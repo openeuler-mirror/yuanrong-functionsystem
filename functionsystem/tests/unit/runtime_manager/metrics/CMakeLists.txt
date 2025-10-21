@@ -1,0 +1,4 @@
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR} METRICS_TEST_SRCS)
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/collector METRICS_TEST_SRCS)
+
+target_sources(${UNIT_TEST_MODULE} PRIVATE ${METRICS_TEST_SRCS})

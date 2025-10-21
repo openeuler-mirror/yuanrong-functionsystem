@@ -1,0 +1,57 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto2";
+option cc_enable_arenas = true;
+//option optimize_for = CODE_SIZE;
+
+
+
+
+message MasterInfo {
+  required string id = 1;
+  // Deprecated, use `address.ip` instead.
+  required uint32 ip = 2;
+  // use `address.port` instead.
+  required uint32 port = 3 [default = 5050];
+  // Deprecated, use `address.hostname` instead.
+  optional string hostname = 5;
+
+  // litebus AID
+  optional string pid = 4;
+  optional string version = 6;
+  optional bytes destUPID = 7;
+}
+
+message ReregisterAgentMsg {
+  optional string id = 1;
+  required MasterInfo agent = 2;
+  repeated Task tasks = 3;
+  optional string version = 4;
+}
+
+message Task {
+  required string name = 1;
+  required string task_id = 2;
+  optional string bind_id = 3;
+  required string agent_id = 4;
+  repeated Resource resources = 5;
+  optional string user = 6;
+}
+
+message Resource {
+  required string name = 1;
+}

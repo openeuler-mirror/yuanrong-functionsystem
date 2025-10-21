@@ -1,0 +1,3 @@
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR} DISTRIBUTE_CACHE_CLIENT_SRCS)
+
+target_sources(function_proxy_common_lib PRIVATE ${DISTRIBUTE_CACHE_CLIENT_SRCS})

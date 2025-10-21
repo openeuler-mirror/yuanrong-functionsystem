@@ -1,0 +1,12 @@
+tool_params:
+  cmetrics:
+    exclude: /go/example # /test1/test1|/test2/test2 不检查test 目录下的test文件和test2下的test2文件，排除目录正则匹配
+    check_path: ${WORKSPACE} # 检查 根目录/src 注：${WORKSPACE}/code为默认代码下载目录
+    is_scan_all_languages: false
+    is_no_import: true
+    process_num: 5 # 检查指令以5进程并发运行
+    is_scan_vue: false
+    is_scan_others: true
+    others: .vue,.html
+    exclude_h_file: MicroCode
+    add_clike_h_file: .x,.h1

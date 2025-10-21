@@ -1,0 +1,5 @@
+target_sources(litebus_obj PRIVATE
+               ${CMAKE_CURRENT_SOURCE_DIR}/timer.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/timertools.cpp
+               ${CMAKE_CURRENT_SOURCE_DIR}/timewatch.cpp
+)

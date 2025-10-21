@@ -1,0 +1,50 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#ifndef UT_MOCKS_MOCK_ETCD_KV_SERVICE_H
+#define UT_MOCKS_MOCK_ETCD_KV_SERVICE_H
+
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include "etcd/api/etcdserverpb/rpc.grpc.pb.h"
+
+namespace functionsystem::test {
+class MockEtcdKvService final : public etcdserverpb::KV::Service {
+public:
+    MockEtcdKvService() = default;
+    ~MockEtcdKvService() override = default;
+
+    MOCK_METHOD(::grpc::Status, Put,
+                (::grpc::ServerContext *, const ::etcdserverpb::PutRequest *, ::etcdserverpb::PutResponse *),
+                (override));
+
+    MOCK_METHOD(::grpc::Status, DeleteRange,
+                (::grpc::ServerContext *, const ::etcdserverpb::DeleteRangeRequest *,
+                 ::etcdserverpb::DeleteRangeResponse *),
+                (override));
+
+    MOCK_METHOD(::grpc::Status, Range,
+                (::grpc::ServerContext *, const ::etcdserverpb::RangeRequest *, ::etcdserverpb::RangeResponse *),
+                (override));
+
+    MOCK_METHOD(::grpc::Status, Txn,
+                (::grpc::ServerContext *, const ::etcdserverpb::TxnRequest *, ::etcdserverpb::TxnResponse *),
+                (override));
+};
+}  // namespace functionsystem::test
+
+#endif  // UT_MOCKS_MOCK_ETCD_LEASE_SERVICE_H

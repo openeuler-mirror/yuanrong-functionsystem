@@ -1,0 +1,72 @@
+# Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+cmake_minimum_required(VERSION 3.14.1)
+
+project(libboundscheck)
+include_directories(
+    ./include
+    ./src
+)
+
+set(CMAKE_C_FLAGS "-Wl,-z,relro,-z,now,-z,noexecstack -D_FORTIFY_SOURCE=2 -O2" )
+set(CMAKE_SHARED_LIBRARY_C_FLAGS "-fPIC")
+add_compile_options(-fstack-protector-strong)
+
+SET(SRC_LIST 
+    ./src/fscanf_s.c
+    ./src/fwscanf_s.c
+    ./src/gets_s.c
+    ./src/memcpy_s.c
+    ./src/memmove_s.c
+    ./src/memset_s.c
+    ./src/scanf_s.c
+    ./src/securecutil.c
+    ./src/secureinput_a.c
+    ./src/secureinput_w.c
+    ./src/secureprintoutput_a.c
+    ./src/secureprintoutput_w.c
+    ./src/snprintf_s.c
+    ./src/sprintf_s.c
+    ./src/sscanf_s.c
+    ./src/strcat_s.c
+    ./src/strcpy_s.c
+    ./src/strncat_s.c
+    ./src/strncpy_s.c
+    ./src/strtok_s.c
+    ./src/swprintf_s.c
+    ./src/swscanf_s.c
+    ./src/vfscanf_s.c
+    ./src/vfwscanf_s.c
+    ./src/vscanf_s.c
+    ./src/vsnprintf_s.c
+    ./src/vsprintf_s.c
+    ./src/vsscanf_s.c
+    ./src/vswprintf_s.c
+    ./src/vswscanf_s.c
+    ./src/vwscanf_s.c
+    ./src/wcscat_s.c
+    ./src/wcscpy_s.c
+    ./src/wcsncat_s.c
+    ./src/wcsncpy_s.c
+    ./src/wcstok_s.c
+    ./src/wmemcpy_s.c
+    ./src/wmemmove_s.c
+    ./src/wscanf_s.c
+)
+
+add_library(securec SHARED ${SRC_LIST})
+install(TARGETS securec LIBRARY DESTINATION "${CMAKE_INSTALL_PREFIX}/lib")
+install(FILES ${PROJECT_SOURCE_DIR}/include/securec.h DESTINATION "${CMAKE_INSTALL_PREFIX}/include")
+install(FILES ${PROJECT_SOURCE_DIR}/include/securectype.h DESTINATION "${CMAKE_INSTALL_PREFIX}/include")
