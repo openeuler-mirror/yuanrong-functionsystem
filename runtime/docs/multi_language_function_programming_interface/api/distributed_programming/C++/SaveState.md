@@ -1,4 +1,0 @@
-# SaveState
-
-```{doxygenfunction} YR::SaveState
-```

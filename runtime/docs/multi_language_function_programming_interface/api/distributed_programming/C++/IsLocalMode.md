@@ -1,4 +1,0 @@
-# IsLocalMode
-
-```{doxygenfunction} YR::IsLocalMode()
-```
