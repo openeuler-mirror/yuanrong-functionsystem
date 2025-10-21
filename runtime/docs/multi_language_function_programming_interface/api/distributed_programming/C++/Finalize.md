@@ -1,4 +1,0 @@
-# Finalize
-
-```{doxygenfunction} YR::Finalize()
-```

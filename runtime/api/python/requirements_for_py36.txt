@@ -1,4 +1,0 @@
-cloudpickle==2.2.1
-msgpack==1.0.5
-protobuf==4.25.5
-dataclasses==0.8

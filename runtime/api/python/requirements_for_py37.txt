@@ -1,4 +1,0 @@
-cloudpickle==2.0.0
-msgpack==1.0.5
-protobuf==3.20.0
-cython==3.0.10
