@@ -1,0 +1,5 @@
+cloudpickle==2.0.0
+msgpack==1.0.5
+protobuf==4.25.5
+cython==3.0.10
+pyyaml==6.0.2

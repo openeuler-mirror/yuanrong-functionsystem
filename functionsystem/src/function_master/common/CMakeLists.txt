@@ -1,0 +1,18 @@
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/flags FLAGS_SRCS)
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/business_policy BUSINESS_POLICY_SRCS)
+
+set(MASTER_COMMON_LIB master_common_lib)
+set(MASTER_COMMON_LIB ${MASTER_COMMON_LIB} PARENT_SCOPE)
+set_property(GLOBAL PROPERTY MASTER_COMMON_DIR "${CMAKE_CURRENT_LIST_DIR}")
+set_property(GLOBAL PROPERTY MASTER_COMMON_LIB ${MASTER_COMMON_LIB})
+
+add_library(${MASTER_COMMON_LIB} STATIC
+    ${FLAGS_SRCS}
+    ${BUSINESS_POLICY_SRCS}
+)
+set_target_properties(${MASTER_COMMON_LIB} PROPERTIES UNITY_BUILD ON)
+target_compile_options(${MASTER_COMMON_LIB} PRIVATE -fPIE)
+
+target_include_directories(${MASTER_COMMON_LIB} PRIVATE ${CMAKE_CURRENT_LIST_DIR})
+
+target_link_libraries(${MASTER_COMMON_LIB} PUBLIC common_flags)

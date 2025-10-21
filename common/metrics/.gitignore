@@ -1,0 +1,9 @@
+# Compile
+build
+output
+
+# Test
+Testing
+
+/.idea/
+/cmake-build-debug/
