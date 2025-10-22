@@ -71,7 +71,7 @@ function checksum_and_decompress() {
     *.tar.gz)
         echo "use tar to decompress"
         mkdir "${savepath}/${name}"
-        tar -xf ${filename} -C "$name" --strip-components=1 && rm ${filename}
+        tar -zxvf ${filename} -C "$name" --strip-components=1 && rm ${filename}
         ;;
     *.zip)
         echo "use unzip to decompress"
@@ -154,15 +154,9 @@ download_a_repo() {
 pids=()
 while IFS=',' read -r name tag module repo sha256 usage; do
     # Start background process for each task.
-    download_a_repo "$name" "$tag" "$module" "$repo" "$sha256" "$usage" &
+    download_a_repo "$name" "$tag" "$module" "$repo" "$sha256" "$usage"
     pid=$!
-    pids+=("$pid")
     echo "Task PID ${pid}: download repo $repo"
 done < "${OPENSOURCE}"
-
-# Wait all task and handle errors
-for pid in "${pids[@]}"; do
-    wait "${pid}" || echo "Task with PID ${pid} failed"
-done
 
 echo "All downloads completed!"
