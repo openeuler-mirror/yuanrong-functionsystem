@@ -793,7 +793,7 @@ if [ "X${GEN_LLT_REPORT}" = "XON" ]; then
 fi
 
 # copy function system output
-mkdir -p "${FUNCTION_SYSTEM_PACKAGE_DIR}"/bin "${FUNCTION_SYSTEM_PACKAGE_DIR}"/lib "${FUNCTION_SYSTEM_PACKAGE_DIR}"/include  "${FUNCTION_SYSTEM_PACKAGE_DIR}"/config
+mkdir -p "${FUNCTION_SYSTEM_PACKAGE_DIR}"/bin "${FUNCTION_SYSTEM_PACKAGE_DIR}"/lib "${FUNCTION_SYSTEM_PACKAGE_DIR}"/include "${FUNCTION_SYSTEM_PACKAGE_DIR}"/deploy "${FUNCTION_SYSTEM_PACKAGE_DIR}"/config
 cp -ar "$OUTPUT_DIR"/bin/* "${FUNCTION_SYSTEM_PACKAGE_DIR}"/bin
 
 if [ $(ls -A "$OUTPUT_DIR"/lib | wc -w) -ne 0 ]; then
@@ -803,6 +803,8 @@ fi
 if [ -f "$OUTPUT_DIR"/include ]; then
     cp -ar "$OUTPUT_DIR"/include/* "${FUNCTION_SYSTEM_PACKAGE_DIR}"/include
 fi
+
+cp -ar  "${YR_ROOT_DIR}"/scripts/deploy/function_system/* "${FUNCTION_SYSTEM_PACKAGE_DIR}"/deploy
 
 # copy metrics config file
 cp -ar "${YR_ROOT_DIR}"/scripts/config/metrics/metrics_config.json "${FUNCTION_SYSTEM_PACKAGE_DIR}"/config/
