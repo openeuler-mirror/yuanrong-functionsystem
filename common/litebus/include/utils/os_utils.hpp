@@ -42,7 +42,7 @@ constexpr int POLL_OPEN_MAX = 1024;
 constexpr int MAX_POLL_SIZE = 1;
 constexpr size_t BUFFER_READ_SIZE = (BUFFER_SIZE_COUNT * BUFFER_SIZE_KB);
 constexpr size_t BUFFER_CONTENT_SIZE = (BUFFER_SIZE_KB * BUFFER_CONTENT_COUNT);
-constexpr size_t ENV_VAR_MAX_LENGTH = 1280;
+constexpr size_t ENV_VAR_MAX_LENGTH = 8196;
 
 const std::string LITEBUS_AKSK_ENABLED = "LITEBUS_AKSK_ENABLED";
 const std::string LITEBUS_ACCESS_KEY = "LITEBUS_ACCESS_KEY";
