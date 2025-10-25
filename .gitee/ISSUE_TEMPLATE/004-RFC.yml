@@ -1,0 +1,63 @@
+name: 💬 Request for comments (RFC).
+description: Ask for feedback on major architectural changes or design choices.
+title: "[RFC]: "
+labels: ["RFC"]
+
+body:
+- type: textarea
+  attributes:
+    label: 背景与目标描述.
+    description: >
+      The motivation of the RFC.
+  validations:
+    required: true
+- type: textarea
+  attributes:
+    label: 建议的方案.
+    description: >
+      The proposed change of the RFC.
+  validations:
+    required: true
+- type: textarea
+  attributes:
+    label: 涉及到的对外API
+    description: >
+      描述该特性是否会有对外API的增加与变更情况的发生，以及变更可能会造成的周边影响.  
+- type: textarea
+  attributes:
+    label: 测试验证
+    description: >
+      详细描述针对该方案，如何开展测试验证，以保证该特性的合入后对应的能力得到充分验证，包括到不限于功能、性能、可靠性、安全等.
+  validations:
+    required: true    
+- type: textarea
+  attributes:
+    label: 期望的反馈时间.
+    description: >
+      The feedback period of the RFC. Usually at least one week.
+  validations:
+    required: false
+- type: textarea
+  attributes:
+    label: CC List.
+    description: >
+      The list of people you want to CC.
+  validations:
+    required: false
+- type: textarea
+  attributes:
+    label: 其他补充信息.
+    description: >
+      Any other things you would like to mention.
+  validations:
+    required: false
+- type: markdown
+  attributes:
+    value: >
+      Thanks for contributing 🎉! The yuanrong core team hosts a biweekly RFC review session, while most RFCs can be discussed online, you can optionally sign up for a slot to discuss your RFC online.
+- type: checkboxes
+  attributes:
+    label: Before submitting a new issue...
+    options:
+      - label: Make sure you already searched for previous.
+        required: true
