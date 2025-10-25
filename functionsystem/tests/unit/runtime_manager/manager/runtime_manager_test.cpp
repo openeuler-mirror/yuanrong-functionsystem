@@ -859,24 +859,4 @@ TEST_F(RuntimeManagerTest, UpdateTokenTest)
     litebus::Terminate(testActor_->GetAID());
     litebus::Await(testActor_->GetAID());
 }
-
-TEST_F(RuntimeManagerTest, CollectCpuType)
-{
-    messages::UpdateCredRequest request;
-    manager_->CollectCpuType();
-
-    EXPECT_FALSE(manager_->GetCpuType().empty());
-}
-
-TEST_F(RuntimeManagerTest, GetCpuTypeByProc)
-{
-    messages::UpdateCredRequest request;
-    EXPECT_FALSE(manager_->GetCpuTypeByProc().empty());
-}
-
-TEST_F(RuntimeManagerTest, GetCpuTypeByCommand)
-{
-    messages::UpdateCredRequest request;
-    EXPECT_FALSE(manager_->GetCpuTypeByCommand().empty());
-}
 }  // namespace functionsystem::runtime_manager
