@@ -125,8 +125,13 @@ void AgentServiceActor::DownloadCodeAndStartRuntime(
 
     auto deployObject = deployObjects->front();
     deployObjects->pop();
-    // every time before download code, code refer should increase
-    AddCodeRefer(deployObject.destination, deployObject.request->instanceid(), deployObject.deployer);
+
+    // working dir don't need to increase code refer
+    if (!IsDelegateWorkingDirPath(deployObject)) {
+        // every time before download code, code refer should increase
+        AddCodeRefer(deployObject.destination, deployObject.request->instanceid(), deployObject.deployer);
+    }
+
     bool isMonopoly = req->scheduleoption().schedpolicyname() == MONOPOLY_SCHEDULE;
     if (auto iter = deployingObjects_.find(deployObject.destination); iter != deployingObjects_.end()) {
         // code package is downloading
@@ -325,7 +330,12 @@ std::shared_ptr<std::queue<DeployerParameters>> AgentServiceActor::BuildDeployer
         destination = config->deploymentconfig().deploydir();
     }
     if (info.Get().storageType == WORKING_DIR_STORAGE_TYPE) {
-        // pass unziped woring dir to runtime_manager
+        if (destination == info.Get().codePath) {
+            // delegate working dir
+            req->mutable_funcdeployspec()->set_deploydir(destination);
+            req->mutable_funcdeployspec()->set_storagetype(WORKING_DIR_STORAGE_TYPE);
+        }
+        // pass unzipped working dir to runtime_manager
         (void)req->mutable_createoptions()->insert({ UNZIPPED_WORKING_DIR, destination });
         // pass origin config (src working dir zip file)
         (void)req->mutable_createoptions()->insert({ YR_WORKING_DIR, info.Get().codePath });
@@ -1193,4 +1203,11 @@ void AgentServiceActor::SetNetworkIsolationRequest(const litebus::AID &, std::st
     resp.set_code(static_cast<int32_t>(StatusCode::FAILED));
     (void)Send(localSchedFuncAgentMgrAID_, "SetNetworkIsolationResponse", resp.SerializeAsString());
 }
+
+bool AgentServiceActor::IsDelegateWorkingDirPath(const DeployerParameters &deployObject)
+{
+    // if th bucket id (working dir) is the code destination path, the deployObject is for a delegate working dir code
+    return deployObject.request->deploymentconfig().bucketid() == deployObject.destination;
+}
+
 }  // namespace functionsystem::function_agent

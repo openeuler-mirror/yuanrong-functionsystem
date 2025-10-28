@@ -85,6 +85,12 @@ std::string WorkingDirDeployer::GetDestination(
     if (appID.empty() && uriFile.empty()) {
         return "";
     }
+
+    if (IsDir(uriFile)) {
+        YRLOG_DEBUG("{}|delegate working dir is a path, use it as destination: {}", appID, uriFile);
+        return uriFile;
+    }
+
     std::string workingDir;
     if (!deployDir.empty()) {
         std::string appDir = litebus::os::Join(deployDir, APP_FOLDER_PREFIX);
@@ -126,7 +132,7 @@ bool WorkingDirDeployer::IsDeployed(const std::string &destination, [[maybe_unus
 DeployResult WorkingDirDeployer::Deploy(const std::shared_ptr<messages::DeployRequest> &request)
 {
     // 'working_dir' storage type objectid (src appID = instanceID)
-    //                            bucketid (src codePath, working dir zip file)
+    //                            bucketid (src codePath, working dir zip file or delegated working dir)
     auto &config = request->deploymentconfig();
     DeployResult result;
     result.destination = GetDestination(config.deploydir(), config.bucketid(), config.objectid());
@@ -134,6 +140,11 @@ DeployResult WorkingDirDeployer::Deploy(const std::shared_ptr<messages::DeployRe
         "WorkingDir deployer received Deploy request to directory({}), workingDirZipFile({}), appID({}), "
         "destination({})",
         config.deploydir(), config.bucketid(), config.objectid(), result.destination);
+
+    if (result.destination == config.bucketid()) {
+        result.status = Status::OK();
+        return result;
+    }
 
     // 1. verify input user params
     std::shared_ptr<ResourceAccessor> accessor =

@@ -435,6 +435,8 @@ private:
     litebus::Future<DeployResult> AsyncDownloadCode(const std::shared_ptr<messages::DeployRequest> &request,
                                                const std::shared_ptr<Deployer> &deployer);
 
+    bool IsDelegateWorkingDirPath(const DeployerParameters &deployObject);
+
 private:
     std::unordered_map<std::string, std::shared_ptr<Deployer>> deployers_;
 

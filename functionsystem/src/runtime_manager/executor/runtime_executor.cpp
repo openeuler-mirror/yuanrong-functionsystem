@@ -116,6 +116,8 @@ const static std::string ASCEND_RT_VISIBLE_DEVICES = "ASCEND_RT_VISIBLE_DEVICES"
 const std::string CONDA_PROGRAM_NAME = "conda";
 const std::string CONDA_ENV_FILE = "env.yaml";
 
+const std::string CHDIR_PATH_CONFIG = "CHDIR_PATH";
+
 // Exclude environment variables passed to the runtime
 const std::vector<std::string> EXCLUDE_ENV_KEYS_PASSED_TO_RUNTIME = {
     UNZIPPED_WORKING_DIR
@@ -135,6 +137,15 @@ std::function<void()> SetRuntimeIdentity(int userID, int groupID)
         if (r == -1) {
             std::cerr << "failed to set gid: " << groupID << ", get errno: " << errno << std::endl;
             ::exit(errno);
+        }
+    };
+}
+
+std::function<void()> ChdirHook(std::string dir)
+{
+    return [dir]() {
+        if (chdir(dir.c_str()) != 0) {
+            std::cerr << "failed to chdir: " << dir << ", get errno: " << errno << std::endl;
         }
     };
 }
@@ -1020,6 +1031,11 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetCppBuildArgs(
     std::string address = config_.ip + ":" + port;
     auto confPath = litebus::os::Join(config_.runtimeConfigPath, "runtime.json");
 
+    auto resultPair = HandleWorkingDirectory(request, request->runtimeinstanceinfo());
+    if (resultPair.first.IsError()) {
+        return { resultPair.first, {} };
+    }
+
     return { Status::OK(),
              { CPP_PROGRAM_NAME, RUNTIME_ID_ARG_PREFIX + request->runtimeinstanceinfo().runtimeid(),
                LOG_LEVEL_PREFIX + config_.runtimeLogLevel,
@@ -1121,12 +1137,9 @@ std::pair<Status, std::string> RuntimeExecutor::HandleWorkingDirectory(
                  "" };
     }
 
-    if (chdir(workingDirIter->second.c_str()) != 0) {
-        YRLOG_ERROR("{}|{}|enter working dir failed, path: {}", info.traceid(), info.requestid(),
-                    workingDirIter->second);
-        return { Status(StatusCode::RUNTIME_MANAGER_WORKING_DIR_FOR_APP_NOTFOUND, "job working dir is invalid"), "" };
-    }
-    YRLOG_DEBUG("change python working dir to {}", workingDirIter->second);
+    (*request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions())[CHDIR_PATH_CONFIG] =
+        workingDirIter->second;
+    YRLOG_DEBUG("change working dir to {}", workingDirIter->second);
     return { Status::OK(), workingDirIter->second };
 }
 
@@ -1470,12 +1483,16 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetPosixCustomBuild
                             "params working dir or unzipped dir is empty"),
                      {} };
         }
-        if (chdir(iter->second.c_str()) != 0) {
+        if (!litebus::os::ExistPath(iter->second)) {
             YRLOG_ERROR("{}|{}|enter working dir failed, path: {}", request->runtimeinstanceinfo().traceid(),
                         request->runtimeinstanceinfo().requestid(), iter->second);
             return { Status(StatusCode::RUNTIME_MANAGER_WORKING_DIR_FOR_APP_NOTFOUND, "job working dir is invalid"),
                      {} };
         }
+
+        (*request->mutable_runtimeinstanceinfo()
+              ->mutable_deploymentconfig()
+              ->mutable_deployoptions())[CHDIR_PATH_CONFIG] = iter->second;
         YRLOG_DEBUG("change job entrypoint execute dir to {}", iter->second);
         return { Status::OK(), {} };
     }
@@ -1487,11 +1504,15 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetPosixCustomBuild
                     request->runtimeinstanceinfo().requestid());
         return { Status(StatusCode::RUNTIME_MANAGER_EXECUTABLE_PATH_INVALID, "entryFile is empty"), {} };
     }
-    if (chdir(entryFile.c_str()) != 0) {
+
+    if (!litebus::os::ExistPath(entryFile)) {
         YRLOG_ERROR("{}|{}|enter entryfile path failed, path: {}", request->runtimeinstanceinfo().traceid(),
                     request->runtimeinstanceinfo().requestid(), entryFile);
         return { Status(StatusCode::RUNTIME_MANAGER_EXECUTABLE_PATH_INVALID, "chdir entryfile path failed"), {} };
     }
+
+    (*request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions())[CHDIR_PATH_CONFIG] =
+        entryFile;
     YRLOG_DEBUG("entrypoint: {}", entryFile + "/bootstrap");
     return { Status::OK(), { entryFile + "/bootstrap" } };
 }
@@ -1513,6 +1534,12 @@ std::vector<std::function<void()>> RuntimeExecutor::BuildInitHook(
             YRLOG_DEBUG("process add conda activate hook");
             (void)initHook.emplace_back(CondaActivate(it->second, it2->second));
         }
+    }
+
+    if (auto iter = deployOptions.find(CHDIR_PATH_CONFIG); iter != deployOptions.end() && !iter->second.empty()) {
+        YRLOG_DEBUG("{}|{} process add chdir({}) hook", request->runtimeinstanceinfo().requestid(),
+                    request->runtimeinstanceinfo().instanceid(), iter->second);
+        (void)initHook.emplace_back(ChdirHook(iter->second));
     }
     return initHook;
 }
