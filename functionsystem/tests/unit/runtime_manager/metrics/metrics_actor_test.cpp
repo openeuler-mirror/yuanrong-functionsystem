@@ -222,7 +222,7 @@ TEST_F(MetricsActorTest, DISABLED_MonitorDiskUsageTest)
                            "--disk_usage_limit=1",
                            "--runtime_home_dir=/home/snuser",
                            "--snuser_disk_usage_limit=1",
-                           "--tmp_disk_usage_limit=500",
+                           "--tmp_disk_usage_limit=600",
                            "--disk_usage_monitor_duration=50",
                            "--disk_usage_monitor_notify_failure_enable=false",
     };
@@ -254,7 +254,7 @@ TEST_F(MetricsActorTest, DISABLED_MonitorDiskUsageTest)
     dir = "/tmp/testdir";
     litebus::os::Rmdir(dir);
     litebus::os::Mkdir(dir);
-    ExecuteCommand("dd if=/dev/zero of=" + dir + "/test.txt bs=500M count=1");
+    ExecuteCommand("dd if=/dev/zero of=" + dir + "/test.txt bs=600M count=1");
     EXPECT_AWAIT_TRUE([&]() -> bool { return mockFuncAgentActor->requestArray_.size() >= 1; });
     request = mockFuncAgentActor->requestArray_[mockFuncAgentActor->requestArray_.size()-1];
     EXPECT_TRUE(request->message().find("tmp dir") != std::string::npos);
