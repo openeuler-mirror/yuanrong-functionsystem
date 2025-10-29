@@ -54,10 +54,10 @@ body:
 - type: markdown
   attributes:
     value: >
-      Thanks for contributing 🎉! The yuanrong core team hosts a biweekly RFC review session, while most RFCs can be discussed online, you can optionally sign up for a slot to discuss your RFC online.
+      Thanks for contributing 🎉! The openYuanrong core team hosts a biweekly RFC review session, while most RFCs can be discussed online, you can optionally sign up for a slot to discuss your RFC online.
 - type: checkboxes
   attributes:
     label: Before submitting a new issue...
     options:
-      - label: Make sure you already searched for previous.
+      - label: Make sure you already searched for previous [RFCs](https://gitee.com/openeuler/yuanrong-functionsystem/issues).
         required: true
