@@ -23,8 +23,9 @@ set(INSTALL_LIB_DIR "${CMAKE_INSTALL_PREFIX}/lib" CACHE PATH "Installation direc
 set(INSTALL_INC_DIR "${CMAKE_INSTALL_PREFIX}/include" CACHE PATH "Installation directory for headers")
 
 set(gRPC_VERSION 1.65.4)
+set(Protobuf_VERSION 25.5.0)
 
-find_package(Protobuf REQUIRED PATHS ${protobuf_ROOT} CONFIG)
+find_package(Protobuf ${Protobuf_VERSION} REQUIRED PATHS ${protobuf_ROOT} CONFIG)
 find_package(c-ares REQUIRED PATHS ${c-ares_ROOT} CONFIG)
 find_package(absl REQUIRED PATHS ${absl_ROOT} CONFIG)
 find_package(re2 REQUIRED PATHS ${re2_ROOT} CONFIG)
