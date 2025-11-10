@@ -662,113 +662,21 @@ function run_unit_test()
     fi
 }
 
-function generate_temp_services_yaml()
-{
-    cat << EOF > /tmp/services.yaml
-- service: defaultservice # 服务名（必填）
-  kind: yrlib # 函数类型（必填） 进程部署只支持 yrlib
-  description: this is the default service # 函数描述（非必填）
-  functions: # 函数（必填）
-    default: # 函数名（必填）
-      cpu: 0 # 函数 CPU 大小，单位：1/1000 核（必填）
-      memory: 0 # 函数 MEM 大小，单位：MB（必填）
-      runtime: python3.11 # 函数 runtime 类型（必填）
-      # environment: # 函数环境变量，内置环境变量定义
-        # "key1" : "value1"
-      # storageType: "local" # 代码包存储类型，默认值为 local, 进程部署只支持 local: 代码包存储在磁盘中
-      # codePath: "/home/sn/function-packages" # 代码包本地路径，默认值为空（除了 python，此项必填）
-    py:
-      cpu: 0
-      memory: 0
-      runtime: python3.11
-    java:
-      cpu: 500
-      memory: 500
-      runtime: java1.8
-    cpp:
-      cpu: 500
-      memory: 500
-      runtime: cpp11
-EOF
-}
-
 # Tests
 if [ "X${RUN_LLT}" = "XON" ]; then
     pushd "bin"
-    log_info "Running ut/it tests"
-    rm -rf /tmp/services.yaml
-    generate_temp_services_yaml
-    cp ${BUILD_DIR}/lib/libyaml_tool.so /tmp/libyaml_tool.so
-    rm -rf /tmp/executor-meta/
-    mkdir -p /tmp/executor-meta/
 
-    log_info "Running tests in parallel subShells..."
-
-    set +e
-    ( run_integration_test ) > /tmp/integration_test.log 2>&1 &
-    PID1=$!
-    echo "Started integration_test with PID: $PID1"
-
-    if [ "X${TEST_SUIT}" = "X*" ] && [ "X${TEST_CASE}" = "X*" ]; then
-        ( run_unit_test ) > /tmp/unit_test.log 2>&1 &
-    else
-        ( run_unit_test_specify_case ) > /tmp/unit_test.log 2>&1 &
+    log_info "Run ut/it test units by python"
+    PY_PATH=${YR_ROOT_DIR}/scripts/executor/run_code_gate.py
+    IT_BIN_PATH=${BASE_DIR}/build/bin/${IT_EXECUTABLE}
+    UT_BIN_PATH=${BASE_DIR}/build/bin/${UT_EXECUTABLE}
+    python3 ${PY_PATH} --it_bin ${IT_BIN_PATH} --ut_bin ${UT_BIN_PATH} --test_suite "${TEST_SUIT}" --test_case "${TEST_CASE}"
+    EXIT_CODE=$?
+    echo "Run run_test_unit.py exit with code $EXIT_CODE"
+    if [ ${EXIT_CODE} -ne 0 ]; then
+      echo "Run run_test_unit.py with filter ${TEST_SUIT}.${TEST_CASE} filed."
+      exit 1
     fi
-    PID2=$!
-    echo "Started unit_test with PID: $PID2"
-
-    # Dynamically wait for any one of the processes to finish
-    wait -n $PID1 $PID2
-    EXIT_CODE=$?  # Capture the status code of the first process to exit
-
-    # Determine which process exited first
-    if ! kill -0 $PID1 2>/dev/null; then
-        FAILED_PID=$PID1
-        REMAINING_PID=$PID2
-        LOG_FILE="/tmp/integration_test.log"
-        TEST_NAME="integration_test"
-    else
-        FAILED_PID=$PID2
-        REMAINING_PID=$PID1
-        LOG_FILE="/tmp/unit_test.log"
-        TEST_NAME="unit_test"
-    fi
-
-    # If the first process to exit failed
-    if [ $EXIT_CODE -ne 0 ]; then
-        echo "$TEST_NAME failed, exit code: $EXIT_CODE"
-        #Immediately kill the other test that is still running
-        kill -g $REMAINING_PID 2>/dev/null
-        # Force wait to prevent zombie processes
-        wait $REMAINING_PID 2>/dev/null
-        # Output failure log
-        echo "<<<<<<<<<<< $TEST_NAME log"
-        cat $LOG_FILE
-        cat /tmp/failed_unit_test.log
-        echo "<<<<<<<<<<< End of $TEST_NAME log, $TEST_NAME fail first"
-        exit 1
-    else
-        # If the first process to exit was successful, continue waiting for the other
-        wait $REMAINING_PID
-        EXIT_REMAIN=$?
-        if [ $EXIT_REMAIN -ne 0 ]; then
-            if [ $REMAINING_PID -eq $PID1 ]; then
-                echo "integration_test failed, exit code: $EXIT_REMAIN"
-                LOG_FILE="/tmp/integration_test.log"
-            else
-                echo "unit_test failed, exit code: $EXIT_REMAIN"
-                LOG_FILE="/tmp/unit_test.log"
-            fi
-            echo "<<<<<<<<<<< Failure log"
-            cat $LOG_FILE
-            cat /tmp/failed_unit_test.log
-            echo "<<<<<<<<<<< End of $LOG_FILE log"
-            exit 1
-        else
-            echo "All tests passed"
-        fi
-    fi
-    set -e
 
     popd
 fi

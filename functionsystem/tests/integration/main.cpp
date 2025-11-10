@@ -39,7 +39,9 @@ const std::string LOG_CONFIG_JSON = R"(
     "maxQueueSize": 1048510,
     "threadCount": 1
   },
-  "alsologtostderr": true
+  "alsologtostderr": true,
+  "stdLogLevel": "DEBUG",
+  "syncFlush": true
 }
 )";
 
