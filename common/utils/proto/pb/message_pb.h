@@ -165,6 +165,9 @@ using QueryDebugInstanceInfosResponse = ::messages::QueryDebugInstanceInfosRespo
 using ReportAgentAbnormalRequest = ::messages::ReportAgentAbnormalRequest;
 using ReportAgentAbnormalResponse = ::messages::ReportAgentAbnormalResponse;
 
+using Reserves = ::messages::Reserves;
+using OnReserves = ::messages::OnReserves;
+
 namespace MetaStore {
 using PutRequest = ::messages::PutRequest;
 using PutResponse = ::messages::PutResponse;
