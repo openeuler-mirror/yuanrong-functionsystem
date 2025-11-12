@@ -459,11 +459,11 @@ TEST_F(DomainGroupCtrlTest, GroupScheduleRangeInstanceReserveCallBackThenSuccess
     auto response1 = std::make_shared<messages::ScheduleResponse>();
     response1->set_code(StatusCode::DOMAIN_SCHEDULER_UNAVAILABLE_SCHEDULER);
     auto rsp1 = std::make_shared<messages::OnReserves>();
-    response->set_requestid(groupInfo->requests(0).requestid());
+    response->set_requestid(groupInfo->requests(0).requestid() + "-0");
     *rsp1->add_responses() = *response;
-    response1->set_requestid(groupInfo->requests(1).requestid());
+    response1->set_requestid(groupInfo->requests(0).requestid() + "-1");
     *rsp1->add_responses() = *response1;
-    response1->set_requestid(groupInfo->requests(2).requestid());
+    response1->set_requestid(groupInfo->requests(0).requestid() + "-2");
     *rsp1->add_responses() = *response1;
     EXPECT_CALL(*mockUnderlayerSchedMgr_, Reserves)
         // first round to reserve
@@ -701,9 +701,9 @@ TEST_F(DomainGroupCtrlTest, SfmdGroupScheduleSuccessful)
 
     schedule_decision::GroupScheduleResult result;
     result.code = 0;
-    (void)result.results.emplace_back(schedule_decision::ScheduleResult{ selectedAgentId1, 0, "", {}, "NPU/310" });
-    (void)result.results.emplace_back(schedule_decision::ScheduleResult{ selectedAgentId2, 0, "", {}, "NPU/310"  });
-    (void)result.results.emplace_back(schedule_decision::ScheduleResult{ selectedAgentId3, 0, "", {}, "NPU/310"  });
+    (void)result.results.emplace_back(schedule_decision::ScheduleResult{ selectedNodeId1, 0, "", {}, "NPU/310" });
+    (void)result.results.emplace_back(schedule_decision::ScheduleResult{ selectedNodeId1, 0, "", {}, "NPU/310"  });
+    (void)result.results.emplace_back(schedule_decision::ScheduleResult{ selectedNodeId1, 0, "", {}, "NPU/310"  });
 
     // single node
     {
@@ -722,10 +722,13 @@ TEST_F(DomainGroupCtrlTest, SfmdGroupScheduleSuccessful)
         (*response3->mutable_scheduleresult()->add_devices()) = std::move(NewHeteroDeviceInfo(103, "0.0.0.3"));
         
         auto rsp = std::make_shared<messages::OnReserves>();
+        response1->set_requestid(groupInfo->requests(0).requestid());
         *rsp->add_responses() = *response1;
+        response2->set_requestid(groupInfo->requests(1).requestid());
         *rsp->add_responses() = *response2;
+        response3->set_requestid(groupInfo->requests(2).requestid());
         *rsp->add_responses() = *response3;
-        EXPECT_CALL(*mockUnderlayerSchedMgr_, Reserves).Times(3)
+        EXPECT_CALL(*mockUnderlayerSchedMgr_, Reserves)
             .WillOnce(Return(rsp));
         EXPECT_CALL(*mockUnderlayerSchedMgr_, UnReserve).Times(0);
 
@@ -796,6 +799,7 @@ TEST_F(DomainGroupCtrlTest, SfmdGroupScheduleSuccessful)
 
     // multi node
     {
+        result.results[2].id = selectedNodeId2;
         EXPECT_CALL(*mockScheduler_, GroupScheduleDecision(_)).WillOnce(Return(result));
         auto groupInfo = NewSfmdGroupInfo(100);
 
@@ -812,9 +816,12 @@ TEST_F(DomainGroupCtrlTest, SfmdGroupScheduleSuccessful)
         response2->set_instanceid(groupInfo->requests(1).instance().instanceid());
         response3->set_instanceid(groupInfo->requests(2).instance().instanceid());
         auto rsp1 = std::make_shared<messages::OnReserves>();
+        response1->set_requestid(groupInfo->requests(0).requestid());
         *rsp1->add_responses() = *response1;
+        response2->set_requestid(groupInfo->requests(1).requestid());
         *rsp1->add_responses() = *response2;
         auto rsp2 = std::make_shared<messages::OnReserves>();
+        response3->set_requestid(groupInfo->requests(2).requestid());
         *rsp2->add_responses() = *response3;
         EXPECT_CALL(*mockUnderlayerSchedMgr_, Reserves).Times(2)
             .WillOnce(Return(rsp1))
@@ -944,11 +951,16 @@ TEST_F(DomainGroupCtrlTest, HeteroGroupSchedulerWithResourceGroup)
     (*response3->mutable_scheduleresult()->add_devices()) = std::move(NewHeteroDeviceInfo(100, "0.0.0.0"));
     (*response3->mutable_scheduleresult()->add_devices()) = std::move(NewHeteroDeviceInfo(103, "0.0.0.3"));
     auto rsp1 = std::make_shared<messages::OnReserves>();
+    response1->set_requestid(groupInfo->requests(0).requestid());
     *rsp1->add_responses() = *response1;
-    *rsp1->add_responses() = *response2;
-    *rsp1->add_responses() = *response3;
+    auto rsp2 = std::make_shared<messages::OnReserves>();
+    response2->set_requestid(groupInfo->requests(1).requestid());
+    *rsp2->add_responses() = *response2;
+    auto rsp3 = std::make_shared<messages::OnReserves>();
+    response3->set_requestid(groupInfo->requests(2).requestid());
+    *rsp3->add_responses() = *response3;
     EXPECT_CALL(*mockUnderlayerSchedMgr_, Reserves)
-        .WillOnce(Return(rsp1));
+        .WillOnce(Return(rsp1)).WillOnce(Return(rsp2)).WillOnce(Return(rsp3));
     EXPECT_CALL(*mockUnderlayerSchedMgr_, UnReserve).Times(0);
 
     std::vector<std::shared_ptr<messages::ScheduleRequest>> scheduleReqs;
