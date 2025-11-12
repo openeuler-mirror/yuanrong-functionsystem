@@ -2774,7 +2774,7 @@ TEST_F(AgentServiceActorTest, DeployInstanceWithWorkingDirCpp)
     auto spec = deployInstanceReq->mutable_funcdeployspec();
     spec->set_storagetype(function_agent::WORKING_DIR_STORAGE_TYPE);
     auto deployDir = "/home/sn/function/package/xxxz";
-    std::string destination = "/tmp/working_dir-tmp/file.zip";
+    std::string destination = "/tmp/working_dir-tmp/";
     (void)litebus::os::Rmdir(deployDir);
     EXPECT_TRUE(litebus::os::ExistPath(destination));
     spec->set_deploydir(deployDir);
