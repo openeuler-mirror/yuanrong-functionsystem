@@ -36,6 +36,9 @@ public:
                                                            bool ignoreNonExist = false);
 
     virtual void NotifyMigratingRequest(const std::string &instanceID);
+
+    virtual void CallQueueChange(const std::string &instanceId, uint64_t callQueueSize);
+
 private:
     std::shared_ptr<ObserverActor> observerActor_;
 };

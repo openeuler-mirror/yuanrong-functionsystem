@@ -94,6 +94,9 @@ void InstanceProxy::OnLocalCall(const litebus::Future<SharedStreamMsg> &callRspF
     auto &requestID = callReq->callreq().requestid();
     perf_->RecordReceivedCallRsp(requestID);
     dispatcher->OnCall(callRsp, callReq->callreq().traceid(), callReq->callreq().requestid());
+    if (subscribeCallQueue_) {
+        observer_->CallQueueChange(instanceID_, dispatcher->GetCallQueueSize());
+    }
 }
 
 void InstanceProxy::ForwardCall(const litebus::AID &from, std::string &&, std::string &&msg)
@@ -290,6 +293,9 @@ void InstanceProxy::OnLocalCallResult(const litebus::Future<SharedStreamMsg> &ca
         ASSERT_FS(selfDispatcher_);
         selfDispatcher_->OnCallResult(callResultAck, callResult->callresultreq().requestid(),
                                       callResult->callresultreq().code());
+        if (subscribeCallQueue_) {
+            observer_->CallQueueChange(instanceID_, selfDispatcher_->GetCallQueueSize());
+        }
         InvocationHandler::ReleaseEstimateMemory(srcInstance, callResult->callresultreq().requestid());
         return;
     }
@@ -443,6 +449,13 @@ bool InstanceProxy::Delete()
 void InstanceProxy::InitDispatcher()
 {
     selfDispatcher_ = std::make_shared<RequestDispatcher>(instanceID_, true, tenantID_, shared_from_this(), perf_);
+}
+
+void InstanceProxy::SubscribeCallQueue()
+{
+    subscribeCallQueue_ = true;
+    ASSERT_FS(selfDispatcher_);
+    observer_->CallQueueChange(instanceID_, selfDispatcher_->GetCallQueueSize());
 }
 
 litebus::Future<SharedStreamMsg> InstanceProxyWrapper::Call(const litebus::AID &to,

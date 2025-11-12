@@ -1349,4 +1349,13 @@ void ObserverActor::CancelWatchInstance(const std::string &instanceID)
     }
 }
 
+void ObserverActor::SubscribeCallQueue(const std::string &instanceID)
+{
+    instanceView_->SubscribeCallQueue(instanceID);
+}
+
+void ObserverActor::CallQueueChange(const std::string &instanceID, uint64_t callQueueSize)
+{
+    callQueueChangeCbFunc_(instanceID, callQueueSize);
+}
 }  // namespace functionsystem::function_proxy

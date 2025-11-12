@@ -20,6 +20,7 @@
 #include <list>
 #include <queue>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "async/future.hpp"
 #include "logs/logging.h"
@@ -63,6 +64,11 @@ public:
     std::list<litebus::Future<SharedStreamMsg>> GetOnRespFuture();
 
     void MoveAllToNew();
+
+    uint64_t GetCallQueueSize() const
+    {
+        return requestMap_.size();
+    }
 
 private:
     std::unordered_map<std::string, std::shared_ptr<CallRequestContext>> requestMap_;

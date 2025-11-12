@@ -55,6 +55,8 @@ public:
 
     void NotifyMigratingRequest(const std::string &instanceID);
 
+    void SubscribeCallQueue(const std::string &instanceID);
+
 private:
     void Creating(const std::string &instanceID, const resources::InstanceInfo &instanceInfo);
     void Running(const std::string &instanceID, const resources::InstanceInfo &instanceInfo);
