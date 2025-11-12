@@ -534,8 +534,8 @@ void UnderlayerSchedMgrActor::DoReserves(
     const std::string &selectedName, const std::shared_ptr<messages::Reserves> &req)
 {
     if (underlayers_.find(selectedName) == underlayers_.end() || underlayers_[selectedName] == nullptr) {
-        YRLOG_ERROR("{}|{}|failed to batch reserve instance of group({}) not found scheduler named {}.", 
-            req->traceid(), req->requestid(), req->groupid(), selectedName);
+        YRLOG_ERROR("{}|{}|failed to batch reserve instance of group({}) not found scheduler named {}.", req->traceid(),
+                    req->requestid(), req->groupid(), selectedName);
         auto rsps = std::make_shared<messages::OnReserves>();
         for (auto r : req->reserves()) {
             auto rsp = rsps->add_responses();
@@ -558,9 +558,9 @@ void UnderlayerSchedMgrActor::DoReserves(
     future.OnComplete([promise, selectedName, req,
                        aid(GetAID())](const litebus::Future<std::shared_ptr<messages::OnReserves>> &future) {
         if (future.IsError()) {
-            YRLOG_WARN("{}|{}|reserve instance({}) of group({}) resource to {} timeout.", req->traceid(), 
-                req->requestid(), fmt::join(req->instanceids().begin(), req->instanceids().end(), ","), 
-                req->groupid(), selectedName);
+            YRLOG_WARN("{}|{}|reserve instance({}) of group({}) resource to {} timeout.", req->traceid(),
+                       req->requestid(), fmt::join(req->instanceids().begin(), req->instanceids().end(), ","),
+                       req->groupid(), selectedName);
             litebus::Async(aid, &UnderlayerSchedMgrActor::DoReserves, promise, selectedName, req);
             return;
         }

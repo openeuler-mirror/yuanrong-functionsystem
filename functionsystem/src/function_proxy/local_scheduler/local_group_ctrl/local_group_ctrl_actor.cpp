@@ -911,7 +911,8 @@ void LocalGroupCtrlActor::Reserves(const litebus::AID &from, std::string &&name,
         futures.emplace_back(DoReserve(scheReq));
     }
     (void)litebus::Collect(futures).OnComplete(
-        [resp, from, aid(GetAID())](const litebus::Future<std::list<std::shared_ptr<messages::ScheduleResponse>>> &future) {
+        [resp, from,
+         aid(GetAID())](const litebus::Future<std::list<std::shared_ptr<messages::ScheduleResponse>>> &future) {
             ASSERT_FS(future.IsOK());
             auto rsps = future.Get();
             for (auto rsp : rsps) {

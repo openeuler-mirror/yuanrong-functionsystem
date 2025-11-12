@@ -399,11 +399,11 @@ TEST_F(DomainGroupCtrlTest, GroupScheduleRangeInstanceSuccessful)
     auto response = std::make_shared<messages::ScheduleResponse>();
     response->set_code(StatusCode::SUCCESS);
     auto rsp1 = std::make_shared<messages::OnReserves>();
-    response->set_requestid(groupInfo->requests(0).requestid());
+    response->set_requestid(groupInfo->requests(0).requestid() + "-0");
     *rsp1->add_responses() = *response;
-    response->set_requestid(groupInfo->requests(1).requestid());
+    response->set_requestid(groupInfo->requests(0).requestid() + "-1");
     *rsp1->add_responses() = *response;
-    response->set_requestid(groupInfo->requests(2).requestid());
+    response->set_requestid(groupInfo->requests(0).requestid() + "-2");
     *rsp1->add_responses() = *response;
     EXPECT_CALL(*mockUnderlayerSchedMgr_, Reserves)
         .WillRepeatedly(Return(rsp1));

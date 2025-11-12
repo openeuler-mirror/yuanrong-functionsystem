@@ -1049,7 +1049,7 @@ TEST_F(LocalGroupCtrlTest, ReserveAndUnReserveSuccessful)
     {
         auto reserves = std::make_shared<messages::Reserves>();
         *reserves->add_reserves() = *scheduleReq;
-        reserves->set_requestid(scheduleReq->requestid());        
+        reserves->set_requestid(scheduleReq->requestid());
         auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserves,
                                      localGroupCtrlActor_->GetAID(), reserves);
         ASSERT_AWAIT_READY(future);
@@ -1086,7 +1086,7 @@ TEST_F(LocalGroupCtrlTest, ReserveFailed)
     EXPECT_CALL(*virtual_, GetResourceViewChanges()).WillRepeatedly(Return(std::make_shared<resource_view::ResourceUnitChanges>()));
     auto reserves = std::make_shared<messages::Reserves>();
     *reserves->add_reserves() = *scheduleReq;
-    reserves->set_requestid(scheduleReq->requestid()); 
+    reserves->set_requestid(scheduleReq->requestid());
     auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserves,
                                  localGroupCtrlActor_->GetAID(), reserves);
     ASSERT_AWAIT_READY(future);
@@ -1121,7 +1121,7 @@ TEST_F(LocalGroupCtrlTest, ReserveAndBindAndUnBindSuccessful)
     {
         auto reserves = std::make_shared<messages::Reserves>();
         *reserves->add_reserves() = *scheduleReq;
-        reserves->set_requestid(scheduleReq->requestid());     
+        reserves->set_requestid(scheduleReq->requestid());   
         auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserves,
                                      localGroupCtrlActor_->GetAID(), reserves);
         ASSERT_AWAIT_READY(future);
@@ -1163,7 +1163,7 @@ TEST_F(LocalGroupCtrlTest, BindFailedByToCreating)
     {
         auto reserves = std::make_shared<messages::Reserves>();
         *reserves->add_reserves() = *scheduleReq;
-        reserves->set_requestid(scheduleReq->requestid()); 
+        reserves->set_requestid(scheduleReq->requestid());
         auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserves,
                                      localGroupCtrlActor_->GetAID(), reserves);
         ASSERT_AWAIT_READY(future);
@@ -1194,7 +1194,7 @@ TEST_F(LocalGroupCtrlTest, BindFailedByToCreatingTxnFailedAlreadyScheduleToAnoth
     {
         auto reserves = std::make_shared<messages::Reserves>();
         *reserves->add_reserves() = *scheduleReq;
-        reserves->set_requestid(scheduleReq->requestid());         
+        reserves->set_requestid(scheduleReq->requestid());
         auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserves,
                                      localGroupCtrlActor_->GetAID(), reserves);
         ASSERT_AWAIT_READY(future);
@@ -1239,7 +1239,7 @@ TEST_F(LocalGroupCtrlTest, ReserveAndTimoutToReserve)
     EXPECT_CALL(*primary_, DeleteInstances).WillOnce(DoAll(FutureArg<0>(&deletedIns), Return(Status::OK())));
     auto reserves = std::make_shared<messages::Reserves>();
     *reserves->add_reserves() = *scheduleReq;
-    reserves->set_requestid(scheduleReq->requestid());  
+    reserves->set_requestid(scheduleReq->requestid());
     auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserves,
                                  localGroupCtrlActor->GetAID(), reserves);
     ASSERT_AWAIT_READY(future);

@@ -735,10 +735,11 @@ TEST_F(UnderlayerSchedMgrTest, Reserve)
 
     auto req = std::make_shared<messages::Reserves>();
     req->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
-
+    req->add_reserves()->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
     {
         messages::OnReserves resp;
         resp.set_requestid(req->requestid());
+        resp.add_responses()->set_requestid(req->reserves(0).requestid());
         EXPECT_CALL(*mockLocalGroupCtrl, MockReserves).WillOnce(Return(resp.SerializeAsString()));
         auto future = underlayer.Reserves("WillRegister", req);
         ASSERT_AWAIT_READY(future);
