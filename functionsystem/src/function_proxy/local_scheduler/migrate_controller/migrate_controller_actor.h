@@ -43,6 +43,7 @@ public:
     Status Awake(const std::string &instanceID);
 
     litebus::Future<Status> SuspendInstance(const std::string &instanceID);
+    litebus::Future<Status> RecycleInstance(const std::string &instanceID);
 
 private:
     bool IsInstHibernate(const resources::InstanceInfo &instanceInfo);

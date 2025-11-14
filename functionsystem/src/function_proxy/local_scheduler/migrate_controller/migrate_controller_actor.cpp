@@ -62,6 +62,18 @@ litebus::Future<Status> MigrateControllerActor::SuspendInstance(const std::strin
     });
 }
 
+litebus::Future<Status> MigrateControllerActor::RecycleInstance(const std::string &instanceID)
+{
+    return this->instanceCtrl_->Kill(instanceID).Then([instanceID](const Status &status) {
+        if (status.IsError()) {
+            YRLOG_ERROR("InstanceID:{} recycle failed, error: {}", instanceID, status.ToString());
+            return status;
+        }
+        YRLOG_INFO("InstanceID:{} recycle success", instanceID);
+        return Status::OK();
+    });
+}
+
 bool MigrateControllerActor::IsInstHibernate(
     const resources::InstanceInfo &instanceInfo)
 {
