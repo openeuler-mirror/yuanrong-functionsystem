@@ -40,6 +40,7 @@
 #include "random_number.h"
 #include "common/utils/struct_transfer.h"
 #include "instance_ctrl_message.h"
+#include "common/posix_client/control_plane_client/control_interface_posix_client.h"
 #include "local_scheduler/grpc_server/bus_service/bus_service.h"
 #include "local_scheduler_service/local_sched_srv.h"
 

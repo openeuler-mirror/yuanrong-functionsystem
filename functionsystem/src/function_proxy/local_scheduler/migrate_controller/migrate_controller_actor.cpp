@@ -15,34 +15,82 @@
  */
 
 #include "migrate_controller_actor.h"
+
+#include "async/async.hpp"
+#include "async/defer.hpp"
 #include "metadata/constants.h"
+#include "utils/struct_transfer.h"
 
-void functionsystem::local_scheduler::MigrateControllerActor::Update(const std::string &instanceID,
-                                                                     const resources::InstanceInfo &instanceInfo,
-                                                                     bool isForceUpdate) {
-    if (IsInstHibernate(instanceInfo))
+using namespace functionsystem::function_proxy;
+
+namespace functionsystem::local_scheduler {
+void MigrateControllerActor::Update(const std::string &instanceID,
+                                    const resources::InstanceInfo &instanceInfo,
+                                    bool isForceUpdate)
+{
     auto owner = instanceInfo.functionproxyid();
+    if (!IsInstHibernate(instanceInfo)) {
+        YRLOG_DEBUG("InstanceID:{} owner:{} is not hibernate instance, ignore it", instanceID, owner);
+        return;
+    }
+    if (IsDriver(instanceInfo)) {
+        YRLOG_DEBUG("InstanceID:{} owner:{} is driver instance, ignore it", instanceID, owner);
+        return;
+    }
+    if (owner != self_) {
+        YRLOG_DEBUG("InstanceID:{} owner:{} is not belong to self({}), ignore it", instanceID, owner, self_);
+        return;
+    }
     auto state = instanceInfo.instancestatus().code();
-    YRLOG_INFO("MigrateControllerActor Update instanceID:{} owner:{} isForceUpdate:{}", instanceID, owner,
-               isForceUpdate);
+    litebus::Async(this->GetAID(), &MigrateControllerActor::ChangeInstState, instanceID, state);
 }
 
-void functionsystem::local_scheduler::MigrateControllerActor::Delete(const std::string &instanceID) {
+void MigrateControllerActor::Delete(const std::string &instanceID)
+{
+    litebus::Async(this->GetAID(), &MigrateControllerActor::DelInstState, instanceID);
 }
 
-void functionsystem::local_scheduler::MigrateControllerActor::InstUtilChangeCallback(const std::string &instanceID,
-    const int utilization) {
+litebus::Future<Status> MigrateControllerActor::SuspendInstance(const std::string &instanceID)
+{
+    return this->instanceCtrl_->Checkpoint(instanceID).Then([instanceID](const Status &status) {
+        if (status.IsError()) {
+            YRLOG_ERROR("InstanceID:{} suspend failed, checkpoint error: {}", instanceID, status.ToString());
+            return status;
+        }
+        YRLOG_INFO("InstanceID:{} suspend checkpoint success", instanceID);
+        return Status::OK();
+    });
 }
 
-void functionsystem::local_scheduler::MigrateControllerActor::CheckPointRespCallback(const std::string &instanceID,
-    const std::shared_ptr<runtime::CheckpointResponse> &status) {
-}
-
-bool functionsystem::local_scheduler::MigrateControllerActor::IsInstHibernate(
-    const resources::InstanceInfo &instanceInfo) {
+bool MigrateControllerActor::IsInstHibernate(
+    const resources::InstanceInfo &instanceInfo)
+{
     auto iter = instanceInfo.createoptions().find(ENABLE_SUSPEND_RESUME);
     if (iter != instanceInfo.createoptions().end()) {
         return iter->second == "true";
     }
     return false;
+}
+
+void MigrateControllerActor::ChangeInstState(
+    const std::string &instanceID, const int32_t &state)
+{
+    if (instanceStateMap_.find(instanceID) != instanceStateMap_.end()) {
+        instanceStateMap_[instanceID] = state;
+        YRLOG_DEBUG("InstanceID:{} state changed to:{}", instanceID, static_cast<uint32_t>(state));
+        return;
+    }
+    instanceStateMap_[instanceID] = state;
+    YRLOG_INFO("InstanceID:{} added to migrate monitor map, state:{}", instanceID, static_cast<uint32_t>(state));
+}
+
+void MigrateControllerActor::DelInstState(const std::string &instanceID)
+{
+    if (instanceStateMap_.find(instanceID) == instanceStateMap_.end()) {
+        YRLOG_DEBUG("InstanceID:{} is not in monitor map", instanceID);
+        return;
+    }
+    instanceStateMap_.erase(instanceID);
+    YRLOG_INFO("InstanceID:{} removed from migrate monitor map", instanceID);
+}
 }
