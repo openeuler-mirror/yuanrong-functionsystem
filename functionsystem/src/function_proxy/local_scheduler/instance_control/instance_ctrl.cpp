@@ -363,4 +363,10 @@ litebus::Future<KillResponse> InstanceCtrl::ForwardSubscriptionEvent(const std::
     ASSERT_IF_NULL(instanceCtrlActor_);
     return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::ForwardSubscriptionEvent, ctx);
 }
+
+litebus::Future<Status> InstanceCtrl::Checkpoint(const std::string &instanceID)
+{
+    ASSERT_IF_NULL(instanceCtrlActor_);
+    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::Checkpoint, instanceID);
+}
 }  // namespace functionsystem::local_scheduler

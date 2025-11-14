@@ -18,29 +18,57 @@
 #define LOCAL_SCHEDULER_MIGRATE_CONTROLLER_ACTOR_H
 
 #include "actor/actor.hpp"
+#include "async/async.hpp"
+#include "common/observer/control_plane_observer/control_plane_observer.h"
+#include "local_scheduler/instance_control/instance_ctrl.h"
 #include "proto/pb/posix/resource.pb.h"
 #include "status/status.h"
 
 namespace functionsystem::local_scheduler {
-    class MigrateControllerActor : public litebus::ActorBase {
-    public:
-        void Update(const std::string &instanceID, const resources::InstanceInfo &instanceInfo,
-                    bool isForceUpdate);
+class MigrateControllerActor : public litebus::ActorBase {
+public:
+    void Update(const std::string &instanceID, const resources::InstanceInfo &instanceInfo,
+                bool isForceUpdate);
 
-        void Delete(const std::string &instanceID);
+    void Delete(const std::string &instanceID);
 
-        void InstUtilChangeCallback(const std::string &instanceID, const int utilization);
+    void CallQueueChangeCallBack(const std::string &instanceID, const int utilization);
 
-        void CheckPointRespCallback(const std::string &instanceID,
-                                    const std::shared_ptr<runtime::CheckpointResponse> &status);
+    void CheckPointRespCallback(const std::string &instanceID,
+                                const std::shared_ptr<runtime::CheckpointResponse> &status);
 
-    private:
-        bool IsInstHibernate(const resources::InstanceInfo &instanceInfo);
+    void StoreInstState(const std::string &instanceID, const int32_t &state);
+    void DelInstState(const std::string &instanceID);
 
+    litebus::Future<KillResponse> SuspendInstance(const std::shared_ptr<KillRequest> &killReq);
 
-        std::unordered_map<std::string, int32_t> instanceStateMap_;
-        std::unordered_map<std::string, int32_t> instanceUtilizationMap_;
-    };
+    litebus::Future<KillResponse> RecycleInstance(const std::shared_ptr<KillRequest> &killReq);
+
+private:
+    bool IsInstHibernate(const resources::InstanceInfo &instanceInfo);
+
+    uint32_t GetInstanceIdleTime(const std::string &instanceID, const resources::InstanceInfo &info);
+
+    std::string self_;
+    std::unordered_map<std::string, int32_t> instanceStateMap_;
+    std::unordered_map<std::string, int32_t> idleTimerMap_;
+    litebus::AID observerId_;
+    uint32_t systemIdleToSuspend = 0;
+    std::shared_ptr<InstanceCtrl> instanceCtrl_ = nullptr;
+
+public:
+    MigrateControllerActor(const std::string &name, const std::string &self,
+                           const litebus::AID &observer_id)
+        : ActorBase(name),
+          self_(self),
+          observerId_(observer_id)
+    {
+        litebus::Async(observer_id, &function_proxy::ControlPlaneObserver::RegisterCallQueueChangeCbFunc,
+                       [this](const std::string &instanceID, int utilization) {
+                           this->CallQueueChangeCallBack(instanceID, utilization);
+                       });
+    }
+};
 }
 
 #endif //LOCAL_SCHEDULER_MIGRATE_CONTROLLER_ACTOR_H

@@ -18,12 +18,15 @@
 
 #include <unordered_set>
 
+#include "types/instance_state.h"
 #include "async/defer.hpp"
 #include "async/uuid_generator.hpp"
 #include "logs/logging.h"
 #include "metadata/metadata.h"
 #include "metrics/metrics_adapter.h"
 #include "meta_store_kv_operation.h"
+#include "meta_store_adapter/instance_operator.h"
+#include "utils/struct_transfer.h"
 
 namespace functionsystem {
 const int32_t MAX_EXIT_TIMES = 3;

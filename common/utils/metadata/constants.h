@@ -251,6 +251,7 @@ const std::string CONDA_DEFAULT_ENV = "CONDA_DEFAULT_ENV";
 
 // hibernate
 const std::string ENABLE_SUSPEND_RESUME = "enableSuspendResume";
+const std::string IDLE_TO_SUSPEND = "idleToSuspend";
 
 }  // namespace functionsystem
 #endif  // COMMON_CONSTANTS_CONSTANTS_H
