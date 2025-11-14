@@ -60,7 +60,6 @@ public:
     void ForwardCreateResourceGroup(const litebus::AID &from, std::string &&name, std::string &&msg);
     void ForwardDeleteResourceGroup(const litebus::AID &from, std::string &&name, std::string &&msg);
     void ForwardReportUnitAbnormal(const litebus::AID &from, std::string &&name, std::string &&msg);
-    void OnForwardGroupSchedule(const litebus::AID &from, std::string &&name, std::string &&msg);
     void OnRemoveBundle(const litebus::AID &from, std::string &&name, std::string &&msg);
     litebus::Future<Status> OnLocalAbnormal(const std::string &abnormalLocal);
     litebus::Future<messages::QueryResourceGroupResponse> QueryResourceGroup(
@@ -94,11 +93,6 @@ protected:
         const std::shared_ptr<messages::GroupInfo> &groupInfo);
     litebus::Future<messages::GroupResponse> ForwardGroupSchedule(
         const std::shared_ptr<messages::GroupInfo> &groupInfo);
-    void DoForwardGroupSchedule(const std::shared_ptr<litebus::Promise<messages::GroupResponse>> &promise,
-                                const std::shared_ptr<messages::GroupInfo> groupInfo);
-    void SendForwardGroupSchedule(const std::shared_ptr<litebus::Promise<messages::GroupResponse>> &promise,
-                                  const litebus::AID &domainGroupCtrl,
-                                  const std::shared_ptr<messages::GroupInfo> &groupInfo);
     litebus::Future<Status> ForwardGroupScheduleDone(
         const messages::GroupResponse &groupRsp, const std::string &requestID, const std::string &name,
         const std::string &tenantID,
@@ -242,8 +236,6 @@ private:
     std::shared_ptr<Business> business_{ nullptr };
     std::shared_ptr<ResourceGroupOperator> groupOperator_;
     int32_t defaultRescheduleInterval_{ DEFAULT_RESCHEDULE_INTERVAL };
-    const uint32_t groupTimeout_ = 10000;
-    REQUEST_SYNC_HELPER(ResourceGroupManagerActor, messages::GroupResponse, groupTimeout_, requestGroupScheduleMatch_);
 };
 }  // namespace functionsystem::resource_group_manager
 #endif  // FUNCTION_MASTER_RESOURCE_GROUP_MANAGER_ACTOR_H
