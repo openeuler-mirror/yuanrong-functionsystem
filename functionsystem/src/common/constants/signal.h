@@ -18,6 +18,8 @@
 #define SRC_COMMON_CONSTANTS_SIGNAL_H
 
 #include <cstdint>
+#include <string>
+#include <unordered_map>
 
 namespace functionsystem {
 // Minimum signal range

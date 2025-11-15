@@ -734,6 +734,7 @@ message KillGroup {
   string groupID = 2;
   // master send request to local, local clear groupCtx
   string groupRequestID = 3;
+  int32 signal = 4;
 }
 
 message KillGroupResponse {

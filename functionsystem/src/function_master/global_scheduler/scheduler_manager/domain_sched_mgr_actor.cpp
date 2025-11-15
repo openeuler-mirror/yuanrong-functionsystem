@@ -191,16 +191,12 @@ litebus::Future<messages::GroupResponse> DomainSchedMgrActor::GroupSchedule(
 void DomainSchedMgrActor::OnForwardGroupSchedule(const litebus::AID &from, std::string &&name, std::string &&msg)
 {
     messages::GroupResponse rsp;
-    if (!rsp.ParseFromString(msg)) {
-        YRLOG_WARN("invalid {} response from {} msg {}, ignored", std::string(from), name, msg);
-        return;
-    }
+    RETURN_IF_TRUE(!rsp.ParseFromString(msg),
+                   fmt::format("invalid {} response from {} msg {}, ignored", std::string(from), name, msg));
     auto status = requestGroupScheduleMatch_.Synchronized(rsp.requestid(), rsp);
-    if (status.IsError()) {
-        YRLOG_WARN("{}|{}|received from {}. code {} msg {}. no found request ignore it", rsp.traceid(), rsp.requestid(),
-                   from.HashString(), rsp.code(), rsp.message());
-        return;
-    }
+    RETURN_IF_TRUE(status.IsError(),
+                   fmt::format("{}|{}|received from {}. code {} msg {}. no found request ignore it", rsp.traceid(),
+                               rsp.requestid(), from.HashString(), rsp.code(), rsp.message()));
     YRLOG_INFO("{}|{}|received response. code {} message {}. from {}", rsp.traceid(), rsp.requestid(), rsp.code(),
                rsp.message(), from.HashString());
 }

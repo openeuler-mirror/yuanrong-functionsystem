@@ -78,12 +78,6 @@ public:
     /// kill all instances (::messages::KillGroupRequest)
     void KillGroup(const litebus::AID &from, std::string &&name, std::string &&msg);
 
-    /// suspend all instances of group (::messages::KillGroup)
-    void SuspendGroup(const litebus::AID &from, std::string &&name, std::string &&msg);
-
-    /// resume all instances of group (::messages::KillGroup)
-    void ResumeGroup(const litebus::AID &from, std::string &&name, std::string &&msg);
-
     // clear group response from local
     void OnClearGroup(const litebus::AID &from, std::string &&name, std::string &&msg);
 
@@ -145,10 +139,8 @@ protected:
                                               const std::shared_ptr<resource_view::InstanceInfo> &instance,
                                               const std::shared_ptr<internal::ForwardKillRequest> killReq);
 
-    litebus::Future<Status> InnerKillInstanceOnComplete(const litebus::AID &from, const std::string &groupID,
-                                                        const Status &status);
-    void OnGroupCompleteForMethod(const litebus::AID &from, std::string method, const std::string &groupID,
-                                  const litebus::Future<Status> &future);
+    void InnerKillInstanceOnComplete(const litebus::AID &from, const std::string &groupID,
+                                     const litebus::Future<Status> &future);
     void WatchGroups();
     void OnGroupWatch(const std::shared_ptr<Watcher> &watcher);
     void OnGroupWatchEvent(const std::vector<WatchEvent> &events);
@@ -233,8 +225,10 @@ protected:
 
         virtual void OnGroupPut(const std::string &groupKey, std::shared_ptr<messages::GroupInfo> groupInfo) = 0;
         virtual void KillGroup(const litebus::AID &from, std::string &&name, std::string &&msg) = 0;
-        virtual void SuspendGroup(const litebus::AID &from, std::string &&name, std::string &&msg) = 0;
-        virtual void ResumeGroup(const litebus::AID &from, std::string &&name, std::string &&msg) = 0;
+        virtual void SuspendGroup(const litebus::AID &from,
+                                  const std::shared_ptr<::messages::KillGroup> &killGroupReq) = 0;
+        virtual void ResumeGroup(const litebus::AID &from,
+                                 const std::shared_ptr<::messages::KillGroup> &killGroupReq) = 0;
         virtual litebus::Future<Status> InnerKillGroup(const std::string &groupID,
                                                        const std::string &srcInstanceID) = 0;
         virtual litebus::Future<Status> OnInstanceAbnormal(
@@ -272,8 +266,9 @@ protected:
 
         void OnGroupPut(const std::string &groupKey, std::shared_ptr<messages::GroupInfo> groupInfo) override;
         void KillGroup(const litebus::AID &from, std::string &&name, std::string &&msg) override;
-        void SuspendGroup(const litebus::AID &from, std::string &&name, std::string &&msg) override;
-        void ResumeGroup(const litebus::AID &from, std::string &&name, std::string &&msg) override;
+        void SuspendGroup(const litebus::AID &from,
+                          const std::shared_ptr<::messages::KillGroup> &killGroupReq) override;
+        void ResumeGroup(const litebus::AID &from, const std::shared_ptr<::messages::KillGroup> &killGroupReq) override;
         litebus::Future<Status> InnerKillGroup(const std::string &groupID, const std::string &srcInstanceID) override;
 
         litebus::Future<Status> OnInstanceAbnormal(
@@ -344,12 +339,12 @@ protected:
             YRLOG_INFO("slave get kill group message");
         }
 
-        void SuspendGroup(const litebus::AID &from, std::string &&name, std::string &&msg) override
+        void SuspendGroup(const litebus::AID &from, const std::shared_ptr<::messages::KillGroup> &killGroupReq) override
         {
             YRLOG_INFO("slave get suspend group message from {}", from.HashString());
         }
 
-        void ResumeGroup(const litebus::AID &from, std::string &&name, std::string &&msg) override
+        void ResumeGroup(const litebus::AID &from, const std::shared_ptr<::messages::KillGroup> &killGroupReq) override
         {
             YRLOG_INFO("slave get resume group message from {}", from.HashString());
         }

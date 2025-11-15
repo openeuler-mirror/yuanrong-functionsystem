@@ -333,18 +333,32 @@ void GroupManagerActor::MasterBusiness::KillGroup(const litebus::AID &from, std:
 {
     // uses local's auth for now
     auto killGroupReq = std::make_shared<::messages::KillGroup>();
-    killGroupReq->ParseFromString(msg);
-
-    if (auto inserted = member_->killingGroups.emplace(killGroupReq->groupid()).second; !inserted) {
-        YRLOG_INFO("receive repeated kill group({}) request, ignored", killGroupReq->groupid());
-        return;
-    }
+    RETURN_IF_TRUE(!killGroupReq->ParseFromString(msg), "invalid request for resume group");
+    RETURN_IF_TRUE(auto inserted = member_->killingGroups.emplace(killGroupReq->groupid()).second;
+                   !inserted, fmt::format("receive group({}) request which suspend/resume/kill is ongoint, ignored",
+                                          killGroupReq->groupid()));
     auto actor = actor_.lock();
     ASSERT_IF_NULL(actor);
 
-    InnerKillGroup(killGroupReq->groupid(), killGroupReq->srcinstanceid())
-        .Then(litebus::Defer(actor->GetAID(), &GroupManagerActor::InnerKillInstanceOnComplete, from,
-                             killGroupReq->groupid(), std::placeholders::_1));
+    switch (killGroupReq->signal()) {
+        case (SHUT_DOWN_SIGNAL_GROUP): {
+            InnerKillGroup(killGroupReq->groupid(), killGroupReq->srcinstanceid())
+                .OnComplete(litebus::Defer(actor->GetAID(), &GroupManagerActor::InnerKillInstanceOnComplete, from,
+                                           killGroupReq->groupid(), std::placeholders::_1));
+            return;
+        }
+        case (GROUP_SUSPEND_SIGNAL): {
+            return SuspendGroup(from, killGroupReq);
+        }
+        case (GROUP_RESUME_SIGNAL): {
+            return ResumeGroup(from, killGroupReq);
+        }
+        default: {
+            YRLOG_WARN("invalid group signal({}) for {}", killGroupReq->signal(), killGroupReq->groupid());
+            return;
+        }
+    }
+    return;
 }
 
 litebus::Future<Status> GroupManagerActor::MasterBusiness::InnerKillGroup(const std::string &groupID,
@@ -398,18 +412,15 @@ void GroupManagerActor::OnGroupSuspend(const litebus::Future<Status> &future, co
     ASSERT_FS(future.IsOK());
     auto status = future.Get();
     if (status.IsError()) {
-        return OnGroupCompleteForMethod(from, "OnSuspendGroup", groupID, status);
+        return InnerKillInstanceOnComplete(
+            from, groupID,
+            Status(status.StatusCode(),
+                   fmt::format("failed to suspend group({}), reason:{}", groupID, status.RawMessage())));
     }
     ASSERT_IF_NULL(business_);
     business_->PersistentGroupInfo(groupID, GroupState::SUSPEND, "group is already suspend")
-        .OnComplete(litebus::Defer(GetAID(), &GroupManagerActor::OnGroupCompleteForMethod, from, "OnSuspendGroup",
-                                   groupID, std::placeholders::_1));
-}
-
-void GroupManagerActor::SuspendGroup(const litebus::AID &from, std::string &&name, std::string &&msg)
-{
-    ASSERT_IF_NULL(business_);
-    business_->SuspendGroup(from, std::move(name), std::move(msg));
+        .OnComplete(litebus::Defer(GetAID(), &GroupManagerActor::InnerKillInstanceOnComplete, from, groupID,
+                                   std::placeholders::_1));
 }
 
 litebus::Future<Status> GroupManagerActor::BroadCastSignalForGroup(const std::string &groupID,
@@ -431,14 +442,13 @@ litebus::Future<Status> GroupManagerActor::MasterBusiness::BroadCastSignalForGro
     YRLOG_INFO("broadcast {} to {} instances of group({})", SignalToString(signal), instances.size(), groupID);
     for (const auto &inst : instances) {
         auto killReq = MakeKillReq(inst.second, srcInstanceID, signal, fmt::format("group broadcast"));
-
         auto promise = std::make_shared<litebus::Promise<Status>>();
         futures.emplace_back(promise->GetFuture());
         member_->killRspPromises[killReq->requestid()] = promise;
         ASSERT_IF_NULL(member_->globalScheduler);
         member_->globalScheduler->GetLocalAddress(inst.second->functionproxyid())
             .Then(litebus::Defer(actor->GetAID(), &GroupManagerActor::InnerKillInstance, std::placeholders::_1,
-                                 inst.second, killReq))
+                                 inst.second, killReq)) 
             .OnComplete([instInfo(inst.second), signal](const litebus::Future<Status> &s) {
                 if (!s.IsOK()) {
                     YRLOG_ERROR("failed to send ({}) instance {}, on proxy {}, in group {}", SignalToString(signal), instInfo->instanceid(),
@@ -446,22 +456,14 @@ litebus::Future<Status> GroupManagerActor::MasterBusiness::BroadCastSignalForGro
                 }
             });
     }
-    std::string errDescription = fmt::format("broadcast ({}) group({}}) instances", SignalToString(signal), groupID);
-    return CollectStatus(futures, errDescription, StatusCode::FAILED, StatusCode::SUCCESS)
-        .After(KILLGROUP_TIMEOUT, [errDescription](const litebus::Future<Status> &future) {
-            auto promise = litebus::Promise<Status>();
-            promise.SetValue(Status(StatusCode::REQUEST_TIME_OUT, "failed to " + errDescription));
-            return promise.GetFuture();
-        });
+    std::string errDescription = fmt::format("broadcast ({}) group({}) instances", SignalToString(signal), groupID);
+    return CollectStatus(futures, errDescription);
 }
 
-void GroupManagerActor::MasterBusiness::SuspendGroup(const litebus::AID &from, std::string &&name, std::string &&msg)
+void GroupManagerActor::MasterBusiness::SuspendGroup(const litebus::AID &from,
+                                                     const std::shared_ptr<::messages::KillGroup> &killGroupReq)
 {
-    auto killGroupReq = std::make_shared<::messages::KillGroup>();
-    RETURN_IF_TRUE(!killGroupReq->ParseFromString(msg), "invalid request for suspend group");
-
-    // todo: killingGroups 去重
-
+    YRLOG_INFO("recevied group({}) suspend request from {}", killGroupReq->groupid(), from.HashString());
     auto actor = actor_.lock();
     ASSERT_IF_NULL(actor);
     auto groupID = killGroupReq->groupid();
@@ -471,7 +473,7 @@ void GroupManagerActor::MasterBusiness::SuspendGroup(const litebus::AID &from, s
         auto reason = fmt::format("group({}) status is {} which not allow to be suspend", groupID,
                                   ToString(static_cast<GroupState>(group.first.second->status())));
         YRLOG_ERROR("{}, request from {}", reason, from.HashString());
-        return actor->OnGroupCompleteForMethod(from, "OnSuspendGroup", groupID,
+        return actor->InnerKillInstanceOnComplete(from, groupID,
                                                Status(StatusCode::ERR_STATE_MACHINE_ERROR, reason));
     }
     BroadCastSignalForGroup(groupID, srcInstanceID, INSTANCE_CHECKPOINT_SIGNAL)
@@ -485,18 +487,10 @@ void GroupManagerActor::MasterBusiness::SuspendGroup(const litebus::AID &from, s
         .OnComplete(litebus::Defer(actor->GetAID(), &GroupManagerActor::OnGroupSuspend, std::placeholders::_1, from, groupID));
 }
 
-void GroupManagerActor::ResumeGroup(const litebus::AID &from, std::string &&name, std::string &&msg)
+void GroupManagerActor::MasterBusiness::ResumeGroup(const litebus::AID &from,
+                                                    const std::shared_ptr<::messages::KillGroup> &killGroupReq)
 {
-    ASSERT_IF_NULL(business_);
-    business_->ResumeGroup(from, std::move(name), std::move(msg));
-}
-
-void GroupManagerActor::MasterBusiness::ResumeGroup(const litebus::AID &from, std::string &&name, std::string &&msg)
-{
-    auto killGroupReq = std::make_shared<::messages::KillGroup>();
-    RETURN_IF_TRUE(!killGroupReq->ParseFromString(msg), "invalid request for resume group");
-    // todo: killingGroups 去重
-
+    YRLOG_INFO("recevied group({}) resume request from {}", killGroupReq->groupid(), from.HashString());
     auto actor = actor_.lock();
     ASSERT_IF_NULL(actor);
     auto groupID = killGroupReq->groupid();
@@ -506,8 +500,7 @@ void GroupManagerActor::MasterBusiness::ResumeGroup(const litebus::AID &from, st
         auto reason = fmt::format("group({}) status is {} which not allow to be resumed", groupID,
                                   ToString(static_cast<GroupState>(group.first.second->status())));
         YRLOG_ERROR("{}, request from {}", reason, from.HashString());
-        return actor->OnGroupCompleteForMethod(from, "OnResumeGroup", groupID,
-                                               Status(StatusCode::ERR_STATE_MACHINE_ERROR, reason));
+        return actor->InnerKillInstanceOnComplete(from, groupID, Status(StatusCode::ERR_STATE_MACHINE_ERROR, reason));
     }
     ReScheduleGroup(groupID).OnComplete(
         litebus::Defer(actor->GetAID(), &GroupManagerActor::OnGroupResume, std::placeholders::_1, from, groupID));
@@ -519,12 +512,15 @@ void GroupManagerActor::OnGroupResume(const litebus::Future<Status> &future, con
     ASSERT_FS(future.IsOK());
     auto status = future.Get();
     if (status.IsError()) {
-        return OnGroupCompleteForMethod(from, "OnResumeGroup", groupID, status);
+        return InnerKillInstanceOnComplete(
+            from, groupID,
+            Status(status.StatusCode(),
+                   fmt::format("failed to resume group({}), reason:{}", groupID, status.RawMessage())));
     }
     ASSERT_IF_NULL(business_);
     business_->PersistentGroupInfo(groupID, GroupState::RUNNING, "group is already resumed")
-        .OnComplete(litebus::Defer(GetAID(), &GroupManagerActor::OnGroupCompleteForMethod, from, "OnResumeGroup",
-                                   groupID, std::placeholders::_1));
+        .OnComplete(litebus::Defer(GetAID(), &GroupManagerActor::InnerKillInstanceOnComplete, from, groupID,
+                                   std::placeholders::_1));
 }
 
 litebus::Future<Status> GroupManagerActor::MasterBusiness::ReScheduleGroup(const std::string &groupID)
@@ -698,22 +694,11 @@ void GroupManagerActor::DeleteGroupInfoFromMetaStore(const std::string &groupKey
         });
 }
 
-void GroupManagerActor::OnGroupCompleteForMethod(const litebus::AID &from, std::string method,
-                                                 const std::string &groupID, const litebus::Future<Status> &future)
+void GroupManagerActor::InnerKillInstanceOnComplete(const litebus::AID &from, const std::string &groupID,
+                                                    const litebus::Future<Status> &future)
 {
     RETURN_IF_TRUE(future.IsError(), "Invalid future");
-    auto msg = ::messages::KillGroupResponse{};
     auto status = future.Get();
-    msg.set_groupid(groupID);
-    msg.set_code(static_cast<int32_t>(status.StatusCode()));
-    msg.set_message(status.GetMessage());
-    YRLOG_INFO("send {} of ({}) to {}, msg {}", method, groupID, from.HashString(), msg.message());
-    Send(from, std::move(method), msg.SerializeAsString());
-}
-
-litebus::Future<Status> GroupManagerActor::InnerKillInstanceOnComplete(const litebus::AID &from,
-                                                                       const std::string &groupID, const Status &status)
-{
     auto msg = ::messages::KillGroupResponse{};
     msg.set_groupid(groupID);
     msg.set_code(static_cast<int32_t>(status.StatusCode()));
@@ -721,7 +706,6 @@ litebus::Future<Status> GroupManagerActor::InnerKillInstanceOnComplete(const lit
     YRLOG_INFO("send OnKillGroup of ({}) to {}, msg {}", groupID, from.HashString(), msg.message());
     Send(from, "OnKillGroup", msg.SerializeAsString());
     member_->killingGroups.erase(groupID);
-    return Status::OK();
 }
 
 litebus::Future<Status> GroupManagerActor::InnerKillInstance(
