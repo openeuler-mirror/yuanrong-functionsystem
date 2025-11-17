@@ -42,7 +42,7 @@ void MigrateControllerActor::Update(const std::string &instanceID,
         return;
     }
     auto state = instanceInfo.instancestatus().code();
-    litebus::Async(this->GetAID(), &MigrateControllerActor::ChangeInstState, instanceID, state);
+    litebus::Async(this->GetAID(), &MigrateControllerActor::StoreInstState, instanceID, state);
 }
 
 void MigrateControllerActor::Delete(const std::string &instanceID)
@@ -64,7 +64,7 @@ litebus::Future<Status> MigrateControllerActor::SuspendInstance(const std::strin
 
 litebus::Future<Status> MigrateControllerActor::RecycleInstance(const std::string &instanceID)
 {
-    return this->instanceCtrl_->Kill(instanceID).Then([instanceID](const Status &status) {
+    return this->instanceCtrl_->Killruntime(instanceID).Then([instanceID](const Status &status) {
         if (status.IsError()) {
             YRLOG_ERROR("InstanceID:{} recycle failed, error: {}", instanceID, status.ToString());
             return status;
@@ -84,7 +84,7 @@ bool MigrateControllerActor::IsInstHibernate(
     return false;
 }
 
-void MigrateControllerActor::ChangeInstState(
+void MigrateControllerActor::StoreInstState(
     const std::string &instanceID, const int32_t &state)
 {
     if (instanceStateMap_.find(instanceID) != instanceStateMap_.end()) {

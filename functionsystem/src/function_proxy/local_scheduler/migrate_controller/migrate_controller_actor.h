@@ -37,10 +37,8 @@ public:
     void CheckPointRespCallback(const std::string &instanceID,
                                 const std::shared_ptr<runtime::CheckpointResponse> &status);
 
-    void ChangeInstState(const std::string &instanceID, const int32_t &state);
+    void StoreInstState(const std::string &instanceID, const int32_t &state);
     void DelInstState(const std::string &instanceID);
-
-    Status Awake(const std::string &instanceID);
 
     litebus::Future<Status> SuspendInstance(const std::string &instanceID);
     litebus::Future<Status> RecycleInstance(const std::string &instanceID);
