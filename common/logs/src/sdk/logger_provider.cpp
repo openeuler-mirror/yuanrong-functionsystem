@@ -56,7 +56,7 @@ LogsApi::YrLogger LoggerProvider::CreateYrLogger(const LogsApi::LogParam &logPar
     if (logger != nullptr) {
         return logger;
     }
-    return context_->CreateAsyncLogger(logParam);
+    return context_->CreateLogger(logParam);
 }
 
 void LoggerProvider::DropYrLogger(const std::string &loggerName) noexcept
@@ -85,7 +85,7 @@ bool LoggerProvider::Shutdown() noexcept
     return context_->Shutdown();
 }
 
-bool LoggerProvider::ForceFlush(std::chrono::microseconds /* timeout */) noexcept
+bool LoggerProvider::ForceFlush(std::chrono::microseconds) noexcept
 {
     assert((context_) != nullptr);
     return context_->ForceFlush();

@@ -22,12 +22,12 @@
 #include "logs/api/logger.h"
 #include "logs/api/log_param.h"
 
-namespace spdlog {
+namespace yr_spdlog {
 class logger;
 }
 
 namespace observability::api::logs {
-using YrLogger = std::shared_ptr<spdlog::logger>;
+using YrLogger = std::shared_ptr<yr_spdlog::logger>;
 class Logger;
 class LoggerProvider {
 public:

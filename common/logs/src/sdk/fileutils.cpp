@@ -41,7 +41,7 @@ const int THOUSANDS_OF_MAGNITUDE = 1000;
 const int MILLION_OF_MAGNITUDE = 1000000;
 const mode_t LOG_FILE_PERMISSION = 0440;
 const size_t BUFFER_SIZE = 32 * 1024uL;
-
+constexpr int DIR_PATH_MAX = PATH_MAX;
 
 inline std::string StrErr(int errNum)
 {
@@ -127,10 +127,10 @@ int CompressFile(const std::string &src, const std::string &dest)
     }
 
     size_t size = BUFFER_SIZE;
-    auto buf = std::make_unique<uint8_t[]>(BUFFER_SIZE);
+    uint8_t buf[size] = "\0";
     for (;;) {
         try {
-            Read(file, buf.get(), &size);
+            Read(file, buf, &size);
         } catch (const std::exception &readException) {
             (void)gzclose(gzf);
             (void)fclose(file);
@@ -140,7 +140,7 @@ int CompressFile(const std::string &src, const std::string &dest)
         if (size == 0) {
             break;
         }
-        int n = gzwrite(gzf, buf.get(), static_cast<unsigned int>(size));
+        int n = gzwrite(gzf, buf, static_cast<unsigned int>(size));
         if (n <= 0) {
             int err;
             const char *errStr = gzerror(gzf, &err);
@@ -196,12 +196,12 @@ bool RenameFile(const std::string &srcFile, const std::string &targetFile) noexc
 
 std::optional<std::string> RealPath(const std::string &inputPath, const int reserveLen)
 {
-    char path[PATH_MAX] = { 0x00 };
+    char path[DIR_PATH_MAX] = { 0x00 };
     if (reserveLen < 0) {
         return std::nullopt;
     }
-    if (inputPath.length() >= PATH_MAX ||
-        inputPath.length() + static_cast<size_t>(reserveLen) >= PATH_MAX ||
+    if (inputPath.length() > DIR_PATH_MAX ||
+        inputPath.length() + static_cast<size_t>(reserveLen) > DIR_PATH_MAX ||
         realpath(inputPath.c_str(), path) == nullptr) {
         return std::nullopt;
     }
