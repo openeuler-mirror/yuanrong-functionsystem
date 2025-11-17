@@ -37,7 +37,7 @@ static const std::unordered_map<InstanceState, std::unordered_set<InstanceState>
       { InstanceState::RUNNING, InstanceState::FAILED, InstanceState::EXITING, InstanceState::FATAL } },
     { InstanceState::RUNNING,
       { InstanceState::FAILED, InstanceState::EXITING, InstanceState::FATAL, InstanceState::EVICTING,
-        InstanceState::SUB_HEALTH } },
+        InstanceState::SUB_HEALTH, InstanceState::SUSPEND } },
     { InstanceState::SUB_HEALTH,
       { InstanceState::FAILED, InstanceState::EXITING, InstanceState::FATAL, InstanceState::EVICTING,
         InstanceState::RUNNING } },
@@ -47,6 +47,7 @@ static const std::unordered_map<InstanceState, std::unordered_set<InstanceState>
     { InstanceState::EVICTING, { InstanceState::EVICTED, InstanceState::FATAL } },
     { InstanceState::SCHEDULE_FAILED, { InstanceState::SCHEDULING, InstanceState::EXITING } },
     { InstanceState::EVICTED, { InstanceState::EXITING, InstanceState::FATAL } },
+    { InstanceState::SUSPEND, { InstanceState::CREATING, InstanceState::SCHEDULING, InstanceState::FATAL } },
 };
 
 /**
