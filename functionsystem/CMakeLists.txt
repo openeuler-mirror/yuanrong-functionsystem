@@ -157,11 +157,6 @@ if ("${BUILD_LLT}" STREQUAL "OFF")
 endif ()
 message(STATUS "GIT COMMIT: ${GIT_HASH}; BRANCH: ${GIT_BRANCH_NAME}")
 
-include(common)
-get_property(UTILS_INCLUDE GLOBAL PROPERTY "UTILS_INCLUDE")
-include_directories(${UTILS_INCLUDE})
-include_directories(${UTILS_INCLUDE}/metadata)
-
 get_property(META_STORE_CLIENT_INCLUDE_DIR GLOBAL PROPERTY "META_STORE_CLIENT_INCLUDE_DIR")
 include_directories(${META_STORE_CLIENT_INCLUDE_DIR})
 add_subdirectory(src)
