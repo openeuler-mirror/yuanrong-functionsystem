@@ -22,22 +22,25 @@
 #include <queue>
 
 #include "async/future.hpp"
-#include "constants.h"
-#include "heartbeat/ping_pong_driver.h"
+#include "common/constants/constants.h"
+#include "common/heartbeat/heartbeat_client.h"
 #include "common/network/network_isolation.h"
 #include "common/register/register_helper.h"
+#include "common/static_function_util.h"
+#include "common/types/instance_state.h"
 #include "common/utils/struct_transfer.h"
 #include "function_agent/code_deployer/deployer.h"
 #include "function_agent/code_deployer/s3_deployer.h"
 #include "function_agent/common/constants.h"
 #include "function_agent/common/types.h"
+#include "function_agent/network/network_tool.h"
 
 namespace functionsystem::function_agent {
 
 const uint32_t DEFAULT_INTERVAL = 5000;
-const uint32_t DOWNLOAD_CODE_RETRY_INTERVAL = 3000; // 3s
-const uint32_t STATIC_FUNCTION_SCHEDULE_RETRY_INTERVAL = 3000; // 3s
-const std::string PODIP_IPSET_NAME = "podip-whitelist"; // length cannot exceed 31
+const uint32_t DOWNLOAD_CODE_RETRY_INTERVAL = 3000;                    // 3s
+const uint32_t STATIC_FUNCTION_SCHEDULE_RETRY_INTERVAL = 3000;         // 3s
+const std::string TENANT_PODIP_IPSET_NAME = "tenant-podip-whitelist";  // length cannot exceed 31
 
 struct DeployerParameters {
     std::shared_ptr<Deployer> deployer;
@@ -71,11 +74,12 @@ public:
         S3Config s3Config;
         messages::CodePackageThresholds codePackageThresholds;
         uint32_t pingTimeoutMs = 0;
-        std::string ipsetName = PODIP_IPSET_NAME;
+        std::string ipsetName = TENANT_PODIP_IPSET_NAME;
+        std::string nodeID;
     };
 
     AgentServiceActor(const std::string &name, const std::string &agentID, const Config &config,
-                      const std::string &alias = "")
+                      const std::string &alias = "", const std::string &componentName = "")
         : ActorBase(name),
           agentID_(agentID),
           alias_(alias),
@@ -88,14 +92,17 @@ public:
           agentServiceName_(name),
           isRegisterCompleted_(false),
           pingTimeoutMs_(config.pingTimeoutMs),
-          ipsetIsolation_(std::make_shared<IpsetIpv4NetworkIsolation>(config.ipsetName))
+          ipsetIsolation_(std::make_shared<IpsetIpv4NetworkIsolation>(config.ipsetName)),
+          componentName_(componentName),
+          nodeID_(config.nodeID)
+
     {
         randomUuid_ = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
     }
     ~AgentServiceActor() override = default;
 
     virtual void Registered(const litebus::AID &from, std::string &&name, std::string &&msg);
-    void TimeOutEvent(HeartbeatConnection connection);
+    void TimeOutEvent();
     litebus::Future<messages::Registered> StartPingPong(const messages::Registered &registered);
 
     /**
@@ -137,6 +144,14 @@ public:
      * @param msg: request data, type is messages::UpdateResourcesRequest
      */
     virtual void UpdateResources(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    /**
+     * request to update resources from runtime manager to function agent
+     * @param from: runtime manager's AID
+     * @param name: function name
+     * @param msg: request data, type is messages::UpdateResourcesRequest
+     */
+    virtual void UpdateMetrics(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     /**
      * request to update an instance's status from runtime manager to function agent
@@ -192,13 +207,16 @@ public:
 
     litebus::Future<Status> SetDeployers(const std::string &storageType, const std::shared_ptr<Deployer> &deployer);
 
-    litebus::Future<Status> IsRegisterLocalSuccessful();
+    litebus::Future<Status> Readiness();
+    litebus::Future<Status> IsAgentReadiness();
 
     void SetRegisterHelper(const std::shared_ptr<RegisterHelper> &helper);
 
     virtual void QueryDebugInstanceInfos(const litebus::AID &, std::string &&, std::string &&msg);
 
     virtual void QueryDebugInstanceInfosResponse(const litebus::AID &, std::string &&, std::string &&msg);
+
+    litebus::Future<Status> CreateStaticFunctionInstance();
 
     // for test
     [[maybe_unused]] void SetIpsetName(std::string ipsetName)
@@ -224,7 +242,7 @@ public:
     }
 
     // for test
-    [[maybe_unused]] std::shared_ptr<PingPongDriver> GetPingPongDriver() const
+    [[maybe_unused]] std::shared_ptr<HeartbeatClientDriver> GetPingPongDriver() const
     {
         return pingPongDriver_;
     }
@@ -292,6 +310,18 @@ public:
     [[maybe_unused]] void SetRegisterInfo(const RegisterInfo &registerInfo)
     {
         registerInfo_ = registerInfo;
+    }
+
+    // for test
+    [[maybe_unused]] bool ProtectedSetNetwork(const std::vector<NetworkConfig> &configs)
+    {
+        return SetNetwork(configs);
+    }
+
+    // for test
+    [[maybe_unused]] void ProtectedStartProbers(const std::vector<ProberConfig> &config)
+    {
+        StartProbers(config);
     }
 
     // for test
@@ -389,6 +419,12 @@ public:
         return s3Config_;
     }
 
+    // for test
+    [[maybe_unused]] void SetPingTimeoutMs(uint32_t pingTimeoutMs)
+    {
+        pingTimeoutMs_ = pingTimeoutMs;
+    }
+
 protected:
     // litebus virtual functions
     void Init() override;
@@ -397,6 +433,8 @@ protected:
                                      const std::shared_ptr<messages::DeployInstanceRequest> &req);
 
 private:
+    bool SetNetwork(const std::vector<NetworkConfig> &configs);
+    void StartProbers(const std::vector<ProberConfig> &config);
 
     messages::DeployInstanceResponse InitDeployInstanceResponse(const int32_t code, const std::string &message,
                                                                 const messages::DeployInstanceRequest &source);
@@ -418,7 +456,7 @@ private:
     void DeleteCodeReferByDeployInstanceRequest(const std::shared_ptr<messages::DeployInstanceRequest> &req);
     void DeleteCodeReferByRuntimeInstanceInfo(const messages::RuntimeInstanceInfo &info);
     void DeleteFunction(const std::string &functionDestination, const std::string &instanceID);
-    void UpdateAgentStatusToLocal(int32_t status, const std::string &msg = "");
+    litebus::Future<bool> UpdateAgentStatusToLocal(int32_t status, const std::string &msg = "");
     void RetryUpdateAgentStatusToLocal(const std::string &requestID, const std::string &msg);
 
     void RemoveCodePackageAsync();
@@ -433,7 +471,19 @@ private:
                       const std::shared_ptr<litebus::Promise<DeployResult>> &promise, const uint32_t retryTimes);
 
     litebus::Future<DeployResult> AsyncDownloadCode(const std::shared_ptr<messages::DeployRequest> &request,
-                                               const std::shared_ptr<Deployer> &deployer);
+                                                    const std::shared_ptr<Deployer> &deployer);
+
+    void AttachTemporaryAccesskey(const std::string &storageType,
+                                  std::shared_ptr<messages::DeployRequest> &deployRequest,
+                                  const std::shared_ptr<messages::DeployInstanceRequest> &req);
+
+    std::shared_ptr<messages::ScheduleRequest> CreateScheduleRequest(const StaticFunctionConfig &config,
+                                                                     const FunctionMeta &meta);
+    void RetryInstanceSchedule(const std::string &msg, const std::string &requestId, uint32_t retryTime);
+
+    virtual void StaticFunctionScheduleResponse(const litebus::AID &from, std::string &&, std::string &&msg);
+    virtual void NotifyFunctionStatusChange(const litebus::AID &from, std::string &&, std::string &&msg);
+    DeployResult PrepareSharedDir(std::shared_ptr<messages::DeployInstanceRequest> &req);
 
     bool IsDelegateWorkingDirPath(const DeployerParameters &deployObject);
 
@@ -461,6 +511,7 @@ private:
     // keep runtime_manager registered resource unit and register this unit to local scheduler
     std::shared_ptr<resources::ResourceUnit> registeredResourceUnit_{ nullptr };
 
+    std::unordered_map<std::string, std::shared_ptr<litebus::Promise<bool>>> updateAgentStatusInfoPromises_;
     std::unordered_map<std::string, litebus::Timer> updateAgentStatusInfos_;
 
     // some configs passed by agent's startup parameters
@@ -468,7 +519,7 @@ private:
     messages::CodePackageThresholds codePackageThresholds_;
 
     std::string agentServiceName_;
-    std::shared_ptr<PingPongDriver> pingPongDriver_{ nullptr };
+    std::shared_ptr<HeartbeatClientDriver> pingPongDriver_{ nullptr };
 
     // Registration
     std::shared_ptr<RegisterHelper> registerHelper_{ nullptr };
@@ -490,9 +541,10 @@ private:
     litebus::Promise<StatusCode> sendCleanStatusPromise_;
     bool monopolyUsed_{ false };
     bool isUnitTestSituation_{ false };
+    bool exiting_ = false;
     litebus::Promise<bool> runtimeManagerGracefulShutdown_;
     int64_t gracefulShutdownTime_{ 0 };
-    std::string ipsetName_{ PODIP_IPSET_NAME };
+    std::string ipsetName_{ TENANT_PODIP_IPSET_NAME };
     std::shared_ptr<IpsetIpv4NetworkIsolation> ipsetIsolation_{ nullptr };
     // when it is true and monopolyUsed is true, process will be restarted after runtime is killed
     bool enableRestartForReuse_{ false };
@@ -500,6 +552,15 @@ private:
     std::string randomUuid_;
     uint32_t retryScheduleInterval_{ STATIC_FUNCTION_SCHEDULE_RETRY_INTERVAL };
     std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResponsePromise_;
+    std::string componentName_;
+    std::string nodeID_;
+
+    bool HandleNetworkIsolation(const std::shared_ptr<messages::SetNetworkIsolationRequest> &req);
+
+    // {instanceID, int32_t}
+    std::unordered_map<std::string, int32_t> instanceHealthyMap_;
+
+    bool isReady_ = false;
 };
 
 }  // namespace functionsystem::function_agent

@@ -18,8 +18,8 @@
 
 #include <csignal>
 #include <utils/string_utils.hpp>
-#include "logs/logging.h"
-#include "status/status.h"
+#include "common/logs/logging.h"
+#include "common/status/status.h"
 namespace functionsystem {
 
 static std::set<int32_t> g_nonFatalCode = { SIGHUP, SIGKILL };
@@ -41,8 +41,7 @@ void InstanceContext::SetInstanceState(InstanceState state, int32_t errCode, int
 {
     ASSERT_IF_NULL(scheduleRequest_);
     YRLOG_DEBUG("set instance({}), state({}), exitCode({}), msg({}), type({})",
-                scheduleRequest_->instance().instanceid(), static_cast<std::underlying_type_t<InstanceState>>(state),
-                exitCode, msg, type);
+                scheduleRequest_->instance().instanceid(), fmt::underlying(state), exitCode, msg, type);
     scheduleRequest_->mutable_instance()->mutable_instancestatus()->set_code(static_cast<int32_t>(state));
     scheduleRequest_->mutable_instance()->mutable_instancestatus()->set_exitcode(exitCode);
     scheduleRequest_->mutable_instance()->mutable_instancestatus()->set_errcode(errCode);

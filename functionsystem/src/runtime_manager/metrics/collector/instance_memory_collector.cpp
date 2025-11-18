@@ -18,8 +18,8 @@
 
 #include <regex>
 
-#include "constants.h"
-#include "logs/logging.h"
+#include "common/constants/constants.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem::runtime_manager {
 

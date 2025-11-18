@@ -18,16 +18,17 @@
 #define RUNTIME_MANAGER_METRICS_ACTOR_H
 
 #include <actor/actor.hpp>
-#include <async/async.hpp>
 #include <async/future.hpp>
 
 #include "collector/base_metrics_collector.h"
-#include "proto/pb/message_pb.h"
-#include "status/status.h"
+#include "collector/heterogeneous_collector/topo_info.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
 #include "common/utils/proc_fs_tools.h"
 #include "runtime_manager/config/flags.h"
 
 namespace functionsystem::runtime_manager {
+
 
 const int16_t UPDATE_METRICS_DURATION = 5000;
 const int16_t DEFAULT_PROC_CPU_METRIC = 1000;
@@ -92,6 +93,11 @@ public:
     void StartUpdateMetrics();
 
     /**
+     * Start update metrics to function agent.
+     */
+    void BeginUpdateMetrics();
+
+    /**
      * Stop update system resources and function resources to function agent.
      *
      */
@@ -132,15 +138,18 @@ protected:
     void ReportInstanceMetrics(const std::vector<litebus::Future<Metrics>> &metricses);
     virtual std::string BuildUpdateMetricsRequest(const std::vector<litebus::Future<Metrics>> &metricses);
     resources::ResourceUnit BuildResourceUnit(const std::vector<litebus::Future<Metrics>> &metricses);
-    resources::ResourceUnit BuildResourceUnitWithInstance(const std::vector<litebus::Future<Metrics>> &metricses) const;
+    resources::ResourceUnit BuildResourceUnitWithInstance(const std::vector<litebus::Future<Metrics>> &metricses);
     resources::ResourceUnit BuildResourceUnitWithSystem(const std::vector<litebus::Future<Metrics>> &metricses);
 private:
     void AddSystemMetricsCollector(const Flags &flags);
     void ResolveCustomResourceMetricsCollector(const std::string &customResource);
+    void ResolveDiskResourceMetricsCollector(const std::string &diskResource);
     bool IsDiskUsageBelowLimit(const DiskUsageMonitorConfig &config) const;
     std::vector<litebus::Future<Metrics>> GenAllMetrics() const;
+    std::vector<litebus::Future<Metrics>> GenTotalMetrics() const;
     std::vector<litebus::Future<Metrics>> GenAllMetricsWithoutSystem() const;
-    void BuildDevClusterResource(Metrics &metrics, resources::Resource &resource);
+    void BuildHeteroDevClusterResource(Metrics &metrics, resources::Resource &resource);
+    void BuildDiskDevClusterResource(Metrics &metrics, resources::Resource &resource);
     void TransitionToVectors(const std::string &key, Metrics &metrics, resources::Resource &resource) const;
     void BuildResource(Metrics &metrics, resources::Resource &resource, const resources::Value_Type &type);
     void RuntimeMemoryMetricsProcess(const std::vector<litebus::Future<Metrics>> &metrics);
@@ -148,10 +157,13 @@ private:
     void SendAgentDiskUsageExceedLimit(const DiskUsageMonitorConfig &config);
 
     std::unordered_map<std::string, std::shared_ptr<BaseMetricsCollector>> filter_;
+    std::unordered_map<std::string, std::shared_ptr<BaseMetricsCollector>> metricsFilter_;
+    std::shared_ptr<XPUCollectorParams> npuCollectorParams_{ nullptr };
     std::shared_ptr<BaseMetricsCollector> runtimeMemoryLimitCollector_{ nullptr };
     std::unordered_map<std::string, messages::RuntimeInstanceInfo> instanceInfos_;
     std::shared_ptr<ProcFSTools> procFSTools_{ nullptr };
     litebus::Timer updateMetricsTimer_;
+    litebus::Timer pushMetricsTimer_;
     MetricsConfig metricsConfig_;
 
     litebus::AID agentAid_;

@@ -18,10 +18,10 @@
 #define FUNCTION_PROXY_COMMON_POSIX_CLIENT_DATA_PLANE_CLIENT_DATA_INTERFACE_CLIENT_MANAGER_PROXY_H
 
 #include "async/future.hpp"
-#include "status/status.h"
+#include "common/status/status.h"
 #include "data_interface_posix_client.h"
 #include "litebus.hpp"
-#include "status/status.h"
+#include "common/status/status.h"
 
 namespace functionsystem {
 class DataInterfaceClientManagerProxy {

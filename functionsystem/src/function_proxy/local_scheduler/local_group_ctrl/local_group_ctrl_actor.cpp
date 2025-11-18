@@ -152,12 +152,14 @@ litebus::Future<Status> LocalGroupCtrlActor::Recover()
         if (info->status() == static_cast<int32_t>(GroupState::SCHEDULING)) {
             // forward to instance manager for
             auto resp = std::make_shared<CreateResponses>();
-            CollectInstancesReady(groupCtx);
             if (groupCtx->insRangeScheduler) {
                 groupCtx->persistingPromise.Associate(ForwardGroupSchedule(groupCtx, resp));
+                groupCtx->persistingPromise.GetFuture().OnComplete(
+                    litebus::Defer(GetAID(), &LocalGroupCtrlActor::CollectInstancesReady, groupCtx));
                 continue;
             }
-            ForwardGroupSchedule(groupCtx, resp);
+            ForwardGroupSchedule(groupCtx, resp)
+                .OnComplete(litebus::Defer(GetAID(), &LocalGroupCtrlActor::CollectInstancesReady, groupCtx));
             resp->set_code(common::ErrorCode::ERR_NONE);
             resp->set_groupid(info->groupid());
             for (auto request : groupCtx->requests) {
@@ -1096,10 +1098,9 @@ void LocalGroupCtrlActor::Bind(const litebus::AID &from, std::string &&name, std
     resp->set_requestid(req->requestid());
     resp->set_traceid(req->traceid());
     if (reserveResult_.find(req->requestid()) == reserveResult_.end()) {
-        YRLOG_INFO("{}|{}|failed to bind instance, because of not found instance({}) reserve result, groupID({})",
-                   req->traceid(), req->requestid(), req->instance().instanceid(), req->instance().groupid());
-        resp->set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
-        Send(from, "OnBind", resp->SerializeAsString());
+        instanceCtrl_->IsInstanceRunning(req->instance().instanceid())
+            .OnComplete(litebus::Defer(GetAID(), &LocalGroupCtrlActor::OnCheckInstanceRunning, std::placeholders::_1,
+                                       from, req, resp));
         return;
     }
     if (bindingReqs_.find(req->requestid()) != bindingReqs_.end()) {
@@ -1115,6 +1116,23 @@ void LocalGroupCtrlActor::Bind(const litebus::AID &from, std::string &&name, std
     ASSERT_IF_NULL(instanceCtrl_);
     (void)instanceCtrl_->ToCreating(req, result)
         .OnComplete(litebus::Defer(GetAID(), &LocalGroupCtrlActor::OnBind, from, std::placeholders::_1, req, resp));
+}
+
+void LocalGroupCtrlActor::OnCheckInstanceRunning(const litebus::Future<bool> &isRunning, const litebus::AID &from,
+                                                 const std::shared_ptr<messages::ScheduleRequest> &req,
+                                                 const std::shared_ptr<messages::GroupResponse> &resp)
+{
+    if (isRunning.IsOK() && isRunning.Get()) {
+        YRLOG_INFO("{}|{}|received request to bind instance({}), instance is already running", req->traceid(),
+                   req->requestid(), req->instance().instanceid());
+        OnBind(from, Status::OK(), req, resp);
+        return;
+    }
+
+    YRLOG_INFO("{}|{}|failed to bind instance, because of not found instance({}) reserve result, groupID({})",
+               req->traceid(), req->requestid(), req->instance().instanceid(), req->instance().groupid());
+    resp->set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
+    Send(from, "OnBind", resp->SerializeAsString());
 }
 
 void LocalGroupCtrlActor::TimeoutToBind(const std::shared_ptr<messages::ScheduleRequest> &req)
@@ -1154,8 +1172,8 @@ void LocalGroupCtrlActor::OnBind(const litebus::AID &to, const litebus::Future<S
         return;
     }
     YRLOG_ERROR("{}|{}|failed to bind instance({}) of groupID({}), code: {}， msg：{}", req->traceid(),
-                req->requestid(), req->instance().instanceid(), req->instance().groupid(), status.StatusCode(),
-                status.GetMessage());
+                req->requestid(), req->instance().instanceid(), req->instance().groupid(),
+                fmt::underlying(status.StatusCode()), status.GetMessage());
     (void)instanceCtrl_->ForceDeleteInstance(req->instance().instanceid())
         .OnComplete(litebus::Defer(GetAID(), &LocalGroupCtrlActor::OnBindFailed, to, status, req, resp));
 }

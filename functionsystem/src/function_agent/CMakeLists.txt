@@ -26,6 +26,7 @@ aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/common FUNCTION_AGENT_SRCS)
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/flags FUNCTION_AGENT_SRCS)
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/code_deployer FUNCTION_AGENT_SRCS)
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/driver FUNCTION_AGENT_SRCS)
+aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/network FUNCTION_AGENT_SRCS)
 
 add_library(${FUNCTION_AGENT_LIB} STATIC # for [function_agent_lib]
         ${FUNCTION_AGENT_SRCS})

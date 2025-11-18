@@ -18,8 +18,9 @@
 
 #include <unordered_set>
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/utils/exec_utils.h"
+#include "common/constants/constants.h"
 #include "utils/os_utils.hpp"
 #include "utils/utils.h"
 
@@ -32,6 +33,8 @@ const static std::map<std::string, std::string> HANDLER_MAP = {
 
 const static std::string HOST_IP = "HOST_IP";
 const static std::string POD_IP = "POD_IP";
+const static std::string SNUSER_LIB_PATH = "SNUSER_LIB_PATH";
+const static std::string REQUEST_ACK_ACC_MAX_SEC = "REQUEST_ACK_ACC_MAX_SEC";
 const static std::string POSIX_LISTEN_ADDR = "POSIX_LISTEN_ADDR";
 const static std::string YR_RUNTIME_ID = "YR_RUNTIME_ID";
 const static std::string INSTANCE_ID_ENV = "INSTANCE_ID";
@@ -53,16 +56,19 @@ const static std::string METRICS_CONFIG_FILE = "METRICS_CONFIG_FILE";
 const static std::string RUNTIME_METRICS_CONFIG = "RUNTIME_METRICS_CONFIG";
 const static std::string RUNTIME_METRICS_CONFIG_FILE = "RUNTIME_METRICS_CONFIG_FILE";
 const static std::string DERICT_RUNTIME_SERVER_PORT = "DERICT_RUNTIME_SERVER_PORT";
+const static std::string ENABLE_TRACE = "ENABLE_TRACE";
+const static std::string TRACE_CONFIG = "TRACE_CONFIG";
+const static std::string RUNTIME_TRACE_CONFIG = "RUNTIME_TRACE_CONFIG";
 
 const static std::string S3_STORAGE_TYPE = "s3";
 
 const static std::string RUNTIME_LAYER_DIR_NAME = "layer";
 const static std::string RUNTIME_FUNC_DIR_NAME = "func";
-const static std::string RUNTIME_ENV_PREFIX = "func-";
 const static std::string GRACEFUL_SHUTDOWN_TIME = "GRACEFUL_SHUTDOWN_TIME";
 const static std::string PYTHONUNBUFFERED = "PYTHONUNBUFFERED";
 
 const static std::string ASCEND_RT_VISIBLE_DEVICES = "ASCEND_RT_VISIBLE_DEVICES";
+const static std::string YR_LOG_PREFIX = "YR_LOG_PREFIX";
 
 const std::vector<std::string> PRE_CONFIG_ENV = {
     POSIX_LISTEN_ADDR, POD_IP, INSTANCE_ID_ENV, DATA_SYSTEM_ADDR, DRIVER_SERVER_PORT,
@@ -107,6 +113,17 @@ Envs GenerateEnvs(const RuntimeConfig &config, const std::shared_ptr<messages::S
         YRLOG_DEBUG("set RUNTIME_DIRECT_CONNECTION_ENABLE=true");
         YRLOG_DEBUG("set DERICT_RUNTIME_SERVER_PORT={}", customResourceEnv[DERICT_RUNTIME_SERVER_PORT]);
     }
+    if (!features.cleanStreamProducerEnable) {
+        customResourceEnv[ENABLE_CLEAN_STREAM_PRODUCER] = "false";
+        YRLOG_DEBUG("set ENABLE_CLEAN_STREAM_PRODUCER=false");
+    }
+    if (!request->logprefix().empty()) {
+        customResourceEnv[YR_LOG_PREFIX] = request->logprefix();
+        // for ds client log reuse
+        customResourceEnv["DATASYSTEM_CLIENT_LOG_NAME"] = request->logprefix() + "_ds_client";
+        customResourceEnv["DATASYSTEM_CLIENT_ACCESS_LOG_NAME"] = request->logprefix() + "_ds_client_access";
+        YRLOG_DEBUG("set YR_LOG_PREFIX: {}", request->logprefix());
+    }
     return { GeneratePosixEnvs(config, request, port),
              customResourceEnv,
              GenerateUserEnvs(request->runtimeinstanceinfo(), cardsIDs)};
@@ -120,6 +137,7 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     const auto &deploymentConfig = info.deploymentconfig();
     const std::string &deployDir = deploymentConfig.deploydir();
     const std::string &storageType = deploymentConfig.storagetype();
+    const std::string &debugServerPort = request->runtimeinstanceinfo().runtimeconfig().debugserverport();
 
     std::string deployFilePath = deployDir;
     std::string layerPath = deployDir;
@@ -148,6 +166,7 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     std::map<std::string, std::string> posixEnvs = {
         { POSIX_LISTEN_ADDR, config.ip + ":" + port },
         { POD_IP, config.ip },
+        { SNUSER_LIB_PATH, config.snuserLibDir },
         { YR_RUNTIME_ID, info.runtimeid() },
         { INSTANCE_ID_ENV, info.instanceid() },
         { DATA_SYSTEM_ADDR,
@@ -165,7 +184,8 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
         { YR_SERVER_ADDRESS,  // keep same env name for runtime in driver mode and job submission mode
           config.proxyIP + ":" + config.proxyGrpcServerPort },
         { CLUSTER_ID, config.clusterID },
-        { NODE_ID, config.nodeID }
+        { NODE_ID, config.nodeID },
+        { YR_DEBUG_SERVER_PORT, debugServerPort }
     };
 
     AddYuanRongEnvs(posixEnvs);
@@ -260,9 +280,27 @@ void AddYuanRongEnvs(std::map<std::string, std::string> &envs)
     auto metricsConfig = metricsConfigOpt.IsNone() ? "" : metricsConfigOpt.Get();
     (void)envs.emplace(std::make_pair(METRICS_CONFIG, metricsConfig));
 
+    const auto enableAlarmOpt = litebus::os::GetEnv("ENABLE_DS_HEALTH_CHECK");
+    auto enableAlarm = enableAlarmOpt.IsNone() ? "false" : enableAlarmOpt.Get();
+    (void)envs.emplace(std::make_pair("ENABLE_DS_HEALTH_CHECK", enableAlarm));
+
     auto metricsConfigFileOpt = litebus::os::GetEnv(RUNTIME_METRICS_CONFIG_FILE);
     auto metricsConfigFile = metricsConfigFileOpt.IsNone() ? "" : metricsConfigFileOpt.Get();
     (void)envs.emplace(std::make_pair(METRICS_CONFIG_FILE, metricsConfigFile));
+
+    auto enableTraceOpt = litebus::os::GetEnv(ENABLE_TRACE);
+    auto enableTrace = enableTraceOpt.IsNone() ? "false" : enableTraceOpt.Get();
+    (void)envs.emplace(std::make_pair(ENABLE_TRACE, enableTrace));
+
+    auto runtimeTraceConfigOpt = litebus::os::GetEnv(RUNTIME_TRACE_CONFIG);
+    auto runtimeTraceConfig = runtimeTraceConfigOpt.IsNone() ? "" : runtimeTraceConfigOpt.Get();
+    (void)envs.emplace(std::make_pair(RUNTIME_TRACE_CONFIG, runtimeTraceConfig));
+
+    auto requestAckAccMaxSecOpt = litebus::os::GetEnv(REQUEST_ACK_ACC_MAX_SEC);
+    if (!requestAckAccMaxSecOpt.IsNone()) {
+        auto requestAckAccMaxSec = requestAckAccMaxSecOpt.Get();
+        (void)envs.emplace(std::make_pair(REQUEST_ACK_ACC_MAX_SEC, requestAckAccMaxSec));
+    }
 }
 
 std::string SelectRealIDs(const std::string &env, const std::vector<int> &cardsIDs)
@@ -272,7 +310,7 @@ std::string SelectRealIDs(const std::string &env, const std::vector<int> &cardsI
         YRLOG_WARN("real ID doesn't report, cannot select real ID");
         return "";
     }
-    std::string newEnvs;
+    std::string newEnvs = "";
     for (auto &id : logicIDs) {
         int idx = 0;
         try {

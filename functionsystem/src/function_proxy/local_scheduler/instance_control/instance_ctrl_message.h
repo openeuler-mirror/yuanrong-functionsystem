@@ -17,11 +17,9 @@
 #ifndef FUNCTION_PROXY_LOCAL_SCHEDULER_INSTANCE_CONTROL_GENERATE_MESSAGE_H
 #define FUNCTION_PROXY_LOCAL_SCHEDULER_INSTANCE_CONTROL_GENERATE_MESSAGE_H
 
-#include "metadata/metadata.h"
-#include "proto/pb/message_pb.h"
-#include "proto/pb/posix_pb.h"
-#include "status/status.h"
-#include "function_proxy/common/observer/control_plane_observer/control_plane_observer.h"
+#include "common/metadata/metadata.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
 
 namespace functionsystem {
 
@@ -51,5 +49,8 @@ std::shared_ptr<messages::DeployInstanceRequest> GetDeployInstanceReq(
 void BuildDeploySpec(const FunctionMeta &funcMeta,
                      const std::shared_ptr<messages::DeployInstanceRequest> &deployInstanceRequest);
 
+std::shared_ptr<messages::StaticFunctionChangeRequest> GetStaticFunctionChangeRequest(const InstanceInfo &instanceInfo,
+                                                                                      int32_t status);
+
 }  // namespace functionsystem
-#endif  // FUNCTIONSYSTEM_SRC_FUNCTION_PROXY_LOCAL_SCHEDULER_INSTANCE_CONTROL_GENERATE_MESSAGE_H
+#endif  // FUNCTION_PROXY_LOCAL_SCHEDULER_INSTANCE_CONTROL_GENERATE_MESSAGE_H

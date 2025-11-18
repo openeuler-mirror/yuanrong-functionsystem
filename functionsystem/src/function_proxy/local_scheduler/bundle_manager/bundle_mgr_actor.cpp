@@ -226,7 +226,8 @@ void BundleMgrActor::RemoveBundle(const litebus::AID &from, std::string &&name, 
                     msg);
         return;
     }
-    YRLOG_INFO("{}|received request for removing bundle rGroupName({})", req->requestid(), req->rgroupname());
+    YRLOG_INFO("{}|received request for removing bundle rGroupName({}), tenantId({})", req->requestid(),
+               req->rgroupname(), req->tenantid());
     HandleRemove(req->rgroupname(), req->tenantid());
 
     ASSERT_IF_NULL(bundleOperator_);
@@ -294,7 +295,7 @@ void BundleMgrActor::OnSuccessfulReserve(const litebus::AID &to, const schedule_
     YRLOG_INFO("{}|{}|success to reserve resource for bundle({}), rGroup({}), selected unit ({}) in {}",
                req->traceid(), req->requestid(), req->instance().instanceid(),
                GetResourceGroupName(req->instance().instanceid()), result.unitID, result.id);
-    SetScheduleReqFunctionAgentIDAndHeteroConfig(req, result);
+    MergeScheduleResultToRequest(req, result);
     auto reservedContext =
         ReservedContext{ .result = result,
                          .reserveTimer = litebus::AsyncAfter(reserveToBindTimeoutMs_, GetAID(),
@@ -317,8 +318,8 @@ void BundleMgrActor::OnBind(const litebus::AID &to, const litebus::Future<Status
     ASSERT_FS(future.IsOK());
     auto status = future.Get();
     if (!status.IsOk()) {
-        YRLOG_ERROR("{}|{}|failed to update bundle in store, code: {}， msg：{}", req->traceid(),
-                    req->requestid(), status.StatusCode(), status.GetMessage());
+        YRLOG_ERROR("{}|{}|failed to update bundle in store, code: {}， msg：{}", req->traceid(), req->requestid(),
+                    fmt::underlying(status.StatusCode()), status.GetMessage());
         OnBindFailed(to, status, req, resp);
         return;
     }
@@ -354,8 +355,8 @@ void BundleMgrActor::OnUnBind(const litebus::AID &to, const litebus::Future<Stat
     ASSERT_FS(future.IsOK());
     auto status = future.Get();
     if (!status.IsOk()) {
-        YRLOG_ERROR("{}|{}|failed to update bundle in store, code: {}， msg：{}", req->traceid(),
-                    req->requestid(), status.StatusCode(), status.GetMessage());
+        YRLOG_ERROR("{}|{}|failed to update bundle in store, code: {}， msg：{}", req->traceid(), req->requestid(),
+                    fmt::underlying(status.StatusCode()), status.GetMessage());
         resp->set_code(static_cast<int32_t>(status.StatusCode()));
         resp->set_message(status.GetMessage());
         Send(to, "OnUnBind", resp->SerializeAsString());
@@ -521,7 +522,7 @@ litebus::Future<Status> BundleMgrActor::CollectResourceChangesForScheduleResp(
 messages::BundleInfo BundleMgrActor::GenBundle(const std::shared_ptr<messages::ScheduleRequest> &req,
                                                const schedule_decision::ScheduleResult &result)
 {
-    auto &instance = req->instance();
+    auto instance = req->instance();
     messages::BundleInfo bundleInfo;
     bundleInfo.set_bundleid(instance.instanceid());
     bundleInfo.set_rgroupname(GetResourceGroupName(instance.instanceid()));

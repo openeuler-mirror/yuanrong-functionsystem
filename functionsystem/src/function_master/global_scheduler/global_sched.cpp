@@ -19,9 +19,9 @@
 #include <async/defer.hpp>
 #include <functional>
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/scheduler_topology/sched_tree.h"
-#include "meta_store_kv_operation.h"
+#include "common/utils/meta_store_kv_operation.h"
 
 namespace functionsystem::global_scheduler {
 const std::string EXTERNAL_AGENT_ID_DELIMITER = "/";

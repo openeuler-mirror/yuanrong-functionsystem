@@ -18,13 +18,11 @@
 #define FUNCTION_PROXY_BUSPROXY_INSTANCE_PROXY_CALL_CACHE_H
 
 #include <list>
-#include <queue>
 #include <unordered_map>
 
 #include "async/future.hpp"
-#include "logs/logging.h"
-#include "proto/pb/posix_pb.h"
-#include "status/status.h"
+#include "common/logs/logging.h"
+#include "common/proto/pb/posix_pb.h"
 
 namespace functionsystem::busproxy {
 struct CallRequestContext {

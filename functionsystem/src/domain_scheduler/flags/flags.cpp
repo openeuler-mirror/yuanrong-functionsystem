@@ -15,7 +15,7 @@
  */
 
 #include "flags.h"
-#include "param_check.h"
+#include "common/utils/param_check.h"
 
 namespace functionsystem::domain_scheduler {
 using namespace litebus::flag;

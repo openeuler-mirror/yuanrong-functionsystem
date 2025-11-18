@@ -20,18 +20,21 @@
 #include <async/asyncafter.hpp>
 #include <async/defer.hpp>
 #include <chrono>
+#include <limits>
 #include <memory>
 
-#include "actor_worker.h"
 #include "async/future.hpp"
 #include "common/constants/actor_name.h"
+#include "common/logs/logging.h"
+#include "common/metrics/metrics_adapter.h"
 #include "common/resource_view/resource_tool.h"
+#include "common/types/instance_state.h"
+#include "common/utils/actor_worker.h"
 #include "common/utils/exec_utils.h"
 #include "common/utils/generate_message.h"
+#include "common/utils/struct_transfer.h"
 #include "function_agent/common/constants.h"
 #include "function_agent/common/utils.h"
-#include "logs/logging.h"
-#include "metrics/metrics_adapter.h"
 
 namespace functionsystem::function_agent {
 using messages::RuleType;
@@ -39,6 +42,49 @@ using messages::RuleType;
 static const int32_t GRACE_SHUTDOWN_DELAY = 3;
 static const int32_t GRACE_SHUTDOWN_TIMEOUT_MS = 1000;
 static const uint32_t DOWNLOAD_CODE_RETRY_TIMES = 5;
+static const uint32_t GRACE_SHUTDOWN_CLEAN_AGENT_TIMEOUT = 3 * UPDATE_AGENT_STATUS_TIMEOUT; // 1500ms
+static const std::string SF_CONFIG_PATH = "SF_CONFIG_PATH";
+static const std::string SF_SCHEDULE_TIMEOUT_MS = "SF_SCHEDULE_TIMEOUT_MS";
+static const std::string SF_INSTANCE_TYPE_NOTE = "SF_INSTANCE_TYPE_NOTE";
+static const std::string SF_DELEGATE_DIRECTORY_INFO = "SF_DELEGATE_DIRECTORY_INFO";
+static const std::string SF_INVOKE_LABELS = "SF_INVOKE_LABELS";
+static const std::string SF_FUNCTION_SIGNATURE = "SF_FUNCTION_SIGNATURE";
+
+DeployResult AgentServiceActor::PrepareSharedDir(std::shared_ptr<messages::DeployInstanceRequest> &req)
+{
+    auto iter = req->createoptions().find(DELEGATE_SHARED_DIRECTORY);
+    if (iter == req->createoptions().end()) {
+        return DeployResult{};
+    }
+    auto deployDir = GetDeployDir();
+    auto dest = deployers_[SHARED_DIR_STORAGE_TYPE]->GetDestination(deployDir, "", iter->second);
+    auto ttlIter = req->createoptions().find(DELEGATE_SHARED_DIRECTORY_TTL);
+    if (ttlIter != req->createoptions().end()) {
+        try {
+            deployers_[SHARED_DIR_STORAGE_TYPE]->SetTTL(dest, std::stoi(ttlIter->second));
+        } catch (const std::invalid_argument &e) {
+            YRLOG_WARN("{}|shared dir ttl is invalid, {}", req->instanceid(), ttlIter->second);
+            auto deployRes = DeployResult{};
+            deployRes.status = Status(StatusCode::FUNC_AGENT_INVALID_DEPLOY_DIRECTORY, "shared dir ttl is invalid");
+            return deployRes;
+        } catch (const std::out_of_range &e) {
+            YRLOG_WARN("{}|shared dir ttl is out of range, {}", req->instanceid(), ttlIter->second);
+            deployers_[SHARED_DIR_STORAGE_TYPE]->SetTTL(dest, std::numeric_limits<int>::max());
+        }
+    }
+    auto request = std::make_shared<messages::DeployRequest>();
+    request->mutable_deploymentconfig()->set_deploydir(deployDir);
+    request->mutable_deploymentconfig()->set_objectid(iter->second);
+    auto res = deployers_[SHARED_DIR_STORAGE_TYPE]->Deploy(request);
+    if (res.status.IsError()) {
+        YRLOG_WARN("failed to create shared dir, {}", res.status.ToString());
+        return res;
+    }
+    (void)req->mutable_createoptions()->insert({ SHARED_DIRECTORY_PATH, dest });
+    AddCodeRefer(dest, req->instanceid(), deployers_[SHARED_DIR_STORAGE_TYPE]);
+    YRLOG_INFO("success to create shared dir: {}", dest);
+    return DeployResult{};
+}
 
 messages::DeployInstanceResponse AgentServiceActor::InitDeployInstanceResponse(
     const int32_t code, const std::string &message, const messages::DeployInstanceRequest &source)
@@ -100,11 +146,81 @@ void AgentServiceActor::DeployInstance(const litebus::AID &from, std::string &&n
 
     YRLOG_DEBUG("s3Config credentialType: {}", s3Config_.credentialType);
     std::string storageType = deployInstanceRequest->funcdeployspec().storagetype();
-    YRLOG_INFO("{}|{}|received a deploy instance({}) request from {}", deployInstanceRequest->traceid(),
-               requestID, deployInstanceRequest->instanceid(), std::string(from));
+    // 2.2 if proxy credential rotation, but not have AK/SK/token
+    if (storageType == S3_STORAGE_TYPE && s3Config_.credentialType == CREDENTIAL_TYPE_ROTATING_CREDENTIALS) {
+        if (const auto token = deployInstanceRequest->funcdeployspec().token(); token.empty()) {
+            YRLOG_ERROR("{}|{}|can't find token for credential type({}), instance({}).",
+                        deployInstanceRequest->traceid(), requestID, s3Config_.credentialType,
+                        deployInstanceRequest->instanceid());
+            auto resp = InitDeployInstanceResponse(static_cast<int32_t>(StatusCode::FUNC_AGENT_INVALID_TOKEN_ERROR),
+                                                   "can't find token for credential type: " + s3Config_.credentialType,
+                                                   *deployInstanceRequest);
+            (void)Send(from, "DeployInstanceResponse", resp.SerializeAsString());
+            return;
+        }
+        if (const auto accessKey = deployInstanceRequest->funcdeployspec().accesskey(); accessKey.empty()) {
+            YRLOG_ERROR("{}|{}|can't find accessKey for credential type({}), instance({}).",
+                        deployInstanceRequest->traceid(), requestID, s3Config_.credentialType,
+                        deployInstanceRequest->instanceid());
+            auto resp = InitDeployInstanceResponse(
+                static_cast<int32_t>(StatusCode::FUNC_AGENT_INVALID_ACCESS_KEY_ERROR),
+                "can't find accessKey for credential type: " + s3Config_.credentialType, *deployInstanceRequest);
+            (void)Send(from, "DeployInstanceResponse", resp.SerializeAsString());
+            return;
+        }
+        if (const auto secretAccessKey = deployInstanceRequest->funcdeployspec().secretaccesskey();
+            secretAccessKey.empty()) {
+            YRLOG_ERROR("{}|{}|can't find secretAccessKey for credential type({}), instance({}).",
+                        deployInstanceRequest->traceid(), requestID, s3Config_.credentialType,
+                        deployInstanceRequest->instanceid());
+            auto resp = InitDeployInstanceResponse(
+                static_cast<int32_t>(StatusCode::FUNC_AGENT_INVALID_SECRET_ACCESS_KEY_ERROR),
+                "can't find secretAccessKey for credential type#" + s3Config_.credentialType, *deployInstanceRequest);
+            (void)Send(from, "DeployInstanceResponse", resp.SerializeAsString());
+            return;
+        }
+    }
+
+    // 3.if createOption is not null, set network
+    auto iter = deployInstanceRequest->createoptions().find(NETWORK_CONFIG);
+    if (iter != deployInstanceRequest->createoptions().end()
+        && !SetNetwork(NetworkTool::ParseNetworkConfig(iter->second))) {
+        YRLOG_ERROR("{}|{}|failed to set network for instance({}), network config: {}.",
+                    deployInstanceRequest->traceid(), requestID, deployInstanceRequest->instanceid(), iter->second);
+        auto resp = InitDeployInstanceResponse(static_cast<int32_t>(StatusCode::FUNC_AGENT_SET_NETWORK_ERROR),
+                                               "set network failed", *deployInstanceRequest);
+        (void)Send(from, "DeployInstanceResponse", resp.SerializeAsString());
+        return;
+    }
+
+    iter = deployInstanceRequest->createoptions().find(PROBER_CONFIG);
+    if (iter != deployInstanceRequest->createoptions().end()) {
+        auto configs = NetworkTool::ParseProberConfig(iter->second);
+        if (configs.empty() || !NetworkTool::Probe(configs)) {
+            YRLOG_ERROR("{}|{}|failed to config probe({}) for instance({}).", deployInstanceRequest->traceid(),
+                        requestID, iter->second, deployInstanceRequest->instanceid());
+            auto resp = InitDeployInstanceResponse(static_cast<int32_t>(StatusCode::FUNC_AGENT_NETWORK_WORK_ERROR),
+                                                   "network function work error", *deployInstanceRequest);
+            (void)Send(from, "DeployInstanceResponse", resp.SerializeAsString());
+            return;
+        }
+        (void)litebus::AsyncAfter(PING_TIME_OUT_MS, GetAID(), &AgentServiceActor::StartProbers, configs);
+    }
+
+    YRLOG_INFO("{}|{}|received a deploy instance({}) request from {}", deployInstanceRequest->traceid(), requestID,
+               deployInstanceRequest->instanceid(), std::string(from));
     deployingRequest_[requestID] = { from, deployInstanceRequest };
     gracefulShutdownTime_ = deployInstanceRequest->gracefulshutdowntime() + GRACE_SHUTDOWN_DELAY;
-    // 4. deploy code package (including main, layer, and delegate package) and start runtime
+
+    // 4. add shared dir
+    if (auto res = PrepareSharedDir(deployInstanceRequest); res.status.IsError()) {
+        auto resp =
+            InitDeployInstanceResponse(static_cast<int32_t>(StatusCode::FUNC_AGENT_INVALID_DEPLOYER_ERROR),
+                                       "failed to create shared dir, " + res.status.ToString(), *deployInstanceRequest);
+        (void)Send(from, "DeployInstanceResponse", resp.SerializeAsString());
+        return;
+    }
+    // 5. deploy code package (including main, layer, and delegate package) and start runtime
     auto parameters = BuildDeployerParameters(deployInstanceRequest);
     DownloadCodeAndStartRuntime(parameters, deployInstanceRequest);
 }
@@ -118,7 +234,7 @@ void AgentServiceActor::DownloadCodeAndStartRuntime(
         return;
     }
     if (deployObjects->empty()) {
-        YRLOG_INFO("{}|s3 object is invalid, directly start runtime({}).", req->requestid(), req->instanceid());
+        YRLOG_INFO("{}|directly start runtime({}).", req->requestid(), req->instanceid());
         (void)StartRuntime(req);
         return;
     }
@@ -166,11 +282,15 @@ void AgentServiceActor::DownloadCode(const std::shared_ptr<messages::DeployReque
     auto downloadPromise = litebus::Promise<DeployResult>();
     auto handler = [request, deployer, downloadPromise]() { downloadPromise.SetValue(deployer->Deploy(request)); };
     auto actor = std::make_shared<ActorWorker>();
+    auto startTime =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count();
     (void)actor->AsyncWork(handler).OnComplete([actor](const litebus::Future<Status> &) { actor->Terminate(); });
     downloadPromise.GetFuture().Then([aid(GetAID()), request, deployer, promise, retryTimes,
-                                      retryDownloadInterval(retryDownloadInterval_)](const DeployResult &result) {
-        if ((result.status.StatusCode() == StatusCode::FUNC_AGENT_OBS_ERROR_NEED_RETRY ||
-             result.status.StatusCode() == StatusCode::FUNC_AGENT_OBS_CONNECTION_ERROR)) {
+                                      retryDownloadInterval(retryDownloadInterval_),
+                                      startTime](const DeployResult &result) {
+        if ((result.status.StatusCode() == StatusCode::FUNC_AGENT_OBS_ERROR_NEED_RETRY
+             || result.status.StatusCode() == StatusCode::FUNC_AGENT_OBS_CONNECTION_ERROR)) {
             if (retryTimes < DOWNLOAD_CODE_RETRY_TIMES) {
                 litebus::AsyncAfter(retryDownloadInterval, aid, &AgentServiceActor::DownloadCode, request, deployer,
                                     promise, retryTimes + 1);
@@ -179,6 +299,10 @@ void AgentServiceActor::DownloadCode(const std::shared_ptr<messages::DeployReque
             // retry exceeds threshold, obs connection error results in alarm
             metrics::MetricsAdapter::GetInstance().SendS3Alarm();
         }
+        auto endTime =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count();
+        YRLOG_INFO("{}|download code cost {} ms", request->instanceid(), (endTime - startTime));
         promise->SetValue(result);
         return Status::OK();
     });
@@ -218,7 +342,7 @@ void AgentServiceActor::GetDownloadCodeResult(const std::shared_ptr<std::queue<D
     if (deployResult.status.IsError()) {
         failedDownloadRequests_[req->requestid()] = deployResult;
         YRLOG_WARN("{}|{}|code package({}) download failed. instanceID({}). ErrCode({}), Msg({})", req->traceid(),
-                   req->requestid(), destination, req->instanceid(), deployResult.status.StatusCode(),
+                   req->requestid(), destination, req->instanceid(), fmt::underlying(deployResult.status.StatusCode()),
                    deployResult.status.GetMessage());
     }
 
@@ -240,12 +364,27 @@ bool AgentServiceActor::UpdateDeployedObjectByDestination(const std::shared_ptr<
     if (result.status.IsError()) {
         failedDownloadRequests_[req->requestid()] = result;
         YRLOG_WARN("{}|{}|code package({}) download failed. instanceID({}). ErrCode({}), Msg({})", req->traceid(),
-                   req->requestid(), destination, req->instanceid(), result.status.StatusCode(),
+                   req->requestid(), destination, req->instanceid(), fmt::underlying(result.status.StatusCode()),
                    result.status.GetMessage());
     }
 
     (void)deployingObjects_.erase(destination);
     return true;
+}
+
+void AgentServiceActor::AttachTemporaryAccesskey(const std::string &storageType,
+                                                 std::shared_ptr<messages::DeployRequest> &deployRequest,
+                                                 const std::shared_ptr<messages::DeployInstanceRequest> &req)
+{
+    if (storageType == S3_STORAGE_TYPE && s3Config_.credentialType == CREDENTIAL_TYPE_ROTATING_CREDENTIALS
+        && (deployRequest->deploymentconfig().temporaryaccesskey().empty()
+            && deployRequest->deploymentconfig().temporarysecretkey().empty()
+            && deployRequest->deploymentconfig().securitytoken().empty())) {
+        YRLOG_DEBUG("attach temporary ak/sk/token");
+        deployRequest->mutable_deploymentconfig()->set_temporaryaccesskey(req->funcdeployspec().accesskey());
+        deployRequest->mutable_deploymentconfig()->set_temporarysecretkey(req->funcdeployspec().secretaccesskey());
+        deployRequest->mutable_deploymentconfig()->set_securitytoken(req->funcdeployspec().token());
+    }
 }
 
 std::shared_ptr<std::queue<DeployerParameters>> AgentServiceActor::BuildDeployerParameters(
@@ -267,6 +406,8 @@ std::shared_ptr<std::queue<DeployerParameters>> AgentServiceActor::BuildDeployer
         req->funcdeployspec().deploydir(), req->funcdeployspec().bucketid(), req->funcdeployspec().objectid());
     if (!dest.empty()) {
         auto deployRequest = SetDeployRequestConfig(req, nullptr);
+        // attach temporary ak/sk/securitytoken when rotating credential in 's3' storage code
+        AttachTemporaryAccesskey(storageType, deployRequest, req);
         parameters->push(DeployerParameters{ deployers_[storageType], dest, deployRequest });
     }
     std::string s3DeployDir(req->funcdeployspec().deploydir());  // should be s3 deploy dir for delegate.
@@ -322,6 +463,8 @@ std::shared_ptr<std::queue<DeployerParameters>> AgentServiceActor::BuildDeployer
         // pass codePath (src working dir zip file)
         config->mutable_deploymentconfig()->set_bucketid(info.Get().codePath);
     }
+    // attach temporary ak/sk/securitytoken when rotating credential in delegate download 's3' storage code
+    AttachTemporaryAccesskey(info.Get().storageType, config, req);
     auto destination = deployers_[info.Get().storageType]->GetDestination(config->deploymentconfig().deploydir(),
                                                                           config->deploymentconfig().bucketid(),
                                                                           config->deploymentconfig().objectid());
@@ -350,19 +493,82 @@ std::shared_ptr<std::queue<DeployerParameters>> AgentServiceActor::BuildDeployer
     return parameters;
 }
 
-void AgentServiceActor::UpdateAgentStatusToLocal(int32_t status, const std::string &msg)
+bool AgentServiceActor::SetNetwork(const std::vector<NetworkConfig> &configs)
+{
+    for (auto &config : configs) {
+        if (config.firewallConfig.IsSome() && !NetworkTool::SetFirewall(config.firewallConfig.Get())) {
+            YRLOG_ERROR("set firewall failed.");
+            return false;
+        }
+
+        // get local pod ip
+        auto localIP = litebus::os::GetEnv("POD_IP");
+        if (localIP.IsNone() || localIP.Get().empty()) {
+            YRLOG_ERROR("pod ip is invalid.");
+            return false;
+        }
+
+        auto addrInfo = NetworkTool::GetAddr(localIP.Get());
+        if (addrInfo.IsNone()) {
+            YRLOG_ERROR("can not get address info by {}.", localIP.Get());
+            return false;
+        }
+
+        if (config.tunnelConfig.IsSome()
+            && !NetworkTool::SetTunnel(TunnelConfig{ config.tunnelConfig.Get().tunnelName,
+                                                     config.tunnelConfig.Get().remoteIP, config.tunnelConfig.Get().mode,
+                                                     localIP.Get() })) {
+            YRLOG_ERROR("set tunnel failed.");
+            return false;
+        }
+
+        if (config.routeConfig.IsSome()) {
+            if (!NetworkTool::SetRoute(RouteConfig{ config.routeConfig.Get().gateway, config.routeConfig.Get().cidr,
+                                                    addrInfo.Get().interface })) {
+                YRLOG_ERROR("set route failed.");
+                return false;
+            }
+
+            auto nameserverList = NetworkTool::GetNameServerList();
+            for (std::string &nameserver : nameserverList) {
+                auto routeConfig =
+                    RouteConfig{ config.routeConfig.Get().gateway, nameserver, addrInfo.Get().interface };
+                if (!NetworkTool::SetRoute(routeConfig)) {
+                    YRLOG_ERROR("set dns server {} route failed.", nameserver);
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+void AgentServiceActor::StartProbers(const std::vector<ProberConfig> &configs)
+{
+    YRLOG_DEBUG("start probe.");
+    if (!NetworkTool::Probe(configs)) {
+        UpdateAgentStatusToLocal(static_cast<int32_t>(FUNC_AGENT_STATUS_VPC_PROBE_FAILED));
+        return;
+    }
+    litebus::AsyncAfter(PING_TIME_OUT_MS, GetAID(), &AgentServiceActor::StartProbers, configs);
+}
+
+litebus::Future<bool> AgentServiceActor::UpdateAgentStatusToLocal(int32_t status, const std::string &msg)
 {
     messages::UpdateAgentStatusRequest request;
-    auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
-    request.set_requestid(uuid.ToString());
+    auto requestID = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
+    request.set_requestid(requestID);
     request.set_status(status);
     request.set_message(msg);
-
+    auto promise = std::make_shared<litebus::Promise<bool>>();
+    updateAgentStatusInfoPromises_[requestID] = promise;
     (void)Send(localSchedFuncAgentMgrAID_, "UpdateAgentStatus", request.SerializeAsString());
 
-    updateAgentStatusInfos_[uuid.ToString()] =
+    updateAgentStatusInfos_[requestID] =
         litebus::AsyncAfter(UPDATE_AGENT_STATUS_TIMEOUT, GetAID(), &AgentServiceActor::RetryUpdateAgentStatusToLocal,
-                            uuid.ToString(), request.SerializeAsString());
+                            requestID, request.SerializeAsString());
+    return promise->GetFuture();
 }
 
 void AgentServiceActor::RetryUpdateAgentStatusToLocal(const std::string &requestID, const std::string &msg)
@@ -385,20 +591,24 @@ void AgentServiceActor::UpdateAgentStatusResponse(const litebus::AID &from, std:
         YRLOG_ERROR("message {} is invalid!", msg);
         return;
     }
-
-    auto agentStatusInfosIter = updateAgentStatusInfos_.find(response.requestid());
+    auto requestID = response.requestid();
+    auto agentStatusInfosIter = updateAgentStatusInfos_.find(requestID);
     if (agentStatusInfosIter == updateAgentStatusInfos_.end()) {
-        YRLOG_ERROR("requestID {} is not in UpdateAgentStatusInfos.", response.requestid());
+        YRLOG_ERROR("requestID {} is not in UpdateAgentStatusInfos.", requestID);
         return;
     }
 
     if (!isRegisterCompleted_) {
-        YRLOG_ERROR("{}|registration is not complete, ignore update agent status response.", response.requestid());
+        YRLOG_ERROR("{}|registration is not complete, ignore update agent status response.", requestID);
         return;
     }
-
+    if (auto iter = updateAgentStatusInfoPromises_.find(requestID);
+        iter != updateAgentStatusInfoPromises_.end() && iter->second != nullptr) {
+        iter->second->SetValue(true);
+    }
     (void)litebus::TimerTools::Cancel(agentStatusInfosIter->second);
-    (void)updateAgentStatusInfos_.erase(agentStatusInfosIter->first);
+    (void)updateAgentStatusInfos_.erase(requestID);
+    (void)updateAgentStatusInfoPromises_.erase(requestID);
 }
 
 void AgentServiceActor::UpdateRuntimeStatus(const litebus::AID &from, std::string &&, std::string &&msg)
@@ -481,6 +691,7 @@ void AgentServiceActor::Init()
     ActorBase::Receive("StopInstanceResponse", &AgentServiceActor::StopInstanceResponse);
     ActorBase::Receive("Registered", &AgentServiceActor::Registered);
     ActorBase::Receive("UpdateResources", &AgentServiceActor::UpdateResources);
+    ActorBase::Receive("UpdateMetrics", &AgentServiceActor::UpdateMetrics);
     ActorBase::Receive("UpdateRuntimeStatus", &AgentServiceActor::UpdateRuntimeStatus);
     ActorBase::Receive("UpdateInstanceStatus", &AgentServiceActor::UpdateInstanceStatus);
     ActorBase::Receive("UpdateInstanceStatusResponse", &AgentServiceActor::UpdateInstanceStatusResponse);
@@ -495,13 +706,22 @@ void AgentServiceActor::Init()
     ActorBase::Receive("SetNetworkIsolationRequest", &AgentServiceActor::SetNetworkIsolationRequest);
     ActorBase::Receive("QueryDebugInstanceInfos", &AgentServiceActor::QueryDebugInstanceInfos);
     ActorBase::Receive("QueryDebugInstanceInfosResponse", &AgentServiceActor::QueryDebugInstanceInfosResponse);
+    ActorBase::Receive("StaticFunctionScheduleResponse", &AgentServiceActor::StaticFunctionScheduleResponse);
+    ActorBase::Receive("NotifyFunctionStatusChange", &AgentServiceActor::NotifyFunctionStatusChange);
 
     litebus::Async(GetAID(), &AgentServiceActor::RemoveCodePackageAsync);
+
+    metrics::MetricsAdapter::GetInstance().RegisterPhysicalMetricsCounter();
+    metrics::MetricsAdapter::GetInstance().RegisterInstanceMetrics();
 }
 
-void AgentServiceActor::TimeOutEvent(HeartbeatConnection connection)
+void AgentServiceActor::TimeOutEvent()
 {
-    YRLOG_INFO("heartbeat with local scheduler timeout, connection({})", connection);
+    YRLOG_INFO("heartbeat with local scheduler timeout");
+    if (exiting_) {
+        YRLOG_INFO("agent is exiting, no need to register.");
+        return;
+    }
     if (monopolyUsed_) {
         if (enableRestartForReuse_) {
             YRLOG_INFO("agent was monopoly used by an instance and enableRestartForReuse is true, agent will restart");
@@ -536,6 +756,9 @@ void AgentServiceActor::Registered(const litebus::AID &from, std::string &&name,
         return;
     }
     registerInfo_.registeredPromise.SetValue(registered);
+
+    // set ready after first Registered, don't reset during re-register
+    isReady_ = true;
     (void)litebus::TimerTools::Cancel(registerInfo_.reRegisterTimer);
 
     if (registered.code() != int32_t(StatusCode::SUCCESS)) {
@@ -559,18 +782,17 @@ void AgentServiceActor::Registered(const litebus::AID &from, std::string &&name,
 litebus::Future<messages::Registered> AgentServiceActor::StartPingPong(const messages::Registered &registered)
 {
     YRLOG_INFO("gonna startup PingPongActor, agent service name: {}", agentID_);
-    pingPongDriver_ = nullptr;
-    auto waitPingTimeout = pingTimeoutMs_ / 2;
-    pingPongDriver_ = std::make_shared<PingPongDriver>(agentID_, waitPingTimeout ? waitPingTimeout : PING_TIME_OUT_MS,
-                                                       [aid(GetAID())](const litebus::AID &, HeartbeatConnection type) {
-                                                           litebus::Async(aid, &AgentServiceActor::TimeOutEvent, type);
-                                                       });
-    ASSERT_IF_NULL(pingPongDriver_);
-    litebus::AID localObserver;
-    localObserver.SetName(agentID_ + HEARTBEAT_BASENAME);
-    localObserver.SetUrl(localSchedFuncAgentMgrAID_.Url());
-    localObserver.SetProtocol(litebus::BUS_UDP);
-    pingPongDriver_->CheckFirstPing(localObserver);
+    if (pingPongDriver_ == nullptr) {
+        pingPongDriver_ = std::make_shared<HeartbeatClientDriver>(
+            litebus::os::Join(componentName_, agentID_, '-'),
+            [aid(GetAID()), agentID = agentID_](const litebus::AID &dst) {
+                YRLOG_WARN("pingpong {} timeout, from agent to proxy. dst: {}", agentID, std::string(dst));
+                litebus::Async(aid, &AgentServiceActor::TimeOutEvent);
+            });
+    }
+    litebus::AID heartbeatAID(HEARTBEAT_OBSERVER_BASENAME + FUNCTION_AGENT_AGENT_MGR_ACTOR_NAME,
+                              localSchedFuncAgentMgrAID_.Url());
+    (void)pingPongDriver_->Start(heartbeatAID);
     return registered;
 }
 
@@ -661,6 +883,14 @@ void AgentServiceActor::StopInstanceResponse(const litebus::AID &from, std::stri
         monopolyUsed_ = true;
     }
 
+    if (monopolyUsed_ && enableRestartForReuse_) {
+        YRLOG_INFO(
+            "{}|kill monopoly instance({}) and enableRestartForReuse is true, stop heart beat, wait for re-start",
+            requestID, killInstanceRequest->instanceid());
+        pingPongDriver_->Stop();
+        TimeOutEvent();
+    }
+
     // clear function's code package
     auto runtimeIter = runtimesDeploymentCache_->runtimes.find(runtimeID);
     if (runtimeIter == runtimesDeploymentCache_->runtimes.end()) {
@@ -672,6 +902,10 @@ void AgentServiceActor::StopInstanceResponse(const litebus::AID &from, std::stri
 
     (void)runtimesDeploymentCache_->runtimes.erase(runtimeID);
     (void)killingRequest_.erase(requestID);
+
+    if (instanceHealthyMap_.find(killInstanceRequest->instanceid()) != instanceHealthyMap_.end()) {
+        (void)instanceHealthyMap_.erase(killInstanceRequest->instanceid());
+    }
 }
 
 void AgentServiceActor::UpdateResources(const litebus::AID &from, std::string &&, std::string &&msg)
@@ -691,8 +925,35 @@ void AgentServiceActor::UpdateResources(const litebus::AID &from, std::string &&
     req.mutable_resourceunit()->set_alias(alias_);
     resources::Value::Counter cnter;
     (void)req.mutable_resourceunit()->mutable_nodelabels()->insert({ agentID_, cnter });
+    if (litebus::os::GetEnv(SF_CONFIG_PATH).IsSome()) {
+        (void)cnter.mutable_items()->insert({ agentID_, 1 });
+        YRLOG_INFO("add resource unit insert node labels: key={}, value={}", RESOURCE_OWNER_KEY, agentID_);
+        (*req.mutable_resourceunit()->mutable_nodelabels())[RESOURCE_OWNER_KEY] = cnter;
+    }
     registeredResourceUnit_->CopyFrom(req.resourceunit());
+
+    // update instance metrics
+    metrics::MetricsAdapter::GetInstance().GetMetricsContext().InitInstanceMetrics(req);
+
     (void)Send(localSchedFuncAgentMgrAID_, "UpdateResources", req.SerializeAsString());
+}
+
+void AgentServiceActor::UpdateMetrics(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    messages::UpdateResourcesRequest req;
+    if (!req.ParseFromString(msg)) {
+        YRLOG_WARN("invalid update metrics request msg from {} msg {}", std::string(from), msg);
+        return;
+    }
+    YRLOG_DEBUG("received UpdateMetrics request from {}, from agentID({}), from nodeID({})", std::string(from),
+                agentID_, nodeID_);
+    if (!registerRuntimeMgr_.registered) {
+        YRLOG_ERROR("functionAgent({}) registration is not complete, ignore update resources request.", agentID_);
+        return;
+    }
+
+    metrics::MetricsAdapter::GetInstance().GetMetricsContext().SetPhysicalMetrics(agentID_, nodeID_,
+                                                                                  req.resourceunit());
 }
 
 void AgentServiceActor::UpdateInstanceStatus(const litebus::AID &, std::string &&, std::string &&msg)
@@ -732,6 +993,12 @@ litebus::Future<messages::Registered> AgentServiceActor::RegisterAgent()
     auto resourceUnit = registerAgentRequest.mutable_resource();
     registeredResourceUnit_->set_id(agentID_);
     registeredResourceUnit_->set_alias(alias_);
+    if (litebus::os::GetEnv(SF_CONFIG_PATH).IsSome()) {
+        resources::Value::Counter cnter;
+        (void)cnter.mutable_items()->insert({ agentID_, 1 });
+        YRLOG_INFO("resource unit insert node labels: key={}, value={}", RESOURCE_OWNER_KEY, agentID_);
+        (*registeredResourceUnit_->mutable_nodelabels())[RESOURCE_OWNER_KEY] = cnter;
+    }
     resourceUnit->CopyFrom(*registeredResourceUnit_);
 
     // Set Registration information
@@ -852,11 +1119,14 @@ void AgentServiceActor::ReceiveRegister(const std::string &message)
 
     // update agent service actor's cache
     registerRuntimeMgr_ = { req.name(), req.address(), req.id(), true };
-    auto timeoutHandler = [aid(GetAID()), id(registerRuntimeMgr_.id)](const litebus::AID &) {
+
+    auto timeoutHandler = [aid(GetAID()), id(registerRuntimeMgr_.id)](const litebus::AID &from, HeartbeatConnection) {
+        YRLOG_WARN("heartbeat timeout, from runtime to agent. from: {}.", std::string(from));
         litebus::Async(aid, &AgentServiceActor::MarkRuntimeManagerUnavailable, id);
     };
-    registerHelper_->SetHeartbeatObserveDriver(registerRuntimeMgr_.name, registerRuntimeMgr_.address, pingTimeoutMs_,
-                                               timeoutHandler);
+    registerHelper_->SetHeartbeatObserveDriver(
+        litebus::os::Join(COMPONENT_NAME_RUNTIME_MANAGER, registerRuntimeMgr_.name, '-'), registerRuntimeMgr_.address,
+        pingTimeoutMs_, timeoutHandler, RUNTIME_MANAGER_ACTOR_NAME);
 
     auto requestInstanceInfos = req.runtimeinstanceinfos();
     for (const auto &it : requestInstanceInfos) {
@@ -873,7 +1143,8 @@ void AgentServiceActor::ReceiveRegister(const std::string &message)
 
     // start to register function_agent to local_scheduler
     RegisterAgent()
-        .Then(litebus::Defer(GetAID(), &AgentServiceActor::StartPingPong, std::placeholders::_1));
+        .Then(litebus::Defer(GetAID(), &AgentServiceActor::StartPingPong, std::placeholders::_1))
+        .Then(litebus::Defer(GetAID(), &AgentServiceActor::CreateStaticFunctionInstance));
 }
 
 void AgentServiceActor::AddCodeReferByRuntimeInstanceInfo(const messages::RuntimeInstanceInfo &info)
@@ -906,6 +1177,15 @@ void AgentServiceActor::AddCodeReferByRuntimeInstanceInfo(const messages::Runtim
         AddCodeRefer(layerDestination, instanceID, deployers_[S3_STORAGE_TYPE]);
     }
 
+    if (auto it = info.runtimeconfig().posixenvs().find(UNZIPPED_WORKING_DIR);
+        it != info.runtimeconfig().posixenvs().end()) {
+        if (auto fileIter = info.runtimeconfig().posixenvs().find(YR_WORKING_DIR);
+            fileIter != info.runtimeconfig().posixenvs().end() && it->second == fileIter->second) {
+            YRLOG_DEBUG("instance({}) uses delegate working dir, skip add code refer", info.instanceid());
+            return;
+        }
+        AddCodeRefer(it->second, instanceID, deployers_[WORKING_DIR_STORAGE_TYPE]);
+    }
     // add delegate user code function refer
     auto userCodeDestinationIter = info.runtimeconfig().posixenvs().find(ENV_DELEGATE_DOWNLOAD);
     if (userCodeDestinationIter == info.runtimeconfig().posixenvs().end()) {
@@ -916,6 +1196,11 @@ void AgentServiceActor::AddCodeReferByRuntimeInstanceInfo(const messages::Runtim
         return;
     }
     AddCodeRefer(userCodeDestinationIter->second, instanceID, deployers_[delegateCodeStorageIter->second]);
+
+    if (auto it = info.runtimeconfig().posixenvs().find(SHARED_DIRECTORY_PATH);
+        it != info.runtimeconfig().posixenvs().end()) {
+        AddCodeRefer(it->second, instanceID, deployers_[SHARED_DIR_STORAGE_TYPE]);
+    }
 }
 
 void AgentServiceActor::AddCodeRefer(const std::string &dstDir, const std::string &instanceID,
@@ -949,12 +1234,20 @@ void AgentServiceActor::DeleteCodeReferByDeployInstanceRequest(
         DeleteFunction(layerDestination, instanceID);
     }
 
-    // delete delegate user code function refer
-    auto userCodeDestinationIter = req->createoptions().find(ENV_DELEGATE_DOWNLOAD);
-    if (userCodeDestinationIter == req->createoptions().end()) {
-        return;
+    // delete working_dir code function refer
+    if (auto it = req->createoptions().find(UNZIPPED_WORKING_DIR); it != req->createoptions().end()) {
+        DeleteFunction(it->second, instanceID);
     }
-    DeleteFunction(userCodeDestinationIter->second, instanceID);
+
+    // delete delegate user code function refer
+    if (auto it = req->createoptions().find(ENV_DELEGATE_DOWNLOAD); it != req->createoptions().end()) {
+        DeleteFunction(it->second, instanceID);
+    }
+
+    // delete delegate shared directory function refer
+    if (auto it = req->createoptions().find(SHARED_DIRECTORY_PATH); it != req->createoptions().end()) {
+        DeleteFunction(it->second, instanceID);
+    }
 }
 
 void AgentServiceActor::DeleteCodeReferByRuntimeInstanceInfo(const messages::RuntimeInstanceInfo &info)
@@ -976,12 +1269,21 @@ void AgentServiceActor::DeleteCodeReferByRuntimeInstanceInfo(const messages::Run
         DeleteFunction(layerDestination, instanceID);
     }
 
-    // delete delegate user code function refer
-    auto userCodeDestinationIter = info.runtimeconfig().posixenvs().find(ENV_DELEGATE_DOWNLOAD);
-    if (userCodeDestinationIter == info.runtimeconfig().posixenvs().end()) {
-        return;
+    // delete working_dir code function refer
+    if (auto it = info.runtimeconfig().posixenvs().find(UNZIPPED_WORKING_DIR);
+        it != info.runtimeconfig().posixenvs().end()) {
+        DeleteFunction(it->second, instanceID);
     }
-    DeleteFunction(userCodeDestinationIter->second, instanceID);
+
+    // delete delegate user code function refer
+    if (auto it = info.runtimeconfig().posixenvs().find(ENV_DELEGATE_DOWNLOAD);
+        it != info.runtimeconfig().posixenvs().end()) {
+        DeleteFunction(it->second, instanceID);
+    }
+    if (auto it = info.runtimeconfig().posixenvs().find(SHARED_DIRECTORY_PATH);
+        it != info.runtimeconfig().posixenvs().end()) {
+        DeleteFunction(it->second, instanceID);
+    }
 }
 
 void AgentServiceActor::DeleteFunction(const std::string &functionDestination, const std::string &instanceID)
@@ -1032,12 +1334,15 @@ void AgentServiceActor::RemoveCodePackageAsync()
     }
 
     for (auto codeReferInfoIter = codeReferInfos_->begin(); codeReferInfoIter != codeReferInfos_->end();) {
+        ASSERT_IF_NULL(codeReferInfoIter->second.deployer);
+        const std::string &objectFile = codeReferInfoIter->first;
+        int ttl = codeReferInfoIter->second.deployer->GetTTL(objectFile);
+        if (ttl < 0) {
+            ttl = codePackageThresholds_.codeagingtime();
+        }
         auto now = static_cast<uint64_t>(std::time(nullptr));
-        if (codeReferInfoIter->second.instanceIDs.empty() &&
-            (now - codeReferInfoIter->second.lastAccessTimestamp >=
-             static_cast<uint64_t>(codePackageThresholds_.codeagingtime()))) {
-            const std::string &objectFile = codeReferInfoIter->first;
-            ASSERT_IF_NULL(codeReferInfoIter->second.deployer);
+        if (codeReferInfoIter->second.instanceIDs.empty()
+            && (now - codeReferInfoIter->second.lastAccessTimestamp >= static_cast<uint64_t>(ttl))) {
             if (codeReferInfoIter->second.deployer->Clear(objectFile, objectFile)) {
                 codeReferInfoIter = codeReferInfos_->erase(codeReferInfoIter);
                 continue;
@@ -1152,16 +1457,78 @@ void AgentServiceActor::GracefulShutdownFinish(const litebus::AID &, std::string
 
 litebus::Future<bool> AgentServiceActor::GracefulShutdown()
 {
-    YRLOG_ERROR("graceful shutdown agent service, gracefulShutdownTime: {}", gracefulShutdownTime_);
+    YRLOG_INFO("graceful shutdown agent service, gracefulShutdownTime: {}", gracefulShutdownTime_);
+    exiting_ = true;
     CleanRuntimeManagerStatus(0);
     (void)litebus::TimerTools::AddTimer(gracefulShutdownTime_ * GRACE_SHUTDOWN_TIMEOUT_MS, GetAID(),
                                         [promise(runtimeManagerGracefulShutdown_)]() { promise.SetValue(true); });
-    return runtimeManagerGracefulShutdown_.GetFuture();
+    return runtimeManagerGracefulShutdown_.GetFuture().Then([aid(GetAID())](const bool res) {
+        return litebus::Async(aid, &AgentServiceActor::UpdateAgentStatusToLocal,
+                              static_cast<int32_t>(FUNC_AGENT_EXITED), "function_agent exited")
+            .After(GRACE_SHUTDOWN_CLEAN_AGENT_TIMEOUT, [](const litebus::Future<bool> future) { return true; });
+    });
 }
 
-litebus::Future<Status> AgentServiceActor::IsRegisterLocalSuccessful()
+litebus::Future<Status> AgentServiceActor::Readiness()
 {
+    if (litebus::os::GetEnv(SF_CONFIG_PATH).IsSome()) {
+        return IsAgentReadiness();
+    }
+
+    if (isReady_) {
+        // if the initial register is ok, considering the agent will always be ready, even if proxy is re-started
+        return Status::OK();
+    }
+
     return registerInfo_.registeredPromise.GetFuture().Then([](const messages::Registered &) { return Status::OK(); });
+}
+
+litebus::Future<Status> AgentServiceActor::IsAgentReadiness()
+{
+    if (instanceHealthyMap_.empty()) {
+        YRLOG_DEBUG_COUNT_60("agent not ready, instance not exist.");
+        return litebus::Future<Status>(litebus::Status(FAILED));
+    }
+
+    for (const auto &[id, status] : instanceHealthyMap_) {
+        if (status != static_cast<int32_t>(InstanceState::RUNNING)) {
+            YRLOG_DEBUG_COUNT_60("agent not ready, {} not running.", id);
+            return litebus::Future<Status>(litebus::Status(FAILED));
+        }
+    }
+
+    return Status::OK();
+}
+
+bool AgentServiceActor::HandleNetworkIsolation(const std::shared_ptr<messages::SetNetworkIsolationRequest> &req)
+{
+    switch (req->ruletype()) {
+        case RuleType::IPSET_ADD:
+            if (req->rules().size() == 1) {  // Only support insert one entry once
+                return !ipsetIsolation_->AddRule(req->rules()[0]);
+            } else {  // batch restore for performance
+                std::vector<std::string> rules;
+                for (const auto &rule : req->rules()) {
+                    rules.push_back(rule);
+                }
+                return !ipsetIsolation_->AddRules(rules);
+            }
+            break;
+        case RuleType::IPSET_DELETE:
+            for (const auto &rule : req->rules()) {
+                if (ipsetIsolation_->RemoveRule(rule) != 0) {
+                    return false;
+                }
+            }
+            break;
+        case RuleType::IPSET_FLUSH:
+            return !ipsetIsolation_->RemoveAllRules();
+            break;
+        case RuleType::IPTABLES_COMMAND:
+        default:
+            break;
+    }
+    return true;
 }
 
 void AgentServiceActor::QueryDebugInstanceInfos(const litebus::AID &, std::string &&, std::string &&msg)
@@ -1199,15 +1566,213 @@ void AgentServiceActor::SetNetworkIsolationRequest(const litebus::AID &, std::st
     req->ParseFromString(msg);
     resp.set_requestid(req->requestid());
     YRLOG_DEBUG("agent receive SetNetworkIsolationRequest({})", req->requestid());
-    resp.set_message("ipset not exist");
-    resp.set_code(static_cast<int32_t>(StatusCode::FAILED));
+
+    if (!ipsetIsolation_->IsIpsetExist()) {
+        YRLOG_ERROR("ipset({}) not exist", GetIpsetName());
+        resp.set_message("ipset not exist");
+        resp.set_code(static_cast<int32_t>(StatusCode::FAILED));
+        (void)Send(localSchedFuncAgentMgrAID_, "SetNetworkIsolationResponse", resp.SerializeAsString());
+        return;
+    }
+
+    if (AgentServiceActor::HandleNetworkIsolation(req)) {
+        resp.set_message("success");
+        resp.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+    } else {
+        resp.set_message("ipset command failed");
+        resp.set_code(static_cast<int32_t>(StatusCode::FAILED));
+        YRLOG_ERROR("agent handle SetNetworkIsolationRequest({}) failed", req->requestid());
+    }
     (void)Send(localSchedFuncAgentMgrAID_, "SetNetworkIsolationResponse", resp.SerializeAsString());
+}
+
+litebus::Option<StaticFunctionConfig> GetFunctionCfgFromEnv()
+{
+    auto path = litebus::os::GetEnv(SF_CONFIG_PATH);
+    if (path.IsNone() || path.Get().empty()) {
+        YRLOG_WARN("env: {} not exist", SF_CONFIG_PATH);
+        return litebus::None();
+    }
+
+    StaticFunctionConfig cfg = {};
+    cfg.functionMetaPath = path.Get();
+
+    if (auto timeout = litebus::os::GetEnv(SF_SCHEDULE_TIMEOUT_MS); timeout.IsSome() && !timeout.Get().empty()) {
+        try {
+            cfg.scheduleTimeoutMs = std::stoi(timeout.Get());
+        } catch (const std::exception &e) {
+            YRLOG_WARN("failed to parse env {}, exception e.what():{}", SF_SCHEDULE_TIMEOUT_MS, e.what());
+        }
+    }
+
+    if (auto type = litebus::os::GetEnv(SF_INSTANCE_TYPE_NOTE); type.IsSome()) {
+        cfg.instanceTypeNote = type.Get();
+    }
+
+    if (auto directoryInfo = litebus::os::GetEnv(SF_DELEGATE_DIRECTORY_INFO); directoryInfo.IsSome()) {
+        cfg.delegateDirectoryInfo = directoryInfo.Get();
+    }
+
+    if (auto labels = litebus::os::GetEnv(SF_INVOKE_LABELS); labels.IsSome()) {
+        cfg.invokeLabels = labels.Get();
+    }
+
+    if (auto podName = litebus::os::GetEnv("POD_NAME"); podName.IsSome()) {
+        cfg.extensions["podName"] = podName.Get();
+    }
+
+    if (auto podNamespace = litebus::os::GetEnv("POD_NAMESPACE"); podNamespace.IsSome()) {
+        cfg.extensions["podNamespace"] = podNamespace.Get();
+    }
+
+    if (auto deploymentName = litebus::os::GetEnv("POD_DEPLOYMENT_NAME"); deploymentName.IsSome()) {
+        cfg.extensions["podDeploymentName"] = deploymentName.Get();
+    }
+
+    if (auto dataSystemFeatureUsed = litebus::os::GetEnv("DATA_SYSTEM_FEATURE_USED"); dataSystemFeatureUsed.IsSome()) {
+        cfg.extensions["dataSystemFeatureUsed"] = dataSystemFeatureUsed.Get();
+    }
+
+    if (auto functionSignature = litebus::os::GetEnv(SF_FUNCTION_SIGNATURE); functionSignature.IsSome()) {
+        cfg.functionSignature = functionSignature.Get();
+    }
+    return cfg;
+}
+
+litebus::Option<FunctionMeta> LoadFunctionMetas(const std::string &path)
+{
+    if (!litebus::os::ExistPath(path)) {
+        YRLOG_WARN("function meta file({}) not exist", path);
+        return litebus::None();
+    }
+
+    const auto metaOpt = litebus::os::Read(path);
+    if (metaOpt.IsNone() || metaOpt.Get().empty()) {
+        YRLOG_WARN("function meta file({}) is empty", path);
+        return litebus::None();
+    }
+
+    return GetFuncMetaFromJson(metaOpt.Get());
+}
+
+std::shared_ptr<messages::ScheduleRequest> AgentServiceActor::CreateScheduleRequest(const StaticFunctionConfig &config,
+                                                                                    const FunctionMeta &meta)
+{
+    const auto createRequest = std::make_shared<CreateRequest>();
+
+    auto uuid = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
+    uuid.erase(std::remove(uuid.begin(), uuid.end(), '-'), uuid.end());
+    const auto requestId = uuid.substr(0, 8) + uuid.substr(uuid.size() - 8, 8) + "00";
+
+    createRequest->set_traceid(requestId);
+    createRequest->set_requestid(requestId);
+
+    auto languageInfo = GetLanguageInfo(meta);
+    createRequest->set_function(languageInfo.functionId);
+
+    createRequest->mutable_schedulingops()->set_scheduletimeoutms(config.scheduleTimeoutMs);
+    (*createRequest->mutable_schedulingops()->mutable_extension())[SCHEDULE_POLICY] = MONOPOLY_SCHEDULE;
+    auto scheduleRequest = TransFromCreateReqToScheduleReq(std::move(*createRequest), "");
+
+    BuildScheduleRequest(scheduleRequest, meta, config);
+
+    (*scheduleRequest->mutable_instance()->mutable_createoptions())[RESOURCE_OWNER_KEY] = STATIC_FUNCTION_OWNER_VALUE;
+    (*scheduleRequest->mutable_instance()->mutable_scheduleoption()->mutable_resourceselector())[RESOURCE_OWNER_KEY] =
+        agentID_;
+
+    for (const auto &[key, value] : config.extensions) {
+        (*scheduleRequest->mutable_instance()->mutable_extensions())[key] = value;
+    }
+    return scheduleRequest;
+}
+
+litebus::Future<Status> AgentServiceActor::CreateStaticFunctionInstance()
+{
+    const auto funcConfig = GetFunctionCfgFromEnv();
+    if (funcConfig.IsNone()) {
+        YRLOG_WARN("static function env not exist");
+        return Status(StatusCode::FAILED, "static function env not exist");
+    }
+
+    const auto funcMeta = LoadFunctionMetas(funcConfig.Get().functionMetaPath);
+    if (funcMeta.IsNone()) {
+        YRLOG_WARN("invalid function metas info");
+        return Status(StatusCode::FAILED, "invalid function metas info");
+    }
+
+    enableRestartForReuse_ = true;  // 静态函数支持function-agent故障后重调度使用
+    const auto request = CreateScheduleRequest(funcConfig.Get(), funcMeta.Get());
+
+    scheduleResponsePromise_ = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    YRLOG_INFO("{}|agent send static function ({}) schedule request to {}", request->instance().requestid(),
+               request->instance().function(), std::string(localSchedFuncAgentMgrAID_));
+    (void)Send(localSchedFuncAgentMgrAID_, "StaticFunctionScheduleRequest", request->SerializeAsString());
+    (void)AsyncAfter(retryScheduleInterval_, GetAID(), &AgentServiceActor::RetryInstanceSchedule,
+                     request->SerializeAsString(), request->requestid(), 0);
+    return Status::OK();
+}
+
+void AgentServiceActor::RetryInstanceSchedule(const std::string &msg, const std::string &requestId, uint32_t retryTime)
+{
+    if (!scheduleResponsePromise_) {
+        return;
+    }
+    if (const auto registerResponseFuture = scheduleResponsePromise_->GetFuture();
+        registerResponseFuture.IsOK() && registerResponseFuture.Get().code() == static_cast<int>(StatusCode::SUCCESS)) {
+        YRLOG_INFO("{}|agent send static function schedule request to {} success", requestId,
+                   std::string(localSchedFuncAgentMgrAID_));
+        return;
+    }
+    if (retryTime < DEFAULE_SCHEDULE_RETRY_TIMES) {
+        YRLOG_INFO("{}|retry({}) agent send static function schedule request to {}", requestId, retryTime + 1,
+                   std::string(localSchedFuncAgentMgrAID_));
+        scheduleResponsePromise_ = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+        Send(localSchedFuncAgentMgrAID_, "StaticFunctionScheduleRequest", std::string(msg));
+        (void)AsyncAfter(retryScheduleInterval_, GetAID(), &AgentServiceActor::RetryInstanceSchedule, msg, requestId,
+                         retryTime + 1);
+    }
+}
+
+void AgentServiceActor::StaticFunctionScheduleResponse(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    messages::ScheduleResponse scheduleResponse;
+    if (msg.empty() || !scheduleResponse.ParseFromString(msg)) {
+        YRLOG_WARN("static function schedule response body invalid from({}), msg={}", from.HashString(), msg);
+        return;
+    }
+    scheduleResponsePromise_->SetValue(scheduleResponse);
+    YRLOG_DEBUG("{}|static function schedule received forward response, from: {}, instanceId: {}",
+                scheduleResponse.requestid(), from.HashString(), scheduleResponse.instanceid());
+}
+
+void AgentServiceActor::NotifyFunctionStatusChange(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    messages::StaticFunctionChangeRequest request;
+    if (msg.empty() || !request.ParseFromString(msg)) {
+        YRLOG_WARN("instance's status change is invalid from {}, msg={}", from.HashString(), msg);
+        return;
+    }
+
+    messages::StaticFunctionChangeResponse response;
+    response.set_instanceid(request.instanceid());
+    response.set_requestid(request.requestid());  // for retry
+
+    YRLOG_DEBUG("{}|instance({})'s status changes to {}, from: {}", request.requestid(), request.instanceid(),
+                request.status(), from.HashString());
+    if (request.status() == static_cast<int32_t>(InstanceState::RUNNING)) {
+        instanceHealthyMap_[request.instanceid()] = request.status();
+    } else {
+        if (instanceHealthyMap_.find(request.instanceid()) != instanceHealthyMap_.end()) {
+            (void)instanceHealthyMap_.erase(request.instanceid());
+        }
+    }
+
+    (void)Send(localSchedFuncAgentMgrAID_, "NotifyFunctionStatusChangeResp", response.SerializeAsString());
 }
 
 bool AgentServiceActor::IsDelegateWorkingDirPath(const DeployerParameters &deployObject)
 {
-    // if th bucket id (working dir) is the code destination path, the deployObject is for a delegate working dir code
+    // if the bucket id (working dir) is the code destination path, the deployObject is for a delegate working dir code
     return deployObject.request->deploymentconfig().bucketid() == deployObject.destination;
 }
-
 }  // namespace functionsystem::function_agent

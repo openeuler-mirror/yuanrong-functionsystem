@@ -102,6 +102,45 @@ Status CommonDriver::InitMetaStoreClient()
     }
 }
 
+Status CommonDriver::CreateInternalIAM(const std::shared_ptr<MetaStorageAccessor> &metaStorageAccessor)
+{
+    YRLOG_INFO("start to init internal iam");
+    auto metaStorageAccessorForIAM = metaStorageAccessor;
+    if (!flags_.GetIAMMetaStoreAddress().empty() && flags_.GetMetaStoreAddress() != flags_.GetIAMMetaStoreAddress()) {
+        MetaStoreConfig iamMetaStoreConfig{ .etcdAddress = flags_.GetIAMMetaStoreAddress() };
+        MetaStoreTimeoutOption option {};
+        // retries must take longer than health check
+        option.operationRetryTimes =
+            static_cast<int64_t>((flags_.GetMaxTolerateMetaStoreFailedTimes() + 1) *
+                                 (flags_.GetMetaStoreCheckInterval() + flags_.GetMetaStoreCheckTimeout()) /
+                                 KV_OPERATE_RETRY_INTERVAL_LOWER_BOUND);
+        MetaStoreMonitorParam param{ .maxTolerateFailedTimes = flags_.GetMaxTolerateMetaStoreFailedTimes(),
+                                     .checkIntervalMs = flags_.GetMetaStoreCheckInterval(),
+                                     .timeoutMs = flags_.GetMetaStoreCheckTimeout() };
+        // iam never enables meta store
+        metaStorageAccessorForIAM = std::make_shared<MetaStorageAccessor>(
+            MetaStoreClient::Create(iamMetaStoreConfig, GetGrpcSSLConfig(flags_), option, true, param));
+        auto metaStoreMonitor = MetaStoreMonitorFactory::GetInstance().GetMonitor(flags_.GetIAMMetaStoreAddress());
+        if (metaStoreMonitor == nullptr || metaStoreMonitor->CheckMetaStoreConnected().IsError()) {
+            return Status(StatusCode::FAILED, "meta store for iam connected failed");
+        }
+    }
+    auto iamClient = function_proxy::IAMClient::CreateIAMClient(flags_.GetIAMBasePath());
+    InternalIAM::Param internalIAMParam = { .isEnableIAM = flags_.GetIsEnableIAM(),
+                                            .policyPath = flags_.GetIamPolicyFile(),
+                                            .clusterID = flags_.GetClusterID(),
+                                            .credType = function_proxy::IAMCredType::TOKEN };
+    internalIAM_ = std::make_shared<InternalIAM>(internalIAMParam);
+    internalIAM_->BindMetaStorageAccessor(metaStorageAccessorForIAM);
+    internalIAM_->BindIAMClient(iamClient);
+    if (internalIAM_->IsIAMEnabled() && !internalIAM_->Init()) {
+        YRLOG_ERROR("failed to start init internal IAM.");
+        return Status(StatusCode::FAILED, "failed to start init internal IAM.");
+    }
+    YRLOG_INFO("successful to init internal iam");
+    return Status::OK();
+}
+
 void CommonDriver::CreateDataAndControlInterfaceClient()
 {
     YRLOG_INFO("start to create posix interface client");
@@ -124,9 +163,10 @@ void CommonDriver::InitObserver(const std::shared_ptr<MetaStorageAccessor> &meta
     observerActor_ = std::make_shared<function_proxy::ObserverActor>(
         FUNCTION_PROXY_OBSERVER_ACTOR_NAME, flags_.GetNodeID(), metaStorageAccessor,
         ObserverParam{ flags_.GetServicesPath(), flags_.GetLibPath(), flags_.GetFunctionMetaPath(),
-                       flags_.GetEnableTenantAffinity(),
+                       flags_.GetEnableIpv4TenantIsolation(), flags_.GetEnableTenantAffinity(),
                        flags_.GetEnableMetaStore(), flags_.IsPartialWatchInstances(), flags_.GetServiceTTL() });
     observerActor_->BindDataInterfaceClientManager(dataInterfaceClient_);
+    observerActor_->BindInternalIAM(internalIAM_);
     YRLOG_INFO("successful to init observer");
 }
 
@@ -138,6 +178,10 @@ Status CommonDriver::Init()
     }
 
     metaStorageAccessor_ = std::make_shared<MetaStorageAccessor>(metaStoreClient_);
+    if (auto status = CreateInternalIAM(metaStorageAccessor_); status.IsError()) {
+        YRLOG_ERROR("failed to init internal iam. err: {}", status.ToString());
+        return status;
+    }
     InitDistributedCache();
     // posix stream interface
     CreateDataAndControlInterfaceClient();

@@ -22,8 +22,8 @@
 #include "actor/actor.hpp"
 #include "async/async.hpp"
 #include "async/future.hpp"
-#include "logs/logging.h"
-#include "status/status.h"
+#include "common/logs/logging.h"
+#include "common/status/status.h"
 #include "utils/constants.h"
 
 namespace functionsystem {

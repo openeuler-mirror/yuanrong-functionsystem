@@ -30,11 +30,11 @@
 #include "meta_store_client/key_value/watcher.h"
 #include "meta_store_client/meta_store_struct.h"
 #include "meta_store_client/watch_client.h"
-#include "meta_store_kv_operation.h"
-#include "metadata/metadata.h"
-#include "proto/pb/message_pb.h"
-#include "proto/pb/posix_pb.h"
-#include "resource_type.h"
+#include "common/utils/meta_store_kv_operation.h"
+#include "common/metadata/metadata.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/proto/pb/posix_pb.h"
+#include "common/resource_view/resource_type.h"
 #include "tenant_observer.h"
 
 namespace functionsystem::function_proxy {
@@ -55,6 +55,7 @@ struct ObserverParam {
     std::string servicesPath;
     std::string libPath;
     std::string functionMetaPath;
+    bool enableIpv4TenantIsolation{ true };  // for coverage
     bool enableTenantAffinity{ true };       // for coverage
     bool isMetaStoreEnabled{ false };
     bool isPartialWatchInstances{ false };
@@ -76,12 +77,7 @@ struct RegisterInfo {
     std::string key = BUSPROXY_PATH_PREFIX + "/0/node/" + nodeID;
     RegisterInfo reg{
         .key = key,
-        .meta =
-            {
-                .node = nodeID,
-                .aid = std::string(aid),
-                .ak = std::move(aid.GetAK())
-            },
+        .meta = { .node = nodeID, .aid = std::string(aid), .ak = std::move(aid.GetAK()) },
     };
     return reg;
 }
@@ -214,6 +210,8 @@ public:
      */
     virtual litebus::Option<InstanceInfoMap> GetLocalInstanceInfo();
 
+    virtual litebus::Future<InstanceInfoMap> GetAllInstanceInfos();
+
     /**
      * get function meta by funcKey
      * @param funcKey
@@ -252,7 +250,7 @@ public:
 
     void FastPutRemoteInstanceEvent(const resource_view::InstanceInfo &instanceInfo, bool synced, int64_t modRevision);
 
-    litebus::Future<Status> DelInstanceEvent(const std::string &instanceID);
+    litebus::Future<Status> DelInstanceEvent(const std::string &instanceID, int64_t modRevision = -1);
 
     litebus::Future<bool> InstanceSyncDone();
 
@@ -273,20 +271,28 @@ public:
 
     void NotifyDeleteTenantInstance(const TenantEvent &event);
 
-    void OnTenantInstanceEvent(const std::string &instanceID,
-                               const resource_view::InstanceInfo &instanceInfo);
+    void OnTenantInstanceEvent(const std::string &instanceID, const resource_view::InstanceInfo &instanceInfo);
 
     litebus::Future<resource_view::InstanceInfo> GetInstanceRouteInfo(const std::string &instanceID);
 
     litebus::Future<resource_view::InstanceInfo> OnGetInstanceFromMetaStore(
         const litebus::Future<std::shared_ptr<GetResponse>> &getResponse, const std::string &instanceID);
 
+    litebus::Future<InstanceInfoMap> OnGetInstancesFromMetaStore(
+        const litebus::Future<std::shared_ptr<GetResponse>> &getResponse);
+
     void WatchInstance(const std::string &instanceID, int64_t revision = 0);
+    bool IsInstanceWatched(const std::string &instanceID);
+
     void OnWatchInstance(const std::string &instanceID, const litebus::Future<std::shared_ptr<Watcher>> &watcher);
 
     litebus::Future<resource_view::InstanceInfo> GetAndWatchInstance(const std::string &instanceID);
 
+    litebus::Future<resource_view::InstanceInfo> GetOrWatchInstance(const std::string &instanceID);
+
     void CancelWatchInstance(const std::string &instanceID);
+
+    void BindInternalIAM(const std::shared_ptr<InternalIAM> &internalIAM);
 
 protected:
     void Init() override{};
@@ -305,10 +311,8 @@ private:
 
     void NotifyUpdateInstance(const std::string &instanceID, const resource_view::InstanceInfo &instanceInfo,
                               bool isForceUpdate) override;
-    void NotifyDeleteInstance(const std::string &instanceID) override;
+    void NotifyDeleteInstance(const std::string &instanceID, int64_t modRevision) override;
 
-    // To Observability Metrics
-    void ReportInstanceStatus(const std::string &instanceID, const int status, const std::string &functionKey);
     void SetInstanceBillingContext(const resource_view::InstanceInfo &instanceInfo, bool synced);
 
     litebus::Future<litebus::Option<FunctionMeta>> GetFuncMetaFromMetaStore(const std::string &funcKey);
@@ -319,21 +323,17 @@ private:
 
     void RemoveQueryKeyMetaCache(const std::string &key);
 
-    litebus::Future<SyncResult> BusProxySyncer();
-    litebus::Future<SyncResult> OnBusProxySyncer(const std::shared_ptr<GetResponse> &getResponse);
+    litebus::Future<SyncResult> BusProxySyncer(const std::shared_ptr<GetResponse> &getResponse);
 
-    litebus::Future<SyncResult> InstanceInfoSyncer();
-    litebus::Future<SyncResult> OnInstanceInfoSyncer(const std::shared_ptr<GetResponse> &getResponse);
+    litebus::Future<SyncResult> InstanceInfoSyncer(const std::shared_ptr<GetResponse> &getResponse);
 
-    litebus::Future<SyncResult> PartialInstanceInfoSyncer(const std::string &instanceID);
-    litebus::Future<SyncResult> OnPartialInstanceInfoSyncer(const std::shared_ptr<GetResponse> &getResponse,
-                                                            const std::string &instanceID);
+    litebus::Future<SyncResult> PartialInstanceInfoSyncer(const std::shared_ptr<GetResponse> &getResponse,
+                                                          const std::string &instanceID);
 
-    litebus::Future<SyncResult> FunctionMetaSyncer();
-    litebus::Future<SyncResult> OnFunctionMetaSyncer(const std::shared_ptr<GetResponse> &getResponse);
+    litebus::Future<SyncResult> FunctionMetaSyncer(const std::shared_ptr<GetResponse> &getResponse);
 
     SyncResult OnSyncer(const std::shared_ptr<GetResponse> &getResponse, std::vector<WatchEvent> &events,
-                    std::string prefixKey);
+                        std::string prefixKey);
 
     void HandleInstanceEvent(bool synced, const WatchEvent &event, std::string &instanceID);
 
@@ -389,6 +389,8 @@ private:
 
     bool isPartialWatchInstances_;
     std::unordered_map<std::string, std::shared_ptr<Watcher>> instanceWatchers_;
+
+    std::shared_ptr<InternalIAM> internalIAM_;
 };
 
 }  // namespace functionsystem::function_proxy

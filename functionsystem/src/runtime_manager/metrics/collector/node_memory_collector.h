@@ -29,8 +29,12 @@ public:
     litebus::Future<Metric> GetUsage() const override;
     Metric GetLimit() const override;
     std::string GenFilter() const override;
+
 private:
+    void parseMemInfo() const;
     double overheadMemory_;
+    mutable double totalMem_{0.0};
+    mutable double availableMem_{0.0};
 };
 
 }

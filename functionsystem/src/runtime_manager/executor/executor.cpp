@@ -17,7 +17,7 @@
 #include "executor.h"
 
 #include "async/async.hpp"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem::runtime_manager {
 const std::vector<std::string> logLevels = { "INFO", "DEBUG", "WARN", "ERROR" };
@@ -33,7 +33,8 @@ const std::vector<std::string> DEFAULT_JVM_ARGS = { "-XX:InitialRAMPercentage=35
                                                     "-XX:+ExplicitGCInvokesConcurrent",
                                                     "-XX:+ExplicitGCInvokesConcurrentAndUnloadsClasses" };
 const std::vector<std::string> DEFAULT_JVM_ARGS_FOR_JAVA11 = { "-XX:MaxRAMPercentage=80.0", "-XX:+UseG1GC",
-                                                               "-XX:+TieredCompilation" };
+                                                               "-XX:+TieredCompilation",
+                                                               "--add-opens=java.base/java.nio=ALL-UNNAMED" };
 const std::vector<std::string> COMMON_JVM_ARGS_ABOVE_17 = { "-XX:+UseZGC",
                                                             "-XX:+AlwaysPreTouch",
                                                             "-XX:+UseCountedLoopSafepoints",
@@ -45,6 +46,7 @@ const std::vector<std::string> COMMON_JVM_ARGS_ABOVE_17 = { "-XX:+UseZGC",
                                                             "--add-opens=java.base/java.math=ALL-UNNAMED",
                                                             "--add-opens=java.base/java.time=ALL-UNNAMED",
                                                             "--add-opens=java.base/java.text=ALL-UNNAMED",
+                                                            "--add-opens=java.base/java.nio=ALL-UNNAMED",
                                                             "--enable-preview" };
 const std::vector<std::string> DEFAULT_JVM_ARGS_FOR_JAVA17 = [] {
     std::vector<std::string> args;
@@ -125,6 +127,7 @@ void Executor::SetRuntimeConfig(const Flags &flags)
     config_.javaSystemProperty = flags.GetJavaSystemProperty();
     config_.javaSystemLibraryPath = flags.GetJavaSystemLibraryPath();
     config_.dataSystemPort = flags.GetDataSystemPort();
+    config_.snuserLibDir = flags.GetSnuserLibDir();
     config_.driverServerPort = flags.GetDriverServerPort();
     const std::string &defaultConfig = flags.GetRuntimeDefaultConfig();
     InitDefaultArgs(defaultConfig);
@@ -148,6 +151,9 @@ void Executor::SetRuntimeConfig(const Flags &flags)
     config_.runtimeDsConnectTimeout = flags.GetRuntimeDsConnectTimeout();
     config_.killProcessTimeoutSeconds = flags.GetKillProcessTimeoutSeconds();
     config_.userLogExportMode = flags.GetUserLogExportMode();
+    config_.cleanStreamProducerEnable = flags.GetCleanStreamProducerEnable();
+    config_.virtualEnvIdleTimeLimit = flags.GetVirtualEnvIdleTimeLimit();
+    InitConfig();
 }
 
 void Executor::ParseJvmArgs(
@@ -186,6 +192,13 @@ void Executor::InitDefaultArgs(const std::string &configJsonString)
         } else if (language.rfind(JAVA21_LANGUAGE, 0) == 0) {
             ParseJvmArgs(language, confJson, config_.jvmArgsForJava21);
         }
+    }
+}
+
+void Executor::InitConfig()
+{
+    if (config_.virtualEnvIdleTimeLimit != -1) {
+        litebus::Async(GetAID(), &Executor::InitVirtualEnvIdleTimeLimit);
     }
 }
 
@@ -264,5 +277,12 @@ bool Executor::IsRuntimeActive(const std::string &runtimeID)
     // Note: each implementation class of the Executor interface needs to reflect the startup and destroy of the
     // runtime's lifecycle in a timely manner in the runtime2Exec_ record of Executor base class.
     return runtime2Exec_.find(runtimeID) != runtime2Exec_.end();
+}
+
+bool Executor::IsRuntimeActiveByPid(const pid_t &pid)
+{
+    // Note: each implementation class of the Executor interface needs to reflect the startup and destroy of the
+    // runtime's lifecycle in a timely manner in the runtime2Exec_ record of Executor base class.
+    return pids_.find(pid) != pids_.end();
 }
 }  // namespace functionsystem::runtime_manager

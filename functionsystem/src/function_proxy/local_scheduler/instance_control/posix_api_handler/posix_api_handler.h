@@ -21,7 +21,7 @@
 
 #include "actor/actor.hpp"
 #include "async/future.hpp"
-#include "proto/pb/posix_pb.h"
+#include "common/proto/pb/posix_pb.h"
 #include "local_scheduler/instance_control/instance_ctrl.h"
 #include "local_scheduler/local_scheduler_service/local_sched_srv.h"
 #include "local_scheduler/local_group_ctrl/local_group_ctrl.h"

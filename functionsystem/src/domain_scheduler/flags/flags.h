@@ -17,7 +17,7 @@
 #ifndef DOMAIN_SCHEDULER_FLAGS_H
 #define DOMAIN_SCHEDULER_FLAGS_H
 
-#include "common_flags/common_flags.h"
+#include "common/common_flags/common_flags.h"
 
 namespace functionsystem::domain_scheduler {
 class Flags : public CommonFlags {

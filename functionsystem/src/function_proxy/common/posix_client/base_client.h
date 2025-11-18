@@ -18,7 +18,7 @@
 #define FUNCTION_PROXY_COMMON_POSIX_CLIENT_BASE_CLIENT_H
 
 #include <shared_mutex>
-#include "rpc/stream/posix/posix_client.h"
+#include "common/rpc/stream/posix/posix_client.h"
 
 namespace functionsystem {
 class BaseClient {
@@ -29,7 +29,7 @@ public:
     virtual ~BaseClient() = default;
     void Start();
     void Close() noexcept;
-    bool IsDone();
+    virtual bool IsDone();
     void RegisterUserCallback(const std::function<void()> &userCb);
     void UpdatePosix(const std::shared_ptr<grpc::PosixClient> &posix);
 

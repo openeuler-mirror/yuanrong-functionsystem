@@ -15,7 +15,7 @@
  */
 #include "request_dispatcher.h"
 
-#include "metrics/metrics_adapter.h"
+#include "common/metrics/metrics_adapter.h"
 #include "function_proxy/busproxy/invocation_handler/invocation_handler.h"
 
 namespace functionsystem::busproxy {
@@ -84,7 +84,7 @@ litebus::Future<SharedStreamMsg> RequestDispatcher::Call(const SharedStreamMsg &
     }
     if (isReject_) {
         YRLOG_ERROR("{}|{}|instance({}) is rejected to handler request, {}|{}", callReq.traceid(), callReq.requestid(),
-                    instanceID_, fatalCode_, fatalMsg_);
+                    instanceID_, fmt::underlying(fatalCode_), fatalMsg_);
         return CreateCallResponse(static_cast<common::ErrorCode>(fatalCode_), fatalMsg_, request->messageid());
     }
     ASSERT_IF_NULL(callCache_);
@@ -147,6 +147,13 @@ void RequestDispatcher::TriggerCall(const std::string &requestID)
     };
     // If local_ is true, means the InstanceActor and the Runtime on the same node.
     if (local_) {
+        if (!AuthorizeInvoke(context->callerTenantID).IsOk()) {
+            YRLOG_ERROR("{}|failed to authorize invoke", request->messageid());
+            SharedStreamMsg rsp =
+                CreateCallResponse(common::ErrorCode::ERR_AUTHORIZE_FAILED, "authorize failed", request->messageid());
+            context->callResponse.SetValue(rsp);
+            return;
+        }
         ++callTimes_;
         ASSERT_IF_NULL(dataInterfaceClient_);
         // Send request to Runtime.
@@ -172,6 +179,23 @@ void RequestDispatcher::TriggerCall(const std::string &requestID)
     return;
 }
 
+Status RequestDispatcher::AuthorizeInvoke(const std::string &callerTenantID)
+{
+    if (internalIam_ == nullptr || !internalIam_->IsIAMEnabled() ||
+        verifiedCallerTenantIDs_.find(callerTenantID) != verifiedCallerTenantIDs_.end()) {
+        return Status::OK();
+    }
+    function_proxy::AuthorizeParam authorizeParam{ .callerTenantID = callerTenantID,
+                                                   .calleeTenantID = tenantID_,
+                                                   .callMethod = function_proxy::CALL_METHOD_INVOKE,
+                                                   .funcName = function_ };
+    auto status = internalIam_->Authorize(authorizeParam);
+    if (status.IsOk()) {
+        verifiedCallerTenantIDs_.emplace(callerTenantID);
+    }
+    return status;
+}
+
 litebus::Future<SharedStreamMsg> RequestDispatcher::CallResult(const SharedStreamMsg &request)
 {
     if (isFatal_) {
@@ -187,7 +211,7 @@ litebus::Future<SharedStreamMsg> RequestDispatcher::CallResult(const SharedStrea
         if (forward == nullptr) {
             return CreateCallResultAck(::common::ERR_INNER_COMMUNICATION, "no route to instance", request->messageid());
         }
-        YRLOG_INFO("{}|forward CallResult to remote({}) instance ({}).", requestID, proxyID_, instanceID_);
+        YRLOG_DEBUG("{}|forward CallResult to remote({}) instance ({}).", requestID, proxyID_, instanceID_);
         perf_->RecordSendCallResult(requestID);
         return forward->SendForwardCallResult(remoteAid_, request);
     }
@@ -205,10 +229,10 @@ litebus::Future<SharedStreamMsg> RequestDispatcher::CallResult(const SharedStrea
         auto rsp = CreateCallResultAck(common::ErrorCode::ERR_NONE, "success", request->messageid());
         promise->SetValue(rsp);
     };
-    // while initcalling, caller invoke another instance would be failed because of its status is not ready.
+    // while init calling, caller invoke another instance would be failed because of its status is not ready.
     // sending notify request to unready caller instance would be failure, we can try to obtain the corresponding
-    // client sent result from the clientmanager while bus-proxy and localscheduler is deploy as one process.
-    if (dataInterfaceClient_ == nullptr) {
+    // client sent result from the client manager while bus-proxy and local-scheduler is deployed as one process.
+    if (dataInterfaceClient_ == nullptr || dataInterfaceClient_->IsDone()) {
         ASSERT_FS(clientManager_);
         return clientManager_->GetDataInterfacePosixClient(instanceID_)
             .Then([associate, request, promise, perfCtx(perf_->GetPerfContext(requestID))](
@@ -276,16 +300,21 @@ void RequestDispatcher::UpdateInfo(const std::shared_ptr<InstanceRouterInfo> &in
     if (info->isLocal && dataInterfaceClient_ == nullptr) {
         isReady = false;
     }
+    if (!info->remote.Name().empty()) {
+        remoteAid_ = info->remote;
+    }
+    // avoid to forward request when remote is empty
+    if (!info->isLocal && remoteAid_.Name().empty()) {
+        isReady = false;
+    }
     proxyID_ = info->proxyID;
-    remoteAid_ = info->remote;
     isFatal_ = false;
     isReject_ = false;
     runtimeID_ = info->runtimeID;
     tenantID_ = info->tenantID;
     function_ = info->function;
-    isLowReliability_ = info->isLowReliability;
-    if (isLowReliability_ && !local_ && isReady_) {
-        // if instance is low-reliability, and in remote node, subscribed event may be late, ignored unready event
+    if (!local_ && isReady_) {
+        // if instance is in remote node, subscribed event may be late, ignored unready event
         return;
     }
     if (isReady_ == isReady) {

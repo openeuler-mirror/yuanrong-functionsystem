@@ -16,8 +16,8 @@
 
 #ifndef DOMAIN_SCHEDULER_STARTUP_H
 #define DOMAIN_SCHEDULER_STARTUP_H
-#include "status/status.h"
-#include "module_driver.h"
+#include "common/status/status.h"
+#include "common/utils/module_driver.h"
 #include "structure.h"
 namespace functionsystem::domain_scheduler {
 class DomainSchedulerLauncher {

@@ -19,8 +19,8 @@
 
 #include <string>
 #include <async/option.hpp>
-#include "proto/pb/message_pb.h"
-#include "metadata/metadata.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/metadata/metadata.h"
 
 
 namespace functionsystem::function_agent {
@@ -34,6 +34,8 @@ void AddDefaultEnv(const std::shared_ptr<messages::DeployInstanceRequest> &req, 
 messages::RuntimeConfig SetRuntimeConfig(const std::shared_ptr<messages::DeployInstanceRequest> &req);
 void SetDeploymentConfig(messages::DeploymentConfig *deploymentConf,
                          const std::shared_ptr<messages::DeployInstanceRequest> &req);
+void SetTenantCredConfig(const std::shared_ptr<messages::DeployInstanceRequest> &req,
+                         messages::RuntimeConfig &runtimeConf);
 messages::RuntimeInstanceInfo SetRuntimeInstanceInfo(const std::shared_ptr<messages::DeployInstanceRequest> &req);
 messages::DeploymentConfig SetDeploymentConfigOfLayer(const std::shared_ptr<messages::DeployInstanceRequest> &req,
                                                       const std::shared_ptr<messages::Layer> &layer);

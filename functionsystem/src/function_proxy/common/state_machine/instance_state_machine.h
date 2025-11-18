@@ -21,12 +21,12 @@
 #include <functional>
 
 #include "async/option.hpp"
-#include "constants.h"
+#include "common/constants/constants.h"
 #include "common/meta_store_adapter/instance_operator.h"
 #include "meta_store_client/meta_store_client.h"
 #include "common/observer/control_plane_observer/control_plane_observer.h"
-#include "proto/pb/message_pb.h"
-#include "status/status.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
 #include "common/utils/struct_transfer.h"
 #include "instance_context.h"
 
@@ -179,6 +179,8 @@ public:
 
     virtual int32_t GetLastSaveFailedState();
 
+    virtual int32_t GetLastSaveFailedErrCode();
+
     virtual void ResetLastSaveFailedState();
 
     virtual litebus::Future<resources::InstanceInfo> SyncInstanceFromMetaStore();
@@ -205,6 +207,12 @@ public:
     void SetCancel(const std::string &reason);
 
 private:
+    void NewSavingPomise();
+
+    void TagSaved();
+
+    void SetLastSaveFailedState(int32_t state, int32_t errorCode);
+
     litebus::Future<TransitionResult> SaveInstanceInfoToMetaStore(const resources::InstanceInfo &newInstanceInfo,
                                                                   const resources::InstanceInfo &prevInstanceInfo,
                                                                   const InstanceState oldState,
@@ -237,7 +245,9 @@ private:
     std::string instanceID_;
     std::recursive_mutex lock_;
     bool isLocalAbnormal_ = false;
-    std::atomic<int32_t> lastSaveFailedState_{ INVALID_LAST_SAVE_FAILED_STATE };
+
+    // <InstanceState, ErrorCode>
+    std::pair<int32_t, int32_t> lastSaveFailedState_{ INVALID_LAST_SAVE_FAILED_STATE, INVALID_LAST_SAVE_FAILED_STATE };
     std::shared_ptr<InstanceOperator> instanceOpt_;
     std::shared_ptr<InstanceContext> instanceContext_;
     std::unordered_map<std::string, StateChangeCallback> stateChangeCallbacks_;

@@ -20,8 +20,8 @@
 #include <async/future.hpp>
 #include <string>
 
-#include "logs/logging.h"
-#include "resource_type.h"
+#include "common/logs/logging.h"
+#include "common/resource_view/resource_type.h"
 #include "common/utils/proc_fs_tools.h"
 
 namespace functionsystem::runtime_manager {
@@ -33,7 +33,8 @@ const MetricsType MEMORY = resource_view::MEMORY_RESOURCE_NAME;
 const MetricsType GPU = resource_view::GPU_RESOURCE_NAME;
 const MetricsType NPU = resource_view::NPU_RESOURCE_NAME;
 const MetricsType LABELS = resource_view::INIT_LABELS_RESOURCE_NAME;
-const std::vector<MetricsType> METRICS_TYPES = { CPU, MEMORY, GPU, NPU, LABELS };
+const MetricsType DISK = resource_view::DISK_RESOURCE_NAME;
+const std::vector<MetricsType> METRICS_TYPES = { CPU, MEMORY, DISK, GPU, NPU, LABELS };
 }  // namespace metrics_type
 
 using CollectorType = std::string;
@@ -61,6 +62,8 @@ struct DevClusterMetrics {
     size_t count;  // GPU/NPU count
     std::unordered_map<std::string, std::string> strInfo;  // partition: topology info, hbm info ...
     std::unordered_map<std::string, std::vector<int>> intsInfo;
+
+    std::vector<resource_view::ResourceExtension> extensionInfo;
 };
 
 struct Metrics {

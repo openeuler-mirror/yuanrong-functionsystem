@@ -59,25 +59,6 @@ function functionsystem_compile() {
   unset CMC_PASSWORD
 }
 
-function data_system_download() {
-  cd "${BASE_DIR}"
-  if [ ! -d "datasystem/output" ]; then
-    mkdir -p datasystem/output
-    cd datasystem/output
-    if [ -z "${DATA_SYSTEM_CACHE}" ]; then
-      echo "data_system url not exist"
-      exit 1
-    fi
-    wget --timeout=10 --read-timeout=10 --tries=3 -O datasystem.tar.gz ${DATA_SYSTEM_CACHE}
-    if [ $? -ne 0 ]; then
-      echo "download datasystem failed"
-      exit 1
-    fi
-    tar -zxvf datasystem.tar.gz
-    rm datasystem.tar.gz
-  fi
-}
-
 function package() {
   bash "${BASE_DIR}"/scripts/package/package.sh $@
 }
@@ -155,7 +136,6 @@ function build() {
   logs_compile
   litebus_compile
   metrics_compile
-  data_system_download
   functionsystem_compile
 }
 

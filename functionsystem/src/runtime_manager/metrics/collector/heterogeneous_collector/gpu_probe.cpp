@@ -15,7 +15,7 @@
  */
 #include "gpu_probe.h"
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/utils/exec_utils.h"
 #include "utils/utils.h"
 #include "partitioner.h"

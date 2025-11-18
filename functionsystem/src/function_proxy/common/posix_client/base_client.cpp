@@ -15,8 +15,8 @@
  */
 #include "base_client.h"
 
-#include "logs/logging.h"
-#include "status/status.h"
+#include "common/logs/logging.h"
+#include "common/status/status.h"
 
 namespace functionsystem {
 using namespace runtime_rpc;

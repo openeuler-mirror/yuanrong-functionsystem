@@ -18,11 +18,11 @@
 
 #include "async/asyncafter.hpp"
 #include "common/constants/actor_name.h"
-#include "logs/logging.h"
-#include "proto/pb/message_pb.h"
-#include "status/status.h"
+#include "common/logs/logging.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
 #include "common/utils/generate_message.h"
-#include "meta_store_kv_operation.h"
+#include "common/utils/meta_store_kv_operation.h"
 
 namespace functionsystem::global_scheduler {
 const uint64_t DEFAULT_RETRY_INTERVAL = 3000;

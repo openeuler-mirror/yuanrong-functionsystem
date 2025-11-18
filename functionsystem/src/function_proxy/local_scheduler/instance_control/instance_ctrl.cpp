@@ -29,10 +29,11 @@ std::unordered_map<std::string, std::unordered_set<std::string>> PLUGINS_MAP = {
     { "Label", { STRICT_NON_ROOT_LABEL_AFFINITY_FILTER_NAME, STRICT_LABEL_AFFINITY_SCORER_NAME } },
     { "Heterogeneous", { DEFAULT_HETEROGENEOUS_FILTER_NAME, DEFAULT_HETEROGENEOUS_SCORER_NAME } },
     { "ResourceSelector", { RESOURCE_SELECTOR_FILTER_NAME } },
+    { "Disk", { DISK_FILTER_NAME, DISK_SCORER_NAME }},
 };
 
 InstanceCtrl::InstanceCtrl(const std::shared_ptr<InstanceCtrlActor> &instanceCtrlActor)
-    : ActorDriver(instanceCtrlActor), instanceCtrlActor_(instanceCtrlActor)
+    : ActorDriver(instanceCtrlActor), instanceCtrlActor_(instanceCtrlActor), aid_(instanceCtrlActor->GetAID())
 {
 }
 
@@ -74,33 +75,33 @@ void InstanceCtrl::Await()
 litebus::Future<CallResultAck> InstanceCtrl::CallResult(
     const std::string &from, const std::shared_ptr<functionsystem::CallResult> &callResult) const
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::CallResult, from, callResult);
+    return litebus::Async(aid_, &InstanceCtrlActor::CallResult, from, callResult);
 }
 litebus::Future<Status> InstanceCtrl::UpdateInstanceStatusPromise(const std::string &instanceID,
                                                                   const std::string &errMsg) const
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::UpdateInstanceStatusPromise, instanceID,
+    return litebus::Async(aid_, &InstanceCtrlActor::UpdateInstanceStatusPromise, instanceID,
                           errMsg);
 }
 
 void InstanceCtrl::PutFailedInstanceStatusByAgentId(const std::string &funcAgentID)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::PutFailedInstanceStatusByAgentId, funcAgentID);
+    litebus::Async(aid_, &InstanceCtrlActor::PutFailedInstanceStatusByAgentId, funcAgentID);
+}
+
+litebus::Future<bool> InstanceCtrl::IsSystemTenant(const std::string &tenantID)
+{
+    return litebus::Async(aid_, &InstanceCtrlActor::IsSystemTenant, tenantID);
 }
 
 void InstanceCtrl::BindScheduler(const std::shared_ptr<schedule_decision::Scheduler> &scheduler) const
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::BindScheduler, scheduler);
+    litebus::Async(aid_, &InstanceCtrlActor::BindScheduler, scheduler);
 }
 
 void InstanceCtrl::BindFunctionAgentMgr(const std::shared_ptr<FunctionAgentMgr> &functionAgentMgr) const
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::BindFunctionAgentMgr, functionAgentMgr);
+    litebus::Async(aid_, &InstanceCtrlActor::BindFunctionAgentMgr, functionAgentMgr);
 }
 
 std::unique_ptr<InstanceCtrl> InstanceCtrl::Create(const std::string &nodeID, const InstanceCtrlConfig &config)
@@ -200,134 +201,127 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrl::Schedule(
     const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
     const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::Schedule, scheduleReq, runtimePromise);
+    return litebus::Async(aid_, &InstanceCtrlActor::Schedule, scheduleReq, runtimePromise);
 }
 
 litebus::Future<KillResponse> InstanceCtrl::Kill(const std::string &srcInstanceID,
                                                  const std::shared_ptr<KillRequest> &killReq)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::Kill, srcInstanceID, killReq, false);
+    return litebus::Async(aid_, &InstanceCtrlActor::Kill, srcInstanceID, killReq, false);
+}
+
+litebus::Future<ExitResponse> InstanceCtrl::Exit(const std::string &srcInstanceID,
+                                                 const std::shared_ptr<ExitRequest> &exitReq)
+{
+    return litebus::Async(aid_, &InstanceCtrlActor::HandleExit, srcInstanceID, exitReq);
 }
 
 litebus::Future<KillResponse> InstanceCtrl::KillInstancesOfJob(const std::shared_ptr<KillRequest> &killReq) const
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::KillInstancesOfJob, killReq);
+    return litebus::Async(aid_, &InstanceCtrlActor::KillInstancesOfJob, killReq);
 }
 
 litebus::Future<Status> InstanceCtrl::SyncInstances(const std::shared_ptr<resource_view::ResourceUnit> &resourceUnit)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::SyncInstance, resourceUnit);
+    return litebus::Async(aid_, &InstanceCtrlActor::SyncInstance, resourceUnit);
 }
 
 litebus::Future<Status> InstanceCtrl::SyncAgent(
     const std::unordered_map<std::string, messages::FuncAgentRegisInfo> &agentMap)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::SyncAgent, agentMap);
+    return litebus::Async(aid_, &InstanceCtrlActor::SyncAgent, agentMap);
 }
 
 litebus::Future<Status> InstanceCtrl::UpdateInstanceStatus(const std::shared_ptr<InstanceExitStatus> &info)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::UpdateInstanceStatus, info);
+    return litebus::Async(aid_, &InstanceCtrlActor::UpdateInstanceStatus, info);
 }
 
 litebus::Future<Status> InstanceCtrl::RescheduleWithID(const std::string &instanceID)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::RescheduleWithID, instanceID);
+    return litebus::Async(aid_, &InstanceCtrlActor::RescheduleWithID, instanceID);
 }
 
 litebus::Future<Status> InstanceCtrl::Reschedule(const Status &status,
                                                  const std::shared_ptr<messages::ScheduleRequest> &request)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::Reschedule, status, request);
+    return litebus::Async(aid_, &InstanceCtrlActor::Reschedule, status, request);
 }
 
 void InstanceCtrl::BindObserver(const std::shared_ptr<function_proxy::ControlPlaneObserver> &observer) const
 {
     ASSERT_IF_NULL(observer);
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::BindObserver, observer);
+    litebus::Async(aid_, &InstanceCtrlActor::BindObserver, observer);
     InstanceStateMachine::BindControlPlaneObserver(observer);
 }
 
 void InstanceCtrl::SetAbnormal()
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::SetAbnormal);
+    litebus::Async(aid_, &InstanceCtrlActor::SetAbnormal);
 }
 
 litebus::Future<Status> InstanceCtrl::RescheduleAfterJudgeRecoverable(const std::string &instanceID,
                                                                       const std::string &funcAgentID)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::RescheduleAfterJudgeRecoverable, instanceID,
+    return litebus::Async(aid_, &InstanceCtrlActor::RescheduleAfterJudgeRecoverable, instanceID,
                           funcAgentID);
 }
 
 void InstanceCtrl::NotifyDsHealthy(bool healthy) const
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::NotifyDsHealthy, healthy);
+    return litebus::Async(aid_, &InstanceCtrlActor::NotifyDsHealthy, healthy);
 }
+
 litebus::Future<Status> InstanceCtrl::EvictInstanceOnAgent(const std::shared_ptr<messages::EvictAgentRequest> &req)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::EvictInstanceOnAgent, req);
+    return litebus::Async(aid_, &InstanceCtrlActor::EvictInstanceOnAgent, req);
 }
 
 litebus::Future<Status> InstanceCtrl::EvictInstances(const std::unordered_set<std::string> &instanceSet,
                                                      const std::shared_ptr<messages::EvictAgentRequest> &req,
                                                      bool isEvictForReuse)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::EvictInstances, instanceSet, req,
+    return litebus::Async(aid_, &InstanceCtrlActor::EvictInstances, instanceSet, req,
                           isEvictForReuse);
 }
 
 void InstanceCtrl::SetNodeLabelsToMetricsContext(const std::string &functionAgentID,
                                                  std::map<std::string, resources::Value::Counter> nodeLabels)
 {
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::SetNodeLabelsToMetricsContext,
+    return litebus::Async(aid_, &InstanceCtrlActor::SetNodeLabelsToMetricsContext,
                           functionAgentID, nodeLabels);
 }
 
 void InstanceCtrl::SetMaxForwardKillRetryTimes(uint32_t times)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::SetMaxForwardKillRetryTimes, times);
+    return litebus::Async(aid_, &InstanceCtrlActor::SetMaxForwardKillRetryTimes, times);
 }
 
 void InstanceCtrl::SetMaxForwardKillRetryCycleMs(uint32_t cycleMs)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::SetMaxForwardKillRetryCycleMs, cycleMs);
+    return litebus::Async(aid_, &InstanceCtrlActor::SetMaxForwardKillRetryCycleMs, cycleMs);
+}
+
+litebus::Future<Status> InstanceCtrl::AddTokenReference(const std::pair<std::string, std::string> &tokenReferPair)
+{
+    return litebus::Async(aid_, &InstanceCtrlActor::AddTokenReference, tokenReferPair);
 }
 
 litebus::Future<Status> InstanceCtrl::ToScheduling(const std::shared_ptr<messages::ScheduleRequest> &req)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::ToScheduling, req);
+    return litebus::Async(aid_, &InstanceCtrlActor::ToScheduling, req);
 }
 
 litebus::Future<Status> InstanceCtrl::ToCreating(const std::shared_ptr<messages::ScheduleRequest> &req,
                                                  const schedule_decision::ScheduleResult &result)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::ToCreating, req, result);
+    return litebus::Async(aid_, &InstanceCtrlActor::ToCreating, req, result);
 }
 
 litebus::Future<Status> InstanceCtrl::DeleteSchedulingInstance(const std::string &instanceID,
                                                                const std::string &requestID)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::DeleteSchedulingInstance, instanceID,
+    return litebus::Async(aid_, &InstanceCtrlActor::DeleteSchedulingInstance, instanceID,
                           requestID);
 }
 
@@ -335,32 +329,32 @@ void InstanceCtrl::RegisterReadyCallback(const std::string &instanceID,
                                          const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
                                          InstanceReadyCallBack callback)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::RegisterReadyCallback, instanceID,
+    return litebus::Async(aid_, &InstanceCtrlActor::RegisterReadyCallback, instanceID,
                           scheduleReq, callback);
 }
 
 litebus::Future<Status> InstanceCtrl::ForceDeleteInstance(const std::string &instanceID)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::ForceDeleteInstance, instanceID);
+    return litebus::Async(aid_, &InstanceCtrlActor::ForceDeleteInstance, instanceID);
 }
 
 void InstanceCtrl::RegisterClearGroupInstanceCallBack(ClearGroupInstanceCallBack callback)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::RegisterClearGroupInstanceCallBack,
+    return litebus::Async(aid_, &InstanceCtrlActor::RegisterClearGroupInstanceCallBack,
                           callback);
 }
 litebus::Future<Status> InstanceCtrl::GracefulShutdown()
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::GracefulShutdown);
+    return litebus::Async(aid_, &InstanceCtrlActor::GracefulShutdown);
 }
 
 litebus::Future<KillResponse> InstanceCtrl::ForwardSubscriptionEvent(const std::shared_ptr<KillContext> &ctx)
 {
-    ASSERT_IF_NULL(instanceCtrlActor_);
-    return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::ForwardSubscriptionEvent, ctx);
+    return litebus::Async(aid_, &InstanceCtrlActor::ForwardSubscriptionEvent, ctx);
+}
+
+litebus::Future<bool> InstanceCtrl::IsInstanceRunning(const std::string &instanceID)
+{
+    return litebus::Async(aid_, &InstanceCtrlActor::IsInstanceRunning, instanceID);
 }
 }  // namespace functionsystem::local_scheduler

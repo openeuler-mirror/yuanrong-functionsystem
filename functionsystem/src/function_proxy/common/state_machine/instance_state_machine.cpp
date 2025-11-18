@@ -20,10 +20,10 @@
 
 #include "async/defer.hpp"
 #include "async/uuid_generator.hpp"
-#include "logs/logging.h"
-#include "metadata/metadata.h"
-#include "metrics/metrics_adapter.h"
-#include "meta_store_kv_operation.h"
+#include "common/logs/logging.h"
+#include "common/metadata/metadata.h"
+#include "common/metrics/metrics_adapter.h"
+#include "common/utils/meta_store_kv_operation.h"
 
 namespace functionsystem {
 const int32_t MAX_EXIT_TIMES = 3;
@@ -95,7 +95,7 @@ TransitionResult InstanceStateMachine::VerifyTransitionState(const TransContext 
 {
     if (STATE_TRANSITION_MAP.find(oldState) == STATE_TRANSITION_MAP.end()) {
         YRLOG_ERROR("{}|transition failed, instance({}) state({}) not found", requestID, instanceID_,
-            static_cast<std::underlying_type_t<InstanceState>>(oldState));
+                    fmt::underlying(oldState));
         return TransitionResult{ litebus::None(), {}, {}, 0, Status(StatusCode::ERR_STATE_MACHINE_ERROR) };
     }
 
@@ -107,14 +107,12 @@ TransitionResult InstanceStateMachine::VerifyTransitionState(const TransContext 
     auto nextStateList = STATE_TRANSITION_MAP.at(oldState);
     if (nextStateList.find(context.newState) == nextStateList.end()) {
         YRLOG_ERROR("{}|transition failed, instance({}) with state({}) next state can not be {}", requestID,
-                    instanceID_, static_cast<std::underlying_type_t<InstanceState>>(oldState),
-                    static_cast<std::underlying_type_t<InstanceState>>(context.newState));
+                    instanceID_, fmt::underlying(oldState), fmt::underlying(context.newState));
         return TransitionResult{ litebus::None(), {}, {}, 0, Status(StatusCode::ERR_STATE_MACHINE_ERROR) };
     }
     if (isLocalAbnormal_) {
         YRLOG_ERROR("{}|local is abnormal, failed to transition instance({}) from ({}) to ({})", requestID, instanceID_,
-                    static_cast<std::underlying_type_t<InstanceState>>(oldState),
-                    static_cast<std::underlying_type_t<InstanceState>>(context.newState));
+                    fmt::underlying(oldState), fmt::underlying(context.newState));
         return TransitionResult{ litebus::None(), {}, {}, 0, Status(StatusCode::ERR_LOCAL_SCHEDULER_ABNORMAL) };
     }
     return TransitionResult{ oldState, {}, {}, 0, Status::OK() };
@@ -130,8 +128,7 @@ void InstanceStateMachine::PrepareTransitionInfo(const TransContext &context, re
     if (context.scheduleReq != nullptr) {
         YRLOG_DEBUG("{}|set scheduleReq instance({}), state({}), errCode({}), exitCode({}), msg({}), type({})",
                     context.scheduleReq->instance().requestid(), context.scheduleReq->instance().instanceid(),
-                    static_cast<std::underlying_type_t<InstanceState>>(context.newState),
-                    errCode, context.exitCode, context.msg, context.type);
+                    fmt::underlying(context.newState), errCode, context.exitCode, context.msg, context.type);
         context.scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(
             static_cast<int32_t>(context.newState));
         context.scheduleReq->mutable_instance()->mutable_instancestatus()->set_errcode(errCode);
@@ -178,24 +175,22 @@ litebus::Future<TransitionResult> InstanceStateMachine::PersistenceInstanceInfo(
     const resources::InstanceInfo &newInstanceInfo, const resources::InstanceInfo &prevInstanceInfo,
     const InstanceState oldState, const TransContext &context)
 {
-    std::lock_guard<std::recursive_mutex> guard(lock_);
-    // isInit mean the instance is persisting
-    savePromise_ = std::make_shared<litebus::Promise<bool>>();
-
+    NewSavingPomise();
     return SaveInstanceInfoToMetaStore(newInstanceInfo, prevInstanceInfo, oldState, context)
-        .Then([requestID(newInstanceInfo.requestid()), instanceID(instanceID_), context, savePromise(savePromise_),
+        .Then([requestID(newInstanceInfo.requestid()), instanceID(instanceID_), context,
                self(shared_from_this())](const TransitionResult &result) -> litebus::Future<TransitionResult> {
             if (!result.status.IsOk()) {
                 YRLOG_DEBUG("{}|transition instance({}) state failed.", requestID, instanceID);
-                savePromise->SetValue(true);
+                self->TagSaved();
                 return result;
             }
             // if save info successfully and context.scheduleReq exist, update stateMachine by scheduleReq
             // scheduleReq in stateMachine is the same as scheduleReq, need to copy to avoid multi-thread modification
             if (context.scheduleReq != nullptr) {
                 self->UpdateScheduleReq(std::make_shared<messages::ScheduleRequest>(*context.scheduleReq));
+                self->SetModRevision(result.currentModRevision);
             }
-            savePromise->SetValue(true);
+            self->TagSaved();
             return result;
         });
 }
@@ -228,8 +223,7 @@ litebus::Future<TransitionResult> InstanceStateMachine::TransitionTo(const Trans
         SetInstanceBillingTerminated(instanceID_, context.newState);
 
         YRLOG_INFO("{}|transition instance({}) state from ({}) to ({}), compare version({})", requestID, instanceID_,
-                   static_cast<std::underlying_type_t<InstanceState>>(oldState),
-                   static_cast<std::underlying_type_t<InstanceState>>(context.newState), context.version);
+                   fmt::underlying(oldState), fmt::underlying(context.newState), context.version);
 
         PrepareTransitionInfo(context, instanceInfo, previousInfo);
         auto persistenceType = GetPersistenceType(instanceInfo, isMetaStoreEnable_);
@@ -239,6 +233,10 @@ litebus::Future<TransitionResult> InstanceStateMachine::TransitionTo(const Trans
             }
             if (context.scheduleReq != nullptr) {
                 instanceContext_->UpdateScheduleReq(std::make_shared<messages::ScheduleRequest>(*context.scheduleReq));
+            }
+            if (instanceInfo.lowreliability() && context.newState == InstanceState::CREATING) {
+                // for low-reliability instance, the invoked event may arrive before the listening event.
+                PublishToLocalObserver(instanceInfo, 0);
             }
             return TransitionResult{ oldState, {}, previousInfo, context.version, Status::OK() };
         }
@@ -281,8 +279,7 @@ litebus::Future<Status> InstanceStateMachine::DelInstance(const std::string &ins
         }
 
         YRLOG_INFO("try to delete instance({}), state({}), owner({}), version({})", instanceID,
-            static_cast<std::underlying_type_t<InstanceState>>(oldState),
-            instanceInfo.functionproxyid(), instanceInfo.version());
+                   fmt::underlying(oldState), instanceInfo.functionproxyid(), instanceInfo.version());
         YRLOG_DEBUG("delete instance to meta store, instance({}), instance status: {}, functionKey: {}, path: {}",
                     instanceInfo.instanceid(), instanceInfo.instancestatus().code(), instanceInfo.function(), keyPath);
         ASSERT_IF_NULL(instanceOpt_);
@@ -294,9 +291,10 @@ litebus::Future<Status> InstanceStateMachine::DelInstance(const std::string &ins
                     return Status::OK();
                 }
                 YRLOG_ERROR("failed to delete key {} from metastore, errorCode: {}, error: {}", key,
-                            result.status.StatusCode(), result.status.GetMessage());
+                            fmt::underlying(result.status.StatusCode()), result.status.GetMessage());
                 if (TransactionFailedForEtcd(result.status.StatusCode())) {
-                    self->lastSaveFailedState_.store(static_cast<int32_t>(InstanceState::EXITED));
+                    self->SetLastSaveFailedState(static_cast<int32_t>(InstanceState::EXITED),
+                                                 INVALID_LAST_SAVE_FAILED_STATE);
                 }
                 return Status(StatusCode::BP_META_STORAGE_DELETE_ERROR, "failed to delete key: " + key);
             });
@@ -334,9 +332,10 @@ litebus::Future<Status> InstanceStateMachine::ForceDelInstance()
                 return Status::OK();
             }
             YRLOG_ERROR("failed to delete key {} from metastore, errorCode: {}, error: {}", path,
-                        result.status.StatusCode(), result.status.GetMessage());
+                        fmt::underlying(result.status.StatusCode()), result.status.GetMessage());
             if (TransactionFailedForEtcd(result.status.StatusCode())) {
-                self->lastSaveFailedState_.store(static_cast<int32_t>(InstanceState::EXITED));
+                self->SetLastSaveFailedState(static_cast<int32_t>(InstanceState::EXITED),
+                                             INVALID_LAST_SAVE_FAILED_STATE);
             }
             return Status(StatusCode::BP_META_STORAGE_DELETE_ERROR, "failed to delete key: " + path);
         });
@@ -380,11 +379,11 @@ litebus::Future<TransitionResult> InstanceStateMachine::SaveInstanceInfoToMetaSt
         "put instance to meta store, instanceID: {}, function: {}, path: {}, status: {}, compare version({}), "
         "persistenceType: {}",
         newInstanceInfo.instanceid(), newInstanceInfo.function(), keyPath, newInstanceInfo.instancestatus().code(),
-        context.version, static_cast<std::underlying_type_t<PersistenceType>>(persistenceType));
+        context.version, fmt::underlying(persistenceType));
     ASSERT_IF_NULL(instanceOpt_);
     if (IsFirstPersistence(newInstanceInfo, oldState, context.version)) {
         return instanceOpt_->Create(instancePutInfo, routePutInfo, IsLowReliabilityInstance(newInstanceInfo))
-            .Then([savePromise(savePromise_), prevInstanceInfo, oldState, key(keyPath), newInstanceInfo,
+            .Then([prevInstanceInfo, oldState, key(keyPath), newInstanceInfo,
                    instanceID(newInstanceInfo.instanceid()), context,
                    self(shared_from_this())](const OperateResult &result) -> litebus::Future<TransitionResult> {
                 if (result.status.IsOk()) {
@@ -416,7 +415,8 @@ litebus::Future<TransitionResult> InstanceStateMachine::SaveInstanceInfoToMetaSt
                                 IsLowReliabilityInstance(newInstanceInfo))
         .Then([prevInstanceInfo, oldState, key(keyPath), self(shared_from_this()), version(context.version),
                instanceID(newInstanceInfo.instanceid()), context, newInstanceInfo,
-               newState(newInstanceInfo.instancestatus().code())](const OperateResult &result) {
+               newState(newInstanceInfo.instancestatus().code()),
+               errCode(newInstanceInfo.instancestatus().errcode())](const OperateResult &result) {
             if (result.status.IsOk()) {
                 YRLOG_DEBUG("success to modify instance for key({}), preKeyVersion is {}", key, version);
                 if (context.persistence && oldState != context.newState) {
@@ -431,10 +431,10 @@ litebus::Future<TransitionResult> InstanceStateMachine::SaveInstanceInfoToMetaSt
                                          version + 1, Status::OK(), result.currentModRevision };
             }
             YRLOG_ERROR("fail to modify instance for key({}), err: {}", key, result.status.ToString());
-            auto lastFailedState = self->lastSaveFailedState_.load();
+            auto lastFailedState = self->GetLastSaveFailedState();
             if (lastFailedState != static_cast<int32_t>(InstanceState::EXITED)) {
                 YRLOG_DEBUG("key({}) last failed state({}), change to({})", key, lastFailedState, newState);
-                self->lastSaveFailedState_.store(newState);
+                self->SetLastSaveFailedState(newState, errCode);
             }
             InstanceInfo instanceInfoSaved;
             if (!TransToInstanceInfoFromJson(instanceInfoSaved, result.value)) {
@@ -592,9 +592,8 @@ litebus::Future<Status> InstanceStateMachine::TryExitInstance(const std::shared_
     auto oldState = killCtx->instanceContext->GetState();
     if (oldState != GetInstanceState()) {
         YRLOG_WARN("{}|instance({}) state is inconsistent, origin state is ({}), current state is ({})",
-                   killCtx->instanceContext->GetRequestID(), instanceID_,
-                   static_cast<std::underlying_type_t<InstanceState>>(oldState),
-                   static_cast<std::underlying_type_t<InstanceState>>(GetInstanceState()));
+                   killCtx->instanceContext->GetRequestID(), instanceID_, fmt::underlying(oldState),
+                   fmt::underlying(GetInstanceState()));
         promise->SetValue(
             Status(StatusCode::ERR_INSTANCE_INFO_INVALID, "failed to exit instance, state is inconsistent"));
         return Status(StatusCode::ERR_INSTANCE_INFO_INVALID, "instance state is inconsistent");
@@ -611,7 +610,7 @@ litebus::Future<Status> InstanceStateMachine::TryExitInstance(const std::shared_
         return Status(StatusCode::ERR_INSTANCE_INFO_INVALID, "instance is exiting, not handle.");
     }
     YRLOG_INFO("try to exit instance({}) times({}), instance state({})", instanceID_, exitTimes_,
-        static_cast<std::underlying_type_t<InstanceState>>(oldState));
+               fmt::underlying(oldState));
     exitTimes_++;
     auto transContext = TransContext{ InstanceState::EXITING, GetVersion(), "exiting" };
     transContext.scheduleReq = killCtx->instanceContext->GetScheduleRequest();
@@ -734,7 +733,7 @@ void InstanceStateMachine::ExecuteStateChangeCallback(const std::string &request
             continue;
         }
         YRLOG_INFO("{}|transition instance({}) state to ({}), to execute callback", requestID, instanceID_,
-            static_cast<std::underlying_type_t<InstanceState>>(newState));
+                   fmt::underlying(newState));
         callbackIter->second.callback(instanceInfo);
         callbackIter = stateChangeCallbacks_.erase(callbackIter);
     }
@@ -870,15 +869,37 @@ std::string InstanceStateMachine::Information()
     return info;
 }
 
+void InstanceStateMachine::NewSavingPomise()
+{
+    std::lock_guard<std::recursive_mutex> guard(lock_);
+    // isInit mean the instance is persisting
+    savePromise_ = std::make_shared<litebus::Promise<bool>>();
+}
+
+void InstanceStateMachine::TagSaved()
+{
+    std::lock_guard<std::recursive_mutex> guard(lock_);
+    if (savePromise_ != nullptr) {
+        savePromise_->SetValue(true);
+        savePromise_ = nullptr;
+    }
+}
+
 litebus::Future<bool> InstanceStateMachine::GetSavingFuture()
 {
     std::lock_guard<std::recursive_mutex> guard(lock_);
+    if (savePromise_ == nullptr) {
+        return false;
+    }
     return savePromise_->GetFuture();
 }
 
 bool InstanceStateMachine::IsSaving()
 {
     std::lock_guard<std::recursive_mutex> guard(lock_);
+    if (savePromise_ == nullptr) {
+        return false;
+    }
     return savePromise_->GetFuture().IsInit();
 }
 
@@ -906,13 +927,25 @@ void InstanceStateMachine::SetTraceID(const std::string &traceID)
 int32_t InstanceStateMachine::GetLastSaveFailedState()
 {
     std::lock_guard<std::recursive_mutex> guard(lock_);
-    return lastSaveFailedState_.load();
+    return lastSaveFailedState_.first;
+}
+
+int32_t InstanceStateMachine::GetLastSaveFailedErrCode()
+{
+    std::lock_guard<std::recursive_mutex> guard(lock_);
+    return lastSaveFailedState_.second;
 }
 
 void InstanceStateMachine::ResetLastSaveFailedState()
 {
     std::lock_guard<std::recursive_mutex> guard(lock_);
-    lastSaveFailedState_.store(INVALID_LAST_SAVE_FAILED_STATE);
+    lastSaveFailedState_ = { INVALID_LAST_SAVE_FAILED_STATE, INVALID_LAST_SAVE_FAILED_STATE };
+}
+
+void InstanceStateMachine::SetLastSaveFailedState(int32_t state, int32_t errorCode)
+{
+    std::lock_guard<std::recursive_mutex> guard(lock_);
+    lastSaveFailedState_ = { state, errorCode };
 }
 
 litebus::Future<resources::InstanceInfo> InstanceStateMachine::SyncInstanceFromMetaStore()
@@ -961,8 +994,7 @@ bool InstanceStateMachine::GetUpdateByRouteInfo()
 void InstanceStateMachine::SetInstanceBillingTerminated(const std::string &instanceID, const InstanceState &newState)
 {
     if (newState == InstanceState::FATAL || newState == InstanceState::FAILED) {
-        YRLOG_DEBUG("Status {} instance {}, set billing terminated",
-            static_cast<std::underlying_type_t<InstanceState>>(newState), instanceID);
+        YRLOG_DEBUG("Status {} instance {}, set billing terminated", fmt::underlying(newState), instanceID);
         metrics::MetricsAdapter::GetInstance().GetMetricsContext().SetBillingInstanceEndTime(
             instanceID,
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
@@ -976,7 +1008,7 @@ void InstanceStateMachine::PublishDeleteToLocalObserver(const std::string &insta
     auto observer = InstanceStateMachine::GetObserver();
     if (observer != nullptr) {
         YRLOG_DEBUG("success to notify instance({}) delete", instanceID);
-        observer->DelInstanceEvent(instanceID);
+        observer->DelInstanceEvent(instanceID, GetModRevision());
     } else {
         YRLOG_WARN("failed to notify instance({}) delete to observer", instanceID);
     }

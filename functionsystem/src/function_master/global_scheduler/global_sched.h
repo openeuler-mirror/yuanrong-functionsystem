@@ -18,7 +18,7 @@
 #define FUNCTION_MASTER_GLOBAL_SCHEDULER_GLOBAL_SCHED_H
 
 #include "meta_store_monitor/meta_store_healthy_observer.h"
-#include "status/status.h"
+#include "common/status/status.h"
 #include "global_sched_actor.h"
 #include "scheduler_manager/domain_sched_mgr.h"
 #include "scheduler_manager/local_sched_mgr.h"

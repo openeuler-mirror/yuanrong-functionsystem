@@ -18,17 +18,19 @@
 #define LOCAL_SCHEDULER_FUNCTION_AGENT_MGR_FUNCTION_AGENT_MGR_ACTOR_H
 
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
 #include "common/utils/actor_driver.h"
-#include "heartbeat/heartbeat_observer_ctrl.h"
+#include "common/heartbeat/heartbeat_observer.h"
 #include "meta_store_client/meta_store_client.h"
-#include "proto/pb/message_pb.h"
-#include "common/resource_view/resource_view.h"
-#include "request_sync_helper.h"
 #include "common/observer/tenant_listener.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/resource_view/resource_view.h"
+#include "common/utils/actor_driver.h"
+#include "common/utils/request_sync_helper.h"
 
 namespace functionsystem::local_scheduler {
 class InstanceCtrl;
@@ -84,6 +86,7 @@ public:
         uint32_t pingCycleMs{ function_agent_mgr::MIN_PING_CYCLE };
         bool enableTenantAffinity { true };
         int32_t tenantPodReuseTimeWindow { 10 };
+        bool enableIpv4TenantIsolation { true };
         bool enableForceDeletePod { true };
         uint32_t getAgentInfoRetryMs {function_agent_mgr::GET_FUNC_AGENT_REGIS_INFO_CYCLE_MS};
         uint64_t invalidAgentGCInterval {function_agent_mgr::AGENT_FAILED_GC_TIME};
@@ -155,14 +158,20 @@ public:
 
     virtual void BindResourceView(const std::shared_ptr<resource_view::ResourceView> &resourceView);
 
-    virtual void BindHeartBeatObserverCtrl(const std::shared_ptr<HeartbeatObserverCtrl> &heartbeatObserverCtrl);
-
     virtual void BindLocalSchedSrv(const std::shared_ptr<LocalSchedSrv> &localSchedSrv);
 
     virtual void BindBundleMgr(const std::shared_ptr<BundleMgr> &bundleMgr);
 
     virtual litebus::Future<messages::DeployInstanceResponse> DeployInstance(
         const std::shared_ptr<messages::DeployInstanceRequest> &request, const std::string &funcAgentID);
+
+    virtual litebus::Future<messages::StaticFunctionChangeResponse> NotifyFunctionStatusChange(
+        const std::shared_ptr<messages::StaticFunctionChangeRequest> &request, const std::string &funcAgentID);
+
+    virtual void RetryNotifyFunctionStatus(const std::string &requestID, const std::string &funcAgentID,
+                                            const std::shared_ptr<messages::StaticFunctionChangeRequest> &request);
+
+    void NotifyFunctionStatusChangeResp(const litebus::AID &from, std::string &&, std::string &&msg);
 
     virtual litebus::Future<messages::KillInstanceResponse> KillInstance(
         const std::shared_ptr<messages::KillInstanceRequest> &request, const std::string &funcAgentID,
@@ -224,6 +233,11 @@ public:
     void UpdateLocalStatus(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     void NotifyUpdateLocalResult(litebus::AID from, const uint32_t &localStatus, const bool &healthy);
+
+    void StaticFunctionScheduleRequest(const litebus::AID &from, std::string &&, std::string &&msg);
+
+    litebus::Future<Status> SendStaticFunctionScheduleResponse(const messages::ScheduleResponse &scheduleResponse,
+                                                               const litebus::AID &from);
 
     // for test
     [[maybe_unused]] void SetFuncAgentsRegis(
@@ -355,6 +369,8 @@ protected:
 
     litebus::Future<Status> StartHeartbeat(const std::string &funcAgentID, const std::string &address);
 
+    void ResetHeartbeat(const std::string &funcAgentID, const std::string &address);
+
     litebus::Future<std::shared_ptr<resource_view::ResourceUnit>> SetFuncAgentInfo(
         const Status &status, const std::string &funcAgentID,
         const std::shared_ptr<resource_view::ResourceUnit> &resourceUnit);
@@ -443,6 +459,9 @@ private:
     bool IsEvictedAgent(const std::string &agentID);
     void DeferGCInvalidAgent(const std::string &agentID);
 
+    void NotifyLocalAgentsInTenant(const std::shared_ptr<TenantCache> &tenantCache,
+        const RuleType &type, std::vector<std::string> &rules, bool isClusterWide);
+
     void SetNetworkIsolation(const std::string &agentID, const RuleType &type, std::vector<std::string> &rules);
 
     void OnTenantFirstInstanceSchedInLocalPod(
@@ -474,10 +493,12 @@ private:
     uint32_t pingCycleMs_;
     bool enableTenantAffinity_;
     int32_t tenantPodReuseTimeWindow_;
+    bool enableIpv4TenantIsolation_;
     uint64_t invalidAgentGCInterval_;
 
     using DeployNotifyPromise = litebus::Promise<messages::DeployInstanceResponse>;
     using KillNotifyPromise = litebus::Promise<messages::KillInstanceResponse>;
+    using instanceStatusNotifyPromise = litebus::Promise<messages::StaticFunctionChangeResponse>;
     std::unordered_map<std::string, FuncAgentInfo> funcAgentTable_;  // key: function agent ID
     std::unordered_map<litebus::AID, std::string> aidTable_;         // key: AID, value: function agent ID
 
@@ -485,11 +506,12 @@ private:
     std::unordered_map<std::string,
                        std::unordered_map<std::string, std::pair<std::shared_ptr<DeployNotifyPromise>, uint32_t>>>
         deployNotifyPromise_;
+    std::unordered_map<
+        std::string, std::unordered_map<std::string, std::pair<std::shared_ptr<instanceStatusNotifyPromise>, uint32_t>>>
+        instanceHealthyNotifyPromise_;
     std::unordered_map<std::string,
                        std::unordered_map<std::string, std::pair<std::shared_ptr<KillNotifyPromise>, uint32_t>>>
         killNotifyPromise_;
-
-    std::shared_ptr<HeartbeatObserverCtrl> heartBeatObserverCtrl_{ nullptr };
 
     std::weak_ptr<InstanceCtrl> instanceCtrl_;
     std::weak_ptr<resource_view::ResourceView> resourceView_;
@@ -526,6 +548,11 @@ private:
     std::shared_ptr<litebus::Promise<Status>> waitToPutAgentInfo_ {nullptr};
     std::shared_ptr<litebus::Promise<Status>> persistingAgentInfo_ {nullptr};
     bool abnormal_{ false };
+
+    std::unordered_set<std::string> staticFunctionScheduleRequestIDs_;
+
+    std::unordered_map<std::string, litebus::AID> pingPongAIDMap_;
+    std::shared_ptr<HeartbeatObserveDriver> heartbeatObserveDriver_ = nullptr;
 };
 }  // namespace functionsystem::local_scheduler
 

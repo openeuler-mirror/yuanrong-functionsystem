@@ -16,26 +16,30 @@
 
 #include "metrics_actor.h"
 
-#include <async/asyncafter.hpp>
 #include <async/async.hpp>
+#include <async/asyncafter.hpp>
 #include <async/defer.hpp>
-#include <utils/os_utils.hpp>
 #include <nlohmann/json.hpp>
+#include <utils/os_utils.hpp>
 
 #include "collector/custom_resource_collector.h"
+#include "collector/disk_collector.h"
 #include "collector/instance_cpu_collector.h"
 #include "collector/instance_memory_collector.h"
+#include "collector/instance_xpu_collector.h"
+#include "collector/node_cpu_collector.h"
+#include "collector/node_cpu_utilization_collector.h"
+#include "collector/node_disk_collector.h"
+#include "collector/node_memory_collector.h"
 #include "collector/resource_labels_collector.h"
 #include "collector/system_cpu_collector.h"
 #include "collector/system_memory_collector.h"
 #include "collector/system_proc_cpu_collector.h"
 #include "collector/system_proc_memory_collector.h"
 #include "collector/system_xpu_collector.h"
-#include "collector/node_cpu_collector.h"
-#include "collector/node_memory_collector.h"
-#include "logs/logging.h"
-#include "proto/pb/message_pb.h"
-#include "proto/pb/posix/resource.pb.h"
+#include "common/logs/logging.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/proto/pb/posix/resource.pb.h"
 #include "common/utils/exec_utils.h"
 #include "manager/runtime_manager.h"
 
@@ -52,6 +56,27 @@ bool IsValidMonitorPath(const std::string &path)
     }
     YRLOG_WARN("invalid monitor path: {}", path);
     return false;
+}
+
+bool IsVectorMetric(MetricsType type)
+{
+    return type == metrics_type::GPU || type == metrics_type::NPU || type == metrics_type::DISK;
+}
+
+
+void TransIntsInfoToVectors(Metrics &metrics, resources::Resource &resource)
+{
+    auto categoryMap = resource.mutable_vectors()->mutable_values();
+    auto &devClusterMetrics = metrics.devClusterMetrics.Get();
+
+    for (auto &pair: devClusterMetrics.intsInfo) {
+        const auto &intsInfo = pair.second;
+        auto &vectors = (*categoryMap)[pair.first];
+        auto &vector = (*vectors.mutable_vectors())[devClusterMetrics.uuid];
+        for (const auto &value : intsInfo) {
+            vector.mutable_values()->Add(value);
+        }
+    }
 }
 
 MetricsActor::MetricsActor(const std::string &name) : ActorBase(name)
@@ -103,15 +128,30 @@ void MetricsActor::AddSystemMetricsCollector(const Flags &flags)
         filter_[systemGpuCollector->GenFilter()] = std::move(systemGpuCollector);
     }
     if (NPU_COLLECT_SET.find(flags.GetNpuCollectionMode()) != NPU_COLLECT_SET.end()) {
-        auto params = std::make_shared<XPUCollectorParams>();
-        params->ldLibraryPath = metricsConfig_.heteroLdLibraryPath;
-        params->deviceInfoPath = flags.GetNpuDeviceInfoPath();
-        params->collectMode = flags.GetNpuCollectionMode();
+        npuCollectorParams_ = std::make_shared<XPUCollectorParams>();
+        npuCollectorParams_->ldLibraryPath = metricsConfig_.heteroLdLibraryPath;
+        npuCollectorParams_->deviceInfoPath = flags.GetNpuDeviceInfoPath();
+        npuCollectorParams_->collectMode = flags.GetNpuCollectionMode();
         std::shared_ptr<BaseMetricsCollector> systemNpuCollector =
-            std::make_shared<SystemXPUCollector>(nodeID, metrics_type::NPU, procFSTools_, params);
+            std::make_shared<SystemXPUCollector>(nodeID, metrics_type::NPU, procFSTools_, npuCollectorParams_);
         filter_[systemNpuCollector->GenFilter()] = std::move(systemNpuCollector);
+
+        std::shared_ptr<BaseMetricsCollector> nodeNpuCollector =
+            std::make_shared<SystemXPUCollector>(nodeID, metrics_type::NPU, procFSTools_, npuCollectorParams_);
+        metricsFilter_[nodeNpuCollector->GenFilter()] = nodeNpuCollector;
     }
+    ResolveDiskResourceMetricsCollector(flags.GetDiskResources());
     ResolveCustomResourceMetricsCollector(flags.GetCustomResources());
+
+    std::shared_ptr<BaseMetricsCollector> nodeCPUUtilizationCollector =
+        std::make_shared<NodeCPUUtilizationCollector>(procFSTools_);
+    std::shared_ptr<BaseMetricsCollector> nodeMemoryCollector =
+        std::make_shared<NodeMemoryCollector>(procFSTools_, metricsConfig_.overheadMemory);
+    std::shared_ptr<BaseMetricsCollector> nodeDiskCollector = std::make_shared<NodeDiskCollector>(procFSTools_);
+
+    metricsFilter_[nodeCPUUtilizationCollector->GenFilter()] = nodeCPUUtilizationCollector;
+    metricsFilter_[nodeMemoryCollector->GenFilter()] = nodeMemoryCollector;
+    metricsFilter_[nodeDiskCollector->GenFilter()] = nodeDiskCollector;
 }
 
 void MetricsActor::ResolveCustomResourceMetricsCollector(const std::string &customResource)
@@ -143,6 +183,16 @@ void MetricsActor::ResolveCustomResourceMetricsCollector(const std::string &cust
     }
 }
 
+void MetricsActor::ResolveDiskResourceMetricsCollector(const std::string &diskResource)
+{
+    if (diskResource.empty()) {
+        YRLOG_INFO("Disk resource config is empty.");
+        return;
+    }
+    std::shared_ptr<BaseMetricsCollector> diskResourcesCollector = std::make_shared<DiskCollector>(diskResource);
+    filter_[diskResourcesCollector->GenFilter()] = diskResourcesCollector;
+}
+
 Status MetricsActor::AddInstance(const messages::RuntimeInstanceInfo &instanceInfo, const pid_t &pid,
                                  const double &cpuLimit, const double &memLimit)
 {
@@ -160,6 +210,12 @@ Status MetricsActor::AddInstance(const messages::RuntimeInstanceInfo &instanceIn
     filter_[instanceMemoryCollector->GenFilter()] = instanceMemoryCollector;
     if (runtimeOomMonitorConfig_.enable) {
         runtimeMemoryLimitCollector_  = instanceMemoryCollector;
+    }
+    if (npuCollectorParams_ != nullptr) {
+        InstInfoWithXPU info = {pid, instanceID, deployDir, instanceInfo, nodeID};
+        std::shared_ptr<BaseMetricsCollector> instNpuCollector =
+            std::make_shared<InstanceXPUCollector>(info, metrics_type::NPU, procFSTools_, npuCollectorParams_);
+        filter_[instNpuCollector->GenFilter()] = std::move(instNpuCollector);
     }
 
     instanceInfos_[instanceID] = instanceInfo;
@@ -186,6 +242,15 @@ void MetricsActor::StartUpdateMetrics()
     (void)Send(agentAid_, "UpdateResources", BuildUpdateMetricsRequest(allMetrics));
     // UPDATE_METRICS_DURATION should be configurable
     updateMetricsTimer_ = litebus::AsyncAfter(UPDATE_METRICS_DURATION, GetAID(), &MetricsActor::StartUpdateMetrics);
+}
+
+void MetricsActor::BeginUpdateMetrics()
+{
+    YRLOG_DEBUG_COUNT_60("push metrics.");
+    auto allMetrics = GenTotalMetrics();
+    (void)Send(agentAid_, "UpdateMetrics", BuildUpdateMetricsRequest(allMetrics));
+    // UPDATE_METRICS_DURATION should be configurable
+    pushMetricsTimer_ = litebus::AsyncAfter(UPDATE_METRICS_DURATION, GetAID(), &MetricsActor::BeginUpdateMetrics);
 }
 
 void MetricsActor::StopUpdateMetrics()
@@ -266,6 +331,16 @@ std::vector<litebus::Future<Metrics>> MetricsActor::GenAllMetrics() const
     return metrics;
 }
 
+std::vector<litebus::Future<Metrics>> MetricsActor::GenTotalMetrics() const
+{
+    std::vector<litebus::Future<Metrics>> metrics;
+    for (const auto &iter : metricsFilter_) {
+        metrics.push_back(iter.second->GetMetrics());
+    }
+    return metrics;
+}
+
+
 std::vector<litebus::Future<Metrics>> MetricsActor::GenAllMetricsWithoutSystem() const
 {
     std::vector<litebus::Future<Metrics>> metrics;
@@ -329,7 +404,7 @@ resources::ResourceUnit MetricsActor::BuildResourceUnit(const std::vector<litebu
 }
 
 resources::ResourceUnit MetricsActor::BuildResourceUnitWithInstance(
-    const std::vector<litebus::Future<Metrics>> &allMetrics) const
+    const std::vector<litebus::Future<Metrics>> &allMetrics)
 {
     resources::ResourceUnit unit;
     auto instances = unit.mutable_instances();
@@ -346,15 +421,26 @@ resources::ResourceUnit MetricsActor::BuildResourceUnitWithInstance(
         auto &instanceInfo = instances->find(metrics.instanceID.Get())->second;
         instanceInfo.set_instanceid(metrics.instanceID.Get());
 
+        auto resourceValueType = resources::Value_Type_SCALAR;
+        // GPU/NPU's type is SET, if device ID is empty, then ignore information of GPU/NPU
+        if (IsVectorMetric(metrics.metricsType)) {
+            if (metrics.devClusterMetrics.IsNone()) {
+                // Failed to collect XPU information. Invalid metrics.
+                continue;
+            }
+            resourceValueType = resources::Value_Type_VECTORS;
+        }
+
         // actual use
         resources::Resource resource;
         auto scalar = resource.mutable_scalar();
         if (metrics.usage.IsSome()) {
             scalar->set_value(metrics.usage.Get());
+        } else {
+            scalar->set_value(0);
         }
-        resource.set_name(metrics.metricsType);
-        resource.set_type(resources::Value_Type_SCALAR);
-        (void)instanceInfo.mutable_actualuse()->mutable_resources()->insert({ metrics.metricsType, resource });
+        BuildResource(metrics, resource, resourceValueType);
+        (void)instanceInfo.mutable_actualuse()->mutable_resources()->insert({ resource.name(), resource });
     }
     return unit;
 }
@@ -375,7 +461,7 @@ resources::ResourceUnit MetricsActor::BuildResourceUnitWithSystem(
 
         auto resourceValueType = resources::Value_Type_SCALAR;
         // GPU/NPU's type is SET, if device ID is empty, then ignore information of GPU/NPU
-        if (metrics.metricsType == metrics_type::GPU || metrics.metricsType == metrics_type::NPU) {
+        if (IsVectorMetric(metrics.metricsType)) {
             if (metrics.devClusterMetrics.IsNone()) {
                 // Failed to collect XPU information. Invalid metrics.
                 continue;
@@ -424,7 +510,11 @@ void MetricsActor::BuildResource(Metrics &metrics, resources::Resource &resource
 {
     resource.set_name(metrics.metricsType);
     resource.set_type(type);
-    BuildDevClusterResource(metrics, resource);
+    if (metrics.metricsType == metrics_type::GPU || metrics.metricsType == metrics_type::NPU) {
+        BuildHeteroDevClusterResource(metrics, resource);
+    } else if (metrics.metricsType == metrics_type::DISK) {
+        BuildDiskDevClusterResource(metrics, resource);
+    }
 }
 
 std::vector<int> MetricsActor::GetCardIDs()
@@ -432,7 +522,7 @@ std::vector<int> MetricsActor::GetCardIDs()
     return cardIDs_;
 }
 
-void MetricsActor::BuildDevClusterResource(Metrics &metrics, resources::Resource &resource)
+void MetricsActor::BuildHeteroDevClusterResource(Metrics &metrics, resources::Resource &resource)
 {
     if (metrics.devClusterMetrics.IsSome()) {
         if (metrics.devClusterMetrics.Get().strInfo.find(dev_metrics_type::PRODUCT_MODEL_KEY)
@@ -449,6 +539,17 @@ void MetricsActor::BuildDevClusterResource(Metrics &metrics, resources::Resource
         }
         for (auto &pair : metrics.devClusterMetrics.Get().strInfo) {
             resource.mutable_heterogeneousinfo()->insert({ pair.first, pair.second });
+        }
+    }
+}
+
+void MetricsActor::BuildDiskDevClusterResource(Metrics &metrics, resources::Resource &resource)
+{
+    if (metrics.devClusterMetrics.IsSome()) {
+        resource.set_name(metrics.metricsType);
+        TransIntsInfoToVectors(metrics, resource);
+        for (auto &extension : metrics.devClusterMetrics.Get().extensionInfo) {
+            resource.add_extensions()->CopyFrom(extension);
         }
     }
 }
@@ -615,20 +716,20 @@ bool MetricsActor::IsDiskUsageBelowLimit(const DiskUsageMonitorConfig &config) c
         std::string command = "/usr/bin/du -sh -m " + path + " 2>/dev/null";
         auto result = ExecuteCommand(command);
         if (!result.error.empty()) {
-            YRLOG_ERROR("get disk({}) usage failed. error message: {}", path, result.error);
-            return false;
+            YRLOG_WARN("get disk({}) usage failed. error message: {}", path, result.error);
+            continue;
         }
         auto outStrs = litebus::strings::Split(result.output, "\t");
         if (outStrs.empty()) {
-            YRLOG_ERROR("failed to get disk({}) usage, empty output", path);
-            return false;
+            YRLOG_WARN("failed to get disk({}) usage, empty output", path);
+            continue;
         }
         int usage = 0;
         try {
             usage = std::stoi(outStrs[0]);
         } catch (std::invalid_argument const &ex) {
-            YRLOG_ERROR("failed to get disk({}) usage,  value({}) is not INT", path, usage);
-            return false;
+            YRLOG_WARN("failed to get disk({}) usage,  value({}) is not INT", path, outStrs[0]);
+            continue;
         }
         if (INT_MAX - totalUsage < usage) {
             YRLOG_ERROR("total usage is overflow for path {}", path);

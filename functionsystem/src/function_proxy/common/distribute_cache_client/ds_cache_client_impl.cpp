@@ -18,8 +18,8 @@
 
 #include <memory>
 
-#include "logs/logging.h"
-#include "files.h"
+#include "common/logs/logging.h"
+#include "common/utils/files.h"
 
 #define RETURN_IF_DS_ERROR(statement)                                      \
     do {                                                                   \
@@ -109,7 +109,18 @@ void DSCacheClientImpl::GetAuthConnectOptions(const std::shared_ptr<DSAuthConfig
 
 Status DSCacheClientImpl::GetHealthStatus()
 {
-    RETURN_IF_DS_ERROR(dsObjectClient_->HealthCheck());
+    ::datasystem::Status healthCheckResult = (dsObjectClient_->HealthCheck());
+    if (healthCheckResult.IsError()) {
+        YRLOG_ERROR("DS return failed, error: {}", healthCheckResult.ToString());
+        return Status(StatusCode::BP_DATASYSTEM_ERROR, healthCheckResult.ToString());
+    }
+
+    return Status::OK();
+}
+
+Status DSCacheClientImpl::ShutDown()
+{
+    RETURN_IF_DS_ERROR(dsObjectClient_->ShutDown());
     return Status::OK();
 }
 

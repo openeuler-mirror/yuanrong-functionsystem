@@ -20,7 +20,7 @@
 #include <async/defer.hpp>
 #include <regex>
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/utils/exec_utils.h"
 #include "common/utils/generate_message.h"
 #include "common/utils/proc_fs_tools.h"
@@ -68,6 +68,11 @@ void HealthCheckActor::UpdateAgentInfo(const litebus::AID &to)
 void HealthCheckActor::RegisterProcessExitCallback(const std::function<void(const pid_t)> &func)
 {
     HealthCheckActor::processExitCallback_ = func;
+}
+
+void HealthCheckActor::RegisterHandleLogPrefixExit(const std::function<void(const std::string)> &func)
+{
+    HealthCheckActor::logPrefixExitCallback_ = func;
 }
 
 void HealthCheckActor::ReapProcess()
@@ -283,6 +288,9 @@ void HealthCheckActor::WaitProcessCyclical()
             if (runtimeStatus_.find(runtimeID) != runtimeStatus_.end()) {
                 runtimeStatus_[runtimeID]->Associate(exitMsgFuture);
             }
+            if (HealthCheckActor::logPrefixExitCallback_ != nullptr) {
+                HealthCheckActor::logPrefixExitCallback_(runtimeID);
+            }
         } else {
             // Check if the pid corresponds to an RuntimeMemoryExceedLimit(OOM) situation
             if (auto iter(oomMap_.find(pid)); iter != oomMap_.end()) {
@@ -361,6 +369,10 @@ litebus::Option<std::string> HealthCheckActor::GetLogInfoByPath(const std::strin
 litebus::Future<litebus::Option<std::string>> HealthCheckActor::GetOOMInfo(const bool isBareMental)
 {
     std::string command = R"(/bin/bash -c "/usr/bin/dmesg -T | tail -100")";
+    if (!isBareMental) {
+        // in container
+        command = "sudo " + command;
+    }
     return AsyncExecuteCommand(command).Then(
         [isBareMental](const CommandExecResult &execResult) -> litebus::Option<std::string> {
             auto result = execResult;

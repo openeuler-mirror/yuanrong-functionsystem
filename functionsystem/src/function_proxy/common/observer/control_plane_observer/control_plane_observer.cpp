@@ -19,7 +19,7 @@
 #include <async/async.hpp>
 
 #include "common/constants/actor_name.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem::function_proxy {
 
@@ -109,6 +109,12 @@ litebus::Future<litebus::Option<InstanceInfoMap>> ControlPlaneObserver::GetLocal
     return litebus::Async(observerActor_->GetAID(), &ObserverActor::GetLocalInstanceInfo);
 }
 
+litebus::Future<InstanceInfoMap> ControlPlaneObserver::GetAllInstanceInfos() const
+{
+    ASSERT_IF_NULL(observerActor_);
+    return litebus::Async(observerActor_->GetAID(), &ObserverActor::GetAllInstanceInfos);
+}
+
 litebus::Future<bool> ControlPlaneObserver::IsSystemFunction(const std::string &function) const
 {
     ASSERT_IF_NULL(observerActor_);
@@ -143,10 +149,10 @@ void ControlPlaneObserver::FastPutRemoteInstanceEvent(const resource_view::Insta
                           modRevision);
 }
 
-litebus::Future<Status> ControlPlaneObserver::DelInstanceEvent(const std::string &instanceID)
+litebus::Future<Status> ControlPlaneObserver::DelInstanceEvent(const std::string &instanceID, int64_t modRevision)
 {
     ASSERT_IF_NULL(observerActor_);
-    return litebus::Async(observerActor_->GetAID(), &ObserverActor::DelInstanceEvent, instanceID);
+    return litebus::Async(observerActor_->GetAID(), &ObserverActor::DelInstanceEvent, instanceID, modRevision);
 }
 
 litebus::Future<std::vector<std::string>> ControlPlaneObserver::GetLocalInstances()
@@ -191,10 +197,22 @@ void ControlPlaneObserver::WatchInstance(const std::string &instanceID, int64_t 
     litebus::Async(observerActor_->GetAID(), &ObserverActor::WatchInstance, instanceID, revision);
 }
 
+litebus::Future<bool> ControlPlaneObserver::IsInstanceWatched(const std::string &instanceID)
+{
+    ASSERT_IF_NULL(observerActor_);
+    return litebus::Async(observerActor_->GetAID(), &ObserverActor::IsInstanceWatched, instanceID);
+}
+
 litebus::Future<resource_view::InstanceInfo> ControlPlaneObserver::GetAndWatchInstance(const std::string &instanceID)
 {
     ASSERT_IF_NULL(observerActor_);
     return litebus::Async(observerActor_->GetAID(), &ObserverActor::GetAndWatchInstance, instanceID);
+}
+
+litebus::Future<resource_view::InstanceInfo> ControlPlaneObserver::GetOrWatchInstance(const std::string &instanceID)
+{
+    ASSERT_IF_NULL(observerActor_);
+    return litebus::Async(observerActor_->GetAID(), &ObserverActor::GetOrWatchInstance, instanceID);
 }
 
 void ControlPlaneObserver::CancelWatchInstance(const std::string &instanceID)

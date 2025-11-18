@@ -17,11 +17,11 @@
 #include "posix_api_handler.h"
 
 #include "async/defer.hpp"
-#include "logs/logging.h"
-#include "proto/pb/message_pb.h"
-#include "resource_type.h"
-#include "rpc/stream/posix/control_client.h"
-#include "status/status.h"
+#include "common/logs/logging.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/resource_view/resource_type.h"
+#include "common/rpc/stream/posix/control_client.h"
+#include "common/status/status.h"
 #include "common/utils/generate_message.h"
 #include "common/utils/struct_transfer.h"
 
@@ -97,7 +97,7 @@ litebus::Future<std::shared_ptr<StreamingMessage>> PosixAPIHandler::Create(
             auto createRsp = TransFromScheduleRspToCreateRsp(future.Get());
             auto response = std::make_shared<StreamingMessage>();
             YRLOG_INFO("{}|{}|reply create instance response to {}. code: {}, message: {}", traceID, requestID, from,
-                       createRsp.code(), createRsp.message());
+                       fmt::underlying(createRsp.code()), createRsp.message());
             *response->mutable_creatersp() = std::move(createRsp);
             return response;
         });
@@ -120,7 +120,7 @@ litebus::Future<std::shared_ptr<runtime_rpc::StreamingMessage>> PosixAPIHandler:
     if (localGroupCtrl == nullptr) {
         YRLOG_ERROR("{}|{}|failed to create group instance from {}, group control is nullptr.", traceID, requestID,
                     from);
-        response->mutable_creatersps()->set_code(common::ERR_INNER_SYSTEM_ERROR);
+        response->mutable_creatersps()->set_code(common::ERR_INNER_COMMUNICATION);
         response->mutable_creatersps()->set_message("group control is nullptr in local scheduler");
         return response;
     }
@@ -147,8 +147,13 @@ litebus::Future<std::shared_ptr<StreamingMessage>> PosixAPIHandler::Kill(
         response->mutable_killrsp()->set_message("instance control is nullptr in local scheduler");
         return response;
     }
-    YRLOG_INFO("receive kill request(signal {}) from instance({}) to instance({}).", killReq->signal(), from,
-               killReq->instanceid());
+    // former compatible
+    if (killReq->requestid().empty()) {
+        killReq->set_requestid(killReq->instanceid() + "-" + std::to_string(killReq->signal()));
+    }
+
+    YRLOG_INFO("{}|receive kill request(signal {}) from instance({}) to instance({}).", killReq->requestid(),
+               killReq->signal(), from, killReq->instanceid());
     return instanceCtrl->Kill(from, killReq)
         .Then([from, response](
                   const litebus::Future<KillResponse> &future) -> litebus::Future<std::shared_ptr<StreamingMessage>> {
@@ -170,15 +175,13 @@ litebus::Future<std::shared_ptr<StreamingMessage>> PosixAPIHandler::Exit(
         YRLOG_ERROR("failed to exit instance({}), instance control is nullptr", instanceID);
         return response;
     }
-    auto killReq = GenKillRequest(instanceID, 1);
-    (void)instanceCtrl->Kill(from, killReq).OnComplete([instanceID](const litebus::Future<KillResponse> &future) {
-        if (future.IsError()) {
-            YRLOG_ERROR("failed to exit instance({})", instanceID);
-            return;
-        }
-        YRLOG_INFO("exit instance({}), exit code: {}", instanceID, future.Get().code());
+
+    auto exitReq = std::make_shared<ExitRequest>(request->exitreq());
+    return instanceCtrl->Exit(from, exitReq).Then([response, instanceID](const ExitResponse &resp) {
+        YRLOG_INFO("exit instance({}), exit code: {}", instanceID, fmt::underlying(resp.code()));
+        response->mutable_exitrsp()->CopyFrom(resp);
+        return response;
     });
-    return response;
 }
 
 litebus::Future<std::pair<bool, std::shared_ptr<StreamingMessage>>> PosixAPIHandler::CallResult(

@@ -19,7 +19,8 @@
 
 #include <string>
 #include <vector>
-#include "status/status.h"
+
+#include "common/status/status.h"
 
 namespace functionsystem {
 
@@ -39,6 +40,8 @@ public:
     virtual Status Del(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys) = 0;
 
     virtual Status GetHealthStatus() = 0;
+
+    virtual Status ShutDown() = 0;
 };
 
 }  // namespace functionsystem

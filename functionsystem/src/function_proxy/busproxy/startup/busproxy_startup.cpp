@@ -20,9 +20,9 @@
 #include <string>
 #include <utility>
 
-#include "logs/logging.h"
-#include "status/status.h"
-#include "meta_store_kv_operation.h"
+#include "common/logs/logging.h"
+#include "common/status/status.h"
+#include "common/utils/meta_store_kv_operation.h"
 #include "function_proxy/busproxy/instance_proxy/instance_proxy.h"
 #include "function_proxy/busproxy/invocation_handler/invocation_handler.h"
 #include "function_proxy/common/observer/data_plane_observer/data_plane_observer.h"
@@ -45,9 +45,14 @@ BusproxyStartup::~BusproxyStartup()
     litebus::Terminate(proxyActor_->GetAID());
     litebus::Await(proxyActor_->GetAID());
 
+    ASSERT_IF_NULL(requestRouter_);
+    litebus::Terminate(requestRouter_->GetAID());
+    litebus::Await(requestRouter_->GetAID());
+
     metaStorageAccessor_ = nullptr;
     proxyActor_ = nullptr;
     registry_ = nullptr;
+    requestRouter_ = nullptr;
 }
 
 void BusproxyStartup::StartProxyActor(const std::string &nodeID, const std::string &modelName)
@@ -66,6 +71,13 @@ void BusproxyStartup::InitRegistry(const litebus::AID &proxyActorAID, const std:
     registry_->Init(std::move(metaStorage), info, param_.serviceTTL);
 }
 
+void BusproxyStartup::StartRequestRouter()
+{
+    // start common instanceProxy actor
+    requestRouter_ = std::make_shared<busproxy::RequestRouter>(REQUEST_ROUTER_NAME);
+    litebus::Spawn(requestRouter_);
+}
+
 Status BusproxyStartup::Run()
 {
     YRLOG_INFO("Start to init Busproxy, nodeID: {}, modelName: {}", param_.nodeID, param_.modelName);
@@ -74,10 +86,14 @@ Status BusproxyStartup::Run()
     InvocationHandler::BindUrl(param_.localAddress);
     busproxy::InstanceProxy::BindObserver(param_.dataPlaneObserver);
     busproxy::RequestDispatcher::BindDataInterfaceClientManager(param_.dataInterfaceClientMgr);
+    busproxy::RequestDispatcher::BindInternalIAM(param_.internalIam);
     InvocationHandler::BindInstanceProxy(std::make_shared<busproxy::InstanceProxyWrapper>());
     InvocationHandler::BindMemoryMonitor(param_.memoryMonitor);
+    InvocationHandler::BindInternalIAM(param_.internalIam);
     InvocationHandler::EnablePerf(param_.isEnablePerf);
     busproxy::Perf::Enable(param_.isEnablePerf);
+
+    StartRequestRouter();
 
     // start proxy actor
     StartProxyActor(param_.nodeID, param_.modelName);
@@ -109,6 +125,9 @@ Status BusproxyStartup::Stop() const
     if (proxyActor_ != nullptr) {
         litebus::Terminate(proxyActor_->GetAID());
     }
+    if (requestRouter_ != nullptr) {
+        litebus::Terminate(requestRouter_->GetAID());
+    }
     return Status::OK();
 }
 
@@ -116,6 +135,9 @@ void BusproxyStartup::Await() const
 {
     ASSERT_IF_NULL(proxyActor_);
     litebus::Await(proxyActor_->GetAID());
+
+    ASSERT_IF_NULL(requestRouter_);
+    litebus::Await(requestRouter_->GetAID());
 }
 
 }  // namespace functionsystem

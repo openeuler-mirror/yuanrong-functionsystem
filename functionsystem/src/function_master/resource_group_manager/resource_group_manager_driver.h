@@ -17,8 +17,8 @@
 #ifndef FUNCTION_MASTER_RESOURCE_GROUP_MANAGER_DRIVER_ACTOR_H
 #define FUNCTION_MASTER_RESOURCE_GROUP_MANAGER_DRIVER_ACTOR_H
 
-#include "http/http_server.h"
-#include "module_driver.h"
+#include "common/http/http_server.h"
+#include "common/utils/module_driver.h"
 #include "resource_group_manager_actor.h"
 
 namespace functionsystem::resource_group_manager {

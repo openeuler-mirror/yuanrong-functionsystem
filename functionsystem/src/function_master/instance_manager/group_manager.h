@@ -16,8 +16,8 @@
 #ifndef FUNCTION_MASTER_INSTANCE_MANAGER_GROUP_MANAGER_H
 #define FUNCTION_MASTER_INSTANCE_MANAGER_GROUP_MANAGER_H
 #include "async/future.hpp"
-#include "resource_type.h"
-#include "status/status.h"
+#include "common/resource_view/resource_type.h"
+#include "common/status/status.h"
 
 namespace functionsystem::instance_manager {
 class GroupManager {

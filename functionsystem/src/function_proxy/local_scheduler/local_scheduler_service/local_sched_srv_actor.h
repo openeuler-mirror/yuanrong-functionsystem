@@ -22,16 +22,17 @@
 #include <map>
 #include <string>
 
-#include "common/utils/actor_driver.h"
 #include "common/explorer/explorer.h"
-#include "heartbeat/ping_pong_driver.h"
-#include "proto/pb/message_pb.h"
-#include "proto/pb/posix_pb.h"
-#include "resource_type.h"
+#include "common/heartbeat/heartbeat_client.h"
+#include "common/heartbeat/heartbeat_observer.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/proto/pb/posix_pb.h"
+#include "common/resource_view/resource_type.h"
 #include "common/resource_view/resource_view_mgr.h"
-#include "status/status.h"
-#include "local_scheduler/instance_control/instance_ctrl.h"
+#include "common/status/status.h"
+#include "common/utils/actor_driver.h"
 #include "local_scheduler/function_agent_manager/function_agent_mgr.h"
+#include "local_scheduler/instance_control/instance_ctrl.h"
 
 namespace functionsystem::local_scheduler {
 const int32_t PING_TIME_OUT_MS = 6000;
@@ -53,6 +54,7 @@ public:
         uint32_t registerCycleMs{ DEFAULT_REGISTER_CYCLE_MS };
         uint32_t pingTimeOutMs{ PING_TIME_OUT_MS };
         uint32_t updateResourceCycleMs{ UPDATE_RESOURCE_CYCLE_MS };
+        std::string componentName{ "" };
         uint32_t forwardRequestTimeOutMs{ FORWARD_SCHEDULE_TIMEOUT };
         uint32_t groupScheduleTimeout{ GROUP_FORWARD_SCHEDULE_TIMEOUT };
         uint32_t groupKillTimeout{ FORWARD_KILL_TIMEOUT };
@@ -60,12 +62,11 @@ public:
     explicit LocalSchedSrvActor(const Param &param);
 
     // use it before start actor
-    void BindPingPongDriver(const std::shared_ptr<PingPongDriver> &pingPongDriver);
+    void BindPingPongDriver(const std::shared_ptr<HeartbeatClientDriver> &pingPongDriver);
 
     ~LocalSchedSrvActor() override;
 
     void ToReady() override;
-    void StartPingPong();
     /**
      * receive request to schedule instance from domain scheduler or runtime
      * @param from: caller AID
@@ -247,7 +248,7 @@ protected:
     void Init() override;
     void Finalize() override;
 
-    void TimeOutEvent(HeartbeatConnection type);
+    void TimeOutEvent();
     litebus::Future<Status> EnableLocalSrv(const litebus::Future<Status> &future);
 
     Status ScheduleResp(const std::shared_ptr<messages::ScheduleResponse> &scheduleRsp,
@@ -322,7 +323,7 @@ private:
     std::shared_ptr<resource_view::ResourceViewMgr> resourceViewMgr_;
     std::weak_ptr<InstanceCtrl> instanceCtrl_;
     std::shared_ptr<FunctionAgentMgr> functionAgentMgr_;
-    std::shared_ptr<PingPongDriver> pingPongDriver_;
+    std::shared_ptr<HeartbeatClientDriver> pingPongDriver_;
 
     std::map<std::string, std::shared_ptr<litebus::Promise<messages::ScheduleResponse>>> forwardSchedulePromise_;
     std::map<std::string, std::shared_ptr<litebus::Promise<messages::ForwardKillResponse>>> forwardKillPromise_;
@@ -342,6 +343,8 @@ private:
     litebus::Promise<Status> unRegistered_;
 
     std::shared_ptr<SubscriptionMgr> subscriptionMgr_;
+
+    std::string  componentName_;
 };
 
 }  // namespace functionsystem::local_scheduler

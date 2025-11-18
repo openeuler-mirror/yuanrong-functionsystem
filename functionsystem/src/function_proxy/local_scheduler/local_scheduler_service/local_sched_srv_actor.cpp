@@ -21,10 +21,11 @@
 
 #include "common/constants/actor_name.h"
 #include "common/explorer/explorer.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
 #include "common/utils/generate_message.h"
-#include "time_trigger.h"
+#include "common/utils/time_trigger.h"
+#include "utils/os_utils.hpp"
 
 namespace functionsystem::local_scheduler {
 const int64_t RESERVED = -300;
@@ -40,11 +41,12 @@ LocalSchedSrvActor::LocalSchedSrvActor(const LocalSchedSrvActor::Param &param)
       updateResourceCycleMs_(param.updateResourceCycleMs),
       forwardRequestTimeOutMs_(param.forwardRequestTimeOutMs),
       groupTimeout_(param.groupScheduleTimeout),
-      groupKillTimeout_(param.groupKillTimeout)
+      groupKillTimeout_(param.groupKillTimeout),
+      componentName_(param.componentName)
 {
 }
 
-void LocalSchedSrvActor::BindPingPongDriver(const std::shared_ptr<PingPongDriver> &pingPongDriver)
+void LocalSchedSrvActor::BindPingPongDriver(const std::shared_ptr<HeartbeatClientDriver> &pingPongDriver)
 {
     pingPongDriver_ = pingPongDriver;
 }
@@ -117,7 +119,9 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> LocalSchedSrvActor:
         [respShared](const std::unordered_map<ResourceType, std::shared_ptr<ResourceUnitChanges>> &changes)
         -> litebus::Future<std::shared_ptr<messages::ScheduleResponse>> {
             for (const auto &[type, change] : changes) {
-                (*respShared->mutable_updateresources())[static_cast<int32_t>(type)] = std::move(*change);
+                if (change != nullptr) {
+                    (*respShared->mutable_updateresources())[static_cast<int32_t>(type)] = std::move(*change);
+                }
             }
             return respShared;
         });
@@ -136,6 +140,9 @@ Status LocalSchedSrvActor::ScheduleResp(const std::shared_ptr<messages::Schedule
     }
     auto rspMessage = scheduleRsp->SerializeAsString();
     Send(from, "ResponseSchedule", std::move(rspMessage));
+    auto type = resource_view::GetResourceType(req.instance()); // need to judge which type and del it
+    (void)resourceViewMgr_->GetInf(type)
+        ->TryDelResourceUnitChange(req.unitsnapshot().version(), req.unitsnapshot().localviewinittime());
     return Status::OK();
 }
 
@@ -334,8 +341,13 @@ void LocalSchedSrvActor::GenErrorForwardKillClearPromise(const std::shared_ptr<m
     (void)forwardKillPromise_.erase(iter);
 }
 
-void LocalSchedSrvActor::UpdateSchedTopoView(const litebus::AID &, std::string &&, std::string &&msg)
+void LocalSchedSrvActor::UpdateSchedTopoView(const litebus::AID &from, std::string &&, std::string &&msg)
 {
+    if (from.HashString() != globalSchedRegisterInfo_.aid.HashString()) {
+        YRLOG_WARN("message dropped. UpdateSchedTopoView from non-registered global, global: {}, from {}",
+                   globalSchedRegisterInfo_.aid.HashString(), from.HashString());
+        return;
+    }
     messages::ScheduleTopology topology;
     (void)topology.ParseFromString(msg);
     YRLOG_INFO("update domain scheduler info, name: {}, address: {}", topology.leader().name(),
@@ -346,6 +358,15 @@ void LocalSchedSrvActor::UpdateSchedTopoView(const litebus::AID &, std::string &
     (void)DoRegistry(domainSchedRegisterInfo_, true);
     ASSERT_IF_NULL(resourceViewMgr_);
     resourceViewMgr_->UpdateDomainUrlForLocal(domainSchedRegisterInfo_.aid.Url());
+    if (pingPongDriver_ == nullptr) {
+        pingPongDriver_ = std::make_shared<HeartbeatClientDriver>(
+            litebus::os::Join(componentName_, nodeID_, '-'),
+            [aid(GetAID())](const litebus::AID &) { litebus::Async(aid, &LocalSchedSrvActor::TimeOutEvent); });
+    }
+    litebus::AID heartBeatAID(HEARTBEAT_OBSERVER_BASENAME + DOMAIN_UNDERLAYER_SCHED_MGR_ACTOR_NAME,
+                              domainSchedRegisterInfo_.aid.Url());
+    YRLOG_DEBUG("UpdateSchedTopoView, StartPingPong nodeID: {}, AID: {}", nodeID_, std::string(heartBeatAID));
+    pingPongDriver_->Start(heartBeatAID);
 }
 
 litebus::Future<Status> LocalSchedSrvActor::Register()
@@ -492,22 +513,29 @@ litebus::Future<Status> LocalSchedSrvActor::EnableLocalSrv(const litebus::Future
 
     auto status = future.Get();
     if (status.StatusCode() != StatusCode::SUCCESS) {
-        YRLOG_ERROR("failed to enable local service, code: {}", status.StatusCode());
+        YRLOG_ERROR("failed to enable local service, code: {}", fmt::underlying(status.StatusCode()));
         return status;
     }
-    litebus::AID domainObserver;
-    domainObserver.SetName(nodeID_ + HEARTBEAT_BASENAME);
-    domainObserver.SetUrl(domainSchedRegisterInfo_.aid.Url());
-    if (pingPongDriver_) {
-        pingPongDriver_->CheckFirstPing(domainObserver);
+
+    if (pingPongDriver_ == nullptr) {
+        pingPongDriver_ = std::make_shared<HeartbeatClientDriver>(
+            litebus::os::Join(componentName_, nodeID_, '-'),
+            [aid(GetAID()), nodeID = nodeID_](const litebus::AID &dst) {
+                YRLOG_WARN("pingpong {} timeout, from proxy to domain. dst: {}", nodeID, std::string(dst));
+                litebus::Async(aid, &LocalSchedSrvActor::TimeOutEvent);
+            });
     }
-    YRLOG_INFO("success to enable local service, ready to receive first ping from {}", domainObserver.HashString());
+    litebus::AID heartBeatAID(HEARTBEAT_OBSERVER_BASENAME + DOMAIN_UNDERLAYER_SCHED_MGR_ACTOR_NAME,
+                              domainSchedRegisterInfo_.aid.Url());
+    YRLOG_DEBUG("EnableLocalSrv, StartPingPong nodeID: {}, AID: {}", nodeID_, std::string(heartBeatAID));
+    (void)pingPongDriver_->Start(heartBeatAID);
+
     // report the resource periodly is removed, implement code should be removed in the future.
     enableService_ = true;
     return status;
 }
 
-void LocalSchedSrvActor::TimeOutEvent(HeartbeatConnection)
+void LocalSchedSrvActor::TimeOutEvent()
 {
     if (exiting_) {
         YRLOG_INFO("local is exiting, no need to register.");
@@ -577,14 +605,6 @@ void LocalSchedSrvActor::Init()
     Receive("DeletePodResponse", &LocalSchedSrvActor::DeletePodResponse);
     Receive("PreemptInstances", &LocalSchedSrvActor::PreemptInstances);
     Receive("TryCancelResponse", &LocalSchedSrvActor::TryCancelResponse);
-}
-
-void LocalSchedSrvActor::StartPingPong()
-{
-    pingPongDriver_ = std::make_shared<PingPongDriver>(nodeID_, pingTimeOutMs_,
-                                                       [aid(GetAID())](const litebus::AID &, HeartbeatConnection type) {
-                                                           litebus::Async(aid, &LocalSchedSrvActor::TimeOutEvent, type);
-                                                       });
 }
 
 void LocalSchedSrvActor::Finalize()
@@ -856,8 +876,8 @@ void LocalSchedSrvActor::DoTryCancel(const std::shared_ptr<messages::CancelSched
     auto domainAid = litebus::AID(domainSchedRegisterInfo_.name + DOMAIN_SCHEDULER_SRV_ACTOR_NAME_POSTFIX,
                                   domainSchedRegisterInfo_.aid.Url());
     YRLOG_WARN("send cancel schedule request to domain(name: {}, addr: {}), cancel({}) type({}) reason({}) msgId({})",
-               domainAid.Name(), domainAid.Url(), cancelRequest->id(), cancelRequest->type(), cancelRequest->reason(),
-               cancelRequest->msgid());
+               domainAid.Name(), domainAid.Url(), cancelRequest->id(), fmt::underlying(cancelRequest->type()),
+               cancelRequest->reason(), cancelRequest->msgid());
     Send(domainAid, "TryCancelSchedule", cancelRequest->SerializeAsString());
     (void)promise->GetFuture().After(TRY_CANCEL_TIMEOUT,
                                      [aid(GetAID()), cancelRequest, promise](const litebus::Future<Status> &) {

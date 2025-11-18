@@ -24,7 +24,7 @@
 #include "async/future.hpp"
 #include "function_proxy/common/posix_client/base_client.h"
 #include "function_proxy/common/posix_client/control_plane_client/control_interface_posix_client.h"
-#include "status/status.h"
+#include "common/status/status.h"
 
 namespace functionsystem {
 struct NewClientInfo {

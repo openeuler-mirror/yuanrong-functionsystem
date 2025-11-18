@@ -21,11 +21,11 @@
 #include <string>
 
 #include "common/explorer/explorer.h"
-#include "heartbeat/ping_pong_driver.h"
-#include "proto/pb/message_pb.h"
+#include "common/heartbeat/heartbeat_client.h"
+#include "common/proto/pb/message_pb.h"
 #include "common/resource_view/resource_view_mgr.h"
-#include "status/status.h"
-#include "request_sync_helper.h"
+#include "common/status/status.h"
+#include "common/utils/request_sync_helper.h"
 #include "domain_scheduler/domain_group_control/domain_group_ctrl.h"
 #include "domain_scheduler/instance_control/instance_ctrl.h"
 #include "include/structure.h"
@@ -44,6 +44,12 @@ public:
      * @return
      */
     virtual litebus::Future<Status> RegisterToGlobal();
+
+    /* *
+     * set component name
+     * @return
+     */
+    void SetComponentName(const std::string &componentName);
 
     /* *
      * Update scheduler topology
@@ -179,7 +185,7 @@ protected:
 
     virtual void RegisterToLeader();
 
-    virtual void PingPongLost(const litebus::AID &lostDst, HeartbeatConnection type);
+    virtual void PingPongLost(const litebus::AID &lostDst);
 
     virtual void UpdateLeader(const std::string &name, const std::string &address);
 
@@ -234,6 +240,8 @@ private:
     void QueryResourcesInfoCallBack(const litebus::AID &to, const std::string &requestID,
                                     const litebus::Future<std::shared_ptr<resource_view::ResourceUnit>> &future);
 
+    void StartPingPong(const std::string &address);
+
     std::string domainName_;
     std::shared_ptr<MetaStoreClient> metaStoreClient_;
     uint32_t maxRegisterTimes_;
@@ -242,7 +250,7 @@ private:
     uint32_t receivedPingTimeout_;
     RegisterUp global_;
     RegisterUp uplayer_;
-    std::unique_ptr<PingPongDriver> pingpong_;
+    std::unique_ptr<HeartbeatClientDriver> pingpong_;
     std::shared_ptr<InstanceCtrl> instanceCtrl_;
     std::shared_ptr<ResourceViewMgr> resourceViewMgr_;
     std::shared_ptr<messages::ScheduleRequest> scheduleRequest_;
@@ -264,6 +272,7 @@ private:
     REQUEST_SYNC_HELPER(DomainSchedSrvActor, Status, notifyAbnormalTimeout_, notifyAbnormalSync_);
     const uint32_t notifyWorkerStatusTimeout_ = 5000;
     REQUEST_SYNC_HELPER(DomainSchedSrvActor, Status, notifyWorkerStatusTimeout_, notifyWorkerStatusSync_);
+    std::string componentName_ = "";
 };
 }  // namespace functionsystem::domain_scheduler
 #endif  // DOMAIN_SCHEDULER_SRV_H

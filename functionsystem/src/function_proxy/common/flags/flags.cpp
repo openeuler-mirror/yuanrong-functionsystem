@@ -16,8 +16,8 @@
 
 #include "flags.h"
 
-#include "constants.h"
-#include "param_check.h"
+#include "common/constants/constants.h"
+#include "common/utils/param_check.h"
 #include "startup/busproxy_startup.h"
 
 namespace functionsystem::function_proxy {
@@ -87,11 +87,11 @@ const uint64_t DEFAULT_MESSAGE_SIZE_THRESHOLD = 20 * 1024;
 const uint64_t MIN_MESSAGE_SIZE_THRESHOLD = 5 * 1024;
 const uint64_t MAX_MESSAGE_SIZE_THRESHOLD = 100 * 1024;
 
-const uint64_t DEFAULT_DS_HEALTH_CHECK_INTERVAL = 1000;
+const uint64_t DEFAULT_DS_HEALTH_CHECK_INTERVAL = 3000;
 const uint64_t MIN_DS_HEALTH_CHECK_INTERVAL = 500;
 const uint64_t MAX_DS_HEALTH_CHECK_INTERVAL = 60000;
 
-const uint64_t DEFAULT_MAX_DS_HEALTH_CHECK_TIMES = 12;
+const uint64_t DEFAULT_MAX_DS_HEALTH_CHECK_TIMES = 5;
 const uint64_t MIN_MAX_DS_HEALTH_CHECK_TIMES = 3;
 const uint64_t MAX_MAX_DS_HEALTH_CHECK_TIMES = 30;
 const uint32_t DEFAULT_SERVICE_TTL = 300000;
@@ -129,6 +129,10 @@ Flags::Flags()
     AddFlag(&Flags::libPath_, "lib_path", "path of yaml tool lib", "/");
     AddFlag(&Flags::serviceTTL_, "service_ttl", "ttl of busproxy", DEFAULT_SERVICE_TTL);
     AddFlag(&Flags::functionMetaPath_, "function_meta_path", "local function meta path", LOCAL_FUNCTION_META_PATH);
+    AddFlag(&Flags::observabilityAgentGrpcPort_, "observability_agent_grpc_port",
+            "observability agent's grpc port, default is 4317", DEFAULT_OBSERVABILITY_AGENT_GRPC_PORT);
+    AddFlag(&Flags::observabilityPrometheusPort_, "observability_prometheus_port",
+            "observability prometheus port, default is 9392", DEFAULT_OBSERVABILITY_PROMETHEUS_PORT);
     AddFlag(&Flags::enableTrace_, "enable_trace", "for trace enable, example: false", false);
     AddFlag(&Flags::isPseudoDataPlane_, "pseudo_data_plane",
             "set the function proxy is Pseudo Data Plane, example: false", false);
@@ -242,6 +246,8 @@ void Flags::AddIAMFlags()
     AddFlag(&Flags::iamBasePath_, "iam_base_path", "iam server base path", "");
     AddFlag(&Flags::iamPolicyFile_, "iam_policy_file", "iam policy file to authorize function request", "");
     AddFlag(&Flags::iamMetastoreAddress_, "iam_meta_store_address", "for iam metaStorage service discover", "");
+    AddFlag(&Flags::iamCredentialType_, "iam_credential_type", "credential type for iam", IAM_CREDENTIAL_TYPE_TOKEN,
+            WhiteListCheck({ IAM_CREDENTIAL_TYPE_TOKEN, IAM_CREDENTIAL_TYPE_AK_SK }));
 }
 
 void Flags::AddIsolationFlags()
@@ -259,6 +265,10 @@ void Flags::AddIsolationFlags()
         "after the instances in the POD are cleared. Other negative values except -1 are illegal.",
         DEFAULT_TENANT_POD_REUSE_TIME_WINDOW, NumCheck(DEFAULT_TENANT_POD_REUSE_TIME_WINDOW,
         std::numeric_limits<int32_t>::max()));
+    AddFlag(&Flags::enableIpv4TenantIsolation_,
+        "enable_ipv4_tenant_isolation",
+        "It ensures that  IPv4 network traffic between different tenants does not interfere with each other",
+        false);
 }
 
 void Flags::AddBusProxyInvokeLimitFlags()

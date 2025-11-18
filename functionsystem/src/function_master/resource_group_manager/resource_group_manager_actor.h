@@ -26,7 +26,7 @@
 #include "common/explorer/explorer.h"
 #include "common/leader/business_policy.h"
 #include "meta_store_client/meta_store_client.h"
-#include "proto/pb/message_pb.h"
+#include "common/proto/pb/message_pb.h"
 #include "function_master/global_scheduler/global_sched.h"
 
 namespace functionsystem::resource_group_manager {

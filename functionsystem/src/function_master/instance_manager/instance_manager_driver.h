@@ -17,16 +17,16 @@
 #ifndef FUNCTION_MASTER_INSTANCE_MANAGER_INSTANCE_MGR_DRIVER_H
 #define FUNCTION_MASTER_INSTANCE_MANAGER_INSTANCE_MGR_DRIVER_H
 
-#include "http/http_server.h"
-#include "status/status.h"
-#include "module_driver.h"
+#include "common/http/http_server.h"
+#include "common/status/status.h"
+#include "common/utils/module_driver.h"
 #include "group_manager_actor.h"
 #include "instance_manager_actor.h"
 
 namespace functionsystem::instance_manager {
 
-const std::string JSON_FORMAT = "application/json";
-
+const std::string APP_JSON_FORMAT = "application/json";
+const std::string JSON_FORMAT = "json";
 class InstancesApiRouter : public ApiRouterRegister {
 public:
     void RegisterHandler(const std::string &url, const HttpHandler &handler) const override
@@ -42,7 +42,7 @@ public:
                 return HttpResponse(litebus::http::ResponseCode::METHOD_NOT_ALLOWED);
             }
             bool useJsonFormat = request.headers.find("Content-Type") == request.headers.end() ||
-                                 request.headers.find("Content-Type")->second == JSON_FORMAT;
+                                 request.headers.find("Content-Type")->second == APP_JSON_FORMAT;
 
             auto req = std::make_shared<messages::QueryNamedInsRequest>();
             if (request.body.empty() || !req->ParseFromString(request.body)) {
@@ -64,6 +64,68 @@ public:
                 });
         };
         RegisterHandler("/named-ins", namedInsHandler);
+	}
+	
+	void InitQueryInstancesHandler(std::shared_ptr<InstanceManagerActor> imActor)
+	{
+        auto handler = [imActor](const HttpRequest &request) -> litebus::Future<HttpResponse> {
+            if (request.method != "GET") {
+                YRLOG_ERROR("Invalid request method.");
+                return HttpResponse(litebus::http::ResponseCode::METHOD_NOT_ALLOWED);
+            }
+            bool useJsonFormat = request.headers.find("Type") == request.headers.end() ||
+                request.headers.find("Type")->second == JSON_FORMAT;
+ 
+            auto req = std::make_shared<messages::QueryInstancesInfoRequest>();
+            auto requestID = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
+            req->set_requestid(requestID);
+ 
+            YRLOG_INFO("{}|query instanceinfo", requestID);
+ 
+            return litebus::Async(imActor->GetAID(), &InstanceManagerActor::QueryInstancesInfo, req)
+                .Then([useJsonFormat](const messages::QueryInstancesInfoResponse &rsp)
+                          -> litebus::Future<litebus::http::Response> {
+                    if (!useJsonFormat) {
+                        return litebus::http::Ok(rsp.SerializeAsString());
+                    }
+                    google::protobuf::util::JsonOptions options;
+                    std::string jsonStr;
+                    (void)google::protobuf::util::MessageToJsonString(rsp, &jsonStr, options);
+                    return litebus::http::Ok(jsonStr);
+                });
+        };
+        RegisterHandler("/queryinstances", handler);
+    }
+
+    void InitQueryDebugInstancesHandler(std::shared_ptr<InstanceManagerActor> imActor)
+    {
+        auto handler = [imActor](const HttpRequest &request) -> litebus::Future<HttpResponse> {
+            if (request.method != "GET") {
+                YRLOG_ERROR("Invalid request method.");
+                return HttpResponse(litebus::http::ResponseCode::METHOD_NOT_ALLOWED);
+            }
+
+            bool useJsonFormat = request.headers.find("Type") == request.headers.end() ||
+                request.headers.find("Type")->second == JSON_FORMAT;
+            auto req = std::make_shared<messages::QueryDebugInstanceInfosRequest>();
+            auto requestID = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
+            req->set_requestid(requestID);
+
+            YRLOG_INFO("{}|query debuginstanceinfo", requestID);
+
+            return litebus::Async(imActor->GetAID(), &InstanceManagerActor::QueryDebugInstancesInfo, req)
+                .Then([useJsonFormat](const messages::QueryDebugInstanceInfosResponse &rsp)
+                          -> litebus::Future<litebus::http::Response> {
+                    if (!useJsonFormat) {
+                        return litebus::http::Ok(rsp.SerializeAsString());
+                    }
+                    google::protobuf::util::JsonOptions options;
+                    std::string jsonStr;
+                    (void)google::protobuf::util::MessageToJsonString(rsp, &jsonStr, options);
+                    return litebus::http::Ok(jsonStr);
+                });
+        };
+        RegisterHandler("/query-debug-instances", handler);
     }
 };
 

@@ -118,7 +118,7 @@ void AbnormalProcessorActor::SchedulerAbnormalWatcher(const std::vector<WatchEve
 {
     for (const auto &event : events) {
         auto eventKey = TrimKeyPrefix(event.kv.key(), metaStoreClient_->GetTablePrefix());
-        YRLOG_WARN("receive self local abnormal, type: {}, key: {}", event.eventType, eventKey);
+        YRLOG_WARN("receive self local abnormal, type: {}, key: {}", fmt::underlying(event.eventType), eventKey);
         ASSERT_IF_NULL(instanceCtrl_);
         ASSERT_IF_NULL(functionAgentMgr_);
         if (event.eventType == EventType::EVENT_TYPE_PUT) {
@@ -142,7 +142,17 @@ litebus::Future<bool> AbnormalProcessorActor::CheckLocalSchedulerIsLegal()
                 litebus::Async(aid, &AbnormalProcessorActor::WatchAbnormal, selfKey);
                 return true;
             }
-            YRLOG_ERROR("current local is abnormal, process will be killed by self");
+
+            if (nlohmann::json::accept(response->kvs.front().value())) {
+                nlohmann::json getRespKvs = nlohmann::json::parse(response->kvs.front().value());
+                if (getRespKvs.contains("instanceManagerActorAid")) {
+                    YRLOG_WARN("current local is abnormal set by {}, process will be killed by self",
+                               getRespKvs.at("instanceManagerActorAid").dump());
+                }
+            } else {
+                YRLOG_WARN("current local is abnormal, process will be killed by self");
+            }
+
             instanceCtrl->SetAbnormal();
             functionAgentMgr->SetAbnormal();
             auto abnormaled = std::make_shared<litebus::Promise<bool>>();
@@ -156,8 +166,8 @@ litebus::Future<bool> AbnormalProcessorActor::WatchAbnormal(const std::string &s
     auto watchOpt = WatchOption{ false, true };
     YRLOG_INFO("Register abnormal watch with key: {}", selfKey);
     ASSERT_IF_NULL(metaStoreClient_);
-    auto syncer = [aid(GetAID())]() -> litebus::Future<SyncResult> {
-        return litebus::Async(aid, &AbnormalProcessorActor::AbnormalSyncer);
+    auto syncer = [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<SyncResult> {
+        return litebus::Async(aid, &AbnormalProcessorActor::AbnormalSyncer, getResponse);
     };
     return metaStoreClient_
         ->Watch(selfKey, watchOpt,
@@ -175,29 +185,18 @@ litebus::Future<bool> AbnormalProcessorActor::WatchAbnormal(const std::string &s
         });
 }
 
-
-litebus::Future<SyncResult> AbnormalProcessorActor::AbnormalSyncer()
+litebus::Future<SyncResult> AbnormalProcessorActor::AbnormalSyncer(const std::shared_ptr<GetResponse> &getResponse)
 {
-    GetOption opts;
-    opts.prefix = false;  // exact match required
-    auto selfKey = ABNORMAL_PREFIX + id_;
-    YRLOG_INFO("start to sync key({}).", selfKey);
-    return metaStoreClient_->Get(selfKey, opts)
-        .Then(litebus::Defer(GetAID(), &AbnormalProcessorActor::OnAbnormalSyncer, std::placeholders::_1, selfKey));
-}
-
-litebus::Future<SyncResult> AbnormalProcessorActor::OnAbnormalSyncer(const std::shared_ptr<GetResponse> &getResponse,
-                                                                     const std::string &prefixKey)
-{
+    auto prefixKey = ABNORMAL_PREFIX + id_;
     if (getResponse->status.IsError()) {
         YRLOG_INFO("failed to get key({}) from meta storage", prefixKey);
-        return SyncResult{ getResponse->status, 0 };
+        return SyncResult{ getResponse->status };
     }
 
     if (getResponse->kvs.empty()) {
         YRLOG_INFO("get no result with key({}) from meta storage, revision is {}", prefixKey,
                    getResponse->header.revision);
-        return SyncResult{ Status::OK(), getResponse->header.revision + 1 };
+        return SyncResult{ Status::OK() };
     }
     std::vector<WatchEvent> events;
     for (auto &kv : getResponse->kvs) {
@@ -205,7 +204,7 @@ litebus::Future<SyncResult> AbnormalProcessorActor::OnAbnormalSyncer(const std::
         (void)events.emplace_back(event);
     }
     SchedulerAbnormalWatcher(events);
-    return SyncResult{ Status::OK(), getResponse->header.revision + 1 };
+    return SyncResult{ Status::OK() };
 }
 
 void AbnormalProcessorActor::SchedulerAbnormaled(const std::shared_ptr<litebus::Promise<bool>> abnormaled)
@@ -244,7 +243,7 @@ void AbnormalProcessorActor::CommitSuicide()
         .Then([raiseWrapper(raiseWrapper_), selfKey](const std::shared_ptr<DeleteResponse> &deleteResponse) {
             if (deleteResponse->status.IsError()) {
                 YRLOG_WARN("failed to delete abnormal information code ({}), which may cause another restart",
-                           deleteResponse->status.StatusCode());
+                           fmt::underlying(deleteResponse->status.StatusCode()));
             }
             YRLOG_ERROR("local is abnormal, raise SIGINT to exit");
             (void)raiseWrapper->Raise(SIGINT);

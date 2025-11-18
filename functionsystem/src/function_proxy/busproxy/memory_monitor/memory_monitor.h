@@ -17,7 +17,7 @@
 #ifndef BUSPROXY_MEMORY_MONITOR_H
 #define BUSPROXY_MEMORY_MONITOR_H
 
-#include "proto/pb/posix_pb.h"
+#include "common/proto/pb/posix_pb.h"
 #include "system_memory_collector.h"
 
 namespace functionsystem {

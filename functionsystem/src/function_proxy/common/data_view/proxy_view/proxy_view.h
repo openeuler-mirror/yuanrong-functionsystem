@@ -19,7 +19,7 @@
 #include <optional>
 #include <unordered_map>
 
-#include "status/status.h"
+#include "common/status/status.h"
 #include "function_proxy/common/communication/proxy/client.h"
 #include "function_proxy/common/communication/rpc_client/forward_rpc.h"
 

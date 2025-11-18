@@ -62,7 +62,7 @@ litebus::Future<Status> ControlInterfacePosixClient::Heartbeat(uint64_t timeMs)
                     promise->SetFailed(static_cast<int32_t>(StatusCode::INSTANCE_HEALTH_CHECK_ERROR));
                     break;
                 default:
-                    YRLOG_WARN("unknown heartbeat code({})", heartbeatRsp.code());
+                    YRLOG_WARN("unknown heartbeat code({})", fmt::underlying(heartbeatRsp.code()));
             }
         });
     return promise->GetFuture();

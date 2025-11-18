@@ -20,9 +20,9 @@
 #include <async/future.hpp>
 
 #include "meta_storage_accessor/meta_storage_accessor.h"
-#include "metadata/metadata.h"
-#include "resource_type.h"
-#include "status/status.h"
+#include "common/metadata/metadata.h"
+#include "common/resource_view/resource_type.h"
+#include "common/status/status.h"
 #include "function_proxy/common/observer/observer_actor.h"
 
 namespace functionsystem::function_proxy {
@@ -94,6 +94,8 @@ public:
      */
     virtual litebus::Future<litebus::Option<InstanceInfoMap>> GetLocalInstanceInfo() const;
 
+    virtual litebus::Future<InstanceInfoMap> GetAllInstanceInfos() const;
+
     /**
      * judge the function is or not system function
      * @param function function key
@@ -112,11 +114,15 @@ public:
     virtual void FastPutRemoteInstanceEvent(const resource_view::InstanceInfo &instanceInfo, bool synced,
                                             int64_t modRevision);
 
-    virtual litebus::Future<Status> DelInstanceEvent(const std::string &instanceID);
+    virtual litebus::Future<Status> DelInstanceEvent(const std::string &instanceID, int64_t modRevision);
 
     virtual void WatchInstance(const std::string &instanceID, int64_t revision = 0);
 
+    virtual litebus::Future<bool> IsInstanceWatched(const std::string &instanceID);
+
     virtual litebus::Future<resource_view::InstanceInfo> GetAndWatchInstance(const std::string &instanceID);
+
+    virtual litebus::Future<resource_view::InstanceInfo> GetOrWatchInstance(const std::string &instanceID);
 
     virtual void CancelWatchInstance(const std::string &instanceID);
 

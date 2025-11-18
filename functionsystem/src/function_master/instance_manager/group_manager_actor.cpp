@@ -22,7 +22,7 @@
 #include "async/collect.hpp"
 #include "async/defer.hpp"
 #include "common/constants/signal.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/utils/collect_status.h"
 
 namespace functionsystem::instance_manager {
@@ -36,13 +36,14 @@ std::shared_ptr<internal::ForwardKillRequest> MakeKillReq(
     const std::shared_ptr<resource_view::InstanceInfo> &instanceInfo, const std::string &srcInstanceID, int32_t signal,
     const std::string &msg)
 {
+    auto requestID = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
     core_service::KillRequest killRequest{};
     killRequest.set_signal(signal);
     killRequest.set_instanceid(instanceInfo->instanceid());
     killRequest.set_payload(msg);
+    killRequest.set_requestid(requestID);
 
     auto forwardKillRequest = std::make_shared<internal::ForwardKillRequest>();
-    auto requestID = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
     forwardKillRequest->set_requestid(requestID);
     forwardKillRequest->set_srcinstanceid(srcInstanceID);
     forwardKillRequest->set_instancerequestid(instanceInfo->requestid());
@@ -57,11 +58,6 @@ void GroupManagerActor::Init()
     businesses_[MASTER_BUSINESS] = std::make_shared<MasterBusiness>(member_, shared_from_this());
     businesses_[SLAVE_BUSINESS] = std::make_shared<SlaveBusiness>(member_, shared_from_this());
     business_ = businesses_[curStatus_];
-
-    (void)explorer::Explorer::GetInstance().AddLeaderChangedCallback(
-        "GroupManager", [aid(GetAID())](const explorer::LeaderInfo &leaderInfo) {
-            litebus::Async(aid, &GroupManagerActor::UpdateLeaderInfo, leaderInfo);
-        });
 
     WatchGroups();
     Receive("ForwardCustomSignalResponse", &GroupManagerActor::OnForwardCustomSignalResponse);
@@ -87,7 +83,7 @@ void GroupManagerActor::MasterBusiness::OnForwardCustomSignalResponse(const lite
         member_->killRspPromises.erase(it);
         return;
     }
-    YRLOG_WARN("receive an kill response of unknown requestID({})", killRsp->requestid());
+    YRLOG_WARN("receive a kill response of unknown requestID({})", killRsp->requestid());
 }
 
 litebus::Future<Status> GroupManagerActor::OnInstanceAbnormal(
@@ -107,7 +103,7 @@ litebus::Future<Status> GroupManagerActor::MasterBusiness::OnInstanceAbnormal(
     }
 
     auto errMsg = fmt::format(
-        "instance exit with group together, reason: group({}) instance ({}) abnormal, instance exit code({})",
+        "instance ({}) under group ({}) was abnormal , instance exited with code({})",
         instanceInfo->groupid(), instanceInfo->instanceid(), instanceInfo->instancestatus().exitcode());
     return FatalGroup(instanceInfo->groupid(), instanceInfo->instanceid(), errMsg);
 }
@@ -146,7 +142,7 @@ litebus::Future<Status> GroupManagerActor::MasterBusiness::FatalGroup(const std:
 
     std::string groupValue;
     if (!GenGroupValueJson(groupInfo, groupValue)) {
-        return Status(StatusCode::JSON_PARSE_ERROR, "failed to gen group value json str");
+        return Status(StatusCode::JSON_PARSE_ERROR, "parse gen group value json str failed");
     }
 
     auto actor = actor_.lock();
@@ -544,8 +540,28 @@ void GroupManagerActor::WatchGroups()
 {
     YRLOG_INFO("start watch groups info");
     ASSERT_IF_NULL(member_->metaClient);
-    (void)member_->metaClient->Get(GROUP_PATH_PREFIX, { .prefix = true })
-        .Then(litebus::Defer(GetAID(), &GroupManagerActor::WatchGroupThen, std::placeholders::_1));
+    auto observer = [aid(GetAID())](const std::vector<WatchEvent> &events, bool) -> bool {
+        litebus::Async(aid, &GroupManagerActor::OnGroupWatchEvent, events);
+        return true;
+    };
+    auto syncer = [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<SyncResult> {
+        return litebus::Async(aid, &GroupManagerActor::GroupInfoSyncer, getResponse);
+    };
+    auto handler = [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<Status> {
+        return litebus::Async(aid, &GroupManagerActor::CheckSyncResponse, getResponse);
+    };
+
+    (void)member_->metaClient
+        ->GetAndWatchWithHandler(GROUP_PATH_PREFIX, { .prefix = true, .prevKv = true }, observer, syncer, handler)
+        .Then([aid(GetAID())](const std::shared_ptr<Watcher> &watcher) -> litebus::Future<Status> {
+            litebus::Async(aid, &GroupManagerActor::OnGroupWatch, watcher);
+            return Status::OK();
+        });
+
+    (void)explorer::Explorer::GetInstance().AddLeaderChangedCallback(
+        "GroupManager", [aid(GetAID())](const explorer::LeaderInfo &leaderInfo) {
+            litebus::Async(aid, &GroupManagerActor::UpdateLeaderInfo, leaderInfo);
+        });
 }
 
 void GroupManagerActor::OnGroupWatch(const std::shared_ptr<Watcher> &watcher)
@@ -585,50 +601,6 @@ void GroupManagerActor::OnGroupWatchEvent(const std::vector<WatchEvent> &events)
             }
         }
     }
-}
-
-litebus::Future<Status> GroupManagerActor::WatchGroupThen(const std::shared_ptr<GetResponse> &response)
-{
-    YRLOG_INFO("get group response size={}", response->kvs.size());
-    if (!response->status.IsOk()) {
-        YRLOG_ERROR("failed to get all instances.");
-        return Status::OK();
-    }
-    if (response->header.revision > INT64_MAX - 1) {
-        YRLOG_ERROR("revision({}) add operation will exceed the maximum value({}) of INT64", response->header.revision,
-                    INT64_MAX);
-        return Status::OK();
-    }
-
-    auto observer = [aid(GetAID())](const std::vector<WatchEvent> &events, bool) -> bool {
-        litebus::Async(aid, &GroupManagerActor::OnGroupWatchEvent, events);
-        return true;
-    };
-    auto syncer = [aid(GetAID())]() -> litebus::Future<SyncResult> {
-        return litebus::Async(aid, &GroupManagerActor::GroupInfoSyncer);
-    };
-
-    WatchOption option = { .prefix = true, .prevKv = true, .revision = response->header.revision + 1 };
-    ASSERT_IF_NULL(member_->metaClient);
-    // eg. /sn/instance/business/yrk/tenant/0/function/../version/..
-    (void)member_->metaClient->Watch(GROUP_PATH_PREFIX, option, observer, syncer)
-        .Then(std::function<litebus::Future<Status>(const std::shared_ptr<Watcher> &watcher)>{
-            [aid(GetAID())](const std::shared_ptr<Watcher> &watcher) -> litebus::Future<Status> {
-                litebus::Async(aid, &GroupManagerActor::OnGroupWatch, watcher);
-                return Status::OK();
-            } });
-
-    for (const auto &kv : response->kvs) {
-        auto group = std::make_shared<messages::GroupInfo>();
-        auto eventKey = TrimKeyPrefix(kv.key(), member_->metaClient->GetTablePrefix());
-        if (TransToGroupInfoFromJson(*group, kv.value())) {
-            OnGroupPut(eventKey, group);
-        } else {
-            YRLOG_ERROR("failed to transform instance({}) info from String.", eventKey);
-        }
-    }
-
-    return Status::OK();
 }
 
 void GroupManagerActor::OnGroupPut(const std::string &groupKey, std::shared_ptr<messages::GroupInfo> groupInfo)
@@ -693,12 +665,56 @@ void GroupManagerActor::QueryGroupStatus(const litebus::AID &from, std::string &
     YRLOG_ERROR("calling not implemented method QueryGroupStatus");
 }
 
+litebus::Future<Status> GroupManagerActor::OnGetInstanceFromMetaStore(
+    const litebus::Future<std::shared_ptr<GetResponse>> &getResponse,
+    const std::string &instanceID, const std::string &groupID)
+{
+    if (getResponse.IsError() || getResponse.Get() == nullptr || getResponse.Get()->kvs.empty()) {
+        YRLOG_WARN("failed to get instance({}) from meta store", instanceID);
+        auto errMsg = fmt::format("group({}) instance({}) is killed separately", groupID, instanceID);
+        ASSERT_IF_NULL(business_);
+        business_->FatalGroup(groupID, instanceID, errMsg);
+    }
+    return Status::OK();
+}
+
+void GroupManagerActor::MasterBusiness::CheckGroupInstanceConsistency(std::shared_ptr<messages::GroupInfo> &groupInfo)
+{
+    std::set<std::string> cachedInstanceIDs;
+    const auto &cachedGroupInstanceInfoMap = member_->groupCaches->GetGroupInstances(groupInfo->groupid());
+    for (const auto &pair: cachedGroupInstanceInfoMap) {
+        cachedInstanceIDs.insert(pair.second->instanceid());
+    }
+    for (const auto &req : groupInfo->requests()) {
+        const auto &instanceID = req.instance().instanceid();
+        if (cachedInstanceIDs.count(instanceID) == 0) {
+            auto actor = actor_.lock();
+            YRLOG_DEBUG("Instance({}) not in local cache, checking existence.", instanceID);
+            ASSERT_IF_NULL(member_->metaClient);
+            auto instanceKey = GenInstanceKey(req.instance().function(), req.instance().instanceid(),
+                                              req.instance().requestid());
+            if (instanceKey.IsNone()) {
+                YRLOG_ERROR("{}|{} failed to generate key", req.instance().requestid(), req.instance().instanceid());
+                continue;
+            }
+            member_->metaClient->Get(instanceKey.Get(), {})
+                .Then(litebus::Defer(actor->GetAID(), &GroupManagerActor::OnGetInstanceFromMetaStore,
+                                     std::placeholders::_1, instanceID, groupInfo->groupid()));
+        }
+    }
+}
+
 /// ======================= OnChange
 void GroupManagerActor::MasterBusiness::OnChange()
 {
     YRLOG_INFO("GroupManagerActor become master");
     // fetch failed group, fetch failed group instances, and recycle them
     for (auto group : member_->groupCaches->GetGroups()) {
+        if (group.second.second->status() == static_cast<int32_t>(GroupState::RUNNING) &&
+            group.second.second->groupopts().samerunninglifecycle()) {
+            CheckGroupInstanceConsistency(group.second.second);
+            continue;
+        }
         if (group.second.second->status() == static_cast<int32_t>(GroupState::FAILED)) {
             YRLOG_INFO("find group({}) is failed", group.second.second->groupid());
             for (auto instance : member_->groupCaches->GetGroupInstances(group.second.second->groupid())) {
@@ -732,8 +748,8 @@ void GroupManagerActor::MasterBusiness::OnChange()
 void GroupManagerActor::GroupCaches::AddGroup(const std::string groupKey,
                                               const std::shared_ptr<messages::GroupInfo> &group)
 {
-    YRLOG_DEBUG("adding group(id={}, parent={}, node={}, status={})", group->groupid(), group->parentid(),
-                group->ownerproxy(), group->status());
+    YRLOG_DEBUG("adding group(id={}, parent={}, node={}, status={}, message: {})", group->groupid(), group->parentid(),
+                group->ownerproxy(), group->status(), group->message());
     // groups
     groups_.insert_or_assign(group->groupid(), std::make_pair(groupKey, group));
 
@@ -844,26 +860,17 @@ std::unordered_map<std::string, GroupKeyInfoPair> GroupManagerActor::GroupCaches
     return groups_;
 }
 
-litebus::Future<SyncResult> GroupManagerActor::GroupInfoSyncer()
-{
-    GetOption opts;
-    opts.prefix = true;
-    ASSERT_IF_NULL(member_->metaClient);
-    return member_->metaClient->Get(GROUP_PATH_PREFIX, opts)
-        .Then(litebus::Defer(GetAID(), &GroupManagerActor::OnGroupInfoSyncer, std::placeholders::_1));
-}
-
-litebus::Future<SyncResult> GroupManagerActor::OnGroupInfoSyncer(const std::shared_ptr<GetResponse> &getResponse)
+litebus::Future<SyncResult> GroupManagerActor::GroupInfoSyncer(const std::shared_ptr<GetResponse> &getResponse)
 {
     if (getResponse->status.IsError()) {
         YRLOG_INFO("failed to get key({}) from meta storage", GROUP_PATH_PREFIX);
-        return SyncResult{ getResponse->status, 0 };
+        return SyncResult{ getResponse->status };
     }
 
     if (getResponse->kvs.empty()) {
         YRLOG_INFO("get no result with key({}) from meta storage, revision is {}", GROUP_PATH_PREFIX,
                    getResponse->header.revision);
-        return SyncResult{ Status::OK(), getResponse->header.revision + 1 };
+        return SyncResult{ Status::OK() };
     }
 
     std::vector<WatchEvent> events;
@@ -884,7 +891,31 @@ litebus::Future<SyncResult> GroupManagerActor::OnGroupInfoSyncer(const std::shar
             OnGroupDelete(groupInfo.second.first, groupInfo.second.second);
         }
     }
-    return SyncResult{ Status::OK(), getResponse->header.revision + 1 };
+    return SyncResult{ Status::OK() };
 }
 
+litebus::Future<Status> GroupManagerActor::CheckSyncResponse(const std::shared_ptr<GetResponse> &response)
+{
+    if (!response->status.IsOk()) {
+        YRLOG_ERROR("failed to sync data, err is {}, gonna to suicide", response->status.ToString());
+        CommitSuicide();
+        return Status(StatusCode::FAILED);
+    }
+    if (response->header.revision > INT64_MAX - 1) {
+        YRLOG_ERROR("revision({}) add operation will exceed the maximum value({}) of INT64, gonna to suicide",
+                    response->header.revision, INT64_MAX);
+        CommitSuicide();
+        return Status(StatusCode::FAILED);
+    }
+    return Status::OK();
+}
+
+
+void GroupManagerActor::CommitSuicide()
+{
+    if (!isSuicide_) {
+        isSuicide_ = true;
+        (void)raise(SIGINT);
+    }
+}
 }  // namespace functionsystem::instance_manager

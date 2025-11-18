@@ -15,7 +15,7 @@
  */
 #include "local_scheduler_view.h"
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem::function_proxy {
 std::shared_ptr<litebus::AID> LocalSchedulerView::Get(const std::string &proxyID)

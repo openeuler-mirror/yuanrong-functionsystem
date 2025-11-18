@@ -21,17 +21,19 @@
 #include "async/defer.hpp"
 #include "async/future.hpp"
 #include "common/constants/actor_name.h"
-#include "logs/logging.h"
-#include "proto/pb/message_pb.h"
-#include "status/status.h"
+#include "common/logs/logging.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
 #include "executor/runtime_executor.h"
 #include "port/port_manager.h"
 #include "runtime_manager/executor/executor.h"
+#include "common/utils/struct_transfer.h"
+#include "common/utils/exec_utils.h"
 
 namespace functionsystem::runtime_manager {
 const uint32_t HALF = 2;
-const int32_t MAX_REGISTER_RETRY_TIMES = 30;
-RuntimeManager::RuntimeManager(const std::string &name) : ActorBase(name)
+const uint32_t MAX_REGISTER_RETRY_TIMES = 30;
+RuntimeManager::RuntimeManager(const std::string &name, bool logReuse) : ActorBase(name), logReuse_(logReuse)
 {
 }
 
@@ -43,9 +45,11 @@ void RuntimeManager::Init()
     ActorBase::Receive("QueryInstanceStatusInfo", &RuntimeManager::QueryInstanceStatusInfo);
     ActorBase::Receive("CleanStatus", &RuntimeManager::CleanStatus);
     ActorBase::Receive("UpdateCred", &RuntimeManager::UpdateCred);
+    ActorBase::Receive("QueryDebugInstanceInfos", &RuntimeManager::QueryDebugInstanceInfos);
     metricsClient_ = std::make_shared<MetricsClient>();
     healthCheckClient_ = std::make_shared<HealthCheck>();
-    auto logManagerActor = std::make_shared<LogManagerActor>(RUNTIME_MANAGER_LOG_MANAGER_ACTOR_NAME, GetAID());
+    auto logManagerActor =
+        std::make_shared<LogManagerActor>(RUNTIME_MANAGER_LOG_MANAGER_ACTOR_NAME, GetAID(), logReuse_);
     logManagerClient_ = std::make_shared<LogManager>(logManagerActor);
     auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
     runtimeManagerID_ = uuid.ToString();
@@ -69,6 +73,11 @@ litebus::Future<bool> RuntimeManager::GracefulShutdown()
         YRLOG_INFO("runtimeManager graceful shutdown, terminate executor name: {}", iter.second->GetName());
         p.Associate(iter.second->GracefulShutdown());
     }
+    if (runtimeInstanceDebugEnable_) {
+        ASSERT_IF_NULL(debugServerMgr_);
+        debugServerMgr_->DestroyAllServers();
+    }
+
     if (executorMap_.empty()) {
         p.SetValue(true);
     }
@@ -110,16 +119,62 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
                        request->runtimeinstanceinfo().instanceid(), promise);
         return;
     }
+    std::string runtimeID = GenerateRuntimeID(instance.instanceid());
+    request->mutable_runtimeinstanceinfo()->set_runtimeid(runtimeID);
     YRLOG_INFO("{}|{}|begin to start runtime({}) for instance({}).", instance.traceid(), instance.requestid(),
                instance.runtimeid(), instance.instanceid());
     auto vecs = metricsClient_->GetCardIDs();
-    (void)executor->StartInstance(request, vecs)
+    messages::StartInstanceResponse response;
+    response.mutable_startruntimeinstanceresponse()->set_runtimeid(runtimeID);
+
+    // start debug server ahead of runtime
+    CreateDebugServer(response, request)
+        .Then(litebus::Defer(GetAID(), &RuntimeManager::TryAcquireLogPrefix, std::placeholders::_1, request))
+        .Then(litebus::Defer(GetAID(), &RuntimeManager::ExecutorStartInstance, std::placeholders::_1, executor, request,
+                             vecs))
+        .OnComplete(
+            litebus::Defer(this->GetAID(), &RuntimeManager::DebugServerAddRecord, std::placeholders::_1, request))
         .OnComplete(
             litebus::Defer(this->GetAID(), &RuntimeManager::CreateInstanceMetrics, std::placeholders::_1, request))
         .OnComplete(
             litebus::Defer(this->GetAID(), &RuntimeManager::CheckHealthForRuntime, std::placeholders::_1, request))
         .OnComplete(litebus::Defer(this->GetAID(), &RuntimeManager::StartInstanceResponse, from,
                                    request->runtimeinstanceinfo().instanceid(), std::placeholders::_1));
+}
+
+litebus::Future<messages::StartInstanceResponse> RuntimeManager::ExecutorStartInstance(
+    const litebus::Future<messages::StartInstanceResponse> &response, const std::shared_ptr<ExecutorProxy> &executor,
+    const std::shared_ptr<messages::StartInstanceRequest> &request, const std::vector<int> &cardIDs)
+{
+    if (response.IsError()) {
+        YRLOG_ERROR("{}|{}|failed to start instance, do not execute, instanceID: {}, runtimeID: {}",
+                    request->runtimeinstanceinfo().traceid(), request->runtimeinstanceinfo().requestid(),
+                    request->runtimeinstanceinfo().instanceid(), request->runtimeinstanceinfo().runtimeid());
+        return response;
+    }
+    if (response.Get().code() != static_cast<int32_t>(SUCCESS)) {
+        YRLOG_ERROR("{}|{}|failed to start instance, do not execute, instanceID: {}, runtimeID: {}",
+                    request->runtimeinstanceinfo().traceid(), request->runtimeinstanceinfo().requestid(),
+                    request->runtimeinstanceinfo().instanceid(), request->runtimeinstanceinfo().runtimeid());
+        return response;
+    }
+
+    return executor->StartInstance(request, cardIDs);
+}
+
+litebus::Future<messages::StartInstanceResponse> RuntimeManager::TryAcquireLogPrefix(
+    const litebus::Future<messages::StartInstanceResponse> &response,
+    const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    if (logReuse_) {
+        return logManagerClient_->AcquireLogPrefix(request->runtimeinstanceinfo().runtimeid())
+            .Then([response, request](const std::string &logPrefix) {
+                request->set_logprefix(logPrefix);
+                return response;
+            });
+    }
+
+    return response;
 }
 
 bool RuntimeManager::CheckInstanceIsDeployed(const litebus::AID &to, const messages::RuntimeInstanceInfo &instance)
@@ -188,6 +243,7 @@ void RuntimeManager::InnerOomKillInstance(const litebus::Future<Status> &status,
         .Then([executor, request]() { return executor->StopInstance(request, true); })
         .OnComplete(litebus::Defer(GetAID(), &RuntimeManager::DeleteOomNotifyData, std::placeholders::_1, request))
         .OnComplete(litebus::Defer(GetAID(), &RuntimeManager::DeleteInstanceMetrics, std::placeholders::_1, request))
+        .OnComplete(litebus::Defer(GetAID(), &RuntimeManager::DestroyDebugServer, std::placeholders::_1, request))
         .OnComplete(litebus::Defer(GetAID(), &RuntimeManager::ReleasePort, std::placeholders::_1, request));
 }
 
@@ -245,6 +301,7 @@ void RuntimeManager::StopInstance(const litebus::AID &from, std::string && /* na
         })
         .Then([executor, request]() { return executor->StopInstance(request, false); })
         .OnComplete(litebus::Defer(GetAID(), &RuntimeManager::DeleteInstanceMetrics, std::placeholders::_1, request))
+        .OnComplete(litebus::Defer(GetAID(), &RuntimeManager::DestroyDebugServer, std::placeholders::_1, request))
         .OnComplete(litebus::Defer(GetAID(), &RuntimeManager::ReleasePort, std::placeholders::_1, request))
         .OnComplete(
             litebus::Defer(GetAID(), &RuntimeManager::StopInstanceResponse, from, std::placeholders::_1, request));
@@ -282,10 +339,25 @@ void RuntimeManager::SetConfig(const Flags &flags)
     RETURN_IF_NULL(logManagerClient_);
     logManagerClient_->SetConfig(flags);
 
+    if (flags.GetRuntimeInstanceDebugEnable()) {
+        runtimeInstanceDebugEnable_ = true;
+        auto debugServerMgrActor = std::make_shared<DebugServerMgrActor>(RUNTIME_MANAGER_DEBUG_SERVER_MGR_ACTOR_NAME);
+        debugServerMgr_ = std::make_shared<DebugServerMgr>(debugServerMgrActor);
+        debugServerMgr_->SetConfig(flags);
+        debugServerMgr_->SetEnableDebug();
+    }
+
     auto handlePrestartuntimeExit = [aid(GetAID())](const pid_t pid) {
         litebus::Async(aid, &RuntimeManager::HandlePrestartRuntimeExit, pid);
     };
     healthCheckClient_->RegisterProcessExitCallback(handlePrestartuntimeExit);
+    if (logReuse_) {
+        auto handleLogPrefixExit = [logManagerClient(logManagerClient_)](const std::string runtimeID) {
+            YRLOG_INFO("runtime {} exiting abnormally, and release log prefix.", runtimeID);
+            logManagerClient->ReleaseLogPrefix(runtimeID);
+        };
+        healthCheckClient_->RegisterHandleLogPrefixExit(handleLogPrefixExit);
+    }
     nodeID_ = flags.GetNodeID();
     pingTimeoutMs_ = flags.GetSystemTimeout() / HALF;
 }
@@ -490,7 +562,7 @@ void RuntimeManager::StopInstanceResponse(const litebus::AID &from, const litebu
         return;
     } else if (status.Get().IsError()) {
         YRLOG_ERROR("{}|{}|failed({}) to stop runtime({}).", request->traceid(), request->requestid(),
-                    status.Get().StatusCode(), request->runtimeid());
+                    fmt::underlying(status.Get().StatusCode()), request->runtimeid());
         response->set_code(static_cast<int32_t>(status.Get().StatusCode()));
         response->set_message("stop instance failed");
         SendStopInstanceResponse(from, request->runtimeid(), response);
@@ -565,6 +637,10 @@ void RuntimeManager::ReleasePort(const litebus::Future<Status> &status,
 
     YRLOG_INFO("{}|{}|release port, runtimeID: {}", request->traceid(), request->requestid(), request->runtimeid());
     (void)PortManager::GetInstance().ReleasePort(request->runtimeid());
+
+    if (logReuse_) {
+        logManagerClient_->ReleaseLogPrefix(request->runtimeid());
+    }
 }
 
 void RuntimeManager::HeartbeatTimeoutHandler(const litebus::AID &from)
@@ -606,6 +682,133 @@ void RuntimeManager::CheckHealthForRuntime(const litebus::Future<messages::Start
     healthCheckClient_->AddRuntimeRecord(functionAgentAID_, pid, instanceID, runtimeID, nodeID_);
 }
 
+bool RuntimeManager::ShouldSkipDebugServerCreation(const litebus::Future<messages::StartInstanceResponse> &response,
+                                                   const std::shared_ptr<messages::StartInstanceRequest> &request) const
+{
+    if (!runtimeInstanceDebugEnable_) {
+        return true;
+    }
+
+    if (response.IsError() || response.Get().code() != static_cast<int32_t>(SUCCESS)) {
+        YRLOG_ERROR("{}|{}|failed to start instance, do not create debug server, instanceID: {}, runtimeID: {}",
+                    request->runtimeinstanceinfo().traceid(), request->runtimeinstanceinfo().requestid(),
+                    request->runtimeinstanceinfo().instanceid(), request->runtimeinstanceinfo().runtimeid());
+        return true;
+    }
+
+    const auto &envs = request->runtimeinstanceinfo().runtimeconfig().posixenvs();
+    if (envs.find(YR_DEBUG_CONFIG) == envs.end()) {
+        return true;
+    }
+
+    // parse debug config
+    nlohmann::json parser;
+    auto iter = request->runtimeinstanceinfo().runtimeconfig().posixenvs().find(YR_DEBUG_CONFIG);
+    try {
+        parser = nlohmann::json::parse(iter->second);
+    } catch (nlohmann::json::parse_error &e) {
+        YRLOG_WARN("failed to parse ({}) to json, error: {}", iter->second, e.what());
+        return true;
+    }
+    const auto &instanceID = request->runtimeinstanceinfo().instanceid();
+    const auto &runtimeID = request->runtimeinstanceinfo().runtimeid();
+    static const std::string ENABLE_DEBUG_KEY = "enable";
+    if (parser.find(ENABLE_DEBUG_KEY) == parser.end() || parser[ENABLE_DEBUG_KEY] == "false") {
+        YRLOG_DEBUG("{}|{}|disable debug instanceID: {}, runtimeID: {}", request->runtimeinstanceinfo().traceid(),
+                    request->runtimeinstanceinfo().requestid(), instanceID, runtimeID);
+        return true;
+    }
+    return false;
+}
+
+litebus::Future<messages::StartInstanceResponse> RuntimeManager::DebugServerAddRecord(
+    const litebus::Future<messages::StartInstanceResponse> &response,
+    const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    if (ShouldSkipDebugServerCreation(response, request)) {
+        return response;
+    }
+    ASSERT_IF_NULL(debugServerMgr_);
+    auto pid = static_cast<pid_t>(response.Get().startruntimeinstanceresponse().pid());
+    const auto &runtimeID = request->runtimeinstanceinfo().runtimeid();
+    debugServerMgr_->AddRecord(runtimeID, pid);
+    return response;
+}
+
+litebus::Future<messages::StartInstanceResponse> RuntimeManager::CreateDebugServer(
+    const litebus::Future<messages::StartInstanceResponse> &response,
+    const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    if (ShouldSkipDebugServerCreation(response, request)) {
+        return response;
+    }
+    const auto &instanceID = request->runtimeinstanceinfo().instanceid();
+    const auto &runtimeID = request->runtimeinstanceinfo().runtimeid();
+    YRLOG_DEBUG("{}|{}|enable debug instanceID: {}, runtimeID: {}", request->runtimeinstanceinfo().traceid(),
+                request->runtimeinstanceinfo().requestid(), instanceID, runtimeID);
+
+    // allocate a port for debug server
+    auto debugServerPort = PortManager::GetInstance().RequestPort(runtimeID);
+    request->mutable_runtimeinstanceinfo()->mutable_runtimeconfig()->set_debugserverport(debugServerPort);
+    std::string language = request->runtimeinstanceinfo().runtimeconfig().language();
+    (void)transform(language.begin(), language.end(), language.begin(), ::tolower);
+
+    // create debug server
+    ASSERT_IF_NULL(debugServerMgr_);
+    litebus::Future<Status> status =
+        debugServerMgr_->CreateServer(runtimeID, debugServerPort, instanceID, language)
+            .Then([traceID(request->runtimeinstanceinfo().traceid()),
+                   requestID(request->runtimeinstanceinfo().requestid()), debugServerPort, instanceID,
+                   runtimeID](litebus::Future<Status> status) {
+                if (status.IsError() || status.Get().IsError()) {
+                    return status;
+                }
+                YRLOG_INFO("{}|{}|create debug server port({}) for instance({}) runtime({})", traceID, requestID,
+                           debugServerPort, instanceID, runtimeID);
+                return status;
+            });
+
+    // return fail when not found gdbserver
+    if (status.IsError() || status.Get().IsError()) {
+        messages::StartInstanceResponse failResponse;
+        failResponse.set_requestid(request->runtimeinstanceinfo().requestid());
+        failResponse.set_code(status.Get().StatusCode());
+        failResponse.set_message(status.Get().RawMessage());
+        return failResponse;
+    }
+    return response;
+}
+
+void RuntimeManager::DestroyDebugServer(const litebus::Future<Status> &status,
+                                        const std::shared_ptr<messages::StopInstanceRequest> &request)
+{
+    if (!runtimeInstanceDebugEnable_) {
+        return;
+    }
+
+    const auto &runtimeID = request->runtimeid();
+    if (status.IsError()) {
+        YRLOG_ERROR("{}|{}|status get error, can not destroy debug server, runtimeID: {}", request->traceid(),
+                    request->requestid(), runtimeID);
+        return;
+    }
+    if (status.Get().IsError()) {
+        YRLOG_ERROR("{}|{}|status get error, can not destroy debug server, runtimeID: {}", request->traceid(),
+                    request->requestid(), runtimeID);
+        return;
+    }
+
+    RETURN_IF_NULL(debugServerMgr_);
+    debugServerMgr_->DestroyServer(runtimeID).Then(
+        [traceID(request->traceid()), requestID(request->requestid()), runtimeID](litebus::Future<Status> status) {
+            if (status.IsError() || status.Get().IsError()) {
+                return status;
+            }
+            YRLOG_INFO("{}|{}|destroy debug server, runtimeID: {}", traceID, requestID, runtimeID);
+            return status;
+        });
+}
+
 void RuntimeManager::SetRegisterHelper(const std::shared_ptr<RegisterHelper> helper)
 {
     registerHelper_ = helper;
@@ -632,14 +835,18 @@ void RuntimeManager::ReceiveRegistered(const std::string &message)
         YRLOG_INFO("succeed to register to FunctionAgent");
         RETURN_IF_NULL(registerHelper_);
         registerHelper_->SetPingPongDriver(
-            pingTimeoutMs_, [aid(GetAID())](const litebus::AID &from, HeartbeatConnection connection) {
-                YRLOG_INFO("heartbeat with function agent timeout, connection({})", connection);
-                litebus::Async(aid, &RuntimeManager::HeartbeatTimeoutHandler, from);
-            });
+            GetAID().Name(), functionAgentAID_.Url(), pingTimeoutMs_,
+            [aid(GetAID()), name = GetAID().Name()](const litebus::AID &dst) {
+                YRLOG_WARN("pingpong {} timeout, from runtime to agent. dst: {}", name, std::string(dst));
+                litebus::Async(aid, &RuntimeManager::HeartbeatTimeoutHandler, dst);
+            },
+            RUNTIME_MANAGER_ACTOR_NAME);
+
         RETURN_IF_NULL(metricsClient_);
         metricsClient_->UpdateAgentInfo(functionAgentAID_);
         metricsClient_->UpdateRuntimeManagerInfo(GetAID());
         metricsClient_->StartUpdateResource();
+        metricsClient_->BeginUpdateMetrics();
         metricsClient_->StartDiskUsageMonitor();
         metricsClient_->StartRuntimeMemoryLimitMonitor();
         RETURN_IF_NULL(healthCheckClient_);
@@ -657,6 +864,39 @@ void RuntimeManager::RegisterTimeout()
     YRLOG_WARN("{}|runtime manager register to FunctionAgent timeout", runtimeManagerID_);
     // clean status after register failed
     CommitSuicide();
+}
+
+void RuntimeManager::QueryDebugInstanceInfos(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    if (!runtimeInstanceDebugEnable_) {
+        YRLOG_WARN("runtime instance not enable debug mode");
+        return;
+    }
+
+    messages::QueryDebugInstanceInfosRequest request;
+    if (!request.ParseFromString(msg)) {
+        YRLOG_ERROR("failed to parse QueryDebugInstanceInfosRequest");
+        return;
+    }
+    if (!connected_) {
+        YRLOG_ERROR(
+            "{}|runtimeManager registration to functionAgent is not complete, ignore query debug instance infos.",
+            request.requestid());
+        return;
+    }
+    YRLOG_DEBUG("{}|received query debug instances infos.", request.requestid());
+
+    RETURN_IF_NULL(debugServerMgr_);
+    debugServerMgr_->QueryDebugInstanceInfos(request.requestid()).Then(litebus::Defer(
+        GetAID(), &RuntimeManager::QueryDebugInstanceInfosResponse, from, std::placeholders::_1));
+}
+
+Status RuntimeManager::QueryDebugInstanceInfosResponse(const litebus::AID &from,
+                                                       const messages::QueryDebugInstanceInfosResponse &response)
+{
+    YRLOG_DEBUG("{}|response query debug instances infos.", response.requestid());
+    (void)Send(from, "QueryDebugInstanceInfosResponse", response.SerializeAsString());
+    return Status::OK();
 }
 
 void RuntimeManager::QueryInstanceStatusInfo(const litebus::AID &from, std::string &&, std::string &&msg)
@@ -790,5 +1030,15 @@ litebus::Future<bool> RuntimeManager::IsRuntimeActive(const std::string &runtime
         return false;
     }
     return executor->IsRuntimeActive(runtimeID);
+}
+
+litebus::Future<bool> RuntimeManager::IsRuntimeActiveByPid(const pid_t &pid)
+{
+    auto executor = FindExecutor(EXECUTOR_TYPE::RUNTIME);
+    if (executor == nullptr) {
+        YRLOG_ERROR("failed to get runtime({}) executor", pid);
+        return false;
+    }
+    return executor->IsRuntimeActiveByPid(pid);
 }
 }  // namespace functionsystem::runtime_manager

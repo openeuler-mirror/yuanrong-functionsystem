@@ -25,6 +25,8 @@ include_directories(${META_STORE_CLIENT_INCLUDE_DIR})
 add_subdirectory(common)
 add_subdirectory(global_scheduler)
 add_subdirectory(instance_manager)
+add_subdirectory(scaler)
+add_subdirectory(system_function_loader)
 add_subdirectory(resource_group_manager)
 
 get_property(META_STORE_DIR GLOBAL PROPERTY "META_STORE_DIR")
@@ -35,14 +37,16 @@ target_include_directories(${EXECUTABLE_NAME} PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/common
         ${CMAKE_CURRENT_LIST_DIR}/global_scheduler
         ${CMAKE_CURRENT_LIST_DIR}/instance_manager
+        ${CMAKE_CURRENT_LIST_DIR}/scaler
+        ${CMAKE_CURRENT_LIST_DIR}/system_function_loader
         ${CMAKE_CURRENT_LIST_DIR}/resource_group_manager)
 
 add_dependencies(${EXECUTABLE_NAME} rpc meta_store_client leader utils heartbeat
-        meta_store_lib)
+        meta_store_lib hex)
 get_property(PLUGIN_LIB GLOBAL PROPERTY "PLUGIN_LIB")
 target_link_libraries(${EXECUTABLE_NAME} PRIVATE
         meta_store_client leader utils heartbeat
-        meta_store_lib rpc
+        meta_store_lib rpc hex
         ${ssl_LIB}
         ${litebus_ALL_LIB}
         ${LITEBUS_LIB}
@@ -50,6 +54,7 @@ target_link_libraries(${EXECUTABLE_NAME} PRIVATE
         ${GLOBAL_SCHEDULER_LIB}
         ${INSTANCE_MANAGER_LIB}
         ${META_STORE_LIB}
+        ${SCALER_LIB}
         ${SYSTEM_FUNCTION_LOADER_LIB}
         ${RESOURCE_GROUP_MANAGER_LIB}
         ${PLUGIN_LIB})

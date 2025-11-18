@@ -17,8 +17,8 @@
 #include "working_dir_deployer.h"
 
 #include "async/uuid_generator.hpp"
-#include "logs/logging.h"
-#include "metadata/metadata.h"
+#include "common/logs/logging.h"
+#include "common/metadata/metadata.h"
 #include "common/utils/exec_utils.h"
 #include "common/utils/hash_util.h"
 #include "utils/os_utils.hpp"
@@ -200,6 +200,9 @@ bool WorkingDirDeployer::Clear(const std::string &filePath, const std::string &o
 
 Status WorkingDirDeployer::UnzipFile(const std::string &destDir, const std::string &workingDirZipFile)
 {
+    if (!IsFile(workingDirZipFile)) {
+        return Status(StatusCode::FUNC_AGENT_INVALID_WORKING_DIR_FILE, "working_dir file is invalid");
+    }
     // baseDir + /app/working_dir/${hash working_dir uri file}/
     std::string cmd = "unzip -d " + destDir + " " + workingDirZipFile;
     if (!CheckIllegalChars(cmd)) {

@@ -17,10 +17,7 @@
 #ifndef FUNCTION_MASTER_GLOBAL_SCHEDULER_DOMAIN_ACTIVATOR_H
 #define FUNCTION_MASTER_GLOBAL_SCHEDULER_DOMAIN_ACTIVATOR_H
 
-#include <async/async.hpp>
-
-#include "common/scheduler_topology/node.h"
-#include "status/status.h"
+#include "common/status/status.h"
 #include "domain_scheduler/include/domain_scheduler_launcher.h"
 
 namespace functionsystem::global_scheduler {

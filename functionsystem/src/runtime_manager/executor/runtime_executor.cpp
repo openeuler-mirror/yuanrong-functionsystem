@@ -17,12 +17,10 @@
 #include "runtime_executor.h"
 
 #include <google/protobuf/util/json_util.h>
-#include <unistd.h>
 #include <yaml-cpp/yaml.h>
 
 #include <algorithm>
 #include <cerrno>
-#include <climits>
 #include <nlohmann/json.hpp>
 #include <regex>
 #include <thread>
@@ -30,15 +28,15 @@
 
 #include "async/asyncafter.hpp"
 #include "async/collect.hpp"
+#include "common/logs/logging.h"
+#include "common/resource_view/resource_type.h"
 #include "common/utils/exec_utils.h"
+#include "common/utils/files.h"
 #include "common/utils/generate_message.h"
 #include "common/utils/path.h"
 #include "common/utils/struct_transfer.h"
 #include "config/build.h"
-#include "files.h"
-#include "logs/logging.h"
 #include "port/port_manager.h"
-#include "resource_type.h"
 #include "utils/os_utils.hpp"
 #include "utils/utils.h"
 
@@ -96,7 +94,7 @@ const std::string JAVA_JOB_ID = "-DjobId=job-";
 const std::string JAVA_MAIN_CLASS = "com.yuanrong.runtime.server.RuntimeServer";
 const std::string PYTHON_NEW_SERVER_PATH = "/python/fnruntime/server.py";
 const std::string YR_JAVA_RUNTIME_PATH = "/java/yr-runtime-1.0.0.jar";
-const std::string POST_START_EXEC_REGEX = R"(^pip[0-9.]+ install [a-zA-Z0-9\-\s:/\.=_]* && pip[0-9.]+ check$)";
+const std::string POST_START_EXEC_REGEX = R"(^(uv )?pip3.[0-9]* install [a-zA-Z0-9\-\s:/\.=_]* && pip3.[0-9]* check$)";
 // should be read from deploy request in the future
 const int DEFAULT_RETRY_RESTART_CACHE_RUNTIME = 3;
 const int MAX_USER_ID = 65535;
@@ -115,6 +113,7 @@ const static std::string ASCEND_RT_VISIBLE_DEVICES = "ASCEND_RT_VISIBLE_DEVICES"
 
 const std::string CONDA_PROGRAM_NAME = "conda";
 const std::string CONDA_ENV_FILE = "env.yaml";
+const std::string WHITE_LIST_ENV_PREFIX = "YR_";
 
 const std::string CHDIR_PATH_CONFIG = "CHDIR_PATH";
 
@@ -141,15 +140,6 @@ std::function<void()> SetRuntimeIdentity(int userID, int groupID)
     };
 }
 
-std::function<void()> ChdirHook(std::string dir)
-{
-    return [dir]() {
-        if (chdir(dir.c_str()) != 0) {
-            std::cerr << "failed to chdir: " << dir << ", get errno: " << errno << std::endl;
-        }
-    };
-}
-
 std::function<void()> SetSubProcessPgid()
 {
     return []() {
@@ -157,6 +147,15 @@ std::function<void()> SetSubProcessPgid()
         int pgidRet = setpgid(pid, 0);
         if (pgidRet < 0) {
             std::cerr << "failed to set pgid: " << pid << ", get errno: " << errno << std::endl;
+        }
+    };
+}
+
+std::function<void()> ChdirHook(std::string dir)
+{
+    return [dir]() {
+        if (chdir(dir.c_str()) != 0) {
+            std::cerr << "failed to chdir: " << dir << ", get errno: " << errno << std::endl;
         }
     };
 }
@@ -185,6 +184,7 @@ std::function<void()> CondaActivate(const std::string &condaPrefix, const std::s
 
 RuntimeExecutor::RuntimeExecutor(const std::string &name, const litebus::AID &functionAgentAID) : Executor(name)
 {
+    mounter_ = std::make_shared<VolumeMount>();
     functionAgentAID_ = functionAgentAID;
     // start file monitor to watch instance subdir
     std::string mcName = "MonitorCallBack_" + litebus::uuid_generator::UUID::GetRandomUUID().ToString();
@@ -297,7 +297,7 @@ void RuntimeExecutor::CheckRuntimesExited(const std::chrono::steady_clock::time_
     litebus::AsyncAfter(WAIT_RUNTIMES_EXITED_INTERVAL, GetAID(), &RuntimeExecutor::CheckRuntimesExited, start, promise);
 }
 
-Status RuntimeExecutor::PostStartExecHook(const messages::RuntimeConfig &config)
+Status RuntimeExecutor::PostStartExecHook(const messages::RuntimeConfig &config, const std::string &instanceID)
 {
     auto iter = config.posixenvs().find("POST_START_EXEC");
     if (iter == config.posixenvs().end()) {
@@ -307,9 +307,8 @@ Status RuntimeExecutor::PostStartExecHook(const messages::RuntimeConfig &config)
     if (!std::regex_search(iter->second, std::regex(POST_START_EXEC_REGEX))) {
         return Status(FAILED, iter->second + " is not match the regular");
     }
-
     const auto &command = iter->second;
-    auto result = ExecuteCommandByPopen(command, INT32_MAX, true);
+    auto result = ExecuteCommandByPopen(command, INT32_MAX, true, instanceID);
     if (result.empty() || result.find("ERROR") != std::string::npos) {
         YRLOG_ERROR(
             "failed to execute POST_START_EXEC command({}), error:\n"
@@ -338,12 +337,17 @@ litebus::Future<messages::StartInstanceResponse> RuntimeExecutor::StartInstance(
     const std::shared_ptr<messages::StartInstanceRequest> &request, const std::vector<int> &cardIDs)
 {
     const auto &info = request->runtimeinstanceinfo();
-    if (auto res(PostStartExecHook(info.runtimeconfig())); res.IsError()) {
+    if (auto res(PostStartExecHook(info.runtimeconfig(), info.instanceid())); res.IsError()) {
         YRLOG_ERROR("{}|{}|failed to execute pre start hook, error: {}", info.traceid(), info.requestid(),
                     res.ToString());
         return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_POST_START_EXEC_FAILED, res.ToString());
     }
 
+    if (auto res(mounter_->MountVolumesForFunction(info.runtimeconfig().funcmountconfig())); res.IsError()) {
+        YRLOG_ERROR("{}|{}|failed to mount volumes for function, error: {}", info.traceid(), info.requestid(),
+                    res.ToString());
+        return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_MOUNT_VOLUME_FAILED);
+    }
     gracefulShutdownTime_ = request->runtimeinstanceinfo().gracefulshutdowntime();
 
     if (request->runtimeinstanceinfo().runtimeconfig().subdirectoryconfig().isenable()
@@ -399,11 +403,12 @@ litebus::Future<messages::StartInstanceResponse> RuntimeExecutor::StartInstance(
         return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_CREATE_EXEC_FAILED);
     }
     runtime2PID_[runtimeID] = execPtr->GetPid();
+    pids_.insert(execPtr->GetPid());
     runtimeInstanceInfoMap_[runtimeID] = request->runtimeinstanceinfo();
     (void)runtime2Exec_.insert(std::make_pair(runtimeID, execPtr));
     YRLOG_INFO("{}|{}|start instance success, instanceID({}) runtimeID({}) PID({}) IP({}) Port({})", info.traceid(),
                info.requestid(), info.instanceid(), info.runtimeid(), execPtr->GetPid(), config_.ip, port);
-    return GenSuccessStartInstanceResponse(request, execPtr, runtimeID, port);
+    return GenSuccessStartInstanceResponse(request, execPtr, port);
 }
 
 Status RuntimeExecutor::CreateSubDir(const std::shared_ptr<messages::StartInstanceRequest> &request)
@@ -446,8 +451,11 @@ litebus::Future<messages::StartInstanceResponse> RuntimeExecutor::StartInstanceW
     const std::vector<int> &cardIDs)
 {
     const auto &info = request->runtimeinstanceinfo();
-    std::string runtimeID = GenerateRuntimeID(info.instanceid());
-    request->mutable_runtimeinstanceinfo()->set_runtimeid(runtimeID);
+    std::string runtimeID = request->runtimeinstanceinfo().runtimeid();
+    if (runtimeID.empty()) {
+        runtimeID = GenerateRuntimeID(info.instanceid());
+        request->mutable_runtimeinstanceinfo()->set_runtimeid(runtimeID);
+    }
     std::string port;
     auto tlsConfig = request->runtimeinstanceinfo().runtimeconfig().tlsconfig();
     RuntimeFeatures features;
@@ -498,6 +506,7 @@ litebus::Future<messages::StartInstanceResponse> RuntimeExecutor::StartInstanceW
             features.directRuntimeServerPort = port;
         }
     }
+    features.cleanStreamProducerEnable = config_.cleanStreamProducerEnable;
     return StartRuntime(request, language, port, GenerateEnvs(config_, request, port, cardIDs, features), args);
 }
 
@@ -554,9 +563,16 @@ litebus::Future<messages::StartInstanceResponse> RuntimeExecutor::StartRuntime(
     YRLOG_INFO("{}|{}|start instance success, instanceID({}), runtimeID({}), PID({}), IP({}), Port({})", info.traceid(),
                info.requestid(), info.instanceid(), info.runtimeid(), execPtr->GetPid(), config_.ip, port);
     runtime2PID_[info.runtimeid()] = execPtr->GetPid();
+    pids_.insert(execPtr->GetPid());
     runtimeInstanceInfoMap_[info.runtimeid()] = request->runtimeinstanceinfo();
     (void)runtime2Exec_.insert(std::make_pair(info.runtimeid(), execPtr));
-    return GenSuccessStartInstanceResponse(request, execPtr, info.runtimeid(), port);
+
+    if (const auto &deployOptions = info.deploymentconfig().deployoptions();
+        deployOptions.contains(CONDA_DEFAULT_ENV) && virtualEnvMgr_ != nullptr) {
+        virtualEnvMgr_->AddEnvReferInfos(deployOptions.at(CONDA_DEFAULT_ENV),
+                                         request->runtimeinstanceinfo().runtimeid());
+    }
+    return GenSuccessStartInstanceResponse(request, execPtr, port);
 }
 
 Status RuntimeExecutor::WriteProtoToRuntime(const std::string &requestID, const std::string &runtimeID,
@@ -624,6 +640,10 @@ Status RuntimeExecutor::StopInstance(const std::shared_ptr<messages::StopInstanc
 {
     std::string runtimeID = request->runtimeid();
     std::string requestID = request->requestid();
+
+    if (virtualEnvMgr_ != nullptr) {
+        virtualEnvMgr_->RmEnvReferInfos(runtimeID);
+    }
     return StopInstanceByRuntimeID(runtimeID, requestID, oomKilled);
 }
 
@@ -718,8 +738,8 @@ std::shared_ptr<litebus::Exec> RuntimeExecutor::StartRuntimeByRuntimeID(
     }
     litebus::ExecIO stdOut = litebus::ExecIO::CreatePipeIO();
     auto stdErr = stdOut;
-    if (config_.userLogExportMode == functionsystem::runtime_manager::FILE_EXPORTER &&
-        config_.separatedRedirectRuntimeStd) {
+    if (config_.userLogExportMode == functionsystem::runtime_manager::FILE_EXPORTER
+        && config_.separatedRedirectRuntimeStd) {
         ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID);
     }
     std::string cmd = execPath;
@@ -876,9 +896,6 @@ std::map<std::string, std::string> RuntimeExecutor::CombineEnvs(const Envs &envs
 
 void RuntimeExecutor::InheritEnv(std::map<std::string, std::string> &combineEnvs) const
 {
-    if (!config_.inheritEnv) {
-        return;
-    }
     char **env = environ;
     for (; *env; ++env) {
         std::string envStr = *env;
@@ -888,14 +905,22 @@ void RuntimeExecutor::InheritEnv(std::map<std::string, std::string> &combineEnvs
         }
         auto key = envStr.substr(0, equalPos);
         auto val = envStr.substr(equalPos + 1);
-        if (key == PATH) {
-            combineEnvs[key] = (combineEnvs[key].empty() ? "" : combineEnvs[key] + ":") + val;
+        if (litebus::strings::StartsWithPrefix(key, WHITE_LIST_ENV_PREFIX)) {
+            if (combineEnvs.find(key) == combineEnvs.end()) {
+                combineEnvs[key] = val;
+            }
             continue;
         }
-        if (combineEnvs.find(key) != combineEnvs.end()) {
-            continue;
+        if (config_.inheritEnv) {
+            if (key == PATH) {
+                combineEnvs[key] = (combineEnvs[key].empty() ? "" : combineEnvs[key] + ":") + val;
+                continue;
+            }
+            if (combineEnvs.find(key) != combineEnvs.end()) {
+                continue;
+            }
+            combineEnvs[key] = val;
         }
-        combineEnvs[key] = val;
     }
 
     // if set YR_NOSET_ASCEND_RT_VISIBLE_DEVICES , ASCEND_RT_VISIBLE_DEVICES will not set
@@ -934,6 +959,7 @@ Status RuntimeExecutor::StopInstanceByRuntimeID(const std::string &runtimeID, co
     litebus::Async(monitorCallBackActor_->GetAID(), &MonitorCallBackActor::DeleteFromMonitorMap, instanceID);
     (void)runtime2PID_.erase(runtimeID);
     (void)runtime2Exec_.erase(runtimeID);
+    (void)pids_.erase(pidIter->second);
 
     if (oomKilled) {
         innerOomKilledruntimes_.insert(runtimeID);
@@ -1239,7 +1265,7 @@ Status RuntimeExecutor::HandleCondaCommand(const google::protobuf::Map<std::stri
 
 std::pair<Status, std::vector<std::string>> RuntimeExecutor::PythonBuildFinalArgs(
     const std::string &port, const std::string &execPath, const std::string &deployDir,
-    const messages::RuntimeInstanceInfo &info, const std::shared_ptr<messages::StartInstanceRequest> &request) const
+    const messages::RuntimeInstanceInfo &info) const
 {
     std::string jobID = PYTHON_JOB_ID_PREFIX + Utils::GetJobIDFromTraceID(info.traceid());
     std::string address = config_.ip + ":" + port;
@@ -1284,7 +1310,7 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetPythonBuildArgs(
         return { status, {} };
     }
 
-    return PythonBuildFinalArgs(port, execPath, deployDir, info, request);
+    return PythonBuildFinalArgs(port, execPath, deployDir, info);
 }
 
 std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetNodejsBuildArgs(
@@ -1430,7 +1456,14 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetJavaBuildArgs(
     (void)args.emplace_back("-cp");
     (void)args.emplace_back(javaClassPath);
     (void)args.emplace_back(JAVA_LOG_LEVEL + config_.runtimeLogLevel);
-    (void)args.emplace_back(JAVA_SYSTEM_PROPERTY_FILE + config_.javaSystemProperty);
+    if (auto path = request->runtimeinstanceinfo().runtimeconfig().posixenvs().find(ENV_DELEGATE_DOWNLOAD);
+        path != request->runtimeinstanceinfo().runtimeconfig().posixenvs().end()) {
+        (void)args.emplace_back(JAVA_SYSTEM_PROPERTY_FILE + config_.javaSystemProperty + ',' + path->second
+                                + "/config/log4j2.xml");
+        YRLOG_INFO("append java system property file: {}/config/log4j2.xml", path->second);
+    } else {
+        (void)args.emplace_back(JAVA_SYSTEM_PROPERTY_FILE + config_.javaSystemProperty);
+    }
     (void)args.emplace_back(JAVA_SYSTEM_LIBRARY_PATH + config_.javaSystemLibraryPath);
     (void)args.emplace_back("-XX:ErrorFile=" + config_.runtimeLogPath + "/exception/BackTrace_"
                             + request->runtimeinstanceinfo().runtimeid() + ".log");
@@ -1483,6 +1516,7 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetPosixCustomBuild
                             "params working dir or unzipped dir is empty"),
                      {} };
         }
+
         if (!litebus::os::ExistPath(iter->second)) {
             YRLOG_ERROR("{}|{}|enter working dir failed, path: {}", request->runtimeinstanceinfo().traceid(),
                         request->runtimeinstanceinfo().requestid(), iter->second);
@@ -1595,7 +1629,7 @@ StatusCode RuntimeExecutor::CheckRuntimeCredential(const std::shared_ptr<message
 
 messages::StartInstanceResponse RuntimeExecutor::GenSuccessStartInstanceResponse(
     const std::shared_ptr<messages::StartInstanceRequest> &request, const std::shared_ptr<litebus::Exec> &execPtr,
-    const std::string &runtimeID, const std::string &port)
+    const std::string &port)
 {
     messages::StartInstanceResponse response;
     response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
@@ -1692,6 +1726,11 @@ void RuntimeExecutor::InitPrestartRuntimePool()
             StartPrestartRuntimeByLanguage(prestartConfig.first, prestartConfig.second);
         }
     }
+}
+
+void RuntimeExecutor::InitVirtualEnvIdleTimeLimit()
+{
+    virtualEnvMgr_ = std::make_shared<VirtualEnvManager>(config_.virtualEnvIdleTimeLimit);
 }
 
 void RuntimeExecutor::StartPrestartRuntimeByLanguage(const std::string &language, const int startCount)

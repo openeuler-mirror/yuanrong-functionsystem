@@ -17,14 +17,15 @@
 #ifndef FUNCTION_PROXY_COMMON_POSIX_SERVICE_POSIX_AUTH_INTERCEPTOR_H
 #define FUNCTION_PROXY_COMMON_POSIX_SERVICE_POSIX_AUTH_INTERCEPTOR_H
 
-#include "rpc/stream/posix/posix_stream.h"
+#include "common/iam/internal_iam.h"
+#include "common/rpc/stream/posix/posix_stream.h"
 
 namespace functionsystem {
 
 class PosixAuthInterceptor : public AuthInterceptor<runtime_rpc::StreamingMessage> {
 public:
-    PosixAuthInterceptor(const std::string &runtimeID, const std::string &instanceID)
-        : runtimeID_(runtimeID), instanceID_(instanceID)
+    PosixAuthInterceptor(const std::string &runtimeID, const std::string &instanceID, const std::string &accessKey)
+        : runtimeID_(runtimeID), instanceID_(instanceID), accessKey_(accessKey)
     {
     }
     ~PosixAuthInterceptor() override = default;
@@ -32,9 +33,16 @@ public:
     litebus::Future<bool> Sign(const std::shared_ptr<runtime_rpc::StreamingMessage> &message) override;
     litebus::Future<bool> Verify(const std::shared_ptr<runtime_rpc::StreamingMessage> &message) override;
 
+    void BindInternalIAM(const std::shared_ptr<function_proxy::InternalIAM> &internalIam)
+    {
+        internalIam_ = internalIam;
+    }
+
 private:
+    std::shared_ptr<function_proxy::InternalIAM> internalIam_;
     std::string runtimeID_;
     std::string instanceID_;
+    std::string accessKey_;
 };
 }  // namespace functionsystem
 

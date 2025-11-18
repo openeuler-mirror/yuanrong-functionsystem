@@ -22,7 +22,7 @@
 #include <litebus.hpp>
 #include <memory>
 
-#include "proto/pb/posix_pb.h"
+#include "common/proto/pb/posix_pb.h"
 
 namespace functionsystem::proxy {
 class Actor : public litebus::ActorBase {

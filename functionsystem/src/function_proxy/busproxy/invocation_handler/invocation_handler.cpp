@@ -16,17 +16,10 @@
 
 #include "invocation_handler.h"
 
-#include <async/async.hpp>
-#include <async/defer.hpp>
-
-#include "logs/logging.h"
-#include "metrics/metrics_adapter.h"
-#include "rpc/stream/posix/control_client.h"
+#include "common/logs/logging.h"
+#include "common/rpc/stream/posix/control_client.h"
 #include "function_proxy/busproxy/instance_proxy/instance_proxy.h"
 
-#ifdef OBSERVABILITY
-#include "common/trace/trace_manager.h"
-#endif
 
 namespace functionsystem {
 using namespace runtime_rpc;
@@ -90,11 +83,43 @@ litebus::Future<std::shared_ptr<StreamingMessage>> InvocationHandler::Invoke(
         response->mutable_invokersp()->set_message("system memory usage not enough, reject invoke request");
         return response;
     }
+    if (internalIam_ && internalIam_->IsIAMEnabled()) {
+        return Authorize(id, from, instanceID, callRequest, recevied);
+    }
     YRLOG_INFO("{}|{}|received Invoke instance({}) from {}, actor({}) will handle it.", invokeRequest->traceid(),
                invokeRequest->requestid(), instanceID, from, id.HashString());
     ASSERT_IF_NULL(instanceProxy_);
     return instanceProxy_
         ->Call(id, busproxy::CallerInfo{ .instanceID = from, .tenantID = "" }, instanceID, callRequest, recevied)
+        .Then([](const std::shared_ptr<StreamingMessage> &rsp) { return CallResponseToInvokeResponse(rsp); });
+}
+
+litebus::Future<std::shared_ptr<runtime_rpc::StreamingMessage>> InvocationHandler::Authorize(
+    const litebus::AID &to, const std::string &srcInstanceID, const std::string &instanceID,
+    const SharedStreamMsg &request, const std::shared_ptr<busproxy::TimePoint> &time)
+{
+    ASSERT_IF_NULL(instanceProxy_);
+    litebus::AID src(srcInstanceID, localUrl_);
+    if (litebus::GetActor(src) == nullptr) {
+        YRLOG_WARN("get actor is null for instance {}", srcInstanceID);
+
+        return instanceProxy_
+            ->Call(to, busproxy::CallerInfo{ .instanceID = srcInstanceID, .tenantID = "" }, instanceID, request, time)
+            .Then([](const std::shared_ptr<StreamingMessage> &rsp) { return CallResponseToInvokeResponse(rsp); });
+    }
+    return instanceProxy_->GetTenantID(src).Then(
+        [to, srcInstanceID, instanceID, request, time](const std::string &tenantID) {
+            return CallWithAuthorize(to, busproxy::CallerInfo{ .instanceID = srcInstanceID, .tenantID = tenantID },
+                                     instanceID, request, time);
+        });
+}
+
+litebus::Future<std::shared_ptr<runtime_rpc::StreamingMessage>> InvocationHandler::CallWithAuthorize(
+    const litebus::AID &to, const busproxy::CallerInfo &callerInfo, const std::string &instanceID,
+    const SharedStreamMsg &request, const std::shared_ptr<busproxy::TimePoint> &time)
+{
+    ASSERT_IF_NULL(instanceProxy_);
+    return instanceProxy_->Call(to, callerInfo, instanceID, request, time)
         .Then([](const std::shared_ptr<StreamingMessage> &rsp) { return CallResponseToInvokeResponse(rsp); });
 }
 

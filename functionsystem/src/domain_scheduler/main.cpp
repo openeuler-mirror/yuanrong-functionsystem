@@ -19,9 +19,10 @@
 #include <memory>
 #include <string>
 
+#include "common/constants/constants.h"
 #include "common/explorer/explorer.h"
-#include "logs/logging.h"
-#include "rpc/client/grpc_client.h"
+#include "common/logs/logging.h"
+#include "common/rpc/client/grpc_client.h"
 #include "common/utils/module_switcher.h"
 #include "common/utils/version.h"
 #include "domain_scheduler/flags/flags.h"
@@ -30,18 +31,22 @@
 #include "async/future.hpp"
 #include "async/option.hpp"
 #include "common/explorer/explorer_actor.h"
+#include "common/kube_client/kube_client.h"
 #include "meta_store_client/meta_store_client.h"
-#include "status/status.h"
-#include "ssl_config.h"
+#include "common/status/status.h"
+#include "common/utils/ssl_config.h"
 #include "domain_scheduler/include/structure.h"
 #include "meta_store_client/meta_store_struct.h"
+#include "common/aksk/aksk_util.h"
+#include "common/constants/actor_name.h"
 
 using namespace functionsystem;
 namespace {
-const std::string COMPONENT_NAME = "domain_scheduler";
+const std::string COMPONENT_NAME = COMPONENT_NAME_DOMAIN_SCHEDULER;
 std::shared_ptr<litebus::Promise<bool>> stopSignal{ nullptr };
 std::shared_ptr<functionsystem::ModuleSwitcher> domainSchedulerSwitcher_{ nullptr };
 std::shared_ptr<domain_scheduler::DomainSchedulerLauncher> domainSchedulerDriver_{ nullptr };
+std::shared_ptr<KubeClient> kubeClient_ = nullptr;
 
 void OnStopHandler(int signum)
 {
@@ -80,12 +85,15 @@ void OnCreate(const domain_scheduler::Flags &flags)
         domainSchedulerSwitcher_->SetStop();
         return;
     }
-    auto leaderName = explorer::DEFAULT_MASTER_ELECTION_KEY;
+    kubeClient_ = KubeClient::CreateKubeClient(flags.GetK8sBasePath(), KubeClient::ClusterSslConfig("", "", false));
+    auto leaderName = flags.GetElectionMode() == K8S_ELECTION_MODE ? explorer::FUNCTION_MASTER_K8S_LEASE_NAME
+                                                                   : explorer::DEFAULT_MASTER_ELECTION_KEY;
     explorer::LeaderInfo leaderInfo{ .name = leaderName, .address = flags.GetGlobalAddress() };
     explorer::ElectionInfo electionInfo{ .identity = flags.GetIP(),
                                          .mode = flags.GetElectionMode(),
                                          .electKeepAliveInterval = flags.GetElectKeepAliveInterval() };
-    if (!explorer::Explorer::CreateExplorer(electionInfo, leaderInfo, metaClient)) {
+    if (!explorer::Explorer::CreateExplorer(electionInfo, leaderInfo, metaClient, kubeClient_,
+                                            flags.GetK8sNamespace())) {
         return;
     }
     auto identity = litebus::os::Join(flags.GetNodeID(), address, '-');
@@ -100,6 +108,7 @@ void OnCreate(const domain_scheduler::Flags &flags)
 	param.enablePreemption = flags.GetEnablePreemption();
 	param.relaxed = flags.GetScheduleRelaxed();
     param.aggregatedStrategy = flags.GetAggregatedStrategy();
+    param.componentName = COMPONENT_NAME;
     domainSchedulerDriver_ = std::make_shared<domain_scheduler::DomainSchedulerLauncher>(param);
     if (auto status = domainSchedulerDriver_->Start(); status.IsError()) {
         YRLOG_ERROR("failed to start {}, errMsg: {}", COMPONENT_NAME, status.ToString());
@@ -146,6 +155,11 @@ int main(int argc, char **argv)
     auto sslCertConfig = GetSSLCertConfig(flags);
     if (flags.GetSslEnable() && InitLitebusSSLEnv(sslCertConfig).IsError()) {
         YRLOG_ERROR("failed to init litebus ssl env");
+        domainSchedulerSwitcher_->SetStop();
+        return EXIT_ABNORMAL;
+    }
+    if (!InitLitebusAKSKEnv(flags).IsOk()) {
+        YRLOG_ERROR("failed to get aksk config");
         domainSchedulerSwitcher_->SetStop();
         return EXIT_ABNORMAL;
     }

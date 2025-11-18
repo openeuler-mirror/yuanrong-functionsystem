@@ -22,11 +22,11 @@
 #include <unordered_map>
 #include <utility>
 
-#include "heartbeat/heartbeat_observer.h"
-#include "proto/pb/message_pb.h"
+#include "common/heartbeat/heartbeat_observer.h"
+#include "common/proto/pb/message_pb.h"
 #include "common/resource_view/resource_view_mgr.h"
 #include "common/schedule_decision/preemption_controller/preemption_controller.h"
-#include "request_sync_helper.h"
+#include "common/utils/request_sync_helper.h"
 #include "domain_scheduler/instance_control/instance_ctrl.h"
 #include "domain_scheduler/domain_scheduler_service/domain_sched_srv.h"
 
@@ -43,8 +43,6 @@ public:
     void AddRegisterTimer(const litebus::AID &aid, uint64_t timeOutMs);
 
     void Registered(const litebus::AID &aid);
-
-    int CreateHeartbeatObserve(const HeartbeatObserver::TimeOutHandler &handler);
 
     void RegisterResourceClearCallback(std::function<void(std::string &)> resourceClearCallBack)
     {
@@ -66,6 +64,11 @@ public:
         return address_;
     }
 
+    const std::string GetName() const
+    {
+        return name_;
+    }
+
 private:
     std::string name_;
     std::string address_;
@@ -74,7 +77,6 @@ private:
     litebus::AID aid_;
     litebus::Timer registerTimeOut_;
     litebus::Promise<bool> registered_;
-    std::shared_ptr<HeartbeatObserveDriver> heartbeatObserver_ = nullptr;
     std::function<void(std::string &)> resourceClearCallBack_;
 };
 
@@ -212,7 +214,7 @@ protected:
     void Init() override;
 
 private:
-    void HeatbeatLost(const std::string &name, const std::string &address);
+    void HeartbeatLost(const std::string &name, const std::string &address);
     litebus::Future<Status> AsyncNotifyAbnormal(const messages::NotifySchedAbnormalRequest &req);
     void NotifySchedAbnormalCallBack(const litebus::AID &to, const messages::NotifySchedAbnormalRequest &req);
     void NotifyWorkerStatusCallBack(const litebus::Future<Status> &status, const litebus::AID &to,
@@ -261,6 +263,9 @@ private:
                         deletePodMatch_);
     const uint32_t preemptInstanceTimeout_ = 5000;
     REQUEST_SYNC_HELPER(UnderlayerSchedMgrActor, Status, preemptInstanceTimeout_, preemptInstanceSync_);
+    int AddNewHeartbeatNode(
+        const HeartbeatObserver::TimeOutHandler &handler, std::shared_ptr<UnderlayerScheduler> underlayer);
+    std::shared_ptr<HeartbeatObserveDriver> heartbeatObserver_ = nullptr;
 };
 }  // namespace functionsystem::domain_scheduler
 

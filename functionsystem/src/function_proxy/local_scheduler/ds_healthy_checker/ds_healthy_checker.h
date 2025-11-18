@@ -18,7 +18,6 @@
 #define FUNCTION_PROXY_COMMON_DS_HEALTHY_CHECKER_DS_HEALTHY_CHECKER_H
 
 #include <atomic>
-#include <utility>
 
 #include "actor/actor.hpp"
 #include "common/distribute_cache_client/distributed_cache_client.h"
@@ -27,13 +26,7 @@ namespace functionsystem::local_scheduler {
 class DsHealthyChecker : public litebus::ActorBase {
 public:
     DsHealthyChecker(uint64_t checkInterval, uint64_t maxUnHealthyTimes,
-                     std::shared_ptr<DistributedCacheClient> distributedCacheClient)
-        : litebus::ActorBase("DsHealthyChecker"),
-          checkInterval_(checkInterval),
-          maxUnHealthyTimes_(maxUnHealthyTimes),
-          distributedCacheClient_(std::move(distributedCacheClient))
-    {
-    }
+                     std::shared_ptr<DistributedCacheClient> distributedCacheClient);
 
     ~DsHealthyChecker() override = default;
 
@@ -42,10 +35,9 @@ public:
         healthyCallback_ = cb;
     }
 
-    bool GetIsUnhealthy()
-    {
-        return isUnhealthy_;
-    }
+    bool GetIsUnhealthy();
+
+    bool IsDataSystemFeatureUsed();
 
 protected:
     std::atomic<bool> isUnhealthy_{ false };
@@ -57,9 +49,11 @@ private:
 
     void InitCheck();
 
+    std::string dataSystemFeatureUsed_;
+
     uint64_t checkInterval_;
     uint64_t maxUnHealthyTimes_;
-    std::shared_ptr<DistributedCacheClient> distributedCacheClient_;
+    std::shared_ptr<DistributedCacheClient> distributedCacheClient_{};
     std::function<void(bool)> healthyCallback_;
     uint32_t failedTimes_{ 0 };
 };

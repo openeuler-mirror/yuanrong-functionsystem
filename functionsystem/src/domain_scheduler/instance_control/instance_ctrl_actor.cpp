@@ -20,7 +20,7 @@
 #include "async/defer.hpp"
 #include "common/constants/actor_name.h"
 #include "common/create_agent_decision/create_agent_decision.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "nlohmann/json.hpp"
 
 namespace functionsystem::domain_scheduler {
@@ -67,12 +67,13 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
                         }
                         if (!status.IsOk()) {
                             return ScheduleResult{
-                                "", static_cast<int32_t>(status.StatusCode()), value + status.RawMessage(), {}, "", {}};
+                                "", static_cast<int32_t>(status.StatusCode()), value + status.RawMessage(),
+                                {}, "", {}, {}};
                         }
                         return ScheduleResult{
                             "", static_cast<int32_t>(StatusCode::ERR_SCHEDULE_CANCELED),
                             value + "the possible cause is that the scheduling queue is busy or the scheduling timeout"
-                            " configuration is not proper.", {}, "", {}};
+                            " configuration is not proper.", {}, "", {}, {}};
                     });
             });
     }
@@ -86,7 +87,6 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     uint32_t dispatchTimes)
 {
     schedulerQueueMap_.erase(req->requestid());
-    (void)cancelTag_.erase(req->requestid());
     auto schedResult = result.Get();
     if (schedResult.code == static_cast<int32_t>(StatusCode::INVALID_RESOURCE_PARAMETER)) {
         if (isHeader_) {
@@ -103,12 +103,24 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
         schedResult.code == static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID)) {
         return BuildErrorScheduleRsp(schedResult, req);
     }
+    (void)cancelTag_.erase(req->requestid());
     YRLOG_DEBUG("{}|{}|scheduler({}) is selected", req->traceid(), req->requestid(), schedResult.id);
     auto promise = litebus::Promise<std::shared_ptr<messages::ScheduleResponse>>();
+    ASSERT_IF_NULL(resourceViewMgr_);
     ASSERT_IF_NULL(underlayer_);
-    (void)underlayer_->DispatchSchedule(schedResult.id, req)
-        .OnComplete(litebus::Defer(GetAID(), &InstanceCtrlActor::CheckIsNeedReDispatch, std::placeholders::_1, promise,
-                                   schedResult, req, dispatchTimes));
+    req->mutable_candidateresult()->set_unitid(schedResult.unitID);
+    (void)resourceViewMgr_->GetInf(resource_view::GetResourceType(req->instance()))
+        ->GetUnitSnapshotInfo(schedResult.id)
+        .Then([aid(GetAID()), req, underlayer(underlayer_), promise, schedResult,
+               dispatchTimes](const resource_view::PullResourceRequest &snapshot) {
+            req->mutable_unitsnapshot()->set_version(snapshot.version());
+            req->mutable_unitsnapshot()->set_localviewinittime(snapshot.localviewinittime());
+            (void)underlayer->DispatchSchedule(schedResult.id, req)
+                .OnComplete(litebus::Defer(aid, &InstanceCtrlActor::CheckIsNeedReDispatch, std::placeholders::_1,
+                                           promise, schedResult, req, dispatchTimes));
+            return Status::OK();
+        });
+
     return promise.GetFuture();
 }
 
@@ -228,6 +240,7 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
         // success schedule or unknown error, such as INSTANCE_TRANSACTION_WRONG_VERSION don't retry
         (void)waitAgentCreatRetryTimes_.erase(req->requestid());
         (void)requestTrySchedTimes_.erase(req->requestid());
+        (void)cancelTag_.erase(req->requestid());
         return rsp;
     }
 
@@ -258,6 +271,7 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
         YRLOG_ERROR("{}|{}|timeout to find a suitable scheduler", req->traceid(), req->requestid());
         (void)waitAgentCreatRetryTimes_.erase(req->requestid());
         (void)requestTrySchedTimes_.erase(req->requestid());
+        (void)cancelTag_.erase(req->requestid());
         return rsp;
     }
 
@@ -273,6 +287,7 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     }
     (void)waitAgentCreatRetryTimes_.erase(req->requestid());
     (void)requestTrySchedTimes_.erase(req->requestid());
+    (void)cancelTag_.erase(req->requestid());
     return rsp;
 }
 
@@ -364,6 +379,7 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
         YRLOG_ERROR("{}|{}|failed to get CreateAgentResponse", req->traceid(), req->requestid());
         (void)waitAgentCreatRetryTimes_.erase(req->requestid());
         (void)requestTrySchedTimes_.erase(req->requestid());
+        (void)cancelTag_.erase(req->requestid());
         return scheduleRsp;
     }
 
@@ -372,6 +388,7 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
                     response->message());
         (void)waitAgentCreatRetryTimes_.erase(req->requestid());
         (void)requestTrySchedTimes_.erase(req->requestid());
+        (void)cancelTag_.erase(req->requestid());
         // scale up by poolID, just return original response, not set createAgent resp
         if (!NeedCreateAgentByPoolID(req->instance())) {
             scheduleRsp->set_code(response->code());

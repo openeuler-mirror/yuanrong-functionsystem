@@ -18,7 +18,7 @@
 
 #include <async/uuid_generator.hpp>
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem::global_scheduler {
 

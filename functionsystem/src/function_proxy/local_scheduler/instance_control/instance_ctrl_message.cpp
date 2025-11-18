@@ -15,8 +15,8 @@
  */
 #include "instance_ctrl_message.h"
 
-#include "metadata/metadata.h"
 #include "common/utils/struct_transfer.h"
+#include "common/metadata/metadata.h"
 
 namespace functionsystem {
 using namespace messages;
@@ -100,4 +100,13 @@ void BuildDeploySpec(const FunctionMeta &funcMeta,
     spec->set_storagetype(funcMeta.codeMetaData.storageType);
 }
 
+std::shared_ptr<messages::StaticFunctionChangeRequest> GetStaticFunctionChangeRequest(const InstanceInfo &instanceInfo,
+                                                                                      int32_t status)
+{
+    auto staticFunctionChangeRequest = std::make_shared<messages::StaticFunctionChangeRequest>();
+    staticFunctionChangeRequest->set_instanceid(instanceInfo.instanceid());
+    staticFunctionChangeRequest->set_requestid(instanceInfo.requestid());
+    staticFunctionChangeRequest->set_status(status);
+    return staticFunctionChangeRequest;
+}
 }  // namespace functionsystem

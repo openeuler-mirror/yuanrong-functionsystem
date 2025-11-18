@@ -17,15 +17,15 @@
 #ifndef RUNTIME_MANAGER_DRIVER_RUNTIME_MANAGER_DRIVER_H
 #define RUNTIME_MANAGER_DRIVER_RUNTIME_MANAGER_DRIVER_H
 
-#include "module_driver.h"
-#include "http/http_server.h"
+#include "common/utils/module_driver.h"
+#include "common/http/http_server.h"
 #include "runtime_manager/config/flags.h"
 #include "runtime_manager/manager/runtime_manager.h"
 
 namespace functionsystem::runtime_manager {
 class RuntimeManagerDriver : public ModuleDriver {
 public:
-    explicit RuntimeManagerDriver(const Flags &flags);
+    explicit RuntimeManagerDriver(const Flags &flags, const std::string &componentName);
 
     ~RuntimeManagerDriver() override = default;
 
@@ -40,6 +40,7 @@ private:
     std::shared_ptr<RuntimeManager> actor_;
     std::shared_ptr<HttpServer> httpServer_;
     std::shared_ptr<DefaultHealthyRouter> apiRouteRegister_;
+    std::string componentName_;
 };
 }  // namespace functionsystem::runtime_manager
 

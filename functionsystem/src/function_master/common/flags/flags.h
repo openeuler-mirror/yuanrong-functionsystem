@@ -19,7 +19,7 @@
 
 #include <async/flag_parser_impl.hpp>
 
-#include "common_flags/common_flags.h"
+#include "common/common_flags/common_flags.h"
 
 namespace functionsystem::functionmaster {
 
@@ -223,6 +223,20 @@ public:
         return agentTemplatePath_;
     }
 
+    bool GetEnableFrontendPool() const
+    {
+        return enableFrontendPool_;
+    }
+
+    [[nodiscard]] bool GetEnableAbnormalDoubleCheck() const
+    {
+        return enableAbnormalDoubleCheck_;
+    }
+
+    uint32_t GetDomainHeartbeatTimeout() const
+    {
+        return domainHeartbeatTimeoutMs_;
+    }
 protected:
     void InitScalerFlags();
     void InitMetaStoreFlags();
@@ -290,6 +304,10 @@ protected:
 
     std::string poolConfigPath_;
     std::string agentTemplatePath_;
+
+    bool enableFrontendPool_{ false };
+    bool enableAbnormalDoubleCheck_{ false };
+    uint32_t domainHeartbeatTimeoutMs_{ DEFAULT_DOMAIN_HEARTBEAT_TIMEOUT };
 };
 
 }  // namespace functionsystem::functionmaster

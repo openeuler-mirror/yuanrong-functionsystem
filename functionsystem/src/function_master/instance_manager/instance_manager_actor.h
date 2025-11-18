@@ -28,7 +28,7 @@
 #include "meta_store_client/meta_store_client.h"
 #include "common/meta_store_adapter/meta_store_operate_cacher.h"
 #include "meta_store_client/meta_store_struct.h"
-#include "resource_type.h"
+#include "common/resource_view/resource_type.h"
 #include "function_master/global_scheduler/global_sched.h"
 #include "group_manager.h"
 #include "instance_family_caches.h"
@@ -45,6 +45,7 @@ struct InstanceManagerStartParam {
     std::string servicesPath;
     std::string libPath;
     std::string functionMetaPath;
+    bool enableAbnormalDoubleCheck;
 };
 
 class InstanceManagerActor : public litebus::ActorBase, public std::enable_shared_from_this<InstanceManagerActor> {
@@ -94,6 +95,11 @@ public:
     void AddNode(const std::string &nodeName);
 
     void DelNode(const std::string &nodeName);
+
+    void SetInstancesReady();
+
+    litebus::Future<std::pair<std::string, std::shared_ptr<InstanceInfo>>> GetInstanceInfoByID(
+        const std::string &instanceID);
 
     std::pair<std::string, std::shared_ptr<InstanceInfo>> GetInstanceInfoByInstanceID(const std::string &instanceID)
     {
@@ -149,34 +155,38 @@ private:
      *
      * @param events created, modified or deleted event list
      */
-    void OnInstanceWatchEvent(const std::vector<WatchEvent> &events);
+    void OnInstanceWatchEvent(const std::vector<WatchEvent> &events, bool synced);
 
     /**
      * called when debug_instance_kv is created, modified or deleted
      * @param events created, modified or deleted event list
      */
-    void OnDebugInstanceWatchEvent(const std::vector<WatchEvent> &events);
+    void OnDebugInstanceWatchEvent(const std::vector<WatchEvent> &events, bool synced);
 
     /**
      * called when function meta is created, modified or deleted
      *
      * @param events created, modified or deleted event list
      */
-    void OnFuncMetaWatchEvent(const std::vector<WatchEvent> &events);
+    void OnFuncMetaWatchEvent(const std::vector<WatchEvent> &events, bool synced);
 
     /**
      * Get all instance and cache
      *
      * @param response to get all instance
      */
+    void GetAndWatchInstance();
+    void GetAndWatchFunctionMeta();
     void OnSyncInstance(const std::shared_ptr<GetResponse> &response);
     Status OnSyncNodes(const std::unordered_set<std::string> &nodes);
+
+    void GetAndWatchDebugInstance();
     void OnSyncDebugInstance(const std::shared_ptr<GetResponse> &response);
     void OnInstanceWatch(const std::shared_ptr<Watcher> &watcher);
 
-    void OnSyncAbnormalScheduler(const std::shared_ptr<GetResponse> &response);
+    void GetAndWatchAbnormal();
     void OnAbnormalSchedulerWatch(const std::shared_ptr<Watcher> &watcher);
-    void OnAbnormalSchedulerWatchEvent(const std::vector<WatchEvent> &events);
+    void OnAbnormalSchedulerWatchEvent(const std::vector<WatchEvent> &events, bool synced);
 
     bool CheckKillResult(const OperateResult &result, const std::string &instanceID, const std::string &requestID,
                          const litebus::AID &from);
@@ -203,6 +213,7 @@ private:
 
         auto forwardKillRequest = std::make_shared<internal::ForwardKillRequest>();
         auto requestID = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
+        killRequest.set_requestid(requestID);
         forwardKillRequest->set_requestid(requestID);
         forwardKillRequest->set_srcinstanceid(srcInstanceID);
         forwardKillRequest->set_instancerequestid(instanceInfo->requestid());
@@ -239,15 +250,21 @@ private:
     void OnLocalScheduleChange(const std::vector<WatchEvent> &events);
     void OnLocalScheduleWatch(const std::shared_ptr<Watcher> &watcher);
 
-    litebus::Future<SyncResult> ProxyAbnormalSyncer();
     litebus::Future<SyncResult> InstanceInfoSyncer();
     litebus::Future<SyncResult> FunctionMetaSyncer();
+    void DoFunctionMetaSyncer();
+    litebus::Future<SyncResult> ProxyAbnormalSyncer(const std::shared_ptr<GetResponse> &getResponse);
 
     litebus::Future<SyncResult> OnInstanceInfoSyncer(const std::shared_ptr<GetResponse> &getResponse);
     litebus::Future<SyncResult> OnFunctionMetaSyncer(const std::shared_ptr<GetResponse> &getResponse);
     litebus::Future<SyncResult> ReplayFailedInstanceOperation(int64_t revision);
-    void ReplayFailedPutOperation(std::list<litebus::Future<Status>> &futures, std::set<std::string> &erasePutKeys);
-    void ReplayFailedDeleteOperation(std::list<litebus::Future<Status>> &futures, std::set<std::string> &eraseDelKeys);
+    void ReplayFailedPutOperation(std::list<litebus::Future<Status>> &futures,
+                                  std::shared_ptr<std::set<std::string>> erasePutKeys);
+    void ReplayFailedDeleteOperation(std::list<litebus::Future<Status>> &futures,
+                                     std::shared_ptr<std::set<std::string>> eraseDelKeys);
+
+    // wrapper for lambda function executor which run in instance-manager actor
+    Status Execute(std::function<Status()> fn);
 
     void DoTryCancel(const litebus::Future<litebus::Option<NodeInfo>> &future,
                      const std::shared_ptr<messages::CancelSchedule> &cancelRequest,
@@ -259,6 +276,8 @@ private:
     void ClearAbnormalSchedulerMetaInfo(const std::string &node);
 
     void ClearAbnormalScheduler(const std::string &node);
+
+    bool IsInstanceManagedByJob(const std::shared_ptr<InstanceInfo> &info);
 
 private:
     struct Member {
@@ -273,6 +292,7 @@ private:
         std::shared_ptr<Watcher> abnormalSchedulerWatcher{ nullptr };
         bool runtimeRecoverEnable{ false };
         std::vector<std::shared_ptr<Watcher>> watchers{ nullptr };
+        bool enableAbnormalDoubleCheck_{ false };
         std::shared_ptr<std::unordered_set<std::string>> abnormalScheduler{ nullptr };
         std::unordered_map<std::string, litebus::Timer> abnormalDeferTimer;
         std::unordered_map<std::string, InstanceManagerMap> instances;
@@ -467,6 +487,9 @@ private:
             std::shared_ptr<messages::QueryDebugInstanceInfosRequest> req) override;
     };
 
+    litebus::Future<Status>  CheckSyncResponse(const std::shared_ptr<GetResponse> &response);
+    void CommitSuicide();
+
     std::shared_ptr<Member> member_{ nullptr };
 
     std::unordered_map<std::string, std::shared_ptr<Business>> businesses_;
@@ -476,6 +499,10 @@ private:
 
     int64_t cancelTimout_;
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<Status>>> cancelPromise_;
+
+    bool isSuicide_{ false };
+
+    litebus::Promise<bool> isInstancesReady_;
 
     friend class InstanceManagerTest;
 };  // class InstanceManagerActor

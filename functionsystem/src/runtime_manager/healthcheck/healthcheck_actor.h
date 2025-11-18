@@ -21,9 +21,9 @@
 #include <async/future.hpp>
 #include <exec/exec.hpp>
 
-#include "constants.h"
-#include "proto/pb/message_pb.h"
-#include "status/status.h"
+#include "common/constants/constants.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
 #include "common/utils/proc_fs_tools.h"
 #include "runtime_manager/config/flags.h"
 
@@ -54,6 +54,8 @@ public:
 
     void RegisterProcessExitCallback(const std::function<void(const pid_t)> &func);
 
+    void RegisterHandleLogPrefixExit(const std::function<void(const std::string)> &func);
+
     void ReapProcess();
 
     litebus::Future<Status> SendInstanceStatus(const std::string &instanceID, const std::string &runtimeID,
@@ -75,6 +77,7 @@ public:
 
     litebus::AID functionAgentAID_;
     std::function<void(const pid_t)> processExitCallback_;
+    std::function<void(const std::string)> logPrefixExitCallback_ = nullptr;
     std::unordered_map<pid_t, std::string> pid2RuntimeIDMap_;
     std::unordered_map<pid_t, std::string> instanceIDMap_;
     std::unordered_map<std::string, std::string> logMap_;

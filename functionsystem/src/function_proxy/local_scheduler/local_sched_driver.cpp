@@ -18,14 +18,12 @@
 
 #include "common/constants/actor_name.h"
 #include "meta_store_monitor/meta_store_monitor_factory.h"
-#include "param_check.h"
-#include "local_scheduler/debug_instance_info_monitor/debug_instance_info_monitor.h"
-#include "function_proxy/common/posix_auth_interceptor/posix_auth_interceptor.h"
+#include "common/utils/param_check.h"
 #include "local_scheduler/bundle_manager/bundle_mgr_actor.h"
-#include "local_scheduler/grpc_server/bus_service/bus_service.h"
+#include "local_scheduler/debug_instance_info_monitor/debug_instance_info_monitor.h"
 #include "local_scheduler/instance_control/posix_api_handler/posix_api_handler.h"
 #include "local_scheduler/local_group_ctrl/local_group_ctrl_actor.h"
-#include "local_scheduler/resource_group_controller/resource_group_ctrl_actor.h"
+#include "local_scheduler/grpc_server/bus_service/bus_service.h"
 
 namespace functionsystem::local_scheduler {
 
@@ -194,7 +192,7 @@ Status LocalSchedDriver::Start()
                                      "disable-agent-" + litebus::uuid_generator::UUID::GetRandomUUID().ToString(),
                                      "agent disabled");
         });
-    localSchedSrv_->StartPingPong();
+
     if (param_.distributedCacheClient != nullptr && param_.distributedCacheClient->IsDsClientEnable()) {
         StartDsHealthyCheck();
     }
@@ -239,7 +237,7 @@ Status LocalSchedDriver::Stop()
 {
     if (param_.unRegisterWhileStop && localSchedSrv_ != nullptr && isStarted_) {
         // block to wait instance & agent to be cleared
-        localSchedSrv_->GracefulShutdown().Get();
+        (void)localSchedSrv_->GracefulShutdown().Get();
     }
     if (dsHealthyChecker_) {
         litebus::Terminate(dsHealthyChecker_->GetAID());
@@ -270,6 +268,7 @@ void LocalSchedDriver::BindInstanceCtrl()
     instanceCtrl_->BindControlInterfaceClientManager(param_.controlInterfacePosixMgr);
     instanceCtrl_->BindMetaStoreClient(metaStoreClient_);
     instanceCtrl_->BindLocalSchedSrv(localSchedSrv_);
+    instanceCtrl_->BindInternalIAM(param_.internalIAM);
     instanceCtrl_->BindResourceGroupCtrl(rGroupCtrl_);
     instanceCtrl_->BindSubscriptionMgr(subscriptionMgr_);
 }
@@ -281,12 +280,12 @@ void LocalSchedDriver::StartDsHealthyCheck()
 
     dsHealthyChecker_ = std::make_shared<DsHealthyChecker>(param_.dsHealthCheckInterval, param_.maxDsHealthCheckTimes,
                                                            param_.distributedCacheClient);
-    dsHealthyChecker_->SubscribeDsHealthy([localSchedSrv(localSchedSrv_), instanceCtrl(instanceCtrl_),
-                                           funcAgentMgr(funcAgentMgr_)](const bool isHealthy) {
-        instanceCtrl->NotifyDsHealthy(isHealthy);
-        (void)localSchedSrv->NotifyDsHealthy(isHealthy);
-    });
-    (void)litebus::Spawn(dsHealthyChecker_);
+    dsHealthyChecker_->SubscribeDsHealthy(
+        [localSchedSrv(localSchedSrv_), instanceCtrl(instanceCtrl_)](const bool isHealthy) {
+            instanceCtrl->NotifyDsHealthy(isHealthy);  // evict instance on local node
+            (void)localSchedSrv->NotifyDsHealthy(isHealthy);
+        });
+    (void) litebus::Spawn(dsHealthyChecker_);
 }
 
 void LocalSchedDriver::StartDebugInstanceInfoMonitor()
@@ -311,6 +310,7 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
     }
     param_.posixGrpcServer = std::make_shared<functionsystem::grpc::CommonGrpcServer>(serverConfig);
     if (param_.enableServerMode) {
+        param_.posixService->BindInternalIAM(param_.internalIAM);
         param_.posixGrpcServer->RegisterService(param_.posixService);
     }
     BusServiceParam serviceParam{ .nodeID = param_.nodeID,

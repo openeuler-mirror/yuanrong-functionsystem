@@ -15,7 +15,7 @@
  */
 #include "domain_group_ctrl.h"
 
-#include "status/status.h"
+#include "common/status/status.h"
 #include "domain_group_control/domain_group_ctrl_actor.h"
 
 namespace functionsystem::domain_scheduler {

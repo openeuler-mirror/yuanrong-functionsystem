@@ -19,7 +19,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem::runtime_manager {
 const static int MAX_PORT_NUM = 65535;

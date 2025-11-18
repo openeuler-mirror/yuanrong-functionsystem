@@ -62,7 +62,7 @@ void ResourceLabelsCollector::GetInitLabelsFromEnv(std::unordered_map<std::strin
     }
 
     for (auto &it : initLabelsJson.items()) {
-        YRLOG_INFO("collected init label {}: {} from env", it.key(), initLabelsJson.at(it.key()));
+        YRLOG_INFO("collected init label {}: {} from env", it.key(), initLabelsJson.at(it.key()).dump());
         labelsMap[it.key()] = initLabelsJson.at(it.key());
     }
 }

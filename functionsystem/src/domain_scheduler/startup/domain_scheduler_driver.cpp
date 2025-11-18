@@ -19,7 +19,7 @@
 #include <nlohmann/json.hpp>
 
 #include "common/constants/actor_name.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/resource_view/resource_poller.h"
 #include "common/schedule_decision/schedule_recorder/schedule_recorder.h"
 #include "common/schedule_plugin/common/constants.h"
@@ -34,6 +34,7 @@ std::unordered_map<std::string, std::unordered_set<std::string>> PLUGINS_MAP = {
     { "Default", { DEFAULT_PREFILTER_NAME, DEFAULT_FILTER_NAME, DEFAULT_SCORER_NAME } },
     { "Heterogeneous", { DEFAULT_HETEROGENEOUS_FILTER_NAME, DEFAULT_HETEROGENEOUS_SCORER_NAME } },
     { "ResourceSelector", { RESOURCE_SELECTOR_FILTER_NAME } },
+    { "Disk", { DISK_FILTER_NAME, DISK_SCORER_NAME }},
 };
 
 std::unordered_map<std::string, std::unordered_set<std::string>> ROOT_STRICT_LABEL_PLUGINS_MAP = {
@@ -102,6 +103,7 @@ Status DomainSchedulerDriver::Start()
         param_.enableMetrics, param_.enablePrintResourceView, param_.maxPriority, param_.aggregatedStrategy);
     auto pingTimeout = param_.heartbeatTimeoutMs / 2;
     domainSrvActor_ = std::make_shared<DomainSchedSrvActor>(param_.identity, param_.metaStoreClient, pingTimeout);
+    domainSrvActor_->SetComponentName(param_.componentName);
     auto domainSrv = std::make_shared<DomainSchedSrv>(domainSrvActor_->GetAID());
     auto heartbeatInterval = param_.heartbeatTimeoutMs / DEFAULT_HEARTBEAT_TIMES;
     heartbeatInterval = heartbeatInterval == 0 ? DEFAULT_HEARTBEAT_INTERVAL : heartbeatInterval;
@@ -133,6 +135,7 @@ Status DomainSchedulerDriver::Start()
     underlayerMgrActor_->BindInstanceCtrl(instanceCtrl);
 
     instanceCtrlActor_->BindUnderlayerMgr(underlayerMgr);
+    instanceCtrlActor_->BindResourceView(resourceViewMgr_);
     instanceCtrlActor_->BindScheduler(scheduler);
     instanceCtrlActor_->BindScheduleRecorder(scheduleRecorder);
 

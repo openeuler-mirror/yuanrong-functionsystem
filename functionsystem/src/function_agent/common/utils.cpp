@@ -20,12 +20,12 @@
 #include <utils/os_utils.hpp>
 #include <utils/string_utils.hpp>
 
-#include "constants.h"
+#include "common/aksk/aksk_util.h"
+#include "common/constants/constants.h"
 #include "common/create_agent_decision/create_agent_decision.h"
-#include "logs/logging.h"
-#include "metadata/metadata.h"
+#include "common/logs/logging.h"
+#include "common/metadata/metadata.h"
 #include "common/utils/struct_transfer.h"
-#include "constants.h"
 
 namespace functionsystem::function_agent {
 const static std::string RUNTIME_ENV_PREFIX = "func-";
@@ -33,7 +33,7 @@ const static std::string RUNTIME_ENV_PREFIX = "func-";
 const std::string DEV_CLUSTER_IPS_KEY = "dev_cluster_ips";  // NOLINT
 const std::string CRYPTO_ALGORITHM_STR = "cryptoAlgorithm";
 const std::string ENV_KEY = "envKey";
-const int CONVERSION = 20;   // MB -> TB
+const int CONVERSION = 20;  // MB -> TB
 const int DEFAULT_QUOTA = 512;
 const int QUOTA_NO_MONITOR = -1;
 const std::unordered_set<std::string> DECRYPT_IGNORE_SET = { CRYPTO_ALGORITHM_STR, ENV_KEY };
@@ -48,7 +48,8 @@ const std::vector<std::string> POSIX_ENV_KEYS = { YR_APP_MODE,
                                                   ENV_DELEGATE_BOOTSTRAP,
                                                   YR_DEBUG_CONFIG,
                                                   CONDA_PREFIX,
-                                                  CONDA_DEFAULT_ENV };
+                                                  CONDA_DEFAULT_ENV,
+                                                  SHARED_DIRECTORY_PATH };
 const std::vector<std::string> USER_ENV_KEYS = { S3_DEPLOY_DIR };
 
 std::shared_ptr<messages::DeployRequest> SetDeployRequestConfig(
@@ -83,6 +84,15 @@ void AddHeteroConfig(const std::shared_ptr<messages::DeployInstanceRequest> &req
     auto gpuIDsIter = req->mutable_createoptions()->find("func-GPU-DEVICE-IDS");
     if (gpuIDsIter != req->mutable_createoptions()->end()) {
         (*runtimeConf.mutable_userenvs())["func-GPU-DEVICE-IDS"] = gpuIDsIter->second;
+    }
+}
+
+void AddDiskConfig(const std::shared_ptr<messages::DeployInstanceRequest> &req, messages::RuntimeConfig &runtimeConf)
+{
+    auto envKey = RUNTIME_ENV_PREFIX + resource_view::DISK_MOUNT_POINT;
+    auto diskMountPointIter = req->mutable_createoptions()->find(envKey);
+    if (diskMountPointIter != req->mutable_createoptions()->end()) {
+        (*runtimeConf.mutable_userenvs())[envKey] = diskMountPointIter->second;
     }
 }
 
@@ -163,6 +173,7 @@ messages::RuntimeConfig SetRuntimeConfig(const std::shared_ptr<messages::DeployI
     (*runtimeConf.mutable_resources()) = req->resources();
 
     AddHeteroConfig(req, runtimeConf);
+    AddDiskConfig(req, runtimeConf);
     AddDefaultEnv(req, runtimeConf);
     // Get the specific value from createOptions as posixEnv value.
     for (const std::string &str : POSIX_ENV_KEYS) {
@@ -310,6 +321,27 @@ void SetTLSConfig(const std::shared_ptr<messages::DeployInstanceRequest> &req, m
     runtimeConf.mutable_tlsconfig()->set_dsclientpublickey(req->runtimedsclientpublickey());
     runtimeConf.mutable_tlsconfig()->set_dsclientprivatekey(req->runtimedsclientprivatekey());
     runtimeConf.mutable_tlsconfig()->set_dsserverpublickey(req->runtimedsserverpublickey());
+    SetTenantCredConfig(req, runtimeConf);
+    YRLOG_INFO("{}|put credential: {} into runtime", req->tenantid(),
+               SensitiveValue(runtimeConf.tlsconfig().tenantcredentials().secretkey()).GetMaskData());
+}
+
+void SetTenantCredConfig(const std::shared_ptr<messages::DeployInstanceRequest> &req,
+                         messages::RuntimeConfig &runtimeConf)
+{
+    if (req->tenantcredentials().accesskey().empty() || !req->tenantcredentials().iscredential()) {
+        YRLOG_DEBUG("tenant credentials is empty, skip");
+        return;
+    }
+
+    auto tenantCredentials = runtimeConf.mutable_tlsconfig()->mutable_tenantcredentials();
+    auto componentDK = GetComponentDataKey();
+    YRLOG_WARN("{}|no component data key, do not decrypt credential", req->requestid());
+    tenantCredentials->set_iscredential(req->tenantcredentials().iscredential());
+    tenantCredentials->set_accesskey(req->tenantcredentials().accesskey());
+    tenantCredentials->set_secretkey(req->tenantcredentials().secretkey());
+    tenantCredentials->set_datakey(req->tenantcredentials().datakey());
+    return;
 }
 
 void SetDeploymentConfig(messages::DeploymentConfig *deploymentConf,
@@ -542,8 +574,8 @@ void ParseMountConfig(messages::RuntimeConfig &runtimeConfig, const std::string 
         if (user.find(MOUNT_USER_ID) != user.end() && user.at(MOUNT_USER_ID).is_number_integer()) {
             mountUser->set_userid(user.at(MOUNT_USER_ID));
         }
-        if (user.find(functionsystem::MOUNT_USER_GROUP_ID) != user.end() &&
-            user.at(functionsystem::MOUNT_USER_GROUP_ID).is_number_integer()) {
+        if (user.find(functionsystem::MOUNT_USER_GROUP_ID) != user.end()
+            && user.at(functionsystem::MOUNT_USER_GROUP_ID).is_number_integer()) {
             mountUser->set_groupid(user.at(functionsystem::MOUNT_USER_GROUP_ID));
         }
     }
@@ -553,19 +585,19 @@ void ParseMountConfig(messages::RuntimeConfig &runtimeConfig, const std::string 
         for (auto &m : funcMounts) {
             auto funcMount = funcMountConfig->add_funcmounts();
             if (m.find(FUNC_MOUNT_TYPE) != m.end()) {
-                funcMount->set_mounttype(m.at(FUNC_MOUNT_TYPE));
+                funcMount->set_mounttype(std::string(m.at(FUNC_MOUNT_TYPE)));
             }
             if (m.find(FUNC_MOUNT_RESOURCE) != m.end()) {
-                funcMount->set_mountresource(m.at(FUNC_MOUNT_RESOURCE));
+                funcMount->set_mountresource(std::string(m.at(FUNC_MOUNT_RESOURCE)));
             }
             if (m.find(FUNC_MOUNT_SHARE_PATH) != m.end()) {
-                funcMount->set_mountsharepath(m.at(FUNC_MOUNT_SHARE_PATH));
+                funcMount->set_mountsharepath(std::string(m.at(FUNC_MOUNT_SHARE_PATH)));
             }
             if (m.find(FUNC_MOUNT_LOCAL_MOUNT_PATH) != m.end()) {
-                funcMount->set_localmountpath(m.at(FUNC_MOUNT_LOCAL_MOUNT_PATH));
+                funcMount->set_localmountpath(std::string(m.at(FUNC_MOUNT_LOCAL_MOUNT_PATH)));
             }
             if (m.find(FUNC_MOUNT_STATUS) != m.end()) {
-                funcMount->set_status(m.at(FUNC_MOUNT_STATUS));
+                funcMount->set_status(std::string(m.at(FUNC_MOUNT_STATUS)));
             }
         }
     }

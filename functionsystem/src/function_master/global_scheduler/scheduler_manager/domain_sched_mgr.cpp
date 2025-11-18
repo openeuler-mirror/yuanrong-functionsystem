@@ -22,9 +22,10 @@
 
 namespace functionsystem::global_scheduler {
 
-DomainSchedMgr::DomainSchedMgr()
+DomainSchedMgr::DomainSchedMgr(const uint32_t heartbeatTimeoutMs)
 {
-    domainSchedMgrActor_ = std::make_shared<DomainSchedMgrActor>(DOMAIN_SCHED_MGR_ACTOR_NAME);
+    domainSchedMgrActor_ =
+        std::make_shared<DomainSchedMgrActor>(DOMAIN_SCHED_MGR_ACTOR_NAME, heartbeatTimeoutMs);
 }
 
 DomainSchedMgr::DomainSchedMgr(std::shared_ptr<DomainSchedMgrActor> domainSchedMgrActor)

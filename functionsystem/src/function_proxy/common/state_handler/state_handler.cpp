@@ -17,7 +17,7 @@
 #include "state_handler.h"
 
 #include "async/async.hpp"
-#include "rpc/stream/posix/control_client.h"
+#include "common/rpc/stream/posix/control_client.h"
 #include "common/utils/generate_message.h"
 
 namespace functionsystem::function_proxy {
@@ -89,4 +89,21 @@ litebus::Future<std::shared_ptr<StreamingMessage>> StateHandler::LoadState(
             return response;
         });
 }
+
+litebus::Future<Status> StateHandler::DeleteState(const std::string &instanceId)
+{
+    YRLOG_INFO("state handler receive delete state from instance({})", instanceId);
+    if (instanceId.empty()) {
+        YRLOG_ERROR("failed to delete state: empty instance id");
+        return Status(StatusCode::ERR_INSTANCE_INFO_INVALID, "load state failed: empty instance id");
+    }
+
+    if (stateActorAid_.Name().empty()) {
+        YRLOG_ERROR("failed to delete state: don't init state actor");
+        return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "delete state failed: don't init state actor");
+    }
+
+    return litebus::Async(stateActorAid_, &StateActor::DeleteState, instanceId);
+}
+
 }  // namespace functionsystem::function_proxy

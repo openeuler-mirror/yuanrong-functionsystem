@@ -20,8 +20,8 @@
 #include "actor/actor.hpp"
 #include "async/future.hpp"
 #include "async/option.hpp"
-#include "resource_type.h"
-#include "status/status.h"
+#include "common/resource_view/resource_type.h"
+#include "common/status/status.h"
 
 namespace functionsystem::function_proxy {
 class ObserverActor;

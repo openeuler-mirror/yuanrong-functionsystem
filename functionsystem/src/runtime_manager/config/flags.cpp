@@ -18,13 +18,13 @@
 
 #include <climits>
 
-#include "common/utils/exec_utils.h"
-#include "param_check.h"
+#include "common/utils/param_check.h"
 #include "utils/os_utils.hpp"
 
 namespace functionsystem::runtime_manager {
 
 const static std::string DEFAULT_RUNTIME_PATH = "/home/snuser";
+const static std::string DEFAULT_SNUSER_LIB_PATH = "/home/snuser/lib";
 const static double DEFAULT_METRICS_CPU = 1000;
 const double MIN_METRICS_CPU = 0;
 const double MAX_METRICS_CPU = 1000000;
@@ -45,7 +45,7 @@ const int MAX_DISK_LIMIT = 1024 * 1024;
 const int DEFAULT_MAX_LOG_SIZE_MB = 40;
 const int DEFAULT_MAX_LOG_FILE_NUM = 20;
 
-const uint32_t DEFAULT_RUNTIME_DS_CONNECT_TIMEOUT = 1800; // s
+const uint32_t DEFAULT_RUNTIME_DS_CONNECT_TIMEOUT = 60; // s
 
 const int MIN_MEMORY_DETECTION_INTERVAL = 100; // ms
 
@@ -89,11 +89,13 @@ void Flags::AddConfigFlags()
     AddFlag(&Flags::runtimeDsConnectTimeout_, "runtime_ds_connect_timeout",
             "runtime ds-client connection timeout in second", DEFAULT_RUNTIME_DS_CONNECT_TIMEOUT,
             NumCheck(static_cast<uint32_t>(1), UINT_MAX));
+    AddFlag(&Flags::diskResources_, "disk_resources", "JSON-formatted string specifying disk resources", "");
 }
 
 Flags::Flags()
 {
     AddFlag(&Flags::runtimePath_, "runtime_dir", "init runtime dir for runtimes", DEFAULT_RUNTIME_PATH, RealPath());
+    AddFlag(&Flags::snuserLibDir_, "snuser_lib_dir", "init runtime dir for runtimes", DEFAULT_SNUSER_LIB_PATH);
     AddFlag(&Flags::runtimeLogsPath_, "runtime_logs_dir", "init runtime logs dir for runtimes", DEFAULT_RUNTIME_PATH,
             RealPath());
     AddFlag(&Flags::runtimeStdLogDir_, "runtime_std_log_dir", "runtime std log dir", "");
@@ -142,12 +144,15 @@ Flags::Flags()
             std::string("22773"), FlagCheckWrraper(IsPortValid));
     AddFlag(&Flags::runtimeUID_, "runtime_uid", "runtime user id", DEFAULT_USER_ID);
     AddFlag(&Flags::runtimeGID_, "runtime_gid", "runtime group id", DEFAULT_GROUP_ID);
+    AddFlag(&Flags::virtualEnvIdleTimeLimit_, "virtual_env_idle_time_limit", "virtual env idle time limit",
+            DEFAULT_VIRTUAL_ENV_IDLE_TIME_LIMIT, NumCheck(-1, INT_MAX));
     AddFlag(&Flags::npuCollectionMode_, "npu_collection_mode", "npu collect mode", "all");
     AddFlag(&Flags::gpuCollectionEnable_, "gpu_collection_enable", "enable gpu collection", false);
     AddFlag(&Flags::isProtoMsgToRuntime_, "is_protomsg_to_runtime", "", false);
     AddFlag(&Flags::massifEnable_, "massif_enable", "valgrind massif enable", false);
     AddFlag(&Flags::inheritEnv_, "enable_inherit_env", "enable runtime to inherit env from runtime-manager", false);
     AddFlag(&Flags::logExpirationEnable_, "log_expiration_enable", "enable runtime log expiration", false);
+    AddFlag(&Flags::logReuseEnable_, "log_reuse_enable", "enable runtime log prefix reuse", false);
     AddFlag(&Flags::logExpirationCleanupInterval_, "log_expiration_cleanup_interval",
             "Check the time interval for expired logs, unit in seconds, default is 10 minutes",
             DEFAULT_LOG_EXPIRATION_CLEANUP_INTERVAL, NumCheck(0, INT_MAX));
@@ -163,6 +168,8 @@ Flags::Flags()
             "enable to redirect standard output of runtime separated. etc. {runtimeID}.out {runtimeID}.err", false);
     AddFlag(&Flags::runtimeDirectConnectionEnable_, "runtime_direct_connection_enable",
             "enable direct runtime connection will allocate a server port for runtime", false);
+    AddFlag(&Flags::cleanStreamProducerEnable_, "enable_clean_stream_producer",
+            "whether clean stream producer, default is true", true);
     AddOomFlags();
     AddConfigFlags();
     AddFlag(&Flags::killProcessTimeoutSeconds_, "kill_process_timeout_seconds",

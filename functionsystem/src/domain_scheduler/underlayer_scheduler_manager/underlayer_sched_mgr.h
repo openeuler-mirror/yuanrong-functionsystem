@@ -20,8 +20,8 @@
 #include <async/future.hpp>
 #include <litebus.hpp>
 
-#include "proto/pb/message_pb.h"
-#include "status/status.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
 
 namespace functionsystem::domain_scheduler {
 class UnderlayerSchedMgr {

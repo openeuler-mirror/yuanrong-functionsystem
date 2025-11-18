@@ -20,12 +20,12 @@
 #include <async/defer.hpp>
 
 #include "common/constants/actor_name.h"
-#include "constants.h"
+#include "common/constants/constants.h"
 #include "common/constants/metastore_keys.h"
 #include "common/explorer/explorer.h"
-#include "logs/logging.h"
-#include "metrics/metrics_adapter.h"
-#include "resource_type.h"
+#include "common/logs/logging.h"
+#include "common/metrics/metrics_adapter.h"
+#include "common/resource_view/resource_type.h"
 
 namespace functionsystem::domain_scheduler {
 const uint32_t DEFAULT_REGISTER_INTERVAL = 5000;
@@ -50,16 +50,26 @@ DomainSchedSrvActor::DomainSchedSrvActor(const std::string &name,
       putReadyResCycleMs_(putReadyResCycleMs ? putReadyResCycleMs : PUT_READY_RES_CYCLE_MS),
       receivedPingTimeout_(receivedPingTimeout ? receivedPingTimeout : DEFAULT_PING_RECEIVE_LOST_TIMEOUT)
 {
-    YRLOG_INFO("start domain {} ping pong actor.", name);
-    pingpong_ =
-        std::make_unique<PingPongDriver>(name, receivedPingTimeout_,
-                                         // while connection lost, try to register
-                                         [aid(GetAID())](const litebus::AID &lostDst, HeartbeatConnection type) {
-                                             litebus::Async(aid, &DomainSchedSrvActor::PingPongLost, lostDst, type);
-                                         });
 }
 
-void DomainSchedSrvActor::PingPongLost(const litebus::AID &lostDst, HeartbeatConnection)
+void DomainSchedSrvActor::StartPingPong(const std::string &address)
+{
+    if (pingpong_ == nullptr) {
+        pingpong_ = std::make_unique<HeartbeatClientDriver>(
+            litebus::os::Join(componentName_, domainName_, '-'),
+            // while connection lost, try to register
+            [aid(GetAID()), domainName = domainName_](const litebus::AID &lostDst) {
+                YRLOG_WARN("pingpong {} timeout, from domain to master. dst: {}", domainName, std::string(lostDst));
+                litebus::Async(aid, &DomainSchedSrvActor::PingPongLost, lostDst);
+            });
+    }
+    litebus::AID heartBeatAID(HEARTBEAT_OBSERVER_BASENAME + DOMAIN_UNDERLAYER_SCHED_MGR_ACTOR_NAME, address);
+    YRLOG_INFO("start domain {} ping pong actor. address: {}", domainName_, std::string(heartBeatAID));
+
+    (void)pingpong_->Start(heartBeatAID);
+}
+
+void DomainSchedSrvActor::PingPongLost(const litebus::AID &lostDst)
 {
     // while connection lost, try to register
     if (lostDst == uplayer_.aid) {
@@ -295,21 +305,21 @@ void DomainSchedSrvActor::Registered(const litebus::AID &from, std::string &&nam
         message.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
     }
     if (from.Name() == global_.aid.Name()) {
+        ASSERT_IF_NULL(instanceCtrl_);
+        ASSERT_IF_NULL(underlayer_);
+        ASSERT_IF_NULL(resourceViewMgr_);
         Registered(message, global_);
         if (message.topo().has_leader()) {
             auto leader = message.topo().leader();
             UpdateLeader(leader.name(), leader.address());
         } else {
             PutReadyResCycle();
-            ASSERT_IF_NULL(instanceCtrl_);
-            ASSERT_IF_NULL(underlayer_);
             isHeader_ = true;
             instanceCtrl_->SetDomainLevel(true);
             underlayer_->SetDomainLevel(isHeader_);
             resourceViewMgr_->GetInf()->UpdateIsHeader(isHeader_);
             metrics::MetricsAdapter::GetInstance().RegisterPodResource();
         }
-        ASSERT_IF_NULL(underlayer_);
         underlayer_->UpdateUnderlayerTopo(message.topo());
         return;
     }
@@ -327,31 +337,30 @@ void DomainSchedSrvActor::UpdateSchedTopoView(const litebus::AID &from, std::str
         YRLOG_ERROR("failed to update topo, invalid topo msg.");
         return;
     }
-
+    ASSERT_IF_NULL(resourceViewMgr_);
+    ASSERT_IF_NULL(instanceCtrl_);
+    ASSERT_IF_NULL(underlayer_);
     YRLOG_INFO("received Topo updated from {} msg {}", std::string(from), topo.ShortDebugString());
     if (topo.has_leader()) {
         UpdateLeader(topo.leader().name(), topo.leader().address());
         if (putReadyResTimer_ != nullptr) {
             (void)litebus::TimerTools::Cancel(*putReadyResTimer_);
         }
-        ASSERT_IF_NULL(instanceCtrl_);
-        ASSERT_IF_NULL(underlayer_);
         isHeader_ = false;
         instanceCtrl_->SetDomainLevel(false);
         underlayer_->SetDomainLevel(isHeader_);
         resourceViewMgr_->GetInf()->UpdateIsHeader(isHeader_);
         metrics::MetricsAdapter::GetInstance().GetMetricsContext().ErasePodResource();
+        StartPingPong(topo.leader().address());
     } else {
         PutReadyResCycle();
-        ASSERT_IF_NULL(instanceCtrl_);
-        ASSERT_IF_NULL(underlayer_);
         isHeader_ = true;
         instanceCtrl_->SetDomainLevel(true);
         underlayer_->SetDomainLevel(isHeader_);
         resourceViewMgr_->GetInf()->UpdateIsHeader(isHeader_);
         metrics::MetricsAdapter::GetInstance().RegisterPodResource();
+        StartPingPong(masterAid_.Url());
     }
-    ASSERT_IF_NULL(underlayer_);
     underlayer_->UpdateUnderlayerTopo(topo);
 }
 
@@ -767,7 +776,8 @@ void DomainSchedSrvActor::TryCancelSchedule(const litebus::AID &from, std::strin
         return;
     }
     YRLOG_INFO("received cancel schedule from {},  cancel({}) type({}) reason({}) msgid({})", std::string(from),
-               cancelRequest->id(), cancelRequest->type(), cancelRequest->reason(), cancelRequest->msgid());
+               cancelRequest->id(), fmt::underlying(cancelRequest->type()), cancelRequest->reason(),
+               cancelRequest->msgid());
     if (cancelRequest->type() == messages::CancelType::REQUEST) {
         ASSERT_IF_NULL(instanceCtrl_);
         instanceCtrl_->TryCancelSchedule(cancelRequest);
@@ -779,6 +789,11 @@ void DomainSchedSrvActor::TryCancelSchedule(const litebus::AID &from, std::strin
     auto cancelRsp = messages::CancelScheduleResponse();
     cancelRsp.set_msgid(cancelRequest->msgid());
     Send(from, "TryCancelResponse", cancelRsp.SerializeAsString());
+}
+
+void DomainSchedSrvActor::SetComponentName(const std::string &componentName)
+{
+    componentName_ = componentName;
 }
 
 }  // namespace functionsystem::domain_scheduler

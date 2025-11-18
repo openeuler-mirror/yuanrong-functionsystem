@@ -18,7 +18,7 @@
 #define RUNTIME_MANAGER_METRICS_METRICS_CLIENT_H
 
 #include "async/future.hpp"
-#include "proto/pb/message_pb.h"
+#include "common/proto/pb/message_pb.h"
 #include "runtime_manager/config/flags.h"
 #include "metrics_actor.h"
 
@@ -39,6 +39,8 @@ public:
     resources::ResourceUnit GetResourceUnit() const;
 
     void StartUpdateResource() const;
+
+    void BeginUpdateMetrics() const;
 
     void StopUpdateResource() const;
 

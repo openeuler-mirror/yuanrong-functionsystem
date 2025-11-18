@@ -22,9 +22,10 @@
 #include <nlohmann/json.hpp>
 
 #include "common/constants/signal.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
+#include "common/metrics/metrics_adapter.h"
 #include "common/resource_view/resource_tool.h"
-#include "resource_type.h"
+#include "common/resource_view/resource_type.h"
 #include "common/types/instance_state.h"
 #include "common/utils/generate_message.h"
 #include "common/utils/collect_status.h"
@@ -45,6 +46,7 @@ FunctionAgentMgrActor::FunctionAgentMgrActor(const std::string &name, const Para
       pingCycleMs_(param.pingCycleMs),
       enableTenantAffinity_(param.enableTenantAffinity),
       tenantPodReuseTimeWindow_(param.tenantPodReuseTimeWindow),
+      enableIpv4TenantIsolation_(param.enableIpv4TenantIsolation),
       invalidAgentGCInterval_(param.invalidAgentGCInterval),
       nodeID_(nodeID),
       metaStoreClient_(std::move(metaStoreClient)),
@@ -65,16 +67,6 @@ void FunctionAgentMgrActor::BindInstanceCtrl(const std::shared_ptr<InstanceCtrl>
 void FunctionAgentMgrActor::BindResourceView(const std::shared_ptr<resource_view::ResourceView> &resourceView)
 {
     resourceView_ = resourceView;
-}
-
-void FunctionAgentMgrActor::BindHeartBeatObserverCtrl(
-    const std::shared_ptr<HeartbeatObserverCtrl> &heartbeatObserverCtrl)
-{
-    if (heartbeatObserverCtrl == nullptr) {
-        heartBeatObserverCtrl_ = std::make_shared<HeartbeatObserverCtrl>(pingTimes_, pingCycleMs_);
-    } else {
-        heartBeatObserverCtrl_ = heartbeatObserverCtrl;
-    }
 }
 
 void FunctionAgentMgrActor::BindLocalSchedSrv(const std::shared_ptr<LocalSchedSrv> &localSchedSrv)
@@ -101,6 +93,8 @@ void FunctionAgentMgrActor::Init()
     Receive("UpdateLocalStatus", &FunctionAgentMgrActor::UpdateLocalStatus);
     Receive("UpdateCredResponse", &FunctionAgentMgrActor::UpdateCredResponse);
     Receive("QueryDebugInstanceInfosResponse", &FunctionAgentMgrActor::QueryDebugInstanceInfosResponse);
+    Receive("StaticFunctionScheduleRequest", &FunctionAgentMgrActor::StaticFunctionScheduleRequest);
+    Receive("NotifyFunctionStatusChangeResp", &FunctionAgentMgrActor::NotifyFunctionStatusChangeResp);
 }
 
 litebus::Future<Status> FunctionAgentMgrActor::Sync()
@@ -226,6 +220,7 @@ litebus::Future<Status> FunctionAgentMgrActor::EnableFuncAgent(const litebus::Fu
         (void)aidTable_.erase(funcAgentTable_[funcAgentID].aid);
         (void)funcAgentTable_.erase(funcAgentID);
         litebus::Async(GetAID(), &FunctionAgentMgrActor::StopHeartbeat, funcAgentID);
+        functionsystem::metrics::MetricsAdapter::GetInstance().GetMetricsContext().DeletePodResource(funcAgentID);
         if (auto resourceView = resourceView_.lock()) {
             (void)resourceView->DeleteResourceUnit(funcAgentID);
         }
@@ -284,6 +279,8 @@ litebus::Future<Status> FunctionAgentMgrActor::AddFuncAgent(const Status &status
 
 void FunctionAgentMgrActor::Register(const litebus::AID &from, string &&name, string &&msg)
 {
+    YRLOG_INFO("receive register from {}. name {} msg {}.",
+                    from.HashString(), name, msg);
     if (!IsReady()) {
         YRLOG_WARN("local_scheduler is not recovered, ignore register from {}", from.HashString());
         return;
@@ -312,6 +309,7 @@ void FunctionAgentMgrActor::Register(const litebus::AID &from, string &&name, st
             Send(from, "Registered", std::move(resp.SerializeAsString()));
         } else {
             YRLOG_WARN("function agent ({}) is recovering, drop its registration request.", funcAgentID);
+            ResetHeartbeat(funcAgentID, address);
         }
         return;
     }
@@ -447,6 +445,9 @@ void FunctionAgentMgrActor::UpdateResources(const litebus::AID &from, string &&,
     if (!ValidateUpdateResourcesRequest(req, from)) {
         return;
     }
+
+    functionsystem::metrics::MetricsAdapter::GetInstance().GetMetricsContext().SetPodResource(
+        aidTable_[from], req.resourceunit());
 
     // set resource labels into instance info
     auto nodelabels = std::map<std::string, resources::Value::Counter>(req.resourceunit().nodelabels().begin(),
@@ -683,6 +684,104 @@ litebus::Future<messages::DeployInstanceResponse> FunctionAgentMgrActor::DeployI
     return notifyPromise->GetFuture();
 }
 
+litebus::Future<messages::StaticFunctionChangeResponse> FunctionAgentMgrActor::NotifyFunctionStatusChange(
+    const std::shared_ptr<messages::StaticFunctionChangeRequest> &request, const string &funcAgentID)
+{
+    ASSERT_IF_NULL(request);
+    auto &requestID = request->requestid();
+    const auto fcAgent = funcAgentTable_.find(funcAgentID);
+    if (fcAgent == funcAgentTable_.end()) {
+        auto &instanceID = request->instanceid();
+        messages::StaticFunctionChangeResponse response = GenStaticFunctionChangeResponse(
+            StatusCode::ERR_INNER_COMMUNICATION, "function agent is not register", requestID, instanceID);
+        YRLOG_ERROR("{}|failed to notify instance {} status change, function agent {} is not registered.", requestID,
+                    instanceID, funcAgentID);
+        return response;
+    }
+
+    auto notifyPromise = std::make_shared<instanceStatusNotifyPromise>();
+    auto emplaceResult =
+        instanceHealthyNotifyPromise_[funcAgentID].emplace(requestID, std::make_pair(notifyPromise, 0));
+    if (!emplaceResult.second) {
+        YRLOG_INFO("{}|request ID is repeat.", requestID);
+        return instanceHealthyNotifyPromise_[funcAgentID][requestID].first->GetFuture();
+    }
+
+    YRLOG_INFO("{}|send request to agent({}) to change instance({}) status to ({}).", requestID, funcAgentID,
+               request->instanceid(), request->status());
+    Send(fcAgent->second.aid, "NotifyFunctionStatusChange", request->SerializeAsString());
+
+    litebus::AsyncAfter(retryCycleMs_, GetAID(), &FunctionAgentMgrActor::RetryNotifyFunctionStatus, requestID,
+                        funcAgentID, request);
+
+    return notifyPromise->GetFuture();
+}
+
+void FunctionAgentMgrActor::RetryNotifyFunctionStatus(
+    const string &requestID, const string &funcAgentID,
+    const std::shared_ptr<messages::StaticFunctionChangeRequest> &request)
+{
+    auto healthyNotifyPromise = instanceHealthyNotifyPromise_.find(funcAgentID);
+    if (healthyNotifyPromise == instanceHealthyNotifyPromise_.end()
+        || healthyNotifyPromise->second.find(requestID) == healthyNotifyPromise->second.end()
+        || healthyNotifyPromise->second[requestID].first->GetFuture().IsOK()) {
+        YRLOG_INFO("{}|a response of notify instance status change has been received.", requestID);
+        return;
+    }
+
+    auto iter = funcAgentTable_.find(funcAgentID);
+    if (healthyNotifyPromise->second[requestID].second++ < retryTimes_ && iter != funcAgentTable_.end()) {
+        YRLOG_INFO("{}|retry to send notify instance status change, times: {}.", requestID,
+                   healthyNotifyPromise->second[requestID].second);
+        Send(funcAgentTable_[funcAgentID].aid, "NotifyFunctionStatusChange", request->SerializeAsString());
+        litebus::AsyncAfter(retryCycleMs_, GetAID(), &FunctionAgentMgrActor::RetryNotifyFunctionStatus, requestID,
+                            funcAgentID, request);
+        return;
+    }
+
+    YRLOG_ERROR("{}|the number of retry to notify instance healthy change is more than {}.", requestID, retryTimes_);
+    messages::StaticFunctionChangeResponse resp = GenStaticFunctionChangeResponse(
+        StatusCode::ERR_INNER_COMMUNICATION,
+        iter == funcAgentTable_.end() ? funcAgentID + " connection timeout" : "notify retry fail", requestID,
+        request->instanceid());
+    healthyNotifyPromise->second[requestID].first->SetValue(resp);
+    (void)healthyNotifyPromise->second.erase(requestID);
+}
+
+void FunctionAgentMgrActor::NotifyFunctionStatusChangeResp(const litebus::AID &from, string &&, string &&msg)
+{
+    messages::StaticFunctionChangeResponse resp;
+    if (msg.empty() || !resp.ParseFromString(msg)) {
+        YRLOG_WARN("invalid request body, failed to get response of notify instance status change from {}.",
+                   from.HashString());
+        return;
+    }
+
+    if (aidTable_.find(from) == aidTable_.end()) {
+        YRLOG_WARN("no agent matches {}, failed to get response of notify instance status change.", std::string(from));
+        return;
+    }
+    auto funcAgentID = aidTable_[from];
+    auto healthyNotifyPromise = instanceHealthyNotifyPromise_.find(funcAgentID);
+    if (healthyNotifyPromise == instanceHealthyNotifyPromise_.end()) {
+        YRLOG_WARN("no funcAgentID {} matches result! failed to get response of notify instance status change.",
+                   funcAgentID);
+        return;
+    }
+
+    auto requestID(resp.requestid());
+    if (auto iter(healthyNotifyPromise->second.find(requestID));
+        iter == healthyNotifyPromise->second.end() || iter->second.first == nullptr) {
+        YRLOG_WARN("no requestID {} matches result! failed to get response of notify instance.", requestID);
+        return;
+    }
+
+    healthyNotifyPromise->second[requestID].first->SetValue(resp);
+    (void)healthyNotifyPromise->second.erase(requestID);
+
+    YRLOG_INFO("{}|notify instance status change instance({}) successfully ", requestID, resp.instanceid());
+}
+
 litebus::Future<messages::KillInstanceResponse> FunctionAgentMgrActor::KillInstance(
     const std::shared_ptr<messages::KillInstanceRequest> &request, const string &funcAgentID, bool isRecovering)
 {
@@ -781,6 +880,7 @@ void FunctionAgentMgrActor::TimeoutEvent(const string &funcAgentID)
         (void)monopolyAgents_.erase(funcAgentID);
     }
 
+    functionsystem::metrics::MetricsAdapter::GetInstance().GetMetricsContext().DeletePodResource(funcAgentID);
     if (auto resourceView = resourceView_.lock()) {
         (void)resourceView->DeleteResourceUnit(funcAgentID);
     }
@@ -802,6 +902,16 @@ void FunctionAgentMgrActor::TimeoutEvent(const string &funcAgentID)
         deployNotifyPromise_.erase(funcAgentID);
     }
 
+    if (auto iter = instanceHealthyNotifyPromise_.find(funcAgentID); iter != instanceHealthyNotifyPromise_.end()) {
+        for (auto promise : iter->second) {
+            messages::StaticFunctionChangeResponse response = GenStaticFunctionChangeResponse(
+                StatusCode::ERR_INNER_COMMUNICATION, "function agent exited", promise.first, "");
+            promise.second.first->SetValue(response);
+        }
+        iter->second.clear();
+        instanceHealthyNotifyPromise_.erase(funcAgentID);
+    }
+
     if (auto iter = killNotifyPromise_.find(funcAgentID); iter != killNotifyPromise_.end()) {
         for (auto promise : iter->second) {
             messages::KillInstanceResponse response =
@@ -818,12 +928,46 @@ void FunctionAgentMgrActor::TimeoutEvent(const string &funcAgentID)
     StopHeartbeat(funcAgentID);
 }
 
+void FunctionAgentMgrActor::ResetHeartbeat(const string &funcAgentID, const string &address)
+{
+    if (pingPongAIDMap_.find(funcAgentID) == pingPongAIDMap_.end()) {
+        YRLOG_WARN("failed to reset heartbeat timer if function {}, addr {}, heartbeat not started", funcAgentID,
+                   address);
+        return;
+    }
+    if (heartbeatObserveDriver_ == nullptr) {
+        YRLOG_WARN("failed to reset heartbeat timer if function {}, addr {}, observer not started", funcAgentID,
+                   address);
+        return;
+    }
+    auto pingPongAID = pingPongAIDMap_[funcAgentID];
+    heartbeatObserveDriver_->ResetHeartbeatNode(
+        pingPongAID, DEFAULT_PING_PONG_TIMEOUT,
+        [aid(GetAID()), funcAgentID](const litebus::AID &from, HeartbeatConnection) {
+            YRLOG_WARN("heartbeat timeout, from agent to proxy. from: {}.", std::string(from));
+            litebus::Async(aid, &FunctionAgentMgrActor::TimeoutEvent, funcAgentID);
+        });
+}
+
 litebus::Future<Status> FunctionAgentMgrActor::StartHeartbeat(const string &funcAgentID, const string &address)
 {
-    RETURN_STATUS_IF_NULL(heartBeatObserverCtrl_, StatusCode::FAILED, "heart beat observer is nullptr");
-    return heartBeatObserverCtrl_->Add(funcAgentID, address, [aid(GetAID()), funcAgentID](const litebus::AID &) {
-        litebus::Async(aid, &FunctionAgentMgrActor::TimeoutEvent, funcAgentID);
-    });
+    litebus::AID pingPongAID = litebus::AID(
+        HEARTBEAT_CLIENT_BASENAME + litebus::os::Join(COMPONENT_NAME_FUNCTION_AGENT, funcAgentID, '-'), address);
+    pingPongAID.SetProtocol(litebus::BUS_TCP);
+    if (heartbeatObserveDriver_ == nullptr) {
+        heartbeatObserveDriver_ = std::make_shared<HeartbeatObserveDriver>(FUNCTION_AGENT_AGENT_MGR_ACTOR_NAME);
+    }
+
+    heartbeatObserveDriver_->AddNewHeartbeatNode(
+        pingPongAID, pingCycleMs_ * pingTimes_,
+        [aid(GetAID()), funcAgentID](const litebus::AID &from, HeartbeatConnection) {
+            YRLOG_WARN("heartbeat timeout, from agent to proxy. from: {}.", std::string(from));
+            litebus::Async(aid, &FunctionAgentMgrActor::TimeoutEvent, funcAgentID);
+        });
+    
+    pingPongAIDMap_[funcAgentID] = pingPongAID;
+
+    return Status(StatusCode::SUCCESS);
 }
 
 void FunctionAgentMgrActor::StopHeartbeat(const string &funcAgentID)
@@ -834,8 +978,10 @@ void FunctionAgentMgrActor::StopHeartbeat(const string &funcAgentID)
     }
     // defer to garbage collection of failed agent
     litebus::AsyncAfter(invalidAgentGCInterval_, GetAID(), &FunctionAgentMgrActor::DeferGCInvalidAgent, funcAgentID);
-    RETURN_IF_NULL(heartBeatObserverCtrl_);
-    heartBeatObserverCtrl_->Delete(funcAgentID);
+
+    if (heartbeatObserveDriver_ != nullptr) {
+        heartbeatObserveDriver_->RemoveHeartbeatNode(pingPongAIDMap_[funcAgentID]);
+    }
 }
 
 void FunctionAgentMgrActor::UpdateFuncAgentRegisInfoStatus(const string &funcAgentID,
@@ -860,6 +1006,10 @@ void FunctionAgentMgrActor::CleanupAgentResources(const std::string &agentID, bo
                                                   const std::shared_ptr<LocalSchedSrv> &localScheSrv,
                                                   const std::shared_ptr<messages::UpdateAgentStatusRequest> &req)
 {
+    if (funcAgentTable_.find(agentID) == funcAgentTable_.end()) {
+        YRLOG_WARN("try to clean up clean up agent resources, but agent id({}) doesn't exist", agentID);
+        return;
+    }
     // 1. Disable the Agent
     funcAgentTable_[agentID].isEnable = false;
 
@@ -878,7 +1028,7 @@ void FunctionAgentMgrActor::CleanupAgentResources(const std::string &agentID, bo
 
     // 4. Delete Pod as needed (with safety checks)
     if (shouldDeletePod && localScheSrv) {
-        YRLOG_ERROR(logMessage.c_str(), agentID);
+        YRLOG_INFO(logMessage.c_str(), agentID);
         localScheSrv->DeletePod(agentID, req->requestid(), req->message());
     }
 }
@@ -903,8 +1053,10 @@ void FunctionAgentMgrActor::UpdateAgentStatus(const litebus::AID &from, string &
         return;
     }
     auto localScheSrv = localSchedSrv_.lock();
-    YRLOG_INFO("{}|Update agent status code: {}, agent :{}, msg: {}",
-               req->requestid(), req->status(), agentID, req->message());
+    YRLOG_INFO("{}|Update agent status code: {}, agent :{}, msg: {}", req->requestid(), req->status(), agentID,
+               req->message());
+    Send(from, "UpdateAgentStatusResponse",
+         GenUpdateAgentStatusResponse(req->requestid(), StatusCode::SUCCESS, "").SerializeAsString());
     switch (req->status()) {
         case FUNC_AGENT_STATUS_VPC_PROBE_FAILED:
         case RUNTIME_MANAGER_DISK_USAGE_EXCEED_LIMIT:
@@ -919,8 +1071,6 @@ void FunctionAgentMgrActor::UpdateAgentStatus(const litebus::AID &from, string &
             break;
         case FUNC_AGENT_EXITED:
         case RUNTIME_MANAGER_REGISTER_FAILED:
-            Send(from, "UpdateAgentStatusResponse",
-                 GenUpdateAgentStatusResponse(req->requestid(), StatusCode::SUCCESS, "").SerializeAsString());
             CleanupAgentResources(agentID, enableTenantAffinity_,
                                   "exited agent({}) which may be tainted is going to be deleted.", localScheSrv, req);
         default:
@@ -960,7 +1110,7 @@ litebus::Future<Status> FunctionAgentMgrActor::OnSyncAgentRegisInfoParser(const 
 {
     messages::FuncAgentRegisInfoCollection funcAgentRegisInfoCollection;
     if (getResp->status.IsError()) {
-        YRLOG_ERROR("failed to get {}'s function agent info from meta storage, rest retry times {}", nodeID_);
+        YRLOG_ERROR("failed to get {}'s function agent info from meta storage", nodeID_);
         return getResp->status;
     }
 
@@ -1004,7 +1154,8 @@ void FunctionAgentMgrActor::PutAgentRegisInfo(const std::string &regisInfoStrs)
 {
     ASSERT_IF_NULL(metaStoreClient_);
     YRLOG_INFO("function agent registration infos: {}.", regisInfoStrs);
-    (void)metaStoreClient_->Put(AGENT_INFO_PATH + nodeID_, regisInfoStrs, {})
+    (void)metaStoreClient_
+        ->Put(AGENT_INFO_PATH + nodeID_, regisInfoStrs, { .leaseId = 0, .prevKv = false, .asyncBackup = false })
         .OnComplete(litebus::Defer(GetAID(), &FunctionAgentMgrActor::OnAgentInfoPut, std::placeholders::_1));
 }
 
@@ -1439,6 +1590,10 @@ void FunctionAgentMgrActor::UpdateLocalStatus(const litebus::AID &from, std::str
     if (localStatus_ == static_cast<int32_t>(req.status())) {
         return;
     }
+    if (!IsReady()) {
+        YRLOG_WARN("local isn't ready yet, ignore update local status");
+        return;
+    }
     localStatus_ = req.status();
     PutAgentRegisInfoWithProxyNodeID().OnComplete([aid(GetAID()), req, from](const litebus::Future<Status> &future) {
         if (future.IsError() || future.Get().IsError()) {
@@ -1490,6 +1645,7 @@ void FunctionAgentMgrActor::OnInstanceEvicted(const litebus::Future<Status> &fut
         NotifyEvcitResult(req->agentid(), StatusCode::SUCCESS, "agent already exited");
         return;
     }
+    functionsystem::metrics::MetricsAdapter::GetInstance().GetMetricsContext().DeletePodResource(req->agentid());
     if (auto resourceView = resourceView_.lock(); resourceView != nullptr) {
         (void)resourceView->DeleteResourceUnit(req->agentid());
     }
@@ -1561,7 +1717,7 @@ void FunctionAgentMgrActor::SetNetworkIsolation(const std::string &agentID, cons
     messages::SetNetworkIsolationRequest req;
     req.set_ruletype(type);
     req.set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
-    YRLOG_DEBUG("Notify local agent({}) SetNetworkIsolation ruleType({})", agentID, type);
+    YRLOG_DEBUG("Notify local agent({}) SetNetworkIsolation ruleType({})", agentID, fmt::underlying(type));
     for (const std::string &rule : rules) {
         req.add_rules(rule);
         YRLOG_DEBUG("rule: {}", rule);
@@ -1569,32 +1725,99 @@ void FunctionAgentMgrActor::SetNetworkIsolation(const std::string &agentID, cons
     (void)Send(funcAgentTable_[agentID].aid, "SetNetworkIsolationRequest", req.SerializeAsString());
 }
 
+void FunctionAgentMgrActor::NotifyLocalAgentsInTenant(const std::shared_ptr<TenantCache> &tenantCache,
+    const RuleType &type, std::vector<std::string> &rules, bool isClusterWide)
+{
+    for (const auto &entry : tenantCache->functionAgentCacheMap) {
+        const std::string &functionAgentID = entry.first;
+        const FunctionAgentCache &cache = entry.second;
+        if (cache.isAgentOnThisNode || isClusterWide) {
+            SetNetworkIsolation(functionAgentID, type, rules);
+        }
+    }
+}
+
 void FunctionAgentMgrActor::OnTenantFirstInstanceSchedInLocalPod(
     const std::shared_ptr<TenantCache> tenantCache, const TenantEvent &event)
 {
+    if (enableIpv4TenantIsolation_) {
+        std::vector<std::string> rules{event.agentPodIp};
+        SetNetworkIsolation(event.functionAgentID, RuleType::IPSET_ADD, rules);
+    }
 }
 
 bool FunctionAgentMgrActor::OnTenantInstanceSchedInRemotePodOnAnotherNode(
     const std::shared_ptr<TenantCache> tenantCache, const TenantEvent &event)
 {
+    if (enableIpv4TenantIsolation_) {
+        std::vector<std::string> rules{event.agentPodIp};
+        // Notify all agents under this tenant that are on this node
+        NotifyLocalAgentsInTenant(tenantCache, RuleType::IPSET_ADD, rules, false);
+    }
     return true;
 }
 
 bool FunctionAgentMgrActor::OnTenantInstanceSchedInNewPodOnCurrentNode(
     const std::shared_ptr<TenantCache> tenantCache, const TenantEvent &event)
 {
+    if (enableIpv4TenantIsolation_) {
+        std::vector<std::string> rules(tenantCache->podIps.begin(), tenantCache->podIps.end());
+        NotifyLocalAgentsInTenant(tenantCache, RuleType::IPSET_ADD, rules, false);
+    }
     return true;
 }
 
 bool FunctionAgentMgrActor::OnTenantInstanceInPodDeleted(
     const std::shared_ptr<TenantCache> tenantCache, const TenantEvent &event)
 {
+    if (enableIpv4TenantIsolation_) {
+        if (tenantCache->podIps.count(event.agentPodIp) == 0) {
+            YRLOG_ERROR("tenant({}) agent({}) pod ip({}) not in cache, need to confirm cache consistency on proxy({})",
+                event.tenantID,
+                event.functionAgentID,
+                event.agentPodIp,
+                event.functionProxyID);
+            return false;
+        }
+        if (tenantCache->functionAgentCacheMap.find(event.functionAgentID) ==
+            tenantCache->functionAgentCacheMap.end()) {
+            return false;
+        }
+        std::string agentPodIp = tenantCache->functionAgentCacheMap[event.functionAgentID].agentPodIp;
+        if (agentPodIp != event.agentPodIp) {
+            YRLOG_ERROR("tenant({}) agent({}) pod ip({}) not match ip({}) in cache",
+                event.tenantID,
+                event.functionAgentID,
+                event.agentPodIp,
+                agentPodIp);
+            return false;
+        }
+    }
     return true;
 }
 
 bool FunctionAgentMgrActor::OnTenantInstanceInPodAllDeleted(
     const std::shared_ptr<TenantCache> tenantCache, const TenantEvent& event)
 {
+    if (enableIpv4TenantIsolation_) {
+        tenantCache->podIps.erase(event.agentPodIp);
+        std::vector<std::string> rules{event.agentPodIp};
+        NotifyLocalAgentsInTenant(tenantCache, RuleType::IPSET_DELETE, rules, true);
+
+        // Flush the whitelist for reusing the agent's POD
+        std::vector<std::string> emptyVector;
+        SetNetworkIsolation(event.functionAgentID, RuleType::IPSET_FLUSH, emptyVector);
+    }
+
+    if (enableTenantAffinity_) {
+        if (tenantPodReuseTimeWindow_ == -1 && event.functionProxyID == nodeID_) {
+            YRLOG_DEBUG("try to clear tenant({})/proxy({})/agent({}) tenant label",
+                event.tenantID, event.functionProxyID, event.functionAgentID);
+        } else if (tenantPodReuseTimeWindow_ < -1) {
+            YRLOG_ERROR("Invalid tenantPodReuseTimeWindow({})", tenantPodReuseTimeWindow_);
+            return false;
+        }
+    }
     return true;
 }
 
@@ -1604,13 +1827,13 @@ void FunctionAgentMgrActor::OnTenantUpdateInstance(const TenantEvent &event)
     // version/$latest/defaultaz/941e253514a11c24/a1a262a8-ec21-4000-8000-000000581e3f
     if (event.code != static_cast<int32_t>(InstanceState::RUNNING)) {
         // The tenant isolation feature only focuses on potential new pod IP events.
-        YRLOG_DEBUG("instance({}) status code is {}, ignore it", event.instanceID, event.code);
+        YRLOG_DEBUG("tenant instance({}) status code is {}, ignore it", event.instanceID, event.code);
         return;
     }
 
     if (tenantCacheMap_.find(event.tenantID) == tenantCacheMap_.end()) {
         // Case1: The function instance in the first POD of the tenant.
-        YRLOG_DEBUG("has no instance on proxy({})", event.functionProxyID);
+        YRLOG_DEBUG("tenant({}) has no instance on proxy({})", event.tenantID, event.functionProxyID);
         auto tenantCache = std::make_shared<TenantCache>();
         tenantCacheMap_[event.tenantID] = tenantCache;
         tenantCache->podIps.insert(event.agentPodIp);
@@ -1652,12 +1875,14 @@ void FunctionAgentMgrActor::OnTenantDeleteInstance(const TenantEvent &event)
 {
     YRLOG_DEBUG("DeleteInstance when instance({}) status code is {}", event.instanceID, event.code);
     if (tenantCacheMap_.find(event.tenantID) == tenantCacheMap_.end()) {
-        YRLOG_WARN("need to confirm cache consistency on proxy({})", event.functionProxyID);
+        YRLOG_WARN("tenant({}) not in cache, need to confirm cache consistency on proxy({})",
+            event.tenantID, event.functionProxyID);
         return;
     }
     auto tenantCache = tenantCacheMap_[event.tenantID];
     if (tenantCache == nullptr) {
-        YRLOG_ERROR("cache is nullptr, need to confirm cache consistency on proxy({})", event.functionProxyID);
+        YRLOG_ERROR("tenant({}) cache is nullptr, need to confirm cache consistency on proxy({})",
+            event.tenantID, event.functionProxyID);
         return;
     }
 
@@ -1672,13 +1897,15 @@ void FunctionAgentMgrActor::OnTenantDeleteInstance(const TenantEvent &event)
     // After deleting all instances, the deletion of the POD can be inferred through cache calculation.
     if (instanceIDs.empty()) {
         tenantCache->functionAgentCacheMap.erase(event.functionAgentID);
-        YRLOG_DEBUG("Clear cache entry: agent({}) podIp({})", event.functionAgentID, event.agentPodIp);
+        YRLOG_DEBUG("Clear cache entry: tenant({}) agent({}) podIp({})",
+            event.tenantID, event.functionAgentID, event.agentPodIp);
         if (!OnTenantInstanceInPodAllDeleted(tenantCache, event)) {
             return;
         }
 
         if (tenantCacheMap_[event.tenantID]->functionAgentCacheMap.empty()) {
             tenantCacheMap_.erase(event.tenantID);
+            YRLOG_DEBUG("Clear cache entry: tenant({})", event.tenantID);
         }
     }
 }
@@ -1792,4 +2019,37 @@ void FunctionAgentMgrActor::SetAbnormal()
 {
     abnormal_ = true;
 }
+
+void FunctionAgentMgrActor::StaticFunctionScheduleRequest(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    messages::ScheduleRequest request;
+    if (msg.empty() || !request.ParseFromString(msg)) {
+        YRLOG_WARN("invalid request body from {}.", from.HashString());
+        return;
+    }
+    auto requestId = request.requestid();
+    if (staticFunctionScheduleRequestIDs_.find(requestId) != staticFunctionScheduleRequestIDs_.end()) {
+        YRLOG_WARN("{}|static function schedule request is being processed.", requestId);
+        return;
+    }
+    const auto instanceCtrl = instanceCtrl_.lock();
+    staticFunctionScheduleRequestIDs_.emplace(requestId);
+    YRLOG_INFO("{}|received a static function schedule request from {}. ", requestId, from.HashString());
+    const auto scheduleRequest = std::make_shared<messages::ScheduleRequest>(std::move(request));
+    scheduleRequest->mutable_instance()->set_parentfunctionproxyaid(instanceCtrl->GetActorAID());
+    (void)instanceCtrl->Schedule(scheduleRequest, std::make_shared<litebus::Promise<messages::ScheduleResponse>>())
+        .Then(litebus::Defer(GetAID(), &FunctionAgentMgrActor::SendStaticFunctionScheduleResponse,
+                             std::placeholders::_1, from));
+}
+
+litebus::Future<Status> FunctionAgentMgrActor::SendStaticFunctionScheduleResponse(
+    const messages::ScheduleResponse &scheduleResponse, const litebus::AID &from)
+{
+    auto requestId = scheduleResponse.requestid();
+    YRLOG_INFO("{}|static function schedule success, send response to aid: {}", requestId, from.HashString());
+    Send(from, "StaticFunctionScheduleResponse", scheduleResponse.SerializeAsString());
+    (void)staticFunctionScheduleRequestIDs_.erase(requestId);
+    return Status::OK();
+}
+
 }  // namespace functionsystem::local_scheduler

@@ -25,9 +25,11 @@ namespace functionsystem::runtime_manager {
 
 const std::string RUNTIME_MANAGER = "runtime-manager";
 
-RuntimeManagerDriver::RuntimeManagerDriver(const Flags &flags) : flags_(flags)
+RuntimeManagerDriver::RuntimeManagerDriver(const Flags &flags, const std::string &componentName)
+    : flags_(flags), componentName_(componentName)
 {
-    actor_ = std::make_shared<RuntimeManager>(flags_.GetNodeID() + RUNTIME_MANAGER_SRV_ACTOR_NAME);
+    actor_ = std::make_shared<RuntimeManager>(flags_.GetNodeID() + RUNTIME_MANAGER_SRV_ACTOR_NAME,
+                                              flags.GetLogReuseEnable());
     litebus::Spawn(actor_);
     PortManager::GetInstance().InitPortResource(flags_.GetRuntimeInitialPort(), flags_.GetPortNum());
     // create http server
@@ -43,6 +45,7 @@ Status RuntimeManagerDriver::Start()
     litebus::Async(actor_->GetAID(), &RuntimeManager::SetConfig, flags_);
     litebus::Async(actor_->GetAID(), &RuntimeManager::CollectCpuType);
     auto registerHelper = std::make_shared<RegisterHelper>(flags_.GetNodeID() + RUNTIME_MANAGER_SRV_ACTOR_NAME);
+    registerHelper->SetComponentName(componentName_);
     litebus::Async(actor_->GetAID(), &RuntimeManager::SetRegisterHelper, registerHelper);
     litebus::Async(actor_->GetAID(), &RuntimeManager::Start);
     (void)litebus::Spawn(httpServer_);

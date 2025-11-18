@@ -16,7 +16,7 @@
 
 #include "flags.h"
 
-#include "param_check.h"
+#include "common/utils/param_check.h"
 
 namespace functionsystem::functionmaster {
 const uint32_t DEFAULT_SYS_FUNC_RETRY_PERIOD = 5000;
@@ -36,7 +36,8 @@ const uint32_t HEALTH_MONITOR_MAX_FAILURE = 5;
 const uint32_t HEALTH_MONITOR_RETRY_INTERVAL = 3000;
 const uint32_t DEFAULT_META_STORE_MAX_FLUSH_CONCURRENCY = 100;
 const uint32_t DEFAULT_META_STORE_MAX_FLUSH_BATCH_SIZE = 50;
-
+const uint32_t MIN_DOMAIN_HEARTBEAT_TIMEOUT = 3000;
+const uint32_t MAX_DOMAIN_HEARTBEAT_TIMEOUT = 60 * 60 * 1000;
 using namespace litebus::flag;
 
 Flags::Flags()
@@ -103,6 +104,10 @@ Flags::Flags()
     AddFlag(&Flags::servicesPath_, "services_path", "service yaml path", "/");
     AddFlag(&Flags::libPath_, "lib_path", "path of yaml tool lib", "/");
     AddFlag(&Flags::functionMetaPath_, "function_meta_path", "local function meta path", LOCAL_FUNCTION_META_PATH);
+    AddFlag(&Flags::enableAbnormalDoubleCheck_, "enable_abnormal_double_check",
+            "proxy is abnormal when heartbeat lost and lease expired", false);
+    AddFlag(&Flags::domainHeartbeatTimeoutMs_, "domain_heartbeat_timeout", "set the domain heartbeat timeout, ms",
+            DEFAULT_DOMAIN_HEARTBEAT_TIMEOUT, NumCheck(MIN_DOMAIN_HEARTBEAT_TIMEOUT, MAX_DOMAIN_HEARTBEAT_TIMEOUT));
     InitScalerFlags();
     InitMetaStoreFlags();
 }
@@ -113,6 +118,8 @@ void Flags::InitScalerFlags()
             "/home/sn/scaler/config/functionsystem-pools.json");
     AddFlag(&Flags::agentTemplatePath_, "agent_template_path", "agent template json path",
             "/home/sn/scaler/template/function-agent.json");
+    AddFlag(&Flags::enableFrontendPool_, "enable_frontend_pool", "enable frontend pool",
+            false);
 }
 
 void Flags::InitMetaStoreFlags()

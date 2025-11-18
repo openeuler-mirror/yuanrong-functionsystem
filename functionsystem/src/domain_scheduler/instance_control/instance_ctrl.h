@@ -20,7 +20,7 @@
 #include <async/future.hpp>
 #include <litebus.hpp>
 #include <queue>
-#include "proto/pb/message_pb.h"
+#include "common/proto/pb/message_pb.h"
 
 namespace functionsystem::domain_scheduler {
 class InstanceCtrl {

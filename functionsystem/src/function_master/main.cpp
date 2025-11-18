@@ -23,15 +23,24 @@
 #include "async/async.hpp"
 #include "async/future.hpp"
 #include "async/option.hpp"
+#include "common/aksk/aksk_util.h"
+#include "common/constants/constants.h"
 #include "common/explorer/explorer.h"
 #include "common/explorer/explorer_actor.h"
+#include "common/kube_client/health_monitor/health_monitor.h"
+#include "common/kube_client/kube_client.h"
 #include "common/leader/etcd_leader_actor.h"
+#include "common/leader/k8s_leader_actor.h"
 #include "common/leader/leader_actor.h"
 #include "common/leader/txn_leader_actor.h"
+#include "common/logs/logging.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/rpc/client/grpc_client.h"
 #include "common/utils/memory_optimizer.h"
 #include "common/utils/module_switcher.h"
+#include "common/utils/param_check.h"
+#include "common/utils/ssl_config.h"
 #include "common/utils/version.h"
-#include "constants.h"
 #include "flags/flags.h"
 #include "global_scheduler/global_sched.h"
 #include "global_scheduler/global_sched_driver.h"
@@ -41,23 +50,22 @@
 #include "instance_manager/instance_manager_driver.h"
 #include "instance_manager_actor.h"
 #include "litebus.hpp"
-#include "logs/logging.h"
 #include "meta_store_client/meta_store_client.h"
 #include "meta_store_client/meta_store_struct.h"
 #include "meta_store_driver.h"
 #include "meta_store_monitor/meta_store_monitor.h"
 #include "meta_store_monitor/meta_store_monitor_factory.h"
-#include "param_check.h"
-#include "proto/pb/message_pb.h"
 #include "resource_group_manager/resource_group_manager_driver.h"
-#include "rpc/client/grpc_client.h"
-#include "ssl_config.h"
+#include "scaler/scaler_driver.h"
+#include "system_function_loader/bootstrap_actor.h"
+#include "system_function_loader/bootstrap_driver.h"
 #include "utils/string_utils.hpp"
+#include "utils/system_upgrade_switch_utils.h"
 
 using namespace functionsystem;
 
 namespace {
-const std::string COMPONENT_NAME = "function_master";              // NOLINT
+const std::string COMPONENT_NAME = COMPONENT_NAME_FUNCTION_MASTER;              // NOLINT
 const std::string DEFAULT_META_STORE_ADDRESS = "127.0.0.1:32279";  // NOLINT
 const std::string META_STORE_MODE_LOCAL = "local";                 // NOLINT
 
@@ -67,7 +75,11 @@ std::shared_ptr<litebus::Promise<bool>> stopSignal{ nullptr };
 std::shared_ptr<functionsystem::ModuleSwitcher> g_functionMasterSwitcher{ nullptr };
 std::shared_ptr<global_scheduler::GlobalSchedDriver> g_globalSchedDriver = nullptr;
 std::shared_ptr<instance_manager::InstanceManagerDriver> g_instanceMgrDriver = nullptr;
+std::shared_ptr<system_function_loader::BootstrapDriver> g_bootstrapDriver = nullptr;
+std::shared_ptr<scaler::ScalerDriver> g_scalerDriver = nullptr;
+std::shared_ptr<KubeClient> g_kubeClient = nullptr;
 std::shared_ptr<functionsystem::leader::LeaderActor> g_leader{ nullptr };
+ScalerHandlers g_handlers;
 std::shared_ptr<meta_store::MetaStoreDriver> g_metaStoreDriver{ nullptr };
 std::shared_ptr<instance_manager::InstanceManager> g_instanceMgr{ nullptr };
 std::shared_ptr<resource_group_manager::ResourceGroupManagerDriver> g_resourceGroupManagerDriver = nullptr;
@@ -98,6 +110,14 @@ void OnDestroy()
         YRLOG_INFO("success to stop leader actor");
     }
 
+    if (g_bootstrapDriver != nullptr && g_bootstrapDriver->Stop().IsOk()) {
+        g_bootstrapDriver->Await();
+        g_bootstrapDriver = nullptr;
+        YRLOG_INFO("success to stop SysFuncLoader");
+    } else {
+        YRLOG_WARN("failed to stop SysFuncLoader");
+    }
+
     if (g_resourceGroupManagerDriver != nullptr && g_resourceGroupManagerDriver->Stop().IsOk()) {
         g_resourceGroupManagerDriver->Await();
         g_resourceGroupManagerDriver = nullptr;
@@ -126,6 +146,16 @@ void OnDestroy()
             YRLOG_INFO("success to stop InstanceManger");
         } else {
             YRLOG_WARN("failed to stop InstanceManager");
+        }
+    }
+
+    if (g_scalerDriver != nullptr) {
+        if (g_scalerDriver->Stop().IsOk()) {
+            g_scalerDriver->Await();
+            g_scalerDriver = nullptr;
+            YRLOG_INFO("success to stop Scaler");
+        } else {
+            YRLOG_WARN("failed to stop Scaler");
         }
     }
 
@@ -162,16 +192,9 @@ bool CreateExplorer(const functionmaster::Flags &flags, const std::shared_ptr<Me
     explorer::ElectionInfo electionInfo{ .identity = flags.GetIP(),
                                          .mode = flags.GetElectionMode(),
                                          .electKeepAliveInterval = flags.GetElectKeepAliveInterval() };
-    if (!explorer::Explorer::CreateExplorer(electionInfo, leaderInfo, metaClient)) {
+    if (!explorer::Explorer::CreateExplorer(electionInfo, leaderInfo, metaClient, g_kubeClient,
+                                            flags.GetK8sNamespace())) {
         return false;
-    }
-    if (flags.GetEnableMetaStore() && flags.GetElectionMode() == K8S_ELECTION_MODE) {
-        explorer::Explorer::GetInstance().AddLeaderChangedCallback(
-            "MetaStoreClientMgr", [metaClient](const explorer::LeaderInfo &leaderInfo) {
-                if (metaClient != nullptr) {
-                    metaClient->UpdateMetaStoreAddress(leaderInfo.address);
-                }
-            });
     }
     return true;
 }
@@ -188,7 +211,12 @@ void CreateLeader(const functionmaster::Flags &flags, const std::shared_ptr<Meta
                                          .electKeepAliveInterval = flags.GetElectKeepAliveInterval(),
                                          .electLeaseTTL = flags.GetElectLeaseTTL(),
                                          .electRenewInterval = renewInterval };
-   if (flags.GetElectionMode() == TXN_ELECTION_MODE) {
+    if (flags.GetElectionMode() == K8S_ELECTION_MODE) {
+        g_leader = std::make_shared<leader::K8sLeaderActor>(explorer::FUNCTION_MASTER_K8S_LEASE_NAME, electionInfo,
+                                                            g_kubeClient, flags.GetK8sNamespace());
+        (void)litebus::Spawn(g_leader);
+        litebus::Async(g_leader->GetAID(), &leader::LeaderActor::Elect);
+    } else if (flags.GetElectionMode() == TXN_ELECTION_MODE) {
         g_leader = std::make_shared<leader::TxnLeaderActor>(explorer::DEFAULT_MASTER_ELECTION_KEY, electionInfo,
                                                             metaStoreClient);
         (void)litebus::Spawn(g_leader);
@@ -206,8 +234,29 @@ void CreateLeader(const functionmaster::Flags &flags, const std::shared_ptr<Meta
     }
 }
 
+bool CreateClient(const functionmaster::Flags &flags)
+{
+    // set k8s certificates
+    HealthMonitorParam param = {
+        .maxFailedTimes = flags.GetGetHealthMonitorMaxFailure(),
+        .checkIntervalMs = flags.GetGetHealthMonitorRetryInterval(),
+        .k8sInfo = flags.GetClusterID(),
+    };
+    
+    g_kubeClient = KubeClient::CreateKubeClient(
+        flags.GetK8sBasePath(),
+        KubeClient::ClusterSslConfig(flags.GetK8sClientCertFile(), flags.GetK8sClientKeyFile(),
+                                     flags.GetIsSkipTlsVerify()),
+        true, param);
+    g_kubeClient->InitOwnerReference(flags.GetK8sNamespace(), "function-master");
+    return true;
+}
+
 bool SetSSLConfig(const functionmaster::Flags &flags)
 {
+    if (!CreateClient(flags)) {
+        return false;
+    }
     // set ssl mutual-auth certificates
     auto sslCertConfig = GetSSLCertConfig(flags);
     if (flags.GetSslEnable()) {
@@ -256,10 +305,40 @@ std::shared_ptr<MetaStoreClient> GetMetaStoreClient(const functionmaster::Flags 
     return metaClient;
 }
 
+std::shared_ptr<MetaStoreClient> GetUpgradeWatchClient(const functionmaster::Flags &flags)
+{
+    if (!flags.GetSystemUpgradeWatchEnable()) {
+        return nullptr;
+    }
+
+    MetaStoreTimeoutOption option;
+    // retries must take longer than health check
+    option.operationRetryTimes =
+        static_cast<int64_t>((flags.GetMaxTolerateMetaStoreFailedTimes() + static_cast<uint32_t>(1))
+                             * (flags.GetMetaStoreCheckInterval() + flags.GetMetaStoreCheckTimeout()))
+        / KV_OPERATE_RETRY_INTERVAL_LOWER_BOUND;
+    MetaStoreMonitorParam param{
+        .maxTolerateFailedTimes = flags.GetMaxTolerateMetaStoreFailedTimes(),
+        .checkIntervalMs = flags.GetMetaStoreCheckInterval(),
+        .timeoutMs = flags.GetMetaStoreCheckTimeout(),
+    };
+    MetaStoreConfig metaStoreConfig;
+    metaStoreConfig.etcdAddress = flags.GetSystemUpgradeWatchAddress();
+    metaStoreConfig.etcdTablePrefix = flags.GetETCDTablePrefix();
+    // upgrade watch client never enable meta store
+    auto upgradeWatchClient = MetaStoreClient::Create(metaStoreConfig, GetGrpcSSLConfig(flags), option, true, param);
+    if (upgradeWatchClient == nullptr) {
+        YRLOG_ERROR("failed to create upgrade watch client");
+        g_functionMasterSwitcher->SetStop();
+    }
+    return upgradeWatchClient;
+}
+
 bool InitGlobalSchedDriver(const functionmaster::Flags &flags, const std::shared_ptr<MetaStoreClient> &metaClient,
                            const std::shared_ptr<global_scheduler::GlobalSched> &globalSched)
 {
     g_globalSchedDriver = std::make_shared<global_scheduler::GlobalSchedDriver>(globalSched, flags, metaClient);
+    g_globalSchedDriver->BindComponentName(COMPONENT_NAME);
     if (g_globalSchedDriver == nullptr || !g_globalSchedDriver->Start().IsOk()) {
         YRLOG_ERROR("failed to start global-scheduler");
         g_functionMasterSwitcher->SetStop();
@@ -280,12 +359,21 @@ bool InitInstanceManagerDriver(const functionmaster::Flags &flags, const std::sh
                                                      .isMetaStoreEnable = flags.GetEnableMetaStore(),
                                                      .servicesPath = flags.GetServicesPath(),
                                                      .libPath = flags.GetLibPath(),
-                                                     .functionMetaPath = flags.GetFunctionMetaPath() });
+                                                     .functionMetaPath = flags.GetFunctionMetaPath(),
+                                                     .enableAbnormalDoubleCheck =
+                                                         flags.GetEnableAbnormalDoubleCheck() });
     g_instanceMgr = std::make_shared<::instance_manager::InstanceManager>(instanceMgrActor);
     metaStoreMonitor->RegisterHealthyObserver(g_instanceMgr);
     groupMgrActor->BindInstanceManager(g_instanceMgr);
 
     g_instanceMgrDriver = std::make_shared<::instance_manager::InstanceManagerDriver>(instanceMgrActor, groupMgrActor);
+
+    g_handlers.systemUpgradeHandler = [aid(instanceMgrActor->GetAID())](bool isUpgrading) {
+        litebus::Async(aid, &instance_manager::InstanceManagerActor::HandleSystemUpgrade, isUpgrading);
+    };
+    g_handlers.localSchedFaultHandler = [aid(instanceMgrActor->GetAID())](const std::string &nodeName) {
+        litebus::Async(aid, &instance_manager::InstanceManagerActor::OnLocalSchedFault, nodeName);
+    };
 
     if (!g_instanceMgrDriver->Start().IsOk()) {
         YRLOG_ERROR("failed to start instance-manager");
@@ -308,6 +396,28 @@ bool InitResourceGroupManager(const std::shared_ptr<MetaStoreClient> &metaClient
         return false;
     }
     return true;
+}
+
+void StartScaler(const functionmaster::Flags &flags, const std::shared_ptr<MetaStoreClient> &metaClient,
+                 const std::shared_ptr<global_scheduler::GlobalSched> &globalSched)
+{
+    g_handlers.evictAgentHandler = [sched(globalSched)](
+                                       const std::string &localID,
+                                       const std::shared_ptr<functionsystem::messages::EvictAgentRequest> &req) {
+        return sched->EvictAgent(localID, req);
+    };
+    if (flags.GetEnableFrontendPool()) {
+        litebus::AID bootstrapAID(SYSTEM_FUNCTION_LOADER_BOOTSTRAP_ACTOR, flags.GetIP());
+        g_handlers.scaleUpSystemFuncHandler = [aid(bootstrapAID)](const std::string &funcName, uint32_t instanceNum) {
+            litebus::Async(aid, &system_function_loader::BootstrapActor::ScaleByFunctionName, funcName, instanceNum);
+        };
+    }
+    g_scalerDriver = std::make_shared<scaler::ScalerDriver>(flags, metaClient, GetUpgradeWatchClient(flags),
+                                                            g_kubeClient, g_handlers);
+    if (!g_scalerDriver->Start().IsOk()) {
+        YRLOG_WARN("failed to start scaler");
+        stopSignal->SetValue(true);
+    }
 }
 
 void StartMetaStore(const functionmaster::Flags &flags)
@@ -334,14 +444,22 @@ void StartMetaStore(const functionmaster::Flags &flags)
         static_cast<int64_t>((flags.GetMaxTolerateMetaStoreFailedTimes() + 1)
                              * (flags.GetMetaStoreCheckInterval() + flags.GetMetaStoreCheckTimeout())
                              / KV_OPERATE_RETRY_INTERVAL_LOWER_BOUND);
+    MetaStoreMonitorParam param{
+        .maxTolerateFailedTimes = flags.GetMaxTolerateMetaStoreFailedTimes(),
+        .checkIntervalMs = flags.GetMetaStoreCheckInterval(),
+        .timeoutMs = flags.GetMetaStoreCheckTimeout(),
+    };
 
     if (flags.GetMetaStoreMode() == META_STORE_MODE_LOCAL && flags.GetEnablePersistence()) {
         YRLOG_INFO("enable local meta-store with persistence");
-        g_metaStoreDriver->Start(
+        g_metaStoreDriver->Start({
             etcdAddress, option, GetGrpcSSLConfig(flags),
             MetaStoreBackupOption{ .enableSyncSysFunc = flags.GetEnableSyncSysFunc(),
                                    .metaStoreMaxFlushConcurrency = flags.GetMetaStoreMaxFlushConcurrency(),
-                                   .metaStoreMaxFlushBatchSize = flags.GetMetaStoreMaxFlushBatchSize()});
+                                   .metaStoreMaxFlushBatchSize = flags.GetMetaStoreMaxFlushBatchSize() },
+            flags.GetElectionMode() == K8S_ELECTION_MODE,
+            param
+    });
         return;
     }
 }
@@ -362,7 +480,11 @@ void OnCreate(const functionmaster::Flags &flags)
         g_functionMasterSwitcher->SetStop();
         return;
     }
-
+    if (!InitLitebusAKSKEnv(flags).IsOk()) {
+        YRLOG_ERROR("failed to get aksk config");
+        g_functionMasterSwitcher->SetStop();
+        return;
+    }
     if (!g_functionMasterSwitcher->InitLiteBus(flags.GetIP(), flags.GetLitebusThreadNum() + RESERVE_THREAD)) {
         YRLOG_ERROR("failed to init litebus.");
         g_functionMasterSwitcher->SetStop();
@@ -371,6 +493,12 @@ void OnCreate(const functionmaster::Flags &flags)
 
     auto memOpt = MemoryOptimizer();
     memOpt.StartTrimming();
+
+    // meta-store relay on k8s election
+    if (flags.GetElectionMode() == K8S_ELECTION_MODE && !CreateExplorer(flags, nullptr)) {
+        g_functionMasterSwitcher->SetStop();
+        return;
+    }
 
     StartMetaStore(flags);
 
@@ -384,10 +512,19 @@ void OnCreate(const functionmaster::Flags &flags)
         g_functionMasterSwitcher->SetStop();
         return;
     }
-    if (!CreateExplorer(flags, metaClient)) {
+    if (flags.GetElectionMode() != K8S_ELECTION_MODE && !CreateExplorer(flags, metaClient)) {
         g_functionMasterSwitcher->SetStop();
         return;
     }
+    if (flags.GetEnableMetaStore() && flags.GetElectionMode() == K8S_ELECTION_MODE) {
+        explorer::Explorer::GetInstance().AddLeaderChangedCallback(
+            "MetaStoreClientMgr", [metaClient](const explorer::LeaderInfo &leaderInfo) {
+                if (metaClient != nullptr) {
+                    metaClient->UpdateMetaStoreAddress(leaderInfo.address);
+                }
+            });
+    }
+
     CreateLeader(flags, metaClient);
 
     auto globalSched = std::make_shared<global_scheduler::GlobalSched>();
@@ -402,6 +539,21 @@ void OnCreate(const functionmaster::Flags &flags)
     if (!InitResourceGroupManager(metaClient, globalSched)) {
         return;
     }
+
+    system_function_loader::SystemFunctionLoaderStartParam param{ .globalSched = globalSched,
+                                                                  .sysFuncRetryPeriod = flags.GetSysFuncRetryPeriod(),
+                                                                  .sysFuncCustomArgs = flags.GetSysFuncCustomArgs(),
+                                                                  .masterAddress = flags.GetIP(),
+                                                                  .instanceMgr = g_instanceMgr,
+                                                                  .enableFrontendPool = flags.GetEnableFrontendPool() };
+    g_bootstrapDriver = std::make_shared<system_function_loader::BootstrapDriver>(param, metaClient);
+    if (!g_bootstrapDriver->Start().IsOk()) {
+        YRLOG_ERROR("failed to start system function loader");
+        g_functionMasterSwitcher->SetStop();
+        return;
+    }
+
+    StartScaler(flags, metaClient, globalSched);
     YRLOG_INFO("{} is started", COMPONENT_NAME);
 }
 

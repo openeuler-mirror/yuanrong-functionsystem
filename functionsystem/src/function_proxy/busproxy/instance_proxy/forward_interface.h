@@ -17,7 +17,7 @@
 #ifndef FUNCTION_PROXY_BUSPROXY_INSTANCE_PROXY_FORWARD_INTERFACE_H
 #define FUNCTION_PROXY_BUSPROXY_INSTANCE_PROXY_FORWARD_INTERFACE_H
 #include "async/future.hpp"
-#include "proto/pb/posix_pb.h"
+#include "common/proto/pb/posix_pb.h"
 namespace functionsystem::busproxy {
 class ForwardInterface {
 public:

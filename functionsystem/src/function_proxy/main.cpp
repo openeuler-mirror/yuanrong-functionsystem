@@ -26,24 +26,26 @@
 
 #include "async/option.hpp"
 #include "busproxy/startup/busproxy_startup.h"
-#include "constants.h"
+#include "common/aksk/aksk_util.h"
+#include "common/constants/constants.h"
 #include "common/explorer/explorer.h"
 #include "common/explorer/explorer_actor.h"
 #include "common/flags/flags.h"
-#include "logs/logging.h"
+#include "common/kube_client/kube_client.h"
+#include "common/logs/logging.h"
 #include "meta_store_client/meta_store_client.h"
-#include "proto/pb/posix_pb.h"
-#include "rpc/server/common_grpc_server.h"
-#include "status/status.h"
-#include "certs_utils.h"
+#include "common/proto/pb/posix_pb.h"
+#include "common/rpc/server/common_grpc_server.h"
+#include "common/status/status.h"
+#include "common/utils/certs_utils.h"
 #include "common/utils/exec_utils.h"
-#include "files.h"
+#include "common/utils/files.h"
 #include "common/utils/memory_optimizer.h"
-#include "module_driver.h"
+#include "common/utils/module_driver.h"
 #include "common/utils/module_switcher.h"
-#include "param_check.h"
-#include "sensitive_value.h"
-#include "ssl_config.h"
+#include "common/utils/param_check.h"
+#include "common/utils/sensitive_value.h"
+#include "common/utils/ssl_config.h"
 #include "common/utils/version.h"
 #include "distribute_cache_client/ds_cache_client_impl.h"
 #include "function_agent_manager/function_agent_mgr_actor.h"
@@ -60,18 +62,12 @@
 #include "openssl/x509.h"
 #include "utils/os_utils.hpp"
 
-
-#ifdef OBSERVABILITY
-#include "common/trace/trace_actor.h"
-#include "common/trace/trace_manager.h"
-#endif
-
 using namespace functionsystem;
 using namespace functionsystem::local_scheduler;
 using namespace functionsystem::function_proxy;
 using litebus::Option;
 namespace {
-const std::string COMPONENT_NAME = "function_proxy";
+const std::string COMPONENT_NAME = COMPONENT_NAME_FUNCTION_PROXY;
 const uint32_t MS_PER_SECOND = 1000;
 const uint32_t DEFAULT_HEARTBEAT_TIMES = 12;
 // litebus thread reserve for resource view
@@ -83,6 +79,7 @@ std::shared_ptr<BusproxyStartup> g_busproxyStartup{ nullptr };
 std::shared_ptr<LocalSchedDriver> g_localSchedDriver{ nullptr };
 std::shared_ptr<CommonDriver> g_commonDriver {nullptr};
 std::shared_ptr<functionsystem::grpc::CommonGrpcServer> g_posixGrpcServer{ nullptr };
+std::shared_ptr<KubeClient> g_kubeClient = nullptr;
 std::atomic_bool g_isCentOS{ false };
 
 void Stop(int signum)
@@ -132,6 +129,7 @@ bool CreateBusProxy(const function_proxy::Flags &flags)
     auto dataInterfaceClientMgrProxy = g_commonDriver->GetDataInterfaceClientManagerProxy();
     auto observer = g_commonDriver->GetObserverActor();
     auto metaStoreClient = g_commonDriver->GetMetaStoreClient();
+    auto internalIAM = g_commonDriver->GetInternalIAM();
     auto metaStorageAccessor = g_commonDriver->GetMetaStorageAccessor();
 
     MemoryControlConfig memoryControlConfig;
@@ -160,13 +158,13 @@ bool CreateBusProxy(const function_proxy::Flags &flags)
         .dataInterfaceClientMgr = dataInterfaceClientMgrProxy,
         .dataPlaneObserver = dataPlaneObserver,
         .memoryMonitor = memoryMonitor,
+        .internalIam = internalIAM,
         .isEnablePerf = flags.GetEnablePerf(),
         .unRegisterWhileStop = flags.UnRegisterWhileStop()
     };
 
     g_busproxyStartup = std::make_shared<BusproxyStartup>(std::move(busproxyStartParam), metaStorageAccessor);
-    auto status = g_busproxyStartup->Run();
-    if (status.IsError()) {
+    if (const auto status = g_busproxyStartup->Run(); status.IsError()) {
         YRLOG_ERROR("failed to start busproxy, errMsg: {}", status.ToString());
         g_functionProxySwitcher->SetStop();
         return false;
@@ -262,6 +260,7 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
     auto controlInterfaceClientMgrProxy = g_commonDriver->GetControlInterfaceClientManagerProxy();
     auto observer = g_commonDriver->GetObserverActor();
     auto posixService = g_commonDriver->GetPosixService();
+    auto internalIAM = g_commonDriver->GetInternalIAM();
     auto controlPlaneObserver = std::make_shared<function_proxy::ControlPlaneObserver>(observer);
     auto pingCycleMs = flags.GetSystemTimeout() / DEFAULT_HEARTBEAT_TIMES;
     auto pingTimeoutMs = flags.GetSystemTimeout() / 2;
@@ -290,18 +289,21 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
                                .pingCycleMs = pingCycleMs,
                                .enableTenantAffinity = flags.GetEnableTenantAffinity(),
                                .tenantPodReuseTimeWindow = flags.GetTenantPodReuseTimeWindow(),
+                               .enableIpv4TenantIsolation = flags.GetEnableIpv4TenantIsolation(),
                                .enableForceDeletePod = flags.EnableForceDeletePod() },
         .localSchedSrvParam = { .nodeID = flags.GetNodeID(),
                                 .globalSchedAddress = flags.GetGlobalSchedulerAddress(),
                                 .isK8sEnabled = !flags.GetK8sBasePath().empty(),
                                 .registerCycleMs = flags.GetServiceRegisterCycleMs(),
                                 .pingTimeOutMs = pingTimeoutMs,
-                                .updateResourceCycleMs = flags.GetServiceUpdateResourceCycleMs() },
+                                .updateResourceCycleMs = flags.GetServiceUpdateResourceCycleMs(),
+                                .componentName = COMPONENT_NAME },
         .resourceViewActorParam = { .isLocal = true,
                                     .enableTenantAffinity = flags.GetEnableTenantAffinity(),
                                     .tenantPodReuseTimeWindow = flags.GetTenantPodReuseTimeWindow() },
         .controlInterfacePosixMgr = controlInterfaceClientMgrProxy,
         .controlPlaneObserver = controlPlaneObserver,
+        .internalIAM = internalIAM,
         .maxGrepSize = flags.GetMaxGrpcSize(),
         .enableDriver = flags.GetEnableDriver(),
         .isPseudoDataPlane = flags.GetIsPseudoDataPlane(),
@@ -347,6 +349,8 @@ Status InitLocalSchedulerDriver(const function_proxy::Flags &flags, const std::s
 
 bool SetSSLConfig(const function_proxy::Flags &flags)
 {
+    // set k8s certificates
+    g_kubeClient = KubeClient::CreateKubeClient(flags.GetK8sBasePath(), KubeClient::ClusterSslConfig("", "", false));
     auto sslCertConfig = GetSSLCertConfig(flags);
     if (flags.GetSslEnable()) {
         if (!InitLitebusSSLEnv(sslCertConfig).IsOk()) {
@@ -365,15 +369,18 @@ Status InitCommonDriver(const function_proxy::Flags &flags, const std::shared_pt
     return g_commonDriver->Init();
 }
 
-Status InitMasterExplorer(const function_proxy::Flags &flags, const std::shared_ptr<MetaStoreClient> &metaStoreClient)
+Status InitMasterExplorer(const function_proxy::Flags &flags, const std::shared_ptr<MetaStoreClient> &metaStoreClient,
+                          const std::shared_ptr<KubeClient> &kubeClient)
 {
     auto leaderName = flags.GetElectionMode() == K8S_ELECTION_MODE ? explorer::FUNCTION_MASTER_K8S_LEASE_NAME
                                                                    : explorer::DEFAULT_MASTER_ELECTION_KEY;
-    explorer::LeaderInfo leaderInfo{ .name = leaderName, .address = flags.GetGlobalSchedulerAddress() };
+    explorer::LeaderInfo leaderInfo{ .name = leaderName,
+                                     .address = flags.GetGlobalSchedulerAddress() };
     explorer::ElectionInfo electionInfo{ .identity = flags.GetIP(),
                                          .mode = flags.GetElectionMode(),
                                          .electKeepAliveInterval = flags.GetElectKeepAliveInterval() };
-    if (!explorer::Explorer::CreateExplorer(electionInfo, leaderInfo, metaStoreClient)) {
+    if (!explorer::Explorer::CreateExplorer(electionInfo, leaderInfo, metaStoreClient, kubeClient,
+                                            flags.GetK8sNamespace())) {
         return Status(StatusCode::FAILED, "failed to init master explorer");
     }
     if (flags.GetEnableMetaStore() && flags.GetElectionMode() == K8S_ELECTION_MODE) {
@@ -389,19 +396,19 @@ Status InitMasterExplorer(const function_proxy::Flags &flags, const std::shared_
 
 void StartUpModule()
 {
-    if (auto status = StartModule({g_commonDriver, g_localSchedDriver}); status.IsError()) {
+    if (const auto status = StartModule({g_commonDriver, g_localSchedDriver}); status.IsError()) {
         YRLOG_ERROR("failed to start function proxy, err: {}", status.ToString());
         g_functionProxySwitcher->SetStop();
         return;
     }
 
-    if (auto status = SyncModule({g_commonDriver, g_localSchedDriver}); status.IsError()) {
+    if (const auto status = SyncModule({g_commonDriver, g_localSchedDriver}); status.IsError()) {
         YRLOG_ERROR("failed to sync function proxy, err: {}", status.ToString());
         g_functionProxySwitcher->SetStop();
         return;
     }
 
-    if (auto status = RecoverModule({g_commonDriver, g_localSchedDriver}); status.IsError()) {
+    if (const auto status = RecoverModule({g_commonDriver, g_localSchedDriver}); status.IsError()) {
         YRLOG_ERROR("failed to sync function proxy, err: {}", status.ToString());
         g_functionProxySwitcher->SetStop();
         return;
@@ -420,7 +427,11 @@ void OnCreate(const Flags &flags)
         g_functionProxySwitcher->SetStop();
         return;
     }
-
+    if (!InitLitebusAKSKEnv(flags).IsOk()) {
+        YRLOG_ERROR("failed to get aksk config");
+        g_functionProxySwitcher->SetStop();
+        return;
+    }
     if (!g_functionProxySwitcher->InitLiteBus(flags.GetAddress(), flags.GetLitebusThreadNum() + RESERVE_THREAD)) {
         g_functionProxySwitcher->SetStop();
         return;
@@ -434,7 +445,7 @@ void OnCreate(const Flags &flags)
         return;
     }
 
-    if (const auto status = InitMasterExplorer(flags, g_commonDriver->GetMetaStoreClient());
+    if (const auto status = InitMasterExplorer(flags, g_commonDriver->GetMetaStoreClient(), g_kubeClient);
         status.IsError()) {
         YRLOG_ERROR("failed to init master explorer, err: {}", status.ToString());
         g_functionProxySwitcher->SetStop();
@@ -461,7 +472,7 @@ void OnDestroy()
     (void)StopModule({g_localSchedDriver, g_commonDriver});
 
     if (g_busproxyStartup != nullptr) {
-        g_busproxyStartup->Stop();
+        (void)g_busproxyStartup->Stop();
     }
 
     AwaitModule({g_localSchedDriver, g_commonDriver});

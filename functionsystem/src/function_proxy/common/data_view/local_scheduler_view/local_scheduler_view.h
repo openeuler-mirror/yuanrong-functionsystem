@@ -20,7 +20,7 @@
 #include <optional>
 #include <unordered_map>
 
-#include "status/status.h"
+#include "common/status/status.h"
 
 namespace functionsystem::function_proxy {
 class LocalSchedulerView {

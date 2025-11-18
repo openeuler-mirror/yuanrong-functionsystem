@@ -19,8 +19,8 @@
 
 #include <async/option.hpp>
 
-#include "proto/pb/message_pb.h"
-#include "status/status.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
 #include "domain_sched_mgr_actor.h"
 
 namespace functionsystem::global_scheduler {
@@ -29,7 +29,7 @@ const uint32_t DEFAULT_RETRY_CYCLE = 10000;  // ms
 
 class DomainSchedMgr {
 public:
-    DomainSchedMgr();
+    explicit DomainSchedMgr(const uint32_t heartbeatTimeoutMs);
     explicit DomainSchedMgr(std::shared_ptr<DomainSchedMgrActor> domainSchedMgrActor);
 
     virtual ~DomainSchedMgr() = default;

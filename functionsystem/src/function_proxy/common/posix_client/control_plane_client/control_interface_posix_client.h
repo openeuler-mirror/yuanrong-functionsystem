@@ -17,8 +17,8 @@
 #ifndef FUNCTION_PROXY_COMMON_POSIX_CLIENT_CONTROL_INTERFACE_POSIX_CLIENT_H
 #define FUNCTION_PROXY_COMMON_POSIX_CLIENT_CONTROL_INTERFACE_POSIX_CLIENT_H
 
-#include "constants.h"
-#include "status/status.h"
+#include "common/constants/constants.h"
+#include "common/status/status.h"
 #include "function_proxy/common/posix_client/base_client.h"
 
 namespace functionsystem {
