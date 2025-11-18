@@ -18,6 +18,7 @@
 #define FUNCTIONSYSTEM_NETWORK_ISOLATION_H
 
 #include <memory>
+#include <vector>
 #include <string>
 
 #include "common/utils/exec_utils.h"
@@ -35,6 +36,11 @@ class NetworkIsolation {
 public:
     NetworkIsolation() = default;
     virtual ~NetworkIsolation() = default;
+
+    virtual std::vector<Rule> GetAllRules() = 0;
+    virtual int AddRule(Rule rule) = 0;
+    virtual int RemoveRule(Rule rule) = 0;
+    virtual int RemoveAllRules() = 0;
 };  // class NetworkIsolation
 
 // IpsetIpv4NetworkIsolation utilizes the rule in form of IPv4 string type.
@@ -48,6 +54,39 @@ public:
     }
     ~IpsetIpv4NetworkIsolation() override
     {}
+
+    /**
+     * @brief Retrieve all rules
+     * @return Returning 0 indicates success, while non-zero indicates failure
+     */
+    std::vector<std::string> GetAllRules() override;
+
+    /**
+     * @brief Create new rule
+     * @param ip IPv4 string
+     * @return Returning 0 indicates success, while non-zero indicates failure
+     */
+    int AddRule(std::string ip) override;
+
+    /**
+     * @brief Create multiple rules
+     * @param ips IPv4 strings
+     * @return Returning 0 indicates success, while non-zero indicates failure
+     */
+    int AddRules(std::vector<std::string> ips);
+
+    /**
+     * @brief Delete rule
+     * @param ip IPv4 string
+     * @return Returning 0 indicates success, while non-zero indicates failure
+     */
+    int RemoveRule(std::string ip) override;
+
+    /**
+     * @brief Remove all rules
+     * @return Returning 0 indicates success, while non-zero indicates failure
+     */
+    int RemoveAllRules() override;
 
     /**
      * @brief Determine if ipset is present.

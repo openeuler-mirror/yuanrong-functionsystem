@@ -22,6 +22,7 @@
 namespace functionsystem {
 // FunctionProxy
 const std::string FUNCTION_PROXY_OBSERVER_ACTOR_NAME = "FunctionProxyObserverActor";
+const std::string REQUEST_ROUTER_NAME = "RequestRouterActor";
 
 // LocalScheduler
 const std::string LOCAL_SCHED_SRV_ACTOR_NAME = "LocalSchedSrvActor";
@@ -39,17 +40,20 @@ const std::string LOCAL_SCHED_MGR_ACTOR_NAME = "LocalSchedulerManager";
 // DomainScheduler
 const std::string DOMAIN_SCHEDULER_SRV_ACTOR_NAME_POSTFIX = "-DomainSchedulerSrv";
 const std::string DOMAIN_UNDERLAYER_SCHED_MGR_ACTOR_NAME_POSTFIX = "-UnderlayerSchedMgr";
+const std::string DOMAIN_UNDERLAYER_SCHED_MGR_ACTOR_NAME = "UnderlayerSchedMgr";
 const std::string DOMAIN_GROUP_CTRL_ACTOR_NAME = "DomainGroupCtrlActor";
 
 // FunctionAgent
 const std::string FUNCTION_AGENT_AGENT_SERVICE_ACTOR_NAME = "AgentServiceActor";
+const std::string FUNCTION_AGENT_AGENT_MGR_ACTOR_NAME = "AgentMgrActor";
 
 // RuntimeManager
-const std::string RUNTIME_MANAGER_PINGPONG_ACTOR_NAME = "RuntimeManagerPong";
+const std::string RUNTIME_MANAGER_ACTOR_NAME = "RuntimeManagerActor";
 const std::string RUNTIME_MANAGER_SRV_ACTOR_NAME = "-RuntimeManagerSrv";
 const std::string RUNTIME_MANAGER_HEALTH_CHECK_ACTOR_NAME = "HealthCheckActor";
 const std::string RUNTIME_MANAGER_LOG_MANAGER_ACTOR_NAME = "LogManagerActor";
 const std::string RUNTIME_MANAGER_DEBUG_SERVER_MGR_ACTOR_NAME = "DebugServerMgrActor";
+const std::string RUNTIME_MANAGER_VIRTUAL_ENV_MGR_ACTOR_NAME = "VirtualEnvMgrActor";
 
 // FunctionAccessor
 const std::string FUNCTION_ACCESSOR_HTTP_SERVER = "FunctionAccessorHttpServer";
@@ -78,8 +82,22 @@ const std::string AKSK_MANAGER_ACTOR_NAME = "AKSKManagerActor";
 // IAMServer
 const std::string IAM_ACTOR = "IAMActor";
 
+// ClusterDeployerActor
+const std::string CLUSTER_DEPLOYER_ACTOR = "ClusterDeployerActor";
+
 // resource group manager
 const std::string RESOURCE_GROUP_MANAGER = "ResourceGroupManager";
+
+const std::string HEARTBEAT_CLIENT_BASENAME = "HeartbeatClient-";
+const std::string HEARTBEAT_OBSERVER_BASENAME = "HeartbeatObserver-";
+
+const std::string COMPONENT_NAME_FUNCTION_PROXY = "function_proxy";
+const std::string COMPONENT_NAME_FUNCTION_MASTER = "function_master";
+const std::string COMPONENT_NAME_DOMAIN_SCHEDULER = "domain_scheduler";
+const std::string COMPONENT_NAME_FUNCTION_AGENT = "function_agent";
+const std::string COMPONENT_NAME_IAM_SERVER = "iam_server";
+const std::string COMPONENT_NAME_RUNTIME_MANAGER = "runtime_manager";
+const std::string COMPONENT_NAME_FUNCTION_ACCESSOR = "function_accessor";
 
 }  // namespace functionsystem
 #endif  // COMMON_CONSTANTS_ACTOR_NAME_H

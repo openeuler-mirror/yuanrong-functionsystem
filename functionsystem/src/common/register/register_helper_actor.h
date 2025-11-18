@@ -18,8 +18,8 @@
 #define COMMON_REGISTER_REGISTER_HELPER_ACTOR_H
 
 #include "actor/actor.hpp"
-#include "heartbeat/heartbeat_observer.h"
-#include "heartbeat/ping_pong_driver.h"
+#include "common/heartbeat/heartbeat_client.h"
+#include "common/heartbeat/heartbeat_observer.h"
 #include "timer/timer.hpp"
 
 namespace functionsystem {
@@ -29,7 +29,7 @@ public:
     explicit RegisterHelperActor(const std::string &name);
     ~RegisterHelperActor() override;
     void StartRegister(const std::string &name, const std::string &address, const std::string &msg,
-                       int32_t maxRegistersTimes);
+                       uint32_t maxRegistersTimes);
     void Register(const litebus::AID &from, std::string &&name, std::string &&msg);
     void Registered(const litebus::AID &from, std::string &&name, std::string &&msg);
     void SetRegisterInterval(const uint64_t interval);
@@ -38,20 +38,25 @@ public:
     void SetRegisterTimeoutCallback(const std::function<void()> &func);
     void SendRegistered(const std::string &name, const std::string &address, const std::string &msg);
     bool IsRegistered();
-    void SetPingPongDriver(const uint32_t &timeoutMs, const PingPongActor::TimeOutHandler &handler);
+    void SetPingPongDriver(const std::string &dstName, const std::string &dstAddress, const uint32_t &timeoutMs,
+                           const HeartbeatClient::TimeOutHandler &handler, const std::string &heartbeatName);
     void SetHeartbeatObserveDriver(const std::string &dstName, const std::string &dstAddress, const uint32_t &timeoutMs,
-                                   const HeartbeatObserver::TimeOutHandler &handler);
+                                   const HeartbeatObserver::TimeOutHandler &handler, const std::string &heartbeatName);
 
     void StopHeartbeatObserver();
     void StopPingPongDriver();
+    /* *
+     * set component name
+     * @return
+     */
+    void SetComponentName(const std::string &componentName);
 
 protected:
     void Init() override;
 
 private:
     void RetryRegister(const std::string &name, const std::string &address, const std::string &msg,
-                       int32_t retryTimes);
-    void WaitFirstPing(const std::string &name, const std::string &address);
+                       uint32_t retryTimes);
 
     std::string name_;
     uint64_t registerInterval_;
@@ -61,8 +66,9 @@ private:
     std::function<void(const std::string &)> registerCb_;
     std::function<void(const std::string &)> registeredCb_;
     std::function<void()> registerTimeoutCb_;
-    std::shared_ptr<HeartbeatObserveDriver> heartbeatObserver_;
-    std::shared_ptr<PingPongDriver> pingPongDriver_;
+    std::shared_ptr<HeartbeatClientDriver> pingPongDriver_ = nullptr;
+    std::shared_ptr<HeartbeatObserveDriver> heartbeatObserveDriver_ = nullptr;
+    std::string componentName_;
 };
 
 }  // namespace functionsystem

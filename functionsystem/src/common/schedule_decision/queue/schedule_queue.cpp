@@ -15,7 +15,7 @@
  */
 
 #include "schedule_queue.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem::schedule_decision {
 

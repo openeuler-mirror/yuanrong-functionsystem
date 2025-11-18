@@ -18,7 +18,7 @@
 #include "async/asyncafter.hpp"
 #include "async/collect.hpp"
 #include "async/defer.hpp"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem::schedule_decision {
 
@@ -146,7 +146,7 @@ litebus::Future<ScheduleResult> ScheduleQueueActor::ScheduleDecision(
     auto res = scheduleStrategy_->Enqueue(item).Get();
     if (res.IsError()) {
         YRLOG_ERROR("enqueue failed, reason is {}", res.GetMessage());
-        return ScheduleResult{"", res.StatusCode(), res.GetMessage(), {}, "", {}};
+        return ScheduleResult{"", res.StatusCode(), res.GetMessage(), {}, "", {}, {}};
     }
     // update schedule status, to avoid multiple get resource, until this consume is completed.
     TransitionSchedulerQueueState();

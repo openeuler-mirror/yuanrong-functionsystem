@@ -1,0 +1,67 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#ifndef FUNCTIONSYSTEM_KUBE_CLIENT_MODEL_V1_SECRECT_KEY_SELECTOR_H_
+#define FUNCTIONSYSTEM_KUBE_CLIENT_MODEL_V1_SECRECT_KEY_SELECTOR_H_
+
+#include <string>
+
+#include "model_base.h"
+
+namespace functionsystem::kube_client {
+namespace model {
+
+const std::string MODE_NAME_V1_SECRET_KEY_SELECTOR = "V1SecretKeySelector";
+
+class V1SecretKeySelector : public ModelBase {
+public:
+    V1SecretKeySelector();
+    ~V1SecretKeySelector() override;
+
+    nlohmann::json ToJson() const override;
+    bool FromJson(const nlohmann::json &json) override;
+
+    std::string GetKey() const;
+    bool KeyIsSet() const;
+    void UnsetKey();
+
+    void SetKey(const std::string &value);
+
+    std::string GetName() const;
+    bool NameIsSet() const;
+    void UnsetName();
+
+    void SetName(const std::string &value);
+
+    bool IsOptional() const;
+    bool OptionalIsSet() const;
+    void UnsetOptional();
+
+    void SetOptional(bool value);
+
+protected:
+    std::string m_key;
+    bool m_keyIsSet;
+    std::string m_name;
+    bool m_nameIsSet;
+    bool m_optional;
+    bool m_optionalIsSet;
+};
+
+}  // namespace model
+}  // namespace functionsystem::kube_client
+
+#endif /* FUNCTIONSYSTEM_KUBE_CLIENT_MODEL_V1_SECRECT_KEY_SELECTOR_H_ */

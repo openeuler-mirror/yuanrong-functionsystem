@@ -18,16 +18,16 @@
 
 #include "async/asyncafter.hpp"
 #include "async/defer.hpp"
-
-#include "metrics/metrics_adapter.h"
+#include "common/metrics/metrics_adapter.h"
 
 namespace functionsystem::leader {
-TxnLeaderActor::TxnLeaderActor(const std::string &electionKey, const ElectionInfo &electionInfo,
+TxnLeaderActor::TxnLeaderActor(const std::string &electionKey, const explorer::ElectionInfo &electionInfo,
                                const std::shared_ptr<MetaStoreClient> &metaStoreClient)
-    : LeaderActor("TxnLeaderActor-" + litebus::uuid_generator::UUID::GetRandomUUID().ToString(), electionKey,
+    : LeaderActor("TxnLeaderActor-" + litebus::uuid_generator::UUID::GetRandomUUID().ToString(), { electionKey },
                   electionInfo),
       metaStoreClient_(metaStoreClient)
 {
+    electionKey_ = !electionKeySet_.empty() ? electionKeySet_.begin()->c_str() : "";
 }
 
 void TxnLeaderActor::Init()
@@ -35,24 +35,10 @@ void TxnLeaderActor::Init()
     YRLOG_INFO("{} | election initialize", electionKey_);
     ASSERT_IF_NULL(metaStoreClient_);
     // new master start, if leader exist, to be slave.
-    (void)metaStoreClient_->Get(electionKey_, { .prefix = false, .keysOnly = true })
-        .Then([aid(GetAID()), key(electionKey_),
-               delay(keepAliveInterval_)](const std::shared_ptr<GetResponse> &response) -> litebus::Future<Status> {
-            if (response->status.IsError()) {
-                // 1.1 if network error, delay electing
-                YRLOG_ERROR("{} | error to get leader, delay elect", key);
-                litebus::AsyncAfter(delay * litebus::SECTOMILLI, aid, &TxnLeaderActor::Elect);
-            } else if (response->kvs.empty()) {
-                // 1.2 if no leader, do elect immediately
-                YRLOG_INFO("{} | no leader, start elect", key);
-                litebus::Async(aid, &TxnLeaderActor::Elect);
-            }
-
-            return litebus::Async(aid, &TxnLeaderActor::OnGetLeader, response);
-        });
+    (void)GetLeader();
 }
 
-litebus::Future<Status> TxnLeaderActor::OnGetLeader(const std::shared_ptr<GetResponse> &response)
+void TxnLeaderActor::GetLeader()
 {
     auto observer = [aid(GetAID()), key(electionKey_)](const std::vector<WatchEvent> &events, bool) -> bool {
         // If Leader changes during the disconnection from the etcd, the historical revision is used for re-watch.
@@ -63,18 +49,47 @@ litebus::Future<Status> TxnLeaderActor::OnGetLeader(const std::shared_ptr<GetRes
                 // 2. leader delete, do elect immediately
                 litebus::Async(aid, &TxnLeaderActor::Elect);
                 break;
+            } else if (it->eventType == EventType::EVENT_TYPE_PUT) {
+                YRLOG_INFO("{} | leader is changed to {}", key, it->kv.value());
+                if (!IsAddressesValid(it->kv.value())) {
+                    // leader info is invalid
+                    YRLOG_WARN("{} | invalid leader info {} in event", key, it->kv.value());
+                    metrics::MetricsAdapter::GetInstance().ElectionFiring("invalid leader info " + it->kv.value()
+                                                                          + " elected for " + key);
+                } else {
+                    metrics::MetricsAdapter::GetInstance().ElectionFiringResolved(
+                        "leader " + it->kv.value() + " is elected successfully for " + key);
+                }
             }
         }
         return true;
     };
 
-    auto syncer = [aid(GetAID())]() -> litebus::Future<SyncResult> {
-        return litebus::Async(aid, &TxnLeaderActor::Sync);
+    auto syncer = [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<SyncResult> {
+        return litebus::Async(aid, &TxnLeaderActor::Sync, getResponse);
     };
-    return metaStoreClient_
-        ->Watch(electionKey_,
-                { .prefix = false, .prevKv = false, .revision = response->header.revision + 1, .keepRetry = true },
-                observer, syncer)
+
+    auto handler = [aid(GetAID()), key(electionKey_), delay(keepAliveInterval_)](
+                       const std::shared_ptr<GetResponse> &response) -> litebus::Future<Status> {
+        if (response->status.IsError()) {
+            // 1.1 if network error, delay electing
+            YRLOG_ERROR("{} | error to get leader, delay elect", key);
+            litebus::AsyncAfter(delay * litebus::SECTOMILLI, aid, &TxnLeaderActor::Elect);
+        } else if (response->kvs.empty()) {
+            // 1.2 if no leader, do elect immediately
+            YRLOG_INFO("{} | no leader, start elect", key);
+            litebus::Async(aid, &TxnLeaderActor::Elect);
+        } else if (!IsAddressesValid(response->kvs[0].value())) {
+            // 1.3 leader info is invalid
+            YRLOG_WARN("{} | invalid leader info ({}) existed when initialization", key, response->kvs[0].value());
+            metrics::MetricsAdapter::GetInstance().ElectionFiring("invalid leader info " + response->kvs[0].value()
+                                                                  + " elected for " + key);
+        }
+        return Status::OK();
+    };
+    WatchOption option{};
+    option.keepRetry = true;
+    (void)metaStoreClient_->GetAndWatchWithHandler(electionKey_, option, observer, syncer, handler)
         .Then([aid(GetAID())](const std::shared_ptr<Watcher> &watcher) -> litebus::Future<Status> {
             return litebus::Async(aid, &TxnLeaderActor::OnWatch, watcher);
         });
@@ -168,7 +183,7 @@ void TxnLeaderActor::OnCampaign(const litebus::Future<std::shared_ptr<TxnRespons
     }
 
     // make sure there's a leader, or do elect again.
-    metaStoreClient_->Get(electionKey_, { .prefix = false, .keysOnly = true })
+    metaStoreClient_->Get(electionKey_, { .prefix = false, .keysOnly = false })
         .Then([aid(GetAID()), electionKey(electionKey_),
                delay(keepAliveInterval_)](const std::shared_ptr<GetResponse> &res) -> litebus::Future<Status> {
             if (res->status.IsError()) {
@@ -176,11 +191,18 @@ void TxnLeaderActor::OnCampaign(const litebus::Future<std::shared_ptr<TxnRespons
                 litebus::AsyncAfter(delay * litebus::SECTOMILLI, aid, &TxnLeaderActor::Elect);
             } else if (res->kvs.empty()) {
                 YRLOG_WARN("{} | no leader elected after election, start elect", electionKey);
-                metrics::MetricsAdapter::GetInstance().ElectionFiring("No leader elected for " + electionKey);
                 // 3.2 campaign fail and no leader, do elect immediately
                 litebus::Async(aid, &TxnLeaderActor::Elect);
+                metrics::MetricsAdapter::GetInstance().ElectionFiring("No leader elected for " + electionKey);
+            } else if (!IsAddressesValid(res->kvs[0].value())) {
+                // 3.3 leader info is invalid
+                YRLOG_WARN("{} | invalid leader info ({}) elected after election", electionKey, res->kvs[0].value());
+                metrics::MetricsAdapter::GetInstance().ElectionFiring("invalid leader info " + res->kvs[0].value()
+                                                                      + " elected for " + electionKey);
+            } else {
+                metrics::MetricsAdapter::GetInstance().ElectionFiringResolved(
+                    "leader " + res->kvs[0].value() + " is elected successfully for " + electionKey);
             }
-
             return Status::OK();
         });
 }
@@ -210,23 +232,14 @@ void TxnLeaderActor::KeepAlive(int64_t leaseID)
     (void)litebus::AsyncAfter(keepAliveInterval_ * litebus::SECTOMILLI, GetAID(), &TxnLeaderActor::KeepAlive, leaseID);
 }
 
-litebus::Future<SyncResult> TxnLeaderActor::Sync()
-{
-    GetOption opts;
-    opts.prefix = true;
-    YRLOG_INFO("start to sync leader key({}), for txn leader", electionKey_);
-    return metaStoreClient_->Get(electionKey_, opts)
-        .Then(litebus::Defer(GetAID(), &TxnLeaderActor::OnSync, std::placeholders::_1));
-}
-
-litebus::Future<SyncResult> TxnLeaderActor::OnSync(const std::shared_ptr<GetResponse> &getResponse)
+litebus::Future<SyncResult> TxnLeaderActor::Sync(const std::shared_ptr<GetResponse> &getResponse)
 {
     if (getResponse->status.IsError()) {
         YRLOG_ERROR("failed to get leader key({}) from meta storage, for txn leader", electionKey_);
 
         // leader delete, do elect immediately
         litebus::Async(GetAID(), &TxnLeaderActor::Elect);
-        return SyncResult{ getResponse->status, 0 };
+        return SyncResult{ getResponse->status };
     }
 
     if (getResponse->kvs.empty()) {
@@ -235,9 +248,9 @@ litebus::Future<SyncResult> TxnLeaderActor::OnSync(const std::shared_ptr<GetResp
 
         // leader delete, do elect immediately
         litebus::Async(GetAID(), &TxnLeaderActor::Elect);
-        return SyncResult{ Status::OK(), getResponse->header.revision };
+        return SyncResult{ Status::OK() };
     }
 
-    return SyncResult{ Status::OK(), getResponse->header.revision };
+    return SyncResult{ Status::OK() };
 }
 }  // namespace functionsystem::leader

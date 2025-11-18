@@ -17,7 +17,7 @@
 #include "resource_view.h"
 
 #include "async/async.hpp"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "litebus.hpp"
 
 namespace functionsystem::resource_view {
@@ -266,4 +266,17 @@ void ResourceView::UpdateIsHeader(bool isHeader)
     ASSERT_IF_NULL(implActor_);
     return litebus::Async(implActor_->GetAID(), &ResourceViewActor::UpdateIsHeader, isHeader);
 }
+
+void ResourceView::TryDelResourceUnitChange(uint64_t version, const std::string &viewInitTime)
+{
+    ASSERT_IF_NULL(implActor_);
+    return litebus::Async(implActor_->GetAID(), &ResourceViewActor::TryDelResourceUnitChange, version, viewInitTime);
+}
+
+litebus::Future<PullResourceRequest> ResourceView::GetUnitSnapshotInfo(const std::string &id)
+{
+    ASSERT_IF_NULL(implActor_);
+    return litebus::Async(implActor_->GetAID(), &ResourceViewActor::GetUnitSnapshotInfo, id);
+}
+
 }  // namespace functionsystem::resource_view

@@ -23,12 +23,13 @@
 #include <nlohmann/json.hpp>
 #include <sstream>
 
-#include "logs/logging.h"
-#include "metadata/metadata.h"
 #include "common/constants/actor_name.h"
-#include "proto/pb/message_pb.h"
-#include "proto/pb/posix_pb.h"
-#include "resource_type.h"
+#include "common/constants/constants.h"
+#include "common/logs/logging.h"
+#include "common/metadata/metadata.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/proto/pb/posix_pb.h"
+#include "common/resource_view/resource_type.h"
 #include "common/schedule_decision/scheduler_common.h"
 #include "common/scheduler_framework/utils/label_affinity_selector.h"
 
@@ -410,8 +411,9 @@ static void SetAffinityOpt(::resources::InstanceInfo &instanceInfo, const Create
 
     (*schedReq->mutable_contexts())[LABEL_AFFINITY_PLUGIN].mutable_affinityctx()->set_maxscore(
         optimalScore);
-    auto topo = scheduleOpt->schedpolicyname() == MONOPOLY_SCHEDULE ? affinity::NODE : affinity::POD;
-    scheduleOpt->mutable_affinity()->mutable_instance()->set_scope(topo);
+    if (scheduleOpt->schedpolicyname() == MONOPOLY_SCHEDULE) {
+        scheduleOpt->mutable_affinity()->mutable_instance()->set_scope(affinity::NODE);
+    }
     SetResourceGroupAffinity(instanceInfo);
 }
 
@@ -629,15 +631,9 @@ static int GetRuntimeRecoverTimes(const resources::InstanceInfo &instanceInfo)
     return false;
 }
 
-[[maybe_unused]] inline void SetScheduleReqFunctionAgentIDAndHeteroConfig(
+[[maybe_unused]] inline void UpdateHeteroInfoWithScheduleResult(
     const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result)
 {
-    scheduleReq->mutable_instance()->set_functionagentid(result.id);
-    scheduleReq->mutable_instance()->set_unitid(result.unitID);
-    // only set once
-    scheduleReq->mutable_instance()->clear_schedulerchain();
-    (*scheduleReq->mutable_instance()->mutable_schedulerchain()->Add()) = result.id;
-
     // set hetero device IDs
     auto deviceIDs = result.realIDs;
     if (deviceIDs.empty() || deviceIDs[0] == -1) {
@@ -674,6 +670,61 @@ static int GetRuntimeRecoverTimes(const resources::InstanceInfo &instanceInfo)
     }
 }
 
+[[maybe_unused]] inline void UpdateVectorResourceWithScheduleResult(
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+    const schedule_framework::VectorResourceAllocation &vectorAlloction)
+{
+    if (vectorAlloction.allocationValues.values().count(vectorAlloction.type) == 0) {
+        YRLOG_WARN("{}|{} Empty {} allocation info",
+                   scheduleReq->requestid(), scheduleReq->instance().instanceid(), vectorAlloction.type);
+    }
+
+    auto *resources = scheduleReq->mutable_instance()->mutable_resources()->mutable_resources();
+    (*resources)[vectorAlloction.type].set_name(vectorAlloction.type);
+    (*resources)[vectorAlloction.type].set_type(resource_view::ValueType::Value_Type_VECTORS);
+    (*resources)[vectorAlloction.type].mutable_vectors()->MergeFrom(vectorAlloction.allocationValues);
+}
+
+[[maybe_unused]] inline void UpdateDiskInfoWithScheduleResult(
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+    const schedule_framework::VectorResourceAllocation &vectorAlloction)
+{
+    // Initialize disk mount point for disk environment variables.
+    if (vectorAlloction.extendedInfo.count(resource_view::DISK_MOUNT_POINT) == 0) {
+        YRLOG_WARN("{}|{} Empty disk mount point", scheduleReq->requestid(), scheduleReq->instance().instanceid());
+    }
+    auto mountPoint = vectorAlloction.extendedInfo.at(resource_view::DISK_MOUNT_POINT);
+    auto createOpt = scheduleReq->mutable_instance()->mutable_createoptions();
+    std::string envKey = RUNTIME_ENV_PREFIX + resource_view::DISK_MOUNT_POINT;
+    (*createOpt)[envKey] = mountPoint;
+    YRLOG_INFO("{}|disk(mountpoint:{}) will be allocated to instance: {}", scheduleReq->requestid(), mountPoint,
+               scheduleReq->instance().instanceid());
+}
+
+[[maybe_unused]] inline void UpdateVectorAllocInfoWithScheduleResult(
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result)
+{
+    for (const auto &vectorAlloction : result.vectorAllocations) {
+        if (vectorAlloction.type == resource_view::DISK_RESOURCE_NAME) {
+            UpdateDiskInfoWithScheduleResult(scheduleReq, vectorAlloction);
+        }
+        UpdateVectorResourceWithScheduleResult(scheduleReq, vectorAlloction);
+    }
+}
+
+[[maybe_unused]] inline void MergeScheduleResultToRequest(
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result)
+{
+    scheduleReq->mutable_instance()->set_functionagentid(result.id);
+    scheduleReq->mutable_instance()->set_unitid(result.unitID);
+    // only set once
+    scheduleReq->mutable_instance()->clear_schedulerchain();
+    (*scheduleReq->mutable_instance()->mutable_schedulerchain()->Add()) = result.id;
+
+    UpdateHeteroInfoWithScheduleResult(scheduleReq, result);
+    UpdateVectorAllocInfoWithScheduleResult(scheduleReq, result);
+}
+
 // Checks if the Heterogeneous product regex syntax is valid.
 [[maybe_unused]] inline static bool IsHeteroProductRegexValid(const std::string &productRegex)
 {
@@ -685,8 +736,8 @@ static int GetRuntimeRecoverTimes(const resources::InstanceInfo &instanceInfo)
     }
 }
 
-[[maybe_unused]] inline static std::string GetResourceCardTypeByRegex(const resources::Resources &resources,
-                                                                      const std::string cardTypeRegex)
+[[maybe_unused]] inline static std::string GetResourceCardTypeByRegex(
+    const resources::Resources &resources, const std::string cardTypeRegex)
 {
     std::string cardType = "";
     if (!IsHeteroProductRegexValid(cardTypeRegex)) {
@@ -696,8 +747,7 @@ static int GetRuntimeRecoverTimes(const resources::InstanceInfo &instanceInfo)
 
     std::regex resourceTypePattern = std::regex(cardTypeRegex);
     for (const auto &pair : resources.resources()) {
-        if (std::regex_match(pair.first, resourceTypePattern)
-            && pair.second.type() == resource_view::ValueType::Value_Type_VECTORS) {
+        if (std::regex_match(pair.first, resourceTypePattern)) {
             cardType = pair.first;
             return cardType;
         }
@@ -949,6 +999,35 @@ static void SetInstanceInfo(::resources::InstanceInfo *instanceInfo, CreateReque
     // unsafe special characters：['\"', '\'', ';', '\\', '|', '&', '$', '>', '<', '`']
     std::regex unsafePattern(R"([\"';\\|&$><`])");
     return !std::regex_search(instanceID, unsafePattern);
+}
+
+[[maybe_unused]] inline bool IsStaticFunctionInstance(const resources::InstanceInfo &instanceInfo)
+{
+    // debug config key not found
+    if (auto it = instanceInfo.createoptions();
+        it.contains(RESOURCE_OWNER_KEY) && it.at(RESOURCE_OWNER_KEY) == STATIC_FUNCTION_OWNER_VALUE) {
+        return true;
+    }
+    return false;
+}
+
+inline bool IsStaticFuncInstWithCreateOpt(const ::google::protobuf::Map<std::string, std::string> &createoptions)
+{
+    // debug config key not found
+    if (auto it = createoptions;
+        it.contains(RESOURCE_OWNER_KEY) && it.at(RESOURCE_OWNER_KEY) == STATIC_FUNCTION_OWNER_VALUE) {
+        return true;
+    }
+    return false;
+}
+
+
+inline bool IsDataSystemFeatureUsedStream(const resources::InstanceInfo &instanceInfo)
+{
+    auto extensions = instanceInfo.extensions();
+
+    return extensions.contains(DATASYSTEM_FEATURE_USED)
+           && extensions.at(DATASYSTEM_FEATURE_USED) == DATASYSTEM_FEATURE_USED_STREAM;
 }
 }  // namespace functionsystem
 

@@ -19,9 +19,9 @@
 
 #include <set>
 
-#include "constants.h"
-#include "status/status.h"
-#include "logs/logging.h"
+#include "common/constants/constants.h"
+#include "common/status/status.h"
+#include "common/logs/logging.h"
 #include "resource_tool.h"
 #include "resource_type.h"
 

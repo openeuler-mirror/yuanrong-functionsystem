@@ -24,8 +24,8 @@ namespace functionsystem::explorer {
 TxnExplorerActor::TxnExplorerActor(const std::string &electionKey, const ElectionInfo &electionInfo,
                                    const litebus::Option<LeaderInfo> &leaderInfo,
                                    const std::shared_ptr<MetaStoreClient> &metaStoreClient)
-    : ExplorerActor("TxnExplorerActor-" + litebus::uuid_generator::UUID::GetRandomUUID().ToString(), electionKey,
-                    electionInfo, leaderInfo),
+    : ExplorerActor("TxnExplorerActor-" + litebus::uuid_generator::UUID::GetRandomUUID().ToString(), {electionKey},
+        electionInfo, leaderInfo),
       metaStoreClient_(metaStoreClient)
 {
 }
@@ -42,6 +42,7 @@ void TxnExplorerActor::Finalize()
 
 void TxnExplorerActor::Observe()
 {
+    electionKey_ = !electionKeySet_.empty() ? electionKeySet_.begin()->c_str() : "";
     YRLOG_INFO("{} | start to watch leader", electionKey_);
     auto observer = [aid(GetAID())](const std::vector<WatchEvent> &events, bool) -> bool {
         // If Leader changes during the disconnection from the etcd, the historical revision is used for re-watch.
@@ -56,10 +57,10 @@ void TxnExplorerActor::Observe()
         return true;
     };
 
-    auto syncer = [aid(GetAID())]() -> litebus::Future<SyncResult> {
-        return litebus::Async(aid, &TxnExplorerActor::Sync);
+    auto syncer = [aid(GetAID())](const std::shared_ptr<GetResponse> &response) -> litebus::Future<SyncResult> {
+        return litebus::Async(aid, &TxnExplorerActor::Sync, response);
     };
-
+    RETURN_IF_NULL(metaStoreClient_);
     (void)metaStoreClient_
         ->GetAndWatch(electionKey_, { .prefix = false, .prevKv = false, .revision = 0 }, observer, syncer)
         .Then(std::function<litebus::Future<Status>(const std::shared_ptr<Watcher> &)>(
@@ -98,33 +99,23 @@ void TxnExplorerActor::FastPublish(const LeaderInfo &leaderInfo)
 {
 }
 
-litebus::Future<SyncResult> TxnExplorerActor::Sync()
-{
-    GetOption opts;
-    opts.prefix = true;
-    YRLOG_INFO("start to sync key({}), for txn explorer", electionKey_);
-    ASSERT_IF_NULL(metaStoreClient_);
-    return metaStoreClient_->Get(electionKey_, opts)
-        .Then(litebus::Defer(GetAID(), &TxnExplorerActor::OnSync, std::placeholders::_1));
-}
-
-litebus::Future<SyncResult> TxnExplorerActor::OnSync(const std::shared_ptr<GetResponse> &getResponse)
+litebus::Future<SyncResult> TxnExplorerActor::Sync(const std::shared_ptr<GetResponse> &getResponse)
 {
     if (getResponse->status.IsError()) {
         YRLOG_ERROR("failed to get key({}) from meta storage, for txn explorer", electionKey_);
-        return SyncResult{ getResponse->status, 0 };
+        return SyncResult{ getResponse->status };
     }
 
     if (getResponse->kvs.empty()) {
         YRLOG_WARN("get no result with key({}) from meta storage, for txn explorer, revision is {}", electionKey_,
                    getResponse->header.revision);
-        return SyncResult{ Status::OK(), getResponse->header.revision };
+        return SyncResult{ Status::OK() };
     }
 
     WatchEvent event;
     event.kv = getResponse->kvs.front();
     OnWatchEvent(event);
-    return SyncResult{ Status::OK(), getResponse->header.revision };
+    return SyncResult{ Status::OK() };
 }
 
 }  // namespace functionsystem::explorer

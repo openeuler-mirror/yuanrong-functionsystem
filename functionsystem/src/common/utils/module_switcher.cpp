@@ -20,7 +20,7 @@
 #include <nlohmann/json.hpp>
 #include <utils/os_utils.hpp>
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/utils/exception.h"
 
 namespace functionsystem {

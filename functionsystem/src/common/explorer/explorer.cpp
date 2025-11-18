@@ -18,8 +18,9 @@
 
 #include <async/async.hpp>
 
-#include "status/status.h"
+#include "common/status/status.h"
 #include "etcd_explorer_actor.h"
+#include "k8s_explorer_actor.h"
 #include "txn_explorer_actor.h"
 
 namespace functionsystem::explorer {
@@ -68,8 +69,20 @@ void Explorer::UnbindExplorerActor(const std::string &electionKey)
     Explorer::GetInstance().BindExplorerActor(electionKey, actor);
 }
 
+void Explorer::NewK8sExplorerActorForMaster(const std::string &electionKey, const ElectionInfo &electionInfo,
+                                            const std::string &k8sNamespace,
+                                            const std::shared_ptr<KubeClient> &kubeClient)
+{
+    litebus::Option<LeaderInfo> leaderInfoOpt;
+    auto actor = std::make_shared<K8sExplorerActor>(electionKey, electionInfo, leaderInfoOpt, kubeClient, k8sNamespace);
+    (void)litebus::Spawn(actor);
+    Explorer::GetInstance().BindExplorerActor(electionKey, actor);
+}
+
 [[maybe_unused]] bool Explorer::CreateExplorer(const ElectionInfo &electionInfo, const LeaderInfo &leaderInfo,
-                                               const std::shared_ptr<MetaStoreClient> &metaClient)
+                                               const std::shared_ptr<MetaStoreClient> &metaClient,
+                                               const std::shared_ptr<KubeClient> &kubeClient,
+                                               const std::string &k8sNamespace)
 {
     YRLOG_INFO("create explore, election mode: {}", electionInfo.mode);
     if (electionInfo.mode == STANDALONE_MODE) {
@@ -78,6 +91,8 @@ void Explorer::UnbindExplorerActor(const std::string &electionKey)
         explorer::Explorer::NewEtcdExplorerActorForMaster(leaderInfo.name, electionInfo, metaClient);
     } else if (electionInfo.mode == TXN_ELECTION_MODE) {
         explorer::Explorer::NewTxnExplorerActorForMaster(leaderInfo.name, electionInfo, metaClient);
+    } else if (electionInfo.mode == K8S_ELECTION_MODE) {
+        explorer::Explorer::NewK8sExplorerActorForMaster(leaderInfo.name, electionInfo, k8sNamespace, kubeClient);
     } else {
         return false;
     }

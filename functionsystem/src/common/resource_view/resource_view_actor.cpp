@@ -21,10 +21,10 @@
 #include "async/async.hpp"
 #include "async/asyncafter.hpp"
 #include "async/uuid_generator.hpp"
-#include "constants.h"
-#include "logs/logging.h"
-#include "metrics/metrics_adapter.h"
-#include "status/status.h"
+#include "common/constants/constants.h"
+#include "common/logs/logging.h"
+#include "common/metrics/metrics_adapter.h"
+#include "common/status/status.h"
 #include "common/types/instance_state.h"
 #include "resource_tool.h"
 #include "utils/string_utils.hpp"
@@ -167,6 +167,7 @@ Status ResourceViewActor::AddResourceUnit(const ResourceUnit &value)
     YRLOG_INFO("add one resource unit, resource unit id = {}, resource capacity = {} allocatable = {}, "
                "current revision = {}", value.id(), ToString(value.capacity()), ToString(value.allocatable()),
                view_->revision());
+
     if (isLocal_) {
         Addition addition;
         (*addition.mutable_resourceunit()) = value;
@@ -400,8 +401,7 @@ Status ResourceViewActor::UpdateResourceUnit(const std::shared_ptr<ResourceUnit>
         case UpdateType::UPDATE_STATIC:
         case UpdateType::UPDATE_UNDEFINED:
         default:
-            YRLOG_ERROR("resource view does not support current update operation : {}.",
-                static_cast<std::underlying_type_t<UpdateType>>(type));
+            YRLOG_ERROR("resource view does not support current update operation : {}.", fmt::underlying(type));
             return Status(PARAMETER_ERROR, "not support current update operation");
     }
 
@@ -411,11 +411,10 @@ Status ResourceViewActor::UpdateResourceUnit(const std::shared_ptr<ResourceUnit>
 Status ResourceViewActor::UpdateUnitStatus(const std::string &unitID, UnitStatus status)
 {
     ASSERT_IF_NULL(view_);
-    YRLOG_INFO("update unit({}) status {}", unitID, static_cast<std::underlying_type_t<UnitStatus>>(status));
+    YRLOG_INFO("update unit({}) status {}", unitID, fmt::underlying(status));
     auto unit = view_->mutable_fragment()->find(unitID);
     if (unit == view_->mutable_fragment()->end()) {
-        YRLOG_ERROR("failed to update unit({}) status({}), unit not found.", unitID,
-                    static_cast<std::underlying_type_t<UnitStatus>>(status));
+        YRLOG_ERROR("failed to update unit({}) status({}), unit not found.", unitID, fmt::underlying(status));
         return Status(PARAMETER_ERROR, "update resource unit with unknown ID.");
     }
     uint32_t lastStatus = unit->second.status();
@@ -573,7 +572,7 @@ ResourceViewInfo ResourceViewActor::GetResourceInfo()
     }
     using LableProtoMap = ::google::protobuf::Map<std::string, ValueCounter>;
     return ResourceViewInfo{
-        *view_, reqIDToUnitIDMap_,
+        *view_, GetCurrentSchedulerLevel(), reqIDToUnitIDMap_,
         isLocal_ ? std::unordered_map<std::string, LableProtoMap>{ { view_->id(), view_->nodelabels() } }
                  : allLocalLabels_
     };
@@ -810,7 +809,7 @@ inline void ResourceViewActor::ClearAgentTenantLabels(const std::string &functio
     auto nodeLabels = view_->mutable_nodelabels();
     auto tenantKv = nodeLabels->find(TENANT_ID);
     if (tenantKv != nodeLabels->end()) {
-        YRLOG_INFO("Clear functionAgent({}) labels", functionAgentID);
+        YRLOG_INFO("Clear functionAgent({}) tenant labels", functionAgentID);
         (void)nodeLabels->erase(TENANT_ID);
     }
 }
@@ -839,7 +838,7 @@ inline void ResourceViewActor::OnTenantInstanceInAgentAllDeleted(const std::stri
     } else if (recycleTime == -1) {
         ClearAgentTenantLabels(functionAgentID);
     } else {
-        YRLOG_ERROR("Invalid recycleTime({})", recycleTime);
+        YRLOG_ERROR("Invalid tenantPodReuseTimeWindow({})", tenantPodReuseTimeWindow_);
     }
 }
 
@@ -1066,6 +1065,10 @@ void ResourceViewActor::UpdateResourceUnitActual(const std::shared_ptr<ResourceU
     auto unit = view_->mutable_fragment()->find(value->id());
     // update top level actual use
     if (view_->has_actualuse()) {
+        if (!IsValid(view_->actualuse() - unit->second.actualuse())) {
+            YRLOG_DEBUG_COUNT_60("Unit({}) actual use exceeds view value", value->id());
+            return;
+        }
         // For Set and Vectors, old data must be deleted before new data can be added.
         // For example: {A, B, C} - {B, C} + {B, C} = {A, B, C}, but {A, B, C} + {B, C} - {B, C} = {A}
         (*view_->mutable_actualuse()) = view_->actualuse() - unit->second.actualuse() + value->actualuse();
@@ -1310,54 +1313,88 @@ ResourceUnitChange ResourceViewActor::MergeTwoModifies(ResourceUnitChange &previ
     return previous;
 }
 
-bool ResourceViewActor::ShouldRemoveInstanceChange(const InstanceChange& previous, const InstanceChange& current)
+bool ResourceViewActor::IsValidChangeCombination(const InstanceChange& previous, const InstanceChange& current) const
 {
     if (previous.instanceid() != current.instanceid()) {
         return false;
     }
 
-    if (previous.changetype() == InstanceChange::ADD && current.changetype() == InstanceChange::DELETE) {
-        return true;
+    if (previous.changetype() == InstanceChange::ADD && current.changetype() == InstanceChange::ADD) {
+        return false;
     }
 
-    if (previous.changetype() == InstanceChange::DELETE && current.changetype() == InstanceChange::ADD) {
-        return true;
+    if (previous.changetype() == InstanceChange::DELETE && current.changetype() == InstanceChange::DELETE) {
+        return false;
     }
 
-    YRLOG_WARN("Non-existent combination, instance({}) change type: {}", previous.instanceid(),
-               previous.changetype());
-    return false;
+    return true;
+}
+
+bool ResourceViewActor::ShouldMergeInstanceChange(const InstanceChange& previous, const InstanceChange& current)
+{
+    return previous.changetype() == InstanceChange::ADD && current.changetype() == InstanceChange::DELETE;
+}
+
+bool ResourceViewActor::ShouldRetainInstanceChange(const InstanceChange& previous, const InstanceChange& current)
+{
+    return previous.changetype() == InstanceChange::DELETE && current.changetype() == InstanceChange::ADD;
 }
 
 void ResourceViewActor::MergeInstanceChanges(Modification &previous, const Modification &current) const
 {
     /**
      * 1.add/delete instance1  + add/delete instance2  --> add/delete instance1 + add/delete instance2
-     * 2.add instance1         + delete instance1      --> no changes(remove previous change)
-     * 3.delete instance1      + add instance1         --> no changes(remove previous change)
+     * 2.delete instance1      + add instance1         --> delete instance1 + add instance1
+     * 3.add instance1         + delete instance1      --> no changes(remove previous change)
      * 5.add instance1         + add instance1         --x Non-existent combination
      * 6.delete instance1      + delete instance1      --x Non-existent combination
      */
-    std::vector<std::pair<std::string, InstanceChange>> instanceInfos;
+    std::vector<std::pair<std::string, InstanceChange>> instanceChanges;
     for (const auto& change : previous.instancechanges()) {
-        instanceInfos.push_back({change.instanceid(), change});
+        instanceChanges.push_back({change.instanceid(), change});
     }
 
     for (const auto& change : current.instancechanges()) {
-        auto it = std::find_if(instanceInfos.begin(), instanceInfos.end(),
+        auto it = std::find_if(instanceChanges.begin(), instanceChanges.end(),
                                [&change](const auto& pair) { return pair.first == change.instanceid(); });
-        if (it == instanceInfos.end()) {
-            instanceInfos.push_back({change.instanceid(), change});
+        if (it == instanceChanges.end()) {
+            instanceChanges.push_back({change.instanceid(), change});
             continue;
         }
-        auto instanceInfo = it->second;
-        if (ShouldRemoveInstanceChange(instanceInfo, change)) {
-            instanceInfos.erase(it);
+
+        // instance1 with DELETE and ADD changes
+        auto itSecond = std::find_if(it + 1, instanceChanges.end(),
+                                     [&change](const auto &pair) { return pair.first == change.instanceid(); });
+        if (itSecond != instanceChanges.end()) {
+            if (it->second.changetype() == InstanceChange::DELETE
+                && itSecond->second.changetype() == InstanceChange::ADD) {
+                it = itSecond;
+            } else {
+                YRLOG_WARN("invalid instance({}) resource update, multiple invalid change: {}, {}",
+                           it->second.instanceid(), fmt::underlying(it->second.changetype()),
+                           fmt::underlying(itSecond->second.changetype()));
+                continue;
+            }
+        }
+
+        auto previousChange = it->second;
+        if (!IsValidChangeCombination(previousChange, change)) {
+            YRLOG_WARN("Non-existent combination, instance({}) change type: {}", previousChange.instanceid(),
+                       fmt::underlying(previousChange.changetype()));
+            continue;
+        }
+
+        if (ShouldMergeInstanceChange(previousChange, change)) {
+            instanceChanges.erase(it);
+        }
+
+        if (ShouldRetainInstanceChange(previousChange, change)) {
+            instanceChanges.push_back({change.instanceid(), change});
         }
     }
 
     previous.clear_instancechanges();
-    for (const auto& change : instanceInfos) {
+    for (const auto& change : instanceChanges) {
         *previous.add_instancechanges() = change.second;
     }
 }
@@ -1743,5 +1780,35 @@ int32_t ResourceViewActor::ParseRecyclePodLabel(const ResourceUnit &unit)
         }
     }
     return 0;
+}
+
+inline SCHEDULER_LEVEL ResourceViewActor::GetCurrentSchedulerLevel(void)
+{
+    if (isLocal_) {
+        return SCHEDULER_LEVEL::LOCAL;
+    }
+    if (isHeader_) {
+        return SCHEDULER_LEVEL::ROOT_DOMAIN;
+    }
+    return SCHEDULER_LEVEL::NON_ROOT_DOMAIN;
+}
+
+void ResourceViewActor::TryDelResourceUnitChange(uint64_t revision, const std::string &viewInitTime)
+{
+    if (viewInitTime == view_->viewinittime() && revision <= lastReportedRevision_) {
+        DelChanges(revision);
+    }
+}
+
+litebus::Future<PullResourceRequest> ResourceViewActor::GetUnitSnapshotInfo(const std::string &unitID)
+{
+    PullResourceRequest snapshot;
+    if (localInfoMap_.find(unitID) == localInfoMap_.end()) {
+        YRLOG_WARN("{} was not found, snapshot return empty", unitID);
+        return snapshot;
+    }
+    snapshot.set_version(localInfoMap_[unitID].localRevisionInDomain);
+    snapshot.set_localviewinittime(localInfoMap_[unitID].localViewInitTime);
+    return snapshot;
 }
 }  // namespace functionsystem::resource_view

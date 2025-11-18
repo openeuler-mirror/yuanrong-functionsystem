@@ -17,9 +17,9 @@
 #ifndef COMMON_RESOURCE_VIEW_SCALA_RESOURCE_TOOL_H
 #define COMMON_RESOURCE_VIEW_SCALA_RESOURCE_TOOL_H
 
-#include "constants.h"
-#include "logs/logging.h"
-#include "status/status.h"
+#include "common/constants/constants.h"
+#include "common/logs/logging.h"
+#include "common/status/status.h"
 #include "resource_type.h"
 
 namespace functionsystem::resource_view {

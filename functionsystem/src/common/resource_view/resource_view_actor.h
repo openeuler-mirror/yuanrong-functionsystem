@@ -18,12 +18,12 @@
 #define COMMON_RESOURCE_VIEW_RESOURCE_VIEW_ACTOR_H
 
 #include <list>
+#include <unordered_map>
 
-#include "actor/actor.hpp"
 #include "async/future.hpp"
 #include "async/option.hpp"
 #include "common/utils/actor_driver.h"
-#include "status/status.h"
+#include "common/status/status.h"
 #include "resource_type.h"
 #include "resource_poller.h"
 
@@ -75,7 +75,7 @@ public:
 
     /**
      * @brief Delete local resource view from the domain resource view.
-     * @param ID local resource view identifier
+     * @param localID local resource view identifier
      * @return Return OK if successful, otherwise return the corresponding error code
      */
     Status DeleteLocalResourceView(const std::string &localID);
@@ -193,6 +193,11 @@ public:
     void UpdateDomainUrlForLocal(const std::string &addr);
 
     void UpdateIsHeader(bool isHeader);
+
+    void TryDelResourceUnitChange(uint64_t revision, const std::string &viewInitTime);
+
+    // used by domain
+    litebus::Future<PullResourceRequest> GetUnitSnapshotInfo(const std::string &unitID);
 
     // for test
     [[maybe_unused]] std::unordered_map<std::string, std::unordered_set<std::string>> GetAgentCache()
@@ -322,8 +327,9 @@ private:
     ResourceUnitChange MergeAddAndModify(ResourceUnitChange &previous, const ResourceUnitChange &current);
     ResourceUnitChange MergeTwoModifies(ResourceUnitChange &previous, const ResourceUnitChange &current);
     void MergeInstanceChanges(Modification &previous, const Modification &current) const;
-    static bool ShouldRemoveInstanceChange(const InstanceChange& previous, const InstanceChange& current);
-    static bool ShouldAddInstanceChange(const InstanceChange& previous, const InstanceChange& current);
+    bool IsValidChangeCombination(const InstanceChange& previous, const InstanceChange& current) const;
+    static bool ShouldMergeInstanceChange(const InstanceChange& previous, const InstanceChange& current);
+    static bool ShouldRetainInstanceChange(const InstanceChange& previous, const InstanceChange& current);
     static bool IsResourceUnitChangeEmpty(const ResourceUnitChange& change);
     static bool IsModifyEmpty(const ResourceUnitChange &modify);
     bool CheckLatestRevision(const std::shared_ptr<ResourceUnitChanges> &changes);
@@ -348,6 +354,7 @@ private:
     inline void DisableAgent(const std::string &functionAgentID);
     inline void SetAgentReuseTimer(const std::string &functionAgentID, int32_t recycleTime);
     inline void OnTenantInstanceInAgentAllDeleted(const std::string &functionAgentID, int32_t recycleTime);
+    inline SCHEDULER_LEVEL GetCurrentSchedulerLevel(void);
 
     std::string unitID_;
     std::shared_ptr<ResourceUnit> view_;

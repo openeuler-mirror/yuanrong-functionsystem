@@ -16,8 +16,8 @@
 
 #include "resource_tool.h"
 
-#include "logs/logging.h"
-#include "status/status.h"
+#include "common/logs/logging.h"
+#include "common/status/status.h"
 #include "scala_resource_tool.h"
 #include "vectors_resource_tool.h"
 
@@ -281,6 +281,19 @@ MapCounter operator-(const MapCounter &l, const MapCounter &r)
         }
     }
     return sub;
+}
+
+MapCounter ToLabelKVs(const ::google::protobuf::Map<std::string, std::string> &labels)
+{
+    MapCounter results;
+    for (auto &[key, value] : labels) {
+        MapCounter result;
+        resources::Value::Counter defaultCnt;
+        (void)defaultCnt.mutable_items()->insert({ value, 1 });
+        result[key] = defaultCnt;
+        results = results + result;
+    }
+    return results;
 }
 
 MapCounter ToLabelKV(const std::string &label)

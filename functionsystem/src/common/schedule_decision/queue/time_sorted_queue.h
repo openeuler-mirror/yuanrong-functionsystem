@@ -18,7 +18,7 @@
 #define COMMON_SCHEDULE_DECISION_TIME_SORTED_QUEUE_H
 #include "schedule_queue.h"
 
-#include "status/status.h"
+#include "common/status/status.h"
 
 namespace functionsystem::schedule_decision {
 inline bool operator>(const std::shared_ptr<QueueItem> &r, const std::shared_ptr<QueueItem> &l)

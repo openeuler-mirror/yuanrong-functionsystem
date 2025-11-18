@@ -23,8 +23,8 @@
 #include <vector>
 #include <openssl/md5.h>
 
-#include "files.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
+#include "common/utils/files.h"
 
 namespace functionsystem {
 constexpr size_t HEX_WIDTH = 2;
@@ -68,7 +68,7 @@ std::string CalculateFileMD5(const std::string& filePath)
     MD5(reinterpret_cast<const unsigned char *>(buffer.data()), buffer.size(), result);
 
     // Convert the result to a hexadecimal string
-    char md5String[33] = {0};
+    char md5String[MD5_DIGEST_LENGTH * HEX_WIDTH + 1] = {0}; // MD5_DIGEST_LENGTH is 16， 16 * 2 + 1 = 33
     for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
         sprintf_s(&md5String[i * HEX_WIDTH], MD5_DIGEST_LENGTH, "%02x", static_cast<unsigned int>(result[i]));
     }

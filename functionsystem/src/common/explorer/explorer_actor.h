@@ -17,10 +17,12 @@
 #ifndef COMMON_EXPLORER_ACTOR_H
 #define COMMON_EXPLORER_ACTOR_H
 
+#include <set>
+#include <async/async.hpp>
 #include "actor/actor.hpp"
 #include "async/option.hpp"
 
-#include "constants.h"
+#include "common/constants/constants.h"
 
 namespace functionsystem::explorer {
 const std::string DEFAULT_MASTER_ELECTION_KEY = "/yr/leader/function-master";
@@ -56,8 +58,8 @@ using CallbackFuncLeaderChange = std::function<void(const LeaderInfo &)>;
 class ExplorerActor : public litebus::ActorBase {
 public:
     // when leaseTTL expires, the leadership will be ressigned automatically
-    ExplorerActor(const std::string& name, std::string electionKey, const ElectionInfo &electionInfo,
-                  const litebus::Option<LeaderInfo> &leaderInfo);
+    ExplorerActor(const std::string name, const std::set<std::string> &electionKeySet,
+                  const ElectionInfo &electionInfo, const litebus::Option<LeaderInfo> &leaderInfo);
 
     ~ExplorerActor() override = default;
 
@@ -76,11 +78,15 @@ protected:
 
     // cached current leader info, may not exist
     LeaderInfo cachedLeaderInfo_;
-    std::string electionKey_;
+    std::set<std::string> electionKeySet_;
     std::string mode_;
     uint32_t electKeepAliveInterval_;
     int64_t electRevision_{ 0 };
     std::unordered_map<std::string, CallbackFuncLeaderChange> callbacks_;
+    // concat all election keys as string
+    std::string electionKeyStr_;
+    // indicate who I am
+    std::string identity_;
 };
 }  // namespace functionsystem::explorer
 

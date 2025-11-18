@@ -24,6 +24,22 @@
 #include <vector>
 
 namespace functionsystem::schedule_framework {
+/**
+ * Represents vector-based resource allocation result
+ * type             - Type of resource (e.g. disk, cardType)
+ * selectedIndices  - Device indices that were actually allocated(e.g. [4, 5])
+ * allocationValues - Corresponding allocation values(Resource's name: Value.Vectors)(e.g. [0, 0, 100, 100]), where:
+ *                    ==0 means not allocated
+ *                    >0 indicates allocated amount
+ * extendedInfo     - Additional resource info (e.g. heteroProductName, diskMountPoint)
+ */
+struct VectorResourceAllocation {
+    std::string type;
+    std::vector<int> selectedIndices;
+    ::resources::Value_Vectors allocationValues;
+    std::map<std::string, std::string> extendedInfo;
+};
+
 struct NodeScore {
     explicit NodeScore(int64_t score) : score(score) {}
     NodeScore(const std::string &name, int64_t score) : name(name), score(score) {}
@@ -43,6 +59,9 @@ struct NodeScore {
 
     // Resource's name: Value.Vectors
     std::map<std::string, ::resources::Value_Vectors> allocatedVectors;
+    // Vector-based resource allocation results
+    std::vector<VectorResourceAllocation> vectorAllocations;
+
     bool operator<(const NodeScore& a) const
     {
         return score < a.score;
@@ -52,12 +71,21 @@ struct NodeScore {
     {
         this->score += a.score;
         // Currently, only heterogeneous plugins return the following information, which is aggregated in overwrite
-        // mode
+        // mode --> will be merged into append mode below.
+        if (!a.heteroProductName.empty()) {
+            this->heteroProductName = a.heteroProductName;
+        }
         if (!(a.realIDs.empty())) {
             this->realIDs = a.realIDs;
         }
         for (const auto &vector : a.allocatedVectors) {
             this->allocatedVectors[vector.first] = vector.second;
+        }
+        // Currently, only disk plugins return the vector allocation information, which is moved in append mode.
+        if (!a.vectorAllocations.empty()) {
+            this->vectorAllocations.insert(this->vectorAllocations.end(),
+                                           std::make_move_iterator(a.vectorAllocations.begin()),
+                                           std::make_move_iterator(a.vectorAllocations.end()));
         }
         // availableForRequest is assign separately
         return *this;

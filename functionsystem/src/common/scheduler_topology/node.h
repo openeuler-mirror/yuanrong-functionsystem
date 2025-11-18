@@ -21,7 +21,7 @@
 #include <string>
 #include <unordered_map>
 
-#include "proto/pb/message_pb.h"
+#include "common/proto/pb/message_pb.h"
 
 namespace functionsystem {
 

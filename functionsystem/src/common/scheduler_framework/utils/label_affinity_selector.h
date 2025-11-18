@@ -19,8 +19,8 @@
 
 #include <string>
 #include <vector>
-#include "logs/logging.h"
-#include "proto/pb/posix_pb.h"
+#include "common/logs/logging.h"
+#include "common/proto/pb/posix_pb.h"
 
 namespace functionsystem {
 const int MAX_PRIORITY_SCORE = 100;

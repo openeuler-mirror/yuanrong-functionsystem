@@ -21,7 +21,7 @@
 #include <memory>
 #include <string>
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/service_json/service_info.h"
 
 namespace functionsystem::service_json {

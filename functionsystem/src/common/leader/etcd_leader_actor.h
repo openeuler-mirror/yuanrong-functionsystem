@@ -85,6 +85,9 @@ private:
     int64_t currentLeaseId_ = -1;
 
     litebus::Timer keepAliveTimer_;
+
+    // etcd election only supports one election key now
+    std::string electionKey_;
 };
 }  // namespace functionsystem::leader
 

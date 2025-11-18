@@ -95,6 +95,7 @@ void PriorityScheduler::HandleResourceInfoUpdate(const resource_view::ResourceVi
 {
     resourceInfo_ = resourceInfo;
     preContext_ = std::make_shared<schedule_framework::PreAllocatedContext>();
+    preContext_->schedulerLevel = resourceInfo_.schedulerLevel;
     preContext_->allLocalLabels = resourceInfo_.allLocalLabels;
 }
 
@@ -113,6 +114,7 @@ void PriorityScheduler::ConsumeRunningQueue()
 
 void PriorityScheduler::DoConsume()
 {
+    ASSERT_IF_NULL(runningQueue_);
     auto item = runningQueue_->Front();
     if (item == nullptr) {
         YRLOG_WARN("item is null");
@@ -121,9 +123,12 @@ void PriorityScheduler::DoConsume()
     // if cancel, skip
     if (item->cancelTag.IsOK()) {
         YRLOG_WARN("{}|schedule is canceled, reason: {}", item->GetRequestId(), item->cancelTag.Get());
+        item->AssociateFailure(StatusCode::ERR_SCHEDULE_CANCELED, item->cancelTag.Get());
         runningQueue_->Dequeue();
         return;
     }
+    ASSERT_IF_NULL(pendingQueue_);
+    ASSERT_IF_NULL(priorityPolicy_);
     if (!priorityPolicy_->CanSchedule(item)) {
         YRLOG_DEBUG("{}|Exists a similar pending request, push it to pending queue", item->GetRequestId());
         pendingQueue_->Enqueue(item);
@@ -191,8 +196,10 @@ void PriorityScheduler::OnScheduleDone(const litebus::Future<ScheduleResult> &fu
 {
     auto &result = future.Get();
     if (!instance->cancelTag.IsInit()) {
+        std::string reason = instance->cancelTag.IsOK() ? instance->cancelTag.Get() : "timeout";
         YRLOG_WARN("{}|instance schedule is canceled (reason: {}), but schedule has completed, need to rollback",
-                   instance->GetRequestId(), instance->cancelTag.IsOK() ? instance->cancelTag.Get() : "timeout");
+                   instance->GetRequestId(), reason);
+        instance->AssociateFailure(StatusCode::ERR_SCHEDULE_CANCELED, reason);
         ASSERT_IF_NULL(instancePerformer_);
         instancePerformer_->RollBack(preContext_, instance, result);
         EraseRecord(instance);
@@ -200,6 +207,7 @@ void PriorityScheduler::OnScheduleDone(const litebus::Future<ScheduleResult> &fu
     }
     auto &resCode = result.code;
     const auto &timeout = instance->scheduleReq->instance().scheduleoption().scheduletimeoutms();
+    ASSERT_IF_NULL(priorityPolicy_);
     if (priorityPolicy_->NeedSuspend(resCode, timeout) && !NeedCreateAgentInDomain(instance->scheduleReq->instance(), 0)
         && recorder_ != nullptr) {
         YRLOG_WARN("{}|instance schedule resource not enough (resCode: {}), push it to pending queue",
@@ -221,13 +229,16 @@ void PriorityScheduler::OnScheduleDone(const litebus::Future<GroupScheduleResult
     auto &result = future.Get();
     ASSERT_IF_NULL(groupPerformer_);
     if (!group->cancelTag.IsInit()) {
+        std::string reason = group->cancelTag.IsOK() ? group->cancelTag.Get() : "timeout";
         YRLOG_WARN("{}|group schedule is canceled (reason: {}), but schedule has completed, need to rollback",
-                   group->GetRequestId(), group->cancelTag.IsOK() ? group->cancelTag.Get() : "timeout");
+                   group->GetRequestId(), reason);
+        group->AssociateFailure(StatusCode::ERR_SCHEDULE_CANCELED, reason);
         groupPerformer_->RollBack(preContext_, group, result);
         EraseRecord(group);
         return;
     }
     auto &resCode = result.code;
+    ASSERT_IF_NULL(priorityPolicy_);
     if (priorityPolicy_->NeedSuspend(resCode, group->GetTimeout()) && recorder_ != nullptr)  {
         YRLOG_WARN("{}|group schedule resource not enough (resCode: {}), push it to pending queue",
                    group->GetRequestId(), resCode);

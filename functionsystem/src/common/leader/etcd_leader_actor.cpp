@@ -26,11 +26,12 @@ using namespace functionsystem::explorer;
 
 EtcdLeaderActor::EtcdLeaderActor(const std::string &electionKey, const explorer::ElectionInfo &electionInfo,
                                  const std::shared_ptr<MetaStoreClient> &metaStoreClient)
-    : LeaderActor("EtcdLeaderActor-" + litebus::uuid_generator::UUID::GetRandomUUID().ToString(), electionKey,
+    : LeaderActor("EtcdLeaderActor-" + litebus::uuid_generator::UUID::GetRandomUUID().ToString(), {electionKey},
                   electionInfo),
       metaStoreClient_(metaStoreClient)
 {
     YRLOG_INFO("start etcd leader actor({})", std::string(GetAID()));
+    electionKey_ = electionKeySet_.size() > 0 ? electionKeySet_.begin()->c_str() : "";
 }
 
 void EtcdLeaderActor::Init()

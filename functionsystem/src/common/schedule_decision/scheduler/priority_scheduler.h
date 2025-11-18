@@ -17,7 +17,7 @@
 #ifndef DOMAIN_DECISION_FAIRNESS_SCHEDULER_H
 #define DOMAIN_DECISION_FAIRNESS_SCHEDULER_H
 
-#include "resource_type.h"
+#include "common/resource_view/resource_type.h"
 #include "common/schedule_decision/performer/group_schedule_performer.h"
 #include "common/schedule_decision/performer/instance_schedule_performer.h"
 #include "common/schedule_decision/queue/aggregated_queue.h"

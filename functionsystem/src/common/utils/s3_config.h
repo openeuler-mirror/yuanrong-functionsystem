@@ -17,8 +17,8 @@
 #ifndef COMMON_UTILS_S3_CONFIG_H
 #define COMMON_UTILS_S3_CONFIG_H
 
-#include "sensitive_value.h"
-#include "constants.h"
+#include "common/utils/sensitive_value.h"
+#include "common/constants/constants.h"
 #include "function_agent/common/constants.h"
 
 namespace functionsystem {

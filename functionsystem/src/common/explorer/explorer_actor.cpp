@@ -19,33 +19,45 @@
 #include <utility>
 
 #include "async/async.hpp"
-#include "logs/logging.h"
-#include "status/status.h"
+#include "common/logs/logging.h"
+#include "common/status/status.h"
 
 namespace functionsystem::explorer {
 
-ExplorerActor::ExplorerActor(const std::string &name, std::string electionKey, const ElectionInfo &electionInfo,
-                             const litebus::Option<LeaderInfo> &leaderInfo)
-    : litebus::ActorBase(name),
-      electionKey_(std::move(electionKey)),
-      mode_(electionInfo.mode),
-      electKeepAliveInterval_(electionInfo.electKeepAliveInterval)
+std::string ConcatSet(const std::set<std::string> &set)
 {
+    std::ostringstream oss;
+    for (const auto& element : set) {
+        oss << element << " ";
+    }
+    return oss.str();
+}
+
+ExplorerActor::ExplorerActor(const std::string name, const std::set<std::string> &electionKeySet,
+                             const ElectionInfo &electionInfo, const litebus::Option<LeaderInfo> &leaderInfo)
+    : litebus::ActorBase(name),
+      electionKeySet_(electionKeySet),
+      mode_(electionInfo.mode),
+      electKeepAliveInterval_(electionInfo.electKeepAliveInterval),
+      identity_(electionInfo.identity)
+{
+    electionKeyStr_ = ConcatSet(electionKeySet_);
     if (mode_ == ETCD_ELECTION_MODE || mode_ == TXN_ELECTION_MODE || mode_ == K8S_ELECTION_MODE) {
-        YRLOG_INFO("{} | create explorer, use {} mode", electionKey_, mode_);
+        YRLOG_INFO("{} | create explorer, use {} mode", electionKeyStr_, mode_);
     } else {
+        YRLOG_INFO("explorerActor({}) use standalone mode", electionKeyStr_);
         if (leaderInfo.IsNone()) {
-            YRLOG_ERROR("{} | LeaderInfo is required in standalone, but is none", electionKey_);
+            YRLOG_ERROR("{} | LeaderInfo is required in standalone, but is none", electionKeyStr_);
             return;
         }
-        YRLOG_INFO("{} | create explorer use standalone mode", electionKey_);
+        YRLOG_INFO("{} | create explorer use standalone mode", electionKeyStr_);
         cachedLeaderInfo_ = leaderInfo.Get();
     }
 }
 
 void ExplorerActor::Init()
 {
-    YRLOG_INFO("{} | init explorer, use {} mode", electionKey_, mode_);
+    YRLOG_INFO("{} | init explorer, use {} mode", electionKeyStr_, mode_);
     if (mode_ == ETCD_ELECTION_MODE || mode_ == TXN_ELECTION_MODE || mode_ == K8S_ELECTION_MODE) {
         litebus::Async(GetAID(), &ExplorerActor::Observe);
     }
@@ -53,7 +65,7 @@ void ExplorerActor::Init()
 
 void ExplorerActor::Finalize()
 {
-    YRLOG_INFO("{} | clear explorer_actor", electionKey_);
+    YRLOG_INFO("{} | clear explorer_actor", electionKeyStr_);
     callbacks_.clear();
 }
 
@@ -61,18 +73,20 @@ void ExplorerActor::RegisterLeaderChangedCallback(const std::string &cbIdentifie
                                                   const CallbackFuncLeaderChange &cbFunc)
 {
     RETURN_IF_NULL(cbFunc);
+    YRLOG_INFO("register leader changed callback to ExplorerActor({}) with id({})", electionKeyStr_,
+               cbIdentifier);
     callbacks_[cbIdentifier] = cbFunc;
     if (cachedLeaderInfo_.address.empty()) {
-        YRLOG_INFO("{} | register leader changed callback({})", electionKey_, cbIdentifier);
+        YRLOG_INFO("{} | register leader changed callback({})", electionKeyStr_, cbIdentifier);
     } else {
-        YRLOG_INFO("{} | register and trigger leader changed callback({})", electionKey_, cbIdentifier);
+        YRLOG_INFO("{} | register and trigger leader changed callback({})", electionKeyStr_, cbIdentifier);
         cbFunc(cachedLeaderInfo_);
     }
 }
 
 void ExplorerActor::UnregisterLeaderChangedCallback(const std::string &cbIdentifier)
 {
-    YRLOG_INFO("{} | unregister leader changed callback({})", electionKey_, cbIdentifier);
+    YRLOG_INFO("{} | unregister leader changed callback({})", electionKeyStr_, cbIdentifier);
     (void)callbacks_.erase(cbIdentifier);
 }
 }  // namespace functionsystem::explorer

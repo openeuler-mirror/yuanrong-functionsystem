@@ -16,11 +16,11 @@
 
 #include "service_json.h"
 
-#include "metadata/metadata.h"
+#include "common/metadata/metadata.h"
 #include "common/resource_view/resource_tool.h"
 #include "common/service_json/service_handler.h"
 #include "common/service_json/service_metadata.h"
-#include "files.h"
+#include "common/utils/files.h"
 #include "common/yaml_tool/yaml_tool.h"
 
 namespace functionsystem::service_json {
@@ -29,7 +29,8 @@ static const uint32_t SERVICE_NAME_MAX_LEN = 16;
 static std::unordered_set<std::string> runtimeEnum = {
     CPP_RUNTIME_VERSION,         JAVA_RUNTIME_VERSION,      JAVA11_RUNTIME_VERSION,    PYTHON_RUNTIME_VERSION,
     PYTHON3_RUNTIME_VERSION,     PYTHON36_RUNTIME_VERSION,  PYTHON37_RUNTIME_VERSION,  PYTHON38_RUNTIME_VERSION,
-    PYTHON39_RUNTIME_VERSION,    PYTHON310_RUNTIME_VERSION, PYTHON311_RUNTIME_VERSION, GO_RUNTIME_VERSION
+    PYTHON39_RUNTIME_VERSION,    PYTHON310_RUNTIME_VERSION, PYTHON311_RUNTIME_VERSION, GO_RUNTIME_VERSION,
+    POSIX_CUSTOM_RUNTIME_VERSION
 };
 
 bool NameMatch(const std::string &str, const std::string &regex)
@@ -675,15 +676,19 @@ litebus::Option<FunctionMeta> BuildFunctionMeta(const ServiceInfo &serviceInfo, 
                              .instanceMetaData = InstanceMetaData{ .maxInstance = functionConfig.minInstance,
                                                                    .minInstance = functionConfig.maxInstance,
                                                                    .concurrentNum = functionConfig.concurrentNum,
-                                                                   .cacheInstance = functionConfig.cacheInstance},
+                                                                   .cacheInstance = functionConfig.cacheInstance,
+                                                                   .diskLimit = 0,
+                                                                   .scalePolicy = "" },
                              .mountConfig = {},
                              .deviceMetaData = { .hbm = functionConfig.device.hbm,
                                                 .latency = functionConfig.device.latency,
                                                 .stream = functionConfig.device.stream,
                                                 .count = functionConfig.device.count,
                                                 .model = functionConfig.device.model,
-                                                .type = functionConfig.device.type }},
-                         .instanceMetaData = {}};
+                                                .type = functionConfig.device.type },
+                             .initializer = {}, .userAgency = {}, .customGracefulShutdown = {} },
+                         .instanceMetaData = {},
+                         .rawJsonStr = ""};
 }
 
 litebus::Option<std::vector<FunctionMeta>> ConvertFunctionMeta(const std::vector<ServiceInfo> &serviceInfos,
@@ -785,8 +790,8 @@ void LoadFuncMetaFromServiceYaml(std::unordered_map<std::string, FunctionMeta> &
         for (const auto &meta : functionMeta.Get()) {
             auto funcKey = GetFuncName(meta.funcMetaData.name, meta.funcMetaData.version, meta.funcMetaData.tenantId);
             if (funcKey.IsNone()) {
-                YRLOG_ERROR("(funcMeta)failed to get func name , name: {}, version: {}",
-                            meta.funcMetaData.name, meta.funcMetaData.version);
+                YRLOG_ERROR("(funcMeta)failed to get func name , name: {}, version: {}, tenantID: {}",
+                            meta.funcMetaData.name, meta.funcMetaData.version, meta.funcMetaData.tenantId);
                 return;
             }
             map[funcKey.Get()] = meta;

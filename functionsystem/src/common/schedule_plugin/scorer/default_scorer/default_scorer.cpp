@@ -16,7 +16,7 @@
 
 #include "default_scorer.h"
 
-#include "constants.h"
+#include "common/constants/constants.h"
 #include "common/resource_view/scala_resource_tool.h"
 #include "common/schedule_plugin/common/constants.h"
 #include "common/schedule_plugin/common/plugin_register.h"
@@ -44,9 +44,8 @@ schedule_framework::NodeScore DefaultScorer::Score(const std::shared_ptr<schedul
     int64_t calculated = 0;
     int64_t accumulated = 0;
     for (auto &req : required) {
-        // hetero resource score in hetero scorer
-        auto resourceNameFields = litebus::strings::Split(req.first, "/");
-        if (resourceNameFields.size() == HETERO_RESOURCE_FIELD_NUM) {
+        // hetero resource score in hetero scorer, disk resource score in disk scorer
+        if (resource_view::IsHeterogeneousResource(req.first) || resource_view::IsDiskResource(req.first)) {
             continue;
         }
         // required number is zero don't need to score

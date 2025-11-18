@@ -17,8 +17,8 @@
 #ifndef COMMON_ACTOR_DRIVER_H
 #define COMMON_ACTOR_DRIVER_H
 #include "async/async.hpp"
-#include "status/status.h"
-#include "logs/logging.h"
+#include "common/status/status.h"
+#include "common/logs/logging.h"
 namespace functionsystem {
 // Standardizes the actor startup process.
 class BasisActor : public litebus::ActorBase {

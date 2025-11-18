@@ -21,7 +21,7 @@
 
 #include "async/future.hpp"
 #include "timer/timertools.hpp"
-#include "proto/pb/message_pb.h"
+#include "common/proto/pb/message_pb.h"
 #include "common/resource_view/resource_view.h"
 #include "common/schedule_decision/performer/schedule_performer.h"
 #include "common/schedule_decision/scheduler/priority_scheduler.h"

@@ -22,9 +22,9 @@
 #include <cstdlib>
 #include <map>
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
-#include "resource_type.h"
+#include "common/resource_view/resource_type.h"
 #include "common/resource_view/scala_resource_tool.h"
 #include "common/schedule_plugin/common/constants.h"
 #include "common/schedule_plugin/common/plugin_register.h"
@@ -127,8 +127,7 @@ std::vector<float> CalcHeterogeneousHbmScore(const std::string cardType,
                 hbmScores.push_back(INVALID_SCORE);
                 continue;
             }
-            float score = (BASE_SCORE_FACTOR - float(reqVal) / float(pair.second.values().at(i))) *
-                float(DEFAULT_SCORE);
+            float score = (float(reqVal) / float(pair.second.values().at(i))) * float(DEFAULT_SCORE);
             hbmScores.push_back(score);
             YRLOG_DEBUG("node {} device{}|Hbm req {}, Hbm avail {}, Hbm score {}", pair.first, i, float(reqVal),
                         float(pair.second.values().at(i)), score);
@@ -160,8 +159,7 @@ std::vector<float> CalcHeterogeneousLatencyScore(const resources::Resources &ava
     for (auto &pair: category.vectors()) {
         for (auto &cardResource: pair.second.values()) {
             auto curAvail = -cardResource;
-            float score = (float(curMaxLatency - curAvail) / float(curMaxLatency + MIN_SCORE_THRESHOLD)) *
-                float(DEFAULT_SCORE);
+            float score = (curAvail / float(curMaxLatency + MIN_SCORE_THRESHOLD)) * float(DEFAULT_SCORE);
             latencyScores.push_back(score);
             YRLOG_DEBUG("node {} device{}|Latency max {}, device cur latency {}, score is {}",
                         pair.first, idx++, curMaxLatency, curAvail, score);
@@ -201,7 +199,7 @@ std::vector<float> CalcHeterogeneousStreamScore(const resources::Resources &avai
                 idx++;
                 continue;
             }
-            float score = (float(cardResource) / float(curMaxAvailStream)) * float(DEFAULT_SCORE);
+            float score = (BASE_SCORE_FACTOR - (float(cardResource) / float(curMaxAvailStream))) * float(DEFAULT_SCORE);
             streamScores.push_back(score);
             YRLOG_DEBUG("node {} device{}|stream avail {}, max stream avail {}, stream req {}, score is {}", pair.first,
                         idx++, cardResource, curMaxAvailStream, reqVal, score);

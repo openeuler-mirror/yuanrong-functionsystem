@@ -27,8 +27,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include "logs/logging.h"
-#include "metadata/metadata.h"
+#include "common/logs/logging.h"
+#include "common/metadata/metadata.h"
 #include "common/service_json/service_info.h"
 
 namespace functionsystem::service_json {

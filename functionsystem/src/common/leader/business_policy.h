@@ -18,8 +18,8 @@
 #define COMMON_LEADER_BUSINESS_POLICY_H
 
 #include <string>
-
-#include "logs/logging.h"
+#include "actor/aid.hpp"
+#include "common/logs/logging.h"
 
 namespace functionsystem::leader {
 

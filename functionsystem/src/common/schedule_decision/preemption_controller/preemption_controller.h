@@ -19,7 +19,7 @@
 
 #include <unordered_map>
 
-#include "resource_type.h"
+#include "common/resource_view/resource_type.h"
 #include "common/schedule_plugin/common/preallocated_context.h"
 
 namespace functionsystem::schedule_decision {
@@ -41,12 +41,19 @@ struct PreemptableUnit {
 // for debug info print
 struct InFeasibleContext {
     std::unordered_set<std::string> infeasibleUnits;
+    std::unordered_set<std::string> crossTenantUnits;
     std::unordered_set<std::string> noPreemptableInstanceUnits;
     const size_t maxRecord = 10;
     void InsertInfeasibleUnit(const std::string &unitID)
     {
         if (infeasibleUnits.size() < maxRecord) {
             infeasibleUnits.insert(unitID);
+        }
+    }
+    void InsertCrossTenantUnit(const std::string &unitID)
+    {
+        if (crossTenantUnits.size() < maxRecord) {
+            crossTenantUnits.insert(unitID);
         }
     }
     void InsertNoPreemptableInstanceUnits(const std::string &unitID)
@@ -62,6 +69,10 @@ struct InFeasibleContext {
         ss << out << "{ infeasible: ";
         for (auto &infeasible : infeasibleUnits) {
             ss << infeasible << " ";
+        }
+        ss << "}, { crossTenant: ";
+        for (auto &cross : crossTenantUnits) {
+            ss << cross << " ";
         }
         ss << "}, { NoPreemptableInstance: ";
         for (auto &noPreemtable : noPreemptableInstanceUnits) {
@@ -91,6 +102,7 @@ public:
 private:
     bool IsUnitMeetRequired(const std::shared_ptr<schedule_framework::PreAllocatedContext> &ctx,
                             const resource_view::InstanceInfo &instance, const resource_view::ResourceUnit &frag);
+    bool IsCrossedTenant(const resource_view::InstanceInfo &instance, const resource_view::ResourceUnit &frag);
     bool IsResourceAffinityMeetRequired(const std::shared_ptr<schedule_framework::PreAllocatedContext> &ctx,
                                         const resource_view::InstanceInfo &instance,
                                         const resource_view::ResourceUnit &frag, int64_t &score);

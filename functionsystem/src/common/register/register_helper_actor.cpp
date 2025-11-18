@@ -17,11 +17,13 @@
 #include "register_helper_actor.h"
 
 #include "async/asyncafter.hpp"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
+#include "utils/os_utils.hpp"
 
 namespace functionsystem {
 
 static const std::string REGISTER_HELPER_SUFFIX = "-RegisterHelper";
+static const std::string REGISTER_HELPER_ACTOR_NAME = "RegisterHelper";
 static constexpr uint64_t DEFAULT_REGISTER_TIMEOUT = 1000;
 static const uint32_t DEFAULT_MAX_PING_TIMES = 12;
 
@@ -32,32 +34,32 @@ void RegisterHelperActor::Init()
 }
 
 RegisterHelperActor::RegisterHelperActor(const std::string &name)
-    : ActorBase(name + REGISTER_HELPER_SUFFIX),
-      name_(name),
-      registerInterval_(DEFAULT_REGISTER_TIMEOUT),
+    : ActorBase(name + REGISTER_HELPER_SUFFIX), name_(name), registerInterval_(DEFAULT_REGISTER_TIMEOUT),
       receiveRegistered_(false)
-{
-}
+{}
 
 RegisterHelperActor::~RegisterHelperActor()
 {
-    heartbeatObserver_ = nullptr;
-    pingPongDriver_ = nullptr;
+    if (pingPongDriver_ != nullptr) {
+        (void)pingPongDriver_->Stop();
+        pingPongDriver_ = nullptr;
+    }
+    heartbeatObserveDriver_ = nullptr;
 }
 
-void RegisterHelperActor::StartRegister(const std::string &name, const std::string &address, const std::string &msg,
-                                        int32_t maxRegistersTimes)
+void RegisterHelperActor::StartRegister(
+    const std::string &name, const std::string &address, const std::string &msg, uint32_t maxRegistersTimes)
 {
     YRLOG_DEBUG("send message(Register) to {}@{}", name + REGISTER_HELPER_SUFFIX, address);
     receiveRegistered_ = false;
     std::string registerMsg(msg);
     Send(litebus::AID(name + REGISTER_HELPER_SUFFIX, address), "Register", std::move(registerMsg));
-    registerTimer_ = litebus::AsyncAfter(registerInterval_, GetAID(), &RegisterHelperActor::RetryRegister, name,
-                                         address, msg, maxRegistersTimes - 1);
+    registerTimer_ = litebus::AsyncAfter(
+        registerInterval_, GetAID(), &RegisterHelperActor::RetryRegister, name, address, msg, maxRegistersTimes - 1);
 }
 
-void RegisterHelperActor::RetryRegister(const std::string &name, const std::string &address, const std::string &msg,
-                                        int32_t retryTimes)
+void RegisterHelperActor::RetryRegister(
+    const std::string &name, const std::string &address, const std::string &msg, uint32_t retryTimes)
 {
     if (receiveRegistered_) {
         YRLOG_INFO("registration already succeeded");
@@ -77,8 +79,8 @@ void RegisterHelperActor::RetryRegister(const std::string &name, const std::stri
     YRLOG_ERROR("not receive Registered message, register timeout, retry times({})", retryTimes);
     std::string registerMsg(msg);
     Send(litebus::AID(name + REGISTER_HELPER_SUFFIX, address), "Register", std::move(registerMsg));
-    registerTimer_ = litebus::AsyncAfter(registerInterval_, GetAID(), &RegisterHelperActor::RetryRegister, name,
-                                         address, msg, retryTimes - 1);
+    registerTimer_ = litebus::AsyncAfter(
+        registerInterval_, GetAID(), &RegisterHelperActor::RetryRegister, name, address, msg, retryTimes - 1);
 }
 
 void RegisterHelperActor::Register(const litebus::AID &from, std::string &&name, std::string &&msg)
@@ -133,12 +135,6 @@ void RegisterHelperActor::SendRegistered(const std::string &name, const std::str
     YRLOG_DEBUG("send message(Registered) to {}@{}", name + REGISTER_HELPER_SUFFIX, address);
     std::string registeredMsg(msg);
     Send(litebus::AID(name + REGISTER_HELPER_SUFFIX, address), "Registered", std::move(registeredMsg));
-    if (heartbeatObserver_ != nullptr) {
-        YRLOG_INFO("start send heartbeat");
-        (void)heartbeatObserver_->Start();
-    } else {
-        YRLOG_INFO("heartbeat observe driver is null");
-    }
 }
 
 bool RegisterHelperActor::IsRegistered()
@@ -146,46 +142,54 @@ bool RegisterHelperActor::IsRegistered()
     return receiveRegistered_;
 }
 
-void RegisterHelperActor::SetPingPongDriver(const uint32_t &timeoutMs, const PingPongActor::TimeOutHandler &handler)
+void RegisterHelperActor::SetPingPongDriver(const std::string &dstName, const std::string &dstAddress,
+                                            const uint32_t &timeoutMs, const HeartbeatClient::TimeOutHandler &handler,
+                                            const std::string &heartbeatName)
 {
-    pingPongDriver_ = nullptr;
-    pingPongDriver_ = std::make_shared<PingPongDriver>(GetAID().Name(), timeoutMs, handler);
-    litebus::Async(GetAID(), &RegisterHelperActor::WaitFirstPing, registeredFrom_.Name() + HEARTBEAT_BASENAME,
-                   registeredFrom_.Url());
+    YRLOG_DEBUG("set ping pong driver, name: {}, address: {}, timeoutMs : {}, GetAID().Name(): {}", dstName, dstAddress,
+                timeoutMs, GetAID().Name());
+    if (pingPongDriver_ == nullptr) {
+        pingPongDriver_ = std::make_shared<HeartbeatClientDriver>(
+            litebus::os::Join(componentName_, dstName, '-') + REGISTER_HELPER_SUFFIX, DEFAULT_MAX_PING_TIMES,
+            timeoutMs / DEFAULT_MAX_PING_TIMES, handler);
+    }
+    litebus::AID heartBeatAID(HEARTBEAT_OBSERVER_BASENAME + heartbeatName, dstAddress);
+    pingPongDriver_->Start(heartBeatAID);
 }
 
 void RegisterHelperActor::SetHeartbeatObserveDriver(const std::string &dstName, const std::string &dstAddress,
-                                                    const uint32_t &timeoutMs,
-                                                    const HeartbeatObserver::TimeOutHandler &handler)
+    const uint32_t &timeoutMs, const HeartbeatObserver::TimeOutHandler &handler, const std::string &heartbeatName)
 {
-    heartbeatObserver_ = nullptr;
-    heartbeatObserver_ = std::make_shared<HeartbeatObserveDriver>(
-        GetAID().Name(), litebus::AID(dstName + REGISTER_HELPER_SUFFIX + PINGPONG_BASENAME, dstAddress),
-        DEFAULT_MAX_PING_TIMES, timeoutMs / DEFAULT_MAX_PING_TIMES, handler);
+    litebus::AID pingPongAID;
+    pingPongAID.SetName(HEARTBEAT_CLIENT_BASENAME + dstName + REGISTER_HELPER_SUFFIX);
+    pingPongAID.SetUrl(dstAddress);
+    pingPongAID.SetProtocol(litebus::BUS_TCP);
+    YRLOG_DEBUG("wait first ping from {}", pingPongAID.HashString());
+    if (heartbeatObserveDriver_ == nullptr) {
+        heartbeatObserveDriver_ = std::make_shared<HeartbeatObserveDriver>(heartbeatName);
+    }
+
+    heartbeatObserveDriver_->AddNewHeartbeatNode(pingPongAID, timeoutMs, handler);
 }
 
 void RegisterHelperActor::StopHeartbeatObserver()
 {
-    heartbeatObserver_ = nullptr;
+    if (pingPongDriver_ != nullptr) {
+        litebus::AID pingPongAID = pingPongDriver_->GetActorAID();
+        heartbeatObserveDriver_->RemoveHeartbeatNode(pingPongAID);
+    }
 }
 
 void RegisterHelperActor::StopPingPongDriver()
 {
-    pingPongDriver_ = nullptr;
-}
-
-void RegisterHelperActor::WaitFirstPing(const std::string &name, const std::string &address)
-{
     if (pingPongDriver_ != nullptr) {
-        litebus::AID observeAID;
-        observeAID.SetName(name);
-        observeAID.SetUrl(address);
-        observeAID.SetProtocol(litebus::BUS_UDP);
-        YRLOG_DEBUG("wait first ping from {}", observeAID.HashString());
-        pingPongDriver_->CheckFirstPing(observeAID);
-    } else {
-        YRLOG_WARN("ping pong driver is null");
+        (void)pingPongDriver_->Stop();
+        pingPongDriver_ = nullptr;
     }
+}
+void RegisterHelperActor::SetComponentName(const std::string &componentName)
+{
+    componentName_ = componentName;
 }
 
 }  // namespace functionsystem

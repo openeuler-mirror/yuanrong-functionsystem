@@ -17,7 +17,7 @@
 #include "register_helper.h"
 
 #include "async/async.hpp"
-#include "status/status.h"
+#include "common/status/status.h"
 #include "litebus.hpp"
 
 namespace functionsystem {
@@ -35,7 +35,7 @@ RegisterHelper::~RegisterHelper()
 }
 
 void RegisterHelper::StartRegister(const std::string &name, const std::string &address, const std::string &msg,
-                                   int32_t maxRegistersTimes)
+                                   uint32_t maxRegistersTimes)
 {
     ASSERT_IF_NULL(actor_);
     litebus::Async(actor_->GetAID(), &RegisterHelperActor::StartRegister, name, address, msg, maxRegistersTimes);
@@ -77,19 +77,23 @@ litebus::Future<bool> RegisterHelper::IsRegistered()
     return litebus::Async(actor_->GetAID(), &RegisterHelperActor::IsRegistered);
 }
 
-void RegisterHelper::SetPingPongDriver(const uint32_t &timeoutMs, const PingPongActor::TimeOutHandler &handler)
+void RegisterHelper::SetPingPongDriver(const std::string &dstName, const std::string &dstAddress,
+                                       const uint32_t &timeoutMs, const HeartbeatClient::TimeOutHandler &handler,
+                                       const std::string &heartbeatName)
 {
     ASSERT_IF_NULL(actor_);
-    return litebus::Async(actor_->GetAID(), &RegisterHelperActor::SetPingPongDriver, timeoutMs, handler);
+    return litebus::Async(actor_->GetAID(), &RegisterHelperActor::SetPingPongDriver, dstName, dstAddress, timeoutMs,
+                          handler, heartbeatName);
 }
 
 void RegisterHelper::SetHeartbeatObserveDriver(const std::string &dstName, const std::string &dstAddress,
                                                const uint32_t &timeoutMs,
-                                               const HeartbeatObserver::TimeOutHandler &handler)
+                                               const HeartbeatObserver::TimeOutHandler &handler,
+                                               const std::string &heartbeatName)
 {
     ASSERT_IF_NULL(actor_);
     return litebus::Async(actor_->GetAID(), &RegisterHelperActor::SetHeartbeatObserveDriver, dstName, dstAddress,
-                          timeoutMs, handler);
+                          timeoutMs, handler, heartbeatName);
 }
 
 void RegisterHelper::StopPingPongDriver()
@@ -102,6 +106,12 @@ void RegisterHelper::StopHeartbeatObserver()
 {
     ASSERT_IF_NULL(actor_);
     litebus::Async(actor_->GetAID(), &RegisterHelperActor::StopHeartbeatObserver);
+}
+
+void RegisterHelper::SetComponentName(const std::string &componentName)
+{
+    ASSERT_IF_NULL(actor_);
+    actor_->SetComponentName(componentName);
 }
 
 }  // namespace functionsystem

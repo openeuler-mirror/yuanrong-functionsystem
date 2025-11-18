@@ -31,20 +31,26 @@ public:
 
     // Methods for downstream.
     void StartRegister(const std::string &name, const std::string &address, const std::string &msg,
-                       int32_t maxRegistersTimes);
+                       uint32_t maxRegistersTimes);
     void SetRegisterInterval(const uint64_t interval);
     litebus::Future<bool> IsRegistered();
     void SetRegisteredCallback(const std::function<void(const std::string &)> &func);
     void SetRegisterTimeoutCallback(const std::function<void()> &func);
-    void SetPingPongDriver(const uint32_t &timeoutMs, const PingPongActor::TimeOutHandler &handler);
+    void SetPingPongDriver(const std::string &dstName, const std::string &dstAddress, const uint32_t &timeoutMs,
+                           const HeartbeatClient::TimeOutHandler &handler, const std::string &heartbeatName);
 
     // Methods for upstream.
     virtual void SendRegistered(const std::string &name, const std::string &address, const std::string &msg);
     void SetRegisterCallback(const std::function<void(const std::string &)> &func);
-    void SetHeartbeatObserveDriver(const std::string &dstName, const std::string &dstAddress,
-                                   const uint32_t &timeoutMs, const HeartbeatObserver::TimeOutHandler &handler);
+    void SetHeartbeatObserveDriver(const std::string &dstName, const std::string &dstAddress, const uint32_t &timeoutMs,
+                                   const HeartbeatObserver::TimeOutHandler &handler, const std::string &heartbeatName);
     void StopPingPongDriver();
     void StopHeartbeatObserver();
+    /* *
+     * set component name
+     * @return
+     */
+    void SetComponentName(const std::string &componentName);
 
 private:
     std::shared_ptr<RegisterHelperActor> actor_;

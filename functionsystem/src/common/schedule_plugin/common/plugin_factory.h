@@ -21,7 +21,7 @@
 
 #include "common/scheduler_framework/framework/framework.h"
 #include "common/scheduler_framework/framework/policy.h"
-#include "singleton.h"
+#include "common/utils/singleton.h"
 
 namespace functionsystem::schedule_framework {
 using PluginCreator = std::function<std::shared_ptr<SchedulePolicyPlugin>()>;

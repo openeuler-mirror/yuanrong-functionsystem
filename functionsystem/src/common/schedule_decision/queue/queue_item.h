@@ -18,9 +18,9 @@
 #define DOMAIN_DECISION_QUEUE_ITEM_H
 
 #include "async/future.hpp"
-#include "logs/logging.h"
-#include "proto/pb/message_pb.h"
-#include "resource_type.h"
+#include "common/logs/logging.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/resource_view/resource_type.h"
 #include "common/schedule_decision/scheduler_common.h"
 #include "litebus.hpp"
 
@@ -37,6 +37,7 @@ public:
     virtual std::string GetRequestId() = 0;
     virtual uint16_t GetPriority() = 0;
     virtual int64_t CreatedTimestamp() = 0;
+    virtual void AssociateFailure(const StatusCode code, const std::string reason) = 0;
     inline void TagFailure()
     {
         hasFailed = true;
@@ -90,6 +91,12 @@ public:
         }
         return scheduleReq->instance().scheduleoption().priority();
     }
+    void AssociateFailure(const StatusCode code, const std::string reason) override
+    {
+        if (schedulePromise->GetFuture().IsInit()) {
+            schedulePromise->Associate(ScheduleResult{ "", static_cast<int32_t>(code), reason, {}, {} });
+        }
+    }
     int64_t CreatedTimestamp() override
     {
         if (scheduleReq == nullptr || !scheduleReq->has_instance()) {
@@ -141,6 +148,12 @@ public:
         }
         return groupReqs.front()->scheduleReq->instance().scheduleoption().priority();
     }
+    void AssociateFailure(const StatusCode code, const std::string reason) override
+    {
+        if (groupPromise->GetFuture().IsInit()) {
+            groupPromise->Associate(GroupScheduleResult{ static_cast<int32_t>(code), reason, {} });
+        }
+    }
     inline GroupSpec::RangeOpt GetRangeOpt() const
     {
         return opt;
@@ -182,7 +195,9 @@ public:
         reqQueue = std::make_shared<std::deque<std::shared_ptr<InstanceItem> > >();
         reqQueue->emplace_back(item);
     }
-
+    void AssociateFailure(const StatusCode code, const std::string reason) override {
+        // do nothing for implementing virtual functions
+    }
     QueueItemType GetItemType() override
     {
         return QueueItemType::AGGREGATED_ITEM;

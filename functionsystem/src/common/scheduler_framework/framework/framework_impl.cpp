@@ -20,10 +20,10 @@
 
 #include "async/try.hpp"
 #include "common/schedule_plugin/common/constants.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
 #include "common/scheduler_framework/framework/policy.h"
-#include "status/status.h"
+#include "common/status/status.h"
 
 using namespace functionsystem::resource_view;
 
@@ -67,6 +67,7 @@ struct AggregatedStatus {
 static std::unordered_map<std::string, double> g_scoreWeights = {
     {schedule_plugin::DEFAULT_SCORER_NAME, 1.0},
     {schedule_plugin::DEFAULT_HETEROGENEOUS_SCORER_NAME, 1.0},
+    {schedule_plugin::DISK_SCORER_NAME, 1.0},
     {schedule_plugin::LABEL_AFFINITY_SCORER_NAME, 100.0},
     {schedule_plugin::RELAXED_LABEL_AFFINITY_SCORER_NAME, 100.0},
     {schedule_plugin::STRICT_LABEL_AFFINITY_SCORER_NAME, 100.0},
@@ -76,8 +77,7 @@ bool FrameworkImpl::RegisterPolicy(const std::shared_ptr<SchedulePolicyPlugin> &
 {
     auto ret = plugins_[plugin->GetPluginType()].emplace(plugin->GetPluginName(), plugin);
     if (!ret.second) {
-        YRLOG_ERROR("duplicate plugin {} type({})", plugin->GetPluginName(),
-            static_cast<std::underlying_type_t<PolicyType>>(plugin->GetPluginType()));
+        YRLOG_ERROR("duplicate plugin {} type({})", plugin->GetPluginName(), fmt::underlying(plugin->GetPluginType()));
     }
     // The default weight of each scoring plug-in is 1
     if (plugin->GetPluginType() == PolicyType::SCORE_POLICY) {
@@ -236,6 +236,7 @@ NodeScore FrameworkImpl::Score(const std::shared_ptr<ScheduleContext> &ctx, cons
         auto plugin = std::dynamic_pointer_cast<ScorePlugin>(it->second);
         auto pluginScore = plugin->Score(ctx, instance, resourceUnit);
         pluginScore.score = pluginScore.score * scorePluginWeight[plugin->GetPluginName()];
+        // Performs move-semantics accumulation; after this operation, 'pluginScore' becomes invalid (moved-from state)
         result += pluginScore;
         if (!pluginScore.heteroProductName.empty()) {
             result.heteroProductName = pluginScore.heteroProductName;
