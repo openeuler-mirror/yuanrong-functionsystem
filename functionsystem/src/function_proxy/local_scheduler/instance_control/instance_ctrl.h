@@ -227,8 +227,6 @@ public:
     // Forwards subscription-related events (including subscribe/unsubscribe requests)
     virtual litebus::Future<KillResponse> ForwardSubscriptionEvent(const std::shared_ptr<KillContext> &ctx);
 
-    virtual litebus::Future<Status> Checkpoint(const std::string &instanceID,);
-
 private:
     std::shared_ptr<InstanceCtrlActor> instanceCtrlActor_;
     // should be moved out instance ctrl in the future
