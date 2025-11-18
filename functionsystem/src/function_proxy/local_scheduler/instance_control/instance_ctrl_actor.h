@@ -369,6 +369,7 @@ public:
                                             const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
     litebus::Future<Status> ToSuspend(const std::string &instanceID);
     litebus::Future<Status> ToResume(const std::string &instanceID);
+    litebus::Future<Status> MakeCheckpoint(const std::string &instanceID);
     litebus::Future<Status> ToScheduling(const std::shared_ptr<messages::ScheduleRequest> &req);
     litebus::Future<Status> ToCreating(const std::shared_ptr<messages::ScheduleRequest> &req,
                                        const schedule_decision::ScheduleResult &result);

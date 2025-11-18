@@ -97,6 +97,14 @@ static AddressInfo GenerateAddressInfo(const std::string &instanceID, const std:
     return info;
 }
 
+KillResponse StatusToKillResponse(const Status &status)
+{
+    KillResponse rsp;
+    rsp.set_code(Status::GetPosixErrorCode(status.StatusCode()));
+    rsp.set_message(status.RawMessage());
+    return rsp;
+}
+
 InstanceCtrlActor::InstanceCtrlActor(const std::string &name, const std::string &nodeID,
                                      const InstanceCtrlConfig &config)
     : BasisActor(name),
@@ -334,6 +342,16 @@ litebus::Future<KillResponse> InstanceCtrlActor::Kill(const std::string &srcInst
         }
         case UNSUBSCRIBE_SIGNAL: {
             return ProcessUnsubscribeRequest(srcInstanceID, killReq);
+        }
+        case INSTANCE_CHECKPOINT_SIGNAL: {
+            return MakeCheckpoint(killReq->instanceid()).Then([](const Status &status){
+                return StatusToKillResponse(status);
+            });
+        }
+        case INSTANCE_TRANS_SUSPEND_SIGNAL: {
+            return ToSuspend(killReq->instanceid()).Then([](const Status &status){
+                return StatusToKillResponse(status);
+            });
         }
         case MIN_USER_SIGNAL_NUM ... MAX_SIGNAL_NUM: {
             return CheckInstanceExist(srcInstanceID, killReq)
@@ -5214,6 +5232,21 @@ litebus::Future<Status> InstanceCtrlActor::ToResume(const std::string &instanceI
     });
 }
 
+Status SuspendStateCheck(const InstanceState &state, const std::string &instanceID)
+{
+    if (state == InstanceState::SUSPEND) {
+        YRLOG_INFO("InstanceID:{} is already suspended", instanceID);
+        return Status::OK();
+    }
+    if (state != InstanceState::RUNNING) {
+        auto msg = fmt::format("suspend failed: InstanceID {} is not in running state, current state: {}", instanceID,
+                               fmt::underlying(state));
+        YRLOG_ERROR("{}", msg);
+        return Status(StatusCode::ERR_STATE_MACHINE_ERROR, msg);
+    }
+    return Status::OK();
+}
+
 litebus::Future<Status> InstanceCtrlActor::ToSuspend(const std::string &instanceID)
 {
     ASSERT_IF_NULL(instanceControlView_);
@@ -5222,10 +5255,15 @@ litebus::Future<Status> InstanceCtrlActor::ToSuspend(const std::string &instance
         return Status(StatusCode::ERR_INSTANCE_NOT_FOUND,
                       fmt::format("instance({}) not found for suspend", instanceID));
     }
+    if (auto status = SuspendStateCheck(stateMachine->GetInstanceState(), instanceID); status.IsError()) {
+        return status;
+    }
     auto future = TransInstanceState(
-        stateMachine, TransContext{ InstanceState::SUSPEND, stateMachine->GetVersion(),
+                      stateMachine,
+                      TransContext{ InstanceState::SUSPEND, stateMachine->GetVersion(),
                                     "WARN: instance is already SUSPEND, please resume instance before you invoke it",
-                                    true, StatusCode::ERR_INSTANCE_SUSPEND });
+                                    true, StatusCode::ERR_INSTANCE_SUSPEND })
+                      .Then([](const TransitionResult &result) { return result.status; });
 
     future.OnComplete([aid(GetAID()), stateMachine, instanceID](const Status &status) {
         if (status.IsError()) {
@@ -5238,6 +5276,21 @@ litebus::Future<Status> InstanceCtrlActor::ToSuspend(const std::string &instance
             .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, std::placeholders::_1, info));
     });
     return future;
+}
+
+litebus::Future<Status> InstanceCtrlActor::MakeCheckpoint(const std::string &instanceID)
+{
+    ASSERT_IF_NULL(instanceControlView_);
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        auto msg = fmt::format("instance({}) not found to checkpoint", instanceID);
+        YRLOG_ERROR("{}", msg);
+        return Status(StatusCode::ERR_INSTANCE_NOT_FOUND, msg);
+    }
+    if (auto status = SuspendStateCheck(stateMachine->GetInstanceState(), instanceID); status.IsError()) {
+        return status;
+    }
+    return Checkpoint(instanceID);
 }
 
 }  // namespace functionsystem::local_scheduler
