@@ -234,14 +234,19 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
   if [ "x${USER_LOG_EXPORT_MODE}" == "xstd" ]; then
     user_lod_export_option=""
   fi
+  local agent_uid=${YR_POD_NAME}
+  if [ "x${YR_POD_NAME}" == "x" ]; then
+    agent_uid="${NODE_ID}"
+  fi
   LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
+  HOST_IP="${IP_ADDRESS}" \
   RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG\
     INIT_LABELS=${LABELS} \
     ${bin} \
     --enable_merge_process=true \
     --ip="${IP_ADDRESS}" \
     --node_id="${NODE_ID}" \
-    --agent_uid="${YR_POD_NAME}" \
+    --agent_uid="${agent_uid}" \
     --alias="${FUNCTION_AGENT_ALIAS}" \
     --log_config="${FS_LOG_CONFIG}" \
     --litebus_thread_num="${FUNCTION_AGENT_LITEBUS_THREAD}" \
