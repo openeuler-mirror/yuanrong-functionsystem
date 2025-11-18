@@ -131,7 +131,7 @@ private:
     LogInfo readyToFlushLogs_;
     litebus::Timer timer_;
 
-    std::shared_ptr<spdlog::logger> userStdLogger_;
+    std::shared_ptr<yr_spdlog::logger> userStdLogger_;
     std::shared_ptr<observability::api::logs::LoggerProvider> lp_{ nullptr };
     std::shared_ptr<observability::sdk::logs::LogManager> logManager_{ nullptr };
 
