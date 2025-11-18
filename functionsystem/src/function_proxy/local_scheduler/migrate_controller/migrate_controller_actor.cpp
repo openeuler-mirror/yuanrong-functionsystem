@@ -42,17 +42,38 @@ void MigrateControllerActor::Update(const std::string &instanceID,
         return;
     }
     auto state = instanceInfo.instancestatus().code();
-    litebus::Async(this->GetAID(), &MigrateControllerActor::StoreInstState, instanceID, state);
+    StoreInstState(instanceID, state);
 }
 
 void MigrateControllerActor::Delete(const std::string &instanceID)
 {
-    litebus::Async(this->GetAID(), &MigrateControllerActor::DelInstState, instanceID);
+    DelInstState(instanceID);
 }
 
 litebus::Future<KillResponse> MigrateControllerActor::SuspendInstance(const std::shared_ptr<KillRequest> &killReq)
 {
     auto instanceID = killReq->instanceid();
+    auto iter = instanceStateMap_.find(instanceID);
+    KillResponse killRes;
+    if (iter == instanceStateMap_.end()) {
+        killRes.set_code(common::ErrorCode::ERR_SUSPEND_RESUME_ERROR);
+        killRes.set_message("suspend failed: InstanceID " + instanceID + " not found in migrate monitor map");
+        YRLOG_ERROR("InstanceID:{} suspend failed, not found in migrate monitor map", instanceID);
+        return killRes;
+    }
+    if (iter->second == static_cast<int32_t>(InstanceState::SUSPENDED)) {
+        killRes.set_code(common::ErrorCode::ERR_NONE);
+        YRLOG_INFO("InstanceID:{} is already suspended", instanceID);
+        return killRes;
+    }
+    if (iter->second != static_cast<int32_t>(InstanceState::RUNNING)) {
+        killRes.set_code(common::ErrorCode::ERR_SUSPEND_RESUME_ERROR);
+        killRes.set_message("suspend failed: InstanceID " + instanceID +
+                            " is not in running state, current state:" + std::to_string(iter->second));
+        YRLOG_ERROR("InstanceID:{} tsuspend failed, is not in running state, current sate:{}", instanceID,
+                    iter->second);
+        return killRes;
+    }
     return this->instanceCtrl_->Checkpoint(instanceID).Then([instanceID](const Status &status) {
         if (status.IsError()) {
             YRLOG_ERROR("InstanceID:{} suspend failed, checkpoint error: {}", instanceID, status.ToString());
