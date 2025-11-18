@@ -113,7 +113,7 @@ messages::FunctionSystemStatus ParseResponse(const std::string &body)
 {
     messages::FunctionSystemStatus status;
     YRLOG_INFO("body: {}", body);
-    google::protobuf::util::JsonStringToMessage(body, &status) ;
+    (void)google::protobuf::util::JsonStringToMessage(body, &status) ;
     return status;
 }
 
