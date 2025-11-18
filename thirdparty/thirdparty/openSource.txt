@@ -16,4 +16,5 @@ libboundscheck,v1.1.16,runtime;litebus;functionsystem;metrics,https://gitee.com/
 curl,8.8.0,litebus,https://gitee.com/mirrors/curl/repository/archive/curl-8_8_0.zip,73c70c94f487c5ae26f9f27094249e40bb1667ae6c0406a75c3b11f86f0c1128,test
 gtest_1_12_1,release-1.12.1,litebus;functionsystem;metrics;logs,https://gitee.com/mirrors/googletest/repository/archive/release-1.12.1.zip,4f1037f17462dbcc4d715f2fc8212c03431ad06e7a4b73bb49b3f534a13b21f1,test
 gtest_1_10_0,release-1.10.0,functionsystem,https://gitee.com/mirrors/googletest/repository/archive/release-1.10.0.zip,db55081e6b5a5f820d052f8d37e0d29835dd5a2bd5b8d4d50590b7834f9abfae,test
+huaweicloud-sdk-c-obs,v3.24.3,functionsystem,https://gitee.com/mirrors/huaweicloud-sdk-c-obs/repository/archive/v3.24.3.zip,ed744c92494d2d7fd171e776abfef627ac7bdd0e24910a207e83d3887cafb2bd,test
 ,,,,,,

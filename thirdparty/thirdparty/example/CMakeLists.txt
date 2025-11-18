@@ -38,6 +38,8 @@ include(securec)
 include(spdlog)
 include(yaml)
 include(zlib)
+include(curl)
+include(obs)
 include(protobuf)
 include(grpc)
 include(etcd)
@@ -46,7 +48,6 @@ include(jemalloc)
 if("${BUILD_TEST_THIRDPARTY}" STREQUAL "ON")
     include(gtest_1_10_0)
     include(gtest_1_12_1)
-    include(curl)
 
     add_custom_target(main
         DEPENDS
@@ -63,6 +64,7 @@ if("${BUILD_TEST_THIRDPARTY}" STREQUAL "ON")
         yaml
         zlib
         jemalloc
+        obs
     )
 else()
     add_custom_target(main
@@ -77,6 +79,8 @@ else()
         yaml
         zlib
         jemalloc
+        curl
+        obs
     )
 endif()
 
