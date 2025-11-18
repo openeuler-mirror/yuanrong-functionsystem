@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(src_dir ${THIRDPARTY_SRC_DIR}/zlib)
+set(src_dir ${VENDOR_SRC_DIR}/zlib)
 set(src_name zlib)
 
 set(${src_name}_CMAKE_ARGS

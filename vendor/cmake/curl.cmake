@@ -13,16 +13,16 @@
 # limitations under the License.
 
 set(src_name curl)
-set(src_dir ${THIRDPARTY_SRC_DIR}/curl)
+set(src_dir ${VENDOR_SRC_DIR}/curl)
 set(curl_PATCHES
-        ${BUILD_CONFIG_DIR}/thirdparty/patches/curl/backport-CVE-2024-6197.patch
-        ${BUILD_CONFIG_DIR}/thirdparty/patches/curl/backport-CVE-2024-6874.patch
-        ${BUILD_CONFIG_DIR}/thirdparty/patches/curl/backport-CVE-2024-7264.patch
-        ${BUILD_CONFIG_DIR}/thirdparty/patches/curl/backport-CVE-2024-8096.patch
-        ${BUILD_CONFIG_DIR}/thirdparty/patches/curl/backport-CVE-2024-9681.patch
-        ${BUILD_CONFIG_DIR}/thirdparty/patches/curl/backport-CVE-2024-11053.patch
-        ${BUILD_CONFIG_DIR}/thirdparty/patches/curl/backport-CVE-2025-0167.patch
-        ${BUILD_CONFIG_DIR}/thirdparty/patches/curl/backport-CVE-2025-0725.patch
+        ${VENDOR_PATCHES_DIR}/curl/backport-CVE-2024-6197.patch
+        ${VENDOR_PATCHES_DIR}/curl/backport-CVE-2024-6874.patch
+        ${VENDOR_PATCHES_DIR}/curl/backport-CVE-2024-7264.patch
+        ${VENDOR_PATCHES_DIR}/curl/backport-CVE-2024-8096.patch
+        ${VENDOR_PATCHES_DIR}/curl/backport-CVE-2024-9681.patch
+        ${VENDOR_PATCHES_DIR}/curl/backport-CVE-2024-11053.patch
+        ${VENDOR_PATCHES_DIR}/curl/backport-CVE-2025-0167.patch
+        ${VENDOR_PATCHES_DIR}/curl/backport-CVE-2025-0725.patch
 )
 
 set(${src_name}_CMAKE_ARGS

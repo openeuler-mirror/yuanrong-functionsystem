@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(etcd_dir ${THIRDPARTY_SRC_DIR}/etcd)
-set(gogo_protobuf_dir ${THIRDPARTY_SRC_DIR}/gogo-protobuf)
-set(google_common_api_dir ${THIRDPARTY_SRC_DIR}/grpc-gateway/third_party/googleapis)
+set(etcd_dir ${VENDOR_SRC_DIR}/etcd)
+set(gogo_protobuf_dir ${VENDOR_SRC_DIR}/gogo-protobuf)
+set(google_common_api_dir ${VENDOR_SRC_DIR}/grpc-gateway/third_party/googleapis)
 
 set(HISTORY_INSTALLLED "${EP_BUILD_DIR}/Install/etcdapi")
 if (NOT EXISTS ${HISTORY_INSTALLLED})
@@ -84,14 +84,14 @@ set(etcdapi_CMAKE_ARGS
         -DCMAKE_SHARED_LINKER_FLAGS=${THIRDPARTY_LINK_FLAGS}
 )
 
-message(STATUS "THIRDPARTY_INSTALL_DIR: ${THIRDPARTY_INSTALL_DIR}/")
+message(STATUS "VENDOR_INSTALL_DIR: ${VENDOR_INSTALL_DIR}/")
 
 EXTERNALPROJECT_ADD(etcdapi
         DOWNLOAD_COMMAND
                 cd ${etcd_proto_SRC} &&
                 LD_LIBRARY_PATH=${grpc_LIB_DIR}:${protobuf_LIB_DIR} ${protobuf_ROOT}/bin/protoc --proto_path=${etcd_proto_SRC}/ --cpp_out=<SOURCE_DIR> ${PROTO_SRCS} &&
                 LD_LIBRARY_PATH=${grpc_LIB_DIR}:${protobuf_LIB_DIR} ${protobuf_ROOT}/bin/protoc --proto_path=${etcd_proto_SRC}/ --grpc_out=<SOURCE_DIR> ${PROTO_GRPC_SRCS} --plugin=protoc-gen-grpc=${grpc_ROOT}/bin/grpc_cpp_plugin &&
-                cp ${BUILD_CONFIG_DIR}/thirdparty/cmake/CMakeLists.txt.etcdapi <SOURCE_DIR>/CMakeLists.txt
+                cp ${VENDOR_CMAKE_DIR}/CMakeLists.txt.etcdapi <SOURCE_DIR>/CMakeLists.txt
         CMAKE_ARGS ${etcdapi_CMAKE_ARGS} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
         LOG_CONFIGURE ON
         LOG_BUILD ON

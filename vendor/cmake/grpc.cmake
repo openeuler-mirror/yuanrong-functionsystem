@@ -1,10 +1,10 @@
 # Build the libs grpc depends
 # c-ares
-set(c-ares_src_dir ${THIRDPARTY_SRC_DIR}/c-ares)
+set(c-ares_src_dir ${VENDOR_SRC_DIR}/c-ares)
 message(STATUS "c-ares src dir: ${c-ares_src_dir}")
-set(re2_src_dir ${THIRDPARTY_SRC_DIR}/re2)
+set(re2_src_dir ${VENDOR_SRC_DIR}/re2)
 message(STATUS "re2 src dir: ${re2_src_dir}")
-set(grpc_src_dir ${THIRDPARTY_SRC_DIR}/grpc)
+set(grpc_src_dir ${VENDOR_SRC_DIR}/grpc)
 message(STATUS "grpc src dir: ${grpc_src_dir}")
 
 set(c-ares_CMAKE_ARGS
@@ -19,8 +19,7 @@ set(c-ares_CMAKE_ARGS
 )
 
 set(HISTORY_INSTALLLED "${EP_BUILD_DIR}/Install/c-ares")
-set(patch_files
-        ${BUILD_CONFIG_DIR}/thirdparty/patches/c-ares/backport-CVE-2024-25629.patch)
+set(patch_files ${VENDOR_PATCHES_DIR}/c-ares/backport-CVE-2024-25629.patch)
 if (NOT EXISTS ${HISTORY_INSTALLLED})
 PATCH_FOR_SOURCE(${c-ares_src_dir} ${patch_files})
 EXTERNALPROJECT_ADD(c-ares
@@ -108,8 +107,7 @@ message(STATUS "grpc build type: ${CMAKE_BUILD_TYPE}")
 
 set(HISTORY_INSTALLLED "${EP_BUILD_DIR}/Install/grpc")
 if (NOT EXISTS ${HISTORY_INSTALLLED})
-set(grpc_patch_files
-        ${BUILD_CONFIG_DIR}/thirdparty/patches/grpc/grpc_1_65_4_gcc_7_3.patch)
+set(grpc_patch_files ${VENDOR_PATCHES_DIR}/grpc/grpc_1_65_4_gcc_7_3.patch)
 PATCH_FOR_SOURCE(${grpc_src_dir} ${grpc_patch_files})
 
 EXTERNALPROJECT_ADD(grpc

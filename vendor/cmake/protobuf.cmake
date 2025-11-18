@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(abseil-cpp_src_dir ${THIRDPARTY_SRC_DIR}/abseil-cpp)
+set(abseil-cpp_src_dir ${VENDOR_SRC_DIR}/abseil-cpp)
 message(STATUS "abseil-cpp src dir: ${abseil-cpp_src_dir}")
-set(src_dir ${THIRDPARTY_SRC_DIR}/protobuf)
+set(src_dir ${VENDOR_SRC_DIR}/protobuf)
 set(src_name protobuf)
 
 set(absl_CMAKE_ARGS
@@ -70,8 +70,7 @@ set(${src_name}_CMAKE_ARGS
 
 set(HISTORY_INSTALLLED "${EP_BUILD_DIR}/Install/${src_name}")
 if (NOT EXISTS ${HISTORY_INSTALLLED})
-set(patch_files
-        ${BUILD_CONFIG_DIR}/thirdparty/patches/protobuf/protobuf_gcc_7_3.patch)
+set(patch_files ${VENDOR_PATCHES_DIR}/protobuf/protobuf_gcc_7_3.patch)
 PATCH_FOR_SOURCE(${src_dir} ${patch_files})
 EXTERNALPROJECT_ADD(${src_name}
         SOURCE_DIR ${src_dir}

@@ -13,21 +13,21 @@
 # limitations under the License.
 
 set(src_name openssl)
-set(src_dir ${THIRDPARTY_SRC_DIR}/openssl)
+set(src_dir ${VENDOR_SRC_DIR}/openssl)
 set(${src_name}_COMMON_FLAGS "-O2 -fuse-ld=gold -pipe -fPIC -fstack-protector-strong -D_FORTIFY_SOURCE=2 -DNDEBUG")
 set(${src_name}_C_FLAGS "-std=gnu11 ${${src_name}_COMMON_FLAGS} ${CODE_GENERATE_FLAGS} ${OPTIMIZE_FLAGS}")
 set(${src_name}_CXX_FLAGS "-std=c++14 ${${src_name}_COMMON_FLAGS} ${CODE_GENERATE_FLAGS} ${OPTIMIZE_FLAGS}")
 
 set(HISTORY_INSTALLLED "${EP_BUILD_DIR}/Install/${src_name}")
 set(patch_files
-    ${BUILD_CONFIG_DIR}/thirdparty/patches/openssl/backport-CVE-2024-0727.patch
-    ${BUILD_CONFIG_DIR}/thirdparty/patches/openssl/backport-CVE-2024-0727-2.patch
-    ${BUILD_CONFIG_DIR}/thirdparty/patches/openssl/backport-CVE-2024-2511.patch
-    ${BUILD_CONFIG_DIR}/thirdparty/patches/openssl/backport-CVE-2024-4741.patch
-    ${BUILD_CONFIG_DIR}/thirdparty/patches/openssl/backport-CVE-2024-4741-2.patch
-    ${BUILD_CONFIG_DIR}/thirdparty/patches/openssl/backport-CVE-2024-5535.patch
-    ${BUILD_CONFIG_DIR}/thirdparty/patches/openssl/backport-CVE-2024-9143.patch
-    ${BUILD_CONFIG_DIR}/thirdparty/patches/openssl/backport-CVE-2024-13176.patch
+    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-0727.patch
+    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-0727-2.patch
+    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-2511.patch
+    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-4741.patch
+    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-4741-2.patch
+    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-5535.patch
+    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-9143.patch
+    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-13176.patch
 )
 
 if (NOT EXISTS ${HISTORY_INSTALLLED})

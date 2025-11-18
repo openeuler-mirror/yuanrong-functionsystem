@@ -23,9 +23,10 @@ CPU_NUM="$(grep -c 'processor' /proc/cpuinfo)"
 . "${BASE_DIR}"/tools/utils.sh
 
 function thirdparty_compile() {
-  cd "${BASE_DIR}"/thirdparty/thirdparty
-  bash download_opensource.sh
-  bash example/build.sh -j ${JOB_NUM}
+  python ${BASE_DIR}/scripts/executor/download_opensource.py --config ${BASE_DIR}/vendor/ThirdPartyList.csv --output ${BASE_DIR}/vendor/src
+  cd "${BASE_DIR}"/vendor
+  cmake -B build
+  cmake --build build --parallel ${JOB_NUM}
 
   # compile thirdparty: etcd
   cd "${BASE_DIR}"/scripts/

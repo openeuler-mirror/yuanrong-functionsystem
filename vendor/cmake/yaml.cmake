@@ -12,11 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(src_name gtest_1_12_1)
-set(src_dir ${THIRDPARTY_SRC_DIR}/gtest_1_12_1)
+set(src_name yaml)
+set(src_dir ${VENDOR_SRC_DIR}/yaml-cpp)
 
-set(${src_name}_CMAKE_OPTIONS
-        -DCMAKE_BUILD_TYPE:STRING=Release
+set(${src_name}_CMAKE_ARGS
+        -DCMAKE_BUILD_TYPE=Release
+        -DYAML_BUILD_SHARED_LIBS=ON
+        -DYAML_CPP_BUILD_TESTS=OFF
+        -DCMAKE_C_FLAGS_RELEASE=${THIRDPARTY_C_FLAGS}
         -DCMAKE_CXX_FLAGS_RELEASE=${THIRDPARTY_CXX_FLAGS}
         -DCMAKE_SHARED_LINKER_FLAGS=${THIRDPARTY_LINK_FLAGS}
 )
@@ -26,11 +29,11 @@ if (NOT EXISTS ${HISTORY_INSTALLLED})
 EXTERNALPROJECT_ADD(${src_name}
         SOURCE_DIR ${src_dir}
         DOWNLOAD_COMMAND ""
-        CMAKE_ARGS ${${src_name}_CMAKE_OPTIONS} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DCMAKE_INSTALL_LIBDIR=<INSTALL_DIR>/lib
+        CMAKE_ARGS ${${src_name}_CMAKE_ARGS} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DCMAKE_INSTALL_LIBDIR=<INSTALL_DIR>/lib
         LOG_CONFIGURE ON
         LOG_BUILD ON
         LOG_INSTALL ON
-        )
+)
 
 ExternalProject_Get_Property(${src_name} INSTALL_DIR)
 else()
@@ -43,7 +46,10 @@ message("install dir of ${src_name}: ${INSTALL_DIR}")
 
 set(${src_name}_INCLUDE_DIR ${INSTALL_DIR}/include)
 set(${src_name}_LIB_DIR ${INSTALL_DIR}/lib)
-set(gtest_LIB_A ${${src_name}_LIB_DIR}/libgtest.a)
-set(gmock_LIB_A ${${src_name}_LIB_DIR}/libgmock.a)
+set(${src_name}_LIB ${${src_name}_LIB_DIR}/libyaml-cpp.so)
 
 include_directories(${${src_name}_INCLUDE_DIR})
+
+install(FILES ${${src_name}_LIB_DIR}/libyaml-cpp.so DESTINATION lib)
+install(FILES ${${src_name}_LIB_DIR}/libyaml-cpp.so.0.8 DESTINATION lib)
+install(FILES ${${src_name}_LIB_DIR}/libyaml-cpp.so.0.8.0 DESTINATION lib)

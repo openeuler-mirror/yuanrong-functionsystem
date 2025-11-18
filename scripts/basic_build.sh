@@ -52,6 +52,7 @@ function build_etcd()
     go mod edit -replace=go.uber.org/zap=go.uber.org/zap@v1.24.0
     go mod tidy
     cd "$BUILD_DIR"/etcd/
+    return
     bash build.sh
 
     # clean and create output dir

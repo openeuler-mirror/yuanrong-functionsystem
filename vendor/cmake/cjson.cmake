@@ -13,7 +13,7 @@
 # limitations under the License.
 
 set(src_name cjson)
-set(src_dir ${THIRDPARTY_SRC_DIR}/${src_name})
+set(src_dir ${VENDOR_SRC_DIR}/${src_name})
 
 set(HISTORY_INSTALLLED "${EP_BUILD_DIR}/Install/${src_name}")
 if (NOT EXISTS ${HISTORY_INSTALLLED})

@@ -12,27 +12,32 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(src_name yaml)
-set(src_dir ${THIRDPARTY_SRC_DIR}/yaml-cpp)
+set(src_dir ${VENDOR_SRC_DIR}/jemalloc)
+set(src_name jemalloc)
 
-set(${src_name}_CMAKE_ARGS
-        -DCMAKE_BUILD_TYPE=Release
-        -DYAML_BUILD_SHARED_LIBS=ON
-        -DYAML_CPP_BUILD_TESTS=OFF
-        -DCMAKE_C_FLAGS_RELEASE=${THIRDPARTY_C_FLAGS}
-        -DCMAKE_CXX_FLAGS_RELEASE=${THIRDPARTY_CXX_FLAGS}
-        -DCMAKE_SHARED_LINKER_FLAGS=${THIRDPARTY_LINK_FLAGS}
-)
+set(${src_name}_CXX_FLAGS "-DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_CXX_FLAGS_RELEASE=${THIRDPARTY_CXX_FLAGS} -DCMAKE_SHARED_LINKER_FLAGS=${THIRDPARTY_LINK_FLAGS}")
+set(JEMALLOC_PROF_FLAGS "")
+set(JEMALLOC_LG_PAGE "")
+
+if ("${JEMALLOC_PROF_ENABLE}" STREQUAL "ON")
+    set(JEMALLOC_PROF_FLAGS "--enable-prof --enable-prof-libunwind")
+endif ()
+
+if (DEFINED ENV{FS_JEMALLOC_LG_PAGE})
+    message(STATUS "jemalloc custom page size=2^$ENV{FS_JEMALLOC_LG_PAGE}")
+    set(JEMALLOC_LG_PAGE "--with-lg-page=$ENV{FS_JEMALLOC_LG_PAGE}")
+endif()
 
 set(HISTORY_INSTALLLED "${EP_BUILD_DIR}/Install/${src_name}")
 if (NOT EXISTS ${HISTORY_INSTALLLED})
 EXTERNALPROJECT_ADD(${src_name}
         SOURCE_DIR ${src_dir}
         DOWNLOAD_COMMAND ""
-        CMAKE_ARGS ${${src_name}_CMAKE_ARGS} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DCMAKE_INSTALL_LIBDIR=<INSTALL_DIR>/lib
+        CONFIGURE_COMMAND env LDFLAGS=${LINK_SAFE_FLAGS} CFLAGS=${THIRDPARTY_C_FLAGS} CXXFLAGS=${${src_name}_CXX_FLAGS} ./autogen.sh ${JEMALLOC_LG_PAGE} ${JEMALLOC_PROF_FLAGS} --prefix=<INSTALL_DIR>
         LOG_CONFIGURE ON
         LOG_BUILD ON
         LOG_INSTALL ON
+        BUILD_IN_SOURCE 1
 )
 
 ExternalProject_Get_Property(${src_name} INSTALL_DIR)
@@ -46,10 +51,9 @@ message("install dir of ${src_name}: ${INSTALL_DIR}")
 
 set(${src_name}_INCLUDE_DIR ${INSTALL_DIR}/include)
 set(${src_name}_LIB_DIR ${INSTALL_DIR}/lib)
-set(${src_name}_LIB ${${src_name}_LIB_DIR}/libyaml-cpp.so)
+set(${src_name}_LIB ${${src_name}_LIB_DIR}/libjemalloc.so)
 
 include_directories(${${src_name}_INCLUDE_DIR})
 
-install(FILES ${${src_name}_LIB_DIR}/libyaml-cpp.so DESTINATION lib)
-install(FILES ${${src_name}_LIB_DIR}/libyaml-cpp.so.0.8 DESTINATION lib)
-install(FILES ${${src_name}_LIB_DIR}/libyaml-cpp.so.0.8.0 DESTINATION lib)
+install(FILES ${${src_name}_LIB_DIR}/libjemalloc.so DESTINATION lib)
+install(FILES ${${src_name}_LIB_DIR}/libjemalloc.so.2 DESTINATION lib)
