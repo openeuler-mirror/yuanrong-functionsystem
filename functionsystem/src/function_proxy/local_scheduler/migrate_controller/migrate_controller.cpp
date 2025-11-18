@@ -18,25 +18,28 @@
 
 #include "async/async.hpp"
 
-void functionsystem::local_scheduler::MigrateController::Update(const std::string &instanceID,
-                                                                const resources::InstanceInfo &instanceInfo,
-                                                                bool isForceUpdate) {
+
+namespace functionsystem::local_scheduler {
+void MigrateController::Update(const std::string &instanceID,
+                               const resources::InstanceInfo &instanceInfo,
+                               bool isForceUpdate)
+{
     litebus::Async(this->migrateControllerActor_->GetAID(), &MigrateControllerActor::Update, instanceID, instanceInfo,
                    isForceUpdate);
 }
 
-void functionsystem::local_scheduler::MigrateController::Delete(const std::string &instanceID) {
+void MigrateController::Delete(const std::string &instanceID)
+{
     litebus::Async(this->migrateControllerActor_->GetAID(), &MigrateControllerActor::Delete, instanceID);
 }
 
-void functionsystem::local_scheduler::MigrateController::InstUtilChangeCallback(const std::string &instanceID,
-    const int utilization) {
-    litebus::Async(this->migrateControllerActor_->GetAID(), &MigrateControllerActor::InstUtilChangeCallback,);
-                   instanceID, utilization);
+litebus::Future<KillResponse> MigrateController::SuspendInstance(const std::shared_ptr<KillRequest> &killReq)
+{
+    return litebus::Async(this->migrateControllerActor_->GetAID(), &MigrateControllerActor::SuspendInstance, killReq);
 }
 
-void functionsystem::local_scheduler::MigrateController::CheckPointRespCallback(const std::string &instanceID,
-    const std::shared_ptr<runtime::CheckpointResponse> &response) {
-    litebus::Async(this->migrateControllerActor_->GetAID(), &MigrateControllerActor::CheckPointRespCallback, instanceID,
-                   response);
+litebus::Future<KillResponse> MigrateController::RecycleInstance(const std::shared_ptr<KillRequest> &killReq)
+{
+    return litebus::Async(this->migrateControllerActor_->GetAID(), &MigrateControllerActor::RecycleInstance, killReq);
+}
 }

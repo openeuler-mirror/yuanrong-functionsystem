@@ -21,21 +21,20 @@
 #include"migrate_controller_actor.h"
 
 namespace functionsystem::local_scheduler {
-    class MigrateController : public InstanceListener {
-    public:
-        void Update(const std::string &instanceID, const resources::InstanceInfo &instanceInfo,
-                    bool isForceUpdate) override;
+class MigrateController : public InstanceListener {
+public:
+    void Update(const std::string &instanceID, const resources::InstanceInfo &instanceInfo,
+                bool isForceUpdate) override;
 
-        void Delete(const std::string &instanceID) override;
+    void Delete(const std::string &instanceID) override;
 
-        void InstUtilChangeCallback(const std::string &instanceID, int utilization);
+    litebus::Future<KillResponse> SuspendInstance(const std::shared_ptr<KillRequest> &killReq);
 
-        void CheckPointRespCallback(const std::string &instanceID,
-                                    const std::shared_ptr<runtime::CheckpointResponse> &status);
+    litebus::Future<KillResponse> RecycleInstance(const std::shared_ptr<KillRequest> &killReq);
 
-    private:
-        std::shared_ptr<MigrateControllerActor> migrateControllerActor_;
-    };
+private:
+    std::shared_ptr<MigrateControllerActor> migrateControllerActor_;
+};
 }
 
 

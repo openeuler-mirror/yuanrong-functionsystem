@@ -40,8 +40,9 @@ public:
     void StoreInstState(const std::string &instanceID, const int32_t &state);
     void DelInstState(const std::string &instanceID);
 
-    litebus::Future<Status> SuspendInstance(const std::string &instanceID);
-    litebus::Future<Status> RecycleInstance(const std::string &instanceID);
+    litebus::Future<KillResponse> SuspendInstance(const std::shared_ptr<KillRequest> &killReq);
+
+    litebus::Future<KillResponse> RecycleInstance(const std::shared_ptr<KillRequest> &killReq);
 
 private:
     bool IsInstHibernate(const resources::InstanceInfo &instanceInfo);
