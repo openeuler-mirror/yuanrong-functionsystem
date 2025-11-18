@@ -20,6 +20,7 @@
 #include <async/defer.hpp>
 
 #include "common/constants/actor_name.h"
+#include "common/constants/signal.h"
 #include "common/explorer/explorer.h"
 #include "logs/logging.h"
 #include "common/resource_view/resource_tool.h"
@@ -793,13 +794,15 @@ void LocalSchedSrvActor::DoKillGroup(
     }
 
     litebus::AID groupMgr(GROUP_MANAGER_ACTOR_NAME, globalSchedRegisterInfo_.aid.Url());
-    YRLOG_INFO("forward kill group({}) schedule request to {}.", killReq->groupid(), std::string(groupMgr));
+    YRLOG_INFO("forward kill group({}) signal({}) schedule request to {}.", killReq->groupid(),
+        SignalToString(killReq->signal()), std::string(groupMgr));
     auto future = requestGroupKillMatch_.AddSynchronizer(killReq->groupid());
     Send(groupMgr, "KillGroup", killReq->SerializeAsString());
     future.OnComplete([promise, killReq,
             aid(GetAID())](const litebus::Future<Status> &future) {
             if (future.IsError()) {
-                YRLOG_WARN("{}|{}|forward kill group({}) request timeout.", killReq->groupid());
+                YRLOG_WARN("forward kill group({}) signal({}) request timeout.", killReq->groupid(),
+                    SignalToString(killReq->signal()));
                 litebus::Async(aid, &LocalSchedSrvActor::DoKillGroup, promise, killReq);
                 return;
             }

@@ -304,7 +304,11 @@ litebus::Future<KillResponse> InstanceCtrlActor::Kill(const std::string &srcInst
         case SHUT_DOWN_SIGNAL_ALL: {
             return KillInstancesOfJob(killReq);
         }
-        case SHUT_DOWN_SIGNAL_GROUP: {
+        case SHUT_DOWN_SIGNAL_GROUP:
+            [[fallthrough]];
+        case GROUP_SUSPEND_SIGNAL:
+            [[fallthrough]];
+        case GROUP_RESUME_SIGNAL: {
             return KillGroup(srcInstanceID, killReq);
         }
         case GROUP_EXIT_SIGNAL:
@@ -4581,6 +4585,7 @@ litebus::Future<KillResponse> InstanceCtrlActor::KillGroup(const std::string &sr
     auto killGroup = std::make_shared<messages::KillGroup>();
     killGroup->set_groupid(killReq->instanceid());
     killGroup->set_srcinstanceid(srcInstanceID);
+    killGroup->set_signal(killReq->signal());
     ASSERT_IF_NULL(localSchedSrv_);
     return localSchedSrv_->KillGroup(killGroup).Then([](const Status &status) {
         KillResponse response;
