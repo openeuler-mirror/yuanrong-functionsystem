@@ -5191,4 +5191,54 @@ void InstanceCtrlActor::ClearLocalDriver()
     connectedDriver_.clear();
 }
 
+litebus::Future<Status> InstanceCtrlActor::ToResume(const std::string &instanceID)
+{
+    ASSERT_IF_NULL(instanceControlView_);
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        return Status(StatusCode::ERR_INSTANCE_NOT_FOUND,
+                      fmt::format("instance({}) not found for suspend", instanceID));
+    }
+    auto state = stateMachine->GetInstanceState();
+    if (state != InstanceState::SUSPEND && state != InstanceState::RUNNING) {
+        return Status(StatusCode::ERR_STATE_MACHINE_ERROR,
+                      fmt::format("instance({}) is state in ({}), which is not allow to suspend", instanceID,
+                                  fmt::underlying(state)));
+    }
+    if (state == InstanceState::RUNNING) {
+        return Status::OK();
+    }
+    auto request = stateMachine->GetScheduleRequest();
+    auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    return Schedule(request, runtimePromise).Then([](const ScheduleResponse &resp) {
+        return Status(static_cast<StatusCode>(resp.code()), resp.message());
+    });
+}
+
+litebus::Future<Status> InstanceCtrlActor::ToSuspend(const std::string &instanceID)
+{
+    ASSERT_IF_NULL(instanceControlView_);
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        return Status(StatusCode::ERR_INSTANCE_NOT_FOUND,
+                      fmt::format("instance({}) not found for suspend", instanceID));
+    }
+    auto future = TransInstanceState(
+        stateMachine, TransContext{ InstanceState::SUSPEND, stateMachine->GetVersion(),
+                                    "WARN: instance is already SUSPEND, please resume instance before you invoke it",
+                                    true, StatusCode::ERR_INSTANCE_SUSPEND });
+
+    future.OnComplete([aid(GetAID()), stateMachine, instanceID](const Status &status) {
+        if (status.IsError()) {
+            return;
+        }
+        litebus::Async(aid, &InstanceCtrlActor::StopHeartbeat, instanceID);
+        YRLOG_INFO("ready to recycle runtime of instance({})", instanceID);
+        auto info = stateMachine->GetInstanceInfo();
+        (void)litebus::Async(aid, &InstanceCtrlActor::KillRuntime, info, false)
+            .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, std::placeholders::_1, info));
+    });
+    return future;
+}
+
 }  // namespace functionsystem::local_scheduler
