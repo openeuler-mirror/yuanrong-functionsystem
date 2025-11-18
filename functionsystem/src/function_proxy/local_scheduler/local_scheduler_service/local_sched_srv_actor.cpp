@@ -796,7 +796,8 @@ void LocalSchedSrvActor::DoKillGroup(
     litebus::AID groupMgr(GROUP_MANAGER_ACTOR_NAME, globalSchedRegisterInfo_.aid.Url());
     YRLOG_INFO("forward kill group({}) signal({}) schedule request to {}.", killReq->groupid(),
         SignalToString(killReq->signal()), std::string(groupMgr));
-    auto future = requestGroupKillMatch_.AddSynchronizer(killReq->groupid());
+    killReq->set_grouprequestid(killReq->groupid() + "-" + std::to_string(killReq->signal()));
+    auto future = requestGroupKillMatch_.AddSynchronizer(killReq->grouprequestid());
     Send(groupMgr, "KillGroup", killReq->SerializeAsString());
     future.OnComplete([promise, killReq,
             aid(GetAID())](const litebus::Future<Status> &future) {
@@ -817,7 +818,7 @@ void LocalSchedSrvActor::OnKillGroup(const litebus::AID &from, std::string &&nam
         YRLOG_WARN("invalid {} response from {} msg {}, ignored", std::string(from), name, msg);
         return;
     }
-    if (auto status = requestGroupKillMatch_.Synchronized(rsp.groupid(),
+    if (auto status = requestGroupKillMatch_.Synchronized(rsp.grouprequestid(),
                                                           Status(static_cast<StatusCode>(rsp.code()), rsp.message()));
         status.IsError()) {
         YRLOG_WARN("received {} from {}. code {} msg {}. no found request({}) ignore it", name, from.HashString(),

@@ -5270,7 +5270,9 @@ litebus::Future<Status> InstanceCtrlActor::ToSuspend(const std::string &instance
                                     true, StatusCode::ERR_INSTANCE_SUSPEND })
                       .Then([](const TransitionResult &result) { return result.status; });
 
-    future.OnComplete([aid(GetAID()), stateMachine, instanceID](const Status &status) {
+    future.OnComplete([aid(GetAID()), stateMachine, instanceID](const litebus::Future<Status> &future) {
+        ASSERT_FS(future.IsOK());
+        auto status = future.Get();
         if (status.IsError()) {
             return;
         }

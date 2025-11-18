@@ -732,7 +732,6 @@ message GroupResponse {
 message KillGroup {
   string srcInstanceID = 1;
   string groupID = 2;
-  // master send request to local, local clear groupCtx
   string groupRequestID = 3;
   int32 signal = 4;
 }
@@ -741,6 +740,7 @@ message KillGroupResponse {
   string groupID = 1;
   int32  code       = 2;
   string message    = 3;
+  string groupRequestID = 4;
 }
 
 message CommonStatus {

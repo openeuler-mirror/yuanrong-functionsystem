@@ -139,7 +139,7 @@ protected:
                                               const std::shared_ptr<resource_view::InstanceInfo> &instance,
                                               const std::shared_ptr<internal::ForwardKillRequest> killReq);
 
-    void InnerKillInstanceOnComplete(const litebus::AID &from, const std::string &groupID,
+    void InnerKillInstanceOnComplete(const litebus::AID &from, const std::string &groupID, const std::string &requestID,
                                      const litebus::Future<Status> &future);
     void WatchGroups();
     void OnGroupWatch(const std::shared_ptr<Watcher> &watcher);
@@ -152,8 +152,10 @@ protected:
     litebus::Future<SyncResult> OnGroupInfoSyncer(const std::shared_ptr<GetResponse> &getResponse);
     litebus::Future<Status> BroadCastSignalForGroup(const std::string &groupID, const std::string &srcInstanceID,
                                                     const int32_t &signal);
-    void OnGroupSuspend(const litebus::Future<Status> &future, const litebus::AID &from, const std::string &groupID);
-    void OnGroupResume(const litebus::Future<Status> &future, const litebus::AID &from, const std::string &groupID);
+    void OnGroupSuspend(const litebus::Future<Status> &future, const litebus::AID &from, const std::string &groupID,
+                        const std::string &requestID);
+    void OnGroupResume(const litebus::Future<Status> &future, const litebus::AID &from, const std::string &groupID,
+                       const std::string &requestID);
 
 protected:
     class GroupCaches {
