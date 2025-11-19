@@ -20,8 +20,8 @@
 #include <async/future.hpp>
 #include <async/defer.hpp>
 
-#include "proto/pb/message_pb.h"
-#include "proto/pb/posix_pb.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/proto/pb/posix_pb.h"
 #include "common/utils/generate_message.h"
 #include "common/constants/signal.h"
 
@@ -135,8 +135,10 @@ litebus::Future<Status> SubscriptionMgrActor::RegisterOrphanedSubscriptionCleanu
     ASSERT_IF_NULL(instanceControlView);
     auto instanceMachine = instanceControlView->GetInstance(subscriber);
     if (instanceMachine == nullptr) {
-        YRLOG_WARN("[event=instance_termination]|"
-                   "Failed to register orphaned subscription cleanup: subscriber instance({}) not found.", subscriber);
+        YRLOG_WARN(
+            "[event=instance_termination]|"
+            "Failed to register orphaned subscription cleanup: subscriber instance({}) not found.",
+            subscriber);
         CleanupOrphanedSubscription(subscriber, publisher);
         return Status::OK();
     }
@@ -146,7 +148,8 @@ litebus::Future<Status> SubscriptionMgrActor::RegisterOrphanedSubscriptionCleanu
         [dstInstanceID(publisher), aid(GetAID())](const resources::InstanceInfo &instanceInfo) {
             (void)litebus::Async(aid, &SubscriptionMgrActor::CleanupOrphanedSubscription, instanceInfo.instanceid(),
                                  dstInstanceID);
-        }, key);
+        },
+        key);
 
     return Status::OK();
 }

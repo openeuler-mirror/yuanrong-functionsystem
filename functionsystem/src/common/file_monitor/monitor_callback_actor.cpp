@@ -13,14 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #include "common/file_monitor/monitor_callback_actor.h"
 
-#include "async/asyncafter.hpp"
-#include "common/utils/exec_utils.h"
-#include "constants.h"
-#include "files.h"
-#include "utils/os_utils.hpp"
+#include "common/constants/constants.h"
 
 namespace functionsystem {
 namespace {
@@ -108,7 +103,7 @@ litebus::Future<int64_t> MonitorCallBackActor::GetDiskUsage(const std::string &p
         return -1;
     }
 
-    if (!CheckIllegalChars(path)) {
+    if (!CheckIllegalChars(path)) {  // Blacklist checks for illegal characters.
         YRLOG_ERROR("path contains illegal chars");
         return -1;
     }

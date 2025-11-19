@@ -17,8 +17,8 @@
 #include "copy_deployer.h"
 
 #include "async/uuid_generator.hpp"
-#include "logs/logging.h"
-#include "metadata/metadata.h"
+#include "common/logs/logging.h"
+#include "common/metadata/metadata.h"
 #include "common/utils/exec_utils.h"
 #include "utils/os_utils.hpp"
 

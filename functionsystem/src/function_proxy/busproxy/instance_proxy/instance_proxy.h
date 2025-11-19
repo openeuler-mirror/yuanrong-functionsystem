@@ -21,8 +21,9 @@
 
 #include "actor/actor.hpp"
 #include "async/future.hpp"
-#include "proto/pb/posix_pb.h"
-#include "request_sync_helper.h"
+#include "common/constants/actor_name.h"
+#include "common/proto/pb/posix_pb.h"
+#include "common/utils/request_sync_helper.h"
 #include "function_proxy/busproxy/instance_proxy/forward_interface.h"
 #include "function_proxy/busproxy/instance_proxy/request_dispatcher.h"
 #include "function_proxy/busproxy/instance_proxy/perf.h"
@@ -48,7 +49,10 @@ public:
 
     void ForwardCall(const litebus::AID &from, std::string &&, std::string &&msg);
 
-    void ResponseForwardCall(const litebus::AID &from, std::string &&, std::string &&msg);
+    virtual litebus::Future<Status> DoForwardCall(const litebus::AID &from,
+                                          const std::shared_ptr<runtime_rpc::StreamingMessage> &request);
+
+    virtual void ResponseForwardCall(const litebus::AID &from, std::string &&, std::string &&msg);
 
     litebus::Future<SharedStreamMsg> CallResult(const std::string &srcInstanceID, const std::string &dstInstanceID,
                                                 const SharedStreamMsg &request, const std::shared_ptr<TimePoint> &time);

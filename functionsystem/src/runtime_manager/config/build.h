@@ -21,13 +21,15 @@
 #include <nlohmann/json.hpp>
 #include <vector>
 
-#include "proto/pb/message_pb.h"
+#include "common/proto/pb/message_pb.h"
 #include "runtime_manager/executor/executor.h"
 
 namespace functionsystem::runtime_manager {
 
 const std::string LD_LIBRARY_PATH = "LD_LIBRARY_PATH";
 const std::string RUNTIME_DIRECT_CONNECTION_ENABLE = "RUNTIME_DIRECT_CONNECTION_ENABLE";
+const std::string ENABLE_CLEAN_STREAM_PRODUCER = "ENABLE_CLEAN_STREAM_PRODUCER";
+const std::string YR_DEBUG_SERVER_PORT = "YR_DEBUG_SERVER_PORT";
 
 struct Envs {
     std::map<std::string, std::string> posixEnvs{};
@@ -41,6 +43,8 @@ struct RuntimeFeatures {
 
     bool runtimeDirectConnectionEnable{false};
     std::string directRuntimeServerPort;
+
+    bool cleanStreamProducerEnable{true};
 };
 
 Envs GenerateEnvs(const RuntimeConfig &config, const std::shared_ptr<messages::StartInstanceRequest> &request,

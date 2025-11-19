@@ -18,7 +18,7 @@
 #define FUNCTION_PROXY_COMMON_POSIX_CLIENT_CONTROL_PLANE_CLIENT_CONTROL_INTERFACE_CLIENT_MANAGER_PROXY_H
 
 #include "async/future.hpp"
-#include "rpc/stream/posix/control_client.h"
+#include "common/rpc/stream/posix/control_client.h"
 #include "control_interface_posix_client.h"
 #include "litebus.hpp"
 namespace functionsystem {

@@ -18,8 +18,8 @@
 
 #include <async/future.hpp>
 
-#include "proto/pb/posix_pb.h"
-#include "status/status.h"
+#include "common/proto/pb/posix_pb.h"
+#include "common/status/status.h"
 
 namespace functionsystem {
 class ForwardRPC {

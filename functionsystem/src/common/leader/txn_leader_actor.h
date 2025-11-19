@@ -35,7 +35,7 @@ protected:
     void Finalize() override;
 
 private:
-    litebus::Future<Status> OnGetLeader(const std::shared_ptr<GetResponse> &response);
+    void GetLeader();
 
     litebus::Future<Status> OnWatch(const std::shared_ptr<Watcher> &watcher);
 
@@ -47,8 +47,7 @@ private:
 
     void OnCampaign(const litebus::Future<std::shared_ptr<TxnResponse>> &response);
 
-    litebus::Future<SyncResult> Sync();
-    litebus::Future<SyncResult> OnSync(const std::shared_ptr<GetResponse> &getResponse);
+    litebus::Future<SyncResult> Sync(const std::shared_ptr<GetResponse> &getResponse);
 
 private:
     std::shared_ptr<MetaStoreClient> metaStoreClient_{ nullptr };
@@ -61,6 +60,9 @@ private:
 
     bool campaigning_ = false;
     bool leader_ = false;
+
+    // txn election only supports one election key now
+    std::string electionKey_;
 };
 }  // namespace functionsystem::leader
 

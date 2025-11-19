@@ -20,9 +20,9 @@
 #include <actor/actor.hpp>
 #include <async/future.hpp>
 
-#include "proto/pb/message_pb.h"
+#include "common/proto/pb/message_pb.h"
 #include "common/resource_view/resource_view_mgr.h"
-#include "status/status.h"
+#include "common/status/status.h"
 #include "common/utils/actor_driver.h"
 #include "local_sched_srv_actor.h"
 
@@ -35,7 +35,6 @@ public:
 
     static std::unique_ptr<LocalSchedSrv> Create(const LocalSchedSrvActor::Param &param);
 
-    void StartPingPong();
     void Start(const std::shared_ptr<InstanceCtrl> &instanceCtrl,
                const std::shared_ptr<resource_view::ResourceViewMgr> &resourceViewMgr);
 

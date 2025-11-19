@@ -119,6 +119,10 @@ public:
     std::string body;  // from user
     Type type;
 
+    std::shared_ptr<std::string> accessKey;
+    std::shared_ptr<SensitiveValue> secretKey;
+
+    std::string peer;
     std::string timestamp;
     std::string signature{ "0" };    // to(url@name), name, body
 };

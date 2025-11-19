@@ -20,7 +20,7 @@
 #include <litebus.hpp>
 
 #include "async/future.hpp"
-#include "proto/pb/message_pb.h"
+#include "common/proto/pb/message_pb.h"
 #include "common/resource_view/resource_view.h"
 #include "common/schedule_decision/preemption_controller/preemption_controller.h"
 #include "common/schedule_decision/queue/queue_item.h"

@@ -18,10 +18,10 @@
 
 #include "async/future.hpp"
 #include "meta_store_monitor/meta_store_healthy_observer.h"
-#include "proto/pb/message_pb.h"
-#include "proto/pb/posix_pb.h"
-#include "resource_type.h"
-#include "status/status.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/proto/pb/posix_pb.h"
+#include "common/resource_view/resource_type.h"
+#include "common/status/status.h"
 #include "common/utils/actor_driver.h"
 #include "litebus.hpp"
 

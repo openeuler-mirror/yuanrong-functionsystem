@@ -15,7 +15,7 @@
  */
 #include "instance_clients.h"
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "function_proxy/common/posix_client/shared_client/shared_client.h"
 
 namespace functionsystem {

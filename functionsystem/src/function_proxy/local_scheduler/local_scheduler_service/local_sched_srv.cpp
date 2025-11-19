@@ -111,12 +111,6 @@ litebus::Future<Status> LocalSchedSrv::KillGroup(const std::shared_ptr<messages:
     return litebus::Async(actor_->GetAID(), &LocalSchedSrvActor::KillGroup, killReq);
 }
 
-void LocalSchedSrv::StartPingPong()
-{
-    ASSERT_IF_NULL(actor_);
-    return litebus::Async(actor_->GetAID(), &LocalSchedSrvActor::StartPingPong);
-}
-
 litebus::Future<Status> LocalSchedSrv::TryCancelSchedule(const std::shared_ptr<messages::CancelSchedule> &cancelRequest)
 {
     ASSERT_IF_NULL(actor_);

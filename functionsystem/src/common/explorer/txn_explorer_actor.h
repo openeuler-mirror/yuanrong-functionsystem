@@ -42,12 +42,13 @@ private:
 
     Status OnWatch(const std::shared_ptr<Watcher> &watcher);
 
-    litebus::Future<SyncResult> Sync();
-    litebus::Future<SyncResult> OnSync(const std::shared_ptr<GetResponse> &getResponse);
+    litebus::Future<SyncResult> Sync(const std::shared_ptr<GetResponse> &getResponse);
 
 private:
     std::shared_ptr<MetaStoreClient> metaStoreClient_{ nullptr };
     std::shared_ptr<Watcher> watcher_{ nullptr };
+    // txn explorer only supports one election key now
+    std::string electionKey_;
 };
 }  // namespace functionsystem::explorer
 

@@ -15,7 +15,7 @@
  */
 #include "label_affinity_utils.h"
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
 
 namespace functionsystem {

@@ -17,7 +17,7 @@
 
 #include <async/async.hpp>
 
-#include "status/status.h"
+#include "common/status/status.h"
 
 namespace functionsystem::proxy {
 void Client::UpdateDstAID(const litebus::AID &dst)

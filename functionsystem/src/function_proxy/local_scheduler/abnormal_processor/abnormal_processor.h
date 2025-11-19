@@ -65,9 +65,7 @@ private:
 
     void CommitSuicide();
 
-    litebus::Future<SyncResult> AbnormalSyncer();
-    litebus::Future<SyncResult> OnAbnormalSyncer(const std::shared_ptr<GetResponse> &getResponse,
-                                             const std::string &prefixKey);
+    litebus::Future<SyncResult> AbnormalSyncer(const std::shared_ptr<GetResponse> &getResponse);
 
     std::string id_;
     std::shared_ptr<function_proxy::ControlPlaneObserver> observer_{ nullptr };

@@ -23,9 +23,10 @@ CPU_NUM="$(grep -c 'processor' /proc/cpuinfo)"
 . "${BASE_DIR}"/tools/utils.sh
 
 function thirdparty_compile() {
-  cd "${BASE_DIR}"/thirdparty/thirdparty
-  bash download_opensource.sh
-  bash example/build.sh -j ${JOB_NUM}
+  python ${BASE_DIR}/scripts/executor/download_opensource.py --config ${BASE_DIR}/vendor/ThirdPartyList.csv --output ${BASE_DIR}/vendor/src
+  cd "${BASE_DIR}"/vendor
+  cmake -B build
+  cmake --build build --parallel ${JOB_NUM}
 
   # compile thirdparty: etcd
   cd "${BASE_DIR}"/scripts/
@@ -33,16 +34,19 @@ function thirdparty_compile() {
 }
 
 function logs_compile() {
+  echo "Compile common/logs"
   cd "${BASE_DIR}"/common/logs
   bash build.sh -j "${JOB_NUM}"
 }
 
 function litebus_compile() {
+  echo "Compile common/litebus"
   cd "${BASE_DIR}"/common/litebus
-  bash build/build.sh -t off -j "${JOB_NUM}"
+  bash build.sh -t off -j "${JOB_NUM}"
 }
 
 function metrics_compile() {
+  echo "Compile common/metrics"
   cd "${BASE_DIR}"/common/metrics
   bash build.sh -j "${JOB_NUM}"
 }
@@ -57,25 +61,6 @@ function functionsystem_compile() {
 
   unset CMC_USERNAME
   unset CMC_PASSWORD
-}
-
-function data_system_download() {
-  cd "${BASE_DIR}"
-  if [ ! -d "datasystem/output" ]; then
-    mkdir -p datasystem/output
-    cd datasystem/output
-    if [ -z "${DATA_SYSTEM_CACHE}" ]; then
-      echo "data_system url not exist"
-      exit 1
-    fi
-    wget --timeout=10 --read-timeout=10 --tries=3 -O datasystem.tar.gz ${DATA_SYSTEM_CACHE}
-    if [ $? -ne 0 ]; then
-      echo "download datasystem failed"
-      exit 1
-    fi
-    tar -zxvf datasystem.tar.gz
-    rm datasystem.tar.gz
-  fi
 }
 
 function package() {
@@ -155,7 +140,6 @@ function build() {
   logs_compile
   litebus_compile
   metrics_compile
-  data_system_download
   functionsystem_compile
 }
 

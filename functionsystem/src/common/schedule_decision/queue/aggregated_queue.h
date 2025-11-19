@@ -16,8 +16,8 @@
 #ifndef AGGRAVATED_QUEUE_H
 #define AGGRAVATED_QUEUE_H
 
-#include "constants.h"
-#include "resource_type.h"
+#include "common/constants/constants.h"
+#include "common/resource_view/resource_type.h"
 #include "common/schedule_decision/queue/queue_item.h"
 #include "schedule_queue.h"
 

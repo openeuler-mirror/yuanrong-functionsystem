@@ -22,7 +22,7 @@
 
 #include "async/future.hpp"
 #include "meta_store_client/meta_store_client.h"
-#include "status/status.h"
+#include "common/status/status.h"
 #include "instance_listener.h"
 #include "instance_state_machine.h"
 
@@ -46,7 +46,7 @@ public:
 
     void Update(const std::string &instanceID, const resources::InstanceInfo &instanceInfo,
                 bool isForceUpdate) override;
-    void Delete(const std::string &instanceID) override;
+    void Delete(const std::string &instanceID, int64_t modRevision = -1) override;
 
     virtual litebus::Future<Status> TryExitInstance(const std::string &instanceID, bool isSynchronized = false);
     void BindMetaStoreClient(const std::shared_ptr<MetaStoreClient> &client);

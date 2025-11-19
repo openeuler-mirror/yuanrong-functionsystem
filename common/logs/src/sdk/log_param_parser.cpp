@@ -86,19 +86,19 @@ void ParseLogRolling(const nlohmann::json &confJson, LogsApi::LogParam &logParam
     if (confJson.find("rolling") != confJson.end()) {
         if (confJson.at("rolling").find("maxsize") != confJson.at("rolling").end()) {
             int size = confJson.at("rolling").at("maxsize").get<int>();
-            if (size > 0 && size < LogsApi::FILE_SIZE_MAX) {
+            if (size > 0) {
                 logParam.maxSize = size;
             }
         }
         if (confJson.at("rolling").find("maxfiles") != confJson.at("rolling").end()) {
             int files = confJson.at("rolling").at("maxfiles").get<int>();
-            if (files > 0 && files < LogsApi::FILES_COUNT_MAX) {
+            if (files > 0) {
                 logParam.maxFiles = static_cast<uint32_t>(files);
             }
         }
         if (confJson.at("rolling").find("retentionDays") != confJson.at("rolling").end()) {
             int retentionDays = confJson.at("rolling").at("retentionDays").get<int>();
-            if (retentionDays > 0 && retentionDays < LogsApi::RETENTION_DAYS_MAX) {
+            if (retentionDays > 0) {
                 logParam.retentionDays = retentionDays;
             }
         }
@@ -110,19 +110,19 @@ void ParseLogAsync(const nlohmann::json &confJson, LogsApi::GlobalLogParam &glob
     if (confJson.find("async") != confJson.end()) {
         if (confJson.at("async").find("logBufSecs") != confJson.at("async").end()) {
             int bufSecs = confJson.at("async").at("logBufSecs").get<int>();
-            if (bufSecs > 0 && bufSecs < LogsApi::DEFAULT_LOG_BUF_SECONDS) {
+            if (bufSecs > 0) {
                 globalLogParam.logBufSecs = bufSecs;
             }
         }
         if (confJson.at("async").find("maxQueueSize") != confJson.at("async").end()) {
             unsigned int queueSize = confJson.at("async").at("maxQueueSize").get<unsigned int>();
-            if (queueSize > 0 && queueSize < LogsApi::MAX_ASYNC_QUEUE_SIZE_MAX) {
+            if (queueSize > 0) {
                 globalLogParam.maxAsyncQueueSize = queueSize;
             }
         }
         if (confJson.at("async").find("threadCount") != confJson.at("async").end()) {
             unsigned int cnt = confJson.at("async").at("threadCount").get<unsigned int>();
-            if (cnt > 0 && cnt <= LogsApi::ASYNC_THREAD_COUNT_MAX) {
+            if (cnt > 0) {
                 globalLogParam.asyncThreadCount = cnt;
             }
         }
@@ -136,6 +136,13 @@ void ParseAlsoLog2Std(const nlohmann::json &confJson, LogsApi::LogParam &logPara
     }
     if (confJson.find("stdLogLevel") != confJson.end()) {
         logParam.stdLogLevel = confJson.at("stdLogLevel").get<std::string>();
+    }
+}
+
+void ParseSyncFlush(const nlohmann::json &confJson, LogsApi::LogParam &logParam)
+{
+    if (confJson.find("syncFlush") != confJson.end()) {
+        logParam.syncFlush = confJson.at("syncFlush").get<bool>();
     }
 }
 
@@ -168,6 +175,7 @@ LogsApi::LogParam GetLogParam(const std::string &configJsonString, const std::st
         ParseLogCompress(confJson, logParam);
         ParseLogRolling(confJson, logParam);
         ParseAlsoLog2Std(confJson, logParam);
+        ParseSyncFlush(confJson, logParam);
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
         (void)raise(SIGINT);

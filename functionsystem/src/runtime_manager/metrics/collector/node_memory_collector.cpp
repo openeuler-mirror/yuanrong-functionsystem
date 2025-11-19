@@ -18,8 +18,8 @@
 
 #include <regex>
 
-#include "constants.h"
-#include "logs/logging.h"
+#include "common/constants/constants.h"
+#include "common/logs/logging.h"
 #include "runtime_manager/utils/utils.h"
 
 namespace functionsystem::runtime_manager {
@@ -36,46 +36,72 @@ NodeMemoryCollector::NodeMemoryCollector() : NodeMemoryCollector(std::make_share
 
 Metric NodeMemoryCollector::GetLimit() const
 {
-    YRLOG_DEBUG_COUNT_60("system memory collector get limit.");
+    YRLOG_DEBUG_COUNT_60("node memory collector get limit.");
     Metric metric;
     if (!procFSTools_) {
         return metric;
     }
-
-    auto meminfoOption = procFSTools_->Read("/proc/meminfo");
-    if (meminfoOption.IsNone()) {
-        return metric;
+    // no chache meminfo
+    if (totalMem_ == 0.0 && availableMem_ == 0.0) {
+        parseMemInfo();
     }
-
-    auto meminfo = meminfoOption.Get();
-    auto meminfos = Utils::SplitByFunc(meminfo, [](const char &ch) -> bool { return ch == '\n' || ch == '\r'; });
-
-    const std::regex re(R"(^MemTotal\s*:\s*(\d+)\s*kB$)");  // MemTotal:       65409488 kB
-    std::smatch matches;
-    double memNum = 0.0;
-    for (long unsigned int i = 0; i < meminfos.size(); i++) {
-        if (!std::regex_search(meminfos[i], matches, re)) {
-            continue;
-        }
-
-        try {
-            memNum = std::stod(matches[1]);
-        } catch (std::exception &e) {
-            return metric;
-        }
-        metric.value = memNum / MEMORY_CALC_BASE - overheadMemory_;
-        return metric;
-    }
-
+    metric.value = totalMem_ - overheadMemory_;
     return metric;
 }
 
 litebus::Future<Metric> NodeMemoryCollector::GetUsage() const
 {
-    YRLOG_DEBUG_COUNT_60("system memory collector get usage.");
+    YRLOG_DEBUG_COUNT_60("node memory collector get usage.");
     litebus::Promise<Metric> promise;
     Metric metric;
-    return metric;
+    if (!procFSTools_) {
+        return metric;
+    }
+    parseMemInfo();
+    metric.value = totalMem_ - availableMem_;
+    promise.SetValue(metric);
+    return promise.GetFuture();
+}
+
+void NodeMemoryCollector::parseMemInfo() const
+{
+    totalMem_ = 0.0;
+    availableMem_ = 0.0;
+
+    if (!procFSTools_) {
+        return;
+    }
+    auto meminfoOption = procFSTools_->Read("/proc/meminfo");
+    if (meminfoOption.IsNone()) {
+        return;
+    }
+
+    auto meminfo = meminfoOption.Get();
+    auto meminfos = Utils::SplitByFunc(meminfo, [](const char &ch) -> bool { return ch == '\n' || ch == '\r'; });
+    const std::regex totalRex(R"(^MemTotal\s*:\s*(\d+)\s*kB$)");
+    const std::regex avaliRex(R"(^MemAvailable\s*:\s*(\d+)\s*kB$)");
+    std::smatch matches;
+    for (long unsigned int i = 0; i < meminfos.size() && (totalMem_ == 0.0 || availableMem_ == 0.0); i++) {
+        if (std::regex_search(meminfos[i], matches, totalRex)) {
+            try {
+                totalMem_ = std::stod(matches[1]) / MEMORY_CALC_BASE;
+            } catch (std::exception &e) {
+                totalMem_ = 0.0;
+                availableMem_ = 0.0;
+                YRLOG_ERROR("can not set totalMem_ from meminfo");
+                break;
+            }
+        } else if (std::regex_search(meminfos[i], matches, avaliRex)) {
+            try {
+                availableMem_ = std::stod(matches[1]) / MEMORY_CALC_BASE;
+            } catch (std::exception &e) {
+                totalMem_ = 0.0;
+                availableMem_ = 0.0;
+                YRLOG_ERROR("can not set availableMem_ from meminfo");
+                break;
+            }
+        }
+    }
 }
 
 std::string NodeMemoryCollector::GenFilter() const

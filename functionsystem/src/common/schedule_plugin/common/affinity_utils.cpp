@@ -16,6 +16,7 @@
 #include "affinity_utils.h"
 
 #include "common/resource_view/resource_tool.h"
+#include "common/resource_view/resource_type.h"
 
 namespace functionsystem::schedule_plugin {
 // IN indicates that the value of the affinity label must be one of pod label value.
@@ -188,7 +189,8 @@ bool NeedAffinityScorer(const resource_view::InstanceInfo &instance)
 
     // 3.check inner-related affinity
     if (affinity.has_inner()) {
-        if (affinity.inner().has_data() || affinity.inner().has_preempt() || affinity.inner().has_grouplb()) {
+        if (affinity.inner().has_tenant() || affinity.inner().has_data() || affinity.inner().has_preempt()
+            || affinity.inner().has_grouplb()) {
             return true;
         }
     }
@@ -200,6 +202,21 @@ bool NeedAffinityScorer(const resource_view::InstanceInfo &instance)
 bool NeedOptimalAffinityCheck(bool isRelaxed, bool isTopdownScheduling)
 {
     return !isRelaxed && !isTopdownScheduling;
+}
+
+::google::protobuf::Map<std::string, resource_view::ValueCounter> GetLocalNodeLabels(
+    const resource_view::ResourceUnit &resourceUnit,
+    const std::shared_ptr<schedule_framework::PreAllocatedContext> &ctx)
+{
+    if (ctx->allLocalLabels.empty()) {
+        return {};
+    }
+    if (ctx->schedulerLevel == resource_view::SCHEDULER_LEVEL::LOCAL) {
+        return ctx->allLocalLabels.begin()->second;
+    } else {
+        auto ownerId = resourceUnit.ownerid();
+        return ctx->allLocalLabels[ownerId];
+    }
 }
 
 }  // namespace functionsystem::schedule_plugin

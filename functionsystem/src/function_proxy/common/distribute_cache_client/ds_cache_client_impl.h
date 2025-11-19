@@ -20,7 +20,7 @@
 #include <memory>
 #include <vector>
 
-#include "sensitive_value.h"
+#include "common/utils/sensitive_value.h"
 #include "datasystem/datasystem.h"
 #include "distributed_cache_client.h"
 
@@ -53,6 +53,8 @@ public:
 
     Status GetHealthStatus() override;
 
+    Status ShutDown() override;
+
     void EnableDSClient(bool isEnable);
     void SetDSAuthEnable(bool isEnable);
     bool IsDsClientEnable() const
@@ -62,6 +64,9 @@ public:
 
     static void GetAuthConnectOptions(const std::shared_ptr<DSAuthConfig> &config,
                                       datasystem::ConnectOptions &connectOptions);
+
+    static void GetAKSKAuthConnectOptions(const std::string &ak, const std::string &sk,
+                                          datasystem::ConnectOptions &connectOptions);
 
 private:
     // connect to data-system

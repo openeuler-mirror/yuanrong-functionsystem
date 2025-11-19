@@ -25,9 +25,9 @@
 #include "common/explorer/explorer.h"
 #include "common/leader/business_policy.h"
 #include "meta_store_client/meta_store_client.h"
-#include "proto/pb/message_pb.h"
+#include "common/proto/pb/message_pb.h"
 #include "common/scheduler_topology/tree.h"
-#include "status/status.h"
+#include "common/status/status.h"
 #include "domain_activator.h"
 #include "scheduler_manager/domain_sched_mgr.h"
 #include "scheduler_manager/local_sched_mgr.h"
@@ -237,6 +237,8 @@ private:
     void OnTopologyEvent(const std::vector<WatchEvent> &events);
 
     void QueryResourcesInfo(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    virtual void CheckMasterStatus(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     void OnQueryResourcesInfo(const litebus::Future<messages::QueryResourcesInfoResponse> &future,
                               const litebus::AID &to);

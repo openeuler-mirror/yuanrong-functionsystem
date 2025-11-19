@@ -14,12 +14,11 @@
  * limitations under the License.
  */
 #include "resource_view_mgr.h"
-#include "constants.h"
+#include "common/constants/constants.h"
 
 #include "async/defer.hpp"
 #include "async/collect.hpp"
-#include "logs/logging.h"
-#include "constants.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem::resource_view {
 using ResourceUnitPair = std::pair<ResourceType, std::shared_ptr<ResourceUnit>>;

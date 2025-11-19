@@ -20,7 +20,7 @@
 #include <async/flag_parser_impl.hpp>
 #include <async/option.hpp>
 
-#include "common_flags/common_flags.h"
+#include "common/common_flags/common_flags.h"
 
 namespace functionsystem::runtime_manager {
 
@@ -37,6 +37,11 @@ public:
     const std::string &GetRuntimePath() const
     {
         return runtimePath_;
+    }
+
+    const std::string &GetSnuserLibDir() const
+    {
+        return snuserLibDir_;
     }
 
     const std::string &GetRuntimeLogPath() const
@@ -222,6 +227,11 @@ public:
         return runtimeGID_;
     }
 
+    int GetVirtualEnvIdleTimeLimit() const
+    {
+        return virtualEnvIdleTimeLimit_;
+    }
+
     const std::string GetNpuCollectionMode() const
     {
         return npuCollectionMode_;
@@ -257,6 +267,11 @@ public:
         return logExpirationEnable_;
     }
 
+    bool GetLogReuseEnable() const
+    {
+        return logReuseEnable_;
+    }
+
     bool GetSeparetedRedirectRuntimeStd() const
     {
         return separatedRedirectRuntimeStd_;
@@ -280,6 +295,11 @@ public:
     bool GetRuntimeDirectConnectionEnable() const
     {
         return runtimeDirectConnectionEnable_;
+    }
+
+    bool GetCleanStreamProducerEnable() const
+    {
+        return cleanStreamProducerEnable_;
     }
 
     int GetMemoryDetectionInterval() const
@@ -357,6 +377,11 @@ public:
         return userLogExportMode_;
     }
 
+    std::string GetDiskResources() const
+    {
+        return diskResources_;
+    }
+
 protected:
     void AddConfigFlags();
 
@@ -365,6 +390,7 @@ protected:
     std::string javaSystemLibraryPath_ = "/home/snuser/runtime/java/lib";
     bool setCmdCred_ = true;
     std::string runtimePath_ = "/home/snuser";
+    std::string snuserLibDir_ = "/home/snuser/lib";
     std::string runtimeLogsPath_ = "/home/snuser";
     std::string runtimeStdLogDir_ = "instances";
     int runtimeMaxLogSize_;
@@ -397,18 +423,21 @@ protected:
     int snuserDirSizeLimit_ = 0;
     int runtimeUID_ = 1003;
     int runtimeGID_ = 1003;
+    int virtualEnvIdleTimeLimit_ = -1; // ms
     std::string npuCollectionMode_;
     bool gpuCollectionEnable_ = false;
     bool isProtoMsgToRuntime_ = false;
     bool massifEnable_ = false;
     bool inheritEnv_ = false;
     bool logExpirationEnable_ = false;
+    bool logReuseEnable_ = false;
     int logExpirationCleanupInterval_ = 0;
     int logExpirationTimeThreshold_ = 0;
     int logExpirationMaxFileCount_ = 0;
     std::string customResources_;
     bool separatedRedirectRuntimeStd_ = false;
     bool runtimeDirectConnectionEnable_ = false;
+    bool cleanStreamProducerEnable_ = true;
     int memoryDetectionInterval_ = 1000; // ms
     bool oomKillEnable_ = false;
     int oomKillControlLimit_ = 0; // MB
@@ -424,6 +453,7 @@ protected:
     bool diskUsageMonitorNotifyFailureEnable_{ false };
     bool runtimeInstanceDebugEnable_{ false };
     std::string userLogExportMode_;
+    std::string diskResources_;
 };
 }  // namespace functionsystem::runtime_manager
 

@@ -23,8 +23,8 @@
 #include <regex>
 #include <algorithm>
 
-#include "logs/logging.h"
-#include "hex/hex.h"
+#include "common/logs/logging.h"
+#include "common/hex/hex.h"
 #include "partitioner.h"
 #include "utils/utils.h"
 
@@ -33,7 +33,7 @@ namespace functionsystem::runtime_manager {
 const static std::string GET_NPU_TOPO_INFO_CMD = "npu-smi info -t topo";  // NOLINT
 
 const static std::string LS_NPU_DAVINCI_CMD = "ls /dev | grep davinci";  // NOLINT
-const static int DEFAULT_HBM_LIMITS = 10000;
+const static int DEFAULT_HBM_LIMITS = 1000;
 const static std::string DEVICE_NUMBER_REGEX = R"(davinci(\d+))";
 /* npu-info regex constants for
  * | NPU   Name                | Health        | Power(W)    Temp(C)           Hugepages-Usage(page)|
@@ -56,7 +56,6 @@ const static std::regex NPU_BASE_INFO_REGEX(
  * */
 // \s*(\d+)\s*：捕获一个或多个数字 Chip
 // \s*(\S+)\s*：捕获一个或多个非空白字符 Bus-Id
-// \s*(\d+)\s*：捕获一个带小数点的数字 Power(W)
 // (\d+)：捕获一个或多个数字 AICore(%)
 // (\d+)\s*/\s*(\d+): 捕获一个分数形式的数字 Memory-Usage(MB)  HBM-Usage(MB)
 const static std::regex NPU_CHIP_INFO_REGEX(
@@ -69,11 +68,24 @@ const static std::regex NPU_CHIP_INFO_REGEX(
 // \s*(\d+)\s+：捕获一个或多个数字 Chip
 // (\d+)\s*   ：捕获一个或多个数字 Phy-ID
 // \s*(\S+)\s*：捕获一个或多个非空白字符 Bus-Id
-// \s*(\d+)\s*：捕获一个带小数点的数字 Power(W)
 // (\d+)：捕获一个或多个数字 AICore(%)
 // (\d+)\s*/\s*(\d+): 捕获一个分数形式的数字 Memory-Usage(MB)  HBM-Usage(MB)
 const static std::regex NPU_CHIP_INFO_REGEX_WITH_PHYID(
     R"(\|\s*(\d+)\s+(\d+)\s*\|\s*(\S+)\s*\|\s*(\d+)\s*(\d+)\s*/\s*(\d+)\s*(\d+)\s*/\s*(\d+)\s*\|)");
+
+/* npu-info regex constants for (Phy-ID is real device id)
+ * | Chip    Device                | Bus-Id          | AICore(%)    Memory-Usage(MB)                        |
+ * | 0       0                     | 0000:06:00.0    | 0            1596 / 44280                            |
+ * */
+// \s*(\d+)\s+：捕获一个或多个数字 Chip
+// (\d+)\s*   ：捕获一个或多个数字 Device
+// \s*(\S+)\s*：捕获一个或多个非空白字符 Bus-Id
+// \s*(\d+)\s*：捕获一个带小数点的数字 Power(W)
+// (\d+)：捕获一个或多个数字 AICore(%)
+// (\d+)\s*/\s*(\d+): 捕获一个分数形式的数字 Memory-Usage(MB)
+const static std::regex NPU_CHIP_INFO_REGEX_WITHOUT_HBM(
+    R"(\|\s*(\d+)\s+(\d+)\s*\|\s*(\S+)\s*\|\s*(\d+)\s*(\d+)\s*/\s*(\d+)\s*\|)");
+
 
 // Query the basic information about all NPU devices.
 const static std::string GET_NPU_BASIC_INFO_CMD = "npu-smi info";  // NOLINT
@@ -94,26 +106,16 @@ const int NPU_LIMIT_HBM_INDEX = 7;
 
 const int NPU_IP_DEVICE_INDEX = 1;
 const int NPU_IP_ADDRESS_INDEX = 2;
+const int16_t UPDATE_METRICS_DURATION = 8000;
 
 const std::string NPU_VDEVICE_CONF_PATH = "/etc/hccn.conf";  // NOLINT
 
-const int INDEX_GAP = 2;
-const int PRODUCT_VALUE_INDEX = 2;
-const int ROW_INTERVAL = 3;
-const int TYPE_INDEX = 4;
-const int HBM_INDEX = 7;
-const int MEM_INDEX = 6;
-const int HBM_VALUE_INDEX = 11;
-const int MEM_VALUE_INDEX = 8;
 
-// for ascend-dmi -i
-const int ASCEND_DMI_CMD_OUTPUT_LEN = 10;
-// length = header + 3 + tail.
-const int ASCEND_DMI_COLUMN_SIZE = 5;
-const int ASCEND_DMI_STATISTICS_INDEX = 8;
-const int ASCEND_DMI_STATISTICS_COUNT_INDEX = 2;
-// One card information needs to be displayed in three lines.
-const int ASCEND_DMI_ITEM_INDEX_GAP = 3;
+std::map<std::string, std::pair<std::regex, std::regex>> RegexMap = {
+    { NPU910B, std::make_pair(NPU_BASE_INFO_REGEX, NPU_CHIP_INFO_REGEX) },
+    { NPU910C, std::make_pair(NPU_BASE_INFO_REGEX, NPU_CHIP_INFO_REGEX_WITH_PHYID) },
+    { NPU310P3, std::make_pair(NPU_BASE_INFO_REGEX, NPU_CHIP_INFO_REGEX_WITHOUT_HBM) },
+};
 
 NpuProbe::NpuProbe(std::string node, const std::shared_ptr<ProcFSTools> &procFSTools, std::shared_ptr<CmdTool> cmdTool,
                    const std::shared_ptr<XPUCollectorParams> &params)
@@ -125,6 +127,19 @@ NpuProbe::NpuProbe(std::string node, const std::shared_ptr<ProcFSTools> &procFST
     npuDeviceInfoPath_ = params->deviceInfoPath;
     InitDevInfo();
     AddLdLibraryPathForNpuCmd(params_->ldLibraryPath);
+}
+
+NpuProbe::~NpuProbe()
+{
+    if (refreshThread_) {
+        refreshFlag_ = false; // notify the thread to stop
+
+        // Wait for the thread to finish (up to 500ms)
+        if (refreshThread_->joinable()) {
+            refreshThread_->join();
+        }
+        refreshThread_.reset(); // release the thread object
+    }
 }
 
 void NpuProbe::InitDevInfo()
@@ -217,7 +232,15 @@ Status NpuProbe::RefreshTopo()
     init = true;
     auto it = collectFuncMap_.find(params_->collectMode);
     if (it != collectFuncMap_.end()) {
-        return (this->*(it->second))();
+        NPUCollectFunc func = it->second;
+        auto status = (this->*(func))();
+        refreshThread_ = std::make_unique<std::thread>([this, func]() { // a new refresh thread is initiated.
+            while (refreshFlag_) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(UPDATE_METRICS_DURATION));
+                (this->*(func))(); // Refresh the HBM or memory of the NPU
+            }
+        });
+        return status;
     }
     YRLOG_WARN("{} is not support", params_->collectMode);
     return Status(StatusCode::FAILED);
@@ -226,6 +249,8 @@ Status NpuProbe::RefreshTopo()
 Status NpuProbe::GetNPUCountInfo()
 {
     auto res = cmdTool_->GetCmdResult(LS_NPU_DAVINCI_CMD);
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
+
     std::regex deviceNumberRegex(DEVICE_NUMBER_REGEX);
     std::smatch match;
     InitDevInfo();
@@ -258,41 +283,117 @@ Status NpuProbe::GetNPUCountInfo()
     return Status::OK();
 }
 
-Status NpuProbe::ParseNpuSmiInfo(size_t &index, std::string &productModel)
+std::string NpuProbe::GetNpuType()
 {
     std::smatch match;
-    int delta = 0;
-    if (std::regex_search(npuSmiCmdOutput_[index], match, NPU_BASE_INFO_REGEX)) {
-        if (index + 1 >= npuSmiCmdOutput_.size()) {  // make sure parse npu and chip info in following two line
-            YRLOG_ERROR("can not get npu from npu-smi info, no chip info in following line.");
-            return Status{ StatusCode::FAILED, "parse npu basic info failed, no chip info in following line." };
+    for (size_t index = 1; index < npuSmiCmdOutput_.size(); index++) {
+        for (auto &reg : RegexMap) {
+            if (std::regex_search(npuSmiCmdOutput_[index - 1], match, reg.second.first)
+                && std::regex_search(npuSmiCmdOutput_[index], match, reg.second.second)) {
+                return reg.first;
+            }
+        }
+    }
+    YRLOG_ERROR("Can not parse npu info, Now only support 910 and 310P3!");
+    return "NOT_SUPPORT";
+}
+
+Status NpuProbe::ParseNPU910B()
+{
+    std::smatch match;
+    for (size_t index = 0; index < npuSmiCmdOutput_.size(); index++) {
+        if (!std::regex_search(npuSmiCmdOutput_[index], match, NPU_BASE_INFO_REGEX)) {
+            continue;
         }
         try {
+            devInfo_->devProductModel = match[NPU_NAME_INDEX];
             devInfo_->devIDs.push_back(std::stoi(match[NPU_ID_INDEX]));
-            productModel = match[NPU_NAME_INDEX];
             devInfo_->health.push_back(match[NPU_HEALTH_INDEX] == "OK" ? 0 : 1);
         } catch (const std::exception &e) {
-            YRLOG_ERROR("parse npu basic info failed, error is {}", e.what());
+            YRLOG_ERROR("parse npu910B basic info failed, error is {}", e.what());
             return Status{ StatusCode::FAILED, "parse npu basic info failed" };
         }
-
         index++;  // regex next line
-        if (!std::regex_search(npuSmiCmdOutput_[index], match, NPU_CHIP_INFO_REGEX)) {
-            if (!std::regex_search(npuSmiCmdOutput_[index], match, NPU_CHIP_INFO_REGEX_WITH_PHYID)) {
-                YRLOG_ERROR("parse npu chip info failed.");
-                return Status{ StatusCode::FAILED, "parse npu chip info failed." };
-            }
-            // use physical id as device id
-            devInfo_->devIDs[devInfo_->devIDs.size() - 1] = std::stoi(match[NPU_PHYSICAL_ID]);
-            delta = 1;
+        if (index >= npuSmiCmdOutput_.size()
+            || !std::regex_search(npuSmiCmdOutput_[index], match, NPU_CHIP_INFO_REGEX)) {
+            return Status{ StatusCode::FAILED, "parse npu chip info failed." };
         }
         try {
+            devInfo_->devUsedMemory.push_back(std::stoi(match[NPU_USE_MEMORY_INDEX]));
+            devInfo_->devTotalMemory.push_back(std::stoi(match[NPU_TOTAL_MEMORY_INDEX]));
+            devInfo_->devUsedHBM.push_back(std::stoi(match[NPU_USE_HBM_INDEX]));
+            devInfo_->devLimitHBMs.push_back(std::stoi(match[NPU_LIMIT_HBM_INDEX]));
+        } catch (const std::exception &e) {
+            YRLOG_ERROR("parse npu910B chip info failed, error is {}", e.what());
+            return Status{ StatusCode::FAILED, "parse npu info failed" };
+        }
+        npuNum_++;  // success parse
+    }
+    return Status::OK();
+}
+
+Status NpuProbe::ParseNPU910C()
+{
+    std::smatch match;
+    for (size_t index = 0; index < npuSmiCmdOutput_.size(); index++) {
+        if (!std::regex_search(npuSmiCmdOutput_[index], match, NPU_BASE_INFO_REGEX)) {
+            continue;
+        }
+        try {
+            devInfo_->devProductModel = match[NPU_NAME_INDEX];
+            devInfo_->health.push_back(match[NPU_HEALTH_INDEX] == "OK" ? 0 : 1);
+        } catch (const std::exception &e) {
+            YRLOG_ERROR("parse npu910C basic info failed, error is {}", e.what());
+            return Status{ StatusCode::FAILED, "parse npu basic info failed" };
+        }
+        index++;  // regex next line
+        if (index >= npuSmiCmdOutput_.size()
+            || !std::regex_search(npuSmiCmdOutput_[index], match, NPU_CHIP_INFO_REGEX_WITH_PHYID)) {
+            return Status{ StatusCode::FAILED, "parse npu chip info failed." };
+        }
+        try {
+            devInfo_->devUsedMemory.push_back(std::stoi(match[NPU_USE_MEMORY_INDEX + 1]));
+            devInfo_->devTotalMemory.push_back(std::stoi(match[NPU_TOTAL_MEMORY_INDEX + 1]));
+            devInfo_->devIDs.push_back(std::stoi(match[NPU_PHYSICAL_ID]));
+            devInfo_->devUsedHBM.push_back(std::stoi(match[NPU_USE_HBM_INDEX + 1]));
+            devInfo_->devLimitHBMs.push_back(std::stoi(match[NPU_LIMIT_HBM_INDEX + 1]));
+        } catch (const std::exception &e) {
+            YRLOG_ERROR("parse npu910C chip info failed, error is {}", e.what());
+            return Status{ StatusCode::FAILED, "parse npu info failed" };
+        }
+        npuNum_++;  // success parse
+    }
+    return Status::OK();
+}
+
+Status NpuProbe::ParseNPU310P3()
+{
+    std::smatch match;
+    int delta = 1;
+    for (size_t index = 0; index < npuSmiCmdOutput_.size(); index++) {
+        if (!std::regex_search(npuSmiCmdOutput_[index], match, NPU_BASE_INFO_REGEX)) {
+            continue;
+        }
+        try {
+            devInfo_->health.push_back(match[NPU_HEALTH_INDEX] == "OK" ? 0 : 1);
+            devInfo_->devProductModel = match[NPU_NAME_INDEX];
+        } catch (const std::exception &e) {
+            YRLOG_ERROR("parse npu310 basic info failed, error is {}", e.what());
+            return Status{ StatusCode::FAILED, "parse npu basic info failed" };
+        }
+        index++;  // regex next line
+        if (index >= npuSmiCmdOutput_.size()
+            || !std::regex_search(npuSmiCmdOutput_[index], match, NPU_CHIP_INFO_REGEX_WITHOUT_HBM)) {
+            return Status{ StatusCode::FAILED, "parse npu chip info failed." };
+        }
+        try {
+            devInfo_->devIDs.push_back(std::stoi(match[NPU_PHYSICAL_ID]));
+            devInfo_->devUsedHBM.push_back(std::stoi(match[NPU_USE_MEMORY_INDEX + delta]));
+            devInfo_->devLimitHBMs.push_back(std::stoi(match[NPU_TOTAL_MEMORY_INDEX + delta]));
             devInfo_->devUsedMemory.push_back(std::stoi(match[NPU_USE_MEMORY_INDEX + delta]));
             devInfo_->devTotalMemory.push_back(std::stoi(match[NPU_TOTAL_MEMORY_INDEX + delta]));
-            devInfo_->devUsedHBM.push_back(std::stoi(match[NPU_USE_HBM_INDEX + delta]));
-            devInfo_->devLimitHBMs.push_back(std::stoi(match[NPU_LIMIT_HBM_INDEX + delta]));
         } catch (const std::exception &e) {
-            YRLOG_ERROR("parse npu chip info failed, error is {}", e.what());
+            YRLOG_ERROR("parse npu310 chip info failed, error is {}", e.what());
             return Status{ StatusCode::FAILED, "parse npu info failed" };
         }
         npuNum_++;  // success parse
@@ -307,20 +408,25 @@ Status NpuProbe::GetNPUSmiInfo()
         YRLOG_ERROR("can not get npu from npu-smi info, make sure npu-smi is exist!");
         return Status{ StatusCode::FAILED, "can not get npu from npu-smi info, make sure npu-smi is exist!" };
     }
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     std::smatch match;
     std::string productModel;
     InitDevInfo();
-    for (size_t index = 0; index < npuSmiCmdOutput_.size(); index++) {
-        auto status = ParseNpuSmiInfo(index, productModel);
-        if (status.IsError()) {
-            return status;
-        }
+
+    auto type = GetNpuType();
+    YRLOG_DEBUG("get NPU type: {}", type);
+    auto it = parseNPUFuncMap_.find(type);
+    if (it == parseNPUFuncMap_.end()) {
+        return Status{ StatusCode::FAILED, "failed to parse npu smi info!" };
+    }
+    auto status = (this->*(it->second))();
+    if (status.IsError()) {
+        return status;
     }
     if (npuNum_ == 0) {
         YRLOG_WARN("can not get npu info from npu-smi info");
         return Status{ StatusCode::FAILED, "can not get npu info from npu-smi info" };
     }
-    devInfo_->devProductModel = productModel; // only support one type now
     return Status::OK();
 }
 
@@ -332,6 +438,7 @@ Status NpuProbe::GetNPUIPInfo()
         return Status(StatusCode::FAILED, "can not read content, procFSTool is nullptr");
     }
     auto content = procFSTools_->Read(NPU_VDEVICE_CONF_PATH);
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     devInfo_->devIPs.clear();
     if (content.IsNone() || content.Get().empty()) {
         YRLOG_WARN("failed to get devs IP from {}, try to get from hccn_tool", NPU_VDEVICE_CONF_PATH);
@@ -373,7 +480,7 @@ Status NpuProbe::GetNPUTopoInfo()
         YRLOG_ERROR("please check command: (npu-smi info -t topo) ");
         return Status{ StatusCode::FAILED, "node does not install npu driver" };
     }
-
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     // If you go here, an NPU device must exist.
     devInfo_->devTopo = GetTopoInfo(topoResult, npuNum_);
     // make sure that devInfo_->devTopo is N x N matrix
@@ -400,7 +507,7 @@ Status NpuProbe::LoadTopoInfo()
         YRLOG_ERROR("failed to read json from {}", npuDeviceInfoPath_);
         return Status(StatusCode::JSON_PARSE_ERROR, "failed to read json from " + npuDeviceInfoPath_);
     }
-
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     auto jsonStr = content.Get();
     nlohmann::json confJson;
     try {

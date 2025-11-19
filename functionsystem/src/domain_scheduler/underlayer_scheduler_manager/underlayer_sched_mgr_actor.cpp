@@ -20,10 +20,10 @@
 #include <async/defer.hpp>
 
 #include "common/constants/actor_name.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
-#include "meta_store_kv_operation.h"
-#include "metrics/metrics_adapter.h"
+#include "common/utils/meta_store_kv_operation.h"
+#include "common/metrics/metrics_adapter.h"
 
 namespace functionsystem::domain_scheduler {
 const uint64_t REGISTER_TIMEOUT = 60000;
@@ -47,7 +47,6 @@ UnderlayerScheduler::~UnderlayerScheduler()
     } catch (std::exception &e) {
         YRLOG_WARN("~UnderlayerScheduler exception e.what():{}", e.what());
     }
-    heartbeatObserver_ = nullptr;
 }
 
 void UnderlayerScheduler::Registered(const litebus::AID &aid)
@@ -55,16 +54,6 @@ void UnderlayerScheduler::Registered(const litebus::AID &aid)
     (void)litebus::TimerTools::Cancel(registerTimeOut_);
     registered_.SetValue(true);
     aid_ = aid;
-}
-
-int UnderlayerScheduler::CreateHeartbeatObserve(const HeartbeatObserver::TimeOutHandler &handler)
-{
-    litebus::AID dst;
-    dst.SetName(name_ + "-PingPong");
-    dst.SetUrl(address_);
-    heartbeatObserver_ =
-        std::make_shared<HeartbeatObserveDriver>(name_, dst, heartbeatMaxTimes_, heartbeatIntervalMs_, handler);
-    return heartbeatObserver_->Start();
 }
 
 void UnderlayerSchedMgrActor::UpdateUnderlayerTopo(const messages::ScheduleTopology &req)
@@ -164,6 +153,22 @@ void UnderlayerSchedMgrActor::SetScalerAddress(const std::string &address)
     isScalerEnabled_ = true;
 }
 
+int UnderlayerSchedMgrActor::AddNewHeartbeatNode(const HeartbeatObserver::TimeOutHandler &handler,
+                                                 std::shared_ptr<UnderlayerScheduler> underlayer)
+{
+    if (heartbeatObserver_ == nullptr) {
+        heartbeatObserver_ = std::make_shared<HeartbeatObserveDriver>(DOMAIN_UNDERLAYER_SCHED_MGR_ACTOR_NAME);
+    }
+
+    litebus::AID dst;
+    dst.SetName(HEARTBEAT_CLIENT_BASENAME
+                + litebus::os::Join(COMPONENT_NAME_FUNCTION_PROXY, underlayer->GetName(), '-'));
+    dst.SetUrl(underlayer->GetAddress());
+    dst.SetProtocol(litebus::BUS_TCP);
+    heartbeatObserver_->AddNewHeartbeatNode(dst, heartbeatMaxTimes_ * heartbeatInterval_, handler);
+    return 0;
+}
+
 void UnderlayerSchedMgrActor::Register(const litebus::AID &from, std::string &&name, std::string &&msg)
 {
     messages::Register req;
@@ -192,10 +197,16 @@ void UnderlayerSchedMgrActor::Register(const litebus::AID &from, std::string &&n
             return;
         }
     }
-    auto ret = underlayers_[req.name()]->CreateHeartbeatObserve(
-        [name(req.name()), address(req.address()), aid(GetAID())](const litebus::AID &) {
-            litebus::Async(aid, &UnderlayerSchedMgrActor::HeatbeatLost, name, address);
-        });
+
+    std::shared_ptr<UnderlayerScheduler> underlayer = underlayers_[req.name()];
+
+    auto ret = AddNewHeartbeatNode(
+        [name(req.name()), address(req.address()), aid(GetAID())](const litebus::AID &from,
+                                                                  functionsystem::HeartbeatConnection) {
+            YRLOG_WARN("heartbeat timeout, from proxy to domain. from: {}.", std::string(from));
+            litebus::Async(aid, &UnderlayerSchedMgrActor::HeartbeatLost, name, address);
+        },
+        underlayer);
     if (ret != static_cast<int>(StatusCode::SUCCESS)) {
         rsp.set_message("failed to build heartbeat");
         (void)Send(from, "Registered", rsp.SerializeAsString());
@@ -210,7 +221,7 @@ void UnderlayerSchedMgrActor::Register(const litebus::AID &from, std::string &&n
         [resource(resourceViewMgr_)](const std::string &id) { (void)resource->UnRegisterResourceUnit(id); });
 }
 
-void UnderlayerSchedMgrActor::HeatbeatLost(const std::string &name, const std::string &address)
+void UnderlayerSchedMgrActor::HeartbeatLost(const std::string &name, const std::string &address)
 {
     if (underlayers_.find(name) == underlayers_.end()) {
         YRLOG_INFO("{} NOT FOUND.", name);
@@ -423,6 +434,7 @@ void UnderlayerSchedMgrActor::ResponseSchedule(const litebus::AID &from, std::st
         YRLOG_WARN("invalid schedule response from {} msg {}, ignored", std::string(from), msg);
         return;
     }
+    ASSERT_IF_NULL(resourceViewMgr_);
     for (auto &[type, resource] : *rsp->mutable_updateresources()) {
         auto changes = std::make_shared<resource_view::ResourceUnitChanges>(std::move(resource));
         (void)resourceViewMgr_->GetInf(static_cast<resource_view::ResourceType>(type))
@@ -640,6 +652,7 @@ void UnderlayerSchedMgrActor::OnReserve(const litebus::AID &from, std::string &&
                    rsp->requestid(), rsp->code(), rsp->message(), from.HashString());
         return;
     }
+    ASSERT_IF_NULL(resourceViewMgr_);
     for (auto &[type, resource] : *rsp->mutable_updateresources()) {
         auto changes = std::make_shared<resource_view::ResourceUnitChanges>(std::move(resource));
         (void)resourceViewMgr_->GetInf(static_cast<resource_view::ResourceType>(type))
@@ -657,6 +670,7 @@ void UnderlayerSchedMgrActor::ReceiveGroupMethod(RequestSyncHelper<UnderlayerSch
         YRLOG_WARN("invalid {} response from {} msg {}, ignored", std::string(from), name, msg);
         return;
     }
+    ASSERT_IF_NULL(resourceViewMgr_);
     for (auto &[type, resource] : *rsp.mutable_updateresources()) {
         auto changes = std::make_shared<resource_view::ResourceUnitChanges>(std::move(resource));
         (void)resourceViewMgr_->GetInf(static_cast<resource_view::ResourceType>(type))

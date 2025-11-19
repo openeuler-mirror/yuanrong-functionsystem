@@ -21,11 +21,11 @@
 #include <async/asyncafter.hpp>
 
 #include "common/constants/actor_name.h"
-#include "logs/logging.h"
-#include "proto/pb/message_pb.h"
-#include "status/status.h"
+#include "common/logs/logging.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
 #include "common/utils/generate_message.h"
-#include "param_check.h"
+#include "common/utils/param_check.h"
 
 namespace functionsystem::global_scheduler {
 
@@ -34,8 +34,10 @@ constexpr int RETRY_LOW_BOUND = 2000;
 constexpr int RETRY_MAX_BOUND = 4000;
 constexpr int RETRY_MAX_TIMES = 5;
 
-DomainSchedMgrActor::DomainSchedMgrActor(const std::string &name)
-    : litebus::ActorBase(name), member_(std::make_shared<Member>())
+DomainSchedMgrActor::DomainSchedMgrActor(const std::string &name, const uint32_t heartbeatTimeoutMs)
+    : litebus::ActorBase(name),
+      member_(std::make_shared<Member>()),
+      heartbeatTimeoutMs_(heartbeatTimeoutMs)
 {
     auto backOff = [lower(RETRY_LOW_BOUND), upper(RETRY_MAX_BOUND), base(RETRY_BASE_INTERVAL)](int64_t attempt) {
         return GenerateRandomNumber(base + lower * attempt, base + upper * attempt);
@@ -131,30 +133,32 @@ Status DomainSchedMgrActor::NotifyWorkerStatusCallback(const CallbackWorkerFunc 
 Status DomainSchedMgrActor::Connect(const std::string &name, const std::string &address)
 {
     // destroy old actor
-    heartbeatObserveDriver_ = nullptr;
-    heartbeatObserveDriver_ = std::make_unique<HeartbeatObserveDriver>(
-        name, litebus::AID(name + "-PingPong", address),
-        [&handler = this->delDomainSchedCallback_, name](const litebus::AID &) { handler(name, ""); });
     // create new domainSchedulerAid
     if (domainSchedulerAID_ == nullptr) {
         domainSchedulerAID_ = std::make_shared<litebus::AID>(name + DOMAIN_SCHEDULER_SRV_ACTOR_NAME_POSTFIX, address);
     } else {
         domainSchedulerAID_->SetUrl(address);
     }
-
-    if (heartbeatObserveDriver_->Start() != 0) {
-        YRLOG_ERROR("heartbeat to name: {}, in {} start failed", std::string(name), std::string(address));
-        this->delDomainSchedCallback_(name, address);
-        this->Disconnect();
-        return Status(StatusCode::FAILED);
+    if (heartbeatObserveDriver_ == nullptr) {
+        heartbeatObserveDriver_ = std::make_shared<HeartbeatObserveDriver>(DOMAIN_UNDERLAYER_SCHED_MGR_ACTOR_NAME);
     }
-    YRLOG_DEBUG("heartbeat start successfully");
+    heartbeatObserveDriver_->AddNewHeartbeatNode(
+        litebus::AID(HEARTBEAT_CLIENT_BASENAME + litebus::os::Join(COMPONENT_NAME_FUNCTION_MASTER, name, '-'),
+                     address),
+        heartbeatTimeoutMs_,
+        [&handler = this->delDomainSchedCallback_, name](const litebus::AID &from,
+                                                         functionsystem::HeartbeatConnection) {
+            YRLOG_WARN("heartbeat timeout, from domain to master. from: {}.", std::string(from));
+            handler(name, "");
+        });
+
+    YRLOG_DEBUG("heartbeat add new heartbeat node from {}",
+                std::string(litebus::AID(HEARTBEAT_CLIENT_BASENAME + name, address)));
     return Status::OK();
 }
 
 void DomainSchedMgrActor::Disconnect()
 {
-    heartbeatObserveDriver_ = nullptr;
 }
 
 litebus::Future<Status> DomainSchedMgrActor::Schedule(const std::string &name, const std::string &address,
@@ -314,12 +318,16 @@ void DomainSchedMgrActor::SendScheduleRequest(const std::string &name, const std
         (void)litebus::TimerTools::Cancel(member_->scheduleTimers[req->requestid()]);
     }
 
+    if (curStatus_ == SLAVE_BUSINESS) {
+        return;
+    }
+
     if (member_->schedulePromises.find(req->requestid()) == member_->schedulePromises.end()) {
         member_->schedulePromises[req->requestid()] = promise;
     }
 
     litebus::AID domainAID(name + DOMAIN_SCHEDULER_SRV_ACTOR_NAME_POSTFIX, address);
-    YRLOG_INFO("send scheduler to domain {}", std::string(domainAID));
+    YRLOG_INFO("send schedule to domain {}", std::string(domainAID));
     Send(domainAID, "Schedule", req->SerializeAsString());
     member_->scheduleTimers[req->requestid()] = litebus::AsyncAfter(
         retryCycle, GetAID(), &DomainSchedMgrActor::SendScheduleRequest, name, address, req, retryCycle, promise);

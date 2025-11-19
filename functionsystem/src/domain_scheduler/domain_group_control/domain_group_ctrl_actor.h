@@ -17,10 +17,10 @@
 #define DOMAIN_SCHEDULER_DOMAIN_GROUP_CTRL_ACTOR_H
 #include "actor/actor.hpp"
 #include "async/future.hpp"
-#include "proto/pb/posix_pb.h"
+#include "common/proto/pb/posix_pb.h"
 #include "common/schedule_decision/scheduler.h"
 #include "common/schedule_decision/schedule_recorder/schedule_recorder.h"
-#include "resource_type.h"
+#include "common/resource_view/resource_type.h"
 #include "common/resource_view/resource_view.h"
 #include "underlayer_scheduler_manager/underlayer_sched_mgr.h"
 #include "common/explorer/explorer.h"
@@ -97,7 +97,7 @@ private:
     void GroupScheduleDone(const std::shared_ptr<GroupScheduleContext> &ctx, const Status &status);
     void OnGroupScheduleDecisionSuccessful(const std::vector<schedule_decision::ScheduleResult> &results,
                                            const std::shared_ptr<GroupScheduleContext> &groupCtx);
-    void RollbackContext(const std::shared_ptr<GroupScheduleContext> &ctx);
+    std::vector<int> RollbackContext(const std::shared_ptr<GroupScheduleContext> &ctx);
 
     litebus::Future<Status> ToReserve(const std::vector<schedule_decision::ScheduleResult> &results,
                                       const std::shared_ptr<GroupScheduleContext> &groupCtx);
@@ -107,6 +107,7 @@ private:
                                             const std::shared_ptr<GroupScheduleContext> &groupCtx);
 
     litebus::Future<Status> RollbackRangeReserve(
+            const std::vector<int> &rollbackedInd,
             const std::vector<schedule_decision::ScheduleResult> &results,
             const std::shared_ptr<GroupScheduleContext> &groupCtx);
 

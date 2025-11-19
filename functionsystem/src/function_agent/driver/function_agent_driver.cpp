@@ -22,7 +22,7 @@
 #include "agent_service_actor.h"
 #include "async/future.hpp"
 #include "common/constants/actor_name.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/register/register_helper.h"
 #include "function_agent/code_deployer/copy_deployer.h"
 #include "function_agent/code_deployer/local_deployer.h"
@@ -50,21 +50,15 @@ FunctionAgentDriver::FunctionAgentDriver(const std::string &nodeID, const Functi
     auto localSchedFuncAgentMgrAID = litebus::AID(localSchedFuncAgentMgrName, startParam_.localSchedulerAddress);
 
     uint32_t receivedPingTimeoutMs = startParam_.heartbeatTimeoutMs;
-    function_agent::AgentServiceActor::Config config{ localSchedFuncAgentMgrAID, startParam_.s3Config,
-                                                      startParam_.codePackageThresholds, receivedPingTimeoutMs };
-    actor_ = std::make_shared<function_agent::AgentServiceActor>(FUNCTION_AGENT_AGENT_SERVICE_ACTOR_NAME, agentID,
-                                                                 config, startParam_.alias);
+    function_agent::AgentServiceActor::Config config{ localSchedFuncAgentMgrAID,         startParam_.s3Config,
+                                                      startParam_.codePackageThresholds, receivedPingTimeoutMs,
+                                                      TENANT_PODIP_IPSET_NAME,           nodeID };
+    actor_ = std::make_shared<function_agent::AgentServiceActor>(
+        FUNCTION_AGENT_AGENT_SERVICE_ACTOR_NAME, agentID, config, startParam_.alias, param.componentName);
     httpServer_ = std::make_shared<HttpServer>(FUNCTION_AGENT);
     apiRouteRegister_ = std::make_shared<HealthyApiRouter>(startParam_.nodeID, TIMEOUTMS);
-    auto isSuccessful = std::make_shared<std::atomic<bool>>(false);
-    apiRouteRegister_->AddProbe([isSuccessful, aid(actor_->GetAID())]() -> litebus::Future<Status> {
-        if (isSuccessful->load()) {
-            return Status::OK();
-        }
-        YRLOG_WARN("function agent is registering.");
-        return litebus::Async(aid, &AgentServiceActor::IsRegisterLocalSuccessful).OnComplete([isSuccessful]() {
-            isSuccessful->store(true);
-        });
+    apiRouteRegister_->AddProbe([aid(actor_->GetAID())]() -> litebus::Future<Status> {
+        return litebus::Async(aid, &AgentServiceActor::Readiness);
     });
     apiRouteRegister_->Register();
     if (auto registerStatus(httpServer_->RegisterRoute(apiRouteRegister_)); registerStatus != StatusCode::SUCCESS) {
@@ -93,6 +87,8 @@ Status FunctionAgentDriver::Start()
     (void)actor_->SetDeployers(COPY_STORAGE_TYPE, copyDeployer);
     auto workingDirDeployer = std::make_shared<function_agent::WorkingDirDeployer>();
     (void)actor_->SetDeployers(WORKING_DIR_STORAGE_TYPE, workingDirDeployer);
+    auto sharedDirDeployer = std::make_shared<function_agent::SharedDirDeployer>();
+    (void)actor_->SetDeployers(SHARED_DIR_STORAGE_TYPE, sharedDirDeployer);
 
     (void)litebus::Spawn(actor_);
     (void)litebus::Spawn(httpServer_);

@@ -17,11 +17,11 @@
 #ifndef FUNCTIONSYSTEM_DEFAULT_FILTER_H
 #define FUNCTIONSYSTEM_DEFAULT_FILTER_H
 
-#include "proto/pb/posix/resource.pb.h"
-#include "resource_type.h"
+#include "common/proto/pb/posix/resource.pb.h"
+#include "common/resource_view/resource_type.h"
 #include "common/schedule_plugin/common/preallocated_context.h"
 #include "common/scheduler_framework/framework/policy.h"
-#include "status/status.h"
+#include "common/status/status.h"
 
 namespace functionsystem::schedule_plugin::filter {
 

@@ -23,13 +23,6 @@ YR_ROOT_DIR="$(readlink -f "${TOP_DIR}/../..")"
 CPU_NUM="$(grep -c 'processor' /proc/cpuinfo)"
 JOB_NUM="$(($(grep -c 'processor' /proc/cpuinfo) + 1))"
 
-function init_default_opts() {
-  export DOWNLOAD_OPENSRC="OFF"
-  export THIRDPARTY_SRC_DIR="${YR_ROOT_DIR}/vendor/"
-  export THIRDPARTY_INSTALL_DIR="${THIRDPARTY_SRC_DIR}/out"
-}
-init_default_opts
-
 #--------------Function--------------
 
 checkopts()
@@ -37,16 +30,6 @@ checkopts()
     while getopts 'x:T:m:' opt
     do
         case "$opt" in
-        x)
-            if [ "${OPTARG^^}" = "ON" ]; then
-                DOWNLOAD_OPENSRC="$OPTARG"
-            fi
-            ;;
-        T)
-            THIRDPARTY_SRC_DIR=$(readlink -f "${OPTARG}")
-            THIRDPARTY_INSTALL_DIR="${THIRDPARTY_SRC_DIR}/out"
-            echo "download opensource to ${THIRDPARTY_SRC_DIR}"
-            ;;
         m)
             #
             TEST_MODEL="$OPTARG"
@@ -66,7 +49,7 @@ LITEBUS_ROOT_PATH=${CUR_DIR}/../
 LITEBUS_SRC_BUILD_DIR=${LITEBUS_ROOT_PATH}/build/build/
 
 #build testcases
-sh ${LITEBUS_ROOT_PATH}/build/build.sh -D -c on -x ${DOWNLOAD_OPENSRC} -T ${THIRDPARTY_SRC_DIR} || exit 1
+sh ${LITEBUS_ROOT_PATH}/build/build.sh -D -c on || exit 1
 
 #run tests
 sh ${LITEBUS_ROOT_PATH}/test/run_tests.sh ${TEST_MODEL} || exit 1

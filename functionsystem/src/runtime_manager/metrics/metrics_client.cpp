@@ -13,11 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <spdlog/fmt/ranges.h>
 #include "metrics_client.h"
 
 #include "async/async.hpp"
-#include "logs/logging.h"
-#include "resource_type.h"
+#include "common/logs/logging.h"
+#include "common/resource_view/resource_type.h"
 
 namespace functionsystem::runtime_manager {
 
@@ -38,7 +39,7 @@ std::vector<int> MetricsClient::GetCardIDs()
 {
     if (firstGetCardID_) {
         cardIDs_ = litebus::Async(actor_->GetAID(), &MetricsActor::GetCardIDs).Get();
-        YRLOG_DEBUG("get cardIDs_ from MetricsActor: [{}]", fmt::join(cardIDs_.begin(), cardIDs_.end(), ", "));
+        YRLOG_DEBUG("get cardIDs_ from MetricsActor: [{}]", fmt::join(cardIDs_, ", "));
         firstGetCardID_ = false;
     }
     return cardIDs_;
@@ -80,6 +81,11 @@ resources::ResourceUnit MetricsClient::GetResourceUnit() const
 void MetricsClient::StartUpdateResource() const
 {
     litebus::Async(actor_->GetAID(), &MetricsActor::StartUpdateMetrics);
+}
+
+void MetricsClient::BeginUpdateMetrics() const
+{
+    litebus::Async(actor_->GetAID(), &MetricsActor::BeginUpdateMetrics);
 }
 
 void MetricsClient::StopUpdateResource() const

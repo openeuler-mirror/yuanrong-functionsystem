@@ -25,17 +25,23 @@ namespace functionsystem::leader {
 
 class LeaderActor : public litebus::ActorBase {
 public:
-    LeaderActor(const std::string &name, const std::string &electionKey, const explorer::ElectionInfo &electionInfo)
+    LeaderActor(const std::string &name, const std::set<std::string> &electionKeySet,
+                const explorer::ElectionInfo &electionInfo)
         : litebus::ActorBase(name),
-          electionKey_(electionKey),
+          electionKeySet_(electionKeySet),
           proposal_(electionInfo.identity),
           leaseTTL_(electionInfo.electLeaseTTL),
           keepAliveInterval_(electionInfo.electKeepAliveInterval),
           electRenewInterval_(electionInfo.electRenewInterval)
     {
+        std::ostringstream oss;
+        for (const auto& element : electionKeySet) {
+            oss << element << " ";
+        }
+        electionKeyStr_ = oss.str();
     }
 
-    ~LeaderActor() override = default;
+    virtual ~LeaderActor() override = default;
 
     virtual void Elect() = 0;
 
@@ -69,8 +75,9 @@ protected:
     std::function<void()> callbackWhenResign_{ nullptr };
     std::function<void(const explorer::LeaderInfo &)> publishLeaderCallBack_;
     std::shared_ptr<litebus::Promise<bool>> isCampaigning_;
-
-    std::string electionKey_;
+    // concat all election keys as string
+    std::string electionKeyStr_;
+    std::set<std::string> electionKeySet_;
     std::string proposal_;  // leader's info, Actually it's address(ip + port) of leader
 
     uint32_t leaseTTL_{ DEFAULT_ELECT_LEASE_TTL };  // lease ttl

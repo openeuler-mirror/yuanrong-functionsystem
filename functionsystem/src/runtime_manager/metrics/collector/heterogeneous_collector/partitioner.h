@@ -22,7 +22,7 @@
 #include <string>
 #include <iostream>
 #include <map>
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 namespace functionsystem::runtime_manager {
 namespace partitioner_info {
 const int TOPOLOGY_X = 0;

@@ -39,7 +39,7 @@ public:
 
     bool Shutdown(std::chrono::microseconds timeout = std::chrono::microseconds::max()) const noexcept;
 
-    LogsApi::YrLogger CreateAsyncLogger(const LogsApi::LogParam &logParam) const noexcept;
+    LogsApi::YrLogger CreateLogger(const LogsApi::LogParam &logParam) const noexcept;
 
     LogsApi::YrLogger GetLogger(const std::string &loggerName) const noexcept;
 

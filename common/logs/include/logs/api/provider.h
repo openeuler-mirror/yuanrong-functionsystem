@@ -61,13 +61,13 @@ private:
 
 #define LOGS_LOGGER_CALL SPDLOG_LOGGER_CALL
 
-#define LOGS_LEVEL_TRACE spdlog::level::trace
-#define LOGS_LEVEL_DEBUG spdlog::level::debug
-#define LOGS_LEVEL_INFO spdlog::level::info
-#define LOGS_LEVEL_WARN spdlog::level::warn
-#define LOGS_LEVEL_ERROR spdlog::level::err
-#define LOGS_LEVEL_FATAL spdlog::level::critical
-#define LOGS_LEVEL_OFF spdlog::level::off
+#define LOGS_LEVEL_TRACE yr_spdlog::level::trace
+#define LOGS_LEVEL_DEBUG yr_spdlog::level::debug
+#define LOGS_LEVEL_INFO yr_spdlog::level::info
+#define LOGS_LEVEL_WARN yr_spdlog::level::warn
+#define LOGS_LEVEL_ERROR yr_spdlog::level::err
+#define LOGS_LEVEL_FATAL yr_spdlog::level::critical
+#define LOGS_LEVEL_OFF yr_spdlog::level::off
 
 #define LOGS_LOGGER(logger, level, ...)                                    \
     do {                                                                   \

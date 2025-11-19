@@ -33,6 +33,11 @@ const static std::string NPU_COLLECT_SFMD = "sfmd";
 const static std::string NPU_COLLECT_TOPO = "topo";
 const static std::string NPU_COLLECT_ALL = "all";
 
+// for cardType
+const std::string NPU910B = "NPU910B";
+const std::string NPU910C = "NPU910C";
+const std::string NPU310P3 = "NPU310P3";
+
 struct DevCluster {
     std::string devType;          // gpu, npu
     std::string devVendor;        // nvidia.com, huawei.com

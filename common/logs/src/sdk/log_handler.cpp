@@ -22,7 +22,6 @@
 #include <map>
 #include <sstream>
 #include <string>
-#include <utility>
 
 #include "fileutils.h"
 #include "logs/api/provider.h"
@@ -66,7 +65,7 @@ void DoLogFileRolling(const observability::api::logs::LogParam &logParam)
 
     // 3rd: delete the oldest files.
     int redundantNum = (fileMap.size() <= logParam.maxFiles) ? 0 : static_cast<int>(fileMap.size() - logParam.maxFiles);
-    for (auto &file : std::as_const(fileMap)) {
+    for (const auto &file : fileMap) {
         auto curTime = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
         bool needDelByTime =
             (curTime - file.first / 1000) > ((static_cast<int64_t>(logParam.retentionDays)) * DAY_MILLISECONDS);
@@ -98,8 +97,8 @@ void DoLogFileCompress(const observability::api::logs::LogParam &logParam)
 
         // e.g: xxx-function_agent.1.log -> xxx-function_agent.{TIME}.log -> xxx-function_agent.{TIME}.log.gz
         std::string basename, ext, idx;
-        std::tie(basename, ext) = spdlog::details::file_helper::split_by_extension(file);
-        std::tie(basename, idx) = spdlog::details::file_helper::split_by_extension(basename);
+        std::tie(basename, ext) = yr_spdlog::details::file_helper::split_by_extension(file);
+        std::tie(basename, idx) = yr_spdlog::details::file_helper::split_by_extension(basename);
         std::string targetFile = basename + "." + std::to_string(timestamp) + ext;
         if (!RenameFile(file, targetFile)) {
             LOGS_CORE_WARN("failed to rename {} to {}", file, targetFile);

@@ -17,12 +17,12 @@
 #ifndef COMMON_RESOURCE_VIEW_RESOURCE_VIEW_H
 #define COMMON_RESOURCE_VIEW_RESOURCE_VIEW_H
 
-#include <iostream>
+
 #include <memory>
 
 #include "async/future.hpp"
 #include "async/option.hpp"
-#include "status/status.h"
+#include "common/status/status.h"
 #include "common/utils/actor_driver.h"
 #include "resource_type.h"
 #include "resource_view_actor.h"
@@ -42,7 +42,7 @@ const ResourceViewActor::Param VIEW_ACTOR_DEFAULT_PARAM = {
 class ResourceView : public ActorDriver {
 public:
     explicit ResourceView(const std::shared_ptr<ResourceViewActor> &actor);
-    ~ResourceView() override;
+    virtual ~ResourceView() override;
     ResourceView(const ResourceView &) = delete;
     ResourceView &operator=(const ResourceView &) = delete;
 
@@ -178,6 +178,10 @@ public:
     virtual void UpdateDomainUrlForLocal(const std::string &addr);
 
     virtual void UpdateIsHeader(bool isHeader);
+
+    virtual void TryDelResourceUnitChange(uint64_t version, const std::string &viewInitTime);
+
+    virtual litebus::Future<PullResourceRequest> GetUnitSnapshotInfo(const std::string &id);
 
     // for test
     std::unordered_map<std::string, std::unordered_set<std::string>> GetAgentCache();

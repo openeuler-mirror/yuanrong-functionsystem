@@ -23,8 +23,8 @@
 #include "actor/actor.hpp"
 #include "async/async.hpp"
 #include "async/future.hpp"
-#include "proto/pb/message_pb.h"
-#include "status/status.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
 #include "exec/exec.hpp"
 #include "runtime_manager/config/flags.h"
 #include "common/utils/test_util.h"
@@ -67,6 +67,7 @@ struct RuntimeConfig {
     std::string javaSystemProperty;
     std::string javaSystemLibraryPath;
     std::string dataSystemPort;
+    std::string snuserLibDir;
     std::string driverServerPort;
     std::string runtimeConfigPath;
     bool setCmdCred;
@@ -90,6 +91,8 @@ struct RuntimeConfig {
     uint32_t runtimeDsConnectTimeout;
     uint32_t killProcessTimeoutSeconds{ 0 };
     std::string userLogExportMode;
+    bool cleanStreamProducerEnable;
+    int virtualEnvIdleTimeLimit;
 };
 
 struct PrestartProcess {
@@ -130,6 +133,8 @@ public:
      */
     virtual std::map<std::string, messages::RuntimeInstanceInfo> GetRuntimeInstanceInfos();
 
+    void InitConfig();
+
     /**
      * Set runtime config from flags.
      *
@@ -153,7 +158,17 @@ public:
      */
     virtual bool IsRuntimeActive(const std::string &runtimeID);
 
+    /**
+     * Check if the ds client is active.
+     *
+     * @param pid ds client pid.
+     * @return True if the ds client is active, false otherwise.
+     */
+    virtual bool IsRuntimeActiveByPid(const pid_t &pid);
+
     virtual void UpdatePrestartRuntimePromise(pid_t pid){};
+
+    virtual void ClearCapability() = 0;
 
     virtual litebus::Future<messages::UpdateCredResponse> UpdateCredForRuntime(
         const std::shared_ptr<messages::UpdateCredRequest> &request) = 0;
@@ -170,11 +185,15 @@ protected:
 
     std::map<std::string, std::shared_ptr<litebus::Exec>> runtime2Exec_;
 
+    std::set<pid_t> pids_;
+
     std::map<std::string, std::deque<PrestartProcess>> prestartRuntimePool_;
 
     std::map<pid_t, std::shared_ptr<litebus::Promise<bool>>> prestartRuntimePromiseMap_;
 
     virtual void InitPrestartRuntimePool() = 0;
+
+    virtual void InitVirtualEnvIdleTimeLimit() = 0;
 
 private:
     void InitDefaultArgs(const std::string &configJsonString);
@@ -227,6 +246,8 @@ public:
 
     virtual void UpdatePrestartRuntimePromise(pid_t pid) = 0;
 
+    virtual void ClearCapability() = 0;
+
     /**
      * Start executor
      *
@@ -273,6 +294,11 @@ public:
     virtual litebus::Future<bool> IsRuntimeActive(const std::string &runtimeID)
     {
         return litebus::Async(executor_->GetAID(), &Executor::IsRuntimeActive, runtimeID);
+    }
+
+    virtual litebus::Future<bool> IsRuntimeActiveByPid(const pid_t &pid)
+    {
+        return litebus::Async(executor_->GetAID(), &Executor::IsRuntimeActiveByPid, pid);
     }
 
     const std::string GetName() const

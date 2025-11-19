@@ -18,6 +18,29 @@
 
 namespace functionsystem::schedule_decision {
 
+void UpdateInstanceWithVectorAllocations(const ScheduleResult &schedResult, resource_view::InstanceInfo &instance)
+{
+    auto *resources = instance.mutable_resources()->mutable_resources();
+    // Set heterogeneous allocation info (will be merged into vectorAllocations processing below)
+    for (const auto &allocated : schedResult.allocatedVectors) {
+        auto *vectors = (*resources)[allocated.first].mutable_vectors();
+        (*resources)[allocated.first].set_name(allocated.first);
+        (*resources)[allocated.first].set_type(resource_view::ValueType::Value_Type_VECTORS);
+        for (const auto &value : allocated.second.values()) {
+            (*vectors->mutable_values())[value.first] = value.second;
+        }
+    }
+    // Set allocation info for vector-type resource (generic implementation)
+    for (const auto &vectorAllocation : schedResult.vectorAllocations) {
+        auto *vectors = (*resources)[vectorAllocation.type].mutable_vectors();
+        (*resources)[vectorAllocation.type].set_name(vectorAllocation.type);
+        (*resources)[vectorAllocation.type].set_type(resource_view::ValueType::Value_Type_VECTORS);
+        for (const auto &value : vectorAllocation.allocationValues.values()) {
+            (*vectors->mutable_values())[value.first] = value.second;
+        }
+    }
+}
+
 void SchedulePerformer::Allocate(const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
                                  const std::string &selected, const resource_view::InstanceInfo &ins,
                                  ScheduleResult &schedResult)
@@ -32,7 +55,9 @@ void SchedulePerformer::Allocate(const std::shared_ptr<schedule_framework::PreAl
                                                 ? ins.resources()
                                                 : context->allocated[selected].resource + ins.resources();
 
-    context->allocatedLabels[selected] = context->allocatedLabels[selected] + ToLabelKVs(ins.labels());
+    context->allocatedLabels[selected] =
+        context->allocatedLabels[selected] + ToLabelKVs(ins.labels()) + ToLabelKVs(ins.kvlabels());
+
     // local and domain need to mark agent is selected to avoid select same agent
     // while two instance scheduling in a short time
     context->preAllocatedSelectedFunctionAgentMap[ins.instanceid()] = selected;
@@ -60,20 +85,12 @@ void SchedulePerformer::DoPreAllocated(const resource_view::InstanceInfo &ins,
     const auto &required = ins.resources().resources();
     ASSERT_IF_NULL(resourceView_);
     for (auto &req : required) {
-        auto resourceNameFields = litebus::strings::Split(req.first, "/");
-        if (resourceNameFields.size() == HETERO_RESOURCE_FIELD_NUM) {
+        auto resourceName = req.first;
+        if (resource_view::IsHeterogeneousResource(resourceName) || resource_view::IsDiskResource(resourceName)) {
             backupIns.mutable_resources()->mutable_resources()->erase(req.first);
         }
     }
-    auto *resources = backupIns.mutable_resources()->mutable_resources();
-    for (const auto &allocated : schedResult.allocatedVectors) {
-        auto *vectors = (*resources)[allocated.first].mutable_vectors();
-        (*resources)[allocated.first].set_name(allocated.first);
-        (*resources)[allocated.first].set_type(resource_view::ValueType::Value_Type_VECTORS);
-        for (const auto &value : allocated.second.values()) {
-            (*vectors->mutable_values())[value.first] = value.second;
-        }
-    }
+    UpdateInstanceWithVectorAllocations(schedResult, backupIns);
     (*backupIns.mutable_schedulerchain()->Add()) = selected;
     backupIns.set_unitid(selected);
     Allocate(context, selected, backupIns, schedResult);
@@ -109,7 +126,8 @@ void SchedulePerformer::RollBackAllocated(const std::shared_ptr<schedule_framewo
         context->allocated[selected].resource = context->allocated[selected].resource - ins.resources();
     }
     if (context->allocatedLabels.find(selected) != context->allocatedLabels.end()) {
-        context->allocatedLabels[selected] = context->allocatedLabels[selected] - ToLabelKVs(ins.labels());
+        context->allocatedLabels[selected] =
+            context->allocatedLabels[selected] - ToLabelKVs(ins.labels()) - ToLabelKVs(ins.kvlabels());
     }
     context->preAllocatedSelectedFunctionAgentSet.erase(selected); // need to free pod while rollback
     // rollback the preAllocated instance
@@ -175,6 +193,7 @@ bool SchedulePerformer::IsScheduled(const std::shared_ptr<schedule_framework::Pr
         }
         context->preAllocatedSelectedFunctionAgentMap[scheReq->instance().instanceid()] = result.id;
         context->preAllocatedSelectedFunctionAgentSet.insert(result.id);
+        result.unitID = result.id;
         result.id = resourceInfo.resourceUnit.fragment().at(result.id).ownerid();
         return true;
     }
@@ -202,7 +221,7 @@ ScheduleResult SchedulePerformer::DoSelectOne(const std::shared_ptr<schedule_fra
     auto results = framework_->SelectFeasible(context, instanceItem->scheduleReq->instance(),
                                               resourceInfo.resourceUnit, 1);
     if (results.code != static_cast<int32_t>(StatusCode::SUCCESS)) {
-        return ScheduleResult{ "", results.code, results.reason, {}, "", {} };
+        return ScheduleResult{ "", results.code, results.reason, {}, "", {}, {} };
     }
     return SelectFromResults(context, resourceInfo, instanceItem, results.sortedFeasibleNodes, _);
 }
@@ -253,7 +272,7 @@ ScheduleResult SchedulePerformer::SelectFromResults(
         ASSERT_FS(nodeScore.availableForRequest == -1 || nodeScore.availableForRequest > 0);
         if (nodeScore.availableForRequest == -1) {
             return ScheduleResult{ nodeScore.name, 0, "", nodeScore.realIDs, nodeScore.heteroProductName,
-                                   nodeScore.allocatedVectors};
+                                   nodeScore.allocatedVectors, nodeScore.vectorAllocations };
         }
         // preAllocate is used for range scheduling. After range scheduling fails, some requests that are successfully
         // reserved are not rolled back. Only the requests that fail and after failed request are rolled
@@ -271,7 +290,7 @@ ScheduleResult SchedulePerformer::SelectFromResults(
         candidateNode.pop();
         nodeScore.availableForRequest--;
         result = ScheduleResult{ nodeScore.name, 0, "", nodeScore.realIDs, nodeScore.heteroProductName,
-                                 nodeScore.allocatedVectors};
+                                 nodeScore.allocatedVectors, nodeScore.vectorAllocations };
         if (nodeScore.availableForRequest > 0) {
             candidateNode.emplace(nodeScore);
         }
@@ -289,6 +308,7 @@ ScheduleResult SchedulePerformer::SelectFromResults(
                            "no available resource that meets the request requirements",
                            {},
                            "",
-                           {} };
+                           {},
+                           {}};
 }
 }

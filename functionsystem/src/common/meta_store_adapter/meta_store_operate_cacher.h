@@ -17,7 +17,7 @@
 #ifndef FUNCTIONCORE_CPP_META_STORE_OPERATOR_CACHE_H
 #define FUNCTIONCORE_CPP_META_STORE_OPERATOR_CACHE_H
 
-#include "metadata/metadata.h"
+#include "common/metadata/metadata.h"
 
 namespace functionsystem {
 class MetaStoreOperateCacher {

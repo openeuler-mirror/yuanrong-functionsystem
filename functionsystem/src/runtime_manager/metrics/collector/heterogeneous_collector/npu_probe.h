@@ -19,7 +19,7 @@
 #include <nlohmann/json.hpp>
 
 #include "topo_probe.h"
-#include "status/status.h"
+#include "common/status/status.h"
 #include "common/utils/proc_fs_tools.h"
 
 namespace functionsystem::runtime_manager {
@@ -36,7 +36,7 @@ public:
     NpuProbe(std::string node, const std::shared_ptr<ProcFSTools> &procFSTools, std::shared_ptr<CmdTool> cmdTool,
              const std::shared_ptr<XPUCollectorParams> &params);
     NpuProbe() = default;
-    ~NpuProbe() override = default;
+    ~NpuProbe() override;
 
     Status RefreshTopo() override;
     size_t GetUsage() const override;
@@ -63,6 +63,7 @@ protected:
 
 private:
     using NPUCollectFunc = Status (NpuProbe::*)();
+    using NPUParseFunc = Status (NpuProbe::*)();
 
     Status LoadTopoInfo();
 
@@ -73,7 +74,11 @@ private:
     Status NPUCollectTopo();
     Status NPUCollectAll();
 
-    Status ParseNpuSmiInfo(size_t &index, std::string &productModel);
+    std::string GetNpuType();
+    Status ParseNPU910B();
+    Status ParseNPU910C();
+    Status ParseNPU310P3();
+
     Status OnGetNPUInfo(bool countMode);
     Status GetNPUCountInfo();
     Status GetNPUSmiInfo();
@@ -101,6 +106,13 @@ private:
                                                               { NPU_COLLECT_SFMD, &NpuProbe::NPUCollectSFMD },
                                                               { NPU_COLLECT_TOPO, &NpuProbe::NPUCollectTopo },
                                                               { NPU_COLLECT_ALL, &NpuProbe::NPUCollectAll } };
+
+    std::map<std::string, NPUParseFunc> parseNPUFuncMap_ = { { NPU910B, &NpuProbe::ParseNPU910B },
+                                                              { NPU910C, &NpuProbe::ParseNPU910C },
+                                                              { NPU310P3, &NpuProbe::ParseNPU310P3 } };
+    std::unique_ptr<std::thread> refreshThread_;
+
+    std::atomic<bool> refreshFlag_{true};
 };
 
 }  // namespace functionsystem::runtime_manager

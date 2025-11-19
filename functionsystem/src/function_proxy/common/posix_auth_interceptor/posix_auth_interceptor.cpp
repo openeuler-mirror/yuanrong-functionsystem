@@ -16,14 +16,62 @@
 
 #include "posix_auth_interceptor.h"
 
+#include "common/aksk/aksk_util.h"
+
 namespace functionsystem {
 litebus::Future<bool> PosixAuthInterceptor::Verify(const std::shared_ptr<runtime_rpc::StreamingMessage> &message)
 {
-    return true;
+    ASSERT_IF_NULL(message);
+    if (!internalIam_->IsIAMEnabled()) {
+        return true;
+    }
+
+    auto accessKey = message->metadata().find("access_key");
+    if (accessKey == message->metadata().end() || accessKey->second.empty()) {
+        YRLOG_ERROR("failed to verify message({}), failed to find access_key in meta-data, instance({}), runtime({})",
+                    message->messageid(), instanceID_, runtimeID_);
+        return false;
+    }
+
+    return internalIam_->RequireCredentialByAK(accessKey->second)
+        .Then(
+            [message, instanceID(instanceID_), runtimeID(runtimeID_)](const std::shared_ptr<AKSKContent> &akSkContent) {
+                if (akSkContent == nullptr || akSkContent->IsValid().IsError()) {
+                    YRLOG_ERROR("failed to verify message({}), failed to get cred from iam, instance({}), runtime({})",
+                                message->messageid(), instanceID, runtimeID);
+                    return false;
+                }
+                return VerifyStreamingMessage(akSkContent->accessKey, akSkContent->secretKey, message);
+            });
 }
 
 litebus::Future<bool> PosixAuthInterceptor::Sign(const std::shared_ptr<runtime_rpc::StreamingMessage> &message)
 {
-    return true;
+    if (!internalIam_->IsIAMEnabled()) {
+        return true;
+    }
+
+    if (accessKey_.empty()) {
+        YRLOG_ERROR("failed to sign message({}), failed to find access_key in meta-data, instance({}), runtime({})",
+                    message->messageid(), instanceID_, runtimeID_);
+        return false;
+    }
+
+    return internalIam_->RequireCredentialByAK(accessKey_)
+        .Then(
+            [message, instanceID(instanceID_), runtimeID(runtimeID_)](const std::shared_ptr<AKSKContent> &akSkContent) {
+                if (akSkContent == nullptr || akSkContent->IsValid().IsError()) {
+                    YRLOG_ERROR("failed to sign message({}), failed to get cred from iam, instance({}), runtime({})",
+                                message->messageid(), instanceID, runtimeID);
+                    return false;
+                }
+
+                if (!SignStreamingMessage(akSkContent->accessKey, akSkContent->secretKey, message)) {
+                    YRLOG_ERROR("failed to sign message({}), instance({}), runtime({})", message->messageid(),
+                                instanceID, runtimeID);
+                    return false;
+                }
+                return true;
+            });
 }
 }  // namespace functionsystem

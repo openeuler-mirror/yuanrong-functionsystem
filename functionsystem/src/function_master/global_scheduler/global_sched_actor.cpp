@@ -24,9 +24,9 @@
 
 #include "common/constants/actor_name.h"
 #include "common/constants/metastore_keys.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "meta_store_client/meta_store_struct.h"
-#include "proto/pb/message_pb.h"
+#include "common/proto/pb/message_pb.h"
 
 namespace functionsystem::global_scheduler {
 
@@ -76,12 +76,16 @@ void GlobalSchedActor::Init()
     Receive("QueryResourcesInfo", &GlobalSchedActor::QueryResourcesInfo);
     // master --resources info resp-> slave
     Receive("ResponseResourcesInfo", &GlobalSchedActor::ProcessResourcesInfo);
+    // check function master running status
+    Receive("CheckMasterStatus", &GlobalSchedActor::CheckMasterStatus);
     auto watchOpt = WatchOption{ false, false, 0, true };
     auto watch = [aid(GetAID())](const std::vector<WatchEvent> &event, bool) {
         litebus::Async(aid, &GlobalSchedActor::OnTopologyEvent, event);
         return true;
     };
-    auto synced = []() -> litebus::Future<SyncResult> { return SyncResult{ Status::OK(), 0 }; };
+    auto synced = [](const std::shared_ptr<GetResponse> &) -> litebus::Future<SyncResult> {
+        return SyncResult{ Status::OK() };
+    };
     (void)metaStoreClient_->Watch(SCHEDULER_TOPOLOGY, watchOpt, watch, synced);
 }
 
@@ -688,6 +692,12 @@ void GlobalSchedActor::QueryResourcesInfo(const litebus::AID &from, std::string 
     }
     (void)HandleQueryResourcesInfo(req).OnComplete(
         litebus::Defer(GetAID(), &GlobalSchedActor::OnQueryResourcesInfo, std::placeholders::_1, from));
+}
+
+void GlobalSchedActor::CheckMasterStatus(const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    YRLOG_DEBUG("received check master status request from {}", from.HashString());
+    Send(from, "CheckedMasterStatus", std::move(msg));
 }
 
 void GlobalSchedActor::OnQueryResourcesInfo(const litebus::Future<messages::QueryResourcesInfoResponse> &future,

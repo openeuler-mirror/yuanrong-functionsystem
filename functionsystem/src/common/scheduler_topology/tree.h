@@ -20,7 +20,7 @@
 #include <memory>
 #include <unordered_map>
 
-#include "status/status.h"
+#include "common/status/status.h"
 #include "node.h"
 
 namespace functionsystem {

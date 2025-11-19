@@ -18,7 +18,7 @@
 
 #include <memory>
 
-#include "status/status.h"
+#include "common/status/status.h"
 #include "common/utils/cmd_tool.h"
 #include "topo_info.h"
 
@@ -71,6 +71,8 @@ protected:
     bool hasXPU_ = false;
     std::shared_ptr<CmdTool> cmdTool_;
     std::map<std::string, bool> initMap_ = {{LIMIT_INIT, false}, {USAGE_INIT, false}};
+
+    mutable std::mutex refreshNpuInfoMtx_{};
 };
 }  // namespace functionsystem::runtime_manager
 

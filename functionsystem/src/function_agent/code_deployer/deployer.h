@@ -19,8 +19,8 @@
 
 #include <string>
 
-#include "proto/pb/message_pb.h"
-#include "status/status.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
 
 namespace functionsystem::function_agent {
 
@@ -36,8 +36,7 @@ public:
 
     virtual ~Deployer() = default;
 
-    virtual std::string GetDestination(const std::string &deployDir,
-                                       const std::string &bucketID,
+    virtual std::string GetDestination(const std::string &deployDir, const std::string &bucketID,
                                        const std::string &objectID) = 0;
 
     virtual bool IsDeployed(const std::string &destination, bool isMonopoly) = 0;
@@ -45,6 +44,15 @@ public:
     virtual DeployResult Deploy(const std::shared_ptr<messages::DeployRequest> &request) = 0;
 
     virtual bool Clear(const std::string &filePath, const std::string &objectKey) = 0;
+
+    virtual void SetTTL(const std::string &destination, int seconds)
+    {
+    }
+
+    virtual int GetTTL(const std::string &destination)
+    {
+        return -1;
+    }
 };
 }  // end of namespace functionsystem::function_agent
 

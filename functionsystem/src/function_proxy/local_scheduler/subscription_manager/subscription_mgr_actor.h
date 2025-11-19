@@ -17,7 +17,7 @@
 #ifndef FUNCTIONSYSTEM_SUBSCRIPTION_MGR_ACTOR_H
 #define FUNCTIONSYSTEM_SUBSCRIPTION_MGR_ACTOR_H
 
-#include "status/status.h"
+#include "common/status/status.h"
 #include "common/utils/actor_driver.h"
 #include "common/state_machine/instance_control_view.h"
 #include "common/state_machine/instance_state_machine.h"

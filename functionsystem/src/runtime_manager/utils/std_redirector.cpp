@@ -18,10 +18,10 @@
 
 #include "async/asyncafter.hpp"
 #include "async/defer.hpp"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "runtime_manager/utils/utils.h"
 #include "utils/os_utils.hpp"
-#include "files.h"
+#include "common/utils/files.h"
 #include "logs/sdk/log_param_parser.h"
 
 namespace functionsystem {

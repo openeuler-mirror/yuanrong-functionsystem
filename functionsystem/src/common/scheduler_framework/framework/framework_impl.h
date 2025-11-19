@@ -19,10 +19,10 @@
 #include <string>
 #include <unordered_map>
 
-#include "resource_type.h"
+#include "common/resource_view/resource_type.h"
 #include "common/scheduler_framework/framework/framework.h"
 #include "common/scheduler_framework/framework/policy.h"
-#include "status/status.h"
+#include "common/status/status.h"
 
 namespace functionsystem::schedule_framework {
 class FrameworkImpl : public Framework {

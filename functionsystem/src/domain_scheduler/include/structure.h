@@ -36,6 +36,7 @@ struct DomainSchedulerParam {
     bool enablePrintResourceView = false;
     std::string schedulePlugins = "";
     std::string aggregatedStrategy{"no_aggregate"}; // three options : no_aggregate, strictly, relaxed
+    std::string componentName = "";
 };
 }  // namespace functionsystem::domain_scheduler
 #endif  // DOMAIN_SCHEDULER_STRUCTURE_H

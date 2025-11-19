@@ -20,13 +20,13 @@
 
 #include "common/constants/actor_name.h"
 #include "common/constants/signal.h"
-#include "logs/logging.h"
-#include "metadata/metadata.h"
-#include "metrics/metrics_adapter.h"
+#include "common/logs/logging.h"
+#include "common/metadata/metadata.h"
+#include "common/metrics/metrics_adapter.h"
 #include "common/service_json/service_json.h"
 #include "common/types/instance_state.h"
 #include "common/utils/generate_message.h"
-#include "meta_store_kv_operation.h"
+#include "common/utils/meta_store_kv_operation.h"
 #include "common/utils/struct_transfer.h"
 #include "common/utils/tenant.h"
 
@@ -50,32 +50,39 @@ Status ObserverActor::Register()
     // keep retrying to watch in 30 seconds. kill process if timeout to watch.
     auto watchOpt = WatchOption{ .prefix = true, .prevKv = false, .revision = 0, .keepRetry = true };
     YRLOG_INFO("Register watch with prefix: {}", FUNC_META_PATH_PREFIX);
-    auto functionMetaSyncer = [aid(GetAID())]() -> litebus::Future<SyncResult> {
-        return litebus::Async(aid, &ObserverActor::FunctionMetaSyncer);
+    auto functionMetaSyncer =
+        [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<SyncResult> {
+        return litebus::Async(aid, &ObserverActor::FunctionMetaSyncer, getResponse);
     };
-    auto instanceInfoSyncer = [aid(GetAID())]() -> litebus::Future<SyncResult> {
-        return litebus::Async(aid, &ObserverActor::InstanceInfoSyncer);
+    auto instanceInfoSyncer =
+        [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<SyncResult> {
+        return litebus::Async(aid, &ObserverActor::InstanceInfoSyncer, getResponse);
     };
-    auto busProxySyncer = [aid(GetAID())]() -> litebus::Future<SyncResult> {
-        return litebus::Async(aid, &ObserverActor::BusProxySyncer);
+    auto busProxySyncer =
+        [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<SyncResult> {
+        return litebus::Async(aid, &ObserverActor::BusProxySyncer, getResponse);
     };
     (void)metaStorageAccessor_
-        ->RegisterObserver(FUNC_META_PATH_PREFIX, watchOpt,
-                           [aid(GetAID())](const std::vector<WatchEvent> &events, bool) {
-                               auto respCopy = events;
-                               litebus::Async(aid, &ObserverActor::UpdateFuncMetaEvent, respCopy);
-                               return true;
-                           }, functionMetaSyncer)
+        ->RegisterObserver(
+            FUNC_META_PATH_PREFIX, watchOpt,
+            [aid(GetAID())](const std::vector<WatchEvent> &events, bool) {
+                auto respCopy = events;
+                litebus::Async(aid, &ObserverActor::UpdateFuncMetaEvent, respCopy);
+                return true;
+            },
+            functionMetaSyncer)
         .After(WATCH_TIMEOUT_MS, after);
 
     YRLOG_INFO("Register watch with prefix: {}", BUSPROXY_PATH_PREFIX);
     (void)metaStorageAccessor_
-        ->RegisterObserver(BUSPROXY_PATH_PREFIX, watchOpt,
-                           [aid(GetAID())](const std::vector<WatchEvent> &events, bool) {
-                               auto respCopy = events;
-                               litebus::Async(aid, &ObserverActor::UpdateProxyEvent, respCopy);
-                               return true;
-                           }, busProxySyncer)
+        ->RegisterObserver(
+            BUSPROXY_PATH_PREFIX, watchOpt,
+            [aid(GetAID())](const std::vector<WatchEvent> &events, bool) {
+                auto respCopy = events;
+                litebus::Async(aid, &ObserverActor::UpdateProxyEvent, respCopy);
+                return true;
+            },
+            busProxySyncer)
         .After(WATCH_TIMEOUT_MS, after);
 
     auto synced = metaStorageAccessor_->Sync(INSTANCE_PATH_PREFIX, true);
@@ -138,7 +145,7 @@ void ObserverActor::UpdateInstanceEvent(const std::vector<WatchEvent> &events, b
         auto keyInfo = ParseInstanceKey(eventKey);
         auto instanceID = keyInfo.instanceID;
         YRLOG_DEBUG("receive instance event, instance({}), type: {}, key: {}, revision: {}", instanceID,
-                    event.eventType, eventKey, event.kv.mod_revision());
+                    fmt::underlying(event.eventType), eventKey, event.kv.mod_revision());
         auto iter = instanceModRevisionMap_.find(instanceID);
         if (iter == instanceModRevisionMap_.end() && event.eventType == EVENT_TYPE_DELETE) {
             YRLOG_WARN("receive non-existed instance({}) delete event, ignore, revision({})", instanceID,
@@ -190,17 +197,16 @@ void ObserverActor::HandleInstanceEvent(bool synced, const WatchEvent &event, st
             (*instanceInfo.mutable_extensions())[INSTANCE_MOD_REVISION] = std::to_string(event.kv.mod_revision());
             PutInstanceEvent(instanceInfo, synced, event.kv.mod_revision());
 
-            litebus::Async(GetAID(), &ObserverActor::ReportInstanceStatus, instanceID,
-                           instanceInfo.instancestatus().code(), instanceInfo.function());
+            functionsystem::metrics::MetricsAdapter::GetInstance().ReportInstanceStatus(instanceID, instanceInfo);
             break;
         }
         case EVENT_TYPE_DELETE: {
             YRLOG_DEBUG("receive instance delete event, instance({}), key({})", instanceID, eventKey);
-            DelInstanceEvent(instanceID);
+            DelInstanceEvent(instanceID, event.kv.mod_revision());
             break;
         }
         default: {
-            YRLOG_WARN("unknown event type {}", event.eventType);
+            YRLOG_WARN("unknown event type {}", fmt::underlying(event.eventType));
         }
     }
 }
@@ -212,7 +218,7 @@ void ObserverActor::UpdateInstanceRouteEvent(const std::vector<WatchEvent> &even
         auto keyInfo = ParseInstanceKey(eventKey);
         auto instanceID = keyInfo.instanceID;
         YRLOG_DEBUG("receive routeInfo event, instance({}), type: {}, key: {}, revision: {}", instanceID,
-                    event.eventType, eventKey, event.kv.mod_revision());
+                    fmt::underlying(event.eventType), eventKey, event.kv.mod_revision());
 
         auto iter = instanceModRevisionMap_.find(instanceID);
         if (iter == instanceModRevisionMap_.end() && event.eventType == EVENT_TYPE_DELETE) {
@@ -252,42 +258,18 @@ void ObserverActor::HandleRouteEvent(bool synced, const WatchEvent &event, std::
             (*instanceInfo.mutable_extensions())[INSTANCE_MOD_REVISION] = std::to_string(event.kv.mod_revision());
             PutInstanceEvent(instanceInfo, synced, event.kv.mod_revision());
 
-            litebus::Async(GetAID(), &ObserverActor::ReportInstanceStatus, instanceID,
-                           instanceInfo.instancestatus().code(), instanceInfo.function());
+            functionsystem::metrics::MetricsAdapter::GetInstance().ReportInstanceStatus(instanceID, instanceInfo);
             break;
         }
         case EVENT_TYPE_DELETE: {
             YRLOG_DEBUG("receive routeInfo delete event, instance({})", instanceID);
-            DelInstanceEvent(instanceID);
+            DelInstanceEvent(instanceID, event.kv.mod_revision());
             break;
         }
         default: {
-            YRLOG_WARN("unknown event type {}", event.eventType);
+            YRLOG_WARN("unknown event type {}", fmt::underlying(event.eventType));
         }
     }
-}
-
-void ObserverActor::ReportInstanceStatus(const std::string &instanceID, const int status,
-                                         const std::string &functionKey)
-{
-    auto timeStamp =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count();
-
-    struct functionsystem::metrics::MeterTitle instanceTitle {
-        "yr_app_instance_status",
-            "instance status code: 1-Scheduling, 2-Creating, 3-Running, 4-Failed, 5-Exited, 6-Fatal, 7-ScheduleFailed",
-            "enum"
-    };
-    struct functionsystem::metrics::MeterData data {
-        static_cast<double>(status),
-            {
-                { "instance_id", instanceID },
-                { "function_key", functionKey },
-                { "timestamp", std::to_string(timeStamp) },
-            },
-    };
-    functionsystem::metrics::MetricsAdapter::GetInstance().ReportGauge(instanceTitle, data);
 }
 
 void ObserverActor::SetInstanceInfo(const std::string &instanceID, const resource_view::InstanceInfo &info)
@@ -347,12 +329,24 @@ void ObserverActor::CloseDataInterfaceClient(const std::string &instanceID)
     (void)dataInterfaceClientManager_->DeleteClient(instanceID);
 }
 
-litebus::Future<Status> ObserverActor::DelInstanceEvent(const std::string &instanceID)
+litebus::Future<Status> ObserverActor::DelInstanceEvent(const std::string &instanceID, int64_t modRevision)
 {
-    NotifyDeleteInstance(instanceID);
+    auto iter = instanceModRevisionMap_.find(instanceID);
+    if (iter != instanceModRevisionMap_.end() && iter->second > 0 && modRevision != -1 && iter->second > modRevision) {
+        YRLOG_WARN("try delete instance({}) of revision: {}, with mod revision {}, ignore", instanceID, iter->second,
+                   modRevision);
+        return Status::OK();
+    }
+
+    if (iter == instanceModRevisionMap_.end()) {
+        YRLOG_WARN("try delete non-exist instance({}), with mod revision {}, ignore", instanceID, modRevision);
+        return Status::OK();
+    }
+
+    NotifyDeleteInstance(instanceID, modRevision);
     DelInstanceInfo(instanceID);
     CloseDataInterfaceClient(instanceID);
-    if (observerParam_.enableTenantAffinity) {
+    if (observerParam_.enableIpv4TenantIsolation || observerParam_.enableTenantAffinity) {
         NotifyDeleteTenantInstance(lastTenantEventCacheMap_[instanceID]);
         lastTenantEventCacheMap_.erase(instanceID);
     }
@@ -372,7 +366,8 @@ void ObserverActor::UpdateFuncMetaEvent(const std::vector<WatchEvent> &events)
             YRLOG_WARN("function key is empty, path: {}", eventKey);
             continue;
         }
-        YRLOG_DEBUG("receive function meta event, type: {}, funKey: {}, path: {}", event.eventType, funcKey, eventKey);
+        YRLOG_DEBUG("receive function meta event, type: {}, funKey: {}, path: {}", fmt::underlying(event.eventType),
+                    funcKey, eventKey);
 
         ProcFuncMetaEvent(funcKey, event);
         RemoveQueryKeyMetaCache(eventKey);
@@ -383,9 +378,13 @@ void ObserverActor::ProcFuncMetaEvent(const std::string &funcKey, const function
 {
     switch (event.eventType) {
         case EVENT_TYPE_PUT: {
-            // Need to delete the function before upgrade different type function.
+            // 1.The function is system function if the tenant id is 0.
+            // 2.System function can be deployed or upgraded by develop plane.
+            // 3.Need to delete the function before upgrade different type function.
             auto funcMeta = GetFuncMetaFromJson(event.kv.value());
-            OnPutMeta(false, funcKey, funcMeta);
+            internalIAM_->IsSystemTenant(funcMeta.funcMetaData.tenantId)
+                .OnComplete(
+                    litebus::Defer(GetAID(), &ObserverActor::OnPutMeta, std::placeholders::_1, funcKey, funcMeta));
             break;
         }
         case EVENT_TYPE_DELETE: {
@@ -396,7 +395,7 @@ void ObserverActor::ProcFuncMetaEvent(const std::string &funcKey, const function
             break;
         }
         default: {
-            YRLOG_WARN("unknown event type {}", event.eventType);
+            YRLOG_WARN("unknown event type {}", fmt::underlying(event.eventType));
             break;
         }
     }
@@ -407,7 +406,7 @@ void ObserverActor::OnPutMeta(const litebus::Future<bool> &isSystem, const std::
 {
     auto meta = funcMeta;  // copy
     if (isSystem.IsError()) {
-        YRLOG_ERROR("failed to check system");
+        YRLOG_ERROR("failed to check system tenant({})", meta.funcMetaData.tenantId);
         return;
     }
 
@@ -504,7 +503,7 @@ void ObserverActor::PutInstanceEvent(const resource_view::InstanceInfo &instance
     SetInstanceInfo(instanceInfo.instanceid(), instanceInfo);
     NotifyUpdateInstance(instanceInfo.instanceid(), instanceInfo, isForceUpdate);
 
-    if (observerParam_.enableTenantAffinity) {
+    if (observerParam_.enableIpv4TenantIsolation || observerParam_.enableTenantAffinity) {
         OnTenantInstanceEvent(instanceInfo.instanceid(), instanceInfo);
     }
 }
@@ -541,7 +540,7 @@ void ObserverActor::FastPutRemoteInstanceEvent(const resource_view::InstanceInfo
 
 litebus::Future<Status> ObserverActor::DelInstance(const std::string &instanceID)
 {
-    if (metaStorageAccessor_ == nullptr) {
+    if (instanceOperator_ == nullptr) {
         YRLOG_ERROR("meta store accessor is null");
         return Status(StatusCode::LS_META_STORE_ACCESSOR_IS_NULL);
     }
@@ -557,9 +556,11 @@ litebus::Future<Status> ObserverActor::DelInstance(const std::string &instanceID
         YRLOG_ERROR("failed to get instance key from InstanceInfo");
         return Status(StatusCode::FAILED);
     }
-    DelInstanceEvent(instanceID);
     YRLOG_DEBUG("delete instance to meta store, instance({}), instance status: {}, functionKey: {}, path: {}",
                 instanceInfo.instanceid(), instanceInfo.instancestatus().code(), instanceInfo.function(), path.Get());
+
+    std::shared_ptr<StoreInfo> infoPutInfo;
+    infoPutInfo = std::make_shared<StoreInfo>(path.Get(), "");
 
     std::shared_ptr<StoreInfo> routePutInfo;
     auto state = static_cast<InstanceState>(instanceInfo.instancestatus().code());
@@ -568,17 +569,21 @@ litebus::Future<Status> ObserverActor::DelInstance(const std::string &instanceID
         routePutInfo = std::make_shared<StoreInfo>(routePath, "");
     }
 
-    return metaStorageAccessor_->Delete(path.Get())
-        .Then([accessor(metaStorageAccessor_), routePutInfo,
-               requestID(instanceInfo.requestid())](const Status &status) -> litebus::Future<Status> {
-            if (status.IsOk()) {
-                if (routePutInfo != nullptr) {
-                    YRLOG_DEBUG("{}|try to delete routeInfo", requestID);
-                    return accessor->Delete(routePutInfo->key);
-                }
+    return instanceOperator_->ForceDelete(infoPutInfo, routePutInfo, nullptr, false)
+        .Then([aid(GetAID()), infoPutInfo, routePutInfo, instanceInfo](const OperateResult &result) {
+            if (result.status.IsOk()) {
+                litebus::Async(aid, &ObserverActor::DelInstanceEvent, instanceInfo.instanceid(),
+                               result.currentModRevision);
                 return Status::OK();
             }
-            return status;
+            YRLOG_ERROR("failed to delete key {} using meta client, error: {}", infoPutInfo->key,
+                        result.status.GetMessage());
+            if (routePutInfo != nullptr) {
+                YRLOG_ERROR("failed to delete key {} using meta client, error: {}", routePutInfo->key,
+                            result.status.GetMessage());
+            }
+            return Status(StatusCode::BP_META_STORAGE_PUT_ERROR,
+                          "failed to delete key, err: " + result.status.GetMessage());
         });
 }
 
@@ -648,6 +653,15 @@ litebus::Option<InstanceInfoMap> ObserverActor::GetLocalInstanceInfo()
     return localInstanceInfo_;
 }
 
+litebus::Future<InstanceInfoMap> ObserverActor::GetAllInstanceInfos()
+{
+    GetOption opt;
+    opt.prefix = true;
+    return metaStorageAccessor_->GetMetaClient()
+        ->Get(INSTANCE_PATH_PREFIX, opt)
+        .Then(litebus::Defer(GetAID(), &ObserverActor::OnGetInstancesFromMetaStore, std::placeholders::_1));
+}
+
 void ObserverActor::UpdateProxyEvent(const std::vector<WatchEvent> &events)
 {
     for (const auto &event : events) {
@@ -682,7 +696,7 @@ void ObserverActor::UpdateProxyEvent(const std::vector<WatchEvent> &events)
                 break;
             }
             default: {
-                YRLOG_WARN("unknown event type {}", event.eventType);
+                YRLOG_WARN("unknown event type {}", fmt::underlying(event.eventType));
             }
         }
     }
@@ -782,11 +796,11 @@ void ObserverActor::NotifyUpdateInstance(const std::string &instanceID, const re
     }
 }
 
-void ObserverActor::NotifyDeleteInstance(const std::string &instanceID)
+void ObserverActor::NotifyDeleteInstance(const std::string &instanceID, int64_t modRevision)
 {
     auto iterator = instanceListenerList_.begin();
     while (iterator != instanceListenerList_.end()) {
-        (*iterator)->Delete(instanceID);  // message_是从etcd监听到的事件。
+        (*iterator)->Delete(instanceID, modRevision);  // message_是从etcd监听到的事件。
         ++iterator;
     }
 }
@@ -824,8 +838,9 @@ litebus::Future<Status> ObserverActor::TrySubscribeInstanceEvent(const std::stri
                                                                  const std::string &targetInstance, bool ignoreNonExist)
 {
     // if this instance hasn't been watched on this node, get and watch first
-    if (isPartialWatchInstances_ && (instanceWatchers_.find(targetInstance) == instanceWatchers_.end()
-        || instanceWatchers_[targetInstance] == nullptr)) {
+    if (isPartialWatchInstances_
+        && (instanceWatchers_.find(targetInstance) == instanceWatchers_.end()
+            || instanceWatchers_[targetInstance] == nullptr)) {
         auto promise = std::make_shared<litebus::Promise<Status>>();
         GetAndWatchInstance(targetInstance)
             .OnComplete([promise, aid(GetAID()), subscriber, targetInstance,
@@ -866,20 +881,22 @@ void ObserverActor::NotifyMigratingRequest(const std::string &instanceID)
 void ObserverActor::SetInstanceBillingContext(const resource_view::InstanceInfo &instanceInfo, bool synced)
 {
     if (synced && instanceInfo.functionproxyid() == nodeID_) {
-        auto customMetricsOption = metrics::MetricsAdapter::GetInstance().GetMetricsContext().
-            GetCustomMetricsOption(instanceInfo);
-        if (instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING) ||
-            instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::EXITING) ||
-            instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::FAILED) ||
-            instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::FATAL)) {
+        auto customMetricsOption =
+            metrics::MetricsAdapter::GetInstance().GetMetricsContext().GetCustomMetricsOption(instanceInfo);
+        if (instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)
+            || instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::EXITING)
+            || instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::FAILED)
+            || instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::FATAL)) {
             metrics::MetricsAdapter::GetInstance().GetMetricsContext().InitExtraBillingInstance(
-                instanceInfo.instanceid(), customMetricsOption, instanceInfo.issystemfunc());
+                instanceInfo.instanceid(), instanceInfo.functionagentid(), customMetricsOption,
+                instanceInfo.issystemfunc());
             metrics::MetricsAdapter::GetInstance().RegisterBillingInstanceRunningDuration();
         }
-        if (instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING) ||
-            instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::EXITING)) {
+        if (instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)
+            || instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::EXITING)) {
             metrics::MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(
-                instanceInfo.instanceid(), customMetricsOption, instanceInfo.issystemfunc());
+                instanceInfo.instanceid(), instanceInfo.functionagentid(), customMetricsOption,
+                instanceInfo.issystemfunc());
             metrics::MetricsAdapter::GetInstance().RegisterBillingInstanceRunningDuration();
         }
     }
@@ -916,7 +933,7 @@ Status ObserverActor::OnGetFuncMetaFromMetaStore(const std::string &funcKey,
 litebus::Future<litebus::Option<ProxyMeta>> ObserverActor::GetProxyFromMetaStore(const std::string &key)
 {
     return metaStorageAccessor_->AsyncGet(key).Then(
-        [](const litebus::Option<std::string> resp) -> litebus::Future<litebus::Option<ProxyMeta>> {
+        [](const litebus::Option<std::string> &resp) -> litebus::Future<litebus::Option<ProxyMeta>> {
             if (resp.IsNone()) {
                 return litebus::None();
             }
@@ -957,17 +974,7 @@ void ObserverActor::RemoveQueryKeyMetaCache(const std::string &key)
     queryMetaStoreTimerMap_.erase(key);
 }
 
-litebus::Future<SyncResult> ObserverActor::BusProxySyncer()
-{
-    GetOption opts;
-    opts.prefix = true;
-    YRLOG_INFO("start to sync key({}).", BUSPROXY_PATH_PREFIX);
-    return metaStorageAccessor_->GetMetaClient()
-        ->Get(BUSPROXY_PATH_PREFIX, opts)
-        .Then(litebus::Defer(GetAID(), &ObserverActor::OnBusProxySyncer, std::placeholders::_1));
-}
-
-litebus::Future<SyncResult> ObserverActor::OnBusProxySyncer(const std::shared_ptr<GetResponse> &getResponse)
+litebus::Future<SyncResult> ObserverActor::BusProxySyncer(const std::shared_ptr<GetResponse> &getResponse)
 {
     std::vector<WatchEvent> events;
     auto syncResult = OnSyncer(getResponse, events, BUSPROXY_PATH_PREFIX);
@@ -981,17 +988,7 @@ litebus::Future<SyncResult> ObserverActor::OnBusProxySyncer(const std::shared_pt
     return syncResult;
 }
 
-litebus::Future<SyncResult> ObserverActor::InstanceInfoSyncer()
-{
-    GetOption opts;
-    opts.prefix = true;
-    YRLOG_INFO("start to sync key({}).", INSTANCE_ROUTE_PATH_PREFIX);
-    return metaStorageAccessor_->GetMetaClient()
-        ->Get(INSTANCE_ROUTE_PATH_PREFIX, opts)
-        .Then(litebus::Defer(GetAID(), &ObserverActor::OnInstanceInfoSyncer, std::placeholders::_1));
-}
-
-litebus::Future<SyncResult> ObserverActor::OnInstanceInfoSyncer(const std::shared_ptr<GetResponse> &getResponse)
+litebus::Future<SyncResult> ObserverActor::InstanceInfoSyncer(const std::shared_ptr<GetResponse> &getResponse)
 {
     std::vector<WatchEvent> events;
     auto syncResult = OnSyncer(getResponse, events, INSTANCE_PATH_PREFIX);
@@ -1012,8 +1009,8 @@ litebus::Future<SyncResult> ObserverActor::OnInstanceInfoSyncer(const std::share
             continue;
         }
         TransToRouteInfoFromInstanceInfo(instanceInfo, routeInfo);
+        etcdRemoteSet.emplace(keyInfo.instanceID);
         if (routeInfo.functionproxyid() != nodeID_) {  // owner is not self_ need to be updated
-            etcdRemoteSet.emplace(keyInfo.instanceID);
             if (!functionsystem::NeedUpdateRouteState(static_cast<InstanceState>(routeInfo.instancestatus().code()),
                                                       isMetaStoreEnabled_)) {
                 continue;  // ignore non-route info
@@ -1037,7 +1034,7 @@ litebus::Future<SyncResult> ObserverActor::OnInstanceInfoSyncer(const std::share
             auto routeKey = GenInstanceRouteKey(instanceInfo.instanceid());
             KeyValue kv;
             kv.set_key(routeKey);
-            kv.set_mod_revision(syncResult.revision);
+            kv.set_mod_revision(getResponse->header.revision);
             WatchEvent event{ .eventType = EVENT_TYPE_DELETE, .kv = kv, .prevKv = {} };
             remoteWatchRouteEvents.emplace_back(event);
             YRLOG_DEBUG("need to delete instance {}, which is not in etcd and belong to {}", instanceInfo.instanceid(),
@@ -1064,16 +1061,8 @@ litebus::Future<SyncResult> ObserverActor::OnInstanceInfoSyncer(const std::share
     return syncResult;
 }
 
-litebus::Future<SyncResult> ObserverActor::PartialInstanceInfoSyncer(const std::string &instanceID)
-{
-    YRLOG_INFO("start to sync key({}).", GenInstanceRouteKey(instanceID));
-    return metaStorageAccessor_->GetMetaClient()
-        ->Get(GenInstanceRouteKey(instanceID), {})
-        .Then(litebus::Defer(GetAID(), &ObserverActor::OnPartialInstanceInfoSyncer, std::placeholders::_1, instanceID));
-}
-
-litebus::Future<SyncResult> ObserverActor::OnPartialInstanceInfoSyncer(const std::shared_ptr<GetResponse> &getResponse,
-                                                                       const std::string &instanceID)
+litebus::Future<SyncResult> ObserverActor::PartialInstanceInfoSyncer(const std::shared_ptr<GetResponse> &getResponse,
+                                                                     const std::string &instanceID)
 {
     std::vector<WatchEvent> events;
     auto syncResult = OnSyncer(getResponse, events, GenInstanceRouteKey(instanceID));
@@ -1096,7 +1085,7 @@ litebus::Future<SyncResult> ObserverActor::OnPartialInstanceInfoSyncer(const std
                         localInstance->second.functionproxyid());
             KeyValue kv;
             kv.set_key(GenInstanceRouteKey(instanceID));
-            kv.set_mod_revision(syncResult.revision);
+            kv.set_mod_revision(getResponse->header.revision);
             WatchEvent event{ .eventType = EVENT_TYPE_DELETE, .kv = kv, .prevKv = {} };
             UpdateInstanceRouteEvent({ event }, true);
             return syncResult;
@@ -1105,6 +1094,11 @@ litebus::Future<SyncResult> ObserverActor::OnPartialInstanceInfoSyncer(const std
         // (2) instance is on current node, update etcd if needed
         if (!IsLowReliabilityInstance(localInstance->second)
             && static_cast<InstanceState>(localInstance->second.instancestatus().code()) != InstanceState::SCHEDULING) {
+            if (!functionsystem::NeedUpdateRouteState(
+                    static_cast<InstanceState>(localInstance->second.instancestatus().code()), isMetaStoreEnabled_)) {
+                return syncResult;  // ignore non-route info
+            }
+
             YRLOG_DEBUG("instance({}) isn't exist in meta-store, put instance", localInstance->first);
             // this key doesn't exist in etcd anymore, putting it agent will reset etcd's key version to 1
             localInstance->second.set_version(1);
@@ -1137,17 +1131,7 @@ litebus::Future<SyncResult> ObserverActor::OnPartialInstanceInfoSyncer(const std
     return syncResult;
 }
 
-litebus::Future<SyncResult> ObserverActor::FunctionMetaSyncer()
-{
-    GetOption opts;
-    opts.prefix = true;
-    YRLOG_INFO("start to sync key({}).", FUNC_META_PATH_PREFIX);
-    return metaStorageAccessor_->GetMetaClient()
-        ->Get(FUNC_META_PATH_PREFIX, opts)
-        .Then(litebus::Defer(GetAID(), &ObserverActor::OnFunctionMetaSyncer, std::placeholders::_1));
-}
-
-litebus::Future<SyncResult> ObserverActor::OnFunctionMetaSyncer(const std::shared_ptr<GetResponse> &getResponse)
+litebus::Future<SyncResult> ObserverActor::FunctionMetaSyncer(const std::shared_ptr<GetResponse> &getResponse)
 {
     std::vector<WatchEvent> events;
     auto syncResult = OnSyncer(getResponse, events, FUNC_META_PATH_PREFIX);
@@ -1197,21 +1181,22 @@ litebus::Future<SyncResult> ObserverActor::OnFunctionMetaSyncer(const std::share
 SyncResult ObserverActor::OnSyncer(const std::shared_ptr<GetResponse> &getResponse, std::vector<WatchEvent> &events,
                                    std::string prefixKey)
 {
-    if (getResponse->status.IsError()) {
+    if (getResponse == nullptr || getResponse->status.IsError()) {
         YRLOG_INFO("failed to get key({}) from meta storage", prefixKey);
-        return SyncResult{ getResponse->status, 0 };
+        return SyncResult{ getResponse->status};
     }
+
     if (getResponse->kvs.empty()) {
         YRLOG_INFO("get no result with key({}) from meta storage, revision is {}", prefixKey,
                    getResponse->header.revision);
-        return SyncResult{ Status::OK(), getResponse->header.revision + 1 };
+        return SyncResult{ Status::OK() };
     }
 
     for (auto &kv : getResponse->kvs) {
         WatchEvent event{ .eventType = EVENT_TYPE_PUT, .kv = kv, .prevKv = {} };
         events.emplace_back(event);
     }
-    return SyncResult{ Status::OK(), getResponse->header.revision + 1 };
+    return SyncResult{ Status::OK() };
 }
 
 litebus::Future<resource_view::InstanceInfo> ObserverActor::GetInstanceRouteInfo(const std::string &instanceID)
@@ -1260,6 +1245,30 @@ litebus::Future<resource_view::InstanceInfo> ObserverActor::OnGetInstanceFromMet
     return instanceInfo;
 }
 
+litebus::Future<InstanceInfoMap> ObserverActor::OnGetInstancesFromMetaStore(
+    const litebus::Future<std::shared_ptr<GetResponse>> &getResponse)
+{
+    InstanceInfoMap instanceMap;
+    if (getResponse.IsError() || getResponse.Get() == nullptr || getResponse.Get()->kvs.empty()) {
+        YRLOG_ERROR("failed to get instances from meta store");
+        return instanceMap;
+    }
+
+    for (const auto &kv : getResponse.Get()->kvs) {
+        resource_view::InstanceInfo instanceInfo;
+        if (!TransToInstanceInfoFromJson(instanceInfo, kv.value())) {
+            YRLOG_ERROR("failed to trans to instance from json string, key({})", kv.key());
+            continue;
+        }
+
+        YRLOG_INFO("get instance({}) info from meta-store", instanceInfo.instanceid());
+        (*instanceInfo.mutable_extensions())[INSTANCE_MOD_REVISION] =
+            std::to_string(getResponse.Get()->kvs.front().mod_revision());
+        instanceMap[instanceInfo.instanceid()] = instanceInfo;
+    }
+    return instanceMap;
+}
+
 void ObserverActor::WatchInstance(const std::string &instanceID, int64_t revision)
 {
     if (!isPartialWatchInstances_) {
@@ -1275,8 +1284,9 @@ void ObserverActor::WatchInstance(const std::string &instanceID, int64_t revisio
     auto key = GenInstanceRouteKey(instanceID);
     YRLOG_INFO("Register watch for instance: {}, key: {}", instanceID, key);
     auto watchOpt = WatchOption{ false, false, revision, true };
-    auto partialInstanceInfoSyncer = [aid(GetAID()), instanceID]() -> litebus::Future<SyncResult> {
-        return litebus::Async(aid, &ObserverActor::PartialInstanceInfoSyncer, instanceID);
+    auto partialInstanceInfoSyncer =
+        [aid(GetAID()), instanceID](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<SyncResult> {
+        return litebus::Async(aid, &ObserverActor::PartialInstanceInfoSyncer, getResponse, instanceID);
     };
     (void)metaStorageAccessor_
         ->RegisterObserver(
@@ -1304,6 +1314,12 @@ void ObserverActor::OnWatchInstance(const std::string &instanceID,
         instanceWatchers_.erase(instanceID);
         return;
     }
+    if (auto iter = instanceWatchers_.find(instanceID); iter == instanceWatchers_.end()) {
+        YRLOG_ERROR("watch instance: {} may already canceled", instanceID);
+        watcher.Get()->Close();
+        return;
+    }
+
     YRLOG_INFO("success to watch instance: {}", instanceID);
     instanceWatchers_[instanceID] = watcher.Get();
 }
@@ -1313,7 +1329,6 @@ litebus::Future<resource_view::InstanceInfo> ObserverActor::GetAndWatchInstance(
     if (!isPartialWatchInstances_) {
         if (instanceInfoMap_.find(instanceID) != instanceInfoMap_.end()) {
             YRLOG_DEBUG("find existed instance({})", instanceID);
-            resource_view::InstanceInfo instanceInfo;
             return instanceInfoMap_[instanceID];
         }
         return litebus::Future<resource_view::InstanceInfo>(litebus::Status(-1));
@@ -1325,6 +1340,37 @@ litebus::Future<resource_view::InstanceInfo> ObserverActor::GetAndWatchInstance(
             if (future.IsError()) {
                 promise.SetFailed(future.GetErrorCode());
                 YRLOG_ERROR("failed to GetInstanceRouteInfo for {}, don't need to watch instance", instanceID);
+                return;
+            }
+            promise.SetValue(future.Get());
+            litebus::Async(aid, &ObserverActor::WatchInstance, instanceID,
+                           GetModRevisionFromInstanceInfo(future.Get()));
+        });
+    return promise.GetFuture();
+}
+
+litebus::Future<resource_view::InstanceInfo> ObserverActor::GetOrWatchInstance(const std::string &instanceID)
+{
+    // if instance existed, either instance have been watched, or instance is managed by this proxy(will be watched)
+    // skip watch
+    if (instanceInfoMap_.find(instanceID) != instanceInfoMap_.end()) {
+        YRLOG_DEBUG("find existed instance({})", instanceID);
+        return instanceInfoMap_[instanceID];
+    }
+
+    // when partial watch isn't enabled, return fail directly
+    if (!isPartialWatchInstances_) {
+        return litebus::Future<resource_view::InstanceInfo>(litebus::Status(-1));
+    }
+
+    litebus::Promise<resource_view::InstanceInfo> promise;
+    GetInstanceRouteInfo(instanceID)
+        .OnComplete([instanceID, aid(GetAID()), promise](const litebus::Future<resource_view::InstanceInfo> &future) {
+            if (future.IsError()) {
+                promise.SetFailed(future.GetErrorCode());
+                YRLOG_ERROR(
+                    "failed to GetInstanceRouteInfo during GetOrWatchInstance for {}, don't need to watch instance",
+                    instanceID);
                 return;
             }
             promise.SetValue(future.Get());
@@ -1349,4 +1395,16 @@ void ObserverActor::CancelWatchInstance(const std::string &instanceID)
     }
 }
 
+void ObserverActor::BindInternalIAM(const std::shared_ptr<InternalIAM> &internalIAM)
+{
+    internalIAM_ = internalIAM;
+}
+
+bool ObserverActor::IsInstanceWatched(const std::string &instanceID)
+{
+    if (!isPartialWatchInstances_) {
+        return true;
+    }
+    return instanceWatchers_.find(instanceID) != instanceWatchers_.end();
+}
 }  // namespace functionsystem::function_proxy

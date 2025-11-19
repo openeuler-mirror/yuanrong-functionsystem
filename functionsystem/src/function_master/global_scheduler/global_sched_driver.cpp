@@ -23,7 +23,7 @@
 
 #include "common/constants/actor_name.h"
 #include "common/constants/metastore_keys.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "meta_store_client/meta_store_client.h"
 #include "common/scheduler_topology/sched_tree.h"
 
@@ -34,6 +34,8 @@ constexpr int DEFAULT_LOCAL_SCHED_PER_DOMAIN_NODE = 4005;
 constexpr int DEFAULT_DOMAIN_SCHED_PER_DOMAIN_NODE = 1000;
 constexpr uint32_t MAX_EVICT_TIMEOUT = 6000;
 constexpr uint32_t DEFAULT_EVICT_TIMEOUT = 30;
+const uint32_t DEFAULT_HEARTBEAT_TIMES = 12;
+const uint32_t DEFAULT_HEARTBEAT_INTERVAL = 1000;
 const std::string DEFAULT_META_STORE_ADDRESS = "127.0.0.1:32279";
 const std::string GLOBAL_SCHEDULER = "global-scheduler";
 const std::string QUERY_AGENTS_URL = "/queryagents";
@@ -253,6 +255,7 @@ GlobalSchedDriver::GlobalSchedDriver(std::shared_ptr<GlobalSched> globalSched, c
     globalSchedAddress_ = flags.GetIP();
     isScheduleTolerateAbnormal_ = flags.GetIsScheduleTolerateAbnormal();
     heartbeatTimeoutMs_ = flags.GetSystemTimeout();
+    domainHeartbeatTimeoutMs_ = flags.GetDomainHeartbeatTimeout();
     pullResourceInterval_ = flags.GetPullResourceInterval();
     enableMetrics_ = flags.GetEnableMetrics();
     enablePrintResourceView_ = flags.GetEnablePrintResourceView();
@@ -266,6 +269,16 @@ GlobalSchedDriver::GlobalSchedDriver(std::shared_ptr<GlobalSched> globalSched, c
     apiRouteRegister_ = std::make_shared<DefaultHealthyRouter>(flags.GetNodeID());
     if (auto registerStatus(httpServer_->RegisterRoute(apiRouteRegister_)); registerStatus != StatusCode::SUCCESS) {
         YRLOG_ERROR("register health check api router failed.");
+    }
+    // add agent api route
+    agentApiRouteRegister_ = std::make_shared<AgentApiRouter>();
+    agentApiRouteRegister_->InitQueryAgentHandler(globalSched_);
+    agentApiRouteRegister_->InitEvictAgentHandler(globalSched_);
+    agentApiRouteRegister_->InitGetSchedulingQueueHandler(globalSched_);
+    agentApiRouteRegister_->InitQueryAgentCountHandler(metaStoreClient_);
+    if (auto registerStatus(httpServer_->RegisterRoute(agentApiRouteRegister_));
+        registerStatus != StatusCode::SUCCESS) {
+        YRLOG_ERROR("register agent api router failed.");
     }
     // add resources api route
     resourcesApiRouteRegister_ = std::make_shared<ResourcesApiRouter>();
@@ -283,8 +296,7 @@ Status GlobalSchedDriver::Start()
         YRLOG_ERROR("maxLocalSchedPerDomainNode and maxDomainSchedPerDomainNode can't less than 2");
         return Status(StatusCode::FAILED);
     }
-
-    auto domainSchedMgr = std::make_unique<DomainSchedMgr>();
+    auto domainSchedMgr = std::make_unique<DomainSchedMgr>(domainHeartbeatTimeoutMs_);
     auto localSchedMgr = std::make_unique<LocalSchedMgr>();
 
     ASSERT_IF_NULL(globalSched_);
@@ -294,7 +306,7 @@ Status GlobalSchedDriver::Start()
         std::make_shared<domain_scheduler::DomainSchedulerLauncher>(domain_scheduler::DomainSchedulerParam{
             "InnerDomainScheduler", globalSchedAddress_, metaStoreClient_, heartbeatTimeoutMs_, pullResourceInterval_,
             isScheduleTolerateAbnormal_, maxPriority_, enablePreemption_, relaxed_, enableMetrics_,
-            enablePrintResourceView_, schedulePlugins_, aggregatedStrategy_ });
+            enablePrintResourceView_, schedulePlugins_, aggregatedStrategy_, componentName_ });
     auto domainActivator = std::make_shared<DomainActivator>(domainLauncher);
     auto topologyTree = std::make_unique<SchedTree>(maxLocalSchedPerDomainNode_, maxDomainSchedPerDomainNode_);
     auto globalSchedActor = std::make_shared<GlobalSchedActor>(GLOBAL_SCHED_ACTOR_NAME, metaStoreClient_,
@@ -330,6 +342,11 @@ void GlobalSchedDriver::Await() const
 std::shared_ptr<GlobalSched> GlobalSchedDriver::GetGlobalSched() const
 {
     return globalSched_;
+}
+
+void GlobalSchedDriver::BindComponentName(const std::string &componentName)
+{
+    componentName_ = componentName;
 }
 
 }  // namespace functionsystem::global_scheduler

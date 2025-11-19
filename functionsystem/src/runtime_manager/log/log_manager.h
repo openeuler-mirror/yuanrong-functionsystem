@@ -35,6 +35,10 @@ public:
 
     void StopScanLogs() const;
 
+    litebus::Future<std::string> AcquireLogPrefix(const std::string &runtimeID);
+
+    void ReleaseLogPrefix(const std::string &runtimeID);
+
     /**
      * Set flags to LogManagerActor
      * @param flags

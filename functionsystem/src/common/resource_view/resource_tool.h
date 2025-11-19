@@ -24,9 +24,9 @@
 
 #include "async/option.hpp"
 #include "async/uuid_generator.hpp"
-#include "constants.h"
-#include "logs/logging.h"
-#include "status/status.h"
+#include "common/constants/constants.h"
+#include "common/logs/logging.h"
+#include "common/status/status.h"
 #include "resource_type.h"
 
 namespace functionsystem::resource_view {
@@ -142,6 +142,27 @@ inline bool IsEmpty(const Resources &resources)
     return ret;
 }
 
+inline bool IsRequestSatisfiable(double req, double available)
+{
+    if (req < available || abs(req - available) <= EPSINON) {
+        return true;
+    }
+    return false;
+}
+
+inline bool IsVectorsAvailable(const Category &available, const resources::Resource &req)
+{
+    auto reqVal = req.scalar().value();
+    for (const auto &pair : available.vectors()) {
+        for (const auto &availableVal : pair.second.values()) {
+            if (IsRequestSatisfiable(reqVal, availableVal)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 inline std::string ToString(const Resource &resource)
 {
     ASSERT_FS(IsValid(resource));
@@ -250,15 +271,48 @@ inline bool HasAffinity(const resource_view::InstanceInfo &instance)
            || HasResourceAffinity(instance) || HasInnerAffinity(instance);
 }
 
+inline bool IsHeterogeneousResource(const std::string &resourceName)
+{
+    auto resourceNameFields = litebus::strings::Split(resourceName, "/");
+    if (resourceNameFields.size() == HETERO_RESOURCE_FIELD_NUM) {
+        return true;
+    }
+    return false;
+}
+
 inline bool HasHeterogeneousResource(const resource_view::InstanceInfo &instance)
 {
     for (auto &req : instance.resources().resources()) {
-        auto resourceNameFields = litebus::strings::Split(req.first, "/");
-        if (resourceNameFields.size() == HETERO_RESOURCE_FIELD_NUM) {
+        if (IsHeterogeneousResource(req.first)) {
             return true;
         }
     }
     return false;
+}
+
+inline bool IsDiskResource(const std::string &resourceName)
+{
+    return resourceName == resource_view::DISK_RESOURCE_NAME;
+}
+
+inline bool HasDiskResource(const resource_view::InstanceInfo &instance)
+{
+    if (instance.resources().resources().find(DISK_RESOURCE_NAME) == instance.resources().resources().end()) {
+        return false;
+    }
+    return true;
+}
+
+inline bool HasDiskResource(const ResourceUnit &unit)
+{
+    if (unit.allocatable().resources().count(resource_view::DISK_RESOURCE_NAME) == 0) {
+        return false;
+    }
+    if (unit.allocatable().resources().at(resource_view::DISK_RESOURCE_NAME).vectors().values()
+        .count(resource_view::DISK_RESOURCE_NAME) == 0) {
+        return false;
+    }
+    return true;
 }
 
 }  // namespace functionsystem::resource_view
@@ -286,6 +340,7 @@ MapCounter operator+(const MapCounter &l, const MapCounter &r);
 MapCounter operator-(const MapCounter &l, const MapCounter &r);
 MapCounter ToLabelKV(const std::string &label);
 MapCounter ToLabelKVs(const ::google::protobuf::RepeatedPtrField<std::string> &labels);
+MapCounter ToLabelKVs(const ::google::protobuf::Map<std::string, std::string> &labels);
 resource_view::Resources BuildResources(int64_t cpuVal, int64_t memVal);
 void DeleteLabel(const resources::InstanceInfo &instInfo,
                  ::google::protobuf::Map<std::string, resource_view::ValueCounter> &nodeLabels);

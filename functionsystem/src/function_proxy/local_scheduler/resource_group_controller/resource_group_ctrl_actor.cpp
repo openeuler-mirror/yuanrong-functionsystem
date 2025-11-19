@@ -16,7 +16,7 @@
 #include "resource_group_ctrl_actor.h"
 
 #include "common/constants/actor_name.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem::local_scheduler {
 const int64_t CREATE_RETRY_BACKOFF = 10000;
@@ -76,7 +76,7 @@ litebus::Future<std::shared_ptr<CreateResourceGroupResponse>> ResourceGroupCtrlA
         }
         auto rsp = future.Get();
         YRLOG_INFO("{}|{}| received create resource group ({}) response, code:({}) reason:({})", req->traceid(),
-                   req->requestid(), req->rgroupspec().name(), rsp->code(), rsp->message());
+                   req->requestid(), req->rgroupspec().name(), fmt::underlying(rsp->code()), rsp->message());
     });
     return future;
 }
@@ -99,8 +99,8 @@ litebus::Future<KillResponse> ResourceGroupCtrlActor::Kill(const std::string &fr
         auto rsp = KillResponse();
         rsp.set_code(forwardKillResponse.code());
         rsp.set_message(forwardKillResponse.message());
-        YRLOG_INFO("received kill resource group ({}) response, code:({}) reason:({})", rgName, rsp.code(),
-                   rsp.message());
+        YRLOG_INFO("received kill resource group ({}) response, code:({}) reason:({})", rgName,
+                   fmt::underlying(rsp.code()), rsp.message());
         return rsp;
     };
     auto opt = killHelper_.Exist(rgName);

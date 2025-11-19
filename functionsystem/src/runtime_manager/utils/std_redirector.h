@@ -22,8 +22,8 @@
 #include "actor/actor.hpp"
 #include "async/async.hpp"
 #include "async/future.hpp"
-#include "logs/logging.h"
-#include "status/status.h"
+#include "common/logs/logging.h"
+#include "common/status/status.h"
 #include "utils/constants.h"
 
 namespace functionsystem {
@@ -131,7 +131,7 @@ private:
     LogInfo readyToFlushLogs_;
     litebus::Timer timer_;
 
-    std::shared_ptr<spdlog::logger> userStdLogger_;
+    std::shared_ptr<yr_spdlog::logger> userStdLogger_;
     std::shared_ptr<observability::api::logs::LoggerProvider> lp_{ nullptr };
     std::shared_ptr<observability::sdk::logs::LogManager> logManager_{ nullptr };
 

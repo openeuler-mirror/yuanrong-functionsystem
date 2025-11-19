@@ -32,6 +32,8 @@ public:
     static litebus::Future<std::shared_ptr<runtime_rpc::StreamingMessage>> LoadState(
         const std::string &instanceId, const std::shared_ptr<runtime_rpc::StreamingMessage> &request);
 
+    static litebus::Future<Status> DeleteState(const std::string &instanceId);
+
 protected:
     [[maybe_unused]] static void ClearStateActor();
 

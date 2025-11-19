@@ -24,7 +24,7 @@
 #include "common/data_view/proxy_view/proxy_view.h"
 #include "common/posix_client/data_plane_client/data_interface_client_manager_proxy.h"
 #include "common/state_machine//instance_listener.h"
-#include "status/status.h"
+#include "common/status/status.h"
 #include "common/types/instance_state.h"
 #include "function_proxy/busproxy/instance_proxy/instance_proxy.h"
 
@@ -37,7 +37,7 @@ public:
     ~InstanceView() override;
     void Update(const std::string &instanceID, const resources::InstanceInfo &instanceInfo,
                 bool isForceUpdate) override;
-    void Delete(const std::string &instanceID) override;
+    void Delete(const std::string &instanceID, int64_t modRevision = -1) override;
 
     void BindDataInterfaceClientManager(
         const std::shared_ptr<DataInterfaceClientManagerProxy> &dataInterfaceClientManager)

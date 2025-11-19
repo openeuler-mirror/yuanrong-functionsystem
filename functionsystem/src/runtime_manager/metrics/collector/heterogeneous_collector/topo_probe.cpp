@@ -16,7 +16,7 @@
 #include "topo_probe.h"
 #include <cstddef>
 #include "partitioner.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem::runtime_manager {
 
@@ -132,6 +132,7 @@ std::vector<std::vector<std::string>> TopoProbe::GetTopoInfo(const std::vector<s
 
 std::vector<std::string> TopoProbe::GetPartition() const
 {
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     if (hasXPU_ && devInfo_) {
         return devInfo_->devPartition;
     }
@@ -140,11 +141,13 @@ std::vector<std::string> TopoProbe::GetPartition() const
 
 std::vector<int> TopoProbe::GetDevClusterIDs() const
 {
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     return devInfo_ ? devInfo_->devIDs : std::vector<int>{};
 }
 
 std::vector<int> TopoProbe::GetHBM() const
 {
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     if (hasXPU_ && devInfo_) {
         return devInfo_->devLimitHBMs;
     }
@@ -153,21 +156,25 @@ std::vector<int> TopoProbe::GetHBM() const
 
 std::string TopoProbe::GetVendor() const
 {
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     return hasXPU_ && devInfo_ ? devInfo_->devVendor : "";
 }
 
 std::string TopoProbe::GetProductModel() const
 {
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     return hasXPU_ && devInfo_ ? devInfo_->devProductModel : "";
 }
 
 std::vector<std::string> TopoProbe::GetDevClusterIPs() const
 {
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     return hasXPU_ && devInfo_ ? devInfo_->devIPs : std::vector<std::string>{};
 }
 
 std::vector<int> TopoProbe::GetStream() const
 {
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     if (hasXPU_ && devInfo_) {
         std::vector<int> streams;
         auto deviceNum = devInfo_->devLimitHBMs.size();
@@ -181,6 +188,7 @@ std::vector<int> TopoProbe::GetStream() const
 
 std::vector<int> TopoProbe::GetLatency() const
 {
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     if (hasXPU_ && devInfo_) {
         std::vector<int> latency;
         auto deviceNum = devInfo_->devLimitHBMs.size();
@@ -194,6 +202,7 @@ std::vector<int> TopoProbe::GetLatency() const
 
 std::vector<int> TopoProbe::GetHealth(const std::string &initType)
 {
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     if (hasXPU_ && devInfo_) {
         auto iter = initMap_.find(initType);
         if (iter != initMap_.end() && !iter->second) { // if get firstly, return directly
@@ -208,6 +217,7 @@ std::vector<int> TopoProbe::GetHealth(const std::string &initType)
 
 std::vector<int> TopoProbe::GetMemory() const
 {
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     if (hasXPU_ && devInfo_) {
         return devInfo_->devTotalMemory;
     }
@@ -216,6 +226,7 @@ std::vector<int> TopoProbe::GetMemory() const
 
 std::vector<int> TopoProbe::GetUsedHBM() const
 {
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     if (hasXPU_ && devInfo_) {
         return devInfo_->devUsedHBM;
     }
@@ -224,6 +235,7 @@ std::vector<int> TopoProbe::GetUsedHBM() const
 
 std::vector<int> TopoProbe::GetUsedMemory() const
 {
+    std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     if (hasXPU_ && devInfo_) {
         return devInfo_->devUsedMemory;
     }

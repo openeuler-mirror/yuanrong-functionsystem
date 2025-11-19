@@ -36,6 +36,8 @@ public:
 
     void RegisterProcessExitCallback(const std::function<void(const pid_t)> &func) const;
 
+    void RegisterHandleLogPrefixExit(const std::function<void(const std::string)> &func) const;
+
     /**
      * Start health check actor to reap child process
      * @param to where to inform reap child status

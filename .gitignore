@@ -29,9 +29,6 @@ functionsystem/pkg/*/**/build/
 .ninja_*
 build.ninja
 
-### vendor
-vendor/
-
 ### build
 build/
 

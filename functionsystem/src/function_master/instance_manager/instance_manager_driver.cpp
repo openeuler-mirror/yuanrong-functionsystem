@@ -17,9 +17,6 @@
 #include "instance_manager_driver.h"
 
 namespace functionsystem::instance_manager {
-
-const std::string INS_MGR = "instance-manager";
-
 InstanceManagerDriver::InstanceManagerDriver(std::shared_ptr<InstanceManagerActor> instanceManagerActor,
                                              std::shared_ptr<GroupManagerActor> groupManagerActor
                                              )
@@ -30,21 +27,23 @@ InstanceManagerDriver::InstanceManagerDriver(std::shared_ptr<InstanceManagerActo
 
 Status InstanceManagerDriver::Start()
 {
-    litebus::AID groupManagerActorAID = litebus::Spawn(groupManagerActor_);
-    if (!groupManagerActorAID.OK()) {
-        return Status(FAILED, "failed to start group_manager actor.");
-    }
-
     litebus::AID instanceManagerActorAID = litebus::Spawn(instanceManagerActor_, false);
     if (!instanceManagerActorAID.OK()) {
         return Status(FAILED, "failed to start instance_manager actor.");
     }
 
-    // http server
-    httpServer_ = std::make_shared<HttpServer>(INS_MGR);
+    litebus::AID groupManagerActorAID = litebus::Spawn(groupManagerActor_);
+    if (!groupManagerActorAID.OK()) {
+        return Status(FAILED, "failed to start group_manager actor.");
+    }
+
+    // create http server
+    const std::string im = "instance-manager";
+    httpServer_ = std::make_shared<HttpServer>(im);
     // add agent api route
     instanceApiRouteRegister_ = std::make_shared<InstancesApiRouter>();
-    instanceApiRouteRegister_->InitQueryNamedInsHandler(instanceManagerActor_);
+    instanceApiRouteRegister_->InitQueryInstancesHandler(instanceManagerActor_);
+    instanceApiRouteRegister_->InitQueryDebugInstancesHandler(instanceManagerActor_);
     if (auto registerStatus(httpServer_->RegisterRoute(instanceApiRouteRegister_));
         registerStatus != StatusCode::SUCCESS) {
         YRLOG_ERROR("register instance api router failed.");
@@ -52,6 +51,7 @@ Status InstanceManagerDriver::Start()
     if (httpServer_) {
         auto hsAID = litebus::Spawn(httpServer_);
     }
+
     return Status::OK();
 }
 

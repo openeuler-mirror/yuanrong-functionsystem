@@ -20,10 +20,10 @@
 #include <set>
 #include <unordered_map>
 
-#include "resource_type.h"
+#include "common/resource_view/resource_type.h"
 #include "common/resource_view/resource_tool.h"
 #include "common/scheduler_framework/framework/framework.h"
-#include "constants.h"
+#include "common/constants/constants.h"
 
 namespace functionsystem::schedule_framework {
 
@@ -80,6 +80,8 @@ struct NodeInfos {
 };
 
 struct PreAllocatedContext : public schedule_framework::ScheduleContext {
+    resource_view::SCHEDULER_LEVEL schedulerLevel;
+
     std::unordered_map<std::string, UnitResource> allocated;
     std::set<std::string> conflictNodes;
 

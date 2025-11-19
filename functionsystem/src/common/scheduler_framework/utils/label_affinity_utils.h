@@ -17,8 +17,8 @@
 #ifndef COMMON_UTILS_LABEL_AFFINITY_UTILS_H
 #define COMMON_UTILS_LABEL_AFFINITY_UTILS_H
 
-#include "proto/pb/posix_pb.h"
-#include "resource_type.h"
+#include "common/proto/pb/posix_pb.h"
+#include "common/resource_view/resource_type.h"
 #include "common/scheduler_framework/utils/score.h"
 
 namespace functionsystem {

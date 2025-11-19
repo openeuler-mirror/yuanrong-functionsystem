@@ -20,9 +20,9 @@
 #include <async/future.hpp>
 #include <litebus.hpp>
 
-#include "proto/pb/message_pb.h"
-#include "resource_type.h"
-#include "status/status.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/resource_view/resource_type.h"
+#include "common/status/status.h"
 #include "common/schedule_decision/scheduler_common.h"
 
 namespace functionsystem::schedule_decision {

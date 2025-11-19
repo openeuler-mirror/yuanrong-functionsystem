@@ -24,26 +24,27 @@
 
 #include "common/utils/exec_utils.h"
 #include "common/utils/module_switcher.h"
-#include "ssl_config.h"
+#include "common/utils/ssl_config.h"
 #include "common/utils/version.h"
+#include "common/aksk/aksk_util.h"
 #include "function_agent/driver/function_agent_driver.h"
 #include "function_agent/flags/function_agent_flags.h"
 #include "runtime_manager/config/flags.h"
 #include "runtime_manager/driver/runtime_manager_driver.h"
 #include "async/future.hpp"
 #include "async/option.hpp"
-#include "constants.h"
-#include "logs/logging.h"
-#include "proto/pb/message_pb.h"
-#include "status/status.h"
-#include "param_check.h"
+#include "common/constants/constants.h"
+#include "common/logs/logging.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
+#include "common/utils/param_check.h"
 #include "common/utils/s3_config.h"
-#include "sensitive_value.h"
+#include "common/utils/sensitive_value.h"
 
 using namespace functionsystem;
 
 namespace {
-const std::string COMPONENT_NAME = "function_agent";  // NOLINT
+const std::string COMPONENT_NAME = COMPONENT_NAME_FUNCTION_AGENT;  // NOLINT
 std::shared_ptr<functionsystem::ModuleSwitcher> g_functionAgentSwitcher{ nullptr };
 std::shared_ptr<function_agent::FunctionAgentDriver> g_functionAgentDriver{ nullptr };
 std::shared_ptr<runtime_manager::RuntimeManagerDriver> g_runtimeManagerDriver{ nullptr };
@@ -63,6 +64,25 @@ functionsystem::messages::CodePackageThresholds GetCodePackageThresholds(
     return codePackageThresholds;
 }
 
+S3Config GetS3Config(const function_agent::FunctionAgentFlags &flags)
+{
+    S3Config s3Config;
+    s3Config.credentialType = flags.GetCredentialType();
+    if (s3Config.credentialType == CREDENTIAL_TYPE_ROTATING_CREDENTIALS) {
+        YRLOG_INFO("S3 auth type({}) enabled", s3Config.credentialType);
+    }
+    if (!flags.GetAccessKey().empty()) {
+    	s3Config.accessKey = flags.GetAccessKey();
+    }
+    if (!flags.GetSecretKey().empty()) {
+    	s3Config.secretKey = flags.GetSecretKey();
+    }
+    s3Config.endpoint = flags.GetS3Endpoint();
+    s3Config.protocol = flags.GetS3Protocol();
+
+    return s3Config;
+}
+
 functionsystem::function_agent::FunctionAgentStartParam BuildStartParam(const function_agent::FunctionAgentFlags &flags)
 {
     function_agent::FunctionAgentStartParam startParam{
@@ -73,13 +93,14 @@ functionsystem::function_agent::FunctionAgentStartParam BuildStartParam(const fu
         .modelName = COMPONENT_NAME,
         .agentPort = flags.GetAgentListenPort(),
         .decryptAlgorithm = flags.GetDecryptAlgorithm(),
-        .s3Enable = false,
-        .s3Config = S3Config{},
+        .s3Enable = flags.GetS3Enable(),
+        .s3Config = GetS3Config(flags),
         .codePackageThresholds = GetCodePackageThresholds(flags),
         .heartbeatTimeoutMs = flags.GetSystemTimeout(),
         .agentUid = flags.GetAgentUID(),
         .localNodeID = flags.GetLocalNodeID(),
         .enableSignatureValidation = flags.GetEnableSignatureValidation(),
+        .componentName = COMPONENT_NAME,
     };
     return startParam;
 }
@@ -111,7 +132,8 @@ void OnCreateFunctionAgent(const function_agent::FunctionAgentFlags &flags)
 void OnCreateRuntimeManager(const runtime_manager::Flags &runtimeManagerFlags)
 {
     // function agent and runtime manager deploy in the same process
-    g_runtimeManagerDriver = std::make_shared<runtime_manager::RuntimeManagerDriver>(runtimeManagerFlags);
+    g_runtimeManagerDriver =
+        std::make_shared<runtime_manager::RuntimeManagerDriver>(runtimeManagerFlags, "runtime_manager");
     if (auto status = g_runtimeManagerDriver->Start(); status.IsError()) {
         YRLOG_ERROR("failed to start runtime_manager, errMsg: {}", status.ToString());
         g_functionAgentSwitcher->SetStop();
@@ -180,6 +202,12 @@ bool InitSSL(const function_agent::FunctionAgentFlags &flags)
             return false;
         }
     }
+
+    std::string agentID = FUNCTION_AGENT_ID_PREFIX + flags.GetIP() + "-" + flags.GetAgentListenPort();
+    if (!flags.GetAgentUID().empty()) {
+        agentID = flags.GetAgentUID();
+    }
+    functionsystem::metrics::MetricsAdapter::GetInstance().SetContextAttr("agent_id", agentID);
     g_functionAgentSwitcher->InitMetrics(flags.GetEnableMetrics(), flags.GetMetricsConfig(),
                                          flags.GetMetricsConfigFile(), sslCertConfig);
     return true;
@@ -235,6 +263,11 @@ int main(int argc, char **argv)
     auto address = flags.GetIP() + ":" + flags.GetAgentListenPort();
     if (!InitSSL(flags)) {
         YRLOG_ERROR("failed to get sslConfig");
+        g_functionAgentSwitcher->SetStop();
+        return EXIT_ABNORMAL;
+    }
+    if (!InitLitebusAKSKEnv(flags).IsOk()) {
+        YRLOG_ERROR("failed to get aksk config");
         g_functionAgentSwitcher->SetStop();
         return EXIT_ABNORMAL;
     }

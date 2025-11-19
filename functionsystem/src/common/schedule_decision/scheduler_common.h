@@ -19,19 +19,24 @@
 #include <string>
 
 #include "async/future.hpp"
-#include "status/status.h"
-#include "proto/pb/message_pb.h"
+#include "common/status/status.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/scheduler_framework/utils/score.h"
 
 namespace functionsystem::schedule_decision {
 struct ScheduleResult {
     std::string id;
     int32_t code;
     std::string reason;
+    // [Deprecated] Will be merged into vectorAllocations selectedIndices
     std::vector<int> realIDs;
+    // [Deprecated] Will be merged into vectorAllocations extendedInfo
     std::string heteroProductName;
 
-    // Resource's name: Value.Vectors
+    // [Deprecated] Will be merged into vectorAllocations allocationValues -- Resource's name: Value.Vectors
     std::map<std::string, ::resources::Value_Vectors> allocatedVectors = {};
+    // Vector-based resource allocation results
+    std::vector<schedule_framework::VectorResourceAllocation> vectorAllocations{};
     // only valid while successful & not domain preAllocated
     std::shared_ptr<litebus::Promise<Status>> allocatedPromise = nullptr;
     // only valid while instance or nested bundle was scheduled to rg bundle, otherwise is equal to id.

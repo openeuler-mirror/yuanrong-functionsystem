@@ -21,8 +21,8 @@
 #include <string>
 #include <unordered_map>
 
-#include "logs/logging.h"
-#include "metadata/metadata.h"
+#include "common/logs/logging.h"
+#include "common/metadata/metadata.h"
 #include "common/service_json/service_handler.h"
 #include "common/service_json/service_info.h"
 

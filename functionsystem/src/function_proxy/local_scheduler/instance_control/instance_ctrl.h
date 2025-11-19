@@ -20,7 +20,7 @@
 #include <actor/actor.hpp>
 #include <async/future.hpp>
 
-#include "resource_type.h"
+#include "common/resource_view/resource_type.h"
 #include "common/schedule_decision/schedule_queue_actor.h"
 #include "common/schedule_decision/scheduler.h"
 #include "common/state_machine/instance_state_machine.h"
@@ -69,6 +69,9 @@ public:
     virtual litebus::Future<KillResponse> Kill(const std::string &srcInstanceID,
                                                const std::shared_ptr<KillRequest> &killReq);
 
+    virtual litebus::Future<ExitResponse> Exit(const std::string &srcInstanceID,
+                                               const std::shared_ptr<ExitRequest> &exitReq);
+
     /**
      * wrap Async call of UpdateInstanceStatus interface
      * request from other actor
@@ -99,8 +102,7 @@ public:
 
     virtual litebus::Future<litebus::Option<FunctionMeta>> GetFuncMeta(const std::string &funcKey)
     {
-        ASSERT_IF_NULL(instanceCtrlActor_);
-        return litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::GetFuncMeta, funcKey);
+        return litebus::Async(aid_, &InstanceCtrlActor::GetFuncMeta, funcKey);
     }
 
     litebus::Future<Status> UpdateInstanceStatusPromise(const std::string &instanceID, const std::string &errMsg) const;
@@ -108,6 +110,8 @@ public:
     virtual void SetAbnormal();
 
     virtual void PutFailedInstanceStatusByAgentId(const std::string &funcAgentID);
+
+    virtual litebus::Future<bool> IsSystemTenant(const std::string &tenantID);
 
     void BindScheduler(const std::shared_ptr<schedule_decision::Scheduler> &scheduler) const;
     inline std::shared_ptr<schedule_decision::Scheduler> GetScheduler()
@@ -121,42 +125,42 @@ public:
 
     void BindResourceView(const std::shared_ptr<resource_view::ResourceViewMgr> &resourceViewMgr) const
     {
-        ASSERT_IF_NULL(instanceCtrlActor_);
-        litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::BindResourceView, resourceViewMgr);
+        litebus::Async(aid_, &InstanceCtrlActor::BindResourceView, resourceViewMgr);
     }
 
     void BindControlInterfaceClientManager(const std::shared_ptr<ControlInterfaceClientManagerProxy> &mgr) const
     {
-        ASSERT_IF_NULL(instanceCtrlActor_);
-        litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::BindControlInterfaceClientManager, mgr);
+        litebus::Async(aid_, &InstanceCtrlActor::BindControlInterfaceClientManager, mgr);
     }
 
     void BindMetaStoreClient(const std::shared_ptr<MetaStoreClient> &metaStoreClient) const
     {
-        ASSERT_IF_NULL(instanceCtrlActor_);
-        litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::BindMetaStoreClient, metaStoreClient);
+        litebus::Async(aid_, &InstanceCtrlActor::BindMetaStoreClient, metaStoreClient);
     }
 
     void BindLocalSchedSrv(const std::shared_ptr<local_scheduler::LocalSchedSrv> &localSchedSrv) const
     {
-        ASSERT_IF_NULL(instanceCtrlActor_);
-        litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::BindLocalSchedSrv, localSchedSrv);
+        litebus::Async(aid_, &InstanceCtrlActor::BindLocalSchedSrv, localSchedSrv);
+    }
+
+    void BindInternalIAM(const std::shared_ptr<function_proxy::InternalIAM> &internalIAM) const
+    {
+        litebus::Async(aid_, &InstanceCtrlActor::BindInternalIAM, internalIAM);
     }
 
     void BindResourceGroupCtrl(const std::shared_ptr<ResourceGroupCtrl> &rGroupCtrl) const
     {
-        ASSERT_IF_NULL(instanceCtrlActor_);
-        litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::BindResourceGroupCtrl, rGroupCtrl);
+        litebus::Async(aid_, &InstanceCtrlActor::BindResourceGroupCtrl, rGroupCtrl);
     }
 
     void BindSubscriptionMgr(const std::shared_ptr<SubscriptionMgr> &subscriptionMgr) const
     {
-        ASSERT_IF_NULL(instanceCtrlActor_);
-        litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::BindSubscriptionMgr, subscriptionMgr);
+        litebus::Async(aid_, &InstanceCtrlActor::BindSubscriptionMgr, subscriptionMgr);
     }
 
     void OnHealthyStatus(const Status &status) const
     {
+        ASSERT_IF_NULL(instanceCtrlActor_);
         litebus::Async(instanceCtrlActor_->GetAID(), &InstanceCtrlActor::OnHealthyStatus, status);
     }
 
@@ -167,8 +171,7 @@ public:
 
     virtual litebus::AID GetActorAID()
     {
-        ASSERT_IF_NULL(instanceCtrlActor_);
-        return instanceCtrlActor_->GetAID();
+        return aid_;
     }
 
     virtual litebus::Future<KillResponse> KillInstancesOfJob(const std::shared_ptr<KillRequest> &killReq) const;
@@ -195,6 +198,8 @@ public:
 
     void NotifyDsHealthy(bool healthy) const;
 
+    virtual litebus::Future<bool> IsInstanceRunning(const std::string &instanceID);
+
     void SetNodeLabelsToMetricsContext(const std::string &functionAgentID,
                                        std::map<std::string, resources::Value::Counter> nodeLabels);
 
@@ -216,6 +221,8 @@ public:
     // only for test
     void SetMaxForwardKillRetryCycleMs(uint32_t cycleMs);
 
+    virtual litebus::Future<Status> AddTokenReference(const std::pair<std::string, std::string> &tokenReferPair);
+
     std::shared_ptr<schedule_decision::ScheduleQueueActor> CreateScheduler(
         const std::string &tag,
         const uint16_t &maxPriority,
@@ -229,6 +236,7 @@ public:
 
 private:
     std::shared_ptr<InstanceCtrlActor> instanceCtrlActor_;
+    litebus::AID aid_;
     // should be moved out instance ctrl in the future
     std::shared_ptr<schedule_decision::ScheduleQueueActor> primaryScheduleQueueActor_;
     std::shared_ptr<schedule_decision::ScheduleQueueActor> virtualScheduleQueueActor_;

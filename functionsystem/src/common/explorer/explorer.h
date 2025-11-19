@@ -18,6 +18,7 @@
 #define COMMON_EXPLORER_H
 
 #include "common/explorer/explorer_actor.h"
+#include "common/kube_client/kube_client.h"
 #include "meta_store_client/meta_store_client.h"
 
 namespace functionsystem::explorer {
@@ -44,11 +45,18 @@ public:
                                                               const ElectionInfo &electionValue,
                                                               const std::shared_ptr<MetaStoreClient> &metaStoreClient);
 
+    [[maybe_unused]] static void NewK8sExplorerActorForMaster(const std::string &electionKey,
+                                                              const ElectionInfo &electionInfo,
+                                                              const std::string &k8sNamespace,
+                                                              const std::shared_ptr<KubeClient> &kubeClient);
+
     [[maybe_unused]] static std::shared_ptr<ExplorerActor> NewStandAloneExplorerActorForMaster(
         const ElectionInfo &electionInfo, const LeaderInfo &leaderInfo);
 
     [[maybe_unused]] static bool CreateExplorer(const ElectionInfo &electionInfo, const LeaderInfo &leaderInfo,
-                                                const std::shared_ptr<MetaStoreClient> &metaClient);
+                                                const std::shared_ptr<MetaStoreClient> &metaClient,
+                                                const std::shared_ptr<KubeClient> &kubeClient,
+                                                const std::string &k8sNamespace);
 
     // for test
     [[maybe_unused]] std::shared_ptr<ExplorerActor> GetExplorer(const std::string &key);

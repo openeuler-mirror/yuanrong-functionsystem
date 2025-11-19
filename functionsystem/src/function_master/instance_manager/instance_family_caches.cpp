@@ -23,7 +23,7 @@
 #include "async/defer.hpp"
 #include "common/constants/actor_name.h"
 #include "common/constants/signal.h"
-#include "resource_type.h"
+#include "common/resource_view/resource_type.h"
 #include "common/types/instance_state.h"
 #include "function_master/global_scheduler/global_sched.h"
 
@@ -72,10 +72,10 @@ void InstanceFamilyCaches::RemoveInstance(const std::string &instanceID)
         family_.erase(itInst);
         return;
     }
-    auto itParent = family_.find(itInst->second.info->parentid());
+    auto parentID = itInst->second.info->detached() ? "" : itInst->second.info->parentid();
+    auto itParent = family_.find(parentID);
     if (itParent == family_.end()) {
-        YRLOG_WARN("trying to remove instance({}), but its parent({}) not exists", instanceID,
-                   itInst->second.info->parentid());
+        YRLOG_WARN("trying to remove instance({}), but its parent({}) not exists", instanceID, parentID);
         family_.erase(itInst);
         itRoot->second.childrenInstanceID.erase(instanceID);
         return;
@@ -98,9 +98,11 @@ bool InstanceFamilyCaches::IsInstanceExists(const std::string &instanceID)
 
 void InstanceFamilyCaches::AddInstance(const std::shared_ptr<InstanceInfo> info)
 {
-    auto itParent = family_.find(info->parentid());
+    // if instance is detached, add it to root node (parent exits, it will not exit)
+    auto parentID = info->detached() ? "" : info->parentid();
+    auto itParent = family_.find(parentID);
     if (itParent == family_.end()) {
-        YRLOG_WARN("trying to add instance({}), but its parent({}) not exists", info->instanceid(), info->parentid());
+        YRLOG_WARN("trying to add instance({}), but its parent({}) not exists", info->instanceid(), parentID);
         itParent = family_.find("");
         if (itParent == family_.end()) {
             YRLOG_WARN("trying to add instance({}), but root not exists", info->instanceid());
@@ -116,6 +118,18 @@ void InstanceFamilyCaches::AddInstance(const std::shared_ptr<InstanceInfo> info)
         return;
     }
     family_.emplace(info->instanceid(), InstanceFamilyEntry{ .childrenInstanceID = {}, .info = info });
+}
+
+std::shared_ptr<InstanceInfo> InstanceFamilyCaches::GetInstance(const std::string &instanceID)
+{
+    if (instanceID.empty()) {
+        return nullptr;
+    }
+    auto iter = family_.find(instanceID);
+    if (iter == family_.end()) {
+        return nullptr;
+    }
+    return iter->second.info;
 }
 
 void InstanceFamilyCaches::SyncInstances(const std::unordered_map<std::string, std::shared_ptr<InstanceInfo>> &infos)

@@ -19,9 +19,9 @@
 #include <algorithm>
 #include <map>
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
-#include "resource_type.h"
+#include "common/resource_view/resource_type.h"
 #include "common/resource_view/scala_resource_tool.h"
 #include "common/schedule_plugin/common/constants.h"
 #include "common/schedule_plugin/common/plugin_register.h"

@@ -23,7 +23,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "resource_type.h"
+#include "common/resource_view/resource_type.h"
 
 namespace functionsystem::instance_manager {
 using InstanceInfo = resource_view::InstanceInfo;
@@ -55,6 +55,15 @@ public:
 
     /// Add an instance, if exists, update the info only (will never update its parent)
     void AddInstance(std::shared_ptr<InstanceInfo> info);
+
+    /**
+     *
+     * get instance by instanceID
+     *
+     * @param instanceID instanceID
+     * @return instance info
+     */
+    std::shared_ptr<InstanceInfo> GetInstance(const std::string &instanceID);
 
     /// sync all instance after restart, add all instances as a parent
     void SyncInstances(const std::unordered_map<std::string, std::shared_ptr<InstanceInfo>> &infos);

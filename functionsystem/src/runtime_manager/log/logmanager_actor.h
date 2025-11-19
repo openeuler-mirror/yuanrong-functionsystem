@@ -19,7 +19,7 @@
 
 #include "actor/actor.hpp"
 #include "async/future.hpp"
-#include "status/status.h"
+#include "common/status/status.h"
 #include "runtime_manager/config/flags.h"
 
 #include <exec/exec.hpp>
@@ -27,6 +27,7 @@
 #include <ctime>
 #include <queue>
 #include <unordered_set>
+#include <unistd.h>
 
 namespace functionsystem::runtime_manager {
 
@@ -68,16 +69,6 @@ public:
         return filePath_;
     }
 
-    // sort by descending order of modifiction time
-    bool operator<(const RuntimeLogFile &other) const
-    {
-        return (modificationTime_ != other.modificationTime_)
-                   ? modificationTime_ > other.modificationTime_
-                   : (isDir_ && !other.isDir_   ? true  // dir last to delete
-                      : !isDir_ && other.isDir_ ? false
-                                                : true);
-    }
-
 private:
     std::string runtimeID_;
     std::string filePath_;
@@ -85,43 +76,81 @@ private:
     bool isDir_{false};
 };
 
+struct RuntimeLogFileComparator {
+    bool operator()(const std::shared_ptr<RuntimeLogFile> &cur, const std::shared_ptr<RuntimeLogFile> &other) const
+    {
+        // sort by descending order of modification time
+        if (cur->GetModificationTime() != other->GetModificationTime()) {
+            return cur->GetModificationTime() > other->GetModificationTime();
+        }
+        // if modification time is same, dir is placed after file
+        return cur->IsDir() && !other->IsDir();
+    }
+};
+
 // ExpiredLogQueue records expired RuntimeLogFile in order of their last modification time.
 class ExpiredLogQueue {
 public:
-    void AddLogFile(const RuntimeLogFile &logFile);
+    void AddLogFile(const std::shared_ptr<RuntimeLogFile> &logFile, bool needAddSet);
 
-    bool IsLogFileExist(const RuntimeLogFile &logFile);
+    bool IsLogFileExist(const std::shared_ptr<RuntimeLogFile> &logFile);
 
     size_t GetLogCount() const;
 
     bool DeleteOldestRuntimeLogFile();
 
+    std::shared_ptr<RuntimeLogFile> PopLogFile();
+
+    void Reset();
+
 private:
     std::unordered_set<std::string> filePathSet_;
-    std::priority_queue<RuntimeLogFile> queue_;
+    std::priority_queue<
+        std::shared_ptr<RuntimeLogFile>,
+        std::vector<std::shared_ptr<RuntimeLogFile>>,
+        RuntimeLogFileComparator> queue_;
 };
 
 class LogManagerActor : public litebus::ActorBase {
 public:
-    explicit LogManagerActor(const std::string &name, const litebus::AID &runtimeManagerAID);
+    explicit LogManagerActor(const std::string &name, const litebus::AID &runtimeManagerAID, bool logReuse = false);
 
     ~LogManagerActor() override = default;
 
     void SetConfig(const Flags &flags);
 
     void ScanLogsRegularly();
-
     void StopScanLogs();
 
-    void CleanLogs();
+    litebus::Future<bool> CleanLogs();
+
+    void StartScanLogs();
+
+    void PartitionDeleteFile(const std::vector<std::shared_ptr<RuntimeLogFile>> &toBeDeleteFiles, size_t index,
+                             litebus::Promise<bool> promise);
 
     virtual litebus::Future<bool> IsRuntimeActive(const std::string &runtimeID) const;
+
+    virtual litebus::Future<bool> IsRuntimeActiveByPid(const pid_t &pid) const;
 
     litebus::Future<bool> CppAndPythonRuntimeLogProcess(const bool &isActive, const std::string &runtimeID,
                                                           const std::string &filePath, const time_t &nowTimeStamp);
 
+    litebus::Future<bool> DsClientLogProcess(const bool &isActive, const pid_t &pid,
+                                             const std::string &filePath, const time_t &nowTimeStamp);
+
     litebus::Future<bool> JavaRuntimeDirProcess(const bool &isActive, const std::string &runtimeID,
                                                   const std::string &filePath, const time_t &nowTimeStamp);
+
+    litebus::Future<std::string> AcquireLogPrefix(const std::string &runtimeID);
+    void ReleaseLogPrefix(const std::string &runtimeID);
+
+    void NoReuseLogScanAndClean(const std::vector<std::string> &files);
+    void ReuseLogScanAndClean(const std::vector<std::string> &files);
+    litebus::Future<bool> RecycleReuseLog(const bool &isActive, const std::string &runtimeID, const std::string &file,
+                                          const time_t &nowTimeStamp);
+    litebus::Future<bool> NeedCleanFile(const std::string &runtimeID, const std::string &filePath,
+                                        const time_t &nowTimeStamp);
 
 protected:
     void Init() override;
@@ -139,7 +168,17 @@ private:
 
     std::string GetRuntimeIDFromLogFileName(const std::string &file, const std::string &filePath);
 
+    pid_t GetDsClientPidFromLogFileName(const std::string &file, const std::string &filePath);
+
     litebus::Future<bool> CollectAddFilesFuture(const std::list<litebus::Future<bool>> &adds);
+
+    // for reuse logPrefix
+    std::unordered_map<std::string, std::string> logPrefix2RuntimeID_;
+    std::unordered_map<std::string, std::string> runtimeID2LogPrefix_;
+    std::deque<std::string> logPrefixDequeue_;
+    std::string actorPid_ = std::to_string(getpid());
+    int logCount_ = 0;
+    bool logReuse_ = false;
 };
 
 }  // namespace functionsystem::runtime_manager

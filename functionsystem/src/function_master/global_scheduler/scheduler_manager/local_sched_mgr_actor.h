@@ -24,9 +24,9 @@
 
 #include "common/explorer/explorer.h"
 #include "common/leader/business_policy.h"
-#include "proto/pb/message_pb.h"
-#include "status/status.h"
-#include "request_sync_helper.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
+#include "common/utils/request_sync_helper.h"
 #include "domain_sched_mgr_actor.h"
 
 namespace functionsystem::global_scheduler {

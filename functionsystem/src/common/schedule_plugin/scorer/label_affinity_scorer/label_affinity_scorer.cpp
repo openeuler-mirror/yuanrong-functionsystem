@@ -16,7 +16,7 @@
 
 #include "label_affinity_scorer.h"
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
 #include "common/schedule_plugin/common/affinity_utils.h"
 #include "common/schedule_plugin/common/constants.h"
@@ -109,16 +109,16 @@ int64_t CalculateResourceAffinityScore(const std::string &unitID, const resource
         if (score == ZERO_SCORE) {
             YRLOG_DEBUG("resourceUnit({}) resource requiredaffinity score is 0", unitID);
         }
-        totalScore += score;
+        totalScore += score * RESOURCE_AFFINITY_WEIGHT;
     }
 
-    if (affinity.resource().has_requiredantiaffinity() &&
-        IsAffinityPriority(affinity.resource().requiredantiaffinity())) {
+    if (affinity.resource().has_requiredantiaffinity()
+        && IsAffinityPriority(affinity.resource().requiredantiaffinity())) {
         auto score = AntiAffinityScorer(unitID, affinity.resource().requiredantiaffinity(), labels);
         if (score == ZERO_SCORE) {
             YRLOG_DEBUG("resourceUnit({}) resource requiredantiaffinity score is 0", unitID);
         }
-        totalScore += score;
+        totalScore += score * RESOURCE_AFFINITY_WEIGHT;
     }
 
     YRLOG_DEBUG("resourceUnit({}), resource preferred score {}", unitID, totalScore);
@@ -167,6 +167,20 @@ int64_t CalculateDataAffinityScore(const std::string &unitID, const resource_vie
     return score;
 }
 
+int64_t CalculateTenantAffinityScore(const std::string &unitID, const resource_view::InstanceInfo &instance,
+                                     const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
+{
+    int64_t score = 0;
+    const auto &affinity = instance.scheduleoption().affinity();
+    if (affinity.has_inner() && affinity.inner().has_tenant() && affinity.inner().tenant().has_preferredaffinity()) {
+        score = AffinityScorer(unitID, affinity.inner().tenant().preferredaffinity(), labels);
+        if (score == ZERO_SCORE) {
+            YRLOG_DEBUG("resourceUnit({}) inner tenant preferredaffinity score is 0", unitID);
+        }
+    }
+    return score;
+}
+
 int64_t CalculateGroupScheduleAffinityScore(
     const std::string &unitID, const resource_view::InstanceInfo &instance,
     const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
@@ -205,14 +219,18 @@ int64_t CalculateInnerAffinityScore(const resource_view::ResourceUnit &resourceU
     auto ownerId = resourceUnit.ownerid();
 
     // 1.calculate inner preempt affinity score
-    totalScore += CalculatePreemptAffinityScore(ownerId, instance, preContext->allLocalLabels[ownerId]);
+    auto localNodeLabels = GetLocalNodeLabels(resourceUnit, preContext);
+    totalScore += CalculatePreemptAffinityScore(ownerId, instance, localNodeLabels);
 
     // 2.calculate inner data affinity score
     totalScore += CalculateDataAffinityScore(unitId, instance, resourceUnit.nodelabels());
 
-    // 3.calculate inner Group Schedule affinity score
+    // 3.calculate inner Tenant affinity score
     // merge scheduled instance labels
     auto unitChildAgentLabels = resourceUnit.nodelabels() + preContext->allocatedLabels[unitId];
+    totalScore += CalculateTenantAffinityScore(unitId, instance, unitChildAgentLabels);
+
+    // 3.calculate inner Group Schedule affinity score
     totalScore += CalculateGroupScheduleAffinityScore(unitId, instance, unitChildAgentLabels);
 
     return totalScore;
@@ -229,7 +247,8 @@ int64_t LabelAffinityScorer::CalculatePreferredScore(
 
     // 1.calculate instance-related affinity score
     if (IsNodeAffinityScope(instance)) {
-        totalScore += CalculateInstanceAffinityScore(unitId, instance, preContext->allLocalLabels[ownerId]);
+        auto localNodeLabels = GetLocalNodeLabels(resourceUnit, preContext);
+        totalScore += CalculateInstanceAffinityScore(unitId, instance, localNodeLabels);
     } else {
         // merge scheduled instance labels
         auto unitChildAgentLabels = resourceUnit.nodelabels() + preContext->allocatedLabels[unitId];
@@ -257,7 +276,7 @@ schedule_framework::NodeScore LabelAffinityScorer::Score(
     }
 
     const auto preContext = std::dynamic_pointer_cast<schedule_framework::PreAllocatedContext>(ctx);
-    if (preContext == nullptr || preContext->pluginCtx == nullptr) {
+    if (preContext == nullptr || preContext->pluginCtx == nullptr || preContext->allLocalLabels.empty()) {
         YRLOG_WARN("{}|invalid context for LabelAffinityScorer", instance.requestid());
         return nodeScore;
     }

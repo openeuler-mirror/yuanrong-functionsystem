@@ -17,8 +17,8 @@
 #ifndef FUNCTION_AGENT_FUNCTION_AGENT_STARTUP_H
 #define FUNCTION_AGENT_FUNCTION_AGENT_STARTUP_H
 
-#include "http/http_server.h"
-#include "module_driver.h"
+#include "common/http/http_server.h"
+#include "common/utils/module_driver.h"
 #include "function_agent/agent_service_actor.h"
 #include "function_agent/common/utils.h"
 
@@ -39,6 +39,7 @@ struct FunctionAgentStartParam {
     std::string agentUid;
     std::string localNodeID;
     bool enableSignatureValidation;
+    std::string componentName;
 };
 
 class FunctionAgentDriver : public ModuleDriver {

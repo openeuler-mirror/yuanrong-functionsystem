@@ -19,9 +19,9 @@
 #include "async/future.hpp"
 #include "common/utils/actor_driver.h"
 #include "meta_store_client/meta_store_client.h"
-#include "proto/pb/posix_pb.h"
+#include "common/proto/pb/posix_pb.h"
 #include "common/schedule_decision/scheduler.h"
-#include "resource_type.h"
+#include "common/resource_view/resource_type.h"
 #include "common/resource_view/resource_view_mgr.h"
 #include "function_proxy/common/posix_client/control_plane_client/control_interface_client_manager_proxy.h"
 #include "function_proxy/local_scheduler/instance_control/instance_ctrl.h"
@@ -233,6 +233,10 @@ private:
     void OnClearGroup(const litebus::AID &to, const std::string &groupID);
 
     void ClearLocalGroupInstanceInfo(const InstanceInfo &info);
+
+    void OnCheckInstanceRunning(const litebus::Future<bool> &isRunning, const litebus::AID &from,
+                                const std::shared_ptr<messages::ScheduleRequest> &req,
+                                const std::shared_ptr<messages::GroupResponse> &resp);
 
 private:
     struct ReservedContext {

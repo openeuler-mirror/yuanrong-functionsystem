@@ -20,8 +20,8 @@
 #include <memory>
 #include <sstream>
 
-#include "logs/logging.h"
-#include "proto/pb/posix_pb.h"
+#include "common/logs/logging.h"
+#include "common/proto/pb/posix_pb.h"
 
 namespace functionsystem::busproxy {
 using TimePoint = std::chrono::time_point<std::chrono::high_resolution_clock>;

@@ -40,12 +40,30 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-message(STATUS "build type: " ${CMAKE_BUILD_TYPE})
-message(STATUS "build config directory: " ${BUILD_CONFIG_DIR})
+# build type
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+message(STATUS "Set logs build type: " ${CMAKE_BUILD_TYPE})
+message(STATUS "Set logs build config path: " ${BUILD_CONFIG_DIR})
 
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_LIST_DIR}/cmake)
+# 引入三方件与配置
+# 设置 vendor 文件夹路径 | VENDOR_DIR
+set(VENDOR_DIR ${CMAKE_CURRENT_LIST_DIR}/../../vendor)
+message(STATUS "VENDOR_DIR: ${VENDOR_DIR}")
+# 设置三方件编译配置，导入公共参数
+include(${VENDOR_DIR}/vendor_utils.cmake)
+# 引入三方件编译的 cmake 文件
+list(APPEND CMAKE_MODULE_PATH ${VENDOR_CMAKE_DIR})
+include(zlib)
+include(spdlog)
+include(cjson)
 
-include(dependencies)
+if (LOGS_BUILD_TEST)
+    include(gtest_1_12_1)
+endif()
+message(STATUS "Config vendor cmake files done")
+# ---------------------------------------------------------------------------------------
 
 set(CMAKE_CXX_STANDARD 17)
 

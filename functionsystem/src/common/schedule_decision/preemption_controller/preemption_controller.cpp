@@ -17,7 +17,7 @@
 
 #include <sstream>
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/scheduler_framework/utils/label_affinity_utils.h"
 
 namespace functionsystem::schedule_decision {
@@ -104,6 +104,10 @@ PreemptResult PreemptionController::PreemptDecision(const std::shared_ptr<schedu
             infeasibleCtx.InsertInfeasibleUnit(unitID);
             continue;
         }
+        if (IsCrossedTenant(instance, frag)) {
+            infeasibleCtx.InsertCrossTenantUnit(unitID);
+            continue;
+        }
         auto preemptedUnit = ChoseInstanceToPreempted(preContext, instance, frag, score);
         if (preemptedUnit.preemptedInstances.empty()) {
             infeasibleCtx.InsertNoPreemptableInstanceUnits(unitID);
@@ -132,6 +136,16 @@ bool PreemptionController::IsUnitMeetRequired(const std::shared_ptr<schedule_fra
 {
     auto cap = GetAllocatedResource(frag.id(), frag.capacity(), ctx);
     if (instance.resources() <= cap) {
+        return true;
+    }
+    return false;
+}
+
+bool PreemptionController::IsCrossedTenant(const resource_view::InstanceInfo &instance,
+                                           const resource_view::ResourceUnit &frag)
+{
+    if (frag.nodelabels().count(TENANT_ID) != 0 &&
+        frag.nodelabels().at(TENANT_ID).items().count(instance.tenantid()) == 0) {
         return true;
     }
     return false;
@@ -173,8 +187,8 @@ bool PreemptionController::IsInstancePreemptable(const resource_view::InstanceIn
     // anti affinity was filtered by IsResourceAffinityMeetRequired
     const auto &affinity = srcInstance.scheduleoption().affinity();
     if (affinity.has_instance() &&affinity.instance().has_requiredaffinity()) {
-        return RequiredFilter(dstInstance.instanceid(), affinity.instance().requiredaffinity(),
-                              ToLabelKVs(dstInstance.labels()));
+        return !RequiredFilter(dstInstance.instanceid(), affinity.instance().requiredaffinity(),
+                              ToLabelKVs(dstInstance.labels()) + ToLabelKVs(dstInstance.kvlabels()));
     }
     return true;
 }
@@ -188,8 +202,10 @@ bool InstanceAffinityComparator(const resource_view::InstanceInfo &instance, con
         return GetPreemptionPriority(l, frag) < GetPreemptionPriority(r, frag);
     }
     // if affinity is required on topology scope, the topology index is required
-    auto lAffinity = CalculateInstanceAffinityScore(l.instanceid(), instance, ToLabelKVs(l.labels()));
-    auto rAffinity = CalculateInstanceAffinityScore(r.instanceid(), instance, ToLabelKVs(r.labels()));
+    auto lAffinity =
+        CalculateInstanceAffinityScore(l.instanceid(), instance, ToLabelKVs(l.labels()) + ToLabelKVs(l.kvlabels()));
+    auto rAffinity =
+        CalculateInstanceAffinityScore(r.instanceid(), instance, ToLabelKVs(r.labels()) + ToLabelKVs(r.kvlabels()));
     if (lAffinity != rAffinity) {
         return lAffinity < rAffinity;
     }
@@ -225,7 +241,7 @@ PreemptableUnit PreemptionController::ChoseInstanceToPreempted(
     resource_view::Resources preemptedResources = BuildResources(0, 0);
     for (const auto &preemptedInstance : candidatePreemptedInstances) {
         avail = avail + preemptedInstance.resources();
-        unitLabels = unitLabels - ToLabelKVs(preemptedInstance.labels());
+        unitLabels = unitLabels - ToLabelKVs(preemptedInstance.labels()) - ToLabelKVs(preemptedInstance.kvlabels());
         result.push_back(preemptedInstance);
         preemptedResources = preemptedResources + preemptedInstance.resources();
         if (instance.resources() <= avail) {

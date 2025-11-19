@@ -37,12 +37,10 @@ std::unique_ptr<FunctionAgentMgr> FunctionAgentMgr::Create(const std::string &no
 }
 
 void FunctionAgentMgr::Start(const std::shared_ptr<InstanceCtrl> &instanceCtrl,
-                             const std::shared_ptr<resource_view::ResourceView> &resourceView,
-                             const std::shared_ptr<HeartbeatObserverCtrl> &heartbeatObserverCtrl)
+                             const std::shared_ptr<resource_view::ResourceView> &resourceView)
 {
     BindResourceView(resourceView);
     BindInstanceCtrl(instanceCtrl);
-    BindHeartBeatObserverCtrl(heartbeatObserverCtrl);
 
     (void)litebus::Spawn(actor_);
 }
@@ -89,12 +87,6 @@ void FunctionAgentMgr::BindResourceView(const std::shared_ptr<resource_view::Res
     ASSERT_IF_NULL(resourceView);
     ASSERT_IF_NULL(actor_);
     actor_->BindResourceView(resourceView);
-}
-
-void FunctionAgentMgr::BindHeartBeatObserverCtrl(const std::shared_ptr<HeartbeatObserverCtrl> &heartbeatObserverCtrl)
-{
-    ASSERT_IF_NULL(actor_);
-    actor_->BindHeartBeatObserverCtrl(heartbeatObserverCtrl);
 }
 
 litebus::Future<messages::UpdateCredResponse> FunctionAgentMgr::UpdateCred(
@@ -156,6 +148,13 @@ void FunctionAgentMgr::SetAbnormal()
 {
     ASSERT_IF_NULL(actor_);
     return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::SetAbnormal);
+}
+
+litebus::Future<messages::StaticFunctionChangeResponse> FunctionAgentMgr::NotifyFunctionStatusChange(
+    const std::shared_ptr<messages::StaticFunctionChangeRequest> &request, const std::string &funcAgentID)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::NotifyFunctionStatusChange, request, funcAgentID);
 }
 
 }  // namespace functionsystem::local_scheduler

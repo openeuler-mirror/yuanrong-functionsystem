@@ -43,6 +43,11 @@ void HealthCheck::RegisterProcessExitCallback(const std::function<void(const pid
     litebus::Async(actor_->GetAID(), &HealthCheckActor::RegisterProcessExitCallback, func);
 }
 
+void HealthCheck::RegisterHandleLogPrefixExit(const std::function<void(const std::string)> &func)  const
+{
+    litebus::Async(actor_->GetAID(), &HealthCheckActor::RegisterHandleLogPrefixExit, func);
+}
+
 void HealthCheck::AddRuntimeRecord(const litebus::AID &to, const pid_t &pid, const std::string &instanceID,
                                    const std::string &runtimeID, const std::string &stdLogName) const
 {

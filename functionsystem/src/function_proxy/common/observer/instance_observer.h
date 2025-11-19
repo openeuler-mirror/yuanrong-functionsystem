@@ -18,7 +18,8 @@
 
 #include <memory>
 #include <string>
-#include "resource_type.h"
+#include "common/resource_view/resource_type.h"
+#include "function_proxy/common/state_machine/instance_listener.h"
 
 namespace functionsystem {
 
@@ -31,7 +32,7 @@ public:
     virtual void Detach(const std::shared_ptr<InstanceListener> &listener) = 0;
     virtual void NotifyUpdateInstance(const std::string &instanceID,
                                       const resource_view::InstanceInfo &instanceInfo, bool isForceUpdate) = 0;
-    virtual void NotifyDeleteInstance(const std::string &instanceID) = 0;
+    virtual void NotifyDeleteInstance(const std::string &instanceID, int64_t modRevision) = 0;
 };
 
 }  // namespace functionsystem

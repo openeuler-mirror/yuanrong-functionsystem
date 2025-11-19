@@ -21,9 +21,9 @@
 #include <async/future.hpp>
 
 #include "common/utils/actor_driver.h"
-#include "proto/pb/message_pb.h"
-#include "status/status.h"
-#include "proto/pb/posix_pb.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
+#include "common/proto/pb/posix_pb.h"
 
 namespace functionsystem::local_scheduler {
 class ResourceGroupCtrl : public ActorDriver {

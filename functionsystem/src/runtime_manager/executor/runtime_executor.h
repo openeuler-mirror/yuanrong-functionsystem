@@ -24,17 +24,20 @@
 #include <shared_mutex>
 
 #include "async/defer.hpp"
-#include "config/build.h"
 #include "common/file_monitor/monitor_callback_actor.h"
-#include "metrics/metrics_adapter.h"
-#include "proto/pb/message_pb.h"
-#include "status/status.h"
-#include "files.h"
+#include "common/metrics/metrics_adapter.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
+#include "common/utils/capability.h"
+#include "common/utils/cmd_tool.h"
+#include "common/utils/files.h"
+#include "config/build.h"
 #include "exec/exec.hpp"
 #include "executor.h"
 #include "runtime_manager/config/flags.h"
 #include "runtime_manager/utils/std_redirector.h"
-#include "common/utils/cmd_tool.h"
+#include "utils/volume_mount.h"
+#include "virtual_env_manager/virtual_env_manager.h"
 
 namespace functionsystem::runtime_manager {
 
@@ -55,6 +58,12 @@ public:
 
     void UpdatePrestartRuntimePromise(pid_t pid) override;
 
+    void ClearCapability() override
+    {
+        cap_value_t cap_list[CAP_LEN] = { CAP_SYS_ADMIN, CAP_SETGID, CAP_SETUID };
+        ClearCapabilities(cap_list, CAP_LEN);
+    }
+
     litebus::Future<messages::UpdateCredResponse> UpdateCredForRuntime(
         const std::shared_ptr<messages::UpdateCredRequest> &request) override;
 
@@ -72,15 +81,18 @@ public:
                                                                 const int limit) override;
 
 protected:
+    std::shared_ptr<VolumeMount> mounter_;
     void Init() override;
 
     void Finalize() override;
 
     void InitPrestartRuntimePool() override;
 
+    void InitVirtualEnvIdleTimeLimit() override;
+
     PrestartProcess GetRuntimeFromPool(const std::string &language, const std::string &schedulePolicy);
 
-    static Status PostStartExecHook(const messages::RuntimeConfig &config);
+    static Status PostStartExecHook(const messages::RuntimeConfig &config, const std::string &instanceID);
 
 private:
     std::map<std::string, messages::RuntimeInstanceInfo> runtimeInstanceInfoMap_;
@@ -232,7 +244,7 @@ private:
 
     messages::StartInstanceResponse GenSuccessStartInstanceResponse(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::shared_ptr<litebus::Exec> &execPtr,
-        const std::string &runtimeID, const std::string &port);
+        const std::string &port);
 
     void KillOtherPrestartRuntimeProcess();
 
@@ -273,16 +285,17 @@ private:
     Status HandleCondaCommand(const google::protobuf::Map<std::string, std::string> &deployOptions,
                               const std::string &condaEnvFile, const messages::RuntimeInstanceInfo &info) const;
 
-    std::pair<Status, std::vector<std::string>> PythonBuildFinalArgs(
-        const std::string &port, const std::string &execPath, const std::string &deployDir,
-        const messages::RuntimeInstanceInfo &info,
-        const std::shared_ptr<messages::StartInstanceRequest> &request) const;
+    std::pair<Status, std::vector<std::string>> PythonBuildFinalArgs(const std::string &port,
+                                                                     const std::string &execPath,
+                                                                     const std::string &deployDir,
+                                                                     const messages::RuntimeInstanceInfo &info) const;
 
     int64_t gracefulShutdownTime_{ 0 };
 
     litebus::AID functionAgentAID_;
     std::shared_ptr<MonitorCallBackActor> monitorCallBackActor_{ nullptr };
     std::shared_ptr<CmdTool> cmdTool_;
+    std::shared_ptr<VirtualEnvManager> virtualEnvMgr_{ nullptr };
 };
 
 class RuntimeExecutorProxy : public ExecutorProxy {
@@ -318,6 +331,11 @@ public:
     litebus::Future<std::map<std::string, messages::RuntimeInstanceInfo>> GetRuntimeInstanceInfos() override;
 
     void UpdatePrestartRuntimePromise(pid_t pid) override;
+
+    void ClearCapability() override
+    {
+        litebus::Async(executor_->GetAID(), &RuntimeExecutor::ClearCapability);
+    }
 
     litebus::Future<bool> GracefulShutdown() override
     {

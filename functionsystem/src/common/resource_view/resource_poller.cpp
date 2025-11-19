@@ -16,7 +16,7 @@
 #include "resource_poller.h"
 
 #include "async/asyncafter.hpp"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "timer/timewatch.hpp"
 
 namespace functionsystem::resource_view {
@@ -80,7 +80,7 @@ void ResourcePoller::Reset(const std::string &id)
 
 void ResourcePoller::TryPullResource()
 {
-    auto currentTime = static_cast<unsigned long>(litebus::TimeWatch::Now());
+    const auto currentTime = static_cast<unsigned long>(litebus::TimeWatch::Now());
     std::vector<std::shared_ptr<ResourcePollInfo>> notReachTime;
     while (pulling_.size() < maxConcurrencyPull_ && !toPoll_.empty()) {
         auto pull = toPoll_.front();
@@ -95,7 +95,7 @@ void ResourcePoller::TryPullResource()
             toPoll_.pop();
             continue;
         }
-        auto promise = std::make_shared<litebus::Promise<bool>>();
+        const auto promise = std::make_shared<litebus::Promise<bool>>();
         pulling_[pull->id] = promise;
         sendPullResource_(pull->id);
         (void)promise->GetFuture().After(

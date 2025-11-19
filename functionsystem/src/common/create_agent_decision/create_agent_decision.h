@@ -17,11 +17,10 @@
 #ifndef COMMON_CREATE_AGENT_DECISION_CREATE_AGENT_DECISION_H
 #define COMMON_CREATE_AGENT_DECISION_CREATE_AGENT_DECISION_H
 
-#include "constants.h"
-#include "logs/logging.h"
-#include "proto/pb/message_pb.h"
-#include "resource_type.h"
-#include "status/status.h"
+#include "common/constants/constants.h"
+#include "common/logs/logging.h"
+#include "common/resource_view/resource_type.h"
+#include "common/status/status.h"
 
 namespace functionsystem {
 const std::set<std::string> POOLABLE_RESOURCES_KEYS{ resource_view::CPU_RESOURCE_NAME,
@@ -39,6 +38,12 @@ const std::set<std::string> POOLABLE_RESOURCES_KEYS{ resource_view::CPU_RESOURCE
 [[maybe_unused]] static bool NeedCreateAgent(const resources::InstanceInfo &info)
 {
     if (info.scheduleoption().schedpolicyname() != MONOPOLY_SCHEDULE) {
+        return false;
+    }
+    if (auto iter = info.createoptions().find(RESOURCE_OWNER_KEY);
+        iter != info.createoptions().end() && iter->second == STATIC_FUNCTION_OWNER_VALUE) {
+        YRLOG_DEBUG("{}|instance({}) is static function, no need to create new agent", info.requestid(),
+                    info.instanceid());
         return false;
     }
     if (info.createoptions().find(DELEGATE_CONTAINER) != info.createoptions().end()) {

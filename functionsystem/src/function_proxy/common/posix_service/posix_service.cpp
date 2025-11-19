@@ -16,10 +16,11 @@
 
 #include "posix_service.h"
 
-#include "logs/logging.h"
+#include "common/aksk/aksk_util.h"
+#include "common/logs/logging.h"
 #include "common/posix_auth_interceptor/posix_auth_interceptor.h"
-#include "proto/pb/posix/runtime_rpc.grpc.pb.h"
-#include "proto/pb/posix_pb.h"
+#include "common/proto/pb/posix/runtime_rpc.grpc.pb.h"
+#include "common/proto/pb/posix_pb.h"
 
 namespace functionsystem {
 using namespace runtime_rpc;
@@ -54,6 +55,45 @@ using namespace runtime_rpc;
     YRLOG_INFO("PosixService receive MessageStream from instance({}), runtime({})", metaData.instanceID,
                metaData.runtimeID);
 
+    ASSERT_IF_NULL(internalIam_);
+    if (!internalIam_->VerifyInstance(metaData.instanceID)) {
+        YRLOG_ERROR(
+            "client connect request unauthorized, instance may be deleted or invalid, instance id: {}, runtime id: {}",
+            metaData.instanceID, metaData.runtimeID);
+        return FailureReactor(
+            ::grpc::Status(::grpc::StatusCode::UNAUTHENTICATED, "instance of you specified may be deleted or invalid"));
+    }
+    // VerifyToken(token).Get() is performed in grpc thread��interface constraints must be synchronized
+    if (internalIam_->IsIAMEnabled()) {
+        auto credType = internalIam_->GetCredType();
+        switch (credType) {
+            case function_proxy::IAMCredType::TOKEN:
+                if (!internalIam_->VerifyToken(metaData.token).Get().IsOk()) {
+                    YRLOG_ERROR("client connect request unauthorized, instance id: {}, runtime id: {}",
+                                metaData.instanceID, metaData.runtimeID);
+                    return FailureReactor(
+                        ::grpc::Status(::grpc::StatusCode::UNAUTHENTICATED, "failed to verify token"));
+                }
+                break;
+            case function_proxy::IAMCredType::AK_SK: {
+                auto akSkContent = internalIam_->RequireCredentialByAK(metaData.accessKey).Get();
+                if (akSkContent == nullptr || akSkContent->IsValid().IsError()
+                    || !VerifyTimestamp(akSkContent->accessKey, akSkContent->secretKey, metaData.timestamp,
+                                        metaData.signature)) {
+                    YRLOG_ERROR("client connect request unauthorized, instance id: {}, runtime id: {}",
+                                metaData.instanceID, metaData.runtimeID);
+                    return FailureReactor(
+                        ::grpc::Status(::grpc::StatusCode::UNAUTHENTICATED, "failed to verify AK/SK."));
+                }
+                break;
+            }
+            default:
+                YRLOG_ERROR("invalid credType({}) for instance({}), runtime id: {}", static_cast<uint32_t>(credType),
+                            metaData.instanceID, metaData.runtimeID);
+                return FailureReactor(::grpc::Status(::grpc::StatusCode::UNAUTHENTICATED, "invalid credType."));
+        }
+    }
+
     if (PosixService::CheckClientIsReady(metaData.instanceID)) {
         YRLOG_ERROR(
             "client connect request unauthorized, instance id: {} already running, can't accept an new connection",
@@ -64,6 +104,12 @@ using namespace runtime_rpc;
     auto reactor = std::make_shared<grpc::PosixStream::ServerReactor>();
     std::shared_ptr<grpc::PosixClient> posixClient =
         std::make_shared<grpc::PosixStream>(reactor, context, metaData.instanceID, metaData.runtimeID);
+    if (internalIam_->IsIAMEnabled() && internalIam_->GetCredType() == function_proxy::IAMCredType::AK_SK) {
+        auto authInterceptor =
+            std::make_shared<PosixAuthInterceptor>(metaData.runtimeID, metaData.instanceID, metaData.accessKey);
+        authInterceptor->BindInternalIAM(internalIam_);
+        posixClient->SetAuthInterceptor(authInterceptor);
+    }
     PosixService::UpdateClient(metaData.instanceID, posixClient);
     if (updatePosixClientCallback_) {
         updatePosixClientCallback_(metaData.instanceID, metaData.runtimeID, posixClient);

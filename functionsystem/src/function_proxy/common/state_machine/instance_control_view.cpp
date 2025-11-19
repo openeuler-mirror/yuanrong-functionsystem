@@ -17,7 +17,7 @@
 #include "instance_control_view.h"
 
 #include "async/try.hpp"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/utils/struct_transfer.h"
 
 namespace functionsystem {
@@ -52,6 +52,11 @@ void InstanceControlView::Update(const std::string &instanceID, const resources:
     // update instance mod revision, when fast publish event send to other nodes, it can be filtered by mod revision
     if (auto modRevision = GetModRevisionFromInstanceInfo(instanceInfo);
         modRevision > 0 && machines_.find(instanceID) != machines_.end()) {
+        if (modRevision <= machines_.at(instanceID)->GetModRevision()) {
+            YRLOG_WARN("receive old instance update events, ignore, current({}) vs received({})",
+                       machines_.at(instanceID)->GetModRevision(), modRevision);
+            return;
+        }
         machines_.at(instanceID)->SetModRevision(modRevision);
     }
     if (!isForceUpdate && newOwner == self_ && !IsDriver(instanceInfo)) {
@@ -131,12 +136,20 @@ bool InstanceControlView::ReleaseOwner(const std::string &instanceID)
     return true;
 }
 
-void InstanceControlView::Delete(const std::string &instanceID)
+void InstanceControlView::Delete(const std::string &instanceID, int64_t modRevision)
 {
     std::lock_guard<std::mutex> guard(lock_);
     if (machines_.find(instanceID) != machines_.end()) {
         auto requestID = machines_[instanceID]->GetRequestID();
         auto machine = machines_[instanceID];
+
+        if (machines_[instanceID]->GetModRevision() != 0 && modRevision != -1
+            && modRevision < machines_[instanceID]->GetModRevision()) {
+            YRLOG_WARN("try delete new instance({}), revision({}), with old revision({}), ignore", instanceID,
+                       machines_[instanceID]->GetModRevision(), modRevision);
+            return;
+        }
+
         machine->ExecuteStateChangeCallback(machine->GetRequestID(), InstanceState::EXITED);
         // only owner would try to exit instance
         if (machine->GetOwner() == self_) {
@@ -186,7 +199,7 @@ bool InstanceControlView::IsDuplicateScheduling(const std::shared_ptr<messages::
     if (!mayGeneratedInstanceID.empty()) {
         instanceInfo->set_instanceid(mayGeneratedInstanceID);
         auto stateMachine = GetInstance(mayGeneratedInstanceID);
-        if (stateMachine == nullptr) {
+        if (stateMachine == nullptr || stateMachine->GetOwner() != self_) {
             return false;
         }
         auto preState = stateMachine->GetInstanceState();

@@ -19,8 +19,11 @@
 
 #include <utility>
 
+#include "common/constants.h"
 #include "common/utils/s3_config.h"
 #include "remote_deployer.h"
+#include "common/utils/test_util.h"
+#include "obs_wrapper.h"
 
 namespace functionsystem::function_agent {
 class S3Deployer : public RemoteDeployer {
@@ -30,18 +33,41 @@ class S3Deployer : public RemoteDeployer {
 
 public:
     explicit S3Deployer(std::shared_ptr<S3Config> config, messages::CodePackageThresholds codePackageThresholds,
-                        bool enableSignatureValidation = false)
-        : RemoteDeployer(std::move(codePackageThresholds), enableSignatureValidation), s3Config_(std::move(config))
+                        bool enableSignatureValidation = false);
+
+    // for test
+    S3Deployer(std::shared_ptr<S3Config> config, const std::shared_ptr<ObsWrapper> &obsWrapper,
+               messages::CodePackageThresholds codePackageThresholds, bool enableSignatureValidation = false)
+        : RemoteDeployer(std::move(codePackageThresholds), enableSignatureValidation),
+          s3Config_(std::move(config)),
+          obsWrapper_(obsWrapper)
+
     {
+        (void)InitHelper(gReconnectObsRetryCount);
     }
 
     ~S3Deployer() override;
 
     Status DownloadCode(const std::string &destFile, const ::messages::DeploymentConfig &config) override;
+
+    virtual Status RetryDownloadCode(const std::string &destFile, const ::messages::DeploymentConfig &config);
+
+protected:
+    Status InitHelper(uint32_t &retryCount);
+
+    bool CheckObsErrorNeedRetry(const obs_status &status);
+
+    Status Reconnect(uint32_t &retryCount, const obs_status &status);
+
 private:
     std::shared_ptr<S3Config> s3Config_;
+    std::shared_ptr<ObsWrapper> obsWrapper_;
+
+private:
+    bool InitObsOptions(obs_options *options, const ::messages::DeploymentConfig &config,
+                        const std::shared_ptr<S3Config> &s3Config) const;
+    FRIEND_TEST(S3DeployerPrivateTest, InitObsOptions);
 };
 
 }  // namespace functionsystem::function_agent
-
 #endif  // FUNCTION_AGENT_S3_DEPLOYER_H

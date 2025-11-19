@@ -19,9 +19,9 @@
 
 #include <string>
 
-#include "proto/pb/message_pb.h"
-#include "proto/pb/posix_pb.h"
-#include "status/status.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/proto/pb/posix_pb.h"
+#include "common/status/status.h"
 #include "async/uuid_generator.hpp"
 
 namespace functionsystem {
@@ -98,6 +98,19 @@ inline messages::DeployInstanceResponse GenDeployInstanceResponse(const StatusCo
     return resp;
 }
 
+inline messages::StaticFunctionChangeResponse GenStaticFunctionChangeResponse(const StatusCode &code,
+                                                                              const std::string &msg,
+                                                                              const std::string &requestID,
+                                                                              const std::string &instanceID)
+{
+    messages::StaticFunctionChangeResponse resp;
+    resp.set_code(static_cast<int32_t>(code));
+    resp.set_message(msg);
+    resp.set_requestid(requestID);
+    resp.set_instanceid(instanceID);
+    return resp;
+}
+
 inline std::shared_ptr<messages::KillInstanceRequest> GenKillInstanceRequest(const std::string &requestID,
                                                                              const std::string &instanceID,
                                                                              const std::string &traceID,
@@ -149,6 +162,7 @@ inline std::shared_ptr<messages::UpdateInstanceStatusRequest> GenUpdateInstanceS
 inline std::shared_ptr<KillRequest> GenKillRequest(const std::string &instanceID, int32_t signal)
 {
     auto killRequest = std::make_shared<KillRequest>();
+    killRequest->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
     killRequest->set_instanceid(instanceID);
     killRequest->set_signal(signal);
     return killRequest;

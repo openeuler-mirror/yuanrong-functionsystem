@@ -18,13 +18,13 @@
 #define LOCAL_SCHEDULER_LOCAL_SCHED_DRIVER_H
 
 #include "common/distribute_cache_client/ds_cache_client_impl.h"
-#include "http/http_server.h"
+#include "common/http/http_server.h"
 #include "meta_storage_accessor/meta_storage_accessor.h"
 #include "common/posix_service/posix_service.h"
 #include "common/resource_view/resource_view_mgr.h"
-#include "rpc/server/common_grpc_server.h"
-#include "status/status.h"
-#include "module_driver.h"
+#include "common/rpc/server/common_grpc_server.h"
+#include "common/status/status.h"
+#include "common/utils/module_driver.h"
 #include "local_scheduler/abnormal_processor/abnormal_processor.h"
 #include "local_scheduler/bundle_manager/bundle_mgr.h"
 #include "local_scheduler/ds_healthy_checker/ds_healthy_checker.h"
@@ -60,6 +60,7 @@ struct LocalSchedStartParam {
     ResourceViewActor::Param resourceViewActorParam;
     std::shared_ptr<ControlInterfaceClientManagerProxy> controlInterfacePosixMgr;
     std::shared_ptr<function_proxy::ControlPlaneObserver> controlPlaneObserver;
+    std::shared_ptr<function_proxy::InternalIAM> internalIAM;
     int32_t maxGrepSize;
     bool enableDriver;
     bool isPseudoDataPlane;

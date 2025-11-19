@@ -297,7 +297,7 @@ bool UdpUtil::ParseMsgHeader(const uint32_t &remainingLen, char *cur, MsgHeader 
 {
     if (remainingLen < sizeof(MsgHeader)) {
         BUSLOG_ERROR("remainingLen(r),sizeof MsgHeader(s),state(t):r:{},s:{},t:{}", remainingLen, sizeof(MsgHeader),
-                     MSG_HEADER);
+                     static_cast<std::underlying_type_t<State>>(MSG_HEADER));
         return false;
     }
     *headerPtr = reinterpret_cast<MsgHeader *>(cur);

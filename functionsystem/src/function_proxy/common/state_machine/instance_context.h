@@ -19,10 +19,10 @@
 
 #include <cstdint>
 
-#include "constants.h"
-#include "proto/pb/message_pb.h"
-#include "proto/pb/posix/resource.pb.h"
-#include "resource_type.h"
+#include "common/constants/constants.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/proto/pb/posix/resource.pb.h"
+#include "common/resource_view/resource_type.h"
 #include "common/schedule_decision/scheduler_common.h"
 #include "common/types/instance_state.h"
 

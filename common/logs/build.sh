@@ -59,11 +59,6 @@ function checkopts()
                 exit 1
             fi
             ;;
-        T)
-            THIRDPARTY_SRC_DIR=$(readlink -f "${OPTARG}")
-            THIRDPARTY_INSTALL_DIR="${THIRDPARTY_SRC_DIR}/out"
-            echo "download opensource to ${THIRDPARTY_SRC_DIR}"
-            ;;
         *)
             echo "command not recognized"
             exit 1
@@ -80,8 +75,6 @@ function configure()
         -DCMAKE_INSTALL_PREFIX=${OUTPUT_DIR} \
         -DBUILD_CONFIG_DIR="${BUILD_CONFIG_DIR}" \
         -DBUILD_GCOV="${BUILD_GCOV}" \
-        -DTHIRDPARTY_SRC_DIR="${THIRDPARTY_SRC_DIR}" \
-        -DTHIRDPARTY_INSTALL_DIR="${THIRDPARTY_INSTALL_DIR}" \
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
         ..
 }
@@ -116,7 +109,6 @@ function install()
 }
 
 checkopts $@
-download_opensource
 configure
 compile
 test

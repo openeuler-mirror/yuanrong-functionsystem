@@ -15,9 +15,8 @@
  */
 #include "posix_stream_manager_proxy.h"
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "shared_client_manager.h"
-#include "async/async.hpp"
 
 namespace functionsystem {
 litebus::Future<std::shared_ptr<DataInterfacePosixClient>> PosixStreamManagerProxy::NewDataInterfacePosixClient(

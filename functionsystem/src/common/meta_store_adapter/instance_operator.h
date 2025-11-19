@@ -18,7 +18,7 @@
 #define COMMON_META_STORE_ADAPTER_INSTANCE_OPERATOR_H
 
 #include "meta_store_client/meta_store_client.h"
-#include "metadata/metadata.h"
+#include "common/metadata/metadata.h"
 
 namespace functionsystem {
 
@@ -44,7 +44,7 @@ struct OperateResult {
 
 struct OperateInfo {
     std::string key;
-    std::string value;
+    std::vector<std::string> values;
     uint64_t keySize;
     int64_t version;
     bool isCentOS;
@@ -79,6 +79,8 @@ private:
     static OperateResult OnCreate(const OperateInfo &operateInfo);
     static OperateResult OnModify(const OperateInfo &operateInfo);
     static OperateResult OnForceDelete(const OperateInfo &operateInfo);
+    static bool CheckGetResponse(const TxnOperationResponse &resp, const std::string &key, const std::string &value,
+                                 OperateResult &result);
     static bool PrintResponse(const OperateInfo &operateInfo);
     static void OnPrintResponse(const KeyValue& kv);
 };

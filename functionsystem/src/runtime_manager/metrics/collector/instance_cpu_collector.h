@@ -24,14 +24,8 @@ namespace functionsystem::runtime_manager {
 
 namespace instance_metrics {
 const std::string PROCESS_STAT_PATH_EXPRESS = "/proc/?/stat";
-const int8_t CPU_UTIME_INDEX = 13;
-const int8_t CPU_STIME_INDEX = 14;
-const int8_t CPU_CUTIME_INDEX = 15;
-const int8_t CPU_CSTIME_INDEX = 16;
-const int8_t PROCESS_CPU_STAT_LEN = 52;
-const uint8_t CPU_JIFFIES_INTERVAL = 10;
 const uint8_t CPU_CAL_INTERVAL = 100;
-const uint32_t CPU_SCALE = 1000;
+const double PERCENT_BASE = 100.0;
 }
 
 class InstanceCPUCollector : public BaseInstanceCollector, public BaseMetricsCollector {
@@ -47,8 +41,9 @@ public:
     Metric GetLimit() const override;
 
 private:
-    static litebus::Option<double> GetCpuJiffies(const pid_t &pid, const std::shared_ptr<ProcFSTools> procFSTools);
-    static litebus::Option<double> CalJiffiesForCPUProcess(const std::string &stat);
+    unsigned long long GetProcessCpuTime(const pid_t &pid, const std::shared_ptr<ProcFSTools> procFSTools) const;
+    unsigned long long CalJiffiesForCPUProcess(const std::string &stat) const;
+    unsigned long long GetTotalCpuTime(std::shared_ptr<ProcFSTools> procFSTools) const;
 };
 
 }

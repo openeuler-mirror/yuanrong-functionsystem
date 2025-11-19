@@ -23,15 +23,18 @@
 #include "function_proxy/busproxy/instance_proxy/call_cache.h"
 #include "function_proxy/busproxy/instance_proxy/perf.h"
 #include "function_proxy/busproxy/instance_proxy/forward_interface.h"
+#include "function_proxy/common/iam/internal_iam.h"
 #include "function_proxy/common/posix_client/data_plane_client/data_interface_posix_client.h"
 #include "function_proxy/common/posix_client/data_plane_client/data_interface_client_manager_proxy.h"
 
 namespace functionsystem::busproxy {
 
+SharedStreamMsg CreateCallResponse(const common::ErrorCode &code, const std::string &message,
+                                   const std::string &messageID);
+
 struct InstanceRouterInfo {
     bool isLocal = false;
     bool isReady = false;
-    bool isLowReliability = false;
     std::string runtimeID;
     std::string proxyID;
     litebus::AID remote;
@@ -75,6 +78,8 @@ public:
 
     std::list<litebus::Future<SharedStreamMsg>> GetOnRespFuture();
 
+    Status AuthorizeInvoke(const std::string &callerTenantID);
+
     std::string GetTenantID()
     {
         return tenantID_;
@@ -91,11 +96,17 @@ public:
         clientManager_ = clientManager;
     }
 
+    static void BindInternalIAM(const std::shared_ptr<functionsystem::function_proxy::InternalIAM> &internalIam)
+    {
+        internalIam_ = internalIam;
+    }
+
 private:
     void TriggerCall(const std::string &requestID);
     void ResponseAllMessage();
 
     inline static std::shared_ptr<DataInterfaceClientManagerProxy> clientManager_ { nullptr };
+    inline static std::shared_ptr<functionsystem::function_proxy::InternalIAM> internalIam_{ nullptr };
 
     void ReportCallTimesMetrics();
 
@@ -113,7 +124,6 @@ private:
     bool isFatal_ { false };
     bool isReject_ { false };
     bool isReady_ { false };
-    bool isLowReliability_ {false};
     std::string fatalMsg_;
     StatusCode fatalCode_ {StatusCode::SUCCESS};
     std::shared_ptr<CallCache> callCache_ { nullptr };

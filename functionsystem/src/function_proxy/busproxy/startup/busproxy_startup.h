@@ -19,10 +19,14 @@
 
 #include "busproxy/memory_monitor/memory_monitor.h"
 #include "busproxy/registry/service_registry.h"
-#include "status/status.h"
+#include "common/status/status.h"
+#include "common/constants/actor_name.h"
 #include "function_proxy/common/communication/proxy/actor.h"
+#include "function_proxy/common/iam/internal_iam.h"
 #include "function_proxy/common/observer/data_plane_observer/data_plane_observer.h"
 #include "function_proxy/common/posix_client/data_plane_client/data_interface_client_manager_proxy.h"
+#include "function_proxy/busproxy/instance_proxy/instance_proxy.h"
+#include "function_proxy/busproxy/instance_proxy/request_router.h"
 
 namespace functionsystem {
 
@@ -34,6 +38,7 @@ struct BusProxyStartParam {
     std::shared_ptr<DataInterfaceClientManagerProxy> dataInterfaceClientMgr{ nullptr };
     std::shared_ptr<function_proxy::DataPlaneObserver> dataPlaneObserver{ nullptr };
     std::shared_ptr<MemoryMonitor> memoryMonitor{ nullptr };
+    std::shared_ptr<function_proxy::InternalIAM> internalIam{ nullptr };
     bool isEnablePerf;
     bool unRegisterWhileStop;
 };
@@ -55,11 +60,13 @@ private:
     void StartProxyActor(const std::string &nodeID, const std::string &modelName);
     void InitRegistry(const litebus::AID &proxyActorAID, const std::string &nodeID,
                       std::shared_ptr<MetaStorageAccessor> metaStorage);
+    void StartRequestRouter();
 
     BusProxyStartParam param_;
     std::shared_ptr<proxy::Actor> proxyActor_{ nullptr };
     std::shared_ptr<MetaStorageAccessor> metaStorageAccessor_{ nullptr };
     std::shared_ptr<ServiceRegistry> registry_{ nullptr };
+    std::shared_ptr<busproxy::RequestRouter> requestRouter_;
 };
 }  // namespace functionsystem
 

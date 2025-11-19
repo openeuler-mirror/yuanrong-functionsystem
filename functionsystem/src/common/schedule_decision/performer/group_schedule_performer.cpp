@@ -31,7 +31,7 @@ bool CheckGroupCanBatch(const std::shared_ptr<schedule_decision::GroupItem> &sch
         return true;
     }
     if (!schedule_plugin::RequiredAntiAffinityFilter("", affinity.instance().requiredantiaffinity(),
-                                                     ToLabelKVs(instance.labels()))) {
+                                                     ToLabelKVs(instance.labels()) + ToLabelKVs(instance.kvlabels()))) {
         return false;
     }
     return true;
@@ -150,8 +150,8 @@ GroupScheduleResult GroupSchedulePerformer::Schedule(
         }
         // copy is triggered only when preemption is enabled and resources are insufficient for the first time.
         if (preemptInstanceCallback_ != nullptr && cachedForPreemption == nullptr) {
-            auto tmp = resource_view::ResourceViewInfo{ resourceInfo.resourceUnit, resourceInfo.alreadyScheduled,
-                                                        resourceInfo.allLocalLabels };
+            auto tmp = resource_view::ResourceViewInfo{ resourceInfo.resourceUnit, resourceInfo.schedulerLevel,
+                                                        resourceInfo.alreadyScheduled, resourceInfo.allLocalLabels };
             cachedForPreemption = std::make_shared<resource_view::ResourceViewInfo>(std::move(tmp));
         }
         // if unPreemptable failure happened break to return failed.

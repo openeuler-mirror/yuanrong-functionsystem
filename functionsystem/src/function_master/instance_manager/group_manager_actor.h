@@ -24,9 +24,9 @@
 #include "common/types/instance_state.h"
 #include "common/leader/business_policy.h"
 #include "meta_store_client/meta_store_client.h"
-#include "resource_type.h"
-#include "status/status.h"
-#include "meta_store_kv_operation.h"
+#include "common/resource_view/resource_type.h"
+#include "common/status/status.h"
+#include "common/utils/meta_store_kv_operation.h"
 #include "function_master/global_scheduler/global_sched.h"
 #include "instance_manager.h"
 
@@ -145,12 +145,14 @@ protected:
     void WatchGroups();
     void OnGroupWatch(const std::shared_ptr<Watcher> &watcher);
     void OnGroupWatchEvent(const std::vector<WatchEvent> &events);
-    litebus::Future<Status> WatchGroupThen(const std::shared_ptr<GetResponse> &response);
+
     void OnGroupPut(const std::string &groupKey, std::shared_ptr<messages::GroupInfo> groupInfo);
     void OnGroupDelete(const std::string &groupKey, const std::shared_ptr<messages::GroupInfo> &groupInfo);
 
-    litebus::Future<SyncResult> GroupInfoSyncer();
-    litebus::Future<SyncResult> OnGroupInfoSyncer(const std::shared_ptr<GetResponse> &getResponse);
+    litebus::Future<SyncResult> GroupInfoSyncer(const std::shared_ptr<GetResponse> &getResponse);
+
+    litebus::Future<Status> OnGetInstanceFromMetaStore(const litebus::Future<std::shared_ptr<GetResponse>> &getResponse,
+                                                       const std::string &instanceID, const std::string &groupID);
 
 protected:
     class GroupCaches {
@@ -293,6 +295,7 @@ protected:
             const std::string &instanceKey, const std::shared_ptr<resource_view::InstanceInfo> &instanceInfo);
         litebus::Future<Status> ProcessDeleteInstanceChildrenGroup(
             const std::string &instanceKey, const std::shared_ptr<resource_view::InstanceInfo> &instanceInfo);
+        void CheckGroupInstanceConsistency(std::shared_ptr<messages::GroupInfo> &groupInfo);
     };
 
     class SlaveBusiness : public Business {
@@ -384,6 +387,10 @@ protected:
         return *member_->groupCaches;
     }
     // ================= FOR TEST ONLY DONE
+
+    void CommitSuicide();
+    litebus::Future<Status> CheckSyncResponse(const std::shared_ptr<GetResponse> &response);
+    bool isSuicide_{ false };
 };
 }  // namespace functionsystem::instance_manager
 #endif  // FUNCTION_MASTER_INSTANCE_MANAGER_GROUP_MANAGER_ACTOR_H

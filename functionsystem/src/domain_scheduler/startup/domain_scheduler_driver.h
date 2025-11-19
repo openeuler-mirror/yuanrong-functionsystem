@@ -23,7 +23,7 @@
 #include "domain_scheduler/underlayer_scheduler_manager/underlayer_sched_mgr_actor.h"
 #include "domain_scheduler/domain_group_control/domain_group_ctrl_actor.h"
 #include "common/resource_view/resource_view_mgr.h"
-#include "module_driver.h"
+#include "common/utils/module_driver.h"
 #include "domain_scheduler/include/structure.h"
 
 namespace functionsystem::domain_scheduler {

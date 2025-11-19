@@ -24,12 +24,12 @@
 #include <functional>
 
 #include "common/explorer/explorer.h"
-#include "heartbeat/heartbeat_observer.h"
+#include "common/heartbeat/heartbeat_observer.h"
 #include "common/leader/business_policy.h"
-#include "random_number.h"
-#include "proto/pb/message_pb.h"
-#include "status/status.h"
-#include "request_sync_helper.h"
+#include "common/utils/random_number.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/status/status.h"
+#include "common/utils/request_sync_helper.h"
 
 namespace functionsystem::global_scheduler {
 
@@ -40,7 +40,7 @@ using CallbackWorkerFunc = std::function<void(const std::string &ip, const std::
 
 class DomainSchedMgrActor : public litebus::ActorBase, public std::enable_shared_from_this<DomainSchedMgrActor> {
 public:
-    explicit DomainSchedMgrActor(const std::string &name);
+    explicit DomainSchedMgrActor(const std::string &name, const uint32_t heartbeatTimeoutMs);
 
     ~DomainSchedMgrActor() override = default;
 
@@ -158,8 +158,6 @@ private:
     CallbackDelFunc delLocalSchedCallback_;
     CallbackWorkerFunc notifyWorkerStatusCallback_;
 
-    std::unique_ptr<HeartbeatObserveDriver> heartbeatObserveDriver_;
-
     std::shared_ptr<Member> member_;
 
     std::unordered_map<std::string, std::shared_ptr<Business>> businesses_;
@@ -175,6 +173,9 @@ private:
 
     BACK_OFF_RETRY_HELPER(DomainSchedMgrActor, messages::QueryResourcesInfoResponse, queryResourceHelper_);
     std::shared_ptr<litebus::AID> domainSchedulerAID_;
+    std::shared_ptr<HeartbeatObserveDriver> heartbeatObserveDriver_ = nullptr;
+
+    const uint32_t heartbeatTimeoutMs_ = 1000;
 };
 
 }  // namespace functionsystem::global_scheduler

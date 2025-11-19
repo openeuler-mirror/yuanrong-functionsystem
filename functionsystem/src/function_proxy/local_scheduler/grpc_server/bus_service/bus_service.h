@@ -18,7 +18,7 @@
 #ifndef FUNCTION_PROXY_LOCAL_SCHEDULER_GRPC_SERVER_BUS_SERVICE_BUS_SERVICE
 #define FUNCTION_PROXY_LOCAL_SCHEDULER_GRPC_SERVER_BUS_SERVICE_BUS_SERVICE
 
-#include "proto/pb/posix/bus_service.grpc.pb.h"
+#include "common/proto/pb/posix/bus_service.grpc.pb.h"
 #include "instance_control/instance_ctrl.h"
 #include "local_scheduler_service/local_sched_srv.h"
 

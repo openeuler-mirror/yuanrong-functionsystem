@@ -22,13 +22,13 @@
 #include "async/defer.hpp"
 #include "common/constants/actor_name.h"
 #include "common/constants/signal.h"
-#include "logs/logging.h"
-#include "metadata/metadata.h"
+#include "common/logs/logging.h"
+#include "common/metadata/metadata.h"
 #include "common/service_json/service_json.h"
 #include "common/types/instance_state.h"
 #include "common/utils/collect_status.h"
 #include "common/utils/generate_message.h"
-#include "meta_store_kv_operation.h"
+#include "common/utils/meta_store_kv_operation.h"
 #include "common/utils/struct_transfer.h"
 #include "instance_manager_util.h"
 
@@ -62,6 +62,7 @@ InstanceManagerActor::InstanceManagerActor(const std::shared_ptr<MetaStoreClient
     member_ = std::make_shared<Member>();
     member_->globalScheduler = scheduler;
     member_->runtimeRecoverEnable = param.runtimeRecoverEnable;
+    member_->enableAbnormalDoubleCheck_ = param.enableAbnormalDoubleCheck;
     member_->isMetaStoreEnable = param.isMetaStoreEnable;
     member_->servicesPath = param.servicesPath;
     member_->libPath = param.libPath;
@@ -137,32 +138,21 @@ void InstanceManagerActor::Init()
                 litebus::Async(aid, &InstanceManagerActor::OnLocalScheduleChange, events);
                 return true;
             },
-            []() -> litebus::Future<SyncResult> { return SyncResult{ Status::OK(), 0 }; })
+            [](const std::shared_ptr<GetResponse> &) -> litebus::Future<SyncResult> {
+                return SyncResult{ Status::OK() };
+            })
         .Then([aid(GetAID())](const std::shared_ptr<Watcher> &watcher) -> litebus::Future<Status> {
             litebus::Async(aid, &InstanceManagerActor::OnLocalScheduleWatch, watcher);
             return Status::OK();
         });
 
-    std::function<litebus::Future<Status>(const std::shared_ptr<GetResponse> &response)> syncAbnormalThen =
-        [aid(GetAID())](const std::shared_ptr<GetResponse> &response) -> litebus::Future<Status> {
-        litebus::Async(aid, &InstanceManagerActor::OnSyncAbnormalScheduler, response);
-        return Status::OK();
-    };
-    (void)member_->client->Get(KEY_ABNORMAL_SCHEDULER_PREFIX, { .prefix = true }).Then(syncAbnormalThen);
+    GetAndWatchAbnormal();
 
-    std::function<litebus::Future<Status>(const std::shared_ptr<GetResponse> &response)> syncInstanceThen =
-        [aid(GetAID())](const std::shared_ptr<GetResponse> &response) -> litebus::Future<Status> {
-        litebus::Async(aid, &InstanceManagerActor::OnSyncInstance, response);
-        return Status::OK();
-    };
-    (void)member_->client->Get(INSTANCE_PATH_PREFIX, { .prefix = true }).Then(syncInstanceThen);
+    GetAndWatchInstance();
+    GetAndWatchFunctionMeta();
 
     // start debug instance watcher
-    (void)member_->client->Get(DEBUG_INSTANCE_PREFIX, { .prefix = true })
-        .Then([aid(GetAID())](const std::shared_ptr<GetResponse> &response) {
-            litebus::Async(aid, &InstanceManagerActor::OnSyncDebugInstance, response);
-            return Status::OK();
-        });
+    GetAndWatchDebugInstance();
 
     (void)Explorer::GetInstance().AddLeaderChangedCallback(
         "InstanceManager", [aid(GetAID())](const LeaderInfo &leaderInfo) {
@@ -182,88 +172,72 @@ void InstanceManagerActor::Init()
             &InstanceManagerActor::ForwardQueryDebugInstancesInfoResponseHandler);
 }
 
-void InstanceManagerActor::OnSyncInstance(const std::shared_ptr<GetResponse> &response)
+void InstanceManagerActor::GetAndWatchInstance()
 {
-    if (!response->status.IsOk()) {
-        YRLOG_ERROR("failed to get all instances.");
-        return;
-    }
-    if (response->header.revision > INT64_MAX - 1) {
-        YRLOG_ERROR("revision({}) add operation will exceed the maximum value({}) of INT64", response->header.revision,
-                    INT64_MAX);
-        return;
-    }
-
-    auto instanceObserver = [aid(GetAID())](const std::vector<WatchEvent> &events, bool) -> bool {
-        litebus::Async(aid, &InstanceManagerActor::OnInstanceWatchEvent, events);
+    auto observer = [aid(GetAID())](const std::vector<WatchEvent> &events, bool synced) -> bool {
+        litebus::Async(aid, &InstanceManagerActor::OnInstanceWatchEvent, events, synced);
         return true;
     };
-    auto instanceSyncer = [aid(GetAID())]() -> litebus::Future<SyncResult> {
-        return litebus::Async(aid, &InstanceManagerActor::InstanceInfoSyncer);
+    auto syncer = [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<SyncResult> {
+        return litebus::Async(aid, &InstanceManagerActor::OnInstanceInfoSyncer, getResponse);
+    };
+    auto handler = [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<Status> {
+        return litebus::Async(aid, &InstanceManagerActor::CheckSyncResponse, getResponse);
     };
 
-    auto metaObserver = [aid(GetAID())](const std::vector<WatchEvent> &events, bool) -> bool {
-        litebus::Async(aid, &InstanceManagerActor::OnFuncMetaWatchEvent, events);
-        return true;
-    };
-    auto funcMetaSyncer = [aid(GetAID())]() -> litebus::Future<SyncResult> {
-        return litebus::Async(aid, &InstanceManagerActor::FunctionMetaSyncer);
-    };
-
-    std::function<litebus::Future<Status>(const std::shared_ptr<Watcher> &watcher)> then =
-        [aid(GetAID())](const std::shared_ptr<Watcher> &watcher) -> litebus::Future<Status> {
-        litebus::Async(aid, &InstanceManagerActor::OnInstanceWatch, watcher);
-        return Status::OK();
-    };
-    WatchOption option = { .prefix = true, .prevKv = true, .revision = response->header.revision + 1 };
     // eg. /sn/instance/business/yrk/tenant/0/function/../version/..
-    (void)member_->client->Watch(INSTANCE_PATH_PREFIX, option, instanceObserver, instanceSyncer).Then(then);
-    // eg. /yr/functions/business/yrk/tenant/...
-    (void)member_->client->Watch(FUNC_META_PATH_PREFIX, option, metaObserver, funcMetaSyncer).Then(then);
-
-    std::unordered_map<std::string, std::shared_ptr<resource_view::InstanceInfo>> allInstances;
-    for (const auto &kv : response->kvs) {
-        auto eventKey = TrimKeyPrefix(kv.key(), member_->client->GetTablePrefix());
-        auto instance = std::make_shared<resource_view::InstanceInfo>();
-        if (TransToInstanceInfoFromJson(*instance, kv.value())) {
-            allInstances.emplace(eventKey, instance);
-        } else {
-            YRLOG_ERROR("failed to transform instance({}) info from String.", eventKey);
-        }
-    }
-    // response.kvs is not sorted, so descendant instance may appear before parent, which will be considered as a
-    // parent-missing instance, and be killed; so add all instances as a parent first
-    member_->family->SyncInstances(allInstances);
-    for (auto [key, instance] : allInstances) {
-        OnInstancePut(key, instance);
-    }
+    (void)member_->client
+        ->GetAndWatchWithHandler(INSTANCE_PATH_PREFIX, { .prefix = true, .prevKv = true }, observer, syncer, handler)
+        .Then([aid(GetAID())](const std::shared_ptr<Watcher> &watcher) -> litebus::Future<Status> {
+            litebus::Async(aid, &InstanceManagerActor::OnInstanceWatch, watcher);
+            return Status::OK();
+        });
 }
 
-void InstanceManagerActor::OnSyncDebugInstance(const std::shared_ptr<GetResponse> &response)
+void InstanceManagerActor::GetAndWatchFunctionMeta()
 {
-    if (!response->status.IsOk()) {
-        YRLOG_ERROR("failed to get all debug instances.");
-        return;
-    }
-    if (response->header.revision > INT64_MAX - 1) {
-        YRLOG_ERROR("revision({}) add operation will exceed the maximum value({}) of INT64", response->header.revision,
-                    INT64_MAX);
-        return;
-    }
+    auto observer = [aid(GetAID())](const std::vector<WatchEvent> &events, bool synced) -> bool {
+        litebus::Async(aid, &InstanceManagerActor::OnFuncMetaWatchEvent, events, synced);
+        return true;
+    };
+    auto syncer = [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<SyncResult> {
+        return litebus::Async(aid, &InstanceManagerActor::OnFunctionMetaSyncer, getResponse);
+    };
+    auto handler = [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<Status> {
+        return litebus::Async(aid, &InstanceManagerActor::CheckSyncResponse, getResponse);
+    };
+
+    // eg. /yr/functions/business/yrk/tenant/...
+    (void)member_->client
+        ->GetAndWatchWithHandler(FUNC_META_PATH_PREFIX, { .prefix = true, .prevKv = true }, observer, syncer, handler)
+        .Then([aid(GetAID())](const std::shared_ptr<Watcher> &watcher) -> litebus::Future<Status> {
+            litebus::Async(aid, &InstanceManagerActor::OnInstanceWatch, watcher);
+            return Status::OK();
+        });
+}
+
+void InstanceManagerActor::GetAndWatchDebugInstance()
+{
     // watcher callback func
-    auto debugInstanceObserver = [aid(GetAID())](const std::vector<WatchEvent> &events, bool) -> bool {
-        litebus::Async(aid, &InstanceManagerActor::OnDebugInstanceWatchEvent, events);
+    auto observer = [aid(GetAID())](const std::vector<WatchEvent> &events, bool synced) -> bool {
+        litebus::Async(aid, &InstanceManagerActor::OnDebugInstanceWatchEvent, events, synced);
         return true;
     };
     // default Syncer
-    auto debugInstanceSyncer = []() -> litebus::Future<SyncResult> { return SyncResult{ Status::OK(), 0 }; };
-    auto then = [aid(GetAID())](const std::shared_ptr<Watcher> &watcher) -> litebus::Future<Status> {
-        litebus::Async(aid, &InstanceManagerActor::OnInstanceWatch, watcher);
-        return Status::OK();
+    auto syncer = [](const std::shared_ptr<GetResponse> &) -> litebus::Future<SyncResult> {
+        return SyncResult{ Status::OK() };
     };
-    WatchOption option = { .prefix = true, .prevKv = true, .revision = response->header.revision + 1 };
-    // eg. /yr/debug/<instanceID>
-    (void)member_->client->Watch(DEBUG_INSTANCE_PREFIX, option, debugInstanceObserver, debugInstanceSyncer).Then(then);
+    auto handler = [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<Status> {
+        return litebus::Async(aid, &InstanceManagerActor::CheckSyncResponse, getResponse);
+    };
+
+    // eg. /yr/functions/business/yrk/tenant/...
+    (void)member_->client
+        ->GetAndWatchWithHandler(DEBUG_INSTANCE_PREFIX, { .prefix = true, .prevKv = true }, observer, syncer, handler)
+        .Then([aid(GetAID())](const std::shared_ptr<Watcher> &watcher) -> litebus::Future<Status> {
+            litebus::Async(aid, &InstanceManagerActor::OnInstanceWatch, watcher);
+            return Status::OK();
+        });
 }
 
 void InstanceManagerActor::OnInstanceWatch(const std::shared_ptr<Watcher> &watcher)
@@ -271,56 +245,27 @@ void InstanceManagerActor::OnInstanceWatch(const std::shared_ptr<Watcher> &watch
     member_->watchers.push_back(watcher);
 }
 
-void InstanceManagerActor::OnSyncAbnormalScheduler(const std::shared_ptr<GetResponse> &response)
+void InstanceManagerActor::GetAndWatchAbnormal()
 {
-    if (!response->status.IsOk()) {
-        YRLOG_ERROR("failed to sync all abnormal scheduler.");
-        return;
-    }
-    if (response->header.revision > INT64_MAX - 1) {
-        YRLOG_ERROR("revision({}) add operation will exceed the maximum value({}) of INT64", response->header.revision,
-                    INT64_MAX);
-        return;
-    }
-
-    auto observer = [aid(GetAID())](const std::vector<WatchEvent> &events, bool) -> bool {
-        litebus::Async(aid, &InstanceManagerActor::OnAbnormalSchedulerWatchEvent, events);
+    auto observer = [aid(GetAID())](const std::vector<WatchEvent> &events, bool synced) -> bool {
+        litebus::Async(aid, &InstanceManagerActor::OnAbnormalSchedulerWatchEvent, events, synced);
         return true;
     };
-    auto syncer = [aid(GetAID())]() -> litebus::Future<SyncResult> {
-        return litebus::Async(aid, &InstanceManagerActor::ProxyAbnormalSyncer);
+
+    auto syncer = [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<SyncResult> {
+        return litebus::Async(aid, &InstanceManagerActor::ProxyAbnormalSyncer, getResponse);
     };
-    std::function<litebus::Future<Status>(const std::shared_ptr<Watcher> &watcher)> then =
-        [aid(GetAID())](const std::shared_ptr<Watcher> &watcher) -> litebus::Future<Status> {
-        litebus::Async(aid, &InstanceManagerActor::OnAbnormalSchedulerWatch, watcher);
-        return Status::OK();
+    auto handler = [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<Status> {
+        return litebus::Async(aid, &InstanceManagerActor::CheckSyncResponse, getResponse);
     };
-    WatchOption option = { .prefix = true, .prevKv = true, .revision = response->header.revision + 1 };
-    (void)member_->client->Watch(KEY_ABNORMAL_SCHEDULER_PREFIX, option, observer, syncer).Then(then);
 
-    for (const auto &kv : response->kvs) {
-        YRLOG_INFO("sync abnormal scheduler {}", kv.value());
-        (void)member_->abnormalScheduler->emplace(kv.value());
-        if (member_->abnormalDeferTimer.find(kv.value()) != member_->abnormalDeferTimer.end()) {
-            litebus::TimerTools::Cancel(member_->abnormalDeferTimer[kv.value()]);
-        }
-        member_->abnormalDeferTimer[kv.value()] = litebus::AsyncAfter(
-            ABNORMAL_GC_TIMEOUT, GetAID(), &InstanceManagerActor::ClearAbnormalScheduler, kv.value());
-        if (member_->runtimeRecoverEnable) {
-            continue;
-        }
-
-        auto instances = member_->instances.find(kv.value());
-        if (instances == member_->instances.end()) {
-            continue;
-        }
-
-        ASSERT_IF_NULL(business_);
-        business_->OnSyncAbnormalScheduler(instances->second);
-        instances->second.clear();
-
-        (void)member_->instances.erase(instances);
-    }
+    (void)member_->client
+        ->GetAndWatchWithHandler(KEY_ABNORMAL_SCHEDULER_PREFIX, { .prefix = true, .prevKv = true }, observer, syncer,
+                                 handler)
+        .Then([aid(GetAID())](const std::shared_ptr<Watcher> &watcher) -> litebus::Future<Status> {
+            litebus::Async(aid, &InstanceManagerActor::OnAbnormalSchedulerWatch, watcher);
+            return Status::OK();
+        });
 }
 
 void InstanceManagerActor::OnAbnormalSchedulerWatch(const std::shared_ptr<Watcher> &watcher)
@@ -328,7 +273,7 @@ void InstanceManagerActor::OnAbnormalSchedulerWatch(const std::shared_ptr<Watche
     member_->abnormalSchedulerWatcher = watcher;
 }
 
-void InstanceManagerActor::OnAbnormalSchedulerWatchEvent(const std::vector<WatchEvent> &events)
+void InstanceManagerActor::OnAbnormalSchedulerWatchEvent(const std::vector<WatchEvent> &events, bool synced)
 {
     for (const auto &event : events) {
         switch (event.eventType) {
@@ -339,6 +284,19 @@ void InstanceManagerActor::OnAbnormalSchedulerWatchEvent(const std::vector<Watch
                 }
                 member_->abnormalDeferTimer[event.kv.value()] = litebus::AsyncAfter(
                     ABNORMAL_GC_TIMEOUT, GetAID(), &InstanceManagerActor::ClearAbnormalScheduler, event.kv.value());
+                if (synced && !member_->runtimeRecoverEnable) { // sync event logic
+                    YRLOG_DEBUG("sync abnormal scheduler: {}", event.kv.value());
+                    auto instances = member_->instances.find(event.kv.value());
+                    if (instances == member_->instances.end()) {
+                        break;
+                    }
+
+                    ASSERT_IF_NULL(business_);
+                    business_->OnSyncAbnormalScheduler(instances->second);
+                    instances->second.clear();
+
+                    (void)member_->instances.erase(instances);
+                }
                 break;
             }
             case EVENT_TYPE_DELETE: {
@@ -411,6 +369,33 @@ Status InstanceManagerActor::GetAbnormalScheduler(const std::shared_ptr<std::uno
     return Status::OK();
 }
 
+bool InstanceManagerActor::IsInstanceManagedByJob(const std::shared_ptr<InstanceInfo> &info)
+{
+    if (info->jobid().empty() || info->detached()) {
+        // detached instance or empty job
+        return false;
+    }
+    std::unordered_set<std::string> jobIns{};
+    auto jobIter = member_->jobID2InstanceIDs.find(info->jobid());
+    auto parentIns = member_->family->GetInstance(info->parentid());
+    while (parentIns != nullptr) {
+        if (IsDriver(parentIns) || IsFrontendFunction(parentIns->function())) {
+            return true;
+        }
+        // parent is detached, it's child will be managed by creator
+        if (parentIns->detached()) {
+            return false;
+        }
+        // parent instance already managed by job
+        if (jobIter != member_->jobID2InstanceIDs.end()
+            && jobIter->second.find(parentIns->instanceid()) != jobIter->second.end()) {
+            return true;
+        }
+        parentIns = member_->family->GetInstance(parentIns->parentid());
+    }
+    return true;
+}
+
 void InstanceManagerActor::OnInstancePut(const std::string &key,
                                          const std::shared_ptr<resource_view::InstanceInfo> &instance)
 {
@@ -425,7 +410,7 @@ void InstanceManagerActor::OnInstancePut(const std::string &key,
     }
     business_->OnInstancePutForFamilyManagement(instance);
     member_->instID2Instance[instance->instanceid()] = std::make_pair(key, instance);
-    if (!instance->jobid().empty()) {
+    if (IsInstanceManagedByJob(instance)) {
         member_->jobID2InstanceIDs[instance->jobid()].emplace(instance->instanceid());
     }
     if (const auto funcKey = GetFuncKeyFromInstancePath(key); !funcKey.empty()) {
@@ -497,8 +482,30 @@ void InstanceManagerActor::OnInstanceDelete(const std::string &key,
     }
 }
 
-void InstanceManagerActor::OnInstanceWatchEvent(const std::vector<WatchEvent> &events)
+void InstanceManagerActor::OnInstanceWatchEvent(const std::vector<WatchEvent> &events, bool synced)
 {
+    if (synced) {
+        YRLOG_DEBUG("sync instance watch event size:{}", events.size());
+        std::unordered_map<std::string, std::shared_ptr<resource_view::InstanceInfo>> allInstances;
+        for (const auto &event : events) {
+            auto eventKey = TrimKeyPrefix(event.kv.key(), member_->client->GetTablePrefix());
+            auto instance = std::make_shared<resource_view::InstanceInfo>();
+            if (TransToInstanceInfoFromJson(*instance, event.kv.value())) {
+                allInstances.emplace(eventKey, instance);
+            } else {
+                YRLOG_ERROR("failed to transform instance({}) info from String.", eventKey);
+            }
+        }
+        // response.kvs is not sorted, so descendant instance may appear before parent, which will be considered as a
+        // parent-missing instance, and be killed; so add all instances as a parent first
+        member_->family->SyncInstances(allInstances);
+        for (auto [key, instance] : allInstances) {
+            OnInstancePut(key, instance);
+        }
+        SetInstancesReady();
+        return;
+    }
+
     for (const auto &event : events) {
         switch (event.eventType) {
             case EVENT_TYPE_PUT: {
@@ -542,7 +549,7 @@ void InstanceManagerActor::OnInstanceWatchEvent(const std::vector<WatchEvent> &e
     }
 }
 
-void InstanceManagerActor::OnDebugInstanceWatchEvent(const std::vector<WatchEvent> &events)
+void InstanceManagerActor::OnDebugInstanceWatchEvent(const std::vector<WatchEvent> &events, bool synced)
 {
     for (const auto &event : events) {
         switch (event.eventType) {
@@ -570,7 +577,7 @@ void InstanceManagerActor::OnDebugInstanceWatchEvent(const std::vector<WatchEven
     }
 }
 
-void InstanceManagerActor::OnFuncMetaWatchEvent(const std::vector<WatchEvent> &events)
+void InstanceManagerActor::OnFuncMetaWatchEvent(const std::vector<WatchEvent> &events, bool synced)
 {
     for (const auto &event : events) {
         auto eventKey = TrimKeyPrefix(event.kv.key(), member_->client->GetTablePrefix());
@@ -579,8 +586,8 @@ void InstanceManagerActor::OnFuncMetaWatchEvent(const std::vector<WatchEvent> &e
             YRLOG_WARN("function key is empty, path: {}", eventKey);
             continue;
         }
-        YRLOG_DEBUG("receive function meta event, type: {}, funKey: {}, path: {}", event.eventType, funcKey,
-                    eventKey);
+        YRLOG_DEBUG("receive function meta event, type: {}, funKey: {}, path: {}", fmt::underlying(event.eventType),
+                    funcKey, eventKey);
 
         switch (event.eventType) {
             case EVENT_TYPE_PUT: {
@@ -655,7 +662,7 @@ litebus::Future<Status> InstanceManagerActor::KillInstanceWithRetry(
             .Then([key(instanceKey), cacher(member_->operateCacher), instance(info)](const OperateResult &result) {
                 if (result.status.IsError()) {
                     YRLOG_ERROR("failed to Delete instance({}) from MetaStore, err status is {}.",
-                                instance->instanceid(), result.status.StatusCode());
+                                instance->instanceid(), fmt::underlying(result.status.StatusCode()));
                     if (TransactionFailedForEtcd(result.status.StatusCode())) {
                         cacher->AddDeleteEvent(INSTANCE_PATH_PREFIX, key);
                     }
@@ -686,7 +693,7 @@ void InstanceManagerActor::CompleteKillInstance(const litebus::Future<Status> &s
         auto infoIter = member_->instID2Instance.find(instanceID);
         if (infoIter == member_->instID2Instance.end() || infoIter->second.second == nullptr) {
             YRLOG_WARN("{}|can not find instance info and failed to kill, code({}), msg({}), retry", requestID,
-                       status.Get().StatusCode(), status.Get().GetMessage());
+                       fmt::underlying(status.Get().StatusCode()), status.Get().GetMessage());
             (void)member_->killReqPromises.erase(requestID);
             return;
         }
@@ -704,7 +711,7 @@ void InstanceManagerActor::CompleteKillInstance(const litebus::Future<Status> &s
             .Then([key(instanceKey), cacher(member_->operateCacher), instance(info)](const OperateResult &result) {
                 if (result.status.IsError()) {
                     YRLOG_ERROR("failed to Delete instance({}) from MetaStore, err status is {}.",
-                                instance->instanceid(), result.status.StatusCode());
+                                instance->instanceid(), fmt::underlying(result.status.StatusCode()));
                     if (TransactionFailedForEtcd(result.status.StatusCode())) {
                         cacher->AddDeleteEvent(INSTANCE_PATH_PREFIX, key);
                     }
@@ -906,11 +913,23 @@ litebus::Future<Status> InstanceManagerActor::MasterBusiness::OnLocalSchedFault(
         return Status(StatusCode::SUCCESS, "system is upgrading");
     }
 
+    if (member_->enableAbnormalDoubleCheck_
+        && member_->proxyRouteSet.find(KEY_BUSPROXY_PATH_PREFIX + nodeName) != member_->proxyRouteSet.end()) {
+        YRLOG_INFO("{}'s lease is still in effect, don't notify abnormal scheduler", nodeName);
+        (void)nodes_.erase(nodeName);
+        return Status(StatusCode::SUCCESS, "proxy's lease still in effect.");
+    }
+
     (void)member_->abnormalScheduler->emplace(nodeName);  // for OnInstancePut
     auto actor = actor_.lock();
     RETURN_STATUS_IF_NULL(actor, StatusCode::FAILED, "InstanceManagerActor is nullptr");
     auto promise = std::make_shared<litebus::Promise<Status>>();
-    (void)member_->client->Put(KEY_ABNORMAL_SCHEDULER_PREFIX + nodeName, nodeName, {})
+
+    nlohmann::json info;
+    info["nodeName"] = nodeName;
+    info["instanceManagerActorAid"] = actor->GetAID();
+
+    (void)member_->client->Put(KEY_ABNORMAL_SCHEDULER_PREFIX + nodeName, info.dump(), {})
         .OnComplete(litebus::Defer(actor->GetAID(), &InstanceManagerActor::OnPutAbnormalScheduler,
                                    std::placeholders::_1, promise, nodeName));
     return promise->GetFuture().OnComplete(
@@ -953,7 +972,7 @@ void InstanceManagerActor::MasterBusiness::ProcessInstanceOnFaultLocal(const std
             continue;
         }
         // take over the driver instance. directly to delete
-        if (IsDriver(instance.second)) {
+        if (IsDriver(instance.second) || IsStaticFunctionInstance(*instance.second)) {
             YRLOG_INFO("the driver ({}) should be deleted because of local({}) abnormal", instance.second->instanceid(),
                        nodeName);
             ForceDelete(instance.first, instance.second);
@@ -1081,13 +1100,6 @@ void InstanceManagerActor::MasterBusiness::HandleShutDownAll(const litebus::AID 
             YRLOG_ERROR("failed to find instance({}), skip", instanceID);
             continue;
         }
-
-        auto i = member_->instID2Instance[instanceID];
-        if (i.second->detached()) {
-            YRLOG_DEBUG("instance({}) is detached of job({})", instanceID, jobID);
-            continue;
-        }
-
         KillInstance(member_->instID2Instance[instanceID].second, SHUT_DOWN_SIGNAL, "job kill");
     }
 
@@ -1119,37 +1131,37 @@ void InstanceManagerActor::MasterBusiness::OnChange()
     // if new info comes, will update allInstancesNeedToBeKilled info
     for (const auto &info : member_->family->GetAllDescendantsOf("")) {
         bool isAbnormalInstance = (info->instancestatus().code() == static_cast<int32_t>(InstanceState::FATAL));
-        bool isParentExists = (info->parentid().empty() || IsCreateByFrontend(info)
-                               || member_->family->IsInstanceExists(info->parentid()));
-        bool needKill = isAbnormalInstance || !isParentExists;
-        if (!needKill) {
+        bool isNeedKill = IsInstanceShouldBeKilled(info);
+        if (!isAbnormalInstance && !isNeedKill) {
             continue;
         }
-        // if parent instance is not existed, need to kill current instance and del instance info
-        if (!isParentExists) {
+        if (isNeedKill) {
+            // signal 1: delete  istance from meta store
             allInstancesNeedToBeKilled.emplace(
                 info->instanceid(), std::make_tuple(info, SHUT_DOWN_SIGNAL,
                                                     fmt::format("ancestor instance is exited", info->instanceid())));
         }
         auto descendants = member_->family->GetAllDescendantsOf(info->instanceid());
         for (const auto &eachDescendant : descendants) {
+            // if parent is abnormal, only set children instance to fatal
             allInstancesNeedToBeKilled.emplace(
                 eachDescendant->instanceid(),
-                std::make_tuple(eachDescendant, isAbnormalInstance ? FAMILY_EXIT_SIGNAL : SHUT_DOWN_SIGNAL,
+                std::make_tuple(eachDescendant, isNeedKill ? SHUT_DOWN_SIGNAL : FAMILY_EXIT_SIGNAL,
                                 fmt::format("ancestor instance({}) is {}", info->instanceid(),
-                                            isAbnormalInstance ? "abnormal" : "exited")));
+                                            isNeedKill ? "exited" : "abnormal")));
         }
     }
     for (const auto &toBeKilled : allInstancesNeedToBeKilled) {
         auto [info, signal, msg] = toBeKilled.second;
         KillInstance(info, signal, msg);
     }
+    actor->DoFunctionMetaSyncer();
 }
 
 void InstanceManagerActor::MasterBusiness::OnSyncAbnormalScheduler(const InstanceManagerMap &instances)
 {
     for (const auto &instance : instances) {
-        if (IsDriver(instance.second)) {
+        if (IsDriver(instance.second) || IsStaticFunctionInstance(*instance.second)) {
             YRLOG_INFO("instance({}) is driver, delete directly when local fault", instance.first);
             ForceDelete(instance.first, instance.second);
             return;
@@ -1189,7 +1201,8 @@ void InstanceManagerActor::MasterBusiness::OnFaultLocalInstancePut(
     // 2. container(proxy, agent) fault: No processing is required.
     // 3. pod or node fault: force delete instance
     RETURN_IF_NULL(instance);
-    if (instance->instancestatus().code() == static_cast<int32_t>(InstanceState::EXITING) || IsDriver(instance)) {
+    if (instance->instancestatus().code() == static_cast<int32_t>(InstanceState::EXITING) || IsDriver(instance)
+        || IsStaticFunctionInstance(*instance)) {
         YRLOG_INFO("instance({}) is driver or exiting, delete directly when {}", key, reason);
         ForceDelete(key, instance);
         return;
@@ -1206,7 +1219,7 @@ void InstanceManagerActor::MasterBusiness::OnFaultLocalInstancePut(
         .Then([instance, cacher(member_->operateCacher)](const OperateResult &result) {
             if (result.status.IsError()) {
                 YRLOG_ERROR("failed to Put instance({}) to MetaStore, errCode is ({}).", instance->instanceid(),
-                            result.status.StatusCode());
+                            fmt::underlying(result.status.StatusCode()));
                 if (TransactionFailedForEtcd(result.status.StatusCode())) {
                     cacher->AddPutEvent(INSTANCE_PATH_PREFIX, instance->instanceid(), "FATAL");
                 }
@@ -1254,7 +1267,7 @@ void InstanceManagerActor::OnKillInstance(const litebus::Future<Status> &status,
 
     if (status.Get().IsError()) {
         YRLOG_ERROR("failed to kill instance({}), code: {}, msg: {}", req.instance().instanceid(),
-                    status.Get().StatusCode(), status.Get().ToString());
+                    fmt::underlying(status.Get().StatusCode()), status.Get().ToString());
         messages::ForwardKillResponse rsp =
             GenerateForwardKillResponse(req, status.Get().StatusCode(), status.Get().ToString());
         (void)Send(from, "ResponseForwardKill", std::move(rsp.SerializeAsString()));
@@ -1290,16 +1303,34 @@ litebus::Future<Status> InstanceManagerActor::MasterBusiness::KillInstance(const
 
 bool InstanceManagerActor::MasterBusiness::IsInstanceShouldBeKilled(const std::shared_ptr<InstanceInfo> &info)
 {
-    bool isParentExists = member_->family->IsInstanceExists(info->parentid()) || IsCreateByFrontend(info);
+    if (info->lowreliability() && IsNonRecoverableStatus(info->instancestatus().code())) {
+        // low reliability instance, and instance cannot be recovered
+        YRLOG_INFO("receive instance({}) event, which is low-reliability and not recoverable, will kill it",
+                   info->instanceid());
+        return true;
+    }
+    if (info->detached()) {
+        // detached instance will be controlled by user
+        return false;
+    }
+    // parent exist or created by frontend or static function
+    bool isParentExists = member_->family->IsInstanceExists(info->parentid()) || IsCreateByFrontend(info)
+                          || IsStaticFunctionInstance(*info);
+    if (!isParentExists) {
+        // parent instance is not exist
+        YRLOG_INFO("receive instance({}) event, which parent({}) is not existed , will kill it", info->instanceid(),
+                   info->parentid());
+        return true;
+    }
     bool isParentExiting = (member_->exitingInstances.find(info->parentid()) != member_->exitingInstances.end());
     bool isSelfExiting = (info->instancestatus().code() == static_cast<int32_t>(InstanceState::EXITING)
                           || info->instancestatus().code() == static_cast<int32_t>(InstanceState::EXITED));
-    bool decision = (!isParentExists || (isParentExiting && !isSelfExiting));
-    if (decision) {
-        YRLOG_INFO("receive instance({}) event, which parent({}) is missed({}) or exiting({}), will kill it",
-                   info->instanceid(), info->parentid(), !isParentExists, isParentExiting);
+    if (isParentExiting && !isSelfExiting) {
+        YRLOG_INFO("receive instance({}) event, which parent({}) is exiting , will kill it", info->instanceid(),
+                   info->parentid());
+        return true;
     }
-    return decision;
+    return false;
 }
 
 bool InstanceManagerActor::MasterBusiness::IsAppDriverFinished(const std::shared_ptr<InstanceInfo> &info)
@@ -1343,7 +1374,7 @@ void InstanceManagerActor::MasterBusiness::OnInstancePutForFamilyManagement(cons
     }
     if (IsInstanceShouldBeKilled(info)) {
         // parent missing/exiting, kill it
-        KillAllInstances({ info }, SHUT_DOWN_SIGNAL, fmt::format("parent({}) may has been killed", info->parentid()));
+        KillAllInstances({ info }, SHUT_DOWN_SIGNAL, "");
     }
     member_->family->AddInstance(info);
 }
@@ -1422,7 +1453,7 @@ void InstanceManagerActor::MasterBusiness::ForwardCustomSignalResponse(const lit
 
     if (forwardKillResponse.code() != 0) {
         YRLOG_WARN("{}|(custom signal)failed to kill, code({}), msg({}), retry", forwardKillResponse.requestid(),
-                   forwardKillResponse.code(), forwardKillResponse.message());
+                   fmt::underlying(forwardKillResponse.code()), forwardKillResponse.message());
         return;
     }
 
@@ -1516,8 +1547,16 @@ void InstanceManagerActor::MasterBusiness::OnSyncNodes(const std::unordered_set<
         if (nodes_.find(nodeInstances.first) != nodes_.end() || nodeInstances.first == INSTANCE_MANAGER_OWNER) {
             continue;
         }
+
+        if (member_->enableAbnormalDoubleCheck_
+            && member_->proxyRouteSet.find(KEY_BUSPROXY_PATH_PREFIX + nodeInstances.first)
+                   != member_->proxyRouteSet.end()) {
+            YRLOG_INFO("{}'s lease is still in effect, don't notify abnormal scheduler", nodeInstances.first);
+            continue;
+        }
         tobeTakeOver.insert(nodeInstances.first);
     }
+
     for (auto node : tobeTakeOver) {
         YRLOG_INFO("{} is not existed, try to take over instance on the node", node);
         ProcessInstanceOnFaultLocal(node, node + " is exited");
@@ -1624,6 +1663,13 @@ bool InstanceManagerActor::SlaveBusiness::NodeExists(const std::string &nodeName
     return true;
 }
 
+void InstanceManagerActor::DoFunctionMetaSyncer()
+{
+    isInstancesReady_.GetFuture().OnComplete([aid(GetAID())](const litebus::Future<bool> fut) {
+        litebus::Async(aid, &InstanceManagerActor::FunctionMetaSyncer);
+    });
+}
+
 litebus::Future<SyncResult> InstanceManagerActor::FunctionMetaSyncer()
 {
     GetOption opts;
@@ -1636,13 +1682,13 @@ litebus::Future<SyncResult> InstanceManagerActor::OnFunctionMetaSyncer(const std
 {
     if (getResponse->status.IsError()) {
         YRLOG_INFO("failed to get key({}) from meta storage", FUNC_META_PATH_PREFIX);
-        return SyncResult{ getResponse->status, 0 };
+        return SyncResult{ getResponse->status };
     }
 
     if (getResponse->kvs.empty()) {
         YRLOG_INFO("get no result with key({}) from meta storage, revision is {}", FUNC_META_PATH_PREFIX,
                    getResponse->header.revision);
-        return SyncResult{ Status::OK(), getResponse->header.revision + 1 };
+        return SyncResult{ Status::OK() };
     }
 
     std::set<std::string> etcdKvSet;
@@ -1663,38 +1709,33 @@ litebus::Future<SyncResult> InstanceManagerActor::OnFunctionMetaSyncer(const std
             business_->OnFuncMetaDelete(funcKey.first);
         }
     }
-    return SyncResult{ Status::OK(), getResponse->header.revision + 1 };
+    return SyncResult{ Status::OK() };
 }
 
-litebus::Future<SyncResult> InstanceManagerActor::ProxyAbnormalSyncer()
+litebus::Future<SyncResult> InstanceManagerActor::ProxyAbnormalSyncer(const std::shared_ptr<GetResponse> &getResponse)
 {
-    GetOption opts;
-    opts.prefix = true;
-    return member_->client->Get(KEY_ABNORMAL_SCHEDULER_PREFIX, opts)
-        .Then([aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<SyncResult> {
-            if (getResponse->status.IsError()) {
-                YRLOG_INFO("failed to get key({}) from meta storage", KEY_ABNORMAL_SCHEDULER_PREFIX);
-                return SyncResult{ getResponse->status, 0 };
-            }
+    if (getResponse->status.IsError()) {
+        YRLOG_INFO("failed to get key({}) from meta storage", KEY_ABNORMAL_SCHEDULER_PREFIX);
+        return SyncResult{ getResponse->status };
+    }
 
-            if (getResponse->kvs.empty()) {
-                YRLOG_INFO("get no result with key({}) from meta storage, revision is {}",
-                           KEY_ABNORMAL_SCHEDULER_PREFIX, getResponse->header.revision);
-                return SyncResult{ Status::OK(), getResponse->header.revision + 1 };
-            }
-            std::list<litebus::Future<Status>> futures;
-            for (auto &kv : getResponse->kvs) {
-                WatchEvent event{ .eventType = EVENT_TYPE_PUT, .kv = kv, .prevKv = {} };
-                auto promise = std::make_shared<litebus::Promise<Status>>();
-                std::shared_ptr<PutResponse> putResponse = std::make_shared<PutResponse>();
-                putResponse->status = Status::OK();
-                litebus::Async(aid, &InstanceManagerActor::OnPutAbnormalScheduler, putResponse, promise, kv.value());
-                futures.emplace_back(promise->GetFuture());
-            }
-            return CollectStatus(futures, "proxy abnormal syncer").Then([getResponse](const Status &status) {
-                return SyncResult{ status, getResponse->header.revision + 1 };
-            });
-        });
+    if (getResponse->kvs.empty()) {
+        YRLOG_INFO("get no result with key({}) from meta storage, revision is {}", KEY_ABNORMAL_SCHEDULER_PREFIX,
+                   getResponse->header.revision);
+        return SyncResult{ Status::OK() };
+    }
+    std::list<litebus::Future<Status>> futures;
+    for (auto &kv : getResponse->kvs) {
+        WatchEvent event{ .eventType = EVENT_TYPE_PUT, .kv = kv, .prevKv = {} };
+        auto promise = std::make_shared<litebus::Promise<Status>>();
+        std::shared_ptr<PutResponse> putResponse = std::make_shared<PutResponse>();
+        putResponse->status = Status::OK();
+        litebus::Async(GetAID(), &InstanceManagerActor::OnPutAbnormalScheduler, putResponse, promise, kv.value());
+        futures.emplace_back(promise->GetFuture());
+    }
+    return CollectStatus(futures, "proxy abnormal syncer").Then([getResponse](const Status &status) {
+        return SyncResult{ status };
+    });
 }
 
 litebus::Future<SyncResult> InstanceManagerActor::InstanceInfoSyncer()
@@ -1708,12 +1749,14 @@ litebus::Future<SyncResult> InstanceManagerActor::InstanceInfoSyncer()
 litebus::Future<SyncResult> InstanceManagerActor::OnInstanceInfoSyncer(const std::shared_ptr<GetResponse> &getResponse)
 {
     if (getResponse->status.IsError()) {
-        YRLOG_INFO("failed to get key({}) from meta storage", FUNC_META_PATH_PREFIX);
-        return SyncResult{ getResponse->status, 0 };
+        YRLOG_INFO("failed to get key({}) from meta storage", INSTANCE_PATH_PREFIX);
+        SetInstancesReady();
+        return SyncResult{ getResponse->status};
     }
     if (getResponse->kvs.empty()) {
         YRLOG_INFO("get no result with key({}) from meta storage, revision is {}", INSTANCE_PATH_PREFIX,
                    getResponse->header.revision);
+        SetInstancesReady();
         // try to replay meta store operation
         return ReplayFailedInstanceOperation(getResponse->header.revision + 1);
     }
@@ -1722,15 +1765,22 @@ litebus::Future<SyncResult> InstanceManagerActor::OnInstanceInfoSyncer(const std
     std::set<std::string> etcdKvMap;
     // update cache by meta store;
     YRLOG_INFO("Start to update instance info from metastore");
-    for (auto &kv : getResponse->kvs) {
+
+    std::unordered_map<std::string, std::shared_ptr<resource_view::InstanceInfo>> allInstances;
+    for (const auto &kv : getResponse->kvs) {
         auto eventKey = TrimKeyPrefix(kv.key(), member_->client->GetTablePrefix());
         auto instance = std::make_shared<resource_view::InstanceInfo>();
         if (TransToInstanceInfoFromJson(*instance, kv.value())) {
-            OnInstancePut(eventKey, instance);
+            allInstances.emplace(eventKey, instance);
             etcdKvMap.emplace(instance->instanceid());
         }
     }
-
+    // response.kvs is not sorted, so descendant instance may appear before parent, which will be considered as a
+    // parent-missing instance, and be killed; so add all instances as a parent first
+    member_->family->SyncInstances(allInstances);
+    for (auto [key, instance] : allInstances) {
+        OnInstancePut(key, instance);
+    }
     // delete instance in cache but not in meta store;
     std::vector<InstanceKeyInfoPair> needToRemove;
     for (const auto &instance : member_->instID2Instance) {
@@ -1747,20 +1797,18 @@ litebus::Future<SyncResult> InstanceManagerActor::OnInstanceInfoSyncer(const std
         ASSERT_IF_NULL(business_);
         business_->OnInstanceDeleteForFamilyManagement(iter->first, iter->second);
     }
-
+    SetInstancesReady();
     // replay meta store operation
     return ReplayFailedInstanceOperation(getResponse->header.revision + 1);
 }
 
 void InstanceManagerActor::ReplayFailedDeleteOperation(std::list<litebus::Future<Status>> &futures,
-                                                       std::set<std::string> &eraseDelKeys)
+                                                       std::shared_ptr<std::set<std::string>> eraseDelKeys)
 {
     auto delEventMap = member_->operateCacher->GetDeleteEventMap();
     auto delEvent = delEventMap.find(INSTANCE_PATH_PREFIX);
     if (delEvent != delEventMap.end()) {
         for (const auto &instanceKey : delEvent->second) {
-            auto routeKey = INSTANCE_ROUTE_PATH_PREFIX + instanceKey.substr(INSTANCE_PATH_PREFIX.size());
-            std::shared_ptr<StoreInfo> routePutInfo = std::make_shared<StoreInfo>(routeKey, "");
             std::shared_ptr<StoreInfo> instancePutInfo = std::make_shared<StoreInfo>(instanceKey, "");
             std::shared_ptr<StoreInfo> debugInstPutInfo = nullptr;
             auto pos = instancePutInfo->key.find_last_of('/');
@@ -1772,15 +1820,20 @@ void InstanceManagerActor::ReplayFailedDeleteOperation(std::list<litebus::Future
             if (pair.second != nullptr && IsDebugInstance(pair.second->createoptions())) {
                 debugInstPutInfo = std::make_shared<StoreInfo>(DEBUG_INSTANCE_PREFIX + instanceId, "");
             }
+            std::shared_ptr<StoreInfo> routePutInfo = std::make_shared<StoreInfo>(GenInstanceRouteKey(instanceId), "");
             auto promise = std::make_shared<litebus::Promise<Status>>();
+            auto onDelete = [instanceKey, promise, eraseDelKeys](const OperateResult &result) {
+                if (result.status.IsOk()) {
+                    YRLOG_DEBUG("finish to replay operation for {}", instanceKey);
+                    eraseDelKeys->emplace(instanceKey);
+                }
+                promise->SetValue(result.status);
+                return result.status;
+            };
             (void)member_->instanceOpt->ForceDelete(instancePutInfo, routePutInfo, debugInstPutInfo, false)
-                .Then([instanceKey, promise, &eraseDelKeys](const OperateResult &result) {
-                    if (result.status.IsOk()) {
-                        YRLOG_DEBUG("finish to replay operation for {}", instanceKey);
-                        eraseDelKeys.emplace(instanceKey);
-                    }
-                    promise->SetValue(result.status);
-                    return result.status;
+                .Then([onDelete, aid(GetAID())](const OperateResult &result) {
+                    auto execute = [onDelete, result]() { return onDelete(result); };
+                    return litebus::Async(aid, &InstanceManagerActor::Execute, execute);
                 });
             futures.emplace_back(promise->GetFuture());
         }
@@ -1788,7 +1841,7 @@ void InstanceManagerActor::ReplayFailedDeleteOperation(std::list<litebus::Future
 }
 
 void InstanceManagerActor::ReplayFailedPutOperation(std::list<litebus::Future<Status>> &futures,
-                                                    std::set<std::string> &erasePutKeys)
+                                                    std::shared_ptr<std::set<std::string>> erasePutKeys)
 {
     auto putEventMap = member_->operateCacher->GetPutEventMap();
     auto instanceEvent = putEventMap.find(INSTANCE_PATH_PREFIX);
@@ -1796,7 +1849,7 @@ void InstanceManagerActor::ReplayFailedPutOperation(std::list<litebus::Future<St
         for (const auto &event : instanceEvent->second) {
             auto iter = member_->instID2Instance.find(event.first);
             if (iter == member_->instID2Instance.end()) {  // instance is not exist
-                erasePutKeys.emplace(event.first);
+                erasePutKeys->emplace(event.first);
                 continue;
             }
             auto &instance = iter->second.second;
@@ -1812,51 +1865,66 @@ void InstanceManagerActor::ReplayFailedPutOperation(std::list<litebus::Future<St
                 promise->SetValue(Status(StatusCode::FAILED, "failed to generate put info"));
                 continue;
             }
-
+            auto onModify = [aid(GetAID()), key(event.first), erasePutKeys, promise, tranState, instancePtr(instance),
+                             instanceKey(instancePutInfo->key)](const OperateResult &result) {
+                if (result.status.IsOk()) {
+                    erasePutKeys->emplace(key);
+                    YRLOG_DEBUG("finish to replay operation for {} and try to reschedule", instanceKey);
+                    if (tranState == InstanceState::SCHEDULING) {  // need to replay reschedule operation
+                        litebus::Async(aid, &InstanceManagerActor::TryReschedule, instanceKey, instancePtr,
+                                       instancePtr->scheduletimes());
+                    }
+                }
+                promise->SetValue(result.status);
+                return result.status;
+            };
             (void)member_->instanceOpt
                 ->Modify(instancePutInfo, routePutInfo, version, IsLowReliabilityInstance(*instance))
-                .Then([aid(GetAID()), key(event.first), &erasePutKeys, promise, tranState, instancePtr(instance),
-                       instanceKey(instancePutInfo->key)](const OperateResult &result) {
-                    if (result.status.IsOk()) {
-                        erasePutKeys.emplace(key);
-                        YRLOG_DEBUG("finish to replay operation for {} and try to reschedule", instanceKey);
-                        if (tranState == InstanceState::SCHEDULING) {  // need to replay reschedule operation
-                            litebus::Async(aid, &InstanceManagerActor::TryReschedule, instanceKey, instancePtr,
-                                           instancePtr->scheduletimes());
-                        }
-                    }
-                    promise->SetValue(result.status);
-                    return result.status;
+                .Then([onModify, aid(GetAID())](const OperateResult &result) {
+                    auto execute = [onModify, result]() { return onModify(result); };
+                    return litebus::Async(aid, &InstanceManagerActor::Execute, execute);
                 });
         }
     }
 }
 
+Status InstanceManagerActor::Execute(std::function<Status()> fn)
+{
+    return fn();
+}
+
 litebus::Future<SyncResult> InstanceManagerActor::ReplayFailedInstanceOperation(int64_t revision)
 {
     std::list<litebus::Future<Status>> futures;
-    std::set<std::string> eraseDelKeys;
-    std::set<std::string> erasePutKeys;
+    auto eraseDelKeys = std::make_shared<std::set<std::string>>();
+    auto erasePutKeys = std::make_shared<std::set<std::string>>();
 
     ReplayFailedDeleteOperation(futures, eraseDelKeys);
     ReplayFailedPutOperation(futures, erasePutKeys);
 
     return CollectStatus(futures, "instance info syncer")
-        .Then([cacher(member_->operateCacher), eraseDelKeys, erasePutKeys, revision](const Status &status) {
-            for (const auto &key : eraseDelKeys) {
+        .Then([cacher(member_->operateCacher), eraseDelKeys, erasePutKeys](const Status &status) {
+            for (const auto &key : *eraseDelKeys) {
                 cacher->EraseDeleteEvent(INSTANCE_PATH_PREFIX, key);
             }
-            for (const auto &key : erasePutKeys) {
+            for (const auto &key : *erasePutKeys) {
                 cacher->ErasePutEvent(INSTANCE_PATH_PREFIX, key);
             }
-            return SyncResult{ status, revision };
+            return SyncResult{ status };
         });
 }
 
 void InstanceManagerActor::OnHealthyStatus(const Status &status)
 {
     YRLOG_INFO("metastore is recovered. sync abnormal status to metastore.");
-    ProxyAbnormalSyncer();
+    GetOption opts;
+    opts.prefix = true;
+    member_->client->Get(KEY_ABNORMAL_SCHEDULER_PREFIX, opts)
+        .Then(litebus::Defer(GetAID(), &InstanceManagerActor::ProxyAbnormalSyncer, std::placeholders::_1));
+
+    InstanceInfoSyncer().OnComplete([aid(GetAID())](const litebus::Future<SyncResult> &res) {
+        litebus::Async(aid, &InstanceManagerActor::FunctionMetaSyncer);
+    });
 }
 
 litebus::Future<Status> InstanceManagerActor::TryCancelSchedule(const std::string &id, const messages::CancelType &type,
@@ -1903,7 +1971,7 @@ void InstanceManagerActor::DoTryCancel(const litebus::Future<litebus::Option<Nod
     auto root = future.Get().Get();
     auto aid = litebus::AID(root.name + DOMAIN_SCHEDULER_SRV_ACTOR_NAME_POSTFIX, root.address);
     YRLOG_WARN("send try cancel schedule request, cancel({}) type({}) reason({}) msgid({})", cancelRequest->id(),
-               cancelRequest->type(), cancelRequest->reason(), cancelRequest->msgid());
+               fmt::underlying(cancelRequest->type()), cancelRequest->reason(), cancelRequest->msgid());
     Send(aid, "TryCancelSchedule", cancelRequest->SerializeAsString());
     (void)promise->GetFuture().After(cancelTimout_, [aid(GetAID()), globalScheduler(member_->globalScheduler),
                                                      cancelRequest, promise](const litebus::Future<Status> &) {
@@ -1967,4 +2035,42 @@ void InstanceManagerActor::ClearAbnormalScheduler(const std::string &node)
     member_->abnormalDeferTimer.erase(node);
 }
 
+litebus::Future<Status> InstanceManagerActor::CheckSyncResponse(const std::shared_ptr<GetResponse> &response)
+{
+    if (!response->status.IsOk()) {
+        YRLOG_ERROR("failed to sync data, err is {}, gonna to suicide", response->status.ToString());
+        CommitSuicide();
+        return Status(StatusCode::FAILED);
+    }
+    if (response->header.revision > INT64_MAX - 1) {
+        YRLOG_ERROR("revision({}) add operation will exceed the maximum value({}) of INT64, gonna to suicide",
+                    response->header.revision, INT64_MAX);
+        CommitSuicide();
+        return Status(StatusCode::FAILED);
+    }
+    return Status::OK();
+}
+
+void InstanceManagerActor::CommitSuicide()
+{
+    if (!isSuicide_) {
+        isSuicide_ = true;
+        (void)raise(SIGINT);
+    }
+}
+
+litebus::Future<std::pair<std::string, std::shared_ptr<InstanceInfo>>> InstanceManagerActor::GetInstanceInfoByID(
+    const std::string &instanceID)
+{
+    if (isInstancesReady_.GetFuture().IsInit()) {
+        YRLOG_WARN("instance-manager is not ready, wait");
+    }
+    return isInstancesReady_.GetFuture().Then(
+        litebus::Defer(GetAID(), &InstanceManagerActor::GetInstanceInfoByInstanceID, instanceID));
+}
+
+void InstanceManagerActor::SetInstancesReady()
+{
+    isInstancesReady_.SetValue(true);
+}
 }  // namespace functionsystem::instance_manager

@@ -22,7 +22,7 @@
 #include <unordered_map>
 
 #include "common/utils/exec_utils.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem {
 [[maybe_unused]] static std::unordered_map<pid_t, std::string> QueryProcStatus(std::unordered_set<pid_t> pids)

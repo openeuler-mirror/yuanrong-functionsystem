@@ -26,14 +26,9 @@ const int DEFAULT_MAX_SIZE = 100;  // 100 MB
 const int DEFAULT_RETENTION_DAYS = 30;
 const int DEFAULT_LOG_BUF_SECONDS = 30;
 const uint32_t DEFAULT_MAX_FILES = 3;
-const uint32_t DEFAULT_MAX_ASYNC_QUEUE_SIZE = 51200;  // 1024*50(every log length)
+const uint32_t DEFAULT_MAX_ASYNC_QUEUE_SIZE = 1024;  // 1024(every log length)
 const uint32_t DEFAULT_ASYNC_THREAD_COUNT = 1;
 const int64_t SIZE_MEGA_BYTES = 1024 * 1024;  // 1 MB
-const int ASYNC_THREAD_COUNT_MAX = 10;
-const int FILES_COUNT_MAX = 500;
-const int FILE_SIZE_MAX = 1024; // 1024 MB
-const int RETENTION_DAYS_MAX = 365;
-const int MAX_ASYNC_QUEUE_SIZE_MAX = 2097152; // 1024 * 1024 * 2
 
 struct LogParam {
     std::string loggerName;
@@ -50,6 +45,7 @@ struct LogParam {
     int retentionDays = DEFAULT_RETENTION_DAYS;
     uint32_t maxFiles = DEFAULT_MAX_FILES;
     std::string stdLogLevel;
+    bool syncFlush = false;
 };
 
 struct GlobalLogParam {

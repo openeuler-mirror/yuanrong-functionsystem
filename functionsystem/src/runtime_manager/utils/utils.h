@@ -17,7 +17,6 @@
 #ifndef RUNTIME_MANAGER_UTILS_UTILS_H
 #define RUNTIME_MANAGER_UTILS_UTILS_H
 
-#include <iostream>
 #include <vector>
 #include <async/uuid_generator.hpp>
 #include <functional>

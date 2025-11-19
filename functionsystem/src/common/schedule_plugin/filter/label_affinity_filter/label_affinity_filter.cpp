@@ -16,7 +16,7 @@
 
 #include "label_affinity_filter.h"
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
 #include "common/schedule_plugin/common/affinity_utils.h"
 #include "common/schedule_plugin/common/constants.h"
@@ -207,6 +207,18 @@ bool IsDataAffinityScoreOptimal(const std::string &unitID, const resource_view::
     return true;
 }
 
+bool IsTenantAffinityScoreOptimal(const std::string &unitID, const resource_view::InstanceInfo &instance,
+                                  const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
+{
+    const auto &affinity = instance.scheduleoption().affinity();
+    if (affinity.has_inner() && affinity.inner().has_tenant() && affinity.inner().tenant().has_preferredaffinity() &&
+        !AffinityScorerMeetOptimal(unitID, affinity.inner().tenant().preferredaffinity(), labels, false)) {
+        YRLOG_DEBUG("The resourceUnit({}) does not meet the tenant preferredaffinity optimal score.", unitID);
+        return false;
+    }
+    return true;
+}
+
 bool IsGroupScheduleAffinityScoreOptimal(const std::string &unitID, const resource_view::InstanceInfo &instance,
                                    const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
 {
@@ -226,7 +238,6 @@ bool IsGroupScheduleAffinityScoreOptimal(const std::string &unitID, const resour
         YRLOG_DEBUG("The resourceUnit({}) does not meet the grouplb preferredantiaffinity optimal score.", unitID);
         return false;
     }
-
     return true;
 }
 
@@ -237,7 +248,8 @@ bool IsInnerAffinityScoreOptimal(const resource_view::ResourceUnit &resourceUnit
     auto unitId = resourceUnit.id();
     auto ownerId = resourceUnit.ownerid();
     // 1.check if the inner preempt affinity meets the optimal score.
-    if (!IsPreemptAffinityScoreOptimal(ownerId, instance, preContext->allLocalLabels[ownerId])) {
+    auto localNodeLabels = GetLocalNodeLabels(resourceUnit, preContext);
+    if (!IsPreemptAffinityScoreOptimal(ownerId, instance, localNodeLabels)) {
         return false;
     }
 
@@ -245,14 +257,18 @@ bool IsInnerAffinityScoreOptimal(const resource_view::ResourceUnit &resourceUnit
     if (!IsDataAffinityScoreOptimal(unitId, instance, resourceUnit.nodelabels())) {
         return false;
     }
-
-    // 3.check if the inner group affinity meets the optimal score.
+	
+	// 3.check if the inner Tenant affinity meets the optimal score.
     // merge scheduled instance labels
     auto unitChildAgentLabels = resourceUnit.nodelabels() + preContext->allocatedLabels[unitId];
-    if (!IsGroupScheduleAffinityScoreOptimal(unitId, instance, unitChildAgentLabels)) {
+    if (!IsTenantAffinityScoreOptimal(unitId, instance, unitChildAgentLabels)) {
         return false;
     }
 
+    // 4.check if the inner group affinity meets the optimal score.
+    if (!IsGroupScheduleAffinityScoreOptimal(unitId, instance, unitChildAgentLabels)) {
+        return false;
+    }
     return true;
 }
 
@@ -298,6 +314,17 @@ bool IsResourceRequiredAffinityPassed(const std::string &unitID, const resource_
     return true;
 }
 
+bool IsInnerTenantRequiredAffinityPassed(const std::string &unitID, const resource_view::InstanceInfo &instance,
+    const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
+{
+    const auto &affinity = instance.scheduleoption().affinity();
+    if (!affinity.has_inner() || !affinity.inner().has_tenant() ||
+        !affinity.inner().tenant().has_requiredantiaffinity()) {
+        return true;
+    }
+    return RequiredAntiAffinityFilter(unitID, affinity.inner().tenant().requiredantiaffinity(), labels);
+}
+
 bool IsInnerResourceGroupRequiredAffinityPassed(
     const std::string &unitID, const resource_view::InstanceInfo &instance,
     const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
@@ -334,13 +361,11 @@ bool IsInnerPendingRequiredAffinityPassed(const std::string &unitID, const resou
     for (const auto& pendingResource : pending.resources()) {
         bool isPendingRequirementMet = true;
         if (pendingResource.has_requiredaffinity()) {
-            isPendingRequirementMet = isPendingRequirementMet &&
-                RequiredAffinityFilter(unitID, pendingResource.requiredaffinity(), labels);
+            isPendingRequirementMet &= RequiredAffinityFilter(unitID, pendingResource.requiredaffinity(), labels);
         }
 
         if (pendingResource.has_requiredantiaffinity()) {
-            isPendingRequirementMet = isPendingRequirementMet &&
-                RequiredAntiAffinityFilter(unitID, pendingResource.requiredantiaffinity(),
+            isPendingRequirementMet &= RequiredAntiAffinityFilter(unitID, pendingResource.requiredantiaffinity(),
                                                                   labels);
         }
 
@@ -373,6 +398,9 @@ bool NeedLabelFilter(const resource_view::InstanceInfo &instance)
 
     // 3.check inner-related affinity
     if (affinity.has_inner()) {
+        if (affinity.inner().has_tenant() && affinity.inner().tenant().has_requiredantiaffinity()) {
+            return true;
+        }
         if (affinity.inner().has_pending() &&
             (!affinity.inner().pending().resources().empty())) {
             return true;
@@ -404,12 +432,13 @@ bool LabelAffinityFilter::PerformLabelFilter(
 
     // merge scheduled instance labels
     auto unitLabels = resourceUnit.nodelabels() + ctx->allocatedLabels[resourceUnit.id()];
+    auto localNodeLabels = GetLocalNodeLabels(resourceUnit, ctx);
     // 1.Filter instance-related affinity
     if (IsNodeAffinityScope(instance) &&
-        !IsInstanceRequiredAffinityPassed(ownerId, instance, ctx->allLocalLabels[ownerId])) {
+        !IsInstanceRequiredAffinityPassed(ownerId, instance, localNodeLabels)) {
         YRLOG_DEBUG("{}|instance({}) agent({}) failed to perform instance node affinity filtering. nodelabel({})",
                     instance.requestid(), instance.instanceid(), unitId,
-                    DebugProtoMapString(ctx->allLocalLabels[ownerId]));
+                    DebugProtoMapString(localNodeLabels));
         ctx->TagNodeUnfeasible(ownerId);
         return false;
     }
@@ -425,7 +454,12 @@ bool LabelAffinityFilter::PerformLabelFilter(
                     DebugProtoMapString(resourceUnit.nodelabels()));
         return false;
     }
-
+    // 3.Filter inner-related affinity
+    if (!IsInnerTenantRequiredAffinityPassed(resourceUnit.id(), instance, unitLabels)) {
+        YRLOG_DEBUG("{}|instance({}) agent({}) failed to perform inner(tenant) affinity filtering. unitLabels({})",
+                    instance.requestid(), instance.instanceid(), unitId, DebugProtoMapString(unitLabels));
+        return false;
+    }
     if (!IsInnerPendingRequiredAffinityPassed(resourceUnit.id(), instance, resourceUnit.nodelabels())) {
         YRLOG_DEBUG("{}|instance({}) agent({}) failed to perform inner(pending) affinity filtering. nodelabels({})",
                     instance.requestid(), instance.instanceid(), unitId,
@@ -453,14 +487,14 @@ bool LabelAffinityFilter::PerformScoreOptimalityCheck(
     const resource_view::InstanceInfo &instance,
     const std::shared_ptr<schedule_framework::PreAllocatedContext> &preContext) const
 {
-    auto ownerId = resourceUnit.ownerid();
     auto unitId = resourceUnit.id();
 
     // 1.check if the instance-related affinity meets the optimal score.
     bool isInstanceAffinityScoreOptimal = true;
     if (IsNodeAffinityScope(instance)) {
+        auto localNodeLabels = GetLocalNodeLabels(resourceUnit, preContext);
         isInstanceAffinityScoreOptimal =
-            IsInstanceAffinityScoreOptimal(unitId, instance, preContext->allLocalLabels[ownerId]);
+            IsInstanceAffinityScoreOptimal(unitId, instance, localNodeLabels);
     } else {
         // merge scheduled instance labels
         auto unitChildAgentLabels = resourceUnit.nodelabels() + preContext->allocatedLabels[unitId];
@@ -493,7 +527,7 @@ schedule_framework::Filtered LabelAffinityFilter::Filter(
     result.availableForRequest = -1;
 
     const auto preContext = std::dynamic_pointer_cast<schedule_framework::PreAllocatedContext>(ctx);
-    if (preContext == nullptr || preContext->pluginCtx == nullptr) {
+    if (preContext == nullptr || preContext->pluginCtx == nullptr || preContext->allLocalLabels.empty()) {
         YRLOG_WARN("{}|invalid context for LabelAffinityFilter", instance.requestid());
         result.status = Status(StatusCode::PARAMETER_ERROR, "Invalid context");
         return result;

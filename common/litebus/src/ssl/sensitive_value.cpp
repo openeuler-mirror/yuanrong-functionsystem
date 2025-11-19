@@ -104,6 +104,29 @@ const char *SensitiveValue::GetData() const
     return Empty() ? "" : data_.get();
 }
 
+std::string SensitiveValue::GetMaskData() const
+{
+    if (!data_ || size_ == 0) {
+        return "";
+    }
+
+    const std::string source(data_.get(), size_);
+    const size_t hash = std::hash<std::string>{}(source);
+
+    std::string output = std::to_string(hash);
+    const size_t totalLen = output.length();
+    if (totalLen == 0) {
+        return "";
+    }
+
+    const size_t hiddenLen = (totalLen + 1) >> 1;
+    for (size_t i = 0; i < hiddenLen; ++i) {
+        output[i] = '*';
+    }
+
+    return output;
+}
+
 size_t SensitiveValue::GetSize() const
 {
     return size_;

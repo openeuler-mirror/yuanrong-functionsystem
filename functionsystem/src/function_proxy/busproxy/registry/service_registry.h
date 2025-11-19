@@ -17,7 +17,7 @@
 #ifndef BUSPROXY_SERVICE_REGISTRY_H
 #define BUSPROXY_SERVICE_REGISTRY_H
 
-#include "metadata/metadata.h"
+#include "common/metadata/metadata.h"
 #include "meta_storage_accessor/meta_storage_accessor.h"
 #include "busproxy/registry/constants.h"
 #include "function_proxy/common/observer/observer_actor.h"

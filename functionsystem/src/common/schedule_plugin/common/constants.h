@@ -33,6 +33,7 @@ const std::string RELAXED_ROOT_LABEL_AFFINITY_FILTER_NAME = "RelaxedRootLabelAff
 const std::string STRICT_ROOT_LABEL_AFFINITY_FILTER_NAME = "StrictRootLabelAffinityFilter";
 const std::string RELAXED_NON_ROOT_LABEL_AFFINITY_FILTER_NAME = "RelaxedNonRootLabelAffinityFilter";
 const std::string STRICT_NON_ROOT_LABEL_AFFINITY_FILTER_NAME = "StrictNonRootLabelAffinityFilter";
+const std::string DISK_FILTER_NAME = "DiskFilter";
 
 // scorer name
 const std::string DEFAULT_SCORER_NAME = "DefaultScorer";
@@ -40,11 +41,13 @@ const std::string DEFAULT_HETEROGENEOUS_SCORER_NAME = "DefaultHeterogeneousScore
 const std::string LABEL_AFFINITY_SCORER_NAME = "LabelAffinityScorer";
 const std::string RELAXED_LABEL_AFFINITY_SCORER_NAME = "RelaxedLabelAffinityScorer";
 const std::string STRICT_LABEL_AFFINITY_SCORER_NAME = "StrictLabelAffinityScorer";
+const std::string DISK_SCORER_NAME = "DiskScorer";
 
 const int64_t DEFAULT_SCORE = 100;
 const float INVALID_SCORE = -1.0f;
 const float MIN_SCORE_THRESHOLD = 0.1f;
 const float BASE_SCORE_FACTOR = 1.0f;
+const int INVALID_INDEX = -1;
 const std::string MONOPOLY_MODE = "monopoly";
 
 }

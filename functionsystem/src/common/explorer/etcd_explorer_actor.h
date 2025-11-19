@@ -29,7 +29,7 @@ public:
     EtcdExplorerActor(const std::string &electionKey, const ElectionInfo &electionInfo,
                       const litebus::Option<LeaderInfo> &leaderInfo,
                       const std::shared_ptr<MetaStoreClient> &metaStoreClient)
-        : ExplorerActor("EtcdExplorerActor-" + litebus::uuid_generator::UUID::GetRandomUUID().ToString(), electionKey,
+        : ExplorerActor("EtcdExplorerActor-" + litebus::uuid_generator::UUID::GetRandomUUID().ToString(), {electionKey},
                         electionInfo, leaderInfo),
           metaStoreClient_(metaStoreClient)
     {
@@ -49,6 +49,8 @@ private:
     // meta store client
     std::shared_ptr<MetaStoreClient> metaStoreClient_{ nullptr };
     std::shared_ptr<Observer> observer_{ nullptr };
+    // etcd explorer only supports one election key now
+    std::string electionKey_;
 };
 }  // namespace functionsystem::explorer
 

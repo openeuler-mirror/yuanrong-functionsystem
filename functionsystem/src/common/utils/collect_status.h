@@ -18,7 +18,7 @@
 
 #include "async/collect.hpp"
 #include "async/defer.hpp"
-#include "status/status.h"
+#include "common/status/status.h"
 
 namespace functionsystem {
 [[maybe_unused]] static litebus::Future<Status> CollectStatus(

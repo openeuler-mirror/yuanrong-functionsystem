@@ -17,7 +17,7 @@
 #include "aggregated_queue.h"
 
 #include "common/create_agent_decision/create_agent_decision.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem::schedule_decision {
 
@@ -147,6 +147,7 @@ litebus::Future<Status> AggregatedQueue::Dequeue()
             }
             frontItem_ = aggregatedReqs[i].front();
             frontPriority_ = i;
+            break;
         }
     }
     if (frontItem_->GetItemType() == QueueItemType::AGGREGATED_ITEM) {

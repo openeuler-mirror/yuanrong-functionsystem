@@ -17,7 +17,7 @@
 #include "data_interface_client_manager_proxy.h"
 
 #include "async/async.hpp"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "data_interface_client_manager.h"
 
 namespace functionsystem {

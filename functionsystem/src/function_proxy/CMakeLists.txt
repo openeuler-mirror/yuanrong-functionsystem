@@ -37,6 +37,7 @@ target_link_libraries(function_proxy PRIVATE
         ${litebus_ALL_LIB}
         busproxy_lib local_scheduler_lib
         function_proxy_common_lib utils
+        resource_lock
         ${PLUGIN_LIB})
 
 INSTALL_TARGET(function_proxy)

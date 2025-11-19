@@ -20,7 +20,8 @@
 #include <async/future.hpp>
 #include <functional>
 
-#include "proto/pb/posix_pb.h"
+#include "common/proto/pb/posix_pb.h"
+#include "function_proxy/common/iam/internal_iam.h"
 #include "function_proxy/common/observer/data_plane_observer/data_plane_observer.h"
 #include "function_proxy/busproxy/instance_proxy/instance_proxy.h"
 #include "function_proxy/busproxy/memory_monitor/memory_monitor.h"
@@ -54,6 +55,11 @@ public:
     static void UnBindInstanceProxy()
     {
         instanceProxy_ = nullptr;
+    }
+
+    static void BindInternalIAM(const std::shared_ptr<function_proxy::InternalIAM> &internalIam)
+    {
+        internalIam_ = internalIam;
     }
 
     static void BindMemoryMonitor(const std::shared_ptr<functionsystem::MemoryMonitor> &memoryMonitor)
@@ -101,6 +107,7 @@ private:
     inline static std::string localUrl_;
     inline static std::shared_ptr<busproxy::InstanceProxyWrapper> instanceProxy_{ nullptr };
     inline static std::shared_ptr<functionsystem::MemoryMonitor> memoryMonitor_{ nullptr };
+    inline static std::shared_ptr<function_proxy::InternalIAM> internalIam_{ nullptr };
     inline static std::atomic<bool> isPerf_{ false };
 };
 

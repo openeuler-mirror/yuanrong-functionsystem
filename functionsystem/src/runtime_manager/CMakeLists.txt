@@ -35,10 +35,19 @@ add_subdirectory(utils)
 add_subdirectory(port)
 add_subdirectory(driver)
 add_subdirectory(log)
+add_subdirectory(debug)
+add_subdirectory(virtual_env_manager)
 
-target_link_libraries(runtime_manager_lib
-        ${litebus_ALL_LIB}
+target_link_libraries(runtime_manager_lib ${litebus_ALL_LIB}
         ${yaml_LIB}
+	aksk
         register common_flags
         http file_monitor network
         utils metrics_adapter resource_view)
+
+add_executable(runtime_manager main.cpp)
+target_compile_options(runtime_manager PRIVATE -fPIE)
+
+target_link_libraries(runtime_manager PRIVATE runtime_manager_lib)
+
+INSTALL_TARGET(runtime_manager)

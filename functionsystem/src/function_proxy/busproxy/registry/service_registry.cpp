@@ -20,7 +20,7 @@
 #include <sstream>
 #include <utility>
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem {
 

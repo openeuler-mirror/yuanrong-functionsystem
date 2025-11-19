@@ -16,10 +16,11 @@
 #ifndef RUNTIME_MANAGER_MANAGER_RUNTIME_MANAGER_H
 #define RUNTIME_MANAGER_MANAGER_RUNTIME_MANAGER_H
 
-#include "constants.h"
-#include "heartbeat/ping_pong_driver.h"
+#include "common/constants/constants.h"
+#include "common/heartbeat/heartbeat_client.h"
 #include "common/register/register_helper.h"
 #include "runtime_manager/config/flags.h"
+#include "runtime_manager/debug/debug_server_mgr.h"
 #include "runtime_manager/executor/executor.h"
 #include "runtime_manager/healthcheck/health_check.h"
 #include "runtime_manager/log/log_manager.h"
@@ -29,7 +30,7 @@ namespace functionsystem::runtime_manager {
 
 class RuntimeManager : public litebus::ActorBase {
 public:
-    explicit RuntimeManager(const std::string &name);
+    explicit RuntimeManager(const std::string &name, bool logReuse = false);
 
     ~RuntimeManager() override = default;
 
@@ -79,6 +80,13 @@ public:
     void QueryInstanceStatusInfo(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     /**
+     * QueryDebugInstanceInfos
+     *
+     * @param from Function agent aid.
+     */
+    void QueryDebugInstanceInfos(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    /**
      * clean status request from funtion agent
      */
     void CleanStatus(const litebus::AID &from, std::string &&, std::string &&msg);
@@ -113,6 +121,8 @@ public:
 
     litebus::Future<bool> IsRuntimeActive(const std::string &runtimeID);
 
+    litebus::Future<bool> IsRuntimeActiveByPid(const pid_t &pid);
+
     void QueryRuntimeActiveResponse(const litebus::AID &to, const litebus::Future<bool> &isActiveFutrue,
         const std::string &runtimeID, const std::string &requestID);
 
@@ -132,6 +142,9 @@ private:
 
     std::shared_ptr<LogManager> logManagerClient_;
 
+    bool runtimeInstanceDebugEnable_{ false };
+    std::shared_ptr<DebugServerMgr> debugServerMgr_{ nullptr };
+
     std::shared_ptr<RegisterHelper> registerHelper_{ nullptr };
 
     litebus::AID functionAgentAID_;
@@ -147,6 +160,8 @@ private:
     std::unordered_set<std::string> receivedStartingReq_;
 
     bool connected_ = false;
+
+    bool logReuse_ = false;
 
     std::shared_ptr<ExecutorProxy> FindExecutor(EXECUTOR_TYPE);
 
@@ -166,11 +181,34 @@ private:
     Status QueryInstanceStatusInfoResponse(const litebus::AID &from, const std::string &requestID,
                                            const messages::InstanceStatusInfo &info);
 
+    Status QueryDebugInstanceInfosResponse(const litebus::AID &from,
+                                           const messages::QueryDebugInstanceInfosResponse &response);
+
     void CreateInstanceMetrics(const litebus::Future<messages::StartInstanceResponse> &response,
                                const std::shared_ptr<messages::StartInstanceRequest> &request);
 
     void CheckHealthForRuntime(const litebus::Future<messages::StartInstanceResponse> &response,
                                const std::shared_ptr<messages::StartInstanceRequest> &request);
+
+    litebus::Future<messages::StartInstanceResponse> CreateDebugServer(
+        const litebus::Future<messages::StartInstanceResponse> &response,
+        const std::shared_ptr<messages::StartInstanceRequest> &request);
+
+    litebus::Future<messages::StartInstanceResponse> DebugServerAddRecord(
+        const litebus::Future<messages::StartInstanceResponse> &response,
+        const std::shared_ptr<messages::StartInstanceRequest> &request);
+
+    litebus::Future<messages::StartInstanceResponse> ExecutorStartInstance(
+        const litebus::Future<messages::StartInstanceResponse> &response,
+        const std::shared_ptr<ExecutorProxy> &executor, const std::shared_ptr<messages::StartInstanceRequest> &request,
+        const std::vector<int> &cardIDs);
+
+    litebus::Future<messages::StartInstanceResponse> TryAcquireLogPrefix(
+        const litebus::Future<messages::StartInstanceResponse> &response,
+        const std::shared_ptr<messages::StartInstanceRequest> &request);
+
+    void DestroyDebugServer(const litebus::Future<Status> &status,
+                            const std::shared_ptr<messages::StopInstanceRequest> &request);
 
     void DeleteInstanceMetrics(const litebus::Future<Status> &status,
                                const std::shared_ptr<messages::StopInstanceRequest> &request);
@@ -187,13 +225,18 @@ private:
 
     void CommitSuicide() const;
 
-    void ClearRuntimeManagerCapability(const litebus::Future<messages::StartInstanceResponse> &response,
+    void ClearRuntimeManagerCapability(const std::shared_ptr<ExecutorProxy> &executorProxy,
+                                       const litebus::Future<messages::StartInstanceResponse> &response,
                                        const std::shared_ptr<messages::StartInstanceRequest> &request) const
     {
         if (response.IsError() || response.Get().code() != static_cast<int32_t>(SUCCESS)) {
             YRLOG_ERROR("{}|{}|failed to start instance, no need to clear capability.",
                         request->runtimeinstanceinfo().traceid(), request->runtimeinstanceinfo().requestid());
             return;
+        }
+
+        if (request->scheduleoption().schedpolicyname() == MONOPOLY_SCHEDULE) {
+            executorProxy->ClearCapability();
         }
     }
 
@@ -207,6 +250,9 @@ private:
     {
         registerHelper_->SetRegisterInterval(interval);
     }
+
+    bool ShouldSkipDebugServerCreation(const litebus::Future<messages::StartInstanceResponse> &response,
+                                       const std::shared_ptr<messages::StartInstanceRequest> &request) const;
 };
 }  // namespace functionsystem::runtime_manager
 

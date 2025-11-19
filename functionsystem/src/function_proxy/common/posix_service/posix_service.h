@@ -19,7 +19,8 @@
 
 #include <async/future.hpp>
 
-#include "rpc/stream/posix/posix_stream.h"
+#include "function_proxy/common/iam/internal_iam.h"
+#include "common/rpc/stream/posix/posix_stream.h"
 
 namespace functionsystem {
 
@@ -42,6 +43,11 @@ public:
     ::grpc::ServerBidiReactor<runtime_rpc::StreamingMessage, runtime_rpc::StreamingMessage> *MessageStream(
         ::grpc::CallbackServerContext *context) override;
 
+    void BindInternalIAM(const std::shared_ptr<function_proxy::InternalIAM> &internalIam)
+    {
+        internalIam_ = internalIam;
+    }
+
     void RegisterUpdatePosixClientCallback(const UpdatePosixClientCallback &cb)
     {
         updatePosixClientCallback_ = cb;
@@ -52,6 +58,7 @@ public:
     static void UpdateClient(const std::string &instanceID, const std::shared_ptr<grpc::PosixClient> &client);
 
 private:
+    std::shared_ptr<function_proxy::InternalIAM> internalIam_;
     // Callback should not cost much time
     UpdatePosixClientCallback updatePosixClientCallback_;
 

@@ -18,7 +18,6 @@
 #define FUNCTION_PROXY_COMMON_STATE_MACHINE_INSTANCE_LISTENER_H
 
 #include <string>
-#include "proto/pb/posix/resource.pb.h"
 
 namespace functionsystem {
 
@@ -29,7 +28,7 @@ public:
     }
     virtual void Update(const std::string &instanceID, const resources::InstanceInfo &instanceInfo,
                         bool isForceUpdate) = 0;
-    virtual void Delete(const std::string &instanceID) = 0;
+    virtual void Delete(const std::string &instanceID, int64_t modRevision) = 0;
 };
 
 }  // namespace functionsystem

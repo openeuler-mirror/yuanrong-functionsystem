@@ -20,8 +20,8 @@
 #include <memory>
 
 #include "common/utils/actor_driver.h"
-#include "logs/logging.h"
-#include "proto/pb/message_pb.h"
+#include "common/logs/logging.h"
+#include "common/proto/pb/message_pb.h"
 #include "common/observer/tenant_listener.h"
 #include "meta_store_monitor/meta_store_healthy_observer.h"
 #include "function_agent_mgr_actor.h"
@@ -44,8 +44,7 @@ public:
                                                     const std::shared_ptr<MetaStoreClient> &metaStoreClient);
 
     void Start(const std::shared_ptr<InstanceCtrl> &instanceCtrl,
-               const std::shared_ptr<resource_view::ResourceView> &resourceView,
-               const std::shared_ptr<HeartbeatObserverCtrl> &heartbeatObserverCtrl = nullptr);
+               const std::shared_ptr<resource_view::ResourceView> &resourceView);
 
     void BindLocalSchedSrv(const std::shared_ptr<LocalSchedSrv> &localSchedSrv);
 
@@ -87,6 +86,9 @@ public:
     virtual litebus::Future<bool> IsFuncAgentRecovering(const std::string &funcAgentID);
 
     virtual void SetAbnormal();
+
+    virtual litebus::Future<messages::StaticFunctionChangeResponse> NotifyFunctionStatusChange(
+        const std::shared_ptr<messages::StaticFunctionChangeRequest> &request, const std::string &funcAgentID);
 
     void OnTenantUpdateInstance(const TenantEvent &event) override;
 
@@ -213,12 +215,17 @@ public:
         return actor_->GetLocalStatus();
     }
 
+    // for test
+    [[maybe_unused]] void StaticFunctionScheduleRequest(const litebus::AID &from, std::string &&name, std::string &&msg)
+    {
+        ASSERT_IF_NULL(actor_);
+        actor_->StaticFunctionScheduleRequest(from, std::move(name), std::move(msg));
+    }
+
 private:
     virtual void BindInstanceCtrl(const std::shared_ptr<InstanceCtrl> &instanceCtrl);
 
     virtual void BindResourceView(const std::shared_ptr<resource_view::ResourceView> &resourceView);
-
-    virtual void BindHeartBeatObserverCtrl(const std::shared_ptr<HeartbeatObserverCtrl> &heartbeatObserverCtrl);
 
     std::shared_ptr<FunctionAgentMgrActor> actor_;
 };

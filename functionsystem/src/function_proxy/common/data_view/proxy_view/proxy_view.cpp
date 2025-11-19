@@ -15,7 +15,7 @@
  */
 #include "proxy_view.h"
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem {
 std::shared_ptr<proxy::Client> ProxyView::Get(const std::string &proxyID)

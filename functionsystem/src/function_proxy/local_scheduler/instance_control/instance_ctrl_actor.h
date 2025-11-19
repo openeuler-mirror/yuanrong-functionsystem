@@ -22,19 +22,20 @@
 #include <unordered_set>
 #include <chrono>
 
-#include "proto/pb/message_pb.h"
-#include "proto/pb/posix_pb.h"
-#include "resource_type.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/proto/pb/posix_pb.h"
+#include "common/resource_view/resource_type.h"
 #include "common/resource_view/resource_view_mgr.h"
-#include "rpc/stream/posix/control_client.h"
+#include "common/rpc/stream/posix/control_client.h"
 #include "common/schedule_decision/scheduler.h"
 #include "common/schedule_decision/scheduler_common.h"
 #include "common/state_machine/instance_control_view.h"
 #include "common/state_machine/instance_state_machine.h"
 #include "common/state_machine/instance_context.h"
-#include "status/status.h"
+#include "common/status/status.h"
 #include "common/types/instance_state.h"
 #include "function_agent_manager/function_agent_mgr.h"
+#include "function_proxy/common/iam/internal_iam.h"
 #include "function_proxy/common/observer/control_plane_observer/control_plane_observer.h"
 #include "function_proxy/common/posix_client/control_plane_client/control_interface_client_manager_proxy.h"
 #include "function_proxy/common/rate_limiter/token_bucket_rate_limiter.h"
@@ -175,6 +176,19 @@ public:
                                        bool isSkipAuth = false);
 
     /**
+     * receive exit instance from client
+     * @param exitReq: exit request
+     * @return exit instance response
+     */
+    litebus::Future<ExitResponse> HandleExit(const std::string &srcInstanceID,
+                                             const std::shared_ptr<ExitRequest> &exitReq);
+
+    litebus::Future<KillResponse> HandleKill(const std::string &srcInstanceID,
+                                             const std::shared_ptr<KillRequest> &killReq, bool isSkipAuth);
+
+    void OnKill(const std::shared_ptr<KillRequest> &killReq, const litebus::Future<KillResponse> &rsp);
+
+    /**
      * receive update instance status from client
      * @param info: instance status info need to update
      * @return update result
@@ -247,7 +261,12 @@ public:
         resourceViewMgr_ = resourceViewMgr;
     }
 
+    void BindInternalIAM(const std::shared_ptr<function_proxy::InternalIAM> &internalIAM);
+
+    bool IsInstanceRunning(const std::string &instanceID);
+
     void OnHealthyStatus(const Status &status);
+    void CheckInstanceFailedState(const litebus::Future<function_proxy::InstanceInfoMap> &instanceMap);
     litebus::Future<Status> InstanceRouteInfoSyncer(const resource_view::RouteInfo &routeInfo);
     void UpdateFuncMetas(bool isAdd, const std::unordered_map<std::string, FunctionMeta> &funcMetas);
 
@@ -295,6 +314,7 @@ public:
     {
         subscriptionMgr_ = subscriptionMgr;
         ASSERT_IF_NULL(instanceControlView_);
+        ASSERT_IF_NULL(subscriptionMgr_);
         subscriptionMgr_->BindInstanceControlView(instanceControlView_);
         ASSERT_IF_NULL(observer_);
         subscriptionMgr_->BindObserver(observer_);
@@ -314,6 +334,11 @@ public:
                                                             const std::string &funcAgentID);
 
     litebus::Future<Status> RecoverInstance(const std::string &instanceID);
+
+    litebus::Future<Status> AuthorizeCreate(
+        const litebus::Option<FunctionMeta> &functionMeta,
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise);
 
     litebus::Future<messages::ScheduleResponse> DoAuthorizeCreate(
         const litebus::Option<FunctionMeta> &functionMeta,
@@ -356,6 +381,8 @@ public:
 
     litebus::Future<litebus::Option<FunctionMeta>> GetFuncMeta(const std::string &funcKey);
 
+    litebus::Future<Status> AddTokenReference(const std::pair<std::string, std::string> &tokenReferPair);
+
     litebus::Future<Status> GetAffinity(const Status &authorizeStatus,
                                         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
@@ -382,10 +409,13 @@ public:
                                const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
     void TryRecoverExistedInstanceWithoutAgent(const InstanceInfo &info);
 
-    litebus::Future<Status> OnQueryInstanceStatusInfo(const litebus::Future<::messages::InstanceStatusInfo> &future,
-                                                      const std::shared_ptr<InstanceStateMachine> &stateMachine,
-                                                      const std::string &errMsg, const std::string &runtimeID,
-                                                      bool isRuntimeRecoverEnable);
+    litebus::Future<bool> IsSystemTenant(const std::string &tenantID);
+
+    void OnQueryInstanceStatusInfo(const litebus::Future<::messages::InstanceStatusInfo> &future,
+                                   const std::shared_ptr<InstanceStateMachine> &stateMachine,
+                                   const std::pair<std::string, std::string> &runtimeErrMsg,
+                                   bool isRuntimeRecoverEnable,
+                                   const std::shared_ptr<litebus::Promise<Status>> promise);
 
     litebus::Future<KillResponse> KillResourceGroup(const std::string &srcInstanceID,
                                                      const std::shared_ptr<KillRequest> &killReq);
@@ -471,6 +501,8 @@ private:
 
     Status CheckHeteroResourceValid(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
+    bool CheckDiskResourceValid(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
+
     litebus::Future<Status> DispatchSchedule(const std::shared_ptr<messages::ScheduleRequest> &request);
 
     litebus::Future<messages::ScheduleResponse> DoDispatchSchedule(
@@ -510,6 +542,8 @@ private:
     litebus::Future<Status> UpdateInstance(const messages::DeployInstanceResponse &response,
                                            const std::shared_ptr<messages::ScheduleRequest> &request,
                                            uint32_t retriedTimes, bool isRecovering = false);
+
+    litebus::Future<ExitResponse> HandleNpuFault(const std::string &instanceID);
 
     /**
      * after app driver instance is deployed, just update instance to running in meta store and send callResult
@@ -566,6 +600,15 @@ private:
 
     void AddDsAuthToDeployInstanceReq(const std::shared_ptr<messages::ScheduleRequest> &scheduleRequest,
                                       const std::shared_ptr<messages::DeployInstanceRequest> &deployInstanceReq);
+
+    void RemoveInternalTokenReference(const std::string &instanceID);
+
+    void UpdateInternalToken(const std::string &tenantID, const std::string &token, const std::string &salt);
+    void UpdateInternalAkSk(const std::string &tenantID, const std::shared_ptr<AKSKContent> &akskContent);
+
+    void UpdateInstanceToken(const std::string &runtimeID, const std::string &agentID, const std::string &token,
+                             const std::string &salt);
+    void UpdateInstanceAkSk(const std::string &agentID, const std::shared_ptr<AKSKContent> &akskContent);
 
     litebus::Future<Status> KillAgentInstance(const Status &status, const std::shared_ptr<ResourceUnit> &resourceUnit);
 
@@ -719,9 +762,11 @@ private:
                                             bool isSynchronized);
 
     Status UpdateInstanceInfo(const resources::InstanceInfo &instanceInfo);
+    litebus::Future<Status> ReportInstanceExitLatency(const Status &status, long long startTimeMillis,
+                                                      const InstanceInfo &instanceInfo);
 
-    litebus::Future<litebus::Option<litebus::AID>> GetLocalSchedulerAID(const std::string &proxyID);
-    void RetryGetLocalSchedulerAID(const std::string &proxyID,
+    litebus::Future<litebus::Option<litebus::AID>> GetLocalSchedulerAID(const std::string &instanceID);
+    void RetryGetLocalSchedulerAID(const std::string &instanceID,
                                    const std::shared_ptr<litebus::Promise<litebus::Option<litebus::AID>>> &promise,
                                    const uint32_t retryTimes = 0);
 
@@ -763,7 +808,7 @@ private:
 
     litebus::Future<resources::InstanceInfo> TransFailedInstanceState(
         const resources::InstanceInfo &info, const std::shared_ptr<InstanceStateMachine> &stateMachine,
-        const InstanceState &failedInstanceState);
+        const InstanceState &failedInstanceState, int32_t errCode);
 
     litebus::Future<messages::ScheduleResponse> TryDispatchOnLocal(
         const Status &status, const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
@@ -780,13 +825,29 @@ private:
 
     bool CheckExistInstanceState(const InstanceState &state,
                                  const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
-                                 const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
+                                 const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+                                 bool isStateFromRemote = false);
 
     void OnDriverEvent(const resource_view::InstanceInfo &instanceInfo);
     void OnDriverConnected(const litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> &instanceClient,
                            const resource_view::InstanceInfo &instanceInfo);
 
     litebus::Future<KillResponse> OnExitInstance(const resource_view::InstanceInfo &instanceInfo, const Status &status);
+
+    litebus::Future<Status> DeleteInstanceForStaticFunction(const InstanceInfo &instanceInfo);
+
+    bool CheckRunningInstanceStateFromRemote(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise, bool isStateFromRemote);
+
+    bool SendCheckStateRequest(
+        const litebus::Option<litebus::AID> &option,
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const std::string &remote,
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise);
+
+    void CheckInstanceState(const litebus::AID &from, std::string &&, std::string &&msg);
+    void CheckInstanceStateResponse(const litebus::AID &from, std::string &&, std::string &&msg);
 
     void ClearLocalDriver();
 private:
@@ -807,6 +868,9 @@ private:
     std::shared_ptr<InstanceControlView> instanceControlView_;
 
     std::shared_ptr<LocalSchedSrv> localSchedSrv_;
+    std::shared_ptr<function_proxy::InternalIAM> internalIAM_;
+    std::unordered_map<std::string, std::unordered_set<std::string>> internalCredReferenceMap_;
+    std::unordered_map<std::string, litebus::Promise<::messages::UpdateCredResponse>> updateTokenPromises_;
 
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<std::shared_ptr<functionsystem::CallResult>>>>
         syncCreateCallResultPromises_;
@@ -868,6 +932,10 @@ private:
     std::shared_ptr<ResourceGroupCtrl> rGroupCtrl_;
 
     std::shared_ptr<SubscriptionMgr> subscriptionMgr_;
+
+    std::unordered_map<std::string, std::shared_ptr<litebus::Promise<KillResponse>>> killingRequest_;
+
+    BACK_OFF_RETRY_HELPER(InstanceCtrlActor, litebus::Option<InstanceState>, checkStateHelper_);
 };
 }  // namespace functionsystem::local_scheduler
 #endif  // LOCAL_SCHEDULER_INSTANCE_CTRL_ACTOR_H

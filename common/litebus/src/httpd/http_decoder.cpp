@@ -143,7 +143,7 @@ std::deque<http::Response *> ResponseDecoder::Decode(const char *data, size_t le
     if (responseParsed != length || bigSize) {
         http::HttpParserError parseResponseError = GetErrorCode();
         BUSLOG_INFO("parse data fail, parsedSize={}, length={}, parseError={}, bigSize={}", responseParsed, length,
-                    parseResponseError, bigSize);
+                    static_cast<std::underlying_type_t<http::HttpParserError>>(parseResponseError), bigSize);
 
         failure = true;
     }
@@ -314,7 +314,7 @@ std::deque<http::Request *> RequestDecoder::Decode(const char *data, size_t leng
     if (requestParsed != length || bigSize) {
         http::HttpParserError paserRequestError = GetErrorCode();
         BUSLOG_INFO("parse data fail, parsedSize={}, length={}, parseError={}, bigsize={}", requestParsed, length,
-                    paserRequestError, bigSize);
+                    static_cast<std::underlying_type_t<http::HttpParserError>>(paserRequestError), bigSize);
         failure = true;
     }
 

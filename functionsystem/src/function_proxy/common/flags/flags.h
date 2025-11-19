@@ -19,7 +19,7 @@
 
 #include <cstdint>
 
-#include "common_flags/common_flags.h"
+#include "common/common_flags/common_flags.h"
 
 namespace functionsystem::function_proxy {
 
@@ -309,6 +309,11 @@ public:
         return schedulePlugins_;
     }
 
+    bool GetEnableIpv4TenantIsolation() const
+    {
+        return enableIpv4TenantIsolation_;
+    }
+
     bool GetRuntimeDsAuthEnable() const
     {
         return runtimeDsAuthEnable_;
@@ -477,6 +482,7 @@ protected:
     bool enablePrintResourceView_;
     int32_t serviceTTL_;
     std::string schedulePlugins_;
+    bool enableIpv4TenantIsolation_;
     bool runtimeDsAuthEnable_;
     bool runtimeDsEncryptEnable_;
     std::string curveKeyPath_;

@@ -20,14 +20,14 @@
 #include <memory>
 #include <string>
 
-#include "constants.h"
-#include "proto/pb/posix/resource.pb.h"
-#include "resource_type.h"
+#include "common/constants/constants.h"
+#include "common/proto/pb/posix/resource.pb.h"
+#include "common/resource_view/resource_type.h"
 #include "common/resource_view/vectors_resource_tool.h"
 #include "common/schedule_plugin/common/preallocated_context.h"
 #include "common/scheduler_framework/framework/policy.h"
 #include "common/scheduler_framework/utils/score.h"
-#include "status/status.h"
+#include "common/status/status.h"
 
 namespace functionsystem::schedule_plugin::filter {
 class DefaultHeterogeneousFilter : public schedule_framework::FilterPlugin {

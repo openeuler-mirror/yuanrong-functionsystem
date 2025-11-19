@@ -28,12 +28,19 @@ BUILD_DIR="$YR_ROOT_DIR"/build
 
 function build_etcd()
 {
+    # Check if etcd and etcdctl already exist
+    if [[ -f "${YUANRONG_DIR}/third_party/etcd/etcd" && -f "${YUANRONG_DIR}/third_party/etcd/etcdctl" ]]; then
+        log_info "etcd and etcdctl already built, skipping build."
+        return
+    fi
+    
     log_info "---- build etcd ----"
     export GO111MODULE=on
     export GONOSUMDB=*
+    
     [ -d "$BUILD_DIR"/etcd ] && rm -rf "$BUILD_DIR"/etcd
     mkdir -p "$BUILD_DIR"
-    cp -ar "${YR_ROOT_DIR}"/vendor/etcd "$BUILD_DIR"
+    cp -ar "${YR_ROOT_DIR}"/vendor/src/etcd "$BUILD_DIR"
     cd "$BUILD_DIR"/etcd
     go get github.com/myitcv/gobin
     go install github.com/myitcv/gobin

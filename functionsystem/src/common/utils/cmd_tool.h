@@ -20,7 +20,7 @@
 #include <string>
 #include <vector>
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem {
 const int LINE_LENGTH = 10240;

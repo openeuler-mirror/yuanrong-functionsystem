@@ -17,7 +17,7 @@
 #define RUNTIME_MANAGER_METRICS_TOPOPROBE_GPU_PROBE_H
 
 #include "topo_probe.h"
-#include "status/status.h"
+#include "common/status/status.h"
 
 namespace functionsystem::runtime_manager {
 class GpuProbe : public TopoProbe {

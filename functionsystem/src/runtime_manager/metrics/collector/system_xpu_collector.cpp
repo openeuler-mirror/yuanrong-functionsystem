@@ -16,7 +16,7 @@
 
 #include "system_xpu_collector.h"
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
 #include "heterogeneous_collector/gpu_probe.h"
 #include "heterogeneous_collector/npu_probe.h"
@@ -76,9 +76,11 @@ DevClusterMetrics SystemXPUCollector::GetDevClusterMetrics(const std::string &in
     (void)devClusterMetrics.strInfo.insert({ resource_view::DEV_CLUSTER_IPS_KEY,
                                           resource_view::CommaSepStr(probe_->GetDevClusterIPs()) });
     (void)devClusterMetrics.intsInfo.insert({ resource_view::HETEROGENEOUS_MEM_KEY, probe_->GetHBM() });
+    (void)devClusterMetrics.intsInfo.insert({ dev_metrics_type::USED_HBM_KEY, probe_->GetUsedHBM() });
     (void)devClusterMetrics.strInfo.insert({ dev_metrics_type::PARTITION_KEY,
                                           resource_view::CommaSepStr(probe_->GetPartition()) });
     (void)devClusterMetrics.intsInfo.insert({ dev_metrics_type::TOTAL_MEMORY_KEY, probe_->GetMemory() });
+    (void)devClusterMetrics.intsInfo.insert({ dev_metrics_type::USED_MEM_KEY, probe_->GetUsedMemory() });
     (void)devClusterMetrics.intsInfo.insert({ resource_view::HETEROGENEOUS_STREAM_KEY, probe_->GetStream() });
     (void)devClusterMetrics.intsInfo.insert({ resource_view::HETEROGENEOUS_LATENCY_KEY, probe_->GetLatency() });
     (void)devClusterMetrics.intsInfo.insert({ resource_view::HEALTH_KEY, probe_->GetHealth(initType) });

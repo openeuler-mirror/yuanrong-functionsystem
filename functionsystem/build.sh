@@ -92,7 +92,7 @@ PROJECT_DIR="${BASE_DIR}"
 BUILD_DIR="${BASE_DIR}/build"
 OUTPUT_DIR="${BASE_DIR}/output"
 YR_ROOT_DIR="${BASE_DIR}/.."
-POSIX_DIR="${YR_ROOT_DIR}/common/utils/proto/posix"
+POSIX_DIR="${BASE_DIR}/src/common/proto/posix"
 PACKAGE_OUTPUT_DIR="${YR_ROOT_DIR}/output"
 FUNCTION_SYSTEM_PACKAGE_DIR="${YR_ROOT_DIR}/output/function_system"
 FUNCTIONCORE_DIR="${YR_ROOT_DIR}/functioncore/"
@@ -170,7 +170,7 @@ function check_module() {
 }
 
 function check_posix() {
-    log_info "Start check posix"
+    log_info "Start check posix at ${POSIX_DIR}"
     if [ ! -d "${POSIX_DIR}" ]; then
         mkdir -p "${POSIX_DIR}"
     fi
@@ -187,28 +187,6 @@ function check_posix() {
         log_info "Get posix success"
     else
         log_info "posix file is exist"
-    fi
-}
-
-download_opensource()
-{
-    if [ "${DOWNLOAD_OPENSRC^^}" != "ON" ]; then
-        echo "don't need download opensource"
-        return 0
-    fi
-
-    echo "build config dir: ${BUILD_CONFIG_DIR}"
-    echo "thirdparty src dir: ${THIRDPARTY_SRC_DIR}"
-    echo "thirdparty install dir: ${THIRDPARTY_INSTALL_DIR}"
-
-    if [ ! -d "${BUILD_CONFIG_DIR}" ]; then
-        echo "please download build config"
-        exit 1
-    fi
-
-    if ! bash "${BUILD_CONFIG_DIR}/download_src.sh" -T "${THIRDPARTY_SRC_DIR}" -Y "${BUILD_ROOT_DIR}" -M "functionsystem"; then
-        echo "download dependency source of src fail"
-        exit 1
     fi
 }
 
@@ -426,8 +404,6 @@ fi
 # Check and get Posix
 check_posix
 
-download_opensource
-
 function check_datasystem_rely_on() {
     for item in "${DATASYSTEM_RELY_ON_MODULE_LIST[@]}"; do
         if [ "$item" == "$1" ]; then
@@ -466,6 +442,7 @@ cmake -G Ninja "${PROJECT_DIR}" -DCMAKE_INSTALL_PREFIX="${OUTPUT_DIR}" \
     -DFUNCTION_SYSTEM_BUILD_PART="${FUNCTION_SYSTEM_BUILD_PART}" \
     -DFUNCTION_SYSTEM_BUILD_TIME_TRACE="${FUNCTION_SYSTEM_BUILD_TIME_TRACE}" \
     -DCMAKE_EXPORT_COMPILE_COMMANDS=ON # to generate compile_commands.json file
+echo "cmake configure successfully"
 
 # Compatible with EulerOS and Ubuntu
 if [ ! -d "${OUTPUT_DIR}"/lib64 ]; then
@@ -483,8 +460,11 @@ if [ "X${BUILD_LLT}" = "XON" ]; then
     export NOT_SKIP_LONG_TESTS=0 # skip long test case in CI
 fi
 
+echo "Start to compile ${MODULE} module"
 ninja ${MODULE} ${VERBOSE} -j "${JOB_NUM}" || die "Failed to compile ${MODULE}"
+echo "ninja compile successfully"
 cmake --build ${BUILD_DIR} --target install || die "Failed to install ${MODULE}"
+echo "cmake install successfully"
 
 if [ "$BUILD_TYPE" != "Debug" ]; then
     [ ! -d "${OUTPUT_DIR}/functionsystem_SYM" ] && mkdir -p "${OUTPUT_DIR}/functionsystem_SYM"

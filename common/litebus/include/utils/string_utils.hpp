@@ -65,9 +65,9 @@ std::string Remove(const std::string &from, const std::string &subStr, Mode mode
 }  // namespace strings
 
 namespace hmac {
-void SHA256AndHex(const std::string &input, std::stringstream &output);
+void SHA256AndHex(const std::string &input, std::stringstream &output, bool appendLineFeed = true);
 
-std::string HMACAndSHA256(const SensitiveValue &secretKey, const std::string &data);
+std::string HMACAndSHA256(const SensitiveValue &secretKey, const std::string &data, bool binaryDigest = false);
 }  // namespace hmac
 }  // namespace litebus
 #endif

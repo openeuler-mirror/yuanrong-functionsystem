@@ -19,9 +19,9 @@
 #define COMMON_MODULE_SWITCHER_H
 
 #include "async/future.hpp"
-#include "constants.h"
-#include "logs/logging.h"
-#include "metrics/metrics_adapter.h"
+#include "common/constants/constants.h"
+#include "common/logs/logging.h"
+#include "common/metrics/metrics_adapter.h"
 #include "logs/sdk/log_param_parser.h"
 
 namespace functionsystem {

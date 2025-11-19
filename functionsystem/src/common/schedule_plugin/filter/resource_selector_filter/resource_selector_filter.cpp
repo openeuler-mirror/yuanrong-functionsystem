@@ -16,8 +16,8 @@
 
 #include "resource_selector_filter.h"
 
-#include "constants.h"
-#include "logs/logging.h"
+#include "common/constants/constants.h"
+#include "common/logs/logging.h"
 #include "common/schedule_plugin/common/constants.h"
 #include "common/schedule_plugin/common/plugin_register.h"
 

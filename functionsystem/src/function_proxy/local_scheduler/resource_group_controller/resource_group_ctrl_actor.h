@@ -18,9 +18,9 @@
 #define LOCAL_SCHEDULER_RESOURCE_GROUP_CTRL_ACTOR_H
 
 #include "common/utils/actor_driver.h"
-#include "proto/pb/posix_pb.h"
+#include "common/proto/pb/posix_pb.h"
 #include "common/explorer/explorer.h"
-#include "request_sync_helper.h"
+#include "common/utils/request_sync_helper.h"
 
 namespace functionsystem::local_scheduler {
 class ResourceGroupCtrlActor : public BasisActor {

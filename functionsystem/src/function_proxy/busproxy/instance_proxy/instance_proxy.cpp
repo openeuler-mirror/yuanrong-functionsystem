@@ -16,8 +16,8 @@
 #include "instance_proxy.h"
 
 #include "async/defer.hpp"
-#include "metrics/metrics_adapter.h"
-#include "status/status.h"
+#include "common/metrics/metrics_adapter.h"
+#include "common/status/status.h"
 #include "busproxy/invocation_handler/invocation_handler.h"
 
 namespace functionsystem::busproxy {
@@ -59,19 +59,34 @@ litebus::Future<SharedStreamMsg> InstanceProxy::Call(const CallerInfo &callerInf
                 return callRsp;
             });
     }
+    // If invoke instance with route, just forward it to other node
+    if (const auto it = callReq.createoptions().find(YR_ROUTE_KEY);
+        it != callReq.createoptions().end() && !it->second.empty()) {
+        auto remoteAID = litebus::AID(dstInstanceID, it->second);
+        auto promise = std::make_shared<litebus::Promise<SharedStreamMsg>>();
+        SendForwardCall(remoteAID, callerInfo.tenantID, request)
+            .OnComplete([messageID(request->messageid()), promise](const litebus::Future<SharedStreamMsg> &future) {
+                if (future.IsError()) {
+                    auto response = std::make_shared<runtime_rpc::StreamingMessage>();
+                    response->set_messageid(messageID);
+                    auto callResponse = response->mutable_callrsp();
+                    callResponse->set_code(
+                        Status::GetPosixErrorCode(common::ErrorCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS));
+                    callResponse->set_message("connection with runtime may be interrupted, please retry.");
+                    promise->SetValue(response);
+                } else {
+                    auto rsp = future.Get();
+                    rsp->set_messageid(messageID);
+                    promise->SetValue(rsp);
+                }
+            });
+        return promise->GetFuture();
+    }
+
     // If the corresponding instance is not found in the dispatcher,
     // the instance information needs to be subscribed to from the observer.
     if (remoteDispatchers_.find(dstInstanceID) == remoteDispatchers_.end()) {
         auto dispatcher = std::make_shared<RequestDispatcher>(dstInstanceID, false, "", shared_from_this(), perf_);
-        if (const auto it = callReq.createoptions().find(YR_ROUTE_KEY);
-             it != callReq.createoptions().end() && !it->second.empty()) {
-            auto info = std::make_shared<InstanceRouterInfo>();
-            info->isLocal = false;
-            info->remote = litebus::AID(dstInstanceID, it->second);
-            info->isReady = true;
-            info->isLowReliability = true;
-            dispatcher->UpdateInfo(info);
-        }
         ASSERT_FS(observer_);
         (void)observer_->SubscribeInstanceEvent(instanceID_, dstInstanceID);
         remoteDispatchers_[dstInstanceID] = std::move(dispatcher);
@@ -98,10 +113,16 @@ void InstanceProxy::OnLocalCall(const litebus::Future<SharedStreamMsg> &callRspF
 
 void InstanceProxy::ForwardCall(const litebus::AID &from, std::string &&, std::string &&msg)
 {
-    auto srcInstanceID = from.Name();
     auto request = std::make_shared<runtime_rpc::StreamingMessage>();
     (void)request->ParseFromString(msg);
+    (void)DoForwardCall(from, request);
+}
+
+litebus::Future<Status> InstanceProxy::DoForwardCall(const litebus::AID &from,
+                                                     const std::shared_ptr<runtime_rpc::StreamingMessage> &request)
+{
     ASSERT_FS(request->has_callreq());
+    auto &srcInstanceID = from.Name();
     const auto &callReq = request->callreq();
     std::string srcTenantID = "";
     // if enable multi tenant, messageid contains tenantID of src instance, {tenantID}{requestID}
@@ -140,6 +161,7 @@ void InstanceProxy::ForwardCall(const litebus::AID &from, std::string &&, std::s
         auto dispatcher = remoteDispatchers_[srcInstanceID];
         dispatcher->UpdateRemoteAID(from);
     }
+    return Status::OK();
 }
 
 void InstanceProxy::Reject(const std::string &instanceID, const std::string &message, const StatusCode &code)
@@ -356,17 +378,40 @@ litebus::Future<SharedStreamMsg> InstanceProxy::SendForwardCall(const litebus::A
                                                                 const SharedStreamMsg &request)
 {
     ASSERT_FS(request->has_callreq());
-    auto promise = std::make_shared<litebus::Promise<SharedStreamMsg>>();
+    const auto &callReq = request->callreq();
     if (callerTenantID.empty()) {
-        request->set_messageid(request->callreq().requestid());
+        request->set_messageid(callReq.requestid());
     } else {
         // if enable multi tenant, messageid contains tenantID of src instance, {tenantID}{requestID}
-        request->set_messageid(callerTenantID + request->callreq().requestid());
+        request->set_messageid(callerTenantID + callReq.requestid());
     }
-    forwardCallPromises_[request->callreq().requestid()] = promise;
-    YRLOG_INFO("{}|{}|(forwardInvoke)send forward call", request->callreq().traceid(), request->callreq().requestid());
-    // send forwardCall request to another proxy actor
-    (void)Send(aid, "ForwardCall", request->SerializeAsString());
+    auto promiseIter = forwardCallPromises_.find(callReq.requestid());
+    std::shared_ptr<litebus::Promise<SharedStreamMsg>> promise;
+    bool firstForwardCall = true;
+    if (promiseIter == forwardCallPromises_.end()) {
+        promise = std::make_shared<litebus::Promise<SharedStreamMsg>>();
+        forwardCallPromises_[callReq.requestid()] = promise;
+    } else {
+        promise = promiseIter->second;
+        firstForwardCall = false;
+    }
+    // 1. client first send
+    // 2. reliable instance retry send
+    if (firstForwardCall || callReq.createoptions().find(YR_ROUTE_KEY) == callReq.createoptions().end()) {
+        (void)Send(aid, "ForwardCall", request->SerializeAsString());
+        YRLOG_INFO("{}|{}|(forwardInvoke)send forward call", callReq.traceid(), callReq.requestid());
+        return promise->GetFuture();
+    }
+
+    // low reliable instance retry send
+    YRLOG_INFO("{}|{}|low reliable instance retry to forward call", callReq.traceid(), callReq.requestid());
+    auto newAid = litebus::AID(REQUEST_ROUTER_NAME, aid.Url());
+    internal::RouteCallRequest routeReq;
+    routeReq.mutable_req()->CopyFrom(*request);
+    routeReq.set_instanceid(aid.Name());
+
+    promise = forwardCallPromises_[callReq.requestid()];
+    (void)Send(newAid, "ForwardCall", routeReq.SerializeAsString());
     return promise->GetFuture();
 }
 

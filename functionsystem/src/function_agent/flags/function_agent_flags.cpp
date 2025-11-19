@@ -15,8 +15,8 @@
  */
 #include "function_agent_flags.h"
 
-#include "constants.h"
-#include "param_check.h"
+#include "common/constants/constants.h"
+#include "common/utils/param_check.h"
 #include "function_agent/common/constants.h"
 
 namespace functionsystem::function_agent {
@@ -50,6 +50,14 @@ FunctionAgentFlags::FunctionAgentFlags()
     AddFlag(&FunctionAgentFlags::dirDepthMax, "dir_depth_max", "maximum directory depth of unzipped S3 object",
             function_agent::DIR_DEPTH_MAX, NumCheck(MIN_DIR_DEPTH, MAX_DIR_DEPTH));
 
+    AddFlag(&FunctionAgentFlags::credentialType, "credential_type", "S3's credential type", "",
+            WhiteListCheck({ "", CREDENTIAL_TYPE_PERMANENT_CREDENTIALS, CREDENTIAL_TYPE_ROTATING_CREDENTIALS }));
+    AddFlag(&FunctionAgentFlags::accessKey, "access_key", "access key when get object from S3", "");
+    AddFlag(&FunctionAgentFlags::secretKey, "secret_key", "secret key when get object from S3", "");
+    AddFlag(&FunctionAgentFlags::s3Endpoint, "s3_endpoint", "S3's endpoint", "");
+    AddFlag(&FunctionAgentFlags::s3Protocol, "s3_protocol", "S3's protocol", S3_PROTOCOL_HTTPS,
+            WhiteListCheck({ S3_PROTOCOL_HTTPS, S3_PROTOCOL_HTTP }));
+    AddFlag(&FunctionAgentFlags::isEnableS3, "s3_enable", "enable to connect s3", DEFAULT_ENABLE_S3);
     AddFlag(&FunctionAgentFlags::decryptAlgorithm, "decrypt_algorithm", "decrypt algorithm, eg: GCM, CBC, NO_CRYPTO",
             function_agent::NO_CRYPTO_ALGORITHM,
             WhiteListCheck({ NO_CRYPTO_ALGORITHM, CBC_CRYPTO_ALGORITHM, GCM_CRYPTO_ALGORITHM }));

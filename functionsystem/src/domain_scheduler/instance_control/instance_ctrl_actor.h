@@ -21,11 +21,14 @@
 #include <litebus.hpp>
 #include <vector>
 
-#include "proto/pb/message_pb.h"
+#include "common/proto/pb/message_pb.h"
 #include "common/schedule_decision/schedule_queue_actor.h"
 #include "common/schedule_decision/schedule_recorder/schedule_recorder.h"
 #include "common/schedule_decision/scheduler.h"
+#include "common/resource_view/resource_view_mgr.h"
 #include "domain_scheduler/underlayer_scheduler_manager/underlayer_sched_mgr.h"
+#include "common/resource_view/resource_type.h"
+
 
 namespace functionsystem::domain_scheduler {
 const std::string INSTANCE_CTRL_ACTOR_NAME_POSTFIX = "-DomainInstanceCtrl";
@@ -77,6 +80,12 @@ public:
     {
         ASSERT_IF_NULL(underlayer);
         underlayer_ = underlayer;
+    }
+
+    void BindResourceView(const std::shared_ptr<resource_view::ResourceViewMgr> &resourceViewMgr)
+    {
+        ASSERT_IF_NULL(resourceViewMgr);
+        resourceViewMgr_ = resourceViewMgr;
     }
 
     inline void BindScheduleRecorder(const std::shared_ptr<schedule_decision::ScheduleRecorder> &recorder)
@@ -170,6 +179,8 @@ private:
     litebus::AID scaler_;
     std::shared_ptr<schedule_decision::Scheduler> scheduler_;
     std::shared_ptr<UnderlayerSchedMgr> underlayer_;
+    std::shared_ptr<resource_view::ResourceViewMgr> resourceViewMgr_{ nullptr };
+
     uint32_t maxSchedReTryTimes_;
     std::unordered_map<std::string, uint32_t> requestTrySchedTimes_;
     std::unordered_map<std::string, uint32_t> waitAgentCreatRetryTimes_;

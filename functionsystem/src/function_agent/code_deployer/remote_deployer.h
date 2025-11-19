@@ -39,7 +39,21 @@ public:
 
     bool Clear(const std::string &filePath, const std::string &objectKey) override;
 
+    virtual Status UnzipFile(const std::string &destDir, const std::string &destFile);
+
     virtual Status DownloadCode(const std::string &destFile, const ::messages::DeploymentConfig &config) = 0;
+
+    virtual Status PackageValidation(const std::string &destFile, const std::string &sha512Str,
+                                     const std::string &sha256Str);
+
+protected:
+    virtual void CollectFunctionInfo(const std::string &destFile,
+                                     const std::shared_ptr<messages::DeployRequest> &request);
+
+    Status CheckSha256(const std::string &destFile, const std::string &sha256Str);
+    Status CheckSha512(const std::string &destFile, const std::string &sha512Str);
+    Status CheckFileContent(const std::string &destFile);
+    std::string GetFileNameFromObjectID(const std::string &objectID);
 protected:
     messages::CodePackageThresholds codePackageThresholds_;
 

@@ -18,10 +18,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include "common/logs/logging.h"
 #include "common/utils/exec_utils.h"
-#include "logs/logging.h"
-#include "meta_store_client/txn_transaction.h"
-#include "meta_store_kv_operation.h"
+#include "common/utils/meta_store_kv_operation.h"
 
 namespace functionsystem {
 
@@ -33,6 +32,36 @@ bool TransactionFailedForEtcd(int32_t errCode)
 InstanceOperator::InstanceOperator(const std::shared_ptr<MetaStoreClient> &metaStoreClient)
     : client_(metaStoreClient), isCentOS_(IsCentos())
 {
+}
+
+bool InstanceOperator::CheckGetResponse(const TxnOperationResponse &resp, const std::string &key,
+                                        const std::string &value, OperateResult &result)
+{
+    if (resp.operationType != TxnOperationType::OPERATION_GET) {
+        YRLOG_ERROR("operation type({}) is not right, key: {}", fmt::underlying(resp.operationType), key);
+        result = OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED, "operation type is wrong"), "",
+                                0, 0 };
+        return true;
+    }
+
+    auto getResponse = std::get<GetResponse>(resp.response);
+    if (getResponse.kvs.empty()) {
+        YRLOG_ERROR("get response KV is empty, key: {}", key);
+        result = OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED, "get response KV is empty"),
+                                "", 0, 0 };
+        // get response is empty, keeps looking for other keys
+        return false;
+    }
+
+    if (value == getResponse.kvs.front().value()) {
+        YRLOG_INFO("instance success but txn fail, key: {} revision: {}", key, resp.header.revision);
+        result = OperateResult{ Status::OK(), "", 0, resp.header.revision };
+        return true;
+    }
+
+    result = OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION, "version is incorrect"),
+                            getResponse.kvs.front().value(), 0, getResponse.kvs.front().mod_revision() };
+    return true;
 }
 
 OperateResult InstanceOperator::OnCreate(const OperateInfo &operateInfo)
@@ -48,41 +77,33 @@ OperateResult InstanceOperator::OnCreate(const OperateInfo &operateInfo)
         }
         return OperateResult{ operateInfo.response->status, "", 0, 0 };
     }
+
+    if (operateInfo.response->responses.size() != operateInfo.keySize
+        || operateInfo.keySize != operateInfo.values.size()) {
+        YRLOG_ERROR("the size of responses transaction return is incorrect while creating, key: {}, size is {}",
+                    operateInfo.key, operateInfo.response->responses.size());
+        PrintResponse(operateInfo);
+        return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_WRONG_RESPONSE_SIZE,
+                                     "the size of responses transaction return is incorrect"),
+                              "", 0, 0 };
+    }
+
     if (operateInfo.response->success) {
-        if (operateInfo.response->responses.size() != operateInfo.keySize) {
-            YRLOG_ERROR("the size of responses transaction return is incorrect while creating, key: {}, size is {}",
-                        operateInfo.key, operateInfo.response->responses.size());
-            PrintResponse(operateInfo);
-            return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_WRONG_RESPONSE_SIZE,
-                                         "the size of responses transaction return is incorrect"), "", 0, 0 };
-        }
         YRLOG_DEBUG("create instance success: {}, key: {}, revision: {}", operateInfo.response->success,
                     operateInfo.key, operateInfo.response->header.revision);
         // use last response's revision, as current revision
         return OperateResult{ Status::OK(), "", 0, operateInfo.response->header.revision };
     }
-    if (operateInfo.response->responses[0].operationType != TxnOperationType::OPERATION_GET) {
-        YRLOG_ERROR("operation type({}) is not right, key: {}", static_cast<std::underlying_type_t<TxnOperationType>>
-            (operateInfo.response->responses[0].operationType), operateInfo.key);
-        PrintResponse(operateInfo);
-        return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED, "operation type is wrong"), "",
-                              0, 0 };
-    }
-    auto getResponse = std::get<GetResponse>(operateInfo.response->responses[0].response);
-    if (getResponse.kvs.empty()) {
-        YRLOG_ERROR("get response KV is empty while creating, key: {}", operateInfo.key);
-        PrintResponse(operateInfo);
-        return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED, "get response KV is empty"), "",
-                              0, 0 };
-    }
-    if (operateInfo.value == getResponse.kvs.front().value()) {
-        YRLOG_INFO("create instance success but txn fail, key: {} revision: {}", operateInfo.key,
-                   operateInfo.response->responses.back().header.revision);
-        return OperateResult{ Status::OK(), "", 0, operateInfo.response->responses.back().header.revision };
+
+    OperateResult result;
+    for (uint32_t i = 0; i < operateInfo.keySize; ++i) {
+        if (CheckGetResponse(operateInfo.response->responses[i], operateInfo.key, operateInfo.values[i], result)) {
+            PrintResponse(operateInfo);
+            return result;
+        }
     }
     PrintResponse(operateInfo);
-    return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION, "version is incorrect"),
-                          getResponse.kvs.front().value(), 0, getResponse.kvs.front().mod_revision() };
+    return result;
 }
 
 OperateResult InstanceOperator::OnModify(const OperateInfo &operateInfo)
@@ -96,40 +117,31 @@ OperateResult InstanceOperator::OnModify(const OperateInfo &operateInfo)
         return OperateResult{ operateInfo.response->status, "", 0, 0 };
     }
 
+    if (operateInfo.response->responses.size() != operateInfo.keySize
+        || operateInfo.keySize != operateInfo.values.size()) {
+        YRLOG_ERROR("the size of responses transaction return is incorrect while modifying, key: {}, size is {}",
+                    operateInfo.key, operateInfo.response->responses.size());
+        PrintResponse(operateInfo);
+        return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_WRONG_RESPONSE_SIZE,
+                                     "the size of responses transaction return is incorrect"),
+                              "", 0, 0 };
+    }
+
     if (operateInfo.response->success) {
-        if (operateInfo.response->responses.size() != operateInfo.keySize) {
-            YRLOG_ERROR("the size of responses transaction return is incorrect while modifying, key: {}, size is {}",
-                        operateInfo.key, operateInfo.response->responses.size());
-            PrintResponse(operateInfo);
-            return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_WRONG_RESPONSE_SIZE,
-                                         "the size of responses transaction return is incorrect"), "", 0, 0 };
-        }
         YRLOG_DEBUG("modify instance success: {}, key: {}, revision: {}", operateInfo.response->success,
                     operateInfo.key, operateInfo.response->header.revision);
         return OperateResult{ Status::OK(), "", operateInfo.version, operateInfo.response->header.revision };
     }
-    if (operateInfo.response->responses[0].operationType != TxnOperationType::OPERATION_GET) {
-        YRLOG_ERROR("operation type({}) is not right, key: {}", static_cast<std::underlying_type_t<TxnOperationType>>
-                    (operateInfo.response->responses[0].operationType), operateInfo.key);
-        PrintResponse(operateInfo);
-        return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED, "operation type is wrong"), "",
-                              0, 0 };
-    }
-    auto getResponse = std::get<GetResponse>(operateInfo.response->responses[0].response);
-    if (getResponse.kvs.empty()) {
-        YRLOG_ERROR("get response KV is empty while modifying, key: {}", operateInfo.key);
-        PrintResponse(operateInfo);
-        return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED, "get response KV is empty"), "",
-                              0, 0 };
-    }
-    if (operateInfo.value == getResponse.kvs.front().value()) {
-        YRLOG_INFO("modify instance success but txn fail, key: {}", operateInfo.key);
-        return OperateResult{ Status::OK(), getResponse.kvs.front().value(), getResponse.kvs.front().version() - 1,
-                              operateInfo.response->responses.back().header.revision };
+
+    OperateResult result;
+    for (uint32_t i = 0; i < operateInfo.keySize; ++i) {
+        if (CheckGetResponse(operateInfo.response->responses[i], operateInfo.key, operateInfo.values[i], result)) {
+            PrintResponse(operateInfo);
+            return result;
+        }
     }
     PrintResponse(operateInfo);
-    return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION, "version is incorrect"),
-                          getResponse.kvs.front().value(), 0, getResponse.kvs.front().mod_revision() };
+    return result;
 }
 
 OperateResult InstanceOperator::OnDelete(const OperateInfo &operateInfo)
@@ -152,8 +164,7 @@ OperateResult InstanceOperator::OnDelete(const OperateInfo &operateInfo)
         }
         if (operateInfo.response->responses[0].operationType != TxnOperationType::OPERATION_DELETE) {
             YRLOG_ERROR("operation type({}) is not right, key: {}",
-                        static_cast<std::underlying_type_t<TxnOperationType>>
-                        (operateInfo.response->responses[0].operationType), operateInfo.key);
+                        fmt::underlying(operateInfo.response->responses[0].operationType), operateInfo.key);
             PrintResponse(operateInfo);
             return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED, "operation type is wrong"),
                                   "", 0, 0 };
@@ -169,8 +180,8 @@ OperateResult InstanceOperator::OnDelete(const OperateInfo &operateInfo)
     }
     PrintResponse(operateInfo);
     if (operateInfo.response->responses[0].operationType != TxnOperationType::OPERATION_GET) {
-        YRLOG_ERROR("operation type({}) is not right, key: {}", static_cast<std::underlying_type_t<TxnOperationType>>
-                    (operateInfo.response->responses[0].operationType), operateInfo.key);
+        YRLOG_ERROR("operation type({}) is not right, key: {}",
+                    fmt::underlying(operateInfo.response->responses[0].operationType), operateInfo.key);
         return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED, "operation type is wrong"), "",
                               0, 0 };
     }
@@ -221,26 +232,32 @@ litebus::Future<OperateResult> InstanceOperator::Create(std::shared_ptr<StoreInf
         transaction->If(meta_store::TxnCompare::OfVersion(routeInfo->key, meta_store::CompareOperator::EQUAL, 0));
     }
     PutOption putOption = { .leaseId = 0, .prevKv = false, .asyncBackup = isLowReliability };
+    std::vector<std::string> values;
     std::string debugKeys;
     uint64_t keySize = 1;
+    values.push_back(instanceInfo->value);
     debugKeys += "(" + instanceInfo->key + ")";
     transaction->Then(meta_store::TxnOperation::Create(instanceInfo->key, instanceInfo->value, putOption));
 
     if (routeInfo != nullptr) {
         keySize++;
+        values.push_back(routeInfo->value);
         debugKeys += "(" + routeInfo->key + ")";
         transaction->Then(meta_store::TxnOperation::Create(routeInfo->key, routeInfo->value, putOption));
     }
 
     GetOption getOption = { false, false, false, 1, SortOrder::NONE, SortTarget::KEY };
     transaction->Else(meta_store::TxnOperation::Create(instanceInfo->key, getOption));
+    if (routeInfo != nullptr) {
+        transaction->Else(meta_store::TxnOperation::Create(routeInfo->key, getOption));
+    }
 
     YRLOG_DEBUG("create instance for key: {}", debugKeys);
-    return transaction->Commit().Then([debugKeys, value(instanceInfo->value), keySize,
-                                       isCentOS(isCentOS_)](const std::shared_ptr<TxnResponse> &response) {
-        OperateInfo operateInfo = OperateInfo{ debugKeys, value, keySize, 0, isCentOS, response };
-        return OnCreate(operateInfo);
-    });
+    return transaction->Commit().Then(
+        [debugKeys, values, keySize, isCentOS(isCentOS_)](const std::shared_ptr<TxnResponse> &response) {
+            OperateInfo operateInfo = OperateInfo{ debugKeys, values, keySize, 0, isCentOS, response };
+            return OnCreate(operateInfo);
+        });
 }
 
 litebus::Future<OperateResult> InstanceOperator::Modify(std::shared_ptr<StoreInfo> instanceInfo,
@@ -258,24 +275,30 @@ litebus::Future<OperateResult> InstanceOperator::Modify(std::shared_ptr<StoreInf
     PutOption option = { .leaseId = 0, .prevKv = false, .asyncBackup = isLowReliability };
     std::string debugKeys;
     uint64_t keySize = 1;
+    std::vector<std::string> values;
+    values.push_back(instanceInfo->value);
     debugKeys += "(" + instanceInfo->key + ")";
     transaction->Then(meta_store::TxnOperation::Create(instanceInfo->key, instanceInfo->value, option));
 
     if (routeInfo != nullptr) {
         keySize++;
+        values.push_back(routeInfo->value);
         debugKeys += "(" + routeInfo->key + ")";
         transaction->Then(meta_store::TxnOperation::Create(routeInfo->key, routeInfo->value, option));
     }
 
     GetOption getOption = { false, false, false, 1, SortOrder::NONE, SortTarget::KEY };
     transaction->Else(meta_store::TxnOperation::Create(instanceInfo->key, getOption));
+    if (routeInfo != nullptr) {
+        transaction->Else(meta_store::TxnOperation::Create(routeInfo->key, getOption));
+    }
 
     YRLOG_DEBUG("modify instance for key: {}, version: {}", debugKeys, version);
-    return transaction->Commit().Then([debugKeys, value(instanceInfo->value), version, keySize,
-                                       isCentOS(isCentOS_)](const std::shared_ptr<TxnResponse> &response) {
-        OperateInfo operateInfo = OperateInfo{ debugKeys, value, keySize, version, isCentOS, response };
-        return OnModify(operateInfo);
-    });
+    return transaction->Commit().Then(
+        [debugKeys, values, version, keySize, isCentOS(isCentOS_)](const std::shared_ptr<TxnResponse> &response) {
+            OperateInfo operateInfo = OperateInfo{ debugKeys, values, keySize, version, isCentOS, response };
+            return OnModify(operateInfo);
+        });
 }
 
 litebus::Future<OperateResult> InstanceOperator::Delete(std::shared_ptr<StoreInfo> instanceInfo,
@@ -316,7 +339,7 @@ litebus::Future<OperateResult> InstanceOperator::Delete(std::shared_ptr<StoreInf
     YRLOG_DEBUG("delete instance for key: {}, version: {}", debugKeys, version);
     return transaction->Commit().Then(
         [debugKeys, keySize, version, isCentOS(isCentOS_)](const std::shared_ptr<TxnResponse> &response) {
-            OperateInfo operateInfo = OperateInfo{ debugKeys, "", keySize, version, isCentOS, response };
+            OperateInfo operateInfo = OperateInfo{ debugKeys, { "" }, keySize, version, isCentOS, response };
             return OnDelete(operateInfo);
         });
 }
@@ -357,7 +380,7 @@ litebus::Future<OperateResult> InstanceOperator::ForceDelete(std::shared_ptr<Sto
     YRLOG_DEBUG("force delete instance for key: {}", debugKeys);
     return transaction->Commit().Then(
         [debugKeys, keySize, isCentOS(isCentOS_)](const std::shared_ptr<TxnResponse> &response) {
-            OperateInfo operateInfo = OperateInfo{ debugKeys, "", keySize, 0, isCentOS, response };
+            OperateInfo operateInfo = OperateInfo{ debugKeys, { "" }, keySize, 0, isCentOS, response };
             return OnForceDelete(operateInfo);
         });
 }
@@ -387,7 +410,7 @@ void InstanceOperator::OnPrintResponse(const KeyValue& kv)
         bodyJson = nlohmann::json::parse(kv.value());
         if (!bodyJson.empty()) {
             YRLOG_DEBUG("{}| instance status ({}), create_revision ({}), mod_revision ({}), version ({}),",
-                        bodyJson["instanceID"], bodyJson["instanceStatus"]["code"].dump(), kv.create_revision(),
+                        bodyJson["instanceID"].dump(), bodyJson["instanceStatus"]["code"].dump(), kv.create_revision(),
                         kv.mod_revision(), kv.version());
         }
     } catch (const std::exception &exc) {

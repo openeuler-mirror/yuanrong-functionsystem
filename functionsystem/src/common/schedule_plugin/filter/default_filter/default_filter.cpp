@@ -18,8 +18,8 @@
 
 #include <limits>
 
-#include "constants.h"
-#include "logs/logging.h"
+#include "common/constants/constants.h"
+#include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
 #include "common/resource_view/scala_resource_tool.h"
 #include "common/schedule_plugin/common/constants.h"
@@ -103,8 +103,8 @@ schedule_framework::Filtered DefaultFilter::ResourceFilter(
     const auto &capacity = unit.capacity();
     int32_t maxAllocatable = MAX_INT_32;
     for (auto &req : required) {
-        auto resourceNameFields = litebus::strings::Split(req.first, "/");
-        if (resourceNameFields.size() == HETERO_RESOURCE_FIELD_NUM) {
+        // hetero resource filter in hetero filter, disk resource filter in disk filter
+        if (resource_view::IsHeterogeneousResource(req.first) || resource_view::IsDiskResource(req.first)) {
             continue;
         }
 

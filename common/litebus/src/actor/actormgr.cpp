@@ -148,6 +148,8 @@ int ActorMgr::Send(const AID &to, std::unique_ptr<MessageBase> msg, bool remoteL
             if (to.GetProtocol() == BUS_UDP && msg->GetType() == MessageBase::Type::KMSG) {
                 msg->type = MessageBase::Type::KUDP;
             }
+            // Set peer directly, if by local queue.
+            msg->peer = msg->to.GetIp();
             return actor->EnqueMessage(std::move(msg));
         } else {
             return ACTOR_NOT_FIND;

@@ -18,7 +18,7 @@
 
 #include <thread>
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "profiler.h"
 
 namespace functionsystem {

@@ -21,8 +21,8 @@
 
 #include "actor/actor.hpp"
 #include "async/future.hpp"
-#include "logs/logging.h"
-#include "proto/pb/posix_pb.h"
+#include "common/logs/logging.h"
+#include "common/proto/pb/posix_pb.h"
 #include "state_client.h"
 
 namespace functionsystem::function_proxy {
@@ -36,6 +36,8 @@ public:
                                                  const std::shared_ptr<StateSaveRequest> &request);
 
     litebus::Future<StateLoadResponse> LoadState(const std::shared_ptr<StateLoadRequest> &request);
+
+    litebus::Future<Status> DeleteState(const std::string &instanceId);
 
     void InitStateClient();
 

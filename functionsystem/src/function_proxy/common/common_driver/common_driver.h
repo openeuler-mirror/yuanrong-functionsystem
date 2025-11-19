@@ -17,8 +17,9 @@
 #ifndef FUNCTION_PROXY_COMMON_COMMONDRIVER_H
 #define FUNCTION_PROXY_COMMON_COMMONDRIVER_H
 #include "common/flags/flags.h"
-#include "module_driver.h"
+#include "common/utils/module_driver.h"
 #include "function_proxy/common/distribute_cache_client/ds_cache_client_impl.h"
+#include "function_proxy/common/iam/internal_iam.h"
 #include "function_proxy/common/observer/observer_actor.h"
 #include "function_proxy/common/posix_client/shared_client/posix_stream_manager_proxy.h"
 #include "function_proxy/common/posix_service/posix_service.h"
@@ -59,6 +60,11 @@ public:
         return observerActor_;
     }
 
+    inline std::shared_ptr<InternalIAM> GetInternalIAM()
+    {
+        return internalIAM_;
+    }
+
     inline std::shared_ptr<PosixService> GetPosixService()
     {
         return posixService_;
@@ -82,12 +88,15 @@ private:
     void BindStateActor();
     Status InitMetaStoreClient();
 
+    Status CreateInternalIAM(const std::shared_ptr<MetaStorageAccessor> &metaStorageAccessor);
+
     void InitObserver(const std::shared_ptr<MetaStorageAccessor> &metaStorageAccessor);
 
     Flags flags_;
     std::shared_ptr<DSAuthConfig> dsAuthConfig_ {nullptr};
     std::shared_ptr<MetaStoreClient> metaStoreClient_{ nullptr };
     std::shared_ptr<DSCacheClientImpl> distributedCacheClient_{ nullptr };
+    std::shared_ptr<InternalIAM> internalIAM_{ nullptr };
     std::shared_ptr<DataInterfaceClientManagerProxy> dataInterfaceClient_;
     std::shared_ptr<ControlInterfaceClientManagerProxy> controlInterfaceClient_;
     std::shared_ptr<ObserverActor> observerActor_{ nullptr };

@@ -22,11 +22,11 @@
 #include <regex>
 
 #include <stdio.h>
-#include <string.h>
+#include <string>
 
 #include "exec/exec.hpp"
 #include "utils/os_utils.hpp"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem {
 struct CommandExecResult {
@@ -36,6 +36,16 @@ struct CommandExecResult {
 
 const int GETS_LINE_MAX_LEN = 256;
 const size_t CMD_OUTPUT_MAX_LEN = 1024 * 1024 * 10;
+
+[[maybe_unused]] static std::string AnonymizeCommand(const std::string &input)
+{
+    static const std::string ANONYMOUS = "****";
+    static const int32_t PRE = 5;
+    if (input.length() <= PRE) {
+        return input;
+    }
+    return input.substr(0, PRE) + ANONYMOUS;
+}
 
 [[maybe_unused]] static CommandExecResult ExecuteCommand(const std::string &command)
 {
@@ -104,8 +114,11 @@ const size_t CMD_OUTPUT_MAX_LEN = 1024 * 1024 * 10;
 }
 
 [[maybe_unused]] static std::string ExecuteCommandByPopen(const std::string &command, const size_t resultSize,
-                                                          bool withStdErr = false)
+                                                          bool withStdErr = false, const std::string &traceInfo = "")
 {
+    auto startTime =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count();
     FILE *stream;
     std::string fullCommand;
     if (withStdErr) {
@@ -127,6 +140,11 @@ const size_t CMD_OUTPUT_MAX_LEN = 1024 * 1024 * 10;
         }
         pclose(stream);
         stream = nullptr;
+        auto endTime =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count();
+        YRLOG_INFO("{}|success to execute command({}) cost {} ms", traceInfo, AnonymizeCommand(command),
+                   endTime - startTime);
         return result;
     }
     YRLOG_ERROR("popen error: {}", fullCommand);

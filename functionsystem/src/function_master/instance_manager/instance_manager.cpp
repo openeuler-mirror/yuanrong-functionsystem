@@ -20,7 +20,7 @@ namespace functionsystem::instance_manager {
 litebus::Future<InstanceKeyInfoPair> InstanceManager::GetInstanceInfoByInstanceID(const std::string &instanceID)
 {
     ASSERT_IF_NULL(actor_);
-    return litebus::Async(actor_->GetAID(), &InstanceManagerActor::GetInstanceInfoByInstanceID, instanceID);
+    return litebus::Async(actor_->GetAID(), &InstanceManagerActor::GetInstanceInfoByID, instanceID);
 }
 
 void InstanceManager::OnHealthyStatus(const Status &status)

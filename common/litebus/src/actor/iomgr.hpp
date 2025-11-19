@@ -29,7 +29,7 @@ static const int SOCKET_LISTEN_BACKLOG = 2048;
 static const int SOCKET_KEEPALIVE = 1;
 
 // Send first probe after `interval' seconds.
-static const int SOCKET_KEEPIDLE = 600;
+static const int SOCKET_KEEPIDLE = 300;
 
 // Send next probes after the specified interval.
 static const int SOCKET_KEEPINTERVAL = 5;

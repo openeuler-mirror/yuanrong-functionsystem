@@ -18,7 +18,7 @@
 #define FUNCTIONCORE_CPP_INSTANCE_MANAGER_UTIL_H
 
 #include "common/types/instance_state.h"
-#include "meta_store_kv_operation.h"
+#include "common/utils/meta_store_kv_operation.h"
 
 namespace functionsystem {
 [[maybe_unused]] static bool GenInstanceInfoJson(const std::shared_ptr<resources::InstanceInfo> &instanceInfo,

@@ -17,10 +17,8 @@
 #ifndef FUNCTION_MASTER_GLOBAL_SCHEDULER_GLOBAL_SCHEDULER_H
 #define FUNCTION_MASTER_GLOBAL_SCHEDULER_GLOBAL_SCHEDULER_H
 
-#include <actor/actor.hpp>
-
-#include "http/http_server.h"
-#include "status/status.h"
+#include "common/http/http_server.h"
+#include "common/status/status.h"
 #include "function_master/common/flags/flags.h"
 #include "global_sched.h"
 #include "global_sched_actor.h"
@@ -64,10 +62,13 @@ public:
 
     std::shared_ptr<GlobalSched> GetGlobalSched() const;
 
+    void BindComponentName(const std::string &componentName);
+
 private:
     std::shared_ptr<GlobalSched> globalSched_ = nullptr;
     std::shared_ptr<HttpServer> httpServer_ = nullptr;
     std::shared_ptr<DefaultHealthyRouter> apiRouteRegister_ = nullptr;
+    std::shared_ptr<AgentApiRouter> agentApiRouteRegister_ = nullptr;
     std::shared_ptr<ResourcesApiRouter> resourcesApiRouteRegister_ = nullptr;
     size_t maxLocalSchedPerDomainNode_{ 0 };
     size_t maxDomainSchedPerDomainNode_{ 0 };
@@ -77,6 +78,7 @@ private:
     std::string schedulePlugins_;
     bool isScheduleTolerateAbnormal_{ false };
     uint32_t heartbeatTimeoutMs_{ DEFAULT_SYSTEM_TIMEOUT };
+    uint32_t domainHeartbeatTimeoutMs_{ DEFAULT_DOMAIN_HEARTBEAT_TIMEOUT };
     uint64_t pullResourceInterval_{ DEFAULT_PULL_RESOURCE_INTERVAL };
     uint16_t maxPriority_{ 0 };
     std::string aggregatedStrategy_ {"no_aggregate"};
@@ -85,6 +87,7 @@ private:
     bool enablePrintResourceView_{ false };
     int32_t relaxed_ = -1;
     bool enablePreemption_{ false };
+    std::string componentName_{};
 };
 
 }  // namespace functionsystem::global_scheduler

@@ -18,12 +18,12 @@
 #include "async/collect.hpp"
 #include "async/defer.hpp"
 #include "common/constants/actor_name.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/schedule_decision/scheduler_common.h"
 #include "common/schedule_plugin/common/preallocated_context.h"
 #include "common/utils/collect_status.h"
 #include "common/utils/struct_transfer.h"
-#include "time_trigger.h"
+#include "common/utils/time_trigger.h"
 
 namespace functionsystem::domain_scheduler {
 using namespace functionsystem::explorer;
@@ -238,18 +238,27 @@ void DomainGroupCtrlActor::OnGroupScheduleDecision(
                                    Status(static_cast<StatusCode>(result.code), result.reason)));
 }
 
-void DomainGroupCtrlActor::RollbackContext(const std::shared_ptr<GroupScheduleContext> &ctx)
+std::vector<int> DomainGroupCtrlActor::RollbackContext(const std::shared_ptr<GroupScheduleContext> &ctx)
 {
     // to ensure strict order-preserving in group scheduling,
     // all instances need to be rolled back after the instance reserve failure.
     // while strict packed, all should be rollback
     bool alreadyFailed = false;
+    std::vector<int> failedInds;
     ctx->lastReservedInd = -1;
     for (size_t i = 0; i < ctx->requests.size(); i++) {
         auto request = ctx->requests[i];
         auto requestID = request->requestid();
-        if (ctx->groupInfo->groupopts().grouppolicy() != common::GroupPolicy::StrictPack
-            && ctx->failedReserve.find(requestID) == ctx->failedReserve.end() && !alreadyFailed) {
+        bool isSuccessful = ctx->failedReserve.find(requestID) == ctx->failedReserve.end();
+        if (ctx->groupInfo->groupopts().grouppolicy() != common::GroupPolicy::StrictPack && isSuccessful
+            && !alreadyFailed) {
+            ctx->lastReservedInd = static_cast<int>(i);
+            continue;
+        }
+        if (isSuccessful && alreadyFailed && ctx->insRangeScheduler
+            && i < static_cast<size_t>(ctx->insRangeRequest->rangeopts().range().min())) {
+            YRLOG_INFO("{}|{}|instance({}) do not to rollback, min({})", request->traceid(), requestID,
+                       request->instance().instanceid(), ctx->insRangeRequest->rangeopts().range().min());
             ctx->lastReservedInd = static_cast<int>(i);
             continue;
         }
@@ -257,12 +266,14 @@ void DomainGroupCtrlActor::RollbackContext(const std::shared_ptr<GroupScheduleCo
         YRLOG_INFO("{}|{}|instance({}) is already failed to reserve, rollback it context to retry", request->traceid(),
                    requestID, request->instance().instanceid());
         schedule_framework::ClearContext(*request->mutable_contexts());
+        failedInds.emplace_back(i);
     }
     // nothing to rollback
     if (!alreadyFailed) {
         ctx->lastReservedInd = static_cast<int>(ctx->requests.size()) - 1;
     }
     ctx->failedReserve.clear();
+    return failedInds;
 }
 
 void DomainGroupCtrlActor::ReleaseUnusedReserve(
@@ -281,7 +292,7 @@ void DomainGroupCtrlActor::ReleaseUnusedReserve(
                unusedReserveCount, results.size(), reservedInstanceCount);
     ASSERT_IF_NULL(underlayer_);
     // unreserve failed is not concerned
-    for (size_t i = results.size(); i < reservedInstanceCount; i++) {
+    for (size_t i = results.size() - 1; i < reservedInstanceCount; i--) {
         underlayer_->UnReserve(groupCtx->requests[i]->contexts().at(GROUP_SCHEDULE_CONTEXT).groupschedctx().reserved(),
                                groupCtx->requests[i]);
         (*groupCtx->requests[i]->mutable_contexts())[GROUP_SCHEDULE_CONTEXT]
@@ -364,10 +375,10 @@ void DomainGroupCtrlActor::OnReserve(const litebus::Future<Status> &future,
                    groupCtx->groupInfo->traceid(), groupCtx->groupInfo->requestid(), groupCtx->groupInfo->groupid(),
                    status.ToString());
         // a fresh round to retry, rollback failed scheduled result.
-        RollbackContext(groupCtx);
+        auto rollbackedInd = RollbackContext(groupCtx);
         ASSERT_IF_NULL(recorder_);
         ASSERT_IF_NULL(scheduler_);
-        RollbackRangeReserve(groupCtx->tryScheduleResults, groupCtx)
+        RollbackRangeReserve(rollbackedInd, groupCtx->tryScheduleResults, groupCtx)
             .OnComplete([aid(GetAID()), recorder(recorder_), scheduler(scheduler_), groupCtx]() {
                 GroupScheduleDecision(recorder, scheduler, aid, groupCtx, true);
             });
@@ -383,6 +394,7 @@ void DomainGroupCtrlActor::OnReserve(const litebus::Future<Status> &future,
 }
 
 litebus::Future<Status> DomainGroupCtrlActor::RollbackRangeReserve(
+    const std::vector<int> &rollbackedInd,
     const std::vector<schedule_decision::ScheduleResult> &results,
     const std::shared_ptr<GroupScheduleContext> &groupCtx)
 {
@@ -391,14 +403,16 @@ litebus::Future<Status> DomainGroupCtrlActor::RollbackRangeReserve(
         return Status::OK();
     }
     std::list<litebus::Future<Status>> unReserves;
-    auto rollbackInd = groupCtx->lastReservedInd + 1;
-    YRLOG_WARN("{}|{}|group({}) schedule rollback reserved instance after latest successful index({})",
-               groupCtx->groupInfo->traceid(), groupCtx->groupInfo->requestid(),
-               groupCtx->groupInfo->groupid(), rollbackInd);
+    YRLOG_WARN(
+        "{}|{}|group({}) schedule rollback reserved instance, instance({}) to be unreserved",
+        groupCtx->groupInfo->traceid(), groupCtx->groupInfo->requestid(), groupCtx->groupInfo->groupid(),
+        !rollbackedInd.empty()
+            ? std::accumulate(std::next(rollbackedInd.begin()), rollbackedInd.end(), std::to_string(rollbackedInd[0]),
+                              [](const std::string &a, int b) { return a + "," + std::to_string(b); })
+            : "none");
     ASSERT_IF_NULL(underlayer_);
-    for (size_t i = static_cast<size_t>(rollbackInd); i < results.size(); i++) {
-        unReserves.emplace_back(underlayer_->UnReserve(results[i].id,
-                                                       groupCtx->requests[i]));
+    for (auto i : rollbackedInd) {
+        unReserves.emplace_back(underlayer_->UnReserve(results[i].id, groupCtx->requests[i]));
     }
     auto promise = std::make_shared<litebus::Promise<Status>>();
     // unreserve failed is not concerned
@@ -664,7 +678,7 @@ void DomainGroupCtrlActor::OnGroupScheduleDone(const litebus::AID &from, const l
     auto groupInfo = groupCtx->groupInfo;
     YRLOG_INFO("{}|{}|finished group schedule from {}, groupID({}) groupName({}). code({}) msg({})",
                groupInfo->traceid(), groupInfo->requestid(), std::string(from), groupInfo->groupid(),
-               groupInfo->groupopts().groupname(), status.StatusCode(), status.GetMessage());
+               groupInfo->groupopts().groupname(), fmt::underlying(status.StatusCode()), status.GetMessage());
     messages::GroupResponse resp;
     resp.set_requestid(groupInfo->requestid());
     resp.set_code(status.StatusCode());

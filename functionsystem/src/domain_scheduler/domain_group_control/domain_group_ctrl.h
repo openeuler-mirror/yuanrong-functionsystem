@@ -20,7 +20,7 @@
 #include <async/future.hpp>
 #include <vector>
 
-#include "proto/pb/message_pb.h"
+#include "common/proto/pb/message_pb.h"
 #include "litebus.hpp"
 
 namespace functionsystem::domain_scheduler {

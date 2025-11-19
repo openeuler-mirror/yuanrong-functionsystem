@@ -16,7 +16,7 @@
 
 #include "sched_tree.h"
 
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "sched_node.h"
 
 namespace functionsystem {

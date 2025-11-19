@@ -122,6 +122,11 @@ protected:
     // register the message handle
     void Receive(const std::string &msgName, ActorFunction &&func);
 
+    // register the message handle
+    virtual void Signature(const std::unique_ptr<MessageBase> &msg);
+
+    virtual bool SignatureVerification(const std::unique_ptr<MessageBase> &msg);
+
     // register the message handle. It will be discarded.
     template <typename T>
     void Receive(const std::string &msgName, void (T::*method)(litebus::AID, std::string &&, std::string &&))
@@ -212,9 +217,14 @@ private:
     void Spawn(std::shared_ptr<ActorBase> &actor, std::unique_ptr<ActorPolicy> actorThread);
     void SetRunningStatus(bool start);
 
+    std::string GenSignature(const std::unique_ptr<MessageBase> &msg, const std::string &timestamp) const;
+
     std::unique_ptr<ActorPolicy> actorThread;
 
     AID id;
+
+    std::shared_ptr<std::string> accessKey_;
+    std::shared_ptr<SensitiveValue> secretKey_;
 
     std::map<std::string, ActorFunction> actionFunctions;
     std::mutex waiterLock;

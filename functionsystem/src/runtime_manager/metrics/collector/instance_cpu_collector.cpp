@@ -18,8 +18,8 @@
 
 #include <regex>
 
-#include "constants.h"
-#include "logs/logging.h"
+#include "common/constants/constants.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem::runtime_manager {
 
@@ -46,78 +46,95 @@ std::string InstanceCPUCollector::GenFilter() const
 litebus::Future<Metric> InstanceCPUCollector::GetUsage() const
 {
     YRLOG_DEBUG_COUNT_60("instance cpu collector get usage.");
-    auto start = GetCpuJiffies(pid_, procFSTools_);
-    if (start.IsNone()) {
+    auto startProc = GetProcessCpuTime(pid_, procFSTools_);
+    auto startTotal = GetTotalCpuTime(procFSTools_);
+    std::this_thread::sleep_for(std::chrono::milliseconds(instance_metrics::CPU_CAL_INTERVAL));
+    auto endProc = GetProcessCpuTime(pid_, procFSTools_);
+    auto endTotal = GetTotalCpuTime(procFSTools_);
+    if (endTotal == startTotal || startProc == 0 || startTotal == 0 || endProc == 0 || endTotal == 0) {
         YRLOG_ERROR("get cpu jiffies from pid {} failed.", pid_);
-        return Metric{ {}, instanceID_, {}, {}};
+        return Metric{ {}, instanceID_, {}, {} };
     }
-
     litebus::Promise<Metric> promise;
-    litebus::TimerTools::AddTimer(
-        instance_metrics::CPU_CAL_INTERVAL, "TriggerAWhile",
-        [promise, start, instanceID = instanceID_, fun = GetCpuJiffies, pid = pid_, procFSTools = procFSTools_]() {
-            auto end = fun(pid, procFSTools);
-            Metric metric;
-            metric.instanceID = instanceID;
-            if (end.IsNone()) {
-                promise.SetValue(metric);
-                return;
-            }
-            metric.value = (end.Get() - start.Get()) * instance_metrics::CPU_SCALE / instance_metrics::CPU_CAL_INTERVAL;
-            promise.SetValue(metric);
-        });
+    Metric metric;
+    metric.instanceID = instanceID_;
+    metric.value = instance_metrics::PERCENT_BASE * static_cast<double>(endProc - startProc)
+                   / static_cast<double>(endTotal - startTotal);  // percent
+    promise.SetValue(metric);
     return promise.GetFuture();
 }
 
+// Get cpu jiffy from /proc/stat
+unsigned long long InstanceCPUCollector::GetTotalCpuTime(const std::shared_ptr<ProcFSTools> procFSTools) const
+{
+    if (procFSTools == nullptr) {
+        YRLOG_ERROR("can not read content, procFSTool is nullptr.");
+        return 0;
+    }
+    auto stat = procFSTools->Read("/proc/stat");
+    if (stat.IsNone() || stat.Get().empty()) {
+        YRLOG_ERROR("read content from /proc/stat failed.");
+        return 0;
+    }
+    auto content = stat.Get();
+    // content first line is like 'cpu  37277813 25 553311 226585434 38509 386500 107559 0 0 0\n'
+    size_t pos = content.find('\n');
+    if (pos == std::string::npos) {
+        YRLOG_WARN("invalid /proc/stat content");
+        return 0;
+    }
+    std::string firstLine = content.substr(0, pos);
+    std::istringstream ss(firstLine);
+    std::string cpu;
+    unsigned long long total = 0;
+    unsigned long long val;
+    ss >> cpu; // skip "cpu"
+    while (ss >> val) {
+        total += val;
+    }
+    return total;
+}
+
 // Get cpu jiffy from /proc/pid/stat
-litebus::Option<double> InstanceCPUCollector::GetCpuJiffies(const pid_t &pid,
-                                                            const std::shared_ptr<ProcFSTools> procFSTools)
+unsigned long long InstanceCPUCollector::GetProcessCpuTime(const pid_t &pid,
+                                                            const std::shared_ptr<ProcFSTools> procFSTools) const
 {
     auto path = instance_metrics::PROCESS_STAT_PATH_EXPRESS;
     path = path.replace(path.find('?'), 1, std::to_string(pid));
     if (procFSTools == nullptr) {
         YRLOG_ERROR("can not read content, procFSTool is nullptr.");
-        return {};
+        return 0;
     }
 
     auto realPath = litebus::os::RealPath(path);
     if (realPath.IsNone()) {
         YRLOG_ERROR("failed to get realpath: {}", path);
-        return {};
+        return 0;
     }
 
     auto stat = procFSTools->Read(path);
     if (stat.IsNone() || stat.Get().empty()) {
         YRLOG_ERROR("read content from {} failed.", path);
-        return {};
+        return 0;
     }
     YRLOG_DEBUG_COUNT_60("read stat {} from {}.", stat.Get(), path);
     return CalJiffiesForCPUProcess(stat.Get());
 }
 
-litebus::Option<double> InstanceCPUCollector::CalJiffiesForCPUProcess(const std::string &stat)
+unsigned long long InstanceCPUCollector::CalJiffiesForCPUProcess(const std::string &stat) const
 {
-    auto stats = litebus::strings::Split(stat, " ");
-    if (stats.size() != instance_metrics::PROCESS_CPU_STAT_LEN) {
-        YRLOG_ERROR("stat size is not equal {}", instance_metrics::PROCESS_CPU_STAT_LEN);
-        return {};
+    std::istringstream ss(stat);
+    std::string tmp;
+    unsigned long long utime;
+    unsigned long long stime;
+    unsigned long long cutime;
+    unsigned long long cstime;
+    // Ignore the first 13 fields
+    for (int i = 0; i < 13; i++) {
+        ss >> tmp;
     }
-
-    auto utime = 0;
-    auto stime = 0;
-    auto cutime = 0;
-    auto cstime = 0;
-    try {
-        utime = std::stoi(stats[instance_metrics::CPU_UTIME_INDEX]);
-        stime = std::stoi(stats[instance_metrics::CPU_STIME_INDEX]);
-        cutime = std::stoi(stats[instance_metrics::CPU_CUTIME_INDEX]);
-        cstime = std::stoi(stats[instance_metrics::CPU_CSTIME_INDEX]);
-    } catch (const std::exception &e) {
-        YRLOG_ERROR("stoi fail, error:{}", e.what());
-        return {};
-    }
-    double value = static_cast<double>(utime + stime + cutime + cstime);
-    return value;
+    ss >> utime >> stime >> cutime >> cstime;
+    return utime + stime + cutime + cstime;
 }
 
 Metric InstanceCPUCollector::GetLimit() const

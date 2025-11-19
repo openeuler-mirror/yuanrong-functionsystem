@@ -63,6 +63,11 @@ litebus::Future<StateLoadResponse> StateActor::LoadState(const std::shared_ptr<S
     return GenStateLoadResponse(common::ErrorCode::ERR_NONE, "", state);
 }
 
+litebus::Future<Status> StateActor::DeleteState(const std::string &instanceId)
+{
+    return stateClient_->Del(instanceId);
+}
+
 void StateActor::InitStateClient()
 {
     RETURN_IF_NULL(stateClient_);

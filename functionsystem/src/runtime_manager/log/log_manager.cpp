@@ -17,7 +17,6 @@
 #include "log_manager.h"
 
 #include "async/async.hpp"
-#include "common/constants/actor_name.h"
 
 namespace functionsystem::runtime_manager {
 
@@ -50,6 +49,16 @@ void LogManager::StartScanLogs() const
 void LogManager::StopScanLogs() const
 {
     litebus::Async(actor_->GetAID(), &LogManagerActor::StopScanLogs);
+}
+
+litebus::Future<std::string> LogManager::AcquireLogPrefix(const std::string &runtimeID)
+{
+    return litebus::Async(actor_->GetAID(), &LogManagerActor::AcquireLogPrefix, runtimeID);
+}
+
+void LogManager::ReleaseLogPrefix(const std::string &runtimeID)
+{
+    litebus::Async(actor_->GetAID(), &LogManagerActor::ReleaseLogPrefix, runtimeID);
 }
 
 }  // namespace functionsystem::runtime_manager

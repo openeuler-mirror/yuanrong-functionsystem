@@ -21,9 +21,8 @@
 
 #include "actor/actor.hpp"
 #include "async/async.hpp"
-#include "resource_type.h"
-#include "status/status.h"
-#include "module_driver.h"
+#include "common/resource_view/resource_type.h"
+#include "common/status/status.h"
 #include "meta_store_monitor/meta_store_healthy_observer.h"
 
 namespace functionsystem::instance_manager {

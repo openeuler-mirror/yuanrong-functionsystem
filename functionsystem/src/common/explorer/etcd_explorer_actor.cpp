@@ -33,6 +33,7 @@ void EtcdExplorerActor::Finalize()
 
 void EtcdExplorerActor::Observe()
 {
+    electionKey_ = electionKeySet_.size() > 0 ? electionKeySet_.begin()->c_str() : "";
     YRLOG_INFO("EtcdExplorerActor({}) starts to observe", electionKey_);
     ASSERT_IF_NULL(metaStoreClient_);
     (void)metaStoreClient_

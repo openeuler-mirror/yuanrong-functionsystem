@@ -17,7 +17,7 @@
 #ifndef FUNCTION_AGENT_FLAGS_H
 #define FUNCTION_AGENT_FLAGS_H
 
-#include "common_flags/common_flags.h"
+#include "common/common_flags/common_flags.h"
 
 namespace functionsystem::function_agent {
 class FunctionAgentFlags : public CommonFlags {
@@ -85,6 +85,30 @@ public:
         return codeAgingTime_;
     }
 
+const std::string &GetAccessKey() const
+    {
+        return accessKey;
+    }
+
+    const std::string &GetSecretKey() const
+    {
+        return secretKey;
+    }
+
+    const std::string &GetS3Endpoint() const
+    {
+        return s3Endpoint;
+    }
+
+    const std::string &GetS3Protocol() const
+    {
+        return s3Protocol;
+    }
+
+    const std::string &GetCredentialType() const
+    {
+        return credentialType;
+    }
     const std::string &GetDecryptAlgorithm() const
     {
         return decryptAlgorithm;
@@ -93,6 +117,11 @@ public:
     const bool &GetEnableMergeProcess() const
     {
         return enableMergeProcess;
+    }
+
+    const bool &GetS3Enable() const
+    {
+        return isEnableS3;
     }
 
     const std::string &GetAgentUID() const
@@ -120,6 +149,12 @@ protected:
     int32_t dirDepthMax{};
     int32_t codeAgingTime_{ 0 };
 
+    bool isEnableS3{ DEFAULT_ENABLE_S3 };
+    std::string credentialType;
+    std::string accessKey;
+    std::string secretKey;
+    std::string s3Endpoint;
+    std::string s3Protocol;
     std::string decryptAlgorithm;
 
     bool enableMergeProcess = false;

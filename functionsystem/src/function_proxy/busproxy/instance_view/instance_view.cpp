@@ -20,9 +20,9 @@
 #include "async/collect.hpp"
 #include "async/defer.hpp"
 #include "common/communication/proxy/client.h"
-#include "constants.h"
-#include "logs/logging.h"
-#include "proto/pb/posix/resource.pb.h"
+#include "common/constants/constants.h"
+#include "common/logs/logging.h"
+#include "common/proto/pb/posix/resource.pb.h"
 #include "common/state_machine/instance_context.h"
 #include "common/utils/struct_transfer.h"
 
@@ -50,7 +50,6 @@ std::shared_ptr<InstanceRouterInfo> TransferInstanceInfo(const resources::Instan
 {
     auto info = std::make_shared<InstanceRouterInfo>();
     info->isReady = IsReadyStatus((InstanceState)instanceInfo.instancestatus().code());
-    info->isLowReliability = instanceInfo.lowreliability();
     info->isLocal = instanceInfo.functionproxyid() == currentNode;
     info->runtimeID = instanceInfo.runtimeid();
     info->proxyID = instanceInfo.functionproxyid();
@@ -117,15 +116,14 @@ void InstanceView::Update(const std::string &instanceID, const resources::Instan
     }
     auto status = static_cast<InstanceState>(instanceInfo.instancestatus().code());
     YRLOG_DEBUG("instance view Update instance, instanceID: {}, status: {}, proxyID: {},  nodeID:{}, handler {}",
-        instanceID, static_cast<std::underlying_type_t<InstanceState>>(status),
-        instanceInfo.functionproxyid(), nodeID_, eventHandlers_.size());
+                instanceID, fmt::underlying(status), instanceInfo.functionproxyid(), nodeID_, eventHandlers_.size());
     if (auto iter(eventHandlers_.find(status)); iter != eventHandlers_.end()) {
         iter->second(instanceID, instanceInfo);
     }
     allInstances_[instanceID] = instanceInfo;
 }
 
-void InstanceView::Delete(const std::string &instanceID)
+void InstanceView::Delete(const std::string &instanceID, int64_t)
 {
     YRLOG_DEBUG("instance view delete instance({})", instanceID);
     (void)allInstances_.erase(instanceID);
@@ -245,6 +243,11 @@ void InstanceView::SpawnInstanceProxy(const std::string &instanceID, const resou
         localInstances_[instanceID] = instanceProxy;
         instanceProxy->InitDispatcher();
         auto shared = true;
+        if (IsFrontendFunction(instanceInfo.function())) {
+            YRLOG_INFO("faasfrontend instance({}) proxy spawn to occupy single thread", instanceID);
+            shared = false;
+        }
+
         (void)litebus::Spawn(instanceProxy, shared);
     }
 }

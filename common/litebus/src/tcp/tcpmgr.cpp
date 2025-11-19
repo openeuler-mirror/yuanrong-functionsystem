@@ -446,7 +446,8 @@ int TCPMgr::RecvMsg(Connection *conn)
             }
 #endif
         default:
-            BUSLOG_DEBUG("fd:{},recvMsgType:{}", conn->fd, conn->recvMsgType);
+            BUSLOG_DEBUG("fd:{},recvMsgType:{}", conn->fd,
+                         static_cast<std::underlying_type_t<ParseType>>(conn->recvMsgType));
             return 0;
     }
 }
@@ -756,13 +757,15 @@ void TCPMgr::DoReConnectConn(Connection *conn, const std::string &to, const AID 
         // simultaneously.
         if (remoteConn != nullptr) {
             BUSLOG_INFO("reconnect, close remote connect,fd:{},sAid:{},dAid:{},remote:{},connState:{}", remoteConn->fd,
-                        std::string(sAid), std::string(dAid), remoteConn->isRemote, remoteConn->connState);
+                        std::string(sAid), std::string(dAid), remoteConn->isRemote,
+                        static_cast<std::underlying_type_t<ConnectionState>>(remoteConn->connState));
             LinkMgr::GetLinkMgr()->CloseConnection(remoteConn);
         }
     }
 
     BUSLOG_INFO("reconnect, close old connect,fd:{},sAid:{},dAid:{},remote:{},connState:{}", conn->fd,
-                std::string(sAid), std::string(dAid), conn->isRemote, conn->connState);
+                std::string(sAid), std::string(dAid), conn->isRemote,
+                static_cast<std::underlying_type_t<ConnectionState>>(conn->connState));
 
     oldFd = conn->fd;
 

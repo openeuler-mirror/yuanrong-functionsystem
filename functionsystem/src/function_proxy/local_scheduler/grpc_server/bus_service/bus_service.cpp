@@ -23,13 +23,13 @@
 
 #include "async/future.hpp"
 #include "common/constants/signal.h"
-#include "logs/logging.h"
+#include "common/logs/logging.h"
 #include "common/observer/control_plane_observer/control_plane_observer.h"
-#include "proto/pb/posix/resource.pb.h"
-#include "proto/pb/posix_pb.h"
-#include "status/status.h"
+#include "common/proto/pb/posix/resource.pb.h"
+#include "common/proto/pb/posix_pb.h"
+#include "common/status/status.h"
 #include "common/utils/generate_message.h"
-#include "param_check.h"
+#include "common/utils/param_check.h"
 #include "common/utils/version.h"
 
 namespace functionsystem::local_scheduler {
@@ -128,9 +128,16 @@ BusService::~BusService()
         if (!funcNameArr.empty()) {
             instanceInfo.set_tenantid(funcNameArr[0]);
         }
+        if (param_.instanceCtrl->IsSystemTenant(instanceInfo.tenantid()).Get()) {
+            instanceInfo.set_issystemfunc(true);
+        }
     }
-    // to make sure routeInfo published
+    // function-proxy is available if any of the following conditions is met:
+    // 1.function-proxy router info is successfully written into etcd.
+    // 2.function proxy is successfully registered into the global.
+    // here, function-proxy router info has been written into the ETCD.
     if (auto status = PutInstance(param_.controlPlaneObserver, instanceInfo).Get(); !status.ok()) {
+        // to make sure routeInfo published
         return status;
     }
     // posix connection would be built on route published
