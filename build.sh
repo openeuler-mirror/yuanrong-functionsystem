@@ -34,16 +34,19 @@ function thirdparty_compile() {
 }
 
 function logs_compile() {
+  echo "Compile common/logs"
   cd "${BASE_DIR}"/common/logs
   bash build.sh -j "${JOB_NUM}"
 }
 
 function litebus_compile() {
+  echo "Compile common/litebus"
   cd "${BASE_DIR}"/common/litebus
-  bash build/build.sh -t off -j "${JOB_NUM}"
+  bash build.sh -t off -j "${JOB_NUM}"
 }
 
 function metrics_compile() {
+  echo "Compile common/metrics"
   cd "${BASE_DIR}"/common/metrics
   bash build.sh -j "${JOB_NUM}"
 }

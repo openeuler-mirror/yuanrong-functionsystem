@@ -1,10 +1,11 @@
 import os
 import csv
-import subprocess
+import stat
 import tarfile
 import zipfile
 import hashlib
 import argparse
+import subprocess
 import urllib.request
 
 
@@ -27,14 +28,14 @@ def download_opensource(config_path, download_path):
         vendor_path = os.path.join(download_path, config['name'])  # vendor/xxx
 
         if os.path.exists(vendor_path):
-            print(f"依赖 {package_name} 已存在，自动跳过下载解压操作")
+            print(f"依赖 {config['name']}-{config['version']} 已存在，自动跳过下载解压操作")
             continue
 
         print(f"正在下载 {config['name']}-{config['version']} 校验值：{config['sha256']} 下载源：{config['repo']}")
         download_zipfile(package_name, config['repo'], archive_path)
         verify_checksum(package_name, archive_path, config['sha256'])
-        package_name = extract_file(archive_path, download_path)
-        package_path = os.path.join(download_path, package_name)  # vendor/xxx-vvv
+        extract_name = extract_file(archive_path, download_path)
+        package_path = os.path.join(download_path, extract_name)  # vendor/xxx-vvv
         os.rename(package_path, vendor_path)
     return 0
 
@@ -95,22 +96,35 @@ def extract_file(archive_path, extract_to):
 
 def extract_zip(zipfile_path, extract_to):
     """解压ZIP文件到指定目录"""
-    with zipfile.ZipFile(zipfile_path, 'r') as zip_ref:
-        zip_ref.extractall(extract_to)
-        for info in zip_ref.infolist():
-            extracted_path = os.path.join(extract_to, info.filename)
-            if not info.is_dir() and info.external_attr:
-                unix_permissions = (info.external_attr >> 16) & 0o777
-                os.chmod(extracted_path, unix_permissions)
-        print(f"文件 {zipfile_path.split('/')[-1]} 解压完成")
-        return zip_ref.infolist()[0].filename.split('/')[0]
+    zip_ref = zipfile.ZipFile(zipfile_path, 'r')
+    zip_ref.extractall(extract_to)
+    for info in zip_ref.infolist():
+        extracted_path = os.path.join(extract_to, info.filename)
+        if not info.is_dir() and info.external_attr:
+            unix_permissions = (info.external_attr >> 16) & 0o777
+            os.chmod(extracted_path, unix_permissions)
+    for info in zip_ref.infolist():
+        file_path = os.path.join(extract_to, info.filename)
+        if _is_symlink(info):
+            # 读取并创建符号链接
+            link_target = zip_ref.read(info.filename).decode('utf-8').strip()
+            if os.path.lexists(file_path):
+                os.remove(file_path)
+            os.symlink(link_target, file_path)
+    print(f"文件 {zipfile_path.split('/')[-1]} 解压完成")
+    return zip_ref.infolist()[0].filename.split('/')[0]
 
 def extract_tar(tarfile_path, extract_to):
     """解压ZIP文件到指定目录"""
-    with tarfile.open(tarfile_path, 'r:*') as tar_ref:
-        tar_ref.extractall(extract_to)
-        print(f"文件 {tarfile_path.split('/')[-1]} 解压完成")
-        return tar_ref.getnames()[0]
+    tar_ref = tarfile.open(tarfile_path, 'r:*')
+    tar_ref.extractall(extract_to)
+    print(f"文件 {tarfile_path.split('/')[-1]} 解压完成")
+    return tar_ref.getnames()[0]
+
+def _is_symlink(info):
+    """检查 ZIP 条目是否为符号链接"""
+    mode = (info.external_attr >> 16) & 0xFFFF
+    return stat.S_IFMT(mode) == stat.S_IFLNK
 
 if __name__ == "__main__":
     _parser = argparse.ArgumentParser(description='编译前三方件下载程序')

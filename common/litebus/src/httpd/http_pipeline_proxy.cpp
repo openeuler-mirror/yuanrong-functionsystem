@@ -127,7 +127,7 @@ bool HttpPipelineProxy::HandleResponse(const Future<Response> &responseFuture, c
         BUS_OOM_EXIT(msg);
         msg->body = output.str();
         BUSLOG_DEBUG("Encode msg, request url,response code, body size, url:{},code:{},size:{}", request.url.path,
-                     response.retCode, body.size());
+                     static_cast<std::underlying_type_t<ResponseCode>>(response.retCode), body.size());
         (void)tcpmgr->Send(msg, connection, conSeq);
     } else {
         BUSLOG_ERROR("tcp protocol is not exist.");

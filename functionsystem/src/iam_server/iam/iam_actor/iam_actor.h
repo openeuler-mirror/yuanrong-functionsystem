@@ -21,7 +21,7 @@
 
 #include "common/http/api_router_register.h"
 #include "common/aksk/aksk_util.h"
-#include "common/meta_store_adapter/meta_store_healthy_observer.h"
+#include "meta_store_monitor/meta_store_healthy_observer.h"
 #include "iam/internal_iam/internal_iam.h"
 
 namespace functionsystem::iamserver {

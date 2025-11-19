@@ -40,6 +40,7 @@ public:
 
     bool Empty() const;
     const char *GetData() const;
+    std::string GetMaskData() const;
     size_t GetSize() const;
     bool MoveTo(std::unique_ptr<char[]> &outData, size_t &outSize);
     void Clear() noexcept;

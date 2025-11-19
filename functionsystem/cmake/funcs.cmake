@@ -1,4 +1,4 @@
-# for git information
+# 获取 git 信息
 macro(get_git_branch git_branch_out_var)
     find_package(Git QUIET)
     if (GIT_FOUND)
@@ -12,6 +12,7 @@ macro(get_git_branch git_branch_out_var)
     endif ()
 endmacro()
 
+# 获取 git 提交哈希值
 macro(get_git_hash git_hash_out_var)
     find_package(Git QUIET)
     if (GIT_FOUND)
@@ -24,3 +25,11 @@ macro(get_git_hash git_hash_out_var)
         )
     endif ()
 endmacro()
+
+# 安装目标函数
+function(INSTALL_TARGET target)
+    install(TARGETS ${target}
+            ARCHIVE DESTINATION ${INSTALL_LIBDIR}
+            LIBRARY DESTINATION ${INSTALL_LIBDIR}
+            RUNTIME DESTINATION ${INSTALL_BINDIR})
+endfunction()

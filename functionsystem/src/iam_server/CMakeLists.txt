@@ -28,15 +28,11 @@ set_target_properties(iam_server_lib PROPERTIES UNITY_BUILD ON)
 target_compile_options(iam_server_lib PRIVATE -fPIE)
 target_link_libraries(iam_server_lib
         ${etcdapi_LIB_A} kube_client
-        rpc sts leader explorer
+        rpc leader explorer
         meta_store_client
         http aksk
         common_flags utils
         posix_pb metrics_adapter)
-
-IF ("${STS_BUILD_ENABLE}" STREQUAL "ON")
-    target_link_libraries(iam_server_lib ${stssdk_LIB})
-endif ()
 
 add_subdirectory(driver)
 add_subdirectory(flags)

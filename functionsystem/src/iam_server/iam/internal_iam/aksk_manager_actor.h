@@ -20,7 +20,7 @@
 #include "common/constants/actor_name.h"
 #include "common/explorer/explorer.h"
 #include "common/leader/business_policy.h"
-#include "common/meta_storage_accessor/meta_storage_accessor.h"
+#include "meta_storage_accessor/meta_storage_accessor.h"
 #include "common/utils/request_sync_helper.h"
 #include "common/utils/aksk_content.h"
 

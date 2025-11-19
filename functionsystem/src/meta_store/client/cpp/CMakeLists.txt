@@ -35,6 +35,6 @@ set_target_properties(meta_store_client PROPERTIES UNITY_BUILD ON)
 
 file(GLOB_RECURSE META_STORE_CLIENT_SRCS src/*.cpp)
 
-add_dependencies(meta_store_client metrics_adapter status etcdapi)
+add_dependencies(meta_store_client metrics_adapter status etcdapi heartbeat)
 target_sources(meta_store_client PRIVATE ${META_STORE_CLIENT_SRCS})
-target_link_libraries(meta_store_client PUBLIC metrics_adapter ${etcdapi_LIB_A} status)
+target_link_libraries(meta_store_client PUBLIC metrics_adapter ${etcdapi_LIB_A} status heartbeat)

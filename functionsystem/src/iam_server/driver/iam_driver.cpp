@@ -19,7 +19,7 @@
 #include <utility>
 
 #include "common/constants/actor_name.h"
-#include "common/meta_store_adapter/meta_store_monitor_factory.h"
+#include "meta_store_monitor/meta_store_monitor_factory.h"
 
 namespace functionsystem::iamserver {
 IAMDriver::IAMDriver(functionsystem::iamserver::IAMStartParam param,

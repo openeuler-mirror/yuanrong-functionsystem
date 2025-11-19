@@ -1,6 +1,6 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2023-2023. All rights reserved.
 
-set(src_dir ${THIRDPARTY_SRC_DIR}/huaweicloud-sdk-c-obs)
+set(src_dir ${VENDOR_SRC_DIR}/huaweicloud-sdk-c-obs)
 set(src_name obs)
 
 set(${src_name}_CMAKE_ARGS
@@ -19,7 +19,7 @@ EXTERNALPROJECT_ADD(${src_name}
         SOURCE_DIR ${src_dir}
         DOWNLOAD_COMMAND ""
         CMAKE_ARGS ${${src_name}_CMAKE_ARGS} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
-        PATCH_COMMAND patch -Np1 < ${BUILD_CONFIG_DIR}/thirdparty/patches/obs/obs-change-spdlog-with-yr.patch || echo 1
+        PATCH_COMMAND patch -Np1 < ${VENDOR_PATCHES_DIR}/obs/obs-change-spdlog-with-yr.patch || echo 1
         LOG_CONFIGURE ON
         LOG_BUILD ON
         LOG_INSTALL ON

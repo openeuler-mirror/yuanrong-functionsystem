@@ -33,9 +33,9 @@
 #include "common/leader/leader_actor.h"
 #include "common/leader/txn_leader_actor.h"
 #include "common/logs/logging.h"
-#include "common/meta_store_adapter/meta_store_monitor_factory.h"
-#include "common/meta_store_client/meta_store_client.h"
-#include "common/meta_store_client/meta_store_struct.h"
+#include "meta_store_monitor/meta_store_monitor_factory.h"
+#include "meta_store_client/meta_store_client.h"
+#include "meta_store_client/meta_store_struct.h"
 #include "common/rpc/client/grpc_client.h"
 #include "common/utils/module_switcher.h"
 #include "common/utils/ssl_config.h"
@@ -152,8 +152,6 @@ void OnCreate(const Flags &flags)
     CreateKubeClient(flags);
     auto address = flags.GetIP() + ":" + flags.GetHTTPListenPort();
     if (flags.GetSslEnable()) {
-        EnableSSLWhiteList({ flags.GetIP() });
-        EnableSSLDownGrade();
         InitLitebusSSLEnv(GetSSLCertConfig(flags));
     }
     g_iamServerSwitcher->InitMetrics(flags.GetEnableMetrics(), flags.GetMetricsConfig(),

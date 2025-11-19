@@ -518,10 +518,11 @@ bool ConnectionUtil::Parse(int, Connection *conn)
                 return false;
             }
 
-            BUSLOG_DEBUG("recvmsg, name:{},from:{},to:{}", conn->recvMsgBase->name, conn->recvFrom, conn->recvTo);
-
-            conn->recvMsgBase->SetTo(std::move(conn->recvTo));
-            conn->recvMsgBase->SetFrom(std::move(conn->recvFrom));
+            BUSLOG_DEBUG("recvmsg]recv name:{}, from:{}, conn fd:{}, remote:{}, peer:{}", conn->recvMsgBase->name,
+                         conn->recvFrom, conn->fd, conn->isRemote, conn->peer);
+            conn->recvMsgBase->peer = conn->isRemote ? conn->peer : conn->to;
+            conn->recvMsgBase->SetFrom(conn->recvFrom);
+            conn->recvMsgBase->SetTo(conn->recvTo);
             conn->recvState = State::MSG_HEADER;
             break;
         default:
@@ -537,11 +538,18 @@ int ConnectionUtil::RecvKMsg(Connection *conn, IOMgr::MsgHandler msgHandler)
     bool ok = Parse(conn->fd, conn);
     // if no message parsed, wait for next read
     if (!ok) {
-        BUSLOG_DEBUG("no message parsed,wait for next read, fd:{},recvState:{}", conn->fd, conn->recvState);
+        BUSLOG_DEBUG("no message parsed,wait for next read, fd:{},recvState:{}", conn->fd,
+                     static_cast<std::underlying_type_t<State>>(conn->recvState));
         if (conn->connState == ConnectionState::DISCONNECTING) {
             return -1;
         }
         return 0;
+    }
+
+    if (conn->recvMsgBase == nullptr) {
+        BUSLOG_ERROR("received an empty message");
+        conn->connState = ConnectionState::DISCONNECTING;
+        return -1;
     }
 
     if (!conn->recvMsgBase->from.OK() || !conn->recvMsgBase->to.OK()) {
@@ -651,10 +659,14 @@ void ConnectionUtil::SocketEventHandler(int fd, uint32_t events, void *context)
           (static_cast<uint32_t>(EPOLLHUP) | static_cast<uint32_t>(EPOLLRDHUP) | static_cast<uint32_t>(EPOLLERR))))) {
         if (conn->recvMsgType == ParseType::KMSG) {
             BUSLOG_INFO("event value, fd:{},events:{},state:{},errcode:{},errno:{},to:{},type:{},remote:{}", fd,
-                        events, conn->connState, conn->errCode, errno, conn->to, conn->recvMsgType, conn->isRemote);
+                        events, static_cast<std::underlying_type_t<ConnectionState>>(conn->connState), conn->errCode,
+                        errno, conn->to, static_cast<std::underlying_type_t<ParseType>>(conn->recvMsgType),
+                        conn->isRemote);
         } else {
             BUSLOG_DEBUG("event value, fd:{},events:{},state:{},errcode:{},errno:{},to:{},type:{},remote:{}", fd,
-                         events, conn->connState, conn->errCode, errno, conn->to, conn->recvMsgType, conn->isRemote);
+                         events, static_cast<std::underlying_type_t<ConnectionState>>(conn->connState), conn->errCode,
+                         errno, conn->to, static_cast<std::underlying_type_t<ParseType>>(conn->recvMsgType),
+                         conn->isRemote);
         }
 
         conn->connState = ConnectionState::DISCONNECTING;
@@ -715,11 +727,13 @@ int ConnectionUtil::AddNewConnEventHandler(Connection *conn)
 void ConnectionUtil::CleanUp(int fd, Connection *conn)
 {
     if (LOG_CHECK_EVERY_N()) {
-        BUSLOG_INFO("new con fail, fd:{},state:{},errno:{},to:{},type:{}", fd, conn->connState, errno, conn->to,
-                    conn->recvMsgType);
+        BUSLOG_INFO("new con fail, fd:{},state:{},errno:{},to:{},type:{}", fd,
+                    static_cast<std::underlying_type_t<ConnectionState>>(conn->connState), errno, conn->to,
+                    static_cast<std::underlying_type_t<ParseType>>(conn->recvMsgType));
     } else {
-        BUSLOG_DEBUG("new con fail, fd:{},state:{},errno:{},to:{},type:{}", fd, conn->connState, errno, conn->to,
-                     conn->recvMsgType);
+        BUSLOG_DEBUG("new con fail, fd:{},state:{},errno:{},to:{},type:{}", fd,
+                     static_cast<std::underlying_type_t<ConnectionState>>(conn->connState), errno, conn->to,
+                     static_cast<std::underlying_type_t<ParseType>>(conn->recvMsgType));
     }
 
     conn->connState = ConnectionState::DISCONNECTING;

@@ -187,7 +187,7 @@ litebus::Future<HttpResponse> IAMActor::RequireAKSKByTenantID(const functionsyst
                                             "require aksk failed, err is " + akskContent->status.ToString());
             }
             // encrypt akskContent with component data key
-            const auto encAKSKContent = EncryptAKSKContentForResponse(akskContent);
+            const auto encAKSKContent = EncryptAKSKContentForStorage(akskContent);
             if (encAKSKContent->status.IsError()) {
                 YRLOG_ERROR("{}|RequireAKSKContentByTenantID failed by {}, encrypt aksk for response failed, err: {}",
                             tenantID, request.client.IsSome() ? request.client.Get() : "unknown ip",
@@ -226,7 +226,7 @@ litebus::Future<HttpResponse> IAMActor::RequireAKSKByAK(const functionsystem::Ht
                                         "require aksk by access key failed, err is " + akskContent->status.ToString());
         }
         // encrypt akskContent with component data key
-        auto encAKSKContent = EncryptAKSKContentForResponse(akskContent);
+        auto encAKSKContent = EncryptAKSKContentForStorage(akskContent);
         if (encAKSKContent->status.IsError()) {
             YRLOG_ERROR("{}|RequireAKSKContentByAK failed by {}, encrypt aksk for response failed, err: {}", accessKey,
                         request.client.IsSome() ? request.client.Get() : "unknown ip",

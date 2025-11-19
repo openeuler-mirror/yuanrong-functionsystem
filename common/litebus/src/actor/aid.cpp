@@ -127,6 +127,10 @@ std::string AID::GetProtocol() const
 
 std::string AID::GetIp() const
 {
+    if (url.empty()) {
+        return url;
+    }
+
     size_t index1 = url.find("://");
     if (index1 == std::string::npos) {
         index1 = 0;
@@ -144,6 +148,10 @@ std::string AID::GetIp() const
 
 uint16_t AID::GetPort() const
 {
+    if (url.empty()) {
+        return 0;
+    }
+
     size_t index = url.rfind(':');
     uint16_t port = 0;
     try {
@@ -154,7 +162,7 @@ uint16_t AID::GetPort() const
         }
         port = static_cast<uint16_t>(ulPort);
     } catch (const std::exception &e) {
-        BUSLOG_ERROR("wrong url:{}, error: {}", url, e.what());
+        BUSLOG_ERROR("actor {} has wrong url:{}, error: {}", name, url, e.what());
     }
     return port;
 }

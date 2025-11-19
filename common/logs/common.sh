@@ -22,8 +22,6 @@ export BUILD_DIR="${BASE_DIR}/build"
 export OUTPUT_DIR="${BASE_DIR}/output"
 export YR_ROOT_DIR="$(readlink -f "${BASE_DIR}/../..")"
 export BUILD_CONFIG_DIR="${YR_ROOT_DIR}/build"
-export THIRDPARTY_SRC_DIR="${YR_ROOT_DIR}/vendor"
-export THIRDPARTY_INSTALL_DIR="${THIRDPARTY_SRC_DIR}/out"
 export CPU_NUM="$(grep -c 'processor' /proc/cpuinfo)"
 UT_EXECUTABLE="logs_test"
 
@@ -40,35 +38,6 @@ function check_number() {
         return 0
     else
         echo "Invalid value $1 for option -$2"
-        exit 1
-    fi
-}
-
-function download_opensource()
-{
-    echo "download opensource: ${DOWNLOAD_OPENSRC}"
-    if [ "${DOWNLOAD_OPENSRC^^}" != "ON" ]; then
-        echo "don't need download opensource"
-        return 0
-    fi
-
-    echo "yr root dir: ${YR_ROOT_DIR}"
-    echo "build config dir: ${BUILD_CONFIG_DIR}"
-    echo "thirdparty src dir: ${THIRDPARTY_SRC_DIR}"
-    echo "thirdparty install dir: ${THIRDPARTY_INSTALL_DIR}"
-
-    if [ ! -d "${BUILD_CONFIG_DIR}" ]; then
-        echo "please download build config"
-        exit 1
-    fi
-
-    ARGS="-T ${THIRDPARTY_SRC_DIR} -Y ${YR_ROOT_DIR} -M logs"
-    if [ "X${BUILD_TEST}" = "XOFF" ]; then
-        ARGS="${ARGS} -r"
-    fi
-
-    if ! bash "${BUILD_CONFIG_DIR}/download_src.sh" "${ARGS}"; then
-        echo "download dependency source of src fail"
         exit 1
     fi
 }

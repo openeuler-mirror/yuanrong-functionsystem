@@ -19,7 +19,6 @@
 #include <async/defer.hpp>
 
 #include "common/http/http_util.h"
-#include "common/utils/hex.h"
 #include "common/utils/meta_store_kv_operation.h"
 
 namespace functionsystem::iamserver {
@@ -701,10 +700,6 @@ litebus::Future<Status> AKSKManagerActor::GetCredentialFromURL(const std::string
 
                 SensitiveValue plain;
                 std::string cipher = credentialJson.value();
-                if (auto status(DecryptByDataKey(dataKey, plain, cipher)); status.IsError()) {
-                    YRLOG_ERROR("{}|Get credential error: illegal cipher, {}", status.ToString(), tenantID);
-                    return Status(FAILED, "Get credential error: illegal cipher, " + status.ToString());
-                }
 
                 auto content = TransToAKSKContentFromJsonNew(plain.GetData());
                 content->expiredTimeStamp = 0;  // must, used by IsValid

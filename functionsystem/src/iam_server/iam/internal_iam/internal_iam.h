@@ -18,7 +18,7 @@
 #define IAM_SERVER_INTERNAL_IAM_INTERNAL_IAM_H
 
 #include "common/status/status.h"
-#include "common/meta_storage_accessor/meta_storage_accessor.h"
+#include "meta_storage_accessor/meta_storage_accessor.h"
 #include "common/utils/token_transfer.h"
 #include "token_manager_actor.h"
 #include "aksk_manager_actor.h"
@@ -84,7 +84,6 @@ private:
     std::shared_ptr<MetaStoreClient> metaStoreClient_{ nullptr };
     std::shared_ptr<TokenManagerActor> tokenManagerActor_{ nullptr };
     std::shared_ptr<AKSKManagerActor> akskManagerActor_{ nullptr };
-    std::shared_ptr<StsManager> stsManager_ {nullptr};
 };
 }  // namespace functionsystem::iamserver
 #endif // IAM_SERVER_INTERNAL_IAM_INTERNAL_IAM_H

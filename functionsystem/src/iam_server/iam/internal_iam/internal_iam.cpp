@@ -18,7 +18,6 @@
 
 #include "common/constants/actor_name.h"
 #include "common/logs/logging.h"
-#include "common/sts/sts_manager.h"
 
 namespace functionsystem::iamserver {
 
@@ -46,30 +45,14 @@ bool InternalIAM::Init()
         litebus::Spawn(tokenManagerActor_);
     } else if (startParam_.credType == IAMCredType::AK_SK) {
         auto permanentCredConfig = LoadPermanentCredentialConfig(startParam_.permanentCredentialConfigPath);
-        if (stsManager_ == nullptr) {
-            stsManager_ = std::make_shared<StsManager>(std::make_shared<StsClient>());
-        }
-        auto status = stsManager_->Init(true);
+
         AKSKManagerActor::Config config{ .clusterID = startParam_.clusterID,
                                          .expiredTimeSpan = startParam_.tokenExpiredTimeSpan,
                                          .metaStoreClient = metaStoreClient_,
                                          .permanentCreds = permanentCredConfig,
                                          .hostAddress = startParam_.credentialHostAddress };
         akskManagerActor_ = std::make_shared<AKSKManagerActor>(AKSK_MANAGER_ACTOR_NAME, config);
-        if (status.IsOk()) {
-            akskManagerActor_->RegisterFetchCredFromRemoteCb(
-                [stsManager(stsManager_)](const std::string &credentialName, const std::string &service,
-                                          const std::vector<std::string> &mircoServices) {
-                    return stsManager->CheckCredentialExist(credentialName, service, mircoServices);
-                });
-            akskManagerActor_->RegisterSaveCredToRemoteCb(
-                [stsManager(stsManager_)](const std::string &credentialName, const std::string &service,
-                                          const std::vector<std::string> &mircoServices,
-                                          const std::shared_ptr<AKSKContent> &akskContent) {
-                    return stsManager->CreateCredential(credentialName, service, mircoServices, akskContent);
-                });
-            YRLOG_INFO("success to register fetch and save credential callback");
-        }
+
         litebus::Spawn(akskManagerActor_);
     } else {
         YRLOG_ERROR("InternalIAM cred type is invalid.");

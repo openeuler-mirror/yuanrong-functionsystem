@@ -145,17 +145,19 @@ const static int32_t FIRST_FOUR_BIT_MOVE = 4;
 
 const static std::string HEX_STRING_SET = "0123456789abcdef";  // NOLINT
 
-void SHA256AndHex(const std::string &input, std::stringstream &output)
+void SHA256AndHex(const std::string &input, std::stringstream &output, bool appendLineFeed)
 {
     unsigned char sha256Chars[SHA256_DIGEST_LENGTH];
     SHA256(reinterpret_cast<const unsigned char *>(input.c_str()), input.size(), sha256Chars);
     for (const auto &c : sha256Chars) {
         output << HEX_STRING_SET[c >> FIRST_FOUR_BIT_MOVE] << HEX_STRING_SET[c & 0xf];
     }
-    output << "\n";
+    if (appendLineFeed) {
+        output << "\n";
+    }
 }
 
-std::string HMACAndSHA256(const SensitiveValue &secretKey, const std::string &data)
+std::string HMACAndSHA256(const SensitiveValue &secretKey, const std::string &data, bool binaryDigest)
 {
     HMAC_CTX *ctx = HMAC_CTX_new();
 
@@ -184,6 +186,13 @@ std::string HMACAndSHA256(const SensitiveValue &secretKey, const std::string &da
     HMAC_CTX_free(ctx);
 
     std::stringstream ss;
+    if (binaryDigest) {
+        for (unsigned int i = 0; i < mdLength; i++) {
+            ss << md[i];
+        }
+        return ss.str();
+    }
+
     ss << std::hex << std::setfill('0');
     for (unsigned int i = 0; i < mdLength; i++) {
         ss << std::setw(CHAR_TO_HEX) << static_cast<unsigned int>(md[i]);

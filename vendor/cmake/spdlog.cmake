@@ -24,6 +24,10 @@ set(${src_name}_CMAKE_ARGS
 
 set(HISTORY_INSTALLLED "${EP_BUILD_DIR}/Install/${src_name}")
 if (NOT EXISTS ${HISTORY_INSTALLLED})
+set(patch_files
+        ${VENDOR_PATCHES_DIR}/spdlog/0001-PATCH-change-namespace-and-library-name-with-yr.patch
+        ${VENDOR_PATCHES_DIR}/spdlog/ignore_rename_exception.patch)
+PATCH_FOR_SOURCE(${src_dir} ${patch_files})
 EXTERNALPROJECT_ADD(${src_name}
         SOURCE_DIR ${src_dir}
         DOWNLOAD_COMMAND ""

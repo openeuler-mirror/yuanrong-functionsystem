@@ -50,8 +50,4 @@ target_compile_options(runtime_manager PRIVATE -fPIE)
 
 target_link_libraries(runtime_manager PRIVATE runtime_manager_lib)
 
-IF ("${STS_BUILD_ENABLE}" STREQUAL "ON")
-    target_link_libraries(runtime_manager PRIVATE ${stssdk_LIB})
-endif ()
-
 INSTALL_TARGET(runtime_manager)

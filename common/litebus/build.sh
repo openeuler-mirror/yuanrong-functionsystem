@@ -21,14 +21,11 @@
 # ----------------------------------------------------------------------
 
 set -e
-
 #--------------Constant--------------
-CUR_DIR=$(dirname $(readlink -f $0))
-BUILD_DIR=${CUR_DIR}/build
-TOP_DIR=${CUR_DIR}/..
-OUTPUT_DIR=${TOP_DIR}/output
-LOG_DIR=${CUR_DIR}/logs
-LOG_FILE=${LOG_DIR}/build.log
+PROJECT_DIR=$(dirname $(readlink -f $0))
+ROOT_DIR=$(readlink -f "${PROJECT_DIR}/../..")
+BUILD_DIR=${PROJECT_DIR}/build
+OUTPUT_DIR=${PROJECT_DIR}/output
 #--------------Variable--------------
 build_type="release"
 build_branch="develop_rtos"
@@ -45,10 +42,6 @@ libprocess_interwork_enabled="off"
 bit_compile="-m64"
 
 DOWNLOAD_OPENSRC="OFF"
-YR_ROOT_DIR="$(readlink -f "${TOP_DIR}/../..")"
-BUILD_CONFIG_DIR="${YR_ROOT_DIR}/thirdparty"
-THIRDPARTY_SRC_DIR="${YR_ROOT_DIR}/vendor"
-THIRDPARTY_INSTALL_DIR="${THIRDPARTY_SRC_DIR}/out"
 CPU_NUM="$(grep -c 'processor' /proc/cpuinfo)"
 JOB_NUM="$(($(grep -c 'processor' /proc/cpuinfo) + 1))"
 
@@ -60,7 +53,7 @@ JOB_NUM="$(($(grep -c 'processor' /proc/cpuinfo) + 1))"
 # ----------------------------------------------------------------------
 log_info()
 {
-    echo "[$(date -u +%Y-%m-%d\ %H:%M:%S)] [Build] [Info] $@" | tee -a ${LOG_FILE}
+    echo "[$(date -u +%Y-%m-%d\ %H:%M:%S)] [Build] [Info] $@"
 }
 
 # ----------------------------------------------------------------------
@@ -71,7 +64,7 @@ log_info()
 # ----------------------------------------------------------------------
 log_warnning()
 {
-    echo "[$(date -u +%Y-%m-%d\ %H:%M:%S)] [Build] [Warning] $@" | tee -a ${LOG_FILE}
+    echo "[$(date -u +%Y-%m-%d\ %H:%M:%S)] [Build] [Warning] $@"
 }
 
 # ----------------------------------------------------------------------
@@ -82,7 +75,7 @@ log_warnning()
 # ----------------------------------------------------------------------
 log_error()
 {
-    echo "[$(date -u +%Y-%m-%d\ %H:%M:%S)] [Build] [Error] $@" | tee -a ${LOG_FILE}
+    echo "[$(date -u +%Y-%m-%d\ %H:%M:%S)] [Build] [Error] $@"
 }
 
 # ----------------------------------------------------------------------
@@ -94,7 +87,6 @@ log_error()
 clean()
 {
     [[ -d "${BUILD_DIR}" ]] && rm -rf "${BUILD_DIR}"
-    [[ -d "${THIRDPARTY_SRC_DIR}" ]] && rm -rf "${THIRDPARTY_SRC_DIR}"
     [[ -d "${OUTPUT_DIR}" ]] && rm -rf "${OUTPUT_DIR}"
 
     [[ -d "${TOP_DIR}"/test/schema ]] && rm -rf "${TOP_DIR}"/test/schema/*.c
@@ -247,11 +239,6 @@ checkopts()
                 DOWNLOAD_OPENSRC="$OPTARG"
             fi
             ;;
-        T)
-            THIRDPARTY_SRC_DIR=$(readlink -f "${OPTARG}")
-            THIRDPARTY_INSTALL_DIR="${THIRDPARTY_SRC_DIR}/out"
-            echo "download opensource to ${THIRDPARTY_SRC_DIR}"
-            ;;
         j)
             if [ ${OPTARG} -gt $(($CPU_NUM * 2)) ]; then
                 log_warning "The -j $OPTARG is over the max logical cpu count($CPU_NUM) * 2"
@@ -268,34 +255,6 @@ checkopts()
 }
 
 # ----------------------------------------------------------------------
-# funcname:     make_dir
-# description:  make dir.
-# parameters:   NA
-# return value: NA
-# ----------------------------------------------------------------------
-make_dir()
-{
-    __dir__=$1
-    if [ ! -d "${__dir__}" ]; then
-        mkdir -p ${__dir__}
-    else
-        rm -rf ${__dir__}/*
-    fi
-}
-
-# ----------------------------------------------------------------------
-# funcname:     setup_dirs
-# description:  setup dirs
-# parameters:   NA
-# return value: NA
-# ----------------------------------------------------------------------
-setup_dirs()
-{
-    make_dir "${BUILD_DIR}"
-    make_dir "${OUTPUT_DIR}"
-}
-
-# ----------------------------------------------------------------------
 # funcname:     compile_litebus
 # description:  compile_litebus.
 # parameters:   NA
@@ -307,15 +266,12 @@ compile_litebus()
     export IMPOSTER_COMPILER_ARG1=$(which gcc)
     export IMPOSTER_COMPILER_ARG2=$(which g++)
 
-    cd ${BUILD_DIR}
 
-    cmake ${CUR_DIR}/.. -DCMAKE_SKIP_RPATH=TRUE \
-      -DCMAKE_TOOLCHAIN_FILE="${CUR_DIR}"/../cmake/x86_64_toolchain.cmake \
+    mkdir -p "${BUILD_DIR}" && cd "${BUILD_DIR}"
+    cmake ${PROJECT_DIR} -DCMAKE_SKIP_RPATH=TRUE \
+      -DCMAKE_TOOLCHAIN_FILE="${PROJECT_DIR}"/cmake/x86_64_toolchain.cmake \
       -DCMAKE_INSTALL_PREFIX="${OUTPUT_DIR}" \
-      -DROOT_DIR="${YR_ROOT_DIR}" \
-      -DBUILD_CONFIG_DIR="${BUILD_CONFIG_DIR}" \
-      -DTHIRDPARTY_SRC_DIR="${THIRDPARTY_SRC_DIR}" \
-      -DTHIRDPARTY_INSTALL_DIR="${THIRDPARTY_INSTALL_DIR}" \
+      -DROOT_DIR="${ROOT_DIR}" \
       -DCMAKE_BUILD_TYPE=${build_type} \
       -DCODE_COVERAGE=${code_coverage} \
       -DBUILD_TESTCASE=${build_testcase} \
@@ -338,7 +294,7 @@ compile_litebus()
     cmake --build ${BUILD_DIR} --target install
 
     log_info "build litebus success!"
-    cd ${CUR_DIR}
+    cd ${PROJECT_DIR}
 }
 
 # ----------------------------------------------------------------------
@@ -351,19 +307,16 @@ compile_protocal_files()
 {
   if [ "${build_testcase}" == "on" ];then
       echo "compile protocal files"
-      echo ${CUR_DIR}
-      export LD_LIBRARY_PATH=${THIRDPARTY_SRC_DIR}/PROTOBUF_C/lib/:${LD_LIBRARY_PATH}
-      PROTOC_BIN_DIR=${THIRDPARTY_SRC_DIR}/PROTOBUF_C/bin/protoc-c
 
       PROTOC_TO_INCLUDE_DIR=${BUILD_DIR}/include
       make_dir ${PROTOC_TO_INCLUDE_DIR}
 
       PROTOC_SRC_DIR=${TOP_DIR}/test/schema
 
-      $PROTOC_BIN_DIR -I${PROTOC_SRC_DIR} --c_out=${CUR_DIR}/../test/schema ${PROTOC_SRC_DIR}/clientserver.proto
-      $PROTOC_BIN_DIR -I${PROTOC_SRC_DIR} --c_out=${CUR_DIR}/../test/schema ${PROTOC_SRC_DIR}/base.proto
+      $PROTOC_BIN_DIR -I${PROTOC_SRC_DIR} --c_out=${PROJECT_DIR}/../test/schema ${PROTOC_SRC_DIR}/clientserver.proto
+      $PROTOC_BIN_DIR -I${PROTOC_SRC_DIR} --c_out=${PROJECT_DIR}/../test/schema ${PROTOC_SRC_DIR}/base.proto
 
-      cd ${CUR_DIR}
+      cd ${PROJECT_DIR}
   fi
 }
 
@@ -383,7 +336,7 @@ tar_files()
     chmod 400 liblitebus.so.0.0.1
     cd ../
 
-    cd ${CUR_DIR}
+    cd ${PROJECT_DIR}
 
     log_info "package litebus success!"
 }
@@ -397,30 +350,6 @@ tar_files()
 configure()
 {
   echo "nothing to configure"
-}
-
-# ----------------------------------------------------------------------
-# funcname:     init_log
-# description:  initiate log file
-# parameters:   NA
-# return value: NA
-# ----------------------------------------------------------------------
-init_log()
-{
-  if [ ! -d "${LOG_DIR}" ];then
-    mkdir -p ${LOG_DIR}
-  fi
-
-  if [ -f "${LOG_FILE}" ];then
-    rm -f ${LOG_FILE}
-  fi
-
-  touch ${LOG_FILE}
-}
-
-clean_log()
-{
-  rm -rf "${LOG_DIR}"/*.log
 }
 
 # ----------------------------------------------------------------------
@@ -455,40 +384,6 @@ copy_files()
     tar_files
 }
 
-# ----------------------------------------------------------------------
-# funcname:     download_opensource
-# description:  download opensource.
-# parameters:   NA
-# return value: NA
-# ----------------------------------------------------------------------
-download_opensource()
-{
-    if [ "${DOWNLOAD_OPENSRC^^}" != "ON" ]; then
-        echo "don't need download opensource"
-        return 0
-    fi
-
-    echo "yr root dir: ${YR_ROOT_DIR}"
-    echo "build config dir: ${BUILD_CONFIG_DIR}"
-    echo "thirdparty src dir: ${THIRDPARTY_SRC_DIR}"
-    echo "thirdparty install dir: ${THIRDPARTY_INSTALL_DIR}"
-
-    if [ ! -d "${BUILD_CONFIG_DIR}" ]; then
-        echo "please download build config"
-        exit 1
-    fi
-
-    ARGS="-T ${THIRDPARTY_SRC_DIR} -Y ${YR_ROOT_DIR} -M litebus"
-    if [ "X${build_testcase}" = "Xoff" ]; then
-        ARGS="${ARGS} -r"
-    fi
-
-    if ! bash "${BUILD_CONFIG_DIR}/download_src.sh" "${ARGS}"; then
-        echo "download dependency source of src fail"
-        exit 1
-    fi
-}
-
 
 # ----------------------------------------------------------------------
 # funcname:     build
@@ -499,9 +394,6 @@ download_opensource()
 build()
 {
     checkopts $@
-
-    download_opensource
-    setup_dirs
     compile
     copy_files
 }
@@ -516,11 +408,9 @@ main()
 {
     if [ "X$1" == "Xclean" ];then
       clean
-      clean_log
       exit 0
     fi
 
-    init_log
     build $@
 }
 

@@ -11,12 +11,26 @@ if(CCACHE_PROGRAM)
     set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CCACHE_PROGRAM}")
 endif()
 
+# 引入三方件与配置
+# 设置 vendor 文件夹路径 | VENDOR_DIR
+set(VENDOR_DIR ${CMAKE_CURRENT_LIST_DIR}/../../vendor)
+message(STATUS "VENDOR_DIR: ${VENDOR_DIR}")
+# 设置三方件编译配置，导入公共参数
+include(${VENDOR_DIR}/vendor_utils.cmake)
+# 引入三方件编译的 cmake 文件
+list(APPEND CMAKE_MODULE_PATH ${VENDOR_CMAKE_DIR})
+include(openssl)
+include(securec)
+if(${BUILD_TESTCASE} STREQUAL "on")
+  include(curl)
+  include(gtest_1_12_1)
+endif()
+# 引入二方件编译的 cmake 文件
+include(${CMAKE_CURRENT_LIST_DIR}/../logs/logs.cmake)
+# ---------------------------------------------------------------------------------------
+
 check_cxx_compiler_flag("-std=c++17" COMPILER_SUPPORTS_CXX17)
 find_package(Threads REQUIRED)
-
-list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
-
-include(dependencies)
 
 set(LITEBUS_PACKAGE_VERSION 0.0.1)
 set(LITEBUS_PACKAGE_SOVERSION 0)
