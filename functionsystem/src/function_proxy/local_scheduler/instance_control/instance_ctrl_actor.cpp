@@ -5222,14 +5222,11 @@ litebus::Future<Status> InstanceCtrlActor::ToResume(const std::string &instanceI
                       fmt::format("instance({}) not found for suspend", instanceID));
     }
     auto state = stateMachine->GetInstanceState();
-    if (state != InstanceState::SUSPEND && state != InstanceState::RUNNING) {
-        return Status(StatusCode::ERR_STATE_MACHINE_ERROR,
-                      fmt::format("instance({}) is state in ({}), which is not allow to suspend", instanceID,
-                                  fmt::underlying(state)));
-    }
-    if (state == InstanceState::RUNNING) {
-        return Status::OK();
-    }
+    RETURN_STATUS_IF_TRUE(state != InstanceState::SUSPEND && state != InstanceState::RUNNING,
+                          StatusCode::ERR_STATE_MACHINE_ERROR,
+                          fmt::format("instance({}) is state in ({}), which is not allow to suspend", instanceID,
+                                      fmt::underlying(state)));
+    RETURN_STATUS_IF_TRUE(state == InstanceState::RUNNING, StatusCode::SUCCESS, "");
     auto request = stateMachine->GetScheduleRequest();
     auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
     return Schedule(request, runtimePromise).Then([](const ScheduleResponse &resp) {
@@ -5260,9 +5257,14 @@ litebus::Future<Status> InstanceCtrlActor::ToSuspend(const std::string &instance
         return Status(StatusCode::ERR_INSTANCE_NOT_FOUND,
                       fmt::format("instance({}) not found for suspend", instanceID));
     }
-    if (auto status = SuspendStateCheck(stateMachine->GetInstanceState(), instanceID); status.IsError()) {
-        return status;
+    auto state = stateMachine->GetInstanceState();
+    if (state == InstanceState::SUSPEND) {
+        YRLOG_INFO("InstanceID:{} is already suspended", instanceID);
+        return Status::OK();
     }
+    RETURN_STATUS_IF_TRUE(state != InstanceState::RUNNING, StatusCode::ERR_STATE_MACHINE_ERROR,
+                          fmt::format("suspend failed: InstanceID {} is not in running state, current state: {}",
+                                      instanceID, fmt::underlying(state)));
     auto future = TransInstanceState(
                       stateMachine,
                       TransContext{ InstanceState::SUSPEND, stateMachine->GetVersion(),
@@ -5294,9 +5296,14 @@ litebus::Future<Status> InstanceCtrlActor::MakeCheckpoint(const std::string &ins
         YRLOG_ERROR("{}", msg);
         return Status(StatusCode::ERR_INSTANCE_NOT_FOUND, msg);
     }
-    if (auto status = SuspendStateCheck(stateMachine->GetInstanceState(), instanceID); status.IsError()) {
-        return status;
+    auto state = stateMachine->GetInstanceState();
+    if (state == InstanceState::SUSPEND) {
+        YRLOG_INFO("InstanceID:{} is already suspended", instanceID);
+        return Status::OK();
     }
+    RETURN_STATUS_IF_TRUE(state != InstanceState::RUNNING, StatusCode::ERR_STATE_MACHINE_ERROR,
+                          fmt::format("checkpoint failed: InstanceID {} is not in running state, current state: {}",
+                                      instanceID, fmt::underlying(state)));
     return Checkpoint(instanceID);
 }
 
