@@ -212,8 +212,7 @@ TEST_F(DomainGroupCtrlTest, ScheduleFailedAfterReserveFailure)
     *rsp1->add_responses() = *response1;
     response1->set_requestid(groupInfo->requests(2).requestid());
     *rsp1->add_responses() = *response1;
-    EXPECT_CALL(*mockUnderlayerSchedMgr_, Reserves)
-        .WillOnce(AsyncReturn(rsp1));
+    EXPECT_CALL(*mockUnderlayerSchedMgr_, Reserves).WillOnce(Return(AsyncReturn(rsp1)));
     EXPECT_CALL(*mockUnderlayerSchedMgr_, UnReserve)
         .WillRepeatedly(Return(Status::OK()));
     auto future = litebus::Async(localSchedSrvStub_->GetAID(), &LocalSchedSrvStub::ForwardGroupSchedule,
@@ -261,12 +260,11 @@ TEST_F(DomainGroupCtrlTest, ReserveRollback)
     *rsp2->add_responses() = *response1;
     EXPECT_CALL(*mockUnderlayerSchedMgr_, Reserves)
         // first round to reserve
-        .WillOnce(AsyncReturn(rsp1))
+        .WillOnce(Return(AsyncReturn(rsp1)))
         // second round to reserve
-        .WillOnce(AsyncReturn(rsp2));
+        .WillOnce(Return(AsyncReturn(rsp2)));
 
-    EXPECT_CALL(*mockUnderlayerSchedMgr_, UnReserve)
-        .WillRepeatedly(AsyncReturn(Status::OK()));
+    EXPECT_CALL(*mockUnderlayerSchedMgr_, UnReserve).WillRepeatedly(Return(AsyncReturn(Status::OK())));
     auto future = litebus::Async(localSchedSrvStub_->GetAID(), &LocalSchedSrvStub::ForwardGroupSchedule,
                                  domainGroupCtrlActor_->GetAID(), groupInfo);
     ASSERT_AWAIT_READY(future);
@@ -467,7 +465,7 @@ TEST_F(DomainGroupCtrlTest, GroupScheduleRangeInstanceReserveCallBackThenSuccess
     *rsp1->add_responses() = *response1;
     EXPECT_CALL(*mockUnderlayerSchedMgr_, Reserves)
         // first round to reserve
-        .WillOnce(AsyncReturn(rsp1));
+        .WillOnce(Return(AsyncReturn(rsp1)));
 
     EXPECT_CALL(*mockUnderlayerSchedMgr_, UnReserve)
         .WillRepeatedly(Return(AsyncReturn(Status::OK())));
@@ -752,7 +750,7 @@ TEST_F(DomainGroupCtrlTest, SfmdGroupScheduleSuccessful)
         response3->set_requestid(groupInfo->requests(2).requestid());
         *rsp->add_responses() = *response3;
         EXPECT_CALL(*mockUnderlayerSchedMgr_, Reserves)
-            .WillOnce(AsyncReturn(rsp));
+            .WillOnce(Return(AsyncReturn(rsp)));
         EXPECT_CALL(*mockUnderlayerSchedMgr_, UnReserve).Times(0);
 
         std::vector<std::shared_ptr<messages::ScheduleRequest>> scheduleReqs;
@@ -847,8 +845,8 @@ TEST_F(DomainGroupCtrlTest, SfmdGroupScheduleSuccessful)
         response3->set_requestid(groupInfo->requests(2).requestid());
         *rsp2->add_responses() = *response3;
         EXPECT_CALL(*mockUnderlayerSchedMgr_, Reserves).Times(2)
-            .WillOnce(AsyncReturn(rsp1))
-            .WillOnce(AsyncReturn(rsp2));
+            .WillOnce(Return(AsyncReturn(rsp1)))
+            .WillOnce(Return(AsyncReturn(rsp2)));
         EXPECT_CALL(*mockUnderlayerSchedMgr_, UnReserve).Times(0);
 
         std::vector<std::shared_ptr<messages::ScheduleRequest>> scheduleReqs;
@@ -983,7 +981,9 @@ TEST_F(DomainGroupCtrlTest, HeteroGroupSchedulerWithResourceGroup)
     response3->set_requestid(groupInfo->requests(2).requestid());
     *rsp3->add_responses() = *response3;
     EXPECT_CALL(*mockUnderlayerSchedMgr_, Reserves)
-        .WillOnce(AsyncReturn(rsp1)).WillOnce(AsyncReturn(rsp2)).WillOnce(AsyncReturn(rsp3));
+        .WillOnce(Return(AsyncReturn(rsp1)))
+        .WillOnce(Return(AsyncReturn(rsp2)))
+        .WillOnce(Return(AsyncReturn(rsp3)));
     EXPECT_CALL(*mockUnderlayerSchedMgr_, UnReserve).Times(0);
 
     std::vector<std::shared_ptr<messages::ScheduleRequest>> scheduleReqs;

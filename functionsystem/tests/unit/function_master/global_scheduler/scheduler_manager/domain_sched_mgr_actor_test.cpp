@@ -412,7 +412,7 @@ TEST_F(DomainSchedMgrActorTest, ReConnect)
 
 TEST_F(DomainSchedMgrActorTest, GroupSchedule)
 {
-    auto actor = std::make_shared<global_scheduler::DomainSchedMgrActor>("TestDomainSchedActor");
+    auto actor = std::make_shared<global_scheduler::DomainSchedMgrActor>("TestDomainSchedActor", HEARTBEAT_TIMEOUT);
     auto groupCtrlStub = std::make_shared<DomainGroupCtrlActorStub>(DOMAIN_GROUP_CTRL_ACTOR_NAME);
     litebus::Spawn(groupCtrlStub);
     litebus::Spawn(actor);
