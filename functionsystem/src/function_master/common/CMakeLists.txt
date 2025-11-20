@@ -10,7 +10,6 @@ add_library(${MASTER_COMMON_LIB} STATIC
     ${FLAGS_SRCS}
     ${BUSINESS_POLICY_SRCS}
 )
-set_target_properties(${MASTER_COMMON_LIB} PROPERTIES UNITY_BUILD ON)
 target_compile_options(${MASTER_COMMON_LIB} PRIVATE -fPIE)
 
 target_include_directories(${MASTER_COMMON_LIB} PRIVATE ${CMAKE_CURRENT_LIST_DIR})

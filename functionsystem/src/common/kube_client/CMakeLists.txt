@@ -14,7 +14,6 @@
 
 project(kube_client)
 add_library(kube_client STATIC "")
-set_target_properties(kube_client PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} KUBE_CLIENT_SRCS)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/api KUBE_CLIENT_SRCS)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/health_monitor KUBE_CLIENT_SRCS)

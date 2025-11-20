@@ -14,7 +14,6 @@
 
 project(resource_view)
 add_library(resource_view STATIC "")
-set_target_properties(resource_view PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} RESOURCE_VIEW_SRCS)
 add_dependencies(resource_view posix_pb)
 target_sources(resource_view PRIVATE ${RESOURCE_VIEW_SRCS})

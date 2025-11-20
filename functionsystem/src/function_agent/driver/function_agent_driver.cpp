@@ -21,6 +21,7 @@
 
 #include "agent_service_actor.h"
 #include "async/future.hpp"
+#include "code_deployer/shared_dir_deployer.h"
 #include "common/constants/actor_name.h"
 #include "common/logs/logging.h"
 #include "common/register/register_helper.h"

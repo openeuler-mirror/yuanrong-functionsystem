@@ -14,7 +14,6 @@
 
 project(file_monitor)
 add_library(file_monitor STATIC "")
-set_target_properties(file_monitor PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} FILE_MONITOR_SRCS)
 add_dependencies(file_monitor status)
 target_sources(file_monitor PRIVATE ${FILE_MONITOR_SRCS})

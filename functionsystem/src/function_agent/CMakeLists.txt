@@ -30,7 +30,6 @@ aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/network FUNCTION_AGENT_SRCS)
 
 add_library(${FUNCTION_AGENT_LIB} STATIC # for [function_agent_lib]
         ${FUNCTION_AGENT_SRCS})
-set_target_properties(${FUNCTION_AGENT_LIB} PROPERTIES UNITY_BUILD ON)
 target_compile_options(${FUNCTION_AGENT_LIB} PRIVATE -fPIE)
 
 add_dependencies(${FUNCTION_AGENT_LIB} zlib rpc)

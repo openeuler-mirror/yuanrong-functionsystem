@@ -14,7 +14,6 @@
 
 project(profile)
 add_library(profile STATIC "")
-set_target_properties(profile PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} PROFILE_SRCS)
 add_dependencies(profile posix_pb)
 target_sources(profile PRIVATE ${PROFILE_SRCS})

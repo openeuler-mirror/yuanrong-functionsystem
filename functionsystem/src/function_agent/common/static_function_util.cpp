@@ -17,6 +17,8 @@
 
 #include "static_function_util.h"
 
+#include "common/utils/struct_transfer.h"
+
 namespace functionsystem::function_agent {
 const std::string CONCURRENT_NUM_KEY = "ConcurrentNum";
 const std::string CALL_TIMEOUT_KEY = "call_timeout";

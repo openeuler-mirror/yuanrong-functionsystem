@@ -24,6 +24,7 @@
 #include "common/logs/logging.h"
 #include "common/utils/ssl_config.h"
 #include "minizip/unzip.h"
+#include "common/utils/param_check.h"
 
 namespace functionsystem::function_agent {
 const uint32_t RECOVER_RETRY_COUNT = 3;

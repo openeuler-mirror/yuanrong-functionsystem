@@ -24,7 +24,6 @@ list(REMOVE_ITEM IAM_SERVER_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp") # exclu
 include_directories(${CMAKE_CURRENT_LIST_DIR})
 
 add_library(iam_server_lib STATIC ${IAM_SERVER_SRCS})
-set_target_properties(iam_server_lib PROPERTIES UNITY_BUILD ON)
 target_compile_options(iam_server_lib PRIVATE -fPIE)
 target_link_libraries(iam_server_lib
         ${etcdapi_LIB_A} kube_client

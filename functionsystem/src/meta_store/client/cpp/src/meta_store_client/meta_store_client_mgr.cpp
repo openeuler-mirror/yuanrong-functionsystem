@@ -28,6 +28,7 @@
 #include "meta_store_client/lease/meta_store_lease_client_strategy.h"
 #include "meta_store_client/maintenance/etcd_maintenance_client_strategy.h"
 #include "meta_store_client/maintenance/meta_store_maintenance_client_strategy.h"
+#include "common/utils/random_number.h"
 
 namespace functionsystem {
 

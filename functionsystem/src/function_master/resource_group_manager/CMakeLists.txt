@@ -23,7 +23,6 @@ include_directories(${CMAKE_CURRENT_LIST_DIR})
 
 add_library(${RESOURCE_GROUP_MANAGER_LIB} STATIC
         ${RESOURCE_GROUP_MANAGER_SRCS})
-set_target_properties(${RESOURCE_GROUP_MANAGER_LIB} PROPERTIES UNITY_BUILD ON)
 target_compile_options(${RESOURCE_GROUP_MANAGER_LIB} PRIVATE -fPIE)
 
 target_include_directories(${RESOURCE_GROUP_MANAGER_LIB} PRIVATE

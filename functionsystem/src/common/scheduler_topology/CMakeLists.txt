@@ -14,7 +14,6 @@
 
 project(scheduler_topology)
 add_library(scheduler_topology STATIC "")
-set_target_properties(scheduler_topology PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} TOPOLOGY_SRCS)
 add_dependencies(scheduler_topology posix_pb)
 target_sources(scheduler_topology PRIVATE ${TOPOLOGY_SRCS})

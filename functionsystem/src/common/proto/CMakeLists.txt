@@ -27,8 +27,6 @@ GENERATE_GRPC_CPP(GRPCPB_SRCS GRPCPB_HDRS ${CMAKE_CURRENT_SOURCE_DIR}/pb/posix
         SOURCE_ROOT  ${CMAKE_CURRENT_SOURCE_DIR}/posix)
 include_directories(${CMAKE_CURRENT_LIST_DIR}/pb)
 add_library(posix_pb STATIC ${GRPCPB_SRCS})
-set_target_properties(posix_pb PROPERTIES UNITY_BUILD ON)
-set_target_properties(posix_pb PROPERTIES UNITY_BUILD_BATCH_SIZE 2)
 add_dependencies(posix_pb protobuf grpc)
 target_compile_options(posix_pb PRIVATE "-fvisibility=hidden")
 target_link_libraries(posix_pb PUBLIC

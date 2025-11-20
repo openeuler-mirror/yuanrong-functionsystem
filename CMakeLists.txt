@@ -15,48 +15,41 @@
 cmake_minimum_required(VERSION 3.16.1)
 project(kernel LANGUAGES CXX C)
 
-message(STATUS "kernel PROJECT_SOURCE_DIR：${PROJECT_SOURCE_DIR}")
+include_directories(common/litebus/include)
+include_directories(common/logs/include)
+include_directories(common/meta_store/client/cpp/include)
+include_directories(common/meta_store/server/cpp/include)
+include_directories(common/utils/)
+include_directories(common/utils/proto/pb/)
+include_directories(common/utils/metadata)
+include_directories(posix/)
+include_directories(posix/proto/pb)
+include_directories(functionsystem/src/)
+include_directories(functionsystem/src/common)
+include_directories(functionsystem/src/domain_scheduler)
+include_directories(functionsystem/src/function_agent)
+include_directories(functionsystem/src/function_proxy)
+include_directories(functionsystem/src/function_proxy/local_scheduler/)
+include_directories(functionsystem/src/function_master)
 
-# Check Git submodule status (only active in Git repositories)
-execute_process(
-    COMMAND git rev-parse --is-inside-work-tree
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE IS_GIT_REPO
-    ERROR_QUIET
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-)
 
-if(IS_GIT_REPO)
-    # Check submodule status recursively
-    execute_process(
-        COMMAND git submodule status --recursive
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        OUTPUT_VARIABLE SUBMODULE_STATUS
-        RESULT_VARIABLE GIT_SUBMOD_RESULT
-        ERROR_QUIET
-    )
+include_directories(vendor/out/openEuler/Install/cjson/include)
+include_directories(vendor/out/openEuler/Install/grpc/include)
+include_directories(vendor/out/openEuler/Install/gtest_1_10_0/include)
+include_directories(vendor/out/openEuler/Install/gtest_1_12_1/include)
+include_directories(vendor/out/openEuler/Install/protobuf/include)
+include_directories(vendor/out/openEuler/Install/spdlog/include)
 
-    if(GIT_SUBMOD_RESULT EQUAL 0)
-        # Detect uninitialized submodules (lines starting with '-')
-        string(REGEX MATCH "(\n|^)-" UNINITIALIZED "${SUBMODULE_STATUS}")
-        if(UNINITIALIZED)
-            message(STATUS "Found uninitialized submodules. Initializing...")
+file(GLOB_RECURSE SOURCES1 functionsystem/src/*.cpp)
+file(GLOB_RECURSE SOURCES2 functionsystem/src/*.cc)
+file(GLOB_RECURSE SOURCES3 functionsystem/src/*.h)
+file(GLOB_RECURSE SOURCES4 common/litebus/src/*.cpp)
+file(GLOB_RECURSE SOURCES5 common/litebus/src/*.hpp)
+file(GLOB_RECURSE SOURCES6 common/metrics/src/*.h)
+file(GLOB_RECURSE SOURCES7 common/metrics/src/*.cpp)
+file(GLOB_RECURSE SOURCES8 common/meta_store/client/src/*.cpp)
+file(GLOB_RECURSE SOURCES9 common/meta_store/client/src/*.h)
+file(GLOB_RECURSE SOURCES10 common/meta_store/server/src/*.cpp)
+file(GLOB_RECURSE SOURCES11 common/meta_store/server/src/*.h)
 
-            # Automatically initialize and update submodules
-            execute_process(
-                COMMAND git submodule update --init --recursive
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-                RESULT_VARIABLE GIT_SUBMOD_UPDATE_RESULT
-            )
-
-            if(NOT GIT_SUBMOD_UPDATE_RESULT EQUAL 0)
-                message(FATAL_ERROR "Failed to initialize submodules. Error code: ${GIT_SUBMOD_UPDATE_RESULT}")
-            endif()
-
-            message(STATUS "Submodules initialized successfully")
-        endif()
-    endif()
-endif()
-
-add_subdirectory(functionsystem)
-add_subdirectory(runtime)
+add_executable(main ${SOURCES1} ${SOURCES2} ${SOURCES3} ${SOURCES4} ${SOURCES5} ${SOURCES6} ${SOURCES7} ${SOURCES8} ${SOURCES9} ${SOURCES10} ${SOURCES11})

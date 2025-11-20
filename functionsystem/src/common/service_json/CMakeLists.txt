@@ -14,7 +14,6 @@
 
 project(service_json)
 add_library(service_json STATIC "")
-set_target_properties(service_json PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} SERVICE_JSON_SRCS)
 add_dependencies(service_json posix_pb resource_view)
 target_sources(service_json PRIVATE ${SERVICE_JSON_SRCS})

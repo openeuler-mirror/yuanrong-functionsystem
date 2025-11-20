@@ -11,7 +11,6 @@ include_directories(${CMAKE_CURRENT_LIST_DIR})
 
 add_library(${SYSTEM_FUNCTION_LOADER_LIB} STATIC
         ${SYSTEM_FUNCTION_LOADER_SRCS})
-set_target_properties(${SYSTEM_FUNCTION_LOADER_LIB} PROPERTIES UNITY_BUILD ON)
 target_compile_options(${SYSTEM_FUNCTION_LOADER_LIB} PRIVATE -fPIE)
 
 target_include_directories(${SYSTEM_FUNCTION_LOADER_LIB} PRIVATE

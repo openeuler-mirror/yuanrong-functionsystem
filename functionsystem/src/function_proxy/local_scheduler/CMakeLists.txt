@@ -17,8 +17,6 @@ project(local_scheduler)
 set_property(GLOBAL PROPERTY SRC_LOCAL_SCHEDULER_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 add_library(local_scheduler_lib STATIC "")
-set_target_properties(local_scheduler_lib PROPERTIES UNITY_BUILD ON)
-set_target_properties(local_scheduler_lib PROPERTIES UNITY_BUILD_BATCH_SIZE 4)
 target_compile_options(local_scheduler_lib PRIVATE -fPIE)
 
 target_include_directories(local_scheduler_lib PUBLIC ${CMAKE_CURRENT_LIST_DIR})

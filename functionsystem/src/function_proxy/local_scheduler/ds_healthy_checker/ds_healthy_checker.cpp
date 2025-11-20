@@ -17,6 +17,8 @@
 
 #include "async/asyncafter.hpp"
 #include "common/logs/logging.h"
+#include "common/constants/constants.h"
+#include "utils/os_utils.hpp"
 
 namespace functionsystem::local_scheduler {
 

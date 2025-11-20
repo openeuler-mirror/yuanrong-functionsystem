@@ -14,7 +14,6 @@
 
 project(hex)
 add_library(hex STATIC "")
-set_target_properties(hex PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} HEX_SRCS)
 add_dependencies(hex status)
 target_sources(hex PRIVATE ${HEX_SRCS})

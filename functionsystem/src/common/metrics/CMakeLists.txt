@@ -22,7 +22,6 @@ include_directories(${UTILS_INCLUDE})
 include_directories(${CMAKE_CURRENT_LIST_DIR})
 
 add_library(metrics_adapter STATIC "")
-set_target_properties(metrics_adapter PROPERTIES UNITY_BUILD ON)
 
 file(GLOB_RECURSE METRICS_ADAPTER_SRCS *.cpp)
 
