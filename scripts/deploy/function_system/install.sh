@@ -95,6 +95,125 @@ function install_function_proxy() {
   log_info "succeed to start function proxy, proxy_port=${FUNCTION_PROXY_PORT}, grpc_port=${FUNCTION_PROXY_GRPC_PORT}, pid=${FUNCTION_PROXY_PID}"
 }
 
+function install_dashboard() {
+  log_info "start dashboard, ip=${IP_ADDRESS}, port=${DASHBOARD_PORT}..."
+  dashboard_config=${FUNCTION_SYSTEM_DIR}/config/dashboard_config.json
+  install_dashboard_config=${config_install_dir}/dashboard_config.json
+  cp "${dashboard_config}" "${install_dashboard_config}"
+  sed -i "s/{ip}/${IP_ADDRESS}/g" "${install_dashboard_config}"
+  sed -i "s/{port}/${DASHBOARD_PORT}/g" "${install_dashboard_config}"
+  sed -i "s*{staticPath}*${FUNCTION_SYSTEM_DIR}/bin/client/dist*g" "${install_dashboard_config}"
+  sed -i "s/{grpcIP}/${IP_ADDRESS}/g" "${install_dashboard_config}"
+  sed -i "s/{grpcPort}/${DASHBOARD_GRPC_PORT}/g" "${install_dashboard_config}"
+  sed -i "s/{functionMasterAddr}/${IP_ADDRESS}:${GLOBAL_SCHEDULER_PORT}/g" "${install_dashboard_config}"
+  sed -i "s/{frontendAddr}/${IP_ADDRESS}:${FAAS_FRONTEND_HTTP_PORT}/g" "${install_dashboard_config}"
+  sed -i "s/{prometheusAddr}/${PROMETHEUS_ADDRESS}/g" "${install_dashboard_config}"
+  sed -i "s/{etcdAddr}/$(echo ${ETCD_CLUSTER_ADDRESS} | sed 's/,/","/g')/g" "${install_dashboard_config}"
+  sed -i "s/{etcdSsl}/${SSL_ENABLE}/g" "${install_dashboard_config}"
+  sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" "${install_dashboard_config}"
+  sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" "${install_dashboard_config}"
+  LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
+    LOG_CONFIG="${FAAS_LOG_CONFIG}" \
+    "${FUNCTION_SYSTEM_DIR}"/bin/dashboard \
+    --config_path="${install_dashboard_config}" \
+    >>"${FS_LOG_PATH}/${NODE_ID}-dashboard${STD_LOG_SUFFIX}" 2>&1 &
+  DASHBOARD_PID=$!
+  if dashboard_health_check ${DASHBOARD_PID}; then
+    log_info "succeed to start dashboard process, ip=${IP_ADDRESS}, port=${DASHBOARD_PORT} pid=${DASHBOARD_PID}"
+    return 0
+  fi
+  return 1
+}
+
+function install_collector() {
+  log_info "start collector, port=${COLLECTOR_PORT}..."
+  GO_RUNTIME_BIN=${RUNTIME_HOME_DIR}/service/go/bin
+  DS_SDK_GO_LIB=${DATA_SYSTEM_DIR}/sdk/go/lib
+  LD_LIBRARY_PATH=${GO_RUNTIME_BIN}:${DS_SDK_GO_LIB}:${LD_LIBRARY_PATH} \
+  "${FUNCTION_SYSTEM_DIR}"/bin/collector \
+    --collect_id="${NODE_ID}" \
+    --datasystem_port="${DS_WORKER_PORT}" \
+    --ip="${IP_ADDRESS}" \
+    --port="${COLLECTOR_PORT}" \
+    --log_root="${LOG_ROOT}" \
+    --etcd_config_servers="${ETCD_CLUSTER_ADDRESS}" \
+    --manager_address="${IP_ADDRESS}:${DASHBOARD_GRPC_PORT}" > "${FS_LOG_PATH}/${NODE_ID}-collector${STD_LOG_SUFFIX}" 2>&1 &
+  COLLECTOR_PID="$!"
+  if dashboard_health_check ${COLLECTOR_PID}; then
+    log_info "succeed to start collector process, port=${COLLECTOR_PORT} pid=${DASHBOARD_PID}"
+    return 0
+  fi
+}
+
+function install_faas_frontend() {
+  log_info "start faas frontend, http_ip=${IP_ADDRESS}, http_port=${FAAS_FRONTEND_HTTP_PORT}, grpc_port=${FAAS_FRONTEND_GRPC_PORT}..."
+  init_frontend_config=${FUNCTION_SYSTEM_DIR}/config/init_frontend_args.json
+  install_init_frontend_config=${config_install_dir}/init_frontend_args_temp.json
+  cp ${init_frontend_config} ${install_init_frontend_config}
+  sed -i "s/{etcdAddr}/$(echo ${ETCD_CLUSTER_ADDRESS} | sed 's/,/","/g')/g" ${install_init_frontend_config}
+  sed -i "s/{faas_frontend_http_ip}/${IP_ADDRESS}/g" ${install_init_frontend_config}
+  sed -i "s/{faas_frontend_http_port}/${FAAS_FRONTEND_HTTP_PORT}/g" ${install_init_frontend_config}
+  sed -i "s/{sslEnable}/${SSL_ENABLE}/g" ${install_init_frontend_config}
+  sed -i "s/{sccEnable}/${SCC_ENABLE}/g" ${install_init_frontend_config}
+  sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" ${install_init_frontend_config}
+  sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" ${install_init_frontend_config}
+  sed -i "s*{sslBasePath}*${SSL_BASE_PATH}*g" ${install_init_frontend_config}
+  sed -i "s*{sccBasePath}*${SCC_BASE_PATH}*g" ${install_init_frontend_config}
+  if [ "X${SSL_ENABLE}" = "Xtrue" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
+    sed -i "s*{etcdCAFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}*g" ${install_init_frontend_config}
+    sed -i "s*{etcdCertFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}*g" ${install_init_frontend_config}
+    sed -i "s*{etcdKeyFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}*g" ${install_init_frontend_config}
+    sed -i "s*{passphraseFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_PWD_FILE}*g" ${install_init_frontend_config}
+  else
+    sed -i "s*{etcdCAFile}**g" ${install_init_frontend_config}
+    sed -i "s*{etcdCertFile}**g" ${install_init_frontend_config}
+    sed -i "s*{etcdKeyFile}**g" ${install_init_frontend_config}
+    sed -i "s*{passphraseFile}**g" ${install_init_frontend_config}
+  fi
+  GO_RUNTIME_BIN=${RUNTIME_HOME_DIR}/service/go/bin
+  POD_NAME="frontend-process" \
+  FUNCTION_LIB_PATH=${PATTERN_FAAS_HOME_DIR}/faasfrontend/faasfrontend.so \
+  INIT_ARGS_FILE_PATH=${install_init_frontend_config} \
+  LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${GO_RUNTIME_BIN}:${LD_LIBRARY_PATH} \
+  ENABLE_SERVER_MODE="true" \
+  INIT_HANDLER="faasfrontend.InitHandler" \
+  CALL_HANDLER="faasfrontend.CallHandler" \
+  CHECKPOINT_HANDLER="faasfrontend.CheckpointHandler" \
+  RECOVER_HANDLER="faasfrontend.RecoverHandler" \
+  SHUTDOWN_HANDLER="faasfrontend.ShutdownHandler" \
+  SIGNAL_HANDLER="faasfrontend.SignalHandler" \
+  YR_FUNCTION_LIB_PATH=${PATTERN_FAAS_HOME_DIR}/faasfrontend/ \
+  GLOG_log_dir="${FS_LOG_PATH}" \
+  YR_LOG_LEVEL=${FS_LOG_LEVEL} \
+  POD_IP=${IP_ADDRESS} \
+  NODE_IP=${IP_ADDRESS} \
+  DATASYSTEM_ADDR=${IP_ADDRESS}:${DS_WORKER_PORT} \
+  INSTANCE_ID="driver-faas-frontend-${NODE_ID}" \
+  FAAS_LOG_PATH=${FS_LOG_PATH} \
+  ${GO_RUNTIME_BIN}/goruntime \
+  -jobId=${NODE_ID} \
+  -runtimeId='faas_frontend_libruntime' \
+  -instanceId="driver-faas-frontend-${NODE_ID}" \
+  -functionName='0/0-system-faasfrontend/$latest' \
+  -logLevel=${FS_LOG_LEVEL} \
+  -logPath=${FS_LOG_PATH} \
+  -enableMTLS=${ENABLE_MTLS} \
+  -privateKeyPath=${PRIVATE_KEY_PATH} \
+  -certificateFilePath=${CERTIFICATE_FILE_PATH} \
+  -verifyFilePath=${VERIFY_FILE_PATH} \
+  -encryptPrivateKeyPasswd=${ENCRYPT_PRIVATE_KEY_PASSWD} \
+  -primaryKeyStoreFile=${PRIMARY_KEY_STORE_FILE} \
+  -standbyKeyStoreFile=${STANDBY_KEY_STORE_FILE} \
+  -enableDsEncrypt=${RUNTIME_DS_ENCRYPT_ENABLE} \
+  -encryptRuntimePublicKeyContext=${ENCRYPT_RUNTIME_PUBLIC_KEY_CONTEXT} \
+  -encryptRuntimePrivateKeyContext=${ENCRYPT_RUNTIME_PRIVATE_KEY_CONTEXT} \
+  -encryptDsPublicKeyContext=${ENCRYPT_DS_PUBLIC_KEY_CONTEXT} \
+  -functionSystemAddress="${IP_ADDRESS}:${FUNCTION_PROXY_GRPC_PORT}" \
+  -driverMode true  >> "${FS_LOG_PATH}/${NODE_ID}-faas_frontend${STD_LOG_SUFFIX}"  2>&1 &
+  FAAS_FRONTEND_PID="$!"
+  log_info "succeed to start faas frontend, http_ip=${IP_ADDRESS}, http_port=${FAAS_FRONTEND_HTTP_PORT}, grpc_port=${FAAS_FRONTEND_GRPC_PORT}, pid=${FAAS_FRONTEND_PID}"
+}
+
 function install_function_agent() {
   install_function_agent_and_runtime_manager_in_the_same_process
   return  $?
@@ -250,6 +369,15 @@ function install_function_system() {
     ;;
   function_proxy)
     install_function_proxy
+    ;;
+  dashboard)
+    install_dashboard
+    ;;
+  collector)
+    install_collector
+    ;;
+  faas_frontend)
+    install_faas_frontend
     ;;
   *)
     log_warning >&2 "Unknown component $1"

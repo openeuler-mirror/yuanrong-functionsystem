@@ -72,3 +72,12 @@ function metaservice_health_check() {
   fi
   return 0
 }
+
+function faas_frontend_health_check() {
+  local pid=$1
+  if ! kill -0 "${pid}" &>/dev/null; then
+    # process not exist
+    return 1
+  fi
+  return 0
+}
