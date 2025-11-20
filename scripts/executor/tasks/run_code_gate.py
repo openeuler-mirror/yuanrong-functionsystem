@@ -3,14 +3,10 @@
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
 import os
 import re
-import utils
-import json
 import time
-import socket
+import utils
 import argparse
 import subprocess
-from urllib.request import urlopen
-from urllib.request import Request
 from datetime import datetime, timezone
 
 from concurrent.futures import ProcessPoolExecutor
@@ -34,7 +30,7 @@ def decode_args():
     return args.it_bin, args.ut_bin, args.test_suite, args.test_case
 
 
-def test_controller(it_bin, ut_bin, test_suite, test_case):
+def run_code_gate(it_bin, ut_bin, test_suite, test_case):
     log.info(f"Read IT test executable path: {it_bin}")
     log.info(f"Read UT test executable path: {ut_bin}")
     log.info(f"Read test suit in gtest_filter: {test_suite}")
@@ -358,7 +354,7 @@ def log2es(step: str, text: str, info: dict, ex: dict = None):
 if __name__ == '__main__':
     _args = decode_args()
     _start_time = time.time()
-    _code = test_controller(*_args)
+    _code = run_code_gate(*_args)
     _stop_time = time.time()
     _exec_time = _stop_time - _start_time
     log.info(f"All test-suit executed finished in {_exec_time * 1000}ms")

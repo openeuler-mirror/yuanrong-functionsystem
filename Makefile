@@ -14,8 +14,6 @@
 
 .PHONY: help build clean
 
-help:
-	python3 ./scripts/executor/make_functionsystem.py -h
 
 build:
 	python3 ./scripts/executor/make_functionsystem.py build
@@ -25,3 +23,6 @@ clean:
 
 test:
 	python3 ./scripts/executor/make_functionsystem.py test
+
+help:
+	python3 ./scripts/executor/make_functionsystem.py -h

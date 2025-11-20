@@ -33,16 +33,17 @@ def parser_args():
     build_parser = subparsers.add_parser("build", help="Build all components of function system")
     build_parser.add_argument("-j", "--jobs", type=int, help="Set the number of jobs run in parallel for compiling")
     build_parser.add_argument("-v", "--version", type=str, help="Set the version for function system build")
-    build_parser.set_defaults(func=lambda args: tasks.run_build(ROOT_DIR, args))
+    build_parser.set_defaults(func=lambda func_args: tasks.run_build(ROOT_DIR, func_args))
 
     clean_parser = subparsers.add_parser("clean", help="Clean all build artifacts and caches")
-    clean_parser.set_defaults(func=lambda args: tasks.run_clean(ROOT_DIR, args))
+    clean_parser.set_defaults(func=lambda func_args: tasks.run_clean(ROOT_DIR, func_args))
 
     test_parsor = subparsers.add_parser("test", help="Run tests for function system")
-    test_parsor.set_defaults(func=lambda args: tasks.run_test(ROOT_DIR, args))
+    test_parsor.set_defaults(func=lambda func_args: tasks.run_test(ROOT_DIR, func_args))
 
     args = parser.parse_args()
     return parser, args
+
 
 if __name__ == "__main__":
     _parser, _args = parser_args()

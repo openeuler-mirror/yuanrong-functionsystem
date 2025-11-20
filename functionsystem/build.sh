@@ -82,7 +82,6 @@ TEST_CASE="*"
 # compile options
 
 YR_VERSION="yr-functionsystem-v0.0.1"
-BUILD_ALL=OFF
 BUILD_TYPE=Debug
 CLEAR_OUTPUT=OFF
 SANITIZERS=OFF
@@ -103,13 +102,9 @@ YR_OPENSOURCE_DIR=""
 BUILD_RUNTIMES="all"
 VERBOSE=""
 
-DATASYSTEM_RELY_ON="ON"
-DATASYSTEM_RELY_ON_MODULE_LIST=("function_proxy")
-FUNCTION_SYSTEM_BUILD_PART="ALL"
 FUNCTION_SYSTEM_BUILD_TIME_TRACE="OFF"
 JEMALLOC_PROF_ENABLE="OFF"
 
-DOWNLOAD_OPENSRC="OFF"
 BUILD_ROOT_DIR="$(readlink -f "${PROJECT_DIR}/..")"
 BUILD_CONFIG_DIR="${BUILD_ROOT_DIR}/thirdparty"
 THIRDPARTY_SRC_DIR="${BUILD_ROOT_DIR}/vendor/"
@@ -125,7 +120,6 @@ export GO111MODULE=on
 export GONOSUMDB=*
 
 . "${YR_ROOT_DIR}"/tools/utils.sh
-. "${YR_ROOT_DIR}"/scripts/compile_functions.sh
 
 if command -v ccache &> /dev/null
 then
@@ -135,18 +129,6 @@ fi
 
 usage_cpp() {
     echo -e "$USAGE"
-}
-
-function generate_code() {
-    check_posix
-    cd "${YR_ROOT_DIR}/scripts"
-    if [ ! -d "build" ]; then
-        mkdir "build"
-    fi
-    cd "build/"
-    cmake .. -DBUILD_THREAD_NUM="${JOB_NUM}"
-    make -j "${JOB_NUM}"
-    log_info "generate code success."
 }
 
 function check_number() {
@@ -224,7 +206,6 @@ function functioncore_compile() {
         return 0
     fi
     cd "${FUNCTIONCORE_SRC_DIR}" && go mod tidy
-    cd "${FUNCTIONCORE_SRC_DIR}/build"
     set +e
     GIT_BRANCH=$(git symbolic-ref --short -q HEAD)
     GIT_HASH=$(git log -1 "--pretty=format:[%H][%aI]")
@@ -234,8 +215,8 @@ function functioncore_compile() {
     export GIT_BRANCH
     export YR_VERSION
 
-    bash cli/build.sh linux || die "cli module build failed"
-    CLI_NAME="yr" bash cli/build.sh linux || die "cli module build failed"
+    bash build_golang.sh linux || die "cli module build failed"
+    CLI_NAME="yr" bash build_golang.sh linux || die "cli module build failed"
 
     rm -f "${PACKAGE_OUTPUT_DIR}"/${YR_VERSION}.tar.gz
     cd ${PACKAGE_OUTPUT_DIR}
@@ -248,18 +229,6 @@ function functioncore_compile() {
 
 while getopts 'yghrxVbm:v:o:j:S:Cc:u:t:M:d:T:s:R:P:p:k' opt; do
     case "$opt" in
-    m)
-        if [ "${OPTARG}" != "all" ]; then
-            if ! check_module "${OPTARG}"; then
-                log_error "Failed to build module $1"
-                exit 1
-            fi
-            MODULE="${OPTARG}"
-            log_info "Specify module build: $MODULE"
-        else
-            BUILD_ALL=ON
-        fi
-        ;;
     v)
         VERSION="${OPTARG}"
         YR_VERSION="yr-functionsystem-v${VERSION}"
@@ -305,18 +274,6 @@ while getopts 'yghrxVbm:v:o:j:S:Cc:u:t:M:d:T:s:R:P:p:k' opt; do
             exit 1
         fi
         ;;
-    P)
-        if [ "X${OPTARG}" = "X1" ]; then
-            FUNCTION_SYSTEM_BUILD_PART="X1"
-            DATASYSTEM_RELY_ON="OFF"
-        elif [ "X${OPTARG}" = "X2" ]; then
-            FUNCTION_SYSTEM_BUILD_PART="X2"
-            DATASYSTEM_RELY_ON="ON"
-        else
-          log_error "Invalid value ${OPTARG} for option -P, choose from 1/2"
-          exit 1
-        fi
-        ;;
     p)
         JEMALLOC_PROF_ENABLE=${OPTARG}
         ;;
@@ -339,26 +296,6 @@ while getopts 'yghrxVbm:v:o:j:S:Cc:u:t:M:d:T:s:R:P:p:k' opt; do
             log_info "${USAGE}"
             exit 1
         fi
-        ;;
-    g)
-        generate_code
-        exit 0
-        ;;
-    x)
-        DOWNLOAD_OPENSRC="ON"
-        ;;
-    T)
-        THIRDPARTY_SRC_DIR=$(readlink -f "${OPTARG}")
-        THIRDPARTY_INSTALL_DIR="${THIRDPARTY_SRC_DIR}/out"
-        echo "download opensource to ${THIRDPARTY_SRC_DIR}"
-        ;;
-    s)
-        log_info "options is deprecated"
-        ;;
-    R)
-        BUILD_RUNTIMES=${OPTARG}
-        ;;
-    k)
         ;;
     b)
         FUNCTION_SYSTEM_BUILD_TIME_TRACE=ON
@@ -405,25 +342,6 @@ fi
 # Check and get Posix
 check_posix
 
-function check_datasystem_rely_on() {
-    for item in "${DATASYSTEM_RELY_ON_MODULE_LIST[@]}"; do
-        if [ "$item" == "$1" ]; then
-            FUNCTION_SYSTEM_BUILD_PART="X2"
-            DATASYSTEM_RELY_ON=ON
-            return
-        fi
-    done
-    if [ "$1" == "all" ]; then
-        FUNCTION_SYSTEM_BUILD_PART="all"
-        DATASYSTEM_RELY_ON=ON
-    elif [ "$1" != "" ]; then
-        FUNCTION_SYSTEM_BUILD_PART="X1"
-        DATASYSTEM_RELY_ON=OFF
-    fi
-}
-
-check_datasystem_rely_on "${MODULE}"
-
 # Build and install
 mkdir -p "${BUILD_DIR}" && cd "${BUILD_DIR}"/
 cmake -G Ninja "${PROJECT_DIR}" -DCMAKE_INSTALL_PREFIX="${OUTPUT_DIR}" \
@@ -434,15 +352,9 @@ cmake -G Ninja "${PROJECT_DIR}" -DCMAKE_INSTALL_PREFIX="${OUTPUT_DIR}" \
     -DBUILD_GCOV="${BUILD_GCOV}" \
     -DBUILD_THREAD_NUM="${JOB_NUM}" \
     -DROOT_DIR="${YR_ROOT_DIR}" \
-    -DDOWNLOAD_OPENSRC="${DOWNLOAD_OPENSRC}" \
-    -DBUILD_ROOT_DIR="${BUILD_ROOT_DIR}" \
-    -DTHIRDPARTY_SRC_DIR="${THIRDPARTY_SRC_DIR}" \
-    -DTHIRDPARTY_INSTALL_DIR="${THIRDPARTY_INSTALL_DIR}" \
     -DJEMALLOC_PROF_ENABLE="${JEMALLOC_PROF_ENABLE}" \
-    -DDATASYSTEM_RELY_ON="${DATASYSTEM_RELY_ON}" \
-    -DFUNCTION_SYSTEM_BUILD_PART="${FUNCTION_SYSTEM_BUILD_PART}" \
     -DFUNCTION_SYSTEM_BUILD_TIME_TRACE="${FUNCTION_SYSTEM_BUILD_TIME_TRACE}" \
-    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON # to generate compile_commands.json file
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 echo "cmake configure successfully"
 
 # Compatible with EulerOS and Ubuntu
@@ -462,6 +374,7 @@ if [ "X${BUILD_LLT}" = "XON" ]; then
 fi
 
 echo "Start to compile ${MODULE} module"
+# 编译指定组件，同时可以附加参数
 ninja ${MODULE} ${VERBOSE} -j "${JOB_NUM}" || die "Failed to compile ${MODULE}"
 echo "ninja compile successfully"
 cmake --build ${BUILD_DIR} --target install || die "Failed to install ${MODULE}"
@@ -478,190 +391,6 @@ if command -v ccache &> /dev/null
 then
     ccache -s
 fi
-
-function get_available_cpus_from_cgroups()
-{
-    # Get the total number of system CPU cores
-    local total_cpus=$(nproc)
-    local cpu_quota_cores=0
-    local cpuset_cores=0
-
-    # Handle CGroup version differences
-    if [ -f /sys/fs/cgroup/cgroup.controllers ]; then
-        # CGroup v2 logic
-        local cpu_max_file="/sys/fs/cgroup/cpu.max"
-        if [ -f "$cpu_max_file" ]; then
-            local content=$(cat "$cpu_max_file")
-            local quota=$(echo "$content" | awk '{print $1}')
-            local period=$(echo "$content" | awk '{print $2}')
-            if [ "$quota" != "max" ] && [ -n "$period" ] && [ "$period" -ne 0 ]; then
-                cpu_quota_cores=$(echo "scale=4; $quota / $period" | bc)
-                cpu_quota_cores=$(echo "$cpu_quota_cores / 1" | bc)  # Floor the value
-            else
-                cpu_quota_cores=$total_cpus
-            fi
-        fi
-        # Handle cpuset restrictions
-        local cpuset_file="/sys/fs/cgroup/cpuset.cpus"
-        [ -f "$cpuset_file" ] && cpuset_cores=$(tr ',' '\n' < "$cpuset_file" | awk -F- '{ sum += $2 - $1 + 1 } END { print sum }')
-    else
-        # CGroup v1 logic
-        local quota_file="/sys/fs/cgroup/cpu,cpuacct/cpu.cfs_quota_us"
-        local period_file="/sys/fs/cgroup/cpu,cpuacct/cpu.cfs_period_us"
-        if [ -f "$quota_file" ] && [ -f "$period_file" ]; then
-            local quota=$(cat "$quota_file")
-            local period=$(cat "$period_file")
-            if [ "$quota" != "-1" ] && [ "$period" -ne 0 ]; then
-                cpu_quota_cores=$(echo "scale=4; $quota / $period" | bc)
-                cpu_quota_cores=$(echo "$cpu_quota_cores / 1" | bc)  # Floor the value
-            else
-                cpu_quota_cores=$total_cpus
-            fi
-        fi
-        # Handle cpuset restrictions
-        local cpuset_file="/sys/fs/cgroup/cpuset/cpuset.cpus"
-        [ -f "$cpuset_file" ] && cpuset_cores=$(tr ',' '\n' < "$cpuset_file" | awk -F- '{ sum += $2 - $1 + 1 } END { print sum }')
-    fi
-
-    # Calculate the final result (priority: quota limit, then physical core count)
-    if [ "$cpu_quota_cores" -gt 0 ]; then
-        echo $cpu_quota_cores
-    elif [ "$cpuset_cores" -gt 0 ]; then
-        echo $cpuset_cores
-    else
-        echo $total_cpus
-    fi
-}
-
-function run_integration_test()
-{
-    cd "${FUNCTIONCORE_SRC_DIR}"/build/bin
-    log_info "Running integration tests"
-    "$(pwd)"/${IT_EXECUTABLE} --gtest_filter="${TEST_SUIT}.${TEST_CASE}"
-    if [ $? -ne 0 ]; then
-        echo "integration tests failed"
-        exit_ret=4
-        exit $exit_ret
-    fi
-}
-
-function run_unit_test_specify_case()
-{
-    cd "${FUNCTIONCORE_SRC_DIR}"/build/bin
-    log_info "Running unit tests"
-    "$(pwd)"/${UT_EXECUTABLE} --gtest_filter="${TEST_SUIT}.${TEST_CASE}"
-    if [ $? -ne 0 ]; then
-        echo "unit tests failed"
-        exit_ret=4
-        exit $exit_ret
-    fi
-}
-
-function run_unit_test()
-{
-    rm -rf /tmp/unit_test*.log failed_unit_test.log
-    cd "${FUNCTIONCORE_SRC_DIR}"/build/bin
-    echo "Running unit tests" | tee -a /tmp/unit_test.log
-
-    local MAX_RETRIES=3
-
-    # Define the sequence part of gtest case matches, put fail-prone use cases in the front
-    local gtest_filter_sequence_part="MetaStoreTest.*:RuntimeExecutorTest.*:MetaStoreClientTest.*:InstanceCtrlTest.*:BootstrapDriverTest.*:HealthCheckTest.*:RuntimeStdRedirectorTest.*:FilesTest.*:S3DeployerTest.*:LeaderTest.*"
-
-    echo "Running sequence part tests" | tee -a /tmp/unit_test.log
-    # Split the sequence part into individual test suites and run them one by one
-    IFS=':' read -ra TEST_SUITES <<< "$gtest_filter_sequence_part"
-    for test_suite in "${TEST_SUITES[@]}"; do
-        echo "Running test suite: $test_suite" | tee -a /tmp/unit_test.log
-        # Sanitize the test suite name for safe use in filenames
-        LOGFILE="/tmp/unit_test_${test_suite%.*}.log"
-        rm -f "$LOGFILE"
-
-        for attempt in $(seq 1 $MAX_RETRIES); do
-            echo "Attempt $attempt/$MAX_RETRIES for test suite: $test_suite" | tee -a /tmp/unit_test.log
-            timeout 120s "$(pwd)"/${UT_EXECUTABLE} --gtest_filter="$test_suite" >> "$LOGFILE" 2>&1
-            local EXIT_CODE=$?
-
-            if [[ $EXIT_CODE -eq 0 ]]; then
-                echo "Test suite $test_suite passed on attempt $attempt." | tee -a /tmp/unit_test.log
-                break
-            elif [[ $EXIT_CODE -eq 124 ]]; then
-                echo "Unit test ${test_suite} timed out on attempt $attempt/$MAX_RETRIES" | tee -a "$LOGFILE"
-                if [[ $attempt -eq $MAX_RETRIES ]]; then
-                    echo "Unit test ${test_suite} timed out after $MAX_RETRIES attempts." | tee -a /tmp/unit_test.log
-                    cat /tmp/unit_test_*.log >> /tmp/unit_test.log
-                    exit 124 # Hard fail, exit script
-                fi
-            else
-                echo "Unit test ${test_suite} failed with code $EXIT_CODE on attempt $attempt/$MAX_RETRIES" | tee -a "$LOGFILE"
-                if [[ $attempt -eq $MAX_RETRIES ]]; then
-                    echo "Unit test ${test_suite} failed after $MAX_RETRIES attempts with code $EXIT_CODE." | tee -a /tmp/unit_test.log
-                    cat /tmp/unit_test_*.log >> /tmp/unit_test.log
-                    exit $EXIT_CODE # Hard fail, exit script
-                fi
-            fi
-            echo "Retrying test suite ${test_suite} in 5 seconds..." | tee -a /tmp/unit_test.log
-            sleep 5
-        done
-    done
-
-    # Run test cases in parallel
-    echo "Running parallel tests"
-    # Define the left part (excluding the other parts)
-    gtest_filter_part_left="-"
-    IFS=":"                   # Set the delimiter to colon
-    for test_case in $gtest_filter_sequence_part; do
-        gtest_filter_part_left="${gtest_filter_part_left}:${test_case}"
-    done
-    unset IFS                 # Restore the delimiter
-
-    # Generate test case list
-    TEST_CASES=$("$(pwd)"/${UT_EXECUTABLE} --gtest_filter="$gtest_filter_part_left" --gtest_list_tests | awk '/^[^ ]/ {suite=$0} /^  / {print suite}'| uniq)
-
-    # Run test cases in parallel
-    echo "$TEST_CASES" | xargs -I {} -P $(get_available_cpus_from_cgroups) sh -c '
-        echo "Running test: {}*";
-        test_case_filter="{}";
-        export LOGFILE="/tmp/unit_test_${test_case_filter%.}.log";
-        rm -f "$LOGFILE";
-        export UT_EXECUTABLE='"${UT_EXECUTABLE}"';
-        export MAX_RETRIES='"${MAX_RETRIES}"';
-        for attempt_par in $(seq 1 $MAX_RETRIES); do
-            echo "Attempt ${attempt_par}/${MAX_RETRIES} for unit test (filter): ${test_case_filter%.}.*" | tee -a "$LOGFILE"
-            timeout 120s "$(pwd)"/${UT_EXECUTABLE} --gtest_filter=${test_case_filter%.}.* >> "$LOGFILE" 2>&1;
-            EXIT_CODE_PAR=$?
-            if [[ $EXIT_CODE_PAR -eq 0 ]]; then
-                echo "Unit test (filter) ${test_case_filter%.}.* passed on attempt ${attempt_par}" | tee -a "$LOGFILE"
-                exit 0
-            elif [[ $EXIT_CODE_PAR -eq 124 ]]; then
-                if [[ $attempt_par -eq $MAX_RETRIES ]]; then
-                    echo "FINAL: Unit test (filter) ${test_case_filter%.}.* timed out after ${MAX_RETRIES} attempts." | tee -a "$LOGFILE"
-                    exit 124
-                fi
-            else
-                if [[ $attempt_par -eq $MAX_RETRIES ]]; then
-                    echo "FINAL: Unit test (filter) ${test_case_filter%.}.* failed after ${MAX_RETRIES} attempts with code $EXIT_CODE_PAR." | tee -a "$LOGFILE"
-                    exit $EXIT_CODE_PAR
-                fi
-            fi
-            echo "Retrying unit test (filter) ${test_case_filter%.}.* in 5 seconds..." | tee -a "$LOGFILE"
-            sleep 5;
-        done
-        echo "Finished test: ${test_case_filter%.}.*" | tee -a "$LOGFILE"
-    '
-
-    echo "start check unit_test" >> /tmp/unit_test.log
-    egrep -rn '\[  FAILED  \]|timed out|Unit test.* failed' $(ls /tmp/unit_test_*.log) >> /tmp/failed_unit_test.log
-    echo "end check unit_test" >> /tmp/unit_test.log
-    # Check results
-    if [ $(egrep -rn '\[  FAILED  \]|timed out|Unit test.* failed' $(ls /tmp/unit_test_*.log) | wc -l) -gt 0 ]; then
-        echo "Error: Some test cases did not pass."
-        cat /tmp/unit_test_*.log >> /tmp/unit_test.log
-        exit 5
-    else
-        echo "All test cases passed."
-    fi
-}
 
 # Tests
 if [ "X${RUN_LLT}" = "XON" ]; then
@@ -728,24 +457,6 @@ cp -ar  "${YR_ROOT_DIR}"/scripts/deploy/function_system/* "${FUNCTION_SYSTEM_PAC
 
 # copy metrics config file
 cp -ar "${YR_ROOT_DIR}"/scripts/config/metrics/metrics_config.json "${FUNCTION_SYSTEM_PACKAGE_DIR}"/config/
-
-
-function all_compile() {
-    runtime_compile "$1" "${BUILD_RUNTIMES}"
-    if [ ! -d "$FUNCTIONCORE_DIR" ];then
-        log_error "functioncore path not existing."
-        exit 1
-    fi
-    bash "$FUNCTIONCORE_DIR"/build.sh
-    bash "${YR_ROOT_DIR}"/scripts/basic_build.sh
-    bash "${YR_ROOT_DIR}"/scripts/runtime_manager_build.sh
-    return 0
-}
-
-if [ "X${BUILD_ALL}" == "XON" ]; then
-    log_info "all_compile YR_VERSION:${YR_VERSION}"
-    all_compile "${YR_VERSION}"
-fi
 
 if [ "$BUILD_TYPE" != "Debug" ]; then
     rm -rf "${SYM_OUTPUT_DIR}/functionsystem_SYM"

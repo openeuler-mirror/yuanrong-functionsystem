@@ -2,7 +2,7 @@
 # coding=UTF-8
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
 from .build_task import run_build
-from .download_thirdparty import download_thirdparty
+from .download_vendor import download_vendor
 
 from .clean_task import run_clean
 
