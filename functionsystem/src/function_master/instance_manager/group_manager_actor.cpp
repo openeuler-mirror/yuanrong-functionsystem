@@ -174,6 +174,8 @@ litebus::Future<Status> GroupManagerActor::MasterBusiness::PersistentGroupInfo(c
         YRLOG_WARN("group ({}) already in {}", groupID, ToString(state));
         return Status::OK();
     }
+    groupInfo->set_status(static_cast<int32_t>(state));
+    groupInfo->set_message(description);
     std::string groupValue;
     if (!GenGroupValueJson(groupInfo, groupValue)) {
         return Status(StatusCode::JSON_PARSE_ERROR, "failed to gen group value json str");
@@ -487,7 +489,7 @@ void GroupManagerActor::MasterBusiness::SuspendGroup(const litebus::AID &from,
                                   INSTANCE_TRANS_SUSPEND_SIGNAL);
         })
         .OnComplete(litebus::Defer(actor->GetAID(), &GroupManagerActor::OnGroupSuspend, std::placeholders::_1, from,
-                                   groupID, requestID));
+                                   requestID, groupID));
 }
 
 void GroupManagerActor::MasterBusiness::ResumeGroup(const litebus::AID &from,

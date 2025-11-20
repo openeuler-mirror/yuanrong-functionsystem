@@ -880,6 +880,16 @@ litebus::Future<KillResponse> InstanceCtrlActor::SendSignal(const std::shared_pt
     signalReq->set_payload(killReq->payload());
 
     auto &instanceInfo = killCtx->instanceContext->GetInstanceInfo();
+    // Suspend-state instance handler retrieval only; pending refactor
+    static const int32_t GET_INSTANCE = 74;
+    static const std::string NAMED_FUNCMETA = "named_funcmeta";
+    if (instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::SUSPEND)
+        && killReq->signal() == GET_INSTANCE && instanceInfo.args_size() >= 1
+        && instanceInfo.createoptions().find(NAMED_FUNCMETA) != instanceInfo.createoptions().end()) {
+        killCtx->killRsp.set_code(common::ErrorCode::ERR_NONE);
+        killCtx->killRsp.set_message(instanceInfo.createoptions().at(NAMED_FUNCMETA));
+        return killCtx->killRsp;
+    }
     ASSERT_IF_NULL(clientManager_);
     return clientManager_->GetControlInterfacePosixClient(instanceInfo.instanceid())
         .Then([signalReq, instanceInfo,
@@ -5269,22 +5279,19 @@ litebus::Future<Status> InstanceCtrlActor::ToSuspend(const std::string &instance
                       stateMachine,
                       TransContext{ InstanceState::SUSPEND, stateMachine->GetVersion(),
                                     "WARN: instance is already SUSPEND, please resume instance before you invoke it",
-                                    true, StatusCode::ERR_INSTANCE_SUSPEND })
-                      .Then([](const TransitionResult &result) { return result.status; });
+                                    true, StatusCode::ERR_INSTANCE_SUSPEND });
 
-    future.OnComplete([aid(GetAID()), stateMachine, instanceID](const litebus::Future<Status> &future) {
-        ASSERT_FS(future.IsOK());
-        auto status = future.Get();
-        if (status.IsError()) {
-            return;
+    return future.Then([aid(GetAID()), stateMachine,
+                        instanceID](const TransitionResult &result) -> litebus::Future<Status> {
+        if (result.status.IsError()) {
+            return result.status;
         }
         litebus::Async(aid, &InstanceCtrlActor::StopHeartbeat, instanceID);
         YRLOG_INFO("ready to recycle runtime of instance({})", instanceID);
         auto info = stateMachine->GetInstanceInfo();
-        (void)litebus::Async(aid, &InstanceCtrlActor::KillRuntime, info, false)
+        return litebus::Async(aid, &InstanceCtrlActor::KillRuntime, info, false)
             .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, std::placeholders::_1, info));
     });
-    return future;
 }
 
 litebus::Future<Status> InstanceCtrlActor::MakeCheckpoint(const std::string &instanceID)

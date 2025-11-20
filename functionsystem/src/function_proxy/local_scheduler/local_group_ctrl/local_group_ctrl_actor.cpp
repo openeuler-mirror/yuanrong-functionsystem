@@ -290,9 +290,6 @@ Status TransGroupRequest(const std::string &from, std::string &nodeID, std::shar
     auto affinityHash =
         std::hash<std::string>()(req->requests(0).schedulingops().scheduleaffinity().ShortDebugString());
     for (CreateRequest createReq : *req->mutable_requests()) {
-        if (!createReq.designatedinstanceid().empty()) {
-            return Status(StatusCode::ERR_PARAM_INVALID, "group schedule does not support to designated instanceID.");
-        }
         if (auto it = createReq.createoptions().find("lifecycle");
             it != createReq.createoptions().end() && it->second == "detached") {
             return Status(StatusCode::ERR_PARAM_INVALID, "group schedule does not support detached instance.");
