@@ -23,8 +23,12 @@
 #include <exception>
 #include <iostream>
 #include <map>
+#include <mutex>
 
 namespace observability::sdk::logs {
+
+std::once_flag init_flag;  
+std::shared_ptr<spdlog::details::thread_pool> g_tp = nullptr;
 
 static void FlushLogger(std::shared_ptr<spdlog::logger> l)
 {
@@ -59,10 +63,12 @@ LoggerContext::LoggerContext() noexcept
 LoggerContext::LoggerContext(const LogsApi::GlobalLogParam &globalLogParam) noexcept : globalLogParam_(globalLogParam)
 {
     spdlog::drop_all();
-    if (!spdlog::thread_pool()) {
-        spdlog::init_thread_pool(static_cast<size_t>(globalLogParam_.maxAsyncQueueSize),
-                                 static_cast<size_t>(globalLogParam_.asyncThreadCount));
-    }
+    std::call_once(init_flag, [globalLogParam]() {
+        g_tp = std::make_shared<spdlog::details::thread_pool>(
+            static_cast<size_t>(globalLogParam.maxAsyncQueueSize), static_cast<size_t>(globalLogParam.asyncThreadCount),
+            []() { std::cout << "fs: async thread start" << std::endl; },
+            []() { std::cout << "fs: async thread end" << std::endl; });
+    });
     spdlog::flush_every(std::chrono::seconds(globalLogParam_.logBufSecs));
 }
 
@@ -86,7 +92,7 @@ LogsApi::YrLogger LoggerContext::CreateAsyncLogger(const LogsApi::LogParam &logP
             (void)sinks.emplace_back(consoleSink);
         }
         auto logger = std::make_shared<spdlog::async_logger>(logParam.loggerName, sinks.begin(), sinks.end(),
-            spdlog::thread_pool(), spdlog::async_overflow_policy::block);
+            g_tp, spdlog::async_overflow_policy::block);
         spdlog::initialize_logger(logger);
 
         const auto logLevel = GetLogLevel(logParam.logLevel);
