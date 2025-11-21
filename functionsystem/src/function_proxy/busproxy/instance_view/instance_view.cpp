@@ -394,14 +394,4 @@ void InstanceView::Reject(const std::string &instanceID, const resources::Instan
     }
 }
 
-void InstanceView::SubscribeCallQueue(const std::string &instanceID)
-{
-    auto instanceProxy
-    = localInstances_[instanceID];
-    if (instanceProxy == nullptr) {
-        YRLOG_ERROR("local instance proxy {} not find, subscribe call queue failed.", instanceID);
-    }
-    litebus::Async(instanceProxy->GetAID(), &InstanceProxy::SubscribeCallQueue);
-}
-
 }  // namespace functionsystem::busproxy

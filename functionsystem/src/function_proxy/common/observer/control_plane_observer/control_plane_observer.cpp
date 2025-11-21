@@ -58,12 +58,6 @@ void ControlPlaneObserver::SetUpdateFuncMetasFunc(const UpdateFuncMetasFunc &upd
     litebus::Async(observerActor_->GetAID(), &ObserverActor::SetUpdateFuncMetasFunc, updateFuncMetasFunc);
 }
 
-void ControlPlaneObserver::RegisterCallQueueChangeCbFunc(const CallQueueChangeCbFunc &callQueueChangeCbFunc)
-{
-    ASSERT_IF_NULL(observerActor_);
-    litebus::Async(observerActor_->GetAID(), &ObserverActor::RegisterCallQueueChangeCbFunc, callQueueChangeCbFunc);
-}
-
 void ControlPlaneObserver::Register() const
 {
     ASSERT_IF_NULL(observerActor_);
@@ -207,12 +201,6 @@ void ControlPlaneObserver::CancelWatchInstance(const std::string &instanceID)
 {
     ASSERT_IF_NULL(observerActor_);
     litebus::Async(observerActor_->GetAID(), &ObserverActor::CancelWatchInstance, instanceID);
-}
-
-void ControlPlaneObserver::SubscribeCallQueue(const std::string &instanceId)
-{
-    ASSERT_IF_NULL(observerActor_);
-    litebus::Async(observerActor_->GetAID(), &ObserverActor::SubscribeCallQueue, instanceId);
 }
 
 }  // namespace functionsystem::function_proxy

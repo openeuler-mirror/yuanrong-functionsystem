@@ -80,8 +80,6 @@ public:
         observer_ = observer;
     }
 
-    void SubscribeCallQueue();
-
 protected:
     void Init() override;
 
@@ -116,7 +114,6 @@ private:
     std::shared_ptr<Perf> perf_;
     // callresult subscribe failed times
     std::unordered_map<std::string, uint32_t> failedSubDstRouteOnCallResult_;
-    bool subscribeCallQueue_;
 };
 
 class InstanceProxyWrapper {

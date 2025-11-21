@@ -48,7 +48,6 @@ using InstanceStatusToRunningCbFunc = std::function<void(const resource_view::In
 using InstanceInfoSyncerCbFunc = std::function<void(const resource_view::RouteInfo &routeInfo)>;
 using UpdateFuncMetasFunc =
     std::function<void(bool isAdd, const std::unordered_map<std::string, FunctionMeta> &funcMetas)>;
-using CallQueueChangeCbFunc = std::function<void(const std::string &instanceId, uint64_t reqNum)>;
 
 const int SERVICE_TTL = 300000;  // ms
 
@@ -141,11 +140,6 @@ public:
             updateFuncMetasFunc_(true, funcMetaMap_);
             updateFuncMetasFunc_(true, systemFuncMetaMap_);
         }
-    }
-
-    virtual void RegisterCallQueueChangeCbFunc(const CallQueueChangeCbFunc &callQueueChangeCbFunc)
-    {
-        callQueueChangeCbFunc_ = callQueueChangeCbFunc;
     }
 
     virtual void BindDataInterfaceClientManager(
@@ -294,9 +288,6 @@ public:
 
     void CancelWatchInstance(const std::string &instanceID);
 
-    void SubscribeCallQueue(const std::string &instanceID);
-
-    void CallQueueChange(const std::string &instanceID, uint64_t callQueueSize);
 protected:
     void Init() override{};
     void Finalize() override{};
@@ -356,7 +347,6 @@ private:
     InstanceStatusToRunningCbFunc instanceStatusToRunningCbFunc_;
     InstanceInfoSyncerCbFunc instanceInfoSyncerCbFunc_;
     UpdateFuncMetasFunc updateFuncMetasFunc_;
-    CallQueueChangeCbFunc callQueueChangeCbFunc_;
 
     // for busproxy
     std::shared_ptr<DataInterfaceClientManagerProxy> dataInterfaceClientManager_;

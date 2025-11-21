@@ -371,12 +371,6 @@ std::list<litebus::Future<SharedStreamMsg>> RequestDispatcher::GetOnRespFuture()
     return callCache_->GetOnRespFuture();
 }
 
-uint64_t RequestDispatcher::GetCallQueueSize()
-{
-    ASSERT_IF_NULL(callCache_);
-    return callCache_->GetCallQueueSize();
-}
-
 void RequestDispatcher::ReportCallTimesMetrics()
 {
     if (callTimes_ == 0) {

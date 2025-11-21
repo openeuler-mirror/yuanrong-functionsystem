@@ -75,8 +75,6 @@ public:
 
     std::list<litebus::Future<SharedStreamMsg>> GetOnRespFuture();
 
-    uint64_t GetCallQueueSize();
-
     std::string GetTenantID()
     {
         return tenantID_;
