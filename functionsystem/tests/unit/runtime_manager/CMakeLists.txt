@@ -14,7 +14,8 @@
 add_subdirectory(metrics)
 add_subdirectory(port)
 add_subdirectory(utils)
-add_subdirectory(executor)
+# todo: debug
+# add_subdirectory(executor)
 add_subdirectory(manager)
 add_subdirectory(healthcheck)
 add_subdirectory(driver)

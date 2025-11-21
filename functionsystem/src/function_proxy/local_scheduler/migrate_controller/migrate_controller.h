@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,8 +17,8 @@
 #ifndef LOCAL_SCHEDULER_MIGRATE_CONTROLLER_H
 #define LOCAL_SCHEDULER_MIGRATE_CONTROLLER_H
 #include "common/state_machine/instance_listener.h"
+#include "migrate_controller_actor.h"
 #include "status/status.h"
-#include"migrate_controller_actor.h"
 
 namespace functionsystem::local_scheduler {
 class MigrateController : public InstanceListener {
@@ -35,7 +35,6 @@ public:
 private:
     std::shared_ptr<MigrateControllerActor> migrateControllerActor_;
 };
-}
+}  // namespace functionsystem::local_scheduler
 
-
-#endif //LOCAL_SCHEDULER_MIGRATE_CONTROLLER_H
+#endif  // LOCAL_SCHEDULER_MIGRATE_CONTROLLER_H

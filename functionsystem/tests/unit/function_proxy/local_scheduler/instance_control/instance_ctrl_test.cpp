@@ -5658,6 +5658,11 @@ TEST_F(InstanceCtrlTest, KillInstanceWithTransSuspend)
     EXPECT_CALL(mockStateMachine, TransitionToImpl(InstanceState::SUSPEND, _, _, _, _))
         .WillOnce(Return(TransitionResult{ InstanceState::RUNNING, InstanceInfo(), InstanceInfo(), 1 }));
     EXPECT_CALL(*mockSharedClientManagerProxy_, DeleteClient(_)).WillRepeatedly(Return(Status::OK()));
+    auto resourceViewMgr = std::make_shared<resource_view::ResourceViewMgr>();
+    auto primary = MockResourceView::CreateMockResourceView();
+    resourceViewMgr->primary_ = primary;
+    EXPECT_CALL(*primary, DeleteInstances).WillOnce(Return(Status::OK()));
+    instanceCtrl_->BindResourceView(resourceViewMgr);
     messages::KillInstanceResponse killInstanceRsp;
     killInstanceRsp.set_code(int32_t(common::ErrorCode::ERR_NONE));
     EXPECT_CALL(*funcAgentMgr_, KillInstance).WillRepeatedly(Return(killInstanceRsp));
@@ -5694,7 +5699,7 @@ TEST_F(InstanceCtrlTest, KillInstanceWithCheckpoint)
         .WillRepeatedly(Return(mockSharedClient));
     runtime::CheckpointResponse checkpointRsp;
     checkpointRsp.set_code(common::ErrorCode::ERR_NONE);
-    checkpointRsp.set_state("state");
+    checkpointRsp.set_state("");
     EXPECT_CALL(*mockSharedClient, Checkpoint).WillOnce(Return(checkpointRsp));
     killRsp = instanceCtrl_->Kill(srcInstance, killReq).Get();
     EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_NONE);

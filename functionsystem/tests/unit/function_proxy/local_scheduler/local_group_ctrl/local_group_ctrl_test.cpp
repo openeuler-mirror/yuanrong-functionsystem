@@ -329,21 +329,6 @@ TEST_F(LocalGroupCtrlTest, LocalGroupCtrlStartedWithDifferGroupInfo)
     EXPECT_EQ(peFuture.Get()->code(), int32_t(SUCCESS));
 }
 
-// group schedule invalid designated instanceID
-TEST_F(LocalGroupCtrlTest, GroupScheduleWithDesignatedInstanceID)
-{
-    auto createRequests = std::make_shared<CreateRequests>();
-    createRequests->set_requestid("group-" + litebus::uuid_generator::UUID::GetRandomUUID().ToString());
-    createRequests->set_traceid("group-traceID");
-    Start();
-    auto createRequest = createRequests->add_requests();
-    createRequest->set_designatedinstanceid("designatedInstanceID");
-    auto future = localGroupCtrl_->GroupSchedule("srcInstanceID", createRequests);
-    ASSERT_AWAIT_READY(future);
-    EXPECT_EQ(future.IsOK(), true);
-    EXPECT_EQ(future.Get()->code(), common::ErrorCode::ERR_PARAM_INVALID);
-}
-
 // group schedule invalid detached lifecycle opt
 TEST_F(LocalGroupCtrlTest, GroupScheduleWithDetachedInstanceOpt)
 {

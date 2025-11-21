@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,10 +18,8 @@
 
 #include "async/async.hpp"
 
-
 namespace functionsystem::local_scheduler {
-void MigrateController::Update(const std::string &instanceID,
-                               const resources::InstanceInfo &instanceInfo,
+void MigrateController::Update(const std::string &instanceID, const resources::InstanceInfo &instanceInfo,
                                bool isForceUpdate)
 {
     litebus::Async(this->migrateControllerActor_->GetAID(), &MigrateControllerActor::Update, instanceID, instanceInfo,
@@ -42,4 +40,4 @@ litebus::Future<KillResponse> MigrateController::RecycleInstance(const std::shar
 {
     return litebus::Async(this->migrateControllerActor_->GetAID(), &MigrateControllerActor::RecycleInstance, killReq);
 }
-}
+}  // namespace functionsystem::local_scheduler
