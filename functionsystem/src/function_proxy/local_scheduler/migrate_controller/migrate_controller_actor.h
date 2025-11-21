@@ -27,6 +27,14 @@
 namespace functionsystem::local_scheduler {
 class MigrateControllerActor : public litebus::ActorBase {
 public:
+    MigrateControllerActor(const std::string &name, const std::string &self,
+                           const litebus::AID &observer_id)
+        : ActorBase(name),
+          self_(self),
+          observerId_(observer_id)
+    {
+    }
+
     void Update(const std::string &instanceID, const resources::InstanceInfo &instanceInfo,
                 bool isForceUpdate);
 
@@ -55,20 +63,7 @@ private:
     litebus::AID observerId_;
     uint32_t systemIdleToSuspend = 0;
     std::shared_ptr<InstanceCtrl> instanceCtrl_ = nullptr;
-
-public:
-    MigrateControllerActor(const std::string &name, const std::string &self,
-                           const litebus::AID &observer_id)
-        : ActorBase(name),
-          self_(self),
-          observerId_(observer_id)
-    {
-        litebus::Async(observer_id, &function_proxy::ControlPlaneObserver::RegisterCallQueueChangeCbFunc,
-                       [this](const std::string &instanceID, int utilization) {
-                           this->CallQueueChangeCallBack(instanceID, utilization);
-                       });
-    }
 };
 }
 
-#endif //LOCAL_SCHEDULER_MIGRATE_CONTROLLER_ACTOR_H
+#endif // LOCAL_SCHEDULER_MIGRATE_CONTROLLER_ACTOR_H

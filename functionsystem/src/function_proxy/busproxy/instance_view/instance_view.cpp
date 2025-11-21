@@ -29,10 +29,14 @@
 namespace functionsystem::busproxy {
 using IsReady = bool;
 const std::map<InstanceState, IsReady> STATUS_READY = {
-    { InstanceState::NEW, false },    { InstanceState::SCHEDULING, false }, { InstanceState::CREATING, false },
-    { InstanceState::RUNNING, true }, { InstanceState::FAILED, false },     { InstanceState::EXITING, false },
-    { InstanceState::FATAL, false }, 
-    // rely on reject tag 
+    { InstanceState::NEW, false },
+    { InstanceState::SCHEDULING, false },
+    { InstanceState::CREATING, false },
+    { InstanceState::RUNNING, true },
+    { InstanceState::FAILED, false },
+    { InstanceState::EXITING, false },
+    { InstanceState::FATAL, false },
+    // rely on reject tag
     // while instance change suspend to creating, need to keep request in flight
     { InstanceState::SUSPEND, true },
 };

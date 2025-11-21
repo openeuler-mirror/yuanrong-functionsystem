@@ -451,11 +451,11 @@ litebus::Future<Status> GroupManagerActor::MasterBusiness::BroadCastSignalForGro
         ASSERT_IF_NULL(member_->globalScheduler);
         member_->globalScheduler->GetLocalAddress(inst.second->functionproxyid())
             .Then(litebus::Defer(actor->GetAID(), &GroupManagerActor::InnerKillInstance, std::placeholders::_1,
-                                 inst.second, killReq)) 
+                                 inst.second, killReq))
             .OnComplete([instInfo(inst.second), signal](const litebus::Future<Status> &s) {
                 if (!s.IsOK()) {
-                    YRLOG_ERROR("failed to send ({}) instance {}, on proxy {}, in group {}", SignalToString(signal), instInfo->instanceid(),
-                                instInfo->functionproxyid(), instInfo->groupid());
+                    YRLOG_ERROR("failed to send ({}) instance {}, on proxy {}, in group {}", SignalToString(signal),
+                                instInfo->instanceid(), instInfo->functionproxyid(), instInfo->groupid());
                 }
             });
     }
@@ -548,7 +548,7 @@ litebus::Future<Status> GroupManagerActor::MasterBusiness::ReScheduleGroup(const
         for (auto &request : *groupInfo->mutable_requests()) {
             if (request.requestid() != info->requestid()) {
                 continue;
-            } 
+            }
             *request.mutable_instance() = *info;
             request.mutable_instance()->set_ischeckpointed(true);
         }

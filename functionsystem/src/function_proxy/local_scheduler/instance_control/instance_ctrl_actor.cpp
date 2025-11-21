@@ -348,12 +348,12 @@ litebus::Future<KillResponse> InstanceCtrlActor::Kill(const std::string &srcInst
             return ProcessUnsubscribeRequest(srcInstanceID, killReq);
         }
         case INSTANCE_CHECKPOINT_SIGNAL: {
-            return MakeCheckpoint(killReq->instanceid()).Then([](const Status &status){
+            return MakeCheckpoint(killReq->instanceid()).Then([](const Status &status) {
                 return StatusToKillResponse(status);
             });
         }
         case INSTANCE_TRANS_SUSPEND_SIGNAL: {
-            return ToSuspend(killReq->instanceid()).Then([](const Status &status){
+            return ToSuspend(killReq->instanceid()).Then([](const Status &status) {
                 return StatusToKillResponse(status);
             });
         }

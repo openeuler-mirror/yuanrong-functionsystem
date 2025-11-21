@@ -70,8 +70,7 @@ bool MigrateControllerActor::IsInstHibernate(
     return false;
 }
 
-void MigrateControllerActor::StoreInstState(
-    const std::string &instanceID, const int32_t &state)
+void MigrateControllerActor::StoreInstState(const std::string &instanceID, const int32_t &state)
 {
     if (instanceStateMap_.find(instanceID) != instanceStateMap_.end()) {
         instanceStateMap_[instanceID] = state;

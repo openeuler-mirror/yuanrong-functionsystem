@@ -27,7 +27,7 @@
 
 namespace observability::sdk::logs {
 
-std::once_flag init_flag;  
+std::once_flag g_initFlag;
 std::shared_ptr<spdlog::details::thread_pool> g_tp = nullptr;
 
 static void FlushLogger(std::shared_ptr<spdlog::logger> l)
@@ -63,7 +63,7 @@ LoggerContext::LoggerContext() noexcept
 LoggerContext::LoggerContext(const LogsApi::GlobalLogParam &globalLogParam) noexcept : globalLogParam_(globalLogParam)
 {
     spdlog::drop_all();
-    std::call_once(init_flag, [globalLogParam]() {
+    std::call_once(g_initFlag, [globalLogParam]() {
         g_tp = std::make_shared<spdlog::details::thread_pool>(
             static_cast<size_t>(globalLogParam.maxAsyncQueueSize), static_cast<size_t>(globalLogParam.asyncThreadCount),
             []() { std::cout << "fs: async thread start" << std::endl; },

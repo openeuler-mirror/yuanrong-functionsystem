@@ -1364,7 +1364,8 @@ TEST_F(GroupManagerTest, SuspendGroupFailed)
         auto killGroupReq = std::make_shared<messages::KillGroup>();
         killGroupReq->set_groupid(GROUP_ID_1);
         killGroupReq->set_signal(GROUP_SUSPEND_SIGNAL);
-        litebus::Async(outerKillerActor->GetAID(), &OuterKillerActor::SendKillGroup, groupMgrActor->GetAID(), killGroupReq);
+        litebus::Async(outerKillerActor->GetAID(), &OuterKillerActor::SendKillGroup, groupMgrActor->GetAID(),
+                       killGroupReq);
         // will send kill group response back to outer killer
         ASSERT_AWAIT_READY(respPromise->GetFuture());
         auto kgRsp = respPromise->GetFuture().Get();
@@ -1396,7 +1397,8 @@ TEST_F(GroupManagerTest, SuspendGroupInvalidState)
         auto killGroupReq = std::make_shared<messages::KillGroup>();
         killGroupReq->set_groupid(GROUP_ID_1);
         killGroupReq->set_signal(GROUP_SUSPEND_SIGNAL);
-        litebus::Async(outerKillerActor->GetAID(), &OuterKillerActor::SendKillGroup, groupMgrActor->GetAID(), killGroupReq);
+        litebus::Async(outerKillerActor->GetAID(), &OuterKillerActor::SendKillGroup, groupMgrActor->GetAID(),
+                       killGroupReq);
         // will send kill group response back to outer killer
         ASSERT_AWAIT_READY(respPromise->GetFuture());
         auto kgRsp = respPromise->GetFuture().Get();
