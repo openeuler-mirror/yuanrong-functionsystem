@@ -3214,8 +3214,10 @@ litebus::Future<Status> InstanceCtrlActor::KillAgentInstance(const Status &statu
     }
     for (const auto &instance : actualInstances) {
         (void)concernedInstance_.insert(instance.first);
-        if (funcAgentMap_[funcAgentID]->find(instance.first) == funcAgentMap_[funcAgentID]->end() ||
-            funcAgentMap_[funcAgentID]->find(instance.first)->second.functionproxyid() == INSTANCE_MANAGER_OWNER) {
+        if (funcAgentMap_[funcAgentID]->find(instance.first) == funcAgentMap_[funcAgentID]->end()
+            || funcAgentMap_[funcAgentID]->find(instance.first)->second.functionproxyid() == INSTANCE_MANAGER_OWNER
+            || funcAgentMap_[funcAgentID]->find(instance.first)->second.instancestatus().code()
+                   == static_cast<int32_t>(InstanceState::SUSPEND)) {
             (void)needKillInstances.insert(instance.first);
         }
     }
