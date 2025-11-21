@@ -133,12 +133,12 @@ public:
     }
     ~MockLocalGroupCtrl() = default;
 
-    void Reserve(const litebus::AID &from, std::string &&name, std::string &&msg)
+    void Reserves(const litebus::AID &from, std::string &&name, std::string &&msg)
     {
-        auto rsp = MockReserve();
-        Send(from, "OnReserve", std::move(rsp));
+        auto rsp = MockReserves();
+        Send(from, "OnReserves", std::move(rsp));
     }
-    MOCK_METHOD(std::string, MockReserve, ());
+    MOCK_METHOD(std::string, MockReserves, ());
 
     void UnReserve(const litebus::AID &from, std::string &&name, std::string &&msg)
     {
@@ -164,7 +164,7 @@ public:
 protected:
     void Init() override
     {
-        Receive("Reserve", &MockLocalGroupCtrl::Reserve);
+        Receive("Reserves", &MockLocalGroupCtrl::Reserves);
         Receive("UnReserve", &MockLocalGroupCtrl::UnReserve);
         Receive("Bind", &MockLocalGroupCtrl::Bind);
         Receive("UnBind", &MockLocalGroupCtrl::UnBind);

@@ -119,6 +119,22 @@ message ScheduleResponse {
   string traceID   = 8;
 }
 
+message Reserves {
+  repeated ScheduleRequest reserves = 1;
+  string requestID = 2;
+  string traceID = 3;
+  string groupID = 4;
+  resources.CreateTarget target = 5;
+  repeated string instanceIDs = 6;
+}
+
+message OnReserves {
+  repeated ScheduleResponse responses = 1;
+  map<int32, resources.ResourceUnitChanges> updateResources = 2;
+  string requestID = 3;
+  string traceID = 4;
+}
+
 message NotifySchedAbnormalRequest {
   string schedName = 1;
   string ip        = 2;
