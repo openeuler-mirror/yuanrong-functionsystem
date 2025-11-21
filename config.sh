@@ -22,7 +22,7 @@ BASE_DIR=$(
 CPU_NUM="$(grep -c 'processor' /proc/cpuinfo)"
 JOB_NUM="$(($(grep -c 'processor' /proc/cpuinfo) + 1))"
 YR_FUNCTION_SYSTEM_VERSION="0.0.1"
-OUTPUT_DIR=$(realpath "$BASE_DIR"/../output)
+OUTPUT_DIR=$(realpath "$BASE_DIR"/output)
 echo "OUTPUT_DIR: ${OUTPUT_DIR}"
 
 USAGE="

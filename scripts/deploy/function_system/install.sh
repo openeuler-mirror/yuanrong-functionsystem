@@ -20,7 +20,10 @@ fi
 FUNCTION_SYSTEM_DIR=$(readlink -m "${FUNCTION_SYSTEM_DEPLOY_DIR}/..")
 DATA_SYSTEM_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../data_system")
 RUNTIME_HOME_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../runtime")
-
+if [ -d "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas" ]; then
+  PATTERN_FAAS_HOME_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas")
+  FUNCTION_META_PATH="$PATTERN_FAAS_HOME_DIR/executor-meta"
+fi
 function install_function_proxy() {
   log_info "start function proxy, proxy_port=${FUNCTION_PROXY_PORT}, grpc_port=${FUNCTION_PROXY_GRPC_PORT}..."
   local bin=${FUNCTION_SYSTEM_DIR}/bin/function_proxy
