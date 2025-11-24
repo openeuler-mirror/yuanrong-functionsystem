@@ -53,14 +53,15 @@ TEST_F(RuntimeMgrDriverTest, DriverTest)
         "--resource_label_path=/tmp/labels",
         "--runtime_ds_connect_timeout=10",
         "--kill_process_timeout_seconds=2",
-        R"(--log_config={"filepath": "/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
+        "--npu_device_info_path=/tmp/home/sn/config/topology-info.json",
+        R"(--log_config={"filepath": "/tmp/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
     };
     flags.ParseFlags(std::size(argv), argv);
     EXPECT_EQ(flags.GetRuntimeHomeDir(), litebus::os::GetEnv("HOME").Get());
     std::cout << "flags.GetRuntimeHomeDir(): " << flags.GetRuntimeHomeDir() << std::endl;
     EXPECT_EQ(flags.GetNodeJsEntryPath(), "/home/runtime/node.js");
     EXPECT_EQ(flags.GetResourceLabelPath(), "/tmp/labels");
-    EXPECT_EQ(flags.GetNpuDeviceInfoPath(), "/home/sn/config/topology-info.json");
+    EXPECT_EQ(flags.GetNpuDeviceInfoPath(), "/tmp/home/sn/config/topology-info.json");
     EXPECT_EQ(flags.GetRuntimeDsConnectTimeout(), static_cast<uint32_t>(10));
 	EXPECT_EQ(flags.GetRuntimeLdLibraryPath(), "/tmp:/home/disk");
     RuntimeManagerDriver driver(flags, "runtime_manager");
@@ -89,7 +90,7 @@ TEST_F(RuntimeMgrDriverTest, DriverParseFailTest)
         "--resource_label_path=/tmp/labels",
         "--runtime_ds_connect_timeout=10",
         "--kill_process_timeout_seconds=2",
-        R"(--log_config={"filepath": "/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
+        R"(--log_config={"filepath": "/tmp/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
     };
     auto result = flags.ParseFlags(std::size(argv), argv);
     EXPECT_TRUE(result.IsSome());

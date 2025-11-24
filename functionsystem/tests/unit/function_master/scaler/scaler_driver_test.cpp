@@ -61,7 +61,7 @@ TEST_F(ScalerDriverTest, DriverStartNoK8s)
 {
     const char *argv2[] = { "./function_master",
                             R"(--log_config={
-                                "filepath":"/home/yr/log",
+                                "filepath":"/tmp/home/yr/log",
                                 "level":"DEBUG",
                                 "rolling":{
                                     "maxsize":100,
@@ -96,7 +96,7 @@ TEST_F(ScalerDriverTest, DriverStartNoPool)
 {
     const char *argv[] = { "./function_master",
                            R"(--log_config={
-                                "filepath":"/home/yr/log",
+                                "filepath":"/tmp/home/yr/log",
                                 "level":"DEBUG",
                                 "rolling":{
                                     "maxsize":100,
@@ -142,7 +142,7 @@ TEST_F(ScalerDriverTest, DriverStartNoPool)
  */
 TEST_F(ScalerDriverTest, DriverStart)
 {
-    (void)litebus::os::Mkdir("/home/sn/scaler/config/");
+    (void)litebus::os::Mkdir("/tmp/home/sn/scaler/config/");
     std::string poolsStr = R"(
     [
         {
@@ -163,11 +163,11 @@ TEST_F(ScalerDriverTest, DriverStart)
         }
     ]
     )";
-    Write("/home/sn/scaler/config/functionsystem-pools.json", poolsStr);
+    Write("/tmp/home/sn/scaler/config/functionsystem-pools.json", poolsStr);
 
     const char *argv[] = { "./function_master",
                            R"(--log_config={
-                                "filepath":"/home/yr/log",
+                                "filepath":"/tmp/home/yr/log",
                                 "level":"DEBUG",
                                 "rolling":{
                                     "maxsize":100,
@@ -205,7 +205,7 @@ TEST_F(ScalerDriverTest, DriverStart)
     (void)driver->Stop();
     driver->Await();
 
-    (void)litebus::os::Rmdir("/home/sn/scaler");
+    (void)litebus::os::Rmdir("/tmp/home/sn/scaler");
 }
 
 }  // namespace functionsystem::scaler::test

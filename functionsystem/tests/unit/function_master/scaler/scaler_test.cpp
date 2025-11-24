@@ -141,7 +141,7 @@ const std::string POD_POOL_INFO_STR = R"(
        "env2": "key2"
      },
      "volumes": "[{\"name\": \"volume-1\", \"hostPath\": { \"path\": \"/home/xxx\",\"type\": \"DirectoryOrCreate\"}}, {\"name\": \"pvc-xx\", \"persistentVolumeClaim\": {\"caimName\": \"pvc-xxx\"}}]",
-     "volume_mounts": "[{\"name\": \"pvc-xx\",\"mountPath\": \"/home/snuser/models\"}]",
+     "volume_mounts": "[{\"name\": \"pvc-xx\",\"mountPath\": \"/tmp/home/snuser/models\"}]",
      "resources": {
        "limits": {
          "cpu": "2",
@@ -181,7 +181,7 @@ const std::string POD_POOL_WITH_HPA_INFO_STR = R"(
        "env2": "key2"
      },
      "volumes": "[{\"name\": \"volume-1\", \"hostPath\": { \"path\": \"/home/xxx\",\"type\": \"DirectoryOrCreate\"}}, {\"name\": \"pvc-xx\", \"persistentVolumeClaim\": {\"caimName\": \"pvc-xxx\"}}]",
-     "volume_mounts": "[{\"name\": \"pvc-xx\",\"mountPath\": \"/home/snuser/models\"}]",
+     "volume_mounts": "[{\"name\": \"pvc-xx\",\"mountPath\": \"/tmp/home/snuser/models\"}]",
      "resources": {
        "limits": {
          "cpu": "2",
@@ -322,8 +322,8 @@ protected:
                                                      }}
 
                                    } };
-        scalerParams.poolConfigPath = "/home/sn/scaler/config/functionsystem-pools.json";
-        scalerParams.agentTemplatePath = "/home/sn/scaler/template/function-agent.json";
+        scalerParams.poolConfigPath = "/tmp/home/sn/scaler/config/functionsystem-pools.json";
+        scalerParams.agentTemplatePath = "/tmp/home/sn/scaler/template/function-agent.json";
         scalerParams.enableFrontendPool = true;
         actor_ = std::make_shared<scaler::ScalerActor>(SCALER_ACTOR, client, metaStorageAccessor_, scalerParams);
         litebus::Spawn(actor_);
@@ -726,26 +726,26 @@ TEST_F(ScalerTest, IsSameDeploymentConfig)
 
     TEST_F(ScalerTest, LoadFunctionPodPoolsConfigSuccess)
 {
-    (void)litebus::os::Rmdir("/home/sn/scaler/config/");
-    (void)litebus::os::Mkdir("/home/sn/scaler/config/");
-    auto writeStatus = Write("/home/sn/scaler/config/functionsystem-pools.json", "fake json");
+    (void)litebus::os::Rmdir("/tmp/home/sn/scaler/config/");
+    (void)litebus::os::Mkdir("/tmp/home/sn/scaler/config/");
+    auto writeStatus = Write("/tmp/home/sn/scaler/config/functionsystem-pools.json", "fake json");
     YRLOG_INFO("write json file result: {}", writeStatus);
     // Failure
     std::shared_ptr<PoolManager> poolManager = std::make_shared<PoolManager>(metaStorageAccessor_);
-    poolManager->LoadPodPoolsConfig("/home/sn/scaler/config/functionsystem-pools.json");
+    poolManager->LoadPodPoolsConfig("/tmp/home/sn/scaler/config/functionsystem-pools.json");
     auto localPoolMap = poolManager->GetLocalPodPools();
     ASSERT_AWAIT_TRUE([&]() -> bool { return localPoolMap.empty(); });
     // Success
     std::string poolsStr =
         R"({"pools":[{"id":"pool1-500-500-a","resources":{"limits":{"cpu":"500m","memory":"500Mi"},"requests":{"cpu":"500m","memory":"500Mi"}},"size":1,"reuse":true},{"id":"pool2-600-600-a","resources":{"limits":{"cpu":"600m","memory":"600Mi"},"requests":{"cpu":"600m","memory":"600Mi"}},"size":2}]})";
-    writeStatus = Write("/home/sn/scaler/config/functionsystem-pools.json", poolsStr);
+    writeStatus = Write("/tmp/home/sn/scaler/config/functionsystem-pools.json", poolsStr);
     YRLOG_INFO("write json file result: {}", writeStatus);
-    poolManager->LoadPodPoolsConfig("/home/sn/scaler/config/functionsystem-pools.json");
+    poolManager->LoadPodPoolsConfig("/tmp/home/sn/scaler/config/functionsystem-pools.json");
     localPoolMap = poolManager->GetLocalPodPools();
     ASSERT_AWAIT_TRUE([&]() -> bool { return localPoolMap.size() == 2; });
     EXPECT_TRUE(localPoolMap["pool1-500-500-a"]->reuse);
     EXPECT_FALSE(localPoolMap["pool2-600-600-a"]->reuse);
-    (void)litebus::os::Rmdir("/home/sn/scaler/config/");
+    (void)litebus::os::Rmdir("/tmp/home/sn/scaler/config/");
 }
 
 const std::string DELEGATE_CONTAINER_VOLUME_MOUNTS_NO = R"(
@@ -3460,23 +3460,23 @@ TEST_F(ScalerTest, CreateAgentByPoolIDTest)
 
 TEST_F(ScalerTest, LoadFunctionAgentTemplate)
 {
-    (void)litebus::os::Rmdir("/home/sn/scaler/template/");
+    (void)litebus::os::Rmdir("/tmp/home/sn/scaler/template/");
     actor_->SetTemplateDeployment(nullptr);
     auto status = litebus::Async(actor_->GetAID(), &ScalerActor::SyncTemplateDeployment);
     EXPECT_EQ(status.Get(), StatusCode::FILE_NOT_FOUND);
 
-    (void)litebus::os::Mkdir("/home/sn/scaler/template/");
-    auto writeStatus = Write("/home/sn/scaler/template/function-agent.json", "fake json");
+    (void)litebus::os::Mkdir("/tmp/home/sn/scaler/template/");
+    auto writeStatus = Write("/tmp/home/sn/scaler/template/function-agent.json", "fake json");
     status = litebus::Async(actor_->GetAID(), &ScalerActor::SyncTemplateDeployment);
     ASSERT_AWAIT_READY(status);
     EXPECT_EQ(status.Get(), StatusCode::JSON_PARSE_ERROR);
 
-    writeStatus = Write("/home/sn/scaler/template/function-agent.json", DEPLOYMENT_JSON);
+    writeStatus = Write("/tmp/home/sn/scaler/template/function-agent.json", DEPLOYMENT_JSON);
     YRLOG_INFO("write json file result: {}", writeStatus);
     status = litebus::Async(actor_->GetAID(), &ScalerActor::SyncTemplateDeployment);
     ASSERT_AWAIT_READY(status);
     EXPECT_EQ(status.Get(), StatusCode::SUCCESS);
-    (void)litebus::os::Rmdir("/home/sn/scaler/");
+    (void)litebus::os::Rmdir("/tmp/home/sn/scaler/");
 }
 
 TEST_F(ScalerTest, SyncPodsTest) {

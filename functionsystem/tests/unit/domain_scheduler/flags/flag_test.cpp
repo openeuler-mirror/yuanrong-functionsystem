@@ -29,7 +29,7 @@ class DomainSchedulerFlagsTest : public ::testing::Test {};
 TEST_F(DomainSchedulerFlagsTest, DomainSchedulerFlagsOK)
 {
     const char *argv[] = { "./domain_scheduler",
-                           "--log_config={\"filepath\": \"/home/yr/log\",\"level\": \"DEBUG\",\"rolling\": "
+                           "--log_config={\"filepath\": \"/tmp/home/yr/log\",\"level\": \"DEBUG\",\"rolling\": "
                            "{\"maxsize\": 100, \"maxfiles\": 1}}",
                            "--node_id=10",
                            "--ip=127.0.0.1",
@@ -42,7 +42,7 @@ TEST_F(DomainSchedulerFlagsTest, DomainSchedulerFlagsOK)
     ASSERT_TRUE(parse.IsNone());
 
     EXPECT_EQ(flags.GetLogConfig(),
-              "{\"filepath\": \"/home/yr/log\",\"level\": \"DEBUG\",\"rolling\": {\"maxsize\": 100, \"maxfiles\": 1}}");
+              "{\"filepath\": \"/tmp/home/yr/log\",\"level\": \"DEBUG\",\"rolling\": {\"maxsize\": 100, \"maxfiles\": 1}}");
     EXPECT_EQ(flags.GetNodeID(), "10");
     EXPECT_EQ(flags.GetIP(), "127.0.0.1");
     EXPECT_EQ(flags.GetDomainListenPort(), "8080");

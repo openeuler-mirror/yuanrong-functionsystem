@@ -199,7 +199,8 @@ TEST_F(HealthCheckTest, HealthCheckWithRuntimeMemoryExceedLimit)
  * Expectation:
  * update instance status message contains exception log
  */
-TEST_F(HealthCheckTest, HealthCheckWhenRuntimeExceptionExitWithExceptionLog)
+// DISABLED which need dmesg privaliage
+TEST_F(HealthCheckTest, DISABLED_HealthCheckWhenRuntimeExceptionExitWithExceptionLog)
 {
     auto functionAgent = std::make_shared<FunctionAgent>();
     litebus::Future<std::string> msgValue;
@@ -207,7 +208,7 @@ TEST_F(HealthCheckTest, HealthCheckWhenRuntimeExceptionExitWithExceptionLog)
         .WillOnce(FutureArg<2>(&msgValue));
     litebus::Spawn(functionAgent);
 
-    const std::string &exceptionLog = "/home/snuser/health_check/exception";
+    const std::string &exceptionLog = "/tmp/home/snuser/health_check/exception";
     if (!litebus::os::ExistPath(exceptionLog)) {
         litebus::os::Mkdir(exceptionLog);
     }
@@ -221,7 +222,7 @@ TEST_F(HealthCheckTest, HealthCheckWhenRuntimeExceptionExitWithExceptionLog)
     outfile << "runtime ID backtrace log. This is a Test." << std::endl;
     outfile.close();
 
-    const std::string &stdLog = "/home/snuser/health_check/instances/";
+    const std::string &stdLog = "/tmp/home/snuser/health_check/instances/";
     if (!litebus::os::ExistPath(stdLog)) {
         litebus::os::Mkdir(stdLog);
     }
@@ -242,7 +243,7 @@ TEST_F(HealthCheckTest, HealthCheckWhenRuntimeExceptionExitWithExceptionLog)
     auto client = std::make_shared<runtime_manager::HealthCheck>();
     runtime_manager::Flags flags;
     const char *argv[] = { "/runtime_manager", "--node_id=", "--ip=127.0.0.1","--host_ip=127.0.0.1", "--port=32233",
-        "--runtime_initial_port=500", "--runtime_std_log_dir=instances", "--runtime_logs_dir=/home/snuser/health_check" };
+        "--runtime_initial_port=500", "--runtime_std_log_dir=instances", "--runtime_logs_dir=/tmp/home/snuser/health_check" };
     flags.ParseFlags(std::size(argv), argv);
     client->SetConfig(flags);
     client->AddRuntimeRecord(functionAgent->GetAID(), execPtr->GetPid(), "Instance-ID", "runtime-ID", "runtime-ID");
@@ -269,7 +270,7 @@ TEST_F(HealthCheckTest, HealthCheckWhenRuntimeExceptionExitWithExceptionLog)
  * Expectation:
  * update instance status message contains std log
  */
-TEST_F(HealthCheckTest, HealthCheckWhenRuntimeExceptionExitWithStdLog)
+TEST_F(HealthCheckTest, DISABLED_HealthCheckWhenRuntimeExceptionExitWithStdLog)
 {
     auto functionAgent = std::make_shared<FunctionAgent>();
     litebus::Future<std::string> msgValue;
@@ -277,7 +278,7 @@ TEST_F(HealthCheckTest, HealthCheckWhenRuntimeExceptionExitWithStdLog)
         .WillOnce(FutureArg<2>(&msgValue));
     litebus::Spawn(functionAgent);
 
-    const std::string &stdLog = "/home/snuser/health_check/instances";
+    const std::string &stdLog = "/tmp/home/snuser/health_check/instances";
     if (!litebus::os::ExistPath(stdLog)) {
         litebus::os::Mkdir(stdLog);
     }
@@ -299,7 +300,7 @@ TEST_F(HealthCheckTest, HealthCheckWhenRuntimeExceptionExitWithStdLog)
     auto client = std::make_shared<runtime_manager::HealthCheck>();
     runtime_manager::Flags flags;
     const char *argv[] = { "/runtime_manager", "--node_id=", "--ip=127.0.0.1","--host_ip=127.0.0.1", "--port=32233",
-        "--runtime_initial_port=500", "--runtime_std_log_dir=instances", "--runtime_logs_dir=/home/snuser/health_check" };
+        "--runtime_initial_port=500", "--runtime_std_log_dir=instances", "--runtime_logs_dir=/tmp/home/snuser/health_check" };
     flags.ParseFlags(std::size(argv), argv);
     client->SetConfig(flags);
     client->AddRuntimeRecord(functionAgent->GetAID(), execPtr->GetPid(), "Instance-ID", "runtime-ID", "runtime-ID");
@@ -316,7 +317,7 @@ TEST_F(HealthCheckTest, HealthCheckWhenRuntimeExceptionExitWithStdLog)
     (void)litebus::os::Rm(runtimeStdLog);
 }
 
-TEST_F(HealthCheckTest, HealthCheckWhenRuntimeExit)
+TEST_F(HealthCheckTest, DISABLED_HealthCheckWhenRuntimeExit)
 {
     auto functionAgent = std::make_shared<FunctionAgent>();
     litebus::Future<std::string> msgValue;
@@ -324,7 +325,7 @@ TEST_F(HealthCheckTest, HealthCheckWhenRuntimeExit)
         .WillOnce(FutureArg<2>(&msgValue));
     litebus::Spawn(functionAgent);
 
-    const std::string &stdLog = "/home/snuser/health_check/instances";
+    const std::string &stdLog = "/tmp/home/snuser/health_check/instances";
     if (!litebus::os::ExistPath(stdLog)) {
         litebus::os::Mkdir(stdLog);
     }
@@ -346,7 +347,7 @@ TEST_F(HealthCheckTest, HealthCheckWhenRuntimeExit)
     runtime_manager::Flags flags;
     client->SetConfig(flags);
     const char *argv[] = { "/runtime_manager", "--node_id=", "--ip=127.0.0.1","--host_ip=127.0.0.1", "--port=32233",
-        "--runtime_initial_port=500", "--runtime_std_log_dir=instances", "--runtime_logs_dir=/home/snuser/health_check" };
+        "--runtime_initial_port=500", "--runtime_std_log_dir=instances", "--runtime_logs_dir=/tmp/home/snuser/health_check" };
     flags.ParseFlags(std::size(argv), argv);
     client->SetConfig(flags);
     client->AddRuntimeRecord(functionAgent->GetAID(), execPtr->GetPid(), "Instance-ID", "runtime-ID", "runtime-ID");

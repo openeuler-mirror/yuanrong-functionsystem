@@ -134,14 +134,14 @@ TEST_F(S3DeployerTest, DirectoryTest)  // NOLINT
 TEST_F(S3DeployerTest, IsDeployedTest)  // NOLINT
 {
     S3Deployer deployer(s3Config_, codePackageThresholds_);
-    std::string destination = "/home/s3/layer/func/bucketid/objectid";
+    std::string destination = "/tmp/home/s3/layer/func/bucketid/objectid";
     litebus::os::Mkdir(destination);
     EXPECT_TRUE(deployer.IsDeployed(destination, false));
     litebus::os::Rmdir(destination);
     EXPECT_FALSE(deployer.IsDeployed(destination, false));
     litebus::os::Mkdir(destination);
     EXPECT_FALSE(deployer.IsDeployed(destination, true));
-    EXPECT_TRUE(deployer.IsDeployed("/home/s3/layer/func/bucketid", true));
+    EXPECT_TRUE(deployer.IsDeployed("/tmp/home/s3/layer/func/bucketid", true));
     litebus::os::Rmdir(destination);
 }
 
@@ -149,12 +149,12 @@ TEST_F(S3DeployerTest, GetDestinationTest)  // NOLINT
 {
     S3Deployer deployer(s3Config_, codePackageThresholds_);
     {
-        std::string destination = "/home/s3/layer/func/bucketid/objectid";
-        EXPECT_EQ(deployer.GetDestination("/home/s3", "bucketid", "objectid"), destination);
+        std::string destination = "/tmp/home/s3/layer/func/bucketid/objectid";
+        EXPECT_EQ(deployer.GetDestination("/tmp/home/s3", "bucketid", "objectid"), destination);
     }
     {
-        std::string destination = "/home/s3/layer/func/bucketid/a-b-c-objectid";
-        EXPECT_EQ(deployer.GetDestination("/home/s3", "bucketid", "a/b/c/objectid"), destination);
+        std::string destination = "/tmp/home/s3/layer/func/bucketid/a-b-c-objectid";
+        EXPECT_EQ(deployer.GetDestination("/tmp/home/s3", "bucketid", "a/b/c/objectid"), destination);
     }
 
 }
@@ -193,7 +193,7 @@ public:
 TEST_F(S3DeployerTest, S3DeployDownloadFailed)  // NOLINT
 {
     messages::DeploymentConfig deploymentConfig;
-    deploymentConfig.set_deploydir("/home/s3/");
+    deploymentConfig.set_deploydir("/tmp/home/s3/");
     deploymentConfig.set_bucketid(BUCKET_ID);
     deploymentConfig.set_objectid(OBJECT_ID);
     deploymentConfig.set_storagetype("s3");
@@ -202,7 +202,7 @@ TEST_F(S3DeployerTest, S3DeployDownloadFailed)  // NOLINT
 
     UnzipMockS3Deployer deployer(s3Config_, codePackageThresholds_);
 
-    std::string layerDir = litebus::os::Join("/home/s3/", "layer");
+    std::string layerDir = litebus::os::Join("/tmp/home/s3/", "layer");
     std::string funcDir = litebus::os::Join(layerDir, "func");
     std::string bucketDir = litebus::os::Join(funcDir, deploymentConfig.bucketid());
     std::string objectDir = litebus::os::Join(bucketDir, deploymentConfig.objectid());
@@ -252,12 +252,12 @@ TEST_F(S3DeployerTest, S3DeployProcess)  // NOLINT
 
     auto request = std::make_shared<messages::DeployRequest>();
     auto *deploymentConfig = request->mutable_deploymentconfig();
-    deploymentConfig->set_deploydir("/home/s3/");
+    deploymentConfig->set_deploydir("/tmp/home/s3/");
     deploymentConfig->set_bucketid(BUCKET_ID);
     deploymentConfig->set_objectid(OBJECT_ID);
     deploymentConfig->set_storagetype("s3");
 
-    std::string layerDir = litebus::os::Join("/home/s3/", "layer");
+    std::string layerDir = litebus::os::Join("/tmp/home/s3/", "layer");
     std::string funcDir = litebus::os::Join(layerDir, "func");
     std::string bucketDir = litebus::os::Join(funcDir, deploymentConfig->bucketid());
     std::string objectDir = litebus::os::Join(bucketDir, deploymentConfig->objectid());
@@ -297,12 +297,12 @@ TEST_F(S3DeployerTest, S3DeployProcessWithMultiDir)
 
     auto request = std::make_shared<messages::DeployRequest>();
     auto *deploymentConfig = request->mutable_deploymentconfig();
-    deploymentConfig->set_deploydir("/home/s3/");
+    deploymentConfig->set_deploydir("/tmp/home/s3/");
     deploymentConfig->set_bucketid(BUCKET_ID);
     deploymentConfig->set_objectid("a/b/c/" + OBJECT_ID);
     deploymentConfig->set_storagetype("s3");
 
-    std::string layerDir = litebus::os::Join("/home/s3/", "layer");
+    std::string layerDir = litebus::os::Join("/tmp/home/s3/", "layer");
     std::string funcDir = litebus::os::Join(layerDir, "func");
     std::string bucketDir = litebus::os::Join(funcDir, deploymentConfig->bucketid());
     std::string objectDir = litebus::os::Join(bucketDir, "a-b-c-" + OBJECT_ID);
@@ -323,7 +323,7 @@ TEST_F(S3DeployerTest, S3DeployWithEmptyDownload)
 {
     auto request = std::make_shared<messages::DeployRequest>();
     auto *deploymentConfig = request->mutable_deploymentconfig();
-    deploymentConfig->set_deploydir("/home/s3/");
+    deploymentConfig->set_deploydir("/tmp/home/s3/");
     deploymentConfig->set_bucketid("");
     deploymentConfig->set_objectid("");
     deploymentConfig->set_storagetype("");
@@ -336,7 +336,7 @@ TEST_F(S3DeployerTest, S3RetryDownloadCodeSuccess)  // NOLINT
     auto request = std::make_shared<messages::DeployRequest>();
 
     auto *deploymentConfig = request->mutable_deploymentconfig();
-    deploymentConfig->set_deploydir("/home/s3/");
+    deploymentConfig->set_deploydir("/tmp/home/s3/");
     deploymentConfig->set_bucketid(BUCKET_ID);
     deploymentConfig->set_objectid(OBJECT_ID);
     deploymentConfig->set_storagetype("s3");
@@ -352,7 +352,7 @@ TEST_F(S3DeployerTest, S3RetryDownloadCodeSuccess)  // NOLINT
     DownloadMockS3Deployer deployer(s3Config_, std::move(mockObsWrapper), codePackageThresholds_);
     EXPECT_CALL(deployer, DownloadCode).WillOnce(testing::Return(Status::OK()));
 
-    std::string layerDir = litebus::os::Join("/home/s3/", "layer");
+    std::string layerDir = litebus::os::Join("/tmp/home/s3/", "layer");
     std::string funcDir = litebus::os::Join(layerDir, "func");
     std::string bucketDir = litebus::os::Join(funcDir, deploymentConfig->bucketid());
     std::string objectDir = litebus::os::Join(bucketDir, deploymentConfig->objectid());
@@ -372,7 +372,7 @@ TEST_F(S3DeployerTest, S3RetryDownloadCodeFailedWhenConnect)  // NOLINT
     auto request = std::make_shared<messages::DeployRequest>();
 
     auto *deploymentConfig = request->mutable_deploymentconfig();
-    deploymentConfig->set_deploydir("/home/s3/");
+    deploymentConfig->set_deploydir("/tmp/home/s3/");
     deploymentConfig->set_bucketid(BUCKET_ID);
     deploymentConfig->set_objectid(OBJECT_ID);
     deploymentConfig->set_storagetype("s3");
@@ -385,7 +385,7 @@ TEST_F(S3DeployerTest, S3RetryDownloadCodeFailedWhenConnect)  // NOLINT
 
     DownloadMockS3Deployer deployer(s3Config_, std::move(mockObsWrapper), codePackageThresholds_);
 
-    std::string layerDir = litebus::os::Join("/home/s3/", "layer");
+    std::string layerDir = litebus::os::Join("/tmp/home/s3/", "layer");
     std::string funcDir = litebus::os::Join(layerDir, "func");
     std::string bucketDir = litebus::os::Join(funcDir, deploymentConfig->bucketid());
     std::string objectDir = litebus::os::Join(bucketDir, deploymentConfig->objectid());
@@ -401,7 +401,7 @@ TEST_F(S3DeployerTest, S3RetryDownloadCodeFailedWhenDownload)  // NOLINT
     auto request = std::make_shared<messages::DeployRequest>();
 
     auto *deploymentConfig = request->mutable_deploymentconfig();
-    deploymentConfig->set_deploydir("/home/s3/");
+    deploymentConfig->set_deploydir("/tmp/home/s3/");
     deploymentConfig->set_bucketid(BUCKET_ID);
     deploymentConfig->set_objectid(OBJECT_ID);
     deploymentConfig->set_storagetype("s3");
@@ -414,7 +414,7 @@ TEST_F(S3DeployerTest, S3RetryDownloadCodeFailedWhenDownload)  // NOLINT
     EXPECT_CALL(deployer, DownloadCode)
         .WillOnce(testing::Return(Status(StatusCode::FUNC_AGENT_OBS_OPEN_FILE_ERROR, "failed to open file")));
 
-    std::string layerDir = litebus::os::Join("/home/s3/", "layer");
+    std::string layerDir = litebus::os::Join("/tmp/home/s3/", "layer");
     std::string funcDir = litebus::os::Join(layerDir, "func");
     std::string bucketDir = litebus::os::Join(funcDir, deploymentConfig->bucketid());
     std::string objectDir = litebus::os::Join(bucketDir, deploymentConfig->objectid());
@@ -521,7 +521,7 @@ TEST_F(S3DeployerTest, ClearTest)
 {
     std::shared_ptr<S3Config> s3Config = std::make_shared<S3Config>();
     S3Deployer deployer(s3Config, codePackageThresholds_);
-    std::string bucketDir = litebus::os::Join("/home/s3/", BUCKET_ID);
+    std::string bucketDir = litebus::os::Join("/tmp/home/s3/", BUCKET_ID);
     std::string objectDir = litebus::os::Join(bucketDir, OBJECT_ID);
     std::string objectTmpDir = objectDir + "_tmp";
     std::string objectTmpInnerDir = litebus::os::Join(objectTmpDir, "tmp");
@@ -545,7 +545,7 @@ TEST_F(S3DeployerTest, CheckPackageContentTest)
     std::shared_ptr<S3Config> s3Config = std::make_shared<S3Config>();
     S3Deployer deployer(s3Config, codePackageThresholds_);
 
-    std::string objDir = "/home/s3/layer/func/bucket/files";
+    std::string objDir = "/tmp/home/s3/layer/func/bucket/files";
     litebus::os::Mkdir(objDir);
     auto file1 = objDir + "/a.txt";
     EXPECT_TRUE(Write(file1, "a"));
@@ -562,21 +562,21 @@ TEST_F(S3DeployerTest, CheckPackageContentTest)
     auto file5 = objDir + "/e.txt";
     EXPECT_TRUE(Write(file5, "e"));
 
-    EXPECT_EQ(ExecuteCommand("zip -r /home/s3/layer/func/bucket/test1.zip " + objDir + "/a.txt").error.empty(), true);
-    auto status = deployer.PackageValidation("/home/s3/layer/func/bucket/test1.zip", "", "");
+    EXPECT_EQ(ExecuteCommand("zip -r /tmp/home/s3/layer/func/bucket/test1.zip " + objDir + "/a.txt").error.empty(), true);
+    auto status = deployer.PackageValidation("/tmp/home/s3/layer/func/bucket/test1.zip", "", "");
     EXPECT_TRUE(status.IsError());
     EXPECT_THAT(status.ToString(), testing::HasSubstr("the depth of dir exceeds maximum limit"));
 
-    EXPECT_EQ(ExecuteCommand("zip -r /home/s3/layer/func/bucket/test2.zip " + objDir + "/c.txt").error.empty(), true);
-    status = deployer.PackageValidation("/home/s3/layer/func/bucket/test2.zip", "", "");
+    EXPECT_EQ(ExecuteCommand("zip -r /tmp/home/s3/layer/func/bucket/test2.zip " + objDir + "/c.txt").error.empty(), true);
+    status = deployer.PackageValidation("/tmp/home/s3/layer/func/bucket/test2.zip", "", "");
     EXPECT_TRUE(status.IsError());
-    EXPECT_THAT(status.ToString(), testing::HasSubstr("check zip file failed, error: file(home/s3/layer/func/bucket/files/c.txt) is bigger than 1048576"));
+    EXPECT_THAT(status.ToString(), testing::HasSubstr("check zip file failed, error: file(tmp/home/s3/layer/func/bucket/files/c.txt) is bigger than 1048576"));
 
-    EXPECT_EQ(ExecuteCommand("zip -r /home/s3/layer/func/bucket/test3.zip " + objDir + "/a.txt " + objDir + "/b.txt " + objDir + "/d.txt " + objDir + "/e.txt").error.empty(), true);
-    status = deployer.PackageValidation("/home/s3/layer/func/bucket/test3.zip", "", "");
+    EXPECT_EQ(ExecuteCommand("zip -r /tmp/home/s3/layer/func/bucket/test3.zip " + objDir + "/a.txt " + objDir + "/b.txt " + objDir + "/d.txt " + objDir + "/e.txt").error.empty(), true);
+    status = deployer.PackageValidation("/tmp/home/s3/layer/func/bucket/test3.zip", "", "");
     EXPECT_TRUE(status.IsError());
     EXPECT_THAT(status.ToString(), testing::HasSubstr("the number of files exceeds maximum limit"));
-    EXPECT_TRUE(litebus::os::Rmdir("/home/s3/layer/func/bucket").IsNone());
+    EXPECT_TRUE(litebus::os::Rmdir("/tmp/home/s3/layer/func/bucket").IsNone());
 }
 
 TEST_F(S3DeployerTest, CheckPackageContentWithMaxThresholds)
@@ -589,7 +589,7 @@ TEST_F(S3DeployerTest, CheckPackageContentWithMaxThresholds)
     std::shared_ptr<S3Config> s3Config = std::make_shared<S3Config>();
     S3Deployer deployer(s3Config, codePackageThresholds);
 
-    std::string objDir = "/home/s3/layer/func/bucket/files";
+    std::string objDir = "/tmp/home/s3/layer/func/bucket/files";
     litebus::os::Mkdir(objDir);
     auto file1 = objDir + "/a.txt";
     EXPECT_TRUE(Write(file1, "a"));
@@ -606,18 +606,18 @@ TEST_F(S3DeployerTest, CheckPackageContentWithMaxThresholds)
     auto file5 = objDir + "/e.txt";
     EXPECT_TRUE(Write(file5, "e"));
 
-    EXPECT_EQ(ExecuteCommand("zip -r /home/s3/layer/func/bucket/test1.zip " + objDir + "/a.txt").error.empty(), true);
-    auto status = deployer.PackageValidation("/home/s3/layer/func/bucket/test1.zip", "", "");
+    EXPECT_EQ(ExecuteCommand("zip -r /tmp/home/s3/layer/func/bucket/test1.zip " + objDir + "/a.txt").error.empty(), true);
+    auto status = deployer.PackageValidation("/tmp/home/s3/layer/func/bucket/test1.zip", "", "");
     EXPECT_TRUE(status.IsOk());
 
-    EXPECT_EQ(ExecuteCommand("zip -r /home/s3/layer/func/bucket/test2.zip " + objDir + "/c.txt").error.empty(), true);
-    status = deployer.PackageValidation("/home/s3/layer/func/bucket/test2.zip", "", "");
+    EXPECT_EQ(ExecuteCommand("zip -r /tmp/home/s3/layer/func/bucket/test2.zip " + objDir + "/c.txt").error.empty(), true);
+    status = deployer.PackageValidation("/tmp/home/s3/layer/func/bucket/test2.zip", "", "");
     EXPECT_TRUE(status.IsOk());
 
-    EXPECT_EQ(ExecuteCommand("zip -r /home/s3/layer/func/bucket/test3.zip " + objDir + "/a.txt " + objDir + "/b.txt " + objDir + "/d.txt " + objDir + "/e.txt").error.empty(), true);
-    status = deployer.PackageValidation("/home/s3/layer/func/bucket/test3.zip", "", "");
+    EXPECT_EQ(ExecuteCommand("zip -r /tmp/home/s3/layer/func/bucket/test3.zip " + objDir + "/a.txt " + objDir + "/b.txt " + objDir + "/d.txt " + objDir + "/e.txt").error.empty(), true);
+    status = deployer.PackageValidation("/tmp/home/s3/layer/func/bucket/test3.zip", "", "");
     EXPECT_TRUE(status.IsOk());
-    EXPECT_TRUE(litebus::os::Rmdir("/home/s3/layer/func/bucket").IsNone());
+    EXPECT_TRUE(litebus::os::Rmdir("/tmp/home/s3/layer/func/bucket").IsNone());
 }
 
 TEST_F(S3DeployerTest, CheckPackageSignatureTest)
@@ -629,7 +629,7 @@ TEST_F(S3DeployerTest, CheckPackageSignatureTest)
     codePackageThresholds.set_unzipfilesizemaxmb(10);
     codePackageThresholds.set_dirdepthmax(10);
     S3Deployer deployer(s3Config, codePackageThresholds, true);
-    std::string objDir = "/home/s3/layer/func/bucket/files";
+    std::string objDir = "/tmp/home/s3/layer/func/bucket/files";
     litebus::os::Mkdir(objDir);
     auto file1 = objDir + "/a.txt";
     std::string largeStr;
@@ -637,27 +637,27 @@ TEST_F(S3DeployerTest, CheckPackageSignatureTest)
         largeStr += "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     }
     EXPECT_TRUE(Write(file1, largeStr));
-    EXPECT_EQ(ExecuteCommand("zip -r /home/s3/layer/func/bucket/test1.zip " + objDir + "/a.txt").error.empty(), true);
-    auto status =deployer.PackageValidation("/home/s3/layer/func/bucket/test1.zip", "", "");
+    EXPECT_EQ(ExecuteCommand("zip -r /tmp/home/s3/layer/func/bucket/test1.zip " + objDir + "/a.txt").error.empty(), true);
+    auto status =deployer.PackageValidation("/tmp/home/s3/layer/func/bucket/test1.zip", "", "");
     EXPECT_TRUE(status.IsError());
     EXPECT_THAT(status.ToString(), testing::HasSubstr("package signature doesn't match"));
-    status = deployer.PackageValidation("/home/s3/layer/func/bucket/test1.zip", "aaaaaaaaaaaa", "");
+    status = deployer.PackageValidation("/tmp/home/s3/layer/func/bucket/test1.zip", "aaaaaaaaaaaa", "");
     EXPECT_TRUE(status.IsError());
     EXPECT_THAT(status.ToString(), testing::HasSubstr("package signature doesn't match"));
-    status = deployer.PackageValidation("/home/s3/layer/func/bucket/test1.zip", "", "aaaaaaaaaaaa");
+    status = deployer.PackageValidation("/tmp/home/s3/layer/func/bucket/test1.zip", "", "aaaaaaaaaaaa");
     EXPECT_TRUE(status.IsError());
     EXPECT_THAT(status.ToString(), testing::HasSubstr("package signature doesn't match"));
-    std::stringstream ss(ExecuteCommand("sha256sum /home/s3/layer/func/bucket/test1.zip").output);
+    std::stringstream ss(ExecuteCommand("sha256sum /tmp/home/s3/layer/func/bucket/test1.zip").output);
     std::string cmdResult;
     ss >> cmdResult;
-    status = deployer.PackageValidation("/home/s3/layer/func/bucket/test1.zip", "", cmdResult);
+    status = deployer.PackageValidation("/tmp/home/s3/layer/func/bucket/test1.zip", "", cmdResult);
     EXPECT_TRUE(status.IsOk());
-    std::stringstream ss1(ExecuteCommand("sha512sum /home/s3/layer/func/bucket/test1.zip").output);
+    std::stringstream ss1(ExecuteCommand("sha512sum /tmp/home/s3/layer/func/bucket/test1.zip").output);
     std::string cmdResult1;
     ss1 >> cmdResult1;
-    status = deployer.PackageValidation("/home/s3/layer/func/bucket/test1.zip", cmdResult1, "");
+    status = deployer.PackageValidation("/tmp/home/s3/layer/func/bucket/test1.zip", cmdResult1, "");
     EXPECT_TRUE(status.IsOk());
-    EXPECT_TRUE(litebus::os::Rmdir("/home/s3/layer/func/bucket").IsNone());
+    EXPECT_TRUE(litebus::os::Rmdir("/tmp/home/s3/layer/func/bucket").IsNone());
 }
 }  // namespace functionsystem::test::function_agent
 

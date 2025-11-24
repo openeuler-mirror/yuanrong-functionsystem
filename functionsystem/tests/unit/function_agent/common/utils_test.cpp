@@ -149,7 +149,7 @@ TEST_F(FunctionAgentUtilsTest, SetRuntimeConfigSuccess)
     auto resourcePath = FunctionAgentUtilsTest::LoadRootKey(K1_HEX_STR, K2_HEX_STR, SALT_HEX_STR, K3_HEX_STR);
 
     functionsystem::messages::FuncDeploySpec funcDeploySpec;
-    funcDeploySpec.set_deploydir("/home");
+    funcDeploySpec.set_deploydir("/tmp/home");
     funcDeploySpec.set_bucketid(TEST_BUCKET_ID);
     funcDeploySpec.set_objectid(TEST_OBJECT_ID);
 
@@ -162,7 +162,7 @@ TEST_F(FunctionAgentUtilsTest, SetRuntimeConfigSuccess)
     auto runtimeConfig = function_agent::SetRuntimeConfig(deployInstanceRequest);
 
     EXPECT_EQ(runtimeConfig.userenvs().size(), static_cast<uint32_t>(8));
-    EXPECT_EQ(runtimeConfig.entryfile(), "/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID + "/test");
+    EXPECT_EQ(runtimeConfig.entryfile(), "/tmp/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID + "/test");
     deployInstanceRequest->set_language(function_agent::JAVA_LANGUAGE);
     runtimeConfig = function_agent::SetRuntimeConfig(deployInstanceRequest);
     EXPECT_EQ(runtimeConfig.entryfile(), TEST_OBJECT_ID + "/test");
@@ -441,7 +441,7 @@ TEST_F(FunctionAgentUtilsTest, HasSuffixSuccess)
 
 TEST_F(FunctionAgentUtilsTest, IsDirSuccess)
 {
-    std::string dir = "/home";
+    std::string dir = "/tmp/home";
     std::string noneDir = "noneDir";
     EXPECT_EQ(function_agent::IsDir(dir), true);
     EXPECT_EQ(function_agent::IsDir(noneDir), false);

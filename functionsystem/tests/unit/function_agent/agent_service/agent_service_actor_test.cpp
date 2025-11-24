@@ -64,7 +64,7 @@ namespace {
     const std::string TEST_OBJECT_ID = "testObjectID";
     const std::string TEST_LAYER_OBJECT_ID = "testObjectID-layer";
     const std::string TEST_LAYER_OBJECT_ID_2 = "testObjectID-layer2";
-    const std::string LOCAL_DEPLOY_DIR = "/home/local/test";
+    const std::string LOCAL_DEPLOY_DIR = "/tmp/home/local/test";
     const std::string TEST_WRONG_FIREWALL_CONFIG = R"([{"firewallConfig": {"chain": "OUTPUT", "table": "", "operation": "add", "target": "127.0.0.1", "args": "-j ACCEPT"}}])";
     const std::string TEST_WRONG_TUNNEL_CONFIG = R"([{"tunnelConfig": {"tunnelName": "", "remoteIP": "127.0.0.1", "mode": "ipip"}}])";
     const std::string TEST_WRONG_ROUTE_CONFIG = R"([{"routeConfig": {"gateway": "127.0.0.1", "cidr": ""}}])";
@@ -271,7 +271,7 @@ inline std::shared_ptr<messages::DeployInstanceRequest> GetDeployInstanceRequest
     deployInstanceReq->set_requestid(requestID);
     deployInstanceReq->set_instanceid(instanceID);
     auto spec = deployInstanceReq->mutable_funcdeployspec();
-    spec->set_deploydir("/home");
+    spec->set_deploydir("/tmp/home");
     spec->set_bucketid(bucketID);
     spec->set_objectid(objectID);
     spec->set_storagetype(function_agent::S3_STORAGE_TYPE);
@@ -359,7 +359,7 @@ TEST_F(AgentServiceActorTest, DeployInstanceErrorRequest)
 
     // package validation failed
     dstActor_->SetFailedDownloadRequests(TEST_REQUEST_ID);
-    spec->set_deploydir("/home");
+    spec->set_deploydir("/tmp/home");
     spec->set_bucketid(TEST_BUCKET_ID);
     spec->set_objectid(TEST_OBJECT_ID);
     testFuncAgentMgrActor_->SendRequestToAgentServiceActor(dstActor_->GetAID(),
@@ -371,7 +371,7 @@ TEST_F(AgentServiceActorTest, DeployInstanceErrorRequest)
     EXPECT_EQ(testFuncAgentMgrActor_->GetDeployInstanceResponse()->code(),
               StatusCode::ERR_USER_CODE_LOAD);
     // package validation failed when downloading other
-    auto destination = "/home";
+    auto destination = "/tmp/home";
     dstActor_->SetFailedDeployingObjects(destination);
     testFuncAgentMgrActor_->SendRequestToAgentServiceActor(dstActor_->GetAID(),
                                                            "DeployInstance",
@@ -585,15 +585,15 @@ TEST_F(AgentServiceActorTest, DeployInstanceWithTwoLayersOfSameDirViaS3)
     deployInstanceReq->set_instanceid(TEST_INSTANCE_ID);
     auto spec = deployInstanceReq->mutable_funcdeployspec();
     spec->set_storagetype(function_agent::S3_STORAGE_TYPE);
-    spec->set_deploydir("/home");
+    spec->set_deploydir("/tmp/home");
     spec->set_bucketid(TEST_BUCKET_ID);
     spec->set_objectid(TEST_OBJECT_ID);
     // add layer one code
     AddLayer(spec->add_layers(), TEST_BUCKET_ID, TEST_LAYER_OBJECT_ID);
     // add layer two code
     AddLayer(spec->add_layers(), TEST_BUCKET_ID, TEST_LAYER_OBJECT_ID);
-    auto destination = "/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
-    auto layerDestination = "/home/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
+    auto destination = "/tmp/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
+    auto layerDestination = "/tmp/home/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
     litebus::os::Rmdir(destination);
     litebus::os::Rmdir(layerDestination);
 
@@ -640,15 +640,15 @@ TEST_F(AgentServiceActorTest, DeployInstanceWithTwoLayersOfSameDirViaS3AtSameTim
     deployInstanceReq->set_instanceid(TEST_INSTANCE_ID);
     auto spec = deployInstanceReq->mutable_funcdeployspec();
     spec->set_storagetype(function_agent::S3_STORAGE_TYPE);
-    spec->set_deploydir("/home");
+    spec->set_deploydir("/tmp/home");
     spec->set_bucketid(TEST_BUCKET_ID);
     spec->set_objectid(TEST_OBJECT_ID);
     // add layer one code
     AddLayer(spec->add_layers(), TEST_BUCKET_ID, TEST_LAYER_OBJECT_ID);
     // add layer two code
     AddLayer(spec->add_layers(), TEST_BUCKET_ID, TEST_LAYER_OBJECT_ID);
-    auto destination = "/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
-    auto layerDestination = "/home/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
+    auto destination = "/tmp/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
+    auto layerDestination = "/tmp/home/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
     litebus::os::Rmdir(destination);
     litebus::os::Rmdir(layerDestination);
 
@@ -701,7 +701,7 @@ TEST_F(AgentServiceActorTest, RepeatedlyDeployInstanceWithOneLayersAndDelegateVi
     deployInstanceReq->set_instanceid(TEST_INSTANCE_ID);
     auto spec = deployInstanceReq->mutable_funcdeployspec();
     spec->set_storagetype(function_agent::S3_STORAGE_TYPE);
-    spec->set_deploydir("/home");
+    spec->set_deploydir("/tmp/home");
     spec->set_bucketid(TEST_BUCKET_ID);
     spec->set_objectid(TEST_OBJECT_ID);
     // add layer code
@@ -713,10 +713,10 @@ TEST_F(AgentServiceActorTest, RepeatedlyDeployInstanceWithOneLayersAndDelegateVi
     // set extractly layer deploy dir
     deployInstanceReq->mutable_createoptions()->insert(
         { "S3_DEPLOY_DIR",
-          "/home/test" });
-    std::string destination = "/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
-    std::string layerDestination = "/home/test/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
-    std::string delegateDestination = "/home/test/layer/func/testUserCodeBucketID/testUserCodeObjectID";
+          "/tmp/home/test" });
+    std::string destination = "/tmp/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
+    std::string layerDestination = "/tmp/home/test/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
+    std::string delegateDestination = "/tmp/home/test/layer/func/testUserCodeBucketID/testUserCodeObjectID";
     litebus::os::Rmdir(destination);
     litebus::os::Rmdir(layerDestination);
     litebus::os::Rmdir(delegateDestination);
@@ -766,9 +766,9 @@ TEST_F(AgentServiceActorTest, RepeatedlyDeployInstanceWithOneLayersAndDelegateVi
     EXPECT_TRUE(litebus::os::Rmdir(delegateDestination).IsNone());
 }
 
-std::string DELEGATE_LAYER_DESTINATION = "/home/test/layer/testUserLibCodeBucketID/testUserLibCodeObjectID";
-std::string DELEGATE_DESTINATION = "/home/test/layer/func/testUserCodeBucketID/testUserCodeObjectID";
-std::string DESTINATION = "/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
+std::string DELEGATE_LAYER_DESTINATION = "/tmp/home/test/layer/testUserLibCodeBucketID/testUserLibCodeObjectID";
+std::string DELEGATE_DESTINATION = "/tmp/home/test/layer/func/testUserCodeBucketID/testUserCodeObjectID";
+std::string DESTINATION = "/tmp/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
 
 void BuildCreateOptions(const std::unique_ptr<messages::DeployInstanceRequest> &request, const std::string &code,
                         const std::string &layer)
@@ -811,7 +811,7 @@ TEST_F(AgentServiceActorTest, DeployInstanceWithDelegateCode)
     deployInstanceReq->set_instanceid(TEST_INSTANCE_ID);
     auto spec = deployInstanceReq->mutable_funcdeployspec();
     spec->set_storagetype(function_agent::S3_STORAGE_TYPE);
-    spec->set_deploydir("/home");
+    spec->set_deploydir("/tmp/home");
     spec->set_bucketid(TEST_BUCKET_ID);
     spec->set_objectid(TEST_OBJECT_ID);
 
@@ -819,7 +819,7 @@ TEST_F(AgentServiceActorTest, DeployInstanceWithDelegateCode)
         deployInstanceReq,
         R"({"appId":"userCode", "bucketId":"testUserCodeBucketID", "objectId":"testUserCodeObjectID", "hostName":"xx", "securityToken":"xxx", "temporayAccessKey":"xxx", "temporarySecretKey":"xxx","sha256":"","sha512":"aaaaaaaa"})",
         R"([{"appId":"userCode-layer", "bucketId":"testUserLibCodeBucketID", "objectId":"testUserLibCodeObjectID", "hostName":"xx", "securityToken":"xxx", "temporayAccessKey":"xxx", "temporarySecretKey":"xxx","sha256":"","sha512":"aaaaaaaa"}])");
-    deployInstanceReq->mutable_createoptions()->insert({ "S3_DEPLOY_DIR", "/home/test" });
+    deployInstanceReq->mutable_createoptions()->insert({ "S3_DEPLOY_DIR", "/tmp/home/test" });
     litebus::os::Rmdir(DESTINATION);
     litebus::os::Rmdir(DELEGATE_LAYER_DESTINATION);
     litebus::os::Rmdir(DELEGATE_DESTINATION);
@@ -878,7 +878,7 @@ TEST_F(AgentServiceActorTest, DeployInstanceWithDelegateCode)
     // set DELEGATE_DOWNLOAD with local file
     BuildCreateOptions(
         deployInstanceReq,
-        R"({"appId":"", "bucketId":"", "objectId":"", "hostName":"xx", "storage_type": "local", "code_path": "/home/test/function-packages"})",
+        R"({"appId":"", "bucketId":"", "objectId":"", "hostName":"xx", "storage_type": "local", "code_path": "/tmp/home/test/function-packages"})",
         R"([{"appId":"userCode-layer", "bucketId":"testUserLibCodeBucketID", "objectId":"testUserLibCodeObjectID", "hostName":"xx"}])");
     startInstanceResponse.set_requestid("testRequestID4");
     EXPECT_CALL(*testRuntimeManager_, MockStartInstanceResponse)
@@ -889,7 +889,7 @@ TEST_F(AgentServiceActorTest, DeployInstanceWithDelegateCode)
                                                            std::move(deployInstanceReq->SerializeAsString()));
     ASSERT_AWAIT_TRUE(
         [&]() -> bool { return testFuncAgentMgrActor_->GetDeployInstanceResponse()->requestid() == "testRequestID4"; });
-    EXPECT_EQ(JudgeCodeReferNum(dstActor_->GetCodeReferManager(), "/home/test/function-packages"),
+    EXPECT_EQ(JudgeCodeReferNum(dstActor_->GetCodeReferManager(), "/tmp/home/test/function-packages"),
               static_cast<uint32_t>(1));
 
     EXPECT_TRUE(litebus::os::Rmdir(DESTINATION).IsNone());
@@ -1133,13 +1133,13 @@ TEST_F(AgentServiceActorTest, DeployAndKillInstanceWithTwoLayerViaS3)
     deployInstanceReq->set_instanceid(TEST_INSTANCE_ID);
     auto spec = deployInstanceReq->mutable_funcdeployspec();
     spec->set_storagetype(function_agent::S3_STORAGE_TYPE);
-    spec->set_deploydir("/home");
+    spec->set_deploydir("/tmp/home");
     spec->set_bucketid(TEST_BUCKET_ID);
     spec->set_objectid(TEST_OBJECT_ID);
     // add layer code
     AddLayer(spec->add_layers(), TEST_BUCKET_ID, TEST_LAYER_OBJECT_ID);
     AddLayer(spec->add_layers(), TEST_BUCKET_ID, TEST_LAYER_OBJECT_ID);
-    auto layerDestination = "/home/layer/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID + "-layer";
+    auto layerDestination = "/tmp/home/layer/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID + "-layer";
     // DeployInstance
     messages::StartInstanceResponse startInstanceResponse;
     startInstanceResponse.set_code(StatusCode::SUCCESS);
@@ -1150,7 +1150,7 @@ TEST_F(AgentServiceActorTest, DeployAndKillInstanceWithTwoLayerViaS3)
     testFuncAgentMgrActor_->SendRequestToAgentServiceActor(dstActor_->GetAID(),
                                                            "DeployInstance",
                                                            std::move(deployInstanceReq->SerializeAsString()));
-    auto destination = "/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
+    auto destination = "/tmp/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
     ASSERT_AWAIT_TRUE([&]() -> bool { return litebus::os::ExistPath(destination); });
     ASSERT_AWAIT_TRUE([&]() -> bool { return litebus::os::ExistPath(layerDestination); });
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1200,7 +1200,7 @@ TEST_F(AgentServiceActorTest, DeployAndKillInstanceWithTwoLayersTwoDelegateLayer
     deployInstanceReq->set_instanceid(TEST_INSTANCE_ID);
     auto spec = deployInstanceReq->mutable_funcdeployspec();
     spec->set_storagetype(function_agent::S3_STORAGE_TYPE);
-    spec->set_deploydir("/home");
+    spec->set_deploydir("/tmp/home");
     spec->set_bucketid(TEST_BUCKET_ID);
     spec->set_objectid(TEST_OBJECT_ID);
     // add two layers
@@ -1217,13 +1217,13 @@ TEST_F(AgentServiceActorTest, DeployAndKillInstanceWithTwoLayersTwoDelegateLayer
     // set extractly layer deploy dir
     deployInstanceReq->mutable_createoptions()->insert(
         { "S3_DEPLOY_DIR",
-          "/home/test" });
-    std::string destination = "/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
-    std::string layerDestination = "/home/test/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
-    std::string layerDestination2 = "/home/test/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID_2;
-    std::string delegateDestination = "/home/test/layer/func/testUserCodeBucketID/testUserCodeObjectID";
-    std::string delegateLayerDestination = "/home/test/layer/testUserCodeBucketID/testUserCodeObjectID-layer";
-    std::string delegateLayerDestination2 = "/home/test/layer/testUserCodeBucketID/testUserCodeObjectID-layer2";
+          "/tmp/home/test" });
+    std::string destination = "/tmp/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
+    std::string layerDestination = "/tmp/home/test/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
+    std::string layerDestination2 = "/tmp/home/test/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID_2;
+    std::string delegateDestination = "/tmp/home/test/layer/func/testUserCodeBucketID/testUserCodeObjectID";
+    std::string delegateLayerDestination = "/tmp/home/test/layer/testUserCodeBucketID/testUserCodeObjectID-layer";
+    std::string delegateLayerDestination2 = "/tmp/home/test/layer/testUserCodeBucketID/testUserCodeObjectID-layer2";
     litebus::os::Rmdir(destination);
     litebus::os::Rmdir(layerDestination);
     litebus::os::Rmdir(layerDestination2);
@@ -1319,7 +1319,7 @@ TEST_F(AgentServiceActorTest, RepeatedlyDeployAndKillInstanceWithOneLayersAndDel
     deployInstanceReq->set_instanceid(TEST_INSTANCE_ID);
     auto spec = deployInstanceReq->mutable_funcdeployspec();
     spec->set_storagetype(function_agent::S3_STORAGE_TYPE);
-    spec->set_deploydir("/home");
+    spec->set_deploydir("/tmp/home");
     spec->set_bucketid(TEST_BUCKET_ID);
     spec->set_objectid(TEST_OBJECT_ID);
     // add layer code
@@ -1328,9 +1328,9 @@ TEST_F(AgentServiceActorTest, RepeatedlyDeployAndKillInstanceWithOneLayersAndDel
     deployInstanceReq->mutable_createoptions()->insert(
         { "DELEGATE_DOWNLOAD",
           R"({"appId": "userCode", "bucketId":"testUserCodeBucketID", "objectId":"testUserCodeObjectID"})" });
-    std::string destination = "/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
-    std::string layerDestination = "/home/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
-    std::string delegateDestination = "/home/layer/func/testUserCodeBucketID/testUserCodeObjectID";
+    std::string destination = "/tmp/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
+    std::string layerDestination = "/tmp/home/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
+    std::string delegateDestination = "/tmp/home/layer/func/testUserCodeBucketID/testUserCodeObjectID";
 
     messages::StartInstanceResponse startInstanceResponse;
     startInstanceResponse.set_code(StatusCode::SUCCESS);
@@ -1851,27 +1851,27 @@ TEST_F(AgentServiceActorTest, DeployInstanceSuccessWithS3WithLayerWithUserCodeDo
     deployInstanceReq->set_instanceid(TEST_INSTANCE_ID);
     deployInstanceReq->set_requestid(TEST_REQUEST_ID);
     // executor destination
-    deployInstanceReq->mutable_funcdeployspec()->set_deploydir("/home");
+    deployInstanceReq->mutable_funcdeployspec()->set_deploydir("/tmp/home");
     deployInstanceReq->mutable_funcdeployspec()->set_bucketid("testBucketID");
     deployInstanceReq->mutable_funcdeployspec()->set_objectid("testObjectID");
-    std::string executorDestination = "/home/layer/func/testBucketID/testObjectID";
+    std::string executorDestination = "/tmp/home/layer/func/testBucketID/testObjectID";
 
     // layer destination
     AddLayer(deployInstanceReq->mutable_funcdeployspec()->add_layers(), TEST_BUCKET_ID, TEST_LAYER_OBJECT_ID);
-    std::string layer1Destination = "/home/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
+    std::string layer1Destination = "/tmp/home/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
 
     // user code destination
     deployInstanceReq->mutable_createoptions()->insert(
         { "DELEGATE_DOWNLOAD",
           R"({"appId": "userCode", "bucketId":"testUserCodeBucketID", "objectId":"testUserCodeObjectID"})" });
-    std::string userCodeDestination = "/home/layer/func/testUserCodeBucketID/testUserCodeObjectID";
+    std::string userCodeDestination = "/tmp/home/layer/func/testUserCodeBucketID/testUserCodeObjectID";
 
     // user code layer destination
     deployInstanceReq->mutable_createoptions()->insert(
         { "DELEGATE_LAYER_DOWNLOAD",
           R"([{"appId": "userCode-layer1", "bucketId":"testUserCodeBucketID", "objectId":"testUserCodeObjectID-layer1"}])" });
-    std::string userCodeLayer1Destination = "/home/layer/testUserCodeBucketID/testUserCodeObjectID-layer1";
-    std::string userCodeLayer2Destination = "/home/layer/testUserCodeBucketID/testUserCodeObjectID-layer2";
+    std::string userCodeLayer1Destination = "/tmp/home/layer/testUserCodeBucketID/testUserCodeObjectID-layer1";
+    std::string userCodeLayer2Destination = "/tmp/home/layer/testUserCodeBucketID/testUserCodeObjectID-layer2";
 
     testFuncAgentMgrActor_->SendRequestToAgentServiceActor(dstActor_->GetAID(),
                                                            "DeployInstance",
@@ -1887,7 +1887,7 @@ TEST_F(AgentServiceActorTest, DeployInstanceSuccessWithS3WithLayerWithUserCodeDo
     startInstanceRequest->ParseFromString(testRuntimeManager_->promiseOfStartInstanceRequest.GetFuture().Get());
     EXPECT_EQ(
         startInstanceRequest->runtimeinstanceinfo().runtimeconfig().posixenvs().find("ENV_DELEGATE_DOWNLOAD")->second,
-        "/home/layer/func/testUserCodeBucketID/testUserCodeObjectID");
+        "/tmp/home/layer/func/testUserCodeBucketID/testUserCodeObjectID");
 
     // start to kill instances
     messages::StopInstanceResponse stopInstanceResponse;
@@ -1916,7 +1916,7 @@ TEST_F(AgentServiceActorTest, DeployInstanceSuccessWithS3WithLayerWithUserCodeDo
     ASSERT_AWAIT_TRUE([&]() -> bool { return !litebus::os::ExistPath(userCodeDestination); });
     ASSERT_AWAIT_TRUE([&]() -> bool { return !litebus::os::ExistPath(userCodeLayer1Destination); });
 
-    (void)litebus::os::Rmdir("/home/layer");
+    (void)litebus::os::Rmdir("/tmp/home/layer");
 }
 
 /**
@@ -1955,22 +1955,22 @@ TEST_F(AgentServiceActorTest, DeployInstanceFailedWithS3WithLayerWithUserCodeDow
     deployInstanceReq->set_instanceid(TEST_INSTANCE_ID);
     deployInstanceReq->set_requestid(TEST_REQUEST_ID);
     // executor destination
-    deployInstanceReq->mutable_funcdeployspec()->set_deploydir("/home");
+    deployInstanceReq->mutable_funcdeployspec()->set_deploydir("/tmp/home");
     deployInstanceReq->mutable_funcdeployspec()->set_bucketid("testBucketID");
     deployInstanceReq->mutable_funcdeployspec()->set_objectid("testObjectID");
-    std::string executorDestination = "/home/layer/func/testBucketID/testObjectID";
+    std::string executorDestination = "/tmp/home/layer/func/testBucketID/testObjectID";
 
     // layer destination
     AddLayer(deployInstanceReq->mutable_funcdeployspec()->add_layers(), TEST_BUCKET_ID, TEST_LAYER_OBJECT_ID);
-    std::string layer1Destination = "/home/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
+    std::string layer1Destination = "/tmp/home/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
 
     // user code destination
     deployInstanceReq->mutable_createoptions()->insert({"DELEGATE_DOWNLOAD", R"({"appId": "userCode", "bucketId":"testUserCodeBucketID", "objectId":"testUserCodeObjectID"})"});
-    std::string userCodeDestination = "/home/layer/func/testUserCodeBucketID/testUserCodeObjectID";
+    std::string userCodeDestination = "/tmp/home/layer/func/testUserCodeBucketID/testUserCodeObjectID";
 
     // user code layer destination
     deployInstanceReq->mutable_createoptions()->insert({"DELEGATE_LAYER_DOWNLOAD", R"([{"appId": "userCode-layer1", "bucketId":"testUserCodeBucketID", "objectId":"testUserCodeObjectID-layer1"}])"});
-    std::string userCodeLayer1Destination = "/home/layer/testUserCodeBucketID/testUserCodeObjectID-layer1";
+    std::string userCodeLayer1Destination = "/tmp/home/layer/testUserCodeBucketID/testUserCodeObjectID-layer1";
 
     testFuncAgentMgrActor_->SendRequestToAgentServiceActor(dstActor_->GetAID(),
                                                            "DeployInstance",
@@ -1982,7 +1982,7 @@ TEST_F(AgentServiceActorTest, DeployInstanceFailedWithS3WithLayerWithUserCodeDow
     ASSERT_AWAIT_TRUE([&]() -> bool { return testFuncAgentMgrActor_->GetDeployInstanceResponse()->message() == TEST_REQUEST_ID; });
     auto startInstanceRequest = std::make_shared<messages::StartInstanceRequest>();
     startInstanceRequest->ParseFromString(testRuntimeManager_->promiseOfStartInstanceRequest.GetFuture().Get());
-    EXPECT_EQ(startInstanceRequest->runtimeinstanceinfo().runtimeconfig().posixenvs().find("ENV_DELEGATE_DOWNLOAD")->second, "/home/layer/func/testUserCodeBucketID/testUserCodeObjectID");
+    EXPECT_EQ(startInstanceRequest->runtimeinstanceinfo().runtimeconfig().posixenvs().find("ENV_DELEGATE_DOWNLOAD")->second, "/tmp/home/layer/func/testUserCodeBucketID/testUserCodeObjectID");
     EXPECT_EQ(startInstanceRequest->runtimeinstanceinfo().deploymentconfig().layers_size(), 2);
     EXPECT_EQ(startInstanceRequest->runtimeinstanceinfo().deploymentconfig().layers(0).bucketid(), TEST_BUCKET_ID);
     EXPECT_EQ(startInstanceRequest->runtimeinstanceinfo().deploymentconfig().layers(0).objectid(), TEST_LAYER_OBJECT_ID);
@@ -1994,7 +1994,7 @@ TEST_F(AgentServiceActorTest, DeployInstanceFailedWithS3WithLayerWithUserCodeDow
     ASSERT_AWAIT_TRUE([&]() -> bool { return !litebus::os::ExistPath(userCodeDestination); });
     ASSERT_AWAIT_TRUE([&]() -> bool { return !litebus::os::ExistPath(userCodeLayer1Destination); });
 
-    (void) litebus::os::Rmdir("/home/layer");
+    (void) litebus::os::Rmdir("/tmp/home/layer");
 }
 
 TEST_F(AgentServiceActorTest, CodeReferAddAndDeleteTest)
@@ -2149,10 +2149,10 @@ TEST_F(AgentServiceActorTest, TestCodeReferDeployKillDeploySuccessive)
 {
     messages::DeployInstanceRequest deployReq;
     deployReq.mutable_funcdeployspec()->set_storagetype(function_agent::S3_STORAGE_TYPE);
-    deployReq.mutable_funcdeployspec()->set_deploydir("/home");
+    deployReq.mutable_funcdeployspec()->set_deploydir("/tmp/home");
     deployReq.mutable_funcdeployspec()->set_bucketid(TEST_BUCKET_ID);
     deployReq.mutable_funcdeployspec()->set_objectid(TEST_OBJECT_ID);
-    auto destination = "/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
+    auto destination = "/tmp/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
     litebus::os::Rmdir(destination);
 
     messages::StartInstanceResponse startInstanceResponse;
@@ -2188,7 +2188,7 @@ TEST_F(AgentServiceActorTest, TestCodeReferDeployKillDeploySuccessive)
     deployReq.set_requestid(TEST_REQUEST_ID_2);
     deployReq.set_instanceid(TEST_INSTANCE_ID_2);
     AddLayer(deployReq.mutable_funcdeployspec()->add_layers(), TEST_BUCKET_ID, TEST_LAYER_OBJECT_ID);
-    auto layerDestination = "/home/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
+    auto layerDestination = "/tmp/home/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
     testFuncAgentMgrActor_->SendRequestToAgentServiceActor(dstActor_->GetAID(),
                                                            "DeployInstance",
                                                            deployReq.SerializeAsString());
@@ -2234,19 +2234,19 @@ TEST_F(AgentServiceActorTest, CleanStatusWithExistedInstanceTest)
     deployInstanceReq.set_instanceid(TEST_INSTANCE_ID);
     auto spec = deployInstanceReq.mutable_funcdeployspec();
     spec->set_storagetype(function_agent::S3_STORAGE_TYPE);
-    spec->set_deploydir("/home/test");
+    spec->set_deploydir("/tmp/home/test");
     spec->set_bucketid(TEST_BUCKET_ID);
     spec->set_objectid(TEST_OBJECT_ID);
     AddLayer(spec->add_layers(), TEST_BUCKET_ID, TEST_LAYER_OBJECT_ID);
-    auto destination = "/home/test/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
-    auto layerDestination = "/home/test/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
+    auto destination = "/tmp/home/test/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
+    auto layerDestination = "/tmp/home/test/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
 
     auto deployInstanceReq2 = deployInstanceReq;
     deployInstanceReq2.set_instanceid(TEST_INSTANCE_ID_2);
-    deployInstanceReq2.mutable_funcdeployspec()->set_deploydir("/home/test2");
+    deployInstanceReq2.mutable_funcdeployspec()->set_deploydir("/tmp/home/test2");
     AddLayer(deployInstanceReq2.mutable_funcdeployspec()->add_layers(), TEST_BUCKET_ID, TEST_LAYER_OBJECT_ID_2);
-    auto destination2 = "/home/test2/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
-    auto layerDestination2 = "/home/test2/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
+    auto destination2 = "/tmp/home/test2/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
+    auto layerDestination2 = "/tmp/home/test2/layer/" + TEST_BUCKET_ID + "/" + TEST_LAYER_OBJECT_ID;
 
     litebus::os::Rmdir(destination);
     litebus::os::Rmdir(destination2);
@@ -2461,12 +2461,12 @@ TEST_F(AgentServiceActorTest, DeployInstanceWithCopyDeployer)
     deployer->Clear(destination, "test");
     EXPECT_FALSE(litebus::os::ExistPath(destination));
     // code deployer with error
-    destination = deployer->GetDestination("", "", "/home/local/test1");
+    destination = deployer->GetDestination("", "", "/tmp/home/local/test1");
     EXPECT_EQ(JudgeCodeReferNum(dstActor_->GetCodeReferManager(), destination), static_cast<uint32_t>(0));
     deployInstanceReq->set_requestid("request123");
     deployInstanceReq->set_instanceid("inst123");
     spec->set_objectid("");
-    spec->set_deploydir("/home/local/test1");
+    spec->set_deploydir("/tmp/home/local/test1");
     testFuncAgentMgrActor_->ResetDeployInstanceResponse();
     testFuncAgentMgrActor_->SendRequestToAgentServiceActor(dstActor_->GetAID(),
                                                            "DeployInstance",
@@ -2488,13 +2488,13 @@ TEST_F(AgentServiceActorTest, DeployMonopolyInstanceWithS3Deployer)
     deployInstanceReq->mutable_createoptions()->insert(
         { "DELEGATE_DOWNLOAD",
           R"({"appId":"userCode", "bucketId":"testUserCodeBucketID", "objectId":"testUserCodeObjectID", "hostName":"xx", "securityToken":"xxx", "temporayAccessKey":"xxx", "temporarySecretKey":"xxx"})" });
-    deployInstanceReq->mutable_createoptions()->insert({ "S3_DEPLOY_DIR","/home/test" });
+    deployInstanceReq->mutable_createoptions()->insert({ "S3_DEPLOY_DIR","/tmp/home/test" });
     deployInstanceReq->mutable_scheduleoption()->set_schedpolicyname("monopoly");
     messages::StartInstanceResponse startInstanceResponse;
     startInstanceResponse.set_code(StatusCode::SUCCESS);
     startInstanceResponse.set_requestid(TEST_REQUEST_ID);
     startInstanceResponse.mutable_startruntimeinstanceresponse()->set_runtimeid(TEST_RUNTIME_ID);
-    std::string destination = "/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
+    std::string destination = "/tmp/home/layer/func/" + TEST_BUCKET_ID + "/" + TEST_OBJECT_ID;
     litebus::os::Rmdir(destination);
     EXPECT_CALL(*testRuntimeManager_, MockStartInstanceResponse)
         .WillOnce(Return(startInstanceResponse.SerializeAsString()));
@@ -2515,9 +2515,9 @@ TEST_F(AgentServiceActorTest, PythonRuntime_Support_WorkingDirFileZip_WithOut_En
     deployInstanceReq->set_language("/usr/bin/python3.9");
     auto spec = deployInstanceReq->mutable_funcdeployspec();
     spec->set_storagetype(function_agent::WORKING_DIR_STORAGE_TYPE);
-    auto deployDir = "/home/sn/function/package/xxxz";
+    auto deployDir = "/tmp/home/sn/function/package/xxxz";
     std::string workingDirFile = "file:///tmp/working_dir-tmp/file.zip";
-    auto destination = "/home/sn/function/package/xxxz/app/working_dir/" + CalculateFileMD5(workingDirFile.substr(7));
+    auto destination = "/tmp/home/sn/function/package/xxxz/app/working_dir/" + CalculateFileMD5(workingDirFile.substr(7));
     (void)litebus::os::Rmdir(deployDir);
     spec->set_deploydir(deployDir);
     std::string optionDetail =
@@ -2586,9 +2586,9 @@ TEST_F(AgentServiceActorTest, AppDriver_Support_DeployInstanceWithWorkingDirDepl
                                                       // absence of an entryfile is not used as a judgment criterion.
     auto spec = deployInstanceReq->mutable_funcdeployspec();
     spec->set_storagetype(function_agent::WORKING_DIR_STORAGE_TYPE);
-    auto deployDir = "/home/sn/function/package/xxxz";
+    auto deployDir = "/tmp/home/sn/function/package/xxxz";
     std::string workingDirFile = "file:///tmp/working_dir-tmp/file.zip";
-    auto destination = "/home/sn/function/package/xxxz/app/working_dir/" + CalculateFileMD5(workingDirFile.substr(7));
+    auto destination = "/tmp/home/sn/function/package/xxxz/app/working_dir/" + CalculateFileMD5(workingDirFile.substr(7));
     (void)litebus::os::Rmdir(deployDir);
     spec->set_deploydir(deployDir);
     // add create options delegate code working_dir zip file
@@ -2650,9 +2650,9 @@ TEST_F(AgentServiceActorTest, AppDriver_Support_DeployInstanceWithWorkingDirDepl
 TEST_F(AgentServiceActorTest, MultiInstance_WithSameWorkingDirFileZip)
 {
     PrepareWorkingDir("/tmp/working_dir-tmp");
-    auto deployDir = "/home/sn/function/package/xxxz";
+    auto deployDir = "/tmp/home/sn/function/package/xxxz";
     std::string workingDirFile = "file:///tmp/working_dir-tmp/file.zip";
-    auto destination = "/home/sn/function/package/xxxz/app/working_dir/" + CalculateFileMD5(workingDirFile.substr(7));
+    auto destination = "/tmp/home/sn/function/package/xxxz/app/working_dir/" + CalculateFileMD5(workingDirFile.substr(7));
     for (int i = 0; i < 2; ++i) {
         auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
         deployInstanceReq->set_requestid(TEST_REQUEST_ID + std::to_string(i));
@@ -2722,13 +2722,13 @@ TEST_F(AgentServiceActorTest, MultiInstance_WithSameWorkingDirFileZip)
 TEST_F(AgentServiceActorTest, MultiInstance_ModifiedWorkingDirFileZip)
 {
     PrepareWorkingDir("/tmp/working_dir-tmp");
-    auto deployDir = "/home/sn/function/package/xxxz";
+    auto deployDir = "/tmp/home/sn/function/package/xxxz";
     std::string workingDirFile = "file:///tmp/working_dir-tmp/file.zip";
     std::string destination;
     for (int i = 0; i < 2; ++i) {
         if (i == 1) {
             ModifyWorkingDir("/tmp/working_dir-tmp");
-            destination = "/home/sn/function/package/xxxz/app/working_dir/" + CalculateFileMD5(workingDirFile.substr(7));
+            destination = "/tmp/home/sn/function/package/xxxz/app/working_dir/" + CalculateFileMD5(workingDirFile.substr(7));
         }
         auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
         deployInstanceReq->set_requestid(TEST_REQUEST_ID + std::to_string(i));
@@ -2807,9 +2807,9 @@ TEST_F(AgentServiceActorTest, DeployInstanceWithWorkingDirDeployer_Ray_Serve_Wit
                                                       // absence of an entryfile is not used as a judgment criterion.
     auto spec = deployInstanceReq->mutable_funcdeployspec();
     spec->set_storagetype(function_agent::S3_STORAGE_TYPE);
-    auto deployDir = "/home/sn/function/package/xxxz";
+    auto deployDir = "/tmp/home/sn/function/package/xxxz";
     std::string workingDirFile = "file:///tmp/working_dir-tmp/file.zip";
-    auto destination = "/home/sn/function/package/xxxz/app/working_dir/" + CalculateFileMD5(workingDirFile.substr(7));
+    auto destination = "/tmp/home/sn/function/package/xxxz/app/working_dir/" + CalculateFileMD5(workingDirFile.substr(7));
     (void)litebus::os::Rmdir(deployDir);
     spec->set_deploydir(deployDir);
     // add create options delegate code working_dir zip file, but without APP_ENTRYPOINT in createOptions
@@ -2855,8 +2855,8 @@ TEST_F(AgentServiceActorTest, DeployInstanceWithWorkingDir_ErrorInputFile_Create
     deployInstanceReq->set_entryfile(appEntryPoint);  // app entrypoint set from proxy
     auto spec = deployInstanceReq->mutable_funcdeployspec();
     spec->set_storagetype(function_agent::WORKING_DIR_STORAGE_TYPE);
-    auto deployDir = "/home/sn/function/package/xxxz";
-    auto destination = "/home/sn/function/package/xxxz/app/working_dir/" + TEST_INSTANCE_ID;
+    auto deployDir = "/tmp/home/sn/function/package/xxxz";
+    auto destination = "/tmp/home/sn/function/package/xxxz/app/working_dir/" + TEST_INSTANCE_ID;
     (void)litebus::os::Rmdir(deployDir);
     EXPECT_TRUE(!litebus::os::ExistPath(destination));
     spec->set_deploydir(deployDir);
@@ -2889,8 +2889,8 @@ TEST_F(AgentServiceActorTest, DeployInstanceWithWorkingDir_ErrorInput_Createopti
     deployInstanceReq->set_entryfile(appEntryPoint);  // app entrypoint set from proxy
     auto spec = deployInstanceReq->mutable_funcdeployspec();
     spec->set_storagetype(function_agent::WORKING_DIR_STORAGE_TYPE);
-    auto deployDir = "/home/sn/function/package/xxxz";
-    auto destination = "/home/sn/function/package/xxxz/app/working_dir/" + TEST_INSTANCE_ID;
+    auto deployDir = "/tmp/home/sn/function/package/xxxz";
+    auto destination = "/tmp/home/sn/function/package/xxxz/app/working_dir/" + TEST_INSTANCE_ID;
     (void)litebus::os::Rmdir(deployDir);
     EXPECT_TRUE(!litebus::os::ExistPath(destination));
     spec->set_deploydir(deployDir);
@@ -2928,7 +2928,7 @@ TEST_F(AgentServiceActorTest, DeployInstanceWithWorkingDirCpp)
 
     auto spec = deployInstanceReq->mutable_funcdeployspec();
     spec->set_storagetype(function_agent::WORKING_DIR_STORAGE_TYPE);
-    auto deployDir = "/home/sn/function/package/xxxz";
+    auto deployDir = "/tmp/home/sn/function/package/xxxz";
     std::string destination = "/tmp/working_dir-tmp/";
     (void)litebus::os::Rmdir(deployDir);
     EXPECT_TRUE(litebus::os::ExistPath(destination));
@@ -3008,7 +3008,7 @@ const std::string STATIC_FUNCTION_META_JSON = R"delim({"funcMetaData":{"layers":
 
 TEST_F(AgentServiceActorTest, CreateStaticFunctionInstanceTest)
 {
-    const std::string user_dir = "/home/static-function-test";
+    const std::string user_dir = "/tmp/home/static-function-test";
 
     auto res = dstActor_->CreateStaticFunctionInstance();
     EXPECT_EQ(res.Get().StatusCode(), -1);  // env not exist
@@ -3030,7 +3030,7 @@ TEST_F(AgentServiceActorTest, CreateStaticFunctionInstanceTest)
     res = dstActor_->CreateStaticFunctionInstance();
     EXPECT_EQ(res.Get().StatusCode(), -1);  // function meta file not exist
 
-    (void)litebus::os::Mkdir(user_dir);  // why /home/test/config/ ?
+    (void)litebus::os::Mkdir(user_dir);  // why /tmp/home/test/config/ ?
 
     Write(user_dir + "/functionMeta.json", "");
     res = dstActor_->CreateStaticFunctionInstance();

@@ -49,7 +49,7 @@ TEST_F(FunctionAgentDriverTest, DriverTest)
         "--access_key=",
         "--secret_key=",
         "--s3_endpoint=",
-        R"(--log_config={"filepath": "/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
+        R"(--log_config={"filepath": "/tmp/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
     };
     flags.ParseFlags(11, argv, true);
     EXPECT_EQ(flags.GetIP(), "127.0.0.1");

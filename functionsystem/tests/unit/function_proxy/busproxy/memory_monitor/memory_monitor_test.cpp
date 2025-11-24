@@ -24,7 +24,7 @@
 #include "busproxy/memory_monitor/memory_monitor.h"
 
 namespace functionsystem::test {
-const std::string FILE_PATH = "/home/sn/";
+const std::string FILE_PATH = "/tmp/home/sn/";
 const std::string FILE_NAME = "memory.stat";
 const float DEFAULT_LOW_MEMORY_THRESHOLD = 0.6;
 const float DEFAULT_HIGH_MEMORY_THRESHOLD = 0.8;

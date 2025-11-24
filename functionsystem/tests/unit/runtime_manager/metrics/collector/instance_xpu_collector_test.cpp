@@ -109,13 +109,13 @@ TEST_F(InstanceXpuCollectorTest, InstanceNPUCollectorGetUsage)
     auto cmdTool = std::make_shared<MockCmdTools>();
     auto params = std::make_shared<runtime_manager::XPUCollectorParams>();
     params->ldLibraryPath = "";
-    params->deviceInfoPath = "/home/sn/config/topology-info.json";
+    params->deviceInfoPath = "/tmp/home/sn/config/topology-info.json";
     params->collectMode = runtime_manager::NPU_COLLECT_HBM;
     auto probe = std::make_shared<runtime_manager::NpuProbe>("co200", tool, cmdTool, params);
     EXPECT_CALL(*cmdTool.get(), GetCmdResult("npu-smi info")).WillRepeatedly(testing::Return(npuinfoStrToVector(npuSmiInfo910B)));
     EXPECT_CALL(*cmdTool.get(), GetCmdResult("pip3 list")).WillRepeatedly(testing::Return(npuinfoStrToVector("")));
 
-    auto deployDir = "/home/sn/function/package/xxxz";
+    auto deployDir = "/tmp/home/sn/function/package/xxxz";
     auto startReq = std::make_shared<messages::StartInstanceRequest>();
     startReq->mutable_runtimeinstanceinfo()->mutable_runtimeconfig()->mutable_userenvs()->insert({"func-NPU-DEVICE-IDS", "0"});
     runtime_manager::InstInfoWithXPU info = {472206, "instanceID1", deployDir, startReq->runtimeinstanceinfo(), "co200"};

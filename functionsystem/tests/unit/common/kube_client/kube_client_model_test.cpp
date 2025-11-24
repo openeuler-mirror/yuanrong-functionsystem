@@ -1389,7 +1389,7 @@ TEST_F(KubeClientModelTest, V1VolumeTest)
     // host path
     std::shared_ptr<V1HostPathVolumeSource> HostPath = std::make_shared<V1HostPathVolumeSource>();
     HostPath->SetType("host");
-    HostPath->SetPath("/home");
+    HostPath->SetPath("/tmp/home");
     V1Volume_->SetHostPath(HostPath);
     // secret
     std::shared_ptr<V1SecretVolumeSource> Secret = std::make_shared<V1SecretVolumeSource>();

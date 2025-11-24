@@ -198,7 +198,7 @@ TEST_F(MetricsAdapterTest, InitImmediatelyMetricsFromJson)
                     {
                         "fileExporter": {
                             "enable": true,
-                            "fileDir": "/home/sn/metrics/",
+                            "fileDir": "/tmp/home/sn/metrics/",
                             "rolling": {
                                 "enable": true,
                                 "maxFiles": 3,
@@ -244,7 +244,7 @@ TEST_F(MetricsAdapterTest, InitBatchMetricsFromJson)
                             "batchSize": 2,
                             "batchIntervalSec": 10,
                             "failureQueueMaxSize": 2,
-                            "failureDataDir": "/home/sn/metrics/failure",
+                            "failureDataDir": "/tmp/home/sn/metrics/failure",
                             "failureDataFileMaxCapacity": 1,
                             "initConfig": {
                                 "fileDir": "",
@@ -859,7 +859,7 @@ TEST_F(MetricsAdapterTest, ReportInstanceStatus)
               "batchSize": 20,
               "batchIntervalSec": 10,
               "failureQueueMaxSize": 100,
-              "failureDataDir": "/home/sn/metrics/failure",
+              "failureDataDir": "/tmp/home/sn/metrics/failure",
               "failureDataFileMaxCapacity": 10,
               "enabledInstruments": [
                 "yr_app_instance_status"
@@ -905,7 +905,7 @@ TEST_F(MetricsAdapterTest, ReportInstanceExitLatency)
               "batchSize": 20,
               "batchIntervalSec": 10,
               "failureQueueMaxSize": 100,
-              "failureDataDir": "/home/sn/metrics/failure",
+              "failureDataDir": "/tmp/home/sn/metrics/failure",
               "failureDataFileMaxCapacity": 10,
               "enabledInstruments": [
                 "yr_instance_exit_latency"

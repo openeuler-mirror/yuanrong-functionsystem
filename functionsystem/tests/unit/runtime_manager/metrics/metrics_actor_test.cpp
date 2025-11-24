@@ -304,7 +304,7 @@ TEST_F(MetricsActorTest, MonitorDiskUsageTest)
     litebus::Async(metricsActor_->GetAID(), &TestMetricsActor::UpdateAgentInfo, mockFuncAgentActor->GetAID());
 
     litebus::os::Rmdir("/diskMonitorTestDir");
-    litebus::os::Rmdir("/home/snuser/testdir");
+    litebus::os::Rmdir("/tmp/home/snuser/testdir");
     litebus::os::Rmdir("/tmp/MetricsActorTest/testdir");
     std::string dir = "/diskMonitorTestDir";
     litebus::os::Mkdir(dir);
@@ -313,7 +313,7 @@ TEST_F(MetricsActorTest, MonitorDiskUsageTest)
                            "--node_id=node1",
                            "--ip=127.0.0.1",
                            "--host_ip=127.0.0.1",
-                           "--runtime_ld_library_path=/home/sn/runtime",
+                           "--runtime_ld_library_path=/tmp/home/sn/runtime",
                            portOption.c_str(),
                            "--agent_address=127.0.0.1:8081",
                            "--runtime_initial_port=20000",
@@ -339,7 +339,7 @@ TEST_F(MetricsActorTest, MonitorDiskUsageTest)
     mockFuncAgentActor->requestArray_.clear();
     litebus::os::Rmdir(dir);
     // write snuser file
-    dir = "/home/snuser/testdir";
+    dir = "/tmp/home/snuser/testdir";
     litebus::os::Rmdir(dir);
     litebus::os::Mkdir(dir);
     ExecuteCommand("dd if=/dev/zero of=" + dir + "/test.txt bs=2M count=1");
@@ -375,7 +375,7 @@ TEST_F(MetricsActorTest, MonitorDiskUsageErrorTest)
     litebus::Async(metricsActor_->GetAID(), &TestMetricsActor::UpdateAgentInfo, mockFuncAgentActor->GetAID());
 
     litebus::os::Rmdir("/diskMonitorTestDir");
-    litebus::os::Rmdir("/home/snuser/testdir");
+    litebus::os::Rmdir("/tmp/home/snuser/testdir");
     litebus::os::Rmdir("/tmp/MetricsActorTest/testdir");
     std::string dir = "/diskMonitorTestDir";
     litebus::os::Mkdir(dir);
@@ -384,7 +384,7 @@ TEST_F(MetricsActorTest, MonitorDiskUsageErrorTest)
         "--node_id=node1",
         "--ip=127.0.0.1",
         "--host_ip=127.0.0.1",
-        "--runtime_ld_library_path=/home/sn/runtime",
+        "--runtime_ld_library_path=/tmp/home/sn/runtime",
         portOption.c_str(),
         "--agent_address=127.0.0.1:8081",
         "--runtime_initial_port=20000",
@@ -422,7 +422,7 @@ TEST_F(MetricsActorTest, OomMonitor_ExceedControlLimit_Trigger_OomKillInstance)
                            "--ip=127.0.0.1",
                            "--proxy_ip=",
                            "--host_ip=127.0.0.1",
-                           "--runtime_ld_library_path=/home/sn/runtime",
+                           "--runtime_ld_library_path=/tmp/home/sn/runtime",
                            portOption.c_str(),
                            "--agent_address=127.0.0.1:8081",
                            "--runtime_initial_port=20000",
@@ -528,7 +528,7 @@ TEST_F(MetricsActorTest, CustomResourceTest)
         "--ip=127.0.0.1",
         "--proxy_ip=127.0.0.1",
         "--host_ip=127.0.0.1",
-        "--runtime_ld_library_path=/home/sn/runtime",
+        "--runtime_ld_library_path=/tmp/home/sn/runtime",
         portOption.c_str(),
         "--agent_address=127.0.0.1:8081",
         "--runtime_initial_port=20000",
@@ -574,7 +574,7 @@ TEST_F(MetricsActorTest, DiskResourceTestWithMixedConfig)
                            "--ip=127.0.0.1",
                            "--proxy_ip=127.0.0.1",
                            "--host_ip=127.0.0.1",
-                           "--runtime_ld_library_path=/home/sn/runtime",
+                           "--runtime_ld_library_path=/tmp/home/sn/runtime",
                            portOption.c_str(),
                            "--agent_address=127.0.0.1:8081",
                            "--runtime_initial_port=20000",
