@@ -18,6 +18,8 @@
 #define SRC_COMMON_CONSTANTS_SIGNAL_H
 
 #include <cstdint>
+#include <string>
+#include <unordered_map>
 
 namespace functionsystem {
 // Minimum signal range
@@ -44,6 +46,42 @@ const int32_t REMOVE_RESOURCE_GROUP = 8;
 const int32_t SUBSCRIBE_SIGNAL = 9;
 const int32_t NOTIFY_SIGNAL = 10;
 const int32_t UNSUBSCRIBE_SIGNAL = 11;
+// signal for instance to making checkpint
+const int32_t INSTANCE_CHECKPOINT_SIGNAL = 12;
+// signal for instance to be suspend state after making checkpoint
+const int32_t INSTANCE_TRANS_SUSPEND_SIGNAL = 13;
+// signal for instance to be suspend (checkpoint & state change & resource release)
+const int32_t INSTANCE_SUSPEND_SIGNAL = 14;
+// signal for instance resume (todo)
+const int32_t INSTANCE_RESUME_SIGNAL = 15;
+// signal for group suspend
+const int32_t GROUP_SUSPEND_SIGNAL = 16;
+// signal for group resume
+const int32_t GROUP_RESUME_SIGNAL = 17;
+
+inline std::string SignalToString(int32_t signal)
+{
+    static std::unordered_map<int32_t, std::string> signalMap = {
+        { SHUT_DOWN_SIGNAL, "SHUT_DOWN_SIGNAL" },
+        { SHUT_DOWN_SIGNAL_ALL, "SHUT_DOWN_SIGNAL_ALL" },
+        { SHUT_DOWN_SIGNAL_SYNC, "SHUT_DOWN_SIGNAL_SYNC" },
+        { SHUT_DOWN_SIGNAL_GROUP, "SHUT_DOWN_SIGNAL_GROUP" },
+        { GROUP_EXIT_SIGNAL, "GROUP_EXIT_SIGNAL" },
+        { FAMILY_EXIT_SIGNAL, "FAMILY_EXIT_SIGNAL" },
+        { APP_STOP_SIGNAL, "APP_STOP_SIGNAL" },
+        { REMOVE_RESOURCE_GROUP, "REMOVE_RESOURCE_GROUP" },
+        { SUBSCRIBE_SIGNAL, "SUBSCRIBE_SIGNAL" },
+        { NOTIFY_SIGNAL, "NOTIFY_SIGNAL" },
+        { UNSUBSCRIBE_SIGNAL, "UNSUBSCRIBE_SIGNAL" },
+        { INSTANCE_CHECKPOINT_SIGNAL, "INSTANCE_CHECKPOINT_SIGNAL" },
+        { INSTANCE_TRANS_SUSPEND_SIGNAL, "INSTANCE_TRANS_SUSPEND_SIGNAL" },
+        { INSTANCE_SUSPEND_SIGNAL, "INSTANCE_SUSPEND_SIGNAL" },
+        { INSTANCE_RESUME_SIGNAL, "INSTANCE_RESUME_SIGNAL" },
+        { GROUP_SUSPEND_SIGNAL, "GROUP_SUSPEND_SIGNAL" },
+        { GROUP_RESUME_SIGNAL, "GROUP_RESUME_SIGNAL" },
+    };
+    return signalMap.find(signal) != signalMap.end() ? signalMap.at(signal) : "UnknownSignal";
+}
 }
 
 #endif  // SRC_COMMON_CONSTANTS_SIGNAL_H

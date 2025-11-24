@@ -116,11 +116,12 @@ public:
      * @param msg Serialized ReportNodeFaultRequest
      */
     void NotifyWorkerStatus(const litebus::AID &from, std::string &&, std::string &&msg);
+
     /**
-     * Received resource reservation return value
+     * Received batch resource reservation return value
      * @param msg Serialized ReserveResponse
      */
-    void OnReserve(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void OnReserves(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     /**
      * Returned result of accepting instance specialization binding
@@ -147,10 +148,10 @@ public:
     void ResponsePreemptInstance(const litebus::AID &from, std::string &&, std::string &&msg);
 
     /* *
-     * Reserve request resource to underlayer
+     * Batch Reserve request resource to underlayer
      */
-    litebus::Future<std::shared_ptr<messages::ScheduleResponse>> Reserve(
-        const std::string &selectedName, const std::shared_ptr<messages::ScheduleRequest> &req);
+    litebus::Future<std::shared_ptr<messages::OnReserves>> Reserves(
+        const std::string &selectedName, const std::shared_ptr<messages::Reserves> &req);
 
     litebus::Future<Status> UnReserve(const std::string &selectedName,
                                       const std::shared_ptr<messages::ScheduleRequest> &req);
@@ -245,16 +246,16 @@ private:
                         requestMatch_);
 
     const uint32_t groupTimeout_ = 5000;
-    void DoReserve(const std::shared_ptr<litebus::Promise<std::shared_ptr<messages::ScheduleResponse>>> &promise,
-                   const std::string &selectedName, const std::shared_ptr<messages::ScheduleRequest> &req);
+    void DoReserves(const std::shared_ptr<litebus::Promise<std::shared_ptr<messages::OnReserves>>> &promise,
+                   const std::string &selectedName, const std::shared_ptr<messages::Reserves> &req);
     void SendMethodWithRetry(const std::shared_ptr<litebus::Promise<Status>> &promise, const std::string &method,
                              RequestSyncHelper<UnderlayerSchedMgrActor, Status> *syncHelper,
                              const std::string &selectedName, const std::shared_ptr<messages::ScheduleRequest> &req);
     void ReceiveGroupMethod(RequestSyncHelper<UnderlayerSchedMgrActor, Status> *syncHelper, const litebus::AID &from,
                             std::string &&name, std::string &&msg);
 
-    REQUEST_SYNC_HELPER(UnderlayerSchedMgrActor, std::shared_ptr<messages::ScheduleResponse>, groupTimeout_,
-                        requestReserveMatch_);
+    REQUEST_SYNC_HELPER(UnderlayerSchedMgrActor, std::shared_ptr<messages::OnReserves>, groupTimeout_,
+                        requestReservesMatch_);
     REQUEST_SYNC_HELPER(UnderlayerSchedMgrActor, Status, groupTimeout_, requestUnReserveMatch_);
     REQUEST_SYNC_HELPER(UnderlayerSchedMgrActor, Status, groupTimeout_, requestBindMatch_);
     REQUEST_SYNC_HELPER(UnderlayerSchedMgrActor, Status, groupTimeout_, requestUnBindMatch_);

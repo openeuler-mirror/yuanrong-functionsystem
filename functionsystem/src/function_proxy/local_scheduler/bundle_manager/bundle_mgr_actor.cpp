@@ -72,7 +72,7 @@ void BundleMgrActor::Init()
             litebus::Async(aid, &BundleMgrActor::UpdateMasterInfo, leaderInfo);
         });
 
-    Receive("Reserve", &BundleMgrActor::Reserve);
+    Receive("Reserves", &BundleMgrActor::Reserves);
     Receive("UnReserve", &BundleMgrActor::UnReserve);
     Receive("Bind", &BundleMgrActor::Bind);
     Receive("UnBind", &BundleMgrActor::UnBind);
@@ -109,12 +109,47 @@ litebus::Future<Status> BundleMgrActor::Recover()
     return Status::OK();
 }
 
-void BundleMgrActor::Reserve(const litebus::AID &from, std::string &&name, std::string &&msg)
+void BundleMgrActor::Reserves(const litebus::AID &from, std::string &&name, std::string &&msg)
 {
-    auto req = std::make_shared<messages::ScheduleRequest>();
-    if (!IsPreCheckPassed(from, std::move(name), std::move(msg), req)) {
+    auto req = std::make_shared<messages::Reserves>();
+    if (!IsReady()) {
+        YRLOG_WARN("Failed to {}, bundle manager actor not ready", name);
         return;
     }
+    if (!req->ParseFromString(msg)) {
+        YRLOG_ERROR("Failed to parse request for reserve resource. from({}) msg({}), ignore it", std::string(from),
+                    msg);
+        return;
+    }
+    YRLOG_INFO("{}|{}|received request of batch reserve bundle({}) resource, groupID({})", req->traceid(),
+               req->requestid(), fmt::join(req->instanceids().begin(), req->instanceids().end(), ","), req->groupid());
+    auto resp = std::make_shared<messages::OnReserves>();
+    resp->set_requestid(req->requestid());
+    resp->set_traceid(req->traceid());
+    std::list<litebus::Future<std::shared_ptr<messages::ScheduleResponse>>> futures;
+    for (auto r : req->reserves()) {
+        auto scheReq = std::make_shared<messages::ScheduleRequest>(r);
+        futures.emplace_back(DoReserve(scheReq));
+    }
+    (void)litebus::Collect(futures).OnComplete(
+        [resp, from,
+         aid(GetAID())](const litebus::Future<std::list<std::shared_ptr<messages::ScheduleResponse>>> &future) {
+            ASSERT_FS(future.IsOK());
+            auto rsps = future.Get();
+            for (auto rsp : rsps) {
+                *resp->add_responses() = std::move(*rsp);
+            }
+            litebus::Async(aid, &BundleMgrActor::CollectResourceChangesForOnReserves, resp)
+                .Then([aid, from, resp](const Status &status) -> litebus::Future<Status> {
+                    litebus::Async(aid, &BundleMgrActor::SendMsg, from, "OnReserves", resp->SerializeAsString());
+                    return status;
+                });
+        });
+}
+
+litebus::Future<std::shared_ptr<messages::ScheduleResponse>> BundleMgrActor::DoReserve(
+    std::shared_ptr<messages::ScheduleRequest> &req)
+{
     auto resp = std::make_shared<messages::ScheduleResponse>();
     resp->set_requestid(req->requestid());
     resp->set_instanceid(req->instance().instanceid());
@@ -126,14 +161,11 @@ void BundleMgrActor::Reserve(const litebus::AID &from, std::string &&name, std::
         litebus::TimerTools::Cancel(reserveResult_[req->requestid()].reserveTimer);
         reserveResult_[req->requestid()].reserveTimer =
             litebus::AsyncAfter(reserveToBindTimeoutMs_, GetAID(), &BundleMgrActor::TimeoutToBind, req);
-        Send(from, "OnReserve", resp->SerializeAsString());
-        return;
+        return resp;
     }
-    YRLOG_INFO("{}|{}|received request of reserve bundle({}) resource, from({})", req->traceid(), req->requestid(),
-               req->instance().instanceid(), from.HashString());
     ASSERT_IF_NULL(scheduler_);
-    scheduler_->ScheduleDecision(req).OnComplete(
-        litebus::Defer(GetAID(), &BundleMgrActor::OnReserve, from, std::placeholders::_1, req, resp));
+    return scheduler_->ScheduleDecision(req).Then(
+        litebus::Defer(GetAID(), &BundleMgrActor::OnReserve, std::placeholders::_1, req, resp));
 }
 
 void BundleMgrActor::UnReserve(const litebus::AID &from, std::string &&name, std::string &&msg)
@@ -249,9 +281,10 @@ void BundleMgrActor::TimeoutToBind(const std::shared_ptr<messages::ScheduleReque
     (void)reserveResult_.erase(req->requestid());
 }
 
-void BundleMgrActor::OnReserve(const litebus::AID &to, const litebus::Future<schedule_decision::ScheduleResult> &future,
-                               const std::shared_ptr<messages::ScheduleRequest> &req,
-                               const std::shared_ptr<messages::ScheduleResponse> &resp)
+litebus::Future<std::shared_ptr<messages::ScheduleResponse>> BundleMgrActor::OnReserve(
+    const litebus::Future<schedule_decision::ScheduleResult> &future,
+    const std::shared_ptr<messages::ScheduleRequest> &req,
+    const std::shared_ptr<messages::ScheduleResponse> &resp)
 {
     ASSERT_FS(future.IsOK());
     auto result = future.Get();
@@ -264,12 +297,10 @@ void BundleMgrActor::OnReserve(const litebus::AID &to, const litebus::Future<sch
                    result.code, result.reason);
         resp->set_code(result.code);
         resp->set_message(result.reason);
-        (void)Send(to, "OnReserve", resp->SerializeAsString());
-        litebus::Async(GetAID(), &BundleMgrActor::SendMsg, to, "OnReserve", resp->SerializeAsString());
-        return;
+        return resp;
     }
     if (result.allocatedPromise != nullptr) {
-        result.allocatedPromise->GetFuture().OnComplete([scheduler(scheduler_), aid(GetAID()), to, req, resp,
+        return result.allocatedPromise->GetFuture().Then([scheduler(scheduler_), aid(GetAID()), req, resp,
                                                          result](const litebus::Future<Status> &future) {
             ASSERT_FS(future.IsOK());
             auto status = future.Get();
@@ -277,20 +308,19 @@ void BundleMgrActor::OnReserve(const litebus::AID &to, const litebus::Future<sch
                 YRLOG_ERROR("{}|{}|failed to reserve for bundle({}), rGroup({}), selected unit ({}) in ({}). retry",
                             req->traceid(), req->requestid(), req->instance().instanceid(),
                             GetResourceGroupName(req->instance().instanceid()), result.unitID, result.id);
-                scheduler->ScheduleDecision(req).OnComplete(
-                    litebus::Defer(aid, &BundleMgrActor::OnReserve, to, std::placeholders::_1, req, resp));
-                return;
+                return scheduler->ScheduleDecision(req).Then(
+                    litebus::Defer(aid, &BundleMgrActor::OnReserve, std::placeholders::_1, req, resp));
             }
-            litebus::Async(aid, &BundleMgrActor::OnSuccessfulReserve, to, result, req, resp);
+            return litebus::Async(aid, &BundleMgrActor::OnSuccessfulReserve, result, req, resp);
         });
-        return;
     }
-    return OnSuccessfulReserve(to, result, req, resp);
+    return OnSuccessfulReserve(result, req, resp);
 }
 
-void BundleMgrActor::OnSuccessfulReserve(const litebus::AID &to, const schedule_decision::ScheduleResult &result,
-                                         const std::shared_ptr<messages::ScheduleRequest> &req,
-                                         const std::shared_ptr<messages::ScheduleResponse> &resp)
+litebus::Future<std::shared_ptr<messages::ScheduleResponse>> BundleMgrActor::OnSuccessfulReserve(
+    const schedule_decision::ScheduleResult &result,
+    const std::shared_ptr<messages::ScheduleRequest> &req,
+    const std::shared_ptr<messages::ScheduleResponse> &resp)
 {
     YRLOG_INFO("{}|{}|success to reserve resource for bundle({}), rGroup({}), selected unit ({}) in {}",
                req->traceid(), req->requestid(), req->instance().instanceid(),
@@ -304,11 +334,7 @@ void BundleMgrActor::OnSuccessfulReserve(const litebus::AID &to, const schedule_
     reservedContext.result.code = static_cast<int32_t>(StatusCode::SUCCESS);
     reserveResult_[req->requestid()] = reservedContext;
     (*resp->mutable_contexts())[GROUP_SCHEDULE_CONTEXT].mutable_groupschedctx()->set_reserved(result.unitID);
-    (void)CollectResourceChangesForScheduleResp(resp).Then([aid(GetAID()), to, resp](const Status &status) ->
-                                                        litebus::Future<Status> {
-        litebus::Async(aid, &BundleMgrActor::SendMsg, to, "OnReserve", resp->SerializeAsString());
-        return status;
-    });
+    return resp;
 }
 
 void BundleMgrActor::OnBind(const litebus::AID &to, const litebus::Future<Status> &future,
@@ -506,8 +532,8 @@ litebus::Future<Status> BundleMgrActor::CollectResourceChangesForGroupResp(
         });
 }
 
-litebus::Future<Status> BundleMgrActor::CollectResourceChangesForScheduleResp(
-    const std::shared_ptr<messages::ScheduleResponse> &resp)
+litebus::Future<Status> BundleMgrActor::CollectResourceChangesForOnReserves(
+    const std::shared_ptr<messages::OnReserves> &resp)
 {
     return resourceViewMgr_->GetChanges().Then(
         [resp](const std::unordered_map<ResourceType, std::shared_ptr<ResourceUnitChanges>> &changes) ->

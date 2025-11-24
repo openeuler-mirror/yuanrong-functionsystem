@@ -37,14 +37,28 @@ enum class InstanceState : int32_t {
     EXITED,
     EVICTING,
     EVICTED,
-    SUB_HEALTH
+    SUB_HEALTH,
+    SUSPEND
 };
 
 enum class GroupState : int32_t {
     SCHEDULING,
     RUNNING,
     FAILED,
+    SUSPEND,
 };
+
+const std::unordered_map<GroupState, std::string> GROUP_STATES = {
+    {GroupState::SCHEDULING, "SCHEDULING"},
+    {GroupState::RUNNING, "RUNNING"},
+    {GroupState::FAILED, "FAILED"},
+    {GroupState::SUSPEND, "SUSPEND"},
+};
+
+inline std::string ToString(GroupState state)
+{
+    return GROUP_STATES.find(state) != GROUP_STATES.end() ? GROUP_STATES.at(state) : "Unknown";
+}
 
 const std::unordered_set<InstanceState> NO_UPDATE_ROUTE_STATE{ InstanceState::CREATING };
 const std::unordered_set<InstanceState> NO_UPDATE_ROUTE_STATE_WITH_META_STORE{ InstanceState::SCHEDULING,

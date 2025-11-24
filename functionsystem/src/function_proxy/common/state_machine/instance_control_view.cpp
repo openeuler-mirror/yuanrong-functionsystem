@@ -75,7 +75,7 @@ void InstanceControlView::Update(const std::string &instanceID, const resources:
             YRLOG_INFO("change instance({}) state machine's owner to {} from {}.", instanceID, newOwner, currentOwner);
         }
         machines_.at(instanceID)->UpdateInstanceInfo(instanceInfo);
-        if (currentOwner != self_) {
+        if (currentOwner != self_ && state != static_cast<int32_t>(InstanceState::SUSPEND)) {
             machines_.at(instanceID)->SetVersion(0);
         }
         // Rescheduling can be triggered in the following states:

@@ -65,6 +65,7 @@ void DomainSchedMgrActor::Init()
     Receive("ResponseQueryAgentInfo", &DomainSchedMgrActor::ResponseQueryAgentInfo);
     Receive("ResponseQueryResourcesInfo", &DomainSchedMgrActor::ResponseQueryResourcesInfo);
     Receive("ResponseGetSchedulingQueue", &DomainSchedMgrActor::ResponseGetSchedulingQueue);
+    Receive("OnForwardGroupSchedule", &DomainSchedMgrActor::OnForwardGroupSchedule);
 }
 
 void DomainSchedMgrActor::Register(const litebus::AID &from, std::string &&name, std::string &&msg)
@@ -178,6 +179,30 @@ litebus::Future<Status> DomainSchedMgrActor::Schedule(const std::string &name, c
     auto promise = std::make_shared<litebus::Promise<Status>>();
     SendScheduleRequest(name, address, req, retryCycle, promise);
     return promise->GetFuture();
+}
+
+litebus::Future<messages::GroupResponse> DomainSchedMgrActor::GroupSchedule(
+    const std::string &name, const std::string &address, const std::shared_ptr<messages::GroupInfo> &groupInfo)
+{
+    auto domainGroupCtrl = litebus::AID(DOMAIN_GROUP_CTRL_ACTOR_NAME, address);
+    YRLOG_INFO("{}|{}|send forward schedule request for resource group({}) to ({}:{})", groupInfo->traceid(),
+               groupInfo->requestid(), groupInfo->rgroupname(), name, address);
+    auto future = requestGroupScheduleMatch_.AddSynchronizer(groupInfo->requestid());
+    Send(domainGroupCtrl, "ForwardGroupSchedule", groupInfo->SerializeAsString());
+    return future;
+}
+
+void DomainSchedMgrActor::OnForwardGroupSchedule(const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    messages::GroupResponse rsp;
+    RETURN_IF_TRUE(!rsp.ParseFromString(msg),
+                   fmt::format("invalid {} response from {} msg {}, ignored", std::string(from), name, msg));
+    auto status = requestGroupScheduleMatch_.Synchronized(rsp.requestid(), rsp);
+    RETURN_IF_TRUE(status.IsError(),
+                   fmt::format("{}|{}|received from {}. code {} msg {}. no found request ignore it", rsp.traceid(),
+                               rsp.requestid(), from.HashString(), rsp.code(), rsp.message()));
+    YRLOG_INFO("{}|{}|received response. code {} message {}. from {}", rsp.traceid(), rsp.requestid(), rsp.code(),
+               rsp.message(), from.HashString());
 }
 
 litebus::Future<messages::QueryAgentInfoResponse> DomainSchedMgrActor::QueryAgentInfo(

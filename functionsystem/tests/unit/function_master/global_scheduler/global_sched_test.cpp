@@ -709,4 +709,44 @@ TEST_F(GlobalSchedTest, RecoverTopologyTest)
     globalSched_.Await();
 }
 
-}  // namespace functionsystem::test
+TEST_F(GlobalSchedTest, GroupScheduleSuccessfulTest)
+{
+    EXPECT_CALL(*mockSchedTree_, GetRootNode).WillOnce(Return(rootNode_));
+    messages::GroupResponse rsp;
+    EXPECT_CALL(*mockDomainSchedMgr_, GroupSchedule).WillOnce(Return(rsp));
+    auto groupInfo = std::make_shared<messages::GroupInfo>();
+    auto future = litebus::Async(globalSchedActor_->GetAID(), &GlobalSchedActor::GroupSchedule, groupInfo, 10);
+    ASSERT_AWAIT_READY(future);
+    EXPECT_EQ(future.Get().code(), 0);
+    globalSched_.Stop();
+    globalSched_.Await();
+}
+
+TEST_F(GlobalSchedTest, GroupScheduleNoRootRetryTest)
+{
+    EXPECT_CALL(*mockSchedTree_, GetRootNode).WillOnce(Return(nullNode_)).WillOnce(Return(rootNode_));
+    messages::GroupResponse rsp;
+    EXPECT_CALL(*mockDomainSchedMgr_, GroupSchedule).WillOnce(Return(rsp));
+    auto groupInfo = std::make_shared<messages::GroupInfo>();
+    auto future = litebus::Async(globalSchedActor_->GetAID(), &GlobalSchedActor::GroupSchedule, groupInfo, 10);
+    ASSERT_AWAIT_READY(future);
+    EXPECT_EQ(future.Get().code(), 0);
+    globalSched_.Stop();
+    globalSched_.Await();
+}
+
+TEST_F(GlobalSchedTest, GroupScheduleTimeOutRetryTest)
+{
+    EXPECT_CALL(*mockSchedTree_, GetRootNode).WillOnce(Return(rootNode_)).WillOnce(Return(rootNode_));
+    messages::GroupResponse rsp;
+    litebus::Future<messages::GroupResponse> failure;
+    failure.SetFailed(REQUEST_TIME_OUT);
+    EXPECT_CALL(*mockDomainSchedMgr_, GroupSchedule).WillOnce(Return(failure)).WillOnce(Return(rsp));
+    auto groupInfo = std::make_shared<messages::GroupInfo>();
+    auto future = litebus::Async(globalSchedActor_->GetAID(), &GlobalSchedActor::GroupSchedule, groupInfo, 10);
+    ASSERT_AWAIT_READY(future);
+    EXPECT_EQ(future.Get().code(), 0);
+    globalSched_.Stop();
+    globalSched_.Await();
+}
+} // namespace functionsystem::test

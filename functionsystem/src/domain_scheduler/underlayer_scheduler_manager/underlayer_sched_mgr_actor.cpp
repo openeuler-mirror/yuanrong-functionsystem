@@ -533,43 +533,47 @@ litebus::Future<bool> UnderlayerSchedMgrActor::IsRegistered(const std::string &n
     return false;
 }
 
-litebus::Future<std::shared_ptr<messages::ScheduleResponse>> UnderlayerSchedMgrActor::Reserve(
-    const std::string &selectedName, const std::shared_ptr<messages::ScheduleRequest> &req)
+litebus::Future<std::shared_ptr<messages::OnReserves>> UnderlayerSchedMgrActor::Reserves(
+    const std::string &selectedName, const std::shared_ptr<messages::Reserves> &req)
 {
-    auto promise = std::make_shared<litebus::Promise<std::shared_ptr<messages::ScheduleResponse>>>();
-    DoReserve(promise, selectedName, req);
+    auto promise = std::make_shared<litebus::Promise<std::shared_ptr<messages::OnReserves>>>();
+    DoReserves(promise, selectedName, req);
     return promise->GetFuture();
 }
 
-void UnderlayerSchedMgrActor::DoReserve(
-    const std::shared_ptr<litebus::Promise<std::shared_ptr<messages::ScheduleResponse>>> &promise,
-    const std::string &selectedName, const std::shared_ptr<messages::ScheduleRequest> &req)
+void UnderlayerSchedMgrActor::DoReserves(
+    const std::shared_ptr<litebus::Promise<std::shared_ptr<messages::OnReserves>>> &promise,
+    const std::string &selectedName, const std::shared_ptr<messages::Reserves> &req)
 {
     if (underlayers_.find(selectedName) == underlayers_.end() || underlayers_[selectedName] == nullptr) {
-        YRLOG_ERROR("{}|{}|failed to reserve instance({}). not found scheduler named {}.", req->traceid(),
-                    req->requestid(), req->instance().instanceid(), req->instance().groupid());
-        auto rsp = std::make_shared<messages::ScheduleResponse>();
-        rsp->set_code(static_cast<int32_t>(StatusCode::DOMAIN_SCHEDULER_UNAVAILABLE_SCHEDULER));
-        rsp->set_message("failed to reserve, because of local scheduler " + selectedName + " is abnormal");
-        rsp->set_requestid(req->requestid());
-        promise->SetValue(rsp);
+        YRLOG_ERROR("{}|{}|failed to batch reserve instance of group({}) not found scheduler named {}.", req->traceid(),
+                    req->requestid(), req->groupid(), selectedName);
+        auto rsps = std::make_shared<messages::OnReserves>();
+        for (auto r : req->reserves()) {
+            auto rsp = rsps->add_responses();
+            rsp->set_code(static_cast<int32_t>(StatusCode::DOMAIN_SCHEDULER_UNAVAILABLE_SCHEDULER));
+            rsp->set_message("failed to reserve, because of local scheduler " + selectedName + " is abnormal");
+            rsp->set_requestid(r.requestid());
+        }
+        promise->SetValue(rsps);
         return;
     }
-    YRLOG_INFO("{}|{}|reserve instance({}) of group({}) resource to {}.", req->traceid(), req->requestid(),
-               req->instance().instanceid(), req->instance().groupid(), selectedName);
+    YRLOG_INFO("{}|{}|batch reserve instance({}) of group({}) resource to {}.", req->traceid(), req->requestid(),
+        fmt::join(req->instanceids().begin(), req->instanceids().end(), ","), req->groupid(), selectedName);
     const auto &aid = underlayers_[selectedName]->GetAID();
-    litebus::AID localAid(req->instance().scheduleoption().target() == resources::CreateTarget::RESOURCE_GROUP
+    litebus::AID localAid(req->target() == resources::CreateTarget::RESOURCE_GROUP
                               ? "BundleMgrActor"
                               : LOCAL_GROUP_CTRL_ACTOR_NAME,
                           aid.Url());
-    auto future = requestReserveMatch_.AddSynchronizer(localAid.Url() + req->requestid());
-    Send(localAid, "Reserve", req->SerializeAsString());
+    auto future = requestReservesMatch_.AddSynchronizer(localAid.Url() + req->requestid());
+    Send(localAid, "Reserves", req->SerializeAsString());
     future.OnComplete([promise, selectedName, req,
-                       aid(GetAID())](const litebus::Future<std::shared_ptr<messages::ScheduleResponse>> &future) {
+                       aid(GetAID())](const litebus::Future<std::shared_ptr<messages::OnReserves>> &future) {
         if (future.IsError()) {
             YRLOG_WARN("{}|{}|reserve instance({}) of group({}) resource to {} timeout.", req->traceid(),
-                       req->requestid(), req->instance().instanceid(), req->instance().groupid(), selectedName);
-            litebus::Async(aid, &UnderlayerSchedMgrActor::DoReserve, promise, selectedName, req);
+                       req->requestid(), fmt::join(req->instanceids().begin(), req->instanceids().end(), ","),
+                       req->groupid(), selectedName);
+            litebus::Async(aid, &UnderlayerSchedMgrActor::DoReserves, promise, selectedName, req);
             return;
         }
         promise->SetValue(future.Get());
@@ -640,16 +644,16 @@ litebus::Future<Status> UnderlayerSchedMgrActor::UnBind(const std::string &selec
     return promise->GetFuture();
 }
 
-void UnderlayerSchedMgrActor::OnReserve(const litebus::AID &from, std::string &&name, std::string &&msg)
+void UnderlayerSchedMgrActor::OnReserves(const litebus::AID &from, std::string &&name, std::string &&msg)
 {
-    auto rsp = std::make_shared<messages::ScheduleResponse>();
+    auto rsp = std::make_shared<messages::OnReserves>();
     if (!rsp->ParseFromString(msg)) {
         YRLOG_WARN("invalid reserve response from {} msg {}, ignored", std::string(from), msg);
         return;
     }
-    if (auto status = requestReserveMatch_.Synchronized(from.Url() + rsp->requestid(), rsp); status.IsError()) {
-        YRLOG_WARN("{}|received reserve response. code {} msg {}. no found request ignore it. from {}",
-                   rsp->requestid(), rsp->code(), rsp->message(), from.HashString());
+    if (auto status = requestReservesMatch_.Synchronized(from.Url() + rsp->requestid(), rsp); status.IsError()) {
+        YRLOG_WARN("{}|{}|received reserve response. no found request ignore it. from {}",
+                   rsp->traceid(), rsp->requestid(), from.HashString());
         return;
     }
     ASSERT_IF_NULL(resourceViewMgr_);
@@ -658,8 +662,7 @@ void UnderlayerSchedMgrActor::OnReserve(const litebus::AID &from, std::string &&
         (void)resourceViewMgr_->GetInf(static_cast<resource_view::ResourceType>(type))
             ->UpdateResourceUnitDelta(changes);
     }
-    YRLOG_INFO("{}|received reserve response. instance({}) code {} message {}. from {}", rsp->requestid(),
-               rsp->instanceid(), rsp->code(), rsp->message(), from.HashString());
+    YRLOG_INFO("{}|{}|received reserve response from {}", rsp->traceid(), rsp->requestid(), from.HashString());
 }
 
 void UnderlayerSchedMgrActor::ReceiveGroupMethod(RequestSyncHelper<UnderlayerSchedMgrActor, Status> *syncHelper,
@@ -709,7 +712,7 @@ void UnderlayerSchedMgrActor::Init()
     Receive("ResponseSchedule", &UnderlayerSchedMgrActor::ResponseSchedule);
     Receive("NotifySchedAbnormal", &UnderlayerSchedMgrActor::NotifySchedAbnormal);
     Receive("NotifyWorkerStatus", &UnderlayerSchedMgrActor::NotifyWorkerStatus);
-    Receive("OnReserve", &UnderlayerSchedMgrActor::OnReserve);
+    Receive("OnReserves", &UnderlayerSchedMgrActor::OnReserves);
     Receive("OnBind", &UnderlayerSchedMgrActor::OnBind);
     Receive("OnUnReserve", &UnderlayerSchedMgrActor::OnUnReserve);
     Receive("OnUnBind", &UnderlayerSchedMgrActor::OnUnBind);

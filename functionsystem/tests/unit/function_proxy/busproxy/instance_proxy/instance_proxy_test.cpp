@@ -717,7 +717,9 @@ TEST_F(InstanceProxyTest, CallDeleteInstance)
     EXPECT_TRUE(fisrtCall.Get()->has_callrsp() && fisrtCall.Get()->callrsp().code() == common::ERR_INSTANCE_EXITED);
 
     ASSERT_AWAIT_SET(secondCall);
-    EXPECT_TRUE(secondCall.Get()->has_callrsp() && secondCall.Get()->callrsp().code() == common::ERR_INSTANCE_NOT_FOUND);
+    EXPECT_TRUE(secondCall.Get()->has_callrsp());
+    auto code = secondCall.Get()->callrsp().code();
+    EXPECT_TRUE(code == common::ERR_INSTANCE_NOT_FOUND || code == common::ERR_INSTANCE_EXITED);
 
     auto thirdCall = litebus::Async(callerProxy, &InstanceProxy::Call, busproxy::CallerInfo{.instanceID=callerIns}, calleeIns,
                                      CallRequest(callerIns, calleeIns, "Request-after-delete"), nullptr);

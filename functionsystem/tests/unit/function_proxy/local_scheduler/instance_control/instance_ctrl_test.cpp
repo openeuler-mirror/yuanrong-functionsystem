@@ -5868,4 +5868,79 @@ TEST_F(InstanceCtrlTest, KillResourceGroup)
     EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_NONE);
 }
 
+TEST_F(InstanceCtrlTest, KillInstanceWithTransSuspend)
+{
+    const std::string instanceID = "InstanceA";
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillOnce(Return(nullptr));
+    auto killReq = GenKillRequest(instanceID, INSTANCE_TRANS_SUSPEND_SIGNAL);
+    auto srcInstance = "instanceM";
+    auto killRsp = instanceCtrl_->Kill(srcInstance, killReq).Get();
+    EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_INSTANCE_NOT_FOUND);
+
+    auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeN");
+    auto &mockStateMachine = *stateMachine;
+
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillOnce(Return(stateMachine));
+    EXPECT_CALL(mockStateMachine, GetInstanceState()).WillOnce(Return(InstanceState::EXITING));
+    killRsp = instanceCtrl_->Kill(srcInstance, killReq).Get();
+    EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_STATE_MACHINE_ERROR);
+
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillOnce(Return(stateMachine));
+    EXPECT_CALL(mockStateMachine, GetInstanceState()).WillOnce(Return(InstanceState::SUSPEND));
+    killRsp = instanceCtrl_->Kill(srcInstance, killReq).Get();
+    EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_NONE);
+
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillOnce(Return(stateMachine));
+    EXPECT_CALL(mockStateMachine, GetInstanceState()).WillOnce(Return(InstanceState::RUNNING));
+    EXPECT_CALL(mockStateMachine, IsSaving).WillOnce(Return(false));
+    EXPECT_CALL(mockStateMachine, TransitionToImpl(InstanceState::SUSPEND, _, _, _, _))
+        .WillOnce(Return(TransitionResult{ InstanceState::RUNNING, InstanceInfo(), InstanceInfo(), 1 }));
+    EXPECT_CALL(*mockSharedClientManagerProxy_, DeleteClient(_)).WillRepeatedly(Return(Status::OK()));
+    auto resourceViewMgr = std::make_shared<resource_view::ResourceViewMgr>();
+    auto primary = MockResourceView::CreateMockResourceView();
+    resourceViewMgr->primary_ = primary;
+    EXPECT_CALL(*primary, DeleteInstances).WillOnce(Return(Status::OK()));
+    instanceCtrl_->BindResourceView(resourceViewMgr);
+    messages::KillInstanceResponse killInstanceRsp;
+    killInstanceRsp.set_code(int32_t(common::ErrorCode::ERR_NONE));
+    EXPECT_CALL(*funcAgentMgr_, KillInstance).WillRepeatedly(Return(killInstanceRsp));
+    killRsp = instanceCtrl_->Kill(srcInstance, killReq).Get();
+    EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_NONE);
+}
+
+TEST_F(InstanceCtrlTest, KillInstanceWithCheckpoint)
+{
+    const std::string instanceID = "InstanceA";
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillOnce(Return(nullptr));
+    auto killReq = GenKillRequest(instanceID, INSTANCE_CHECKPOINT_SIGNAL);
+    auto srcInstance = "instanceM";
+    auto killRsp = instanceCtrl_->Kill(srcInstance, killReq).Get();
+    EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_INSTANCE_NOT_FOUND);
+
+    auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeN");
+    auto &mockStateMachine = *stateMachine;
+
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillOnce(Return(stateMachine));
+    EXPECT_CALL(mockStateMachine, GetInstanceState()).WillOnce(Return(InstanceState::EXITING));
+    killRsp = instanceCtrl_->Kill(srcInstance, killReq).Get();
+    EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_STATE_MACHINE_ERROR);
+
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillOnce(Return(stateMachine));
+    EXPECT_CALL(mockStateMachine, GetInstanceState()).WillOnce(Return(InstanceState::SUSPEND));
+    killRsp = instanceCtrl_->Kill(srcInstance, killReq).Get();
+    EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_NONE);
+
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillOnce(Return(stateMachine));
+    EXPECT_CALL(mockStateMachine, GetInstanceState()).WillOnce(Return(InstanceState::RUNNING));
+    auto mockSharedClient = std::make_shared<MockSharedClient>();
+    EXPECT_CALL(*mockSharedClientManagerProxy_, GetControlInterfacePosixClient(_))
+        .WillRepeatedly(Return(mockSharedClient));
+    runtime::CheckpointResponse checkpointRsp;
+    checkpointRsp.set_code(common::ErrorCode::ERR_NONE);
+    checkpointRsp.set_state("");
+    EXPECT_CALL(*mockSharedClient, Checkpoint).WillOnce(Return(checkpointRsp));
+    killRsp = instanceCtrl_->Kill(srcInstance, killReq).Get();
+    EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_NONE);
+}
+
 }  // namespace functionsystem::test

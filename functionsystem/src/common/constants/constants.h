@@ -267,6 +267,10 @@ const std::string CONDA_COMMAND = "CONDA_COMMAND";
 const std::string CONDA_PREFIX = "CONDA_PREFIX";
 const std::string CONDA_DEFAULT_ENV = "CONDA_DEFAULT_ENV";
 
+// hibernate
+const std::string ENABLE_SUSPEND_RESUME = "enableSuspendResume";
+const std::string IDLE_TO_SUSPEND = "idleToSuspend";
+
 // system function
 const std::string FRONTEND_FUNCTION_NAME = "0-system-faasfrontend";
 

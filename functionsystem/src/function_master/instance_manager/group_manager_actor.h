@@ -139,9 +139,8 @@ protected:
                                               const std::shared_ptr<resource_view::InstanceInfo> &instance,
                                               const std::shared_ptr<internal::ForwardKillRequest> killReq);
 
-    litebus::Future<Status> InnerKillInstanceOnComplete(const litebus::AID &from, const std::string &groupID,
-                                                        const Status &status);
-
+    void InnerKillInstanceOnComplete(const litebus::AID &from, const std::string &groupID, const std::string &requestID,
+                                     const litebus::Future<Status> &future);
     void WatchGroups();
     void OnGroupWatch(const std::shared_ptr<Watcher> &watcher);
     void OnGroupWatchEvent(const std::vector<WatchEvent> &events);
@@ -153,6 +152,14 @@ protected:
 
     litebus::Future<Status> OnGetInstanceFromMetaStore(const litebus::Future<std::shared_ptr<GetResponse>> &getResponse,
                                                        const std::string &instanceID, const std::string &groupID);
+    litebus::Future<SyncResult> GroupInfoSyncer();
+    litebus::Future<SyncResult> OnGroupInfoSyncer(const std::shared_ptr<GetResponse> &getResponse);
+    litebus::Future<Status> BroadCastSignalForGroup(const std::string &groupID, const std::string &srcInstanceID,
+                                                    const int32_t &signal);
+    void OnGroupSuspend(const litebus::Future<Status> &future, const litebus::AID &from, const std::string &groupID,
+                        const std::string &requestID);
+    void OnGroupResume(const litebus::Future<Status> &future, const litebus::AID &from, const std::string &groupID,
+                       const std::string &requestID);
 
 protected:
     class GroupCaches {
@@ -224,6 +231,10 @@ protected:
 
         virtual void OnGroupPut(const std::string &groupKey, std::shared_ptr<messages::GroupInfo> groupInfo) = 0;
         virtual void KillGroup(const litebus::AID &from, std::string &&name, std::string &&msg) = 0;
+        virtual void SuspendGroup(const litebus::AID &from,
+                                  const std::shared_ptr<::messages::KillGroup> &killGroupReq) = 0;
+        virtual void ResumeGroup(const litebus::AID &from,
+                                 const std::shared_ptr<::messages::KillGroup> &killGroupReq) = 0;
         virtual litebus::Future<Status> InnerKillGroup(const std::string &groupID,
                                                        const std::string &srcInstanceID) = 0;
         virtual litebus::Future<Status> OnInstanceAbnormal(
@@ -240,6 +251,11 @@ protected:
 
         virtual litebus::Future<Status> OnInstanceDelete(
             const std::string &instanceKey, const std::shared_ptr<resource_view::InstanceInfo> &instanceInfo) = 0;
+        virtual litebus::Future<Status> BroadCastSignalForGroup(const std::string &groupID,
+                                                                const std::string &srcInstanceID,
+                                                                const int32_t &signal) = 0;
+        virtual litebus::Future<Status> PersistentGroupInfo(const std::string &groupID, const GroupState &state,
+                                                            const std::string &description) = 0;
 
     protected:
         std::shared_ptr<Member> member_;
@@ -256,6 +272,9 @@ protected:
 
         void OnGroupPut(const std::string &groupKey, std::shared_ptr<messages::GroupInfo> groupInfo) override;
         void KillGroup(const litebus::AID &from, std::string &&name, std::string &&msg) override;
+        void SuspendGroup(const litebus::AID &from,
+                          const std::shared_ptr<::messages::KillGroup> &killGroupReq) override;
+        void ResumeGroup(const litebus::AID &from, const std::shared_ptr<::messages::KillGroup> &killGroupReq) override;
         litebus::Future<Status> InnerKillGroup(const std::string &groupID, const std::string &srcInstanceID) override;
 
         litebus::Future<Status> OnInstanceAbnormal(
@@ -296,6 +315,14 @@ protected:
         litebus::Future<Status> ProcessDeleteInstanceChildrenGroup(
             const std::string &instanceKey, const std::shared_ptr<resource_view::InstanceInfo> &instanceInfo);
         void CheckGroupInstanceConsistency(std::shared_ptr<messages::GroupInfo> &groupInfo);
+
+        litebus::Future<Status> BroadCastSignalForGroup(const std::string &groupID, const std::string &srcInstanceID,
+                                                        const int32_t &signal);
+
+        litebus::Future<Status> PersistentGroupInfo(const std::string &groupID, const GroupState &state,
+                                                    const std::string &description);
+
+        litebus::Future<Status> ReScheduleGroup(const std::string &groupID);
     };
 
     class SlaveBusiness : public Business {
@@ -317,6 +344,16 @@ protected:
         {
             // slave do nothing about kill group
             YRLOG_INFO("slave get kill group message");
+        }
+
+        void SuspendGroup(const litebus::AID &from, const std::shared_ptr<::messages::KillGroup> &killGroupReq) override
+        {
+            YRLOG_INFO("slave get suspend group message from {}", from.HashString());
+        }
+
+        void ResumeGroup(const litebus::AID &from, const std::shared_ptr<::messages::KillGroup> &killGroupReq) override
+        {
+            YRLOG_INFO("slave get resume group message from {}", from.HashString());
         }
 
         litebus::Future<Status> OnInstanceAbnormal(
@@ -368,6 +405,18 @@ protected:
         litebus::Future<Status> FatalGroup(const std::string &groupID, const std::string &ignoredInstanceID,
                                            const std::string &errMsg) override
 
+        {
+            return Status::OK();
+        }
+
+        litebus::Future<Status> BroadCastSignalForGroup(const std::string &groupID, const std::string &srcInstanceID,
+                                                        const int32_t &signal)
+        {
+            return Status::OK();
+        }
+
+        litebus::Future<Status> PersistentGroupInfo(const std::string &groupID, const GroupState &state,
+                                                    const std::string &description)
         {
             return Status::OK();
         }

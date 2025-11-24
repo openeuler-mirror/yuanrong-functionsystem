@@ -168,6 +168,9 @@ using QueryDebugInstanceInfosResponse = ::messages::QueryDebugInstanceInfosRespo
 using ReportAgentAbnormalRequest = ::messages::ReportAgentAbnormalRequest;
 using ReportAgentAbnormalResponse = ::messages::ReportAgentAbnormalResponse;
 
+using Reserves = ::messages::Reserves;
+using OnReserves = ::messages::OnReserves;
+
 using CheckInstanceStateRequest = ::messages::CheckInstanceStateRequest;
 using CheckInstanceStateResponse = ::messages::CheckInstanceStateResponse;
 

@@ -278,7 +278,7 @@ uint32_t DomainSchedSrvActor::DoCountReadyRes(const resource_view::ResourceUnit 
 
     const auto fragment = unit.fragment();
     for (const auto &childNode : fragment) {
-        if (childNode.first.find(FUNCTION_AGENT_ID_PREFIX) != childNode.first.npos) {
+        if (childNode.second.fragment_size() == 0) {
             if (childNode.second.status() == static_cast<uint32_t>(UnitStatus::TO_BE_DELETED)) {
                 continue;
             }

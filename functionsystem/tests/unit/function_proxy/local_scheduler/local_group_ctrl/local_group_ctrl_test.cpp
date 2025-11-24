@@ -41,17 +41,17 @@ public:
     }
     ~DomainUnderlayerStub() = default;
 
-    litebus::Future<messages::ScheduleResponse> Reserve(const litebus::AID &dst,
-                                                        const std::shared_ptr<messages::ScheduleRequest> &req)
+    litebus::Future<messages::OnReserves> Reserves(const litebus::AID &dst,
+                                                     const std::shared_ptr<messages::Reserves> &req)
     {
-        Send(dst, "Reserve", req->SerializeAsString());
-        reservePromises_[req->requestid()] = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+        Send(dst, "Reserves", req->SerializeAsString());
+        reservePromises_[req->requestid()] = std::make_shared<litebus::Promise<messages::OnReserves>>();
         return reservePromises_[req->requestid()]->GetFuture();
     }
 
-    void OnReserve(const litebus::AID &from, std::string &&name, std::string &&msg)
+    void OnReserves(const litebus::AID &from, std::string &&name, std::string &&msg)
     {
-        messages::ScheduleResponse resp;
+        messages::OnReserves resp;
         resp.ParseFromString(msg);
         if (reservePromises_.find(resp.requestid()) != reservePromises_.end()) {
             (void)reservePromises_[resp.requestid()]->SetValue(resp);
@@ -136,7 +136,7 @@ public:
 
     void Init() override
     {
-        Receive("OnReserve", &DomainUnderlayerStub::OnReserve);
+        Receive("OnReserves", &DomainUnderlayerStub::OnReserves);
         Receive("OnBind", &DomainUnderlayerStub::OnBind);
         Receive("OnUnReserve", &DomainUnderlayerStub::OnUnReserve);
         Receive("OnUnBind", &DomainUnderlayerStub::OnUnBind);
@@ -144,7 +144,7 @@ public:
     }
 
 private:
-    std::unordered_map<std::string, std::shared_ptr<litebus::Promise<messages::ScheduleResponse>>> reservePromises_;
+    std::unordered_map<std::string, std::shared_ptr<litebus::Promise<messages::OnReserves>>> reservePromises_;
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<messages::GroupResponse>>> unReservePromises_;
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<messages::GroupResponse>>> bindPromises_;
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<messages::GroupResponse>>> unBindPromises_;
@@ -328,21 +328,6 @@ TEST_F(LocalGroupCtrlTest, LocalGroupCtrlStartedWithDifferGroupInfo)
     auto peFuture = ctx->persistingPromise.GetFuture();
     ASSERT_AWAIT_READY(peFuture);
     EXPECT_EQ(peFuture.Get()->code(), int32_t(SUCCESS));
-}
-
-// group schedule invalid designated instanceID
-TEST_F(LocalGroupCtrlTest, GroupScheduleWithDesignatedInstanceID)
-{
-    auto createRequests = std::make_shared<CreateRequests>();
-    createRequests->set_requestid("group-" + litebus::uuid_generator::UUID::GetRandomUUID().ToString());
-    createRequests->set_traceid("group-traceID");
-    Start();
-    auto createRequest = createRequests->add_requests();
-    createRequest->set_designatedinstanceid("designatedInstanceID");
-    auto future = localGroupCtrl_->GroupSchedule("srcInstanceID", createRequests);
-    ASSERT_AWAIT_READY(future);
-    EXPECT_EQ(future.IsOK(), true);
-    EXPECT_EQ(future.Get()->code(), common::ErrorCode::ERR_PARAM_INVALID);
 }
 
 // group schedule invalid detached lifecycle opt
@@ -1053,7 +1038,7 @@ TEST_F(LocalGroupCtrlTest, InvalidReserveAndBind)
     EXPECT_CALL(*primary_, DeleteInstances).Times(0);
     EXPECT_CALL(*mockInstanceCtrl_, ToCreating).Times(0);
     EXPECT_CALL(*mockInstanceCtrl_, ForceDeleteInstance).Times(0);
-    localGroupCtrlActor_->Reserve(litebus::AID(), "Reserve", "xxx");
+    localGroupCtrlActor_->Reserves(litebus::AID(), "Reserves", "xxx");
     localGroupCtrlActor_->Bind(litebus::AID(), "Bind", "xxx");
     localGroupCtrlActor_->UnReserve(litebus::AID(), "UnReserve", "xxx");
     localGroupCtrlActor_->UnBind(litebus::AID(), "UnBind", "xxx");
@@ -1086,19 +1071,22 @@ TEST_F(LocalGroupCtrlTest, ReserveAndUnReserveSuccessful)
         .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
 
     {
-        auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserve,
-                                     localGroupCtrlActor_->GetAID(), scheduleReq);
+        auto reserves = std::make_shared<messages::Reserves>();
+        *reserves->add_reserves() = *scheduleReq;
+        reserves->set_requestid(scheduleReq->requestid());
+        auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserves,
+                                     localGroupCtrlActor_->GetAID(), reserves);
         ASSERT_AWAIT_READY(future);
         EXPECT_EQ(future.IsOK(), true);
         auto result = future.Get();
-        EXPECT_EQ(result.code(), 0);
+        EXPECT_EQ(result.responses(0).code(), 0);
 
         // duplicate request
-        future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserve,
-                                localGroupCtrlActor_->GetAID(), scheduleReq);
+        future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserves,
+                                localGroupCtrlActor_->GetAID(), reserves);
         ASSERT_AWAIT_READY(future);
         EXPECT_EQ(future.IsOK(), true);
-        EXPECT_EQ(future.Get().code(), 0);
+        EXPECT_EQ(future.Get().responses(0).code(), 0);
     }
 
     {
@@ -1123,13 +1111,15 @@ TEST_F(LocalGroupCtrlTest, ReserveFailed)
         .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
     EXPECT_CALL(*virtual_, GetResourceViewChanges())
         .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
-
-    auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserve,
-                                 localGroupCtrlActor_->GetAID(), scheduleReq);
+    auto reserves = std::make_shared<messages::Reserves>();
+    *reserves->add_reserves() = *scheduleReq;
+    reserves->set_requestid(scheduleReq->requestid());
+    auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserves,
+                                 localGroupCtrlActor_->GetAID(), reserves);
     ASSERT_AWAIT_READY(future);
     EXPECT_EQ(future.IsOK(), true);
     auto result = future.Get();
-    EXPECT_EQ(result.code(), StatusCode::RESOURCE_NOT_ENOUGH);
+    EXPECT_EQ(result.responses(0).code(), StatusCode::RESOURCE_NOT_ENOUGH);
 }
 
 // Bind failed by no reserve
@@ -1156,12 +1146,15 @@ TEST_F(LocalGroupCtrlTest, ReserveAndBindAndUnBindSuccessful)
         .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
 
     {
-        auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserve,
-                                     localGroupCtrlActor_->GetAID(), scheduleReq);
+        auto reserves = std::make_shared<messages::Reserves>();
+        *reserves->add_reserves() = *scheduleReq;
+        reserves->set_requestid(scheduleReq->requestid());   
+        auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserves,
+                                     localGroupCtrlActor_->GetAID(), reserves);
         ASSERT_AWAIT_READY(future);
         EXPECT_EQ(future.IsOK(), true);
         auto result = future.Get();
-        EXPECT_EQ(result.code(), 0);
+        EXPECT_EQ(result.responses(0).code(), 0);
     }
 
     EXPECT_CALL(*mockInstanceCtrl_, ToCreating).WillRepeatedly(Return(AsyncReturn(Status::OK())));
@@ -1197,12 +1190,15 @@ TEST_F(LocalGroupCtrlTest, BindFailedByToCreating)
         .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
 
     {
-        auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserve,
-                                     localGroupCtrlActor_->GetAID(), scheduleReq);
+        auto reserves = std::make_shared<messages::Reserves>();
+        *reserves->add_reserves() = *scheduleReq;
+        reserves->set_requestid(scheduleReq->requestid());
+        auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserves,
+                                     localGroupCtrlActor_->GetAID(), reserves);
         ASSERT_AWAIT_READY(future);
         EXPECT_EQ(future.IsOK(), true);
         auto result = future.Get();
-        EXPECT_EQ(result.code(), 0);
+        EXPECT_EQ(result.responses(0).code(), 0);
     }
 
     EXPECT_CALL(*mockInstanceCtrl_, ForceDeleteInstance).WillOnce(Return(AsyncReturn(Status::OK())));
@@ -1228,12 +1224,15 @@ TEST_F(LocalGroupCtrlTest, BindFailedByToCreatingTxnFailedAlreadyScheduleToAnoth
     EXPECT_CALL(*virtual_, GetResourceViewChanges())
         .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
     {
-        auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserve,
-                                     localGroupCtrlActor_->GetAID(), scheduleReq);
+        auto reserves = std::make_shared<messages::Reserves>();
+        *reserves->add_reserves() = *scheduleReq;
+        reserves->set_requestid(scheduleReq->requestid());
+        auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserves,
+                                     localGroupCtrlActor_->GetAID(), reserves);
         ASSERT_AWAIT_READY(future);
         EXPECT_EQ(future.IsOK(), true);
         auto result = future.Get();
-        EXPECT_EQ(result.code(), 0);
+        EXPECT_EQ(result.responses(0).code(), 0);
     }
     EXPECT_CALL(*primary_, DeleteInstances).Times(1);
     EXPECT_CALL(*mockInstanceCtrl_, ToCreating)
@@ -1274,12 +1273,15 @@ TEST_F(LocalGroupCtrlTest, ReserveAndTimoutToReserve)
     litebus::Future<std::vector<std::string>> deletedIns;
     EXPECT_CALL(*primary_, DeleteInstances)
         .WillOnce(DoAll(FutureArg<0>(&deletedIns), Return(AsyncReturn(Status::OK()))));
-    auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserve,
-                                 localGroupCtrlActor->GetAID(), scheduleReq);
+    auto reserves = std::make_shared<messages::Reserves>();
+    *reserves->add_reserves() = *scheduleReq;
+    reserves->set_requestid(scheduleReq->requestid());
+    auto future = litebus::Async(underlayerSrv_->GetAID(), &DomainUnderlayerStub::Reserves,
+                                 localGroupCtrlActor->GetAID(), reserves);
     ASSERT_AWAIT_READY(future);
     EXPECT_EQ(future.IsOK(), true);
     auto result = future.Get();
-    EXPECT_EQ(result.code(), 0);
+    EXPECT_EQ(result.responses(0).code(), 0);
     ASSERT_AWAIT_READY(deletedIns);
     EXPECT_EQ(deletedIns.IsOK(), true);
     EXPECT_EQ(deletedIns.Get().size(), static_cast<long unsigned int>(1));

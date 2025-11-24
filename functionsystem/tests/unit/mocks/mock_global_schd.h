@@ -46,6 +46,8 @@ public:
                 (const std::shared_ptr<messages::QueryResourcesInfoRequest> &req), (override));
 
     MOCK_METHOD(litebus::Future<Status>, Schedule, (const std::shared_ptr<messages::ScheduleRequest> &), (override));
+    MOCK_METHOD(litebus::Future<messages::GroupResponse>, GroupSchedule,
+                (const std::shared_ptr<messages::GroupInfo> &, uint32_t), (override));
     MOCK_METHOD(void, LocalSchedAbnormalCallback, (const global_scheduler::LocalSchedAbnormalCallbackFunc &),
                 (override));
     MOCK_METHOD(void, BindCheckLocalAbnormalCallback, (const global_scheduler::CheckLocalAbnormalCallbackFunc &),
