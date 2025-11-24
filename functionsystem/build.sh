@@ -255,7 +255,7 @@ while getopts 'yghrxVbm:v:o:j:S:Cc:u:t:M:d:T:s:R:P:p:k' opt; do
         ;;
     S)
         BUILD_TYPE=Debug
-        SANITIZERS="${OPTARG}"
+        SANITIZERS="${OPTARG}" # Debug工具
         ;;
     C)
         CLEAR_OUTPUT=ON
@@ -320,8 +320,6 @@ if [ X"${BUILD_FUNCTIONCORE}" == X"ON" ]; then
     exit 0
 fi
 
-[ -z "$YR_OPENSOURCE_DIR" ] && export YR_OPENSOURCE_DIR="${YR_ROOT_DIR}"/.3rd
-
 function clear_object_posix() {
     local pb_object="${PROJECT_DIR}/src/common/proto/pb"
     [ -d "${pb_object}" ] && rm -f "${pb_object}"/*.pb.*
@@ -343,6 +341,18 @@ fi
 check_posix
 
 # Build and install
+echo cmake -G Ninja "${PROJECT_DIR}" -DCMAKE_INSTALL_PREFIX="${OUTPUT_DIR}" \
+    -DBUILD_VERSION="${YR_VERSION}" \
+    -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+    -DSANITIZERS="${SANITIZERS}" \
+    -DBUILD_LLT="${BUILD_LLT}" \
+    -DBUILD_GCOV="${BUILD_GCOV}" \
+    -DBUILD_THREAD_NUM="${JOB_NUM}" \
+    -DROOT_DIR="${YR_ROOT_DIR}" \
+    -DJEMALLOC_PROF_ENABLE="${JEMALLOC_PROF_ENABLE}" \
+    -DFUNCTION_SYSTEM_BUILD_TIME_TRACE="${FUNCTION_SYSTEM_BUILD_TIME_TRACE}" \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
 mkdir -p "${BUILD_DIR}" && cd "${BUILD_DIR}"/
 cmake -G Ninja "${PROJECT_DIR}" -DCMAKE_INSTALL_PREFIX="${OUTPUT_DIR}" \
     -DBUILD_VERSION="${YR_VERSION}" \

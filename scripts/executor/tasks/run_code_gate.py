@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # coding=UTF-8
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
 import os
@@ -11,9 +10,9 @@ from datetime import datetime, timezone
 
 from concurrent.futures import ProcessPoolExecutor
 
-log = utils.init_logger()
+log = utils.stream_logger()
 _env = utils.pipeline_env()
-_exec_timeout = int(os.getenv("EXEC_TIMEOUT", 120))  # 单个测试用例执行超时时间，单位秒
+
 
 def decode_args():
     """
@@ -30,11 +29,8 @@ def decode_args():
     return args.it_bin, args.ut_bin, args.test_suite, args.test_case
 
 
-def run_code_gate(it_bin, ut_bin, test_suite, test_case):
-    log.info(f"Read IT test executable path: {it_bin}")
-    log.info(f"Read UT test executable path: {ut_bin}")
-    log.info(f"Read test suit in gtest_filter: {test_suite}")
-    log.info(f"Read test case in gtest_filter: {test_case}")
+def run_code_gate(it_bin, ut_bin, test_suite, test_case,
+                  exec_timeout=120, retry_times=0, job_num=os.cpu_count(), print_logs=True):
     start_time = time.time()
 
     # 采集所有测试用例的名字
@@ -47,6 +43,9 @@ def run_code_gate(it_bin, ut_bin, test_suite, test_case):
         "ut_bin": ut_bin,
         "ut_count": 0,
         "ut_index": gather_tests_index(ut_bin),
+        "exec_timeout": exec_timeout,
+        "retry_times": retry_times,
+        "job_num": job_num,
         "merge_info": {
             "user": os.getenv("codehubMergedByUser"),
             "repo": os.getenv("codehubSourceRepoName"),
@@ -55,7 +54,6 @@ def run_code_gate(it_bin, ut_bin, test_suite, test_case):
             "target": os.getenv("codehubTargetRepoSshUrl"),
         }
     }
-
     for key, value in collector["it_index"].items():
         log.info(f"Find IT test-suit[{key}] cases: {value}")
         collector["it_count"] += len(value)
@@ -69,33 +67,30 @@ def run_code_gate(it_bin, ut_bin, test_suite, test_case):
         if test_case == "":
             test_case = "*"
         if test_suite in collector["it_index"].keys():
-            proc_result = run_test_unit(it_bin, test_suite, test_case)
-            case_results = parse_test_output(*proc_result)
+            proc_result = run_test_unit(it_bin, test_suite, test_case, exec_timeout)
+            case_results = parse_test_output(*proc_result, print_logs=print_logs)
             return summarize(start_time, collector, [proc_result], case_results)
         elif test_suite in collector["ut_index"].keys():
-            proc_result = run_test_unit(ut_bin, test_suite, test_case)
-            case_results = parse_test_output(*proc_result)
+            proc_result = run_test_unit(ut_bin, test_suite, test_case, exec_timeout)
+            case_results = parse_test_output(*proc_result, print_logs=print_logs)
             return summarize(start_time, collector, [proc_result], case_results)
         else:
             log.error(f"Target test-unit: {test_suite}.{test_case} not found.")
             return 0
 
     # 执行全部测试用例
-    cpu_count, total_mem = utils.get_linux_resources()
-    worker_num = min(int(os.getenv("MAX_WORKERS", 64)), cpu_count)
-    log.info(f"Run all test suites in {worker_num} workers. Total resources available: {cpu_count}CPU {total_mem}GB")
-    executor = ProcessPoolExecutor(max_workers=worker_num)
+    executor = ProcessPoolExecutor(max_workers=job_num)
     futures = []
     for test_suite in sorted(collector["it_index"].keys()):
-        futures.append(executor.submit(run_test_unit_proc, it_bin, test_suite, "*"))
+        futures.append(executor.submit(run_test_unit_proc, it_bin, test_suite, "*", exec_timeout, retry_times))
     for test_suite in sorted(collector["ut_index"].keys()):
-        futures.append(executor.submit(run_test_unit_proc, ut_bin, test_suite, "*"))
+        futures.append(executor.submit(run_test_unit_proc, ut_bin, test_suite, "*", exec_timeout, retry_times))
 
     proc_results = []
     case_results = []
     for future in futures:
         result = future.result()
-        case_results.extend(parse_test_output(*result))
+        case_results.extend(parse_test_output(*result, print_logs=print_logs))
         proc_results.append(result)
 
     return summarize(start_time, collector, proc_results, case_results)
@@ -103,12 +98,12 @@ def run_code_gate(it_bin, ut_bin, test_suite, test_case):
 
 def gather_tests_index(path):
     # 先收集非期望的输出
-    _, main_output, _ = run_command(path, "--gtest_color=no", "--gtest_list_tests", "--gtest_filter=-*")
+    _, main_output, _ = utils.pipe_command([path, "--gtest_color=no", "--gtest_list_tests", "--gtest_filter=-*"])
     main_output = main_output.split("\n")
-
-    _, tests_list, _ = run_command(path, "--gtest_color=no", "--gtest_list_tests")
+    # 收集全量的用例输出
+    _, tests_list, _ = utils.pipe_command([path, "--gtest_color=no", "--gtest_list_tests"])
     tests_list = tests_list.split("\n")
-
+    # 对比计算测试用例输出
     it = 0  # 虚拟指针指向非期望的输出内容的行
     tests_index = {}
     test_suite_name = ""
@@ -132,22 +127,7 @@ def gather_tests_index(path):
     return tests_index
 
 
-def run_command(path, *args):
-    cmd = [path, *args]
-    log.info(f"Run command: {' '.join(cmd)}")
-    proc = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, cmd, output=proc.stdout, stderr=proc.stderr)
-
-    return proc.returncode, proc.stdout, proc.stderr
-
-
-def run_test_unit_proc(path, test_suite, test_case):
+def run_test_unit_proc(path, test_suite, test_case, exec_timeout, retry_times):
     """
     用于在并发场景下包装测试用例执行函数，捕获异常进程信息
     :return: 进程名，执行时间，退出代码，[标准输入，标准输出，标准错误]
@@ -155,10 +135,9 @@ def run_test_unit_proc(path, test_suite, test_case):
     proc_name = path.split('/')[-1]
     proc_desc = f"<{proc_name}>[{test_suite}.{test_case}]"
 
-    retry_times = max(1, int(os.getenv("RETRY_TIMES", "1")))
     try:
-        while retry_times > 0:
-            result = run_test_unit(path, test_suite, test_case)
+        while retry_times + 1 > 0:
+            result = run_test_unit(path, test_suite, test_case, exec_timeout)
             retry_times -= 1
             if result[2] == 0:
                 return result
@@ -170,7 +149,7 @@ def run_test_unit_proc(path, test_suite, test_case):
         return proc_name, 0, -400, [[test_suite, test_case], "", str(e)]
 
 
-def run_test_unit(path, test_suite, test_case):
+def run_test_unit(path, test_suite, test_case, exec_timeout):
     """
     测试用例执行函数，捕获程序执行状态、标准输出、标准错误
     :return: 进程名，执行时间，退出代码，[标准输入，标准输出，标准错误]
@@ -185,7 +164,7 @@ def run_test_unit(path, test_suite, test_case):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             encoding="utf-8",
-            timeout=_exec_timeout,
+            timeout=exec_timeout,
             errors="replace",
             text=True,
         )
@@ -193,16 +172,14 @@ def run_test_unit(path, test_suite, test_case):
         log.error(f"Run test {proc_desc} timeout: {e}")
         stdout = "" if e.stdout is None else e.stdout.decode("utf-8", errors="replace")
         stderr = "" if e.stderr is None else e.stderr.decode("utf-8", errors="replace")
-        return proc_name, _exec_timeout * 1000, -408, [[test_suite, test_case], stdout, stderr]
+        return proc_name, exec_timeout * 1000, -408, [[test_suite, test_case], stdout, stderr]
     stop_time = time.time()
     exec_time = int((stop_time - start_time) * 1000)  # 转换为毫秒
     log.info(f"Test process {proc_desc} finished in {exec_time}ms with code {proc.returncode}.")
     return proc_name, exec_time, proc.returncode, [[test_suite, test_case], proc.stdout, proc.stderr]
 
 
-
-
-def parse_test_output(proc_name, exec_time, exit_code, std):
+def parse_test_output(proc_name, exec_time, exit_code, std, print_logs):
     """
     串行打印并分析测试用例的输出信息
     """
@@ -210,8 +187,7 @@ def parse_test_output(proc_name, exec_time, exit_code, std):
     stdout_lines = std[1].split("\n")
     stderr_lines = std[2].split("\n")
 
-    test_log_print_disable = os.getenv("TEST_LOG_PRINT_DISABLE")
-    if test_log_print_disable != "true":
+    if print_logs:
         log.info(f"Show process {proc_desc} original standard output and standard errors")
         log.info(f"{'-' * 10} {proc_desc} stdout {'-' * 10}")
         for line in stdout_lines:
@@ -248,7 +224,7 @@ def parse_test_output(proc_name, exec_time, exit_code, std):
 pattern = r'\[\s+(\w+)\s+\]\s+([\w\/]+)\.([\w\/]+)\s+\((\d+)\s+ms\)'
 
 
-def test_result_line(hits: str , line: str, test_suite="Unknown", test_case="Unknown"):
+def test_result_line(hits: str, line: str, test_suite="Unknown", test_case="Unknown"):
     matches = re.match(pattern, line)
     if not matches:
         log.error(f"Invalid test result line: {line}")
@@ -342,7 +318,7 @@ def log2es(step: str, text: str, info: dict, ex: dict = None):
 
     headers = {
         'X-SubSystem': "function_system",
-        'X-Pipeline-Name': _env["JOB_BASE_NAME"],
+        'X-Pipeline-Name': _env.get("JOB_BASE_NAME", ""),
         'X-Pipeline-Type': "gate",
         'X-Pipeline-Step': "gtest",
     }

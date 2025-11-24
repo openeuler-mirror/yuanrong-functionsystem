@@ -1,31 +1,10 @@
-#!/usr/bin/env python3
 # coding=UTF-8
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
 import os
-import sys
-import json
-import socket
-import logging
 from typing import Tuple
-from typing import Optional
-from urllib.request import urlopen
-from urllib.request import Request
 
 
 # 请勿在此声明全局变量
-
-def init_logger() -> logging.Logger:
-    """
-    初始化日志组件
-    """
-    logging.basicConfig(
-        level=logging.INFO,
-        format='[%(levelname)s][%(asctime)s] %(message)s',
-        datefmt='%b %d %H:%M:%S',
-        handlers=[logging.StreamHandler(sys.stdout)]
-    )
-    log = logging.getLogger()
-    return log
 
 
 def pipeline_env() -> dict:
@@ -58,26 +37,10 @@ def get_linux_resources() -> Tuple[int, int]:
     return cpu_count, total_mem_gb
 
 
-def report2es(headers: dict, data: dict) -> Optional[str]:
-    """
-    上报事件到ES存储
-    """
-    url = os.getenv("LOGSTASH_URL")
-    if url is None:
-        return None
-
-    headers.update({
-        'Content-Type': 'application/json',
-        'User-Agent': socket.gethostname(),
-    })
-    json_data = json.dumps(data).encode("utf-8")
-    req = Request(url=url, method="POST", headers=headers, data=json_data)
-
-    try:
-        rsp = urlopen(req)
-    except (ConnectionRefusedError, ConnectionResetError) as e:
-        return f"Connect [{url}] error: {e}"
-    status_code = rsp.status
-    if status_code != 200:
-        return f"Failed to send logstash data: {data}"
-    return None
+def get_linux_distribution():
+    with open("/etc/os-release") as f:
+        lines = f.readlines()
+        for line in lines:
+            if line.startswith("ID="):
+                return line.split('"')[1]
+        return "Unknown"

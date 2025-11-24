@@ -1,29 +1,27 @@
-#!/usr/bin/env python3
-# coding=UTF-8
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
-
+import json
 import os
 import utils
 import tasks
 
-log = utils.init_logger()
+log = utils.stream_logger()
 
 
-def run_build(root_dir, args):
-    build_args = {
+def run_build(root_dir, cmd_args):
+    args = {
         "root_dir": root_dir,
-        "job_num": args.jobs if args.jobs else (os.cpu_count() or 1),
-        "version": args.version if args.version else "0.0.1"
+        "job_num": cmd_args.job_num,
+        "version": cmd_args.version
     }
-    if build_args['job_num'] > (os.cpu_count() or 1) * 2:
-        log.warning(f"The -j {build_args['job_num']} is over the max logical cpu count({os.cpu_count()}) * 2")
-    log.info(f"Start to build function system with args: {build_args}")
+    if args['job_num'] > (os.cpu_count() or 1) * 2:
+        log.warning(f"The -j {args['job_num']} is over the max logical cpu count({os.cpu_count()}) * 2")
+    log.info(f"Start to build function-system with args: {json.dumps(args)}")
 
-    compile_vendor(build_args)
-    compile_logs(build_args)
-    compile_litebus(build_args)
-    compile_metrics(build_args)
-    compile_functionsystem(build_args)
+    compile_vendor(args)
+    compile_logs(args)
+    compile_litebus(args)
+    compile_metrics(args)
+    compile_functionsystem(args)
 
 
 def compile_vendor(args):
@@ -31,8 +29,8 @@ def compile_vendor(args):
 
     # 根据下载清单下载第三方依赖
     tasks.download_vendor(
-        config_path=os.path.join(args['root_dir'], "vendor/VendorList.csv"),
-        download_path=os.path.join(args['root_dir'], "vendor/src")
+        config_path=os.path.join(args['root_dir'], "vendor", "VendorList.csv"),
+        download_path=os.path.join(args['root_dir'], "vendor", "src")
     )
 
     utils.sync_command(
