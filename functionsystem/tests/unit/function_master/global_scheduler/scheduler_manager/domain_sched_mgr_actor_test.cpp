@@ -23,6 +23,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "mock_domain_sched_srv_actor.h"
+#include "mocks/group_ctrl_stub_actor.h"
 #include "utils/future_test_helper.h"
 #include "utils/generate_info.h"
 
@@ -409,4 +410,24 @@ TEST_F(DomainSchedMgrActorTest, ReConnect)
     litebus::Await(actor->GetAID());
 }
 
+TEST_F(DomainSchedMgrActorTest, GroupSchedule)
+{
+    auto actor = std::make_shared<global_scheduler::DomainSchedMgrActor>("TestDomainSchedActor");
+    auto groupCtrlStub = std::make_shared<DomainGroupCtrlActorStub>(DOMAIN_GROUP_CTRL_ACTOR_NAME);
+    litebus::Spawn(groupCtrlStub);
+    litebus::Spawn(actor);
+    auto groupInfo = std::make_shared<messages::GroupInfo>();
+    groupInfo->set_requestid("123456");
+    messages::GroupResponse rsp;
+    rsp.set_requestid("123456");
+    EXPECT_CALL(*groupCtrlStub, MockForwardGroupSchedule).WillOnce(testing::Return(rsp.SerializeAsString()));
+    auto future = litebus::Async(actor->GetAID(), &global_scheduler::DomainSchedMgrActor::GroupSchedule, "name",
+                                 actor->GetAID().UnfixUrl(), groupInfo);
+    ASSERT_AWAIT_READY(future);
+    EXPECT_EQ(future.Get().code(), 0);
+    litebus::Terminate(groupCtrlStub->GetAID());
+    litebus::Await(groupCtrlStub->GetAID());
+    litebus::Terminate(actor->GetAID());
+    litebus::Await(actor->GetAID());
+}
 }  // namespace functionsystem::test

@@ -29,9 +29,16 @@
 namespace functionsystem::busproxy {
 using IsReady = bool;
 const std::map<InstanceState, IsReady> STATUS_READY = {
-    { InstanceState::NEW, false },    { InstanceState::SCHEDULING, false }, { InstanceState::CREATING, false },
-    { InstanceState::RUNNING, true }, { InstanceState::FAILED, false },     { InstanceState::EXITING, false },
+    { InstanceState::NEW, false },
+    { InstanceState::SCHEDULING, false },
+    { InstanceState::CREATING, false },
+    { InstanceState::RUNNING, true },
+    { InstanceState::FAILED, false },
+    { InstanceState::EXITING, false },
     { InstanceState::FATAL, false },
+    // rely on reject tag
+    // while instance change suspend to creating, need to keep request in flight
+    { InstanceState::SUSPEND, true },
 };
 
 const int32_t INT_SIGNAL = 2;
@@ -78,7 +85,9 @@ InstanceView::InstanceView(const std::string &nodeID) : nodeID_(nodeID)
         { InstanceState::FATAL, std::bind(&InstanceView::Fatal, this, std::placeholders::_1, std::placeholders::_2) },
         { InstanceState::EVICTED, std::bind(&InstanceView::Fatal, this, std::placeholders::_1, std::placeholders::_2) },
         { InstanceState::SUB_HEALTH,
-          std::bind(&InstanceView::Reject, this, std::placeholders::_1, std::placeholders::_2) }
+          std::bind(&InstanceView::Reject, this, std::placeholders::_1, std::placeholders::_2) },
+        { InstanceState::SUSPEND,
+          std::bind(&InstanceView::Reject, this, std::placeholders::_1, std::placeholders::_2) },
     };
 }
 
@@ -288,6 +297,8 @@ void InstanceView::NotifyReady(const std::string &instanceID, const resources::I
                 auto routeInfo = TransferInstanceInfo(instanceInfo, nodeID);
                 routeInfo->localClient = dataInterfacePosix;
                 ASSERT_IF_NULL(instanceProxy);
+                YRLOG_DEBUG("update data interface posix client for {}, runtime {}, address {}.", instanceID,
+                            instanceInfo.runtimeid(), address);
                 litebus::Async(instanceProxy->GetAID(), &InstanceProxy::NotifyChanged, instanceID, routeInfo);
                 return Status::OK();
             });
@@ -382,18 +393,11 @@ void InstanceView::Reject(const std::string &instanceID, const resources::Instan
     SpawnInstanceProxy(instanceID, instanceInfo);
     auto errCode = instanceInfo.instancestatus().errcode();
     auto msg = instanceInfo.instancestatus().msg();
-    YRLOG_INFO("instance({}) is set to reject request, errcode({}), msg({})", instanceID, errCode, msg);
+    // only instance in local would reject request
     if (auto iter(localInstances_.find(instanceID)); iter != localInstances_.end()) {
+        YRLOG_INFO("instance({}) is set to reject request, errcode({}), msg({})", instanceID, errCode, msg);
         litebus::Async(iter->second->GetAID(), &InstanceProxy::Reject, instanceID, msg,
                        static_cast<StatusCode>(errCode));
-    }
-    // notify subscriber
-    for (const auto &subscriber : subscribedInstances_[instanceID]) {
-        if (localInstances_.find(subscriber) != localInstances_.end() && localInstances_[subscriber] != nullptr) {
-            auto instanceProxy = localInstances_[subscriber];
-            litebus::Async(instanceProxy->GetAID(), &InstanceProxy::Reject, instanceID, msg,
-                           static_cast<StatusCode>(errCode));
-        }
     }
 }
 

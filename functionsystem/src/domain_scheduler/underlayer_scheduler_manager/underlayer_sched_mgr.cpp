@@ -40,10 +40,10 @@ void UnderlayerSchedMgr::SetDomainLevel(bool isHeader)
     return litebus::Async(aid_, &UnderlayerSchedMgrActor::SetDomainLevel, isHeader);
 }
 
-litebus::Future<std::shared_ptr<messages::ScheduleResponse>> UnderlayerSchedMgr::Reserve(
-    const std::string &selectedName, const std::shared_ptr<messages::ScheduleRequest> &req)
+litebus::Future<std::shared_ptr<messages::OnReserves>> UnderlayerSchedMgr::Reserves(
+    const std::string &selectedName, const std::shared_ptr<messages::Reserves> &req)
 {
-    return litebus::Async(aid_, &UnderlayerSchedMgrActor::Reserve, selectedName, req);
+    return litebus::Async(aid_, &UnderlayerSchedMgrActor::Reserves, selectedName, req);
 }
 
 litebus::Future<Status> UnderlayerSchedMgr::UnReserve(const std::string &selectedName,

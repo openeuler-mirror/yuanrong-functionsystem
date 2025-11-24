@@ -107,7 +107,7 @@ LocalGroupCtrlActor::LocalGroupCtrlActor(const std::string &name, const std::str
 void LocalGroupCtrlActor::Init()
 {
     ActorBase::Init();
-    Receive("Reserve", &LocalGroupCtrlActor::Reserve);
+    Receive("Reserves", &LocalGroupCtrlActor::Reserves);
     Receive("UnReserve", &LocalGroupCtrlActor::UnReserve);
     Receive("Bind", &LocalGroupCtrlActor::Bind);
     Receive("UnBind", &LocalGroupCtrlActor::UnBind);
@@ -292,9 +292,6 @@ Status TransGroupRequest(const std::string &from, std::string &nodeID, std::shar
     auto affinityHash =
         std::hash<std::string>()(req->requests(0).schedulingops().scheduleaffinity().ShortDebugString());
     for (CreateRequest createReq : *req->mutable_requests()) {
-        if (!createReq.designatedinstanceid().empty()) {
-            return Status(StatusCode::ERR_PARAM_INVALID, "group schedule does not support to designated instanceID.");
-        }
         if (auto it = createReq.createoptions().find("lifecycle");
             it != createReq.createoptions().end() && it->second == "detached") {
             return Status(StatusCode::ERR_PARAM_INVALID, "group schedule does not support detached instance.");
@@ -891,17 +888,42 @@ void LocalGroupCtrlActor::HandleAllocateInsError(const std::shared_ptr<GroupCont
         litebus::Defer(GetAID(), &LocalGroupCtrlActor::OnLocalGroupSchedule, std::placeholders::_1, groupCtx, rsp));
 }
 
-void LocalGroupCtrlActor::Reserve(const litebus::AID &from, std::string &&name, std::string &&msg)
+void LocalGroupCtrlActor::Reserves(const litebus::AID &from, std::string &&name, std::string &&msg)
 {
     if (!CheckIsReady(name)) {
         return;
     }
-    auto req = std::make_shared<messages::ScheduleRequest>();
+    auto req = std::make_shared<messages::Reserves>();
     if (!req->ParseFromString(msg)) {
         YRLOG_ERROR("failed to parse request for reserve resource. from({}) msg({}), ignore it", std::string(from),
                     msg);
         return;
     }
+    YRLOG_INFO("{}|{}|received request of batch reserve instance({}) resource, groupID({})", req->traceid(),
+               req->requestid(), fmt::join(req->instanceids().begin(), req->instanceids().end(), ","), req->groupid());
+    auto resp = std::make_shared<messages::OnReserves>();
+    resp->set_requestid(req->requestid());
+    resp->set_traceid(req->traceid());
+    std::list<litebus::Future<std::shared_ptr<messages::ScheduleResponse>>> futures;
+    for (auto r : req->reserves()) {
+        auto scheReq = std::make_shared<messages::ScheduleRequest>(r);
+        futures.emplace_back(DoReserve(scheReq));
+    }
+    (void)litebus::Collect(futures).OnComplete(
+        [resp, from,
+         aid(GetAID())](const litebus::Future<std::list<std::shared_ptr<messages::ScheduleResponse>>> &future) {
+            ASSERT_FS(future.IsOK());
+            auto rsps = future.Get();
+            for (auto rsp : rsps) {
+                *resp->add_responses() = std::move(*rsp);
+            }
+            litebus::Async(aid, &LocalGroupCtrlActor::CollectResourceOnReserve, from, resp);
+        });
+}
+
+litebus::Future<std::shared_ptr<messages::ScheduleResponse>> LocalGroupCtrlActor::DoReserve(
+        std::shared_ptr<messages::ScheduleRequest> &req)
+{
     auto resp = std::make_shared<messages::ScheduleResponse>();
     resp->set_requestid(req->requestid());
     resp->set_instanceid(req->instance().instanceid());
@@ -914,25 +936,21 @@ void LocalGroupCtrlActor::Reserve(const litebus::AID &from, std::string &&name, 
         // reset timer
         reserveResult_[req->requestid()].reserveTimeout =
             litebus::AsyncAfter(reserveToBindTimeoutMs_, GetAID(), &LocalGroupCtrlActor::TimeoutToBind, req);
-        Send(from, "OnReserve", resp->SerializeAsString());
-        return;
+        return resp;
     }
-    YRLOG_INFO("{}|{}|received request of reserve instance({}) resource, groupID({}) from({})", req->traceid(),
-               req->requestid(), req->instance().instanceid(), req->instance().groupid(), from.HashString());
     ASSERT_IF_NULL(scheduler_);
-    scheduler_->ScheduleDecision(req).OnComplete(
-        litebus::Defer(GetAID(), &LocalGroupCtrlActor::OnReserve, from, std::placeholders::_1, req, resp));
+    return scheduler_->ScheduleDecision(req).Then(
+        litebus::Defer(GetAID(), &LocalGroupCtrlActor::OnReserve, std::placeholders::_1, req, resp));
 }
 
-void LocalGroupCtrlActor::SetDeviceInfoError(const litebus::AID &to,
+litebus::Future<std::shared_ptr<messages::ScheduleResponse>> LocalGroupCtrlActor::SetDeviceInfoError(
     const std::shared_ptr<messages::ScheduleRequest> &req, const std::shared_ptr<messages::ScheduleResponse> &resp)
 {
     auto type = resource_view::GetResourceType(req->instance());
     resourceViewMgr_->GetInf(type)->DeleteInstances({ req->instance().instanceid() }, true);
     (void)reserveResult_.erase(req->requestid());
-    scheduler_->ScheduleDecision(req).OnComplete(
-        litebus::Defer(GetAID(), &LocalGroupCtrlActor::OnReserve, to, std::placeholders::_1, req, resp));
-    return;
+    return scheduler_->ScheduleDecision(req).Then(
+        litebus::Defer(GetAID(), &LocalGroupCtrlActor::OnReserve, std::placeholders::_1, req, resp));
 }
 
 litebus::Future<Status> LocalGroupCtrlActor::SetDeviceInfoToHeteroScheduleResp(
@@ -957,10 +975,10 @@ litebus::Future<Status> LocalGroupCtrlActor::SetDeviceInfoToHeteroScheduleResp(
     });
 }
 
-void LocalGroupCtrlActor::OnSuccessfulReserve(const litebus::AID &to,
-                                              const schedule_decision::ScheduleResult &result,
-                                              const std::shared_ptr<messages::ScheduleRequest> &req,
-                                              const std::shared_ptr<messages::ScheduleResponse> &resp)
+litebus::Future<std::shared_ptr<messages::ScheduleResponse>> LocalGroupCtrlActor::OnSuccessfulReserve(
+    const schedule_decision::ScheduleResult &result,
+    const std::shared_ptr<messages::ScheduleRequest> &req,
+    const std::shared_ptr<messages::ScheduleResponse> &resp)
 {
     YRLOG_INFO("{}|{}|success to reserve instance({}), groupID({}), selected agent ({})", req->traceid(),
                req->requestid(), req->instance().instanceid(), req->instance().groupid(), result.id);
@@ -973,12 +991,11 @@ void LocalGroupCtrlActor::OnSuccessfulReserve(const litebus::AID &to,
     (*resp->mutable_contexts())[GROUP_SCHEDULE_CONTEXT].mutable_groupschedctx()->set_reserved(result.id);
 
     if (!IsHeterogeneousRequest(req)) {
-        CollectResourceOnReserve(to, resp);
-        return;
+        return resp;
     }
 
-    SetDeviceInfoToHeteroScheduleResp(result, req, resp).OnComplete([aid(GetAID()), to, req, resp, result](
-        const litebus::Future<Status> &future) {
+    return SetDeviceInfoToHeteroScheduleResp(result, req, resp).Then([aid(GetAID()), req, resp, result](
+        const litebus::Future<Status> &future) -> litebus::Future<std::shared_ptr<messages::ScheduleResponse>> {
         ASSERT_FS(future.IsOK());
         auto status = future.Get();
         if (status.IsError()) {
@@ -986,15 +1003,14 @@ void LocalGroupCtrlActor::OnSuccessfulReserve(const litebus::AID &to,
                         "instance({}), groupID({}), selected agent ({}). retry to reserve",
                         req->traceid(), req->requestid(), req->instance().instanceid(), req->instance().groupid(),
                         result.id);
-            litebus::Async(aid, &LocalGroupCtrlActor::SetDeviceInfoError, to, req, resp);
-            return;
+            return litebus::Async(aid, &LocalGroupCtrlActor::SetDeviceInfoError, req, resp);
         }
-        litebus::Async(aid, &LocalGroupCtrlActor::CollectResourceOnReserve, to, resp);
+        return resp;
     });
 }
 
 void LocalGroupCtrlActor::CollectResourceOnReserve(const litebus::AID &to,
-                                                   const std::shared_ptr<messages::ScheduleResponse> &resp)
+                                                   const std::shared_ptr<messages::OnReserves> &resp)
 {
     ASSERT_IF_NULL(resourceViewMgr_);
     (void)resourceViewMgr_->GetChanges().Then(
@@ -1003,15 +1019,15 @@ void LocalGroupCtrlActor::CollectResourceOnReserve(const litebus::AID &to,
             for (const auto &[type, change] : changes) {
                 (*resp->mutable_updateresources())[static_cast<int32_t>(type)] = std::move(*change);
             }
-            litebus::Async(aid, &LocalGroupCtrlActor::SendMsg, to, "OnReserve", resp->SerializeAsString());
+            litebus::Async(aid, &LocalGroupCtrlActor::SendMsg, to, "OnReserves", resp->SerializeAsString());
             return {};
         });
 }
 
-void LocalGroupCtrlActor::OnReserve(const litebus::AID &to,
-                                    const litebus::Future<schedule_decision::ScheduleResult> &future,
-                                    const std::shared_ptr<messages::ScheduleRequest> &req,
-                                    const std::shared_ptr<messages::ScheduleResponse> &resp)
+litebus::Future<std::shared_ptr<messages::ScheduleResponse>> LocalGroupCtrlActor::OnReserve(
+    const litebus::Future<schedule_decision::ScheduleResult> &future,
+    const std::shared_ptr<messages::ScheduleRequest> &req,
+    const std::shared_ptr<messages::ScheduleResponse> &resp)
 {
     ASSERT_FS(future.IsOK());
     auto result = future.Get();
@@ -1024,10 +1040,10 @@ void LocalGroupCtrlActor::OnReserve(const litebus::AID &to,
                    result.reason);
         resp->set_code(result.code);
         resp->set_message(result.reason);
-        return CollectResourceOnReserve(to, resp);
+        return resp;
     }
     if (result.allocatedPromise != nullptr) {
-        result.allocatedPromise->GetFuture().OnComplete([scheduler(scheduler_), aid(GetAID()), to, req, resp,
+        return result.allocatedPromise->GetFuture().Then([scheduler(scheduler_), aid(GetAID()), req, resp,
                                                          result](const litebus::Future<Status> &future) {
             ASSERT_FS(future.IsOK());
             auto status = future.Get();
@@ -1035,15 +1051,13 @@ void LocalGroupCtrlActor::OnReserve(const litebus::AID &to,
                 YRLOG_ERROR("{}|{}|failed to allocate instance({}), groupID({}), selected agent ({}). retry to reserve",
                             req->traceid(), req->requestid(), req->instance().instanceid(), req->instance().groupid(),
                             result.id);
-                scheduler->ScheduleDecision(req).OnComplete(
-                    litebus::Defer(aid, &LocalGroupCtrlActor::OnReserve, to, std::placeholders::_1, req, resp));
-                return;
+                return scheduler->ScheduleDecision(req).Then(
+                    litebus::Defer(aid, &LocalGroupCtrlActor::OnReserve, std::placeholders::_1, req, resp));
             }
-            litebus::Async(aid, &LocalGroupCtrlActor::OnSuccessfulReserve, to, result, req, resp);
+            return litebus::Async(aid, &LocalGroupCtrlActor::OnSuccessfulReserve, result, req, resp);
         });
-        return;
     }
-    return OnSuccessfulReserve(to, result, req, resp);
+    return OnSuccessfulReserve(result, req, resp);
 }
 
 void LocalGroupCtrlActor::SendMsg(const litebus::AID &to, const std::string &name, const std::string &msg)

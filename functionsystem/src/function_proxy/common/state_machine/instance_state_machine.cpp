@@ -18,12 +18,15 @@
 
 #include <unordered_set>
 
+#include "common/types/instance_state.h"
 #include "async/defer.hpp"
 #include "async/uuid_generator.hpp"
 #include "common/logs/logging.h"
 #include "common/metadata/metadata.h"
 #include "common/metrics/metrics_adapter.h"
 #include "common/utils/meta_store_kv_operation.h"
+#include "common/meta_store_adapter/instance_operator.h"
+#include "common/utils/struct_transfer.h"
 
 namespace functionsystem {
 const int32_t MAX_EXIT_TIMES = 3;
@@ -37,7 +40,7 @@ static const std::unordered_map<InstanceState, std::unordered_set<InstanceState>
       { InstanceState::RUNNING, InstanceState::FAILED, InstanceState::EXITING, InstanceState::FATAL } },
     { InstanceState::RUNNING,
       { InstanceState::FAILED, InstanceState::EXITING, InstanceState::FATAL, InstanceState::EVICTING,
-        InstanceState::SUB_HEALTH } },
+        InstanceState::SUB_HEALTH, InstanceState::SUSPEND } },
     { InstanceState::SUB_HEALTH,
       { InstanceState::FAILED, InstanceState::EXITING, InstanceState::FATAL, InstanceState::EVICTING,
         InstanceState::RUNNING } },
@@ -47,6 +50,8 @@ static const std::unordered_map<InstanceState, std::unordered_set<InstanceState>
     { InstanceState::EVICTING, { InstanceState::EVICTED, InstanceState::FATAL } },
     { InstanceState::SCHEDULE_FAILED, { InstanceState::SCHEDULING, InstanceState::EXITING } },
     { InstanceState::EVICTED, { InstanceState::EXITING, InstanceState::FATAL } },
+    { InstanceState::SUSPEND,
+      { InstanceState::CREATING, InstanceState::SCHEDULING, InstanceState::FATAL, InstanceState::EXITING } },
 };
 
 /**

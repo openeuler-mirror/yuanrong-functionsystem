@@ -110,6 +110,9 @@ public:
                                              const std::shared_ptr<messages::ScheduleRequest> &req,
                                              uint32_t retryCycle = DEFAULT_RETRY_CYCLE) const;
 
+    virtual litebus::Future<messages::GroupResponse> GroupSchedule(
+        const std::string &name, const std::string &address, const std::shared_ptr<messages::GroupInfo> &req) const;
+
     virtual void UpdateLeaderInfo(const explorer::LeaderInfo &leaderInfo);
 
     virtual litebus::Future<messages::QueryAgentInfoResponse> QueryAgentInfo(

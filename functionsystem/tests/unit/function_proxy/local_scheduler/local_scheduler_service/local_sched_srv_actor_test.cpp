@@ -780,6 +780,7 @@ TEST_F(LocalSchedSrvActorTest, ForwardKillGroup)
     {
         messages::KillGroupResponse rsp;
         rsp.set_groupid(kill->groupid());
+        rsp.set_grouprequestid(kill->groupid() + "-" + std::to_string(kill->signal()));
         EXPECT_CALL(*groupMgrStub, MockKillGroup).WillOnce(Return(rsp.SerializeAsString()));
         auto future = litebus::Async(dstActor_->GetAID(), &LocalSchedSrvActor::KillGroup, kill);
         ASSERT_AWAIT_READY(future);

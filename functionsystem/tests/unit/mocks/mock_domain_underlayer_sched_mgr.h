@@ -31,8 +31,8 @@ public:
                 (const std::string &selectedName, const std::shared_ptr<messages::ScheduleRequest> &req), (override));
     MOCK_METHOD(void, UpdateUnderlayerTopo, (const messages::ScheduleTopology &req), (override));
     MOCK_METHOD(litebus::Future<bool>, IsRegistered, (const std::string &name), (override));
-    MOCK_METHOD(litebus::Future<std::shared_ptr<messages::ScheduleResponse>>, Reserve,
-                (const std::string &selectedName, const std::shared_ptr<messages::ScheduleRequest> &req), (override));
+    MOCK_METHOD(litebus::Future<std::shared_ptr<messages::OnReserves>>, Reserves,
+                (const std::string &selectedName, const std::shared_ptr<messages::Reserves> &req), (override));
     MOCK_METHOD(litebus::Future<Status>, UnReserve,
                 (const std::string &selectedName, const std::shared_ptr<messages::ScheduleRequest> &req), (override));
     MOCK_METHOD(litebus::Future<Status>, Bind,

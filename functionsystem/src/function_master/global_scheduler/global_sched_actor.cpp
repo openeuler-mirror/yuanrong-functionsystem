@@ -625,6 +625,41 @@ litebus::Future<Status> GlobalSchedActor::DoSchedule(const std::shared_ptr<messa
     return member_->domainSchedMgr->Schedule(rootDomain->GetNodeInfo().name, rootDomain->GetNodeInfo().address, req);
 }
 
+litebus::Future<messages::GroupResponse> GlobalSchedActor::GroupSchedule(
+    const std::shared_ptr<messages::GroupInfo> &groupInfo, uint32_t retryCycle)
+{
+    YRLOG_DEBUG("{}|start to forward group schedule for rg({}), groupName({})", groupInfo->requestid(),
+                groupInfo->rgroupname(), groupInfo->groupid());
+    auto promise = std::make_shared<litebus::Promise<messages::GroupResponse>>();
+    DoGroupSchedule(groupInfo, promise, retryCycle);
+    return promise->GetFuture();
+}
+
+void GlobalSchedActor::DoGroupSchedule(
+    const std::shared_ptr<messages::GroupInfo> &groupInfo,
+    const std::shared_ptr<litebus::Promise<messages::GroupResponse>> &promise, uint32_t retryCycle)
+{
+    auto rootDomain = FindRootDomainSched();
+    if (rootDomain == nullptr) {
+        YRLOG_ERROR("{}|root domain not exist, can't schedule group({}). defer ({}) to retry", groupInfo->requestid(),
+                    groupInfo->groupid());
+        litebus::AsyncAfter(retryCycle, GetAID(), &GlobalSchedActor::DoGroupSchedule, groupInfo, promise, retryCycle);
+        return;
+    }
+    ASSERT_IF_NULL(member_->domainSchedMgr);
+    member_->domainSchedMgr->GroupSchedule(rootDomain->GetNodeInfo().name, rootDomain->GetNodeInfo().address, groupInfo)
+        .OnComplete(
+            [retryCycle, promise, groupInfo, aid(GetAID())](const litebus::Future<messages::GroupResponse> &future) {
+                if (future.IsError()) {
+                    YRLOG_WARN("{}|{}|forward schedule request for resource group({}), request timeout.",
+                               groupInfo->traceid(), groupInfo->requestid(), groupInfo->rgroupname());
+                    litebus::Async(aid, &GlobalSchedActor::DoGroupSchedule, groupInfo, promise, retryCycle);
+                    return;
+                }
+                promise->SetValue(future.Get());
+            });
+}
+
 void GlobalSchedActor::UpdateLeaderInfo(const explorer::LeaderInfo &leaderInfo)
 {
     litebus::AID masterAID(GLOBAL_SCHED_ACTOR_NAME, leaderInfo.address);

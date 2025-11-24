@@ -96,6 +96,12 @@ litebus::Future<Status> DomainSchedMgr::Schedule(const std::string &name, const 
                           retryCycle);
 }
 
+litebus::Future<messages::GroupResponse> DomainSchedMgr::GroupSchedule(
+    const std::string &name, const std::string &address, const std::shared_ptr<messages::GroupInfo> &req) const
+{
+    return litebus::Async(domainSchedMgrActor_->GetAID(), &DomainSchedMgrActor::GroupSchedule, name, address, req);
+}
+
 void DomainSchedMgr::UpdateLeaderInfo(const explorer::LeaderInfo &leaderInfo)
 {
     litebus::Async(domainSchedMgrActor_->GetAID(), &DomainSchedMgrActor::UpdateLeaderInfo, leaderInfo);

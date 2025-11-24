@@ -36,8 +36,8 @@
 
 namespace functionsystem::runtime_manager {
 using namespace functionsystem::test;
-const int INITIAL_PORT = 600;
-const int PORT_NUM = 10;
+const int INITIAL_PORT = 1000;
+const int PORT_NUM = 1000;
 const std::string testDeployDir = "/tmp/layer/func/bucket-test-log1/yr-test-runtime-executor";
 const std::string funcObj = testDeployDir + "/" + "funcObj";
 const std::string TEST_TENANT_ID = "tenant001";

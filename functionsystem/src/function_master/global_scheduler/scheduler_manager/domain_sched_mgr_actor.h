@@ -70,6 +70,9 @@ public:
     litebus::Future<Status> Schedule(const std::string &name, const std::string &address,
                                      const std::shared_ptr<messages::ScheduleRequest> &req, const uint32_t retryCycle);
 
+    litebus::Future<messages::GroupResponse> GroupSchedule(const std::string &name, const std::string &address,
+                                                           const std::shared_ptr<messages::GroupInfo> &req);
+
     void ResponseSchedule(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     litebus::Future<messages::QueryAgentInfoResponse> QueryAgentInfo(const std::string &name,
@@ -90,6 +93,7 @@ public:
 
     void UpdateLeaderInfo(const explorer::LeaderInfo &leaderInfo);
 
+    void OnForwardGroupSchedule(const litebus::AID &from, std::string &&name, std::string &&msg);
 protected:
     void Init() override;
 
@@ -176,6 +180,9 @@ private:
     std::shared_ptr<HeartbeatObserveDriver> heartbeatObserveDriver_ = nullptr;
 
     const uint32_t heartbeatTimeoutMs_ = 1000;
+
+    const uint32_t groupTimeout_ = 10000;
+    REQUEST_SYNC_HELPER(DomainSchedMgrActor, messages::GroupResponse, groupTimeout_, requestGroupScheduleMatch_);
 };
 
 }  // namespace functionsystem::global_scheduler

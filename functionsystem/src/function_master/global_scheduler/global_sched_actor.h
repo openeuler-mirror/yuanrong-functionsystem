@@ -139,6 +139,8 @@ public:
     void AddLocalSchedAbnormalNotifyCallback(const std::string &name, const LocalSchedAbnormalCallbackFunc &func);
 
     litebus::Future<Status> DoSchedule(const std::shared_ptr<messages::ScheduleRequest> &req);
+    litebus::Future<messages::GroupResponse> GroupSchedule(const std::shared_ptr<messages::GroupInfo> &groupInfo,
+                                                           uint32_t retryCycle);
 
     litebus::Future<messages::QueryAgentInfoResponse> QueryAgentInfo(
         const std::shared_ptr<messages::QueryAgentInfoRequest> &req);
@@ -247,6 +249,10 @@ private:
 
     void OnLocalExit(const std::string &name);
     void OnLocalAbnormal(const std::string &name);
+
+    void DoGroupSchedule(const std::shared_ptr<messages::GroupInfo> &groupInfo,
+                         const std::shared_ptr<litebus::Promise<messages::GroupResponse>> &promise,
+                         uint32_t retryCycle);
 
     std::shared_ptr<MetaStoreClient> metaStoreClient_;
     std::shared_ptr<DomainActivator> domainActivator_;

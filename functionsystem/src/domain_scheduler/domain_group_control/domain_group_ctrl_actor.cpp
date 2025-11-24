@@ -310,53 +310,89 @@ void DomainGroupCtrlActor::OnGroupScheduleDecisionSuccessful(
         .OnComplete(litebus::Defer(GetAID(), &DomainGroupCtrlActor::OnReserve, _1, results, groupCtx));
 }
 
+void CollectReserves(std::shared_ptr<litebus::Promise<Status>> promise,
+                     const std::shared_ptr<GroupScheduleContext> &groupCtx,
+                     const litebus::Future<std::list<std::shared_ptr<messages::OnReserves>>> &future)
+{
+    if (future.IsError()) {
+        promise->SetValue(Status(static_cast<StatusCode>(future.GetErrorCode()),
+                                 "failed to reserve resource for " + groupCtx->groupInfo->groupid()));
+        return;
+    }
+    bool isError = false;
+    auto result = Status::OK();
+    std::list<std::shared_ptr<messages::ScheduleResponse>> responses;
+    for (auto resps : future.Get()) {
+        for (auto resp : resps->responses()) {
+            responses.emplace_back(std::make_shared<messages::ScheduleResponse>(resp));
+            if (resp.code() == static_cast<int32_t>(StatusCode::SUCCESS)) {
+                continue;
+            }
+            // reserve failed no need to confirm
+            isError = true;
+            result.AppendMessage("failed to reserve for instance " + resp.instanceid() + " of "
+                                 + groupCtx->groupInfo->groupid() + " err: " + resp.message());
+        }
+    }
+    if (isError) {
+        promise->SetValue(Status(StatusCode::DOMAIN_SCHEDULER_RESERVE, result.GetMessage()));
+        return;
+    }
+    groupCtx->responses = responses;
+    promise->SetValue(result);
+}
+
 litebus::Future<Status> DomainGroupCtrlActor::ToReserve(const std::vector<schedule_decision::ScheduleResult> &results,
                                                         const std::shared_ptr<GroupScheduleContext> &groupCtx)
 {
     ASSERT_FS(groupCtx->requests.size() >= results.size());
-    std::list<litebus::Future<std::shared_ptr<messages::ScheduleResponse>>> reserves;
+    std::unordered_map<std::string, std::vector<size_t>> records;
     for (size_t i = 0; i < results.size(); i++) {
-        auto future = underlayer_->Reserve(results[i].id, groupCtx->requests[i]);
-        future.OnComplete([groupCtx, i, selected(results[i].id)](
-                              const litebus::Future<std::shared_ptr<messages::ScheduleResponse>> &future) {
-            ASSERT_FS(future.IsOK());
-            auto resp = future.Get();
-            *(groupCtx->requests[i]->mutable_contexts()) = resp->contexts();
-            // reserved would not to rollback, unless domain group schedule decision failed.
-            if (resp->code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
-                (*groupCtx->requests[i]->mutable_contexts())[GROUP_SCHEDULE_CONTEXT]
-                    .mutable_groupschedctx()
-                    ->set_reserved("");
-                (void)groupCtx->failedReserve.insert(groupCtx->requests[i]->requestid());
-            }
-        });
+        records[results[i].id].emplace_back(i);
+    }
+    std::list<litebus::Future<std::shared_ptr<messages::OnReserves>>> reserves;
+    for (auto [id, indexs] : records) {
+        std::unordered_map<std::string, size_t> requestToIndex;
+        auto req = std::make_shared<messages::Reserves>();
+        std::string post;
+        for (auto i : indexs) {
+            post += "_" + std::to_string(i);
+            *req->add_reserves() = *groupCtx->requests[i];
+            *req->add_instanceids() = groupCtx->requests[i]->instance().instanceid();
+            requestToIndex[groupCtx->requests[i]->requestid()] = i;
+        }
+        req->set_requestid(groupCtx->groupInfo->requestid() + post);
+        req->set_traceid(groupCtx->groupInfo->traceid());
+        req->set_groupid(groupCtx->groupInfo->groupid());
+        req->set_target(HasResourceGroupRequest(groupCtx->requests) ? 
+            resources::CreateTarget::RESOURCE_GROUP : resources::CreateTarget::INSTANCE);
+        auto future = underlayer_->Reserves(id, req);
+        future.OnComplete(
+            [groupCtx, requestToIndex](const litebus::Future<std::shared_ptr<messages::OnReserves>> &future) {
+                ASSERT_FS(future.IsOK());
+                for (auto resp : future.Get()->responses()) {
+                    auto &requestID = resp.requestid();
+                    auto iter = requestToIndex.find(requestID);
+                    if (iter == requestToIndex.end()) {
+                        continue;
+                    }
+                    auto i = iter->second;
+                    *(groupCtx->requests[i]->mutable_contexts()) = resp.contexts();
+                    // reserved would not to rollback, unless domain group schedule decision failed.
+                    if (resp.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+                        (*groupCtx->requests[i]->mutable_contexts())[GROUP_SCHEDULE_CONTEXT]
+                            .mutable_groupschedctx()
+                            ->set_reserved("");
+                        (void)groupCtx->failedReserve.insert(requestID);
+                    }
+                }
+            });
         reserves.emplace_back(future);
     }
     auto promise = std::make_shared<litebus::Promise<Status>>();
     (void)litebus::Collect(reserves).OnComplete(
-        [groupCtx, promise](const litebus::Future<std::list<std::shared_ptr<messages::ScheduleResponse>>> &future) {
-            if (future.IsError()) {
-                promise->SetValue(Status(static_cast<StatusCode>(future.GetErrorCode()),
-                                         "failed to reserve resource for " + groupCtx->groupInfo->groupid()));
-                return;
-            }
-            bool isError = false;
-            auto result = Status::OK();
-            for (auto resp : future.Get()) {
-                if (resp->code() == static_cast<int32_t>(StatusCode::SUCCESS)) {
-                    continue;
-                }
-                // reserve failed no need to confirm
-                isError = true;
-                result.AppendMessage("failed to reserve for instance " + resp->instanceid() + " of " +
-                                     groupCtx->groupInfo->groupid() + " err: " + resp->message());
-            }
-            if (isError) {
-                promise->SetValue(Status(StatusCode::DOMAIN_SCHEDULER_RESERVE, result.GetMessage()));
-                return;
-            }
-            groupCtx->responses = future.Get();
-            promise->SetValue(result);
+        [groupCtx, promise](const litebus::Future<std::list<std::shared_ptr<messages::OnReserves>>> &future) {
+            CollectReserves(promise, groupCtx, future);
         });
     return promise->GetFuture();
 }

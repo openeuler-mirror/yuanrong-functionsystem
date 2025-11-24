@@ -183,8 +183,6 @@ protected:
         groupInfo1->mutable_bundles(0)->mutable_status()->set_code(static_cast<int32_t>(BundleState::CREATED));
 
         scheduler_ = std::make_shared<MockGlobalSched>();
-        groupCtrlStub_ = std::make_shared<DomainGroupCtrlActorStub>(DOMAIN_GROUP_CTRL_ACTOR_NAME);
-        litebus::Spawn(groupCtrlStub_);
         localResourceGroupCtrl_ = std::make_shared<MockLocalResourceGroupCtrl>();
         litebus::Spawn(localResourceGroupCtrl_);
         localBundleMgr_ = std::make_shared<MockLocalBundleMgrActor>();
@@ -198,8 +196,6 @@ protected:
     void TearDown() override
     {
         metaStoreClient_->Delete("/", {false, true}).Get(3000);
-        litebus::Terminate(groupCtrlStub_->GetAID());
-        litebus::Await(groupCtrlStub_->GetAID());
         litebus::Terminate(localResourceGroupCtrl_->GetAID());
         litebus::Await(localResourceGroupCtrl_->GetAID());
         litebus::Terminate(localBundleMgr_->GetAID());
@@ -212,7 +208,6 @@ protected:
         rgMangerDriver_ = nullptr;
         metaStoreClient_ = nullptr;
         scheduler_ = nullptr;
-        groupCtrlStub_ = nullptr;
         localResourceGroupCtrl_ = nullptr;
         localBundleMgr_ = nullptr;
     }
@@ -222,7 +217,6 @@ protected:
     inline static std::string localAddress_;
     std::shared_ptr<MetaStoreClient> metaStoreClient_{ nullptr };
     std::shared_ptr<MockGlobalSched> scheduler_{ nullptr };
-    std::shared_ptr<DomainGroupCtrlActorStub> groupCtrlStub_ {nullptr};
     std::shared_ptr<MockLocalResourceGroupCtrl> localResourceGroupCtrl_ {nullptr};
     std::shared_ptr<MockLocalBundleMgrActor> localBundleMgr_ { nullptr};
 
@@ -332,9 +326,7 @@ TEST_F(ResourceGroupManagerActorTest, CreateDeleteResourceGroupSuccess)
         result.set_nodeid("node00" + std::to_string(i));
         (*rsp.mutable_scheduleresults())["3_rg1_request001_" + std::to_string(i)] = result;
     }
-    NodeInfo info{.name = "", .address= localAddress_};
-    EXPECT_CALL(*scheduler_, GetRootDomainInfo()).WillOnce(testing::Return(litebus::Option<NodeInfo>(info)));
-    EXPECT_CALL(*groupCtrlStub_, MockForwardGroupSchedule).WillOnce(testing::Return(rsp.SerializeAsString()));
+    EXPECT_CALL(*scheduler_, GroupSchedule).WillOnce(testing::Return(rsp));
     // 1. create rg
     auto future = localResourceGroupCtrl_->SendForwardCreateResourceGroup(rgManagerActor_->GetAID(), request);
     ASSERT_AWAIT_READY(future);
@@ -452,9 +444,7 @@ TEST_F(ResourceGroupManagerActorTest, CreateResourceGroupFail)
     messages::GroupResponse rsp;
     rsp.set_requestid("rg1-request001");
     rsp.set_code(static_cast<int32_t>(common::ErrorCode::ERR_RESOURCE_NOT_ENOUGH));
-    NodeInfo info{.name = "", .address= localAddress_};
-    EXPECT_CALL(*scheduler_, GetRootDomainInfo()).WillOnce(testing::Return(litebus::Option<NodeInfo>(info)));
-    EXPECT_CALL(*groupCtrlStub_, MockForwardGroupSchedule).WillOnce(testing::Return(rsp.SerializeAsString()));
+    EXPECT_CALL(*scheduler_, GroupSchedule).WillOnce(testing::Return(rsp));
     future = localResourceGroupCtrl_->SendForwardCreateResourceGroup(rgManagerActor_->GetAID(), request);
     ASSERT_AWAIT_READY(future);
     EXPECT_EQ(future.Get().code(), static_cast<int32_t>(common::ErrorCode::ERR_RESOURCE_NOT_ENOUGH));
@@ -471,8 +461,7 @@ TEST_F(ResourceGroupManagerActorTest, CreateResourceGroupFail)
     messages::GroupResponse rsp1;
     rsp1.set_requestid("rg1-request001");
     (*rsp1.mutable_scheduleresults())["rg1_request001_0"] = result;
-    EXPECT_CALL(*scheduler_, GetRootDomainInfo()).WillOnce(testing::Return(litebus::Option<NodeInfo>(info)));
-    EXPECT_CALL(*groupCtrlStub_, MockForwardGroupSchedule).WillOnce(testing::Return(rsp1.SerializeAsString()));
+    EXPECT_CALL(*scheduler_, GroupSchedule).WillOnce(testing::Return(rsp1));
     future = localResourceGroupCtrl_->SendForwardCreateResourceGroup(rgManagerActor_->GetAID(), request);
     ASSERT_AWAIT_READY(future);
     EXPECT_EQ(future.Get().code(), static_cast<int32_t>(common::ErrorCode::ERR_ETCD_OPERATION_ERROR));
@@ -490,9 +479,7 @@ TEST_F(ResourceGroupManagerActorTest, CreateResourceGroupForwardFail)
     messages::GroupResponse rsp1;
     rsp1.set_requestid("rg1-request001");
     (*rsp1.mutable_scheduleresults())["rg1_request001_0"] = result;
-    NodeInfo info{.name = "", .address= localAddress_};
-    EXPECT_CALL(*scheduler_, GetRootDomainInfo()).WillOnce(testing::Return(litebus::None())).WillOnce(testing::Return(litebus::Option<NodeInfo>(info)));
-    EXPECT_CALL(*groupCtrlStub_, MockForwardGroupSchedule).WillOnce(testing::Return(rsp1.SerializeAsString()));
+    EXPECT_CALL(*scheduler_, GroupSchedule).WillOnce(testing::Return(rsp1));
     auto future = localResourceGroupCtrl_->SendForwardCreateResourceGroup(rgManagerActor_->GetAID(), request);
     ASSERT_AWAIT_READY(future);
     EXPECT_EQ(future.Get().code(), static_cast<int32_t>(StatusCode::SUCCESS));
@@ -618,9 +605,6 @@ TEST_F(ResourceGroupManagerActorTest, OnLocalAbnormal)
     groupInfo2->mutable_bundles(0)->mutable_status()->set_code(static_cast<int32_t>(BundleState::CREATED));
     rgManagerActor_->AddResourceGroupInfo(groupInfo1);
     rgManagerActor_->AddResourceGroupInfo(groupInfo2);
-    NodeInfo info{.name = "", .address= localAddress_};
-    EXPECT_CALL(*scheduler_, GetRootDomainInfo()).Times(2).WillRepeatedly(testing::Return(litebus::Option<NodeInfo>(info)));
-
     messages::ScheduleResult result;
     result.set_nodeid("node001");
     messages::GroupResponse rsp;
@@ -630,7 +614,7 @@ TEST_F(ResourceGroupManagerActorTest, OnLocalAbnormal)
     messages::GroupResponse rsp1;
     rsp1.set_requestid(groupInfo2->name() + "-" +groupInfo2->requestid());
     (*rsp1.mutable_scheduleresults())[groupInfo2->bundles(0).bundleid()] = result;
-    EXPECT_CALL(*groupCtrlStub_, MockForwardGroupSchedule).WillOnce(testing::Return(rsp.SerializeAsString())).WillOnce(testing::Return(rsp1.SerializeAsString()));
+    EXPECT_CALL(*scheduler_, GroupSchedule).WillOnce(testing::Return(rsp)).WillOnce(testing::Return(rsp1));
     rgManagerActor_->OnLocalAbnormal("node002");
     ASSERT_AWAIT_TRUE([=]() -> bool { return groupInfo1->bundles(0).functionproxyid() == "node001"; });
     ASSERT_AWAIT_TRUE([=]() -> bool { return groupInfo1->bundles(0).status().code() == static_cast<int32_t>(BundleState::CREATED); });
@@ -657,9 +641,6 @@ TEST_F(ResourceGroupManagerActorTest, ForwardReportUnitAbnormal)
     *request->add_bundleids() = groupInfo2->mutable_bundles(0)->bundleid();
     *request->add_bundleids() = "not-exist";
 
-    NodeInfo info{.name = "", .address= localAddress_};
-    EXPECT_CALL(*scheduler_, GetRootDomainInfo()).Times(2).WillRepeatedly(testing::Return(litebus::Option<NodeInfo>(info)));
-
     messages::ScheduleResult result;
     result.set_nodeid("node001");
     messages::GroupResponse rsp;
@@ -669,7 +650,7 @@ TEST_F(ResourceGroupManagerActorTest, ForwardReportUnitAbnormal)
     messages::GroupResponse rsp1;
     rsp1.set_requestid(groupInfo2->name() + "-" +groupInfo2->requestid());
     (*rsp1.mutable_scheduleresults())[groupInfo2->bundles(0).bundleid()] = result;
-    EXPECT_CALL(*groupCtrlStub_, MockForwardGroupSchedule).WillOnce(testing::Return(rsp.SerializeAsString())).WillOnce(testing::Return(rsp1.SerializeAsString()));
+    EXPECT_CALL(*scheduler_, GroupSchedule).WillOnce(testing::Return(rsp)).WillOnce(testing::Return(rsp1));
     auto future = localBundleMgr_->SendReportAgentAbnormalRequest(rgManagerActor_->GetAID(), request);
     ASSERT_AWAIT_READY(future);
     EXPECT_EQ(future.Get().code(), static_cast<int32_t>(StatusCode::SUCCESS));
@@ -703,8 +684,6 @@ TEST_F(ResourceGroupManagerActorTest, ForwardReportUnitAbnormalFail)
     auto errPutResp = std::make_shared<PutResponse>();
     errPutResp->status =  Status(StatusCode::FAILED);
     EXPECT_CALL(*mockMetaClient, Put).WillOnce(testing::Return(putResp)).WillOnce(testing::Return(errPutResp)).WillRepeatedly(testing::Return(putResp));
-    NodeInfo info{.name = "", .address= localAddress_};
-    EXPECT_CALL(*scheduler_, GetRootDomainInfo()).Times(2).WillRepeatedly(testing::Return(litebus::Option<NodeInfo>(info)));
 
     messages::ScheduleResult result;
     result.set_nodeid("node001");
@@ -715,7 +694,7 @@ TEST_F(ResourceGroupManagerActorTest, ForwardReportUnitAbnormalFail)
     messages::GroupResponse rsp1;
     rsp1.set_requestid(groupInfo2->name() + "-" +groupInfo2->requestid());
     (*rsp1.mutable_scheduleresults())[groupInfo2->bundles(0).bundleid()] = result;
-    EXPECT_CALL(*groupCtrlStub_, MockForwardGroupSchedule).WillOnce(testing::Return(rsp.SerializeAsString())).WillOnce(testing::Return(rsp1.SerializeAsString()));
+    EXPECT_CALL(*scheduler_, GroupSchedule).WillOnce(testing::Return(rsp)).WillOnce(testing::Return(rsp1));
     auto future = localBundleMgr_->SendReportAgentAbnormalRequest(rgManagerActor_->GetAID(), request);
     ASSERT_AWAIT_READY(future);
     EXPECT_EQ(future.Get().code(), static_cast<int32_t>(StatusCode::ERR_ETCD_OPERATION_ERROR));

@@ -707,26 +707,28 @@ TEST_F(UnderlayerSchedMgrTest, Reserve)
     auto mockLocalGroupCtrl = std::make_shared<MockLocalGroupCtrl>(LOCAL_GROUP_CTRL_ACTOR_NAME);
     litebus::Spawn(mockLocalGroupCtrl);
 
-    auto req = std::make_shared<messages::ScheduleRequest>();
+    auto req = std::make_shared<messages::Reserves>();
     req->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
-
+    req->add_reserves()->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
     {
-        messages::ScheduleResponse resp;
+        messages::OnReserves resp;
         resp.set_requestid(req->requestid());
-        EXPECT_CALL(*mockLocalGroupCtrl, MockReserve).WillOnce(Return(resp.SerializeAsString()));
-        auto future = underlayer.Reserve("WillRegister", req);
+        resp.add_responses()->set_requestid(req->reserves(0).requestid());
+        EXPECT_CALL(*mockLocalGroupCtrl, MockReserves).WillOnce(Return(resp.SerializeAsString()));
+        auto future = underlayer.Reserves("WillRegister", req);
         ASSERT_AWAIT_READY(future);
-        EXPECT_EQ(future.Get()->code(), (int32_t)StatusCode::SUCCESS);
+        EXPECT_EQ(future.Get()->requestid(), req->requestid());
+        EXPECT_EQ(future.Get()->responses(0).code(), (int32_t)StatusCode::SUCCESS);
     }
 
     {
-        EXPECT_CALL(*mockLocalGroupCtrl, MockReserve).WillRepeatedly(Return("xxxxx"));
+        EXPECT_CALL(*mockLocalGroupCtrl, MockReserves).WillRepeatedly(Return("xxxxx"));
         mockUnderlayerActor->ClosePingPong();
         EXPECT_CALL(*mockInstanceCtrl_, UpdateMaxSchedRetryTimes(0)).Times(1);
         EXPECT_CALL(*mockDomainSrv_, NotifySchedAbnormal(_)).WillOnce(Return(AsyncReturn(Status::OK())));
-        auto future = underlayer.Reserve("WillRegister", req);
+        auto future = underlayer.Reserves("WillRegister", req);
         ASSERT_AWAIT_READY(future);
-        EXPECT_EQ(future.Get()->code(), (int32_t)StatusCode::DOMAIN_SCHEDULER_UNAVAILABLE_SCHEDULER);
+        EXPECT_EQ(future.Get()->responses(0).code(), (int32_t)StatusCode::DOMAIN_SCHEDULER_UNAVAILABLE_SCHEDULER);
     }
 
     litebus::Terminate(mockUnderlayerActor->GetAID());

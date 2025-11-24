@@ -42,6 +42,7 @@
 #include "common/utils/random_number.h"
 #include "common/utils/struct_transfer.h"
 #include "instance_ctrl_message.h"
+#include "common/posix_client/control_plane_client/control_interface_posix_client.h"
 #include "local_scheduler/grpc_server/bus_service/bus_service.h"
 #include "local_scheduler_service/local_sched_srv.h"
 
@@ -102,6 +103,14 @@ static AddressInfo GenerateAddressInfo(const std::string &instanceID, const std:
 {
     AddressInfo info{ .instanceID = instanceID, .runtimeID = runtimeID, .address = address, .isDriver = isDriver };
     return info;
+}
+
+KillResponse StatusToKillResponse(const Status &status)
+{
+    KillResponse rsp;
+    rsp.set_code(Status::GetPosixErrorCode(status.StatusCode()));
+    rsp.set_message(status.RawMessage());
+    return rsp;
 }
 
 InstanceCtrlActor::InstanceCtrlActor(const std::string &name, const std::string &nodeID,
@@ -319,7 +328,11 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(const std::string &s
         case SHUT_DOWN_SIGNAL_ALL: {
             return KillInstancesOfJob(killReq);
         }
-        case SHUT_DOWN_SIGNAL_GROUP: {
+        case SHUT_DOWN_SIGNAL_GROUP:
+            [[fallthrough]];
+        case GROUP_SUSPEND_SIGNAL:
+            [[fallthrough]];
+        case GROUP_RESUME_SIGNAL: {
             return KillGroup(srcInstanceID, killReq);
         }
         case GROUP_EXIT_SIGNAL:
@@ -358,6 +371,16 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(const std::string &s
         }
         case UNSUBSCRIBE_SIGNAL: {
             return ProcessUnsubscribeRequest(srcInstanceID, killReq);
+        }
+        case INSTANCE_CHECKPOINT_SIGNAL: {
+            return MakeCheckpoint(killReq->instanceid()).Then([](const Status &status) {
+                return StatusToKillResponse(status);
+            });
+        }
+        case INSTANCE_TRANS_SUSPEND_SIGNAL: {
+            return ToSuspend(killReq->instanceid()).Then([](const Status &status) {
+                return StatusToKillResponse(status);
+            });
         }
         case MIN_USER_SIGNAL_NUM ... MAX_SIGNAL_NUM: {
             return CheckInstanceExist(srcInstanceID, killReq)
@@ -986,6 +1009,16 @@ litebus::Future<KillResponse> InstanceCtrlActor::SendSignal(const std::shared_pt
     signalReq->set_payload(killReq->payload());
 
     auto &instanceInfo = killCtx->instanceContext->GetInstanceInfo();
+    // Suspend-state instance handler retrieval only; pending refactor
+    static const int32_t GET_INSTANCE = 74;
+    static const std::string NAMED_FUNCMETA = "named_funcmeta";
+    if (instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::SUSPEND)
+        && killReq->signal() == GET_INSTANCE && instanceInfo.args_size() >= 1
+        && instanceInfo.createoptions().find(NAMED_FUNCMETA) != instanceInfo.createoptions().end()) {
+        killCtx->killRsp.set_code(common::ErrorCode::ERR_NONE);
+        killCtx->killRsp.set_message(instanceInfo.createoptions().at(NAMED_FUNCMETA));
+        return killCtx->killRsp;
+    }
     ASSERT_IF_NULL(clientManager_);
     return clientManager_->GetControlInterfacePosixClient(instanceInfo.instanceid())
         .Then([signalReq, instanceInfo,
@@ -3397,8 +3430,10 @@ litebus::Future<Status> InstanceCtrlActor::KillAgentInstance(const Status &statu
     }
     for (const auto &instance : actualInstances) {
         (void)concernedInstance_.insert(instance.first);
-        if (funcAgentMap_[funcAgentID]->find(instance.first) == funcAgentMap_[funcAgentID]->end() ||
-            funcAgentMap_[funcAgentID]->find(instance.first)->second.functionproxyid() == INSTANCE_MANAGER_OWNER) {
+        if (funcAgentMap_[funcAgentID]->find(instance.first) == funcAgentMap_[funcAgentID]->end()
+            || funcAgentMap_[funcAgentID]->find(instance.first)->second.functionproxyid() == INSTANCE_MANAGER_OWNER
+            || funcAgentMap_[funcAgentID]->find(instance.first)->second.instancestatus().code()
+                   == static_cast<int32_t>(InstanceState::SUSPEND)) {
             (void)needKillInstances.insert(instance.first);
         }
     }
@@ -5145,6 +5180,7 @@ litebus::Future<KillResponse> InstanceCtrlActor::KillGroup(const std::string &sr
     auto killGroup = std::make_shared<messages::KillGroup>();
     killGroup->set_groupid(killReq->instanceid());
     killGroup->set_srcinstanceid(srcInstanceID);
+    killGroup->set_signal(killReq->signal());
     ASSERT_IF_NULL(localSchedSrv_);
     return localSchedSrv_->KillGroup(killGroup).Then([](const Status &status) {
         KillResponse response;
@@ -5914,6 +5950,97 @@ void InstanceCtrlActor::ClearLocalDriver()
         DeleteDriverClient(instanceID, jobID);
     }
     connectedDriver_.clear();
+}
+
+litebus::Future<Status> InstanceCtrlActor::ToResume(const std::string &instanceID)
+{
+    ASSERT_IF_NULL(instanceControlView_);
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        return Status(StatusCode::ERR_INSTANCE_NOT_FOUND,
+                      fmt::format("instance({}) not found for suspend", instanceID));
+    }
+    auto state = stateMachine->GetInstanceState();
+    RETURN_STATUS_IF_TRUE(state != InstanceState::SUSPEND && state != InstanceState::RUNNING,
+                          StatusCode::ERR_STATE_MACHINE_ERROR,
+                          fmt::format("instance({}) is state in ({}), which is not allow to suspend", instanceID,
+                                      fmt::underlying(state)));
+    RETURN_STATUS_IF_TRUE(state == InstanceState::RUNNING, StatusCode::SUCCESS, "");
+    auto request = stateMachine->GetScheduleRequest();
+    auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    return Schedule(request, runtimePromise).Then([](const ScheduleResponse &resp) {
+        return Status(static_cast<StatusCode>(resp.code()), resp.message());
+    });
+}
+
+Status SuspendStateCheck(const InstanceState &state, const std::string &instanceID)
+{
+    if (state == InstanceState::SUSPEND) {
+        YRLOG_INFO("InstanceID:{} is already suspended", instanceID);
+        return Status::OK();
+    }
+    if (state != InstanceState::RUNNING) {
+        auto msg = fmt::format("suspend failed: InstanceID {} is not in running state, current state: {}", instanceID,
+                               fmt::underlying(state));
+        YRLOG_ERROR("{}", msg);
+        return Status(StatusCode::ERR_STATE_MACHINE_ERROR, msg);
+    }
+    return Status::OK();
+}
+
+litebus::Future<Status> InstanceCtrlActor::ToSuspend(const std::string &instanceID)
+{
+    ASSERT_IF_NULL(instanceControlView_);
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        return Status(StatusCode::ERR_INSTANCE_NOT_FOUND,
+                      fmt::format("instance({}) not found for suspend", instanceID));
+    }
+    auto state = stateMachine->GetInstanceState();
+    if (state == InstanceState::SUSPEND) {
+        YRLOG_INFO("InstanceID:{} is already suspended", instanceID);
+        return Status::OK();
+    }
+    RETURN_STATUS_IF_TRUE(state != InstanceState::RUNNING, StatusCode::ERR_STATE_MACHINE_ERROR,
+                          fmt::format("suspend failed: InstanceID {} is not in running state, current state: {}",
+                                      instanceID, fmt::underlying(state)));
+    auto future = TransInstanceState(
+                      stateMachine,
+                      TransContext{ InstanceState::SUSPEND, stateMachine->GetVersion(),
+                                    "WARN: instance is already SUSPEND, please resume instance before you invoke it",
+                                    true, StatusCode::ERR_INSTANCE_SUSPEND });
+
+    return future.Then([aid(GetAID()), stateMachine,
+                        instanceID](const TransitionResult &result) -> litebus::Future<Status> {
+        if (result.status.IsError()) {
+            return result.status;
+        }
+        litebus::Async(aid, &InstanceCtrlActor::StopHeartbeat, instanceID);
+        YRLOG_INFO("ready to recycle runtime of instance({})", instanceID);
+        auto info = stateMachine->GetInstanceInfo();
+        return litebus::Async(aid, &InstanceCtrlActor::KillRuntime, info, false)
+            .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, std::placeholders::_1, info));
+    });
+}
+
+litebus::Future<Status> InstanceCtrlActor::MakeCheckpoint(const std::string &instanceID)
+{
+    ASSERT_IF_NULL(instanceControlView_);
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        auto msg = fmt::format("instance({}) not found to checkpoint", instanceID);
+        YRLOG_ERROR("{}", msg);
+        return Status(StatusCode::ERR_INSTANCE_NOT_FOUND, msg);
+    }
+    auto state = stateMachine->GetInstanceState();
+    if (state == InstanceState::SUSPEND) {
+        YRLOG_INFO("InstanceID:{} is already suspended", instanceID);
+        return Status::OK();
+    }
+    RETURN_STATUS_IF_TRUE(state != InstanceState::RUNNING, StatusCode::ERR_STATE_MACHINE_ERROR,
+                          fmt::format("checkpoint failed: InstanceID {} is not in running state, current state: {}",
+                                      instanceID, fmt::underlying(state)));
+    return Checkpoint(instanceID);
 }
 
 }  // namespace functionsystem::local_scheduler

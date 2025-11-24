@@ -52,6 +52,9 @@ public:
                 (const std::string &name, const std::string &address,
                  const std::shared_ptr<messages::ScheduleRequest> &req, const uint32_t retryCycle),
                 (const, override));
+    MOCK_METHOD(litebus::Future<messages::GroupResponse>, GroupSchedule,
+                (const std::string &name, const std::string &address, const std::shared_ptr<messages::GroupInfo> &req),
+                (const, override));
     MOCK_METHOD(Status, AddDomainSchedCallback, (const global_scheduler::CallbackAddFunc &func), (const, override));
     MOCK_METHOD(Status, DelDomainSchedCallback, (const global_scheduler::CallbackDelFunc &func), (const, override));
     MOCK_METHOD(Status, DelLocalSchedCallback, (const global_scheduler::CallbackDelFunc &func), (const, override));
