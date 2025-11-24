@@ -11,13 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_subdirectory(metrics)
-add_subdirectory(port)
-add_subdirectory(utils)
-# todo: debug
-# add_subdirectory(executor)
-add_subdirectory(manager)
-add_subdirectory(healthcheck)
-add_subdirectory(driver)
-add_subdirectory(config)
-add_subdirectory(log)
+
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR} MIGRATE_CONTROLLER)
+
+target_sources(local_scheduler_lib PRIVATE ${MIGRATE_CONTROLLER})

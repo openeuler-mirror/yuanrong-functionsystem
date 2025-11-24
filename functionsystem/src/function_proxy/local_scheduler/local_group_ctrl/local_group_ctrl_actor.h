@@ -80,11 +80,14 @@ public:
     litebus::Future<Status> Sync() override;
     litebus::Future<Status> Recover() override;
 
-    /**
-     * receives resource pre-deduction from the domain.
-     * @param msg is serilized ReserveRequest
+        /**
+     * receives batch resource pre-deduction from the domain.
+     * @param msg is serilized ReservesRequest
      */
-    virtual void Reserve(const litebus::AID &from, std::string &&name, std::string &&msg);
+    virtual void Reserves(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    litebus::Future<std::shared_ptr<messages::ScheduleResponse>> DoReserve(
+        std::shared_ptr<messages::ScheduleRequest> &req);
 
     /**
      * receives rollback resource pre-deduction
@@ -196,9 +199,10 @@ private:
     inline void DeleteGroupCtx(const std::string &requestID);
     std::shared_ptr<GroupContext> GetGroupCtx(const std::string &requestID);
 
-    void OnReserve(const litebus::AID &to, const litebus::Future<schedule_decision::ScheduleResult> &future,
-                   const std::shared_ptr<messages::ScheduleRequest> &req,
-                   const std::shared_ptr<messages::ScheduleResponse> &resp);
+    litebus::Future<std::shared_ptr<messages::ScheduleResponse>> OnReserve(
+        const litebus::Future<schedule_decision::ScheduleResult> &future,
+        const std::shared_ptr<messages::ScheduleRequest> &req,
+        const std::shared_ptr<messages::ScheduleResponse> &resp);
 
     void OnBind(const litebus::AID &to, const litebus::Future<Status> &future,
                 const std::shared_ptr<messages::ScheduleRequest> &req,
@@ -208,11 +212,12 @@ private:
 
     void TimeoutToBind(const std::shared_ptr<messages::ScheduleRequest> &req);
 
-    void OnSuccessfulReserve(const litebus::AID &to, const schedule_decision::ScheduleResult &result,
-                             const std::shared_ptr<messages::ScheduleRequest> &req,
-                             const std::shared_ptr<messages::ScheduleResponse> &resp);
+    litebus::Future<std::shared_ptr<messages::ScheduleResponse>> OnSuccessfulReserve(
+        const schedule_decision::ScheduleResult &result,
+        const std::shared_ptr<messages::ScheduleRequest> &req,
+        const std::shared_ptr<messages::ScheduleResponse> &resp);
 
-    void CollectResourceOnReserve(const litebus::AID &to, const std::shared_ptr<messages::ScheduleResponse> &resp);
+    void CollectResourceOnReserve(const litebus::AID &to, const std::shared_ptr<messages::OnReserves> &resp);
 
     litebus::Future<std::shared_ptr<CreateResponses>> DoLocalGroupSchedule(
         const Status &status, std::shared_ptr<schedule_decision::Scheduler> scheduler,
@@ -224,8 +229,9 @@ private:
 
     void OnUnBind(const litebus::AID &to, const std::shared_ptr<messages::ScheduleRequest> &req);
 
-    void SetDeviceInfoError(const litebus::AID &to, const std::shared_ptr<messages::ScheduleRequest> &req,
-                            const std::shared_ptr<messages::ScheduleResponse> &resp);
+    litebus::Future<std::shared_ptr<messages::ScheduleResponse>> SetDeviceInfoError(
+        const std::shared_ptr<messages::ScheduleRequest> &req,
+        const std::shared_ptr<messages::ScheduleResponse> &resp);
 
     litebus::Future<Status> SetDeviceInfoToHeteroScheduleResp(const schedule_decision::ScheduleResult &result,
         const std::shared_ptr<messages::ScheduleRequest> &req, const std::shared_ptr<messages::ScheduleResponse> &resp);

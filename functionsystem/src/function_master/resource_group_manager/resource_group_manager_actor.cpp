@@ -170,7 +170,6 @@ void ResourceGroupManagerActor::Init()
     Receive("ForwardCreateResourceGroup", &ResourceGroupManagerActor::ForwardCreateResourceGroup);
     Receive("ForwardDeleteResourceGroup", &ResourceGroupManagerActor::ForwardDeleteResourceGroup);
     Receive("ForwardReportAgentAbnormal", &ResourceGroupManagerActor::ForwardReportUnitAbnormal);
-    Receive("OnForwardGroupSchedule", &ResourceGroupManagerActor::OnForwardGroupSchedule);
     Receive("OnRemoveBundle", &ResourceGroupManagerActor::OnRemoveBundle);
     Receive("ForwardQueryResourceGroup", &ResourceGroupManagerActor::ForwardQueryResourceGroupHandler);
     Receive("ForwardQueryResourceGroupResponse", &ResourceGroupManagerActor::ForwardQueryResourceGroupResponseHandler);
@@ -293,23 +292,6 @@ void ResourceGroupManagerActor::ForwardReportUnitAbnormal(const litebus::AID &fr
     }
     ASSERT_IF_NULL(business_);
     business_->ForwardReportUnitAbnormal(from, reportAbnormalReq);
-}
-
-void ResourceGroupManagerActor::OnForwardGroupSchedule(const litebus::AID &from, std::string &&name, std::string &&msg)
-{
-    messages::GroupResponse rsp;
-    if (!rsp.ParseFromString(msg)) {
-        YRLOG_WARN("invalid {} response from {} msg {}, ignored", std::string(from), name, msg);
-        return;
-    }
-    auto status = requestGroupScheduleMatch_.Synchronized(rsp.requestid(), rsp);
-    if (status.IsError()) {
-        YRLOG_WARN("{}|{}|received from {}. code {} msg {}. no found request ignore it", rsp.traceid(), rsp.requestid(),
-                   from.HashString(), rsp.code(), rsp.message());
-        return;
-    }
-    YRLOG_INFO("{}|{}|received response. code {} message {}. from {}", rsp.traceid(), rsp.requestid(), rsp.code(),
-               rsp.message(), from.HashString());
 }
 
 void ResourceGroupManagerActor::OnRemoveBundle(const litebus::AID &from, std::string &&name, std::string &&msg)
@@ -448,51 +430,8 @@ void ResourceGroupManagerActor::ScheduleResourceGroup(
 litebus::Future<messages::GroupResponse> ResourceGroupManagerActor::ForwardGroupSchedule(
     const std::shared_ptr<messages::GroupInfo> &groupInfo)
 {
-    YRLOG_DEBUG("{}|start to forward group schedule for rg({}), groupName({})", groupInfo->requestid(),
-                groupInfo->rgroupname(), groupInfo->groupid());
-    auto promise = std::make_shared<litebus::Promise<messages::GroupResponse>>();
-    DoForwardGroupSchedule(promise, groupInfo);
-    return promise->GetFuture();
-}
-
-void ResourceGroupManagerActor::DoForwardGroupSchedule(
-    const std::shared_ptr<litebus::Promise<messages::GroupResponse>> &promise,
-    const std::shared_ptr<messages::GroupInfo> groupInfo)
-{
     ASSERT_IF_NULL(member_->globalScheduler);
-    member_->globalScheduler->GetRootDomainInfo().OnComplete(
-        [promise, groupInfo, aid(GetAID()),
-         timeout(defaultRescheduleInterval_)](const litebus::Future<litebus::Option<NodeInfo>> &future) {
-            if (future.IsError() || future.Get().IsNone()) {
-                YRLOG_ERROR("failed to schedule resource group, get empty root domain info.defer to forward");
-                litebus::AsyncAfter(timeout, aid, &ResourceGroupManagerActor::DoForwardGroupSchedule, promise,
-                                    groupInfo);
-                return;
-            }
-            auto root = future.Get().Get();
-            auto domainGroupCtrl = litebus::AID(DOMAIN_GROUP_CTRL_ACTOR_NAME, root.address);
-            litebus::Async(aid, &ResourceGroupManagerActor::SendForwardGroupSchedule, promise, domainGroupCtrl,
-                           groupInfo);
-        });
-}
-
-void ResourceGroupManagerActor::SendForwardGroupSchedule(
-    const std::shared_ptr<litebus::Promise<messages::GroupResponse>> &promise, const litebus::AID &domainGroupCtrl,
-    const std::shared_ptr<messages::GroupInfo> &groupInfo)
-{
-    YRLOG_INFO("{}|{}|send forward schedule request for resource group({})", groupInfo->traceid(),
-               groupInfo->requestid(), groupInfo->rgroupname());
-    auto future = requestGroupScheduleMatch_.AddSynchronizer(groupInfo->requestid());
-    Send(domainGroupCtrl, "ForwardGroupSchedule", groupInfo->SerializeAsString());
-    future.OnComplete([promise, groupInfo, aid(GetAID())](const litebus::Future<messages::GroupResponse> &future) {
-        if (future.IsError()) {
-            YRLOG_WARN("{}|{}|forward schedule request for resource group({}), request timeout.", groupInfo->traceid(),
-                       groupInfo->requestid(), groupInfo->rgroupname());
-            litebus::Async(aid, &ResourceGroupManagerActor::DoForwardGroupSchedule, promise, groupInfo);
-            return;
-        }
-        promise->SetValue(future.Get());
-    });
+    return member_->globalScheduler->GroupSchedule(groupInfo, defaultRescheduleInterval_);
 }
 
 litebus::Future<Status> ResourceGroupManagerActor::ForwardGroupScheduleDone(

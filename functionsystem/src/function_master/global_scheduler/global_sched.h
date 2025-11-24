@@ -40,6 +40,8 @@ public:
                              std::unique_ptr<LocalSchedMgr> localSchedMgr);
 
     virtual litebus::Future<Status> Schedule(const std::shared_ptr<messages::ScheduleRequest> &req);
+    virtual litebus::Future<messages::GroupResponse> GroupSchedule(const std::shared_ptr<messages::GroupInfo> &req,
+                                                                   uint32_t retryCycle);
 
     virtual litebus::Future<litebus::Option<std::string>> GetLocalAddress(const std::string &name);
 

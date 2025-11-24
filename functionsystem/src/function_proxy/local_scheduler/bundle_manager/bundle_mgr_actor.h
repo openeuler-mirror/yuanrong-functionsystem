@@ -48,10 +48,13 @@ public:
     litebus::Future<Status> Recover() override;
 
     /**
-     * reserve resource: 1.pre-deduction from resource view, 2.create bundle
+     * batch reserve resource: 1.pre-deduction from resource view, 2.create bundle
      * @param msg is serialized ScheduleRequest
      */
-    virtual void Reserve(const litebus::AID &from, std::string &&name, std::string &&msg);
+    virtual void Reserves(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    litebus::Future<std::shared_ptr<messages::ScheduleResponse>> DoReserve(
+        std::shared_ptr<messages::ScheduleRequest> &req);
 
     /**
      * rollback reserve operation
@@ -171,12 +174,14 @@ private:
                           std::shared_ptr<messages::ScheduleRequest> &req);
     std::shared_ptr<ResourceView> GetResourceView(const std::string &rGroup);
     void TimeoutToBind(const std::shared_ptr<messages::ScheduleRequest> &req);
-    void OnReserve(const litebus::AID &to, const litebus::Future<schedule_decision::ScheduleResult> &future,
-                   const std::shared_ptr<messages::ScheduleRequest> &req,
-                   const std::shared_ptr<messages::ScheduleResponse> &resp);
-    void OnSuccessfulReserve(const litebus::AID &to, const schedule_decision::ScheduleResult &result,
-                             const std::shared_ptr<messages::ScheduleRequest> &req,
-                             const std::shared_ptr<messages::ScheduleResponse> &resp);
+    litebus::Future<std::shared_ptr<messages::ScheduleResponse>> OnReserve(
+        const litebus::Future<schedule_decision::ScheduleResult> &future,
+        const std::shared_ptr<messages::ScheduleRequest> &req,
+        const std::shared_ptr<messages::ScheduleResponse> &resp);
+    litebus::Future<std::shared_ptr<messages::ScheduleResponse>> OnSuccessfulReserve(
+        const schedule_decision::ScheduleResult &result,
+        const std::shared_ptr<messages::ScheduleRequest> &req,
+        const std::shared_ptr<messages::ScheduleResponse> &resp);
     void OnBind(const litebus::AID &to, const litebus::Future<Status> &future,
                 const std::shared_ptr<messages::ScheduleRequest> &req,
                 const std::shared_ptr<messages::GroupResponse> &resp);
@@ -195,8 +200,8 @@ private:
     void OnPutBundlesInMetaStore(const litebus::Future<Status> &status);
 
     litebus::Future<Status> CollectResourceChangesForGroupResp(const std::shared_ptr<messages::GroupResponse> &resp);
-    litebus::Future<Status> CollectResourceChangesForScheduleResp(
-        const std::shared_ptr<messages::ScheduleResponse> &resp);
+    litebus::Future<Status> CollectResourceChangesForOnReserves(
+        const std::shared_ptr<messages::OnReserves> &resp);
     messages::BundleInfo GenBundle(const std::shared_ptr<messages::ScheduleRequest> &req,
                                    const schedule_decision::ScheduleResult &result);
     resources::InstanceInfo GenInstanceInfo(const messages::BundleInfo &bundleInfo);

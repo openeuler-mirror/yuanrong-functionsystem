@@ -142,6 +142,13 @@ litebus::Future<Status> GlobalSched::Schedule(const std::shared_ptr<messages::Sc
     return litebus::Async(globalSchedActor_->GetAID(), &GlobalSchedActor::DoSchedule, req);
 }
 
+litebus::Future<messages::GroupResponse> GlobalSched::GroupSchedule(const std::shared_ptr<messages::GroupInfo> &req,
+                                                                    uint32_t retryCycle)
+{
+    ASSERT_IF_NULL(globalSchedActor_);
+    return litebus::Async(globalSchedActor_->GetAID(), &GlobalSchedActor::GroupSchedule, req, retryCycle);
+}
+
 litebus::Future<litebus::Option<std::string>> GlobalSched::GetLocalAddress(const std::string &name)
 {
     ASSERT_IF_NULL(globalSchedActor_);
