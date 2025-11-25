@@ -23,7 +23,6 @@ list(REMOVE_ITEM RUNTIME_MANAGER_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp") # 
 include_directories(${CMAKE_CURRENT_LIST_DIR})
 
 add_library(runtime_manager_lib STATIC ${RUNTIME_MANAGER_SRCS})
-set_target_properties(runtime_manager_lib PROPERTIES UNITY_BUILD ON)
 target_compile_options(runtime_manager_lib PRIVATE -fPIE)
 
 add_subdirectory(executor)

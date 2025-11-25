@@ -14,6 +14,11 @@
  * limitations under the License.
  */
 #include "common/file_monitor/monitor_callback_actor.h"
+#include "async/asyncafter.hpp"
+#include "utils/os_utils.hpp"
+#include "utils/string_utils.hpp"
+#include "common/utils/files.h"
+#include "common/utils/exec_utils.h"
 
 #include "common/constants/constants.h"
 

@@ -324,7 +324,7 @@ TEST_F(NetworkToolTest, GetRouteConfigTest)
     const int32_t DEFAULT_EMPTY_SIZE = 0;
     EXPECT_TRUE(function_agent::NetworkTool::GetRouteConfig(emptyStr).size() == DEFAULT_EMPTY_SIZE);
 
-    std::string wrongStr = "/home";
+    std::string wrongStr = "/tmp/home";
     EXPECT_TRUE(function_agent::NetworkTool::GetRouteConfig(wrongStr).size() == DEFAULT_EMPTY_SIZE);
 
     wrongStr = "192.168.123.2/234";

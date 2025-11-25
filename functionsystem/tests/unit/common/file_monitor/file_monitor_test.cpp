@@ -29,7 +29,7 @@ namespace functionsystem::test {
 using namespace std;
 using namespace functionsystem;
 
-const std::string FILE_PATH = "/home/sn/function/config";
+const std::string FILE_PATH = "/tmp/home/sn/function/config";
 const std::string FILE_NAME = "system-function-config.json";
 
 const std::string content1 = R"(

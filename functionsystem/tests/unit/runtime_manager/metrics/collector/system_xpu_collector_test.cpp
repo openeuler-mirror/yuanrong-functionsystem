@@ -845,7 +845,7 @@ TEST_F(XpuCollectorTest, TestNpuProbeOnGetCountNPUInfo)
     auto cmdTool = std::make_shared<MockCmdTools>();
     auto params = std::make_shared<runtime_manager::XPUCollectorParams>();
     params->ldLibraryPath = emptyLdLibraryPath;
-    params->deviceInfoPath = "/home/sn/config/topology-info.json";
+    params->deviceInfoPath = "/tmp/home/sn/config/topology-info.json";
     params->collectMode = runtime_manager::NPU_COLLECT_COUNT;
     auto probe = std::make_shared<runtime_manager::NpuProbe>("co200", tool, cmdTool, params);
 
@@ -905,7 +905,7 @@ TEST_F(XpuCollectorTest, TestNpuProbeOnGetNPUSmiInfo)
     auto cmdTool = std::make_shared<MockCmdTools>();
     auto params = std::make_shared<runtime_manager::XPUCollectorParams>();
     params->ldLibraryPath = emptyLdLibraryPath;
-    params->deviceInfoPath = "/home/sn/config/topology-info.json";
+    params->deviceInfoPath = "/tmp/home/sn/config/topology-info.json";
     params->collectMode = runtime_manager::NPU_COLLECT_COUNT;
     auto probe = std::make_shared<runtime_manager::NpuProbe>("co200", tool, cmdTool, params);
 
@@ -954,7 +954,7 @@ TEST_F(XpuCollectorTest, TestNpuProbeOnGetNPUSmiInfoFailed)
     auto cmdTool = std::make_shared<MockCmdTools>();
     auto params = std::make_shared<runtime_manager::XPUCollectorParams>();
     params->ldLibraryPath = emptyLdLibraryPath;
-    params->deviceInfoPath = "/home/sn/config/topology-info.json";
+    params->deviceInfoPath = "/tmp/home/sn/config/topology-info.json";
     params->collectMode = runtime_manager::NPU_COLLECT_COUNT;
     auto probe = std::make_shared<runtime_manager::NpuProbe>("co200", tool, cmdTool, params);
 
@@ -998,7 +998,7 @@ TEST_F(XpuCollectorTest, TestGetNPUIPInfo)
     auto cmdTools = std::make_shared<MockCmdTools>();
     auto params = std::make_shared<runtime_manager::XPUCollectorParams>();
     params->ldLibraryPath = emptyLdLibraryPath;
-    params->deviceInfoPath = "/home/sn/config/topology-info.json";
+    params->deviceInfoPath = "/tmp/home/sn/config/topology-info.json";
     auto probe = std::make_shared<runtime_manager::NpuProbe>(nodeID, tool, cmdTools, params);
     // case1: get ips from hccn_conf file successfully
     {
@@ -1083,7 +1083,7 @@ TEST_F(XpuCollectorTest, TestGetNPUTopoInfo)
     auto cmdTools = std::make_shared<MockCmdTools>();
     auto params = std::make_shared<runtime_manager::XPUCollectorParams>();
     params->ldLibraryPath = emptyLdLibraryPath;
-    params->deviceInfoPath = "/home/sn/config/topology-info.json";
+    params->deviceInfoPath = "/tmp/home/sn/config/topology-info.json";
     auto probe = std::make_shared<runtime_manager::NpuProbe>(nodeID, tool, cmdTools, params);
 
     // case1: get topo info successfully
@@ -1167,7 +1167,7 @@ TEST_F(XpuCollectorTest, TestRefreshTopoInfo)
    std::string nodeID = "co200";
    auto params = std::make_shared<runtime_manager::XPUCollectorParams>();
    params->ldLibraryPath = emptyLdLibraryPath;
-   params->deviceInfoPath = "/home/sn/config/topology-info.json";
+   params->deviceInfoPath = "/tmp/home/sn/config/topology-info.json";
    // case1: don't get any npu info
    {
        auto tool = std::make_shared<MockProcFSTools>();
@@ -1248,7 +1248,7 @@ TEST_F(XpuCollectorTest, TestRefreshTopoInfoAllMode)
    auto cmdTool = std::make_shared<MockCmdTools>();
    auto params = std::make_shared<runtime_manager::XPUCollectorParams>();
    params->ldLibraryPath = emptyLdLibraryPath;
-   params->deviceInfoPath = "/home/sn/config/topology-info.json";
+   params->deviceInfoPath = "/tmp/home/sn/config/topology-info.json";
    params->collectMode = runtime_manager::NPU_COLLECT_ALL;
 
    // case1: success get all information
@@ -1298,7 +1298,7 @@ TEST_F(XpuCollectorTest, TestUpdateInfo)
    auto cmdTool = std::make_shared<MockCmdTools>();
    auto params = std::make_shared<runtime_manager::XPUCollectorParams>();
    params->ldLibraryPath = emptyLdLibraryPath;
-   params->deviceInfoPath = "/home/sn/config/topology-info.json";
+   params->deviceInfoPath = "/tmp/home/sn/config/topology-info.json";
 
    {
        params->collectMode = runtime_manager::NPU_COLLECT_HBM;
@@ -1358,7 +1358,7 @@ TEST_F(XpuCollectorTest, IsNpuTopoCommandValid_NewCmd_NotSupport)
    auto cmdTools = std::make_shared<MockCmdTools>();
    auto params = std::make_shared<runtime_manager::XPUCollectorParams>();
    params->ldLibraryPath = emptyLdLibraryPath;
-   params->deviceInfoPath = "/home/sn/config/topology-info.json";
+   params->deviceInfoPath = "/tmp/home/sn/config/topology-info.json";
    auto probe = std::make_shared<runtime_manager::NpuProbe>(nodeID, tool, cmdTools, params);
    EXPECT_FALSE(probe->IsNpuTopoCommandValid(topoInfoNotSupport));
    EXPECT_TRUE(probe->IsNpuTopoCommandValid(stringToVector(npuSminTopoInfo)));
@@ -1420,7 +1420,7 @@ TEST_F(XpuCollectorTest, TestNpuCollectorByCmd)
     std::string nodeID = "co200";
     auto params = std::make_shared<runtime_manager::XPUCollectorParams>();
     params->ldLibraryPath = emptyLdLibraryPath;
-    params->deviceInfoPath = "/home/sn/config/topology-info.json";
+    params->deviceInfoPath = "/tmp/home/sn/config/topology-info.json";
     params->collectMode = runtime_manager::NPU_COLLECT_COUNT;
     EXPECT_CALL(*cmdTool.get(), GetCmdResult("ls /dev | grep davinci")).WillRepeatedly(testing::Return(stringToVector(devDavinciInfo)));
     auto probe = std::make_shared<runtime_manager::NpuProbe>(nodeID, tool, cmdTool, params);

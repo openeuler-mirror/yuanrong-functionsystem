@@ -35,16 +35,6 @@
 #include "utils/string_utils.hpp"
 
 namespace functionsystem::system_function_loader {
-const std::string BOOTSTRAP_CONFIG_PATH = "/home/sn/function/config/system-function-config.json";  // NOLINT
-const std::string METAFILE_WATCH_PATH = "/home/sn/function/system-function-meta";
-const std::string SYSFUNCTION_CONFIG_KEY = "/faas/system-function/config";
-const uint64_t SENDARGS_TIMEOUT_MS = 120000;
-const uint64_t UPGRADE_TIMEOUT_MS = 60000;
-const uint32_t WAIT_INSTANCE_MAX_TIMES = 60;
-const int MAX_RETRY_TIMES = 5;
-const int RETRY_TIMEOUT_MS = 10000;
-const int MAX_SYSFUNCTION_META_INFO = 6;
-
 using namespace functionsystem::explorer;
 
 BootstrapActor::BootstrapActor(const std::shared_ptr<MetaStoreClient> &metaClient,

@@ -14,7 +14,6 @@
 project(function_proxy_common)
 
 add_library(function_proxy_common_lib STATIC "")
-set_target_properties(function_proxy_common_lib PROPERTIES UNITY_BUILD ON)
 target_compile_options(function_proxy_common_lib PRIVATE -fPIE)
 target_include_directories(function_proxy_common_lib PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 

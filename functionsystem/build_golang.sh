@@ -16,8 +16,8 @@
 set -e
 
 BASE_DIR=$(cd "$(dirname "$0")"; pwd)
-PROJECT_DIR="${BASE_DIR}/../../pkg/cli"
-OUTPUT_DIR="${BASE_DIR}/../../../output/function_system/cli"
+PROJECT_DIR="${BASE_DIR}/pkg/cli"
+OUTPUT_DIR="${BASE_DIR}/../output/function_system/cli"
 TARGET_OS=$1
 CLI_NAME=${CLI_NAME:-"yr"}
 PLATFORM_NAME=${PLATFORM_NAME:-"OpenYuanrong"}

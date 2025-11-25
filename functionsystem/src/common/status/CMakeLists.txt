@@ -19,7 +19,6 @@ add_library(status STATIC "")
 get_property(UTILS_INCLUDE GLOBAL PROPERTY "UTILS_INCLUDE")
 
 include_directories(${UTILS_INCLUDE})
-set_target_properties(status PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} STATUS_SRCS)
 add_dependencies(status posix_pb)
 target_sources(status PRIVATE ${STATUS_SRCS})

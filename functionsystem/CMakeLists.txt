@@ -80,8 +80,8 @@ endif()
 include(${CMAKE_CURRENT_LIST_DIR}/../common/logs/logs.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/../common/litebus/litebus.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/../common/metrics/metrics.cmake)
-include(${CMAKE_CURRENT_LIST_DIR}/cmake/datasystem.cmake)
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/funcs.cmake)
+include(${VENDOR_CMAKE_DIR}/datasystem.cmake)
 
 # 设置 litebus 相关库变量
 set(litebus_ALL_LIB ${litebus_LIB} ${securec_LIB} ${yrlogs_LIB} pthread)

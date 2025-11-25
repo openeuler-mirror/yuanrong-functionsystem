@@ -14,7 +14,6 @@
 
 project(explore)
 add_library(explorer STATIC "")
-set_target_properties(explorer PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} EXPLORER_SRCS)
 add_dependencies(explorer status meta_store_client resource_lock)
 target_sources(explorer PRIVATE ${EXPLORER_SRCS})

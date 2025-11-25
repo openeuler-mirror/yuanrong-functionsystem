@@ -23,7 +23,6 @@ include_directories(${CMAKE_CURRENT_LIST_DIR})
 
 add_library(${INSTANCE_MANAGER_LIB} STATIC
         ${INSTANCE_MANAGER_SRCS})
-set_target_properties(${INSTANCE_MANAGER_LIB} PROPERTIES UNITY_BUILD ON)
 target_compile_options(${INSTANCE_MANAGER_LIB} PRIVATE -fPIE)
 
 target_include_directories(${INSTANCE_MANAGER_LIB} PRIVATE

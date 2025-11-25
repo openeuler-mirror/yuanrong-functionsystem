@@ -14,7 +14,6 @@
 
 project(resource_lock)
 add_library(resource_lock STATIC "")
-set_target_properties(resource_lock PROPERTIES UNITY_BUILD ON)
 add_dependencies(resource_lock kube_client)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} RESOURCE_LOCK_SRCS)
 target_sources(resource_lock PRIVATE ${RESOURCE_LOCK_SRCS})

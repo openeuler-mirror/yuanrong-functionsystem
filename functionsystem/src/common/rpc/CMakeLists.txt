@@ -20,7 +20,6 @@ add_library(rpc STATIC "")
 get_property(UTILS_INCLUDE GLOBAL PROPERTY "UTILS_INCLUDE")
 
 include_directories(${UTILS_INCLUDE})
-set_target_properties(rpc PROPERTIES UNITY_BUILD ON)
 file(GLOB_RECURSE RPC_SRCS *.cpp)
 target_sources(rpc PRIVATE ${RPC_SRCS})
 target_compile_options(rpc PRIVATE "-fvisibility=hidden")

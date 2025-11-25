@@ -27,6 +27,7 @@
 #include "common/utils/ssl_config.h"
 #include "minizip/unzip.h"
 #include "utils/os_utils.hpp"
+#include "common/constants.h"
 
 namespace functionsystem::function_agent {
 

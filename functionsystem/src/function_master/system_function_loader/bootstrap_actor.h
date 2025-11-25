@@ -34,6 +34,15 @@ namespace functionsystem::system_function_loader {
 const uint64_t WAIT_KILLINSTANCE_MS = 3000;
 const uint64_t WAIT_STARTINSTANCE_MS = 10000;
 const uint64_t WAIT_UPDATE_CONFIGMAP_MS = 1000;
+const std::string BOOTSTRAP_CONFIG_PATH = "/home/sn/function/config/system-function-config.json";  // NOLINT
+const std::string METAFILE_WATCH_PATH = "/home/sn/function/system-function-meta";
+const std::string SYSFUNCTION_CONFIG_KEY = "/faas/system-function/config";
+const uint64_t SENDARGS_TIMEOUT_MS = 120000;
+const uint64_t UPGRADE_TIMEOUT_MS = 60000;
+const uint32_t WAIT_INSTANCE_MAX_TIMES = 60;
+const int MAX_RETRY_TIMES = 5;
+const int RETRY_TIMEOUT_MS = 10000;
+const int MAX_SYSFUNCTION_META_INFO = 6;
 
 struct FunctionConfig {
     std::string tenantID;

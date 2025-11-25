@@ -36,7 +36,7 @@ const std::string yamlStr1 =
     "      environment:\n"
     "        key: value\n"
     "      storageType: local\n"
-    "      codePath: /home/sn/";
+    "      codePath: /tmp/home/sn/";
 
 const std::string yamlStr2 =
     "- service: wm\n"
@@ -71,7 +71,7 @@ TEST_F(YamlToolTest, TranslateSuccess)
     std::string expectJsonStr =
         "[{\"service\": \"oxx\", \"kind\": \"yrlib\", \"description\": \"this is oxx demo\", \"functions\": {\"oxx\": "
         "{\"timeout\": \"86400\", \"cpu\": \"1500\", \"memory\": \"3000\", \"runtime\": \"cpp11\", \"concurrentNum\": "
-        "\"20\", \"environment\": {\"key\": \"value\"}, \"storageType\": \"local\", \"codePath\": \"/home/sn/\"}}}]";
+        "\"20\", \"environment\": {\"key\": \"value\"}, \"storageType\": \"local\", \"codePath\": \"/tmp/home/sn/\"}}}]";
 
     auto jsonStr = std::string(YamlToJson(yamlStr1));
 

@@ -47,7 +47,7 @@ public:
         mockMetaStoreClient_ = std::make_shared<MockMetaStoreClient>("");
 
         const char *argv[] = { "./function_master",
-                           "--log_config={\"filepath\": \"/home/yr/log\",\"level\": \"DEBUG\",\"rolling\": "
+                           "--log_config={\"filepath\": \"/tmp/home/yr/log\",\"level\": \"DEBUG\",\"rolling\": "
                            "{\"maxsize\": 100, \"maxfiles\": 1}}",
                            "--node_id=aaa",
                            "--ip=127.0.0.1:8080",

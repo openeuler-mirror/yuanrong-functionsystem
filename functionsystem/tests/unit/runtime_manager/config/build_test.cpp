@@ -38,7 +38,7 @@ public:
 TEST_F(BuildTest, GeneratePosixEnvsTest)
 {
     litebus::os::SetEnv("RUNTIME_METRICS_CONFIG", "{}");
-    litebus::os::SetEnv("RUNTIME_METRICS_CONFIG_FILE", "/home/snuser/config.json");
+    litebus::os::SetEnv("RUNTIME_METRICS_CONFIG_FILE", "/tmp/home/snuser/config.json");
     RuntimeConfig runtimeConfig;
     runtimeConfig.runtimeLdLibraryPath = "/runtime/sdk/lib";
     runtimeConfig.hostIP = "10.0.0.1";
@@ -62,7 +62,7 @@ TEST_F(BuildTest, GeneratePosixEnvsTest)
         EXPECT_EQ(envMap["PYTHONUNBUFFERED"], "1");
         EXPECT_EQ(envMap["ENABLE_METRICS"], "false");
         EXPECT_EQ(envMap["METRICS_CONFIG"], "{}");
-        EXPECT_EQ(envMap["METRICS_CONFIG_FILE"], "/home/snuser/config.json");
+        EXPECT_EQ(envMap["METRICS_CONFIG_FILE"], "/tmp/home/snuser/config.json");
         auto ldPath = envMap["LD_LIBRARY_PATH"];
         EXPECT_EQ(envMap["LD_LIBRARY_PATH"],
                   "/dcache/layer/func/test/test:/dcache/layer/func/test/test/lib:/runtime/sdk/lib");

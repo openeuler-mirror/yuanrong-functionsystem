@@ -19,7 +19,6 @@ add_library(aksk STATIC "")
 get_property(UTILS_INCLUDE GLOBAL PROPERTY "UTILS_INCLUDE")
 
 include_directories(${UTILS_INCLUDE})
-set_target_properties(aksk PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} AKSK_SRCS)
 add_dependencies(aksk hex http)
 target_sources(aksk PRIVATE ${AKSK_SRCS})

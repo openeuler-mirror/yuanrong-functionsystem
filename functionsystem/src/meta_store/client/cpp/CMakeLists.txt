@@ -31,7 +31,6 @@ include_directories(${CMAKE_CURRENT_LIST_DIR}/include/meta_store_client/maintena
 include_directories(${CMAKE_CURRENT_LIST_DIR}/include/meta_store_client/utils)
 
 add_library(meta_store_client STATIC "")
-set_target_properties(meta_store_client PROPERTIES UNITY_BUILD ON)
 
 file(GLOB_RECURSE META_STORE_CLIENT_SRCS src/*.cpp)
 

@@ -25,7 +25,24 @@
 #include <string>
 
 namespace functionsystem {
-std::tm ParseTimestamp(const std::string &timestamp);
-bool IsLaterThan(const std::string &timestamp1, const std::string &timestamp2, double seconds);
+inline std::tm ParseTimestamp(const std::string &timestamp)
+{
+    std::tm tm = {};
+    std::istringstream ss(timestamp);
+    ss >> std::get_time(&tm, "%Y%m%dT%H%M%SZ");
+    if (ss.fail()) {
+        return {};
+    }
+    return tm;
+}
+// bool IsLaterThan(const std::string &timestamp1, const std::string &timestamp2, double seconds);
+inline bool IsLaterThan(const std::string &timestamp1, const std::string &timestamp2, double seconds)
+{
+    std::tm tm1 = ParseTimestamp(timestamp1);
+    std::tm tm2 = ParseTimestamp(timestamp2);
+    std::time_t time1 = std::mktime(&tm1);
+    std::time_t time2 = std::mktime(&tm2);
+    return std::difftime(time1, time2) > seconds;
+}
 }  // namespace functionsystem
 #endif  // COMMON_UTILS_TIME_H

@@ -19,6 +19,7 @@
 #include <climits>
 
 #include "common/utils/param_check.h"
+#include "common/utils/exec_utils.h"
 #include "utils/os_utils.hpp"
 
 namespace functionsystem::runtime_manager {

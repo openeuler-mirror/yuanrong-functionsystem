@@ -14,7 +14,6 @@
 
 project(register)
 add_library(register STATIC "")
-set_target_properties(register PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} REGISTER_SRCS)
 add_dependencies(register status heartbeat)
 target_sources(register PRIVATE ${REGISTER_SRCS})

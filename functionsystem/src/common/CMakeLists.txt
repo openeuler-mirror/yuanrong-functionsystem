@@ -49,14 +49,12 @@ add_subdirectory(resource_lock)
 
 
 add_library(utils STATIC "")
-set_target_properties(utils PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/utils FS_UTILS_SRCS)
 add_dependencies(utils status)
 target_sources(utils PRIVATE ${FS_UTILS_SRCS})
 target_link_libraries(utils PUBLIC status ${crypto_LIB} ${ssl_LIB})
 
 add_library(scheduler STATIC "")
-set_target_properties(scheduler PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/scheduler SCHEDULER_SRCS)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/schedule_decision SCHEDULER_SRCS)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/schedule_decision/scheduler SCHEDULER_SRCS)
@@ -73,7 +71,6 @@ target_sources(scheduler PRIVATE ${SCHEDULER_SRCS})
 target_link_libraries(scheduler PUBLIC status posix_pb)
 
 add_library(schedule_plugin_common STATIC "")
-set_target_properties(schedule_plugin_common PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/schedule_plugin/common PLUGIN_COMMON_SRCS)
 add_dependencies(schedule_plugin_common status posix_pb resource_view)
 target_sources(schedule_plugin_common PRIVATE ${PLUGIN_COMMON_SRCS})

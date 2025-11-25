@@ -19,7 +19,6 @@ add_library(${SCALER_LIB} STATIC
         ${SCALER_UTILS_SRCS}
         ${SCALER_POOL_SRCS}
         ${SCALER_SRCS})
-set_target_properties(${SCALER_LIB} PROPERTIES UNITY_BUILD ON)
 target_compile_options(${SCALER_LIB} PRIVATE -fPIE)
 
 target_include_directories(${SCALER_LIB} PRIVATE

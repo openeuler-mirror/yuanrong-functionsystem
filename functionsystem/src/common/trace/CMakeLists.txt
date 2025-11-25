@@ -14,7 +14,6 @@
 
 project(trace_adapter)
 add_library(trace_adapter STATIC "")
-set_target_properties(trace_adapter PROPERTIES UNITY_BUILD ON)
 message(STATUS "building with observability")
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} TRACE_SRCS)
 add_dependencies(trace_adapter status)

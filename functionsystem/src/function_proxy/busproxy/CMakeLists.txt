@@ -26,8 +26,6 @@ aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/startup STARTUP_SRCS)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/memory_monitor MONITOR_SRCS)
 
 add_library(busproxy_lib STATIC "")
-set_target_properties(busproxy_lib PROPERTIES UNITY_BUILD ON)
-set_target_properties(busproxy_lib PROPERTIES UNITY_BUILD_BATCH_SIZE 9) # only 9 files, set in one batch
 target_compile_options(busproxy_lib PRIVATE -fPIE)
 target_sources(busproxy_lib PRIVATE ${INSTANCE_PROXY_SRCS} ${INSTANCE_VIEW_SRCS} ${INVOCATION_SRCS} ${REGISTRY_SRCS} ${STARTUP_SRCS} ${MONITOR_SRCS})
 target_link_libraries(busproxy_lib ${LITEBUS_LIB} meta_store_client meta_store_adapter utils)

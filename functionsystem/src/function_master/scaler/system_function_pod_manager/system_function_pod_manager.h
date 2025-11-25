@@ -20,6 +20,8 @@
 #include <string>
 #include <unordered_set>
 
+#include "utils/string_utils.hpp"
+
 #include "common/kube_client/model/pod/v1_pod.h"
 #include "common/status/status.h"
 

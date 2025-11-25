@@ -28,7 +28,6 @@ include_directories(${CMAKE_CURRENT_LIST_DIR})
 
 add_library(${META_STORE_LIB} STATIC
         ${META_STORE_SRCS})
-set_target_properties(${META_STORE_LIB} PROPERTIES UNITY_BUILD ON)
 target_compile_options(${META_STORE_LIB} PRIVATE -fPIE)
 
 add_dependencies(${META_STORE_LIB} meta_store_client http explorer)

@@ -34,7 +34,7 @@ class ResourceLabelsCollectorTest : public ::testing::Test {};
  */
 TEST_F(ResourceLabelsCollectorTest, GenFilter)
 {
-    auto collector = std::make_shared<runtime_manager::ResourceLabelsCollector>("/home/sn/podInfo/labels");
+    auto collector = std::make_shared<runtime_manager::ResourceLabelsCollector>("/tmp/home/sn/podInfo/labels");
     EXPECT_EQ(collector->GenFilter(), "system-InitLabels");
 }
 
@@ -49,16 +49,16 @@ TEST_F(ResourceLabelsCollectorTest, GetLabelsOK)
     litebus::os::SetEnv(runtime_manager::INIT_LABELS_ENV_KEY, R"({"a":"b", "c":"d"})");
     litebus::os::SetEnv(runtime_manager::NODE_ID_LABEL_KEY, "123");
 
-    if (!litebus::os::ExistPath("/home/sn/podInfo")) {
-        litebus::os::Mkdir("/home/sn/podInfo");
+    if (!litebus::os::ExistPath("/tmp/home/sn/podInfo")) {
+        litebus::os::Mkdir("/tmp/home/sn/podInfo");
     }
 
     std::ofstream outfile;
-    outfile.open("/home/sn/podInfo/labels");
+    outfile.open("/tmp/home/sn/podInfo/labels");
     outfile << "e=\"f\"\ng=\"h\"";
     outfile.close();
 
-    auto collector = std::make_shared<runtime_manager::ResourceLabelsCollector>("/home/sn/podInfo/labels");
+    auto collector = std::make_shared<runtime_manager::ResourceLabelsCollector>("/tmp/home/sn/podInfo/labels");
     auto limit = collector->GetLimit();
     EXPECT_TRUE(limit.initLabels.IsSome());
     auto initLabels = limit.initLabels.Get();
@@ -77,7 +77,7 @@ TEST_F(ResourceLabelsCollectorTest, GetLabelsOK)
     EXPECT_EQ(initLabels.find(runtime_manager::NODE_ID_LABEL_KEY)->second, "123");
     litebus::os::UnSetEnv(runtime_manager::INIT_LABELS_ENV_KEY);
     litebus::os::UnSetEnv(runtime_manager::NODE_ID_LABEL_KEY);
-    litebus::os::Rm("/home/sn/podInfo/labels");
+    litebus::os::Rm("/tmp/home/sn/podInfo/labels");
 }
 
 /**

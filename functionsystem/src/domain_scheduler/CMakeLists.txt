@@ -19,7 +19,6 @@ message(STATUS "Begin to configure domain_scheduler")
 set_property(GLOBAL PROPERTY SRC_DOMAIN_SCHEDULER_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 add_library(domain_scheduler_lib STATIC domain_scheduler_launcher.cpp)
-set_target_properties(domain_scheduler_lib PROPERTIES UNITY_BUILD ON)
 target_compile_options(domain_scheduler_lib PRIVATE -fPIE)
 
 add_subdirectory(startup)

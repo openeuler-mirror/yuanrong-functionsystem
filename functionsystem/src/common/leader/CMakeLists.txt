@@ -14,7 +14,6 @@
 
 project(leader)
 add_library(leader STATIC "")
-set_target_properties(leader PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} LEADER_SRCS)
 add_dependencies(leader status meta_store_client explorer)
 target_sources(leader PRIVATE ${LEADER_SRCS})

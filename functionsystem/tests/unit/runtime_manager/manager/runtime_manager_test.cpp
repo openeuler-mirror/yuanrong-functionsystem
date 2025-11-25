@@ -239,7 +239,7 @@ public:
             "--proc_metrics_cpu=2000",
             "--proc_metrics_memory=2000",
             "--runtime_instance_debug_enable=true",
-            R"(--log_config={"filepath": "/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
+            R"(--log_config={"filepath": "/tmp/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
         };
         flags.ParseFlags(std::size(argv), argv);
         manager_->SetRegisterHelper(std::make_shared<RegisterHelper>("node1-RuntimeManagerSrv"));
@@ -732,7 +732,7 @@ TEST_F(RuntimeManagerTest, RegisterToFunctionAgentFailedTest)
         "--runtime_ld_library_path=/tmp",
         "--proc_metrics_cpu=2000",
         "--proc_metrics_memory=2000",
-        R"(--log_config={"filepath": "/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
+        R"(--log_config={"filepath": "/tmp/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
     };
     flags.ParseFlags(std::size(argv), argv);
     manager_->SetRegisterHelper(std::make_shared<RegisterHelper>("node1-RuntimeManagerSrv"));
@@ -782,7 +782,7 @@ TEST_F(RuntimeManagerTest, RegisterToFunctionAgentUnknownErrorTest)
         "--runtime_ld_library_path=/tmp",
         "--proc_metrics_cpu=2000",
         "--proc_metrics_memory=2000",
-        R"(--log_config={"filepath": "/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
+        R"(--log_config={"filepath": "/tmp/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
     };
     flags.ParseFlags(std::size(argv), argv);
     manager_->SetRegisterHelper(std::make_shared<RegisterHelper>("node1-RuntimeManagerSrv"));
@@ -821,7 +821,7 @@ TEST_F(RuntimeManagerTest, RegisterToFunctionAgentTimeoutTest)
         "--runtime_ld_library_path=/tmp",
         "--proc_metrics_cpu=2000",
         "--proc_metrics_memory=2000",
-        R"(--log_config={"filepath": "/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
+        R"(--log_config={"filepath": "/tmp/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
     };
     flags.ParseFlags(std::size(argv), argv);
     manager_->SetRegisterHelper(std::make_shared<RegisterHelper>("node1-RuntimeManagerSrv"));
@@ -966,7 +966,7 @@ TEST_F(RuntimeManagerTest, EnableDebugInstanceIDTest_NotFound_Gdbserver)
         "--proc_metrics_cpu=2000",
         "--proc_metrics_memory=2000",
         "--runtime_instance_debug_enable=true",
-        R"(--log_config={"filepath": "/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
+        R"(--log_config={"filepath": "/tmp/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
     };
     flags.ParseFlags(std::size(argv), argv);
     manager_->SetRegisterHelper(std::make_shared<RegisterHelper>("node1-RuntimeManagerSrv"));

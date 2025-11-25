@@ -19,7 +19,6 @@ add_library(common_flags STATIC "")
 get_property(UTILS_INCLUDE GLOBAL PROPERTY "UTILS_INCLUDE")
 
 include_directories(${UTILS_INCLUDE})
-set_target_properties(common_flags PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} COMMON_FLAGS_SRCS)
 target_sources(common_flags PRIVATE ${COMMON_FLAGS_SRCS})
 target_link_libraries(common_flags PUBLIC ${litebus_ALL_LIB})

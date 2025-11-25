@@ -12,13 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(src_dir ${ROOT_DIR}/datasystem)
+set(src_name datasystem)
+set(src_dir ${VENDOR_SRC_DIR}/datasystem)
 
 get_filename_component(absolute_src_dir ${src_dir} ABSOLUTE)
 set(src_dir ${absolute_src_dir})
 
-set(datasystem_INCLUDE_DIR ${src_dir}/output/sdk/cpp/include)
-set(datasystem_LIB_DIR ${src_dir}/output/sdk/cpp/lib)
+set(INSTALL_DIR "${EP_BUILD_DIR}/Install/${src_name}")
+message("include datasystem lib from ${INSTALL_DIR}")
+set(datasystem_INCLUDE_DIR ${INSTALL_DIR}/sdk/cpp/include)
+set(datasystem_LIB_DIR ${INSTALL_DIR}/sdk/cpp/lib)
 set(datasystem_LIB ${datasystem_LIB_DIR}/libdatasystem.so)
 
 include_directories(${datasystem_INCLUDE_DIR})

@@ -603,9 +603,9 @@ TEST_F(UtilsTest, SetAffinityOpt)
 
 TEST_F(UtilsTest, Sha256CalculateFileTest)
 {
-    (void)litebus::os::Rmdir("/home/layer/func/bucket");
-    std::string objDir = "/home/layer/func/bucket/files";
-    std::string destFile = "/home/layer/func/bucket/test.zip";
+    (void)litebus::os::Rmdir("/tmp/home/layer/func/bucket");
+    std::string objDir = "/tmp/home/layer/func/bucket/files";
+    std::string destFile = "/tmp/home/layer/func/bucket/test.zip";
     litebus::os::Mkdir(objDir);
     auto file = objDir + "/a.txt";
     (void)ExecuteCommandByPopen("echo a > " + file, INT32_MAX);
@@ -624,7 +624,7 @@ TEST_F(UtilsTest, Sha256CalculateFileTest)
     }
     std::string cmd = "/usr/bin/sha256sum " + destFile;
     EXPECT_TRUE(litebus::strings::StartsWithPrefix(ExecuteCommandByPopen(cmd, INT32_MAX), resultSs.str()));
-    EXPECT_TRUE(litebus::os::Rmdir("/home/layer/func/bucket").IsNone());
+    EXPECT_TRUE(litebus::os::Rmdir("/tmp/home/layer/func/bucket").IsNone());
 }
 
 TEST_F(UtilsTest, ExceptionTest)

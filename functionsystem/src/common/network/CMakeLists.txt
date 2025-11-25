@@ -14,6 +14,5 @@
 
 project(network)
 add_library(network STATIC "")
-set_target_properties(network PROPERTIES UNITY_BUILD ON)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} NETWORK_SRCS)
 target_sources(network PRIVATE ${NETWORK_SRCS})
