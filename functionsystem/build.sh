@@ -153,23 +153,8 @@ function check_module() {
 
 function check_posix() {
     log_info "Start check posix at ${POSIX_DIR}"
-    if [ ! -d "${POSIX_DIR}" ]; then
-        mkdir -p "${POSIX_DIR}"
-    fi
-    if [ ! -d "${YR_ROOT_DIR}/posix" ]; then
-        log_error "The posix project does not exist, please check it"
-        exit 1
-    fi
-    if [ ! -f "${POSIX_DIR}/common.proto" ]|| \
-       [ ! -f "${POSIX_DIR}/core_service.proto" ]|| \
-       [ ! -f "${POSIX_DIR}/runtime_rpc.proto" ]|| \
-       [ ! -f "${POSIX_DIR}/affinity.proto" ]|| \
-       [ ! -f "${POSIX_DIR}/runtime_service.proto" ]; then
-        cp "${YR_ROOT_DIR}/posix/proto"/*.proto "${POSIX_DIR}"
-        log_info "Get posix success"
-    else
-        log_info "posix file is exist"
-    fi
+    cp -f "${YR_ROOT_DIR}/proto/inner/*.proto" "${POSIX_DIR}"
+    cp -f "${YR_ROOT_DIR}/proto/posix/*.proto" "${POSIX_DIR}"
 }
 
 function strip_symbols() {

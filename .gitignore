@@ -32,8 +32,8 @@ build.ninja
 ### build
 build/
 
-### thirdparty build cache
-thirdparty/thirdparty/example/build
+### resource
+resource/
 
 ### functionsystem build cache
 functionsystem/build/CMakeFiles

@@ -1,6 +1,7 @@
 # coding=UTF-8
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
 import json
+import shutil
 import os.path
 
 import utils
@@ -20,8 +21,14 @@ def compile_functionsystem(root_dir, job_num, version="0.0.0", build_type="Debug
                            time_trace=False, coverage=False, jemalloc=False, sanitizers=False, gtest=False):
     print("Build cpp code in functionsystem")
 
-    # 检查 Proto 文件存在性
-    log.warning("Copy proto file not implement")
+    # 拷贝 proto 文件
+    log.info("Auto copy all proto file to cpp common folder")
+    inner_proto = os.path.join(root_dir, "proto", "inner")
+    posix_proto = os.path.join(root_dir, "proto", "posix")
+    cpp_proto_dir = os.path.join(root_dir, "functionsystem", "src", "common", "proto", "posix")
+    os.makedirs(cpp_proto_dir, exist_ok=True)
+    copy_proto_folder(inner_proto, cpp_proto_dir)
+    copy_proto_folder(posix_proto, cpp_proto_dir)
 
     # 使用 CMake 创建 Ninja 构建清单
     root_dir = os.path.abspath(root_dir)  # Git根目录
@@ -77,3 +84,8 @@ def version_name(version):
 
 def bool2switch(b: bool):
     return "ON" if b else "OFF"
+
+def copy_proto_folder(src, dst):
+    for proto_file in os.listdir(src):
+        if proto_file.endswith(".proto"):
+            shutil.copy(os.path.join(src, proto_file), dst)
