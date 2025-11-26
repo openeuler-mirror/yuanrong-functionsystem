@@ -6,12 +6,13 @@ import utils
 import hashlib
 import argparse
 import urllib.request
+from urllib.parse import urlparse
 
 log = utils.stream_logger()
 
 
 def download_vendor(config_path, download_path):
-    """主函数"""
+    """下载并解压依赖"""
     config_path = os.path.abspath(config_path)
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
@@ -23,21 +24,31 @@ def download_vendor(config_path, download_path):
     configs = list(reader)  # name, version, module, repo, sha256
 
     for config in configs:
+        repo_parsed = urlparse(config['repo'])
         archive_name = config['repo'].split('/')[-1]
         package_name = archive_name.replace(".tar.gz", "").replace(".tar", "").replace(".zip", "")
-        archive_path = os.path.join(download_path, archive_name)  # vendor/xxx-vvv.zip
-        vendor_path = os.path.join(download_path, config['name'])  # vendor/xxx
+        archive_path = os.path.join(download_path, archive_name)  # vendor/src/xxx-vvv.zip
+        vendor_path = os.path.join(download_path, config['name'])  # vendor/src/xxx
 
         if os.path.exists(vendor_path):
             log.info(f"Dependency {config['name']}-{config['version']} already exists, skipping download and extraction")
             continue
 
-        log.info(f"Downloading {config['name']}-{config['version']} with checksum: {config['sha256']} from source: {config['repo']}")
-        download_zipfile(package_name, config['repo'], archive_path)
-        verify_checksum(package_name, archive_path, config['sha256'])
-        extract_name = utils.extract_file(archive_path, download_path)
-        package_path = os.path.join(download_path, extract_name)  # vendor/xxx-vvv
-        os.rename(package_path, vendor_path)
+        if repo_parsed.scheme == "file":
+            # 直接解压指定压缩包
+            log.info(f"Extracting {config['name']}-{config['version']} with local file: {repo_parsed.path}")
+            log.warning(f"Skip local file[{archive_name}] hash verification")
+            extract_name = utils.extract_file(archive_path, download_path)
+            package_path = os.path.join(download_path, extract_name)  # vendor/src/xxx-vvv
+            os.rename(package_path, vendor_path)
+        else:
+            # 通过网络下载压缩包
+            log.info(f"Downloading {config['name']}-{config['version']} with checksum: {config['sha256']} from source: {config['repo']}")
+            download_zipfile(package_name, config['repo'], archive_path)
+            verify_checksum(package_name, archive_path, config['sha256'])
+            extract_name = utils.extract_file(archive_path, download_path)
+            package_path = os.path.join(download_path, extract_name)  # vendor/src/xxx-vvv
+            os.rename(package_path, vendor_path)
     return 0
 
 

@@ -1,8 +1,10 @@
+# coding=UTF-8
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
 import os
 import json
 import utils
 import tasks
+import shutil
 import compile
 
 log = utils.stream_logger()
@@ -27,26 +29,38 @@ def run_build(root_dir, cmd_args):
 
 def compile_vendor(args):
     print(args['root_dir'], args['job_num'])
+    vendor_path = os.path.join(args['root_dir'], "vendor")
 
     # 根据下载清单下载第三方依赖
     tasks.download_vendor(
-        config_path=os.path.join(args['root_dir'], "vendor", "VendorList.csv"),
-        download_path=os.path.join(args['root_dir'], "vendor", "src")
+        config_path=os.path.join(vendor_path, "VendorList.csv"),
+        download_path=os.path.join(vendor_path, "src")
     )
-
+    # 编译三方件依赖
     utils.sync_command(
         ["cmake", "-B", "build"],
-        cwd=os.path.join(args['root_dir'], "vendor")
+        cwd=os.path.join(vendor_path)
     )
     utils.sync_command(
         ["cmake", "--build", "build", "--parallel", str(args['job_num'])],
-        cwd=os.path.join(args['root_dir'], "vendor")
+        cwd=os.path.join(vendor_path)
     )
     utils.sync_command(
         ["bash", "basic_build.sh"],
         cwd=os.path.join(args['root_dir'], "scripts")
     )
+    # 引入二方件产物
+    install_datasystem(vendor_path)
 
+
+def install_datasystem(vendor_path):
+    linux_dist = utils.get_linux_distribution()
+    datasystem_sdk_path = os.path.join(vendor_path, "src", "datasystem", "sdk")
+    datasystem_install_path = os.path.join(vendor_path, "output", linux_dist, "Install", "datasystem", "sdk")
+    if os.path.exists(datasystem_install_path):
+        log.warning("Datasystem install path is exist. Skip to copy files.")
+        return
+    shutil.copytree(datasystem_sdk_path, datasystem_install_path, copy_function=shutil.copy2)
 
 def compile_logs(args):
     log.info("Start to compile common/logs")
