@@ -400,8 +400,8 @@ litebus::Future<std::shared_ptr<CreateResponses>> LocalGroupCtrlActor::GroupSche
         return resp;
     }
     auto groupCtx = NewGroupCtx(groupInfo);
-    YRLOG_INFO("{}|{}|received group schedule request, id ({}) instance num {}", req->traceid(), req->requestid(),
-               groupInfo->groupid(), req->requests_size());
+    YRLOG_INFO("{}|{}|received group schedule request, id ({}) instance num {} policy {}", req->traceid(), req->requestid(),
+               groupInfo->groupid(), req->requests_size(), groupInfo->groupopts().grouppolicy());
     ASSERT_IF_NULL(groupOperator_);
     ASSERT_IF_NULL(scheduler_);
     auto future = ToGroupInstanceScheduling(groupCtx).Then(
