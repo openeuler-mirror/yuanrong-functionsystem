@@ -3407,7 +3407,7 @@ litebus::Future<Status> InstanceCtrlActor::Checkpoint(const std::string &instanc
             if (saveRsp.code() != common::ErrorCode::ERR_NONE) {
                 YRLOG_ERROR("failed to save checkpoint state, error code: {}, msg: {}", saveRsp.code(),
                             saveRsp.message());
-                promise->SetValue(Status(static_cast<StatusCode>(saveRsp.code())));
+                promise->SetValue(Status(static_cast<StatusCode>(saveRsp.code()), saveRsp.message()));
                 return;
             }
             promise->SetValue(Status::OK());

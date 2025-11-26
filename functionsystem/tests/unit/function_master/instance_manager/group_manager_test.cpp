@@ -1411,6 +1411,73 @@ TEST_F(GroupManagerTest, SuspendGroupInvalidState)
     litebus::Await(groupMgrActor->GetAID());
 }
 
+TEST_F(GroupManagerTest, SuspendGroupNoExist)
+{
+    auto mockMetaClient = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
+    EXPECT_CALL(*mockMetaClient, Get).WillRepeatedly(testing::Return(litebus::Future<std::shared_ptr<GetResponse>>()));
+    auto mockGlobalScheduler = std::make_shared<MockGlobalSched>();
+    auto groupMgrActor = std::make_shared<GroupManagerActor>(mockMetaClient, mockGlobalScheduler);
+    litebus::Spawn(groupMgrActor);
+    litebus::Async(groupMgrActor->GetAID(), &GroupManagerActor::UpdateLeaderInfo,
+                   GetLeaderInfo(groupMgrActor->GetAID()));
+    {
+        auto outerKillerActor = std::make_shared<OuterKillerActor>();
+        ASSERT_TRUE(litebus::Spawn(outerKillerActor).OK());
+        auto respPromise = std::make_shared<litebus::Promise<messages::KillGroupResponse>>();
+        EXPECT_CALL(*outerKillerActor, OnKillGroupCallback)
+            .WillOnce(testing::Invoke(
+                [&respPromise](const messages::KillGroupResponse &rsp) { respPromise->SetValue(rsp); }));
+        // let killer send SuspendGroup
+        auto killGroupReq = std::make_shared<messages::KillGroup>();
+        killGroupReq->set_groupid(GROUP_ID_1);
+        killGroupReq->set_signal(GROUP_SUSPEND_SIGNAL);
+        litebus::Async(outerKillerActor->GetAID(), &OuterKillerActor::SendKillGroup, groupMgrActor->GetAID(),
+                       killGroupReq);
+        // will send kill group response back to outer killer
+        ASSERT_AWAIT_READY(respPromise->GetFuture());
+        auto kgRsp = respPromise->GetFuture().Get();
+        EXPECT_EQ(kgRsp.code(), static_cast<int32_t>(ERR_PARAM_INVALID));
+        YRLOG_INFO("SUSPEND group response: {}", kgRsp.DebugString());
+        litebus::Terminate(outerKillerActor->GetAID());
+        litebus::Await(outerKillerActor->GetAID());
+    }
+    litebus::Terminate(groupMgrActor->GetAID());
+    litebus::Await(groupMgrActor->GetAID());
+}
+
+TEST_F(GroupManagerTest, SuspendGroupAlreadySuspend)
+{
+    auto mockMetaClient = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
+    EXPECT_CALL(*mockMetaClient, Get).WillRepeatedly(testing::Return(litebus::Future<std::shared_ptr<GetResponse>>()));
+    auto mockGlobalScheduler = std::make_shared<MockGlobalSched>();
+    auto groupMgrActor = std::make_shared<GroupManagerActor>(mockMetaClient, mockGlobalScheduler);
+    litebus::Spawn(groupMgrActor);
+    PrepareGroup(groupMgrActor, GroupState::SUSPEND, InstanceState::RUNNING);
+    {
+        auto outerKillerActor = std::make_shared<OuterKillerActor>();
+        ASSERT_TRUE(litebus::Spawn(outerKillerActor).OK());
+        auto respPromise = std::make_shared<litebus::Promise<messages::KillGroupResponse>>();
+        EXPECT_CALL(*outerKillerActor, OnKillGroupCallback)
+            .WillOnce(testing::Invoke(
+                [&respPromise](const messages::KillGroupResponse &rsp) { respPromise->SetValue(rsp); }));
+        // let killer send SuspendGroup
+        auto killGroupReq = std::make_shared<messages::KillGroup>();
+        killGroupReq->set_groupid(GROUP_ID_1);
+        killGroupReq->set_signal(GROUP_SUSPEND_SIGNAL);
+        litebus::Async(outerKillerActor->GetAID(), &OuterKillerActor::SendKillGroup, groupMgrActor->GetAID(),
+                       killGroupReq);
+        // will send kill group response back to outer killer
+        ASSERT_AWAIT_READY(respPromise->GetFuture());
+        auto kgRsp = respPromise->GetFuture().Get();
+        EXPECT_EQ(kgRsp.code(), 0);
+        YRLOG_INFO("SUSPEND group response: {}", kgRsp.DebugString());
+        litebus::Terminate(outerKillerActor->GetAID());
+        litebus::Await(outerKillerActor->GetAID());
+    }
+    litebus::Terminate(groupMgrActor->GetAID());
+    litebus::Await(groupMgrActor->GetAID());
+}
+
 TEST_F(GroupManagerTest, ResumeGroup)
 {
     auto mockMetaClient = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
@@ -1487,7 +1554,7 @@ TEST_F(GroupManagerTest, ResumeGroupInvalidState)
     auto mockGlobalScheduler = std::make_shared<MockGlobalSched>();
     auto groupMgrActor = std::make_shared<GroupManagerActor>(mockMetaClient, mockGlobalScheduler);
     litebus::Spawn(groupMgrActor);
-    PrepareGroup(groupMgrActor, GroupState::RUNNING, InstanceState::RUNNING);
+    PrepareGroup(groupMgrActor, GroupState::SCHEDULING, InstanceState::RUNNING);
 
     auto [group, exist] = groupMgrActor->member_->groupCaches->GetGroupInfo(GROUP_ID_1);
     EXPECT_EQ(exist, true);
@@ -1504,6 +1571,68 @@ TEST_F(GroupManagerTest, ResumeGroupInvalidState)
     ASSERT_AWAIT_READY(respPromise->GetFuture());
     auto kgRsp = respPromise->GetFuture().Get();
     EXPECT_EQ(kgRsp.code(), static_cast<int32_t>(ERR_STATE_MACHINE_ERROR));
+    YRLOG_INFO("RESUME group response: {}", kgRsp.DebugString());
+    litebus::Terminate(outerKillerActor->GetAID());
+    litebus::Await(outerKillerActor->GetAID());
+    litebus::Terminate(groupMgrActor->GetAID());
+    litebus::Await(groupMgrActor->GetAID());
+}
+
+TEST_F(GroupManagerTest, ResumeGroupNotExistState)
+{
+    auto mockMetaClient = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
+    EXPECT_CALL(*mockMetaClient, Get).WillRepeatedly(testing::Return(litebus::Future<std::shared_ptr<GetResponse>>()));
+    auto mockGlobalScheduler = std::make_shared<MockGlobalSched>();
+    auto groupMgrActor = std::make_shared<GroupManagerActor>(mockMetaClient, mockGlobalScheduler);
+    litebus::Spawn(groupMgrActor);
+    litebus::Async(groupMgrActor->GetAID(), &GroupManagerActor::UpdateLeaderInfo,
+                   GetLeaderInfo(groupMgrActor->GetAID()));
+    auto [group, exist] = groupMgrActor->member_->groupCaches->GetGroupInfo(GROUP_ID_1);
+    EXPECT_EQ(exist, false);
+    auto outerKillerActor = std::make_shared<OuterKillerActor>();
+    ASSERT_TRUE(litebus::Spawn(outerKillerActor).OK());
+    auto respPromise = std::make_shared<litebus::Promise<messages::KillGroupResponse>>();
+    EXPECT_CALL(*outerKillerActor, OnKillGroupCallback)
+        .WillOnce(
+            testing::Invoke([&respPromise](const messages::KillGroupResponse &rsp) { respPromise->SetValue(rsp); }));
+    auto killGroupReq = std::make_shared<messages::KillGroup>();
+    killGroupReq->set_groupid(GROUP_ID_1);
+    killGroupReq->set_signal(GROUP_RESUME_SIGNAL);
+    litebus::Async(outerKillerActor->GetAID(), &OuterKillerActor::SendKillGroup, groupMgrActor->GetAID(), killGroupReq);
+    ASSERT_AWAIT_READY(respPromise->GetFuture());
+    auto kgRsp = respPromise->GetFuture().Get();
+    EXPECT_EQ(kgRsp.code(), static_cast<int32_t>(ERR_PARAM_INVALID));
+    YRLOG_INFO("RESUME group response: {}", kgRsp.DebugString());
+    litebus::Terminate(outerKillerActor->GetAID());
+    litebus::Await(outerKillerActor->GetAID());
+    litebus::Terminate(groupMgrActor->GetAID());
+    litebus::Await(groupMgrActor->GetAID());
+}
+
+TEST_F(GroupManagerTest, ResumeGroupAlreadyRunning)
+{
+    auto mockMetaClient = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
+    EXPECT_CALL(*mockMetaClient, Get).WillRepeatedly(testing::Return(litebus::Future<std::shared_ptr<GetResponse>>()));
+    auto mockGlobalScheduler = std::make_shared<MockGlobalSched>();
+    auto groupMgrActor = std::make_shared<GroupManagerActor>(mockMetaClient, mockGlobalScheduler);
+    litebus::Spawn(groupMgrActor);
+    PrepareGroup(groupMgrActor, GroupState::RUNNING, InstanceState::RUNNING);
+
+    auto [group, exist] = groupMgrActor->member_->groupCaches->GetGroupInfo(GROUP_ID_1);
+    EXPECT_EQ(exist, true);
+    auto outerKillerActor = std::make_shared<OuterKillerActor>();
+    ASSERT_TRUE(litebus::Spawn(outerKillerActor).OK());
+    auto respPromise = std::make_shared<litebus::Promise<messages::KillGroupResponse>>();
+    EXPECT_CALL(*outerKillerActor, OnKillGroupCallback)
+        .WillOnce(
+            testing::Invoke([&respPromise](const messages::KillGroupResponse &rsp) { respPromise->SetValue(rsp); }));
+    auto killGroupReq = std::make_shared<messages::KillGroup>();
+    killGroupReq->set_groupid(GROUP_ID_1);
+    killGroupReq->set_signal(GROUP_RESUME_SIGNAL);
+    litebus::Async(outerKillerActor->GetAID(), &OuterKillerActor::SendKillGroup, groupMgrActor->GetAID(), killGroupReq);
+    ASSERT_AWAIT_READY(respPromise->GetFuture());
+    auto kgRsp = respPromise->GetFuture().Get();
+    EXPECT_EQ(kgRsp.code(), 0);
     YRLOG_INFO("RESUME group response: {}", kgRsp.DebugString());
     litebus::Terminate(outerKillerActor->GetAID());
     litebus::Await(outerKillerActor->GetAID());
