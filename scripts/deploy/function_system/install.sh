@@ -208,9 +208,6 @@ function install_faas_frontend() {
   -primaryKeyStoreFile=${PRIMARY_KEY_STORE_FILE} \
   -standbyKeyStoreFile=${STANDBY_KEY_STORE_FILE} \
   -enableDsEncrypt=${RUNTIME_DS_ENCRYPT_ENABLE} \
-  -encryptRuntimePublicKeyContext=${ENCRYPT_RUNTIME_PUBLIC_KEY_CONTEXT} \
-  -encryptRuntimePrivateKeyContext=${ENCRYPT_RUNTIME_PRIVATE_KEY_CONTEXT} \
-  -encryptDsPublicKeyContext=${ENCRYPT_DS_PUBLIC_KEY_CONTEXT} \
   -functionSystemAddress="${IP_ADDRESS}:${FUNCTION_PROXY_GRPC_PORT}" \
   -driverMode true  >> "${FS_LOG_PATH}/${NODE_ID}-faas_frontend${STD_LOG_SUFFIX}"  2>&1 &
   FAAS_FRONTEND_PID="$!"
