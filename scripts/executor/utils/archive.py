@@ -53,3 +53,14 @@ def _is_symlink(info):
     """检查 ZIP 条目是否为符号链接"""
     mode = (info.external_attr >> 16) & 0xFFFF
     return stat.S_IFMT(mode) == stat.S_IFLNK
+
+
+def archive_tar(tarfile_path: str, archive_path):
+    """压缩指定文件夹到压缩文件"""
+    mod = "w"
+    if tarfile_path.endswith(".tar.gz"):
+        mod = "w:gz"
+    base_path = os.path.basename(os.path.abspath(archive_path))
+    tar_ref = tarfile.open(tarfile_path, mod)
+    tar_ref.add(archive_path, arcname=base_path)
+    tar_ref.close()

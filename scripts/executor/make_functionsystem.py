@@ -29,6 +29,8 @@ def parser_args():
                               help="Set the number of jobs for compile")
     build_parser.add_argument("-v", "--version", type=str, default="0.0.0",
                               help="Set the version for function system build")
+    build_parser.add_argument("--build_type", type=str, default="Release",
+                              help="Set program compilation mode(Debug/Release). Default: Release")
     build_parser.set_defaults(func=lambda func_args: tasks.run_build(ROOT_DIR, func_args))
     # 清理缓存执行参数
     clean_parser = subparsers.add_parser("clean", help="Clean all build artifacts and caches")
@@ -49,6 +51,13 @@ def parser_args():
     test_parser.add_argument("-p", "--print_logs", type=bool, default=True,
                              help="Set whether to print test case standard output. Default: True")
     test_parser.set_defaults(func=lambda func_args: tasks.run_test(ROOT_DIR, func_args))
+    # 打包函数系统构建产物
+    pack_parser = subparsers.add_parser("pack", help="Copy and package all compiled products of function system")
+    pack_parser.add_argument("-v", "--version", type=str, default="0.0.0",
+                              help="Set the version for function system package")
+    pack_parser.add_argument("--pack_type", type=str, default="Release",
+                              help="Set program package mode(Debug/Release). Default: Release")
+    pack_parser.set_defaults(func=lambda func_args: tasks.run_pack(ROOT_DIR, func_args))
 
     args = parser.parse_args()
     return parser, args

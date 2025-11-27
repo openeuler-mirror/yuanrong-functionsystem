@@ -11,6 +11,7 @@ from .process import sync_command
 from .process import exec_command
 from .process import pipe_command
 
-from .extract import extract_file
-from .extract import extract_tar
-from .extract import extract_zip
+from .archive import extract_file
+from .archive import extract_tar
+from .archive import extract_zip
+from .archive import archive_tar

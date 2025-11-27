@@ -14,7 +14,8 @@ def run_build(root_dir, cmd_args):
     args = {
         "root_dir": root_dir,
         "job_num": cmd_args.job_num,
-        "version": cmd_args.version
+        "version": cmd_args.version,
+        "build_type": cmd_args.build_type.capitalize(),  # 设置为首字母大写
     }
     if args['job_num'] > (os.cpu_count() or 1) * 2:
         log.warning(f"The -j {args['job_num']} is over the max logical cpu count({os.cpu_count()}) * 2")
@@ -62,6 +63,7 @@ def install_datasystem(vendor_path):
         return
     shutil.copytree(datasystem_sdk_path, datasystem_install_path, copy_function=shutil.copy2)
 
+
 def compile_logs(args):
     log.info("Start to compile common/logs")
     utils.sync_command(
@@ -89,7 +91,7 @@ def compile_metrics(args):
 def compile_functionsystem(root_dir, args):
     cwd = os.path.join(args['root_dir'], "functionsystem")
     log.info("Start to compile functionsystem")
-    compile.compile_binary(root_dir, args["job_num"], args["version"])
+    compile.compile_binary(root_dir, args["job_num"], args["version"], args["build_type"])
     utils.sync_command(
         ["bash", "build.sh", "-y", "-j", str(args['job_num']), "-v", args['version']],
         cwd=cwd
