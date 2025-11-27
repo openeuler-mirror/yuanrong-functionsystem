@@ -472,9 +472,19 @@ void GroupManagerActor::MasterBusiness::SuspendGroup(const litebus::AID &from,
     auto &groupID = killGroupReq->groupid();
     auto &requestID = killGroupReq->grouprequestid();
     auto srcInstanceID = killGroupReq->srcinstanceid();
-    if (auto group = member_->groupCaches->GetGroupInfo(groupID);
-        group.second && group.first.second->status() != static_cast<int32_t>(GroupState::RUNNING)) {
-        auto reason = fmt::format("group({}) status is {} which not allow to be suspend", groupID,
+    auto group = member_->groupCaches->GetGroupInfo(groupID);
+    if (!group.second) {
+        auto reason = fmt::format("group({}) is not found, unable to be suspend", groupID);
+        YRLOG_ERROR("{}, request from {}", reason, from.HashString());
+        return actor->InnerKillInstanceOnComplete(from, groupID, requestID,
+                                                  Status(StatusCode::ERR_PARAM_INVALID, reason));
+    }
+    if (group.first.second->status() == static_cast<int32_t>(GroupState::SUSPEND)) {
+        return actor->InnerKillInstanceOnComplete(from, groupID, requestID, Status::OK());
+    }
+    if (group.first.second->status() != static_cast<int32_t>(GroupState::RUNNING)) {
+        auto reason = fmt::format("status of group(id:{} name:{}) is {} which not allow to be suspend", groupID,
+                                  group.first.second->groupopts().groupname(),
                                   ToString(static_cast<GroupState>(group.first.second->status())));
         YRLOG_ERROR("{}, request from {}", reason, from.HashString());
         return actor->InnerKillInstanceOnComplete(from, groupID, requestID,
@@ -501,9 +511,19 @@ void GroupManagerActor::MasterBusiness::ResumeGroup(const litebus::AID &from,
     auto groupID = killGroupReq->groupid();
     auto requestID = killGroupReq->grouprequestid();
     auto srcInstanceID = killGroupReq->srcinstanceid();
-    if (auto group = member_->groupCaches->GetGroupInfo(groupID);
-        group.second && group.first.second->status() != static_cast<int32_t>(GroupState::SUSPEND)) {
-        auto reason = fmt::format("group({}) status is {} which not allow to be resumed", groupID,
+    auto group = member_->groupCaches->GetGroupInfo(groupID);
+    if (!group.second) {
+        auto reason = fmt::format("group({}) is not found, unable to be resume", groupID);
+        YRLOG_ERROR("{}, request from {}", reason, from.HashString());
+        return actor->InnerKillInstanceOnComplete(from, groupID, requestID,
+                                                  Status(StatusCode::ERR_PARAM_INVALID, reason));
+    }
+    if (group.first.second->status() == static_cast<int32_t>(GroupState::RUNNING)) {
+        return actor->InnerKillInstanceOnComplete(from, groupID, requestID, Status::OK());
+    }
+    if (group.first.second->status() != static_cast<int32_t>(GroupState::SUSPEND)) {
+        auto reason = fmt::format("status of group(id:{} name:{}) is {} which not allow to be resumed", groupID,
+                                  group.first.second->groupopts().groupname(),
                                   ToString(static_cast<GroupState>(group.first.second->status())));
         YRLOG_ERROR("{}, request from {}", reason, from.HashString());
         return actor->InnerKillInstanceOnComplete(from, groupID, requestID,
@@ -711,7 +731,7 @@ void GroupManagerActor::InnerKillInstanceOnComplete(const litebus::AID &from, co
     auto msg = ::messages::KillGroupResponse{};
     msg.set_groupid(groupID);
     msg.set_code(static_cast<int32_t>(status.StatusCode()));
-    msg.set_message(status.GetMessage());
+    msg.set_message(status.RawMessage());
     msg.set_grouprequestid(requestID);
     YRLOG_INFO("send OnKillGroup of ({}) to {}, msg {}", groupID, from.HashString(), msg.message());
     Send(from, "OnKillGroup", msg.SerializeAsString());
