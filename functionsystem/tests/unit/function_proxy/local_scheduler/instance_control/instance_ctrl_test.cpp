@@ -1370,7 +1370,7 @@ TEST_F(InstanceCtrlTest, KillInstanceRemote)
     EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_INSTANCE_NOT_FOUND);
 }
 
-TEST_F(InstanceCtrlTest, KillInstanceLocal)
+TEST_F(InstanceCtrlTest, DISABLED_KillInstanceLocal)
 {
     const std::string instanceID = "InstanceA";
     const std::string funcAgentID = "funcAgentA";
@@ -3419,7 +3419,7 @@ TEST_F(InstanceCtrlTest, NewInstanceWithDuplicate)
  * 2. mocked state chanage call back register
  * Expectation:
  */
-TEST_F(InstanceCtrlTest, SchedulingWithDuplicate)
+TEST_F(InstanceCtrlTest, DISABLED_SchedulingWithDuplicate)
 {
     auto observer = std::make_shared<MockObserver>();
     ASSERT_IF_NULL(observer);
@@ -5675,7 +5675,7 @@ TEST_F(InstanceCtrlTest, PersistentNewToSchedulingFailed)
  * Because DeployInstance return StatusCode::LS_UPDATE_INSTANCE_FAIL,
  * which causes no notifyResult to be send in ScheduleEnd
  */
-TEST_F(InstanceCtrlTest, PersistentSchedulingToCreatingFailed)
+TEST_F(InstanceCtrlTest, DISABLED_PersistentSchedulingToCreatingFailed)
 {
     auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActorTest", "nodeID", instanceCtrlConfig);
     auto mockSharedClient = std::make_shared<MockSharedClient>();

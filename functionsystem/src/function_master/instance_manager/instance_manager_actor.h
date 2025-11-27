@@ -504,7 +504,7 @@ private:
 
     litebus::Promise<bool> isInstancesReady_;
 
-    friend class InstanceManagerTest;
+    friend class DISABLED_InstanceManagerTest;
 };  // class InstanceManagerActor
 
 }  // namespace functionsystem::instance_manager

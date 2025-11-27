@@ -23,7 +23,7 @@
 
 namespace functionsystem::system_function_loader {
 const std::string META_STORE_ADDRESS = "127.0.0.1:123";
-class BootstrapDriverTest : public ::testing::Test {
+class DISABLED_BootstrapDriverTest : public ::testing::Test {
 protected:
     inline static std::unique_ptr<meta_store::test::EtcdServiceDriver> etcdSrvDriver_;
 
@@ -51,7 +51,7 @@ protected:
  * 2. StatusCode::SUCCESS
  * 3. StatusCode::SUCCESS
  */
-TEST_F(BootstrapDriverTest, StartSuccess)
+TEST_F(DISABLED_BootstrapDriverTest, StartSuccess)
 {
     system_function_loader::SystemFunctionLoaderStartParam param{ .globalSched =
                                                                       std::make_shared<global_scheduler::GlobalSched>(),

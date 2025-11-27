@@ -119,7 +119,7 @@ public:
     std::shared_ptr<litebus::Promise<Status>> promise_;
 };
 
-class InstanceManagerTest : public ::testing::Test {
+class DISABLED_InstanceManagerTest : public ::testing::Test {
 protected:
     inline static std::unique_ptr<meta_store::test::EtcdServiceDriver> etcdSrvDriver_;
     inline static std::string metaStoreServerHost_;
@@ -285,8 +285,8 @@ protected:
         EXPECT_AWAIT_TRUE([&isMetaSynced]() -> bool { return isMetaSynced; });
     }
 };
-/*
-TEST_F(InstanceManagerTest, SyncInstance)  // NOLINT
+
+TEST_F(DISABLED_InstanceManagerTest, SyncInstance)  // NOLINT
 {
     PutInstances(true);
     auto scheduler = std::make_shared<MockGlobalSched>();
@@ -320,7 +320,7 @@ TEST_F(InstanceManagerTest, SyncInstance)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, StartSyncFail)
+TEST_F(DISABLED_InstanceManagerTest, StartSyncFail)
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
     auto mockMetaStoreClient = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
@@ -347,7 +347,7 @@ TEST_F(InstanceManagerTest, StartSyncFail)
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, SchedulerWatchTest)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, SchedulerWatchTest)  // NOLINT
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
 
@@ -374,7 +374,7 @@ TEST_F(InstanceManagerTest, SchedulerWatchTest)  // NOLINT
     litebus::Await(aid);
 }
 
-TEST_F(InstanceManagerTest, ReplayFailedDeleteOperationTest)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, ReplayFailedDeleteOperationTest)  // NOLINT
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
 
@@ -410,7 +410,7 @@ TEST_F(InstanceManagerTest, ReplayFailedDeleteOperationTest)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, SyncAbnormalScheduler)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, SyncAbnormalScheduler)  // NOLINT
 {
     PutInstances();
     MetaStoreClient client(MetaStoreConfig{ .etcdAddress = metaStoreServerHost_ });
@@ -460,7 +460,7 @@ TEST_F(InstanceManagerTest, SyncAbnormalScheduler)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, PutAndDeleteInstance)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, PutAndDeleteInstance)  // NOLINT
 {
     PutInstances(true);
     auto scheduler = std::make_shared<MockGlobalSched>();
@@ -527,7 +527,7 @@ TEST_F(InstanceManagerTest, PutAndDeleteInstance)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, PutAndDeleteAbnormalScheduler)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, PutAndDeleteAbnormalScheduler)  // NOLINT
 {
     PutInstances();
     MetaStoreClient client(MetaStoreConfig{ .etcdAddress = metaStoreServerHost_ });
@@ -589,7 +589,7 @@ TEST_F(InstanceManagerTest, PutAndDeleteAbnormalScheduler)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, OnLocalSchedulerFaultRecover)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, OnLocalSchedulerFaultRecover)  // NOLINT
 {
     PutInstances(true, true);
     auto scheduler = std::make_shared<MockGlobalSched>();
@@ -710,7 +710,7 @@ TEST_F(InstanceManagerTest, OnLocalSchedulerFaultRecover)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, OnLocalSchedulerFaultNotRecover)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, OnLocalSchedulerFaultNotRecover)  // NOLINT
 {
     PutInstances(false, true);
     auto scheduler = std::make_shared<MockGlobalSched>();
@@ -813,7 +813,7 @@ TEST_F(InstanceManagerTest, OnLocalSchedulerFaultNotRecover)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, PutInstanceAfterAbnormal)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, PutInstanceAfterAbnormal)  // NOLINT
 {
     PutInstances();
     MetaStoreClient client(MetaStoreConfig{ .etcdAddress = metaStoreServerHost_ });
@@ -870,7 +870,7 @@ TEST_F(InstanceManagerTest, PutInstanceAfterAbnormal)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, OnChange)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, OnChange)  // NOLINT
 {
     PutInstances(true);
     auto scheduler = std::make_shared<MockGlobalSched>();
@@ -962,7 +962,7 @@ TEST_F(InstanceManagerTest, OnChange)  // NOLINT
 }
 
 // SlaveBusiness test cases
-TEST_F(InstanceManagerTest, SlaveBusinessTest)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, SlaveBusinessTest)  // NOLINT
 {
     PutInstances(true);
     auto member = std::make_shared<InstanceManagerActor::Member>();
@@ -989,7 +989,7 @@ TEST_F(InstanceManagerTest, SlaveBusinessTest)  // NOLINT
     EXPECT_EQ(slaveBusiness->member_->exitingInstances.find("123"), slaveBusiness->member_->exitingInstances.end());
 }
 
-TEST_F(InstanceManagerTest, ForwardKillInstance)
+TEST_F(DISABLED_InstanceManagerTest, ForwardKillInstance)
 {
     std::string jsonString001;
     resource_view::InstanceInfo instance001 = CreateInstance(INSTANCE_PATH_PREFIX + "/001", true);
@@ -1026,7 +1026,7 @@ TEST_F(InstanceManagerTest, ForwardKillInstance)
 }
 
 // FamilyManagement test cases
-TEST_F(InstanceManagerTest, FamilyManagement_OnParentMissingInstancePut)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, FamilyManagement_OnParentMissingInstancePut)  // NOLINT
 {
     // make new
     auto scheduler = std::make_shared<MockGlobalSched>();
@@ -1083,7 +1083,7 @@ TEST_F(InstanceManagerTest, FamilyManagement_OnParentMissingInstancePut)  // NOL
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, FamilyManagement_OnAbnormalInstancePut)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, FamilyManagement_OnAbnormalInstancePut)  // NOLINT
 {
     // make new
     MetaStoreClient client(MetaStoreConfig{ .etcdAddress = metaStoreServerHost_ });
@@ -1197,7 +1197,7 @@ TEST_F(InstanceManagerTest, FamilyManagement_OnAbnormalInstancePut)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, FamilyManagement_RetryKill)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, FamilyManagement_RetryKill)  // NOLINT
 {
     const int retryIntervalMsInThisTest = 300;
     // make new
@@ -1277,7 +1277,7 @@ TEST_F(InstanceManagerTest, FamilyManagement_RetryKill)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, WatchInstanceMetaJobTest)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, WatchInstanceMetaJobTest)  // NOLINT
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
     EXPECT_CALL(*scheduler, QueryNodes).WillOnce(::testing::Return(NODES));
@@ -1360,7 +1360,7 @@ TEST_F(InstanceManagerTest, WatchInstanceMetaJobTest)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, FuncMetaKillTest)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, FuncMetaKillTest)  // NOLINT
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
     EXPECT_CALL(*scheduler, QueryNodes).WillOnce(::testing::Return(NODES));
@@ -1434,7 +1434,7 @@ TEST_F(InstanceManagerTest, FuncMetaKillTest)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, JobKillTest)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, JobKillTest)  // NOLINT
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
     EXPECT_CALL(*scheduler, QueryNodes).WillOnce(::testing::Return(NODES));
@@ -1528,7 +1528,7 @@ TEST_F(InstanceManagerTest, JobKillTest)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, PutProxyAbnormalFailed)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, PutProxyAbnormalFailed)  // NOLINT
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
     EXPECT_CALL(*scheduler, QueryNodes).WillOnce(::testing::Return(NODES));
@@ -1559,7 +1559,7 @@ TEST_F(InstanceManagerTest, PutProxyAbnormalFailed)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, ProxyAbnormalSyncerTest)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, ProxyAbnormalSyncerTest)  // NOLINT
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
     EXPECT_CALL(*scheduler, QueryNodes).WillOnce(::testing::Return(NODES));
@@ -1614,7 +1614,7 @@ TEST_F(InstanceManagerTest, ProxyAbnormalSyncerTest)  // NOLINT
 }
 
 
-TEST_F(InstanceManagerTest, FunctionMetaSyncerTest)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, FunctionMetaSyncerTest)  // NOLINT
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
     EXPECT_CALL(*scheduler, QueryNodes).WillOnce(::testing::Return(NODES));
@@ -1721,7 +1721,7 @@ TEST_F(InstanceManagerTest, FunctionMetaSyncerTest)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, InstanceInfoSyncerTest)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, InstanceInfoSyncerTest)  // NOLINT
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
     std::unordered_set<std::string> nodes = {"siaphisprg00912"};
@@ -1815,7 +1815,7 @@ TEST_F(InstanceManagerTest, InstanceInfoSyncerTest)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, InstanceInfoSyncerOperationReplayTest)  // NOLINT
+TEST_F(DISABLED_InstanceManagerTest, InstanceInfoSyncerOperationReplayTest)  // NOLINT
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
     std::unordered_set<std::string> nodes = { "siaphisprg00912" };
@@ -1888,7 +1888,7 @@ TEST_F(InstanceManagerTest, InstanceInfoSyncerOperationReplayTest)  // NOLINT
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, ForwardKillInstanceWhenInstanceManagerNeverTakeInstance)
+TEST_F(DISABLED_InstanceManagerTest, ForwardKillInstanceWhenInstanceManagerNeverTakeInstance)
 {
     std::string jsonString001;
     resource_view::InstanceInfo instance001 = CreateInstance(INSTANCE_PATH_PREFIX + "/001", true);
@@ -1927,7 +1927,7 @@ TEST_F(InstanceManagerTest, ForwardKillInstanceWhenInstanceManagerNeverTakeInsta
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, QueryInstancesInfo)
+TEST_F(DISABLED_InstanceManagerTest, QueryInstancesInfo)
 {
     PutInstances(true, true);
     auto scheduler = std::make_shared<MockGlobalSched>();
@@ -1961,7 +1961,7 @@ TEST_F(InstanceManagerTest, QueryInstancesInfo)
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, QueryNamedIns)
+TEST_F(DISABLED_InstanceManagerTest, QueryNamedIns)
 {
     PutInstances(true, true);
     auto scheduler = std::make_shared<MockGlobalSched>();
@@ -2002,7 +2002,7 @@ TEST_F(InstanceManagerTest, QueryNamedIns)
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, QueryDebugInstancesInfo)
+TEST_F(DISABLED_InstanceManagerTest, QueryDebugInstancesInfo)
 {
 
     MetaStoreClient client(MetaStoreConfig{ .etcdAddress = metaStoreServerHost_ });
@@ -2074,7 +2074,7 @@ TEST_F(InstanceManagerTest, QueryDebugInstancesInfo)
 }
 
 
-TEST_F(InstanceManagerTest, CompleteKillInstance)
+TEST_F(DISABLED_InstanceManagerTest, CompleteKillInstance)
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
     std::unordered_set<std::string> nodes = {"siaphisprg00912"};
@@ -2134,7 +2134,7 @@ TEST_F(InstanceManagerTest, CompleteKillInstance)
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, NodesTest)
+TEST_F(DISABLED_InstanceManagerTest, NodesTest)
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
     EXPECT_CALL(*scheduler, LocalSchedAbnormalCallback).Times(1);
@@ -2198,7 +2198,7 @@ TEST_F(InstanceManagerTest, NodesTest)
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, ExecuteTest)
+TEST_F(DISABLED_InstanceManagerTest, ExecuteTest)
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
     auto groupMgrActor = std::make_shared<MockGroupManagerActor>(
@@ -2224,7 +2224,7 @@ TEST_F(InstanceManagerTest, ExecuteTest)
     litebus::Await(instanceMgrActor->GetAID());
 }
 
-TEST_F(InstanceManagerTest, ForwardQueryDebugInstancesInfo)
+TEST_F(DISABLED_InstanceManagerTest, ForwardQueryDebugInstancesInfo)
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
     auto groupMgrActor = std::make_shared<MockGroupManagerActor>(
@@ -2271,7 +2271,7 @@ TEST_F(InstanceManagerTest, ForwardQueryDebugInstancesInfo)
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, ForwardQueryInstancesInfo)
+TEST_F(DISABLED_InstanceManagerTest, ForwardQueryInstancesInfo)
 {
     auto scheduler = std::make_shared<MockGlobalSched>();
     auto groupMgrActor = std::make_shared<MockGroupManagerActor>(
@@ -2318,7 +2318,7 @@ TEST_F(InstanceManagerTest, ForwardQueryInstancesInfo)
     instanceMgrDriver->Await();
 }
 
-TEST_F(InstanceManagerTest, IsInstanceShouldBeKilledTest)
+TEST_F(DISABLED_InstanceManagerTest, IsInstanceShouldBeKilledTest)
 {
     auto member = std::make_shared<InstanceManagerActor::Member>();
     auto instanceMgrActor = std::make_shared<InstanceManagerActor>(
@@ -2351,7 +2351,7 @@ TEST_F(InstanceManagerTest, IsInstanceShouldBeKilledTest)
     EXPECT_TRUE(masterBusiness->IsInstanceShouldBeKilled(instanceInfoA));
 }
 
-TEST_F(InstanceManagerTest, IsInstanceManagedByJobTest)
+TEST_F(DISABLED_InstanceManagerTest, IsInstanceManagedByJobTest)
 {
     auto member = std::make_shared<InstanceManagerActor::Member>();
     auto instanceMgrActor = std::make_shared<InstanceManagerActor>(
@@ -2387,5 +2387,5 @@ TEST_F(InstanceManagerTest, IsInstanceManagedByJobTest)
     EXPECT_TRUE(instanceMgrActor->IsInstanceManagedByJob(instanceInfoA));
     instanceMgrActor->member_->jobID2InstanceIDs["job-123"] = {"instanceC"};
     EXPECT_TRUE(instanceMgrActor->IsInstanceManagedByJob(instanceInfoA));
-}*/
+}
 }  // namespace functionsystem::instance_manager::test

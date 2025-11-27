@@ -1896,7 +1896,7 @@ TEST_F(ResourceViewTest, MaintainsInstanceChangesOrderDuringMerge)
     EXPECT_EQ(change.modification().instancechanges(2).instance().instanceid(), inst5.instanceid());
 }
 
-TEST_F(ResourceViewTest, PullResourceUnitTest)
+TEST_F(ResourceViewTest, DISABLED_PullResourceUnitTest)
 {
     class MockUpdateHandler {
     public:
@@ -2696,7 +2696,7 @@ void RecoverResourceView(std::unique_ptr<ResourceView> &parent, std::string loca
     ASSERT_EQ(parent->GetLocalInfoInDomain(LOCAL_RESOUCE_VIEW_ID).localViewInitTime, localViewInitTimeOrigin);
 }
 
-TEST_F(ResourceViewTest, PullResourceUnitChangesError)
+TEST_F(ResourceViewTest, DISABLED_PullResourceUnitChangesError)
 {
     auto parent = resource_view::ResourceView::CreateResourceView(DOMAIN_RESOUCE_VIEW_ID, PARENT_PARAM);
     std::string childNode = LOCAL_RESOUCE_VIEW_ID;

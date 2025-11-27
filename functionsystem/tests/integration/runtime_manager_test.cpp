@@ -58,7 +58,7 @@ const std::string KILL_PROCESS_TIMEOUT_SECONDS = "1";
 const std::string TEST_MONITOR_DISK_PATH = "/diskMonitorTestDir";
 const std::string TEST_TENANT_ID = "tenant001";
 
-class RuntimeManagerTest : public testing::Test {
+class DISABLED_RuntimeManagerTest : public testing::Test {
 public:
     [[maybe_unused]] static void SetUpTestSuite()
     {
@@ -221,8 +221,7 @@ public:
     std::string workingDirFile_ = "file:///tmp/home/sn/function/package/file.zip";
 };
 
-/*
-TEST_F(RuntimeManagerTest, StartInstance)
+TEST_F(DISABLED_RuntimeManagerTest, StartInstance)
 {
     auto functionAgent = StartFunctionAgent();
     auto runtimeProcess = StartRuntimeManager(binPath_, functionAgent);
@@ -251,7 +250,7 @@ TEST_F(RuntimeManagerTest, StartInstance)
     (void)runtimeProcess->GetStatus().Get();
 }
 
-TEST_F(RuntimeManagerTest, StopInstance)
+TEST_F(DISABLED_RuntimeManagerTest, StopInstance)
 {
     auto functionAgent = StartFunctionAgent();
     auto runtimeProcess = StartRuntimeManager(binPath_, functionAgent);
@@ -328,7 +327,7 @@ void KillChildProcesses(pid_t parentPid)
     }
 }
 
-TEST_F(RuntimeManagerTest, RayJobStartAndKill)
+TEST_F(DISABLED_RuntimeManagerTest, RayJobStartAndKill)
 {
     PrepareWorkingDir();
 
@@ -361,7 +360,7 @@ TEST_F(RuntimeManagerTest, RayJobStartAndKill)
     DestroyWorkingDir();
 }
 
-TEST_F(RuntimeManagerTest, StartInstanceWithDiskMonitor)
+TEST_F(DISABLED_RuntimeManagerTest, StartInstanceWithDiskMonitor)
 {
     litebus::os::Mkdir(TEST_MONITOR_DISK_PATH);
 
@@ -390,6 +389,5 @@ TEST_F(RuntimeManagerTest, StartInstanceWithDiskMonitor)
     KillProcess(runtimeProcess->GetPid(), SIGKILL);
     litebus::os::Mkdir(TEST_MONITOR_DISK_PATH);
 }
-*/
 
 }  // namespace functionsystem::test

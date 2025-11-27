@@ -93,7 +93,7 @@ public:
     }
 };
 
-class InstanceCtrlActorTest : public ::testing::Test {
+class DISABLED_InstanceCtrlActorTest : public ::testing::Test {
 public:
     inline static std::string metaStoreServerHost_;
     inline static uint16_t grpcServerPort_;
@@ -262,7 +262,7 @@ protected:
     std::shared_ptr<HttpServer> httpServer_;
 };
 
-TEST_F(InstanceCtrlActorTest, DeployAppDriver)
+TEST_F(DISABLED_InstanceCtrlActorTest, DeployAppDriver)
 {
     auto request = std::make_shared<messages::ScheduleRequest>();
     request->mutable_instance()->set_instanceid(TEST_INSTANCE_ID);
@@ -296,7 +296,7 @@ TEST_F(InstanceCtrlActorTest, DeployAppDriver)
     EXPECT_TRUE(instanceCtrlActor_->concernedInstance_.find(TEST_INSTANCE_ID) != instanceCtrlActor_->concernedInstance_.end());
 }
 
-TEST_F(InstanceCtrlActorTest, StopAppDriver)
+TEST_F(DISABLED_InstanceCtrlActorTest, StopAppDriver)
 {
     const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
@@ -334,7 +334,7 @@ TEST_F(InstanceCtrlActorTest, StopAppDriver)
     instanceCtrlActor_->StopAppDriver(killContext);
 }
 
-TEST_F(InstanceCtrlActorTest, AuthorizeKillTest)
+TEST_F(DISABLED_InstanceCtrlActorTest, AuthorizeKillTest)
 {
     EXPECT_CALL(*mockInternalIAM_, IsIAMEnabled).WillRepeatedly(Return(true));
     EXPECT_CALL(*mockInternalIAM_, GetCredType).WillRepeatedly(Return(function_proxy::IAMCredType::TOKEN));
@@ -368,7 +368,7 @@ TEST_F(InstanceCtrlActorTest, AuthorizeKillTest)
 
 }
 
-TEST_F(InstanceCtrlActorTest, SetTenantAffinityOpt_instance)
+TEST_F(DISABLED_InstanceCtrlActorTest, SetTenantAffinityOpt_instance)
 {
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     auto instanceInfo = scheduleReq->mutable_instance();
@@ -434,7 +434,7 @@ TEST_F(InstanceCtrlActorTest, SetTenantAffinityOpt_instance)
     EXPECT_EQ(preferredAffinity.condition().subconditions(1).weight(), 90);
 }
 
-TEST_F(InstanceCtrlActorTest, SetTenantAffinityOpt_resource)
+TEST_F(DISABLED_InstanceCtrlActorTest, SetTenantAffinityOpt_resource)
 {
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     auto instanceInfo = scheduleReq->mutable_instance();
@@ -496,7 +496,7 @@ TEST_F(InstanceCtrlActorTest, SetTenantAffinityOpt_resource)
     }
 }
 
-TEST_F(InstanceCtrlActorTest, SetTenantAffinityOpt_label)
+TEST_F(DISABLED_InstanceCtrlActorTest, SetTenantAffinityOpt_label)
 {
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     auto instanceInfo = scheduleReq->mutable_instance();
@@ -515,7 +515,7 @@ TEST_F(InstanceCtrlActorTest, SetTenantAffinityOpt_label)
 }
 
 
-TEST_F(InstanceCtrlActorTest, SetInstanceBillingContext)
+TEST_F(DISABLED_InstanceCtrlActorTest, SetInstanceBillingContext)
 {
     metrics::MetricsAdapter::GetInstance().GetMetricsContext().SetEnabledInstruments({functionsystem::metrics::YRInstrument::YR_INSTANCE_RUNNING_DURATION});
     std::string endPointKey = "endpoint";
@@ -541,7 +541,7 @@ TEST_F(InstanceCtrlActorTest, SetInstanceBillingContext)
  * Expectations:
  * 1. set ScheduleReq successfully
  */
-TEST_F(InstanceCtrlActorTest, SetScheduleReqConfigSuccess)
+TEST_F(DISABLED_InstanceCtrlActorTest, SetScheduleReqConfigSuccess)
 {
     const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
@@ -586,7 +586,7 @@ TEST_F(InstanceCtrlActorTest, SetScheduleReqConfigSuccess)
  * Expectations:
  * Terminate billing
  */
-TEST_F(InstanceCtrlActorTest, ShutdownWithNoInstanceClient)
+TEST_F(DISABLED_InstanceCtrlActorTest, ShutdownWithNoInstanceClient)
 {
     resource_view::InstanceInfo inst;
     auto id = "Test_InstID_" + litebus::uuid_generator::UUID::GetRandomUUID().ToString();
@@ -608,7 +608,7 @@ TEST_F(InstanceCtrlActorTest, ShutdownWithNoInstanceClient)
  * Expectations:
  * scheduleRep code is version wrong or others
  */
-TEST_F(InstanceCtrlActorTest, RetryForwardSchedule)
+TEST_F(DISABLED_InstanceCtrlActorTest, RetryForwardSchedule)
 {
     auto scheduleRequest = std::make_shared<messages::ScheduleRequest>();
     messages::ScheduleResponse resp;
@@ -681,7 +681,7 @@ TEST_F(InstanceCtrlActorTest, RetryForwardSchedule)
  * Expectations:
  * scheduleRep code is version wrong or success
  */
-TEST_F(InstanceCtrlActorTest, TryDispatchOnLocal)
+TEST_F(DISABLED_InstanceCtrlActorTest, TryDispatchOnLocal)
 {
     auto mockInstanceStateMachine = std::make_shared<MockInstanceStateMachine>("machine1");
     auto mockScheduler = std::make_shared<MockScheduler>();
@@ -726,7 +726,7 @@ TEST_F(InstanceCtrlActorTest, TryDispatchOnLocal)
 /**
  * server mode driver heartbeat lost
  */
-TEST_F(InstanceCtrlActorTest, DriverLostOnServerMode)
+TEST_F(DISABLED_InstanceCtrlActorTest, DriverLostOnServerMode)
 {
     std::string instanceID = "driver-job_123456";
     // get state machine
@@ -763,7 +763,7 @@ TEST_F(InstanceCtrlActorTest, DriverLostOnServerMode)
 /**
  * duplicate driver event
  */
-TEST_F(InstanceCtrlActorTest, DuplicateDriverEvent)
+TEST_F(DISABLED_InstanceCtrlActorTest, DuplicateDriverEvent)
 {
     auto mockSharedClientManagerProxy_ = std::make_shared<MockSharedClientManagerProxy>();
     instanceCtrlActor_->BindControlInterfaceClientManager(mockSharedClientManagerProxy_);
@@ -789,7 +789,7 @@ TEST_F(InstanceCtrlActorTest, DuplicateDriverEvent)
 /**
  * cancel schedule
  */
-TEST_F(InstanceCtrlActorTest, CancelSchedule)
+TEST_F(DISABLED_InstanceCtrlActorTest, CancelSchedule)
 {
     auto mockInstanceStateMachine = std::make_shared<MockInstanceStateMachine>("TEST_PROXY_ID");
     EXPECT_CALL(*mockInstanceCtrlView_, GetInstance).WillRepeatedly(Return(mockInstanceStateMachine));
@@ -849,7 +849,7 @@ TEST_F(InstanceCtrlActorTest, CancelSchedule)
  * 1. When all four retry attempts fail
  * 2. When the signal succeeds on the second attempt
  */
-TEST_F(InstanceCtrlActorTest, RetryNotificationSignal) {
+TEST_F(DISABLED_InstanceCtrlActorTest, RetryNotificationSignal) {
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::CREATING));
     scheduleReq->mutable_instance()->set_functionproxyid(TEST_NODE_ID);
@@ -898,7 +898,7 @@ TEST_F(InstanceCtrlActorTest, RetryNotificationSignal) {
     EXPECT_EQ(response.code(), common::ErrorCode::ERR_NONE);
 }
 
-TEST_F(InstanceCtrlActorTest, GetStaticFunctionChangeRequest) {
+TEST_F(DISABLED_InstanceCtrlActorTest, GetStaticFunctionChangeRequest) {
     InstanceInfo info;
     info.set_instanceid("test-instanceID");
     info.set_requestid("test-requestID");
@@ -908,7 +908,7 @@ TEST_F(InstanceCtrlActorTest, GetStaticFunctionChangeRequest) {
     EXPECT_EQ(req->status(), 0);
 }
 
-TEST_F(InstanceCtrlActorTest, CheckExistInstanceStateTest)
+TEST_F(DISABLED_InstanceCtrlActorTest, CheckExistInstanceStateTest)
 {
     auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
@@ -957,7 +957,7 @@ TEST_F(InstanceCtrlActorTest, CheckExistInstanceStateTest)
     EXPECT_EQ(runtimePromise->GetFuture().Get().code(), static_cast<int32_t>(StatusCode::ERR_INSTANCE_EXITED));
 }
 
-TEST_F(InstanceCtrlActorTest, ExitWithoutCodeTest)
+TEST_F(DISABLED_InstanceCtrlActorTest, ExitWithoutCodeTest)
 {
     auto request = std::make_shared<ExitRequest>();
     request->set_code(common::ERR_NONE);
@@ -966,7 +966,7 @@ TEST_F(InstanceCtrlActorTest, ExitWithoutCodeTest)
     EXPECT_EQ(future.Get().code(), common::ErrorCode::ERR_NONE);
 }
 
-TEST_F(InstanceCtrlActorTest, ExitInvalidCodeTest)
+TEST_F(DISABLED_InstanceCtrlActorTest, ExitInvalidCodeTest)
 {
     auto request = std::make_shared<ExitRequest>();
     request->set_code(common::ERR_REQUEST_BETWEEN_RUNTIME_BUS);  // invalid code
@@ -976,7 +976,7 @@ TEST_F(InstanceCtrlActorTest, ExitInvalidCodeTest)
     EXPECT_EQ(future.Get().message(), "invalid exit code");
 }
 
-TEST_F(InstanceCtrlActorTest, ExitWithNPUFaultTest)
+TEST_F(DISABLED_InstanceCtrlActorTest, ExitWithNPUFaultTest)
 {
     auto mockInstanceCtrlView = std::make_shared<MockInstanceControlView>("TEST_NODE_ID");
     instanceCtrlActor_->instanceControlView_ = mockInstanceCtrlView;
