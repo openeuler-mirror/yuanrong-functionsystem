@@ -89,10 +89,8 @@ def compile_metrics(args):
 
 
 def compile_functionsystem(root_dir, args):
-    cwd = os.path.join(args['root_dir'], "functionsystem")
     log.info("Start to compile functionsystem")
+    # 编译 CPP 程序
     compile.compile_binary(root_dir, args["job_num"], args["version"], args["build_type"])
-    utils.sync_command(
-        ["bash", "build.sh", "-y", "-j", str(args['job_num']), "-v", args['version']],
-        cwd=cwd
-    )
+    # 编译 CLI 程序
+    compile.compile_cli(root_dir)

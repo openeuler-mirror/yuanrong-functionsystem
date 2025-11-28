@@ -14,19 +14,37 @@
  * limitations under the License.
  */
 
-// Package build is build info of cli
-package build
+// Package test is used for unit tests
+package test
 
-// Version is version of cli, it is dynamically set by the Makefile.
-var Version = Dev
+import (
+	"bytes"
+	"io/ioutil"
 
-// CustomizeVer is build time of cli, it is dynamically set by the Makefile.
-var CustomizeVer = ""
-
-// Date is build time of cli, it is dynamically set by the Makefile.
-var Date = "" // YYYY-MM-DD
-
-const (
-	// Dev develop version
-	Dev = "DEV"
+	"cli/pkg/cmdio"
 )
+
+// CmdIO mock io of cmd
+type CmdIO struct {
+	In     *bytes.Buffer
+	Out    *bytes.Buffer
+	ErrOut *bytes.Buffer
+}
+
+// MockCmdIO mock cmdio for unit tests
+func MockCmdIO() (*cmdio.CmdIO, *CmdIO) {
+	in := &bytes.Buffer{}
+	out := &bytes.Buffer{}
+	errOut := &bytes.Buffer{}
+	cio := &cmdio.CmdIO{
+		In:     ioutil.NopCloser(in),
+		Out:    out,
+		ErrOut: errOut,
+	}
+	tio := &CmdIO{
+		In:     in,
+		Out:    out,
+		ErrOut: errOut,
+	}
+	return cio, tio
+}

@@ -14,37 +14,23 @@
  * limitations under the License.
  */
 
-// Package test is used for unit tests
-package test
+// Package main is main function of serverless native
+package main
 
 import (
-	"bytes"
-	"io/ioutil"
+	"os"
 
-	"functionsystem/pkg/cli/pkg/cmdio"
+	"cli/internal"
 )
 
-// CmdIO mock io of cmd
-type CmdIO struct {
-	In     *bytes.Buffer
-	Out    *bytes.Buffer
-	ErrOut *bytes.Buffer
-}
+const errorExitCode = 1
 
-// MockCmdIO mock cmdio for unit tests
-func MockCmdIO() (*cmdio.CmdIO, *CmdIO) {
-	in := &bytes.Buffer{}
-	out := &bytes.Buffer{}
-	errOut := &bytes.Buffer{}
-	cio := &cmdio.CmdIO{
-		In:     ioutil.NopCloser(in),
-		Out:    out,
-		ErrOut: errOut,
+func main() {
+	rootCmd := cmd.NewCmdRoot()
+
+	err := rootCmd.Execute()
+	if err != nil {
+		os.Exit(errorExitCode)
+		return
 	}
-	tio := &CmdIO{
-		In:     in,
-		Out:    out,
-		ErrOut: errOut,
-	}
-	return cio, tio
 }

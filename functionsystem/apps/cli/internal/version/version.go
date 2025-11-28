@@ -20,11 +20,11 @@ package version
 import (
 	"github.com/spf13/cobra"
 
-	"functionsystem/pkg/cli/build"
-	"functionsystem/pkg/cli/constant"
-	"functionsystem/pkg/cli/pkg/cmdio"
-	"functionsystem/pkg/cli/utils"
-	"functionsystem/pkg/cli/utils/colorprint"
+	"cli/build"
+	"cli/constant"
+	"cli/pkg/cmdio"
+	"cli/utils"
+	"cli/utils/colorprint"
 )
 
 type options struct {

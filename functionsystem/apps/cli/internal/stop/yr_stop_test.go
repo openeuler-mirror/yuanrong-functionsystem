@@ -17,9 +17,9 @@
 package stop
 
 import (
-	"functionsystem/pkg/cli/constant"
-	"functionsystem/pkg/cli/pkg/cmdio"
-	"functionsystem/pkg/cli/utils"
+	"cli/constant"
+	"cli/pkg/cmdio"
+	"cli/utils"
 	"github.com/agiledragon/gomonkey"
 	"github.com/smartystreets/goconvey/convey"
 	"os"

@@ -23,10 +23,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"functionsystem/pkg/cli/build"
-	"functionsystem/pkg/cli/constant"
-	"functionsystem/pkg/cli/pkg/test"
-	"functionsystem/pkg/cli/utils/colorprint"
+	"cli/build"
+	"cli/constant"
+	"cli/pkg/test"
+	"cli/utils/colorprint"
 )
 
 func TestInitVersionCMD(t *testing.T) {

@@ -17,10 +17,10 @@
 package start
 
 import (
+	"cli/constant"
 	"context"
 	"errors"
 	"fmt"
-	"functionsystem/pkg/cli/constant"
 	"os"
 	"os/exec"
 	"path"
@@ -28,8 +28,8 @@ import (
 	"testing"
 	"time"
 
-	"functionsystem/pkg/cli/pkg/cmdio"
-	"functionsystem/pkg/cli/utils"
+	"cli/pkg/cmdio"
+	"cli/utils"
 
 	"github.com/agiledragon/gomonkey"
 	. "github.com/smartystreets/goconvey/convey"

@@ -23,12 +23,12 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"functionsystem/pkg/cli/cmd/start"
-	"functionsystem/pkg/cli/cmd/status"
-	"functionsystem/pkg/cli/cmd/stop"
-	"functionsystem/pkg/cli/cmd/version"
-	"functionsystem/pkg/cli/constant"
-	"functionsystem/pkg/cli/pkg/cmdio"
+	"cli/constant"
+	"cli/internal/start"
+	"cli/internal/status"
+	"cli/internal/stop"
+	"cli/internal/version"
+	"cli/pkg/cmdio"
 )
 
 // NewCmdRoot new root cmd

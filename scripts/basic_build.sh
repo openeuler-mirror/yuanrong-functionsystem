@@ -46,7 +46,7 @@ function build_etcd()
     go install github.com/myitcv/gobin
     export GO_LDFLAGS='-linkmode=external -extldflags "-fstack-protector-strong -Wl,-z,now,-z,relro,-z,noexecstack,-s -Wall -Werror"'
     export GO_BUILD_FLAGS='-buildmode=pie'
-    git apply "${BASE_DIR}"/vendor/patches/etcd.patch
+    git apply "${YR_ROOT_DIR}"/vendor/patches/etcd.patch
     go mod edit -replace=go.uber.org/zap=go.uber.org/zap@v1.24.0
     go mod tidy
     cd "$BUILD_DIR"/etcd/server

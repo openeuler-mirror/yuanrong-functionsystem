@@ -32,11 +32,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"functionsystem/pkg/cli/constant"
-	"functionsystem/pkg/cli/pkg/cmdio"
-	"functionsystem/pkg/cli/pkg/progress"
-	"functionsystem/pkg/cli/utils"
-	"functionsystem/pkg/cli/utils/colorprint"
+	"cli/constant"
+	"cli/pkg/cmdio"
+	"cli/pkg/progress"
+	"cli/utils"
+	"cli/utils/colorprint"
 )
 
 type yrStopOptions struct {

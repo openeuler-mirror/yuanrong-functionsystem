@@ -30,10 +30,10 @@ import (
 	"github.com/spf13/cobra"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"functionsystem/pkg/cli/constant"
-	"functionsystem/pkg/cli/pkg/cmdio"
-	"functionsystem/pkg/cli/utils"
-	"functionsystem/pkg/cli/utils/colorprint"
+	"cli/constant"
+	"cli/pkg/cmdio"
+	"cli/utils"
+	"cli/utils/colorprint"
 )
 
 type yrStatusOptions struct {
