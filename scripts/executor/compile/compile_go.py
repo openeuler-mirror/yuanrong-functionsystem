@@ -38,3 +38,15 @@ def compile_golang(app_path, app_name, main_path, output_path,
         env=build_env
     )
     log.info(f"Build golang app[{app_name}] success")
+
+def compile_etcd(vendor_path):
+    etcd_path = os.path.join(vendor_path, "src", "etcd")
+    etcd_bin_path = os.path.join(etcd_path, "bin")
+    if os.path.exists(etcd_bin_path):
+        log.warning("Skip ETCD compilation. Compilation product already exists")
+        return
+    # 原地编译ETCD
+    utils.sync_command(
+        ["bash", "build.sh"],
+        cwd=os.path.join(etcd_path)
+    )

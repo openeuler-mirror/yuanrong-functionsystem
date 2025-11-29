@@ -58,7 +58,7 @@ def run_pack(root_dir, cmd_args):
 
     # 拷贝ETCD二进制
     log.info("Copy etcd binary to vendor folder")
-    etcd_bin_path = os.path.join(root_dir, "functionsystem", "build", "etcd", "bin")
+    etcd_bin_path = os.path.join(root_dir, "vendor", "src", "etcd", "bin")
     etcd_dst_path = os.path.join(pack_base_dir, "deploy", "vendor", "etcd")
     shutil.copytree(etcd_bin_path, etcd_dst_path, copy_function=shutil.copy2)
 

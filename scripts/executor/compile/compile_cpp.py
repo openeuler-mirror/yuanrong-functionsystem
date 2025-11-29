@@ -26,9 +26,11 @@ def compile_functionsystem(root_dir, job_num, version="0.0.0", build_type="Debug
     inner_proto = os.path.join(root_dir, "proto", "inner")
     posix_proto = os.path.join(root_dir, "proto", "posix")
     cpp_proto_dir = os.path.join(root_dir, "functionsystem", "src", "common", "proto", "posix")
+    if os.path.exists(cpp_proto_dir):
+        shutil.rmtree(cpp_proto_dir)
     os.makedirs(cpp_proto_dir, exist_ok=True)
-    shutil.copytree(inner_proto, cpp_proto_dir, copy_function=shutil.copy2)
-    shutil.copytree(posix_proto, cpp_proto_dir, copy_function=shutil.copy2)
+    shutil.copytree(inner_proto, cpp_proto_dir, copy_function=shutil.copy2, dirs_exist_ok=True)
+    shutil.copytree(posix_proto, cpp_proto_dir, copy_function=shutil.copy2, dirs_exist_ok=True)
 
     # 使用 CMake 创建 Ninja 构建清单
     root_dir = os.path.abspath(root_dir)  # Git根目录

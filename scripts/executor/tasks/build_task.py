@@ -38,6 +38,7 @@ def compile_vendor(args):
         download_path=os.path.join(vendor_path, "src")
     )
     # 编译三方件依赖
+    compile.compile_etcd(vendor_path)
     utils.sync_command(
         ["cmake", "-B", "build"],
         cwd=os.path.join(vendor_path)
@@ -45,10 +46,6 @@ def compile_vendor(args):
     utils.sync_command(
         ["cmake", "--build", "build", "--parallel", str(args['job_num'])],
         cwd=os.path.join(vendor_path)
-    )
-    utils.sync_command(
-        ["bash", "basic_build.sh"],
-        cwd=os.path.join(args['root_dir'], "scripts")
     )
     # 引入二方件产物
     install_datasystem(vendor_path)
