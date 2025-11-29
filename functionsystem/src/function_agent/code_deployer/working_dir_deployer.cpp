@@ -91,19 +91,24 @@ std::string WorkingDirDeployer::GetDestination(
         return uriFile;
     }
 
+    std::shared_ptr<ResourceAccessor> accessor = ResourceAccessorFactory::CreateAccessor(uriFile);
+    if (!accessor) {
+        YRLOG_WARN("Unsupported working_dir schema: {}", uriFile);
+        return "";
+    }
+
+    if (!IsFile(accessor->GetResource()) && uriFile.find(FILE_SCHEME) == std::string::npos
+        && litebus::os::Mkdir(uriFile).IsSome()) {
+        YRLOG_DEBUG("{}|delegate working dir is a non-exist path, mkdir and use it as destination: {}", appID, uriFile);
+        return uriFile;
+    }
+
     std::string workingDir;
     if (!deployDir.empty()) {
         std::string appDir = litebus::os::Join(deployDir, APP_FOLDER_PREFIX);
         workingDir = litebus::os::Join(appDir, WORKING_DIR_FOLDER_PREFIX);
     } else {
         workingDir = baseDeployDir_;
-    }
-
-    std::shared_ptr<ResourceAccessor> accessor =
-        ResourceAccessorFactory::CreateAccessor(uriFile);
-    if (!accessor) {
-        YRLOG_WARN("Unsupported working_dir schema: {}", uriFile);
-        return "";
     }
 
     // baseDir + /app/working_dir/${md5 working_dir uri file}/
