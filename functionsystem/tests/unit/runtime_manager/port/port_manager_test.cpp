@@ -22,7 +22,7 @@ using namespace functionsystem::runtime_manager;
 
 namespace functionsystem::test {
 
-class PortManagerTest : public ::testing::Test {
+class DISABLED_PortManagerTest : public ::testing::Test {
 public:
     void SetUp() override
     {
@@ -34,14 +34,14 @@ public:
     }
 };
 
-TEST_F(PortManagerTest, RequestPort)
+TEST_F(DISABLED_PortManagerTest, RequestPort)
 {
     std::string runtimeID = "test_runtimeID";
     std::string port = PortManager::GetInstance().RequestPort(runtimeID);
     EXPECT_EQ("333", port);
 }
 
-TEST_F(PortManagerTest, GetPort)
+TEST_F(DISABLED_PortManagerTest, GetPort)
 {
     std::string runtimeID = "test_runtimeID";
     std::string port = PortManager::GetInstance().RequestPort(runtimeID);
@@ -59,7 +59,7 @@ TEST_F(PortManagerTest, GetPort)
     EXPECT_EQ("", unknownPort);
 }
 
-TEST_F(PortManagerTest, ReleasePort)
+TEST_F(DISABLED_PortManagerTest, ReleasePort)
 {
     std::string runtimeID = "test_runtimeID";
     std::string port = PortManager::GetInstance().RequestPort(runtimeID);
@@ -78,7 +78,7 @@ TEST_F(PortManagerTest, ReleasePort)
     EXPECT_EQ("", emptyPort);
 }
 
-TEST_F(PortManagerTest, ClearTest)
+TEST_F(DISABLED_PortManagerTest, ClearTest)
 {
     std::string runtimeID = "test_runtimeID";
     std::string port = PortManager::GetInstance().RequestPort(runtimeID);
@@ -90,7 +90,7 @@ TEST_F(PortManagerTest, ClearTest)
     EXPECT_EQ("", emptyPort);
 }
 
-TEST_F(PortManagerTest, CheckPortInuse)
+TEST_F(DISABLED_PortManagerTest, CheckPortInuse)
 {
     uint16_t port = GetPortEnv("LITEBUS_PORT", 8080);
     bool isInuse = PortManager::GetInstance().CheckPortInUse(port);

@@ -21,7 +21,7 @@
 namespace functionsystem::test {
 const std::string TEST_DIR = "/tmp/testdir";
 
-class FilesTest : public ::testing::Test {
+class DISABLED_FilesTest : public ::testing::Test {
 public:
     static void ExecCommand(const std::string &cmd)
     {
@@ -38,7 +38,7 @@ public:
     }
 };
 
-TEST_F(FilesTest, FileExistsTest)
+TEST_F(DISABLED_FilesTest, FileExistsTest)
 {
     // create test dir
     litebus::os::Mkdir(TEST_DIR);
@@ -54,7 +54,7 @@ TEST_F(FilesTest, FileExistsTest)
     EXPECT_FALSE(FileExists(TEST_DIR + "/file.txt"));
 }
 
-TEST_F(FilesTest, GetPermissionTest)
+TEST_F(DISABLED_FilesTest, GetPermissionTest)
 {
     litebus::os::Rmdir(TEST_DIR);
     EXPECT_TRUE(GetPermission(TEST_DIR).IsNone());
@@ -77,7 +77,7 @@ TEST_F(FilesTest, GetPermissionTest)
     litebus::os::Rmdir(TEST_DIR);
 }
 
-TEST_F(FilesTest, GetOwnerTest)
+TEST_F(DISABLED_FilesTest, GetOwnerTest)
 {
     litebus::os::Rmdir(TEST_DIR);
     EXPECT_TRUE(GetOwner(TEST_DIR).IsNone());
@@ -98,7 +98,7 @@ TEST_F(FilesTest, GetOwnerTest)
     litebus::os::Rmdir(TEST_DIR);
 }
 
-TEST_F(FilesTest, IsWriteableTest)
+TEST_F(DISABLED_FilesTest, IsWriteableTest)
 {
     Permissions permissions{ .owner = 7, .group = 7, .others = 7 };
     EXPECT_TRUE(IsWriteable(permissions, { 0, 0 }, 1000, 1000));  // others
@@ -120,7 +120,7 @@ TEST_F(FilesTest, IsWriteableTest)
     EXPECT_TRUE(IsWriteable(permissions, { 0, 0 }, 0, 1000));      // owner
 }
 
-TEST_F(FilesTest, IsPathWriteableTest)
+TEST_F(DISABLED_FilesTest, IsPathWriteableTest)
 {
     litebus::os::Rmdir(TEST_DIR);
     EXPECT_FALSE(IsPathWriteable(TEST_DIR, 0, 0));

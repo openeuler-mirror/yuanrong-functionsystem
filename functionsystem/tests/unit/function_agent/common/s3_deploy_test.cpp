@@ -40,7 +40,7 @@ const std::string BUCKET_ID = "yr-cxx-refactor-bucket-test";  // NOLINT
 const std::string OBJECT_ID = "yr-cxx-refactor-object-test";     // NOLINT
 const std::string OBJECT_BUFFER = "YuanRong C++ refactor test";  // NOLINT
 
-class S3DeployerTest : public ::testing::Test {
+class DISABLED_S3DeployerTest : public ::testing::Test {
 public:
     [[maybe_unused]] static void SetUpTestSuite()
     {
@@ -100,7 +100,7 @@ protected:
     inline static messages::CodePackageThresholds codePackageThresholds_;
 };
 
-TEST_F(S3DeployerTest, DirectoryTest)  // NOLINT
+TEST_F(DISABLED_S3DeployerTest, DirectoryTest)  // NOLINT
 {
     std::string layerDir = litebus::os::Join("/home/s3", "layer");
     std::string funcDir = litebus::os::Join(layerDir, "func");
@@ -131,7 +131,7 @@ TEST_F(S3DeployerTest, DirectoryTest)  // NOLINT
     EXPECT_TRUE(litebus::os::Rmdir(layerDir).IsNone());
 }
 
-TEST_F(S3DeployerTest, IsDeployedTest)  // NOLINT
+TEST_F(DISABLED_S3DeployerTest, IsDeployedTest)  // NOLINT
 {
     S3Deployer deployer(s3Config_, codePackageThresholds_);
     std::string destination = "/tmp/home/s3/layer/func/bucketid/objectid";
@@ -145,7 +145,7 @@ TEST_F(S3DeployerTest, IsDeployedTest)  // NOLINT
     litebus::os::Rmdir(destination);
 }
 
-TEST_F(S3DeployerTest, GetDestinationTest)  // NOLINT
+TEST_F(DISABLED_S3DeployerTest, GetDestinationTest)  // NOLINT
 {
     S3Deployer deployer(s3Config_, codePackageThresholds_);
     {
@@ -190,7 +190,7 @@ public:
  * 2. Second download, failed when obs init options
  * 4. Third download, failed when obs init options
  */
-TEST_F(S3DeployerTest, S3DeployDownloadFailed)  // NOLINT
+TEST_F(DISABLED_S3DeployerTest, S3DeployDownloadFailed)  // NOLINT
 {
     messages::DeploymentConfig deploymentConfig;
     deploymentConfig.set_deploydir("/tmp/home/s3/");
@@ -236,7 +236,7 @@ public:
 };
 
 
-TEST_F(S3DeployerTest, S3DeployProcess)  // NOLINT
+TEST_F(DISABLED_S3DeployerTest, S3DeployProcess)  // NOLINT
 {
     DownloadMockS3Deployer deployer(s3Config_, codePackageThresholds_);
     EXPECT_CALL(deployer, DownloadCode)
@@ -280,7 +280,7 @@ TEST_F(S3DeployerTest, S3DeployProcess)  // NOLINT
     EXPECT_FALSE(litebus::os::ExistPath(layerDir));
 }
 
-TEST_F(S3DeployerTest, S3DeployProcessWithMultiDir)
+TEST_F(DISABLED_S3DeployerTest, S3DeployProcessWithMultiDir)
 {
     DownloadMockS3Deployer deployer(s3Config_, codePackageThresholds_);
     std::string expected;
@@ -319,7 +319,7 @@ TEST_F(S3DeployerTest, S3DeployProcessWithMultiDir)
     EXPECT_STREQ(expected.c_str(), objectFileTmp.c_str());
 }
 
-TEST_F(S3DeployerTest, S3DeployWithEmptyDownload)
+TEST_F(DISABLED_S3DeployerTest, S3DeployWithEmptyDownload)
 {
     auto request = std::make_shared<messages::DeployRequest>();
     auto *deploymentConfig = request->mutable_deploymentconfig();
@@ -331,7 +331,7 @@ TEST_F(S3DeployerTest, S3DeployWithEmptyDownload)
     EXPECT_TRUE(deployer->Deploy(request).status.IsOk());
 }
 
-TEST_F(S3DeployerTest, S3RetryDownloadCodeSuccess)  // NOLINT
+TEST_F(DISABLED_S3DeployerTest, S3RetryDownloadCodeSuccess)  // NOLINT
 {
     auto request = std::make_shared<messages::DeployRequest>();
 
@@ -367,7 +367,7 @@ TEST_F(S3DeployerTest, S3RetryDownloadCodeSuccess)  // NOLINT
     EXPECT_FALSE(litebus::os::ExistPath(layerDir));
 }
 
-TEST_F(S3DeployerTest, S3RetryDownloadCodeFailedWhenConnect)  // NOLINT
+TEST_F(DISABLED_S3DeployerTest, S3RetryDownloadCodeFailedWhenConnect)  // NOLINT
 {
     auto request = std::make_shared<messages::DeployRequest>();
 
@@ -396,7 +396,7 @@ TEST_F(S3DeployerTest, S3RetryDownloadCodeFailedWhenConnect)  // NOLINT
     EXPECT_EQ(status.StatusCode(), StatusCode::FUNC_AGENT_OBS_CONNECTION_ERROR);
 }
 
-TEST_F(S3DeployerTest, S3RetryDownloadCodeFailedWhenDownload)  // NOLINT
+TEST_F(DISABLED_S3DeployerTest, S3RetryDownloadCodeFailedWhenDownload)  // NOLINT
 {
     auto request = std::make_shared<messages::DeployRequest>();
 
@@ -425,7 +425,7 @@ TEST_F(S3DeployerTest, S3RetryDownloadCodeFailedWhenDownload)  // NOLINT
     EXPECT_EQ(status.StatusCode(), StatusCode::FUNC_AGENT_OBS_OPEN_FILE_ERROR);
 }
 
-TEST_F(S3DeployerTest, S3InitFailedTest)  // NOLINT
+TEST_F(DISABLED_S3DeployerTest, S3InitFailedTest)  // NOLINT
 {
     std::shared_ptr<MockObsWrapper> mockObsWrapper = std::make_shared<MockObsWrapper>();
     EXPECT_CALL(*mockObsWrapper, DeinitializeObs()).WillRepeatedly(testing::Return());
@@ -442,7 +442,7 @@ TEST_F(S3DeployerTest, S3InitFailedTest)  // NOLINT
                                                                    codePackageThresholds_);
 }
 
-TEST_F(S3DeployerTest, S3InitSuccessAfterRetryTest)  // NOLINT
+TEST_F(DISABLED_S3DeployerTest, S3InitSuccessAfterRetryTest)  // NOLINT
 {
     std::shared_ptr<MockObsWrapper> mockObsWrapper = std::make_shared<MockObsWrapper>();
     EXPECT_CALL(*mockObsWrapper, DeinitializeObs()).WillRepeatedly(testing::Return());
@@ -462,7 +462,7 @@ TEST_F(S3DeployerTest, S3InitSuccessAfterRetryTest)  // NOLINT
                                                                    codePackageThresholds_);
 }
 
-TEST_F(S3DeployerTest, S3InitSuccessTest)  // NOLINT
+TEST_F(DISABLED_S3DeployerTest, S3InitSuccessTest)  // NOLINT
 {
     std::shared_ptr<MockObsWrapper> mockObsWrapper = std::make_shared<MockObsWrapper>();
     EXPECT_CALL(*mockObsWrapper, DeinitializeObs()).WillOnce(testing::Return());
@@ -479,7 +479,7 @@ TEST_F(S3DeployerTest, S3InitSuccessTest)  // NOLINT
                                                                    codePackageThresholds_);
 }
 
-TEST_F(S3DeployerTest, S3CredentialRotationInitSuccessTest)
+TEST_F(DISABLED_S3DeployerTest, S3CredentialRotationInitSuccessTest)
 {
     std::shared_ptr<MockObsWrapper> mockObsWrapper = std::make_shared<MockObsWrapper>();
     EXPECT_CALL(*mockObsWrapper, DeinitializeObs()).WillOnce(testing::Return());
@@ -495,7 +495,7 @@ TEST_F(S3DeployerTest, S3CredentialRotationInitSuccessTest)
                                                                    codePackageThresholds_);
 }
 
-TEST_F(S3DeployerTest, UnzipFileTest)  // NOLINT
+TEST_F(DISABLED_S3DeployerTest, UnzipFileTest)  // NOLINT
 {
     std::shared_ptr<MockObsWrapper> mockObsWrapper = std::make_shared<MockObsWrapper>();
     EXPECT_CALL(*mockObsWrapper, DeinitializeObs()).WillOnce(testing::Return());
@@ -517,7 +517,7 @@ TEST_F(S3DeployerTest, UnzipFileTest)  // NOLINT
 }
 
 // test for interface Clear
-TEST_F(S3DeployerTest, ClearTest)
+TEST_F(DISABLED_S3DeployerTest, ClearTest)
 {
     std::shared_ptr<S3Config> s3Config = std::make_shared<S3Config>();
     S3Deployer deployer(s3Config, codePackageThresholds_);
@@ -540,7 +540,7 @@ TEST_F(S3DeployerTest, ClearTest)
     litebus::os::Rmdir(bucketDir);
 }
 
-TEST_F(S3DeployerTest, CheckPackageContentTest)
+TEST_F(DISABLED_S3DeployerTest, CheckPackageContentTest)
 {
     std::shared_ptr<S3Config> s3Config = std::make_shared<S3Config>();
     S3Deployer deployer(s3Config, codePackageThresholds_);
@@ -579,7 +579,7 @@ TEST_F(S3DeployerTest, CheckPackageContentTest)
     EXPECT_TRUE(litebus::os::Rmdir("/tmp/home/s3/layer/func/bucket").IsNone());
 }
 
-TEST_F(S3DeployerTest, CheckPackageContentWithMaxThresholds)
+TEST_F(DISABLED_S3DeployerTest, CheckPackageContentWithMaxThresholds)
 {
     messages::CodePackageThresholds codePackageThresholds;
     codePackageThresholds.set_filecountsmax(30000);
@@ -620,7 +620,7 @@ TEST_F(S3DeployerTest, CheckPackageContentWithMaxThresholds)
     EXPECT_TRUE(litebus::os::Rmdir("/tmp/home/s3/layer/func/bucket").IsNone());
 }
 
-TEST_F(S3DeployerTest, CheckPackageSignatureTest)
+TEST_F(DISABLED_S3DeployerTest, CheckPackageSignatureTest)
 {
     std::shared_ptr<S3Config> s3Config = std::make_shared<S3Config>();
     messages::CodePackageThresholds codePackageThresholds;

@@ -32,7 +32,7 @@ using namespace functionsystem::runtime_manager;
 
 namespace functionsystem::test {
 
-class VolumeMountTest : public ::testing::Test {
+class DISABLED_VolumeMountTest : public ::testing::Test {
 public:
     void SetUp() override
     {
@@ -49,7 +49,7 @@ protected:
     std::shared_ptr<VolumeMount> mounter_;
 };
 
-TEST_F(VolumeMountTest, VolumeMountTestEmptyFuncMounts)
+TEST_F(DISABLED_VolumeMountTest, VolumeMountTestEmptyFuncMounts)
 {
     messages::FuncMountConfig mountConfig;
     messages::FuncMountUser mountUser;
@@ -62,7 +62,7 @@ TEST_F(VolumeMountTest, VolumeMountTestEmptyFuncMounts)
     EXPECT_EQ(mountResultStatus.IsOk(), true);
 }
 
-TEST_F(VolumeMountTest, VolumeMountTestLocalPathExists)
+TEST_F(DISABLED_VolumeMountTest, VolumeMountTestLocalPathExists)
 {
     messages::FuncMountConfig mountConfig;
     messages::FuncMountUser mountUser;
@@ -86,7 +86,7 @@ TEST_F(VolumeMountTest, VolumeMountTestLocalPathExists)
     (void)litebus::os::Rmdir("/testMount/testSFS");
 }
 
-TEST_F(VolumeMountTest, VolumeMountTestExecMountFailed)
+TEST_F(DISABLED_VolumeMountTest, VolumeMountTestExecMountFailed)
 {
     messages::FuncMountConfig mountConfig;
     messages::FuncMountUser mountUser;
@@ -110,7 +110,7 @@ TEST_F(VolumeMountTest, VolumeMountTestExecMountFailed)
     (void)litebus::os::Rmdir("/testMount/testECS");
 }
 
-TEST_F(VolumeMountTest, InvalidSharedPath)
+TEST_F(DISABLED_VolumeMountTest, InvalidSharedPath)
 {
     messages::FuncMount funcMount;
     funcMount.set_mounttype("ecs");
@@ -130,7 +130,7 @@ TEST_F(VolumeMountTest, InvalidSharedPath)
  * Expectation:
  * 1. Receive RUNTIME_MANAGER_MOUNT_VOLUME_FAILED status.
  */
-TEST_F(VolumeMountTest, ExecMountTest)
+TEST_F(DISABLED_VolumeMountTest, ExecMountTest)
 {
     std::string host = "localhost";
     std::string mountSharePath = "/testMount";

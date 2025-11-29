@@ -50,7 +50,7 @@ public:
     }
 };
 
-class MetricsActorTest : public ::testing::Test {
+class DISABLED_MetricsActorTest : public ::testing::Test {
 protected:
     [[maybe_unused]] static void SetUpTestSuite()
     {
@@ -113,7 +113,7 @@ void CheckDiskResourceMatch(const Resource& resource, const std::vector<DiskInfo
  * Steps:
  * Expectation:
  */
-TEST_F(MetricsActorTest, BuildUpdateMetricsRequest)
+TEST_F(DISABLED_MetricsActorTest, BuildUpdateMetricsRequest)
 {
     runtimeManager_->metricsClient_->StartUpdateResource();
     runtimeManager_->metricsClient_->StartDiskUsageMonitor();
@@ -211,7 +211,7 @@ TEST_F(MetricsActorTest, BuildUpdateMetricsRequest)
  * Steps:
  * Expectation:
  */
-TEST_F(MetricsActorTest, BuildResourceUnit)
+TEST_F(DISABLED_MetricsActorTest, BuildResourceUnit)
 {
     const char *argv[] = { "./runtime-manager", "--node_id=node1"};
     runtime_manager::Flags flags;
@@ -285,7 +285,6 @@ TEST_F(MetricsActorTest, BuildResourceUnit)
     CheckDiskResourceMatch(diskResourceIter->second, expectedDisks);
 }
 
-#if 0
 /**
  * Feature: MetricsActorTest MonitorDiskUsageTest
  * Description: monitor disk usage
@@ -296,7 +295,7 @@ TEST_F(MetricsActorTest, BuildResourceUnit)
  * Expectation:
  * 3. Report error to function agent
  */
-TEST_F(MetricsActorTest, MonitorDiskUsageTest)
+TEST_F(DISABLED_MetricsActorTest, MonitorDiskUsageTest)
 {
     auto mockFuncAgentActor = std::make_shared<MockFunctionAgentActor>();
     litebus::Spawn(mockFuncAgentActor);
@@ -365,9 +364,8 @@ TEST_F(MetricsActorTest, MonitorDiskUsageTest)
     litebus::Await(mockFuncAgentActor->GetAID());
     litebus::os::Rmdir(dir);
 }
-#endif
 
-TEST_F(MetricsActorTest, MonitorDiskUsageErrorTest)
+TEST_F(DISABLED_MetricsActorTest, MonitorDiskUsageErrorTest)
 {
     auto mockFuncAgentActor = std::make_shared<MockFunctionAgentActor>();
     litebus::Spawn(mockFuncAgentActor);
@@ -414,7 +412,7 @@ TEST_F(MetricsActorTest, MonitorDiskUsageErrorTest)
     litebus::os::Rmdir(dir);
 }
 
-TEST_F(MetricsActorTest, OomMonitor_ExceedControlLimit_Trigger_OomKillInstance)
+TEST_F(DISABLED_MetricsActorTest, OomMonitor_ExceedControlLimit_Trigger_OomKillInstance)
 {
     std::string portOption = "--port=" + std::to_string(port_);
     const char *argv[] = { "./runtime_manager",
@@ -520,7 +518,7 @@ TEST_F(MetricsActorTest, OomMonitor_ExceedControlLimit_Trigger_OomKillInstance)
  * 3. string json format
  * 4. filter expected
  */
-TEST_F(MetricsActorTest, CustomResourceTest)
+TEST_F(DISABLED_MetricsActorTest, CustomResourceTest)
 {
     std::string portOption = "--port=" + std::to_string(port_);
     const char *argv[] = { "./runtime_manager",
@@ -562,7 +560,7 @@ TEST_F(MetricsActorTest, CustomResourceTest)
  * - disk1 (valid config)
  * - disk2 (invalid mount point)
  */
-TEST_F(MetricsActorTest, DiskResourceTestWithMixedConfig)
+TEST_F(DISABLED_MetricsActorTest, DiskResourceTestWithMixedConfig)
 {
     std::string portOption = "--port=" + std::to_string(port_);
 

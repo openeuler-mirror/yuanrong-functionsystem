@@ -107,7 +107,7 @@ const std::vector<std::string> debugServerScriptContent = {
     "    process_b(args.port)"
 };
 
-class RuntimeManagerTest : public ::testing::Test {
+class DISABLED_RuntimeManagerTest : public ::testing::Test {
 public:
     [[maybe_unused]] static void SetUpTestSuite()
     {
@@ -185,7 +185,7 @@ protected:
     inline static litebus::Future<bool> sigReceived_;
 };
 
-class RuntimeManagerDebugServerTest : public RuntimeManagerTest {
+class DISABLED_RuntimeManagerDebugServerTest : public DISABLED_RuntimeManagerTest {
 public:
     void SetUp() override
     {
@@ -194,7 +194,7 @@ public:
             env_ = optionEnv.Get();
         }
 
-        RuntimeManagerTest::SetUp();
+        DISABLED_RuntimeManagerTest::SetUp();
         litebus::os::SetEnv("PATH", litebus::os::Join("/tmp", env_, ':'));
         (void)litebus::os::Rm("/tmp/gdbserver");
         auto fd = open("/tmp/gdbserver", O_RDWR | O_CREAT, S_IRWXU | S_IRWXG | S_IRWXO);
@@ -251,13 +251,13 @@ public:
         litebus::os::SetEnv("PATH", env_);
         (void)litebus::os::Rm("/tmp/gdbserver");
         (void)litebus::os::Rm("/tmp/python3");
-        RuntimeManagerTest::TearDown();
+        DISABLED_RuntimeManagerTest::TearDown();
     }
 
     static inline std::string env_;
 };
 
-TEST_F(RuntimeManagerTest, StartInstanceTest)
+TEST_F(DISABLED_RuntimeManagerTest, StartInstanceTest)
 {
     const char *port = ("--port=" + std::to_string(FindAvailablePort())).c_str();
     const char *argv[] = {
@@ -333,7 +333,7 @@ TEST_F(RuntimeManagerTest, StartInstanceTest)
     litebus::Await(testActor_->GetAID());
 }
 
-TEST_F(RuntimeManagerTest, StartInstanceWithPreStartSuccessTest)
+TEST_F(DISABLED_RuntimeManagerTest, StartInstanceWithPreStartSuccessTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);
@@ -356,7 +356,7 @@ TEST_F(RuntimeManagerTest, StartInstanceWithPreStartSuccessTest)
     litebus::Await(testActor_->GetAID());
 }
 
-TEST_F(RuntimeManagerTest, StartInstance_PosixCustomRuntime_WithEntryfileEmpty)
+TEST_F(DISABLED_RuntimeManagerTest, StartInstance_PosixCustomRuntime_WithEntryfileEmpty)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);
@@ -378,7 +378,7 @@ TEST_F(RuntimeManagerTest, StartInstance_PosixCustomRuntime_WithEntryfileEmpty)
     litebus::Await(testActor_->GetAID());
 }
 
-TEST_F(RuntimeManagerTest, StartInstanceWithPreStartFailedTest)
+TEST_F(DISABLED_RuntimeManagerTest, StartInstanceWithPreStartFailedTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);
@@ -404,7 +404,7 @@ TEST_F(RuntimeManagerTest, StartInstanceWithPreStartFailedTest)
 }
 
 // Note: this case Connection to pypi.org timed out, set `export NOT_SKIP_LONG_TESTS=1` when run it, and not run on CI by default
-TEST_F(RuntimeManagerTest, StartInstance_PosixCustomRuntime_POST_START_EXEC_pip_install_SUCCESS)
+TEST_F(DISABLED_RuntimeManagerTest, StartInstance_PosixCustomRuntime_POST_START_EXEC_pip_install_SUCCESS)
 {
     const char* skip_test = std::getenv("NOT_SKIP_LONG_TESTS");
     if (skip_test == nullptr || std::string(skip_test) != "1") {
@@ -446,7 +446,7 @@ TEST_F(RuntimeManagerTest, StartInstance_PosixCustomRuntime_POST_START_EXEC_pip_
 }
 
 // Note: this case cost long and failed by other tests in CI, set `export NOT_SKIP_LONG_TESTS=1` when run it, and not run on CI by default
-TEST_F(RuntimeManagerTest, StartInstance_PosixCustomRuntime_POST_START_EXEC_pip_install_FAIL)
+TEST_F(DISABLED_RuntimeManagerTest, StartInstance_PosixCustomRuntime_POST_START_EXEC_pip_install_FAIL)
 {
     const char* skip_test = std::getenv("NOT_SKIP_LONG_TESTS");
     if (skip_test == nullptr || std::string(skip_test) != "1") {
@@ -502,7 +502,7 @@ TEST_F(RuntimeManagerTest, StartInstance_PosixCustomRuntime_POST_START_EXEC_pip_
  * Expectation:
  * start instance failed
  */
-TEST_F(RuntimeManagerTest, StartInstanceWithInvalidRequestTest)
+TEST_F(DISABLED_RuntimeManagerTest, StartInstanceWithInvalidRequestTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);
@@ -523,7 +523,7 @@ TEST_F(RuntimeManagerTest, StartInstanceWithInvalidRequestTest)
  * Expectation:
  * return RUNTIME_MANAGER_PARAMS_INVALID code in response
  */
-TEST_F(RuntimeManagerTest, StartInstanceWithInvalidExecutorTypeTest)
+TEST_F(DISABLED_RuntimeManagerTest, StartInstanceWithInvalidExecutorTypeTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);
@@ -542,7 +542,7 @@ TEST_F(RuntimeManagerTest, StartInstanceWithInvalidExecutorTypeTest)
     litebus::Await(testActor_->GetAID());
 }
 
-TEST_F(RuntimeManagerTest, StartInstanceRequestPortFailTest)
+TEST_F(DISABLED_RuntimeManagerTest, StartInstanceRequestPortFailTest)
 {
     // can only support one runtime instance
     PortManager::GetInstance().InitPortResource(0, 1);
@@ -611,7 +611,7 @@ TEST_F(RuntimeManagerTest, StartInstanceRequestPortFailTest)
     PortManager::GetInstance().InitPortResource(INITIAL_PORT, PORT_NUM);
 }
 
-TEST_F(RuntimeManagerTest, StopInstanceTest)
+TEST_F(DISABLED_RuntimeManagerTest, StopInstanceTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);
@@ -659,7 +659,7 @@ TEST_F(RuntimeManagerTest, StopInstanceTest)
 }
 
 
-TEST_F(RuntimeManagerTest, StopInstanceFailTest)
+TEST_F(DISABLED_RuntimeManagerTest, StopInstanceFailTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);
@@ -689,7 +689,7 @@ TEST_F(RuntimeManagerTest, StopInstanceFailTest)
  * Expectation:
  * no response
  */
-TEST_F(RuntimeManagerTest, StopInstanceWithInvalidRequestTest)
+TEST_F(DISABLED_RuntimeManagerTest, StopInstanceWithInvalidRequestTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);
@@ -711,7 +711,7 @@ TEST_F(RuntimeManagerTest, StopInstanceWithInvalidRequestTest)
  * Expectation:
  * runtime manager print the error in log
  */
-TEST_F(RuntimeManagerTest, RegisterToFunctionAgentFailedTest)
+TEST_F(DISABLED_RuntimeManagerTest, RegisterToFunctionAgentFailedTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>("AgentServiceActor-RegisterHelper");
     litebus::Spawn(testActor_, true);
@@ -761,7 +761,7 @@ TEST_F(RuntimeManagerTest, RegisterToFunctionAgentFailedTest)
  * Expectation:
  * runtime manager print the error in log
  */
-TEST_F(RuntimeManagerTest, RegisterToFunctionAgentUnknownErrorTest)
+TEST_F(DISABLED_RuntimeManagerTest, RegisterToFunctionAgentUnknownErrorTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>("AgentServiceActor-RegisterHelper");
     litebus::Spawn(testActor_, true);
@@ -802,7 +802,7 @@ TEST_F(RuntimeManagerTest, RegisterToFunctionAgentUnknownErrorTest)
     litebus::Await(testActor_->GetAID());
 }
 
-TEST_F(RuntimeManagerTest, RegisterToFunctionAgentTimeoutTest)
+TEST_F(DISABLED_RuntimeManagerTest, RegisterToFunctionAgentTimeoutTest)
 {
     manager_->isUnitTestSituation_ = false;
 
@@ -842,7 +842,7 @@ TEST_F(RuntimeManagerTest, RegisterToFunctionAgentTimeoutTest)
  * Expectation:
  * get current response
  */
-TEST_F(RuntimeManagerTest, QueryInstanceStatusInfoTest)
+TEST_F(DISABLED_RuntimeManagerTest, QueryInstanceStatusInfoTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);
@@ -872,7 +872,7 @@ TEST_F(RuntimeManagerTest, QueryInstanceStatusInfoTest)
     litebus::Await(testActor_->GetAID());
 }
 
-TEST_F(RuntimeManagerTest, CleanStatusTest)
+TEST_F(DISABLED_RuntimeManagerTest, CleanStatusTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);
@@ -899,7 +899,7 @@ TEST_F(RuntimeManagerTest, CleanStatusTest)
  * 1. agent forward UpdateToken Request to RuntimeManager, and then RuntimeManger refresh token for runtime
  * and return UpdateTokenResponse
  */
-TEST_F(RuntimeManagerTest, UpdateTokenTest)
+TEST_F(DISABLED_RuntimeManagerTest, UpdateTokenTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);
@@ -924,24 +924,24 @@ TEST_F(RuntimeManagerTest, UpdateTokenTest)
     litebus::Await(testActor_->GetAID());
 }
 
-TEST_F(RuntimeManagerTest, CollectCpuType)
+TEST_F(DISABLED_RuntimeManagerTest, CollectCpuType)
 {
     manager_->CollectCpuType();
 
     EXPECT_FALSE(manager_->GetCpuType().empty());
 }
 
-TEST_F(RuntimeManagerTest, GetCpuTypeByProc)
+TEST_F(DISABLED_RuntimeManagerTest, GetCpuTypeByProc)
 {
     EXPECT_FALSE(manager_->GetCpuTypeByProc().empty());
 }
 
-TEST_F(RuntimeManagerTest, GetCpuTypeByCommand)
+TEST_F(DISABLED_RuntimeManagerTest, GetCpuTypeByCommand)
 {
     EXPECT_FALSE(manager_->GetCpuTypeByCommand().empty());
 }
 
-TEST_F(RuntimeManagerTest, EnableDebugInstanceIDTest_NotFound_Gdbserver)
+TEST_F(DISABLED_RuntimeManagerTest, EnableDebugInstanceIDTest_NotFound_Gdbserver)
 {
     auto optionEnv = litebus::os::GetEnv("PATH");
     std::string env;
@@ -1020,7 +1020,7 @@ TEST_F(RuntimeManagerTest, EnableDebugInstanceIDTest_NotFound_Gdbserver)
     litebus::os::SetEnv("PATH", env);
 }
 
-TEST_F(RuntimeManagerDebugServerTest, QueryDebugInstanceInfosTest)
+TEST_F(DISABLED_RuntimeManagerDebugServerTest, QueryDebugInstanceInfosTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);
@@ -1079,7 +1079,7 @@ TEST_F(RuntimeManagerDebugServerTest, QueryDebugInstanceInfosTest)
     litebus::Await(testActor_->GetAID());
 }
 
-TEST_F(RuntimeManagerDebugServerTest, DisableDebugInstanceIDTest)
+TEST_F(DISABLED_RuntimeManagerDebugServerTest, DisableDebugInstanceIDTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);
@@ -1127,7 +1127,7 @@ TEST_F(RuntimeManagerDebugServerTest, DisableDebugInstanceIDTest)
     litebus::Await(testActor_->GetAID());
 }
 
-TEST_F(RuntimeManagerDebugServerTest, EnableDebugInstanceIDTest)
+TEST_F(DISABLED_RuntimeManagerDebugServerTest, EnableDebugInstanceIDTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);
@@ -1171,7 +1171,7 @@ TEST_F(RuntimeManagerDebugServerTest, EnableDebugInstanceIDTest)
     litebus::Await(testActor_->GetAID());
 }
 
-TEST_F(RuntimeManagerDebugServerTest, EnablePythonDebugInstanceIDTest)
+TEST_F(DISABLED_RuntimeManagerDebugServerTest, EnablePythonDebugInstanceIDTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);

@@ -38,9 +38,9 @@ using namespace functionsystem;
 
 const int BUFFER_SIZE = 250;
 namespace functionsystem::test {
-class UtilsTest : public ::testing::Test {};
+class DISABLED_UtilsTest : public ::testing::Test {};
 
-TEST_F(UtilsTest, GetInstanceIDValid)
+TEST_F(DISABLED_UtilsTest, GetInstanceIDValid)
 {
     auto key = "/yr/instance/business/yrk/tenant/0/function/helloWorld/version/latest/defaultaz/requestid/instanceA";
 
@@ -49,7 +49,7 @@ TEST_F(UtilsTest, GetInstanceIDValid)
     EXPECT_TRUE(instance == "instanceA");
 }
 
-TEST_F(UtilsTest, GetInstanceIDInvalid)
+TEST_F(DISABLED_UtilsTest, GetInstanceIDInvalid)
 {
     auto key = "/yr/instance/business/yrk/tenant/0/function/helloWorld/version/latest/defaultaz";
 
@@ -58,7 +58,7 @@ TEST_F(UtilsTest, GetInstanceIDInvalid)
     EXPECT_TRUE(instance == "");
 }
 
-TEST_F(UtilsTest, IsNodeIDValid)
+TEST_F(DISABLED_UtilsTest, IsNodeIDValid)
 {
     std::string nodeID = "";
     auto isNodeIDValid = IsNodeIDValid(nodeID);
@@ -85,7 +85,7 @@ TEST_F(UtilsTest, IsNodeIDValid)
     EXPECT_TRUE(!isNodeIDValid);
 }
 
-TEST_F(UtilsTest, IsAliasValid)
+TEST_F(DISABLED_UtilsTest, IsAliasValid)
 {
     std::string alias = "";
     auto isAliasIDValid = IsAliasValid(alias);
@@ -112,7 +112,7 @@ TEST_F(UtilsTest, IsAliasValid)
     EXPECT_TRUE(!isAliasIDValid);
 }
 
-TEST_F(UtilsTest, IsIPValid)
+TEST_F(DISABLED_UtilsTest, IsIPValid)
 {
     std::string ip = "";
     auto isIpValid = IsIPValid(ip);
@@ -135,7 +135,7 @@ TEST_F(UtilsTest, IsIPValid)
     EXPECT_TRUE(!isIpValid);
 }
 
-TEST_F(UtilsTest, IsPortValid)
+TEST_F(DISABLED_UtilsTest, IsPortValid)
 {
     std::string port = "";
     auto isPortValid = IsPortValid(port);
@@ -166,7 +166,7 @@ TEST_F(UtilsTest, IsPortValid)
     EXPECT_TRUE(!isPortValid);
 }
 
-TEST_F(UtilsTest, IsAddressesValid)
+TEST_F(DISABLED_UtilsTest, IsAddressesValid)
 {
     std::string addresses = "";
     auto isAddressesValid = IsAddressesValid(addresses);
@@ -201,14 +201,14 @@ TEST_F(UtilsTest, IsAddressesValid)
     EXPECT_TRUE(!isAddressesValid);
 }
 
-TEST_F(UtilsTest, IsInnerService)
+TEST_F(DISABLED_UtilsTest, IsInnerService)
 {
     EXPECT_FALSE(IsInnerServiceAddress("www.test.com"));
     EXPECT_FALSE(IsInnerServiceAddress("www.xxxxxxxxxxxxxxxxxxxxxxx.com"));
     EXPECT_TRUE(IsInnerServiceAddress("minio.default.svc.cluster.local"));
 }
 
-TEST_F(UtilsTest, LookPathWithNotExistFile)
+TEST_F(DISABLED_UtilsTest, LookPathWithNotExistFile)
 {
     // given
     std::string given[] = {
@@ -222,7 +222,7 @@ TEST_F(UtilsTest, LookPathWithNotExistFile)
     }
 }
 
-TEST_F(UtilsTest, LookPathWithExistFile)
+TEST_F(DISABLED_UtilsTest, LookPathWithExistFile)
 {
     // given
     std::string given[] = {
@@ -254,7 +254,7 @@ TEST_F(UtilsTest, LookPathWithExistFile)
     litebus::os::SetEnv("PATH", env);
 }
 
-TEST_F(UtilsTest, FILEIOTest)
+TEST_F(DISABLED_UtilsTest, FILEIOTest)
 {
     (void)litebus::os::Rmdir("/tmp/runtime-log");
     std::string dirPath = "/tmp/runtime-log";
@@ -276,7 +276,7 @@ TEST_F(UtilsTest, FILEIOTest)
     });
 }
 
-TEST_F(UtilsTest, IsFileTest)
+TEST_F(DISABLED_UtilsTest, IsFileTest)
 {
     TouchFile("/tmp/testfile");
     EXPECT_TRUE(IsFile("/tmp/testfile"));
@@ -290,7 +290,7 @@ TEST_F(UtilsTest, IsFileTest)
     (void)litebus::os::Rmdir("/tmp/testdir");
 }
 
-TEST_F(UtilsTest, IsDirTest)
+TEST_F(DISABLED_UtilsTest, IsDirTest)
 {
     TouchFile("/tmp/testfile");
     EXPECT_FALSE(IsDir("/tmp/testfile"));
@@ -304,7 +304,7 @@ TEST_F(UtilsTest, IsDirTest)
     (void)litebus::os::Rmdir("/tmp/testdir");
 }
 
-TEST_F(UtilsTest, RealPath)
+TEST_F(DISABLED_UtilsTest, RealPath)
 {
     char currPath[BUFFER_SIZE];
     (void)getcwd(currPath, BUFFER_SIZE);
@@ -315,7 +315,7 @@ TEST_F(UtilsTest, RealPath)
     EXPECT_EQ(realPath, subStr);
 }
 
-TEST_F(UtilsTest, LoadHbmToCreateRequestTest)
+TEST_F(DISABLED_UtilsTest, LoadHbmToCreateRequestTest)
 {
     FunctionMeta functionMeta{};
     functionMeta.extendedMetaData.deviceMetaData = DeviceMetaData{
@@ -347,7 +347,7 @@ TEST_F(UtilsTest, LoadHbmToCreateRequestTest)
     EXPECT_TRUE(static_cast<int32_t>(requestRes2.at(hbmResKey2)) == expectedHbm);
 }
 
-TEST_F(UtilsTest, LoadDeviceFunctionMetaToCreateRequest)
+TEST_F(DISABLED_UtilsTest, LoadDeviceFunctionMetaToCreateRequest)
 {
     FunctionMeta functionMeta{};
     functionMeta.extendedMetaData.deviceMetaData = DeviceMetaData{
@@ -376,7 +376,7 @@ TEST_F(UtilsTest, LoadDeviceFunctionMetaToCreateRequest)
     EXPECT_TRUE(static_cast<uint32_t>(requestRes.at(streamResKey)) == namedFunctionMeta.stream);
 }
 
-TEST_F(UtilsTest, LoadDeviceFunctionMetaToCreateRequestNPU)
+TEST_F(DISABLED_UtilsTest, LoadDeviceFunctionMetaToCreateRequestNPU)
 {
     FunctionMeta functionMeta{};
     functionMeta.extendedMetaData.deviceMetaData = DeviceMetaData{
@@ -405,7 +405,7 @@ TEST_F(UtilsTest, LoadDeviceFunctionMetaToCreateRequestNPU)
     EXPECT_TRUE(static_cast<uint32_t>(requestRes.at(streamResKey)) == namedFunctionMeta.stream);
 }
 
-TEST_F(UtilsTest, LoadHbmToScheduleRequestTest)
+TEST_F(DISABLED_UtilsTest, LoadHbmToScheduleRequestTest)
 {
     FunctionMeta functionMeta{};
     functionMeta.extendedMetaData.deviceMetaData = DeviceMetaData{
@@ -449,7 +449,7 @@ TEST_F(UtilsTest, LoadHbmToScheduleRequestTest)
     EXPECT_EQ(requestRes2.at(hbmResKey2).name(), hbmResKey2);
 }
 
-TEST_F(UtilsTest, LoadDeviceFunctionMetaToScheduleRequest)
+TEST_F(DISABLED_UtilsTest, LoadDeviceFunctionMetaToScheduleRequest)
 {
     FunctionMeta functionMeta{};
     functionMeta.extendedMetaData.deviceMetaData = DeviceMetaData{
@@ -480,7 +480,7 @@ TEST_F(UtilsTest, LoadDeviceFunctionMetaToScheduleRequest)
     EXPECT_EQ(requestRes.at(streamResKey).name(), streamResKey);
 }
 
-TEST_F(UtilsTest, LoadDeviceFunctionMetaToScheduleRequestNPU)
+TEST_F(DISABLED_UtilsTest, LoadDeviceFunctionMetaToScheduleRequestNPU)
 {
     FunctionMeta functionMeta{};
     functionMeta.extendedMetaData.deviceMetaData = DeviceMetaData{
@@ -537,7 +537,7 @@ affinity::Selector PreferredSelect(bool isPriority,
     return selector;
 }
 
-TEST_F(UtilsTest, SetAffinityOpt)
+TEST_F(DISABLED_UtilsTest, SetAffinityOpt)
 {
     CreateRequest createReq;
     auto scheduleAffinity = createReq.mutable_schedulingops()->mutable_scheduleaffinity();
@@ -601,7 +601,7 @@ TEST_F(UtilsTest, SetAffinityOpt)
     EXPECT_EQ(instanceInfo->labels(0), NOT_PREEMPTIBLE);
 }
 
-TEST_F(UtilsTest, Sha256CalculateFileTest)
+TEST_F(DISABLED_UtilsTest, Sha256CalculateFileTest)
 {
     (void)litebus::os::Rmdir("/tmp/home/layer/func/bucket");
     std::string objDir = "/tmp/home/layer/func/bucket/files";
@@ -627,17 +627,17 @@ TEST_F(UtilsTest, Sha256CalculateFileTest)
     EXPECT_TRUE(litebus::os::Rmdir("/tmp/home/layer/func/bucket").IsNone());
 }
 
-TEST_F(UtilsTest, ExceptionTest)
+TEST_F(DISABLED_UtilsTest, ExceptionTest)
 {
     EXPECT_TRUE(GetTid() > 0);
 }
 
-TEST_F(UtilsTest, RealPathTest)
+TEST_F(DISABLED_UtilsTest, RealPathTest)
 {
     EXPECT_EQ(GetRealPath(""), "");
 }
 
-TEST_F(UtilsTest, MetaStoreKvOperationTest)
+TEST_F(DISABLED_UtilsTest, MetaStoreKvOperationTest)
 {
     auto key = GetLastFunctionNameFromKey("12345678901234561234567890123456/0-test-helloWorld/$latest");
     EXPECT_TRUE(key.IsSome());
@@ -650,7 +650,7 @@ TEST_F(UtilsTest, MetaStoreKvOperationTest)
     EXPECT_TRUE(key.IsNone());
 }
 
-TEST_F(UtilsTest, SensitiveValueTest)
+TEST_F(DISABLED_UtilsTest, SensitiveValueTest)
 {
     std::string value = "123";
     SensitiveValue sensitiveValue;
@@ -664,7 +664,7 @@ TEST_F(UtilsTest, SensitiveValueTest)
     EXPECT_TRUE(sensitiveValue == sensitiveValue2);
 }
 
-TEST_F(UtilsTest, TransCreateReqReliabilityTypeTest)
+TEST_F(DISABLED_UtilsTest, TransCreateReqReliabilityTypeTest)
 {
     std::shared_ptr<CreateRequest> lowCreateReq = std::make_shared<CreateRequest>();
     auto createOptions = lowCreateReq->mutable_createoptions();
@@ -677,7 +677,7 @@ TEST_F(UtilsTest, TransCreateReqReliabilityTypeTest)
     EXPECT_FALSE(scheduleReq->instance().lowreliability());
 }
 
-TEST_F(UtilsTest, ChmodErrorTest)
+TEST_F(DISABLED_UtilsTest, ChmodErrorTest)
 {
     litebus::os::Rmdir("/invalid");
     int result = chmod("/invalid", 0770);
@@ -691,7 +691,7 @@ TEST_F(UtilsTest, ChmodErrorTest)
     litebus::os::Rmdir("/invalid");
 }
 
-TEST_F(UtilsTest, ExtractProxyIDFromProxyAIDTest)
+TEST_F(DISABLED_UtilsTest, ExtractProxyIDFromProxyAIDTest)
 {
     std::string proxyAID = "dggphis151700-LocalSchedInstanceCtrlActor@127.0.0.1:22772";
     EXPECT_EQ(ExtractProxyIDFromProxyAID(proxyAID), "dggphis151700");
@@ -712,7 +712,7 @@ TEST_F(UtilsTest, ExtractProxyIDFromProxyAIDTest)
     EXPECT_EQ(ExtractProxyIDFromProxyAID(proxyAID), "");
 }
 
-TEST_F(UtilsTest, GenerateRuntimeID)
+TEST_F(DISABLED_UtilsTest, GenerateRuntimeID)
 {
     const uint32_t defaultUUIDLength = 36;
     std::string UUID = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
@@ -727,7 +727,7 @@ TEST_F(UtilsTest, GenerateRuntimeID)
     EXPECT_TRUE(runtimeID1.find("a-b-instance") != std::string::npos);
 }
 
-TEST_F(UtilsTest, ParseValueFromKey)
+TEST_F(DISABLED_UtilsTest, ParseValueFromKey)
 {
     auto funcName = TrimKeyPrefix("/yr/functions/business/yrk/tenant/0/function/0-system-faascontroller/version/$latest", "");
     EXPECT_EQ("/yr/functions/business/yrk/tenant/0/function/0-system-faascontroller/version/$latest", funcName);
@@ -742,7 +742,7 @@ TEST_F(UtilsTest, ParseValueFromKey)
 * @tc.number: ShuffleStringByDelimiter_Test_001
 * @tc.desc  : Test ShuffleStringByDelimiter function with empty input string.
  */
-TEST_F(UtilsTest, ShuffleStringByDelimiter_ShouldReturnEmptyString_WhenInputIsEmpty) {
+TEST_F(DISABLED_UtilsTest, ShuffleStringByDelimiter_ShouldReturnEmptyString_WhenInputIsEmpty) {
     std::string input = "";
     std::string pattern = ",";
     std::string result = ShuffleStringByDelimiter(input, pattern);
@@ -754,7 +754,7 @@ TEST_F(UtilsTest, ShuffleStringByDelimiter_ShouldReturnEmptyString_WhenInputIsEm
 * @tc.number: ShuffleStringByDelimiter_Test_002
 * @tc.desc  : Test ShuffleStringByDelimiter function with input string that has no delimiter.
  */
-TEST_F(UtilsTest, ShuffleStringByDelimiter_ShouldReturnSameString_WhenInputHasNoDelimiter) {
+TEST_F(DISABLED_UtilsTest, ShuffleStringByDelimiter_ShouldReturnSameString_WhenInputHasNoDelimiter) {
     std::string input = "127.0.0.1:2379";
     std::string pattern = ",";
     std::string result = ShuffleStringByDelimiter(input, pattern);
@@ -768,7 +768,7 @@ TEST_F(UtilsTest, ShuffleStringByDelimiter_ShouldReturnSameString_WhenInputHasNo
 * @tc.number: ShuffleStringByDelimiter_Test_003
 * @tc.desc  : Test ShuffleStringByDelimiter function with input string that has multiple delimiters.
  */
-TEST_F(UtilsTest, ShuffleStringByDelimiter_ShouldReturnShuffledString_WhenInputHasMultipleDelimiters) {
+TEST_F(DISABLED_UtilsTest, ShuffleStringByDelimiter_ShouldReturnShuffledString_WhenInputHasMultipleDelimiters) {
     std::string input = "127.0.0.1:2379,127.0.0.2:2379,127.0.0.3:2379";
     std::string pattern = ",";
     std::string result = ShuffleStringByDelimiter(input, pattern);

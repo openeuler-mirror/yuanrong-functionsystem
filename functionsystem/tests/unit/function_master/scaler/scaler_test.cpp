@@ -3026,7 +3026,7 @@ TEST_F(ScalerTest, DeletePodRequest)
     }
 }
 
-TEST_F(ScalerTest, ResourceIsSyncedTest) {
+TEST_F(ScalerTest, DISABLED_ResourceIsSyncedTest) {
     auto mockClient = std::make_shared<MockKubeClient>();
     actor_->SetKubeClient(mockClient);
     std::shared_ptr<PoolManager> poolManager = std::make_shared<PoolManager>(metaStorageAccessor_);

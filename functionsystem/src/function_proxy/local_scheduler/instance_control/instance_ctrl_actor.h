@@ -918,7 +918,7 @@ private:
     inline static ExitHandler exitHandler_;
 
     friend class InstanceCtrlTest;
-    friend class InstanceCtrlActorTest;
+    friend class DISABLED_InstanceCtrlActorTest;
     litebus::Future<Status> TryRecover(const std::string &instanceID, const std::string &runtimeID,
                                        const std::string &errMsg, std::shared_ptr<InstanceStateMachine> &stateMachine,
                                        InstanceInfo &instanceInfo);

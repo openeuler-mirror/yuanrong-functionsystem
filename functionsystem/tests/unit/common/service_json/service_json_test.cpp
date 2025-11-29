@@ -23,9 +23,9 @@
 using namespace functionsystem::service_json;
 
 namespace functionsystem::test {
-class ServiceJsonTest : public ::testing::Test {};
-/*
-TEST_F(ServiceJsonTest, ParseCodePathTest)
+class DISABLED_ServiceJsonTest : public ::testing::Test {};
+
+TEST_F(DISABLED_ServiceJsonTest, ParseCodePathTest)
 {
     // absulote code path
     std::string codePath = "/home/";
@@ -42,7 +42,7 @@ TEST_F(ServiceJsonTest, ParseCodePathTest)
     EXPECT_EQ(ret, litebus::os::Join(yamlDir, codePath));
 }
 
-TEST_F(ServiceJsonTest, ExtendedTimeoutTest)
+TEST_F(DISABLED_ServiceJsonTest, ExtendedTimeoutTest)
 {
     YrLibBuilder yrLibBuilder("test");
     FunctionConfig functionConfig;
@@ -60,7 +60,7 @@ TEST_F(ServiceJsonTest, ExtendedTimeoutTest)
     auto meta = functionsystem::service_json::BuildFunctionMeta(serviceInfo, functionConfig, "functiontest", "/temp");
 }
 
-TEST_F(ServiceJsonTest, CheckNameTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckNameTest)
 {
     bool retEmpty = CheckName("", ".*", 0, 100);
     EXPECT_FALSE(retEmpty);
@@ -72,7 +72,7 @@ TEST_F(ServiceJsonTest, CheckNameTest)
     EXPECT_FALSE(retWrongSize);
 }
 
-TEST_F(ServiceJsonTest, CheckServiceNameTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckServiceNameTest)
 {
     bool retEmpty = CheckServiceName("");
     EXPECT_FALSE(retEmpty);
@@ -81,7 +81,7 @@ TEST_F(ServiceJsonTest, CheckServiceNameTest)
     EXPECT_TRUE(ret);
 }
 
-TEST_F(ServiceJsonTest, CheckKindTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckKindTest)
 {
     bool retEmpty = CheckKind("");
     EXPECT_FALSE(retEmpty);
@@ -90,7 +90,7 @@ TEST_F(ServiceJsonTest, CheckKindTest)
     EXPECT_TRUE(ret);
 }
 
-TEST_F(ServiceJsonTest, CheckFunctionNameTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckFunctionNameTest)
 {
     bool retEmpty = CheckFunctionName("");
     EXPECT_FALSE(retEmpty);
@@ -99,7 +99,7 @@ TEST_F(ServiceJsonTest, CheckFunctionNameTest)
     EXPECT_TRUE(ret);
 }
 
-TEST_F(ServiceJsonTest, CheckRuntimeTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckRuntimeTest)
 {
     bool retEmpty = CheckRuntime("");
     EXPECT_FALSE(retEmpty);
@@ -108,7 +108,7 @@ TEST_F(ServiceJsonTest, CheckRuntimeTest)
     EXPECT_TRUE(ret);
 }
 
-TEST_F(ServiceJsonTest, CheckCPUAndMemorySize)
+TEST_F(DISABLED_ServiceJsonTest, CheckCPUAndMemorySize)
 {
     bool retCpuFailed = CheckCPUAndMemorySize(0, 500);
     EXPECT_TRUE(retCpuFailed);
@@ -123,7 +123,7 @@ TEST_F(ServiceJsonTest, CheckCPUAndMemorySize)
     EXPECT_TRUE(ret);
 }
 
-TEST_F(ServiceJsonTest, CheckEnvTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckEnvTest)
 {
     std::unordered_map<std::string, std::string> envs = { { "FAAS_FUNCTION_NAME", "" } };
     bool ret = CheckEnv(envs);
@@ -141,7 +141,7 @@ TEST_F(ServiceJsonTest, CheckEnvTest)
     EXPECT_FALSE(ret2);
 }
 
-TEST_F(ServiceJsonTest, CheckLayerNameTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckLayerNameTest)
 {
     bool ret = CheckLayerName("");
     EXPECT_FALSE(ret);
@@ -154,7 +154,7 @@ TEST_F(ServiceJsonTest, CheckLayerNameTest)
     EXPECT_TRUE(ret2);
 }
 
-TEST_F(ServiceJsonTest, ParseAndCheckLayerVersionTest)
+TEST_F(DISABLED_ServiceJsonTest, ParseAndCheckLayerVersionTest)
 {
     bool ret = ParseAndCheckLayerVersion("");
     EXPECT_FALSE(ret);
@@ -167,7 +167,7 @@ TEST_F(ServiceJsonTest, ParseAndCheckLayerVersionTest)
     EXPECT_TRUE(ret2);
 }
 
-TEST_F(ServiceJsonTest, CheckFunctionRefLayerTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckFunctionRefLayerTest)
 {
     bool ret = CheckFunctionRefLayer("");
     EXPECT_FALSE(ret);
@@ -180,7 +180,7 @@ TEST_F(ServiceJsonTest, CheckFunctionRefLayerTest)
     EXPECT_TRUE(ret2);
 }
 
-TEST_F(ServiceJsonTest, CheckFunctionLayersTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckFunctionLayersTest)
 {
     std::vector<std::string> layers;
     bool ret = CheckFunctionLayers(layers);
@@ -197,7 +197,7 @@ TEST_F(ServiceJsonTest, CheckFunctionLayersTest)
     EXPECT_TRUE(ret2);
 }
 
-TEST_F(ServiceJsonTest, CheckMinMaxInstanceTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckMinMaxInstanceTest)
 {
     bool ret1 = CheckMinInstance(-1);
     EXPECT_FALSE(ret1);
@@ -230,21 +230,21 @@ TEST_F(ServiceJsonTest, CheckMinMaxInstanceTest)
     EXPECT_TRUE(ret10);
 }
 
-TEST_F(ServiceJsonTest, CheckWorkerConfigTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckWorkerConfigTest)
 {
     FunctionConfig config{ 1, 1, 100, "handler", "description" };
     bool ret1 = CheckWorkerConfig(config);
     EXPECT_TRUE(ret1);
 }
 
-TEST_F(ServiceJsonTest, PackHookHandlerTest)
+TEST_F(DISABLED_ServiceJsonTest, PackHookHandlerTest)
 {
     FunctionHookHandlerConfig config{ "init", "call", "checkpoint", "recover", "shutdown", "signal" };
     auto result = PackHookHandler(config);
     EXPECT_EQ(result["init"], "init");
 }
 
-TEST_F(ServiceJsonTest, CheckHookHandlerRegularizationTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckHookHandlerRegularizationTest)
 {
     std::string longStr;
     for (int i = 0; i < 300; i++) {
@@ -260,7 +260,7 @@ TEST_F(ServiceJsonTest, CheckHookHandlerRegularizationTest)
     EXPECT_TRUE(ret3);
 }
 
-TEST_F(ServiceJsonTest, CheckHookHandlerTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckHookHandlerTest)
 {
     FunctionHookHandlerConfig config{ "init", "call", "checkpoint", "recover", "shutdown", "signal" };
     auto result = CheckHookHandler(config, "cpp11");
@@ -273,21 +273,21 @@ TEST_F(ServiceJsonTest, CheckHookHandlerTest)
     EXPECT_FALSE(result2);
 }
 
-TEST_F(ServiceJsonTest, CheckFunctionConfigTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckFunctionConfigTest)
 {
     FunctionConfig config{ 1, 1, 100, "handler", "description" };
     bool ret1 = CheckFunctionConfig(config);
     EXPECT_FALSE(ret1);
 }
 
-TEST_F(ServiceJsonTest, CheckFunctionTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckFunctionTest)
 {
     FunctionConfig config{ 1, 1, 100, "handler", "description" };
     bool ret1 = CheckFunction("function", config);
     EXPECT_FALSE(ret1);
 }
 
-TEST_F(ServiceJsonTest, GetFuncMetaFromServiceYamlTest)
+TEST_F(DISABLED_ServiceJsonTest, GetFuncMetaFromServiceYamlTest)
 {
     auto functionMeta = GetFuncMetaFromServiceYaml("/faketemp", "/temp");
     EXPECT_FALSE(functionMeta.IsSome());
@@ -301,7 +301,7 @@ TEST_F(ServiceJsonTest, GetFuncMetaFromServiceYamlTest)
     EXPECT_EQ(functionMeta.Get().size(), static_cast<uint32_t>(4)) << "Actual: " << functionMeta.Get().size();
 }
 
-TEST_F(ServiceJsonTest, CheckServiceInfosTest)
+TEST_F(DISABLED_ServiceJsonTest, CheckServiceInfosTest)
 {
     service_json::ServiceInfo serviceInfo;
     serviceInfo.service = "service";
@@ -316,7 +316,7 @@ TEST_F(ServiceJsonTest, CheckServiceInfosTest)
     EXPECT_FALSE(CheckServiceInfos(vec));
 }
 
-TEST_F(ServiceJsonTest, ParseFunctionHookHandlerConfigTest)
+TEST_F(DISABLED_ServiceJsonTest, ParseFunctionHookHandlerConfigTest)
 {
     FunctionHookHandlerConfig config;
 
@@ -340,7 +340,7 @@ TEST_F(ServiceJsonTest, ParseFunctionHookHandlerConfigTest)
     EXPECT_EQ(config.initHandler, "initHandler");
 }
 
-TEST_F(ServiceJsonTest, ParseCodeMetaTest)
+TEST_F(DISABLED_ServiceJsonTest, ParseCodeMetaTest)
 {
     std::vector<std::string> layers = { "numpy", "pandas" };
     FunctionConfig functionConfig;
@@ -352,7 +352,7 @@ TEST_F(ServiceJsonTest, ParseCodeMetaTest)
     EXPECT_EQ(functionConfig.codePath, "/temp");
 }
 
-TEST_F(ServiceJsonTest, ParseEnvMetaTest)
+TEST_F(DISABLED_ServiceJsonTest, ParseEnvMetaTest)
 {
     std::unordered_map<std::string, std::string> environment = {
         { "tenantID", "id" },
@@ -367,7 +367,7 @@ TEST_F(ServiceJsonTest, ParseEnvMetaTest)
     EXPECT_EQ(functionConfig.environment["tenantID"], "id");
 }
 
-TEST_F(ServiceJsonTest, ParseInstMetaTest)
+TEST_F(DISABLED_ServiceJsonTest, ParseInstMetaTest)
 {
     FunctionConfig functionConfig;
     nlohmann::json configJson;
@@ -383,7 +383,7 @@ TEST_F(ServiceJsonTest, ParseInstMetaTest)
     EXPECT_EQ(functionConfig.cacheInstance, 100);
 }
 
-TEST_F(ServiceJsonTest, ParseResTest)
+TEST_F(DISABLED_ServiceJsonTest, ParseResTest)
 {
     std::unordered_map<std::string, std::string> customResources = {
         { "gpu", "10" },
@@ -400,7 +400,7 @@ TEST_F(ServiceJsonTest, ParseResTest)
     EXPECT_EQ(functionConfig.memory, 1500);
 }
 
-TEST_F(ServiceJsonTest, ParsefunctionTest)
+TEST_F(DISABLED_ServiceJsonTest, ParsefunctionTest)
 {
     FunctionConfig functionConfig;
     nlohmann::json configJson;
@@ -426,7 +426,7 @@ TEST_F(ServiceJsonTest, ParsefunctionTest)
     EXPECT_EQ(functionConfig.preStopTimeout, 3);
 }
 
-TEST_F(ServiceJsonTest, ParseDeviceInfo)
+TEST_F(DISABLED_ServiceJsonTest, ParseDeviceInfo)
 {
     DeviceMetaData deviceMetaData;
     nlohmann::json device, h;
@@ -447,7 +447,7 @@ TEST_F(ServiceJsonTest, ParseDeviceInfo)
     EXPECT_EQ(deviceMetaData.type, "NPU");
 }
 
-TEST_F(ServiceJsonTest, ParseServiceInfoTest)
+TEST_F(DISABLED_ServiceJsonTest, ParseServiceInfoTest)
 {
     std::vector<service_json::ServiceInfo> vec;
     FunctionConfig config{ 1, 1, 100, "handler", "description" };
@@ -469,12 +469,12 @@ TEST_F(ServiceJsonTest, ParseServiceInfoTest)
     EXPECT_EQ(vec[0].description, "description_test");
 }
 
-TEST_F(ServiceJsonTest, NameMatchTest)
+TEST_F(DISABLED_ServiceJsonTest, NameMatchTest)
 {
     auto result = NameMatch("test123", "test123");
     EXPECT_TRUE(result);
 
     auto result2 = NameMatch("test123", "test123567");
     EXPECT_FALSE(result2);
-}*/
+}
 } // namespace functionsystem::test

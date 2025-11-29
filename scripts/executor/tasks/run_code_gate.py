@@ -243,6 +243,8 @@ def summarize(start_time, collector, proc_results, case_results):
         log.warning("LOGSTASH_URL is not set. Can not send any message to logstash.")
 
     core_dump = False
+    count_failed_cases = 0
+    count_failed_suites = 0
     # 统计进程运行状态
     for result in proc_results:
         proc_name, exec_time, exit_code, std = result
@@ -259,6 +261,7 @@ def summarize(start_time, collector, proc_results, case_results):
         proc_desc = f"<{proc_name}>[{std[0][0]}.{std[0][1]}]"
         if exit_code != 0:
             info = f"Run test suite {proc_desc} failed[{exit_code}] in {exec_time}ms."
+            count_failed_suites += 1
             core_dump = True
             log.error(info)
         else:
@@ -280,14 +283,18 @@ def summarize(start_time, collector, proc_results, case_results):
         case_desc = f"<{proc_name}>[{test_suite}.{test_case}]"
         if status != "OK":
             info = f"Run test case {case_desc} failed[{status}] in {exec_time}ms."
+            count_failed_cases += 1
             core_dump = True
             log.error(info)
         else:
             info = f"Run test case {case_desc} success[{status}] in {exec_time}ms."
         log2es("TestCase", info, collector["merge_info"], ex)
 
+    log.info(f"Total failed test suites: {count_failed_suites}, failed test cases: {count_failed_cases}")
+
     stop_time = time.time()
-    dt_time = (stop_time - start_time) * 1000
+    dt_time = int((stop_time - start_time) * 1000)
+    log.info(f"All test-suit executed finished in {dt_time}ms")
     ex = {
         "exec_time": int(dt_time),
         "test_suite": "*",
@@ -329,9 +336,5 @@ def log2es(step: str, text: str, info: dict, ex: dict = None):
 
 if __name__ == '__main__':
     _args = decode_args()
-    _start_time = time.time()
     _code = run_code_gate(*_args)
-    _stop_time = time.time()
-    _exec_time = _stop_time - _start_time
-    log.info(f"All test-suit executed finished in {_exec_time * 1000}ms")
     exit(_code)
