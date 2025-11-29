@@ -2929,6 +2929,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithWorkingDirCpp)
     auto spec = deployInstanceReq->mutable_funcdeployspec();
     spec->set_storagetype(function_agent::WORKING_DIR_STORAGE_TYPE);
     auto deployDir = "/tmp/home/sn/function/package/xxxz";
+
     std::string destination = "/tmp/working_dir-tmp/";
     (void)litebus::os::Rmdir(deployDir);
     EXPECT_TRUE(litebus::os::ExistPath(destination));
@@ -2976,7 +2977,8 @@ TEST_F(DISABLED_AgentServiceActorTest, SendS3Alarm)
     auto mockTestDeployer = std::make_shared<MockTestAgentS3Deployer>(s3Config, codePackageThresholds);
     dstActor_->SetDeployers(function_agent::S3_STORAGE_TYPE, mockTestDeployer);
     dstActor_->retryDownloadInterval_ = 50;
-    EXPECT_CALL(*mockTestDeployer, Deploy).WillRepeatedly(Return(DeployResult{.status = Status(StatusCode::FUNC_AGENT_OBS_ERROR_NEED_RETRY)}));
+    EXPECT_CALL(*mockTestDeployer, Deploy)
+        .WillRepeatedly(Return(DeployResult{ .status = Status(StatusCode::FUNC_AGENT_OBS_ERROR_NEED_RETRY) }));
     dstActor_->DownloadCode(request, mockTestDeployer, promise, 1);
     ASSERT_AWAIT_TRUE([&]() -> bool {
         promise->GetFuture().Get();
@@ -2984,7 +2986,6 @@ TEST_F(DISABLED_AgentServiceActorTest, SendS3Alarm)
         return alarmMap.find(metrics::S3_ALARM) != alarmMap.end();
     });
 }
-
 
 TEST_F(DISABLED_AgentServiceActorTest, ConfigCodeAgingTimeTest)
 {
