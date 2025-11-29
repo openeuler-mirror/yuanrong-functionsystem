@@ -23,7 +23,12 @@
 namespace functionsystem::schedule_decision {
 inline bool operator>(const std::shared_ptr<QueueItem> &r, const std::shared_ptr<QueueItem> &l)
 {
-    return r->CreatedTimestamp() > l->CreatedTimestamp();
+    const auto &rt = r->CreatedTimestamp();
+    const auto &lt = l->CreatedTimestamp();
+    if (rt == lt) {
+        return r->GetRequestId() > l->GetRequestId();
+    }
+    return rt > lt;
 }
 using TimePriorityQueue = std::priority_queue<std::shared_ptr<QueueItem>, std::vector<std::shared_ptr<QueueItem>>,
                                           std::greater<std::shared_ptr<QueueItem>>>;
