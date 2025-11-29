@@ -341,7 +341,6 @@ Status TransGroupRequest(const std::string &from, std::string &nodeID, std::shar
             auto preOptimal = ctx->maxscore();
             ctx->set_maxscore(preOptimal + score);
         }
-
         instanceInfo->set_groupid(groupInfo->groupid());
         index++;
     }
