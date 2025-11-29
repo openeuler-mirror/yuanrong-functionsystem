@@ -34,6 +34,10 @@ def parser_args():
     build_parser.set_defaults(func=lambda func_args: tasks.run_build(ROOT_DIR, func_args))
     # 清理缓存执行参数
     clean_parser = subparsers.add_parser("clean", help="Clean all build artifacts and caches")
+    clean_parser.add_argument("--skip_vendor", type=bool, default=True,
+                              help="Skip clean vendor build cache and installed files")
+    clean_parser.add_argument("--skip_change", type=bool, default=True,
+                              help="Skip clean all code change and the files that ignored by git")
     clean_parser.set_defaults(func=lambda func_args: tasks.run_clean(ROOT_DIR, func_args))
     # 测试用例执行参数
     test_parser = subparsers.add_parser("test", help="Run tests for function system")
