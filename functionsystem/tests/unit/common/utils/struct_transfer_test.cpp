@@ -79,7 +79,7 @@ TEST_F(StructTransferTest, MergeScheduleResultToRequest)
     *req->mutable_instance() = scheduleInstance;
     req->set_requestid(scheduleInstance.requestid());
     req->set_traceid("traceID_" + litebus::uuid_generator::UUID::GetRandomUUID().ToString());
-
+    req->mutable_instance()->mutable_scheduleoption()->set_target(resources::CreateTarget::RESOURCE_GROUP);
     schedule_decision::ScheduleResult result;
     result.id = DEFAULT_UNIT_ID;
     result.unitID = DEFAULT_UNIT_ID;
@@ -107,6 +107,9 @@ TEST_F(StructTransferTest, MergeScheduleResultToRequest)
     ASSERT_NE(heteroResource, resources.end());
     EXPECT_EQ(heteroResource->second.type(), resource_view::ValueType::Value_Type_VECTORS);
     EXPECT_EQ(heteroResource->second.name(), DEFAULT_CARD_TYPE);
+    // rg which should be removed
+    EXPECT_EQ(resources.find(view_utils::DEFAULT_NPU_TYPE + "/" + resource_view::HETEROGENEOUS_CARDNUM_KEY),
+              resources.end());
 
     const auto& heteroVectors = heteroResource->second.vectors().values();
     auto heteroCategory = heteroVectors.find(resource_view::HETEROGENEOUS_MEM_KEY);
