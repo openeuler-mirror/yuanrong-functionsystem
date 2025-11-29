@@ -641,6 +641,7 @@ static int GetRuntimeRecoverTimes(const resources::InstanceInfo &instanceInfo)
     }
 
     auto required = scheduleReq->instance().resources().resources();
+    std::vector<std::string> taggedHeteroKey;
     for (const auto &res : required) {
         auto resourceNameFields = litebus::strings::Split(res.first, "/");
         if (resourceNameFields.size() != HETERO_RESOURCE_FIELD_NUM) {
@@ -656,8 +657,19 @@ static int GetRuntimeRecoverTimes(const resources::InstanceInfo &instanceInfo)
         (*createOpt)["func-" + vendor + "-DEVICE-IDS"] = deviceIDsStr;
         YRLOG_INFO("{}|{}: {} will be allocated to instance: {}", vendor, scheduleReq->requestid(), deviceIDsStr,
                    scheduleReq->instance().instanceid());
+        taggedHeteroKey.emplace_back(res.first);
     }
-
+    if (scheduleReq->mutable_instance()->scheduleoption().target() == resources::CreateTarget::RESOURCE_GROUP
+        && !taggedHeteroKey.empty()) {
+        YRLOG_INFO("{}|{}|update heteroInfo result for bundle of resource group, ({}) would be removed",
+                   scheduleReq->requestid(), scheduleReq->instance().instanceid(),
+                   fmt::join(taggedHeteroKey.begin(), taggedHeteroKey.end(), ","));
+        // resource group the origin request should be removed
+        for (auto key : taggedHeteroKey) {
+            auto required = scheduleReq->mutable_instance()->mutable_resources();
+            required->mutable_resources()->erase(key);
+        }
+    }
     // add hetero schedule result to instance info (for instance recover)
     auto *resources = scheduleReq->mutable_instance()->mutable_resources()->mutable_resources();
     for (const auto &allocated : result.allocatedVectors) {
