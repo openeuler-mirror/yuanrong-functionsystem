@@ -20,7 +20,6 @@ package version
 import (
 	"github.com/spf13/cobra"
 
-	"cli/build"
 	"cli/constant"
 	"cli/pkg/cmdio"
 	"cli/utils"
@@ -41,7 +40,7 @@ var cmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		colorMap := []colorprint.StringColorInfo{
 			{Str: "CLI version: ", Color: colorprint.Colorless},
-			{Str: build.Version, Color: colorprint.KeywordColor},
+			{Str: constant.Version, Color: colorprint.KeywordColor},
 			{Str: ".\n", Color: colorprint.Colorless},
 			{Str: "Using yuanrong at: ", Color: colorprint.Colorless},
 			{Str: constant.YuanRongInstallationDir, Color: colorprint.Colorless},

@@ -23,7 +23,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"cli/build"
 	"cli/constant"
 	"cli/pkg/test"
 	"cli/utils/colorprint"
@@ -47,8 +46,8 @@ func TestInitVersionCMD(t *testing.T) {
 	}
 	for _, tt := range testCases {
 		t.Run(tt.name, func(t *testing.T) {
-			p := gomonkey.ApplyGlobalVar(&build.Version, tt.version)
-			p.ApplyGlobalVar(&build.Date, tt.buildTime)
+			p := gomonkey.ApplyGlobalVar(&constant.Version, tt.version)
+			p.ApplyGlobalVar(&constant.Date, tt.buildTime)
 			defer p.Reset()
 
 			cio, mio := test.MockCmdIO()

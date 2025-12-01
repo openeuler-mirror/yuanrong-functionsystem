@@ -15,10 +15,10 @@
 
 FUNCTION_SYSTEM_DEPLOY_DIR=$(dirname "$(readlink -f "$0")")
 if [ -n "${BASE_DIR}" ]; then
-  FUNCTION_SYSTEM_DEPLOY_DIR=${BASE_DIR}/../../function_system/deploy
+  FUNCTION_SYSTEM_DEPLOY_DIR=${BASE_DIR}/../../functionsystem/deploy
 fi
 FUNCTION_SYSTEM_DIR=$(readlink -m "${FUNCTION_SYSTEM_DEPLOY_DIR}/..")
-DATA_SYSTEM_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../data_system")
+DATA_SYSTEM_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../datasystem")
 RUNTIME_HOME_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../runtime")
 if [ -d "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas" ]; then
   PATTERN_FAAS_HOME_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas")
