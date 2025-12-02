@@ -721,7 +721,7 @@ void RuntimeExecutor::ConfigRuntimeRedirectLog(litebus::ExecIO &stdOut, litebus:
         YRLOG_WARN("create std err log file {} failed.", errFile, litebus::os::Strerror(errno));
         return;
     }
-    stdErr = litebus::ExecIO::CreateFileIO(outFile);
+    stdErr = litebus::ExecIO::CreateFileIO(errFile);
 }
 
 std::shared_ptr<litebus::Exec> RuntimeExecutor::StartRuntimeByRuntimeID(
