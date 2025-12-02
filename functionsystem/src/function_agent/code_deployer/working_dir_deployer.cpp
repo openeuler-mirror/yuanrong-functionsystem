@@ -98,7 +98,7 @@ std::string WorkingDirDeployer::GetDestination(
     }
 
     if (!IsFile(accessor->GetResource()) && uriFile.find(FILE_SCHEME) == std::string::npos
-        && litebus::os::Mkdir(uriFile).IsSome()) {
+        && litebus::os::Mkdir(uriFile).IsNone()) {
         YRLOG_DEBUG("{}|delegate working dir is a non-exist path, mkdir and use it as destination: {}", appID, uriFile);
         return uriFile;
     }

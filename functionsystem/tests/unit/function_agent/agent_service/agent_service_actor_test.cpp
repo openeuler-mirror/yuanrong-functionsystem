@@ -2965,6 +2965,56 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithWorkingDirCpp)
     DestroyWorkingDir("/tmp/working_dir-tmp");
 }
 
+TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithNonExistWorkingDirCpp)
+{
+    PrepareWorkingDir("/tmp/working_dir-tmp");
+    auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
+    deployInstanceReq->set_requestid(TEST_REQUEST_ID);  // as appID
+    deployInstanceReq->set_instanceid(TEST_INSTANCE_ID);
+    deployInstanceReq->set_language("cpp11");
+
+    auto spec = deployInstanceReq->mutable_funcdeployspec();
+    spec->set_storagetype(function_agent::WORKING_DIR_STORAGE_TYPE);
+    auto deployDir = "/tmp/home/sn/function/package/xxxz";
+
+    std::string destination = "/tmp/working_dir-tmp-fake/";
+    (void)litebus::os::Rmdir(deployDir);
+    (void)litebus::os::Rmdir(destination);
+    EXPECT_FALSE(litebus::os::ExistPath(destination));
+    spec->set_deploydir(deployDir);
+
+    // path
+    deployInstanceReq->mutable_createoptions()->insert(
+        { "DELEGATE_DOWNLOAD",
+          R"({"appId":"userWorkingDirCode001", "storage_type":"working_dir", "code_path":"/tmp/working_dir-tmp-fake/"})" });
+    messages::StartInstanceResponse startInstanceResponse;
+    startInstanceResponse.set_code(StatusCode::SUCCESS);
+    startInstanceResponse.set_requestid(TEST_REQUEST_ID);
+    startInstanceResponse.mutable_startruntimeinstanceresponse()->set_runtimeid(TEST_RUNTIME_ID);
+    EXPECT_CALL(*testRuntimeManager_, MockStartInstanceResponse)
+        .WillOnce(Return(startInstanceResponse.SerializeAsString()));
+
+    testFuncAgentMgrActor_->ResetDeployInstanceResponse();
+    testFuncAgentMgrActor_->SendRequestToAgentServiceActor(dstActor_->GetAID(),
+                                                           "DeployInstance",
+                                                           std::move(deployInstanceReq->SerializeAsString()));
+    ASSERT_AWAIT_TRUE(
+        [&]() -> bool { return testFuncAgentMgrActor_->GetDeployInstanceResponse()->requestid() == TEST_REQUEST_ID; });
+    EXPECT_TRUE(litebus::os::ExistPath(destination));  // app deployed
+
+    auto startInstanceRequest = std::make_shared<messages::StartInstanceRequest>();
+    startInstanceRequest->ParseFromString(testRuntimeManager_->promiseOfStartInstanceRequest.GetFuture().Get());
+    YRLOG_DEBUG(startInstanceRequest->ShortDebugString());
+    EXPECT_EQ(
+        startInstanceRequest->runtimeinstanceinfo().runtimeconfig().posixenvs().find(UNZIPPED_WORKING_DIR)->second,
+        destination);  // startInstance param posixenvs should contain UNZIPPED_WORKING_DIR
+    EXPECT_EQ(startInstanceRequest->runtimeinstanceinfo().runtimeconfig().posixenvs().find(YR_WORKING_DIR)->second,
+              destination);  // startInstance param posixenvs should contain YR_WORKING_DIR
+    EXPECT_TRUE(litebus::os::ExistPath(destination));
+    DestroyWorkingDir("/tmp/working_dir-tmp");
+    (void)litebus::os::Rmdir(destination);
+}
+
 TEST_F(DISABLED_AgentServiceActorTest, SendS3Alarm)
 {
     metrics::MetricsAdapter::GetInstance().enabledInstruments_.insert(metrics::YRInstrument::YR_S3_ALARM);
