@@ -14,7 +14,7 @@ yaml-cpp,0.8.0,functionsystem,https://gitee.com/mirrors/yaml-cpp/repository/arch
 zlib,v1.3.1,functionsystem;metrics;logs,https://gitee.com/mirrors/zlib/repository/archive/v1.3.1.tar.gz,4208eb8a8ba5703831123b06c9bbadf780e678a9972eb00ecce57e6f87b30f36
 grpc-gateway,v1.16.0,functionsystem,https://gitee.com/mirrors/grpc-gateway/repository/archive/v1.16.0.zip,0c85be2911500fabace8caffe3cfafd335a75844135aa2f5b58ea4d693ffb2ae
 libboundscheck,v1.1.16,runtime;litebus;functionsystem;metrics,https://gitee.com/openeuler/libboundscheck/repository/archive/v1.1.16.zip,5119bda1ee96440c1a45e23f0cb8b079cc6697e052c4a78f27d0869f84ba312b
-curl,8.8.0,litebus,https://gitee.com/mirrors/curl/repository/archive/curl-8_8_0.zip,73c70c94f487c5ae26f9f27094249e40bb1667ae6c0406a75c3b11f86f0c1128
+curl,8.8.0,litebus,https://gitee.com/mirrors/curl/repository/archive/curl-8_8_0.zip,479697e261e6db6ad438d9eaff1b517161a0bc4450e5d195e4478ccdcae673b8
 gtest_1_12_1,release-1.12.1,litebus;functionsystem;metrics;logs,https://gitee.com/mirrors/googletest/repository/archive/release-1.12.1.zip,4f1037f17462dbcc4d715f2fc8212c03431ad06e7a4b73bb49b3f534a13b21f1
 gtest_1_10_0,release-1.10.0,functionsystem,https://gitee.com/mirrors/googletest/repository/archive/release-1.10.0.zip,db55081e6b5a5f820d052f8d37e0d29835dd5a2bd5b8d4d50590b7834f9abfae
 huaweicloud-sdk-c-obs,v3.24.3,functionsystem,https://gitee.com/mirrors/huaweicloud-sdk-c-obs/repository/archive/v3.24.3.zip,ed744c92494d2d7fd171e776abfef627ac7bdd0e24910a207e83d3887cafb2bd

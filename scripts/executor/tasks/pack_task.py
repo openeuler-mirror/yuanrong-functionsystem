@@ -105,7 +105,7 @@ def pack_metrics(args):
 
     # 拷贝头文件
     log.info("Copy metrics include files")
-    include_src_path = os.path.join(root_dir, "common", "metrics", "include", "metrics")
+    include_src_path = os.path.join(root_dir, "common", "metrics", "output", "include")
     include_dst_path = os.path.join(pack_base_dir, "include")
     shutil.copytree(include_src_path, include_dst_path, copy_function=shutil.copy2)
 

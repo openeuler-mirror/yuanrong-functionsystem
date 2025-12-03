@@ -26,7 +26,7 @@ def run_clean(root_dir, args):
             os.path.join(vendor_path, "src", "etcd", "bin"),
         ]
         for folder in vendor_list:
-            shutil.rmtree(folder)
+            shutil.rmtree(folder, ignore_errors=True)
 
     if not args["skip_change"]:
         utils.sync_command(["git", "clean", "-dffx"], cwd=root_dir)
@@ -42,4 +42,4 @@ def run_clean(root_dir, args):
         os.path.join(common_path, "metrics", "output"),
     ]
     for folder in output_list:
-        shutil.rmtree(folder)
+        shutil.rmtree(folder, ignore_errors=True)
