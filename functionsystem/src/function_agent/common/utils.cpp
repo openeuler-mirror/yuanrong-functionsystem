@@ -158,15 +158,7 @@ messages::RuntimeConfig SetRuntimeConfig(const std::shared_ptr<messages::DeployI
 {
     ASSERT_IF_NULL(req);
     messages::RuntimeConfig runtimeConf;
-    YRLOG_DEBUG("{}|{}|origin entryfile: {}", req->traceid(), req->requestid(), req->entryfile());
     runtimeConf.set_entryfile(req->entryfile());
-    if (!ContainsWorkingDirLayer(req->createoptions()) && req->language().find(JAVA_LANGUAGE) == std::string::npos) {
-        auto splits = litebus::strings::Split(req->entryfile(), "/");
-        if (!splits.empty()) {
-            runtimeConf.set_entryfile(JoinEntryFile(req, splits[splits.size() - 1]));
-        }
-    }
-    YRLOG_DEBUG("{}|{}|current entryfile: {}", req->traceid(), req->requestid(), runtimeConf.entryfile());
     runtimeConf.set_language(req->language());
     for (const auto &it : req->hookhandler()) {
         (*runtimeConf.mutable_hookhandler())[it.first] = it.second;

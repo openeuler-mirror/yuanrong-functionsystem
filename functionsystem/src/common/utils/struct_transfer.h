@@ -55,6 +55,7 @@ const std::string CREATE_SOURCE = "source";
 const std::string FRONTEND_STR = "frontend";
 const std::string RUNTIME_UUID_PREFIX = "runtime-";
 const std::string APP_ENTRYPOINT = "ENTRYPOINT";
+const std::string RUNTIME_ENTRYPOINT = "RUNTIME_ENTRYPOINT";
 const std::string PID = "pid";
 const std::string CREATE_TIME_STAMP = "createTimestamp";
 const std::string RECEIVED_TIMESTAMP = "receivedTimestamp";
