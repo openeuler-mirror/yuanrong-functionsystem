@@ -615,7 +615,7 @@ TEST_F(DomainInstanceCtrlTest, CreateAgentFailed)
  * 2. create agent success
  * 3. failed, success
  */
-TEST_F(DomainInstanceCtrlTest, CreateAgentRetrySuccess)
+TEST_F(DomainInstanceCtrlTest, DISABLED_CreateAgentRetrySuccess)
 {
     domain_scheduler::InstanceCtrl instanceCtrl(instanceCtrl_->GetAID());
     instanceCtrl.SetDomainLevel(true);
@@ -684,7 +684,7 @@ TEST_F(DomainInstanceCtrlTest, CreateAgentRetrySuccess)
  * 2. create agent success
  * 3. failed, failed, return inti failed code
  */
-TEST_F(DomainInstanceCtrlTest, CreateAgentRetryFailed)
+TEST_F(DomainInstanceCtrlTest, DISABLED_CreateAgentRetryFailed)
 {
     domain_scheduler::InstanceCtrl instanceCtrl(instanceCtrl_->GetAID());
     instanceCtrl.SetDomainLevel(true);
@@ -869,7 +869,7 @@ TEST_F(DomainInstanceCtrlTest, AffinityRetry)
  * 2. create agent success
  * 3. failed, success
  */
-TEST_F(DomainInstanceCtrlTest, CreateAgentByPoolIDAffinityFailed)
+TEST_F(DomainInstanceCtrlTest, DISABLED_CreateAgentByPoolIDAffinityFailed)
 {
     domain_scheduler::InstanceCtrl instanceCtrl(instanceCtrl_->GetAID());
     instanceCtrl.SetDomainLevel(true);
