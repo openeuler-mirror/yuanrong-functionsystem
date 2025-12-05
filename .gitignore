@@ -1,14 +1,6 @@
 ### IDE
 .idea
-*.iml
 .vscode
-.clangd
-.cache
-.clwb
-.ijwb
-
-###go.sum
-*.sum
 
 ### output dir
 **/output/*
@@ -22,50 +14,9 @@
 .project
 *.prefs
 
-### ignore all `build` dir inside pkg or tools
-functionsystem/pkg/*/**/build/
-
 ### ninja files
 .ninja_*
 build.ninja
 
-### build
-build/
-
-### resource
-resource/
-
-### functionsystem build cache
-functionsystem/build/CMakeFiles
-functionsystem/build/lib
-functionsystem/build/bin
-functionsystem/build/src
-functionsystem/build/tests
-functionsystem/build/*.txt
-functionsystem/build/cmake*
-functionsystem/build/*cmake
-functionsystem/build/build.ninja
-functionsystem/build/compile_commands.json
-functionsystem/output/
-
-### litebus build cache
-common/litebus/build/
-common/litebus/test/ssl_utils/
-### logs build cache
-common/utils/logs/build/
-### metrics build cache
-common/utils/metrics/build/
-
-### generated files
-functionsystem/src/common/utils/version.h
-
 ### copied files
-common/utils/proto/pb/posix/*.pb.*
-common/utils/proto/posix/common.proto
-common/utils/proto/posix/core_service.proto
-common/utils/proto/posix/runtime_rpc.proto
-common/utils/proto/posix/runtime_service.proto
-common/utils/proto/posix/affinity.proto
-
-### package cache
-.build
+functionsystem/src/common/proto/*

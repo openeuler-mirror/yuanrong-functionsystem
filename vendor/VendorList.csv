@@ -1,7 +1,7 @@
 name,version,module,repo,sha256
 abseil-cpp,20240722.0,functionsystem,https://gitee.com/mirrors/abseil-cpp/repository/archive/20240722.0.zip,104dead3edd7b67ddeb70c37578245130d6118efad5dad4b618d7e26a5331f55
 c-ares,1.19.1,functionsystem,https://gitee.com/mirrors/c-ares/repository/archive/cares-1_19_1.zip,edcaac184aff0e6b6eb7b9ede7a55f36c7fc04085d67fecff2434779155dd8ce
-etcd,v3.5.11,functionsystem,https://gitee.com/mirrors/etcd/repository/archive/v3.5.11.zip,7af745a2bf75c7b04f9b168b85deb35fb73d30d60f751046564b54dbd483277a
+etcd,v3.5.24,functionsystem,https://gitee.com/mirrors/etcd/repository/archive/v3.5.24.zip,cd1ee896fcdae1679dbed946fc61f799de51460121ff8ac0687bc39063f87123
 gogo-protobuf,v1.3.2,functionsystem,https://gitee.com/mirrors_gogo/protobuf/repository/archive/v1.3.2.zip,11e863712289bf1e6ba86239b5b896704bb63815bee8710e5032daf63fd9efe7
 grpc,v1.65.4,runtime;functionsystem,https://gitee.com/mirrors/grpc/repository/archive/v1.65.4.tar.gz,dd60131b74bd1ecb3ffd29a31a6d68d6bb009106bd22c4be140e40f5d2baf2f6
 jemalloc,5.3.0,functionsystem,https://gitee.com/mirrors/jemalloc/repository/archive/5.3.0.zip,fcd383b168b72904f777e500631996366a633d1c40714f1601b7e739eb054613
@@ -18,3 +18,4 @@ curl,8.8.0,litebus,https://gitee.com/mirrors/curl/repository/archive/curl-8_8_0.
 gtest_1_12_1,release-1.12.1,litebus;functionsystem;metrics;logs,https://gitee.com/mirrors/googletest/repository/archive/release-1.12.1.zip,4f1037f17462dbcc4d715f2fc8212c03431ad06e7a4b73bb49b3f534a13b21f1
 gtest_1_10_0,release-1.10.0,functionsystem,https://gitee.com/mirrors/googletest/repository/archive/release-1.10.0.zip,db55081e6b5a5f820d052f8d37e0d29835dd5a2bd5b8d4d50590b7834f9abfae
 huaweicloud-sdk-c-obs,v3.24.3,functionsystem,https://gitee.com/mirrors/huaweicloud-sdk-c-obs/repository/archive/v3.24.3.zip,ed744c92494d2d7fd171e776abfef627ac7bdd0e24910a207e83d3887cafb2bd
+datasystem,0.0.0,functionsystem,file://localhost/vendor/src/yr-datasystem.tar.gz,
