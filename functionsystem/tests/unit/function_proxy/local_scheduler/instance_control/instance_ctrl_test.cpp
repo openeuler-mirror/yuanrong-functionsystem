@@ -5943,4 +5943,38 @@ TEST_F(InstanceCtrlTest, KillInstanceWithCheckpoint)
     EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_NONE);
 }
 
+TEST_F(InstanceCtrlTest, KillDriverInstance)
+{
+    const std::string instanceID = "driver-job_12345";
+    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string runtimeID = "runtimeA";
+    const std::string functionProxyID = "nodeN";
+
+    auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeN");
+    auto &mockStateMachine = *stateMachine;
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillRepeatedly(Return(stateMachine));
+    resources::InstanceInfo instanceInfo;
+    instanceInfo.set_instanceid(instanceID);
+    instanceInfo.mutable_instancestatus()->set_code(int32_t(InstanceState::RUNNING));
+    instanceInfo.set_function(function);
+    instanceInfo.set_runtimeid(runtimeID);
+    instanceInfo.set_functionproxyid(functionProxyID);
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->mutable_instance()->CopyFrom(instanceInfo);
+    auto instanceContext = std::make_shared<InstanceContext>(scheduleReq);
+    EXPECT_CALL(mockStateMachine, GetInstanceContextCopy).WillRepeatedly(Return(instanceContext));
+    EXPECT_CALL(mockStateMachine, TagStop).WillRepeatedly(Return());
+    EXPECT_CALL(*funcAgentMgr_, IsFuncAgentRecovering(testing::_)).WillRepeatedly(Return(true));
+    auto mockSharedClient = std::make_shared<MockSharedClient>();
+    EXPECT_CALL(*mockSharedClientManagerProxy_, GetControlInterfacePosixClient(_))
+        .WillRepeatedly(Return(mockSharedClient));
+    EXPECT_CALL(*mockSharedClient, IsDone).WillOnce(Return(false));
+    auto killReq = GenKillRequest(instanceID, SHUT_DOWN_SIGNAL);
+    auto srcInstance = "instanceM";
+
+    auto killRsp = instanceCtrl_->Kill(srcInstance, killReq);
+    ASSERT_AWAIT_READY(killRsp);
+    EXPECT_EQ(killRsp.Get().code(), common::ErrorCode::ERR_NONE);
+}
+
 }  // namespace functionsystem::test
