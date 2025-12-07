@@ -14,6 +14,19 @@ def compile_cli(root_path):
     output_path = os.path.join(root_path, "functionsystem", "output", "bin")
     compile_golang(app_path, "yr", main_path, output_path)
 
+def compile_meta_service(root_path):
+    app_path = os.path.join(root_path, "functionsystem", "apps", "meta_service")
+    utils.sync_command(
+        cmd=[
+            "bash", "gen/gen.sh",
+        ],
+        cwd=app_path,
+        env=os.environ
+    )
+    main_path = os.path.join(app_path, "cmd", "main.go")
+    output_path = os.path.join(root_path, "functionsystem", "output", "bin")
+    compile_golang(app_path, "meta_service", main_path, output_path)
+
 
 def compile_golang(app_path, app_name, main_path, output_path,
                    go_ldflags="-s -w", cgo_enabled=False):
