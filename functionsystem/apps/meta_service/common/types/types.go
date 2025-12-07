@@ -1,0 +1,665 @@
+/*
+ * Copyright (c) 2021 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+// Package types -
+package types
+
+import (
+	"meta_service/common/logger/logservice"
+	"meta_service/common/trace"
+)
+
+// DNSDomainInfo dns domain info
+type DNSDomainInfo struct {
+	ID         string `json:"id"`
+	DomainName string `json:"domain_name"`
+	Type       string `json:"type" valid:",optional"`
+	ZoneType   string `json:"zone_type" valid:",optional"`
+}
+
+// Layer define layer info
+type Layer struct {
+	BucketURL      string `json:"bucketUrl" valid:"url,optional"`
+	ObjectID       string `json:"objectId" valid:"stringlength(1|255),optional"`
+	BucketID       string `json:"bucketId" valid:"stringlength(1|255),optional"`
+	AppID          string `json:"appId" valid:"stringlength(1|128),optional"`
+	ETag           string `json:"etag" valid:"optional"`
+	Link           string `json:"link" valid:"optional"`
+	Name           string `json:"name" valid:",optional"`
+	Sha256         string `json:"sha256" valid:"optional"`
+	DependencyType string `json:"dependencyType" valid:",optional"`
+}
+
+// FunctionMetaInfo define function meta info for FunctionGraph
+type FunctionMetaInfo struct {
+	FuncMetaData     FuncMetaData     `json:"funcMetaData" valid:",optional"`
+	S3MetaData       S3MetaData       `json:"s3MetaData" valid:",optional"`
+	CodeMetaData     CodeMetaData     `json:"codeMetaData" valid:",optional"`
+	EnvMetaData      EnvMetaData      `json:"envMetaData" valid:",optional"`
+	ResourceMetaData ResourceMetaData `json:"resourceMetaData" valid:",optional"`
+	InstanceMetaData InstanceMetaData `json:"instanceMetaData" valid:",optional"`
+	ExtendedMetaData ExtendedMetaData `json:"extendedMetaData" valid:",optional"`
+}
+
+// FuncMetaData define meta data of functions
+type FuncMetaData struct {
+	Layers              []*Layer          `json:"layers" valid:",optional"`
+	Name                string            `json:"name"`
+	FunctionDescription string            `json:"description" valid:"stringlength(1|1024)"`
+	FunctionURN         string            `json:"functionUrn"`
+	TenantID            string            `json:"tenantId"`
+	AgentID             string            `json:"agentId" valid:",optional"`
+	EnvironmentID       string            `json:"environmentId" valid:",optional"`
+	Tags                map[string]string `json:"tags" valid:",optional"`
+	FunctionUpdateTime  string            `json:"functionUpdateTime" valid:",optional"`
+	FunctionVersionURN  string            `json:"functionVersionUrn"`
+	RevisionID          string            `json:"revisionId" valid:"stringlength(1|20),optional"`
+	CodeSize            int               `json:"codeSize" valid:"int"`
+	CodeSha512          string            `json:"codeSha512" valid:"stringlength(1|128),optional"`
+	Handler             string            `json:"handler" valid:"stringlength(1|255)"`
+	Runtime             string            `json:"runtime" valid:"stringlength(1|63)"`
+	Timeout             int64             `json:"timeout" valid:"required"`
+	Version             string            `json:"version" valid:"stringlength(1|32)"`
+	DeadLetterConfig    string            `json:"deadLetterConfig" valid:"stringlength(1|255)"`
+	BusinessID          string            `json:"businessId"  valid:"stringlength(1|32)"`
+	FunctionType        string            `json:"functionType" valid:",optional"`
+	FuncID              string            `json:"func_id" valid:",optional"`
+	FuncName            string            `json:"func_name" valid:",optional"`
+	DomainID            string            `json:"domain_id" valid:",optional"`
+	ProjectName         string            `json:"project_name" valid:",optional"`
+	Service             string            `json:"service" valid:",optional"`
+	Dependencies        string            `json:"dependencies" valid:",optional"`
+	EnableCloudDebug    string            `json:"enable_cloud_debug" valid:",optional"`
+	IsStatefulFunction  bool              `json:"isStatefulFunction" valid:"optional"`
+	IsBridgeFunction    bool              `json:"isBridgeFunction" valid:"optional"`
+	IsStreamEnable      bool              `json:"isStreamEnable" valid:"optional"`
+	Type                string            `json:"type" valid:"optional"`
+	EnableAuthInHeader  bool              `json:"enable_auth_in_header" valid:"optional"`
+	DNSDomainCfg        []DNSDomainInfo   `json:"dns_domain_cfg" valid:",optional"`
+	VPCTriggerImage     string            `json:"vpcTriggerImage" valid:",optional"`
+	StateConfig         StateConfig       `json:"stateConfig" valid:",optional"`
+	BusinessType        string            `json:"businessType" valid:"optional"`
+}
+
+// StateConfig ConsistentWithInstance- The lifecycle is consistent with that of the instance.
+// Independent - The lifecycle is independent of instances.
+type StateConfig struct {
+	LifeCycle string `json:"lifeCycle"`
+}
+
+// FuncCode include function code file and link info
+type FuncCode struct {
+	File string `json:"file" valid:",optional"`
+	Link string `json:"link" valid:",optional"`
+}
+
+// S3MetaData define meta function info for OBS
+type S3MetaData struct {
+	AppID        string   `json:"appId" valid:"stringlength(1|128),optional"`
+	BucketID     string   `json:"bucketId" valid:"stringlength(1|255),optional"`
+	ObjectID     string   `json:"objectId" valid:"stringlength(1|255),optional"`
+	BucketURL    string   `json:"bucketUrl" valid:"url,optional"`
+	CodeType     string   `json:"code_type" valid:",optional"`
+	CodeURL      string   `json:"code_url" valid:",optional"`
+	CodeFileName string   `json:"code_filename" valid:",optional"`
+	FuncCode     FuncCode `json:"func_code" valid:",optional"`
+}
+
+// LocalMetaData -
+type LocalMetaData struct {
+	StorageType string `json:"storage_type" valid:",optional"`
+	CodePath    string `json:"code_path" valid:",optional"`
+}
+
+// CodeMetaData -
+type CodeMetaData struct {
+	Sha512 string `json:"sha512" valid:",optional"`
+	LocalMetaData
+	S3MetaData
+}
+
+// EnvMetaData -
+type EnvMetaData struct {
+	Environment       string `json:"environment"`
+	EncryptedUserData string `json:"encrypted_user_data"`
+	EnvKey            string `json:"envKey" valid:",optional"`
+	CryptoAlgorithm   string `json:"cryptoAlgorithm" valid:",optional"`
+}
+
+// ResourceMetaData include resource data such as cpu and memory
+type ResourceMetaData struct {
+	CPU                 int64  `json:"cpu"`
+	Memory              int64  `json:"memory"`
+	GpuMemory           int64  `json:"gpu_memory"`
+	EnableDynamicMemory bool   `json:"enable_dynamic_memory" valid:",optional"`
+	CustomResources     string `json:"customResources" valid:",optional"`
+	EnableTmpExpansion  bool   `json:"enable_tmp_expansion" valid:",optional"`
+	EphemeralStorage    int    `json:"ephemeral_storage" valid:"int,optional"`
+	CustomResourcesSpec string `json:"CustomResourcesSpec" valid:",optional"`
+}
+
+// InstanceMetaData define instance meta data of FG functions
+type InstanceMetaData struct {
+	MaxInstance    int64  `json:"maxInstance" valid:",optional"`
+	MinInstance    int64  `json:"minInstance" valid:",optional"`
+	ConcurrentNum  int    `json:"concurrentNum" valid:",optional"`
+	DiskLimit      int64  `json:"diskLimit"   valid:",optional"`
+	InstanceType   string `json:"instanceType" valid:",optional"`
+	SchedulePolicy string `json:"schedulePolicy" valid:",optional"`
+	ScalePolicy    string `json:"scalePolicy" valid:",optional"`
+	IdleMode       bool   `json:"idleMode" valid:",optional"`
+	PoolLabel      string `json:"poolLabel"`
+	PoolID         string `json:"poolId" valid:",optional"`
+}
+
+// VpcConfig include info of function vpc
+type VpcConfig struct {
+	ID         string `json:"id,omitempty"`
+	DomainID   string `json:"domain_id,omitempty"`
+	Namespace  string `json:"namespace,omitempty"`
+	VpcName    string `json:"vpc_name,omitempty"`
+	VpcID      string `json:"vpc_id,omitempty"`
+	SubnetName string `json:"subnet_name,omitempty"`
+	SubnetID   string `json:"subnet_id,omitempty"`
+	TenantCidr string `json:"tenant_cidr,omitempty"`
+	HostVMCidr string `json:"host_vm_cidr,omitempty"`
+	Gateway    string `json:"gateway,omitempty"`
+	Xrole      string `json:"xrole,omitempty"`
+}
+
+// StrategyConfig -
+type StrategyConfig struct {
+	Concurrency int `json:"concurrency" valid:",optional"`
+}
+
+// Heartbeat define user custom heartbeat function config
+type Heartbeat struct {
+	// Handler define heartbeat function entry
+	Handler string `json:"heartbeat_handler" valid:",optional"`
+}
+
+// LogTankService -
+type LogTankService struct {
+	GroupID  string `json:"logGroupId" valid:",optional"`
+	StreamID string `json:"logStreamId" valid:",optional"`
+}
+
+// TraceService -
+type TraceService struct {
+	TraceAK     string `json:"tracing_ak" valid:",optional"`
+	TraceSK     string `json:"tracing_sk" valid:",optional"`
+	ProjectName string `json:"project_name" valid:",optional"`
+}
+
+// CustomContainerConfig contains the metadata for custom container
+type CustomContainerConfig struct {
+	ControlPath string   `json:"control_path" valid:",optional"`
+	Image       string   `json:"image" valid:",optional"`
+	Command     []string `json:"command" valid:",optional"`
+	Args        []string `json:"args" valid:",optional"`
+	WorkingDir  string   `json:"working_dir" valid:",optional"`
+	UID         int      `json:"uid" valid:",optional"`
+	GID         int      `json:"gid" valid:",optional"`
+}
+
+// ExtendedMetaData define external meta data of functions
+type ExtendedMetaData struct {
+	ImageName              string                 `json:"image_name" valid:",optional"`
+	Role                   Role                   `json:"role" valid:",optional"`
+	VpcConfig              *VpcConfig             `json:"func_vpc" valid:",optional"`
+	EndpointTenantVpc      *VpcConfig             `json:"endpoint_tenant_vpc" valid:",optional"`
+	FuncMountConfig        *FuncMountConfig       `json:"mount_config" valid:",optional"`
+	StrategyConfig         StrategyConfig         `json:"strategy_config" valid:",optional"`
+	ExtendConfig           string                 `json:"extend_config" valid:",optional"`
+	Initializer            Initializer            `json:"initializer" valid:",optional"`
+	Heartbeat              Heartbeat              `json:"heartbeat" valid:",optional"`
+	EnterpriseProjectID    string                 `json:"enterprise_project_id" valid:",optional"`
+	LogTankService         LogTankService         `json:"log_tank_service" valid:",optional"`
+	TraceService           TraceService           `json:"tracing_config" valid:",optional"`
+	CustomContainerConfig  CustomContainerConfig  `json:"custom_container_config" valid:",optional"`
+	AsyncConfigLoaded      bool                   `json:"async_config_loaded" valid:",optional"`
+	RestoreHook            RestoreHook            `json:"restore_hook,omitempty" valid:",optional"`
+	NetworkController      NetworkController      `json:"network_controller" valid:",optional"`
+	UserAgency             UserAgency             `json:"user_agency" valid:",optional"`
+	CustomFilebeatConfig   CustomFilebeatConfig   `json:"custom_filebeat_config"`
+	CustomHealthCheck      CustomHealthCheck      `json:"custom_health_check" valid:",optional"`
+	DynamicConfig          DynamicConfigEvent     `json:"dynamic_config" valid:",optional"`
+	CustomGracefulShutdown CustomGracefulShutdown `json:"runtime_graceful_shutdown"`
+	PreStop                PreStop                `json:"pre_stop"`
+	RaspConfig             RaspConfig             `json:"rasp_config"`
+	ServeDeploySchema      ServeDeploySchema      `json:"serveDeploySchema" valid:"optional"`
+	ImagePullConfig        ImagePullConfig        `json:"imagePullConfig,omitempty"`
+}
+
+// CustomHealthCheck custom health check
+type CustomHealthCheck struct {
+	TimeoutSeconds   int `json:"timeoutSeconds" valid:",optional"`
+	PeriodSeconds    int `json:"periodSeconds" valid:",optional"`
+	FailureThreshold int `json:"failureThreshold" valid:",optional"`
+}
+
+// DynamicConfigEvent  dynamic config etcd event
+type DynamicConfigEvent struct {
+	Enabled       bool   `json:"enabled"` // use for signature
+	UpdateTime    string `json:"update_time"`
+	ConfigContent []KV   `json:"config_content"`
+}
+
+// CustomGracefulShutdown define the option of custom container's runtime graceful shutdown
+type CustomGracefulShutdown struct {
+	MaxShutdownTimeout int `json:"maxShutdownTimeout"`
+}
+
+// ImagePullConfig image pull config
+type ImagePullConfig struct {
+	Secrets []string `json:"secrets,omitempty"`
+}
+
+// KV config key and value
+type KV struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// CustomFilebeatConfig custom filebeat config
+type CustomFilebeatConfig struct {
+	SidecarConfigInfo *SidecarConfigInfo `json:"sidecarConfigInfo"`
+	CPU               int64              `json:"cpu"`
+	Memory            int64              `json:"memory"`
+	Version           string             `json:"version"`
+	ImageAddress      string             `json:"imageAddress"`
+}
+
+// RaspConfig rasp config key and value
+type RaspConfig struct {
+	InitImage      string `json:"init-image"`
+	RaspImage      string `json:"rasp-image"`
+	RaspServerIP   string `json:"rasp-server-ip"`
+	RaspServerPort string `json:"rasp-server-port"`
+	Envs           []KV   `json:"envs"`
+}
+
+// SidecarConfigInfo sidecat config info
+type SidecarConfigInfo struct {
+	ConfigFiles     []CustomLogConfigFile `json:"configFiles"`
+	LiveNessShell   string                `json:"livenessShell"`
+	ReadNessShell   string                `json:"readnessShell"`
+	PreStopCommands string                `json:"preStopCommands"`
+}
+
+// CustomLogConfigFile custom log config file
+type CustomLogConfigFile struct {
+	Path   string `json:"path"`
+	Data   string `json:"data"`
+	Secret bool   `json:"secret"`
+}
+
+// UserAgency define AK/SK of user's agency
+type UserAgency struct {
+	AccessKey     string `json:"accessKey"`
+	SecretKey     string `json:"secretKey"`
+	Token         string `json:"token"`
+	SecurityAk    string `json:"securityAk"`
+	SecuritySk    string `json:"securitySk"`
+	SecurityToken string `json:"securityToken"`
+}
+
+// VpcInfo contains the information of VPC access restriction
+type VpcInfo struct {
+	VpcName string `json:"vpc_name,omitempty"`
+	VpcID   string `json:"vpc_id,omitempty"`
+}
+
+// NetworkController contains some special network settings
+type NetworkController struct {
+	DisablePublicNetwork bool      `json:"disable_public_network" valid:",optional"`
+	TriggerAccessVpcs    []VpcInfo `json:"trigger_access_vpcs" valid:",optional"`
+}
+
+// RestoreHook include restorehook handler and timeout
+type RestoreHook struct {
+	Handler string `json:"restore_hook_handler,omitempty" valid:",optional"`
+	Timeout int64  `json:"restore_hook_timeout,omitempty" valid:",optional"`
+}
+
+// HTTPResponse is general http response
+type HTTPResponse struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// InnerInstanceData is the function instance data stored in ETCD
+type InnerInstanceData struct {
+	IP              string           `json:"ip"`
+	Port            string           `json:"port"`
+	Status          string           `json:"status"`
+	P2pPort         string           `json:"p2pPort"`
+	GrpcPort        string           `json:"grpcPort,omitempty"`
+	NodeIP          string           `json:"nodeIP,omitempty"`
+	NodePort        string           `json:"nodePort,omitempty"`
+	NodeName        string           `json:"nodeName,omitempty"`
+	NodeID          string           `json:"nodeID,omitempty"`
+	Applier         string           `json:"applier,omitempty"` // silimar to OwnerIP
+	OwnerIP         string           `json:"ownerIP,omitempty"`
+	FuncSig         string           `json:"functionSignature,omitempty"`
+	Reserved        bool             `json:"reserved,omitempty"`
+	CPU             int64            `json:"cpu,omitempty"`
+	Memory          int64            `json:"memory,omitempty"`
+	GroupID         string           `json:"groupID,omitempty"`
+	StackID         string           `json:"stackID,omitempty"`
+	CustomResources map[string]int64 `json:"customResources,omitempty" valid:"optional"`
+}
+
+// FunctionSpec define function spec
+type FunctionSpec struct {
+	LogicInstanceID   string                    `json:"logicInstanceID"`
+	BusAddress        string                    `json:"busAddress"`
+	URN               string                    `json:"urn"`
+	Handler           string                    `json:"handler"`
+	EntryFile         string                    `json:"entry_file"`
+	Timeout           int64                     `json:"timeout"`
+	EnvKey            string                    `json:"env_key"`
+	Environment       string                    `json:"env"`
+	EncryptedUserData string                    `json:"encrypted_user_data"`
+	Language          string                    `json:"language"`
+	CodeSha256        string                    `json:"codeSha256,omitempty"`
+	ResourceMetaData  ResourceMetaData          `json:"resourceMetaData"`
+	Initializer       Initializer               `json:"initializer"`
+	PreStop           PreStop                   `json:"pre_stop"`
+	Role              Role                      `json:"role" valid:",optional"`
+	DomainID          string                    `json:"domain_id" valid:",optional"`
+	LogTankService    logservice.LogTankService `json:"logTankService"`
+	TraceService      trace.Service             `json:"traceService"`
+	FuncMountConfig   FuncMountConfig           `json:"mount_config" valid:",optional"`
+	HookHandler       map[string]string         `json:"hookHandler" valid:",optional"`
+}
+
+// Initializer include initializer handler and timeout
+type Initializer struct {
+	Handler string `json:"initializer_handler" valid:",optional"`
+	Timeout int64  `json:"initializer_timeout" valid:",optional"`
+}
+
+// PreStop include pre_stop handler and timeout
+type PreStop struct {
+	Handler string `json:"pre_stop_handler" valid:",optional"`
+	Timeout int64  `json:"pre_stop_timeout" valid:",optional"`
+}
+
+// FuncMountConfig function mount config
+type FuncMountConfig struct {
+	FuncMountUser FuncMountUser `json:"mount_user" valid:",optional"`
+	FuncMounts    []FuncMount   `json:"func_mounts" valid:",optional"`
+}
+
+// FuncMountUser function mount user
+type FuncMountUser struct {
+	UserID  int `json:"user_id" valid:",optional"`
+	GroupID int `json:"user_group_id" valid:",optional"`
+}
+
+// FuncMount function mount
+type FuncMount struct {
+	MountType      string `json:"mount_type" valid:",optional"`
+	MountResource  string `json:"mount_resource" valid:",optional"`
+	MountSharePath string `json:"mount_share_path" valid:",optional"`
+	LocalMountPath string `json:"local_mount_path" valid:",optional"`
+	Status         string `json:"status" valid:",optional"`
+}
+
+// Role include x_role and app_x_role
+type Role struct {
+	XRole    string `json:"xrole" valid:",optional"`
+	AppXRole string `json:"app_xrole" valid:",optional"`
+}
+
+// FunctionDeploymentSpec define function deployment spec
+type FunctionDeploymentSpec struct {
+	BucketID  string `json:"bucket_id"`
+	ObjectID  string `json:"object_id"`
+	Layers    string `json:"layers"`
+	DeployDir string `json:"deploydir"`
+}
+
+// FunctionMessage define function message
+type FunctionMessage struct {
+	Function   FunctionSpec           `json:"function"`
+	Deployment FunctionDeploymentSpec `json:"deployment"`
+}
+
+// InstanceResource describes the cpu and memory info of an instance
+type InstanceResource struct {
+	CPU             string           `json:"cpu"`
+	Memory          string           `json:"memory"`
+	CustomResources map[string]int64 `json:"customresources"`
+}
+
+// Worker define a worker
+type Worker struct {
+	Instances       []*Instance `json:"instances"`
+	FunctionName    string      `json:"functionname"`
+	FunctionVersion string      `json:"functionversion"`
+	Tenant          string      `json:"tenant"`
+	Business        string      `json:"business"`
+}
+
+// Instance define a instance
+type Instance struct {
+	IP             string `json:"ip"`
+	Port           string `json:"port"`
+	GrpcPort       string `json:"grpcPort"`
+	InstanceID     string `json:"instanceID,omitempty"`
+	DeployedIP     string `json:"deployed_ip"`
+	DeployedNode   string `json:"deployed_node"`
+	DeployedNodeID string `json:"deployed_node_id"`
+	TenantID       string `json:"tenant_id"`
+}
+
+// InstanceCreationRequest is used to create instance
+type InstanceCreationRequest struct {
+	LogicInstanceID string           `json:"logicInstanceID"`
+	FuncName        string           `json:"functionName"`
+	Applier         string           `json:"applier"`
+	DeployNode      string           `json:"deployNode"`
+	Business        string           `json:"business"`
+	TenantID        string           `json:"tenantID"`
+	Version         string           `json:"version"`
+	OwnerIP         string           `json:"ownerIP"`
+	TraceID         string           `json:"traceID"`
+	TriggerFlag     string           `json:"triggerFlag"`
+	VersionUrn      string           `json:"versionUrn"`
+	CPU             int64            `json:"cpu"`
+	Memory          int64            `json:"memory"`
+	GroupID         string           `json:"groupID"`
+	StackID         string           `json:"stackID"`
+	CustomResources map[string]int64 `json:"customResources,omitempty" valid:"optional"`
+}
+
+// InstanceCreationSuccessResponse is the struct returned by workermanager upon successful instance creation
+type InstanceCreationSuccessResponse struct {
+	HTTPResponse
+	Worker   *Worker   `json:"worker"`
+	Instance *Instance `json:"instance"`
+}
+
+// InstanceDeletionRequest is used to delete instance
+type InstanceDeletionRequest struct {
+	InstanceID  string `json:"instanceID"`
+	FuncName    string `json:"functionName"`
+	FuncVersion string `json:"functionVersion"`
+	TenantID    string `json:"tenantID"`
+	BusinessID  string `json:"businessID"`
+	Applier     string `json:"applier"`
+	Force       bool   `json:"force"`
+}
+
+// InstanceDeletionResponse is the struct returned by workermanager upon successful instance deletion
+type InstanceDeletionResponse struct {
+	HTTPResponse
+	Reserved bool `json:"reserved"`
+}
+
+// HookArgs keeps args of hook
+type HookArgs struct {
+	FuncArgs        []byte // Call() request in worker
+	SrcTenant       string
+	DstTenant       string
+	StateID         string
+	LogType         string
+	StateKey        string // for trigger state call
+	FunctionVersion string // for trigger state call
+	ExternalRequest bool   // for trigger state call
+	ServiceID       string
+	TraceID         string
+	InvokeType      string
+}
+
+// ResourceStack stores properties of resource stack
+type ResourceStack struct {
+	StackID         string           `json:"id" valid:"required"`
+	CPU             int64            `json:"cpu" valid:"required"`
+	Mem             int64            `json:"mem" valid:"required"`
+	CustomResources map[string]int64 `json:"customResources,omitempty" valid:"optional"`
+}
+
+// ResourceGroup stores properties of resource group
+type ResourceGroup struct {
+	GroupID         string                     `json:"id" valid:"required"`
+	DeployOption    string                     `json:"deployOption" valid:"required"`
+	GroupState      string                     `json:"groupState" valid:"required"`
+	ResourceStacks  []ResourceStack            `json:"resourceStacks" valid:"required"`
+	ScheduledStacks map[string][]ResourceStack `json:"scheduledStacks,omitempty" valid:"optional"`
+}
+
+// AffinityInfo is data affinity information
+type AffinityInfo struct {
+	AffinityRequest AffinityRequest
+	AffinityNode    string // if AffinityNode is not empty, the affinity node has been calculated
+	NeedToForward   bool
+}
+
+// AffinityRequest is affinity request parameter
+type AffinityRequest struct {
+	Strategy  string   `json:"strategy"`
+	ObjectIDs []string `json:"object_ids"`
+}
+
+// GroupInfo stores groupID and stackID
+type GroupInfo struct {
+	GroupID string `json:"groupID"`
+	StackID string `json:"stackID"`
+}
+
+// InvokeOption contains invoke options
+type InvokeOption struct {
+	AffinityRequest  AffinityRequest
+	GroupInfo        GroupInfo
+	ResourceMetaData map[string]float32
+}
+
+// ScheduleConfig defines schedule config
+type ScheduleConfig struct {
+	Policy                         int     `json:"policy" valid:"optional"`
+	GetMetricsTickInterval         int     `json:"getMetricsTickInterval" valid:"optional"`
+	MaxGetMetricsFailedCount       int     `json:"maxGetMetricsFailedCount" valid:"optional"`
+	ForwardScheduleFirst           bool    `json:"forwardScheduleResourceNotEnough" valid:"optional"`
+	SleepingMemThreshold           float64 `json:"sleepingMemoryThreshold" valid:"optional"`
+	SelectInstanceToSleepingPolicy string  `json:"selectInstanceToSleepingPolicy" valid:"optional"`
+	ResourceManagementType         string  `json:"resourceManagementType" valid:"optional"`
+}
+
+// MetricsData shows the quantities of a specific resource
+type MetricsData struct {
+	TotalResource float64 `json:"totalResource"`
+	InUseResource float64 `json:"inUseResource"`
+}
+
+// ResourceMetrics contains several resources' MetricsData
+type ResourceMetrics map[string]MetricsData
+
+// WorkerMetrics stores metrics used for scheduler
+type WorkerMetrics struct {
+	SystemResources ResourceMetrics
+	// key levels: functionUrn instanceID
+	FunctionResources map[string]map[string]ResourceMetrics
+}
+
+// InstanceInfo stores instance info for cli query
+type InstanceInfo struct {
+	InstanceID string `json:"InstanceID"`
+	Status     string `json:"Status"`
+}
+
+// InnerWorkerData is the worker data stored in ETCD
+type InnerWorkerData struct {
+	IP                        string           `json:"ip"`
+	Port                      string           `json:"port"`
+	NodeIP                    string           `json:"nodeIP"`
+	P2pPort                   string           `json:"p2pPort"`
+	NodeName                  string           `json:"nodeName"`
+	NodeID                    string           `json:"nodeID"`
+	WorkerAgentID             string           `json:"workerAgentID"`
+	AllocatableCPU            int64            `json:"allocatableCPU"`
+	AllocatableMemory         int64            `json:"allocatableMemory"`
+	AllocatableCustomResource map[string]int64 `json:"allocatableCustomResource"`
+}
+
+// TerminateRequest sent from worker manager to worker to delete function instance
+type TerminateRequest struct {
+	RuntimeID   string `json:"runtime_id"`
+	FuncName    string `json:"function_name"`
+	FuncVersion string `json:"function_version"`
+	TenantID    string `json:"tenant_id"`
+	BusinessID  string `json:"business_id" valid:"optional"`
+}
+
+// FunctionInstance is the function instance data stored in ETCD
+type FunctionInstance struct {
+	DeployedIP   string           `json:"deployedIP"`
+	DeployedNode string           `json:"deployedNode"`
+	RuntimeID    string           `json:"runtimeID"`
+	RuntimeIP    string           `json:"runtimeIP"`
+	RuntimePort  string           `json:"runtimePort"`
+	FuncKey      string           `json:"funcKey"`
+	Resource     InstanceResource `json:"resource"`
+	Status       int32            `json:"status"`
+	Labels       []string         `json:"labels"`
+	IsDriver     bool             `json:"isDriver"`
+}
+
+// HitsDataSource 匹配内容源
+type HitsDataSource struct {
+	Time         string `json:"Time"`
+	Message      string `json:"Message"`
+	PodName      string `json:"PodName"`
+	FunctionName string `json:"DeploymentName"`
+	Version      string `json:"Version"`
+	Level        string `json:"Level"`
+	TraceID      string `json:"TraceID"`
+	RuntimeID    string `json:"RuntimeID"`
+	TenantID     string `json:"TenantID"`
+	TimeNano     int64  `json:"TimeNano"`
+}
+
+// Device is the device store in etcd
+type Device struct {
+	Model   string `json:"model,omitempty"`
+	Hbm     int    `json:"hbm,omitempty"`
+	Type    string `json:"type,omitempty"`
+	Count   int    `json:"count,omitempty"`
+	Latency int    `json:"latency,omitempty"`
+	Stream  int    `json:"stream,omitempty"`
+}

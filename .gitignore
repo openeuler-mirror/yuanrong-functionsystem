@@ -20,3 +20,7 @@ build.ninja
 
 ### copied files
 functionsystem/src/common/proto/*
+
+### build files
+common/litebus/build
+functionsystem/build
