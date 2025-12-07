@@ -91,3 +91,5 @@ def compile_functionsystem(root_dir, args):
     compile.compile_binary(root_dir, args["job_num"], args["version"], args["build_type"])
     # 编译 CLI 程序
     compile.compile_cli(root_dir)
+    # 编译 meta-service
+    compile.compile_meta_service(root_dir)

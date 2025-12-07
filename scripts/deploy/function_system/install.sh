@@ -362,6 +362,70 @@ function install_function_master() {
   return 1
 }
 
+function install_metaservice() {
+  log_info "start metaservice, ip=${IP_ADDRESS}, port=${METASERVICE_PORT}..."
+  metaservice_config=${FUNCTION_SYSTEM_DIR}/config/meta_service/metaservice_config.json
+  install_metaservice_config=${config_install_dir}/metaservice_config.json
+  cp ${metaservice_config} ${install_metaservice_config}
+  sed -i "s/{ip}/${IP_ADDRESS}/g" ${install_metaservice_config}
+  sed -i "s/{port}/${METASERVICE_PORT}/g" ${install_metaservice_config}
+  sed -i "s/{maxFunctionVersion}/${MAX_FUNCTION_VERSION}/g" ${install_metaservice_config}
+  sed -i "s/{maxInstanceLabel}/${MAX_INSTANCE_LABEL}/g" ${install_metaservice_config}
+  sed -i "s/{functionMasterAddr}/${IP_ADDRESS}:${GLOBAL_SCHEDULER_PORT}/g" ${install_metaservice_config}
+  sed -i "s/{frontendAddr}/${IP_ADDRESS}:${FAAS_FRONTEND_HTTP_PORT}/g" ${install_metaservice_config}
+  sed -i "s/{etcdAddr}/$(echo ${ETCD_CLUSTER_ADDRESS} | sed 's/,/","/g')/g" ${install_metaservice_config}
+  sed -i "s/{sslEnable}/${SSL_ENABLE}/g" ${install_metaservice_config}
+  sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" ${install_metaservice_config}
+  sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" ${install_metaservice_config}
+  sed -i "s/{clusters}/${CLUSTER_LIST}/g" ${install_metaservice_config}
+  sed -i "s/{sccEnable}/${SCC_ENABLE}/g" ${install_metaservice_config}
+  sed -i "s*{sccBasePath}*${SCC_BASE_PATH}*g" ${install_metaservice_config}
+  if [ "X${SSL_ENABLE}" = "Xtrue" ] && [ -n "${SSL_BASE_PATH}" ]; then
+    sed -i "s*{rootCAFile}*${SSL_BASE_PATH}/${SSL_ROOT_FILE}*g" ${install_metaservice_config}
+    sed -i "s*{moduleCertFile}*${SSL_BASE_PATH}/${SSL_CERT_FILE}*g" ${install_metaservice_config}
+    sed -i "s*{moduleKeyFile}*${SSL_BASE_PATH}/${SSL_KEY_FILE}*g" ${install_metaservice_config}
+    sed -i "s*{pwdFile}*${SSL_BASE_PATH}/${SSL_PWD_FILE}*g" ${install_metaservice_config}
+  else
+    sed -i "s*{rootCAFile}**g" ${install_metaservice_config}
+    sed -i "s*{moduleCertFile}**g" ${install_metaservice_config}
+    sed -i "s*{moduleKeyFile}**g" ${install_metaservice_config}
+    sed -i "s*{pwdFile}**g" ${install_metaservice_config}
+  fi
+  if [ "X${SSL_ENABLE}" = "Xtrue" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
+    sed -i "s*{etcdCAFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}*g" ${install_metaservice_config}
+    sed -i "s*{etcdCertFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}*g" ${install_metaservice_config}
+    sed -i "s*{etcdKeyFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}*g" ${install_metaservice_config}
+    sed -i "s*{passphraseFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_PWD_FILE}*g" ${install_metaservice_config}
+  else
+    sed -i "s*{etcdCAFile}**g" ${install_metaservice_config}
+    sed -i "s*{etcdCertFile}**g" ${install_metaservice_config}
+    sed -i "s*{etcdKeyFile}**g" ${install_metaservice_config}
+    sed -i "s*{passphraseFile}**g" ${install_metaservice_config}
+  fi
+  if [ "X${SCC_ENABLE}" = "Xtrue" ]; then
+    sed -i "s*{sslDecryptTool}*${SSL_DECRYPT_TOOL}*g" ${install_metaservice_config}
+  else
+    sed -i "s*{sslDecryptTool}**g" ${install_metaservice_config}
+  fi
+  metaservice_log=${FUNCTION_SYSTEM_DIR}/config/meta_service/metaservice_log.json
+  metaservice_temp_log=${FUNCTION_SYSTEM_DIR}/config/metaservice_temp_log.json
+  cp ${metaservice_log} ${metaservice_temp_log}
+  metaservice_log_path=${FS_LOG_PATH}
+  sed -i "s*{logConfigPath}*${metaservice_log_path}*g" ${metaservice_temp_log}
+  sed -i "s/{logLevel}/${FS_LOG_LEVEL}/g" ${metaservice_temp_log}
+  LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
+    ${FUNCTION_SYSTEM_DIR}/bin/meta-service \
+    --config_path="${install_metaservice_config}" \
+    --log_config_path="${metaservice_temp_log}" \
+    >>"${FS_LOG_PATH}/${NODE_ID}-metaservice${STD_LOG_SUFFIX}" 2>&1 &
+    METASERVICE_PID=$!
+  if metaservice_health_check ${METASERVICE_PID}; then
+    log_info "succeed to start metaservice process, ip=${IP_ADDRESS} port=${METASERVICE_PORT} pid=${METASERVICE_PID}"
+    return 0
+  fi
+  return 1
+}
+
 function install_function_system() {
   config_install_dir="${INSTALL_DIR_PARENT}/config"
   [ -d "${config_install_dir}" ] || mkdir -p "${config_install_dir}"
@@ -383,6 +447,9 @@ function install_function_system() {
     ;;
   faas_frontend)
     install_faas_frontend
+    ;;
+  metaservice)
+    install_metaservice
     ;;
   *)
     log_warning >&2 "Unknown component $1"
