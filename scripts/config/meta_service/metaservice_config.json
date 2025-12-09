@@ -1,0 +1,164 @@
+{
+    "etcd": {
+      "servers": ["{etcdAddr}"],
+      "sslEnable": {sslEnable},
+      "authType": "{etcdAuthType}",
+      "cafile": "{etcdCAFile}",
+      "certfile": "{etcdCertFile}",
+      "keyfile": "{etcdKeyFile}",
+      "passphraseFile": "{passphraseFile}",
+      "azPrefix": "{azPrefix}"
+    },
+    "metaEtcdEnable": true,
+    "metaEtcd": {
+      "servers": ["{etcdAddr}"],
+      "user": "",
+      "password": "",
+      "sslEnable": {sslEnable},
+      "authType": "{etcdAuthType}",
+      "cafile": "{etcdCAFile}",
+      "certfile": "{etcdCertFile}",
+      "keyfile": "{etcdKeyFile}",
+      "passphraseFile": "{passphraseFile}",
+      "azPrefix": "{azPrefix}"
+    },
+    "clusters": "{clusters}",
+    "decryptAlgorithm": "NO_CRYPTO",
+    "bucket": [
+      {
+        "bucketId": "",
+        "businessId": "",
+        "appId": "",
+        "appSecret": "",
+        "url": "",
+        "writable": 1,
+        "description": "",
+        "createTime": "",
+        "updateTime": ""
+      }
+    ],
+    "runtimeType": [
+        "nodejs10.15.2",
+        "java1.8",
+        "java8",
+        "java11",
+        "java17",
+        "java21",
+        "python3.6",
+        "python3.7",
+        "python3.8",
+        "python3.9",
+        "python3.10",
+        "python3.11",
+        "cpp11",
+        "cpp11-bin",
+        "custom-runtime",
+        "posix-custom-runtime",
+        "go1.13"
+    ],
+    "fileServer": {
+      "storageType": "local",
+      "s3": {
+        "endpoint": "127.0.0.1:9000",
+        "accessKey": "",
+        "secretKey": "",
+        "secure": false,
+        "caFile": "",
+        "presignedUrlExpires": 3600,
+        "timeout": 40,
+        "trustedCA": false
+      }
+    },
+    "trigger": {
+      "urlPrefix": "",
+      "type": [
+        {
+          "sourceProvider": "",
+          "effect": "",
+          "action": ""
+        }
+      ]
+    },
+    "compatibleRuntimeType": [
+        "nodejs10.15.2",
+        "java1.8",
+        "python3.7",
+        "python3.8",
+        "python3.9",
+        "cpp11",
+        "cpp11-bin",
+        "custom-runtime",
+        "posix-custom-runtime",
+        "go1.13"
+    ],
+    "urn": {
+      "prefix": "sn",
+      "zone": "cn",
+      "resourceType": "function"
+    },
+    "function": {
+        "default": {
+          "version": "$latest",
+          "envPrefix": "func-",
+          "pageIndex": 1,
+          "pageSize": 1000,
+          "cpuList": [
+              500,
+              1500,
+              4000
+          ],
+          "memoryList": [
+              500,
+              3000,
+              16000
+          ],
+          "timeout": 900,
+          "defaultMinInstance": "0",
+          "defaultMaxInstance": "100",
+          "defaultConcurrentNum": "100",
+          "maxInstanceUpperLimit": "1000",
+          "concurrentNumUpperLimit": "1000",
+          "minCpu": 300,
+          "minMemory": 128,
+          "maxCpu": 16000,
+          "maxMemory": 1073741824
+        },
+        "package": {
+          "uploadTempPath": "/home/sn/upload",
+          "zipFileSizeMaxMB": 1,
+          "unzipFileSizeMaxMB": 1,
+          "fileCountsMax": 1,
+          "dirDepthMax": 1,
+          "ioReadTimeout": 100000
+        },
+      "versionMax": {maxFunctionVersion},
+      "instanceLabelMax": {maxInstanceLabel},
+      "aliasMax": 8,
+      "layerMax": 1
+    },
+    "server": {
+      "ip": "{ip}",
+      "port": {port}
+    },
+    "mutualTLSConfig": {
+      "tlsEnable": {sslEnable},
+      "rootCAFile": "",
+      "moduleCertFile": "",
+      "moduleKeyFile": "",
+      "serverName": ""
+    },
+    "scc": {
+      "enable": {sccEnable},
+      "algorithm": "AES256_GCM",
+      "sccConfigPath": "{sccBasePath}"
+    },
+    "mutualSSLConfig": {
+      "sslEnable": {sslEnable},
+      "rootCAFile": "{rootCAFile}",
+      "moduleCertFile": "{moduleCertFile}",
+      "moduleKeyFile": "{moduleKeyFile}",
+      "pwdFile": "{pwdFile}",
+      "serverName": "",
+      "sslDecryptTool": "{sslDecryptTool}"
+    }
+  }
