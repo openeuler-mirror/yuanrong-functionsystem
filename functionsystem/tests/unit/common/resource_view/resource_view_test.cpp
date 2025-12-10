@@ -2598,7 +2598,7 @@ void CheckRevionChanges(std::unique_ptr<ResourceView> &parent, std::unique_ptr<R
     ASSERT_EQ(changes.Get()->endrevision(), currentRevisionInLocal);
 }
 
-TEST_F(ResourceViewTest, DISBALED_UpdateLastReportedRevision)
+TEST_F(ResourceViewTest, DISABLED_UpdateLastReportedRevision)
 {
     ResourcePoller::SetInterval(100);
     auto parent = resource_view::ResourceView::CreateResourceView(DOMAIN_RESOUCE_VIEW_ID, PARENT_PARAM);
