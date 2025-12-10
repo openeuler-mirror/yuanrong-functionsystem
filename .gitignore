@@ -5,6 +5,9 @@
 ### output dir
 **/output/*
 **/_output/*
+common/litebus/build/
+functionsystem/build/
+functionsystem/src/common/utils/version.h
 
 ### protobuf
 *.pb.go
@@ -20,6 +23,7 @@ build.ninja
 
 ### copied files
 functionsystem/src/common/proto/*
+
 
 ### build files
 common/litebus/build
