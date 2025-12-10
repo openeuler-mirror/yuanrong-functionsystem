@@ -1,0 +1,458 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package storage
+
+import (
+	"context"
+	"io"
+
+	"meta_service/common/logger/log"
+	"meta_service/common/codec"
+	"meta_service/common/snerror"
+	"meta_service/function_repo/errmsg"
+	"meta_service/common/engine"
+)
+
+const (
+	defaultPageIndex = 1
+	defaultPageSize  = 1000
+)
+
+type generatedKV struct {
+	keyCodecs [{{len .Types}}]codec.Codec
+	valCodecs [{{len .Types}}]codec.Codec
+	eng       engine.Engine
+}
+
+func newKV(eng engine.Engine, prefix string) *generatedKV {
+	kv := &generatedKV{eng: eng}
+	{{range $i, $t := .Types}}
+	{{if eq $t.Name "Pool"}}
+	kv.keyCodecs[{{$i}}] = codec.NewReflectCodec("/yr/podpools/info", false)
+	{{else }}
+	kv.keyCodecs[{{$i}}] = codec.NewReflectCodec(prefix + "/{{$t.Name}}", true)
+	{{end }}
+	kv.valCodecs[{{$i}}] = codec.NewJSONCodec()
+	{{- end}}
+
+	return kv
+}
+
+func (kv *generatedKV) Put(ctx context.Context, key, value string) error {
+	return kv.eng.Put(ctx, key, value)
+}
+
+func (kv *generatedKV) BeginTx(ctx context.Context) *generatedTx {
+	return &generatedTx{
+		keyCodecs: kv.keyCodecs,
+		valCodecs: kv.valCodecs,
+		t:         kv.eng.BeginTx(ctx),
+	}
+}
+
+type pageInfo struct {
+	Begin, Size int
+}
+
+func newPageInfo(pageIndex, pageSize int) (pageInfo, error) {
+	if pageIndex != 0 {
+		if pageSize != 0 {
+			return pageInfo{
+				Begin: pageSize * (pageIndex - 1),
+				Size:  pageSize,
+			}, nil
+		}
+		return pageInfo{}, errmsg.PageError
+	}
+	return pageInfo{
+		Begin: defaultPageSize * (defaultPageIndex - 1),
+		Size:  defaultPageSize,
+	}, nil
+}
+
+type generatedTx struct {
+	keyCodecs [{{len .Types}}]codec.Codec
+	valCodecs [{{len .Types}}]codec.Codec
+	t         engine.Transaction
+	ops       []func() error
+}
+
+func (t *generatedTx) Put(key, value string) {
+	t.t.Put(key, value)
+}
+
+func (t *generatedTx) Delete(key string) {
+	t.t.Del(key)
+}
+
+func (t *generatedTx) DeleteRange(prefix string) {
+	t.t.DelPrefix(prefix)
+}
+
+func (t *generatedTx) Commit() error {
+	if err := t.t.Commit(); err != nil {
+		log.GetLogger().Errorf("failed to commit transaction: %s", err.Error())
+		return snerror.New(errmsg.TransactionFailed, err.Error())
+	}
+	return nil
+}
+
+func (t *generatedTx) Cancel() {
+	t.t.Cancel()
+}
+{{range $i, $t := .Types}}
+func (kv *generatedKV) {{$t.Name}}Get(ctx context.Context, key {{$t.Key}}) ({{$t.Value}}, error) {
+	k, err := kv.keyCodecs[{{$i}}].Encode(key)
+	if err != nil {
+		log.GetLogger().Errorf("failed to encode key of [{{$t.Name}}]: %s", err.Error())
+		return {{$t.Value}}{}, errmsg.MarshalError
+	}
+	log.GetLogger().Debugf("{{$t.Name}}Get key: %+v", key)
+	v, err := kv.eng.Get(ctx, k)
+	if err != nil {
+		if err == engine.ErrKeyNotFound {
+			return {{$t.Value}}{}, errmsg.KeyNotFoundError
+		}
+		log.GetLogger().Errorf("failed to get from [{{$t.Name}}]: %s", err.Error())
+		return {{$t.Value}}{}, errmsg.EtcdInternalError
+	}
+
+	var res {{$t.Value}}
+	err = kv.valCodecs[{{$i}}].Decode(v, &res)
+	if err != nil {
+		log.GetLogger().Errorf("failed to decode value of [{{$t.Name}}]: %s", err.Error())
+		return {{$t.Value}}{}, errmsg.UnmarshalError
+	}
+	return res, nil
+}
+
+func (kv *generatedKV) {{$t.Name}}Count(ctx context.Context, prefix {{$t.Key}}) (int64, error) {
+	p, err := kv.keyCodecs[{{$i}}].Encode(prefix)
+	if err != nil {
+		log.GetLogger().Errorf("failed to encode key of [{{$t.Name}}]: %s", err.Error())
+		return 0, errmsg.MarshalError
+	}
+	log.GetLogger().Debugf("{{$t.Name}}Count prefix: %+v", prefix)
+	n, err := kv.eng.Count(ctx, p)
+	if err != nil {
+		log.GetLogger().Errorf("failed to count from [{{$t.Name}}]: %s", err.Error())
+		return 0, errmsg.EtcdInternalError
+	}
+	return n, nil
+}
+
+func (kv *generatedKV) {{$t.Name}}FirstInRange(ctx context.Context, prefix {{$t.Key}}) ({{$t.Key}}, {{$t.Value}}, error) {
+	p, err := kv.keyCodecs[{{$i}}].Encode(prefix)
+	if err != nil {
+		log.GetLogger().Errorf("failed to encode key of [{{$t.Name}}]: %s", err.Error())
+		return {{$t.Key}}{}, {{$t.Value}}{}, errmsg.MarshalError
+	}
+	log.GetLogger().Debugf("{{$t.Name}}FirstInRange prefix: %+v", prefix)
+	k, v, err := kv.eng.FirstInRange(ctx, p)
+	if err != nil {
+		if err == engine.ErrKeyNotFound {
+			return {{$t.Key}}{}, {{$t.Value}}{}, errmsg.KeyNotFoundError
+		}
+		log.GetLogger().Errorf("failed to get first in range from [{{$t.Name}}]: %s", err.Error())
+		return {{$t.Key}}{}, {{$t.Value}}{}, errmsg.EtcdInternalError
+	}
+
+	var key {{$t.Key}}
+	var val {{$t.Value}}
+	if err := kv.keyCodecs[{{$i}}].Decode(k, &key); err != nil {
+		log.GetLogger().Errorf("failed to decode key of [{{$t.Name}}]: %s", err.Error())
+		return {{$t.Key}}{}, {{$t.Value}}{}, errmsg.UnmarshalError
+	}
+	if err := kv.valCodecs[{{$i}}].Decode(v, &val); err != nil {
+		log.GetLogger().Errorf("failed to decode value of [{{$t.Name}}]: %s", err.Error())
+		return {{$t.Key}}{}, {{$t.Value}}{}, errmsg.UnmarshalError
+	}
+	return key, val, nil
+}
+
+func (kv *generatedKV) {{$t.Name}}LastInRange(ctx context.Context, prefix {{$t.Key}}) ({{$t.Key}}, {{$t.Value}}, error) {
+	p, err := kv.keyCodecs[{{$i}}].Encode(prefix)
+	if err != nil {
+		log.GetLogger().Errorf("failed to encode key of [{{$t.Name}}]: %s", err.Error())
+		return {{$t.Key}}{}, {{$t.Value}}{}, errmsg.MarshalError
+	}
+	log.GetLogger().Debugf("{{$t.Name}}LastInRange prefix: %+v", prefix)
+	k, v, err := kv.eng.LastInRange(ctx, p)
+	if err != nil {
+		if err == engine.ErrKeyNotFound {
+			return {{$t.Key}}{}, {{$t.Value}}{}, errmsg.KeyNotFoundError
+		}
+		log.GetLogger().Errorf("failed to get last in range from [{{$t.Name}}]: %s", err.Error())
+		return {{$t.Key}}{}, {{$t.Value}}{}, errmsg.EtcdInternalError
+	}
+
+	var key {{$t.Key}}
+	var val {{$t.Value}}
+	if err := kv.keyCodecs[{{$i}}].Decode(k, &key); err != nil {
+		log.GetLogger().Errorf("failed to decode key of [{{$t.Name}}]: %s", err.Error())
+		return {{$t.Key}}{}, {{$t.Value}}{}, errmsg.UnmarshalError
+	}
+	if err := kv.valCodecs[{{$i}}].Decode(v, &val); err != nil {
+		log.GetLogger().Errorf("failed to decode value of [{{$t.Name}}]: %s", err.Error())
+		return {{$t.Key}}{}, {{$t.Value}}{}, errmsg.UnmarshalError
+	}
+	return key, val, nil
+}
+
+func (kv *generatedKV) {{$t.Name}}Stream(ctx context.Context, prefix {{$t.Key}}, by engine.SortBy) *{{$t.Name}}PrepareStmt {
+	return &{{$t.Name}}PrepareStmt{
+		keyCodecs: kv.keyCodecs[{{$i}}],
+		valCodecs: kv.valCodecs[{{$i}}],
+		eng:       kv.eng,
+		ctx:       ctx,
+		prefix:    prefix,
+		by:        by,
+	}
+}
+
+type {{$t.Name}}PrepareStmt struct {
+	keyCodecs codec.Codec
+	valCodecs codec.Codec
+	eng       engine.Engine
+	ctx       context.Context
+	prefix    {{$t.Key}}
+	by        engine.SortBy
+	filters   []{{$t.Name}}FilterFunc
+}
+
+type {{$t.Name}}FilterFunc func(key {{$t.Key}}, val {{$t.Value}}) bool
+
+func (ps *{{$t.Name}}PrepareStmt) Filter(filter {{$t.Name}}FilterFunc) *{{$t.Name}}PrepareStmt {
+	ps.filters = append(ps.filters, filter)
+	return ps
+}
+
+
+func (ps *{{$t.Name}}PrepareStmt) Execute() ([]{{$t.Name}}Tuple, error) {
+	p, err := ps.keyCodecs.Encode(ps.prefix)
+	if err != nil {
+		log.GetLogger().Errorf("failed to encode key of [{{$t.Name}}]: %s", err.Error())
+		return nil, errmsg.MarshalError
+	}
+	decode := func(k, v string) (interface{}, error) {
+		var key {{$t.Key}}
+		if err := ps.keyCodecs.Decode(k, &key); err != nil {
+			log.GetLogger().Errorf("failed to decode key of [{{$t.Name}}]: %s", err.Error())
+			return nil, errmsg.UnmarshalError
+		}
+		var val {{$t.Value}}
+		if err := ps.valCodecs.Decode(v, &val); err != nil {
+			log.GetLogger().Errorf("failed to decode value of [{{$t.Name}}]: %s", err.Error())
+			return nil, errmsg.UnmarshalError
+		}
+		return {{$t.Name}}Tuple{
+			Key:   key,
+			Value: val,
+		}, nil
+	}
+	log.GetLogger().Debugf("{{$t.Name}}Stream prefix: %+v, by: %+v", ps.prefix, ps.by)
+	prepStmt := ps.eng.PrepareStream(ps.ctx, p, decode, ps.by)
+	for _, filter := range ps.filters {
+		prepStmt = prepStmt.Filter(func(i interface{}) bool {
+			tuple := i.({{$t.Name}}Tuple)
+			return filter(tuple.Key, tuple.Value)
+		})
+	}
+	stream, err := prepStmt.Execute()
+	if err != nil {
+		log.GetLogger().Errorf("failed to execute stream of [{{$t.Name}}]: %s", err.Error())
+		return nil, errmsg.EtcdInternalError
+	}
+
+	var res []{{$t.Name}}Tuple
+	for {
+		i, err := stream.Next()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			log.GetLogger().Errorf("failed to get next from stream [{{$t.Name}}]: %s", err.Error())
+			return nil, errmsg.EtcdInternalError
+		}
+		tuple := i.({{$t.Name}}Tuple)
+		res = append(res, tuple)
+	}
+	if len(res) == 0 {
+		return nil, errmsg.KeyNotFoundError
+	}
+	return res, nil
+}
+
+func (ps *{{$t.Name}}PrepareStmt) ExecuteWithPage(pageIndex, pageSize int) ([]{{$t.Name}}Tuple, int, error) {
+	log.GetLogger().Debugf("{{$t.Name}}ExecuteWithPage pageIndex %v, pageSize %v", pageIndex, pageSize)
+	pageInfo, err := newPageInfo(pageIndex, pageSize)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	res, err := ps.Execute()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if pageInfo.Begin > len(res) {
+		return nil, len(res), nil
+	}
+
+	if pageInfo.Begin+pageInfo.Size > len(res) {
+		return res[pageInfo.Begin:], len(res), nil
+	}
+
+	return res[pageInfo.Begin : pageInfo.Begin+pageInfo.Size], len(res), nil
+}
+
+func (kv *generatedKV) {{$t.Name}}Put(ctx context.Context, key {{$t.Key}}, val {{$t.Value}}) error {
+	k, err := kv.keyCodecs[{{$i}}].Encode(key)
+	if err != nil {
+		log.GetLogger().Errorf("failed to encode key of [{{$t.Name}}]: %s", err.Error())
+		return errmsg.MarshalError
+	}
+	v, err := kv.valCodecs[{{$i}}].Encode(val)
+	if err != nil {
+		log.GetLogger().Errorf("failed to encode value of [{{$t.Name}}]: %s", err.Error())
+		return errmsg.MarshalError
+	}
+	log.GetLogger().Debugf("{{$t.Name}}Put key: %+v, val: %+v", key, val)
+	err = kv.eng.Put(ctx, k, v)
+	if err != nil {
+		log.GetLogger().Errorf("failed to put to [{{$t.Name}}]: %s", err.Error())
+		return errmsg.EtcdInternalError
+	}
+	return nil
+}
+
+func (kv *generatedKV) {{$t.Name}}Delete(ctx context.Context, key {{$t.Key}}) error {
+	k, err := kv.keyCodecs[{{$i}}].Encode(key)
+	if err != nil {
+		log.GetLogger().Errorf("failed to encode key of [{{$t.Name}}]: %s", err.Error())
+		return errmsg.MarshalError
+	}
+	log.GetLogger().Debugf("{{$t.Name}}Delete key: %+v", key)
+	err = kv.eng.Delete(ctx, k)
+	if err != nil {
+		log.GetLogger().Errorf("failed to delete from [{{$t.Name}}]: %s", err.Error())
+		return errmsg.EtcdInternalError
+	}
+	return nil
+}
+
+func (t *generatedTx) {{$t.Name}}Get(key {{$t.Key}}) ({{$t.Value}}, error) {
+	k, err := t.keyCodecs[{{$i}}].Encode(key)
+	if err != nil {
+		log.GetLogger().Errorf("transaction: failed to encode key of [{{$t.Name}}]: %s", err.Error())
+		return {{$t.Value}}{}, errmsg.MarshalError
+	}
+	log.GetLogger().Debugf("transaction: {{$t.Name}}Get key: %+v", key)
+	v, err := t.t.Get(k)
+	if err != nil {
+		if err == engine.ErrKeyNotFound {
+			return {{$t.Value}}{}, errmsg.KeyNotFoundError
+		}
+		log.GetLogger().Errorf("transaction: failed to get from [{{$t.Name}}]: %s", err.Error())
+		return {{$t.Value}}{}, errmsg.EtcdInternalError
+	}
+
+	var res {{$t.Value}}
+	err = t.valCodecs[{{$i}}].Decode(v, &res)
+	if err != nil {
+		log.GetLogger().Errorf("transaction: failed to decode value of [{{$t.Name}}]: %s", err.Error())
+		return {{$t.Value}}{}, errmsg.UnmarshalError
+	}
+	return res, nil
+}
+
+func (t *generatedTx) {{$t.Name}}GetRange(prefix {{$t.Key}}) ([]{{$t.Name}}Tuple, error) {
+	p, err := t.keyCodecs[{{$i}}].Encode(prefix)
+	if err != nil {
+		log.GetLogger().Errorf("transaction: failed to encode key of [{{$t.Name}}]: %s", err.Error())
+		return nil, errmsg.MarshalError
+	}
+	log.GetLogger().Debugf("transaction: {{$t.Name}}GetRange prefix: %+v", prefix)
+	keys, vals, err := t.t.GetPrefix(p)
+	if err != nil {
+		log.GetLogger().Errorf("transaction: failed to get range from [{{$t.Name}}]: %s", err.Error())
+		return nil, errmsg.EtcdInternalError
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+
+	tuples := make([]{{$t.Name}}Tuple, len(keys))
+	for i := range tuples {
+		var key {{$t.Key}}
+		if err := t.keyCodecs[{{$i}}].Decode(keys[i], &key); err != nil {
+			log.GetLogger().Errorf("transaction: failed to decode key of [{{$t.Name}}]: %s", err.Error())
+			return nil, errmsg.UnmarshalError
+		}
+
+		var val {{$t.Value}}
+		if err := t.valCodecs[{{$i}}].Decode(vals[i], &val); err != nil {
+			log.GetLogger().Errorf("transaction: failed to decode value of [{{$t.Name}}]: %s", err.Error())
+			return nil, errmsg.UnmarshalError
+		}
+
+		tuples[i] = {{$t.Name}}Tuple{
+			Key: key,
+			Value: val,
+		}
+	}
+	return tuples, nil
+}
+
+func (t *generatedTx) {{$t.Name}}Put(key {{$t.Key}}, val {{$t.Value}}) error {
+	k, err := t.keyCodecs[{{$i}}].Encode(key)
+	if err != nil {
+		log.GetLogger().Errorf("transaction: failed to encode key of [{{$t.Name}}]: %s", err.Error())
+		return errmsg.MarshalError
+	}
+	v, err := t.valCodecs[{{$i}}].Encode(val)
+	if err != nil {
+		log.GetLogger().Errorf("transaction: failed to encode value of [{{$t.Name}}]: %s", err.Error())
+		return errmsg.MarshalError
+	}
+	log.GetLogger().Debugf("transaction: {{$t.Name}}Put key: %+v, val: %+v", key, val)
+	t.t.Put(k, v)
+	return nil
+}
+
+func (t *generatedTx) {{$t.Name}}Delete(key {{$t.Key}}) error {
+	k, err := t.keyCodecs[{{$i}}].Encode(key)
+	if err != nil {
+		log.GetLogger().Errorf("transaction: failed to encode key of [{{$t.Name}}]: %s", err.Error())
+		return errmsg.MarshalError
+	}
+	log.GetLogger().Debugf("transaction: {{$t.Name}}Delete key: %+v", key)
+	t.t.Del(k)
+	return nil
+}
+
+func (t *generatedTx) {{$t.Name}}DeleteRange(prefix {{$t.Key}}) error {
+	p, err := t.keyCodecs[{{$i}}].Encode(prefix)
+	if err != nil {
+		log.GetLogger().Errorf("transaction: failed to encode key of [{{$t.Name}}]: %s", err.Error())
+		return errmsg.MarshalError
+	}
+	log.GetLogger().Debugf("transaction: {{$t.Name}}DeleteRange prefix: %+v", prefix)
+	t.t.DelPrefix(p)
+	return nil
+}
+{{end}}
