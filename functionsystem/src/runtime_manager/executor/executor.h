@@ -55,7 +55,7 @@ const std::string POSIX_CUSTOM_RUNTIME = "posix-custom-runtime";
 // value is config with json fmt
 struct RuntimeLauncherConfig {
     std::string endpoint;
-}
+};
 struct RuntimeConfig {
     std::string ip;
     std::string hostIP;
@@ -99,7 +99,7 @@ struct RuntimeConfig {
     std::string userLogExportMode;
     bool cleanStreamProducerEnable;
     int virtualEnvIdleTimeLimit;
-    RuntimeLauncherConfig launcherConfigs;
+    // RuntimeLauncherConfig launcherConfigs;
 };
 
 struct PrestartProcess {
@@ -140,7 +140,7 @@ public:
      */
     virtual std::map<std::string, messages::RuntimeInstanceInfo> GetRuntimeInstanceInfos();
 
-    void InitConfig();
+    virtual void InitConfig();
 
     /**
      * Set runtime config from flags.
