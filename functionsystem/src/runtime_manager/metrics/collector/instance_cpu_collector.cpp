@@ -45,6 +45,9 @@ std::string InstanceCPUCollector::GenFilter() const
 
 litebus::Future<Metric> InstanceCPUCollector::GetUsage() const
 {
+    if (pid_ == 0) {
+        return Metric{ {}, instanceID_, {}, {} };
+    }
     YRLOG_DEBUG_COUNT_60("instance cpu collector get usage.");
     auto startProc = GetProcessCpuTime(pid_, procFSTools_);
     auto startTotal = GetTotalCpuTime(procFSTools_);
