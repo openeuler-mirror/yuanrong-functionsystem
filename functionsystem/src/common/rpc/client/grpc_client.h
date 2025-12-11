@@ -157,6 +157,22 @@ public:
         return std::move(std::make_unique<GrpcClient<T>>(addr, std::move(stub), std::move(channel)));
     }
 
+    static std::unique_ptr<GrpcClient<T>> CreateUdsGrpcClient(const std::string &endpoint)
+    {
+        YRLOG_DEBUG("enter CreateUdsGrpcClient");
+        GrpcSslConfig sslConfig{};
+        ::grpc::ChannelArguments args;
+        args.SetMaxSendMessageSize(std::numeric_limits<int>::max());
+        args.SetMaxReceiveMessageSize(std::numeric_limits<int>::max());
+        auto channel = ::grpc::CreateCustomChannel(endpoint, sslConfig.sslCredentials, args);
+        auto stub = T::NewStub(static_cast<const std::shared_ptr<::grpc::ChannelInterface> &>(channel));
+        if (!stub) {
+            YRLOG_ERROR("Create grpc client stub failed, addr = {}", addr);
+            return nullptr;
+        }
+        return std::move(std::make_unique<GrpcClient<T>>(addr, std::move(stub), std::move(channel)));
+    }
+
     void CheckChannelAndWaitForReconnect(const std::atomic<bool> &running)
     {
         if (channel_ == nullptr) {
