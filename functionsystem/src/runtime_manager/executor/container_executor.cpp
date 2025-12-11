@@ -30,6 +30,7 @@
 #include "async/collect.hpp"
 #include "common/logs/logging.h"
 #include "common/resource_view/resource_type.h"
+#include "common/utils/collect_status.h"
 #include "common/utils/exec_utils.h"
 #include "common/utils/files.h"
 #include "common/utils/generate_message.h"
@@ -43,17 +44,25 @@
 namespace functionsystem::runtime_manager {
 using json = nlohmann::json;
 const int64_t DEFAULT_GRACEFUL_SHUTDOWN = 5;
+const std::string PARAM_LANGUAGE = "language";
+const std::string RUNTIME_LAYER_DIR_NAME = "layer";
+const std::string RUNTIME_FUNC_DIR_NAME = "func";
+const std::string PARAM_EXEC_PATH = "execPath";
+const std::string PARAM_RUNTIME_ID = "runtimeID";
 
 ContainerExecutor::ContainerExecutor(const std::string &name, const litebus::AID &functionAgentAID) : Executor(name)
 {
-    mounter_ = std::make_shared<VolumeMount>();
     functionAgentAID_ = functionAgentAID;
 }
 
-void InitConfig()
+void ContainerExecutor::InitConfig()
 {
     cmdBuilder_.SetRuntimeConfig(config_);
-    containerd_ = GrpcClient<runtime_launcher::RuntimeLauncher>::CreateUdsGrpcClient(config_.launcherConfigs.endpoint);
+    auto ep = litebus::os::GetEnv("CONTAINER_EP");
+    std::string endpoint = ep.IsSome() ? ep.Get() : "127.0.0.1:8222";
+    YRLOG_INFO("start container executor which bind containerd({})", endpoint);
+    containerd_ = GrpcClient<runtime_launcher::RuntimeLauncher>::CreateUdsGrpcClient(endpoint);
+    YRLOG_INFO("success to start container executor which bind containerd({})", endpoint);
 }
 
 void ContainerExecutor::Init()
@@ -74,13 +83,12 @@ litebus::Future<Status> ContainerExecutor::NotifyInstancesDiskUsageExceedLimit(c
 
 litebus::Future<bool> ContainerExecutor::StopAllContainers()
 {
-    auto start = std::chrono::steady_clock::now();
     std::list<litebus::Future<Status>> futures;
     YRLOG_INFO("{} containers need to stop", runtime2containerID_.size());
     for (auto [runtimeID, containerID] : runtime2containerID_) {
         // todo: lwy grpc client to delete container
         futures.emplace_back(TerminateContainer(runtimeID, "", containerID, false));
-        YRLOG_INFO("stop runtime {} with container {}, ret: {}, errno: {}", runtimeID, containerID, ret, errno);
+        YRLOG_INFO("stop runtime {} with container {}", runtimeID, containerID);
     }
     return CollectStatus(futures, "").Then([]() -> litebus::Future<bool> { return true; });
 }
@@ -89,28 +97,26 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartInstanc
     const std::shared_ptr<messages::StartInstanceRequest> &request, const std::vector<int> &cardIDs)
 {
     const auto &info = request->runtimeinstanceinfo();
-    std::string language = request->runtimeinstanceinfo().runtimeconfig().language();
-    const auto &deployOptions = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
+    std::string language = info.runtimeconfig().language();
     (void)transform(language.begin(), language.end(), language.begin(), ::tolower);
-    const auto &info = request->runtimeinstanceinfo();
-    std::string runtimeID = request->runtimeinstanceinfo().runtimeid();
+    std::string runtimeID = info.runtimeid();
     if (runtimeID.empty()) {
         runtimeID = GenerateRuntimeID(info.instanceid());
         request->mutable_runtimeinstanceinfo()->set_runtimeid(runtimeID);
     }
     std::string port;
-    auto tlsConfig = request->runtimeinstanceinfo().runtimeconfig().tlsconfig();
+    auto tlsConfig = info.runtimeconfig().tlsconfig();
     RuntimeFeatures features;
     if (tlsConfig.enableservermode()) {
         port = tlsConfig.posixport();
         features.serverMode = false;
     }
     YRLOG_DEBUG("enableservermode = {}, port = {}", tlsConfig.enableservermode(), port);
-    if (CheckRuntimeCredential(request) != StatusCode::SUCCESS) {
-        YRLOG_ERROR("{}|{}|CheckRuntimeCredential failed, instanceID({}), runtimeID({})", info.traceid(),
-                    info.requestid(), info.instanceid(), runtimeID);
-        return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_PARAMS_INVALID);
-    }
+    // if (CheckRuntimeCredential(request) != StatusCode::SUCCESS) {
+    //     YRLOG_ERROR("{}|{}|CheckRuntimeCredential failed, instanceID({}), runtimeID({})", info.traceid(),
+    //                 info.requestid(), info.instanceid(), runtimeID);
+    //     return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_PARAMS_INVALID);
+    // }
     std::vector<std::string> args;
     if (auto status = cmdBuilder_.GetBuildArgs(language, port, request, args); status.IsError()) {
         YRLOG_ERROR("{}|{}|get build args failed, can not start instanceID({}), runtimeID({})", info.traceid(),
@@ -125,7 +131,7 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartInstanc
 }
 
 litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnStartRuntime(
-    const messages::StartInstanceResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request)
+    const runtime_launcher::StartResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &info = request->runtimeinstanceinfo();
     if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
@@ -165,8 +171,8 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartRuntime
     return StartByRuntimeID(
                request,
                { { PARAM_EXEC_PATH, execPath }, { PARAM_RUNTIME_ID, info.runtimeid() }, { PARAM_LANGUAGE, language } },
-               args, envs, info)
-        .Then(litebus::Defer(GetAID(), &ContainerExecutor::OnStartRuntime, std::placeholder::_1, request));
+               args, envs)
+        .Then(litebus::Defer(GetAID(), &ContainerExecutor::OnStartRuntime, std::placeholders::_1, request));
 
     // todo lwy tlsconfig should be passed by uds
     // Status result;
@@ -205,7 +211,7 @@ void ContainerExecutor::ReportInfo(const std::string &instanceID, const std::str
 }
 
 void ContainerExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr,
-                                                 const std::string &runtimeID) const
+                                                 const std::string &runtimeID)
 {
     auto parentPath = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
     auto path = litebus::os::Join(parentPath, runtimeID);
@@ -222,14 +228,14 @@ void ContainerExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::strin
         return;
     }
 
-    auto stdOut = litebus::os::Join(std::string(realPath), "stdout");
-    if (!litebus::os::ExistPath(outFile) && TouchFile(outFile) != 0) {
-        YRLOG_WARN("create std out log file {} failed.", outFile, litebus::os::Strerror(errno));
+    stdOut = litebus::os::Join(std::string(realPath), "stdout");
+    if (!litebus::os::ExistPath(stdOut) && TouchFile(stdOut) != 0) {
+        YRLOG_WARN("create std out log file {} failed.", stdOut, litebus::os::Strerror(errno));
         return;
     }
-    auto stdErr = litebus::os::Join(std::string(realPath), "stderr");
-    if (!litebus::os::ExistPath(errFile) && TouchFile(errFile) != 0) {
-        YRLOG_WARN("create std err log file {} failed.", errFile, litebus::os::Strerror(errno));
+    stdErr = litebus::os::Join(std::string(realPath), "stderr");
+    if (!litebus::os::ExistPath(stdErr) && TouchFile(stdErr) != 0) {
+        YRLOG_WARN("create std err log file {} failed.", stdErr, litebus::os::Strerror(errno));
         return;
     }
 }
@@ -248,7 +254,7 @@ void BuildMountForCode(const std::shared_ptr<runtime_launcher::StartRequest> &st
     for (auto &layer : deploySpec.layers()) {
         auto code = start->add_mounts();
         code->set_type("bind");
-        std::string curLayer = litebus::os::Join(layer, deploySpec.bucketid());
+        std::string curLayer = litebus::os::Join(layerPath, deploySpec.bucketid());
         code->set_source(curLayer + "/" + TransMultiLevelDirToSingle(layer.objectid()));
         code->set_target(curLayer);
     }
@@ -270,8 +276,8 @@ litebus::Future<runtime_launcher::StartResponse> ContainerExecutor::StartByRunti
     runtime_launcher::StartResponse rsp{};
     // java has jvm args check so ignore here
     if (language.find(JAVA_LANGUAGE_PREFIX) == std::string::npos && !CheckIllegalChars(cmd)) {
-        rsp->set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
-        rsp->set_message(fmt::format("invalid java cmd: {}", cmd));
+        rsp.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
+        rsp.set_message(fmt::format("invalid java cmd: {}", cmd));
         return rsp;
     }
 
@@ -292,8 +298,8 @@ litebus::Future<runtime_launcher::StartResponse> ContainerExecutor::StartByRunti
                 start->mutable_image()->set_readonly(j.at("readonly").get<bool>());
             }
         } catch (std::exception &e) {
-            rsp->set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
-            rsp->set_message(fmt::format("invalid CONTAINER_OPTS: {}", opts[CONTAINER_OPTS]));
+            rsp.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
+            rsp.set_message(fmt::format("invalid CONTAINER_OPTS: {}", opts[CONTAINER_OPTS]));
             return rsp;
         }
     }
@@ -302,7 +308,7 @@ litebus::Future<runtime_launcher::StartResponse> ContainerExecutor::StartByRunti
      for (const auto &arg : buildArgs) {
          *start->add_cmd() = arg;
     }
-    BuildMountForCode(start， request)；
+    BuildMountForCode(start, request);
 
     // todo: should be more elegant
     const auto &resources = request->runtimeinstanceinfo().runtimeconfig().resources();
@@ -349,7 +355,7 @@ litebus::Future<Status> ContainerExecutor::StopInstanceByRuntimeID(const std::st
         YRLOG_WARN("{}|can not find pid to stop runtime({}).", requestID, runtimeID);
         return Status::OK();
     }
-    return TerminateContainer(runtimeID, requestID, container.second, oomKilled);
+    return TerminateContainer(runtimeID, requestID, container->second, oomKilled);
 }
 
 litebus::Future<Status> ContainerExecutor::OnDeleteContainer(const std::string &instanceID,
@@ -363,11 +369,11 @@ litebus::Future<Status> ContainerExecutor::OnDeleteContainer(const std::string &
         runtimeInstanceInfoMap_.erase(runtimeID);
     }
     functionsystem::metrics::MeterTitle title{ "yr_instance_stop_time", "stop timestamp", "num" };
-    litebus::Async(GetAID(), &ContainerExecutor::ReportInfo, instanceID, runtimeID, container->second, title);
+    litebus::Async(GetAID(), &ContainerExecutor::ReportInfo, instanceID, runtimeID, containerID, title);
     (void)runtime2containerID_.erase(runtimeID);
-    if (oomKilled) {
-        innerOomKilledruntimes_.insert(runtimeID);
-    }
+    // if (oomKilled) {
+    //     innerOomKilledruntimes_.insert(runtimeID);
+    // }
     return Status::OK();
 }
 
@@ -451,8 +457,8 @@ litebus::Future<runtime_launcher::StartResponse> ContainerExecutor::DoStartConta
     const std::shared_ptr<runtime_launcher::StartRequest> &start)
 {
     ASSERT_IF_NULL(containerd_);
-    (void)containerd_
-        ->CallAsync("Start", start.get(), static_cast<runtime_launcher::StartResponse *>(nullptr),
+    return containerd_
+        ->CallAsync("Start", *start.get(), static_cast<runtime_launcher::StartResponse *>(nullptr),
                     &runtime_launcher::RuntimeLauncher::Stub::AsyncStart)
         .Then([aid(GetAID()), start, request](litebus::Try<runtime_launcher::StartResponse> rsp)
                   -> litebus::Future<runtime_launcher::StartResponse> {
@@ -461,13 +467,13 @@ litebus::Future<runtime_launcher::StartResponse> ContainerExecutor::DoStartConta
             }
             auto msg = fmt::format("failed to start container {} for runtime({}) instance({}), grpc err: {}",
                                    start->runtime(), request->runtimeinstanceinfo().runtimeid(),
-                                   request->runtimeinstanceinfo().instanceid(), fmt::underlying(rsp.GetErrorCode()));
+                                   request->runtimeinstanceinfo().instanceid(), rsp.GetErrorCode());
             YRLOG_ERROR("{}|{}|{}", request->runtimeinstanceinfo().traceid(),
                         request->runtimeinstanceinfo().requestid(), msg);
-            runtime_launcher::StartResponse rsp{};
-            rsp->set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
-            rsp->set_message(msg);
-            return rsp;
+            runtime_launcher::StartResponse startRsp{};
+            startRsp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+            startRsp.set_message(msg);
+            return startRsp;
         });
 }
 litebus::Future<runtime_launcher::DeleteResponse> ContainerExecutor::DoDeleteContainer(
@@ -475,16 +481,16 @@ litebus::Future<runtime_launcher::DeleteResponse> ContainerExecutor::DoDeleteCon
     const std::shared_ptr<runtime_launcher::DeleteRequest> &req)
 {
     ASSERT_IF_NULL(containerd_);
-    (void)containerd_
-        ->CallAsync("Delete", req.get(), static_cast<runtime_launcher::DeleteResponse *>(nullptr),
+    return containerd_
+        ->CallAsync("Delete", *req.get(), static_cast<runtime_launcher::DeleteResponse *>(nullptr),
                     &runtime_launcher::RuntimeLauncher::Stub::AsyncDelete)
         .Then([aid(GetAID()), req, runtimeID, requestID](litebus::Try<runtime_launcher::DeleteResponse> rsp)
                   -> litebus::Future<runtime_launcher::DeleteResponse> {
             if (rsp.IsOK()) {
                 return rsp.Get();
             }
-            auto msg = fmt::format("failed to delete container {} for runtime({}), grpc err: {}",
-                                   req->id(), runtimeID, fmt::underlying(rsp.GetErrorCode()));
+            auto msg = fmt::format("failed to delete container {} for runtime({}), grpc err: {}", req->id(), runtimeID,
+                                   rsp.GetErrorCode());
             YRLOG_ERROR("{}|{}", requestID, msg);
             return runtime_launcher::DeleteResponse{};
         });
@@ -493,21 +499,20 @@ litebus::Future<runtime_launcher::WaitResponse> ContainerExecutor::DoWaitContain
     const std::shared_ptr<runtime_launcher::WaitRequest> &req)
 {
     ASSERT_IF_NULL(containerd_);
-    (void)containerd_
-        ->CallAsync("Wait", req.get(), static_cast<runtime_launcher::WaitResponse *>(nullptr),
+    return containerd_
+        ->CallAsync("Wait", *req.get(), static_cast<runtime_launcher::WaitResponse *>(nullptr),
                     &runtime_launcher::RuntimeLauncher::Stub::AsyncWait)
         .Then([req](litebus::Try<runtime_launcher::WaitResponse> rsp)
                   -> litebus::Future<runtime_launcher::WaitResponse> {
             if (rsp.IsOK()) {
                 return rsp.Get();
             }
-            auto msg = fmt::format("failed to wait container {}, grpc err: {}",
-                                   req->id(), fmt::underlying(rsp.GetErrorCode()));
-            YRLOG_ERROR("{}",msg);
-            runtime_launcher::WaitResponse rsp{};
-            rsp->set_status(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
-            rsp->set_message(msg);
-            return rsp;
+            auto msg = fmt::format("failed to wait container {}, grpc err: {}", req->id(), rsp.GetErrorCode());
+            YRLOG_ERROR("{}", msg);
+            runtime_launcher::WaitResponse wait{};
+            wait.set_status(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+            wait.set_message(msg);
+            return wait;
         });
 }
 
@@ -526,11 +531,6 @@ litebus::Future<Status> ContainerExecutorProxy::StopInstance(
 litebus::Future<std::map<std::string, messages::RuntimeInstanceInfo>> ContainerExecutorProxy::GetRuntimeInstanceInfos()
 {
     return litebus::Async(executor_->GetAID(), &ContainerExecutor::GetRuntimeInstanceInfos);
-}
-
-void ContainerExecutorProxy::UpdatePrestartRuntimePromise(pid_t pid)
-{
-    return litebus::Async(executor_->GetAID(), &ContainerExecutor::UpdatePrestartRuntimePromise, pid);
 }
 
 }  // namespace functionsystem::runtime_manager
