@@ -237,7 +237,7 @@ void RuntimeManager::InnerOomKillInstance(const litebus::Future<Status> &status,
     request->set_requestid(requestID);
     auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
     request->set_traceid("trace-OOM-Kill_" + runtimeID + "_" + uuid.ToString());
-    request->set_type(GetRuntimeType(runtimeID));
+    request->set_type(static_cast<int32_t>(GetRuntimeType(runtimeID)));
 
     auto executor = FindExecutor(EXECUTOR_TYPE(request->type()));
     YRLOG_INFO("{}|{}|begin to oom kill runtime({}).", request->traceid(), requestID, runtimeID);
@@ -324,9 +324,9 @@ void RuntimeManager::HandlePrestartRuntimeExit(const pid_t pid)
 void RuntimeManager::SetConfig(const Flags &flags)
 {
     functionAgentAID_ = litebus::AID(FUNCTION_AGENT_AGENT_SERVICE_ACTOR_NAME, flags.GetAgentAddress());
-
-    for (auto [type, executor] : executorMap_) {
-        YRLOG_INFO("SetRuntimeConfig for type({})", type);
+    for (auto type : {EXECUTOR_TYPE::RUNTIME, EXECUTOR_TYPE::CONTAINER}) {
+        auto executor = FindExecutor(type);
+        YRLOG_INFO("SetRuntimeConfig for type({})", fmt::underlying(type));
         if (executor != nullptr) {
             executor->SetRuntimeConfig(flags);
         }
@@ -440,7 +440,7 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::FindExecutor(EXECUTOR_TYPE type)
         return executorProxy;
     }
     if (type == EXECUTOR_TYPE::CONTAINER) {
-         YRLOG_DEBUG("create a container executor.");
+        YRLOG_INFO("create a container executor.");
         auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
         const std::string name = "RuntimeExecutor_" + uuid.ToString();
         auto executor = std::make_shared<ContainerExecutor>(name, functionAgentAID_);
@@ -1066,10 +1066,10 @@ litebus::Future<bool> RuntimeManager::IsRuntimeActiveByPid(const pid_t &pid)
     return executor->IsRuntimeActiveByPid(pid);
 }
 
-EXECUTOR_TYPE GetRuntimeType(const std::string &runtimeID)
+EXECUTOR_TYPE RuntimeManager::GetRuntimeType(const std::string &runtimeID)
 {
     auto type = EXECUTOR_TYPE::RUNTIME;
-    if (instanceInfoMap_.find(runtimeID != instanceInfoMap_.end())) {
+    if (instanceInfoMap_.find(runtimeID) != instanceInfoMap_.end()) {
         auto info = instanceInfoMap_[runtimeID];
         if (info.deploymentconfig().deployoptions().find(CONTAINER_OPTS) != info.deploymentconfig().deployoptions().end()) {
             type = EXECUTOR_TYPE::CONTAINER;
