@@ -127,7 +127,9 @@ public:
         const std::string &runtimeID, const std::string &requestID);
 
     litebus::Future<Status> NotifyInstancesDiskUsageExceedLimit(const std::string &description, const int limit);
-
+    
+    EXECUTOR_TYPE GetRuntimeType(const std::string &runtimeID);
+    
 protected:
     void Init() override;
 
