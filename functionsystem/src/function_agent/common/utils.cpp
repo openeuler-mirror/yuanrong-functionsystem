@@ -460,7 +460,6 @@ void SetStopRuntimeInstanceRequest(messages::StopInstanceRequest &stopInstanceRe
     stopInstanceRequest.set_runtimeid(req->runtimeid());
     stopInstanceRequest.set_requestid(req->requestid());
     stopInstanceRequest.set_traceid(req->traceid());
-    stopInstanceRequest.set_type(req->type());
 }
 
 std::unordered_map<std::string, std::shared_ptr<messages::Layer>> SetDeployingRequestLayers(
