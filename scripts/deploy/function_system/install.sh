@@ -177,7 +177,7 @@ function install_faas_frontend() {
   POD_NAME="frontend-process" \
   FUNCTION_LIB_PATH=${PATTERN_FAAS_HOME_DIR}/faasfrontend/faasfrontend.so \
   INIT_ARGS_FILE_PATH=${install_init_frontend_config} \
-  LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${GO_RUNTIME_BIN}:${LD_LIBRARY_PATH} \
+  LD_LIBRARY_PATH=${GO_RUNTIME_BIN}:${FUNCTION_SYSTEM_DIR}/lib:${LD_LIBRARY_PATH} \
   ENABLE_SERVER_MODE="true" \
   INIT_HANDLER="faasfrontend.InitHandler" \
   CALL_HANDLER="faasfrontend.CallHandler" \
@@ -212,6 +212,70 @@ function install_faas_frontend() {
   -driverMode true  >> "${FS_LOG_PATH}/${NODE_ID}-faas_frontend${STD_LOG_SUFFIX}"  2>&1 &
   FAAS_FRONTEND_PID="$!"
   log_info "succeed to start faas frontend, http_ip=${IP_ADDRESS}, http_port=${FAAS_FRONTEND_HTTP_PORT}, grpc_port=${FAAS_FRONTEND_GRPC_PORT}, pid=${FAAS_FRONTEND_PID}"
+}
+
+function install_function_scheduler() {
+  log_info "start scheduler..."
+  init_scheduler_config=${FUNCTION_SYSTEM_DIR}/config/init_scheduler_args.json
+  install_init_scheduler_config=${config_install_dir}/init_scheduler_args_temp.json
+  cp ${init_scheduler_config} ${install_init_scheduler_config}
+  sed -i "s/{etcdAddr}/$(echo ${ETCD_CLUSTER_ADDRESS} | sed 's/,/","/g')/g" ${install_init_scheduler_config}
+  sed -i "s/{sslEnable}/${SSL_ENABLE}/g" ${install_init_scheduler_config}
+  sed -i "s/{sccEnable}/${SCC_ENABLE}/g" ${install_init_scheduler_config}
+  sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" ${install_init_scheduler_config}
+  sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" ${install_init_scheduler_config}
+  sed -i "s*{sslBasePath}*${SSL_BASE_PATH}*g" ${install_init_scheduler_config}
+  sed -i "s*{sccBasePath}*${SCC_BASE_PATH}*g" ${install_init_scheduler_config}
+  if [ "X${SSL_ENABLE}" = "Xtrue" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
+    sed -i "s*{etcdCAFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}*g" ${install_init_scheduler_config}
+    sed -i "s*{etcdCertFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}*g" ${install_init_scheduler_config}
+    sed -i "s*{etcdKeyFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}*g" ${install_init_scheduler_config}
+    sed -i "s*{passphraseFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_PWD_FILE}*g" ${install_init_scheduler_config}
+  else
+    sed -i "s*{etcdCAFile}**g" ${install_init_scheduler_config}
+    sed -i "s*{etcdCertFile}**g" ${install_init_scheduler_config}
+    sed -i "s*{etcdKeyFile}**g" ${install_init_scheduler_config}
+    sed -i "s*{passphraseFile}**g" ${install_init_scheduler_config}
+  fi
+  GO_RUNTIME_BIN=${RUNTIME_HOME_DIR}/service/go/bin
+  POD_NAME="scheduler-process" \
+  FUNCTION_LIB_PATH=${PATTERN_FAAS_HOME_DIR}/faasscheduler/faasscheduler.so \
+  INIT_ARGS_FILE_PATH=${install_init_scheduler_config} \
+  LD_LIBRARY_PATH=${GO_RUNTIME_BIN}:${FUNCTION_SYSTEM_DIR}/lib:${LD_LIBRARY_PATH} \
+  ENABLE_SERVER_MODE="true" \
+  INIT_HANDLER="faasscheduler.InitHandler" \
+  CALL_HANDLER="faasscheduler.CallHandler" \
+  CHECKPOINT_HANDLER="faasscheduler.CheckpointHandler" \
+  RECOVER_HANDLER="faasscheduler.RecoverHandler" \
+  SHUTDOWN_HANDLER="faasscheduler.ShutdownHandler" \
+  SIGNAL_HANDLER="faasscheduler.SignalHandler" \
+  YR_FUNCTION_LIB_PATH=${PATTERN_FAAS_HOME_DIR}/faasscheduler/ \
+  GLOG_log_dir="${FS_LOG_PATH}" \
+  YR_LOG_LEVEL=${FS_LOG_LEVEL} \
+  POD_IP=${IP_ADDRESS} \
+  NODE_IP=${IP_ADDRESS} \
+  DATASYSTEM_ADDR=${IP_ADDRESS}:${DS_WORKER_PORT} \
+  INSTANCE_ID="driver-scheduler-${NODE_ID}" \
+  FAAS_LOG_PATH=${FS_LOG_PATH} \
+  ${GO_RUNTIME_BIN}/goruntime \
+  -jobId=${NODE_ID} \
+  -runtimeId='scheduler_libruntime' \
+  -instanceId="driver-scheduler-${NODE_ID}" \
+  -functionName='0/0-system-faasscheduler/$latest' \
+  -logLevel=${FS_LOG_LEVEL} \
+  -logPath=${FS_LOG_PATH} \
+  -enableMTLS=${ENABLE_MTLS} \
+  -privateKeyPath=${PRIVATE_KEY_PATH} \
+  -certificateFilePath=${CERTIFICATE_FILE_PATH} \
+  -verifyFilePath=${VERIFY_FILE_PATH} \
+  -encryptPrivateKeyPasswd=${ENCRYPT_PRIVATE_KEY_PASSWD} \
+  -primaryKeyStoreFile=${PRIMARY_KEY_STORE_FILE} \
+  -standbyKeyStoreFile=${STANDBY_KEY_STORE_FILE} \
+  -enableDsEncrypt=${RUNTIME_DS_ENCRYPT_ENABLE} \
+  -functionSystemAddress="${IP_ADDRESS}:${FUNCTION_PROXY_GRPC_PORT}" \
+  -driverMode true  >> "${FS_LOG_PATH}/${NODE_ID}-scheduler${STD_LOG_SUFFIX}"  2>&1 &
+  SCHEDULER_PID="$!"
+  log_info "succeed to scheduler, pid=${SCHEDULER_PID}"
 }
 
 function install_function_agent() {
@@ -447,6 +511,9 @@ function install_function_system() {
     ;;
   faas_frontend)
     install_faas_frontend
+    ;;
+  function_scheduler)
+    install_function_scheduler
     ;;
   metaservice)
     install_metaservice

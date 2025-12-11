@@ -792,7 +792,19 @@ litebus::Future<KillResponse> InstanceCtrlActor::Exit(const std::shared_ptr<Kill
     // after the driver is marked for exit, subsequent cleanup actions are executed by detecting disconnection.
     if (IsDriver(instanceInfo)) {
         stateMachine->TagStop();
-        return KillResponse();
+        // get client to check connection is already closed.
+        return clientManager_->GetControlInterfacePosixClient(instanceInfo.instanceid())
+            .Then([instanceInfo, aid(GetAID())](const std::shared_ptr<ControlInterfacePosixClient> &client) {
+                // if connection of client is closed, the client should be removed immediately, avoid garbage collection
+                // deferred.
+                if (client == nullptr || client->IsDone()) {
+                    YRLOG_INFO("connection of {} is already closed, immediately to remove driver info",
+                               instanceInfo.instanceid());
+                    litebus::Async(aid, &InstanceCtrlActor::DeleteDriverClient, instanceInfo.instanceid(),
+                                   instanceInfo.jobid());
+                }
+                return KillResponse();
+            });
     }
     if (auto iter = exiting_.find(instanceInfo.instanceid()); iter != exiting_.end()) {
         YRLOG_INFO("{}|instance({}) is exiting", instanceInfo.requestid(), instanceInfo.instanceid());
