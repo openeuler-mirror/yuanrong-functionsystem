@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 
-#include "build.h"
+#include "command_builder.h"
 
 #include <unordered_set>
 
-#include "common/logs/logging.h"
 #include "common/constants/constants.h"
+#include "common/logs/logging.h"
+#include "common/resource_view/resource_type.h"
+#include "common/utils/path.h"
 #include "utils/os_utils.hpp"
 #include "utils/utils.h"
 
@@ -64,6 +66,21 @@ const std::string JAVA_JOB_ID = "-DjobId=job-";
 const std::string JAVA_MAIN_CLASS = "com.yuanrong.runtime.server.RuntimeServer";
 const std::string PYTHON_NEW_SERVER_PATH = "/python/fnruntime/server.py";
 const std::string YR_JAVA_RUNTIME_PATH = "/java/yr-runtime-1.0.0.jar";
+
+const std::string INSTANCE_WORK_DIR_ENV = "INSTANCE_WORK_DIR";
+const std::string YR_NOSET_ASCEND_RT_VISIBLE_DEVICES = "YR_NOSET_ASCEND_RT_VISIBLE_DEVICES";
+const static std::string ASCEND_RT_VISIBLE_DEVICES = "ASCEND_RT_VISIBLE_DEVICES";
+
+const std::string CONDA_PROGRAM_NAME = "conda";
+const std::string CONDA_ENV_FILE = "env.yaml";
+const std::string WHITE_LIST_ENV_PREFIX = "YR_";
+
+const std::string CHDIR_PATH_CONFIG = "CHDIR_PATH";
+
+// Exclude environment variables passed to the runtime
+const std::vector<std::string> EXCLUDE_ENV_KEYS_PASSED_TO_RUNTIME = {
+    UNZIPPED_WORKING_DIR
+};  // job working_dir file unzipped path
 
 std::string CommandBuilder::GetExecPath(const std::string &language) const
 {

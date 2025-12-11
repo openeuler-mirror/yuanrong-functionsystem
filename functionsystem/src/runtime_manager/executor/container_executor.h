@@ -56,7 +56,7 @@ public:
 
     std::map<std::string, messages::RuntimeInstanceInfo> GetRuntimeInstanceInfos() override;
 
-    void UpdatePrestartRuntimePromise(pid_t pid) override;
+    void UpdatePrestartRuntimePromise(pid_t pid) override {};
 
     void ClearCapability() override {}
 
@@ -65,8 +65,9 @@ public:
 
     litebus::Future<Status> NotifyInstancesDiskUsageExceedLimit(const std::string &description,
                                                                 const int limit) override;
-
     void InitConfig() override;
+
+    litebus::Future<bool> StopAllContainers();
 
 protected:
     void Init() override;
@@ -79,15 +80,18 @@ protected:
     void InitVirtualEnvIdleTimeLimit() override {};
 
 private:
-    std::shared_ptr<litebus::Exec> StartByRuntimeID(const std::shared_ptr<messages::StartInstanceRequest> &request,
-                                                    const std::map<std::string, std::string> startRuntimeParams,
-                                                    const std::vector<std::string> &buildArgs, const Envs &envs);
+    void ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID);
 
-    Status StopInstanceByRuntimeID(const std::string &runtimeID, const std::string &requestID, bool oomKilled = false);
+    litebus::Future<runtime_launcher::StartResponse> StartByRuntimeID(
+        const std::shared_ptr<messages::StartInstanceRequest> &request,
+        const std::map<std::string, std::string> startRuntimeParams, const std::vector<std::string> &buildArgs,
+        const Envs &envs);
+
+    litebus::Future<Status> StopInstanceByRuntimeID(const std::string &runtimeID, const std::string &requestID,
+                                                    bool oomKilled = false);
     litebus::Future<Status> TerminateContainer(const std::string &runtimeID, const std::string &requestID,
                                                const std::string &containerID, bool force);
-    litebus::Future<Status> OnDeleteContainer(const runtime_launcher::DeleteResponse &,
-                                              const std::string &instanceID, const std::string &runtimeID,
+    litebus::Future<Status> OnDeleteContainer(const std::string &instanceID, const std::string &runtimeID,
                                               const std::string &requestID, const std::string &containerID);
     messages::StartInstanceResponse GenSuccessStartInstanceResponse(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &containerID);
@@ -95,6 +99,10 @@ private:
     litebus::Future<messages::StartInstanceResponse> StartRuntime(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &language,
         const std::string &port, const Envs &envs, const std::vector<std::string> &args);
+
+    litebus::Future<messages::StartInstanceResponse> OnStartRuntime(
+        const runtime_launcher::StartResponse &response,
+        const std::shared_ptr<messages::StartInstanceRequest> &request);
 
     void ReportInfo(const std::string &instanceID, const std::string runtimeID, const std::string &containerID,
                     const functionsystem::metrics::MeterTitle &title);
@@ -109,12 +117,12 @@ private:
         const std::shared_ptr<runtime_launcher::WaitRequest> &req);
 
     std::map<std::string, messages::RuntimeInstanceInfo> runtimeInstanceInfoMap_;
-    std::map<std::string, string> runtime2containerID_;
+    std::map<std::string, std::string> runtime2containerID_;
     std::unordered_set<std::string> innerOomKilledruntimes_;
     litebus::AID functionAgentAID_;
     std::unique_ptr<GrpcClient<runtime_launcher::RuntimeLauncher>> containerd_ {nullptr};
     std::shared_ptr<HealthCheck> healthCheckClient_;
-    CommandBuilder cmdBuilder_(false);
+    CommandBuilder cmdBuilder_ = {false};
 };
 
 class ContainerExecutorProxy : public ExecutorProxy {

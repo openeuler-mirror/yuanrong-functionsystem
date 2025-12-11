@@ -17,8 +17,9 @@
 #ifndef RUNTIME_MANAGER_CONFIG_COMMAND_BUILDER_H
 #define RUNTIME_MANAGER_CONFIG_COMMAND_BUILDER_H
 
-#include "runtime_manager/executor/executor.h"
+#include "build.h"
 #include "common/proto/pb/message_pb.h"
+#include "runtime_manager/executor/executor.h"
 
 namespace functionsystem::runtime_manager {
 class CommandBuilder {
@@ -110,8 +111,7 @@ private:
                            { PYTHON311_LANGUAGE, &CommandBuilder::GetPythonBuildArgs } };
     RuntimeConfig config_;
     bool execLookPath_ = true;
-}
-
+};
 }
 
 #endif
