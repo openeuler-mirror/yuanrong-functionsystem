@@ -2,9 +2,6 @@
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} SCALER_SRCS)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/utils SCALER_UTILS_SRCS)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/pool SCALER_POOL_SRCS)
-aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/long_run_pod_collector SCALER_SRCS)
-aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/nuwa SCALER_SRCS)
-aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/kuberay SCALER_SRCS)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/system_function_pod_manager SCALER_SRCS)
 
 set(SCALER_LIB scaler_lib) # for this directory
