@@ -456,44 +456,52 @@ litebus::Future<runtime_launcher::StartResponse> ContainerExecutor::DoStartConta
     const std::shared_ptr<messages::StartInstanceRequest> &request,
     const std::shared_ptr<runtime_launcher::StartRequest> &start)
 {
-    ASSERT_IF_NULL(containerd_);
-    return containerd_
-        ->CallAsync("Start", *start.get(), static_cast<runtime_launcher::StartResponse *>(nullptr),
-                    &runtime_launcher::RuntimeLauncher::Stub::AsyncStart)
-        .Then([aid(GetAID()), start, request](litebus::Try<runtime_launcher::StartResponse> rsp)
-                  -> litebus::Future<runtime_launcher::StartResponse> {
-            if (rsp.IsOK()) {
-                return rsp.Get();
-            }
-            auto msg = fmt::format("failed to start container {} for runtime({}) instance({}), grpc err: {}",
-                                   start->runtime(), request->runtimeinstanceinfo().runtimeid(),
-                                   request->runtimeinstanceinfo().instanceid(), rsp.GetErrorCode());
-            YRLOG_ERROR("{}|{}|{}", request->runtimeinstanceinfo().traceid(),
-                        request->runtimeinstanceinfo().requestid(), msg);
-            runtime_launcher::StartResponse startRsp{};
-            startRsp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
-            startRsp.set_message(msg);
-            return startRsp;
-        });
+    YRLOG_INFO("{}|{}|{} {} DoStartContainer meg: {}", request->runtimeinstanceinfo().traceid(),
+                        request->runtimeinstanceinfo().requestid(), request->runtimeinstanceinfo().runtimeid(),
+                                   request->runtimeinstanceinfo().instanceid(), start->ShortDebugString());
+    runtime_launcher::StartResponse startRsp{};
+    startRsp.set_id("123456789");
+    return startRsp;
+    // ASSERT_IF_NULL(containerd_);
+    // return containerd_
+    //     ->CallAsync("Start", *start.get(), static_cast<runtime_launcher::StartResponse *>(nullptr),
+    //                 &runtime_launcher::RuntimeLauncher::Stub::AsyncStart)
+    //     .Then([aid(GetAID()), start, request](litebus::Try<runtime_launcher::StartResponse> rsp)
+    //               -> litebus::Future<runtime_launcher::StartResponse> {
+    //         if (rsp.IsOK()) {
+    //             return rsp.Get();
+    //         }
+    //         auto msg = fmt::format("failed to start container {} for runtime({}) instance({}), grpc err: {}",
+    //                                start->runtime(), request->runtimeinstanceinfo().runtimeid(),
+    //                                request->runtimeinstanceinfo().instanceid(), rsp.GetErrorCode());
+    //         YRLOG_ERROR("{}|{}|{}", request->runtimeinstanceinfo().traceid(),
+    //                     request->runtimeinstanceinfo().requestid(), msg);
+    //         runtime_launcher::StartResponse startRsp{};
+    //         startRsp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+    //         startRsp.set_message(msg);
+    //         return startRsp;
+    //     });
 }
 litebus::Future<runtime_launcher::DeleteResponse> ContainerExecutor::DoDeleteContainer(
     const std::string &instanceID, const std::string &runtimeID, const std::string &requestID,
     const std::shared_ptr<runtime_launcher::DeleteRequest> &req)
 {
-    ASSERT_IF_NULL(containerd_);
-    return containerd_
-        ->CallAsync("Delete", *req.get(), static_cast<runtime_launcher::DeleteResponse *>(nullptr),
-                    &runtime_launcher::RuntimeLauncher::Stub::AsyncDelete)
-        .Then([aid(GetAID()), req, runtimeID, requestID](litebus::Try<runtime_launcher::DeleteResponse> rsp)
-                  -> litebus::Future<runtime_launcher::DeleteResponse> {
-            if (rsp.IsOK()) {
-                return rsp.Get();
-            }
-            auto msg = fmt::format("failed to delete container {} for runtime({}), grpc err: {}", req->id(), runtimeID,
-                                   rsp.GetErrorCode());
-            YRLOG_ERROR("{}|{}", requestID, msg);
-            return runtime_launcher::DeleteResponse{};
-        });
+    YRLOG_INFO("{}|{}|{} DoDeleteContainer meg: {}", requestID, instanceID, runtimeID, req->ShortDebugString());
+    return runtime_launcher::DeleteResponse{};
+    // ASSERT_IF_NULL(containerd_);
+    // return containerd_
+    //     ->CallAsync("Delete", *req.get(), static_cast<runtime_launcher::DeleteResponse *>(nullptr),
+    //                 &runtime_launcher::RuntimeLauncher::Stub::AsyncDelete)
+    //     .Then([aid(GetAID()), req, runtimeID, requestID](litebus::Try<runtime_launcher::DeleteResponse> rsp)
+    //               -> litebus::Future<runtime_launcher::DeleteResponse> {
+    //         if (rsp.IsOK()) {
+    //             return rsp.Get();
+    //         }
+    //         auto msg = fmt::format("failed to delete container {} for runtime({}), grpc err: {}", req->id(), runtimeID,
+    //                                rsp.GetErrorCode());
+    //         YRLOG_ERROR("{}|{}", requestID, msg);
+    //         return runtime_launcher::DeleteResponse{};
+    //     });
 }
 litebus::Future<runtime_launcher::WaitResponse> ContainerExecutor::DoWaitContainer(
     const std::shared_ptr<runtime_launcher::WaitRequest> &req)
