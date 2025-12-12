@@ -82,7 +82,7 @@ protected:
 private:
     void ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID);
 
-    litebus::Future<runtime_launcher::StartResponse> StartByRuntimeID(
+    litebus::Future<runtime::v1::StartResponse> StartByRuntimeID(
         const std::shared_ptr<messages::StartInstanceRequest> &request,
         const std::map<std::string, std::string> startRuntimeParams, const std::vector<std::string> &buildArgs,
         const Envs &envs);
@@ -101,26 +101,26 @@ private:
         const std::string &port, const Envs &envs, const std::vector<std::string> &args);
 
     litebus::Future<messages::StartInstanceResponse> OnStartRuntime(
-        const runtime_launcher::StartResponse &response,
+        const runtime::v1::StartResponse &response,
         const std::shared_ptr<messages::StartInstanceRequest> &request);
 
     void ReportInfo(const std::string &instanceID, const std::string runtimeID, const std::string &containerID,
                     const functionsystem::metrics::MeterTitle &title);
 
-    litebus::Future<runtime_launcher::StartResponse> DoStartContainer(
+    litebus::Future<runtime::v1::StartResponse> DoStartContainer(
         const std::shared_ptr<messages::StartInstanceRequest> &request,
-        const std::shared_ptr<runtime_launcher::StartRequest> &start);
-    litebus::Future<runtime_launcher::DeleteResponse> DoDeleteContainer(
+        const std::shared_ptr<runtime::v1::StartRequest> &start);
+    litebus::Future<runtime::v1::DeleteResponse> DoDeleteContainer(
         const std::string &instanceID, const std::string &runtimeID, const std::string &requestID,
-        const std::shared_ptr<runtime_launcher::DeleteRequest> &req);
-    litebus::Future<runtime_launcher::WaitResponse> DoWaitContainer(
-        const std::shared_ptr<runtime_launcher::WaitRequest> &req);
+        const std::shared_ptr<runtime::v1::DeleteRequest> &req);
+    litebus::Future<runtime::v1::WaitResponse> DoWaitContainer(
+        const std::shared_ptr<runtime::v1::WaitRequest> &req);
 
     std::map<std::string, messages::RuntimeInstanceInfo> runtimeInstanceInfoMap_;
     std::map<std::string, std::string> runtime2containerID_;
     std::unordered_set<std::string> innerOomKilledruntimes_;
     litebus::AID functionAgentAID_;
-    std::unique_ptr<GrpcClient<runtime_launcher::RuntimeLauncher>> containerd_ {nullptr};
+    std::unique_ptr<GrpcClient<runtime::v1::RuntimeLauncher>> containerd_ {nullptr};
     std::shared_ptr<HealthCheck> healthCheckClient_;
     CommandBuilder cmdBuilder_ = {false};
 };

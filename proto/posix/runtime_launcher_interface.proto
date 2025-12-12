@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package runtime_launcher;
+package runtime.v1;
 
 service RuntimeLauncher {
   rpc Start (StartRequest) returns (StartResponse) {}
@@ -8,7 +8,7 @@ service RuntimeLauncher {
   rpc Wait (WaitRequest) returns (WaitResponse) {}
 }
 
-message ImageSpec {
+message RootfsSpec {
   string imageUrl = 1;
   bool readonly = 2;
 }
@@ -24,10 +24,11 @@ message Mount {
   repeated string options = 4;
 }
 
+
 message StartRequest {
   string runtime = 1;
-  repeated string cmd = 2;
-  ImageSpec image = 3;
+  repeated string command = 2;
+  RootfsSpec rootfs = 3;
   repeated Mount mounts = 4;
   // resource request of function
   // etc: CPU millicore​
@@ -37,9 +38,9 @@ message StartRequest {
   map<string, string> userEnvs = 7;
   // string envsFile = 9;
   // redirect path for stdout
-  string stdout = 10;
+  string stdout = 8;
   // redirect path for stderr
-  string stderr = 11;
+  string stderr = 9;
 }
 
 message StartResponse {
@@ -64,10 +65,10 @@ message WaitRequest {
 }
 
 message WaitResponse {
-    int32 status = 1;
-    // Exit code of the container. Only required when finished_at != 0. Default: 0.
-    int32 exit_code = 2;
-    // Human-readable message indicating details about why container is in its
-    // current state.
-    string message = 3;
+  int32 status = 1;
+  // Exit code of the container. Only required when finished_at != 0. Default: 0.
+  int32 exit_code = 2;
+  // Human-readable message indicating details about why container is in its
+  // current state.
+  string message = 3;
 }
