@@ -24,9 +24,13 @@ import (
 	"github.com/spf13/cobra"
 
 	"cli/constant"
+	"cli/internal/debug"
+	"cli/internal/down"
+	"cli/internal/exec"
 	"cli/internal/start"
 	"cli/internal/status"
 	"cli/internal/stop"
+	"cli/internal/up"
 	"cli/internal/version"
 	"cli/pkg/cmdio"
 )
@@ -51,10 +55,14 @@ func NewCmdRoot() *cobra.Command {
 
 	cobra.OnInitialize()
 
-	cmd.AddCommand(start.InitYrCMD(cio))
-	cmd.AddCommand(stop.InitYrCMD(cio))
-	cmd.AddCommand(status.InitYrCMD(cio))
-	cmd.AddCommand(version.InitVersionCMD(cio))
+	cmd.AddCommand(start.InitCMD(cio))
+	cmd.AddCommand(stop.InitCMD(cio))
+	cmd.AddCommand(status.InitCMD(cio))
+	cmd.AddCommand(version.InitCMD(cio))
+	cmd.AddCommand(exec.InitCMD(cio))
+	cmd.AddCommand(up.InitCMD(cio))
+	cmd.AddCommand(down.InitCMD(cio))
+	cmd.AddCommand(debug.InitCMD(cio))
 
 	return cmd
 }

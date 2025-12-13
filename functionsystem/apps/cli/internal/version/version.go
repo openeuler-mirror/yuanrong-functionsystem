@@ -50,8 +50,8 @@ var cmd = &cobra.Command{
 	},
 }
 
-// InitVersionCMD init cmd for version
-func InitVersionCMD(cio *cmdio.CmdIO) *cobra.Command {
+// InitCMD init cmd for version
+func InitCMD(cio *cmdio.CmdIO) *cobra.Command {
 	opts.cmdIO = cio
 	return cmd
 }
