@@ -101,8 +101,8 @@ var yrStartCmd = &cobra.Command{
 	RunE: yrStartDeploy,
 }
 
-// InitYrCMD init cmd
-func InitYrCMD(cio *cmdio.CmdIO) *cobra.Command {
+// InitCMD init cmd
+func InitCMD(cio *cmdio.CmdIO) *cobra.Command {
 	yrOpts.cmdIO = cio
 	mem := &runtime.MemStats{}
 	runtime.ReadMemStats(mem)

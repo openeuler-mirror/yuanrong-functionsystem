@@ -64,8 +64,8 @@ const (
 
 var errorGetZeroYuanRongProcesses = errors.New("didn't find any yuanrong processes")
 
-// InitYrCMD init login cmd
-func InitYrCMD(cio *cmdio.CmdIO) *cobra.Command {
+// InitCMD init login cmd
+func InitCMD(cio *cmdio.CmdIO) *cobra.Command {
 	yrOpts.cmdIO = cio
 
 	yrStopCmd.Flags().IntVarP(&yrOpts.graceExitTimeout, "grace_exit_timeout", "g", defaultGraceExitTimeout,

@@ -59,8 +59,8 @@ var yrStatusCmd = &cobra.Command{
 	RunE: yrStatusYuanRong,
 }
 
-// InitYrCMD init login cmd
-func InitYrCMD(cio *cmdio.CmdIO) *cobra.Command {
+// InitCMD init login cmd
+func InitCMD(cio *cmdio.CmdIO) *cobra.Command {
 	yrOpts.cmdIO = cio
 	// 添加命令行参数
 	yrStatusCmd.Flags().StringVar(&yrOpts.etcdEndpoint, "etcd_endpoint", "", "ETCD endpoint address")

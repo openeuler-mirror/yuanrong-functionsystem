@@ -40,12 +40,13 @@ func GetGOOSType() (string, string) {
 	if runtime.GOOS == "windows" {
 		return "CMD", "/C"
 	}
-	return "bash", "-c"
+	return "/bin/sh", "-c"
 }
 
 // ExecCommandUntil - this function will also check if the command exit, so it will return the channel with wait called
 func ExecCommandUntil(cmd *exec.Cmd, stopCond func(ctx context.Context, block bool) error, timeout int, block bool) (
-	error, chan error) {
+	error, chan error,
+) {
 	if err := cmd.Start(); err != nil {
 		fmt.Println("failed to start sub command:", err)
 		return err, nil
