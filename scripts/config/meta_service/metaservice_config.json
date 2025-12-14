@@ -131,8 +131,8 @@
           "dirDepthMax": 1,
           "ioReadTimeout": 100000
         },
-      "versionMax": {maxFunctionVersion},
-      "instanceLabelMax": {maxInstanceLabel},
+      "versionMax": 8,
+      "instanceLabelMax": 100,
       "aliasMax": 8,
       "layerMax": 1
     },

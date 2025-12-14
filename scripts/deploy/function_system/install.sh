@@ -427,14 +427,12 @@ function install_function_master() {
 }
 
 function install_metaservice() {
-  log_info "start metaservice, ip=${IP_ADDRESS}, port=${METASERVICE_PORT}..."
+  log_info "start metaservice, ip=${IP_ADDRESS}, port=${META_SERVICE_PORT}..."
   metaservice_config=${FUNCTION_SYSTEM_DIR}/config/meta_service/metaservice_config.json
   install_metaservice_config=${config_install_dir}/metaservice_config.json
   cp ${metaservice_config} ${install_metaservice_config}
   sed -i "s/{ip}/${IP_ADDRESS}/g" ${install_metaservice_config}
-  sed -i "s/{port}/${METASERVICE_PORT}/g" ${install_metaservice_config}
-  sed -i "s/{maxFunctionVersion}/${MAX_FUNCTION_VERSION}/g" ${install_metaservice_config}
-  sed -i "s/{maxInstanceLabel}/${MAX_INSTANCE_LABEL}/g" ${install_metaservice_config}
+  sed -i "s/{port}/${META_SERVICE_PORT}/g" ${install_metaservice_config}
   sed -i "s/{functionMasterAddr}/${IP_ADDRESS}:${GLOBAL_SCHEDULER_PORT}/g" ${install_metaservice_config}
   sed -i "s/{frontendAddr}/${IP_ADDRESS}:${FAAS_FRONTEND_HTTP_PORT}/g" ${install_metaservice_config}
   sed -i "s/{etcdAddr}/$(echo ${ETCD_CLUSTER_ADDRESS} | sed 's/,/","/g')/g" ${install_metaservice_config}
@@ -478,13 +476,13 @@ function install_metaservice() {
   sed -i "s*{logConfigPath}*${metaservice_log_path}*g" ${metaservice_temp_log}
   sed -i "s/{logLevel}/${FS_LOG_LEVEL}/g" ${metaservice_temp_log}
   LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
-    ${FUNCTION_SYSTEM_DIR}/bin/meta-service \
+    ${FUNCTION_SYSTEM_DIR}/bin/meta_service \
     --config_path="${install_metaservice_config}" \
     --log_config_path="${metaservice_temp_log}" \
     >>"${FS_LOG_PATH}/${NODE_ID}-metaservice${STD_LOG_SUFFIX}" 2>&1 &
     METASERVICE_PID=$!
   if metaservice_health_check ${METASERVICE_PID}; then
-    log_info "succeed to start metaservice process, ip=${IP_ADDRESS} port=${METASERVICE_PORT} pid=${METASERVICE_PID}"
+    log_info "succeed to start metaservice process, ip=${IP_ADDRESS} port=${META_SERVICE_PORT} pid=${METASERVICE_PID}"
     return 0
   fi
   return 1
@@ -515,7 +513,7 @@ function install_function_system() {
   function_scheduler)
     install_function_scheduler
     ;;
-  metaservice)
+  meta_service)
     install_metaservice
     ;;
   *)
