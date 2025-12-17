@@ -50,7 +50,9 @@ inline std::string ScalaValueToString(const Resource &resource)
 
 inline bool ScalaValueValidate(const Resource &resource)
 {
-    if (!resource.has_scalar() || resource.scalar().value() < 0) {
+    // if (!resource.has_scalar() || resource.scalar().value() < 0) {
+    // allowed value < 0 for overcommit scenarios
+    if (!resource.has_scalar()) {
         YRLOG_WARN("invalid scala value : has no scala element({}) or value({}) < 0.", !resource.has_scalar(),
                    resource.has_scalar() ? resource.scalar().value() : 0);
         return false;
