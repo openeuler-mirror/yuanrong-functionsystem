@@ -83,6 +83,9 @@ public:
 
     litebus::Future<Status> DeleteOomNotifyData(const std::string &requestID) const;
 
+    void StartUpdateInstanceStatus(const std::shared_ptr<messages::UpdateInstanceStatusRequest> &req,
+                                   const litebus::AID &to, const std::string &runtimeID, const int status);
+
 private:
     std::shared_ptr<HealthCheckActor> actor_;
 };

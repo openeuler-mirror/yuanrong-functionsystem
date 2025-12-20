@@ -25,6 +25,7 @@
 #include "common/proto/pb/message_pb.h"
 #include "common/status/status.h"
 #include "executor/runtime_executor.h"
+#include "executor/container_executor.h"
 #include "port/port_manager.h"
 #include "runtime_manager/executor/executor.h"
 #include "common/utils/struct_transfer.h"
@@ -105,7 +106,11 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
     if (CheckInstanceIsDeployed(from, instance)) {
         return;
     }
-    auto executor = FindExecutor(EXECUTOR_TYPE(request->type()));
+    auto type = EXECUTOR_TYPE::RUNTIME;
+    if (instance.deploymentconfig().deployoptions().find(CONTAINER_OPTS) != instance.deploymentconfig().deployoptions().end()) {
+        type = EXECUTOR_TYPE::CONTAINER;
+    }
+    auto executor = FindExecutor(type);
     if (executor == nullptr) {
         YRLOG_ERROR("{}|{}|the type({}) is not supported to start runtime for instance({}).", instance.traceid(),
                     instance.requestid(), request->type(), instance.instanceid());
@@ -232,7 +237,7 @@ void RuntimeManager::InnerOomKillInstance(const litebus::Future<Status> &status,
     request->set_requestid(requestID);
     auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
     request->set_traceid("trace-OOM-Kill_" + runtimeID + "_" + uuid.ToString());
-    request->set_type(static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME));
+    request->set_type(static_cast<int32_t>(GetRuntimeType(runtimeID)));
 
     auto executor = FindExecutor(EXECUTOR_TYPE(request->type()));
     YRLOG_INFO("{}|{}|begin to oom kill runtime({}).", request->traceid(), requestID, runtimeID);
@@ -281,7 +286,7 @@ void RuntimeManager::StopInstance(const litebus::AID &from, std::string && /* na
             request->traceid(), request->requestid(), request->runtimeid());
         return;
     }
-    auto executor = FindExecutor(EXECUTOR_TYPE(request->type()));
+    auto executor = FindExecutor(GetRuntimeType(request->runtimeid()));
     if (executor == nullptr) {
         YRLOG_ERROR("{}|{}|the type({}) is not supported to stop runtime({})", request->traceid(), request->requestid(),
                     request->type(), request->runtimeid());
@@ -319,9 +324,12 @@ void RuntimeManager::HandlePrestartRuntimeExit(const pid_t pid)
 void RuntimeManager::SetConfig(const Flags &flags)
 {
     functionAgentAID_ = litebus::AID(FUNCTION_AGENT_AGENT_SERVICE_ACTOR_NAME, flags.GetAgentAddress());
-    auto executor = FindExecutor(EXECUTOR_TYPE::RUNTIME);
-    if (executor != nullptr) {
-        executor->SetRuntimeConfig(flags);
+    for (auto type : {EXECUTOR_TYPE::RUNTIME, EXECUTOR_TYPE::CONTAINER}) {
+        auto executor = FindExecutor(type);
+        YRLOG_INFO("SetRuntimeConfig for type({})", fmt::underlying(type));
+        if (executor != nullptr) {
+            executor->SetRuntimeConfig(flags);
+        }
     }
 
     RETURN_IF_NULL(metricsClient_);
@@ -431,6 +439,17 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::FindExecutor(EXECUTOR_TYPE type)
         (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::RUNTIME, executorProxy));
         return executorProxy;
     }
+    if (type == EXECUTOR_TYPE::CONTAINER) {
+        YRLOG_INFO("create a container executor.");
+        auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
+        const std::string name = "RuntimeExecutor_" + uuid.ToString();
+        auto executor = std::make_shared<ContainerExecutor>(name, functionAgentAID_);
+        executor->SetHealthCheckClient(healthCheckClient_);
+        litebus::Spawn(executor, false);
+        auto executorProxy = std::make_shared<ContainerExecutorProxy>(executor);
+        (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::CONTAINER, executorProxy));
+        return executorProxy;
+    }
     return nullptr;
 }
 
@@ -487,6 +506,7 @@ void RuntimeManager::RegisterToFunctionAgent()
         }
         YRLOG_DEBUG("add instance({}) to regitster info", instanceID);
     }
+    // todo merge both executor of info
     auto executor = FindExecutor(EXECUTOR_TYPE::RUNTIME);
     if (executor == nullptr) {
         YRLOG_ERROR("failed to get runtime executor.");
@@ -675,6 +695,10 @@ void RuntimeManager::CheckHealthForRuntime(const litebus::Future<messages::Start
 
     auto runtimeID = response.Get().startruntimeinstanceresponse().runtimeid();
     auto pid = static_cast<pid_t>(response.Get().startruntimeinstanceresponse().pid());
+    // todo: health check should be mv to executor
+    if (pid == 0) {
+        return;
+    }
     YRLOG_INFO("{}|{}|check health for instance({}) runtime({}) pid({})", request->runtimeinstanceinfo().traceid(),
                request->runtimeinstanceinfo().requestid(), request->runtimeinstanceinfo().instanceid(), runtimeID, pid);
     auto instanceID = request->runtimeinstanceinfo().instanceid();
@@ -983,8 +1007,8 @@ void RuntimeManager::UpdateCred(const litebus::AID &from, std::string &&, std::s
 
     YRLOG_DEBUG("{}|{}|runtime-manager({}) receive UpdateCred from function-agent", requestID, runtimeID,
                 runtimeManagerID_);
-
-    auto executor = FindExecutor(EXECUTOR_TYPE::RUNTIME);
+    
+    auto executor = FindExecutor(GetRuntimeType(runtimeID));
     if (executor == nullptr) {
         YRLOG_ERROR("{}|{}|failed to get runtime executor", requestID, runtimeID);
         messages::UpdateCredResponse updateTokenResponse;
@@ -1040,5 +1064,17 @@ litebus::Future<bool> RuntimeManager::IsRuntimeActiveByPid(const pid_t &pid)
         return false;
     }
     return executor->IsRuntimeActiveByPid(pid);
+}
+
+EXECUTOR_TYPE RuntimeManager::GetRuntimeType(const std::string &runtimeID)
+{
+    auto type = EXECUTOR_TYPE::RUNTIME;
+    if (instanceInfoMap_.find(runtimeID) != instanceInfoMap_.end()) {
+        auto info = instanceInfoMap_[runtimeID];
+        if (info.deploymentconfig().deployoptions().find(CONTAINER_OPTS) != info.deploymentconfig().deployoptions().end()) {
+            type = EXECUTOR_TYPE::CONTAINER;
+        }
+    }
+    return type;
 }
 }  // namespace functionsystem::runtime_manager
