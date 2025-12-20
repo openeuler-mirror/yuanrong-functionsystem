@@ -98,4 +98,10 @@ void HealthCheck::RemoveRuntimeStatusCache(const std::string &runtimeID) const
     litebus::Async(actor_->GetAID(), &HealthCheckActor::RemoveRuntimeStatusCache, runtimeID);
 }
 
+void HealthCheck::StartUpdateInstanceStatus(const std::shared_ptr<messages::UpdateInstanceStatusRequest> &req,
+                                            const litebus::AID &to, const std::string &runtimeID, const int status)
+{
+    litebus::Async(actor_->GetAID(), &HealthCheckActor::StartUpdateInstanceStatus, req, to, runtimeID, status);
+}
+
 }  // namespace functionsystem::runtime_manager

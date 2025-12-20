@@ -68,7 +68,7 @@ const uint64_t DEFAULT_PULL_RESOURCE_INTERVAL = 1000;
 
 const uint32_t DEFAULT_DOMAIN_HEARTBEAT_TIMEOUT = 6000;
 
-enum class EXECUTOR_TYPE { RUNTIME = 0, UNKNOWN = -1 };
+enum class EXECUTOR_TYPE { RUNTIME = 0, CONTAINER = 1, UNKNOWN = -1 };
 
 const int32_t SYSTEM_FUNCTION_INSTANCE_LEVEL = 1;
 
@@ -266,6 +266,9 @@ const std::string CONDA_CONFIG = "CONDA_CONFIG";
 const std::string CONDA_COMMAND = "CONDA_COMMAND";
 const std::string CONDA_PREFIX = "CONDA_PREFIX";
 const std::string CONDA_DEFAULT_ENV = "CONDA_DEFAULT_ENV";
+
+// container 
+const std::string CONTAINER_OPTS = "CONTAINER_OPTS";  // { "runtime": "", "imageurl":"", "readonly":true}
 
 // hibernate
 const std::string ENABLE_SUSPEND_RESUME = "enableSuspendResume";
