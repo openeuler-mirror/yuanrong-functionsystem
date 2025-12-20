@@ -14,32 +14,33 @@
  * limitations under the License.
  */
 
-#include <csignal>
 #include <algorithm>
 #include <atomic>
+#include <csignal>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include "common/utils/exec_utils.h"
-#include "common/utils/module_switcher.h"
-#include "common/utils/ssl_config.h"
-#include "common/utils/version.h"
-#include "common/aksk/aksk_util.h"
-#include "function_agent/driver/function_agent_driver.h"
-#include "function_agent/flags/function_agent_flags.h"
-#include "runtime_manager/config/flags.h"
-#include "runtime_manager/driver/runtime_manager_driver.h"
 #include "async/future.hpp"
 #include "async/option.hpp"
+#include "common/aksk/aksk_util.h"
 #include "common/constants/constants.h"
 #include "common/logs/logging.h"
 #include "common/proto/pb/message_pb.h"
 #include "common/status/status.h"
+#include "common/utils/exec_utils.h"
+#include "common/utils/module_switcher.h"
 #include "common/utils/param_check.h"
 #include "common/utils/s3_config.h"
 #include "common/utils/sensitive_value.h"
+#include "common/utils/ssl_config.h"
+#include "common/utils/version.h"
+#include "function_agent/common/kv_client.h"
+#include "function_agent/driver/function_agent_driver.h"
+#include "function_agent/flags/function_agent_flags.h"
+#include "runtime_manager/config/flags.h"
+#include "runtime_manager/driver/runtime_manager_driver.h"
 
 using namespace functionsystem;
 
@@ -72,10 +73,10 @@ S3Config GetS3Config(const function_agent::FunctionAgentFlags &flags)
         YRLOG_INFO("S3 auth type({}) enabled", s3Config.credentialType);
     }
     if (!flags.GetAccessKey().empty()) {
-    	s3Config.accessKey = flags.GetAccessKey();
+        s3Config.accessKey = flags.GetAccessKey();
     }
     if (!flags.GetSecretKey().empty()) {
-    	s3Config.secretKey = flags.GetSecretKey();
+        s3Config.secretKey = flags.GetSecretKey();
     }
     s3Config.endpoint = flags.GetS3Endpoint();
     s3Config.protocol = flags.GetS3Protocol();
@@ -120,6 +121,12 @@ void OnCreateFunctionAgent(const function_agent::FunctionAgentFlags &flags)
 {
     YRLOG_INFO("{} is starting...", COMPONENT_NAME);
     YRLOG_INFO("version:{} branch:{} commit_id:{}", BUILD_VERSION, GIT_BRANCH_NAME, GIT_HASH);
+    if (flags.GetDataSystemEnable()) {
+        if (auto status = function_agent::KVClient::GetInstance().Init(flags); status.IsError()) {
+            YRLOG_ERROR("failed to init kv client, errMsg: {}", status.ToString());
+            return;
+        }
+    }
     g_functionAgentDriver =
         std::make_shared<function_agent::FunctionAgentDriver>(flags.GetNodeID(), BuildStartParam(flags));
     if (auto status = g_functionAgentDriver->Start(); status.IsError()) {

@@ -1151,6 +1151,12 @@ std::pair<Status, std::string> RuntimeExecutor::HandleWorkingDirectory(
                  "" };
     }
 
+    if (workingDirIter->second.find(".img") != std::string::npos) {
+        YRLOG_WARN("{}|{}| not support mount img now {}", info.traceid(), info.requestid(),
+                    workingDirIter->second);
+        return { Status(StatusCode::RUNTIME_MANAGER_WORKING_DIR_FOR_APP_NOTFOUND, "not support mount img now"), "" };
+    }
+
     char canonicalPath[PATH_MAX];
     if (realpath(workingDirIter->second.c_str(), canonicalPath) == nullptr) {
         return { Status(StatusCode::RUNTIME_MANAGER_WORKING_DIR_FOR_APP_NOTFOUND, "cannot resolve path"), "" };
