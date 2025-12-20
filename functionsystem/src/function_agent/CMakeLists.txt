@@ -40,6 +40,7 @@ target_link_libraries(${FUNCTION_AGENT_LIB} PUBLIC # for [function_agent_lib]
         ${eSDKOBS_LIB}
         ${zlib_LIB}
         ${zlib_MINIZIP_LIB}
+        ${datasystem_LIB}
         runtime_manager_lib)
 
 add_executable(${FUNCTION_AGENT} main.cpp)
