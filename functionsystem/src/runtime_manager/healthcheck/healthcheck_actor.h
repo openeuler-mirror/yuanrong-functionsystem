@@ -75,6 +75,9 @@ public:
 
     litebus::Future<Status> DeleteOomNotifyData(const std::string &requestID);
 
+    void StartUpdateInstanceStatus(const std::shared_ptr<messages::UpdateInstanceStatusRequest> &req,
+                                   const litebus::AID &to, const std::string &runtimeID, const int status);
+
     litebus::AID functionAgentAID_;
     std::function<void(const pid_t)> processExitCallback_;
     std::function<void(const std::string)> logPrefixExitCallback_ = nullptr;
@@ -95,8 +98,6 @@ private:
     litebus::Future<ExceptionInfo> GetOOMExceptionInfo(const litebus::Option<std::string> &info,
                                                        const std::string &runtimeID, const std::string &instanceID,
                                                        const int &status);
-    void StartUpdateInstanceStatus(const std::shared_ptr<messages::UpdateInstanceStatusRequest> &req,
-                                   const litebus::AID &to, const std::string &runtimeID, const int status);
     void UpdateInstanceStatus(const std::shared_ptr<messages::UpdateInstanceStatusRequest> &req, const litebus::AID &to,
                               const std::string &runtimeID, const int status);
     litebus::Option<std::string> GetLogInfoByPath(const std::string &runtimeID, const std::string &path);

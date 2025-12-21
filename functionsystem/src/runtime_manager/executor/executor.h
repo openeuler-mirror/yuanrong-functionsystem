@@ -50,6 +50,12 @@ const std::string PYTHON310_LANGUAGE = "python3.10";
 const std::string PYTHON311_LANGUAGE = "python3.11";
 const std::string POSIX_CUSTOM_RUNTIME = "posix-custom-runtime";
 
+// this aims to support multiple launcher which orgnized by map
+// key is launcher type name
+// value is config with json fmt
+struct RuntimeLauncherConfig {
+    std::string endpoint;
+};
 struct RuntimeConfig {
     std::string ip;
     std::string hostIP;
@@ -93,6 +99,7 @@ struct RuntimeConfig {
     std::string userLogExportMode;
     bool cleanStreamProducerEnable;
     int virtualEnvIdleTimeLimit;
+    // RuntimeLauncherConfig launcherConfigs;
 };
 
 struct PrestartProcess {
@@ -123,8 +130,8 @@ public:
      * @param request Include stop instance arguments.
      * @return response Include stop instance result arguments.
      */
-    virtual Status StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request,
-                                bool oomKilled = false) = 0;
+    virtual litebus::Future<Status> StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request,
+                                                 bool oomKilled = false) = 0;
 
     /**
      * Get runtime instance infos.
@@ -133,7 +140,7 @@ public:
      */
     virtual std::map<std::string, messages::RuntimeInstanceInfo> GetRuntimeInstanceInfos();
 
-    void InitConfig();
+    virtual void InitConfig();
 
     /**
      * Set runtime config from flags.
