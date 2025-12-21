@@ -52,6 +52,9 @@ litebus::Future<Metric> InstanceMemoryCollector::GetUsage() const
     // /proc/pid/status
     Metric metric;
     metric.instanceID = instanceID_;
+    if (pid_ == 0) {
+        return metric;
+    }
 
     auto path = instance_metrics::PROCESS_STATUS_PATH_EXPRESS;
     path = path.replace(path.find('?'), 1, std::to_string(pid_));
