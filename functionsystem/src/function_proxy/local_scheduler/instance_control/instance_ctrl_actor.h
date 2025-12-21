@@ -148,6 +148,8 @@ struct InstanceCtrlConfig {
     // schedule max priority
     uint16_t maxPriority {0};
     bool enablePreemption {false};
+    // dposix uds endpoint pass to runtime
+    std::string udsPath;
 };
 
 class InstanceCtrlActor : public BasisActor {

@@ -316,7 +316,6 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
                            .maxCpu = flags.GetMaxInstanceCpuSize(),
                            .maxMemory = flags.GetMaxInstanceMemorySize() },
         .enablePrintResourceView = flags.GetEnablePrintResourceView(),
-        .posixGrpcServer = g_posixGrpcServer,
         .posixService = posixService,
         .creds = InitPosixGrpcServerSecureOption(flags),
         .posixPort = flags.GetGrpcListenPort(),
@@ -331,7 +330,8 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .isPartialWatchInstances = flags.IsPartialWatchInstances(),
         .distributedCacheClient = g_commonDriver->GetDistributedCacheClient(),
         .runtimeInstanceDebugEnable = flags.IsRuntimeInstanceDebugEnable(),
-        .unRegisterWhileStop = flags.UnRegisterWhileStop()
+        .unRegisterWhileStop = flags.UnRegisterWhileStop(),
+        .udsPath = flags.GetDPosixUdsPath()
     };
 }
 
