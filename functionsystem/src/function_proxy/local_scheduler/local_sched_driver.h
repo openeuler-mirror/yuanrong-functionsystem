@@ -70,7 +70,6 @@ struct LocalSchedStartParam {
     uint64_t maxDsHealthCheckTimes;
     InstanceLimitResource limitResource;
     bool enablePrintResourceView;
-    std::shared_ptr<functionsystem::grpc::CommonGrpcServer> posixGrpcServer;
     std::shared_ptr<functionsystem::PosixService> posixService;
     std::shared_ptr<::grpc::ServerCredentials> creds;
     std::string posixPort;
@@ -86,6 +85,7 @@ struct LocalSchedStartParam {
     std::shared_ptr<DSCacheClientImpl> distributedCacheClient;
     bool runtimeInstanceDebugEnable;
     bool unRegisterWhileStop;
+    std::string udsPath;
 };
 
 class LocalSchedDriver : public ModuleDriver {
@@ -145,6 +145,7 @@ private:
     std::shared_ptr<ResourceGroupCtrl> rGroupCtrl_;
     std::shared_ptr<SubscriptionMgr> subscriptionMgr_;
     std::shared_ptr<InstanceCtrlMetaStoreHealthyObserver> metaStoreHealthyObserver_;
+    std::shared_ptr<functionsystem::grpc::CommonGrpcServer> posixGrpcServer_;
     bool isStarted_ = false;
 };
 }  // namespace functionsystem::local_scheduler

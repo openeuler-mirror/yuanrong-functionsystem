@@ -238,6 +238,8 @@ void Flags::AddGrpcServerFlags()
             "if on, grpc server will set in proxy and client in runtime", true);
     AddFlag(&Flags::enableDriver_, "enable_driver",
             "Indicates whether to enable the gateway service to discover driver.", false);
+    AddFlag(&Flags::dPosixUdsPath_, "dposix_uds_path",
+            "dposix uds path for communication between runtime and function proxy", "");
 }
 
 void Flags::AddIAMFlags()

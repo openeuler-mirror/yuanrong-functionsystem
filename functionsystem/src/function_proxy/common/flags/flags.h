@@ -417,6 +417,11 @@ public:
         return unRegisterWhileStop_;
     }
 
+    std::string GetDPosixUdsPath() const
+    {
+        return dPosixUdsPath_;
+    }
+
 protected:
     void AddRuntimeFlags();
     void AddDSFlags();
@@ -506,6 +511,7 @@ protected:
     bool runtimeInstanceDebugEnable_{ false };  // deploy in docker only use false, in process use false or true
     bool diskUsageMonitorForceDeletePodEnable_{ false };
     bool unRegisterWhileStop_{ false };
+    std::string dPosixUdsPath_;
 };
 
 }  // namespace functionsystem::function_proxy
