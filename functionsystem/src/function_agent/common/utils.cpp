@@ -180,7 +180,7 @@ messages::RuntimeConfig SetRuntimeConfig(const std::shared_ptr<messages::DeployI
     SetCreateOptions(req, runtimeConf, { "secretKey", "accessKey", "authToken" });
     SetTLSConfig(req, runtimeConf);
     SetSubDirConfig(req, runtimeConf);
-
+    runtimeConf.set_dposixudspath(req->dposixudspath());
     runtimeConf.mutable_funcmountconfig()->CopyFrom(req->funcmountconfig());
     if (auto mountConfig = req->createoptions().find(DELEGATE_MOUNT); mountConfig != req->createoptions().end()) {
         ParseMountConfig(runtimeConf, mountConfig->second);
