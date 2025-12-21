@@ -36,6 +36,7 @@
 #include "common/utils/generate_message.h"
 #include "common/utils/path.h"
 #include "common/utils/struct_transfer.h"
+#include "common/utils/actor_worker.h"
 #include "config/build.h"
 #include "port/port_manager.h"
 #include "utils/os_utils.hpp"
@@ -44,6 +45,7 @@
 namespace functionsystem::runtime_manager {
 using json = nlohmann::json;
 const int64_t DEFAULT_GRACEFUL_SHUTDOWN = 5;
+const int64_t RECONNECT_CONTAINERD_INTERVAL_MS = 5000;
 const std::string PARAM_LANGUAGE = "language";
 const std::string RUNTIME_LAYER_DIR_NAME = "layer";
 const std::string RUNTIME_FUNC_DIR_NAME = "func";
@@ -62,7 +64,49 @@ void ContainerExecutor::InitConfig()
     std::string endpoint = ep.IsSome() ? ep.Get() : "127.0.0.1:8222";
     YRLOG_INFO("start container executor which bind containerd({})", endpoint);
     containerd_ = GrpcClient<runtime_launcher::RuntimeLauncher>::CreateUdsGrpcClient(endpoint);
+    CheckConnectivity();
     YRLOG_INFO("success to start container executor which bind containerd({})", endpoint);
+}
+
+void ContainerExecutor::CheckConnectivity()
+{
+    litebus::AsyncAfter(RECONNECT_CONTAINERD_INTERVAL_MS, GetAID(), &ContainerExecutor::CheckConnectivity);
+    if (containerd_->IsConnected()) {
+        return;
+    }
+    if (reconnecting_) {
+        return;
+    }
+    YRLOG_WARN("containerd is not connected, try to reconnect");
+    ReconnectContainerd();
+}
+
+void ContainerExecutor::ReconnectContainerd()
+{
+    if (containerd_->IsConnected()) {
+        reconnecting_ = false;
+        return;
+    }
+    reconnecting_ = true;
+    auto actor = std::make_shared<ActorWorker>();
+    (void)actor->AsyncWork([containerd(containerd_)](){
+        YRLOG_INFO("try to reconnect containerd...");
+        containerd->CheckChannelAndWaitForReconnect(true);
+    }).OnComplete([actor, aid(GetAID())](const litebus::Future<Status> &) {
+        actor->Terminate();
+        litebus::Async(aid, &ContainerExecutor::OnReconnectContainerd);
+    });
+}
+
+void ContainerExecutor::OnReconnectContainerd()
+{
+    if (!containerd_->IsConnected()) {
+        YRLOG_WARN("reconnect containerd failed, retry after {} ms", RECONNECT_CONTAINERD_INTERVAL_MS);
+        litebus::AsyncAfter(RECONNECT_CONTAINERD_INTERVAL_MS, GetAID(), &ContainerExecutor::ReconnectContainerd);
+        return;
+    }
+    reconnecting_ = false;
+    YRLOG_INFO("reconnect containerd success");
 }
 
 void ContainerExecutor::Init()
@@ -125,7 +169,7 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartInstanc
     }
     YRLOG_INFO("{}|{}|advance to start instanceID({}) runtimeID({})", info.traceid(), info.requestid(),
                info.instanceid(), runtimeID);
-    // todo lwy runtime directly call 
+    // todo lwy runtime directly call
     features.cleanStreamProducerEnable = config_.cleanStreamProducerEnable;
     return StartRuntime(request, language, port, GenerateEnvs(config_, request, port, cardIDs, features), args);
 }
@@ -325,8 +369,8 @@ litebus::Future<runtime_launcher::StartResponse> ContainerExecutor::StartByRunti
     } else {
         (*start->mutable_resources())[MEMORY_RESOURCE_NAME] = resources.resources().at(MEMORY_RESOURCE_NAME).scalar().value();
     }
-    
-    // currently all treated as runtimeEnv 
+
+    // currently all treated as runtimeEnv
     // todo lwy for fork friendly, the immutable env should be mv to runtimeEnv
     start->mutable_runtimeenvs()->insert(combineEnvs.begin(), combineEnvs.end());
     start->set_stdout(stdOut);

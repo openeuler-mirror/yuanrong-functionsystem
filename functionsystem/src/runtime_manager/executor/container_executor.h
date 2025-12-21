@@ -44,7 +44,7 @@ public:
 
     virtual ~ContainerExecutor() override = default;
 
-    void SetHealthCheckClient(const std::shared_ptr<HealthCheck> &healthCheck) 
+    void SetHealthCheckClient(const std::shared_ptr<HealthCheck> &healthCheck)
     {
         healthCheckClient_ = healthCheck;
     }
@@ -80,6 +80,9 @@ protected:
     void InitVirtualEnvIdleTimeLimit() override {};
 
 private:
+    void ReconnectContainerd();
+    void OnReconnectContainerd();
+    void CheckConnectivity();
     void ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID);
 
     litebus::Future<runtime_launcher::StartResponse> StartByRuntimeID(
@@ -120,9 +123,10 @@ private:
     std::map<std::string, std::string> runtime2containerID_;
     std::unordered_set<std::string> innerOomKilledruntimes_;
     litebus::AID functionAgentAID_;
-    std::unique_ptr<GrpcClient<runtime_launcher::RuntimeLauncher>> containerd_ {nullptr};
+    std::shared_ptr<GrpcClient<runtime_launcher::RuntimeLauncher>> containerd_ {nullptr};
     std::shared_ptr<HealthCheck> healthCheckClient_;
     CommandBuilder cmdBuilder_ = {false};
+    bool reconnecting_ = false;
 };
 
 class ContainerExecutorProxy : public ExecutorProxy {

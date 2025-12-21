@@ -65,7 +65,7 @@ void CommonGrpcServer::Run()
     if (!config_.udsPath.empty()) {
         if (!litebus::os::ExistPath(config_.udsPath)) {
             if (litebus::os::Mkdir(config_.udsPath).IsSome()) {
-                YRLOG_ERROR("Failed to create UDS directory path: {}, err:{}", config_.udsPath, strerror);
+                YRLOG_ERROR("Failed to create UDS directory path: {}, err:{}", config_.udsPath, strerror(errno));
                 serverReady_.SetValue(false);
                 return;
             }
