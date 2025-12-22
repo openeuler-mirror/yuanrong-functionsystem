@@ -157,6 +157,7 @@ function install_faas_frontend() {
   sed -i "s/{faas_frontend_http_ip}/${IP_ADDRESS}/g" ${install_init_frontend_config}
   sed -i "s/{faas_frontend_http_port}/${FAAS_FRONTEND_HTTP_PORT}/g" ${install_init_frontend_config}
   sed -i "s/{sslEnable}/${SSL_ENABLE}/g" ${install_init_frontend_config}
+  sed -i "s/{frontendSslEnable}/${FRONTEND_SSL_ENABLE}/g" ${install_init_frontend_config}
   sed -i "s/{sccEnable}/${SCC_ENABLE}/g" ${install_init_frontend_config}
   sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" ${install_init_frontend_config}
   sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" ${install_init_frontend_config}
@@ -166,12 +167,10 @@ function install_faas_frontend() {
     sed -i "s*{etcdCAFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}*g" ${install_init_frontend_config}
     sed -i "s*{etcdCertFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}*g" ${install_init_frontend_config}
     sed -i "s*{etcdKeyFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}*g" ${install_init_frontend_config}
-    sed -i "s*{passphraseFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_PWD_FILE}*g" ${install_init_frontend_config}
   else
     sed -i "s*{etcdCAFile}**g" ${install_init_frontend_config}
     sed -i "s*{etcdCertFile}**g" ${install_init_frontend_config}
     sed -i "s*{etcdKeyFile}**g" ${install_init_frontend_config}
-    sed -i "s*{passphraseFile}**g" ${install_init_frontend_config}
   fi
   GO_RUNTIME_BIN=${RUNTIME_HOME_DIR}/service/go/bin
   POD_NAME="frontend-process" \
