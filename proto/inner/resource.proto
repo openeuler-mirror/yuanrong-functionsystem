@@ -402,6 +402,10 @@ message BucketIndex {
     map<string, Bucket> buckets = 1;
 }
 
+message CapacityChange {
+    Resources delta = 1;
+}
+
 message StatusChange {
     uint32 status = 1;
 }
@@ -419,6 +423,7 @@ message InstanceChange {
 message Modification {
     StatusChange statusChange = 1;
     repeated InstanceChange instanceChanges = 3;
+    CapacityChange capacityChange = 4;
 }
 
 message Addition {

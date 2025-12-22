@@ -312,6 +312,7 @@ private:
 
     void UpdateActualUse(const Resources &oldActualUse, const Resources &newActualUse, resources::ResourceUnit &view);
     void UpdateResourceUnitActual(const std::shared_ptr<ResourceUnit> &value);
+    void UpdateResourceUnitDynamic(const std::shared_ptr<ResourceUnit> &value);
     void DeleteLabels(const InstanceInfo &instInfo);
     void AddLabels(const InstanceInfo &instance);
 
@@ -326,6 +327,7 @@ private:
     ResourceUnitChange MergeResourceUnitChanges(ResourceUnitChange &previous, const ResourceUnitChange &current);
     ResourceUnitChange MergeAddAndModify(ResourceUnitChange &previous, const ResourceUnitChange &current);
     ResourceUnitChange MergeTwoModifies(ResourceUnitChange &previous, const ResourceUnitChange &current);
+    void MergeCapacityChange(ResourceUnitChange &previous, const ResourceUnitChange &current);
     void MergeInstanceChanges(Modification &previous, const Modification &current) const;
     bool IsValidChangeCombination(const InstanceChange& previous, const InstanceChange& current) const;
     static bool ShouldMergeInstanceChange(const InstanceChange& previous, const InstanceChange& current);
