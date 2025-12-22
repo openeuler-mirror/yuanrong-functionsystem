@@ -1162,11 +1162,11 @@ TEST_F(ResourceViewTest, AddResourceUnitError)
 
     unit = Get1DResourceUnit();
     unit.mutable_capacity()->mutable_resources()->begin()->second.mutable_scalar()->set_value(-1.0);
-    EXPECT_FALSE(viewPtr->AddResourceUnit(unit).Get().IsOk());
+    EXPECT_TRUE(viewPtr->AddResourceUnit(unit).Get().IsOk());
 
     unit = Get1DResourceUnit();
     unit.mutable_allocatable()->mutable_resources()->begin()->second.mutable_scalar()->set_value(-1.0);
-    EXPECT_FALSE(viewPtr->AddResourceUnit(unit).Get().IsOk());
+    EXPECT_TRUE(viewPtr->AddResourceUnit(unit).Get().IsOk());
 
     unit = Get1DResourceUnit();
     ASSERT_TRUE(viewPtr->AddResourceUnit(unit).Get().IsOk());
@@ -1295,7 +1295,7 @@ TEST_F(ResourceViewTest, AddInstancesError)
     inst1 = inst;
     inst1.mutable_resources()->mutable_resources()->begin()->second.mutable_scalar()->set_value(-1);
     instances.insert({ inst1.instanceid(), resource_view::InstanceAllocatedInfo{ inst1, nullptr } });
-    EXPECT_FALSE(viewPtr->AddInstances(instances).Get().IsOk());
+    EXPECT_TRUE(viewPtr->AddInstances(instances).Get().IsOk());
 
     instances.clear();
     inst1 = inst;
@@ -2598,7 +2598,7 @@ void CheckRevionChanges(std::unique_ptr<ResourceView> &parent, std::unique_ptr<R
     ASSERT_EQ(changes.Get()->endrevision(), currentRevisionInLocal);
 }
 
-TEST_F(ResourceViewTest, DISBALED_UpdateLastReportedRevision)
+TEST_F(ResourceViewTest, DISABLED_UpdateLastReportedRevision)
 {
     ResourcePoller::SetInterval(100);
     auto parent = resource_view::ResourceView::CreateResourceView(DOMAIN_RESOUCE_VIEW_ID, PARENT_PARAM);

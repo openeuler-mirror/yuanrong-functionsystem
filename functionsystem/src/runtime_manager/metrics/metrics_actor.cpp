@@ -37,6 +37,7 @@
 #include "collector/system_proc_cpu_collector.h"
 #include "collector/system_proc_memory_collector.h"
 #include "collector/system_xpu_collector.h"
+#include "collector/external_system_collector.h"
 #include "common/logs/logging.h"
 #include "common/proto/pb/message_pb.h"
 #include "common/proto/pb/posix/resource.pb.h"
@@ -109,6 +110,10 @@ void MetricsActor::AddSystemMetricsCollector(const Flags &flags)
     } else if (metricsConfig_.metricsCollectorType == "node") {
         systemCPUCollector = std::make_shared<NodeCPUCollector>(procFSTools_, metricsConfig_.overheadCPU);
         systemMemoryCollector = std::make_shared<NodeMemoryCollector>(procFSTools_, metricsConfig_.overheadMemory);
+    } else if (metricsConfig_.metricsCollectorType == "external") {
+        auto curlActorRef = CurlHelper::NewCurlHelper();
+        systemCPUCollector = std::make_shared<ExternalSystemCPUCollector>(metricsConfig_.procMetricsCPU, curlActorRef);
+        systemMemoryCollector = std::make_shared<ExternalSystemMemoryCollector>(metricsConfig_.procMetricsMemory, curlActorRef);
     } else {
         systemCPUCollector = std::make_shared<SystemCPUCollector>(procFSTools_);
         systemMemoryCollector = std::make_shared<SystemMemoryCollector>(procFSTools_);

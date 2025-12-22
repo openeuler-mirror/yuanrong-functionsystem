@@ -72,9 +72,11 @@ type yrStartOptions struct {
 
 var yrOpts yrStartOptions
 
-const fileMode = 0600
-const dirMode = os.ModeDir | 0750
-const deployFailureWaitTime = 2 * constant.DeployStdLogRedirectIntervalMs * time.Millisecond
+const (
+	fileMode              = 0o600
+	dirMode               = os.ModeDir | 0o750
+	deployFailureWaitTime = 2 * constant.DeployStdLogRedirectIntervalMs * time.Millisecond
+)
 
 var ipRegex *regexp.Regexp = regexp.MustCompile(`(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})`)
 
@@ -268,7 +270,7 @@ func checkIfNodeAlreadyStartedYuanRong() (currentMasterInfoDumpPolicy, error) {
 	//
 	// to check if belongs to same master, we use etcd_addr_list(if exists) or master_ip(if exists)
 	var err error
-	info, err := utils.GetMasterInfoFromFile(constant.DefaultYuanRongCurrentMasterInfoPath)
+	info, err := utils.GetMasterInfoFromFile(yrOpts.masterInfoOutput)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return dumpPolicyNew, nil
@@ -313,8 +315,7 @@ func splitEtcdAddrListString(etcdAddrList string) []string {
 }
 
 func printMasterStartedHelpMsg() error {
-
-	if masterInfo, err := utils.GetMasterInfoString(constant.DefaultYuanRongCurrentMasterInfoPath); err == nil &&
+	if masterInfo, err := utils.GetMasterInfoString(yrOpts.masterInfoOutput); err == nil &&
 		yrOpts.verbose > 0 {
 		var startNextHelp string
 		if len(yrOpts.etcdAddrList) > 0 {
@@ -346,7 +347,7 @@ Next Steps:
 failed to find master info file at %s, the deployment may failed, you can also run
   yr stop
 to make sure no yuanrong processes left on you machine
-`, constant.DefaultYuanRongCurrentMasterInfoPath), ".\n")
+`, yrOpts.masterInfoOutput), ".\n")
 	}
 	return errors.New("failed to deploy yuanrong master")
 }
@@ -537,7 +538,9 @@ func yrMakeDeployPathSymbolLink() error {
 			}
 		}
 		if err := utils.CreateSymbolicLinkWithForce(yrOpts.deployPath, constant.DefaultYuanRongDeployDir); err != nil {
-			return err
+			colorprint.PrintInteractive(yrOpts.cmdIO.Out, fmt.Sprintf("WARN: failed to link %s to %s. err: %s\n",
+				yrOpts.deployPath, constant.DefaultYuanRongDeployDir, err.Error()))
+			return nil
 		}
 	}
 	return nil
@@ -568,7 +571,9 @@ func yrMakeSymbolLink(dumpPolicy currentMasterInfoDumpPolicy) error {
 		default:
 			if err := utils.CreateSymbolicLinkWithForce(yrOpts.masterInfoOutput,
 				constant.DefaultYuanRongCurrentMasterInfoPath); err != nil {
-				return err
+				colorprint.PrintInteractive(yrOpts.cmdIO.Out, fmt.Sprintf("WARN: failed to link %s to %s. err: %s \n",
+					yrOpts.masterInfoOutput, constant.YuanRongCurrentMasterInfoPath, err.Error()))
+				return nil
 			}
 		}
 	}

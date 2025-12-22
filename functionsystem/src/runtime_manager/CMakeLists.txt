@@ -39,6 +39,7 @@ add_subdirectory(virtual_env_manager)
 
 target_link_libraries(runtime_manager_lib ${litebus_ALL_LIB}
         ${yaml_LIB}
+        ${curl_LIBS}
 	aksk
         register common_flags
         http file_monitor network
