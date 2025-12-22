@@ -90,8 +90,8 @@ func yrStopYuanRong(cmd *cobra.Command, args []string) error {
 	}
 	var keywords = []string{
 		filepath.Join(yuanRongDir, "deploy", "process", "deploy.sh"),
-		filepath.Join(yuanRongDir, "function_system"),
-		filepath.Join(yuanRongDir, "data_system"),
+		filepath.Join(yuanRongDir, "functionsystem"),
+		filepath.Join(yuanRongDir, "datasystem"),
 		filepath.Join(yuanRongDir, "third_party"),
 		filepath.Join(yuanRongDir, "runtime"),
 	}
