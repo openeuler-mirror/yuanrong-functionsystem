@@ -1058,7 +1058,7 @@ void GroupManagerActor::GroupCaches::AddGroupInstance(const std::string &groupID
                                                       const std::shared_ptr<resource_view::InstanceInfo> &instanceInfo)
 {
     if (auto it = groupID2Instances_.find(groupID); it != groupID2Instances_.end()) {
-        it->second.insert({ instanceKey, instanceInfo });
+        it->second.insert_or_assign(instanceKey, instanceInfo);
     } else {
         groupID2Instances_.emplace(groupID,
                                    std::unordered_map<std::string, std::shared_ptr<resource_view::InstanceInfo>>{

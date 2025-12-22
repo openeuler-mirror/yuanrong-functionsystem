@@ -251,7 +251,8 @@ TEST_F(GroupCachesTest, AddAndDelIntance)
 {
     auto groupInfo1 = MakeGroupInfo(GROUP_ID_1, NODE_ID_1, GroupState::RUNNING, "--");
     auto groupInfo2 = MakeGroupInfo(GROUP_ID_2, NODE_ID_2, GroupState::RUNNING, "--");
-    auto instanceInfo1 = MakeInstanceInfo(INSTANCE_ID_1, GROUP_ID_1, NODE_ID_1, InstanceState::RUNNING);
+    auto instanceInfoScheduling = MakeInstanceInfo(INSTANCE_ID_1, GROUP_ID_1, NODE_ID_1, InstanceState::SCHEDULING);
+    auto instanceInfoRunning = MakeInstanceInfo(INSTANCE_ID_1, GROUP_ID_1, NODE_ID_1, InstanceState::RUNNING);
     auto instanceInfo2 = MakeInstanceInfo(INSTANCE_ID_2, GROUP_ID_2, NODE_ID_2, InstanceState::RUNNING);
     auto instanceKey1 = INSTANCE_PATH_PREFIX + "/" + INSTANCE_ID_1;
     auto instanceKey2 = INSTANCE_PATH_PREFIX + "/" + INSTANCE_ID_2;
@@ -263,12 +264,23 @@ TEST_F(GroupCachesTest, AddAndDelIntance)
     ASSERT_TRUE(caches.GetNodeGroups(NODE_ID_1).size() == static_cast<size_t>(1));
     ASSERT_TRUE(caches.GetNodeGroups(NODE_ID_2).size() == static_cast<size_t>(1));
 
-    caches.AddGroupInstance(GROUP_ID_1, instanceKey1, instanceInfo1);
+    caches.AddGroupInstance(GROUP_ID_1, instanceKey1, instanceInfoScheduling);
     ASSERT_TRUE(caches.groups_.size() == static_cast<size_t>(2));
     ASSERT_TRUE(caches.groupID2Instances_.size() == static_cast<size_t>(1));
     ASSERT_TRUE(caches.groupID2Instances_.find(GROUP_ID_1) != caches.groupID2Instances_.end());
     ASSERT_TRUE(caches.groupID2Instances_.find(GROUP_ID_1)->second.find(instanceKey1) !=
-                caches.groupID2Instances_.find(GROUP_ID_1)->second.end());  // instance2 in group2
+                caches.groupID2Instances_.find(GROUP_ID_1)->second.end());  // instance1 in group1
+    ASSERT_TRUE(caches.groupID2Instances_.find(GROUP_ID_1)->second.find(instanceKey1)->second
+            ->mutable_instancestatus()->code() == static_cast<int>(InstanceState::SCHEDULING));
+
+    caches.AddGroupInstance(GROUP_ID_1, instanceKey1, instanceInfoRunning);
+    ASSERT_TRUE(caches.groups_.size() == static_cast<size_t>(2));
+    ASSERT_TRUE(caches.groupID2Instances_.size() == static_cast<size_t>(1));
+    ASSERT_TRUE(caches.groupID2Instances_.find(GROUP_ID_1) != caches.groupID2Instances_.end());
+    ASSERT_TRUE(caches.groupID2Instances_.find(GROUP_ID_1)->second.find(instanceKey1) !=
+                caches.groupID2Instances_.find(GROUP_ID_1)->second.end());  // instance1 in group1
+    ASSERT_TRUE(caches.groupID2Instances_.find(GROUP_ID_1)->second.find(instanceKey1)->second
+            ->mutable_instancestatus()->code() == static_cast<int>(InstanceState::RUNNING));
 
     caches.AddGroupInstance(GROUP_ID_2, instanceKey2, instanceInfo2);
     ASSERT_TRUE(caches.groups_.size() == static_cast<size_t>(2));             // 2 groups
@@ -277,7 +289,7 @@ TEST_F(GroupCachesTest, AddAndDelIntance)
     ASSERT_TRUE(caches.groupID2Instances_.find(GROUP_ID_2)->second.find(instanceKey2) !=
                 caches.groupID2Instances_.find(GROUP_ID_2)->second.end());  // instance2 in group2
 
-    caches.RemoveGroupInstance(instanceKey1, instanceInfo1);
+    caches.RemoveGroupInstance(instanceKey1, instanceInfoRunning);
     ASSERT_TRUE(caches.groups_.size() == static_cast<size_t>(2));             // 2 groups
     ASSERT_TRUE(caches.groupID2Instances_.size() == static_cast<size_t>(1));  // 2 instances in differnet groups
     ASSERT_TRUE(caches.groupID2Instances_.find(GROUP_ID_2) != caches.groupID2Instances_.end());  // group2 exists
