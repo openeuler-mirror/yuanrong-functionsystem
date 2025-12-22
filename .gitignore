@@ -24,7 +24,9 @@ build.ninja
 ### copied files
 functionsystem/src/common/proto/*
 
-
 ### build files
 common/litebus/build
 functionsystem/build
+build/
+functionsystem/apps/meta_service/function_repo/storage/kv.go
+functionsystem/src/common/utils/version.h

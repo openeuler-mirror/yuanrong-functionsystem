@@ -92,7 +92,7 @@ const std::string JAVA_SYSTEM_LIBRARY_PATH = "-Djava.library.path=";
 const std::string JAVA_LOG_LEVEL = "-DlogLevel=";
 const std::string JAVA_JOB_ID = "-DjobId=job-";
 const std::string JAVA_MAIN_CLASS = "com.yuanrong.runtime.server.RuntimeServer";
-const std::string PYTHON_NEW_SERVER_PATH = "/python/fnruntime/server.py";
+const std::string PYTHON_NEW_SERVER_PATH = "/python/yr/main/yr_runtime_main.py";
 const std::string YR_JAVA_RUNTIME_PATH = "/java/yr-runtime-1.0.0.jar";
 const std::string POST_START_EXEC_REGEX = R"(^(uv )?pip3.[0-9]* install [a-zA-Z0-9\-\s:/\.=_]* && pip3.[0-9]* check$)";
 // should be read from deploy request in the future
@@ -773,8 +773,6 @@ std::string RuntimeExecutor::GetExecPath(const std::string &language) const
         return config_.runtimePath + CPP_NEW_EXEC_PATH;
     } else if (languageArg == GO_LANGUAGE) {
         return config_.runtimePath + GO_NEW_EXEC_PATH;
-    } else if (languageArg == POSIX_CUSTOM_RUNTIME) {
-        return BASH_PATH;
     } else if (languageArg == NODE_JS) {
         languageCmd = NODE_JS_CMD;
     } else if (languageArg == JAVA_LANGUAGE) {
@@ -821,7 +819,7 @@ std::string RuntimeExecutor::GetExecPathFromRuntimeConfig(const messages::Runtim
             return ss.str();
         }
         // custom-runtime Cases
-        return BASH_PATH;
+        return config.entryfile();
     }
     return GetExecPath(language);
 }
@@ -1532,24 +1530,14 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetPosixCustomBuild
         return { Status::OK(), {} };
     }
 
-    // entry path + '/bootstrap' case
     std::string entryFile = request->runtimeinstanceinfo().runtimeconfig().entryfile();
     if (entryFile.empty()) {
         YRLOG_ERROR("{}|{}|entryFile is empty", request->runtimeinstanceinfo().traceid(),
                     request->runtimeinstanceinfo().requestid());
         return { Status(StatusCode::RUNTIME_MANAGER_EXECUTABLE_PATH_INVALID, "entryFile is empty"), {} };
     }
-
-    if (!litebus::os::ExistPath(entryFile)) {
-        YRLOG_ERROR("{}|{}|enter entryfile path failed, path: {}", request->runtimeinstanceinfo().traceid(),
-                    request->runtimeinstanceinfo().requestid(), entryFile);
-        return { Status(StatusCode::RUNTIME_MANAGER_EXECUTABLE_PATH_INVALID, "chdir entryfile path failed"), {} };
-    }
-
-    (*request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions())[CHDIR_PATH_CONFIG] =
-        entryFile;
-    YRLOG_DEBUG("entrypoint: {}", entryFile + "/bootstrap");
-    return { Status::OK(), { entryFile + "/bootstrap" } };
+    YRLOG_DEBUG("entrypoint: {}", entryFile);
+    return { Status::OK(), { entryFile } };
 }
 
 std::vector<std::function<void()>> RuntimeExecutor::BuildInitHook(

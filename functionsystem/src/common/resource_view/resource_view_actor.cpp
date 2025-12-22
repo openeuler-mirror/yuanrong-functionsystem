@@ -398,6 +398,9 @@ Status ResourceViewActor::UpdateResourceUnit(const std::shared_ptr<ResourceUnit>
         case UpdateType::UPDATE_ACTUAL:
             UpdateResourceUnitActual(value);
             break;
+        case UpdateType::UPDATE_DYNAMIC:
+            UpdateResourceUnitDynamic(value);
+            break;
         case UpdateType::UPDATE_STATIC:
         case UpdateType::UPDATE_UNDEFINED:
         default:
@@ -478,6 +481,14 @@ Status ResourceViewActor::AddInstances(const std::map<std::string, InstanceAlloc
         if (view_->fragment().find(selected) == view_->fragment().end()
             || view_->fragment().at(selected).status() != static_cast<uint32_t>(UnitStatus::NORMAL)) {
             YRLOG_WARN("unable to allocate instances({}). the ({}) is unavailable", inst.first, selected);
+            inst.second.allocatedPromise->SetValue(Status(StatusCode::ERR_INNER_SYSTEM_ERROR));
+            continue;
+        }
+        if (simplifyInstance.resources() > view_->fragment().at(selected).allocatable()) {
+            YRLOG_WARN(
+                "unable to allocate instances({}). the ({}) has insufficient resources may caused by capacity "
+                "decrement",
+                inst.first, selected);
             inst.second.allocatedPromise->SetValue(Status(StatusCode::ERR_INNER_SYSTEM_ERROR));
             continue;
         }
@@ -1059,6 +1070,50 @@ void ResourceViewActor::DeleteInstanceFromView(const InstanceInfo &instance)
     }
 }
 
+void ResourceViewActor::UpdateResourceUnitDynamic(const std::shared_ptr<ResourceUnit> &value)
+{
+    ASSERT_IF_NULL(view_);
+    auto unit = view_->mutable_fragment()->find(value->id());
+    if (unit == view_->mutable_fragment()->end()) {
+        YRLOG_ERROR("resource view does not have a resource unit with ID {}.", value->id());
+        return;
+    }
+    if (value->capacity() == unit->second.capacity()) {
+        return;
+    }
+    YRLOG_DEBUG("for test: Unit({}) current:{} allocatable:{} received:{}", value->id(),
+                unit->second.capacity().ShortDebugString(), unit->second.allocatable().ShortDebugString(),
+                value->capacity().ShortDebugString());
+    /*
+        unit capacity : 上一次的容量
+        value capacity: 本次更新的容量
+        delta: 两次容量的差值
+        capacityChange.increment(): 本次容量是否上升
+    */
+    (*view_->mutable_capacity()) = view_->capacity() - unit->second.capacity() + value->capacity();
+    // cap decreased
+    CapacityChange capacityChange;
+    auto delta = capacityChange.mutable_delta();
+    delta->CopyFrom(value->capacity() - unit->second.capacity());
+    YRLOG_DEBUG("for test: Unit({}) delta:{}", value->id(), delta->ShortDebugString());
+
+    // maybe negative allocatable
+    // todo: while negative allocatable, need to trigger some alert event to evict/migrate instances
+    (*view_->mutable_allocatable()) = view_->allocatable() + *delta;
+
+    // update capacity in fragment
+    *unit->second.mutable_capacity() = value->capacity();
+
+    // make change record
+    Modification modification;
+    *modification.mutable_capacitychange() = std::move(capacityChange);
+    ResourceUnitChange resourceUnitChange;
+    resourceUnitChange.set_resourceunitid(value->id());
+    *resourceUnitChange.mutable_modification() = std::move(modification);
+    view_->set_revision(view_->revision() + 1);
+    StoreChange(view_->revision(), resourceUnitChange);
+}
+
 void ResourceViewActor::UpdateResourceUnitActual(const std::shared_ptr<ResourceUnit> &value)
 {
     ASSERT_IF_NULL(view_);
@@ -1239,6 +1294,21 @@ void ResourceViewActor::MergeResourceViewChanges(int64_t startRevision, int64_t 
     result.set_localid(view_->id());
 }
 
+void ResourceViewActor::MergeCapacityChange(ResourceUnitChange &previous, const ResourceUnitChange &current)
+{
+    if (!current.has_modification() || !current.modification().has_capacitychange()) {
+        return;
+    }
+    if (!previous.has_modification() || !previous.modification().has_capacitychange()) {
+        previous.mutable_modification()->mutable_capacitychange()->CopyFrom(current.modification().capacitychange());
+        return;
+    }
+    auto previousCapacityChange = previous.mutable_modification()->mutable_capacitychange();
+    auto currentCapacityChange = current.modification().capacitychange();
+    (*previousCapacityChange->mutable_delta()) =
+        previousCapacityChange->delta() + currentCapacityChange.delta();
+}
+
 ResourceUnitChange ResourceViewActor::MergeResourceUnitChanges(ResourceUnitChange &previous,
                                                                const ResourceUnitChange &current)
 {
@@ -1251,7 +1321,7 @@ ResourceUnitChange ResourceViewActor::MergeResourceUnitChanges(ResourceUnitChang
      * 6.any changes + add          --x Non-existent combination
      */
     ASSERT_FS(previous.resourceunitid() == current.resourceunitid());
-
+    MergeCapacityChange(previous, current);
     if (previous.has_addition() && current.has_modification()) {
         return MergeAddAndModify(previous, current);
     }
@@ -1542,6 +1612,13 @@ Status ResourceViewActor::HandleReportedModification(const ResourceUnitChange &c
 
     if (modification.has_statuschange()) {
         agentResourceUnit.set_status(static_cast<uint32_t>(modification.statuschange().status()));
+    }
+
+    if (modification.has_capacitychange()) {
+        auto delta = modification.capacitychange().delta();
+        (*agentResourceUnit.mutable_capacity()) = agentResourceUnit.capacity() + delta;
+        (*view_->mutable_capacity()) = view_->capacity() + delta;
+        (*view_->mutable_allocatable()) = view_->allocatable() + delta;
     }
 
     if (modification.instancechanges().empty()) {

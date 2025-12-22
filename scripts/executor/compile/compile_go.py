@@ -23,13 +23,6 @@ def compile_meta_service(root_path):
         cwd=app_path,
         env=os.environ
     )
-    # 确保 go.sum 文件存在
-    log.info("Running go mod tidy to ensure dependencies are resolved...")
-    utils.sync_command(
-        cmd=["go", "mod", "tidy"],
-        cwd=app_path,
-        env=os.environ
-    )
     main_path = os.path.join(app_path, "cmd", "main.go")
     output_path = os.path.join(root_path, "functionsystem", "output", "bin")
     compile_golang(app_path, "meta_service", main_path, output_path)

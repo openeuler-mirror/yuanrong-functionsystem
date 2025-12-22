@@ -15,8 +15,8 @@
  */
 #include "instance_ctrl_message.h"
 
-#include "common/utils/struct_transfer.h"
 #include "common/metadata/metadata.h"
+#include "common/utils/struct_transfer.h"
 
 namespace functionsystem {
 using namespace messages;
@@ -67,6 +67,10 @@ std::shared_ptr<DeployInstanceRequest> GetDeployInstanceReq(const FunctionMeta &
         funcMountPtr->set_status(mount.status);
     }
     deployInstanceRequest->set_gracefulshutdowntime(request->instance().gracefulshutdowntime());
+
+    if (request->instance().createoptions().find(RUNTIME_ENTRYPOINT) != request->instance().createoptions().end()) {
+        deployInstanceRequest->set_entryfile(request->instance().createoptions().find(RUNTIME_ENTRYPOINT)->second);
+    }
 
     // for app driver
     if (auto createOpts = request->instance().createoptions(); IsAppDriver(request->instance().createoptions())) {
