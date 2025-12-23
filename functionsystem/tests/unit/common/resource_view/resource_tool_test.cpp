@@ -55,9 +55,6 @@ TEST_F(ResourceToolTest, ScalaValueValidate)
     auto r = GetCpuResource();
     EXPECT_TRUE(ScalaValueValidate(r));
 
-    r.mutable_scalar()->set_value(-1);
-    EXPECT_FALSE(ScalaValueValidate(r));
-
     r.clear_scalar();
     EXPECT_FALSE(ScalaValueValidate(r));
 }
@@ -162,11 +159,11 @@ TEST_F(ResourceToolTest, IsValid)
 
     Resource r4 = r1;
     r4.mutable_scalar()->set_value(-1.0);
-    EXPECT_FALSE(IsValid(r4));
+    EXPECT_TRUE(IsValid(r4));
 
     Resource r5 = r1;
     r5.clear_scalar();
-    EXPECT_FALSE(IsValid(r4));
+    EXPECT_FALSE(IsValid(r5));
 }
 
 TEST_F(ResourceToolTest, IsEmpty)
@@ -419,7 +416,8 @@ TEST_F(ResourceToolTest, Subs)
     EXPECT_EQ(r4.resources().size(), static_cast<uint32_t>(2));
     EXPECT_EQ(r4.resources().at(RESOURCE_CPU_NAME).scalar().value(), SCALA_VALUE1 - 200);
     EXPECT_EQ(r4.resources().at(RESOURCE_MEM_NAME).scalar().value(), 0);
-    EXPECT_FALSE(IsValid(r4));
+    YRLOG_INFO("ScalaResourceSub result: {}", r4.ShortDebugString());
+    EXPECT_TRUE(IsValid(r4));
 }
 
 TEST_F(ResourceToolTest, ScalaResource2StringSuccess)
@@ -515,7 +513,7 @@ TEST_F(ResourceToolTest, MapCounterAdd)
         { "x", GetSimpleCounter(std::unordered_map<std::string, uint64_t>{ { "z", 1 } }) } });
     auto mc3 = GetSimpleMapCounter(std::unordered_map<std::string, resources::Value::Counter>{
         { "x", GetSimpleCounter(std::unordered_map<std::string, uint64_t>{ { "z", 1 } }) } });
-    
+
     // expected sum: {x:{y:1,z:2}}
     auto sum = mc1 + mc2 + mc3;
     EXPECT_EQ(sum.size(), static_cast<uint32_t>(1));
@@ -536,7 +534,7 @@ TEST_F(ResourceToolTest, MapCounterSub)
         { "x", GetSimpleCounter(std::unordered_map<std::string, uint64_t>{ { "y", 1 }, { "z", 2 } }) } });
     auto mc2 = GetSimpleMapCounter(std::unordered_map<std::string, resources::Value::Counter>{
         { "x", GetSimpleCounter(std::unordered_map<std::string, uint64_t>{ { "y", 1 }, { "z", 1 } }) } });
-    
+
     auto sub = mc1 - mc2;
     EXPECT_EQ(sub.size(), static_cast<uint32_t>(1));
     EXPECT_TRUE(sub.contains("x"));

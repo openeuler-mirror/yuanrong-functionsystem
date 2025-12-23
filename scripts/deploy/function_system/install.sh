@@ -57,6 +57,7 @@ function install_function_proxy() {
     --lib_path="${FUNCTION_SYSTEM_DIR}/lib" \
     --ip="${IP_ADDRESS}" \
     --grpc_listen_port="${FUNCTION_PROXY_GRPC_PORT}" \
+    --dposix_uds_path="${DPOSIX_UDS_PATH}" \
     --enable_driver="${enable_driver}" \
     --enable_trace="${ENABLE_TRACE}" \
     --enable_metrics="${ENABLE_METRICS}" \

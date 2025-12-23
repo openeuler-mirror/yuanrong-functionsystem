@@ -157,6 +157,27 @@ public:
         return std::move(std::make_unique<GrpcClient<T>>(addr, std::move(stub), std::move(channel)));
     }
 
+    static std::unique_ptr<GrpcClient<T>> CreateUdsGrpcClient(const std::string &endpoint)
+    {
+        YRLOG_DEBUG("enter CreateUdsGrpcClient");
+        GrpcSslConfig sslConfig{};
+        ::grpc::ChannelArguments args;
+        args.SetInt(GRPC_ARG_KEEPALIVE_TIME_MS, GRPC_KEEPALIVE_TIME_MS);
+        args.SetInt(GRPC_ARG_KEEPALIVE_TIMEOUT_MS, GRPC_KEEPALIVE_TIMEOUT_MS);
+        args.SetInt(GRPC_ARG_INITIAL_RECONNECT_BACKOFF_MS, INITIAL_RECONNECT_BACKOFF_MS);
+        args.SetInt(GRPC_ARG_MIN_RECONNECT_BACKOFF_MS, MIN_RECONNECT_BACKOFF_MS);
+        args.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, MAX_RECONNECT_BACKOFF_MS);
+        args.SetMaxSendMessageSize(std::numeric_limits<int>::max());
+        args.SetMaxReceiveMessageSize(std::numeric_limits<int>::max());
+        auto channel = ::grpc::CreateCustomChannel(endpoint, sslConfig.sslCredentials, args);
+        auto stub = T::NewStub(static_cast<const std::shared_ptr<::grpc::ChannelInterface> &>(channel));
+        if (!stub) {
+            YRLOG_ERROR("Create grpc client stub failed, addr = {}", endpoint);
+            return nullptr;
+        }
+        return std::move(std::make_unique<GrpcClient<T>>(endpoint, std::move(stub), std::move(channel)));
+    }
+
     void CheckChannelAndWaitForReconnect(const std::atomic<bool> &running)
     {
         if (channel_ == nullptr) {

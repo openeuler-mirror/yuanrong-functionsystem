@@ -4812,6 +4812,7 @@ litebus::Future<Status> InstanceCtrlActor::AddCredToDeployInstanceReq(
 {
     deployInstanceReq->set_enableservermode(config_.enableServerMode);
     deployInstanceReq->set_posixport(config_.posixPort);
+    deployInstanceReq->set_dposixudspath(config_.udsPath);
     deployInstanceReq->set_tenantid(tenantID);
     ASSERT_IF_NULL(internalIAM_);
     if (!internalIAM_->IsIAMEnabled()) {

@@ -41,6 +41,7 @@ const static std::string INSTANCE_ID_ENV = "INSTANCE_ID";
 const static std::string HOME_ENV = "HOME";
 const static std::string DATA_SYSTEM_ADDR = "DATASYSTEM_ADDR";
 const static std::string YR_DS_ADDRESS = "YR_DS_ADDRESS";
+const static std::string YR_DPOSIX_UDS = "YR_DPOSIX_UDS";
 const static std::string YR_SERVER_ADDRESS = "YR_SERVER_ADDRESS";
 const static std::string DRIVER_SERVER_PORT = "DRIVER_SERVER_PORT";
 const static std::string FUNCTION_LIB_PATH = "FUNCTION_LIB_PATH";
@@ -183,6 +184,7 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
         { PROXY_GRPC_SERVER_PORT, config.proxyGrpcServerPort },
         { YR_SERVER_ADDRESS,  // keep same env name for runtime in driver mode and job submission mode
           config.proxyIP + ":" + config.proxyGrpcServerPort },
+        { YR_DPOSIX_UDS, request->runtimeinstanceinfo().runtimeconfig().dposixudspath() },
         { CLUSTER_ID, config.clusterID },
         { NODE_ID, config.nodeID },
         { YR_DEBUG_SERVER_PORT, debugServerPort }

@@ -215,7 +215,7 @@ Status NpuProbe::OnGetNPUInfo(bool countMode)
     auto status = GetNPUSmiInfo();
     if (status.IsError()) {
         InitDevInfo();
-        YRLOG_WARN("There seems to be no npu device on this node. try to get from {}", params_->deviceInfoPath);
+        YRLOG_DEBUG_COUNT_60("There seems to be no npu device on this node. try to get from {}", params_->deviceInfoPath);
         LoadTopoInfo();
         return status;
     }
@@ -405,7 +405,7 @@ Status NpuProbe::GetNPUSmiInfo()
 {
     npuSmiCmdOutput_ = cmdTool_->GetCmdResult(getNpuStandardInfoCmd_);  // npu-smi info
     if (npuSmiCmdOutput_.empty()) {
-        YRLOG_ERROR("can not get npu from npu-smi info, make sure npu-smi is exist!");
+        YRLOG_DEBUG_COUNT_60("can not get npu from npu-smi info, make sure npu-smi is exist!");
         return Status{ StatusCode::FAILED, "can not get npu from npu-smi info, make sure npu-smi is exist!" };
     }
     std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
@@ -504,7 +504,7 @@ Status NpuProbe::LoadTopoInfo()
     }
     auto content = procFSTools_->Read(npuDeviceInfoPath_);
     if (content.IsNone() || content.Get().empty()) {
-        YRLOG_ERROR("failed to read json from {}", npuDeviceInfoPath_);
+        YRLOG_DEBUG_COUNT_60("failed to read json from {}", npuDeviceInfoPath_);
         return Status(StatusCode::JSON_PARSE_ERROR, "failed to read json from " + npuDeviceInfoPath_);
     }
     std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
