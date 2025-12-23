@@ -6,11 +6,29 @@ service RuntimeLauncher {
   rpc Start(StartRequest) returns (StartResponse) {}
   rpc Delete(DeleteRequest) returns (DeleteResponse) {}
   rpc Wait(WaitRequest) returns (WaitResponse) {}
+  rpc Register(RegisterRequest) returns (NormalResponse) {}
+  rpc Unregister(UnregisterRequest) returns (NormalResponse) {}
+  rpc GetRegistered(GetRegisteredRequest) returns (GetRegisteredResponse) {} 
 }
 
-message RootfsSpec {
-  string imageUrl = 1;
+enum RootfsSrcType {
+  S3 = 0;
+  IMAGE = 1;
+}
+
+message S3Config {
+  string Endpoint = 1;
+  string Bucket = 2;
+  string Object = 3;
+  string AccessKeyID = 4;     // omitempty
+  string AccessKeySecret = 5; // omitempty
+}
+
+message RootfsConfig {
   bool readonly = 2;
+  RootfsSrcType type = 3;
+  S3Config s3Config = 4;
+  string imageUrl = 5;
 }
 
 message Mount {
@@ -31,7 +49,7 @@ message Mount {
 message StartRequest {
   string runtime = 1;
   repeated string command = 2;
-  RootfsSpec rootfs = 3;
+  RootfsConfig rootfs = 3;
   repeated Mount mounts = 4;
   // resource request of function
   // etc: CPU millicore​
@@ -74,4 +92,33 @@ message WaitResponse {
   // Human-readable message indicating details about why container is in its
   // current state.
   string message = 3;
+}
+
+message WarmUpRuntime {
+  string id = 1;
+  RootfsConfig rootfs = 2;
+  bool makeSeed = 3;
+
+  // used during making seed.
+  repeated string command = 4;
+  map<string, string> runtimeEnvs = 5;
+}
+
+message RegisterRequest {
+  repeated WarmUpRuntime langRuntimes = 1;
+}
+
+message NormalResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message UnregisterRequest {
+  repeated string ids = 1;
+}
+
+message GetRegisteredRequest {}
+
+message GetRegisteredResponse {
+  repeated WarmUpRuntime langRuntimes = 1;
 }
