@@ -39,7 +39,7 @@ const int DEFAULT_QUOTA = 512;
 const int QUOTA_NO_MONITOR = -1;
 const std::unordered_set<std::string> DECRYPT_IGNORE_SET = { CRYPTO_ALGORITHM_STR, ENV_KEY };
 
-const std::vector<std::string> DEPLOY_OPTION_KEYS = { CONDA_CONFIG, CONDA_COMMAND, CONDA_PREFIX, CONDA_DEFAULT_ENV };
+const std::vector<std::string> DEPLOY_OPTION_KEYS = { CONDA_CONFIG, CONDA_COMMAND, CONDA_PREFIX, CONDA_DEFAULT_ENV, CONTAINER_OPTS };
 const std::vector<std::string> POSIX_ENV_KEYS = { YR_APP_MODE,
                                                   YR_WORKING_DIR,
                                                   UNZIPPED_WORKING_DIR,
@@ -180,7 +180,7 @@ messages::RuntimeConfig SetRuntimeConfig(const std::shared_ptr<messages::DeployI
     SetCreateOptions(req, runtimeConf, { "secretKey", "accessKey", "authToken" });
     SetTLSConfig(req, runtimeConf);
     SetSubDirConfig(req, runtimeConf);
-
+    runtimeConf.set_dposixudspath(req->dposixudspath());
     runtimeConf.mutable_funcmountconfig()->CopyFrom(req->funcmountconfig());
     if (auto mountConfig = req->createoptions().find(DELEGATE_MOUNT); mountConfig != req->createoptions().end()) {
         ParseMountConfig(runtimeConf, mountConfig->second);
@@ -452,7 +452,6 @@ void SetStopRuntimeInstanceRequest(messages::StopInstanceRequest &stopInstanceRe
     stopInstanceRequest.set_runtimeid(req->runtimeid());
     stopInstanceRequest.set_requestid(req->requestid());
     stopInstanceRequest.set_traceid(req->traceid());
-    stopInstanceRequest.set_type(static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME));
 }
 
 std::unordered_map<std::string, std::shared_ptr<messages::Layer>> SetDeployingRequestLayers(

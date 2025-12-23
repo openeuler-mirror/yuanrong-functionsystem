@@ -94,6 +94,7 @@ Status LocalSchedDriver::Create()
     config.isPartialWatchInstances = param_.isPartialWatchInstances;
     config.maxPriority = param_.maxPriority;
     config.enablePreemption = param_.enablePreemption;
+    config.udsPath = param_.udsPath;
     instanceCtrl_ = InstanceCtrl::Create(param_.nodeID, config);
     PosixAPIHandler::BindInstanceCtrl(instanceCtrl_);
     PosixAPIHandler::BindControlClientManager(param_.controlInterfacePosixMgr);
@@ -301,6 +302,7 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
     functionsystem::grpc::CommonGrpcServerConfig serverConfig;
     serverConfig.ip = param_.ip;
     serverConfig.listenPort = param_.posixPort;
+    serverConfig.udsPath = param_.udsPath;
     serverConfig.creds = ::grpc::InsecureServerCredentials();
     if (param_.enableSSL) {
         if (param_.creds == nullptr) {
@@ -308,10 +310,10 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
         }
         serverConfig.creds = param_.creds;
     }
-    param_.posixGrpcServer = std::make_shared<functionsystem::grpc::CommonGrpcServer>(serverConfig);
+    posixGrpcServer_ = std::make_shared<functionsystem::grpc::CommonGrpcServer>(serverConfig);
     if (param_.enableServerMode) {
         param_.posixService->BindInternalIAM(param_.internalIAM);
-        param_.posixGrpcServer->RegisterService(param_.posixService);
+        posixGrpcServer_->RegisterService(param_.posixService);
     }
     BusServiceParam serviceParam{ .nodeID = param_.nodeID,
                                   .controlPlaneObserver = param_.controlPlaneObserver,
@@ -321,10 +323,10 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
                                   .isEnableServerMode = param_.enableServerMode,
                                   .hostIP = param_.ip  };
     std::shared_ptr<BusService> busService = std::make_shared<BusService>(std::move(serviceParam));
-    param_.posixGrpcServer->RegisterService(busService);
-    param_.posixGrpcServer->Start();
+    posixGrpcServer_->RegisterService(busService);
+    posixGrpcServer_->Start();
 
-    if (!param_.posixGrpcServer->WaitServerReady()) {
+    if (!posixGrpcServer_->WaitServerReady()) {
         YRLOG_ERROR("failed to start posix grpc server.");
         return false;
     }
