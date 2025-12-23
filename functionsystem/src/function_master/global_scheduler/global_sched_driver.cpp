@@ -259,6 +259,7 @@ GlobalSchedDriver::GlobalSchedDriver(std::shared_ptr<GlobalSched> globalSched, c
     pullResourceInterval_ = flags.GetPullResourceInterval();
     enableMetrics_ = flags.GetEnableMetrics();
     enablePrintResourceView_ = flags.GetEnablePrintResourceView();
+    enableVerticalScale_ = flags.GetEnableVerticalScale();
     schedulePlugins_ = flags.GetSchedulePlugins();
     relaxed_ = flags.GetScheduleRelaxed();
     maxPriority_ = flags.GetMaxPriority();
@@ -306,7 +307,7 @@ Status GlobalSchedDriver::Start()
         std::make_shared<domain_scheduler::DomainSchedulerLauncher>(domain_scheduler::DomainSchedulerParam{
             "InnerDomainScheduler", globalSchedAddress_, metaStoreClient_, heartbeatTimeoutMs_, pullResourceInterval_,
             isScheduleTolerateAbnormal_, maxPriority_, enablePreemption_, relaxed_, enableMetrics_,
-            enablePrintResourceView_, schedulePlugins_, aggregatedStrategy_, componentName_ });
+            enablePrintResourceView_, schedulePlugins_, aggregatedStrategy_, componentName_, enableVerticalScale_ });
     auto domainActivator = std::make_shared<DomainActivator>(domainLauncher);
     auto topologyTree = std::make_unique<SchedTree>(maxLocalSchedPerDomainNode_, maxDomainSchedPerDomainNode_);
     auto globalSchedActor = std::make_shared<GlobalSchedActor>(GLOBAL_SCHED_ACTOR_NAME, metaStoreClient_,
