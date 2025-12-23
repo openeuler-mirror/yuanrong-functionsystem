@@ -460,7 +460,8 @@ void FunctionAgentMgrActor::UpdateResources(const litebus::AID &from, string &&,
     if (auto resourceView = resourceView_.lock()) {
         if (funcAgentTable_[aidTable_[from]].isInit) {
             auto unit = std::make_shared<resource_view::ResourceUnit>(std::move(*req.mutable_resourceunit()));
-            (void)resourceView->UpdateResourceUnit(unit, resource_view::UpdateType::UPDATE_ACTUAL);
+            // todo: pass flag to indicate whether to update only actual resources
+            (void)resourceView->UpdateResourceUnit(unit, resource_view::UpdateType::UPDATE_DYNAMIC);
         } else {
             YRLOG_DEBUG("start to add resource of agent({}) to view.", from.HashString());
             funcAgentTable_[aidTable_[from]].isInit = true;
@@ -964,7 +965,7 @@ litebus::Future<Status> FunctionAgentMgrActor::StartHeartbeat(const string &func
             YRLOG_WARN("heartbeat timeout, from agent to proxy. from: {}.", std::string(from));
             litebus::Async(aid, &FunctionAgentMgrActor::TimeoutEvent, funcAgentID);
         });
-    
+
     pingPongAIDMap_[funcAgentID] = pingPongAID;
 
     return Status(StatusCode::SUCCESS);

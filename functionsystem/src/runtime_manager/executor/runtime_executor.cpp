@@ -636,7 +636,8 @@ std::shared_ptr<litebus::Exec> RuntimeExecutor::StartRuntimeByRuntimeIDWithRetry
     return nullptr;
 }
 
-Status RuntimeExecutor::StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request, bool oomKilled)
+litebus::Future<Status> RuntimeExecutor::StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request,
+                                                      bool oomKilled)
 {
     std::string runtimeID = request->runtimeid();
     std::string requestID = request->requestid();

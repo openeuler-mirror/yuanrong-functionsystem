@@ -288,6 +288,7 @@ message DeployInstanceRequest {
   string codeSha512 = 33;
   TenantCredentials tenantCredentials = 34;
   string tenantID = 35;
+  string dposixUdsPath = 36;
 }
 
 message TenantCredentials {
@@ -398,6 +399,7 @@ message RuntimeConfig {
   map<string, string> posixEnvs = 8;
   CreateSubDirectoryConfig subDirectoryConfig = 9;
   string debugServerPort = 10;
+  string dposixUdsPath = 11;
 }
 
 message CreateSubDirectoryConfig {

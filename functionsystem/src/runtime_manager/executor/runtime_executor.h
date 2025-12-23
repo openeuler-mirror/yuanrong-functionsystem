@@ -52,7 +52,8 @@ public:
     litebus::Future<messages::StartInstanceResponse> StartInstance(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::vector<int> &cardIDs) override;
 
-    Status StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request, bool oomKilled = false) override;
+    litebus::Future<Status> StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request,
+                                         bool oomKilled = false) override;
 
     std::map<std::string, messages::RuntimeInstanceInfo> GetRuntimeInstanceInfos() override;
 
