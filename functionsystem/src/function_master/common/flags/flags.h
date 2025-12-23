@@ -83,6 +83,11 @@ public:
         return enablePrintResourceView_;
     }
 
+    bool GetEnableVerticalScale() const
+    {
+        return enableVerticalScale_;
+    }
+
     const std::string GetMigratePrefix() const
     {
         return migratePrefix_;
@@ -268,6 +273,7 @@ protected:
 
     std::string electionMode_;
     bool enablePrintResourceView_;
+    bool enableVerticalScale_;
 
     std::string migratePrefix_;
     std::string taintToleranceList_;

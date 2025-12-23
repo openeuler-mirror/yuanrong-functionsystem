@@ -124,6 +124,11 @@ public:
         scheduleRetryTimes_ = intervals.size();
     }
 
+    void SetEnableVerticalScale(bool enable)
+    {
+        enableVerticalScale_ = enable;
+    }
+
     std::vector<std::shared_ptr<messages::ScheduleRequest>> GetSchedulerQueue()
     {
         // 创建一个vector来存储所有的values
@@ -197,6 +202,7 @@ private:
     uint32_t scheduleRetryTimes_{ 0 };
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<std::string>>> cancelTag_;
     std::map<std::string, std::shared_ptr<messages::ScheduleRequest>> schedulerQueueMap_;
+    bool enableVerticalScale_{ false };
 };
 }  // namespace functionsystem::domain_scheduler
 

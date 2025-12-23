@@ -37,6 +37,7 @@ struct DomainSchedulerParam {
     std::string schedulePlugins = "";
     std::string aggregatedStrategy{"no_aggregate"}; // three options : no_aggregate, strictly, relaxed
     std::string componentName = "";
+    bool enableVerticalScale = false;
 };
 }  // namespace functionsystem::domain_scheduler
 #endif  // DOMAIN_SCHEDULER_STRUCTURE_H

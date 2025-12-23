@@ -208,8 +208,8 @@ void PriorityScheduler::OnScheduleDone(const litebus::Future<ScheduleResult> &fu
     auto &resCode = result.code;
     const auto &timeout = instance->scheduleReq->instance().scheduleoption().scheduletimeoutms();
     ASSERT_IF_NULL(priorityPolicy_);
-    if (priorityPolicy_->NeedSuspend(resCode, timeout) && !NeedCreateAgentInDomain(instance->scheduleReq->instance(), 0)
-        && recorder_ != nullptr) {
+    if (priorityPolicy_->NeedSuspend(resCode, timeout)
+        && !NeedCreateAgentInDomain(instance->scheduleReq->instance(), resCode) && recorder_ != nullptr) {
         YRLOG_WARN("{}|instance schedule resource not enough (resCode: {}), push it to pending queue",
                    instance->GetRequestId(), resCode);
         recorder_->RecordScheduleErr(instance->GetRequestId(), Status(static_cast<StatusCode>(resCode), result.reason));

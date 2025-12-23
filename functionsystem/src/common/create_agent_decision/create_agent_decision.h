@@ -79,6 +79,13 @@ const std::set<std::string> POOLABLE_RESOURCES_KEYS{ resource_view::CPU_RESOURCE
         YRLOG_DEBUG("instance({}) has an affinity attribute, need to create new agent", info.instanceid());
         return true;
     }
+    if (auto it = info.createoptions().find(ENABLE_VERTICAL_SCALE_KEY);
+        it != info.createoptions().end() && it->second == "true"
+        && (scheduleRespCode == static_cast<int32_t>(StatusCode::RESOURCE_NOT_ENOUGH)
+            || scheduleRespCode == static_cast<int32_t>(StatusCode::ERR_RESOURCE_NOT_ENOUGH))) {
+        YRLOG_INFO("Enable verticalScale. Create a new agent for instance({})", info.instanceid());
+        return true;
+    }
 
     return NeedCreateAgent(info);
 }

@@ -49,8 +49,12 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     ASSERT_IF_NULL(scheduler_);
     auto requestID = req->requestid();
     uint64_t timeout = req->instance().scheduleoption().scheduletimeoutms();
-    YRLOG_INFO("instance(req={}, priority={}, timeout={}) schedule decision",
-               requestID, req->instance().scheduleoption().priority(), timeout);
+    if (enableVerticalScale_) {
+        auto createOpts = req->mutable_instance()->mutable_createoptions();
+        (*createOpts)[ENABLE_VERTICAL_SCALE_KEY] = "true";
+    }
+    YRLOG_INFO("instance(req={}, priority={}, timeout={}, enableVerticalScale={}) schedule decision",
+               requestID, req->instance().scheduleoption().priority(), timeout, enableVerticalScale_);
     auto cancelPromise = GetCancelTag(requestID);
     auto future = scheduler_->ScheduleDecision(req, cancelPromise->GetFuture());
     if (timeout > 0) {
@@ -303,6 +307,9 @@ void InstanceCtrlActor::CheckUUID(const std::shared_ptr<messages::ScheduleReques
         auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
         (*req->mutable_instance()->mutable_scheduleoption()->mutable_resourceselector())[RESOURCE_OWNER_KEY] =
             uuid.ToString();
+        // the agent to be create is remarked a unique resource selector in the previous step.
+        // Set schedule policy as monopoly to ensure that the new agent will be deleted after the ins is destroyed.
+        req->mutable_instance()->mutable_scheduleoption()->set_schedpolicyname(MONOPOLY_SCHEDULE);
     }
 }
 

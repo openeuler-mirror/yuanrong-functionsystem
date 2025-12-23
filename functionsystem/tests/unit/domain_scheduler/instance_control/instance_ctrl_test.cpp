@@ -483,6 +483,72 @@ TEST_F(DomainInstanceCtrlTest, CreateAgentSuccess)
     litebus::Await(mockScaler->GetAID());
 }
 
+/**
+ * Description: create agent success when enable vertical scale
+ * Steps:
+ * 1. schedule decision
+ * 2. create agent
+ * 3. schedule decision
+ * Expectation:
+ * 1. resources not enough
+ * 2. create agent success
+ * 3. success
+ */
+TEST_F(DomainInstanceCtrlTest, EnableVerticalScale)
+{
+    instanceCtrl_->SetEnableVerticalScale(true);
+    domain_scheduler::InstanceCtrl instanceCtrl(instanceCtrl_->GetAID());
+    instanceCtrl.SetDomainLevel(true);
+    instanceCtrl.UpdateMaxSchedRetryTimes(1);
+
+    auto mockScaler = std::make_shared<MockScalerActor>();
+    litebus::Spawn(mockScaler);
+    instanceCtrl.SetScalerAddress(mockScaler->GetAID().Url());
+
+    std::string requestID = "request-123";
+    std::string traceID = "trace-123";
+
+    ScheduleResult resourceNotEnough{ "", RESOURCE_NOT_ENOUGH, "resources not enough" };
+    std::string mockSelectedName = "selected";
+    ScheduleResult result{ mockSelectedName, 0, "" };
+    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _))
+        .WillOnce(Return(AsyncReturn(resourceNotEnough)))
+        .WillOnce(Return(AsyncReturn(result)));
+
+    auto mockSchedRsp = std::make_shared<messages::ScheduleResponse>();
+    mockSchedRsp->set_code(0);
+    mockSchedRsp->set_requestid(requestID);
+    EXPECT_CALL(*mockUnderlayerScheMgr_, DispatchSchedule(mockSelectedName, _)).WillOnce(Return(AsyncReturn(mockSchedRsp)));
+
+    resource_view::PullResourceRequest snapshot;
+    snapshot.set_localviewinittime("INITTIME1");
+    snapshot.set_version(2);
+    EXPECT_CALL(*primary_, GetUnitSnapshotInfo(_)).WillOnce(Return(litebus::Future<resource_view::PullResourceRequest>{snapshot}));
+
+    messages::CreateAgentResponse createAgentRsp;
+    createAgentRsp.set_requestid(requestID);
+    createAgentRsp.set_code(0);
+    (*createAgentRsp.mutable_updatedcreateoptions())["123"] = "123";
+    EXPECT_CALL(*mockScaler, GetCreateAgentResponse()).WillOnce(Return(createAgentRsp.SerializeAsString()));
+
+    auto req = std::make_shared<messages::ScheduleRequest>();
+    req->set_requestid(requestID);
+    req->set_traceid(traceID);
+    auto future = instanceCtrl.Schedule(req);
+
+    ASSERT_AWAIT_READY_FOR(future, 1000);
+    auto rsp = future.Get();
+    EXPECT_EQ(rsp->code(), 0);
+    EXPECT_EQ(rsp->requestid(), requestID);
+    EXPECT_TRUE(instanceCtrl_->cancelTag_.find(rsp->requestid())==instanceCtrl_->cancelTag_.end());
+    EXPECT_EQ(req->unitsnapshot().localviewinittime(), "INITTIME1");
+    EXPECT_EQ(req->unitsnapshot().version(), 2);
+    EXPECT_TRUE(req->instance().scheduleoption().schedpolicyname() == MONOPOLY_SCHEDULE);
+
+    litebus::Terminate(mockScaler->GetAID());
+    litebus::Await(mockScaler->GetAID());
+}
+
 TEST_F(DomainInstanceCtrlTest, AffinityCreateAgent)
 {
     domain_scheduler::InstanceCtrl instanceCtrl(instanceCtrl_->GetAID());
