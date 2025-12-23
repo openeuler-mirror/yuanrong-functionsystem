@@ -647,6 +647,35 @@ TEST_F(PrioritySchedulerTest, RequestOrderTest) {
 }
 
 /*
+ * Test vertical scale when resource are not enbough
+ * 1. Create and enqueue ins1
+ * 2. Mock scheduling (failure)
+ * 3. Ins will not enqueue to pending queue because vertical scale is enabled
+ */
+TEST_F(PrioritySchedulerTest, EnableVerticalScaleTest)
+{
+    auto scheduler = std::make_shared<PriorityScheduler>(recorder_, 10, PriorityPolicyType::FAIRNESS);
+    scheduler->RegisterSchedulePerformer(mockInstancePerformer_, mockGroupPerformer_, mockAggregatedSchedulePerformer_);
+
+    // 1. Create and enqueue ins1 with affinity
+    auto ins1 = InstanceItem::CreateInstanceItem("ins1");
+    ins1->scheduleReq->mutable_instance()->mutable_scheduleoption()->set_scheduletimeoutms(1);
+    auto createOpts = ins1->scheduleReq->mutable_instance()->mutable_createoptions();
+    (*createOpts)[ENABLE_VERTICAL_SCALE_KEY] = "true";
+
+    scheduler->Enqueue(ins1);
+    EXPECT_FALSE(scheduler->CheckIsRunningQueueEmpty());
+    EXPECT_TRUE(scheduler->CheckIsPendingQueueEmpty());
+
+    // 2. Mock scheduling (failure)
+    EXPECT_CALL(*mockInstancePerformer_, DoSchedule)
+        .WillOnce(Return(ScheduleResult{ "", StatusCode::RESOURCE_NOT_ENOUGH, "" }));
+    scheduler->ConsumeRunningQueue();
+    EXPECT_TRUE(scheduler->CheckIsRunningQueueEmpty());
+    EXPECT_TRUE(scheduler->CheckIsPendingQueueEmpty());
+}
+
+/*
  * Test for handling empty affinity requests in the priority scheduler(fairness)(All instances have different priority)
  * 1. Create and enqueue ins1 with priority 10 and empty affinity
  * 2. Simulate scheduling (failure)
