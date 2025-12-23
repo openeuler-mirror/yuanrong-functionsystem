@@ -30,13 +30,13 @@
 #include "async/collect.hpp"
 #include "common/logs/logging.h"
 #include "common/resource_view/resource_type.h"
+#include "common/utils/actor_worker.h"
 #include "common/utils/collect_status.h"
 #include "common/utils/exec_utils.h"
 #include "common/utils/files.h"
 #include "common/utils/generate_message.h"
 #include "common/utils/path.h"
 #include "common/utils/struct_transfer.h"
-#include "common/utils/actor_worker.h"
 #include "config/build.h"
 #include "port/port_manager.h"
 #include "utils/os_utils.hpp"
@@ -89,13 +89,15 @@ void ContainerExecutor::ReconnectContainerd()
     }
     reconnecting_ = true;
     auto actor = std::make_shared<ActorWorker>();
-    (void)actor->AsyncWork([containerd(containerd_)](){
-        YRLOG_INFO("try to reconnect containerd...");
-        containerd->CheckChannelAndWaitForReconnect(true);
-    }).OnComplete([actor, aid(GetAID())](const litebus::Future<Status> &) {
-        actor->Terminate();
-        litebus::Async(aid, &ContainerExecutor::OnReconnectContainerd);
-    });
+    (void)actor
+        ->AsyncWork([containerd(containerd_)]() {
+            YRLOG_INFO("try to reconnect containerd...");
+            containerd->CheckChannelAndWaitForReconnect(true);
+        })
+        .OnComplete([actor, aid(GetAID())](const litebus::Future<Status> &) {
+            actor->Terminate();
+            litebus::Async(aid, &ContainerExecutor::OnReconnectContainerd);
+        });
 }
 
 void ContainerExecutor::OnReconnectContainerd()
@@ -120,7 +122,7 @@ void ContainerExecutor::Finalize()
 }
 
 litebus::Future<Status> ContainerExecutor::NotifyInstancesDiskUsageExceedLimit(const std::string &description,
-                                                                             const int limit)
+                                                                               const int limit)
 {
     return Status::OK();
 }
@@ -179,12 +181,13 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnStartRunti
 {
     const auto &info = request->runtimeinstanceinfo();
     if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
-        YRLOG_ERROR("{}|{}|failed to start container, code({}) message({})", info.traceid(), info.requestid(), response.code(), response.message());
+        YRLOG_ERROR("{}|{}|failed to start container, code({}) message({})", info.traceid(), info.requestid(),
+                    response.code(), response.message());
         return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_CREATE_EXEC_FAILED, response.message());
     }
     auto containerID = response.id();
     litebus::Async(GetAID(), &ContainerExecutor::ReportInfo, info.instanceid(), info.runtimeid(), containerID,
-                    functionsystem::metrics::MeterTitle{ "yr_app_instance_start_time", " start timestamp", "ms" });
+                   functionsystem::metrics::MeterTitle{ "yr_app_instance_start_time", " start timestamp", "ms" });
     YRLOG_INFO("{}|{}|start instance success, instanceID({}), runtimeID({}), containerID({}))", info.traceid(),
                info.requestid(), info.instanceid(), info.runtimeid(), containerID);
     runtime2containerID_[info.runtimeid()] = containerID;
@@ -222,11 +225,13 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartRuntime
     // Status result;
     // if (config_.isProtoMsgToRuntime) {
     //     result =
-    //         WriteProtoToRuntime(request->runtimeinstanceinfo().requestid(), request->runtimeinstanceinfo().runtimeid(),
+    //         WriteProtoToRuntime(request->runtimeinstanceinfo().requestid(),
+    //         request->runtimeinstanceinfo().runtimeid(),
     //                             request->runtimeinstanceinfo().runtimeconfig().tlsconfig(), execPtr);
     // } else {
     //     result =
-    //         WriteJsonToRuntime(request->runtimeinstanceinfo().requestid(), request->runtimeinstanceinfo().runtimeid(),
+    //         WriteJsonToRuntime(request->runtimeinstanceinfo().requestid(),
+    //         request->runtimeinstanceinfo().runtimeid(),
     //                            request->runtimeinstanceinfo().runtimeconfig().tlsconfig(), execPtr);
     // }
     // if (result.IsError()) {
@@ -234,8 +239,8 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartRuntime
     // }
 }
 
-void ContainerExecutor::ReportInfo(const std::string &instanceID, const std::string runtimeID, const std::string &containerID,
-                                 const functionsystem::metrics::MeterTitle &title)
+void ContainerExecutor::ReportInfo(const std::string &instanceID, const std::string runtimeID,
+                                   const std::string &containerID, const functionsystem::metrics::MeterTitle &title)
 {
     auto timeStamp =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
@@ -254,8 +259,7 @@ void ContainerExecutor::ReportInfo(const std::string &instanceID, const std::str
     functionsystem::metrics::MetricsAdapter::GetInstance().ReportGauge(title, data);
 }
 
-void ContainerExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr,
-                                                 const std::string &runtimeID)
+void ContainerExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID)
 {
     auto parentPath = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
     auto path = litebus::os::Join(parentPath, runtimeID);
@@ -284,24 +288,46 @@ void ContainerExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::strin
     }
 }
 
-void BuildMountForCode(const std::shared_ptr<runtime_launcher::StartRequest> &start,
-                       const std::shared_ptr<messages::StartInstanceRequest> &request)
+Envs BuildMountForCode(const std::shared_ptr<runtime_launcher::StartRequest> &start,
+                       const std::shared_ptr<messages::StartInstanceRequest> &request, const Envs &envs)
 {
+    Envs updateEnv = envs;
     auto deploySpec = request->runtimeinstanceinfo().deploymentconfig();
-    auto code = start->add_mounts();
-    code->set_type("bind");
     auto layerPath = litebus::os::Join(deploySpec.deploydir(), RUNTIME_LAYER_DIR_NAME);
     auto funcPath = litebus::os::Join(layerPath, RUNTIME_FUNC_DIR_NAME);
-    code->set_source(funcPath.append("/" + deploySpec.bucketid()) + "/" + TransMultiLevelDirToSingle(deploySpec.objectid()));
-    code->set_target(funcPath);
+    auto code = start->add_mounts();
+    code->set_type("bind");
 
-    for (auto &layer : deploySpec.layers()) {
+    auto libPathIter = envs.posixEnvs.find("YR_FUNCTION_LIB_PATH");
+    if (libPathIter != envs.posixEnvs.end() && !libPathIter->second.empty()) {
+        funcPath = libPathIter->second;
+    }
+    std::string funcPathTarget = funcPath;
+    std::replace(funcPathTarget.begin(), funcPathTarget.end(), '/', '-');
+    code->set_target(litebus::os::Join("/opt", funcPathTarget));
+
+    auto workingDirIter = envs.posixEnvs.find(UNZIPPED_WORKING_DIR);
+    if (workingDirIter == envs.posixEnvs.end() || workingDirIter->second.empty()) {
+        code->set_source(funcPath);
+    } else {
+        code->set_source(workingDirIter->second);
+        if (workingDirIter->second.find(".img") != std::string::npos) {
+            code->set_type("erofs");
+        }
+    }
+    updateEnv.posixEnvs[UNZIPPED_WORKING_DIR] = code->target();
+    updateEnv.posixEnvs["YR_FUNCTION_LIB_PATH"] = code->target();
+    updateEnv.posixEnvs["FUNCTION_LIB_PATH"] = code->target();
+
+    for (auto &layer : GenerateLayerPath(request->runtimeinstanceinfo())) {
         auto code = start->add_mounts();
         code->set_type("bind");
-        std::string curLayer = litebus::os::Join(layerPath, deploySpec.bucketid());
-        code->set_source(curLayer + "/" + TransMultiLevelDirToSingle(layer.objectid()));
-        code->set_target(curLayer);
+        code->set_source(layer);
+        std::string target = layer;
+        std::replace(target.begin(), target.end(), '/', '-');
+        code->set_target(litebus::os::Join("/opt", target));
     }
+    return updateEnv;
 }
 
 litebus::Future<runtime_launcher::StartResponse> ContainerExecutor::StartByRuntimeID(
@@ -311,7 +337,6 @@ litebus::Future<runtime_launcher::StartResponse> ContainerExecutor::StartByRunti
 {
     const auto &execPath = startRuntimeParams.at(PARAM_EXEC_PATH);
     auto language = startRuntimeParams.at(PARAM_LANGUAGE);
-    const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
     auto runtimeID = startRuntimeParams.at(PARAM_RUNTIME_ID);
     std::string stdOut;
     std::string stdErr;
@@ -336,7 +361,7 @@ litebus::Future<runtime_launcher::StartResponse> ContainerExecutor::StartByRunti
                 start->set_runtime(j.at("runtime").get<std::string>());
             }
             if (j.find("imageurl") != j.end()) {
-                start->mutable_image()->set_imageurl(j.at("imageurl").get<std::string>());;
+                start->mutable_image()->set_imageurl(j.at("imageurl").get<std::string>());
             }
             if (j.find("readonly") != j.end()) {
                 start->mutable_image()->set_readonly(j.at("readonly").get<bool>());
@@ -349,10 +374,10 @@ litebus::Future<runtime_launcher::StartResponse> ContainerExecutor::StartByRunti
     }
 
     *start->add_cmd() = execPath;
-     for (const auto &arg : buildArgs) {
-         *start->add_cmd() = arg;
+    for (const auto &arg : buildArgs) {
+        *start->add_cmd() = arg;
     }
-    BuildMountForCode(start, request);
+    auto updateEnv = BuildMountForCode(start, request, envs);
 
     // todo: should be more elegant
     const auto &resources = request->runtimeinstanceinfo().runtimeconfig().resources();
@@ -367,11 +392,13 @@ litebus::Future<runtime_launcher::StartResponse> ContainerExecutor::StartByRunti
         || resources.resources().at(MEMORY_RESOURCE_NAME).type() != ValueType::Value_Type_SCALAR) {
         (*start->mutable_resources())[MEMORY_RESOURCE_NAME] = 500;
     } else {
-        (*start->mutable_resources())[MEMORY_RESOURCE_NAME] = resources.resources().at(MEMORY_RESOURCE_NAME).scalar().value();
+        (*start->mutable_resources())[MEMORY_RESOURCE_NAME] =
+            resources.resources().at(MEMORY_RESOURCE_NAME).scalar().value();
     }
 
     // currently all treated as runtimeEnv
     // todo lwy for fork friendly, the immutable env should be mv to runtimeEnv
+    const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(updateEnv);
     start->mutable_runtimeenvs()->insert(combineEnvs.begin(), combineEnvs.end());
     start->set_stdout(stdOut);
     start->set_stderr(stdErr);
@@ -379,7 +406,8 @@ litebus::Future<runtime_launcher::StartResponse> ContainerExecutor::StartByRunti
     return DoStartContainer(request, start);
 }
 
-litebus::Future<Status> ContainerExecutor::StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request, bool oomKilled)
+litebus::Future<Status> ContainerExecutor::StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request,
+                                                        bool oomKilled)
 {
     std::string runtimeID = request->runtimeid();
     std::string requestID = request->requestid();
@@ -406,7 +434,8 @@ litebus::Future<Status> ContainerExecutor::OnDeleteContainer(const std::string &
                                                              const std::string &runtimeID, const std::string &requestID,
                                                              const std::string &containerID)
 {
-    YRLOG_INFO("{}|finished delete container({}) for instance({}) runtime({})", requestID, containerID, instanceID, runtimeID);
+    YRLOG_INFO("{}|finished delete container({}) for instance({}) runtime({})", requestID, containerID, instanceID,
+               runtimeID);
 
     auto infoIter = runtimeInstanceInfoMap_.find(runtimeID);
     if (infoIter != runtimeInstanceInfoMap_.end()) {
@@ -546,18 +575,18 @@ litebus::Future<runtime_launcher::WaitResponse> ContainerExecutor::DoWaitContain
     return containerd_
         ->CallAsync("Wait", *req.get(), static_cast<runtime_launcher::WaitResponse *>(nullptr),
                     &runtime_launcher::RuntimeLauncher::Stub::AsyncWait)
-        .Then([req](litebus::Try<runtime_launcher::WaitResponse> rsp)
-                  -> litebus::Future<runtime_launcher::WaitResponse> {
-            if (rsp.IsOK()) {
-                return rsp.Get();
-            }
-            auto msg = fmt::format("failed to wait container {}, grpc err: {}", req->id(), rsp.GetErrorCode());
-            YRLOG_ERROR("{}", msg);
-            runtime_launcher::WaitResponse wait{};
-            wait.set_status(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
-            wait.set_message(msg);
-            return wait;
-        });
+        .Then(
+            [req](litebus::Try<runtime_launcher::WaitResponse> rsp) -> litebus::Future<runtime_launcher::WaitResponse> {
+                if (rsp.IsOK()) {
+                    return rsp.Get();
+                }
+                auto msg = fmt::format("failed to wait container {}, grpc err: {}", req->id(), rsp.GetErrorCode());
+                YRLOG_ERROR("{}", msg);
+                runtime_launcher::WaitResponse wait{};
+                wait.set_status(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+                wait.set_message(msg);
+                return wait;
+            });
 }
 
 litebus::Future<::messages::StartInstanceResponse> ContainerExecutorProxy::StartInstance(
