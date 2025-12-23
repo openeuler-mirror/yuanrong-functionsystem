@@ -42,6 +42,7 @@ Status InstanceManagerDriver::Start()
     httpServer_ = std::make_shared<HttpServer>(im);
     // add agent api route
     instanceApiRouteRegister_ = std::make_shared<InstancesApiRouter>();
+    instanceApiRouteRegister_->InitQueryNamedInsHandler(instanceManagerActor_);
     instanceApiRouteRegister_->InitQueryInstancesHandler(instanceManagerActor_);
     instanceApiRouteRegister_->InitQueryDebugInstancesHandler(instanceManagerActor_);
     if (auto registerStatus(httpServer_->RegisterRoute(instanceApiRouteRegister_));
