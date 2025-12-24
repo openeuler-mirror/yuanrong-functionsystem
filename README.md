@@ -14,7 +14,7 @@ openYuanrong 由多语言函数运行时、函数系统和数据系统组成，�
 
 **函数**是 openYuanrong 的核心概念抽象，它对传统 Serverless 函数概念进行了通用化扩展，起到了类似单机 OS 中进程的作用，可以表达任意分布式应用的运行实例，同时天然支持相互调用。
 
-openYuanrong 分为四个代码仓库：[yuanrong](https://gitee.com/openeuler/yuanrong) 对应多语言函数运行时；yuanrong-functionsystem 对应函数系统，即当前代码仓；[yuanrong-datasystem](https://gitee.com/openeuler/yuanrong-datasystem) 对应数据系统；[yuanrong-frontend](https://gitee.com/openeuler/yuanrong-frontend) 提供网关能力，支持函数创建、调用等功能。
+openYuanrong 分为四个代码仓库：[yuanrong](https://gitcode.com/openeuler/yuanrong) 对应多语言函数运行时；yuanrong-functionsystem 对应函数系统，即当前代码仓；[yuanrong-datasystem](https://gitcode.com/openeuler/yuanrong-datasystem) 对应数据系统；[yuanrong-frontend](https://gitcode.com/openeuler/yuanrong-frontend) 提供网关能力，支持函数创建、调用等功能。
 
 ## 入门
 
