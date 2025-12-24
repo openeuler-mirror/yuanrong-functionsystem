@@ -104,13 +104,15 @@ public:
                                              const std::shared_ptr<resource_view::InstanceInfo> &instanceInfo);
 
     /// ClearGroupInfo
-    /// clear group info in metastore
-    litebus::Future<Status> ClearGroupInfo(const std::string &groupID, const Status &status);
+    /// clear group info in metastore when isClearMatastore is true
+    litebus::Future<Status> ClearGroupInfo(const std::string &groupID, const Status &status,
+        bool isClearMetastore = true);
 
     litebus::Future<Status> SendClearGroupToLocal(const litebus::Option<std::string> &proxyAddress,
                                                   const std::string &groupKey,
                                                   const std::shared_ptr<messages::KillGroup> clearReq,
-                                                  const std::shared_ptr<litebus::Promise<Status>> &promise);
+                                                  const std::shared_ptr<litebus::Promise<Status>> &promise,
+                                                  bool isClearMetastore);
 
     void DeleteGroupInfoFromMetaStore(const std::string &groupKey,
                                       const std::shared_ptr<litebus::Promise<Status>> promise);

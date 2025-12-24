@@ -1305,6 +1305,7 @@ TEST_F(GroupManagerTest, SuspendGroup)
             return std::make_pair(true, fkRsp);
         }));
     EXPECT_CALL(*mockMetaClient, Put).WillOnce(testing::Return(std::make_shared<PutResponse>()));
+    auto clearGroupFuture = localGroupctlActor1->ExpectCallMockClearGroupResponseReturnOK()->GetFuture();
     auto outerKillerActor = std::make_shared<OuterKillerActor>();
     ASSERT_TRUE(litebus::Spawn(outerKillerActor).OK());
     auto respPromise = std::make_shared<litebus::Promise<messages::KillGroupResponse>>();
@@ -1317,6 +1318,7 @@ TEST_F(GroupManagerTest, SuspendGroup)
     litebus::Async(outerKillerActor->GetAID(), &OuterKillerActor::SendKillGroup, groupMgrActor->GetAID(), killGroupReq);
     EXPECT_AWAIT_READY(respPromise->GetFuture());
     auto kgRsp = respPromise->GetFuture().Get();
+    ASSERT_AWAIT_READY(clearGroupFuture);
     EXPECT_EQ(kgRsp.code(), static_cast<int32_t>(SUCCESS));
     YRLOG_INFO("SUSPEND group response: {}", kgRsp.DebugString());
     litebus::Terminate(outerKillerActor->GetAID());

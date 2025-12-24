@@ -402,7 +402,7 @@ litebus::Future<Status> GroupManagerActor::MasterBusiness::InnerKillGroup(const 
                    promise.SetValue(Status(StatusCode::REQUEST_TIME_OUT, "kill group timeout"));
                    return promise.GetFuture();
                })
-        .Then(litebus::Defer(actor->GetAID(), &GroupManagerActor::ClearGroupInfo, groupID, std::placeholders::_1));
+        .Then(litebus::Defer(actor->GetAID(), &GroupManagerActor::ClearGroupInfo, groupID, std::placeholders::_1, true));
 }
 
 void GroupManagerActor::OnGroupSuspend(const litebus::Future<Status> &future, const litebus::AID &from,
@@ -494,6 +494,8 @@ void GroupManagerActor::MasterBusiness::SuspendGroup(const litebus::AID &from,
             return litebus::Async(actor->GetAID(), &GroupManagerActor::BroadCastSignalForGroup, groupID, srcInstanceID,
                                   INSTANCE_TRANS_SUSPEND_SIGNAL);
         })
+        .Then(litebus::Defer(actor->GetAID(), &GroupManagerActor::ClearGroupInfo, groupID,
+            std::placeholders::_1, false))
         .OnComplete(litebus::Defer(actor->GetAID(), &GroupManagerActor::OnGroupSuspend, std::placeholders::_1, from,
                                    requestID, groupID));
 }
@@ -659,7 +661,8 @@ litebus::Future<Status> GroupManagerActor::OnInstanceDelete(
     return business_->OnInstanceDelete(instanceKey, instanceInfo);
 }
 
-litebus::Future<Status> GroupManagerActor::ClearGroupInfo(const std::string &groupID, const Status &status)
+litebus::Future<Status> GroupManagerActor::ClearGroupInfo(const std::string &groupID, const Status &status,
+    bool isClearMetastore)
 {
     if (!status.IsOk()) {
         YRLOG_WARN("status is not ok when clear group info, {}", status.GetMessage());
@@ -678,13 +681,14 @@ litebus::Future<Status> GroupManagerActor::ClearGroupInfo(const std::string &gro
     ASSERT_IF_NULL(member_->globalScheduler);
     member_->globalScheduler->GetLocalAddress(ownerProxy)
         .Then(litebus::Defer(GetAID(), &GroupManagerActor::SendClearGroupToLocal, std::placeholders::_1, groupKey,
-                             clearGroupReq, promise));
+                             clearGroupReq, promise, isClearMetastore));
     return promise->GetFuture();
 }
 
 litebus::Future<Status> GroupManagerActor::SendClearGroupToLocal(
     const litebus::Option<std::string> &proxyAddress, const std::string &groupKey,
-    const std::shared_ptr<messages::KillGroup> clearReq, const std::shared_ptr<litebus::Promise<Status>> &promise)
+    const std::shared_ptr<messages::KillGroup> clearReq, const std::shared_ptr<litebus::Promise<Status>> &promise,
+    bool isClearMetastore)
 {
     if (proxyAddress.IsNone()) {
         YRLOG_WARN("{}|failed to clear group, local address not found", clearReq->groupid());
@@ -694,11 +698,16 @@ litebus::Future<Status> GroupManagerActor::SendClearGroupToLocal(
     auto localAID = litebus::AID(LOCAL_GROUP_CTRL_ACTOR_NAME, proxyAddress.Get());
     auto future = requestGroupClearMatch_.AddSynchronizer(clearReq->groupid());
     (void)Send(localAID, "ClearGroup", clearReq->SerializeAsString());
-    future.OnComplete([promise, groupKey, aid(GetAID())](const litebus::Future<Status> &future) {
+    future.OnComplete([promise, groupKey, isClearMetastore, aid(GetAID())]
+            (const litebus::Future<Status> &future) {
         if (future.IsError()) {
             YRLOG_WARN("failed get clear group response, group:{}", groupKey);
         }
-        litebus::Async(aid, &GroupManagerActor::DeleteGroupInfoFromMetaStore, groupKey, promise);
+        if (isClearMetastore) {
+            litebus::Async(aid, &GroupManagerActor::DeleteGroupInfoFromMetaStore, groupKey, promise);
+        } else {
+            promise->SetValue(Status::OK());
+        }
     });
     return Status::OK();
 }
