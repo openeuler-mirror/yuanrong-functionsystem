@@ -129,6 +129,8 @@ struct FunctionConfig {
     int32_t cacheInstance{ 0 };
     FunctionHookHandlerConfig functionHookHandlerConfig;
     DeviceMetaData device;
+    WarmupType warmup;
+    RootfsSpecMeta rootfs;
 };
 
 struct ServiceInfo {

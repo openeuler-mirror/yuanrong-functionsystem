@@ -8,7 +8,7 @@ service RuntimeLauncher {
   rpc Wait(WaitRequest) returns (WaitResponse) {}
   rpc Register(RegisterRequest) returns (NormalResponse) {}
   rpc Unregister(UnregisterRequest) returns (NormalResponse) {}
-  rpc GetRegistered(GetRegisteredRequest) returns (GetRegisteredResponse) {} 
+  rpc GetRegistered(GetRegisteredRequest) returns (GetRegisteredResponse) {}
 }
 
 enum RootfsSrcType {
@@ -25,10 +25,10 @@ message S3Config {
 }
 
 message RootfsConfig {
-  bool readonly = 2;
-  RootfsSrcType type = 3;
+  bool readonly = 1;
+  RootfsSrcType type = 2;
+  string imageUrl = 3;
   S3Config s3Config = 4;
-  string imageUrl = 5;
 }
 
 message Mount {
@@ -105,6 +105,7 @@ message WarmUpRuntime {
 }
 
 message RegisterRequest {
+  // runtimes ? 
   repeated WarmUpRuntime langRuntimes = 1;
 }
 
