@@ -239,6 +239,12 @@ public:
     litebus::Future<Status> SendStaticFunctionScheduleResponse(const messages::ScheduleResponse &scheduleResponse,
                                                                const litebus::AID &from);
 
+    litebus::Future<Status> RegisterToWarmUp(
+        const std::shared_ptr<messages::DeployInstanceRequest> &request);
+
+    litebus::Future<Status> UnRegisterWarmUp(
+        const std::shared_ptr<messages::KillInstanceRequest> &request);
+
     // for test
     [[maybe_unused]] void SetFuncAgentsRegis(
         std::unordered_map<std::string, messages::FuncAgentRegisInfo> &funcAgentsRegis)

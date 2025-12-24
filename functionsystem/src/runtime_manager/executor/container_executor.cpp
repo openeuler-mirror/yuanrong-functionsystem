@@ -144,10 +144,6 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartInstanc
     std::string language = info.runtimeconfig().language();
     (void)transform(language.begin(), language.end(), language.begin(), ::tolower);
     std::string runtimeID = info.runtimeid();
-    if (runtimeID.empty()) {
-        runtimeID = GenerateRuntimeID(info.instanceid());
-        request->mutable_runtimeinstanceinfo()->set_runtimeid(runtimeID);
-    }
     std::string port;
     auto tlsConfig = info.runtimeconfig().tlsconfig();
     RuntimeFeatures features;
@@ -211,11 +207,10 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartRuntime
         return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_EXEC_PATH_NOT_FOUND,
                                             "Executable path of " + language + " is not found");
     }
-
-    return StartByRuntimeID(
-               request,
-               { { PARAM_EXEC_PATH, execPath }, { PARAM_RUNTIME_ID, info.runtimeid() }, { PARAM_LANGUAGE, language } },
-               args, envs)
+    if (request->runtimeinstanceinfo().warmuptype() != static_cast<int32_t>(WarmupType::NONE)) {
+        return WarmUp(request, { { PARAM_EXEC_PATH, execPath }, { PARAM_LANGUAGE, language } }, args, envs);
+    }
+    return StartByRuntimeID(request, { { PARAM_EXEC_PATH, execPath }, { PARAM_LANGUAGE, language } }, args, envs)
         .Then(litebus::Defer(GetAID(), &ContainerExecutor::OnStartRuntime, std::placeholders::_1, request));
 
     // todo lwy tlsconfig should be passed by uds
@@ -312,7 +307,7 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
     const auto &execPath = startRuntimeParams.at(PARAM_EXEC_PATH);
     auto language = startRuntimeParams.at(PARAM_LANGUAGE);
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
-    auto runtimeID = startRuntimeParams.at(PARAM_RUNTIME_ID);
+    const auto &runtimeID = request->runtimeinstanceinfo().runtimeid();
     std::string stdOut;
     std::string stdErr;
     ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID);
@@ -328,25 +323,27 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
     YRLOG_INFO("start {} runtime({}), execute final cmd: {}", language, runtimeID, cmd);
     auto start = std::make_shared<runtime::v1::StartRequest>();
     // todo: read from request
-    auto opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
-    if (opts.find(CONTAINER_OPTS) != opts.end()) {
-        try {
-            nlohmann::json j = nlohmann::json::parse(opts[CONTAINER_OPTS]);
-            if (j.find("runtime") != j.end()) {
-                start->set_runtime(j.at("runtime").get<std::string>());
-            }
-            if (j.find("imageurl") != j.end()) {
-                start->mutable_rootfs()->set_imageurl(j.at("imageurl").get<std::string>());;
-            }
-            if (j.find("readonly") != j.end()) {
-                start->mutable_rootfs()->set_readonly(j.at("readonly").get<bool>());
-            }
-        } catch (std::exception &e) {
-            rsp.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
-            rsp.set_message(fmt::format("invalid CONTAINER_OPTS: {}", opts[CONTAINER_OPTS]));
-            return rsp;
-        }
-    }
+    start->set_runtime(request->runtimeinstanceinfo().container().runtime());
+    *start->mutable_rootfs() = request->runtimeinstanceinfo().container().rootfsconfig();
+    // auto opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
+    // if (opts.find(CONTAINER_OPTS) != opts.end()) {
+    //     try {
+    //         nlohmann::json j = nlohmann::json::parse(opts[CONTAINER_OPTS]);
+    //         if (j.find("runtime") != j.end()) {
+    //             start->set_runtime(j.at("runtime").get<std::string>());
+    //         }
+    //         if (j.find("imageurl") != j.end()) {
+    //             start->mutable_rootfs()->set_imageurl(j.at("imageurl").get<std::string>());;
+    //         }
+    //         if (j.find("readonly") != j.end()) {
+    //             start->mutable_rootfs()->set_readonly(j.at("readonly").get<bool>());
+    //         }
+    //     } catch (std::exception &e) {
+    //         rsp.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
+    //         rsp.set_message(fmt::format("invalid CONTAINER_OPTS: {}", opts[CONTAINER_OPTS]));
+    //         return rsp;
+    //     }
+    // }
 
      for (const auto &arg : buildArgs) {
          *start->add_command() = arg;
@@ -386,7 +383,33 @@ litebus::Future<Status> ContainerExecutor::StopInstance(const std::shared_ptr<me
 {
     std::string runtimeID = request->runtimeid();
     std::string requestID = request->requestid();
+    if (registeredWarmUp_.find(runtimeID) != registeredWarmUp_.end()) {
+        return UnRegisteredWarmUped(runtimeID, requestID);
+    }
     return StopInstanceByRuntimeID(runtimeID, requestID, oomKilled);
+}
+
+litebus::Future<Status> ContainerExecutor::UnRegisteredWarmUped(const std::string &runtimeID, const std::string &requestID)
+{
+    auto unReg = std::make_shared<runtime::v1::UnregisterRequest>();
+    *unReg->add_ids() = runtimeID;
+    YRLOG_INFO("start to unregister Pre-warmed runtime({})", runtimeID);
+    return DoUnregisterWarmUped(unReg).Then(
+        litebus::Defer(GetAID(), &ContainerExecutor::OnUnregisteredWarmUped, unReg, std::placeholders::_1));
+}
+
+litebus::Future<Status> ContainerExecutor::OnUnregisteredWarmUped(const std::shared_ptr<runtime::v1::UnregisterRequest> &unReg,
+                                                   const runtime::v1::NormalResponse &response)
+{
+    if (!response.success()) {
+        YRLOG_ERROR("failed to unRegister Pre-warmed runtime({})", fmt::join(unReg->ids().begin(), unReg->ids().end(), ","));
+        return Status(StatusCode::RUNTIME_MANAGER_WARMUP_FAILURE);
+    }
+    for (const auto &id : unReg->ids()) {
+        registeredWarmUp_.erase(id);
+    }
+    YRLOG_INFO("success to unregister Pre-warmed runtime({})", fmt::join(unReg->ids().begin(), unReg->ids().end(), ","));
+    return Status::OK();
 }
 
 litebus::Future<Status> ContainerExecutor::StopInstanceByRuntimeID(const std::string &runtimeID,
@@ -503,7 +526,7 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::DoStartContainer(
     const std::shared_ptr<messages::StartInstanceRequest> &request,
     const std::shared_ptr<runtime::v1::StartRequest> &start)
 {
-    YRLOG_INFO("{}|{}|{} {} DoStartContainer meg: {}", request->runtimeinstanceinfo().traceid(),
+    YRLOG_INFO("debug:: {}|{}|{} {} DoStartContainer meg: {}", request->runtimeinstanceinfo().traceid(),
                         request->runtimeinstanceinfo().requestid(), request->runtimeinstanceinfo().runtimeid(),
                                    request->runtimeinstanceinfo().instanceid(), start->ShortDebugString());
     ASSERT_IF_NULL(containerd_);
@@ -564,6 +587,132 @@ litebus::Future<runtime::v1::WaitResponse> ContainerExecutor::DoWaitContainer(
             wait.set_status(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
             wait.set_message(msg);
             return wait;
+        });
+}
+
+litebus::Future<messages::StartInstanceResponse> ContainerExecutor::WarmUp(
+    const std::shared_ptr<messages::StartInstanceRequest> &request,
+    const std::map<std::string, std::string> startRuntimeParams, const std::vector<std::string> &buildArgs,
+    const Envs &envs)
+{
+    const auto &execPath = startRuntimeParams.at(PARAM_EXEC_PATH);
+    auto language = startRuntimeParams.at(PARAM_LANGUAGE);
+    const auto &runtimeID = request->runtimeinstanceinfo().runtimeid();
+    const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
+    std::string cmd = execPath;
+    // java has jvm args check so ignore here
+    if (language.find(JAVA_LANGUAGE_PREFIX) == std::string::npos && !CheckIllegalChars(cmd)) {
+        return GenFailStartInstanceResponse(request, ERR_PARAM_INVALID, fmt::format("invalid java cmd: {}", cmd));
+    }
+    YRLOG_INFO("warm up {} ({}), execute final cmd: {}", language, request->runtimeinstanceinfo().instanceid(), cmd);
+    auto registerReq = std::make_shared<runtime::v1::RegisterRequest>();
+    // currently only one register langruntime
+    // warmup 不需要runtime字段吗？
+    auto warmup = registerReq->add_langruntimes();
+    warmup->set_id(runtimeID);
+    *warmup->mutable_rootfs() = request->runtimeinstanceinfo().container().rootfsconfig();
+    warmup->set_makeseed(request->runtimeinstanceinfo().warmuptype() == static_cast<int32_t>(WarmupType::SEED));
+     for (const auto &arg : buildArgs) {
+         *warmup->add_command() = arg;
+    }
+    // BuildMountForCode(start, request);
+    // currently all treated as runtimeEnv
+    // todo lwy for fork friendly, the immutable env should be mv to runtimeEnv
+    warmup->mutable_runtimeenvs()->insert(combineEnvs.begin(), combineEnvs.end());
+    return DoRegisterToWarmUp(registerReq)
+        .Then(litebus::Defer(GetAID(), &ContainerExecutor::OnRegisterToWarmUp, std::placeholders::_1, request,
+                             registerReq));
+}
+
+litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnRegisterToWarmUp(
+        const runtime::v1::NormalResponse &response,
+        const std::shared_ptr<messages::StartInstanceRequest> &request,
+         const std::shared_ptr<runtime::v1::RegisterRequest> &reg)
+{
+    if (!response.success()) {
+        return GenFailStartInstanceResponse(
+            request, RUNTIME_MANAGER_WARMUP_FAILURE,
+            fmt::format("failed to register warmup runtime ({}), message:{}",
+                        request->runtimeinstanceinfo().instanceid(), response.message()));
+    }
+    const auto &runtimes = reg->langruntimes();
+    for (const auto &warmuped : runtimes) {
+        registeredWarmUp_[warmuped.id()] = warmuped;
+    }
+    messages::StartInstanceResponse rsp;
+    rsp.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+    rsp.set_requestid(request->runtimeinstanceinfo().requestid());
+    auto instanceResponse = rsp.mutable_startruntimeinstanceresponse();
+    instanceResponse->set_runtimeid(request->runtimeinstanceinfo().runtimeid());
+    YRLOG_DEBUG("{}|{}|success to warmup({}) runtime({})", request->runtimeinstanceinfo().traceid(),
+                request->runtimeinstanceinfo().requestid(), request->runtimeinstanceinfo().instanceid(),
+                request->runtimeinstanceinfo().runtimeid());
+    return rsp;
+}
+
+litebus::Future<runtime::v1::NormalResponse> ContainerExecutor::DoRegisterToWarmUp(
+        const std::shared_ptr<runtime::v1::RegisterRequest> &reg)
+{
+    ASSERT_IF_NULL(containerd_);
+    return containerd_
+        ->CallAsync("Register", *reg.get(), static_cast<runtime::v1::NormalResponse *>(nullptr),
+                    &runtime::v1::RuntimeLauncher::Stub::AsyncRegister)
+        .Then([reg](litebus::Try<runtime::v1::NormalResponse> rsp)
+                  -> litebus::Future<runtime::v1::NormalResponse> {
+            if (rsp.IsOK()) {
+                return rsp.Get();
+            }
+            runtime::v1::NormalResponse normal{};
+            if (reg->langruntimes_size() == 0) {
+                return normal;
+            }
+            auto msg = fmt::format("failed to warm up container {}, grpc err: {}", reg->langruntimes(0).id(), rsp.GetErrorCode());
+            YRLOG_ERROR("{}", msg);
+            normal.set_success(false);
+            normal.set_message(msg);
+            return normal;
+        });
+}
+
+litebus::Future<runtime::v1::NormalResponse> ContainerExecutor::DoUnregisterWarmUped(
+        const std::shared_ptr<runtime::v1::UnregisterRequest> &unReg)
+{
+    ASSERT_IF_NULL(containerd_);
+    return containerd_
+        ->CallAsync("Unregister", *unReg.get(), static_cast<runtime::v1::NormalResponse *>(nullptr),
+                    &runtime::v1::RuntimeLauncher::Stub::AsyncUnregister)
+        .Then([unReg](litebus::Try<runtime::v1::NormalResponse> rsp)
+                  -> litebus::Future<runtime::v1::NormalResponse> {
+            if (rsp.IsOK()) {
+                return rsp.Get();
+            }
+            runtime::v1::NormalResponse normal{};
+            if (unReg->ids_size() != 0) {
+                return normal;
+            }
+            auto msg = fmt::format("failed to unregister container ({}), grpc err: {}",
+                                   fmt::join(unReg->ids().begin(), unReg->ids().end(), ","), rsp.GetErrorCode());
+            YRLOG_ERROR("{}", msg);
+            normal.set_success(false);
+            normal.set_message(msg);
+            return normal;
+        });
+}
+
+litebus::Future<runtime::v1::GetRegisteredResponse> ContainerExecutor::GetRegisteredWarmUped()
+{
+    ASSERT_IF_NULL(containerd_);
+    return containerd_
+        ->CallAsync("GetRegistered", runtime::v1::GetRegisteredRequest{}, static_cast<runtime::v1::GetRegisteredResponse *>(nullptr),
+                    &runtime::v1::RuntimeLauncher::Stub::AsyncGetRegistered)
+        .Then([](litebus::Try<runtime::v1::GetRegisteredResponse> rsp)
+                  -> litebus::Future<runtime::v1::GetRegisteredResponse> {
+            if (rsp.IsOK()) {
+                return rsp.Get();
+            }
+            litebus::Promise<runtime::v1::GetRegisteredResponse> promise;
+            promise.SetFailed(rsp.GetErrorCode());
+            return promise.GetFuture();
         });
 }
 

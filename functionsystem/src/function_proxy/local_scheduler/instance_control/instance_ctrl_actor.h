@@ -178,7 +178,7 @@ public:
                                        bool isSkipAuth = false);
 
     /**
-     * receive exit instance from client
+     * receive exit instance from clientd
      * @param exitReq: exit request
      * @return exit instance response
      */
@@ -271,6 +271,14 @@ public:
     void CheckInstanceFailedState(const litebus::Future<function_proxy::InstanceInfoMap> &instanceMap);
     litebus::Future<Status> InstanceRouteInfoSyncer(const resource_view::RouteInfo &routeInfo);
     void UpdateFuncMetas(bool isAdd, const std::unordered_map<std::string, FunctionMeta> &funcMetas);
+
+    void FunctionWarmUp(const std::string &funcKey, const FunctionMeta &funcMeta);
+
+    void OnFunctionWarmUp(const std::string &funcKey, const litebus::Future<Status> &future);
+
+    void FunctionDelete(const std::string &funcKey, const FunctionMeta &funcMeta);
+
+    void OnFunctionDelete(const std::string &funcKey, const litebus::Future<Status> &future);
 
     // for test
     [[maybe_unused]] void BindInstanceControlView(const std::shared_ptr<InstanceControlView> &view)

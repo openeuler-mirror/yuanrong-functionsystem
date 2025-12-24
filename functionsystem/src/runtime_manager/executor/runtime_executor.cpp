@@ -452,10 +452,6 @@ litebus::Future<messages::StartInstanceResponse> RuntimeExecutor::StartInstanceW
 {
     const auto &info = request->runtimeinstanceinfo();
     std::string runtimeID = request->runtimeinstanceinfo().runtimeid();
-    if (runtimeID.empty()) {
-        runtimeID = GenerateRuntimeID(info.instanceid());
-        request->mutable_runtimeinstanceinfo()->set_runtimeid(runtimeID);
-    }
     std::string port;
     auto tlsConfig = request->runtimeinstanceinfo().runtimeconfig().tlsconfig();
     RuntimeFeatures features;
@@ -1731,7 +1727,7 @@ void RuntimeExecutor::StartPrestartRuntimeByLanguage(const std::string &language
         return;
     }
     for (int i = 0; i < startCount; i++) {
-        std::string runtimeID = GenerateRuntimeID("");
+        std::string runtimeID = RUNTIME_UUID_PREFIX + litebus::uuid_generator::UUID::GetRandomUUID().ToString();
         if (!StartPrestartRuntimeByRuntimeID(runtimeID, language, execPath, 0)) {
             YRLOG_ERROR("stop to prestart runtime for {}", language);
             break;

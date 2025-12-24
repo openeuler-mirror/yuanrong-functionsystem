@@ -106,11 +106,8 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
     if (CheckInstanceIsDeployed(from, instance)) {
         return;
     }
-    auto type = EXECUTOR_TYPE::RUNTIME;
-    if (instance.deploymentconfig().deployoptions().find(CONTAINER_OPTS) != instance.deploymentconfig().deployoptions().end()) {
-        type = EXECUTOR_TYPE::CONTAINER;
-    }
-    auto executor = FindExecutor(type);
+    auto type = request->type();
+    auto executor = FindExecutor(static_cast<EXECUTOR_TYPE>(type));
     if (executor == nullptr) {
         YRLOG_ERROR("{}|{}|the type({}) is not supported to start runtime for instance({}).", instance.traceid(),
                     instance.requestid(), request->type(), instance.instanceid());
@@ -124,7 +121,7 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
                        request->runtimeinstanceinfo().instanceid(), promise);
         return;
     }
-    std::string runtimeID = GenerateRuntimeID(instance.instanceid());
+    std::string runtimeID = GenerateRuntimeID(instance);
     request->mutable_runtimeinstanceinfo()->set_runtimeid(runtimeID);
     YRLOG_INFO("{}|{}|begin to start runtime({}) for instance({}).", instance.traceid(), instance.requestid(),
                instance.runtimeid(), instance.instanceid());
@@ -1007,7 +1004,7 @@ void RuntimeManager::UpdateCred(const litebus::AID &from, std::string &&, std::s
 
     YRLOG_DEBUG("{}|{}|runtime-manager({}) receive UpdateCred from function-agent", requestID, runtimeID,
                 runtimeManagerID_);
-    
+
     auto executor = FindExecutor(GetRuntimeType(runtimeID));
     if (executor == nullptr) {
         YRLOG_ERROR("{}|{}|failed to get runtime executor", requestID, runtimeID);
