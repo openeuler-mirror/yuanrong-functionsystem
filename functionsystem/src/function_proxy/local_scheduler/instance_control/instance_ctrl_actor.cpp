@@ -2913,7 +2913,8 @@ void InstanceCtrlActor::ScheduleEnd(const litebus::Future<Status> &future,
         callResult->set_instanceid(parent);
         callResult->set_requestid(request->requestid());
         callResult->set_code(Status::GetPosixErrorCode(statusCode));
-        callResult->set_message(status.MultipleErr() ? status.GetMessage() : status.RawMessage());
+        callResult->set_message(fmt::format("{} on {}",
+            status.MultipleErr() ? status.GetMessage() : status.RawMessage(), nodeID_));
         auto stateMachine = instanceControlView_->GetInstance(instanceID);
         if (stateMachine == nullptr) {
             (void)SendCallResult(instanceID, parent, parentProxy, callResult);
@@ -3403,7 +3404,7 @@ litebus::Future<Status> InstanceCtrlActor::SyncFailedAgentInstance(
             callResult->set_requestid(info.requestid());
             callResult->set_instanceid(info.parentid());
             callResult->set_code(Status::GetPosixErrorCode(info.instancestatus().errcode()));
-            callResult->set_message(info.instancestatus().msg());
+            callResult->set_message(fmt::format("{} on {}", info.instancestatus().msg(), nodeID_));
             (void)WaitClientConnected(info.parentid())
                 .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::SendCallResult, info.instanceid(),
                                      info.parentid(), info.parentfunctionproxyaid(), callResult));
@@ -3919,7 +3920,7 @@ litebus::Future<Status> InstanceCtrlActor::RescheduleAfterJudgeRecoverable(const
 
     (void)TransInstanceState(stateMachine, TransContext{ InstanceState::FATAL, stateMachine->GetVersion(), msg, true,
                                                          StatusCode::ERR_INSTANCE_EXITED })
-        .Then([aid(GetAID()), needToSendCallResult, stateMachine](const TransitionResult &result) {
+        .Then([aid(GetAID()), nodeID(nodeID_), needToSendCallResult, stateMachine](const TransitionResult &result) {
             if (!needToSendCallResult) {
                 return result;
             }
@@ -3928,7 +3929,7 @@ litebus::Future<Status> InstanceCtrlActor::RescheduleAfterJudgeRecoverable(const
             callResult->set_instanceid(sche->instance().parentid());
             callResult->set_requestid(sche->instance().requestid());
             callResult->set_code(Status::GetPosixErrorCode(sche->instance().instancestatus().errcode()));
-            callResult->set_message(sche->instance().instancestatus().msg());
+            callResult->set_message(fmt::format("{} on {}", sche->instance().instancestatus().msg(), nodeID));
             litebus::Async(aid, &InstanceCtrlActor::SendCallResult, sche->instance().instanceid(),
                            sche->instance().parentid(), sche->instance().parentfunctionproxyaid(), callResult);
             return result;
@@ -5720,7 +5721,7 @@ CreateCallResultCallBack InstanceCtrlActor::RegisterCreateCallResultCallback(
     const std::shared_ptr<ScheduleRequest> &request)
 {
     auto callback =
-        [request, instanceControlView(instanceControlView_), aid(GetAID())](
+        [request, instanceControlView(instanceControlView_), aid(GetAID()), nodeID(nodeID_)](
             const std::shared_ptr<functionsystem::CallResult> &callResult) -> litebus::Future<CallResultAck> {
         CallResultAck ack;
         ASSERT_IF_NULL(instanceControlView);
@@ -5749,11 +5750,11 @@ CreateCallResultCallBack InstanceCtrlActor::RegisterCreateCallResultCallback(
                     }
                     return Status::OK();
                 })
-                .Then([aid, instanceID(instanceInfo.instanceid()), dstInstanceID(instanceInfo.parentid()),
+                .Then([aid, nodeID, instanceID(instanceInfo.instanceid()), dstInstanceID(instanceInfo.parentid()),
                        dstProxyID(instanceInfo.parentfunctionproxyaid()), callResult](const Status &status) {
                     if (status.IsError()) {
                         callResult->set_code(common::ErrorCode::ERR_ETCD_OPERATION_ERROR);
-                        callResult->set_message("failed to transition to running, err: " + status.GetMessage());
+                        callResult->set_message(fmt::format("failed to transition to running, err: {} on {}", status.GetMessage(), nodeID));
                     }
                     return litebus::Async(aid, &InstanceCtrlActor::SendCallResult, instanceID, dstInstanceID,
                                           dstProxyID, callResult);
