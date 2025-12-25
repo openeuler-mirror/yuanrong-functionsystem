@@ -543,21 +543,21 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::DoStartContainer(
                request->runtimeinstanceinfo().requestid(), request->runtimeinstanceinfo().runtimeid(),
                request->runtimeinstanceinfo().instanceid(), start->ShortDebugString());
     ASSERT_IF_NULL(containerd_);
+    auto response = std::make_shared<runtime::v1::StartResponse>();
     return containerd_
-        ->CallAsync("Start", *start.get(), static_cast<runtime::v1::StartResponse *>(nullptr),
-                    &runtime::v1::RuntimeLauncher::Stub::AsyncStart)
-        .Then([aid(GetAID()), start,
-               request](litebus::Try<runtime::v1::StartResponse> rsp) -> litebus::Future<runtime::v1::StartResponse> {
-            if (rsp.IsOK()) {
-                return rsp.Get();
+        ->CallAsyncX("Start", *start.get(), response.get(), &runtime::v1::RuntimeLauncher::Stub::AsyncStart)
+        .Then([aid(GetAID()), response, start,
+               request](const Status &status) -> litebus::Future<runtime::v1::StartResponse> {
+            if (status.IsOk()) {
+                return *response;
             }
             auto msg = fmt::format("failed to start container {} for runtime({}) instance({}), grpc err: {}",
                                    start->funcruntime().sandbox(), request->runtimeinstanceinfo().runtimeid(),
-                                   request->runtimeinstanceinfo().instanceid(), rsp.GetErrorCode());
+                                   request->runtimeinstanceinfo().instanceid(), status.RawMessage());
             YRLOG_ERROR("{}|{}|{}", request->runtimeinstanceinfo().traceid(),
                         request->runtimeinstanceinfo().requestid(), msg);
             runtime::v1::StartResponse startRsp{};
-            startRsp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+            startRsp.set_code(static_cast<int32_t>(status.StatusCode()));
             startRsp.set_message(msg);
             return startRsp;
         });
