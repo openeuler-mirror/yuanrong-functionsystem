@@ -283,7 +283,7 @@ void ContainerExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::strin
     }
 }
 
-Envs BuildMountForCode(const std::shared_ptr<runtime_launcher::StartRequest> &start,
+Envs BuildMountForCode(const std::shared_ptr<runtime::v1::StartRequest> &start,
                        const std::shared_ptr<messages::StartInstanceRequest> &request, const Envs &envs)
 {
     Envs updateEnv = envs;
@@ -406,9 +406,12 @@ litebus::Future<Status> ContainerExecutor::UnRegisteredWarmUped(const std::strin
     YRLOG_INFO("start to unregister Pre-warmed runtime({})", runtimeID);
     return DoUnregisterWarmUped(unReg).Then(
         litebus::Defer(GetAID(), &ContainerExecutor::OnUnregisteredWarmUped, unReg, std::placeholders::_1));
+}
 
-litebus::Future<Status> ContainerExecutor::OnUnregisteredWarmUped(const std::shared_ptr<runtime::v1::UnregisterRequest> &unReg,
+litebus::Future<Status> ContainerExecutor::OnUnregisteredWarmUped(
+    const std::shared_ptr<runtime::v1::UnregisterRequest> &unReg, const runtime::v1::NormalResponse &response)
 {
+    if (!response.success()) {
         YRLOG_ERROR("failed to unRegister Pre-warmed runtime({})",
                     fmt::join(unReg->ids().begin(), unReg->ids().end(), ","));
         return Status(StatusCode::RUNTIME_MANAGER_WARMUP_FAILURE);
@@ -416,7 +419,8 @@ litebus::Future<Status> ContainerExecutor::OnUnregisteredWarmUped(const std::sha
     for (const auto &id : unReg->ids()) {
         registeredWarmUp_.erase(id);
     }
-    YRLOG_INFO("success to unregister Pre-warmed runtime({})", fmt::join(unReg->ids().begin(), unReg->ids().end(), ","));
+    YRLOG_INFO("success to unregister Pre-warmed runtime({})",
+               fmt::join(unReg->ids().begin(), unReg->ids().end(), ","));
     return Status::OK();
 }
 
