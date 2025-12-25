@@ -427,7 +427,8 @@ void SetStartRuntimeInstanceRequestConfig(const std::unique_ptr<messages::StartI
     auto runtimeInstanceInfo = SetRuntimeInstanceInfo(req);
     *startInstanceRequest->mutable_runtimeinstanceinfo() = std::move(runtimeInstanceInfo);
     *startInstanceRequest->mutable_scheduleoption() = std::move(req->scheduleoption());
-    startInstanceRequest->set_type(static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME));
+    startInstanceRequest->set_type(!req->has_container() ? static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME)
+                                                         : static_cast<int32_t>(EXECUTOR_TYPE::CONTAINER));
 }
 
 messages::RuntimeInstanceInfo SetRuntimeInstanceInfo(const std::shared_ptr<messages::DeployInstanceRequest> &req)
@@ -442,6 +443,10 @@ messages::RuntimeInstanceInfo SetRuntimeInstanceInfo(const std::shared_ptr<messa
     runtimeInstanceInfo.set_traceid(req->traceid());
     runtimeInstanceInfo.set_requestid(req->requestid());
     runtimeInstanceInfo.set_gracefulshutdowntime(req->gracefulshutdowntime());
+    runtimeInstanceInfo.set_warmuptype(req->warmuptype());
+    if (req->has_container()) {
+        *runtimeInstanceInfo.mutable_container() = std::move(req->container());
+    }
     return runtimeInstanceInfo;
 }
 

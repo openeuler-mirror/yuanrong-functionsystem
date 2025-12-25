@@ -105,6 +105,8 @@ public:
         return litebus::Async(aid_, &InstanceCtrlActor::GetFuncMeta, funcKey);
     }
 
+    virtual void TriggerToWarmUpFunction(const std::string &agentID);
+
     litebus::Future<Status> UpdateInstanceStatusPromise(const std::string &instanceID, const std::string &errMsg) const;
 
     virtual void SetAbnormal();

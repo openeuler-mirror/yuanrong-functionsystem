@@ -575,6 +575,8 @@ static inline void GetInstanceMetaData(FunctionMeta &funcMeta, const nlohmann::j
 
         // extendedMetaData
         GetExtendedMetaData(funcMeta, j);
+
+        // todo rootfsMetaData
     } catch (std::exception &e) {
         YRLOG_ERROR("parse funcMeta json failed, error: {}", e.what());
     }

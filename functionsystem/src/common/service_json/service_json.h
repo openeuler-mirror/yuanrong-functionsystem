@@ -94,6 +94,8 @@ void ParseFunctionHookHandlerConfig(service_json::FunctionHookHandlerConfig &fun
 
 void ParseDeviceInfo(DeviceMetaData &device, const nlohmann::json &h);
 
+void ParseRootfsSpec(RootfsSpecMeta &rootfs, const nlohmann::json &h);
+
 void ParseCodeMeta(service_json::FunctionConfig &functionConfig, const nlohmann::json &f);
 
 void ParseEnvMeta(service_json::FunctionConfig &functionConfig, const nlohmann::json &f);
