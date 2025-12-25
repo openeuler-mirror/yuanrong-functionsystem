@@ -19,6 +19,7 @@ syntax = "proto3";
 import "resource.proto";
 import "common.proto";
 import "core_service.proto";
+import "runtime_launcher_interface.proto";
 
 package messages;
 option go_package = "functionsystem/pkg/common/faas_common/grpc/pb/message;message";
@@ -252,6 +253,13 @@ message FuncMountConfig {
     repeated FuncMount funcMounts = 2;
 }
 
+message ContainerRuntimeConfig {
+  // runsc, runc, etc
+  string runtime = 1;
+  string id = 2;
+  runtime.v1.RootfsConfig rootfsConfig = 3;
+}
+
 message DeployInstanceRequest {
   string instanceID = 1;
   string traceID = 2;
@@ -289,6 +297,8 @@ message DeployInstanceRequest {
   TenantCredentials tenantCredentials = 34;
   string tenantID = 35;
   string dposixUdsPath = 36;
+  int32 warmupType = 37;
+  ContainerRuntimeConfig container = 38;
 }
 
 message TenantCredentials {
@@ -468,6 +478,8 @@ message RuntimeInstanceInfo {
   string requestID = 6;
   string address = 7;
   int64 gracefulShutdownTime = 8;
+  int32 warmupType = 9;
+  ContainerRuntimeConfig container = 10;
 }
 
 message DeployDuration {

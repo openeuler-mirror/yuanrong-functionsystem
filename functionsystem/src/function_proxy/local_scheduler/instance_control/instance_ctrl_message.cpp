@@ -37,6 +37,8 @@ std::shared_ptr<DeployInstanceRequest> GetDeployInstanceReq(const FunctionMeta &
     deployInstanceRequest->set_codesha256(funcMeta.funcMetaData.codeSha256);
     deployInstanceRequest->mutable_resources()->CopyFrom(request->instance().resources());
     BuildDeploySpec(funcMeta, deployInstanceRequest);
+    // todo support user defined rootfs
+    BuildRootfsConfig(funcMeta, deployInstanceRequest);
     for (auto &[key, handler] : funcMeta.funcMetaData.hookHandler) {
         deployInstanceRequest->mutable_hookhandler()->operator[](key) = handler;
     }
@@ -112,5 +114,32 @@ std::shared_ptr<messages::StaticFunctionChangeRequest> GetStaticFunctionChangeRe
     staticFunctionChangeRequest->set_requestid(instanceInfo.requestid());
     staticFunctionChangeRequest->set_status(status);
     return staticFunctionChangeRequest;
+}
+
+void BuildRootfsConfig(
+    const FunctionMeta &funcMeta, const std::shared_ptr<DeployInstanceRequest> &deployInstanceRequest)
+{
+    if (funcMeta.rootfs.runtime.empty() || funcMeta.rootfs.imageurl.empty()
+        || funcMeta.rootfs.type == RootfsSrcType::INVALID) {
+        return;
+    }
+    auto container = deployInstanceRequest->mutable_container();
+    auto funkey =
+        GetFuncName(funcMeta.funcMetaData.name, funcMeta.funcMetaData.version, funcMeta.funcMetaData.tenantId);
+    container->set_id(std::to_string(std::hash<std::string>{}(funkey.Get())));
+    container->set_runtime(funcMeta.rootfs.runtime);
+    container->mutable_rootfsconfig()->set_readonly(funcMeta.rootfs.readonly);
+    container->mutable_rootfsconfig()->set_type(static_cast<runtime::v1::RootfsSrcType>(funcMeta.rootfs.type));
+    if (funcMeta.rootfs.type == RootfsSrcType::S3) {
+        auto s3Config = container->mutable_rootfsconfig()->mutable_s3config();
+        s3Config->set_endpoint(funcMeta.rootfs.storageInfo.endpoint);
+        s3Config->set_bucket(funcMeta.rootfs.storageInfo.bucket);
+        s3Config->set_object(funcMeta.rootfs.storageInfo.object);
+        s3Config->set_accesskeyid(funcMeta.rootfs.storageInfo.accessKey);
+        s3Config->set_accesskeysecret(funcMeta.rootfs.storageInfo.secretKey);
+        container->mutable_rootfsconfig()->set_imageurl(funcMeta.rootfs.imageurl);
+    } else if (funcMeta.rootfs.type == RootfsSrcType::IMAGE) {
+        container->mutable_rootfsconfig()->set_imageurl(funcMeta.rootfs.imageurl);
+    }
 }
 }  // namespace functionsystem

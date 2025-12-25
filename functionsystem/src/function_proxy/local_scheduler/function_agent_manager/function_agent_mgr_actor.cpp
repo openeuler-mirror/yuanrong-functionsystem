@@ -252,6 +252,8 @@ litebus::Future<Status> FunctionAgentMgrActor::EnableFuncAgent(const litebus::Fu
         req->set_timeoutsec(funcAgentsRegisMap_[funcAgentID].evicttimeoutsec());
         EvictInstanceOnAgent(req);
     }
+    auto instanceCtrl = instanceCtrl_.lock();
+    instanceCtrl->TriggerToWarmUpFunction(funcAgentID);
     return Status(StatusCode::SUCCESS);
 }
 
@@ -547,8 +549,8 @@ void FunctionAgentMgrActor::DeployInstanceResp(const litebus::AID &from, string 
     (void)agentDeployNotifyPromise->second.erase(requestID);
     (void)funcAgentTable_[funcAgentID].instanceIDs.insert(resp.instanceid());
 
-    YRLOG_INFO("{}|deploy instance({}) successfully on {}. address:{}, pid:{}", requestID, resp.instanceid(),
-               funcAgentID, resp.address(), resp.pid());
+    YRLOG_INFO("{}|deploy instance({}) on {}. address:{} pid:{} code:{} message:{}", requestID, resp.instanceid(),
+               funcAgentID, resp.address(), resp.pid(), resp.code(), resp.message());
 }
 
 void FunctionAgentMgrActor::KillInstanceResp(const litebus::AID &from, string &&, string &&msg)
@@ -2051,6 +2053,45 @@ litebus::Future<Status> FunctionAgentMgrActor::SendStaticFunctionScheduleRespons
     Send(from, "StaticFunctionScheduleResponse", scheduleResponse.SerializeAsString());
     (void)staticFunctionScheduleRequestIDs_.erase(requestId);
     return Status::OK();
+}
+
+litebus::Future<Status> FunctionAgentMgrActor::RegisterToWarmUp(
+    const std::shared_ptr<messages::DeployInstanceRequest> &request,
+        const litebus::Option<std::string> &agentID)
+{
+    std::list<litebus::Future<messages::DeployInstanceResponse>> deployFutures;
+    YRLOG_INFO("debug:: {}", request->DebugString());
+    if (agentID.IsSome()) {
+        return DeployInstance(request, agentID.Get()).Then([](){
+            return Status::OK();
+        });
+    }
+    for (auto [agentID, agentInfo] : funcAgentTable_) {
+        YRLOG_INFO("send warm up deploy request to agent({})({}) for instance({})", agentID, std::string(agentInfo.aid),
+                   request->instanceid());
+        deployFutures.push_back(DeployInstance(request, agentID));
+    }
+    return litebus::Collect(deployFutures).Then(
+        [aid(GetAID()), request](const std::list<messages::DeployInstanceResponse> &resps) -> litebus::Future<Status> {
+            // todo collect deploy responses
+            return Status::OK();
+        });
+}
+
+litebus::Future<Status> FunctionAgentMgrActor::UnRegisterWarmUp(
+        const std::shared_ptr<messages::KillInstanceRequest> &request)
+{
+    std::list<litebus::Future<messages::KillInstanceResponse>> killFutures;
+    for (auto [agentID, agentInfo] : funcAgentTable_) {
+        YRLOG_INFO("send unregister kill request to agent({})({}) for instance({})", agentID, std::string(agentInfo.aid),
+                   request->instanceid());
+        killFutures.push_back(KillInstance(request, agentID, false));
+    }
+    return litebus::Collect(killFutures).Then(
+        [aid(GetAID()), request](const std::list<messages::KillInstanceResponse> &resps) -> litebus::Future<Status> {
+            // todo collect deploy responses
+            return Status::OK();
+        });
 }
 
 }  // namespace functionsystem::local_scheduler

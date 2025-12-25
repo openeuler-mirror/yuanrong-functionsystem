@@ -87,8 +87,8 @@ if (LINKER_LLD)
     set(CMAKE_C_LD_FLAGS "-fuse-ld=lld")
 else ()
     # If lld does not exist, use gold and enable parallel linking.
-    set(CMAKE_CXX_LD_FLAGS "-fuse-ld=gold -Wl,--threads")
-    set(CMAKE_C_LD_FLAGS "-fuse-ld=gold -Wl,--threads")
+    set(CMAKE_CXX_LD_FLAGS "-fuse-ld=gold")
+    set(CMAKE_C_LD_FLAGS "-fuse-ld=gold")
 endif ()
 
 set(WARN_FLAGS "-Wall -Werror -Wextra -Wno-ignored-qualifiers -Wno-missing-field-initializers -Wno-float-equal -Wtrampolines -Wformat=2 -Wdate-time -Wcast-align -Wunused -Wno-deprecated-declarations")

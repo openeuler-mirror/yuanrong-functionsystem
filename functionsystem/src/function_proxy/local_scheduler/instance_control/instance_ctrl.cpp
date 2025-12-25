@@ -357,4 +357,9 @@ litebus::Future<bool> InstanceCtrl::IsInstanceRunning(const std::string &instanc
 {
     return litebus::Async(aid_, &InstanceCtrlActor::IsInstanceRunning, instanceID);
 }
+
+void InstanceCtrl::TriggerToWarmUpFunction(const std::string &agentID)
+{
+    return litebus::Async(aid_, &InstanceCtrlActor::TriggerToWarmUpFunction, agentID);
+}
 }  // namespace functionsystem::local_scheduler
