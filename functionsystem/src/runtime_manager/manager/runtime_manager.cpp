@@ -1068,7 +1068,7 @@ EXECUTOR_TYPE RuntimeManager::GetRuntimeType(const std::string &runtimeID)
     auto type = EXECUTOR_TYPE::RUNTIME;
     if (instanceInfoMap_.find(runtimeID) != instanceInfoMap_.end()) {
         auto info = instanceInfoMap_[runtimeID];
-        if (info.deploymentconfig().deployoptions().find(CONTAINER_OPTS) != info.deploymentconfig().deployoptions().end()) {
+        if (info.has_container()) {
             type = EXECUTOR_TYPE::CONTAINER;
         }
     }
