@@ -272,7 +272,10 @@ public:
     litebus::Future<Status> InstanceRouteInfoSyncer(const resource_view::RouteInfo &routeInfo);
     void UpdateFuncMetas(bool isAdd, const std::unordered_map<std::string, FunctionMeta> &funcMetas);
 
-    void FunctionWarmUp(const std::string &funcKey, const FunctionMeta &funcMeta);
+    void TriggerToWarmUpFunction(const std::string &agentID);
+
+    void FunctionWarmUp(const std::string &funcKey, const FunctionMeta &funcMeta,
+        const litebus::Option<std::string> &agentID = litebus::None());
 
     void OnFunctionWarmUp(const std::string &funcKey, const litebus::Future<Status> &future);
 

@@ -240,7 +240,8 @@ public:
                                                                const litebus::AID &from);
 
     litebus::Future<Status> RegisterToWarmUp(
-        const std::shared_ptr<messages::DeployInstanceRequest> &request);
+        const std::shared_ptr<messages::DeployInstanceRequest> &request,
+        const litebus::Option<std::string> &agentID);
 
     litebus::Future<Status> UnRegisterWarmUp(
         const std::shared_ptr<messages::KillInstanceRequest> &request);

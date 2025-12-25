@@ -153,7 +153,7 @@ private:
     std::shared_ptr<HealthCheck> healthCheckClient_;
     CommandBuilder cmdBuilder_ = {false};
     bool reconnecting_ = false;
-    std::unordered_map<std::string, runtime::v1::WarmUpRuntime> registeredWarmUp_;
+    std::unordered_map<std::string, runtime::v1::FunctionRuntime> registeredWarmUp_;
 };
 
 class ContainerExecutorProxy : public ExecutorProxy {

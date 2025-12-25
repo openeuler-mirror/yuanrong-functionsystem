@@ -20,7 +20,7 @@ message S3Config {
   string Endpoint = 1;
   string Bucket = 2;
   string Object = 3;
-  string AccessKeyID = 4;     // omitempty
+  string AccessKeyID = 4; // omitempty
   string AccessKeySecret = 5; // omitempty
 }
 
@@ -46,22 +46,27 @@ message Mount {
   repeated string options = 4;
 }
 
-message StartRequest {
-  string runtime = 1;
-  repeated string command = 2;
+message FunctionRuntime {
+  string id = 1;
+  string sandbox = 2;
   RootfsConfig rootfs = 3;
-  repeated Mount mounts = 4;
+  bool makeSeed = 4;
+  repeated string command = 5;
+  map<string, string> runtimeEnvs = 6;
+}
+
+message StartRequest {
+  FunctionRuntime funcRuntime = 1;
+  repeated Mount mounts = 2;
   // resource request of function
   // etc: CPU millicore​
   //      Memory MB
-  map<string, double> resources = 5;
-  map<string, string> runtimeEnvs = 6;
-  map<string, string> userEnvs = 7;
-  // string envsFile = 9;
+  map<string, double> resources = 3;
+  map<string, string> userEnvs = 4;
   // redirect path for stdout
-  string stdout = 8;
+  string stdout = 5;
   // redirect path for stderr
-  string stderr = 9;
+  string stderr = 6;
 }
 
 message StartResponse {
@@ -94,20 +99,7 @@ message WaitResponse {
   string message = 3;
 }
 
-message WarmUpRuntime {
-  string id = 1;
-  RootfsConfig rootfs = 2;
-  bool makeSeed = 3;
-
-  // used during making seed.
-  repeated string command = 4;
-  map<string, string> runtimeEnvs = 5;
-}
-
-message RegisterRequest {
-  // runtimes ? 
-  repeated WarmUpRuntime langRuntimes = 1;
-}
+message RegisterRequest { repeated FunctionRuntime funcRuntimes = 1; }
 
 message NormalResponse {
   bool success = 1;
@@ -120,6 +112,4 @@ message UnregisterRequest {
 
 message GetRegisteredRequest {}
 
-message GetRegisteredResponse {
-  repeated WarmUpRuntime langRuntimes = 1;
-}
+message GetRegisteredResponse { repeated FunctionRuntime funcRuntimes = 1; }
