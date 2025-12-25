@@ -322,31 +322,12 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
 
     YRLOG_INFO("start {} runtime({}), execute final cmd: {}", language, runtimeID, cmd);
     auto start = std::make_shared<runtime::v1::StartRequest>();
-    // todo: read from request
-    start->set_runtime(request->runtimeinstanceinfo().container().runtime());
-    *start->mutable_rootfs() = request->runtimeinstanceinfo().container().rootfsconfig();
-    // auto opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
-    // if (opts.find(CONTAINER_OPTS) != opts.end()) {
-    //     try {
-    //         nlohmann::json j = nlohmann::json::parse(opts[CONTAINER_OPTS]);
-    //         if (j.find("runtime") != j.end()) {
-    //             start->set_runtime(j.at("runtime").get<std::string>());
-    //         }
-    //         if (j.find("imageurl") != j.end()) {
-    //             start->mutable_rootfs()->set_imageurl(j.at("imageurl").get<std::string>());;
-    //         }
-    //         if (j.find("readonly") != j.end()) {
-    //             start->mutable_rootfs()->set_readonly(j.at("readonly").get<bool>());
-    //         }
-    //     } catch (std::exception &e) {
-    //         rsp.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
-    //         rsp.set_message(fmt::format("invalid CONTAINER_OPTS: {}", opts[CONTAINER_OPTS]));
-    //         return rsp;
-    //     }
-    // }
-
+    auto funcRt = start->mutable_funcruntime();
+    funcRt->set_id(request->runtimeinstanceinfo().container().id());
+    funcRt->set_sandbox(request->runtimeinstanceinfo().container().runtime());
+    *funcRt->mutable_rootfs() = request->runtimeinstanceinfo().container().rootfsconfig();
      for (const auto &arg : buildArgs) {
-         *start->add_command() = arg;
+         *funcRt->add_command() = arg;
     }
     auto dssocket = start->add_mounts();
     dssocket->set_type("bind");
@@ -372,7 +353,7 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
 
     // currently all treated as runtimeEnv
     // todo lwy for fork friendly, the immutable env should be mv to runtimeEnv
-    start->mutable_runtimeenvs()->insert(combineEnvs.begin(), combineEnvs.end());
+    start->mutable_userenvs()->insert(combineEnvs.begin(), combineEnvs.end());
     start->set_stdout(stdOut);
     start->set_stderr(stdErr);
 
@@ -539,7 +520,7 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::DoStartContainer(
                 return rsp.Get();
             }
             auto msg = fmt::format("failed to start container {} for runtime({}) instance({}), grpc err: {}",
-                                   start->runtime(), request->runtimeinstanceinfo().runtimeid(),
+                                   start->funcruntime().sandbox(), request->runtimeinstanceinfo().runtimeid(),
                                    request->runtimeinstanceinfo().instanceid(), rsp.GetErrorCode());
             YRLOG_ERROR("{}|{}|{}", request->runtimeinstanceinfo().traceid(),
                         request->runtimeinstanceinfo().requestid(), msg);
@@ -608,8 +589,9 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::WarmUp(
     auto registerReq = std::make_shared<runtime::v1::RegisterRequest>();
     // currently only one register langruntime
     // warmup 不需要runtime字段吗？
-    auto warmup = registerReq->add_langruntimes();
+    auto warmup = registerReq->add_funcruntimes();
     warmup->set_id(runtimeID);
+    warmup->set_sandbox(request->runtimeinstanceinfo().container().runtime());
     *warmup->mutable_rootfs() = request->runtimeinstanceinfo().container().rootfsconfig();
     warmup->set_makeseed(request->runtimeinstanceinfo().warmuptype() == static_cast<int32_t>(WarmupType::SEED));
      for (const auto &arg : buildArgs) {
@@ -619,6 +601,12 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::WarmUp(
     // currently all treated as runtimeEnv
     // todo lwy for fork friendly, the immutable env should be mv to runtimeEnv
     warmup->mutable_runtimeenvs()->insert(combineEnvs.begin(), combineEnvs.end());
+    if (auto env = litebus::os::GetEnv("YR_ENV_FILE"); env.IsSome()) {
+        (*warmup->mutable_runtimeenvs())["YR_ENV_FILE"] = env.Get();
+    }
+    if (auto ready = litebus::os::GetEnv("YR_SEED_FILE"); ready.IsSome()) {
+        (*warmup->mutable_runtimeenvs())["YR_SEED_FILE"] = ready.Get();
+    }
     return DoRegisterToWarmUp(registerReq)
         .Then(litebus::Defer(GetAID(), &ContainerExecutor::OnRegisterToWarmUp, std::placeholders::_1, request,
                              registerReq));
@@ -635,7 +623,7 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnRegisterTo
             fmt::format("failed to register warmup runtime ({}), message:{}",
                         request->runtimeinstanceinfo().instanceid(), response.message()));
     }
-    const auto &runtimes = reg->langruntimes();
+    const auto &runtimes = reg->funcruntimes();
     for (const auto &warmuped : runtimes) {
         registeredWarmUp_[warmuped.id()] = warmuped;
     }
@@ -653,6 +641,7 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnRegisterTo
 litebus::Future<runtime::v1::NormalResponse> ContainerExecutor::DoRegisterToWarmUp(
         const std::shared_ptr<runtime::v1::RegisterRequest> &reg)
 {
+    YRLOG_DEBUG("debug:: {}", reg->ShortDebugString());
     ASSERT_IF_NULL(containerd_);
     return containerd_
         ->CallAsync("Register", *reg.get(), static_cast<runtime::v1::NormalResponse *>(nullptr),
@@ -663,10 +652,10 @@ litebus::Future<runtime::v1::NormalResponse> ContainerExecutor::DoRegisterToWarm
                 return rsp.Get();
             }
             runtime::v1::NormalResponse normal{};
-            if (reg->langruntimes_size() == 0) {
+            if (reg->funcruntimes_size() == 0) {
                 return normal;
             }
-            auto msg = fmt::format("failed to warm up container {}, grpc err: {}", reg->langruntimes(0).id(), rsp.GetErrorCode());
+            auto msg = fmt::format("failed to warm up container {}, grpc err: {}", reg->funcruntimes(0).id(), rsp.GetErrorCode());
             YRLOG_ERROR("{}", msg);
             normal.set_success(false);
             normal.set_message(msg);
