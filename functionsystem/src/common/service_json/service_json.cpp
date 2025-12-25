@@ -580,7 +580,12 @@ void ParseRootfsSpec(RootfsSpecMeta &rootfs, const nlohmann::json &h)
         rootfs.imageurl = rf.at("imageurl");
     }
     if (rf.find("readonly") != rf.end()) {
-        rootfs.readonly = rf.at("readonly");
+        if (rf.at("readonly").is_boolean()) {
+            rootfs.readonly = rf.at("readonly");
+        } else if (rf.at("readonly").is_string()) {
+            std::string str = rf.at("readonly");
+            rootfs.readonly = (str == "true" || str == "1" );
+        }
     }
     if (rf.find("storageInfo") != rf.end()) {
         nlohmann::json storage = rf.at("storageInfo");
@@ -801,7 +806,7 @@ litebus::Option<std::vector<FunctionMeta>> GetFuncMetaFromServiceYaml(const std:
     auto jsonStr = yamlToJsonFunc(data);
 
     (void)dlclose(handle);
-
+    YRLOG_INFO("debug:: (funcMeta)services info, {}", jsonStr);
     auto serviceInfosOpt = GetServiceInfosFromJson(jsonStr);
     if (serviceInfosOpt.IsNone()) {
         YRLOG_ERROR("(funcMeta)failed to get services info");

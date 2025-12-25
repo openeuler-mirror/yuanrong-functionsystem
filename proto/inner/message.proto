@@ -256,7 +256,8 @@ message FuncMountConfig {
 message ContainerRuntimeConfig {
   // runsc, runc, etc
   string runtime = 1;
-  runtime.v1.RootfsConfig rootfsConfig = 2;
+  string id = 2;
+  runtime.v1.RootfsConfig rootfsConfig = 3;
 }
 
 message DeployInstanceRequest {

@@ -5795,6 +5795,14 @@ void InstanceCtrlActor::UpdateFuncMetas(bool isAdd, const std::unordered_map<std
     }
 }
 
+void InstanceCtrlActor::TriggerToWarmUpFunction(const std::string &agentID)
+{
+    for (auto [funcKey, funcMeta] : funcMetaMap_) {
+        FunctionWarmUp(funcKey, funcMeta, agentID);
+    }
+    return;
+}
+
 bool InstanceCtrlActor::CheckExistInstanceState(
     const InstanceState &state, const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
     const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, bool isStateFromRemote)
@@ -6057,11 +6065,13 @@ litebus::Future<Status> InstanceCtrlActor::MakeCheckpoint(const std::string &ins
     return Checkpoint(instanceID);
 }
 
-void InstanceCtrlActor::FunctionWarmUp(const std::string &funcKey, const FunctionMeta &funcMeta)
+void InstanceCtrlActor::FunctionWarmUp(const std::string &funcKey, const FunctionMeta &funcMeta,
+    const litebus::Option<std::string> &agentID)
 {
     if (funcMeta.warmup == WarmupType::NONE || funcMeta.warmup == WarmupType::INVALID) {
         return;
     }
+    YRLOG_INFO("start to warm up {}, type:{}", funcKey, fmt::underlying(funcMeta.warmup));
     auto warm = std::make_shared<ScheduleRequest>();
     warm->set_requestid(fmt::format("FunctionWarmUp-{}", funcKey));
     warm->set_traceid(fmt::format("FunctionWarmUp-{}", funcKey));
@@ -6070,7 +6080,7 @@ void InstanceCtrlActor::FunctionWarmUp(const std::string &funcKey, const Functio
     // todo : may change another field in future
     auto deployInstanceRequest = GetDeployInstanceReq(funcMeta, warm);
     deployInstanceRequest->set_warmuptype(static_cast<int32_t>(funcMeta.warmup));
-    (void)functionAgentMgr_->RegisterToWarmUp(deployInstanceRequest).OnComplete(
+    (void)functionAgentMgr_->RegisterToWarmUp(deployInstanceRequest, agentID).OnComplete(
         litebus::Defer(GetAID(), &InstanceCtrlActor::OnFunctionWarmUp, funcKey, std::placeholders::_1));
 }
 
