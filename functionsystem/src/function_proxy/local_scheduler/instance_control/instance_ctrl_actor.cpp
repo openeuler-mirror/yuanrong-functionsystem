@@ -6054,9 +6054,9 @@ litebus::Future<Status> InstanceCtrlActor::ToSuspend(const std::string &instance
                       TransContext{ InstanceState::SUSPEND, stateMachine->GetVersion(),
                                     "WARN: instance is already SUSPEND, please resume instance before you invoke it",
                                     true, StatusCode::ERR_INSTANCE_SUSPEND });
-
-    return future.Then([aid(GetAID()), stateMachine,
-                        instanceID](const TransitionResult &result) -> litebus::Future<Status> {
+    
+    return future.Then([aid(GetAID()), stateMachine, instanceID, groupInstanceClear(groupInstanceClear_)]
+            (const TransitionResult &result) -> litebus::Future<Status> {
         if (result.status.IsError()) {
             return result.status;
         }
@@ -6064,7 +6064,19 @@ litebus::Future<Status> InstanceCtrlActor::ToSuspend(const std::string &instance
         YRLOG_INFO("ready to recycle runtime of instance({})", instanceID);
         auto info = stateMachine->GetInstanceInfo();
         return litebus::Async(aid, &InstanceCtrlActor::KillRuntime, info, false)
-            .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, std::placeholders::_1, info));
+            .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, std::placeholders::_1, info))
+            .Then([aid, instanceInfo(info), groupInsClear(groupInstanceClear)]
+                    (const Status &status) -> litebus::Future<Status> {
+                if (status.IsError()) {
+                    return status;
+                }
+                // Delete the reserved resource information corresponding to the group instance
+                // bound to the local node when instance suspend.
+                if (!instanceInfo.groupid().empty() && groupInsClear != nullptr) {
+                    groupInsClear(instanceInfo);
+                }
+                return Status::OK();
+            });
     });
 }
 
