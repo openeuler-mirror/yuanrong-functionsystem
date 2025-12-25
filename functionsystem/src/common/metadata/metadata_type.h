@@ -153,6 +153,46 @@ struct DeviceMetaData {
     std::string type;
 };
 
+struct RootfsStorageInfo {
+    std::string endpoint;
+    std::string bucket;
+    std::string object;
+    std::string accessKey;
+    std::string secretKey;
+};
+
+enum class RootfsSrcType {
+    S3 = 0,
+    IMAGE = 1,
+    INVALID = 255,
+};
+
+inline RootfsSrcType StringToRootfsSrcType(const std::string &str)
+{
+    static std::unordered_map<std::string, RootfsSrcType> rootfsSrcTypeMap = {
+        { "s3", RootfsSrcType::S3 },
+        { "image", RootfsSrcType::IMAGE },
+        { "invalid", RootfsSrcType::INVALID }
+    };
+    if (auto iter = rootfsSrcTypeMap.find(str); iter != rootfsSrcTypeMap.end()) {
+        return iter->second;
+    }
+    return RootfsSrcType::INVALID;
+}
+
+struct RootfsSpecMeta {
+    // for runtime etc: runsc, runc ...
+    std::string runtime;
+    // for rootfs source type
+    RootfsSrcType type;
+    // for custom image url
+    std::string imageurl;
+    // to define whether the rootfs is readonly
+    bool readonly;
+    // for s3 storage info
+    RootfsStorageInfo storageInfo;
+};
+
 struct Initializer {
     std::string handler;
     uint32_t timeout;
@@ -180,13 +220,35 @@ struct ExtendedMetaData {
     CustomGracefulShutdown customGracefulShutdown;
 };
 
+enum class WarmupType {
+    NONE = 0,
+    SEED = 1,
+    PRELOAD = 2,
+    INVALID = 255,
+};
+
+inline WarmupType StringToWarmupType(const std::string &str)
+{
+    static std::unordered_map<std::string, WarmupType> warmupTypeMap = {
+        { "seed", WarmupType::SEED },
+        { "preload",  WarmupType::PRELOAD },
+        { "none", WarmupType::NONE }
+    };
+    if (auto iter = warmupTypeMap.find(str); iter != warmupTypeMap.end()) {
+        return iter->second;
+    }
+    return WarmupType::INVALID;
+}
+
 struct FunctionMeta {
+    WarmupType warmup;
     FuncMetaData funcMetaData;
     CodeMetaData codeMetaData;
     EnvMetaData envMetaData;
     resource_view::Resources resources;
     ExtendedMetaData extendedMetaData;
     InstanceMetaData instanceMetaData;
+    RootfsSpecMeta rootfs;
     std::string rawJsonStr;
 };
 

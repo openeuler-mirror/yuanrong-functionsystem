@@ -5783,14 +5783,24 @@ void InstanceCtrlActor::UpdateFuncMetas(bool isAdd, const std::unordered_map<std
         for (const auto &funcMeta : funcMetas) {
             YRLOG_DEBUG("update function({}) meta", funcMeta.first);
             funcMetaMap_[funcMeta.first] = funcMeta.second;
+            FunctionWarmUp(funcMeta.first, funcMeta.second);
         }
         return;
     }
 
     for (const auto &funcMeta : funcMetas) {
         YRLOG_DEBUG("delete function({}) meta", funcMeta.first);
+        FunctionDelete(funcMeta.first, funcMetaMap_[funcMeta.first]);
         funcMetaMap_.erase(funcMeta.first);
     }
+}
+
+void InstanceCtrlActor::TriggerToWarmUpFunction(const std::string &agentID)
+{
+    for (auto [funcKey, funcMeta] : funcMetaMap_) {
+        FunctionWarmUp(funcKey, funcMeta, agentID);
+    }
+    return;
 }
 
 bool InstanceCtrlActor::CheckExistInstanceState(
@@ -6053,6 +6063,67 @@ litebus::Future<Status> InstanceCtrlActor::MakeCheckpoint(const std::string &ins
                           fmt::format("checkpoint failed: InstanceID {} is not in running state, current state: {}",
                                       instanceID, fmt::underlying(state)));
     return Checkpoint(instanceID);
+}
+
+void InstanceCtrlActor::FunctionWarmUp(const std::string &funcKey, const FunctionMeta &funcMeta,
+    const litebus::Option<std::string> &agentID)
+{
+    if (funcMeta.warmup == WarmupType::NONE || funcMeta.warmup == WarmupType::INVALID) {
+        return;
+    }
+    YRLOG_INFO("start to warm up {}, type:{}", funcKey, fmt::underlying(funcMeta.warmup));
+    auto warm = std::make_shared<ScheduleRequest>();
+    warm->set_requestid(fmt::format("FunctionWarmUp-{}", funcKey));
+    warm->set_traceid(fmt::format("FunctionWarmUp-{}", funcKey));
+    auto instance = warm->mutable_instance();
+    instance->set_instanceid(std::to_string(std::hash<std::string>{}(funcKey)));
+    // todo : may change another field in future
+    auto deployInstanceRequest = GetDeployInstanceReq(funcMeta, warm);
+    deployInstanceRequest->set_warmuptype(static_cast<int32_t>(funcMeta.warmup));
+    (void)functionAgentMgr_->RegisterToWarmUp(deployInstanceRequest, agentID).OnComplete(
+        litebus::Defer(GetAID(), &InstanceCtrlActor::OnFunctionWarmUp, funcKey, std::placeholders::_1));
+}
+
+void InstanceCtrlActor::OnFunctionWarmUp(
+    const std::string &funcKey, const litebus::Future<Status> &future)
+{
+    if (future.IsError()) {
+        YRLOG_WARN("function({}) warm up failed: {}", funcKey, future.GetErrorCode());
+        return;
+    }
+    auto status = future.Get();
+    if (!status.IsOk()) {
+        YRLOG_WARN("function({}) warm up failed: {}", funcKey, status.GetMessage());
+        return;
+    }
+    YRLOG_INFO("function({}) warm up succeeded", funcKey);
+}
+
+void InstanceCtrlActor::FunctionDelete(const std::string &funcKey, const FunctionMeta &funcMeta)
+{
+    if (funcMeta.warmup == WarmupType::NONE || funcMeta.warmup == WarmupType::INVALID) {
+        return;
+    }
+    auto killInstanceReq = GenKillInstanceRequest(funcKey, fmt::format("FunctionWarmUp-Instance-{}", funcKey), funcKey,
+                                                  funcMeta.codeMetaData.storageType, false);
+    killInstanceReq->set_runtimeid(std::to_string(std::hash<std::string>{}(funcKey)));
+    (void)functionAgentMgr_->UnRegisterWarmUp(killInstanceReq)
+        .OnComplete(litebus::Defer(GetAID(), &InstanceCtrlActor::OnFunctionDelete, funcKey, std::placeholders::_1));
+}
+
+void InstanceCtrlActor::OnFunctionDelete(
+    const std::string &funcKey, const litebus::Future<Status> &future)
+{
+    if (future.IsError()) {
+        YRLOG_WARN("function({}) delete failed: {}", funcKey, future.GetErrorCode());
+        return;
+    }
+    auto status = future.Get();
+    if (!status.IsOk()) {
+        YRLOG_WARN("function({}) delete failed: {}", funcKey, status.GetMessage());
+        return;
+    }
+    YRLOG_INFO("function({}) delete succeeded", funcKey);
 }
 
 }  // namespace functionsystem::local_scheduler

@@ -951,9 +951,13 @@ static void SetInstanceInfo(::resources::InstanceInfo *instanceInfo, CreateReque
     return keyItems[0];
 }
 
-[[maybe_unused]] static std::string GenerateRuntimeID(const std::string &instanceID)
+[[maybe_unused]] static std::string GenerateRuntimeID(const messages::RuntimeInstanceInfo &info)
 {
     auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
+    const std::string &instanceID = info.instanceid();
+    if (info.warmuptype() != static_cast<int32_t>(WarmupType::NONE)) {
+        return instanceID;
+    }
     if (instanceID.empty()) {
         return RUNTIME_UUID_PREFIX + uuid.ToString();
     }

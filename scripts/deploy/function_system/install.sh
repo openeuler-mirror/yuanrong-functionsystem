@@ -19,7 +19,8 @@ if [ -n "${BASE_DIR}" ]; then
 fi
 FUNCTION_SYSTEM_DIR=$(readlink -m "${FUNCTION_SYSTEM_DEPLOY_DIR}/..")
 DATA_SYSTEM_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../datasystem")
-RUNTIME_HOME_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../runtime")
+# RUNTIME_HOME_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../runtime")
+RUNTIME_HOME_DIR="/home/yuanrong/runtime"
 if [ -d "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas" ]; then
   PATTERN_FAAS_HOME_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas")
   FUNCTION_META_PATH="$PATTERN_FAAS_HOME_DIR/executor-meta"
