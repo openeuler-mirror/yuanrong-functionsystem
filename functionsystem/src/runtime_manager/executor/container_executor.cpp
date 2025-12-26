@@ -298,7 +298,7 @@ Envs BuildMountForCode(const std::shared_ptr<runtime::v1::StartRequest> &start,
     }
     std::string funcPathTarget = funcPath;
     std::replace(funcPathTarget.begin(), funcPathTarget.end(), '/', '-');
-    code->set_target(litebus::os::Join("/opt", funcPathTarget));
+    code->set_target(litebus::os::Join("/var/task/code", funcPathTarget));
 
     auto workingDirIter = envs.posixEnvs.find(UNZIPPED_WORKING_DIR);
     if (workingDirIter == envs.posixEnvs.end() || workingDirIter->second.empty()) {
