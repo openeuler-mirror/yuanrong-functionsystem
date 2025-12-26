@@ -95,7 +95,7 @@ void Flags::AddConfigFlags()
 
 Flags::Flags()
 {
-    AddFlag(&Flags::runtimePath_, "runtime_dir", "init runtime dir for runtimes", DEFAULT_RUNTIME_PATH, RealPath());
+    AddFlag(&Flags::runtimePath_, "runtime_dir", "init runtime dir for runtimes", DEFAULT_RUNTIME_PATH);
     AddFlag(&Flags::snuserLibDir_, "snuser_lib_dir", "init runtime dir for runtimes", DEFAULT_SNUSER_LIB_PATH);
     AddFlag(&Flags::runtimeLogsPath_, "runtime_logs_dir", "init runtime logs dir for runtimes", DEFAULT_RUNTIME_PATH,
             RealPath());
