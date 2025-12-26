@@ -6100,7 +6100,7 @@ void InstanceCtrlActor::OnFunctionWarmUp(const std::string &funcKey, const liteb
         return;
     }
     static const int64_t WARM_UP_RETRY_INTERVAL = 10000;
-    litebus::AsyncAfter(WARM_UP_RETRY_INTERVAL, GetAID(), &InstanceCtrlActor::FunctionWarmUp, funcKey, it.second,
+    litebus::AsyncAfter(WARM_UP_RETRY_INTERVAL, GetAID(), &InstanceCtrlActor::FunctionWarmUp, funcKey, it->second,
                         agentID);
 }
 
