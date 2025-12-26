@@ -252,6 +252,11 @@ public:
         return massifEnable_;
     }
 
+    bool GetEnableDisConvCallStack() const
+    {
+        return enableDisConvCallStack_;
+    }
+
     bool GetInheritEnv() const
     {
         return inheritEnv_;
@@ -454,6 +459,7 @@ protected:
     bool runtimeInstanceDebugEnable_{ false };
     std::string userLogExportMode_;
     std::string diskResources_;
+    bool enableDisConvCallStack_ = false;
 };
 }  // namespace functionsystem::runtime_manager
 

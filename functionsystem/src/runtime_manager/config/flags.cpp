@@ -181,5 +181,7 @@ Flags::Flags()
     AddFlag(&Flags::runtimeInstanceDebugEnable_, "runtime_instance_debug_enable", "runtime instance debug enable",
             false);
     AddFlag(&Flags::userLogExportMode_, "user_log_export_mode", "user log export mode: std/file", "file");
+    AddFlag(&Flags::enableDisConvCallStack_, "enable_dis_conv_call_stack", "enable distributed convergent call stack",
+            false);
 }
 }  // namespace functionsystem::runtime_manager
