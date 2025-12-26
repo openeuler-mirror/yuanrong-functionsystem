@@ -200,6 +200,43 @@ function install_dashboard() {
   sed -i "s/{etcdSsl}/${SSL_ENABLE}/g" "${install_dashboard_config}"
   sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" "${install_dashboard_config}"
   sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" "${install_dashboard_config}"
+  if [ "X${SSL_ENABLE}" = "Xtrue" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
+    sed -i "s*{etcdCAFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}*g" ${install_dashboard_config}
+    sed -i "s*{etcdCertFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}*g" ${install_dashboard_config}
+    sed -i "s*{etcdKeyFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}*g" ${install_dashboard_config}
+  else
+    sed -i "s*{etcdCAFile}**g" ${install_dashboard_config}
+    sed -i "s*{etcdCertFile}**g" ${install_dashboard_config}
+    sed -i "s*{etcdKeyFile}**g" ${install_dashboard_config}
+  fi
+  sed -i "s/{functionSystemSsl}/${SSL_ENABLE}/g" "${install_dashboard_config}"
+  if [ "X${SSL_ENABLE}" = "Xtrue" ] && [ -n "${SSL_BASE_PATH}" ]; then
+    sed -i "s*{functionSystemCAFile}*${SSL_BASE_PATH}/${SSL_ROOT_FILE}*g" ${install_dashboard_config}
+    sed -i "s*{functionSystemCertFile}*${SSL_BASE_PATH}/${SSL_CERT_FILE}*g" ${install_dashboard_config}
+    sed -i "s*{functionSystemKeyFile}*${SSL_BASE_PATH}/${SSL_KEY_FILE}*g" ${install_dashboard_config}
+  else
+    sed -i "s*{functionSystemCAFile}**g" ${install_dashboard_config}
+    sed -i "s*{functionSystemCertFile}**g" ${install_dashboard_config}
+    sed -i "s*{functionSystemKeyFile}**g" ${install_dashboard_config}
+  fi
+  sed -i "s/{prometheusSsl}/${PROMETHEUS_SSL_ENABLE}/g" "${install_dashboard_config}"
+  if [ "X${PROMETHEUS_SSL_ENABLE}" = "Xtrue" ] && [ -n "${PROMETHEUS_SSL_BASE_PATH}" ]; then
+    sed -i "s*{prometheusCAFile}*${PROMETHEUS_SSL_BASE_PATH}/${PROMETHEUS_SSL_ROOT_FILE}*g" ${install_dashboard_config}
+    sed -i "s*{prometheusCertFile}*${PROMETHEUS_SSL_BASE_PATH}/${PROMETHEUS_SSL_CERT_FILE}*g" ${install_dashboard_config}
+    sed -i "s*{prometheusKeyFile}*${PROMETHEUS_SSL_BASE_PATH}/${PROMETHEUS_SSL_KEY_FILE}*g" ${install_dashboard_config}
+  else
+    sed -i "s*{prometheusCAFile}**g" ${install_dashboard_config}
+    sed -i "s*{prometheusCertFile}**g" ${install_dashboard_config}
+    sed -i "s*{prometheusKeyFile}**g" ${install_dashboard_config}
+  fi
+  sed -i "s/{dashboardSsl}/${DASHBOARD_SSL_ENABLE}/g" "${install_dashboard_config}"
+  if [ "X${DASHBOARD_SSL_ENABLE}" = "Xtrue" ] && [ -n "${DASHBOARD_SSL_BASE_PATH}" ]; then
+    sed -i "s*{dashboardCertFile}*${DASHBOARD_SSL_BASE_PATH}/${DASHBOARD_SSL_CERT_FILE}*g" ${install_dashboard_config}
+    sed -i "s*{dashboardKeyFile}*${DASHBOARD_SSL_BASE_PATH}/${DASHBOARD_SSL_KEY_FILE}*g" ${install_dashboard_config}
+  else
+    sed -i "s*{dashboardCertFile}**g" ${install_dashboard_config}
+    sed -i "s*{dashboardKeyFile}**g" ${install_dashboard_config}
+  fi
   LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
     LOG_CONFIG="${FAAS_LOG_CONFIG}" \
     "${FUNCTION_SYSTEM_DIR}"/bin/dashboard \
@@ -225,6 +262,15 @@ function install_collector() {
     --port="${COLLECTOR_PORT}" \
     --log_root="${LOG_ROOT}" \
     --etcd_config_servers="${ETCD_CLUSTER_ADDRESS}" \
+    --etcd_config_ssl_enable="${SSL_ENABLE}" \
+    --etcd_config_auth_type="${ETCD_AUTH_TYPE}" \
+    --etcd_config_ca_file="${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}" \
+    --etcd_config_cert_file="${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}" \
+    --etcd_config_key_file="${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}" \
+    --function_system_ssl_enable="${SSL_ENABLE}" \
+    --function_system_ca_file="${SSL_BASE_PATH}/${SSL_ROOT_FILE}" \
+    --function_system_cert_file="${SSL_BASE_PATH}/${SSL_CERT_FILE}" \
+    --function_system_key_file="${SSL_BASE_PATH}/${SSL_KEY_FILE}" \
     --manager_address="${IP_ADDRESS}:${DASHBOARD_GRPC_PORT}" > "${FS_LOG_PATH}/${NODE_ID}-collector${STD_LOG_SUFFIX}" 2>&1 &
   COLLECTOR_PID="$!"
   if dashboard_health_check ${COLLECTOR_PID}; then
