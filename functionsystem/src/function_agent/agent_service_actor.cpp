@@ -473,11 +473,9 @@ std::shared_ptr<std::queue<DeployerParameters>> AgentServiceActor::BuildDeployer
         destination = config->deploymentconfig().deploydir();
     }
     if (info.Get().storageType == WORKING_DIR_STORAGE_TYPE) {
-        if (destination == info.Get().codePath) {
-            // delegate working dir
-            req->mutable_funcdeployspec()->set_deploydir(destination);
-            req->mutable_funcdeployspec()->set_storagetype(WORKING_DIR_STORAGE_TYPE);
-        }
+        // delegate working dir
+        req->mutable_funcdeployspec()->set_deploydir(destination);
+        req->mutable_funcdeployspec()->set_storagetype(WORKING_DIR_STORAGE_TYPE);
         // pass unzipped working dir to runtime_manager
         (void)req->mutable_createoptions()->insert({ UNZIPPED_WORKING_DIR, destination });
         // pass origin config (src working dir zip file)
