@@ -100,6 +100,19 @@ const std::string testCondaConfig = R"(
 )";
 
 std::shared_ptr<messages::StartInstanceRequest> BuildStartInstanceRequest(const std::string &language);
+
+class MockRuntimeExecutor : public RuntimeExecutor {
+public:
+    explicit MockRuntimeExecutor(const std::string &name, const litebus::AID &functionAgentAID) : RuntimeExecutor(name, functionAgentAID)
+    {
+    }
+
+    void SetDisConvCallStack(bool enable)
+    {
+        config_.enableDisConvCallStack = enable;
+    }
+};
+
 class RuntimeExecutorTest : public ::testing::Test {
 public:
     [[maybe_unused]] static void SetUpTestSuite()
@@ -127,7 +140,7 @@ public:
             "> /tmp/layer/func/bucket-test-log1/yr-test-runtime-executor/funcObj");
         mockAgent_ = std::make_shared<runtime_manager::test::MockFunctionAgentActor>();
         litebus::Spawn(mockAgent_);
-        executor_ = std::make_shared<RuntimeExecutor>("RuntimeExecutorTestActor", mockAgent_->GetAID());
+        executor_ = std::make_shared<MockRuntimeExecutor>("RuntimeExecutorTestActor", mockAgent_->GetAID());
         litebus::Spawn(executor_);
         litebus::os::SetEnv("YR_BARE_MENTAL", "1");
 
@@ -175,7 +188,7 @@ public:
     }
 
 protected:
-    std::shared_ptr<RuntimeExecutor> executor_;
+    std::shared_ptr<MockRuntimeExecutor> executor_;
     std::shared_ptr<runtime_manager::test::MockFunctionAgentActor> mockAgent_;
     std::string env_;
     std::vector<pid_t> pidArray;
@@ -249,6 +262,8 @@ TEST_F(RuntimeExecutorTest, StartInstanceTest)
     deployConfig->set_bucketid("test_bucketID");
     deployConfig->set_deploydir(testDeployDir);
     deployConfig->set_storagetype("s3");
+
+    executor_->SetDisConvCallStack(true);
 
     auto future = executor_->StartInstance(startRequest, {});
     auto instanceResponse = future.Get();

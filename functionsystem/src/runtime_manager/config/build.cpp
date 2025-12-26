@@ -60,6 +60,7 @@ const static std::string DERICT_RUNTIME_SERVER_PORT = "DERICT_RUNTIME_SERVER_POR
 const static std::string ENABLE_TRACE = "ENABLE_TRACE";
 const static std::string TRACE_CONFIG = "TRACE_CONFIG";
 const static std::string RUNTIME_TRACE_CONFIG = "RUNTIME_TRACE_CONFIG";
+const static std::string ENABLE_DIS_CONV_CALL_STACK = "ENABLE_DIS_CONV_CALL_STACK";
 
 const static std::string S3_STORAGE_TYPE = "s3";
 
@@ -187,6 +188,7 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
         { YR_DPOSIX_UDS, request->runtimeinstanceinfo().runtimeconfig().dposixudspath() },
         { CLUSTER_ID, config.clusterID },
         { NODE_ID, config.nodeID },
+        { ENABLE_DIS_CONV_CALL_STACK, config.enableDisConvCallStack ? "true" : "false" },
         { YR_DEBUG_SERVER_PORT, debugServerPort }
     };
 

@@ -63,7 +63,7 @@ function install_function_proxy() {
 
   local enable_driver="true"
   [[ "X${DRIVER_GATEWAY_ENABLE^^}" == "XFALSE" ]] && { enable_driver="false"; }
-  
+
   local merge_process_args=""
   if [ "X${FUNCTION_PROXY_MERGE_PROCESS_ENABLE^^}" == "XTRUE" ]; then
     local ld_library_path=${LD_LIBRARY_PATH}
@@ -125,7 +125,7 @@ function install_function_proxy() {
     --log_expiration_cleanup_interval="${LOG_EXPIRATION_CLEANUP_INTERVAL}" \
     --log_expiration_max_file_count="${LOG_EXPIRATION_MAX_FILE_COUNT}""
   fi
-  
+
   LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${LD_LIBRARY_PATH} \
     LD_PRELOAD="${jemalloc_path}" \
     LOCAL_IP="${LOCAL_IP}" \
@@ -446,6 +446,7 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     --etcd_ssl_base_path=${ETCD_SSL_BASE_PATH}
     --runtime_default_config="${RUNTIME_DEFAULT_CONFIG}"
     --proc_metrics_memory="${MEM4COMP}"
+    --enable_dis_conv_call_stack="${ENABLE_DIS_CONV_CALL_STACK}"
     --data_system_enable=true
     --data_system_host="${IP_ADDRESS}"
     --runtime_instance_debug_enable="${RUNTIME_INSTANCE_DEBUG_ENABLE}"

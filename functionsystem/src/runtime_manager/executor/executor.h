@@ -99,7 +99,7 @@ struct RuntimeConfig {
     std::string userLogExportMode;
     bool cleanStreamProducerEnable;
     int virtualEnvIdleTimeLimit;
-    // RuntimeLauncherConfig launcherConfigs;
+    bool enableDisConvCallStack;
 };
 
 struct PrestartProcess {

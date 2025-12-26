@@ -59,6 +59,7 @@ const std::string YR_LOG_LEVEL = "YR_LOG_LEVEL";
 const std::string PYTHON_PATH = "PYTHONPATH";
 const std::string PATH = "PATH";
 const std::string PYTHON_LOG_CONFIG_PATH = "PYTHON_LOG_CONFIG";
+const std::string ENABLE_DIS_CONV_CALL_STACK = "ENABLE_DIS_CONV_CALL_STACK";
 const std::string BASH_PATH = "/bin/bash";
 const std::string MAX_LOG_SIZE_MB_ENV = "YR_MAX_LOG_SIZE_MB";
 const std::string MAX_LOG_FILE_NUM_ENV = "YR_MAX_LOG_FILE_NUM";
@@ -862,6 +863,8 @@ std::map<std::string, std::string> RuntimeExecutor::CombineEnvs(const Envs &envs
     combineEnvs[PYTHON_LOG_CONFIG_PATH] = config_.pythonLogConfigPath;
     combineEnvs[MAX_LOG_SIZE_MB_ENV] = std::to_string(config_.runtimeMaxLogSize);
     combineEnvs[MAX_LOG_FILE_NUM_ENV] = std::to_string(config_.runtimeMaxLogFileNum);
+    // set distributed convergent call stack enable environment variable
+    combineEnvs[ENABLE_DIS_CONV_CALL_STACK] = config_.enableDisConvCallStack ? "true" : "false";
     std::string pythonPath = config_.runtimePath;
     if (!config_.pythonDependencyPath.empty()) {
         (void)pythonPath.append(":" + config_.pythonDependencyPath);
@@ -1758,9 +1761,14 @@ bool RuntimeExecutor::StartPrestartRuntimeByRuntimeID(const std::string &runtime
         YRLOG_ERROR("get build args failed, can not start runtime, runtimeID: {}", runtimeID);
         return false;
     }
-    Envs envs = { .posixEnvs = { { IS_PRESTART, PRESTART_FLAG }, { RUNTIME_DIR, config_.runtimePath } },
-                  .customResourceEnvs = {},
-                  .userEnvs = {} };
+    Envs envs = {
+        .posixEnvs = {
+            {IS_PRESTART, PRESTART_FLAG}, {RUNTIME_DIR, config_.runtimePath},
+            {ENABLE_DIS_CONV_CALL_STACK, config_.enableDisConvCallStack ? "true" : "false"}
+        },
+        .customResourceEnvs = {},
+        .userEnvs = {}
+    };
     std::string tlsJson = "{}\n";
     std::shared_ptr<litebus::Exec> execPtr;
     for (int j = 0; j < RETRY_TIMES; j++) {

@@ -2583,6 +2583,7 @@ litebus::Future<CallResultAck> InstanceCtrlActor::SendNotifyResult(
     notifyRequest.set_code(Status::GetPosixErrorCode(callResult->code()));
     notifyRequest.set_message(callResult->message());
     notifyRequest.mutable_smallobjects()->Swap(callResult->mutable_smallobjects());
+    notifyRequest.mutable_stacktraceinfos()->Swap(callResult->mutable_stacktraceinfos());
     if (callResult->has_runtimeinfo()) {
         notifyRequest.mutable_runtimeinfo()->Swap(callResult->mutable_runtimeinfo());
     }

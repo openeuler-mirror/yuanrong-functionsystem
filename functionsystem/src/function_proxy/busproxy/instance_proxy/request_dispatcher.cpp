@@ -50,6 +50,7 @@ runtime::NotifyRequest CallResultToNotifyRequest(const SharedStreamMsg &request)
     notifyRequest.set_code(Status::GetPosixErrorCode(callresult->code()));
     notifyRequest.set_requestid(callresult->requestid());
     notifyRequest.mutable_smallobjects()->Swap(callresult->mutable_smallobjects());
+    notifyRequest.mutable_stacktraceinfos()->Swap(callresult->mutable_stacktraceinfos());
     if (callresult->has_runtimeinfo()) {
         notifyRequest.mutable_runtimeinfo()->Swap(callresult->mutable_runtimeinfo());
     }

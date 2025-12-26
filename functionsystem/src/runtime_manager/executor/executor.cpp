@@ -145,6 +145,7 @@ void Executor::SetRuntimeConfig(const Flags &flags)
         YRLOG_DEBUG("prestart config is not empty, start to parse");
         InitPrestartConfig(prestartConfig);
     }
+    config_.enableDisConvCallStack = flags.GetEnableDisConvCallStack();
     config_.runtimeDirectConnectionEnable = flags.GetRuntimeDirectConnectionEnable();
     config_.runtimeHomeDir = flags.GetRuntimeHomeDir();
     config_.nodeJsEntryPath = flags.GetNodeJsEntryPath();

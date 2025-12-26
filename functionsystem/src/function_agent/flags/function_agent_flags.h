@@ -129,6 +129,11 @@ public:
         return agentUID;
     }
 
+    const bool &GetEnableDisConvCallStack() const
+    {
+        return enableDisConvCallStack;
+    }
+
     const bool &GetEnableSignatureValidation() const
     {
         return enableSignatureValidation_;
@@ -173,6 +178,7 @@ protected:
     std::string decryptAlgorithm;
 
     bool enableMergeProcess = false;
+    bool enableDisConvCallStack = false;
     std::string agentUID = "";
     bool enableSignatureValidation_ = false;
 
