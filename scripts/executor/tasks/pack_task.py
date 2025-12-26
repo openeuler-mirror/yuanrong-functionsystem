@@ -1,9 +1,11 @@
 # coding=UTF-8
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
 import json
-import utils
-import shutil
 import os.path
+import shutil
+
+import builder
+import utils
 
 log = utils.stream_logger()
 
@@ -12,16 +14,28 @@ def run_pack(root_dir, cmd_args):
     args = {
         "root_dir": root_dir,
         "version": cmd_args.version,
-        "pack_type": cmd_args.pack_type.capitalize(),  # 设置为首字母大写
+        "skip_wheel": cmd_args.skip_wheel,
+        "skip_metrics": cmd_args.skip_metrics,
+        "skip_archive": cmd_args.skip_archive,
+        "strip_symbols": cmd_args.strip_symbols,
     }
     log.info(f"Start to package function system output with args: {json.dumps(args)}")
     renew_output(root_dir)
-    pack_metrics(args)
+
+    log.info("Start packaging function system compilation products")
     pack_functionsystem(args)
+
+    if args["skip_wheel"] is False:
+        log.info("Start building and packaging Python wheel product")
+        pack_wheel(args)
+    if args["skip_metrics"] is False:
+        log.info("Start packaging common metrics product")
+        pack_metrics(args)
 
 
 def renew_output(root_dir):
     # 创建输出文件夹
+    log.warning("Deleting output folder and rebuilding it")
     output_dir = os.path.join(root_dir, "output")  # ./functionsystem/output
     if os.path.exists(output_dir):
         log.warning(f"Removing product output folder: {output_dir}")
@@ -30,7 +44,7 @@ def renew_output(root_dir):
 
 
 def pack_functionsystem(args):
-    root_dir = args['root_dir']
+    root_dir = args["root_dir"]
     pack_base_dir = os.path.join(root_dir, "output", "functionsystem")  # ./output/functionsystem
 
     # 拷贝二进制 bin 产物
@@ -55,7 +69,7 @@ def pack_functionsystem(args):
     shutil.copytree(lib_src_path, lib_dst_path, copy_function=shutil.copy2, symlinks=True)
 
     # CPP程序去符号
-    if args['pack_type'] == "Release":
+    if args["strip_symbols"] is True:
         log.info("Remove debug symbols from compiled products")
         remove_cpp_symbol(pack_base_dir)
 
@@ -67,9 +81,10 @@ def pack_functionsystem(args):
 
     # 拷贝部署配置文件
     log.info("Copy function system config files")
-    config_src_path = os.path.join(root_dir, "scripts", "config")
-    config_dst_path = os.path.join(pack_base_dir, "config")
-    shutil.copytree(config_src_path, config_dst_path, copy_function=shutil.copy2)
+    for config_name in ["meta_service", "metrics"]:
+        config_src_path = os.path.join(root_dir, "scripts", "config", config_name)
+        config_dst_path = os.path.join(pack_base_dir, "config", config_name)
+        shutil.copytree(config_src_path, config_dst_path, copy_function=shutil.copy2)
 
     # 拷贝ETCD二进制
     log.info("Copy etcd binary to vendor folder")
@@ -78,9 +93,10 @@ def pack_functionsystem(args):
     shutil.copytree(etcd_bin_path, etcd_dst_path, copy_function=shutil.copy2)
 
     # 生成压缩包
-    tar_name = f"yr-functionsystem-v{args['version']}.tar.gz"
-    tarfile = os.path.join(root_dir, "output", tar_name)
-    archive_output(tar_name, tarfile, pack_base_dir)
+    if args["skip_archive"] is False:
+        tar_name = f"yr-functionsystem-v{args['version']}.tar.gz"
+        tarfile = os.path.join(root_dir, "output", tar_name)
+        archive_output(tar_name, tarfile, pack_base_dir)
 
 
 def remove_cpp_symbol(pack_base_dir):
@@ -100,7 +116,7 @@ def remove_cpp_symbol(pack_base_dir):
 
 
 def pack_metrics(args):
-    root_dir = args['root_dir']
+    root_dir = args["root_dir"]
     pack_base_dir = os.path.join(root_dir, "output", "metrics")  # ./output/metrics
 
     # 拷贝配置文件
@@ -122,9 +138,10 @@ def pack_metrics(args):
     shutil.copytree(lib_src_path, lib_dst_path, copy_function=shutil.copy2, symlinks=True)
 
     # 生成压缩包
-    tar_name = f"metrics.tar.gz"
-    tarfile = os.path.join(root_dir, "output", tar_name)
-    archive_output(tar_name, tarfile, pack_base_dir)
+    if args["skip_archive"] is False:
+        tar_name = "metrics.tar.gz"
+        tarfile = os.path.join(root_dir, "output", tar_name)
+        archive_output(tar_name, tarfile, pack_base_dir)
 
 
 def archive_output(tar_name, tarfile, pack_base_dir):
@@ -132,3 +149,32 @@ def archive_output(tar_name, tarfile, pack_base_dir):
     utils.archive_tar(tarfile, pack_base_dir)
     tar_file_size = os.path.getsize(tarfile)
     log.info(f"The size of the product[{tar_name}] is {tar_file_size / (1024 * 1024):.2f}MiB")
+
+
+def pack_wheel(args):
+    root_dir = args["root_dir"]
+    tar_base_dir = os.path.join(root_dir, "output", "functionsystem")  # ./output/functionsystem
+    wheel_base_dir = os.path.join(root_dir, "output", "wheel")  # ./output/wheel
+    wheel_fs_dir = os.path.join(wheel_base_dir, "yr", "functionsystem")
+    os.makedirs(wheel_fs_dir)
+
+    # 创建软连接（软连接在打包时会自动转为实际链接）
+    for name in ["bin", "lib", "config"]:
+        src_path = os.path.join(tar_base_dir, name)
+        dst_path = os.path.join(wheel_fs_dir, name)
+        os.symlink(src_path, dst_path)
+
+    # 复制配置文件
+    config_src_path = os.path.join(root_dir, "scripts", "config", "pyproject.toml")
+    config_dst_path = os.path.join(wheel_base_dir, "pyproject.toml")
+    shutil.copy2(config_src_path, config_dst_path)
+
+    # 复制README
+    readme_src_path = os.path.join(root_dir, "README.md")
+    readme_dst_path = os.path.join(wheel_base_dir, "README.md")
+    shutil.copy2(readme_src_path, readme_dst_path)
+
+    # 构建wheel包
+    wheel_src_path = builder.build_wheel(args["version"], config_dst_path, wheel_base_dir)
+    wheel_dst_path = os.path.join(root_dir, "output", os.path.basename(wheel_src_path))
+    shutil.move(wheel_src_path, wheel_dst_path)

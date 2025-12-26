@@ -1,12 +1,14 @@
 # coding=UTF-8
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
-import os
-import csv
-import utils
-import hashlib
 import argparse
+import csv
+import hashlib
+import os
+import ssl
 import urllib.request
 from urllib.parse import urlparse
+
+import utils
 
 log = utils.stream_logger()
 
@@ -23,15 +25,18 @@ def download_vendor(config_path, download_path):
     reader = csv.DictReader(open(config_path, mode="r", encoding="utf-8"))
     configs = list(reader)  # name, version, module, repo, sha256
 
+    log.info("Download vendor package with TLS info:", ssl.get_default_verify_paths())
     for config in configs:
-        repo_parsed = urlparse(config['repo'])
-        archive_name = config['repo'].split('/')[-1]
+        repo_parsed = urlparse(config["repo"])
+        archive_name = config["repo"].split("/")[-1]
         package_name = archive_name.replace(".tar.gz", "").replace(".tar", "").replace(".zip", "")
         archive_path = os.path.join(download_path, archive_name)  # vendor/src/xxx-vvv.zip
-        vendor_path = os.path.join(download_path, config['name'])  # vendor/src/xxx
+        vendor_path = os.path.join(download_path, config["name"])  # vendor/src/xxx
 
         if os.path.exists(vendor_path):
-            log.info(f"Dependency {config['name']}-{config['version']} already exists, skipping download and extraction")
+            log.info(
+                f"Dependency {config['name']}-{config['version']} already exists, skipping download and extraction"
+            )
             continue
 
         if repo_parsed.scheme == "file":
@@ -43,9 +48,11 @@ def download_vendor(config_path, download_path):
             os.rename(package_path, vendor_path)
         else:
             # 通过网络下载压缩包
-            log.info(f"Downloading {config['name']}-{config['version']} with checksum: {config['sha256']} from source: {config['repo']}")
-            download_zipfile(package_name, config['repo'], archive_path)
-            verify_checksum(package_name, archive_path, config['sha256'])
+            log.info(
+                f"Downloading {config['name']}-{config['version']} from {config['repo']} (sha256:{config['sha256']})"
+            )
+            download_zipfile(package_name, config["repo"], archive_path)
+            verify_checksum(package_name, archive_path, config["sha256"])
             extract_name = utils.extract_file(archive_path, download_path)
             package_path = os.path.join(download_path, extract_name)  # vendor/src/xxx-vvv
             os.rename(package_path, vendor_path)
@@ -56,10 +63,10 @@ def download_zipfile(package_name, download_url, download_path):
     """下载文件到指定路径"""
     try:
         file = open(download_path, "wb")
-        headers = {'User-Agent': 'curl/7.68.0'}
-        req = urllib.request.Request(download_url, headers=headers, method='GET')
+        headers = {"User-Agent": "curl/7.68.0"}
+        req = urllib.request.Request(download_url, headers=headers, method="GET")
         resp = urllib.request.urlopen(req)
-        file_size = int(resp.getheader('Content-Length', 0))
+        file_size = int(resp.getheader("Content-Length", 0))
         downloaded = 0
         block_size = 8192
 
@@ -82,7 +89,9 @@ def verify_checksum(package_name, file_path, expected_sha256):
     if actual_sha256 == expected_sha256:
         log.info(f"Dependency {package_name} hash verification successful, hash value: {expected_sha256}")
     else:
-        log.info(f"Dependency {package_name} hash verification failed. Expected: {expected_sha256}, Actual: {actual_sha256}")
+        log.info(
+            f"Dependency {package_name} hash verification failed. Expected: {expected_sha256}, Actual: {actual_sha256}"
+        )
         raise ValueError("Download verification failed")
 
 
@@ -95,12 +104,10 @@ def compute_sha256(file_path):
     return sha256_hash.hexdigest()
 
 
-
-
 if __name__ == "__main__":
-    _parser = argparse.ArgumentParser(description='Compilate vendor dependencies pre-downloader')
-    _parser.add_argument('--config', type=str, required=True, help='Configuration file path')
-    _parser.add_argument('--output', type=str, required=True, help='Dependencies download path')
+    _parser = argparse.ArgumentParser(description="Compilate vendor dependencies pre-downloader")
+    _parser.add_argument("--config", type=str, required=True, help="Configuration file path")
+    _parser.add_argument("--output", type=str, required=True, help="Dependencies download path")
     _args = _parser.parse_args()
     _code = download_vendor(_args.config, _args.output)
     exit(_code)
