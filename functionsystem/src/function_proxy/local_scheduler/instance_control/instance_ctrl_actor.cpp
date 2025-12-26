@@ -6082,22 +6082,26 @@ void InstanceCtrlActor::FunctionWarmUp(const std::string &funcKey, const Functio
     auto deployInstanceRequest = GetDeployInstanceReq(funcMeta, warm);
     deployInstanceRequest->set_warmuptype(static_cast<int32_t>(funcMeta.warmup));
     (void)functionAgentMgr_->RegisterToWarmUp(deployInstanceRequest, agentID).OnComplete(
-        litebus::Defer(GetAID(), &InstanceCtrlActor::OnFunctionWarmUp, funcKey, std::placeholders::_1));
+        litebus::Defer(GetAID(), &InstanceCtrlActor::OnFunctionWarmUp, funcKey, std::placeholders::_1, agentID));
 }
 
-void InstanceCtrlActor::OnFunctionWarmUp(
-    const std::string &funcKey, const litebus::Future<Status> &future)
+void InstanceCtrlActor::OnFunctionWarmUp(const std::string &funcKey, const litebus::Future<Status> &future,
+                                         const litebus::Option<std::string> &agentID)
 {
-    if (future.IsError()) {
-        YRLOG_WARN("function({}) warm up failed: {}", funcKey, future.GetErrorCode());
+    if (!future.IsError() && future.Get().IsOk()) {
+        YRLOG_INFO("function({}) warm up succeeded", funcKey);
         return;
     }
-    auto status = future.Get();
-    if (!status.IsOk()) {
-        YRLOG_WARN("function({}) warm up failed: {}", funcKey, status.GetMessage());
+    YRLOG_WARN("function({}) warm up failed: {}, defer to retry", funcKey,
+               future.IsError() ? std::to_string(future.GetErrorCode()) : future.Get().GetMessage());
+    auto it = funcMetaMap_.find(funcKey);
+    if (it == funcMetaMap_.end()) {
+        YRLOG_INFO("function({}) is already deleted. stop to warmup", funcKey);
         return;
     }
-    YRLOG_INFO("function({}) warm up succeeded", funcKey);
+    static const int64_t WARM_UP_RETRY_INTERVAL = 10000;
+    litebus::AsyncAfter(WARM_UP_RETRY_INTERVAL, GetAID(), &InstanceCtrlActor::FunctionWarmUp, funcKey, it.second,
+                        agentID);
 }
 
 void InstanceCtrlActor::FunctionDelete(const std::string &funcKey, const FunctionMeta &funcMeta)
