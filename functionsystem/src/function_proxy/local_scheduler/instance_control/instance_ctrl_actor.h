@@ -277,7 +277,8 @@ public:
     void FunctionWarmUp(const std::string &funcKey, const FunctionMeta &funcMeta,
         const litebus::Option<std::string> &agentID = litebus::None());
 
-    void OnFunctionWarmUp(const std::string &funcKey, const litebus::Future<Status> &future);
+    void OnFunctionWarmUp(const std::string &funcKey, const litebus::Future<Status> &future,
+                          const litebus::Option<std::string> &agentID);
 
     void FunctionDelete(const std::string &funcKey, const FunctionMeta &funcMeta);
 
