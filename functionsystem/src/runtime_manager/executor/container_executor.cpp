@@ -132,7 +132,6 @@ litebus::Future<bool> ContainerExecutor::StopAllContainers()
     std::list<litebus::Future<Status>> futures;
     YRLOG_INFO("{} containers need to stop", runtime2containerID_.size());
     for (auto [runtimeID, containerID] : runtime2containerID_) {
-        // todo: lwy grpc client to delete container
         futures.emplace_back(TerminateContainer(runtimeID, "", containerID, false));
         YRLOG_INFO("stop runtime {} with container {}", runtimeID, containerID);
     }
@@ -619,7 +618,6 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::WarmUp(
     YRLOG_INFO("warm up {} ({}), execute final cmd: {}", language, request->runtimeinstanceinfo().instanceid(), cmd);
     auto registerReq = std::make_shared<runtime::v1::RegisterRequest>();
     // currently only one register langruntime
-    // warmup 不需要runtime字段吗？
     auto warmup = registerReq->add_funcruntimes();
     warmup->set_id(runtimeID);
     warmup->set_sandbox(request->runtimeinstanceinfo().container().runtime());
