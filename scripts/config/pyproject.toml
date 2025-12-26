@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+authors = [{ name = "openyuanrong team" }]
+description = "Open YuanRong function-system"
+license = "Apache-2.0"
+name = "openyuanrong-functionsystem"
+readme = "README.md"
+requires-python = ">=3.9"
+version = "0.0.0"
+maintainers = [
+    { name = "Yi Liang", email = "liangyi20@huawei.com" },
+    { name = "ZhanCheng Luo", email = "luozhancheng@huawei.com" },
+]
+keywords = ["openyuanrong", "serverless", "openeuler", "yuanrong"]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.9",
+    "Operating System :: POSIX :: Linux",
+]
+
+dependencies = []
+
+[project.urls]
+Homepage = "https://www.openeuler.org/zh/projects/yuanrong/"
+Documentation = "https://pages.openeuler.openatom.cn/openyuanrong/docs/zh-cn/latest/index.html"
+Repository = "https://gitcode.com/openeuler/yuanrong-functionsystem"
+
+[tool.setuptools.packages.find]
+include = ["yr*"]
+namespaces = true
+where = ["."]
+
+[tool.setuptools.package-data]
+"yr.functionsystem" = ["**/*"]
+
+[tool.distutils.bdist_wheel]
+py-limited-api = "cp39" # experimental
+plat-name = "manylinux"

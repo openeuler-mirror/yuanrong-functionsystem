@@ -72,7 +72,6 @@ PROJECT_DIR="${BASE_DIR}"
 BUILD_DIR="${BASE_DIR}/build"
 OUTPUT_DIR="${BASE_DIR}/output"
 YR_ROOT_DIR="${BASE_DIR}/../.."
-PACKAGE_OUTPUT_DIR="${YR_ROOT_DIR}/output/function_system/metrics"
 CPU_NUM="$(grep -c 'processor' /proc/cpuinfo)"
 JOB_NUM="$(($(grep -c 'processor' /proc/cpuinfo) + 1))"
 YR_OPENSOURCE_DIR=""
@@ -311,17 +310,6 @@ if [ "X${GEN_LLT_REPORT}" = "XON" ]; then
     lcov --capture --directory "${PROJECT_DIR}" --output-file  coverage.info_tmp
     lcov --extract coverage.info_tmp '*src/*' --output-file coverage.info
     genhtml coverage.info --output-directory coverage_report --ignore-errors source
-fi
-
-# copy to output
-mkdir -p "${PACKAGE_OUTPUT_DIR}"/lib "${PACKAGE_OUTPUT_DIR}"/include
-
-if [ $(ls -A "${OUTPUT_DIR}"/lib | wc -w) -ne 0 ]; then
-    cp -ar "${OUTPUT_DIR}"/lib/* "${PACKAGE_OUTPUT_DIR}"/lib
-fi
-
-if [ -d "${OUTPUT_DIR}"/include ]; then
-    cp -ar "${OUTPUT_DIR}"/include/* "${PACKAGE_OUTPUT_DIR}"/include
 fi
 
 log_info "Build observability-metrics successfully"

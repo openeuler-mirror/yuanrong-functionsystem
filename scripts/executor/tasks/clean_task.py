@@ -1,9 +1,9 @@
 # coding=UTF-8
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
 import os.path
+import shutil
 
 import utils
-import shutil
 
 log = utils.stream_logger()
 

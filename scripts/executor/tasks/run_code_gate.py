@@ -1,14 +1,14 @@
 # coding=UTF-8
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
+import argparse
 import os
 import re
-import time
-import utils
-import argparse
 import subprocess
+import time
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 
-from concurrent.futures import ProcessPoolExecutor
+import utils
 
 log = utils.stream_logger()
 _env = utils.pipeline_env()
@@ -29,8 +29,9 @@ def decode_args():
     return args.it_bin, args.ut_bin, args.test_suite, args.test_case
 
 
-def run_code_gate(it_bin, ut_bin, test_suite, test_case,
-                  exec_timeout=120, retry_times=0, job_num=os.cpu_count(), print_logs=True):
+def run_code_gate(
+    it_bin, ut_bin, test_suite, test_case, exec_timeout=120, retry_times=0, job_num=os.cpu_count(), print_logs=True
+):
     start_time = time.time()
 
     # 采集所有测试用例的名字
@@ -52,7 +53,7 @@ def run_code_gate(it_bin, ut_bin, test_suite, test_case,
             "merge": os.getenv("codehubMergeRequestIid"),
             "branch": os.getenv("codehubTargetBranch"),
             "target": os.getenv("codehubTargetRepoSshUrl"),
-        }
+        },
     }
     for key, value in collector["it_index"].items():
         log.info(f"Find IT test-suit[{key}] cases: {value}")
@@ -109,8 +110,12 @@ def gather_tests_index(path):
     test_suite_name = ""
     log_data = datetime.now(timezone.utc).strftime("%m%d")
     for line in tests_list:
-        if (line.startswith(f"D{log_data}") or line.startswith(f"I{log_data}")
-                or line.startswith(f"W{log_data}") or line.startswith(f"E{log_data}")):
+        if (
+            line.startswith(f"D{log_data}")
+            or line.startswith(f"I{log_data}")
+            or line.startswith(f"W{log_data}")
+            or line.startswith(f"E{log_data}")
+        ):
             it += 1
             continue  # 跳过元戎日志输出
         elif main_output[it] == line:
@@ -132,7 +137,7 @@ def run_test_unit_proc(path, test_suite, test_case, exec_timeout, retry_times):
     用于在并发场景下包装测试用例执行函数，捕获异常进程信息
     :return: 进程名，执行时间，退出代码，[标准输入，标准输出，标准错误]
     """
-    proc_name = path.split('/')[-1]
+    proc_name = path.split("/")[-1]
     proc_desc = f"<{proc_name}>[{test_suite}.{test_case}]"
 
     try:
@@ -154,7 +159,7 @@ def run_test_unit(path, test_suite, test_case, exec_timeout):
     测试用例执行函数，捕获程序执行状态、标准输出、标准错误
     :return: 进程名，执行时间，退出代码，[标准输入，标准输出，标准错误]
     """
-    proc_name = path.split('/')[-1]
+    proc_name = path.split("/")[-1]
     proc_desc = f"<{proc_name}>[{test_suite}.{test_case}]"
     log.info(f"Start test process: {proc_desc}")
     start_time = time.time()
@@ -215,22 +220,28 @@ def parse_test_output(proc_name, exec_time, exit_code, std, print_logs):
             result.append(proc_name)
             results.append(result)
 
-    log.info(f"Parallel controller receive process {proc_desc} exit code {exit_code} in {exec_time}ms. " +
-             f"Receive stdout {len(stdout_lines)} lines and stderr {len(stderr_lines)} lines")
+    log.info(
+        f"Parallel controller receive process {proc_desc} exit code {exit_code} in {exec_time}ms. "
+        + f"Receive stdout {len(stdout_lines)} lines and stderr {len(stderr_lines)} lines"
+    )
 
     return results
 
 
-pattern = r'\[\s+(\w+)\s+\]\s+([\w\/]+)\.([\w\/]+)\s+\((\d+)\s+ms\)'
+PATTERN = r"\[\s+(\w+)\s+\]\s+([\w\/]+)\.([\w\/]+)\s+\((\d+)\s+ms\)"
 
 
 def test_result_line(hits: str, line: str, test_suite="Unknown", test_case="Unknown"):
-    matches = re.match(pattern, line)
+    matches = re.match(PATTERN, line)
     if not matches:
         log.error(f"Invalid test result line: {line}")
         return [hits, test_suite, test_case, "-1"]
-    return [matches.group(1), matches.group(2), matches.group(3),
-            int(matches.group(4))]  # status, test_suite, test_case, exec_time
+    return [
+        matches.group(1),
+        matches.group(2),
+        matches.group(3),
+        int(matches.group(4)),
+    ]  # status, test_suite, test_case, exec_time
 
 
 def summarize(start_time, collector, proc_results, case_results):
@@ -315,26 +326,21 @@ def summarize(start_time, collector, proc_results, case_results):
 
 
 def log2es(step: str, text: str, info: dict, ex: dict = None):
-    data = {
-        "step": step,
-        "info": info,
-        "text": text,
-        "envs": _env
-    }
+    data = {"step": step, "info": info, "text": text, "envs": _env}
     data.update(ex)
 
     headers = {
-        'X-SubSystem': "function_system",
-        'X-Pipeline-Name': _env.get("JOB_BASE_NAME", ""),
-        'X-Pipeline-Type': "gate",
-        'X-Pipeline-Step': "gtest",
+        "X-SubSystem": "function_system",
+        "X-Pipeline-Name": _env.get("JOB_BASE_NAME", ""),
+        "X-Pipeline-Type": "gate",
+        "X-Pipeline-Step": "gtest",
     }
     result = utils.report2es(headers, data)
     if result is not None:
         log.error(result)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     _args = decode_args()
     _code = run_code_gate(*_args)
     exit(_code)

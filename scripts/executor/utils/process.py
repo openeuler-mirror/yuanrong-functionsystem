@@ -2,8 +2,9 @@
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
 
 import os
-import utils
 import subprocess
+
+import utils
 
 log = utils.stream_logger()
 
@@ -17,13 +18,7 @@ def sync_command(cmd: list[str], cwd: str = None, env: dict[str, str] = None):
     :param env: 执行的环境变量
     """
     log.info(f"Executing command[{cmd[0]}] in {cwd if cwd else os.getcwd()}")
-    subprocess.run(
-        cmd,
-        cwd=cwd,
-        env=env,
-        text=True,
-        check=True
-    )
+    subprocess.run(cmd, cwd=cwd, env=env, text=True, check=True)
 
 
 def exec_command(cmd: list[str]):
@@ -43,10 +38,5 @@ def pipe_command(cmd: list[str], cwd: str = None):
     :param cwd: 命令的参数
     """
     log.info(f"Executing command[{cmd[0]}] in {cwd if cwd else os.getcwd()}")
-    proc = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     return proc.returncode, proc.stdout, proc.stderr
