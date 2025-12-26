@@ -2,9 +2,10 @@
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
 import os
 import stat
-import utils
 import tarfile
 import zipfile
+
+import utils
 
 log = utils.stream_logger()
 
@@ -22,7 +23,7 @@ def extract_file(archive_path, extract_to):
 
 def extract_zip(zipfile_path, extract_to):
     """解压ZIP文件到指定目录"""
-    zip_ref = zipfile.ZipFile(zipfile_path, 'r')
+    zip_ref = zipfile.ZipFile(zipfile_path, "r")
     zip_ref.extractall(extract_to)
     for info in zip_ref.infolist():
         extracted_path = os.path.join(extract_to, info.filename)
@@ -33,17 +34,17 @@ def extract_zip(zipfile_path, extract_to):
         file_path = os.path.join(extract_to, info.filename)
         if _is_symlink(info):
             # 读取并创建符号链接
-            link_target = zip_ref.read(info.filename).decode('utf-8').strip()
+            link_target = zip_ref.read(info.filename).decode("utf-8").strip()
             if os.path.lexists(file_path):
                 os.remove(file_path)
             os.symlink(link_target, file_path)
     log.info(f"File {zipfile_path.split('/')[-1]} extraction complete")
-    return zip_ref.infolist()[0].filename.split('/')[0]
+    return zip_ref.infolist()[0].filename.split("/")[0]
 
 
 def extract_tar(tarfile_path, extract_to):
     """解压ZIP文件到指定目录"""
-    tar_ref = tarfile.open(tarfile_path, 'r:*')
+    tar_ref = tarfile.open(tarfile_path, "r:*")
     tar_ref.extractall(extract_to)
     log.info(f"File {tarfile_path.split('/')[-1]} extraction complete")
     return tar_ref.getnames()[0]

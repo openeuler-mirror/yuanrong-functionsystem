@@ -1,13 +1,13 @@
 # coding=UTF-8
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
-import os
-import sys
 import json
-import socket
 import logging
+import os
+import socket
+import sys
 from typing import Optional
-from urllib.request import urlopen
-from urllib.request import Request
+from urllib.request import Request, urlopen
+
 
 def stream_logger() -> logging.Logger:
     """
@@ -15,12 +15,13 @@ def stream_logger() -> logging.Logger:
     """
     logging.basicConfig(
         level=logging.INFO,
-        format='[%(levelname)s][%(asctime)s] %(message)s',
-        datefmt='%b %d %H:%M:%S',
-        handlers=[logging.StreamHandler(sys.stdout)]
+        format="[%(levelname)s][%(asctime)s] %(message)s",
+        datefmt="%b %d %H:%M:%S",
+        handlers=[logging.StreamHandler(sys.stdout)],
     )
     log = logging.getLogger()
     return log
+
 
 def report2es(headers: dict, data: dict) -> Optional[str]:
     """
@@ -30,10 +31,12 @@ def report2es(headers: dict, data: dict) -> Optional[str]:
     if url is None:
         return None
 
-    headers.update({
-        'Content-Type': 'application/json',
-        'User-Agent': socket.gethostname(),
-    })
+    headers.update(
+        {
+            "Content-Type": "application/json",
+            "User-Agent": socket.gethostname(),
+        }
+    )
     json_data = json.dumps(data).encode("utf-8")
     req = Request(url=url, method="POST", headers=headers, data=json_data)
 
