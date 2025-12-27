@@ -150,6 +150,11 @@ public:
         litebus::Async(aid_, &InstanceCtrlActor::BindInternalIAM, internalIAM);
     }
 
+    void BindDataObjClient(const std::shared_ptr<DataObjClient> &dataObjClient) const
+    {
+        litebus::Async(aid_, &InstanceCtrlActor::BindDataObjClient, dataObjClient);
+    }
+
     void BindResourceGroupCtrl(const std::shared_ptr<ResourceGroupCtrl> &rGroupCtrl) const
     {
         litebus::Async(aid_, &InstanceCtrlActor::BindResourceGroupCtrl, rGroupCtrl);
