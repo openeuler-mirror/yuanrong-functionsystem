@@ -54,6 +54,15 @@ std::string GetMonitorAddress(const function_proxy::Flags &flags)
     return flags.GetMetaStoreAddress();
 }
 
+void CommonDriver::BindDataObjClient()
+{
+    distributedCacheClient_->EnableRouterClient(true);
+    distributedCacheClient_->EnableDSClient(true);
+    auto dataObjActor = std::make_shared<DataObjActor>(distributedCacheClient_);
+    dataObjClient_ = std::make_shared<DataObjClient>(dataObjActor);
+    litebus::Spawn(dataObjActor);
+}
+
 void CommonDriver::BindStateActor()
 {
     distributedCacheClient_->EnableDSClient(true);
@@ -66,19 +75,44 @@ void CommonDriver::BindStateActor()
 void CommonDriver::CreateDistributedCacheClient()
 {
     datasystem::ConnectOptions connectOptions;
+    RouterConnectOptions routerConnectOptions;
     DSCacheClientImpl::GetAuthConnectOptions(dsAuthConfig_, connectOptions);
     connectOptions.host = flags_.GetCacheStorageHost();
     connectOptions.port = flags_.GetCacheStoragePort();
 
-    distributedCacheClient_ = std::make_shared<DSCacheClientImpl>(connectOptions);
+    // routerConnectOptions
+    routerConnectOptions.azName = flags_.GetCacheStorageInfoPrefix();
+    if (flags_.GetEnableMetaStore()) {
+        routerConnectOptions.etcdAddress = flags_.GetEtcdAddress();
+    } else {
+        routerConnectOptions.etcdAddress = flags_.GetMetaStoreAddress();
+    }
+    auto etcdAuth = GetGrpcTLSConfig(flags_);
+    routerConnectOptions.etcdCa = etcdAuth.ca;
+    routerConnectOptions.etcdKey = etcdAuth.privateKey;
+    routerConnectOptions.etcdCert = etcdAuth.cert;
+    distributedCacheClient_ = std::make_shared<DSCacheClientImpl>(connectOptions, routerConnectOptions);
     distributedCacheClient_->SetDSAuthEnable(flags_.GetCacheStorageAuthEnable());
+}
+
+bool CommonDriver::NeedBindDs()
+{
+    bool isDataSystemFeatureUsed = false;
+    if (auto dataSystemFeatureUsed = litebus::os::GetEnv("DATA_SYSTEM_FEATURE_USED"); dataSystemFeatureUsed.IsSome()) {
+        isDataSystemFeatureUsed = (dataSystemFeatureUsed == DATASYSTEM_FEATURE_USED_STREAM);
+    }
+    YRLOG_INFO("isDataSystemFeatureUsed {}", isDataSystemFeatureUsed);
+
+    return flags_.GetStateStorageType() == function_proxy::DATA_SYSTEM_STORE || isDataSystemFeatureUsed;
 }
 
 void CommonDriver::InitDistributedCache()
 {
     CreateDistributedCacheClient();
-    if (flags_.GetStateStorageType() == function_proxy::DATA_SYSTEM_STORE) {
+    if (NeedBindDs()) {
+        YRLOG_INFO("need to bind ds client");
         BindStateActor();
+        BindDataObjClient();
     }
 }
 
@@ -218,6 +252,9 @@ Status CommonDriver::Stop()
     if (observerActor_ != nullptr) {
         litebus::Terminate(observerActor_->GetAID());
     }
+    if (dataObjClient_ != nullptr) {
+        dataObjClient_->Stop();
+    }
     return Status::OK();
 }
 
@@ -225,6 +262,9 @@ void CommonDriver::Await()
 {
     if (observerActor_ != nullptr) {
         litebus::Await(observerActor_->GetAID());
+    }
+    if (dataObjClient_ != nullptr) {
+        dataObjClient_->Await();
     }
 }
 

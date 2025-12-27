@@ -22,9 +22,19 @@
 
 #include "common/utils/sensitive_value.h"
 #include "datasystem/datasystem.h"
+#include "datasystem/router_client.h"
 #include "distributed_cache_client.h"
 
 namespace functionsystem {
+
+struct RouterConnectOptions {
+    std::string azName = "";
+    std::string etcdAddress = "";
+    SensitiveValue etcdCa;
+    SensitiveValue etcdCert;
+    SensitiveValue etcdKey;
+    std::string etcdDNSName = "";
+};
 
 struct DSAuthConfig {
     bool isEnable = false;
@@ -40,7 +50,8 @@ struct DSAuthConfig {
 
 class DSCacheClientImpl : public DistributedCacheClient {
 public:
-    explicit DSCacheClientImpl(const datasystem::ConnectOptions &connectOptions);
+    explicit DSCacheClientImpl(const datasystem::ConnectOptions &connectOptions,
+                               const RouterConnectOptions &routerConnectOptions);
     ~DSCacheClientImpl() override = default;
     Status Init() override;
 
@@ -51,11 +62,19 @@ public:
     Status Del(const std::string &key) override;
     Status Del(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys) override;
 
+    // object client
+    Status GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objs,
+                          std::vector<ObjMetaInfo> &meta) override;
+
+    // router client
+    Status GetWorkerAddrByWorkerId(const std::vector<std::string> &workerIds,
+                                   std::vector<std::string> &workerAddrs) override;
     Status GetHealthStatus() override;
 
     Status ShutDown() override;
 
     void EnableDSClient(bool isEnable);
+    void EnableRouterClient(bool isEnable);
     void SetDSAuthEnable(bool isEnable);
     bool IsDsClientEnable() const
     {
@@ -73,7 +92,11 @@ private:
     std::unique_ptr<datasystem::KVClient> kvClient_;
     std::unique_ptr<datasystem::ObjectClient> dsObjectClient_;
 
+    // connect to etcd for data-system
+    std::unique_ptr<datasystem::RouterClient> dsRouterClient_;
+
     bool isDSEnabled_{ false };
+    bool isRouterEnabled_{ false };
     bool isDSAuthEnable_{ false };
     std::mutex mut_;
 };

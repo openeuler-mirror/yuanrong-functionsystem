@@ -33,6 +33,7 @@
 #include "local_scheduler/instance_control/instance_ctrl_actor.h"
 #include "local_scheduler/instance_control/instance_ctrl_message.h"
 #include "mocks/mock_distributed_cache_client.h"
+#include "mocks/mock_data_obj_client.h"
 #include "mocks/mock_function_agent_mgr.h"
 #include "mocks/mock_instance_control_view.h"
 #include "mocks/mock_instance_operator.h"
@@ -4898,6 +4899,106 @@ TEST_F(InstanceCtrlTest, HandleInstanceHealthChangeTest)
     litebus::Async(actor->GetAID(), &InstanceCtrlActor::HandleInstanceHealthChange, "instanceID3",
                    StatusCode::INSTANCE_SUB_HEALTH);
     ASSERT_AWAIT_TRUE([&isFinished]() { return isFinished; });
+
+    litebus::Terminate(actor->GetAID());
+    litebus::Await(actor->GetAID());
+}
+
+TEST_F(InstanceCtrlTest, GetDataAffinityTest)
+{
+    auto mockDataClient = std::make_shared<MockDataObjClient>();
+    auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
+    actor->BindDataObjClient(mockDataClient);
+    litebus::Spawn(actor);
+
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->set_requestid("requestID");
+    scheduleReq->mutable_instance()->set_instanceid("instanceID");
+    scheduleReq->mutable_instance()->set_tenantid("tenantID");
+    auto args = scheduleReq->mutable_instance()->mutable_args();
+    ::common::Arg arg{};
+    arg.set_type(::common::Arg_ArgType_VALUE);
+    arg.mutable_nested_refs()->Add("123");
+    arg.mutable_nested_refs()->Add("1234");
+    args->Add(std::move(arg));
+
+    auto status =
+        litebus::Async(actor->GetAID(), &InstanceCtrlActor::GetAffinity, Status(StatusCode::FAILED), scheduleReq);
+    EXPECT_AWAIT_READY(status);
+    EXPECT_TRUE(status.Get().IsError());
+
+    // data affinity disabled, preemption affinity disable
+    scheduleReq->mutable_instance()->mutable_scheduleoption()->set_scheduletimeoutms(30);
+    actor->config_.maxPriority = 0;
+    status = litebus::Async(actor->GetAID(), &InstanceCtrlActor::GetAffinity, Status::OK(), scheduleReq);
+    EXPECT_AWAIT_READY(status);
+    EXPECT_TRUE(status.Get().IsOk());
+    EXPECT_FALSE(scheduleReq->instance().scheduleoption().affinity().inner().data().has_preferredaffinity());
+    EXPECT_EQ(scheduleReq->instance().scheduleoption().scheduletimeoutms(), 30);
+
+    // preemption affinity enable
+    (*scheduleReq->mutable_instance()->mutable_createoptions())["DATA_AFFINITY_ENABLED"] = "FALSE";
+    scheduleReq->mutable_instance()->mutable_scheduleoption()->set_scheduletimeoutms(30);
+    actor->config_.maxPriority = 1;
+    actor->config_.enablePreemption = true;
+    status = litebus::Async(actor->GetAID(), &InstanceCtrlActor::GetAffinity, Status::OK(), scheduleReq);
+    EXPECT_AWAIT_READY(status);
+    EXPECT_TRUE(status.Get().IsOk());
+    EXPECT_FALSE(scheduleReq->instance().scheduleoption().affinity().inner().data().has_preferredaffinity());
+    EXPECT_EQ(scheduleReq->instance().scheduleoption().scheduletimeoutms(), 30); // clear schedule timeouts
+
+    // get list failed
+    litebus::Future<std::vector<std::string>> list;
+    list.SetFailed(-1);
+    litebus::Future<std::vector<std::string>> objIDs;
+    EXPECT_CALL(*mockDataClient, GetObjNodeList("tenantID", _))
+        .WillOnce(testing::DoAll(FutureArg<1>(&objIDs), Return(list)));
+    (*scheduleReq->mutable_instance()->mutable_createoptions())["DATA_AFFINITY_ENABLED"] = "true";
+    status = litebus::Async(actor->GetAID(), &InstanceCtrlActor::GetAffinity, Status::OK(), scheduleReq);
+    ASSERT_AWAIT_READY(objIDs);
+    ASSERT_EQ(objIDs.Get().size(), static_cast<uint32_t>(2));
+    EXPECT_EQ(objIDs.Get()[0], "123");
+    EXPECT_EQ(objIDs.Get()[1], "1234");
+
+    ASSERT_AWAIT_READY(status);
+    EXPECT_TRUE(status.Get().IsOk());
+    EXPECT_FALSE(scheduleReq->instance().scheduleoption().affinity().inner().data().has_preferredaffinity());
+
+    ::common::Arg arg2{};
+    arg2.set_type(::common::Arg_ArgType_OBJECT_REF);
+    arg2.set_value("12345");
+    args->Add(std::move(arg2));
+
+    objIDs = {};
+    list = {};
+    list.SetValue({"123", "234", "345"});
+    EXPECT_CALL(*mockDataClient, GetObjNodeList("tenantID", _))
+        .WillOnce(testing::DoAll(FutureArg<1>(&objIDs), Return(list)));
+    status = litebus::Async(actor->GetAID(), &InstanceCtrlActor::GetAffinity, Status::OK(), scheduleReq);
+    EXPECT_AWAIT_READY(objIDs);
+    ASSERT_EQ(objIDs.Get().size(), static_cast<uint32_t>(3));
+    EXPECT_EQ(objIDs.Get()[0], "123");
+    EXPECT_EQ(objIDs.Get()[1], "1234");
+    EXPECT_EQ(objIDs.Get()[2], "12345");
+
+    EXPECT_AWAIT_READY(status);
+    EXPECT_TRUE(status.Get().IsOk());
+    EXPECT_TRUE(scheduleReq->instance().scheduleoption().affinity().inner().data().has_preferredaffinity());
+    auto dataPreferredaffinity = scheduleReq->instance().scheduleoption().affinity().inner().data().preferredaffinity();
+    EXPECT_EQ(dataPreferredaffinity.condition().subconditions_size(), 3);
+
+    EXPECT_EQ(dataPreferredaffinity.condition().subconditions(0).weight(), 100);
+    ASSERT_EQ(dataPreferredaffinity.condition().subconditions(0).expressions().size(), 1);
+    EXPECT_EQ(dataPreferredaffinity.condition().subconditions(0).expressions(0).key(), "HOST_IP");
+    EXPECT_TRUE(dataPreferredaffinity.condition().subconditions(0).expressions(0).op().has_in());
+    ASSERT_EQ(dataPreferredaffinity.condition().subconditions(0).expressions(0).op().in().values_size(), 1);
+    EXPECT_EQ(dataPreferredaffinity.condition().subconditions(0).expressions(0).op().in().values()[0], "123");
+
+    EXPECT_EQ(dataPreferredaffinity.condition().subconditions(1).weight(), 90);
+    EXPECT_EQ(dataPreferredaffinity.condition().subconditions(1).expressions(0).op().in().values()[0], "234");
+
+    EXPECT_EQ(dataPreferredaffinity.condition().subconditions(2).weight(), 80);
+    EXPECT_EQ(dataPreferredaffinity.condition().subconditions(2).expressions(0).op().in().values()[0], "345");
 
     litebus::Terminate(actor->GetAID());
     litebus::Await(actor->GetAID());
