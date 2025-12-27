@@ -54,7 +54,8 @@ public:
 TEST_F(DistributeCacheClientTest, DSCacheClientImpl)
 {
     datasystem::ConnectOptions connectOptions{ .host = "0.0.0.0", .port = 31002, .connectTimeoutMs = 10 };
-    DSCacheClientImpl client(connectOptions);
+    RouterConnectOptions routerConnectOptions;
+    DSCacheClientImpl client(connectOptions, routerConnectOptions);
     std::string key = "key";
     std::string value = "value";
     std::string val = "";

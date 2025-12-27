@@ -35,6 +35,7 @@
 #include "common/status/status.h"
 #include "common/types/instance_state.h"
 #include "function_agent_manager/function_agent_mgr.h"
+#include "function_proxy/common/data_obj_client/data_obj_client.h"
 #include "function_proxy/common/iam/internal_iam.h"
 #include "function_proxy/common/observer/control_plane_observer/control_plane_observer.h"
 #include "function_proxy/common/posix_client/control_plane_client/control_interface_client_manager_proxy.h"
@@ -265,6 +266,11 @@ public:
 
     void BindInternalIAM(const std::shared_ptr<function_proxy::InternalIAM> &internalIAM);
 
+    void BindDataObjClient(const std::shared_ptr<DataObjClient> &dataObjClient)
+    {
+        dataObjClient_ = dataObjClient;
+    }
+
     bool IsInstanceRunning(const std::string &instanceID);
 
     void OnHealthyStatus(const Status &status);
@@ -327,6 +333,7 @@ public:
     void BindSubscriptionMgr(const std::shared_ptr<SubscriptionMgr> &subscriptionMgr)
     {
         subscriptionMgr_ = subscriptionMgr;
+        YRLOG_INFO("subscriptionMgr_ in ctrl is nullptr {}", subscriptionMgr_ == nullptr);
         ASSERT_IF_NULL(instanceControlView_);
         ASSERT_IF_NULL(subscriptionMgr_);
         subscriptionMgr_->BindInstanceControlView(instanceControlView_);
@@ -929,6 +936,7 @@ private:
     bool isAbnormal_ = false;
 
     std::unordered_map<std::string, litebus::Timer> runtimeHeartbeatTimers_;
+    std::shared_ptr<DataObjClient> dataObjClient_;
 
     inline static ExitHandler exitHandler_;
 

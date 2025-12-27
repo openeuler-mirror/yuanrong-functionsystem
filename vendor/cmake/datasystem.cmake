@@ -22,7 +22,7 @@ set(INSTALL_DIR "${EP_BUILD_DIR}/Install/${src_name}")
 message("include datasystem lib from ${INSTALL_DIR}")
 set(datasystem_INCLUDE_DIR ${INSTALL_DIR}/sdk/cpp/include)
 set(datasystem_LIB_DIR ${INSTALL_DIR}/sdk/cpp/lib)
-set(datasystem_LIB ${datasystem_LIB_DIR}/libdatasystem.so)
+set(datasystem_LIB ${datasystem_LIB_DIR}/libdatasystem.so ${datasystem_LIB_DIR}/libds_router_client.so)
 
 include_directories(${datasystem_INCLUDE_DIR})
 

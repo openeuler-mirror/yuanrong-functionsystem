@@ -363,6 +363,7 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
     auto observer = g_commonDriver->GetObserverActor();
     auto posixService = g_commonDriver->GetPosixService();
     auto internalIAM = g_commonDriver->GetInternalIAM();
+    auto dataObjClient = g_commonDriver->GetDataObjClient();
     auto controlPlaneObserver = std::make_shared<function_proxy::ControlPlaneObserver>(observer);
     auto pingCycleMs = flags.GetSystemTimeout() / DEFAULT_HEARTBEAT_TIMES;
     auto pingTimeoutMs = flags.GetSystemTimeout() / 2;
@@ -422,6 +423,7 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .creds = InitPosixGrpcServerSecureOption(flags),
         .posixPort = flags.GetGrpcListenPort(),
         .schedulePlugins = flags.GetSchedulePlugins(),
+        .dataObjClient = dataObjClient,
         .enableTenantAffinity = flags.GetEnableTenantAffinity(),
         .createLimitationEnable = flags.GetCreateLimitationEnable(),
         .tokenBucketCapacity = flags.GetTokenBucketCapacity(),

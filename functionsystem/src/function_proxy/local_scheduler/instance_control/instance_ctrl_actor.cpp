@@ -5584,7 +5584,78 @@ litebus::Future<Status> InstanceCtrlActor::GetAffinity(
 litebus::Future<Status> InstanceCtrlActor::SetDataAffinity(
     const std::shared_ptr<messages::ScheduleRequest> &scheduleReq)
 {
-    return Status::OK();
+    if (auto iter = scheduleReq->instance().createoptions().find(DATA_AFFINITY_ENABLED_KEY);
+        iter == scheduleReq->instance().createoptions().end() || iter->second != "true" || dataObjClient_ == nullptr) {
+        YRLOG_DEBUG("{}|{}|instance({}) data affinity is disabled, skipped", scheduleReq->traceid(),
+                    scheduleReq->requestid(), scheduleReq->instance().instanceid());
+        return Status::OK();
+    }
+
+    std::set<std::string> objIDSet;
+    for (const auto &arg : scheduleReq->instance().args()) {
+        if (arg.type() == common::Arg_ArgType_OBJECT_REF && !arg.value().empty()) {
+            objIDSet.insert(arg.value());
+        }
+
+        for (const auto &objID : arg.nested_refs()) {
+            if (!objID.empty()) {
+                objIDSet.insert(objID);
+            }
+        }
+    }
+
+    std::vector<std::string> objIDList(objIDSet.begin(), objIDSet.end());
+    if (objIDList.empty()) {
+        YRLOG_DEBUG("{}|{}|instance({}) empty objIDs, data affinity skipped", scheduleReq->traceid(),
+                    scheduleReq->requestid(), scheduleReq->instance().instanceid());
+        return Status::OK();
+    }
+
+    litebus::Promise<Status> promise;
+    dataObjClient_->GetObjNodeList(scheduleReq->instance().tenantid(), objIDList)
+        .OnComplete(litebus::Defer(GetAID(), &InstanceCtrlActor::AddDataAffinity, _1, scheduleReq, promise));
+    return promise.GetFuture();
+}
+
+void InstanceCtrlActor::AddDataAffinity(const litebus::Future<std::vector<std::string>> &nodeListFut,
+                                        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+                                        const litebus::Promise<Status> &promise)
+{
+    if (nodeListFut.IsError() || nodeListFut.Get().empty()) {
+        YRLOG_WARN("{}|{}|failed to get data affinity for instance({})", scheduleReq->traceid(),
+                   scheduleReq->requestid(), scheduleReq->instance().instanceid());
+        // failed to get data affinity, don't affect scheduling, still return OK
+        promise.SetValue(Status::OK());
+        return;
+    }
+
+    auto nodeList = nodeListFut.Get();
+    affinity::Selector preferredDataSelector;
+    preferredDataSelector.mutable_condition()->set_orderpriority(true);
+
+    for (uint32_t i = 0; i < nodeList.size() && i < MAX_LABEL_AFFINITY_COUNT; ++i) {
+        auto expressions = preferredDataSelector.mutable_condition()->add_subconditions()->add_expressions();
+        expressions->set_key(HOST_IP_LABEL);
+        expressions->mutable_op()->mutable_in()->add_values(nodeList[i]);
+    }
+
+    int64_t optimalScore = GetAffinityMaxScore(scheduleReq.get());
+    SetAffinityWeight(preferredDataSelector, optimalScore);  // add weight and calculate score
+    (*scheduleReq->mutable_instance()
+          ->mutable_scheduleoption()
+          ->mutable_affinity()
+          ->mutable_inner()
+          ->mutable_data()
+          ->mutable_preferredaffinity()) = preferredDataSelector;
+    (*scheduleReq->mutable_contexts())[LABEL_AFFINITY_PLUGIN].mutable_affinityctx()->set_maxscore(
+        optimalScore);
+
+    YRLOG_INFO("{}|{}|add data affinity for instance({})", scheduleReq->traceid(), scheduleReq->requestid(),
+               scheduleReq->instance().instanceid());
+
+    // clear DATA_AFFINITY_ENABLED, avoids set data affinity repeatedly
+    (*scheduleReq->mutable_instance()->mutable_createoptions())[DATA_AFFINITY_ENABLED_KEY] = "";
+    promise.SetValue(Status::OK());
 }
 
 void InstanceCtrlActor::OnHealthyStatus(const Status &status)

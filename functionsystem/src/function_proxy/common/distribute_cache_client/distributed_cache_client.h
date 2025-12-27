@@ -39,6 +39,12 @@ public:
     virtual Status Del(const std::string &key) = 0;
     virtual Status Del(const std::vector<std::string> &keys, std::vector<std::string> &failedKeys) = 0;
 
+    virtual Status GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objs,
+                                  std::vector<ObjMetaInfo> &meta) = 0;
+
+    virtual Status GetWorkerAddrByWorkerId(const std::vector<std::string> &workerIds,
+                                           std::vector<std::string> &workerAddrs) = 0;
+
     virtual Status GetHealthStatus() = 0;
 
     virtual Status ShutDown() = 0;

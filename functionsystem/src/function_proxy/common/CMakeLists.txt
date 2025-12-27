@@ -28,6 +28,7 @@ add_subdirectory(state_handler)
 add_subdirectory(state_machine)
 add_subdirectory(iam)
 add_subdirectory(distribute_cache_client)
+add_subdirectory(data_obj_client)
 add_subdirectory(rate_limiter)
 add_subdirectory(common_driver)
 

@@ -74,6 +74,7 @@ struct LocalSchedStartParam {
     std::shared_ptr<::grpc::ServerCredentials> creds;
     std::string posixPort;
     std::string schedulePlugins;
+    std::shared_ptr<DataObjClient> dataObjClient;
     bool enableTenantAffinity;
     bool createLimitationEnable;
     uint32_t tokenBucketCapacity;

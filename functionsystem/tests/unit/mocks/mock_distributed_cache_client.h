@@ -31,6 +31,11 @@ public:
     MOCK_METHOD(Status, Get, (const std::vector<std::string> &keys, std::vector<std::string> &vals), (override));
     MOCK_METHOD(Status, Del, (const std::string &key), (override));
     MOCK_METHOD(Status, Del, (const std::vector<std::string> &keys, std::vector<std::string> &failedKeys), (override));
+    MOCK_METHOD(Status, GetObjMetaInfo,
+                (const std::string &tenantId, const std::vector<std::string> &objs, std::vector<ObjMetaInfo> &meta),
+                (override));
+    MOCK_METHOD(Status, GetWorkerAddrByWorkerId,
+                (const std::vector<std::string> &workerIds, std::vector<std::string> &workerAddrs), (override));
     MOCK_METHOD(Status, GetHealthStatus, (), (override));
     MOCK_METHOD(Status, ShutDown, (), (override));
 };

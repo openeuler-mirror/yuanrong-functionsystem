@@ -32,10 +32,17 @@
 
 namespace functionsystem {
 
-DSCacheClientImpl::DSCacheClientImpl(const datasystem::ConnectOptions &connectOptions)
+DSCacheClientImpl::DSCacheClientImpl(const datasystem::ConnectOptions &connectOptions,
+                                     const RouterConnectOptions &routerConnectOptions)
 {
     kvClient_ = std::make_unique<datasystem::KVClient>(connectOptions);
     dsObjectClient_ = std::make_unique<datasystem::ObjectClient>(connectOptions);
+    dsRouterClient_ = std::make_unique<datasystem::RouterClient>(
+        routerConnectOptions.azName, routerConnectOptions.etcdAddress,
+        datasystem::SensitiveValue(routerConnectOptions.etcdCa.GetData(), routerConnectOptions.etcdCa.GetSize()),
+        datasystem::SensitiveValue(routerConnectOptions.etcdCert.GetData(), routerConnectOptions.etcdCert.GetSize()),
+        datasystem::SensitiveValue(routerConnectOptions.etcdKey.GetData(), routerConnectOptions.etcdKey.GetSize()),
+        routerConnectOptions.etcdDNSName);
 }
 
 Status DSCacheClientImpl::Init()
@@ -44,6 +51,10 @@ Status DSCacheClientImpl::Init()
     if (isDSEnabled_) {
         RETURN_IF_DS_ERROR(kvClient_->Init());
         RETURN_IF_DS_ERROR(dsObjectClient_->Init());
+    }
+
+    if (isRouterEnabled_) {
+        RETURN_IF_DS_ERROR(dsRouterClient_->Init());
     }
     return Status::OK();
 }
@@ -107,6 +118,28 @@ void DSCacheClientImpl::GetAuthConnectOptions(const std::shared_ptr<DSAuthConfig
     }
 }
 
+Status DSCacheClientImpl::GetObjMetaInfo(const std::string &tenantId, const std::vector<std::string> &objs,
+                                         std::vector<ObjMetaInfo> &meta)
+{
+    std::vector<::datasystem::ObjMetaInfo> objMetaInfos;
+    // only set tenantId when ds auth is enabled
+    RETURN_IF_DS_ERROR(dsObjectClient_->GetObjMetaInfo(isDSAuthEnable_ ? tenantId : "", objs, objMetaInfos));
+    for (const auto &metaInfo : objMetaInfos) {
+        ObjMetaInfo temp;
+        temp.objSize = metaInfo.objSize;
+        temp.locations = { metaInfo.locations.begin(), metaInfo.locations.end() };
+        meta.push_back(temp);
+    }
+    return Status::OK();
+}
+
+Status DSCacheClientImpl::GetWorkerAddrByWorkerId(const std::vector<std::string> &workerIds,
+                                                  std::vector<std::string> &workerAddrs)
+{
+    RETURN_IF_DS_ERROR(dsRouterClient_->GetWorkerAddrByWorkerId(workerIds, workerAddrs));
+    return Status::OK();
+}
+
 Status DSCacheClientImpl::GetHealthStatus()
 {
     ::datasystem::Status healthCheckResult = (dsObjectClient_->HealthCheck());
@@ -127,6 +160,11 @@ Status DSCacheClientImpl::ShutDown()
 void DSCacheClientImpl::EnableDSClient(bool isEnable)
 {
     isDSEnabled_ = isEnable;
+}
+
+void DSCacheClientImpl::EnableRouterClient(bool isEnable)
+{
+    isRouterEnabled_ = isEnable;
 }
 
 void DSCacheClientImpl::SetDSAuthEnable(bool isEnable)

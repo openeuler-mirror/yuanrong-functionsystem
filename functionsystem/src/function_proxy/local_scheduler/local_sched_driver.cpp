@@ -178,6 +178,9 @@ Status LocalSchedDriver::Start()
     PosixAPIHandler::BindLocalGroupCtrl(localGroupCtrl_);
     litebus::Spawn(localGroupCtrlActor);
     (void)litebus::Spawn(httpServer_);
+    if (param_.dataObjClient != nullptr) {
+        param_.dataObjClient->InitDistributedCacheClient();
+    }
 
     auto monitor = MetaStoreMonitorFactory::GetInstance().GetMonitor(GetMonitorAddress(param_));
     if (monitor != nullptr) {
@@ -270,6 +273,7 @@ void LocalSchedDriver::BindInstanceCtrl()
     instanceCtrl_->BindMetaStoreClient(metaStoreClient_);
     instanceCtrl_->BindLocalSchedSrv(localSchedSrv_);
     instanceCtrl_->BindInternalIAM(param_.internalIAM);
+    instanceCtrl_->BindDataObjClient(param_.dataObjClient);
     instanceCtrl_->BindResourceGroupCtrl(rGroupCtrl_);
     instanceCtrl_->BindSubscriptionMgr(subscriptionMgr_);
 }
