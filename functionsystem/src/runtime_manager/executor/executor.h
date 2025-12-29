@@ -100,6 +100,10 @@ struct RuntimeConfig {
     bool cleanStreamProducerEnable;
     int virtualEnvIdleTimeLimit;
     bool enableDisConvCallStack;
+    int32_t userLogAutoFlushIntervalMs;
+    int32_t userLogBufferFlushThreshold;
+    unsigned long userLogRollingSizeLimitMb;
+    unsigned long userLogRollingFileCountLimit;
 };
 
 struct PrestartProcess {

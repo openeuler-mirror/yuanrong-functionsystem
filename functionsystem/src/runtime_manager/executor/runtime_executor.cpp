@@ -18,6 +18,7 @@
 
 #include <google/protobuf/util/json_util.h>
 #include <yaml-cpp/yaml.h>
+#include <sys/eventfd.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -123,6 +124,8 @@ const std::vector<std::string> EXCLUDE_ENV_KEYS_PASSED_TO_RUNTIME = {
     UNZIPPED_WORKING_DIR
 };  // job working_dir file unzipped path
 
+const int DEFAULT_STD_MONITOR_EVENT = EPOLLIN | EPOLLHUP | EPOLLERR;
+
 std::function<void()> SetRuntimeIdentity(int userID, int groupID)
 {
     return [groupID, userID]() {
@@ -192,6 +195,9 @@ RuntimeExecutor::RuntimeExecutor(const std::string &name, const litebus::AID &fu
     monitorCallBackActor_ = std::make_shared<MonitorCallBackActor>(mcName, functionAgentAID);
     cmdTool_ = std::make_shared<CmdTool>();
     litebus::Spawn(monitorCallBackActor_);
+    // start std monitor
+    stdMonitor_ = std::make_shared<StdMonitor>();
+    stdMonitor_->Start();
 }
 
 void RuntimeExecutor::Init()
@@ -208,6 +214,10 @@ void RuntimeExecutor::Finalize()
     litebus::Async(monitorCallBackActor_->GetAID(), &MonitorCallBackActor::DeleteAllMonitorAndRemoveDir);
     litebus::Terminate(monitorCallBackActor_->GetAID());
     litebus::Await(monitorCallBackActor_->GetAID());
+
+    stdMonitor_->Stop();
+    stdMonitor_ = nullptr;
+
     stdRedirectors_.clear();
     runtimeInstanceInfoMap_.clear();
     Executor::Finalize();
@@ -553,6 +563,9 @@ litebus::Future<messages::StartInstanceResponse> RuntimeExecutor::StartRuntime(
     if (result.IsError()) {
         return GenFailStartInstanceResponse(request, result.StatusCode());
     }
+    if (config_.separatedRedirectRuntimeStd && NeedToRollUserLog()) {
+        StartRuntimeStdRedirection(info.runtimeid(), execPtr->GetOut(), execPtr->GetErr());
+    }
     if (!config_.separatedRedirectRuntimeStd) {
         litebus::Async(GetStdRedirector(config_.nodeID)->GetAID(), &StdRedirector::StartRuntimeStdRedirection,
                        info.runtimeid(), info.instanceid(), execPtr->GetOut(), execPtr->GetErr());
@@ -570,6 +583,36 @@ litebus::Future<messages::StartInstanceResponse> RuntimeExecutor::StartRuntime(
                                          request->runtimeinstanceinfo().runtimeid());
     }
     return GenSuccessStartInstanceResponse(request, execPtr, port);
+}
+
+
+void RuntimeExecutor::StartRuntimeStdRedirection(const std::string &runtimeID,
+                                                 const litebus::Option<int> stdOut, const litebus::Option<int> stdErr)
+{
+    const StdRedirectParam stdRedirectParam = {
+        .maxLogLength          = config_.userLogBufferFlushThreshold,
+        .flushDuration         = config_.userLogAutoFlushIntervalMs,
+        .stdRollingMaxFileSize = config_.userLogRollingSizeLimitMb,
+        .stdRollingMaxFiles    = config_.userLogRollingFileCountLimit,
+        .exportMode            = FILE_EXPORTER,
+        .logFileExtensions     = DEFAULT_LOG_FILE_OUT_EXTENSIONS,
+    };
+
+    if (stdOut.IsSome()) {
+        std::function<void(int, int)> ReadDataCallback =
+            [aid(GetStdRedirector(runtimeID, stdRedirectParam)->GetAID())](int fd, int event) {
+                litebus::Async(aid, &StdRedirector::ReadStdLogRealTime, fd, event);
+            };
+        stdMonitor_->AddFd(stdOut.Get(), DEFAULT_STD_MONITOR_EVENT, ReadDataCallback);
+    }
+
+    if (stdErr.IsSome()) {
+        std::function<void(int, int)> ReadDataCallback =
+            [aid(GetStdRedirector(runtimeID, stdRedirectParam)->GetAID())](int fd, int event) {
+                litebus::Async(aid, &StdRedirector::ReadStdLogRealTime, fd, event);
+            };
+        stdMonitor_->AddFd(stdErr.Get(), DEFAULT_STD_MONITOR_EVENT, ReadDataCallback);
+    }
 }
 
 Status RuntimeExecutor::WriteProtoToRuntime(const std::string &requestID, const std::string &runtimeID,
@@ -670,6 +713,33 @@ std::shared_ptr<StdRedirector> RuntimeExecutor::GetStdRedirector(const std::stri
     return redirector;
 }
 
+std::shared_ptr<StdRedirector> RuntimeExecutor::GetStdRedirector(const std::string &runtimeID,
+                                                                 const StdRedirectParam &stdRedirectParam)
+{
+    if (stdRedirectors_.find(runtimeID) != stdRedirectors_.end()) {
+        return stdRedirectors_[runtimeID];
+    }
+    auto path = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
+    auto logFileName = runtimeID + stdRedirectParam.logFileExtensions;
+    YRLOG_INFO("{} not found, create a new redirector log file: {} {}", runtimeID, path, logFileName);
+    auto redirector = std::make_shared<StdRedirector>(path, logFileName, stdRedirectParam);
+    (void)litebus::Spawn(redirector);
+    (void)litebus::Async(redirector->GetAID(), &StdRedirector::Start);
+    stdRedirectors_[runtimeID] = redirector;
+    return redirector;
+}
+
+void RuntimeExecutor::StopRedirectorByRuntimeID(const std::string &runtimeID)
+{
+    auto iter = stdRedirectors_.find(runtimeID);
+    if (iter == stdRedirectors_.end()) {
+        return;
+    }
+    litebus::Terminate(iter->second->GetAID());
+    litebus::Await(iter->second->GetAID());
+    stdRedirectors_.erase(iter);
+}
+
 void RuntimeExecutor::ReportInfo(const std::string &instanceID, const std::string runtimeID, const pid_t &pid,
                                  const functionsystem::metrics::MeterTitle &title)
 {
@@ -722,6 +792,11 @@ void RuntimeExecutor::ConfigRuntimeRedirectLog(litebus::ExecIO &stdOut, litebus:
     stdErr = litebus::ExecIO::CreateFileIO(errFile);
 }
 
+bool RuntimeExecutor::NeedToRollUserLog() const
+{
+    return config_.userLogRollingFileCountLimit != 0;
+}
+
 std::shared_ptr<litebus::Exec> RuntimeExecutor::StartRuntimeByRuntimeID(
     const std::map<std::string, std::string> startRuntimeParams, const std::vector<std::string> &buildArgs,
     const Envs &envs, const std::vector<std::function<void()>> childInitHook) const
@@ -737,7 +812,8 @@ std::shared_ptr<litebus::Exec> RuntimeExecutor::StartRuntimeByRuntimeID(
     litebus::ExecIO stdOut = litebus::ExecIO::CreatePipeIO();
     auto stdErr = stdOut;
     if (config_.userLogExportMode == functionsystem::runtime_manager::FILE_EXPORTER
-        && config_.separatedRedirectRuntimeStd) {
+        && config_.separatedRedirectRuntimeStd
+        && !NeedToRollUserLog()) {
         ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID);
     }
     std::string cmd = execPath;
@@ -927,6 +1003,25 @@ void RuntimeExecutor::InheritEnv(std::map<std::string, std::string> &combineEnvs
     }
 }
 
+void RuntimeExecutor::StopMonitoringFD(const std::string &runtimeID, const std::string &requestID)
+{
+    auto execPtr = GetExecByRuntimeID(runtimeID);
+    if (execPtr == nullptr) {
+        YRLOG_WARN("{}|{}|runtime has already been killed.", requestID, runtimeID);
+        return;
+    }
+
+    auto stdOut = execPtr->GetOut();
+    if (stdOut.IsSome()) {
+        stdMonitor_->RemoveFd(stdOut.Get());
+    }
+
+    auto stdErr = execPtr->GetErr();
+    if (stdErr.IsSome()) {
+        stdMonitor_->RemoveFd(stdErr.Get());
+    }
+}
+
 Status RuntimeExecutor::StopInstanceByRuntimeID(const std::string &runtimeID, const std::string &requestID,
                                                 bool oomKilled)
 {
@@ -956,6 +1051,8 @@ Status RuntimeExecutor::StopInstanceByRuntimeID(const std::string &runtimeID, co
     // clear work dir if exist
     litebus::Async(monitorCallBackActor_->GetAID(), &MonitorCallBackActor::DeleteFromMonitorMap, instanceID);
     (void)runtime2PID_.erase(runtimeID);
+    StopMonitoringFD(runtimeID, requestID);
+    StopRedirectorByRuntimeID(runtimeID);
     (void)runtime2Exec_.erase(runtimeID);
     (void)pids_.erase(pidIter->second);
 

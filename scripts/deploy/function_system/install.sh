@@ -500,6 +500,11 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     --log_expiration_time_threshold="${LOG_EXPIRATION_TIME_THRESHOLD}"
     --log_expiration_cleanup_interval="${LOG_EXPIRATION_CLEANUP_INTERVAL}"
     --log_expiration_max_file_count="${LOG_EXPIRATION_MAX_FILE_COUNT}"
+    --user_log_auto_flush_interval_ms="${USER_LOG_AUTO_FLUSH_INTERVAL_MS}"
+    --user_log_buffer_flush_threshold="${USER_LOG_BUFFER_FLUSH_THRESHOLD}"
+    --user_log_rolling_size_limit_mb="${USER_LOG_MAX_ROLLING_FILE_SIZE_MB}"
+    --user_log_rolling_file_count_limit="${USER_LOG_MAX_ROLLING_LOG_FILE_NUM}"
+    --npu_collection_enable="${NPU_COLLECTION_ENABLE}"
   )
 
   # Start with or without redirecting stdout/stderr depending on USER_LOG_EXPORT_MODE

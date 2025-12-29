@@ -35,6 +35,7 @@
 #include "exec/exec.hpp"
 #include "executor.h"
 #include "runtime_manager/config/flags.h"
+#include "runtime_manager/std_monitor/std_monitor.h"
 #include "runtime_manager/utils/std_redirector.h"
 #include "utils/volume_mount.h"
 #include "virtual_env_manager/virtual_env_manager.h"
@@ -67,6 +68,40 @@ public:
 
     litebus::Future<messages::UpdateCredResponse> UpdateCredForRuntime(
         const std::shared_ptr<messages::UpdateCredRequest> &request) override;
+
+    // for test
+    [[maybe_unused]] void ProtectedHookRuntimeCredentialByID(std::vector<std::function<void()>> &initHook, int userID,
+                                                             int groupID) const
+    {
+        HookRuntimeCredentialByID(initHook, userID, groupID);
+    }
+
+    // for test
+    [[maybe_unused]] bool ProtectedCheckPrestartRuntimeRetry(const std::string &runtimeID, const std::string &language,
+                                                             const int retryTimes)
+    {
+        return CheckPrestartRuntimeRetry(runtimeID, language, retryTimes);
+    }
+
+    // for test
+    [[maybe_unused]] int CheckPrestartRuntimePromise()
+    {
+        int cnt = 0;
+        for (auto iter = prestartRuntimePromiseMap_.begin(); iter != prestartRuntimePromiseMap_.end(); ++iter) {
+            if (iter->second->GetFuture().IsError() || iter->second->GetFuture().IsOK()) {
+                cnt++;
+            } else {
+                return 0;
+            }
+        }
+        return cnt;
+    }
+
+    // for test
+    [[maybe_unused]] void SetStdRedirectors(const std::string logName, const std::shared_ptr<StdRedirector> redirector)
+    {
+        stdRedirectors_[logName] = redirector;
+    }
 
     litebus::Future<bool> StopAllRuntimes();
 
@@ -104,9 +139,16 @@ private:
 
     std::shared_ptr<StdRedirector> GetStdRedirector(const std::string &logName);
 
+    std::shared_ptr<StdRedirector> GetStdRedirector(const std::string &runtimeID,
+                                                    const StdRedirectParam &stdRedirectParam);
+
+    void StopRedirectorByRuntimeID(const std::string &runtimeID);
+
     litebus::Future<messages::StartInstanceResponse> StartInstanceWithoutPrestart(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &language,
         const std::vector<int> &cardIDs);
+
+    bool NeedToRollUserLog() const;
 
     std::shared_ptr<litebus::Exec> StartRuntimeByRuntimeID(
         const std::map<std::string, std::string> startRuntimeParams, const std::vector<std::string> &buildArgs,
@@ -131,6 +173,8 @@ private:
     void KillProcess(const pid_t &pid, bool force = false);
 
     bool ShouldUseProcessGroup() const;
+
+    void StopMonitoringFD(const std::string &runtimeID, const std::string &requestID);
 
     void TerminateImmediately(pid_t pid, std::string_view processType);
 
@@ -272,6 +316,9 @@ private:
 
     void ConfigRuntimeRedirectLog(litebus::ExecIO &stdOut, litebus::ExecIO &stdErr, const std::string &runtimeID) const;
 
+    void StartRuntimeStdRedirection(const std::string &runtimeID,
+                                    const litebus::Option<int> stdOut, const litebus::Option<int> stdErr);
+
     std::pair<Status, std::string> GetPythonExecPath(
         const google::protobuf::Map<std::string, std::string> &deployOptions,
         const messages::RuntimeInstanceInfo &info) const;
@@ -297,6 +344,8 @@ private:
     std::shared_ptr<MonitorCallBackActor> monitorCallBackActor_{ nullptr };
     std::shared_ptr<CmdTool> cmdTool_;
     std::shared_ptr<VirtualEnvManager> virtualEnvMgr_{ nullptr };
+    std::shared_ptr<StdMonitor> stdMonitor_{ nullptr };
+    StdRedirectParam stdRedirectParam_;
 };
 
 class RuntimeExecutorProxy : public ExecutorProxy {

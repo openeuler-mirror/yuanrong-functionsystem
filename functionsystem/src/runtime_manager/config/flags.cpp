@@ -46,6 +46,11 @@ const int MAX_DISK_LIMIT = 1024 * 1024;
 const int DEFAULT_MAX_LOG_SIZE_MB = 40;
 const int DEFAULT_MAX_LOG_FILE_NUM = 20;
 
+const int32_t DEFAULT_USER_LOG_AUTO_FLUSH_INTERVAL_MS = 10000;
+const int32_t DEFAULT_USER_LOG_BUFFER_FLUSH_THRESHOLD = 1024 * 1024;
+const unsigned long DEFAULT_USER_LOG_MAX_ROLLING_FILE_SIZE_MB = 100;
+const unsigned long DEFAULT_USER_LOG_MAX_ROLLING_LOG_FILE_NUM = 100;
+
 const uint32_t DEFAULT_RUNTIME_DS_CONNECT_TIMEOUT = 60; // s
 
 const int MIN_MEMORY_DETECTION_INTERVAL = 100; // ms
@@ -181,7 +186,13 @@ Flags::Flags()
     AddFlag(&Flags::runtimeInstanceDebugEnable_, "runtime_instance_debug_enable", "runtime instance debug enable",
             false);
     AddFlag(&Flags::userLogExportMode_, "user_log_export_mode", "user log export mode: std/file", "file");
-    AddFlag(&Flags::enableDisConvCallStack_, "enable_dis_conv_call_stack", "enable distributed convergent call stack",
-            false);
+    AddFlag(&Flags::userLogAutoFlushIntervalMs_, "user_log_auto_flush_interval_ms",
+            "Interval in milliseconds for auto flushing user logs", DEFAULT_USER_LOG_AUTO_FLUSH_INTERVAL_MS);
+    AddFlag(&Flags::userLogBufferFlushThreshold_, "user_log_buffer_flush_threshold",
+            "Threshold for flushing user log buffer", DEFAULT_USER_LOG_BUFFER_FLUSH_THRESHOLD);
+    AddFlag(&Flags::userLogRollingSizeLimitMb_, "user_log_rolling_size_limit_mb",
+            "Maximum size limit (in MB) for a single user log file", DEFAULT_USER_LOG_MAX_ROLLING_FILE_SIZE_MB);
+    AddFlag(&Flags::userLogRollingFileCountLimit_, "user_log_rolling_file_count_limit",
+            "Maximum number of user log files to retain", DEFAULT_USER_LOG_MAX_ROLLING_LOG_FILE_NUM);
 }
 }  // namespace functionsystem::runtime_manager
