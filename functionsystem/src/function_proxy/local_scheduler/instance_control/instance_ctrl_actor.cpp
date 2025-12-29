@@ -6136,11 +6136,12 @@ litebus::Future<Status> InstanceCtrlActor::ToSuspend(const std::string &instance
         auto info = stateMachine->GetInstanceInfo();
         return litebus::Async(aid, &InstanceCtrlActor::KillRuntime, info, false)
             .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, std::placeholders::_1, info))
-            .Then([aid, instanceInfo(info), groupInsClear(groupInstanceClear)]
+            .Then([aid, instanceInfo(info), groupInsClear(groupInstanceClear), stateMachine]
                     (const Status &status) -> litebus::Future<Status> {
                 if (status.IsError()) {
                     return status;
                 }
+                stateMachine->ReleaseOwner();
                 // Delete the reserved resource information corresponding to the group instance
                 // bound to the local node when instance suspend.
                 if (!instanceInfo.groupid().empty() && groupInsClear != nullptr) {
