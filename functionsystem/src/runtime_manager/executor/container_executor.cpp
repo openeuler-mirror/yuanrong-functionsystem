@@ -282,8 +282,10 @@ void ContainerExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::strin
     }
 }
 
-std::string trimDash(const std::string& s) {
-    if (s.empty()) return s;
+std::string trimDash(const std::string &s)
+{
+    if (s.empty())
+        return s;
 
     size_t start = s.find_first_not_of('-');
     if (start == std::string::npos) {
@@ -292,6 +294,21 @@ std::string trimDash(const std::string& s) {
     size_t end = s.find_last_not_of('-');
 
     return s.substr(start, end - start + 1);
+}
+
+std::string DirName(const std::string &path)
+{
+    if (path.empty()) {
+        return "";
+    }
+    size_t pos = path.find_last_of('/');
+    if (pos == std::string::npos) {
+        return "";
+    }
+    if (pos == 0) {
+        return "/";
+    }
+    return path.substr(0, pos);
 }
 
 Envs BuildMountForCode(const std::shared_ptr<runtime::v1::StartRequest> &start,
@@ -308,9 +325,6 @@ Envs BuildMountForCode(const std::shared_ptr<runtime::v1::StartRequest> &start,
     if (libPathIter != envs.posixEnvs.end() && !libPathIter->second.empty()) {
         funcPath = libPathIter->second;
     }
-    std::string funcPathTarget = funcPath;
-    std::replace(funcPathTarget.begin(), funcPathTarget.end(), '/', '-');
-    code->set_target(litebus::os::Join(request->runtimeinstanceinfo().container().mountpoint(), trimDash(funcPathTarget)));
 
     auto workingDirIter = envs.posixEnvs.find(UNZIPPED_WORKING_DIR);
     if (workingDirIter == envs.posixEnvs.end() || workingDirIter->second.empty()) {
@@ -319,8 +333,14 @@ Envs BuildMountForCode(const std::shared_ptr<runtime::v1::StartRequest> &start,
         code->set_source(workingDirIter->second);
         if (workingDirIter->second.find(".img") != std::string::npos) {
             code->set_type("erofs");
+            funcPath = DirName(workingDirIter->second);
         }
     }
+    std::string funcPathTarget = funcPath;
+    std::replace(funcPathTarget.begin(), funcPathTarget.end(), '/', '-');
+    code->set_target(
+        litebus::os::Join(request->runtimeinstanceinfo().container().mountpoint(), trimDash(funcPathTarget)));
+
     updateEnv.posixEnvs[UNZIPPED_WORKING_DIR] = code->target();
     updateEnv.posixEnvs["YR_FUNCTION_LIB_PATH"] = code->target();
     updateEnv.posixEnvs["FUNCTION_LIB_PATH"] = code->target();
