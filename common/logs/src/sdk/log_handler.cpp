@@ -45,6 +45,12 @@ void DoLogFileRolling(const observability::api::logs::LogParam &logParam)
     std::vector<std::string> files;
     // glog gzip filename format: <nodeName>-<modelName>.<time>.log.gz
     std::stringstream ss;
+    std::string logFileExtensions = "*[0-9]\\";
+    if (!logParam.logFileExtensions.empty()) {
+        logFileExtensions += logParam.logFileExtensions;
+    } else {
+        logFileExtensions += ".log";
+    }
     ss << logParam.logDir.c_str() << "/" << logParam.fileNamePattern.c_str() << "\\."
        << "*[0-9]\\.log"
        << "\\.gz";
@@ -85,6 +91,8 @@ void DoLogFileCompress(const observability::api::logs::LogParam &logParam)
     std::vector<std::string> files;
     // function system log filename format: <nodeName>-<modelName>.<idx>.log
     std::stringstream ss;
+    std::string logFileExtensions = "*[0-9]\\";
+    logParam.logFileExtensions.empty() ? logFileExtensions += ".log" : logFileExtensions += logParam.logFileExtensions;
     ss << logParam.logDir.c_str() << "/" << logParam.fileNamePattern.c_str() << "\\."
        << "*[0-9]\\.log";
     std::string pattern = ss.str();

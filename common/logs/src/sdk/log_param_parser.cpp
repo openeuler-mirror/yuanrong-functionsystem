@@ -49,7 +49,10 @@ std::string GetLogFile(const LogsApi::LogParam &param)
         logFile = param.logDir + "/" + param.nodeName + "-" + param.modelName;
     }
     if (param.logFileWithTime) {
-        logFile += "-" + FormatTimePoint() + ".log";
+        logFile += "-" + FormatTimePoint();
+    }
+    if (!param.logFileExtensions.empty()) {
+        logFile += param.logFileExtensions;
     } else {
         logFile += ".log";
     }

@@ -140,6 +140,10 @@ void Executor::SetRuntimeConfig(const Flags &flags)
     config_.massifEnable = flags.GetMassifEnable();
     config_.inheritEnv = flags.GetInheritEnv();
     config_.separatedRedirectRuntimeStd = flags.GetSeparetedRedirectRuntimeStd();
+    config_.userLogAutoFlushIntervalMs = flags.GetUserLogAutoFlushIntervalMs();
+    config_.userLogBufferFlushThreshold = flags.GetUserLogBufferFlushThreshold();
+    config_.userLogRollingSizeLimitMb = flags.GetUserLogRollingSizeLimitMb();
+    config_.userLogRollingFileCountLimit = flags.GetUserLogRollingFileCountLimit();
     const std::string &prestartConfig = flags.GetRuntimePrestartConfig();
     if (!prestartConfig.empty() && prestartConfig != "{}") {
         YRLOG_DEBUG("prestart config is not empty, start to parse");

@@ -38,6 +38,8 @@ const unsigned long STD_ROLLING_MAX_FILES = 100;
 const std::string ERROR_LEVEL = "ERROR";
 const std::string INFO_LEVEL = "INFO";
 const std::string STD_POSTFIX = "-user_func_std.log";
+const std::string DEFAULT_LOG_FILE_EXTENSIONS = ".log";
+const std::string DEFAULT_LOG_FILE_OUT_EXTENSIONS = ".out";
 
 struct StdRedirectParam {
     int32_t maxLogLength{ MAX_LOG_LENGTH };
@@ -45,6 +47,7 @@ struct StdRedirectParam {
     unsigned long stdRollingMaxFileSize{ STD_ROLLING_MAX_FILE_SIZE };
     unsigned long stdRollingMaxFiles{ STD_ROLLING_MAX_FILES };
     std::string exportMode { functionsystem::runtime_manager::FILE_EXPORTER };
+    std::string logFileExtensions{ DEFAULT_LOG_FILE_EXTENSIONS };
 };
 
 struct RuntimeStandardLog {
@@ -72,6 +75,7 @@ public:
         param_.flushDuration = flushDuration;
         param_.stdRollingMaxFileSize = STD_ROLLING_MAX_FILE_SIZE;
         param_.stdRollingMaxFiles = STD_ROLLING_MAX_FILES;
+        param_.logFileExtensions = DEFAULT_LOG_FILE_EXTENSIONS;
     }
 
     StdRedirector(const std::string &path, const std::string &logName, const StdRedirectParam &param)
@@ -86,11 +90,15 @@ public:
                                     const litebus::Option<int> stdOut, const litebus::Option<int> stdErr);
     static std::string GetStdLog(const std::string &logFile, const std::string &runtimeID, const std::string &level,
                                  int32_t targetLineCnt = 20, int32_t readLineCnt = 1000);
+    void ReadStdLogRealTime(int fd, int event);
+
+    void TerminatePipeReader(int fd);
 
 private:
     void FlushToDisk(const RuntimeStandardLog &log);
     void SetStdLogContent(const std::string &content, const std::string &runtimeID,
                           const std::string &instanceID, const std::string &level);
+    void SetStdLogRawContent(const std::string &content);
     void FlushLogContentRegularly();
     void SetTimer(const litebus::Timer &timer)
     {
@@ -119,6 +127,8 @@ private:
     void FlushToDiskDirectly();
     void FlushToStd();
 
+    litebus::AID GetPipeAsyncReader(int fd);
+
     bool logFileNotExist_{ false };
     // (origin) logger
     std::string path_;
@@ -134,6 +144,7 @@ private:
     std::shared_ptr<yr_spdlog::logger> userStdLogger_;
     std::shared_ptr<observability::api::logs::LoggerProvider> lp_{ nullptr };
     std::shared_ptr<observability::sdk::logs::LogManager> logManager_{ nullptr };
+    std::unordered_map<int, litebus::AID> fd2Readers_;
 
     void Finalize() override;
 };

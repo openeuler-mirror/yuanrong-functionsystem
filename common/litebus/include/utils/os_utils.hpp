@@ -121,6 +121,7 @@ public:
                       int readMaxSize = BUFFER_CONTENT_SIZE);
     void ReadFromPipeRealTime(int fd, std::shared_ptr<Promise<std::string>> promise, AID aid,
                               const std::function<void(const std::string &)> &readPipeCallback);
+    void ImmediatePipeReadOperation(int fd, const std::function<void(const std::string&)>& dataCallback);
 };
 
 litebus::Future<std::string> ReadPipeAsync(int fd, bool readASync = true);

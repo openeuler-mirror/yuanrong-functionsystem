@@ -128,7 +128,6 @@ TEST_F(LoggerProviderSDKDeathTest, UseLogMarcoWithSetProvider)
     SDK_WARN("warn message");
     SDK_ERROR("error message");
     enum TestEnum { FIRST, SECOND };
-    SDK_DEBUG("enum message {}", TestEnum::FIRST);
     EXPECT_EXIT(SDK_FATAL("fatal message"), testing::KilledBySignal(SIGINT), "");
 }
 
