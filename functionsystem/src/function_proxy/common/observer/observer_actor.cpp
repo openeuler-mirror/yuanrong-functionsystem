@@ -1070,6 +1070,51 @@ litebus::Future<SyncResult> ObserverActor::InstanceInfoSyncer(const std::shared_
     return syncResult;
 }
 
+void ObserverActor::DeleteInstanceRouteEvent(const std::shared_ptr<GetResponse> &getResponse,
+                                             const std::string &instanceID)
+{
+    KeyValue kv;
+    kv.set_key(GenInstanceRouteKey(instanceID));
+    kv.set_mod_revision(getResponse->header.revision);
+    WatchEvent event{ .eventType = EVENT_TYPE_DELETE, .kv = kv, .prevKv = {} };
+    UpdateInstanceRouteEvent({ event }, true);
+}
+
+litebus::Future<SyncResult> ObserverActor::DealWithInstanceNotInEtcd(
+    const std::shared_ptr<GetResponse> &getResponse, const std::string &instanceID, SyncResult syncResult,
+    std::unordered_map<std::string, resource_view::InstanceInfo>::iterator localInstance)
+{
+    // (1) instance not on current node, update cache with etcd, delete cache
+    if (localInstance->second.functionproxyid() != nodeID_) {
+        YRLOG_DEBUG("need to delete instance {}, which is not in etcd and belong to {}", instanceID,
+                    localInstance->second.functionproxyid());
+        DeleteInstanceRouteEvent(getResponse, instanceID);
+        return syncResult;
+    }
+
+    // (2) instance is on current node, update etcd if needed
+    if (!IsLowReliabilityInstance(localInstance->second)
+        && static_cast<InstanceState>(localInstance->second.instancestatus().code()) != InstanceState::SCHEDULING) {
+        if (!functionsystem::NeedUpdateRouteState(
+            static_cast<InstanceState>(localInstance->second.instancestatus().code()), isMetaStoreEnabled_)) {
+            return syncResult;  // ignore non-route info
+        }
+
+        YRLOG_DEBUG("instance({}) isn't exist in meta-store, put instance", localInstance->first);
+        // this key doesn't exist in etcd anymore, putting it agent will reset etcd's key version to 1
+        localInstance->second.set_version(1);
+        PutInstance(localInstance->second, true);
+    }
+
+    if (IsLowReliabilityInstance(localInstance->second)) {
+        YRLOG_WARN("failed to find low reliability instance({}) in meta-store, delete local instance",
+                   localInstance->first);
+        DelInstanceEvent(instanceID, getResponse->header.revision);
+    }
+
+    return syncResult;
+}
+
 litebus::Future<SyncResult> ObserverActor::PartialInstanceInfoSyncer(const std::shared_ptr<GetResponse> &getResponse,
                                                                      const std::string &instanceID)
 {
@@ -1088,32 +1133,7 @@ litebus::Future<SyncResult> ObserverActor::PartialInstanceInfoSyncer(const std::
     // 1. instance doesn't exist in etcd
     // (1) but exists in local cache
     if (events.empty() && localInstance != instanceInfoMap_.end()) {
-        // instance not on current node, update cache with etcd, delete cache
-        if (localInstance->second.functionproxyid() != nodeID_) {
-            YRLOG_DEBUG("need to delete instance {}, which is not in etcd and belong to {}", instanceID,
-                        localInstance->second.functionproxyid());
-            KeyValue kv;
-            kv.set_key(GenInstanceRouteKey(instanceID));
-            kv.set_mod_revision(getResponse->header.revision);
-            WatchEvent event{ .eventType = EVENT_TYPE_DELETE, .kv = kv, .prevKv = {} };
-            UpdateInstanceRouteEvent({ event }, true);
-            return syncResult;
-        }
-
-        // (2) instance is on current node, update etcd if needed
-        if (!IsLowReliabilityInstance(localInstance->second)
-            && static_cast<InstanceState>(localInstance->second.instancestatus().code()) != InstanceState::SCHEDULING) {
-            if (!functionsystem::NeedUpdateRouteState(
-                    static_cast<InstanceState>(localInstance->second.instancestatus().code()), isMetaStoreEnabled_)) {
-                return syncResult;  // ignore non-route info
-            }
-
-            YRLOG_DEBUG("instance({}) isn't exist in meta-store, put instance", localInstance->first);
-            // this key doesn't exist in etcd anymore, putting it agent will reset etcd's key version to 1
-            localInstance->second.set_version(1);
-            PutInstance(localInstance->second, true);
-        }
-        return syncResult;
+        return DealWithInstanceNotInEtcd(getResponse, instanceID, syncResult, localInstance);
     }
     auto eventKey = TrimKeyPrefix(events.at(0).kv.key(), metaStorageAccessor_->GetMetaClient()->GetTablePrefix());
     auto keyInfo = ParseInstanceKey(eventKey);

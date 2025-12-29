@@ -937,10 +937,19 @@ std::vector<WatchEvent> GenerateResponseRouteEvent(std::string NodeID) {
     auto key4 = R"(/yr/route/business/yrk/InstanceID4)";
     std::string value4 = R"({"instanceID":"InstanceID4","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-4","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","functionProxyID":"XXXXXXX","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID4","tenantID":"12345678901234561234567890123456","version":"3"})";
 
+    auto key5 = R"(/yr/route/business/yrk/InstanceID5)";
+    std::string value5 = R"({"instanceID":"InstanceID5","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-5","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","functionProxyID":"XXXXXXX","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID5","tenantID":"12345678901234561234567890123456","version":"5","createOptions":{"ReliabilityType":"low"}})";
+
     std::string from = "XXXXXXX";
     size_t start_pos = 0;
     while ((start_pos = value4.find(from, start_pos)) != std::string::npos) {
         value4.replace(start_pos, from.length(), NodeID);
+        start_pos += NodeID.length(); // Move past the replaced substring
+    }
+
+    start_pos = 0;
+    while ((start_pos = value5.find(from, start_pos)) != std::string::npos) {
+        value5.replace(start_pos, from.length(), NodeID);
         start_pos += NodeID.length(); // Move past the replaced substring
     }
 
@@ -951,6 +960,7 @@ std::vector<WatchEvent> GenerateResponseRouteEvent(std::string NodeID) {
         {key2, value2},
         {key3, value3},
         {key4, value4},
+        {key5, value5},
     };
     auto mod = 0;
     for (auto elem : kvMap) {
@@ -1209,5 +1219,34 @@ TEST_F(ObserverTest, PartialInstanceInfoSyncerTest)
     ASSERT_TRUE(future.Get().status.IsOk());
     // test belong to self, not found in remote, don't delete
     EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID4") == 1);
+}
+
+TEST_F(ObserverTest, PartialInstanceInfoSyncerLowReliabilityTest)
+{
+    auto mockMetaStoreClient = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
+    metaStorageAccessor_->metaClient_ = mockMetaStoreClient;
+
+    observerActor_->instanceInfoMap_.clear();
+    observerActor_->instanceModRevisionMap_.clear();
+    auto events = GenerateResponseRouteEvent(observerActor_->nodeID_);
+    std::vector<WatchEvent> putEvents({ events[5] });
+    observerActor_->UpdateInstanceRouteEvent(putEvents, true);
+    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID5") != 0);
+
+    std::shared_ptr<GetResponse> rep = std::make_shared<GetResponse>();
+    rep->header.revision = 5;
+    rep->status = Status::OK();
+
+    controlPlaneObserver_->SetInstanceInfoSyncerCbFunc([](const resource_view::RouteInfo &) { return Status::OK(); });
+
+    rep->kvs.clear();
+    resources::InstanceInfo info = observerActor_->instanceInfoMap_["InstanceID5"];
+    (*info.mutable_createoptions())["ReliabilityType"] = "low";
+    observerActor_->instanceInfoMap_["InstanceID5"] = info;
+
+    auto future = observerActor_->PartialInstanceInfoSyncer(rep, "InstanceID5");
+    ASSERT_AWAIT_READY(future);
+    ASSERT_TRUE(future.Get().status.IsOk());
+    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID5") == 0);
 }
 }  // namespace functionsystem::test

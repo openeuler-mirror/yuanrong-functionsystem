@@ -336,6 +336,12 @@ private:
 
     litebus::Future<SyncResult> InstanceInfoSyncer(const std::shared_ptr<GetResponse> &getResponse);
 
+    void DeleteInstanceRouteEvent(const ::std::shared_ptr<GetResponse> &getResponse, const std::string &instanceID);
+
+    litebus::Future<SyncResult> DealWithInstanceNotInEtcd(
+        const std::shared_ptr<GetResponse> &getResponse, const std::string &instanceID, SyncResult syncResult,
+        std::unordered_map<std::string, resource_view::InstanceInfo>::iterator localInstance);
+
     litebus::Future<SyncResult> PartialInstanceInfoSyncer(const std::shared_ptr<GetResponse> &getResponse,
                                                           const std::string &instanceID);
 
