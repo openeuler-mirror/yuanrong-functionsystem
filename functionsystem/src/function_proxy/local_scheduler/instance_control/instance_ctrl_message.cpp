@@ -128,6 +128,7 @@ void BuildRootfsConfig(
         GetFuncName(funcMeta.funcMetaData.name, funcMeta.funcMetaData.version, funcMeta.funcMetaData.tenantId);
     container->set_id(std::to_string(std::hash<std::string>{}(funkey.Get())));
     container->set_runtime(funcMeta.rootfs.runtime);
+    container->set_mountpoint(funcMeta.rootfs.mountpoint);
     container->mutable_rootfsconfig()->set_readonly(funcMeta.rootfs.readonly);
     container->mutable_rootfsconfig()->set_type(static_cast<runtime::v1::RootfsSrcType>(funcMeta.rootfs.type));
     if (funcMeta.rootfs.type == RootfsSrcType::S3) {

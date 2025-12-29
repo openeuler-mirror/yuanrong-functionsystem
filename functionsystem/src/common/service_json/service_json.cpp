@@ -579,6 +579,9 @@ void ParseRootfsSpec(RootfsSpecMeta &rootfs, const nlohmann::json &h)
     if (rf.find("imageurl") != rf.end()) {
         rootfs.imageurl = rf.at("imageurl");
     }
+    if (rf.find("mountpoint") != rf.end()) {
+        rootfs.mountpoint = rf.at("mountpoint");
+    }
     if (rf.find("readonly") != rf.end()) {
         if (rf.at("readonly").is_boolean()) {
             rootfs.readonly = rf.at("readonly");

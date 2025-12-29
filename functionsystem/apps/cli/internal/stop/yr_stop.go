@@ -62,9 +62,7 @@ const (
 	defaultGraceExitTimeout = 5
 )
 
-var (
-	errorGetZeroYuanRongProcesses = errors.New("didn't find any yuanrong processes")
-)
+var errorGetZeroYuanRongProcesses = errors.New("didn't find any yuanrong processes")
 
 // InitYrCMD init login cmd
 func InitYrCMD(cio *cmdio.CmdIO) *cobra.Command {
@@ -88,7 +86,7 @@ func yrStopYuanRong(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	var keywords = []string{
+	keywords := []string{
 		filepath.Join(yuanRongDir, "deploy", "process", "deploy.sh"),
 		filepath.Join(yuanRongDir, "functionsystem"),
 		filepath.Join(yuanRongDir, "datasystem"),
@@ -164,7 +162,7 @@ func filterProcesses(processes []process, keywords []string) []process {
 	}
 	for _, p := range processes {
 		for keyword := range keywordSet {
-			if strings.Contains(p.Cmdline, keyword) {
+			if strings.Contains(p.Cmdline, keyword) && !strings.Contains(p.Cmdline, "bin/yr") {
 				p.Keyword = keyword
 				filtered = append(filtered, p)
 				break
@@ -232,7 +230,6 @@ func handleProcess(p process, graceExitTimeout time.Duration) {
 	if err != nil {
 		return
 	}
-
 	select {
 	case <-time.After(graceExitTimeout):
 		colorMap := []colorprint.StringColorInfo{
