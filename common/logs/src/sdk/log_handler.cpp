@@ -51,9 +51,7 @@ void DoLogFileRolling(const observability::api::logs::LogParam &logParam)
     } else {
         logFileExtensions += ".log";
     }
-    ss << logParam.logDir.c_str() << "/" << logParam.fileNamePattern.c_str() << "\\."
-       << "*[0-9]\\.log"
-       << "\\.gz";
+    ss << logParam.logDir.c_str() << "/" << logParam.fileNamePattern.c_str() << "\\." << logFileExtensions << "\\.gz";
     std::string pattern = ss.str();
     Glob(pattern, files);
 
@@ -93,8 +91,7 @@ void DoLogFileCompress(const observability::api::logs::LogParam &logParam)
     std::stringstream ss;
     std::string logFileExtensions = "*[0-9]\\";
     logParam.logFileExtensions.empty() ? logFileExtensions += ".log" : logFileExtensions += logParam.logFileExtensions;
-    ss << logParam.logDir.c_str() << "/" << logParam.fileNamePattern.c_str() << "\\."
-       << "*[0-9]\\.log";
+    ss << logParam.logDir.c_str() << "/" << logParam.fileNamePattern.c_str() << "\\." << logFileExtensions;
     std::string pattern = ss.str();
     Glob(pattern, files);
 
