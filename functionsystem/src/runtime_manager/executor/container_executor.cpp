@@ -282,6 +282,18 @@ void ContainerExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::strin
     }
 }
 
+std::string trimDash(const std::string& s) {
+    if (s.empty()) return s;
+
+    size_t start = s.find_first_not_of('-');
+    if (start == std::string::npos) {
+        return "";
+    }
+    size_t end = s.find_last_not_of('-');
+
+    return s.substr(start, end - start + 1);
+}
+
 Envs BuildMountForCode(const std::shared_ptr<runtime::v1::StartRequest> &start,
                        const std::shared_ptr<messages::StartInstanceRequest> &request, const Envs &envs)
 {
@@ -298,7 +310,7 @@ Envs BuildMountForCode(const std::shared_ptr<runtime::v1::StartRequest> &start,
     }
     std::string funcPathTarget = funcPath;
     std::replace(funcPathTarget.begin(), funcPathTarget.end(), '/', '-');
-    code->set_target(litebus::os::Join("/var/task/code", funcPathTarget));
+    code->set_target(litebus::os::Join(request->runtimeinstanceinfo().container().mountpoint(), trimDash(funcPathTarget)));
 
     auto workingDirIter = envs.posixEnvs.find(UNZIPPED_WORKING_DIR);
     if (workingDirIter == envs.posixEnvs.end() || workingDirIter->second.empty()) {

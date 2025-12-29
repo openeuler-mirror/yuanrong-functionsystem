@@ -191,6 +191,8 @@ struct RootfsSpecMeta {
     bool readonly;
     // for s3 storage info
     RootfsStorageInfo storageInfo;
+    // for mount point
+    std::string mountpoint;
 };
 
 struct Initializer {
