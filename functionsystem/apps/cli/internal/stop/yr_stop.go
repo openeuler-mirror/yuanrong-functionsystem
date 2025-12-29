@@ -162,7 +162,7 @@ func filterProcesses(processes []process, keywords []string) []process {
 	}
 	for _, p := range processes {
 		for keyword := range keywordSet {
-			if strings.Contains(p.Cmdline, keyword) && !strings.Contains(p.Cmdline, "bin/yr") {
+			if strings.Contains(p.Cmdline, keyword) && p.PID != os.Getpid() {
 				p.Keyword = keyword
 				filtered = append(filtered, p)
 				break
