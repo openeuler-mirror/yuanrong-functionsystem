@@ -301,6 +301,25 @@ public:
     {
         return runtimeDirectConnectionEnable_;
     }
+    int32_t GetUserLogAutoFlushIntervalMs() const
+    {
+        return userLogAutoFlushIntervalMs_;
+    }
+
+    int32_t GetUserLogBufferFlushThreshold() const
+    {
+        return userLogBufferFlushThreshold_;
+    }
+
+    unsigned long GetUserLogRollingSizeLimitMb() const
+    {
+        return userLogRollingSizeLimitMb_;
+    }
+
+    unsigned long GetUserLogRollingFileCountLimit() const
+    {
+        return userLogRollingFileCountLimit_;
+    }
 
     bool GetCleanStreamProducerEnable() const
     {
@@ -460,6 +479,10 @@ protected:
     std::string userLogExportMode_;
     std::string diskResources_;
     bool enableDisConvCallStack_ = false;
+    int32_t userLogAutoFlushIntervalMs_;
+    int32_t userLogBufferFlushThreshold_;
+    unsigned long userLogRollingSizeLimitMb_;
+    unsigned long userLogRollingFileCountLimit_;
 };
 }  // namespace functionsystem::runtime_manager
 

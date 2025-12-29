@@ -23,6 +23,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <poll.h>
+#include <chrono>
 #include "async/async.hpp"
 #include "async/asyncafter.hpp"
 #include "async/uuid_generator.hpp"
@@ -487,6 +488,12 @@ void PipeReadActor::ReadFromPipeRealTime(int fd, std::shared_ptr<Promise<std::st
         std::string msg = "fd read finish: " + std::to_string(errno);
         promise->SetValue(msg);
     }
+}
+
+void PipeReadActor::ImmediatePipeReadOperation(int fd, const std::function<void(const std::string&)>& dataCallback)
+{
+    ReadPipeRealTime(fd, dataCallback);
+    BUSLOG_DEBUG("Completed immediate read operation for fd:{}", fd);
 }
 
 // atomic int read actor name

@@ -23,6 +23,7 @@
 
 #include "common/constants/constants.h"
 #include "common/status/status.h"
+#include "common/utils/exec_utils.h"
 #include "common/utils/files.h"
 #include "common/utils/path.h"
 #include "gtest/gtest.h"
@@ -30,6 +31,7 @@
 #include "port/port_manager.h"
 #include "runtime_manager/healthcheck/health_check.h"
 #include "runtime_manager/metrics/mock_function_agent_actor.h"
+#include "runtime_manager/utils/std_redirector.h"
 #include "utils/future_test_helper.h"
 #include "utils/os_utils.hpp"
 #include "utils/port_helper.h"
@@ -2010,6 +2012,109 @@ TEST_F(RuntimeExecutorTest, StartJobEntrypoint_InvalidWorkingDirTest)
 
     auto response = executor_->StartInstance(request1, {}).Get();
     EXPECT_EQ(response.code(), RUNTIME_MANAGER_WORKING_DIR_FOR_APP_NOTFOUND);
+}
+
+TEST_F(RuntimeExecutorTest, TestStartRuntimeStdRedirection)
+{
+    (void)litebus::os::Rm("/home/snuser/instances/test_runtime_id.out");
+    runtime_manager::Flags flags;
+    const char *argv[] = { "/runtime_manager", "--node_id=testid", "--ip=127.0.0.1","--host_ip=127.0.0.1", "--port=32233",
+                           "--runtime_initial_port=500", "--runtime_std_log_dir=instances",
+                           "--runtime_direct_connection_enable=false",
+                           "--enable_separated_redirect_runtime_std=true"};
+    flags.ParseFlags(9, argv);
+    executor_->SetRuntimeConfig(flags);
+    auto stdOut = litebus::ExecIO::CreatePipeIO();
+    auto stdOErr = stdOut;
+    litebus::Try<std::shared_ptr<litebus::Exec>> s = litebus::Exec::CreateExec(
+            "echo start; cp a b; echo end;", litebus::None(), litebus::ExecIO::CreateFDIO(STDIN_FILENO),
+            stdOut, stdOErr);
+    executor_->StartRuntimeStdRedirection("test_runtime_id", s.Get()->GetOut(), s.Get()->GetErr());
+    ASSERT_AWAIT_TRUE([=]() {
+        auto output = litebus::os::Read("/home/snuser/instances/test_runtime_id.out");
+        return output.IsSome() &&
+               (output.Get().find("start") != std::string::npos) &&
+               (output.Get().find("No such file or directory") != std::string::npos) &&
+               (output.Get().find("end") != std::string::npos);
+    });
+    (void)litebus::os::Rm("/home/snuser/instances/test_runtime_id.out");
+}
+
+// Note: this case run more than 30s, set `export NOT_SKIP_LONG_TESTS=1` when run it, and not run on CI by default
+TEST_F(RuntimeExecutorTest, EpollRedirectorStdLogRollingCompressTest)
+{
+    const char* skip_test = std::getenv("NOT_SKIP_LONG_TESTS");
+    if (skip_test == nullptr || std::string(skip_test) != "1") {
+        GTEST_SKIP() << "Long-running tests are skipped by default";
+    }
+
+    // 1.init StdRedirectParam
+    std::string command = "rm -rf /home/snuser/instances/test_runtime_id*";
+    (void)std::system(command.c_str());
+    executor_->config_.userLogBufferFlushThreshold_ = 1024;
+    executor_->config_.userLogAutoFlushIntervalMs_ = 10;
+    executor_->config_.userLogRollingSizeLimitMb_ = 1;
+    executor_->config_.userLogRollingFileCountLimit_ = 3;
+
+    // 2.StartRuntimeStdRedirection
+    runtime_manager::Flags flags;
+    const char *argv[] = { "/runtime_manager", "--node_id=testid", "--ip=127.0.0.1","--host_ip=127.0.0.1", "--port=32233",
+                           "--runtime_initial_port=500", "--runtime_std_log_dir=instances",
+                           "--runtime_direct_connection_enable=false",
+                           "--enable_separated_redirect_runtime_std=true"};
+    flags.ParseFlags(9, argv);
+    executor_->SetRuntimeConfig(flags);
+    auto stdOut = litebus::ExecIO::CreatePipeIO();
+    auto stdErr = stdOut;
+    litebus::Try<std::shared_ptr<litebus::Exec>> s = litebus::Exec::CreateExec(
+            "for i in {1..15000}; do echo output1; cp a b; cp a b; done", litebus::None(),
+            litebus::ExecIO::CreateFDIO(STDIN_FILENO), stdOut, stdErr);
+    executor_->StartRuntimeStdRedirection("test_runtime_id", s.Get()->GetOut(), s.Get()->GetErr());
+
+    // 3.validate
+    sleep(30);
+    {
+        // find rolling compression log files
+        std::string command = "ls /home/snuser/instances/test_runtime_id* | wc -l";
+        auto result = ExecuteCommand(command);
+        if (!result.error.empty()) {
+            YRLOG_ERROR("execute command {} failed, error: {}", command, result.error);
+            return;
+        }
+
+        YRLOG_INFO("command {} output is {}", command, result.output);
+        std::istringstream iss(result.output);
+        std::string line;
+        std::getline(iss, line);
+        std::istringstream linestream(line);
+        int count;
+        linestream >> count;
+        EXPECT_FALSE(line.empty());
+        EXPECT_TRUE(count == 1);
+    }
+
+    {
+        // find rolling compression log files
+        std::string command = "ls /home/snuser/instances/test_runtime_id*.out.gz | wc -l";
+        auto result = ExecuteCommand(command);
+        if (!result.error.empty()) {
+            YRLOG_ERROR("execute command {} failed, error: {}", command, result.error);
+            return;
+        }
+
+        YRLOG_INFO("command {} output is {}", command, result.output);
+        std::istringstream iss(result.output);
+        std::string line;
+        std::getline(iss, line);
+        std::istringstream linestream(line);
+        int count;
+        linestream >> count;
+        EXPECT_FALSE(line.empty());
+        EXPECT_TRUE(count > 0);
+    }
+
+    // std::string command = "rm -rf /home/snuser/instances/testid-user_func_std*";
+    // (void)std::system(command.c_str());
 }
 
 TEST_F(RuntimeExecutorTest, SetRuntimeEnv_runtime_direct_connection_enable_false)

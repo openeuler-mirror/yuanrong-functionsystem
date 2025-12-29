@@ -46,6 +46,7 @@ struct LogParam {
     uint32_t maxFiles = DEFAULT_MAX_FILES;
     std::string stdLogLevel;
     bool syncFlush = false;
+    std::string logFileExtensions;
 };
 
 struct GlobalLogParam {

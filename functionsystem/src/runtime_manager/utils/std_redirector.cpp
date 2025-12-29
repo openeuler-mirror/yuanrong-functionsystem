@@ -15,6 +15,8 @@
  */
 #include "std_redirector.h"
 #include <cstdlib>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
 
 #include "async/asyncafter.hpp"
 #include "async/defer.hpp"
@@ -61,8 +63,8 @@ Status StdRedirector::Start()
     }
 
     // set user func std logger
-    size_t pos = logName_.rfind(".log");
-    if (pos != std::string::npos && pos == logName_.length() - std::string(".log").size()) {
+    size_t pos = logName_.rfind(param_.logFileExtensions);
+    if (pos != std::string::npos && pos == logName_.length() - std::string(param_.logFileExtensions).size()) {
         logNameForLogsSdk_ = logName_.substr(0, pos);  // compatible with previous configurations
     } else {
         logNameForLogsSdk_ = logName_;
@@ -84,6 +86,7 @@ Status StdRedirector::Start()
     loggerParam.maxFiles = param_.stdRollingMaxFiles;
     loggerParam.maxSize = param_.stdRollingMaxFileSize;  // MB
     loggerParam.alsoLog2Std = false; // not print to std output
+    loggerParam.logFileExtensions = param_.logFileExtensions;
     YRLOG_DEBUG("loggerParam.maxFiles: {}, loggerParam.maxSize: {} MB", loggerParam.maxFiles, loggerParam.maxSize);
 
     lp_ = LogsApi::Provider::GetLoggerProvider();
@@ -157,6 +160,56 @@ void StdRedirector::Finalize()
         std::cerr << "close fileWriteStream failed. error: " << e.what() << std::endl;
     } catch (...) {
         std::cerr << "close fileWriteStream failed." << std::endl;
+    }
+    for (auto iter : fd2Readers_) {
+        litebus::Terminate(iter.second);
+        litebus::Await(iter.second);
+    }
+    fd2Readers_.clear();
+}
+
+litebus::AID StdRedirector::GetPipeAsyncReader(int fd)
+{
+    if (fd2Readers_.count(fd) > 0) {
+        return fd2Readers_[fd];
+    }
+    const std::string strPipeReadAsync = "AID" + std::to_string(fd);
+    const litebus::AID pipeAsyncReader = litebus::Spawn(std::make_shared<litebus::os::PipeReadActor>(strPipeReadAsync));
+    fd2Readers_[fd] = pipeAsyncReader;
+    return pipeAsyncReader;
+}
+
+void StdRedirector::TerminatePipeReader(int fd)
+{
+    auto it = fd2Readers_.find(fd);
+    if (it == fd2Readers_.end()) {
+        return;
+    }
+
+    litebus::Terminate(it->second);
+    litebus::Await(it->second);
+    fd2Readers_.erase(it);
+}
+
+void StdRedirector::ReadStdLogRealTime(int fd, int event)
+{
+    bool isValidEvent = (!(event & EPOLLERR) && !(event & EPOLLHUP));
+    if (!isValidEvent) {
+        if (event & EPOLLERR) {
+            YRLOG_ERROR("fd({}) I/O error occurred (EPOLLERR)", fd);
+        } else if (event & EPOLLHUP) {
+            YRLOG_WARN("fd({}) connection closed by peer (EPOLLHUP)", fd);
+        }
+        MoveLogsToReady();
+        litebus::Async(GetAID(), &StdRedirector::ExportLog);
+    }
+    if (event & EPOLLIN) {
+        const auto reader = GetPipeAsyncReader(fd);
+
+        auto dataCallback = [aid(GetAID())](const std::string &content) {
+            litebus::Async(aid, &StdRedirector::SetStdLogRawContent, content);
+        };
+        litebus::Async(reader, &litebus::os::PipeReadActor::ImmediatePipeReadOperation, fd, dataCallback);
     }
 }
 
@@ -267,6 +320,20 @@ void StdRedirector::SetStdLogContent(const std::string &content, const std::stri
 
     MoveLogsToReady();
     YRLOG_DEBUG("ready to flush log when log larger then {} byte.", param_.maxLogLength);
+    litebus::Async(GetAID(), &StdRedirector::ExportLog);
+}
+
+void StdRedirector::SetStdLogRawContent(const std::string &content)
+{
+    logs_.length += static_cast<int32_t>(content.length());
+    logs_.message << content;
+
+    if (logs_.length < param_.maxLogLength) {
+        return;
+    }
+
+    MoveLogsToReady();
+    YRLOG_DEBUG("ready to flush log to disk when log larger then {} byte.", param_.maxLogLength);
     litebus::Async(GetAID(), &StdRedirector::ExportLog);
 }
 

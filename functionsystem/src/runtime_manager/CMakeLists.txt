@@ -37,6 +37,7 @@ add_subdirectory(driver)
 add_subdirectory(log)
 add_subdirectory(debug)
 add_subdirectory(virtual_env_manager)
+add_subdirectory(std_monitor)
 
 target_link_libraries(runtime_manager_lib ${litebus_ALL_LIB}
         ${yaml_LIB}
