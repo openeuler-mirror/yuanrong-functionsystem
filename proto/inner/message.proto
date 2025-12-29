@@ -258,6 +258,7 @@ message ContainerRuntimeConfig {
   string runtime = 1;
   string id = 2;
   runtime.v1.RootfsConfig rootfsConfig = 3;
+  string mountPoint = 4;
 }
 
 message DeployInstanceRequest {
