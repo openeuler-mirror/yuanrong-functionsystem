@@ -57,6 +57,7 @@ function install_function_proxy() {
     --node_id="${NODE_ID}" --log_config="${FS_LOG_CONFIG}" \
     --services_path="${SERVICES_PATH}" \
     --lib_path="${FUNCTION_SYSTEM_DIR}/lib" \
+    --function_meta_path="${FUNCTION_META_PATH}" \
     --ip="${IP_ADDRESS}" \
     --grpc_listen_port="${FUNCTION_PROXY_GRPC_PORT}" \
     --dposix_uds_path="${DPOSIX_UDS_PATH}" \
