@@ -554,6 +554,7 @@ static inline void GetInstanceMetaData(FunctionMeta &funcMeta, const nlohmann::j
 
 static inline void GetRoofsMetaData(FunctionMeta &funcMeta, const nlohmann::json &h)
 {
+    YRLOG_INFO("debug::{}", h.dump());
     if (h.find("warmup") != h.end()) {
         funcMeta.warmup = StringToWarmupType(h.at("warmup"));
     }
