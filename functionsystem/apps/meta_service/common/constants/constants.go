@@ -315,6 +315,8 @@ const (
 	LocalStorageType = "local"
 	// CopyStorageType the code is stored in the disk and need to copy to container path
 	CopyStorageType = "copy"
+	// WorkingDirStorageType the code is stored in the working directory
+	WorkingDirStorageType = "working_dir"
 	// Faas kind of function creation
 	Faas = "faas"
 )
