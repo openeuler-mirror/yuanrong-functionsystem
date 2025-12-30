@@ -2062,8 +2062,8 @@ litebus::Future<Status> FunctionAgentMgrActor::RegisterToWarmUp(
     std::list<litebus::Future<messages::DeployInstanceResponse>> deployFutures;
     YRLOG_INFO("debug:: {}", request->DebugString());
     if (agentID.IsSome()) {
-        return DeployInstance(request, agentID.Get()).Then([](){
-            return Status::OK();
+        return DeployInstance(request, agentID.Get()).Then([](const messages::DeployInstanceResponse &resp) -> litebus::Future<Status> {
+            return Status(static_cast<StatusCode>(resp.code()), resp.message());
         });
     }
     for (auto [agentID, agentInfo] : funcAgentTable_) {
@@ -2074,6 +2074,11 @@ litebus::Future<Status> FunctionAgentMgrActor::RegisterToWarmUp(
     return litebus::Collect(deployFutures).Then(
         [aid(GetAID()), request](const std::list<messages::DeployInstanceResponse> &resps) -> litebus::Future<Status> {
             // todo collect deploy responses
+            for (auto &resp : resps) {
+                if (resp.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+                    return Status(static_cast<StatusCode>(resp.code()), resp.message());
+                }
+            }
             return Status::OK();
         });
 }
