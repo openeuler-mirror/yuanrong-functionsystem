@@ -552,6 +552,53 @@ static inline void GetInstanceMetaData(FunctionMeta &funcMeta, const nlohmann::j
     }
 }
 
+static inline void GetRoofsMetaData(FunctionMeta &funcMeta, const nlohmann::json &h)
+{
+    if (h.find("warmup") != h.end()) {
+        funcMeta.warmup = StringToWarmupType(h.at("warmup"));
+    }
+
+    if (h.find("rootfs") == h.end()) {
+        return;
+    }
+    nlohmann::json rf = h.at("rootfs");
+    if (rf.find("runtime") != rf.end()) {
+        funcMeta.rootfs.runtime = rf.at("runtime");
+    }
+    if (rf.find("type") != rf.end()) {
+        funcMeta.rootfs.type = StringToRootfsSrcType(rf.at("type"));
+    }
+    if (rf.find("imageurl") != rf.end()) {
+        funcMeta.rootfs.imageurl = rf.at("imageurl");
+    }
+    if (rf.find("readonly") != rf.end()) {
+        if (rf.at("readonly").is_boolean()) {
+            funcMeta.rootfs.readonly = rf.at("readonly");
+        } else if (rf.at("readonly").is_string()) {
+            std::string str = rf.at("readonly");
+            funcMeta.rootfs.readonly = (str == "true" || str == "1");
+        }
+    }
+    if (rf.find("storageInfo") != rf.end()) {
+        nlohmann::json storage = rf.at("storageInfo");
+        if (storage.find("endpoint") != storage.end()) {
+            funcMeta.rootfs.storageInfo.endpoint = storage.at("endpoint");
+        }
+        if (storage.find("bucket") != storage.end()) {
+            funcMeta.rootfs.storageInfo.bucket = storage.at("bucket");
+        }
+        if (storage.find("object") != storage.end()) {
+            funcMeta.rootfs.storageInfo.object = storage.at("object");
+        }
+        if (storage.find("accessKey") != storage.end()) {
+            funcMeta.rootfs.storageInfo.accessKey = storage.at("accessKey");
+        }
+        if (storage.find("secretKey") != storage.end()) {
+            funcMeta.rootfs.storageInfo.secretKey = storage.at("secretKey");
+        }
+    }
+}
+
 [[maybe_unused]] static FunctionMeta GetFuncMetaFromJson(const std::string &jsonStr)
 {
     FunctionMeta funcMeta{};
@@ -577,6 +624,7 @@ static inline void GetInstanceMetaData(FunctionMeta &funcMeta, const nlohmann::j
         GetExtendedMetaData(funcMeta, j);
 
         // todo rootfsMetaData
+        GetRoofsMetaData(funcMeta, j);
     } catch (std::exception &e) {
         YRLOG_ERROR("parse funcMeta json failed, error: {}", e.what());
     }
