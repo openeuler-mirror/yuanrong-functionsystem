@@ -87,7 +87,6 @@ function install_function_proxy() {
     --election_mode=${ELECTION_MODE} --unregister_while_stop="${FUNCTION_PROXY_UNREGISTER_WHILE_STOP}" \
     --runtime_ds_encrypt_enable="${RUNTIME_DS_ENCRYPT_ENABLE}" --runtime_ds_auth_enable="${RUNTIME_DS_AUTH_ENABLE}" \
     --curve_key_path="${CURVE_KEY_PATH}" \
-    --function_meta_path="${FUNCTION_META_PATH}" \
     --cache_storage_auth_type="${CACHE_STORAGE_AUTH_TYPE}" --cache_storage_auth_enable="${CACHE_STORAGE_AUTH_ENABLE}" \
     --ssl_downgrade_enable="true" \
     --ssl_enable="${SSL_ENABLE}" --ssl_base_path="${SSL_BASE_PATH}" \
