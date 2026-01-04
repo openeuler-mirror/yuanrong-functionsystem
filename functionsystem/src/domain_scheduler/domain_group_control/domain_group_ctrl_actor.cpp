@@ -219,7 +219,7 @@ void DomainGroupCtrlActor::OnGroupScheduleDecision(
         GroupScheduleDone(ctx, Status(static_cast<StatusCode>(result.code), result.reason));
         return;
     }
-    if (result.code == StatusCode::SUCCESS) {
+    if (result.code == StatusCode::SUCCESS || result.code == StatusCode::INSTANCE_ALLOCATED) {
         YRLOG_DEBUG("{}|{} schedule decision success for ({}) instance, start to reserve and bind",
                     ctx->groupInfo->traceid(), ctx->groupInfo->requestid(), result.results.size());
         OnGroupScheduleDecisionSuccessful(result.results, ctx);

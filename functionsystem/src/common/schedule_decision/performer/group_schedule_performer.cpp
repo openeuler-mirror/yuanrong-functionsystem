@@ -72,7 +72,7 @@ GroupScheduleResult GroupSchedulePerformer::DoStrictPackSchedule(
     auto totalItem = std::make_shared<InstanceItem>(
         std::make_shared<messages::ScheduleRequest>(*scheduleItem->groupReqs[0]->scheduleReq), promise,
         litebus::Future<std::string>());
-    totalItem->scheduleReq->set_requestid(totalItem->GetRequestId());
+    totalItem->scheduleReq->set_requestid(scheduleItem->groupReqID);
     for (size_t i = 1; i < scheduleItem->groupReqs.size(); i++) {
         auto pre = totalItem->scheduleReq->mutable_instance()->resources();
         *totalItem->scheduleReq->mutable_instance()->mutable_resources() =
