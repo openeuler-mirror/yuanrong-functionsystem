@@ -331,6 +331,13 @@ std::pair<Status, std::string> CommandBuilder::GetPythonExecPath(
     return { Status::OK(), execPath };
 }
 
+bool endsWith(const std::string &str, const std::string &suffix)
+{
+    if (suffix.size() > str.size())
+        return false;
+    return str.substr(str.size() - suffix.size()) == suffix;
+}
+
 std::pair<Status, std::string> CommandBuilder::HandleWorkingDirectory(
     const std::shared_ptr<messages::StartInstanceRequest> &request, const messages::RuntimeInstanceInfo &info) const
 {
@@ -346,6 +353,15 @@ std::pair<Status, std::string> CommandBuilder::HandleWorkingDirectory(
         return { Status(StatusCode::RUNTIME_MANAGER_WORKING_DIR_FOR_APP_NOTFOUND,
                         "params working dir or unzipped dir is empty"),
                  "" };
+    }
+
+    if (endsWith(workingDirIter->second, ".img")) {
+        (*request->mutable_runtimeinstanceinfo()
+              ->mutable_deploymentconfig()
+              ->mutable_deployoptions())[CHDIR_PATH_CONFIG] = request->runtimeinstanceinfo().container().mountpoint();
+        YRLOG_DEBUG("change working dir to container mount point: {}",
+                    request->runtimeinstanceinfo().container().mountpoint());
+        return { Status::OK(), request->runtimeinstanceinfo().container().mountpoint() };
     }
 
     char canonicalPath[PATH_MAX];
