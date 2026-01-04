@@ -44,6 +44,22 @@ bool endsWith(const std::string &str, const std::string &suffix)
     return str.substr(str.size() - suffix.size()) == suffix;
 }
 
+std::string GetDestinationPath(const std::string &destination)
+{
+    if (!endsWith(destination, ".img")) {
+        return destination;
+    }
+    auto pos = destination.find_last_of("/");
+        if (pos == std::string::npos) {
+            return "./";
+        }
+        auto dst = destination.substr(0, pos);
+        if (dst.empty()) {
+            return "/";
+        }
+        return dst;
+}
+
 // implement it for different schema, like 'file://', 'ftp://', 'http://'
 class ResourceAccessor {
 public:
@@ -143,7 +159,8 @@ public:
             return std::make_pair(
                 Status(StatusCode::FUNC_AGENT_INVALID_WORKING_DIR_FILE, "invalid package size with " + dsKey_), "");
         }
-        std::string fullpath = litebus::os::Join(dst, filename);
+        auto destinationPath = GetDestinationPath(dst);
+        std::string fullpath = litebus::os::Join(destinationPath, filename);
         std::ofstream file(fullpath, std::ios::out | std::ios::binary);
         if (!file.is_open()) {
             YRLOG_WARN("failed to open {}", filename);
@@ -292,17 +309,17 @@ DeployResult WorkingDirDeployer::Deploy(const std::shared_ptr<messages::DeployRe
                                "Unsupported working_dir schema: " + config.objectid());
         return result;
     }
-
+    auto dst = GetDestinationPath(result.destination);
     // 2. create dest working dir
-    if (!CheckIllegalChars(result.destination) || !litebus::os::Mkdir(result.destination).IsNone()) {
-        YRLOG_ERROR("failed to create dir for workingDir({}).", result.destination);
+    if (!CheckIllegalChars(dst) || !litebus::os::Mkdir(dst).IsNone()) {
+        YRLOG_ERROR("failed to create dir for workingDir({}).", dst);
         // failed to create directory, return 0x111ad and object directory.
         result.status = Status(
             StatusCode::FUNC_AGENT_MKDIR_DEST_WORKING_DIR_ERROR,
-            "failed to create dest working dir for " + result.destination + ", msg: +" + litebus::os::Strerror(errno));
+            "failed to create dest working dir for " + dst + ", msg: +" + litebus::os::Strerror(errno));
         return result;
     }
-    std::string cmd = "chmod -R 750 " + result.destination;
+    std::string cmd = "chmod -R 750 " + dst;
     if (auto code(std::system(cmd.c_str())); code) {
         YRLOG_WARN("failed to execute chmod cmd({}). code: {}", cmd, code);
     }

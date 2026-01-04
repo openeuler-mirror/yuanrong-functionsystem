@@ -338,8 +338,7 @@ Envs BuildMountForCode(const std::shared_ptr<runtime::v1::StartRequest> &start,
     }
     std::string funcPathTarget = funcPath;
     std::replace(funcPathTarget.begin(), funcPathTarget.end(), '/', '-');
-    code->set_target(
-        litebus::os::Join(request->runtimeinstanceinfo().container().mountpoint(), trimDash(funcPathTarget)));
+    code->set_target(request->runtimeinstanceinfo().container().mountpoint());
 
     updateEnv.posixEnvs[UNZIPPED_WORKING_DIR] = code->target();
     updateEnv.posixEnvs["YR_FUNCTION_LIB_PATH"] = code->target();
