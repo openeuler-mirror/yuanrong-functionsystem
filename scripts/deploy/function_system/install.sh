@@ -233,12 +233,10 @@ function install_function_scheduler() {
     sed -i "s*{etcdCAFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}*g" ${install_init_scheduler_config}
     sed -i "s*{etcdCertFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}*g" ${install_init_scheduler_config}
     sed -i "s*{etcdKeyFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}*g" ${install_init_scheduler_config}
-    sed -i "s*{passphraseFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_PWD_FILE}*g" ${install_init_scheduler_config}
   else
     sed -i "s*{etcdCAFile}**g" ${install_init_scheduler_config}
     sed -i "s*{etcdCertFile}**g" ${install_init_scheduler_config}
     sed -i "s*{etcdKeyFile}**g" ${install_init_scheduler_config}
-    sed -i "s*{passphraseFile}**g" ${install_init_scheduler_config}
   fi
   GO_RUNTIME_BIN=${RUNTIME_HOME_DIR}/service/go/bin
   POD_NAME="scheduler-process" \
@@ -442,32 +440,29 @@ function install_metaservice() {
   sed -i "s/{frontendAddr}/${IP_ADDRESS}:${FAAS_FRONTEND_HTTP_PORT}/g" ${install_metaservice_config}
   sed -i "s/{etcdAddr}/$(echo ${ETCD_CLUSTER_ADDRESS} | sed 's/,/","/g')/g" ${install_metaservice_config}
   sed -i "s/{sslEnable}/${SSL_ENABLE}/g" ${install_metaservice_config}
+  sed -i "s/{metaserviceSslEnable}/${META_SERVICE_SSL_ENABLE}/g" ${install_metaservice_config}
   sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" ${install_metaservice_config}
   sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" ${install_metaservice_config}
   sed -i "s/{clusters}/${CLUSTER_LIST}/g" ${install_metaservice_config}
   sed -i "s/{sccEnable}/${SCC_ENABLE}/g" ${install_metaservice_config}
   sed -i "s*{sccBasePath}*${SCC_BASE_PATH}*g" ${install_metaservice_config}
-  if [ "X${SSL_ENABLE}" = "Xtrue" ] && [ -n "${SSL_BASE_PATH}" ]; then
+  if [ "X${META_SERVICE_SSL_ENABLE}" = "Xtrue" ] && [ -n "${SSL_BASE_PATH}" ]; then
     sed -i "s*{rootCAFile}*${SSL_BASE_PATH}/${SSL_ROOT_FILE}*g" ${install_metaservice_config}
     sed -i "s*{moduleCertFile}*${SSL_BASE_PATH}/${SSL_CERT_FILE}*g" ${install_metaservice_config}
     sed -i "s*{moduleKeyFile}*${SSL_BASE_PATH}/${SSL_KEY_FILE}*g" ${install_metaservice_config}
-    sed -i "s*{pwdFile}*${SSL_BASE_PATH}/${SSL_PWD_FILE}*g" ${install_metaservice_config}
   else
     sed -i "s*{rootCAFile}**g" ${install_metaservice_config}
     sed -i "s*{moduleCertFile}**g" ${install_metaservice_config}
     sed -i "s*{moduleKeyFile}**g" ${install_metaservice_config}
-    sed -i "s*{pwdFile}**g" ${install_metaservice_config}
   fi
   if [ "X${SSL_ENABLE}" = "Xtrue" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
     sed -i "s*{etcdCAFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}*g" ${install_metaservice_config}
     sed -i "s*{etcdCertFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}*g" ${install_metaservice_config}
     sed -i "s*{etcdKeyFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}*g" ${install_metaservice_config}
-    sed -i "s*{passphraseFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_PWD_FILE}*g" ${install_metaservice_config}
   else
     sed -i "s*{etcdCAFile}**g" ${install_metaservice_config}
     sed -i "s*{etcdCertFile}**g" ${install_metaservice_config}
     sed -i "s*{etcdKeyFile}**g" ${install_metaservice_config}
-    sed -i "s*{passphraseFile}**g" ${install_metaservice_config}
   fi
   if [ "X${SCC_ENABLE}" = "Xtrue" ]; then
     sed -i "s*{sslDecryptTool}*${SSL_DECRYPT_TOOL}*g" ${install_metaservice_config}

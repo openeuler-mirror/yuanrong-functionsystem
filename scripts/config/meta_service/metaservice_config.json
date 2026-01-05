@@ -6,7 +6,7 @@
       "cafile": "{etcdCAFile}",
       "certfile": "{etcdCertFile}",
       "keyfile": "{etcdKeyFile}",
-      "passphraseFile": "{passphraseFile}",
+      "passphraseFile": "",
       "azPrefix": "{azPrefix}"
     },
     "metaEtcdEnable": true,
@@ -19,7 +19,7 @@
       "cafile": "{etcdCAFile}",
       "certfile": "{etcdCertFile}",
       "keyfile": "{etcdKeyFile}",
-      "passphraseFile": "{passphraseFile}",
+      "passphraseFile": "",
       "azPrefix": "{azPrefix}"
     },
     "clusters": "{clusters}",
@@ -141,7 +141,7 @@
       "port": {port}
     },
     "mutualTLSConfig": {
-      "tlsEnable": {sslEnable},
+      "tlsEnable": {metaserviceSslEnable},
       "rootCAFile": "",
       "moduleCertFile": "",
       "moduleKeyFile": "",
@@ -153,11 +153,11 @@
       "sccConfigPath": "{sccBasePath}"
     },
     "mutualSSLConfig": {
-      "sslEnable": {sslEnable},
+      "sslEnable": {metaserviceSslEnable},
       "rootCAFile": "{rootCAFile}",
       "moduleCertFile": "{moduleCertFile}",
       "moduleKeyFile": "{moduleKeyFile}",
-      "pwdFile": "{pwdFile}",
+      "pwdFile": "",
       "serverName": "",
       "sslDecryptTool": "{sslDecryptTool}"
     }

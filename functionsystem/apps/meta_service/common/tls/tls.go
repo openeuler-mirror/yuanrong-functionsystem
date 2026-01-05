@@ -53,10 +53,14 @@ type MutualSSLConfig struct {
 // BuildClientTLSConfOpts is to build an option array for mostly used client tlsConf
 func BuildClientTLSConfOpts(mutualConf MutualTLSConfig) []Option {
 	var opts []Option
-	passPhase, err := reader.ReadFileWithTimeout(mutualConf.PwdFile)
-	if err != nil {
-		log.GetLogger().Errorf("failed to read file PwdFile: %s", err.Error())
-		return opts
+	var passPhase []byte
+	var err error
+	if mutualConf.PwdFile != "" {
+		passPhase, err = reader.ReadFileWithTimeout(mutualConf.PwdFile)
+		if err != nil {
+			log.GetLogger().Errorf("failed to read file PwdFile: %s", err.Error())
+			return opts
+		}
 	}
 	opts = append(opts, WithRootCAs(mutualConf.RootCAFile),
 		WithCertsByEncryptedKey(mutualConf.ModuleCertFile, mutualConf.ModuleKeyFile,
