@@ -219,13 +219,13 @@ func NewEtcdWatcher(config EtcdConfig) (*EtcdClient, error) {
 	stopCh := make(chan struct{})
 	go config.getEtcdAuthTypeNoTLS().renewToken(client, stopCh)
 
-	// fetch registered grpc-proxy endpoints
-	if config.DisableSync {
-		return &EtcdClient{Client: client}, nil
-	}
-	if err = client.Sync(context.Background()); err != nil {
-		log.GetLogger().Warnf("Sync endpoints: %s", err.Error())
-	}
+	// // fetch registered grpc-proxy endpoints
+	// if config.DisableSync {
+	// 	return &EtcdClient{Client: client}, nil
+	// }
+	// if err = client.Sync(context.Background()); err != nil {
+	// 	log.GetLogger().Warnf("Sync endpoints: %s", err.Error())
+	// }
 	log.GetLogger().Infof("Etcd discovered endpoints: %v", client.Endpoints())
 	return &EtcdClient{Client: client, AZPrefix: config.AZPrefix}, nil
 }
