@@ -40,7 +40,7 @@ func GetGOOSType() (string, string) {
 	if runtime.GOOS == "windows" {
 		return "CMD", "/C"
 	}
-	return "/bin/sh", "-c"
+	return "/bin/bash", "-c"
 }
 
 // ExecCommandUntil - this function will also check if the command exit, so it will return the channel with wait called
