@@ -33,7 +33,7 @@
 
 namespace litebus {
 
-static const int MAX_PARAMS_SIZE = 1000;
+static const int MAX_PARAMS_SIZE = 2048;
 
 namespace execinternal {
 
