@@ -319,6 +319,7 @@ void DomainSchedSrvActor::Registered(const litebus::AID &from, std::string &&nam
             underlayer_->SetDomainLevel(isHeader_);
             resourceViewMgr_->GetInf()->UpdateIsHeader(isHeader_);
             metrics::MetricsAdapter::GetInstance().RegisterPodResource();
+            StartPingPong(global_.aid.Url());
         }
         underlayer_->UpdateUnderlayerTopo(message.topo());
         return;
@@ -326,6 +327,7 @@ void DomainSchedSrvActor::Registered(const litebus::AID &from, std::string &&nam
 
     if (from.Name() == uplayer_.aid.Name()) {
         Registered(message, uplayer_);
+        StartPingPong(uplayer_.aid.Url());
         return;
     }
 }
