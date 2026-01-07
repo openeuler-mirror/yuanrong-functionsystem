@@ -878,11 +878,12 @@ void GlobalSchedActor::MasterBusiness::UpdateLeaderInfo(const explorer::LeaderIn
 void GlobalSchedActor::SlaveBusiness::OnChange()
 {
     ASSERT_IF_NULL(member_->domainSchedMgr);
-    YRLOG_INFO("change status to slave, disconnect to domain scheduler");
+    YRLOG_INFO("change status to slave, disconnect to domain scheduler and stop inner domain");
     member_->domainSchedMgr->Disconnect();
     auto actor = actor_.lock();
     ASSERT_IF_NULL(actor);
     actor->SetTopoRecovered(false);
+    actor->domainActivator_->StopDomainSched();
 }
 Node::TreeNode GlobalSchedActor::SlaveBusiness::FindRootDomainSched()
 {
