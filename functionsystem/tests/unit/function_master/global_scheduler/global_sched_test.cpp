@@ -623,7 +623,8 @@ TEST_F(GlobalSchedTest, SlaveBusinessTest)  // NOLINT
     EXPECT_CALL(*mockDomainSchedMgr, Disconnect).Times(1);
     auto member = std::make_shared<GlobalSchedActor::Member>();
     member->domainSchedMgr = std::move(domainSchedMgr);
-    auto globalSchedActor = std::make_shared<GlobalSchedActor>("", nullptr, nullptr, nullptr);
+    auto domainActivator = std::make_shared<DomainActivator>(mockDomainSchedulerLauncher_);
+    auto globalSchedActor = std::make_shared<GlobalSchedActor>("", nullptr, domainActivator, nullptr);
     auto slaveBusiness = std::make_shared<GlobalSchedActor::SlaveBusiness>(globalSchedActor, member);
     slaveBusiness->OnChange();
     slaveBusiness->FindRootDomainSched();

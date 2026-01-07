@@ -312,6 +312,7 @@ void DomainSchedSrvActor::Registered(const litebus::AID &from, std::string &&nam
         if (message.topo().has_leader()) {
             auto leader = message.topo().leader();
             UpdateLeader(leader.name(), leader.address());
+            StartPingPong(leader.address());
         } else {
             PutReadyResCycle();
             isHeader_ = true;
@@ -319,7 +320,7 @@ void DomainSchedSrvActor::Registered(const litebus::AID &from, std::string &&nam
             underlayer_->SetDomainLevel(isHeader_);
             resourceViewMgr_->GetInf()->UpdateIsHeader(isHeader_);
             metrics::MetricsAdapter::GetInstance().RegisterPodResource();
-            StartPingPong(global_.aid.Url());
+            StartPingPong(masterAid_.Url());
         }
         underlayer_->UpdateUnderlayerTopo(message.topo());
         return;
