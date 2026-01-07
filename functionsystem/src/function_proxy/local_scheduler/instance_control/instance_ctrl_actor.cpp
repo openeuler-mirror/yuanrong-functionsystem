@@ -6069,7 +6069,7 @@ litebus::Future<Status> InstanceCtrlActor::MakeCheckpoint(const std::string &ins
 void InstanceCtrlActor::FunctionWarmUp(const std::string &funcKey, const FunctionMeta &funcMeta,
     const litebus::Option<std::string> &agentID)
 {
-    if (funcMeta.warmup == WarmupType::NONE || funcMeta.warmup == WarmupType::INVALID) {
+    if (config_.isPseudoDataPlane || funcMeta.warmup == WarmupType::NONE || funcMeta.warmup == WarmupType::INVALID) {
         return;
     }
     YRLOG_INFO("start to warm up {}, type:{}", funcKey, fmt::underlying(funcMeta.warmup));
