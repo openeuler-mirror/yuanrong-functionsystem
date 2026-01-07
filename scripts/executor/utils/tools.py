@@ -44,10 +44,10 @@ def get_linux_resources() -> Tuple[int, int]:
 
 def get_linux_distribution():
     with open("/etc/os-release") as f:
-        lines = f.readlines()
+        lines = f.read().splitlines()
         for line in lines:
             if line.startswith("ID="):
-                return line.split('"')[1]
+                return line.split('=')[1].strip('"')
         return "Unknown"
 
 
