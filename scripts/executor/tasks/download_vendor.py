@@ -25,7 +25,7 @@ def download_vendor(config_path, download_path):
     reader = csv.DictReader(open(config_path, mode="r", encoding="utf-8"))
     configs = list(reader)  # name, version, module, repo, sha256
 
-    log.info("Download vendor package with TLS info:", ssl.get_default_verify_paths())
+    log.info("Download vendor package with TLS info: {}".format(ssl.get_default_verify_paths()))
     for config in configs:
         repo_parsed = urlparse(config["repo"])
         archive_name = config["repo"].split("/")[-1]
