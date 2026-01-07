@@ -17,6 +17,7 @@
 package utils
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -108,6 +109,7 @@ func BadRequest(c server.Context, err error) {
 	e := TransToSnError(err)
 	log.GetLogger().Errorf("request resource: %s, response with error code: %d, message: %s",
 		c.ResourceInfo(), e.Code(), e.Error())
+	fmt.Printf("==========>%v", snerror.Marshal(e))
 	c.Gin().Data(http.StatusInternalServerError, "", snerror.Marshal(e))
 }
 
@@ -143,7 +145,6 @@ func WriteResponseWithMsg(c server.Context, v interface{}, err error) {
 		Message: e.Error(),
 		Result:  v,
 	})
-
 }
 
 // successJSONBody structure returned when the processing is successful.

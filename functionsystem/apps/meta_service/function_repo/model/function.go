@@ -196,6 +196,7 @@ type FunctionInfo struct {
 	base.FunctionCommonInfo
 	FuncLayer []Layer      `json:"funcLayer"`
 	Device    types.Device `json:"device,omitempty"`
+	Kind      string       `json:"kind,omitempty"`
 }
 
 // GetFunctionResponse is response of getting function
@@ -245,8 +246,7 @@ type FunctionPolicyRequest struct {
 }
 
 // FunctionPolicyResponse -
-type FunctionPolicyResponse struct {
-}
+type FunctionPolicyResponse struct{}
 
 // DateTime time
 type DateTime struct {
@@ -393,6 +393,7 @@ type FunctionVersion struct {
 	Status             string             `json:"status"`
 	InstanceNum        int64              `json:"instanceNum"`
 	Device             types.Device       `json:"device,omitempty"`
+	Kind               string             `json:"kind,omitempty"`
 }
 
 // Function is function entity
@@ -447,6 +448,7 @@ type FunctionForUser struct {
 	Status              string             `json:"status"`
 	InstanceNum         int                `json:"instanceNum"`
 	Device              types.Device       `json:"device,omitempty"`
+	Kind                string             `json:"kind,omitempty"`
 }
 
 // GetFunctionResponseForUser is response of function info
