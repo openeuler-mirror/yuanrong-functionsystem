@@ -262,6 +262,10 @@ std::vector<int> DomainGroupCtrlActor::RollbackContext(const std::shared_ptr<Gro
             ctx->lastReservedInd = static_cast<int>(i);
             continue;
         }
+
+        if (i >= ctx->tryScheduleResults.size()) {
+            continue;
+        }
         alreadyFailed = true;
         YRLOG_INFO("{}|{}|instance({}) is already failed to reserve, rollback it context to retry", request->traceid(),
                    requestID, request->instance().instanceid());
