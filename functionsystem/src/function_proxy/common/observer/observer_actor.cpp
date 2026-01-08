@@ -62,16 +62,6 @@ Status ObserverActor::Register()
         [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<SyncResult> {
         return litebus::Async(aid, &ObserverActor::BusProxySyncer, getResponse);
     };
-    (void)metaStorageAccessor_
-        ->RegisterObserver(
-            FUNC_META_PATH_PREFIX, watchOpt,
-            [aid(GetAID())](const std::vector<WatchEvent> &events, bool) {
-                auto respCopy = events;
-                litebus::Async(aid, &ObserverActor::UpdateFuncMetaEvent, respCopy);
-                return true;
-            },
-            functionMetaSyncer)
-        .After(WATCH_TIMEOUT_MS, after);
 
     YRLOG_INFO("Register watch with prefix: {}", BUSPROXY_PATH_PREFIX);
     (void)metaStorageAccessor_
@@ -90,6 +80,26 @@ Status ObserverActor::Register()
     YRLOG_DEBUG("sync key({}) finished", INSTANCE_PATH_PREFIX);
     instanceSyncDone_.SetValue(true);
 
+    YRLOG_INFO("load local function");
+    LoadLocalFuncMeta(funcMetaMap_, observerParam_.functionMetaPath);
+    service_json::LoadFuncMetaFromServiceYaml(funcMetaMap_, observerParam_.servicesPath, observerParam_.libPath);
+    for (auto it = funcMetaMap_.begin(); it != funcMetaMap_.end(); ++it) {
+        localFuncMetaSet_.emplace(it->first);
+    }
+    if (updateFuncMetasFunc_ != nullptr) {
+        updateFuncMetasFunc_(true, funcMetaMap_);
+    }
+    (void)metaStorageAccessor_
+        ->RegisterObserver(
+            FUNC_META_PATH_PREFIX, watchOpt,
+            [aid(GetAID())](const std::vector<WatchEvent> &events, bool) {
+                auto respCopy = events;
+                litebus::Async(aid, &ObserverActor::UpdateFuncMetaEvent, respCopy);
+                return true;
+            },
+            functionMetaSyncer)
+        .After(WATCH_TIMEOUT_MS, after);
+
     if (!isPartialWatchInstances_) {
         YRLOG_INFO("Register watch with prefix: {}", INSTANCE_ROUTE_PATH_PREFIX);
         watchOpt = WatchOption{ true, false, synced.second + 1, true };
@@ -103,16 +113,6 @@ Status ObserverActor::Register()
                 },
                 instanceInfoSyncer)
             .After(WATCH_TIMEOUT_MS, after);
-    }
-
-    YRLOG_INFO("load local function");
-    LoadLocalFuncMeta(funcMetaMap_, observerParam_.functionMetaPath);
-    service_json::LoadFuncMetaFromServiceYaml(funcMetaMap_, observerParam_.servicesPath, observerParam_.libPath);
-    for (auto it = funcMetaMap_.begin(); it != funcMetaMap_.end(); ++it) {
-        localFuncMetaSet_.emplace(it->first);
-    }
-    if (updateFuncMetasFunc_ != nullptr) {
-        updateFuncMetasFunc_(true, funcMetaMap_);
     }
     return Status::OK();
 }
