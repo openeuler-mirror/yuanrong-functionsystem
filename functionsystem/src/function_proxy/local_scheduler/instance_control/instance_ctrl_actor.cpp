@@ -5783,6 +5783,11 @@ void InstanceCtrlActor::UpdateFuncMetas(bool isAdd, const std::unordered_map<std
     if (isAdd) {
         for (const auto &funcMeta : funcMetas) {
             YRLOG_DEBUG("update function({}) meta", funcMeta.first);
+            if (funcMetaMap_.find(funcMeta.first) != funcMetaMap_.end()
+                && GetFunctionHashTag(funcMetaMap_[funcMeta.first]) != GetFunctionHashTag(funcMeta.second)) {
+                YRLOG_INFO("function({}) meta is updated, old should be removed", funcMeta.first);
+                FunctionDelete(funcMeta.first, funcMetaMap_[funcMeta.first]);
+            }
             funcMetaMap_[funcMeta.first] = funcMeta.second;
             FunctionWarmUp(funcMeta.first, funcMeta.second);
         }
@@ -6077,7 +6082,7 @@ void InstanceCtrlActor::FunctionWarmUp(const std::string &funcKey, const Functio
     warm->set_requestid(fmt::format("FunctionWarmUp-{}", funcKey));
     warm->set_traceid(fmt::format("FunctionWarmUp-{}", funcKey));
     auto instance = warm->mutable_instance();
-    instance->set_instanceid(std::to_string(std::hash<std::string>{}(funcKey)));
+    instance->set_instanceid(GetFunctionHashTag(funcMeta));
     // todo : may change another field in future
     auto deployInstanceRequest = GetDeployInstanceReq(funcMeta, warm);
     deployInstanceRequest->set_warmuptype(static_cast<int32_t>(funcMeta.warmup));
@@ -6111,7 +6116,7 @@ void InstanceCtrlActor::FunctionDelete(const std::string &funcKey, const Functio
     }
     auto killInstanceReq = GenKillInstanceRequest(funcKey, fmt::format("FunctionWarmUp-Instance-{}", funcKey), funcKey,
                                                   funcMeta.codeMetaData.storageType, false);
-    killInstanceReq->set_runtimeid(std::to_string(std::hash<std::string>{}(funcKey)));
+    killInstanceReq->set_runtimeid(GetFunctionHashTag(funcMeta));
     (void)functionAgentMgr_->UnRegisterWarmUp(killInstanceReq)
         .OnComplete(litebus::Defer(GetAID(), &InstanceCtrlActor::OnFunctionDelete, funcKey, std::placeholders::_1));
 }

@@ -12,9 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-project(meta_store_adapter)
-add_library(meta_store_adapter STATIC "")
-aux_source_directory(${CMAKE_CURRENT_LIST_DIR} META_STORE_ADAPTER_SRCS)
-add_dependencies(meta_store_adapter posix_pb resource_view metadata)
-target_sources(meta_store_adapter PRIVATE ${META_STORE_ADAPTER_SRCS})
-target_link_libraries(meta_store_adapter PUBLIC meta_store_client metadata)
+project(metadata)
+
+message(STATUS "Begin to configure metadata")
+add_library(metadata STATIC "")
+get_property(UTILS_INCLUDE GLOBAL PROPERTY "UTILS_INCLUDE")
+
+include_directories(${UTILS_INCLUDE})
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR} METADATA_SRCS)
+add_dependencies(metadata posix_pb resource_view)
+target_sources(metadata PRIVATE ${METADATA_SRCS})
+target_link_libraries(metadata PUBLIC posix_pb resource_view ${yrlogs_LIB})

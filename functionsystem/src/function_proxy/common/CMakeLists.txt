@@ -32,6 +32,6 @@ add_subdirectory(rate_limiter)
 add_subdirectory(common_driver)
 
 add_dependencies(function_proxy_common_lib service_json rpc meta_store_client
-        common_flags)
+        common_flags metadata)
 target_link_libraries(function_proxy_common_lib aksk service_json rpc meta_store_client
-        common_flags ${datasystem_LIB} busproxy_lib)
+        common_flags ${datasystem_LIB} busproxy_lib metadata)
