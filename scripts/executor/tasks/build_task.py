@@ -54,9 +54,8 @@ def build_vendor(args):
 
 
 def install_datasystem(vendor_path):
-    linux_dist = utils.get_linux_distribution()
     datasystem_sdk_path = os.path.join(vendor_path, "src", "datasystem", "sdk")
-    datasystem_install_path = os.path.join(vendor_path, "output", linux_dist, "Install", "datasystem", "sdk")
+    datasystem_install_path = os.path.join(vendor_path, "output", "Install", "datasystem", "sdk")
     if os.path.exists(datasystem_install_path):
         log.warning("Datasystem install path is exist. Skip to copy files.")
         return

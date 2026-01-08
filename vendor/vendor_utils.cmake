@@ -34,18 +34,9 @@ message(STATUS "VENDOR_CMAKE_DIR: ${VENDOR_CMAKE_DIR}")
 set(VENDOR_PATCHES_DIR ${VENDOR_DIR}/patches)
 message(STATUS "VENDOR_PATCHES_DIR: ${VENDOR_PATCHES_DIR}")
 
-# 检查并设置 Linux 发行版类型 | LINUX_DISTRIBUTION
-if(EXISTS "/etc/os-release")
-    file(STRINGS "/etc/os-release" OS_RELEASE_CONTENT REGEX "^ID=")
-    string(REGEX REPLACE "^ID=\"?([^\"\n]+)\"?.*" "\\1" LINUX_DISTRIBUTION "${OS_RELEASE_CONTENT}")
-else()
-    set(LINUX_DISTRIBUTION "Unknown")
-endif()
-message(STATUS "LINUX_DISTRIBUTION: ${LINUX_DISTRIBUTION}")
-
 # 加载并配置 CMake 的 ExternalProject 功能模块
 include(ExternalProject)  # 该模块用于管理和构建外部依赖项目
-set(EP_BUILD_DIR "${VENDOR_INSTALL_DIR}/${LINUX_DISTRIBUTION}")
+set(EP_BUILD_DIR "${VENDOR_INSTALL_DIR}")
 set_property(DIRECTORY PROPERTY EP_BASE ${EP_BUILD_DIR})  # 设置构建基目录为 EP_BUILD_DIR
 message(STATUS "EP_BUILD_DIR: ${EP_BUILD_DIR}")
 
