@@ -57,5 +57,8 @@ file(GLOB_RECURSE SOURCES8 common/meta_store/client/src/*.cpp)
 file(GLOB_RECURSE SOURCES9 common/meta_store/client/src/*.h)
 file(GLOB_RECURSE SOURCES10 common/meta_store/server/src/*.cpp)
 file(GLOB_RECURSE SOURCES11 common/meta_store/server/src/*.h)
+file(GLOB_RECURSE SOURCES12 common/logs/include/*.h)
+file(GLOB_RECURSE SOURCES13 common/logs/src/*.cpp)
 
-add_executable(main ${SOURCES1} ${SOURCES2} ${SOURCES3} ${SOURCES4} ${SOURCES5} ${SOURCES6} ${SOURCES7} ${SOURCES8} ${SOURCES9} ${SOURCES10} ${SOURCES11})
+add_executable(main ${SOURCES1} ${SOURCES2} ${SOURCES3} ${SOURCES4} ${SOURCES5} ${SOURCES6}
+        ${SOURCES7} ${SOURCES8} ${SOURCES9} ${SOURCES10} ${SOURCES11} ${SOURCES12} ${SOURCES13})

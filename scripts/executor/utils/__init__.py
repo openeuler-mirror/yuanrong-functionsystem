@@ -10,7 +10,6 @@ from .tools import (
     check_package_metadata,
     compare_version,
     get_glibc_version,
-    get_linux_distribution,
     get_linux_resources,
     get_system_info,
     pipeline_env,

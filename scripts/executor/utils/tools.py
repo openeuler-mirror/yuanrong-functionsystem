@@ -42,15 +42,6 @@ def get_linux_resources() -> Tuple[int, int]:
     return cpu_count, total_mem_gb
 
 
-def get_linux_distribution():
-    with open("/etc/os-release") as f:
-        lines = f.read().splitlines()
-        for line in lines:
-            if line.startswith("ID="):
-                return line.split('=')[1].strip('"')
-        return "Unknown"
-
-
 def get_system_info():
     """获取系统架构信息"""
     # 系统类型
