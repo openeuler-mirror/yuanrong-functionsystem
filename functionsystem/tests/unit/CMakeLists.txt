@@ -99,6 +99,7 @@ target_link_libraries(${UNIT_TEST_MODULE} PRIVATE
         profile
         yaml_tool
         metrics_adapter
+        metadata
         ${PLUGIN_LIB}
         pthread
 )

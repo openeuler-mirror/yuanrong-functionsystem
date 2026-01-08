@@ -27,8 +27,9 @@ target_compile_options(${INSTANCE_MANAGER_LIB} PRIVATE -fPIE)
 
 target_include_directories(${INSTANCE_MANAGER_LIB} PRIVATE
         ${CMAKE_CURRENT_LIST_DIR})
-add_dependencies(${INSTANCE_MANAGER_LIB} meta_store_client meta_store_adapter service_json)
+add_dependencies(${INSTANCE_MANAGER_LIB} meta_store_client meta_store_adapter service_json metadata)
 target_link_libraries(${INSTANCE_MANAGER_LIB} PUBLIC
         meta_store_client
         meta_store_adapter
-        service_json)
+        service_json
+        metadata)

@@ -80,6 +80,9 @@ protected:
     void InitVirtualEnvIdleTimeLimit() override {};
 
 private:
+    void Sync();
+    litebus::Future<Status> DoSyncRegistered();
+    void OnSyncRegistered();
     void ReconnectContainerd();
     void OnReconnectContainerd();
     void CheckConnectivity();
@@ -153,6 +156,7 @@ private:
     std::shared_ptr<HealthCheck> healthCheckClient_;
     CommandBuilder cmdBuilder_ = {false};
     bool reconnecting_ = false;
+    bool synced_ = false;
     std::unordered_map<std::string, runtime::v1::FunctionRuntime> registeredWarmUp_;
 };
 

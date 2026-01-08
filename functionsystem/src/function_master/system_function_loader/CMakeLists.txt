@@ -15,5 +15,5 @@ target_compile_options(${SYSTEM_FUNCTION_LOADER_LIB} PRIVATE -fPIE)
 
 target_include_directories(${SYSTEM_FUNCTION_LOADER_LIB} PRIVATE
         ${CMAKE_CURRENT_LIST_DIR})
-add_dependencies(${SYSTEM_FUNCTION_LOADER_LIB} hex leader posix_pb utils meta_store_client file_monitor)
-target_link_libraries(${SYSTEM_FUNCTION_LOADER_LIB} PUBLIC hex leader posix_pb utils meta_store_client file_monitor)
+add_dependencies(${SYSTEM_FUNCTION_LOADER_LIB} hex leader posix_pb utils meta_store_client file_monitor metadata)
+target_link_libraries(${SYSTEM_FUNCTION_LOADER_LIB} PUBLIC hex leader posix_pb utils meta_store_client file_monitor metadata)

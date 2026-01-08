@@ -437,6 +437,11 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::FindExecutor(EXECUTOR_TYPE type)
         return executorProxy;
     }
     if (type == EXECUTOR_TYPE::CONTAINER) {
+        auto ep = litebus::os::GetEnv("CONTAINER_EP");
+        if (ep.IsNone()) {
+            YRLOG_INFO("container executor disabled, no containerd endpoint found");
+            return nullptr;
+        }
         YRLOG_INFO("create a container executor.");
         auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
         const std::string name = "RuntimeExecutor_" + uuid.ToString();

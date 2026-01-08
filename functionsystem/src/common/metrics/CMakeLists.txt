@@ -25,6 +25,6 @@ add_library(metrics_adapter STATIC "")
 
 file(GLOB_RECURSE METRICS_ADAPTER_SRCS *.cpp)
 
-add_dependencies(metrics_adapter status etcdapi)
+add_dependencies(metrics_adapter status etcdapi metadata)
 target_sources(metrics_adapter PRIVATE ${METRICS_ADAPTER_SRCS})
-target_link_libraries(metrics_adapter PUBLIC dl ${etcdapi_LIB_A} ${metrics_sdk_LIB} status)
+target_link_libraries(metrics_adapter PUBLIC dl ${etcdapi_LIB_A} ${metrics_sdk_LIB} status metadata)

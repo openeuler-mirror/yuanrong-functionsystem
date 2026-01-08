@@ -61,6 +61,10 @@ void ContainerExecutor::InitConfig()
 {
     cmdBuilder_.SetRuntimeConfig(config_);
     auto ep = litebus::os::GetEnv("CONTAINER_EP");
+    if (ep.IsNone()) {
+        YRLOG_INFO("container executor disabled, no containerd endpoint found");
+        return;
+    }
     std::string endpoint = ep.IsSome() ? ep.Get() : "127.0.0.1:8222";
     YRLOG_INFO("start container executor which bind containerd({})", endpoint);
     containerd_ = GrpcClient<runtime::v1::RuntimeLauncher>::CreateUdsGrpcClient(endpoint);
@@ -113,12 +117,55 @@ void ContainerExecutor::OnReconnectContainerd()
 
 void ContainerExecutor::Init()
 {
+    Sync();
 }
 
 void ContainerExecutor::Finalize()
 {
     runtimeInstanceInfoMap_.clear();
     Executor::Finalize();
+}
+
+void ContainerExecutor::Sync()
+{
+    DoSyncRegistered().OnComplete([aid(GetAID())](const litebus::Future<Status> &result) {
+        if (result.IsError() || result.Get().IsError()) {
+            YRLOG_ERROR("sync registered failed, code {}. try to resync", result.GetErrorCode());
+            litebus::AsyncAfter(RECONNECT_CONTAINERD_INTERVAL_MS, aid, &ContainerExecutor::Sync);
+            return;
+        }
+        YRLOG_INFO("sync registered succeed.");
+        litebus::Async(aid, &ContainerExecutor::OnSyncRegistered);
+    });
+}
+
+void ContainerExecutor::OnSyncRegistered()
+{
+    synced_ = true;
+}
+
+litebus::Future<Status> ContainerExecutor::DoSyncRegistered()
+{
+    if (containerd_ == nullptr || !containerd_->IsConnected()) {
+        YRLOG_ERROR("containerd client is not connected, can not sync registered runtimes");
+        return Status(StatusCode::FAILED);
+    }
+    return GetRegisteredWarmUped().Then(
+        [aid(GetAID())](const litebus::Future<runtime::v1::GetRegisteredResponse> &future) -> litebus::Future<Status> {
+            if (future.IsError()) {
+                YRLOG_ERROR("get registered warmuped runtimes failed, code {}", future.GetErrorCode());
+                return Status(StatusCode::FAILED);
+            }
+            auto registeredRuntimes = future.Get();
+            YRLOG_INFO("get {} registered warmuped runtimes, currently unregister all",
+                       registeredRuntimes.funcruntimes_size());
+            auto unReg = std::make_shared<runtime::v1::UnregisterRequest>();
+            for (const auto &funcRuntime : registeredRuntimes.funcruntimes()) {
+                *unReg->add_ids() = funcRuntime.id();
+            }
+            return litebus::Async(aid, &ContainerExecutor::DoUnregisterWarmUped, unReg)
+                .Then(litebus::Defer(aid, &ContainerExecutor::OnUnregisteredWarmUped, unReg, std::placeholders::_1));
+        });
 }
 
 litebus::Future<Status> ContainerExecutor::NotifyInstancesDiskUsageExceedLimit(const std::string &description,
@@ -700,6 +747,14 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnRegisterTo
 litebus::Future<runtime::v1::NormalResponse> ContainerExecutor::DoRegisterToWarmUp(
     const std::shared_ptr<runtime::v1::RegisterRequest> &reg)
 {
+    if (!synced_) {
+        std::string msg = "sync not completed yet, can not warm up container now";
+        YRLOG_WARN("{}", msg);
+        runtime::v1::NormalResponse normal{};
+        normal.set_success(false);
+        normal.set_message(msg);
+        return normal;
+    }
     YRLOG_DEBUG("debug:: {}", reg->ShortDebugString());
     ASSERT_IF_NULL(containerd_);
     return containerd_

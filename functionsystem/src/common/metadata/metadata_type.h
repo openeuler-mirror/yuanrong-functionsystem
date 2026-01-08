@@ -78,6 +78,7 @@ struct FuncMetaData {
     std::string name;
     std::string version;
     std::string tenantId;
+    std::string revisionId;
     bool isSystemFunc{ false };
     // static function add
     uint32_t timeout = 0;

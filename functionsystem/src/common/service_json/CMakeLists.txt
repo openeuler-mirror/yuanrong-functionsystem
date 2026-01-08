@@ -15,6 +15,6 @@
 project(service_json)
 add_library(service_json STATIC "")
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} SERVICE_JSON_SRCS)
-add_dependencies(service_json posix_pb resource_view)
+add_dependencies(service_json posix_pb resource_view metadata)
 target_sources(service_json PRIVATE ${SERVICE_JSON_SRCS})
-target_link_libraries(service_json PUBLIC posix_pb resource_view scheduler_topology)
+target_link_libraries(service_json PUBLIC posix_pb resource_view scheduler_topology metadata)

@@ -917,6 +917,7 @@ private:
     std::unordered_map<std::string, std::shared_ptr<TokenBucketRateLimiter>> rateLimiterMap_;
 
     std::unordered_map<std::string, FunctionMeta> funcMetaMap_;
+    std::unordered_set<std::string> funcTag_;
 
     uint32_t maxForwardKillRetryTimes_ = MAX_FORWARD_KILL_RETRY_TIMES;
     uint32_t maxForwardKillRetryCycleMs_ = MAX_FORWARD_KILL_RETRY_CYCLE_MS;

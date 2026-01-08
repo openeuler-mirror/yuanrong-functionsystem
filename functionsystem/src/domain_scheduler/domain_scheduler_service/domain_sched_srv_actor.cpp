@@ -583,6 +583,9 @@ void DomainSchedSrvActor::UpdateMasterInfo(const explorer::LeaderInfo &leaderInf
         ASSERT_IF_NULL(underlayer_);
         underlayer_->SetScalerAddress(leaderInfo.address);
         (void)RegisterToGlobal();
+        if (isHeader_) {
+            StartPingPong(masterAid_.Url());
+        }
     }
 }
 

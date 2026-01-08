@@ -79,6 +79,7 @@ FuncMetaData BuildFuncMetaData(const ServiceInfo &serviceInfo, const FunctionCon
         name : BuildFuncName(serviceInfo.service, functionName),
         version : LATEST_VERSION,
         tenantId : DEFAULT_TENANT_ID,
+        revisionId : "0",
     };
 }
 
