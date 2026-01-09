@@ -90,7 +90,7 @@ litebus::Future<std::string> ExternalSystemCollector::CollectFromExternal() cons
 litebus::Future<Metric> ExternalSystemCPUCollector::GetUsage() const
 {
     return CollectFromExternal().Then([previous(previous_)](const std::string& response) -> litebus::Future<Metric> {
-        std::cout << "Received CPU response: " << response << std::endl;
+        YRLOG_DEBUG_COUNT_60("Received CPU response: {}", response);
         if (response.empty()) {
             return previous != nullptr ? *previous : Metric{};
         }
@@ -122,7 +122,7 @@ Metric ExternalSystemCPUCollector::GetLimit() const
 litebus::Future<Metric> ExternalSystemMemoryCollector::GetUsage() const
 {
     return CollectFromExternal().Then([previous(previous_)](const std::string& response) -> litebus::Future<Metric> {
-        std::cout << "Received Memory response: " << response << std::endl;
+        YRLOG_DEBUG_COUNT_60("Received Memory response: {}", response);
         if (response.empty()) {
             return previous != nullptr ? *previous : Metric{};
         }
