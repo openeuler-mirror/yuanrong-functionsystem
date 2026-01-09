@@ -1616,7 +1616,9 @@ Status ResourceViewActor::HandleReportedModification(const ResourceUnitChange &c
 
     if (modification.has_capacitychange()) {
         auto delta = modification.capacitychange().delta();
+        YRLOG_DEBUG("for test: Unit({}) delta:{}", agentResourceUnit.id(), delta.ShortDebugString());
         (*agentResourceUnit.mutable_capacity()) = agentResourceUnit.capacity() + delta;
+        (*agentResourceUnit.mutable_allocatable()) = agentResourceUnit.allocatable() + delta;
         (*view_->mutable_capacity()) = view_->capacity() + delta;
         (*view_->mutable_allocatable()) = view_->allocatable() + delta;
     }

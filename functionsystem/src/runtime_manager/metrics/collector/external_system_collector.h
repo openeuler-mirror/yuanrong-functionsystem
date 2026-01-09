@@ -29,6 +29,7 @@ class CurlHelper : public litebus::ActorBase {
 public:
     static std::shared_ptr<CurlHelper> NewCurlHelper()
     {
+        std::cout << "Creating CurlHelper actor" << std::endl;
         std::string endpoint = "/var/run/resource.sock";
         if (auto ep = litebus::os::GetEnv("EXTERNAL_RESOURCE_EP"); ep.IsSome()) {
             endpoint = ep.Get();
@@ -40,17 +41,18 @@ public:
         std::string actorName = "CurlHelper-" + litebus::uuid_generator::UUID::GetRandomUUID().ToString();
         auto helper = std::make_shared<CurlHelper>(actorName, endpoint, url);
         litebus::Spawn(helper);
+        std::cout << "Created CurlHelper actor" << std::endl;
         return helper;
     }
     CurlHelper() = default;
-    CurlHelper(const std::string &name, const std::string &externEndpoint, const std::string &url)
-        : litebus::ActorBase(name), externEndpoint_(externEndpoint), url_(url) {};
-    ~CurlHelper() override = default;
+    CurlHelper(const std::string &name, const std::string &externEndpoint, const std::string &url);
+    ~CurlHelper() override;
     litebus::Future<std::string> Query();
 
 private:
     std::string externEndpoint_;
     std::string url_;
+    void *curl_{ nullptr };
 };
 
 class ExternalSystemCollector : public BaseMetricsCollector {
@@ -88,7 +90,7 @@ class ExternalSystemCPUCollector : public ExternalSystemCollector {
 public:
     ExternalSystemCPUCollector() = default;
     explicit ExternalSystemCPUCollector(const double &limit, const litebus::ActorReference &curlActorRef)
-        : ExternalSystemCollector(limit, metrics_type::CPU, curlActorRef) {};
+        : ExternalSystemCollector(limit, metrics_type::CPU, curlActorRef), previous_(std::make_shared<Metric>()) {};
     ~ExternalSystemCPUCollector() override = default;
     litebus::Future<Metric> GetUsage() const override;
     Metric GetLimit() const override;
@@ -100,7 +102,7 @@ class ExternalSystemMemoryCollector : public ExternalSystemCollector {
 public:
     ExternalSystemMemoryCollector() = default;
     explicit ExternalSystemMemoryCollector(const double &limit, const litebus::ActorReference &curlActorRef)
-        : ExternalSystemCollector(limit, metrics_type::MEMORY, curlActorRef) {};
+        : ExternalSystemCollector(limit, metrics_type::MEMORY, curlActorRef), previous_(std::make_shared<Metric>()) {};
     ~ExternalSystemMemoryCollector() override = default;
     litebus::Future<Metric> GetUsage() const override;
     Metric GetLimit() const override;
