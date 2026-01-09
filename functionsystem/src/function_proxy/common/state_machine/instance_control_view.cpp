@@ -66,15 +66,24 @@ void InstanceControlView::Update(const std::string &instanceID, const resources:
     auto state = instanceInfo.instancestatus().code();
     if (machines_.find(instanceID) != machines_.end()) {
         auto currentOwner = machines_.at(instanceID)->GetOwner();
-        // The owner is current node does not care about etcd events.
         // Events from current node are not concerned
-        if (!isForceUpdate && (currentOwner == self_ || newOwner == self_)) {
+        if (!isForceUpdate && newOwner == self_) {
+            return;
+        }
+        // The owner is current node does not care about etcd events.
+        // ===Special case===: When instance is in SUSPEND state and receives update event
+        // where the owner in instanceInfo is not the current node (newOwner != self_),
+        // this indicates ownership has been transferred, thus instanceInfo needs to
+        // be updated to reflect the new owner.
+        if (!isForceUpdate && currentOwner == self_
+                && machines_.at(instanceID)->GetInstanceState() != InstanceState::SUSPEND) {
             return;
         }
         if (newOwner != currentOwner) {
             YRLOG_INFO("change instance({}) state machine's owner to {} from {}.", instanceID, newOwner, currentOwner);
         }
         machines_.at(instanceID)->UpdateInstanceInfo(instanceInfo);
+        // 实例休眠状态下，使所有节点的version一致，避免休眠实例唤醒到其他节点后，因version=0无法更新实例状态
         if (currentOwner != self_ && state != static_cast<int32_t>(InstanceState::SUSPEND)) {
             machines_.at(instanceID)->SetVersion(0);
         }
