@@ -190,6 +190,46 @@ TEST_F(InstanceControlViewTest, ListenUpdateInstanceRemote)
     EXPECT_TRUE(instanceControlView.GetInstance(instanceID)->GetUpdateByRouteInfo());
 }
 
+TEST_F(InstanceControlViewTest, ListenUpdateInstanceRemoteWhenLocalSuspend)
+{
+    InstanceControlView instanceControlView(TEST_NODE_ID, false);
+    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string instanceID = "instance id";
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->mutable_instance()->set_instanceid(instanceID);
+    scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(
+        static_cast<int32_t>(InstanceState::SCHEDULING));
+    scheduleReq->mutable_instance()->set_function(function);
+    auto mockMetaClient = MetaStoreClient::Create({ .etcdAddress = metaStoreServerHost_ });
+    TxnResponse response;
+    response.status = Status::OK();
+    response.responses.emplace_back(TxnOperationResponse());
+    instanceControlView.BindMetaStoreClient(mockMetaClient);
+    instanceControlView.NewInstance(scheduleReq);
+
+    instanceControlView.Update(instanceID, scheduleReq->instance(), false);
+    EXPECT_EQ(instanceControlView.GetInstance(instanceID)->GetOwner(), TEST_NODE_ID);
+    EXPECT_FALSE(instanceControlView.GetInstance(instanceID)->GetUpdateByRouteInfo());
+
+    auto machine = instanceControlView.GetInstance(instanceID);
+    machine->TransitionTo(TransContext{ InstanceState::CREATING, 0, "", true });
+    machine->TransitionTo(TransContext{ InstanceState::RUNNING, 0, "", true });
+    machine->TransitionTo(TransContext{ InstanceState::SUSPEND, 0, "", true });
+    EXPECT_EQ(instanceControlView.GetInstance(instanceID)->GetOwner(), TEST_NODE_ID);
+    EXPECT_EQ(instanceControlView.GetInstance(instanceID)->GetInstanceState(), InstanceState::SUSPEND);
+
+    auto remoteScheduleReq = std::make_shared<messages::ScheduleRequest>();
+    remoteScheduleReq->mutable_instance()->set_instanceid(instanceID);
+    remoteScheduleReq->mutable_instance()->mutable_instancestatus()->set_code(
+        static_cast<int32_t>(InstanceState::SCHEDULING));
+    remoteScheduleReq->mutable_instance()->set_function(function);
+    remoteScheduleReq->mutable_instance()->set_functionproxyid("1");
+    instanceControlView.Update(instanceID, remoteScheduleReq->instance(), false);
+    EXPECT_EQ(instanceControlView.GetInstance(instanceID)->GetOwner(), "1");
+    EXPECT_EQ(static_cast<int>(instanceControlView.GetInstance(instanceID)->GetInstanceState()),
+        static_cast<int>(InstanceState::SCHEDULING));
+}
+
 TEST_F(InstanceControlViewTest, ListenUpdateInstanceLocal)
 {
     InstanceControlView instanceControlView(TEST_NODE_ID, false);
