@@ -21,47 +21,64 @@
 #include "utils/os_utils.hpp"
 namespace functionsystem::runtime_manager {
 const uint32_t CPU_SCALE = 1000;
+const uint32_t MEMORY_SCALE = 1024 * 1024;
 size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp)
 {
     size_t totalSize = size * nmemb;
     userp->append(static_cast<char*>(contents), totalSize);
     return totalSize;
 }
+
+CurlHelper::CurlHelper(const std::string &name, const std::string &externEndpoint, const std::string &url)
+    : litebus::ActorBase(name), externEndpoint_(externEndpoint), url_(url)
+{
+    auto error = curl_global_init(CURL_GLOBAL_ALL);
+    if (error) {
+        std::cerr << "<CurlHelper> failed to initialize global curl!" << std::endl;
+        return;
+    }
+    curl_ = curl_easy_init();
+    if (!curl_) {
+        curl_global_cleanup();
+        std::cerr << "<CurlHelper> failed to initialize easy curl!" << std::endl;
+        return;
+    }
+};
+
+CurlHelper::~CurlHelper()
+{
+    curl_easy_cleanup(curl_);
+    curl_global_cleanup();
+    if (curl_ != nullptr) {
+        curl_ = nullptr;
+    }
+}
+
 litebus::Future<std::string> CurlHelper::Query()
 {
-    CURL* curl = curl_easy_init();
-    if (!curl) {
+    if (!curl_) {
         YRLOG_ERROR("Failed to initialize libcurl");
         return "";
     }
+    curl_easy_reset(curl_);
     std::string response;
-    curl_easy_setopt(curl, CURLOPT_UNIX_SOCKET_PATH, externEndpoint_);
-    curl_easy_setopt(curl, CURLOPT_URL, url_);
-    curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Accept: application/json");
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-    CURLcode res = curl_easy_perform(curl);
+    curl_easy_setopt(curl_, CURLOPT_UNIX_SOCKET_PATH, externEndpoint_.c_str());
+    curl_easy_setopt(curl_, CURLOPT_URL, url_.c_str());
+    curl_easy_setopt(curl_, CURLOPT_HTTPGET, 1L);
+    curl_easy_setopt(curl_, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl_, CURLOPT_WRITEDATA, &response);
+    CURLcode res = curl_easy_perform(curl_);
     if (res != CURLE_OK) {
         YRLOG_DEBUG_COUNT_60("curl_easy_perform() failed: {}", curl_easy_strerror(res));
-        curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
         return "";
     }
     long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &http_code);
     if (http_code != 200) {
         YRLOG_DEBUG_COUNT_60("{} for {} with status code: {}, response: {}", externEndpoint_, url_, http_code,
                              response);
-        curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
         return "";
     }
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
     return response;
 }
 
@@ -73,6 +90,7 @@ litebus::Future<std::string> ExternalSystemCollector::CollectFromExternal() cons
 litebus::Future<Metric> ExternalSystemCPUCollector::GetUsage() const
 {
     return CollectFromExternal().Then([previous(previous_)](const std::string& response) -> litebus::Future<Metric> {
+        std::cout << "Received CPU response: " << response << std::endl;
         if (response.empty()) {
             return previous != nullptr ? *previous : Metric{};
         }
@@ -104,6 +122,7 @@ Metric ExternalSystemCPUCollector::GetLimit() const
 litebus::Future<Metric> ExternalSystemMemoryCollector::GetUsage() const
 {
     return CollectFromExternal().Then([previous(previous_)](const std::string& response) -> litebus::Future<Metric> {
+        std::cout << "Received Memory response: " << response << std::endl;
         if (response.empty()) {
             return previous != nullptr ? *previous : Metric{};
         }
@@ -111,8 +130,8 @@ litebus::Future<Metric> ExternalSystemMemoryCollector::GetUsage() const
         try {
             auto j = nlohmann::json::parse(response);
             if (j.contains("mem") && j["mem"].is_number_integer()) {
-                auto memory = j["mem"].get<int>();
-                auto metric = Metric{ { double(memory) }, {}, {}, {} };
+                auto memory = j["mem"].get<int64_t>();
+                auto metric = Metric{ { double(memory) / MEMORY_SCALE }, {}, {}, {} };
                 *previous = metric;
                 return metric;
             }
