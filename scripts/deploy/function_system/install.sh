@@ -292,79 +292,97 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
   if [ "X${DEPLOY_FUNCTION_PROXY}" = "Xfalse" ] && [ ! -z "${UNIQUE_NODE_ID}" ]; then
     unique_proxy_option="--local_node_id=${UNIQUE_NODE_ID}"
   fi
-  local user_lod_export_option=">>${FS_LOG_PATH}/${NODE_ID}-function_agent${STD_LOG_SUFFIX} 2>&1"
-  if [ "x${USER_LOG_EXPORT_MODE}" == "xstd" ]; then
-    user_lod_export_option=""
-  fi
   local agent_uid=${YR_POD_NAME}
   if [ "x${YR_POD_NAME}" == "x" ]; then
     agent_uid="${NODE_ID}"
   fi
-  LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
-  HOST_IP="${IP_ADDRESS}" \
-  RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG\
+
+  # Extract agent arguments into an array for clarity and reuse
+  agent_args=(
+    --enable_merge_process=true
+    --ip="${IP_ADDRESS}"
+    --node_id="${NODE_ID}"
+    --agent_uid="${agent_uid}"
+    --alias="${FUNCTION_AGENT_ALIAS}"
+    --log_config="${FS_LOG_CONFIG}"
+    --litebus_thread_num="${FUNCTION_AGENT_LITEBUS_THREAD}"
+    --local_scheduler_address="${IP_ADDRESS}:${FUNCTION_PROXY_PORT}"
+    --agent_listen_port="${FUNCTION_AGENT_PORT}"
+    --runtime_dir="${RUNTIME_HOME_DIR}/service"
+    --runtime_home_dir="${RUNTIME_USER_HOME_DIR}"
+    --runtime_logs_dir="${RUNTIME_LOG_PATH}"
+    --runtime_std_log_dir=""
+    --runtime_ld_library_path="${ld_library_path}:${RUNTIME_HOME_DIR}/service/cpp/snlib:${RUNTIME_HOME_DIR}/sdk/cpp/lib"
+    --runtime_log_level="${RUNTIME_LOG_LEVEL}"
+    --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}"
+    --runtime_max_log_file_num="${RUNTIME_LOG_ROLLING_MAX_FILES}"
+    --runtime_config_dir="${RUNTIME_HOME_DIR}/service/cpp/config/"
+    --enable_separated_redirect_runtime_std="${SEPARATED_REDIRECT_RUNTIME_STD}"
+    --user_log_export_mode="${USER_LOG_EXPORT_MODE}"
+    --npu_collection_mode="${NPU_COLLECTION_MODE}"
+    --gpu_collection_enable="${GPU_COLLECTION_ENABLE}"
+    --proxy_grpc_server_port="${FUNCTION_PROXY_GRPC_PORT}"
+    --setCmdCred=false
+    --python_dependency_path="${PYTHONPATH}:${RUNTIME_HOME_DIR}/service/python"
+    --python_log_config_path="${RUNTIME_HOME_DIR}/service/python/config/python-runtime-log.json"
+    --java_system_property="${RUNTIME_HOME_DIR}/service/java/log4j2.xml"
+    --java_system_library_path="${RUNTIME_HOME_DIR}/service/java/lib"
+    --host_ip="${IP_ADDRESS}"
+    --port="${FUNCTION_AGENT_PORT}"
+    --data_system_port="${DS_WORKER_PORT}"
+    --agent_address="${IP_ADDRESS}:${FUNCTION_AGENT_PORT}"
+    --enable_metrics="${ENABLE_METRICS}"
+    --metrics_config="${METRICS_CONFIG}"
+    --metrics_config_file="${METRICS_CONFIG_FILE}"
+    --runtime_initial_port="${RUNTIME_INIT_PORT}"
+    --port_num="${RUNTIME_PORT_NUM}"
+    --system_timeout="${SYSTEM_TIMEOUT}"
+    --metrics_collector_type="${METRICS_COLLECTOR_TYPE}"
+    --proc_metrics_cpu="${CPU4COMP}"
+    --custom_resources="${CUSTOM_RESOURCES}"
+    --is_protomsg_to_runtime="${IS_PROTOMSG_TO_RUNTIME}"
+    --massif_enable="${MASSIF_ENABLE}"
+    --enable_inherit_env="${ENABLE_INHERIT_ENV}"
+    --memory_detection_interval="${MEMORY_DETECTION_INTERVAL}"
+    --oom_kill_enable="${OOM_KILL_ENABLE}"
+    --oom_kill_control_limit="${OOM_KILL_CONTROL_LIMIT}"
+    --oom_consecutive_detection_count="${OOM_CONSECUTIVE_DETECTION_COUNT}"
+    --kill_process_timeout_seconds="${KILL_PROCESS_TIMEOUT_SECONDS}"
+    --runtime_ds_connect_timeout="${RUNTIME_DS_CONNECT_TIMEOUT}"
+    --runtime_direct_connection_enable="${RUNTIME_DIRECT_CONNECTION_ENABLE}"
+    --ssl_enable="${SSL_ENABLE}"
+    --ssl_base_path="${SSL_BASE_PATH}"
+    --ssl_root_file="${SSL_ROOT_FILE}"
+    --ssl_cert_file="${SSL_CERT_FILE}"
+    --ssl_key_file="${SSL_KEY_FILE}"
+    --etcd_auth_type="${ETCD_AUTH_TYPE}"
+    --etcd_root_ca_file="${ETCD_CA_FILE}"
+    --etcd_cert_file="${ETCD_CLIENT_CERT_FILE}"
+    --etcd_key_file="${ETCD_CLIENT_KEY_FILE}"
+    --etcd_ssl_base_path=${ETCD_SSL_BASE_PATH}
+    --runtime_default_config="${RUNTIME_DEFAULT_CONFIG}"
+    --proc_metrics_memory="${MEM4COMP}"
+    --data_system_enable=true
+    --data_system_host="${IP_ADDRESS}"
+    --runtime_instance_debug_enable="${RUNTIME_INSTANCE_DEBUG_ENABLE}"
+  )
+
+  # Start with or without redirecting stdout/stderr depending on USER_LOG_EXPORT_MODE
+  if [ "x${USER_LOG_EXPORT_MODE}" == "xstd" ]; then
+    LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
+    HOST_IP="${IP_ADDRESS}" \
+    RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG \
     INIT_LABELS=${LABELS} \
-    ${bin} \
-    --enable_merge_process=true \
-    --ip="${IP_ADDRESS}" \
-    --node_id="${NODE_ID}" \
-    --agent_uid="${agent_uid}" \
-    --alias="${FUNCTION_AGENT_ALIAS}" \
-    --log_config="${FS_LOG_CONFIG}" \
-    --litebus_thread_num="${FUNCTION_AGENT_LITEBUS_THREAD}" \
-    --local_scheduler_address="${IP_ADDRESS}:${FUNCTION_PROXY_PORT}" \
-    --agent_listen_port="${FUNCTION_AGENT_PORT}" \
-    --runtime_dir="${RUNTIME_HOME_DIR}/service" \
-    --runtime_home_dir="${RUNTIME_USER_HOME_DIR}" \
-    --runtime_logs_dir="${RUNTIME_LOG_PATH}" --runtime_std_log_dir="" \
-    --runtime_ld_library_path="${ld_library_path}:${RUNTIME_HOME_DIR}/service/cpp/snlib:${RUNTIME_HOME_DIR}/sdk/cpp/lib" \
-    --runtime_log_level="${RUNTIME_LOG_LEVEL}" \
-    --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}" \
-    --runtime_max_log_file_num="${RUNTIME_LOG_ROLLING_MAX_FILES}" \
-    --runtime_config_dir="${RUNTIME_HOME_DIR}/service/cpp/config/" \
-    --enable_separated_redirect_runtime_std="${SEPARATED_REDIRECT_RUNTIME_STD}" \
-    --user_log_export_mode="${USER_LOG_EXPORT_MODE}" \
-    --npu_collection_mode="${NPU_COLLECTION_MODE}" \
-    --gpu_collection_enable="${GPU_COLLECTION_ENABLE}" \
-    --proxy_grpc_server_port="${FUNCTION_PROXY_GRPC_PORT}" \
-    --setCmdCred=false \
-    --python_dependency_path="${PYTHONPATH}:${RUNTIME_HOME_DIR}/service/python" \
-    --python_log_config_path="${RUNTIME_HOME_DIR}/service/python/config/python-runtime-log.json" \
-    --java_system_property="${RUNTIME_HOME_DIR}/service/java/log4j2.xml" \
-    --java_system_library_path="${RUNTIME_HOME_DIR}/service/java/lib" \
-    --host_ip="${IP_ADDRESS}" \
-    --port="${FUNCTION_AGENT_PORT}" \
-    --data_system_port="${DS_WORKER_PORT}" \
-    --agent_address="${IP_ADDRESS}:${FUNCTION_AGENT_PORT}" \
-    --enable_metrics="${ENABLE_METRICS}" \
-    --metrics_config="${METRICS_CONFIG}" \
-    --metrics_config_file="${METRICS_CONFIG_FILE}" \
-    --runtime_initial_port="${RUNTIME_INIT_PORT}" \
-    --port_num="${RUNTIME_PORT_NUM}" \
-    --system_timeout="${SYSTEM_TIMEOUT}" \
-    --metrics_collector_type="${METRICS_COLLECTOR_TYPE}" \
-    --proc_metrics_cpu="${CPU4COMP}" \
-    --custom_resources="${CUSTOM_RESOURCES}" \
-    --is_protomsg_to_runtime="${IS_PROTOMSG_TO_RUNTIME}" \
-    --massif_enable="${MASSIF_ENABLE}" \
-    --enable_inherit_env="${ENABLE_INHERIT_ENV}" \
-    --memory_detection_interval="${MEMORY_DETECTION_INTERVAL}" \
-    --oom_kill_enable="${OOM_KILL_ENABLE}" \
-    --oom_kill_control_limit="${OOM_KILL_CONTROL_LIMIT}" \
-    --oom_consecutive_detection_count="${OOM_CONSECUTIVE_DETECTION_COUNT}" \
-    --kill_process_timeout_seconds="${KILL_PROCESS_TIMEOUT_SECONDS}" \
-    --runtime_ds_connect_timeout="${RUNTIME_DS_CONNECT_TIMEOUT}" \
-    --runtime_direct_connection_enable="${RUNTIME_DIRECT_CONNECTION_ENABLE}" \
-    --ssl_enable="${SSL_ENABLE}" --ssl_base_path="${SSL_BASE_PATH}" \
-    --ssl_root_file="${SSL_ROOT_FILE}" --ssl_cert_file="${SSL_CERT_FILE}" --ssl_key_file="${SSL_KEY_FILE}" \
-    --etcd_auth_type="${ETCD_AUTH_TYPE}" --etcd_root_ca_file="${ETCD_CA_FILE}" --etcd_cert_file="${ETCD_CLIENT_CERT_FILE}" --etcd_key_file="${ETCD_CLIENT_KEY_FILE}" \
-    --etcd_ssl_base_path=${ETCD_SSL_BASE_PATH} \
-    --runtime_default_config="${RUNTIME_DEFAULT_CONFIG}" \
-    --proc_metrics_memory="${MEM4COMP}" ${unique_proxy_option} \
-    --data_system_enable=true \
-    --data_system_host="${IP_ADDRESS}" \
-    --runtime_instance_debug_enable="${RUNTIME_INSTANCE_DEBUG_ENABLE}" ${user_lod_export_option} &
-  FUNCTION_AGENT_PID="$!"
+    ${bin} "${agent_args[@]}" ${unique_proxy_option} &
+    FUNCTION_AGENT_PID="$!"
+  else
+    LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
+    HOST_IP="${IP_ADDRESS}" \
+    RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG \
+    INIT_LABELS=${LABELS} \
+    ${bin} "${agent_args[@]}" ${unique_proxy_option} >>"${FS_LOG_PATH}/${NODE_ID}-function_agent${STD_LOG_SUFFIX}" 2>&1 &
+    FUNCTION_AGENT_PID="$!"
+  fi
   log_info "succeed to start function agent and runtime manager, port=${FUNCTION_AGENT_PORT} pid=${FUNCTION_AGENT_PID}"
 }
 
