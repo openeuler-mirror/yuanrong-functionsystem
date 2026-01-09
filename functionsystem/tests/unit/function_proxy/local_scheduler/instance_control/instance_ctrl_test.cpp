@@ -5994,7 +5994,6 @@ TEST_F(InstanceCtrlTest, KillInstanceWithTransSuspend)
     EXPECT_CALL(*instanceControlView_, GetInstance).WillOnce(Return(stateMachine));
     EXPECT_CALL(mockStateMachine, GetInstanceState()).WillOnce(Return(InstanceState::RUNNING));
     EXPECT_CALL(mockStateMachine, IsSaving).WillOnce(Return(false));
-    EXPECT_CALL(mockStateMachine, ReleaseOwner).WillOnce(Return());
     EXPECT_CALL(mockStateMachine, TransitionToImpl(InstanceState::SUSPEND, _, _, _, _))
         .WillOnce(Return(TransitionResult{ InstanceState::RUNNING, InstanceInfo(), InstanceInfo(), 1 }));
     EXPECT_CALL(*mockSharedClientManagerProxy_, DeleteClient(_)).WillRepeatedly(Return(Status::OK()));
