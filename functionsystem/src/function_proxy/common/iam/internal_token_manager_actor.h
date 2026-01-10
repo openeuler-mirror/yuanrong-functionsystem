@@ -79,6 +79,7 @@ private:
     std::shared_ptr<IAMClient> iamClient_{ nullptr };
     std::function<void(const std::string &, const std::string &, const std::string &)> updateTokenCallback_{ nullptr };
     std::string clusterID_;
+    std::unordered_map<std::string, std::shared_ptr<litebus::Promise<std::shared_ptr<TokenSalt>>>> requirePending_;
     std::unordered_map<std::string, std::shared_ptr<TokenSalt>> newTokenMap_;
     litebus::Timer checkTokenExpiredInAdvanceTimer_;
 };
