@@ -229,6 +229,7 @@ type FaaSFuncMetaData struct {
 	EnableAuthInHeader  bool              `json:"enable_auth_in_header" valid:"optional"`
 	DNSDomainCfg        []DNSDomainInfo   `json:"dns_domain_cfg" valid:",optional"`
 	VPCTriggerImage     string            `json:"vpcTriggerImage" valid:",optional"`
+	IdleTime            int64             `json:"idleTime" valid:",optional"`
 }
 
 // FaaSResourceMetaData include resource data such as cpu and memory

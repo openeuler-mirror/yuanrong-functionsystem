@@ -92,6 +92,9 @@ type FuncMetaData struct {
 	VPCTriggerImage     string            `json:"vpcTriggerImage" valid:",optional"`
 	StateConfig         StateConfig       `json:"stateConfig" valid:",optional"`
 	BusinessType        string            `json:"businessType" valid:"optional"`
+	IdleTime            int64             `json:"idleTime" valid:"optional"`
+	WarmupType          string            `json:"warmup" valid:",optional"`
+	RootfsSpecMeta      RootfsSpecMeta    `json:"rootfs" valid:",optional"`
 }
 
 // StateConfig ConsistentWithInstance- The lifecycle is consistent with that of the instance.
@@ -662,4 +665,23 @@ type Device struct {
 	Count   int    `json:"count,omitempty"`
 	Latency int    `json:"latency,omitempty"`
 	Stream  int    `json:"stream,omitempty"`
+}
+
+// RootfsStorageInfo defines rootfs storage information
+type RootfsStorageInfo struct {
+	Endpoint  string `json:"endpoint" valid:",optional"`
+	Bucket    string `json:"bucket" valid:",optional"`
+	Object    string `json:"object" valid:",optional"`
+	AccessKey string `json:"accessKey" valid:",optional"`
+	SecretKey string `json:"secretKey" valid:",optional"`
+}
+
+// RootfsSpecMeta defines rootfs specification metadata
+type RootfsSpecMeta struct {
+	Runtime     string            `json:"runtime" valid:",optional"`
+	Type        string            `json:"type" valid:",optional"`
+	ImageURL    string            `json:"imageurl" valid:",optional"`
+	ReadOnly    bool              `json:"readonly" valid:",optional"`
+	StorageInfo RootfsStorageInfo `json:"storageInfo" valid:",optional"`
+	MountPoint  string            `json:"mountpoint" valid:",optional"`
 }
