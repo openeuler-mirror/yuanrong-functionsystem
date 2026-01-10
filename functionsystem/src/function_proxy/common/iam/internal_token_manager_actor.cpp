@@ -27,11 +27,7 @@ namespace {
 bool IsValidToken(const std::shared_ptr<TokenSalt> &tokenSalt)
 {
     auto now = static_cast<uint64_t>(std::time(nullptr));
-    if (tokenSalt->expiredTimeStamp <= now + NEW_TOKEN_EXPIRED_OFFSET) {
-        YRLOG_WARN("local token is expired or going to be expired:{}", tokenSalt->expiredTimeStamp);
-        return false;
-    }
-    return true;
+    return tokenSalt->expiredTimeStamp > now + NEW_TOKEN_EXPIRED_OFFSET;
 }
 }  // namespace
 
@@ -60,7 +56,6 @@ void InternalTokenManagerActor::UpdateSyncToken(const std::vector<WatchEvent> &e
     for (const auto &event : events) {
         auto eventKey = TrimKeyPrefix(event.kv.key(), metaStorageAccessor_->GetMetaClient()->GetTablePrefix());
         auto tenantID = GetTokenTenantID(eventKey);
-        YRLOG_DEBUG("detected token updated, tenantID: {}, eventType:{}", tenantID, fmt::underlying(event.eventType));
         switch (event.eventType) {
             case EVENT_TYPE_PUT: {
                 SyncPutToken(tenantID, event.kv.value());
@@ -71,7 +66,7 @@ void InternalTokenManagerActor::UpdateSyncToken(const std::vector<WatchEvent> &e
                 break;
             }
             default: {
-                YRLOG_WARN("unknown event type {}", fmt::underlying(event.eventType));
+                YRLOG_WARN("{}|unknown event type {}", tenantID, fmt::underlying(event.eventType));
                 break;
             }
         }
@@ -82,7 +77,7 @@ void InternalTokenManagerActor::SyncPutToken(const std::string &tenantID, const 
 {
     auto tokenSalt = TransTokenSaltFromJson(tokenJson);
     if (auto status(DecryptTokenSaltFromStorage(tokenSalt->token, tokenSalt)); status.IsError()) {
-        YRLOG_WARN("sync put token from storage failed, err: {}", status.ToString());
+        YRLOG_WARN("{}|sync and put token failed, err: {}", tenantID, status.ToString());
         return;
     }
     SaveTokenAndTriggerUpdate(tenantID, tokenSalt);
@@ -134,12 +129,20 @@ litebus::Future<Status> InternalTokenManagerActor::VerifyToken(const std::string
 litebus::Future<std::shared_ptr<TokenSalt>> InternalTokenManagerActor::RequireEncryptToken(const std::string &tenantID)
 {
     if (newTokenMap_.find(tenantID) != newTokenMap_.end() && IsValidToken(newTokenMap_[tenantID])) {
-        YRLOG_DEBUG("RequireEncryptToken return local token, tenantID: {}", tenantID);
-        return newTokenMap_[tenantID];
+        if (IsValidToken(newTokenMap_[tenantID])) {
+            return newTokenMap_[tenantID];
+        }
+        YRLOG_WARN("{}|The local token has expired or is about to expire: {}", tenantID,
+                   newTokenMap_[tenantID]->expiredTimeStamp);
     }
-    auto promise = std::make_shared<litebus::Promise<std::shared_ptr<TokenSalt>>>();
-    DoRequireEncryptToken(tenantID, promise, 0);
-    return promise->GetFuture();
+
+    if (requirePending_.find(tenantID) != requirePending_.end()) {
+        return requirePending_[tenantID]->GetFuture();
+    }
+
+    requirePending_[tenantID] = std::make_shared<litebus::Promise<std::shared_ptr<TokenSalt>>>();
+    DoRequireEncryptToken(tenantID, requirePending_[tenantID], 0);
+    return requirePending_[tenantID]->GetFuture();
 }
 
 void InternalTokenManagerActor::DoRequireEncryptToken(
@@ -151,6 +154,7 @@ void InternalTokenManagerActor::DoRequireEncryptToken(
         YRLOG_ERROR("{}|require token from iam exceed max times", tenantID);
         auto tokenSalt = std::make_shared<TokenSalt>();
         tokenSalt->status = Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "require token timeout");
+        requirePending_.erase(tenantID);
         promise->SetValue(tokenSalt);
         return;
     }
@@ -167,7 +171,11 @@ litebus::Future<std::shared_ptr<TokenSalt>> InternalTokenManagerActor::OnRequire
     if (tokenSalt->status.IsOk() || tokenSalt->status.StatusCode() != StatusCode::ERR_INNER_SYSTEM_ERROR) {
         if (!tokenSalt->token.empty()) {
             SaveTokenAndTriggerUpdate(tenantID, tokenSalt);
+            YRLOG_INFO("{}|success to require token from iam", tenantID);
+        } else {
+            YRLOG_ERROR("{}|token required from iam server is empty", tenantID);
         }
+        requirePending_.erase(tenantID);
         promise->SetValue(tokenSalt);
         return tokenSalt;
     }
@@ -185,7 +193,7 @@ void InternalTokenManagerActor::DoVerifyToken(const std::string &token,
         promise->SetValue(Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "verify token timeout"));
         return;
     }
-    YRLOG_INFO("require token from iam, retryTimes({})", retryTimes);
+    YRLOG_INFO("verify token to iam-server, retryTimes({})", retryTimes);
     iamClient_->VerifyToken(token).Then([aid(GetAID()), token, promise, retryTimes](const Status status) {
         if (status.IsOk() || status.StatusCode() != StatusCode::ERR_INNER_SYSTEM_ERROR) {
             promise->SetValue(status);
@@ -230,10 +238,14 @@ void InternalTokenManagerActor::CheckTokenExpiredInAdvance()
             needUpdateSet.insert(tokenIter.first);
         }
     }
-    for (const auto &val : needUpdateSet) {
-        YRLOG_INFO("start update token in advance, tenantID: {}", val);
-        auto promise = std::make_shared<litebus::Promise<std::shared_ptr<TokenSalt>>>();
-        DoRequireEncryptToken(val, promise, 0);
+    for (const auto &tenantID : needUpdateSet) {
+        if (requirePending_.find(tenantID) != requirePending_.end()) {
+            continue;
+        }
+        YRLOG_INFO("{}|start update token in advance", tenantID);
+
+        requirePending_[tenantID] = std::make_shared<litebus::Promise<std::shared_ptr<TokenSalt>>>();
+        DoRequireEncryptToken(tenantID, requirePending_[tenantID], 0);
     }
     checkTokenExpiredInAdvanceTimer_ = litebus::AsyncAfter(CHECK_EXPIRED_INTERVAL, GetAID(),
                                                            &InternalTokenManagerActor::CheckTokenExpiredInAdvance);

@@ -731,7 +731,7 @@ TEST_F(InternalIAMTest, CheckTokenExpiredInAdvanceTest)
     auto testIamClient = MockIAMClient::CreateMockIAMClient(testIamBasePath_);
     internalIAM_->BindIAMClient(testIamClient);
     internalIAM_->syncTokenActor_->BindIAMClient(testIamClient);
-    auto response0 = litebus::http::Response{ litebus::http::ResponseCode::FORBIDDEN };
+    auto response0 = litebus::http::Response{ litebus::http::ResponseCode::FORBIDDEN };  // not retry
     auto response1 = litebus::http::Response{ litebus::http::ResponseCode::OK };
     response1.headers["X-Auth"] = "encrypt_token";
     auto newExpired = static_cast<uint64_t>(std::time(nullptr)) + 600;
@@ -741,10 +741,15 @@ TEST_F(InternalIAMTest, CheckTokenExpiredInAdvanceTest)
     internalIAM_->syncTokenActor_->newTokenMap_["tenant001"] = tokenSalt;
     internalIAM_->syncTokenActor_->newTokenMap_["tenant002"] = tokenSalt1;
     internalIAM_->syncTokenActor_->CheckTokenExpiredInAdvance();
+    ASSERT_AWAIT_TRUE([&]() -> bool {
+        return internalIAM_->syncTokenActor_->requirePending_.find("tenant001")
+               == internalIAM_->syncTokenActor_->requirePending_.end();
+    });  // wait for 403 require token finished
     internalIAM_->syncTokenActor_->CheckTokenExpiredInAdvance();
-    ASSERT_AWAIT_TRUE(
-        [&]() -> bool { return internalIAM_->syncTokenActor_->newTokenMap_["tenant001"]->expiredTimeStamp == newExpired;});
-    EXPECT_TRUE( internalIAM_->syncTokenActor_->newTokenMap_["tenant002"]->expiredTimeStamp == expire1);
+    ASSERT_AWAIT_TRUE([&]() -> bool {
+        return internalIAM_->syncTokenActor_->newTokenMap_["tenant001"]->expiredTimeStamp == newExpired;
+    });
+    EXPECT_TRUE(internalIAM_->syncTokenActor_->newTokenMap_["tenant002"]->expiredTimeStamp == expire1);
 }
 
 TEST_F(InternalIAMTest, InitWithCredentialTest)  // NOLINT
