@@ -58,10 +58,10 @@ std::string GetHeaderValueFromResponse(const litebus::http::Response &localVarRe
 {
     auto iter = localVarResponse.headers.find(headerKey);
     if (iter == localVarResponse.headers.end()) {
-        YRLOG_ERROR("failed to get header {} from response", headerKey);
+        YRLOG_ERROR("failed to get header:{} from response", headerKey);
         return "";
     } else if (iter->second.empty()) {
-        YRLOG_ERROR("get header {} is empty from response", headerKey);
+        YRLOG_ERROR("header:{} is empty from response", headerKey);
         return "";
     } else {
         return iter->second;
@@ -114,11 +114,11 @@ litebus::Future<std::shared_ptr<TokenSalt>> IAMClient::RequireEncryptToken(const
     std::map<std::string, std::string> headers{ { HEADER_TENANT_ID_KEY, tenantID } };
     auto promise = std::make_shared<litebus::Promise<std::shared_ptr<TokenSalt>>>();
     auto future = CallApi(REQUIRE_ENCRYPT_TOKEN_PATH, std::string("GET"), headers);
-    future.OnComplete([promise](const litebus::Future<litebus::http::Response> &respFuture) {
+    future.OnComplete([promise, tenantID](const litebus::Future<litebus::http::Response> &respFuture) {
         auto result = std::make_shared<TokenSalt>();
         if (respFuture.IsError()) {
-            YRLOG_ERROR("error({}) calling api require token, please ensure that the iam server is reachable.",
-                        respFuture.GetErrorCode());
+            YRLOG_ERROR("{}|error({}) calling api require token, please ensure that the iam server is reachable.",
+                        tenantID, respFuture.GetErrorCode());
             result->status = Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "iam server not reachable");
             promise->SetValue(result);
             return;
@@ -128,13 +128,13 @@ litebus::Future<std::shared_ptr<TokenSalt>> IAMClient::RequireEncryptToken(const
         if (code >= litebus::http::ResponseCode::INTERNAL_SERVER_ERROR
             || code == litebus::http::HttpErrorCode::CONNECTION_REFUSED
             || code == litebus::http::HttpErrorCode::CONNECTION_TIMEOUT) {
-            YRLOG_ERROR("error:{} require token, please ensure that iam server is available.", code);
+            YRLOG_ERROR("{}|error:{} require token, please ensure that iam server is available.", tenantID, code);
             result->status = Status(StatusCode::ERR_INNER_SYSTEM_ERROR, &"iam server not available:"[code]);
             promise->SetValue(result);
             return;
         }
         if (code >= HTTP_CODE_CLIENT_ERROR || code < HTTP_CODE_CLIENT_SUCCESS) {
-            YRLOG_ERROR("IAMClient require token err calling api: {}", code);
+            YRLOG_ERROR("{}|IAMClient require token err calling api: {}", tenantID, code);
             promise->SetValue(result);
             return;
         }
@@ -145,7 +145,7 @@ litebus::Future<std::shared_ptr<TokenSalt>> IAMClient::RequireEncryptToken(const
             try {
                 result->expiredTimeStamp = std::stoull(expireStr);
             } catch (std::exception &e) {
-                YRLOG_WARN("transform time stamp type failed, err:{}", std::string(e.what()));
+                YRLOG_WARN("{}|transform time stamp type failed, err:{}", tenantID, std::string(e.what()));
             }
         }
         promise->SetValue(result);

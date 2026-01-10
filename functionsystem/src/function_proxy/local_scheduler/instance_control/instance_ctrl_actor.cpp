@@ -4927,7 +4927,7 @@ void InstanceCtrlActor::RemoveInternalTokenReference(const std::string &instance
     if (internalCredReferenceMap_.find(tenantID) != internalCredReferenceMap_.end()) {
         (void)internalCredReferenceMap_[tenantID].erase(instanceID);
         if (internalCredReferenceMap_[tenantID].empty()) {
-            YRLOG_INFO("gonna remove internal token");
+            YRLOG_INFO("{}|gonna remove internal token", tenantID);
             internalIAM_->AbandonTokenByTenantID(tenantID);
             internalIAM_->AbandonCredentialByTenantID(tenantID);
             (void)internalCredReferenceMap_.erase(tenantID);
@@ -4943,13 +4943,13 @@ void InstanceCtrlActor::UpdateInternalToken(const std::string &tenantID, const s
         return;
     }
     if (internalCredReferenceMap_.find(tenantID) == internalCredReferenceMap_.end()) {
-        YRLOG_WARN("do not have reference of token");
+        YRLOG_WARN("{}|do not have reference of token", tenantID);
         return;
     }
     for (auto instanceIte : internalCredReferenceMap_[tenantID]) {
         auto stateMachine = instanceControlView_->GetInstance(instanceIte.data());
         if (stateMachine == nullptr) {
-            YRLOG_ERROR("{}|StateMachine is null", instanceIte.data());
+            YRLOG_ERROR("{}|{}|StateMachine is null", tenantID, instanceIte.data());
             continue;
         }
         auto instanceInfo = stateMachine->GetInstanceInfo();
