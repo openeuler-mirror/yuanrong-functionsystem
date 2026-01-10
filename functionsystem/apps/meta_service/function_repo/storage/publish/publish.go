@@ -26,6 +26,7 @@ import (
 	"meta_service/common/functionhandler"
 	"meta_service/common/logger/log"
 	"meta_service/common/metadata"
+	"meta_service/common/types"
 	"meta_service/function_repo/config"
 	"meta_service/function_repo/errmsg"
 	"meta_service/function_repo/model"
@@ -174,6 +175,7 @@ func buildFaaSFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionVa
 	info.FuncMetaData.FuncName = fv.FunctionVersion.FuncName
 	info.FuncMetaData.Service = fv.FunctionVersion.Service
 	info.FuncMetaData.VersionDescription = fv.FunctionVersion.Description
+	info.FuncMetaData.IdleTime = fv.FunctionVersion.IdleTime
 	info.FuncMetaData.IsStatefulFunction = fv.FunctionVersion.StatefulFlag != 0
 	info.FuncMetaData.Layers, err = getFaaSLayerBucket(storage.GetTxnByKind(txn.GetCtx(), ""),
 		fv.FunctionLayer, tenantInfo)
@@ -341,6 +343,9 @@ func buildFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionValue,
 	info.FuncMetaData.VersionDescription = fv.FunctionVersion.Description
 	info.FuncMetaData.StatefulFlag = fv.FunctionVersion.StatefulFlag != 0
 	info.FuncMetaData.HookHandler = fv.FunctionVersion.HookHandler
+	info.FuncMetaData.IdleTime = fv.FunctionVersion.IdleTime
+	info.FuncMetaData.WarmupType = fv.FunctionVersion.WarmupType
+	info.FuncMetaData.RootfsSpecMeta = buildRootFsSpecMeta(fv.FunctionVersion.RootfsSpecMeta)
 	var err error
 	info.CodeMetaData, err = buildCodeMetaData(fv, tenantInfo.BusinessID)
 	if err != nil {
@@ -360,6 +365,22 @@ func buildFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionValue,
 	info.ExtendedMetaData.ExtendedTimeout = fv.FunctionVersion.ExtendedTimeout
 	info.ExtendedMetaData.Device = fv.FunctionVersion.Device
 	return info, nil
+}
+
+func buildRootFsSpecMeta(rootfs types.RootfsSpecMeta) metadata.RootfsSpecMeta {
+	return metadata.RootfsSpecMeta{
+		Runtime:  rootfs.Runtime,
+		Type:     rootfs.Type,
+		ImageURL: rootfs.ImageURL,
+		ReadOnly: rootfs.ReadOnly,
+		StorageInfo: metadata.RootfsStorageInfo{
+			Endpoint:  rootfs.StorageInfo.Endpoint,
+			Bucket:    rootfs.StorageInfo.Bucket,
+			Object:    rootfs.StorageInfo.Object,
+			AccessKey: rootfs.StorageInfo.AccessKey,
+			SecretKey: rootfs.StorageInfo.SecretKey,
+		},
+	}
 }
 
 func buildCodeMetaData(fv storage.FunctionVersionValue, businessID string) (metadata.CodeMetaData, error) {

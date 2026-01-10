@@ -44,20 +44,19 @@ bool endsWith(const std::string &str, const std::string &suffix)
     return str.substr(str.size() - suffix.size()) == suffix;
 }
 
-std::string GetDestinationPath(const std::string &destination)
+std::string GetDirectoryPath(const std::string &path)
 {
-    if (!endsWith(destination, ".img")) {
-        return destination;
+    if (path.empty()) {
+        return ".";
     }
-    auto pos = destination.find_last_of("/");
-        if (pos == std::string::npos) {
-            return "./";
-        }
-        auto dst = destination.substr(0, pos);
-        if (dst.empty()) {
-            return "/";
-        }
-        return dst;
+    auto pos = path.find_last_of("/");
+    if (pos == std::string::npos) {
+        return ".";
+    }
+    if (pos == 0) {
+        return "/";
+    }
+    return path.substr(0, pos);
 }
 
 // implement it for different schema, like 'file://', 'ftp://', 'http://'
@@ -159,7 +158,10 @@ public:
             return std::make_pair(
                 Status(StatusCode::FUNC_AGENT_INVALID_WORKING_DIR_FILE, "invalid package size with " + dsKey_), "");
         }
-        auto destinationPath = GetDestinationPath(dst);
+        auto destinationPath = dst;
+        if (endsWith(dst, ".img")) {
+            destinationPath = GetDirectoryPath(dst);
+        }
         std::string fullpath = litebus::os::Join(destinationPath, filename);
         std::ofstream file(fullpath, std::ios::out | std::ios::binary);
         if (!file.is_open()) {
@@ -309,14 +311,17 @@ DeployResult WorkingDirDeployer::Deploy(const std::shared_ptr<messages::DeployRe
                                "Unsupported working_dir schema: " + config.objectid());
         return result;
     }
-    auto dst = GetDestinationPath(result.destination);
+    auto dst = result.destination;
+    if (endsWith(dst, ".img")) {
+        dst = GetDirectoryPath(dst);
+    }
     // 2. create dest working dir
     if (!CheckIllegalChars(dst) || !litebus::os::Mkdir(dst).IsNone()) {
         YRLOG_ERROR("failed to create dir for workingDir({}).", dst);
         // failed to create directory, return 0x111ad and object directory.
-        result.status = Status(
-            StatusCode::FUNC_AGENT_MKDIR_DEST_WORKING_DIR_ERROR,
-            "failed to create dest working dir for " + dst + ", msg: +" + litebus::os::Strerror(errno));
+        result.status =
+            Status(StatusCode::FUNC_AGENT_MKDIR_DEST_WORKING_DIR_ERROR,
+                   "failed to create dest working dir for " + dst + ", msg: +" + litebus::os::Strerror(errno));
         return result;
     }
     std::string cmd = "chmod -R 750 " + dst;
@@ -338,7 +343,11 @@ DeployResult WorkingDirDeployer::Deploy(const std::shared_ptr<messages::DeployRe
 bool WorkingDirDeployer::Clear(const std::string &filePath, const std::string &objectKey)
 {
     YRLOG_DEBUG("Clear filePath({}), objectKey({})", filePath, objectKey);
-    return ClearFile(filePath, objectKey);
+    std::string needsClearPath = filePath;
+    if (endsWith(filePath, ".img")) {
+        needsClearPath = GetDirectoryPath(filePath);
+    }
+    return ClearFile(needsClearPath, objectKey);
 }
 
 Status WorkingDirDeployer::UnzipFile(const std::string &destDir, const std::string &workingDirZipFile)

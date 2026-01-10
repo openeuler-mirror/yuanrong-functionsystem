@@ -84,6 +84,9 @@ type FunctionBasicInfo struct {
 	ResourceAffinitySelectors []ResourceAffinitySelector `form:"resourceAffinitySelectors" json:"resourceAffinitySelectors"`
 	CodeUploadType            string                     `form:"codeUploadType" json:"codeUploadType"`
 	PoolID                    string                     `form:"poolId" json:"poolId" valid:"optional,poolId~pool id can contain only lowercase letters;digits and - it cannot start or end with - and cannot exceed 40 characters or less than 1 characters"`
+	IdleTime                  int64                      `form:"idleTime" json:"idleTime"`
+	WarmupType                string                     `json:"warmup" valid:",optional"`
+	RootfsSpecMeta            types.RootfsSpecMeta       `json:"rootfs" valid:",optional"`
 }
 
 // FunctionCreateRequest -

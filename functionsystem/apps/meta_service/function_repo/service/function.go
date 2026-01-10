@@ -238,11 +238,14 @@ func buildBasicUpdateFunctionVersion(request model.FunctionUpdateRequest,
 	}
 	fv.FunctionVersion.PoolLabel = poolLabel
 	fv.FunctionVersion.PoolID = request.PoolID
+	fv.FunctionVersion.IdleTime = request.IdleTime
 	fv.FunctionVersion.Package.BucketID = request.S3CodePath.BucketID
 	fv.FunctionVersion.Package.ObjectID = request.S3CodePath.ObjectID
 	fv.FunctionVersion.Package.BucketUrl = request.S3CodePath.BucketUrl
 	fv.FunctionVersion.Package.Token = request.S3CodePath.Token
 	fv.FunctionVersion.Package.Signature = request.S3CodePath.Sha512
+	fv.FunctionVersion.WarmupType = request.WarmupType
+	fv.FunctionVersion.RootfsSpecMeta = request.RootfsSpecMeta
 }
 
 func buildUpdateFunctionVersion(request model.FunctionUpdateRequest,
@@ -461,6 +464,9 @@ func getFunctionVersion(request model.FunctionCreateRequest, env string,
 		Device:          request.Device,
 		PoolLabel:       poolLabel,
 		PoolID:          request.PoolID,
+		IdleTime:        request.IdleTime,
+		WarmupType:      request.WarmupType,
+		RootfsSpecMeta:  request.RootfsSpecMeta,
 	}
 	if request.Kind == common.Faas {
 		version.Kind = common.Faas

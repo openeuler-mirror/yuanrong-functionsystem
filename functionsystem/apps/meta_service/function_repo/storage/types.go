@@ -107,6 +107,9 @@ type FunctionVersion struct {
 	Device             types.Device
 	PoolLabel          string
 	PoolID             string
+	IdleTime           int64
+	WarmupType         string
+	RootfsSpecMeta     types.RootfsSpecMeta
 }
 
 // FunctionLayer defines layer info related to function version.
