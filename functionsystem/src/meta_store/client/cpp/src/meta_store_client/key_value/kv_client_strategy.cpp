@@ -266,7 +266,7 @@ litebus::Future<Status> KvClientStrategy::Sync(size_t index)
     readyRecords_.erase(records_[index]->watcher->GetWatchId());
     auto record = records_[index];
     GetOption getOption = { .prefix = record->option.prefix };
-    YRLOG_INFO("start to sync leader key({}) for watcher({})", record->key, record->watcher->GetWatchId());
+    YRLOG_INFO("start to sync key({}) for watcher({})", record->key, record->watcher->GetWatchId());
     return Get(record->key, getOption)
         .Then([record](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<Status> {
             if (getResponse == nullptr || getResponse->status.IsError()) {

@@ -130,7 +130,7 @@ public:
     void RegisterBillingInstanceRunningDuration();
     void CollectBillingInstanceRunningDuration(MetricsApi::ObserveResult obRes);
 
-    void RegisterPodResource();
+    void RegisterPodResource(bool logCheckSwitch = false);
     void CollectPodResource(MetricsApi::ObserveResult obRes);
 
     void SendK8sAlarm(const std::string &locationInfo);

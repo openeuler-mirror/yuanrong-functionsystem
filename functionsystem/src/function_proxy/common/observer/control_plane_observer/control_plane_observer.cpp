@@ -139,8 +139,8 @@ void ControlPlaneObserver::Detach(const std::shared_ptr<InstanceListener> &liste
     return litebus::Async(observerActor_->GetAID(), &ObserverActor::Detach, listener);
 }
 
-void ControlPlaneObserver::PutInstanceEvent(const resource_view::InstanceInfo &instanceInfo, bool synced,
-                                            int64_t modRevision)
+litebus::Future<Status> ControlPlaneObserver::PutInstanceEvent(const resource_view::InstanceInfo &instanceInfo,
+                                                               bool synced, int64_t modRevision)
 {
     ASSERT_IF_NULL(observerActor_);
     return litebus::Async(observerActor_->GetAID(), &ObserverActor::PutInstanceEvent, instanceInfo, synced,

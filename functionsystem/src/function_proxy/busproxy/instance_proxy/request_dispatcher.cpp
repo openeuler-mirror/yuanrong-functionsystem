@@ -358,7 +358,7 @@ void RequestDispatcher::Fatal(const std::string &message, const StatusCode &code
 
 void RequestDispatcher::ResponseAllMessage()
 {
-    YRLOG_INFO("instance {} response all message", instanceID_);
+    YRLOG_INFO("reply all message for instance: {}", instanceID_);
     ASSERT_IF_NULL(callCache_);
     auto reqNew = callCache_->GetNewReqs();
     for (auto &req : reqNew) {
