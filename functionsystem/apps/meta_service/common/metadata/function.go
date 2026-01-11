@@ -33,6 +33,8 @@ type Function struct {
 	EnvMetaData      EnvMetaData      `json:"envMetaData" valid:",optional"`
 	ResourceMetaData ResourceMetaData `json:"resourceMetaData" valid:",optional"`
 	ExtendedMetaData ExtendedMetaData `json:"extendedMetaData" valid:",optional"`
+	WarmupType       string           `json:"warmup" valid:",optional"`
+	RootfsSpecMeta   RootfsSpecMeta   `json:"rootfs" valid:",optional"`
 }
 
 // FuncMetaData define meta data of functions
@@ -65,8 +67,6 @@ type FuncMetaData struct {
 	StatefulFlag            bool              `json:"statefulFlag"`
 	HookHandler             map[string]string `json:"hookHandler" valid:",optional"`
 	IdleTime                int64             `json:"idleTime" valid:",optional"`
-	WarmupType              string            `json:"warmup" valid:",optional"`
-	RootfsSpecMeta          RootfsSpecMeta    `json:"rootfs" valid:",optional"`
 }
 
 // Layer define layer info
