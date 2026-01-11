@@ -253,7 +253,7 @@ public:
 
     void Detach(const std::shared_ptr<InstanceListener> &listener) override;
 
-    void PutInstanceEvent(const resource_view::InstanceInfo &instanceInfo, bool isForceUpdate, int64_t modRevision);
+    Status PutInstanceEvent(const resource_view::InstanceInfo &instanceInfo, bool isForceUpdate, int64_t modRevision);
 
     void FastPutRemoteInstanceEvent(const resource_view::InstanceInfo &instanceInfo, bool synced, int64_t modRevision);
 

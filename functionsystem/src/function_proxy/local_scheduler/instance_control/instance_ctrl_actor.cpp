@@ -4744,11 +4744,15 @@ litebus::Future<TransitionResult> InstanceCtrlActor::TransInstanceState(
     }
     if (auto instance = machine->GetInstanceInfo();
         context.newState == InstanceState::FATAL && IsStaticFunctionInstance(instance)) {
-        YRLOG_INFO("{}|static function instance state is fatal, delete instance {}", instance.requestid(),
-                   instance.instanceid());
-       auto preState = machine->GetInstanceState();
-       DeleteInstanceForStaticFunction(instance);
-       return TransitionResult{ preState, {}, {}, 0, Status::OK() };
+        YRLOG_INFO("{}|static function instance is fatal, delete: {}", instance.requestid(), instance.instanceid());
+        instance.mutable_instancestatus()->set_code(static_cast<int32_t>(context.newState));
+        instance.mutable_instancestatus()->set_errcode(context.errCode);
+        instance.mutable_instancestatus()->set_msg(context.msg);
+        return observer_->PutInstanceEvent(instance, false, GetModRevisionFromInstanceInfo(instance))
+            .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::DeleteInstanceForStaticFunction, instance))
+            .Then([machine](const Status &) -> TransitionResult {
+                return TransitionResult{ machine->GetInstanceState(), {}, {}, 0, Status::OK() };
+            });
     }
     return machine->TransitionTo(context).Then(
         [machine, nodeID(nodeID_), context](const TransitionResult &result) -> litebus::Future<TransitionResult> {

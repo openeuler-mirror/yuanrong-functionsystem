@@ -98,7 +98,7 @@ TEST_F(InstanceStateMachineTest, LowReliabilityTypeTransitionStateToRunning)
     auto mockControlPlaneObserver = std::make_shared<MockObserver>();
     instanceStateMachine->BindControlPlaneObserver(mockControlPlaneObserver);
     EXPECT_CALL(*mockControlPlaneObserver, WatchInstance).Times(1).WillRepeatedly(Return());
-    EXPECT_CALL(*mockControlPlaneObserver, PutInstanceEvent).Times(2).WillRepeatedly(Return());
+    EXPECT_CALL(*mockControlPlaneObserver, PutInstanceEvent).Times(2).WillRepeatedly(Return(Status::OK()));
 
     auto mockInstanceOpt = std::make_shared<MockInstanceOperator>();
     instanceStateMachine->instanceOpt_ = mockInstanceOpt;
@@ -347,9 +347,9 @@ TEST_F(InstanceStateMachineTest, ChangeSameStateTest)
     EXPECT_CALL(*mockObserver, WatchInstance).WillRepeatedly(Return());
     // only PutInstance 3 times, repeat trans state RUNNING doesn't trigger put
     EXPECT_CALL(*mockObserver, PutInstanceEvent)
-        .WillOnce(testing::Return())
-        .WillOnce(testing::Return())
-        .WillOnce(testing::Return());
+        .WillOnce(testing::Return(Status::OK()))
+        .WillOnce(testing::Return(Status::OK()))
+        .WillOnce(testing::Return(Status::OK()));
 
     auto actor = std::make_shared<local_scheduler::InstanceCtrlActor>("InstanceCtrlActor-ChangeSameStateTest", "nodeID",
                                                                       local_scheduler::InstanceCtrlConfig{});

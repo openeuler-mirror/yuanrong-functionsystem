@@ -51,7 +51,7 @@ public:
 
     MOCK_METHOD(litebus::Future<function_proxy::InstanceInfoMap>, GetAllInstanceInfos, (), (const, override));
 
-    MOCK_METHOD(void, PutInstanceEvent,
+    MOCK_METHOD(litebus::Future<Status>, PutInstanceEvent,
                 (const resource_view::InstanceInfo &instanceInfo, bool synced, int64_t modRevision),
                 (override));
 
