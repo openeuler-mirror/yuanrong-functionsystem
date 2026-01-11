@@ -351,8 +351,8 @@ func buildFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionValue,
 	info.FuncMetaData.StatefulFlag = fv.FunctionVersion.StatefulFlag != 0
 	info.FuncMetaData.HookHandler = fv.FunctionVersion.HookHandler
 	info.FuncMetaData.IdleTime = fv.FunctionVersion.IdleTime
-	info.FuncMetaData.WarmupType = fv.FunctionVersion.WarmupType
-	info.FuncMetaData.RootfsSpecMeta = buildRootFsSpecMeta(fv.FunctionVersion.RootfsSpecMeta)
+	info.WarmupType = fv.FunctionVersion.WarmupType
+	info.RootfsSpecMeta = buildRootFsSpecMeta(fv.FunctionVersion.RootfsSpecMeta)
 	var err error
 	info.CodeMetaData, err = buildCodeMetaData(fv, tenantInfo.BusinessID)
 	if err != nil {
