@@ -493,8 +493,8 @@ litebus::Future<Status> ObserverActor::PutInstance(const resource_view::Instance
         });
 }
 
-void ObserverActor::PutInstanceEvent(const resource_view::InstanceInfo &instanceInfo, bool isForceUpdate,
-                                     int64_t modRevision)
+Status ObserverActor::PutInstanceEvent(const resource_view::InstanceInfo &instanceInfo, bool isForceUpdate,
+                                       int64_t modRevision)
 {
     if (modRevision != 0 || instanceModRevisionMap_.find(instanceInfo.instanceid()) == instanceModRevisionMap_.end()) {
         // update mod_revision
@@ -506,6 +506,7 @@ void ObserverActor::PutInstanceEvent(const resource_view::InstanceInfo &instance
     if (observerParam_.enableIpv4TenantIsolation || observerParam_.enableTenantAffinity) {
         OnTenantInstanceEvent(instanceInfo.instanceid(), instanceInfo);
     }
+    return Status::OK();
 }
 
 void ObserverActor::FastPutRemoteInstanceEvent(const resource_view::InstanceInfo &instanceInfo, bool synced,

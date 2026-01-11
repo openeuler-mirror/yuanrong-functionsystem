@@ -1167,10 +1167,12 @@ std::pair<MetricsApi::MetricLabels, uint64_t> MetricsAdapter::BuildBillingInstan
     return std::pair{ labels, value };
 }
 
-void MetricsAdapter::RegisterPodResource()
+void MetricsAdapter::RegisterPodResource(bool logCheckSwitch)
 {
     if (enabledInstruments_.find(YRInstrument::YR_POD_RESOURCE) == enabledInstruments_.end()) {
-        YRLOG_WARN("billing pod resource is not enabled");
+        if (logCheckSwitch) {
+            YRLOG_WARN("billing pod resource is not enabled");
+        }
         return;
     }
     if (metricsContext_.GetAttr("component_name") != "function_master") {

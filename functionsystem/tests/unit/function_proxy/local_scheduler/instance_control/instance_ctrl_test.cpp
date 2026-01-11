@@ -5068,7 +5068,7 @@ TEST_F(InstanceCtrlTest, ToSchedulingSuccessful)
     EXPECT_CALL(*mockObserver_, GetFuncMeta).WillOnce(Return(functionMeta_));
     GeneratedInstanceStates genStates{ "DesignatedInstanceID", InstanceState::NEW, false };
     EXPECT_CALL(*instanceControlView_, TryGenerateNewInstance).WillOnce(Return(genStates));
-    EXPECT_CALL(*mockObserver_, PutInstanceEvent).WillOnce(Return());
+    EXPECT_CALL(*mockObserver_, PutInstanceEvent).WillOnce(Return(Status::OK()));
     EXPECT_CALL(*mockObserver_, WatchInstance).WillOnce(Return());
 
     auto future = instanceCtrlWithMockObserver_->ToScheduling(scheduleReq);

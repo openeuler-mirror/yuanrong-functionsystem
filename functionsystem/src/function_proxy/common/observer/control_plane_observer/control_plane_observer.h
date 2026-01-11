@@ -110,7 +110,8 @@ public:
 
     virtual void Detach(const std::shared_ptr<InstanceListener> &listener) const;
 
-    virtual void PutInstanceEvent(const resource_view::InstanceInfo &instanceInfo, bool synced, int64_t modRevision);
+    virtual litebus::Future<Status> PutInstanceEvent(const resource_view::InstanceInfo &instanceInfo, bool synced,
+                                                     int64_t modRevision);
 
     virtual void FastPutRemoteInstanceEvent(const resource_view::InstanceInfo &instanceInfo, bool synced,
                                             int64_t modRevision);
