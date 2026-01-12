@@ -1101,8 +1101,9 @@ void ResourceViewActor::UpdateResourceUnitDynamic(const std::shared_ptr<Resource
     // todo: while negative allocatable, need to trigger some alert event to evict/migrate instances
     (*view_->mutable_allocatable()) = view_->allocatable() + *delta;
 
-    // update capacity in fragment
+    // update in fragment
     *unit->second.mutable_capacity() = value->capacity();
+    *unit->second.mutable_allocatable() = unit->second.allocatable() + *delta;
 
     // make change record
     Modification modification;
