@@ -33,6 +33,9 @@ namespace functionsystem {
     instanceInfo->mutable_instancestatus()->set_exitcode(static_cast<int32_t>(StatusCode::ERR_INSTANCE_EXITED));
     instanceInfo->set_functionproxyid(INSTANCE_MANAGER_OWNER);
     instanceInfo->set_version(version);
+    if (state == InstanceState::FATAL) {
+        instanceInfo->clear_args();
+    }
     return TransToJsonFromInstanceInfo(output, *instanceInfo);
 }
 
