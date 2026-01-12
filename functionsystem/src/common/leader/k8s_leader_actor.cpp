@@ -24,7 +24,7 @@
 namespace functionsystem::leader {
 
 constexpr int64_t MILLISECONDS_PRE_SECOND = 1000;
-const uint32_t MIN_RENEW_LEASE_INTERNAL = 5;
+const uint32_t MIN_RENEW_LEASE_INTERNAL = 3;
 
 void K8sLeaderActor::Init()
 {
