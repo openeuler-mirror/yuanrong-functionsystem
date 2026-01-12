@@ -107,7 +107,10 @@ type FunctionVersion struct {
 	Device             types.Device
 	PoolLabel          string
 	PoolID             string
+	ScalePolicy        string
+	SchedulePolicy     string
 	IdleTime           int64
+	AutoScaleConfig    AutoScaleConfig
 	WarmupType         string
 	RootfsSpecMeta     types.RootfsSpecMeta
 }
@@ -402,4 +405,11 @@ func GetTxnByKind(ctx server.Context, kind string) Transaction {
 		return NewMetaTxn(ctx)
 	}
 	return NewTxn(ctx)
+}
+
+// AutoScaleConfig -
+type AutoScaleConfig struct {
+	SLAQuota      int
+	ScaleDownTime int
+	BurstScaleNum int
 }
