@@ -1621,6 +1621,7 @@ Status ResourceViewActor::HandleReportedModification(const ResourceUnitChange &c
         (*agentResourceUnit.mutable_allocatable()) = agentResourceUnit.allocatable() + delta;
         (*view_->mutable_capacity()) = view_->capacity() + delta;
         (*view_->mutable_allocatable()) = view_->allocatable() + delta;
+        MarkResourceUpdated();
     }
 
     if (modification.instancechanges().empty()) {
