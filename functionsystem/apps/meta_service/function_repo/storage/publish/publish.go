@@ -387,6 +387,7 @@ func buildRootFsSpecMeta(rootfs types.RootfsSpecMeta) metadata.RootfsSpecMeta {
 			AccessKey: rootfs.StorageInfo.AccessKey,
 			SecretKey: rootfs.StorageInfo.SecretKey,
 		},
+		MountPoint: rootfs.MountPoint,
 	}
 }
 
