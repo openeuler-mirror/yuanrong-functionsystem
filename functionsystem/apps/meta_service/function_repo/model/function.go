@@ -52,6 +52,13 @@ type ResourceAffinitySelector struct {
 	Priority int    `form:"priority" json:"priority"`
 }
 
+// AutoScaleConfig -
+type AutoScaleConfig struct {
+	SLAQuota      int `json:"slaQuota" valid:"optional" default:"-1"`
+	ScaleDownTime int `json:"scaleDownTime" valid:"optional" default:"-1"`
+	BurstScaleNum int `json:"burstScaleNum" valid:"optional" default:"-1"`
+}
+
 type FunctionBasicInfo struct {
 	Layers                    []string                   `json:"layers"`
 	Memory                    int64                      `json:"memory"`
@@ -87,6 +94,9 @@ type FunctionBasicInfo struct {
 	IdleTime                  int64                      `form:"idleTime" json:"idleTime"`
 	WarmupType                string                     `json:"warmup" valid:",optional"`
 	RootfsSpecMeta            types.RootfsSpecMeta       `json:"rootfs" valid:",optional"`
+	AutoScaleConfig           AutoScaleConfig            `json:"autoScaleConfig" valid:",optional"`
+	SchedulePolicy            string                     `json:"schedulePolicy" valid:",optional"`
+	ScalePolicy               string                     `json:"scalePolicy" valid:",optional"`
 }
 
 // FunctionCreateRequest -

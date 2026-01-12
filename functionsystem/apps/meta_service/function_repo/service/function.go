@@ -246,6 +246,13 @@ func buildBasicUpdateFunctionVersion(request model.FunctionUpdateRequest,
 	fv.FunctionVersion.Package.Signature = request.S3CodePath.Sha512
 	fv.FunctionVersion.WarmupType = request.WarmupType
 	fv.FunctionVersion.RootfsSpecMeta = request.RootfsSpecMeta
+	fv.FunctionVersion.ScalePolicy = request.ScalePolicy
+	fv.FunctionVersion.SchedulePolicy = request.SchedulePolicy
+	fv.FunctionVersion.AutoScaleConfig = storage.AutoScaleConfig{
+		SLAQuota:      request.AutoScaleConfig.SLAQuota,
+		ScaleDownTime: request.AutoScaleConfig.ScaleDownTime,
+		BurstScaleNum: request.AutoScaleConfig.BurstScaleNum,
+	}
 }
 
 func buildUpdateFunctionVersion(request model.FunctionUpdateRequest,
@@ -467,6 +474,13 @@ func getFunctionVersion(request model.FunctionCreateRequest, env string,
 		IdleTime:        request.IdleTime,
 		WarmupType:      request.WarmupType,
 		RootfsSpecMeta:  request.RootfsSpecMeta,
+		ScalePolicy:     request.ScalePolicy,
+		SchedulePolicy:  request.SchedulePolicy,
+		AutoScaleConfig: storage.AutoScaleConfig{
+			SLAQuota:      request.AutoScaleConfig.SLAQuota,
+			ScaleDownTime: request.AutoScaleConfig.ScaleDownTime,
+			BurstScaleNum: request.AutoScaleConfig.BurstScaleNum,
+		},
 	}
 	if request.Kind == common.Faas {
 		version.Kind = common.Faas

@@ -176,6 +176,11 @@ func buildFaaSFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionVa
 	info.FuncMetaData.Service = fv.FunctionVersion.Service
 	info.FuncMetaData.VersionDescription = fv.FunctionVersion.Description
 	info.FuncMetaData.IdleTime = fv.FunctionVersion.IdleTime
+	info.FuncMetaData.AutoScaleConfig = metadata.AutoScaleConfig{
+		SLAQuota:      fv.FunctionVersion.AutoScaleConfig.SLAQuota,
+		ScaleDownTime: fv.FunctionVersion.AutoScaleConfig.ScaleDownTime,
+		BurstScaleNum: fv.FunctionVersion.AutoScaleConfig.BurstScaleNum,
+	}
 	info.FuncMetaData.IsStatefulFunction = fv.FunctionVersion.StatefulFlag != 0
 	info.FuncMetaData.Layers, err = getFaaSLayerBucket(storage.GetTxnByKind(txn.GetCtx(), ""),
 		fv.FunctionLayer, tenantInfo)
@@ -219,6 +224,8 @@ func buildFaaSInstanceMetaData(txn storage.Transaction, fv storage.FunctionVersi
 	instance.PoolID = fv.FunctionVersion.PoolID
 	instance.PoolLabel = fv.FunctionVersion.PoolLabel
 	instance.IdleMode = false
+	instance.ScalePolicy = fv.FunctionVersion.ScalePolicy
+	instance.SchedulePolicy = fv.FunctionVersion.SchedulePolicy
 	key := BuildInstanceRegisterKey(tenantInfo, fv.Function.Name,
 		fv.FunctionVersion.Version, constants.DefaultClusterID)
 	data := make(map[string]interface{})
