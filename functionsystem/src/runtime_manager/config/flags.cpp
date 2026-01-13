@@ -186,6 +186,8 @@ Flags::Flags()
     AddFlag(&Flags::runtimeInstanceDebugEnable_, "runtime_instance_debug_enable", "runtime instance debug enable",
             false);
     AddFlag(&Flags::userLogExportMode_, "user_log_export_mode", "user log export mode: std/file", "file");
+    AddFlag(&Flags::enableDisConvCallStack_, "enable_dis_conv_call_stack", "enable distributed convergent call stack",
+        false);
     AddFlag(&Flags::userLogAutoFlushIntervalMs_, "user_log_auto_flush_interval_ms",
             "Interval in milliseconds for auto flushing user logs", DEFAULT_USER_LOG_AUTO_FLUSH_INTERVAL_MS);
     AddFlag(&Flags::userLogBufferFlushThreshold_, "user_log_buffer_flush_threshold",
