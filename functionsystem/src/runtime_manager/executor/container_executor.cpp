@@ -402,6 +402,90 @@ Envs BuildMountForCode(const std::shared_ptr<runtime::v1::StartRequest> &start,
     return updateEnv;
 }
 
+Status RootfsJsonParse(runtime::v1::FunctionRuntime &funcRt, const std::string &rootfsJson)
+{
+    try {
+        nlohmann::json j = nlohmann::json::parse(rootfsJson);
+
+        // Set runtime (sandbox)
+        if (j.find("runtime") != j.end()) {
+            funcRt.set_sandbox(j.at("runtime").get<std::string>());
+        }
+
+        // Set image URL
+        if (j.find("imageurl") != j.end()) {
+            funcRt.mutable_rootfs()->set_imageurl(j.at("imageurl").get<std::string>());
+        }
+
+        // Set readonly
+        if (j.find("readonly") != j.end()) {
+            bool readonly = false;
+            if (j.at("readonly").is_boolean()) {
+                readonly = j.at("readonly").get<bool>();
+            } else if (j.at("readonly").is_string()) {
+                std::string readonlyStr = j.at("readonly").get<std::string>();
+                readonly = (readonlyStr == "true" || readonlyStr == "1");
+            }
+            funcRt.mutable_rootfs()->set_readonly(readonly);
+        }
+
+        // Set type
+        if (j.find("type") != j.end()) {
+            std::string typeStr = j.at("type").get<std::string>();
+            if (typeStr == "s3") {
+                funcRt.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::S3);
+            } else if (typeStr == "image") {
+                funcRt.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::IMAGE);
+            }
+        }
+
+        // Set storageInfo (for S3)
+        if (j.find("storageInfo") != j.end()) {
+            nlohmann::json storage = j.at("storageInfo");
+            auto s3Config = funcRt.mutable_rootfs()->mutable_s3config();
+
+            if (storage.find("endpoint") != storage.end()) {
+                s3Config->set_endpoint(storage.at("endpoint").get<std::string>());
+            }
+            if (storage.find("bucket") != storage.end()) {
+                s3Config->set_bucket(storage.at("bucket").get<std::string>());
+            }
+            if (storage.find("object") != storage.end()) {
+                s3Config->set_object(storage.at("object").get<std::string>());
+            }
+            if (storage.find("accessKey") != storage.end()) {
+                s3Config->set_accesskeyid(storage.at("accessKey").get<std::string>());
+            }
+            if (storage.find("secretKey") != storage.end()) {
+                s3Config->set_accesskeysecret(storage.at("secretKey").get<std::string>());
+            }
+        }
+    } catch (std::exception &e) {
+        auto err = fmt::format("Failed to parse rootfs JSON: {}", std::string(e.what()));
+        YRLOG_ERROR("{}", err);
+        return Status(StatusCode::ERR_PARAM_INVALID, err);
+    }
+    return Status::OK();
+}
+
+Status ContainerExecutor::BuildRootfs(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                      std::shared_ptr<runtime::v1::StartRequest> &start)
+{
+    // TODO(lwy): build rootfs if needed
+    auto funcRt = start->mutable_funcruntime();
+    const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
+    if (opts.find(CONTAINER_ROOTFS) == opts.end()) {
+        funcRt->set_id(request->runtimeinstanceinfo().container().id());
+        funcRt->set_sandbox(request->runtimeinstanceinfo().container().runtime());
+        *funcRt->mutable_rootfs() = request->runtimeinstanceinfo().container().rootfsconfig();
+        return Status::OK();
+    }
+    // When rootfs is specified, do not use the function container ID to avoid using a registered pre-warmed seed with
+    // inconsistent rootfs
+    funcRt->set_id(request->runtimeinstanceinfo().runtimeid());
+    return RootfsJsonParse(*funcRt, opts.at(CONTAINER_ROOTFS));
+}
+
 litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
     const std::shared_ptr<messages::StartInstanceRequest> &request,
     const std::map<std::string, std::string> startRuntimeParams, const std::vector<std::string> &buildArgs,
@@ -421,13 +505,19 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
         rsp.set_message(fmt::format("invalid java cmd: {}", cmd));
         return rsp;
     }
-
     YRLOG_INFO("start {} runtime({}), execute final cmd: {}", language, runtimeID, cmd);
     auto start = std::make_shared<runtime::v1::StartRequest>();
     auto funcRt = start->mutable_funcruntime();
-    funcRt->set_id(request->runtimeinstanceinfo().container().id());
-    funcRt->set_sandbox(request->runtimeinstanceinfo().container().runtime());
-    *funcRt->mutable_rootfs() = request->runtimeinstanceinfo().container().rootfsconfig();
+    if (auto status = BuildRootfs(request, start); !status.IsOk()) {
+        runtime::v1::StartResponse rsp{};
+        rsp.set_code(static_cast<int32_t>(status.StatusCode()));
+        rsp.set_message(status.RawMessage());
+        return rsp;
+    }
+    const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
+    if (opts.find(CONTAINER_EXTRA_CONFIG) != opts.end()) {
+        start->set_extraconfig(opts.at(CONTAINER_EXTRA_CONFIG));
+    }
     for (const auto &arg : buildArgs) {
         *funcRt->add_command() = arg;
     }
