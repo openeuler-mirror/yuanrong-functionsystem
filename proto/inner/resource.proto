@@ -353,6 +353,12 @@ message InstanceInfo {
     map<string, string> kvLabels = 35;
 }
 
+enum TrafficReportType {
+    None           = 0;  // Do not emit traffic events
+    Idle           = 1;  // Only emit busy/idle events
+    Periodic       = 2;  // Emit events periodically
+}
+
 message RouteInfo {
     string instanceID = 1;
     string runtimeAddress = 2;
@@ -366,6 +372,7 @@ message RouteInfo {
     string tenantID = 10; // Need while iam
     bool isSystemFunc = 11; // Need while iam
     int64 version = 12;    // indicates the number of times that instance information is modified in etcd
+    TrafficReportType trafficReportType = 13;
 }
 
 message SystemInfo {
