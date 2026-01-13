@@ -48,6 +48,12 @@ def pack_functionsystem(args):
     lib_dst_path = os.path.join(pack_base_dir, "lib")
     shutil.copytree(lib_src_path, lib_dst_path, copy_function=shutil.copy2, symlinks=True)
 
+    # 拷贝运维脚本 产物
+    log.info("Copy function system ops tools products")
+    lib_src_path = os.path.join(root_dir, "tools", "ops")
+    lib_dst_path = os.path.join(pack_base_dir, "tools")
+    shutil.copytree(lib_src_path, lib_dst_path, copy_function=shutil.copy2, symlinks=True)
+
     # CPP程序去符号
     if args['pack_type'] == "Release":
         log.info("Remove debug symbols from compiled products")
