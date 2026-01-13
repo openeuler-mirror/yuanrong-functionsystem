@@ -87,6 +87,8 @@ private:
     void OnReconnectContainerd();
     void CheckConnectivity();
     void ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID);
+    Status BuildRootfs(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                       std::shared_ptr<runtime::v1::StartRequest> &start);
 
     litebus::Future<runtime::v1::StartResponse> StartByRuntimeID(
         const std::shared_ptr<messages::StartInstanceRequest> &request,

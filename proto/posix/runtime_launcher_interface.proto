@@ -67,6 +67,8 @@ message StartRequest {
   string stdout = 5;
   // redirect path for stderr
   string stderr = 6;
+  // json string for extra options
+  string extraConfig = 7;
 }
 
 message StartResponse {
