@@ -267,8 +267,23 @@ const std::string CONDA_COMMAND = "CONDA_COMMAND";
 const std::string CONDA_PREFIX = "CONDA_PREFIX";
 const std::string CONDA_DEFAULT_ENV = "CONDA_DEFAULT_ENV";
 
-// container 
-const std::string CONTAINER_OPTS = "CONTAINER_OPTS";  // { "runtime": "", "imageurl":"", "readonly":true}
+// container
+/* Example of rootfs json:
+{
+    "runtime": "runsc",
+    "type": "s3",
+    "imageurl": "registry.cn-hangzhou.com/runtime-python3.11:latest",
+    "readonly": "true",
+    "storageInfo": {
+        "endpoint": "cn-hangzhou.alipay.aliyun-inc.com",
+        "bucket": "crfs-dev",
+        "object": "akernel/test_img/roorfs_202512251644.img"
+    }
+}
+*/
+const std::string CONTAINER_ROOTFS = "rootfs";
+
+const std::string CONTAINER_EXTRA_CONFIG = "extra_config";
 
 // hibernate
 const std::string ENABLE_SUSPEND_RESUME = "enableSuspendResume";
