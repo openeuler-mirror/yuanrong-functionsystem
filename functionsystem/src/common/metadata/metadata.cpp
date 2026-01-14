@@ -119,6 +119,7 @@ void TransToRouteInfoFromInstanceInfo(const InstanceInfo &instanceInfo, resource
     routeInfo.set_issystemfunc(instanceInfo.issystemfunc());
     routeInfo.set_version(instanceInfo.version());
     routeInfo.mutable_instancestatus()->CopyFrom(instanceInfo.instancestatus());
+    routeInfo.set_trafficreporttype(instanceInfo.trafficreporttype());
 }
 
 std::string GetDeployDir()

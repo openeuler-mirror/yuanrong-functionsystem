@@ -82,6 +82,7 @@ public:
     static void BindObserver(const std::shared_ptr<function_proxy::DataPlaneObserver> &observer)
     {
         observer_ = observer;
+        RequestDispatcher::BindObserver(observer);
     }
 
 protected:

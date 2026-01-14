@@ -37,6 +37,7 @@ public:
     virtual void SetDriverEventCbFunc(const DriverEventCbFunc &driverCbFunc);
     virtual void SetInstanceInfoSyncerCbFunc(const InstanceInfoSyncerCbFunc &instanceInfoSyncerCbFunc);
     virtual void SetUpdateFuncMetasFunc(const UpdateFuncMetasFunc &updateFuncMetasFunc);
+    virtual void SetTrafficReportCbFunc(const TrafficReportCbFunc &trafficReportCbFunc);
 
     /**
      * register callback to meta store accessor

@@ -247,6 +247,12 @@ message ScheduleOption {
     string                      rGroupName          = 12;
 }
 
+enum TrafficReportType {
+    None           = 0;  // Do not emit traffic events
+    Idle           = 1;  // Only emit busy/idle events
+    Periodic       = 2;  // Emit events periodically
+}
+
 message InstanceStatus {
     // code in state-machine
     int32 code = 1;
@@ -351,12 +357,8 @@ message InstanceInfo {
 
     // kv labels
     map<string, string> kvLabels = 35;
-}
 
-enum TrafficReportType {
-    None           = 0;  // Do not emit traffic events
-    Idle           = 1;  // Only emit busy/idle events
-    Periodic       = 2;  // Emit events periodically
+    TrafficReportType trafficReportType = 36;
 }
 
 message RouteInfo {

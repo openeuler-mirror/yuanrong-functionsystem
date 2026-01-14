@@ -878,6 +878,14 @@ void ObserverActor::NotifyMigratingRequest(const std::string &instanceID)
     instanceView_->NotifyMigratingRequest(instanceID);
 }
 
+void ObserverActor::ReportTraffic(const std::string &instanceID, const size_t &size)
+{
+    if (trafficReportCbFunc_ == nullptr) {
+        return;
+    }
+    trafficReportCbFunc_(instanceID, size);
+}
+
 void ObserverActor::SetInstanceBillingContext(const resource_view::InstanceInfo &instanceInfo, bool synced)
 {
     if (synced && instanceInfo.functionproxyid() == nodeID_) {

@@ -62,6 +62,20 @@ const std::string RECEIVED_TIMESTAMP = "receivedTimestamp";
 const std::string INSTANCE_MOD_REVISION = "modRevision";
 const std::string NAMED = "named";
 
+[[maybe_unused]] inline int64_t GetIdleTimeout(const resources::InstanceInfo &instanceInfo)
+{
+    auto iter = instanceInfo.createoptions().find(IDLE_TIMEOUT);
+    if (iter == instanceInfo.createoptions().end()) {
+        return -1;
+    }
+    try {
+        return std::stoll(iter->second);
+    } catch (std::exception &e) {
+        YRLOG_WARN("failed to get idle {} from instance({})", instanceInfo.instanceid(), iter->second);
+    }
+    return -1;
+}
+
 /**
  * transfer from FunctionMeta's hbm value to ScheduleRequest
  * @param scheduleRequest: struct of ScheduleRequest
@@ -887,6 +901,8 @@ static void SetInstanceInfo(::resources::InstanceInfo *instanceInfo, CreateReque
 
     SetGracefulShutdownTime(instanceInfo, callRequest);
     (*instanceInfo->mutable_extensions())[NAMED] = createReq.designatedinstanceid().empty() ? "false" : "true";
+    instanceInfo->set_trafficreporttype(GetIdleTimeout(*instanceInfo) <= 0 ? resources::TrafficReportType::None
+                                                                           : resources::TrafficReportType::Idle);
 }
 
 /**

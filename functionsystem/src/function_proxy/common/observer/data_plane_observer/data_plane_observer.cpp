@@ -34,4 +34,10 @@ void DataPlaneObserver::NotifyMigratingRequest(const std::string &instanceID)
     RETURN_IF_NULL(observerActor_);
     return litebus::Async(observerActor_->GetAID(), &ObserverActor::NotifyMigratingRequest, instanceID);
 }
+
+void DataPlaneObserver::ReportTraffic(const std::string &instanceID, const size_t &size)
+{
+    RETURN_IF_NULL(observerActor_);
+    return litebus::Async(observerActor_->GetAID(), &ObserverActor::ReportTraffic, instanceID, size);
+}
 }  // namespace functionsystem::function_proxy

@@ -954,6 +954,14 @@ private:
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<KillResponse>>> killingRequest_;
 
     BACK_OFF_RETRY_HELPER(InstanceCtrlActor, litebus::Option<InstanceState>, checkStateHelper_);
+
+    // todo(Lwy_Robb): idle controller should be mv to a separate actor in future
+    std::unordered_map<std::string, litebus::Timer> idleTimers_;
+
+    void TrafficReport(const std::string &instanceID, const size_t &processingNum);
+    void StartIdleTimer(const std::string &instanceID);
+    void HandleIdleTimeout(const std::string &instanceID);
+    void CancelIdleTimer(const std::string &instanceID);
 };
 }  // namespace functionsystem::local_scheduler
 #endif  // LOCAL_SCHEDULER_INSTANCE_CTRL_ACTOR_H

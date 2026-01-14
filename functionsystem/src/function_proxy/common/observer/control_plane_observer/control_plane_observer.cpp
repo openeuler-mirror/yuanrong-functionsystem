@@ -58,6 +58,12 @@ void ControlPlaneObserver::SetUpdateFuncMetasFunc(const UpdateFuncMetasFunc &upd
     litebus::Async(observerActor_->GetAID(), &ObserverActor::SetUpdateFuncMetasFunc, updateFuncMetasFunc);
 }
 
+void ControlPlaneObserver::SetTrafficReportCbFunc(const TrafficReportCbFunc &trafficReportCbFunc)
+{
+    ASSERT_IF_NULL(observerActor_);
+    litebus::Async(observerActor_->GetAID(), &ObserverActor::SetTrafficReportCbFunc, trafficReportCbFunc);
+}
+
 void ControlPlaneObserver::Register() const
 {
     ASSERT_IF_NULL(observerActor_);

@@ -34,6 +34,8 @@ struct CallRequestContext {
     litebus::Promise<SharedStreamMsg> callResponse;
 };
 
+using TrafficReport = std::function<void(bool idle, const size_t &inProgressSize)>;
+
 class CallCache {
 public:
     void Push(const std::shared_ptr<CallRequestContext> &context);
@@ -62,12 +64,19 @@ public:
 
     void MoveAllToNew();
 
+    void SetTrafficReport(const TrafficReport &report)
+    {
+        trafficReport_ = report;
+    }
+
 private:
+    void ReportTraffic();
     std::unordered_map<std::string, std::shared_ptr<CallRequestContext>> requestMap_;
     std::unordered_set<std::string> reqNew_;
     std::unordered_set<std::string> reqInProgress_;
     std::unordered_set<std::string> reqOnResp_;
     std::unordered_map<std::string, litebus::Promise<CallResultAck>> callResultAckPromises_;
+    TrafficReport trafficReport_ { nullptr };
 };
 
 }  // namespace functionsystem::busproxy

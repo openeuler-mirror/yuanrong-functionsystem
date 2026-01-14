@@ -48,6 +48,8 @@ const uint8_t TENANT_POSITION = 3;        // function tenant position from back 
  */
 const std::string RELIABILITY_TYPE = "ReliabilityType";  // NOLINT
 
+const std::string IDLE_TIMEOUT = "idle_timeout";  // NOLINT
+
 struct ProxyMeta {
     std::string node;
     std::string aid;

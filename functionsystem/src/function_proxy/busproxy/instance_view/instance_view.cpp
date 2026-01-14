@@ -62,6 +62,9 @@ std::shared_ptr<InstanceRouterInfo> TransferInstanceInfo(const resources::Instan
     info->proxyID = instanceInfo.functionproxyid();
     info->tenantID = instanceInfo.tenantid();
     info->function = instanceInfo.function();
+    if (info->isLocal && info->isReady) {
+        info->trafficReportType = instanceInfo.trafficreporttype();
+    }
     return info;
 }
 
