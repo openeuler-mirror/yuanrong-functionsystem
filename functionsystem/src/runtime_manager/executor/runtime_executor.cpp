@@ -954,7 +954,8 @@ std::map<std::string, std::string> RuntimeExecutor::CombineEnvs(const Envs &envs
         (void)pythonPath.append(":" + workingDirIter->second);
     }
     if (combineEnvs.find(PYTHON_PATH) != combineEnvs.end()) {
-        pythonPath.append(":" + combineEnvs[PYTHON_PATH]);
+        auto userDefined = combineEnvs[PYTHON_PATH];
+        pythonPath = userDefined.append(":" + pythonPath);
     }
     combineEnvs[PYTHON_PATH] = pythonPath;
 
