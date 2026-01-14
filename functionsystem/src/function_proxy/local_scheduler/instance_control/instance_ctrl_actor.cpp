@@ -4674,10 +4674,9 @@ void InstanceCtrlActor::BindObserver(const std::shared_ptr<function_proxy::Contr
         return litebus::Async(aid, &InstanceCtrlActor::InstanceRouteInfoSyncer, routeInfo);
     });
 
-    observer->SetUpdateFuncMetasFunc(
-        [aid(GetAID())](bool isAdd, const std::unordered_map<std::string, FunctionMeta> &funcMetas) {
-            YRLOG_DEBUG("update function meta, isAdd: {}, size: {}", isAdd, funcMetas.size());
-            litebus::Async(aid, &InstanceCtrlActor::UpdateFuncMetas, isAdd, funcMetas);
+    observer->SetTrafficReportCbFunc(
+        [aid(GetAID())](const std::string &instanceID, const size_t &processingNum) {
+            litebus::Async(aid, &InstanceCtrlActor::TrafficReport, instanceID, processingNum);
         });
 
     observer_ = observer;
@@ -6134,6 +6133,83 @@ void InstanceCtrlActor::OnFunctionDelete(
         return;
     }
     YRLOG_INFO("function({}) delete succeeded", funcKey);
+}
+
+void InstanceCtrlActor::HandleIdleTimeout(const std::string &instanceID)
+{
+    idleTimers_.erase(instanceID);
+    ASSERT_IF_NULL(instanceControlView_);
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        return;
+    }
+    const auto &instanceInfo = stateMachine->GetInstanceInfo();
+    YRLOG_INFO("{}|instance({}) idle timeout, ready to evict", instanceInfo.requestid(), instanceID);
+    std::string msg =
+        fmt::format("instance was evicted after idle for more than {} seconds", GetIdleTimeout(instanceInfo));
+    (void)TransInstanceState(stateMachine, TransContext{ InstanceState::EVICTING, stateMachine->GetVersion(), msg,
+                                                          true, StatusCode::ERR_INSTANCE_EVICTED })
+        .Then([aid(GetAID()), instanceId(instanceID)]() {
+            litebus::Async(aid, &InstanceCtrlActor::StopHeartbeat, instanceId);
+            return Status::OK();
+        })
+        .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::KillRuntime, instanceInfo, false))
+        .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::DeleteInstanceInResourceView, std::placeholders::_1, instanceInfo))
+        .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::TransInstanceState, stateMachine,
+                                  TransContext{ InstanceState::EVICTED, stateMachine->GetVersion(),
+                                                msg, true, StatusCode::ERR_INSTANCE_EVICTED }))
+        .Then([instanceID](const TransitionResult &result) -> litebus::Future<Status> {
+            if (result.preState.IsNone()) {
+                YRLOG_WARN("failed to transfer instance({}) to evicted by idle timeout.", instanceID);
+            }
+            return Status::OK();
+        });
+}
+
+void InstanceCtrlActor::StartIdleTimer(const std::string &instanceID)
+{
+    if (idleTimers_.find(instanceID) != idleTimers_.end()) {
+        return;
+    }
+    ASSERT_IF_NULL(instanceControlView_);
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        return;
+    }
+    const auto &instanceInfo = stateMachine->GetInstanceInfo();
+    if (instanceInfo.functionproxyid() != nodeID_ || instanceInfo.instancestatus().code() != static_cast<int32_t>(InstanceState::RUNNING)) {
+        return;
+    }
+    int64_t idleTimeout = GetIdleTimeout(instanceInfo);
+    if (idleTimeout <= 0) {
+        return;
+    }
+    YRLOG_DEBUG("start idle timer for instance({}) with timeout {} seconds", instanceID, idleTimeout);
+    idleTimers_[instanceID] = litebus::AsyncAfter(
+        idleTimeout * 1000, GetAID(), &InstanceCtrlActor::HandleIdleTimeout, instanceID);
+}
+
+void InstanceCtrlActor::CancelIdleTimer(const std::string &instanceID)
+{
+    auto iter = idleTimers_.find(instanceID);
+    if (iter == idleTimers_.end()) {
+        return;
+    }
+    YRLOG_DEBUG("cancel idle timer for instance({})", instanceID);
+    litebus::TimerTools::Cancel(iter->second);
+    idleTimers_.erase(iter);
+}
+
+void InstanceCtrlActor::TrafficReport(const std::string &instanceID, const size_t &processingNum)
+{
+    YRLOG_DEBUG("debug:: instance({}) processing num: {}", instanceID, processingNum);
+    bool isIdle = (processingNum == 0);
+    ASSERT_IF_NULL(instanceControlView_);
+    if (!isIdle) {
+        CancelIdleTimer(instanceID);
+        return;
+    }
+    StartIdleTimer(instanceID);
 }
 
 }  // namespace functionsystem::local_scheduler

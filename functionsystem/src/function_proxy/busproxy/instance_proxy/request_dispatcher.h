@@ -26,6 +26,7 @@
 #include "function_proxy/common/iam/internal_iam.h"
 #include "function_proxy/common/posix_client/data_plane_client/data_interface_posix_client.h"
 #include "function_proxy/common/posix_client/data_plane_client/data_interface_client_manager_proxy.h"
+#include "function_proxy/common/observer/data_plane_observer/data_plane_observer.h"
 
 namespace functionsystem::busproxy {
 
@@ -41,6 +42,7 @@ struct InstanceRouterInfo {
     std::string tenantID;
     std::string function;
     std::shared_ptr<DataInterfacePosixClient> localClient = nullptr;
+    resources::TrafficReportType trafficReportType = resources::TrafficReportType::None;
 };
 
 struct CallerInfo {
@@ -101,16 +103,24 @@ public:
         internalIam_ = internalIam;
     }
 
+    static void BindObserver(const std::shared_ptr<functionsystem::function_proxy::DataPlaneObserver> &observer)
+    {
+        observer_ = observer;
+    }
+
 private:
     void TriggerCall(const std::string &requestID);
     void ResponseAllMessage();
 
     inline static std::shared_ptr<DataInterfaceClientManagerProxy> clientManager_ { nullptr };
     inline static std::shared_ptr<functionsystem::function_proxy::InternalIAM> internalIam_{ nullptr };
+    inline static std::shared_ptr<functionsystem::function_proxy::DataPlaneObserver> observer_ { nullptr };
 
     void ReportCallTimesMetrics();
 
     void ReportCallLatency(const std::string &requestID, common::ErrorCode errCode);
+
+    void ReportTrafficMetrics(bool busy, const size_t &size);
 
     void SendNotify(const std::basic_string<char> &req, const std::shared_ptr<CallRequestContext> &context) const;
 
@@ -131,6 +141,7 @@ private:
     std::shared_ptr<DataInterfacePosixClient> dataInterfaceClient_ { nullptr };
     std::shared_ptr<Perf> perf_ { nullptr };
     std::unordered_set<std::string> verifiedCallerTenantIDs_{};
+    resources::TrafficReportType trafficReportType_ { resources::TrafficReportType::None };
 
     int callTimes_ = 0;
     int failedCallTimes_ = 0;
