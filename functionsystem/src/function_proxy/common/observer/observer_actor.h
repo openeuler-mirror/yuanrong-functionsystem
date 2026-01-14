@@ -49,6 +49,8 @@ using InstanceInfoSyncerCbFunc = std::function<void(const resource_view::RouteIn
 using UpdateFuncMetasFunc =
     std::function<void(bool isAdd, const std::unordered_map<std::string, FunctionMeta> &funcMetas)>;
 
+using TrafficReportCbFunc = std::function<void(const std::string &instanceID, const size_t &size)>;
+
 const int SERVICE_TTL = 300000;  // ms
 
 struct ObserverParam {
@@ -136,6 +138,11 @@ public:
             updateFuncMetasFunc_(true, funcMetaMap_);
             updateFuncMetasFunc_(true, systemFuncMetaMap_);
         }
+    }
+
+    virtual void SetTrafficReportCbFunc(const TrafficReportCbFunc &trafficReportCbFunc)
+    {
+        trafficReportCbFunc_ = trafficReportCbFunc;
     }
 
     virtual void BindDataInterfaceClientManager(
@@ -261,6 +268,8 @@ public:
 
     void NotifyMigratingRequest(const std::string &instanceID);
 
+    void ReportTraffic(const std::string &instanceID, const size_t &size);
+
     void InstanceRouteUpdate(const std::string &instanceID, const resources::InstanceInfo &instanceInfo);
 
     void AttachTenantListener(const std::shared_ptr<TenantListener> &listener);
@@ -347,6 +356,7 @@ private:
     InstanceStatusToRunningCbFunc instanceStatusToRunningCbFunc_;
     InstanceInfoSyncerCbFunc instanceInfoSyncerCbFunc_;
     UpdateFuncMetasFunc updateFuncMetasFunc_;
+    TrafficReportCbFunc trafficReportCbFunc_;
 
     // for busproxy
     std::shared_ptr<DataInterfaceClientManagerProxy> dataInterfaceClientManager_;
