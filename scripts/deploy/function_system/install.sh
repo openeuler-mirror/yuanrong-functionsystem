@@ -19,9 +19,22 @@ if [ -n "${BASE_DIR}" ]; then
 fi
 FUNCTION_SYSTEM_DIR=$(readlink -m "${FUNCTION_SYSTEM_DEPLOY_DIR}/..")
 DATA_SYSTEM_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../datasystem")
+# todo(lwy_robb): for sandbox, the start up script path should be assigned by rootfs
+INSTALLED_RUNTIME=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../runtime")
 if [ -z "$RUNTIME_HOME_DIR" ]; then
-  RUNTIME_HOME_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../runtime")
+  RUNTIME_HOME_DIR=$INSTALLED_RUNTIME
+else
+  LINK_DIR=$(dirname "$RUNTIME_HOME_DIR")
+  if [ ! -d "$LINK_DIR" ]; then
+      mkdir -p "$LINK_DIR"
+      if [ $? -ne 0 ]; then
+        log_error "Error: failed to create directory $LINK_DIR. Please check permissions."
+        exit 1
+      fi
+  fi
+  ln -sf $INSTALLED_RUNTIME $RUNTIME_HOME_DIR
 fi
+
 if [ -z "$FUNCTION_META_PATH" ] && [ -d "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas" ]; then
   PATTERN_FAAS_HOME_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas")
   FUNCTION_META_PATH="$PATTERN_FAAS_HOME_DIR/executor-meta"
