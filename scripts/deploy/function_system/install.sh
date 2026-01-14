@@ -95,7 +95,6 @@ function install_function_proxy() {
     --etcd_ssl_base_path=${ETCD_SSL_BASE_PATH} \
     --etcd_table_prefix="${ETCD_TABLE_PREFIX}" --etcd_target_name_override="${ETCD_TARGET_NAME_OVERRIDE}" \
     --enable_print_perf="${ENABLE_PRINT_PERF}" --is_partial_watch_instances="${IS_PARTIAL_WATCH_INSTANCES}" \
-    --function_meta_path="${FUNCTION_META_PATH}" \
     --enable_meta_store="${ENABLE_META_STORE}" --meta_store_mode="${META_STORE_MODE}" --meta_store_excluded_keys="${META_STORE_EXCLUDED_KEYS}" \
     --runtime_instance_debug_enable="${RUNTIME_INSTANCE_DEBUG_ENABLE}"  >>"${FS_LOG_PATH}/${NODE_ID}-function_proxy${STD_LOG_SUFFIX}" 2>&1 &
 
