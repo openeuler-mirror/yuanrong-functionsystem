@@ -69,8 +69,8 @@ litebus::Future<std::shared_ptr<StreamingMessage>> PosixAPIHandler::Create(
     const std::string &from, const std::shared_ptr<StreamingMessage> &request)
 {
     auto &createReq = *request->mutable_createreq();
-    const auto &requestID = createReq.requestid();
-    const auto &traceID = createReq.traceid();
+    const auto requestID = createReq.requestid();
+    const auto traceID = createReq.traceid();
     auto response = std::make_shared<StreamingMessage>();
     if (auto status = IsValidCreateRequest(createReq); !status.IsOk()) {
         YRLOG_ERROR("{}|{}|failed to create instance from {}, reason: ", traceID, requestID, from, status.GetMessage());
