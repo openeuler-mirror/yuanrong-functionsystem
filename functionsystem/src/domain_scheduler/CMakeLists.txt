@@ -44,7 +44,7 @@ target_link_libraries(domain_scheduler PRIVATE domain_scheduler_lib
         ${grpcpp_LIB}
         ${gpr_LIB}
         ${litebus_ALL_LIB}
-        crypto rpc
+        ${crypto_LIB} rpc
         ${PLUGIN_LIB})
 
 INSTALL_TARGET(domain_scheduler)
