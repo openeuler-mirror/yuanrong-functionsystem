@@ -1721,7 +1721,7 @@ TEST_F(RuntimeExecutorTest, InheritEnvTest)
     EXPECT_EQ(combineEnv["YR_FRONTEND_ADDRESS"], "127.0.0.1:0");
     // append UNZIPPED_WORKING_DIR Into PYTHONPATH
     EXPECT_EQ(
-        combineEnv["PYTHONPATH"], "/path/to/python_runtime:/python/path:/home/sn/function/package/xxx/working_dir/:/userdefined/pythonpath");
+        combineEnv["PYTHONPATH"], "/userdefined/pythonpath:/path/to/python_runtime:/python/path:/home/sn/function/package/xxx/working_dir/");
     EXPECT_EQ(combineEnv["PATH"], "/usr/local/bin:/inherit/path");
     EXPECT_EQ(combineEnv.count("UNZIPPED_WORKING_DIR"), 0);
 
