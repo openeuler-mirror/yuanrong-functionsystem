@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import time
 
 import builder
 import utils
@@ -13,6 +14,7 @@ log = utils.stream_logger()
 
 
 def run_build(root_dir, cmd_args):
+    start_time = time.time()
     args = {
         "root_dir": root_dir,
         "job_num": cmd_args.job_num,
@@ -28,6 +30,8 @@ def run_build(root_dir, cmd_args):
     build_litebus(args)
     build_metrics(args)
     build_functionsystem(root_dir, args)
+    elapsed_time = time.time() - start_time
+    log.info(f"Build function-system successfully in {elapsed_time:.2f} seconds")
 
 
 def build_vendor(args):
@@ -45,7 +49,7 @@ def build_vendor(args):
     builder.build_etcd(vendor_path)
 
     log.info("Start to build vendor dependency packages with C++")
-    utils.sync_command(["cmake", "-B", "build"], cwd=os.path.join(vendor_path))
+    utils.sync_command(["cmake", "-B", "build", f"-DTHIRDPARTY_JOBS={args['job_num']}"], cwd=os.path.join(vendor_path))
     utils.sync_command(["cmake", "--build", "build", "--parallel", str(args["job_num"])], cwd=os.path.join(vendor_path))
 
     # 引入二方件产物

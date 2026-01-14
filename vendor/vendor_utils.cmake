@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# 设置三方件编译的并行任务数 | THIRDPARTY_JOBS
+if (NOT DEFINED THIRDPARTY_JOBS)
+  set(THIRDPARTY_JOBS 8)
+endif()
+message(STATUS "THIRDPARTY_JOBS: ${THIRDPARTY_JOBS}")
+
 # 基于 VENDOR_DIR 变量为需要依赖三方件的cmake提供配置
 message(STATUS "Config vendor with VENDOR_DIR: ${VENDOR_DIR}")
 if (NOT EXISTS ${VENDOR_DIR})

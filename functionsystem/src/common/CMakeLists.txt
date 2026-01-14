@@ -53,7 +53,7 @@ add_library(utils STATIC "")
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/utils FS_UTILS_SRCS)
 add_dependencies(utils status metadata)
 target_sources(utils PRIVATE ${FS_UTILS_SRCS})
-target_link_libraries(utils PUBLIC status ${crypto_LIB} ${ssl_LIB} metadata)
+target_link_libraries(utils PUBLIC status ${crypto_LIB} ${ssl_LIB} cap metadata)
 
 add_library(scheduler STATIC "")
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/scheduler SCHEDULER_SRCS)
