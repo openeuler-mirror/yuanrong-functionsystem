@@ -160,6 +160,15 @@ func (c *FunctionBasicInfo) setDefault(configs config.Configs) {
 	if c.Timeout == 0 {
 		c.Timeout = configs.FunctionCfg.DefaultCfg.Timeout
 	}
+	if c.AutoScaleConfig.SLAQuota == 0 {
+		c.AutoScaleConfig.SLAQuota = -1
+	}
+	if c.AutoScaleConfig.ScaleDownTime == 0 {
+		c.AutoScaleConfig.ScaleDownTime = -1
+	}
+	if c.AutoScaleConfig.BurstScaleNum == 0 {
+		c.AutoScaleConfig.BurstScaleNum = -1
+	}
 }
 
 func checkRuntime(configs config.Configs, runtime string) error {
