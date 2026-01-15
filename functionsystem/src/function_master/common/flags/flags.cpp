@@ -120,8 +120,8 @@ void Flags::InitScalerFlags()
             "/home/sn/scaler/template/function-agent.json");
     AddFlag(&Flags::enableFrontendPool_, "enable_frontend_pool", "enable frontend pool",
             false);
-    AddFlag(&Flags::enableVerticalScale_, "enable_vertical_scale",
-            "enable vertical scale when reosurces are not enough", false);
+    AddFlag(&Flags::enableHorizontalScale_, "enable_horizontal_scale",
+            "enable horizontal scale when reosurces are not enough", false);
 }
 
 void Flags::InitMetaStoreFlags()

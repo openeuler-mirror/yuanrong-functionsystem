@@ -88,7 +88,7 @@ private:
     int32_t relaxed_ = -1;
     bool enablePreemption_{ false };
     std::string componentName_{};
-    bool enableVerticalScale_{ false };
+    bool enableHorizontalScale_{ false };
 };
 
 }  // namespace functionsystem::global_scheduler

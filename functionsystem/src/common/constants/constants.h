@@ -89,7 +89,7 @@ const std::string VIRTUAL_TAG = "virtual";
 const std::string PRIMARY_TAG = "primary";
 const std::string DATASYSTEM_FEATURE_USED = "dataSystemFeatureUsed";
 const std::string DATASYSTEM_FEATURE_USED_STREAM = "stream";
-const std::string ENABLE_VERTICAL_SCALE_KEY = "ENABLE_VERTICAL_SCALE";
+const std::string ENABLE_HORIZONTAL_SCALE_KEY = "ENABLE_HORIZONTAL_SCALE";
 
 const std::string DELEGATE_ENCRYPT = "DELEGATE_ENCRYPT";
 const std::string DELEGATE_DECRYPT = "DELEGATE_DECRYPT";

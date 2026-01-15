@@ -647,12 +647,12 @@ TEST_F(PrioritySchedulerTest, RequestOrderTest) {
 }
 
 /*
- * Test vertical scale when resource are not enbough
+ * Test horizontal scale when resource are not enbough
  * 1. Create and enqueue ins1
  * 2. Mock scheduling (failure)
- * 3. Ins will not enqueue to pending queue because vertical scale is enabled
+ * 3. Ins will not enqueue to pending queue because horizontal scale is enabled
  */
-TEST_F(PrioritySchedulerTest, EnableVerticalScaleTest)
+TEST_F(PrioritySchedulerTest, EnableHorizontalScaleTest)
 {
     auto scheduler = std::make_shared<PriorityScheduler>(recorder_, 10, PriorityPolicyType::FAIRNESS);
     scheduler->RegisterSchedulePerformer(mockInstancePerformer_, mockGroupPerformer_, mockAggregatedSchedulePerformer_);
@@ -661,8 +661,7 @@ TEST_F(PrioritySchedulerTest, EnableVerticalScaleTest)
     auto ins1 = InstanceItem::CreateInstanceItem("ins1");
     ins1->scheduleReq->mutable_instance()->mutable_scheduleoption()->set_scheduletimeoutms(1);
     auto createOpts = ins1->scheduleReq->mutable_instance()->mutable_createoptions();
-    (*createOpts)[ENABLE_VERTICAL_SCALE_KEY] = "true";
-
+    (*createOpts)[ENABLE_HORIZONTAL_SCALE_KEY] = "true";
     scheduler->Enqueue(ins1);
     EXPECT_FALSE(scheduler->CheckIsRunningQueueEmpty());
     EXPECT_TRUE(scheduler->CheckIsPendingQueueEmpty());
