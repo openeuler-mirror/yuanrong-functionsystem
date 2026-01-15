@@ -484,7 +484,7 @@ TEST_F(DomainInstanceCtrlTest, CreateAgentSuccess)
 }
 
 /**
- * Description: create agent success when enable vertical scale
+ * Description: create agent success when enable horizontal scale
  * Steps:
  * 1. schedule decision
  * 2. create agent
@@ -494,9 +494,9 @@ TEST_F(DomainInstanceCtrlTest, CreateAgentSuccess)
  * 2. create agent success
  * 3. success
  */
-TEST_F(DomainInstanceCtrlTest, EnableVerticalScale)
+TEST_F(DomainInstanceCtrlTest, EnableHorizontalScale)
 {
-    instanceCtrl_->SetEnableVerticalScale(true);
+    instanceCtrl_->SetEnableHorizontalScale(true);
     domain_scheduler::InstanceCtrl instanceCtrl(instanceCtrl_->GetAID());
     instanceCtrl.SetDomainLevel(true);
     instanceCtrl.UpdateMaxSchedRetryTimes(1);

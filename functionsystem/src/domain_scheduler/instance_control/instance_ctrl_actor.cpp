@@ -49,12 +49,12 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     ASSERT_IF_NULL(scheduler_);
     auto requestID = req->requestid();
     uint64_t timeout = req->instance().scheduleoption().scheduletimeoutms();
-    if (enableVerticalScale_) {
+    if (enableHorizontalScale_) {
         auto createOpts = req->mutable_instance()->mutable_createoptions();
-        (*createOpts)[ENABLE_VERTICAL_SCALE_KEY] = "true";
+        (*createOpts)[ENABLE_HORIZONTAL_SCALE_KEY] = "true";
     }
-    YRLOG_INFO("instance(req={}, priority={}, timeout={}, enableVerticalScale={}) schedule decision",
-               requestID, req->instance().scheduleoption().priority(), timeout, enableVerticalScale_);
+    YRLOG_INFO("instance(req={}, priority={}, timeout={}, enableHorizontalScale={}) schedule decision",
+               requestID, req->instance().scheduleoption().priority(), timeout, enableHorizontalScale_);
     auto cancelPromise = GetCancelTag(requestID);
     auto future = scheduler_->ScheduleDecision(req, cancelPromise->GetFuture());
     if (timeout > 0) {
