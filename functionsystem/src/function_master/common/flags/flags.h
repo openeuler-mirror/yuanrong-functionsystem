@@ -83,9 +83,9 @@ public:
         return enablePrintResourceView_;
     }
 
-    bool GetEnableVerticalScale() const
+    bool GetEnableHorizontalScale() const
     {
-        return enableVerticalScale_;
+        return enableHorizontalScale_;
     }
 
     const std::string GetMigratePrefix() const
@@ -273,7 +273,7 @@ protected:
 
     std::string electionMode_;
     bool enablePrintResourceView_;
-    bool enableVerticalScale_;
+    bool enableHorizontalScale_;
 
     std::string migratePrefix_;
     std::string taintToleranceList_;

@@ -138,7 +138,7 @@ Status DomainSchedulerDriver::Start()
     instanceCtrlActor_->BindResourceView(resourceViewMgr_);
     instanceCtrlActor_->BindScheduler(scheduler);
     instanceCtrlActor_->BindScheduleRecorder(scheduleRecorder);
-    instanceCtrlActor_->SetEnableVerticalScale(param_.enableVerticalScale);
+    instanceCtrlActor_->SetEnableHorizontalScale(param_.enableHorizontalScale);
 
     domainGroupCtrlActor_ = std::make_shared<DomainGroupCtrlActor>(DOMAIN_GROUP_CTRL_ACTOR_NAME);
     domainGroupCtrlActor_->BindScheduler(scheduler);
