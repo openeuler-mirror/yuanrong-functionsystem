@@ -35,7 +35,7 @@ InstanceXPUCollector::InstanceXPUCollector(const InstInfoWithXPU &basicInstInfo,
     for (const auto &envIter : userEnvs) {
         if (envIter.first.find(RUNTIME_ENV_PREFIX, 0) == 0) {
             std::string key = Utils::TrimPrefix(envIter.first, RUNTIME_ENV_PREFIX);
-            if (key == "NPU-DEVICE-IDS") {
+            if (key == "NPU-DEVICE-IDS" || key == "GPU-DEVICE-IDS") {
                 YRLOG_DEBUG("logic cardID is {}", envIter.second);
                 ResolveLogicCardIDs(envIter.second);
                 break;

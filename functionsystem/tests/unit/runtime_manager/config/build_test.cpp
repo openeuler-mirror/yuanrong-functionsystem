@@ -126,6 +126,8 @@ TEST_F(BuildTest, GenerateEnvsTest)
         { "func-POSIX_LISTEN_ADDR", "/dcache" });
     startReq->mutable_runtimeinstanceinfo()->mutable_runtimeconfig()->mutable_userenvs()->insert(
         { "func-NPU-DEVICE-IDS", "0,1,3" });
+    startReq->mutable_runtimeinstanceinfo()->mutable_runtimeconfig()->mutable_userenvs()->insert(
+        { "func-GPU-DEVICE-IDS", "1,2,3" });
     auto env = GenerateEnvs(runtimeConfig, startReq, "21000", {0, 4, 6, 7});
     EXPECT_TRUE(env.customResourceEnvs["ENABLE_DS_AUTH"] == "true");
     EXPECT_TRUE(env.customResourceEnvs["ENABLE_SERVER_AUTH"] == "true");
@@ -135,6 +137,7 @@ TEST_F(BuildTest, GenerateEnvsTest)
     EXPECT_TRUE(env.posixEnvs["YR_FUNCTION_LIB_PATH"] == "/dcache/layer/func/test/test-a-b-c");
     EXPECT_TRUE(env.posixEnvs["LAYER_LIB_PATH"] == "/dcache/layer/test/layer-a-b");
     EXPECT_TRUE(env.userEnvs["ASCEND_RT_VISIBLE_DEVICES"] == "0,1,3");
+    EXPECT_TRUE(env.userEnvs["CUDA_VISIBLE_DEVICES"] == "1,2,3");
     EXPECT_TRUE(env.customResourceEnvs.find("YR_LOG_PREFIX") == env.customResourceEnvs.end());
 
     startReq->set_logprefix("YR_123_000001");

@@ -70,6 +70,7 @@ const static std::string GRACEFUL_SHUTDOWN_TIME = "GRACEFUL_SHUTDOWN_TIME";
 const static std::string PYTHONUNBUFFERED = "PYTHONUNBUFFERED";
 
 const static std::string ASCEND_RT_VISIBLE_DEVICES = "ASCEND_RT_VISIBLE_DEVICES";
+const static std::string CUDA_VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES";
 const static std::string YR_LOG_PREFIX = "YR_LOG_PREFIX";
 
 const std::vector<std::string> PRE_CONFIG_ENV = {
@@ -252,12 +253,13 @@ std::map<std::string, std::string> GenerateUserEnvs(const ::messages::RuntimeIns
     for (const auto &envIter : userEnvs) {
         if (envIter.first.find(RUNTIME_ENV_PREFIX, 0) == 0) {
             std::string key = Utils::TrimPrefix(envIter.first, RUNTIME_ENV_PREFIX);
-            if (key == "NPU-DEVICE-IDS") {
+            if (key == "NPU-DEVICE-IDS" || key == "GPU-DEVICE-IDS") {
                 auto realIDs = SelectRealIDs(envIter.second, cardsIDs);
+                auto visibleDevicesEnvKey = key == "NPU-DEVICE-IDS" ? ASCEND_RT_VISIBLE_DEVICES : CUDA_VISIBLE_DEVICES;
                 (void)envs.emplace(std::make_pair(key, realIDs));
-                // ASCEND_RT_VISIBLE_DEVICES need to set logic id, not physical id, so we used sorted schedule result
-                (void)envs.emplace(std::make_pair(ASCEND_RT_VISIBLE_DEVICES, envIter.second));
-                YRLOG_DEBUG("select NPU realIDs, mappingIDS: [{}], [{}]", realIDs, envIter.second);
+                // XXX_VISIBLE_DEVICES need to set logic id, not physical id, so we used sorted schedule result
+                (void)envs.emplace(std::make_pair(visibleDevicesEnvKey, envIter.second));
+                YRLOG_DEBUG("select {} realIDs, mappingIDS: [{}], [{}]", key, realIDs, envIter.second);
                 continue;
             }
             if (IsPreconfiguredEnv(key)) {
