@@ -168,9 +168,17 @@ std::shared_ptr<MetricsExporters::Exporter> MetricsAdapter::InitHttpExporter(con
             YRLOG_INFO("begin to refresh jobName, agent_id is {}", metricsContext_.GetAttr("agent_id"));
             initConfigJson["jobName"] = metricsContext_.GetAttr("agent_id"); // distinguish muti agents in the same node
         }
-        if (initConfigJson.find("ip") != initConfigJson.end() && initConfigJson.find("port") != initConfigJson.end()) {
+        std::string ip;
+        // default use local address
+        if (auto opt = litebus::os::GetEnv("IP_ADDRESS"); opt.IsSome()) {
+            ip = opt.Get();
+        }
+        if (initConfigJson.find("ip") != initConfigJson.end()) {
+            ip = initConfigJson.at("ip").get<std::string>();
+        }
+        if ( !ip.empty() && initConfigJson.find("port") != initConfigJson.end()) {
             initConfigJson["endpoint"] =
-                initConfigJson.at("ip").get<std::string>() + ":" + std::to_string(initConfigJson.at("port").get<int>());
+                ip + ":" + std::to_string(initConfigJson.at("port").get<int>());
         }
 
         try {
