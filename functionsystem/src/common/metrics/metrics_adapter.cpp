@@ -1413,6 +1413,45 @@ void MetricsAdapter::ReportClusterSourceState(const std::shared_ptr<resource_vie
             unit->allocatable().resources().at(functionsystem::resource_view::MEMORY_RESOURCE_NAME).scalar().value();
         TransformGaugeParam("yr_cluster_memory_allocatable", "", "mb", allocatableMemory);
     }
+
+    // 遍历 fragment 中的每个 resourceUnit，只上报 CPU 和 Memory
+    for (const auto &[nodeID, resourceUnit] : unit->fragment()) {
+        // 上报 CPU capacity
+        if (functionsystem::resource_view::HasValidCPU(resourceUnit.capacity())) {
+            double value = resourceUnit.capacity().resources().at(
+                functionsystem::resource_view::CPU_RESOURCE_NAME).scalar().value();
+            MeterTitle meterTitle{ "yr_nodes_cpu_capacity", "", "vmillicore" };
+            MeterData meterData{ value, { { "node_id", nodeID } } };
+            ReportDoubleGauge(meterTitle, meterData, {});
+        }
+
+        // 上报 CPU allocatable
+        if (functionsystem::resource_view::HasValidCPU(resourceUnit.allocatable())) {
+            double value = resourceUnit.allocatable().resources().at(
+                functionsystem::resource_view::CPU_RESOURCE_NAME).scalar().value();
+            MeterTitle meterTitle{ "yr_nodes_cpu_allocatable", "", "vmillicore" };
+            MeterData meterData{ value, { { "node_id", nodeID } } };
+            ReportDoubleGauge(meterTitle, meterData, {});
+        }
+
+        // 上报 Memory capacity
+        if (functionsystem::resource_view::HasValidMemory(resourceUnit.capacity())) {
+            double value = resourceUnit.capacity().resources().at(
+                functionsystem::resource_view::MEMORY_RESOURCE_NAME).scalar().value();
+            MeterTitle meterTitle{ "yr_nodes_memory_capacity", "", "mb" };
+            MeterData meterData{ value, { { "node_id", nodeID } } };
+            ReportDoubleGauge(meterTitle, meterData, {});
+        }
+
+        // 上报 Memory allocatable
+        if (functionsystem::resource_view::HasValidMemory(resourceUnit.allocatable())) {
+            double value = resourceUnit.allocatable().resources().at(
+                functionsystem::resource_view::MEMORY_RESOURCE_NAME).scalar().value();
+            MeterTitle meterTitle{ "yr_nodes_memory_allocatable", "", "mb" };
+            MeterData meterData{ value, { { "node_id", nodeID } } };
+            ReportDoubleGauge(meterTitle, meterData, {});
+        }
+    }
 }
 
 void MetricsAdapter::SetContextAttr(const std::string &attr, const std::string &value)

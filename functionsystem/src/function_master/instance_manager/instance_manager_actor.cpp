@@ -24,6 +24,7 @@
 #include "common/constants/signal.h"
 #include "common/logs/logging.h"
 #include "common/metadata/metadata.h"
+#include "common/metrics/metrics_adapter.h"
 #include "common/service_json/service_json.h"
 #include "common/types/instance_state.h"
 #include "common/utils/collect_status.h"
@@ -40,6 +41,7 @@ const std::string KEY_AGENT_INFO_PATH = "/yr/agentInfo/";
 const std::string KEY_BUSPROXY_PATH_PREFIX = "/yr/busproxy/business/yrk/tenant/0/node/";
 const int64_t CANCEL_TIMEOUT = 5000;
 const int64_t ABNORMAL_GC_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hour
+const int64_t INSTANCE_COUNT_REPORT_INTERVAL = 10 * 1000; // 10 seconds
 
 static messages::ForwardKillResponse GenerateForwardKillResponse(const messages::ForwardKillRequest &req,
                                                                         int32_t state, const std::string &msg)
@@ -170,6 +172,9 @@ void InstanceManagerActor::Init()
     Receive("ForwardQueryDebugInstancesInfo", &InstanceManagerActor::ForwardQueryDebugInstancesInfoHandler);
     Receive("ForwardQueryDebugInstancesInfoResponse",
             &InstanceManagerActor::ForwardQueryDebugInstancesInfoResponseHandler);
+
+    // 启动周期性上报实例数量指标
+    litebus::Async(GetAID(), &InstanceManagerActor::ReportInstanceCountPeriodically);
 }
 
 void InstanceManagerActor::GetAndWatchInstance()
@@ -2072,5 +2077,64 @@ litebus::Future<std::pair<std::string, std::shared_ptr<InstanceInfo>>> InstanceM
 void InstanceManagerActor::SetInstancesReady()
 {
     isInstancesReady_.SetValue(true);
+}
+// todo(lwy_robb): should caculated in instance on etcd event
+void InstanceManagerActor::ReportInstanceCountPeriodically()
+{
+    // 只有 master 节点上报指标
+    if (curStatus_ != MASTER_BUSINESS) {
+        litebus::AsyncAfter(INSTANCE_COUNT_REPORT_INTERVAL, GetAID(),
+                           &InstanceManagerActor::ReportInstanceCountPeriodically);
+        return;
+    }
+
+    // 统计各个节点的 RUNNING 状态实例数量
+    std::unordered_map<std::string, size_t> nodeInstanceCount;
+    size_t totalInstanceCount = 0;
+
+    for (const auto &[nodeID, instanceMap] : member_->instances) {
+        size_t count = 0;
+        // 只统计 RUNNING 状态的实例
+        for (const auto &[key, instance] : instanceMap) {
+            if (instance && instance->instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)) {
+                count++;
+            }
+        }
+
+        nodeInstanceCount[nodeID] = count;
+        totalInstanceCount += count;
+
+        // 为每个节点上报 RUNNING 状态实例数量
+        functionsystem::metrics::MeterTitle meterTitle{
+            "yr_instance_count",
+            "Number of running instances on each node",
+            "count"
+        };
+        functionsystem::metrics::MeterData meterData{
+            static_cast<double>(count),
+            { { "node_id", nodeID } }
+        };
+        functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(
+            meterTitle, meterData, {});
+    }
+
+    // 上报集群总 RUNNING 状态实例数量
+    functionsystem::metrics::MeterTitle totalMeterTitle{
+        "yr_cluster_instance_total",
+        "Total number of running instances in the cluster",
+        "count"
+    };
+    functionsystem::metrics::MeterData totalMeterData{
+        static_cast<double>(totalInstanceCount),
+        {}
+    };
+    functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(
+        totalMeterTitle, totalMeterData, {});
+
+    YRLOG_DEBUG("Report running instance count metrics: total={}, nodes={}", totalInstanceCount, nodeInstanceCount.size());
+
+    // 调度下一次上报
+    litebus::AsyncAfter(INSTANCE_COUNT_REPORT_INTERVAL, GetAID(),
+                       &InstanceManagerActor::ReportInstanceCountPeriodically);
 }
 }  // namespace functionsystem::instance_manager
