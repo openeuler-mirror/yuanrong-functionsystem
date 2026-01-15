@@ -112,6 +112,8 @@ const uint32_t WAIT_RUNTIMES_EXITED_INTERVAL = 1000;  // ms
 const std::string INSTANCE_WORK_DIR_ENV = "INSTANCE_WORK_DIR";
 const std::string YR_NOSET_ASCEND_RT_VISIBLE_DEVICES = "YR_NOSET_ASCEND_RT_VISIBLE_DEVICES";
 const static std::string ASCEND_RT_VISIBLE_DEVICES = "ASCEND_RT_VISIBLE_DEVICES";
+const std::string YR_NOSET_CUDA_VISIBLE_DEVICES = "YR_NOSET_CUDA_VISIBLE_DEVICES";
+const static std::string CUDA_VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES";
 
 const std::string CONDA_PROGRAM_NAME = "conda";
 const std::string CONDA_ENV_FILE = "env.yaml";
@@ -1000,6 +1002,10 @@ void RuntimeExecutor::InheritEnv(std::map<std::string, std::string> &combineEnvs
     // if set YR_NOSET_ASCEND_RT_VISIBLE_DEVICES , ASCEND_RT_VISIBLE_DEVICES will not set
     if (combineEnvs.find(YR_NOSET_ASCEND_RT_VISIBLE_DEVICES) != combineEnvs.end()) {
         (void)combineEnvs.erase(ASCEND_RT_VISIBLE_DEVICES);
+    }
+    // if set YR_NOSET_CUDA_VISIBLE_DEVICES , CUDA_VISIBLE_DEVICES will not set
+    if (combineEnvs.find(YR_NOSET_CUDA_VISIBLE_DEVICES) != combineEnvs.end()) {
+        (void)combineEnvs.erase(CUDA_VISIBLE_DEVICES);
     }
 }
 

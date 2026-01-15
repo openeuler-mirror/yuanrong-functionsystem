@@ -1748,6 +1748,12 @@ TEST_F(RuntimeExecutorTest, InheritEnvTest)
     env.userEnvs["ASCEND_RT_VISIBLE_DEVICES"] = "0,1";
     combineEnv = executor_->CombineEnvs(env);
     EXPECT_TRUE(combineEnv.find("ASCEND_RT_VISIBLE_DEVICES") == combineEnv.end());
+
+    // YR_NOSET_CUDA_VISIBLE_DEVICES is set, CUDA_VISIBLE_DEVICES will delete
+    litebus::os::SetEnv("YR_NOSET_CUDA_VISIBLE_DEVICES", "1");
+    env.userEnvs["CUDA_VISIBLE_DEVICES"] = "4,5,6";
+    combineEnv = executor_->CombineEnvs(env);
+    EXPECT_TRUE(combineEnv.find("CUDA_VISIBLE_DEVICES") == combineEnv.end());
 }
 
 TEST_F(RuntimeExecutorTest, InheritEnvFalseTest)
