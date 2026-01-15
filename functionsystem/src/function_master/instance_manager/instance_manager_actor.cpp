@@ -2096,7 +2096,8 @@ void InstanceManagerActor::ReportInstanceCountPeriodically()
         size_t count = 0;
         // 只统计 RUNNING 状态的实例
         for (const auto &[key, instance] : instanceMap) {
-            if (instance && instance->instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)) {
+            if (instance && instance->instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)
+                && !instance->issystemfunc()) {
                 count++;
             }
         }
