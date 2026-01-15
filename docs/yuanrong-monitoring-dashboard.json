@@ -19,6 +19,195 @@
   "links": [],
   "panels": [
     {
+      "id": 1,
+      "title": "Function Invocations Total",
+      "type": "graph",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(function_invocations_total[5m])) by (function_name, http_code)",
+          "legendFormat": "{{function_name}} - {{http_code}}",
+          "refId": "A"
+        }
+      ],
+      "yaxes": [
+        {
+          "format": "ops",
+          "label": "Requests/sec"
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "xaxis": {
+        "mode": "time"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Function Invocation Duration",
+      "type": "graph",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(function_invocation_duration_seconds_bucket[5m])) by (le, function_name))",
+          "legendFormat": "p95 - {{function_name}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(function_invocation_duration_seconds_bucket[5m])) by (le, function_name))",
+          "legendFormat": "p99 - {{function_name}}",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(function_invocation_duration_seconds_sum[5m])) / sum(rate(function_invocation_duration_seconds_count[5m])) by (function_name)",
+          "legendFormat": "avg - {{function_name}}",
+          "refId": "C"
+        }
+      ],
+      "yaxes": [
+        {
+          "format": "s",
+          "label": "Duration (seconds)"
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "xaxis": {
+        "mode": "time"
+      }
+    },
+    {
+      "id": 3,
+      "title": "HTTP Status Code Distribution",
+      "type": "piechart",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "sum(function_invocations_total) by (http_code)",
+          "legendFormat": "{{http_code}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Function Invocation Count by Function",
+      "type": "table",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "sum(function_invocations_total) by (function_name, http_code)",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {},
+            "renameByName": {
+              "function_name": "Function Name",
+              "http_code": "HTTP Code",
+              "Value": "Count"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Error Rate",
+      "type": "graph",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(function_invocations_total{http_code=~\"5..\"}[5m])) / sum(rate(function_invocations_total[5m]))",
+          "legendFormat": "Error Rate",
+          "refId": "A"
+        }
+      ],
+      "yaxes": [
+        {
+          "format": "percentunit",
+          "label": "Error Rate"
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "xaxis": {
+        "mode": "time"
+      }
+    },
+    {
+      "id": 6,
+      "title": "Request Rate by Function",
+      "type": "graph",
+      "datasource": "Prometheus",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(function_invocations_total[5m])) by (function_name)",
+          "legendFormat": "{{function_name}}",
+          "refId": "A"
+        }
+      ],
+      "yaxes": [
+        {
+          "format": "ops",
+          "label": "Requests/sec"
+        },
+        {
+          "format": "short"
+        }
+      ],
+      "xaxis": {
+        "mode": "time"
+      }
+    },
+    {
       "datasource": "Prometheus",
       "fieldConfig": {
         "defaults": {
@@ -102,7 +291,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 0
+        "y": 24
       },
       "id": 101,
       "options": {
@@ -218,7 +407,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 0
+        "y": 24
       },
       "id": 102,
       "options": {
@@ -303,7 +492,7 @@
         "h": 9,
         "w": 12,
         "x": 0,
-        "y": 8
+        "y": 32
       },
       "id": 103,
       "options": {
@@ -388,7 +577,7 @@
         "h": 9,
         "w": 12,
         "x": 12,
-        "y": 8
+        "y": 32
       },
       "id": 104,
       "options": {
@@ -453,9 +642,9 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 17
+        "y": 41
       },
-      "id": 1,
+      "id": 105,
       "options": {
         "orientation": "auto",
         "reduceOptions": {
@@ -533,9 +722,9 @@
         "h": 8,
         "w": 18,
         "x": 6,
-        "y": 17
+        "y": 41
       },
-      "id": 2,
+      "id": 106,
       "options": {
         "legend": {
           "calcs": [
@@ -613,9 +802,9 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 25
+        "y": 49
       },
-      "id": 3,
+      "id": 107,
       "options": {
         "legend": {
           "calcs": [
@@ -690,9 +879,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 34
+        "y": 58
       },
-      "id": 4,
+      "id": 108,
       "options": {
         "showHeader": true,
         "sortBy": [
@@ -758,9 +947,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 34
+        "y": 58
       },
-      "id": 5,
+      "id": 109,
       "options": {
         "legend": {
           "displayMode": "table",
@@ -810,9 +999,9 @@
         "h": 6,
         "w": 4,
         "x": 0,
-        "y": 42
+        "y": 66
       },
-      "id": 6,
+      "id": 110,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -871,9 +1060,9 @@
         "h": 6,
         "w": 4,
         "x": 4,
-        "y": 42
+        "y": 66
       },
-      "id": 7,
+      "id": 111,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -932,9 +1121,9 @@
         "h": 6,
         "w": 4,
         "x": 8,
-        "y": 42
+        "y": 66
       },
-      "id": 8,
+      "id": 112,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -1013,9 +1202,9 @@
         "h": 6,
         "w": 12,
         "x": 12,
-        "y": 42
+        "y": 66
       },
-      "id": 9,
+      "id": 113,
       "options": {
         "legend": {
           "calcs": [],
@@ -1041,8 +1230,11 @@
   "schemaVersion": 27,
   "style": "dark",
   "tags": [
+    "yuanrong",
+    "frontend",
     "functionsystem",
     "instances",
+    "metrics",
     "monitoring"
   ],
   "templating": {
@@ -1054,18 +1246,21 @@
   },
   "timepicker": {
     "refresh_intervals": [
+      "5s",
       "10s",
       "30s",
       "1m",
       "5m",
       "15m",
       "30m",
-      "1h"
+      "1h",
+      "2h",
+      "1d"
     ]
   },
   "timezone": "browser",
-  "title": "Function System - Instance Monitoring",
-  "uid": "functionsystem-instances",
+  "title": "Yuanrong Complete Monitoring Dashboard",
+  "uid": "yuanrong-complete-monitoring",
   "version": 1,
-  "description": "监控 Function System 集群和各节点的运行实例数量"
+  "description": "完整的元融监控面板，包含前端函数调用指标和集群实例监控"
 }
