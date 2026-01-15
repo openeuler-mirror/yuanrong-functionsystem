@@ -248,6 +248,11 @@ private:
                                 const std::string &nodeName);
 
     void OnLocalScheduleChange(const std::vector<WatchEvent> &events);
+    
+    /**
+     * Periodically report instance count metrics
+     */
+    void ReportInstanceCountPeriodically();
     void OnLocalScheduleWatch(const std::shared_ptr<Watcher> &watcher);
 
     litebus::Future<SyncResult> InstanceInfoSyncer();
