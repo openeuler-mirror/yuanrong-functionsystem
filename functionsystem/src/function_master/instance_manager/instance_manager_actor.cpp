@@ -42,6 +42,8 @@ const std::string KEY_BUSPROXY_PATH_PREFIX = "/yr/busproxy/business/yrk/tenant/0
 const int64_t CANCEL_TIMEOUT = 5000;
 const int64_t ABNORMAL_GC_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hour
 const int64_t INSTANCE_COUNT_REPORT_INTERVAL = 10 * 1000; // 10 seconds
+const int64_t GARBAGE_COLLECT_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const uint64_t FATAL_INSTANCE_TIMEOUT = 3600; // 1 hour in seconds
 
 static messages::ForwardKillResponse GenerateForwardKillResponse(const messages::ForwardKillRequest &req,
                                                                         int32_t state, const std::string &msg)
@@ -175,6 +177,9 @@ void InstanceManagerActor::Init()
 
     // 启动周期性上报实例数量指标
     litebus::Async(GetAID(), &InstanceManagerActor::ReportInstanceCountPeriodically);
+
+    // 启动周期性垃圾回收任务
+    litebus::Async(GetAID(), &InstanceManagerActor::GarbageCollectFatalInstances);
 }
 
 void InstanceManagerActor::GetAndWatchInstance()
@@ -1493,6 +1498,63 @@ litebus::Future<messages::QueryDebugInstanceInfosResponse> InstanceManagerActor:
     return rsp;
 }
 
+void InstanceManagerActor::MasterBusiness::GarbageCollectFatalInstances()
+{
+    auto nowTimestamp = static_cast<uint64_t>(std::time(nullptr));
+    std::vector<std::pair<std::string, std::shared_ptr<resource_view::InstanceInfo>>> instancesToDelete;
+
+    // 查找 INSTANCE_MANAGER_OWNER 中状态为 FATAL 且超过 1 小时的实例
+    if (member_->instances.find(INSTANCE_MANAGER_OWNER) != member_->instances.end()) {
+        const auto &ownerInstances = member_->instances[INSTANCE_MANAGER_OWNER];
+
+        for (const auto &[key, instance] : ownerInstances) {
+            if (!instance) {
+                continue;
+            }
+
+            // 检查是否为 FATAL 状态
+            if (instance->instancestatus().code() != static_cast<int32_t>(InstanceState::FATAL)) {
+                continue;
+            }
+
+            // 检查是否有 CREATE_TIME_STAMP
+            auto extIter = instance->extensions().find(CREATE_TIME_STAMP);
+            if (extIter == instance->extensions().end()) {
+                YRLOG_WARN("Instance({}) in FATAL state has no CREATE_TIME_STAMP, skip garbage collection",
+                          instance->instanceid());
+                continue;
+            }
+
+            // 解析创建时间戳
+            uint64_t createTimestamp = 0;
+            try {
+                createTimestamp = std::stoull(extIter->second);
+            } catch (const std::exception &e) {
+                YRLOG_ERROR("Failed to parse CREATE_TIME_STAMP for instance({}): {}",
+                           instance->instanceid(), e.what());
+                continue;
+            }
+
+            // 检查是否超过 1 小时
+            if (nowTimestamp > createTimestamp && (nowTimestamp - createTimestamp) > FATAL_INSTANCE_TIMEOUT) {
+                YRLOG_INFO("Found FATAL instance({}) exceeding timeout, created at {}, now {}, age {} seconds",
+                          instance->instanceid(), createTimestamp, nowTimestamp,
+                          nowTimestamp - createTimestamp);
+                instancesToDelete.emplace_back(key, instance);
+            }
+        }
+    }
+
+    if (instancesToDelete.empty()) {
+        return;
+    }
+    YRLOG_INFO("Garbage collecting {} FATAL instances that exceeded timeout", instancesToDelete.size());
+    for (const auto &[key, instance] : instancesToDelete) {
+        YRLOG_INFO("Force deleting FATAL instance({}) key({})", instance->instanceid(), key);
+        ForceDelete(key, instance);
+    }
+}
+
 void InstanceManagerActor::MasterBusiness::DelNode(const std::string &nodeName, const bool force)
 {
     if (force) {
@@ -2137,5 +2199,15 @@ void InstanceManagerActor::ReportInstanceCountPeriodically()
     // 调度下一次上报
     litebus::AsyncAfter(INSTANCE_COUNT_REPORT_INTERVAL, GetAID(),
                        &InstanceManagerActor::ReportInstanceCountPeriodically);
+}
+
+void InstanceManagerActor::GarbageCollectFatalInstances()
+{
+    ASSERT_IF_NULL(business_);
+    business_->GarbageCollectFatalInstances();
+
+    // 调度下一次垃圾回收
+    litebus::AsyncAfter(GARBAGE_COLLECT_INTERVAL, GetAID(),
+                       &InstanceManagerActor::GarbageCollectFatalInstances);
 }
 }  // namespace functionsystem::instance_manager

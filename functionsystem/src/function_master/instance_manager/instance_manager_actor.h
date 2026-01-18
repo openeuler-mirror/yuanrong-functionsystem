@@ -248,11 +248,17 @@ private:
                                 const std::string &nodeName);
 
     void OnLocalScheduleChange(const std::vector<WatchEvent> &events);
-    
+
     /**
      * Periodically report instance count metrics
      */
     void ReportInstanceCountPeriodically();
+
+    /**
+     * Periodically garbage collect FATAL instances that exceed timeout
+     */
+    void GarbageCollectFatalInstances();
+
     void OnLocalScheduleWatch(const std::shared_ptr<Watcher> &watcher);
 
     litebus::Future<SyncResult> InstanceInfoSyncer();
@@ -371,6 +377,8 @@ private:
         virtual litebus::Future<messages::QueryDebugInstanceInfosResponse> QueryDebugInstancesInfo(
             std::shared_ptr<messages::QueryDebugInstanceInfosRequest> req) = 0;
 
+        virtual void GarbageCollectFatalInstances() = 0;
+
     protected:
         std::shared_ptr<Member> member_;
         std::weak_ptr<InstanceManagerActor> actor_;
@@ -444,6 +452,8 @@ private:
 
         litebus::Future<messages::QueryDebugInstanceInfosResponse> QueryDebugInstancesInfo(
             std::shared_ptr<messages::QueryDebugInstanceInfosRequest> req) override;
+
+        void GarbageCollectFatalInstances() override;
     private:
         bool nodeSynced_{false};
         std::unordered_set<std::string> nodes_;
@@ -490,6 +500,8 @@ private:
 
         litebus::Future<messages::QueryDebugInstanceInfosResponse> QueryDebugInstancesInfo(
             std::shared_ptr<messages::QueryDebugInstanceInfosRequest> req) override;
+
+        void GarbageCollectFatalInstances() override {};
     };
 
     litebus::Future<Status>  CheckSyncResponse(const std::shared_ptr<GetResponse> &response);
