@@ -107,13 +107,6 @@ void InstanceManagerActor::Init()
     (void)businesses_.emplace(MASTER_BUSINESS, masterBusiness);
     (void)businesses_.emplace(SLAVE_BUSINESS, slaveBusiness);
 
-    YRLOG_INFO("load local function");
-    std::unordered_map<std::string, FunctionMeta> funcMetaMap{};
-    LoadLocalFuncMeta(funcMetaMap, member_->functionMetaPath);
-    service_json::LoadFuncMetaFromServiceYaml(funcMetaMap, member_->servicesPath, member_->libPath);
-    for (const auto &item : funcMetaMap) {
-        member_->innerFuncMetaKeys.emplace(item.first);
-    }
     member_->globalScheduler->LocalSchedAbnormalCallback(
         [aid(GetAID())](const std::string &nodeID) -> litebus::Future<Status> {
             // blocked until migration is complete, then global scheduler update topology.
@@ -134,6 +127,14 @@ void InstanceManagerActor::Init()
         [aid(GetAID())](const std::string &nodeID) {
             litebus::Async(aid, &InstanceManagerActor::AddNode, nodeID);
         });
+
+    YRLOG_INFO("load local function");
+    std::unordered_map<std::string, FunctionMeta> funcMetaMap{};
+    LoadLocalFuncMeta(funcMetaMap, member_->functionMetaPath);
+    service_json::LoadFuncMetaFromServiceYaml(funcMetaMap, member_->servicesPath, member_->libPath);
+    for (const auto &item : funcMetaMap) {
+        member_->innerFuncMetaKeys.emplace(item.first);
+    }
 
     (void)member_->client
         ->GetAndWatch(
