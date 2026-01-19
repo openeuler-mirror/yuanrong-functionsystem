@@ -281,8 +281,7 @@ litebus::Future<Status> FunctionAgentMgrActor::AddFuncAgent(const Status &status
 
 void FunctionAgentMgrActor::Register(const litebus::AID &from, string &&name, string &&msg)
 {
-    YRLOG_INFO("receive register from {}. name {} msg {}.",
-                    from.HashString(), name, msg);
+    YRLOG_INFO("receive register from {}. name {}.", from.HashString(), name);
     if (!IsReady()) {
         YRLOG_WARN("local_scheduler is not recovered, ignore register from {}", from.HashString());
         return;
@@ -1312,7 +1311,7 @@ void FunctionAgentMgrActor::QueryInstanceStatusInfoResponse(const litebus::AID &
 {
     messages::QueryInstanceStatusResponse rsp;
     if (!rsp.ParseFromString(msg)) {
-        YRLOG_ERROR("invalid instance status response from({}), {}", std::string(from), msg);
+        YRLOG_ERROR("invalid instance status response from({})", std::string(from));
         return;
     }
     YRLOG_INFO("{}|got instance status response from({}), {}", rsp.requestid(), std::string(from),
@@ -1403,7 +1402,7 @@ void FunctionAgentMgrActor::QueryDebugInstanceInfosResponse(const litebus::AID &
 {
     messages::QueryDebugInstanceInfosResponse rsp;
     if (!rsp.ParseFromString(msg)) {
-        YRLOG_ERROR("invalid debug instance response from({}), {}", std::string(from), msg);
+        YRLOG_ERROR("invalid debug instance response from({})", std::string(from));
         return;
     }
     YRLOG_INFO("{}|get debug instance info response from({}), {}", rsp.requestid(), std::string(from),
