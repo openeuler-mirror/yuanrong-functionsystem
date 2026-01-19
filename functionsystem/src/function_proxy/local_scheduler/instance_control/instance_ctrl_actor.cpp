@@ -4674,10 +4674,15 @@ void InstanceCtrlActor::BindObserver(const std::shared_ptr<function_proxy::Contr
         return litebus::Async(aid, &InstanceCtrlActor::InstanceRouteInfoSyncer, routeInfo);
     });
 
-    observer->SetTrafficReportCbFunc(
-        [aid(GetAID())](const std::string &instanceID, const size_t &processingNum) {
-            litebus::Async(aid, &InstanceCtrlActor::TrafficReport, instanceID, processingNum);
+    observer->SetUpdateFuncMetasFunc(
+        [aid(GetAID())](bool isAdd, const std::unordered_map<std::string, FunctionMeta> &funcMetas) {
+            YRLOG_DEBUG("update function meta, isAdd: {}, size: {}", isAdd, funcMetas.size());
+            litebus::Async(aid, &InstanceCtrlActor::UpdateFuncMetas, isAdd, funcMetas);
         });
+
+    observer->SetTrafficReportCbFunc([aid(GetAID())](const std::string &instanceID, const size_t &processingNum) {
+        litebus::Async(aid, &InstanceCtrlActor::TrafficReport, instanceID, processingNum);
+    });
 
     observer_ = observer;
     observer_->Attach(instanceControlView_);
