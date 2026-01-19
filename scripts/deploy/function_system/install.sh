@@ -32,7 +32,7 @@ else
         exit 1
       fi
   fi
-  ln -sf $INSTALLED_RUNTIME $RUNTIME_HOME_DIR
+  ln -sf $INSTALLED_RUNTIME/service $RUNTIME_HOME_DIR/service
 fi
 
 if [ -z "$FUNCTION_META_PATH" ] && [ -d "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas" ]; then
