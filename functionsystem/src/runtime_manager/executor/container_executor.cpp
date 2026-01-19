@@ -521,10 +521,6 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
     for (const auto &arg : buildArgs) {
         *funcRt->add_command() = arg;
     }
-    auto dssocket = start->add_mounts();
-    dssocket->set_type("bind");
-    dssocket->set_source("/opt/ds/socket/");
-    dssocket->set_target("/opt/ds/socket/");
     auto updateEnv = BuildMountForCode(start, request, envs);
 
     // todo: should be more elegant
