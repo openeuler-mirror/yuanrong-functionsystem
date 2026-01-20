@@ -224,6 +224,7 @@ enum StatusCode : int32_t {
     ERR_SCHEDULE_PLUGIN_CONFIG,
     ERR_SUB_STATE_INVALID,
     ERR_INSTANCE_SUSPEND,
+    ERR_INSTANCE_BUSY,
 
     // Posix user error code, range [2000, 3000)
     ERR_USER_CODE_LOAD = static_cast<int>(POSIX) + 1001,
