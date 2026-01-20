@@ -17,6 +17,7 @@
 
 #include "common/resource_view/resource_tool.h"
 #include "common/resource_view/resource_type.h"
+#include <cmath>
 
 namespace functionsystem::schedule_plugin {
 // IN indicates that the value of the affinity label must be one of pod label value.
@@ -69,7 +70,7 @@ bool IsAffinityPriority(const affinity::Selector &selector)
     return selector.condition().orderpriority();
 }
 
-int64_t GetAffinityScore(const std::string &unitID, const affinity::Selector &selector,
+double GetAffinityScore(const std::string &unitID, const affinity::Selector &selector,
                          const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels, bool anti)
 {
     for (const auto &subcondition : selector.condition().subconditions()) {
@@ -113,8 +114,8 @@ bool FilterRequiredWithPriority(const std::string &unitID, const affinity::Selec
                                 const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels,
                                 bool anti)
 {
-    int64_t score = GetAffinityScore(unitID, selector, labels, anti);
-    return score != 0;
+    double score = GetAffinityScore(unitID, selector, labels, anti);
+    return std::abs(score - ZERO_SCORE) > SCORE_EPSILON;
 }
 
 bool RequiredAffinityFilter(const std::string &unitID, const affinity::Selector &selector,
@@ -137,13 +138,13 @@ bool RequiredAntiAffinityFilter(const std::string &unitID, const affinity::Selec
     }
 }
 
-int64_t AffinityScorer(const std::string &unitID, const affinity::Selector &selector,
+double AffinityScorer(const std::string &unitID, const affinity::Selector &selector,
     const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
 {
     return GetAffinityScore(unitID, selector, labels, false);
 }
 
-int64_t AntiAffinityScorer(const std::string &unitID, const affinity::Selector &selector,
+double AntiAffinityScorer(const std::string &unitID, const affinity::Selector &selector,
     const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
 {
     return GetAffinityScore(unitID, selector, labels, true);

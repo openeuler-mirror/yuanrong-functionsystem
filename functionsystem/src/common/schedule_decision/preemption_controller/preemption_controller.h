@@ -31,7 +31,7 @@ struct PreemptResult {
 };
 
 struct PreemptableUnit {
-    int64_t score;
+    double score;
     std::string unitID;
     std::string ownerID;
     std::vector<resource_view::InstanceInfo> preemptedInstances;
@@ -105,14 +105,14 @@ private:
     bool IsCrossedTenant(const resource_view::InstanceInfo &instance, const resource_view::ResourceUnit &frag);
     bool IsResourceAffinityMeetRequired(const std::shared_ptr<schedule_framework::PreAllocatedContext> &ctx,
                                         const resource_view::InstanceInfo &instance,
-                                        const resource_view::ResourceUnit &frag, int64_t &score);
+                                        const resource_view::ResourceUnit &frag, double &score);
 
     bool IsInstancePreemptable(const resource_view::InstanceInfo &srcInstance,
                                const resource_view::InstanceInfo &dstInstance, const resource_view::ResourceUnit &frag);
 
     PreemptableUnit ChoseInstanceToPreempted(const std::shared_ptr<schedule_framework::PreAllocatedContext> &ctx,
                                              const resource_view::InstanceInfo &instance,
-                                             const resource_view::ResourceUnit &frag, int64_t &score);
+                                             const resource_view::ResourceUnit &frag, double &score);
 };
 }  // namespace functionsystem::domain_scheduler
 

@@ -42,7 +42,7 @@ schedule_framework::NodeScore DefaultScorer::Score(const std::shared_ptr<schedul
 
     const auto &required = instance.resources().resources();
     int64_t calculated = 0;
-    int64_t accumulated = 0;
+    double accumulated = 0.0;
     for (auto &req : required) {
         // hetero resource score in hetero scorer, disk resource score in disk scorer
         if (resource_view::IsHeterogeneousResource(req.first) || resource_view::IsDiskResource(req.first)) {
@@ -60,12 +60,11 @@ schedule_framework::NodeScore DefaultScorer::Score(const std::shared_ptr<schedul
             YRLOG_WARN("{} not find in agent resources", req.first);
             continue;
         }
-        int64_t remain =
-            static_cast<int64_t>((1.0f - req.second.scalar().value() / avail->second.scalar().value()) * 100);
+        double remain = (1.0 - req.second.scalar().value() / avail->second.scalar().value()) * 100.0;
         accumulated += remain;
         calculated++;
     }
-    int64_t score = calculated > 0 ? accumulated / calculated : accumulated;
+    double score = calculated > 0.0 ? accumulated / calculated : accumulated;
     return schedule_framework::NodeScore(score);
 }
 

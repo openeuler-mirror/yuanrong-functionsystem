@@ -1514,7 +1514,8 @@ void InstanceManagerActor::MasterBusiness::GarbageCollectFatalInstances()
             }
 
             // 检查是否为 FATAL 状态
-            if (instance->instancestatus().code() != static_cast<int32_t>(InstanceState::FATAL)) {
+            if (instance->instancestatus().code() != static_cast<int32_t>(InstanceState::FATAL) &&
+                instance->instancestatus().code() != static_cast<int32_t>(InstanceState::EVICTED)) {
                 continue;
             }
 

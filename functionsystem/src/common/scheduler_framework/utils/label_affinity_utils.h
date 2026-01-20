@@ -23,7 +23,8 @@
 
 namespace functionsystem {
 const int64_t REQUIRED_AFFINITY_PRIORITY_NOT_MET = -1;
-const int64_t ZERO_SCORE = 0;
+const double ZERO_SCORE = 0.0;
+const double SCORE_EPSILON = 1e-9;
 
 bool IsLabelInValues(const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels,
                      const std::string &key, const ::google::protobuf::RepeatedPtrField<std::string> &values);
@@ -39,21 +40,21 @@ bool RequiredFilter(const std::string &unitID, const affinity::Selector &selecto
 bool RequiredAntiFilter(const std::string &unitID, const affinity::Selector &selector,
                         const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
 
-int64_t AffinityScorer(const std::string &unitID, const affinity::Selector &selector,
+double AffinityScorer(const std::string &unitID, const affinity::Selector &selector,
                        const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
 
-int64_t AntiAffinityScorer(const std::string &unitID, const affinity::Selector &selector,
+double AntiAffinityScorer(const std::string &unitID, const affinity::Selector &selector,
                            const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
 
 bool IsResourceRequiredAffinityPassed(
     const std::string &unitID, const resource_view::InstanceInfo &instance,
     const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
 
-int64_t CalculateInstanceAffinityScore(
+double CalculateInstanceAffinityScore(
     const std::string &unitID, const resource_view::InstanceInfo &instance,
     const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
 
-int64_t CalculateResourceAffinityScore(
+double CalculateResourceAffinityScore(
     const std::string &unitID, const resource_view::InstanceInfo &instance,
     const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
 

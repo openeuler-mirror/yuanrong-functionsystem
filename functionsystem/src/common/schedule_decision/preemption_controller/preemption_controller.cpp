@@ -99,7 +99,7 @@ PreemptResult PreemptionController::PreemptDecision(const std::shared_ptr<schedu
             infeasibleCtx.InsertInfeasibleUnit(unitID);
             continue;
         }
-        int64_t score = 0;
+        double score = 0.0;
         if (!IsResourceAffinityMeetRequired(preContext, instance, frag, score)) {
             infeasibleCtx.InsertInfeasibleUnit(unitID);
             continue;
@@ -153,7 +153,7 @@ bool PreemptionController::IsCrossedTenant(const resource_view::InstanceInfo &in
 
 bool PreemptionController::IsResourceAffinityMeetRequired(
     const std::shared_ptr<schedule_framework::PreAllocatedContext> &ctx, const resource_view::InstanceInfo &instance,
-    const resource_view::ResourceUnit &frag, int64_t &score)
+    const resource_view::ResourceUnit &frag, double &score)
 {
     auto unitLabels = frag.nodelabels() + ctx->allocatedLabels[frag.id()];
     // do not meet resource required affinity
@@ -218,7 +218,7 @@ bool InstanceAffinityComparator(const resource_view::InstanceInfo &instance, con
 
 PreemptableUnit PreemptionController::ChoseInstanceToPreempted(
     const std::shared_ptr<schedule_framework::PreAllocatedContext> &ctx, const resource_view::InstanceInfo &instance,
-    const resource_view::ResourceUnit &frag, int64_t &score)
+    const resource_view::ResourceUnit &frag, double &score)
 {
     PreemptableUnit preemptableUnit;
     std::vector<resource_view::InstanceInfo> result;
@@ -253,7 +253,6 @@ PreemptableUnit PreemptionController::ChoseInstanceToPreempted(
                    instance.instanceid());
         return preemptableUnit;
     }
-
     score += CalculateInstanceAffinityScore(frag.id(), instance, unitLabels);
     preemptableUnit.unitID = frag.id();
     preemptableUnit.ownerID = frag.ownerid();

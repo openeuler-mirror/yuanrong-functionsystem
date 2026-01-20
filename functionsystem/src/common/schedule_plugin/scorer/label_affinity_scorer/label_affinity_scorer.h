@@ -33,7 +33,7 @@ public:
                                         const resource_view::InstanceInfo &instance,
                                         const resource_view::ResourceUnit &resourceUnit) override;
 private:
-    int64_t CalculatePreferredScore(
+    double CalculatePreferredScore(
             const resource_view::ResourceUnit &resourceUnit, const resource_view::InstanceInfo &instance,
             const std::shared_ptr<schedule_framework::PreAllocatedContext> &preContext) const;
     bool isRelaxed_;
