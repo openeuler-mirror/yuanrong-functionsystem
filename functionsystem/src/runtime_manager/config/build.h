@@ -67,6 +67,8 @@ void AddYuanRongEnvs(std::map<std::string, std::string> &envs);
 std::string SelectRealIDs(const std::string &env, const std::vector<int> &cardsIDs);
 std::string ReplaceDollarContent(const std::string &source, std::map<std::string, std::string> &env);
 bool IsPreconfiguredEnv(std::string& key);
+
+std::string GetPosixAddress(const RuntimeConfig config, const std::string &port);
 }  // namespace functionsystem::runtime_manager
 
 #endif  // RUNTIME_MANAGER_CONFIG_BUILD_H

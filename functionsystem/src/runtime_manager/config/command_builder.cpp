@@ -280,7 +280,7 @@ std::pair<Status, std::vector<std::string>> CommandBuilder::GetCppBuildArgs(
 {
     YRLOG_DEBUG("{}|{}|GetCppBuildArgs start", request->runtimeinstanceinfo().traceid(),
                 request->runtimeinstanceinfo().requestid());
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     auto confPath = litebus::os::Join(config_.runtimeConfigPath, "runtime.json");
 
     auto resultPair = HandleWorkingDirectory(request, request->runtimeinstanceinfo());
@@ -302,7 +302,7 @@ std::pair<Status, std::vector<std::string>> CommandBuilder::GetGoBuildArgs(
     YRLOG_DEBUG("{}|{}|GetGoBuildArgs start, instance({}), runtime({})", request->runtimeinstanceinfo().traceid(),
                 request->runtimeinstanceinfo().requestid(), request->runtimeinstanceinfo().instanceid(),
                 request->runtimeinstanceinfo().runtimeid());
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     return { Status::OK(),
              { GO_PROGRAM_NAME, RUNTIME_ID_ARG_PREFIX + request->runtimeinstanceinfo().runtimeid(),
                INSTANCE_ID_ARG_PREFIX + request->runtimeinstanceinfo().instanceid(),
@@ -418,7 +418,7 @@ std::pair<Status, std::vector<std::string>> CommandBuilder::PythonBuildFinalArgs
     const messages::RuntimeInstanceInfo &info) const
 {
     std::string jobID = PYTHON_JOB_ID_PREFIX + Utils::GetJobIDFromTraceID(info.traceid());
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
 
     return { Status::OK(),
              { execPath, "-u", config_.runtimePath + PYTHON_NEW_SERVER_PATH, "--rt_server_address", address,
@@ -441,7 +441,7 @@ std::pair<Status, std::vector<std::string>> CommandBuilder::GetJavaBuildArgs(
             deployDir + "/" + RUNTIME_LAYER_DIR_NAME + "/" + RUNTIME_FUNC_DIR_NAME + "/" + bucketID + "/" + objectID;
     }
     std::string javaClassPath = config_.runtimePath + YR_JAVA_RUNTIME_PATH + ":" + jarPath;
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     std::vector<std::string> args = jvmArgs;
     auto resources = request->runtimeinstanceinfo().runtimeconfig().resources().resources();
     for (auto resource : resources) {
@@ -507,7 +507,7 @@ std::pair<Status, std::vector<std::string>> CommandBuilder::GetNodejsBuildArgs(
     const std::string &port, const std::shared_ptr<messages::StartInstanceRequest> &request) const
 {
     std::string memorySize = "";
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     auto resources = request->runtimeinstanceinfo().runtimeconfig().resources().resources();
     for (auto resource : resources) {
         if (resource.first == resource_view::MEMORY_RESOURCE_NAME && resource.second.mutable_scalar()->value() > 0) {

@@ -71,7 +71,7 @@ function install_function_proxy() {
     --services_path="${SERVICES_PATH}" \
     --lib_path="${FUNCTION_SYSTEM_DIR}/lib" \
     --function_meta_path="${FUNCTION_META_PATH}" \
-    --ip="${IP_ADDRESS}" \
+    --ip="${LOCAL_IP}" \
     --grpc_listen_port="${FUNCTION_PROXY_GRPC_PORT}" \
     --dposix_uds_path="${DPOSIX_UDS_PATH}" \
     --enable_driver="${enable_driver}" \
@@ -334,6 +334,7 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     --user_log_export_mode="${USER_LOG_EXPORT_MODE}"
     --npu_collection_mode="${NPU_COLLECTION_MODE}"
     --gpu_collection_enable="${GPU_COLLECTION_ENABLE}"
+    --proxy_ip="${LOCAL_IP}" \
     --proxy_grpc_server_port="${FUNCTION_PROXY_GRPC_PORT}"
     --setCmdCred=false
     --python_dependency_path="${PYTHONPATH}:${RUNTIME_HOME_DIR}/service/python"
@@ -383,6 +384,7 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
   # Start with or without redirecting stdout/stderr depending on USER_LOG_EXPORT_MODE
   if [ "x${USER_LOG_EXPORT_MODE}" == "xstd" ]; then
     LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
+    LOCAL_IP="${LOCAL_IP}" \
     HOST_IP="${IP_ADDRESS}" \
     RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG \
     INIT_LABELS=${LABELS} \
@@ -390,6 +392,7 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     FUNCTION_AGENT_PID="$!"
   else
     LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
+    LOCAL_IP="${LOCAL_IP}" \
     HOST_IP="${IP_ADDRESS}" \
     RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG \
     INIT_LABELS=${LABELS} \

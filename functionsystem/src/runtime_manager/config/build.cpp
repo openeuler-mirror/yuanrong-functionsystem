@@ -165,7 +165,7 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     YRLOG_INFO("{}|{}|start runtime env LD_LIBRARY_PATH: {}", info.traceid(), info.requestid(), ldLibraryPath);
 
     std::map<std::string, std::string> posixEnvs = {
-        { POSIX_LISTEN_ADDR, config.ip + ":" + port },
+        { POSIX_LISTEN_ADDR, GetPosixAddress(config, port) },
         { POD_IP, config.ip },
         { SNUSER_LIB_PATH, config.snuserLibDir },
         { YR_RUNTIME_ID, info.runtimeid() },
@@ -368,5 +368,10 @@ std::string ReplaceDollarContent(const std::string &source, std::map<std::string
 bool IsPreconfiguredEnv(std::string& key)
 {
     return std::find(PRE_CONFIG_ENV.begin(), PRE_CONFIG_ENV.end(), key) != PRE_CONFIG_ENV.end();
+}
+
+std::string GetPosixAddress(const RuntimeConfig config, const std::string &port)
+{
+    return config.proxyIP + ":" + port;
 }
 }  // namespace functionsystem::runtime_manager

@@ -1049,7 +1049,7 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetCppBuildArgs(
 {
     YRLOG_DEBUG("{}|{}|GetCppBuildArgs start", request->runtimeinstanceinfo().traceid(),
                 request->runtimeinstanceinfo().requestid());
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     auto confPath = litebus::os::Join(config_.runtimeConfigPath, "runtime.json");
 
     auto resultPair = HandleWorkingDirectory(request, request->runtimeinstanceinfo());
@@ -1269,7 +1269,7 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::PythonBuildFinalArg
     const messages::RuntimeInstanceInfo &info) const
 {
     std::string jobID = PYTHON_JOB_ID_PREFIX + Utils::GetJobIDFromTraceID(info.traceid());
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
 
     return { Status::OK(),
              { execPath, "-u", config_.runtimePath + PYTHON_NEW_SERVER_PATH, "--rt_server_address", address,
@@ -1318,7 +1318,7 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetNodejsBuildArgs(
     const std::string &port, const std::shared_ptr<messages::StartInstanceRequest> &request) const
 {
     std::string memorySize = "";
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     auto resources = request->runtimeinstanceinfo().runtimeconfig().resources().resources();
     for (auto resource : resources) {
         if (resource.first == resource_view::MEMORY_RESOURCE_NAME && resource.second.mutable_scalar()->value() > 0) {
@@ -1438,7 +1438,7 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetJavaBuildArgs(
             deployDir + "/" + RUNTIME_LAYER_DIR_NAME + "/" + RUNTIME_FUNC_DIR_NAME + "/" + bucketID + "/" + objectID;
     }
     std::string javaClassPath = config_.runtimePath + YR_JAVA_RUNTIME_PATH + ":" + jarPath;
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     std::vector<std::string> args = jvmArgs;
     auto resources = request->runtimeinstanceinfo().runtimeconfig().resources().resources();
     for (auto resource : resources) {
@@ -1481,7 +1481,7 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetGoBuildArgs(
     YRLOG_DEBUG("{}|{}|GetGoBuildArgs start, instance({}), runtime({})", request->runtimeinstanceinfo().traceid(),
                 request->runtimeinstanceinfo().requestid(), request->runtimeinstanceinfo().instanceid(),
                 request->runtimeinstanceinfo().runtimeid());
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     return { Status::OK(),
              { GO_PROGRAM_NAME, RUNTIME_ID_ARG_PREFIX + request->runtimeinstanceinfo().runtimeid(),
                INSTANCE_ID_ARG_PREFIX + request->runtimeinstanceinfo().instanceid(),
@@ -1629,7 +1629,7 @@ messages::StartInstanceResponse RuntimeExecutor::GenSuccessStartInstanceResponse
 
     auto instanceResponse = response.mutable_startruntimeinstanceresponse();
     instanceResponse->set_runtimeid(request->runtimeinstanceinfo().runtimeid());
-    instanceResponse->set_address(config_.ip + ":" + port);
+    instanceResponse->set_address(GetPosixAddress(config_, port));
     YRLOG_DEBUG("{}|{}|instance address: ip: {}, port: {}", request->runtimeinstanceinfo().traceid(),
                 request->runtimeinstanceinfo().requestid(), config_.ip, port);
     instanceResponse->set_port(port);
@@ -1660,7 +1660,7 @@ std::vector<std::string> RuntimeExecutor::GetCppBuildArgsForPrestart(const std::
                                                                      const std::string &language) const
 {
     YRLOG_DEBUG("GetCppBuildArgs start {}", language);
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     auto confPath = litebus::os::Join(config_.runtimeConfigPath, "runtime.json");
     return { CPP_PROGRAM_NAME, RUNTIME_ID_ARG_PREFIX + runtimeID, LOG_LEVEL_PREFIX + config_.runtimeLogLevel,
              GRPC_ADDRESS_PREFIX + address, CONFIG_PATH_PREFIX + confPath };
@@ -1672,7 +1672,7 @@ std::vector<std::string> RuntimeExecutor::GetPythonBuildArgsForPrestart(const st
 {
     YRLOG_DEBUG("GetPythonBuildArgs start {}", language);
     std::string execPath = GetExecPath(language);
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     return { execPath,
              "-u",
              config_.runtimePath + PYTHON_NEW_SERVER_PATH,
@@ -1692,7 +1692,7 @@ std::vector<std::string> RuntimeExecutor::GetJavaBuildArgsForPrestart(const std:
 {
     YRLOG_DEBUG("GetJavaBuildArgs start {}", language);
     std::string javaClassPath = config_.runtimePath + YR_JAVA_RUNTIME_PATH;
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     std::vector<std::string> args;
     if (language == JAVA11_LANGUAGE) {
         args = config_.jvmArgsForJava11;
