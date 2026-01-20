@@ -23,7 +23,8 @@
 #include "common/schedule_plugin/common/preallocated_context.h"
 
 namespace functionsystem::schedule_plugin {
-const int64_t ZERO_SCORE = 0;
+const double ZERO_SCORE = 0.0;
+const double SCORE_EPSILON = 1e-9;
 const int64_t RESOURCE_AFFINITY_WEIGHT = 100;
 
 bool RequiredAffinityFilter(const std::string &unitID, const affinity::Selector &selector,
@@ -32,10 +33,10 @@ bool RequiredAffinityFilter(const std::string &unitID, const affinity::Selector 
 bool RequiredAntiAffinityFilter(const std::string &unitID, const affinity::Selector &selector,
                                 const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
 
-int64_t AffinityScorer(const std::string &unitID, const affinity::Selector &selector,
+double AffinityScorer(const std::string &unitID, const affinity::Selector &selector,
                        const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
 
-int64_t AntiAffinityScorer(const std::string &unitID, const affinity::Selector &selector,
+double AntiAffinityScorer(const std::string &unitID, const affinity::Selector &selector,
                            const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
 
 bool IsNodeAffinityScope(const resource_view::InstanceInfo &instance);
