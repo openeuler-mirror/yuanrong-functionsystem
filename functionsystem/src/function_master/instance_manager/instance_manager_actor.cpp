@@ -2157,6 +2157,9 @@ void InstanceManagerActor::ReportInstanceCountPeriodically()
     size_t totalInstanceCount = 0;
 
     for (const auto &[nodeID, instanceMap] : member_->instances) {
+        if (nodeID == INSTANCE_MANAGER_OWNER) {
+            continue;  // 跳过 master 自身实例
+        }
         size_t count = 0;
         // 只统计 RUNNING 状态的实例
         for (const auto &[key, instance] : instanceMap) {
@@ -2165,7 +2168,6 @@ void InstanceManagerActor::ReportInstanceCountPeriodically()
                 count++;
             }
         }
-
         nodeInstanceCount[nodeID] = count;
         totalInstanceCount += count;
 
