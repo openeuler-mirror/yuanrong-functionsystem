@@ -6044,6 +6044,29 @@ TEST_F(InstanceCtrlTest, KillInstanceWithCheckpoint)
     EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_NONE);
 }
 
+TEST_F(InstanceCtrlTest, KillInstanceWithCheckpointErrorRetry)
+{
+    auto srcInstance = "instanceM";
+    auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeN");
+    auto &mockStateMachine = *stateMachine;
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillOnce(Return(stateMachine));
+    EXPECT_CALL(mockStateMachine, GetInstanceState()).WillOnce(Return(InstanceState::RUNNING));
+    auto mockSharedClient = std::make_shared<MockSharedClient>();
+    EXPECT_CALL(*mockSharedClientManagerProxy_, GetControlInterfacePosixClient(_))
+        .WillRepeatedly(Return(mockSharedClient));
+    runtime::CheckpointResponse busyCheckpointRsp;
+    busyCheckpointRsp.set_code(common::ErrorCode::ERR_INSTANCE_BUSY);
+    busyCheckpointRsp.set_state("");
+    runtime::CheckpointResponse normalCheckpointRsp;
+    normalCheckpointRsp.set_code(common::ErrorCode::ERR_NONE);
+    normalCheckpointRsp.set_state("");
+    EXPECT_CALL(*mockSharedClient, Checkpoint).WillOnce(Return(busyCheckpointRsp)).WillOnce(Return(busyCheckpointRsp))
+        .WillOnce(Return(normalCheckpointRsp));
+    auto killReq = GenKillRequest(instanceID, INSTANCE_CHECKPOINT_SIGNAL);
+    auto killRsp = instanceCtrl_->Kill(srcInstance, killReq).Get();
+    EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_NONE);
+}
+
 TEST_F(InstanceCtrlTest, KillDriverInstance)
 {
     const std::string instanceID = "driver-job_12345";

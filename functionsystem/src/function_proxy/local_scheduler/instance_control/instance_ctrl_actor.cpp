@@ -63,6 +63,7 @@ static const uint32_t HEARTBEAT_INTERVAL_MS = 3000;
 
 static const uint32_t MILLISECONDS_PRE_SECOND = 1000;
 static const uint32_t RETRY_CHECK_CLIENT_CONNECT_TIME = 1000;
+static const uint32_t INSTANCE_BUSY_SUSPEND_RETRY_MS = 300;
 static uint32_t g_getLocalSchedulerInterval = 10000;
 static const std::string KILL_JOB_INS_PREFIX = "job-killer-";
 static const std::string DATA_AFFINITY_ENABLED_KEY = "DATA_AFFINITY_ENABLED";
@@ -6129,7 +6130,7 @@ litebus::Future<Status> InstanceCtrlActor::ToSuspend(const std::string &instance
                       TransContext{ InstanceState::SUSPEND, stateMachine->GetVersion(),
                                     "WARN: instance is already SUSPEND, please resume instance before you invoke it",
                                     true, StatusCode::ERR_INSTANCE_SUSPEND });
-    
+
     return future.Then([aid(GetAID()), stateMachine, instanceID, groupInstanceClear(groupInstanceClear_)]
             (const TransitionResult &result) -> litebus::Future<Status> {
         if (result.status.IsError()) {
@@ -6172,9 +6173,25 @@ litebus::Future<Status> InstanceCtrlActor::MakeCheckpoint(const std::string &ins
     RETURN_STATUS_IF_TRUE(state != InstanceState::RUNNING, StatusCode::ERR_STATE_MACHINE_ERROR,
                           fmt::format("checkpoint failed: InstanceID {} is not in running state, current state: {}",
                                       instanceID, fmt::underlying(state)));
-    return Checkpoint(instanceID);
+    litebus::Promise<Status> promise;
+    DoCheckpoint(instanceID, promise);
+    return promise.GetFuture();
 }
 
+void InstanceCtrlActor::DoCheckpoint(const std::string &instanceID, const litebus::Promise<Status> &promise,
+    uint32_t retryTimes)
+{
+    (void)litebus::Async(GetAID(), &InstanceCtrlActor::Checkpoint, instanceID).Then(
+        [aid(GetAID()), retryTimes, instanceID, promise](const Status &status) -> litebus::Future<Status> {
+            if (status.IsOk() || status.StatusCode() != StatusCode::ERR_INSTANCE_BUSY || retryTimes <= 1) {
+                promise.SetValue(status);
+                return Status::OK();
+            }
+            litebus::AsyncAfter(INSTANCE_BUSY_SUSPEND_RETRY_MS, aid, &InstanceCtrlActor::DoCheckpoint,
+                instanceID, promise, retryTimes - 1);
+            return Status::OK();
+        });
+}
 void InstanceCtrlActor::FunctionWarmUp(const std::string &funcKey, const FunctionMeta &funcMeta,
     const litebus::Option<std::string> &agentID)
 {
