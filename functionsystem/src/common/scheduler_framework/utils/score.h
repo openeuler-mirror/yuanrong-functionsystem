@@ -41,16 +41,16 @@ struct VectorResourceAllocation {
 };
 
 struct NodeScore {
-    explicit NodeScore(int64_t score) : score(score) {}
-    NodeScore(const std::string &name, int64_t score) : name(name), score(score) {}
-    NodeScore(int64_t score, std::vector<int> realIDs) : realIDs(std::move(realIDs)), score(score) {}
-    NodeScore(const std::string &name, int64_t score, std::vector<int> realIDs)
+    explicit NodeScore(double score) : score(score) {}
+    NodeScore(const std::string &name, double score) : name(name), score(score) {}
+    NodeScore(double score, std::vector<int> realIDs) : realIDs(std::move(realIDs)), score(score) {}
+    NodeScore(const std::string &name, double score, std::vector<int> realIDs)
         : name(name), realIDs(std::move(realIDs)), score(score) {}
 
     std::string name;
     std::string heteroProductName;
     std::vector<int> realIDs = {};
-    int64_t score;
+    double score;
     // Indicates the number of requests that can be scheduled in the current pod or unit.
     // -1 means no limited, etc: while label affinity matched, no matter how many instances can be scheduled if the
     // resource is allowed.
@@ -95,12 +95,12 @@ struct NodeScore {
 using NodeScoreList = std::vector<NodeScore>;
 
 struct PluginScore {
-    PluginScore(const std::string &name, int64_t score) : name(name), score(score)
+    PluginScore(const std::string &name, double score) : name(name), score(score)
     {
     }
 
     std::string name;
-    int64_t score;
+    double score;
 };
 
 struct NodePluginScores {
@@ -115,7 +115,7 @@ struct NodePluginScores {
 
     std::string nodeName;
     std::vector<PluginScore> scores;
-    int64_t totalScore;
+    double totalScore;
 };
 
 static inline std::string DebugNodeScores(std::vector<NodeScore> &nodeScores)
