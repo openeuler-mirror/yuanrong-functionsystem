@@ -37,13 +37,13 @@ std::map<std::string, std::string> YrLibBuilder::HookHandler(const FunctionConfi
 {
     std::map<std::string, std::string> hookHandler;
     if (functionConfig.runtime == JAVA_RUNTIME_VERSION || functionConfig.runtime == JAVA11_RUNTIME_VERSION) {
-        hookHandler = { { INIT_HANDLER, "com.yuanrong.handler.InitHandler" },
-                        { CALL_HANDLER, "com.yuanrong.handler.CallHandler" },
+        hookHandler = { { INIT_HANDLER, "org.yuanrong.handler.InitHandler" },
+                        { CALL_HANDLER, "org.yuanrong.handler.CallHandler" },
                         { CHECK_POINT_HANDLER,
-                          "com.yuanrong.handler.CheckPointHandler" },
-                        { RECOVER_HANDLER, "com.yuanrong.handler.RecoverHandler" },
-                        { SHUTDOWN_HANDLER, "com.yuanrong.handler.ShutdownHandler" },
-                        { SIGNAL_HANDLER, "com.yuanrong.handler.SignalHandler" } };
+                          "org.yuanrong.handler.CheckPointHandler" },
+                        { RECOVER_HANDLER, "org.yuanrong.handler.RecoverHandler" },
+                        { SHUTDOWN_HANDLER, "org.yuanrong.handler.ShutdownHandler" },
+                        { SIGNAL_HANDLER, "org.yuanrong.handler.SignalHandler" } };
     } else {
         hookHandler = {
             { INIT_HANDLER,
