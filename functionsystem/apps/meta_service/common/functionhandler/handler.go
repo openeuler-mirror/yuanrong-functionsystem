@@ -125,12 +125,12 @@ func (f FaasBuilder) HookHandler(runtime string, handlerInfo FunctionHookHandler
 		}
 	} else if strings.HasPrefix(runtime, JavaRuntimePrefix) {
 		hookHandler = map[string]string{
-			InitHandler:       "com.services.handler.FaaSExecutor.faasInitHandler",
-			CallHandler:       "com.services.handler.FaaSExecutor.faasCallHandler",
-			CheckpointHandler: "com.services.handler.FaaSExecutor.faasCheckPointHandler",
-			RecoverHandler:    "com.services.handler.FaaSExecutor.faasRecoverHandler",
-			ShutdownHandler:   "com.services.handler.FaaSExecutor.faasShutDownHandler",
-			SignalHandler:     "com.services.handler.FaaSExecutor.faasSignalHandler",
+			InitHandler:       "org.yuanrong.services.handler.FaaSExecutor.faasInitHandler",
+			CallHandler:       "org.yuanrong.services.handler.FaaSExecutor.faasCallHandler",
+			CheckpointHandler: "org.yuanrong.services.handler.FaaSExecutor.faasCheckPointHandler",
+			RecoverHandler:    "org.yuanrong.services.handler.FaaSExecutor.faasRecoverHandler",
+			ShutdownHandler:   "org.yuanrong.services.handler.FaaSExecutor.faasShutDownHandler",
+			SignalHandler:     "org.yuanrong.services.handler.FaaSExecutor.faasSignalHandler",
 		}
 	} else {
 		fmt.Printf("faas: language matching error")
@@ -184,12 +184,12 @@ func (y YrlibBuilder) HookHandler(runtime string, handlerInfo FunctionHookHandle
 	hookHandler := map[string]string{}
 	if strings.HasPrefix(runtime, JavaRuntimePrefix) {
 		hookHandler = map[string]string{
-			InitHandler:       "com.yuanrong.handler.InitHandler",
-			CallHandler:       "com.yuanrong.handler.CallHandler",
-			CheckpointHandler: "com.yuanrong.handler.CheckPointHandler",
-			RecoverHandler:    "com.yuanrong.handler.RecoverHandler",
-			ShutdownHandler:   "com.yuanrong.handler.ShutdownHandler",
-			SignalHandler:     "com.yuanrong.handler.SignalHandler",
+			InitHandler:       "org.yuanrong.handler.InitHandler",
+			CallHandler:       "org.yuanrong.handler.CallHandler",
+			CheckpointHandler: "org.yuanrong.handler.CheckPointHandler",
+			RecoverHandler:    "org.yuanrong.handler.RecoverHandler",
+			ShutdownHandler:   "org.yuanrong.handler.ShutdownHandler",
+			SignalHandler:     "org.yuanrong.handler.SignalHandler",
 		}
 	} else {
 		hookHandler = map[string]string{
