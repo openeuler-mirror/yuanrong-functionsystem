@@ -67,6 +67,8 @@ public:
                                                                 const int limit) override;
     void InitConfig() override;
 
+    bool IsRuntimeActive(const std::string &runtimeID) override;
+
     litebus::Future<bool> StopAllContainers();
 
 protected:

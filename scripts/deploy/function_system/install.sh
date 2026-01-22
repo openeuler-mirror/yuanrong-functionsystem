@@ -379,6 +379,10 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     --data_system_enable=true
     --data_system_host="${IP_ADDRESS}"
     --runtime_instance_debug_enable="${RUNTIME_INSTANCE_DEBUG_ENABLE}"
+    --log_expiration_enable="${LOG_EXPIRATION_ENABLE}"
+    --log_expiration_time_threshold="${LOG_EXPIRATION_TIME_THRESHOLD}"
+    --log_expiration_cleanup_interval="${LOG_EXPIRATION_CLEANUP_INTERVAL}"
+    --log_expiration_max_file_count="${LOG_EXPIRATION_MAX_FILE_COUNT}"
   )
 
   # Start with or without redirecting stdout/stderr depending on USER_LOG_EXPORT_MODE

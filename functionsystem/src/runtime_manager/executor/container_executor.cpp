@@ -247,6 +247,7 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartRuntime
     if (litebus::strings::StartsWithPrefix(language, PYTHON_LANGUAGE)) {
         execPath = language;
     } else {
+        // todo(ant)： adapter for different runtime
         execPath = cmdBuilder_.GetExecPathFromRuntimeConfig(info.runtimeconfig());
     }
     YRLOG_DEBUG("{}|{}|language({}) executor path: {}", info.traceid(), info.requestid(), language, execPath);
@@ -302,29 +303,27 @@ void ContainerExecutor::ReportInfo(const std::string &instanceID, const std::str
 
 void ContainerExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID)
 {
+    // Keep logs directly under parentPath as {runtimeID}.out / {runtimeID}.err
     auto parentPath = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
-    auto path = litebus::os::Join(parentPath, runtimeID);
-    if (!litebus::os::ExistPath(path)) {
-        YRLOG_WARN("std log path {} not found, try to make dir", path);
-        if (!litebus::os::Mkdir(path).IsNone()) {
-            YRLOG_WARN("failed to make dir {}, msg: {}", path, litebus::os::Strerror(errno));
+    if (!litebus::os::ExistPath(parentPath)) {
+        YRLOG_WARN("std log dir {} not found, try to make dir", parentPath);
+        if (!litebus::os::Mkdir(parentPath).IsNone()) {
+            YRLOG_WARN("failed to make dir {}, msg: {}", parentPath, litebus::os::Strerror(errno));
             return;
         }
     }
-    char realPath[PATH_MAX] = { 0 };
-    if (realpath(path.c_str(), realPath) == nullptr) {
-        YRLOG_WARN("real path std log file {} failed, errno: {}, {}", path, errno, litebus::os::Strerror(errno));
-        return;
-    }
 
-    stdOut = litebus::os::Join(std::string(realPath), "stdout");
+    // Build file paths
+    stdOut = litebus::os::Join(parentPath, fmt::format("runtime-{}.out", runtimeID));
+    stdErr = litebus::os::Join(parentPath, fmt::format("runtime-{}.err", runtimeID));
+
+    // Ensure files exist
     if (!litebus::os::ExistPath(stdOut) && TouchFile(stdOut) != 0) {
-        YRLOG_WARN("create std out log file {} failed.", stdOut, litebus::os::Strerror(errno));
+        YRLOG_WARN("create std out log file {} failed: {}", stdOut, litebus::os::Strerror(errno));
         return;
     }
-    stdErr = litebus::os::Join(std::string(realPath), "stderr");
     if (!litebus::os::ExistPath(stdErr) && TouchFile(stdErr) != 0) {
-        YRLOG_WARN("create std err log file {} failed.", stdErr, litebus::os::Strerror(errno));
+        YRLOG_WARN("create std err log file {} failed: {}", stdErr, litebus::os::Strerror(errno));
         return;
     }
 }
@@ -696,6 +695,11 @@ litebus::Future<messages::UpdateCredResponse> ContainerExecutor::UpdateCredForRu
     //                                             : WriteJsonToRuntime(requestID, runtimeID, tlsConfig, execPtr);
     response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
     return response;
+}
+
+ bool ContainerExecutor::IsRuntimeActive(const std::string &runtimeID)
+{
+    return runtime2containerID_.find(runtimeID) != runtime2containerID_.end();
 }
 
 litebus::Future<runtime::v1::StartResponse> ContainerExecutor::DoStartContainer(
