@@ -1050,7 +1050,7 @@ litebus::Future<Status> RuntimeManager::NotifyInstancesDiskUsageExceedLimit(cons
 
 litebus::Future<bool> RuntimeManager::IsRuntimeActive(const std::string &runtimeID)
 {
-    auto executor = FindExecutor(EXECUTOR_TYPE::RUNTIME);
+    auto executor = FindExecutor(GetRuntimeType(runtimeID));
     if (executor == nullptr) {
         YRLOG_ERROR("failed to get runtime({}) executor", runtimeID);
         return false;
