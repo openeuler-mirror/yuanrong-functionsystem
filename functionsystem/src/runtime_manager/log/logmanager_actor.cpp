@@ -46,6 +46,8 @@ const std::regex CPP_RUNTIME_LOG_REGEX_PATTERN_REGEX(CPP_RUNTIME_LOG_REGEX_PATTE
 const std::string LIB_RUNTIME_LOG_REGEX_PATTERN =
     "^job-[0-9a-f]{8}-" + RUNTIME_LOG_REGEX_PATTERN + "(-\\d{14})?(\\.\\d*)?\\.log(\\.gz)?$";
 const std::regex LIB_RUNTIME_LOG_REGEX_PATTERN_REGEX(LIB_RUNTIME_LOG_REGEX_PATTERN);
+const std::string STD_OUTPUT_LOG_REGEX_PATTERN = "^" + RUNTIME_LOG_REGEX_PATTERN + ".*\\.(out|err)$";
+const std::regex STD_OUTPUT_LOG_REGEX_PATTERN_REGEX(STD_OUTPUT_LOG_REGEX_PATTERN);
 const std::string DS_CLIENT_LOG_REGEX_PATTERN =
     R"(ds_client_(?:access_)?(\d+)(?:\.(?:INFO|DEBUG|ERROR|WARNING))?(?:\.log)?)";
 const std::regex DS_CLIENT_LOG_REGEX_PATTERN_REGEX(DS_CLIENT_LOG_REGEX_PATTERN);
@@ -287,6 +289,12 @@ std::string LogManagerActor::GetRuntimeIDFromLogFileName(const std::string &file
         if (matchResult.size() > 1) {
             runtimeID = matchResult[1].str();
             YRLOG_DEBUG("Extracted lib runtimeId: {}", runtimeID);
+        }
+    } else if (std::regex_match(file, matchResult, STD_OUTPUT_LOG_REGEX_PATTERN_REGEX)) {
+        YRLOG_DEBUG("Processing std output/error runtime log file {}", filePath);
+        if (matchResult.size() > 1) {
+            runtimeID = matchResult[1].str();
+            YRLOG_DEBUG("Extracted std output/error runtimeId: {}", runtimeID);
         }
     } else if (std::regex_match(file, matchResult, CPP_RUNTIME_LOG_REGEX_PATTERN_REGEX)) { // last match
         YRLOG_DEBUG("Processing cpp runtime log file {}", filePath);
