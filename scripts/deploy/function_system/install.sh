@@ -24,11 +24,11 @@ INSTALLED_RUNTIME=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../runtime")
 if [ -z "$RUNTIME_HOME_DIR" ]; then
   RUNTIME_HOME_DIR=$INSTALLED_RUNTIME
 else
-  LINK_DIR=$(dirname "$RUNTIME_HOME_DIR")
-  if [ ! -d "$LINK_DIR" ]; then
-      mkdir -p "$LINK_DIR"
+  # Create RUNTIME_HOME_DIR directory if not exists
+  if [ ! -d "$RUNTIME_HOME_DIR" ]; then
+      mkdir -p "$RUNTIME_HOME_DIR"
       if [ $? -ne 0 ]; then
-        log_error "Error: failed to create directory $LINK_DIR. Please check permissions."
+        log_error "Error: failed to create directory $RUNTIME_HOME_DIR. Please check permissions."
         exit 1
       fi
   fi

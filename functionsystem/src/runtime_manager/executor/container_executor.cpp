@@ -51,6 +51,7 @@ const std::string RUNTIME_LAYER_DIR_NAME = "layer";
 const std::string RUNTIME_FUNC_DIR_NAME = "func";
 const std::string PARAM_EXEC_PATH = "execPath";
 const std::string PARAM_RUNTIME_ID = "runtimeID";
+const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 
 ContainerExecutor::ContainerExecutor(const std::string &name, const litebus::AID &functionAgentAID) : Executor(name)
 {
@@ -543,6 +544,7 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
     // todo lwy for fork friendly, the immutable env should be mv to runtimeEnv
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(updateEnv);
     start->mutable_userenvs()->insert(combineEnvs.begin(), combineEnvs.end());
+    (*start->mutable_userenvs())[YR_ONLY_STDOUT] = "true";
     start->set_stdout(stdOut);
     start->set_stderr(stdErr);
 
@@ -804,6 +806,7 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::WarmUp(
     if (auto ready = litebus::os::GetEnv("YR_SEED_FILE"); ready.IsSome()) {
         (*warmup->mutable_runtimeenvs())["YR_SEED_FILE"] = ready.Get();
     }
+    (*warmup->mutable_runtimeenvs())[YR_ONLY_STDOUT] = "true";
     return DoRegisterToWarmUp(registerReq)
         .Then(litebus::Defer(GetAID(), &ContainerExecutor::OnRegisterToWarmUp, std::placeholders::_1, request,
                              registerReq));
