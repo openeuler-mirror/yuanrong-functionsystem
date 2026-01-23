@@ -20,9 +20,11 @@ package debug
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os/exec"
 	"strconv"
 	"strings"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -182,12 +184,22 @@ func handleInstance(cio *cmdio.CmdIO, parts []string) error {
 		}
 	}
 
-	// 启动 GDB 客户端并连接到 gdbserver
-	if err := startGDBClient(instanceInfo.DebugServer, strconv.Itoa(int(instanceInfo.PID))); err != nil {
-		return err
-	}
+    language := strings.ToLower(instanceInfo.Language)
+    if strings.HasPrefix(language, "python") {
+        colorprint.PrintInteractive(opts.cmdIO.Out,
+            fmt.Sprintf("Detected Python function (%s), connecting to local DebugServer\n",
+                instanceInfo.Language))
 
-	return nil
+        if err := connectToPythonDebugServer(instanceInfo.InstanceID); err != nil {
+            return fmt.Errorf("failed to connect to Python DebugServer: %v", err)
+    }
+    }else{
+        if err := startGDBClient(instanceInfo.DebugServer, strconv.Itoa(int(instanceInfo.PID))); err != nil {
+            return err
+        }
+    }
+    return nil
+
 }
 
 // startGDBClient 启动 GDB 客户端并连接到 gdbserver
@@ -233,4 +245,49 @@ func handleInfo(cio *cmdio.CmdIO, parts []string) error {
 		return fmt.Errorf("unknown subcommand: %s", subcommand)
 	}
 	return nil
+}
+
+func connectToPythonDebugServer(instanceID string) error {
+    instanceInfo, ok :=debugInstanceInfosMap[instanceID]
+    if !ok {
+        return fmt.Errorf("instance %s not found", instanceID)
+    }
+
+    addr := instanceInfo.DebugServer
+    if addr == "" {
+        return fmt.Errorf("debug server address is empty for instance %s", instanceID)
+    }
+
+    conn, err := net.Dial("tcp", addr)
+    if err != nil {
+        return fmt.Errorf("cannot connect to Python DebugServer at %s: %v", addr, err)
+    }
+
+    defer func() {
+        if closeErr := conn.Close(); closeErr != nil {
+            _ = closeErr
+        }
+    }()
+
+    colorprint.PrintInteractive(
+        opts.cmdIO.Out,
+        "Connected! Use Pdb commands like 'c'. Type 'quit' to exit.\n",
+
+    )
+    done := make(chan struct{})
+
+    go func() {
+        _, err := io.Copy(conn, opts.cmdIO.In)
+        if err != nil {
+        }
+        close(done)
+
+    }()
+
+    _, err = io.Copy(opts.cmdIO.Out, conn)
+    if err != nil {
+    }
+
+    <-done
+    return nil
 }

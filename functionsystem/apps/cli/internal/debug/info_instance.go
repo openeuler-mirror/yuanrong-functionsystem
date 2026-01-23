@@ -40,6 +40,7 @@ type InstanceInfo struct {
 	PID         int32  `json:"pid"`
 	DebugServer string `json:"debugServer"`
 	Status      string `json:"status"`
+	Language    string `json:"language" json:"language"`
 }
 
 var debugInstanceInfosMap map[string]InstanceInfo
