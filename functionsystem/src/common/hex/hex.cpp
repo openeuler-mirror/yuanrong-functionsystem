@@ -83,6 +83,28 @@ std::string Base64UrlEncodeString(const std::string &data)
     return Base64UrlEncodeByte(vec);
 }
 
+std::string Base64UrlDecode(const std::string &input)
+{
+    // Convert Base64URL to standard Base64
+    std::string base64 = input;
+    // Replace - with +
+    std::replace(base64.begin(), base64.end(), '-', '+');
+    // Replace _ with /
+    std::replace(base64.begin(), base64.end(), '_', '/');
+    // Add padding if needed
+    switch (base64.length() % 4) {
+        case 2:
+            base64 += "==";
+            break;
+        case 3:
+            base64 += "=";
+            break;
+        default:
+            break;
+    }
+    return Base64Decode(base64);
+}
+
 std::string Base64Decode(const std::string &input)
 {
     if (input.empty()) {

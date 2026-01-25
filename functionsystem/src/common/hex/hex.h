@@ -131,6 +131,7 @@ std::vector<unsigned char> HexToBytes(const std::string &hex);
 std::string BytesToBase64(const std::vector<unsigned char> &data);
 std::string Base64UrlEncodeByte(const std::vector<unsigned char> &data);
 std::string Base64UrlEncodeString(const std::string &data);
+std::string Base64UrlDecode(const std::string &input);
 std::string Base64Decode(const std::string &input);
 std::string Base64Encode(const std::string &input);
 
