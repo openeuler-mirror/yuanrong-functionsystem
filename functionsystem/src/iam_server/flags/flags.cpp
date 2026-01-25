@@ -35,8 +35,9 @@ Flags::Flags()
     AddFlag(&Flags::metaStoreAddress, "meta_store_address", "For MetaStorage service discover", "");
     AddFlag(&Flags::enableTrace, "enable_trace", "For trace enable, example: false", false);
     AddFlag(&Flags::enableIAM_, "enable_iam", "enable verify and authorize token of internal request", false);
-    AddFlag(&Flags::tokenExpiredTimeSpan_, "token_expired_time_span", "token alive period of internal request",
-            DEFAULT_TOKEN_EXPIRED_TIME_SPAN, NumCheck(MIN_TOKEN_EXPIRED_TIME_SPAN, MAX_TOKEN_EXPIRED_TIME_SPAN));
+    // tokenExpiredTimeSpan = 0 means token never expires
+    AddFlag(&Flags::tokenExpiredTimeSpan_, "token_expired_time_span", "token alive period of internal request, 0 means never expire",
+            DEFAULT_TOKEN_EXPIRED_TIME_SPAN, NumCheck(0u, MAX_TOKEN_EXPIRED_TIME_SPAN));
     AddFlag(&Flags::decryptAlgorithm_, "decrypt_algorithm", "decrypt algorithm",
             std::string("NO_CRYPTO"), WhiteListCheck({ "NO_CRYPTO" }));
     AddFlag(&Flags::resourcePath_, "resource_path", "resource path to read secret key files", "/");

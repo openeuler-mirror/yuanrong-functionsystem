@@ -21,6 +21,7 @@ namespace functionsystem::iamserver {
 const std::string SPLIT_SYMBOL = "_";
 const std::string SPLIT_SYMBOL_TIMESTAMP = "+";
 
+const uint32_t TOKEN_NEVER_EXPIRE = 0;  // expiredTimeSpan = 0 means token never expires
 const uint32_t CHECK_EXPIRED_INTERVAL = 2 * 60 * 1000;  // unit: ms, check cred every 2 min
 const uint32_t TIME_AHEAD_OF_EXPIRED = 10 * 60; // unit: s, update cred 10 min before expired
 const int32_t WATCH_TIMEOUT_MS = 30000;

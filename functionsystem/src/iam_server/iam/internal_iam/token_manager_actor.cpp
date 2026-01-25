@@ -19,6 +19,7 @@
 #include <async/defer.hpp>
 
 #include "common/utils/meta_store_kv_operation.h"
+#include "common/aksk/aksk_util.h"
 
 namespace functionsystem::iamserver {
 
@@ -32,12 +33,15 @@ TokenManagerActor::TokenManagerActor(const std::string &name, const std::string 
     member_ = std::make_shared<Member>();
     member_->clusterID = clusterID;
     member_->tokenExpiredTimeSpan = expiredTimeSpan;
-    // min token expiredTimeSpan is 720 s
-    if (member_->tokenExpiredTimeSpan / MIN_AHEAD_TIME_FACTOR < TIME_AHEAD_OF_EXPIRED) {
-        member_->aheadUpdateExpireTokenTime = member_->tokenExpiredTimeSpan / MIN_AHEAD_TIME_FACTOR;
-    }
-    if (member_->aheadUpdateExpireTokenTime * MS_SECOND / MIN_EXPIRED_FACTOR < CHECK_TOKEN_EXPIRED_INTERVAL) {
-        member_->checkTokenExpireInterval = member_->aheadUpdateExpireTokenTime * MS_SECOND / MIN_EXPIRED_FACTOR;
+    // expiredTimeSpan = 0 means token never expires, skip timer related logic
+    if (member_->tokenExpiredTimeSpan != TOKEN_NEVER_EXPIRE) {
+        // min token expiredTimeSpan is 720 s
+        if (member_->tokenExpiredTimeSpan / MIN_AHEAD_TIME_FACTOR < TIME_AHEAD_OF_EXPIRED) {
+            member_->aheadUpdateExpireTokenTime = member_->tokenExpiredTimeSpan / MIN_AHEAD_TIME_FACTOR;
+        }
+        if (member_->aheadUpdateExpireTokenTime * MS_SECOND / MIN_EXPIRED_FACTOR < CHECK_TOKEN_EXPIRED_INTERVAL) {
+            member_->checkTokenExpireInterval = member_->aheadUpdateExpireTokenTime * MS_SECOND / MIN_EXPIRED_FACTOR;
+        }
     }
     ASSERT_IF_NULL(metaStoreClient);
     member_->metaStoreClient = metaStoreClient;
@@ -110,6 +114,10 @@ void TokenManagerActor::Finalize()
 
 void TokenManagerActor::CheckTokenExpiredInAdvance()
 {
+    // if token never expires, skip check
+    if (member_->tokenExpiredTimeSpan == TOKEN_NEVER_EXPIRE) {
+        return;
+    }
     std::unordered_set<std::string> needUpdateSet;
     for (const auto &tokenIter : member_->newTokenMap) {
         auto now = static_cast<uint64_t>(std::time(nullptr));
@@ -128,6 +136,10 @@ void TokenManagerActor::CheckTokenExpiredInAdvance()
 
 void TokenManagerActor::CheckTokenExpiredInTime()
 {
+    // if token never expires, skip check
+    if (member_->tokenExpiredTimeSpan == TOKEN_NEVER_EXPIRE) {
+        return;
+    }
     std::unordered_set<std::string> needDeleteSet;
     for (const auto &tokenIter : member_->oldTokenMap) {
         auto now = static_cast<uint64_t>(std::time(nullptr));
@@ -163,8 +175,11 @@ void TokenManagerActor::AsyncInitialize(const std::shared_ptr<GetResponse> &newR
 {
     SyncTokenFromMetaStore(newResponse, true);
     SyncTokenFromMetaStore(oldResponse, false);
-    CheckTokenExpiredInAdvance();
-    CheckTokenExpiredInTime();
+    // if token never expires (tokenExpiredTimeSpan = 0), skip starting expiration check timers
+    if (member_->tokenExpiredTimeSpan != TOKEN_NEVER_EXPIRE) {
+        CheckTokenExpiredInAdvance();
+        CheckTokenExpiredInTime();
+    }
     member_->initialized = true;
 }
 
@@ -358,6 +373,32 @@ litebus::Future<SyncResult> TokenManagerActor::IAMTokenSyncer(const std::shared_
 
 Status TokenManagerActor::DecryptToken(const std::string &tokenStr, const std::shared_ptr<TokenContent> &tokenContent)
 {
+    tokenContent->encryptToken = tokenStr;
+
+    // Check if it's JWT format first (contains two dots for JWT: header.payload.signature)
+    if (tokenContent->IsJwtFormat()) {
+        // Parse JWT token directly
+        auto parseStatus = tokenContent->ParseFromEncryptToken();
+        if (parseStatus.IsError()) {
+            return parseStatus;
+        }
+
+        // Verify JWT signature
+        auto secretKey = GetComponentDataKey();
+        if (secretKey.GetSize() > 0) {
+            if (!tokenContent->VerifySignature(secretKey)) {
+                YRLOG_ERROR("JWT token signature verification failed for tenantID: {}", tokenContent->tenantID);
+                return Status(StatusCode::PARAMETER_ERROR, "JWT token signature verification failed");
+            }
+            YRLOG_DEBUG("JWT token signature verified successfully for tenantID: {}", tokenContent->tenantID);
+        } else {
+            YRLOG_ERROR("JWT token signature verification failed: no secret key available");
+            return Status(StatusCode::PARAMETER_ERROR, "JWT token requires secret key for verification");
+        }
+        return Status::OK();
+    }
+
+    // Legacy format: key_SPLIT_SYMBOL_encryptedToken
     auto pos = tokenStr.find(SPLIT_SYMBOL);
     if (pos == std::string::npos) {
         YRLOG_ERROR("decrypt token string to TokenContent failed, split symbol not found");
@@ -374,19 +415,38 @@ Status TokenManagerActor::DecryptToken(const std::string &tokenStr, const std::s
         YRLOG_ERROR("decrypted token copy failed! err:{}", std::to_string(ret));
         return Status(StatusCode::PARAMETER_ERROR, "decrypted token copy failed! err: " + std::to_string(ret));
     }
-    tokenContent->encryptToken = tokenStr;
-    return tokenContent->Parse(decryptedToken);
+
+    // Parse legacy format token
+    auto parseStatus = tokenContent->ParseFromEncryptToken();
+    if (parseStatus.IsError()) {
+        return parseStatus;
+    }
+    return Status::OK();
 }
 
 Status TokenManagerActor::EncryptToken(const std::shared_ptr<TokenContent> &tokenContent)
 {
+    // Get component data key for signing
+    auto secretKey = GetComponentDataKey();
+    if (secretKey.GetSize() > 0) {
+        // Sign the token using HMAC-SHA256 (JWT-like)
+        // Sign() stores result directly in encryptToken as: payload.signature
+        auto signStatus = tokenContent->Sign(secretKey);
+        if (signStatus.IsError()) {
+            YRLOG_WARN("failed to sign token: {}, fallback to unsigned token", signStatus.ToString());
+        } else {
+            // Sign succeeded, encryptToken already contains signed token
+            return Status::OK();
+        }
+    }
+
+    // Fallback: no signing, use legacy format
     char serializeToken[INTERNAL_IAM_TOKEN_MAX_SIZE] = { 0 };
     size_t tokenSize{ 0 };
     Status status = tokenContent->Serialize(serializeToken, tokenSize);
     if (status.IsError()) {
         return Status(StatusCode::PARAMETER_ERROR, "serialize token failed, err: " + status.ToString());
     }
-    SensitiveValue tokenSensitiveValue(serializeToken, tokenSize);
     tokenContent->encryptToken = serializeToken;
     return Status::OK();
 }
@@ -510,12 +570,22 @@ litebus::Future<Status> TokenManagerActor::VerifyToken(const std::shared_ptr<Tok
     }
     YRLOG_DEBUG("{}|verify token, expiredTime:{}", tokenContent->tenantID, tokenContent->expiredTimeStamp);
     //  check expired time, if token expired then verify failed
-    auto now = static_cast<uint64_t>(std::time(nullptr));
-    if (tokenContent->expiredTimeStamp < now) {
-        YRLOG_ERROR("token expired, now = {}, expiredTimeStamp = {}", now, tokenContent->expiredTimeStamp);
-        return Status(StatusCode::PARAMETER_ERROR,
-                      "token has expired, expiredTimeStamp = " + std::to_string(tokenContent->expiredTimeStamp));
+    //  if tokenExpiredTimeSpan is 0 or expiredTimeStamp is UINT64_MAX, token never expires, skip check
+    if (member_->tokenExpiredTimeSpan != TOKEN_NEVER_EXPIRE && tokenContent->expiredTimeStamp != UINT64_MAX) {
+        auto now = static_cast<uint64_t>(std::time(nullptr));
+        if (tokenContent->expiredTimeStamp < now) {
+            YRLOG_ERROR("token expired, now = {}, expiredTimeStamp = {}", now, tokenContent->expiredTimeStamp);
+            return Status(StatusCode::PARAMETER_ERROR,
+                          "token has expired, expiredTimeStamp = " + std::to_string(tokenContent->expiredTimeStamp));
+        }
     }
+
+    // If JWT format token with valid signature, verification is complete (no cache lookup needed)
+    if (tokenContent->IsJwtFormat() && tokenContent->HasSignature()) {
+        YRLOG_DEBUG("{}|JWT token signature verified, skip cache comparison", tokenContent->tenantID);
+        return Status::OK();
+    }
+
     ASSERT_IF_NULL(business_);
     return business_->VerifyToken(tokenContent);
 }
@@ -534,6 +604,20 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::GenerateNewToken(
         (void)member_->newTokenRequestMap.erase(tenantID);
         return tokenSalt;
     }
+
+    // If JWT format token (signed), skip persistence to MetaStore
+    if (tokenContent->IsJwtFormat()) {
+        YRLOG_INFO("{}|JWT format token generated, skip persistence", tenantID);
+        tokenSalt->status = Status::OK();
+        tokenSalt->token = tokenContent->encryptToken;
+        tokenSalt->salt = tokenContent->salt;
+        tokenSalt->expiredTimeStamp = tokenContent->expiredTimeStamp;
+        // todo(lwy_robb: consider to cache JWT tokens in memory for faster retrieval, which should remove while expired)
+        promise->SetValue(tokenSalt);
+        (void)member_->newTokenRequestMap.erase(tenantID);
+        return promise->GetFuture();
+    }
+
     YRLOG_DEBUG("{}|success to generate new token, start to put it to metastore", tenantID);
     (void)PutTokenToMetaStore(tokenContent, true)
         .Then(litebus::Defer(GetAID(), &TokenManagerActor::OnPutTokenFromMetaStore, std::placeholders::_1, tokenContent,
@@ -546,8 +630,13 @@ Status TokenManagerActor::GenerateToken(const std::string &tenantID, const std::
     // 1. generate token
     tokenContent->tenantID = tenantID;
     auto now = static_cast<uint64_t>(std::time(nullptr));
-    tokenContent->expiredTimeStamp =
-        (UINT64_MAX - now < member_->tokenExpiredTimeSpan) ? now : now + member_->tokenExpiredTimeSpan;
+    // if tokenExpiredTimeSpan is 0, token never expires (set expiredTimeStamp to UINT64_MAX)
+    if (member_->tokenExpiredTimeSpan == TOKEN_NEVER_EXPIRE) {
+        tokenContent->expiredTimeStamp = UINT64_MAX;
+    } else {
+        tokenContent->expiredTimeStamp =
+            (UINT64_MAX - now < member_->tokenExpiredTimeSpan) ? now : now + member_->tokenExpiredTimeSpan;
+    }
 
     Status status = EncryptToken(tokenContent);
     if (status.IsError()) {
