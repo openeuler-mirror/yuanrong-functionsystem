@@ -527,6 +527,65 @@ function install_metaservice() {
   return 1
 }
 
+function install_iam_server() {
+  log_info "start iam_server, ip=${IP_ADDRESS}, port=${IAM_SERVER_PORT}..."
+  local bin=${FUNCTION_SYSTEM_DIR}/bin/iam_server
+
+  jemalloc_path=""
+  if [ "X${ENABLE_JEMALLOC}" == "Xtrue" ]; then
+    jemalloc_path="${JEMALLOC_LIB_PATH}"
+    if [ ! -f "${jemalloc_path}" ]; then
+      log_warning "jemalloc lib path ${jemalloc_path} does not exist!"
+    fi
+  fi
+
+  if [ "x${ENABLE_META_STORE}" == "xtrue" ] && [ "x${META_STORE_MODE}" == "xlocal" ]; then
+    META_STORE_ADDRESS="${IP_ADDRESS}:${GLOBAL_SCHEDULER_PORT}"
+  else
+    META_STORE_ADDRESS="${ETCD_CLUSTER_ADDRESS}"
+  fi
+
+  # Determine if SSL should be enabled for iam_server
+  # SSL is enabled if either global SSL_ENABLE=true or IAM_SSL_ENABLE=true
+  local iam_ssl_enable="false"
+  if [ "X${SSL_ENABLE}" = "Xtrue" ] || [ "X${SSL_ENABLE}" = "XTRUE" ] || \
+     [ "X${IAM_SSL_ENABLE}" = "Xtrue" ] || [ "X${IAM_SSL_ENABLE}" = "XTRUE" ]; then
+    iam_ssl_enable="true"
+    log_info "iam_server mTLS enabled, ssl_base_path=${SSL_BASE_PATH}"
+  fi
+
+  if check_port "${IP_ADDRESS}" "${IAM_SERVER_PORT}"; then
+    OPENSSL_CONF="" LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${LD_LIBRARY_PATH} \
+      LD_PRELOAD="${jemalloc_path}":"${LD_PRELOAD}" \
+      ${bin} --ip="${IP_ADDRESS}" \
+      --http_listen_port="${IAM_SERVER_PORT}" \
+      --meta_store_address="${META_STORE_ADDRESS}" \
+      --log_config="${FS_LOG_CONFIG}" \
+      --node_id="${NODE_ID}" \
+      --enable_iam="true" \
+      --enable_trace="${ENABLE_TRACE}" \
+      --token_expired_time_span="${IAM_TOKEN_EXPIRED_TIME_SPAN}" \
+      --iam_credential_type="${IAM_CREDENTIAL_TYPE}" \
+      --election_mode=${ELECTION_MODE} \
+      --ssl_enable="${iam_ssl_enable}" \
+      --ssl_base_path="${SSL_BASE_PATH}" \
+      --ssl_root_file="${SSL_ROOT_FILE}" \
+      --ssl_cert_file="${SSL_CERT_FILE}" \
+      --ssl_key_file="${SSL_KEY_FILE}" \
+      >>"${FS_LOG_PATH}/${NODE_ID}-iam_server${STD_LOG_SUFFIX}" 2>&1 &
+    IAM_SERVER_PID=$!
+    if function_system_health_check ${IAM_SERVER_PID} "${IAM_SERVER_PORT}" "iam-server"; then
+      log_info "succeed to start iam_server process, ip=${IP_ADDRESS}, port=${IAM_SERVER_PORT}, pid=${IAM_SERVER_PID}"
+      return 0
+    fi
+    if [ ${IAM_SERVER_PID} -gt 0 ]; then
+      log_warning "health check failed, killing iam_server process pid: ${IAM_SERVER_PID}"
+      kill -9 ${IAM_SERVER_PID}
+    fi
+  fi
+  return 1
+}
+
 function install_function_system() {
   config_install_dir="${INSTALL_DIR_PARENT}/config"
   [ -d "${config_install_dir}" ] || mkdir -p "${config_install_dir}"
@@ -554,6 +613,9 @@ function install_function_system() {
     ;;
   meta_service)
     install_metaservice
+    ;;
+  iam_server)
+    install_iam_server
     ;;
   *)
     log_warning >&2 "Unknown component $1"
