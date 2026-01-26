@@ -315,8 +315,8 @@ void ContainerExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::strin
     }
 
     // Build file paths
-    stdOut = litebus::os::Join(parentPath, fmt::format("runtime-{}.out", runtimeID));
-    stdErr = litebus::os::Join(parentPath, fmt::format("runtime-{}.err", runtimeID));
+    stdOut = litebus::os::Join(parentPath, fmt::format("{}.out", runtimeID));
+    stdErr = litebus::os::Join(parentPath, fmt::format("{}.err", runtimeID));
 
     // Ensure files exist
     if (!litebus::os::ExistPath(stdOut) && TouchFile(stdOut) != 0) {
