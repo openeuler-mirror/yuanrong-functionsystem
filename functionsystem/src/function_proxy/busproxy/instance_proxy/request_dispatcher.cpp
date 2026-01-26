@@ -324,7 +324,8 @@ void RequestDispatcher::UpdateInfo(const std::shared_ptr<InstanceRouterInfo> &in
             // same lifecycle with RequestDispatcher which can be safe to capture this pointer
             ASSERT_IF_NULL(callCache_);
             YRLOG_INFO("enable traffic report for instance({}) report type({})", instanceID_, fmt::underlying(trafficReportType_));
-            callCache_->SetTrafficReport([this](bool busy, const size_t &size) { ReportTrafficMetrics(busy, size); });
+            callCache_->SetTrafficReport([this](bool idle, const size_t &size) { ReportTrafficMetrics(idle, size); });
+            ReportTrafficMetrics(true, 0);
         }
     }
     if (!local_ && isReady_) {
@@ -455,18 +456,18 @@ void RequestDispatcher::Reject(const std::string &message, const StatusCode &cod
     isReject_ = true;
 }
 
-void RequestDispatcher::ReportTrafficMetrics(bool busy, const size_t &size)
+void RequestDispatcher::ReportTrafficMetrics(bool idle, const size_t &size)
 {
     if (trafficReportType_ == resources::TrafficReportType::None) {
         return;
     }
     // TODO(Lwy_Robb): resources::TrafficReportType::Periodic metric reporting
     static bool current = false;
-    YRLOG_DEBUG("instance({}) report traffic busy({}) size({}) current({})", instanceID_, busy, size, current);
-    // only report when busy state changed
-    if (current != busy) {
+    YRLOG_DEBUG("instance({}) report traffic idle({}) size({}) current({})", instanceID_, idle, size, current);
+    // only report when idle state changed
+    if (current != idle) {
         observer_->ReportTraffic(instanceID_, size);
-        current = busy;
+        current = idle;
     }
 }
 }  // namespace functionsystem::busproxy

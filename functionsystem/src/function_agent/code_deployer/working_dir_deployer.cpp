@@ -329,7 +329,7 @@ DeployResult WorkingDirDeployer::Deploy(const std::shared_ptr<messages::DeployRe
         YRLOG_WARN("failed to execute chmod cmd({}). code: {}", cmd, code);
     }
     auto [status, workingDirZipFile] = accessor->GetResource(result.destination);
-    if (!status.OK()) {
+    if (!status.IsOk()) {
         result.status = status;
         return result;
     }
