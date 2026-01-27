@@ -19,7 +19,6 @@
 
 #include <utility>
 
-#include "common/constants.h"
 #include "common/utils/s3_config.h"
 #include "remote_deployer.h"
 #include "common/utils/test_util.h"

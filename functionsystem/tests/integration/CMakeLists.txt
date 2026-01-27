@@ -47,6 +47,9 @@ target_link_libraries(${INTEGRATION_TEST_MODULE} PRIVATE
         posix_pb
         register
         rpc
+        utils
+        function_agent_lib
+        runtime_manager_lib
         pthread)
 
 add_test(NAME ${INTEGRATION_TEST_MODULE} COMMAND ${INTEGRATION_TEST_MODULE} --gtest_filter=*.*)

@@ -24,6 +24,7 @@ include_directories(${CMAKE_CURRENT_LIST_DIR})
 
 add_library(runtime_manager_lib STATIC ${RUNTIME_MANAGER_SRCS})
 target_compile_options(runtime_manager_lib PRIVATE -fPIE)
+target_include_directories(runtime_manager_lib PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 
 add_subdirectory(executor)
 add_subdirectory(metrics)

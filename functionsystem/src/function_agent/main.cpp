@@ -86,23 +86,24 @@ S3Config GetS3Config(const function_agent::FunctionAgentFlags &flags)
 
 functionsystem::function_agent::FunctionAgentStartParam BuildStartParam(const function_agent::FunctionAgentFlags &flags)
 {
-    function_agent::FunctionAgentStartParam startParam{
-        .ip = flags.GetIP(),
-        .localSchedulerAddress = flags.GetLocalSchedulerAddress(),
-        .nodeID = flags.GetNodeID(),
-        .alias = flags.GetAlias(),
-        .modelName = COMPONENT_NAME,
-        .agentPort = flags.GetAgentListenPort(),
-        .decryptAlgorithm = flags.GetDecryptAlgorithm(),
-        .s3Enable = flags.GetS3Enable(),
-        .s3Config = GetS3Config(flags),
-        .codePackageThresholds = GetCodePackageThresholds(flags),
-        .heartbeatTimeoutMs = flags.GetSystemTimeout(),
-        .agentUid = flags.GetAgentUID(),
-        .localNodeID = flags.GetLocalNodeID(),
-        .enableSignatureValidation = flags.GetEnableSignatureValidation(),
-        .componentName = COMPONENT_NAME,
-    };
+    function_agent::FunctionAgentStartParam startParam{ .ip = flags.GetIP(),
+                                                        .localSchedulerAddress = flags.GetLocalSchedulerAddress(),
+                                                        .nodeID = flags.GetNodeID(),
+                                                        .alias = flags.GetAlias(),
+                                                        .modelName = COMPONENT_NAME,
+                                                        .agentPort = flags.GetAgentListenPort(),
+                                                        .decryptAlgorithm = flags.GetDecryptAlgorithm(),
+                                                        .s3Enable = flags.GetS3Enable(),
+                                                        .s3Config = GetS3Config(flags),
+                                                        .codePackageThresholds = GetCodePackageThresholds(flags),
+                                                        .heartbeatTimeoutMs = flags.GetSystemTimeout(),
+                                                        .agentUid = flags.GetAgentUID(),
+                                                        .localNodeID = flags.GetLocalNodeID(),
+                                                        .enableSignatureValidation =
+                                                            flags.GetEnableSignatureValidation(),
+                                                        .componentName = COMPONENT_NAME,
+                                                        .enableMergeProcess = false,  // 在 main 函数中设置
+                                                        .runtimeManagerFlags = nullptr };
     return startParam;
 }
 
@@ -115,37 +116,6 @@ void OnStopHandler(int signum)
         raise(SIGKILL);
     }
     g_stopSignal->SetValue(true);
-}
-
-void OnCreateFunctionAgent(const function_agent::FunctionAgentFlags &flags)
-{
-    YRLOG_INFO("{} is starting...", COMPONENT_NAME);
-    YRLOG_INFO("version:{} branch:{} commit_id:{}", BUILD_VERSION, GIT_BRANCH_NAME, GIT_HASH);
-    if (flags.GetDataSystemEnable()) {
-        if (auto status = function_agent::KVClient::GetInstance().Init(flags); status.IsError()) {
-            YRLOG_ERROR("failed to init kv client, errMsg: {}", status.ToString());
-            return;
-        }
-    }
-    g_functionAgentDriver =
-        std::make_shared<function_agent::FunctionAgentDriver>(flags.GetNodeID(), BuildStartParam(flags));
-    if (auto status = g_functionAgentDriver->Start(); status.IsError()) {
-        YRLOG_ERROR("failed to start function_agent, errMsg: {}", status.ToString());
-        g_functionAgentSwitcher->SetStop();
-        return;
-    }
-}
-
-void OnCreateRuntimeManager(const runtime_manager::Flags &runtimeManagerFlags)
-{
-    // function agent and runtime manager deploy in the same process
-    g_runtimeManagerDriver =
-        std::make_shared<runtime_manager::RuntimeManagerDriver>(runtimeManagerFlags, "runtime_manager");
-    if (auto status = g_runtimeManagerDriver->Start(); status.IsError()) {
-        YRLOG_ERROR("failed to start runtime_manager, errMsg: {}", status.ToString());
-        g_functionAgentSwitcher->SetStop();
-        return;
-    }
 }
 
 void StopFunctionAgent()
@@ -162,37 +132,10 @@ void StopFunctionAgent()
     } else {
         YRLOG_WARN("failed to stop {}", COMPONENT_NAME);
     }
-    return;
-}
-
-void StopRuntimeManager()
-{
-    if (g_runtimeManagerDriver == nullptr) {
-        YRLOG_WARN("runtime manager is not started");
-        return;
-    }
-    if (g_runtimeManagerDriver->Stop().IsOk()) {
-        g_runtimeManagerDriver->Await();
-        g_runtimeManagerDriver = nullptr;
-        YRLOG_INFO("success to stop runtime_manager");
-    } else {
-        YRLOG_WARN("failed to stop runtime_manager");
-    }
-    return;
 }
 
 void OnDestroy()
 {
-    StopRuntimeManager();
-    if (g_runtimeManagerDriver != nullptr) {
-        if (g_runtimeManagerDriver->Stop().IsOk()) {
-            g_runtimeManagerDriver->Await();
-            g_runtimeManagerDriver = nullptr;
-            YRLOG_INFO("success to stop runtime_manager");
-        } else {
-            YRLOG_WARN("failed to stop runtime_manager");
-        }
-    }
     StopFunctionAgent();
     g_functionAgentSwitcher->CleanMetrics();
     g_functionAgentSwitcher->FinalizeLiteBus();
@@ -282,10 +225,17 @@ int main(int argc, char **argv)
     if (!g_functionAgentSwitcher->InitLiteBus(address, flags.GetLitebusThreadNum())) {
         g_functionAgentSwitcher->SetStop();
     } else {
+        function_agent::FunctionAgentStartParam startParam = BuildStartParam(flags);
         if (flags.GetEnableMergeProcess()) {
-            OnCreateRuntimeManager(runtimeManagerFlags);
+            startParam.enableMergeProcess = true;
+            startParam.runtimeManagerFlags = std::make_shared<runtime_manager::Flags>(runtimeManagerFlags);
         }
-        OnCreateFunctionAgent(flags);
+
+        g_functionAgentDriver = std::make_shared<function_agent::FunctionAgentDriver>(flags.GetNodeID(), startParam);
+        if (auto status = g_functionAgentDriver->Start(); status.IsError()) {
+            YRLOG_ERROR("failed to start function_agent, errMsg: {}", status.ToString());
+            g_functionAgentSwitcher->SetStop();
+        }
     }
     g_functionAgentSwitcher->WaitStop();
 

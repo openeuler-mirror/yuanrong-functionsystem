@@ -38,6 +38,10 @@ target_link_libraries(function_proxy PRIVATE
         busproxy_lib local_scheduler_lib
         function_proxy_common_lib utils
         resource_lock
-        ${PLUGIN_LIB})
+        ${PLUGIN_LIB}
+        function_agent_lib
+        runtime_manager_lib)
+
+add_dependencies(function_proxy function_agent_lib runtime_manager_lib)
 
 INSTALL_TARGET(function_proxy)

@@ -417,6 +417,11 @@ public:
         return unRegisterWhileStop_;
     }
 
+    const bool &GetEnableMergeProcess() const
+    {
+        return enableMergeProcess_;
+    }
+
     std::string GetDPosixUdsPath() const
     {
         return dPosixUdsPath_;
@@ -511,6 +516,7 @@ protected:
     bool runtimeInstanceDebugEnable_{ false };  // deploy in docker only use false, in process use false or true
     bool diskUsageMonitorForceDeletePodEnable_{ false };
     bool unRegisterWhileStop_{ false };
+    bool enableMergeProcess_{ false };
     std::string dPosixUdsPath_;
 };
 

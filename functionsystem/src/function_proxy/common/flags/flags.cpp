@@ -134,6 +134,8 @@ Flags::Flags()
     AddFlag(&Flags::observabilityPrometheusPort_, "observability_prometheus_port",
             "observability prometheus port, default is 9392", DEFAULT_OBSERVABILITY_PROMETHEUS_PORT);
     AddFlag(&Flags::enableTrace_, "enable_trace", "for trace enable, example: false", false);
+    AddFlag(&Flags::enableMergeProcess_, "enable_merge_process",
+            "enable function_proxy, function_agent and runtime_manager merge in the same process", false);
     AddFlag(&Flags::isPseudoDataPlane_, "pseudo_data_plane",
             "set the function proxy is Pseudo Data Plane, example: false", false);
     AddFlag(&Flags::decryptAlgorithm_, "decrypt_algorithm", "decrypt algorithm, eg: GCM, CBC, STS",

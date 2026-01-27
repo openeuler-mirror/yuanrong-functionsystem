@@ -69,6 +69,17 @@ FunctionAgentDriver::FunctionAgentDriver(const std::string &nodeID, const Functi
 
 Status FunctionAgentDriver::Start()
 {
+    if (startParam_.enableMergeProcess && startParam_.runtimeManagerFlags != nullptr) {
+        YRLOG_INFO("starting runtime_manager in merged process mode...");
+        runtimeManagerDriver_ = std::make_shared<runtime_manager::RuntimeManagerDriver>(
+            *startParam_.runtimeManagerFlags, "runtime_manager");
+        if (auto status = runtimeManagerDriver_->Start(); status.IsError()) {
+            YRLOG_ERROR("failed to start runtime_manager, errMsg: {}", status.ToString());
+            return status;
+        }
+        YRLOG_INFO("runtime_manager started successfully in merged process");
+    }
+    
     auto registerHelper = std::make_shared<RegisterHelper>(FUNCTION_AGENT_AGENT_SERVICE_ACTOR_NAME);
     actor_->SetRegisterHelper(registerHelper);
     // set deployers to actor
@@ -107,6 +118,17 @@ Status FunctionAgentDriver::Stop()
 {
     litebus::Terminate(actor_->GetAID());
     litebus::Terminate(httpServer_->GetAID());
+    
+    if (runtimeManagerDriver_ != nullptr) {
+        if (auto status = runtimeManagerDriver_->Stop(); status.IsOk()) {
+            runtimeManagerDriver_->Await();
+            runtimeManagerDriver_ = nullptr;
+            YRLOG_INFO("success to stop runtime_manager");
+        } else {
+            YRLOG_WARN("failed to stop runtime_manager");
+        }
+    }
+    
     return Status::OK();
 }
 
@@ -114,6 +136,10 @@ void FunctionAgentDriver::Await()
 {
     litebus::Await(actor_->GetAID());
     litebus::Await(httpServer_->GetAID());
+    
+    if (runtimeManagerDriver_ != nullptr) {
+        runtimeManagerDriver_->Await();
+    }
 }
 
 }  // namespace functionsystem::function_agent
