@@ -31,6 +31,7 @@
 #include "common/utils/struct_transfer.h"
 #include "common/utils/random_number.h"
 #include "common/utils/sensitive_value.h"
+#include "common/metadata/metadata_type.h"
 #include "exec/exec.hpp"
 #include "utils/future_test_helper.h"
 
@@ -718,13 +719,28 @@ TEST_F(DISABLED_UtilsTest, GenerateRuntimeID)
     std::string UUID = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
     EXPECT_EQ(UUID.size(), defaultUUIDLength);
 
-    std::string runtimeID = GenerateRuntimeID("");
+    // Test with empty instanceID
+    messages::RuntimeInstanceInfo info1;
+    info1.set_warmuptype(static_cast<int32_t>(WarmupType::NONE));
+    std::string runtimeID = GenerateRuntimeID(info1);
     EXPECT_TRUE(runtimeID.find("runtime-") != std::string::npos);
     const uint32_t defaultRuntimeIDLength = 44;
     EXPECT_EQ(runtimeID.size(), defaultRuntimeIDLength);
-    std::string runtimeID1 = GenerateRuntimeID("a-b-instance");
+
+    // Test with non-empty instanceID
+    messages::RuntimeInstanceInfo info2;
+    info2.set_warmuptype(static_cast<int32_t>(WarmupType::NONE));
+    info2.set_instanceid("a-b-instance");
+    std::string runtimeID1 = GenerateRuntimeID(info2);
     EXPECT_TRUE(runtimeID1.find("runtime-") != std::string::npos);
     EXPECT_TRUE(runtimeID1.find("a-b-instance") != std::string::npos);
+
+    // Test with warmupType != NONE
+    messages::RuntimeInstanceInfo info3;
+    info3.set_warmuptype(static_cast<int32_t>(WarmupType::SEED));
+    info3.set_instanceid("warmup-instance");
+    std::string runtimeID2 = GenerateRuntimeID(info3);
+    EXPECT_EQ(runtimeID2, "warmup-instance");
 }
 
 TEST_F(DISABLED_UtilsTest, ParseValueFromKey)
