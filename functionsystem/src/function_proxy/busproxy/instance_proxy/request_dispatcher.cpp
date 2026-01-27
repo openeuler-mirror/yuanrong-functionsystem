@@ -462,12 +462,11 @@ void RequestDispatcher::ReportTrafficMetrics(bool idle, const size_t &size)
         return;
     }
     // TODO(Lwy_Robb): resources::TrafficReportType::Periodic metric reporting
-    static bool current = false;
-    YRLOG_DEBUG("instance({}) report traffic idle({}) size({}) current({})", instanceID_, idle, size, current);
+    YRLOG_DEBUG("instance({}) report traffic idle({}) size({}) current({})", instanceID_, idle, size, currentTrafficIdleState_);
     // only report when idle state changed
-    if (current != idle) {
+    if (currentTrafficIdleState_ != idle) {
         observer_->ReportTraffic(instanceID_, size);
-        current = idle;
+        currentTrafficIdleState_ = idle;
     }
 }
 }  // namespace functionsystem::busproxy

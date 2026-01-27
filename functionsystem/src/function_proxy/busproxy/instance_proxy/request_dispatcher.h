@@ -147,6 +147,7 @@ private:
     int failedCallTimes_ = 0;
 
     std::map<std::string, std::chrono::system_clock::time_point> localStartCallTimeMap_;
+    bool currentTrafficIdleState_ { false };
 };
 }  // namespace functionsystem::busproxy
 
