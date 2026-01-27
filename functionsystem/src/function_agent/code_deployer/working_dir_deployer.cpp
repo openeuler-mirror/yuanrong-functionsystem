@@ -278,6 +278,9 @@ bool WorkingDirDeployer::IsDeployed(const std::string &destination, [[maybe_unus
     if (!litebus::os::ExistPath(destination)) {
         return false;
     }
+    if (endsWith(destination, ".img")) {
+        return true;
+    }
     auto option = litebus::os::Ls(destination);
     if (option.IsSome() && !option.Get().empty()) {
         return true;
