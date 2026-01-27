@@ -391,8 +391,10 @@ type FunctionVersion struct {
 	Function
 	FunctionVersionURN string             `json:"functionVersionUrn"`
 	RevisionID         string             `json:"revisionId"`
+	StorageType        string             `json:"storageType"`
 	CodeSize           int64              `json:"codeSize"`
 	CodeSha256         string             `json:"codeSha256"`
+	CodePath           string             `json:"codePath"`
 	BucketID           string             `json:"bucketId"`
 	ObjectID           string             `json:"objectId"`
 	Handler            string             `json:"handler"`
@@ -446,8 +448,10 @@ type FunctionForUser struct {
 	Tag                 map[string]string  `json:"tag"`
 	FunctionVersionURN  string             `json:"functionVersionUrn"`
 	RevisionID          string             `json:"revisionId"`
+	StorageType         string             `json:"storageType"`
 	CodeSize            int64              `json:"codeSize"`
 	CodeSha256          string             `json:"codeSha256"`
+	CodePath            string             `json:"codePath"`
 	BucketID            string             `json:"bucketId"`
 	ObjectID            string             `json:"objectId"`
 	Handler             string             `json:"handler"`
