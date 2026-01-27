@@ -63,8 +63,70 @@ function install_function_proxy() {
 
   local enable_driver="true"
   [[ "X${DRIVER_GATEWAY_ENABLE^^}" == "XFALSE" ]] && { enable_driver="false"; }
+  
+  local merge_process_args=""
+  if [ "X${FUNCTION_PROXY_MERGE_PROCESS_ENABLE^^}" == "XTRUE" ]; then
+    local ld_library_path=${LD_LIBRARY_PATH}
+    local agent_uid=${YR_POD_NAME}
+    if [ "x${YR_POD_NAME}" == "x" ]; then
+      agent_uid="${NODE_ID}"
+    fi
+    merge_process_args="--enable_merge_process=true \
+    --agent_listen_port="${FUNCTION_PROXY_PORT}" \
+    --local_scheduler_address="${LOCAL_IP}:${FUNCTION_PROXY_PORT}" \
+    --runtime_dir="${RUNTIME_HOME_DIR}/service" \
+    --runtime_home_dir="${RUNTIME_USER_HOME_DIR}" \
+    --runtime_logs_dir="${RUNTIME_LOG_PATH}" \
+    --runtime_std_log_dir="" \
+    --runtime_ld_library_path="${ld_library_path}:${RUNTIME_HOME_DIR}/service/cpp/snlib:${RUNTIME_HOME_DIR}/sdk/cpp/lib" \
+    --runtime_log_level="${RUNTIME_LOG_LEVEL}" \
+    --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}" \
+    --runtime_max_log_file_num="${RUNTIME_LOG_ROLLING_MAX_FILES}" \
+    --runtime_config_dir="${RUNTIME_HOME_DIR}/service/cpp/config/" \
+    --enable_separated_redirect_runtime_std="${SEPARATED_REDIRECT_RUNTIME_STD}" \
+    --user_log_export_mode="${USER_LOG_EXPORT_MODE}" \
+    --npu_collection_mode="${NPU_COLLECTION_MODE}" \
+    --gpu_collection_enable="${GPU_COLLECTION_ENABLE}" \
+    --proxy_ip="${LOCAL_IP}" \
+    --proxy_grpc_server_port="${FUNCTION_PROXY_GRPC_PORT}" \
+    --setCmdCred=false \
+    --python_dependency_path="${PYTHONPATH}:${RUNTIME_HOME_DIR}/service/python" \
+    --python_log_config_path="${RUNTIME_HOME_DIR}/service/python/config/python-runtime-log.json" \
+    --java_system_property="${RUNTIME_HOME_DIR}/service/java/log4j2.xml" \
+    --java_system_library_path="${RUNTIME_HOME_DIR}/service/java/lib" \
+    --host_ip="${IP_ADDRESS}" \
+    --port="${FUNCTION_PROXY_PORT}" \
+    --data_system_port="${DS_WORKER_PORT}" \
+    --agent_address="${IP_ADDRESS}:${FUNCTION_PROXY_PORT}" \
+    --runtime_initial_port="${RUNTIME_INIT_PORT}" \
+    --port_num="${RUNTIME_PORT_NUM}" \
+    --metrics_collector_type="${METRICS_COLLECTOR_TYPE}" \
+    --proc_metrics_cpu="${CPU4COMP}" \
+    --custom_resources="${CUSTOM_RESOURCES}" \
+    --is_protomsg_to_runtime="${IS_PROTOMSG_TO_RUNTIME}" \
+    --massif_enable="${MASSIF_ENABLE}" \
+    --enable_inherit_env="${ENABLE_INHERIT_ENV}" \
+    --memory_detection_interval="${MEMORY_DETECTION_INTERVAL}" \
+    --oom_kill_enable="${OOM_KILL_ENABLE}" \
+    --oom_kill_control_limit="${OOM_KILL_CONTROL_LIMIT}" \
+    --oom_consecutive_detection_count="${OOM_CONSECUTIVE_DETECTION_COUNT}" \
+    --kill_process_timeout_seconds="${KILL_PROCESS_TIMEOUT_SECONDS}" \
+    --runtime_ds_connect_timeout="${RUNTIME_DS_CONNECT_TIMEOUT}" \
+    --runtime_direct_connection_enable="${RUNTIME_DIRECT_CONNECTION_ENABLE}" \
+    --runtime_default_config="${RUNTIME_DEFAULT_CONFIG}" \
+    --proc_metrics_memory="${MEM4COMP}" \
+    --data_system_enable=true \
+    --data_system_host="${IP_ADDRESS}" \
+    --agent_uid="${agent_uid}" \
+    --alias="${FUNCTION_AGENT_ALIAS}""
+  fi
+  
   LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${LD_LIBRARY_PATH} \
     LD_PRELOAD="${jemalloc_path}" \
+    LOCAL_IP="${LOCAL_IP}" \
+    HOST_IP="${IP_ADDRESS}" \
+    RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG \
+    INIT_LABELS=${LABELS} \
     ${bin} --address="${IP_ADDRESS}:${FUNCTION_PROXY_PORT}" --meta_store_address="${META_STORE_ADDRESS}" \
     --etcd_address="${ETCD_CLUSTER_ADDRESS}" \
     --node_id="${NODE_ID}" --log_config="${FS_LOG_CONFIG}" \
@@ -109,7 +171,8 @@ function install_function_proxy() {
     --etcd_table_prefix="${ETCD_TABLE_PREFIX}" --etcd_target_name_override="${ETCD_TARGET_NAME_OVERRIDE}" \
     --enable_print_perf="${ENABLE_PRINT_PERF}" --is_partial_watch_instances="${IS_PARTIAL_WATCH_INSTANCES}" \
     --enable_meta_store="${ENABLE_META_STORE}" --meta_store_mode="${META_STORE_MODE}" --meta_store_excluded_keys="${META_STORE_EXCLUDED_KEYS}" \
-    --runtime_instance_debug_enable="${RUNTIME_INSTANCE_DEBUG_ENABLE}"  >>"${FS_LOG_PATH}/${NODE_ID}-function_proxy${STD_LOG_SUFFIX}" 2>&1 &
+    --runtime_instance_debug_enable="${RUNTIME_INSTANCE_DEBUG_ENABLE}" \
+    ${merge_process_args} >>"${FS_LOG_PATH}/${NODE_ID}-function_proxy${STD_LOG_SUFFIX}" 2>&1 &
 
   FUNCTION_PROXY_PID="$!"
   log_info "succeed to start function proxy, proxy_port=${FUNCTION_PROXY_PORT}, grpc_port=${FUNCTION_PROXY_GRPC_PORT}, pid=${FUNCTION_PROXY_PID}"

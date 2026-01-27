@@ -21,6 +21,8 @@
 #include "common/utils/module_driver.h"
 #include "function_agent/agent_service_actor.h"
 #include "function_agent/common/utils.h"
+#include "runtime_manager/config/flags.h"
+#include "runtime_manager/driver/runtime_manager_driver.h"
 
 namespace functionsystem::function_agent {
 struct FunctionAgentStartParam {
@@ -40,6 +42,9 @@ struct FunctionAgentStartParam {
     std::string localNodeID;
     bool enableSignatureValidation;
     std::string componentName;
+
+    bool enableMergeProcess = false;
+    std::shared_ptr<runtime_manager::Flags> runtimeManagerFlags = nullptr;
 };
 
 class FunctionAgentDriver : public ModuleDriver {
@@ -60,6 +65,8 @@ private:
     std::shared_ptr<AgentServiceActor> actor_ = nullptr;
     std::shared_ptr<HttpServer> httpServer_;
     std::shared_ptr<HealthyApiRouter> apiRouteRegister_;
+
+    std::shared_ptr<runtime_manager::RuntimeManagerDriver> runtimeManagerDriver_ = nullptr;
 };  // class FunctionAgentDriver
 
 }  // namespace functionsystem::function_agent

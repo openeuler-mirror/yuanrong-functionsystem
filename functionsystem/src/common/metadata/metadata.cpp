@@ -133,8 +133,6 @@ std::string GetDeployDir()
     }
 }
 
-namespace {
-
 void GetEntryFileAndHandler(FunctionMeta &funcMeta, const nlohmann::json &j)
 {
     const std::string deployPath = "/dcache/layer/func/";  // need to get from config and trans to absolute path
@@ -558,8 +556,6 @@ inline void GetRoofsMetaData(FunctionMeta &funcMeta, const nlohmann::json &h)
         }
     }
 }
-
-}  // anonymous namespace
 
 FunctionMeta GetFuncMetaFromJson(const std::string &jsonStr)
 {

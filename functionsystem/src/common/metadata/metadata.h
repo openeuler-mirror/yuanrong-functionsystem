@@ -100,6 +100,10 @@ litebus::Option<FunctionMeta> GetFuncMeta(const std::string &funcKey,
                                           const std::unordered_map<std::string, FunctionMeta> &funcMetaMap,
                                           const std::unordered_map<std::string, FunctionMeta> &systemFuncMetaMap);
 
+void GetFuncMounts(MountConfig &mountConfig, const nlohmann::json &funcMounts);
+
+void GetEntryFileAndHandler(FunctionMeta &funcMeta, const nlohmann::json &j);
+
 void LoadLocalFuncMeta(std::unordered_map<std::string, FunctionMeta> &map, const std::string &path);
 
 Layer ParseDelegateDownloadInfo(const nlohmann::json &parser);
