@@ -29,7 +29,7 @@
 
 namespace functionsystem::grpc {
 
-const int32_t DEFAULT_MAX_GRPC_SIZE = 4;  // MB
+const int32_t DEFAULT_MAX_GRPC_SIZE = 11;  // MB
 const int64_t DEFAULT_TIMEOUT_SEC = 30;   // s
 
 struct ControlClientConfig {
