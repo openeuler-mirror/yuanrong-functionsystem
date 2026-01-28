@@ -103,7 +103,10 @@ functionsystem::function_agent::FunctionAgentStartParam BuildStartParam(const fu
                                                             flags.GetEnableSignatureValidation(),
                                                         .componentName = COMPONENT_NAME,
                                                         .enableMergeProcess = false,  // 在 main 函数中设置
-                                                        .runtimeManagerFlags = nullptr };
+                                                        .runtimeManagerFlags = nullptr,
+                                                        .dataSystemEnable = flags.GetDataSystemEnable(),
+                                                        .dataSystemHost = flags.GetDataSystemHost(),
+                                                        .dataSystemPort = flags.GetDataSystemPort() };
     return startParam;
 }
 
@@ -231,6 +234,8 @@ int main(int argc, char **argv)
             startParam.runtimeManagerFlags = std::make_shared<runtime_manager::Flags>(runtimeManagerFlags);
         }
 
+        YRLOG_INFO("{} is starting...", COMPONENT_NAME);
+        YRLOG_INFO("version:{} branch:{} commit_id:{}", BUILD_VERSION, GIT_BRANCH_NAME, GIT_HASH);
         g_functionAgentDriver = std::make_shared<function_agent::FunctionAgentDriver>(flags.GetNodeID(), startParam);
         if (auto status = g_functionAgentDriver->Start(); status.IsError()) {
             YRLOG_ERROR("failed to start function_agent, errMsg: {}", status.ToString());

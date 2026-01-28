@@ -138,9 +138,12 @@ functionsystem::function_agent::FunctionAgentStartParam BuildFunctionAgentStartP
         .enableSignatureValidation = flags.GetEnableSignatureValidation(),
         .componentName = COMPONENT_NAME_FUNCTION_AGENT,
         .enableMergeProcess = enableMergeProcess,
-        .runtimeManagerFlags = enableMergeProcess ? 
-            std::make_shared<runtime_manager::Flags>(runtimeManagerFlags) : 
-            nullptr
+        .runtimeManagerFlags = enableMergeProcess ?
+            std::make_shared<runtime_manager::Flags>(runtimeManagerFlags) :
+            nullptr,
+        .dataSystemEnable = flags.GetDataSystemEnable(),
+        .dataSystemHost = flags.GetDataSystemHost(),
+        .dataSystemPort = flags.GetDataSystemPort()
     };
     return startParam;
 }
