@@ -45,6 +45,11 @@ struct FunctionAgentStartParam {
 
     bool enableMergeProcess = false;
     std::shared_ptr<runtime_manager::Flags> runtimeManagerFlags = nullptr;
+
+    // DataSystem config for KVClient initialization
+    bool dataSystemEnable = false;
+    std::string dataSystemHost;
+    int32_t dataSystemPort = 0;
 };
 
 class FunctionAgentDriver : public ModuleDriver {

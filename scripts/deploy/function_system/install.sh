@@ -118,7 +118,12 @@ function install_function_proxy() {
     --data_system_enable=true \
     --data_system_host="${IP_ADDRESS}" \
     --agent_uid="${agent_uid}" \
-    --alias="${FUNCTION_AGENT_ALIAS}""
+    --alias="${FUNCTION_AGENT_ALIAS}" \
+    --alias="${FUNCTION_AGENT_ALIAS}" \
+    --log_expiration_enable="${LOG_EXPIRATION_ENABLE}" \
+    --log_expiration_time_threshold="${LOG_EXPIRATION_TIME_THRESHOLD}" \
+    --log_expiration_cleanup_interval="${LOG_EXPIRATION_CLEANUP_INTERVAL}" \
+    --log_expiration_max_file_count="${LOG_EXPIRATION_MAX_FILE_COUNT}""
   fi
   
   LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${LD_LIBRARY_PATH} \
