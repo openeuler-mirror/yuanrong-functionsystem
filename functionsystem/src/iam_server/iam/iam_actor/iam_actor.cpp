@@ -35,6 +35,7 @@ const std::string HEADER_AUTH_KEY = "X-Auth"; // key for token
 const std::string HEADER_TENANT_ID_KEY = "X-Tenant-ID"; // key for tenantID
 const std::string HEADER_TENANT_SALT_KEY = "X-Salt"; // salt for tenant
 const std::string HEADER_EXPIRED_TIME_SPAN = "X-Expired-Time-Span"; // key for expired time
+const std::string HEADER_ROLE_KEY = "X-Role"; // key for role
 
 Status GetValueFromHeaderMap(const litebus::http::HeaderMap &headerMap, const std::string &key, std::string &value)
 {
@@ -107,6 +108,9 @@ litebus::Future<HttpResponse> IAMActor::VerifyToken(const functionsystem::HttpRe
             litebus::http::Response::GetStatusDescribe(litebus::http::ResponseCode::OK));
         response.headers.insert({{ HEADER_TENANT_ID_KEY, tokenContent->tenantID },
                                   { HEADER_EXPIRED_TIME_SPAN, std::to_string(tokenContent->expiredTimeStamp - now) }});
+        if (!tokenContent->role.empty()) {
+            response.headers.insert({ HEADER_ROLE_KEY, tokenContent->role });
+        }
         return response;
     });
 }
@@ -123,7 +127,10 @@ litebus::Future<HttpResponse> IAMActor::RequireEncryptToken(const functionsystem
         return GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST,
                                     "require token failed, parse TenantID from headerMap failed.");
     }
-    return internalIAM_->RequireEncryptToken(tenantID).Then([tenantID](const std::shared_ptr<TokenSalt> &tokenSalt) {
+    // Optional: get role from header
+    std::string role;
+    (void)GetValueFromHeaderMap(request.headers, HEADER_ROLE_KEY, role);
+    return internalIAM_->RequireEncryptToken(tenantID, role).Then([tenantID](const std::shared_ptr<TokenSalt> &tokenSalt) {
         if (tokenSalt->status.IsError() || tokenSalt->token.empty()) {
             YRLOG_ERROR("{}|RequireEncryptToken failed, err is {}", tenantID, tokenSalt->status.ToString());
             return GenerateHttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR,
