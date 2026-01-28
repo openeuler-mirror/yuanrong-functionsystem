@@ -23,6 +23,7 @@
 #include "async/future.hpp"
 #include "code_deployer/shared_dir_deployer.h"
 #include "common/constants/actor_name.h"
+#include "common/kv_client.h"
 #include "common/logs/logging.h"
 #include "common/register/register_helper.h"
 #include "function_agent/code_deployer/copy_deployer.h"
@@ -69,6 +70,17 @@ FunctionAgentDriver::FunctionAgentDriver(const std::string &nodeID, const Functi
 
 Status FunctionAgentDriver::Start()
 {
+    // Initialize KVClient if DataSystem is enabled
+    if (startParam_.dataSystemEnable) {
+        if (auto status = function_agent::KVClient::GetInstance().Init(startParam_.dataSystemHost,
+                                                                        startParam_.dataSystemPort);
+            status.IsError()) {
+            YRLOG_ERROR("failed to init kv client, errMsg: {}", status.ToString());
+            return status;
+        }
+        YRLOG_INFO("kv client initialized successfully");
+    }
+
     if (startParam_.enableMergeProcess && startParam_.runtimeManagerFlags != nullptr) {
         YRLOG_INFO("starting runtime_manager in merged process mode...");
         runtimeManagerDriver_ = std::make_shared<runtime_manager::RuntimeManagerDriver>(

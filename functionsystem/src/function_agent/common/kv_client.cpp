@@ -19,18 +19,44 @@
 namespace functionsystem::function_agent {
 Status KVClient::Init(const function_agent::FunctionAgentFlags &flags)
 {
+    YRLOG_INFO("initializing kv client with host: {}, port: {}", flags.GetDataSystemHost(), flags.GetDataSystemPort());
     datasystem::ConnectOptions connectOptions;
     connectOptions.host = flags.GetDataSystemHost();
     connectOptions.port = flags.GetDataSystemPort();
     dsKvClient_ = std::make_unique<datasystem::KVClient>(connectOptions);
     ::datasystem::Status s = dsKvClient_->Init();
     if (s.IsError()) {
+        YRLOG_ERROR("failed to initialize kv client, host: {}, port: {}, error: {}",
+                   flags.GetDataSystemHost(), flags.GetDataSystemPort(), s.ToString());
         return Status(StatusCode::BP_DATASYSTEM_ERROR, s.ToString());
     }
+    YRLOG_INFO("kv client initialized successfully with host: {}, port: {}", flags.GetDataSystemHost(), flags.GetDataSystemPort());
+    return Status::OK();
+}
+
+Status KVClient::Init(const std::string &host, int32_t port)
+{
+    YRLOG_INFO("initializing kv client with host: {}, port: {}", host, port);
+    datasystem::ConnectOptions connectOptions;
+    connectOptions.host = host;
+    connectOptions.port = port;
+    dsKvClient_ = std::make_unique<datasystem::KVClient>(connectOptions);
+    ::datasystem::Status s = dsKvClient_->Init();
+    if (s.IsError()) {
+        YRLOG_ERROR("failed to initialize kv client, host: {}, port: {}, error: {}", host, port, s.ToString());
+        return Status(StatusCode::BP_DATASYSTEM_ERROR, s.ToString());
+    }
+    YRLOG_INFO("kv client initialized successfully with host: {}, port: {}", host, port);
     return Status::OK();
 }
 std::pair<Status, datasystem::ReadOnlyBuffer> KVClient::Get(const std::string &key)
 {
+    if (dsKvClient_ == nullptr) {
+        YRLOG_ERROR("kv client is not initialized");
+        return std::make_pair(Status(StatusCode::BP_DATASYSTEM_ERROR, "kv client is not initialized"),
+                              datasystem::ReadOnlyBuffer());
+    }
+
     datasystem::Optional<datasystem::ReadOnlyBuffer> buffer;
     datasystem::Status s = dsKvClient_->Get(key, buffer);
     if (s.IsError()) {

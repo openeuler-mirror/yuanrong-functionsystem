@@ -26,6 +26,7 @@ namespace functionsystem::function_agent {
 class KVClient : public Singleton<KVClient> {
 public:
     Status Init(const function_agent::FunctionAgentFlags &flags);
+    Status Init(const std::string &host, int32_t port);
     std::pair<Status, datasystem::ReadOnlyBuffer> Get(const std::string &key);
 
 private:
