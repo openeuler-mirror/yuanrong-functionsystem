@@ -539,7 +539,8 @@ litebus::Future<Status> TokenManagerActor::AbandonTokenByTenantID(const std::str
     return business_->AbandonTokenByTenantID(tenantID);
 }
 
-litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::RequireEncryptToken(const std::string &tenantID)
+litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::RequireEncryptToken(const std::string &tenantID,
+                                                                                  const std::string &role)
 {
     if (!member_->initialized) {
         auto tokenSalt = std::make_shared<TokenSalt>();
@@ -556,7 +557,7 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::RequireEncryptTok
     }
     // 2. try to generate new
     ASSERT_IF_NULL(business_);
-    return business_->RequireEncryptToken(tenantID);
+    return business_->RequireEncryptToken(tenantID, role);
 }
 
 litebus::Future<Status> TokenManagerActor::VerifyToken(const std::shared_ptr<TokenContent> &tokenContent)
@@ -590,14 +591,15 @@ litebus::Future<Status> TokenManagerActor::VerifyToken(const std::shared_ptr<Tok
     return business_->VerifyToken(tokenContent);
 }
 
-litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::GenerateNewToken(const std::string &tenantID)
+litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::GenerateNewToken(const std::string &tenantID,
+                                                                                const std::string &role)
 {
     YRLOG_INFO("{}|start to generate new token", tenantID);
     auto promise = std::make_shared<litebus::Promise<std::shared_ptr<TokenSalt>>>();
     member_->newTokenRequestMap[tenantID] = promise;
     auto tokenContent = std::make_shared<TokenContent>();
     auto tokenSalt = std::make_shared<TokenSalt>();
-    Status status = GenerateToken(tenantID, tokenContent);
+    Status status = GenerateToken(tenantID, tokenContent, role);
     if (status.IsError()) {
         tokenSalt->status = status;
         YRLOG_ERROR("{}|failed to generate new token, err:", tenantID, status.ToString());
@@ -625,10 +627,12 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::GenerateNewToken(
     return promise->GetFuture();
 }
 
-Status TokenManagerActor::GenerateToken(const std::string &tenantID, const std::shared_ptr<TokenContent> &tokenContent)
+Status TokenManagerActor::GenerateToken(const std::string &tenantID, const std::shared_ptr<TokenContent> &tokenContent,
+                                         const std::string &role)
 {
     // 1. generate token
     tokenContent->tenantID = tenantID;
+    tokenContent->role = role;
     auto now = static_cast<uint64_t>(std::time(nullptr));
     // if tokenExpiredTimeSpan is 0, token never expires (set expiredTimeStamp to UINT64_MAX)
     if (member_->tokenExpiredTimeSpan == TOKEN_NEVER_EXPIRE) {
@@ -1002,11 +1006,11 @@ void TokenManagerActor::UpdateOldTokenCompareTime(const std::shared_ptr<TokenCon
 }
 
 litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::MasterBusiness::RequireEncryptToken(
-    const std::string &tenantID)
+    const std::string &tenantID, const std::string &role)
 {
     auto actor = actor_.lock();
     ASSERT_IF_NULL(actor);
-    return actor->GenerateNewToken(tenantID);
+    return actor->GenerateNewToken(tenantID, role);
 }
 
 litebus::Future<Status> TokenManagerActor::MasterBusiness::VerifyToken(
@@ -1091,11 +1095,12 @@ litebus::Future<Status> TokenManagerActor::SlaveBusiness::UpdateTokenInAdvance(c
 }
 
 litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::SlaveBusiness::RequireEncryptToken(
-    const std::string &tenantID)
+    const std::string &tenantID, const std::string &role)
 {
     auto actor = actor_.lock();
     ASSERT_IF_NULL(actor);
     auto promise = std::make_shared<litebus::Promise<std::shared_ptr<TokenSalt>>>();
+    // Note: in slave mode, forward request to master, role is not passed directly
     (void)actor->SendForwardGetToken(tenantID, true)
         .OnComplete(litebus::Defer(actor->GetAID(), &TokenManagerActor::OnForwardGetNewToken, std::placeholders::_1,
                                    promise, tenantID));
