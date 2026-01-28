@@ -47,7 +47,8 @@ public:
     // set virtual for mocking
     virtual litebus::Future<Status> VerifyToken(const std::shared_ptr<TokenContent> &tokenContent);
     // set virtual for mocking
-    virtual litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptToken(const std::string &tenantID);
+    virtual litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptToken(const std::string &tenantID,
+                                                                            const std::string &role = "");
     // set virtual for mocking
     virtual litebus::Future<Status> AbandonTokenByTenantID(const std::string &tenantID);
 

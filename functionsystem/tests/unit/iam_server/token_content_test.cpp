@@ -47,6 +47,36 @@ TEST_F(TokenContentTest, GetJwtPayloadJsonBasic)
     EXPECT_EQ(j["exp"].get<uint64_t>(), 1737849600);
 }
 
+TEST_F(TokenContentTest, GetJwtPayloadJsonWithRole)
+{
+    TokenContent token;
+    token.tenantID = "tenant123";
+    token.expiredTimeStamp = 1737849600;
+    token.role = "admin";
+
+    std::string payload = token.GetJwtPayloadJson();
+
+    nlohmann::json j = nlohmann::json::parse(payload);
+    EXPECT_EQ(j["sub"].get<std::string>(), "tenant123");
+    EXPECT_EQ(j["exp"].get<uint64_t>(), 1737849600);
+    EXPECT_EQ(j["role"].get<std::string>(), "admin");
+}
+
+TEST_F(TokenContentTest, GetJwtPayloadJsonWithoutRole)
+{
+    TokenContent token;
+    token.tenantID = "tenant123";
+    token.expiredTimeStamp = 1737849600;
+    token.role = "";  // Empty role
+
+    std::string payload = token.GetJwtPayloadJson();
+
+    nlohmann::json j = nlohmann::json::parse(payload);
+    EXPECT_EQ(j["sub"].get<std::string>(), "tenant123");
+    EXPECT_EQ(j["exp"].get<uint64_t>(), 1737849600);
+    EXPECT_FALSE(j.contains("role"));  // Should not have role field when empty
+}
+
 TEST_F(TokenContentTest, GetJwtPayloadJsonEmptyTenantID)
 {
     TokenContent token;
@@ -82,6 +112,32 @@ TEST_F(TokenContentTest, ParseJwtPayloadJsonBasic)
     EXPECT_TRUE(status.IsOk());
     EXPECT_EQ(token.tenantID, "tenant456");
     EXPECT_EQ(token.expiredTimeStamp, 1737936000);
+}
+
+TEST_F(TokenContentTest, ParseJwtPayloadJsonWithRole)
+{
+    TokenContent token;
+    std::string payload = R"({"sub":"tenant456","exp":1737936000,"role":"operator"})";
+
+    Status status = token.ParseJwtPayloadJson(payload);
+
+    EXPECT_TRUE(status.IsOk());
+    EXPECT_EQ(token.tenantID, "tenant456");
+    EXPECT_EQ(token.expiredTimeStamp, 1737936000);
+    EXPECT_EQ(token.role, "operator");
+}
+
+TEST_F(TokenContentTest, ParseJwtPayloadJsonWithoutRole)
+{
+    TokenContent token;
+    std::string payload = R"({"sub":"tenant456","exp":1737936000})";
+
+    Status status = token.ParseJwtPayloadJson(payload);
+
+    EXPECT_TRUE(status.IsOk());
+    EXPECT_EQ(token.tenantID, "tenant456");
+    EXPECT_EQ(token.expiredTimeStamp, 1737936000);
+    EXPECT_TRUE(token.role.empty());  // Role should be empty if not present
 }
 
 TEST_F(TokenContentTest, ParseJwtPayloadJsonMissingSub)
@@ -153,6 +209,24 @@ TEST_F(TokenContentTest, JwtPayloadJsonRoundTrip)
     EXPECT_TRUE(status.IsOk());
     EXPECT_EQ(parsed.tenantID, original.tenantID);
     EXPECT_EQ(parsed.expiredTimeStamp, original.expiredTimeStamp);
+}
+
+TEST_F(TokenContentTest, JwtPayloadJsonRoundTripWithRole)
+{
+    TokenContent original;
+    original.tenantID = "test_tenant_roundtrip";
+    original.expiredTimeStamp = 1737849600;
+    original.role = "admin";
+
+    std::string payload = original.GetJwtPayloadJson();
+
+    TokenContent parsed;
+    Status status = parsed.ParseJwtPayloadJson(payload);
+
+    EXPECT_TRUE(status.IsOk());
+    EXPECT_EQ(parsed.tenantID, original.tenantID);
+    EXPECT_EQ(parsed.expiredTimeStamp, original.expiredTimeStamp);
+    EXPECT_EQ(parsed.role, original.role);
 }
 
 // ==================== JWT Sign Tests ====================
@@ -373,6 +447,28 @@ TEST_F(TokenContentTest, ParseJwtBasic)
     EXPECT_EQ(parsed.expiredTimeStamp, 1737849600);
 }
 
+TEST_F(TokenContentTest, ParseJwtWithRole)
+{
+    // First sign a token with role
+    TokenContent original;
+    original.tenantID = "tenant_parse_test";
+    original.expiredTimeStamp = 1737849600;
+    original.role = "operator";
+    original.salt = "test_salt";
+    EXPECT_TRUE(original.Sign(secretKey_).IsOk());
+
+    // Create new token with just the encryptToken
+    TokenContent parsed;
+    parsed.encryptToken = original.encryptToken;
+
+    Status status = parsed.ParseJwt();
+
+    EXPECT_TRUE(status.IsOk());
+    EXPECT_EQ(parsed.tenantID, "tenant_parse_test");
+    EXPECT_EQ(parsed.expiredTimeStamp, 1737849600);
+    EXPECT_EQ(parsed.role, "operator");
+}
+
 TEST_F(TokenContentTest, ParseJwtInvalidFormat)
 {
     TokenContent token;
@@ -531,6 +627,7 @@ TEST_F(TokenContentTest, CopyCreatesDeepCopy)
     original.tenantID = "tenant";
     original.expiredTimeStamp = 1737849600;
     original.salt = "salt";
+    original.role = "admin";
     original.encryptToken = "token";
 
     auto copy = original.Copy();
@@ -538,11 +635,14 @@ TEST_F(TokenContentTest, CopyCreatesDeepCopy)
     EXPECT_EQ(copy->tenantID, original.tenantID);
     EXPECT_EQ(copy->expiredTimeStamp, original.expiredTimeStamp);
     EXPECT_EQ(copy->salt, original.salt);
+    EXPECT_EQ(copy->role, original.role);
     EXPECT_EQ(copy->encryptToken, original.encryptToken);
 
     // Modify original, copy should not change
     original.tenantID = "modified";
+    original.role = "modified_role";
     EXPECT_EQ(copy->tenantID, "tenant");
+    EXPECT_EQ(copy->role, "admin");
 }
 
 // ==================== Equality Operator Tests ====================
@@ -628,6 +728,30 @@ TEST_F(TokenContentTest, FullJwtFlowWithNeverExpire)
     parsed.encryptToken = token.encryptToken;
     EXPECT_TRUE(parsed.ParseFromEncryptToken().IsOk());
     EXPECT_EQ(parsed.expiredTimeStamp, UINT64_MAX);
+}
+
+TEST_F(TokenContentTest, FullJwtFlowWithRole)
+{
+    // Create and sign token with role
+    TokenContent original;
+    original.tenantID = "production_tenant";
+    original.expiredTimeStamp = 1737849600;
+    original.role = "superadmin";
+    original.salt = "random_salt";
+    EXPECT_TRUE(original.Sign(secretKey_).IsOk());
+
+    // Verify signature
+    EXPECT_TRUE(original.VerifySignature(secretKey_));
+
+    // Parse back from JWT
+    TokenContent parsed;
+    parsed.encryptToken = original.encryptToken;
+    EXPECT_TRUE(parsed.ParseFromEncryptToken().IsOk());
+
+    // Verify parsed data matches original including role
+    EXPECT_EQ(parsed.tenantID, original.tenantID);
+    EXPECT_EQ(parsed.expiredTimeStamp, original.expiredTimeStamp);
+    EXPECT_EQ(parsed.role, original.role);
 }
 
 }  // namespace functionsystem::iamserver::test

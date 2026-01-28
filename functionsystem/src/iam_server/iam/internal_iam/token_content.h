@@ -35,6 +35,7 @@ struct TokenContent {
     std::string tenantID;
     uint64_t expiredTimeStamp{0};
     std::string salt;
+    std::string role;  // role field for JWT token
     // JWT token format: base64url(header).base64url(payload).base64url(signature)
     std::string encryptToken;
 
@@ -141,25 +142,29 @@ struct TokenContent {
         tokenContent->salt = salt;
         tokenContent->tenantID = tenantID;
         tokenContent->expiredTimeStamp = expiredTimeStamp;
+        tokenContent->role = role;
         tokenContent->encryptToken = encryptToken;
         return tokenContent;
     }
 
     /**
      * Generate JWT payload JSON string using nlohmann::json
-     * Format: {"sub":"tenantID","exp":expiredTimeStamp}
+     * Format: {"sub":"tenantID","exp":expiredTimeStamp,"role":"role"}
      */
     std::string GetJwtPayloadJson() const
     {
         nlohmann::json payload;
         payload["sub"] = tenantID;
         payload["exp"] = expiredTimeStamp;
+        if (!role.empty()) {
+            payload["role"] = role;
+        }
         return payload.dump();
     }
 
     /**
      * Parse JWT payload JSON string using nlohmann::json
-     * Format: {"sub":"tenantID","exp":expiredTimeStamp}
+     * Format: {"sub":"tenantID","exp":expiredTimeStamp,"role":"role"}
      */
     Status ParseJwtPayloadJson(const std::string &payloadJson)
     {
@@ -173,6 +178,10 @@ struct TokenContent {
             }
             tenantID = payload["sub"].get<std::string>();
             expiredTimeStamp = payload["exp"].get<uint64_t>();
+            // Parse optional role field
+            if (payload.contains("role") && payload["role"].is_string()) {
+                role = payload["role"].get<std::string>();
+            }
             return Status::OK();
         } catch (const nlohmann::json::exception &e) {
             return Status(StatusCode::FAILED, "JWT payload parse failed: " + std::string(e.what()));

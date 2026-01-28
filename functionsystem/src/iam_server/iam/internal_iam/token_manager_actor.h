@@ -59,11 +59,13 @@ public:
                                   const std::shared_ptr<litebus::Promise<Status>> &promise,
                                   const std::shared_ptr<TokenContent> &tokenContent);
 
-    litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptToken(const std::string &tenantID);
+    litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptToken(const std::string &tenantID,
+                                                                    const std::string &role = "");
     litebus::Future<Status> VerifyToken(const std::shared_ptr<TokenContent> &tokenContent);
     litebus::Future<Status> AbandonTokenByTenantID(const std::string &tenantID);
 
-    litebus::Future<std::shared_ptr<TokenSalt>> GenerateNewToken(const std::string &tenantID);
+    litebus::Future<std::shared_ptr<TokenSalt>> GenerateNewToken(const std::string &tenantID,
+                                                                 const std::string &role = "");
 
     std::shared_ptr<TokenSalt> GetLocalNewToken(const std::string &tenantID);
 
@@ -95,7 +97,8 @@ private:
      */
     const std::shared_ptr<TokenContent> FindTokenFromCache(const std::string &tenantID, const bool &isNewTokenMap);
 
-    Status GenerateToken(const std::string &tenantID, const std::shared_ptr<TokenContent> &tokenContent);
+    Status GenerateToken(const std::string &tenantID, const std::shared_ptr<TokenContent> &tokenContent,
+                         const std::string &role = "");
 
     Status OnRequireEncryptToken(const std::shared_ptr<TokenSalt> &tokenSalt, const litebus::AID &from,
                                  const std::shared_ptr<messages::GetTokenRequest> &tokenRequest);
@@ -182,7 +185,8 @@ private:
             : actor_(actor), member_(member) {}
         ~Business() override = default;
 
-        virtual litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptToken(const std::string &tenantID) = 0;
+        virtual litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptToken(const std::string &tenantID,
+                                                                                 const std::string &role = "") = 0;
         virtual litebus::Future<Status> VerifyToken(const std::shared_ptr<TokenContent> &tokenContent) = 0;
         virtual litebus::Future<Status> AbandonTokenByTenantID(const std::string &tenantID) = 0;
         virtual litebus::Future<Status> UpdateTokenInAdvance(const std::string &tenantID) = 0;
@@ -204,7 +208,8 @@ private:
         ~MasterBusiness() override = default;
 
         void OnChange() override;
-        litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptToken(const std::string &tenantID) override;
+        litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptToken(const std::string &tenantID,
+                                                                         const std::string &role = "") override;
         litebus::Future<Status> VerifyToken(const std::shared_ptr<TokenContent> &tokenContent) override;
         litebus::Future<Status> AbandonTokenByTenantID(const std::string &tenantID) override;
         litebus::Future<Status> UpdateTokenInAdvance(const std::string &tenantID) override;
@@ -222,7 +227,8 @@ private:
         ~SlaveBusiness() override = default;
 
         void OnChange() override;
-        litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptToken(const std::string &tenantID) override;
+        litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptToken(const std::string &tenantID,
+                                                                         const std::string &role = "") override;
         litebus::Future<Status> VerifyToken(const std::shared_ptr<TokenContent> &tokenContent) override;
         litebus::Future<Status> AbandonTokenByTenantID(const std::string &tenantID) override;
         litebus::Future<Status> UpdateTokenInAdvance(const std::string &tenantID) override;
