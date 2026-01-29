@@ -89,7 +89,7 @@ message InstanceAffinity {
   Selector preferredAntiAffinity = 2;
   Selector requiredAffinity      = 3;
   Selector requiredAntiAffinity  = 4;
-  AffinityScope scope            = 5;  
+    AffinityScope scope            = 5;  
 }
 
 message Affinity {

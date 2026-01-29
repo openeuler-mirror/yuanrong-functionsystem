@@ -242,6 +242,11 @@ public:
         return gpuCollectionEnable_;
     }
 
+    bool GetNumaCollectionEnable() const
+    {
+        return numaCollectionEnable_;
+    }
+
     bool GetIsProtoMsgToRuntime() const
     {
         return isProtoMsgToRuntime_;
@@ -450,6 +455,7 @@ protected:
     int virtualEnvIdleTimeLimit_ = -1; // ms
     std::string npuCollectionMode_;
     bool gpuCollectionEnable_ = false;
+    bool numaCollectionEnable_ = false;
     bool isProtoMsgToRuntime_ = false;
     bool massifEnable_ = false;
     bool inheritEnv_ = false;

@@ -142,6 +142,9 @@ protected:
     resources::ResourceUnit BuildResourceUnitWithSystem(const std::vector<litebus::Future<Metrics>> &metricses);
 private:
     void AddSystemMetricsCollector(const Flags &flags);
+    void AddCpuMemoryAndLabelCollectors(const Flags &flags);
+    void AddGpuNumaNpuCollectors(const Flags &flags);
+    void AddNodeMetricsCollectors();
     void ResolveCustomResourceMetricsCollector(const std::string &customResource);
     void ResolveDiskResourceMetricsCollector(const std::string &diskResource);
     bool IsDiskUsageBelowLimit(const DiskUsageMonitorConfig &config) const;
@@ -150,6 +153,7 @@ private:
     std::vector<litebus::Future<Metrics>> GenAllMetricsWithoutSystem() const;
     void BuildHeteroDevClusterResource(Metrics &metrics, resources::Resource &resource);
     void BuildDiskDevClusterResource(Metrics &metrics, resources::Resource &resource);
+    void BuildNUMAResource(Metrics &metrics, resources::Resource &resource);
     void TransitionToVectors(const std::string &key, Metrics &metrics, resources::Resource &resource) const;
     void BuildResource(Metrics &metrics, resources::Resource &resource, const resources::Value_Type &type);
     void RuntimeMemoryMetricsProcess(const std::vector<litebus::Future<Metrics>> &metrics);

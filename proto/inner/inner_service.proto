@@ -28,7 +28,7 @@ import "runtime_rpc.proto";
 option go_package = "functionsystem/pkg/common/faas_common/grpc/pb/inner;inner";
 
 // Inner service provides APIs for bus to bus interaction
-service InnerService {
+service InnerService { 
   // forward a recovery request to rebuild instance owned by other bus-proxy
   rpc ForwardRecover (ForwardRecoverRequest) returns (ForwardRecoverResponse) {}
   // notify the result of forward by other proxy request

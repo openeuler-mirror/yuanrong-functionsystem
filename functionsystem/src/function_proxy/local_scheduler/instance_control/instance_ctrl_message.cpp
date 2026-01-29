@@ -54,6 +54,10 @@ std::shared_ptr<DeployInstanceRequest> GetDeployInstanceReq(const FunctionMeta &
     }
     deployInstanceRequest->mutable_scheduleoption()->set_schedpolicyname(
         request->instance().scheduleoption().schedpolicyname());
+    // 传递 NUMA 等 extension 到 runtime_manager（StartInstanceRequest 无 createoptions，需从 scheduleOption 读取）
+    for (const auto& [k, v] : request->instance().scheduleoption().extension()) {
+        (*deployInstanceRequest->mutable_scheduleoption()->mutable_extension())[k] = v;
+    }
     auto mountUser = funcMeta.extendedMetaData.mountConfig.mountUser;
     auto config = deployInstanceRequest->mutable_funcmountconfig();
     config->mutable_funcmountuser()->set_userid(mountUser.userID);

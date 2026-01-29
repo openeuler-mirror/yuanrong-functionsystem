@@ -32,9 +32,10 @@ const MetricsType CPU = resource_view::CPU_RESOURCE_NAME;
 const MetricsType MEMORY = resource_view::MEMORY_RESOURCE_NAME;
 const MetricsType GPU = resource_view::GPU_RESOURCE_NAME;
 const MetricsType NPU = resource_view::NPU_RESOURCE_NAME;
+const MetricsType NUMA = resource_view::NUMA_RESOURCE_NAME;
 const MetricsType LABELS = resource_view::INIT_LABELS_RESOURCE_NAME;
 const MetricsType DISK = resource_view::DISK_RESOURCE_NAME;
-const std::vector<MetricsType> METRICS_TYPES = { CPU, MEMORY, DISK, GPU, NPU, LABELS };
+const std::vector<MetricsType> METRICS_TYPES = { CPU, MEMORY, DISK, GPU, NPU, NUMA, LABELS };
 }  // namespace metrics_type
 
 using CollectorType = std::string;

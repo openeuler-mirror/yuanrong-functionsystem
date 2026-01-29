@@ -197,6 +197,12 @@ enum GroupPolicy {
     StrictPack = 4;
 }
 
+enum BindStrategy {
+    BIND_None = 0;
+    BIND_Spread = 1;
+    BIND_Pack = 2;
+}
+
 message ResourceGroupSpec {
     string name         = 1;
     // indicated which rg is the resource group was created from, default is primary

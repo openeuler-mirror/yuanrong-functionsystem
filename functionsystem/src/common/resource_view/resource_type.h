@@ -34,6 +34,7 @@ const std::string DEFAULT_NPU_PRODUCT = "310";
 const std::string DEFAULT_GPU_PRODUCT = "cuda";
 const std::string GPU_RESOURCE_NAME = "GPU";
 const std::string NPU_RESOURCE_NAME = "NPU";
+const std::string NUMA_RESOURCE_NAME = "NUMA";
 const std::string INIT_LABELS_RESOURCE_NAME = "InitLabels";
 
 const uint32_t MULTI_STREAM_DEFAULT_NUM = 100;

@@ -363,6 +363,49 @@ inline resource_view::Resources GetDiskResources(
     return rs;
 }
 
+// NUMA: vectorValue = CPU millicores per NUMA node, nodeid = ResourceUnit id for vector lookup
+inline resource_view::Resource GetNUMAResource(
+    const std::vector<double>& vectorValue = { 1000.0, 1000.0 },
+    const std::string& nodeid = litebus::uuid_generator::UUID::GetRandomUUID().ToString())
+{
+    resource_view::Resource r;
+    r.set_name(resource_view::NUMA_RESOURCE_NAME);
+    r.set_type(resource_view::ValueType::Value_Type_VECTORS);
+    auto categories = r.mutable_vectors()->mutable_values();
+    auto& vectors1 = (*categories)["CPU"];
+    auto& vector1 = (*vectors1.mutable_vectors())[nodeid];
+    for (double v : vectorValue) {
+        vector1.mutable_values()->Add(v);
+    }
+    return r;
+}
+
+inline resource_view::Resources GetNUMAResources(
+    const std::vector<double>& vectorValue = { 1000.0, 1000.0 },
+    const std::string& nodeid = litebus::uuid_generator::UUID::GetRandomUUID().ToString())
+{
+    resource_view::Resources rs;
+    (*rs.mutable_resources())[resource_view::NUMA_RESOURCE_NAME] = GetNUMAResource(vectorValue, nodeid);
+    return rs;
+}
+
+inline resource_view::ResourceUnit Get1DResourceUnitWithNUMA(
+    const std::vector<double>& numaCpuMillicores = { 1000.0, 1000.0 },
+    double totalCpu = 2000.0,
+    double totalMem = 4096.0,
+    const std::string& nodeid = "test_numa_node")
+{
+    resource_view::ResourceUnit unit;
+    unit.set_id(nodeid);
+    resource_view::Resources base = GetCpuMemResources();
+    base.mutable_resources()->at(RESOURCE_CPU_NAME).mutable_scalar()->set_value(totalCpu);
+    base.mutable_resources()->at(RESOURCE_MEM_NAME).mutable_scalar()->set_value(totalMem);
+    (*base.mutable_resources())[resource_view::NUMA_RESOURCE_NAME] = GetNUMAResource(numaCpuMillicores, nodeid);
+    (*unit.mutable_capacity()) = base;
+    (*unit.mutable_allocatable()) = base;
+    (*unit.mutable_actualuse()) = Get0CpuMemResources();
+    return unit;
+}
 
 inline resource_view::ResourceUnit Get1DResourceUnitWithDisk(
     const std::vector<int> vectorValue = { 100, 100, 100 },

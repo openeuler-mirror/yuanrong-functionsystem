@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdlib>
 #include <nlohmann/json.hpp>
 #include <regex>
 #include <thread>
@@ -33,6 +34,7 @@
 #include "common/resource_view/resource_type.h"
 #include "common/utils/exec_utils.h"
 #include "common/utils/files.h"
+#include "common/utils/numa_binding.h"
 #include "common/utils/generate_message.h"
 #include "common/utils/path.h"
 #include "common/utils/struct_transfer.h"
@@ -164,6 +166,99 @@ std::function<void()> ChdirHook(std::string dir)
             std::cerr << "failed to chdir: " << dir << ", get errno: " << errno << std::endl;
         }
     };
+}
+
+static std::vector<int> ParseNUMANodeIds(const std::string& idsStr)
+{
+    std::vector<int> selectedNodes;
+    size_t pos = 0;
+    while (pos < idsStr.length()) {
+        size_t commaPos = idsStr.find(',', pos);
+        std::string nodeIdStr = (commaPos == std::string::npos)
+                                   ? idsStr.substr(pos)
+                                   : idsStr.substr(pos, commaPos - pos);
+        if (nodeIdStr.empty()) {
+            if (commaPos == std::string::npos) {
+                break;
+            }
+            pos = commaPos + 1;
+            continue;
+        }
+        int nodeId = -1;
+        try {
+            nodeId = std::stoi(nodeIdStr);
+        } catch (const std::exception& e) {
+            YRLOG_WARN("Failed to parse NUMA node ID '{}': {}", nodeIdStr, e.what());
+            if (commaPos == std::string::npos) {
+                break;
+            }
+            pos = commaPos + 1;
+            continue;
+        }
+        if (nodeId < 0) {
+            if (commaPos == std::string::npos) {
+                break;
+            }
+            pos = commaPos + 1;
+            continue;
+        }
+        selectedNodes.push_back(nodeId);
+        if (commaPos == std::string::npos) {
+            break;
+        }
+        pos = commaPos + 1;
+    }
+    return selectedNodes;
+}
+
+static void AddSingleNodeBindingHook(std::vector<std::function<void()>>& initHook, int nodeId)
+{
+    (void)initHook.emplace_back([nodeId]() {
+        auto status = functionsystem::utils::NUMABinding::BindToNUMANode(nodeId);
+        if (!status.IsOk()) {
+            YRLOG_WARN("Failed to bind to NUMA node {}: {}", nodeId, status.GetMessage());
+        }
+    });
+}
+
+static void AddMultiNodeBindingHook(std::vector<std::function<void()>>& initHook,
+                                    const std::vector<int>& selectedNodes)
+{
+    std::vector<int> nodesCopy = selectedNodes;
+    (void)initHook.emplace_back([nodesCopy]() {
+        auto status = functionsystem::utils::NUMABinding::BindToNUMANodes(nodesCopy);
+        if (!status.IsOk()) {
+            YRLOG_WARN("Failed to bind to NUMA nodes [{}]: {}",
+                       fmt::format("{}", fmt::join(nodesCopy, ", ")), status.GetMessage());
+        }
+    });
+}
+
+static void AddNUMABindingHook(std::vector<std::function<void()>>& initHook,
+                               const std::shared_ptr<messages::StartInstanceRequest>& request)
+{
+    if (!request->has_scheduleoption()) {
+        return;
+    }
+    const auto& extension = request->scheduleoption().extension();
+    auto numaIDsIter = extension.find("NUMA_NODE_IDS");
+    if (numaIDsIter == extension.end() || numaIDsIter->second.empty()) {
+        return;
+    }
+    auto idsStr = numaIDsIter->second;
+    std::vector<int> selectedNodes = ParseNUMANodeIds(idsStr);
+    if (selectedNodes.empty()) {
+        return;
+    }
+    YRLOG_INFO("{}|{}|Binding runtime to NUMA node(s) [{}]",
+               request->runtimeinstanceinfo().requestid(),
+               request->runtimeinstanceinfo().instanceid(),
+               idsStr);
+    if (selectedNodes.size() == 1) {
+        AddSingleNodeBindingHook(initHook, selectedNodes[0]);
+    } else {
+        AddMultiNodeBindingHook(initHook, selectedNodes);
+    }
 }
 
 std::function<void()> CondaActivate(const std::string &condaPrefix, const std::string &condaDefaultEnv)
@@ -1665,10 +1760,13 @@ std::vector<std::function<void()>> RuntimeExecutor::BuildInitHook(
     }
 
     if (auto iter = deployOptions.find(CHDIR_PATH_CONFIG); iter != deployOptions.end() && !iter->second.empty()) {
-        YRLOG_DEBUG("{}|{} process add chdir({}) hook", request->runtimeinstanceinfo().requestid(),
-                    request->runtimeinstanceinfo().instanceid(), iter->second);
+        YRLOG_DEBUG("{}|{} process add chdir({}) hook",
+                    request->runtimeinstanceinfo().requestid(),
+                    request->runtimeinstanceinfo().instanceid(),
+                    iter->second);
         (void)initHook.emplace_back(ChdirHook(iter->second));
     }
+    AddNUMABindingHook(initHook, request);
     return initHook;
 }
 
@@ -1694,6 +1792,7 @@ void RuntimeExecutor::HookRuntimeCredentialByID(std::vector<std::function<void()
     YRLOG_INFO("HookRuntimeCredential with userID: {}, groupID: {}", userID, groupID);
     (void)initHook.emplace_back(SetRuntimeIdentity(userID, groupID));
 }
+
 
 StatusCode RuntimeExecutor::CheckRuntimeCredential(const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
