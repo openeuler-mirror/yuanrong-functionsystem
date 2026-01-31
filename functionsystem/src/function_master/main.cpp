@@ -41,6 +41,7 @@
 #include "common/utils/param_check.h"
 #include "common/utils/ssl_config.h"
 #include "common/utils/version.h"
+#include "common/trace/trace_manager.h"
 #include "flags/flags.h"
 #include "global_scheduler/global_sched.h"
 #include "global_scheduler/global_sched_driver.h"
@@ -242,7 +243,7 @@ bool CreateClient(const functionmaster::Flags &flags)
         .checkIntervalMs = flags.GetGetHealthMonitorRetryInterval(),
         .k8sInfo = flags.GetClusterID(),
     };
-    
+
     g_kubeClient = KubeClient::CreateKubeClient(
         flags.GetK8sBasePath(),
         KubeClient::ClusterSslConfig(flags.GetK8sClientCertFile(), flags.GetK8sClientKeyFile(),
@@ -494,6 +495,8 @@ void OnCreate(const functionmaster::Flags &flags)
     auto memOpt = MemoryOptimizer();
     memOpt.StartTrimming();
 
+    trace::TraceManager::GetInstance().InitTrace(COMPONENT_NAME, flags.GetNodeID(), flags.GetEnableTrace(),
+                                                 flags.GetTraceConfig());
     // meta-store relay on k8s election
     if (flags.GetElectionMode() == K8S_ELECTION_MODE && !CreateExplorer(flags, nullptr)) {
         g_functionMasterSwitcher->SetStop();

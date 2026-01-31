@@ -44,7 +44,7 @@ include(etcd)
 include(jemalloc)
 include(curl)
 include(obs)
-
+include(opentelemetry)
 
 add_custom_target(main
     DEPENDS

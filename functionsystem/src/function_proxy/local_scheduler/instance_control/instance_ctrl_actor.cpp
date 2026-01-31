@@ -41,6 +41,7 @@
 #include "common/utils/generate_message.h"
 #include "common/utils/random_number.h"
 #include "common/utils/struct_transfer.h"
+#include "common/trace/trace_manager.h"
 #include "instance_ctrl_message.h"
 #include "common/posix_client/control_plane_client/control_interface_posix_client.h"
 #include "local_scheduler/grpc_server/bus_service/bus_service.h"
@@ -1570,6 +1571,9 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::DoDispatchSchedule(
                     scheduleReq->traceid(), scheduleReq->requestid(), scheduleReq->instance().instanceid());
     }
     ASSERT_IF_NULL(scheduler_);
+    // todo(lwy_robb): to use traceID
+    trace::TraceManager::GetInstance().StartSpanWithRecord(
+        { "LocalSchedule", scheduleReq->requestid(), "", scheduleReq->instance().function(), scheduleReq->instance().instanceid() });
     return scheduler_->ScheduleDecision(scheduleReq)
                       .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::ConfirmScheduleDecisionAndDispatch,
                                            scheduleReq, _1, result.preState.Get()));
@@ -1614,6 +1618,8 @@ litebus::Option<TransitionResult> InstanceCtrlActor::OnTryDispatchOnLocal(
     const std::shared_ptr<ScheduleRequest> &scheduleReq, const ScheduleResult &result,
     const TransitionResult &transResult)
 {
+    // todo(lwy_robb): to use traceID
+    trace::TraceManager::GetInstance().StopSpan("LocalSchedule", scheduleReq->requestid());
     if (IsLowReliabilityInstance(scheduleReq->instance()) || transResult.version != 0) {
         scheduleResp->SetValue(GenScheduleResponse(result.code, result.reason, *scheduleReq));
         return litebus::None();
@@ -1710,6 +1716,9 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::RetryForwardSched
     const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const messages::ScheduleResponse &resp,
     uint32_t retryTimes, const std::shared_ptr<InstanceStateMachine> &stateMachine)
 {
+    // todo(lwy_robb): to use traceID
+    trace::TraceManager::GetInstance().StartSpanWithRecord(
+        { "ForwardSchedule", scheduleReq->requestid(), "", scheduleReq->instance().function(), scheduleReq->instance().instanceid() });
     if (auto cancel = stateMachine->GetCancelFuture(); cancel.IsOK()) {
         YRLOG_WARN("{}|{}|instance canceled before forward schedule, reason({})", scheduleReq->requestid(),
                    scheduleReq->instance().instanceid(), cancel.Get());
@@ -1761,6 +1770,8 @@ void InstanceCtrlActor::SetGracefulShutdownTime(const std::shared_ptr<messages::
 litebus::Future<ScheduleResponse> InstanceCtrlActor::HandleForwardResponseAndNotifyCreator(
     const std::shared_ptr<ScheduleRequest> &scheduleReq, const ScheduleResponse &resp)
 {
+    // todo(lwy_robb): to use traceID
+    trace::TraceManager::GetInstance().StopSpan("ForwardSchedule", scheduleReq->requestid());
     ASSERT_IF_NULL(instanceControlView_);
     // If the forwarded scheduling request fails, the notify interface is invoked to notify the instance
     // creator of the scheduling failure, and this local scheduler, as the owner scheduling starting point
@@ -1942,6 +1953,9 @@ litebus::Future<Status> InstanceCtrlActor::DeployInstance(const std::shared_ptr<
                                                           bool isRecovering)
 {
     auto requestID = request->requestid();
+    // todo(lwy_robb): to use traceID
+    trace::TraceManager::GetInstance().StartSpanWithRecord(
+        { "DeployInstance", requestID, "", request->instance().function(), request->instance().instanceid() });
     if (result.IsSome()) {
         YRLOG_DEBUG("{}|{}|failed to deploy instance({}) because failed to update instance info", request->traceid(),
                     requestID, request->instance().instanceid());
@@ -2072,6 +2086,9 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     }
     litebus::Promise<Status> instanceStatusPromise;
     instanceStatusPromises_[request->instance().instanceid()] = instanceStatusPromise;
+    // todo(lwy_robb): to use traceID
+    trace::TraceManager::GetInstance().StartSpanWithRecord({ "WaitConnection", request->requestid(), "",
+                                                        request->instance().function(), request->instance().instanceid()});
     return CreateInstanceClient(request->instance().instanceid(), response.runtimeid(), response.address())
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::CheckReadiness, _1, request, retriedTimes, isRecovering))
         .Then([aid(GetAID()), request, isRecovering](const Status &status) -> litebus::Future<Status> {
@@ -2167,6 +2184,8 @@ litebus::Future<Status> InstanceCtrlActor::CheckReadiness(
     const std::shared_ptr<ControlInterfacePosixClient> &instanceClient, const std::shared_ptr<ScheduleRequest> &request,
     uint32_t retriedTimes, bool isRecovering)
 {
+    // todo(lwy_robb): to use traceID
+    trace::TraceManager::GetInstance().StopSpan("WaitConnection", request->requestid());
     auto stateMachine = instanceControlView_->GetInstance(request->instance().instanceid());
     if (stateMachine == nullptr) {
         YRLOG_ERROR("{}|{}|instance({}) stateMachine is nullptr", request->traceid(), request->requestid(),
@@ -2590,6 +2609,8 @@ litebus::Future<CallResultAck> InstanceCtrlActor::SendNotifyResult(
     }
     auto promise = std::make_shared<litebus::Promise<CallResultAck>>();
     YRLOG_INFO("{}|ready to notify create result to instance({})", requestID, instanceID);
+    // todo(lwy_robb): to use traceID
+    trace::TraceManager::GetInstance().StopSpan(requestID, "Create", {{"instance.id", instanceID}});
     (void)instanceClient->NotifyResult(std::move(notifyRequest))
         .OnComplete([promise, instanceID, requestID](const litebus::Future<runtime_service::NotifyResponse> &future) {
             CallResultAck ack;
@@ -2713,6 +2734,8 @@ void InstanceCtrlActor::ForwardCallResultResponse(const litebus::AID &from, std:
 litebus::Future<Status> InstanceCtrlActor::ScheduleConfirmed(const Status &status,
                                                              const std::shared_ptr<ScheduleRequest> &request)
 {
+    // todo(lwy_robb): to use traceID
+    trace::TraceManager::GetInstance().StopSpan(request->requestid(), "DeployInstance");
     auto rsp = std::make_shared<ScheduleResponse>();
     rsp->set_code(static_cast<int32_t>(status.StatusCode()));
     rsp->set_requestid(request->requestid());
@@ -2899,6 +2922,8 @@ void InstanceCtrlActor::CollectInstanceResources(const InstanceInfo &instance)
 void InstanceCtrlActor::ScheduleEnd(const litebus::Future<Status> &future,
                                     const std::shared_ptr<ScheduleRequest> &request)
 {
+    // todo(lwy_robb): to use traceID
+    trace::TraceManager::GetInstance().StopSpan(request->requestid(), "DeployInstance");
     Status status;
     if (future.IsError()) {
         status = Status(static_cast<StatusCode>(future.GetErrorCode()), "failed to create instance");

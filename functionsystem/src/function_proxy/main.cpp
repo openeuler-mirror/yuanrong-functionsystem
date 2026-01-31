@@ -49,6 +49,7 @@
 #include "common/utils/ssl_config.h"
 #include "common/utils/s3_config.h"
 #include "common/utils/version.h"
+#include "common/trace/trace_manager.h"
 #include "distribute_cache_client/ds_cache_client_impl.h"
 #include "function_agent_manager/function_agent_mgr_actor.h"
 #include "function_proxy/busproxy/invocation_handler/invocation_handler.h"
@@ -152,22 +153,22 @@ void OnCreateFunctionAgent(const function_agent::FunctionAgentFlags &functionAge
                           const runtime_manager::Flags &runtimeManagerFlags,
                           bool enableMergeProcess)
 {
-    YRLOG_INFO("function_agent is starting{}...", 
+    YRLOG_INFO("function_agent is starting{}...",
                enableMergeProcess ? " with runtime_manager in merged process" : "");
-    
-    function_agent::FunctionAgentStartParam startParam = 
+
+    function_agent::FunctionAgentStartParam startParam =
         BuildFunctionAgentStartParam(functionAgentFlags, runtimeManagerFlags, enableMergeProcess);
-    
+
     g_functionAgentDriver = std::make_shared<function_agent::FunctionAgentDriver>(
         functionAgentFlags.GetNodeID(), startParam);
-    
+
     if (auto status = g_functionAgentDriver->Start(); status.IsError()) {
         YRLOG_ERROR("failed to start function_agent, errMsg: {}", status.ToString());
         g_functionProxySwitcher->SetStop();
         return;
     }
-    
-    YRLOG_INFO("function_agent{} started successfully", 
+
+    YRLOG_INFO("function_agent{} started successfully",
                enableMergeProcess ? " and runtime_manager" : "");
 }
 
@@ -541,6 +542,8 @@ void OnCreate(const Flags &flags, const function_agent::FunctionAgentFlags &func
         return;
     }
 
+    trace::TraceManager::GetInstance().InitTrace(COMPONENT_NAME, flags.GetNodeID(), flags.GetEnableTrace(),
+                                                 flags.GetTraceConfig());
     if (flags.GetEnableMergeProcess()) {
         OnCreateFunctionAgent(functionAgentFlags, runtimeManagerFlags, true);
     }
@@ -637,7 +640,7 @@ int main(int argc, char **argv)
             std::cerr << COMPONENT_NAME << " parse function_agent flags error: " << parse.Get() << std::endl;
             return EXIT_COMMAND_MISUSE;
         }
-        
+
         if (auto parse = runtimeManagerFlags.ParseFlags(argc, argv, true); parse.IsSome()) {
             std::cerr << COMPONENT_NAME << " parse runtime_manager flags error: " << parse.Get() << std::endl;
             return EXIT_COMMAND_MISUSE;

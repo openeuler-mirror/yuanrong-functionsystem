@@ -42,7 +42,7 @@ target_include_directories(${EXECUTABLE_NAME} PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/resource_group_manager)
 
 add_dependencies(${EXECUTABLE_NAME} rpc meta_store_client leader utils heartbeat
-        meta_store_lib hex)
+        meta_store_lib hex trace_adapter)
 get_property(PLUGIN_LIB GLOBAL PROPERTY "PLUGIN_LIB")
 target_link_libraries(${EXECUTABLE_NAME} PRIVATE
         meta_store_client leader utils heartbeat
@@ -57,6 +57,7 @@ target_link_libraries(${EXECUTABLE_NAME} PRIVATE
         ${SCALER_LIB}
         ${SYSTEM_FUNCTION_LOADER_LIB}
         ${RESOURCE_GROUP_MANAGER_LIB}
-        ${PLUGIN_LIB})
+        ${PLUGIN_LIB}
+        trace_adapter)
 
 INSTALL_TARGET(${EXECUTABLE_NAME})
