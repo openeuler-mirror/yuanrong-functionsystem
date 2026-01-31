@@ -40,8 +40,9 @@ target_link_libraries(function_proxy PRIVATE
         resource_lock
         ${PLUGIN_LIB}
         function_agent_lib
-        runtime_manager_lib)
+        runtime_manager_lib
+        trace_adapter)
 
-add_dependencies(function_proxy function_agent_lib runtime_manager_lib)
+add_dependencies(function_proxy function_agent_lib runtime_manager_lib trace_adapter)
 
 INSTALL_TARGET(function_proxy)
