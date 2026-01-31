@@ -67,6 +67,7 @@ type FuncMetaData struct {
 	StatefulFlag            bool              `json:"statefulFlag"`
 	HookHandler             map[string]string `json:"hookHandler" valid:",optional"`
 	IdleTime                int64             `json:"idleTime" valid:",optional"`
+	IsFuncPublic            bool              `json:"isFuncPublic" valid:"optional"`
 }
 
 // Layer define layer info

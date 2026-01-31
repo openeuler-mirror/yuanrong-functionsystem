@@ -95,6 +95,7 @@ type FuncMetaData struct {
 	IdleTime            int64             `json:"idleTime" valid:"optional"`
 	WarmupType          string            `json:"warmup" valid:",optional"`
 	RootfsSpecMeta      RootfsSpecMeta    `json:"rootfs" valid:",optional"`
+	IsFuncPublic        bool              `json:"isFuncPublic" valid:"optional"`
 }
 
 // StateConfig ConsistentWithInstance- The lifecycle is consistent with that of the instance.
