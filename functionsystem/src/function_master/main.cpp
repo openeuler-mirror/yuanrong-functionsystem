@@ -495,7 +495,7 @@ void OnCreate(const functionmaster::Flags &flags)
     auto memOpt = MemoryOptimizer();
     memOpt.StartTrimming();
 
-    trace::TraceManager::GetInstance().InitTrace(COMPONENT_NAME, flags.GetNodeID(), flags.GetEnableTrace(),
+    trace::TraceManager::GetInstance().InitTrace("yuanrong-kernel", flags.GetNodeID(), flags.GetEnableTrace(),
                                                  flags.GetTraceConfig());
     // meta-store relay on k8s election
     if (flags.GetElectionMode() == K8S_ELECTION_MODE && !CreateExplorer(flags, nullptr)) {
