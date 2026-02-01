@@ -542,7 +542,7 @@ void OnCreate(const Flags &flags, const function_agent::FunctionAgentFlags &func
         return;
     }
 
-    trace::TraceManager::GetInstance().InitTrace(COMPONENT_NAME, flags.GetNodeID(), flags.GetEnableTrace(),
+    trace::TraceManager::GetInstance().InitTrace("yuanrong-kernel", flags.GetNodeID(), flags.GetEnableTrace(),
                                                  flags.GetTraceConfig());
     if (flags.GetEnableMergeProcess()) {
         OnCreateFunctionAgent(functionAgentFlags, runtimeManagerFlags, true);
