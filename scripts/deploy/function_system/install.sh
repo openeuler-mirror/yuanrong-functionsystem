@@ -143,6 +143,7 @@ function install_function_proxy() {
     --dposix_uds_path="${DPOSIX_UDS_PATH}" \
     --enable_driver="${enable_driver}" \
     --enable_trace="${ENABLE_TRACE}" \
+    --trace_config="${TRACE_CONFIG}" \
     --enable_metrics="${ENABLE_METRICS}" \
     --metrics_config="${METRICS_CONFIG}" \
     --metrics_config_file="${METRICS_CONFIG_FILE}" \
@@ -575,6 +576,7 @@ function install_function_master() {
       --etcd_table_prefix="${ETCD_TABLE_PREFIX}" --etcd_target_name_override="${ETCD_TARGET_NAME_OVERRIDE}" \
       --ssl_root_file="${SSL_ROOT_FILE}" --ssl_cert_file="${SSL_CERT_FILE}" --ssl_key_file="${SSL_KEY_FILE}" \
       --function_meta_path="${FUNCTION_META_PATH}" \
+      --enable_trace=${ENABLE_TRACE} --trace_config="${TRACE_CONFIG}" \
       --meta_store_max_flush_concurrency="${META_STORE_MAX_FLUSH_CONCURRENCY}" --meta_store_max_flush_batch_size="${META_STORE_MAX_FLUSH_BATCH_SIZE}" \
       >>"${FS_LOG_PATH}/${NODE_ID}-function_master${STD_LOG_SUFFIX}" 2>&1 &
     FUNCTION_MASTER_PID=$!
