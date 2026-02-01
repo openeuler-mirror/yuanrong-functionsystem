@@ -2510,6 +2510,8 @@ litebus::Future<CallResultAck> InstanceCtrlActor::SendCallResult(
             return CallResultAck();
         }
         ASSERT_IF_NULL(clientManager_);
+        // todo(lwy_robb): to use traceID
+        trace::TraceManager::GetInstance().StopSpan("Create", requestID, {{"instance.id", srcInstance}});
         auto clientFuture = clientManager_->GetControlInterfacePosixClient(dstInstance);
         return clientFuture.Then(
             litebus::Defer(GetAID(), &InstanceCtrlActor::SendNotifyResult, _1, dstInstance, requestID, callResult));
@@ -2609,8 +2611,6 @@ litebus::Future<CallResultAck> InstanceCtrlActor::SendNotifyResult(
     }
     auto promise = std::make_shared<litebus::Promise<CallResultAck>>();
     YRLOG_INFO("{}|ready to notify create result to instance({})", requestID, instanceID);
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan(requestID, "Create", {{"instance.id", instanceID}});
     (void)instanceClient->NotifyResult(std::move(notifyRequest))
         .OnComplete([promise, instanceID, requestID](const litebus::Future<runtime_service::NotifyResponse> &future) {
             CallResultAck ack;
@@ -2735,7 +2735,7 @@ litebus::Future<Status> InstanceCtrlActor::ScheduleConfirmed(const Status &statu
                                                              const std::shared_ptr<ScheduleRequest> &request)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan(request->requestid(), "DeployInstance");
+    trace::TraceManager::GetInstance().StopSpan("DeployInstance", request->requestid());
     auto rsp = std::make_shared<ScheduleResponse>();
     rsp->set_code(static_cast<int32_t>(status.StatusCode()));
     rsp->set_requestid(request->requestid());
@@ -2923,7 +2923,7 @@ void InstanceCtrlActor::ScheduleEnd(const litebus::Future<Status> &future,
                                     const std::shared_ptr<ScheduleRequest> &request)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan(request->requestid(), "DeployInstance");
+    trace::TraceManager::GetInstance().StopSpan("DeployInstance", request->requestid());
     Status status;
     if (future.IsError()) {
         status = Status(static_cast<StatusCode>(future.GetErrorCode()), "failed to create instance");

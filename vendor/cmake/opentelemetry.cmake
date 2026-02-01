@@ -23,6 +23,7 @@ set(${src_name}_CMAKE_ARGS
         -DWITH_EXAMPLES=OFF # do not build examples code in opentelemetry
         # No dependency is transferred. need to declare the address of the compilation product on which the GRPC depends, such as absl and c-ares.
         -DWITH_ABSEIL:BOOL=ON # Indicates that the local environment already has compiled artifacts of absl when protobuf version is 3.22 or upper
+        -DWITH_STL:BOOL=ON # Use C++ STL types (std::variant, std::string_view) for ABI compatibility
         -DgRPC_DIR=${grpc_ROOT}/lib/cmake/grpc
         -Dabsl_DIR:PATH=${absl_ROOT}/lib/cmake/absl
         -Dc-ares_DIR:PATH=${c-ares_ROOT}/lib/cmake/c-ares

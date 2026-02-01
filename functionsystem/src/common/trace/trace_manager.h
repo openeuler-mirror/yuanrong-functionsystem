@@ -18,9 +18,13 @@
 #ifndef COMMON_TRACE_TRACE_MANAGER_H
 #define COMMON_TRACE_TRACE_MANAGER_H
 
-#define HAVE_ABSEIL
+// ABI 兼容性说明：
+// OpenTelemetry SDK 已配置 -DWITH_STL=ON，统一使用 std::variant 和 std::string_view
+// CMakeLists.txt 中定义了 OPENTELEMETRY_STL_VERSION=2017 以匹配 SDK
+
 #include <string>
 #include <vector>
+#include <variant>
 #include <mutex>
 #include "common/logs/logging.h"
 #include "common/proto/pb/posix_pb.h"
@@ -37,11 +41,13 @@
 
 namespace functionsystem {
 namespace trace {
-
+using AttributesVector = std::vector<std::pair<const std::string, const opentelemetry::common::AttributeValue>>;
 class TraceManager : public Singleton<TraceManager> {
 public:
+    // Type aliases for cleaner interface
     using OtelSpan = opentelemetry::nostd::shared_ptr<opentelemetry::trace::Span>;
 
+    // Span creation parameters
     struct SpanParam {
         std::string spanName;
         std::string traceID;
@@ -50,65 +56,67 @@ public:
         std::string instanceID;
     };
 
-    // Initialize and shutdown
+    // ========================================================================
+    // Initialization & Shutdown
+    // ========================================================================
     void InitTrace(const std::string &serviceName, const std::string &hostID, const bool &enableTrace,
                    const std::string &traceConfig);
     void ShutDown();
 
-    void SetAttr(const std::string &attr, const std::string &value);
+    // Set global attribute that will be added to all spans
+    void SetAttr(const std::string &key, const std::string &value);
 
-    // Basic span creation
-    OtelSpan StartSpan(const std::string &name, const opentelemetry::common::KeyValueIterable &attributes,
+    // ========================================================================
+    // Span Creation APIs
+    // ========================================================================
+
+    // Core span creation with full OpenTelemetry parameters
+    OtelSpan StartSpan(const std::string &name,
+                      const opentelemetry::common::KeyValueIterable &attributes,
                       const opentelemetry::trace::SpanContextKeyValueIterable &links,
-                      const opentelemetry::trace::StartSpanOptions &startSpanOptions);
+                      const opentelemetry::trace::StartSpanOptions &options);
 
+    // Simple span creation with only options
     OtelSpan StartSpan(const std::string &name,
-                      const opentelemetry::trace::StartSpanOptions &startSpanOptions);
+                      const opentelemetry::trace::StartSpanOptions &options);
 
+    // Span creation with parent context and typed attributes
     OtelSpan StartSpan(const std::string &name,
-                      std::vector<std::pair<const std::string, const opentelemetry::common::AttributeValue>> attrs,
-                      const opentelemetry::trace::StartSpanOptions &startSpanOptions);
+                      const std::string &traceID,
+                      const std::string &spanID,
+                      AttributesVector &attrs);
 
-    OtelSpan StartSpan(const std::string &name, const std::string &traceID, const std::string &spanID,
-                      std::vector<std::pair<const std::string, const opentelemetry::common::AttributeValue>> attrs);
-
-    // Span creation with params
-    OtelSpan StartSpan(SpanParam &&spanParam);
+    // Start span and record for later management (e.g., StopSpan)
     OtelSpan StartSpanWithRecord(SpanParam &&spanParam);
 
-    // Span management
-    void StopSpan(const std::string &traceID, const std::string &spanName,
-                  std::vector<std::pair<const std::string, const opentelemetry::common::AttributeValue>> attrs = {},
+    // ========================================================================
+    // Span Lifecycle Management
+    // ========================================================================
+    void StopSpan(const std::string &spanName,
+                  const std::string &traceID,
+                  const AttributesVector &attrs = {},
                   const std::vector<std::string> &events = {});
 
     std::string GetSpanIDFromStore(const std::string &traceID, const std::string &spanName);
     void Clear();
 
-    // Request-specific span creation
-    opentelemetry::trace::SpanId StartInvokeSpan(const std::string &spanName, const InvokeRequest &request);
-    opentelemetry::trace::SpanId StartCallSpan(const std::string &spanName, const std::string &instanceID,
-                                               const runtime::CallRequest &request);
-    OtelSpan StartInvokeLocalSpan(const std::string &spanName, const InvokeRequest &request);
-    void StartLocalSpanAndSet(const std::string &spanName, InvokeRequest *request);
-
-    // Utility methods
+    // ========================================================================
+    // Utility Methods
+    // ========================================================================
     static std::string SpanIDToStr(const opentelemetry::trace::SpanId &spanId);
     static std::string TraceIDToStr(const opentelemetry::trace::TraceId &traceID);
     opentelemetry::nostd::shared_ptr<opentelemetry::trace::Tracer> GetTracer(
         const std::string &name = "yuanrong", const std::string &version = "");
 
 private:
-    template <typename T>
-    opentelemetry::trace::SpanId StartReqSpan(const std::string &spanName, const std::string &instanceID,
-                                              const T &request);
-
+    OtelSpan CreateNoopSpan();
     std::unique_ptr<opentelemetry::sdk::trace::SpanExporter> InitOtlpGrpcExporter(const OtelGrpcExporterConfig &conf);
     std::unique_ptr<opentelemetry::sdk::trace::SpanExporter> InitLogFileExporter();
     opentelemetry::trace::StartSpanOptions BuildOptWithParent(const std::string &traceID, const std::string &spanID);
 
     bool enableTrace_{ false };
-    std::map<std::string, std::string> attribute_;
-    std::map<std::string, OtelSpan> spanMap_;
+    std::map<std::string, std::string> attribute_;      // Global attributes
+    std::map<std::string, OtelSpan> spanMap_;           // Active spans for lifecycle management
     std::mutex spanMapMutex_;
     std::string hostID_;
 };

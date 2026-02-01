@@ -28,10 +28,10 @@ add_subdirectory(instance_control)
 add_subdirectory(flags)
 add_subdirectory(domain_group_control)
 add_dependencies(domain_scheduler_lib
-        meta_store_client explorer scheduler common_flags utils heartbeat kube_client aksk)
+        meta_store_client explorer scheduler common_flags utils heartbeat kube_client aksk trace_adapter)
 
 target_link_libraries(domain_scheduler_lib PUBLIC
-        meta_store_client explorer scheduler common_flags utils heartbeat kube_client aksk)
+        meta_store_client explorer scheduler common_flags utils heartbeat kube_client aksk trace_adapter)
 
 target_include_directories(domain_scheduler_lib PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 
@@ -45,6 +45,6 @@ target_link_libraries(domain_scheduler PRIVATE domain_scheduler_lib
         ${gpr_LIB}
         ${litebus_ALL_LIB}
         ${crypto_LIB} rpc
-        ${PLUGIN_LIB})
+        ${PLUGIN_LIB} trace_adapter)
 
 INSTALL_TARGET(domain_scheduler)

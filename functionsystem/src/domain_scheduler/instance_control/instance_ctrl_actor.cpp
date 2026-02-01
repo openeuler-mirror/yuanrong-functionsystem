@@ -21,6 +21,7 @@
 #include "common/constants/actor_name.h"
 #include "common/create_agent_decision/create_agent_decision.h"
 #include "common/logs/logging.h"
+#include "common/trace/trace_manager.h"
 #include "nlohmann/json.hpp"
 
 namespace functionsystem::domain_scheduler {
@@ -53,6 +54,11 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
         auto createOpts = req->mutable_instance()->mutable_createoptions();
         (*createOpts)[ENABLE_HORIZONTAL_SCALE_KEY] = "true";
     }
+
+    // todo(lwy_robb): to use traceID
+    trace::TraceManager::GetInstance().StartSpanWithRecord(
+        { "DomainSchedule", req->requestid(), "", req->instance().function(), req->instance().instanceid() });
+
     YRLOG_INFO("instance(req={}, priority={}, timeout={}, enableHorizontalScale={}) schedule decision",
                requestID, req->instance().scheduleoption().priority(), timeout, enableHorizontalScale_);
     auto cancelPromise = GetCancelTag(requestID);
@@ -90,6 +96,9 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     const litebus::Future<ScheduleResult> &result, const std::shared_ptr<messages::ScheduleRequest> &req,
     uint32_t dispatchTimes)
 {
+        // todo(lwy_robb): to use traceID
+    trace::TraceManager::GetInstance().StopSpan("DomainSchedule", req->requestid());
+
     schedulerQueueMap_.erase(req->requestid());
     auto schedResult = result.Get();
     if (schedResult.code == static_cast<int32_t>(StatusCode::INVALID_RESOURCE_PARAMETER)) {
