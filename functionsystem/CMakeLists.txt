@@ -182,6 +182,10 @@ if (CMAKE_BUILD_TYPE STREQUAL Debug)
     add_definitions(-D__DEBUG__)
 endif ()
 
+# OpenTelemetry ABI 兼容性：SDK 已配置 -DWITH_STL=ON
+# 统一使用 std::variant 和 std::string_view
+add_definitions(-DOPENTELEMETRY_STL_VERSION=2017)
+
 set(BUILD_VERSION ${BUILD_VERSION})
 
 set(GIT_HASH "Unknown")

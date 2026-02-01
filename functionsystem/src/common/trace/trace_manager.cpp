@@ -16,6 +16,8 @@
 
 #include "trace_manager.h"
 #include <nlohmann/json.hpp>
+#include <opentelemetry/exporters/ostream/common_utils.h>
+#include <opentelemetry/sdk/common/attribute_utils.h>
 #include "common/proto/pb/posix_pb.h"
 #include "exporter/log_file_exporter_factory.h"
 #include "opentelemetry/sdk/trace/processor.h"
@@ -85,7 +87,7 @@ static void SpanIdStrToArr(const std::string &spanID, uint8_t (&arr)[SPAN_ID_BUF
 void TraceManager::InitTrace(const std::string &serviceName, const std::string &hostID, const bool &enableTrace, const std::string &traceConfig)
 {
     enableTrace_ = enableTrace;
-    YRLOG_DEBUG("init trace, enableTrace is {}, traceConfig is {}", enableTrace, traceConfig);
+    YRLOG_INFO("init trace, enableTrace is {}, traceConfig is {}", enableTrace, traceConfig);
     if (!enableTrace_) {
         return;
     }
@@ -140,7 +142,6 @@ void TraceManager::InitTrace(const std::string &serviceName, const std::string &
         enableTrace_ = false;
         return;
     }
-    SetAttr("host.id", hostID_);
     opentelemetry::sdk::resource::ResourceAttributes attributes = {
         { opentelemetry::sdk::resource::SemanticConventions::kTelemetrySdkLanguage, "" },
         { opentelemetry::sdk::resource::SemanticConventions::kTelemetrySdkName, "" },
@@ -174,85 +175,105 @@ void TraceManager::SetAttr(const std::string &attr, const std::string &value)
     attribute_.insert_or_assign(attr, value);
 }
 
-// Basic span creation
-TraceManager::OtelSpan TraceManager::StartSpan(const std::string &name,
-                                                const opentelemetry::common::KeyValueIterable &attributes,
-                                                const opentelemetry::trace::SpanContextKeyValueIterable &links,
-                                                const opentelemetry::trace::StartSpanOptions &startSpanOptions)
+// ============================================================================
+// Private Helper Methods
+// ============================================================================
+
+TraceManager::OtelSpan TraceManager::CreateNoopSpan()
 {
-    if (enableTrace_) {
-        auto tracer = GetTracer();
-        if (tracer != nullptr) {
-            return tracer->StartSpan(name, attributes, links, startSpanOptions);
-        }
-    }
-    std::shared_ptr<opentelemetry::trace::Tracer> noopTracer =
-        std::make_shared<opentelemetry::trace::NoopTracer>();
+    static auto noopTracer = std::make_shared<opentelemetry::trace::NoopTracer>();
     return opentelemetry::nostd::shared_ptr<opentelemetry::trace::Span>(
         new opentelemetry::trace::NoopSpan(noopTracer));
 }
 
+// ============================================================================
+// Span Creation APIs
+// ============================================================================
+
+// Core span creation with full OpenTelemetry parameters
 TraceManager::OtelSpan TraceManager::StartSpan(const std::string &name,
-                                                const opentelemetry::trace::StartSpanOptions &startSpanOptions)
+                                                const opentelemetry::common::KeyValueIterable &attributes,
+                                                const opentelemetry::trace::SpanContextKeyValueIterable &links,
+                                                const opentelemetry::trace::StartSpanOptions &options)
+{
+    if (!enableTrace_) {
+        return CreateNoopSpan();
+    }
+
+    try {
+        auto tracer = GetTracer();
+        if (tracer != nullptr) {
+            return tracer->StartSpan(name, attributes, links, options);
+        }
+    } catch (const std::exception &e) {
+        YRLOG_ERROR("StartSpan exception: {}", e.what());
+    }
+
+    return CreateNoopSpan();
+}
+
+// Simple span creation with only options
+TraceManager::OtelSpan TraceManager::StartSpan(const std::string &name,
+                                                const opentelemetry::trace::StartSpanOptions &options)
 {
     return StartSpan(name, opentelemetry::common::NoopKeyValueIterable(),
-                    opentelemetry::trace::NullSpanContext(), startSpanOptions);
+                    opentelemetry::trace::NullSpanContext(), options);
 }
 
-TraceManager::OtelSpan TraceManager::StartSpan(
-    const std::string &name,
-    std::vector<std::pair<const std::string, const opentelemetry::common::AttributeValue>> attrs,
-    const opentelemetry::trace::StartSpanOptions &startSpanOptions)
-{
-    // preset system attr
-    for (const auto &it : attribute_) {
-        attrs.emplace_back(it);
-    }
-    return StartSpan(name, opentelemetry::common::KeyValueIterableView(attrs),
-                    opentelemetry::trace::NullSpanContext(), startSpanOptions);
-}
-
+// Span creation with parent context and typed attributes
 TraceManager::OtelSpan TraceManager::StartSpan(
     const std::string &name,
     const std::string &traceID,
     const std::string &spanID,
-    std::vector<std::pair<const std::string, const opentelemetry::common::AttributeValue>> attrs)
+    AttributesVector &attrs)
 {
     YRLOG_DEBUG("start span with traceID and spanID, name: {}, traceID: {}, spanID: {}", name, traceID, spanID);
+
     auto options = BuildOptWithParent(traceID, spanID);
-    return StartSpan(name, attrs, options);
+    for (auto it : attribute_) {
+        attrs.emplace_back(it);
+    }
+    return StartSpan(name, opentelemetry::common::KeyValueIterableView(attrs),
+                    opentelemetry::trace::NullSpanContext(), options);
 }
 
-// Span creation with params
-TraceManager::OtelSpan TraceManager::StartSpan(TraceManager::SpanParam &&spanParam)
-{
-    YRLOG_DEBUG("(trace)start span, spanName: {}, traceID: {}, spanID: {}, function: {}, instanceID: {}",
-                spanParam.spanName, spanParam.traceID, spanParam.spanID, spanParam.function, spanParam.instanceID);
+// ============================================================================
+// Span with Record Management (lifecycle tracking)
+// ============================================================================
 
-    std::vector<std::pair<const std::string, const opentelemetry::common::AttributeValue>> attrs = {
-        {"function.name", spanParam.function},
-        {"host.id", hostID_},
-        {"instance.id", spanParam.instanceID}
-    };
-
-    return StartSpan(spanParam.spanName, spanParam.traceID, spanParam.spanID, std::move(attrs));
-}
-
+// Start span and record it for later retrieval (e.g., for StopSpan)
 TraceManager::OtelSpan TraceManager::StartSpanWithRecord(TraceManager::SpanParam &&spanParam)
 {
     std::string spanKey = spanParam.traceID + "_" + spanParam.spanName;
-    YRLOG_DEBUG("start span: {}", spanKey);
-    auto span = StartSpan(std::move(spanParam));
+    YRLOG_DEBUG("(trace)start span, spanName: {}, traceID: {}, spanID: {}, function: {}, instanceID: {}",
+                spanParam.spanName, spanParam.traceID, spanParam.spanID, spanParam.function, spanParam.instanceID);
+
+    AttributesVector attrs;
+    if (!spanParam.function.empty()) {
+        attrs.emplace_back("yr.function", spanParam.function);
+    }
+    if (!spanParam.instanceID.empty()) {
+        attrs.emplace_back("yr.instance_id", spanParam.instanceID);
+    }
+    if (!hostID_.empty()) {
+        attrs.emplace_back("host.id", hostID_);
+    }
+
+    auto span = StartSpan(spanParam.spanName, spanParam.traceID, spanParam.spanID, attrs);
+
     if (span != nullptr) {
         std::lock_guard<std::mutex> lock(spanMapMutex_);
-        spanMap_.insert({ spanKey, span });
+        spanMap_.emplace(spanKey, span);
     }
+
     return span;
 }
 
-// Span management
-void TraceManager::StopSpan(const std::string &traceID, const std::string &spanName,
-                            std::vector<std::pair<const std::string, const opentelemetry::common::AttributeValue>> attrs,
+// ============================================================================
+// Span Lifecycle Management
+// ============================================================================
+void TraceManager::StopSpan(const std::string &spanName, const std::string &traceID,
+                            const AttributesVector &attrs,
                             const std::vector<std::string> &events)
 {
     std::string spanKey = traceID + "_" + spanName;
@@ -261,20 +282,21 @@ void TraceManager::StopSpan(const std::string &traceID, const std::string &spanN
     OtelSpan span;
     {
         std::lock_guard<std::mutex> lock(spanMapMutex_);
-        if (spanMap_.find(spanKey) == spanMap_.end()) {
+        auto it = spanMap_.find(spanKey);
+        if (it == spanMap_.end()) {
             YRLOG_WARN("no span: {} found with traceID: {}", spanName, traceID);
             return;
         }
-        span = spanMap_.at(spanKey);
+        span = it->second;
     }
 
     for (const auto &event : events) {
         YRLOG_DEBUG("stopspan add event: {}", event);
         span->AddEvent(event);
     }
-    for (const auto &attr : attrs) {
-        YRLOG_DEBUG("stopspan add attr: {}", attr.first);
-        span->SetAttribute(attr.first, attr.second);
+    for (const auto &[key, value] : attrs) {
+        YRLOG_DEBUG("stopspan add attr: {}", key);
+        span->SetAttribute(key, value);
     }
     opentelemetry::trace::EndSpanOptions options;
     options.end_steady_time = opentelemetry::common::SteadyTimestamp(std::chrono::steady_clock::now());
@@ -291,11 +313,12 @@ std::string TraceManager::GetSpanIDFromStore(const std::string &traceID, const s
 {
     std::lock_guard<std::mutex> lock(spanMapMutex_);
     auto spanKey = traceID + "_" + spanName;
-    if (spanMap_.find(spanKey) == spanMap_.end()) {
+    auto it = spanMap_.find(spanKey);
+    if (it == spanMap_.end()) {
         YRLOG_WARN("cannot find span in spanMap_. spanKey: {}", spanKey);
         return "";
     }
-    auto spanID = spanMap_.at(spanKey)->GetContext().span_id();
+    auto spanID = it->second->GetContext().span_id();
     return SpanIDToStr(spanID);
 }
 
@@ -305,58 +328,7 @@ void TraceManager::Clear()
     spanMap_.clear();
 }
 
-// Request-specific span creation
-opentelemetry::trace::SpanId TraceManager::StartInvokeSpan(const std::string &spanName, const InvokeRequest &request)
-{
-    return StartReqSpan(spanName, request.instanceid(), request);
-}
-
-opentelemetry::trace::SpanId TraceManager::StartCallSpan(const std::string &spanName, const std::string &instanceID,
-                                                         const runtime::CallRequest &request)
-{
-    return StartReqSpan(spanName, instanceID, request);
-}
-
-template <typename T>
-opentelemetry::trace::SpanId TraceManager::StartReqSpan(const std::string &spanName, const std::string &instanceID,
-                                                        const T &request)
-{
-    SpanParam spanParam = {
-        .spanName = spanName,
-        .traceID = request.traceid(),
-        .spanID = request.spanid(),
-        .function = request.function(),
-        .instanceID = instanceID,
-    };
-    auto spanSharedPtr = StartSpanWithRecord(std::move(spanParam));
-    if (spanSharedPtr == nullptr) {
-        return opentelemetry::trace::SpanId();
-    }
-    return spanSharedPtr->GetContext().span_id();
-}
-
-TraceManager::OtelSpan TraceManager::StartInvokeLocalSpan(const std::string &spanName,
-                                                          const InvokeRequest &request)
-{
-    SpanParam spanParam = {
-        .spanName = spanName,
-        .traceID = request.traceid(),
-        .spanID = request.spanid(),
-        .function = request.function(),
-        .instanceID = request.instanceid()
-    };
-    return StartSpan(std::move(spanParam));
-}
-
-void TraceManager::StartLocalSpanAndSet(const std::string &spanName, InvokeRequest *request)
-{
-    YRLOG_DEBUG("(trace)root invoke, traceID: {}, spanID: {}", request->traceid(), request->spanid());
-    auto spanSharePtr = StartInvokeLocalSpan(spanName, *request);
-    request->set_traceid(TraceIDToStr(spanSharePtr->GetContext().trace_id()));
-    YRLOG_DEBUG("(trace)new traceID: {}", TraceIDToStr(spanSharePtr->GetContext().trace_id()));
-}
-
-// Utility methods
+// methods
 std::string TraceManager::SpanIDToStr(const opentelemetry::trace::SpanId &spanId)
 {
     std::string spanIDStr;

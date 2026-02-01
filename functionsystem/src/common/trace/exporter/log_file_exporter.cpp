@@ -16,11 +16,29 @@
 
 #include "log_file_exporter.h"
 #include "common/logs/logging.h"
+#include <opentelemetry/exporters/ostream/common_utils.h>
 #include <opentelemetry/sdk/trace/recordable.h>
 #include <opentelemetry/sdk/trace/span_data.h>
 
 namespace functionsystem {
 namespace trace {
+
+constexpr int TRACE_ID_LEN = 32;
+constexpr int SPAN_ID_LEN = 16;
+
+std::string TraceIdToString(const opentelemetry::trace::TraceId& traceId)
+{
+    char traceIdHex[TRACE_ID_LEN];
+    traceId.ToLowerBase16(traceIdHex);
+    return std::string(traceIdHex, TRACE_ID_LEN);
+}
+
+std::string SpanIdToString(const opentelemetry::trace::SpanId& spanId)
+{
+    char spanIdHex[SPAN_ID_LEN];
+    spanId.ToLowerBase16(spanIdHex);
+    return std::string(spanIdHex, SPAN_ID_LEN);
+}
 
 std::unique_ptr<opentelemetry::sdk::trace::Recordable> LogFileExporter::MakeRecordable() noexcept
 {
@@ -35,14 +53,20 @@ opentelemetry::sdk::common::ExportResult LogFileExporter::Export(
         auto span = std::unique_ptr<opentelemetry::sdk::trace::SpanData>(
             static_cast<opentelemetry::sdk::trace::SpanData *>(recordable.release()));
         if (span != nullptr) {
-            char trace_buf[32];
-            char span_buf[16];
-            span->GetTraceId().ToLowerBase16(trace_buf);
-            span->GetSpanId().ToLowerBase16(span_buf);
-            YRLOG_INFO("Trace: span_name={}, trace_id={}, span_id={}",
-                      std::string(span->GetName()),
-                      std::string(trace_buf, 32),
-                      std::string(span_buf, 16));
+            std::ostringstream oss;
+            oss << "span_name: " << span->GetName() << ", "
+                << "trace_id: " << TraceIdToString(span->GetTraceId()) << ", "
+                << "span_id: " << SpanIdToString(span->GetSpanId()) << ", "
+                << "start_time: " << span->GetStartTime().time_since_epoch().count() << " ns" << ", "
+                << "duration: " << std::chrono::duration_cast<std::chrono::milliseconds>(span->GetDuration()).count() << " ms" << ", ";
+            auto attributes = span->GetAttributes();
+            oss << "attributes: {";
+            for (const auto& [key, value] : attributes) {
+                oss << " " << key << " = ";
+                opentelemetry::exporter::ostream_common::print_value(value, oss);
+            }
+            oss << "}";
+            YRLOG_INFO("trace info: {}", oss.str());
         }
     }
     return opentelemetry::sdk::common::ExportResult::kSuccess;
