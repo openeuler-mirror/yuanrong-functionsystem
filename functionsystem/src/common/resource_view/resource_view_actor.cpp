@@ -1348,19 +1348,17 @@ void ResourceViewActor::MergeResourceViewChangesAsync(int64_t startRevision, int
     auto selfAid = GetAID();
     // 在 Worker 中执行合并，完成后通过 Async 回调到 Actor 线程发送结果
     asyncWorker_->AsyncWork([changesCopy, startRevision, endRevision, viewInitTime, localId, replyTo, selfAid]() {
-        ResourceUnitChanges result;
-        result.set_localviewinittime(viewInitTime);
-        MergeResourceViewChanges(*changesCopy, startRevision, endRevision, localId, result);
-        std::string serializedResult = result.SerializeAsString();
-
+        auto result = std::make_shared<ResourceUnitChanges>() ;
+        result->set_localviewinittime(viewInitTime);
+        MergeResourceViewChanges(*changesCopy, startRevision, endRevision, localId, *result);
         // 回调到 Actor 线程发送结果
-        litebus::Async(selfAid, [serializedResult = std::move(serializedResult), replyTo, selfAid]() mutable {
-            auto actor = litebus::GetActor(selfAid);
-            if (actor != nullptr) {
-                actor->Send(replyTo, std::string("ReportResource"), std::move(serializedResult));
-            }
-        });
+        litebus::Async(selfAid, &ResourceViewActor::ToReportResourceViewChanges, replyTo, result);
     });
+}
+
+void ResourceViewActor::ToReportResourceViewChanges(const litebus::AID &dst, const std::shared_ptr<ResourceUnitChanges> &changes)
+{
+    Send(dst, "ReportResource", changes->SerializeAsString());
 }
 
 void ResourceViewActor::MergeCapacityChange(ResourceUnitChange &previous, const ResourceUnitChange &current)

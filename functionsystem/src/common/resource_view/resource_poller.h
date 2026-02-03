@@ -62,7 +62,7 @@ public:
     }
 
 private:
-    inline static uint64_t pullResourceCycle_ = 1000;
+    inline static uint64_t pullResourceCycle_ = 500;
     struct ResourcePollInfo {
         std::string id;
         int64_t latestPulledTime;

@@ -197,6 +197,8 @@ public:
 
     void TryDelResourceUnitChange(uint64_t revision, const std::string &viewInitTime);
 
+    void ToReportResourceViewChanges(const litebus::AID &dst, const std::shared_ptr<ResourceUnitChanges> &changes);
+
     // used by domain
     litebus::Future<PullResourceRequest> GetUnitSnapshotInfo(const std::string &unitID);
 
@@ -254,7 +256,7 @@ public:
     }
 
     // for test
-    [[maybe_unused]] void SetEnableTenantAffinity(bool enable)
+    [[maybe_unused]]static void SetEnableTenantAffinity(bool enable)
     {
         enableTenantAffinity_ = enable;
     }
