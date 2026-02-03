@@ -1267,27 +1267,28 @@ bool ResourceViewActor::IsModifyEmpty(const ResourceUnitChange &modify)
 void ResourceViewActor::MergeResourceViewChanges(int64_t startRevision, int64_t endRevision,
                                                  ResourceUnitChanges &result)
 {
-    std::vector<std::pair<std::string, ResourceUnitChange>> summarizedChanges;
-
-    for (auto it = versionChanges_.upper_bound(startRevision); it != versionChanges_.upper_bound(endRevision); ++it) {
-        auto change = it->second;
-        auto resourceUnitId = change.resourceunitid();
-        auto iter = std::find_if(summarizedChanges.begin(), summarizedChanges.end(),
-                                 [&resourceUnitId](const auto& pair) { return pair.first == resourceUnitId; });
+    std::unordered_map<std::string, ResourceUnitChange> summarizedChanges;
+    auto itEnd = versionChanges_.upper_bound(endRevision);
+    for (auto it = versionChanges_.upper_bound(startRevision); it != itEnd; ++it) {
+        const auto& change = it->second;
+        const auto& resourceUnitId = change.resourceunitid();
+        auto iter = summarizedChanges.find(resourceUnitId);
         if (iter == summarizedChanges.end()) {
-            summarizedChanges.push_back({resourceUnitId, change});
+            // 首次遇到，直接插入
+            summarizedChanges.emplace(resourceUnitId, change);
             continue;
         }
         auto mergeChange = MergeResourceUnitChanges(iter->second, change);
         if (IsResourceUnitChangeEmpty(mergeChange)) {
             summarizedChanges.erase(iter);
         } else {
-            iter->second = mergeChange;
+            iter->second = std::move(mergeChange);
         }
     }
-
+    // 预分配空间
+    result.mutable_changes()->Reserve(static_cast<int>(summarizedChanges.size()));
     for (auto& change : summarizedChanges) {
-        *result.add_changes() = change.second;
+        *result.add_changes() = std::move(change.second);
     }
     ASSERT_IF_NULL(view_);
     result.set_startrevision(startRevision);
