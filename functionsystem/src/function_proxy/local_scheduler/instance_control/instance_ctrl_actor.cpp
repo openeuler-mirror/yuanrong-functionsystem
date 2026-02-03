@@ -163,17 +163,27 @@ void InstanceCtrlActor::Init()
                        instanceInfo.requestid(), instanceInfo.instanceid());
             return litebus::Async(aid, &InstanceCtrlActor::DeleteInstanceInControlView, Status::OK(), instanceInfo);
         }
-        return litebus::Async(aid, &InstanceCtrlActor::ShutDownInstance, instanceInfo,
-                              static_cast<uint32_t>(instanceInfo.gracefulshutdowntime()))
+        return litebus::Async(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, Status::OK(), instanceInfo)
+            .Then(litebus::Defer(aid, &InstanceCtrlActor::ShutDownInstance, instanceInfo,
+                              static_cast<uint32_t>(instanceInfo.gracefulshutdowntime())))
             .Then([instanceInfo, aid](const Status &) {
                 return litebus::Async(aid, &InstanceCtrlActor::KillRuntime, instanceInfo, false);
             })
-            .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, std::placeholders::_1,
-                                 instanceInfo))
             .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInControlView, std::placeholders::_1,
                                  instanceInfo))
             .Then(litebus::Defer(aid, &InstanceCtrlActor::ReportInstanceExitLatency, std::placeholders::_1,
                                  startTimeMillis, instanceInfo));
+        // return litebus::Async(aid, &InstanceCtrlActor::ShutDownInstance, instanceInfo,
+        //                       static_cast<uint32_t>(instanceInfo.gracefulshutdowntime()))
+        //     .Then([instanceInfo, aid](const Status &) {
+        //         return litebus::Async(aid, &InstanceCtrlActor::KillRuntime, instanceInfo, false);
+        //     })
+        //     .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, std::placeholders::_1,
+        //                          instanceInfo))
+        //     .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInControlView, std::placeholders::_1,
+        //                          instanceInfo))
+        //     .Then(litebus::Defer(aid, &InstanceCtrlActor::ReportInstanceExitLatency, std::placeholders::_1,
+        //                          startTimeMillis, instanceInfo));
     };
     InstanceStateMachine::SetExitHandler(exitHandler_);
     InstanceStateMachine::SetExitFailedHandler([aid(GetAID()), nodeID(nodeID_)](const TransitionResult &result) {
@@ -811,8 +821,10 @@ litebus::Future<KillResponse> InstanceCtrlActor::Exit(const std::shared_ptr<Kill
         return iter->second.GetFuture();
     }
     exiting_[instanceInfo.instanceid()] = litebus::Promise<KillResponse>();
-    return TryExitInstance(stateMachine, killCtx, isSynchronized)
+    return ForceDeleteInstance(instanceInfo.instanceid())
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::OnExitInstance, instanceInfo, _1));
+    // return TryExitInstance(stateMachine, killCtx, isSynchronized)
+    //     .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::OnExitInstance, instanceInfo, _1));
 }
 
 litebus::Future<KillResponse> InstanceCtrlActor::OnExitInstance(const InstanceInfo &instanceInfo, const Status &status)
