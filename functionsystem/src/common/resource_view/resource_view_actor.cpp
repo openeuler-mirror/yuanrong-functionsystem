@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "async/async.hpp"
+#include "litebus.hpp"
 #include "async/asyncafter.hpp"
 #include "async/uuid_generator.hpp"
 #include "common/constants/constants.h"
@@ -33,10 +34,17 @@ namespace functionsystem::resource_view {
 static const int32_t DEFAULT_PRINT_RESOURCE_VIEW_TIMER_COUNT = 60;
 static const std::string NEED_RECOVER_VIEW = "needRecoverView";
 static const std::string IDLE_TO_RECYCLE = "yr-idle-to-recycle";
+// 当变更数量超过此阈值时，使用异步处理
+static const int64_t ASYNC_MERGE_THRESHOLD = 50;
+
+// 静态成员变量定义
+bool ResourceViewActor::enableTenantAffinity_ = true;
+
 ResourceViewActor::ResourceViewActor(const std::string &name, std::string id, const Param &param)
     : BasisActor(name), unitID_(std::move(id)), isLocal_(param.isLocal),
-      enableTenantAffinity_(param.enableTenantAffinity), tenantPodReuseTimeWindow_(param.tenantPodReuseTimeWindow)
+      tenantPodReuseTimeWindow_(param.tenantPodReuseTimeWindow)
 {
+    enableTenantAffinity_ = param.enableTenantAffinity;
     if (auto pos = name.find_last_of('-'); pos != std::string::npos) {
         actorSuffix_ = name.substr(pos);
     }
@@ -1173,24 +1181,46 @@ void ResourceViewActor::PullResource(const litebus::AID &from, std::string &&nam
         return;
     }
     ASSERT_IF_NULL(view_);
-    ResourceUnitChanges result;
     // lastReportedRevision_ is only used for obtaining incremental updates for scheduling requests
     lastReportedRevision_ = view_->revision();
     auto viewInitTimeStoredInDomain = pullRequest.localviewinittime();
     bool isViewConsistent = viewInitTimeStoredInDomain == view_->viewinittime();
     bool hasNoNewChanges = pullRequest.version() == view_->revision();
-    result.set_localviewinittime(view_->viewinittime());
-    if (isViewConsistent) {
-        MergeResourceViewChanges(pullRequest.version(), view_->revision(), result);
-        DelChanges(pullRequest.version());
-    } else {
-        ConvertFullResourceviewToChanges(result);
-    }
+
     if (isViewConsistent && hasNoNewChanges) {
         Send(from, "ReportResource", "");
         return;
     }
-    Send(from, "ReportResource", result.SerializeAsString());
+
+    if (!isViewConsistent) {
+        // 全量同步，直接处理
+        ResourceUnitChanges result;
+        result.set_localviewinittime(view_->viewinittime());
+        ConvertFullResourceviewToChanges(result);
+        Send(from, "ReportResource", result.SerializeAsString());
+        return;
+    }
+
+    // 增量同步：根据变更数量决定同步或异步处理
+    auto startRevision = pullRequest.version();
+    auto endRevision = view_->revision();
+    auto itStart = versionChanges_.upper_bound(startRevision);
+    auto itEnd = versionChanges_.upper_bound(endRevision);
+    auto changeCount = std::distance(itStart, itEnd);
+
+    if (changeCount <= ASYNC_MERGE_THRESHOLD) {
+        // 变更数量少，同步处理
+        ResourceUnitChanges result;
+        result.set_localviewinittime(view_->viewinittime());
+        MergeResourceViewChanges(startRevision, endRevision, result);
+        DelChanges(startRevision);
+        Send(from, "ReportResource", result.SerializeAsString());
+    } else {
+        // 变更数量多，异步处理避免阻塞 Actor
+        YRLOG_INFO("PullResource: {} changes to merge, using async processing", changeCount);
+        MergeResourceViewChangesAsync(startRevision, endRevision, view_->viewinittime(), view_->id(), from);
+        DelChanges(startRevision);
+    }
 }
 
 std::string GetUnitIDFromAID(const litebus::AID &from)
@@ -1267,14 +1297,21 @@ bool ResourceViewActor::IsModifyEmpty(const ResourceUnitChange &modify)
 void ResourceViewActor::MergeResourceViewChanges(int64_t startRevision, int64_t endRevision,
                                                  ResourceUnitChanges &result)
 {
+    ASSERT_IF_NULL(view_);
+    MergeResourceViewChanges(versionChanges_, startRevision, endRevision, view_->id(), result);
+}
+
+void ResourceViewActor::MergeResourceViewChanges(const std::map<int64_t, ResourceUnitChange> &changes,
+                                                       int64_t startRevision, int64_t endRevision,
+                                                       const std::string &localId, ResourceUnitChanges &result)
+{
     std::unordered_map<std::string, ResourceUnitChange> summarizedChanges;
-    auto itEnd = versionChanges_.upper_bound(endRevision);
-    for (auto it = versionChanges_.upper_bound(startRevision); it != itEnd; ++it) {
+    auto itEnd = changes.upper_bound(endRevision);
+    for (auto it = changes.upper_bound(startRevision); it != itEnd; ++it) {
         const auto& change = it->second;
         const auto& resourceUnitId = change.resourceunitid();
         auto iter = summarizedChanges.find(resourceUnitId);
         if (iter == summarizedChanges.end()) {
-            // 首次遇到，直接插入
             summarizedChanges.emplace(resourceUnitId, change);
             continue;
         }
@@ -1285,15 +1322,45 @@ void ResourceViewActor::MergeResourceViewChanges(int64_t startRevision, int64_t 
             iter->second = std::move(mergeChange);
         }
     }
-    // 预分配空间
     result.mutable_changes()->Reserve(static_cast<int>(summarizedChanges.size()));
-    for (auto& change : summarizedChanges) {
-        *result.add_changes() = std::move(change.second);
+    for (auto& [id, change] : summarizedChanges) {
+        *result.add_changes() = std::move(change);
     }
-    ASSERT_IF_NULL(view_);
     result.set_startrevision(startRevision);
     result.set_endrevision(endRevision);
-    result.set_localid(view_->id());
+    result.set_localid(localId);
+}
+
+void ResourceViewActor::MergeResourceViewChangesAsync(int64_t startRevision, int64_t endRevision,
+                                                      const std::string &viewInitTime, const std::string &localId,
+                                                      const litebus::AID &replyTo)
+{
+    // 使用迭代器范围构造拷贝需要处理的 changes 数据
+    auto itStart = versionChanges_.upper_bound(startRevision);
+    auto itEnd = versionChanges_.upper_bound(endRevision);
+    auto changesCopy = std::make_shared<std::map<int64_t, ResourceUnitChange>>(itStart, itEnd);
+
+    // 懒初始化 asyncWorker_
+    if (asyncWorker_ == nullptr) {
+        asyncWorker_ = std::make_shared<ActorWorker>();
+    }
+
+    auto selfAid = GetAID();
+    // 在 Worker 中执行合并，完成后通过 Async 回调到 Actor 线程发送结果
+    asyncWorker_->AsyncWork([changesCopy, startRevision, endRevision, viewInitTime, localId, replyTo, selfAid]() {
+        ResourceUnitChanges result;
+        result.set_localviewinittime(viewInitTime);
+        MergeResourceViewChanges(*changesCopy, startRevision, endRevision, localId, result);
+        std::string serializedResult = result.SerializeAsString();
+
+        // 回调到 Actor 线程发送结果
+        litebus::Async(selfAid, [serializedResult = std::move(serializedResult), replyTo, selfAid]() mutable {
+            auto actor = litebus::GetActor(selfAid);
+            if (actor != nullptr) {
+                actor->Send(replyTo, std::string("ReportResource"), std::move(serializedResult));
+            }
+        });
+    });
 }
 
 void ResourceViewActor::MergeCapacityChange(ResourceUnitChange &previous, const ResourceUnitChange &current)
@@ -1385,7 +1452,7 @@ ResourceUnitChange ResourceViewActor::MergeTwoModifies(ResourceUnitChange &previ
     return previous;
 }
 
-bool ResourceViewActor::IsValidChangeCombination(const InstanceChange& previous, const InstanceChange& current) const
+bool ResourceViewActor::IsValidChangeCombination(const InstanceChange& previous, const InstanceChange& current)
 {
     if (previous.instanceid() != current.instanceid()) {
         return false;
@@ -1412,7 +1479,7 @@ bool ResourceViewActor::ShouldRetainInstanceChange(const InstanceChange& previou
     return previous.changetype() == InstanceChange::DELETE && current.changetype() == InstanceChange::ADD;
 }
 
-void ResourceViewActor::MergeInstanceChanges(Modification &previous, const Modification &current) const
+void ResourceViewActor::MergeInstanceChanges(Modification &previous, const Modification &current)
 {
     /**
      * 1.add/delete instance1  + add/delete instance2  --> add/delete instance1 + add/delete instance2
