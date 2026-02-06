@@ -562,6 +562,8 @@ void Parsefunction(service_json::FunctionConfig &functionConfig, const nlohmann:
     ParseDeviceInfo(functionConfig.device, f);
 
     ParseRootfsSpec(functionConfig.rootfs, f);
+
+    ParseLanguage(functionConfig.language, f);
 }
 
 void ParseRootfsSpec(RootfsSpecMeta &rootfs, const nlohmann::json &h)
@@ -649,6 +651,38 @@ void ParseDeviceInfo(DeviceMetaData &device, const nlohmann::json &h)
     }
     if (dev.find("type") != dev.end()) {
         device.type = dev.at("type");
+    }
+}
+
+void ParseLanguage(LanguageMetaData &language, const nlohmann::json &h)
+{
+    if (h.find("language") == h.end()) {
+        return;
+    }
+    nlohmann::json lang = h.at("language");
+    if (lang.find("name") != lang.end()) {
+        language.name = lang.at("name");
+    }
+    if (lang.find("type") != lang.end()) {
+        language.type = lang.at("type");
+    }
+    if (lang.find("root") != lang.end()) {
+        language.root = lang.at("root");
+    }
+    if (lang.find("entrypoint") != lang.end()) {
+        language.entrypoint = lang.at("entrypoint");
+    }
+    if (lang.find("executor") != lang.end()) {
+        language.executor = lang.at("executor");
+    }
+    if (lang.find("version") != lang.end()) {
+        language.version = lang.at("version");
+    }
+    if (lang.find("env") != lang.end()) {
+        nlohmann::json envs = lang.at("env");
+        for (const auto &env : envs.items()) {
+            language.env[env.key()] = env.value();
+        }
     }
 }
 
@@ -742,6 +776,7 @@ litebus::Option<FunctionMeta> BuildFunctionMeta(const ServiceInfo &serviceInfo, 
                              .initializer = {}, .userAgency = {}, .customGracefulShutdown = {} },
                          .instanceMetaData = {},
                          .rootfs = functionConfig.rootfs,
+                         .language = functionConfig.language,
                          .rawJsonStr = ""};
 }
 

@@ -147,6 +147,16 @@ struct MountConfig {
     std::vector<FuncMount> funcMounts;
 };
 
+struct LanguageMetaData {
+    std::string name;
+    std::string type;
+    std::string root;
+    std::string entrypoint;
+    std::string executor;
+    std::string version;
+    std::unordered_map<std::string, std::string> env;
+};
+
 struct DeviceMetaData {
     float hbm = 0;
     float latency = 0;
@@ -254,6 +264,7 @@ struct FunctionMeta {
     ExtendedMetaData extendedMetaData;
     InstanceMetaData instanceMetaData;
     RootfsSpecMeta rootfs;
+    LanguageMetaData language;
     std::string rawJsonStr;
 };
 

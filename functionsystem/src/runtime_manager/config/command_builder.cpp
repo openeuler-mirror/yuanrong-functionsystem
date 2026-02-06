@@ -421,7 +421,7 @@ std::pair<Status, std::vector<std::string>> CommandBuilder::PythonBuildFinalArgs
     std::string address = GetPosixAddress(config_, port);
 
     return { Status::OK(),
-             { execPath, "-u", config_.runtimePath + PYTHON_NEW_SERVER_PATH, "--rt_server_address", address,
+             { "--rt_server_address", address,
                "--deploy_dir", deployDir, "--runtime_id", info.runtimeid(), "--job_id", jobID, "--log_level",
                config_.runtimeLogLevel } };
 }
@@ -509,6 +509,7 @@ std::pair<Status, std::vector<std::string>> CommandBuilder::GetNodejsBuildArgs(
     std::string memorySize = "";
     std::string address = GetPosixAddress(config_, port);
     auto resources = request->runtimeinstanceinfo().runtimeconfig().resources().resources();
+    // todo(lwy): rm entry, memory size append whiled setting up envs for nodejs runtime, which is more clear and reasonable
     for (auto resource : resources) {
         if (resource.first == resource_view::MEMORY_RESOURCE_NAME && resource.second.mutable_scalar()->value() > 0) {
             if (resource.second.mutable_scalar()->value() >= std::numeric_limits<int>::max()) {
