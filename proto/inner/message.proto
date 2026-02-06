@@ -1043,3 +1043,49 @@ message StaticFunctionChangeResponse {
   string requestID = 3;
   string instanceID = 4;
 }
+
+// Snapshot metadata stored in etcd
+message SnapshotMetadata {
+  resources.InstanceInfo instanceInfo = 1; // 实例信息
+  resources.SnapshotInfo snapshotInfo = 2; // 快照信息
+}
+
+
+message SnapshotRuntimeRequest {
+  string requestID = 1;
+  string runtimeID = 2;
+  string instanceID = 3;
+  string containerID = 4;
+}
+
+message SnapshotRuntimeResponse {
+  int32 code = 1;
+  string message = 2;
+  string requestID = 3;
+  resources.SnapshotInfo snapshotInfo = 4;
+}
+
+message RestoreSnapshotRequest {
+  string requestID = 1;
+  string checkpointID = 2;
+  core_service.SnapStartOptions snapStartOptions = 3;
+}
+
+message RestoreSnapshotResponse {
+  int32 code = 1;
+  string message = 2;
+  string requestID = 3;
+  string instanceID = 4;
+}
+
+message RecordSnapshotRequest {
+  string requestID = 1;
+  resources.SnapshotInfo snapshotInfo = 2;
+  resources.InstanceInfo instanceInfo = 3;
+}
+
+message RecordSnapshotResponse {
+  int32 code = 1;
+  string message = 2;
+  string requestID = 3;
+}

@@ -23,7 +23,7 @@
 #include "async/future.hpp"
 #include "code_deployer/shared_dir_deployer.h"
 #include "common/constants/actor_name.h"
-#include "common/kv_client.h"
+#include "common/kv_client/kv_client.h"
 #include "common/logs/logging.h"
 #include "common/register/register_helper.h"
 #include "function_agent/code_deployer/copy_deployer.h"
@@ -91,7 +91,7 @@ Status FunctionAgentDriver::Start()
         }
         YRLOG_INFO("runtime_manager started successfully in merged process");
     }
-    
+
     auto registerHelper = std::make_shared<RegisterHelper>(FUNCTION_AGENT_AGENT_SERVICE_ACTOR_NAME);
     actor_->SetRegisterHelper(registerHelper);
     // set deployers to actor
@@ -130,7 +130,7 @@ Status FunctionAgentDriver::Stop()
 {
     litebus::Terminate(actor_->GetAID());
     litebus::Terminate(httpServer_->GetAID());
-    
+
     if (runtimeManagerDriver_ != nullptr) {
         if (auto status = runtimeManagerDriver_->Stop(); status.IsOk()) {
             runtimeManagerDriver_->Await();
@@ -140,7 +140,7 @@ Status FunctionAgentDriver::Stop()
             YRLOG_WARN("failed to stop runtime_manager");
         }
     }
-    
+
     return Status::OK();
 }
 
@@ -148,7 +148,7 @@ void FunctionAgentDriver::Await()
 {
     litebus::Await(actor_->GetAID());
     litebus::Await(httpServer_->GetAID());
-    
+
     if (runtimeManagerDriver_ != nullptr) {
         runtimeManagerDriver_->Await();
     }

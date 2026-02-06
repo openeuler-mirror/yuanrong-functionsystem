@@ -37,6 +37,7 @@ add_subdirectory(driver)
 add_subdirectory(log)
 add_subdirectory(debug)
 add_subdirectory(virtual_env_manager)
+add_subdirectory(ckpt)
 add_subdirectory(std_monitor)
 
 target_link_libraries(runtime_manager_lib ${litebus_ALL_LIB}
@@ -45,7 +46,8 @@ target_link_libraries(runtime_manager_lib ${litebus_ALL_LIB}
 	aksk
         register common_flags
         http file_monitor network
-        utils metrics_adapter resource_view cap)
+        utils metrics_adapter resource_view
+        runtime_manager_ckpt)
 
 add_executable(runtime_manager main.cpp)
 target_compile_options(runtime_manager PRIVATE -fPIE)

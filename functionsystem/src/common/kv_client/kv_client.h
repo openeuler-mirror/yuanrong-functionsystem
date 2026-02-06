@@ -21,15 +21,16 @@
 #include "datasystem/datasystem.h"
 #include "function_agent/flags/function_agent_flags.h"
 
-namespace functionsystem::function_agent {
+namespace functionsystem {
 
 class KVClient : public Singleton<KVClient> {
 public:
-    Status Init(const function_agent::FunctionAgentFlags &flags);
     Status Init(const std::string &host, int32_t port);
     std::pair<Status, datasystem::ReadOnlyBuffer> Get(const std::string &key);
+    Status Put(const std::string &key, const datasystem::ReadOnlyBuffer &value);
+    Status Delete(const std::string &key);
 
 private:
     std::unique_ptr<datasystem::KVClient> dsKvClient_;
 };
-}  // namespace functionsystem::function_agent
+}  // namespace functionsystem

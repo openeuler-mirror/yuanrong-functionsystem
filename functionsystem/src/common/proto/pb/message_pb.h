@@ -174,6 +174,14 @@ using OnReserves = ::messages::OnReserves;
 using CheckInstanceStateRequest = ::messages::CheckInstanceStateRequest;
 using CheckInstanceStateResponse = ::messages::CheckInstanceStateResponse;
 
+using SnapshotRuntimeRequest = ::messages::SnapshotRuntimeRequest;
+using SnapshotRuntimeResponse = ::messages::SnapshotRuntimeResponse;
+using RestoreSnapshotRequest = ::messages::RestoreSnapshotRequest;
+using RestoreSnapshotResponse = ::messages::RestoreSnapshotResponse;
+using RecordSnapshotRequest = ::messages::RecordSnapshotRequest;
+using RecordSnapshotResponse = ::messages::RecordSnapshotResponse;
+using SnapshotInfo = ::messages::SnapshotInfo;
+
 namespace MetaStore {
 using PutRequest = ::messages::PutRequest;
 using PutResponse = ::messages::PutResponse;

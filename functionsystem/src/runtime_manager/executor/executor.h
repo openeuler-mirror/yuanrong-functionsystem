@@ -138,6 +138,15 @@ public:
                                                  bool oomKilled = false) = 0;
 
     /**
+     * Snapshot Runtime when receive message from function agent.
+     *
+     * @param request Include snapshot arguments.
+     * @return response Include snapshot result with checkpoint info.
+     */
+    virtual litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(
+        const std::shared_ptr<messages::SnapshotRuntimeRequest> &request) = 0;
+
+    /**
      * Get runtime instance infos.
      *
      * @return Runtime infos.
@@ -247,6 +256,15 @@ public:
      */
     virtual litebus::Future<Status> StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request,
                                                  bool oomKilled = false) = 0;
+
+    /**
+     * Snapshot Runtime when receive message from function agent.
+     *
+     * @param request Include snapshot arguments.
+     * @return response Include snapshot result with checkpoint info.
+     */
+    virtual litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(
+        const std::shared_ptr<messages::SnapshotRuntimeRequest> &request) = 0;
 
     /**
      * Get runtime instance infos.

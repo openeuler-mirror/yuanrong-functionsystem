@@ -187,6 +187,22 @@ message StateLoadResponse {
   bytes            state   = 3;
 }
 
+message SnapOptions {
+  common.SnapType type = 1;
+  bool leaveRunning = 2;
+}
+
+message SnapStartOptions {
+  common.SnapType type = 1;
+  SchedulingOptions scheduleOpts = 2;
+}
+
+message SnapInfo {
+  string snapshotID = 1;
+  int64 size = 2;
+
+}
+
 message KillRequest {
   string instanceID = 1;
   int32  signal     = 2;
@@ -197,4 +213,5 @@ message KillRequest {
 message KillResponse {
   common.ErrorCode code    = 1;
   string           message = 2;
+  bytes            payload = 3;
 }

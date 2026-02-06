@@ -53,6 +53,7 @@ using CreateCallResultCallBack =
 
 class FunctionAgentMgr;
 class LocalSchedSrv;
+class SnapCtrl;
 
 struct RuntimeConfig {
     std::string runtimeHeartbeatEnable;
@@ -221,6 +222,10 @@ public:
     void ForwardCallResultRequest(const litebus::AID &from, std::string &&, std::string &&msg);
 
     void ForwardCallResultResponse(const litebus::AID &from, std::string &&, std::string &&msg);
+
+    void OnCheckpointRuntimeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    void OnCheckpointMetadataResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     litebus::Future<CallResultAck> CallResult(const std::string &from,
                                               const std::shared_ptr<functionsystem::CallResult> &callResult);
@@ -420,6 +425,16 @@ public:
     litebus::Future<Status> ToSuspend(const std::string &instanceID);
     litebus::Future<Status> ToResume(const std::string &instanceID);
     litebus::Future<Status> MakeCheckpoint(const std::string &instanceID);
+
+    /**
+     * Bind the SnapCtrl for handling snapshot signals
+     * @param snapCtrl: The snap control interface
+     */
+    void BindSnapCtrl(const std::shared_ptr<SnapCtrl> &snapCtrl)
+    {
+        snapCtrl_ = snapCtrl;
+    }
+
     void DoCheckpoint(const std::string &instanceID, const litebus::Promise<Status> &promise, uint32_t retryTimes = 3);
     litebus::Future<Status> ToScheduling(const std::shared_ptr<messages::ScheduleRequest> &req);
     litebus::Future<Status> ToCreating(const std::shared_ptr<messages::ScheduleRequest> &req,
@@ -510,6 +525,10 @@ public:
                                                               const std::string &srcInstanceID,
                                                               const std::shared_ptr<KillRequest> &killReq,
                                                               uint32_t cnt);
+
+    litebus::Future<KillResponse> HandleSnapshotSignal(const std::shared_ptr<KillContext> &killCtx,
+                                                       const std::string &srcInstanceID,
+                                                       const std::shared_ptr<KillRequest> &killReq);
 
     litebus::Future<KillResponse> ProcessSubscribeRequest(const std::string &srcInstanceID,
                                                           const std::shared_ptr<KillRequest> &killReq);
@@ -847,6 +866,14 @@ private:
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result,
         const TransitionResult &transResult);
 
+    /**
+     * Deploy a snapstart instance (without CheckReadiness and InitCall)
+     * @param scheduleReq: The schedule request for the restored instance
+     * @return Future of DeployInstanceResponse
+     */
+    litebus::Future<messages::DeployInstanceResponse> DeploySnapStartInstance(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
+
     CreateCallResultCallBack RegisterCreateCallResultCallback(
         const std::shared_ptr<messages::ScheduleRequest> &request);
 
@@ -895,6 +922,7 @@ private:
     std::shared_ptr<InstanceControlView> instanceControlView_;
 
     std::shared_ptr<LocalSchedSrv> localSchedSrv_;
+    std::shared_ptr<SnapCtrl> snapCtrl_;
     std::shared_ptr<function_proxy::InternalIAM> internalIAM_;
     std::unordered_map<std::string, std::unordered_set<std::string>> internalCredReferenceMap_;
     std::unordered_map<std::string, litebus::Promise<::messages::UpdateCredResponse>> updateTokenPromises_;

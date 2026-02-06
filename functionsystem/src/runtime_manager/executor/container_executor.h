@@ -35,6 +35,8 @@
 
 #include "common/rpc/client/grpc_client.h"
 #include "common/proto/pb/posix/runtime_launcher_interface.grpc.pb.h"
+#include "common/file_storage/file_storage_client.h"
+#include "runtime_manager/ckpt/ckpt_file_manager.h"
 
 namespace functionsystem::runtime_manager {
 
@@ -53,6 +55,9 @@ public:
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::vector<int> &cardIDs) override;
 
     litebus::Future<Status> StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request, bool oomKilled = false) override;
+
+    litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(
+        const std::shared_ptr<messages::SnapshotRuntimeRequest> &request) override;
 
     std::map<std::string, messages::RuntimeInstanceInfo> GetRuntimeInstanceInfos() override;
 
@@ -134,6 +139,26 @@ private:
     litebus::Future<runtime::v1::WaitResponse> DoWaitContainer(
         const std::shared_ptr<runtime::v1::WaitRequest> &req);
 
+    litebus::Future<runtime::v1::CheckpointResponse> DoCheckpoint(
+        const std::shared_ptr<runtime::v1::CheckpointRequest> &req);
+
+    litebus::Future<runtime::v1::RestoreResponse> DoRestore(
+        const std::shared_ptr<runtime::v1::RestoreRequest> &req);
+
+    litebus::Future<messages::SnapshotRuntimeResponse> OnCheckpointCompleted(
+        const runtime::v1::CheckpointResponse &ckptResponse,
+        const std::string &requestID,
+        const std::string &checkpointID,
+        const std::string &checkpointPath,
+        const std::string &runtimeID);
+
+    litebus::Future<messages::SnapshotRuntimeResponse> OnRegisterCheckpoint(
+        const Status &regStatus,
+        messages::SnapshotRuntimeResponse response,
+        const std::string &requestID,
+        const std::string &checkpointID,
+        const std::string &runtimeID);
+
     litebus::Future<runtime::v1::NormalResponse> DoRegisterToWarmUp(
         const std::shared_ptr<runtime::v1::RegisterRequest> &reg);
 
@@ -154,10 +179,12 @@ private:
 
     std::map<std::string, messages::RuntimeInstanceInfo> runtimeInstanceInfoMap_;
     std::map<std::string, std::string> runtime2containerID_;
+    std::unordered_map<std::string, std::string> runtime2checkpointID_;  // runtimeID -> checkpointID
     std::unordered_set<std::string> innerOomKilledruntimes_;
     litebus::AID functionAgentAID_;
     std::shared_ptr<GrpcClient<runtime::v1::RuntimeLauncher>> containerd_ {nullptr};
     std::shared_ptr<HealthCheck> healthCheckClient_;
+    std::shared_ptr<CkptFileManager> ckptFileManager_;
     CommandBuilder cmdBuilder_ = {false};
     bool reconnecting_ = false;
     bool synced_ = false;
@@ -188,6 +215,15 @@ public:
      */
     litebus::Future<Status> StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request,
                                          bool oomKilled = false) override;
+
+    /**
+     * Snapshot Runtime when receive message from function agent.
+     *
+     * @param request Include snapshot arguments.
+     * @return response Include snapshot result with checkpoint info.
+     */
+    litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(
+        const std::shared_ptr<messages::SnapshotRuntimeRequest> &request) override;
 
     /**
      * Get runtime instance infos.

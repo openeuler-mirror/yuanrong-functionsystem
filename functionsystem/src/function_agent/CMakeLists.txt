@@ -32,7 +32,7 @@ add_library(${FUNCTION_AGENT_LIB} STATIC # for [function_agent_lib]
         ${FUNCTION_AGENT_SRCS})
 target_compile_options(${FUNCTION_AGENT_LIB} PRIVATE -fPIE)
 
-add_dependencies(${FUNCTION_AGENT_LIB} zlib rpc metadata)
+add_dependencies(${FUNCTION_AGENT_LIB} zlib rpc metadata kv_client)
 target_include_directories(${FUNCTION_AGENT_LIB} PUBLIC # for [function_agent_lib]
         ${CMAKE_CURRENT_LIST_DIR}
         ${zlib_INCLUDE_DIR}) # for module
@@ -42,7 +42,8 @@ target_link_libraries(${FUNCTION_AGENT_LIB} PUBLIC # for [function_agent_lib]
         ${zlib_MINIZIP_LIB}
         ${datasystem_LIB}
         runtime_manager_lib
-        metadata)
+        metadata
+        kv_client)
 
 add_executable(${FUNCTION_AGENT} main.cpp)
 target_compile_options(${FUNCTION_AGENT} PRIVATE -fPIE)

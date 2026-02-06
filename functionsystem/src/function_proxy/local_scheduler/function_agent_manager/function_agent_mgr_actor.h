@@ -62,6 +62,12 @@ using TenantCache = struct TenantCache {
     std::unordered_set<std::string> podIps;
 };
 
+struct SnapshotResult {
+    int32_t code{0};
+    std::string message;
+    messages::SnapshotInfo snapshotInfo;
+};
+
 class FunctionAgentMgrActor : public BasisActor {
 public:
     struct FuncAgentInfo {
@@ -245,6 +251,10 @@ public:
 
     litebus::Future<Status> UnRegisterWarmUp(
         const std::shared_ptr<messages::KillInstanceRequest> &request);
+
+    litebus::Future<SnapshotResult> SnapshotRuntime(const std::string &requestID,
+                                                     const resource_view::InstanceInfo &instanceInfo);
+    void SnapshotRuntimeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     // for test
     [[maybe_unused]] void SetFuncAgentsRegis(
@@ -542,8 +552,11 @@ private:
 
     const uint32_t queryTimeout_ = 60000;
     const uint32_t updateTokenTimeout_ = 60000;
+    const uint32_t checkpointRuntimeTimeout_ = 120000;  // checkpoint may take longer
+    const uint32_t snapshotRuntimeTimeout_ = 120000;  // snapshot may take longer
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::InstanceStatusInfo, queryTimeout_, queryStatusSync_);
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::UpdateCredResponse, updateTokenTimeout_, updateTokenSync_);
+    REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::SnapshotRuntimeResponse, snapshotRuntimeTimeout_, snapshotRuntimeSync_);
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::QueryDebugInstanceInfosResponse,
                         QUERY_DEBUG_INSTANCE_INFO_INTERVAL_MS, queryDebugInstInfoSync_);
     // key: request id, value: function agent id

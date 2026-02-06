@@ -92,6 +92,7 @@ void FunctionAgentMgrActor::Init()
     Receive("SetNetworkIsolationResponse", &FunctionAgentMgrActor::SetNetworkIsolationResponse);
     Receive("UpdateLocalStatus", &FunctionAgentMgrActor::UpdateLocalStatus);
     Receive("UpdateCredResponse", &FunctionAgentMgrActor::UpdateCredResponse);
+    Receive("SnapshotRuntimeResponse", &FunctionAgentMgrActor::SnapshotRuntimeResponse);
     Receive("QueryDebugInstanceInfosResponse", &FunctionAgentMgrActor::QueryDebugInstanceInfosResponse);
     Receive("StaticFunctionScheduleRequest", &FunctionAgentMgrActor::StaticFunctionScheduleRequest);
     Receive("NotifyFunctionStatusChangeResp", &FunctionAgentMgrActor::NotifyFunctionStatusChangeResp);
@@ -1525,6 +1526,78 @@ void FunctionAgentMgrActor::UpdateCredResponse(const litebus::AID &from, std::st
     auto requestID = response.requestid();
     YRLOG_INFO("{}|update token successfully", requestID);
     (void)updateTokenSync_.Synchronized(requestID, response);
+}
+
+litebus::Future<SnapshotRuntimeResponse> FunctionAgentMgrActor::SnapshotRuntime(
+    const std::string &requestID,
+    const resource_view::InstanceInfo &instanceInfo)
+{
+    // 1. 从 instanceInfo 获取 funcAgentID
+    std::string funcAgentID = instanceInfo.functionagentid();
+    std::string instanceID = instanceInfo.instanceid();
+
+    if (funcAgentID.empty()) {
+        SnapshotRuntimeResponse result;
+        result.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
+        result.set_message(fmt::format("agent not found for instance {}", instanceID));
+        YRLOG_ERROR("{}|functionagentid is empty for instance", instanceID);
+        return result;
+    }
+
+    if (funcAgentTable_.find(funcAgentID) == funcAgentTable_.end()) {
+        SnapshotRuntimeResponse result;
+        result.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        result.set_message("function agent is not registered");
+        YRLOG_ERROR("{}|failed to send snapshot runtime request, function agent {} is not registered.",
+                    instanceID, funcAgentID);
+        return result;
+    }
+
+    // 2. 构造 SnapshotRuntime 请求
+    auto request = std::make_shared<messages::SnapshotRuntimeRequest>();
+    request->set_requestid(requestID);
+    request->set_instanceid(instanceID);
+    request->set_runtimeid(instanceInfo.runtimeid());
+    request->set_containerid(instanceInfo.runtimeid());  // containerID is same as runtimeID in container mode
+
+    auto future = snapshotRuntimeSync_.AddSynchronizer(requestID);
+
+    YRLOG_INFO("{}|send SnapshotRuntime request to agent({}) for instance({})",
+               requestID, funcAgentID, instanceID);
+    Send(funcAgentTable_[funcAgentID].aid, "SnapshotRuntime", request->SerializeAsString());
+
+    // 3. 将 SnapshotRuntimeResponse 消息转换为结构体
+    return future.Then([instanceID](const messages::SnapshotRuntimeResponse &response) -> SnapshotResult {
+        SnapshotResult result;
+        result.code = response.code();
+        result.message = response.message();
+        if (response.code() == common::ERR_NONE && response.has_snapshotinfo()) {
+            result.checkpointID = response.snapshotinfo().checkpointid();
+            result.storagePath = response.snapshotinfo().storage();
+            result.size = 0; // Size is not in SnapshotInfo proto, set to 0 for now
+            YRLOG_INFO("{}|snapshot runtime successful, checkpointID: {}",
+                      instanceID, result.checkpointID);
+        } else {
+            YRLOG_ERROR("{}|snapshot runtime failed, code: {}, message: {}",
+                       instanceID, response.code(), response.message());
+        }
+        return result;
+    });
+}
+
+void FunctionAgentMgrActor::SnapshotRuntimeResponse(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    messages::SnapshotRuntimeResponse response;
+    if (msg.empty() || !response.ParseFromString(msg)) {
+        YRLOG_WARN("invalid request body, failed to get SnapshotRuntimeResponse from {}.", from.HashString());
+        return;
+    }
+
+    std::string requestID = response.requestid();
+    std::string checkpointID = response.has_snapshotinfo() ? response.snapshotinfo().checkpointid() : "N/A";
+    YRLOG_INFO("{}|received SnapshotRuntimeResponse, code: {}, checkpointID: {}",
+               requestID, response.code(), checkpointID);
+    (void)snapshotRuntimeSync_.Synchronized(requestID, response);
 }
 
 litebus::Future<Status> FunctionAgentMgrActor::EvictAgent(const std::shared_ptr<messages::EvictAgentRequest> &req)

@@ -221,6 +221,31 @@ public:
                                        InstanceReadyCallBack callback);
     virtual litebus::Future<Status> ForceDeleteInstance(const std::string &instanceID);
 
+    virtual litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> CreateInstanceClient(
+        const std::string &instanceID, const std::string &runtimeID, const std::string &address)
+    {
+        return litebus::Async(aid_, &InstanceCtrlActor::CreateInstanceClient, instanceID, runtimeID, address, 
+                             nullptr, false);
+    }
+
+    virtual void StartHeartbeat(const std::string &instanceID, uint32_t timeoutTimes, 
+                               const std::string &runtimeID, const StatusCode &prevStatus)
+    {
+        litebus::Async(aid_, &InstanceCtrlActor::StartHeartbeat, instanceID, timeoutTimes, runtimeID, prevStatus);
+    }
+
+    virtual litebus::Future<TransitionResult> TransInstanceState(
+        const std::shared_ptr<InstanceStateMachine> machine, const TransContext &context)
+    {
+        return litebus::Async(aid_, &InstanceCtrlActor::TransInstanceState, machine, context);
+    }
+
+    virtual litebus::Future<messages::DeployInstanceResponse> DeploySnapStartInstance(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq)
+    {
+        return litebus::Async(aid_, &InstanceCtrlActor::DeploySnapStartInstance, scheduleReq);
+    }
+
     virtual void RegisterClearGroupInstanceCallBack(ClearGroupInstanceCallBack callback);
     // only for test
     void SetMaxForwardKillRetryTimes(uint32_t times);

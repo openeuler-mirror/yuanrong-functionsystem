@@ -58,6 +58,10 @@ const int32_t INSTANCE_RESUME_SIGNAL = 15;
 const int32_t GROUP_SUSPEND_SIGNAL = 16;
 // signal for group resume
 const int32_t GROUP_RESUME_SIGNAL = 17;
+// signal for instance snapshot (new snapshot mode)
+const int32_t INSTANCE_SNAPSHOT_SIGNAL = 18;
+// signal for instance snapstart (restore from snapshot)
+const int32_t INSTANCE_SNAPSTART_SIGNAL = 19;
 
 inline std::string SignalToString(int32_t signal)
 {
@@ -79,6 +83,9 @@ inline std::string SignalToString(int32_t signal)
         { INSTANCE_RESUME_SIGNAL, "INSTANCE_RESUME_SIGNAL" },
         { GROUP_SUSPEND_SIGNAL, "GROUP_SUSPEND_SIGNAL" },
         { GROUP_RESUME_SIGNAL, "GROUP_RESUME_SIGNAL" },
+        { INSTANCE_SNAPSHOT_SIGNAL, "INSTANCE_SNAPSHOT_SIGNAL" },
+        { INSTANCE_SNAPSTART_SIGNAL, "INSTANCE_SNAPSTART_SIGNAL" },
+        { INSTANCE_RESTORE_SIGNAL, "INSTANCE_RESTORE_SIGNAL" },
     };
     return signalMap.find(signal) != signalMap.end() ? signalMap.at(signal) : "UnknownSignal";
 }

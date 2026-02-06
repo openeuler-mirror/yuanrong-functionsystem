@@ -196,4 +196,56 @@ litebus::Future<runtime::RecoverResponse> ControlInterfacePosixClient::Recover(R
         });
     return promise->GetFuture();
 }
+
+litebus::Future<runtime::PrepareSnapResponse> ControlInterfacePosixClient::PrepareSnap(PrepareSnapRequest &&request)
+{
+    auto promise = std::make_shared<litebus::Promise<runtime::PrepareSnapResponse>>();
+    auto msg = std::make_shared<StreamingMessage>();
+    *msg->mutable_preparesnapreq() = std::move(request);
+    auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
+    msg->set_messageid(uuid.ToString());
+    std::shared_lock<std::shared_mutex> lock(rwMut_);
+    runtime::PrepareSnapResponse rsp{};
+    rsp.set_code(common::ERR_REQUEST_BETWEEN_RUNTIME_BUS);
+    rsp.set_message("prepare snap failed! client may already closed");
+    if (posix_ == nullptr) {
+        promise->SetValue(rsp);
+        return promise->GetFuture();
+    }
+    (void)posix_->Send(msg).OnComplete([promise, rsp](const litebus::Future<StreamingMessage> &resp) {
+        if (resp.IsError() || !resp.Get().has_preparesnaprsp()) {
+            YRLOG_ERROR("failed to prepare snap! client may already closed");
+            promise->SetValue(rsp);
+            return;
+        }
+        promise->SetValue(resp.Get().preparesnaprsp());
+    });
+    return promise->GetFuture();
+}
+
+litebus::Future<runtime::SnapStartedResponse> ControlInterfacePosixClient::SnapStarted(SnapStartedRequest &&request)
+{
+    auto promise = std::make_shared<litebus::Promise<runtime::SnapStartedResponse>>();
+    auto msg = std::make_shared<StreamingMessage>();
+    *msg->mutable_snapstartedreq() = std::move(request);
+    auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
+    msg->set_messageid(uuid.ToString());
+    std::shared_lock<std::shared_mutex> lock(rwMut_);
+    runtime::SnapStartedResponse rsp{};
+    rsp.set_code(common::ERR_REQUEST_BETWEEN_RUNTIME_BUS);
+    rsp.set_message("snap started failed! client may already closed");
+    if (posix_ == nullptr) {
+        promise->SetValue(rsp);
+        return promise->GetFuture();
+    }
+    (void)posix_->Send(msg).OnComplete([promise, rsp](const litebus::Future<StreamingMessage> &resp) {
+        if (resp.IsError() || !resp.Get().has_snapstartedrsp()) {
+            YRLOG_ERROR("failed to snap started! client may already closed");
+            promise->SetValue(rsp);
+            return;
+        }
+        promise->SetValue(resp.Get().snapstartedrsp());
+    });
+    return promise->GetFuture();
+}
 }  // namespace functionsystem

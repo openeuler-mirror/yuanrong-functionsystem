@@ -43,6 +43,7 @@
 #include "common/utils/struct_transfer.h"
 #include "common/trace/trace_manager.h"
 #include "instance_ctrl_message.h"
+#include "local_scheduler/snap_ctrl/snap_ctrl.h"
 #include "common/posix_client/control_plane_client/control_interface_posix_client.h"
 #include "local_scheduler/grpc_server/bus_service/bus_service.h"
 #include "local_scheduler_service/local_sched_srv.h"
@@ -320,6 +321,32 @@ litebus::Future<KillResponse> InstanceCtrlActor::ProcessUnsubscribeRequest(const
     return subscriptionMgr_->Unsubscribe(srcInstanceID, killReq);
 }
 
+litebus::Future<KillResponse> InstanceCtrlActor::HandleSnapshotSignal(const std::shared_ptr<KillContext> &killCtx,
+                                                                       const std::string &srcInstanceID,
+                                                                       const std::shared_ptr<KillRequest> &killReq)
+{
+    // 如果 SignalRoute 失败，返回错误
+    if (killCtx->killRsp.code() != common::ErrorCode::ERR_NONE) {
+        YRLOG_ERROR("{}|failed to route snapshot signal, code: {}",
+                    killReq->requestid(), static_cast<uint32_t>(killCtx->killRsp.code()));
+        return killCtx->killRsp;
+    }
+
+    // 如果实例在其他节点，转发请求
+    if (!killCtx->isLocal) {
+        YRLOG_INFO("{}|instance({}) is on remote node, forwarding snapshot request",
+                   killReq->requestid(), killReq->instanceid());
+        return GetLocalSchedulerAID(killCtx->instanceContext->GetInstanceInfo().instanceid())
+            .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::SendForwardCustomSignalRequest, _1,
+                                 srcInstanceID, killReq,
+                                 killCtx->instanceContext->GetInstanceInfo().requestid(), false));
+    }
+
+    // 实例在本地，直接处理
+    ASSERT_IF_NULL(snapCtrl_);
+    return snapCtrl_->HandleSnapshot(killReq->requestid(), killReq->instanceid(), killReq->payload());
+}
+
 litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(const std::string &srcInstanceID,
                                                             const std::shared_ptr<KillRequest> &killReq,
                                                             bool isSkipAuth)
@@ -392,6 +419,17 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(const std::string &s
             return ToSuspend(killReq->instanceid()).Then([](const Status &status) {
                 return StatusToKillResponse(status);
             });
+        }
+        case INSTANCE_SNAPSHOT_SIGNAL: {
+            return CheckInstanceExist(srcInstanceID, killReq)
+                .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::CheckKillParam, _1, srcInstanceID, killReq))
+                .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::SignalRoute, _1))
+                .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::HandleSnapshotSignal, _1, srcInstanceID, killReq));
+        }
+        case INSTANCE_SNAPSTART_SIGNAL: {
+            // snapstart不需要路由，直接处理
+            ASSERT_IF_NULL(snapCtrl_);
+            return snapCtrl_->HandleSnapStart(killReq->requestid(), killReq->instanceid(), killReq->payload());
         }
         case MIN_USER_SIGNAL_NUM ... MAX_SIGNAL_NUM: {
             return CheckInstanceExist(srcInstanceID, killReq)
@@ -1649,6 +1687,43 @@ litebus::Option<TransitionResult> InstanceCtrlActor::OnTryDispatchOnLocal(
     scheduleResp->SetValue(
         GenScheduleResponse(StatusCode::SUCCESS, "instance is scheduled to another node", *scheduleReq));
     return transResult;
+}
+
+litebus::Future<messages::DeployInstanceResponse> InstanceCtrlActor::DeploySnapStartInstance(
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq)
+{
+    const auto &instanceID = scheduleReq->instance().instanceid();
+    const auto &requestID = scheduleReq->requestid();
+
+    YRLOG_INFO("{}|{}|DeploySnapStartInstance: start deploying snapstart instance", requestID, instanceID);
+
+    // Check if function meta exists
+    if (funcMetaMap_.find(scheduleReq->instance().function()) == funcMetaMap_.end()) {
+        YRLOG_ERROR("{}|{}|failed to deploy instance, function meta not found", requestID, instanceID);
+        return GenDeployInstanceResponse(StatusCode::ERR_FUNCTION_META_NOT_FOUND, 
+                                        "function meta not found", requestID);
+    }
+
+    // Prepare DeployInstanceRequest
+    auto deployInstanceRequest = GetDeployInstanceReq(funcMetaMap_.at(scheduleReq->instance().function()), scheduleReq);
+    auto funcAgentID = scheduleReq->instance().functionagentid();
+
+    AddDsAuthToDeployInstanceReq(scheduleReq, deployInstanceRequest);
+
+    // Call functionAgentMgr->DeployInstance
+    ASSERT_IF_NULL(functionAgentMgr_);
+    return AddCredToDeployInstanceReq(scheduleReq->instance().tenantid(), deployInstanceRequest)
+        .Then([functionAgentMgr(functionAgentMgr_), funcAgentID, deployInstanceRequest, instanceID, requestID](
+                  const Status &status) -> litebus::Future<messages::DeployInstanceResponse> {
+            if (status.IsError()) {
+                YRLOG_ERROR("{}|{}|AddCredToDeployInstanceReq failed", requestID, instanceID);
+                return GenDeployInstanceResponse(status.StatusCode(), "require token failed",
+                                                deployInstanceRequest->requestid());
+            }
+
+            YRLOG_INFO("{}|{}|calling functionAgentMgr->DeployInstance", requestID, instanceID);
+            return functionAgentMgr->DeployInstance(deployInstanceRequest, funcAgentID);
+        });
 }
 
 litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::ConfirmScheduleDecisionAndDispatch(

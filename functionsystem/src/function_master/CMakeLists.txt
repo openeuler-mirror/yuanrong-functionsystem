@@ -28,6 +28,7 @@ add_subdirectory(instance_manager)
 add_subdirectory(scaler)
 add_subdirectory(system_function_loader)
 add_subdirectory(resource_group_manager)
+add_subdirectory(snap_manager)
 
 get_property(META_STORE_DIR GLOBAL PROPERTY "META_STORE_DIR")
 
@@ -39,7 +40,8 @@ target_include_directories(${EXECUTABLE_NAME} PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/instance_manager
         ${CMAKE_CURRENT_LIST_DIR}/scaler
         ${CMAKE_CURRENT_LIST_DIR}/system_function_loader
-        ${CMAKE_CURRENT_LIST_DIR}/resource_group_manager)
+        ${CMAKE_CURRENT_LIST_DIR}/resource_group_manager
+        ${CMAKE_CURRENT_LIST_DIR}/snap_manager)
 
 add_dependencies(${EXECUTABLE_NAME} rpc meta_store_client leader utils heartbeat
         meta_store_lib hex trace_adapter)
@@ -57,6 +59,7 @@ target_link_libraries(${EXECUTABLE_NAME} PRIVATE
         ${SCALER_LIB}
         ${SYSTEM_FUNCTION_LOADER_LIB}
         ${RESOURCE_GROUP_MANAGER_LIB}
+        ${SNAP_MANAGER_LIB}
         ${PLUGIN_LIB}
         trace_adapter)
 

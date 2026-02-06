@@ -141,4 +141,17 @@ void LocalSchedSrv::BindSubscriptionMgr(const std::shared_ptr<SubscriptionMgr> &
     litebus::Async(actor_->GetAID(), &LocalSchedSrvActor::BindSubscriptionMgr, subscriptionMgr);
 }
 
+litebus::Future<messages::RecordSnapshotResponse> LocalSchedSrv::RecordSnapshotMetadata(
+    const std::shared_ptr<messages::RecordSnapshotRequest> &req)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &LocalSchedSrvActor::RecordSnapshotMetadata, req);
+}
+
+litebus::Future<messages::SnapStartCheckpointResponse> LocalSchedSrv::SnapStartCheckpoint(const std::string &checkpointID)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &LocalSchedSrvActor::SnapStartCheckpoint, checkpointID);
+}
+
 }  // namespace functionsystem::local_scheduler

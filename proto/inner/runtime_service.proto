@@ -42,7 +42,6 @@ message CallRequest {
 message CallResponse {
   common.ErrorCode code    = 1;
   string           message = 2;
-
 }
 
 message CheckpointRequest {
@@ -106,6 +105,22 @@ message SignalRequest {
 }
 
 message SignalResponse {
+  common.ErrorCode code    = 1;
+  string           message = 2;
+}
+
+// called before sandbox checkpoint
+message PrepareSnapRequest {}
+
+message PrepareSnapResponse {
+  common.ErrorCode code    = 1;
+  string           message = 2;
+}
+
+// called after sandbox restored
+message SnapStartedRequest {};
+
+message SnapStartedResponse {
   common.ErrorCode code    = 1;
   string           message = 2;
 }
