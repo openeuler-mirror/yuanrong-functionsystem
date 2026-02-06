@@ -14,25 +14,9 @@
  * limitations under the License.
  */
 
-#include "function_agent/common/kv_client.h"
+#include "common/kv_client/kv_client.h"
 
-namespace functionsystem::function_agent {
-Status KVClient::Init(const function_agent::FunctionAgentFlags &flags)
-{
-    YRLOG_INFO("initializing kv client with host: {}, port: {}", flags.GetDataSystemHost(), flags.GetDataSystemPort());
-    datasystem::ConnectOptions connectOptions;
-    connectOptions.host = flags.GetDataSystemHost();
-    connectOptions.port = flags.GetDataSystemPort();
-    dsKvClient_ = std::make_unique<datasystem::KVClient>(connectOptions);
-    ::datasystem::Status s = dsKvClient_->Init();
-    if (s.IsError()) {
-        YRLOG_ERROR("failed to initialize kv client, host: {}, port: {}, error: {}",
-                   flags.GetDataSystemHost(), flags.GetDataSystemPort(), s.ToString());
-        return Status(StatusCode::BP_DATASYSTEM_ERROR, s.ToString());
-    }
-    YRLOG_INFO("kv client initialized successfully with host: {}, port: {}", flags.GetDataSystemHost(), flags.GetDataSystemPort());
-    return Status::OK();
-}
+namespace functionsystem {
 
 Status KVClient::Init(const std::string &host, int32_t port)
 {
@@ -64,4 +48,36 @@ std::pair<Status, datasystem::ReadOnlyBuffer> KVClient::Get(const std::string &k
     }
     return std::make_pair(Status::OK(), *buffer);
 }
-}  // namespace functionsystem::function_agent
+
+Status KVClient::Put(const std::string &key, const datasystem::ReadOnlyBuffer &value)
+{
+    if (dsKvClient_ == nullptr) {
+        YRLOG_ERROR("kv client is not initialized");
+        return Status(StatusCode::BP_DATASYSTEM_ERROR, "kv client is not initialized");
+    }
+
+    datasystem::Status s = dsKvClient_->Put(key, value);
+    if (s.IsError()) {
+        YRLOG_ERROR("failed to put key: {}, error: {}", key, s.ToString());
+        return Status(StatusCode::BP_DATASYSTEM_ERROR, s.ToString());
+    }
+    YRLOG_DEBUG("successfully put key: {}", key);
+    return Status::OK();
+}
+
+Status KVClient::Delete(const std::string &key)
+{
+    if (dsKvClient_ == nullptr) {
+        YRLOG_ERROR("kv client is not initialized");
+        return Status(StatusCode::BP_DATASYSTEM_ERROR, "kv client is not initialized");
+    }
+
+    datasystem::Status s = dsKvClient_->Delete(key);
+    if (s.IsError()) {
+        YRLOG_ERROR("failed to delete key: {}, error: {}", key, s.ToString());
+        return Status(StatusCode::BP_DATASYSTEM_ERROR, s.ToString());
+    }
+    YRLOG_DEBUG("successfully deleted key: {}", key);
+    return Status::OK();
+}
+}  // namespace functionsystem

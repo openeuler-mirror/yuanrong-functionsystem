@@ -42,6 +42,8 @@
 #include "port/port_manager.h"
 #include "utils/os_utils.hpp"
 #include "utils/utils.h"
+#include "runtime_manager/ckpt/ckpt_file_manager_actor.h"
+#include "common/constants/actor_name.h"
 
 namespace functionsystem::runtime_manager {
 using json = nlohmann::json;
@@ -57,6 +59,10 @@ const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 ContainerExecutor::ContainerExecutor(const std::string &name, const litebus::AID &functionAgentAID) : Executor(name)
 {
     functionAgentAID_ = functionAgentAID;
+    // Initialize checkpoint file manager
+    auto ckptFileManagerActor = std::make_shared<CkptFileManagerActor>(
+        name + "_CkptFileManager", GetAID());
+    ckptFileManager_ = std::make_shared<CkptFileManager>(ckptFileManagerActor);
 }
 
 void ContainerExecutor::InitConfig()
@@ -652,6 +658,149 @@ litebus::Future<Status> ContainerExecutor::UnRegisteredWarmUped(const std::strin
         litebus::Defer(GetAID(), &ContainerExecutor::OnUnregisteredWarmUped, unReg, std::placeholders::_1));
 }
 
+litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::SnapshotRuntime(
+    const std::shared_ptr<messages::SnapshotRuntimeRequest> &request)
+{
+    messages::SnapshotRuntimeResponse response;
+    response.set_requestid(request->requestid());
+
+    const std::string &runtimeID = request->runtimeid();
+    const std::string &containerID = request->containerid();
+    const std::string &instanceID = request->instanceid();
+
+    YRLOG_INFO("{}|snapshot runtime({}) container({})", request->requestid(), runtimeID, containerID);
+
+    // Check if container exists
+    auto container = runtime2containerID_.find(runtimeID);
+    if (container == runtime2containerID_.end()) {
+        YRLOG_ERROR("{}|runtime({}) not found in runtime2containerID map", request->requestid(), runtimeID);
+        response.set_code(static_cast<int32_t>(StatusCode::RUNTIME_MANAGER_RUNTIME_NOT_FOUND));
+        response.set_message(fmt::format("runtime {} not found", runtimeID));
+        return response;
+    }
+
+    // Generate unique checkpoint ID
+    std::string checkpointID = fmt::format("ckpt-{}-{}", instanceID,
+        std::chrono::system_clock::now().time_since_epoch().count());
+
+    std::string checkpointPath = fmt::format("/home/yuanrong/checkpoints/{}", checkpointID);
+
+    auto *snapshotInfo = response.mutable_snapshotinfo();
+    snapshotInfo->set_checkpointid(checkpointID);
+    snapshotInfo->set_storage(checkpointPath);
+
+    // Call containerd to create checkpoint
+    auto checkpointReq = std::make_shared<runtime::v1::CheckpointRequest>();
+    checkpointReq->set_id(containerID);
+    checkpointReq->set_ckpt_dir(checkpointPath);
+    checkpointReq->set_timeout(request->has_timeout() ? request->timeout() : 30);
+    checkpointReq->set_compress(false);
+    checkpointReq->set_trace_id(request->requestid());
+
+    return DoCheckpoint(checkpointReq).Then(
+        litebus::Defer(GetAID(), &ContainerExecutor::OnCheckpointCompleted, std::placeholders::_1,
+                       request->requestid(), checkpointID, checkpointPath, runtimeID));
+}
+
+litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::OnCheckpointCompleted(
+    const runtime::v1::CheckpointResponse &ckptResponse,
+    const std::string &requestID,
+    const std::string &checkpointID,
+    const std::string &checkpointPath,
+    const std::string &runtimeID)
+{
+    messages::SnapshotRuntimeResponse response;
+    response.set_requestid(requestID);
+
+    if (!ckptResponse.success()) {
+        YRLOG_ERROR("{}|checkpoint failed: {}", requestID, ckptResponse.message());
+        response.set_code(static_cast<int32_t>(StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED));
+        response.set_message(ckptResponse.message());
+        return response;
+    }
+
+    YRLOG_INFO("{}|checkpoint created successfully, uploading to storage: {}", requestID, checkpointID);
+
+    // Register checkpoint (upload and register in ckptFileManager)
+    ASSERT_IF_NULL(ckptFileManager_);
+    return ckptFileManager_->RegisterCheckpoint(checkpointID, checkpointPath, checkpointID)
+        .Then(litebus::Defer(GetAID(), &ContainerExecutor::OnRegisterCheckpoint,
+                                std::placeholders::_1, response, requestID, checkpointID, runtimeID));
+}
+
+litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::OnRegisterCheckpoint(
+    const Status &regStatus,
+    messages::SnapshotRuntimeResponse response,
+    const std::string &requestID,
+    const std::string &checkpointID,
+    const std::string &runtimeID)
+{
+    if (regStatus.IsError()) {
+        YRLOG_ERROR("{}|failed to register checkpoint {}: {}",
+                    requestID, checkpointID, regStatus.RawMessage());
+        response.set_code(static_cast<int32_t>(StatusCode::RUNTIME_MANAGER_CHECKPOINT_REGISTER_FAILED));
+        response.set_message(fmt::format("checkpoint registration failed: {}", regStatus.RawMessage()));
+        return response;
+    }
+
+    // Track checkpoint for this runtime
+    runtime2checkpointID_[runtimeID] = checkpointID;
+
+    YRLOG_INFO("{}|snapshot runtime {} completed successfully with checkpoint {}",
+               requestID, runtimeID, checkpointID);
+    response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+    response.set_message("snapshot created successfully");
+    return response;
+}
+
+litebus::Future<runtime::v1::CheckpointResponse> ContainerExecutor::DoCheckpoint(
+    const std::shared_ptr<runtime::v1::CheckpointRequest> &req)
+{
+    YRLOG_INFO("{}|DoCheckpoint for container {} to {}", req->trace_id(), req->id(), req->ckpt_dir());
+    ASSERT_IF_NULL(containerd_);
+
+    auto response = std::make_shared<runtime::v1::CheckpointResponse>();
+    return containerd_
+        ->CallAsyncX("Checkpoint", *req.get(), response.get(),
+                     &runtime::v1::RuntimeLauncher::Stub::AsyncCheckpoint)
+        .Then([req, response](const Status &status) -> litebus::Future<runtime::v1::CheckpointResponse> {
+            if (status.IsOk()) {
+                return *response;
+            }
+            auto msg = fmt::format("failed to checkpoint container {}, grpc err: {}",
+                                   req->id(), status.RawMessage());
+            YRLOG_ERROR("{}|{}", req->trace_id(), msg);
+            runtime::v1::CheckpointResponse checkpointRsp;
+            checkpointRsp.set_success(false);
+            checkpointRsp.set_message(msg);
+            return checkpointRsp;
+        });
+}
+
+litebus::Future<runtime::v1::RestoreResponse> ContainerExecutor::DoRestore(
+    const std::shared_ptr<runtime::v1::RestoreRequest> &req)
+{
+    YRLOG_INFO("{}|DoRestore from checkpoint {} for runtime {}", req->trace_id(),
+               req->ckpt_dir(), req->funcruntime().id());
+    ASSERT_IF_NULL(containerd_);
+
+    auto response = std::make_shared<runtime::v1::RestoreResponse>();
+    return containerd_
+        ->CallAsyncX("Restore", *req.get(), response.get(), &runtime::v1::RuntimeLauncher::Stub::AsyncRestore)
+        .Then([req, response](const Status &status) -> litebus::Future<runtime::v1::RestoreResponse> {
+            if (status.IsOk()) {
+                return *response;
+            }
+            auto msg = fmt::format("failed to restore from checkpoint {} for runtime {}, grpc err: {}",
+                                   req->ckpt_dir(), req->funcruntime().id(), status.RawMessage());
+            YRLOG_ERROR("{}|{}", req->trace_id(), msg);
+            runtime::v1::RestoreResponse restoreRsp;
+            restoreRsp.set_code(static_cast<int32_t>(status.StatusCode()));
+            restoreRsp.set_message(msg);
+            return restoreRsp;
+        });
+}
+
 litebus::Future<Status> ContainerExecutor::OnUnregisteredWarmUped(
     const std::shared_ptr<runtime::v1::UnregisterRequest> &unReg, const runtime::v1::NormalResponse &response)
 {
@@ -695,6 +844,26 @@ litebus::Future<Status> ContainerExecutor::OnDeleteContainer(const std::string &
     if (infoIter != runtimeInstanceInfoMap_.end()) {
         runtimeInstanceInfoMap_.erase(runtimeID);
     }
+
+    // Remove checkpoint reference when container is deleted
+    auto ckptIter = runtime2checkpointID_.find(runtimeID);
+    if (ckptIter != runtime2checkpointID_.end()) {
+        std::string checkpointID = ckptIter->second;
+        if (ckptFileManager_ != nullptr) {
+            ckptFileManager_->RemoveReference(checkpointID).Then(
+                [checkpointID, requestID, runtimeID](const litebus::Future<Status> &result) {
+                    if (result.IsError() || result.Get().IsError()) {
+                        YRLOG_WARN("{}|failed to remove reference for checkpoint {} (runtime: {})",
+                                   requestID, checkpointID, runtimeID);
+                    } else {
+                        YRLOG_INFO("{}|removed reference for checkpoint {} (runtime: {})",
+                                   requestID, checkpointID, runtimeID);
+                    }
+                });
+        }
+        runtime2checkpointID_.erase(ckptIter);
+    }
+
     functionsystem::metrics::MeterTitle title{ "yr_instance_stop_time", "stop timestamp", "num" };
     litebus::Async(GetAID(), &ContainerExecutor::ReportInfo, instanceID, runtimeID, containerID, title);
     (void)runtime2containerID_.erase(runtimeID);
@@ -1015,6 +1184,12 @@ litebus::Future<Status> ContainerExecutorProxy::StopInstance(
     const std::shared_ptr<messages::StopInstanceRequest> &request, bool oomKilled)
 {
     return litebus::Async(executor_->GetAID(), &ContainerExecutor::StopInstance, request, oomKilled);
+}
+
+litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutorProxy::SnapshotRuntime(
+    const std::shared_ptr<messages::SnapshotRuntimeRequest> &request)
+{
+    return litebus::Async(executor_->GetAID(), &ContainerExecutor::SnapshotRuntime, request);
 }
 
 litebus::Future<std::map<std::string, messages::RuntimeInstanceInfo>> ContainerExecutorProxy::GetRuntimeInstanceInfos()

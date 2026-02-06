@@ -249,3 +249,8 @@ message NotificationPayload {
     FunctionMasterEvent functionMasterEvent = 2; // function-master election changed event
   }
 }
+
+enum SnapType {
+  DUMPSTATE = 0;
+  SNAPSHOT = 1;
+}

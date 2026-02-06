@@ -103,6 +103,9 @@ public:
     virtual litebus::Future<Status> UnRegisterWarmUp(
         const std::shared_ptr<messages::KillInstanceRequest> &request);
 
+    virtual litebus::Future<SnapshotRuntimeResponse> SnapshotRuntime(
+        const std::string &requestID,
+        const resource_view::InstanceInfo &instanceInfo);
     // for test
     [[maybe_unused]] litebus::Future<bool> IsRegistered(const std::string &funcAgentID) const
     {
