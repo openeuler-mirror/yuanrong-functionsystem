@@ -19,16 +19,18 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "common/utils/sensitive_value.h"
+
 namespace functionsystem::iamserver::test {
 
 class TokenContentTest : public ::testing::Test {
 protected:
     void SetUp() override
     {
-        secretKey_ = SensitiveValue("test_secret_key_for_jwt_signing");
+        secretKey_ = litebus::SensitiveValue("test_secret_key_for_jwt_signing");
     }
 
-    SensitiveValue secretKey_;
+     litebus::SensitiveValue secretKey_;
 };
 
 // ==================== JWT Payload JSON Tests ====================

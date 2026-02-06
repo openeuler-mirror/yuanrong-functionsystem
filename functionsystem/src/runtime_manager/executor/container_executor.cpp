@@ -660,6 +660,7 @@ messages::StartInstanceResponse ContainerExecutor::GenSuccessStartInstanceRespon
 
     auto instanceResponse = response.mutable_startruntimeinstanceresponse();
     instanceResponse->set_runtimeid(request->runtimeinstanceinfo().runtimeid());
+    instanceResponse->set_containerid(containerID);
     YRLOG_DEBUG("{}|{}|instance({}) runtime({}) with container({})", request->runtimeinstanceinfo().traceid(),
                 request->runtimeinstanceinfo().requestid(), request->runtimeinstanceinfo().instanceid(),
                 request->runtimeinstanceinfo().runtimeid(), containerID);
