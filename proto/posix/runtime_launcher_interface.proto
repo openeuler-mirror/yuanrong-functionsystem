@@ -1,7 +1,6 @@
 syntax = "proto3";
 
 package runtime.v1;
-
 service RuntimeLauncher {
   rpc Start(StartRequest) returns (StartResponse) {}
   rpc Delete(DeleteRequest) returns (DeleteResponse) {}

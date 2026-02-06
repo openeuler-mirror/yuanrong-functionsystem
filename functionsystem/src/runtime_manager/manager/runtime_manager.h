@@ -58,6 +58,14 @@ public:
     void StopInstance(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     /**
+     * Snapshot Runtime when receive snapshot message from function agent.
+     *
+     * @param from Function agent aid.
+     * @param msg Snapshot request with runtime infos.
+     */
+    void SnapshotRuntime(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    /**
      * OOM Kill instance when receive event from metrics actor.
      */
     void OomKillInstance(const std::string &instanceID, const std::string &runtimeID, const std::string &requestID);
@@ -127,9 +135,9 @@ public:
         const std::string &runtimeID, const std::string &requestID);
 
     litebus::Future<Status> NotifyInstancesDiskUsageExceedLimit(const std::string &description, const int limit);
-    
+
     EXECUTOR_TYPE GetRuntimeType(const std::string &runtimeID);
-    
+
 protected:
     void Init() override;
 

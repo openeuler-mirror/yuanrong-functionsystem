@@ -606,6 +606,8 @@ void LocalSchedSrvActor::Init()
     Receive("DeletePodResponse", &LocalSchedSrvActor::DeletePodResponse);
     Receive("PreemptInstances", &LocalSchedSrvActor::PreemptInstances);
     Receive("TryCancelResponse", &LocalSchedSrvActor::TryCancelResponse);
+    Receive("RecordSnapshotMetadataResponse", &LocalSchedSrvActor::OnRecordSnapshotMetadataResponse);
+    Receive("SnapStartCheckpointResponse", &LocalSchedSrvActor::OnSnapStartCheckpointResponse);
 }
 
 void LocalSchedSrvActor::Finalize()
@@ -961,4 +963,114 @@ litebus::Future<Status> LocalSchedSrvActor::IsRegisteredToGlobal()
     return globalSchedRegisterInfo_.registeredPromise.GetFuture().Then(
         [](const messages::Registered &) -> litebus::Future<Status> { return Status::OK(); });
 }
-} // namespace functionsystem::local_scheduler
+
+
+litebus::Future<messages::RecordSnapshotResponse> LocalSchedSrvActor::RecordSnapshotMetadata(
+    const std::shared_ptr<messages::RecordSnapshotRequest> &req)
+{
+    if (masterAid_.Name().empty()) {
+        YRLOG_ERROR("master AID is empty, failed to send RecordSnapshotMetadata");
+        messages::RecordSnapshotResponse errorRsp;
+        errorRsp.set_code(common::ERR_INNER_COMMUNICATION);
+        errorRsp.set_message("master AID not available");
+        return errorRsp;
+    }
+
+    // 构造发送到 master snap_manager 的 AID
+    litebus::AID snapMgrAid(SNAP_MANAGER_ACTOR_NAME, masterAid_.Url());
+    YRLOG_INFO("sending RecordSnapshotMetadata to snap_manager, checkpointID: {}, size: {}, path: {}",
+               req->checkpointid(), req->size(), req->storagepath());
+
+    // 通过 REQUEST_SYNC_HELPER 发送并等待响应
+    auto future = recordSnapshotSync_.AddSynchronizer(req->requestid());
+    Send(snapMgrAid, "RecordSnapshotMetadata", req->SerializeAsString());
+
+    return future.Then([checkpointID(req->checkpointid())](
+                           const litebus::Future<messages::RecordSnapshotResponse> &future)
+                           -> messages::RecordSnapshotResponse {
+        if (future.IsError()) {
+            YRLOG_ERROR("RecordSnapshotMetadata request timeout for checkpoint: {}", checkpointID);
+            messages::RecordSnapshotResponse errorRsp;
+            errorRsp.set_code(common::ERR_REQUEST_TIMEOUT);
+            errorRsp.set_message("request timeout");
+            return errorRsp;
+        }
+        return future.Get();
+    });
+}
+
+void LocalSchedSrvActor::OnRecordSnapshotMetadataResponse(
+    const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    messages::RecordSnapshotResponse rsp;
+    if (!rsp.ParseFromString(msg)) {
+        YRLOG_ERROR("failed to parse RecordSnapshotMetadataResponse");
+        return;
+    }
+
+    YRLOG_INFO("received RecordSnapshotMetadataResponse from {}, checkpointID: {}, code: {}",
+               from.HashString(), rsp.checkpointid(), rsp.code());
+
+    if (auto status = recordSnapshotSync_.Synchronized(rsp.checkpointid(), rsp); status.IsError()) {
+        YRLOG_WARN("no matching request found for checkpoint: {}", rsp.checkpointid());
+    }
+}
+
+litebus::Future<messages::RestoreSnapshotResponse> LocalSchedSrvActor::SnapStartCheckpoint(
+    const std::shared_ptr<messages::RestoreSnapshotRequest> &req)
+{
+    auto promise = std::make_shared<litebus::Promise<messages::RestoreSnapshotResponse>>();
+    DoSnapStartCheckpoint(promise, req);
+    return promise->GetFuture();
+}
+
+void LocalSchedSrvActor::DoSnapStartCheckpoint(
+    const std::shared_ptr<litebus::Promise<messages::RestoreSnapshotResponse>> &promise,
+    const std::shared_ptr<messages::RestoreSnapshotRequest> &req)
+{
+    if (masterAid_.Name().empty()) {
+        YRLOG_ERROR("master AID is empty, failed to send SnapStartCheckpoint");
+        messages::RestoreSnapshotResponse errorRsp;
+        errorRsp.set_code(common::ERR_INNER_COMMUNICATION);
+        errorRsp.set_message("master AID not available");
+        promise->SetValue(errorRsp);
+        return;
+    }
+
+    // 构造发送到 master snap_manager 的 AID
+    litebus::AID snapMgrAid(SNAP_MANAGER_ACTOR_NAME, masterAid_.Url());
+    YRLOG_INFO("sending SnapStartCheckpoint to snap_manager, requestID: {}, snapshotID: {}",
+               req->requestid(), req->snapshotid());
+
+    // 通过 REQUEST_SYNC_HELPER 发送并等待响应
+    auto future = snapStartCheckpointSync_.AddSynchronizer(req->requestid());
+    Send(snapMgrAid, "SnapStartCheckpoint", req->SerializeAsString());
+
+    future.OnComplete([promise, req, aid(GetAID())](
+                          const litebus::Future<messages::RestoreSnapshotResponse> &future) {
+        if (future.IsError()) {
+            YRLOG_WARN("SnapStartCheckpoint request timeout for requestID: {}, retrying...", req->requestid());
+            // 无限重试
+            litebus::Async(aid, &LocalSchedSrvActor::DoSnapStartCheckpoint, promise, req);
+            return;
+        }
+        promise->SetValue(future.Get());
+    });
+}
+
+void LocalSchedSrvActor::OnSnapStartCheckpointResponse(
+    const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    messages::RestoreSnapshotResponse rsp;
+    if (!rsp.ParseFromString(msg)) {
+        YRLOG_ERROR("failed to parse RestoreSnapshotResponse");
+        return;
+    }
+
+    YRLOG_INFO("received RestoreSnapshotResponse from {}, requestID: {}, code: {}, message: {}",
+               from.HashString(), rsp.requestid(), rsp.code(), rsp.message());
+
+    if (auto status = snapStartCheckpointSync_.Synchronized(rsp.requestid(), rsp); status.IsError()) {
+        YRLOG_WARN("no matching request found for requestID: {}", rsp.requestid());
+    }
+}

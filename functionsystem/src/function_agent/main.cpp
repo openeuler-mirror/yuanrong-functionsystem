@@ -36,7 +36,7 @@
 #include "common/utils/sensitive_value.h"
 #include "common/utils/ssl_config.h"
 #include "common/utils/version.h"
-#include "function_agent/common/kv_client.h"
+#include "common/kv_client/kv_client.h"
 #include "function_agent/driver/function_agent_driver.h"
 #include "function_agent/flags/function_agent_flags.h"
 #include "runtime_manager/config/flags.h"

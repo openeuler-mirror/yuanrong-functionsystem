@@ -266,6 +266,13 @@ message InstanceStatus {
     int32 errCode = 5;
 }
 
+message SnapshotInfo {
+  string checkpointID = 1;
+  string storage = 2;
+  string createTime = 3;
+  int32 ttlSeconds = 4;
+}
+
 message InstanceInfo {
     // podname in K8S BCM, InstanceID in YuanRong system.
     string instanceID = 1;
@@ -361,6 +368,8 @@ message InstanceInfo {
     TrafficReportType trafficReportType = 36;
     string containerID = 37;  // container ID from containerd
     string proxyGrpcAddress = 38;  // proxy gRPC service address (ip:port format)
+
+    SnapshotInfo snapshotInfo = 39;
 }
 
 message RouteInfo {

@@ -674,6 +674,66 @@ void AgentServiceActor::KillInstance(const litebus::AID &from, std::string &&nam
          stopInstanceRequest.SerializeAsString());
 }
 
+void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    auto request = std::make_shared<messages::SnapshotRuntimeRequest>();
+    if (!request->ParseFromString(msg)) {
+        YRLOG_ERROR("failed to parse SnapshotRuntimeRequest");
+        return;
+    }
+
+    const std::string &instanceID = request->instanceid();
+    const std::string &runtimeID = request->runtimeid();
+    YRLOG_INFO("{}|received SnapshotRuntime request for instance({}), runtime({})",
+               request->requestid(), instanceID, runtimeID);
+
+    // Prepare response
+    messages::SnapshotRuntimeResponse response;
+    response.set_requestid(request->requestid());
+
+    // Check if agent is registered
+    if (!registerRuntimeMgr_.registered || !isRegisterCompleted_) {
+        response.set_code(static_cast<int32_t>(StatusCode::FUNC_AGENT_NOT_REGISTERED));
+        response.set_message("function agent is not registered");
+        YRLOG_ERROR("{}|registration is not complete, ignore snapshot request for instance({})",
+                    request->requestid(), instanceID);
+        Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
+        return;
+    }
+
+    // Forward snapshot request to RuntimeManager
+    YRLOG_INFO("{}|forward SnapshotRuntime request to RuntimeManager({}-{}) for instance({}), runtime({})",
+               request->requestid(), registerRuntimeMgr_.name, registerRuntimeMgr_.address, instanceID, runtimeID);
+
+    // Store the caller's AID to send response back later
+    snapshotRequests_[request->requestid()] = from;
+
+    Send(litebus::AID(registerRuntimeMgr_.name, registerRuntimeMgr_.address), "SnapshotRuntime", msg);
+}
+
+void AgentServiceActor::SnapshotRuntimeResponse(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    messages::SnapshotRuntimeResponse response;
+    if (!response.ParseFromString(msg)) {
+        YRLOG_ERROR("failed to parse SnapshotRuntimeResponse");
+        return;
+    }
+
+    const std::string &requestID = response.requestid();
+    auto iter = snapshotRequests_.find(requestID);
+    if (iter == snapshotRequests_.end()) {
+        YRLOG_WARN("{}|snapshot request not found in snapshotRequests_", requestID);
+        return;
+    }
+
+    YRLOG_INFO("{}|received SnapshotRuntimeResponse from RuntimeManager, code: {}",
+               requestID, response.code());
+
+    // Forward response back to the original caller (FunctionAgentMgrActor)
+    Send(iter->second, "SnapshotRuntimeResponse", msg);
+    snapshotRequests_.erase(iter);
+}
+
 litebus::Future<Status> AgentServiceActor::SetDeployers(const std::string &storageType,
                                                         const std::shared_ptr<Deployer> &deployer)
 {
@@ -706,6 +766,8 @@ void AgentServiceActor::Init()
     ActorBase::Receive("QueryDebugInstanceInfosResponse", &AgentServiceActor::QueryDebugInstanceInfosResponse);
     ActorBase::Receive("StaticFunctionScheduleResponse", &AgentServiceActor::StaticFunctionScheduleResponse);
     ActorBase::Receive("NotifyFunctionStatusChange", &AgentServiceActor::NotifyFunctionStatusChange);
+    ActorBase::Receive("SnapshotRuntime", &AgentServiceActor::SnapshotRuntime);
+    ActorBase::Receive("SnapshotRuntimeResponse", &AgentServiceActor::SnapshotRuntimeResponse);
 
     litebus::Async(GetAID(), &AgentServiceActor::RemoveCodePackageAsync);
 

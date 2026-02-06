@@ -43,6 +43,7 @@ void RuntimeManager::Init()
     YRLOG_INFO("init RuntimeManagerActor {}", ActorBase::GetAID().Name());
     ActorBase::Receive("StartInstance", &RuntimeManager::StartInstance);
     ActorBase::Receive("StopInstance", &RuntimeManager::StopInstance);
+    ActorBase::Receive("SnapshotRuntime", &RuntimeManager::SnapshotRuntime);
     ActorBase::Receive("QueryInstanceStatusInfo", &RuntimeManager::QueryInstanceStatusInfo);
     ActorBase::Receive("CleanStatus", &RuntimeManager::CleanStatus);
     ActorBase::Receive("UpdateCred", &RuntimeManager::UpdateCred);
@@ -307,6 +308,54 @@ void RuntimeManager::StopInstance(const litebus::AID &from, std::string && /* na
         .OnComplete(litebus::Defer(GetAID(), &RuntimeManager::ReleasePort, std::placeholders::_1, request))
         .OnComplete(
             litebus::Defer(GetAID(), &RuntimeManager::StopInstanceResponse, from, std::placeholders::_1, request));
+}
+
+void RuntimeManager::SnapshotRuntime(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    auto request = std::make_shared<messages::SnapshotRuntimeRequest>();
+    if (!request->ParseFromString(msg)) {
+        YRLOG_ERROR("failed to parse SnapshotRuntimeRequest");
+        return;
+    }
+
+    const std::string &instanceID = request->instanceid();
+    const std::string &runtimeID = request->runtimeid();
+    YRLOG_INFO("{}|received SnapshotRuntime request for instance({}), runtime({})",
+               request->requestid(), instanceID, runtimeID);
+
+    // Find executor by runtime type (CONTAINER)
+    auto executor = FindExecutor(EXECUTOR_TYPE::CONTAINER);
+    if (executor == nullptr) {
+        YRLOG_ERROR("{}|container executor not found", request->requestid());
+        messages::SnapshotRuntimeResponse response;
+        response.set_requestid(request->requestid());
+        response.set_code(static_cast<int32_t>(StatusCode::EXECUTOR_NOT_FOUND));
+        response.set_message("container executor not found");
+        Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
+        return;
+    }
+
+    // Call executor's SnapshotRuntime method
+    executor->SnapshotRuntime(request)
+        .Then([aid(GetAID()), from, instanceID, requestID(request->requestid())](
+                  const litebus::Future<messages::SnapshotRuntimeResponse> &responseFuture) {
+            if (responseFuture.IsError()) {
+                YRLOG_ERROR("{}|snapshot runtime future error: {}", requestID, responseFuture.GetErrorCode());
+                messages::SnapshotRuntimeResponse response;
+                response.set_requestid(requestID);
+                response.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
+                response.set_message("snapshot runtime failed");
+                litebus::Async(aid, &RuntimeManager::Send, from, std::string("SnapshotRuntimeResponse"),
+                               response.SerializeAsString());
+                return;
+            }
+
+            auto response = responseFuture.Get();
+            YRLOG_INFO("{}|snapshot runtime completed for instance({}), code: {}",
+                       requestID, instanceID, response.code());
+            litebus::Async(aid, &RuntimeManager::Send, from, std::string("SnapshotRuntimeResponse"),
+                           response.SerializeAsString());
+        });
 }
 
 void RuntimeManager::HandlePrestartRuntimeExit(const pid_t pid)
