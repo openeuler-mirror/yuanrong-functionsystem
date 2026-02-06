@@ -1,4 +1,4 @@
-# Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,10 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/bus_service LOCAL_SCHEDULER_GRPC_SERVER_BUS_SERVICE_SRCS)
-aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/exec_service LOCAL_SCHEDULER_GRPC_SERVER_EXEC_SERVICE_SRCS)
+enable_testing()
 
-target_sources(local_scheduler_lib
-        PRIVATE
-        ${LOCAL_SCHEDULER_GRPC_SERVER_BUS_SERVICE_SRCS}
-        ${LOCAL_SCHEDULER_GRPC_SERVER_EXEC_SERVICE_SRCS})
+find_package(GTest REQUIRED)
+
+add_executable(exec_session_test
+    exec_session_test.cpp
+)
+
+target_include_directories(exec_session_test
+    PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../..
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../..
+)
+
+target_link_libraries(exec_session_test
+    exec_session
+    GTest::gtest
+    GTest::gtest_main
+    GTest::gmock
+)
+
+add_test(NAME exec_session_test COMMAND exec_session_test)

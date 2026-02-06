@@ -827,11 +827,12 @@ void AgentServiceActor::StartInstanceResponse(const litebus::AID &from, std::str
                     std::string(from), startInstanceResponse.code());
         DeleteCodeReferByDeployInstanceRequest(request->second.request);
     } else {
-        YRLOG_INFO("{}|received start instance response. instance({}) runtime({}) address({}) pid({})",
+        YRLOG_INFO("{}|received start instance response. instance({}) runtime({}) address({}) pid({}) containerID({})",
                    startInstanceResponse.requestid(), request->second.request->instanceid(),
                    startInstanceResponse.startruntimeinstanceresponse().runtimeid(),
                    startInstanceResponse.startruntimeinstanceresponse().address(),
-                   startInstanceResponse.startruntimeinstanceresponse().pid());
+                   startInstanceResponse.startruntimeinstanceresponse().pid(),
+                   startInstanceResponse.startruntimeinstanceresponse().containerid());
     }
 
     auto deployInstanceResponse = BuildDeployInstanceResponse(startInstanceResponse, request->second.request);

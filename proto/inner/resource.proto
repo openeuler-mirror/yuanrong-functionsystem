@@ -359,6 +359,7 @@ message InstanceInfo {
     map<string, string> kvLabels = 35;
 
     TrafficReportType trafficReportType = 36;
+    string containerID = 37;  // container ID from containerd
 }
 
 message RouteInfo {

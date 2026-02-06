@@ -21,6 +21,8 @@
 
 namespace functionsystem::iamserver::test {
 
+using litebus::SensitiveValue;
+
 class IAMActorRoleTest : public ::testing::Test {
 protected:
     void SetUp() override

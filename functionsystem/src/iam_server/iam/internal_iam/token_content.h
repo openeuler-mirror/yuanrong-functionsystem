@@ -195,7 +195,7 @@ struct TokenContent {
      * @param secretKey: the secret key for signing (HMAC-SHA256)
      * @return Status::OK() if success
      */
-    Status Sign(const SensitiveValue &secretKey)
+    Status Sign(const litebus::SensitiveValue &secretKey)
     {
         if (tenantID.empty()) {
             return Status(StatusCode::FAILED, "tenantID is empty, cannot sign");
@@ -230,7 +230,7 @@ struct TokenContent {
      * @param secretKey: the secret key for verification
      * @return true if signature is valid
      */
-    bool VerifySignature(const SensitiveValue &secretKey) const
+    bool VerifySignature(const litebus::SensitiveValue &secretKey) const
     {
         // Split JWT into parts
         auto firstDot = encryptToken.find(JWT_SEPARATOR);

@@ -31,6 +31,10 @@
 #include "utils/os_utils.hpp"
 #include "exec/exec.hpp"
 
+#include <pty.h>
+#include <termios.h>
+#include <sys/ioctl.h>
+
 namespace litebus {
 
 static const int MAX_PARAMS_SIZE = 2048;
@@ -446,6 +450,101 @@ std::shared_ptr<Exec> Exec::CreateExec(const std::string &path, const std::vecto
     }
 
     return tExec;
+}
+
+Try<PtyExecIO> PtyExecIO::Create(int rows, int cols)
+{
+    int master, slave;
+
+    // Set window size
+    struct winsize ws;
+    ws.ws_row = static_cast<unsigned short>(rows);
+    ws.ws_col = static_cast<unsigned short>(cols);
+    ws.ws_xpixel = 0;
+    ws.ws_ypixel = 0;
+
+    // Create PTY pair
+    if (openpty(&master, &slave, nullptr, nullptr, &ws) == -1) {
+        BUSLOG_ERROR("Failed to create PTY pair, errno: {}", errno);
+        return Try<PtyExecIO>(Failure(IO_CREATE_ERROR));
+    }
+
+    BUSLOG_DEBUG("PTY created, master: {}, slave: {}", master, slave);
+
+    // Construct ExecIO objects using shared_ptr
+    auto ptyStdIn = std::make_shared<ExecIO>(
+        [slave]() {
+            InFileDescriptor fd;
+            fd.read = slave;
+            return Try<InFileDescriptor>(fd);
+        },
+        [master]() {
+            OutFileDescriptor fd;
+            fd.write = master;
+            return Try<OutFileDescriptor>(fd);
+        }
+    );
+
+    auto ptyStdOut = std::make_shared<ExecIO>(
+        [slave]() {
+            InFileDescriptor fd;
+            fd.read = slave;
+            return Try<InFileDescriptor>(fd);
+        },
+        [slave, master]() {
+            OutFileDescriptor fd;
+            fd.read = master;
+            fd.write = slave;
+            return Try<OutFileDescriptor>(fd);
+        }
+    );
+
+    // Construct PtyExecIO
+    PtyExecIO pty;
+    pty.masterFd = master;
+    pty.slaveFd = slave;
+    pty.stdIn = std::move(ptyStdIn);
+    pty.stdErr = ptyStdOut;  // stderr merged to stdout (shared) - assign BEFORE moving
+    pty.stdOut = std::move(ptyStdOut);
+    return pty;
+}
+
+int PtyExecIO::Resize(int rows, int cols)
+{
+    if (masterFd < 0) {
+        return -1;
+    }
+
+    struct winsize ws;
+    ws.ws_row = static_cast<unsigned short>(rows);
+    ws.ws_col = static_cast<unsigned short>(cols);
+    ws.ws_xpixel = 0;
+    ws.ws_ypixel = 0;
+
+    int ret = ioctl(masterFd, TIOCSWINSZ, &ws);
+    if (ret == 0) {
+        BUSLOG_DEBUG("PTY resized to {}x{}", rows, cols);
+    } else {
+        BUSLOG_ERROR("Failed to resize PTY, errno: {}", errno);
+    }
+
+    return ret;
+}
+
+void PtyExecIO::Close()
+{
+    if (masterFd >= 0) {
+        close(masterFd);
+        masterFd = -1;
+    }
+    if (slaveFd >= 0) {
+        close(slaveFd);
+        slaveFd = -1;
+    }
+    // Release ExecIO pointers
+    stdIn.reset();
+    stdOut.reset();
+    stdErr.reset();
 }
 
 }    // namespace litebus

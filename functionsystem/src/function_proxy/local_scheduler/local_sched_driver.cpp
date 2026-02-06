@@ -243,6 +243,12 @@ Status LocalSchedDriver::Stop()
         // block to wait instance & agent to be cleared
         (void)localSchedSrv_->GracefulShutdown().Get();
     }
+    // Close ExecStreamService
+    if (execStreamService_) {
+        YRLOG_INFO("Closing ExecStreamService sessions");
+        execStreamService_->CloseAllSessions();
+        execStreamService_.reset();
+    }
     if (dsHealthyChecker_) {
         litebus::Terminate(dsHealthyChecker_->GetAID());
     }
@@ -328,6 +334,12 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
                                   .hostIP = param_.ip  };
     std::shared_ptr<BusService> busService = std::make_shared<BusService>(std::move(serviceParam));
     posixGrpcServer_->RegisterService(busService);
+
+    // Register ExecStreamService
+    execStreamService_ = std::make_shared<ExecStreamService>();
+    posixGrpcServer_->RegisterService(execStreamService_);
+    YRLOG_INFO("ExecStreamService registered on {}", param_.posixPort);
+
     posixGrpcServer_->Start();
 
     if (!posixGrpcServer_->WaitServerReady()) {

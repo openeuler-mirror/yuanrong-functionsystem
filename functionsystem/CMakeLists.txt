@@ -85,7 +85,7 @@ include(${CMAKE_CURRENT_LIST_DIR}/cmake/funcs.cmake)
 include(${VENDOR_CMAKE_DIR}/datasystem.cmake)
 
 # 设置 litebus 相关库变量
-set(litebus_ALL_LIB ${litebus_LIB} ${securec_LIB} ${yrlogs_LIB} pthread)
+set(litebus_ALL_LIB ${litebus_LIB} ${securec_LIB} ${yrlogs_LIB} pthread util)
 
 # ---------------------------------------------------------
 

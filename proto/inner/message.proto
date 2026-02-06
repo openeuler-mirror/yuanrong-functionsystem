@@ -319,6 +319,7 @@ message DeployInstanceResponse {
   string address = 7;
   string cpuType = 8;
   int64  pid = 9;
+  string containerID = 10;
 }
 
 message KillInstanceRequest {
@@ -523,6 +524,7 @@ message StartRuntimeInstanceResponse {
   string port = 3;
   int64  pid = 4;
   string cpuType = 5;
+  string containerID = 6;
 }
 
 message StartInstanceResponse {

@@ -22,6 +22,7 @@
 #include <unistd.h>
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -72,6 +73,39 @@ public:
 
     // read from pipe
     static std::string ReadPipe(int pipeRead);
+};
+
+/**
+ * PTY unified IO structure
+ * Since PTY is bidirectional, stdin/stdout/stderr share the same PTY
+ */
+struct PtyExecIO {
+    int masterFd = -1;  // PTY master end, used by parent process
+    int slaveFd = -1;   // PTY slave end, used by child process
+    std::shared_ptr<ExecIO> stdIn;
+    std::shared_ptr<ExecIO> stdOut;
+    std::shared_ptr<ExecIO> stdErr;
+
+    /**
+     * Create PTY IO group
+     * @param rows Terminal rows
+     * @param cols Terminal columns
+     * @return PTY IO object or error
+     */
+    static Try<PtyExecIO> Create(int rows = 24, int cols = 80);
+
+    /**
+     * Resize window
+     * @param rows New row count
+     * @param cols New column count
+     * @return 0 on success, -1 on failure
+     */
+    int Resize(int rows, int cols);
+
+    /**
+     * Close PTY
+     */
+    void Close();
 };
 
 /**

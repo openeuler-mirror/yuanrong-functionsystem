@@ -272,6 +272,7 @@ inline std::shared_ptr<messages::DeployInstanceResponse> BuildDeployInstanceResp
     deployInstanceResponse->set_address(startInstanceResponse.startruntimeinstanceresponse().address());
     deployInstanceResponse->set_cputype(startInstanceResponse.startruntimeinstanceresponse().cputype());
     deployInstanceResponse->set_pid(startInstanceResponse.startruntimeinstanceresponse().pid());
+    deployInstanceResponse->set_containerid(startInstanceResponse.startruntimeinstanceresponse().containerid());
     return deployInstanceResponse;
 }
 
