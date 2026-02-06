@@ -1,0 +1,137 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto3";
+
+package exec_service;
+
+option go_package = "functionsystem/pkg/common/faas_common/grpc/pb/exec;exec";
+
+// ExecService provides bidirectional streaming interface for container interaction
+service ExecService {
+  // ExecStream establishes a bidirectional stream connection with container
+  // Client sends command input, server returns output
+  rpc ExecStream(stream ExecMessage) returns (stream ExecMessage) {}
+}
+
+// ExecMessage is a unified message type, using oneof to distinguish different payloads
+message ExecMessage {
+  // Session ID, used to identify an exec session
+  string session_id = 1;
+
+  oneof payload {
+    // Start session request (client -> server)
+    ExecStartRequest start_request = 2;
+
+    // Input data (client -> server)
+    ExecInputData input_data = 3;
+
+    // Window size adjustment (client -> server, TTY mode only)
+    ExecResizeRequest resize = 4;
+
+    // Output data (server -> client)
+    ExecOutputData output_data = 5;
+
+    // Status response (server -> client)
+    ExecStatusResponse status = 6;
+  }
+}
+
+// ExecStartRequest starts a new exec session
+message ExecStartRequest {
+  // Container ID or name
+  string container_id = 1;
+
+  // Command to execute, default is ["/bin/sh"]
+  repeated string command = 2;
+
+  // Whether to enable TTY mode
+  // true: use docker exec -ti, supporting full interactive terminal
+  // false: use docker exec -i, basic mode
+  bool tty = 3;
+
+  // Initial terminal rows (only valid in TTY mode)
+  int32 rows = 4;
+
+  // Initial terminal columns (only valid in TTY mode)
+  int32 cols = 5;
+
+  // Environment variables
+  map<string, string> env = 6;
+
+  // Working directory (optional)
+  string working_dir = 7;
+
+  // User (optional)
+  string user = 8;
+}
+
+// ExecInputData contains data to be sent to container stdin
+message ExecInputData {
+  // Input data (binary-safe)
+  bytes data = 1;
+}
+
+// ExecResizeRequest is used to resize terminal window (TTY mode only)
+message ExecResizeRequest {
+  // New number of rows
+  int32 rows = 1;
+
+  // New number of columns
+  int32 cols = 2;
+}
+
+// ExecOutputData contains output data from container
+message ExecOutputData {
+  // Output stream type
+  enum StreamType {
+    STDOUT = 0;
+    STDERR = 1;
+  }
+
+  // Indicates whether it's stdout or stderr
+  StreamType stream_type = 1;
+
+  // Output data (binary-safe, may contain ANSI sequences)
+  bytes data = 2;
+}
+
+// ExecStatusResponse contains session status information
+message ExecStatusResponse {
+  // Session status
+  enum Status {
+    // Session has been started
+    STARTED = 0;
+
+    // Session is running
+    RUNNING = 1;
+
+    // Process has exited
+    EXITED = 2;
+
+    // An error occurred
+    ERROR = 3;
+  }
+
+  // Current status
+  Status status = 1;
+
+  // Process exit code (only valid when status == EXITED)
+  int32 exit_code = 2;
+
+  // Error message (only valid when status == ERROR)
+  string error_message = 3;
+}

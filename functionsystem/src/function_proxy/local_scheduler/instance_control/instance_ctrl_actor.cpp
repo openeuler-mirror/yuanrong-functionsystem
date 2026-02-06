@@ -2071,13 +2071,14 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
                                                               Status::GetPosixErrorCode(response.code()) })
             .Then([errCode, message]() { return Status(errCode, message); });
     }
-    YRLOG_DEBUG("{}|{}|success to deploy instance({}) with runtimeID({}), runtimeAddress({}), startTime({}), pid({})",
+    YRLOG_DEBUG("{}|{}|success to deploy instance({}) with runtimeID({}), runtimeAddress({}), startTime({}), pid({}), containerID({})",
                 request->traceid(), request->requestid(), request->instance().instanceid(), response.runtimeid(),
-                response.address(), response.timeinfo(), response.pid());
+                response.address(), response.timeinfo(), response.pid(), response.containerid());
     request->mutable_instance()->set_runtimeid(response.runtimeid());
     request->mutable_instance()->set_starttime(response.timeinfo());
     request->mutable_instance()->set_runtimeaddress(response.address());
     (*request->mutable_instance()->mutable_extensions())[PID] = std::to_string(response.pid());
+    request->mutable_instance()->set_containerid(response.containerid());
     SetBillingMetrics(request, response);
 
     // when instance is an app driver, no connection built from proxy to app driver

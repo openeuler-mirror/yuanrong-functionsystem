@@ -211,7 +211,7 @@ public:
         resource.mutable_scalar()->set_value(500);
         metaResources.mutable_resources()->operator[](CPU_RESOURCE_NAME).CopyFrom(resource);
         metaResources.mutable_resources()->operator[](MEMORY_RESOURCE_NAME).CopyFrom(resource);
-        functionMeta_ = { FuncMetaData{}, CodeMetaData{}, EnvMetaData{}, metaResources, ExtendedMetaData{} };
+        functionMeta_ = { WarmupType::NONE, FuncMetaData{}, CodeMetaData{}, EnvMetaData{}, metaResources, ExtendedMetaData{}, InstanceMetaData{}, RootfsSpecMeta{}, "" };
 
         mockResourceViewMgr_ = std::make_shared<resource_view::ResourceViewMgr>();
         primary_ = MockResourceView::CreateMockResourceView();
@@ -648,7 +648,7 @@ TEST_F(InstanceCtrlTest, DeployInstanceRetry)
     auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
     auto result = instanceCtrl->Schedule(scheduleReq, runtimePromise);
     ASSERT_AWAIT_READY(result);
-    EXPECT_EQ(result.Get().code(), StatusCode::SUCCESS);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::SUCCESS);
     ASSERT_AWAIT_READY_FOR(notifyCalled.GetFuture(), 30000);
     EXPECT_EQ(static_cast<StatusCode>(notifyCalled.GetFuture().Get().code()),
               StatusCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS);
@@ -690,7 +690,7 @@ TEST_F(InstanceCtrlTest, ScheduleCancelAfterScheduling)
     auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
     auto result = instanceCtrl.Schedule(scheduleReq, runtimePromise);
     ASSERT_AWAIT_READY(result);
-    EXPECT_EQ(result.Get().code(), StatusCode::RESOURCE_NOT_ENOUGH);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::RESOURCE_NOT_ENOUGH);
 }
 
 TEST_F(InstanceCtrlTest, ScheduleCancelAfterCreating)
@@ -793,7 +793,7 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForResourceNotEnough)
     auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
     auto result = instanceCtrl->Schedule(scheduleReq, runtimePromise);
     ASSERT_AWAIT_READY(result);
-    EXPECT_EQ(result.Get().code(), StatusCode::RESOURCE_NOT_ENOUGH);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::RESOURCE_NOT_ENOUGH);
 
     ASSERT_AWAIT_TRUE([&]() {
         return scheduleReq->instance().instancestatus().code() == static_cast<int32_t>(InstanceState::SCHEDULE_FAILED);
@@ -866,7 +866,7 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForDeployInstanceFailed)
     auto result = instanceCtrl->Schedule(scheduleReq, runtimePromise);
 
     ASSERT_AWAIT_READY(result);
-    EXPECT_EQ(result.Get().code(), StatusCode::SUCCESS);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::SUCCESS);
     ASSERT_AWAIT_READY(notifyCalled.GetFuture());
     EXPECT_EQ(static_cast<StatusCode>(notifyCalled.GetFuture().Get().code()), StatusCode::ERR_INNER_COMMUNICATION);
     auto selector = scheduleReq->mutable_instance()->mutable_scheduleoption()->mutable_resourceselector();
@@ -2378,7 +2378,7 @@ TEST_F(InstanceCtrlTest, CreateInstanceClientTest)
     auto result = instanceCtrl->Schedule(scheduleReqA, runtimePromise);
     // client returned is nullptr therefore code would be ERR_REQUEST_BETWEEN_RUNTIME_BUS;
     ASSERT_AWAIT_READY(result);
-    EXPECT_EQ(result.Get().code(), StatusCode::SUCCESS);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::SUCCESS);
     ASSERT_AWAIT_READY_FOR(notifyCalled.GetFuture(), 60000);
     EXPECT_EQ(static_cast<StatusCode>(notifyCalled.GetFuture().Get().code()),
               StatusCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS);
@@ -3157,7 +3157,7 @@ TEST_F(InstanceCtrlTest, CreateLocalNotEnoughAndRemoteNotEnough)
     auto runtimeFuture = runtimePromise->GetFuture();
     ASSERT_AWAIT_READY(runtimeFuture);
     YRLOG_INFO("Result: {}", result.Get().SerializeAsString());
-    EXPECT_EQ(result.Get().code(), StatusCode::RESOURCE_NOT_ENOUGH);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::RESOURCE_NOT_ENOUGH);
     EXPECT_EQ(runtimeFuture.Get().code(), 0);
     EXPECT_EQ(runtimeFuture.Get().instanceid(), "instance-id-CreateLocalNotEnoughAndRemoteNotEnough");
     EXPECT_EQ(static_cast<int32_t>(mockStateMachineState), static_cast<int32_t>(InstanceState::SCHEDULE_FAILED));
@@ -3252,7 +3252,7 @@ TEST_F(InstanceCtrlTest, CreateLocalNotEnoughAndRemoteEnough)
     auto runtimeFuture = runtimePromise->GetFuture();
     ASSERT_AWAIT_READY(runtimeFuture);
     YRLOG_INFO("Result: {}", result.Get().SerializeAsString());
-    EXPECT_EQ(result.Get().code(), StatusCode::RESOURCE_NOT_ENOUGH);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::RESOURCE_NOT_ENOUGH);
     EXPECT_EQ(runtimeFuture.Get().code(), 0);
     EXPECT_EQ(runtimeFuture.Get().instanceid(), "instance-id-CreateLocalNotEnoughAndRemoteEnough");
     EXPECT_EQ(mockStateMachineState, InstanceState::SCHEDULING);
@@ -3336,7 +3336,7 @@ TEST_F(InstanceCtrlTest, CreateLocalNotEnoughButNotForward)
     auto result = instanceCtrl->Schedule(scheduleReq, runtimePromise);
     ASSERT_AWAIT_READY(result);
     YRLOG_INFO("Result: {}", result.Get().SerializeAsString());
-    EXPECT_EQ(result.Get().code(), StatusCode::RESOURCE_NOT_ENOUGH);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::RESOURCE_NOT_ENOUGH);
     EXPECT_EQ(mockStateMachineState, InstanceState::SCHEDULING);
 }
 
@@ -3404,7 +3404,7 @@ TEST_F(InstanceCtrlTest, NewInstanceWithDuplicate)
 
     auto result = instanceCtrl->Schedule(scheduleReq, runtimePromise);
     ASSERT_AWAIT_READY(result);
-    EXPECT_EQ(result.Get().code(), StatusCode::SUCCESS);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::SUCCESS);
     ASSERT_AWAIT_READY(runtimePromise->GetFuture());
     EXPECT_EQ(runtimePromise->GetFuture().Get().code(), 0);
     ASSERT_AWAIT_READY(notifyCalled.GetFuture());
@@ -3478,7 +3478,7 @@ TEST_F(InstanceCtrlTest, DISABLED_SchedulingWithDuplicate)
     ASSERT_AWAIT_READY(result);
     ASSERT_AWAIT_READY(duplicateResult);
     YRLOG_INFO("Result: {}", result.Get().SerializeAsString());
-    EXPECT_EQ(result.Get().code(), StatusCode::RESOURCE_NOT_ENOUGH);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::RESOURCE_NOT_ENOUGH);
     EXPECT_EQ(duplicateResult.Get().code(), StatusCode::RESOURCE_NOT_ENOUGH);
     EXPECT_EQ(mockStateMachineState, InstanceState::SCHEDULING);
 
@@ -5694,7 +5694,7 @@ TEST_F(InstanceCtrlTest, KillFatalInstance)
     future = instanceCtrlWithMockObserver_->Kill("src", killReq);
     ASSERT_AWAIT_READY(future);
     resp = future.Get();
-    EXPECT_EQ(resp.code(), StatusCode::ERR_INNER_SYSTEM_ERROR);
+    EXPECT_EQ(resp.code(), (int32_t)StatusCode::ERR_INNER_SYSTEM_ERROR);
 }
 
 /**
