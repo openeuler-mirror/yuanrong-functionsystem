@@ -16,9 +16,9 @@
 
 syntax = "proto3";
 
-import "resource.proto";
 import "common.proto";
 import "core_service.proto";
+import "resource.proto";
 import "runtime_launcher_interface.proto";
 
 package messages;
@@ -261,6 +261,16 @@ message ContainerRuntimeConfig {
   string mountPoint = 4;
 }
 
+message LanguageConfig {
+  string name = 1;
+  string type = 2;
+  string root = 3;
+  string entrypoint = 4;
+  string executor = 5;
+  string version = 6;
+  map<string, string> env = 7;
+}
+
 message DeployInstanceRequest {
   string instanceID = 1;
   string traceID = 2;
@@ -300,6 +310,7 @@ message DeployInstanceRequest {
   string dposixUdsPath = 36;
   int32 warmupType = 37;
   ContainerRuntimeConfig container = 38;
+  LanguageConfig languageConfig = 39;
 }
 
 message TenantCredentials {
@@ -482,6 +493,7 @@ message RuntimeInstanceInfo {
   int64 gracefulShutdownTime = 8;
   int32 warmupType = 9;
   ContainerRuntimeConfig container = 10;
+  LanguageConfig languageConfig = 11;
 }
 
 message DeployDuration {
