@@ -25,8 +25,10 @@
 #include <grpcpp/grpcpp.h>
 #include "common/proto/pb/posix/exec_service.grpc.pb.h"
 
-#include "function_proxy/common/exec_session/exec_session.h"
-#include "function_proxy/common/exec_session/stream_writer.h"
+#include "actor/actor.hpp"
+#include "actor/aid.hpp"
+#include "function_proxy/common/exec_session/exec_session_actor.h"
+#include "function_proxy/common/exec_session/io_event_actor.h"
 
 namespace functionsystem {
 
@@ -48,8 +50,10 @@ using GrpcStatus = ::grpc::Status;
  *
  * Responsibilities:
  * 1. Handle gRPC bidirectional stream Read/Write
- * 2. Manage multiple ExecSession instances
- * 3. Route different message types to appropriate handlers
+ * 2. Manage multiple ExecSessionActor instances
+ * 3. Route different message types to appropriate actors
+ *
+ * Refactored to use Actor model - delegates session management to ExecSessionActor
  */
 class ExecStreamService : public ExecService::Service {
 public:
@@ -80,28 +84,29 @@ private:
      */
     GrpcStatus HandleStartRequest(
         const ExecStartRequest& request,
-        const std::shared_ptr<StreamWriter>& writer,
-        std::shared_ptr<ExecSession>& outSession);
+        ServerReaderWriter<ExecMessage, ExecMessage>* stream,
+        litebus::AID& outSessionAid,
+        std::string& outSessionId);
 
     /**
      * Handle input data
      */
     GrpcStatus HandleInputData(
         const ExecInputData& input,
-        const std::shared_ptr<ExecSession>& session);
+        const litebus::AID& sessionAid);
 
     /**
      * Handle window resize
      */
     GrpcStatus HandleResize(
         const ExecResizeRequest& resize,
-        const std::shared_ptr<ExecSession>& session);
+        const litebus::AID& sessionAid);
 
     /**
      * Send status response
      */
     void SendStatusResponse(
-        const std::shared_ptr<StreamWriter>& writer,
+        ServerReaderWriter<ExecMessage, ExecMessage>* stream,
         const std::string& sessionId,
         ExecStatusResponse::Status status,
         int exitCode = 0,
@@ -110,22 +115,18 @@ private:
     /**
      * Add session to manager
      */
-    void AddSession(const std::string& sessionId, std::shared_ptr<ExecSession> session);
+    void AddSession(const std::string& sessionId, const litebus::AID& sessionAid);
 
     /**
      * Remove session
      */
     void RemoveSession(const std::string& sessionId);
 
-    /**
-     * Get session
-     */
-    std::shared_ptr<ExecSession> GetSession(const std::string& sessionId) const;
-
 private:
     // Session management (using read-write lock for concurrent access)
+    // Now stores Actor IDs instead of shared_ptr<ExecSession>
     mutable std::shared_mutex sessionsMutex_;
-    std::unordered_map<std::string, std::shared_ptr<ExecSession>> sessions_;
+    std::unordered_map<std::string, litebus::AID> sessions_;
 };
 
 }  // namespace functionsystem

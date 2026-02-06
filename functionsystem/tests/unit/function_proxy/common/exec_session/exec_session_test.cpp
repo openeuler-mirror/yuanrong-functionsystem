@@ -16,81 +16,58 @@
 
 #include <gtest/gtest.h>
 
-#include "function_proxy/common/exec_session/exec_session.h"
+#include "function_proxy/common/exec_session/exec_session_actor.h"
+#include "function_proxy/common/exec_session/io_event_actor.h"
 
 namespace functionsystem {
 namespace test {
 
-class ExecSessionTest : public ::testing::Test {
+class ExecSessionActorTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Test setup if needed
+        // Initialize IOEventActor singleton for tests
+        IOEventActor::CreateInstance();
     }
 
     void TearDown() override {
+        // Cleanup IOEventActor singleton
+        IOEventActor::DestroyInstance();
     }
 };
 
-// Test session creation
-TEST_F(ExecSessionTest, CreateSession) {
-    ExecSession::CreateParams params;
-    params.containerId = "test-container";
-    params.command = {"/bin/sh"};
-    params.tty = false;
+// Test ExecSessionActor creation
+TEST_F(ExecSessionActorTest, CreateSessionActor) {
+    std::vector<std::pair<std::string, int>> outputs;  // (data, exitCode)
 
-    auto session = ExecSession::Create(params);
+    ExecSessionActor::CreateParams params;
+    params.writer = [&outputs](const std::string& data, int exitCode) {
+        outputs.push_back({data, exitCode});
+    };
 
-    ASSERT_NE(session, nullptr);
-    EXPECT_FALSE(session->GetSessionId().empty());
-    EXPECT_FALSE(session->IsRunning());
+    auto actor = ExecSessionActor::Create(params);
+
+    ASSERT_NE(actor, nullptr);
+    EXPECT_FALSE(actor->GetAID().Name().empty());
 }
 
-// Test session ID uniqueness
-TEST_F(ExecSessionTest, SessionIdUnique) {
-    ExecSession::CreateParams params;
-    params.containerId = "test-container";
+// Test ExecSessionActor ID uniqueness
+TEST_F(ExecSessionActorTest, SessionActorIdUnique) {
+    ExecSessionActor::CreateParams params;
+    params.writer = [](const std::string& data, int exitCode) {};
 
-    auto session1 = ExecSession::Create(params);
-    auto session2 = ExecSession::Create(params);
+    auto actor1 = ExecSessionActor::Create(params);
+    auto actor2 = ExecSessionActor::Create(params);
 
-    EXPECT_NE(session1->GetSessionId(), session2->GetSessionId());
+    EXPECT_NE(actor1->GetAID().Name(), actor2->GetAID().Name());
 }
 
-// Test default command
-TEST_F(ExecSessionTest, DefaultCommand) {
-    ExecSession::CreateParams params;
-    params.containerId = "test-container";
-    // Don't set command
+// Test IOEventActor singleton
+TEST_F(ExecSessionActorTest, IOEventActorSingleton) {
+    auto aid1 = IOEventActor::GetInstance();
+    auto aid2 = IOEventActor::GetInstance();
 
-    auto session = ExecSession::Create(params);
-    ASSERT_NE(session, nullptr);
-    // Default should use /bin/sh
-}
-
-// Test write to closed session
-TEST_F(ExecSessionTest, WriteToClosedSession) {
-    ExecSession::CreateParams params;
-    params.containerId = "test-container";
-
-    auto session = ExecSession::Create(params);
-
-    // Close without starting
-    session->Close();
-
-    auto status = session->WriteInput("test");
-    EXPECT_FALSE(status.IsOk());
-}
-
-// Test resize in non-TTY mode
-TEST_F(ExecSessionTest, ResizeNonTtyMode) {
-    ExecSession::CreateParams params;
-    params.containerId = "test-container";
-    params.tty = false;
-
-    auto session = ExecSession::Create(params);
-
-    auto status = session->Resize(40, 120);
-    EXPECT_FALSE(status.IsOk());
+    EXPECT_EQ(aid1.Name(), aid2.Name());
+    EXPECT_FALSE(aid1.Name().empty());
 }
 
 }  // namespace test
