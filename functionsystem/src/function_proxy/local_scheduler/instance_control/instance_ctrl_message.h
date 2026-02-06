@@ -49,6 +49,9 @@ std::shared_ptr<messages::DeployInstanceRequest> GetDeployInstanceReq(
 void BuildRootfsConfig(
     const FunctionMeta &funcMeta, const std::shared_ptr<messages::DeployInstanceRequest> &request);
 
+void BuildLanguageConfig(
+    const FunctionMeta &funcMeta, const std::shared_ptr<messages::DeployInstanceRequest> &request);
+
 void BuildDeploySpec(const FunctionMeta &funcMeta,
                      const std::shared_ptr<messages::DeployInstanceRequest> &deployInstanceRequest);
 

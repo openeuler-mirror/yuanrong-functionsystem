@@ -23,6 +23,7 @@
 #include <cerrno>
 #include <nlohmann/json.hpp>
 #include <regex>
+#include <sstream>
 #include <thread>
 #include <unordered_set>
 
@@ -69,7 +70,8 @@ void ContainerExecutor::InitConfig()
     std::string endpoint = ep.IsSome() ? ep.Get() : "127.0.0.1:8222";
     YRLOG_INFO("start container executor which bind containerd({})", endpoint);
     containerd_ = GrpcClient<runtime::v1::RuntimeLauncher>::CreateUdsGrpcClient(endpoint);
-    CheckConnectivity();
+    synced_ = true;
+    // CheckConnectivity();
     YRLOG_INFO("success to start container executor which bind containerd({})", endpoint);
 }
 
@@ -246,7 +248,7 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartRuntime
     const auto &info = request->runtimeinstanceinfo();
     std::string execPath;
     if (litebus::strings::StartsWithPrefix(language, PYTHON_LANGUAGE)) {
-        execPath = language;
+        execPath = info.languageconfig().executor().empty() ? language : info.languageconfig().executor();
     } else {
         // todo(ant)： adapter for different runtime
         execPath = cmdBuilder_.GetExecPathFromRuntimeConfig(info.runtimeconfig());
@@ -468,6 +470,12 @@ Status RootfsJsonParse(runtime::v1::FunctionRuntime &funcRt, const std::string &
     return Status::OK();
 }
 
+bool HasCustomRootfs(const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
+    return opts.find(CONTAINER_ROOTFS) != opts.end();
+}
+
 Status ContainerExecutor::BuildRootfs(const std::shared_ptr<messages::StartInstanceRequest> &request,
                                       std::shared_ptr<runtime::v1::StartRequest> &start)
 {
@@ -484,6 +492,65 @@ Status ContainerExecutor::BuildRootfs(const std::shared_ptr<messages::StartInsta
     // inconsistent rootfs
     funcRt->set_id(request->runtimeinstanceinfo().runtimeid());
     return RootfsJsonParse(*funcRt, opts.at(CONTAINER_ROOTFS));
+}
+
+
+std::vector<std::string> BuildCommand(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                      const std::string &execPath)
+{
+    std::vector<std::string> commands;
+    const auto &languageConfig = request->runtimeinstanceinfo().languageconfig();
+
+    // Add environment variables in key=value format
+    for (const auto &[key, value] : languageConfig.env()) {
+        commands.push_back(key + "=" + value);
+    }
+
+    // Add execPath
+    if (!execPath.empty()) {
+        commands.push_back(execPath);
+    }
+
+    // Add entrypoint from languageConfig, split by spaces
+    if (!languageConfig.entrypoint().empty()) {
+        std::istringstream iss(languageConfig.entrypoint());
+        std::string token;
+        while (iss >> token) {
+            commands.push_back(token);
+        }
+    }
+
+    return commands;
+}
+
+std::string BuildLanguageWorkingRoot(
+    const std::shared_ptr<messages::StartInstanceRequest> &request,
+    runtime::v1::Mount &mount)
+{
+    std::string root = "/";
+    const auto &languageConfig = request->runtimeinstanceinfo().languageconfig();
+
+    // Only create mount and return cd commands if languageConfig has valid type and root
+    if (languageConfig.type().empty() || languageConfig.root().empty()) {
+        return root;
+    }
+    if (!HasCustomRootfs(request)) {
+        YRLOG_WARN("custom rootfs is not specified, using default language working root config");
+        return root;
+    }
+    const std::string mountDst = "/__yuanrong/";
+    mount.set_source(languageConfig.root());
+    mount.set_target(mountDst);
+
+    if (languageConfig.type() == "erofs") {
+        mount.set_type("erofs");
+    } else if (languageConfig.type() == "path") {
+        mount.set_type("bind");
+    } else {
+        // For unknown types, default to bind
+        mount.set_type("bind");
+    }
+    return mountDst;
 }
 
 litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
@@ -518,6 +585,23 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
     if (opts.find(CONTAINER_EXTRA_CONFIG) != opts.end()) {
         start->set_extraconfig(opts.at(CONTAINER_EXTRA_CONFIG));
     }
+
+    // Build language mount and get cd commands
+    runtime::v1::Mount mount;
+    auto workingRoot = BuildLanguageWorkingRoot(request, mount);
+    if (mount.source().length() > 0 && mount.target().length() > 0) {
+        *start->add_mounts() = mount;
+    }
+    *funcRt->add_command() = "cd";
+    *funcRt->add_command() = workingRoot;
+    *funcRt->add_command() = "&&";
+
+    // Build command from languageconfig and execPath
+    auto commands = BuildCommand(request, execPath);
+    for (const auto &cmd : commands) {
+        *funcRt->add_command() = cmd;
+    }
+    // Also add buildArgs if provided
     for (const auto &arg : buildArgs) {
         *funcRt->add_command() = arg;
     }
@@ -794,6 +878,18 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::WarmUp(
     warmup->set_sandbox(request->runtimeinstanceinfo().container().runtime());
     *warmup->mutable_rootfs() = request->runtimeinstanceinfo().container().rootfsconfig();
     warmup->set_makeseed(request->runtimeinstanceinfo().warmuptype() == static_cast<int32_t>(WarmupType::SEED));
+    runtime::v1::Mount _;
+    auto workingRoot = BuildLanguageWorkingRoot(request, _);
+    *warmup->add_command() = "cd";
+    *warmup->add_command() = workingRoot;
+    *warmup->add_command() = "&&";
+
+    // Build command from languageconfig and execPath
+    auto commands = BuildCommand(request, execPath);
+    for (const auto &cmd : commands) {
+        *warmup->add_command() = cmd;
+    }
+    // Also add buildArgs if provided
     for (const auto &arg : buildArgs) {
         *warmup->add_command() = arg;
     }

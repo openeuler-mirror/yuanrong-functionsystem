@@ -37,8 +37,8 @@ std::shared_ptr<DeployInstanceRequest> GetDeployInstanceReq(const FunctionMeta &
     deployInstanceRequest->set_codesha256(funcMeta.funcMetaData.codeSha256);
     deployInstanceRequest->mutable_resources()->CopyFrom(request->instance().resources());
     BuildDeploySpec(funcMeta, deployInstanceRequest);
-    // todo support user defined rootfs
     BuildRootfsConfig(funcMeta, deployInstanceRequest);
+    BuildLanguageConfig(funcMeta, deployInstanceRequest);
     for (auto &[key, handler] : funcMeta.funcMetaData.hookHandler) {
         deployInstanceRequest->mutable_hookhandler()->operator[](key) = handler;
     }
@@ -119,8 +119,7 @@ std::shared_ptr<messages::StaticFunctionChangeRequest> GetStaticFunctionChangeRe
 void BuildRootfsConfig(
     const FunctionMeta &funcMeta, const std::shared_ptr<DeployInstanceRequest> &deployInstanceRequest)
 {
-    if (funcMeta.rootfs.runtime.empty() || funcMeta.rootfs.imageurl.empty()
-        || funcMeta.rootfs.type == RootfsSrcType::INVALID) {
+    if (funcMeta.rootfs.runtime.empty() || funcMeta.rootfs.type == RootfsSrcType::INVALID) {
         return;
     }
     auto container = deployInstanceRequest->mutable_container();
@@ -139,6 +138,24 @@ void BuildRootfsConfig(
         container->mutable_rootfsconfig()->set_imageurl(funcMeta.rootfs.imageurl);
     } else if (funcMeta.rootfs.type == RootfsSrcType::IMAGE) {
         container->mutable_rootfsconfig()->set_imageurl(funcMeta.rootfs.imageurl);
+    }
+}
+
+void BuildLanguageConfig(
+    const FunctionMeta &funcMeta, const std::shared_ptr<DeployInstanceRequest> &deployInstanceRequest)
+{
+    if (funcMeta.language.name.empty()) {
+        return;
+    }
+    auto languageConfig = deployInstanceRequest->mutable_languageconfig();
+    languageConfig->set_name(funcMeta.language.name);
+    languageConfig->set_type(funcMeta.language.type);
+    languageConfig->set_root(funcMeta.language.root);
+    languageConfig->set_entrypoint(funcMeta.language.entrypoint);
+    languageConfig->set_executor(funcMeta.language.executor);
+    languageConfig->set_version(funcMeta.language.version);
+    for (const auto &[key, value] : funcMeta.language.env) {
+        languageConfig->mutable_env()->operator[](key) = value;
     }
 }
 }  // namespace functionsystem

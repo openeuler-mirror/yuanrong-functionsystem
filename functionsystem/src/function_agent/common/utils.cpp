@@ -448,6 +448,9 @@ messages::RuntimeInstanceInfo SetRuntimeInstanceInfo(const std::shared_ptr<messa
     if (req->has_container()) {
         *runtimeInstanceInfo.mutable_container() = std::move(req->container());
     }
+    if (req->has_languageconfig()) {
+        *runtimeInstanceInfo.mutable_languageconfig() = std::move(req->languageconfig());
+    }
     return runtimeInstanceInfo;
 }
 

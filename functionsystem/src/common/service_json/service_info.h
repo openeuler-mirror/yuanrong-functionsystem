@@ -131,6 +131,7 @@ struct FunctionConfig {
     DeviceMetaData device;
     WarmupType warmup {0};
     RootfsSpecMeta rootfs;
+    LanguageMetaData language;
 };
 
 struct ServiceInfo {
