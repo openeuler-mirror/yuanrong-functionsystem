@@ -71,7 +71,7 @@ void ContainerExecutor::InitConfig()
     YRLOG_INFO("start container executor which bind containerd({})", endpoint);
     containerd_ = GrpcClient<runtime::v1::RuntimeLauncher>::CreateUdsGrpcClient(endpoint);
     synced_ = true;
-    // CheckConnectivity();
+    CheckConnectivity();
     YRLOG_INFO("success to start container executor which bind containerd({})", endpoint);
 }
 
@@ -532,10 +532,6 @@ std::string BuildLanguageWorkingRoot(
 
     // Only create mount and return cd commands if languageConfig has valid type and root
     if (languageConfig.type().empty() || languageConfig.root().empty()) {
-        return root;
-    }
-    if (!HasCustomRootfs(request)) {
-        YRLOG_WARN("custom rootfs is not specified, using default language working root config");
         return root;
     }
     const std::string mountDst = "/__yuanrong/";
