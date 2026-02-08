@@ -9,26 +9,28 @@ service RuntimeLauncher {
   rpc Register(RegisterRequest) returns (NormalResponse) {}
   rpc Unregister(UnregisterRequest) returns (NormalResponse) {}
   rpc GetRegistered(GetRegisteredRequest) returns (GetRegisteredResponse) {}
+  rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
+  rpc Restore(RestoreRequest) returns (RestoreResponse) {}
 }
 
 enum RootfsSrcType {
-  S3 = 0;
+  S3    = 0;
   IMAGE = 1;
 }
 
 message S3Config {
-  string Endpoint = 1;
-  string Bucket = 2;
-  string Object = 3;
-  string AccessKeyID = 4; // omitempty
+  string Endpoint        = 1;
+  string Bucket          = 2;
+  string Object          = 3;
+  string AccessKeyID     = 4; // omitempty
   string AccessKeySecret = 5; // omitempty
 }
 
 message RootfsConfig {
-  bool readonly = 1;
-  RootfsSrcType type = 2;
-  string imageUrl = 3;
-  S3Config s3Config = 4;
+  bool          readonly = 1;
+  RootfsSrcType type     = 2;
+  string        imageUrl = 3;
+  S3Config      s3Config = 4;
 }
 
 message Mount {
@@ -47,28 +49,31 @@ message Mount {
 }
 
 message FunctionRuntime {
-  string id = 1;
-  string sandbox = 2;
-  RootfsConfig rootfs = 3;
-  bool makeSeed = 4;
-  repeated string command = 5;
+  string              id          = 1;
+  string              sandbox     = 2;
+  RootfsConfig        rootfs      = 3;
+  bool                makeSeed    = 4;
+  repeated string     command     = 5;
   map<string, string> runtimeEnvs = 6;
 }
 
 message StartRequest {
   FunctionRuntime funcRuntime = 1;
-  repeated Mount mounts = 2;
+  repeated Mount  mounts      = 2;
   // resource request of function
-  // etc: CPU millicore​
+  // etc: CPU millicore
   //      Memory MB
   map<string, double> resources = 3;
-  map<string, string> userEnvs = 4;
+  map<string, string> userEnvs  = 4;
   // redirect path for stdout
   string stdout = 5;
   // redirect path for stderr
   string stderr = 6;
-  // json string for extra options
+  // json string for customized config
   string extraConfig = 7;
+  // network indicates the type of network the function use,
+  // default is sandbox, support: sandbox, host, none
+  string network = 8;
 }
 
 message StartResponse {
@@ -104,14 +109,55 @@ message WaitResponse {
 message RegisterRequest { repeated FunctionRuntime funcRuntimes = 1; }
 
 message NormalResponse {
-  bool success = 1;
+  bool   success = 1;
   string message = 2;
 }
 
-message UnregisterRequest {
-  repeated string ids = 1;
-}
+message UnregisterRequest { repeated string ids = 1; }
 
 message GetRegisteredRequest {}
 
 message GetRegisteredResponse { repeated FunctionRuntime funcRuntimes = 1; }
+
+message CheckpointRequest {
+  string id       = 1;
+  string ckpt_dir = 2;
+  int64  timeout  = 3;
+  bool   compress = 4;
+  string trace_id = 5;
+}
+
+message CheckpointResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message RestoreRequest {
+  FunctionRuntime funcRuntime = 1;
+  repeated Mount  mounts      = 2;
+  // resource request of function
+  // etc: CPU millicore
+  //      Memory MB
+  map<string, double> resources = 3;
+  map<string, string> userEnvs  = 4;
+  // redirect path for stdout
+  string stdout = 5;
+  // redirect path for stderr
+  string stderr = 6;
+  // json string for customized config
+  string extraConfig = 7;
+  // network indicates the type of network the function use,
+  // default is sandbox, support: sandbox, host, none
+  string network = 8;
+  string ckpt_dir = 9;
+  string trace_id = 10;
+}
+
+message RestoreResponse {
+  // success:0
+  int32 code = 1;
+  // message indicating details about why start return with specific code
+  string message = 2;
+  // unique id of process/container
+  string id = 3;
+}
