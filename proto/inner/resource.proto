@@ -360,6 +360,7 @@ message InstanceInfo {
 
     TrafficReportType trafficReportType = 36;
     string containerID = 37;  // container ID from containerd
+    string proxyGrpcAddress = 38;  // proxy gRPC service address (ip:port format)
 }
 
 message RouteInfo {

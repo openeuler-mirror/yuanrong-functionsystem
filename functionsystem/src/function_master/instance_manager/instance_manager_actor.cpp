@@ -45,6 +45,31 @@ const int64_t INSTANCE_COUNT_REPORT_INTERVAL = 10 * 1000; // 10 seconds
 const int64_t GARBAGE_COLLECT_INTERVAL = 5 * 60 * 1000; // 5 minutes
 const uint64_t FATAL_INSTANCE_TIMEOUT = 3600; // 1 hour in seconds
 
+/**
+ * Parse tenantID from instance key.
+ * Key format: /sn/instance/business/yrk/tenant/{tenantID}/function/{function}/version/{version}/defaultaz/{requestID}/{instanceID}
+ * @param instanceKey The instance key path
+ * @return The tenantID, or empty string if parsing fails
+ */
+static std::string ParseTenantIDFromInstanceKey(const std::string &instanceKey)
+{
+    static const std::string PREFIX = INSTANCE_PATH_PREFIX + "/";
+    if (instanceKey.empty() || instanceKey.size() <= PREFIX.size()) {
+        return "";
+    }
+
+    // Extract the part after the prefix
+    std::string remaining = instanceKey.substr(PREFIX.size());
+
+    // Split by "/" and get the first segment (tenantID)
+    auto pos = remaining.find('/');
+    if (pos == std::string::npos) {
+        return "";
+    }
+
+    return remaining.substr(0, pos);
+}
+
 static messages::ForwardKillResponse GenerateForwardKillResponse(const messages::ForwardKillRequest &req,
                                                                         int32_t state, const std::string &msg)
 {
@@ -502,6 +527,11 @@ void InstanceManagerActor::OnInstanceWatchEvent(const std::vector<WatchEvent> &e
             auto eventKey = TrimKeyPrefix(event.kv.key(), member_->client->GetTablePrefix());
             auto instance = std::make_shared<resource_view::InstanceInfo>();
             if (TransToInstanceInfoFromJson(*instance, event.kv.value())) {
+                // Parse tenantID from key and set it in instance
+                std::string tenantID = ParseTenantIDFromInstanceKey(eventKey);
+                if (!tenantID.empty()) {
+                    instance->set_tenantid(tenantID);
+                }
                 allInstances.emplace(eventKey, instance);
             } else {
                 YRLOG_ERROR("failed to transform instance({}) info from String.", eventKey);
@@ -531,6 +561,11 @@ void InstanceManagerActor::OnInstanceWatchEvent(const std::vector<WatchEvent> &e
                 auto instance = std::make_shared<resource_view::InstanceInfo>();
                 auto eventKey = TrimKeyPrefix(event.kv.key(), member_->client->GetTablePrefix());
                 if (TransToInstanceInfoFromJson(*instance, event.kv.value())) {
+                    // Parse tenantID from key and set it in instance
+                    std::string tenantID = ParseTenantIDFromInstanceKey(eventKey);
+                    if (!tenantID.empty()) {
+                        instance->set_tenantid(tenantID);
+                    }
                     OnInstancePut(eventKey, instance);
                 } else {
                     YRLOG_ERROR("failed to transform instance({}) info from String.", eventKey);
