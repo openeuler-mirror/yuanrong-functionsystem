@@ -48,15 +48,15 @@ GrpcStatus ExecStreamService::ExecStream(
     litebus::AID sessionAid;
     std::string currentSessionId;
 
+    // Stream validity flag (shared with writer callback)
+    // Use shared_ptr to ensure it's kept alive as long as the actor exists
+    auto streamValid = std::make_shared<std::atomic<bool>>(true);
+
     // Main loop: read and process client messages
     ExecMessage request;
     int messageCount = 0;
     while (stream->Read(&request)) {
         messageCount++;
-        YRLOG_INFO("Received message #{}, payload_case: {}, session_id: {}",
-                   messageCount,
-                   static_cast<int>(request.payload_case()),
-                   request.session_id());
 
         switch (request.payload_case()) {
             case ExecMessage::kStartRequest: {
@@ -72,7 +72,7 @@ GrpcStatus ExecStreamService::ExecStream(
 
                 // Handle start request
                 YRLOG_INFO("Calling HandleStartRequest...");
-                auto status = HandleStartRequest(request.start_request(), stream,
+                auto status = HandleStartRequest(request.start_request(), stream, streamValid,
                                                   sessionAid, currentSessionId);
                 if (!status.ok()) {
                     YRLOG_ERROR("HandleStartRequest failed: {}", status.error_message());
@@ -91,8 +91,6 @@ GrpcStatus ExecStreamService::ExecStream(
             }
 
             case ExecMessage::kInputData: {
-                YRLOG_DEBUG("Received kInputData, size: {} bytes",
-                           request.input_data().data().size());
                 if (sessionAid.Name().empty()) {
                     YRLOG_WARN("Received input data but no session exists");
                     continue;
@@ -130,6 +128,9 @@ GrpcStatus ExecStreamService::ExecStream(
 
     YRLOG_INFO("ExecStream connection closed, total messages received: {}", messageCount);
 
+    // Mark stream as invalid before cleanup
+    streamValid->store(false);
+
     // Cleanup resources
     if (!sessionAid.Name().empty()) {
         litebus::Async(sessionAid, &ExecSessionActor::DoClose);
@@ -142,6 +143,7 @@ GrpcStatus ExecStreamService::ExecStream(
 GrpcStatus ExecStreamService::HandleStartRequest(
     const ExecStartRequest& request,
     ServerReaderWriter<ExecMessage, ExecMessage>* stream,
+    std::shared_ptr<std::atomic<bool>> streamValid,
     litebus::AID& outSessionAid,
     std::string& outSessionId)
 {
@@ -154,10 +156,16 @@ GrpcStatus ExecStreamService::HandleStartRequest(
         return GrpcStatus(::grpc::StatusCode::INVALID_ARGUMENT, "container_id is required");
     }
 
-    // Create stream writer callback (captures stream pointer)
+    // Create stream writer callback (captures stream pointer and validity flag)
     // Note: This is called from Actor context, so it's serial
-    auto writer = [stream, sessionIdPtr = &outSessionId]
+    auto writer = [stream, sessionIdPtr = &outSessionId, streamValid]
                   (const std::string& data, int exitCode) {
+        // Check if stream is still valid before writing
+        if (!streamValid->load()) {
+            YRLOG_WARN("Stream already closed, ignoring write for sessionId: {}", *sessionIdPtr);
+            return;
+        }
+
         ExecMessage response;
         response.set_session_id(*sessionIdPtr);
 
@@ -169,7 +177,6 @@ GrpcStatus ExecStreamService::HandleStartRequest(
             status->set_exit_code(exitCode);
         } else if (!data.empty()) {
             // Normal output data
-            YRLOG_DEBUG("Sending output data, sessionId: {}, size: {}", *sessionIdPtr, data.size());
             auto* output = response.mutable_output_data();
             output->set_data(data);
             output->set_stream_type(ExecOutputData::STDOUT);
