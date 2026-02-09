@@ -45,6 +45,7 @@ Status InstanceManagerDriver::Start()
     instanceApiRouteRegister_->InitQueryNamedInsHandler(instanceManagerActor_);
     instanceApiRouteRegister_->InitQueryInstancesHandler(instanceManagerActor_);
     instanceApiRouteRegister_->InitQueryDebugInstancesHandler(instanceManagerActor_);
+    instanceApiRouteRegister_->InitQueryTenantInstancesHandler(instanceManagerActor_);
     if (auto registerStatus(httpServer_->RegisterRoute(instanceApiRouteRegister_));
         registerStatus != StatusCode::SUCCESS) {
         YRLOG_ERROR("register instance api router failed.");
