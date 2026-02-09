@@ -17,13 +17,14 @@
 #ifndef FUNCTIONSYSTEM_FUNCTION_PROXY_EXEC_SESSION_IO_EVENT_ACTOR_H
 #define FUNCTIONSYSTEM_FUNCTION_PROXY_EXEC_SESSION_IO_EVENT_ACTOR_H
 
-#include <actor/actor.hpp>
-#include <timer/timertools.hpp>
 #include <sys/epoll.h>
-#include <unordered_map>
+
+#include <actor/actor.hpp>
 #include <atomic>
-#include <memory>
 #include <functional>
+#include <memory>
+#include <timer/timertools.hpp>
+#include <unordered_map>
 
 namespace functionsystem {
 
@@ -33,7 +34,7 @@ class IOEventActor : public litebus::ActorBase {
 public:
     // IO callback type: (data, exitCode) -> void
     // exitCode: -1 for normal data, >=0 for EOF/error with exit code
-    using IOCallback = std::function<void(const std::string& data, int exitCode)>;
+    using IOCallback = std::function<void(const std::string &data, int exitCode)>;
 
     // Create singleton instance (should be called once at service startup)
     static void CreateInstance();
@@ -61,7 +62,7 @@ protected:
     void Finalize() override;
 
 private:
-    explicit IOEventActor(const std::string& name);
+    explicit IOEventActor(const std::string &name);
 
     // Event loop (scheduled periodically via AsyncAfter)
     void EventLoop();
@@ -69,9 +70,9 @@ private:
     // Helper method to read and dispatch data
     void ReadAndDispatch(int fd);
 
-    int epollFd_{-1};
+    int epollFd_{ -1 };
     std::unordered_map<int, IOCallback> fdToCallback_;
-    std::atomic<bool> running_{false};
+    std::atomic<bool> running_{ false };
     litebus::Timer eventLoopTimer_;  // Timer for event loop scheduling
 
     static std::shared_ptr<IOEventActor> instance_;
