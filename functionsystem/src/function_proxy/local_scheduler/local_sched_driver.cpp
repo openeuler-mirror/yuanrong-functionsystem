@@ -95,6 +95,8 @@ Status LocalSchedDriver::Create()
     config.maxPriority = param_.maxPriority;
     config.enablePreemption = param_.enablePreemption;
     config.udsPath = param_.udsPath;
+    // Set proxy gRPC address (ip:port format)
+    config.proxyGrpcAddress = param_.ip + ":" + param_.grpcListenPort;
     instanceCtrl_ = InstanceCtrl::Create(param_.nodeID, config);
     PosixAPIHandler::BindInstanceCtrl(instanceCtrl_);
     PosixAPIHandler::BindControlClientManager(param_.controlInterfacePosixMgr);

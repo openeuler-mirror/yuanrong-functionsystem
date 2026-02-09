@@ -151,6 +151,8 @@ struct InstanceCtrlConfig {
     bool enablePreemption {false};
     // dposix uds endpoint pass to runtime
     std::string udsPath;
+    // proxy gRPC service address (ip:port format)
+    std::string proxyGrpcAddress;
 };
 
 class InstanceCtrlActor : public BasisActor {

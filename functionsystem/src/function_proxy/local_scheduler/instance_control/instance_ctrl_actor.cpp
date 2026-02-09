@@ -2079,6 +2079,8 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     request->mutable_instance()->set_runtimeaddress(response.address());
     (*request->mutable_instance()->mutable_extensions())[PID] = std::to_string(response.pid());
     request->mutable_instance()->set_containerid(response.containerid());
+    // Set proxy gRPC address
+    request->mutable_instance()->set_proxygrpcaddress(config_.proxyGrpcAddress);
     SetBillingMetrics(request, response);
 
     // when instance is an app driver, no connection built from proxy to app driver
