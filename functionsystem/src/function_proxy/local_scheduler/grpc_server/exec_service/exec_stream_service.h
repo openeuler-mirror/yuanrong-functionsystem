@@ -85,6 +85,7 @@ private:
     GrpcStatus HandleStartRequest(
         const ExecStartRequest& request,
         ServerReaderWriter<ExecMessage, ExecMessage>* stream,
+        std::shared_ptr<std::atomic<bool>> streamValid,
         litebus::AID& outSessionAid,
         std::string& outSessionId);
 

@@ -23,11 +23,13 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <random>
 #include <sstream>
 
 #include "async/async.hpp"
+#include "async/defer.hpp"
 #include "common/logs/logging.h"
 #include "exec/exec.hpp"
 
@@ -91,7 +93,6 @@ void ExecSessionActor::DoOutput(const std::string& data, int exitCode)
         Cleanup();
     } else {
         // Normal output data
-        YRLOG_DEBUG("Received output data, sessionId: {}, size: {}", sessionId_, data.size());
         WriteToStream(data, -1);  // -1 means normal data
     }
 }
@@ -254,8 +255,6 @@ void ExecSessionActor::DoInput(const std::string& data)
         return;
     }
 
-    YRLOG_DEBUG("Writing input data, size: {}, sessionId: {}", data.size(), sessionId_);
-
     ssize_t written = write(stdinFd_, data.c_str(), data.size());
     if (written < 0) {
         YRLOG_ERROR("Write failed, sessionId: {}, errno: {}", sessionId_, errno);
@@ -311,39 +310,29 @@ void ExecSessionActor::RegisterExitHandler()
     YRLOG_INFO("Registering exit handler, sessionId: {}", sessionId_);
 
     auto future = exec_->GetStatus();
-
-    // Use weak_ptr to prevent circular reference
-    std::weak_ptr<ExecSessionActor> weakSelf = std::static_pointer_cast<ExecSessionActor>(shared_from_this());
-
-    future.OnComplete([this, weakSelf](const litebus::Future<litebus::Option<int>>& f) {
-        auto self = weakSelf.lock();
-        if (!self) {
-            YRLOG_WARN("ExecSessionActor already destroyed, ignoring exit callback");
-            return;
-        }
-
-        if (!running_.load()) {
-            YRLOG_INFO("Session already stopped, ignoring exit callback, sessionId: {}", sessionId_);
-            return;
-        }
-
-        YRLOG_INFO("Process exit detected (async callback), sessionId: {}", sessionId_);
-
-        running_ = false;
-
-        // Get exit code from Future
-        int exitCode = 0;
-        if (!f.IsError() && f.Get().IsSome()) {
-            exitCode = f.Get().Get();
-        }
-
-        YRLOG_INFO("Process exited, sessionId: {}, exitCode: {}", sessionId_, exitCode);
-
-        // Send exit notification
-        WriteToStream("", exitCode);
-    });
-
+    future.OnComplete(litebus::Defer(GetAID(), &ExecSessionActor::OnProcessExit, std::placeholders::_1));
     YRLOG_INFO("Exit handler registered successfully, sessionId: {}", sessionId_);
+}
+
+void ExecSessionActor::OnProcessExit(const litebus::Future<litebus::Option<int>>& future)
+{
+    if (!running_.load()) {
+        YRLOG_INFO("Session already stopped, ignoring exit callback, sessionId: {}", sessionId_);
+        return;
+    }
+
+    YRLOG_INFO("Process exit detected (deferred callback), sessionId: {}", sessionId_);
+    running_ = false;
+
+    // Get exit code from Future
+    int exitCode = 0;
+    if (!future.IsError() && future.Get().IsSome()) {
+        exitCode = future.Get().Get();
+    }
+    YRLOG_INFO("Process exited, sessionId: {}, exitCode: {}", sessionId_, exitCode);
+
+    // Send exit notification
+    WriteToStream("", exitCode);
 }
 
 void ExecSessionActor::Cleanup()
@@ -384,7 +373,6 @@ void ExecSessionActor::Close()
     }
 
     YRLOG_INFO("Closing ExecSessionActor, sessionId: {}", sessionId_);
-
     Cleanup();
 }
 

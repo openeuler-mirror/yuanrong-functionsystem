@@ -70,6 +70,7 @@ private:
     // Helper methods
     void WriteToStream(const std::string& data, int exitCode);
     void RegisterExitHandler();
+    void OnProcessExit(const litebus::Future<litebus::Option<int>>& future);
     void Cleanup();
     void Close();
 

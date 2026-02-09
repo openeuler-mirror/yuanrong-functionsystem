@@ -206,8 +206,6 @@ void IOEventActor::ReadAndDispatch(int fd)
 
     if (bytesRead > 0) {
         // Normal data
-        YRLOG_DEBUG("Read {} bytes from fd {}", bytesRead, fd);
-
         // Invoke callback with data
         it->second(std::string(buffer, bytesRead), -1);
 
