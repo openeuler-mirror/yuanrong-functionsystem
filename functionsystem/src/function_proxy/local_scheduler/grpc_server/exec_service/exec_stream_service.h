@@ -17,33 +17,47 @@
 #ifndef FUNCTIONSYSTEM_FUNCTION_PROXY_EXEC_STREAM_SERVICE_H
 #define FUNCTIONSYSTEM_FUNCTION_PROXY_EXEC_STREAM_SERVICE_H
 
+#include <grpcpp/grpcpp.h>
+
 #include <memory>
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <unordered_map>
 
-#include <grpcpp/grpcpp.h>
-#include "common/proto/pb/posix/exec_service.grpc.pb.h"
-
 #include "actor/actor.hpp"
 #include "actor/aid.hpp"
+#include "common/proto/pb/posix/exec_service.grpc.pb.h"
 #include "function_proxy/common/exec_session/exec_session_actor.h"
 #include "function_proxy/common/exec_session/io_event_actor.h"
 
 namespace functionsystem {
 
-using exec_service::ExecService;
-using exec_service::ExecMessage;
-using exec_service::ExecStartRequest;
 using exec_service::ExecInputData;
-using exec_service::ExecResizeRequest;
+using exec_service::ExecMessage;
 using exec_service::ExecOutputData;
+using exec_service::ExecResizeRequest;
+using exec_service::ExecService;
+using exec_service::ExecStartRequest;
 using exec_service::ExecStatusResponse;
 using ::grpc::ServerContext;
 using ::grpc::ServerReaderWriter;
 
 // Type alias for gRPC Status to avoid conflict with functionsystem::Status
 using GrpcStatus = ::grpc::Status;
+
+/**
+ * StreamContext holds per-stream state including write mutex for thread safety
+ */
+struct StreamContext {
+    ServerReaderWriter<ExecMessage, ExecMessage>* stream;
+    std::mutex writeMutex;
+    std::shared_ptr<std::atomic<bool>> valid;
+    litebus::AID sessionAid;  // Session Actor ID to terminate on exit
+};
+
+// Shared pointer type for StreamContext to ensure proper lifetime management
+using StreamContextPtr = std::shared_ptr<StreamContext>;
 
 /**
  * ExecStreamService provides gRPC bidirectional streaming service for container interaction.
@@ -64,9 +78,7 @@ public:
      * ExecStream RPC implementation
      * Establish bidirectional stream connection to container
      */
-    GrpcStatus ExecStream(
-        ServerContext* context,
-        ServerReaderWriter<ExecMessage, ExecMessage>* stream) override;
+    GrpcStatus ExecStream(ServerContext *context, ServerReaderWriter<ExecMessage, ExecMessage> *stream) override;
 
     /**
      * Get current active session count
@@ -82,46 +94,40 @@ private:
     /**
      * Handle start request
      */
-    GrpcStatus HandleStartRequest(
-        const ExecStartRequest& request,
-        ServerReaderWriter<ExecMessage, ExecMessage>* stream,
-        std::shared_ptr<std::atomic<bool>> streamValid,
-        litebus::AID& outSessionAid,
-        std::string& outSessionId);
+    GrpcStatus HandleStartRequest(const ExecStartRequest &request, StreamContextPtr streamCtx,
+                                  litebus::AID &outSessionAid, std::string &outSessionId);
 
     /**
      * Handle input data
      */
-    GrpcStatus HandleInputData(
-        const ExecInputData& input,
-        const litebus::AID& sessionAid);
+    GrpcStatus HandleInputData(const ExecInputData &input, const litebus::AID &sessionAid);
 
     /**
      * Handle window resize
      */
-    GrpcStatus HandleResize(
-        const ExecResizeRequest& resize,
-        const litebus::AID& sessionAid);
+    GrpcStatus HandleResize(const ExecResizeRequest &resize, const litebus::AID &sessionAid);
 
     /**
      * Send status response
      */
-    void SendStatusResponse(
-        ServerReaderWriter<ExecMessage, ExecMessage>* stream,
-        const std::string& sessionId,
-        ExecStatusResponse::Status status,
-        int exitCode = 0,
-        const std::string& errorMessage = "");
+    void SendStatusResponse(ServerReaderWriter<ExecMessage, ExecMessage> *stream, const std::string &sessionId,
+                            ExecStatusResponse::Status status, int exitCode = 0, const std::string &errorMessage = "");
 
     /**
      * Add session to manager
      */
-    void AddSession(const std::string& sessionId, const litebus::AID& sessionAid);
+    void AddSession(const std::string &sessionId, const litebus::AID &sessionAid);
 
     /**
      * Remove session
      */
-    void RemoveSession(const std::string& sessionId);
+    void RemoveSession(const std::string &sessionId);
+
+    /**
+     * Thread-safe write to stream, handles actor termination on exit
+     */
+    void WriteToStream(StreamContextPtr streamCtx, const std::string &sessionId,
+                       const std::string &data, int exitCode);
 
 private:
     // Session management (using read-write lock for concurrent access)

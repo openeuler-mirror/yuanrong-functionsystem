@@ -91,6 +91,7 @@ void TransToInstanceInfoFromRouteInfo(const resources::RouteInfo &routeInfo, Ins
     instanceInfo.set_issystemfunc(routeInfo.issystemfunc());
     instanceInfo.set_version(routeInfo.version());
     instanceInfo.mutable_instancestatus()->CopyFrom(routeInfo.instancestatus());
+    instanceInfo.set_proxygrpcaddress(routeInfo.proxygrpcaddress());
 }
 
 bool IsLowReliabilityInstance(const resources::InstanceInfo &instanceInfo)
@@ -120,6 +121,7 @@ void TransToRouteInfoFromInstanceInfo(const InstanceInfo &instanceInfo, resource
     routeInfo.set_version(instanceInfo.version());
     routeInfo.mutable_instancestatus()->CopyFrom(instanceInfo.instancestatus());
     routeInfo.set_trafficreporttype(instanceInfo.trafficreporttype());
+    routeInfo.set_proxygrpcaddress(instanceInfo.proxygrpcaddress());
 }
 
 std::string GetDeployDir()

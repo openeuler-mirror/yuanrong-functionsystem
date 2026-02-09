@@ -15,7 +15,6 @@
  */
 
 #include "exec_session_actor.h"
-#include "io_event_actor.h"
 
 #include <fcntl.h>
 #include <signal.h>
@@ -32,6 +31,7 @@
 #include "async/defer.hpp"
 #include "common/logs/logging.h"
 #include "exec/exec.hpp"
+#include "io_event_actor.h"
 
 namespace functionsystem {
 
@@ -48,14 +48,13 @@ std::string ExecSessionActor::GenerateSessionId()
     return ss.str();
 }
 
-std::shared_ptr<ExecSessionActor> ExecSessionActor::Create(const CreateParams& params)
+std::shared_ptr<ExecSessionActor> ExecSessionActor::Create(const CreateParams &params)
 {
     return std::make_shared<ExecSessionActor>(params);
 }
 
-ExecSessionActor::ExecSessionActor(const CreateParams& params)
-    : litebus::ActorBase("ExecSessionActor-" + GenerateSessionId()),
-      streamWriter_(params.writer)
+ExecSessionActor::ExecSessionActor(const CreateParams &params)
+    : litebus::ActorBase("ExecSessionActor-" + GenerateSessionId()), streamWriter_(params.writer)
 {
     sessionId_ = GenerateSessionId();
     YRLOG_INFO("ExecSessionActor created, sessionId: {}", sessionId_);
@@ -69,11 +68,7 @@ ExecSessionActor::~ExecSessionActor()
 
 void ExecSessionActor::Init()
 {
-    YRLOG_INFO("ExecSessionActor::Init, sessionId: {}", sessionId_);
-
     // No message handlers needed - all communication uses Async
-
-    YRLOG_INFO("ExecSessionActor initialized, sessionId: {}", sessionId_);
 }
 
 void ExecSessionActor::Finalize()
@@ -82,50 +77,36 @@ void ExecSessionActor::Finalize()
     Cleanup();
 }
 
-// DoOutput - handle output data from IOEventActor via Async
-void ExecSessionActor::DoOutput(const std::string& data, int exitCode)
+void ExecSessionActor::DoOutput(const std::string &data, int exitCode)
 {
     if (exitCode >= 0) {
-        // EOF/Exit
-        YRLOG_INFO("Process EOF/Exit detected, sessionId: {}, exitCode: {}", sessionId_, exitCode);
+        YRLOG_INFO("Process exit, sessionId: {}, exitCode: {}", sessionId_, exitCode);
         running_ = false;
         WriteToStream("", exitCode);
-        Cleanup();
+        Close();
     } else {
-        // Normal output data
-        WriteToStream(data, -1);  // -1 means normal data
+        WriteToStream(data, -1);
     }
 }
 
 // Do* methods - actual implementation with normal function signatures
-void ExecSessionActor::DoStart(const std::string& containerId,
-                               const std::vector<std::string>& command,
-                               const std::map<std::string, std::string>& env,
-                               bool tty, int rows, int cols)
+void ExecSessionActor::DoStart(const std::string &containerId, const std::vector<std::string> &command,
+                               const std::map<std::string, std::string> &env, bool tty, int rows, int cols)
 {
-    YRLOG_INFO("ExecSessionActor::DoStart, sessionId: {}, containerId: {}, command: [{}], env: {}, tty: {}, rows: {}, cols: {}",
-               sessionId_, containerId,
-               command.empty() ? std::string("/bin/sh") : command[0],
-               env.size(),
-               tty, rows, cols);
-
     if (running_.load()) {
         YRLOG_WARN("Session already started, sessionId: {}", sessionId_);
         return;
     }
 
-    // Parse parameters
     containerId_ = containerId;
-    command_ = command.empty() ? std::vector<std::string>{"/bin/sh"} : command;
+    command_ = command.empty() ? std::vector<std::string>{ "/bin/sh" } : command;
     tty_ = tty;
     rows_ = rows;
     cols_ = cols;
 
-    // Build docker exec command
-    std::vector<std::string> argv = {"docker", "exec", "-i"};
+    std::vector<std::string> argv = { "docker", "exec", "-i" };
 
-    // Add environment variables
-    for (const auto& [key, value] : env) {
+    for (const auto &[key, value] : env) {
         argv.push_back("-e");
         argv.push_back(key + "=" + value);
     }
@@ -136,15 +117,13 @@ void ExecSessionActor::DoStart(const std::string& containerId,
     argv.push_back(containerId_);
     argv.insert(argv.end(), command_.begin(), command_.end());
 
-    YRLOG_INFO("Starting docker exec, sessionId: {}, command: docker exec -i{} {} {}",
-               sessionId_, tty_ ? "t" : "", containerId_, command_[0]);
+    YRLOG_INFO("Starting docker exec, sessionId: {}, container: {}", sessionId_, containerId);
 
     if (tty_) {
-        // Use PTY IO
         auto ptyResult = litebus::PtyExecIO::Create(rows_, cols_);
         if (ptyResult.IsError()) {
             YRLOG_ERROR("Failed to create PTY, sessionId: {}", sessionId_);
-            WriteToStream("", 1);  // Send error
+            WriteToStream("", 1);
             return;
         }
 
@@ -152,7 +131,6 @@ void ExecSessionActor::DoStart(const std::string& containerId,
         ptyIO_ = std::make_unique<litebus::PtyExecIO>(std::move(pty));
         ptyMasterFd_ = ptyIO_->masterFd;
 
-        // Prepare child init hooks for TTY mode
         int slaveFd = ptyIO_->slaveFd;
         std::vector<std::function<void()>> childInitHooks = {
             litebus::ChildInitHook::EXITWITHPARENT(),
@@ -167,41 +145,30 @@ void ExecSessionActor::DoStart(const std::string& containerId,
         exec_ = litebus::Exec::CreateExec(
             "docker", argv, litebus::None(),
             *ptyIO_->stdIn, *ptyIO_->stdOut, *ptyIO_->stdErr,
-            childInitHooks,
-            {}, true
-        );
-
-        YRLOG_INFO("ExecSessionActor started with PTY, sessionId: {}, masterFd: {}",
-                   sessionId_, ptyMasterFd_);
+            childInitHooks, {}, true);
 
     } else {
-        // Use normal Pipe IO
         exec_ = litebus::Exec::CreateExec(
             "docker", argv, litebus::None(),
             litebus::ExecIO::CreatePipeIO(),
             litebus::ExecIO::CreatePipeIO(),
             litebus::ExecIO::CreatePipeIO(),
-            {litebus::ChildInitHook::EXITWITHPARENT()},
-            {}, true
-        );
-
-        YRLOG_INFO("ExecSessionActor started with Pipe, sessionId: {}", sessionId_);
+            { litebus::ChildInitHook::EXITWITHPARENT() }, {}, true);
     }
 
     if (!exec_) {
         YRLOG_ERROR("Failed to create exec process, sessionId: {}", sessionId_);
-        WriteToStream("", 1);  // Send error
+        WriteToStream("", 1);
         return;
     }
 
-    YRLOG_INFO("Exec process created, sessionId: {}, pid: {}", sessionId_, exec_->GetPid());
+    YRLOG_INFO("Exec process started, sessionId: {}, pid: {}", sessionId_, exec_->GetPid());
 
     running_ = true;
 
-    // Get stdin/stdout fd
-    if (tty_ && ptyIO_) {
-        stdinFd_ = ptyIO_->masterFd;
-        stdoutFd_ = ptyIO_->masterFd;  // PTY uses same fd for input/output
+    if (tty_) {
+        stdinFd_ = ptyMasterFd_;
+        stdoutFd_ = ptyMasterFd_;
     } else {
         if (exec_->GetIn().IsSome()) {
             stdinFd_ = exec_->GetIn().Get();
@@ -211,71 +178,42 @@ void ExecSessionActor::DoStart(const std::string& containerId,
         }
     }
 
-    // Register stdout fd with IOEventActor using Async
     if (stdoutFd_ >= 0) {
-        YRLOG_INFO("Registering stdout fd {} with IOEventActor, sessionId: {}", stdoutFd_, sessionId_);
-
-        // Capture weak_ptr to avoid circular reference
-        std::weak_ptr<ExecSessionActor> weakSelf = std::static_pointer_cast<ExecSessionActor>(shared_from_this());
-
-        // Register with callback - callback will be invoked in IOEventActor context
-        // and will use Async to call DoOutput in ExecSessionActor context
-        litebus::Async(IOEventActor::GetInstance(), &IOEventActor::DoRegister,
-                       stdoutFd_,
-                       [weakSelf](const std::string& data, int exitCode) {
-                           auto self = weakSelf.lock();
-                           if (!self) {
-                               YRLOG_WARN("ExecSessionActor already destroyed, ignoring IO callback");
-                               return;
-                           }
-                           // Call DoOutput via Async to execute in ExecSessionActor context
-                           litebus::Async(self->GetAID(), &ExecSessionActor::DoOutput, data, exitCode);
+        litebus::Async(IOEventActor::GetInstance(), &IOEventActor::DoRegister, stdoutFd_,
+                       [aid = GetAID()](const std::string &data, int exitCode) {
+                           litebus::Async(aid, &ExecSessionActor::DoOutput, data, exitCode);
                        });
-
-    } else {
-        YRLOG_WARN("stdout fd not available, sessionId: {}", sessionId_);
     }
 
-    // Register exit handler
-    RegisterExitHandler();
+    if (!tty_ && exec_->GetErr().IsSome()) {
+        int stderrFd = exec_->GetErr().Get();
+        if (stderrFd >= 0) {
+            litebus::Async(IOEventActor::GetInstance(), &IOEventActor::DoRegister, stderrFd,
+                           [aid = GetAID()](const std::string &data, int exitCode) {
+                               litebus::Async(aid, &ExecSessionActor::DoOutput, data, exitCode);
+                           });
+        }
+    }
 
-    // Send success response
-    WriteToStream("", -1);  // -1 means success (no data)
+    RegisterExitHandler();
+    WriteToStream("", -1);
 }
 
-void ExecSessionActor::DoInput(const std::string& data)
+void ExecSessionActor::DoInput(const std::string &data)
 {
-    if (closed_.load() || !running_.load()) {
-        YRLOG_WARN("Session is closed, ignoring input, sessionId: {}", sessionId_);
-        return;
-    }
-
-    if (stdinFd_ < 0) {
-        YRLOG_ERROR("stdin fd not available, sessionId: {}", sessionId_);
+    if (closed_.load() || !running_.load() || stdinFd_ < 0) {
         return;
     }
 
     ssize_t written = write(stdinFd_, data.c_str(), data.size());
     if (written < 0) {
         YRLOG_ERROR("Write failed, sessionId: {}, errno: {}", sessionId_, errno);
-        return;
-    }
-
-    if (static_cast<size_t>(written) != data.size()) {
-        YRLOG_WARN("Partial write, sessionId: {}, written: {}, total: {}",
-                   sessionId_, written, data.size());
     }
 }
 
 void ExecSessionActor::DoResize(int rows, int cols)
 {
-    if (!tty_) {
-        YRLOG_WARN("Resize only available in TTY mode, sessionId: {}", sessionId_);
-        return;
-    }
-
     if (!ptyIO_ || ptyMasterFd_ < 0) {
-        YRLOG_ERROR("PTY not available, sessionId: {}", sessionId_);
         return;
     }
 
@@ -286,93 +224,71 @@ void ExecSessionActor::DoResize(int rows, int cols)
 
     rows_ = rows;
     cols_ = cols;
-    YRLOG_INFO("Window resized, sessionId: {}, rows: {}, cols: {}", sessionId_, rows_, cols_);
 }
 
 void ExecSessionActor::DoClose()
 {
-    YRLOG_INFO("Closing ExecSessionActor, sessionId: {}", sessionId_);
     Close();
 }
 
-void ExecSessionActor::WriteToStream(const std::string& data, int exitCode)
+void ExecSessionActor::WriteToStream(const std::string &data, int exitCode)
 {
-    // In Actor, this is called serially, no lock needed
     if (streamWriter_) {
         streamWriter_(data, exitCode);
-    } else {
-        YRLOG_WARN("Stream writer is null, sessionId: {}", sessionId_);
     }
 }
 
 void ExecSessionActor::RegisterExitHandler()
 {
-    YRLOG_INFO("Registering exit handler, sessionId: {}", sessionId_);
-
-    auto future = exec_->GetStatus();
-    future.OnComplete(litebus::Defer(GetAID(), &ExecSessionActor::OnProcessExit, std::placeholders::_1));
-    YRLOG_INFO("Exit handler registered successfully, sessionId: {}", sessionId_);
+    exec_->GetStatus().OnComplete(litebus::Defer(GetAID(), &ExecSessionActor::OnProcessExit, std::placeholders::_1));
 }
 
-void ExecSessionActor::OnProcessExit(const litebus::Future<litebus::Option<int>>& future)
+void ExecSessionActor::OnProcessExit(const litebus::Future<litebus::Option<int>> &future)
 {
     if (!running_.load()) {
-        YRLOG_INFO("Session already stopped, ignoring exit callback, sessionId: {}", sessionId_);
         return;
     }
 
-    YRLOG_INFO("Process exit detected (deferred callback), sessionId: {}", sessionId_);
     running_ = false;
 
-    // Get exit code from Future
     int exitCode = 0;
     if (!future.IsError() && future.Get().IsSome()) {
         exitCode = future.Get().Get();
     }
-    YRLOG_INFO("Process exited, sessionId: {}, exitCode: {}", sessionId_, exitCode);
 
-    // Send exit notification
+    YRLOG_INFO("Process exited, sessionId: {}, exitCode: {}", sessionId_, exitCode);
     WriteToStream("", exitCode);
+    Close();
 }
 
 void ExecSessionActor::Cleanup()
 {
-    YRLOG_INFO("Cleaning up ExecSessionActor, sessionId: {}", sessionId_);
-
     running_ = false;
 
-    // Unregister fd from IOEventActor using Async
     if (stdoutFd_ >= 0) {
-        YRLOG_INFO("Unregistering stdout fd {} from IOEventActor, sessionId: {}", stdoutFd_, sessionId_);
         litebus::Async(IOEventActor::GetInstance(), &IOEventActor::DoUnregister, stdoutFd_);
         stdoutFd_ = -1;
     }
 
-    // Close PTY
     if (ptyIO_) {
         ptyIO_->Close();
         ptyIO_.reset();
     }
 
-    // Give process some time to exit gracefully
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    // If process still running, send SIGTERM
     if (exec_ && exec_->GetPid() > 0) {
-        YRLOG_INFO("Sending SIGTERM to process, pid: {}, sessionId: {}", exec_->GetPid(), sessionId_);
         kill(exec_->GetPid(), SIGTERM);
     }
-
-    YRLOG_INFO("ExecSessionActor cleanup completed, sessionId: {}", sessionId_);
 }
 
 void ExecSessionActor::Close()
 {
     if (closed_.exchange(true)) {
-        return;  // Already closed
+        return;
     }
 
-    YRLOG_INFO("Closing ExecSessionActor, sessionId: {}", sessionId_);
+    YRLOG_INFO("Closing session, sessionId: {}", sessionId_);
     Cleanup();
 }
 
