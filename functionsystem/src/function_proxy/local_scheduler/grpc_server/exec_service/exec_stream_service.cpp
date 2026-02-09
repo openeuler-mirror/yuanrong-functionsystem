@@ -17,6 +17,7 @@
 #include "exec_stream_service.h"
 
 #include <atomic>
+#include <mutex>
 
 #include "common/logs/logging.h"
 #include "common/utils/actor_driver.h"
@@ -38,220 +39,179 @@ ExecStreamService::~ExecStreamService()
     YRLOG_INFO("ExecStreamService destroyed");
 }
 
-GrpcStatus ExecStreamService::ExecStream(
-    ServerContext* context,
-    ServerReaderWriter<ExecMessage, ExecMessage>* stream)
+GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWriter<ExecMessage, ExecMessage> *stream)
 {
-    YRLOG_INFO("ExecStream connection established");
+    auto peer = context->peer();
+    YRLOG_INFO("ExecStream connection established, peer: {}", peer);
 
     // Current session
     litebus::AID sessionAid;
     std::string currentSessionId;
 
     // Stream validity flag (shared with writer callback)
-    // Use shared_ptr to ensure it's kept alive as long as the actor exists
     auto streamValid = std::make_shared<std::atomic<bool>>(true);
+
+    // Create stream context with write mutex for thread safety
+    auto streamCtx = std::make_shared<StreamContext>();
+    streamCtx->stream = stream;
+    streamCtx->valid = streamValid;
 
     // Main loop: read and process client messages
     ExecMessage request;
-    int messageCount = 0;
     while (stream->Read(&request)) {
-        messageCount++;
-
         switch (request.payload_case()) {
             case ExecMessage::kStartRequest: {
-                YRLOG_INFO("Handling kStartRequest, container_id: {}",
-                          request.start_request().container_id());
                 // If there's already a session, close it first
                 if (!sessionAid.Name().empty()) {
-                    YRLOG_WARN("New start request received, closing existing session: {}",
-                              currentSessionId);
+                    YRLOG_INFO("Closing existing session {} before starting new one, peer: {}",
+                               currentSessionId, peer);
                     litebus::Async(sessionAid, &ExecSessionActor::DoClose);
                     RemoveSession(currentSessionId);
                 }
 
                 // Handle start request
-                YRLOG_INFO("Calling HandleStartRequest...");
-                auto status = HandleStartRequest(request.start_request(), stream, streamValid,
-                                                  sessionAid, currentSessionId);
+                auto status = HandleStartRequest(request.start_request(), streamCtx, sessionAid, currentSessionId);
                 if (!status.ok()) {
                     YRLOG_ERROR("HandleStartRequest failed: {}", status.error_message());
-                    SendStatusResponse(stream, "", ExecStatusResponse::ERROR,
-                                      0, status.error_message());
+                    SendStatusResponse(stream, "", ExecStatusResponse::ERROR, 0, status.error_message());
                     continue;
                 }
 
-                YRLOG_INFO("Session created with ID: {}", currentSessionId);
                 AddSession(currentSessionId, sessionAid);
-
-                // Send start success response
-                YRLOG_INFO("Sending STARTED status response for session: {}", currentSessionId);
                 SendStatusResponse(stream, currentSessionId, ExecStatusResponse::STARTED);
+                YRLOG_INFO("Session {} started, peer: {}", currentSessionId, peer);
                 break;
             }
 
             case ExecMessage::kInputData: {
-                if (sessionAid.Name().empty()) {
-                    YRLOG_WARN("Received input data but no session exists");
-                    continue;
-                }
-
-                auto status = HandleInputData(request.input_data(), sessionAid);
-                if (!status.ok()) {
-                    YRLOG_ERROR("Failed to handle input data: {}", status.error_message());
+                if (!sessionAid.Name().empty()) {
+                    HandleInputData(request.input_data(), sessionAid);
                 }
                 break;
             }
 
             case ExecMessage::kResize: {
-                YRLOG_DEBUG("Received kResize, rows: {}, cols: {}",
-                           request.resize().rows(), request.resize().cols());
-                if (sessionAid.Name().empty()) {
-                    YRLOG_WARN("Received resize request but no session exists");
-                    continue;
-                }
-
-                auto status = HandleResize(request.resize(), sessionAid);
-                if (!status.ok()) {
-                    YRLOG_WARN("Failed to handle resize: {}", status.error_message());
+                if (!sessionAid.Name().empty()) {
+                    HandleResize(request.resize(), sessionAid);
                 }
                 break;
             }
 
-            default: {
-                YRLOG_WARN("Unknown or unexpected message type: {}",
-                          static_cast<int>(request.payload_case()));
+            default:
                 break;
-            }
         }
     }
 
-    YRLOG_INFO("ExecStream connection closed, total messages received: {}", messageCount);
+    YRLOG_INFO("ExecStream connection closed, peer: {}", peer);
 
     // Mark stream as invalid before cleanup
     streamValid->store(false);
 
     // Cleanup resources
     if (!sessionAid.Name().empty()) {
+        YRLOG_INFO("Cleaning up session {}, peer: {}", currentSessionId, peer);
         litebus::Async(sessionAid, &ExecSessionActor::DoClose);
+        litebus::Terminate(sessionAid);
+        litebus::Await(sessionAid);
         RemoveSession(currentSessionId);
     }
 
     return GrpcStatus::OK;
 }
 
-GrpcStatus ExecStreamService::HandleStartRequest(
-    const ExecStartRequest& request,
-    ServerReaderWriter<ExecMessage, ExecMessage>* stream,
-    std::shared_ptr<std::atomic<bool>> streamValid,
-    litebus::AID& outSessionAid,
-    std::string& outSessionId)
+void ExecStreamService::WriteToStream(StreamContextPtr streamCtx, const std::string &sessionId,
+                                      const std::string &data, int exitCode)
 {
-    YRLOG_INFO("HandleStartRequest: container_id={}, tty={}, rows={}, cols={}",
-              request.container_id(), request.tty(), request.rows(), request.cols());
+    if (!streamCtx || !streamCtx->valid || !streamCtx->valid->load()) {
+        return;
+    }
 
-    // Validate parameters
+    std::lock_guard<std::mutex> lock(streamCtx->writeMutex);
+
+    if (!streamCtx->valid->load()) {
+        return;
+    }
+
+    ExecMessage response;
+    response.set_session_id(sessionId);
+
+    if (exitCode >= 0) {
+        auto *status = response.mutable_status();
+        status->set_status(ExecStatusResponse::EXITED);
+        status->set_exit_code(exitCode);
+    } else if (!data.empty()) {
+        auto *output = response.mutable_output_data();
+        output->set_data(data);
+        output->set_stream_type(ExecOutputData::STDOUT);
+    }
+
+    if (!streamCtx->stream->Write(response)) {
+        return;
+    }
+
+    if (exitCode >= 0 && !streamCtx->sessionAid.Name().empty()) {
+        litebus::Terminate(streamCtx->sessionAid);
+        litebus::Await(streamCtx->sessionAid);
+        RemoveSession(sessionId);
+    }
+}
+
+GrpcStatus ExecStreamService::HandleStartRequest(const ExecStartRequest &request,
+                                                 StreamContextPtr streamCtx,
+                                                 litebus::AID &outSessionAid, std::string &outSessionId)
+{
     if (request.container_id().empty()) {
-        YRLOG_ERROR("container_id is empty");
         return GrpcStatus(::grpc::StatusCode::INVALID_ARGUMENT, "container_id is required");
     }
 
-    // Create stream writer callback (captures stream pointer and validity flag)
-    // Note: This is called from Actor context, so it's serial
-    auto writer = [stream, sessionIdPtr = &outSessionId, streamValid]
-                  (const std::string& data, int exitCode) {
-        // Check if stream is still valid before writing
-        if (!streamValid->load()) {
-            YRLOG_WARN("Stream already closed, ignoring write for sessionId: {}", *sessionIdPtr);
-            return;
-        }
-
-        ExecMessage response;
-        response.set_session_id(*sessionIdPtr);
-
-        if (exitCode >= 0) {
-            // Exit message
-            YRLOG_INFO("Sending exit message, sessionId: {}, exitCode: {}", *sessionIdPtr, exitCode);
-            auto* status = response.mutable_status();
-            status->set_status(ExecStatusResponse::EXITED);
-            status->set_exit_code(exitCode);
-        } else if (!data.empty()) {
-            // Normal output data
-            auto* output = response.mutable_output_data();
-            output->set_data(data);
-            output->set_stream_type(ExecOutputData::STDOUT);
-        }
-
-        stream->Write(response);
-    };
-
-    // Create ExecSessionActor
-    YRLOG_INFO("Creating ExecSessionActor...");
-    ExecSessionActor::CreateParams params;
-    params.writer = writer;
-
-    auto actor = ExecSessionActor::Create(params);
+    auto actor = ExecSessionActor::Create({});
     if (!actor) {
-        YRLOG_ERROR("Failed to create ExecSessionActor");
         return GrpcStatus(::grpc::StatusCode::INTERNAL, "Failed to create session actor");
     }
-    YRLOG_INFO("ExecSessionActor created successfully");
 
-    // Spawn the actor to start it
-    YRLOG_INFO("Spawning ExecSessionActor...");
+    outSessionId = actor->GetSessionId();
+    outSessionAid = actor->GetAID();
+    streamCtx->sessionAid = outSessionAid;
+
+    actor->SetWriter([this, streamCtx, sessionId = outSessionId](const std::string &data, int exitCode) {
+        WriteToStream(streamCtx, sessionId, data, exitCode);
+    });
+
     litebus::Spawn(actor);
-    YRLOG_INFO("ExecSessionActor spawned successfully");
 
-    // Send Start message to actor using Async (call DoStart directly)
-    // Prepare command from request
     std::vector<std::string> command(request.command().begin(), request.command().end());
-
-    // Prepare environment variables from request
     auto env = std::map<std::string, std::string>(request.env().begin(), request.env().end());
 
-    // Ensure TERM is set for TTY mode
     if (request.tty() && env.find("TERM") == env.end()) {
         env["TERM"] = "xterm";
     }
 
-    litebus::Async(actor->GetAID(), &ExecSessionActor::DoStart,
-                   request.container_id(), command, env,
-                   request.tty(), request.rows(), request.cols());
-
-    outSessionAid = actor->GetAID();
+    litebus::Async(actor->GetAID(), &ExecSessionActor::DoStart, request.container_id(), command, env, request.tty(),
+                   request.rows(), request.cols());
 
     return GrpcStatus::OK;
 }
 
-GrpcStatus ExecStreamService::HandleInputData(
-    const ExecInputData& input,
-    const litebus::AID& sessionAid)
+GrpcStatus ExecStreamService::HandleInputData(const ExecInputData &input, const litebus::AID &sessionAid)
 {
-    // Send Input message to actor using Async (call DoInput directly)
     litebus::Async(sessionAid, &ExecSessionActor::DoInput, input.data());
     return GrpcStatus::OK;
 }
 
-GrpcStatus ExecStreamService::HandleResize(
-    const ExecResizeRequest& resize,
-    const litebus::AID& sessionAid)
+GrpcStatus ExecStreamService::HandleResize(const ExecResizeRequest &resize, const litebus::AID &sessionAid)
 {
-    // Send Resize message to actor using Async (call DoResize directly)
     litebus::Async(sessionAid, &ExecSessionActor::DoResize, resize.rows(), resize.cols());
     return GrpcStatus::OK;
 }
 
-void ExecStreamService::SendStatusResponse(
-    ServerReaderWriter<ExecMessage, ExecMessage>* stream,
-    const std::string& sessionId,
-    ExecStatusResponse::Status status,
-    int exitCode,
-    const std::string& errorMessage)
+void ExecStreamService::SendStatusResponse(ServerReaderWriter<ExecMessage, ExecMessage> *stream,
+                                           const std::string &sessionId, ExecStatusResponse::Status status,
+                                           int exitCode, const std::string &errorMessage)
 {
     ExecMessage response;
     response.set_session_id(sessionId);
 
-    auto* statusResp = response.mutable_status();
+    auto *statusResp = response.mutable_status();
     statusResp->set_status(status);
     statusResp->set_exit_code(exitCode);
     if (!errorMessage.empty()) {
@@ -261,19 +221,16 @@ void ExecStreamService::SendStatusResponse(
     stream->Write(response);
 }
 
-void ExecStreamService::AddSession(const std::string& sessionId, const litebus::AID& sessionAid)
+void ExecStreamService::AddSession(const std::string &sessionId, const litebus::AID &sessionAid)
 {
     std::unique_lock<std::shared_mutex> lock(sessionsMutex_);
     sessions_[sessionId] = sessionAid;
-    YRLOG_DEBUG("Session added, sessionId: {}, aid: {}, total: {}",
-               sessionId, sessionAid.Name(), sessions_.size());
 }
 
-void ExecStreamService::RemoveSession(const std::string& sessionId)
+void ExecStreamService::RemoveSession(const std::string &sessionId)
 {
     std::unique_lock<std::shared_mutex> lock(sessionsMutex_);
     sessions_.erase(sessionId);
-    YRLOG_DEBUG("Session removed, sessionId: {}, total: {}", sessionId, sessions_.size());
 }
 
 size_t ExecStreamService::GetActiveSessionCount() const
@@ -284,22 +241,18 @@ size_t ExecStreamService::GetActiveSessionCount() const
 
 void ExecStreamService::CloseAllSessions()
 {
-    YRLOG_INFO("Closing all sessions");
-
     std::vector<litebus::AID> sessionsToClose;
     {
         std::unique_lock<std::shared_mutex> lock(sessionsMutex_);
-        for (auto& pair : sessions_) {
+        for (auto &pair : sessions_) {
             sessionsToClose.push_back(pair.second);
         }
         sessions_.clear();
     }
 
-    for (auto& aid : sessionsToClose) {
+    for (auto &aid : sessionsToClose) {
         litebus::Async(aid, &ExecSessionActor::DoClose);
     }
-
-    YRLOG_INFO("All sessions closed");
 }
 
 }  // namespace functionsystem

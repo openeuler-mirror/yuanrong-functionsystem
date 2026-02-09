@@ -18,49 +18,52 @@
 #define FUNCTIONSYSTEM_FUNCTION_PROXY_EXEC_SESSION_EXEC_SESSION_ACTOR_H
 
 #include <actor/actor.hpp>
+#include <atomic>
 #include <exec/exec.hpp>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
-#include <map>
-#include <atomic>
 
 namespace functionsystem {
 
 // ExecSessionActor: Actor-based session for managing docker exec processes
 // Replaces the multi-threaded ExecSession with message-driven architecture
-class ExecSessionActor : public litebus::ActorBase,
-                         public std::enable_shared_from_this<ExecSessionActor> {
+class ExecSessionActor : public litebus::ActorBase, public std::enable_shared_from_this<ExecSessionActor> {
 public:
     // Stream writer callback (for gRPC stream output)
-    using StreamWriter = std::function<void(const std::string& data, int exitCode)>;
+    using StreamWriter = std::function<void(const std::string &data, int exitCode)>;
 
     // Creation parameters
     struct CreateParams {
-        StreamWriter writer;  // Callback for writing to gRPC stream
+        StreamWriter writer = nullptr;  // Callback for writing to gRPC stream (can be set later)
     };
 
     // Factory method to create a session actor
-    static std::shared_ptr<ExecSessionActor> Create(const CreateParams& params);
+    static std::shared_ptr<ExecSessionActor> Create(const CreateParams &params);
 
     ~ExecSessionActor() override;
 
-    explicit ExecSessionActor(const CreateParams& params);
+    explicit ExecSessionActor(const CreateParams &params);
 
     // Disable copy
-    ExecSessionActor(const ExecSessionActor&) = delete;
-    ExecSessionActor& operator=(const ExecSessionActor&) = delete;
+    ExecSessionActor(const ExecSessionActor &) = delete;
+    ExecSessionActor &operator=(const ExecSessionActor &) = delete;
 
     // Public methods for Async calls
-    void DoStart(const std::string& containerId,
-                 const std::vector<std::string>& command,
-                 const std::map<std::string, std::string>& env,
-                 bool tty, int rows, int cols);
-    void DoInput(const std::string& data);
-    void DoOutput(const std::string& data, int exitCode);  // exitCode: -1=normal, >=0=exit
+    void DoStart(const std::string &containerId, const std::vector<std::string> &command,
+                 const std::map<std::string, std::string> &env, bool tty, int rows, int cols);
+    void DoInput(const std::string &data);
+    void DoOutput(const std::string &data, int exitCode);  // exitCode: -1=normal, >=0=exit
     void DoResize(int rows, int cols);
     void DoClose();
+
+    // Get session ID
+    const std::string& GetSessionId() const { return sessionId_; }
+
+    // Set writer callback
+    void SetWriter(const StreamWriter& writer) { streamWriter_ = writer; }
 
 protected:
     void Init() override;
@@ -68,9 +71,9 @@ protected:
 
 private:
     // Helper methods
-    void WriteToStream(const std::string& data, int exitCode);
+    void WriteToStream(const std::string &data, int exitCode);
     void RegisterExitHandler();
-    void OnProcessExit(const litebus::Future<litebus::Option<int>>& future);
+    void OnProcessExit(const litebus::Future<litebus::Option<int>> &future);
     void Cleanup();
     void Close();
 
@@ -80,21 +83,21 @@ private:
     // Process related
     std::shared_ptr<litebus::Exec> exec_;
     std::unique_ptr<litebus::PtyExecIO> ptyIO_;
-    int stdinFd_{-1};
-    int stdoutFd_{-1};
-    int ptyMasterFd_{-1};
+    int stdinFd_{ -1 };
+    int stdoutFd_{ -1 };
+    int ptyMasterFd_{ -1 };
 
     // State
     std::string sessionId_;
     std::string containerId_;
     std::vector<std::string> command_;
-    bool tty_{false};
-    int rows_{24};
-    int cols_{80};
+    bool tty_{ false };
+    int rows_{ 24 };
+    int cols_{ 80 };
     std::map<std::string, std::string> env_;
 
-    std::atomic<bool> running_{false};
-    std::atomic<bool> closed_{false};
+    std::atomic<bool> running_{ false };
+    std::atomic<bool> closed_{ false };
 
     // Generate unique session ID
     static std::string GenerateSessionId();

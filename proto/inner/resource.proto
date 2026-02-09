@@ -387,6 +387,7 @@ message RouteInfo {
     bool isSystemFunc = 11; // Need while iam
     int64 version = 12;    // indicates the number of times that instance information is modified in etcd
     TrafficReportType trafficReportType = 13;
+    string proxyGrpcAddress = 14;  // proxy gRPC service address (ip:port format)
 }
 
 message SystemInfo {

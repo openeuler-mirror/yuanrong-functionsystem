@@ -38,7 +38,7 @@ void IOEventActor::CreateInstance()
 
     instance_ = std::shared_ptr<IOEventActor>(new IOEventActor("IOEventActor"));
     litebus::Spawn(instance_);
-    YRLOG_INFO("IOEventActor singleton created and spawned");
+    YRLOG_INFO("IOEventActor singleton created");
 }
 
 litebus::AID IOEventActor::GetInstance()
@@ -61,58 +61,38 @@ void IOEventActor::DestroyInstance()
 
 IOEventActor::IOEventActor(const std::string &name) : litebus::ActorBase(name)
 {
-    YRLOG_INFO("IOEventActor constructor, name: {}", name);
 }
 
 IOEventActor::~IOEventActor()
 {
-    YRLOG_INFO("IOEventActor destructor");
 }
 
 void IOEventActor::Init()
 {
-    YRLOG_INFO("IOEventActor::Init - Creating epoll fd");
-
-    // Create epoll instance
     epollFd_ = epoll_create1(0);
     if (epollFd_ < 0) {
         YRLOG_ERROR("Failed to create epoll instance, errno: {}", errno);
         return;
     }
 
-    YRLOG_INFO("IOEventActor epoll fd created: {}", epollFd_);
-
-    // No need to register message handlers - use Async directly
-
-    // Start event loop using AsyncAfter
     running_ = true;
     eventLoopTimer_ = litebus::AsyncAfter(EVENT_LOOP_INTERVAL_MS, GetAID(), &IOEventActor::EventLoop);
-
-    YRLOG_INFO("IOEventActor initialized successfully");
 }
 
 void IOEventActor::Finalize()
 {
-    YRLOG_INFO("IOEventActor::Finalize");
-
     running_ = false;
 
-    // Close epoll fd
     if (epollFd_ >= 0) {
         close(epollFd_);
         epollFd_ = -1;
     }
 
     fdToCallback_.clear();
-
-    YRLOG_INFO("IOEventActor finalized");
 }
 
 void IOEventActor::DoRegister(int fd, IOCallback callback)
 {
-    YRLOG_INFO("Registering fd {} with callback", fd);
-
-    // Add fd to epoll
     struct epoll_event ev;
     ev.events = EPOLLIN;
     ev.data.fd = fd;
@@ -122,28 +102,17 @@ void IOEventActor::DoRegister(int fd, IOCallback callback)
         return;
     }
 
-    // Store callback
     fdToCallback_[fd] = std::move(callback);
-
-    YRLOG_INFO("Fd {} registered successfully", fd);
 }
 
 void IOEventActor::DoUnregister(int fd)
 {
-    YRLOG_INFO("Unregistering fd {}", fd);
-
-    // Remove from epoll
     if (epoll_ctl(epollFd_, EPOLL_CTL_DEL, fd, nullptr) < 0) {
         YRLOG_ERROR("Failed to remove fd {} from epoll, errno: {}", fd, errno);
     }
 
-    // Remove from mapping
     fdToCallback_.erase(fd);
-
-    // Close fd
     close(fd);
-
-    YRLOG_INFO("Fd {} unregistered successfully", fd);
 }
 
 void IOEventActor::EventLoop()
@@ -153,11 +122,10 @@ void IOEventActor::EventLoop()
     }
 
     struct epoll_event events[MAX_EVENTS];
-    int nfds = epoll_wait(epollFd_, events, MAX_EVENTS, 0);  // Non-blocking
+    int nfds = epoll_wait(epollFd_, events, MAX_EVENTS, 0);
 
     if (nfds < 0) {
         if (errno == EINTR) {
-            // Interrupted by signal, reschedule
             eventLoopTimer_ = litebus::AsyncAfter(EVENT_LOOP_INTERVAL_MS, GetAID(), &IOEventActor::EventLoop);
             return;
         }
@@ -165,29 +133,20 @@ void IOEventActor::EventLoop()
         return;
     }
 
-    // Process events
     for (int i = 0; i < nfds; i++) {
         int fd = events[i].data.fd;
 
         if (events[i].events & EPOLLIN) {
-            // Data available to read
             ReadAndDispatch(fd);
         } else if (events[i].events & (EPOLLERR | EPOLLHUP)) {
-            // Error or hangup
-            YRLOG_WARN("Epoll error/hangup on fd {}", fd);
-
-            // Notify callback about EOF
             auto it = fdToCallback_.find(fd);
             if (it != fdToCallback_.end()) {
                 it->second("", 0);
             }
-
-            // Unregister fd
             DoUnregister(fd);
         }
     }
 
-    // Reschedule next iteration
     if (running_) {
         eventLoopTimer_ = litebus::AsyncAfter(EVENT_LOOP_INTERVAL_MS, GetAID(), &IOEventActor::EventLoop);
     }
@@ -200,38 +159,20 @@ void IOEventActor::ReadAndDispatch(int fd)
 
     auto it = fdToCallback_.find(fd);
     if (it == fdToCallback_.end()) {
-        YRLOG_WARN("Fd {} not found in fdToCallback map", fd);
         return;
     }
 
     if (bytesRead > 0) {
-        // Normal data
-        // Invoke callback with data
         it->second(std::string(buffer, bytesRead), -1);
-
     } else if (bytesRead == 0) {
-        // EOF - process exited
-        YRLOG_INFO("EOF on fd {}", fd);
-
-        // Invoke callback with EOF indicator
         it->second("", 0);
-
-        // Unregister fd
         DoUnregister(fd);
-
     } else {
-        // Error
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            // No data available, try again later
             return;
         }
-
         YRLOG_ERROR("read error on fd {}, errno: {}", fd, errno);
-
-        // Invoke callback with error indicator
         it->second("", 0);
-
-        // Unregister fd
         DoUnregister(fd);
     }
 }
