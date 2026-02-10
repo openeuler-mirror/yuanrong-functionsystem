@@ -205,7 +205,7 @@ litebus::Future<Status> CkptFileManagerActor::RegisterCheckpoint(
             return;
         }
         YRLOG_INFO("checkpoint {} uploaded successfully to {}", checkpointID, storageUrl);
-        
+
         // Register checkpoint info after successful upload
         litebus::Async(aid, &CkptFileManagerActor::OnUploadSuccess,
                       checkpointID, localPath, storageUrl, uploadPromise);
@@ -228,9 +228,9 @@ void CkptFileManagerActor::OnUploadSuccess(
     info.refCount = 0;  // Start with 0, will be incremented when used for restore
     info.ttlSeconds = defaultTTLSeconds_;
     info.ttlActive = true;  // Start TTL immediately since refCount is 0
-    info.creationTime = std::chrono::steady_clock::now();
-    info.lastAccessTime = info.creationTime;
-    info.ttlStartTime = info.creationTime;  // Start TTL timer now
+    info.createdTime = std::chrono::steady_clock::now();
+    info.lastAccessTime = info.createdTime;
+    info.ttlStartTime = info.createdTime;  // Start TTL timer now
 
     checkpointFiles_[checkpointID] = info;
 
@@ -257,17 +257,15 @@ void CkptFileManagerActor::StartCleanupTimer()
 
 void CkptFileManagerActor::StopCleanupTimer()
 {
-    if (cleanupTimer_.IsValid()) {
-        litebus::TimerTools::Cancel(cleanupTimer_);
-        YRLOG_INFO("checkpoint cleanup timer stopped");
-    }
+    litebus::TimerTools::Cancel(cleanupTimer_);
+    YRLOG_INFO("checkpoint cleanup timer stopped");
 }
 
 void CkptFileManagerActor::PeriodicCleanup()
 {
     YRLOG_DEBUG("performing periodic checkpoint cleanup");
 
-    CleanupExpiredFiles().Then([aid(GetAID())](const litebus::Future<int32_t> &result) {
+    CleanupExpiredFiles().Then([aid(GetAID())](const litebus::Future<int32_t> &result) -> Status {
         if (result.IsError()) {
             YRLOG_ERROR("cleanup failed with error code: {}", result.GetErrorCode());
         } else {
@@ -276,6 +274,7 @@ void CkptFileManagerActor::PeriodicCleanup()
                 YRLOG_INFO("cleaned up {} expired checkpoint files", deletedCount);
             }
         }
+        return Status::OK();
     });
 
     // Schedule next cleanup
@@ -301,7 +300,7 @@ litebus::Future<int32_t> CkptFileManagerActor::CleanupExpiredFiles()
     // Delete expired checkpoints
     for (const auto &checkpointID : toDelete) {
         Status status = DeleteCheckpointFile(checkpointID);
-        if (status.IsOK()) {
+        if (status.IsOk()) {
             deletedCount++;
         }
     }
@@ -394,7 +393,7 @@ void CkptFileManagerActor::RestoreCheckpointsFromLocal()
             info.ttlActive = true;  // Start TTL immediately
             info.ttlStartTime = std::chrono::steady_clock::now();
             info.ttlSeconds = defaultTTLSeconds_;
-            info.creationTime = std::chrono::steady_clock::now();
+            info.createdTime = std::chrono::steady_clock::now();
             info.lastAccessTime = std::chrono::steady_clock::now();
 
             checkpointFiles_[checkpointID] = info;

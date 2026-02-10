@@ -180,7 +180,7 @@ using RestoreSnapshotRequest = ::messages::RestoreSnapshotRequest;
 using RestoreSnapshotResponse = ::messages::RestoreSnapshotResponse;
 using RecordSnapshotRequest = ::messages::RecordSnapshotRequest;
 using RecordSnapshotResponse = ::messages::RecordSnapshotResponse;
-using SnapshotInfo = ::messages::SnapshotInfo;
+using SnapshotInfo = ::resources::SnapshotInfo;
 
 namespace MetaStore {
 using PutRequest = ::messages::PutRequest;

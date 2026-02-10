@@ -72,7 +72,7 @@ Status FunctionAgentDriver::Start()
 {
     // Initialize KVClient if DataSystem is enabled
     if (startParam_.dataSystemEnable) {
-        if (auto status = function_agent::KVClient::GetInstance().Init(startParam_.dataSystemHost,
+        if (auto status = KVClient::GetInstance().Init(startParam_.dataSystemHost,
                                                                         startParam_.dataSystemPort);
             status.IsError()) {
             YRLOG_ERROR("failed to init kv client, errMsg: {}", status.ToString());

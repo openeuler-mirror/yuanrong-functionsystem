@@ -49,14 +49,14 @@ std::pair<Status, datasystem::ReadOnlyBuffer> KVClient::Get(const std::string &k
     return std::make_pair(Status::OK(), *buffer);
 }
 
-Status KVClient::Put(const std::string &key, const datasystem::ReadOnlyBuffer &value)
+Status KVClient::Put(const std::string &key, const std::string &value)
 {
     if (dsKvClient_ == nullptr) {
         YRLOG_ERROR("kv client is not initialized");
         return Status(StatusCode::BP_DATASYSTEM_ERROR, "kv client is not initialized");
     }
 
-    datasystem::Status s = dsKvClient_->Put(key, value);
+    datasystem::Status s = dsKvClient_->Set(key, value);
     if (s.IsError()) {
         YRLOG_ERROR("failed to put key: {}, error: {}", key, s.ToString());
         return Status(StatusCode::BP_DATASYSTEM_ERROR, s.ToString());
@@ -72,7 +72,7 @@ Status KVClient::Delete(const std::string &key)
         return Status(StatusCode::BP_DATASYSTEM_ERROR, "kv client is not initialized");
     }
 
-    datasystem::Status s = dsKvClient_->Delete(key);
+    datasystem::Status s = dsKvClient_->Del(key);
     if (s.IsError()) {
         YRLOG_ERROR("failed to delete key: {}, error: {}", key, s.ToString());
         return Status(StatusCode::BP_DATASYSTEM_ERROR, s.ToString());

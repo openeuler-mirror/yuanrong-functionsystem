@@ -56,6 +56,9 @@ public:
     litebus::Future<Status> StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request,
                                          bool oomKilled = false) override;
 
+    litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(
+        const std::shared_ptr<messages::SnapshotRuntimeRequest> &request) override;
+
     std::map<std::string, messages::RuntimeInstanceInfo> GetRuntimeInstanceInfos() override;
 
     void UpdatePrestartRuntimePromise(pid_t pid) override;
@@ -372,6 +375,15 @@ public:
      */
     litebus::Future<Status> StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request,
                                          bool oomKilled = false) override;
+
+    /**
+     * Snapshot Runtime when receive message from function agent.
+     *
+     * @param request Include snapshot arguments.
+     * @return response Include snapshot result with checkpoint info.
+     */
+    litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(
+        const std::shared_ptr<messages::SnapshotRuntimeRequest> &request) override;
 
     /**
      * Get runtime instance infos.

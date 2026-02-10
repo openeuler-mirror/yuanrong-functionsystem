@@ -194,6 +194,10 @@ private:
     Status QueryDebugInstanceInfosResponse(const litebus::AID &from,
                                            const messages::QueryDebugInstanceInfosResponse &response);
 
+    Status SnapshotRuntimeResponse(const litebus::AID &from, const std::string &instanceID,
+                                   const std::string &requestID,
+                                   const litebus::Future<messages::SnapshotRuntimeResponse> &responseFuture);
+
     void CreateInstanceMetrics(const litebus::Future<messages::StartInstanceResponse> &response,
                                const std::shared_ptr<messages::StartInstanceRequest> &request);
 

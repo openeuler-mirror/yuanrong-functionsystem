@@ -27,7 +27,7 @@ CkptFileManager::CkptFileManager(const std::shared_ptr<CkptFileManagerActor> &ac
 CkptFileManager::~CkptFileManager()
 {
     if (actor_ != nullptr) {
-        actor_->Terminate();
+        litebus::Terminate(actor_->GetAID());
     }
 }
 

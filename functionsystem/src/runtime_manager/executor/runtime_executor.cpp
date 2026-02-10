@@ -690,6 +690,17 @@ litebus::Future<Status> RuntimeExecutor::StopInstance(const std::shared_ptr<mess
     return StopInstanceByRuntimeID(runtimeID, requestID, oomKilled);
 }
 
+litebus::Future<messages::SnapshotRuntimeResponse> RuntimeExecutor::SnapshotRuntime(
+    const std::shared_ptr<messages::SnapshotRuntimeRequest> &request)
+{
+    messages::SnapshotRuntimeResponse response;
+    response.set_requestid(request->requestid());
+    response.set_code(static_cast<int32_t>(StatusCode::GRPC_UNIMPLEMENTED));
+    response.set_message("Snapshot is not supported for process-based runtime");
+    YRLOG_WARN("{}|SnapshotRuntime is not supported for RuntimeExecutor", request->requestid());
+    return response;
+}
+
 std::shared_ptr<StdRedirector> RuntimeExecutor::GetStdRedirector(const std::string &logName)
 {
     if (stdRedirectors_.find(logName) != stdRedirectors_.end()) {
@@ -2048,6 +2059,12 @@ litebus::Future<Status> RuntimeExecutorProxy::StopInstance(
     const std::shared_ptr<messages::StopInstanceRequest> &request, bool oomKilled)
 {
     return litebus::Async(executor_->GetAID(), &RuntimeExecutor::StopInstance, request, oomKilled);
+}
+
+litebus::Future<messages::SnapshotRuntimeResponse> RuntimeExecutorProxy::SnapshotRuntime(
+    const std::shared_ptr<messages::SnapshotRuntimeRequest> &request)
+{
+    return litebus::Async(executor_->GetAID(), &RuntimeExecutor::SnapshotRuntime, request);
 }
 
 litebus::Future<std::map<std::string, messages::RuntimeInstanceInfo>> RuntimeExecutorProxy::GetRuntimeInstanceInfos()
