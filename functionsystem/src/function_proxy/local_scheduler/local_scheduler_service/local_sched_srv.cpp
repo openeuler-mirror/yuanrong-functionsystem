@@ -148,10 +148,10 @@ litebus::Future<messages::RecordSnapshotResponse> LocalSchedSrv::RecordSnapshotM
     return litebus::Async(actor_->GetAID(), &LocalSchedSrvActor::RecordSnapshotMetadata, req);
 }
 
-litebus::Future<messages::SnapStartCheckpointResponse> LocalSchedSrv::SnapStartCheckpoint(const std::string &checkpointID)
+litebus::Future<messages::RestoreSnapshotResponse> LocalSchedSrv::SnapStartCheckpoint(const std::shared_ptr<messages::RestoreSnapshotRequest> &req)
 {
     ASSERT_IF_NULL(actor_);
-    return litebus::Async(actor_->GetAID(), &LocalSchedSrvActor::SnapStartCheckpoint, checkpointID);
+    return litebus::Async(actor_->GetAID(), &LocalSchedSrvActor::SnapStartCheckpoint, req);
 }
 
 }  // namespace functionsystem::local_scheduler

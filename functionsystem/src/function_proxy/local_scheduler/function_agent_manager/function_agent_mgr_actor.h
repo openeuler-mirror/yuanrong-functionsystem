@@ -252,7 +252,7 @@ public:
     litebus::Future<Status> UnRegisterWarmUp(
         const std::shared_ptr<messages::KillInstanceRequest> &request);
 
-    litebus::Future<SnapshotResult> SnapshotRuntime(const std::string &requestID,
+    litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(const std::string &requestID,
                                                      const resource_view::InstanceInfo &instanceInfo);
     void SnapshotRuntimeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 

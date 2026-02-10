@@ -27,7 +27,7 @@ class KVClient : public Singleton<KVClient> {
 public:
     Status Init(const std::string &host, int32_t port);
     std::pair<Status, datasystem::ReadOnlyBuffer> Get(const std::string &key);
-    Status Put(const std::string &key, const datasystem::ReadOnlyBuffer &value);
+    Status Put(const std::string &key, const std::string &value);
     Status Delete(const std::string &key);
 
 private:

@@ -103,7 +103,7 @@ public:
     virtual litebus::Future<Status> UnRegisterWarmUp(
         const std::shared_ptr<messages::KillInstanceRequest> &request);
 
-    virtual litebus::Future<SnapshotRuntimeResponse> SnapshotRuntime(
+    virtual litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(
         const std::string &requestID,
         const resource_view::InstanceInfo &instanceInfo);
     // for test

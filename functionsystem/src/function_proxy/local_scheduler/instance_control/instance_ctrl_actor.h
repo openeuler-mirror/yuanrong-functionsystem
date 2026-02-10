@@ -542,6 +542,17 @@ public:
 
     litebus::Future<KillResponse> ForwardSubscriptionEvent(const std::shared_ptr<KillContext> &ctx);
 
+    litebus::Future<TransitionResult> TransInstanceState(const std::shared_ptr<InstanceStateMachine> machine,
+                                                        const TransContext &context);
+
+    /**
+     * Deploy a snapstart instance (without CheckReadiness and InitCall)
+     * @param scheduleReq: The schedule request for the restored instance
+     * @return Future of DeployInstanceResponse
+     */
+    litebus::Future<messages::DeployInstanceResponse> DeploySnapStartInstance(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
+        
 private:
     Status CheckSchedRequestValid(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
@@ -800,9 +811,6 @@ private:
 
     void DeleteDriverClient(const std::string &instanceID, const std::string &jobID);
 
-    litebus::Future<TransitionResult> TransInstanceState(const std::shared_ptr<InstanceStateMachine> machine,
-                                                         const TransContext &context);
-
     litebus::Future<Status> TryExitInstance(const std::shared_ptr<InstanceStateMachine> stateMachine,
                                             const std::shared_ptr<KillContext> &killCtx,
                                             bool isSynchronized);
@@ -865,14 +873,6 @@ private:
         const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result,
         const TransitionResult &transResult);
-
-    /**
-     * Deploy a snapstart instance (without CheckReadiness and InitCall)
-     * @param scheduleReq: The schedule request for the restored instance
-     * @return Future of DeployInstanceResponse
-     */
-    litebus::Future<messages::DeployInstanceResponse> DeploySnapStartInstance(
-        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
     CreateCallResultCallBack RegisterCreateCallResultCallback(
         const std::shared_ptr<messages::ScheduleRequest> &request);
