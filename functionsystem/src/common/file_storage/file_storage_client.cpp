@@ -18,6 +18,7 @@
 
 #include <fstream>
 #include <sstream>
+
 #include "common/kv_client/kv_client.h"
 #include "common/logs/logging.h"
 #include "datasystem/datasystem.h"
@@ -37,8 +38,7 @@ Status FileStorageClient::UploadFile(const std::string &key, const std::string &
     }
 
     // Upload to KV storage
-    datasystem::ReadOnlyBuffer buffer(content.data(), content.size());
-    status = KVClient::GetInstance().Put(key, buffer);
+    status = KVClient::GetInstance().Put(key, content);
     if (!status.IsOk()) {
         YRLOG_ERROR("failed to upload file to KV storage with key: {}, error: {}", key, status.GetMessage());
         return status;
@@ -60,14 +60,14 @@ Status FileStorageClient::DownloadFile(const std::string &key, const std::string
     }
 
     // Write to file
-    std::string content(static_cast<const char*>(buffer.Data()), buffer.Size());
+    std::string content(static_cast<const char *>(buffer.ImmutableData()), buffer.GetSize());
     status = WriteFileContent(filePath, content);
     if (!status.IsOk()) {
         YRLOG_ERROR("failed to write file content to: {}", filePath);
         return status;
     }
 
-    YRLOG_INFO("successfully downloaded file with key: {} to: {}, size: {} bytes", key, filePath, buffer.Size());
+    YRLOG_INFO("successfully downloaded file with key: {} to: {}, size: {} bytes", key, filePath, buffer.GetSize());
     return Status::OK();
 }
 

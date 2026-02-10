@@ -202,6 +202,10 @@ message SnapInfo {
   int64 size = 2;
 }
 
+message SnapStartedInfo {
+  string instanceID = 1;
+}
+
 message KillRequest {
   string instanceID = 1;
   int32  signal     = 2;

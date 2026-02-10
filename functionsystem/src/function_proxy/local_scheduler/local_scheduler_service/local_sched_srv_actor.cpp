@@ -978,20 +978,20 @@ litebus::Future<messages::RecordSnapshotResponse> LocalSchedSrvActor::RecordSnap
 
     // 构造发送到 master snap_manager 的 AID
     litebus::AID snapMgrAid(SNAP_MANAGER_ACTOR_NAME, masterAid_.Url());
-    YRLOG_INFO("sending RecordSnapshotMetadata to snap_manager, checkpointID: {}, size: {}, path: {}",
-               req->checkpointid(), req->size(), req->storagepath());
+    YRLOG_INFO("sending RecordSnapshotMetadata to snap_manager, requestID: {}, checkpointID: {}",
+               req->requestid(), req->snapshotinfo().checkpointid());
 
     // 通过 REQUEST_SYNC_HELPER 发送并等待响应
     auto future = recordSnapshotSync_.AddSynchronizer(req->requestid());
     Send(snapMgrAid, "RecordSnapshotMetadata", req->SerializeAsString());
 
-    return future.Then([checkpointID(req->checkpointid())](
+    return future.Then([requestID(req->requestid())](
                            const litebus::Future<messages::RecordSnapshotResponse> &future)
                            -> messages::RecordSnapshotResponse {
         if (future.IsError()) {
-            YRLOG_ERROR("RecordSnapshotMetadata request timeout for checkpoint: {}", checkpointID);
+            YRLOG_ERROR("RecordSnapshotMetadata request timeout for requestID: {}", requestID);
             messages::RecordSnapshotResponse errorRsp;
-            errorRsp.set_code(common::ERR_REQUEST_TIMEOUT);
+            errorRsp.set_code(static_cast<int32_t>(StatusCode::REQUEST_TIME_OUT));
             errorRsp.set_message("request timeout");
             return errorRsp;
         }
@@ -1008,11 +1008,11 @@ void LocalSchedSrvActor::OnRecordSnapshotMetadataResponse(
         return;
     }
 
-    YRLOG_INFO("received RecordSnapshotMetadataResponse from {}, checkpointID: {}, code: {}",
-               from.HashString(), rsp.checkpointid(), rsp.code());
+    YRLOG_INFO("received RecordSnapshotMetadataResponse from {}, requestID: {}, code: {}",
+               from.HashString(), rsp.requestid(), rsp.code());
 
-    if (auto status = recordSnapshotSync_.Synchronized(rsp.checkpointid(), rsp); status.IsError()) {
-        YRLOG_WARN("no matching request found for checkpoint: {}", rsp.checkpointid());
+    if (auto status = recordSnapshotSync_.Synchronized(rsp.requestid(), rsp); status.IsError()) {
+        YRLOG_WARN("no matching request found for requestID: {}", rsp.requestid());
     }
 }
 
@@ -1039,8 +1039,8 @@ void LocalSchedSrvActor::DoSnapStartCheckpoint(
 
     // 构造发送到 master snap_manager 的 AID
     litebus::AID snapMgrAid(SNAP_MANAGER_ACTOR_NAME, masterAid_.Url());
-    YRLOG_INFO("sending SnapStartCheckpoint to snap_manager, requestID: {}, snapshotID: {}",
-               req->requestid(), req->snapshotid());
+    YRLOG_INFO("sending SnapStartCheckpoint to snap_manager, requestID: {}, checkpointID: {}",
+               req->requestid(), req->checkpointid());
 
     // 通过 REQUEST_SYNC_HELPER 发送并等待响应
     auto future = snapStartCheckpointSync_.AddSynchronizer(req->requestid());
@@ -1073,4 +1073,5 @@ void LocalSchedSrvActor::OnSnapStartCheckpointResponse(
     if (auto status = snapStartCheckpointSync_.Synchronized(rsp.requestid(), rsp); status.IsError()) {
         YRLOG_WARN("no matching request found for requestID: {}", rsp.requestid());
     }
+}
 }

@@ -96,14 +96,7 @@ litebus::Future<messages::UpdateCredResponse> FunctionAgentMgr::UpdateCred(
     return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::UpdateCred, funcAgentID, request);
 }
 
-litebus::Future<CheckpointResult> FunctionAgentMgr::CheckpointRuntime(const std::string &requestID,
-    const resource_view::InstanceInfo &instanceInfo, const common::SnapType &type)
-{
-    ASSERT_IF_NULL(actor_);
-    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::CheckpointRuntime, requestID, instanceInfo, type);
-}
-
-litebus::Future<SnapshotRuntimeResponse> FunctionAgentMgr::SnapshotRuntime(
+litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgr::SnapshotRuntime(
     const std::string &requestID,
     const resource_view::InstanceInfo &instanceInfo)
 {

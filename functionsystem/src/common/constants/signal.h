@@ -84,8 +84,7 @@ inline std::string SignalToString(int32_t signal)
         { GROUP_SUSPEND_SIGNAL, "GROUP_SUSPEND_SIGNAL" },
         { GROUP_RESUME_SIGNAL, "GROUP_RESUME_SIGNAL" },
         { INSTANCE_SNAPSHOT_SIGNAL, "INSTANCE_SNAPSHOT_SIGNAL" },
-        { INSTANCE_SNAPSTART_SIGNAL, "INSTANCE_SNAPSTART_SIGNAL" },
-        { INSTANCE_RESTORE_SIGNAL, "INSTANCE_RESTORE_SIGNAL" },
+        { INSTANCE_SNAPSTART_SIGNAL, "INSTANCE_SNAPSTART_SIGNAL" }
     };
     return signalMap.find(signal) != signalMap.end() ? signalMap.at(signal) : "UnknownSignal";
 }

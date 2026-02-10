@@ -24,7 +24,7 @@
 #include "common/metadata/metadata.h"
 #include "common/utils/exec_utils.h"
 #include "common/utils/hash_util.h"
-#include "function_agent/common/kv_client.h"
+#include "common/kv_client/kv_client.h"
 #include "function_agent/flags/function_agent_flags.h"
 #include "utils/os_utils.hpp"
 
@@ -148,7 +148,7 @@ public:
     {
         auto filename = dsKey_.substr(DS_SCHEME.length());
         auto splits = litebus::strings::Split(filename, ".");
-        auto [s, buffer] = function_agent::KVClient::GetInstance().Get(splits[0]);
+        auto [s, buffer] = KVClient::GetInstance().Get(splits[0]);
         if (!s.OK()) {
             YRLOG_WARN("failed to get dsKey {}, err: {}", filename, s.ToString());
             return std::make_pair(s, "");

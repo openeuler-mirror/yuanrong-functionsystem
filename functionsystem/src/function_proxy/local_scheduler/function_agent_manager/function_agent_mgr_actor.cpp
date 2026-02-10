@@ -1528,7 +1528,7 @@ void FunctionAgentMgrActor::UpdateCredResponse(const litebus::AID &from, std::st
     (void)updateTokenSync_.Synchronized(requestID, response);
 }
 
-litebus::Future<SnapshotRuntimeResponse> FunctionAgentMgrActor::SnapshotRuntime(
+litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::SnapshotRuntime(
     const std::string &requestID,
     const resource_view::InstanceInfo &instanceInfo)
 {
@@ -1537,7 +1537,7 @@ litebus::Future<SnapshotRuntimeResponse> FunctionAgentMgrActor::SnapshotRuntime(
     std::string instanceID = instanceInfo.instanceid();
 
     if (funcAgentID.empty()) {
-        SnapshotRuntimeResponse result;
+        messages::SnapshotRuntimeResponse result;
         result.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
         result.set_message(fmt::format("agent not found for instance {}", instanceID));
         YRLOG_ERROR("{}|functionagentid is empty for instance", instanceID);
@@ -1545,7 +1545,7 @@ litebus::Future<SnapshotRuntimeResponse> FunctionAgentMgrActor::SnapshotRuntime(
     }
 
     if (funcAgentTable_.find(funcAgentID) == funcAgentTable_.end()) {
-        SnapshotRuntimeResponse result;
+        messages::SnapshotRuntimeResponse result;
         result.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
         result.set_message("function agent is not registered");
         YRLOG_ERROR("{}|failed to send snapshot runtime request, function agent {} is not registered.",
@@ -1567,22 +1567,7 @@ litebus::Future<SnapshotRuntimeResponse> FunctionAgentMgrActor::SnapshotRuntime(
     Send(funcAgentTable_[funcAgentID].aid, "SnapshotRuntime", request->SerializeAsString());
 
     // 3. 将 SnapshotRuntimeResponse 消息转换为结构体
-    return future.Then([instanceID](const messages::SnapshotRuntimeResponse &response) -> SnapshotResult {
-        SnapshotResult result;
-        result.code = response.code();
-        result.message = response.message();
-        if (response.code() == common::ERR_NONE && response.has_snapshotinfo()) {
-            result.checkpointID = response.snapshotinfo().checkpointid();
-            result.storagePath = response.snapshotinfo().storage();
-            result.size = 0; // Size is not in SnapshotInfo proto, set to 0 for now
-            YRLOG_INFO("{}|snapshot runtime successful, checkpointID: {}",
-                      instanceID, result.checkpointID);
-        } else {
-            YRLOG_ERROR("{}|snapshot runtime failed, code: {}, message: {}",
-                       instanceID, response.code(), response.message());
-        }
-        return result;
-    });
+    return future;
 }
 
 void FunctionAgentMgrActor::SnapshotRuntimeResponse(const litebus::AID &from, std::string &&, std::string &&msg)

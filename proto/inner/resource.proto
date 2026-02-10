@@ -269,8 +269,9 @@ message InstanceStatus {
 message SnapshotInfo {
   string checkpointID = 1;
   string storage = 2;
-  string createTime = 3;
-  int32 ttlSeconds = 4;
+  int64  size = 3;
+  string createTime = 4;
+  int32 ttlSeconds = 5;
 }
 
 message InstanceInfo {

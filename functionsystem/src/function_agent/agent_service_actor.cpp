@@ -708,7 +708,7 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
     // Store the caller's AID to send response back later
     snapshotRequests_[request->requestid()] = from;
 
-    Send(litebus::AID(registerRuntimeMgr_.name, registerRuntimeMgr_.address), "SnapshotRuntime", msg);
+    Send(litebus::AID(registerRuntimeMgr_.name, registerRuntimeMgr_.address), "SnapshotRuntime", std::move(msg));
 }
 
 void AgentServiceActor::SnapshotRuntimeResponse(const litebus::AID &from, std::string &&, std::string &&msg)
@@ -730,7 +730,7 @@ void AgentServiceActor::SnapshotRuntimeResponse(const litebus::AID &from, std::s
                requestID, response.code());
 
     // Forward response back to the original caller (FunctionAgentMgrActor)
-    Send(iter->second, "SnapshotRuntimeResponse", msg);
+    Send(iter->second, "SnapshotRuntimeResponse", std::move(msg));
     snapshotRequests_.erase(iter);
 }
 

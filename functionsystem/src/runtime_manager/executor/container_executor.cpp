@@ -693,7 +693,7 @@ litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::SnapshotRu
     auto checkpointReq = std::make_shared<runtime::v1::CheckpointRequest>();
     checkpointReq->set_id(containerID);
     checkpointReq->set_ckpt_dir(checkpointPath);
-    checkpointReq->set_timeout(request->has_timeout() ? request->timeout() : 30);
+    checkpointReq->set_timeout(30);  // Use default timeout of 30 seconds
     checkpointReq->set_compress(false);
     checkpointReq->set_trace_id(request->requestid());
 
@@ -851,7 +851,7 @@ litebus::Future<Status> ContainerExecutor::OnDeleteContainer(const std::string &
         std::string checkpointID = ckptIter->second;
         if (ckptFileManager_ != nullptr) {
             ckptFileManager_->RemoveReference(checkpointID).Then(
-                [checkpointID, requestID, runtimeID](const litebus::Future<Status> &result) {
+                [checkpointID, requestID, runtimeID](const litebus::Future<Status> &result) -> Status {
                     if (result.IsError() || result.Get().IsError()) {
                         YRLOG_WARN("{}|failed to remove reference for checkpoint {} (runtime: {})",
                                    requestID, checkpointID, runtimeID);
@@ -859,6 +859,7 @@ litebus::Future<Status> ContainerExecutor::OnDeleteContainer(const std::string &
                         YRLOG_INFO("{}|removed reference for checkpoint {} (runtime: {})",
                                    requestID, checkpointID, runtimeID);
                     }
+                    return Status::OK();
                 });
         }
         runtime2checkpointID_.erase(ckptIter);
