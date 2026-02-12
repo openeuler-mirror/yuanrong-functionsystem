@@ -113,6 +113,7 @@ type FunctionVersion struct {
 	AutoScaleConfig    AutoScaleConfig
 	WarmupType         string
 	RootfsSpecMeta     types.RootfsSpecMeta
+	IsFuncPublic       bool
 }
 
 // FunctionLayer defines layer info related to function version.

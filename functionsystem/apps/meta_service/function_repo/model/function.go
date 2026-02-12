@@ -97,6 +97,7 @@ type FunctionBasicInfo struct {
 	AutoScaleConfig           AutoScaleConfig            `json:"autoScaleConfig" valid:",optional"`
 	SchedulePolicy            string                     `json:"schedulePolicy" valid:",optional"`
 	ScalePolicy               string                     `json:"scalePolicy" valid:",optional"`
+	IsFuncPublic              bool                       `json:"isFuncPublic" valid:"optional"`
 }
 
 // FunctionCreateRequest -
