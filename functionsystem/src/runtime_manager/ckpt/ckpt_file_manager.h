@@ -44,15 +44,15 @@ public:
                                                      const std::string &storageUrl) const;
 
     /**
-     * Register a locally created checkpoint (uploads to storage and registers)
+     * Register a locally created checkpoint (zips, uploads to storage, and registers)
      * @param checkpointID Unique checkpoint identifier
-     * @param localPath Local checkpoint directory path
-     * @param storageUrl Remote storage URL (storage key)
-     * @return Future with status
+     * @param localPath Local checkpoint directory path (may contain multiple files)
+     * @param storageUrl Ignored (storageUrl is derived from localPath as parentPath.zip)
+     * @return Future with storageUrl (parentPath.zip)
      */
-    litebus::Future<Status> RegisterCheckpoint(const std::string &checkpointID,
-                                               const std::string &localPath,
-                                               const std::string &storageUrl) const;
+    litebus::Future<std::string> RegisterCheckpoint(const std::string &checkpointID,
+                                                    const std::string &localPath,
+                                                    const std::string &storageUrl) const;
     /**
      * Increment reference count for a checkpoint file
      * @param checkpointID Checkpoint identifier

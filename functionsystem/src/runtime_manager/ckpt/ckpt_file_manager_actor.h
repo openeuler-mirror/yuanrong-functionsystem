@@ -59,7 +59,7 @@ struct CheckpointFileInfo {
  */
 class CkptFileManagerActor : public litebus::ActorBase {
 public:
-    explicit CkptFileManagerActor(const std::string &name, const litebus::AID &parentAID);
+    explicit CkptFileManagerActor(const std::string &name);
 
     ~CkptFileManagerActor() override = default;
 
@@ -88,14 +88,15 @@ public:
 
     /**
      * Register a locally created checkpoint file (from snapshot operation)
+     * Zips the localPath directory and uploads the zip to remote storage.
      * @param checkpointID Unique checkpoint identifier
-     * @param localPath Local checkpoint directory path
-     * @param storageUrl Remote storage URL (storage key)
-     * @return Future with status
+     * @param localPath Local checkpoint directory path (may contain multiple files)
+     * @param storageUrl Ignored (storageUrl is derived from localPath as parentPath.zip)
+     * @return Future with storageUrl (parentPath.zip)
      */
-    litebus::Future<Status> RegisterCheckpoint(const std::string &checkpointID,
-                                               const std::string &localPath,
-                                               const std::string &storageUrl);
+    litebus::Future<std::string> RegisterCheckpoint(const std::string &checkpointID,
+                                                    const std::string &localPath,
+                                                    const std::string &storageUrl);
 
     /**
      * Set TTL for checkpoint files (in seconds)
@@ -171,7 +172,23 @@ private:
     void OnUploadSuccess(const std::string &checkpointID,
                         const std::string &localPath,
                         const std::string &storageUrl,
-                        litebus::Promise<Status> uploadPromise);
+                        litebus::Promise<std::string> uploadPromise);
+
+    /**
+     * Zip a directory into a zip file
+     * @param dirPath Directory to zip
+     * @param zipPath Output zip file path
+     * @return Status indicating success or failure
+     */
+    static Status ZipDirectory(const std::string &dirPath, const std::string &zipPath);
+
+    /**
+     * Unzip a file to a target directory
+     * @param zipPath Zip file to extract
+     * @param targetDir Directory to extract into
+     * @return Status indicating success or failure
+     */
+    static Status UnzipFile(const std::string &zipPath, const std::string &targetDir);
 
     litebus::AID parentAID_;
     std::unordered_map<std::string, CheckpointFileInfo> checkpointFiles_;

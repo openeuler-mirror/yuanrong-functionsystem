@@ -36,9 +36,9 @@ SnapCtrl::~SnapCtrl()
     Await();
 }
 
-std::unique_ptr<SnapCtrl> SnapCtrl::Create(const std::string &nodeID, const SnapCtrlConfig &config)
+std::unique_ptr<SnapCtrl> SnapCtrl::Create(const std::string &nodeID)
 {
-    auto actor = std::make_shared<SnapCtrlActor>(SNAP_CTRL_ACTOR_NAME, nodeID, config);
+    auto actor = std::make_shared<SnapCtrlActor>(SNAP_CTRL_ACTOR_NAME, nodeID);
     litebus::Spawn(actor);
     return std::make_unique<SnapCtrl>(actor);
 }
@@ -82,6 +82,12 @@ void SnapCtrl::BindInstanceCtrl(const std::shared_ptr<InstanceCtrl> &instanceCtr
     litebus::Async(aid_, &SnapCtrlActor::BindInstanceCtrl, instanceCtrl);
 }
 
+void SnapCtrl::BindClientManager(const std::shared_ptr<ControlInterfaceClientManagerProxy> &clientManager)
+{
+    ASSERT_IF_NULL(snapCtrlActor_);
+    litebus::Async(aid_, &SnapCtrlActor::BindClientManager, clientManager);
+}
+
 litebus::Future<KillResponse> SnapCtrl::HandleSnapshot(const std::string &requestID,
                                                        const std::string &instanceID,
                                                        const std::string &payload)
@@ -96,6 +102,15 @@ litebus::Future<KillResponse> SnapCtrl::HandleSnapStart(const std::string &reque
 {
     ASSERT_IF_NULL(snapCtrlActor_);
     return litebus::Async(aid_, &SnapCtrlActor::HandleSnapStart, requestID, checkpointID, payload);
+}
+
+void SnapCtrl::SnapStart(
+    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result,
+    const TransitionResult &transResult)
+{
+    ASSERT_IF_NULL(snapCtrlActor_);
+    litebus::Async(aid_, &SnapCtrlActor::SnapStart, scheduleResp, scheduleReq, result, transResult);
 }
 
 }  // namespace functionsystem::local_scheduler

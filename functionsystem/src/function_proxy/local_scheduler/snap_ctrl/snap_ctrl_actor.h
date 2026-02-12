@@ -40,14 +40,9 @@ class FunctionAgentMgr;
 class LocalSchedSrv;
 class InstanceCtrlActor;
 
-struct SnapCtrlConfig {
-    uint32_t snapshotTimeoutMs{120000};  // 2 minutes default timeout for snapshot
-    uint32_t snapStartTimeoutMs{60000};  // 1 minute default timeout for snapstart
-};
-
 class SnapCtrlActor : public BasisActor {
 public:
-    SnapCtrlActor(const std::string &name, const std::string &nodeID, const SnapCtrlConfig &config);
+    SnapCtrlActor(const std::string &name, const std::string &nodeID);
     ~SnapCtrlActor() override = default;
 
     void Init() override;
@@ -85,7 +80,7 @@ public:
 
     /**
      * Handle snapstart instance initialization after state transition to CREATING
-     * Complete flow: DeployInstance -> CreateInstanceClient -> StartHeartbeat 
+     * Complete flow: DeployInstance -> CreateInstanceClient -> StartHeartbeat
      *                -> SnapStarted -> TransInstanceState(RUNNING) -> SetValue
      * @param scheduleResp: Promise to return schedule response
      * @param scheduleReq: The schedule request for the restored instance
@@ -93,7 +88,7 @@ public:
      * @param transResult: Transition result from state transition to CREATING
      * @return Option of TransitionResult
      */
-    litebus::Option<TransitionResult> SnapStarted(
+    void SnapStart(
         const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
         const schedule_decision::ScheduleResult &result,
@@ -198,7 +193,6 @@ private:
         const litebus::Future<TransitionResult> &transResult);
 
     std::string nodeID_;
-    SnapCtrlConfig config_;
 
     std::shared_ptr<FunctionAgentMgr> functionAgentMgr_;
     std::shared_ptr<LocalSchedSrv> localSchedSrv_;
