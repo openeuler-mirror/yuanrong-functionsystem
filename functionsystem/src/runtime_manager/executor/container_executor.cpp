@@ -61,7 +61,8 @@ ContainerExecutor::ContainerExecutor(const std::string &name, const litebus::AID
     functionAgentAID_ = functionAgentAID;
     // Initialize checkpoint file manager
     auto ckptFileManagerActor = std::make_shared<CkptFileManagerActor>(
-        name + "_CkptFileManager", GetAID());
+        name + "_CkptFileManager");
+    litebus::Spawn(ckptFileManagerActor);
     ckptFileManager_ = std::make_shared<CkptFileManager>(ckptFileManagerActor);
 }
 
@@ -269,6 +270,9 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartRuntime
     if (request->runtimeinstanceinfo().warmuptype() != static_cast<int32_t>(WarmupType::NONE)) {
         return WarmUp(request, { { PARAM_EXEC_PATH, execPath }, { PARAM_LANGUAGE, language } }, args, envs);
     }
+    if (!request->runtimeinstanceinfo().snapshotinfo().checkpointid().empty()) {
+        return StartBySnapshot(request, { { PARAM_EXEC_PATH, execPath }, { PARAM_LANGUAGE, language } }, args, envs);
+    }
     return StartByRuntimeID(request, { { PARAM_EXEC_PATH, execPath }, { PARAM_LANGUAGE, language } }, args, envs)
         .Then(litebus::Defer(GetAID(), &ContainerExecutor::OnStartRuntime, std::placeholders::_1, request));
 
@@ -366,10 +370,106 @@ std::string DirName(const std::string &path)
     return path.substr(0, pos);
 }
 
+// Forward declarations for functions used in helpers
+std::vector<std::string> BuildCommand(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                     const std::string &execPath);
+std::string BuildLanguageWorkingRoot(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                    runtime::v1::Mount &mount);
+
+// Unified helper to build runtime commands - works with FunctionRuntime directly
+void ContainerExecutor::BuildRuntimeCommands(runtime::v1::FunctionRuntime *funcRt,
+                                           const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                           const std::string &execPath,
+                                           const std::vector<std::string> &buildArgs,
+                                           const std::string &workingRoot)
+{
+    *funcRt->add_command() = "cd";
+    *funcRt->add_command() = workingRoot;
+    *funcRt->add_command() = "&&";
+    auto commands = BuildCommand(request, execPath);
+    for (const auto &cmd : commands) {
+        *funcRt->add_command() = cmd;
+    }
+    for (const auto &arg : buildArgs) {
+        *funcRt->add_command() = arg;
+    }
+}
+
+// Unified helper to set request resources - works with protobuf map directly
+void ContainerExecutor::SetRequestResources(google::protobuf::Map<std::string, double> *resourcesMap,
+                                          const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    const auto &resources = request->runtimeinstanceinfo().runtimeconfig().resources();
+    if (resources.resources().find(CPU_RESOURCE_NAME) == resources.resources().end()
+        || resources.resources().at(CPU_RESOURCE_NAME).type() != ValueType::Value_Type_SCALAR) {
+        (*resourcesMap)[CPU_RESOURCE_NAME] = 500;
+    } else {
+        (*resourcesMap)[CPU_RESOURCE_NAME] =
+            resources.resources().at(CPU_RESOURCE_NAME).scalar().value();
+    }
+    if (resources.resources().find(MEMORY_RESOURCE_NAME) == resources.resources().end()
+        || resources.resources().at(MEMORY_RESOURCE_NAME).type() != ValueType::Value_Type_SCALAR) {
+        (*resourcesMap)[MEMORY_RESOURCE_NAME] = 500;
+    } else {
+        (*resourcesMap)[MEMORY_RESOURCE_NAME] =
+            resources.resources().at(MEMORY_RESOURCE_NAME).scalar().value();
+    }
+}
+
+void ContainerExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req,
+                                                     const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                                     const Envs &envs,
+                                                     const std::string &runtimeID)
+{
+    const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
+    req->mutable_userenvs()->insert(combineEnvs.begin(), combineEnvs.end());
+    (*req->mutable_userenvs())[YR_ONLY_STDOUT] = "true";
+    std::string stdOut, stdErr;
+    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID);
+    req->set_stdout(stdOut);
+    req->set_stderr(stdErr);
+}
+
+void ContainerExecutor::SetRequestEnvsAndLogsForRestore(runtime::v1::RestoreRequest *req,
+                                                       const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                                       const Envs &envs,
+                                                       const std::string &runtimeID)
+{
+    const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
+    req->mutable_userenvs()->insert(combineEnvs.begin(), combineEnvs.end());
+    (*req->mutable_userenvs())[YR_ONLY_STDOUT] = "true";
+    std::string stdOut, stdErr;
+    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID);
+    req->set_stdout(stdOut);
+    req->set_stderr(stdErr);
+}
+
+void ContainerExecutor::SetRequestExtraConfigForStart(runtime::v1::StartRequest *req,
+                                                     const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
+    if (opts.find(CONTAINER_EXTRA_CONFIG) != opts.end()) {
+        req->set_extraconfig(opts.at(CONTAINER_EXTRA_CONFIG));
+    }
+}
+
+void ContainerExecutor::SetRequestExtraConfigForRestore(runtime::v1::RestoreRequest *req,
+                                                       const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
+    if (opts.find(CONTAINER_EXTRA_CONFIG) != opts.end()) {
+        req->set_extraconfig(opts.at(CONTAINER_EXTRA_CONFIG));
+    }
+}
+
 Envs BuildMountForCode(const std::shared_ptr<runtime::v1::StartRequest> &start,
                        const std::shared_ptr<messages::StartInstanceRequest> &request, const Envs &envs)
 {
     Envs updateEnv = envs;
+    auto workingDirIter = envs.posixEnvs.find(UNZIPPED_WORKING_DIR);
+    if (workingDirIter == envs.posixEnvs.end() || workingDirIter->second.empty()) {
+        return updateEnv;
+    }
     auto deploySpec = request->runtimeinstanceinfo().deploymentconfig();
     auto layerPath = litebus::os::Join(deploySpec.deploydir(), RUNTIME_LAYER_DIR_NAME);
     auto funcPath = litebus::os::Join(layerPath, RUNTIME_FUNC_DIR_NAME);
@@ -380,16 +480,10 @@ Envs BuildMountForCode(const std::shared_ptr<runtime::v1::StartRequest> &start,
     if (libPathIter != envs.posixEnvs.end() && !libPathIter->second.empty()) {
         funcPath = libPathIter->second;
     }
-
-    auto workingDirIter = envs.posixEnvs.find(UNZIPPED_WORKING_DIR);
-    if (workingDirIter == envs.posixEnvs.end() || workingDirIter->second.empty()) {
-        code->set_source(funcPath);
-    } else {
-        code->set_source(workingDirIter->second);
-        if (workingDirIter->second.find(".img") != std::string::npos) {
-            code->set_type("erofs");
-            funcPath = DirName(workingDirIter->second);
-        }
+    code->set_source(workingDirIter->second);
+    if (workingDirIter->second.find(".img") != std::string::npos) {
+        code->set_type("erofs");
+        funcPath = DirName(workingDirIter->second);
     }
     std::string funcPathTarget = funcPath;
     std::replace(funcPathTarget.begin(), funcPathTarget.end(), '/', '-');
@@ -540,6 +634,11 @@ std::string BuildLanguageWorkingRoot(
     if (languageConfig.type().empty() || languageConfig.root().empty()) {
         return root;
     }
+    // todo lwy which should be removed after warmup supports mount
+    if (!HasCustomRootfs(request)) {
+        YRLOG_WARN("custom rootfs is not specified, using default language working root config");
+        return root;
+    }
     const std::string mountDst = "/__yuanrong/";
     mount.set_source(languageConfig.root());
     mount.set_target(mountDst);
@@ -576,63 +675,23 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
     }
     YRLOG_INFO("start {} runtime({}), execute final cmd: {}", language, runtimeID, cmd);
     auto start = std::make_shared<runtime::v1::StartRequest>();
-    auto funcRt = start->mutable_funcruntime();
     if (auto status = BuildRootfs(request, start); !status.IsOk()) {
         runtime::v1::StartResponse rsp{};
         rsp.set_code(static_cast<int32_t>(status.StatusCode()));
         rsp.set_message(status.RawMessage());
         return rsp;
     }
-    const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
-    if (opts.find(CONTAINER_EXTRA_CONFIG) != opts.end()) {
-        start->set_extraconfig(opts.at(CONTAINER_EXTRA_CONFIG));
-    }
 
-    // Build language mount and get cd commands
-    runtime::v1::Mount mount;
+    SetRequestExtraConfigForStart(start.get(), request);
+     runtime::v1::Mount mount;
     auto workingRoot = BuildLanguageWorkingRoot(request, mount);
     if (mount.source().length() > 0 && mount.target().length() > 0) {
         *start->add_mounts() = mount;
     }
-    *funcRt->add_command() = "cd";
-    *funcRt->add_command() = workingRoot;
-    *funcRt->add_command() = "&&";
-
-    // Build command from languageconfig and execPath
-    auto commands = BuildCommand(request, execPath);
-    for (const auto &cmd : commands) {
-        *funcRt->add_command() = cmd;
-    }
-    // Also add buildArgs if provided
-    for (const auto &arg : buildArgs) {
-        *funcRt->add_command() = arg;
-    }
+    BuildRuntimeCommands(start->mutable_funcruntime(), request, execPath, buildArgs, workingRoot);
     auto updateEnv = BuildMountForCode(start, request, envs);
-
-    // todo: should be more elegant
-    const auto &resources = request->runtimeinstanceinfo().runtimeconfig().resources();
-    if (resources.resources().find(CPU_RESOURCE_NAME) == resources.resources().end()
-        || resources.resources().at(CPU_RESOURCE_NAME).type() != ValueType::Value_Type_SCALAR) {
-        (*start->mutable_resources())[CPU_RESOURCE_NAME] = 500;
-    } else {
-        (*start->mutable_resources())[CPU_RESOURCE_NAME] = resources.resources().at(CPU_RESOURCE_NAME).scalar().value();
-    }
-
-    if (resources.resources().find(MEMORY_RESOURCE_NAME) == resources.resources().end()
-        || resources.resources().at(MEMORY_RESOURCE_NAME).type() != ValueType::Value_Type_SCALAR) {
-        (*start->mutable_resources())[MEMORY_RESOURCE_NAME] = 500;
-    } else {
-        (*start->mutable_resources())[MEMORY_RESOURCE_NAME] =
-            resources.resources().at(MEMORY_RESOURCE_NAME).scalar().value();
-    }
-
-    // currently all treated as runtimeEnv
-    // todo lwy for fork friendly, the immutable env should be mv to runtimeEnv
-    const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(updateEnv);
-    start->mutable_userenvs()->insert(combineEnvs.begin(), combineEnvs.end());
-    (*start->mutable_userenvs())[YR_ONLY_STDOUT] = "true";
-    start->set_stdout(stdOut);
-    start->set_stderr(stdErr);
+    SetRequestResources(start->mutable_resources(), request);
+    SetRequestEnvsAndLogsForStart(start.get(), request, updateEnv, runtimeID);
 
     return DoStartContainer(request, start);
 }
@@ -685,10 +744,6 @@ litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::SnapshotRu
 
     std::string checkpointPath = fmt::format("/home/yuanrong/checkpoints/{}", checkpointID);
 
-    auto *snapshotInfo = response.mutable_snapshotinfo();
-    snapshotInfo->set_checkpointid(checkpointID);
-    snapshotInfo->set_storage(checkpointPath);
-
     // Call containerd to create checkpoint
     auto checkpointReq = std::make_shared<runtime::v1::CheckpointRequest>();
     checkpointReq->set_id(containerID);
@@ -729,25 +784,20 @@ litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::OnCheckpoi
 }
 
 litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::OnRegisterCheckpoint(
-    const Status &regStatus,
+    const std::string &storageUrl,
     messages::SnapshotRuntimeResponse response,
     const std::string &requestID,
     const std::string &checkpointID,
     const std::string &runtimeID)
 {
-    if (regStatus.IsError()) {
-        YRLOG_ERROR("{}|failed to register checkpoint {}: {}",
-                    requestID, checkpointID, regStatus.RawMessage());
-        response.set_code(static_cast<int32_t>(StatusCode::RUNTIME_MANAGER_CHECKPOINT_REGISTER_FAILED));
-        response.set_message(fmt::format("checkpoint registration failed: {}", regStatus.RawMessage()));
-        return response;
-    }
-
+    auto *snapshotInfo = response.mutable_snapshotinfo();
+    snapshotInfo->set_checkpointid(checkpointID);
+    snapshotInfo->set_storage(storageUrl);
     // Track checkpoint for this runtime
     runtime2checkpointID_[runtimeID] = checkpointID;
 
-    YRLOG_INFO("{}|snapshot runtime {} completed successfully with checkpoint {}",
-               requestID, runtimeID, checkpointID);
+    YRLOG_INFO("{}|snapshot runtime {} completed successfully with checkpoint {}, storageUrl: {}",
+               requestID, runtimeID, checkpointID, storageUrl);
     response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
     response.set_message("snapshot created successfully");
     return response;
@@ -1044,8 +1094,10 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::WarmUp(
     warmup->set_sandbox(request->runtimeinstanceinfo().container().runtime());
     *warmup->mutable_rootfs() = request->runtimeinstanceinfo().container().rootfsconfig();
     warmup->set_makeseed(request->runtimeinstanceinfo().warmuptype() == static_cast<int32_t>(WarmupType::SEED));
-    runtime::v1::Mount _;
-    auto workingRoot = BuildLanguageWorkingRoot(request, _);
+
+    // Build language mount and get working root
+    runtime::v1::Mount mount;
+    auto workingRoot = BuildLanguageWorkingRoot(request, mount);
     *warmup->add_command() = "cd";
     *warmup->add_command() = workingRoot;
     *warmup->add_command() = "&&";
@@ -1059,7 +1111,7 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::WarmUp(
     for (const auto &arg : buildArgs) {
         *warmup->add_command() = arg;
     }
-    // BuildMountForCode(start, request);
+
     // currently all treated as runtimeEnv
     // todo lwy for fork friendly, the immutable env should be mv to runtimeEnv
     warmup->mutable_runtimeenvs()->insert(combineEnvs.begin(), combineEnvs.end());
@@ -1098,6 +1150,138 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnRegisterTo
                 request->runtimeinstanceinfo().requestid(), request->runtimeinstanceinfo().instanceid(),
                 request->runtimeinstanceinfo().runtimeid());
     return rsp;
+}
+
+litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartBySnapshot(
+    const std::shared_ptr<messages::StartInstanceRequest> &request,
+    const std::map<std::string, std::string> startRuntimeParams, const std::vector<std::string> &buildArgs,
+    const Envs &envs)
+{
+    const auto &info = request->runtimeinstanceinfo();
+    const auto &snapshotInfo = info.snapshotinfo();
+    const auto &runtimeID = info.runtimeid();
+
+    const std::string checkpointID = snapshotInfo.checkpointid();
+    const std::string storageUrl = snapshotInfo.storage();
+
+    YRLOG_INFO("{}|{}|start instance from snapshot, instanceID({}), runtimeID({}), checkpointID({})",
+               info.traceid(), info.requestid(), info.instanceid(), runtimeID, checkpointID);
+
+    // Download checkpoint and increase reference count
+    ASSERT_IF_NULL(ckptFileManager_);
+    return ckptFileManager_->DownloadCheckpoint(checkpointID, storageUrl)
+        .Then(litebus::Defer(GetAID(), &ContainerExecutor::OnDownloadCheckpointForRestore,
+                             std::placeholders::_1, request, startRuntimeParams, buildArgs, envs));
+}
+
+litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnDownloadCheckpointForRestore(
+    const std::string &checkpointPath,
+    const std::shared_ptr<messages::StartInstanceRequest> &request,
+    const std::map<std::string, std::string> startRuntimeParams, const std::vector<std::string> &buildArgs,
+    const Envs &envs)
+{
+    const auto &info = request->runtimeinstanceinfo();
+    const std::string checkpointID = info.snapshotinfo().checkpointid();
+
+    YRLOG_INFO("{}|{}|checkpoint downloaded to {}, adding reference and starting restore...",
+               info.traceid(), info.requestid(), checkpointPath);
+
+    // Add reference count for this checkpoint
+    return ckptFileManager_->AddReference(checkpointID)
+        .Then(litebus::Defer(GetAID(), &ContainerExecutor::OnAddReferenceForRestore,
+                             std::placeholders::_1, checkpointPath, checkpointID, request,
+                             startRuntimeParams, buildArgs, envs));
+}
+
+litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnAddReferenceForRestore(
+    const Status &refStatus,
+    const std::string &checkpointPath,
+    const std::string &checkpointID,
+    const std::shared_ptr<messages::StartInstanceRequest> &request,
+    const std::map<std::string, std::string> startRuntimeParams,
+    const std::vector<std::string> &buildArgs,
+    const Envs &envs)
+{
+    const auto &info = request->runtimeinstanceinfo();
+    const auto &runtimeID = info.runtimeid();
+    const auto &execPath = startRuntimeParams.at(PARAM_EXEC_PATH);
+    auto language = startRuntimeParams.at(PARAM_LANGUAGE);
+
+    if (refStatus.IsError()) {
+        YRLOG_ERROR("{}|{}|failed to add reference for checkpoint {}: {}",
+                    info.traceid(), info.requestid(), checkpointID, refStatus.RawMessage());
+        return GenFailStartInstanceResponse(request, StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED,
+                                           "Failed to add checkpoint reference: " + refStatus.RawMessage());
+    }
+
+    // Track checkpoint reference for this runtime
+    runtime2checkpointID_[runtimeID] = checkpointID;
+
+    YRLOG_INFO("{}|{}|building restore request for runtime({})",
+               info.traceid(), info.requestid(), runtimeID);
+
+    // Build restore request
+    auto restoreReq = std::make_shared<runtime::v1::RestoreRequest>();
+    restoreReq->set_ckpt_dir(checkpointPath);
+    restoreReq->set_trace_id(info.requestid());
+
+    // Configure function runtime
+    auto funcRt = restoreReq->mutable_funcruntime();
+    funcRt->set_id(runtimeID);
+    funcRt->set_sandbox(request->runtimeinstanceinfo().container().runtime());
+    *funcRt->mutable_rootfs() = request->runtimeinstanceinfo().container().rootfsconfig();
+
+    SetRequestExtraConfigForRestore(restoreReq.get(), request);
+    runtime::v1::Mount mount;
+    auto workingRoot = BuildLanguageWorkingRoot(request, mount);
+    if (mount.source().length() > 0 && mount.target().length() > 0) {
+        *restoreReq->add_mounts() = mount;
+    }
+    BuildRuntimeCommands(restoreReq->mutable_funcruntime(), request, execPath, buildArgs, workingRoot);
+
+    // Build mounts for code - need to create temporary StartRequest for this
+    auto tempStart = std::make_shared<runtime::v1::StartRequest>();
+    auto updateEnv = BuildMountForCode(tempStart, request, envs);
+    // Copy mounts from tempStart to restoreReq
+    for (const auto &mount : tempStart->mounts()) {
+        *restoreReq->add_mounts() = mount;
+    }
+
+    SetRequestResources(restoreReq->mutable_resources(), request);
+    SetRequestEnvsAndLogsForRestore(restoreReq.get(), request, updateEnv, runtimeID);
+
+    YRLOG_INFO("{}|{}|calling DoRestore for runtime({}), checkpoint({})",
+               info.traceid(), info.requestid(), runtimeID, checkpointPath);
+
+    // Call restore
+    return DoRestore(restoreReq).Then(
+        litebus::Defer(GetAID(), &ContainerExecutor::OnRestoreCompleted,
+                       std::placeholders::_1, request));
+}
+
+litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnRestoreCompleted(
+    const runtime::v1::RestoreResponse &response,
+    const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    const auto &info = request->runtimeinstanceinfo();
+
+    if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+        YRLOG_ERROR("{}|{}|failed to restore from snapshot, code({}) message({})",
+                    info.traceid(), info.requestid(), response.code(), response.message());
+        return GenFailStartInstanceResponse(request, StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED, response.message());
+    }
+
+    auto containerID = response.id();
+    litebus::Async(GetAID(), &ContainerExecutor::ReportInfo, info.instanceid(), info.runtimeid(), containerID,
+                   functionsystem::metrics::MeterTitle{ "yr_app_instance_start_time", " start timestamp", "ms" });
+
+    YRLOG_INFO("{}|{}|restore instance success, instanceID({}), runtimeID({}), containerID({})",
+               info.traceid(), info.requestid(), info.instanceid(), info.runtimeid(), containerID);
+
+    runtime2containerID_[info.runtimeid()] = containerID;
+    runtimeInstanceInfoMap_[info.runtimeid()] = request->runtimeinstanceinfo();
+
+    return GenSuccessStartInstanceResponse(request, containerID);
 }
 
 litebus::Future<runtime::v1::NormalResponse> ContainerExecutor::DoRegisterToWarmUp(

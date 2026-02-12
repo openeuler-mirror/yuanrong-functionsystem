@@ -255,10 +255,12 @@ void SnapManagerActor::DoCleanupExpiredSnapshots()
 }
 
 void SnapManagerActor::SendRecordSnapshotResponse(const litebus::AID &to,
+                                                  const std::string &requestID,
                                                   int32_t code,
                                                   const std::string &message)
 {
     messages::RecordSnapshotResponse rsp;
+    rsp.set_requestid(requestID);
     rsp.set_code(code);
     rsp.set_message(message);
     Send(to, "RecordSnapshotMetadataResponse", rsp.SerializeAsString());
@@ -277,7 +279,7 @@ void SnapManagerActor::SendSnapStartResponse(const litebus::AID &to,
     if (!instanceID.empty()) {
         rsp.set_instanceid(instanceID);
     }
-    Send(to, "RestoreSnapshotResponse", rsp.SerializeAsString());
+    Send(to, "SnapStartCheckpointResponse", rsp.SerializeAsString());
 }
 
 // ===========================================
@@ -296,7 +298,7 @@ void SnapManagerActor::MasterBusiness::RecordSnapshotMetadata(const litebus::AID
     messages::RecordSnapshotRequest req;
     if (!req.ParseFromString(msg)) {
         YRLOG_ERROR("failed to parse RecordSnapshotRequest");
-        SendRecordSnapshotResponse(from, common::ERR_PARAM_INVALID, "failed to parse request");
+        SendRecordSnapshotResponse(from, "", common::ERR_PARAM_INVALID, "failed to parse request");
         return;
     }
     HandleRecordSnapshot(from, std::move(req));
@@ -368,11 +370,13 @@ void SnapManagerActor::MasterBusiness::HandleRecordSnapshot(const litebus::AID &
 
     *meta.mutable_instanceinfo() = std::move(*req.mutable_instanceinfo());
 
+    const auto &requestID = req.requestid();
+
     // Validate required fields
     const auto &snapshotID = meta.snapshotinfo().checkpointid();
     if (snapshotID.empty()) {
-        YRLOG_ERROR("RecordSnapshotMetadata: snapshotID is empty");
-        SendRecordSnapshotResponse(from, common::ERR_PARAM_INVALID, "snapshotID is required");
+        YRLOG_ERROR("RecordSnapshotMetadata: snapshotID is empty, requestID={}", requestID);
+        SendRecordSnapshotResponse(from, requestID, common::ERR_PARAM_INVALID, "snapshotID is required");
         return;
     }
 
@@ -381,7 +385,7 @@ void SnapManagerActor::MasterBusiness::HandleRecordSnapshot(const litebus::AID &
 
     // Save to etcd
     SaveMetadataToEtcd(meta)
-        .OnComplete([weakActor(actor_), from, snapshotID](const litebus::Future<Status> &future) {
+        .OnComplete([weakActor(actor_), from, snapshotID, requestID](const litebus::Future<Status> &future) {
             ASSERT_FS(future.IsOK());
             auto actor = weakActor.lock();
             if (!actor) {
@@ -389,11 +393,11 @@ void SnapManagerActor::MasterBusiness::HandleRecordSnapshot(const litebus::AID &
             }
             auto status = future.Get();
             if (status.IsOk()) {
-                YRLOG_INFO("snapshot metadata recorded successfully: {}", snapshotID);
+                YRLOG_INFO("snapshot metadata recorded successfully: {}, requestID={}", snapshotID, requestID);
             } else {
-                YRLOG_ERROR("failed to record snapshot metadata: {}, error: {}", snapshotID, status.GetMessage());
+                YRLOG_ERROR("failed to record snapshot metadata: {}, requestID={}, error: {}", snapshotID, requestID, status.GetMessage());
             }
-            litebus::Async(actor->GetAID(), &SnapManagerActor::SendRecordSnapshotResponse, from, status.StatusCode(), status.RawMessage());
+            litebus::Async(actor->GetAID(), &SnapManagerActor::SendRecordSnapshotResponse, from, requestID, status.StatusCode(), status.RawMessage());
         });
 }
 
@@ -512,11 +516,12 @@ Status SnapManagerActor::MasterBusiness::ValidateSnapshot(const SnapshotMetadata
 }
 
 void SnapManagerActor::MasterBusiness::SendRecordSnapshotResponse(const litebus::AID &to,
+                                                                  const std::string &requestID,
                                                                   int32_t code,
                                                                   const std::string &message) const
 {
     if (auto actor = actor_.lock(); actor) {
-        actor->SendRecordSnapshotResponse(to, code, message);
+        actor->SendRecordSnapshotResponse(to, requestID, code, message);
     }
 }
 

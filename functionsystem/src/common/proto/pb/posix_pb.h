@@ -47,6 +47,7 @@ namespace functionsystem {
     using SnapOptions = core_service::SnapOptions;
     using SnapStartOptions = core_service::SnapStartOptions;
     using SnapInfo = core_service::SnapInfo;
+    using SnapStartedInfo = core_service::SnapStartedInfo;
 }
 
 namespace internal {

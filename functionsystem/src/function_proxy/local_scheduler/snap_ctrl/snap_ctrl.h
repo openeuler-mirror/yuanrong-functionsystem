@@ -42,10 +42,9 @@ public:
     /**
      * Create a SnapCtrl instance with associated actor
      * @param nodeID: The node ID
-     * @param config: Configuration for snap control
      * @return Unique pointer to SnapCtrl
      */
-    static std::unique_ptr<SnapCtrl> Create(const std::string &nodeID, const SnapCtrlConfig &config);
+    static std::unique_ptr<SnapCtrl> Create(const std::string &nodeID);
 
     void Stop() override;
     void Await() override;
@@ -75,6 +74,12 @@ public:
     void BindInstanceCtrl(const std::shared_ptr<InstanceCtrl> &instanceCtrl);
 
     /**
+     * Bind the ControlInterfaceClientManagerProxy for accessing instance clients
+     * @param clientManager: The client manager
+     */
+    void BindClientManager(const std::shared_ptr<ControlInterfaceClientManagerProxy> &clientManager);
+
+    /**
      * Handle INSTANCE_SNAPSHOT_SIGNAL
      * Wrap async call to SnapCtrlActor::HandleSnapshot
      * @param requestID: Request ID for tracing
@@ -97,6 +102,11 @@ public:
     virtual litebus::Future<KillResponse> HandleSnapStart(const std::string &requestID,
                                                           const std::string &checkpointID,
                                                           const std::string &payload);
+
+    void SnapStart(
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result,
+        const TransitionResult &transResult);
 
     /**
      * Get the AID of the underlying actor

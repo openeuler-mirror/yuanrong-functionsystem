@@ -36,6 +36,9 @@ std::shared_ptr<DeployInstanceRequest> GetDeployInstanceReq(const FunctionMeta &
     deployInstanceRequest->set_codesha512(funcMeta.funcMetaData.codeSha512);
     deployInstanceRequest->set_codesha256(funcMeta.funcMetaData.codeSha256);
     deployInstanceRequest->mutable_resources()->CopyFrom(request->instance().resources());
+    if (request->instance().has_snapshotinfo()) {
+        deployInstanceRequest->mutable_snapshotinfo()->CopyFrom(request->instance().snapshotinfo());
+    }
     BuildDeploySpec(funcMeta, deployInstanceRequest);
     BuildRootfsConfig(funcMeta, deployInstanceRequest);
     BuildLanguageConfig(funcMeta, deployInstanceRequest);
