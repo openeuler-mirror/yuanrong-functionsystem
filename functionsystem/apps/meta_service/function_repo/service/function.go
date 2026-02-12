@@ -239,6 +239,7 @@ func buildBasicUpdateFunctionVersion(request model.FunctionUpdateRequest,
 	fv.FunctionVersion.PoolLabel = poolLabel
 	fv.FunctionVersion.PoolID = request.PoolID
 	fv.FunctionVersion.IdleTime = request.IdleTime
+	fv.FunctionVersion.IsFuncPublic = request.IsFuncPublic
 	fv.FunctionVersion.Package.BucketID = request.S3CodePath.BucketID
 	fv.FunctionVersion.Package.ObjectID = request.S3CodePath.ObjectID
 	fv.FunctionVersion.Package.BucketUrl = request.S3CodePath.BucketUrl
@@ -471,6 +472,7 @@ func getFunctionVersion(request model.FunctionCreateRequest, env string,
 		Device:          request.Device,
 		PoolLabel:       poolLabel,
 		PoolID:          request.PoolID,
+		IsFuncPublic:    request.IsFuncPublic,
 		IdleTime:        request.IdleTime,
 		WarmupType:      request.WarmupType,
 		RootfsSpecMeta:  request.RootfsSpecMeta,

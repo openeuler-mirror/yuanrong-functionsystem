@@ -231,6 +231,7 @@ type FaaSFuncMetaData struct {
 	VPCTriggerImage     string            `json:"vpcTriggerImage" valid:",optional"`
 	IdleTime            int64             `json:"idleTime" valid:",optional"`
 	AutoScaleConfig     AutoScaleConfig   `json:"autoScaleConfig" valid:"optional"`
+	IsFuncPublic        bool              `json:"isFuncPublic" valid:"optional"`
 }
 
 // FaaSResourceMetaData include resource data such as cpu and memory

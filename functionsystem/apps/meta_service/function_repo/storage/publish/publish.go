@@ -176,6 +176,7 @@ func buildFaaSFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionVa
 	info.FuncMetaData.Service = fv.FunctionVersion.Service
 	info.FuncMetaData.VersionDescription = fv.FunctionVersion.Description
 	info.FuncMetaData.IdleTime = fv.FunctionVersion.IdleTime
+	info.FuncMetaData.IsFuncPublic = fv.FunctionVersion.IsFuncPublic
 	info.FuncMetaData.AutoScaleConfig = metadata.AutoScaleConfig{
 		SLAQuota:      fv.FunctionVersion.AutoScaleConfig.SLAQuota,
 		ScaleDownTime: fv.FunctionVersion.AutoScaleConfig.ScaleDownTime,
@@ -351,6 +352,7 @@ func buildFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionValue,
 	info.FuncMetaData.StatefulFlag = fv.FunctionVersion.StatefulFlag != 0
 	info.FuncMetaData.HookHandler = fv.FunctionVersion.HookHandler
 	info.FuncMetaData.IdleTime = fv.FunctionVersion.IdleTime
+	info.FuncMetaData.IsFuncPublic = fv.FunctionVersion.IsFuncPublic
 	info.WarmupType = fv.FunctionVersion.WarmupType
 	info.RootfsSpecMeta = buildRootFsSpecMeta(fv.FunctionVersion.RootfsSpecMeta)
 	var err error
