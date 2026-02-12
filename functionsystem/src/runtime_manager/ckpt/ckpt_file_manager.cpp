@@ -39,7 +39,7 @@ litebus::Future<std::string> CkptFileManager::DownloadCheckpoint(
                           checkpointID, storageUrl);
 }
 
-litebus::Future<Status> CkptFileManager::RegisterCheckpoint(
+litebus::Future<std::string> CkptFileManager::RegisterCheckpoint(
     const std::string &checkpointID,
     const std::string &localPath,
     const std::string &storageUrl) const

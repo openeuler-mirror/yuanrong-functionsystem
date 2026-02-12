@@ -32,8 +32,8 @@
 
 namespace functionsystem::local_scheduler {
 
-SnapCtrlActor::SnapCtrlActor(const std::string &name, const std::string &nodeID, const SnapCtrlConfig &config)
-    : BasisActor(name), nodeID_(nodeID), config_(config)
+SnapCtrlActor::SnapCtrlActor(const std::string &name, const std::string &nodeID)
+    : BasisActor(name), nodeID_(nodeID)
 {
 }
 
@@ -216,7 +216,9 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapStart(const std::string &
                 YRLOG_INFO("{}|snapstart checkpoint {} succeeded, new instanceID: {}", requestID, checkpointID,
                            rsp.instanceid());
                 // 在 payload 中返回新的 instanceID
-                killRsp.set_payload(rsp.instanceid());
+                SnapStartedInfo info;
+                info.set_instanceid(rsp.instanceid());
+                killRsp.set_payload(info.SerializeAsString());
             } else {
                 YRLOG_ERROR("{}|snapstart checkpoint {} failed: {}", requestID, checkpointID, rsp.message());
             }
@@ -225,7 +227,7 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapStart(const std::string &
         });
 }
 
-litebus::Option<TransitionResult> SnapCtrlActor::SnapStarted(
+void SnapCtrlActor::SnapStart(
     const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
     const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result,
     const TransitionResult &transResult)
@@ -235,15 +237,7 @@ litebus::Option<TransitionResult> SnapCtrlActor::SnapStarted(
 
     YRLOG_INFO("{}|{}|SnapStarted: start snapstart instance initialization flow", requestID, instanceID);
 
-    // Check transition result - similar to OnTryDispatchOnLocal
-    if (transResult.savedInfo.functionproxyid().empty()) {
-        YRLOG_ERROR("{}|{}|failed to update state of instance, err: {}", requestID, instanceID,
-                    transResult.status.GetMessage());
-        scheduleResp->SetValue(GenScheduleResponse(
-            StatusCode::ERR_ETCD_OPERATION_ERROR,
-            "failed to update instance info, err: " + transResult.status.GetMessage(), *scheduleReq));
-        return transResult;
-    }
+    // todo(lwy) :Check transition result
 
     // 1. DeployInstance - call InstanceCtrl to deploy the snapstart instance
     ASSERT_IF_NULL(instanceCtrl_);
@@ -251,8 +245,6 @@ litebus::Option<TransitionResult> SnapCtrlActor::SnapStarted(
     instanceCtrl_->DeploySnapStartInstance(scheduleReq)
         .OnComplete(litebus::Defer(GetAID(), &SnapCtrlActor::OnDeploySnapStartInstanceComplete, scheduleResp,
                                    scheduleReq, std::placeholders::_1));
-
-    return litebus::None();
 }
 
 void SnapCtrlActor::OnDeploySnapStartInstanceComplete(

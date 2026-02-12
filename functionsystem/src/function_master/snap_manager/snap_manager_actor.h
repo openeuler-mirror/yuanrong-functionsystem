@@ -109,6 +109,7 @@ public:
     litebus::Future<Status> DeleteSnapshot(const std::string &snapshotID);
 
     void SendRecordSnapshotResponse(const litebus::AID &to,
+                                    const std::string &requestID,
                                     int32_t code,
                                     const std::string &message);
 
@@ -185,7 +186,7 @@ private:
 
         Status ValidateSnapshot(const SnapshotMetadata &meta, int64_t currentTime) const;
 
-        void SendRecordSnapshotResponse(const litebus::AID &to, int32_t code, const std::string &message) const;
+        void SendRecordSnapshotResponse(const litebus::AID &to, const std::string &requestID, int32_t code, const std::string &message) const;
         void SendSnapStartResponse(const litebus::AID &to, const std::string &requestID,
                                   int32_t code, const std::string &message,
                                   const std::string &instanceID = "") const;

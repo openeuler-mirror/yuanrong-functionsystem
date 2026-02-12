@@ -58,6 +58,7 @@
 #include "meta_store_monitor/meta_store_monitor_factory.h"
 #include "resource_group_manager/resource_group_manager_driver.h"
 #include "scaler/scaler_driver.h"
+#include "snap_manager/snap_manager_driver.h"
 #include "system_function_loader/bootstrap_actor.h"
 #include "system_function_loader/bootstrap_driver.h"
 #include "utils/string_utils.hpp"
@@ -84,6 +85,7 @@ ScalerHandlers g_handlers;
 std::shared_ptr<meta_store::MetaStoreDriver> g_metaStoreDriver{ nullptr };
 std::shared_ptr<instance_manager::InstanceManager> g_instanceMgr{ nullptr };
 std::shared_ptr<resource_group_manager::ResourceGroupManagerDriver> g_resourceGroupManagerDriver = nullptr;
+std::shared_ptr<snap_manager::SnapManagerDriver> g_snapManagerDriver = nullptr;
 
 bool CheckFlags(const functionmaster::Flags &flags)
 {
@@ -135,6 +137,16 @@ void OnDestroy()
         YRLOG_INFO("success to stop GlobalScheduler");
     } else {
         YRLOG_WARN("failed to stop GlobalScheduler");
+    }
+
+    if (g_snapManagerDriver != nullptr) {
+        if (g_snapManagerDriver->Stop().IsOk()) {
+            g_snapManagerDriver->Await();
+            g_snapManagerDriver = nullptr;
+            YRLOG_INFO("success to stop SnapManager");
+        } else {
+            YRLOG_WARN("failed to stop SnapManager");
+        }
     }
 
     // instance manager only can be stopped after bootstrap, because instances
@@ -399,6 +411,19 @@ bool InitResourceGroupManager(const std::shared_ptr<MetaStoreClient> &metaClient
     return true;
 }
 
+bool InitSnapManagerDriver(const std::shared_ptr<MetaStoreClient> &metaClient,
+                           const std::shared_ptr<global_scheduler::GlobalSched> &globalSched)
+{
+    auto snapManagerActor = std::make_shared<snap_manager::SnapManagerActor>(metaClient, globalSched);
+    g_snapManagerDriver = std::make_shared<snap_manager::SnapManagerDriver>(snapManagerActor);
+    if (!g_snapManagerDriver->Start().IsOk()) {
+        YRLOG_ERROR("failed to start snap-manager");
+        g_functionMasterSwitcher->SetStop();
+        return false;
+    }
+    return true;
+}
+
 void StartScaler(const functionmaster::Flags &flags, const std::shared_ptr<MetaStoreClient> &metaClient,
                  const std::shared_ptr<global_scheduler::GlobalSched> &globalSched)
 {
@@ -540,6 +565,10 @@ void OnCreate(const functionmaster::Flags &flags)
         return;
     }
     if (!InitResourceGroupManager(metaClient, globalSched)) {
+        return;
+    }
+
+    if (!InitSnapManagerDriver(metaClient, globalSched)) {
         return;
     }
 

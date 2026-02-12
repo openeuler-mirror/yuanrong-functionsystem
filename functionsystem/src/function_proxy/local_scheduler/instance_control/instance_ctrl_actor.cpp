@@ -1644,10 +1644,18 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::TryDispatchOnLoca
     auto scheduleResp = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
     auto transContext = TransContext{ InstanceState::CREATING, stateMachineRef->GetVersion(), "creating" };
     transContext.scheduleReq = scheduleReq;
-    TransInstanceState(stateMachineRef, transContext)
-        .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::OnTryDispatchOnLocal, scheduleResp, scheduleReq, result, _1))
-        .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::DeployInstance, scheduleReq, 0, _1, false))
-        .OnComplete(litebus::Defer(GetAID(), &InstanceCtrlActor::ScheduleEnd, _1, scheduleReq));
+    if (scheduleReq->instance().has_snapshotinfo()) {
+        TransInstanceState(stateMachineRef, transContext)
+        .OnComplete([scheduleResp, scheduleReq, result, snapCtrl(snapCtrl_)](const litebus::Future<TransitionResult> &transResult) {
+            ASSERT_FS(transResult.IsOK());
+            return snapCtrl->SnapStart(scheduleResp,scheduleReq, result, transResult.Get());
+        });
+    } else {
+        TransInstanceState(stateMachineRef, transContext)
+            .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::OnTryDispatchOnLocal, scheduleResp, scheduleReq, result, _1))
+            .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::DeployInstance, scheduleReq, 0, _1, false))
+            .OnComplete(litebus::Defer(GetAID(), &InstanceCtrlActor::ScheduleEnd, _1, scheduleReq));
+    }
     return scheduleResp->GetFuture();
 }
 
@@ -1700,7 +1708,7 @@ litebus::Future<messages::DeployInstanceResponse> InstanceCtrlActor::DeploySnapS
     // Check if function meta exists
     if (funcMetaMap_.find(scheduleReq->instance().function()) == funcMetaMap_.end()) {
         YRLOG_ERROR("{}|{}|failed to deploy instance, function meta not found", requestID, instanceID);
-        return GenDeployInstanceResponse(StatusCode::ERR_FUNCTION_META_NOT_FOUND, 
+        return GenDeployInstanceResponse(StatusCode::ERR_FUNCTION_META_NOT_FOUND,
                                         "function meta not found", requestID);
     }
 
@@ -6435,6 +6443,12 @@ void InstanceCtrlActor::TrafficReport(const std::string &instanceID, const size_
         return;
     }
     StartIdleTimer(instanceID);
+}
+
+void InstanceCtrlActor::BindSnapCtrl(const std::shared_ptr<SnapCtrl> &snapCtrl)
+{
+    snapCtrl_ = snapCtrl;
+    snapCtrl_->BindInstanceControlView(instanceControlView_);
 }
 
 }  // namespace functionsystem::local_scheduler

@@ -984,19 +984,20 @@ litebus::Future<messages::RecordSnapshotResponse> LocalSchedSrvActor::RecordSnap
     // 通过 REQUEST_SYNC_HELPER 发送并等待响应
     auto future = recordSnapshotSync_.AddSynchronizer(req->requestid());
     Send(snapMgrAid, "RecordSnapshotMetadata", req->SerializeAsString());
-
-    return future.Then([requestID(req->requestid())](
-                           const litebus::Future<messages::RecordSnapshotResponse> &future)
-                           -> messages::RecordSnapshotResponse {
+    auto promise = std::make_shared<litebus::Promise<messages::RecordSnapshotResponse>>();
+    future.OnComplete([promise, requestID(req->requestid())](
+                           const litebus::Future<messages::RecordSnapshotResponse> &future) {
         if (future.IsError()) {
             YRLOG_ERROR("RecordSnapshotMetadata request timeout for requestID: {}", requestID);
             messages::RecordSnapshotResponse errorRsp;
             errorRsp.set_code(static_cast<int32_t>(StatusCode::REQUEST_TIME_OUT));
             errorRsp.set_message("request timeout");
-            return errorRsp;
+            promise->SetValue(errorRsp);
+            return;
         }
-        return future.Get();
+        promise->SetValue(future.Get());
     });
+    return promise->GetFuture();
 }
 
 void LocalSchedSrvActor::OnRecordSnapshotMetadataResponse(

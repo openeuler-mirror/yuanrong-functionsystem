@@ -45,8 +45,10 @@ std::shared_ptr<messages::ScheduleRequest> SnapshotScheduler::BuildScheduleReque
     scheduleReq->mutable_instance()->set_functionagentid("");
     scheduleReq->mutable_instance()->set_runtimeid("");
     scheduleReq->mutable_instance()->set_runtimeaddress("");
-    scheduleReq->mutable_instance()->set_parentid("InstanceManagerOwner");
+    // todo(lwy): parentID should be passed from restore request
+    // scheduleReq->mutable_instance()->set_parentid("InstanceManagerOwner");
     scheduleReq->mutable_instance()->clear_args();
+    scheduleReq->mutable_instance()->set_version(0);
     scheduleReq->mutable_instance()->mutable_snapshotinfo()->CopyFrom(meta.snapshotinfo());
 
     // Set instance state to NEW for restoration
@@ -99,8 +101,8 @@ std::string SnapshotScheduler::GenerateInstanceID(const std::string &snapshotID)
     // Format: "{shortened_snapshotID}-{8char_uuid}"
     std::string snapshotIDShort = snapshotID;
     if (snapshotID.length() > 50) {
-        // Take first 20 and last 20 chars to stay within 64 char limit
-        snapshotIDShort = snapshotID.substr(0, 20) + "-" + snapshotID.substr(snapshotID.length() - 20);
+        // Take first 13 and last 8 chars
+        snapshotIDShort = snapshotID.substr(0, 13) + "-" + snapshotID.substr(snapshotID.length() - 8);
     }
     return snapshotIDShort + "-" +
            litebus::uuid_generator::UUID::GetRandomUUID().ToString().substr(0, 8);

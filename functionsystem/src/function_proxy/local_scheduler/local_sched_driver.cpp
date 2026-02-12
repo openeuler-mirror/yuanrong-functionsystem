@@ -142,6 +142,13 @@ Status LocalSchedDriver::Start()
     }
     BindInstanceCtrl();
 
+    snapCtrl_ = SnapCtrl::Create(param_.nodeID);
+    snapCtrl_->BindFunctionAgentMgr(funcAgentMgr_);
+    snapCtrl_->BindLocalSchedSrv(localSchedSrv_);
+    snapCtrl_->BindInstanceCtrl(instanceCtrl_);
+    snapCtrl_->BindClientManager(param_.controlInterfacePosixMgr);
+    instanceCtrl_->BindSnapCtrl(snapCtrl_);
+
     abnormalProcessor_->BindMetaStoreClient(metaStoreClient_);
     abnormalProcessor_->BindObserver(param_.controlPlaneObserver);
     abnormalProcessor_->BindInstanceCtrl(instanceCtrl_);
@@ -213,7 +220,7 @@ Status LocalSchedDriver::Start()
 Status LocalSchedDriver::Sync()
 {
     auto status =
-        ActorSync({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_ });
+        ActorSync({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
     if (status.IsError()) {
         return status;
     }
@@ -224,7 +231,7 @@ Status LocalSchedDriver::Sync()
 Status LocalSchedDriver::Recover()
 {
     auto status =
-        ActorRecover({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_ });
+        ActorRecover({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
     if (status.IsError()) {
         return status;
     }
@@ -236,7 +243,7 @@ void LocalSchedDriver::ToReady()
 {
     ActorReady({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_,
                  resourceViewMgr_->GetInf(resource_view::ResourceType::PRIMARY),
-                 resourceViewMgr_->GetInf(resource_view::ResourceType::VIRTUAL) });
+                 resourceViewMgr_->GetInf(resource_view::ResourceType::VIRTUAL), snapCtrl_ });
 }
 
 Status LocalSchedDriver::Stop()
@@ -257,7 +264,7 @@ Status LocalSchedDriver::Stop()
     if (httpServer_) {
         litebus::Terminate(httpServer_->GetAID());
     }
-    StopActor({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_ });
+    StopActor({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
     return Status::OK();
 }
 
@@ -269,7 +276,7 @@ void LocalSchedDriver::Await()
     if (httpServer_) {
         litebus::Await(httpServer_->GetAID());
     }
-    AwaitActor({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_ });
+    AwaitActor({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
 }
 
 void LocalSchedDriver::BindInstanceCtrl()

@@ -97,6 +97,39 @@ private:
     Status BuildRootfs(const std::shared_ptr<messages::StartInstanceRequest> &request,
                        std::shared_ptr<runtime::v1::StartRequest> &start);
 
+    // Helper functions to reduce code duplication
+    void BuildRuntimeCommands(runtime::v1::FunctionRuntime *funcRt,
+                            const std::shared_ptr<messages::StartInstanceRequest> &request,
+                            const std::string &execPath, const std::vector<std::string> &buildArgs,
+                            const std::string &workingRoot);
+
+    void BuildRuntimeCommandsForRestore(runtime::v1::RestoreRequest *req,
+                                       const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                       const std::string &execPath, const std::vector<std::string> &buildArgs);
+
+    void SetRequestResources(google::protobuf::Map<std::string, double> *resourcesMap,
+                           const std::shared_ptr<messages::StartInstanceRequest> &request);
+
+    void SetRequestResourcesForStart(runtime::v1::StartRequest *req,
+                                    const std::shared_ptr<messages::StartInstanceRequest> &request);
+
+    void SetRequestResourcesForRestore(runtime::v1::RestoreRequest *req,
+                                      const std::shared_ptr<messages::StartInstanceRequest> &request);
+
+    void SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req,
+                                      const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                      const Envs &envs, const std::string &runtimeID);
+
+    void SetRequestEnvsAndLogsForRestore(runtime::v1::RestoreRequest *req,
+                                        const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                        const Envs &envs, const std::string &runtimeID);
+
+    void SetRequestExtraConfigForStart(runtime::v1::StartRequest *req,
+                                      const std::shared_ptr<messages::StartInstanceRequest> &request);
+
+    void SetRequestExtraConfigForRestore(runtime::v1::RestoreRequest *req,
+                                        const std::shared_ptr<messages::StartInstanceRequest> &request);
+
     litebus::Future<runtime::v1::StartResponse> StartByRuntimeID(
         const std::shared_ptr<messages::StartInstanceRequest> &request,
         const std::map<std::string, std::string> startRuntimeParams, const std::vector<std::string> &buildArgs,
@@ -109,6 +142,30 @@ private:
         const std::shared_ptr<messages::StartInstanceRequest> &request,
         const std::map<std::string, std::string> startRuntimeParams, const std::vector<std::string> &buildArgs,
         const Envs &envs);
+
+    litebus::Future<messages::StartInstanceResponse> StartBySnapshot(
+        const std::shared_ptr<messages::StartInstanceRequest> &request,
+        const std::map<std::string, std::string> startRuntimeParams, const std::vector<std::string> &buildArgs,
+        const Envs &envs);
+
+    litebus::Future<messages::StartInstanceResponse> OnDownloadCheckpointForRestore(
+        const std::string &checkpointPath,
+        const std::shared_ptr<messages::StartInstanceRequest> &request,
+        const std::map<std::string, std::string> startRuntimeParams, const std::vector<std::string> &buildArgs,
+        const Envs &envs);
+
+    litebus::Future<messages::StartInstanceResponse> OnAddReferenceForRestore(
+        const Status &refStatus,
+        const std::string &checkpointPath,
+        const std::string &checkpointID,
+        const std::shared_ptr<messages::StartInstanceRequest> &request,
+        const std::map<std::string, std::string> startRuntimeParams,
+        const std::vector<std::string> &buildArgs,
+        const Envs &envs);
+
+    litebus::Future<messages::StartInstanceResponse> OnRestoreCompleted(
+        const runtime::v1::RestoreResponse &response,
+        const std::shared_ptr<messages::StartInstanceRequest> &request);
 
     litebus::Future<Status> UnRegisteredWarmUped(const std::string &runtimeID, const std::string &requestID);
 
@@ -153,7 +210,7 @@ private:
         const std::string &runtimeID);
 
     litebus::Future<messages::SnapshotRuntimeResponse> OnRegisterCheckpoint(
-        const Status &regStatus,
+        const std::string &storageUrl,
         messages::SnapshotRuntimeResponse response,
         const std::string &requestID,
         const std::string &checkpointID,

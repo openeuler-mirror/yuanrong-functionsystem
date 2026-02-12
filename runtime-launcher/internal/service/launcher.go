@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 
 	pb "runtime-launcher/api/proto/runtime/v1"
@@ -11,7 +13,7 @@ import (
 	"runtime-launcher/internal/state"
 )
 
-// LauncherService 实现 RuntimeLauncher gRPC 服务的 6 个 RPC 方法。
+// LauncherService 实现 RuntimeLauncher gRPC 服务的 8 个 RPC 方法。
 type LauncherService struct {
 	pb.UnimplementedRuntimeLauncherServer
 
@@ -216,6 +218,167 @@ func (s *LauncherService) buildCreateConfig(req *pb.StartRequest) *rt.CreateConf
 	}
 
 	// 网络模式配置，默认使用 host
+	network := req.GetNetwork()
+	if network == "" {
+		network = "host"
+	}
+
+	return &rt.CreateConfig{
+		ID:           funcRt.GetId(),
+		Sandbox:      funcRt.GetSandbox(),
+		Rootfs:       rootfs,
+		Command:      funcRt.GetCommand(),
+		Envs:         envs,
+		Mounts:       mounts,
+		CPUMillicore: cpuMilli,
+		MemoryMB:     memMB,
+		Stdout:       req.GetStdout(),
+		Stderr:       req.GetStderr(),
+		ExtraConfig:  req.GetExtraConfig(),
+		MakeSeed:     funcRt.GetMakeSeed(),
+		Network:      network,
+	}
+}
+
+// Checkpoint 对指定容器创建检查点（mock 实现：在 ckpt_dir 下生成标记文件）。
+func (s *LauncherService) Checkpoint(ctx context.Context, req *pb.CheckpointRequest) (*pb.CheckpointResponse, error) {
+	containerID := req.GetId()
+	ckptDir := req.GetCkptDir()
+
+	if containerID == "" {
+		return &pb.CheckpointResponse{Success: false, Message: "容器 ID 不能为空"}, nil
+	}
+	if ckptDir == "" {
+		return &pb.CheckpointResponse{Success: false, Message: "ckpt_dir 不能为空"}, nil
+	}
+
+	log.Printf("[service] Checkpoint(mock): containerID=%s, ckpt_dir=%s", containerID, ckptDir)
+
+	// mock: 创建 ckpt_dir 目录，并写入标记文件
+	if err := os.MkdirAll(ckptDir, 0755); err != nil {
+		return &pb.CheckpointResponse{
+			Success: false,
+			Message: fmt.Sprintf("创建检查点目录失败: %v", err),
+		}, nil
+	}
+
+	markerPath := filepath.Join(ckptDir, "checkpoint.marker")
+	markerContent := fmt.Sprintf("container_id=%s\n", containerID)
+	if err := os.WriteFile(markerPath, []byte(markerContent), 0644); err != nil {
+		return &pb.CheckpointResponse{
+			Success: false,
+			Message: fmt.Sprintf("写入检查点标记文件失败: %v", err),
+		}, nil
+	}
+
+	log.Printf("[service] Checkpoint(mock): 成功，marker=%s", markerPath)
+	return &pb.CheckpointResponse{Success: true, Message: "checkpoint mock 成功"}, nil
+}
+
+// Restore 从检查点恢复容器（mock 实现：校验 ckpt_dir 存在后按 Start 方式启动新容器）。
+func (s *LauncherService) Restore(ctx context.Context, req *pb.RestoreRequest) (*pb.RestoreResponse, error) {
+	ckptDir := req.GetCkptDir()
+
+	if req.GetFuncRuntime() == nil {
+		return &pb.RestoreResponse{Code: 1, Message: "funcRuntime 不能为空"}, nil
+	}
+	if ckptDir == "" {
+		return &pb.RestoreResponse{Code: 1, Message: "ckpt_dir 不能为空"}, nil
+	}
+
+	// 检查 ckpt_dir 是否存在
+	if _, err := os.Stat(ckptDir); os.IsNotExist(err) {
+		return &pb.RestoreResponse{
+			Code:    1,
+			Message: fmt.Sprintf("检查点目录不存在: %s", ckptDir),
+		}, nil
+	}
+
+	funcRt := req.GetFuncRuntime()
+	runtimeID := funcRt.GetId()
+
+	log.Printf("[service] Restore(mock): runtimeID=%s, ckpt_dir=%s", runtimeID, ckptDir)
+
+	// 按照 Start 的方式构建配置并启动新容器
+	cfg := s.buildCreateConfigFromRestore(req)
+
+	// 如果此 runtimeID 已注册（预热），合并注册时的环境变量
+	if regRt, ok := s.stateMgr.GetRegisteredRuntime(runtimeID); ok {
+		for k, v := range regRt.GetRuntimeEnvs() {
+			if _, exists := cfg.Envs[k]; !exists {
+				cfg.Envs[k] = v
+			}
+		}
+	}
+
+	containerID, err := s.runtime.Create(ctx, cfg)
+	if err != nil {
+		log.Printf("[service] Restore(mock) 创建容器失败: %v", err)
+		return &pb.RestoreResponse{
+			Code:    1,
+			Message: fmt.Sprintf("创建容器失败: %v", err),
+		}, nil
+	}
+
+	s.stateMgr.AddContainer(containerID, runtimeID)
+	go s.watchContainer(containerID)
+
+	log.Printf("[service] Restore(mock): 成功，containerID=%s", containerID)
+	return &pb.RestoreResponse{
+		Code: 0,
+		Id:   containerID,
+	}, nil
+}
+
+// buildCreateConfigFromRestore 从 proto RestoreRequest 构建 CreateConfig。
+// RestoreRequest 与 StartRequest 结构相同（额外多 ckpt_dir 和 trace_id）。
+func (s *LauncherService) buildCreateConfigFromRestore(req *pb.RestoreRequest) *rt.CreateConfig {
+	funcRt := req.GetFuncRuntime()
+
+	envs := make(map[string]string)
+	for k, v := range funcRt.GetRuntimeEnvs() {
+		envs[k] = v
+	}
+	for k, v := range req.GetUserEnvs() {
+		envs[k] = v
+	}
+
+	mounts := make([]rt.MountConfig, 0, len(req.GetMounts()))
+	for _, m := range req.GetMounts() {
+		mounts = append(mounts, rt.MountConfig{
+			Type:    m.GetType(),
+			Source:  m.GetSource(),
+			Target:  m.GetTarget(),
+			Options: m.GetOptions(),
+		})
+	}
+
+	rootfs := rt.RootfsConfig{}
+	if funcRt.GetRootfs() != nil {
+		protoRootfs := funcRt.GetRootfs()
+		rootfs.Readonly = protoRootfs.GetReadonly()
+		rootfs.Type = rt.RootfsSrcType(protoRootfs.GetType())
+		rootfs.ImageURL = protoRootfs.GetImageUrl()
+		if protoRootfs.GetS3Config() != nil {
+			rootfs.S3 = &rt.S3Config{
+				Endpoint:        protoRootfs.GetS3Config().GetEndpoint(),
+				Bucket:          protoRootfs.GetS3Config().GetBucket(),
+				Object:          protoRootfs.GetS3Config().GetObject(),
+				AccessKeyID:     protoRootfs.GetS3Config().GetAccessKeyID(),
+				AccessKeySecret: protoRootfs.GetS3Config().GetAccessKeySecret(),
+			}
+		}
+	}
+
+	cpuMilli := 500.0
+	memMB := 512.0
+	if v, ok := req.GetResources()["CPU"]; ok {
+		cpuMilli = v
+	}
+	if v, ok := req.GetResources()["Memory"]; ok {
+		memMB = v
+	}
+
 	network := req.GetNetwork()
 	if network == "" {
 		network = "host"

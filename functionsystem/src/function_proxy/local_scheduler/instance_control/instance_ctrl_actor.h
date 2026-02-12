@@ -430,10 +430,7 @@ public:
      * Bind the SnapCtrl for handling snapshot signals
      * @param snapCtrl: The snap control interface
      */
-    void BindSnapCtrl(const std::shared_ptr<SnapCtrl> &snapCtrl)
-    {
-        snapCtrl_ = snapCtrl;
-    }
+    void BindSnapCtrl(const std::shared_ptr<SnapCtrl> &snapCtrl);
 
     void DoCheckpoint(const std::string &instanceID, const litebus::Promise<Status> &promise, uint32_t retryTimes = 3);
     litebus::Future<Status> ToScheduling(const std::shared_ptr<messages::ScheduleRequest> &req);

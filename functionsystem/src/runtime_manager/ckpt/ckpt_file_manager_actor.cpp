@@ -29,9 +29,8 @@ static const int32_t DEFAULT_TTL_SECONDS = 1800;  // 30 minutes
 static const int32_t DEFAULT_CLEANUP_INTERVAL_SECONDS = 300;  // 5 minutes
 static const std::string DEFAULT_CHECKPOINT_DIR = "/home/yuanrong/checkpoints";
 
-CkptFileManagerActor::CkptFileManagerActor(const std::string &name, const litebus::AID &parentAID)
+CkptFileManagerActor::CkptFileManagerActor(const std::string &name)
     : ActorBase(name),
-      parentAID_(parentAID),
       defaultTTLSeconds_(DEFAULT_TTL_SECONDS),
       cleanupIntervalSeconds_(DEFAULT_CLEANUP_INTERVAL_SECONDS),
       checkpointBaseDir_(DEFAULT_CHECKPOINT_DIR),
@@ -63,7 +62,7 @@ litebus::Future<std::string> CkptFileManagerActor::DownloadCheckpoint(
     const std::string &checkpointID,
     const std::string &storageUrl)
 {
-    YRLOG_INFO("downloading checkpoint: {}, from: {}", checkpointID, storageUrl);
+    YRLOG_INFO("downloading checkpoint: {}, storageUrl: {}", checkpointID, storageUrl);
 
     // Check if checkpoint already exists locally
     auto iter = checkpointFiles_.find(checkpointID);
@@ -80,6 +79,16 @@ litebus::Future<std::string> CkptFileManagerActor::DownloadCheckpoint(
         return pendingIter->second.GetFuture();
     }
 
+    // Derive parentPath (strip .zip suffix) from storageUrl
+    std::string parentPath = storageUrl;
+    const std::string zipSuffix = ".zip";
+    if (parentPath.size() > zipSuffix.size() &&
+        parentPath.compare(parentPath.size() - zipSuffix.size(), zipSuffix.size(), zipSuffix) == 0) {
+        parentPath = parentPath.substr(0, parentPath.size() - zipSuffix.size());
+    }
+    std::string zipLocalPath = checkpointBaseDir_ + "/" + parentPath + ".zip";
+    std::string extractedPath = checkpointBaseDir_ + "/" + parentPath;
+
     // Create promise for this download to coordinate concurrent requests
     litebus::Promise<std::string> downloadPromise;
     pendingDownloads_[checkpointID] = std::move(downloadPromise);
@@ -89,15 +98,28 @@ litebus::Future<std::string> CkptFileManagerActor::DownloadCheckpoint(
     CheckpointFileInfo info;
     info.checkpointID = checkpointID;
     info.storageUrl = storageUrl;
-    info.localPath = GetLocalPath(checkpointID);
+    info.localPath = extractedPath;
     info.ttlSeconds = defaultTTLSeconds_;
 
     // Use local AsyncWorker for concurrent downloads
     auto worker = std::make_shared<ActorWorker>();
-    worker->AsyncWork([storageUrl, localPath = info.localPath, checkpointID]() {
-        YRLOG_DEBUG("worker thread downloading checkpoint: {}", checkpointID);
+    worker->AsyncWork([parentPath, zipLocalPath, extractedPath, checkpointID,
+                       baseDir = checkpointBaseDir_]() {
+        // Download the zip file using parentPath as key
+        YRLOG_DEBUG("worker thread downloading checkpoint zip: {} with key: {}", zipLocalPath, parentPath);
         file_storage::FileStorageClient client;
-        Status status = client.DownloadFile(storageUrl, localPath);
+        Status status = client.DownloadFile(parentPath, zipLocalPath);
+        if (!status.IsOk()) {
+            return status;
+        }
+
+        // Extract zip to basedir_
+        YRLOG_DEBUG("extracting checkpoint zip {} to {}", zipLocalPath, baseDir);
+        status = CkptFileManagerActor::UnzipFile(zipLocalPath, baseDir);
+
+        // Clean up the zip file after extraction
+        std::filesystem::remove(zipLocalPath);
+
         return status;
     }).OnComplete([worker, checkpointID, info, aid(GetAID())](
         const litebus::Future<Status> &result) mutable {
@@ -110,7 +132,7 @@ litebus::Future<std::string> CkptFileManagerActor::DownloadCheckpoint(
                 checkpointID, code);
             return;
         }
-        YRLOG_INFO("checkpoint {} downloaded successfully to {}", checkpointID, info.localPath);
+        YRLOG_INFO("checkpoint {} downloaded and extracted to {}", checkpointID, info.localPath);
         litebus::Async(aid, &CkptFileManagerActor::OnDownloadSuccess, checkpointID, info);
     });
 
@@ -170,45 +192,64 @@ litebus::Future<Status> CkptFileManagerActor::RemoveReference(const std::string 
     return Status::OK();
 }
 
-litebus::Future<Status> CkptFileManagerActor::RegisterCheckpoint(
+litebus::Future<std::string> CkptFileManagerActor::RegisterCheckpoint(
     const std::string &checkpointID,
     const std::string &localPath,
-    const std::string &storageUrl)
+    const std::string & /* storageUrl */)
 {
-    YRLOG_INFO("registering checkpoint: {}, local: {}, storage: {}", checkpointID, localPath, storageUrl);
+    // Derive parentPath (directory name) and zip name from localPath
+    std::string parentPath = std::filesystem::path(localPath).filename().string();
+    std::string derivedStorageUrl = parentPath + ".zip";
+
+    YRLOG_INFO("registering checkpoint: {}, local: {}, storageUrl: {}", checkpointID, localPath, derivedStorageUrl);
 
     // Check if checkpoint already exists
     auto iter = checkpointFiles_.find(checkpointID);
     if (iter != checkpointFiles_.end()) {
         YRLOG_WARN("checkpoint {} already registered", checkpointID);
-        return Status(StatusCode::ERR_CHECKPOINT_ALREADY_EXISTS, "checkpoint already exists");
+        litebus::Promise<std::string> p;
+        p.SetFailed(static_cast<int32_t>(StatusCode::ERR_CHECKPOINT_ALREADY_EXISTS));
+        return p.GetFuture();
     }
 
-    // Upload checkpoint to remote storage using AsyncWorker
+    // Zip the localPath directory and upload the zip to remote storage
     auto worker = std::make_shared<ActorWorker>();
-    litebus::Promise<Status> uploadPromise;
+    litebus::Promise<std::string> uploadPromise;
     auto uploadFuture = uploadPromise.GetFuture();
 
-    worker->AsyncWork([storageUrl, localPath, checkpointID]() {
-        YRLOG_DEBUG("worker thread uploading checkpoint: {}", checkpointID);
+    worker->AsyncWork([localPath, parentPath, derivedStorageUrl, checkpointID]() {
+        // Zip the checkpoint directory: localPath → localPath.zip
+        std::string zipPath = localPath + ".zip";
+        Status zipStatus = ZipDirectory(localPath, zipPath);
+        if (!zipStatus.IsOk()) {
+            YRLOG_ERROR("failed to zip checkpoint directory {}: {}", localPath, zipStatus.RawMessage());
+            return zipStatus;
+        }
+
+        // Upload the zip file with key = parentPath
+        YRLOG_DEBUG("worker thread uploading checkpoint zip: {} with key: {}", zipPath, parentPath);
         file_storage::FileStorageClient client;
-        Status status = client.UploadFile(storageUrl, localPath);
+        Status status = client.UploadFile(parentPath, zipPath);
+
+        // Clean up the temporary zip file after upload
+        std::filesystem::remove(zipPath);
+
         return status;
-    }).OnComplete([worker, checkpointID, localPath, storageUrl, uploadPromise, aid(GetAID())](
+    }).OnComplete([worker, checkpointID, localPath, derivedStorageUrl, uploadPromise, aid(GetAID())](
         const litebus::Future<Status> &result) mutable {
         worker->Terminate();
         if (result.IsError() || result.Get().IsError()) {
             auto code = result.IsError() ? result.GetErrorCode() : result.Get().StatusCode();
             YRLOG_ERROR("async upload checkpoint {} failed with error code: {}",
                 checkpointID, code);
-            uploadPromise.SetValue(Status(static_cast<StatusCode>(code), "upload failed"));
+            uploadPromise.SetFailed(code);
             return;
         }
-        YRLOG_INFO("checkpoint {} uploaded successfully to {}", checkpointID, storageUrl);
+        YRLOG_INFO("checkpoint {} uploaded successfully, storageUrl: {}", checkpointID, derivedStorageUrl);
 
         // Register checkpoint info after successful upload
         litebus::Async(aid, &CkptFileManagerActor::OnUploadSuccess,
-                      checkpointID, localPath, storageUrl, uploadPromise);
+                      checkpointID, localPath, derivedStorageUrl, uploadPromise);
     });
 
     return uploadFuture;
@@ -218,7 +259,7 @@ void CkptFileManagerActor::OnUploadSuccess(
     const std::string &checkpointID,
     const std::string &localPath,
     const std::string &storageUrl,
-    litebus::Promise<Status> uploadPromise)
+    litebus::Promise<std::string> uploadPromise)
 {
     // Create checkpoint info with initial reference count = 0
     CheckpointFileInfo info;
@@ -234,8 +275,9 @@ void CkptFileManagerActor::OnUploadSuccess(
 
     checkpointFiles_[checkpointID] = info;
 
-    YRLOG_INFO("checkpoint {} registered successfully with initial refCount=0, TTL active", checkpointID);
-    uploadPromise.SetValue(Status::OK());
+    YRLOG_INFO("checkpoint {} registered successfully with initial refCount=0, TTL active, storageUrl: {}",
+               checkpointID, storageUrl);
+    uploadPromise.SetValue(storageUrl);
 }
 
 void CkptFileManagerActor::SetDefaultTTL(int32_t ttlSeconds)
@@ -435,6 +477,50 @@ void CkptFileManagerActor::OnDownloadFailed(const std::string &checkpointID, int
         promiseIter->second.SetFailed(errorCode);
         pendingDownloads_.erase(promiseIter);
     }
+}
+
+Status CkptFileManagerActor::ZipDirectory(const std::string &dirPath, const std::string &zipPath)
+{
+    std::filesystem::path dir(dirPath);
+    if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
+        return Status(StatusCode::FAILED, "directory does not exist: " + dirPath);
+    }
+
+    std::string parentDir = dir.parent_path().string();
+    std::string dirName = dir.filename().string();
+
+    // zip -r <zipPath> <dirName> executed from parentDir
+    std::string cmd = "cd " + parentDir + " && zip -r " + zipPath + " " + dirName;
+    YRLOG_DEBUG("zip command: {}", cmd);
+
+    int ret = std::system(cmd.c_str());
+    if (ret != 0) {
+        return Status(StatusCode::FAILED,
+                      "zip command failed with exit code " + std::to_string(ret));
+    }
+
+    return Status::OK();
+}
+
+Status CkptFileManagerActor::UnzipFile(const std::string &zipPath, const std::string &targetDir)
+{
+    if (!std::filesystem::exists(zipPath)) {
+        return Status(StatusCode::FAILED, "zip file does not exist: " + zipPath);
+    }
+
+    std::filesystem::create_directories(targetDir);
+
+    // unzip -o <zipPath> -d <targetDir>
+    std::string cmd = "unzip -o " + zipPath + " -d " + targetDir;
+    YRLOG_DEBUG("unzip command: {}", cmd);
+
+    int ret = std::system(cmd.c_str());
+    if (ret != 0) {
+        return Status(StatusCode::FAILED,
+                      "unzip command failed with exit code " + std::to_string(ret));
+    }
+
+    return Status::OK();
 }
 
 }  // namespace functionsystem::runtime_manager

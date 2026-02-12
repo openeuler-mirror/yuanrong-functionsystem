@@ -34,6 +34,7 @@
 namespace functionsystem::local_scheduler {
 
 class LocalSchedSrv;
+class SnapCtrl;
 class InstanceCtrl : public ActorDriver {
 public:
     explicit InstanceCtrl(const std::shared_ptr<InstanceCtrlActor> &instanceCtrlActor);
@@ -163,6 +164,11 @@ public:
     void BindSubscriptionMgr(const std::shared_ptr<SubscriptionMgr> &subscriptionMgr) const
     {
         litebus::Async(aid_, &InstanceCtrlActor::BindSubscriptionMgr, subscriptionMgr);
+    }
+
+    void BindSnapCtrl(const std::shared_ptr<SnapCtrl> &snapCtrl)
+    {
+        litebus::Async(aid_, &InstanceCtrlActor::BindSnapCtrl, snapCtrl);
     }
 
     void OnHealthyStatus(const Status &status) const

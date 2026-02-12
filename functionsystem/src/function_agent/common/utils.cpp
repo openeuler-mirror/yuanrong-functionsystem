@@ -451,6 +451,9 @@ messages::RuntimeInstanceInfo SetRuntimeInstanceInfo(const std::shared_ptr<messa
     if (req->has_languageconfig()) {
         *runtimeInstanceInfo.mutable_languageconfig() = std::move(req->languageconfig());
     }
+    if (req->has_snapshotinfo()) {
+        *runtimeInstanceInfo.mutable_snapshotinfo() = std::move(req->snapshotinfo());
+    }
     return runtimeInstanceInfo;
 }
 

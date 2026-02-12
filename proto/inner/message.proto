@@ -311,6 +311,7 @@ message DeployInstanceRequest {
   int32 warmupType = 37;
   ContainerRuntimeConfig container = 38;
   LanguageConfig languageConfig = 39;
+  resources.SnapshotInfo snapshotInfo = 40;
 }
 
 message TenantCredentials {
@@ -494,6 +495,7 @@ message RuntimeInstanceInfo {
   int32 warmupType = 9;
   ContainerRuntimeConfig container = 10;
   LanguageConfig languageConfig = 11;
+  resources.SnapshotInfo snapshotInfo = 12;
 }
 
 message DeployDuration {
