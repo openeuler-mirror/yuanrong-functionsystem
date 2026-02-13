@@ -88,10 +88,10 @@ void IOEventActor::Finalize()
         epollFd_ = -1;
     }
 
-    fdToCallback_.clear();
+    fdToInfo_.clear();
 }
 
-void IOEventActor::DoRegister(int fd, IOCallback callback)
+void IOEventActor::DoRegister(int fd, IOCallback dataCallback, std::function<void()> onUnregister)
 {
     struct epoll_event ev;
     ev.events = EPOLLIN;
@@ -101,18 +101,30 @@ void IOEventActor::DoRegister(int fd, IOCallback callback)
         YRLOG_ERROR("Failed to add fd {} to epoll, errno: {}", fd, errno);
         return;
     }
-
-    fdToCallback_[fd] = std::move(callback);
+    fdToInfo_[fd] = {std::move(dataCallback), std::move(onUnregister)};
 }
 
-void IOEventActor::DoUnregister(int fd)
+void IOEventActor::DoUnregister(int fd, std::function<void()> onDone)
 {
+    int err = 0;
     if (epoll_ctl(epollFd_, EPOLL_CTL_DEL, fd, nullptr) < 0) {
-        YRLOG_ERROR("Failed to remove fd {} from epoll, errno: {}", fd, errno);
+        err = errno;
+        // EBADF: fd already closed (e.g. by EOF path's DoCleanupAfterUnregister). ENOENT: fd not in epoll.
+        if (err != EBADF && err != ENOENT) {
+            YRLOG_ERROR("Failed to remove fd {} from epoll, errno: {}", fd, err);
+        }
     }
-
-    fdToCallback_.erase(fd);
-    close(fd);
+    std::function<void()> toCall;
+    auto it = fdToInfo_.find(fd);
+    if (onDone) {
+        toCall = std::move(onDone);
+    } else if (it != fdToInfo_.end() && it->second.onUnregister) {
+        toCall = std::move(it->second.onUnregister);
+    }
+    fdToInfo_.erase(fd);
+    if (toCall) {
+        toCall();
+    }
 }
 
 void IOEventActor::EventLoop()
@@ -139,9 +151,9 @@ void IOEventActor::EventLoop()
         if (events[i].events & EPOLLIN) {
             ReadAndDispatch(fd);
         } else if (events[i].events & (EPOLLERR | EPOLLHUP)) {
-            auto it = fdToCallback_.find(fd);
-            if (it != fdToCallback_.end()) {
-                it->second("", 0);
+            auto it = fdToInfo_.find(fd);
+            if (it != fdToInfo_.end()) {
+                it->second.dataCb("", 0);
             }
             DoUnregister(fd);
         }
@@ -157,22 +169,22 @@ void IOEventActor::ReadAndDispatch(int fd)
     char buffer[4096];
     ssize_t bytesRead = read(fd, buffer, sizeof(buffer));
 
-    auto it = fdToCallback_.find(fd);
-    if (it == fdToCallback_.end()) {
+    auto it = fdToInfo_.find(fd);
+    if (it == fdToInfo_.end()) {
         return;
     }
 
     if (bytesRead > 0) {
-        it->second(std::string(buffer, bytesRead), -1);
+        it->second.dataCb(std::string(buffer, bytesRead), -1);
     } else if (bytesRead == 0) {
-        it->second("", 0);
+        it->second.dataCb("", 0);
         DoUnregister(fd);
     } else {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return;
         }
         YRLOG_ERROR("read error on fd {}, errno: {}", fd, errno);
-        it->second("", 0);
+        it->second.dataCb("", 0);
         DoUnregister(fd);
     }
 }

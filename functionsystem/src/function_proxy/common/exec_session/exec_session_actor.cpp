@@ -50,13 +50,16 @@ std::string ExecSessionActor::GenerateSessionId()
 
 std::shared_ptr<ExecSessionActor> ExecSessionActor::Create(const CreateParams &params)
 {
-    return std::make_shared<ExecSessionActor>(params);
+    CreateParams resolved = params;
+    if (resolved.sessionId.empty()) {
+        resolved.sessionId = GenerateSessionId();
+    }
+    return std::make_shared<ExecSessionActor>(resolved);
 }
 
 ExecSessionActor::ExecSessionActor(const CreateParams &params)
-    : litebus::ActorBase("ExecSessionActor-" + GenerateSessionId()), streamWriter_(params.writer)
+    : litebus::ActorBase("ExecSessionActor-" + params.sessionId), streamWriter_(params.writer), sessionId_(params.sessionId)
 {
-    sessionId_ = GenerateSessionId();
     YRLOG_INFO("ExecSessionActor created, sessionId: {}", sessionId_);
 }
 
@@ -82,6 +85,8 @@ void ExecSessionActor::DoOutput(const std::string &data, int exitCode)
     if (exitCode >= 0) {
         YRLOG_INFO("Process exit, sessionId: {}, exitCode: {}", sessionId_, exitCode);
         running_ = false;
+        stdoutFd_ = -1;  // Mark unregistered so Cleanup skips (IOEventActor handles EOF path)
+        stderrFd_ = -1;
         WriteToStream("", exitCode);
         Close();
     } else {
@@ -178,20 +183,25 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
         }
     }
 
+    auto onUnregister = [aid = GetAID()]() {
+        litebus::Async(aid, &ExecSessionActor::DoCleanupAfterUnregister);
+    };
     if (stdoutFd_ >= 0) {
         litebus::Async(IOEventActor::GetInstance(), &IOEventActor::DoRegister, stdoutFd_,
                        [aid = GetAID()](const std::string &data, int exitCode) {
                            litebus::Async(aid, &ExecSessionActor::DoOutput, data, exitCode);
-                       });
+                       },
+                       onUnregister);
     }
 
     if (!tty_ && exec_->GetErr().IsSome()) {
-        int stderrFd = exec_->GetErr().Get();
-        if (stderrFd >= 0) {
-            litebus::Async(IOEventActor::GetInstance(), &IOEventActor::DoRegister, stderrFd,
+        stderrFd_ = exec_->GetErr().Get();
+        if (stderrFd_ >= 0) {
+            litebus::Async(IOEventActor::GetInstance(), &IOEventActor::DoRegister, stderrFd_,
                            [aid = GetAID()](const std::string &data, int exitCode) {
                                litebus::Async(aid, &ExecSessionActor::DoOutput, data, exitCode);
-                           });
+                           },
+                           nullptr);  // stdout's onUnregister triggers DoCleanupAfterUnregister
         }
     }
 
@@ -265,11 +275,34 @@ void ExecSessionActor::Cleanup()
 {
     running_ = false;
 
-    if (stdoutFd_ >= 0) {
-        litebus::Async(IOEventActor::GetInstance(), &IOEventActor::DoUnregister, stdoutFd_);
-        stdoutFd_ = -1;
-    }
+    int outFd = stdoutFd_;
+    int errFd = stderrFd_;
+    stdoutFd_ = -1;
+    stderrFd_ = -1;
 
+    auto onAllUnregistered = [aid = GetAID()]() {
+        litebus::Async(aid, &ExecSessionActor::DoCleanupAfterUnregister);
+    };
+    if (outFd >= 0) {
+        auto doNext = [aid = GetAID(), errFd, onAllUnregistered]() {
+            if (errFd >= 0) {
+                litebus::Async(IOEventActor::GetInstance(), &IOEventActor::DoUnregister, errFd, onAllUnregistered);
+            } else {
+                onAllUnregistered();
+            }
+        };
+        litebus::Async(IOEventActor::GetInstance(), &IOEventActor::DoUnregister, outFd, doNext);
+    } else if (errFd >= 0) {
+        litebus::Async(IOEventActor::GetInstance(), &IOEventActor::DoUnregister, errFd, onAllUnregistered);
+    } else {
+        onAllUnregistered();
+    }
+}
+
+void ExecSessionActor::DoCleanupAfterUnregister()
+{
+    stdoutFd_ = -1;  // Mark done so any queued Cleanup (from DoClose) skips unregister
+    stderrFd_ = -1;
     if (ptyIO_) {
         ptyIO_->Close();
         ptyIO_.reset();
