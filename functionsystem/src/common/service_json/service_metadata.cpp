@@ -62,7 +62,7 @@ std::string BuildFuncName(const std::string &serviceName, const std::string &fun
 
 std::string BuildFunctionURN(const std::string &serviceName, const std::string &functionName)
 {
-    return "sn:cn:yrk:12345678901234561234567890123456:function:" + BuildFuncName(serviceName, functionName);
+    return "sn:cn:yrk:default:function:" + BuildFuncName(serviceName, functionName);
 }
 
 FuncMetaData BuildFuncMetaData(const ServiceInfo &serviceInfo, const FunctionConfig &functionConfig,

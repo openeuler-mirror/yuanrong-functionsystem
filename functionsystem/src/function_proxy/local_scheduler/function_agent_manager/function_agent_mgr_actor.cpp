@@ -1883,7 +1883,7 @@ bool FunctionAgentMgrActor::OnTenantInstanceInPodAllDeleted(
 
 void FunctionAgentMgrActor::OnTenantUpdateInstance(const TenantEvent &event)
 {
-    // key: /sn/instance/business/yrk/tenant/12345678901234561234567890123456/function/0-system-faasscheduler/
+    // key: /sn/instance/business/yrk/tenant/default/function/0-system-faasscheduler/
     // version/$latest/defaultaz/941e253514a11c24/a1a262a8-ec21-4000-8000-000000581e3f
     if (event.code != static_cast<int32_t>(InstanceState::RUNNING)) {
         // The tenant isolation feature only focuses on potential new pod IP events.

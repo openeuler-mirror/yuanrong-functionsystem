@@ -88,7 +88,7 @@ const std::string POSIX_CUSTOM_RUNTIME_VERSION = "posix-custom-runtime";
 
 const std::string LATEST_VERSION = "$latest";
 
-const std::string DEFAULT_TENANT_ID = "12345678901234561234567890123456";
+const std::string DEFAULT_TENANT_ID = "default";
 const std::string DEFAULT_STORAGE_TYPE = "local";
 
 const std::string FAAS = "faas";

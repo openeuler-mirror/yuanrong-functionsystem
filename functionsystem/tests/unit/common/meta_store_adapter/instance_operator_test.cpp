@@ -30,11 +30,11 @@
 
 namespace functionsystem::test {
 const std::string key =
-    "/sn/instance/business/yrk/tenant/12345678901234561234567890123456/function/0-opc-opc/version/$latest/"
+    "/sn/instance/business/yrk/tenant/default/function/0-opc-opc/version/$latest/"
     "defaultaz/job-3d8f88d4-task-daf90ea7-f29e-4c9e-ada4-b11cea549201-694d1ff7031c-0/"
     "0ee7cafc-93b9-4be3-1111-000000000080";
 const std::string instanceKey =
-    "/sn/instance/business/yrk/tenant/12345678901234561234567890123456/function/0-opc-opc/version/$latest/"
+    "/sn/instance/business/yrk/tenant/default/function/0-opc-opc/version/$latest/"
     "defaultaz/job-3d8f88d4-task-daf90ea7-f29e-4c9e-ada4-b11cea549201-694d1ff7031c-0/"
     "0ee7cafc-93b9-4be3-ae01-000000000075";
 const std::string routeKey = "/yr/route/business/yrk/0ee7cafc-93b9-4be3-ae01-000000000075";

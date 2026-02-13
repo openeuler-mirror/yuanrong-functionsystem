@@ -146,7 +146,7 @@ static std::shared_ptr<messages::ScheduleRequest> GenScheduleReq(std::shared_ptr
     scheduleReq->mutable_instance()->set_parentid("DesignatedParentID");
     scheduleReq->mutable_instance()->set_parentfunctionproxyaid(actor->GetAID());
     scheduleReq->set_requestid("requestID");
-    scheduleReq->mutable_instance()->set_function("12345678901234561234567890123456/yrf8440ad184-test-wait/$latest");
+    scheduleReq->mutable_instance()->set_function("default/yrf8440ad184-test-wait/$latest");
     (*(scheduleReq->mutable_instance()->mutable_createoptions()))["ConcurrentNum"] = "2";
 
     resources::Resource validCPU;
@@ -1345,7 +1345,7 @@ TEST_F(InstanceCtrlTest, KillInstanceRemote)
 {
     const std::string instanceID = "InstanceA";
     const std::string funcAgentID = "funcAgentA";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string runtimeID = "runtimeA";
     const std::string functionProxyID = "nodeB";
 
@@ -1375,7 +1375,7 @@ TEST_F(InstanceCtrlTest, DISABLED_KillInstanceLocal)
 {
     const std::string instanceID = "InstanceA";
     const std::string funcAgentID = "funcAgentA";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string runtimeID = "runtimeA";
     const std::string functionProxyID = "nodeN";
 
@@ -2293,7 +2293,7 @@ TEST_F(InstanceCtrlTest, CreateInstanceClientTest)
 
     EXPECT_CALL(*clientManager, DeleteClient(_)).WillRepeatedly(Return(Status::OK()));
     const std::string funcAgentID = "funcAgentA";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string functionProxyID = "nodeN";
     const std::string jobID = "job";
     const std::string requestID = "requestID_CreateInstanceClientTest";
@@ -2449,7 +2449,7 @@ TEST_F(InstanceCtrlTest, CreateRateLimitTest_Rescheduled)
     const std::string instanceID = "instanceA";
     const std::string funcAgentID = "funcAgentA";
     const std::string parentID = "parentID";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     InstanceState state = InstanceState::NEW;
     auto insInfo = GenInstanceInfo(instanceID, funcAgentID, function, state);
     insInfo.set_functionproxyid("nodeID");
@@ -2475,7 +2475,7 @@ TEST_F(InstanceCtrlTest, TenantCreateRateLimitTest)
     const std::string instanceIDA = "instanceA";
     const std::string funcAgentIDA = "funcAgentA";
     const std::string parentID = "parentID";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     InstanceState state = InstanceState::NEW;
     auto insInfoA = GenInstanceInfo(instanceIDA, funcAgentIDA, function, state);
     insInfoA.set_functionproxyid("nodeID");
@@ -5401,7 +5401,7 @@ TEST_F(InstanceCtrlTest, OnHealthyStatusTest)
     instanceInfoMap.clear();
     resource_view::InstanceInfo info2;
     info2.set_instanceid("instance2");
-    info2.set_function("12345678901234561234567890123456/0-test-helloWorld/$latest");
+    info2.set_function("default/0-test-helloWorld/$latest");
     info2.set_functionproxyid("nodeID");
     info2.set_jobid("job");
     info2.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::CREATING));
@@ -5528,7 +5528,7 @@ TEST_F(InstanceCtrlTest, KillToFatalTest)
 {
     const std::string instanceID = "InstanceA";
     const std::string funcAgentID = "funcAgentA";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string runtimeID = "runtimeA";
     const std::string functionProxyID = "nodeID";
 
@@ -5596,7 +5596,7 @@ TEST_F(InstanceCtrlTest, ForwardCallResultRequestForLowReliability)
     auto instanceControlView = std::make_shared<InstanceControlView>("node1", false);
     actor->BindInstanceControlView(instanceControlView);
 
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string instanceID = "instance id";
     const std::string requestID = "request id";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
@@ -5639,7 +5639,7 @@ TEST_F(InstanceCtrlTest, KillFatalInstance)
 {
     const std::string instanceID = "InstanceA";
     const std::string funcAgentID = "funcAgentA";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string runtimeID = "runtimeA";
     const std::string functionProxyID = "InstanceManagerOwner";
 
@@ -6070,7 +6070,7 @@ TEST_F(InstanceCtrlTest, KillInstanceWithCheckpointErrorRetry)
 TEST_F(InstanceCtrlTest, KillDriverInstance)
 {
     const std::string instanceID = "driver-job_12345";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string runtimeID = "runtimeA";
     const std::string functionProxyID = "nodeN";
 

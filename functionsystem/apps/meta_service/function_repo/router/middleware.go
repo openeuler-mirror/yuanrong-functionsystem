@@ -38,8 +38,8 @@ const (
 )
 
 const (
-	defaultUserID    = "12345678901234561234567890123456"
-	defaultTenantID  = "12345678901234561234567890123456"
+	defaultUserID    = "default"
+	defaultTenantID  = "default"
 	defaultPrivilege = "1111"
 	defaultAppID     = "yrk"
 	defaultAppSecret = "12CFV18835434FDGEEF39BD6YRE45D46"

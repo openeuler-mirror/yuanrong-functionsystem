@@ -137,7 +137,7 @@ inline InstanceKeyInfo ParseInstanceKey(const std::string &instanceKey)
 [[maybe_unused]] static litebus::Option<std::string> GetLastFunctionNameFromKey(const std::string &functionKey)
 {
     // need to modify format of instance key when control plane is ready
-    // funcKey format: 12345678901234561234567890123456/0-test-helloWorld/$latest
+    // funcKey format: default/0-test-helloWorld/$latest
     static const std::string SEP = "/";
     static const int32_t FUNC_KEY_LEN = 3;
     static const int32_t FUNC_NAME_LEN = 3;
@@ -167,7 +167,7 @@ inline InstanceKeyInfo ParseInstanceKey(const std::string &instanceKey)
                                                                     const std::string &requestID)
 {
     // need to modify format of instance key when control plane is ready
-    // funcKey format: 12345678901234561234567890123456/0-test-helloWorld/$latest
+    // funcKey format: default/0-test-helloWorld/$latest
     static const std::string SEP = "/";
     static const int32_t FUNC_KEY_LEN = 3;
     static const int32_t TENANT_POSITION = 0;

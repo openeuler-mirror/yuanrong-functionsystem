@@ -640,14 +640,14 @@ TEST_F(DISABLED_UtilsTest, RealPathTest)
 
 TEST_F(DISABLED_UtilsTest, MetaStoreKvOperationTest)
 {
-    auto key = GetLastFunctionNameFromKey("12345678901234561234567890123456/0-test-helloWorld/$latest");
+    auto key = GetLastFunctionNameFromKey("default/0-test-helloWorld/$latest");
     EXPECT_TRUE(key.IsSome());
     EXPECT_EQ(key.Get(), "helloWorld");
 
-    key = GetLastFunctionNameFromKey("12345678901234561234567890123456/0-test-helloWorld/$latest/123/123/123");
+    key = GetLastFunctionNameFromKey("default/0-test-helloWorld/$latest/123/123/123");
     EXPECT_TRUE(key.IsNone());
 
-    key = GetLastFunctionNameFromKey("12345678901234561234567890123456/0-test-helloWorld-123-123/$latest");
+    key = GetLastFunctionNameFromKey("default/0-test-helloWorld-123-123/$latest");
     EXPECT_TRUE(key.IsNone());
 }
 

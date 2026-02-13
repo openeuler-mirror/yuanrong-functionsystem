@@ -86,7 +86,7 @@ TEST_F(InstanceStateMachineTest, TransitionStateFailedFromNew)
 
 TEST_F(InstanceStateMachineTest, LowReliabilityTypeTransitionStateToRunning)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);
@@ -130,7 +130,7 @@ TEST_F(InstanceStateMachineTest, LowReliabilityTypeTransitionStateToRunning)
 
 TEST_F(InstanceStateMachineTest, HighReliabilityTypeTransitionStateToRunning)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);
@@ -165,7 +165,7 @@ TEST_F(InstanceStateMachineTest, HighReliabilityTypeTransitionStateToRunning)
 TEST_F(InstanceStateMachineTest, ExitRunningInstanceHandlerIsNull)
 {
     InstanceStateMachine::SetExitHandler(nullptr);
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);
@@ -198,7 +198,7 @@ TEST_F(InstanceStateMachineTest, ExitRunningInstanceHandlerIsNull)
  */
 TEST_F(InstanceStateMachineTest, ExitOldStateExiting)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(5);
     scheduleReq->mutable_instance()->set_function(function);
@@ -217,7 +217,7 @@ TEST_F(InstanceStateMachineTest, ExitRunningInstance)
 {
     InstanceStateMachine::SetExitHandler(
         [](const resources::InstanceInfo &instanceInfo) -> litebus::Future<Status> { return Status::OK(); });
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);
@@ -243,7 +243,7 @@ TEST_F(InstanceStateMachineTest, ExitCreatingInstance)
 {
     InstanceStateMachine::SetExitHandler(
         [](const resources::InstanceInfo &instanceInfo) -> litebus::Future<Status> { return Status::OK(); });
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);
@@ -273,7 +273,7 @@ TEST_F(InstanceStateMachineTest, ExitCreatingInstance)
 TEST_F(InstanceStateMachineTest, ExitRunningInstanceWhenExitHandlerIsNULL)
 {
     InstanceStateMachine::SetExitHandler(nullptr);
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);
@@ -302,7 +302,7 @@ TEST_F(InstanceStateMachineTest, ExitRunningInstanceWhenExitHandlerIsNULL)
 
 TEST_F(InstanceStateMachineTest, StateChangeCallback)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);
@@ -326,7 +326,7 @@ TEST_F(InstanceStateMachineTest, StateChangeCallback)
 
 TEST_F(InstanceStateMachineTest, ChangeSameStateTest)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);
@@ -373,7 +373,7 @@ TEST_F(InstanceStateMachineTest, ChangeSameStateTest)
 
 TEST_F(InstanceStateMachineTest, TransitionFromFatalToFailed)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);
@@ -392,7 +392,7 @@ TEST_F(InstanceStateMachineTest, TransitionFromFatalToFailed)
 
 TEST_F(InstanceStateMachineTest, TransitionFromExitingToFatal)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);
@@ -412,7 +412,7 @@ TEST_F(InstanceStateMachineTest, TransitionFromExitingToFatal)
 
 TEST_F(InstanceStateMachineTest, TransitionPersistenceFromFatalToFailed)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);
@@ -479,7 +479,7 @@ TEST_F(InstanceStateMachineTest, ErrTransitionTo)
  */
 TEST_F(InstanceStateMachineTest, DelInstanceSuccess)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->set_function(function);
     scheduleReq->mutable_instance()->set_functionagentid("funcAgent");
@@ -513,7 +513,7 @@ TEST_F(InstanceStateMachineTest, DelInstanceSuccess)
  */
 TEST_F(InstanceStateMachineTest, DelInstanceFailed)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     std::string instanceID = "instanceA";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(5);
@@ -552,7 +552,7 @@ TEST_F(InstanceStateMachineTest, DelInstanceFailed)
  */
 TEST_F(InstanceStateMachineTest, SetScheduleTimes)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);
@@ -590,7 +590,7 @@ TEST_F(InstanceStateMachineTest, SetScheduleTimes)
  */
 TEST_F(InstanceStateMachineTest, ScheduleMutableSetters)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);
@@ -663,7 +663,7 @@ TEST_F(InstanceStateMachineTest, MultipleTryExitInstance)
     InstanceStateMachine::SetExitFailedHandler([count](const TransitionResult &result){
         *count = *count + 1;
     });
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);
@@ -717,7 +717,7 @@ TEST_F(InstanceStateMachineTest, MultipleTryExitInstance)
 
 TEST_F(InstanceStateMachineTest, TransitionFailedWhenLocalAbnormal)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(3);
     scheduleReq->mutable_instance()->set_function(function);
@@ -742,7 +742,7 @@ TEST_F(InstanceStateMachineTest, TransitionFailedWhenLocalAbnormal)
  */
 TEST_F(InstanceStateMachineTest, PrepareTransitionInfoTest)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);
@@ -810,7 +810,7 @@ TEST_F(InstanceStateMachineTest, PrepareTransitionInfoTest)
  */
 TEST_F(InstanceStateMachineTest, ConcurrentExecureStateChangeCb)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     std::string reqID = "requestId";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
@@ -887,7 +887,7 @@ TEST_F(InstanceStateMachineTest, TransitionStateFailedFromRunning)
  */
 TEST_F(InstanceStateMachineTest, ForceDelInstance)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(5);
     scheduleReq->mutable_instance()->set_function(function);
@@ -915,7 +915,7 @@ TEST_F(InstanceStateMachineTest, ForceDelInstance)
 
 TEST_F(InstanceStateMachineTest, TransitionStateFailedAfterForceDelInstance)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);

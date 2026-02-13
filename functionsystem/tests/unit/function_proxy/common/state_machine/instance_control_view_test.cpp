@@ -60,7 +60,7 @@ TEST_F(InstanceControlViewTest, NewInstanceWithStateScheduling)
     response.status = Status::OK();
     response.responses.emplace_back(TxnOperationResponse());
     instanceControlView.BindMetaStoreClient(mockMetaClient);
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string instanceID = "instanceID";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->set_instanceid(instanceID);
@@ -78,7 +78,7 @@ TEST_F(InstanceControlViewTest, NewInstanceWithStateScheduling)
 TEST_F(InstanceControlViewTest, NewInstanceWithStateInvalid)
 {
     InstanceControlView instanceControlView(TEST_NODE_ID, false);
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string instanceID = "instanceID";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->set_instanceid(instanceID);
@@ -98,7 +98,7 @@ TEST_F(InstanceControlViewTest, NewInstanceWithStateNew)
     response.status = Status::OK();
     response.responses.emplace_back(TxnOperationResponse());
     instanceControlView.BindMetaStoreClient(mockMetaClient);
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string instanceID = "";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->set_instanceid(instanceID);
@@ -120,7 +120,7 @@ TEST_F(InstanceControlViewTest, NewInstanceWithDuplicate)
     response.status = Status::OK();
     response.responses.emplace_back(TxnOperationResponse());
     instanceControlView.BindMetaStoreClient(mockMetaClient);
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string instanceID = "";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->set_instanceid(instanceID);
@@ -156,7 +156,7 @@ TEST_F(InstanceControlViewTest, NewInstanceWithDistributeDuplicate)
     TxnResponse response;
     response.status = Status::OK();
     instanceControlView.BindMetaStoreClient(mockMetaClient);
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string instanceID = "";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->set_instanceid(instanceID);
@@ -177,7 +177,7 @@ TEST_F(InstanceControlViewTest, NewInstanceWithDistributeDuplicate)
 TEST_F(InstanceControlViewTest, ListenUpdateInstanceRemote)
 {
     InstanceControlView instanceControlView(TEST_NODE_ID, false);
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string instanceID = "instance id";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->set_instanceid(instanceID);
@@ -193,7 +193,7 @@ TEST_F(InstanceControlViewTest, ListenUpdateInstanceRemote)
 TEST_F(InstanceControlViewTest, ListenUpdateInstanceRemoteWhenLocalSuspend)
 {
     InstanceControlView instanceControlView(TEST_NODE_ID, false);
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string instanceID = "instance id";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->set_instanceid(instanceID);
@@ -233,7 +233,7 @@ TEST_F(InstanceControlViewTest, ListenUpdateInstanceRemoteWhenLocalSuspend)
 TEST_F(InstanceControlViewTest, ListenUpdateInstanceLocal)
 {
     InstanceControlView instanceControlView(TEST_NODE_ID, false);
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string instanceID = "instance id";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->set_instanceid(instanceID);
@@ -268,7 +268,7 @@ TEST_F(InstanceControlViewTest, DelInstanceTest)
     auto mockMetaClient = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
 
     instanceControlView.BindMetaStoreClient(mockMetaClient);
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string instanceID = "";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->set_instanceid(instanceID);
@@ -351,7 +351,7 @@ TEST_F(InstanceControlViewTest, HandleReqestFuture)
     response.status = Status::OK();
     response.responses.emplace_back(TxnOperationResponse());
     instanceControlView.BindMetaStoreClient(mockMetaClient);
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string requestID = "req";
 
     litebus::Future<messages::ScheduleResponse> fut;

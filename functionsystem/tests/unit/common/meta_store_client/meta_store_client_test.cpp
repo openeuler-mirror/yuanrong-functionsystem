@@ -662,7 +662,7 @@ TEST_F(MetaStoreClientTest, WatchCanceledByServerTest)  // NOLINT
 TEST_F(MetaStoreClientTest, CloseWatcher)  // NOLINT
 {
     const std::string key =
-        "/sn/instance/business/yrk/tenant/12345678901234561234567890123456/function"
+        "/sn/instance/business/yrk/tenant/default/function"
         "/0-yrcpp-yr-refcount/version/$latest/defaultaz/cf8e2758-dab0-4775-adff-a746df288052";
     MetaStoreClient watchClient(MetaStoreConfig{ .etcdAddress = metaStoreServerHost_ , .metaStoreAddress = "", .enableMetaStore= false, .etcdTablePrefix = "/test" }, sslConfig, metaStoreTimeoutOpt_);
     watchClient.Init();

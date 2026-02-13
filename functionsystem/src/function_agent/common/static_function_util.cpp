@@ -50,7 +50,7 @@ const std::string HTTP_CALL_ROUTE = "invoke";
 FunctionLanguageInfo GetLanguageInfo(const FunctionMeta &funcMeta)
 {
     std::string runtime = funcMeta.funcMetaData.runtime;
-    std::string executorFormat = "12345678901234561234567890123456/0-system-faasExecutor{}/$latest";
+    std::string executorFormat = "default/0-system-faasExecutor{}/$latest";
     if (runtime.find("python3.6") != std::string::npos) {
         return FunctionLanguageInfo{ fmt::format(executorFormat, "Python3.6"), resources::LanguageType::Python };
     }
