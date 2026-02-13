@@ -195,7 +195,7 @@ func Test_buildFaaSFunctionVersionValue(t *testing.T) {
 			FunctionLayer: []storage.FunctionLayer{},
 		}
 		tInfo := server.TenantInfo{
-			TenantID: "12345678901234561234567890123456",
+			TenantID: "default",
 		}
 		Convey("failed to buildFaaSEnv", func() {
 			Convey("failed to getEnvironment", func() {
