@@ -94,8 +94,9 @@ private:
     /**
      * Handle start request
      */
-    GrpcStatus HandleStartRequest(const ExecStartRequest &request, StreamContextPtr streamCtx,
-                                  litebus::AID &outSessionAid, std::string &outSessionId);
+    GrpcStatus HandleStartRequest(const std::string &clientSessionId, const ExecStartRequest &request,
+                                  StreamContextPtr streamCtx, litebus::AID &outSessionAid,
+                                  std::string &outSessionId);
 
     /**
      * Handle input data

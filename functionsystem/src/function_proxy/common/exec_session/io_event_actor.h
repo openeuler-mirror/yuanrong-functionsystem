@@ -51,11 +51,12 @@ public:
     // Async-callable methods (normal function signatures)
 
     // Register fd with callback for IO events
-    // Callback will be invoked when data is available, EOF, or error occurs
-    void DoRegister(int fd, IOCallback callback);
+    // dataCallback: invoked when data available / EOF / error
+    // onUnregister: invoked after epoll remove (for fd close). Empty = no-op (e.g. stderr when stdout owns cleanup).
+    void DoRegister(int fd, IOCallback dataCallback, std::function<void()> onUnregister = nullptr);
 
-    // Unregister fd and stop monitoring
-    void DoUnregister(int fd);
+    // Unregister fd. Uses onUnregister from Register, or onDone if provided (overrides).
+    void DoUnregister(int fd, std::function<void()> onDone = nullptr);
 
 protected:
     void Init() override;
@@ -70,8 +71,12 @@ private:
     // Helper method to read and dispatch data
     void ReadAndDispatch(int fd);
 
+    struct FdInfo {
+        IOCallback dataCb;
+        std::function<void()> onUnregister;
+    };
     int epollFd_{ -1 };
-    std::unordered_map<int, IOCallback> fdToCallback_;
+    std::unordered_map<int, FdInfo> fdToInfo_;
     std::atomic<bool> running_{ false };
     litebus::Timer eventLoopTimer_;  // Timer for event loop scheduling
 

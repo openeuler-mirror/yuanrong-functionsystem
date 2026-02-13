@@ -69,8 +69,9 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
                     RemoveSession(currentSessionId);
                 }
 
-                // Handle start request
-                auto status = HandleStartRequest(request.start_request(), streamCtx, sessionAid, currentSessionId);
+                // Handle start request (use client session_id if provided, otherwise generate)
+                auto status = HandleStartRequest(request.session_id(), request.start_request(), streamCtx,
+                                                 sessionAid, currentSessionId);
                 if (!status.ok()) {
                     YRLOG_ERROR("HandleStartRequest failed: {}", status.error_message());
                     SendStatusResponse(stream, "", ExecStatusResponse::ERROR, 0, status.error_message());
@@ -156,7 +157,8 @@ void ExecStreamService::WriteToStream(StreamContextPtr streamCtx, const std::str
     }
 }
 
-GrpcStatus ExecStreamService::HandleStartRequest(const ExecStartRequest &request,
+GrpcStatus ExecStreamService::HandleStartRequest(const std::string &clientSessionId,
+                                                 const ExecStartRequest &request,
                                                  StreamContextPtr streamCtx,
                                                  litebus::AID &outSessionAid, std::string &outSessionId)
 {
@@ -164,12 +166,17 @@ GrpcStatus ExecStreamService::HandleStartRequest(const ExecStartRequest &request
         return GrpcStatus(::grpc::StatusCode::INVALID_ARGUMENT, "container_id is required");
     }
 
-    auto actor = ExecSessionActor::Create({});
+    std::string sessionId =
+        clientSessionId.empty() ? ExecSessionActor::GenerateSessionId() : clientSessionId;
+    ExecSessionActor::CreateParams params;
+    params.sessionId = sessionId;
+
+    auto actor = ExecSessionActor::Create(params);
     if (!actor) {
         return GrpcStatus(::grpc::StatusCode::INTERNAL, "Failed to create session actor");
     }
 
-    outSessionId = actor->GetSessionId();
+    outSessionId = sessionId;
     outSessionAid = actor->GetAID();
     streamCtx->sessionAid = outSessionAid;
 
