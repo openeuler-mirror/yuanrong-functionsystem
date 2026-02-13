@@ -189,7 +189,8 @@ message StateLoadResponse {
 
 message SnapOptions {
   common.SnapType type = 1;
-  bool leaveRunning = 2;
+  int32           ttl  = 2;  // seconds
+  bool            leaveRunning = 3;
 }
 
 message SnapStartOptions {
