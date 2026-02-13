@@ -38,6 +38,7 @@ public:
     // Creation parameters
     struct CreateParams {
         StreamWriter writer = nullptr;  // Callback for writing to gRPC stream (can be set later)
+        std::string sessionId;          // Optional: use external session_id; empty = generate internally
     };
 
     // Factory method to create a session actor
@@ -65,6 +66,9 @@ public:
     // Set writer callback
     void SetWriter(const StreamWriter& writer) { streamWriter_ = writer; }
 
+    // Generate unique session ID (for callers that need to pre-generate before Create)
+    static std::string GenerateSessionId();
+
 protected:
     void Init() override;
     void Finalize() override;
@@ -75,6 +79,7 @@ private:
     void RegisterExitHandler();
     void OnProcessExit(const litebus::Future<litebus::Option<int>> &future);
     void Cleanup();
+    void DoCleanupAfterUnregister();  // Called after fd unregistered; closes pty/fds
     void Close();
 
     // Session parameters
@@ -85,6 +90,7 @@ private:
     std::unique_ptr<litebus::PtyExecIO> ptyIO_;
     int stdinFd_{ -1 };
     int stdoutFd_{ -1 };
+    int stderrFd_{ -1 };   // non-TTY only; TTY merges stderr to stdout
     int ptyMasterFd_{ -1 };
 
     // State
@@ -98,9 +104,6 @@ private:
 
     std::atomic<bool> running_{ false };
     std::atomic<bool> closed_{ false };
-
-    // Generate unique session ID
-    static std::string GenerateSessionId();
 };
 
 }  // namespace functionsystem
