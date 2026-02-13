@@ -190,7 +190,8 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
         { CLUSTER_ID, config.clusterID },
         { NODE_ID, config.nodeID },
         { ENABLE_DIS_CONV_CALL_STACK, config.enableDisConvCallStack ? "true" : "false" },
-        { YR_DEBUG_SERVER_PORT, debugServerPort }
+        { YR_DEBUG_SERVER_PORT, debugServerPort },
+        { "YR_JOB_ID", "job-" + Utils::GetJobIDFromTraceID(info.traceid())}
     };
 
     AddYuanRongEnvs(posixEnvs);
