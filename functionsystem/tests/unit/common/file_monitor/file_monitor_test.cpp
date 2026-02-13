@@ -35,7 +35,7 @@ const std::string FILE_NAME = "system-function-config.json";
 const std::string content1 = R"(
 {
      "0-system-faascontroller": {
-       "tenantID":"12345678901234561234567890123456",
+       "tenantID":"default",
        "version":"001",
        "memory": 666,
        "cpu": 666,
@@ -49,7 +49,7 @@ const std::string content1 = R"(
 const std::string content2 = R"(
 {
      "0-system-faascontroller": {
-       "tenantID":"12345678901234561234567890123456",
+       "tenantID":"default",
        "version":"002",
        "memory": 666,
        "cpu": 666,

@@ -70,7 +70,7 @@ protected:
 std::shared_ptr<InstanceStateMachine> GetInstanceMachine(std::string instanceID, InstanceState state,
                                                          std::string functionProxyID = LOCAL_NODE_ID)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(static_cast<int32_t>(state));
     scheduleReq->mutable_instance()->set_functionproxyid(functionProxyID);

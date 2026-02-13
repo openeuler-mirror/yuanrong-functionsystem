@@ -179,7 +179,7 @@ func Test_updateFunction(t *testing.T) {
 		expectedMsg  string
 	}{
 		{"test delete success", "/serverless/v1/functions/" +
-			"sn:cn:yrk:12345678901234561234567890123456:function:0-test-aa:$latest", "{\n" +
+			"sn:cn:yrk:default:function:0-test-aa:$latest", "{\n" +
 			"\t\"name\": \"0-test-aa\",\n" +
 			"\t\"runtime\": \"java1.8\",\n" +
 			"\t\"kind\": \"yr-lib\",\n" +
@@ -342,7 +342,7 @@ func TestPublishFunction(t *testing.T) {
 	) (model.PublishResponse, error) {
 		return model.PublishResponse{
 			FunctionVersion: model.FunctionVersion{
-				FunctionVersionURN: "sn:cn:yrk:12345678901234561234567890123456:function:0@faaspy@hello:latest",
+				FunctionVersionURN: "sn:cn:yrk:default:function:0@faaspy@hello:latest",
 			},
 		}, nil
 	})
@@ -357,7 +357,7 @@ func TestPublishFunction(t *testing.T) {
 	functionBytes, _ := json.Marshal(successBody.Function)
 	functionResp := &model.GetFunctionResponseForUser{}
 	_ = json.Unmarshal(functionBytes, functionResp)
-	assert.Equal(t, "sn:cn:yrk:12345678901234561234567890123456:function:0@faaspy@hello:latest", functionResp.ID)
+	assert.Equal(t, "sn:cn:yrk:default:function:0@faaspy@hello:latest", functionResp.ID)
 }
 
 func TestReservedInstanceConfig(t *testing.T) {
@@ -375,11 +375,11 @@ func TestReservedInstanceConfig(t *testing.T) {
 	}{
 		{
 			"test success", "/serverless/v1/functions/reserve-instance",
-			"{\"traceId\":\"test123\",\"funcName\":\"0@faaspy@hello\",\"version\":\"latest\",\"tenantId\":\"12345678901234561234567890123456\",\"instanceLabel\":\"label1\",\"instanceConfigInfos\":[{\"clusterId\":\"\",\"maxInstance\":100,\"minInstance\":0}]}",
+			"{\"traceId\":\"test123\",\"funcName\":\"0@faaspy@hello\",\"version\":\"latest\",\"tenantId\":\"default\",\"instanceLabel\":\"label1\",\"instanceConfigInfos\":[{\"clusterId\":\"\",\"maxInstance\":100,\"minInstance\":0}]}",
 			"{\"traceId\":\"test123\",\"funcName\":\"0@faaspy@hello\",\"version\":\"latest\"," +
-				"\"tenantId\":\"12345678901234561234567890123456\",\"instanceLabel\":\"label1\",\"instanceConfigInfos\":[{\"clusterId\":\"\",\"maxInstance\":99,\"minInstance\":0}]}",
+				"\"tenantId\":\"default\",\"instanceLabel\":\"label1\",\"instanceConfigInfos\":[{\"clusterId\":\"\",\"maxInstance\":99,\"minInstance\":0}]}",
 			"{\"traceId\":\"test123\",\"funcName\":\"0@faaspy@hello\",\"version\":\"latest\"," +
-				"\"tenantId\":\"12345678901234561234567890123456\",\"instanceLabel\":\"label1\"}",
+				"\"tenantId\":\"default\",\"instanceLabel\":\"label1\"}",
 			http.StatusOK, "",
 		},
 	}
