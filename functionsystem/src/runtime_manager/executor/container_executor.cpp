@@ -726,8 +726,9 @@ litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::SnapshotRu
     const std::string &runtimeID = request->runtimeid();
     const std::string &containerID = request->containerid();
     const std::string &instanceID = request->instanceid();
+    int32_t ttl = request->ttl();  // Extract TTL from request
 
-    YRLOG_INFO("{}|snapshot runtime({}) container({})", request->requestid(), runtimeID, containerID);
+    YRLOG_INFO("{}|snapshot runtime({}) container({}) with ttl: {}", request->requestid(), runtimeID, containerID, ttl);
 
     // Check if container exists
     auto container = runtime2containerID_.find(runtimeID);
@@ -754,7 +755,7 @@ litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::SnapshotRu
 
     return DoCheckpoint(checkpointReq).Then(
         litebus::Defer(GetAID(), &ContainerExecutor::OnCheckpointCompleted, std::placeholders::_1,
-                       request->requestid(), checkpointID, checkpointPath, runtimeID));
+                       request->requestid(), checkpointID, checkpointPath, runtimeID, ttl));
 }
 
 litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::OnCheckpointCompleted(
@@ -762,7 +763,8 @@ litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::OnCheckpoi
     const std::string &requestID,
     const std::string &checkpointID,
     const std::string &checkpointPath,
-    const std::string &runtimeID)
+    const std::string &runtimeID,
+    int32_t ttl)
 {
     messages::SnapshotRuntimeResponse response;
     response.set_requestid(requestID);
@@ -774,13 +776,13 @@ litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::OnCheckpoi
         return response;
     }
 
-    YRLOG_INFO("{}|checkpoint created successfully, uploading to storage: {}", requestID, checkpointID);
+    YRLOG_INFO("{}|checkpoint created successfully, uploading to storage: {} with ttl: {}", requestID, checkpointID, ttl);
 
     // Register checkpoint (upload and register in ckptFileManager)
     ASSERT_IF_NULL(ckptFileManager_);
-    return ckptFileManager_->RegisterCheckpoint(checkpointID, checkpointPath, checkpointID)
+    return ckptFileManager_->RegisterCheckpoint(checkpointID, checkpointPath, checkpointID, ttl)
         .Then(litebus::Defer(GetAID(), &ContainerExecutor::OnRegisterCheckpoint,
-                                std::placeholders::_1, response, requestID, checkpointID, runtimeID));
+                                std::placeholders::_1, response, requestID, checkpointID, runtimeID, ttl));
 }
 
 litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::OnRegisterCheckpoint(
@@ -788,16 +790,18 @@ litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::OnRegister
     messages::SnapshotRuntimeResponse response,
     const std::string &requestID,
     const std::string &checkpointID,
-    const std::string &runtimeID)
+    const std::string &runtimeID,
+    int32_t ttl)
 {
     auto *snapshotInfo = response.mutable_snapshotinfo();
     snapshotInfo->set_checkpointid(checkpointID);
     snapshotInfo->set_storage(storageUrl);
+    snapshotInfo->set_ttlseconds(ttl);  // Set TTL in response
     // Track checkpoint for this runtime
     runtime2checkpointID_[runtimeID] = checkpointID;
 
-    YRLOG_INFO("{}|snapshot runtime {} completed successfully with checkpoint {}, storageUrl: {}",
-               requestID, runtimeID, checkpointID, storageUrl);
+    YRLOG_INFO("{}|snapshot runtime {} completed successfully with checkpoint {}, storageUrl: {}, ttl: {}",
+               requestID, runtimeID, checkpointID, storageUrl, ttl);
     response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
     response.set_message("snapshot created successfully");
     return response;

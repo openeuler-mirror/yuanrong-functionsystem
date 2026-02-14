@@ -195,13 +195,18 @@ litebus::Future<Status> CkptFileManagerActor::RemoveReference(const std::string 
 litebus::Future<std::string> CkptFileManagerActor::RegisterCheckpoint(
     const std::string &checkpointID,
     const std::string &localPath,
-    const std::string & /* storageUrl */)
+    const std::string & /* storageUrl */,
+    int32_t ttl)
 {
     // Derive parentPath (directory name) and zip name from localPath
     std::string parentPath = std::filesystem::path(localPath).filename().string();
     std::string derivedStorageUrl = parentPath + ".zip";
 
-    YRLOG_INFO("registering checkpoint: {}, local: {}, storageUrl: {}", checkpointID, localPath, derivedStorageUrl);
+    // Use provided TTL if greater than 0, otherwise use default
+    int32_t effectiveTTL = (ttl > 0) ? ttl : defaultTTLSeconds_;
+
+    YRLOG_INFO("registering checkpoint: {}, local: {}, storageUrl: {}, ttl: {} seconds",
+               checkpointID, localPath, derivedStorageUrl, effectiveTTL);
 
     // Check if checkpoint already exists
     auto iter = checkpointFiles_.find(checkpointID);
@@ -235,7 +240,7 @@ litebus::Future<std::string> CkptFileManagerActor::RegisterCheckpoint(
         std::filesystem::remove(zipPath);
 
         return status;
-    }).OnComplete([worker, checkpointID, localPath, derivedStorageUrl, uploadPromise, aid(GetAID())](
+    }).OnComplete([worker, checkpointID, localPath, derivedStorageUrl, effectiveTTL, uploadPromise, aid(GetAID())](
         const litebus::Future<Status> &result) mutable {
         worker->Terminate();
         if (result.IsError() || result.Get().IsError()) {
@@ -247,9 +252,9 @@ litebus::Future<std::string> CkptFileManagerActor::RegisterCheckpoint(
         }
         YRLOG_INFO("checkpoint {} uploaded successfully, storageUrl: {}", checkpointID, derivedStorageUrl);
 
-        // Register checkpoint info after successful upload
+        // Register checkpoint info after successful upload with TTL
         litebus::Async(aid, &CkptFileManagerActor::OnUploadSuccess,
-                      checkpointID, localPath, derivedStorageUrl, uploadPromise);
+                      checkpointID, localPath, derivedStorageUrl, effectiveTTL, uploadPromise);
     });
 
     return uploadFuture;
@@ -259,6 +264,7 @@ void CkptFileManagerActor::OnUploadSuccess(
     const std::string &checkpointID,
     const std::string &localPath,
     const std::string &storageUrl,
+    int32_t ttl,
     litebus::Promise<std::string> uploadPromise)
 {
     // Create checkpoint info with initial reference count = 0
@@ -267,7 +273,7 @@ void CkptFileManagerActor::OnUploadSuccess(
     info.localPath = localPath;
     info.storageUrl = storageUrl;
     info.refCount = 0;  // Start with 0, will be incremented when used for restore
-    info.ttlSeconds = defaultTTLSeconds_;
+    info.ttlSeconds = ttl;  // Set TTL from parameter
     info.ttlActive = true;  // Start TTL immediately since refCount is 0
     info.createdTime = std::chrono::steady_clock::now();
     info.lastAccessTime = info.createdTime;
@@ -275,8 +281,8 @@ void CkptFileManagerActor::OnUploadSuccess(
 
     checkpointFiles_[checkpointID] = info;
 
-    YRLOG_INFO("checkpoint {} registered successfully with initial refCount=0, TTL active, storageUrl: {}",
-               checkpointID, storageUrl);
+    YRLOG_INFO("checkpoint {} registered successfully with initial refCount=0, TTL: {} seconds, storageUrl: {}",
+               checkpointID, ttl, storageUrl);
     uploadPromise.SetValue(storageUrl);
 }
 

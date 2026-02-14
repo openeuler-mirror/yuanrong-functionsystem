@@ -98,10 +98,11 @@ litebus::Future<messages::UpdateCredResponse> FunctionAgentMgr::UpdateCred(
 
 litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgr::SnapshotRuntime(
     const std::string &requestID,
-    const resource_view::InstanceInfo &instanceInfo)
+    const resource_view::InstanceInfo &instanceInfo,
+    int32_t ttl)
 {
     ASSERT_IF_NULL(actor_);
-    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::SnapshotRuntime, requestID, instanceInfo);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::SnapshotRuntime, requestID, instanceInfo, ttl);
 }
 
 litebus::Future<Status> FunctionAgentMgr::EvictAgent(const std::shared_ptr<messages::EvictAgentRequest> &req)

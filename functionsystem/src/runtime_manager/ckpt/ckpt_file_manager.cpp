@@ -42,10 +42,11 @@ litebus::Future<std::string> CkptFileManager::DownloadCheckpoint(
 litebus::Future<std::string> CkptFileManager::RegisterCheckpoint(
     const std::string &checkpointID,
     const std::string &localPath,
-    const std::string &storageUrl) const
+    const std::string &storageUrl,
+    int32_t ttl) const
 {
     return litebus::Async(actor_->GetAID(), &CkptFileManagerActor::RegisterCheckpoint,
-                          checkpointID, localPath, storageUrl);
+                          checkpointID, localPath, storageUrl, ttl);
 }
 
 litebus::Future<Status> CkptFileManager::AddReference(const std::string &checkpointID) const
