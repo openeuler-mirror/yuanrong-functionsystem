@@ -1530,7 +1530,8 @@ void FunctionAgentMgrActor::UpdateCredResponse(const litebus::AID &from, std::st
 
 litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::SnapshotRuntime(
     const std::string &requestID,
-    const resource_view::InstanceInfo &instanceInfo)
+    const resource_view::InstanceInfo &instanceInfo,
+    int32_t ttl)
 {
     // 1. 从 instanceInfo 获取 funcAgentID
     std::string funcAgentID = instanceInfo.functionagentid();
@@ -1558,12 +1559,12 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
     request->set_requestid(requestID);
     request->set_instanceid(instanceID);
     request->set_runtimeid(instanceInfo.runtimeid());
-    request->set_containerid(instanceInfo.runtimeid());  // containerID is same as runtimeID in container mode
-
+    request->set_containerid(instanceInfo.containerid());  // containerID is same as runtimeID in container mode
+    request->set_ttl(ttl);  // Set TTL from parameter
     auto future = snapshotRuntimeSync_.AddSynchronizer(requestID);
 
-    YRLOG_INFO("{}|send SnapshotRuntime request to agent({}) for instance({})",
-               requestID, funcAgentID, instanceID);
+    YRLOG_INFO("{}|send SnapshotRuntime request to agent({}) for instance({}), ttl: {}",
+               requestID, funcAgentID, instanceID, ttl);
     Send(funcAgentTable_[funcAgentID].aid, "SnapshotRuntime", request->SerializeAsString());
 
     // 3. 将 SnapshotRuntimeResponse 消息转换为结构体

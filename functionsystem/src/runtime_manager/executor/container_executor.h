@@ -207,14 +207,16 @@ private:
         const std::string &requestID,
         const std::string &checkpointID,
         const std::string &checkpointPath,
-        const std::string &runtimeID);
+        const std::string &runtimeID,
+        int32_t ttl);
 
     litebus::Future<messages::SnapshotRuntimeResponse> OnRegisterCheckpoint(
         const std::string &storageUrl,
         messages::SnapshotRuntimeResponse response,
         const std::string &requestID,
         const std::string &checkpointID,
-        const std::string &runtimeID);
+        const std::string &runtimeID,
+        int32_t ttl);
 
     litebus::Future<runtime::v1::NormalResponse> DoRegisterToWarmUp(
         const std::shared_ptr<runtime::v1::RegisterRequest> &reg);

@@ -105,7 +105,8 @@ public:
 
     virtual litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(
         const std::string &requestID,
-        const resource_view::InstanceInfo &instanceInfo);
+        const resource_view::InstanceInfo &instanceInfo,
+        int32_t ttl = 0);
     // for test
     [[maybe_unused]] litebus::Future<bool> IsRegistered(const std::string &funcAgentID) const
     {

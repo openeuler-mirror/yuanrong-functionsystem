@@ -88,6 +88,7 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
 {
     // 1. 解析 payload 获取参数（core_service::SnapOptions）
     bool leaveRunning = false;
+    int32_t ttl = 0;  // Default TTL is 0 (no expiration)
     if (!payload.empty()) {
         SnapOptions options;
         if (!options.ParseFromString(payload)) {
@@ -98,6 +99,7 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
             return errorRsp;
         }
         leaveRunning = options.leaverunning();
+        ttl = options.ttl();  // Extract TTL from SnapOptions
     }
     // 1. 获取实例状态机
     ASSERT_IF_NULL(instanceControlView_);
@@ -114,7 +116,7 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
     ASSERT_IF_NULL(functionAgentMgr_);
     // 2. 调用 PrepareSnap 验证实例状态并准备快照
     return PrepareSnap(requestID, instanceID)
-        .Then([aid(GetAID()), requestID, instanceID, instanceInfo,
+        .Then([aid(GetAID()), requestID, instanceID, instanceInfo, ttl,
                functionAgentMgr(functionAgentMgr_)](const Status &status) -> litebus::Future<messages::SnapshotRuntimeResponse> {
             if (status.IsError()) {
                 YRLOG_ERROR("{}|{}|PrepareSnap failed: {}", requestID, instanceID, status.GetMessage());
@@ -124,7 +126,7 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
                 return errorRsp;
             }
             // 2. 通过 functionAgentMgr_ 发送 SnapshotRuntime 请求到 function_agent
-            return functionAgentMgr->SnapshotRuntime(requestID, instanceInfo);
+            return functionAgentMgr->SnapshotRuntime(requestID, instanceInfo, ttl);
         })
         .Then([aid(GetAID()), localSchedSrv(localSchedSrv_), requestID,
                instanceInfo](const messages::SnapshotRuntimeResponse &runtimeRsp) -> litebus::Future<SnapshotResult> {

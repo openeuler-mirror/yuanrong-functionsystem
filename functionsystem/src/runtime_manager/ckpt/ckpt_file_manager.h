@@ -48,11 +48,13 @@ public:
      * @param checkpointID Unique checkpoint identifier
      * @param localPath Local checkpoint directory path (may contain multiple files)
      * @param storageUrl Ignored (storageUrl is derived from localPath as parentPath.zip)
+     * @param ttl Time to live in seconds (0 means no expiration)
      * @return Future with storageUrl (parentPath.zip)
      */
     litebus::Future<std::string> RegisterCheckpoint(const std::string &checkpointID,
                                                     const std::string &localPath,
-                                                    const std::string &storageUrl) const;
+                                                    const std::string &storageUrl,
+                                                    int32_t ttl = 0) const;
     /**
      * Increment reference count for a checkpoint file
      * @param checkpointID Checkpoint identifier

@@ -253,7 +253,8 @@ public:
         const std::shared_ptr<messages::KillInstanceRequest> &request);
 
     litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(const std::string &requestID,
-                                                     const resource_view::InstanceInfo &instanceInfo);
+                                                     const resource_view::InstanceInfo &instanceInfo,
+                                                     int32_t ttl);
     void SnapshotRuntimeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     // for test
