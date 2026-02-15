@@ -1,6 +1,8 @@
 ### IDE
 .idea
 .vscode
+.claude
+.specify
 
 ### output dir
 **/output/*
