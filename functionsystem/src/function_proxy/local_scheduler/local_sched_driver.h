@@ -89,6 +89,7 @@ struct LocalSchedStartParam {
     bool runtimeInstanceDebugEnable;
     bool unRegisterWhileStop;
     std::string udsPath;
+    std::string sessionGrpcPort;
 };
 
 class LocalSchedDriver : public ModuleDriver {
@@ -150,6 +151,7 @@ private:
     std::shared_ptr<SnapCtrl> snapCtrl_;
     std::shared_ptr<InstanceCtrlMetaStoreHealthyObserver> metaStoreHealthyObserver_;
     std::shared_ptr<functionsystem::grpc::CommonGrpcServer> posixGrpcServer_;
+    std::shared_ptr<functionsystem::grpc::CommonGrpcServer> sessionGrpcServer_;
     std::shared_ptr<ExecStreamService> execStreamService_;
     bool isStarted_ = false;
 };
