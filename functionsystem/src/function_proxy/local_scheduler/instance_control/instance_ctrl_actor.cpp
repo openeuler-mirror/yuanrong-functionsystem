@@ -6426,7 +6426,7 @@ void InstanceCtrlActor::StartIdleTimer(const std::string &instanceID)
     // Additional check: don't start timer if there are active sessions
     auto it = instanceActiveSessions_.find(instanceID);
     if (it != instanceActiveSessions_.end() && it->second) {
-        YRLOG_DEBUG("skip starting idle timer for instance({}) due to active sessions", instanceID);
+        YRLOG_INFO("skip starting idle timer for instance({}) due to active sessions", instanceID);
         return;
     }
 
@@ -6434,7 +6434,7 @@ void InstanceCtrlActor::StartIdleTimer(const std::string &instanceID)
     if (idleTimeout <= 0) {
         return;
     }
-    YRLOG_DEBUG("start idle timer for instance({}) with timeout {} seconds", instanceID, idleTimeout);
+    YRLOG_INFO("start idle timer for instance({}) with timeout {} seconds", instanceID, idleTimeout);
     idleTimers_[instanceID] = litebus::AsyncAfter(
         idleTimeout * 1000, GetAID(), &InstanceCtrlActor::HandleIdleTimeout, instanceID);
 }
@@ -6445,7 +6445,7 @@ void InstanceCtrlActor::CancelIdleTimer(const std::string &instanceID)
     if (iter == idleTimers_.end()) {
         return;
     }
-    YRLOG_DEBUG("cancel idle timer for instance({})", instanceID);
+    YRLOG_INFO("cancel idle timer for instance({})", instanceID);
     litebus::TimerTools::Cancel(iter->second);
     idleTimers_.erase(iter);
 }
