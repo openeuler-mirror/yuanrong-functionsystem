@@ -234,6 +234,8 @@ void Flags::AddGrpcServerFlags()
     AddFlag(&Flags::ip_, "ip", "IP address for listening.", "127.0.0.1", FlagCheckWrraper(IsIPValid));
     AddFlag(&Flags::grpcListenPort_, "grpc_listen_port", "For posix server listening. example: 30001",
             std::string("30001"), FlagCheckWrraper(IsPortValid));
+    AddFlag(&Flags::sessionGrpcPort_, "session_grpc_port",
+            "Session gRPC port for ExecStream. 0 = disabled. example: 30002", std::string("0"));
     AddFlag(&Flags::maxGrpcSize_, "max_grpc_size", "posix max grpc size", DEFAULT_MAX_GRPC_SIZE,
             NumCheck(MIN_MAX_GRPC_SIZE, MAX_MAX_GRPC_SIZE));
     AddFlag(&Flags::enableServerMode_, "enable_server_mode",
