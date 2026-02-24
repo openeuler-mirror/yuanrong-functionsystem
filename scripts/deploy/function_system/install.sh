@@ -140,6 +140,7 @@ function install_function_proxy() {
     --function_meta_path="${FUNCTION_META_PATH}" \
     --ip="${LOCAL_IP}" \
     --grpc_listen_port="${FUNCTION_PROXY_GRPC_PORT}" \
+    --session_grpc_port="${FUNCTION_PROXY_EXEC_GRPC_PORT}" \
     --dposix_uds_path="${DPOSIX_UDS_PATH}" \
     --enable_driver="${enable_driver}" \
     --enable_trace="${ENABLE_TRACE}" \

@@ -57,6 +57,11 @@ public:
         return grpcListenPort_;
     }
 
+    const std::string &GetSessionGrpcPort() const
+    {
+        return sessionGrpcPort_;
+    }
+
     const std::string &GetMetaStoreAddress() const
     {
         return metaStoreAddress_;
@@ -443,6 +448,7 @@ protected:
     std::string address_;
     std::string ip_;
     std::string grpcListenPort_;
+    std::string sessionGrpcPort_;
     std::string schedulePolicy_;
     std::string metaStoreAddress_;
     std::string iamMetastoreAddress_;

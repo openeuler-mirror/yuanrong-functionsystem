@@ -436,7 +436,8 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .distributedCacheClient = g_commonDriver->GetDistributedCacheClient(),
         .runtimeInstanceDebugEnable = flags.IsRuntimeInstanceDebugEnable(),
         .unRegisterWhileStop = flags.UnRegisterWhileStop(),
-        .udsPath = flags.GetDPosixUdsPath()
+        .udsPath = flags.GetDPosixUdsPath(),
+        .sessionGrpcPort = flags.GetSessionGrpcPort()
     };
 }
 
