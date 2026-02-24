@@ -6376,6 +6376,15 @@ void InstanceCtrlActor::HandleIdleTimeout(const std::string &instanceID)
     if (stateMachine == nullptr) {
         return;
     }
+
+    // Double-check: ensure no active sessions before evicting
+    auto it = instanceActiveSessions_.find(instanceID);
+    if (it != instanceActiveSessions_.end() && it->second) {
+        YRLOG_INFO("{}|instance({}) idle timeout cancelled due to active sessions",
+                   stateMachine->GetInstanceInfo().requestid(), instanceID);
+        return;
+    }
+
     const auto &instanceInfo = stateMachine->GetInstanceInfo();
     YRLOG_INFO("{}|instance({}) idle timeout, ready to evict", instanceInfo.requestid(), instanceID);
     std::string msg =
@@ -6413,6 +6422,14 @@ void InstanceCtrlActor::StartIdleTimer(const std::string &instanceID)
     if (instanceInfo.functionproxyid() != nodeID_ || instanceInfo.instancestatus().code() != static_cast<int32_t>(InstanceState::RUNNING)) {
         return;
     }
+
+    // Additional check: don't start timer if there are active sessions
+    auto it = instanceActiveSessions_.find(instanceID);
+    if (it != instanceActiveSessions_.end() && it->second) {
+        YRLOG_DEBUG("skip starting idle timer for instance({}) due to active sessions", instanceID);
+        return;
+    }
+
     int64_t idleTimeout = GetIdleTimeout(instanceInfo);
     if (idleTimeout <= 0) {
         return;
@@ -6439,10 +6456,84 @@ void InstanceCtrlActor::TrafficReport(const std::string &instanceID, const size_
     bool isIdle = (processingNum == 0);
     ASSERT_IF_NULL(instanceControlView_);
     if (!isIdle) {
+        instanceTrafficIdle_.erase(instanceID);
         CancelIdleTimer(instanceID);
         return;
     }
-    StartIdleTimer(instanceID);
+
+    instanceTrafficIdle_[instanceID] = true;
+
+    // Only start idle timer if both traffic idle AND no active sessions
+    bool hasActiveSessions = false;
+    auto it = instanceActiveSessions_.find(instanceID);
+    if (it != instanceActiveSessions_.end()) {
+        hasActiveSessions = it->second;
+    }
+
+    if (!hasActiveSessions) {
+        StartIdleTimer(instanceID);
+    } else {
+        YRLOG_DEBUG("instance({}) is idle but has active exec sessions, skip idle timer", instanceID);
+    }
+}
+
+void InstanceCtrlActor::SessionCountDelta(const std::string &instanceID, int delta)
+{
+    if (instanceID.empty() || delta == 0) {
+        return;
+    }
+
+    auto &count = instanceSessionCounts_[instanceID];
+    size_t oldCount = count;
+
+    if (delta > 0) {
+        count += static_cast<size_t>(delta);
+    } else if (delta < 0 && count > 0) {
+        size_t dec = static_cast<size_t>(-delta);
+        count = (dec >= count) ? 0 : (count - dec);
+    }
+
+    size_t newCount = count;
+    if (newCount == 0) {
+        instanceSessionCounts_.erase(instanceID);
+    }
+
+    // Edge detection: 0->N or N->0
+    if ((oldCount == 0 && newCount > 0) || (oldCount > 0 && newCount == 0)) {
+        bool hasActiveSessions = (newCount > 0);
+        YRLOG_INFO("instance({}) session count edge: {} sessions, hasActiveSessions={}",
+                   instanceID, newCount, hasActiveSessions);
+        SessionAlive(instanceID, hasActiveSessions);
+    }
+}
+
+void InstanceCtrlActor::SessionAlive(const std::string &instanceID, bool hasActiveSessions)
+{
+    YRLOG_INFO("instance({}) session alive status changed: hasActiveSessions={}", instanceID, hasActiveSessions);
+
+    // Update session status
+    if (hasActiveSessions) {
+        instanceActiveSessions_[instanceID] = true;
+        // Cancel idle timer when sessions become active
+        CancelIdleTimer(instanceID);
+    } else {
+        instanceActiveSessions_.erase(instanceID);
+        // When sessions become inactive, check traffic idle status before starting timer
+        bool trafficIdle = false;
+        auto trafficIt = instanceTrafficIdle_.find(instanceID);
+        if (trafficIt != instanceTrafficIdle_.end()) {
+            trafficIdle = trafficIt->second;
+        }
+        ASSERT_IF_NULL(instanceControlView_);
+        auto stateMachine = instanceControlView_->GetInstance(instanceID);
+        if (trafficIdle && stateMachine != nullptr) {
+            const auto &instanceInfo = stateMachine->GetInstanceInfo();
+            if (instanceInfo.functionproxyid() == nodeID_ &&
+                instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)) {
+                StartIdleTimer(instanceID);
+            }
+        }
+    }
 }
 
 void InstanceCtrlActor::BindSnapCtrl(const std::shared_ptr<SnapCtrl> &snapCtrl)

@@ -77,6 +77,9 @@ message ExecStartRequest {
 
   // User (optional)
   string user = 8;
+
+  // 实例 ID（用于 session 引用计数）
+  string instance_id = 9;
 }
 
 // ExecInputData contains data to be sent to container stdin
