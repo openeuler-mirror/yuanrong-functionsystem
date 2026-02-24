@@ -949,6 +949,7 @@ std::map<std::string, std::string> RuntimeExecutor::CombineEnvs(const Envs &envs
     // framework envs needed by runtime override userEnvs
     combineEnvs[YR_LOG_LEVEL] = config_.runtimeLogLevel;
     combineEnvs[GLOG_LOG_DIR] = config_.runtimeLogPath;
+    combineEnvs["YR_LOG_PATH"] = config_.runtimeLogPath;
     combineEnvs[PYTHON_LOG_CONFIG_PATH] = config_.pythonLogConfigPath;
     combineEnvs[MAX_LOG_SIZE_MB_ENV] = std::to_string(config_.runtimeMaxLogSize);
     combineEnvs[MAX_LOG_FILE_NUM_ENV] = std::to_string(config_.runtimeMaxLogFileNum);
