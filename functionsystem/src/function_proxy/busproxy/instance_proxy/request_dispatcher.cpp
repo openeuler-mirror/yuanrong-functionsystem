@@ -315,7 +315,7 @@ void RequestDispatcher::UpdateInfo(const std::shared_ptr<InstanceRouterInfo> &in
     tenantID_ = info->tenantID;
     function_ = info->function;
     // Update traffic report type only when the instance is running and ready
-    if (local_ && isReady_) {
+    if (local_ && isReady) {
         trafficReportType_ = info->trafficReportType;
         if (trafficReportType_ == resources::TrafficReportType::None) {
             // disable traffic report
