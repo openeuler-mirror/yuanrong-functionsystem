@@ -345,7 +345,7 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
     posixGrpcServer_->RegisterService(busService);
 
     // Register ExecStreamService
-    execStreamService_ = std::make_shared<ExecStreamService>();
+    execStreamService_ = std::make_shared<ExecStreamService>(instanceCtrl_->GetActorAID());
     posixGrpcServer_->RegisterService(execStreamService_);
     YRLOG_INFO("ExecStreamService registered on {}", param_.posixPort);
 

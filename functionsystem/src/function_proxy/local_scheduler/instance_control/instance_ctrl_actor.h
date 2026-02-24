@@ -549,7 +549,8 @@ public:
      */
     litebus::Future<messages::DeployInstanceResponse> DeploySnapStartInstance(
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
-        
+
+    void SessionCountDelta(const std::string &instanceID, int delta);
 private:
     Status CheckSchedRequestValid(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
@@ -994,7 +995,15 @@ private:
     // todo(Lwy_Robb): idle controller should be mv to a separate actor in future
     std::unordered_map<std::string, litebus::Timer> idleTimers_;
 
+    // Track whether each instance has active exec sessions
+    std::unordered_map<std::string, bool> instanceActiveSessions_;
+    // Track whether each instance is idle by traffic reports
+    std::unordered_map<std::string, bool> instanceTrafficIdle_;
+    // Track per-instance session counts (edge-triggered)
+    std::unordered_map<std::string, size_t> instanceSessionCounts_;
+
     void TrafficReport(const std::string &instanceID, const size_t &processingNum);
+    void SessionAlive(const std::string &instanceID, bool hasActiveSessions);
     void StartIdleTimer(const std::string &instanceID);
     void HandleIdleTimeout(const std::string &instanceID);
     void CancelIdleTimer(const std::string &instanceID);

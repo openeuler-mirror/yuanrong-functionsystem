@@ -33,6 +33,10 @@
 
 namespace functionsystem {
 
+namespace local_scheduler {
+class InstanceCtrlActor;
+}
+
 using exec_service::ExecInputData;
 using exec_service::ExecMessage;
 using exec_service::ExecOutputData;
@@ -54,6 +58,7 @@ struct StreamContext {
     std::mutex writeMutex;
     std::shared_ptr<std::atomic<bool>> valid;
     litebus::AID sessionAid;  // Session Actor ID to terminate on exit
+    std::string instanceID;   // Instance ID for session counting
 };
 
 // Shared pointer type for StreamContext to ensure proper lifetime management
@@ -66,12 +71,13 @@ using StreamContextPtr = std::shared_ptr<StreamContext>;
  * 1. Handle gRPC bidirectional stream Read/Write
  * 2. Manage multiple ExecSessionActor instances
  * 3. Route different message types to appropriate actors
+ * 4. Notify InstanceCtrlActor to track per-instance session counts
  *
  * Refactored to use Actor model - delegates session management to ExecSessionActor
  */
 class ExecStreamService : public ExecService::Service {
 public:
-    ExecStreamService();
+    explicit ExecStreamService(const litebus::AID &instanceCtrlAid);
     ~ExecStreamService() override;
 
     /**
@@ -135,6 +141,9 @@ private:
     // Now stores Actor IDs instead of shared_ptr<ExecSession>
     mutable std::shared_mutex sessionsMutex_;
     std::unordered_map<std::string, litebus::AID> sessions_;
+
+    // Callback to InstanceCtrlActor
+    litebus::AID instanceCtrlAid_;
 };
 
 }  // namespace functionsystem

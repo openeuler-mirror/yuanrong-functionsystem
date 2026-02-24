@@ -21,10 +21,12 @@
 
 #include "common/logs/logging.h"
 #include "common/utils/actor_driver.h"
+#include "local_scheduler/instance_control/instance_ctrl_actor.h"
 
 namespace functionsystem {
 
-ExecStreamService::ExecStreamService()
+ExecStreamService::ExecStreamService(const litebus::AID &instanceCtrlAid)
+    : instanceCtrlAid_(instanceCtrlAid)
 {
     // Initialize IOEventActor singleton
     IOEventActor::CreateInstance();
@@ -65,6 +67,11 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
                 if (!sessionAid.Name().empty()) {
                     YRLOG_INFO("Closing existing session {} before starting new one, peer: {}",
                                currentSessionId, peer);
+                    if (!streamCtx->instanceID.empty()) {
+                        litebus::Async(instanceCtrlAid_, &local_scheduler::InstanceCtrlActor::SessionCountDelta,
+                                      streamCtx->instanceID, -1);
+                        streamCtx->instanceID.clear();
+                    }
                     litebus::Async(sessionAid, &ExecSessionActor::DoClose);
                     RemoveSession(currentSessionId);
                 }
@@ -79,6 +86,11 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
                 }
 
                 AddSession(currentSessionId, sessionAid);
+                if (!request.start_request().instance_id().empty()) {
+                    litebus::Async(instanceCtrlAid_, &local_scheduler::InstanceCtrlActor::SessionCountDelta,
+                                  request.start_request().instance_id(), 1);
+                }
+
                 SendStatusResponse(stream, currentSessionId, ExecStatusResponse::STARTED);
                 YRLOG_INFO("Session {} started, peer: {}", currentSessionId, peer);
                 break;
@@ -111,6 +123,15 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
     // Cleanup resources
     if (!sessionAid.Name().empty()) {
         YRLOG_INFO("Cleaning up session {}, peer: {}", currentSessionId, peer);
+
+        // Decrement instance session count if instanceID was set
+        if (!streamCtx->instanceID.empty()) {
+            litebus::Async(instanceCtrlAid_, &local_scheduler::InstanceCtrlActor::SessionCountDelta,
+                          streamCtx->instanceID, -1);
+        } else {
+            YRLOG_DEBUG("session({}) cleanup already handled, skip decrement", currentSessionId);
+        }
+
         litebus::Async(sessionAid, &ExecSessionActor::DoClose);
         litebus::Terminate(sessionAid);
         litebus::Await(sessionAid);
@@ -151,9 +172,17 @@ void ExecStreamService::WriteToStream(StreamContextPtr streamCtx, const std::str
     }
 
     if (exitCode >= 0 && !streamCtx->sessionAid.Name().empty()) {
+        if (!streamCtx->instanceID.empty()) {
+            litebus::Async(instanceCtrlAid_, &local_scheduler::InstanceCtrlActor::SessionCountDelta,
+                          streamCtx->instanceID, -1);
+            streamCtx->instanceID.clear();
+        } else {
+            YRLOG_DEBUG("session({}) exit already handled, skip decrement", sessionId);
+        }
         litebus::Terminate(streamCtx->sessionAid);
         litebus::Await(streamCtx->sessionAid);
         RemoveSession(sessionId);
+        // Note: instanceID tracking will be handled in session cleanup
     }
 }
 
@@ -179,6 +208,7 @@ GrpcStatus ExecStreamService::HandleStartRequest(const std::string &clientSessio
     outSessionId = sessionId;
     outSessionAid = actor->GetAID();
     streamCtx->sessionAid = outSessionAid;
+    streamCtx->instanceID = request.instance_id();  // Save instanceID for cleanup
 
     actor->SetWriter([this, streamCtx, sessionId = outSessionId](const std::string &data, int exitCode) {
         WriteToStream(streamCtx, sessionId, data, exitCode);
