@@ -463,7 +463,7 @@ void RequestDispatcher::ReportTrafficMetrics(bool idle, const size_t &size)
         return;
     }
     // TODO(Lwy_Robb): resources::TrafficReportType::Periodic metric reporting
-    YRLOG_DEBUG("instance({}) report traffic idle({}) size({}) current({})", instanceID_, idle, size, currentTrafficIdleState_);
+    YRLOG_INFO("instance({}) report traffic idle({}) size({}) current({})", instanceID_, idle, size, currentTrafficIdleState_);
     // only report when idle state changed
     if (currentTrafficIdleState_ != idle) {
         observer_->ReportTraffic(instanceID_, size);
