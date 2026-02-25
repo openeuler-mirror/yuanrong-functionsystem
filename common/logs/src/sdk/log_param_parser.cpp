@@ -149,6 +149,13 @@ void ParseSyncFlush(const nlohmann::json &confJson, LogsApi::LogParam &logParam)
     }
 }
 
+void ParseLogTimeType(const nlohmann::json &confJson, LogsApi::LogParam &logParam)
+{
+    if (confJson.find("useUtcTime") != confJson.end()) {
+        logParam.useUtcTime = confJson.at("useUtcTime").get<bool>();
+    }
+}
+
 LogsApi::LogParam GetLogParam(const std::string &configJsonString, const std::string &nodeName,
     const std::string &modelName, const bool logFileWithTime, const std::string &fileNamePattern)
 {
@@ -179,6 +186,7 @@ LogsApi::LogParam GetLogParam(const std::string &configJsonString, const std::st
         ParseLogRolling(confJson, logParam);
         ParseAlsoLog2Std(confJson, logParam);
         ParseSyncFlush(confJson, logParam);
+        ParseLogTimeType(confJson, logParam);
     } catch (const std::exception &e) {
         std::cerr << e.what() << std::endl;
         (void)raise(SIGINT);
