@@ -282,6 +282,10 @@ function install_collector() {
 
 function install_faas_frontend() {
   log_info "start faas frontend, http_ip=${IP_ADDRESS}, http_port=${FAAS_FRONTEND_HTTP_PORT}, grpc_port=${FAAS_FRONTEND_GRPC_PORT}..."
+  local meta_service_address="${META_SERVICE_ADDRESS}"
+  if [ -z "${meta_service_address}" ]; then
+    meta_service_address="${IP_ADDRESS}:${META_SERVICE_PORT}"
+  fi
   init_frontend_config=${FUNCTION_SYSTEM_DIR}/config/init_frontend_args.json
   install_init_frontend_config=${config_install_dir}/init_frontend_args_temp.json
   cp ${init_frontend_config} ${install_init_frontend_config}
@@ -293,6 +297,7 @@ function install_faas_frontend() {
   sed -i "s/RequireAndVerifyClientCert/${FRONTEND_CLIENT_AUTH_TYPE}/g" ${install_init_frontend_config}
   sed -i "s/{sccEnable}/${SCC_ENABLE}/g" ${install_init_frontend_config}
   sed -i "s/{iam_server_address}/${IAM_SERVER_ADDRESS}/g" ${install_init_frontend_config}
+  sed -i "s/{meta_service_address}/${meta_service_address}/g" ${install_init_frontend_config}
   sed -i "s/{enable_func_token_auth}/${ENABLE_FUNCTION_TOKEN_AUTH}/g" ${install_init_frontend_config}
   sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" ${install_init_frontend_config}
   sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" ${install_init_frontend_config}
@@ -605,6 +610,7 @@ function install_metaservice() {
   sed -i "s/{etcdAddr}/$(echo ${ETCD_CLUSTER_ADDRESS} | sed 's/,/","/g')/g" ${install_metaservice_config}
   sed -i "s/{sslEnable}/${SSL_ENABLE}/g" ${install_metaservice_config}
   sed -i "s/{metaserviceSslEnable}/${META_SERVICE_SSL_ENABLE}/g" ${install_metaservice_config}
+  sed -i "s/RequireAndVerifyClientCert/${META_SERVICE_CLIENT_AUTH_TYPE}/g" ${install_metaservice_config}
   sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" ${install_metaservice_config}
   sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" ${install_metaservice_config}
   sed -i "s/{clusters}/${CLUSTER_LIST}/g" ${install_metaservice_config}
