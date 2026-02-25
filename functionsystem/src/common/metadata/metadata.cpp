@@ -253,7 +253,7 @@ void GetCodeMetaData(FunctionMeta &funcMeta, const nlohmann::json &j)
         if (codeMetaData.find("code_path") != codeMetaData.end() && !codeMetaData.at("code_path").empty()) {
             funcMeta.codeMetaData.deployDir = codeMetaData.at("code_path");
         } else {
-            funcMeta.codeMetaData.deployDir = "/home/sn/function/package/" + funcMeta.funcMetaData.name;
+            funcMeta.codeMetaData.deployDir = GetDeployDir();
         }
     } else {  // code in S3 or NSP or woring_dir
         if (codeMetaData.find("bucketId") != codeMetaData.end()) {
@@ -270,8 +270,6 @@ void GetCodeMetaData(FunctionMeta &funcMeta, const nlohmann::json &j)
         }
 
         if (j.find("funcMetaData") != j.end()) {
-            funcMeta.codeMetaData.deployDir = GetDeployDir();
-
             nlohmann::json funcMetaData = j.at("funcMetaData");
             if (funcMetaData.find("layers") != funcMetaData.end()) {
                 nlohmann::json layers = funcMetaData.at("layers");
