@@ -37,6 +37,7 @@ type MutualTLSConfig struct {
 	SecretName     string `json:"secretName" yaml:"secretName" valid:"optional"`
 	PwdFile        string `json:"pwdFile" yaml:"pwdFile" valid:"optional"`
 	DecryptTool    string `json:"sslDecryptTool" yaml:"sslDecryptTool" valid:"optional"`
+	ClientAuthType string `json:"clientAuthType" yaml:"clientAuthType" valid:"optional"`
 }
 
 // MutualSSLConfig indicates ssl config
@@ -48,6 +49,7 @@ type MutualSSLConfig struct {
 	ServerName     string `json:"serverName" yaml:"serverName" valid:"optional"`
 	PwdFile        string `json:"pwdFile" yaml:"pwdFile" valid:"optional"`
 	DecryptTool    string `json:"sslDecryptTool" yaml:"sslDecryptTool" valid:"optional"`
+	ClientAuthType string `json:"clientAuthType" yaml:"clientAuthType" valid:"optional"`
 }
 
 // BuildClientTLSConfOpts is to build an option array for mostly used client tlsConf
@@ -74,6 +76,7 @@ func BuildServerTLSConfOpts(mutualConf MutualTLSConfig) []Option {
 	var opts []Option
 	var passPhase []byte
 	var err error
+	clientAuthType := parseClientAuthType(mutualConf.ClientAuthType)
 	if mutualConf.PwdFile != "" {
 		passPhase, err = reader.ReadFileWithTimeout(mutualConf.PwdFile)
 		if err != nil {
@@ -85,8 +88,30 @@ func BuildServerTLSConfOpts(mutualConf MutualTLSConfig) []Option {
 		WithCertsByEncryptedKey(mutualConf.ModuleCertFile, mutualConf.ModuleKeyFile,
 			string(passPhase)),
 		WithClientCAs(mutualConf.RootCAFile),
-		WithClientAuthType(tls.RequireAndVerifyClientCert))
+		WithClientAuthType(clientAuthType))
 	return opts
+}
+
+func parseClientAuthType(authType string) tls.ClientAuthType {
+	if authType == "" {
+		return tls.RequireAndVerifyClientCert
+	}
+
+	switch authType {
+	case "NoClientCert":
+		return tls.NoClientCert
+	case "RequestClientCert":
+		return tls.RequestClientCert
+	case "RequireAnyClientCert":
+		return tls.RequireAnyClientCert
+	case "VerifyClientCertIfGiven":
+		return tls.VerifyClientCertIfGiven
+	case "RequireAndVerifyClientCert":
+		return tls.RequireAndVerifyClientCert
+	default:
+		log.GetLogger().Errorf("invalid client auth type: %s, using default RequireAndVerifyClientCert", authType)
+		return tls.RequireAndVerifyClientCert
+	}
 }
 
 // LoadRootCAs returns system cert pool with caFiles added

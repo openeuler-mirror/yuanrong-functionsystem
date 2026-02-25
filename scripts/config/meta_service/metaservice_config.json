@@ -159,6 +159,7 @@
       "moduleKeyFile": "{moduleKeyFile}",
       "pwdFile": "",
       "serverName": "",
-      "sslDecryptTool": "{sslDecryptTool}"
+      "sslDecryptTool": "{sslDecryptTool}",
+      "clientAuthType": "RequireAndVerifyClientCert"
     }
   }
