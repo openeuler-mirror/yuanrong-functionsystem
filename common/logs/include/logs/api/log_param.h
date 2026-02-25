@@ -41,6 +41,7 @@ struct LogParam {
     bool logFileWithTime = false;
     bool alsoLog2Std = false;
     bool compressEnable = true;
+    bool useUtcTime = true;
     int maxSize = DEFAULT_MAX_SIZE;
     int retentionDays = DEFAULT_RETENTION_DAYS;
     uint32_t maxFiles = DEFAULT_MAX_FILES;
