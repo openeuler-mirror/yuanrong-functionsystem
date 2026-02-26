@@ -3,6 +3,8 @@
 .vscode
 .claude
 .specify
+CLAUDE.md
+SKILL.md
 
 ### output dir
 **/output/*
