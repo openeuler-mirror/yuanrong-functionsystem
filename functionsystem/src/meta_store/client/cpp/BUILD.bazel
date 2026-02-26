@@ -1,0 +1,67 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@yuanrong_functionsystem//bazel:yr.bzl", "COPTS")
+
+# meta_store_client_inc: include-provider for meta_store_client includes
+# Note: includes for "include/xxx" subdirectories are handled by strip_include_prefix
+cc_library(
+    name = "meta_store_client_inc",
+    deps = ["//functionsystem/src:src_root_inc"],
+    visibility = ["//visibility:public"],
+)
+
+# meta_store_types — header-only types library (no .cpp sources)
+# Provides meta_store_client/meta_store_struct.h to other packages (e.g.
+# //functionsystem/src/common:metadata) without creating a circular dependency
+# (meta_store_client → metadata → meta_store_client).
+cc_library(
+    name = "meta_store_types",
+    hdrs = glob([
+        "include/**/*.h",
+        "include/**/*.hpp",
+    ]),
+    strip_include_prefix = "include",
+    copts = COPTS,
+    deps = [
+        "//functionsystem/src/common:status",
+        "@etcdapi//:etcdapi",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# meta_store_client — mirrors CMake's meta_store_client STATIC library
+cc_library(
+    name = "meta_store_client",
+    srcs = glob(["src/**/*.cpp"]),
+    hdrs = glob([
+        "include/**/*.h",
+        "include/**/*.hpp",
+    ]),
+    # Expose include/ as the public include root
+    strip_include_prefix = "include",
+    # Keep these includes because they need specific subdirectory paths
+    includes = [
+        "include/meta_store_client",
+        "include/meta_store_client/election",
+        "include/meta_store_client/key_value",
+        "include/meta_store_client/lease",
+        "include/meta_store_client/maintenance",
+        "include/meta_store_client/utils",
+        "include/meta_store_monitor",
+        "include/meta_storage_accessor",
+    ],
+    copts = COPTS,
+    deps = [
+        ":meta_store_client_inc",
+        "//functionsystem/src:src_root_inc",
+        "//functionsystem/src/common:metrics_adapter",
+        "//functionsystem/src/common:status",
+        "//functionsystem/src/common:heartbeat",
+        "//functionsystem/src/common:metadata",
+        "//functionsystem/src/common:rpc",
+        "//functionsystem/src/common:utils_base",
+        "//functionsystem/src/common:utils",
+        "//functionsystem/src/common:posix_pb",
+        "@etcdapi//:etcdapi",
+    ],
+    visibility = ["//visibility:public"],
+)
