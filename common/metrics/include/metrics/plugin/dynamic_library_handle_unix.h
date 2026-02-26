@@ -102,7 +102,7 @@ inline std::shared_ptr<observability::exporters::metrics::Exporter> LoadExporter
         std::cerr << "null factory: " << error << std::endl;
         return nullptr;
     }
-    auto exporter = factory->MakeExpoter(config, error);
+    auto exporter = factory->MakeExporter(config, error);
     return exporter;
 }
 

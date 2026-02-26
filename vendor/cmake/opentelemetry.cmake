@@ -19,6 +19,7 @@ set(${src_name}_CMAKE_ARGS
         -DBUILD_SHARED_LIBS=ON
         -DCMAKE_BUILD_TYPE=Release
         -DWITH_OTLP_GRPC=ON # build OTLP GRPC exporter
+        -DWITH_OTLP_HTTP=ON # build OTLP HTTP exporter
         -DBUILD_TESTING=OFF # do not build ut code in opentelemetry
         -DWITH_EXAMPLES=OFF # do not build examples code in opentelemetry
         # No dependency is transferred. need to declare the address of the compilation product on which the GRPC depends, such as absl and c-ares.
@@ -32,6 +33,8 @@ set(${src_name}_CMAKE_ARGS
         -DZLIB_ROOT:PATH=${zlib_ROOT}
         -DProtobuf_DIR:PATH=${protobuf_PKG_PATH}
         -Dutf8_range_DIR:PATH=${utf8_range_PKG_PATH}
+        -DOPENTELEMETRY_EXTERNAL_NLOHMANN_JSON=ON
+        -Dnlohmann_json_DIR=${json_INCLUDE_DIR}
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON
         -DOPENTELEMETRY_INSTALL=ON
         -DCMAKE_C_FLAGS_RELEASE=${THIRDPARTY_C_FLAGS}
@@ -67,8 +70,17 @@ message("install dir of ${src_name}: ${INSTALL_DIR}")
 set(${src_name}_INCLUDE_DIR ${INSTALL_DIR}/include)
 set(${src_name}_LIB_DIR ${INSTALL_DIR}/lib)
 
+# Define OpenTelemetry libraries
+set(opentelemetry_LIB ${${src_name}_LIB_DIR}/libopentelemetry_exporter_otlp_http_metric.so)
+set(opentelemetry_http_client_LIB ${${src_name}_LIB_DIR}/libopentelemetry_exporter_otlp_http_client.so)
+set(opentelemetry_otlp_recordable_LIB ${${src_name}_LIB_DIR}/libopentelemetry_otlp_recordable.so)
+set(opentelemetry_sdk_LIB ${${src_name}_LIB_DIR}/libopentelemetry_sdk.so)
+set(opentelemetry_api_LIB ${${src_name}_LIB_DIR}/libopentelemetry_api.so)
+
 include_directories(${${src_name}_INCLUDE_DIR})
 include_directories(${${src_name}_INCLUDE_DIR}/opentelemetry/exporters)
+
+link_directories(${${src_name}_LIB_DIR})
 
 message("opentelemetry.cmake finish")
 
