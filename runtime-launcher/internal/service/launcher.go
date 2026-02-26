@@ -220,7 +220,7 @@ func (s *LauncherService) buildCreateConfig(req *pb.StartRequest) *rt.CreateConf
 	// 网络模式配置，默认使用 host
 	network := req.GetNetwork()
 	if network == "" {
-		network = "host"
+		network = "bridge"
 	}
 
 	return &rt.CreateConfig{
