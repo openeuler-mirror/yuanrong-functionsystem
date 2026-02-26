@@ -26,6 +26,25 @@ add_subdirectory(busproxy)
 add_subdirectory(local_scheduler)
 add_subdirectory(common)
 
+# Precompiled headers for litebus/async and heavy template headers to reduce per-TU compile memory
+target_precompile_headers(local_scheduler_lib PRIVATE
+    <actor/actor.hpp>
+    <async/future.hpp>
+    <async/async.hpp>
+    <async/asyncafter.hpp>
+    <async/collect.hpp>
+    <async/defer.hpp>
+    <async/option.hpp>
+    <nlohmann/json.hpp>
+    <memory>
+    <string>
+    <unordered_map>
+    <unordered_set>
+    <functional>
+    <vector>
+    <chrono>
+)
+
 add_executable(function_proxy main.cpp)
 target_compile_options(function_proxy PRIVATE -fPIE)
 

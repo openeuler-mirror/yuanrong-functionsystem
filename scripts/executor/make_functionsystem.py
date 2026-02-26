@@ -40,6 +40,13 @@ def parser_args():
         default="Release",
         help="Set program compilation mode(Debug/Release). Default: Release",
     )
+    build_parser.add_argument(
+        "--builder",
+        type=str,
+        choices=["cmake", "bazel"],
+        default="cmake",
+        help="Choose build system to use: cmake or bazel. Default: cmake",
+    )
     build_parser.set_defaults(func=lambda func_args: tasks.run_build(ROOT_DIR, func_args))
     # 清理缓存执行参数
     clean_parser = subparsers.add_parser("clean", help="Clean all build artifacts and caches")
@@ -81,6 +88,13 @@ def parser_args():
         type=bool,
         default=True,
         help="Set whether to print test case standard output. Default: True",
+    )
+    test_parser.add_argument(
+        "--builder",
+        type=str,
+        choices=["cmake", "bazel"],
+        default="cmake",
+        help="Choose build system used for test artifacts: cmake or bazel. Default: cmake",
     )
     test_parser.set_defaults(func=lambda func_args: tasks.run_test(ROOT_DIR, func_args))
     # 打包函数系统构建产物

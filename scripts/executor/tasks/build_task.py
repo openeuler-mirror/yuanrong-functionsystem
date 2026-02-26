@@ -15,11 +15,13 @@ log = utils.stream_logger()
 
 def run_build(root_dir, cmd_args):
     start_time = time.time()
+    builder_name = getattr(cmd_args, "builder", "cmake")
     args = {
         "root_dir": root_dir,
         "job_num": cmd_args.job_num,
         "version": cmd_args.version,
         "build_type": cmd_args.build_type.capitalize(),  # 设置为首字母大写
+        "builder": builder_name,
     }
     if args["job_num"] > (os.cpu_count() or 1) * 2:
         log.warning(f"The -j {args['job_num']} is over the max logical cpu count({os.cpu_count()}) * 2")
@@ -29,7 +31,10 @@ def run_build(root_dir, cmd_args):
     build_logs(args)
     build_litebus(args)
     build_metrics(args)
-    build_functionsystem(root_dir, args)
+    if args["builder"] == "bazel":
+        build_functionsystem_bazel(root_dir, args)
+    else:
+        build_functionsystem(root_dir, args)
     elapsed_time = time.time() - start_time
     log.info(f"Build function-system successfully in {elapsed_time:.2f} seconds")
 
@@ -95,4 +100,14 @@ def build_functionsystem(root_dir, args):
     # 编译 CLI 程序
     builder.build_cli(root_dir)
     # 编译 meta-service
+    builder.build_meta_service(root_dir)
+
+
+def build_functionsystem_bazel(root_dir, args):
+    log.info("Start to build functionsystem with Bazel")
+    # 编译 CPP 程序 (Bazel)
+    builder.build_binary_bazel(root_dir, args["job_num"], args["version"], args["build_type"])
+    # 编译 CLI 程序 (same as cmake, CLI uses Go)
+    builder.build_cli(root_dir)
+    # 编译 meta-service (same as cmake, meta-service uses Go)
     builder.build_meta_service(root_dir)
