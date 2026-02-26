@@ -55,6 +55,8 @@ const std::string RUNTIME_FUNC_DIR_NAME = "func";
 const std::string PARAM_EXEC_PATH = "execPath";
 const std::string PARAM_RUNTIME_ID = "runtimeID";
 const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
+// used to chdir for runtime entrypoint
+const std::string YR_RT_WORKING_DIR = "YR_RT_WORKING_DIR";
 
 ContainerExecutor::ContainerExecutor(const std::string &name, const litebus::AID &functionAgentAID) : Executor(name)
 {
@@ -254,18 +256,9 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartRuntime
 {
     const auto &info = request->runtimeinstanceinfo();
     std::string execPath;
-    if (litebus::strings::StartsWithPrefix(language, PYTHON_LANGUAGE)) {
-        execPath = info.languageconfig().executor().empty() ? language : info.languageconfig().executor();
-    } else {
+    if (!litebus::strings::StartsWithPrefix(language, PYTHON_LANGUAGE)) {
         // todo(ant)： adapter for different runtime
         execPath = cmdBuilder_.GetExecPathFromRuntimeConfig(info.runtimeconfig());
-    }
-    YRLOG_DEBUG("{}|{}|language({}) executor path: {}", info.traceid(), info.requestid(), language, execPath);
-    if (execPath.empty()) {
-        YRLOG_ERROR("{}|{}|execPath is not found, start instanceID({}) failed, runtimeID({})", info.traceid(),
-                    info.requestid(), info.instanceid(), info.runtimeid());
-        return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_EXEC_PATH_NOT_FOUND,
-                                            "Executable path of " + language + " is not found");
     }
     if (request->runtimeinstanceinfo().warmuptype() != static_cast<int32_t>(WarmupType::NONE)) {
         return WarmUp(request, { { PARAM_EXEC_PATH, execPath }, { PARAM_LANGUAGE, language } }, args, envs);
@@ -372,20 +365,16 @@ std::string DirName(const std::string &path)
 
 // Forward declarations for functions used in helpers
 std::vector<std::string> BuildCommand(const std::shared_ptr<messages::StartInstanceRequest> &request,
-                                     const std::string &execPath);
-std::string BuildLanguageWorkingRoot(const std::shared_ptr<messages::StartInstanceRequest> &request,
-                                    runtime::v1::Mount &mount);
+                                      const std::string &execPath);
+std::string BuildBootstrapWorkingRoot(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                     runtime::v1::Mount &mount);
 
 // Unified helper to build runtime commands - works with FunctionRuntime directly
 void ContainerExecutor::BuildRuntimeCommands(runtime::v1::FunctionRuntime *funcRt,
                                            const std::shared_ptr<messages::StartInstanceRequest> &request,
                                            const std::string &execPath,
-                                           const std::vector<std::string> &buildArgs,
-                                           const std::string &workingRoot)
+                                           const std::vector<std::string> &buildArgs)
 {
-    *funcRt->add_command() = "cd";
-    *funcRt->add_command() = workingRoot;
-    *funcRt->add_command() = "&&";
     auto commands = BuildCommand(request, execPath);
     for (const auto &cmd : commands) {
         *funcRt->add_command() = cmd;
@@ -599,21 +588,24 @@ std::vector<std::string> BuildCommand(const std::shared_ptr<messages::StartInsta
                                       const std::string &execPath)
 {
     std::vector<std::string> commands;
-    const auto &languageConfig = request->runtimeinstanceinfo().languageconfig();
+    const auto &bootstrapConfig = request->runtimeinstanceinfo().bootstrapconfig();
 
-    // Add environment variables in key=value format
-    for (const auto &[key, value] : languageConfig.env()) {
-        commands.push_back(key + "=" + value);
+    // // Add execPath
+    // if (!execPath.empty()) {
+    //     commands.push_back(execPath);
+    // }
+
+    // Add entrypoint from bootstrapConfig, split by spaces
+    if (!bootstrapConfig.entrypoint().empty()) {
+        std::istringstream iss(bootstrapConfig.entrypoint());
+        std::string token;
+        while (iss >> token) {
+            commands.push_back(token);
+        }
     }
-
-    // Add execPath
-    if (!execPath.empty()) {
-        commands.push_back(execPath);
-    }
-
-    // Add entrypoint from languageConfig, split by spaces
-    if (!languageConfig.entrypoint().empty()) {
-        std::istringstream iss(languageConfig.entrypoint());
+    // Add cmd from bootstrapConfig, split by spaces
+    if (!bootstrapConfig.cmd().empty()) {
+        std::istringstream iss(bootstrapConfig.cmd());
         std::string token;
         while (iss >> token) {
             commands.push_back(token);
@@ -623,15 +615,15 @@ std::vector<std::string> BuildCommand(const std::shared_ptr<messages::StartInsta
     return commands;
 }
 
-std::string BuildLanguageWorkingRoot(
+std::string BuildBootstrapWorkingRoot(
     const std::shared_ptr<messages::StartInstanceRequest> &request,
     runtime::v1::Mount &mount)
 {
     std::string root = "/";
-    const auto &languageConfig = request->runtimeinstanceinfo().languageconfig();
+    const auto &bootstrapConfig = request->runtimeinstanceinfo().bootstrapconfig();
 
-    // Only create mount and return cd commands if languageConfig has valid type and root
-    if (languageConfig.type().empty() || languageConfig.root().empty()) {
+    // Only create mount and return cd commands if bootstrapConfig has valid type and root
+    if (bootstrapConfig.type().empty() || bootstrapConfig.root().empty()) {
         return root;
     }
     // todo lwy which should be removed after warmup supports mount
@@ -640,12 +632,12 @@ std::string BuildLanguageWorkingRoot(
         return root;
     }
     const std::string mountDst = "/__yuanrong/";
-    mount.set_source(languageConfig.root());
+    mount.set_source(bootstrapConfig.root());
     mount.set_target(mountDst);
 
-    if (languageConfig.type() == "erofs") {
+    if (bootstrapConfig.type() == "erofs") {
         mount.set_type("erofs");
-    } else if (languageConfig.type() == "path") {
+    } else if (bootstrapConfig.type() == "path") {
         mount.set_type("bind");
     } else {
         // For unknown types, default to bind
@@ -684,11 +676,13 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
 
     SetRequestExtraConfigForStart(start.get(), request);
      runtime::v1::Mount mount;
-    auto workingRoot = BuildLanguageWorkingRoot(request, mount);
+    auto workingRoot = BuildBootstrapWorkingRoot(request, mount);
     if (mount.source().length() > 0 && mount.target().length() > 0) {
         *start->add_mounts() = mount;
     }
-    BuildRuntimeCommands(start->mutable_funcruntime(), request, execPath, buildArgs, workingRoot);
+    BuildRuntimeCommands(start->mutable_funcruntime(), request, execPath, buildArgs);
+    (*start->mutable_funcruntime()->mutable_runtimeenvs())[YR_RT_WORKING_DIR] = workingRoot;
+
     auto updateEnv = BuildMountForCode(start, request, envs);
     SetRequestResources(start->mutable_resources(), request);
     SetRequestEnvsAndLogsForStart(start.get(), request, updateEnv, runtimeID);
@@ -1101,12 +1095,10 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::WarmUp(
 
     // Build language mount and get working root
     runtime::v1::Mount mount;
-    auto workingRoot = BuildLanguageWorkingRoot(request, mount);
-    *warmup->add_command() = "cd";
-    *warmup->add_command() = workingRoot;
-    *warmup->add_command() = "&&";
+    auto workingRoot = BuildBootstrapWorkingRoot(request, mount);
+    (*warmup->mutable_runtimeenvs())[YR_RT_WORKING_DIR] = workingRoot;
 
-    // Build command from languageconfig and execPath
+    // Build command from bootstrapconfig and execPath
     auto commands = BuildCommand(request, execPath);
     for (const auto &cmd : commands) {
         *warmup->add_command() = cmd;
@@ -1237,11 +1229,12 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnAddReferen
 
     SetRequestExtraConfigForRestore(restoreReq.get(), request);
     runtime::v1::Mount mount;
-    auto workingRoot = BuildLanguageWorkingRoot(request, mount);
+    auto workingRoot = BuildBootstrapWorkingRoot(request, mount);
     if (mount.source().length() > 0 && mount.target().length() > 0) {
         *restoreReq->add_mounts() = mount;
     }
-    BuildRuntimeCommands(restoreReq->mutable_funcruntime(), request, execPath, buildArgs, workingRoot);
+    BuildRuntimeCommands(restoreReq->mutable_funcruntime(), request, execPath, buildArgs);
+    (*restoreReq->mutable_funcruntime()->mutable_runtimeenvs())[YR_RT_WORKING_DIR] = workingRoot;
 
     // Build mounts for code - need to create temporary StartRequest for this
     auto tempStart = std::make_shared<runtime::v1::StartRequest>();

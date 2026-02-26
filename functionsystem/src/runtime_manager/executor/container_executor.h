@@ -100,8 +100,7 @@ private:
     // Helper functions to reduce code duplication
     void BuildRuntimeCommands(runtime::v1::FunctionRuntime *funcRt,
                             const std::shared_ptr<messages::StartInstanceRequest> &request,
-                            const std::string &execPath, const std::vector<std::string> &buildArgs,
-                            const std::string &workingRoot);
+                            const std::string &execPath, const std::vector<std::string> &buildArgs);
 
     void BuildRuntimeCommandsForRestore(runtime::v1::RestoreRequest *req,
                                        const std::shared_ptr<messages::StartInstanceRequest> &request,

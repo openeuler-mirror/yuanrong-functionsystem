@@ -41,7 +41,7 @@ std::shared_ptr<DeployInstanceRequest> GetDeployInstanceReq(const FunctionMeta &
     }
     BuildDeploySpec(funcMeta, deployInstanceRequest);
     BuildRootfsConfig(funcMeta, deployInstanceRequest);
-    BuildLanguageConfig(funcMeta, deployInstanceRequest);
+    BuildBootstrapConfig(funcMeta, deployInstanceRequest);
     for (auto &[key, handler] : funcMeta.funcMetaData.hookHandler) {
         deployInstanceRequest->mutable_hookhandler()->operator[](key) = handler;
     }
@@ -144,21 +144,17 @@ void BuildRootfsConfig(
     }
 }
 
-void BuildLanguageConfig(
+void BuildBootstrapConfig(
     const FunctionMeta &funcMeta, const std::shared_ptr<DeployInstanceRequest> &deployInstanceRequest)
 {
-    if (funcMeta.language.name.empty()) {
+    if (funcMeta.bootstrap.type.empty() && funcMeta.bootstrap.root.empty() &&
+        funcMeta.bootstrap.entrypoint.empty() && funcMeta.bootstrap.cmd.empty()) {
         return;
     }
-    auto languageConfig = deployInstanceRequest->mutable_languageconfig();
-    languageConfig->set_name(funcMeta.language.name);
-    languageConfig->set_type(funcMeta.language.type);
-    languageConfig->set_root(funcMeta.language.root);
-    languageConfig->set_entrypoint(funcMeta.language.entrypoint);
-    languageConfig->set_executor(funcMeta.language.executor);
-    languageConfig->set_version(funcMeta.language.version);
-    for (const auto &[key, value] : funcMeta.language.env) {
-        languageConfig->mutable_env()->operator[](key) = value;
-    }
+    auto bootstrapConfig = deployInstanceRequest->mutable_bootstrapconfig();
+    bootstrapConfig->set_type(funcMeta.bootstrap.type);
+    bootstrapConfig->set_root(funcMeta.bootstrap.root);
+    bootstrapConfig->set_entrypoint(funcMeta.bootstrap.entrypoint);
+    bootstrapConfig->set_cmd(funcMeta.bootstrap.cmd);
 }
 }  // namespace functionsystem

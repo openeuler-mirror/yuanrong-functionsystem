@@ -557,35 +557,23 @@ inline void GetRoofsMetaData(FunctionMeta &funcMeta, const nlohmann::json &h)
     }
 }
 
-inline void GetLanguageMetaData(FunctionMeta &funcMeta, const nlohmann::json &h)
+inline void GetBootstrapMetaData(FunctionMeta &funcMeta, const nlohmann::json &h)
 {
-    if (h.find("language") == h.end()) {
+    if (h.find("bootstrap") == h.end()) {
         return;
     }
-    nlohmann::json lang = h.at("language");
-    if (lang.find("name") != lang.end()) {
-        funcMeta.language.name = lang.at("name");
-    }
+    nlohmann::json lang = h.at("bootstrap");
     if (lang.find("type") != lang.end()) {
-        funcMeta.language.type = lang.at("type");
+        funcMeta.bootstrap.type = lang.at("type");
     }
     if (lang.find("root") != lang.end()) {
-        funcMeta.language.root = lang.at("root");
+        funcMeta.bootstrap.root = lang.at("root");
     }
     if (lang.find("entrypoint") != lang.end()) {
-        funcMeta.language.entrypoint = lang.at("entrypoint");
+        funcMeta.bootstrap.entrypoint = lang.at("entrypoint");
     }
-    if (lang.find("executor") != lang.end()) {
-        funcMeta.language.executor = lang.at("executor");
-    }
-    if (lang.find("version") != lang.end()) {
-        funcMeta.language.version = lang.at("version");
-    }
-    if (lang.find("env") != lang.end()) {
-        nlohmann::json envs = lang.at("env");
-        for (const auto &env : envs.items()) {
-            funcMeta.language.env[env.key()] = env.value();
-        }
+    if (lang.find("cmd") != lang.end()) {
+        funcMeta.bootstrap.cmd = lang.at("cmd");
     }
 }
 
@@ -615,8 +603,8 @@ FunctionMeta GetFuncMetaFromJson(const std::string &jsonStr)
 
         GetRoofsMetaData(funcMeta, j);
 
-        // languageMetaData
-        GetLanguageMetaData(funcMeta, j);
+        // bootstrapMetaData
+        GetBootstrapMetaData(funcMeta, j);
     } catch (std::exception &e) {
         YRLOG_ERROR("parse funcMeta json failed, error: {}", e.what());
     }

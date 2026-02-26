@@ -54,6 +54,7 @@ message FunctionRuntime {
   bool                makeSeed    = 4;
   repeated string     command     = 5;
   map<string, string> runtimeEnvs = 6;
+  string              cwd         = 7;
 }
 
 message StartRequest {

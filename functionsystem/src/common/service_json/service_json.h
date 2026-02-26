@@ -96,7 +96,7 @@ void ParseDeviceInfo(DeviceMetaData &device, const nlohmann::json &h);
 
 void ParseRootfsSpec(RootfsSpecMeta &rootfs, const nlohmann::json &h);
 
-void ParseLanguage(LanguageMetaData &language, const nlohmann::json &h);
+void ParseBootstrap(BootstrapMetaData &bootstrap, const nlohmann::json &h);
 
 void ParseCodeMeta(service_json::FunctionConfig &functionConfig, const nlohmann::json &f);
 
