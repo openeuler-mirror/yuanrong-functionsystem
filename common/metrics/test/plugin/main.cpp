@@ -38,7 +38,7 @@ int main(int argc, char *argv[])
     }
 
     std::string config{ "init config" };
-    auto exporter = factory->MakeExpoter(config, error);
+    auto exporter = factory->MakeExporter(config, error);
     if (exporter == nullptr) {
         std::cerr << "Failed to make tracer: " << error << "\n";
         return -1;
