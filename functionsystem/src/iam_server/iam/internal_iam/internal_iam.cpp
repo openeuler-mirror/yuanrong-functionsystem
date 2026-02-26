@@ -69,10 +69,12 @@ litebus::Future<Status> InternalIAM::VerifyToken(const std::shared_ptr<TokenCont
 }
 
 litebus::Future<std::shared_ptr<TokenSalt>> InternalIAM::RequireEncryptToken(const std::string &tenantID,
-                                                                                  const std::string &role)
+                                                                                  const std::string &role,
+                                                                                  uint64_t expiredTimeSpan)
 {
     ASSERT_IF_NULL(tokenManagerActor_);
-    return litebus::Async(tokenManagerActor_->GetAID(), &TokenManagerActor::RequireEncryptToken, tenantID, role);
+    return litebus::Async(tokenManagerActor_->GetAID(), &TokenManagerActor::RequireEncryptToken, tenantID, role,
+                          expiredTimeSpan);
 }
 
 litebus::Future<Status> InternalIAM::AbandonTokenByTenantID(const std::string &tenantID)
