@@ -1,0 +1,27 @@
+# Pre-built OpenSSL 1.1.1 — files are at the root of vendor/src/openssl/
+# Headers: include/openssl/*.h
+# Libs: libssl.so.1.1, libcrypto.so.1.1 (at repo root)
+
+cc_library(
+    name = "boringssl_sdk",
+    hdrs = glob(["include/openssl/*.h", "include/openssl/**/*.h"]),
+    strip_include_prefix = "include",
+    srcs = [
+        "libssl.so.1.1",
+        "libcrypto.so.1.1",
+    ],
+    visibility = ["//visibility:public"],
+    alwayslink = True,
+)
+
+alias(
+    name = "ssl",
+    actual = ":boringssl_sdk",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "crypto",
+    actual = ":boringssl_sdk",
+    visibility = ["//visibility:public"],
+)

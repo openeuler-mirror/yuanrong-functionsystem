@@ -1,0 +1,56 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+load("@yuanrong_functionsystem//bazel:yr.bzl", "COPTS")
+
+# iam_server_inc: include-provider for -Ifunctionsystem/src/iam_server/
+# and -Ifunctionsystem/src/
+cc_library(
+    name = "iam_server_inc",
+    includes = ["."],
+    deps = ["//functionsystem/src:src_root_inc"],
+    visibility = ["//visibility:public"],
+)
+
+# iam_server_lib — mirrors CMake's iam_server_lib STATIC library
+cc_library(
+    name = "iam_server_lib",
+    srcs = glob(
+        [
+            "*.cpp",
+            "driver/**/*.cpp",
+            "flags/**/*.cpp",
+            "iam/**/*.cpp",
+        ],
+        exclude = ["main.cpp"],
+    ),
+    hdrs = glob(["**/*.h"]),
+    copts = COPTS + ["-fPIE"],
+    deps = [
+        ":iam_server_inc",
+        "@etcdapi//:etcdapi",
+        "//functionsystem/src/common:kube_client",
+        "//functionsystem/src/common:rpc",
+        "//functionsystem/src/common:leader",
+        "//functionsystem/src/common:explorer",
+        "//functionsystem/src/meta_store/client/cpp:meta_store_client",
+        "//functionsystem/src/common:http",
+        "//functionsystem/src/common:aksk",
+        "//functionsystem/src/common:common_flags",
+        "//functionsystem/src/common:utils",
+        "//functionsystem/src/common:posix_pb",
+        "//functionsystem/src/common:metrics_adapter",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# iam_server binary
+cc_binary(
+    name = "iam_server",
+    srcs = ["main.cpp"],
+    copts = COPTS + ["-fPIE"],
+    linkopts = ["-pie"],
+    deps = [
+        ":iam_server_inc",
+        ":iam_server_lib",
+    ],
+    visibility = ["//visibility:public"],
+)

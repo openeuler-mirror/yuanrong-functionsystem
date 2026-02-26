@@ -141,11 +141,15 @@ endfunction()
 set_linker_flags()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_LD_FLAGS} -pipe ${CXX_WANR_FLAGS} ${LANGUAGE_FLAGS} ${CODE_GENERATE_FLAGS} ${OPTIMIZE_FLAGS} ${COMPILE_SAFE_FLAGS}")
-set(CMAKE_CXX_FLAGS_DEBUG "-Og -g3 -ftrapv -fstack-check")
+set(CMAKE_CXX_FLAGS_DEBUG "-Og -g3 -gsplit-dwarf -ftrapv -fstack-check")
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -Wextra -Wno-unused-parameter -Wno-float-equal -DNDEBUG")
 set(CMAKE_C_FLAGS "${CMAKE_C_LD_FLAGS} -pipe ${C_WANR_FLAGS} ${LANGUAGE_FLAGS} ${CODE_GENERATE_FLAGS} ${OPTIMIZE_FLAGS} ${COMPILE_SAFE_FLAGS}")
-set(CMAKE_C_FLAGS_DEBUG "-Og -g3 -ftrapv -fstack-check")
+set(CMAKE_C_FLAGS_DEBUG "-Og -g3 -gsplit-dwarf -ftrapv -fstack-check")
 set(CMAKE_C_FLAGS_RELEASE "-O2 -Wextra -Wno-float-equal -DNDEBUG")
+
+# Limit concurrent linker processes to reduce peak link-phase memory (Ninja only)
+set_property(GLOBAL PROPERTY JOB_POOLS link_pool=2)
+set(CMAKE_JOB_POOL_LINK link_pool)
 
 # Link flags
 set(LINK_SAFE_FLAGS "-Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack")
