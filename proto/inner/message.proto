@@ -261,14 +261,12 @@ message ContainerRuntimeConfig {
   string mountPoint = 4;
 }
 
-message LanguageConfig {
-  string name = 1;
-  string type = 2;
-  string root = 3;
-  string entrypoint = 4;
-  string executor = 5;
-  string version = 6;
-  map<string, string> env = 7;
+message BootstrapConfig {
+  string type = 1;
+  string root = 2;
+  // would be splited by space send to launcher
+  string entrypoint = 3;
+  string cmd = 4;
 }
 
 message DeployInstanceRequest {
@@ -310,7 +308,7 @@ message DeployInstanceRequest {
   string dposixUdsPath = 36;
   int32 warmupType = 37;
   ContainerRuntimeConfig container = 38;
-  LanguageConfig languageConfig = 39;
+  BootstrapConfig bootstrapConfig = 39;
   resources.SnapshotInfo snapshotInfo = 40;
 }
 
@@ -494,7 +492,7 @@ message RuntimeInstanceInfo {
   int64 gracefulShutdownTime = 8;
   int32 warmupType = 9;
   ContainerRuntimeConfig container = 10;
-  LanguageConfig languageConfig = 11;
+  BootstrapConfig bootstrapConfig = 11;
   resources.SnapshotInfo snapshotInfo = 12;
 }
 
