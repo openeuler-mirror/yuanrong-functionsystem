@@ -61,6 +61,7 @@ cc_library(
 # --- posix_pb: pre-generated proto C++ files ---
 # Mirrors CMake's posix_pb STATIC library.
 # Uses the checked-in generated .cc files from common/proto/pb/posix/
+# Also depends on Bazel-generated proto libraries for Bazel build.
 cc_library(
     name = "posix_pb",
     srcs = glob(["proto/pb/posix/*.cc"]),
@@ -71,6 +72,7 @@ cc_library(
     copts = COPTS + ["-fvisibility=hidden"],
     deps = [
         ":common_root_inc",
+        "//proto/posix:posix_protos_cc",
         "@com_google_protobuf//:protobuf",
         "@com_github_grpc_grpc//:grpc++",
         "@com_github_grpc_grpc//:gpr",
