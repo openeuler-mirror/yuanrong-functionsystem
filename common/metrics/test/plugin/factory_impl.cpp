@@ -41,10 +41,10 @@ private:
 
 class FactoryImpl final : public observability::plugin::metrics::Factory::FactoryImpl {
 public:
-    std::unique_ptr<observability::plugin::metrics::ExporterHandle> MakeExpoterHandle(
-        std::string expoterConfig, std::unique_ptr<char[]> & /*error*/) const noexcept override
+    std::unique_ptr<observability::plugin::metrics::ExporterHandle> MakeExporterHandle(
+        std::string exporterConfig, std::unique_ptr<char[]> & /*error*/) const noexcept override
     {
-        std::shared_ptr<ExampleExporter> exporter{ new (std::nothrow) ExampleExporter(expoterConfig) };
+        std::shared_ptr<ExampleExporter> exporter{ new (std::nothrow) ExampleExporter(exporterConfig) };
         if (exporter == nullptr) {
             return nullptr;
         }
