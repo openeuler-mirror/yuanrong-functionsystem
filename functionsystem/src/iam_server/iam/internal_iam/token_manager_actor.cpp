@@ -540,7 +540,8 @@ litebus::Future<Status> TokenManagerActor::AbandonTokenByTenantID(const std::str
 }
 
 litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::RequireEncryptToken(const std::string &tenantID,
-                                                                                  const std::string &role)
+                                                                                  const std::string &role,
+                                                                                  uint64_t expiredTimeSpan)
 {
     if (!member_->initialized) {
         auto tokenSalt = std::make_shared<TokenSalt>();
@@ -557,7 +558,7 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::RequireEncryptTok
     }
     // 2. try to generate new
     ASSERT_IF_NULL(business_);
-    return business_->RequireEncryptToken(tenantID, role);
+    return business_->RequireEncryptToken(tenantID, role, expiredTimeSpan);
 }
 
 litebus::Future<Status> TokenManagerActor::VerifyToken(const std::shared_ptr<TokenContent> &tokenContent)
@@ -592,14 +593,15 @@ litebus::Future<Status> TokenManagerActor::VerifyToken(const std::shared_ptr<Tok
 }
 
 litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::GenerateNewToken(const std::string &tenantID,
-                                                                                const std::string &role)
+                                                                                const std::string &role,
+                                                                                uint64_t expiredTimeSpan)
 {
     YRLOG_INFO("{}|start to generate new token", tenantID);
     auto promise = std::make_shared<litebus::Promise<std::shared_ptr<TokenSalt>>>();
     member_->newTokenRequestMap[tenantID] = promise;
     auto tokenContent = std::make_shared<TokenContent>();
     auto tokenSalt = std::make_shared<TokenSalt>();
-    Status status = GenerateToken(tenantID, tokenContent, role);
+    Status status = GenerateToken(tenantID, tokenContent, role, expiredTimeSpan);
     if (status.IsError()) {
         tokenSalt->status = status;
         YRLOG_ERROR("{}|failed to generate new token, err:", tenantID, status.ToString());
@@ -628,18 +630,22 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::GenerateNewToken(
 }
 
 Status TokenManagerActor::GenerateToken(const std::string &tenantID, const std::shared_ptr<TokenContent> &tokenContent,
-                                         const std::string &role)
+                                         const std::string &role, uint64_t expiredTimeSpan)
 {
     // 1. generate token
     tokenContent->tenantID = tenantID;
     tokenContent->role = role;
     auto now = static_cast<uint64_t>(std::time(nullptr));
-    // if tokenExpiredTimeSpan is 0, token never expires (set expiredTimeStamp to UINT64_MAX)
-    if (member_->tokenExpiredTimeSpan == TOKEN_NEVER_EXPIRE) {
+    // Use per-request expiredTimeSpan if provided, otherwise fall back to global config
+    // UINT64_MAX means never expire (from X-TTL: -1), 0 means use global default
+    uint64_t effectiveTimeSpan = (expiredTimeSpan > 0 && expiredTimeSpan != UINT64_MAX)
+        ? expiredTimeSpan : member_->tokenExpiredTimeSpan;
+    // if effectiveTimeSpan is 0 or expiredTimeSpan is UINT64_MAX, token never expires
+    if (effectiveTimeSpan == TOKEN_NEVER_EXPIRE || expiredTimeSpan == UINT64_MAX) {
         tokenContent->expiredTimeStamp = UINT64_MAX;
     } else {
         tokenContent->expiredTimeStamp =
-            (UINT64_MAX - now < member_->tokenExpiredTimeSpan) ? now : now + member_->tokenExpiredTimeSpan;
+            (UINT64_MAX - now < effectiveTimeSpan) ? now : now + effectiveTimeSpan;
     }
 
     Status status = EncryptToken(tokenContent);
@@ -1006,11 +1012,11 @@ void TokenManagerActor::UpdateOldTokenCompareTime(const std::shared_ptr<TokenCon
 }
 
 litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::MasterBusiness::RequireEncryptToken(
-    const std::string &tenantID, const std::string &role)
+    const std::string &tenantID, const std::string &role, uint64_t expiredTimeSpan)
 {
     auto actor = actor_.lock();
     ASSERT_IF_NULL(actor);
-    return actor->GenerateNewToken(tenantID, role);
+    return actor->GenerateNewToken(tenantID, role, expiredTimeSpan);
 }
 
 litebus::Future<Status> TokenManagerActor::MasterBusiness::VerifyToken(
@@ -1095,7 +1101,7 @@ litebus::Future<Status> TokenManagerActor::SlaveBusiness::UpdateTokenInAdvance(c
 }
 
 litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::SlaveBusiness::RequireEncryptToken(
-    const std::string &tenantID, const std::string &role)
+    const std::string &tenantID, const std::string &role, uint64_t expiredTimeSpan)
 {
     auto actor = actor_.lock();
     ASSERT_IF_NULL(actor);
