@@ -60,7 +60,9 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
 
     // Main loop: read and process client messages
     ExecMessage request;
+    YRLOG_INFO("ExecStream starting read loop, peer: {}", peer);
     while (stream->Read(&request)) {
+        YRLOG_DEBUG("ExecStream read message, peer: {}", peer);
         switch (request.payload_case()) {
             case ExecMessage::kStartRequest: {
                 // If there's already a session, close it first
@@ -115,7 +117,20 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
         }
     }
 
-    YRLOG_INFO("ExecStream connection closed, peer: {}", peer);
+    YRLOG_INFO("ExecStream read loop exited, peer: {}, sessionCount: {}, currentSessionId: {}",
+                peer, GetActiveSessionCount(), currentSessionId);
+
+    // Log all active sessions before closing
+    {
+        std::shared_lock<std::shared_mutex> lock(sessionsMutex_);
+        YRLOG_INFO("Active sessions before cleanup: count={}", sessions_.size());
+        for (const auto& pair : sessions_) {
+            YRLOG_INFO("  active session: {} -> {}", pair.first, pair.second.Name());
+        }
+    }
+
+    YRLOG_INFO("ExecStream connection closed, peer: {}, sessionCount: {}, currentSessionId: {}",
+                peer, GetActiveSessionCount(), currentSessionId);
 
     // Mark stream as invalid before cleanup
     streamValid->store(false);
@@ -133,10 +148,14 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
         }
 
         litebus::Async(sessionAid, &ExecSessionActor::DoClose);
+        YRLOG_INFO("Calling Terminate and Await for session {}, peer: {}", currentSessionId, peer);
         litebus::Terminate(sessionAid);
         litebus::Await(sessionAid);
+        YRLOG_INFO("Terminate and Await completed for session {}, peer: {}", currentSessionId, peer);
         RemoveSession(currentSessionId);
     }
+
+    YRLOG_INFO("ExecStream cleanup completed, peer: {}, remaining sessions: {}", peer, GetActiveSessionCount());
 
     return GrpcStatus::OK;
 }
@@ -172,6 +191,7 @@ void ExecStreamService::WriteToStream(StreamContextPtr streamCtx, const std::str
     }
 
     if (exitCode >= 0 && !streamCtx->sessionAid.Name().empty()) {
+        YRLOG_INFO("WriteToStream: process exited, sessionId: {}, exitCode: {}", sessionId, exitCode);
         if (!streamCtx->instanceID.empty()) {
             litebus::Async(instanceCtrlAid_, &local_scheduler::InstanceCtrlActor::SessionCountDelta,
                           streamCtx->instanceID, -1);
@@ -179,8 +199,10 @@ void ExecStreamService::WriteToStream(StreamContextPtr streamCtx, const std::str
         } else {
             YRLOG_DEBUG("session({}) exit already handled, skip decrement", sessionId);
         }
+        YRLOG_INFO("WriteToStream: calling Terminate and Await for session {}", sessionId);
         litebus::Terminate(streamCtx->sessionAid);
         litebus::Await(streamCtx->sessionAid);
+        YRLOG_INFO("WriteToStream: Terminate and Await completed for session {}", sessionId);
         RemoveSession(sessionId);
         // Note: instanceID tracking will be handled in session cleanup
     }

@@ -280,8 +280,12 @@ void ExecSessionActor::Cleanup()
     stdoutFd_ = -1;
     stderrFd_ = -1;
 
-    auto onAllUnregistered = [aid = GetAID()]() {
-        litebus::Async(aid, &ExecSessionActor::DoCleanupAfterUnregister);
+    YRLOG_INFO("Cleanup session, sessionId: {}, outFd: {}, errFd: {}", sessionId_, outFd, errFd);
+
+    auto onAllUnregistered = [aid = GetAID(), this]() {
+        YRLOG_INFO("Calling DoCleanupAfterUnregister, sessionId: {}", sessionId_);
+        // Directly call instead of async dispatch to ensure it runs before actor destruction
+        DoCleanupAfterUnregister();
     };
     if (outFd >= 0) {
         auto doNext = [aid = GetAID(), errFd, onAllUnregistered]() {
@@ -295,6 +299,7 @@ void ExecSessionActor::Cleanup()
     } else if (errFd >= 0) {
         litebus::Async(IOEventActor::GetInstance(), &IOEventActor::DoUnregister, errFd, onAllUnregistered);
     } else {
+        YRLOG_INFO("No valid file descriptors, calling onAllUnregistered directly, sessionId: {}", sessionId_);
         onAllUnregistered();
     }
 }
@@ -310,8 +315,16 @@ void ExecSessionActor::DoCleanupAfterUnregister()
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    if (exec_ && exec_->GetPid() > 0) {
-        kill(exec_->GetPid(), SIGTERM);
+    YRLOG_INFO("DoCleanupAfterUnregister: exec_={}, sessionId: {}",
+                (exec_ ? "valid" : "null"), sessionId_);
+
+    if (exec_) {
+        int pid = exec_->GetPid();
+        YRLOG_INFO("DoCleanupAfterUnregister: pid={}, sessionId: {}", pid, sessionId_);
+        if (pid > 0) {
+            YRLOG_INFO("Killing exec process, pid: {}, sessionId: {}", pid, sessionId_);
+            kill(pid, SIGTERM);
+        }
     }
 }
 
