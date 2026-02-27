@@ -45,3 +45,33 @@ def hw_rules():
         sha256 = "2a4d07cd64b0719b39a7c12218a3e507672b82a97b98c6a89d38565894cf7c51",
         strip_prefix = "rules_foreign_cc-0.9.0",
     )
+
+    # --- rules_apple / rules_swift / apple_support ---
+    # Required by gRPC's Bazel build (rules_apple is loaded by grpc_deps).
+    # On Linux these are never actually invoked, but must be resolvable.
+    http_archive(
+        name = "build_bazel_rules_apple",
+        sha256 = "d6735ed25754dbcb4fce38e6d72c55b55f6afa91408e0b72f1357640b88bb49c",
+        strip_prefix = "rules_apple-0.31.3",
+        urls = [
+            "https://github.com/bazelbuild/rules_apple/archive/refs/tags/0.31.3.tar.gz",
+        ],
+    )
+
+    http_archive(
+        name = "build_bazel_rules_swift",
+        sha256 = "802c094df1642909833b59a9507ed5f118209cf96d13306219461827a00992da",
+        strip_prefix = "rules_swift-0.21.0",
+        urls = [
+            "https://github.com/bazelbuild/rules_swift/archive/refs/tags/0.21.0.tar.gz",
+        ],
+    )
+
+    http_archive(
+        name = "build_bazel_apple_support",
+        sha256 = "c02a8c902f405e5ea12b815f426fbe429bc39a2628b290e50703d956d40f5542",
+        strip_prefix = "apple_support-0.10.0",
+        urls = [
+            "https://github.com/bazelbuild/apple_support/archive/refs/tags/0.10.0.tar.gz",
+        ],
+    )
