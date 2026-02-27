@@ -30,14 +30,6 @@ def build_functionsystem(
 ):
     log.info("Build cpp code in functionsystem")
 
-    # 拷贝 proto 文件
-    log.info("Auto copy all proto file to cpp common folder")
-    inner_proto = os.path.join(root_dir, "proto", "inner")
-    posix_proto = os.path.join(root_dir, "proto", "posix")
-    cpp_proto_dir = os.path.join(root_dir, "functionsystem", "src", "common", "proto", "posix")
-    shutil.copytree(inner_proto, cpp_proto_dir, copy_function=utils.copy2_when_modify, dirs_exist_ok=True)
-    shutil.copytree(posix_proto, cpp_proto_dir, copy_function=utils.copy2_when_modify, dirs_exist_ok=True)
-
     # 使用 CMake 创建 Ninja 构建清单
     root_dir = os.path.abspath(root_dir)  # Git根目录
     code_path = os.path.join(root_dir, "functionsystem")
