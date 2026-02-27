@@ -12,6 +12,7 @@ SKILL.md
 common/litebus/build/
 functionsystem/build/
 functionsystem/src/common/utils/version.h
+bazel-*
 
 ### protobuf
 *.pb.go
@@ -26,7 +27,7 @@ functionsystem/src/common/utils/version.h
 build.ninja
 
 ### copied files
-functionsystem/src/common/proto/*
+functionsystem/src/common/proto/posix/*.proto
 
 ### build files
 common/litebus/build

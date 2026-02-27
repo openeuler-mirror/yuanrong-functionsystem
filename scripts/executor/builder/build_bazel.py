@@ -50,9 +50,6 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     """
     check_bazel_available()
 
-    # Copy proto files into common/proto/posix/ (required by posix_pb cc_library)
-    _copy_proto_files(root_dir)
-
     # Determine bazel config flag
     config = "release" if build_type.lower() == "release" else "debug"
 
@@ -78,19 +75,6 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     _copy_shared_libraries(root_dir, output_dir)
 
     log.info(f"Bazel build complete. Binaries installed to {bin_output_dir}")
-
-
-def _copy_proto_files(root_dir: str):
-    """Copy proto files from proto/inner/ and proto/posix/ into common/proto/posix/.
-
-    This mirrors what build_cpp.py does for the CMake build.
-    """
-    inner_proto = os.path.join(root_dir, "proto", "inner")
-    posix_proto = os.path.join(root_dir, "proto", "posix")
-    cpp_proto_dir = os.path.join(root_dir, "functionsystem", "src", "common", "proto", "posix")
-    shutil.copytree(inner_proto, cpp_proto_dir, copy_function=utils.copy2_when_modify, dirs_exist_ok=True)
-    shutil.copytree(posix_proto, cpp_proto_dir, copy_function=utils.copy2_when_modify, dirs_exist_ok=True)
-    log.info(f"Proto files copied to {cpp_proto_dir}")
 
 
 def _copy_bazel_outputs(root_dir: str, bin_output_dir: str):
