@@ -84,6 +84,10 @@ void CommonGrpcServer::Run()
         builder.AddListeningPort(tcpAddress, config_.creds);
     }
     (void)builder.AddChannelArgument(GRPC_ARG_ALLOW_REUSEPORT, 0);
+    // Enable keepalive to detect dead connections
+    (void)builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_TIME_MS, 30000);  // Send ping every 30s
+    (void)builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_TIMEOUT_MS, 10000);  // Wait 10s for ping ack
+    (void)builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_PERMIT_WITHOUT_CALLS, 1);  // Allow pings without active calls
     server_ = std::move(builder.BuildAndStart());
     if (server_ == nullptr) {
         YRLOG_ERROR("Grpc Server start failed (BuildAndStart returned null).");
