@@ -172,7 +172,6 @@ proto_library(
     name = "log_service_proto",
     srcs = ["log_service.proto"],
     strip_import_prefix = "/proto/posix",
-    deps = [":common_proto"],
     visibility = ["//visibility:public"],
 )
 
