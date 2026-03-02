@@ -80,6 +80,20 @@ set(opentelemetry_api_LIB ${${src_name}_LIB_DIR}/libopentelemetry_api.so)
 include_directories(${${src_name}_INCLUDE_DIR})
 include_directories(${${src_name}_INCLUDE_DIR}/opentelemetry/exporters)
 
+# Match compile definitions used when building OpenTelemetry libraries to ensure ABI compatibility.
+# Without these, OtlpHttpMetricExporterOptions has a different struct layout (missing SSL/TLS fields),
+# causing stack smashing when the runtime library's constructor writes beyond the caller's stack allocation.
+add_definitions(
+    -DHAVE_ABSEIL
+    -DOPENTELEMETRY_STL_VERSION=2023
+    -DOPENTELEMETRY_ABI_VERSION_NO=1
+    -DENABLE_ASYNC_EXPORT
+    -DENABLE_OTLP_HTTP_SSL_PREVIEW
+    -DENABLE_HTTP_SSL_PREVIEW
+    -DENABLE_OTLP_HTTP_SSL_TLS_PREVIEW
+    -DENABLE_HTTP_SSL_TLS_PREVIEW
+)
+
 link_directories(${${src_name}_LIB_DIR})
 
 message("opentelemetry.cmake finish")

@@ -53,6 +53,7 @@ const std::string YR_INSTANCE_MEMORY_USAGE("yr_instance_memory_usage");
 
 const std::string FILE_EXPORTER("fileExporter");
 const std::string PROMETHEUS_PUSH_EXPORTER("prometheusPushExporter");
+const std::string OPENTELEMETRY_EXPORTER("opentelemetryExporter");
 
 const uint32_t SIZE_MEGA_BYTES = 1024 * 1024;  // 1 MB
 const uint32_t INSTANCE_RUNNING_DURATION_COLLECT_INTERVAL = 15;  // unit:second

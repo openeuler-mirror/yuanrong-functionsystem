@@ -3,6 +3,13 @@
 #include "opentelemetry/exporters/otlp/otlp_http_metric_exporter.h"
 #include "opentelemetry/sdk/metrics/data/metric_data.h"
 #include "opentelemetry/sdk/metrics/export/metric_producer.h"
+#include "opentelemetry/sdk/resource/resource.h"
+#include "opentelemetry/sdk/instrumentationscope/instrumentation_scope.h"
+#include <opentelemetry/sdk/common/global_log_handler.h>
+#include <iostream>
+#include <fstream>
+#include <mutex>
+
 
 namespace observability {
 namespace exporters {
@@ -61,7 +68,7 @@ OpenTelemetryExporter::OpenTelemetryExporter(const std::string& config) {
     otlp_options.url = options_.endpoint;
     otlp_options.timeout = options_.timeout;
     otlp_options.http_headers = ToOtlpHeaders(options_.headers);
-
+    otlp_options.content_type = opentelemetry::exporter::otlp::HttpRequestContentType::kBinary;
     otlp_exporter_ = std::make_unique<opentelemetry::exporter::otlp::OtlpHttpMetricExporter>(otlp_options);
 }
 
@@ -72,7 +79,7 @@ OpenTelemetryExporter::OpenTelemetryExporter(const OpenTelemetryExporterOptions&
     otlp_options.url = options_.endpoint;
     otlp_options.timeout = options_.timeout;
     otlp_options.http_headers = ToOtlpHeaders(options_.headers);
-
+    otlp_options.content_type = opentelemetry::exporter::otlp::HttpRequestContentType::kBinary;
     otlp_exporter_ = std::make_unique<opentelemetry::exporter::otlp::OtlpHttpMetricExporter>(otlp_options);
 }
 
@@ -90,9 +97,15 @@ ExportResult OpenTelemetryExporter::Export(
         otel_metric.instrument_descriptor.type_ = static_cast<opentelemetry::sdk::metrics::InstrumentType>(
             metric.instrumentDescriptor.type);
 
-        // Set aggregation temporality
-        otel_metric.aggregation_temporality = static_cast<opentelemetry::sdk::metrics::AggregationTemporality>(
+        // Set aggregation temporality.
+        // Internal default is UNSPECIFIED (0); Prometheus exporter ignores UNSPECIFIED sums,
+        // so fall back to CUMULATIVE when the source does not specify.
+        auto src_temporality = static_cast<opentelemetry::sdk::metrics::AggregationTemporality>(
             metric.aggregationTemporality);
+        otel_metric.aggregation_temporality =
+            (src_temporality == opentelemetry::sdk::metrics::AggregationTemporality::kUnspecified)
+                ? opentelemetry::sdk::metrics::AggregationTemporality::kCumulative
+                : src_temporality;
 
         // Set collection timestamp
         otel_metric.end_ts = metric.collectionTs;
@@ -131,13 +144,30 @@ ExportResult OpenTelemetryExporter::Export(
     }
 
     // Wrap in ScopeMetrics and ResourceMetrics for the OTel exporter API
+
+    // Create an instrumentation scope identifying this metrics library.
+    // The unique_ptr must outlive the Export() call since scope_metrics.scope_
+    // holds a raw pointer into it.
+    auto scope = opentelemetry::sdk::instrumentationscope::InstrumentationScope::Create(
+        "yuanrong-functionsystem-metrics", "1.0.0");
+
     opentelemetry::sdk::metrics::ScopeMetrics scope_metrics;
     scope_metrics.metric_data_ = std::move(otel_data);
+    scope_metrics.scope_ = scope.get();
 
     std::vector<opentelemetry::sdk::metrics::ScopeMetrics> scope_metrics_vec;
     scope_metrics_vec.push_back(std::move(scope_metrics));
 
+    // Create a Resource with service attributes so the OTLP exporter sends
+    // non-empty resource attributes.  resource_ is a raw pointer so the
+    // Resource object must outlive the Export() call.
+    auto resource = opentelemetry::sdk::resource::Resource::Create(
+        opentelemetry::sdk::resource::ResourceAttributes{
+            {"service.name", "yuanrong-functionsystem"}
+        });
+
     opentelemetry::sdk::metrics::ResourceMetrics resource_metrics;
+    resource_metrics.resource_ = &resource;
     resource_metrics.scope_metric_data_ = std::move(scope_metrics_vec);
 
     // Export data using OpenTelemetry exporter
@@ -159,7 +189,7 @@ ExportResult OpenTelemetryExporter::Export(
 
 observability::sdk::metrics::AggregationTemporality OpenTelemetryExporter::GetAggregationTemporality(
     observability::sdk::metrics::InstrumentType /* instrumentType */) const noexcept {
-    return observability::sdk::metrics::AggregationTemporality::DELTA;
+    return observability::sdk::metrics::AggregationTemporality::CUMULATIVE;
 }
 
 bool OpenTelemetryExporter::ForceFlush(std::chrono::microseconds timeout) noexcept {

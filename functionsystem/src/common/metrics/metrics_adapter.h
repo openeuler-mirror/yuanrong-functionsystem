@@ -178,6 +178,8 @@ private:
 
     std::shared_ptr<observability::exporters::metrics::Exporter> InitHttpExporter(const std::string &httpExporterType,
         const std::string &backendName, const nlohmann::json &exporterValue, const SSLCertConfig &sslCertConfig);
+    std::shared_ptr<observability::exporters::metrics::Exporter> InitOtelExporter(
+        const std::string &backendName, const nlohmann::json &exporterValue);
     void InitAlarmGauge();
     void AlarmGaugeLabelsAddContextAttr(MetricsApi::MetricLabels &labels);
     void AlarmGaugeLabelsAddBaseAttr(const std::string &id, const std::string &name, const std::string &level,

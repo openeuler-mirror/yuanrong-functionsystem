@@ -73,6 +73,8 @@ static std::string GetLibraryPath(const std::string &exporterType)
             filePath = std::string(realLibPath) + "/libobservability-metrics-file-exporter.so";
         } else if (exporterType == PROMETHEUS_PUSH_EXPORTER) {
             filePath = std::string(realLibPath) + "/libobservability-prometheus-push-exporter.so";
+        } else if (exporterType == OPENTELEMETRY_EXPORTER) {
+            filePath = std::string(realLibPath) + "/libobservability-metrics-opentelemetry-exporter.so";
         }
         YRLOG_INFO("exporter {} get library path: {}", exporterType, filePath);
     }
@@ -204,6 +206,56 @@ std::shared_ptr<MetricsExporters::Exporter> MetricsAdapter::InitHttpExporter(con
     return MetricsPlugin::LoadExporterFromLibrary(GetLibraryPath(httpExporterType), initConfig, error);
 }
 
+std::shared_ptr<MetricsExporters::Exporter> MetricsAdapter::InitOtelExporter(
+    const std::string &backendName, const nlohmann::json &exporterValue)
+{
+    YRLOG_DEBUG("add exporter {} for backend {}", OPENTELEMETRY_EXPORTER, backendName);
+    if (exporterValue.find("enable") == exporterValue.end() || !exporterValue.at("enable").get<bool>()) {
+        YRLOG_DEBUG("metrics exporter {} for backend {} is not enabled", OPENTELEMETRY_EXPORTER, backendName);
+        return nullptr;
+    }
+    std::string initConfig;
+    if (exporterValue.find("initConfig") != exporterValue.end()) {
+        auto initConfigJson = exporterValue.at("initConfig");
+
+        // Set default endpoint if not provided
+        if (initConfigJson.find("endpoint") == initConfigJson.end()) {
+            initConfigJson["endpoint"] = "http://localhost:4318/v1/metrics";
+        }
+
+        // Set default protocol if not provided
+        if (initConfigJson.find("protocol") == initConfigJson.end()) {
+            initConfigJson["protocol"] = "http";
+        }
+
+        // Set default timeout if not provided
+        if (initConfigJson.find("timeout") == initConfigJson.end()) {
+            initConfigJson["timeout"] = 10000;  // 10 seconds
+        }
+
+        // Add service.name attribute as header for OTLP
+        if (initConfigJson.find("headers") == initConfigJson.end()) {
+            initConfigJson["headers"] = nlohmann::json::object();
+        }
+        initConfigJson["headers"]["service.name"] = metricsContext_.GetAttr("component_name");
+
+        try {
+            YRLOG_INFO("metrics opentelemetry exporter for backend {}, initConfig: {}",
+                       backendName, initConfigJson.dump());
+        } catch (std::exception &e) {
+            YRLOG_ERROR("dump initConfigJson failed, error: {}", e.what());
+        }
+
+        try {
+            initConfig = initConfigJson.dump();
+        } catch (std::exception &e) {
+            YRLOG_ERROR("dump initConfigJson failed, error: {}", e.what());
+        }
+    }
+    std::string error;
+    return MetricsPlugin::LoadExporterFromLibrary(GetLibraryPath(OPENTELEMETRY_EXPORTER), initConfig, error);
+}
+
 void MetricsAdapter::SetImmediatelyExporters(const std::shared_ptr<observability::sdk::metrics::MeterProvider> &mp,
                                              const std::string &backendName, const nlohmann::json &exporters,
                                              const std::function<std::string(std::string)> &getFileName,
@@ -225,6 +277,17 @@ void MetricsAdapter::SetImmediatelyExporters(const std::shared_ptr<observability
             mp->AddMetricProcessor(std::move(processor));
         } else if (key == PROMETHEUS_PUSH_EXPORTER) {
             auto &&exporter = InitHttpExporter(key, backendName, value, sslCertConfig);
+            if (exporter == nullptr) {
+                continue;
+            }
+            auto exportConfigs = BuildExportConfigs(value);
+            exportConfigs.exporterName = metricsContext_.GetAttr("component_name") + "_" + key;
+            exportConfigs.exportMode = MetricsSdk::ExportMode::IMMEDIATELY;
+            auto processor =
+                std::make_shared<MetricsSdk::ImmediatelyExportProcessor>(std::move(exporter), exportConfigs);
+            mp->AddMetricProcessor(std::move(processor));
+        } else if (key == OPENTELEMETRY_EXPORTER) {
+            auto &&exporter = InitOtelExporter(backendName, value);
             if (exporter == nullptr) {
                 continue;
             }
@@ -261,6 +324,17 @@ void MetricsAdapter::SetBatchExporters(const std::shared_ptr<observability::sdk:
             mp->AddMetricProcessor(std::move(processor));
         } else if (key == PROMETHEUS_PUSH_EXPORTER) {
             auto &&exporter = InitHttpExporter(key, backendName, value, sslCertConfig);
+            if (exporter == nullptr) {
+                YRLOG_ERROR("Failed to init exporter {}", key);
+                continue;
+            }
+            auto exportConfigs = BuildExportConfigs(value);
+            exportConfigs.exporterName = metricsContext_.GetAttr("component_name") + "_" + key;
+            exportConfigs.exportMode = MetricsSdk::ExportMode::BATCH;
+            auto processor = std::make_shared<MetricsSdk::BatchExportProcessor>(std::move(exporter), exportConfigs);
+            mp->AddMetricProcessor(std::move(processor));
+        } else if (key == OPENTELEMETRY_EXPORTER) {
+            auto &&exporter = InitOtelExporter(backendName, value);
             if (exporter == nullptr) {
                 YRLOG_ERROR("Failed to init exporter {}", key);
                 continue;
