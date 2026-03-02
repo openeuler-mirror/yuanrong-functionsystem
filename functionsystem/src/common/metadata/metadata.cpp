@@ -526,6 +526,9 @@ inline void GetRoofsMetaData(FunctionMeta &funcMeta, const nlohmann::json &h)
     if (rf.find("imageurl") != rf.end()) {
         funcMeta.rootfs.imageurl = rf.at("imageurl");
     }
+    if (rf.find("path") != rf.end()) {
+        funcMeta.rootfs.path = rf.at("path");
+    }
     if (rf.find("mountpoint") != rf.end()) {
         funcMeta.rootfs.mountpoint = rf.at("mountpoint");
     }

@@ -174,6 +174,7 @@ struct RootfsStorageInfo {
 enum class RootfsSrcType {
     S3 = 0,
     IMAGE = 1,
+    LOCAL = 2,
     INVALID = 255,
 };
 
@@ -182,6 +183,7 @@ inline RootfsSrcType StringToRootfsSrcType(const std::string &str)
     static std::unordered_map<std::string, RootfsSrcType> rootfsSrcTypeMap = {
         { "s3", RootfsSrcType::S3 },
         { "image", RootfsSrcType::IMAGE },
+        { "local", RootfsSrcType::LOCAL },
         { "invalid", RootfsSrcType::INVALID }
     };
     if (auto iter = rootfsSrcTypeMap.find(str); iter != rootfsSrcTypeMap.end()) {
@@ -195,12 +197,16 @@ struct RootfsSpecMeta {
     std::string runtime;
     // for rootfs source type
     RootfsSrcType type;
-    // for custom image url
-    std::string imageurl;
     // to define whether the rootfs is readonly
     bool readonly;
+
     // for s3 storage info
     RootfsStorageInfo storageInfo;
+    // for custom image url
+    std::string imageurl;
+    // for local path
+    std::string path;
+
     // for mount point
     std::string mountpoint;
 };
