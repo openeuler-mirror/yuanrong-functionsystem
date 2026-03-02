@@ -15,6 +15,7 @@ service RuntimeLauncher {
 enum RootfsSrcType {
   S3    = 0;
   IMAGE = 1;
+  LOCAL = 2;
 }
 
 message S3Config {
@@ -28,8 +29,11 @@ message S3Config {
 message RootfsConfig {
   bool          readonly = 1;
   RootfsSrcType type     = 2;
-  string        imageUrl = 3;
-  S3Config      s3Config = 4;
+  oneof source {
+    string   image_url = 3;
+    S3Config s3_config = 4;
+    string   path      = 5;
+  }
 }
 
 message Mount {
