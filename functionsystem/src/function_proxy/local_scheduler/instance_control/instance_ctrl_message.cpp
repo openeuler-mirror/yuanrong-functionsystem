@@ -132,15 +132,16 @@ void BuildRootfsConfig(
     container->mutable_rootfsconfig()->set_readonly(funcMeta.rootfs.readonly);
     container->mutable_rootfsconfig()->set_type(static_cast<runtime::v1::RootfsSrcType>(funcMeta.rootfs.type));
     if (funcMeta.rootfs.type == RootfsSrcType::S3) {
-        auto s3Config = container->mutable_rootfsconfig()->mutable_s3config();
+        auto s3Config = container->mutable_rootfsconfig()->mutable_s3_config();
         s3Config->set_endpoint(funcMeta.rootfs.storageInfo.endpoint);
         s3Config->set_bucket(funcMeta.rootfs.storageInfo.bucket);
         s3Config->set_object(funcMeta.rootfs.storageInfo.object);
         s3Config->set_accesskeyid(funcMeta.rootfs.storageInfo.accessKey);
         s3Config->set_accesskeysecret(funcMeta.rootfs.storageInfo.secretKey);
-        container->mutable_rootfsconfig()->set_imageurl(funcMeta.rootfs.imageurl);
     } else if (funcMeta.rootfs.type == RootfsSrcType::IMAGE) {
-        container->mutable_rootfsconfig()->set_imageurl(funcMeta.rootfs.imageurl);
+        container->mutable_rootfsconfig()->set_image_url(funcMeta.rootfs.imageurl);
+    } else if (funcMeta.rootfs.type == RootfsSrcType::LOCAL) {
+        container->mutable_rootfsconfig()->set_path(funcMeta.rootfs.path);
     }
 }
 

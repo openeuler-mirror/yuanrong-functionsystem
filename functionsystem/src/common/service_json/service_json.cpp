@@ -581,6 +581,9 @@ void ParseRootfsSpec(RootfsSpecMeta &rootfs, const nlohmann::json &h)
     if (rf.find("imageurl") != rf.end()) {
         rootfs.imageurl = rf.at("imageurl");
     }
+    if (rf.find("path") != rf.end()) {
+        rootfs.path = rf.at("path");
+    }
     if (rf.find("mountpoint") != rf.end()) {
         rootfs.mountpoint = rf.at("mountpoint");
     }
