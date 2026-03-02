@@ -90,6 +90,7 @@ struct LocalSchedStartParam {
     bool unRegisterWhileStop;
     std::string udsPath;
     std::string sessionGrpcPort;
+    std::string address;  // LiteBus address (ip:port format), used to extract IP for gRPC servers
 };
 
 class LocalSchedDriver : public ModuleDriver {
