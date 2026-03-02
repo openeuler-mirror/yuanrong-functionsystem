@@ -26,6 +26,7 @@
 #include <memory>
 #include <random>
 #include <sstream>
+#include <thread>
 
 #include "async/async.hpp"
 #include "async/defer.hpp"
@@ -77,7 +78,11 @@ void ExecSessionActor::Init()
 void ExecSessionActor::Finalize()
 {
     YRLOG_INFO("ExecSessionActor::Finalize, sessionId: {}", sessionId_);
-    Cleanup();
+    // Only run Cleanup if Close() was never called. closed_.exchange(true) returns the old value,
+    // so if it was already true (Close was called), we skip to avoid double-cleanup.
+    if (!closed_.exchange(true)) {
+        Cleanup();
+    }
 }
 
 void ExecSessionActor::DoOutput(const std::string &data, int exitCode)
@@ -282,13 +287,14 @@ void ExecSessionActor::Cleanup()
 
     YRLOG_INFO("Cleanup session, sessionId: {}, outFd: {}, errFd: {}", sessionId_, outFd, errFd);
 
-    auto onAllUnregistered = [aid = GetAID(), this]() {
-        YRLOG_INFO("Calling DoCleanupAfterUnregister, sessionId: {}", sessionId_);
-        // Directly call instead of async dispatch to ensure it runs before actor destruction
-        DoCleanupAfterUnregister();
+    // Use shared_from_this() to keep the actor alive until the callback fires,
+    // even if litebus::Terminate+Await has already completed on the gRPC handler thread.
+    auto onAllUnregistered = [self = shared_from_this()]() {
+        YRLOG_INFO("Calling DoCleanupAfterUnregister, sessionId: {}", self->sessionId_);
+        self->DoCleanupAfterUnregister();
     };
     if (outFd >= 0) {
-        auto doNext = [aid = GetAID(), errFd, onAllUnregistered]() {
+        auto doNext = [errFd, onAllUnregistered]() {
             if (errFd >= 0) {
                 litebus::Async(IOEventActor::GetInstance(), &IOEventActor::DoUnregister, errFd, onAllUnregistered);
             } else {
@@ -306,24 +312,32 @@ void ExecSessionActor::Cleanup()
 
 void ExecSessionActor::DoCleanupAfterUnregister()
 {
-    stdoutFd_ = -1;  // Mark done so any queued Cleanup (from DoClose) skips unregister
-    stderrFd_ = -1;
+    // Guard against double invocation: once from the IOEventActor onUnregister callback and
+    // once from Cleanup()'s onAllUnregistered (or from a second Cleanup() call).
+    if (cleanupDone_.exchange(true)) {
+        YRLOG_INFO("DoCleanupAfterUnregister already done, skip, sessionId: {}", sessionId_);
+        return;
+    }
+
+    YRLOG_INFO("DoCleanupAfterUnregister: exec_={}, sessionId: {}",
+                (exec_ ? "valid" : "null"), sessionId_);
+
     if (ptyIO_) {
         ptyIO_->Close();
         ptyIO_.reset();
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-    YRLOG_INFO("DoCleanupAfterUnregister: exec_={}, sessionId: {}",
-                (exec_ ? "valid" : "null"), sessionId_);
-
     if (exec_) {
         int pid = exec_->GetPid();
         YRLOG_INFO("DoCleanupAfterUnregister: pid={}, sessionId: {}", pid, sessionId_);
         if (pid > 0) {
-            YRLOG_INFO("Killing exec process, pid: {}, sessionId: {}", pid, sessionId_);
-            kill(pid, SIGTERM);
+            YRLOG_INFO("Killing exec process (detached thread), pid: {}, sessionId: {}", pid, sessionId_);
+            // Offload the sleep+kill to a detached thread so we never block the calling thread
+            // (which may be the IOEventActor event-loop thread, shared by all sessions).
+            std::thread([pid]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                kill(pid, SIGTERM);
+            }).detach();
         }
     }
 }
