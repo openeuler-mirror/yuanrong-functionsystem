@@ -37,9 +37,11 @@
 #include "collector/system_proc_cpu_collector.h"
 #include "collector/system_proc_memory_collector.h"
 #include "collector/system_xpu_collector.h"
+#include "collector/numa_collector.h"
 #include "common/logs/logging.h"
 #include "common/proto/pb/message_pb.h"
 #include "common/proto/pb/posix/resource.pb.h"
+#include "common/resource_view/resource_tool.h"
 #include "common/utils/exec_utils.h"
 #include "manager/runtime_manager.h"
 
@@ -60,7 +62,8 @@ bool IsValidMonitorPath(const std::string &path)
 
 bool IsVectorMetric(MetricsType type)
 {
-    return type == metrics_type::GPU || type == metrics_type::NPU || type == metrics_type::DISK;
+    return type == metrics_type::GPU || type == metrics_type::NPU ||
+           type == metrics_type::DISK || type == metrics_type::NUMA;
 }
 
 
@@ -98,14 +101,23 @@ void MetricsActor::Finalize()
 void MetricsActor::AddSystemMetricsCollector(const Flags &flags)
 {
     YRLOG_INFO("create system resource collectors.");
+    AddCpuMemoryAndLabelCollectors(flags);
+    AddGpuNumaNpuCollectors(flags);
+    ResolveDiskResourceMetricsCollector(flags.GetDiskResources());
+    ResolveCustomResourceMetricsCollector(flags.GetCustomResources());
+    AddNodeMetricsCollectors();
+}
+
+void MetricsActor::AddCpuMemoryAndLabelCollectors(const Flags &flags)
+{
     std::shared_ptr<BaseMetricsCollector> systemCPUCollector;
     std::shared_ptr<BaseMetricsCollector> systemMemoryCollector;
-
     if (metricsConfig_.metricsCollectorType == "proc") {
         auto callback = [func = std::bind(&MetricsActor::GenAllMetricsWithoutSystem,
                                           this)]() -> std::vector<litebus::Future<Metrics>> { return func(); };
         systemCPUCollector = std::make_shared<SystemProcCPUCollector>(metricsConfig_.procMetricsCPU, callback);
-        systemMemoryCollector = std::make_shared<SystemProcMemoryCollector>(metricsConfig_.procMetricsMemory, callback);
+        systemMemoryCollector =
+            std::make_shared<SystemProcMemoryCollector>(metricsConfig_.procMetricsMemory, callback);
     } else if (metricsConfig_.metricsCollectorType == "node") {
         systemCPUCollector = std::make_shared<NodeCPUCollector>(procFSTools_, metricsConfig_.overheadCPU);
         systemMemoryCollector = std::make_shared<NodeMemoryCollector>(procFSTools_, metricsConfig_.overheadMemory);
@@ -114,41 +126,45 @@ void MetricsActor::AddSystemMetricsCollector(const Flags &flags)
         systemMemoryCollector = std::make_shared<SystemMemoryCollector>(procFSTools_);
     }
     auto resourceLabelCollector = std::make_shared<ResourceLabelsCollector>(flags.GetResourceLabelPath());
-
     filter_[systemCPUCollector->GenFilter()] = systemCPUCollector;
     filter_[systemMemoryCollector->GenFilter()] = systemMemoryCollector;
     filter_[resourceLabelCollector->GenFilter()] = resourceLabelCollector;
+}
 
+void MetricsActor::AddGpuNumaNpuCollectors(const Flags &flags)
+{
     if (flags.GetGpuCollectionEnable()) {
         auto params = std::make_shared<XPUCollectorParams>();
         params->ldLibraryPath = metricsConfig_.heteroLdLibraryPath;
         params->deviceInfoPath = flags.GetNpuDeviceInfoPath();
-        std::shared_ptr<BaseMetricsCollector> systemGpuCollector =
+        auto systemGpuCollector =
             std::make_shared<SystemXPUCollector>(nodeID, metrics_type::GPU, procFSTools_, params);
         filter_[systemGpuCollector->GenFilter()] = std::move(systemGpuCollector);
+    }
+    if (flags.GetNumaCollectionEnable()) {
+        auto numaCollector = std::make_shared<NUMACollector>(procFSTools_);
+        filter_[numaCollector->GenFilter()] = std::move(numaCollector);
     }
     if (NPU_COLLECT_SET.find(flags.GetNpuCollectionMode()) != NPU_COLLECT_SET.end()) {
         npuCollectorParams_ = std::make_shared<XPUCollectorParams>();
         npuCollectorParams_->ldLibraryPath = metricsConfig_.heteroLdLibraryPath;
         npuCollectorParams_->deviceInfoPath = flags.GetNpuDeviceInfoPath();
         npuCollectorParams_->collectMode = flags.GetNpuCollectionMode();
-        std::shared_ptr<BaseMetricsCollector> systemNpuCollector =
+        auto systemNpuCollector =
             std::make_shared<SystemXPUCollector>(nodeID, metrics_type::NPU, procFSTools_, npuCollectorParams_);
         filter_[systemNpuCollector->GenFilter()] = std::move(systemNpuCollector);
-
-        std::shared_ptr<BaseMetricsCollector> nodeNpuCollector =
+        auto nodeNpuCollector =
             std::make_shared<SystemXPUCollector>(nodeID, metrics_type::NPU, procFSTools_, npuCollectorParams_);
         metricsFilter_[nodeNpuCollector->GenFilter()] = nodeNpuCollector;
     }
-    ResolveDiskResourceMetricsCollector(flags.GetDiskResources());
-    ResolveCustomResourceMetricsCollector(flags.GetCustomResources());
+}
 
-    std::shared_ptr<BaseMetricsCollector> nodeCPUUtilizationCollector =
-        std::make_shared<NodeCPUUtilizationCollector>(procFSTools_);
-    std::shared_ptr<BaseMetricsCollector> nodeMemoryCollector =
+void MetricsActor::AddNodeMetricsCollectors()
+{
+    auto nodeCPUUtilizationCollector = std::make_shared<NodeCPUUtilizationCollector>(procFSTools_);
+    auto nodeMemoryCollector =
         std::make_shared<NodeMemoryCollector>(procFSTools_, metricsConfig_.overheadMemory);
-    std::shared_ptr<BaseMetricsCollector> nodeDiskCollector = std::make_shared<NodeDiskCollector>(procFSTools_);
-
+    auto nodeDiskCollector = std::make_shared<NodeDiskCollector>(procFSTools_);
     metricsFilter_[nodeCPUUtilizationCollector->GenFilter()] = nodeCPUUtilizationCollector;
     metricsFilter_[nodeMemoryCollector->GenFilter()] = nodeMemoryCollector;
     metricsFilter_[nodeDiskCollector->GenFilter()] = nodeDiskCollector;
@@ -422,10 +438,10 @@ resources::ResourceUnit MetricsActor::BuildResourceUnitWithInstance(
         instanceInfo.set_instanceid(metrics.instanceID.Get());
 
         auto resourceValueType = resources::Value_Type_SCALAR;
-        // GPU/NPU's type is SET, if device ID is empty, then ignore information of GPU/NPU
+        // GPU/NPU/DISK/NUMA's type is VECTORS, if devClusterMetrics is empty, then ignore information
         if (IsVectorMetric(metrics.metricsType)) {
             if (metrics.devClusterMetrics.IsNone()) {
-                // Failed to collect XPU information. Invalid metrics.
+                // Failed to collect XPU/DISK/NUMA information. Invalid metrics.
                 continue;
             }
             resourceValueType = resources::Value_Type_VECTORS;
@@ -460,10 +476,11 @@ resources::ResourceUnit MetricsActor::BuildResourceUnitWithSystem(
         }
 
         auto resourceValueType = resources::Value_Type_SCALAR;
-        // GPU/NPU's type is SET, if device ID is empty, then ignore information of GPU/NPU
+        // GPU/NPU/DISK/NUMA's type is VECTORS, if devClusterMetrics is empty, then ignore information
         if (IsVectorMetric(metrics.metricsType)) {
+            // NUMA 也使用 devClusterMetrics 字段（与 XPU/DISK 保持一致）
             if (metrics.devClusterMetrics.IsNone()) {
-                // Failed to collect XPU information. Invalid metrics.
+                // Failed to collect XPU/DISK/NUMA information. Invalid metrics.
                 continue;
             }
             resourceValueType = resources::Value_Type_VECTORS;
@@ -514,8 +531,11 @@ void MetricsActor::BuildResource(Metrics &metrics, resources::Resource &resource
         BuildHeteroDevClusterResource(metrics, resource);
     } else if (metrics.metricsType == metrics_type::DISK) {
         BuildDiskDevClusterResource(metrics, resource);
+    } else if (metrics.metricsType == metrics_type::NUMA) {
+        BuildNUMAResource(metrics, resource);
     }
 }
+
 
 std::vector<int> MetricsActor::GetCardIDs()
 {
@@ -551,6 +571,21 @@ void MetricsActor::BuildDiskDevClusterResource(Metrics &metrics, resources::Reso
         for (auto &extension : metrics.devClusterMetrics.Get().extensionInfo) {
             resource.add_extensions()->CopyFrom(extension);
         }
+    }
+}
+
+void MetricsActor::BuildNUMAResource(Metrics &metrics, resources::Resource &resource)
+{
+    if (metrics.devClusterMetrics.IsNone()) {
+        return;
+    }
+    
+    resource.set_name(metrics.metricsType);
+    
+    // 使用 devClusterMetrics 构建 VECTORS 类型的 Resource
+    // 使用 nodeID（ResourceUnit 的 nodeID）作为 UUID，与 XPU 保持一致
+    for (auto &pair : metrics.devClusterMetrics.Get().intsInfo) {
+        TransitionToVectors(pair.first, metrics, resource);
     }
 }
 

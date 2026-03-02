@@ -280,7 +280,7 @@ private:
                                    { PYTHON311_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgsForPrestart } };
 
     void HookRuntimeCredentialByID(std::vector<std::function<void()>> &initHook, int userID, int groupID) const;
-    [[nodiscard]] std::vector<std::function<void()>> BuildInitHook(
+    [[nodiscard]]     std::vector<std::function<void()>> BuildInitHook(
         const std::shared_ptr<messages::StartInstanceRequest> &request) const;
 
     [[nodiscard]] std::vector<std::function<void()>> BuildInitHookForPrestart() const;

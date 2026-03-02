@@ -53,7 +53,7 @@ add_library(utils STATIC "")
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/utils FS_UTILS_SRCS)
 add_dependencies(utils status)
 target_sources(utils PRIVATE ${FS_UTILS_SRCS})
-target_link_libraries(utils PUBLIC status ${crypto_LIB} ${ssl_LIB} cap)
+target_link_libraries(utils PUBLIC status ${crypto_LIB} ${ssl_LIB} cap numa)
 
 add_library(scheduler STATIC "")
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/scheduler SCHEDULER_SRCS)
@@ -88,11 +88,14 @@ add_subdirectory(schedule_plugin/filter/label_affinity_filter)
 add_subdirectory(schedule_plugin/scorer/label_affinity_scorer)
 add_subdirectory(schedule_plugin/filter/disk_filter)
 add_subdirectory(schedule_plugin/scorer/disk_scorer)
+add_subdirectory(schedule_plugin/filter/numa_affinity_filter)
+add_subdirectory(schedule_plugin/scorer/numa_affinity_scorer)
 
 set(PLUGIN
         -Wl,--whole-archive
         default_prefilter default_filter resource_selector_filter default_scorer default_heterogeneous_filter
         default_heterogeneous_scorer label_affinity_filter label_affinity_scorer disk_filter disk_scorer
+        numa_affinity_filter numa_affinity_scorer
         -Wl,--no-whole-archive)
 
 set_property(GLOBAL PROPERTY PLUGIN_LIB "${PLUGIN}")

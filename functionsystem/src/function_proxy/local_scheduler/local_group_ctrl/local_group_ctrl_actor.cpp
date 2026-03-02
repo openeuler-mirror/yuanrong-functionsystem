@@ -13,7 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+ 
 #include "local_group_ctrl_actor.h"
+
+#include <map>
 #include "async/collect.hpp"
 #include "async/defer.hpp"
 #include "common/constants/metastore_keys.h"
@@ -21,6 +24,7 @@
 #include "common/utils/collect_status.h"
 #include "common/utils/struct_transfer.h"
 #include "function_proxy/local_scheduler/local_scheduler_service/local_sched_srv.h"
+
 namespace functionsystem::local_scheduler {
 const int32_t MAX_GROUP_INSTANCE_SIZE = 256;
 const int32_t MAX_RESERVE_TIMEOUT_MS = 120000;
@@ -342,6 +346,22 @@ Status TransGroupRequest(const std::string &from, std::string &nodeID, std::shar
             auto ctx = (*scheduleReq->mutable_contexts())[LABEL_AFFINITY_PLUGIN].mutable_affinityctx();
             auto preOptimal = ctx->maxscore();
             ctx->set_maxscore(preOptimal + score);
+        }
+
+        // 设置组调度的 BindOptions 到 extension 中，供 NUMA 亲和性插件使用
+        if (groupInfo->groupopts().has_bind()) {
+            const auto& bind = groupInfo->groupopts().bind();
+            (*instanceInfo->mutable_scheduleoption()->mutable_extension())["bind_resource"] = bind.resource();
+            
+            static const std::map<common::BindStrategy, std::string> bindStrategyMap = {
+                {common::BindStrategy::BIND_None, "BIND_None"},
+                {common::BindStrategy::BIND_Pack, "BIND_Pack"},
+                {common::BindStrategy::BIND_Spread, "BIND_Spread"}
+            };
+            
+            auto it = bindStrategyMap.find(bind.policy());
+            std::string strategyStr = (it != bindStrategyMap.end()) ? it->second : "BIND_None";
+            (*instanceInfo->mutable_scheduleoption()->mutable_extension())["bind_strategy"] = strategyStr;
         }
 
         instanceInfo->set_groupid(groupInfo->groupid());

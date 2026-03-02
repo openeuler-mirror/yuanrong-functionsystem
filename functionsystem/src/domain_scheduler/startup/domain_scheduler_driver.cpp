@@ -35,6 +35,7 @@ std::unordered_map<std::string, std::unordered_set<std::string>> PLUGINS_MAP = {
     { "Heterogeneous", { DEFAULT_HETEROGENEOUS_FILTER_NAME, DEFAULT_HETEROGENEOUS_SCORER_NAME } },
     { "ResourceSelector", { RESOURCE_SELECTOR_FILTER_NAME } },
     { "Disk", { DISK_FILTER_NAME, DISK_SCORER_NAME }},
+    { "NUMA", { NUMA_AFFINITY_FILTER_NAME, NUMA_AFFINITY_SCORER_NAME }},
 };
 
 std::unordered_map<std::string, std::unordered_set<std::string>> ROOT_STRICT_LABEL_PLUGINS_MAP = {

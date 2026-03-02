@@ -377,6 +377,7 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     --user_log_export_mode="${USER_LOG_EXPORT_MODE}" \
     --npu_collection_mode="${NPU_COLLECTION_MODE}" \
     --gpu_collection_enable="${GPU_COLLECTION_ENABLE}" \
+    --numa_collection_enable="${NUMA_COLLECTION_ENABLE}" \
     --proxy_grpc_server_port="${FUNCTION_PROXY_GRPC_PORT}" \
     --setCmdCred=false \
     --python_dependency_path="${PYTHONPATH}:${RUNTIME_HOME_DIR}/service/python" \

@@ -154,6 +154,7 @@ Flags::Flags()
             DEFAULT_VIRTUAL_ENV_IDLE_TIME_LIMIT, NumCheck(-1, INT_MAX));
     AddFlag(&Flags::npuCollectionMode_, "npu_collection_mode", "npu collect mode", "all");
     AddFlag(&Flags::gpuCollectionEnable_, "gpu_collection_enable", "enable gpu collection", false);
+    AddFlag(&Flags::numaCollectionEnable_, "numa_collection_enable", "enable numa collection", false);
     AddFlag(&Flags::isProtoMsgToRuntime_, "is_protomsg_to_runtime", "", false);
     AddFlag(&Flags::massifEnable_, "massif_enable", "valgrind massif enable", false);
     AddFlag(&Flags::inheritEnv_, "enable_inherit_env", "enable runtime to inherit env from runtime-manager", false);

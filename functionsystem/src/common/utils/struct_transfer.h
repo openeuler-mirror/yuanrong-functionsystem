@@ -714,12 +714,33 @@ static int GetRuntimeRecoverTimes(const resources::InstanceInfo &instanceInfo)
                scheduleReq->instance().instanceid());
 }
 
+[[maybe_unused]] inline void UpdateNUMAInfoWithScheduleResult(
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+    const schedule_framework::VectorResourceAllocation &vectorAllocation)
+{
+    if (vectorAllocation.selectedIndices.empty()) {
+        YRLOG_WARN("{}|{} Empty NUMA node IDs", scheduleReq->requestid(), scheduleReq->instance().instanceid());
+        return;
+    }
+    std::string numaIDsStr;
+    for (size_t i = 0; i < vectorAllocation.selectedIndices.size(); ++i) {
+        if (i > 0) numaIDsStr += ",";
+        numaIDsStr += std::to_string(vectorAllocation.selectedIndices[i]);
+    }
+    // 写入 scheduleOption.extension，供 runtime_manager 的 StartInstanceRequest 读取
+    (*scheduleReq->mutable_instance()->mutable_scheduleoption()->mutable_extension())["NUMA_NODE_IDS"] = numaIDsStr;
+    YRLOG_INFO("{}|{}|NUMA node(s) [{}] will be allocated to instance: {}", scheduleReq->requestid(),
+               scheduleReq->instance().instanceid(), numaIDsStr, scheduleReq->instance().instanceid());
+}
+
 [[maybe_unused]] inline void UpdateVectorAllocInfoWithScheduleResult(
     const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result)
 {
     for (const auto &vectorAlloction : result.vectorAllocations) {
         if (vectorAlloction.type == resource_view::DISK_RESOURCE_NAME) {
             UpdateDiskInfoWithScheduleResult(scheduleReq, vectorAlloction);
+        } else if (vectorAlloction.type == resource_view::NUMA_RESOURCE_NAME) {
+            UpdateNUMAInfoWithScheduleResult(scheduleReq, vectorAlloction);
         }
         UpdateVectorResourceWithScheduleResult(scheduleReq, vectorAlloction);
     }

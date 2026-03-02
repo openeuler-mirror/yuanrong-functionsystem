@@ -80,6 +80,11 @@ message CreateResponse {
   string           instanceID = 3;
 }
 
+message BindOptions {
+  string resource = 1;
+  common.BindStrategy policy = 2;
+}
+
 message GroupOptions {
   // group schedule timeout (sec)
   int64         timeout               = 1;
@@ -89,6 +94,7 @@ message GroupOptions {
   // indicated which rgroup submit to
   string        rGroupName            = 4;
   common.GroupPolicy   groupPolicy    = 5;
+  BindOptions bind = 6;
 }
 
 // gang scheduling
