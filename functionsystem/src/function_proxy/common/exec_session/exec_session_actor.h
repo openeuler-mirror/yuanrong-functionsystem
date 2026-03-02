@@ -24,6 +24,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace functionsystem {
@@ -104,6 +105,7 @@ private:
 
     std::atomic<bool> running_{ false };
     std::atomic<bool> closed_{ false };
+    std::atomic<bool> cleanupDone_{ false };
 };
 
 }  // namespace functionsystem
