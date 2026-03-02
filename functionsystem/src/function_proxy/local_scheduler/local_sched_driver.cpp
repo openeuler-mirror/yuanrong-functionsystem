@@ -29,6 +29,31 @@ namespace functionsystem::local_scheduler {
 
 const std::string LOCAL_SCHEDULER = "local-scheduler";
 
+namespace {
+/**
+ * Extract IP address from a full address string (ip:port format).
+ * This is used to get the IP from LiteBus address for gRPC servers.
+ *
+ * @param address Full address in "ip:port" format
+ * @return Extracted IP address, or original address if no colon found
+ */
+std::string ExtractIPFromAddress(const std::string& address)
+{
+    size_t colonPos = address.find_last_of(':');
+    if (colonPos != std::string::npos && colonPos > 0) {
+        // Handle IPv6 addresses like [::1]:port
+        if (address[0] == '[') {
+            size_t closeBracketPos = address.find(']', 1);
+            if (closeBracketPos != std::string::npos && closeBracketPos < colonPos) {
+                return address.substr(1, closeBracketPos - 1);
+            }
+        }
+        return address.substr(0, colonPos);
+    }
+    return address;  // fallback: return as-is
+}
+}  // namespace
+
 void LocalSchedDriver::SetRuntimeConfig(InstanceCtrlConfig &config)
 {
     ASSERT_IF_NULL(param_.dsAuthConfig);
@@ -97,10 +122,12 @@ Status LocalSchedDriver::Create()
     config.udsPath = param_.udsPath;
     // Set proxy gRPC address (ip:port format)
     // Use session port when session server is enabled, otherwise use posix port
+    // Extract IP from LiteBus address to ensure external connectivity
+    std::string externalIP = ExtractIPFromAddress(param_.address);
     if (param_.sessionGrpcPort != "0") {
-        config.proxyGrpcAddress = param_.ip + ":" + param_.sessionGrpcPort;
+        config.proxyGrpcAddress = externalIP + ":" + param_.sessionGrpcPort;
     } else {
-        config.proxyGrpcAddress = param_.ip + ":" + param_.grpcListenPort;
+        config.proxyGrpcAddress = externalIP + ":" + param_.grpcListenPort;
     }
     instanceCtrl_ = InstanceCtrl::Create(param_.nodeID, config);
     PosixAPIHandler::BindInstanceCtrl(instanceCtrl_);
@@ -366,8 +393,10 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
     // Register ExecStreamService based on session server configuration
     if (param_.sessionGrpcPort != "0") {
         // Create independent session gRPC server for ExecStreamService
+        // Use same IP as LiteBus for external connectivity
         functionsystem::grpc::CommonGrpcServerConfig sessionConfig;
-        sessionConfig.ip = param_.ip;
+        sessionConfig.ip =
+            ExtractIPFromAddress(param_.address);  // Extract IP from LiteBus address to ensure external connectivity
         sessionConfig.listenPort = param_.sessionGrpcPort;
         sessionConfig.creds = ::grpc::InsecureServerCredentials();
         if (param_.enableSSL) {

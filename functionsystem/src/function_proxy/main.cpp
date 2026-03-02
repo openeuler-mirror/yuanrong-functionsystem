@@ -437,7 +437,8 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .runtimeInstanceDebugEnable = flags.IsRuntimeInstanceDebugEnable(),
         .unRegisterWhileStop = flags.UnRegisterWhileStop(),
         .udsPath = flags.GetDPosixUdsPath(),
-        .sessionGrpcPort = flags.GetSessionGrpcPort()
+        .sessionGrpcPort = flags.GetSessionGrpcPort(),
+        .address = flags.GetAddress()  // LiteBus address for extracting IP used by gRPC servers
     };
 }
 
