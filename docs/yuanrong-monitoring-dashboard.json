@@ -310,12 +310,12 @@
       },
       "targets": [
         {
-          "expr": "yr_cluster_cpu_capacity{akernel_env=~\"$akernel_env\"} / 1000",
+          "expr": "yr_cluster_cpu_capacity_vmillicore{akernel_env=~\"$akernel_env\"} / 1000",
           "refId": "A",
           "legendFormat": "cluster capacity"
         },
         {
-          "expr": "yr_cluster_cpu_allocatable{akernel_env=~\"$akernel_env\"} / 1000",
+          "expr": "yr_cluster_cpu_allocatable_vmillicore{akernel_env=~\"$akernel_env\"} / 1000",
           "refId": "B",
           "legendFormat": "cluster allocatable"
         }
@@ -426,12 +426,12 @@
       },
       "targets": [
         {
-          "expr": "yr_cluster_memory_capacity{akernel_env=~\"$akernel_env\"}",
+          "expr": "yr_cluster_memory_capacity_mb{akernel_env=~\"$akernel_env\"}",
           "refId": "A",
           "legendFormat": "cluster capacity"
         },
         {
-          "expr": "yr_cluster_memory_allocatable{akernel_env=~\"$akernel_env\"}",
+          "expr": "yr_cluster_memory_allocatable_mb{akernel_env=~\"$akernel_env\"}",
           "refId": "B",
           "legendFormat": "cluster allocatable"
         }
@@ -511,12 +511,12 @@
       },
       "targets": [
         {
-          "expr": "yr_nodes_cpu_capacity{akernel_env=~\"$akernel_env\"} / 1000",
+          "expr": "yr_nodes_cpu_capacity_vmillicore{akernel_env=~\"$akernel_env\"} / 1000",
           "refId": "A",
           "legendFormat": "{{node_id}} capacity"
         },
         {
-          "expr": "yr_nodes_cpu_allocatable{akernel_env=~\"$akernel_env\"} / 1000",
+          "expr": "yr_nodes_cpu_allocatable_vmillicore{akernel_env=~\"$akernel_env\"} / 1000",
           "refId": "B",
           "legendFormat": "{{node_id}} allocatable"
         }
@@ -596,12 +596,12 @@
       },
       "targets": [
         {
-          "expr": "yr_nodes_memory_capacity{akernel_env=~\"$akernel_env\"}",
+          "expr": "yr_nodes_memory_capacity_mb{akernel_env=~\"$akernel_env\"}",
           "refId": "A",
           "legendFormat": "{{node_id}} capacity"
         },
         {
-          "expr": "yr_nodes_memory_allocatable{akernel_env=~\"$akernel_env\"}",
+          "expr": "yr_nodes_memory_allocatable_mb{akernel_env=~\"$akernel_env\"}",
           "refId": "B",
           "legendFormat": "{{node_id}} allocatable"
         }
@@ -661,7 +661,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "yr_cluster_instance_total{akernel_env=~\"$akernel_env\"}",
+          "expr": "yr_cluster_instance_total_count{akernel_env=~\"$akernel_env\"}",
           "refId": "A",
           "legendFormat": "Total Running Instances"
         }
@@ -741,7 +741,7 @@
       },
       "targets": [
         {
-          "expr": "yr_cluster_instance_total{akernel_env=~\"$akernel_env\"}",
+          "expr": "yr_cluster_instance_total_count{akernel_env=~\"$akernel_env\"}",
           "refId": "A",
           "legendFormat": "集群总数"
         }
