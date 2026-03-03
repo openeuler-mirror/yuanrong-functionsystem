@@ -330,6 +330,8 @@ message DeployInstanceResponse {
   string cpuType = 8;
   int64  pid = 9;
   string containerID = 10;
+  // port forward mappings allocated by container executor, JSON: {"8888":"40001","443":"40002"}
+  string portMappings = 11;
 }
 
 message KillInstanceRequest {

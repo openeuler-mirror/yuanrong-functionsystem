@@ -55,6 +55,7 @@ type CreateConfig struct {
 
 	// 网络配置
 	Network string // 网络模式：host, bridge, none 等，默认 host
+	Ports   []string
 }
 
 // MountConfig 对应 proto Mount 消息。

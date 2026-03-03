@@ -78,6 +78,7 @@ message StartRequest {
   // network indicates the type of network the function use,
   // default is sandbox, support: sandbox, host, none
   string network = 8;
+  repeated string ports = 9;
 }
 
 message StartResponse {

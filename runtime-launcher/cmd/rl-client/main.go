@@ -22,6 +22,8 @@ func main() {
 	imageFlag := flag.String("image", "", "容器镜像（必填，用于 run/start）")
 	cmdFlag := flag.String("cmd", "", "容器内执行的命令（如 'echo hello'）")
 	mountFlag := flag.String("mount", "", "挂载，格式: 源路径:目标路径[:ro]，多个用逗号分隔")
+	networkFlag := flag.String("network", "bridge", "网络模式（如 bridge|host|none）")
+	portsFlag := flag.String("ports", "", "端口映射，格式: protocol:hostPort:containerPort，多个用逗号分隔")
 	idFlag := flag.String("id", "", "容器/运行时 ID（用于 wait/delete/unregister）")
 	timeoutFlag := flag.Int64("timeout", 5, "删除时的优雅超时秒数")
 	cpuFlag := flag.Float64("cpu", 500, "CPU 毫核")
@@ -48,9 +50,9 @@ func main() {
 	switch *action {
 	case "run":
 		// run = start + wait + delete（完整生命周期）
-		doRun(ctx, client, *imageFlag, *cmdFlag, *mountFlag, *envFlag, *cpuFlag, *memFlag, *timeoutFlag)
+		doRun(ctx, client, *imageFlag, *cmdFlag, *mountFlag, *envFlag, *networkFlag, *portsFlag, *cpuFlag, *memFlag, *timeoutFlag)
 	case "start":
-		doStart(ctx, client, *imageFlag, *cmdFlag, *mountFlag, *envFlag, *cpuFlag, *memFlag)
+		doStart(ctx, client, *imageFlag, *cmdFlag, *mountFlag, *envFlag, *networkFlag, *portsFlag, *cpuFlag, *memFlag)
 	case "wait":
 		doWait(ctx, client, *idFlag)
 	case "delete":
@@ -68,13 +70,13 @@ func main() {
 }
 
 // doRun 执行完整的容器生命周期：start -> wait -> delete
-func doRun(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd, mounts, envs string, cpu, mem float64, timeout int64) {
+func doRun(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd, mounts, envs, network, ports string, cpu, mem float64, timeout int64) {
 	if image == "" {
 		log.Fatal("--image 参数必填")
 	}
 
 	// 1. Start
-	containerID := mustStart(ctx, client, image, cmd, mounts, envs, cpu, mem)
+	containerID := mustStart(ctx, client, image, cmd, mounts, envs, network, ports, cpu, mem)
 
 	// 2. Wait
 	fmt.Println("\n--- 等待容器退出 ---")
@@ -100,14 +102,14 @@ func doRun(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd, mou
 	}
 }
 
-func doStart(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd, mounts, envs string, cpu, mem float64) {
+func doStart(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd, mounts, envs, network, ports string, cpu, mem float64) {
 	if image == "" {
 		log.Fatal("--image 参数必填")
 	}
-	mustStart(ctx, client, image, cmd, mounts, envs, cpu, mem)
+	mustStart(ctx, client, image, cmd, mounts, envs, network, ports, cpu, mem)
 }
 
-func mustStart(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd, mounts, envs string, cpu, mem float64) string {
+func mustStart(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd, mounts, envs, network, ports string, cpu, mem float64) string {
 	runtimeID := fmt.Sprintf("test-%d", time.Now().UnixNano()%1000000)
 
 	// 构建命令
@@ -147,6 +149,17 @@ func mustStart(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd,
 		}
 	}
 
+	// 构建端口映射
+	var portMappings []string
+	if ports != "" {
+		for _, p := range strings.Split(ports, ",") {
+			port := strings.TrimSpace(p)
+			if port != "" {
+				portMappings = append(portMappings, port)
+			}
+		}
+	}
+
 	req := &pb.StartRequest{
 		FuncRuntime: &pb.FunctionRuntime{
 			Id:      runtimeID,
@@ -162,6 +175,8 @@ func mustStart(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd,
 			"Memory": mem,
 		},
 		UserEnvs: userEnvs,
+		Network:  network,
+		Ports:    portMappings,
 	}
 
 	fmt.Println("--- 启动容器 ---")
@@ -169,6 +184,7 @@ func mustStart(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd,
 	fmt.Printf("  命令:    %s\n", cmd)
 	fmt.Printf("  CPU:     %.0f millicore\n", cpu)
 	fmt.Printf("  内存:    %.0f MB\n", mem)
+	fmt.Printf("  网络:    %s\n", network)
 	if len(mountList) > 0 {
 		fmt.Printf("  挂载:\n")
 		for _, m := range mountList {
@@ -179,6 +195,12 @@ func mustStart(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd,
 		fmt.Printf("  环境变量:\n")
 		for k, v := range userEnvs {
 			fmt.Printf("    %s=%s\n", k, v)
+		}
+	}
+	if len(portMappings) > 0 {
+		fmt.Printf("  端口映射:\n")
+		for _, p := range portMappings {
+			fmt.Printf("    %s\n", p)
 		}
 	}
 	fmt.Println()

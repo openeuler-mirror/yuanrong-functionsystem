@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 )
 
 // DockerRuntime 使用 Docker Engine SDK 实现 ContainerRuntime 接口。
@@ -102,6 +104,20 @@ func (d *DockerRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, 
 		NetworkMode: networkMode,
 	}
 
+	if len(cfg.Ports) > 0 {
+		exposedPorts, portBindings, err := parsePortMappings(cfg.Ports)
+		if err != nil {
+			return "", err
+		}
+
+		if networkMode == "host" {
+			log.Printf("[docker] network=host 时忽略端口映射: %v", cfg.Ports)
+		} else {
+			containerCfg.ExposedPorts = exposedPorts
+			hostCfg.PortBindings = portBindings
+		}
+	}
+
 	// 创建容器
 	containerName := fmt.Sprintf("rl-%s-%d", cfg.ID, time.Now().UnixNano()%100000)
 	resp, err := d.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, containerName)
@@ -118,6 +134,50 @@ func (d *DockerRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, 
 
 	log.Printf("[docker] 容器已启动: id=%s, image=%s, network=%s", resp.ID[:12], imageName, networkMode)
 	return resp.ID, nil
+}
+
+func parsePortMappings(mappings []string) (nat.PortSet, nat.PortMap, error) {
+	exposedPorts := nat.PortSet{}
+	portBindings := nat.PortMap{}
+
+	for _, raw := range mappings {
+		parts := strings.Split(raw, ":")
+		if len(parts) != 3 {
+			return nil, nil, fmt.Errorf("无效端口映射 %q，期望格式 protocol:hostPort:containerPort", raw)
+		}
+
+		protocol := strings.ToLower(strings.TrimSpace(parts[0]))
+		hostPort := strings.TrimSpace(parts[1])
+		containerPort := strings.TrimSpace(parts[2])
+
+		if protocol != "tcp" && protocol != "udp" && protocol != "sctp" {
+			return nil, nil, fmt.Errorf("无效端口映射 %q，protocol 仅支持 tcp/udp/sctp", raw)
+		}
+
+		if err := validatePort(hostPort); err != nil {
+			return nil, nil, fmt.Errorf("无效端口映射 %q，hostPort %v", raw, err)
+		}
+		if err := validatePort(containerPort); err != nil {
+			return nil, nil, fmt.Errorf("无效端口映射 %q，containerPort %v", raw, err)
+		}
+
+		portKey := nat.Port(fmt.Sprintf("%s/%s", containerPort, protocol))
+		exposedPorts[portKey] = struct{}{}
+		portBindings[portKey] = append(portBindings[portKey], nat.PortBinding{HostPort: hostPort})
+	}
+
+	return exposedPorts, portBindings, nil
+}
+
+func validatePort(port string) error {
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		return fmt.Errorf("不是合法整数端口: %s", port)
+	}
+	if p < 1 || p > 65535 {
+		return fmt.Errorf("超出范围(1-65535): %d", p)
+	}
+	return nil
 }
 
 func (d *DockerRuntime) Wait(ctx context.Context, containerID string) (*ContainerStatus, error) {

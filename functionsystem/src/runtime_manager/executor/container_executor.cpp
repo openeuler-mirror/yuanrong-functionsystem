@@ -237,6 +237,13 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnStartRunti
     if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
         YRLOG_ERROR("{}|{}|failed to start container, code({}) message({})", info.traceid(), info.requestid(),
                     response.code(), response.message());
+        // Release any port-forward ports allocated in StartByRuntimeID before the container start failed
+        const auto &runtimeID = info.runtimeid();
+        auto portMappingsIter = runtime2portMappings_.find(runtimeID);
+        if (portMappingsIter != runtime2portMappings_.end()) {
+            PortManager::GetInstance().ReleasePorts(runtimeID);
+            runtime2portMappings_.erase(portMappingsIter);
+        }
         return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_CREATE_EXEC_FAILED, response.message());
     }
     auto containerID = response.id();
@@ -653,6 +660,42 @@ std::string BuildBootstrapWorkingRoot(
     return mountDst;
 }
 
+std::vector<ContainerExecutor::PortForwardConfig> ContainerExecutor::ParseForwardPorts(const std::string &networkJson)
+{
+    std::vector<PortForwardConfig> configs;
+    if (networkJson.empty()) {
+        return configs;
+    }
+    try {
+        auto j = json::parse(networkJson);
+        if (!j.contains("portForwardings") || !j["portForwardings"].is_array()) {
+            return configs;
+        }
+        for (const auto &item : j["portForwardings"]) {
+            if (!item.is_object() || !item.contains("port") || !item["port"].is_number_integer()) {
+                continue;
+            }
+            int p = item["port"].get<int>();
+            if (p > 0 && p <= 65535) {
+                PortForwardConfig config;
+                config.containerPort = static_cast<uint32_t>(p);
+                // Protocol is stored as lowercase (tcp/udp)
+                if (item.contains("protocol") && item["protocol"].is_string()) {
+                    std::string proto = item["protocol"].get<std::string>();
+                    std::transform(proto.begin(), proto.end(), proto.begin(), ::tolower);
+                    config.protocol = proto;
+                } else {
+                    config.protocol = "tcp";  // Default to TCP
+                }
+                configs.push_back(config);
+            }
+        }
+    } catch (const std::exception &e) {
+        YRLOG_WARN("ParseForwardPorts: failed to parse network json: {}, error: {}", networkJson, e.what());
+    }
+    return configs;
+}
+
 litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
     const std::shared_ptr<messages::StartInstanceRequest> &request,
     const std::map<std::string, std::string> startRuntimeParams, const std::vector<std::string> &buildArgs,
@@ -682,6 +725,37 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
     }
 
     SetRequestExtraConfigForStart(start.get(), request);
+    // Port forwarding: allocate host ports for requested container ports
+    const auto &deployOpts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
+    auto networkIter = deployOpts.find(CONTAINER_NETWORK);
+    if (networkIter != deployOpts.end() && !networkIter->second.empty()) {
+        const auto forwardConfigs = ParseForwardPorts(networkIter->second);
+        if (!forwardConfigs.empty()) {
+            auto hostPorts = PortManager::GetInstance().RequestPorts(runtimeID, static_cast<int>(forwardConfigs.size()));
+            if (hostPorts.size() == forwardConfigs.size()) {
+                // Format for runtime_launcher: "protocol:hostPort:containerPort" (e.g., "tcp:40001:8080")
+                for (size_t i = 0; i < forwardConfigs.size(); ++i) {
+                    std::string portMapping = forwardConfigs[i].protocol + ":" +
+                                             std::to_string(hostPorts[i]) + ":" +
+                                             std::to_string(forwardConfigs[i].containerPort);
+                    start->add_ports(portMapping);
+                }
+                // Format for response: "protocol:hostPort:containerPort" JSON array
+                json portJson = json::array();
+                for (size_t i = 0; i < forwardConfigs.size(); ++i) {
+                    portJson.push_back(forwardConfigs[i].protocol + ":" +
+                                       std::to_string(hostPorts[i]) + ":" +
+                                       std::to_string(forwardConfigs[i].containerPort));
+                }
+                runtime2portMappings_[runtimeID] = portJson.dump();
+                YRLOG_INFO("{}|port forward: allocated mappings for runtime({}): {}", runtimeID, runtimeID,
+                           runtime2portMappings_[runtimeID]);
+            } else {
+                YRLOG_WARN("{}|port forward: insufficient ports for runtime({}), requested {}", runtimeID, runtimeID,
+                           forwardConfigs.size());
+            }
+        }
+    }
      runtime::v1::Mount mount;
     auto workingRoot = BuildBootstrapWorkingRoot(request, mount);
     if (mount.source().length() > 0 && mount.target().length() > 0) {
@@ -923,6 +997,12 @@ litebus::Future<Status> ContainerExecutor::OnDeleteContainer(const std::string &
     functionsystem::metrics::MeterTitle title{ "yr_instance_stop_time", "stop timestamp", "num" };
     litebus::Async(GetAID(), &ContainerExecutor::ReportInfo, instanceID, runtimeID, containerID, title);
     (void)runtime2containerID_.erase(runtimeID);
+    // Release forwarded ports if any were allocated for this runtime
+    auto portMappingsIter = runtime2portMappings_.find(runtimeID);
+    if (portMappingsIter != runtime2portMappings_.end()) {
+        PortManager::GetInstance().ReleasePorts(runtimeID);
+        (void)runtime2portMappings_.erase(portMappingsIter);
+    }
     // if (oomKilled) {
     //     innerOomKilledruntimes_.insert(runtimeID);
     // }
@@ -971,6 +1051,12 @@ messages::StartInstanceResponse ContainerExecutor::GenSuccessStartInstanceRespon
                 request->runtimeinstanceinfo().runtimeid(), containerID);
     // set to be zero
     instanceResponse->set_pid(0);
+    // Set port forward mappings if allocated (JSON string e.g. {"8888":"40001","443":"40002"})
+    const auto &runtimeID = request->runtimeinstanceinfo().runtimeid();
+    auto portMappingsIter = runtime2portMappings_.find(runtimeID);
+    if (portMappingsIter != runtime2portMappings_.end()) {
+        instanceResponse->set_port(portMappingsIter->second);
+    }
     return response;
 }
 

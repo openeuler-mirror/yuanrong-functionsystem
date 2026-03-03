@@ -22,6 +22,7 @@
 #include <chrono>
 #include <memory>
 #include <shared_mutex>
+#include <vector>
 
 #include "async/defer.hpp"
 #include "common/metrics/metrics_adapter.h"
@@ -75,6 +76,23 @@ public:
     bool IsRuntimeActive(const std::string &runtimeID) override;
 
     litebus::Future<bool> StopAllContainers();
+
+    /**
+     * Port forward configuration parsed from network JSON.
+     */
+    struct PortForwardConfig {
+        uint32_t containerPort;  // Container port to forward
+        std::string protocol;    // "TCP" or "UDP"
+    };
+
+    /**
+     * Parse the list of port forward configs from a network JSON string.
+     * Expected format: {"portForwardings": [{"port": 8080, "protocol": "TCP"}, ...]}
+     *
+     * @param networkJson JSON string from deployOptions["network"].
+     * @return Parsed port forward configs, empty on error.
+     */
+    static std::vector<PortForwardConfig> ParseForwardPorts(const std::string &networkJson);
 
 protected:
     void Init() override;
@@ -238,6 +256,7 @@ private:
     std::map<std::string, messages::RuntimeInstanceInfo> runtimeInstanceInfoMap_;
     std::map<std::string, std::string> runtime2containerID_;
     std::unordered_map<std::string, std::string> runtime2checkpointID_;  // runtimeID -> checkpointID
+    std::unordered_map<std::string, std::string> runtime2portMappings_;  // runtimeID -> portMappings JSON
     std::unordered_set<std::string> innerOomKilledruntimes_;
     litebus::AID functionAgentAID_;
     std::shared_ptr<GrpcClient<runtime::v1::RuntimeLauncher>> containerd_ {nullptr};

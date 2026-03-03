@@ -76,6 +76,8 @@ message StartRequest {
   // network indicates the type of network the function use,
   // default is sandbox, support: sandbox, host, none
   string network = 8;
+  // port forward mappings, format: "protocol:hostPort:containerPort" (e.g., "tcp:40001:8080")
+  repeated string ports = 9;
 }
 
 message StartResponse {

@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <set>
+
 #include "gtest/gtest.h"
 #include "runtime_manager/port/port_manager.h"
 #include "utils/port_helper.h"
@@ -98,5 +100,61 @@ TEST_F(DISABLED_PortManagerTest, CheckPortInuse)
 
     isInuse = PortManager::GetInstance().CheckPortInUse(7777);
     EXPECT_EQ(isInuse, false);
+}
+
+TEST_F(DISABLED_PortManagerTest, RequestPorts_Success)
+{
+    std::string runtimeID = "test_runtime_ports";
+    auto ports = PortManager::GetInstance().RequestPorts(runtimeID, 3);
+    EXPECT_EQ(3u, ports.size());
+    // All ports should be distinct
+    std::set<int> portSet(ports.begin(), ports.end());
+    EXPECT_EQ(3u, portSet.size());
+    // All allocated ports should be discoverable via GetPort
+    EXPECT_NE("", PortManager::GetInstance().GetPort(runtimeID));
+}
+
+TEST_F(DISABLED_PortManagerTest, RequestPorts_ZeroCount)
+{
+    auto ports = PortManager::GetInstance().RequestPorts("test_runtime_zero", 0);
+    EXPECT_EQ(0u, ports.size());
+}
+
+TEST_F(DISABLED_PortManagerTest, RequestPorts_InsufficientPorts)
+{
+    // Request more ports than available (poolSize=1000)
+    auto ports = PortManager::GetInstance().RequestPorts("test_runtime_many", 2000);
+    // Should fail completely (rollback), return empty
+    EXPECT_EQ(0u, ports.size());
+    // No partial allocation should remain
+    EXPECT_EQ("", PortManager::GetInstance().GetPort("test_runtime_many"));
+}
+
+TEST_F(DISABLED_PortManagerTest, ReleasePorts_Success)
+{
+    std::string runtimeID = "test_runtime_release_all";
+    auto ports = PortManager::GetInstance().RequestPorts(runtimeID, 3);
+    EXPECT_EQ(3u, ports.size());
+    // Verify ports are allocated
+    EXPECT_NE("", PortManager::GetInstance().GetPort(runtimeID));
+
+    // Release all ports
+    PortManager::GetInstance().ReleasePorts(runtimeID);
+    // Verify all ports are freed
+    EXPECT_EQ("", PortManager::GetInstance().GetPort(runtimeID));
+}
+
+TEST_F(DISABLED_PortManagerTest, ReleasePorts_ReAlloc)
+{
+    std::string runtimeID = "test_runtime_realloc";
+    auto ports = PortManager::GetInstance().RequestPorts(runtimeID, 2);
+    EXPECT_EQ(2u, ports.size());
+
+    PortManager::GetInstance().ReleasePorts(runtimeID);
+    EXPECT_EQ("", PortManager::GetInstance().GetPort(runtimeID));
+
+    // Should be able to re-allocate after release
+    auto ports2 = PortManager::GetInstance().RequestPorts(runtimeID, 2);
+    EXPECT_EQ(2u, ports2.size());
 }
 }

@@ -89,6 +89,9 @@ rl-client --image alpine:latest --cmd "env" --env "FOO=bar,APP=test"
 # 自定义资源限制
 rl-client --image alpine:latest --cmd "echo hi" --cpu 1000 --mem 256
 
+# 端口转发（bridge 网络）
+rl-client --image nginx:latest --cmd "sleep 60" --network bridge --ports "tcp:40081:80"
+
 # 多个挂载 + 环境变量
 rl-client --image python:3.11-slim --cmd "python /app/main.py" \
   --mount /home/code:/app,/tmp/data:/data:ro \
@@ -129,6 +132,8 @@ rl-client --action unregister --id my-runtime
 | `--image` | 空 | 容器镜像（`run`/`start`/`register` 必填） |
 | `--cmd` | 空 | 容器内执行的命令 |
 | `--mount` | 空 | 挂载，格式 `源:目标[:ro]`，多个用逗号分隔 |
+| `--network` | `bridge` | 容器网络模式（如 `bridge`/`host`/`none`） |
+| `--ports` | 空 | 端口映射，格式 `protocol:hostPort:containerPort`，多个用逗号分隔 |
 | `--env` | 空 | 环境变量，格式 `KEY=VAL`，多个用逗号分隔 |
 | `--id` | 空 | 容器/运行时 ID（`wait`/`delete`/`unregister` 必填） |
 | `--socket` | `/var/run/runtime-launcher.sock` | 服务端 UDS 路径 |
