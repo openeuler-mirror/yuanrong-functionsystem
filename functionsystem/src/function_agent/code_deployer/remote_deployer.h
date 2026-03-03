@@ -46,6 +46,7 @@ public:
     virtual Status PackageValidation(const std::string &destFile, const std::string &sha512Str,
                                      const std::string &sha256Str);
 
+    void UpdateCodePackageThresholds(const messages::CodePackageThresholds &codePackageThresholds);
 protected:
     virtual void CollectFunctionInfo(const std::string &destFile,
                                      const std::shared_ptr<messages::DeployRequest> &request);

@@ -51,9 +51,10 @@ FunctionAgentDriver::FunctionAgentDriver(const std::string &nodeID, const Functi
     auto localSchedFuncAgentMgrAID = litebus::AID(localSchedFuncAgentMgrName, startParam_.localSchedulerAddress);
 
     uint32_t receivedPingTimeoutMs = startParam_.heartbeatTimeoutMs;
-    function_agent::AgentServiceActor::Config config{ localSchedFuncAgentMgrAID,         startParam_.s3Config,
-                                                      startParam_.codePackageThresholds, receivedPingTimeoutMs,
-                                                      TENANT_PODIP_IPSET_NAME,           nodeID };
+    function_agent::AgentServiceActor::Config config{ localSchedFuncAgentMgrAID, startParam_.s3Config,
+                                                      startParam_.codePackageThresholds,
+                                                      startParam_.codePkgThresholdsCfgPath,
+                                                      receivedPingTimeoutMs, TENANT_PODIP_IPSET_NAME, nodeID };
     actor_ = std::make_shared<function_agent::AgentServiceActor>(FUNCTION_AGENT_AGENT_SERVICE_ACTOR_NAME, agentID,
                                                                  config, startParam_.alias, param.componentName);
     httpServer_ = std::make_shared<HttpServer>(FUNCTION_AGENT);
@@ -99,20 +100,36 @@ Status FunctionAgentDriver::Start()
     auto sharedDirDeployer = std::make_shared<function_agent::SharedDirDeployer>();
     (void)actor_->SetDeployers(SHARED_DIR_STORAGE_TYPE, sharedDirDeployer);
 
+    if (startParam_.enableHotThresholdsCfg) {
+        actor_->LoadCodePkgThresholdsCfg();
+        fileMonitor_ = std::make_shared<FileMonitor>();
+        if (!fileMonitor_->Start().Get()) {
+            YRLOG_ERROR("failed to start file monitor.");
+            return Status(StatusCode::FAILED, "failed to start file monitor.");
+        }
+        std::function<void(const std::string &, const std::string &, uint32_t)> thresholdsCallback =
+            [aid(actor_->GetAID())](const std::string &path, const std::string &name, uint32_t mask) {
+                litebus::Async(aid, &AgentServiceActor::CodePkgThresholdsCfgCallback, path, name, mask);
+        };
+        auto result = fileMonitor_->AddWatch(startParam_.codePkgThresholdsCfgPath, thresholdsCallback);
+        if (!result.Get()) {
+            YRLOG_ERROR("failed to watch code package threshold config path event.");
+            return Status(StatusCode::FAILED, "failed to watch code package threshold config path event.");
+        }
+    }
+
     if (!startParam_.pluginConfigs.empty()) {
         return actor_->LoadPlugins(startParam_.pluginConfigs)
             .OnComplete([this](const litebus::Future<Status> &fut) -> litebus::Future<Status> {
                 if (fut.IsError()) {
                     return Status(StatusCode::FAILED, "failed to load plugins");
                 }
-                auto status = fut.Get();
-                if (status.IsError()) {
+                if (auto status = fut.Get(); status.IsError()) {
                     YRLOG_ERROR("failed to load plugins, reason: {}", status.ToString());
                     return status;
                 }
                 return PostStartFunctionAgent();
-            })
-            .Get();
+            }).Get();
     }
     return PostStartFunctionAgent();
 }

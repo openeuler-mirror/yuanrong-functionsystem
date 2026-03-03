@@ -77,5 +77,38 @@ litebus::Option<std::string> DecryptDelegateData(const std::string &str, const s
 void ParseEnvInfoJson(const std::string &parsedJson, messages::RuntimeConfig &runtimeConf);
 
 void ParseMountConfig(messages::RuntimeConfig &runtimeConfig, const std::string &str);
+
+template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
+std::optional<T> GetBoundedJsonValue(const nlohmann::json &j, const std::string &key, T min, T max)
+{
+    if (!j.contains(key)) {
+        YRLOG_DEBUG("json field {} not exist.", key);
+        return std::nullopt;
+    }
+
+    T value;
+    try {
+        const auto &item = j.at(key);
+        if (item.is_number()) {
+            value = item.get<T>();
+        } else if (item.is_string()) {
+            auto valueStr = item.get<std::string>();
+            value = static_cast<T>(std::stoll(valueStr));
+        } else {
+            YRLOG_DEBUG("json field {} invalid type.", key);
+            return std::nullopt;
+        }
+    } catch (const std::exception &e) {
+        YRLOG_DEBUG("json field {} parse error: {}", key, e.what());
+        return std::nullopt;
+    }
+
+    if (value < min || value > max) {
+        YRLOG_DEBUG("json field {} value {} out of range: [{}, {}]", key, value, min, max);
+        return std::nullopt;
+    }
+
+    return value;
+}
 }  // namespace functionsystem::function_agent
 #endif  // FUNCTION_AGENT_COMMON_UTILS_H

@@ -24,10 +24,22 @@ const int32_t DEFAULT_RANDOM_PRECISE = 36;
 const int32_t NUMBER_LOWER_LETTERS = 26;
 const int32_t NUMBER_ARABIC_NUMERALS = 10;
 
-const int32_t FILE_COUNTS_MAX = 30000;
-const int32_t ZIP_FILE_SIZE_MAX_MB = 500;
-const int32_t UNZIP_FILE_SIZE_MAX_MB = 1000;
-const int32_t DIR_DEPTH_MAX = 20;
+constexpr int32_t MIN_FILE_COUNTS = 10;
+constexpr int32_t MAX_FILE_COUNTS = 30000;
+constexpr int32_t DEFAULT_FILE_LIMIT_COUNTS = 30000;
+
+constexpr int32_t MIN_FILE_SIZE_MB = 10;
+constexpr int32_t MAX_FILE_SIZE_MB = 1024 * 1024 * 10;
+constexpr int32_t DEFAULT_ZIP_FILE_LIMIT_SIZE_MB = 500;
+constexpr int32_t DEFAULT_UNZIP_FILE_LIMIT_SIZE_MB = 1000;
+
+constexpr int32_t MIN_DIR_DEPTH = 1;
+constexpr int32_t MAX_DIR_DEPTH = 50;
+constexpr int32_t DEFAULT_DIR_LIMIT_DEPTH = 20;
+
+constexpr uint64_t WAIT_UPDATE_THRESHOLDS_CONFIGMAP_MS = 1000;
+
+const std::string CODE_PKG_THRESHOLDS_CFG_FILE = "code-package-thresholds.json";
 
 const std::string LOCAL_STORAGE_TYPE = "local";
 const std::string S3_STORAGE_TYPE = "s3";

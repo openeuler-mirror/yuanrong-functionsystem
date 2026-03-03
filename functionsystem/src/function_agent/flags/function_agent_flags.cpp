@@ -20,11 +20,6 @@
 #include "function_agent/common/constants.h"
 
 namespace functionsystem::function_agent {
-const int32_t MIN_FILE_COUNTS = 10;
-const int32_t MIN_FILE_SIZE = 10;
-const int32_t MAX_FILE_SIZE = 1024 * 1024 * 10;
-const int32_t MIN_DIR_DEPTH = 1;
-const int32_t MAX_DIR_DEPTH = 50;
 const int32_t MAX_CODE_AGING_TIME = 3600;
 
 FunctionAgentFlags::FunctionAgentFlags()
@@ -40,15 +35,19 @@ FunctionAgentFlags::FunctionAgentFlags()
             "For agent actor server listening. example: 22799", true, FlagCheckWrraper(IsPortValid));
 
     AddFlag(&FunctionAgentFlags::fileCountMax, "file_count_max", "maximum number of files when download S3 object",
-            function_agent::FILE_COUNTS_MAX, NumCheck(MIN_FILE_COUNTS, FILE_COUNTS_MAX));
+            function_agent::DEFAULT_FILE_LIMIT_COUNTS, NumCheck(MIN_FILE_COUNTS, MAX_FILE_COUNTS));
     AddFlag(&FunctionAgentFlags::zipFileSizeMaxMB, "zip_file_size_max_MB",
-            "the file size threshold when download S3 object, unit: MB", function_agent::ZIP_FILE_SIZE_MAX_MB,
-            NumCheck(MIN_FILE_SIZE, MAX_FILE_SIZE));
+            "the file size threshold when download S3 object, unit: MB", function_agent::DEFAULT_ZIP_FILE_LIMIT_SIZE_MB,
+            NumCheck(MIN_FILE_SIZE_MB, MAX_FILE_SIZE_MB));
     AddFlag(&FunctionAgentFlags::unzipFileSizeMaxMB, "unzip_file_size_max_MB",
-            "the size threshold of unzipped files, unit: MB", function_agent::UNZIP_FILE_SIZE_MAX_MB,
-            NumCheck(MIN_FILE_SIZE, MAX_FILE_SIZE));
+            "the size threshold of unzipped files, unit: MB", function_agent::DEFAULT_UNZIP_FILE_LIMIT_SIZE_MB,
+            NumCheck(MIN_FILE_SIZE_MB, MAX_FILE_SIZE_MB));
     AddFlag(&FunctionAgentFlags::dirDepthMax, "dir_depth_max", "maximum directory depth of unzipped S3 object",
-            function_agent::DIR_DEPTH_MAX, NumCheck(MIN_DIR_DEPTH, MAX_DIR_DEPTH));
+            function_agent::DEFAULT_DIR_LIMIT_DEPTH, NumCheck(MIN_DIR_DEPTH, MAX_DIR_DEPTH));
+    AddFlag(&FunctionAgentFlags::enableHotThresholdsCfg_, "enable_hot_thresholds_config",
+            "enable code package thresholds hot reconfiguration", false);
+    AddFlag(&FunctionAgentFlags::codePkgThresholdCfgPath_, "code_package_thresholds_config_path",
+            "config path for code package thresholds hot reconfiguration", "/home/sn/download/config");
 
     AddFlag(&FunctionAgentFlags::credentialType, "credential_type", "S3's credential type", "",
             WhiteListCheck({ "", CREDENTIAL_TYPE_PERMANENT_CREDENTIALS, CREDENTIAL_TYPE_ROTATING_CREDENTIALS }));

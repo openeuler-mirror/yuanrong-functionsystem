@@ -115,9 +115,9 @@ TEST_F(NUMAAffinityScorerTest, ScoreWithNUMAAllocation) {
 
     EXPECT_EQ(score.score, 0);
     EXPECT_EQ(score.name, DEFAULT_NUMA_NODE_ID);
-    EXPECT_EQ(score.vectorAllocations.size(), 1);
+    EXPECT_EQ(score.vectorAllocations.size(), size_t{1});
     EXPECT_EQ(score.vectorAllocations[0].type, resource_view::NUMA_RESOURCE_NAME);
-    EXPECT_EQ(score.vectorAllocations[0].selectedIndices.size(), 1);
+    EXPECT_EQ(score.vectorAllocations[0].selectedIndices.size(), size_t{1});
     EXPECT_EQ(score.vectorAllocations[0].selectedIndices[0], 0);
 }
 
@@ -137,8 +137,8 @@ TEST_F(NUMAAffinityScorerTest, BIND_PackSelectsSingleNode) {
     auto preAllocated = std::make_shared<PreAllocatedContext>();
     auto score = scorer.Score(preAllocated, instance, unit);
 
-    EXPECT_EQ(score.vectorAllocations.size(), 1);
-    EXPECT_EQ(score.vectorAllocations[0].selectedIndices.size(), 2);
+    EXPECT_EQ(score.vectorAllocations.size(), size_t{1});
+    EXPECT_EQ(score.vectorAllocations[0].selectedIndices.size(), size_t{2});
 }
 
 // BIND_Spread: nodes spread when multiple needed
@@ -157,8 +157,8 @@ TEST_F(NUMAAffinityScorerTest, BIND_SpreadSelectsMultipleNodes) {
     auto preAllocated = std::make_shared<PreAllocatedContext>();
     auto score = scorer.Score(preAllocated, instance, unit);
 
-    EXPECT_EQ(score.vectorAllocations.size(), 1);
-    EXPECT_EQ(score.vectorAllocations[0].selectedIndices.size(), 2);
+    EXPECT_EQ(score.vectorAllocations.size(), size_t{1});
+    EXPECT_EQ(score.vectorAllocations[0].selectedIndices.size(), size_t{2});
     EXPECT_THAT(score.vectorAllocations[0].selectedIndices, UnorderedElementsAre(0, 1));
 }
 
@@ -186,8 +186,8 @@ TEST_F(NUMAAffinityScorerTest, PreAllocatedContext) {
 
     auto score = scorer.Score(preAllocated, instance, unit);
 
-    EXPECT_EQ(score.vectorAllocations.size(), 1);
-    EXPECT_EQ(score.vectorAllocations[0].selectedIndices.size(), 1);
+    EXPECT_EQ(score.vectorAllocations.size(), size_t{1});
+    EXPECT_EQ(score.vectorAllocations[0].selectedIndices.size(), size_t{1});
     // effectiveAllocatable NUMA: [500, 1000], BIND_Spread picks node1 (max) first for 500
     EXPECT_EQ(score.vectorAllocations[0].selectedIndices[0], 1);
 }
@@ -207,8 +207,8 @@ TEST_F(NUMAAffinityScorerTest, BIND_NoneDefaultsToSpread) {
     auto preAllocated = std::make_shared<PreAllocatedContext>();
     auto score = scorer.Score(preAllocated, instance, unit);
 
-    EXPECT_EQ(score.vectorAllocations.size(), 1);
-    EXPECT_EQ(score.vectorAllocations[0].selectedIndices.size(), 1);
+    EXPECT_EQ(score.vectorAllocations.size(), size_t{1});
+    EXPECT_EQ(score.vectorAllocations[0].selectedIndices.size(), size_t{1});
 }
 
 // GetPluginName

@@ -22,6 +22,7 @@
 #include <chrono>
 #include <limits>
 #include <memory>
+#include <sys/inotify.h>
 
 #include "async/future.hpp"
 #include "common/constants/actor_name.h"
@@ -1850,5 +1851,62 @@ litebus::Future<Status> AgentServiceActor::LoadPlugins(const std::string &config
         pluginClient_ = std::make_shared<MultiPluginClient>();
     }
     return pluginClient_->RegisterPlugin(configs);
+}
+
+void AgentServiceActor::CodePkgThresholdsCfgCallback(const std::string &path,
+    const std::string &name, uint32_t mask)
+{
+    YRLOG_DEBUG("receive code package thresholds config file event. path: {} name: {} mask: {}", path, name, mask);
+    if (mask & IN_DELETE) {
+        litebus::AsyncAfter(
+            WAIT_UPDATE_THRESHOLDS_CONFIGMAP_MS, GetAID(), &AgentServiceActor::LoadCodePkgThresholdsCfg);
+    }
+}
+
+void AgentServiceActor::LoadCodePkgThresholdsCfg()
+{
+    auto configPath = litebus::os::Join(codePkgThresholdsCfgPath_, CODE_PKG_THRESHOLDS_CFG_FILE);
+    if (!litebus::os::ExistPath(configPath)) {
+        YRLOG_INFO("code package thresholds config file not exist.");
+        return;
+    }
+    std::string jsonStr = Read(configPath);
+
+    nlohmann::json thresholds;
+    try {
+        thresholds = nlohmann::json::parse(jsonStr);
+    } catch (const nlohmann::json::parse_error& e) {
+        YRLOG_ERROR("code package thresholds config parse failed. error: {}", e.what());
+        return;
+    }
+    auto maxFileCount = GetBoundedJsonValue<int32_t>(thresholds, "file_count_max",
+        MIN_FILE_COUNTS, MAX_FILE_COUNTS);
+    if (maxFileCount.has_value()) {
+        codePackageThresholds_.set_filecountsmax(maxFileCount.value());
+    }
+    auto maxZipFileSizeMB = GetBoundedJsonValue<int32_t>(thresholds, "zip_file_size_max_MB",
+        MIN_FILE_SIZE_MB, MAX_FILE_SIZE_MB);
+    if (maxZipFileSizeMB.has_value()) {
+        codePackageThresholds_.set_zipfilesizemaxmb(maxZipFileSizeMB.value());
+    }
+    auto maxUnzipFileSizeMB = GetBoundedJsonValue<int32_t>(thresholds, "unzip_file_size_max_MB",
+        MIN_FILE_SIZE_MB, MAX_FILE_SIZE_MB);
+    if (maxUnzipFileSizeMB.has_value()) {
+        codePackageThresholds_.set_unzipfilesizemaxmb(maxUnzipFileSizeMB.value());
+    }
+    auto maxDirDepth = GetBoundedJsonValue<int32_t>(thresholds, "dir_depth_max", MIN_DIR_DEPTH, MAX_DIR_DEPTH);
+    if (maxDirDepth.has_value()) {
+        codePackageThresholds_.set_dirdepthmax(maxDirDepth.value());
+    }
+
+    if (deployers_.find(S3_STORAGE_TYPE) != deployers_.end()) {
+        if (const auto s3Deployer = std::dynamic_pointer_cast<RemoteDeployer>(deployers_[S3_STORAGE_TYPE]);
+                s3Deployer != nullptr) {
+            s3Deployer->UpdateCodePackageThresholds(codePackageThresholds_);
+        }
+    }
+    YRLOG_INFO("update code package thresholds finish. filecountsmax({}), zipfilesizemaxmb({}), unzipfilesizemaxmb({}),"
+        " dirdepthmax({})", codePackageThresholds_.filecountsmax(), codePackageThresholds_.zipfilesizemaxmb(),
+        codePackageThresholds_.unzipfilesizemaxmb(), codePackageThresholds_.dirdepthmax());
 }
 }  // namespace functionsystem::function_agent

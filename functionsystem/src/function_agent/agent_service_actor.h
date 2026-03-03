@@ -74,6 +74,7 @@ public:
         litebus::AID localSchedFuncAgentMgrAID;
         S3Config s3Config;
         messages::CodePackageThresholds codePackageThresholds;
+        std::string codePkgThresholdsCfgPath;
         uint32_t pingTimeoutMs = 0;
         std::string ipsetName = TENANT_PODIP_IPSET_NAME;
         std::string nodeID;
@@ -90,6 +91,7 @@ public:
           registeredResourceUnit_(std::make_shared<resources::ResourceUnit>()),
           s3Config_(config.s3Config),
           codePackageThresholds_(config.codePackageThresholds),
+          codePkgThresholdsCfgPath_(config.codePkgThresholdsCfgPath),
           agentServiceName_(name),
           isRegisterCompleted_(false),
           pingTimeoutMs_(config.pingTimeoutMs),
@@ -220,6 +222,10 @@ public:
     litebus::Future<Status> CreateStaticFunctionInstance();
 
     litebus::Future<Status> LoadPlugins(const std::string &configs);
+
+    void CodePkgThresholdsCfgCallback(const std::string &path, const std::string &name, uint32_t mask);
+
+    void LoadCodePkgThresholdsCfg();
 
     // for test
     [[maybe_unused]] void SetIpsetName(std::string ipsetName)
@@ -527,6 +533,7 @@ private:
     // some configs passed by agent's startup parameters
     S3Config s3Config_;
     messages::CodePackageThresholds codePackageThresholds_;
+    std::string codePkgThresholdsCfgPath_;
 
     std::string agentServiceName_;
     std::shared_ptr<HeartbeatClientDriver> pingPongDriver_{ nullptr };
