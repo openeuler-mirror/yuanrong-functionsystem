@@ -286,6 +286,8 @@ const std::string CONTAINER_ROOTFS = "rootfs";
 
 const std::string CONTAINER_EXTRA_CONFIG = "extra_config";
 
+const std::string CONTAINER_NETWORK = "network";
+
 // hibernate
 const std::string ENABLE_SUSPEND_RESUME = "enableSuspendResume";
 const std::string IDLE_TO_SUSPEND = "idleToSuspend";

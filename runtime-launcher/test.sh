@@ -16,6 +16,16 @@ PASSED=0
 FAILED=0
 TOTAL=0
 
+pick_free_port() {
+    for p in $(seq 40080 40120); do
+        if ! ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${p}$"; then
+            echo "$p"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # 颜色
 GREEN="\033[32m"
 RED="\033[31m"
@@ -176,6 +186,45 @@ else
     else
         echo -e "${RED}  => 失败（exit_code 不为 0）${RESET}"
         FAILED=$((FAILED + 1))
+    fi
+fi
+
+# ============================
+# 测试 10: 端口转发（桥接网络）
+# ============================
+echo ""
+TOTAL=$((TOTAL + 1))
+echo -e "${YELLOW}[$TOTAL] 端口转发 — Start + Docker PortBinding 校验${RESET}"
+
+HOST_PORT=$(pick_free_port || true)
+if [ -z "$HOST_PORT" ]; then
+    echo -e "${RED}  => 失败：未找到可用测试端口${RESET}"
+    FAILED=$((FAILED + 1))
+else
+    START_PORT_OUT=$("$CLIENT_BIN" --socket "$SOCKET" --action start \
+        --image "$IMAGE" --cmd "sleep 20" --network bridge \
+        --ports "tcp:${HOST_PORT}:8080" 2>&1)
+    echo "$START_PORT_OUT"
+    PORT_CID=$(echo "$START_PORT_OUT" | grep "容器已启动" | sed 's/.*id=//')
+
+    if [ -z "$PORT_CID" ]; then
+        echo -e "${RED}  => 失败：启动失败，未获取到容器 ID${RESET}"
+        FAILED=$((FAILED + 1))
+    else
+        PORT_BIND=$(docker inspect "$PORT_CID" --format '{{(index (index .HostConfig.PortBindings "8080/tcp") 0).HostPort}}' 2>/dev/null || true)
+
+        # 清理容器
+        "$CLIENT_BIN" --socket "$SOCKET" --action delete --id "$PORT_CID" >/dev/null 2>&1 || true
+
+        if [ "$PORT_BIND" = "$HOST_PORT" ]; then
+            echo "  docker inspect port binding: 8080/tcp -> ${PORT_BIND}"
+            echo -e "${GREEN}  => 通过${RESET}"
+            PASSED=$((PASSED + 1))
+        else
+            echo "  期望端口绑定: ${HOST_PORT}, 实际: ${PORT_BIND}"
+            echo -e "${RED}  => 失败：端口映射未生效${RESET}"
+            FAILED=$((FAILED + 1))
+        fi
     fi
 fi
 

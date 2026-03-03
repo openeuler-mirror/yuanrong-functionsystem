@@ -208,8 +208,8 @@ func (s *LauncherService) buildCreateConfig(req *pb.StartRequest) *rt.CreateConf
 	}
 
 	// 提取资源限制
-	cpuMilli := 500.0  // 默认值
-	memMB := 512.0     // 默认值
+	cpuMilli := 500.0 // 默认值
+	memMB := 512.0    // 默认值
 	if v, ok := req.GetResources()["CPU"]; ok {
 		cpuMilli = v
 	}
@@ -237,6 +237,7 @@ func (s *LauncherService) buildCreateConfig(req *pb.StartRequest) *rt.CreateConf
 		ExtraConfig:  req.GetExtraConfig(),
 		MakeSeed:     funcRt.GetMakeSeed(),
 		Network:      network,
+		Ports:        req.GetPorts(),
 	}
 }
 

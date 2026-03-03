@@ -2162,6 +2162,9 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     request->mutable_instance()->set_runtimeaddress(response.address());
     (*request->mutable_instance()->mutable_extensions())[PID] = std::to_string(response.pid());
     request->mutable_instance()->set_containerid(response.containerid());
+    if (!response.portmappings().empty()) {
+        (*request->mutable_instance()->mutable_extensions())[PORT_FORWARD_KEY] = response.portmappings();
+    }
     // Set proxy gRPC address
     request->mutable_instance()->set_proxygrpcaddress(config_.proxyGrpcAddress);
     SetBillingMetrics(request, response);
