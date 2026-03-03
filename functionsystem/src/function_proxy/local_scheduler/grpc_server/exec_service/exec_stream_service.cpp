@@ -195,16 +195,20 @@ void ExecStreamService::WriteToStream(StreamContextPtr streamCtx, const std::str
         if (!streamCtx->instanceID.empty()) {
             litebus::Async(instanceCtrlAid_, &local_scheduler::InstanceCtrlActor::SessionCountDelta,
                           streamCtx->instanceID, -1);
+            // Clear instanceID so ExecStream's read-loop cleanup skips the double-decrement.
             streamCtx->instanceID.clear();
         } else {
             YRLOG_DEBUG("session({}) exit already handled, skip decrement", sessionId);
         }
-        YRLOG_INFO("WriteToStream: calling Terminate and Await for session {}", sessionId);
-        litebus::Terminate(streamCtx->sessionAid);
-        litebus::Await(streamCtx->sessionAid);
-        YRLOG_INFO("WriteToStream: Terminate and Await completed for session {}", sessionId);
-        RemoveSession(sessionId);
-        // Note: instanceID tracking will be handled in session cleanup
+        // NOTE: Do NOT call Terminate+Await here.
+        // WriteToStream is invoked from ExecSessionActor's own actor thread (via streamWriter_
+        // callback from DoOutput / OnProcessExit). Calling litebus::Await on the actor's own
+        // AID from within its message handler would deadlock: the actor can't finish DoOutput
+        // while it's blocked in Await waiting for itself to finish.
+        //
+        // Cleanup is handled by two paths that are both safe:
+        //   1. ExecSessionActor::DoOutput/OnProcessExit -> Close() cleans up fds and the process.
+        //   2. ExecStream::ExecStream() read-loop exit -> Terminate + Await (on gRPC thread, safe).
     }
 }
 
