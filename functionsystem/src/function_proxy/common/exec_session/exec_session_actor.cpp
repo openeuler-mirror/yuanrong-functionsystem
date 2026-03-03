@@ -156,6 +156,9 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
             "docker", argv, litebus::None(),
             *ptyIO_->stdIn, *ptyIO_->stdOut, *ptyIO_->stdErr,
             childInitHooks, {}, true);
+        // Exec::CreateExec closes the slave fd in the parent process (via CloseFD after fork).
+        // Reset slaveFd to -1 so PtyExecIO::Close() does not double-close a possibly reused fd.
+        ptyIO_->slaveFd = -1;
 
     } else {
         exec_ = litebus::Exec::CreateExec(
