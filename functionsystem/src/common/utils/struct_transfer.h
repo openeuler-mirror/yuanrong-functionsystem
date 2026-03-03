@@ -57,6 +57,7 @@ const std::string RUNTIME_UUID_PREFIX = "runtime-";
 const std::string APP_ENTRYPOINT = "ENTRYPOINT";
 const std::string RUNTIME_ENTRYPOINT = "RUNTIME_ENTRYPOINT";
 const std::string PID = "pid";
+const std::string PORT_FORWARD_KEY = "portForward";
 const std::string CREATE_TIME_STAMP = "createTimestamp";
 const std::string RECEIVED_TIMESTAMP = "receivedTimestamp";
 const std::string INSTANCE_MOD_REVISION = "modRevision";
