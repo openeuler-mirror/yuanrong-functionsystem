@@ -244,6 +244,9 @@ litebus::Future<Status> InstanceCtrlActor::DeleteInstanceInResourceView(const St
 litebus::Future<Status> InstanceCtrlActor::DeleteInstanceInControlView(const Status &status,
                                                                        const InstanceInfo &instanceInfo)
 {
+    if (traefikRegistry_) {
+        (void)litebus::Async(GetAID(), &InstanceCtrlActor::UnregisterTraefikRoute, instanceInfo.instanceid());
+    }
     // Delete the reserved resource information corresponding to the group instance bound to the local node.
     if (!instanceInfo.groupid().empty() && groupInstanceClear_ != nullptr) {
         groupInstanceClear_(instanceInfo);

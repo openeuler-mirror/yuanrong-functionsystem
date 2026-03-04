@@ -29,7 +29,6 @@ namespace functionsystem::local_scheduler {
 
 class TraefikRegistry {
 public:
-    // Port mapping: sandbox port (inside container) -> host port
     struct PortMapping {
         int sandboxPort;
         int hostPort;
@@ -38,29 +37,23 @@ public:
     TraefikRegistry(std::shared_ptr<MetaStorageAccessor> accessor,
                     const std::string& domain,
                     const std::string& keyPrefix,
-                    int leaseTTL,
                     const std::string& tcpEntryPoint = "tcpsecure");
     ~TraefikRegistry() = default;
 
-    // Register instance with multiple port mappings (TCP L4 routing)
-    // All ports share one lease, managed by LeaseActor
     litebus::Future<Status> RegisterInstance(
         const std::string& instanceID,
         const std::string& hostIP,
         const std::vector<PortMapping>& portMappings);
 
-    // Unregister instance (revokes the shared lease, all keys auto-deleted)
     litebus::Future<Status> UnregisterInstance(const std::string& instanceID);
 
 private:
-    // Replace characters not allowed in Traefik router/service names (e.g. @)
     static std::string SanitizeID(const std::string& id);
 
     std::shared_ptr<MetaStorageAccessor> accessor_;
-    std::string domain_;       // e.g. "example.com"
-    std::string keyPrefix_;    // e.g. "traefik"
-    int leaseTTL_;            // milliseconds
-    std::string tcpEntryPoint_;  // e.g. "tcpsecure"
+    std::string domain_;
+    std::string keyPrefix_;
+    std::string tcpEntryPoint_;
 };
 
 }  // namespace functionsystem::local_scheduler

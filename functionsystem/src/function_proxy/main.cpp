@@ -442,7 +442,8 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .enableTraefikRegistry = flags.GetEnableTraefikRegistry(),
         .traefikDomain = flags.GetTraefikDomain(),
         .traefikEtcdPrefix = flags.GetTraefikEtcdPrefix(),
-        .traefikLeaseTTL = flags.GetTraefikLeaseTTL()
+        .traefikLeaseTTL = flags.GetTraefikLeaseTTL(),
+        .traefikTcpEntryPoint = flags.GetTraefikTcpEntryPoint()
     };
 }
 
