@@ -47,6 +47,7 @@
 #include "common/posix_client/control_plane_client/control_interface_posix_client.h"
 #include "local_scheduler/grpc_server/bus_service/bus_service.h"
 #include "local_scheduler_service/local_sched_srv.h"
+#include "local_scheduler/traefik_registry/traefik_registry.h"
 
 namespace functionsystem::local_scheduler {
 using namespace messages;
@@ -2167,6 +2168,8 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     }
     // Set proxy gRPC address
     request->mutable_instance()->set_proxygrpcaddress(config_.proxyGrpcAddress);
+    // Port mappings are stored in extensions["portForward"] as JSON string
+    // This will be parsed in RegisterTraefikRoute when registering to Traefik
     SetBillingMetrics(request, response);
 
     // when instance is an app driver, no connection built from proxy to app driver
@@ -4823,6 +4826,10 @@ void InstanceCtrlActor::DeleteDriverClient(const std::string &instanceID, const 
     ASSERT_IF_NULL(clientManager_);
     connectedDriver_.erase(instanceID);
     RemoveInternalTokenReference(instanceID);
+    // Unregister from Traefik (async, non-blocking)
+    if (traefikRegistry_) {
+        (void)litebus::Async(GetAID(), &InstanceCtrlActor::UnregisterTraefikRoute, instanceID);
+    }
     (void)observer_->DelInstance(instanceID)
         .After(OBSERVER_TIMEOUT_MS,
                [instanceID](litebus::Future<Status>) -> litebus::Future<Status> {
@@ -4870,11 +4877,17 @@ litebus::Future<TransitionResult> InstanceCtrlActor::TransInstanceState(
             });
     }
     return machine->TransitionTo(context).Then(
-        [machine, nodeID(nodeID_), context](const TransitionResult &result) -> litebus::Future<TransitionResult> {
+        [machine, nodeID(nodeID_), context, isTraefikEnable(traefikRegistry_ != nullptr),
+         aid(GetAID())](const TransitionResult &result) -> litebus::Future<TransitionResult> {
             // transition successful
             if (result.status.IsOk()) {
                 // if successfully, need to update state for observer and execute callback
                 machine->ExecuteStateChangeCallback(machine->GetRequestID(), context.newState);
+                // Register to Traefik when instance enters RUNNING state (async, non-blocking)
+                if (context.newState == InstanceState::RUNNING && isTraefikEnable) {
+                    const auto &instanceInfo = machine->GetInstanceInfo();
+                    (void)litebus::Async(aid, &InstanceCtrlActor::RegisterTraefikRoute, instanceInfo);
+                }
                 return result;
             }
             // transition failed but local state is changed which need to roll back
@@ -4894,6 +4907,12 @@ litebus::Future<TransitionResult> InstanceCtrlActor::TransInstanceState(
                     auto ret = result;
                     ret.status = Status::OK();
                     machine->ExecuteStateChangeCallback(machine->GetRequestID(), context.newState);
+                    if (context.newState == InstanceState::RUNNING && isTraefikEnable) {
+                        const auto& instanceInfo = machine->GetInstanceInfo();
+                        YRLOG_INFO("TransInstanceState: triggering Traefik register (path=txn_recovery), instanceID={}",
+                                   instanceInfo.instanceid());
+                        (void)litebus::Async(aid, &InstanceCtrlActor::RegisterTraefikRoute, instanceInfo);
+                    }
                     return ret;
                 }
             }
@@ -5612,6 +5631,10 @@ litebus::Future<Status> InstanceCtrlActor::DeleteSchedulingInstance(const std::s
     if (instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::SCHEDULING)) {
         ASSERT_IF_NULL(observer_);
         observer_->DelInstanceEvent(instanceID, stateMachine->GetModRevision());
+    }
+    // Unregister from Traefik (async, non-blocking)
+    if (traefikRegistry_) {
+        (void)litebus::Async(GetAID(), &InstanceCtrlActor::UnregisterTraefikRoute, instanceID);
     }
     return Status::OK();
 }
@@ -6545,4 +6568,104 @@ void InstanceCtrlActor::BindSnapCtrl(const std::shared_ptr<SnapCtrl> &snapCtrl)
     snapCtrl_->BindInstanceControlView(instanceControlView_);
 }
 
+
+litebus::Future<Status> InstanceCtrlActor::RegisterTraefikRoute(const InstanceInfo& instanceInfo)
+{
+    if (!traefikRegistry_) {
+        return Status::OK();
+    }
+
+    // Check if instance has port mappings in extensions
+    auto it = instanceInfo.extensions().find(PORT_FORWARD_KEY);
+    if (it == instanceInfo.extensions().end() || it->second.empty()) {
+        YRLOG_DEBUG("Instance {} has no port mappings, skip Traefik registration", instanceInfo.instanceid());
+        return Status::OK();
+    }
+
+    const std::string& portMappingsJson = it->second;
+
+    // Helper to parse IP from runtime address
+    auto parseIP = [](const std::string& addr) -> std::string {
+        auto pos = addr.find(':');
+        return pos != std::string::npos ? addr.substr(0, pos) : "";
+    };
+
+    auto ip = parseIP(instanceInfo.runtimeaddress());
+    if (ip.empty()) {
+        YRLOG_WARN("skip traefik registration for instance({}): invalid address({})",
+                   instanceInfo.instanceid(), instanceInfo.runtimeaddress());
+        return Status::OK();
+    }
+
+    // Parse port mappings from JSON: ["tcp:40001:8080", "tcp:40002:443"]
+    std::vector<TraefikRegistry::PortMapping> portMappings;
+    try {
+        nlohmann::json portJson = nlohmann::json::parse(portMappingsJson);
+        if (portJson.is_array()) {
+            for (const auto& entry : portJson) {
+                if (entry.is_string()) {
+                    std::string mapping = entry.get<std::string>();
+                    // Parse "protocol:hostPort:containerPort"
+                    std::vector<std::string> parts;
+                    std::stringstream ss(mapping);
+                    std::string part;
+                    while (std::getline(ss, part, ':')) {
+                        parts.push_back(part);
+                    }
+                    if (parts.size() == 3) {
+                        try {
+                            int hostPort = std::stoi(parts[1]);
+                            int sandboxPort = std::stoi(parts[2]);
+                            portMappings.push_back({sandboxPort, hostPort});
+                            YRLOG_DEBUG("Parsed port mapping: sandbox_port={}, host_port={}",
+                                       sandboxPort, hostPort);
+                        } catch (const std::exception& e) {
+                            YRLOG_WARN("Failed to parse port numbers from '{}': {}", mapping, e.what());
+                        }
+                    }
+                }
+            }
+        }
+    } catch (const nlohmann::json::exception& e) {
+        YRLOG_WARN("Failed to parse port mappings JSON '{}': {}", portMappingsJson, e.what());
+        return Status::OK();
+    }
+
+    if (portMappings.empty()) {
+        YRLOG_DEBUG("No valid port mappings found for instance {}", instanceInfo.instanceid());
+        return Status::OK();
+    }
+
+    YRLOG_INFO("Registering instance to Traefik: instanceID={}, hostIP={}, ports={}",
+              instanceInfo.instanceid(), ip, portMappings.size());
+
+    return traefikRegistry_->RegisterInstance(instanceInfo.instanceid(), ip, portMappings)
+        .Then([instanceID = instanceInfo.instanceid()](const Status& status) -> Status {
+            if (!status.IsOk()) {
+                YRLOG_ERROR("failed to register traefik route for instance({}): {}",
+                           instanceID, status.GetMessage());
+                return status;
+            }
+            return Status::OK();
+        });
+}
+
+litebus::Future<Status> InstanceCtrlActor::UnregisterTraefikRoute(const std::string& instanceID)
+{
+    if (!traefikRegistry_) {
+        return Status::OK();
+    }
+    YRLOG_INFO("Unregistering instance from Traefik: instanceID={}", instanceID);
+    return traefikRegistry_->UnregisterInstance(instanceID)
+        .Then([instanceID](const Status& status) -> Status {
+            if (!status.IsOk()) {
+                YRLOG_WARN("failed to unregister traefik route for instance({}): {}",
+                          instanceID, status.GetMessage());
+                // lease will expire automatically, so don't block main flow
+                return status;
+            }
+            return Status::OK();
+        });
+}
 }  // namespace functionsystem::local_scheduler
+

@@ -17,6 +17,7 @@
 #include "local_sched_driver.h"
 
 #include "common/constants/actor_name.h"
+#include "local_scheduler/traefik_registry/traefik_registry.h"
 #include "meta_store_monitor/meta_store_monitor_factory.h"
 #include "common/utils/param_check.h"
 #include "local_scheduler/bundle_manager/bundle_mgr_actor.h"
@@ -83,6 +84,7 @@ void LocalSchedDriver::SetRuntimeConfig(InstanceCtrlConfig &config)
 
 Status LocalSchedDriver::Create()
 {
+    metaStorageAccessor_ = std::make_shared<MetaStorageAccessor>(metaStoreClient_);
     resourceViewMgr_ = std::make_shared<resource_view::ResourceViewMgr>();
     resourceViewMgr_->Init(param_.nodeID, param_.resourceViewActorParam);
 
@@ -135,6 +137,25 @@ Status LocalSchedDriver::Create()
     PosixAPIHandler::BindLocalSchedSrv(localSchedSrv_);
     PosixAPIHandler::BindResourceGroupCtrl(rGroupCtrl_);
     PosixAPIHandler::SetMaxPriority(param_.maxPriority);
+
+    // Initialize and inject TraefikRegistry if enabled (sync call before actor spawn)
+    if (param_.enableTraefikRegistry && !param_.traefikDomain.empty()) {
+        traefikRegistry_ = std::make_shared<TraefikRegistry>(
+            metaStorageAccessor_,
+            param_.traefikDomain,
+            param_.traefikEtcdPrefix,
+            param_.traefikLeaseTTL,
+            "tcpsecure");  // TCP entryPoint for L4 routing
+        instanceCtrl_->SetTraefikRegistry(traefikRegistry_);
+        YRLOG_INFO("TraefikRegistry initialized and injected: domain={}, prefix={}, ttl={}ms, entryPoint={}",
+                  param_.traefikDomain, param_.traefikEtcdPrefix, param_.traefikLeaseTTL, "tcpsecure");
+    } else {
+        if (param_.enableTraefikRegistry) {
+            YRLOG_WARN("Traefik registry enabled but domain is empty, skipping initialization");
+        } else {
+            YRLOG_INFO("Traefik registry disabled");
+        }
+    }
 
     subscriptionMgr_ = SubscriptionMgr::Init(param_.nodeID,
         SubscriptionMgrConfig{ .isPartialWatchInstances = param_.isPartialWatchInstances });

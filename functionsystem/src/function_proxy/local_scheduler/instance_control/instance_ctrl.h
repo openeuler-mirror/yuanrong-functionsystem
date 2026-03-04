@@ -35,6 +35,7 @@ namespace functionsystem::local_scheduler {
 
 class LocalSchedSrv;
 class SnapCtrl;
+class TraefikRegistry;
 class InstanceCtrl : public ActorDriver {
 public:
     explicit InstanceCtrl(const std::shared_ptr<InstanceCtrlActor> &instanceCtrlActor);
@@ -187,6 +188,8 @@ public:
         return aid_;
     }
 
+    void SetTraefikRegistry(const std::shared_ptr<TraefikRegistry> &registry);
+
     virtual litebus::Future<KillResponse> KillInstancesOfJob(const std::shared_ptr<KillRequest> &killReq) const;
 
     void BindInstanceControlView(const std::shared_ptr<InstanceControlView> &view)
@@ -230,11 +233,11 @@ public:
     virtual litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> CreateInstanceClient(
         const std::string &instanceID, const std::string &runtimeID, const std::string &address)
     {
-        return litebus::Async(aid_, &InstanceCtrlActor::CreateInstanceClient, instanceID, runtimeID, address, 
+        return litebus::Async(aid_, &InstanceCtrlActor::CreateInstanceClient, instanceID, runtimeID, address,
                              nullptr, false);
     }
 
-    virtual void StartHeartbeat(const std::string &instanceID, uint32_t timeoutTimes, 
+    virtual void StartHeartbeat(const std::string &instanceID, uint32_t timeoutTimes,
                                const std::string &runtimeID, const StatusCode &prevStatus)
     {
         litebus::Async(aid_, &InstanceCtrlActor::StartHeartbeat, instanceID, timeoutTimes, runtimeID, prevStatus);

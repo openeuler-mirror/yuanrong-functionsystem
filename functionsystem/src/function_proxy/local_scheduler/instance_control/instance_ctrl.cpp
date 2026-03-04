@@ -19,6 +19,7 @@
 #include <async/async.hpp>
 
 #include "common/constants/actor_name.h"
+#include "local_scheduler/traefik_registry/traefik_registry.h"
 #include "common/schedule_plugin/common/constants.h"
 #include "common/scheduler_framework/framework/framework_impl.h"
 
@@ -87,6 +88,13 @@ litebus::Future<Status> InstanceCtrl::UpdateInstanceStatusPromise(const std::str
 void InstanceCtrl::PutFailedInstanceStatusByAgentId(const std::string &funcAgentID)
 {
     litebus::Async(aid_, &InstanceCtrlActor::PutFailedInstanceStatusByAgentId, funcAgentID);
+}
+
+void InstanceCtrl::SetTraefikRegistry(const std::shared_ptr<TraefikRegistry> &registry)
+{
+    if (instanceCtrlActor_ != nullptr) {
+        instanceCtrlActor_->SetTraefikRegistry(registry);
+    }
 }
 
 litebus::Future<bool> InstanceCtrl::IsSystemTenant(const std::string &tenantID)
