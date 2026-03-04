@@ -6584,16 +6584,18 @@ litebus::Future<Status> InstanceCtrlActor::RegisterTraefikRoute(const InstanceIn
 
     const std::string& portMappingsJson = it->second;
 
-    // Helper to parse IP from runtime address
+    // Helper to parse IP from address (ip:port format)
     auto parseIP = [](const std::string& addr) -> std::string {
         auto pos = addr.find(':');
         return pos != std::string::npos ? addr.substr(0, pos) : "";
     };
 
-    auto ip = parseIP(instanceInfo.runtimeaddress());
+    // Use proxy's external IP from config for Traefik routing
+    // This ensures external clients can reach the instance through Traefik
+    std::string ip = parseIP(config_.proxyGrpcAddress);
     if (ip.empty()) {
-        YRLOG_WARN("skip traefik registration for instance({}): invalid address({})",
-                   instanceInfo.instanceid(), instanceInfo.runtimeaddress());
+        YRLOG_WARN("skip traefik registration for instance({}): invalid proxy address({})",
+                   instanceInfo.instanceid(), config_.proxyGrpcAddress);
         return Status::OK();
     }
 
