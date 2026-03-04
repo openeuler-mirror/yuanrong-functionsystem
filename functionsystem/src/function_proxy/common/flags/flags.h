@@ -432,6 +432,26 @@ public:
         return dPosixUdsPath_;
     }
 
+    bool GetEnableTraefikRegistry() const
+    {
+        return enableTraefikRegistry_;
+    }
+
+    const std::string& GetTraefikDomain() const
+    {
+        return traefikDomain_;
+    }
+
+    const std::string& GetTraefikEtcdPrefix() const
+    {
+        return traefikEtcdPrefix_;
+    }
+
+    int32_t GetTraefikLeaseTTL() const
+    {
+        return traefikLeaseTTL_;
+    }
+
 protected:
     void AddRuntimeFlags();
     void AddDSFlags();
@@ -524,6 +544,10 @@ protected:
     bool unRegisterWhileStop_{ false };
     bool enableMergeProcess_{ false };
     std::string dPosixUdsPath_;
+    bool enableTraefikRegistry_{ false };
+    std::string traefikDomain_;
+    std::string traefikEtcdPrefix_ = "traefik";
+    int32_t traefikLeaseTTL_ = 300000;
 };
 
 }  // namespace functionsystem::function_proxy

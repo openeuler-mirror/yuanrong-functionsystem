@@ -174,4 +174,17 @@ litebus::Future<Status> MetaStorageAccessor::Delete(const std::string &key, bool
         });
 }
 
+litebus::Future<Status> MetaStorageAccessor::TxnWithLease(
+    const std::string& groupKey,
+    const std::vector<std::pair<std::string, std::string>>& kvs,
+    const int ttl)
+{
+    return litebus::Async(leaseActor_->GetAID(), &LeaseActor::TxnWithLease, groupKey, kvs, ttl);
+}
+
+litebus::Future<Status> MetaStorageAccessor::RevokeGroup(const std::string& groupKey)
+{
+    return litebus::Async(leaseActor_->GetAID(), &LeaseActor::RevokeGroup, groupKey);
+}
+
 }  // namespace functionsystem

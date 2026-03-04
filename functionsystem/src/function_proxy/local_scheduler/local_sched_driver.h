@@ -91,6 +91,10 @@ struct LocalSchedStartParam {
     std::string udsPath;
     std::string sessionGrpcPort;
     std::string address;  // LiteBus address (ip:port format), used to extract IP for gRPC servers
+    bool enableTraefikRegistry = false;
+    std::string traefikDomain;
+    std::string traefikEtcdPrefix = "traefik";
+    int32_t traefikLeaseTTL = 300000;
 };
 
 class LocalSchedDriver : public ModuleDriver {
@@ -154,6 +158,7 @@ private:
     std::shared_ptr<functionsystem::grpc::CommonGrpcServer> posixGrpcServer_;
     std::shared_ptr<functionsystem::grpc::CommonGrpcServer> sessionGrpcServer_;
     std::shared_ptr<ExecStreamService> execStreamService_;
+    std::shared_ptr<TraefikRegistry> traefikRegistry_;
     bool isStarted_ = false;
 };
 }  // namespace functionsystem::local_scheduler

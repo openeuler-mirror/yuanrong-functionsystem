@@ -161,6 +161,14 @@ Flags::Flags()
     AddBusProxyInvokeLimitFlags();
     AddFlag(&Flags::redisConfPath_, "redis_conf_path", "redis connection conf file path", "/home/sn/conf/conf.json");
     AddBusProxyCreatRateLimitFlags();
+    AddFlag(&Flags::enableTraefikRegistry_, "enable_traefik_registry",
+            "enable traefik registry for instance route", false);
+    AddFlag(&Flags::traefikDomain_, "traefik_domain",
+            "domain for traefik route, e.g. example.com", "");
+    AddFlag(&Flags::traefikEtcdPrefix_, "traefik_etcd_prefix",
+            "etcd key prefix for traefik configuration", "traefik");
+    AddFlag(&Flags::traefikLeaseTTL_, "traefik_lease_ttl",
+            "lease TTL for traefik registry (milliseconds)", 300000);
 }
 
 void Flags::AddElectionFlags()
