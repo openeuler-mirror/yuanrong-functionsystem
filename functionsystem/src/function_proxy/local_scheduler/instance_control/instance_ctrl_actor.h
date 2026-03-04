@@ -45,6 +45,8 @@
 #include "local_scheduler/subscription_manager/subscription_mgr.h"
 
 namespace functionsystem::local_scheduler {
+
+class TraefikRegistry;
 using CtrlClientPromise = litebus::Promise<std::shared_ptr<ControlInterfacePosixClient>>;
 using InstanceReadyCallBack = std::function<litebus::Future<Status>(const Status &status)>;
 using ClearGroupInstanceCallBack = std::function<void(const InstanceInfo &instanceInfo)>;
@@ -346,6 +348,11 @@ public:
         subscriptionMgr_->BindInstanceControlView(instanceControlView_);
         ASSERT_IF_NULL(observer_);
         subscriptionMgr_->BindObserver(observer_);
+    }
+
+    void SetTraefikRegistry(const std::shared_ptr<TraefikRegistry> &registry)
+    {
+        traefikRegistry_ = registry;
     }
 
     litebus::Future<Status> Checkpoint(const std::string &instanceID);
@@ -903,6 +910,9 @@ private:
 
     void ClearLocalDriver();
 private:
+    litebus::Future<Status> RegisterTraefikRoute(const InstanceInfo& instanceInfo);
+    litebus::Future<Status> UnregisterTraefikRoute(const std::string& instanceID);
+private:
     litebus::Future<Status> FcAccessorHeartbeatEnable(bool enable)
     {
         fcAccessorHeartbeat_ = enable;
@@ -991,6 +1001,8 @@ private:
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<KillResponse>>> killingRequest_;
 
     BACK_OFF_RETRY_HELPER(InstanceCtrlActor, litebus::Option<InstanceState>, checkStateHelper_);
+
+    std::shared_ptr<TraefikRegistry> traefikRegistry_;
 
     // todo(Lwy_Robb): idle controller should be mv to a separate actor in future
     std::unordered_map<std::string, litebus::Timer> idleTimers_;

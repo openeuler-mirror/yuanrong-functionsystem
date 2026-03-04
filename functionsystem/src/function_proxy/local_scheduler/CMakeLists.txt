@@ -33,10 +33,11 @@ add_subdirectory(bundle_manager)
 add_subdirectory(resource_group_controller)
 add_subdirectory(subscription_manager)
 add_subdirectory(snap_ctrl)
+add_subdirectory(traefik_registry)
 
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} LOCAL_SCHEDULER_SRC)
 
 target_sources(local_scheduler_lib PRIVATE ${LOCAL_SCHEDULER_SRC})
 
-add_dependencies(local_scheduler_lib http heartbeat meta_store_client explorer scheduler metadata)
-target_link_libraries(local_scheduler_lib http heartbeat meta_store_client explorer scheduler metadata)
+add_dependencies(local_scheduler_lib http heartbeat meta_store_client explorer scheduler metadata traefik_registry_lib)
+target_link_libraries(local_scheduler_lib http heartbeat meta_store_client explorer scheduler metadata traefik_registry_lib)

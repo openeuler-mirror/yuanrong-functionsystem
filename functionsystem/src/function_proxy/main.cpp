@@ -438,7 +438,11 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .unRegisterWhileStop = flags.UnRegisterWhileStop(),
         .udsPath = flags.GetDPosixUdsPath(),
         .sessionGrpcPort = flags.GetSessionGrpcPort(),
-        .address = flags.GetAddress()  // LiteBus address for extracting IP used by gRPC servers
+        .address = flags.GetAddress(),  // LiteBus address for extracting IP used by gRPC servers
+        .enableTraefikRegistry = flags.GetEnableTraefikRegistry(),
+        .traefikDomain = flags.GetTraefikDomain(),
+        .traefikEtcdPrefix = flags.GetTraefikEtcdPrefix(),
+        .traefikLeaseTTL = flags.GetTraefikLeaseTTL()
     };
 }
 

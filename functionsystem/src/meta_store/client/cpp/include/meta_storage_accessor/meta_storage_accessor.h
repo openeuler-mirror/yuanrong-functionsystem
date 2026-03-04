@@ -70,6 +70,26 @@ public:
     virtual litebus::Future<Status> Revoke(const std::string &key);
 
     /**
+     * Transactional put multiple key-values with a shared lease.
+     * All keys will be written atomically in a single transaction and share one lease.
+     * @param groupKey Identifier for this group of keys (e.g., instanceID), used for revoke.
+     * @param kvs Vector of key-value pairs to write.
+     * @param ttl Time to live in milliseconds.
+     * @return
+     */
+    virtual litebus::Future<Status> TxnWithLease(
+        const std::string& groupKey,
+        const std::vector<std::pair<std::string, std::string>>& kvs,
+        const int ttl);
+
+    /**
+     * Revoke the lease for a group of keys.
+     * @param groupKey The group key used in TxnWithLease.
+     * @return
+     */
+    virtual litebus::Future<Status> RevokeGroup(const std::string& groupKey);
+
+    /**
      * Get a value according to the key synchronous.
      * @param key the key of BusProxy.
      * @return
