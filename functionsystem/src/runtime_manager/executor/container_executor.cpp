@@ -510,11 +510,6 @@ Status RootfsJsonParse(runtime::v1::FunctionRuntime &funcRt, const std::string &
             funcRt.set_sandbox(j.at("runtime").get<std::string>());
         }
 
-        // Set image URL
-        if (j.find("imageurl") != j.end()) {
-            funcRt.mutable_rootfs()->set_image_url(j.at("imageurl").get<std::string>());
-        }
-
         // Set readonly
         if (j.find("readonly") != j.end()) {
             bool readonly = false;
@@ -527,28 +522,21 @@ Status RootfsJsonParse(runtime::v1::FunctionRuntime &funcRt, const std::string &
             funcRt.mutable_rootfs()->set_readonly(readonly);
         }
 
-        // Set type
-        if (j.find("type") != j.end()) {
-            std::string typeStr = j.at("type").get<std::string>();
-            if (typeStr == "s3") {
-                funcRt.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::S3);
-            } else if (typeStr == "image") {
-                funcRt.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::IMAGE);
-            } else if (typeStr == "local") {
-                funcRt.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::LOCAL);
+        // Guard: early return if type is not present
+        if (j.find("type") == j.end()) {
+            return Status::OK();
+        }
+
+        std::string typeStr = j.at("type").get<std::string>();
+
+        if (typeStr == "s3") {
+            funcRt.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::S3);
+            if (j.find("storageInfo") == j.end()) {
+                return Status::OK();
             }
-        }
 
-        // Set path (for LOCAL)
-        if (j.find("path") != j.end()) {
-            funcRt.mutable_rootfs()->set_path(j.at("path").get<std::string>());
-        }
-
-        // Set storageInfo (for S3)
-        if (j.find("storageInfo") != j.end()) {
             nlohmann::json storage = j.at("storageInfo");
             auto s3Config = funcRt.mutable_rootfs()->mutable_s3_config();
-
             if (storage.find("endpoint") != storage.end()) {
                 s3Config->set_endpoint(storage.at("endpoint").get<std::string>());
             }
@@ -564,7 +552,18 @@ Status RootfsJsonParse(runtime::v1::FunctionRuntime &funcRt, const std::string &
             if (storage.find("secretKey") != storage.end()) {
                 s3Config->set_accesskeysecret(storage.at("secretKey").get<std::string>());
             }
+        } else if (typeStr == "image") {
+            funcRt.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::IMAGE);
+            if (j.find("imageurl") != j.end()) {
+                funcRt.mutable_rootfs()->set_image_url(j.at("imageurl").get<std::string>());
+            }
+        } else if (typeStr == "local") {
+            funcRt.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::LOCAL);
+            if (j.find("path") != j.end()) {
+                funcRt.mutable_rootfs()->set_path(j.at("path").get<std::string>());
+            }
         }
+
     } catch (std::exception &e) {
         auto err = fmt::format("Failed to parse rootfs JSON: {}", std::string(e.what()));
         YRLOG_ERROR("{}", err);
