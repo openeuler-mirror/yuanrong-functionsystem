@@ -213,6 +213,7 @@ func buildFaaSFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionVa
 		log.GetLogger().Errorf("failed to build faas instance meta data, error: %s", err.Error())
 		return metadata.FaaSFuncMeta{}, err
 	}
+	info.RootfsSpecMeta = buildRootFsSpecMeta(fv.FunctionVersion.RootfsSpecMeta)
 	return info, nil
 }
 

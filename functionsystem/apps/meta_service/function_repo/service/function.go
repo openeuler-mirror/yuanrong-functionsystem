@@ -917,6 +917,7 @@ func buildFunctionVersionInfo(function model.Function, functionVersionURN string
 		InstanceNum:        version.FunctionVersion.InstanceNum,
 		Device:             version.FunctionVersion.Device,
 		Kind:               version.FunctionVersion.Kind,
+		RootfsSpecMeta:     version.FunctionVersion.RootfsSpecMeta,
 	}
 	if version.FunctionVersion.CustomResources != "" {
 		err := json.Unmarshal([]byte(version.FunctionVersion.CustomResources), &v.CustomResources)
@@ -1201,6 +1202,7 @@ func buildFunctionVersionEntity(key storage.FunctionVersionKey, v storage.Functi
 		FunctionVersionURN: functionVersionURN,
 		Device:             v.FunctionVersion.Device,
 		Kind:               v.FunctionVersion.Kind,
+		RootfsSpecMeta:     v.FunctionVersion.RootfsSpecMeta,
 	}
 	return funcVer
 }
