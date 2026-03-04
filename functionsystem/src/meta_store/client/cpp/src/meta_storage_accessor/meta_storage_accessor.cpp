@@ -174,6 +174,23 @@ litebus::Future<Status> MetaStorageAccessor::Delete(const std::string &key, bool
         });
 }
 
+litebus::Future<Status> MetaStorageAccessor::Txn(const std::vector<std::pair<std::string, std::string>>& kvs)
+{
+    YRLOG_DEBUG("txn put {} key-values without lease", kvs.size());
+    ASSERT_IF_NULL(metaClient_);
+    auto txn = metaClient_->BeginTransaction();
+    for (const auto& [key, value] : kvs) {
+        txn->Then(meta_store::TxnOperation::Create(key, value, PutOption{}));
+    }
+    return txn->Commit().Then([kvsSize = kvs.size()](const std::shared_ptr<TxnResponse>& response) {
+        if (response->status.IsError()) {
+            YRLOG_ERROR("failed to txn put {} keys, error: {}", kvsSize, response->status.GetMessage());
+            return Status(StatusCode::BP_META_STORAGE_PUT_ERROR, "failed to txn put keys");
+        }
+        return Status::OK();
+    });
+}
+
 litebus::Future<Status> MetaStorageAccessor::TxnWithLease(
     const std::string& groupKey,
     const std::vector<std::pair<std::string, std::string>>& kvs,

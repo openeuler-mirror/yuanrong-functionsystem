@@ -95,6 +95,7 @@ struct LocalSchedStartParam {
     std::string traefikDomain;
     std::string traefikEtcdPrefix = "traefik";
     int32_t traefikLeaseTTL = 300000;
+    std::string traefikTcpEntryPoint = "tcpsecure";
 };
 
 class LocalSchedDriver : public ModuleDriver {

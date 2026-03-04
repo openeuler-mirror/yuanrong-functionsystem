@@ -25,16 +25,14 @@ namespace functionsystem::local_scheduler {
 TraefikRegistry::TraefikRegistry(std::shared_ptr<MetaStorageAccessor> accessor,
                                    const std::string& domain,
                                    const std::string& keyPrefix,
-                                   int leaseTTL,
                                    const std::string& tcpEntryPoint)
     : accessor_(std::move(accessor)),
       domain_(domain),
       keyPrefix_(keyPrefix),
-      leaseTTL_(leaseTTL),
       tcpEntryPoint_(tcpEntryPoint)
 {
-    YRLOG_INFO("TraefikRegistry initialized: domain={}, keyPrefix={}, leaseTTL={}ms, tcpEntryPoint={}",
-              domain_, keyPrefix_, leaseTTL_, tcpEntryPoint_);
+    YRLOG_INFO("TraefikRegistry initialized: domain={}, keyPrefix={}, tcpEntryPoint={}",
+              domain_, keyPrefix_, tcpEntryPoint_);
 }
 
 litebus::Future<Status> TraefikRegistry::RegisterInstance(
@@ -84,8 +82,7 @@ litebus::Future<Status> TraefikRegistry::RegisterInstance(
     YRLOG_INFO("Registering instance {} to Traefik: {} ports, {} keys",
               instanceID, portMappings.size(), kvs.size());
 
-    // Call accessor_->TxnWithLease, KeepAlive is automatically managed by LeaseActor
-    return accessor_->TxnWithLease(instanceID, kvs, leaseTTL_)
+    return accessor_->Txn(kvs)
         .Then([instanceID, portMappingsCount = portMappings.size()](const Status& status) -> Status {
             if (!status.IsOk()) {
                 YRLOG_ERROR("Failed to register instance {} to Traefik: {}", instanceID, status.GetMessage());
@@ -106,15 +103,23 @@ litebus::Future<Status> TraefikRegistry::UnregisterInstance(const std::string& i
 
     YRLOG_INFO("Unregistering instance {} from Traefik", instanceID);
 
-    // Call accessor_->RevokeGroup to revoke the shared lease (all keys auto-deleted)
-    return accessor_->RevokeGroup(instanceID)
+    std::string safeID = SanitizeID(instanceID);
+    std::string routerPrefix = keyPrefix_ + "/tcp/routers/" + safeID;
+    std::string servicePrefix = keyPrefix_ + "/tcp/services/" + safeID;
+
+    return accessor_->Delete(routerPrefix, true)
+        .Then([this, servicePrefix](const Status& status) {
+            if (!status.IsOk()) {
+                YRLOG_WARN("Failed to delete Traefik routers: {}", status.GetMessage());
+            }
+            return accessor_->Delete(servicePrefix, true);
+        })
         .Then([instanceID](const Status& status) -> Status {
             if (!status.IsOk()) {
                 YRLOG_WARN("Failed to unregister instance {} from Traefik: {}", instanceID, status.GetMessage());
-                // Don't return error for unregistration failures
-                return Status::OK();
+            } else {
+                YRLOG_INFO("Successfully unregistered instance {} from Traefik", instanceID);
             }
-            YRLOG_INFO("Successfully unregistered instance {} from Traefik", instanceID);
             return Status::OK();
         });
 }

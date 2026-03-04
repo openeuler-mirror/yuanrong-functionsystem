@@ -138,17 +138,15 @@ Status LocalSchedDriver::Create()
     PosixAPIHandler::BindResourceGroupCtrl(rGroupCtrl_);
     PosixAPIHandler::SetMaxPriority(param_.maxPriority);
 
-    // Initialize and inject TraefikRegistry if enabled (sync call before actor spawn)
     if (param_.enableTraefikRegistry && !param_.traefikDomain.empty()) {
         traefikRegistry_ = std::make_shared<TraefikRegistry>(
             metaStorageAccessor_,
             param_.traefikDomain,
             param_.traefikEtcdPrefix,
-            param_.traefikLeaseTTL,
-            "tcpsecure");  // TCP entryPoint for L4 routing
+            param_.traefikTcpEntryPoint);
         instanceCtrl_->SetTraefikRegistry(traefikRegistry_);
-        YRLOG_INFO("TraefikRegistry initialized and injected: domain={}, prefix={}, ttl={}ms, entryPoint={}",
-                  param_.traefikDomain, param_.traefikEtcdPrefix, param_.traefikLeaseTTL, "tcpsecure");
+        YRLOG_INFO("TraefikRegistry initialized and injected: domain={}, prefix={}, entryPoint={}",
+                  param_.traefikDomain, param_.traefikEtcdPrefix, param_.traefikTcpEntryPoint);
     } else {
         if (param_.enableTraefikRegistry) {
             YRLOG_WARN("Traefik registry enabled but domain is empty, skipping initialization");

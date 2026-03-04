@@ -70,6 +70,14 @@ public:
     virtual litebus::Future<Status> Revoke(const std::string &key);
 
     /**
+     * Transactional put multiple key-values without lease.
+     * All keys will be written atomically in a single transaction.
+     * @param kvs Vector of key-value pairs to write.
+     * @return
+     */
+    virtual litebus::Future<Status> Txn(const std::vector<std::pair<std::string, std::string>>& kvs);
+
+    /**
      * Transactional put multiple key-values with a shared lease.
      * All keys will be written atomically in a single transaction and share one lease.
      * @param groupKey Identifier for this group of keys (e.g., instanceID), used for revoke.
