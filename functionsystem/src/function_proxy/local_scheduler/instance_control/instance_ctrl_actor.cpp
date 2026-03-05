@@ -4131,6 +4131,11 @@ litebus::Future<Status> InstanceCtrlActor::AuthorizeCreate(
     const litebus::Option<FunctionMeta> &functionMeta, const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
     const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise)
 {
+    // todo(lwy): should be jwt or other auth info in create options, and should not be required for system function.
+    auto createOptions = scheduleReq->instance().createoptions();
+    if (createOptions.find(TENANT_ID) != createOptions.end() && !createOptions[TENANT_ID].empty()) {
+        scheduleReq->mutable_instance()->set_tenantid(createOptions[TENANT_ID]);
+    }
     // 1. Verify the IAM function's switch.
     if (internalIAM_ == nullptr || !internalIAM_->IsIAMEnabled()) {
         return Status::OK();

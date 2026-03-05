@@ -563,7 +563,7 @@ void InstanceManagerActor::OnInstanceWatchEvent(const std::vector<WatchEvent> &e
                 if (TransToInstanceInfoFromJson(*instance, event.kv.value())) {
                     // Parse tenantID from key and set it in instance
                     std::string tenantID = ParseTenantIDFromInstanceKey(eventKey);
-                    if (!tenantID.empty()) {
+                    if (instance->tenantid().empty() && !tenantID.empty()) {
                         instance->set_tenantid(tenantID);
                     }
                     OnInstancePut(eventKey, instance);
