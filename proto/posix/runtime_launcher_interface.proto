@@ -29,6 +29,7 @@ message S3Config {
 message RootfsConfig {
   bool          readonly = 1;
   RootfsSrcType type     = 2;
+
   oneof source {
     string   image_url = 3;
     S3Config s3_config = 4;
@@ -59,6 +60,7 @@ message FunctionRuntime {
   repeated string     command     = 5;
   map<string, string> runtimeEnvs = 6;
   string              cwd         = 7;
+  repeated Mount      mounts      = 8;
 }
 
 message StartRequest {
@@ -77,8 +79,10 @@ message StartRequest {
   string extraConfig = 7;
   // network indicates the type of network the function use,
   // default is sandbox, support: sandbox, host, none
-  string network = 8;
-  repeated string ports = 9;
+  string network  = 8;
+  string ckpt_dir = 9;
+  string trace_id = 10;
+  repeated string ports = 11;
 }
 
 message StartResponse {
@@ -133,7 +137,7 @@ message CheckpointRequest {
 }
 
 message CheckpointResponse {
-  bool success = 1;
+  bool   success = 1;
   string message = 2;
 }
 
@@ -153,9 +157,10 @@ message RestoreRequest {
   string extraConfig = 7;
   // network indicates the type of network the function use,
   // default is sandbox, support: sandbox, host, none
-  string network = 8;
+  string network  = 8;
   string ckpt_dir = 9;
   string trace_id = 10;
+  repeated string ports = 11;
 }
 
 message RestoreResponse {
