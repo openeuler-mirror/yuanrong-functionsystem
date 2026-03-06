@@ -198,6 +198,12 @@ public:
         instanceCtrlActor_->BindInstanceControlView(view);
     }
 
+    std::shared_ptr<InstanceControlView> GetInstanceControlView() const
+    {
+        ASSERT_IF_NULL(instanceCtrlActor_);
+        return instanceCtrlActor_->GetInstanceControlView();
+    }
+
     virtual litebus::Future<Status> RescheduleWithID(const std::string &instanceID);
 
     virtual litebus::Future<Status> RescheduleAfterJudgeRecoverable(const std::string &instanceID,

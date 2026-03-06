@@ -34,6 +34,7 @@
 #include "local_scheduler/local_scheduler_service/local_sched_srv.h"
 #include "local_scheduler/local_scheduler_service/local_sched_srv_actor.h"
 #include "local_scheduler/resource_group_controller/resource_group_ctrl.h"
+#include "local_scheduler/gc_actor/local_gc_actor.h"
 #include "local_scheduler/snap_ctrl/snap_ctrl.h"
 #include "local_scheduler/subscription_manager/subscription_mgr.h"
 #include "local_scheduler/grpc_server/exec_service/exec_stream_service.h"
@@ -155,6 +156,7 @@ private:
     std::shared_ptr<ResourceGroupCtrl> rGroupCtrl_;
     std::shared_ptr<SubscriptionMgr> subscriptionMgr_;
     std::shared_ptr<SnapCtrl> snapCtrl_;
+    std::shared_ptr<LocalGcActor> gcActor_;
     std::shared_ptr<InstanceCtrlMetaStoreHealthyObserver> metaStoreHealthyObserver_;
     std::shared_ptr<functionsystem::grpc::CommonGrpcServer> posixGrpcServer_;
     std::shared_ptr<functionsystem::grpc::CommonGrpcServer> sessionGrpcServer_;

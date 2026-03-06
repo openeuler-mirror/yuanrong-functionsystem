@@ -306,6 +306,14 @@ public:
         instanceControlView_ = view;
     }
 
+    // Thread-safety note: instanceControlView_ is set once during construction and
+    // never reassigned afterwards, so copying the shared_ptr here is safe even when
+    // called from outside the actor thread (e.g., from LocalSchedDriver::Start).
+    std::shared_ptr<InstanceControlView> GetInstanceControlView() const
+    {
+        return instanceControlView_;
+    }
+
     litebus::Future<Status> SyncInstance(const std::shared_ptr<resource_view::ResourceUnit> &resourceUnit);
 
     litebus::Future<Status> SyncAgent(const std::unordered_map<std::string, messages::FuncAgentRegisInfo> &agentMap);
