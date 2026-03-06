@@ -163,8 +163,6 @@ Flags::Flags()
     AddBusProxyCreatRateLimitFlags();
     AddFlag(&Flags::enableTraefikRegistry_, "enable_traefik_registry",
             "enable traefik registry for instance route", false);
-    AddFlag(&Flags::traefikDomain_, "traefik_domain",
-            "domain for traefik route, e.g. example.com", "");
     AddFlag(&Flags::traefikEtcdPrefix_, "traefik_etcd_prefix",
             "etcd key prefix for traefik configuration", "traefik");
     AddFlag(&Flags::traefikLeaseTTL_, "traefik_lease_ttl",
