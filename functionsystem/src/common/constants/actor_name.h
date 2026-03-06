@@ -32,6 +32,7 @@ const std::string LOCAL_GROUP_CTRL_ACTOR_NAME = "LocalGroupCtrlActor";
 const std::string BUNDLE_MGR_ACTOR_NAME = "BundleMgrActor";
 const std::string SUBSCRIPTION_MGR_ACTOR_NAME_POSTFIX = "-SubscriptionMgrActor";
 const std::string SNAP_CTRL_ACTOR_NAME = "SnapCtrlActor";
+const std::string LOCAL_GC_ACTOR_NAME = "LocalGcActor";
 
 // GlobalScheduler
 const std::string GLOBAL_SCHED_ACTOR_NAME = "GlobalSchedActor";

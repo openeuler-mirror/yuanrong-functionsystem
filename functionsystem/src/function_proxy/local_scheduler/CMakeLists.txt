@@ -34,6 +34,7 @@ add_subdirectory(resource_group_controller)
 add_subdirectory(subscription_manager)
 add_subdirectory(snap_ctrl)
 add_subdirectory(traefik_registry)
+add_subdirectory(gc_actor)
 
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} LOCAL_SCHEDULER_SRC)
 

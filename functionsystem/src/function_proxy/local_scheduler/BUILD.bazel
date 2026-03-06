@@ -27,6 +27,7 @@ cc_library(
         "resource_group_controller/**/*.cpp",
         "subscription_manager/**/*.cpp",
         "snap_ctrl/**/*.cpp",
+        "gc_actor/**/*.cpp",
     ]),
     hdrs = glob(["**/*.h"]),
     copts = COPTS + ["-fPIE"],
