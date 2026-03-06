@@ -143,10 +143,11 @@ Status LocalSchedDriver::Create()
             metaStorageAccessor_,
             param_.traefikDomain,
             param_.traefikEtcdPrefix,
-            param_.traefikTcpEntryPoint);
+            param_.traefikHttpEntryPoint,
+            param_.traefikEnableTLS);
         instanceCtrl_->SetTraefikRegistry(traefikRegistry_);
-        YRLOG_INFO("TraefikRegistry initialized and injected: domain={}, prefix={}, entryPoint={}",
-                  param_.traefikDomain, param_.traefikEtcdPrefix, param_.traefikTcpEntryPoint);
+        YRLOG_INFO("TraefikRegistry initialized and injected: domain={}, prefix={}, entryPoint={}, enableTLS={}",
+                  param_.traefikDomain, param_.traefikEtcdPrefix, param_.traefikHttpEntryPoint, param_.traefikEnableTLS);
     } else {
         if (param_.enableTraefikRegistry) {
             YRLOG_WARN("Traefik registry enabled but domain is empty, skipping initialization");

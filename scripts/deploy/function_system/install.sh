@@ -181,7 +181,7 @@ function install_function_proxy() {
     --runtime_instance_debug_enable="${RUNTIME_INSTANCE_DEBUG_ENABLE}" \
     --enable_traefik_registry="${ENABLE_TRAEFIK_REGISTRY}" --traefik_domain="${TRAEFIK_DOMAIN}" \
     --traefik_etcd_prefix="${TRAEFIK_ETCD_PREFIX}" --traefik_lease_ttl="${TRAEFIK_LEASE_TTL}" \
-    --traefik_tcp_entrypoint="${TRAEFIK_TCP_ENTRYPOINT}" \
+    --traefik_http_entrypoint="${TRAEFIK_HTTP_ENTRYPOINT}" --traefik_enable_tls="${TRAEFIK_ENABLE_TLS}" \
     ${merge_process_args} >>"${FS_LOG_PATH}/${NODE_ID}-function_proxy${STD_LOG_SUFFIX}" 2>&1 &
 
   FUNCTION_PROXY_PID="$!"
