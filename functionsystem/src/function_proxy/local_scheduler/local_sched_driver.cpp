@@ -138,22 +138,17 @@ Status LocalSchedDriver::Create()
     PosixAPIHandler::BindResourceGroupCtrl(rGroupCtrl_);
     PosixAPIHandler::SetMaxPriority(param_.maxPriority);
 
-    if (param_.enableTraefikRegistry && !param_.traefikDomain.empty()) {
+    if (param_.enableTraefikRegistry) {
         traefikRegistry_ = std::make_shared<TraefikRegistry>(
             metaStorageAccessor_,
-            param_.traefikDomain,
             param_.traefikEtcdPrefix,
             param_.traefikHttpEntryPoint,
             param_.traefikEnableTLS);
         instanceCtrl_->SetTraefikRegistry(traefikRegistry_);
-        YRLOG_INFO("TraefikRegistry initialized and injected: domain={}, prefix={}, entryPoint={}, enableTLS={}",
-                  param_.traefikDomain, param_.traefikEtcdPrefix, param_.traefikHttpEntryPoint, param_.traefikEnableTLS);
+        YRLOG_INFO("TraefikRegistry initialized and injected: prefix={}, entryPoint={}, enableTLS={}",
+                  param_.traefikEtcdPrefix, param_.traefikHttpEntryPoint, param_.traefikEnableTLS);
     } else {
-        if (param_.enableTraefikRegistry) {
-            YRLOG_WARN("Traefik registry enabled but domain is empty, skipping initialization");
-        } else {
-            YRLOG_INFO("Traefik registry disabled");
-        }
+        YRLOG_INFO("Traefik registry disabled");
     }
 
     subscriptionMgr_ = SubscriptionMgr::Init(param_.nodeID,
