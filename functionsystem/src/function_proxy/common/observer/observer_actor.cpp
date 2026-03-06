@@ -889,15 +889,13 @@ void ObserverActor::SetInstanceBillingContext(const resource_view::InstanceInfo 
             || instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::FAILED)
             || instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::FATAL)) {
             metrics::MetricsAdapter::GetInstance().GetMetricsContext().InitExtraBillingInstance(
-                instanceInfo.instanceid(), instanceInfo.functionagentid(), customMetricsOption,
-                instanceInfo.issystemfunc());
+                instanceInfo, customMetricsOption);
             metrics::MetricsAdapter::GetInstance().RegisterBillingInstanceRunningDuration();
         }
         if (instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)
             || instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::EXITING)) {
             metrics::MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(
-                instanceInfo.instanceid(), instanceInfo.functionagentid(), customMetricsOption,
-                instanceInfo.issystemfunc());
+                instanceInfo, customMetricsOption);
             metrics::MetricsAdapter::GetInstance().RegisterBillingInstanceRunningDuration();
         }
     }

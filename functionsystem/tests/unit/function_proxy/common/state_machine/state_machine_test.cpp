@@ -837,7 +837,11 @@ TEST_F(InstanceStateMachineTest, TransitionStateFatalFromRunning)
 {
     const std::string instanceId = "instanceID";
     std::map<std::string, std::string> createOptions = {};
-    metrics::MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(instanceId, "", createOptions);
+    resources::InstanceInfo instanceInfo;
+    instanceInfo.set_instanceid(instanceId);
+    instanceInfo.set_functionagentid("");
+    instanceInfo.set_issystemfunc(false);
+    metrics::MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(instanceInfo, createOptions);
 
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
@@ -860,7 +864,11 @@ TEST_F(InstanceStateMachineTest, TransitionStateFailedFromRunning)
 {
     const std::string instanceId = "instanceID";
     std::map<std::string, std::string> createOptions = {};
-    metrics::MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(instanceId, "", createOptions);
+    resources::InstanceInfo instanceInfo;
+    instanceInfo.set_instanceid(instanceId);
+    instanceInfo.set_functionagentid("");
+    instanceInfo.set_issystemfunc(false);
+    metrics::MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(instanceInfo, createOptions);
 
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);

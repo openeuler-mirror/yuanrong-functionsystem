@@ -243,10 +243,51 @@ const std::map<std::string, std::string> MetricsContext::GetCustomMetricsOption(
     return customMetricsOptions;
 }
 
-void MetricsContext::InitBillingInstance(const std::string &instanceID, const std::string &functionAgentId,
-                                         const std::map<std::string, std::string> &createOptions,
-                                         const bool isSystemFunc)
+void MetricsContext::ExtractResources(const resource_view::InstanceInfo &instanceInfo,
+                                      BillingInstanceInfo &billingInstanceInfo)
 {
+    for (const auto &pair: instanceInfo.resources().resources()) {
+        const std::string &key = pair.first;
+        const resources::Resource &resource = pair.second;
+        if (resource.has_scalar()) {
+            billingInstanceInfo.requiredResources[key] = std::to_string(resource.scalar().value());
+        } else if (resource.has_ranges()) {
+            std::ostringstream oss;
+            for (int i = 0; i < resource.ranges().range_size(); ++i) {
+                const auto &r = resource.ranges().range(i);
+                oss << "(" << r.begin() << "," << r.end() << ")";
+                if (i != resource.ranges().range_size() - 1) {
+                    oss << ",";
+                }
+            }
+            billingInstanceInfo.requiredResources[key] = oss.str();
+        } else if (resource.has_set()) {
+            std::ostringstream oss;
+            for (int i = 0; i < resource.set().items_size(); ++i) {
+                const auto &s = resource.set().items(i);
+                oss << s;
+                if (i != resource.set().items_size() - 1) {
+                    oss << ",";
+                }
+            }
+            billingInstanceInfo.requiredResources[key] = oss.str();
+        } else if (resource.has_vectors() && std::count(key.begin(), key.end(), '/') == 1) {
+            // Ensure that the string is in the format of NPU/xx or GPU/xx
+            size_t index = key.find('/');
+            if (auto prefix = key.substr(0, index); prefix != "NPU" && prefix != "GPU") {
+                continue;
+            }
+            billingInstanceInfo.xpuType = key.substr(index + 1, key.size() - index - 1);
+        }
+    }
+}
+
+void MetricsContext::InitBillingInstance(const resource_view::InstanceInfo &instanceInfo,
+                                         const std::map<std::string, std::string> &createOptions)
+{
+    const auto &instanceID = instanceInfo.instanceid();
+    const auto &functionAgentId = instanceInfo.functionagentid();
+    auto isSystemFunc = instanceInfo.issystemfunc();
     if (enabledInstruments_.find(YRInstrument::YR_INSTANCE_RUNNING_DURATION) == enabledInstruments_.end()
         || isSystemFunc) {
         return;
@@ -264,6 +305,7 @@ void MetricsContext::InitBillingInstance(const std::string &instanceID, const st
         billingInstanceInfo.customCreateOption = createOptions;
         billingInstanceInfo.isSystemFunc = isSystemFunc;
         billingInstanceInfo.functionAgentId = functionAgentId;
+        ExtractResources(instanceInfo, billingInstanceInfo);
         billingInstanceMap_[instanceID] = billingInstanceInfo;
     }
 
@@ -277,10 +319,12 @@ void MetricsContext::InitBillingInstance(const std::string &instanceID, const st
                 createOptions.size());
 }
 
-void MetricsContext::InitExtraBillingInstance(const std::string &instanceID, const std::string &functionAgentId,
-                                              const std::map<std::string, std::string> &createOptions,
-                                              const bool isSystemFunc)
+    void MetricsContext::InitExtraBillingInstance(const resource_view::InstanceInfo &instanceInfo,
+                                                  const std::map<std::string, std::string> &createOptions)
 {
+    const auto &instanceID = instanceInfo.instanceid();
+    const auto &functionAgentId = instanceInfo.functionagentid();
+    auto isSystemFunc = instanceInfo.issystemfunc();
     if (enabledInstruments_.find(YRInstrument::YR_INSTANCE_RUNNING_DURATION) == enabledInstruments_.end()
         || isSystemFunc) {
         return;
@@ -297,6 +341,7 @@ void MetricsContext::InitExtraBillingInstance(const std::string &instanceID, con
         billingInstanceInfo.endTimeMillis = nowMillis;
         billingInstanceInfo.customCreateOption = createOptions;
         billingInstanceInfo.functionAgentId = functionAgentId;
+        ExtractResources(instanceInfo, billingInstanceInfo);
         extraBillingInstanceMap_[instanceID] = billingInstanceInfo;
     }
     auto nodeLabelsOption = GetNodeLabelById(functionAgentId);

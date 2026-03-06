@@ -5872,9 +5872,8 @@ CreateCallResultCallBack InstanceCtrlActor::RegisterCreateCallResultCallback(
 void InstanceCtrlActor::SetInstanceBillingContext(const resource_view::InstanceInfo &instance)
 {
     auto customMetricsOption = metrics::MetricsAdapter::GetInstance().GetMetricsContext().
-        GetCustomMetricsOption(instance);
-    metrics::MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(
-        instance.instanceid(), instance.functionagentid(), customMetricsOption, instance.issystemfunc());
+            GetCustomMetricsOption(instance);
+    metrics::MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(instance, customMetricsOption);
     metrics::MetricsAdapter::GetInstance().RegisterBillingInstanceRunningDuration();
 }
 

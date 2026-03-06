@@ -56,6 +56,9 @@ struct BillingInstanceInfo {
     long long startTimeMillis;
     long long endTimeMillis;
     std::string functionAgentId;
+    std::string xpuType; // GPU or NPU model name, like 910B4
+    // key: resource name, like CPU,memeory
+    std::map<std::string, std::string> requiredResources;
 };
 
 struct InstanceMetrics {
@@ -119,11 +122,14 @@ public:
 
     const litebus::Option<NodeLabelsType> GetNodeLabelById(const std::string &functionAgentId);
 
-    void InitBillingInstance(const std::string &instanceID, const std::string &functionAgentId,
-                             const std::map<std::string, std::string> &createOptions, const bool isSystemFunc = false);
-    void InitExtraBillingInstance(const std::string &instanceID, const std::string &functionAgentId,
-                                  const std::map<std::string, std::string> &createOptions,
-                                  const bool isSystemFunc = false);
+    void ExtractResources(const resource_view::InstanceInfo &instanceInfo, BillingInstanceInfo &billingInstanceInfo);
+
+    void InitBillingInstance(const resource_view::InstanceInfo &instanceInfo,
+                             const std::map<std::string, std::string> &createOptions);
+
+    void InitExtraBillingInstance(const resource_view::InstanceInfo &instanceInfo,
+                                  const std::map<std::string, std::string> &createOptions);
+
     bool IsSystemFunc(const std::string &agentId);
 
     void InitInstanceMetrics(const messages::UpdateResourcesRequest &req);

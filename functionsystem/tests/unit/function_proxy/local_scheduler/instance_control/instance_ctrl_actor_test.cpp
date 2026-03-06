@@ -611,8 +611,12 @@ TEST_F(DISABLED_InstanceCtrlActorTest, ShutdownWithNoInstanceClient)
     auto id2 = "Test_ReqID_" + litebus::uuid_generator::UUID::GetRandomUUID().ToString();
     inst.set_instanceid(id);
     inst.set_requestid(id2);
+    resources::InstanceInfo instanceInfo;
+    instanceInfo.set_instanceid(id);
+    instanceInfo.set_functionagentid("");
+    instanceInfo.set_issystemfunc(false);
 
-    metrics::MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(id, "", std::map<std::string, std::string>{});
+    metrics::MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(instanceInfo, std::map<std::string, std::string>{});
     auto res = instanceCtrlActor_->ShutDownInstance(inst, 10);
     EXPECT_EQ(res.Get(), Status::OK());
     auto endTime = metrics::MetricsAdapter::GetInstance().GetMetricsContext().GetBillingInstance(id).endTimeMillis;
