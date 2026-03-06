@@ -37,7 +37,8 @@ public:
     TraefikRegistry(std::shared_ptr<MetaStorageAccessor> accessor,
                     const std::string& domain,
                     const std::string& keyPrefix,
-                    const std::string& tcpEntryPoint = "tcpsecure");
+                    const std::string& httpEntryPoint = "websecure",
+                    bool enableTLS = true);
     ~TraefikRegistry() = default;
 
     litebus::Future<Status> RegisterInstance(
@@ -53,7 +54,8 @@ private:
     std::shared_ptr<MetaStorageAccessor> accessor_;
     std::string domain_;
     std::string keyPrefix_;
-    std::string tcpEntryPoint_;
+    std::string httpEntryPoint_;
+    bool enableTLS_;
 };
 
 }  // namespace functionsystem::local_scheduler

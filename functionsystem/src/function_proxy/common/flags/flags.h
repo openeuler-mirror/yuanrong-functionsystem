@@ -452,9 +452,14 @@ public:
         return traefikLeaseTTL_;
     }
 
-    const std::string& GetTraefikTcpEntryPoint() const
+    const std::string& GetTraefikHttpEntryPoint() const
     {
-        return traefikTcpEntryPoint_;
+        return traefikHttpEntryPoint_;
+    }
+
+    bool GetTraefikEnableTLS() const
+    {
+        return traefikEnableTLS_;
     }
 
 protected:
@@ -553,7 +558,8 @@ protected:
     std::string traefikDomain_;
     std::string traefikEtcdPrefix_ = "traefik";
     int32_t traefikLeaseTTL_ = 300000;
-    std::string traefikTcpEntryPoint_ = "tcpsecure";
+    std::string traefikHttpEntryPoint_ = "websecure";
+    bool traefikEnableTLS_ = true;
 };
 
 }  // namespace functionsystem::function_proxy

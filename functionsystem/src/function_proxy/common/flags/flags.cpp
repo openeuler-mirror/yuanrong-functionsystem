@@ -169,8 +169,10 @@ Flags::Flags()
             "etcd key prefix for traefik configuration", "traefik");
     AddFlag(&Flags::traefikLeaseTTL_, "traefik_lease_ttl",
             "lease TTL for traefik registry (milliseconds)", 300000);
-    AddFlag(&Flags::traefikTcpEntryPoint_, "traefik_tcp_entrypoint",
-            "TCP entryPoint name for traefik routing", "tcpsecure");
+    AddFlag(&Flags::traefikHttpEntryPoint_, "traefik_http_entrypoint",
+            "HTTP entryPoint name for traefik routing", "websecure");
+    AddFlag(&Flags::traefikEnableTLS_, "traefik_enable_tls",
+            "enable TLS for HTTP routing", true);
 }
 
 void Flags::AddElectionFlags()

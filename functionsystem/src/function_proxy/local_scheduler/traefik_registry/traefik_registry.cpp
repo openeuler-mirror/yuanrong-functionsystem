@@ -25,14 +25,16 @@ namespace functionsystem::local_scheduler {
 TraefikRegistry::TraefikRegistry(std::shared_ptr<MetaStorageAccessor> accessor,
                                    const std::string& domain,
                                    const std::string& keyPrefix,
-                                   const std::string& tcpEntryPoint)
+                                   const std::string& httpEntryPoint,
+                                   bool enableTLS)
     : accessor_(std::move(accessor)),
       domain_(domain),
       keyPrefix_(keyPrefix),
-      tcpEntryPoint_(tcpEntryPoint)
+      httpEntryPoint_(httpEntryPoint),
+      enableTLS_(enableTLS)
 {
-    YRLOG_INFO("TraefikRegistry initialized: domain={}, keyPrefix={}, tcpEntryPoint={}",
-              domain_, keyPrefix_, tcpEntryPoint_);
+    YRLOG_INFO("TraefikRegistry initialized: domain={}, keyPrefix={}, httpEntryPoint={}, enableTLS={}",
+              domain_, keyPrefix_, httpEntryPoint_, enableTLS_);
 }
 
 litebus::Future<Status> TraefikRegistry::RegisterInstance(
@@ -52,34 +54,36 @@ litebus::Future<Status> TraefikRegistry::RegisterInstance(
 
     std::string safeID = SanitizeID(instanceID);
 
-    // Build key-value pairs for TCP routing
-    // Each port needs 5 keys: rule, service, entryPoints/0, tls, loadbalancer address
+    // Build key-value pairs for HTTP routing based on path prefix
+    // Each port needs 4-5 keys: rule, service, entryPoints/0, tls (optional), loadbalancer url
     std::vector<std::pair<std::string, std::string>> kvs;
 
     for (const auto& [sandboxPort, hostPort] : portMappings) {
         std::string routerName = safeID + "-p" + std::to_string(sandboxPort);
 
-        // TCP router rule: HostSNI(`inst-001-p8080.example.com`)
-        std::string ruleValue = "HostSNI(`" + routerName + "." + domain_ + "`)";
-        kvs.push_back({keyPrefix_ + "/tcp/routers/" + routerName + "/rule", ruleValue});
+        // HTTP router rule: PathPrefix(`/{instanceID}/{port}`)
+        std::string ruleValue = "PathPrefix(`/" + safeID + "/" + std::to_string(sandboxPort) + "`)";
+        kvs.push_back({keyPrefix_ + "/http/routers/" + routerName + "/rule", ruleValue});
 
-        // TCP router service name
-        kvs.push_back({keyPrefix_ + "/tcp/routers/" + routerName + "/service", routerName});
+        // HTTP router service name
+        kvs.push_back({keyPrefix_ + "/http/routers/" + routerName + "/service", routerName});
 
-        // TCP router entryPoint
-        kvs.push_back({keyPrefix_ + "/tcp/routers/" + routerName + "/entryPoints/0", tcpEntryPoint_});
+        // HTTP router entryPoint (websecure for HTTPS, web for HTTP)
+        kvs.push_back({keyPrefix_ + "/http/routers/" + routerName + "/entryPoints/0", httpEntryPoint_});
 
-        // TCP router TLS (empty value enables TLS)
-        kvs.push_back({keyPrefix_ + "/tcp/routers/" + routerName + "/tls", ""});
+        // HTTP router TLS (optional, empty value enables TLS)
+        if (enableTLS_) {
+            kvs.push_back({keyPrefix_ + "/http/routers/" + routerName + "/tls", ""});
+        }
 
-        // TCP service loadbalancer address: hostIP:hostPort
-        std::ostringstream addrStream;
-        addrStream << hostIP << ":" << hostPort;
-        kvs.push_back({keyPrefix_ + "/tcp/services/" + routerName + "/loadbalancer/servers/0/address",
-                       addrStream.str()});
+        // HTTP service loadbalancer URL: http://hostIP:hostPort
+        std::ostringstream urlStream;
+        urlStream << "http://" << hostIP << ":" << hostPort;
+        kvs.push_back({keyPrefix_ + "/http/services/" + routerName + "/loadbalancer/servers/0/url",
+                       urlStream.str()});
     }
 
-    YRLOG_INFO("Registering instance {} to Traefik: {} ports, {} keys",
+    YRLOG_INFO("Registering instance {} to Traefik HTTP: {} ports, {} keys",
               instanceID, portMappings.size(), kvs.size());
 
     return accessor_->Txn(kvs)
@@ -101,24 +105,24 @@ litebus::Future<Status> TraefikRegistry::UnregisterInstance(const std::string& i
         return litebus::Future<Status>(Status::OK());
     }
 
-    YRLOG_INFO("Unregistering instance {} from Traefik", instanceID);
+    YRLOG_INFO("Unregistering instance {} from Traefik HTTP", instanceID);
 
     std::string safeID = SanitizeID(instanceID);
-    std::string routerPrefix = keyPrefix_ + "/tcp/routers/" + safeID;
-    std::string servicePrefix = keyPrefix_ + "/tcp/services/" + safeID;
+    std::string routerPrefix = keyPrefix_ + "/http/routers/" + safeID;
+    std::string servicePrefix = keyPrefix_ + "/http/services/" + safeID;
 
     return accessor_->Delete(routerPrefix, true)
         .Then([this, servicePrefix](const Status& status) {
             if (!status.IsOk()) {
-                YRLOG_WARN("Failed to delete Traefik routers: {}", status.GetMessage());
+                YRLOG_WARN("Failed to delete Traefik HTTP routers: {}", status.GetMessage());
             }
             return accessor_->Delete(servicePrefix, true);
         })
         .Then([instanceID](const Status& status) -> Status {
             if (!status.IsOk()) {
-                YRLOG_WARN("Failed to unregister instance {} from Traefik: {}", instanceID, status.GetMessage());
+                YRLOG_WARN("Failed to unregister instance {} from Traefik HTTP: {}", instanceID, status.GetMessage());
             } else {
-                YRLOG_INFO("Successfully unregistered instance {} from Traefik", instanceID);
+                YRLOG_INFO("Successfully unregistered instance {} from Traefik HTTP", instanceID);
             }
             return Status::OK();
         });
