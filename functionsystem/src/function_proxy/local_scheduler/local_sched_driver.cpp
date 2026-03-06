@@ -23,6 +23,7 @@
 #include "local_scheduler/bundle_manager/bundle_mgr_actor.h"
 #include "local_scheduler/debug_instance_info_monitor/debug_instance_info_monitor.h"
 #include "local_scheduler/instance_control/posix_api_handler/posix_api_handler.h"
+#include "local_scheduler/gc_actor/local_gc_actor.h"
 #include "local_scheduler/local_group_ctrl/local_group_ctrl_actor.h"
 #include "local_scheduler/grpc_server/bus_service/bus_service.h"
 
@@ -196,6 +197,11 @@ Status LocalSchedDriver::Start()
     snapCtrl_->BindClientManager(param_.controlInterfacePosixMgr);
     instanceCtrl_->BindSnapCtrl(snapCtrl_);
 
+    gcActor_ = std::make_shared<LocalGcActor>(LOCAL_GC_ACTOR_NAME, param_.nodeID);
+    gcActor_->BindInstanceControlView(instanceCtrl_->GetInstanceControlView());
+    gcActor_->BindInstanceCtrl(instanceCtrl_);
+    litebus::Spawn(gcActor_);
+
     abnormalProcessor_->BindMetaStoreClient(metaStoreClient_);
     abnormalProcessor_->BindObserver(param_.controlPlaneObserver);
     abnormalProcessor_->BindInstanceCtrl(instanceCtrl_);
@@ -314,6 +320,9 @@ Status LocalSchedDriver::Stop()
     if (httpServer_) {
         litebus::Terminate(httpServer_->GetAID());
     }
+    if (gcActor_) {
+        litebus::Terminate(gcActor_->GetAID());
+    }
     StopActor({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
     return Status::OK();
 }
@@ -325,6 +334,9 @@ void LocalSchedDriver::Await()
     }
     if (httpServer_) {
         litebus::Await(httpServer_->GetAID());
+    }
+    if (gcActor_) {
+        litebus::Await(gcActor_->GetAID());
     }
     AwaitActor({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
 }

@@ -12,18 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(local_scheduler_service)
-add_subdirectory(instance_control)
-add_subdirectory(function_agent_manager)
-add_subdirectory(grpc_server)
-add_subdirectory(abnormal_processor)
-add_subdirectory(ds_healthy_checker)
-add_subdirectory(local_group_ctrl)
-add_subdirectory(bundle_manager)
-add_subdirectory(resource_group_controller)
-add_subdirectory(subscription_manager)
-add_subdirectory(gc_actor)
-
-get_property(SRC_LOCAL_SCHEDULER_INCLUDE_DIR GLOBAL PROPERTY "SRC_LOCAL_SCHEDULER_INCLUDE_DIR")
-
-target_include_directories(${UNIT_TEST_MODULE} PRIVATE ${SRC_LOCAL_SCHEDULER_INCLUDE_DIR})
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR} GC_ACTOR_SRC)
+target_sources(local_scheduler_lib PRIVATE ${GC_ACTOR_SRC})
