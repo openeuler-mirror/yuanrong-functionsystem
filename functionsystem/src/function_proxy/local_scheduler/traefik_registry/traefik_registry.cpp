@@ -35,6 +35,20 @@ TraefikRegistry::TraefikRegistry(std::shared_ptr<MetaStorageAccessor> accessor,
 {
     YRLOG_INFO("TraefikRegistry initialized: domain={}, keyPrefix={}, httpEntryPoint={}, enableTLS={}",
               domain_, keyPrefix_, httpEntryPoint_, enableTLS_);
+    
+    // Create global StripPrefix middleware for all instances
+    // This middleware removes /{instanceID}/{port} prefix using regex
+    if (accessor_) {
+        accessor_->Put(keyPrefix_ + "/http/middlewares/stripprefix-all/stripPrefixRegex/regex", 
+                       "^/[^/]+/[0-9]+")
+            .Then([](const Status& status) {
+                if (!status.IsOk()) {
+                    YRLOG_WARN("Failed to create global StripPrefix middleware: {}", status.GetMessage());
+                } else {
+                    YRLOG_INFO("Global StripPrefix middleware created successfully");
+                }
+            });
+    }
 }
 
 litebus::Future<Status> TraefikRegistry::RegisterInstance(
@@ -55,18 +69,24 @@ litebus::Future<Status> TraefikRegistry::RegisterInstance(
     std::string safeID = SanitizeID(instanceID);
 
     // Build key-value pairs for HTTP routing based on path prefix
-    // Each port needs 4-5 keys: rule, service, entryPoints/0, tls (optional), loadbalancer url
+    // Each port needs 6-7 keys: rule, service, middlewares/0, entryPoints/0, tls (optional), 
+    // middleware config, loadbalancer url
     std::vector<std::pair<std::string, std::string>> kvs;
 
     for (const auto& [sandboxPort, hostPort] : portMappings) {
         std::string routerName = safeID + "-p" + std::to_string(sandboxPort);
+        std::string prefixPath = "/" + safeID + "/" + std::to_string(sandboxPort);
+        std::string middlewareName = "strip-" + routerName;
 
         // HTTP router rule: PathPrefix(`/{instanceID}/{port}`)
-        std::string ruleValue = "PathPrefix(`/" + safeID + "/" + std::to_string(sandboxPort) + "`)";
+        std::string ruleValue = "PathPrefix(`" + prefixPath + "`)";
         kvs.push_back({keyPrefix_ + "/http/routers/" + routerName + "/rule", ruleValue});
 
         // HTTP router service name
         kvs.push_back({keyPrefix_ + "/http/routers/" + routerName + "/service", routerName});
+
+        // HTTP router middlewares - use StripPrefix to remove /{instanceID}/{port} prefix
+        kvs.push_back({keyPrefix_ + "/http/routers/" + routerName + "/middlewares/0", middlewareName});
 
         // HTTP router entryPoint (websecure for HTTPS, web for HTTP)
         kvs.push_back({keyPrefix_ + "/http/routers/" + routerName + "/entryPoints/0", httpEntryPoint_});
@@ -75,6 +95,9 @@ litebus::Future<Status> TraefikRegistry::RegisterInstance(
         if (enableTLS_) {
             kvs.push_back({keyPrefix_ + "/http/routers/" + routerName + "/tls", ""});
         }
+
+        // StripPrefix middleware configuration - remove the prefix before forwarding to backend
+        kvs.push_back({keyPrefix_ + "/http/middlewares/" + middlewareName + "/stripPrefix/prefixes/0", prefixPath});
 
         // HTTP service loadbalancer URL: http://hostIP:hostPort
         std::ostringstream urlStream;
