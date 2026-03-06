@@ -92,7 +92,6 @@ struct LocalSchedStartParam {
     std::string sessionGrpcPort;
     std::string address;  // LiteBus address (ip:port format), used to extract IP for gRPC servers
     bool enableTraefikRegistry = false;
-    std::string traefikDomain;
     std::string traefikEtcdPrefix = "traefik";
     int32_t traefikLeaseTTL = 300000;
     std::string traefikHttpEntryPoint = "websecure";

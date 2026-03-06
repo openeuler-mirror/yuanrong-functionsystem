@@ -35,7 +35,6 @@ public:
     };
 
     TraefikRegistry(std::shared_ptr<MetaStorageAccessor> accessor,
-                    const std::string& domain,
                     const std::string& keyPrefix,
                     const std::string& httpEntryPoint = "websecure",
                     bool enableTLS = true);
@@ -52,7 +51,6 @@ private:
     static std::string SanitizeID(const std::string& id);
 
     std::shared_ptr<MetaStorageAccessor> accessor_;
-    std::string domain_;
     std::string keyPrefix_;
     std::string httpEntryPoint_;
     bool enableTLS_;

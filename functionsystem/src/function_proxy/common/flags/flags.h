@@ -437,11 +437,6 @@ public:
         return enableTraefikRegistry_;
     }
 
-    const std::string& GetTraefikDomain() const
-    {
-        return traefikDomain_;
-    }
-
     const std::string& GetTraefikEtcdPrefix() const
     {
         return traefikEtcdPrefix_;
@@ -555,7 +550,6 @@ protected:
     bool enableMergeProcess_{ false };
     std::string dPosixUdsPath_;
     bool enableTraefikRegistry_{ false };
-    std::string traefikDomain_;
     std::string traefikEtcdPrefix_ = "traefik";
     int32_t traefikLeaseTTL_ = 300000;
     std::string traefikHttpEntryPoint_ = "websecure";
