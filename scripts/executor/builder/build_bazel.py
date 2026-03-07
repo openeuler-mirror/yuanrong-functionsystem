@@ -59,9 +59,24 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
 
     log.info(f"Running Bazel build with config={config}, jobs={job_num}")
 
+    # Place Bazel output under workspace/build/ (bind-mounted via -v /home/:/home/).
+    # Without this, the default output root lands on Docker overlayfs (/root/.cache/bazel/),
+    # which is NOT a bind mount, so linux-sandbox cannot resolve symlinks into the execroot.
+    # This mirrors yuanrong's build.sh: --output_user_root="${BASE_DIR}/build".
+    bazel_output_root = os.path.join(root_dir, "build", "bazel_root")
+    os.makedirs(bazel_output_root, exist_ok=True)
+
+    # thirdparty/runtime_deps holds pre-downloaded tarballs (e.g. rules_apple)
+    # that are not available on the Huawei mirror.  Mirrors yuanrong's
+    # --distdir=./thirdparty/runtime_deps pattern.
+    distdir = os.path.join(root_dir, "thirdparty", "runtime_deps")
+
     # Build all binary targets
     bazel_cmd = [
-        "bazel", "build",
+        "bazel",
+        f"--output_user_root={bazel_output_root}",
+        "build",
+        f"--distdir={distdir}",
         f"--jobs={job_num}",
         f"--config={config}",
         *BINARY_TARGETS,
