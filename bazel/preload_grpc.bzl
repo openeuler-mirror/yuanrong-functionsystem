@@ -2,23 +2,24 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("//bazel:grpc_upb_repository.bzl", "grpc_upb_repository")
 
 def preload_grpc():
-    # abseil-cpp — GitHub stable tarball (gitee /repository/archive/ zips are non-deterministic)
-    # Not in github.com/bazelbuild/ so NOT redirected to Huawei mirror
+    # abseil-cpp — zip archive (the .tar.gz variant returns 404 on Huawei mirror;
+    # the .zip is pre-downloaded in thirdparty/runtime_deps/20240722.0.zip)
     http_archive(
         name = "com_google_absl",
-        sha256 = "f50e5ac311a81382da7fa75b97310e4b9006474f9560ac46f54a9967f07d4ae3",
+        sha256 = "104dead3edd7b67ddeb70c37578245130d6118efad5dad4b618d7e26a5331f55",
         strip_prefix = "abseil-cpp-20240722.0",
         urls = [
-            "https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.tar.gz",
+            "https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.zip",
         ],
     )
 
-    # protobuf v3.25.5 — GitHub stable tarball
+    # protobuf v3.25.5 — zip archive (the .tar.gz variant returns 404 on Huawei mirror;
+    # the .zip is pre-downloaded in thirdparty/runtime_deps/v3.25.5.zip)
     http_archive(
         name = "com_google_protobuf",
-        strip_prefix = "protobuf-3.25.5",
-        sha256 = "4356e78744dfb2df3890282386c8568c85868116317d9b3ad80eb11c2aecf2ff",
-        urls = ["https://github.com/protocolbuffers/protobuf/archive/refs/tags/v3.25.5.tar.gz"],
+        strip_prefix = "protobuf_source-v3.25.5",
+        sha256 = "4640cb69abb679e2a4b061dfeb7debb3170b592e4ac6e3f16dbaaa4aac0710bd",
+        urls = ["https://github.com/protocolbuffers/protobuf/archive/refs/tags/v3.25.5.zip"],
     )
 
     # utf8_range (required by protobuf)
@@ -29,12 +30,13 @@ def preload_grpc():
         urls = ["https://github.com/protocolbuffers/utf8_range/archive/d863bc33e15cba6d873c878dcca9e6fe52b2f8cb.zip"],
     )
 
-    # zlib (required by protobuf/grpc) — GitHub stable tarball
+    # zlib (required by protobuf/grpc) — zip archive (the .tar.gz variant returns 404 on Huawei mirror;
+    # the .zip is pre-downloaded in thirdparty/runtime_deps/v1.3.1.zip)
     http_archive(
         name = "zlib",
-        strip_prefix = "zlib-1.3.1",
-        urls = ["https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz"],
-        sha256 = "17e88863f3600672ab49182f217281b6fc4d3c762bde361935e436a95214d05c",
+        strip_prefix = "zlib-v1.3.1",
+        urls = ["https://github.com/madler/zlib/archive/refs/tags/v1.3.1.zip"],
+        sha256 = "7c31009abc4e76ddc32e1448b6051bafe5f606aac158bb36166100a21ec170c6",
         build_file = "@com_google_protobuf//:third_party/zlib.BUILD",
     )
 
@@ -57,11 +59,12 @@ def preload_grpc():
         path = "./vendor/src/openssl/",
     )
 
-    # re2 — GitHub stable tarball
+    # re2 — zip archive (the .tar.gz variant returns 404 on Huawei mirror;
+    # the .zip is pre-downloaded in thirdparty/runtime_deps/2024-02-01.zip)
     http_archive(
         name = "com_googlesource_code_re2",
-        urls = ["https://github.com/google/re2/archive/refs/tags/2024-02-01.tar.gz"],
-        sha256 = "cd191a311b84fcf37310e5cd876845b4bf5aee76fdd755008eef3b6478ce07bb",
+        urls = ["https://github.com/google/re2/archive/refs/tags/2024-02-01.zip"],
+        sha256 = "54bff0e995b101e1865dcea5d052ec10b3aadb6f8c57b5c03c9eeccddb00a08a",
         strip_prefix = "re2-2024-02-01",
     )
 
@@ -73,10 +76,11 @@ def preload_grpc():
         strip_prefix = "googleapis-541b1ded4abadcc38e8178680b0677f65594ea6f",
     )
 
-    # c-ares — GitHub stable tarball
+    # c-ares — zip archive (the .tar.gz variant returns 404 on Huawei mirror;
+    # the .zip is pre-downloaded in thirdparty/runtime_deps/cares-1_19_1.zip)
     http_archive(
         name = "com_github_cares_cares",
-        urls = ["https://github.com/c-ares/c-ares/archive/refs/tags/cares-1_19_1.tar.gz"],
-        sha256 = "9eadec0b34015941abdf3eb6aead694c8d96a192a792131186a7e0a86f2ad6d9",
+        urls = ["https://github.com/c-ares/c-ares/archive/refs/tags/cares-1_19_1.zip"],
+        sha256 = "edcaac184aff0e6b6eb7b9ede7a55f36c7fc04085d67fecff2434779155dd8ce",
         strip_prefix = "c-ares-cares-1_19_1",
     )
