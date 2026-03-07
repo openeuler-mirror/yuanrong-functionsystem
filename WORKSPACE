@@ -19,21 +19,23 @@ local_patched_repository(
     build_file = "@//bazel:spdlog.bzl",
 )
 
-# --- nlohmann_json --- GitHub stable tarball (gitee archive is non-deterministic)
+# --- nlohmann_json --- gitee mirror zip (GitHub .tar.gz returns 404 on Huawei mirror;
+# the .zip is pre-downloaded in thirdparty/runtime_deps/v3.11.3.zip)
 http_archive(
     name = "nlohmann_json",
     build_file = "@//bazel:nlohmann_json.bzl",
-    sha256 = "0d8ef5af7f9794e3263480193c491549b2ba6cc74bb018906202ada498a79406",
-    strip_prefix = "json-3.11.3",
-    urls = ["https://github.com/nlohmann/json/archive/refs/tags/v3.11.3.tar.gz"],
+    sha256 = "0deac294b2c96c593d0b7c0fb2385a2f4594e8053a36c52b11445ef4b9defebb",
+    strip_prefix = "nlohmann-json-v3.11.3",
+    urls = ["https://gitee.com/mirrors/nlohmann-json/repository/archive/v3.11.3.zip"],
 )
 
-# --- gtest --- GitHub stable tarball
+# --- gtest --- zip archive (the .tar.gz variant returns 404 on Huawei mirror;
+# the .zip is pre-downloaded in thirdparty/runtime_deps/v1.13.0.zip)
 http_archive(
     name = "gtest",
-    sha256 = "ad7fdba11ea011c1d925b3289cf4af2c66a352e18d4c7264392fead75e919363",
-    strip_prefix = "googletest-1.13.0",
-    urls = ["https://github.com/google/googletest/archive/refs/tags/v1.13.0.tar.gz"],
+    sha256 = "647924848ca7cb91ba5e34260132902886e1bd140428bd3bd7b4e8fa6c6c8904",
+    strip_prefix = "googletest-v1.13.0",
+    urls = ["https://github.com/google/googletest/archive/refs/tags/v1.13.0.zip"],
 )
 
 # --- grpc dependency chain (abseil, protobuf, zlib, grpc, boringssl, re2, etc.) ---
@@ -71,12 +73,13 @@ load("//bazel:grpc_extra_deps.bzl", "grpc_extra_deps")
 
 grpc_extra_deps()
 
-# --- yaml-cpp --- GitHub stable tarball
+# --- yaml-cpp --- zip archive (the .tar.gz variant returns 404 on Huawei mirror;
+# the .zip is pre-downloaded in thirdparty/runtime_deps/0.8.0.zip)
 http_archive(
     name = "yaml-cpp",
-    sha256 = "fbe74bbdcee21d656715688706da3c8becfd946d92cd44705cc6098bb23b3a16",
+    sha256 = "6a05c681872d9465b8e2040b5211b1aa5cf30151dc4f3d7ed23ac75ce0fd9944",
     strip_prefix = "yaml-cpp-0.8.0",
-    urls = ["https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.tar.gz"],
+    urls = ["https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.zip"],
 )
 
 # --- securec (libboundscheck) ---

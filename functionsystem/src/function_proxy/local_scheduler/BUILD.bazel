@@ -28,6 +28,7 @@ cc_library(
         "subscription_manager/**/*.cpp",
         "snap_ctrl/**/*.cpp",
         "gc_actor/**/*.cpp",
+        "traefik_registry/**/*.cpp",
     ]),
     hdrs = glob(["**/*.h"]),
     copts = COPTS + ["-fPIE"],
