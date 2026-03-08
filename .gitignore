@@ -5,6 +5,7 @@
 .specify
 CLAUDE.md
 SKILL.md
+**/.cache/*
 
 ### output dir
 **/output/*
