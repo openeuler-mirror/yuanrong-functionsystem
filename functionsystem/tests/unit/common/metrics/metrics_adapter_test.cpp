@@ -619,17 +619,67 @@ TEST_F(MetricsAdapterTest, RegisterBillingInstanceRunningDuration)
     EXPECT_TRUE(observableInstrumentMap.find("yr_instance_running_duration") != observableInstrumentMap.end());
 
     // init instance info
-    MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(instanceID, agentId, createOptions);
+    resources::InstanceInfo instanceInfo;
+    instanceInfo.set_instanceid(instanceID);
+    instanceInfo.set_functionagentid(agentId);
+    instanceInfo.set_issystemfunc(false);
+    resources::Resources* resources = instanceInfo.mutable_resources();
+
+    resources::Resource cpuRes;
+    cpuRes.set_name("CPU");
+    cpuRes.mutable_scalar()->set_value(500);
+    (*resources->mutable_resources())["CPU"] = cpuRes;
+
+    resources::Resource memRes;
+    memRes.set_name("Memory");
+    memRes.mutable_scalar()->set_value(500);
+    (*resources->mutable_resources())["Memory"] = memRes;
+
+    resources::Resource npuCnt;
+    npuCnt.set_name("NPU/.+/count");
+    npuCnt.mutable_scalar()->set_value(1);
+    (*resources->mutable_resources())["NPU/.+/count"] = npuCnt;
+
+    resources::Resource rangeRes;
+    rangeRes.set_name("test_ranges");
+    auto range1 = rangeRes.mutable_ranges()->add_range();
+    range1->set_begin(10);
+    range1->set_end(20);
+    auto range2 = rangeRes.mutable_ranges()->add_range();
+    range2->set_begin(40);
+    range2->set_end(50);
+    (*resources->mutable_resources())["test_ranges"] = rangeRes;
+
+    resources::Resource setRes;
+    setRes.set_name("test_set");
+    setRes.mutable_set()->add_items("item1");
+    setRes.mutable_set()->add_items("item2");
+    (*resources->mutable_resources())["test_set"] = setRes;
+
+    resources::Resource npuRes;
+    npuRes.set_name("NPU/910B4");
+    resources::Value::Vectors::Category category;
+    resources::Value::Vectors::Vector vector;
+    vector.add_values(32768);
+    (*category.mutable_vectors())["devserer-bms-24-512177"] = vector;
+    (*npuRes.mutable_vectors()->mutable_values())["HBM"] = category;
+    (*resources->mutable_resources())["NPU/910B4"] = npuRes;
+
+    MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(instanceInfo, createOptions);
     auto startTimeMillis = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     auto billingInstanceMap = MetricsAdapter::GetInstance().GetMetricsContext().GetBillingInstanceMap();
     auto billingInstance = billingInstanceMap.find(instanceID);
     EXPECT_TRUE(billingInstance != billingInstanceMap.end());
     EXPECT_TRUE(billingInstance->second.customCreateOption.find("app_name")->second == "testApp");
     EXPECT_TRUE(billingInstance->second.customCreateOption.find("endpoint")->second == "127.0.0.1");
+    EXPECT_TRUE(billingInstance->second.xpuType == "910B4");
+    EXPECT_NEAR(std::stod(billingInstance->second.requiredResources["CPU"]), 500.0, 1e-9);
+    EXPECT_NEAR(std::stod(billingInstance->second.requiredResources["Memory"]), 500.0, 1e-9);
+    EXPECT_NEAR(std::stod(billingInstance->second.requiredResources["NPU/.+/count"]), 1.0, 1e-9);
 
     // init extra instance info
     auto endTimeMillis = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    MetricsAdapter::GetInstance().GetMetricsContext().InitExtraBillingInstance(instanceID, agentId, createOptions);
+    MetricsAdapter::GetInstance().GetMetricsContext().InitExtraBillingInstance(instanceInfo, createOptions);
     auto extraBillingInstanceMap = MetricsAdapter::GetInstance().GetMetricsContext().GetExtraBillingInstanceMap();
     auto extraBillingInstance = extraBillingInstanceMap.find(instanceID);
     EXPECT_TRUE(extraBillingInstance != extraBillingInstanceMap.end());
@@ -652,15 +702,23 @@ TEST_F(MetricsAdapterTest, RegisterBillingInstanceRunningDuration)
     auto labels = observedVal[0].first;
     std::string cpuTypeSet = "";
     std::string poolLabel = "";
+    std::string xpuType = "";
+    std::string requiredResources = "";
     for (auto it : labels) {
         if (it.first == "cpu_type") {
             cpuTypeSet = it.second;
         } else if (it.first == "pool_label") {
             poolLabel = it.second;
+        } else if (it.first == "xpu_type") {
+            xpuType = it.second;
+        } else if (it.first == "required_resources") {
+            requiredResources = it.second;
         }
     }
     EXPECT_EQ(cpuTypeSet, cpuType);
     EXPECT_EQ(poolLabel, "[]");
+    EXPECT_EQ(xpuType, "910B4");
+    EXPECT_EQ(requiredResources, std::string(R"lit({"CPU":"500.000000","Memory":"500.000000","NPU/.+/count":"1.000000","test_ranges":"(10,20),(40,50)","test_set":"item1,item2"})lit"));
     extraBillingInstanceMap = MetricsAdapter::GetInstance().GetMetricsContext().GetExtraBillingInstanceMap();
     extraBillingInstance = extraBillingInstanceMap.find(instanceID);
     EXPECT_TRUE(extraBillingInstance == extraBillingInstanceMap.end());
@@ -770,9 +828,13 @@ TEST_F(MetricsAdapterTest, InvalidBillingInstanceRunningDuration)
     MetricsAdapter::GetInstance().RegisterBillingInstanceRunningDuration();
     auto observableInstrumentMap = MetricsAdapter::GetInstance().GetObservableInstrumentMap();
     EXPECT_TRUE(observableInstrumentMap.find("yr_instance_running_duration") != observableInstrumentMap.end());
+    resources::InstanceInfo instanceInfo;
+    instanceInfo.set_instanceid(instanceID);
+    instanceInfo.set_functionagentid("");
+    instanceInfo.set_issystemfunc(false);
 
     // init instance info
-    MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(instanceID, "", createOptions);
+    MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(instanceInfo, createOptions);
     auto startTimeMillis = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     auto billingInstanceMap = MetricsAdapter::GetInstance().GetMetricsContext().GetBillingInstanceMap();
     auto billingInstance = billingInstanceMap.find(instanceID);
@@ -810,13 +872,17 @@ TEST_F(MetricsAdapterTest, SystemInstanceRunningDuartion)
     auto observableInstrumentMap = MetricsAdapter::GetInstance().GetObservableInstrumentMap();
     EXPECT_TRUE(observableInstrumentMap.find("yr_instance_running_duration") != observableInstrumentMap.end());
 
+    resources::InstanceInfo instanceInfo;
+    instanceInfo.set_instanceid(instanceID);
+    instanceInfo.set_functionagentid("");
+    instanceInfo.set_issystemfunc(true);
     // init instance info
-    MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(instanceID, "", createOptions, true);
+    MetricsAdapter::GetInstance().GetMetricsContext().InitBillingInstance(instanceInfo, createOptions);
     auto billingInstanceMap = MetricsAdapter::GetInstance().GetMetricsContext().GetBillingInstanceMap();
     EXPECT_TRUE(billingInstanceMap.find(instanceID) == billingInstanceMap.end());
 
     // init instance info
-    MetricsAdapter::GetInstance().GetMetricsContext().InitExtraBillingInstance(instanceID, "", createOptions, true);
+    MetricsAdapter::GetInstance().GetMetricsContext().InitExtraBillingInstance(instanceInfo, createOptions);
     auto extraBillingInstanceMap = MetricsAdapter::GetInstance().GetMetricsContext().GetExtraBillingInstanceMap();
     EXPECT_TRUE(extraBillingInstanceMap.find(instanceID) == extraBillingInstanceMap.end());
 

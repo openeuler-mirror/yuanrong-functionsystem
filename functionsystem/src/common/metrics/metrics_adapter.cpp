@@ -1117,13 +1117,18 @@ std::pair<MetricsApi::MetricLabels, uint64_t> MetricsAdapter::BuildBillingInstan
     }
     metrics::LabelType labelMap;
     try {
-        labelMap = {{ "instance_id", instanceID },
-	                { "cpu_type", billingFunctionOption.cpuType },
-	                { "init_ms", std::to_string(billingInstanceInfo.startTimeMillis) },
-	                { "last_report_ms", std::to_string(billingInstanceInfo.lastReportTimeMillis) },
-	                { "report_ms", std::to_string(reportTimeMillis) },
-	                { "pool_label", poolLabelsJson.dump() },
-	                { "agent_id", billingInstanceInfo.functionAgentId }};
+        nlohmann::json requiredResourcesJson = billingInstanceInfo.requiredResources;
+        labelMap = {
+            {"instance_id", instanceID},
+            {"cpu_type", billingFunctionOption.cpuType},
+            {"xpu_type", billingInstanceInfo.xpuType},
+            {"init_ms", std::to_string(billingInstanceInfo.startTimeMillis)},
+            {"last_report_ms", std::to_string(billingInstanceInfo.lastReportTimeMillis)},
+            {"report_ms", std::to_string(reportTimeMillis)},
+            {"pool_label", poolLabelsJson.dump()},
+            {"agent_id", billingInstanceInfo.functionAgentId},
+            {"required_resources", requiredResourcesJson.dump()}
+        };
     } catch (std::exception &e) {
         YRLOG_ERROR("dump labelMap failed, error: {}", e.what());
     }
