@@ -6607,7 +6607,7 @@ litebus::Future<Status> InstanceCtrlActor::RegisterTraefikRoute(const InstanceIn
         return Status::OK();
     }
 
-    // Parse port mappings from JSON: ["tcp:40001:8080", "tcp:40002:443"]
+    // Parse port mappings from JSON: ["https:40001:8080", "tcp:40002:443"] or legacy format ["40001:8080"]
     std::vector<TraefikRegistry::PortMapping> portMappings;
     try {
         nlohmann::json portJson = nlohmann::json::parse(portMappingsJson);
@@ -6615,22 +6615,37 @@ litebus::Future<Status> InstanceCtrlActor::RegisterTraefikRoute(const InstanceIn
             for (const auto& entry : portJson) {
                 if (entry.is_string()) {
                     std::string mapping = entry.get<std::string>();
-                    // Parse "protocol:hostPort:containerPort"
+                    // Parse "protocol:hostPort:containerPort" or legacy "hostPort:containerPort"
                     std::vector<std::string> parts;
                     std::stringstream ss(mapping);
                     std::string part;
                     while (std::getline(ss, part, ':')) {
                         parts.push_back(part);
                     }
+                    // New format: "protocol:hostPort:containerPort" (3 parts)
                     if (parts.size() == 3) {
                         try {
+                            std::string protocol = parts[0];
                             int hostPort = std::stoi(parts[1]);
                             int sandboxPort = std::stoi(parts[2]);
-                            portMappings.push_back({sandboxPort, hostPort});
-                            YRLOG_DEBUG("Parsed port mapping: sandbox_port={}, host_port={}",
+                            portMappings.push_back({sandboxPort, hostPort, protocol});
+                            YRLOG_DEBUG("Parsed port mapping: protocol={}, sandbox_port={}, host_port={}",
+                                       protocol, sandboxPort, hostPort);
+                        } catch (const std::exception& e) {
+                            YRLOG_WARN("Failed to parse port mapping from '{}': {}", mapping, e.what());
+                        }
+                    }
+                    // Legacy format: "hostPort:containerPort" (2 parts, no protocol)
+                    // Default to "http" for backward compatibility (HTTP backend)
+                    else if (parts.size() == 2) {
+                        try {
+                            int hostPort = std::stoi(parts[0]);
+                            int sandboxPort = std::stoi(parts[1]);
+                            portMappings.push_back({sandboxPort, hostPort, "http"});
+                            YRLOG_DEBUG("Parsed legacy port mapping (no protocol): sandbox_port={}, host_port={}, defaulting to 'http'",
                                        sandboxPort, hostPort);
                         } catch (const std::exception& e) {
-                            YRLOG_WARN("Failed to parse port numbers from '{}': {}", mapping, e.what());
+                            YRLOG_WARN("Failed to parse legacy port mapping from '{}': {}", mapping, e.what());
                         }
                     }
                 }

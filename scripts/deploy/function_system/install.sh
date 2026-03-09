@@ -64,8 +64,7 @@ function install_function_proxy() {
   local enable_driver="true"
   [[ "X${DRIVER_GATEWAY_ENABLE^^}" == "XFALSE" ]] && { enable_driver="false"; }
 
-  # Set default values for Traefik backend TLS configuration
-  TRAEFIK_BACKEND_TLS="${TRAEFIK_BACKEND_TLS:-false}"
+  # Set default values for Traefik serversTransport configuration
   TRAEFIK_SERVERS_TRANSPORT="${TRAEFIK_SERVERS_TRANSPORT:-yr-backend-tls@file}"
 
   local merge_process_args=""
@@ -186,7 +185,7 @@ function install_function_proxy() {
     --enable_traefik_registry="${ENABLE_TRAEFIK_REGISTRY}" \
     --traefik_etcd_prefix="${TRAEFIK_ETCD_PREFIX}" --traefik_lease_ttl="${TRAEFIK_LEASE_TTL}" \
     --traefik_http_entrypoint="${TRAEFIK_HTTP_ENTRYPOINT}" --traefik_enable_tls="${TRAEFIK_ENABLE_TLS}" \
-    --traefik_backend_tls="${TRAEFIK_BACKEND_TLS}" --traefik_servers_transport="${TRAEFIK_SERVERS_TRANSPORT}" \
+    --traefik_servers_transport="${TRAEFIK_SERVERS_TRANSPORT}" \
     ${merge_process_args} >>"${FS_LOG_PATH}/${NODE_ID}-function_proxy${STD_LOG_SUFFIX}" 2>&1 &
 
   FUNCTION_PROXY_PID="$!"
