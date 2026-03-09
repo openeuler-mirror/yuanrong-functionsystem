@@ -37,7 +37,9 @@ public:
     TraefikRegistry(std::shared_ptr<MetaStorageAccessor> accessor,
                     const std::string& keyPrefix,
                     const std::string& httpEntryPoint = "websecure",
-                    bool enableTLS = true);
+                    bool enableTLS = true,
+                    bool useBackendTLS = false,
+                    const std::string& serversTransport = "yr-backend-tls@file");
     ~TraefikRegistry() = default;
 
     litebus::Future<Status> RegisterInstance(
@@ -54,6 +56,8 @@ private:
     std::string keyPrefix_;
     std::string httpEntryPoint_;
     bool enableTLS_;
+    bool useBackendTLS_;
+    std::string serversTransport_;
 };
 
 }  // namespace functionsystem::local_scheduler

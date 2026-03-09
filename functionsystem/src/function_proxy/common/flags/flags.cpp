@@ -171,6 +171,10 @@ Flags::Flags()
             "HTTP entryPoint name for traefik routing", "websecure");
     AddFlag(&Flags::traefikEnableTLS_, "traefik_enable_tls",
             "enable TLS for HTTP routing", true);
+    AddFlag(&Flags::traefikBackendTLS_, "traefik_backend_tls",
+            "use HTTPS to backend and verify backend cert via ServersTransport", false);
+    AddFlag(&Flags::traefikServersTransport_, "traefik_servers_transport",
+            "ServersTransport name for backend TLS (e.g. yr-backend-tls@file)", "yr-backend-tls@file");
 }
 
 void Flags::AddElectionFlags()

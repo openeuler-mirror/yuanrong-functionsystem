@@ -144,10 +144,12 @@ Status LocalSchedDriver::Create()
             metaStorageAccessor_,
             param_.traefikEtcdPrefix,
             param_.traefikHttpEntryPoint,
-            param_.traefikEnableTLS);
+            param_.traefikEnableTLS,
+            param_.traefikBackendTLS,
+            param_.traefikServersTransport);
         instanceCtrl_->SetTraefikRegistry(traefikRegistry_);
-        YRLOG_INFO("TraefikRegistry initialized and injected: prefix={}, entryPoint={}, enableTLS={}",
-                  param_.traefikEtcdPrefix, param_.traefikHttpEntryPoint, param_.traefikEnableTLS);
+        YRLOG_INFO("TraefikRegistry initialized and injected: prefix={}, entryPoint={}, enableTLS={}, useBackendTLS={}",
+                  param_.traefikEtcdPrefix, param_.traefikHttpEntryPoint, param_.traefikEnableTLS, param_.traefikBackendTLS);
     } else {
         YRLOG_INFO("Traefik registry disabled");
     }

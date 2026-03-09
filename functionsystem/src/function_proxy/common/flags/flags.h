@@ -457,6 +457,16 @@ public:
         return traefikEnableTLS_;
     }
 
+    bool GetTraefikBackendTLS() const
+    {
+        return traefikBackendTLS_;
+    }
+
+    const std::string& GetTraefikServersTransport() const
+    {
+        return traefikServersTransport_;
+    }
+
 protected:
     void AddRuntimeFlags();
     void AddDSFlags();
@@ -554,6 +564,8 @@ protected:
     int32_t traefikLeaseTTL_ = 300000;
     std::string traefikHttpEntryPoint_ = "websecure";
     bool traefikEnableTLS_ = true;
+    bool traefikBackendTLS_{ false };
+    std::string traefikServersTransport_ = "yr-backend-tls@file";
 };
 
 }  // namespace functionsystem::function_proxy
