@@ -129,6 +129,7 @@ public:
     }
 
     // Query tenant instances with containerID and proxyGrpcAddress
+    // If tenant_id is system tenant (configurable), returns all tenants' instances
     void InitQueryTenantInstancesHandler(std::shared_ptr<InstanceManagerActor> imActor)
     {
         auto handler = [imActor](const HttpRequest &request) -> litebus::Future<HttpResponse> {
@@ -157,19 +158,23 @@ public:
                 instanceID = instanceIt->second;
             }
 
+            // Check if this is a system tenant query
+            bool isSystemTenant = (tenantID == imActor->GetSystemTenantID());
+
             auto req = std::make_shared<messages::QueryInstancesInfoRequest>();
             req->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
 
-            // Capture both tenantID and instanceID for the lambda
+            // Capture tenantID, instanceID, and isSystemTenant for the lambda
             return litebus::Async(imActor->GetAID(), &InstanceManagerActor::QueryInstancesInfo, req)
-                .Then([tenantID, instanceID](const messages::QueryInstancesInfoResponse &rsp)
+                .Then([tenantID, instanceID, isSystemTenant](const messages::QueryInstancesInfoResponse &rsp)
                           -> litebus::Future<litebus::http::Response> {
-                    // Filter instances by tenantID and optionally by instanceID
+                    // Filter instances based on tenantID
+                    // If isSystemTenant is true, return all instances; otherwise filter by tenantID
                     nlohmann::json instancesArray = nlohmann::json::array();
 
                     for (const auto &instance : rsp.instanceinfos()) {
-                        // First filter by tenantID
-                        if (instance.tenantid() == tenantID) {
+                        // If system tenant, return all instances; otherwise filter by tenantID
+                        if (isSystemTenant || instance.tenantid() == tenantID) {
                             // If instanceID is specified, also filter by instanceID
                             if (!instanceID.empty() && instance.instanceid() != instanceID) {
                                 continue;
@@ -194,6 +199,11 @@ public:
                     responseJson["instances"] = instancesArray;
                     responseJson["count"] = instancesArray.size();
                     responseJson["tenantID"] = tenantID;
+                    
+                    // Add a flag to indicate if this is a system tenant query
+                    if (isSystemTenant) {
+                        responseJson["isSystemTenant"] = true;
+                    }
 
                     // Add instanceID to response if it was specified in request
                     if (!instanceID.empty()) {

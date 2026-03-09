@@ -101,6 +101,7 @@ InstanceManagerActor::InstanceManagerActor(const std::shared_ptr<MetaStoreClient
     member_->abnormalScheduler = std::make_shared<std::unordered_set<std::string>>();
     member_->groupManager = groupManager;
     member_->family = std::make_shared<InstanceFamilyCaches>();
+    member_->systemTenantID = param.systemTenantID;
 }
 
 bool InstanceManagerActor::UpdateLeaderInfo(const LeaderInfo &leaderInfo)
