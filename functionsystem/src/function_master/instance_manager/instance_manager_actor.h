@@ -129,6 +129,11 @@ public:
     void OnQueryDebugInstancesInfoFinished(const litebus::AID &from,
                                       const litebus::Future<messages::QueryDebugInstanceInfosResponse> &rsp);
 
+    const std::string &GetSystemTenantID() const
+    {
+        return member_->systemTenantID;
+    }
+
 protected:
     void Init() override;
     void Finalize() override;
@@ -333,6 +338,7 @@ private:
 
         std::shared_ptr<litebus::Promise<messages::QueryInstancesInfoResponse>> queryInstancesPromise;
         std::shared_ptr<litebus::Promise<messages::QueryDebugInstanceInfosResponse>> queryDebugInstancesPromise;
+        std::string systemTenantID{ "0" };
     };
 
     class Business : public leader::BusinessPolicy {

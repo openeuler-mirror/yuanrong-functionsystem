@@ -374,7 +374,8 @@ bool InitInstanceManagerDriver(const functionmaster::Flags &flags, const std::sh
                                                      .libPath = flags.GetLibPath(),
                                                      .functionMetaPath = flags.GetFunctionMetaPath(),
                                                      .enableAbnormalDoubleCheck =
-                                                         flags.GetEnableAbnormalDoubleCheck() });
+                                                         flags.GetEnableAbnormalDoubleCheck(),
+                                                     .systemTenantID = flags.GetSystemTenantID() });
     g_instanceMgr = std::make_shared<::instance_manager::InstanceManager>(instanceMgrActor);
     metaStoreMonitor->RegisterHealthyObserver(g_instanceMgr);
     groupMgrActor->BindInstanceManager(g_instanceMgr);

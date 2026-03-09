@@ -592,6 +592,7 @@ function install_function_master() {
       --function_meta_path="${FUNCTION_META_PATH}" \
       --enable_trace=${ENABLE_TRACE} --trace_config="${TRACE_CONFIG}" \
       --meta_store_max_flush_concurrency="${META_STORE_MAX_FLUSH_CONCURRENCY}" --meta_store_max_flush_batch_size="${META_STORE_MAX_FLUSH_BATCH_SIZE}" \
+      --system_tenant_id="${SYSTEM_TENANT_ID}" \
       >>"${FS_LOG_PATH}/${NODE_ID}-function_master${STD_LOG_SUFFIX}" 2>&1 &
     FUNCTION_MASTER_PID=$!
     if function_system_health_check ${FUNCTION_MASTER_PID} "${GLOBAL_SCHEDULER_PORT}" "global-scheduler"; then
