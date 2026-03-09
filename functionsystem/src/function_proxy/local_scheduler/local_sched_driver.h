@@ -97,7 +97,6 @@ struct LocalSchedStartParam {
     int32_t traefikLeaseTTL = 300000;
     std::string traefikHttpEntryPoint = "websecure";
     bool traefikEnableTLS = true;
-    bool traefikBackendTLS = false;
     std::string traefikServersTransport = "yr-backend-tls@file";
 };
 
