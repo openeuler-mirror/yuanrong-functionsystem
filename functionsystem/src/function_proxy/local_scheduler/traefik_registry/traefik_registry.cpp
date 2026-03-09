@@ -17,6 +17,7 @@
 #include "traefik_registry.h"
 
 #include <sstream>
+#include <regex>
 
 #include "common/logs/logging.h"
 
@@ -25,14 +26,34 @@ namespace functionsystem::local_scheduler {
 TraefikRegistry::TraefikRegistry(std::shared_ptr<MetaStorageAccessor> accessor,
                                    const std::string& keyPrefix,
                                    const std::string& httpEntryPoint,
-                                   bool enableTLS)
+                                   bool enableTLS,
+                                   bool useBackendTLS,
+                                   const std::string& serversTransport)
     : accessor_(std::move(accessor)),
       keyPrefix_(keyPrefix),
       httpEntryPoint_(httpEntryPoint),
-      enableTLS_(enableTLS)
+      enableTLS_(enableTLS),
+      useBackendTLS_(useBackendTLS),
+      serversTransport_(serversTransport)
 {
-    YRLOG_INFO("TraefikRegistry initialized: keyPrefix={}, httpEntryPoint={}, enableTLS={}",
-              keyPrefix_, httpEntryPoint_, enableTLS_);
+    // Validate serversTransport format when useBackendTLS is enabled
+    if (useBackendTLS_) {
+        if (serversTransport_.empty()) {
+            YRLOG_ERROR("TraefikRegistry: serversTransport must be specified when useBackendTLS=true");
+            throw std::invalid_argument("serversTransport cannot be empty when useBackendTLS is enabled");
+        }
+        // Validate format: should be like "name@provider" (e.g., "yr-backend-tls@file")
+        static const std::regex transportPattern(R"(^[^@]+@[^@]+$)");
+        if (!std::regex_match(serversTransport_, transportPattern)) {
+            YRLOG_ERROR("TraefikRegistry: invalid serversTransport format '{}', expected 'name@provider' (e.g., 'yr-backend-tls@file')",
+                       serversTransport_);
+            throw std::invalid_argument("serversTransport must be in format 'name@provider' (e.g., 'yr-backend-tls@file')");
+        }
+        YRLOG_INFO("TraefikRegistry: backend TLS enabled with ServersTransport: {}", serversTransport_);
+    }
+
+    YRLOG_INFO("TraefikRegistry initialized: keyPrefix={}, httpEntryPoint={}, enableTLS={}, useBackendTLS={}",
+              keyPrefix_, httpEntryPoint_, enableTLS_, useBackendTLS_);
     
     // Create global StripPrefix middleware for all instances
     // This middleware removes /{instanceID}/{port} prefix using regex
@@ -94,11 +115,16 @@ litebus::Future<Status> TraefikRegistry::RegisterInstance(
             kvs.push_back({keyPrefix_ + "/http/routers/" + routerName + "/tls", ""});
         }
 
-        // HTTP service loadbalancer URL: http://hostIP:hostPort
+        // HTTP service loadbalancer URL: http(s)://hostIP:hostPort
+        std::string scheme = useBackendTLS_ ? "https" : "http";
         std::ostringstream urlStream;
-        urlStream << "http://" << hostIP << ":" << hostPort;
+        urlStream << scheme << "://" << hostIP << ":" << hostPort;
         kvs.push_back({keyPrefix_ + "/http/services/" + routerName + "/loadbalancer/servers/0/url",
                        urlStream.str()});
+        if (useBackendTLS_) {
+            kvs.push_back({keyPrefix_ + "/http/services/" + routerName + "/loadbalancer/serverstransport",
+                           serversTransport_});
+        }
     }
 
     YRLOG_INFO("Registering instance {} to Traefik HTTP: {} ports, {} keys",
