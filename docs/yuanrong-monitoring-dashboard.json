@@ -1247,14 +1247,14 @@
           "value": "$__all"
         },
         "datasource": "Prometheus",
-        "definition": "label_values(function_invocations_total, akernel_env)",
+        "definition": "label_values(akernel_env)",
         "hide": 0,
         "includeAll": true,
         "label": "akernel-env",
         "name": "akernel_env",
         "options": [],
         "query": {
-          "query": "label_values(function_invocations_total, akernel_env)",
+          "query": "label_values(akernel_env)",
           "refId": "Prometheus-akernel-env-Variable"
         },
         "refresh": 2,
