@@ -39,6 +39,22 @@ def check_bazel_available():
     return bazel_path
 
 
+def ensure_bazel_deps(root_dir: str):
+    """Download Bazel dependency archives and populate repository_cache if needed.
+
+    Runs tools/download_bazel_deps.sh which:
+      - Downloads missing archives to thirdparty/runtime_deps/
+      - Verifies sha256 checksums
+      - Populates Bazel repository_cache for fully offline builds
+    """
+    script = os.path.join(root_dir, "tools", "download_bazel_deps.sh")
+    if not os.path.isfile(script):
+        log.warning(f"download_bazel_deps.sh not found at {script}, skipping.")
+        return
+    log.info("Ensuring Bazel dependency archives are present...")
+    utils.sync_command(["bash", script], cwd=root_dir)
+
+
 def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: str = "Release"):
     """Build all functionsystem C++ binaries using Bazel and copy artifacts to output/.
 
@@ -49,6 +65,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
         build_type: "Release" or "Debug"
     """
     check_bazel_available()
+    ensure_bazel_deps(root_dir)
 
     # Determine bazel config flag
     config = "release" if build_type.lower() == "release" else "debug"

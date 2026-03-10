@@ -19,8 +19,7 @@ local_patched_repository(
     build_file = "@//bazel:spdlog.bzl",
 )
 
-# --- nlohmann_json --- gitee mirror zip (GitHub .tar.gz returns 404 on Huawei mirror;
-# the .zip is pre-downloaded in thirdparty/runtime_deps/v3.11.3.zip)
+# --- nlohmann_json --- gitee.com mirror zip
 http_archive(
     name = "nlohmann_json",
     build_file = "@//bazel:nlohmann_json.bzl",
@@ -29,13 +28,12 @@ http_archive(
     urls = ["https://gitee.com/mirrors/nlohmann-json/repository/archive/v3.11.3.zip"],
 )
 
-# --- gtest --- zip archive (the .tar.gz variant returns 404 on Huawei mirror;
-# the .zip is pre-downloaded in thirdparty/runtime_deps/v1.13.0.zip)
+# --- gtest --- gitee.com mirror zip
 http_archive(
     name = "gtest",
     sha256 = "647924848ca7cb91ba5e34260132902886e1bd140428bd3bd7b4e8fa6c6c8904",
     strip_prefix = "googletest-v1.13.0",
-    urls = ["https://github.com/google/googletest/archive/refs/tags/v1.13.0.zip"],
+    urls = ["https://gitee.com/mirrors/googletest/repository/archive/v1.13.0.zip"],
 )
 
 # --- grpc dependency chain (abseil, protobuf, zlib, grpc, boringssl, re2, etc.) ---
@@ -73,13 +71,12 @@ load("//bazel:grpc_extra_deps.bzl", "grpc_extra_deps")
 
 grpc_extra_deps()
 
-# --- yaml-cpp --- zip archive (the .tar.gz variant returns 404 on Huawei mirror;
-# the .zip is pre-downloaded in thirdparty/runtime_deps/0.8.0.zip)
+# --- yaml-cpp --- gitee.com mirror zip
 http_archive(
     name = "yaml-cpp",
     sha256 = "6a05c681872d9465b8e2040b5211b1aa5cf30151dc4f3d7ed23ac75ce0fd9944",
     strip_prefix = "yaml-cpp-0.8.0",
-    urls = ["https://github.com/jbeder/yaml-cpp/archive/refs/tags/0.8.0.zip"],
+    url = "https://gitee.com/mirrors/yaml-cpp/repository/archive/0.8.0.zip",
 )
 
 # --- securec (libboundscheck) ---
