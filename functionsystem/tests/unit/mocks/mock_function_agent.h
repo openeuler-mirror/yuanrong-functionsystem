@@ -31,7 +31,7 @@ public:
                       uint32_t pingTimeoutMs = 0, const std::string &alias = "")
         : function_agent::AgentServiceActor(name, agentID,
                                             function_agent::AgentServiceActor::Config{
-                                                localSchedulerAID, s3Config, codePackageThresholds, pingTimeoutMs },
+                                                localSchedulerAID, s3Config, codePackageThresholds, "", pingTimeoutMs },
                                             alias)
     {
     }

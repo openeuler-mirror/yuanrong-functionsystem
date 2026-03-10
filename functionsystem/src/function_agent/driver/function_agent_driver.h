@@ -17,6 +17,7 @@
 #ifndef FUNCTION_AGENT_FUNCTION_AGENT_STARTUP_H
 #define FUNCTION_AGENT_FUNCTION_AGENT_STARTUP_H
 
+#include "common/file_monitor/file_monitor.h"
 #include "common/http/http_server.h"
 #include "common/utils/module_driver.h"
 #include "function_agent/agent_service_actor.h"
@@ -34,6 +35,8 @@ struct FunctionAgentStartParam {
     bool s3Enable;
     S3Config s3Config;
     messages::CodePackageThresholds codePackageThresholds;
+    bool enableHotThresholdsCfg;
+    std::string codePkgThresholdsCfgPath;
 
     uint32_t heartbeatTimeoutMs;
     std::string agentUid;
@@ -62,6 +65,7 @@ private:
     std::shared_ptr<AgentServiceActor> actor_ = nullptr;
     std::shared_ptr<HttpServer> httpServer_;
     std::shared_ptr<HealthyApiRouter> apiRouteRegister_;
+    std::shared_ptr<FileMonitor> fileMonitor_{ nullptr };
 };  // class FunctionAgentDriver
 
 }  // namespace functionsystem::function_agent

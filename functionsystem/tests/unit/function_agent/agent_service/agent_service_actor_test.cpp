@@ -89,8 +89,23 @@ namespace {
         tempLayer.set_objectid(objectID);
         layer->CopyFrom(tempLayer);
     }
+
+    void GenCodePkgThresholdsCfgFile(const std::string &configDir, const std::string &content)
+    {
+        if (!litebus::os::ExistPath(configDir)) {
+            litebus::os::Mkdir(configDir);
+        }
+        auto configPath = litebus::os::Join(configDir, "code-package-thresholds.json");
+        if (litebus::os::ExistPath(configPath)) {
+            litebus::os::Rm(configPath);
+        }
+        std::ofstream outfile;
+        outfile.open(configPath.c_str());
+        outfile << content << std::endl;
+        outfile.close();
+    }
 }
-class DISABLED_AgentServiceActorTest : public ::testing::Test {
+class AgentServiceActorTest : public ::testing::Test {
 public:
     void SetUp() override
     {
@@ -302,7 +317,7 @@ inline std::shared_ptr<messages::DeployInstanceRequest> GetDeployInstanceRequest
  * 6. Cause repeatedly deploy instance request err, AgentServiceActor will not send StartInstance request to RuntimeManager
  * or return DeployInstanceResponse to FunctionAgentMgrActor
  */
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceErrorRequest)
+TEST_F(AgentServiceActorTest, DeployInstanceErrorRequest)
 {
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
     deployInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -400,7 +415,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceErrorRequest)
  * back to FunctionAgentMgrActor but not send StartInstance request to RuntimeManager
  * 3. RuntimeManager will receive StartInstance request from AgentServiceActor, but FunctionAgentMgrActor won't receive DeployInstanceResponse
  */
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceSetNetworkFailed)
+TEST_F(AgentServiceActorTest, DeployInstanceSetNetworkFailed)
 {
     messages::DeployInstanceRequest deployInstance;
     deployInstance.set_requestid(TEST_REQUEST_ID);
@@ -453,7 +468,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceSetNetworkFailed)
  * 2. AgentServiceActor will send StartInstance request to RuntimeManager and
  * send DeployInstanceResponse Successfully back to FunctionAgentMgrActor
  */
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceAboutRuntimeMgrRegistration)
+TEST_F(AgentServiceActorTest, DeployInstanceAboutRuntimeMgrRegistration)
 {
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
     deployInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -508,7 +523,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceAboutRuntimeMgrRegistration
  * 2. Second deploy, runtime code still has one code refer, FunctionAgentMgrActor will receive DeployInstanceResponse with code SUCCESS again
  * 3. Third deploy, runtime code still has one code refer, FunctionAgentMgrActor will receive DeployInstanceResponse with code RUNTIME_MANAGER_PARAMS_INVALID
  */
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithLocalDeployer)
+TEST_F(AgentServiceActorTest, DeployInstanceWithLocalDeployer)
 {
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
     deployInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -578,7 +593,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithLocalDeployer)
  * layer code dir has code refer number as 1
  * 2. FunctionAgentMgrActor will receive DeployInstanceResponse from AgentServiceActor
  */
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithTwoLayersOfSameDirViaS3)
+TEST_F(AgentServiceActorTest, DeployInstanceWithTwoLayersOfSameDirViaS3)
 {
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
     deployInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -633,7 +648,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithTwoLayersOfSameDirViaS3
  * 1. Runtime code package dir and layer code packager dir will be created, and runtime code dir has code refer number as 2 while
  * layer code dir has code refer number as 2
  */
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithTwoLayersOfSameDirViaS3AtSameTime)
+TEST_F(AgentServiceActorTest, DeployInstanceWithTwoLayersOfSameDirViaS3AtSameTime)
 {
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
     deployInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -694,7 +709,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithTwoLayersOfSameDirViaS3
  * 2. Second deploy, runtime code, layer code and delegate code have two code refer respectively,
  * FunctionAgentMgrActor will receive DeployInstanceResponse again
  */
-TEST_F(DISABLED_AgentServiceActorTest, RepeatedlyDeployInstanceWithOneLayersAndDelegateViaS3)
+TEST_F(AgentServiceActorTest, RepeatedlyDeployInstanceWithOneLayersAndDelegateViaS3)
 {
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
     deployInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -804,7 +819,7 @@ void BuildCreateOptions(const std::unique_ptr<messages::DeployInstanceRequest> &
  * 5. Forth deploy, runtime code, local delegate lib code have one code refer,
  * FunctionAgentMgrActor will receive DeployInstanceResponse again
  */
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithDelegateCode)
+TEST_F(AgentServiceActorTest, DeployInstanceWithDelegateCode)
 {
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
     deployInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -908,7 +923,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithDelegateCode)
  * 2. deployingRequest_ does not store DeployInstanceRequest with the same requestid, so
  * AgentServiceActor will not return DeployInstanceResponse to FunctionAgentMgrActor
  */
-TEST_F(DISABLED_AgentServiceActorTest, StartInstanceResponseError)
+TEST_F(AgentServiceActorTest, StartInstanceResponseError)
 {
     auto startInstanceResponse = std::make_unique<messages::StartInstanceResponse>();
     startInstanceResponse->set_requestid(TEST_REQUEST_ID);
@@ -943,7 +958,7 @@ TEST_F(DISABLED_AgentServiceActorTest, StartInstanceResponseError)
  * back to FunctionAgentMgrActor but not send StopInstance request to RuntimeManager
  * 4. AgentServiceActor will send StopInstance request to RuntimeManager but not send KillInstanceResponse to FunctionAgentMgrActor
  */
-TEST_F(DISABLED_AgentServiceActorTest, KillInstanceErrorRequest)
+TEST_F(AgentServiceActorTest, KillInstanceErrorRequest)
 {
     auto killInstanceReq = std::make_unique<messages::KillInstanceRequest>();
     killInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -997,7 +1012,7 @@ TEST_F(DISABLED_AgentServiceActorTest, KillInstanceErrorRequest)
  * 2. killingRequest_ does not store KillInstanceRequest with the same requestid, so
  * AgentServiceActor will not return KillInstanceResponse to FunctionAgentMgrActor
  */
-TEST_F(DISABLED_AgentServiceActorTest, StopInstanceResponseError)
+TEST_F(AgentServiceActorTest, StopInstanceResponseError)
 {
     auto stopInstanceResponse = std::make_unique<messages::StopInstanceResponse>();
     stopInstanceResponse->set_requestid(TEST_REQUEST_ID);
@@ -1026,7 +1041,7 @@ TEST_F(DISABLED_AgentServiceActorTest, StopInstanceResponseError)
  * 1. RuntimeManager will receive StopInstance request from AgentServiceActor
  * 2. FunctionAgentMgrActor will receive KillInstanceResponse from AgentServiceActor
  */
-TEST_F(DISABLED_AgentServiceActorTest, KillInstanceWithRespose)
+TEST_F(AgentServiceActorTest, KillInstanceWithRespose)
 {
     auto killInstanceReq = std::make_unique<messages::KillInstanceRequest>();
     killInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -1050,7 +1065,7 @@ TEST_F(DISABLED_AgentServiceActorTest, KillInstanceWithRespose)
     EXPECT_EQ(dstActor_->monopolyUsed_, true);
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, KillInstanceWithResposeCancelHeartbeat)
+TEST_F(AgentServiceActorTest, KillInstanceWithResposeCancelHeartbeat)
 {
     auto killInstanceReq = std::make_unique<messages::KillInstanceRequest>();
     killInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -1080,7 +1095,7 @@ TEST_F(DISABLED_AgentServiceActorTest, KillInstanceWithResposeCancelHeartbeat)
     EXPECT_THAT(status.Get().ToString(), testing::HasSubstr("HeartbeatClient is stopped"));
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, KillInstanceWithoutRuntimeMgrRegistration)
+TEST_F(AgentServiceActorTest, KillInstanceWithoutRuntimeMgrRegistration)
 {
     auto killInstanceReq = std::make_unique<messages::KillInstanceRequest>();
     killInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -1126,7 +1141,7 @@ TEST_F(DISABLED_AgentServiceActorTest, KillInstanceWithoutRuntimeMgrRegistration
  * 3. While killing, runtime code package dir and layer code packager dir will be removed, and layer code dir has code refer number as 0
  * 4. While killing, FunctionAgentMgrActor will receive KillInstanceResponse from AgentServiceActor
  */
-TEST_F(DISABLED_AgentServiceActorTest, DeployAndKillInstanceWithTwoLayerViaS3)
+TEST_F(AgentServiceActorTest, DeployAndKillInstanceWithTwoLayerViaS3)
 {
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
     deployInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -1193,7 +1208,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployAndKillInstanceWithTwoLayerViaS3)
  * 2. While killing, dir of runtime code, layer code, delegate layer code and delegate code should be removed respectively, each one have zero code refer,
  * FunctionAgentMgrActor will receive KillInstanceResponse
  */
-TEST_F(DISABLED_AgentServiceActorTest, DeployAndKillInstanceWithTwoLayersTwoDelegateLayersAndDelegate)
+TEST_F(AgentServiceActorTest, DeployAndKillInstanceWithTwoLayersTwoDelegateLayersAndDelegate)
 {
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
     deployInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -1312,7 +1327,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployAndKillInstanceWithTwoLayersTwoDele
  * 3. While second killing, dir of runtime code, layer code and delegate code should be removed respectively, each one have zero code refer,
  * FunctionAgentMgrActor will receive KillInstanceResponse again
  */
-TEST_F(DISABLED_AgentServiceActorTest, RepeatedlyDeployAndKillInstanceWithOneLayersAndDelegateViaS3)
+TEST_F(AgentServiceActorTest, RepeatedlyDeployAndKillInstanceWithOneLayersAndDelegateViaS3)
 {
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
     deployInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -1420,7 +1435,7 @@ TEST_F(DISABLED_AgentServiceActorTest, RepeatedlyDeployAndKillInstanceWithOneLay
  * 1. FunctionAgentMgrActor will not receive UpdateResources request from AgentServiceActor
  * 2. FunctionAgentMgrActor will receive UpdateInstanceStatus request from AgentServiceActor
  */
-TEST_F(DISABLED_AgentServiceActorTest, UpdateResourcesRequest)
+TEST_F(AgentServiceActorTest, UpdateResourcesRequest)
 {
     auto updateResourcesReq = std::make_unique<messages::UpdateResourcesRequest>();
     // ParseFromString failed
@@ -1446,7 +1461,7 @@ TEST_F(DISABLED_AgentServiceActorTest, UpdateResourcesRequest)
  * Expectation:
  * 1. RuntimeManager will receive UpdateInstanceStatusResponse
  */
-TEST_F(DISABLED_AgentServiceActorTest, UpdateInstanceStatusRequestAndResponse)
+TEST_F(AgentServiceActorTest, UpdateInstanceStatusRequestAndResponse)
 {
     auto testHealthCheckActor =
         std::make_shared<function_agent::test::MockHealthCheckActor>(RUNTIME_MANAGER_HEALTH_CHECK_ACTOR_NAME);
@@ -1490,7 +1505,7 @@ TEST_F(DISABLED_AgentServiceActorTest, UpdateInstanceStatusRequestAndResponse)
  * 4. After waiting for 1s, FunctionAgentMgrActor will receive UpdateInstanceStatus request from AgentServiceActor
  * 5. After waiting for 1s, FunctionAgentMgrActor will not receive UpdateInstanceStatus request from AgentServiceActor
  */
-TEST_F(DISABLED_AgentServiceActorTest, UpdateRuntimeStatusRequestAndResponse)
+TEST_F(AgentServiceActorTest, UpdateRuntimeStatusRequestAndResponse)
 {
     auto updateRuntimeStatusRequest = std::make_unique<messages::UpdateRuntimeStatusRequest>();
     updateRuntimeStatusRequest->set_requestid(TEST_REQUEST_ID);
@@ -1562,7 +1577,7 @@ TEST_F(DISABLED_AgentServiceActorTest, UpdateRuntimeStatusRequestAndResponse)
  * 2. Second register, will discard this request, RegisterHelper of RuntimeManager will receive Registered response
  * 3. Third register, will discard this request, RegisterHelper of RuntimeManager will receive Registered response, RuntimeManager will be set registered
  */
-TEST_F(DISABLED_AgentServiceActorTest, ReceiveRuntimeManagerRegisterRequest)
+TEST_F(AgentServiceActorTest, ReceiveRuntimeManagerRegisterRequest)
 {
     messages::RegisterRuntimeManagerRequest req;
     req.set_name(testRuntimeManager_->GetAID().Name());
@@ -1625,7 +1640,7 @@ TEST_F(DISABLED_AgentServiceActorTest, ReceiveRuntimeManagerRegisterRequest)
  * will be registered
  * 4. FunctionAgentMgrActor send Registered response again will not set AgentServiceActor registered
  */
-TEST_F(DISABLED_AgentServiceActorTest, AgentRegisterRequestAndResponse)
+TEST_F(AgentServiceActorTest, AgentRegisterRequestAndResponse)
 {
     messages::RegisterRuntimeManagerRequest req;
     req.set_name(testRuntimeManager_->GetAID().Name());
@@ -1679,7 +1694,7 @@ TEST_F(DISABLED_AgentServiceActorTest, AgentRegisterRequestAndResponse)
  * Expectation:
  * 1. FunctionAgentMgrActor will receive QueryInstanceStatusResponse from AgentServiceActor
  */
-TEST_F(DISABLED_AgentServiceActorTest, QueryInstanceStatusInfoTest)
+TEST_F(AgentServiceActorTest, QueryInstanceStatusInfoTest)
 {
     auto req = std::make_unique<messages::QueryInstanceStatusRequest>();
     req->set_requestid(TEST_REQUEST_ID);
@@ -1700,7 +1715,7 @@ TEST_F(DISABLED_AgentServiceActorTest, QueryInstanceStatusInfoTest)
     EXPECT_EQ(testFuncAgentMgrActor_->GetQueryInstanceStatusResponse()->requestid(), TEST_REQUEST_ID);
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, QueryDebugInstanceInfosTest)
+TEST_F(AgentServiceActorTest, QueryDebugInstanceInfosTest)
 {
     auto req = std::make_unique<messages::QueryDebugInstanceInfosRequest>();
     req->set_requestid(TEST_REQUEST_ID);
@@ -1727,7 +1742,7 @@ TEST_F(DISABLED_AgentServiceActorTest, QueryDebugInstanceInfosTest)
  * 1. receive UpdateToken request from FunctionAgentMgrActor and send it to RuntimeManger,
  * then receive UpdateTokenResponse from RuntimeManager and will send it to FunctionAgentMgrActor
  */
-TEST_F(DISABLED_AgentServiceActorTest, UpdateTokenTest)
+TEST_F(AgentServiceActorTest, UpdateTokenTest)
 {
     auto req = std::make_unique<messages::UpdateCredRequest>();
     req->set_requestid(TEST_REQUEST_ID);
@@ -1757,7 +1772,7 @@ TEST_F(DISABLED_AgentServiceActorTest, UpdateTokenTest)
  * 1. Set route cause err, return false
  * 1. Skip set network, return true
  */
-TEST_F(DISABLED_AgentServiceActorTest, ProtectedSetNetworkTest)
+TEST_F(AgentServiceActorTest, ProtectedSetNetworkTest)
 {
     bool state = false;
     if (getenv("POD_IP") == nullptr) {
@@ -1781,7 +1796,7 @@ TEST_F(DISABLED_AgentServiceActorTest, ProtectedSetNetworkTest)
  * Expectation:
  * 1. PingPongDriver will be constructed
  */
-TEST_F(DISABLED_AgentServiceActorTest, StartPingPongSuccess)
+TEST_F(AgentServiceActorTest, StartPingPongSuccess)
 {
     messages::Registered registered;
     auto registerResponseFuture = dstActor_->StartPingPong(registered);
@@ -1799,7 +1814,7 @@ TEST_F(DISABLED_AgentServiceActorTest, StartPingPongSuccess)
  * 1. cause RegisterAgent
  * 2. PingPongDriver will be set nullptr
  */
-TEST_F(DISABLED_AgentServiceActorTest, TimeOutEventTest)
+TEST_F(AgentServiceActorTest, TimeOutEventTest)
 {
     RegisterInfo registerInfo;
     registerInfo.registeredPromise = litebus::Promise<messages::Registered>();
@@ -1836,7 +1851,7 @@ TEST_F(DISABLED_AgentServiceActorTest, TimeOutEventTest)
  * 2.4 clear user layer code
  */
 
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceSuccessWithS3WithLayerWithUserCodeDownload)
+TEST_F(AgentServiceActorTest, DeployInstanceSuccessWithS3WithLayerWithUserCodeDownload)
 {
     messages::StartInstanceResponse startInstanceResponse;
     startInstanceResponse.set_code(0);
@@ -1941,7 +1956,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceSuccessWithS3WithLayerWithU
  * 2.4 clear user layer code
  */
 
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceFailedWithS3WithLayerWithUserCodeDownload)
+TEST_F(AgentServiceActorTest, DeployInstanceFailedWithS3WithLayerWithUserCodeDownload)
 {
     messages::StartInstanceResponse startInstanceResponse;
     startInstanceResponse.set_code(-1);
@@ -1997,7 +2012,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceFailedWithS3WithLayerWithUs
     (void) litebus::os::Rmdir("/tmp/home/layer");
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, CodeReferAddAndDeleteTest)
+TEST_F(AgentServiceActorTest, CodeReferAddAndDeleteTest)
 {
     auto deployer = std::make_shared<function_agent::LocalDeployer>();
     dstActor_->SetDeployers(function_agent::LOCAL_STORAGE_TYPE, deployer);
@@ -2087,7 +2102,7 @@ TEST_F(DISABLED_AgentServiceActorTest, CodeReferAddAndDeleteTest)
     EXPECT_EQ(JudgeCodeReferNum(dstActor_->GetCodeReferManager(), LOCAL_DEPLOY_DIR), static_cast<uint32_t>(0));
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, TestCodeReferWhenRetryDeployAndKillInstance)
+TEST_F(AgentServiceActorTest, TestCodeReferWhenRetryDeployAndKillInstance)
 {
     auto deployer = std::make_shared<function_agent::LocalDeployer>();
     dstActor_->SetDeployers(function_agent::LOCAL_STORAGE_TYPE, deployer);
@@ -2145,7 +2160,7 @@ TEST_F(DISABLED_AgentServiceActorTest, TestCodeReferWhenRetryDeployAndKillInstan
     EXPECT_EQ(JudgeCodeReferNum(dstActor_->GetCodeReferManager(), LOCAL_DEPLOY_DIR), static_cast<uint32_t>(0));
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, TestCodeReferDeployKillDeploySuccessive)
+TEST_F(AgentServiceActorTest, TestCodeReferDeployKillDeploySuccessive)
 {
     messages::DeployInstanceRequest deployReq;
     deployReq.mutable_funcdeployspec()->set_storagetype(function_agent::S3_STORAGE_TYPE);
@@ -2201,7 +2216,7 @@ TEST_F(DISABLED_AgentServiceActorTest, TestCodeReferDeployKillDeploySuccessive)
     EXPECT_TRUE(litebus::os::Rmdir(layerDestination).IsNone());
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, CleanStatusRequestRetryTest)
+TEST_F(AgentServiceActorTest, CleanStatusRequestRetryTest)
 {
     messages::CleanStatusRequest cleanStatusRequest;
     cleanStatusRequest.set_name("invalid agentID");
@@ -2227,7 +2242,7 @@ TEST_F(DISABLED_AgentServiceActorTest, CleanStatusRequestRetryTest)
     EXPECT_TRUE(testFuncAgentMgrActor_->GetReceivedCleanStatusResponse());
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, CleanStatusWithExistedInstanceTest)
+TEST_F(AgentServiceActorTest, CleanStatusWithExistedInstanceTest)
 {
     messages::DeployInstanceRequest deployInstanceReq;
     deployInstanceReq.set_requestid(TEST_REQUEST_ID);
@@ -2282,7 +2297,7 @@ TEST_F(DISABLED_AgentServiceActorTest, CleanStatusWithExistedInstanceTest)
     ASSERT_AWAIT_TRUE([&]() -> bool { return !litebus::os::ExistPath(layerDestination2); });
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, RegisterAgentFailedTest)
+TEST_F(AgentServiceActorTest, RegisterAgentFailedTest)
 {
     std::string msg = "AgentServiceActor nullptr of registeredResourceUnit_! Maybe runtime_manager is not registered.";
     dstActor_->SetRegisteredResourceUnit(nullptr);
@@ -2291,7 +2306,7 @@ TEST_F(DISABLED_AgentServiceActorTest, RegisterAgentFailedTest)
     EXPECT_EQ(rsp.Get().message(), msg);
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, GracefulShutdown)
+TEST_F(AgentServiceActorTest, GracefulShutdown)
 {
     testFuncAgentMgrActor_->ResetReceivedUpdateAgentStatus();
     auto fut = litebus::Async(dstActor_->GetAID(), &AgentServiceActor::GracefulShutdown);
@@ -2306,7 +2321,7 @@ TEST_F(DISABLED_AgentServiceActorTest, GracefulShutdown)
     EXPECT_TRUE(fut.Get());
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, RestartForReuse)
+TEST_F(AgentServiceActorTest, RestartForReuse)
 {
     dstActor_->monopolyUsed_ = true;
     dstActor_->enableRestartForReuse_ = true;
@@ -2314,7 +2329,7 @@ TEST_F(DISABLED_AgentServiceActorTest, RestartForReuse)
     EXPECT_TRUE(dstActor_->runtimeManagerGracefulShutdown_.GetFuture().Get());
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, SetNetworkIsolationPodIpSuccessAddDelete)
+TEST_F(AgentServiceActorTest, SetNetworkIsolationPodIpSuccessAddDelete)
 {
     CommandExecResult result;
     result.output = "Name: test-podip-whitelist\nMembers:\n";
@@ -2369,7 +2384,7 @@ TEST_F(DISABLED_AgentServiceActorTest, SetNetworkIsolationPodIpSuccessAddDelete)
     EXPECT_EQ(ipsetIsolation->GetAllRules().size(), static_cast<size_t>(1));  // #5
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, SetNetworkIsolationRuleFlush)
+TEST_F(AgentServiceActorTest, SetNetworkIsolationRuleFlush)
 {
     CommandExecResult result;
     result.output = "Name: test-podip-whitelist\nMembers:\n";
@@ -2423,14 +2438,14 @@ TEST_F(DISABLED_AgentServiceActorTest, SetNetworkIsolationRuleFlush)
     EXPECT_EQ(ipsetIsolation->GetAllRules().size(), static_cast<long unsigned int>(0));  // #5
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, RegisteredEvictedTest)
+TEST_F(AgentServiceActorTest, RegisteredEvictedTest)
 {
     messages::Registered registered;
     registered.set_code(static_cast<int32_t>(StatusCode::LS_AGENT_EVICTED));
     dstActor_->Registered(testFuncAgentMgrActor_->GetAID(), "Registered", registered.SerializeAsString());
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithCopyDeployer)
+TEST_F(AgentServiceActorTest, DeployInstanceWithCopyDeployer)
 {
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
     deployInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -2477,7 +2492,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithCopyDeployer)
     EXPECT_EQ(JudgeCodeReferNum(dstActor_->GetCodeReferManager(), destination), static_cast<uint32_t>(0));
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, DeployMonopolyInstanceWithS3Deployer)
+TEST_F(AgentServiceActorTest, DeployMonopolyInstanceWithS3Deployer)
 {
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
     deployInstanceReq->set_requestid(TEST_REQUEST_ID);
@@ -2506,7 +2521,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployMonopolyInstanceWithS3Deployer)
     EXPECT_FALSE(litebus::os::ExistPath(destination));
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, PythonRuntime_Support_WorkingDirFileZip_WithOut_EntryPoint)
+TEST_F(AgentServiceActorTest, PythonRuntime_Support_WorkingDirFileZip_WithOut_EntryPoint)
 {
     PrepareWorkingDir("/tmp/working_dir-tmp");
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
@@ -2599,7 +2614,7 @@ TEST_F(DISABLED_AgentServiceActorTest, PythonRuntime_Support_WorkingDirFileZip_W
     DestroyWorkingDir("/tmp/working_dir-tmp");
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, AppDriver_Support_DeployInstanceWithWorkingDirDeployer_And_KillInstance)
+TEST_F(AgentServiceActorTest, AppDriver_Support_DeployInstanceWithWorkingDirDeployer_And_KillInstance)
 {
     PrepareWorkingDir("/tmp/working_dir-tmp");
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
@@ -2672,7 +2687,7 @@ TEST_F(DISABLED_AgentServiceActorTest, AppDriver_Support_DeployInstanceWithWorki
     DestroyWorkingDir("/tmp/working_dir-tmp");
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, MultiInstance_WithSameWorkingDirFileZip)
+TEST_F(AgentServiceActorTest, MultiInstance_WithSameWorkingDirFileZip)
 {
     PrepareWorkingDir("/tmp/working_dir-tmp");
     auto deployDir = "/tmp/home/sn/function/package/xxxz";
@@ -2744,7 +2759,7 @@ TEST_F(DISABLED_AgentServiceActorTest, MultiInstance_WithSameWorkingDirFileZip)
     DestroyWorkingDir("/tmp/working_dir-tmp");
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, MultiInstance_ModifiedWorkingDirFileZip)
+TEST_F(AgentServiceActorTest, MultiInstance_ModifiedWorkingDirFileZip)
 {
     PrepareWorkingDir("/tmp/working_dir-tmp");
     auto deployDir = "/tmp/home/sn/function/package/xxxz";
@@ -2820,7 +2835,7 @@ TEST_F(DISABLED_AgentServiceActorTest, MultiInstance_ModifiedWorkingDirFileZip)
     DestroyWorkingDir("/tmp/working_dir-tmp");
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithWorkingDirDeployer_Ray_Serve_Without_createOptions_APP_ENTRYPOINT)
+TEST_F(AgentServiceActorTest, DeployInstanceWithWorkingDirDeployer_Ray_Serve_Without_createOptions_APP_ENTRYPOINT)
 {
     PrepareWorkingDir("/tmp/working_dir-tmp");
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
@@ -2869,7 +2884,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithWorkingDirDeployer_Ray_
     DestroyWorkingDir("/tmp/working_dir-tmp");
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithWorkingDir_ErrorInputFile_Createoption_WorkingDirFile)
+TEST_F(AgentServiceActorTest, DeployInstanceWithWorkingDir_ErrorInputFile_Createoption_WorkingDirFile)
 {
     PrepareWorkingDir("/tmp/working_dir-tmp");
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
@@ -2903,7 +2918,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithWorkingDir_ErrorInputFi
     DestroyWorkingDir("/tmp/working_dir-tmp");
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithWorkingDir_ErrorInput_Createoption_WorkingDirFile)
+TEST_F(AgentServiceActorTest, DeployInstanceWithWorkingDir_ErrorInput_Createoption_WorkingDirFile)
 {
     PrepareWorkingDir("/tmp/working_dir-tmp");
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
@@ -2943,7 +2958,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithWorkingDir_ErrorInput_C
 }
 
 
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithWorkingDirCpp)
+TEST_F(AgentServiceActorTest, DeployInstanceWithWorkingDirCpp)
 {
     PrepareWorkingDir("/tmp/working_dir-tmp");
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
@@ -2990,7 +3005,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithWorkingDirCpp)
     DestroyWorkingDir("/tmp/working_dir-tmp");
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithNonExistWorkingDirCpp)
+TEST_F(AgentServiceActorTest, DeployInstanceWithNonExistWorkingDirCpp)
 {
     PrepareWorkingDir("/tmp/working_dir-tmp");
     auto deployInstanceReq = std::make_unique<messages::DeployInstanceRequest>();
@@ -3040,7 +3055,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithNonExistWorkingDirCpp)
     (void)litebus::os::Rmdir(destination);
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, SendS3Alarm)
+TEST_F(AgentServiceActorTest, SendS3Alarm)
 {
     metrics::MetricsAdapter::GetInstance().enabledInstruments_.insert(metrics::YRInstrument::YR_S3_ALARM);
 
@@ -3062,7 +3077,7 @@ TEST_F(DISABLED_AgentServiceActorTest, SendS3Alarm)
     });
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, ConfigCodeAgingTimeTest)
+TEST_F(AgentServiceActorTest, ConfigCodeAgingTimeTest)
 {
     dstActor_->codePackageThresholds_.set_codeagingtime(10);
     dstActor_->codeReferInfos_->clear();
@@ -3082,7 +3097,7 @@ TEST_F(DISABLED_AgentServiceActorTest, ConfigCodeAgingTimeTest)
 
 const std::string STATIC_FUNCTION_META_JSON = R"delim({"funcMetaData":{"layers":[],"name":"0@functest@functest","description":"empty function","functionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0@functest@functest","reversedConcurrency":0,"tenantId":"12345678901234561234567890123456","tags":null,"functionUpdateTime":"","functionVersionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0@functest@functest:latest","revisionId":"20250410134701376","codeSize":2911,"codeSha512":"9508f59eb7231bb7577ecc123c5c27317e6563a434dd83d33501f55dfe76b80b58228da0d8f6e37f6cf6d54ccd6dba0eb506bdc10a6acc2ee43e7aa83028b8e3","handler":"handler.my_handler","runtime":"python3.9","timeout":900,"version":"latest","versionDescription":"latest","deadLetterConfig":"","businessId":"yrk","functionType":"","func_id":"","func_name":"functest","domain_id":"","project_name":"","service":"functest","dependencies":"","enable_cloud_debug":"","isStatefulFunction":false,"isBridgeFunction":false,"isStreamEnable":false,"type":"","created":"2025-04-09 08:58:48.655 UTC","enable_auth_in_header":false,"dns_domain_cfg":null,"vpcTriggerImage":""},"codeMetaData":{"codeUploadType":"s3","sha512":"9508f59eb7231bb7577ecc123c5c27317e6563a434dd83d33501f55dfe76b80b58228da0d8f6e37f6cf6d54ccd6dba0eb506bdc10a6acc2ee43e7aa83028b8e3","storage_type":"s3","code_path":"","appId":"61022","bucketId":"bucket-test-log1","objectId":"0@functest@functest-1744292821408","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085","code_type":"","code_url":"","code_filename":"","func_code":{"file":"","link":""}},"envMetaData":{"envKey":"abca007b01f5b1f1fc2e9b3a:86c55b48dc81cac2813f080bd214ea83bf8d79430892c54fdbcd353b29daf165d342943a45411b4b83b01cce27b3a0a51a22d09b6fee1fd729872e5e46893640d5bd870e1051eeb7c90e7e31df5af1ee","environment":"757be5c1d3725bedf25692ea:e4a8c7eeb322fcc5397a498ca9bd83f45597","encrypted_user_data":"","cryptoAlgorithm":"GCM"},"resourceMetaData":{"cpu":600,"memory":512,"gpu_memory":0,"enable_dynamic_memory":false,"customResources":"","enable_tmp_expansion":false,"ephemeral_storage":0},"instanceMetaData":{"maxInstance":100,"minInstance":0,"concurrentNum":100,"instanceType":"","idleMode":false,"poolLabel":"","poolId":"","scalePolicy":"staticFunction"},"extendedMetaData":{"image_name":"","role":{"xrole":"","app_xrole":""},"func_vpc":null,"endpoint_tenant_vpc":null,"mount_config":null,"strategy_config":{"concurrency":0},"extend_config":"","initializer":{"initializer_handler":"handler.init","initializer_timeout":30},"pre_stop":{"pre_stop_handler":"","pre_stop_timeout":0},"heartbeat":{"heartbeat_handler":""},"enterprise_project_id":"","log_tank_service":{"logGroupId":"","logStreamId":""},"tracing_config":{"tracing_ak":"","tracing_sk":"","project_name":""},"custom_container_config":{"control_path":"","image":"","command":null,"args":null,"working_dir":"","uid":0,"gid":0},"async_config_loaded":false,"restore_hook":{},"network_controller":{"disable_public_network":false,"trigger_access_vpcs":null},"user_agency":{"accessKey":"","secretKey":"","token":""}}})delim";
 
-TEST_F(DISABLED_AgentServiceActorTest, CreateStaticFunctionInstanceTest)
+TEST_F(AgentServiceActorTest, CreateStaticFunctionInstanceTest)
 {
     const std::string user_dir = "/tmp/home/static-function-test";
 
@@ -3143,7 +3158,7 @@ TEST_F(DISABLED_AgentServiceActorTest, CreateStaticFunctionInstanceTest)
     litebus::os::Rmdir(user_dir);
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, NotifyFunctionStatusTest)
+TEST_F(AgentServiceActorTest, NotifyFunctionStatusTest)
 {
     auto staticFunctionChangeRequest = std::make_shared<messages::StaticFunctionChangeRequest>();
     std::string instanceID = "Test-InstanceID";
@@ -3173,7 +3188,7 @@ TEST_F(DISABLED_AgentServiceActorTest, NotifyFunctionStatusTest)
     });
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, CheckReadinessTest)
+TEST_F(AgentServiceActorTest, CheckReadinessTest)
 {
     EXPECT_TRUE(dstActor_->IsAgentReadiness().IsError());
 
@@ -3185,7 +3200,7 @@ TEST_F(DISABLED_AgentServiceActorTest, CheckReadinessTest)
     EXPECT_TRUE(future.IsOK() && future.Get().IsOk());
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithSharedDir)
+TEST_F(AgentServiceActorTest, DISABLED_DeployInstanceWithSharedDir)
 {
     std::string sharedDir = "test_abc";
     std::string dest = "/dcache/shared/" + sharedDir;
@@ -3211,7 +3226,7 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithSharedDir)
     EXPECT_TRUE(litebus::os::Rmdir(dest).IsNone());
 }
 
-TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithSharedDirAndInvalidTTL)
+TEST_F(AgentServiceActorTest, DeployInstanceWithSharedDirAndInvalidTTL)
 {
     std::string sharedDir = "test_abc";
     std::string dest = "/dcache/shared/" + sharedDir;
@@ -3227,5 +3242,76 @@ TEST_F(DISABLED_AgentServiceActorTest, DeployInstanceWithSharedDirAndInvalidTTL)
     testFuncAgentMgrActor_->SendRequestToAgentServiceActor(dstActor_->GetAID(), "DeployInstance",
                                                            std::move(deployInstanceReq->SerializeAsString()));
     ASSERT_AWAIT_TRUE([&]() -> bool { return testFuncAgentMgrActor_->GetDeployInstanceResponse()->code() == 70052; });
+}
+
+TEST_F(AgentServiceActorTest, LoadConfigPkgThresholdsCfgTest)
+{
+    messages::CodePackageThresholds defaultThresholds;
+    defaultThresholds.set_filecountsmax(30000);
+    defaultThresholds.set_zipfilesizemaxmb(300);
+    defaultThresholds.set_unzipfilesizemaxmb(600);
+    defaultThresholds.set_dirdepthmax(10);
+    auto thresholdConfigPath = "/tmp/home/download/config";
+    dstActor_->codePkgThresholdsCfgPath_ = thresholdConfigPath;
+    {
+        dstActor_->codePackageThresholds_.Clear();
+        std::string content = R"({"file_count_max":"20000","zip_file_size_max_MB":1000,
+            "unzip_file_size_max_MB":2000,"dir_depth_max":50})";
+        GenCodePkgThresholdsCfgFile(thresholdConfigPath, content);
+        dstActor_->LoadCodePkgThresholdsCfg();
+        EXPECT_EQ(dstActor_->codePackageThresholds_.filecountsmax(), 20000);
+        EXPECT_EQ(dstActor_->codePackageThresholds_.zipfilesizemaxmb(), 1000);
+        EXPECT_EQ(dstActor_->codePackageThresholds_.unzipfilesizemaxmb(), 2000);
+        EXPECT_EQ(dstActor_->codePackageThresholds_.dirdepthmax(), 50);
+        auto s3Deployer = std::dynamic_pointer_cast<S3Deployer>(dstActor_->deployers_["s3"]);
+        EXPECT_EQ(s3Deployer->codePackageThresholds_.filecountsmax(), 20000);
+        EXPECT_EQ(s3Deployer->codePackageThresholds_.zipfilesizemaxmb(), 1000);
+        EXPECT_EQ(s3Deployer->codePackageThresholds_.unzipfilesizemaxmb(), 2000);
+        EXPECT_EQ(s3Deployer->codePackageThresholds_.dirdepthmax(), 50);
+    }
+    {
+        dstActor_->codePackageThresholds_.CopyFrom(defaultThresholds);
+        litebus::os::Rm(litebus::os::Join(thresholdConfigPath, "code-package-thresholds.json"));
+        dstActor_->LoadCodePkgThresholdsCfg();
+        EXPECT_EQ(dstActor_->codePackageThresholds_.filecountsmax(), 30000);
+        EXPECT_EQ(dstActor_->codePackageThresholds_.zipfilesizemaxmb(), 300);
+        EXPECT_EQ(dstActor_->codePackageThresholds_.unzipfilesizemaxmb(), 600);
+        EXPECT_EQ(dstActor_->codePackageThresholds_.dirdepthmax(), 10);
+    }
+    {
+        dstActor_->codePackageThresholds_.CopyFrom(defaultThresholds);
+        std::string content = R"({})";
+        GenCodePkgThresholdsCfgFile(thresholdConfigPath, content);
+        dstActor_->LoadCodePkgThresholdsCfg();
+        EXPECT_EQ(dstActor_->codePackageThresholds_.filecountsmax(), 30000);
+        EXPECT_EQ(dstActor_->codePackageThresholds_.zipfilesizemaxmb(), 300);
+        EXPECT_EQ(dstActor_->codePackageThresholds_.unzipfilesizemaxmb(), 600);
+        EXPECT_EQ(dstActor_->codePackageThresholds_.dirdepthmax(), 10);
+    }
+    {
+        dstActor_->codePackageThresholds_.CopyFrom(defaultThresholds);
+        std::string content = R"({"file_count_max":"0","zip_file_size_max_MB":true,
+            "unzip_file_size_max_MB":2.2,"dir_depth_max":500})";
+        GenCodePkgThresholdsCfgFile(thresholdConfigPath, content);
+        dstActor_->LoadCodePkgThresholdsCfg();
+        EXPECT_EQ(dstActor_->codePackageThresholds_.filecountsmax(), 30000);
+        EXPECT_EQ(dstActor_->codePackageThresholds_.zipfilesizemaxmb(), 300);
+        EXPECT_EQ(dstActor_->codePackageThresholds_.unzipfilesizemaxmb(), 600);
+        EXPECT_EQ(dstActor_->codePackageThresholds_.dirdepthmax(), 10);
+    }
+    {
+        dstActor_->codePackageThresholds_.Clear();
+        dstActor_->codePackageThresholds_.set_filecountsmax(30000);
+        dstActor_->codePackageThresholds_.set_dirdepthmax(50);
+        std::string content = R"({"file_count_max":"20000","zip_file_size_max_MB":1000,"unzip_file_size_max_MB":2000})";
+        GenCodePkgThresholdsCfgFile(thresholdConfigPath, content);
+        dstActor_->CodePkgThresholdsCfgCallback(thresholdConfigPath, "..2026_02_11_03_37_09.275559235",
+            uint32_t{1073742336});
+        std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+        EXPECT_EQ(dstActor_->codePackageThresholds_.filecountsmax(), 20000);
+        EXPECT_EQ(dstActor_->codePackageThresholds_.zipfilesizemaxmb(), 1000);
+        EXPECT_EQ(dstActor_->codePackageThresholds_.unzipfilesizemaxmb(), 2000);
+        EXPECT_EQ(dstActor_->codePackageThresholds_.dirdepthmax(), 50);
+    }
 }
 }  // namespace functionsystem::test

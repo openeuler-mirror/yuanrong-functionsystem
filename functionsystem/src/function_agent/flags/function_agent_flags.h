@@ -80,6 +80,16 @@ public:
         return dirDepthMax;
     }
 
+    const bool &GetEnableHotThresholdsCfg() const
+    {
+        return enableHotThresholdsCfg_;
+    }
+
+    const std::string &GetCodePkgThresholdsCfgPath() const
+    {
+        return codePkgThresholdCfgPath_;
+    }
+
     const int32_t &GetCodeAgingTime() const
     {
         return codeAgingTime_;
@@ -154,6 +164,8 @@ protected:
     int32_t unzipFileSizeMaxMB{};
     int32_t dirDepthMax{};
     int32_t codeAgingTime_{ 0 };
+    bool enableHotThresholdsCfg_{ false };
+    std::string codePkgThresholdCfgPath_;
 
     bool isEnableS3{ DEFAULT_ENABLE_S3 };
     std::string credentialType;

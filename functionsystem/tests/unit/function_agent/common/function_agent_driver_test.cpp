@@ -18,6 +18,8 @@
 
 #include <gtest/gtest.h>
 
+#define private public  // onle for test
+#include "function_agent/driver/function_agent_driver.h"
 #include "function_agent/flags/function_agent_flags.h"
 
 using namespace functionsystem::function_agent;
@@ -49,16 +51,41 @@ TEST_F(FunctionAgentDriverTest, DriverTest)
         "--access_key=",
         "--secret_key=",
         "--s3_endpoint=",
+        "--enable_hot_thresholds_config=true",
+        "--code_package_thresholds_config_path=/tmp/download/config",
         R"(--log_config={"filepath": "/tmp/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
     };
-    flags.ParseFlags(11, argv, true);
+    flags.ParseFlags(13, argv, true);
     EXPECT_EQ(flags.GetIP(), "127.0.0.1");
     EXPECT_EQ(flags.GetAgentListenPort(), "500");
+    EXPECT_TRUE(flags.GetEnableHotThresholdsCfg());
+    EXPECT_STREQ(flags.GetCodePkgThresholdsCfgPath().c_str(), "/tmp/download/config");
 
-    FunctionAgentDriver driver("node1", {});
-    EXPECT_EQ(driver.Start(), Status::OK());
-    EXPECT_EQ(driver.Stop(), Status::OK());
-    driver.Await();
+    {
+        FunctionAgentDriver driver("node1", {});
+        EXPECT_EQ(driver.Start(), Status::OK());
+        EXPECT_EQ(driver.Stop(), Status::OK());
+        auto aid = driver.actor_->registerHelper_->actor_->GetAID();
+        litebus::Terminate(aid);
+        litebus::Await(aid);
+        driver.Await();
+    }
+    {
+        FunctionAgentStartParam param;
+        param.enableHotThresholdsCfg = true;
+        param.codePkgThresholdsCfgPath = "/tmp/download/config/tmp";
+        FunctionAgentDriver driver("node2", param);
+        if (litebus::os::ExistPath("/tmp/download/config/tmp")) {
+            litebus::os::Rmdir("/tmp/download/config/tmp");
+        }
+        Status status = driver.Start();
+        EXPECT_TRUE(status.IsError());
+        EXPECT_STREQ(status.GetMessage().c_str(), "[failed to watch code package threshold config path event.]");
+        auto aid = driver.actor_->registerHelper_->actor_->GetAID();
+        litebus::Terminate(aid);
+        litebus::Await(aid);
+        driver.Await();
+    }
 }
 
 }  // namespace functionsystem::test

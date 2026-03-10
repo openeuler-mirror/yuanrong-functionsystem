@@ -45,7 +45,7 @@ RemoteDeployer::RemoteDeployer(messages::CodePackageThresholds codePackageThresh
     // process overflow, set to default
     if (unzipFileSizeMaxBytes_ / SIZE_MEGA_BYTES !=
         static_cast<uint64_t>(codePackageThresholds_.unzipfilesizemaxmb())) {
-        unzipFileSizeMaxBytes_ = function_agent::UNZIP_FILE_SIZE_MAX_MB;
+        unzipFileSizeMaxBytes_ = function_agent::DEFAULT_UNZIP_FILE_LIMIT_SIZE_MB;
     }
 }
 
@@ -429,5 +429,10 @@ Status RemoteDeployer::CheckFileContent(const std::string &destFile)
 
     YRLOG_DEBUG("zipFileInfo: fileCount({}), uncompressedSize({}), dirDepth({})", fileCount, uncompressedSize, depth);
     return Status::OK();
+}
+
+void RemoteDeployer::UpdateCodePackageThresholds(const messages::CodePackageThresholds &codePackageThresholds)
+{
+    codePackageThresholds_.MergeFrom(codePackageThresholds);
 }
 }  // namespace functionsystem::function_agent

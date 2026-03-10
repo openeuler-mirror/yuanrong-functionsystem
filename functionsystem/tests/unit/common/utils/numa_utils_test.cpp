@@ -35,7 +35,7 @@ TEST_F(NUMAUtilsTest, GetNUMANodeCPUsFromAllocatable) {
 
     auto result = NUMAUtils::GetNUMANodeCPUsFromAllocatable(allocatable, DEFAULT_NUMA_NODE_ID);
 
-    EXPECT_EQ(result.size(), 3);
+    EXPECT_EQ(result.size(), size_t{3});
     EXPECT_DOUBLE_EQ(result[0], 1000.0);
     EXPECT_DOUBLE_EQ(result[1], 2000.0);
     EXPECT_DOUBLE_EQ(result[2], 500.0);
@@ -47,7 +47,7 @@ TEST_F(NUMAUtilsTest, GetNUMANodeCPUsFromAllocatableFallbackToFirst) {
 
     auto result = NUMAUtils::GetNUMANodeCPUsFromAllocatable(allocatable, "non_existent_node_id");
 
-    EXPECT_EQ(result.size(), 2);
+    EXPECT_EQ(result.size(), size_t{2});
     EXPECT_DOUBLE_EQ(result[0], 800.0);
     EXPECT_DOUBLE_EQ(result[1], 1200.0);
 }
@@ -68,7 +68,7 @@ TEST_F(NUMAUtilsTest, GetNUMANodeCPUsFromResourceUnit) {
 
     auto result = NUMAUtils::GetNUMANodeCPUsFromResourceUnit(unit);
 
-    EXPECT_EQ(result.size(), 3);
+    EXPECT_EQ(result.size(), size_t{3});
     EXPECT_DOUBLE_EQ(result[0], 500.0);
     EXPECT_DOUBLE_EQ(result[1], 1500.0);
     EXPECT_DOUBLE_EQ(result[2], 300.0);

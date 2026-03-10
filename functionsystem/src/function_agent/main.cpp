@@ -102,6 +102,8 @@ functionsystem::function_agent::FunctionAgentStartParam BuildStartParam(const fu
         .s3Enable = flags.GetS3Enable(),
         .s3Config = GetS3Config(flags),
         .codePackageThresholds = GetCodePackageThresholds(flags),
+        .enableHotThresholdsCfg = flags.GetEnableHotThresholdsCfg(),
+        .codePkgThresholdsCfgPath = flags.GetCodePkgThresholdsCfgPath(),
         .heartbeatTimeoutMs = flags.GetSystemTimeout(),
         .agentUid = flags.GetAgentUID(),
         .localNodeID = flags.GetLocalNodeID(),
