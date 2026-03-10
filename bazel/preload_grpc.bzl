@@ -2,23 +2,21 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("//bazel:grpc_upb_repository.bzl", "grpc_upb_repository")
 
 def preload_grpc():
-    # abseil-cpp — zip archive (the .tar.gz variant returns 404 on Huawei mirror;
-    # the .zip is pre-downloaded in thirdparty/runtime_deps/20240722.0.zip)
+    # abseil-cpp — gitee.com mirror zip
     http_archive(
         name = "com_google_absl",
         sha256 = "104dead3edd7b67ddeb70c37578245130d6118efad5dad4b618d7e26a5331f55",
         strip_prefix = "abseil-cpp-20240722.0",
         urls = [
-            "https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.zip",
+            "https://gitee.com/mirrors/abseil-cpp/repository/archive/20240722.0.zip",
         ],
     )
 
-    # protobuf v3.25.5 — zip archive (the .tar.gz variant returns 404 on Huawei mirror;
-    # the .zip is pre-downloaded in thirdparty/runtime_deps/v3.25.5.zip)
+    # protobuf v3.25.5 — GitHub zip (gitee.com mirror uses protobuf_source which lacks Bazel BUILD files)
     http_archive(
         name = "com_google_protobuf",
-        strip_prefix = "protobuf_source-v3.25.5",
-        sha256 = "4640cb69abb679e2a4b061dfeb7debb3170b592e4ac6e3f16dbaaa4aac0710bd",
+        strip_prefix = "protobuf-3.25.5",
+        sha256 = "747e7477cd959878998145626b49d6f1b9d46065f2fe805622ff5702334f7cb7",
         urls = ["https://github.com/protocolbuffers/protobuf/archive/refs/tags/v3.25.5.zip"],
     )
 
@@ -30,12 +28,11 @@ def preload_grpc():
         urls = ["https://github.com/protocolbuffers/utf8_range/archive/d863bc33e15cba6d873c878dcca9e6fe52b2f8cb.zip"],
     )
 
-    # zlib (required by protobuf/grpc) — zip archive (the .tar.gz variant returns 404 on Huawei mirror;
-    # the .zip is pre-downloaded in thirdparty/runtime_deps/v1.3.1.zip)
+    # zlib (required by protobuf/grpc) — gitee.com mirror zip
     http_archive(
         name = "zlib",
         strip_prefix = "zlib-v1.3.1",
-        urls = ["https://github.com/madler/zlib/archive/refs/tags/v1.3.1.zip"],
+        urls = ["https://gitee.com/mirrors/zlib/repository/archive/v1.3.1.zip"],
         sha256 = "7c31009abc4e76ddc32e1448b6051bafe5f606aac158bb36166100a21ec170c6",
         build_file = "@com_google_protobuf//:third_party/zlib.BUILD",
     )
@@ -59,11 +56,10 @@ def preload_grpc():
         path = "./vendor/src/openssl/",
     )
 
-    # re2 — zip archive (the .tar.gz variant returns 404 on Huawei mirror;
-    # the .zip is pre-downloaded in thirdparty/runtime_deps/2024-02-01.zip)
+    # re2 — gitee.com mirror zip
     http_archive(
         name = "com_googlesource_code_re2",
-        urls = ["https://github.com/google/re2/archive/refs/tags/2024-02-01.zip"],
+        url = "https://gitee.com/mirrors/re2/repository/archive/2024-02-01.zip",
         sha256 = "54bff0e995b101e1865dcea5d052ec10b3aadb6f8c57b5c03c9eeccddb00a08a",
         strip_prefix = "re2-2024-02-01",
     )
@@ -76,11 +72,12 @@ def preload_grpc():
         strip_prefix = "googleapis-541b1ded4abadcc38e8178680b0677f65594ea6f",
     )
 
-    # c-ares — zip archive (the .tar.gz variant returns 404 on Huawei mirror;
-    # the .zip is pre-downloaded in thirdparty/runtime_deps/cares-1_19_1.zip)
+    # c-ares — gitee.com mirror zip
+    # build_file required: gitee.com archive does not include Bazel BUILD; use gRPC's template
     http_archive(
         name = "com_github_cares_cares",
-        urls = ["https://github.com/c-ares/c-ares/archive/refs/tags/cares-1_19_1.zip"],
+        url = "https://gitee.com/mirrors/c-ares/repository/archive/cares-1_19_1.zip",
         sha256 = "edcaac184aff0e6b6eb7b9ede7a55f36c7fc04085d67fecff2434779155dd8ce",
         strip_prefix = "c-ares-cares-1_19_1",
+        build_file = "@com_github_grpc_grpc//third_party:cares/cares.BUILD",
     )

@@ -19,6 +19,12 @@ build -c opt
 # Replace external dependencies with Huawei mirror
 build --experimental_downloader_config=.bazel_redirect.cfg
 
+# Offline dependency cache: distdir for filename-based lookup, repository_cache for sha256-based lookup.
+# All gitee archives in thirdparty/runtime_deps must also be populated into repository_cache
+# with {sha256}/file format to ensure reliable offline fetching.
+build --distdir=./thirdparty/runtime_deps
+build --repository_cache=/root/.cache/bazel/_bazel_root/cache/repos/v1
+
 # --- ASan build ---
 build:sanitize_address --define sanitize=address
 build:sanitize_address --copt=-fsanitize=address
