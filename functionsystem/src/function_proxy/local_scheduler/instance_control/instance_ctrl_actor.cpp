@@ -5329,7 +5329,6 @@ void InstanceCtrlActor::SetNodeLabelsToMetricsContext(const std::string &functio
             ASSERT_FS(future.IsOK());
             auto opt = future.Get();
             if (opt.IsNone()) {
-                YRLOG_WARN("function agent({}) instance info is none", functionAgentID);
                 return;
             }
             for (auto &instance : opt.Get()) {

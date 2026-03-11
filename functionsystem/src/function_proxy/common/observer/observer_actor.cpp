@@ -639,7 +639,6 @@ litebus::Future<litebus::Option<resource_view::InstanceInfo>> ObserverActor::Get
 litebus::Option<InstanceInfoMap> ObserverActor::GetAgentInstanceInfoByID(const std::string &funcAgentID)
 {
     if (agentInstanceInfoMap_.find(funcAgentID) == agentInstanceInfoMap_.end()) {
-        YRLOG_WARN("there is no element of funcAgentID: {}", funcAgentID);
         return litebus::None();
     }
 
