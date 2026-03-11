@@ -403,11 +403,22 @@ Status NpuProbe::ParseNPU310P3()
 
 Status NpuProbe::GetNPUSmiInfo()
 {
+    if (npuUnavailable_) {
+        return Status{ StatusCode::FAILED, "npu not available, skip" };
+    }
     npuSmiCmdOutput_ = cmdTool_->GetCmdResult(getNpuStandardInfoCmd_);  // npu-smi info
     if (npuSmiCmdOutput_.empty()) {
-        YRLOG_DEBUG_COUNT_60("can not get npu from npu-smi info, make sure npu-smi is exist!");
+        npuRetryCount_++;
+        if (npuRetryCount_ >= kNpuMaxRetryCount) {
+            npuUnavailable_ = true;  // mark as unavailable after max retries
+            YRLOG_DEBUG_COUNT_60("npu not available after {} retries, skip further attempts", kNpuMaxRetryCount);
+        } else {
+            YRLOG_DEBUG_COUNT_60("can not get npu from npu-smi info, retry {}/{}", npuRetryCount_, kNpuMaxRetryCount);
+        }
         return Status{ StatusCode::FAILED, "can not get npu from npu-smi info, make sure npu-smi is exist!" };
     }
+    // reset counter on success
+    npuRetryCount_ = 0;
     std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     std::smatch match;
     std::string productModel;

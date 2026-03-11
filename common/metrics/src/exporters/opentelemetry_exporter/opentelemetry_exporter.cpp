@@ -173,15 +173,21 @@ ExportResult OpenTelemetryExporter::Export(
     // Export data using OpenTelemetry exporter
     auto result = otlp_exporter_->Export(resource_metrics);
     if (result == opentelemetry::sdk::common::ExportResult::kSuccess) {
-        is_healthy_ = true;
-        if (health_callback_) {
-            health_callback_(true);
+        // Only trigger callback when health status changes (false -> true)
+        if (!is_healthy_) {
+            is_healthy_ = true;
+            if (health_callback_) {
+                health_callback_(true);
+            }
         }
         return ExportResult::SUCCESS;
     } else {
-        is_healthy_ = false;
-        if (health_callback_) {
-            health_callback_(false);
+        // Only trigger callback when health status changes (true -> false)
+        if (is_healthy_) {
+            is_healthy_ = false;
+            if (health_callback_) {
+                health_callback_(false);
+            }
         }
         return ExportResult::FAILURE;
     }
