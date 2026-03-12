@@ -22,6 +22,7 @@
 #include "common/create_agent_decision/create_agent_decision.h"
 #include "common/logs/logging.h"
 #include "common/trace/trace_manager.h"
+#include "common/proto/pb/posix/message.pb.h"
 #include "nlohmann/json.hpp"
 
 namespace functionsystem::domain_scheduler {
@@ -34,6 +35,19 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     const std::shared_ptr<messages::ScheduleRequest> &req)
 {
     ASSERT_IF_NULL(req);
+
+    // Quota cooldown interception
+    const std::string &tenantID = req->instance().tenantid();
+    if (!tenantID.empty() && blockedTenants_.count(tenantID)) {
+        schedule_decision::ScheduleResult result;
+        result.code   = static_cast<int32_t>(StatusCode::ERR_RESOURCE_NOT_ENOUGH);
+        result.reason = "QUOTA_EXCEEDED|tenantID=" + tenantID +
+                        "|reason=tenant resource quota exceeded";
+        auto promise = std::make_shared<litebus::Promise<std::shared_ptr<messages::ScheduleResponse>>>();
+        promise->SetValue(BuildErrorScheduleRsp(result, req));
+        return promise->GetFuture();
+    }
+
     if (requestTrySchedTimes_.find(req->requestid()) == requestTrySchedTimes_.end()) {
         requestTrySchedTimes_[req->requestid()] = 0;
     }
@@ -455,6 +469,30 @@ void InstanceCtrlActor::CreateAgentResponse(const litebus::AID &from, std::strin
 void InstanceCtrlActor::Init()
 {
     Receive("CreateAgentResponse", &InstanceCtrlActor::CreateAgentResponse);
+    Receive("TenantQuotaExceeded", &InstanceCtrlActor::OnTenantQuotaExceeded);
+}
+
+void InstanceCtrlActor::OnTenantQuotaExceeded(
+    const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    messages::TenantQuotaExceeded event;
+    if (!event.ParseFromString(msg)) {
+        YRLOG_WARN("InstanceCtrlActor::OnTenantQuotaExceeded parse failed");
+        return;
+    }
+    const std::string tenantID = event.tenantid();
+    int64_t cooldownMs = event.cooldownms();
+    if (cooldownMs <= 0) cooldownMs = 10000;
+
+    YRLOG_INFO("InstanceCtrlActor: tenant={} blocked for {}ms (quota exceeded)", tenantID, cooldownMs);
+
+    blockedTenants_[tenantID] = litebus::AsyncAfter(
+        cooldownMs,
+        GetAID(),
+        [this, tenantID]() {
+            blockedTenants_.erase(tenantID);
+            YRLOG_INFO("InstanceCtrlActor: tenant={} cooldown expired, scheduling resumed", tenantID);
+        });
 }
 
 void InstanceCtrlActor::SetScalerAddress(const std::string &address)
