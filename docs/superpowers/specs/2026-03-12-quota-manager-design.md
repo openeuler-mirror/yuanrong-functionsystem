@@ -178,11 +178,11 @@ double cpuCores = resMap.count("CPU")    ? resMap.at("CPU").scalar().value()    
 double memMb    = resMap.count("Memory") ? resMap.at("Memory").scalar().value() : 0.0;
 
 // 转换为内部单位
-int64_t cpuMillicores = static_cast<int64_t>(cpuCores * 1000);
+int64_t cpuMillicores = static_cast<int64_t>(cpuCores);
 int64_t memMbInt      = static_cast<int64_t>(memMb);
 ```
 
-**单位约定：** CPU scalar.value() 单位为核（core），×1000 转毫核；Memory scalar.value() 单位为 MB，直接转 int64。
+**单位约定：** CPU scalar.value() 单位为毫核（Millicores） 直接转 int64；Memory scalar.value() 单位为 MB，直接转 int64。
 
 ### 4.4 InstanceCtrlActor 新增状态
 
@@ -264,7 +264,9 @@ InstanceCtrlActor::Schedule(const std::shared_ptr<messages::ScheduleRequest> &re
     if (blockedTenants_.count(tenantID)) {
         schedule_decision::ScheduleResult result;
         result.code   = static_cast<int32_t>(StatusCode::ERR_RESOURCE_NOT_ENOUGH);
-        result.reason = "tenant quota exceeded, retry after cooldown";
+        // 错误信息格式：QUOTA_EXCEEDED|tenantID=<id>|reason=tenant resource quota exceeded
+        result.reason = "QUOTA_EXCEEDED|tenantID=" + tenantID +
+                        "|reason=tenant resource quota exceeded";
         auto promise  = std::make_shared<litebus::Promise<std::shared_ptr<messages::ScheduleResponse>>>();
         promise->SetValue(BuildErrorScheduleRsp(result, req));
         return promise->GetFuture();
@@ -291,7 +293,7 @@ void InstanceCtrlActor::OnTenantQuotaExceeded(
 
     // 重置（已有 Timer 则覆盖，相当于刷新冷却）
     blockedTenants_[tenantID] = litebus::Timer(
-        std::chrono::milliseconds(cooldownMs),
+        cooldownMs,
         [this, tenantID]() { blockedTenants_.erase(tenantID); });
 }
 ```
@@ -325,8 +327,10 @@ while ((usage.cpuMillicores > quota.cpuMillicores ||
     // 使用 InstanceManagerActor 现有 ForwardKill 消息
     inner_service::ForwardKillRequest killReq;
     killReq.set_instanceid(instanceID);
-    // requestID 填 quota_eviction 标识，便于日志追踪
-    killReq.set_requestid("quota_eviction_" + instanceID);
+    // requestID 格式：QUOTA_EVICTION|tenantID=<id>|instanceID=<id>
+    // 便于日志和问题追踪，与调度拦截错误信息前缀保持一致
+    killReq.set_requestid("QUOTA_EVICTION|tenantID=" + tenantID +
+                          "|instanceID=" + instanceID);
 
     Send(instanceMgrAID_, "ForwardKill", killReq.SerializeAsString());
 
@@ -336,7 +340,23 @@ while ((usage.cpuMillicores > quota.cpuMillicores ||
 }
 ```
 
-### 5.6 预留 per-tenant 外部接口
+### 5.6 错误信息规范
+
+所有与 quota 相关的错误信息统一使用 `KEY=VALUE` 管道分隔格式，便于日志解析与问题追踪。
+
+| 场景 | 字段 | 示例 |
+|------|------|------|
+| 调度拦截（冷却期内拒绝） | `ScheduleResult.reason` | `QUOTA_EXCEEDED\|tenantID=tenant-abc\|reason=tenant resource quota exceeded` |
+| 驱逐实例（ForwardKill requestID）| `ForwardKillRequest.requestid` | `QUOTA_EVICTION\|tenantID=tenant-abc\|instanceID=inst-xyz` |
+
+**设计原则：**
+- 前缀统一（`QUOTA_EXCEEDED` / `QUOTA_EVICTION`），便于 grep 过滤
+- 始终携带 `tenantID`，支持多租户日志隔离
+- `reason` 字段面向调用方，用英文描述，避免暴露内部实现细节
+
+---
+
+### 5.7 预留 per-tenant 外部接口
 
 ```cpp
 // QuotaManagerActor 预留，首阶段不实现
