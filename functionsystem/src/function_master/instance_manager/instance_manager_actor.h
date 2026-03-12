@@ -46,6 +46,7 @@ struct InstanceManagerStartParam {
     std::string libPath;
     std::string functionMetaPath;
     bool enableAbnormalDoubleCheck;
+    std::string systemTenantID{ "0" };
 };
 
 class InstanceManagerActor : public litebus::ActorBase, public std::enable_shared_from_this<InstanceManagerActor> {
