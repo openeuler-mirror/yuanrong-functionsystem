@@ -51,6 +51,13 @@ void InstanceCtrl::TryCancelSchedule(const std::shared_ptr<messages::CancelSched
     litebus::Async(aid_, &InstanceCtrlActor::TryCancelSchedule, cancelRequest);
 }
 
+void InstanceCtrl::OnTenantQuotaExceeded(std::string msg)
+{
+    litebus::AID from;
+    (void)litebus::Async(aid_, &InstanceCtrlActor::OnTenantQuotaExceeded,
+                         from, std::string{"TenantQuotaExceeded"}, std::move(msg));
+}
+
 litebus::Future<std::vector<std::shared_ptr<messages::ScheduleRequest>>> InstanceCtrl::GetSchedulerQueue()
 {
     return litebus::Async(aid_, &InstanceCtrlActor::GetSchedulerQueue);

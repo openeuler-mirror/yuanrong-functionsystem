@@ -82,6 +82,8 @@ public:
         underlayer_ = underlayer;
     }
 
+    void OnTenantQuotaExceeded(const litebus::AID &from, std::string &&name, std::string &&msg);
+
     void BindResourceView(const std::shared_ptr<resource_view::ResourceViewMgr> &resourceViewMgr)
     {
         ASSERT_IF_NULL(resourceViewMgr);
@@ -192,6 +194,7 @@ private:
     std::unordered_map<std::string, litebus::Promise<std::shared_ptr<messages::CreateAgentResponse>>>
         createAgentPromises_;
     std::unordered_map<std::string, litebus::Timer> createAgentRetryTimers_;
+    std::unordered_map<std::string, litebus::Timer> blockedTenants_;
     uint32_t createAgentAwaitRetryInterval_ = DEFAULT_CREATE_AGENT_AWAIT_RETRY_INTERVAL;
     std::vector<uint32_t> retryScheduleIntervals_ = RETRY_SCHEDULE_INTERVALS;
     uint32_t createAgentAwaitRetryTimes_ = DEFAULT_CREATE_AGENT_AWAIT_RETRY_TIMES;

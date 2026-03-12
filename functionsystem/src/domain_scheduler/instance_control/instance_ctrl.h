@@ -34,6 +34,7 @@ public:
     virtual void SetDomainLevel(bool isHeader);
     virtual void SetScalerAddress(const std::string& address);
     virtual void TryCancelSchedule(const std::shared_ptr<messages::CancelSchedule> &cancelRequest);
+    virtual void OnTenantQuotaExceeded(std::string msg);
     virtual litebus::Future<std::vector<std::shared_ptr<messages::ScheduleRequest>>> GetSchedulerQueue();
 
 private:
