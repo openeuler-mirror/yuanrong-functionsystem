@@ -506,7 +506,16 @@ void DomainSchedSrvActor::ResponseNotifySchedAbnormal(const litebus::AID &from, 
         YRLOG_ERROR("invalid Notify response {}. ignored", msg);
         return;
     }
-    notifyAbnormalSync_.Synchronized(rsp.schedname(), Status::OK());
+    notifyAbnormalSync_.Synchronized(rsp.schedname(), Status::Ok());
+}
+
+void DomainSchedSrvActor::OnTenantQuotaExceeded(const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    if (!instanceCtrl_) {
+        YRLOG_WARN("DomainSchedSrvActor::OnTenantQuotaExceeded: instanceCtrl_ is null");
+        return;
+    }
+    instanceCtrl_->OnTenantQuotaExceeded(std::move(msg));
 }
 
 void DomainSchedSrvActor::ResponseNotifyWorkerStatus(const litebus::AID &from, std::string &&, std::string &&msg)
@@ -563,6 +572,7 @@ void DomainSchedSrvActor::Init()
     Receive("ResponseForwardSchedule", &DomainSchedSrvActor::ResponseForwardSchedule);
     Receive("Schedule", &DomainSchedSrvActor::Schedule);
     Receive("ResponseNotifySchedAbnormal", &DomainSchedSrvActor::ResponseNotifySchedAbnormal);
+    Receive("TenantQuotaExceeded", &DomainSchedSrvActor::OnTenantQuotaExceeded);
     Receive("ResponseNotifyWorkerStatus", &DomainSchedSrvActor::ResponseNotifyWorkerStatus);
     Receive("QueryAgentInfo", &DomainSchedSrvActor::QueryAgentInfo);
     Receive("QueryResourcesInfo", &DomainSchedSrvActor::QueryResourcesInfo);
