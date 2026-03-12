@@ -205,16 +205,10 @@ void QuotaManagerActor::RebuildUsageFromSnapshot()
     });
 }
 
-void QuotaManagerActor::OnSnapshotRebuilt(const litebus::Future<messages::QueryInstancesInfoResponse> &rsp)
+void QuotaManagerActor::OnSnapshotRebuilt(const messages::QueryInstancesInfoResponse &rsp)
 {
-    if (!rsp.IsReady()) {
-        YRLOG_ERROR("QuotaManagerActor: Snapshot rebuild failed - response not ready");
-        return;
-    }
-
-    const auto &response = rsp.Get();
-    if (response.code() != 0) {
-        YRLOG_ERROR("QuotaManagerActor: Snapshot rebuild failed with code {}", response.code());
+    if (rsp.code() != 0) {
+        YRLOG_ERROR("QuotaManagerActor: Snapshot rebuild failed with code {}", rsp.code());
         return;
     }
 
@@ -222,7 +216,7 @@ void QuotaManagerActor::OnSnapshotRebuilt(const litebus::Future<messages::QueryI
     instanceArrivalTime_.clear();
     int64_t now = NowMs();
 
-    for (const auto &insInfo : response.instanceinfos()) {
+    for (const auto &insInfo : rsp.instanceinfos()) {
         const std::string tenantID = insInfo.tenantid();
         if (IsSystemTenant(tenantID)) {
             continue;

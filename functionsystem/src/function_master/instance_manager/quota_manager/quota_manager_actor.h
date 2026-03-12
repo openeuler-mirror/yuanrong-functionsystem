@@ -42,7 +42,7 @@ protected:
 private:
     void CheckAndEnforce(const std::string &tenantID);
     void RebuildUsageFromSnapshot();
-    void OnSnapshotRebuilt(const litebus::Future<messages::QueryInstancesInfoResponse> &rsp);
+    void OnSnapshotRebuilt(const messages::QueryInstancesInfoResponse &rsp);
 
     int64_t NowMs() const;
 
