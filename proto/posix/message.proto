@@ -1092,3 +1092,8 @@ message RecordSnapshotResponse {
   string message = 2;
   string requestID = 3;
 }
+
+message TenantQuotaExceeded {
+    string tenantID   = 1;
+    int64  cooldownMs = 2;
+}
