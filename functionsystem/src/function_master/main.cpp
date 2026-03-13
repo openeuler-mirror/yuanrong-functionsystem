@@ -48,6 +48,8 @@
 #include "group_manager.h"
 #include "group_manager_actor.h"
 #include "instance_manager.h"
+#include "function_master/instance_manager/quota_manager/quota_config.h"
+#include "function_master/instance_manager/quota_manager/quota_manager_actor.h"
 #include "instance_manager/instance_manager_driver.h"
 #include "instance_manager_actor.h"
 #include "litebus.hpp"
@@ -380,7 +382,14 @@ bool InitInstanceManagerDriver(const functionmaster::Flags &flags, const std::sh
     metaStoreMonitor->RegisterHealthyObserver(g_instanceMgr);
     groupMgrActor->BindInstanceManager(g_instanceMgr);
 
-    g_instanceMgrDriver = std::make_shared<::instance_manager::InstanceManagerDriver>(instanceMgrActor, groupMgrActor);
+    // Create QuotaManagerActor if quota config file is specified
+    std::shared_ptr<function_master::QuotaManagerActor> quotaMgrActor;
+    auto quotaConfig = function_master::QuotaConfig::LoadFromFile(flags.GetQuotaConfigFile());
+    quotaMgrActor = std::make_shared<function_master::QuotaManagerActor>(std::move(quotaConfig));
+    YRLOG_INFO("QuotaManagerActor created with config file: {}", flags.GetQuotaConfigFile());
+
+    g_instanceMgrDriver = std::make_shared<::instance_manager::InstanceManagerDriver>(
+        instanceMgrActor, groupMgrActor, quotaMgrActor);
 
     g_handlers.systemUpgradeHandler = [aid(instanceMgrActor->GetAID())](bool isUpgrading) {
         litebus::Async(aid, &instance_manager::InstanceManagerActor::HandleSystemUpgrade, isUpgrading);

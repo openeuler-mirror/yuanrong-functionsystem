@@ -18,10 +18,11 @@
 
 namespace functionsystem::instance_manager {
 InstanceManagerDriver::InstanceManagerDriver(std::shared_ptr<InstanceManagerActor> instanceManagerActor,
-                                             std::shared_ptr<GroupManagerActor> groupManagerActor
-                                             )
+                                             std::shared_ptr<GroupManagerActor> groupManagerActor,
+                                             std::shared_ptr<function_master::QuotaManagerActor> quotaManagerActor)
     : instanceManagerActor_(instanceManagerActor),
-      groupManagerActor_(groupManagerActor)
+      groupManagerActor_(groupManagerActor),
+      quotaManagerActor_(quotaManagerActor)
 {
 }
 
@@ -35,6 +36,20 @@ Status InstanceManagerDriver::Start()
     litebus::AID groupManagerActorAID = litebus::Spawn(groupManagerActor_);
     if (!groupManagerActorAID.OK()) {
         return Status(FAILED, "failed to start group_manager actor.");
+    }
+
+    if (quotaManagerActor_ != nullptr) {
+        litebus::AID quotaManagerActorAID = litebus::Spawn(quotaManagerActor_);
+        if (!quotaManagerActorAID.OK()) {
+            YRLOG_WARN("failed to start quota_manager actor, quota enforcement disabled.");
+            quotaManagerActor_ = nullptr;
+        } else {
+            // Bind mutual AIDs so QuotaManagerActor receives lifecycle events
+            // and InstanceManagerActor can forward kills
+            quotaManagerActor_->BindInstanceMgrAID(instanceManagerActorAID);
+            instanceManagerActor_->BindQuotaMgrAID(quotaManagerActorAID);
+            YRLOG_INFO("QuotaManagerActor started and wired to InstanceManagerActor.");
+        }
     }
 
     // create http server
@@ -62,6 +77,9 @@ Status InstanceManagerDriver::Stop()
     if (httpServer_) {
         litebus::Terminate(httpServer_->GetAID());
     }
+    if (quotaManagerActor_ != nullptr) {
+        litebus::Terminate(quotaManagerActor_->GetAID());
+    }
     litebus::Terminate(instanceManagerActor_->GetAID());
     litebus::Terminate(groupManagerActor_->GetAID());
     return Status::OK();
@@ -71,6 +89,9 @@ void InstanceManagerDriver::Await()
 {
     if (httpServer_) {
         litebus::Terminate(httpServer_->GetAID());
+    }
+    if (quotaManagerActor_ != nullptr) {
+        litebus::Await(quotaManagerActor_->GetAID());
     }
     litebus::Await(instanceManagerActor_->GetAID());
     litebus::Await(groupManagerActor_->GetAID());
