@@ -91,6 +91,11 @@ public:
 
     bool UpdateLeaderInfo(const explorer::LeaderInfo &leaderInfo);
 
+    void BindQuotaMgrAID(litebus::AID aid)
+    {
+        quotaMgrAID_ = std::move(aid);
+    }
+
     void HandleSystemUpgrade(bool isUpgrading);
 
     void AddNode(const std::string &nodeName);
@@ -515,6 +520,7 @@ private:
     void CommitSuicide();
 
     std::shared_ptr<Member> member_{ nullptr };
+    litebus::AID quotaMgrAID_;
 
     std::unordered_map<std::string, std::shared_ptr<Business>> businesses_;
 

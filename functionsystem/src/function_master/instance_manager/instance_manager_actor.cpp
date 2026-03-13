@@ -445,6 +445,10 @@ void InstanceManagerActor::OnInstancePut(const std::string &key,
     } else {
         member_->groupManager->OnInstancePut(key, instance);
     }
+    if (!quotaMgrAID_.Name().empty()
+        && instance->instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)) {
+        Send(quotaMgrAID_, "OnInstanceRunning", instance->SerializeAsString());
+    }
     business_->OnInstancePutForFamilyManagement(instance);
     member_->instID2Instance[instance->instanceid()] = std::make_pair(key, instance);
     if (IsInstanceManagedByJob(instance)) {
@@ -485,6 +489,9 @@ void InstanceManagerActor::OnInstanceDelete(const std::string &key,
                                             const std::shared_ptr<resource_view::InstanceInfo> &instance)
 {
     RETURN_IF_NULL(instance);
+    if (!quotaMgrAID_.Name().empty()) {
+        Send(quotaMgrAID_, "OnInstanceExited", instance->SerializeAsString());
+    }
     member_->instID2Instance.erase(instance->instanceid());
 
     if (!instance->jobid().empty() &&
