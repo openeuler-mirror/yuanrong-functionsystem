@@ -506,7 +506,7 @@ void DomainSchedSrvActor::ResponseNotifySchedAbnormal(const litebus::AID &from, 
         YRLOG_ERROR("invalid Notify response {}. ignored", msg);
         return;
     }
-    notifyAbnormalSync_.Synchronized(rsp.schedname(), Status::Ok());
+    notifyAbnormalSync_.Synchronized(rsp.schedname(), Status::OK());
 }
 
 void DomainSchedSrvActor::OnTenantQuotaExceeded(const litebus::AID &from, std::string &&name, std::string &&msg)

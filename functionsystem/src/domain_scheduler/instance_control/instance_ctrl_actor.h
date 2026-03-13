@@ -83,6 +83,8 @@ public:
     }
 
     void OnTenantQuotaExceeded(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void HandleTenantQuotaExceeded(std::string msg);  // value-arg adapter for external callers
+    void OnTenantCooldownExpired(std::string tenantID);
 
     void BindResourceView(const std::shared_ptr<resource_view::ResourceViewMgr> &resourceViewMgr)
     {

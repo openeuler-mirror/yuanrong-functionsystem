@@ -37,22 +37,16 @@ bool IsSystemTenant(const std::string &tenantID)
 }
 }  // namespace
 
-QuotaManagerActor::QuotaManagerActor(QuotaConfig config) : config_(std::move(config)) {}
+QuotaManagerActor::QuotaManagerActor(QuotaConfig config)
+    : ActorBase(std::string(QUOTA_MANAGER_ACTOR_NAME)), config_(std::move(config))
+{
+}
 
 void QuotaManagerActor::Init()
 {
     Receive("OnInstanceRunning", &QuotaManagerActor::OnInstanceRunning);
     Receive("OnInstanceExited", &QuotaManagerActor::OnInstanceExited);
-
-    instanceMgrAID_ = litebus::GetActor(litebus::AID("InstanceManagerActor", ""));
-    domainSchedSrvAID_ = litebus::GetActor(litebus::AID("DomainSchedSrvActor", ""));
-
-    if (instanceMgrAID_ == nullptr) {
-        YRLOG_WARN("QuotaManagerActor: InstanceManagerActor not found, will retry on next call");
-    }
-    if (domainSchedSrvAID_ == nullptr) {
-        YRLOG_WARN("QuotaManagerActor: DomainSchedSrvActor not found, will retry on next call");
-    }
+    Receive("ForwardQueryInstancesInfoResponse", &QuotaManagerActor::OnSnapshotResponse);
 
     RebuildUsageFromSnapshot();
 }
@@ -71,7 +65,7 @@ int64_t QuotaManagerActor::NowMs() const
 
 void QuotaManagerActor::OnInstanceRunning(const litebus::AID &from, std::string &&name, std::string &&msg)
 {
-    messages::InstanceInfo insInfo;
+    InstanceInfo insInfo;
     if (!insInfo.ParseFromString(msg)) {
         YRLOG_ERROR("QuotaManagerActor: Failed to parse InstanceRunning message");
         return;
@@ -100,7 +94,7 @@ void QuotaManagerActor::OnInstanceRunning(const litebus::AID &from, std::string 
 
 void QuotaManagerActor::OnInstanceExited(const litebus::AID &from, std::string &&name, std::string &&msg)
 {
-    messages::InstanceInfo insInfo;
+    InstanceInfo insInfo;
     if (!insInfo.ParseFromString(msg)) {
         YRLOG_ERROR("QuotaManagerActor: Failed to parse InstanceExited message");
         return;
@@ -152,7 +146,7 @@ void QuotaManagerActor::CheckAndEnforce(const std::string &tenantID)
         auto it = std::prev(usage.sortedInstances.end());
         const std::string instanceID = it->second;
 
-        if (instanceMgrAID_ != nullptr) {
+        if (!instanceMgrAID_.Name().empty()) {
             inner_service::ForwardKillRequest killReq;
             killReq.set_instanceid(instanceID);
             killReq.set_requestid("QUOTA_EVICT|tenantID=" + tenantID + "|instanceID=" + instanceID);
@@ -165,11 +159,11 @@ void QuotaManagerActor::CheckAndEnforce(const std::string &tenantID)
         usage.sortedInstances.erase(it);
     }
 
-    if (domainSchedSrvAID_ != nullptr) {
-        nlohmann::json event;
-        event["tenantID"] = tenantID;
-        event["cooldownMs"] = quota.cooldownMs;
-        Send(domainSchedSrvAID_, "TenantQuotaExceeded", event.dump());
+    if (!domainSchedSrvAID_.Name().empty()) {
+        ::messages::TenantQuotaExceeded event;
+        event.set_tenantid(tenantID);
+        event.set_cooldownms(quota.cooldownMs);
+        Send(domainSchedSrvAID_, "TenantQuotaExceeded", event.SerializeAsString());
         YRLOG_INFO("QuotaManagerActor: Sent TenantQuotaExceeded for tenant {}, cooldown {}ms",
                    tenantID, quota.cooldownMs);
     }
@@ -177,32 +171,24 @@ void QuotaManagerActor::CheckAndEnforce(const std::string &tenantID)
 
 void QuotaManagerActor::RebuildUsageFromSnapshot()
 {
-    if (instanceMgrAID_ == nullptr) {
-        instanceMgrAID_ = litebus::GetActor(litebus::AID("InstanceManagerActor", ""));
-        if (instanceMgrAID_ == nullptr) {
-            YRLOG_WARN("QuotaManagerActor: InstanceManagerActor not available for snapshot rebuild");
-            return;
-        }
+    if (instanceMgrAID_.Name().empty()) {
+        YRLOG_WARN("QuotaManagerActor: instanceMgrAID not set, skipping snapshot rebuild");
+        return;
     }
 
-    auto req = std::make_shared<messages::QueryInstancesInfoRequest>();
-    req->set_requestid("QUOTA_REBUILD_" + std::to_string(NowMs()));
+    messages::QueryInstancesInfoRequest req;
+    req.set_requestid("QUOTA_REBUILD_" + std::to_string(NowMs()));
+    Send(instanceMgrAID_, "ForwardQueryInstancesInfo", req.SerializeAsString());
+}
 
-    auto future = Send(instanceMgrAID_, "ForwardQueryInstancesInfo", req->SerializeAsString());
-
-    auto self = shared_from_this();
-    future.OnComplete([self](const litebus::Future<std::string> &result) {
-        if (!result.IsReady()) {
-            YRLOG_ERROR("QuotaManagerActor: QueryInstancesInfo future not ready");
-            return;
-        }
-        auto rsp = std::make_shared<messages::QueryInstancesInfoResponse>();
-        if (!rsp->ParseFromString(result.Get())) {
-            YRLOG_ERROR("QuotaManagerActor: Failed to parse QueryInstancesInfoResponse");
-            return;
-        }
-        self->OnSnapshotRebuilt(*rsp);
-    });
+void QuotaManagerActor::OnSnapshotResponse(const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    messages::QueryInstancesInfoResponse rsp;
+    if (!rsp.ParseFromString(msg)) {
+        YRLOG_ERROR("QuotaManagerActor: Failed to parse QueryInstancesInfoResponse");
+        return;
+    }
+    OnSnapshotRebuilt(rsp);
 }
 
 void QuotaManagerActor::OnSnapshotRebuilt(const messages::QueryInstancesInfoResponse &rsp)

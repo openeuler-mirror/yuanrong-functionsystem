@@ -32,12 +32,23 @@ public:
     explicit QuotaManagerActor(QuotaConfig config);
     ~QuotaManagerActor() override = default;
 
+    void BindInstanceMgrAID(litebus::AID aid)
+    {
+        instanceMgrAID_ = std::move(aid);
+    }
+
+    void BindDomainSchedSrvAID(litebus::AID aid)
+    {
+        domainSchedSrvAID_ = std::move(aid);
+    }
+
 protected:
     void Init() override;
     void Finalize() override;
 
     void OnInstanceRunning(const litebus::AID &from, std::string &&name, std::string &&msg);
     void OnInstanceExited(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void OnSnapshotResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 
 private:
     void CheckAndEnforce(const std::string &tenantID);

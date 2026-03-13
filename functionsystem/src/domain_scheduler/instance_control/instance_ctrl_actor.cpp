@@ -475,7 +475,7 @@ void InstanceCtrlActor::Init()
 void InstanceCtrlActor::OnTenantQuotaExceeded(
     const litebus::AID &from, std::string &&name, std::string &&msg)
 {
-    messages::TenantQuotaExceeded event;
+    ::messages::TenantQuotaExceeded event;
     if (!event.ParseFromString(msg)) {
         YRLOG_WARN("InstanceCtrlActor::OnTenantQuotaExceeded parse failed");
         return;
@@ -487,12 +487,20 @@ void InstanceCtrlActor::OnTenantQuotaExceeded(
     YRLOG_INFO("InstanceCtrlActor: tenant={} blocked for {}ms (quota exceeded)", tenantID, cooldownMs);
 
     blockedTenants_[tenantID] = litebus::AsyncAfter(
-        cooldownMs,
-        GetAID(),
-        [this, tenantID]() {
-            blockedTenants_.erase(tenantID);
-            YRLOG_INFO("InstanceCtrlActor: tenant={} cooldown expired, scheduling resumed", tenantID);
-        });
+        cooldownMs, GetAID(), &InstanceCtrlActor::OnTenantCooldownExpired, tenantID);
+}
+
+void InstanceCtrlActor::HandleTenantQuotaExceeded(std::string msg)
+{
+    litebus::AID from;
+    std::string name = "TenantQuotaExceeded";
+    OnTenantQuotaExceeded(from, std::move(name), std::move(msg));
+}
+
+void InstanceCtrlActor::OnTenantCooldownExpired(std::string tenantID)
+{
+    blockedTenants_.erase(tenantID);
+    YRLOG_INFO("InstanceCtrlActor: tenant={} cooldown expired, scheduling resumed", tenantID);
 }
 
 void InstanceCtrlActor::SetScalerAddress(const std::string &address)
