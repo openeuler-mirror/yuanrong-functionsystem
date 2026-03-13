@@ -84,6 +84,7 @@ void QuotaManagerActor::OnInstanceRunning(const litebus::AID &from, std::string 
     usage.cpuMillicores += cpu;
     usage.memMb += mem;
     usage.sortedInstances.insert({ now, instanceID });
+    usage.instanceResources[instanceID] = { cpu, mem };
     instanceArrivalTime_[instanceID] = now;
 
     YRLOG_DEBUG("QuotaManagerActor: Instance {} running for tenant {}, cpu={}, mem={}",
@@ -105,7 +106,6 @@ void QuotaManagerActor::OnInstanceExited(const litebus::AID &from, std::string &
         return;
     }
 
-    auto [cpu, mem] = ExtractResources(insInfo);
     const std::string &instanceID = insInfo.instanceid();
 
     auto usageIt = tenantUsage_.find(tenantID);
@@ -114,8 +114,14 @@ void QuotaManagerActor::OnInstanceExited(const litebus::AID &from, std::string &
     }
 
     auto &usage = usageIt->second;
-    usage.cpuMillicores = std::max(int64_t(0), usage.cpuMillicores - cpu);
-    usage.memMb = std::max(int64_t(0), usage.memMb - mem);
+
+    // Only reduce usage if this instance is still tracked (not already evicted by CheckAndEnforce)
+    auto resIt = usage.instanceResources.find(instanceID);
+    if (resIt != usage.instanceResources.end()) {
+        usage.cpuMillicores = std::max(int64_t(0), usage.cpuMillicores - resIt->second.first);
+        usage.memMb = std::max(int64_t(0), usage.memMb - resIt->second.second);
+        usage.instanceResources.erase(resIt);
+    }
 
     auto arrivalIt = instanceArrivalTime_.find(instanceID);
     if (arrivalIt != instanceArrivalTime_.end()) {
@@ -123,8 +129,7 @@ void QuotaManagerActor::OnInstanceExited(const litebus::AID &from, std::string &
         instanceArrivalTime_.erase(arrivalIt);
     }
 
-    YRLOG_DEBUG("QuotaManagerActor: Instance {} exited for tenant {}, cpu={}, mem={}",
-                instanceID, tenantID, cpu, mem);
+    YRLOG_DEBUG("QuotaManagerActor: Instance {} exited for tenant {}", instanceID, tenantID);
 }
 
 void QuotaManagerActor::CheckAndEnforce(const std::string &tenantID)
@@ -145,6 +150,14 @@ void QuotaManagerActor::CheckAndEnforce(const std::string &tenantID)
            && !usage.sortedInstances.empty()) {
         auto it = std::prev(usage.sortedInstances.end());
         const std::string instanceID = it->second;
+
+        // Reduce usage immediately for accurate loop termination
+        auto resIt = usage.instanceResources.find(instanceID);
+        if (resIt != usage.instanceResources.end()) {
+            usage.cpuMillicores = std::max(int64_t(0), usage.cpuMillicores - resIt->second.first);
+            usage.memMb = std::max(int64_t(0), usage.memMb - resIt->second.second);
+            usage.instanceResources.erase(resIt);
+        }
 
         if (!instanceMgrAID_.Name().empty()) {
             inner_service::ForwardKillRequest killReq;
@@ -215,6 +228,7 @@ void QuotaManagerActor::OnSnapshotRebuilt(const messages::QueryInstancesInfoResp
         usage.cpuMillicores += cpu;
         usage.memMb += mem;
         usage.sortedInstances.insert({ now, instanceID });
+        usage.instanceResources[instanceID] = { cpu, mem };
         instanceArrivalTime_[instanceID] = now;
     }
 

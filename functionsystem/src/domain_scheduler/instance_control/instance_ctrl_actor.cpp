@@ -40,7 +40,7 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     const std::string &tenantID = req->instance().tenantid();
     if (!tenantID.empty() && blockedTenants_.count(tenantID)) {
         schedule_decision::ScheduleResult result;
-        result.code   = static_cast<int32_t>(StatusCode::ERR_RESOURCE_NOT_ENOUGH);
+        result.code   = static_cast<int32_t>(StatusCode::RESOURCE_NOT_ENOUGH);
         result.reason = "QUOTA_EXCEEDED|tenantID=" + tenantID +
                         "|reason=tenant resource quota exceeded";
         auto promise = std::make_shared<litebus::Promise<std::shared_ptr<messages::ScheduleResponse>>>();

@@ -24,6 +24,7 @@ struct TenantUsage {
     int64_t cpuMillicores{ 0 };
     int64_t memMb{ 0 };
     std::multimap<int64_t, std::string> sortedInstances; // {arrivalTimeMs, instanceID}
+    std::unordered_map<std::string, std::pair<int64_t, int64_t>> instanceResources; // instanceID -> {cpu, mem}
 };
 
 class QuotaManagerActor : public litebus::ActorBase,

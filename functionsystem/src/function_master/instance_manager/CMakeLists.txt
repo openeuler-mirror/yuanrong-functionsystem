@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} INSTANCE_MANAGER_SRCS)
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/quota_manager QUOTA_MANAGER_SRCS)
+list(APPEND INSTANCE_MANAGER_SRCS ${QUOTA_MANAGER_SRCS})
 
 set(INSTANCE_MANAGER_LIB instance_manager_lib) # for this directory
 set(INSTANCE_MANAGER_LIB ${INSTANCE_MANAGER_LIB} PARENT_SCOPE) # for function_master directory
@@ -20,6 +22,7 @@ set_property(GLOBAL PROPERTY INSTANCE_MANAGER_DIR "${CMAKE_CURRENT_LIST_DIR}")
 set_property(GLOBAL PROPERTY INSTANCE_MANAGER_LIB ${INSTANCE_MANAGER_LIB})
 
 include_directories(${CMAKE_CURRENT_LIST_DIR})
+include_directories(${CMAKE_CURRENT_LIST_DIR}/quota_manager)
 
 add_library(${INSTANCE_MANAGER_LIB} STATIC
         ${INSTANCE_MANAGER_SRCS})
