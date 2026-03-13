@@ -20,6 +20,7 @@
 #include "common/http/http_server.h"
 #include "common/status/status.h"
 #include "common/utils/module_driver.h"
+#include "function_master/instance_manager/quota_manager/quota_manager_actor.h"
 #include "group_manager_actor.h"
 #include "instance_manager_actor.h"
 #include <nlohmann/json.hpp>
@@ -221,8 +222,8 @@ public:
 class InstanceManagerDriver : public ModuleDriver {
 public:
     explicit InstanceManagerDriver(std::shared_ptr<InstanceManagerActor> instanceManagerActor,
-                                   std::shared_ptr<GroupManagerActor> groupManagerActor
-    );
+                                   std::shared_ptr<GroupManagerActor> groupManagerActor,
+                                   std::shared_ptr<function_master::QuotaManagerActor> quotaManagerActor = nullptr);
 
     ~InstanceManagerDriver() override = default;
 
@@ -235,6 +236,7 @@ public:
 private:
     std::shared_ptr<InstanceManagerActor> instanceManagerActor_{ nullptr };
     std::shared_ptr<GroupManagerActor> groupManagerActor_{ nullptr };
+    std::shared_ptr<function_master::QuotaManagerActor> quotaManagerActor_{ nullptr };
 
     std::shared_ptr<HttpServer> httpServer_{nullptr};
     std::shared_ptr<InstancesApiRouter> instanceApiRouteRegister_ = nullptr;
