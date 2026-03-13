@@ -128,7 +128,7 @@ TEST_F(InstanceCtrlCooldownTest, ScheduleBlockedTenantReturnsQuotaExceeded)
     ASSERT_AWAIT_READY_FOR(future, 3000);
     auto rsp = future.Get();
     EXPECT_NE(rsp->code(), 0);
-    EXPECT_THAT(rsp->reason(), ::testing::HasSubstr("QUOTA_EXCEEDED"));
+    EXPECT_THAT(rsp->message(), ::testing::HasSubstr("QUOTA_EXCEEDED"));
 }
 
 /**
