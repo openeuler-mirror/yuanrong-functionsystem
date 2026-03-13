@@ -38,3 +38,6 @@ functionsystem/apps/meta_service/function_repo/storage/kv.go
 functionsystem/src/common/utils/version.h
 runtime-launcher/bin
 thirdparty/runtime_deps/
+opencode.json
+.ccb/.claude-session
+.ccb/.opencode-session
