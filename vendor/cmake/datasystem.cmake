@@ -35,7 +35,7 @@ install(FILES ${datasystem_LIB_DIR}/libdatasystem.so DESTINATION ${INSTALL_LIBDI
 install(FILES ${datasystem_LIB_DIR}/librpc_option_protos.so DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${datasystem_LIB_DIR}/libprotobuf.so.25.5.0 DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${datasystem_LIB_DIR}/libcommon_flags.so DESTINATION ${INSTALL_LIBDIR})
-install(FILES ${datasystem_LIB_DIR}/libabseil_dl1.so.2407.0.0 DESTINATION ${INSTALL_LIBDIR})
+install(FILES ${datasystem_LIB_DIR}/libabseil_dll.so.2407.0.0 DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${datasystem_LIB_DIR}/libetcdapi_proto.so DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${datasystem_LIB_DIR}/libds_router_client.so DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${DS_SPDLOG} DESTINATION ${INSTALL_LIBDIR})
