@@ -4,13 +4,14 @@
 
 Workflow:
   1. Check that 'bazel' is available in PATH.
-  2. Copy proto files into common/proto/posix/ (same as CMake path).
+  2. Generate proto/grpc C++ sources into common/proto/pb/posix/ (same include layout as CMake).
   3. Run `bazel build //functionsystem/src/...` to build all binaries.
   4. Copy Bazel output binaries to functionsystem/output/bin/ (mirrors cmake install).
 """
 
 import os
 import shutil
+from glob import glob
 
 import utils
 
@@ -24,6 +25,29 @@ BINARY_TARGETS = [
     "//functionsystem/src/domain_scheduler:domain_scheduler",
     "//functionsystem/src/runtime_manager:runtime_manager",
     "//functionsystem/src/iam_server:iam_server",
+]
+
+PROTO_FILES = [
+    "common.proto",
+    "core_service.proto",
+    "runtime_rpc.proto",
+    "runtime_service.proto",
+    "affinity.proto",
+    "inner_service.proto",
+    "bus_service.proto",
+    "message.proto",
+    "resource.proto",
+    "bus_adapter.proto",
+    "runtime_launcher_interface.proto",
+    "exec_service.proto",
+]
+
+GRPC_PROTO_FILES = [
+    "runtime_rpc.proto",
+    "inner_service.proto",
+    "bus_service.proto",
+    "runtime_launcher_interface.proto",
+    "exec_service.proto",
 ]
 
 
@@ -55,6 +79,139 @@ def ensure_bazel_deps(root_dir: str):
     utils.sync_command(["bash", script], cwd=root_dir)
 
 
+def generate_proto_sources(root_dir: str):
+    """Generate protobuf/grpc C++ sources into functionsystem/src/common/proto/pb/posix/.
+
+    This keeps Bazel aligned with the legacy CMake include layout:
+      common/proto/pb/posix/*.pb.h
+      common/proto/pb/posix/*.grpc.pb.h
+    """
+    protoc = _find_protoc(root_dir)
+    grpc_cpp_plugin = _find_grpc_cpp_plugin(root_dir)
+    if protoc is None:
+        raise RuntimeError("protoc not found in PATH. Please source buildtools.sh before Bazel build.")
+    if grpc_cpp_plugin is None:
+        raise RuntimeError("grpc_cpp_plugin not found. Please build vendor/grpc before Bazel build.")
+
+    proto_root = os.path.join(root_dir, "proto", "posix")
+    output_dir = os.path.join(root_dir, "functionsystem", "src", "common", "proto", "pb", "posix")
+    os.makedirs(output_dir, exist_ok=True)
+    plugin_env = _build_grpc_plugin_env(root_dir)
+
+    expected_outputs = _expected_generated_files(output_dir)
+    if _proto_outputs_up_to_date(proto_root, expected_outputs, protoc, grpc_cpp_plugin):
+        log.info("Proto sources are up to date, skipping regeneration.")
+        return
+
+    stale_outputs = _find_stale_generated_files(output_dir, expected_outputs)
+    for path in sorted(expected_outputs | stale_outputs):
+        if os.path.exists(path):
+            os.remove(path)
+
+    log.info(f"Generating proto sources into {output_dir}")
+
+    cpp_cmd = [
+        protoc,
+        f"-I{proto_root}",
+        f"--cpp_out={output_dir}",
+        *PROTO_FILES,
+    ]
+    utils.sync_command(cpp_cmd, cwd=proto_root, env=plugin_env)
+
+    grpc_cmd = [
+        protoc,
+        f"-I{proto_root}",
+        f"--grpc_out={output_dir}",
+        f"--plugin=protoc-gen-grpc={grpc_cpp_plugin}",
+        *GRPC_PROTO_FILES,
+    ]
+    utils.sync_command(grpc_cmd, cwd=proto_root, env=plugin_env)
+
+
+def _expected_generated_files(output_dir: str):
+    outputs = set()
+    for proto_file in PROTO_FILES:
+        base_name, _ = os.path.splitext(proto_file)
+        outputs.add(os.path.join(output_dir, f"{base_name}.pb.h"))
+        outputs.add(os.path.join(output_dir, f"{base_name}.pb.cc"))
+    for proto_file in GRPC_PROTO_FILES:
+        base_name, _ = os.path.splitext(proto_file)
+        outputs.add(os.path.join(output_dir, f"{base_name}.grpc.pb.h"))
+        outputs.add(os.path.join(output_dir, f"{base_name}.grpc.pb.cc"))
+    return outputs
+
+
+def _find_stale_generated_files(output_dir: str, expected_outputs):
+    existing_outputs = set()
+    for pattern in ("*.pb.h", "*.pb.cc", "*.grpc.pb.h", "*.grpc.pb.cc"):
+        existing_outputs.update(glob(os.path.join(output_dir, pattern)))
+    return existing_outputs - expected_outputs
+
+
+def _proto_outputs_up_to_date(proto_root: str, expected_outputs, protoc: str, grpc_cpp_plugin: str):
+    if not expected_outputs:
+        return True
+
+    missing_outputs = [path for path in expected_outputs if not os.path.isfile(path)]
+    if missing_outputs:
+        log.info(f"Proto outputs missing, regeneration required: {missing_outputs[0]}")
+        return False
+
+    stale_outputs = _find_stale_generated_files(os.path.dirname(next(iter(expected_outputs))), expected_outputs)
+    if stale_outputs:
+        log.info(f"Found stale generated proto outputs, regeneration required: {sorted(stale_outputs)[0]}")
+        return False
+
+    input_paths = [os.path.join(proto_root, proto_file) for proto_file in PROTO_FILES]
+    input_paths.extend([protoc, grpc_cpp_plugin])
+    latest_input_mtime = max(os.path.getmtime(path) for path in input_paths)
+    oldest_output_mtime = min(os.path.getmtime(path) for path in expected_outputs)
+    return oldest_output_mtime >= latest_input_mtime
+
+
+def _find_grpc_cpp_plugin(root_dir: str):
+    plugin = shutil.which("grpc_cpp_plugin")
+    if plugin is not None:
+        return plugin
+
+    candidates = [
+        os.path.join(root_dir, "vendor", "output", "Install", "grpc", "bin", "grpc_cpp_plugin"),
+        os.path.join(root_dir, "vendor", "output", "openEuler", "Install", "grpc", "bin", "grpc_cpp_plugin"),
+        os.path.join(root_dir, "vendor", "output", "Build", "grpc", "grpc_cpp_plugin"),
+        os.path.join(root_dir, "vendor", "output", "openEuler", "Build", "grpc", "grpc_cpp_plugin"),
+    ]
+    for candidate in candidates:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def _find_protoc(root_dir: str):
+    candidates = [
+        os.path.join(root_dir, "vendor", "output", "Install", "protobuf", "bin", "protoc"),
+        os.path.join(root_dir, "vendor", "output", "openEuler", "Install", "protobuf", "bin", "protoc"),
+    ]
+    for candidate in candidates:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return shutil.which("protoc")
+
+
+def _build_grpc_plugin_env(root_dir: str):
+    env = os.environ.copy()
+    ld_library_path = env.get("LD_LIBRARY_PATH", "")
+    lib_dirs = [
+        os.path.join(root_dir, "vendor", "output", "Install", "grpc", "lib"),
+        os.path.join(root_dir, "vendor", "output", "openEuler", "Install", "grpc", "lib"),
+        os.path.join(root_dir, "vendor", "output", "Build", "grpc"),
+        os.path.join(root_dir, "vendor", "output", "openEuler", "Build", "grpc"),
+    ]
+    existing = [path for path in lib_dirs if os.path.isdir(path)]
+    if existing:
+        env["LD_LIBRARY_PATH"] = ":".join(existing + ([ld_library_path] if ld_library_path else []))
+    return env
+
+
 def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: str = "Release"):
     """Build all functionsystem C++ binaries using Bazel and copy artifacts to output/.
 
@@ -66,6 +223,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     """
     check_bazel_available()
     ensure_bazel_deps(root_dir)
+    generate_proto_sources(root_dir)
 
     # Determine bazel config flag
     config = "release" if build_type.lower() == "release" else "debug"
