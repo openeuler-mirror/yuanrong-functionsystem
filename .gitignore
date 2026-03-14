@@ -1,5 +1,6 @@
 ### IDE
 .idea
+.ccb
 .vscode
 .claude
 .specify
@@ -29,6 +30,7 @@ build.ninja
 
 ### copied files
 functionsystem/src/common/proto/posix/*.proto
+functionsystem/src/common/proto/pb/posix/*
 
 ### build files
 common/litebus/build
@@ -39,5 +41,3 @@ functionsystem/src/common/utils/version.h
 runtime-launcher/bin
 thirdparty/runtime_deps/
 opencode.json
-.ccb/.claude-session
-.ccb/.opencode-session
