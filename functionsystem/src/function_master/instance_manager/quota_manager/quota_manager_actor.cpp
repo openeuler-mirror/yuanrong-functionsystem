@@ -134,6 +134,10 @@ void QuotaManagerActor::OnInstanceExited(const litebus::AID &from, std::string &
 
 void QuotaManagerActor::CheckAndEnforce(const std::string &tenantID)
 {
+    if (!config_.IsEnabled()) {
+        return;
+    }
+
     auto quota = config_.GetQuota(tenantID);
     auto &usage = tenantUsage_[tenantID];
 
