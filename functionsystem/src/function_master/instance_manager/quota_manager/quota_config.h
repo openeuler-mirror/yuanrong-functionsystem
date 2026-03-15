@@ -24,17 +24,20 @@ struct TenantQuota {
 
 class QuotaConfig {
 public:
-    // Flag 未配置（path 为空）：使用兜底默认值，打印 WARNING
+    // Flag 未配置（path 为空）：关闭限额控制，打印 WARNING
     // Flag 已配置但文件不存在或解析失败：YRLOG_FATAL + 终止
     static QuotaConfig LoadFromFile(const std::string &path);
 
     // 查询顺序：perTenantQuota_[tenantID] → defaultQuota_
     TenantQuota GetQuota(const std::string &tenantID) const;
 
+    bool IsEnabled() const;
+
     // 预留：外部接口写入 per-tenant quota（首阶段不调用）
     void UpdateTenantQuota(const std::string &tenantID, const TenantQuota &quota);
 
 private:
+    bool enabled_{ true };
     TenantQuota defaultQuota_;
     std::unordered_map<std::string, TenantQuota> perTenantQuota_;
 };
@@ -46,8 +49,8 @@ inline QuotaConfig QuotaConfig::LoadFromFile(const std::string &path)
     cfg.defaultQuota_ = TenantQuota{ 32000, 65536, 10000 };
 
     if (path.empty()) {
-        YRLOG_WARN("quota_config_file not set, using built-in defaults "
-                   "(cpuMillicores=32000, memMb=65536, cooldownMs=10000)");
+        cfg.enabled_ = false;
+        YRLOG_WARN("quota_config_file not set, quota control disabled");
         return cfg;
     }
 
@@ -89,8 +92,14 @@ inline TenantQuota QuotaConfig::GetQuota(const std::string &tenantID) const
     return defaultQuota_;
 }
 
+inline bool QuotaConfig::IsEnabled() const
+{
+    return enabled_;
+}
+
 inline void QuotaConfig::UpdateTenantQuota(const std::string &tenantID, const TenantQuota &quota)
 {
+    enabled_ = true;
     perTenantQuota_[tenantID] = quota;
 }
 

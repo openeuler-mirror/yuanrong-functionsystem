@@ -58,10 +58,7 @@ static InstanceInfo MakeInstance(const std::string &instanceID,
 TEST(QuotaConfigTest, EmptyPathUsesDefaults)
 {
     auto cfg = QuotaConfig::LoadFromFile("");
-    auto quota = cfg.GetQuota("any-tenant");
-    EXPECT_EQ(quota.cpuMillicores, 32000);
-    EXPECT_EQ(quota.memLimitMb, 65536);
-    EXPECT_EQ(quota.cooldownMs, 10000);
+    EXPECT_FALSE(cfg.IsEnabled());
 }
 
 TEST(QuotaConfigTest, UpdateAndGetPerTenantQuota)
@@ -80,6 +77,31 @@ TEST(QuotaConfigTest, UnknownTenantFallsBackToDefault)
     cfg.UpdateTenantQuota("tenant1", TenantQuota{1000, 2048, 5000});
     auto q = cfg.GetQuota("unknown");
     EXPECT_EQ(q.cpuMillicores, 32000);
+}
+
+TEST(QuotaManagerActorNoQuotaConfigTest, EmptyPathDoesNotEnforceQuota)
+{
+    auto actor = std::make_shared<QuotaManagerActor>(QuotaConfig::LoadFromFile(""));
+    litebus::Spawn(actor);
+
+    for (int i = 0; i < 3; i++) {
+        actor->Send(actor->GetAID(),
+                    "OnInstanceRunning",
+                    MakeInstance("inst" + std::to_string(i), "t1", 20000.0, 40000.0).SerializeAsString());
+    }
+
+    ASSERT_AWAIT_TRUE([&actor]() {
+        auto it = actor->tenantUsage_.find("t1");
+        return it != actor->tenantUsage_.end() && it->second.sortedInstances.size() == 3u;
+    });
+
+    auto &usage = actor->tenantUsage_["t1"];
+    EXPECT_EQ(usage.sortedInstances.size(), 3u);
+    EXPECT_EQ(usage.cpuMillicores, 60000);
+    EXPECT_EQ(usage.memMb, 120000);
+
+    litebus::Terminate(actor->GetAID());
+    litebus::Await(actor);
 }
 
 // ─── QuotaManagerActor Usage Tracking Tests ─────────────────────────────────
