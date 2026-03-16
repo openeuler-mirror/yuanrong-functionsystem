@@ -201,9 +201,32 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartInstanc
     const std::shared_ptr<messages::StartInstanceRequest> &request, const std::vector<int> &cardIDs)
 {
     const auto &info = request->runtimeinstanceinfo();
+    std::string runtimeID = info.runtimeid();
+
+    if (IsRuntimeActive(runtimeID)) {
+        YRLOG_INFO("{}|{}|runtime({}) already active, return successful response", info.traceid(), info.requestid(),
+                   runtimeID);
+        return GenSuccessStartInstanceResponse(request, runtime2containerID_[runtimeID]);
+    }
+
+    if (auto it = inProgressStarts_.find(runtimeID); it != inProgressStarts_.end()) {
+        YRLOG_INFO("{}|{}|runtime({}) start is already in progress, join and return existing future", info.traceid(),
+                   info.requestid(), runtimeID);
+        if (pendingDeletes_.erase(runtimeID) > 0) {
+            YRLOG_INFO("{}|{}|runtime({}) pending delete cleared by duplicate start request", info.traceid(),
+                       info.requestid(), runtimeID);
+        }
+        return it->second.Then([request](const messages::StartInstanceResponse &rsp) {
+            messages::StartInstanceResponse newRsp = rsp;
+            newRsp.set_requestid(request->runtimeinstanceinfo().requestid());
+            return newRsp;
+        });
+    }
+
+    pendingDeletes_.erase(runtimeID);
+
     std::string language = info.runtimeconfig().language();
     (void)transform(language.begin(), language.end(), language.begin(), ::tolower);
-    std::string runtimeID = info.runtimeid();
     std::string port;
     auto tlsConfig = info.runtimeconfig().tlsconfig();
     RuntimeFeatures features;
@@ -227,7 +250,11 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartInstanc
                info.instanceid(), runtimeID);
     // todo lwy runtime directly call
     features.cleanStreamProducerEnable = config_.cleanStreamProducerEnable;
-    return StartRuntime(request, language, port, GenerateEnvs(config_, request, port, cardIDs, features), args);
+    auto future = StartRuntime(request, language, port, GenerateEnvs(config_, request, port, cardIDs, features), args)
+                      .Then(litebus::Defer(GetAID(), &ContainerExecutor::OnStartInstanceCompleted, runtimeID,
+                                           std::placeholders::_1));
+    inProgressStarts_[runtimeID] = future;
+    return future;
 }
 
 litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnStartRuntime(
@@ -255,6 +282,22 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnStartRunti
     // pids_.insert(execPtr->GetPid());
     runtimeInstanceInfoMap_[info.runtimeid()] = request->runtimeinstanceinfo();
     return GenSuccessStartInstanceResponse(request, containerID);
+}
+
+litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnStartInstanceCompleted(
+    const std::string &runtimeID, const messages::StartInstanceResponse &response)
+{
+    (void)inProgressStarts_.erase(runtimeID);
+    if (pendingDeletes_.erase(runtimeID) > 0) {
+        YRLOG_INFO("runtime({}) finish start, but has pending delete, start cleaning up", runtimeID);
+        if (response.code() == static_cast<int32_t>(StatusCode::SUCCESS)) {
+            auto stopReq = std::make_shared<messages::StopInstanceRequest>();
+            stopReq->set_runtimeid(runtimeID);
+            stopReq->set_requestid("cleanup-" + runtimeID);
+            litebus::Async(GetAID(), &ContainerExecutor::StopInstance, stopReq, false);
+        }
+    }
+    return response;
 }
 
 litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartRuntime(
@@ -950,6 +993,11 @@ litebus::Future<Status> ContainerExecutor::StopInstanceByRuntimeID(const std::st
 {
     auto container = runtime2containerID_.find(runtimeID);
     if (container == runtime2containerID_.end()) {
+        if (inProgressStarts_.find(runtimeID) != inProgressStarts_.end()) {
+            YRLOG_INFO("{}|runtime({}) is starting, mark as pending delete", requestID, runtimeID);
+            pendingDeletes_.insert(runtimeID);
+            return Status::OK();
+        }
         if (innerOomKilledruntimes_.find(runtimeID) != innerOomKilledruntimes_.end()) {
             YRLOG_DEBUG("{}|runtime({}) already deleted by oomMonitor.", requestID, runtimeID);
             innerOomKilledruntimes_.erase(runtimeID);

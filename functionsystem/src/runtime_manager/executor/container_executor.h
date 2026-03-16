@@ -253,8 +253,13 @@ private:
 
     void OnGetRegisteredWarmUped(const litebus::Future<runtime::v1::GetRegisteredResponse> &registered);
 
+    litebus::Future<messages::StartInstanceResponse> OnStartInstanceCompleted(
+        const std::string &runtimeID, const messages::StartInstanceResponse &response);
+
     std::map<std::string, messages::RuntimeInstanceInfo> runtimeInstanceInfoMap_;
     std::map<std::string, std::string> runtime2containerID_;
+    std::unordered_map<std::string, litebus::Future<messages::StartInstanceResponse>> inProgressStarts_;
+    std::unordered_set<std::string> pendingDeletes_;
     std::unordered_map<std::string, std::string> runtime2checkpointID_;  // runtimeID -> checkpointID
     std::unordered_map<std::string, std::string> runtime2portMappings_;  // runtimeID -> portMappings JSON
     std::unordered_set<std::string> innerOomKilledruntimes_;
