@@ -48,6 +48,8 @@ const std::string PYTHON38_LANGUAGE = "python3.8";
 const std::string PYTHON39_LANGUAGE = "python3.9";
 const std::string PYTHON310_LANGUAGE = "python3.10";
 const std::string PYTHON311_LANGUAGE = "python3.11";
+const std::string PYTHON312_LANGUAGE = "python3.12";
+const std::string PYTHON313_LANGUAGE = "python3.13";
 const std::string POSIX_CUSTOM_RUNTIME = "posix-custom-runtime";
 
 // this aims to support multiple launcher which orgnized by map
