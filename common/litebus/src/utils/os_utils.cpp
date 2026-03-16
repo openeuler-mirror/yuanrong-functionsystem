@@ -376,7 +376,6 @@ std::string ReadPipe(int fd, int readMaxSize)
             // to avoid reach max but 0(read all), then set -1(no need append)
             if (lefReadMaxSize == 0) {
                 lefReadMaxSize = -1;
-                BUSLOG_WARN("ReadPipe reach max: {},maxsize: {}", fd, readMaxSize);
             }
         }
         bzero(buf, size);
