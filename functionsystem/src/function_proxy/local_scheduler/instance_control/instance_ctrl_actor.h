@@ -42,6 +42,7 @@
 #include "function_proxy/common/posix_client/control_plane_client/control_interface_client_manager_proxy.h"
 #include "function_proxy/common/rate_limiter/token_bucket_rate_limiter.h"
 // for remove rgroup, easy for facilitates authentication, which should be extracted in the future
+#include "local_scheduler/instance_control/idle/idle_mgr.h"
 #include "local_scheduler/resource_group_controller/resource_group_ctrl.h"
 #include "local_scheduler/subscription_manager/subscription_mgr.h"
 
@@ -567,6 +568,26 @@ public:
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
     void SessionCountDelta(const std::string &instanceID, int delta);
+
+    /**
+     * Evict an instance that has exceeded its idle timeout.
+     * Called by IdleActor after idle timer fires. Performs an authoritative
+     * session veto (using instanceSessionCounts_) before running the eviction
+     * chain. Both this message and SessionCountDelta are serialized in this
+     * actor's mailbox, preserving the original single-mailbox ordering guarantee.
+     */
+    void EvictByIdleTimeout(const std::string &instanceID);
+
+    /**
+     * Set the IdleMgr before Spawn. Must be called synchronously before
+     * litebus::Spawn(instanceCtrlActor_) to avoid a null-pointer in the first
+     * TrafficReport or SessionCountDelta message.
+     */
+    void SetIdleMgr(const std::shared_ptr<IdleMgr> &idleMgr)
+    {
+        idleMgr_ = idleMgr;
+    }
+
 private:
     Status CheckSchedRequestValid(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
@@ -1013,21 +1034,18 @@ private:
 
     std::shared_ptr<TraefikRegistry> traefikRegistry_;
 
-    // todo(Lwy_Robb): idle controller should be mv to a separate actor in future
-    std::unordered_map<std::string, litebus::Timer> idleTimers_;
+    // IdleMgr forwards TrafficReport and SessionCountDelta to IdleActor.
+    // Set synchronously via SetIdleMgr() before Spawn.
+    std::shared_ptr<IdleMgr> idleMgr_;
 
-    // Track whether each instance has active exec sessions
-    std::unordered_map<std::string, bool> instanceActiveSessions_;
-    // Track whether each instance is idle by traffic reports
-    std::unordered_map<std::string, bool> instanceTrafficIdle_;
-    // Track per-instance session counts (edge-triggered)
+    // Authoritative session counts for eviction veto in EvictByIdleTimeout.
+    // Intentionally kept here (not only in IdleActor) so that EvictByIdleTimeout
+    // and SessionCountDelta are both serialized in this actor's mailbox, preserving
+    // the original single-mailbox ordering guarantee.
     std::unordered_map<std::string, size_t> instanceSessionCounts_;
 
+    // Forwards traffic idle events to IdleActor (registered as observer callback).
     void TrafficReport(const std::string &instanceID, const size_t &processingNum);
-    void SessionAlive(const std::string &instanceID, bool hasActiveSessions);
-    void StartIdleTimer(const std::string &instanceID);
-    void HandleIdleTimeout(const std::string &instanceID);
-    void CancelIdleTimer(const std::string &instanceID);
 
 public:
     // Tenant quota cooldown: blocks scheduling for tenants that exceeded quota
