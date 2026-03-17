@@ -124,6 +124,12 @@ void GlobalSched::AddLocalSchedAbnormalNotifyCallback(const std::string &name,
     litebus::Async(globalSchedActor_->GetAID(), &GlobalSchedActor::AddLocalSchedAbnormalNotifyCallback, name, func);
 }
 
+Status GlobalSched::AddDomainSchedCallback(const CallbackAddFunc &func)
+{
+    ASSERT_IF_NULL(domainSchedMgr_);
+    return domainSchedMgr_->AddDomainSchedCallback(func);
+}
+
 void GlobalSched::BindLocalDeleteCallback(const LocalDeleteCallbackFunc &func)
 {
     ASSERT_IF_NULL(globalSchedActor_);

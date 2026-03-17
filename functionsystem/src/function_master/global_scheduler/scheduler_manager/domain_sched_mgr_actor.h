@@ -22,6 +22,7 @@
 #include <async/async.hpp>
 #include <async/future_base.hpp>
 #include <functional>
+#include <vector>
 
 #include "common/explorer/explorer.h"
 #include "common/heartbeat/heartbeat_observer.h"
@@ -157,7 +158,7 @@ private:
     void SendScheduleRequest(const std::string &name, const std::string &address,
                              const std::shared_ptr<messages::ScheduleRequest> &req, const uint32_t retryCycle,
                              const std::shared_ptr<litebus::Promise<Status>> &promise);
-    CallbackAddFunc addDomainSchedCallback_;
+    std::vector<CallbackAddFunc> addDomainSchedCallbacks_;
     CallbackDelFunc delDomainSchedCallback_;
     CallbackDelFunc delLocalSchedCallback_;
     CallbackWorkerFunc notifyWorkerStatusCallback_;
