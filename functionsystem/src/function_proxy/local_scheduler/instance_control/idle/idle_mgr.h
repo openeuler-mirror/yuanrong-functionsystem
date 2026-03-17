@@ -17,45 +17,37 @@
 #ifndef LOCAL_SCHEDULER_IDLE_MGR_H
 #define LOCAL_SCHEDULER_IDLE_MGR_H
 
-#include <actor/actor.hpp>
-#include <async/async.hpp>
+#include <memory>
 #include <string>
-
-#include "idle_actor.h"
 
 namespace functionsystem::local_scheduler {
 
+class IdleActor;
+
 /**
- * IdleMgr wraps IdleActor's AID and provides a thread-safe interface for
- * forwarding idle-related events via litebus::Async.
+ * IdleMgr owns the IdleActor lifecycle and is the unified external interface
+ * for the idle subsystem.
  *
- * Consumers (InstanceCtrlActor) should never include idle_actor.h directly —
- * they use IdleMgr for all interactions with the idle subsystem.
+ * All callers (InstanceCtrlActor, ExecStreamService, ...) MUST route idle
+ * events through IdleMgr.  IdleActor internals are hidden in idle_mgr.cpp
+ * so that consumers need not include idle_actor.h.
  */
 class IdleMgr {
 public:
-    explicit IdleMgr(const litebus::AID &idleActorAID) : idleActorAID_(idleActorAID) {}
+    explicit IdleMgr(std::shared_ptr<IdleActor> idleActor);
 
-    /**
-     * Forward a traffic report to IdleActor.
-     * Called from InstanceCtrlActor::TrafficReport (private forwarding method).
-     */
-    void TrafficReport(const std::string &instanceID, const size_t &processingNum)
-    {
-        litebus::Async(idleActorAID_, &IdleActor::TrafficReport, instanceID, processingNum);
-    }
+    ~IdleMgr();
 
-    /**
-     * Forward a session count delta to IdleActor.
-     * Called from InstanceCtrlActor::SessionCountDelta after updating local session state.
-     */
-    void SessionCountDelta(const std::string &instanceID, int delta)
-    {
-        litebus::Async(idleActorAID_, &IdleActor::SessionCountDelta, instanceID, delta);
-    }
+    void Spawn();
+    void Stop();
+    void Await();
+
+    void TrafficReport(const std::string &instanceID, const size_t &processingNum);
+
+    void SessionCountDelta(const std::string &instanceID, int delta);
 
 private:
-    litebus::AID idleActorAID_;
+    std::shared_ptr<IdleActor> idleActor_;
 };
 
 }  // namespace functionsystem::local_scheduler

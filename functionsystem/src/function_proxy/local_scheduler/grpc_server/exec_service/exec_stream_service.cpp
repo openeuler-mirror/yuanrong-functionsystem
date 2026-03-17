@@ -21,12 +21,12 @@
 
 #include "common/logs/logging.h"
 #include "common/utils/actor_driver.h"
-#include "local_scheduler/instance_control/instance_ctrl_actor.h"
+#include "local_scheduler/instance_control/idle/idle_mgr.h"
 
 namespace functionsystem {
 
-ExecStreamService::ExecStreamService(const litebus::AID &instanceCtrlAid)
-    : instanceCtrlAid_(instanceCtrlAid)
+ExecStreamService::ExecStreamService(const std::shared_ptr<local_scheduler::IdleMgr> &idleMgr)
+    : idleMgr_(idleMgr)
 {
     // Initialize IOEventActor singleton
     IOEventActor::CreateInstance();
@@ -70,8 +70,7 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
                     YRLOG_INFO("Closing existing session {} before starting new one, peer: {}",
                                currentSessionId, peer);
                     if (!streamCtx->instanceID.empty()) {
-                        litebus::Async(instanceCtrlAid_, &local_scheduler::InstanceCtrlActor::SessionCountDelta,
-                                      streamCtx->instanceID, -1);
+                        idleMgr_->SessionCountDelta(streamCtx->instanceID, -1);
                         streamCtx->instanceID.clear();
                     }
                     litebus::Async(sessionAid, &ExecSessionActor::DoClose);
@@ -89,8 +88,7 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
 
                 AddSession(currentSessionId, sessionAid);
                 if (!request.start_request().instance_id().empty()) {
-                    litebus::Async(instanceCtrlAid_, &local_scheduler::InstanceCtrlActor::SessionCountDelta,
-                                  request.start_request().instance_id(), 1);
+                    idleMgr_->SessionCountDelta(request.start_request().instance_id(), 1);
                 }
 
                 SendStatusResponse(stream, currentSessionId, ExecStatusResponse::STARTED);
@@ -141,8 +139,7 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
 
         // Decrement instance session count if instanceID was set
         if (!streamCtx->instanceID.empty()) {
-            litebus::Async(instanceCtrlAid_, &local_scheduler::InstanceCtrlActor::SessionCountDelta,
-                          streamCtx->instanceID, -1);
+            idleMgr_->SessionCountDelta(streamCtx->instanceID, -1);
         } else {
             YRLOG_DEBUG("session({}) cleanup already handled, skip decrement", currentSessionId);
         }
@@ -193,8 +190,7 @@ void ExecStreamService::WriteToStream(StreamContextPtr streamCtx, const std::str
     if (exitCode >= 0 && !streamCtx->sessionAid.Name().empty()) {
         YRLOG_INFO("WriteToStream: process exited, sessionId: {}, exitCode: {}", sessionId, exitCode);
         if (!streamCtx->instanceID.empty()) {
-            litebus::Async(instanceCtrlAid_, &local_scheduler::InstanceCtrlActor::SessionCountDelta,
-                          streamCtx->instanceID, -1);
+            idleMgr_->SessionCountDelta(streamCtx->instanceID, -1);
             // Clear instanceID so ExecStream's read-loop cleanup skips the double-decrement.
             streamCtx->instanceID.clear();
         } else {
