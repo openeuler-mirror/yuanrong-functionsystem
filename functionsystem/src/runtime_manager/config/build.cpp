@@ -159,6 +159,11 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
         ss << deployFilePath << ":" << deployFilePath << "/lib:" << delegateDownload << ":" << delegateDownload
            << "/lib";
     }
+    std::string language = info.runtimeconfig().language();
+    (void)transform(language.begin(), language.end(), language.begin(), ::tolower);
+    if (language == CPP_LANGUAGE) {
+        ss << ":" << config.runtimePath << "/cpp/lib";
+    }
     if (!config.runtimeLdLibraryPath.empty()) {
         ss << ":" << config.runtimeLdLibraryPath;
     }
@@ -194,8 +199,6 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     AddYuanRongEnvs(posixEnvs);
 
     // for python and posix-custom-runtime set PYTHONUNBUFFERED=1
-    std::string language = info.runtimeconfig().language();
-    (void)transform(language.begin(), language.end(), language.begin(), ::tolower);
     if (info.runtimeconfig().language().find(PYTHON_LANGUAGE) != std::string::npos
         || info.runtimeconfig().language() == POSIX_CUSTOM_RUNTIME) {
         (void)posixEnvs.emplace(PYTHONUNBUFFERED, "1");
