@@ -278,6 +278,12 @@ public:
 
     virtual litebus::Future<Status> GracefulShutdown();
 
+    // Forward TenantQuotaExceeded event to the actor
+    void OnTenantQuotaExceeded(const std::string &msg)
+    {
+        litebus::Async(aid_, &InstanceCtrlActor::OnTenantQuotaExceeded, msg);
+    }
+
     // Forwards subscription-related events (including subscribe/unsubscribe requests)
     virtual litebus::Future<KillResponse> ForwardSubscriptionEvent(const std::shared_ptr<KillContext> &ctx);
 

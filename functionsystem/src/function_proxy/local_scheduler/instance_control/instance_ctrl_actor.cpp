@@ -20,6 +20,7 @@
 
 #include "async/async.hpp"
 #include "async/asyncafter.hpp"
+#include "common/proto/pb/posix/message.pb.h"
 #include "async/collect.hpp"
 #include "async/defer.hpp"
 #include "async/option.hpp"
@@ -211,8 +212,40 @@ void InstanceCtrlActor::Init()
 
     Receive("CheckInstanceState", &InstanceCtrlActor::CheckInstanceState);
     Receive("CheckInstanceStateResponse", &InstanceCtrlActor::CheckInstanceStateResponse);
+    Receive("TenantQuotaExceeded", &InstanceCtrlActor::OnTenantQuotaExceededMsg);
 }
 
+
+void InstanceCtrlActor::OnTenantQuotaExceededMsg(const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    OnTenantQuotaExceeded(msg);
+}
+
+void InstanceCtrlActor::OnTenantQuotaExceeded(const std::string &msg)
+{
+    ::messages::TenantQuotaExceeded event;
+    if (!event.ParseFromString(msg)) {
+        YRLOG_WARN("LocalInstanceCtrlActor::OnTenantQuotaExceeded parse failed");
+        return;
+    }
+    const std::string tenantID = event.tenantid();
+    int64_t cooldownMs = event.cooldownms();
+    if (cooldownMs <= 0) {
+        cooldownMs = 10000;
+    }
+    YRLOG_INFO("LocalInstanceCtrlActor: tenant={} blocked for {}ms (quota exceeded)", tenantID, cooldownMs);
+    cooldownMgr_.Apply(tenantID, [&](uint64_t gen) {
+        return litebus::AsyncAfter(
+            static_cast<uint64_t>(cooldownMs), GetAID(), &InstanceCtrlActor::OnTenantCooldownExpired, tenantID, gen);
+    });
+}
+
+void InstanceCtrlActor::OnTenantCooldownExpired(std::string tenantID, uint64_t generation)
+{
+    if (cooldownMgr_.OnExpired(tenantID, generation)) {
+        YRLOG_INFO("LocalInstanceCtrlActor: tenant={} cooldown expired, scheduling resumed", tenantID);
+    }
+}
 
 Status InstanceCtrlActor::UpdateInstanceInfo(const resources::InstanceInfo &instanceInfo)
 {
@@ -1299,6 +1332,16 @@ messages::ScheduleResponse InstanceCtrlActor::PrepareCreateInstance(
     const std::string traceID = scheduleReq->traceid();
     const std::string requestID = scheduleReq->requestid();
     const auto &tenantID = scheduleReq->instance().tenantid();
+    // Quota cooldown interception: block new instance creation for tenants that exceeded quota
+    if (!tenantID.empty() && cooldownMgr_.IsBlocked(tenantID)) {
+        YRLOG_INFO("{}|{}|LocalInstanceCtrlActor::PrepareCreateInstance: BLOCKED by quota cooldown, tenantID={}",
+                   traceID, requestID, tenantID);
+        runtimePromise->SetValue(GenScheduleResponse(StatusCode::RESOURCE_NOT_ENOUGH,
+                                                     "tenant resource quota exceeded, scheduling blocked during cooldown",
+                                                     *scheduleReq));
+        return GenScheduleResponse(StatusCode::RESOURCE_NOT_ENOUGH,
+                                   "tenant resource quota exceeded, scheduling blocked during cooldown", *scheduleReq);
+    }
     bool notLimited = DoRateLimit(scheduleReq);
     if (!notLimited) {
         YRLOG_ERROR("{}|{}|tenant({}) create rate limited on local.", traceID, requestID, tenantID);

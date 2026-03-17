@@ -26,6 +26,7 @@
 #include "common/schedule_decision/schedule_recorder/schedule_recorder.h"
 #include "common/schedule_decision/scheduler.h"
 #include "common/resource_view/resource_view_mgr.h"
+#include "common/utils/tenant_cooldown_manager.h"
 #include "domain_scheduler/underlayer_scheduler_manager/underlayer_sched_mgr.h"
 #include "common/resource_view/resource_type.h"
 
@@ -84,7 +85,7 @@ public:
 
     void OnTenantQuotaExceeded(const litebus::AID &from, std::string &&name, std::string &&msg);
     void HandleTenantQuotaExceeded(std::string msg);  // value-arg adapter for external callers
-    void OnTenantCooldownExpired(std::string tenantID);
+    void OnTenantCooldownExpired(std::string tenantID, uint64_t generation);
 
     void BindResourceView(const std::shared_ptr<resource_view::ResourceViewMgr> &resourceViewMgr)
     {
@@ -196,7 +197,7 @@ private:
     std::unordered_map<std::string, litebus::Promise<std::shared_ptr<messages::CreateAgentResponse>>>
         createAgentPromises_;
     std::unordered_map<std::string, litebus::Timer> createAgentRetryTimers_;
-    std::unordered_map<std::string, litebus::Timer> blockedTenants_;
+    functionsystem::TenantCooldownManager cooldownMgr_;
     uint32_t createAgentAwaitRetryInterval_ = DEFAULT_CREATE_AGENT_AWAIT_RETRY_INTERVAL;
     std::vector<uint32_t> retryScheduleIntervals_ = RETRY_SCHEDULE_INTERVALS;
     uint32_t createAgentAwaitRetryTimes_ = DEFAULT_CREATE_AGENT_AWAIT_RETRY_TIMES;
