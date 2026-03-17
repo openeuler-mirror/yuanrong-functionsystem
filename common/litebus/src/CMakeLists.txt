@@ -44,6 +44,12 @@ if(${HTTP_ENABLED} STREQUAL "on")
 endif(${HTTP_ENABLED} STREQUAL "on")
 
 add_library(litebus_shared SHARED $<TARGET_OBJECTS:litebus_obj>)
+# glibc < 2.34 (e.g. Ubuntu 20.04) requires -lutil for openpty; glibc >= 2.34 merged it into libc
+include(CheckLibraryExists)
+check_library_exists(util openpty "" HAVE_LIBUTIL)
+if(HAVE_LIBUTIL)
+  set(LINK_LIBS ${LINK_LIBS} util)
+endif()
 target_link_libraries(litebus_shared ${LINK_LIBS})
 target_include_directories(litebus_shared PUBLIC ${LITEBUS_INCLUDE_DIR})
 
