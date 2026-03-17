@@ -13,6 +13,7 @@
 # limitations under the License.
 
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} LOCAL_SCHEDULER_INSTANCE_CTRL_SRCS)
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/idle LOCAL_SCHEDULER_INSTANCE_CTRL_SRCS)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/posix_api_handler LOCAL_SCHEDULER_SERVICE_POSIX_API_HANDLER_SRCS)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/scheduler LOCAL_SCHEDULER_INSTANCE_CTRL_SRCS)
 

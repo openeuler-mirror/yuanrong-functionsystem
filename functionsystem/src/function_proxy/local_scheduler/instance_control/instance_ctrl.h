@@ -28,6 +28,7 @@
 #include "common/utils/actor_driver.h"
 #include "function_agent_manager/function_agent_mgr.h"
 #include "function_proxy/common/posix_client/control_plane_client/control_interface_client_manager_proxy.h"
+#include "idle/idle_actor.h"
 #include "instance_ctrl_actor.h"
 #include "local_scheduler/subscription_manager/subscription_mgr.h"
 
@@ -294,6 +295,7 @@ private:
     std::shared_ptr<schedule_decision::ScheduleQueueActor> primaryScheduleQueueActor_;
     std::shared_ptr<schedule_decision::ScheduleQueueActor> virtualScheduleQueueActor_;
     std::shared_ptr<schedule_decision::Scheduler> scheduler_;
+    std::shared_ptr<IdleActor> idleActor_;
     inline static std::string nodeID_;
     bool enablePrintResourceView_ = false;
     inline static std::string schedulePlugins_;
