@@ -41,6 +41,8 @@ set(${src_name}_CMAKE_ARGS
         -DCMAKE_CXX_FLAGS_RELEASE=${THIRDPARTY_CXX_FLAGS}
         -DCMAKE_SHARED_LINKER_FLAGS=${THIRDPARTY_LINK_FLAGS}
         -DCMAKE_CXX_STANDARD=17 # absl use cpp17 to compile
+        -DCURL_INCLUDE_DIR:PATH=${curl_INCLUDE_DIR}
+        -DCURL_LIBRARY:FILEPATH=${curl_LIB}
 )
 
 
@@ -56,7 +58,7 @@ if (NOT EXISTS ${HISTORY_INSTALLLED})
             LOG_CONFIGURE ON
             LOG_BUILD ON
             LOG_INSTALL ON
-            DEPENDS protobuf grpc
+            DEPENDS protobuf grpc curl
     )
     ExternalProject_Get_Property(${src_name} INSTALL_DIR)
 else()
