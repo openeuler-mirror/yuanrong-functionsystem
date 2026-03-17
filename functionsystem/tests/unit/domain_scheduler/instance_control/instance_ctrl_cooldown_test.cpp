@@ -17,6 +17,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <thread>
+
 #define private public
 #define protected public
 
@@ -88,10 +91,10 @@ protected:
 };
 
 /**
- * Description: HandleTenantQuotaExceeded blocks the tenant and adds it to blockedTenants_.
+ * Description: HandleTenantQuotaExceeded blocks the tenant and adds it to cooldownMgr_.
  * Steps:
  * 1. Call HandleTenantQuotaExceeded with tenant "t1", cooldown 5000ms
- * 2. Verify blockedTenants_ contains "t1"
+ * 2. Verify cooldownMgr_.IsBlocked("t1") returns true
  */
 TEST_F(InstanceCtrlCooldownTest, HandleTenantQuotaExceededBlocksTenant)
 {
@@ -99,10 +102,10 @@ TEST_F(InstanceCtrlCooldownTest, HandleTenantQuotaExceededBlocksTenant)
     ctrl.OnTenantQuotaExceeded(MakeCooldownMsg("t1", 5000));
 
     ASSERT_AWAIT_TRUE([this]() {
-        return instanceCtrl_->blockedTenants_.count("t1") > 0;
+        return instanceCtrl_->cooldownMgr_.IsBlocked("t1");
     });
 
-    EXPECT_EQ(instanceCtrl_->blockedTenants_.count("t1"), 1u);
+    EXPECT_TRUE(instanceCtrl_->cooldownMgr_.IsBlocked("t1"));
 }
 
 /**
@@ -119,7 +122,7 @@ TEST_F(InstanceCtrlCooldownTest, ScheduleBlockedTenantReturnsQuotaExceeded)
 
     // Wait for block to be applied
     ASSERT_AWAIT_TRUE([this]() {
-        return instanceCtrl_->blockedTenants_.count("t1") > 0;
+        return instanceCtrl_->cooldownMgr_.IsBlocked("t1");
     });
 
     auto req = MakeScheduleReq("t1", "req-blocked");
@@ -137,7 +140,7 @@ TEST_F(InstanceCtrlCooldownTest, ScheduleBlockedTenantReturnsQuotaExceeded)
  * 1. Block tenant "t2" with a short cooldown (200ms)
  * 2. Verify it is blocked
  * 3. Wait for cooldown to expire
- * 4. Verify blockedTenants_ no longer contains "t2"
+ * 4. Verify cooldownMgr_.IsBlocked("t2") returns false
  */
 TEST_F(InstanceCtrlCooldownTest, TenantUnblockedAfterCooldown)
 {
@@ -146,15 +149,15 @@ TEST_F(InstanceCtrlCooldownTest, TenantUnblockedAfterCooldown)
 
     // Verify blocked
     ASSERT_AWAIT_TRUE([this]() {
-        return instanceCtrl_->blockedTenants_.count("t2") > 0;
+        return instanceCtrl_->cooldownMgr_.IsBlocked("t2");
     });
 
     // Wait for unblock (cooldown 200ms + margin)
     ASSERT_AWAIT_TRUE_FOR(
-        [this]() { return instanceCtrl_->blockedTenants_.count("t2") == 0; },
+        [this]() { return !instanceCtrl_->cooldownMgr_.IsBlocked("t2"); },
         2000);
 
-    EXPECT_EQ(instanceCtrl_->blockedTenants_.count("t2"), 0u);
+    EXPECT_FALSE(instanceCtrl_->cooldownMgr_.IsBlocked("t2"));
 }
 
 /**
@@ -171,7 +174,7 @@ TEST_F(InstanceCtrlCooldownTest, UnblockedTenantCanSchedule)
 
     // Wait for block to be applied
     ASSERT_AWAIT_TRUE([this]() {
-        return instanceCtrl_->blockedTenants_.count("tA") > 0;
+        return instanceCtrl_->cooldownMgr_.IsBlocked("tA");
     });
 
     // "tC" is not blocked — its Schedule should reach the scheduler
@@ -198,7 +201,7 @@ TEST_F(InstanceCtrlCooldownTest, UnblockedTenantCanSchedule)
  * Description: Repeated quota exceeded for same tenant resets the timer.
  * Steps:
  * 1. Block tenant "t3" twice
- * 2. Verify it's still only in blockedTenants_ once (map key overwrite)
+ * 2. Verify it's still blocked (cooldownMgr_.IsBlocked returns true)
  */
 TEST_F(InstanceCtrlCooldownTest, RepeatedQuotaExceededOverwritesTimer)
 {
@@ -207,11 +210,90 @@ TEST_F(InstanceCtrlCooldownTest, RepeatedQuotaExceededOverwritesTimer)
     ctrl.OnTenantQuotaExceeded(MakeCooldownMsg("t3", 5000));
 
     ASSERT_AWAIT_TRUE([this]() {
-        return instanceCtrl_->blockedTenants_.count("t3") > 0;
+        return instanceCtrl_->cooldownMgr_.IsBlocked("t3");
     });
 
-    // Should still have exactly 1 entry (map, not multimap)
-    EXPECT_EQ(instanceCtrl_->blockedTenants_.count("t3"), 1u);
+    // Should still be blocked (generation mechanism handles reset)
+    EXPECT_TRUE(instanceCtrl_->cooldownMgr_.IsBlocked("t3"));
+}
+
+/**
+ * Description: ZeroCooldownMsDefaultsToTenSeconds
+ * Steps:
+ * 1. Send cooldownMs=0 message to "t4"
+ * 2. Immediately check cooldownMgr_.IsBlocked("t4") == true
+ * 3. Verify the default is not a trivially short timer (still blocked after 1s)
+ */
+TEST_F(InstanceCtrlCooldownTest, ZeroCooldownMsDefaultsToTenSeconds)
+{
+    domain_scheduler::InstanceCtrl ctrl(instanceCtrl_->GetAID());
+    ctrl.OnTenantQuotaExceeded(MakeCooldownMsg("t4", 0));
+
+    ASSERT_AWAIT_TRUE([this]() {
+        return instanceCtrl_->cooldownMgr_.IsBlocked("t4");
+    });
+
+    EXPECT_TRUE(instanceCtrl_->cooldownMgr_.IsBlocked("t4"));
+
+    // Verify it's not using a trivially short timer (still blocked after 1s)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    EXPECT_TRUE(instanceCtrl_->cooldownMgr_.IsBlocked("t4"));
+}
+
+/**
+ * Description: EmptyTenantIdIsIgnored
+ * Steps:
+ * 1. Send message with tenantID=""
+ * 2. Briefly wait then verify cooldownMgr_.IsBlocked("") == false
+ * 3. IsBlocked("") is the only check needed since Apply("") is a no-op at the helper level
+ */
+TEST_F(InstanceCtrlCooldownTest, EmptyTenantIdIsIgnored)
+{
+    domain_scheduler::InstanceCtrl ctrl(instanceCtrl_->GetAID());
+    ctrl.OnTenantQuotaExceeded(MakeCooldownMsg("", 5000));
+
+    ASSERT_AWAIT_TRUE_FOR([this]() { return true; }, 100);
+
+    EXPECT_FALSE(instanceCtrl_->cooldownMgr_.IsBlocked(""));
+}
+
+/**
+ * Description: RepeatedNotificationResetsTimerSemantically
+ * Steps:
+ * 1. Send cooldownMs=500 to "t5"
+ * 2. Wait 350ms (first timer not yet expired)
+ * 3. Send cooldownMs=500 again to "t5" (reset)
+ * 4. Wait 200ms (first timer would have expired, but generation should protect)
+ * 5. Verify "t5" is still blocked
+ * 6. Wait another 400ms (second timer expires around t=850ms from resend)
+ * 7. Verify "t5" is unblocked
+ */
+TEST_F(InstanceCtrlCooldownTest, RepeatedNotificationResetsTimerSemantically)
+{
+    domain_scheduler::InstanceCtrl ctrl(instanceCtrl_->GetAID());
+    ctrl.OnTenantQuotaExceeded(MakeCooldownMsg("t5", 500));
+
+    ASSERT_AWAIT_TRUE([this]() {
+        return instanceCtrl_->cooldownMgr_.IsBlocked("t5");
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(350));
+
+    ctrl.OnTenantQuotaExceeded(MakeCooldownMsg("t5", 500));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    // First timer (fired at ~500ms from t=0) should be ignored by generation mechanism;
+    // second timer (fires at ~500ms from resend) has not yet expired
+    ASSERT_AWAIT_TRUE_FOR([this]() { return instanceCtrl_->cooldownMgr_.IsBlocked("t5"); }, 100);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+
+    ASSERT_AWAIT_TRUE_FOR(
+        [this]() { return !instanceCtrl_->cooldownMgr_.IsBlocked("t5"); },
+        1000);
+
+    EXPECT_FALSE(instanceCtrl_->cooldownMgr_.IsBlocked("t5"));
 }
 
 }  // namespace functionsystem::test

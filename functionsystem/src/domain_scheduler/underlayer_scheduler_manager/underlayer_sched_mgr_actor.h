@@ -158,6 +158,8 @@ public:
 
     void SetScalerAddress(const std::string &address);
 
+    void BroadcastTenantQuotaExceeded(const std::string &msg);
+
     /* *
      * instance specialization binding to underlayer
      */
