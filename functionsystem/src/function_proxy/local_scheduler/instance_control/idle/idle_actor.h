@@ -39,11 +39,6 @@ class InstanceCtrlActor;
  * EvictByIdleTimeout to InstanceCtrlActor for the authoritative eviction
  * decision.
  *
- * NOTE: instanceSessionCounts_ is intentionally duplicated between IdleActor
- * (for timer management decisions) and InstanceCtrlActor (for authoritative
- * eviction veto). Both actors receive SessionCountDelta messages independently,
- * maintaining consistent session counts for their respective purposes.
- *
  * Anti-race mechanism: each timer invocation is stamped with a generation
  * counter. CancelIdleTimer increments the generation before cancelling, so
  * any already-queued timeout callback will detect the stale generation and
@@ -113,7 +108,6 @@ private:
     std::unordered_map<std::string, bool> instanceActiveSessions_;
 
     // Per-instance session counts for timer management decisions.
-    // (Authoritative session counts are maintained separately in InstanceCtrlActor.)
     std::unordered_map<std::string, size_t> instanceSessionCounts_;
 };
 

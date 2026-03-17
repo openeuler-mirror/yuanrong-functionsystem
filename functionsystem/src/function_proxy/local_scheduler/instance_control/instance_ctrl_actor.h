@@ -567,21 +567,14 @@ public:
     litebus::Future<messages::DeployInstanceResponse> DeploySnapStartInstance(
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
-    void SessionCountDelta(const std::string &instanceID, int delta);
-
     /**
      * Evict an instance that has exceeded its idle timeout.
-     * Called by IdleActor after idle timer fires. Performs an authoritative
-     * session veto (using instanceSessionCounts_) before running the eviction
-     * chain. Both this message and SessionCountDelta are serialized in this
-     * actor's mailbox, preserving the original single-mailbox ordering guarantee.
+     * Called by IdleActor after idle timer fires.
      */
     void EvictByIdleTimeout(const std::string &instanceID);
 
     /**
-     * Set the IdleMgr before Spawn. Must be called synchronously before
-     * litebus::Spawn(instanceCtrlActor_) to avoid a null-pointer in the first
-     * TrafficReport or SessionCountDelta message.
+     * Set IdleMgr before Spawn so BindObserver can forward traffic events.
      */
     void SetIdleMgr(const std::shared_ptr<IdleMgr> &idleMgr)
     {
@@ -1034,18 +1027,7 @@ private:
 
     std::shared_ptr<TraefikRegistry> traefikRegistry_;
 
-    // IdleMgr forwards TrafficReport and SessionCountDelta to IdleActor.
-    // Set synchronously via SetIdleMgr() before Spawn.
     std::shared_ptr<IdleMgr> idleMgr_;
-
-    // Authoritative session counts for eviction veto in EvictByIdleTimeout.
-    // Intentionally kept here (not only in IdleActor) so that EvictByIdleTimeout
-    // and SessionCountDelta are both serialized in this actor's mailbox, preserving
-    // the original single-mailbox ordering guarantee.
-    std::unordered_map<std::string, size_t> instanceSessionCounts_;
-
-    // Forwards traffic idle events to IdleActor (registered as observer callback).
-    void TrafficReport(const std::string &instanceID, const size_t &processingNum);
 
 public:
     // Tenant quota cooldown: blocks scheduling for tenants that exceeded quota
