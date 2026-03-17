@@ -19,12 +19,16 @@
 #include <async/async.hpp>
 
 #include "common/constants/actor_name.h"
+#include "idle/idle_mgr.h"
 #include "local_scheduler/traefik_registry/traefik_registry.h"
 #include "common/schedule_plugin/common/constants.h"
 #include "common/scheduler_framework/framework/framework_impl.h"
 
 namespace functionsystem::local_scheduler {
 using namespace schedule_plugin;
+
+static const std::string IDLE_ACTOR_NAME_POSTFIX = "-LocalSchedIdleActor";
+
 std::unordered_map<std::string, std::unordered_set<std::string>> PLUGINS_MAP = {
     { "Default", { DEFAULT_PREFILTER_NAME, DEFAULT_FILTER_NAME, DEFAULT_SCORER_NAME } },
     { "Label", { STRICT_NON_ROOT_LABEL_AFFINITY_FILTER_NAME, STRICT_LABEL_AFFINITY_SCORER_NAME } },
@@ -55,6 +59,9 @@ void InstanceCtrl::Stop()
     if (virtualScheduleQueueActor_ != nullptr) {
         litebus::Terminate(virtualScheduleQueueActor_->GetAID());
     }
+    if (idleActor_ != nullptr) {
+        litebus::Terminate(idleActor_->GetAID());
+    }
 }
 
 void InstanceCtrl::Await()
@@ -70,6 +77,10 @@ void InstanceCtrl::Await()
     if (virtualScheduleQueueActor_ != nullptr) {
         litebus::Await(virtualScheduleQueueActor_->GetAID());
         virtualScheduleQueueActor_ = nullptr;
+    }
+    if (idleActor_ != nullptr) {
+        litebus::Await(idleActor_->GetAID());
+        idleActor_ = nullptr;
     }
 }
 
@@ -119,7 +130,18 @@ std::unique_ptr<InstanceCtrl> InstanceCtrl::Create(const std::string &nodeID, co
     schedulePlugins_ = config.schedulePlugins;
     auto actor = std::make_shared<InstanceCtrlActor>(aid, nodeID, config);
     actor->ClearRateLimiterRegularly();
-    return std::make_unique<InstanceCtrl>(std::move(actor));
+
+    // Wire IdleMgr into InstanceCtrlActor before Spawn so the first TrafficReport
+    // or SessionCountDelta message is handled correctly.
+    std::string idleAID = nodeID + IDLE_ACTOR_NAME_POSTFIX;
+    actor->SetIdleMgr(std::make_shared<IdleMgr>(idleAID));
+
+    auto ctrl = std::make_unique<InstanceCtrl>(std::move(actor));
+    // Store IdleActor for lifecycle management; Spawn happens in Start().
+    ctrl->idleActor_ = std::make_shared<IdleActor>(
+        idleAID, nodeID, ctrl->instanceCtrlActor_->GetInstanceControlView(),
+        litebus::AID(aid));
+    return ctrl;
 }
 
 std::shared_ptr<schedule_decision::ScheduleQueueActor> InstanceCtrl::CreateScheduler(
@@ -155,6 +177,9 @@ void InstanceCtrl::Start(const std::shared_ptr<FunctionAgentMgr> &functionAgentM
     InstanceStateMachine::BindControlPlaneObserver(observer);
     instanceCtrlActor_->BindResourceView(resourceViewMgr);
     instanceCtrlActor_->BindObserver(observer);
+    if (idleActor_ != nullptr) {
+        litebus::Spawn(idleActor_);
+    }
     (void)litebus::Spawn(instanceCtrlActor_, false);
 
     primaryScheduleQueueActor_ =
