@@ -219,6 +219,15 @@ public:
                                const std::shared_ptr<messages::RestoreSnapshotRequest> &req);
     void OnSnapStartCheckpointResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 
+    /**
+     * Receive tenant quota exceeded notification from domain scheduler.
+     * Blocks scheduling for the tenant during cooldown period.
+     * @param from: caller AID
+     * @param name: interface name
+     * @param msg: serialized TenantQuotaExceeded proto
+     */
+    void OnTenantQuotaExceeded(const litebus::AID &from, std::string &&name, std::string &&msg);
+
     litebus::Future<Status> IsRegisteredToGlobal();
 
     // for test

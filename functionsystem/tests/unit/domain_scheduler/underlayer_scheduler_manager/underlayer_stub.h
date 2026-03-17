@@ -80,6 +80,12 @@ public:
     }
     MOCK_METHOD3(MockResponseNotifyWorkerStatus, void(const litebus::AID &, std::string, std::string));
 
+    void TenantQuotaExceeded(const litebus::AID &from, std::string &&name, std::string &&msg)
+    {
+        MockTenantQuotaExceeded(from, name, msg);
+    }
+    MOCK_METHOD3(MockTenantQuotaExceeded, void(const litebus::AID &, std::string, std::string));
+
     void ClosePingPong()
     {
         pingpong_->Stop();
@@ -124,6 +130,7 @@ protected:
         Receive("ResponseNotifyWorkerStatus", &MockUnderlayer::ResponseNotifyWorkerStatus);
         Receive("DeletePodResponse", &MockUnderlayer::DeletePodResponse);
         Receive("PreemptInstances", &MockUnderlayer::PreemptInstance);
+        Receive("TenantQuotaExceeded", &MockUnderlayer::TenantQuotaExceeded);
         pingpong_ = std::make_unique<HeartbeatClientDriver>(GetAID().Name(), [this](const litebus::AID &lostDst) {});
     }
 

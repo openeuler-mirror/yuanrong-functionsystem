@@ -34,6 +34,7 @@
 #include "common/state_machine/instance_context.h"
 #include "common/status/status.h"
 #include "common/types/instance_state.h"
+#include "common/utils/tenant_cooldown_manager.h"
 #include "function_agent_manager/function_agent_mgr.h"
 #include "function_proxy/common/data_obj_client/data_obj_client.h"
 #include "function_proxy/common/iam/internal_iam.h"
@@ -1027,6 +1028,16 @@ private:
     void StartIdleTimer(const std::string &instanceID);
     void HandleIdleTimeout(const std::string &instanceID);
     void CancelIdleTimer(const std::string &instanceID);
+
+public:
+    // Tenant quota cooldown: blocks scheduling for tenants that exceeded quota
+    void OnTenantQuotaExceededMsg(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void OnTenantQuotaExceeded(const std::string &msg);
+private:
+    void OnTenantCooldownExpired(std::string tenantID, uint64_t generation);
+
+    // key: tenantID, value: cooldown expiry timer
+    functionsystem::TenantCooldownManager cooldownMgr_;
 };
 }  // namespace functionsystem::local_scheduler
 #endif  // LOCAL_SCHEDULER_INSTANCE_CTRL_ACTOR_H

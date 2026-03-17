@@ -46,6 +46,7 @@ public:
     virtual litebus::Future<Status> UnBind(const std::string &selectedName,
                                    const std::shared_ptr<messages::ScheduleRequest> &req);
     virtual void SetScalerAddress(const std::string &address);
+    virtual void BroadcastTenantQuotaExceeded(const std::string &msg);
 private:
     litebus::AID aid_;
 };
