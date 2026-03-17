@@ -14,6 +14,13 @@
  * limitations under the License.
  */
 
+// Must be included before #define private public to avoid redeclaration errors in STL headers
+#include <sstream>
+#include <string>
+
+#define private public
+#define protected public
+
 #include "function_master/global_scheduler/scheduler_manager/domain_sched_mgr_actor.h"
 
 #include "common/constants/actor_name.h"
@@ -430,4 +437,37 @@ TEST_F(DomainSchedMgrActorTest, GroupSchedule)
     litebus::Terminate(actor->GetAID());
     litebus::Await(actor->GetAID());
 }
+
+TEST_F(DomainSchedMgrActorTest, AddDomainSchedCallbackFanOut)
+{
+    // Direct method call (not through mailbox) is intentional here:
+    // this test validates only the fan-out loop over addDomainSchedCallbacks_,
+    // not the message dispatch path. The mailbox path is covered by existing
+    // OnDomainSchedulerRegister integration tests.
+    auto actor = std::make_shared<functionsystem::global_scheduler::DomainSchedMgrActor>("TestDomainSchedMgrActor",
+                                                                                         HEARTBEAT_TIMEOUT);
+    bool called1 = false;
+    bool called2 = false;
+    actor->AddDomainSchedCallback(
+        [&called1](const litebus::AID &from, const std::string &name, const std::string &address) {
+            called1 = true;
+        });
+    actor->AddDomainSchedCallback(
+        [&called2](const litebus::AID &from, const std::string &name, const std::string &address) {
+            called2 = true;
+        });
+    actor->Init();
+    // Switch to MASTER mode so MasterBusiness::Register invokes the callbacks.
+    actor->business_ = actor->businesses_.at("master");
+
+    messages::Register registerReq;
+    registerReq.set_name("TestDomain");
+    registerReq.set_address("127.0.0.1:8080");
+    litebus::AID from;
+    actor->Register(from, "Register", registerReq.SerializeAsString());
+
+    EXPECT_TRUE(called1);
+    EXPECT_TRUE(called2);
+}
+
 }  // namespace functionsystem::test

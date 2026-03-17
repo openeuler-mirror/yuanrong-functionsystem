@@ -705,6 +705,22 @@ void UnderlayerSchedMgrActor::OnUnBind(const litebus::AID &from, std::string &&n
     ReceiveGroupMethod(&requestUnBindMatch_, from, std::move(name), std::move(msg));
 }
 
+void UnderlayerSchedMgrActor::BroadcastTenantQuotaExceeded(const std::string &msg)
+{
+    for (const auto &[name, underlayer] : underlayers_) {
+        if (underlayer == nullptr) {
+            continue;
+        }
+        const auto &aid = underlayer->GetAID();
+        if (aid.Url().empty()) {
+            YRLOG_INFO("BroadcastTenantQuotaExceeded: skip {} (not yet registered)", name);
+            continue;
+        }
+        (void)Send(aid, "TenantQuotaExceeded", std::string(msg));
+        YRLOG_INFO("BroadcastTenantQuotaExceeded: sent TenantQuotaExceeded to local scheduler {}", name);
+    }
+}
+
 void UnderlayerSchedMgrActor::Init()
 {
     Receive("Register", &UnderlayerSchedMgrActor::Register);

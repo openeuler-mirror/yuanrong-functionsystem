@@ -113,7 +113,7 @@ void DomainSchedMgrActor::UpdateSchedTopoView(const std::string &name, const std
 
 Status DomainSchedMgrActor::AddDomainSchedCallback(const functionsystem::global_scheduler::CallbackAddFunc &func)
 {
-    return SetCallback([func, &handler = this->addDomainSchedCallback_]() { handler = func; }, func);
+    return SetCallback([func, &handlers = this->addDomainSchedCallbacks_]() { handlers.push_back(func); }, func);
 }
 
 Status DomainSchedMgrActor::DelDomainSchedCallback(const functionsystem::global_scheduler::CallbackDelFunc &func)
@@ -393,7 +393,9 @@ void DomainSchedMgrActor::MasterBusiness::Register(const litebus::AID &from, std
     }
 
     YRLOG_DEBUG("{} from {} receive message: {}", name, from.HashString(), request.ShortDebugString());
-    actor->addDomainSchedCallback_(from, request.name(), request.address());
+    for (const auto &cb : actor->addDomainSchedCallbacks_) {
+        cb(from, request.name(), request.address());
+    }
 }
 
 void DomainSchedMgrActor::MasterBusiness::NotifySchedAbnormal(const litebus::AID &from, std::string &&name,
