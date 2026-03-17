@@ -210,11 +210,6 @@ void IdleActor::HandleIdleTimeout(const std::string &instanceID, uint64_t genera
     YRLOG_INFO("{}|instance({}) idle timeout, requesting eviction via InstanceCtrlActor",
                instanceInfo.requestid(), instanceID);
 
-    // Delegate eviction to InstanceCtrlActor. InstanceCtrlActor will perform the
-    // authoritative session veto (checking its own instanceSessionCounts_) before
-    // proceeding with the eviction chain. Both this message and any concurrent
-    // SessionCountDelta messages are serialized in InstanceCtrlActor's mailbox,
-    // preserving the original single-actor ordering guarantee.
     litebus::Async(facadeAID_, &InstanceCtrlActor::EvictByIdleTimeout, instanceID);
 }
 
