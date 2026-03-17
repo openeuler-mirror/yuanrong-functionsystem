@@ -43,7 +43,6 @@
 #include "common/utils/random_number.h"
 #include "common/utils/struct_transfer.h"
 #include "common/trace/trace_manager.h"
-#include "idle/idle_actor.h"
 #include "instance_ctrl_message.h"
 #include "local_scheduler/snap_ctrl/snap_ctrl.h"
 #include "common/posix_client/control_plane_client/control_interface_posix_client.h"
@@ -4863,8 +4862,8 @@ void InstanceCtrlActor::BindObserver(const std::shared_ptr<function_proxy::Contr
             litebus::Async(aid, &InstanceCtrlActor::UpdateFuncMetas, isAdd, funcMetas);
         });
 
-    observer->SetTrafficReportCbFunc([aid(GetAID())](const std::string &instanceID, const size_t &processingNum) {
-        litebus::Async(aid, &InstanceCtrlActor::TrafficReport, instanceID, processingNum);
+    observer->SetTrafficReportCbFunc([mgr(idleMgr_)](const std::string &instanceID, const size_t &processingNum) {
+        mgr->TrafficReport(instanceID, processingNum);
     });
 
     observer_ = observer;
@@ -6446,49 +6445,8 @@ void InstanceCtrlActor::OnFunctionDelete(
 }
 
 
-void InstanceCtrlActor::TrafficReport(const std::string &instanceID, const size_t &processingNum)
-{
-    ASSERT_IF_NULL(idleMgr_);
-    idleMgr_->TrafficReport(instanceID, processingNum);
-}
-
-void InstanceCtrlActor::SessionCountDelta(const std::string &instanceID, int delta)
-{
-    if (instanceID.empty() || delta == 0) {
-        return;
-    }
-
-    // Update authoritative session counts used by EvictByIdleTimeout for the
-    // eviction veto. Both SessionCountDelta and EvictByIdleTimeout are processed
-    // in this actor's mailbox, preserving single-mailbox ordering semantics.
-    auto &count = instanceSessionCounts_[instanceID];
-    if (delta > 0) {
-        count += static_cast<size_t>(delta);
-    } else if (delta < 0 && count > 0) {
-        size_t dec = static_cast<size_t>(-delta);
-        count = (dec >= count) ? 0 : (count - dec);
-    }
-    if (count == 0) {
-        instanceSessionCounts_.erase(instanceID);
-    }
-
-    // Forward to IdleActor for timer management (cancel on session active, restart on session idle)
-    ASSERT_IF_NULL(idleMgr_);
-    idleMgr_->SessionCountDelta(instanceID, delta);
-}
-
 void InstanceCtrlActor::EvictByIdleTimeout(const std::string &instanceID)
 {
-    // Authoritative session veto: if a new session arrived after IdleActor sent this
-    // message, reject eviction. Because SessionCountDelta and this message are both
-    // serialized in this actor's mailbox, the veto is race-free.
-    auto it = instanceSessionCounts_.find(instanceID);
-    if (it != instanceSessionCounts_.end() && it->second > 0) {
-        YRLOG_INFO("EvictByIdleTimeout cancelled: instance({}) has {} active sessions",
-                   instanceID, it->second);
-        return;
-    }
-
     ASSERT_IF_NULL(instanceControlView_);
     auto stateMachine = instanceControlView_->GetInstance(instanceID);
     if (stateMachine == nullptr) {

@@ -19,7 +19,7 @@
 #include <async/async.hpp>
 
 #include "common/constants/actor_name.h"
-#include "idle/idle_mgr.h"
+#include "idle/idle_actor.h"
 #include "local_scheduler/traefik_registry/traefik_registry.h"
 #include "common/schedule_plugin/common/constants.h"
 #include "common/scheduler_framework/framework/framework_impl.h"
@@ -59,8 +59,8 @@ void InstanceCtrl::Stop()
     if (virtualScheduleQueueActor_ != nullptr) {
         litebus::Terminate(virtualScheduleQueueActor_->GetAID());
     }
-    if (idleActor_ != nullptr) {
-        litebus::Terminate(idleActor_->GetAID());
+    if (idleMgr_ != nullptr) {
+        idleMgr_->Stop();
     }
 }
 
@@ -78,9 +78,9 @@ void InstanceCtrl::Await()
         litebus::Await(virtualScheduleQueueActor_->GetAID());
         virtualScheduleQueueActor_ = nullptr;
     }
-    if (idleActor_ != nullptr) {
-        litebus::Await(idleActor_->GetAID());
-        idleActor_ = nullptr;
+    if (idleMgr_ != nullptr) {
+        idleMgr_->Await();
+        idleMgr_ = nullptr;
     }
 }
 
@@ -131,16 +131,14 @@ std::unique_ptr<InstanceCtrl> InstanceCtrl::Create(const std::string &nodeID, co
     auto actor = std::make_shared<InstanceCtrlActor>(aid, nodeID, config);
     actor->ClearRateLimiterRegularly();
 
-    // Wire IdleMgr into InstanceCtrlActor before Spawn so the first TrafficReport
-    // or SessionCountDelta message is handled correctly.
-    std::string idleAID = nodeID + IDLE_ACTOR_NAME_POSTFIX;
-    actor->SetIdleMgr(std::make_shared<IdleMgr>(idleAID));
-
     auto ctrl = std::make_unique<InstanceCtrl>(std::move(actor));
-    // Store IdleActor for lifecycle management; Spawn happens in Start().
-    ctrl->idleActor_ = std::make_shared<IdleActor>(
+
+    std::string idleAID = nodeID + IDLE_ACTOR_NAME_POSTFIX;
+    auto idleActor = std::make_shared<IdleActor>(
         idleAID, nodeID, ctrl->instanceCtrlActor_->GetInstanceControlView(),
         litebus::AID(aid));
+    auto idleMgr = std::make_shared<IdleMgr>(std::move(idleActor));
+    ctrl->BindIdleMgr(idleMgr);
     return ctrl;
 }
 
@@ -177,8 +175,8 @@ void InstanceCtrl::Start(const std::shared_ptr<FunctionAgentMgr> &functionAgentM
     InstanceStateMachine::BindControlPlaneObserver(observer);
     instanceCtrlActor_->BindResourceView(resourceViewMgr);
     instanceCtrlActor_->BindObserver(observer);
-    if (idleActor_ != nullptr) {
-        litebus::Spawn(idleActor_);
+    if (idleMgr_ != nullptr) {
+        idleMgr_->Spawn();
     }
     (void)litebus::Spawn(instanceCtrlActor_, false);
 
