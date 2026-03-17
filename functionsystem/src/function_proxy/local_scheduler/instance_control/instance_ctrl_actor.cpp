@@ -43,6 +43,7 @@
 #include "common/utils/random_number.h"
 #include "common/utils/struct_transfer.h"
 #include "common/trace/trace_manager.h"
+#include "idle/idle_actor.h"
 #include "instance_ctrl_message.h"
 #include "local_scheduler/snap_ctrl/snap_ctrl.h"
 #include "common/posix_client/control_plane_client/control_interface_posix_client.h"
@@ -6444,20 +6445,53 @@ void InstanceCtrlActor::OnFunctionDelete(
     YRLOG_INFO("function({}) delete succeeded", funcKey);
 }
 
-void InstanceCtrlActor::HandleIdleTimeout(const std::string &instanceID)
+
+void InstanceCtrlActor::TrafficReport(const std::string &instanceID, const size_t &processingNum)
 {
-    idleTimers_.erase(instanceID);
-    ASSERT_IF_NULL(instanceControlView_);
-    auto stateMachine = instanceControlView_->GetInstance(instanceID);
-    if (stateMachine == nullptr) {
+    ASSERT_IF_NULL(idleMgr_);
+    idleMgr_->TrafficReport(instanceID, processingNum);
+}
+
+void InstanceCtrlActor::SessionCountDelta(const std::string &instanceID, int delta)
+{
+    if (instanceID.empty() || delta == 0) {
         return;
     }
 
-    // Double-check: ensure no active sessions before evicting
-    auto it = instanceActiveSessions_.find(instanceID);
-    if (it != instanceActiveSessions_.end() && it->second) {
-        YRLOG_INFO("{}|instance({}) idle timeout cancelled due to active sessions",
-                   stateMachine->GetInstanceInfo().requestid(), instanceID);
+    // Update authoritative session counts used by EvictByIdleTimeout for the
+    // eviction veto. Both SessionCountDelta and EvictByIdleTimeout are processed
+    // in this actor's mailbox, preserving single-mailbox ordering semantics.
+    auto &count = instanceSessionCounts_[instanceID];
+    if (delta > 0) {
+        count += static_cast<size_t>(delta);
+    } else if (delta < 0 && count > 0) {
+        size_t dec = static_cast<size_t>(-delta);
+        count = (dec >= count) ? 0 : (count - dec);
+    }
+    if (count == 0) {
+        instanceSessionCounts_.erase(instanceID);
+    }
+
+    // Forward to IdleActor for timer management (cancel on session active, restart on session idle)
+    ASSERT_IF_NULL(idleMgr_);
+    idleMgr_->SessionCountDelta(instanceID, delta);
+}
+
+void InstanceCtrlActor::EvictByIdleTimeout(const std::string &instanceID)
+{
+    // Authoritative session veto: if a new session arrived after IdleActor sent this
+    // message, reject eviction. Because SessionCountDelta and this message are both
+    // serialized in this actor's mailbox, the veto is race-free.
+    auto it = instanceSessionCounts_.find(instanceID);
+    if (it != instanceSessionCounts_.end() && it->second > 0) {
+        YRLOG_INFO("EvictByIdleTimeout cancelled: instance({}) has {} active sessions",
+                   instanceID, it->second);
+        return;
+    }
+
+    ASSERT_IF_NULL(instanceControlView_);
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
         return;
     }
 
@@ -6482,134 +6516,6 @@ void InstanceCtrlActor::HandleIdleTimeout(const std::string &instanceID)
             }
             return Status::OK();
         });
-}
-
-void InstanceCtrlActor::StartIdleTimer(const std::string &instanceID)
-{
-    if (idleTimers_.find(instanceID) != idleTimers_.end()) {
-        return;
-    }
-    ASSERT_IF_NULL(instanceControlView_);
-    auto stateMachine = instanceControlView_->GetInstance(instanceID);
-    if (stateMachine == nullptr) {
-        return;
-    }
-    const auto &instanceInfo = stateMachine->GetInstanceInfo();
-    if (instanceInfo.functionproxyid() != nodeID_ || instanceInfo.instancestatus().code() != static_cast<int32_t>(InstanceState::RUNNING)) {
-        return;
-    }
-
-    // Additional check: don't start timer if there are active sessions
-    auto it = instanceActiveSessions_.find(instanceID);
-    if (it != instanceActiveSessions_.end() && it->second) {
-        YRLOG_INFO("skip starting idle timer for instance({}) due to active sessions", instanceID);
-        return;
-    }
-
-    int64_t idleTimeout = GetIdleTimeout(instanceInfo);
-    if (idleTimeout <= 0) {
-        return;
-    }
-    YRLOG_INFO("start idle timer for instance({}) with timeout {} seconds", instanceID, idleTimeout);
-    idleTimers_[instanceID] = litebus::AsyncAfter(
-        idleTimeout * 1000, GetAID(), &InstanceCtrlActor::HandleIdleTimeout, instanceID);
-}
-
-void InstanceCtrlActor::CancelIdleTimer(const std::string &instanceID)
-{
-    auto iter = idleTimers_.find(instanceID);
-    if (iter == idleTimers_.end()) {
-        return;
-    }
-    YRLOG_INFO("cancel idle timer for instance({})", instanceID);
-    litebus::TimerTools::Cancel(iter->second);
-    idleTimers_.erase(iter);
-}
-
-void InstanceCtrlActor::TrafficReport(const std::string &instanceID, const size_t &processingNum)
-{
-    YRLOG_DEBUG("debug:: instance({}) processing num: {}", instanceID, processingNum);
-    bool isIdle = (processingNum == 0);
-    ASSERT_IF_NULL(instanceControlView_);
-    if (!isIdle) {
-        instanceTrafficIdle_.erase(instanceID);
-        CancelIdleTimer(instanceID);
-        return;
-    }
-
-    instanceTrafficIdle_[instanceID] = true;
-
-    // Only start idle timer if both traffic idle AND no active sessions
-    bool hasActiveSessions = false;
-    auto it = instanceActiveSessions_.find(instanceID);
-    if (it != instanceActiveSessions_.end()) {
-        hasActiveSessions = it->second;
-    }
-
-    if (!hasActiveSessions) {
-        StartIdleTimer(instanceID);
-    } else {
-        YRLOG_DEBUG("instance({}) is idle but has active exec sessions, skip idle timer", instanceID);
-    }
-}
-
-void InstanceCtrlActor::SessionCountDelta(const std::string &instanceID, int delta)
-{
-    if (instanceID.empty() || delta == 0) {
-        return;
-    }
-
-    auto &count = instanceSessionCounts_[instanceID];
-    size_t oldCount = count;
-
-    if (delta > 0) {
-        count += static_cast<size_t>(delta);
-    } else if (delta < 0 && count > 0) {
-        size_t dec = static_cast<size_t>(-delta);
-        count = (dec >= count) ? 0 : (count - dec);
-    }
-
-    size_t newCount = count;
-    if (newCount == 0) {
-        instanceSessionCounts_.erase(instanceID);
-    }
-
-    // Edge detection: 0->N or N->0
-    if ((oldCount == 0 && newCount > 0) || (oldCount > 0 && newCount == 0)) {
-        bool hasActiveSessions = (newCount > 0);
-        YRLOG_INFO("instance({}) session count edge: {} sessions, hasActiveSessions={}",
-                   instanceID, newCount, hasActiveSessions);
-        SessionAlive(instanceID, hasActiveSessions);
-    }
-}
-
-void InstanceCtrlActor::SessionAlive(const std::string &instanceID, bool hasActiveSessions)
-{
-    YRLOG_INFO("instance({}) session alive status changed: hasActiveSessions={}", instanceID, hasActiveSessions);
-
-    // Update session status
-    if (hasActiveSessions) {
-        instanceActiveSessions_[instanceID] = true;
-        // Cancel idle timer when sessions become active
-        CancelIdleTimer(instanceID);
-    } else {
-        instanceActiveSessions_.erase(instanceID);
-        // When sessions become inactive, check traffic idle status before starting timer
-        bool trafficIdle = false;
-        auto trafficIt = instanceTrafficIdle_.find(instanceID);
-        if (trafficIt != instanceTrafficIdle_.end()) {
-            trafficIdle = trafficIt->second;
-        }
-        ASSERT_IF_NULL(instanceControlView_);
-        auto stateMachine = instanceControlView_->GetInstance(instanceID);
-        if (trafficIdle && stateMachine != nullptr) {
-            const auto &instanceInfo = stateMachine->GetInstanceInfo();
-            if (instanceInfo.functionproxyid() == nodeID_ &&
-                instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)) {
-                StartIdleTimer(instanceID);
-            }
-        }
-    }
 }
 
 void InstanceCtrlActor::BindSnapCtrl(const std::shared_ptr<SnapCtrl> &snapCtrl)
