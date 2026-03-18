@@ -124,6 +124,7 @@ private:
     bool isFatal_ { false };
     bool isReject_ { false };
     bool isReady_ { false };
+    bool used_ { false };
     std::string fatalMsg_;
     StatusCode fatalCode_ {StatusCode::SUCCESS};
     std::shared_ptr<CallCache> callCache_ { nullptr };

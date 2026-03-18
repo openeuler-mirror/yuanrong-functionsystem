@@ -75,6 +75,7 @@ litebus::Future<SharedStreamMsg> RequestDispatcher::Call(const SharedStreamMsg &
 {
     ASSERT_FS(request->has_callreq());
     auto callReq = request->callreq();
+    // 已退出，不再具备消息处理能力
     if (isFatal_) {
         YRLOG_ERROR("{}|{}|instance({}) is fatal, failed to call", callReq.traceid(), callReq.requestid(), instanceID_);
         // When runtime Invoke a stateless function, determine whether to re-create an instance
@@ -83,7 +84,8 @@ litebus::Future<SharedStreamMsg> RequestDispatcher::Call(const SharedStreamMsg &
                                fatalMsg_.empty() ? "unknown reason" : fatalMsg_);
         return CreateCallResponse(TransFatalCode(fatalCode_), err, request->messageid());
     }
-    if (isReject_) {
+    // 驱逐和亚健康状态，只处理强制调用消息
+    if (isReject_ && !callReq.createoptions().contains("ENABLE_FORCE_INVOKE")) {
         YRLOG_ERROR("{}|{}|instance({}) is rejected to handler request, {}|{}", callReq.traceid(), callReq.requestid(),
                     instanceID_, fmt::underlying(fatalCode_), fatalMsg_);
         return CreateCallResponse(static_cast<common::ErrorCode>(fatalCode_), fatalMsg_, request->messageid());
@@ -111,6 +113,15 @@ litebus::Future<SharedStreamMsg> RequestDispatcher::Call(const SharedStreamMsg &
     callCache_->Push(callRequestContext);
     if (isReady_) {
         TriggerCall(callRequestContext->requestID);
+    } else if (callReq.createoptions().contains("ENABLE_FORCE_INVOKE")) {
+        // 其他状态且 used，只处理带 ENABLE_FORCE_INVOKE 的请求
+        YRLOG_INFO("{}|force invoke enabled, will forward request to instance despite not ready.", callReq.requestid());
+        // remote instance 存在 State Machine 重建可能，不会主动触发调用
+        // remote：直接转发强制调用请求，有对端决策
+        // local：根据 used_ 状态判断是否触发调用
+        if (!local_ || used_) {
+            TriggerCall(callRequestContext->requestID);
+        }
     }
     return callResponse.GetFuture();
 }
@@ -323,6 +334,7 @@ void RequestDispatcher::UpdateInfo(const std::shared_ptr<InstanceRouterInfo> &in
     }
     isReady_ = isReady;
     if (isReady_) {
+        used_ = true;
         callCache_->MoveAllToNew();
         auto reqNew = callCache_->GetNewReqs();
         for (auto &req : reqNew) {
@@ -352,9 +364,9 @@ void RequestDispatcher::ResponseAllMessage()
             YRLOG_ERROR("{}|not find call request for call response to gracefully shutdown.", req);
             continue;
         }
-        auto callResponse = CreateCallResponse(Status::GetPosixErrorCode(fatalCode_), fatalMsg_, req);
-        context->callResponse.SetValue(callResponse);
-        callCache_->DeleteReqNew(req);
+            auto callResponse = CreateCallResponse(Status::GetPosixErrorCode(fatalCode_), fatalMsg_, req);
+            context->callResponse.SetValue(callResponse);
+            callCache_->DeleteReqNew(req);
     }
 
     auto reqOnResp = callCache_->GetOnResp();
