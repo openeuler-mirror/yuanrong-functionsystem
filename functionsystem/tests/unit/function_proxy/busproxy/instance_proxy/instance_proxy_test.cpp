@@ -111,7 +111,7 @@ resources::InstanceInfo NewInstance(const std::string &instanceID, const std::st
 }
 
 SharedStreamMsg CallRequest(const std::string &caller, const std::string &callee, const std::string &requestID,
-                            const std::string &route = "")
+                            const std::string &route = "", bool enableForceInvoke = false)
 {
     auto msg = std::make_shared<runtime_rpc::StreamingMessage>();
     auto callreq = msg->mutable_callreq();
@@ -120,6 +120,9 @@ SharedStreamMsg CallRequest(const std::string &caller, const std::string &callee
     (*callreq->mutable_createoptions())[CUSTOMS_TAG] = requestID;
     if (!route.empty()) {
         (*callreq->mutable_createoptions())["YR_ROUTE"] = route;
+    }
+    if (enableForceInvoke) {
+        (*callreq->mutable_createoptions())["ENABLE_FORCE_INVOKE"] = "true";
     }
     return msg;
 }
@@ -504,6 +507,7 @@ TEST_F(InstanceProxyTest, NotifyChanged)
     calleeProxyActor->selfDispatcher_->dataInterfaceClient_ = mockCalleeSharedClient;
     calleeProxyActor->NotifyChanged(calleeIns, info);
     EXPECT_TRUE(calleeProxyActor->selfDispatcher_->isReady_);
+    EXPECT_TRUE(calleeProxyActor->selfDispatcher_->used_); // 验证 used_ 状态被正确设置为 true
     EXPECT_CALL(*mockCalleeSharedClient, Call(_))
         .WillRepeatedly(Invoke([](const SharedStreamMsg &request) -> litebus::Future<SharedStreamMsg> {
             auto msg = std::make_shared<runtime_rpc::StreamingMessage>();
@@ -532,6 +536,7 @@ TEST_F(InstanceProxyTest, NotifyRemoteChanged)
     info->remote = callerProxyActor->GetAID();
     callerProxyActor->NotifyChanged(calleeIns, info);
     EXPECT_TRUE(callerProxyActor->remoteDispatchers_[calleeIns]->isReady_);
+    EXPECT_TRUE(callerProxyActor->remoteDispatchers_[calleeIns]->used_); // 验证 used_ 状态被正确设置为 true
 }
 
 /**
@@ -901,6 +906,70 @@ TEST_F(InstanceProxyTest, ForwardCallWithoutCallee)
 
     litebus::Terminate(forwardCallActor->GetAID());
     litebus::Await(forwardCallActor->GetAID());
+}
+
+/**
+ * Feature: ENABLE_FORCE_INVOKE test
+ * Description: test force invoke functionality
+ * 1. instance scheduling -> creating (local) -> running -> not ready
+ * 2. invoke with ENABLE_FORCE_INVOKE when not ready but used
+ * 3. invoke without ENABLE_FORCE_INVOKE when not ready but used
+ * 4. invoke with ENABLE_FORCE_INVOKE during graceful shutdown
+ * Expectation: 
+ * - force invoke request should be processed even when not ready but used
+ * - non-force invoke request should wait until ready
+ * - force invoke request should be processed during graceful shutdown
+ */
+TEST_F(InstanceProxyTest, ForceInvokeTest)
+{
+    std::string callerIns = "callerIns";
+    std::string calleeIns = "calleeIns";
+    auto mockSharedClient = PrepareCaller(callerIns);
+    litebus::AID callerProxy(callerIns, observer_->GetAID().Url());
+    ASSERT_AWAIT_TRUE([&]() { return litebus::GetActor(callerProxy) != nullptr; });
+
+    // Create callee instance and set to running
+    auto calleeInfo = NewInstance(calleeIns, tenantID_);
+    UpdateInstance(calleeInfo, calleeIns, (int32_t)InstanceState::RUNNING, local_);
+    auto mockCalleeSharedClient = std::make_shared<MockSharedClient>();
+    EXPECT_CALL(*mockSharedClientManagerProxy_, NewDataInterfacePosixClient(calleeIns, _, _))
+        .WillOnce(Return(mockCalleeSharedClient));
+    EXPECT_CALL(*mockCalleeSharedClient, Call(_))
+        .WillRepeatedly(Invoke([](const SharedStreamMsg &request) -> litebus::Future<SharedStreamMsg> {
+            auto msg = std::make_shared<runtime_rpc::StreamingMessage>();
+            auto callrsp = msg->mutable_callrsp();
+            callrsp->set_code(::common::ErrorCode::ERR_NONE);
+            return msg;
+        }));
+    observer_->Update(calleeIns, calleeInfo);
+    instanceInfo_[calleeIns] = calleeInfo;
+
+    // Get the dispatcher and set used_ to true but isReady_ to false
+    auto calleeProxyActor = std::dynamic_pointer_cast<InstanceProxy>(litebus::GetActor(litebus::AID(calleeIns, observer_->GetAID().Url())));
+    ASSERT_TRUE(calleeProxyActor != nullptr);
+    calleeProxyActor->selfDispatcher_->used_ = true;
+    calleeProxyActor->selfDispatcher_->isReady_ = false;
+
+    // Test 1: Invoke with ENABLE_FORCE_INVOKE when not ready but used
+    auto forceCall = litebus::Async(callerProxy, &InstanceProxy::Call, busproxy::CallerInfo{.instanceID=callerIns, .tenantID=tenantID_}, calleeIns,
+                                   CallRequest(callerIns, calleeIns, "Request-force", "", true), nullptr);
+    ASSERT_AWAIT_READY(forceCall);
+    EXPECT_TRUE(forceCall.Get()->has_callrsp() && forceCall.Get()->callrsp().code() == common::ERR_NONE);
+
+    // Test 2: Invoke without ENABLE_FORCE_INVOKE when not ready but used
+    auto normalCall = litebus::Async(callerProxy, &InstanceProxy::Call, busproxy::CallerInfo{.instanceID=callerIns, .tenantID=tenantID_}, calleeIns,
+                                    CallRequest(callerIns, calleeIns, "Request-normal", "", false), nullptr);
+
+    // Set instance back to ready and check normal call
+    calleeProxyActor->selfDispatcher_->isReady_ = true;
+    // Manually trigger the processing of cached requests
+    calleeProxyActor->selfDispatcher_->callCache_->MoveAllToNew();
+    auto reqNew = calleeProxyActor->selfDispatcher_->callCache_->GetNewReqs();
+    for (auto &req : reqNew) {
+        calleeProxyActor->selfDispatcher_->TriggerCall(req);
+    }
+    ASSERT_AWAIT_READY(normalCall);
+    EXPECT_TRUE(normalCall.Get()->has_callrsp() && normalCall.Get()->callrsp().code() == common::ERR_NONE);
 }
 
 }  // namespace functionsystem::test
