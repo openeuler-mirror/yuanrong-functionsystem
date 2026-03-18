@@ -28,40 +28,78 @@ message(STATUS "VENDOR_DIR: ${VENDOR_DIR}")
 # 设置三方件编译配置，导入公共参数
 include(${PROJECT_SOURCE_DIR}/vendor_utils.cmake)
 
+# In Bazel build mode, several vendor components are either built from source
+# by Bazel itself or are not referenced by any Bazel target, so they can be
+# skipped to reduce build time.
+#
+# Skipped when BAZEL_MODE=ON:
+#   gtest_1_12_1 / gtest_1_10_0  — Bazel uses @gtest http_archive for tests
+#   yaml                          — Bazel uses @yaml-cpp http_archive
+#   jemalloc                      — not referenced by any Bazel BUILD target
+#   cjson                         — not referenced by any Bazel BUILD target
+#   opentelemetry                 — Bazel builds from source via @opentelemetry_cpp
+#   protobuf, grpc                — Bazel builds from source via @com_google_protobuf/@com_github_grpc_grpc
+#   etcd                          — Bazel builds etcdapi from source via //vendor/etcdapi:etcdapi
+#
+# Always built (Bazel still needs CMake output):
+#   openssl                       — dep for curl/obs CMake builds
+#   securec                       — dep for obs CMake build
+#   spdlog                        — dep for obs CMake build (obs.cmake: DEPENDS ... spdlog)
+#   zlib                          — @minizip_sdk points to vendor/output/Install/zlib/
+#   curl                          — @curl_sdk prebuilt .so
+#   obs                           — @obs_sdk prebuilt .so
+#
+# Note: protoc + grpc_cpp_plugin for proto generation now come from Bazel-built
+#   bazel-bin/external/com_google_protobuf/protoc
+#   bazel-bin/external/com_github_grpc_grpc/src/compiler/grpc_cpp_plugin
+option(BAZEL_MODE "Build only vendor components required by Bazel build mode" OFF)
+message(STATUS "BAZEL_MODE: ${BAZEL_MODE}")
+
 # 引入三方件编译的 cmake 文件
 list(APPEND CMAKE_MODULE_PATH ${VENDOR_CMAKE_DIR})
-include(gtest_1_12_1)
-include(gtest_1_10_0)
-include(cjson)
+
 include(openssl)
 include(securec)
 include(spdlog)
-include(yaml)
 include(zlib)
-include(protobuf)
-include(grpc)
-include(etcd)
-include(jemalloc)
 include(curl)
 include(obs)
-include(opentelemetry)
 
-add_custom_target(main
-    DEPENDS
-    gtest_1_12_1
-    gtest_1_10_0
-    etcd
-    grpc
-    curl
-    cjson
-    openssl
-    jemalloc
-    protobuf
-    securec
-    spdlog
-    yaml
-    zlib
-    obs
-)
-
-
+if (NOT BAZEL_MODE)
+    include(gtest_1_12_1)
+    include(gtest_1_10_0)
+    include(cjson)
+    include(yaml)
+    include(jemalloc)
+    include(protobuf)
+    include(grpc)
+    include(etcd)
+    include(opentelemetry)
+    add_custom_target(main
+        DEPENDS
+        gtest_1_12_1
+        gtest_1_10_0
+        etcd
+        grpc
+        curl
+        cjson
+        openssl
+        jemalloc
+        protobuf
+        securec
+        spdlog
+        yaml
+        zlib
+        obs
+    )
+else()
+    add_custom_target(main
+        DEPENDS
+        curl
+        openssl
+        securec
+        spdlog
+        zlib
+        obs
+    )
+endif()
