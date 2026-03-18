@@ -113,10 +113,13 @@ new_local_repository(
 )
 
 # --- Pre-built vendor libraries (built by run.sh vendor step) ---
+
+# etcdapi: Bazel source build — proto/gRPC stubs generated from vendor/src/etcd/.
+# The vendor/etcdapi/ directory is a placeholder; all real deps are in @yuanrong_functionsystem//vendor/src/.
 new_local_repository(
     name = "etcdapi",
     build_file = "@//bazel:etcdapi.bzl",
-    path = "./vendor/output/Install/etcdapi/",
+    path = "./vendor/etcdapi/",
 )
 
 new_local_repository(
@@ -131,11 +134,7 @@ new_local_repository(
     path = "./vendor/output/Install/curl/",
 )
 
-new_local_repository(
-    name = "opentelemetry_prebuilt",
-    build_file = "@//bazel:opentelemetry_prebuilt.bzl",
-    path = "./vendor/output/Install/opentelemetry/",
-)
+
 
 new_local_repository(
     name = "minizip_sdk",
