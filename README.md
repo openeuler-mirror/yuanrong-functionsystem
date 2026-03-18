@@ -26,7 +26,7 @@ openYuanrong 分为三个代码仓库：
 
 ## 入门
 
-查看 [openYuanrong 文档](https://pages.openeuler.openatom.cn/openyuanrong/docs/zh-cn/latest/index.html)了解如何使用 openYuanrong 开发分布式应用。
+查看 [openYuanrong 文档](https://docs.openyuanrong.org/zh-cn/latest/index.html)了解如何使用 openYuanrong 开发分布式应用。
 
 - **安装**：
   请根据您的环境选择合适的版本。以下为 Python 3.9 (x86_64) 的示例安装命令：
@@ -34,13 +34,13 @@ openYuanrong 分为三个代码仓库：
   pip install [https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/release/0.7.0/linux/x86_64/openyuanrong-0.7.0-cp39-cp39-manylinux_2_34_x86_64.whl](https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/release/0.7.0/linux/x86_64/openyuanrong-0.7.0-cp39-cp39-manylinux_2_34_x86_64.whl)
 
 
-[更多安装信息及版本选择](https://pages.openeuler.openatom.cn/openyuanrong/docs/zh-cn/latest/deploy/installation.html)。
+[更多安装信息及版本选择](https://docs.openyuanrong.org/zh-cn/latest/deploy/installation.html)。
 
-* [快速入门](https://pages.openeuler.openatom.cn/openyuanrong/docs/zh-cn/latest/getting_started.html)
+* [快速入门](https://docs.openyuanrong.org/zh-cn/latest/getting_started.html)
 
 ## 贡献
 
-我们欢迎您对 openYuanrong 做各种形式的贡献，请参阅我们的[贡献者指南](https://pages.openeuler.openatom.cn/openyuanrong/docs/zh-cn/latest/contributor_guide/index.html)。
+我们欢迎您对 openYuanrong 做各种形式的贡献，请参阅我们的[贡献者指南](https://docs.openyuanrong.org/zh-cn/latest/contributor_guide/index.html)。
 
 ## 许可证
 
