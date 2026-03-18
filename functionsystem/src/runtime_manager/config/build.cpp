@@ -161,7 +161,7 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     }
     std::string language = info.runtimeconfig().language();
     (void)transform(language.begin(), language.end(), language.begin(), ::tolower);
-    if (language == CPP_LANGUAGE) {
+    if (language.find(CPP_LANGUAGE) != std::string::npos) {
         ss << ":" << config.runtimePath << "/cpp/lib";
     }
     if (!config.runtimeLdLibraryPath.empty()) {
