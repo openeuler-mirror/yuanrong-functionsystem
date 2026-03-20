@@ -116,6 +116,101 @@ public:
         return credentialHostAddress_;
     }
 
+    const std::string &GetKeycloakUrl() const
+    {
+        return keycloakUrl_;
+    }
+
+    const std::string &GetKeycloakPublicUrl() const
+    {
+        return keycloakPublicUrl_;
+    }
+
+    const std::string &GetKeycloakClientId() const
+    {
+        return keycloakClientId_;
+    }
+
+    const std::string &GetKeycloakClientSecret() const
+    {
+        return keycloakClientSecret_;
+    }
+
+    const std::string &GetKeycloakIssuerUrl() const
+    {
+        return keycloakIssuerUrl_.empty() ? keycloakUrl_ : keycloakIssuerUrl_;
+    }
+
+    const std::string &GetKeycloakRealm() const
+    {
+        return keycloakRealm_;
+    }
+
+    bool GetKeycloakEnabled() const
+    {
+        return keycloakEnabled_;
+    }
+
+    int GetKeycloakCacheTtlSeconds() const
+    {
+        return keycloakCacheTtlSeconds_;
+    }
+
+    const std::string &GetAuthProvider() const
+    {
+        return authProvider_;
+    }
+
+    const std::string &GetCasdoorEndpoint() const
+    {
+        return casdoorEndpoint_;
+    }
+
+    const std::string &GetCasdoorPublicEndpoint() const
+    {
+        return casdoorPublicEndpoint_;
+    }
+
+    const std::string &GetCasdoorClientId() const
+    {
+        return casdoorClientId_;
+    }
+
+    const std::string &GetCasdoorClientSecret() const
+    {
+        return casdoorClientSecret_;
+    }
+
+    const std::string &GetCasdoorOrganization() const
+    {
+        return casdoorOrganization_;
+    }
+
+    const std::string &GetCasdoorApplication() const
+    {
+        return casdoorApplication_;
+    }
+
+    const std::string &GetCasdoorAdminUser() const
+    {
+        return casdoorAdminUser_;
+    }
+
+    const std::string &GetCasdoorAdminPassword() const
+    {
+        return casdoorAdminPassword_;
+    }
+
+    const std::string &GetCasdoorJwtPublicKey() const
+    {
+        return casdoorJwtPublicKey_;
+    }
+
+    bool GetCasdoorEnabled() const
+    {
+        return casdoorEnabled_;
+    }
+
 private:
     std::string logConfig;
     std::string nodeID;
@@ -137,6 +232,26 @@ private:
     std::string iamCredentialType_;
     std::string permanentCredentialConfigPath_;
     std::string credentialHostAddress_;
+    std::string keycloakUrl_;
+    std::string keycloakPublicUrl_;
+    std::string keycloakClientId_;
+    std::string keycloakClientSecret_;
+    std::string keycloakIssuerUrl_;
+    std::string keycloakRealm_;
+    bool keycloakEnabled_ = false;
+    int keycloakCacheTtlSeconds_ = 300;
+
+    std::string authProvider_;
+    std::string casdoorEndpoint_;
+    std::string casdoorPublicEndpoint_;
+    std::string casdoorClientId_;
+    std::string casdoorClientSecret_;
+    std::string casdoorOrganization_;
+    std::string casdoorApplication_;
+    std::string casdoorAdminUser_;
+    std::string casdoorAdminPassword_;
+    std::string casdoorJwtPublicKey_;
+    bool casdoorEnabled_ = false;
 };
-} // functionsystem::iamserver
-#endif // IAM_SERVER_FLAGS_FLAGS_H
+}  // namespace functionsystem::iamserver
+#endif  // IAM_SERVER_FLAGS_FLAGS_H
