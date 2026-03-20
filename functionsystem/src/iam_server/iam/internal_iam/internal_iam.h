@@ -17,11 +17,11 @@
 #ifndef IAM_SERVER_INTERNAL_IAM_INTERNAL_IAM_H
 #define IAM_SERVER_INTERNAL_IAM_INTERNAL_IAM_H
 
-#include "common/status/status.h"
-#include "meta_storage_accessor/meta_storage_accessor.h"
-#include "common/utils/token_transfer.h"
-#include "token_manager_actor.h"
 #include "aksk_manager_actor.h"
+#include "common/status/status.h"
+#include "common/utils/token_transfer.h"
+#include "meta_storage_accessor/meta_storage_accessor.h"
+#include "token_manager_actor.h"
 
 namespace functionsystem::iamserver {
 class InternalIAM {
@@ -35,7 +35,7 @@ public:
         std::string permanentCredentialConfigPath;
         std::string credentialHostAddress;
     };
-    explicit InternalIAM(const Param &param) : startParam_(std::move(param)) {};
+    explicit InternalIAM(const Param &param) : startParam_(std::move(param)){};
     virtual ~InternalIAM();
 
     inline bool IsIAMEnabled() const
@@ -50,14 +50,22 @@ public:
     virtual litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptToken(const std::string &tenantID,
                                                                             const std::string &role = "",
                                                                             uint64_t expiredTimeSpan = 0);
+
+    // New version supporting quotas
+    virtual litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptTokenWithQuota(const std::string &tenantID,
+                                                                                     const std::string &role,
+                                                                                     int64_t cpuLimit,
+                                                                                     const std::string &memLimit,
+                                                                                     uint64_t expiredTimeSpan = 0);
+
     // set virtual for mocking
     virtual litebus::Future<Status> AbandonTokenByTenantID(const std::string &tenantID);
 
     virtual litebus::Future<Status> SyncToReplaceToken(bool isNew);
     /**
-    * generate new aksk or return local new aksk in cache if exists.
-    * for creating aksk when creating instance
-    */
+     * generate new aksk or return local new aksk in cache if exists.
+     * for creating aksk when creating instance
+     */
     virtual litebus::Future<std::shared_ptr<AKSKContent>> RequireAKSKContentByTenantID(
         const std::string &tenantID, const bool isPermanentValid = false);
     /**
@@ -79,6 +87,7 @@ public:
     {
         return startParam_.credType;
     }
+
 private:
     std::vector<std::shared_ptr<PermanentCredential>> LoadPermanentCredentialConfig(const std::string &configPath);
 
@@ -88,4 +97,4 @@ private:
     std::shared_ptr<AKSKManagerActor> akskManagerActor_{ nullptr };
 };
 }  // namespace functionsystem::iamserver
-#endif // IAM_SERVER_INTERNAL_IAM_INTERNAL_IAM_H
+#endif  // IAM_SERVER_INTERNAL_IAM_INTERNAL_IAM_H

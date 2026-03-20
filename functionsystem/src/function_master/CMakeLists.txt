@@ -19,6 +19,9 @@ project(${EXECUTABLE_NAME})
 message(STATUS "Begin to configure ${EXECUTABLE_NAME}")
 
 add_executable(${EXECUTABLE_NAME} main.cpp)
+target_sources(${EXECUTABLE_NAME} PRIVATE
+    tenant_quota_manager.cpp
+)
 target_compile_options(${EXECUTABLE_NAME} PRIVATE -fPIE)
 include_directories(${META_STORE_CLIENT_INCLUDE_DIR})
 
