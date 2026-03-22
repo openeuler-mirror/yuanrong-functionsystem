@@ -50,6 +50,7 @@ public:
     // Span creation parameters
     struct SpanParam {
         std::string spanName;
+        std::string spanKey;
         std::string traceID;
         std::string spanID;
         std::string function;
@@ -93,11 +94,11 @@ public:
     // Span Lifecycle Management
     // ========================================================================
     void StopSpan(const std::string &spanName,
-                  const std::string &traceID,
+                  const std::string &spanKey,
                   const AttributesVector &attrs = {},
                   const std::vector<std::string> &events = {});
 
-    std::string GetSpanIDFromStore(const std::string &traceID, const std::string &spanName);
+    std::string GetSpanIDFromStore(const std::string &spanKey, const std::string &spanName);
     void Clear();
 
     // ========================================================================
