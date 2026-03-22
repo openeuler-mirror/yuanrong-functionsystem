@@ -88,9 +88,13 @@ litebus::Future<std::shared_ptr<StreamingMessage>> PosixAPIHandler::Create(
     }
     YRLOG_INFO("{}|{}|receive a create instance request from {}.", traceID, createReq.requestid(), from);
     auto scheduleReq = TransFromCreateReqToScheduleReq(std::move(createReq), from);
-        // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord(
-        { "Create", requestID, "", scheduleReq->instance().function(), scheduleReq->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = "Create";
+    param.spanKey = requestID;
+    param.traceID = traceID;
+    param.function = scheduleReq->instance().function();
+    param.instanceID = scheduleReq->instance().instanceid();
+    trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
     scheduleReq->mutable_instance()->set_parentfunctionproxyaid(instanceCtrl->GetActorAID());
     auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
     (void)instanceCtrl->Schedule(scheduleReq, runtimePromise);
