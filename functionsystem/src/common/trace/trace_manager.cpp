@@ -244,7 +244,7 @@ TraceManager::OtelSpan TraceManager::StartSpan(
 // Start span and record it for later retrieval (e.g., for StopSpan)
 TraceManager::OtelSpan TraceManager::StartSpanWithRecord(TraceManager::SpanParam &&spanParam)
 {
-    std::string spanKey = spanParam.traceID + "_" + spanParam.spanName;
+    std::string spanKey = spanParam.spanKey + "_" + spanParam.spanName;
     YRLOG_DEBUG("(trace)start span, spanName: {}, traceID: {}, spanID: {}, function: {}, instanceID: {}",
                 spanParam.spanName, spanParam.traceID, spanParam.spanID, spanParam.function, spanParam.instanceID);
 
@@ -272,19 +272,19 @@ TraceManager::OtelSpan TraceManager::StartSpanWithRecord(TraceManager::SpanParam
 // ============================================================================
 // Span Lifecycle Management
 // ============================================================================
-void TraceManager::StopSpan(const std::string &spanName, const std::string &traceID,
+void TraceManager::StopSpan(const std::string &spanName, const std::string &spanKey,
                             const AttributesVector &attrs,
                             const std::vector<std::string> &events)
 {
-    std::string spanKey = traceID + "_" + spanName;
-    YRLOG_DEBUG("stop span, key: {}", spanKey);
+    std::string spanMapKey = spanKey + "_" + spanName;
+    YRLOG_DEBUG("stop span, key: {}", spanMapKey);
 
     OtelSpan span;
     {
         std::lock_guard<std::mutex> lock(spanMapMutex_);
-        auto it = spanMap_.find(spanKey);
+        auto it = spanMap_.find(spanMapKey);
         if (it == spanMap_.end()) {
-            YRLOG_WARN("no span: {} found with traceID: {}", spanName, traceID);
+            YRLOG_WARN("no span: {} found with spanKey: {}", spanName, spanKey);
             return;
         }
         span = it->second;
@@ -304,18 +304,18 @@ void TraceManager::StopSpan(const std::string &spanName, const std::string &trac
 
     {
         std::lock_guard<std::mutex> lock(spanMapMutex_);
-        spanMap_.erase(spanKey);
-        YRLOG_DEBUG("stop current span, traceID: {}, spanName: {}", traceID, spanName);
+        spanMap_.erase(spanMapKey);
+        YRLOG_DEBUG("stop current span, spanKey: {}, spanName: {}", spanKey, spanName);
     }
 }
 
-std::string TraceManager::GetSpanIDFromStore(const std::string &traceID, const std::string &spanName)
+std::string TraceManager::GetSpanIDFromStore(const std::string &spanKey, const std::string &spanName)
 {
     std::lock_guard<std::mutex> lock(spanMapMutex_);
-    auto spanKey = traceID + "_" + spanName;
-    auto it = spanMap_.find(spanKey);
+    auto spanMapKey = spanKey + "_" + spanName;
+    auto it = spanMap_.find(spanMapKey);
     if (it == spanMap_.end()) {
-        YRLOG_WARN("cannot find span in spanMap_. spanKey: {}", spanKey);
+        YRLOG_WARN("cannot find span in spanMap_. spanKey: {}", spanMapKey);
         return "";
     }
     auto spanID = it->second->GetContext().span_id();

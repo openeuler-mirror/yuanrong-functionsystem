@@ -70,9 +70,13 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
         (*createOpts)[ENABLE_HORIZONTAL_SCALE_KEY] = "true";
     }
 
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord(
-        { "DomainSchedule", req->requestid(), "", req->instance().function(), req->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = "DomainSchedule";
+    param.spanKey = req->requestid();
+    param.traceID = req->traceid();
+    param.function = req->instance().function();
+    param.instanceID = req->instance().instanceid();
+    trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
 
     YRLOG_INFO("instance(req={}, priority={}, timeout={}, enableHorizontalScale={}) schedule decision",
                requestID, req->instance().scheduleoption().priority(), timeout, enableHorizontalScale_);

@@ -1656,9 +1656,13 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::DoDispatchSchedule(
                     scheduleReq->traceid(), scheduleReq->requestid(), scheduleReq->instance().instanceid());
     }
     ASSERT_IF_NULL(scheduler_);
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord(
-        { "LocalSchedule", scheduleReq->requestid(), "", scheduleReq->instance().function(), scheduleReq->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = "LocalSchedule";
+    param.spanKey = scheduleReq->requestid();
+    param.traceID = scheduleReq->traceid();
+    param.function = scheduleReq->instance().function();
+    param.instanceID = scheduleReq->instance().instanceid();
+    trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
     return scheduler_->ScheduleDecision(scheduleReq)
                       .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::ConfirmScheduleDecisionAndDispatch,
                                            scheduleReq, _1, result.preState.Get()));
@@ -1846,9 +1850,13 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::RetryForwardSched
     const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const messages::ScheduleResponse &resp,
     uint32_t retryTimes, const std::shared_ptr<InstanceStateMachine> &stateMachine)
 {
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord(
-        { "ForwardSchedule", scheduleReq->requestid(), "", scheduleReq->instance().function(), scheduleReq->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = "ForwardSchedule";
+    param.spanKey = scheduleReq->requestid();
+    param.traceID = scheduleReq->traceid();
+    param.function = scheduleReq->instance().function();
+    param.instanceID = scheduleReq->instance().instanceid();
+    trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
     if (auto cancel = stateMachine->GetCancelFuture(); cancel.IsOK()) {
         YRLOG_WARN("{}|{}|instance canceled before forward schedule, reason({})", scheduleReq->requestid(),
                    scheduleReq->instance().instanceid(), cancel.Get());
@@ -2083,9 +2091,13 @@ litebus::Future<Status> InstanceCtrlActor::DeployInstance(const std::shared_ptr<
                                                           bool isRecovering)
 {
     auto requestID = request->requestid();
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord(
-        { "DeployInstance", requestID, "", request->instance().function(), request->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = "DeployInstance";
+    param.spanKey = requestID;
+    param.traceID = request->traceid();
+    param.function = request->instance().function();
+    param.instanceID = request->instance().instanceid();
+    trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
     if (result.IsSome()) {
         YRLOG_DEBUG("{}|{}|failed to deploy instance({}) because failed to update instance info", request->traceid(),
                     requestID, request->instance().instanceid());
@@ -2224,9 +2236,13 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     }
     litebus::Promise<Status> instanceStatusPromise;
     instanceStatusPromises_[request->instance().instanceid()] = instanceStatusPromise;
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord({ "WaitConnection", request->requestid(), "",
-                                                        request->instance().function(), request->instance().instanceid()});
+    trace::TraceManager::SpanParam param;
+    param.spanName = "WaitConnection";
+    param.spanKey = request->requestid();
+    param.traceID = request->traceid();
+    param.function = request->instance().function();
+    param.instanceID = request->instance().instanceid();
+    trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
     return CreateInstanceClient(request->instance().instanceid(), response.runtimeid(), response.address())
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::CheckReadiness, _1, request, retriedTimes, isRecovering))
         .Then([aid(GetAID()), request, isRecovering](const Status &status) -> litebus::Future<Status> {
@@ -6599,4 +6615,3 @@ litebus::Future<Status> InstanceCtrlActor::UnregisterTraefikRoute(const std::str
         });
 }
 }  // namespace functionsystem::local_scheduler
-
