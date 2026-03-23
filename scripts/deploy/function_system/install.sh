@@ -321,6 +321,15 @@ function install_faas_frontend() {
     sed -i "s*{etcdKeyFile}**g" ${install_init_frontend_config}
   fi
   GO_RUNTIME_BIN=${RUNTIME_HOME_DIR}/service/go/bin
+  # Extract OTLP gRPC endpoint from TRACE_CONFIG for frontend OTel tracer
+  local otel_grpc_endpoint=""
+  local otel_enable_sample="false"
+  if [ "X${ENABLE_TRACE}" = "Xtrue" ] && [ -n "${TRACE_CONFIG}" ]; then
+    otel_grpc_endpoint=$(echo "${TRACE_CONFIG}" | grep -oP '"endpoint"\s*:\s*"\K[^"]+' | head -1)
+    if [ -n "${otel_grpc_endpoint}" ]; then
+      otel_enable_sample="true"
+    fi
+  fi
   POD_NAME="frontend-process" \
   FUNCTION_LIB_PATH=${PATTERN_FAAS_HOME_DIR}/faasfrontend/faasfrontend.so \
   INIT_ARGS_FILE_PATH=${install_init_frontend_config} \
@@ -340,6 +349,9 @@ function install_faas_frontend() {
   DATASYSTEM_ADDR=${IP_ADDRESS}:${DS_WORKER_PORT} \
   INSTANCE_ID="driver-faas-frontend-${NODE_ID}" \
   FAAS_LOG_PATH=${FS_LOG_PATH} \
+  OTEL_GRPC_ENDPOINT="${otel_grpc_endpoint}" \
+  OTEL_ENABLE_SAMPLE="${otel_enable_sample}" \
+  OTEL_SERVICE_NAME="faas-frontend" \
   ${GO_RUNTIME_BIN}/goruntime \
   -jobId=${NODE_ID} \
   -runtimeId='faas_frontend_libruntime' \
