@@ -263,7 +263,8 @@ inline std::shared_ptr<runtime_rpc::StreamingMessage> GenStateLoadRspStreamMessa
 
 inline std::shared_ptr<messages::DeployInstanceResponse> BuildDeployInstanceResponse(
     const messages::StartInstanceResponse &startInstanceResponse,
-    const std::shared_ptr<messages::DeployInstanceRequest> &request)
+    const std::shared_ptr<messages::DeployInstanceRequest> &request,
+    const std::string &portMappings = "")
 {
     auto deployInstanceResponse = std::make_shared<messages::DeployInstanceResponse>();
     deployInstanceResponse->set_code(startInstanceResponse.code());
@@ -274,6 +275,10 @@ inline std::shared_ptr<messages::DeployInstanceResponse> BuildDeployInstanceResp
     deployInstanceResponse->set_address(startInstanceResponse.startruntimeinstanceresponse().address());
     deployInstanceResponse->set_cputype(startInstanceResponse.startruntimeinstanceresponse().cputype());
     deployInstanceResponse->set_pid(startInstanceResponse.startruntimeinstanceresponse().pid());
+    deployInstanceResponse->set_containerid(startInstanceResponse.startruntimeinstanceresponse().containerid());
+    if (!portMappings.empty()) {
+        deployInstanceResponse->set_portmappings(portMappings);
+    }
     return deployInstanceResponse;
 }
 

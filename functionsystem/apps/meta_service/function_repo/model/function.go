@@ -52,6 +52,13 @@ type ResourceAffinitySelector struct {
 	Priority int    `form:"priority" json:"priority"`
 }
 
+// AutoScaleConfig -
+type AutoScaleConfig struct {
+	SLAQuota      int `json:"slaQuota" valid:"optional" default:"-1"`
+	ScaleDownTime int `json:"scaleDownTime" valid:"optional" default:"-1"`
+	BurstScaleNum int `json:"burstScaleNum" valid:"optional" default:"-1"`
+}
+
 type FunctionBasicInfo struct {
 	Layers                    []string                   `json:"layers"`
 	Memory                    int64                      `json:"memory"`
@@ -85,6 +92,13 @@ type FunctionBasicInfo struct {
 	CodeUploadType            string                     `form:"codeUploadType" json:"codeUploadType"`
 	PoolID                    string                     `form:"poolId" json:"poolId" valid:"optional,poolId~pool id can contain only lowercase letters;digits and - it cannot start or end with - and cannot exceed 40 characters or less than 1 characters"`
 	EnableAgentSession        bool                       `form:"enableAgentSession" json:"enableAgentSession"`
+	IdleTime                  int64                      `form:"idleTime" json:"idleTime"`
+	WarmupType                string                     `json:"warmup" valid:",optional"`
+	RootfsSpecMeta            types.RootfsSpecMeta       `json:"rootfs" valid:",optional"`
+	AutoScaleConfig           AutoScaleConfig            `json:"autoScaleConfig" valid:",optional"`
+	SchedulePolicy            string                     `json:"schedulePolicy" valid:",optional"`
+	ScalePolicy               string                     `json:"scalePolicy" valid:",optional"`
+	IsFuncPublic              bool                       `json:"isFuncPublic" valid:"optional"`
 }
 
 // FunctionCreateRequest -
@@ -148,6 +162,15 @@ func (c *FunctionBasicInfo) setDefault(configs config.Configs) {
 	if c.Timeout == 0 {
 		c.Timeout = configs.FunctionCfg.DefaultCfg.Timeout
 	}
+	if c.AutoScaleConfig.SLAQuota == 0 {
+		c.AutoScaleConfig.SLAQuota = -1
+	}
+	if c.AutoScaleConfig.ScaleDownTime == 0 {
+		c.AutoScaleConfig.ScaleDownTime = -1
+	}
+	if c.AutoScaleConfig.BurstScaleNum == 0 {
+		c.AutoScaleConfig.BurstScaleNum = -1
+	}
 }
 
 func checkRuntime(configs config.Configs, runtime string) error {
@@ -197,6 +220,7 @@ type FunctionInfo struct {
 	base.FunctionCommonInfo
 	FuncLayer []Layer      `json:"funcLayer"`
 	Device    types.Device `json:"device,omitempty"`
+	Kind      string       `json:"kind,omitempty"`
 }
 
 // GetFunctionResponse is response of getting function
@@ -246,8 +270,7 @@ type FunctionPolicyRequest struct {
 }
 
 // FunctionPolicyResponse -
-type FunctionPolicyResponse struct {
-}
+type FunctionPolicyResponse struct{}
 
 // DateTime time
 type DateTime struct {
@@ -368,32 +391,36 @@ func checkWorkerParams(minInstance int, maxInstance int, configs config.Configs,
 // FunctionVersion indicates the function instance information of the interface.
 type FunctionVersion struct {
 	Function
-	FunctionVersionURN string             `json:"functionVersionUrn"`
-	RevisionID         string             `json:"revisionId"`
-	CodeSize           int64              `json:"codeSize"`
-	CodeSha256         string             `json:"codeSha256"`
-	BucketID           string             `json:"bucketId"`
-	ObjectID           string             `json:"objectId"`
-	Handler            string             `json:"handler"`
-	Layers             []string           `json:"layers"`
-	CPU                int64              `json:"cpu"`
-	Memory             int64              `json:"memory"`
-	Runtime            string             `json:"runtime"`
-	Timeout            int64              `json:"timeout"`
-	VersionNumber      string             `json:"versionNumber"`
-	VersionDesc        string             `json:"versionDesc"`
-	Environment        map[string]string  `json:"environment"`
-	CustomResources    map[string]float64 `json:"customResources"`
-	StatefulFlag       int                `json:"statefulFlag"`
-	LastModified       string             `json:"lastModified"`
-	Published          string             `json:"Published"`
-	MinInstance        int64              `json:"minInstance"`
-	MaxInstance        int64              `json:"maxInstance"`
-	ConcurrentNum      int                `json:"concurrentNum"`
-	FuncLayer          []FunctionLayer    `json:"funcLayer"`
-	Status             string             `json:"status"`
-	InstanceNum        int64              `json:"instanceNum"`
-	Device             types.Device       `json:"device,omitempty"`
+	FunctionVersionURN string               `json:"functionVersionUrn"`
+	RevisionID         string               `json:"revisionId"`
+	StorageType        string               `json:"storageType"`
+	CodeSize           int64                `json:"codeSize"`
+	CodeSha256         string               `json:"codeSha256"`
+	CodePath           string               `json:"codePath"`
+	BucketID           string               `json:"bucketId"`
+	ObjectID           string               `json:"objectId"`
+	Handler            string               `json:"handler"`
+	Layers             []string             `json:"layers"`
+	CPU                int64                `json:"cpu"`
+	Memory             int64                `json:"memory"`
+	Runtime            string               `json:"runtime"`
+	Timeout            int64                `json:"timeout"`
+	VersionNumber      string               `json:"versionNumber"`
+	VersionDesc        string               `json:"versionDesc"`
+	Environment        map[string]string    `json:"environment"`
+	CustomResources    map[string]float64   `json:"customResources"`
+	StatefulFlag       int                  `json:"statefulFlag"`
+	LastModified       string               `json:"lastModified"`
+	Published          string               `json:"Published"`
+	MinInstance        int64                `json:"minInstance"`
+	MaxInstance        int64                `json:"maxInstance"`
+	ConcurrentNum      int                  `json:"concurrentNum"`
+	FuncLayer          []FunctionLayer      `json:"funcLayer"`
+	Status             string               `json:"status"`
+	InstanceNum        int64                `json:"instanceNum"`
+	Device             types.Device         `json:"device,omitempty"`
+	Kind               string               `json:"kind,omitempty"`
+	RootfsSpecMeta     types.RootfsSpecMeta `json:"rootfs" valid:",optional"`
 }
 
 // Function is function entity
@@ -411,43 +438,47 @@ type Function struct {
 
 // FunctionForUser describes function info
 type FunctionForUser struct {
-	ID                  string             `json:"id"`
-	CreateTime          string             `json:"createTime"`
-	UpdateTime          string             `json:"updateTime"`
-	FunctionURN         string             `json:"functionUrn"`
-	FunctionName        string             `json:"name"`
-	TenantID            string             `json:"tenantId"`
-	BusinessID          string             `json:"businessId"`
-	ProductID           string             `json:"productId"`
-	ReversedConcurrency int                `json:"reversedConcurrency"`
-	Description         string             `json:"description"`
-	Tag                 map[string]string  `json:"tag"`
-	FunctionVersionURN  string             `json:"functionVersionUrn"`
-	RevisionID          string             `json:"revisionId"`
-	CodeSize            int64              `json:"codeSize"`
-	CodeSha256          string             `json:"codeSha256"`
-	BucketID            string             `json:"bucketId"`
-	ObjectID            string             `json:"objectId"`
-	Handler             string             `json:"handler"`
-	Layers              []string           `json:"layers"`
-	CPU                 int                `json:"cpu"`
-	Memory              int                `json:"memory"`
-	Runtime             string             `json:"runtime"`
-	Timeout             int                `json:"timeout"`
-	VersionNumber       string             `json:"versionNumber"`
-	VersionDesc         string             `json:"versionDesc"`
-	Environment         map[string]string  `json:"environment"`
-	CustomResources     map[string]float64 `json:"customResources"`
-	StatefulFlag        int                `json:"statefulFlag"`
-	LastModified        string             `json:"lastModified"`
-	Published           string             `json:"Published"`
-	MinInstance         int                `json:"minInstance"`
-	MaxInstance         int                `json:"maxInstance"`
-	ConcurrentNum       int                `json:"concurrentNum"`
-	FuncLayer           []Layer            `json:"funcLayer"`
-	Status              string             `json:"status"`
-	InstanceNum         int                `json:"instanceNum"`
-	Device              types.Device       `json:"device,omitempty"`
+	ID                  string               `json:"id"`
+	CreateTime          string               `json:"createTime"`
+	UpdateTime          string               `json:"updateTime"`
+	FunctionURN         string               `json:"functionUrn"`
+	FunctionName        string               `json:"name"`
+	TenantID            string               `json:"tenantId"`
+	BusinessID          string               `json:"businessId"`
+	ProductID           string               `json:"productId"`
+	ReversedConcurrency int                  `json:"reversedConcurrency"`
+	Description         string               `json:"description"`
+	Tag                 map[string]string    `json:"tag"`
+	FunctionVersionURN  string               `json:"functionVersionUrn"`
+	RevisionID          string               `json:"revisionId"`
+	StorageType         string               `json:"storageType"`
+	CodeSize            int64                `json:"codeSize"`
+	CodeSha256          string               `json:"codeSha256"`
+	CodePath            string               `json:"codePath"`
+	BucketID            string               `json:"bucketId"`
+	ObjectID            string               `json:"objectId"`
+	Handler             string               `json:"handler"`
+	Layers              []string             `json:"layers"`
+	CPU                 int                  `json:"cpu"`
+	Memory              int                  `json:"memory"`
+	Runtime             string               `json:"runtime"`
+	Timeout             int                  `json:"timeout"`
+	VersionNumber       string               `json:"versionNumber"`
+	VersionDesc         string               `json:"versionDesc"`
+	Environment         map[string]string    `json:"environment"`
+	CustomResources     map[string]float64   `json:"customResources"`
+	StatefulFlag        int                  `json:"statefulFlag"`
+	LastModified        string               `json:"lastModified"`
+	Published           string               `json:"Published"`
+	MinInstance         int                  `json:"minInstance"`
+	MaxInstance         int                  `json:"maxInstance"`
+	ConcurrentNum       int                  `json:"concurrentNum"`
+	FuncLayer           []Layer              `json:"funcLayer"`
+	Status              string               `json:"status"`
+	InstanceNum         int                  `json:"instanceNum"`
+	Device              types.Device         `json:"device,omitempty"`
+	Kind                string               `json:"kind,omitempty"`
+	RootfsSpecMeta      types.RootfsSpecMeta `json:"rootfs" valid:",optional"`
 }
 
 // GetFunctionResponseForUser is response of function info

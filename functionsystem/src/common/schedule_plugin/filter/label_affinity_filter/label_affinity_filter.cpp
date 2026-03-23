@@ -87,7 +87,7 @@ bool AffinityScorerMeetOptimal(const std::string &unitID, const affinity::Select
     if (selector.condition().subconditions().empty()) {
         return true;
     }
-    int64_t score = 0;
+    double score = 0.0;
     if (anti) {
         score = AntiAffinityScorer(unitID, selector, labels);
     } else {

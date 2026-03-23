@@ -17,6 +17,16 @@
 #include "call_cache.h"
 
 namespace functionsystem::busproxy {
+
+void CallCache::ReportTraffic()
+{
+    if (trafficReport_ == nullptr) {
+        return;
+    }
+    auto size = requestMap_.size();
+    trafficReport_(size == 0, size);
+}
+
 void CallCache::Push(const std::shared_ptr<CallRequestContext> &context)
 {
     if (requestMap_.find(context->requestID) != requestMap_.end()) {
@@ -24,6 +34,7 @@ void CallCache::Push(const std::shared_ptr<CallRequestContext> &context)
     }
     (void)reqNew_.insert(context->requestID);
     requestMap_[context->requestID] = context;
+    ReportTraffic();
 }
 
 void CallCache::PushOnResp(const std::shared_ptr<CallRequestContext> &context)
@@ -59,18 +70,21 @@ void CallCache::DeleteReqInProgress(const std::string &requestID)
 {
     (void)reqInProgress_.erase(requestID);
     (void)requestMap_.erase(requestID);
+    ReportTraffic();
 }
 
 void CallCache::DeleteReqNew(const std::string &requestID)
 {
     (void)reqNew_.erase(requestID);
     (void)requestMap_.erase(requestID);
+    ReportTraffic();
 }
 
 void CallCache::DeleteReqOnResp(const std::string &requestID)
 {
     (void)reqOnResp_.erase(requestID);
     (void)requestMap_.erase(requestID);
+    ReportTraffic();
 }
 
 std::unordered_set<std::string> CallCache::GetNewReqs()

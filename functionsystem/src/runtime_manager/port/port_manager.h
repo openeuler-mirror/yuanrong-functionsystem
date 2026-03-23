@@ -20,6 +20,7 @@
 #include <string>
 #include <unordered_map>
 #include <map>
+#include <vector>
 #include "common/utils/singleton.h"
 
 namespace functionsystem::runtime_manager {
@@ -61,6 +62,24 @@ public:
      * @return success if found port resource and release.
      */
     int ReleasePort(const std::string &runtimeID);
+
+    /**
+     * Request multiple port resources atomically for port forwarding.
+     * Rolls back all allocations if count ports cannot be satisfied.
+     *
+     * @param runtimeID Runtime id to associate ports with.
+     * @param count Number of ports to allocate.
+     * @return Allocated port numbers, or empty vector if insufficient ports.
+     */
+    std::vector<int> RequestPorts(const std::string &runtimeID, int count);
+
+    /**
+     * Release all port resources associated with a runtimeID.
+     * Used when container with multiple forwarded ports is stopped.
+     *
+     * @param runtimeID Runtime id whose ports should all be freed.
+     */
+    void ReleasePorts(const std::string &runtimeID);
 
     /**
      * Clear port map when resource manager is closed.

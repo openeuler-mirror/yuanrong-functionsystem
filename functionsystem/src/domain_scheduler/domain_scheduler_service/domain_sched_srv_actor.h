@@ -99,6 +99,8 @@ public:
      */
     void ResponseNotifySchedAbnormal(const litebus::AID &from, std::string &&name, std::string &&msg);
 
+    void OnTenantQuotaExceeded(const litebus::AID &from, std::string &&name, std::string &&msg);
+
     /* *
      * Schedule interface for uplayer scheduler
      * @param from: Uplayer AID

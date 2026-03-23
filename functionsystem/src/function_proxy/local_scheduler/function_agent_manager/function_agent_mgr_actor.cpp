@@ -92,6 +92,7 @@ void FunctionAgentMgrActor::Init()
     Receive("SetNetworkIsolationResponse", &FunctionAgentMgrActor::SetNetworkIsolationResponse);
     Receive("UpdateLocalStatus", &FunctionAgentMgrActor::UpdateLocalStatus);
     Receive("UpdateCredResponse", &FunctionAgentMgrActor::UpdateCredResponse);
+    Receive("SnapshotRuntimeResponse", &FunctionAgentMgrActor::SnapshotRuntimeResponse);
     Receive("QueryDebugInstanceInfosResponse", &FunctionAgentMgrActor::QueryDebugInstanceInfosResponse);
     Receive("StaticFunctionScheduleRequest", &FunctionAgentMgrActor::StaticFunctionScheduleRequest);
     Receive("NotifyFunctionStatusChangeResp", &FunctionAgentMgrActor::NotifyFunctionStatusChangeResp);
@@ -252,6 +253,8 @@ litebus::Future<Status> FunctionAgentMgrActor::EnableFuncAgent(const litebus::Fu
         req->set_timeoutsec(funcAgentsRegisMap_[funcAgentID].evicttimeoutsec());
         EvictInstanceOnAgent(req);
     }
+    auto instanceCtrl = instanceCtrl_.lock();
+    instanceCtrl->TriggerToWarmUpFunction(funcAgentID);
     return Status(StatusCode::SUCCESS);
 }
 
@@ -279,8 +282,7 @@ litebus::Future<Status> FunctionAgentMgrActor::AddFuncAgent(const Status &status
 
 void FunctionAgentMgrActor::Register(const litebus::AID &from, string &&name, string &&msg)
 {
-    YRLOG_INFO("receive register from {}. name {} msg {}.",
-                    from.HashString(), name, msg);
+    YRLOG_INFO("receive register from {}. name {}.", from.HashString(), name);
     if (!IsReady()) {
         YRLOG_WARN("local_scheduler is not recovered, ignore register from {}", from.HashString());
         return;
@@ -460,7 +462,8 @@ void FunctionAgentMgrActor::UpdateResources(const litebus::AID &from, string &&,
     if (auto resourceView = resourceView_.lock()) {
         if (funcAgentTable_[aidTable_[from]].isInit) {
             auto unit = std::make_shared<resource_view::ResourceUnit>(std::move(*req.mutable_resourceunit()));
-            (void)resourceView->UpdateResourceUnit(unit, resource_view::UpdateType::UPDATE_ACTUAL);
+            // todo: pass flag to indicate whether to update only actual resources
+            (void)resourceView->UpdateResourceUnit(unit, resource_view::UpdateType::UPDATE_DYNAMIC);
         } else {
             YRLOG_DEBUG("start to add resource of agent({}) to view.", from.HashString());
             funcAgentTable_[aidTable_[from]].isInit = true;
@@ -546,8 +549,8 @@ void FunctionAgentMgrActor::DeployInstanceResp(const litebus::AID &from, string 
     (void)agentDeployNotifyPromise->second.erase(requestID);
     (void)funcAgentTable_[funcAgentID].instanceIDs.insert(resp.instanceid());
 
-    YRLOG_INFO("{}|deploy instance({}) successfully on {}. address:{}, pid:{}", requestID, resp.instanceid(),
-               funcAgentID, resp.address(), resp.pid());
+    YRLOG_INFO("{}|deploy instance({}) on {}. address:{} pid:{} code:{} message:{}", requestID, resp.instanceid(),
+               funcAgentID, resp.address(), resp.pid(), resp.code(), resp.message());
 }
 
 void FunctionAgentMgrActor::KillInstanceResp(const litebus::AID &from, string &&, string &&msg)
@@ -964,7 +967,7 @@ litebus::Future<Status> FunctionAgentMgrActor::StartHeartbeat(const string &func
             YRLOG_WARN("heartbeat timeout, from agent to proxy. from: {}.", std::string(from));
             litebus::Async(aid, &FunctionAgentMgrActor::TimeoutEvent, funcAgentID);
         });
-    
+
     pingPongAIDMap_[funcAgentID] = pingPongAID;
 
     return Status(StatusCode::SUCCESS);
@@ -1309,7 +1312,7 @@ void FunctionAgentMgrActor::QueryInstanceStatusInfoResponse(const litebus::AID &
 {
     messages::QueryInstanceStatusResponse rsp;
     if (!rsp.ParseFromString(msg)) {
-        YRLOG_ERROR("invalid instance status response from({}), {}", std::string(from), msg);
+        YRLOG_ERROR("invalid instance status response from({})", std::string(from));
         return;
     }
     YRLOG_INFO("{}|got instance status response from({}), {}", rsp.requestid(), std::string(from),
@@ -1400,7 +1403,7 @@ void FunctionAgentMgrActor::QueryDebugInstanceInfosResponse(const litebus::AID &
 {
     messages::QueryDebugInstanceInfosResponse rsp;
     if (!rsp.ParseFromString(msg)) {
-        YRLOG_ERROR("invalid debug instance response from({}), {}", std::string(from), msg);
+        YRLOG_ERROR("invalid debug instance response from({})", std::string(from));
         return;
     }
     YRLOG_INFO("{}|get debug instance info response from({}), {}", rsp.requestid(), std::string(from),
@@ -1523,6 +1526,64 @@ void FunctionAgentMgrActor::UpdateCredResponse(const litebus::AID &from, std::st
     auto requestID = response.requestid();
     YRLOG_INFO("{}|update token successfully", requestID);
     (void)updateTokenSync_.Synchronized(requestID, response);
+}
+
+litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::SnapshotRuntime(
+    const std::string &requestID,
+    const resource_view::InstanceInfo &instanceInfo,
+    int32_t ttl)
+{
+    // 1. 从 instanceInfo 获取 funcAgentID
+    std::string funcAgentID = instanceInfo.functionagentid();
+    std::string instanceID = instanceInfo.instanceid();
+
+    if (funcAgentID.empty()) {
+        messages::SnapshotRuntimeResponse result;
+        result.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
+        result.set_message(fmt::format("agent not found for instance {}", instanceID));
+        YRLOG_ERROR("{}|functionagentid is empty for instance", instanceID);
+        return result;
+    }
+
+    if (funcAgentTable_.find(funcAgentID) == funcAgentTable_.end()) {
+        messages::SnapshotRuntimeResponse result;
+        result.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        result.set_message("function agent is not registered");
+        YRLOG_ERROR("{}|failed to send snapshot runtime request, function agent {} is not registered.",
+                    instanceID, funcAgentID);
+        return result;
+    }
+
+    // 2. 构造 SnapshotRuntime 请求
+    auto request = std::make_shared<messages::SnapshotRuntimeRequest>();
+    request->set_requestid(requestID);
+    request->set_instanceid(instanceID);
+    request->set_runtimeid(instanceInfo.runtimeid());
+    request->set_containerid(instanceInfo.containerid());  // containerID is same as runtimeID in container mode
+    request->set_ttl(ttl);  // Set TTL from parameter
+    auto future = snapshotRuntimeSync_.AddSynchronizer(requestID);
+
+    YRLOG_INFO("{}|send SnapshotRuntime request to agent({}) for instance({}), ttl: {}",
+               requestID, funcAgentID, instanceID, ttl);
+    Send(funcAgentTable_[funcAgentID].aid, "SnapshotRuntime", request->SerializeAsString());
+
+    // 3. 将 SnapshotRuntimeResponse 消息转换为结构体
+    return future;
+}
+
+void FunctionAgentMgrActor::SnapshotRuntimeResponse(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    messages::SnapshotRuntimeResponse response;
+    if (msg.empty() || !response.ParseFromString(msg)) {
+        YRLOG_WARN("invalid request body, failed to get SnapshotRuntimeResponse from {}.", from.HashString());
+        return;
+    }
+
+    std::string requestID = response.requestid();
+    std::string checkpointID = response.has_snapshotinfo() ? response.snapshotinfo().checkpointid() : "N/A";
+    YRLOG_INFO("{}|received SnapshotRuntimeResponse, code: {}, checkpointID: {}",
+               requestID, response.code(), checkpointID);
+    (void)snapshotRuntimeSync_.Synchronized(requestID, response);
 }
 
 litebus::Future<Status> FunctionAgentMgrActor::EvictAgent(const std::shared_ptr<messages::EvictAgentRequest> &req)
@@ -1823,7 +1884,7 @@ bool FunctionAgentMgrActor::OnTenantInstanceInPodAllDeleted(
 
 void FunctionAgentMgrActor::OnTenantUpdateInstance(const TenantEvent &event)
 {
-    // key: /sn/instance/business/yrk/tenant/12345678901234561234567890123456/function/0-system-faasscheduler/
+    // key: /sn/instance/business/yrk/tenant/default/function/0-system-faasscheduler/
     // version/$latest/defaultaz/941e253514a11c24/a1a262a8-ec21-4000-8000-000000581e3f
     if (event.code != static_cast<int32_t>(InstanceState::RUNNING)) {
         // The tenant isolation feature only focuses on potential new pod IP events.
@@ -2050,6 +2111,50 @@ litebus::Future<Status> FunctionAgentMgrActor::SendStaticFunctionScheduleRespons
     Send(from, "StaticFunctionScheduleResponse", scheduleResponse.SerializeAsString());
     (void)staticFunctionScheduleRequestIDs_.erase(requestId);
     return Status::OK();
+}
+
+litebus::Future<Status> FunctionAgentMgrActor::RegisterToWarmUp(
+    const std::shared_ptr<messages::DeployInstanceRequest> &request,
+        const litebus::Option<std::string> &agentID)
+{
+    std::list<litebus::Future<messages::DeployInstanceResponse>> deployFutures;
+    YRLOG_INFO("debug:: {}", request->DebugString());
+    if (agentID.IsSome()) {
+        return DeployInstance(request, agentID.Get()).Then([](const messages::DeployInstanceResponse &resp) -> litebus::Future<Status> {
+            return Status(static_cast<StatusCode>(resp.code()), resp.message());
+        });
+    }
+    for (auto [agentID, agentInfo] : funcAgentTable_) {
+        YRLOG_INFO("send warm up deploy request to agent({})({}) for instance({})", agentID, std::string(agentInfo.aid),
+                   request->instanceid());
+        deployFutures.push_back(DeployInstance(request, agentID));
+    }
+    return litebus::Collect(deployFutures).Then(
+        [aid(GetAID()), request](const std::list<messages::DeployInstanceResponse> &resps) -> litebus::Future<Status> {
+            // todo collect deploy responses
+            for (auto &resp : resps) {
+                if (resp.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+                    return Status(static_cast<StatusCode>(resp.code()), resp.message());
+                }
+            }
+            return Status::OK();
+        });
+}
+
+litebus::Future<Status> FunctionAgentMgrActor::UnRegisterWarmUp(
+        const std::shared_ptr<messages::KillInstanceRequest> &request)
+{
+    std::list<litebus::Future<messages::KillInstanceResponse>> killFutures;
+    for (auto [agentID, agentInfo] : funcAgentTable_) {
+        YRLOG_INFO("send unregister kill request to agent({})({}) for instance({})", agentID, std::string(agentInfo.aid),
+                   request->instanceid());
+        killFutures.push_back(KillInstance(request, agentID, false));
+    }
+    return litebus::Collect(killFutures).Then(
+        [aid(GetAID()), request](const std::list<messages::KillInstanceResponse> &resps) -> litebus::Future<Status> {
+            // todo collect deploy responses
+            return Status::OK();
+        });
 }
 
 }  // namespace functionsystem::local_scheduler

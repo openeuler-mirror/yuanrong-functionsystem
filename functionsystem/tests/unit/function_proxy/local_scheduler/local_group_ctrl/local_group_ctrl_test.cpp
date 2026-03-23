@@ -684,14 +684,16 @@ TEST_F(LocalGroupCtrlTest, GroupScheduleLocalSuccessful)
                       InstanceReadyCallBack callback) { callback(Status::OK()); })));
     EXPECT_CALL(*mockInstanceCtrl_, ToCreating).WillRepeatedly(Return(AsyncReturn(Status::OK())));
     auto mockSharedClient = std::make_shared<MockSharedClient>();
+    // Both GroupSchedule calls (original + duplicate) each notify srcInstanceID, so allow multiple calls.
     EXPECT_CALL(*clientManager_, GetControlInterfacePosixClient(_))
-        .WillOnce(Return(AsyncReturn(std::dynamic_pointer_cast<ControlInterfacePosixClient>(mockSharedClient))));
+        .WillRepeatedly(Return(AsyncReturn(std::dynamic_pointer_cast<ControlInterfacePosixClient>(mockSharedClient))));
     litebus::Promise<runtime::NotifyRequest> notifyCalled;
     EXPECT_CALL(*mockSharedClient, NotifyResult(_))
         .WillOnce(Invoke([notifyCalled](runtime::NotifyRequest &&request) -> litebus::Future<runtime::NotifyResponse> {
             notifyCalled.SetValue(request);
             return runtime::NotifyResponse();
-        }));
+        }))
+        .WillRepeatedly(Return(runtime::NotifyResponse()));
     auto future = localGroupCtrl_->GroupSchedule("srcInstanceID", createRequests);
     auto future1 = localGroupCtrl_->GroupSchedule("srcInstanceID", createRequests);
     ASSERT_AWAIT_READY(future);

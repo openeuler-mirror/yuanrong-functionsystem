@@ -36,6 +36,8 @@ public:
     virtual litebus::Future<runtime::CheckpointResponse> Checkpoint(runtime::CheckpointRequest &&request);
     virtual litebus::Future<runtime::RecoverResponse> Recover(runtime::RecoverRequest &&request,
                                                               uint64_t timeoutMs = DEFAULT_RECOVER_TIMEOUT_MS);
+    virtual litebus::Future<runtime::PrepareSnapResponse> PrepareSnap(runtime::PrepareSnapRequest &&request);
+    virtual litebus::Future<runtime::SnapStartedResponse> SnapStarted(runtime::SnapStartedRequest &&request);
 };
 }  // namespace functionsystem
 

@@ -106,6 +106,7 @@ Flags::Flags()
             "proxy is abnormal when heartbeat lost and lease expired", false);
     AddFlag(&Flags::domainHeartbeatTimeoutMs_, "domain_heartbeat_timeout", "set the domain heartbeat timeout, ms",
             DEFAULT_DOMAIN_HEARTBEAT_TIMEOUT, NumCheck(MIN_DOMAIN_HEARTBEAT_TIMEOUT, MAX_DOMAIN_HEARTBEAT_TIMEOUT));
+    AddFlag(&Flags::systemTenantID_, "system_tenant_id", "system tenant id for querying all tenants' instances", "0");
     InitScalerFlags();
     InitMetaStoreFlags();
 }

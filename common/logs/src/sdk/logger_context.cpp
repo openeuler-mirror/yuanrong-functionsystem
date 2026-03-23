@@ -105,8 +105,9 @@ LogsApi::YrLogger LoggerContext::CreateLogger(const LogsApi::LogParam &logParam)
         const auto logLevel = GetLogLevel(logParam.logLevel);
         logger->set_level(logLevel);
 
-        // log with international UTC time
-        logger->set_pattern(logParam.pattern, yr_spdlog::pattern_time_type::utc);
+        // log with UTC or local time based on configuration
+        auto timeType = logParam.useUtcTime ? yr_spdlog::pattern_time_type::utc : yr_spdlog::pattern_time_type::local;
+        logger->set_pattern(logParam.pattern, timeType);
         return logger;
     } catch (std::exception &e) {
         std::cerr << "failed to init logger, error: " << e.what() << std::endl;

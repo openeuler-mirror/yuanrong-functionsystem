@@ -40,11 +40,14 @@
 #include "common/utils/param_check.h"
 #include "common/utils/ssl_config.h"
 #include "common/utils/version.h"
+#include "common/trace/trace_manager.h"
 #include "global_scheduler/global_sched.h"
 #include "global_scheduler/global_sched_driver.h"
 #include "group_manager.h"
 #include "group_manager_actor.h"
 #include "instance_manager.h"
+#include "function_master/instance_manager/quota_manager/quota_config.h"
+#include "function_master/instance_manager/quota_manager/quota_manager_actor.h"
 #include "instance_manager/instance_manager_driver.h"
 #include "instance_manager_actor.h"
 #include "litebus.hpp"
@@ -55,6 +58,7 @@
 #include "meta_store_monitor/meta_store_monitor_factory.h"
 #include "resource_group_manager/resource_group_manager_driver.h"
 #include "scaler/scaler_driver.h"
+#include "snap_manager/snap_manager_driver.h"
 #include "system_function_loader/bootstrap_actor.h"
 #include "system_function_loader/bootstrap_driver.h"
 #include "utils/system_upgrade_switch_utils.h"
@@ -80,6 +84,7 @@ ScalerHandlers g_handlers;
 std::shared_ptr<meta_store::MetaStoreDriver> g_metaStoreDriver{ nullptr };
 std::shared_ptr<instance_manager::InstanceManager> g_instanceMgr{ nullptr };
 std::shared_ptr<resource_group_manager::ResourceGroupManagerDriver> g_resourceGroupManagerDriver = nullptr;
+std::shared_ptr<snap_manager::SnapManagerDriver> g_snapManagerDriver = nullptr;
 
 bool CheckFlags(const functionmaster::Flags &flags)
 {
@@ -131,6 +136,16 @@ void OnDestroy()
         YRLOG_INFO("success to stop GlobalScheduler");
     } else {
         YRLOG_WARN("failed to stop GlobalScheduler");
+    }
+
+    if (g_snapManagerDriver != nullptr) {
+        if (g_snapManagerDriver->Stop().IsOk()) {
+            g_snapManagerDriver->Await();
+            g_snapManagerDriver = nullptr;
+            YRLOG_INFO("success to stop SnapManager");
+        } else {
+            YRLOG_WARN("failed to stop SnapManager");
+        }
     }
 
     // instance manager only can be stopped after bootstrap, because instances
@@ -239,7 +254,7 @@ bool CreateClient(const functionmaster::Flags &flags)
         .checkIntervalMs = flags.GetGetHealthMonitorRetryInterval(),
         .k8sInfo = flags.GetClusterID(),
     };
-    
+
     g_kubeClient = KubeClient::CreateKubeClient(
         flags.GetK8sBasePath(),
         KubeClient::ClusterSslConfig(flags.GetK8sClientCertFile(), flags.GetK8sClientKeyFile(),
@@ -361,12 +376,20 @@ bool InitInstanceManagerDriver(const functionmaster::Flags &flags, const std::sh
                                                      .libPath = flags.GetLibPath(),
                                                      .functionMetaPath = flags.GetFunctionMetaPath(),
                                                      .enableAbnormalDoubleCheck =
-                                                         flags.GetEnableAbnormalDoubleCheck() });
+                                                         flags.GetEnableAbnormalDoubleCheck(),
+                                                     .systemTenantID = flags.GetSystemTenantID() });
     g_instanceMgr = std::make_shared<::instance_manager::InstanceManager>(instanceMgrActor);
     metaStoreMonitor->RegisterHealthyObserver(g_instanceMgr);
     groupMgrActor->BindInstanceManager(g_instanceMgr);
 
-    g_instanceMgrDriver = std::make_shared<::instance_manager::InstanceManagerDriver>(instanceMgrActor, groupMgrActor);
+    // Create QuotaManagerActor if quota config file is specified
+    std::shared_ptr<function_master::QuotaManagerActor> quotaMgrActor;
+    auto quotaConfig = function_master::QuotaConfig::LoadFromFile(flags.GetQuotaConfigFile());
+    quotaMgrActor = std::make_shared<function_master::QuotaManagerActor>(std::move(quotaConfig));
+    YRLOG_INFO("QuotaManagerActor created with config file: {}", flags.GetQuotaConfigFile());
+
+    g_instanceMgrDriver = std::make_shared<::instance_manager::InstanceManagerDriver>(
+        instanceMgrActor, groupMgrActor, quotaMgrActor);
 
     g_handlers.systemUpgradeHandler = [aid(instanceMgrActor->GetAID())](bool isUpgrading) {
         litebus::Async(aid, &instance_manager::InstanceManagerActor::HandleSystemUpgrade, isUpgrading);
@@ -392,6 +415,19 @@ bool InitResourceGroupManager(const std::shared_ptr<MetaStoreClient> &metaClient
         std::make_shared<resource_group_manager::ResourceGroupManagerDriver>(resourceGroupManagerActor);
     if (!g_resourceGroupManagerDriver->Start().IsOk()) {
         YRLOG_ERROR("failed to start resource group manager");
+        g_functionMasterSwitcher->SetStop();
+        return false;
+    }
+    return true;
+}
+
+bool InitSnapManagerDriver(const std::shared_ptr<MetaStoreClient> &metaClient,
+                           const std::shared_ptr<global_scheduler::GlobalSched> &globalSched)
+{
+    auto snapManagerActor = std::make_shared<snap_manager::SnapManagerActor>(metaClient, globalSched);
+    g_snapManagerDriver = std::make_shared<snap_manager::SnapManagerDriver>(snapManagerActor);
+    if (!g_snapManagerDriver->Start().IsOk()) {
+        YRLOG_ERROR("failed to start snap-manager");
         g_functionMasterSwitcher->SetStop();
         return false;
     }
@@ -494,6 +530,8 @@ void OnCreate(const functionmaster::Flags &flags)
     auto memOpt = MemoryOptimizer();
     memOpt.StartTrimming();
 
+    trace::TraceManager::GetInstance().InitTrace("yuanrong-kernel", flags.GetNodeID(), flags.GetEnableTrace(),
+                                                 flags.GetTraceConfig());
     // meta-store relay on k8s election
     if (flags.GetElectionMode() == K8S_ELECTION_MODE && !CreateExplorer(flags, nullptr)) {
         g_functionMasterSwitcher->SetStop();
@@ -536,6 +574,11 @@ void OnCreate(const functionmaster::Flags &flags)
     if (!InitResourceGroupManager(metaClient, globalSched)) {
         return;
     }
+
+    if (!InitSnapManagerDriver(metaClient, globalSched)) {
+        return;
+    }
+
     if (!InitInstanceManagerDriver(flags, metaClient, globalSched, metaStoreMonitor)) {
         return;
     }

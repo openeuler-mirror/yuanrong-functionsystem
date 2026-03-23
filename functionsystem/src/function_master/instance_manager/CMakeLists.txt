@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} INSTANCE_MANAGER_SRCS)
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/quota_manager QUOTA_MANAGER_SRCS)
+list(APPEND INSTANCE_MANAGER_SRCS ${QUOTA_MANAGER_SRCS})
 
 set(INSTANCE_MANAGER_LIB instance_manager_lib) # for this directory
 set(INSTANCE_MANAGER_LIB ${INSTANCE_MANAGER_LIB} PARENT_SCOPE) # for function_master directory
@@ -20,6 +22,7 @@ set_property(GLOBAL PROPERTY INSTANCE_MANAGER_DIR "${CMAKE_CURRENT_LIST_DIR}")
 set_property(GLOBAL PROPERTY INSTANCE_MANAGER_LIB ${INSTANCE_MANAGER_LIB})
 
 include_directories(${CMAKE_CURRENT_LIST_DIR})
+include_directories(${CMAKE_CURRENT_LIST_DIR}/quota_manager)
 
 add_library(${INSTANCE_MANAGER_LIB} STATIC
         ${INSTANCE_MANAGER_SRCS})
@@ -27,8 +30,9 @@ target_compile_options(${INSTANCE_MANAGER_LIB} PRIVATE -fPIE)
 
 target_include_directories(${INSTANCE_MANAGER_LIB} PRIVATE
         ${CMAKE_CURRENT_LIST_DIR})
-add_dependencies(${INSTANCE_MANAGER_LIB} meta_store_client meta_store_adapter service_json)
+add_dependencies(${INSTANCE_MANAGER_LIB} meta_store_client meta_store_adapter service_json metadata)
 target_link_libraries(${INSTANCE_MANAGER_LIB} PUBLIC
         meta_store_client
         meta_store_adapter
-        service_json)
+        service_json
+        metadata)

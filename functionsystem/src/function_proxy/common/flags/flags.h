@@ -57,6 +57,11 @@ public:
         return grpcListenPort_;
     }
 
+    const std::string &GetSessionGrpcPort() const
+    {
+        return sessionGrpcPort_;
+    }
+
     const std::string &GetMetaStoreAddress() const
     {
         return metaStoreAddress_;
@@ -407,6 +412,46 @@ public:
         return unRegisterWhileStop_;
     }
 
+    const bool &GetEnableMergeProcess() const
+    {
+        return enableMergeProcess_;
+    }
+
+    std::string GetDPosixUdsPath() const
+    {
+        return dPosixUdsPath_;
+    }
+
+    bool GetEnableTraefikRegistry() const
+    {
+        return enableTraefikRegistry_;
+    }
+
+    const std::string& GetTraefikEtcdPrefix() const
+    {
+        return traefikEtcdPrefix_;
+    }
+
+    int32_t GetTraefikLeaseTTL() const
+    {
+        return traefikLeaseTTL_;
+    }
+
+    const std::string& GetTraefikHttpEntryPoint() const
+    {
+        return traefikHttpEntryPoint_;
+    }
+
+    bool GetTraefikEnableTLS() const
+    {
+        return traefikEnableTLS_;
+    }
+
+    const std::string& GetTraefikServersTransport() const
+    {
+        return traefikServersTransport_;
+    }
+
 protected:
     void AddRuntimeFlags();
     void AddDSFlags();
@@ -423,6 +468,7 @@ protected:
     std::string address_;
     std::string ip_;
     std::string grpcListenPort_;
+    std::string sessionGrpcPort_;
     std::string schedulePolicy_;
     std::string metaStoreAddress_;
     std::string iamMetastoreAddress_;
@@ -494,6 +540,14 @@ protected:
     bool runtimeInstanceDebugEnable_{ false };  // deploy in docker only use false, in process use false or true
     bool diskUsageMonitorForceDeletePodEnable_{ false };
     bool unRegisterWhileStop_{ false };
+    bool enableMergeProcess_{ false };
+    std::string dPosixUdsPath_;
+    bool enableTraefikRegistry_{ false };
+    std::string traefikEtcdPrefix_ = "traefik";
+    int32_t traefikLeaseTTL_ = 300000;
+    std::string traefikHttpEntryPoint_ = "websecure";
+    bool traefikEnableTLS_ = true;
+    std::string traefikServersTransport_ = "yr-backend-tls@file";
 };
 
 }  // namespace functionsystem::function_proxy

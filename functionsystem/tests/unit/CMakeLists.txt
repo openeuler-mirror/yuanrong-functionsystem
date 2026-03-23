@@ -28,6 +28,7 @@ add_subdirectory(function_proxy)
 add_subdirectory(function_master)
 add_subdirectory(runtime_manager)
 add_subdirectory(function_agent) # function_agent test
+add_subdirectory(iam_server) # iam_server test
 
 get_property(SRC_INCLUDE_DIR GLOBAL PROPERTY "SRC_INCLUDE_DIR")
 get_property(SRC_BUSPROXY_INCLUDE_DIR GLOBAL PROPERTY "SRC_BUSPROXY_INCLUDE_DIR")
@@ -99,6 +100,7 @@ target_link_libraries(${UNIT_TEST_MODULE} PRIVATE
         profile
         yaml_tool
         metrics_adapter
+        metadata
         ${PLUGIN_LIB}
         pthread
 )

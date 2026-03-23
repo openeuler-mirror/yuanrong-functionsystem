@@ -24,6 +24,7 @@
 #include "common/constants/signal.h"
 #include "common/logs/logging.h"
 #include "common/metadata/metadata.h"
+#include "common/metrics/metrics_adapter.h"
 #include "common/service_json/service_json.h"
 #include "common/types/instance_state.h"
 #include "common/utils/collect_status.h"
@@ -40,6 +41,34 @@ const std::string KEY_AGENT_INFO_PATH = "/yr/agentInfo/";
 const std::string KEY_BUSPROXY_PATH_PREFIX = "/yr/busproxy/business/yrk/tenant/0/node/";
 const int64_t CANCEL_TIMEOUT = 5000;
 const int64_t ABNORMAL_GC_TIMEOUT = 2 * 60 * 60 * 1000; // 2 hour
+const int64_t INSTANCE_COUNT_REPORT_INTERVAL = 10 * 1000; // 10 seconds
+const int64_t GARBAGE_COLLECT_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const uint64_t FATAL_INSTANCE_TIMEOUT = 3600; // 1 hour in seconds
+
+/**
+ * Parse tenantID from instance key.
+ * Key format: /sn/instance/business/yrk/tenant/{tenantID}/function/{function}/version/{version}/defaultaz/{requestID}/{instanceID}
+ * @param instanceKey The instance key path
+ * @return The tenantID, or empty string if parsing fails
+ */
+static std::string ParseTenantIDFromInstanceKey(const std::string &instanceKey)
+{
+    static const std::string PREFIX = INSTANCE_PATH_PREFIX + "/";
+    if (instanceKey.empty() || instanceKey.size() <= PREFIX.size()) {
+        return "";
+    }
+
+    // Extract the part after the prefix
+    std::string remaining = instanceKey.substr(PREFIX.size());
+
+    // Split by "/" and get the first segment (tenantID)
+    auto pos = remaining.find('/');
+    if (pos == std::string::npos) {
+        return "";
+    }
+
+    return remaining.substr(0, pos);
+}
 
 static messages::ForwardKillResponse GenerateForwardKillResponse(const messages::ForwardKillRequest &req,
                                                                         int32_t state, const std::string &msg)
@@ -74,6 +103,7 @@ InstanceManagerActor::InstanceManagerActor(const std::shared_ptr<MetaStoreClient
     member_->groupManager = groupManager;
     member_->resourceGroupManager = resourceGroupManager;
     member_->family = std::make_shared<InstanceFamilyCaches>();
+    member_->systemTenantID = param.systemTenantID;
 }
 
 bool InstanceManagerActor::UpdateLeaderInfo(const LeaderInfo &leaderInfo)
@@ -105,13 +135,6 @@ void InstanceManagerActor::Init()
     (void)businesses_.emplace(MASTER_BUSINESS, masterBusiness);
     (void)businesses_.emplace(SLAVE_BUSINESS, slaveBusiness);
 
-    YRLOG_INFO("load local function");
-    std::unordered_map<std::string, FunctionMeta> funcMetaMap{};
-    LoadLocalFuncMeta(funcMetaMap, member_->functionMetaPath);
-    service_json::LoadFuncMetaFromServiceYaml(funcMetaMap, member_->servicesPath, member_->libPath);
-    for (const auto &item : funcMetaMap) {
-        member_->innerFuncMetaKeys.emplace(item.first);
-    }
     member_->globalScheduler->LocalSchedAbnormalCallback(
         [aid(GetAID())](const std::string &nodeID) -> litebus::Future<Status> {
             // blocked until migration is complete, then global scheduler update topology.
@@ -132,6 +155,14 @@ void InstanceManagerActor::Init()
         [aid(GetAID())](const std::string &nodeID) {
             litebus::Async(aid, &InstanceManagerActor::AddNode, nodeID);
         });
+
+    YRLOG_INFO("load local function");
+    std::unordered_map<std::string, FunctionMeta> funcMetaMap{};
+    LoadLocalFuncMeta(funcMetaMap, member_->functionMetaPath);
+    service_json::LoadFuncMetaFromServiceYaml(funcMetaMap, member_->servicesPath, member_->libPath);
+    for (const auto &item : funcMetaMap) {
+        member_->innerFuncMetaKeys.emplace(item.first);
+    }
 
     (void)member_->client
         ->GetAndWatch(
@@ -172,6 +203,12 @@ void InstanceManagerActor::Init()
     Receive("ForwardQueryDebugInstancesInfo", &InstanceManagerActor::ForwardQueryDebugInstancesInfoHandler);
     Receive("ForwardQueryDebugInstancesInfoResponse",
             &InstanceManagerActor::ForwardQueryDebugInstancesInfoResponseHandler);
+
+    // 启动周期性上报实例数量指标
+    litebus::Async(GetAID(), &InstanceManagerActor::ReportInstanceCountPeriodically);
+
+    // 启动周期性垃圾回收任务
+    litebus::Async(GetAID(), &InstanceManagerActor::GarbageCollectFatalInstances);
 }
 
 void InstanceManagerActor::GetAndWatchInstance()
@@ -410,6 +447,10 @@ void InstanceManagerActor::OnInstancePut(const std::string &key,
     } else {
         member_->groupManager->OnInstancePut(key, instance);
     }
+    if (!quotaMgrAID_.Name().empty()
+        && instance->instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)) {
+        Send(quotaMgrAID_, "OnInstanceRunning", instance->SerializeAsString());
+    }
     business_->OnInstancePutForFamilyManagement(instance);
     member_->instID2Instance[instance->instanceid()] = std::make_pair(key, instance);
     if (IsInstanceManagedByJob(instance)) {
@@ -450,6 +491,9 @@ void InstanceManagerActor::OnInstanceDelete(const std::string &key,
                                             const std::shared_ptr<resource_view::InstanceInfo> &instance)
 {
     RETURN_IF_NULL(instance);
+    if (!quotaMgrAID_.Name().empty()) {
+        Send(quotaMgrAID_, "OnInstanceExited", instance->SerializeAsString());
+    }
     member_->instID2Instance.erase(instance->instanceid());
 
     if (!instance->jobid().empty() &&
@@ -493,6 +537,11 @@ void InstanceManagerActor::OnInstanceWatchEvent(const std::vector<WatchEvent> &e
             auto eventKey = TrimKeyPrefix(event.kv.key(), member_->client->GetTablePrefix());
             auto instance = std::make_shared<resource_view::InstanceInfo>();
             if (TransToInstanceInfoFromJson(*instance, event.kv.value())) {
+                // Parse tenantID from key and set it in instance
+                std::string tenantID = ParseTenantIDFromInstanceKey(eventKey);
+                if (!tenantID.empty()) {
+                    instance->set_tenantid(tenantID);
+                }
                 allInstances.emplace(eventKey, instance);
             } else {
                 YRLOG_ERROR("failed to transform instance({}) info from String.", eventKey);
@@ -522,6 +571,11 @@ void InstanceManagerActor::OnInstanceWatchEvent(const std::vector<WatchEvent> &e
                 auto instance = std::make_shared<resource_view::InstanceInfo>();
                 auto eventKey = TrimKeyPrefix(event.kv.key(), member_->client->GetTablePrefix());
                 if (TransToInstanceInfoFromJson(*instance, event.kv.value())) {
+                    // Parse tenantID from key and set it in instance
+                    std::string tenantID = ParseTenantIDFromInstanceKey(eventKey);
+                    if (instance->tenantid().empty() && !tenantID.empty()) {
+                        instance->set_tenantid(tenantID);
+                    }
                     OnInstancePut(eventKey, instance);
                 } else {
                     YRLOG_ERROR("failed to transform instance({}) info from String.", eventKey);
@@ -1496,6 +1550,64 @@ litebus::Future<messages::QueryDebugInstanceInfosResponse> InstanceManagerActor:
     return rsp;
 }
 
+void InstanceManagerActor::MasterBusiness::GarbageCollectFatalInstances()
+{
+    auto nowTimestamp = static_cast<uint64_t>(std::time(nullptr));
+    std::vector<std::pair<std::string, std::shared_ptr<resource_view::InstanceInfo>>> instancesToDelete;
+
+    // 查找 INSTANCE_MANAGER_OWNER 中状态为 FATAL 且超过 1 小时的实例
+    if (member_->instances.find(INSTANCE_MANAGER_OWNER) != member_->instances.end()) {
+        const auto &ownerInstances = member_->instances[INSTANCE_MANAGER_OWNER];
+
+        for (const auto &[key, instance] : ownerInstances) {
+            if (!instance) {
+                continue;
+            }
+
+            // 检查是否为 FATAL 状态
+            if (instance->instancestatus().code() != static_cast<int32_t>(InstanceState::FATAL) &&
+                instance->instancestatus().code() != static_cast<int32_t>(InstanceState::EVICTED)) {
+                continue;
+            }
+
+            // 检查是否有 CREATE_TIME_STAMP
+            auto extIter = instance->extensions().find(CREATE_TIME_STAMP);
+            if (extIter == instance->extensions().end()) {
+                YRLOG_WARN("Instance({}) in FATAL state has no CREATE_TIME_STAMP, skip garbage collection",
+                          instance->instanceid());
+                continue;
+            }
+
+            // 解析创建时间戳
+            uint64_t createTimestamp = 0;
+            try {
+                createTimestamp = std::stoull(extIter->second);
+            } catch (const std::exception &e) {
+                YRLOG_ERROR("Failed to parse CREATE_TIME_STAMP for instance({}): {}",
+                           instance->instanceid(), e.what());
+                continue;
+            }
+
+            // 检查是否超过 1 小时
+            if (nowTimestamp > createTimestamp && (nowTimestamp - createTimestamp) > FATAL_INSTANCE_TIMEOUT) {
+                YRLOG_INFO("Found FATAL instance({}) exceeding timeout, created at {}, now {}, age {} seconds",
+                          instance->instanceid(), createTimestamp, nowTimestamp,
+                          nowTimestamp - createTimestamp);
+                instancesToDelete.emplace_back(key, instance);
+            }
+        }
+    }
+
+    if (instancesToDelete.empty()) {
+        return;
+    }
+    YRLOG_INFO("Garbage collecting {} FATAL instances that exceeded timeout", instancesToDelete.size());
+    for (const auto &[key, instance] : instancesToDelete) {
+        YRLOG_INFO("Force deleting FATAL instance({}) key({})", instance->instanceid(), key);
+        ForceDelete(key, instance);
+    }
+}
+
 void InstanceManagerActor::MasterBusiness::DelNode(const std::string &nodeName, const bool force)
 {
     if (force) {
@@ -2080,5 +2192,77 @@ litebus::Future<std::pair<std::string, std::shared_ptr<InstanceInfo>>> InstanceM
 void InstanceManagerActor::SetInstancesReady()
 {
     isInstancesReady_.SetValue(true);
+}
+// todo(lwy_robb): should caculated in instance on etcd event
+void InstanceManagerActor::ReportInstanceCountPeriodically()
+{
+    // 只有 master 节点上报指标
+    if (curStatus_ != MASTER_BUSINESS) {
+        litebus::AsyncAfter(INSTANCE_COUNT_REPORT_INTERVAL, GetAID(),
+                           &InstanceManagerActor::ReportInstanceCountPeriodically);
+        return;
+    }
+
+    // 统计各个节点的 RUNNING 状态实例数量
+    std::unordered_map<std::string, size_t> nodeInstanceCount;
+    size_t totalInstanceCount = 0;
+
+    for (const auto &[nodeID, instanceMap] : member_->instances) {
+        if (nodeID == INSTANCE_MANAGER_OWNER) {
+            continue;  // 跳过 master 自身实例
+        }
+        size_t count = 0;
+        // 只统计 RUNNING 状态的实例
+        for (const auto &[key, instance] : instanceMap) {
+            if (instance && instance->instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)
+                && !instance->issystemfunc()) {
+                count++;
+            }
+        }
+        nodeInstanceCount[nodeID] = count;
+        totalInstanceCount += count;
+
+        // 为每个节点上报 RUNNING 状态实例数量
+        functionsystem::metrics::MeterTitle meterTitle{
+            "yr_instance_count",
+            "Number of running instances on each node",
+            "count"
+        };
+        functionsystem::metrics::MeterData meterData{
+            static_cast<double>(count),
+            { { "node_id", nodeID } }
+        };
+        functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(
+            meterTitle, meterData, {});
+    }
+
+    // 上报集群总 RUNNING 状态实例数量
+    functionsystem::metrics::MeterTitle totalMeterTitle{
+        "yr_cluster_instance_total",
+        "Total number of running instances in the cluster",
+        "count"
+    };
+    functionsystem::metrics::MeterData totalMeterData{
+        static_cast<double>(totalInstanceCount),
+        {}
+    };
+    functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(
+        totalMeterTitle, totalMeterData, {});
+
+    YRLOG_DEBUG("Report running instance count metrics: total={}, nodes={}", totalInstanceCount, nodeInstanceCount.size());
+
+    // 调度下一次上报
+    litebus::AsyncAfter(INSTANCE_COUNT_REPORT_INTERVAL, GetAID(),
+                       &InstanceManagerActor::ReportInstanceCountPeriodically);
+}
+
+void InstanceManagerActor::GarbageCollectFatalInstances()
+{
+    ASSERT_IF_NULL(business_);
+    business_->GarbageCollectFatalInstances();
+
+    // 调度下一次垃圾回收
+    litebus::AsyncAfter(GARBAGE_COLLECT_INTERVAL, GetAID(),
+                       &InstanceManagerActor::GarbageCollectFatalInstances);
 }
 }  // namespace functionsystem::instance_manager

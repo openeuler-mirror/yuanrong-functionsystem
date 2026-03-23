@@ -84,7 +84,7 @@ private:
         }                                                                  \
     } while (0)
 
-inline YrLogger GetCoreLogger()
+__attribute__((visibility("default"))) inline YrLogger GetCoreLogger()
 {
     auto lp = Provider::GetLoggerProvider();
     if (lp == nullptr) {

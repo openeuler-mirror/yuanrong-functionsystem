@@ -34,7 +34,10 @@
 #include "local_scheduler/local_scheduler_service/local_sched_srv.h"
 #include "local_scheduler/local_scheduler_service/local_sched_srv_actor.h"
 #include "local_scheduler/resource_group_controller/resource_group_ctrl.h"
+#include "local_scheduler/gc_actor/local_gc_actor.h"
+#include "local_scheduler/snap_ctrl/snap_ctrl.h"
 #include "local_scheduler/subscription_manager/subscription_mgr.h"
+#include "local_scheduler/grpc_server/exec_service/exec_stream_service.h"
 
 namespace functionsystem::local_scheduler {
 struct LocalSchedStartParam {
@@ -70,7 +73,6 @@ struct LocalSchedStartParam {
     uint64_t maxDsHealthCheckTimes;
     InstanceLimitResource limitResource;
     bool enablePrintResourceView;
-    std::shared_ptr<functionsystem::grpc::CommonGrpcServer> posixGrpcServer;
     std::shared_ptr<functionsystem::PosixService> posixService;
     std::shared_ptr<::grpc::ServerCredentials> creds;
     std::string posixPort;
@@ -88,6 +90,15 @@ struct LocalSchedStartParam {
     bool runtimeInstanceDebugEnable;
     bool unRegisterWhileStop;
     bool enableFakeSuspendResume{ false };
+    std::string udsPath;
+    std::string sessionGrpcPort;
+    std::string address;  // LiteBus address (ip:port format), used to extract IP for gRPC servers
+    bool enableTraefikRegistry = false;
+    std::string traefikEtcdPrefix = "traefik";
+    int32_t traefikLeaseTTL = 300000;
+    std::string traefikHttpEntryPoint = "websecure";
+    bool traefikEnableTLS = true;
+    std::string traefikServersTransport = "yr-backend-tls@file";
 };
 
 class LocalSchedDriver : public ModuleDriver {
@@ -146,7 +157,13 @@ private:
     std::shared_ptr<LocalGroupCtrl> localGroupCtrl_;
     std::shared_ptr<ResourceGroupCtrl> rGroupCtrl_;
     std::shared_ptr<SubscriptionMgr> subscriptionMgr_;
+    std::shared_ptr<SnapCtrl> snapCtrl_;
+    std::shared_ptr<LocalGcActor> gcActor_;
     std::shared_ptr<InstanceCtrlMetaStoreHealthyObserver> metaStoreHealthyObserver_;
+    std::shared_ptr<functionsystem::grpc::CommonGrpcServer> posixGrpcServer_;
+    std::shared_ptr<functionsystem::grpc::CommonGrpcServer> sessionGrpcServer_;
+    std::shared_ptr<ExecStreamService> execStreamService_;
+    std::shared_ptr<TraefikRegistry> traefikRegistry_;
     bool isStarted_ = false;
 };
 }  // namespace functionsystem::local_scheduler

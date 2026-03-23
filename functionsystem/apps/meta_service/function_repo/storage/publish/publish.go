@@ -26,6 +26,7 @@ import (
 	"meta_service/common/functionhandler"
 	"meta_service/common/logger/log"
 	"meta_service/common/metadata"
+	"meta_service/common/types"
 	"meta_service/function_repo/config"
 	"meta_service/function_repo/errmsg"
 	"meta_service/function_repo/model"
@@ -174,6 +175,13 @@ func buildFaaSFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionVa
 	info.FuncMetaData.FuncName = fv.FunctionVersion.FuncName
 	info.FuncMetaData.Service = fv.FunctionVersion.Service
 	info.FuncMetaData.VersionDescription = fv.FunctionVersion.Description
+	info.FuncMetaData.IdleTime = fv.FunctionVersion.IdleTime
+	info.FuncMetaData.IsFuncPublic = fv.FunctionVersion.IsFuncPublic
+	info.FuncMetaData.AutoScaleConfig = metadata.AutoScaleConfig{
+		SLAQuota:      fv.FunctionVersion.AutoScaleConfig.SLAQuota,
+		ScaleDownTime: fv.FunctionVersion.AutoScaleConfig.ScaleDownTime,
+		BurstScaleNum: fv.FunctionVersion.AutoScaleConfig.BurstScaleNum,
+	}
 	info.FuncMetaData.IsStatefulFunction = fv.FunctionVersion.StatefulFlag != 0
 	info.FuncMetaData.Layers, err = getFaaSLayerBucket(storage.GetTxnByKind(txn.GetCtx(), ""),
 		fv.FunctionLayer, tenantInfo)
@@ -206,6 +214,7 @@ func buildFaaSFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionVa
 		log.GetLogger().Errorf("failed to build faas instance meta data, error: %s", err.Error())
 		return metadata.FaaSFuncMeta{}, err
 	}
+	info.RootfsSpecMeta = buildRootFsSpecMeta(fv.FunctionVersion.RootfsSpecMeta)
 	return info, nil
 }
 
@@ -218,6 +227,8 @@ func buildFaaSInstanceMetaData(txn storage.Transaction, fv storage.FunctionVersi
 	instance.PoolID = fv.FunctionVersion.PoolID
 	instance.PoolLabel = fv.FunctionVersion.PoolLabel
 	instance.IdleMode = false
+	instance.ScalePolicy = fv.FunctionVersion.ScalePolicy
+	instance.SchedulePolicy = fv.FunctionVersion.SchedulePolicy
 	key := BuildInstanceRegisterKey(tenantInfo, fv.Function.Name,
 		fv.FunctionVersion.Version, constants.DefaultClusterID)
 	data := make(map[string]interface{})
@@ -342,6 +353,10 @@ func buildFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionValue,
 	info.FuncMetaData.VersionDescription = fv.FunctionVersion.Description
 	info.FuncMetaData.StatefulFlag = fv.FunctionVersion.StatefulFlag != 0
 	info.FuncMetaData.HookHandler = fv.FunctionVersion.HookHandler
+	info.FuncMetaData.IdleTime = fv.FunctionVersion.IdleTime
+	info.FuncMetaData.IsFuncPublic = fv.FunctionVersion.IsFuncPublic
+	info.WarmupType = fv.FunctionVersion.WarmupType
+	info.RootfsSpecMeta = buildRootFsSpecMeta(fv.FunctionVersion.RootfsSpecMeta)
 	var err error
 	info.CodeMetaData, err = buildCodeMetaData(fv, tenantInfo.BusinessID)
 	if err != nil {
@@ -364,13 +379,30 @@ func buildFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionValue,
 	return info, nil
 }
 
+func buildRootFsSpecMeta(rootfs types.RootfsSpecMeta) metadata.RootfsSpecMeta {
+	return metadata.RootfsSpecMeta{
+		Runtime:  rootfs.Runtime,
+		Type:     rootfs.Type,
+		ImageURL: rootfs.ImageURL,
+		ReadOnly: rootfs.ReadOnly,
+		StorageInfo: metadata.RootfsStorageInfo{
+			Endpoint:  rootfs.StorageInfo.Endpoint,
+			Bucket:    rootfs.StorageInfo.Bucket,
+			Object:    rootfs.StorageInfo.Object,
+			AccessKey: rootfs.StorageInfo.AccessKey,
+			SecretKey: rootfs.StorageInfo.SecretKey,
+		},
+		MountPoint: rootfs.MountPoint,
+	}
+}
+
 func buildCodeMetaData(fv storage.FunctionVersionValue, businessID string) (metadata.CodeMetaData, error) {
 	codeMetaData := metadata.CodeMetaData{
 		CodeUploadType: fv.FunctionVersion.Package.CodeUploadType,
 		Sha512:         fv.FunctionVersion.Package.Signature,
 	}
 	codeMetaData.StorageType = fv.FunctionVersion.Package.StorageType
-	if codeMetaData.StorageType == common.LocalStorageType || codeMetaData.StorageType == common.CopyStorageType {
+	if codeMetaData.StorageType == common.LocalStorageType || codeMetaData.StorageType == common.CopyStorageType || codeMetaData.StorageType == common.WorkingDirStorageType {
 		codeMetaData.LocalMetaData.CodePath = fv.FunctionVersion.Package.CodePath
 	} else {
 		pkg := fv.FunctionVersion.Package

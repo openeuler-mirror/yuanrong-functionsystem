@@ -115,8 +115,18 @@ message StreamingMessage {
     core_service.CreateResourceGroupRequest  rGroupReq = 32;
     core_service.CreateResourceGroupResponse rGroupRsp = 33;
 
+    // receive the prepare snap call before functionsystem to make sandbox checkpoint
+    // handle by runtime
+    runtime_service.PrepareSnapRequest prepareSnapReq = 34;
+    runtime_service.PrepareSnapResponse prepareSnapRsp = 35;
+
+    // received after runtime was snap started
+    // handle by runtime
+    runtime_service.SnapStartedRequest snapStartedReq = 36;
+    runtime_service.SnapStartedResponse snapStartedRsp = 37;
+
     // Send stream event data
-    core_service.EventRequest          eventReq      = 34;
+    core_service.EventRequest          eventReq      = 38;
   }
   map<string, string> metaData = 100;
 }

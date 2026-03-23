@@ -1,29 +1,32 @@
 {
   "backends": [
     {
-      "immediatelyExport": {
-        "name": "Alarm",
-        "enable": false,
-        "custom": {
-          "labels": {
-            "site": "",
-            "tenant_id": "",
-            "application_id": "",
-            "service_id": ""
-          }
-        },
+      "batchExport": {
+        "name": "LakeHouse",
+        "enable": true,
         "exporters": [
           {
-            "fileExporter": {
+            "prometheusPushExporter": {
               "enable": true,
+              "batchSize": 1000,
+              "batchIntervalSec": 1,
+              "failureQueueMaxSize": 3,
+              "failureDataDir": "/home/sn/metrics/failure",
+              "failureDataFileMaxCapacity": 1,
+              "enabledInstruments": [
+                "yr_nodes_cpu_allocatable",
+                "yr_nodes_cpu_capacity",
+                "yr_nodes_memory_allocatable",
+                "yr_nodes_memory_capacity",
+                "yr_cluster_cpu_capacity",
+                "yr_cluster_cpu_allocatable",
+                "yr_cluster_memory_capacity",
+                "yr_cluster_memory_allocatable",
+                "yr_instance_count",
+                "yr_cluster_instance_total"
+              ],
               "initConfig": {
-                "fileDir": "/home/sn/metrics/",
-                "rolling": {
-                  "enable": true,
-                  "maxFiles": 3,
-                  "maxSize": 10000
-                },
-                "contentType": "LABELS"
+                "port": 9091
               }
             }
           }

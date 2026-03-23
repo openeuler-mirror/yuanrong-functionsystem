@@ -285,14 +285,14 @@ const std::string NODE_AFFINITY_TEMPLATE_STR = R"(
 }
 )";
 
-const std::string instanceKey1 = R"(/sn/instance/business/yrk/tenant/12345678901234561234567890123456/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/requestID1/instanceID1)";
-const std::string instanceInfoJson1 = R"({"scheduleOption":{"schedPolicyName":"monopoly"},"instanceID":"instanceID1","requestID":"requestID1","runtimeID":"runtime-1","runtimeAddress":"10.42.2.101","functionAgentID":"functionagent-pool1-776c6db574-1","functionProxyID":"siaphisprg00911","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","scheduleTimes":1,"instanceStatus":{"code":1,"msg":"scheduling"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"1"})";
+const std::string instanceKey1 = R"(/sn/instance/business/yrk/tenant/default/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/requestID1/instanceID1)";
+const std::string instanceInfoJson1 = R"({"scheduleOption":{"schedPolicyName":"monopoly"},"instanceID":"instanceID1","requestID":"requestID1","runtimeID":"runtime-1","runtimeAddress":"10.42.2.101","functionAgentID":"functionagent-pool1-776c6db574-1","functionProxyID":"siaphisprg00911","function":"default/0-system-faasExecutorPython3.9/$latest","scheduleTimes":1,"instanceStatus":{"code":1,"msg":"scheduling"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"1"})";
 
-const std::string instanceKey2 = R"(/sn/instance/business/yrk/tenant/12345678901234561234567890123456/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/requestID2/instanceID2)";
-const std::string instanceInfoJson2 = R"({"scheduleOption":{"schedPolicyName":"monopoly"},"instanceID":"instanceID2","requestID":"requestID2","runtimeID":"runtime-2","runtimeAddress":"10.42.2.102","functionAgentID":"functionagent-pool1-776c6db574-2","functionProxyID":"siaphisprg00912","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","scheduleTimes":1,"instanceStatus":{"code":2,"msg":"creating"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"1"})";
+const std::string instanceKey2 = R"(/sn/instance/business/yrk/tenant/default/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/requestID2/instanceID2)";
+const std::string instanceInfoJson2 = R"({"scheduleOption":{"schedPolicyName":"monopoly"},"instanceID":"instanceID2","requestID":"requestID2","runtimeID":"runtime-2","runtimeAddress":"10.42.2.102","functionAgentID":"functionagent-pool1-776c6db574-2","functionProxyID":"siaphisprg00912","function":"default/0-system-faasExecutorPython3.9/$latest","scheduleTimes":1,"instanceStatus":{"code":2,"msg":"creating"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"1"})";
 
-const std::string instanceKey3 = R"(/sn/instance/business/yrk/tenant/12345678901234561234567890123456/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/requestID3/instanceID3)";
-const std::string instanceInfoJson3 = R"({"instanceID":"instanceID3","requestID":"requestID3","runtimeID":"runtime-3","runtimeAddress":"10.42.2.103","functionAgentID":"functionagent-pool1-776c6db574-3","functionProxyID":"siaphisprg00913","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","scheduleTimes":1,"instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"1"})";
+const std::string instanceKey3 = R"(/sn/instance/business/yrk/tenant/default/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/requestID3/instanceID3)";
+const std::string instanceInfoJson3 = R"({"instanceID":"instanceID3","requestID":"requestID3","runtimeID":"runtime-3","runtimeAddress":"10.42.2.103","functionAgentID":"functionagent-pool1-776c6db574-3","functionProxyID":"siaphisprg00913","function":"default/0-system-faasExecutorPython3.9/$latest","scheduleTimes":1,"instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"1"})";
 
 
 class ScalerTest : public ::testing::Test {
@@ -2881,7 +2881,7 @@ TEST_F(ScalerTest, InstanceInfoSyncerTest)
     TransToJsonFromInstanceInfo(jsonString1, instance1);
     KeyValue inst1;
     inst1.set_value(jsonString1);
-    inst1.set_key("/sn/instance/business/yrk/tenant/12345678901234561234567890123456/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/requestID4/instanceID4");
+    inst1.set_key("/sn/instance/business/yrk/tenant/default/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/requestID4/instanceID4");
     rep->kvs.emplace_back(inst1);
 
     auto future = actor_->InstanceInfoSyncer(rep);
@@ -3394,11 +3394,15 @@ TEST_F(ScalerTest, CreateAgentByPoolIDTest)
                        createAgentRequest->SerializeAsString());
         ASSERT_AWAIT_READY(promise1.GetFuture());
         auto pod1 = promise1.GetFuture().Get();
+        // Wait for OnScaleUpPodComplete to run (it calls OnPodUpdate which triggers scaleUpHandler, counter -> 1)
+        // This ensures waitForReadyPods_ is populated before we send the pod modified event.
+        ASSERT_AWAIT_TRUE([&]() -> bool { return *counter >= 1; });
         pod1->SetStatus(std::make_shared<functionsystem::kube_client::model::V1PodStatus>());
         pod1->GetStatus()->SetContainerStatuses({});
         pod1->GetStatus()->SetPhase("Running");
         EXPECT_EQ(pod1->GetMetadata()->GetLabels()["yr-idle-to-recycle"], "20");
-        actor_->OnPodModified(K8sEventType::EVENT_TYPE_MODIFIED, pod1);
+        litebus::Async(actor_->GetAID(), &ScalerActor::HandlePodModifiedEvent, K8sEventType::EVENT_TYPE_MODIFIED,
+                       std::static_pointer_cast<ModelBase>(pod1));
         ASSERT_AWAIT_TRUE([&]() -> bool { return GetTestResponse().requestid() == "test-request-02"; });
         EXPECT_EQ(GetTestResponse().code(), 0);
         EXPECT_EQ(poolManager->GetPodPool("pool1")->readyCount, 1);
@@ -3410,11 +3414,15 @@ TEST_F(ScalerTest, CreateAgentByPoolIDTest)
                        createAgentRequest->SerializeAsString());
         ASSERT_AWAIT_READY(promise2.GetFuture());
         auto pod2 = promise2.GetFuture().Get();
+        // Wait for OnScaleUpPodComplete to run (it calls OnPodUpdate which triggers scaleUpHandler, counter -> 3)
+        // This ensures waitForReadyPods_ is populated before we send the pod modified event.
+        ASSERT_AWAIT_TRUE([&]() -> bool { return *counter >= 3; });
         EXPECT_EQ(pod2->GetMetadata()->GetLabels()["yr-idle-to-recycle"], "10");
         pod2->SetStatus(std::make_shared<functionsystem::kube_client::model::V1PodStatus>());
         pod2->GetStatus()->SetContainerStatuses({});
         pod2->GetStatus()->SetPhase("Running");
-        actor_->OnPodModified(K8sEventType::EVENT_TYPE_MODIFIED, pod2);
+        litebus::Async(actor_->GetAID(), &ScalerActor::HandlePodModifiedEvent, K8sEventType::EVENT_TYPE_MODIFIED,
+                       std::static_pointer_cast<ModelBase>(pod2));
         ASSERT_AWAIT_TRUE([&]() -> bool { return GetTestResponse().requestid() == "test-request-03"; });
         EXPECT_EQ(GetTestResponse().code(), 0);
         EXPECT_EQ(poolManager->GetPodPool("pool1")->readyCount, 2);

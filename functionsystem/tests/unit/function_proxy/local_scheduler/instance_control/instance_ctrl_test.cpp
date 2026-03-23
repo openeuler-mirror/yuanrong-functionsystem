@@ -146,7 +146,7 @@ static std::shared_ptr<messages::ScheduleRequest> GenScheduleReq(std::shared_ptr
     scheduleReq->mutable_instance()->set_parentid("DesignatedParentID");
     scheduleReq->mutable_instance()->set_parentfunctionproxyaid(actor->GetAID());
     scheduleReq->set_requestid("requestID");
-    scheduleReq->mutable_instance()->set_function("12345678901234561234567890123456/yrf8440ad184-test-wait/$latest");
+    scheduleReq->mutable_instance()->set_function("default/yrf8440ad184-test-wait/$latest");
     (*(scheduleReq->mutable_instance()->mutable_createoptions()))["ConcurrentNum"] = "2";
 
     resources::Resource validCPU;
@@ -211,7 +211,7 @@ public:
         resource.mutable_scalar()->set_value(500);
         metaResources.mutable_resources()->operator[](CPU_RESOURCE_NAME).CopyFrom(resource);
         metaResources.mutable_resources()->operator[](MEMORY_RESOURCE_NAME).CopyFrom(resource);
-        functionMeta_ = { FuncMetaData{}, CodeMetaData{}, EnvMetaData{}, metaResources, ExtendedMetaData{} };
+        functionMeta_ = { WarmupType::NONE, FuncMetaData{}, CodeMetaData{}, EnvMetaData{}, metaResources, ExtendedMetaData{}, InstanceMetaData{}, RootfsSpecMeta{}, "" };
 
         mockResourceViewMgr_ = std::make_shared<resource_view::ResourceViewMgr>();
         primary_ = MockResourceView::CreateMockResourceView();
@@ -251,6 +251,9 @@ public:
         mockResourceViewMgr_ = nullptr;
         primary_ = nullptr;
         virtual_ = nullptr;
+
+        // reset static observer to avoid polluting other test suites
+        InstanceStateMachine::UnBindControlPlaneObserver();
     }
 
 protected:
@@ -648,7 +651,7 @@ TEST_F(InstanceCtrlTest, DeployInstanceRetry)
     auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
     auto result = instanceCtrl->Schedule(scheduleReq, runtimePromise);
     ASSERT_AWAIT_READY(result);
-    EXPECT_EQ(result.Get().code(), StatusCode::SUCCESS);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::SUCCESS);
     ASSERT_AWAIT_READY_FOR(notifyCalled.GetFuture(), 30000);
     EXPECT_EQ(static_cast<StatusCode>(notifyCalled.GetFuture().Get().code()),
               StatusCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS);
@@ -690,7 +693,7 @@ TEST_F(InstanceCtrlTest, ScheduleCancelAfterScheduling)
     auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
     auto result = instanceCtrl.Schedule(scheduleReq, runtimePromise);
     ASSERT_AWAIT_READY(result);
-    EXPECT_EQ(result.Get().code(), StatusCode::RESOURCE_NOT_ENOUGH);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::RESOURCE_NOT_ENOUGH);
 }
 
 TEST_F(InstanceCtrlTest, ScheduleCancelAfterCreating)
@@ -793,7 +796,7 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForResourceNotEnough)
     auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
     auto result = instanceCtrl->Schedule(scheduleReq, runtimePromise);
     ASSERT_AWAIT_READY(result);
-    EXPECT_EQ(result.Get().code(), StatusCode::RESOURCE_NOT_ENOUGH);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::RESOURCE_NOT_ENOUGH);
 
     ASSERT_AWAIT_TRUE([&]() {
         return scheduleReq->instance().instancestatus().code() == static_cast<int32_t>(InstanceState::SCHEDULE_FAILED);
@@ -866,7 +869,7 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForDeployInstanceFailed)
     auto result = instanceCtrl->Schedule(scheduleReq, runtimePromise);
 
     ASSERT_AWAIT_READY(result);
-    EXPECT_EQ(result.Get().code(), StatusCode::SUCCESS);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::SUCCESS);
     ASSERT_AWAIT_READY(notifyCalled.GetFuture());
     EXPECT_EQ(static_cast<StatusCode>(notifyCalled.GetFuture().Get().code()), StatusCode::ERR_INNER_COMMUNICATION);
     auto selector = scheduleReq->mutable_instance()->mutable_scheduleoption()->mutable_resourceselector();
@@ -944,8 +947,9 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForInitRuntimeFailed)
     litebus::Future<runtime::CallResponse> sendRet;
     runtime::CallResponse callRsp;
     callRsp.set_code(common::ERR_REQUEST_BETWEEN_RUNTIME_BUS);
-    auto expectMsg = "call runtime failed! client may already closed";
-    callRsp.set_message(expectMsg);
+    auto baseMsg = "call runtime failed! client may already closed";
+    auto expectMsg = std::string(baseMsg) + " on nodeID";
+    callRsp.set_message(baseMsg);
     sendRet.SetValue(callRsp);
     EXPECT_CALL(*mockSharedClient, InitCallWrapper).WillOnce(Return(sendRet));
 
@@ -1312,14 +1316,7 @@ TEST_F(InstanceCtrlTest, KillInstanceWithCreating)
     const std::string instanceID = "InstanceA";
     auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeN");
     auto &mockStateMachine = *stateMachine;
-    EXPECT_CALL(*instanceControlView_, GetInstance).WillRepeatedly(Return(stateMachine));
-    EXPECT_CALL(mockStateMachine, IsSaving).WillOnce(Return(false));
-    EXPECT_CALL(mockStateMachine, TryExitInstance)
-        .WillOnce(Invoke([](const std::shared_ptr<litebus::Promise<Status>> &promise,
-                const std::shared_ptr<KillContext> &killCtx, bool isSynchronized) {
-            promise->SetValue(Status::OK());
-            return Status::OK();
-        }));
+
     resources::InstanceInfo instance;
     instance.set_instanceid(instanceID);
     instance.set_requestid("request");
@@ -1328,12 +1325,24 @@ TEST_F(InstanceCtrlTest, KillInstanceWithCreating)
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->CopyFrom(instance);
     auto instanceContext = std::make_shared<InstanceContext>(scheduleReq);
+
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillRepeatedly(Return(stateMachine));
     EXPECT_CALL(mockStateMachine, GetInstanceContextCopy).WillRepeatedly(Return(instanceContext));
+    EXPECT_CALL(mockStateMachine, GetInstanceInfo).WillRepeatedly(Return(instance));
+    EXPECT_CALL(mockStateMachine, GetCancelFuture).WillRepeatedly(Return(litebus::Future<std::string>()));
+    // Exit now calls ForceDeleteInstance instead of TryExitInstance.
+    // ForceDeleteInstance registers a second AddStateChangeCallback for RUNNING/FATAL/EXITED.
     EXPECT_CALL(mockStateMachine, AddStateChangeCallback)
         .WillOnce(Invoke([instance](const std::unordered_set<InstanceState> &statesConcerned,
                                     const std::function<void(const resources::InstanceInfo &)> &callback,
-                                    const std::string &eventKey) { callback(instance); }));
-    EXPECT_CALL(mockStateMachine, GetCancelFuture).WillOnce(Return(litebus::Future<std::string>()));
+                                    const std::string &eventKey) { callback(instance); }))
+        .WillOnce(Invoke([](const std::unordered_set<InstanceState> &statesConcerned,
+                            const std::function<void(const resources::InstanceInfo &)> &callback,
+                            const std::string &eventKey) {
+            resources::InstanceInfo exitedInstance;
+            exitedInstance.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::EXITED));
+            callback(exitedInstance);
+        }));
 
     auto killReq = GenKillRequest(instanceID, SHUT_DOWN_SIGNAL);
     auto srcInstance = "instanceM";
@@ -1345,7 +1354,7 @@ TEST_F(InstanceCtrlTest, KillInstanceRemote)
 {
     const std::string instanceID = "InstanceA";
     const std::string funcAgentID = "funcAgentA";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string runtimeID = "runtimeA";
     const std::string functionProxyID = "nodeB";
 
@@ -1375,7 +1384,7 @@ TEST_F(InstanceCtrlTest, DISABLED_KillInstanceLocal)
 {
     const std::string instanceID = "InstanceA";
     const std::string funcAgentID = "funcAgentA";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string runtimeID = "runtimeA";
     const std::string functionProxyID = "nodeN";
 
@@ -2293,7 +2302,7 @@ TEST_F(InstanceCtrlTest, CreateInstanceClientTest)
 
     EXPECT_CALL(*clientManager, DeleteClient(_)).WillRepeatedly(Return(Status::OK()));
     const std::string funcAgentID = "funcAgentA";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string functionProxyID = "nodeN";
     const std::string jobID = "job";
     const std::string requestID = "requestID_CreateInstanceClientTest";
@@ -2378,7 +2387,7 @@ TEST_F(InstanceCtrlTest, CreateInstanceClientTest)
     auto result = instanceCtrl->Schedule(scheduleReqA, runtimePromise);
     // client returned is nullptr therefore code would be ERR_REQUEST_BETWEEN_RUNTIME_BUS;
     ASSERT_AWAIT_READY(result);
-    EXPECT_EQ(result.Get().code(), StatusCode::SUCCESS);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::SUCCESS);
     ASSERT_AWAIT_READY_FOR(notifyCalled.GetFuture(), 60000);
     EXPECT_EQ(static_cast<StatusCode>(notifyCalled.GetFuture().Get().code()),
               StatusCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS);
@@ -2449,7 +2458,7 @@ TEST_F(InstanceCtrlTest, CreateRateLimitTest_Rescheduled)
     const std::string instanceID = "instanceA";
     const std::string funcAgentID = "funcAgentA";
     const std::string parentID = "parentID";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     InstanceState state = InstanceState::NEW;
     auto insInfo = GenInstanceInfo(instanceID, funcAgentID, function, state);
     insInfo.set_functionproxyid("nodeID");
@@ -2475,7 +2484,7 @@ TEST_F(InstanceCtrlTest, TenantCreateRateLimitTest)
     const std::string instanceIDA = "instanceA";
     const std::string funcAgentIDA = "funcAgentA";
     const std::string parentID = "parentID";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     InstanceState state = InstanceState::NEW;
     auto insInfoA = GenInstanceInfo(instanceIDA, funcAgentIDA, function, state);
     insInfoA.set_functionproxyid("nodeID");
@@ -3157,7 +3166,7 @@ TEST_F(InstanceCtrlTest, CreateLocalNotEnoughAndRemoteNotEnough)
     auto runtimeFuture = runtimePromise->GetFuture();
     ASSERT_AWAIT_READY(runtimeFuture);
     YRLOG_INFO("Result: {}", result.Get().SerializeAsString());
-    EXPECT_EQ(result.Get().code(), StatusCode::RESOURCE_NOT_ENOUGH);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::RESOURCE_NOT_ENOUGH);
     EXPECT_EQ(runtimeFuture.Get().code(), 0);
     EXPECT_EQ(runtimeFuture.Get().instanceid(), "instance-id-CreateLocalNotEnoughAndRemoteNotEnough");
     EXPECT_EQ(static_cast<int32_t>(mockStateMachineState), static_cast<int32_t>(InstanceState::SCHEDULE_FAILED));
@@ -3252,7 +3261,7 @@ TEST_F(InstanceCtrlTest, CreateLocalNotEnoughAndRemoteEnough)
     auto runtimeFuture = runtimePromise->GetFuture();
     ASSERT_AWAIT_READY(runtimeFuture);
     YRLOG_INFO("Result: {}", result.Get().SerializeAsString());
-    EXPECT_EQ(result.Get().code(), StatusCode::RESOURCE_NOT_ENOUGH);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::RESOURCE_NOT_ENOUGH);
     EXPECT_EQ(runtimeFuture.Get().code(), 0);
     EXPECT_EQ(runtimeFuture.Get().instanceid(), "instance-id-CreateLocalNotEnoughAndRemoteEnough");
     EXPECT_EQ(mockStateMachineState, InstanceState::SCHEDULING);
@@ -3336,7 +3345,7 @@ TEST_F(InstanceCtrlTest, CreateLocalNotEnoughButNotForward)
     auto result = instanceCtrl->Schedule(scheduleReq, runtimePromise);
     ASSERT_AWAIT_READY(result);
     YRLOG_INFO("Result: {}", result.Get().SerializeAsString());
-    EXPECT_EQ(result.Get().code(), StatusCode::RESOURCE_NOT_ENOUGH);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::RESOURCE_NOT_ENOUGH);
     EXPECT_EQ(mockStateMachineState, InstanceState::SCHEDULING);
 }
 
@@ -3404,7 +3413,7 @@ TEST_F(InstanceCtrlTest, NewInstanceWithDuplicate)
 
     auto result = instanceCtrl->Schedule(scheduleReq, runtimePromise);
     ASSERT_AWAIT_READY(result);
-    EXPECT_EQ(result.Get().code(), StatusCode::SUCCESS);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::SUCCESS);
     ASSERT_AWAIT_READY(runtimePromise->GetFuture());
     EXPECT_EQ(runtimePromise->GetFuture().Get().code(), 0);
     ASSERT_AWAIT_READY(notifyCalled.GetFuture());
@@ -3478,7 +3487,7 @@ TEST_F(InstanceCtrlTest, DISABLED_SchedulingWithDuplicate)
     ASSERT_AWAIT_READY(result);
     ASSERT_AWAIT_READY(duplicateResult);
     YRLOG_INFO("Result: {}", result.Get().SerializeAsString());
-    EXPECT_EQ(result.Get().code(), StatusCode::RESOURCE_NOT_ENOUGH);
+    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::RESOURCE_NOT_ENOUGH);
     EXPECT_EQ(duplicateResult.Get().code(), StatusCode::RESOURCE_NOT_ENOUGH);
     EXPECT_EQ(mockStateMachineState, InstanceState::SCHEDULING);
 
@@ -5401,7 +5410,7 @@ TEST_F(InstanceCtrlTest, OnHealthyStatusTest)
     instanceInfoMap.clear();
     resource_view::InstanceInfo info2;
     info2.set_instanceid("instance2");
-    info2.set_function("12345678901234561234567890123456/0-test-helloWorld/$latest");
+    info2.set_function("default/0-test-helloWorld/$latest");
     info2.set_functionproxyid("nodeID");
     info2.set_jobid("job");
     info2.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::CREATING));
@@ -5528,7 +5537,7 @@ TEST_F(InstanceCtrlTest, KillToFatalTest)
 {
     const std::string instanceID = "InstanceA";
     const std::string funcAgentID = "funcAgentA";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string runtimeID = "runtimeA";
     const std::string functionProxyID = "nodeID";
 
@@ -5596,7 +5605,7 @@ TEST_F(InstanceCtrlTest, ForwardCallResultRequestForLowReliability)
     auto instanceControlView = std::make_shared<InstanceControlView>("node1", false);
     actor->BindInstanceControlView(instanceControlView);
 
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string instanceID = "instance id";
     const std::string requestID = "request id";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
@@ -5639,7 +5648,7 @@ TEST_F(InstanceCtrlTest, KillFatalInstance)
 {
     const std::string instanceID = "InstanceA";
     const std::string funcAgentID = "funcAgentA";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string runtimeID = "runtimeA";
     const std::string functionProxyID = "InstanceManagerOwner";
 
@@ -6070,7 +6079,7 @@ TEST_F(InstanceCtrlTest, KillInstanceWithCheckpointErrorRetry)
 TEST_F(InstanceCtrlTest, KillDriverInstance)
 {
     const std::string instanceID = "driver-job_12345";
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     const std::string runtimeID = "runtimeA";
     const std::string functionProxyID = "nodeN";
 

@@ -19,8 +19,23 @@ if [ -n "${BASE_DIR}" ]; then
 fi
 FUNCTION_SYSTEM_DIR=$(readlink -m "${FUNCTION_SYSTEM_DEPLOY_DIR}/..")
 DATA_SYSTEM_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../datasystem")
-RUNTIME_HOME_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../runtime")
-if [ -d "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas" ]; then
+# todo(lwy_robb): for sandbox, the start up script path should be assigned by rootfs
+INSTALLED_RUNTIME=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../runtime")
+if [ -z "$RUNTIME_HOME_DIR" ]; then
+  RUNTIME_HOME_DIR=$INSTALLED_RUNTIME
+else
+  # Create RUNTIME_HOME_DIR directory if not exists
+  if [ ! -d "$RUNTIME_HOME_DIR" ]; then
+      mkdir -p "$RUNTIME_HOME_DIR"
+      if [ $? -ne 0 ]; then
+        log_error "Error: failed to create directory $RUNTIME_HOME_DIR. Please check permissions."
+        exit 1
+      fi
+  fi
+  ln -sf $INSTALLED_RUNTIME/service $RUNTIME_HOME_DIR/service
+fi
+
+if [ -z "$FUNCTION_META_PATH" ] && [ -d "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas" ]; then
   PATTERN_FAAS_HOME_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas")
   FUNCTION_META_PATH="$PATTERN_FAAS_HOME_DIR/executor-meta"
 fi
@@ -48,17 +63,91 @@ function install_function_proxy() {
 
   local enable_driver="true"
   [[ "X${DRIVER_GATEWAY_ENABLE^^}" == "XFALSE" ]] && { enable_driver="false"; }
+
+  # Set default values for Traefik serversTransport configuration
+  TRAEFIK_SERVERS_TRANSPORT="${TRAEFIK_SERVERS_TRANSPORT:-yr-backend-tls@file}"
+
+  local merge_process_args=""
+  if [ "X${FUNCTION_PROXY_MERGE_PROCESS_ENABLE^^}" == "XTRUE" ]; then
+    local ld_library_path=${LD_LIBRARY_PATH}
+    local agent_uid=${YR_POD_NAME}
+    if [ "x${YR_POD_NAME}" == "x" ]; then
+      agent_uid="${NODE_ID}"
+    fi
+    merge_process_args="--enable_merge_process=true \
+    --agent_listen_port="${FUNCTION_PROXY_PORT}" \
+    --local_scheduler_address="${LOCAL_IP}:${FUNCTION_PROXY_PORT}" \
+    --runtime_dir="${RUNTIME_HOME_DIR}/service" \
+    --runtime_home_dir="${RUNTIME_USER_HOME_DIR}" \
+    --runtime_logs_dir="${RUNTIME_LOG_PATH}" \
+    --runtime_std_log_dir="" \
+    --runtime_ld_library_path="${ld_library_path}:${RUNTIME_HOME_DIR}/service/cpp/snlib:${RUNTIME_HOME_DIR}/sdk/cpp/lib" \
+    --runtime_log_level="${RUNTIME_LOG_LEVEL}" \
+    --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}" \
+    --runtime_max_log_file_num="${RUNTIME_LOG_ROLLING_MAX_FILES}" \
+    --runtime_config_dir="${RUNTIME_HOME_DIR}/service/cpp/config/" \
+    --enable_separated_redirect_runtime_std="${SEPARATED_REDIRECT_RUNTIME_STD}" \
+    --user_log_export_mode="${USER_LOG_EXPORT_MODE}" \
+    --npu_collection_mode="${NPU_COLLECTION_MODE}" \
+    --gpu_collection_enable="${GPU_COLLECTION_ENABLE}" \
+    --proxy_ip="${LOCAL_IP}" \
+    --proxy_grpc_server_port="${FUNCTION_PROXY_GRPC_PORT}" \
+    --setCmdCred=false \
+    --python_dependency_path="${PYTHONPATH}:${RUNTIME_HOME_DIR}/service/python" \
+    --python_log_config_path="${RUNTIME_HOME_DIR}/service/python/config/python-runtime-log.json" \
+    --java_system_property="${RUNTIME_HOME_DIR}/service/java/log4j2.xml" \
+    --java_system_library_path="${RUNTIME_HOME_DIR}/service/java/lib" \
+    --host_ip="${IP_ADDRESS}" \
+    --port="${FUNCTION_PROXY_PORT}" \
+    --data_system_port="${DS_WORKER_PORT}" \
+    --agent_address="${IP_ADDRESS}:${FUNCTION_PROXY_PORT}" \
+    --runtime_initial_port="${RUNTIME_INIT_PORT}" \
+    --port_num="${RUNTIME_PORT_NUM}" \
+    --metrics_collector_type="${METRICS_COLLECTOR_TYPE}" \
+    --proc_metrics_cpu="${CPU4COMP}" \
+    --custom_resources="${CUSTOM_RESOURCES}" \
+    --is_protomsg_to_runtime="${IS_PROTOMSG_TO_RUNTIME}" \
+    --massif_enable="${MASSIF_ENABLE}" \
+    --enable_inherit_env="${ENABLE_INHERIT_ENV}" \
+    --memory_detection_interval="${MEMORY_DETECTION_INTERVAL}" \
+    --oom_kill_enable="${OOM_KILL_ENABLE}" \
+    --oom_kill_control_limit="${OOM_KILL_CONTROL_LIMIT}" \
+    --oom_consecutive_detection_count="${OOM_CONSECUTIVE_DETECTION_COUNT}" \
+    --kill_process_timeout_seconds="${KILL_PROCESS_TIMEOUT_SECONDS}" \
+    --runtime_ds_connect_timeout="${RUNTIME_DS_CONNECT_TIMEOUT}" \
+    --runtime_direct_connection_enable="${RUNTIME_DIRECT_CONNECTION_ENABLE}" \
+    --runtime_default_config="${RUNTIME_DEFAULT_CONFIG}" \
+    --proc_metrics_memory="${MEM4COMP}" \
+    --data_system_enable=true \
+    --data_system_host="${IP_ADDRESS}" \
+    --agent_uid="${agent_uid}" \
+    --alias="${FUNCTION_AGENT_ALIAS}" \
+    --alias="${FUNCTION_AGENT_ALIAS}" \
+    --log_expiration_enable="${LOG_EXPIRATION_ENABLE}" \
+    --log_expiration_time_threshold="${LOG_EXPIRATION_TIME_THRESHOLD}" \
+    --log_expiration_cleanup_interval="${LOG_EXPIRATION_CLEANUP_INTERVAL}" \
+    --log_expiration_max_file_count="${LOG_EXPIRATION_MAX_FILE_COUNT}""
+  fi
+
   LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${LD_LIBRARY_PATH} \
     LD_PRELOAD="${jemalloc_path}" \
+    LOCAL_IP="${LOCAL_IP}" \
+    HOST_IP="${IP_ADDRESS}" \
+    RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG \
+    INIT_LABELS=${LABELS} \
     ${bin} --address="${IP_ADDRESS}:${FUNCTION_PROXY_PORT}" --meta_store_address="${META_STORE_ADDRESS}" \
     --etcd_address="${ETCD_CLUSTER_ADDRESS}" \
     --node_id="${NODE_ID}" --log_config="${FS_LOG_CONFIG}" \
     --services_path="${SERVICES_PATH}" \
     --lib_path="${FUNCTION_SYSTEM_DIR}/lib" \
-    --ip="${IP_ADDRESS}" \
+    --function_meta_path="${FUNCTION_META_PATH}" \
+    --ip="${LOCAL_IP}" \
     --grpc_listen_port="${FUNCTION_PROXY_GRPC_PORT}" \
+    --session_grpc_port="${FUNCTION_PROXY_EXEC_GRPC_PORT}" \
+    --dposix_uds_path="${DPOSIX_UDS_PATH}" \
     --enable_driver="${enable_driver}" \
     --enable_trace="${ENABLE_TRACE}" \
+    --trace_config="${TRACE_CONFIG}" \
     --enable_metrics="${ENABLE_METRICS}" \
     --metrics_config="${METRICS_CONFIG}" \
     --metrics_config_file="${METRICS_CONFIG_FILE}" \
@@ -93,7 +182,12 @@ function install_function_proxy() {
     --enable_print_perf="${ENABLE_PRINT_PERF}" --is_partial_watch_instances="${IS_PARTIAL_WATCH_INSTANCES}" \
     --function_meta_path="${FUNCTION_META_PATH}" \
     --enable_meta_store="${ENABLE_META_STORE}" --meta_store_mode="${META_STORE_MODE}" --meta_store_excluded_keys="${META_STORE_EXCLUDED_KEYS}" \
-    --runtime_instance_debug_enable="${RUNTIME_INSTANCE_DEBUG_ENABLE}"  >>"${FS_LOG_PATH}/${NODE_ID}-function_proxy${STD_LOG_SUFFIX}" 2>&1 &
+    --runtime_instance_debug_enable="${RUNTIME_INSTANCE_DEBUG_ENABLE}" \
+    --enable_traefik_registry="${ENABLE_TRAEFIK_REGISTRY}" \
+    --traefik_etcd_prefix="${TRAEFIK_ETCD_PREFIX}" --traefik_lease_ttl="${TRAEFIK_LEASE_TTL}" \
+    --traefik_http_entrypoint="${TRAEFIK_HTTP_ENTRYPOINT}" --traefik_enable_tls="${TRAEFIK_ENABLE_TLS}" \
+    --traefik_servers_transport="${TRAEFIK_SERVERS_TRANSPORT}" \
+    ${merge_process_args} >>"${FS_LOG_PATH}/${NODE_ID}-function_proxy${STD_LOG_SUFFIX}" 2>&1 &
 
   FUNCTION_PROXY_PID="$!"
   log_info "succeed to start function proxy, proxy_port=${FUNCTION_PROXY_PORT}, grpc_port=${FUNCTION_PROXY_GRPC_PORT}, pid=${FUNCTION_PROXY_PID}"
@@ -196,6 +290,10 @@ function install_collector() {
 
 function install_faas_frontend() {
   log_info "start faas frontend, http_ip=${IP_ADDRESS}, http_port=${FAAS_FRONTEND_HTTP_PORT}, grpc_port=${FAAS_FRONTEND_GRPC_PORT}..."
+  local meta_service_address="${META_SERVICE_ADDRESS}"
+  if [ -z "${meta_service_address}" ]; then
+    meta_service_address="${IP_ADDRESS}:${META_SERVICE_PORT}"
+  fi
   init_frontend_config=${FUNCTION_SYSTEM_DIR}/config/init_frontend_args.json
   install_init_frontend_config=${config_install_dir}/init_frontend_args_temp.json
   cp ${init_frontend_config} ${install_init_frontend_config}
@@ -203,7 +301,12 @@ function install_faas_frontend() {
   sed -i "s/{faas_frontend_http_ip}/${IP_ADDRESS}/g" ${install_init_frontend_config}
   sed -i "s/{faas_frontend_http_port}/${FAAS_FRONTEND_HTTP_PORT}/g" ${install_init_frontend_config}
   sed -i "s/{sslEnable}/${SSL_ENABLE}/g" ${install_init_frontend_config}
+  sed -i "s/{frontendSslEnable}/${FRONTEND_SSL_ENABLE}/g" ${install_init_frontend_config}
+  sed -i "s/RequireAndVerifyClientCert/${FRONTEND_CLIENT_AUTH_TYPE}/g" ${install_init_frontend_config}
   sed -i "s/{sccEnable}/${SCC_ENABLE}/g" ${install_init_frontend_config}
+  sed -i "s/{iam_server_address}/${IAM_SERVER_ADDRESS}/g" ${install_init_frontend_config}
+  sed -i "s/{meta_service_address}/${meta_service_address}/g" ${install_init_frontend_config}
+  sed -i "s/{enable_func_token_auth}/${ENABLE_FUNCTION_TOKEN_AUTH}/g" ${install_init_frontend_config}
   sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" ${install_init_frontend_config}
   sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" ${install_init_frontend_config}
   sed -i "s*{sslBasePath}*${SSL_BASE_PATH}*g" ${install_init_frontend_config}
@@ -212,12 +315,10 @@ function install_faas_frontend() {
     sed -i "s*{etcdCAFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}*g" ${install_init_frontend_config}
     sed -i "s*{etcdCertFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}*g" ${install_init_frontend_config}
     sed -i "s*{etcdKeyFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}*g" ${install_init_frontend_config}
-    sed -i "s*{passphraseFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_PWD_FILE}*g" ${install_init_frontend_config}
   else
     sed -i "s*{etcdCAFile}**g" ${install_init_frontend_config}
     sed -i "s*{etcdCertFile}**g" ${install_init_frontend_config}
     sed -i "s*{etcdKeyFile}**g" ${install_init_frontend_config}
-    sed -i "s*{passphraseFile}**g" ${install_init_frontend_config}
   fi
   GO_RUNTIME_BIN=${RUNTIME_HOME_DIR}/service/go/bin
   POD_NAME="frontend-process" \
@@ -277,12 +378,10 @@ function install_function_scheduler() {
     sed -i "s*{etcdCAFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}*g" ${install_init_scheduler_config}
     sed -i "s*{etcdCertFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}*g" ${install_init_scheduler_config}
     sed -i "s*{etcdKeyFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}*g" ${install_init_scheduler_config}
-    sed -i "s*{passphraseFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_PWD_FILE}*g" ${install_init_scheduler_config}
   else
     sed -i "s*{etcdCAFile}**g" ${install_init_scheduler_config}
     sed -i "s*{etcdCertFile}**g" ${install_init_scheduler_config}
     sed -i "s*{etcdKeyFile}**g" ${install_init_scheduler_config}
-    sed -i "s*{passphraseFile}**g" ${install_init_scheduler_config}
   fi
   GO_RUNTIME_BIN=${RUNTIME_HOME_DIR}/service/go/bin
   POD_NAME="scheduler-process" \
@@ -338,84 +437,117 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
   if [ "X${DEPLOY_FUNCTION_PROXY}" = "Xfalse" ] && [ ! -z "${UNIQUE_NODE_ID}" ]; then
     unique_proxy_option="--local_node_id=${UNIQUE_NODE_ID}"
   fi
-  local user_lod_export_option=">>${FS_LOG_PATH}/${NODE_ID}-function_agent${STD_LOG_SUFFIX} 2>&1"
-  if [ "x${USER_LOG_EXPORT_MODE}" == "xstd" ]; then
-    user_lod_export_option=""
-  fi
   local agent_uid=${YR_POD_NAME}
   if [ "x${YR_POD_NAME}" == "x" ]; then
     agent_uid="${NODE_ID}"
   fi
-  LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
-  HOST_IP="${IP_ADDRESS}" \
-  RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG\
+
+  # Extract agent arguments into an array for clarity and reuse
+  agent_args=(
+    --enable_merge_process=true
+    --ip="${IP_ADDRESS}"
+    --node_id="${NODE_ID}"
+    --agent_uid="${agent_uid}"
+    --alias="${FUNCTION_AGENT_ALIAS}"
+    --log_config="${FS_LOG_CONFIG}"
+    --litebus_thread_num="${FUNCTION_AGENT_LITEBUS_THREAD}"
+    --local_scheduler_address="${IP_ADDRESS}:${FUNCTION_PROXY_PORT}"
+    --agent_listen_port="${FUNCTION_AGENT_PORT}"
+    --runtime_dir="${RUNTIME_HOME_DIR}/service"
+    --runtime_home_dir="${RUNTIME_USER_HOME_DIR}"
+    --runtime_logs_dir="${RUNTIME_LOG_PATH}"
+    --runtime_std_log_dir=""
+    --runtime_ld_library_path="${ld_library_path}:${RUNTIME_HOME_DIR}/service/cpp/snlib:${RUNTIME_HOME_DIR}/sdk/cpp/lib"
+    --runtime_log_level="${RUNTIME_LOG_LEVEL}"
+    --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}"
+    --runtime_max_log_file_num="${RUNTIME_LOG_ROLLING_MAX_FILES}"
+    --runtime_config_dir="${RUNTIME_HOME_DIR}/service/cpp/config/"
+    --enable_separated_redirect_runtime_std="${SEPARATED_REDIRECT_RUNTIME_STD}"
+    --user_log_export_mode="${USER_LOG_EXPORT_MODE}"
+    --npu_collection_mode="${NPU_COLLECTION_MODE}"
+    --gpu_collection_enable="${GPU_COLLECTION_ENABLE}"
+    --proxy_ip="${LOCAL_IP}" \
+    --proxy_grpc_server_port="${FUNCTION_PROXY_GRPC_PORT}"
+    --setCmdCred=false
+    --python_dependency_path="${PYTHONPATH}:${RUNTIME_HOME_DIR}/service/python"
+    --python_log_config_path="${RUNTIME_HOME_DIR}/service/python/config/python-runtime-log.json"
+    --java_system_property="${RUNTIME_HOME_DIR}/service/java/log4j2.xml"
+    --java_system_library_path="${RUNTIME_HOME_DIR}/service/java/lib"
+    --host_ip="${IP_ADDRESS}"
+    --port="${FUNCTION_AGENT_PORT}"
+    --data_system_port="${DS_WORKER_PORT}"
+    --agent_address="${IP_ADDRESS}:${FUNCTION_AGENT_PORT}"
+    --enable_metrics="${ENABLE_METRICS}"
+    --metrics_config="${METRICS_CONFIG}"
+    --metrics_config_file="${METRICS_CONFIG_FILE}"
+    --runtime_initial_port="${RUNTIME_INIT_PORT}"
+    --port_num="${RUNTIME_PORT_NUM}"
+    --system_timeout="${SYSTEM_TIMEOUT}"
+    --metrics_collector_type="${METRICS_COLLECTOR_TYPE}"
+    --proc_metrics_cpu="${CPU4COMP}"
+    --custom_resources="${CUSTOM_RESOURCES}"
+    --is_protomsg_to_runtime="${IS_PROTOMSG_TO_RUNTIME}"
+    --massif_enable="${MASSIF_ENABLE}"
+    --enable_inherit_env="${ENABLE_INHERIT_ENV}"
+    --memory_detection_interval="${MEMORY_DETECTION_INTERVAL}"
+    --oom_kill_enable="${OOM_KILL_ENABLE}"
+    --oom_kill_control_limit="${OOM_KILL_CONTROL_LIMIT}"
+    --oom_consecutive_detection_count="${OOM_CONSECUTIVE_DETECTION_COUNT}"
+    --kill_process_timeout_seconds="${KILL_PROCESS_TIMEOUT_SECONDS}"
+    --runtime_ds_connect_timeout="${RUNTIME_DS_CONNECT_TIMEOUT}"
+    --runtime_direct_connection_enable="${RUNTIME_DIRECT_CONNECTION_ENABLE}"
+    --ssl_enable="${SSL_ENABLE}"
+    --ssl_base_path="${SSL_BASE_PATH}"
+    --ssl_root_file="${SSL_ROOT_FILE}"
+    --ssl_cert_file="${SSL_CERT_FILE}"
+    --ssl_key_file="${SSL_KEY_FILE}"
+    --etcd_auth_type="${ETCD_AUTH_TYPE}"
+    --etcd_root_ca_file="${ETCD_CA_FILE}"
+    --etcd_cert_file="${ETCD_CLIENT_CERT_FILE}"
+    --etcd_key_file="${ETCD_CLIENT_KEY_FILE}"
+    --etcd_ssl_base_path=${ETCD_SSL_BASE_PATH}
+    --runtime_default_config="${RUNTIME_DEFAULT_CONFIG}"
+    --proc_metrics_memory="${MEM4COMP}"
+    --enable_dis_conv_call_stack="${ENABLE_DIS_CONV_CALL_STACK}"
+    --data_system_enable=true
+    --data_system_host="${IP_ADDRESS}"
+    --runtime_instance_debug_enable="${RUNTIME_INSTANCE_DEBUG_ENABLE}"
+    --log_expiration_enable="${LOG_EXPIRATION_ENABLE}"
+    --log_expiration_time_threshold="${LOG_EXPIRATION_TIME_THRESHOLD}"
+    --log_expiration_cleanup_interval="${LOG_EXPIRATION_CLEANUP_INTERVAL}"
+    --log_expiration_max_file_count="${LOG_EXPIRATION_MAX_FILE_COUNT}"
+    --user_log_auto_flush_interval_ms="${USER_LOG_AUTO_FLUSH_INTERVAL_MS}"
+    --user_log_buffer_flush_threshold="${USER_LOG_BUFFER_FLUSH_THRESHOLD}"
+    --user_log_rolling_size_limit_mb="${USER_LOG_MAX_ROLLING_FILE_SIZE_MB}"
+    --user_log_rolling_file_count_limit="${USER_LOG_MAX_ROLLING_LOG_FILE_NUM}"
+    --npu_collection_enable="${NPU_COLLECTION_ENABLE}"
+    --user_log_auto_flush_interval_ms="${USER_LOG_AUTO_FLUSH_INTERVAL_MS}"
+    --user_log_buffer_flush_threshold="${USER_LOG_BUFFER_FLUSH_THRESHOLD}"
+    --user_log_rolling_size_limit_mb="${USER_LOG_MAX_ROLLING_FILE_SIZE_MB}"
+    --user_log_rolling_file_count_limit="${USER_LOG_MAX_ROLLING_LOG_FILE_NUM}"
+    --npu_collection_enable="${NPU_COLLECTION_ENABLE}"
+    --numa_collection_enable="${NUMA_COLLECTION_ENABLE}"
+
+  )
+
+  # Start with or without redirecting stdout/stderr depending on USER_LOG_EXPORT_MODE
+  if [ "x${USER_LOG_EXPORT_MODE}" == "xstd" ]; then
+    LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
+    LOCAL_IP="${LOCAL_IP}" \
+    HOST_IP="${IP_ADDRESS}" \
+    RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG \
     INIT_LABELS=${LABELS} \
-    ${bin} \
-    --enable_merge_process=true \
-    --ip="${IP_ADDRESS}" \
-    --node_id="${NODE_ID}" \
-    --agent_uid="${agent_uid}" \
-    --alias="${FUNCTION_AGENT_ALIAS}" \
-    --log_config="${FS_LOG_CONFIG}" \
-    --litebus_thread_num="${FUNCTION_AGENT_LITEBUS_THREAD}" \
-    --local_scheduler_address="${IP_ADDRESS}:${FUNCTION_PROXY_PORT}" \
-    --agent_listen_port="${FUNCTION_AGENT_PORT}" \
-    --runtime_dir="${RUNTIME_HOME_DIR}/service" \
-    --runtime_home_dir="${RUNTIME_USER_HOME_DIR}" \
-    --runtime_logs_dir="${RUNTIME_LOG_PATH}" --runtime_std_log_dir="" \
-    --runtime_ld_library_path="${ld_library_path}" \
-    --runtime_log_level="${RUNTIME_LOG_LEVEL}" \
-    --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}" \
-    --runtime_max_log_file_num="${RUNTIME_LOG_ROLLING_MAX_FILES}" \
-    --runtime_config_dir="${RUNTIME_HOME_DIR}/service/cpp/config/" \
-    --enable_separated_redirect_runtime_std="${SEPARATED_REDIRECT_RUNTIME_STD}" \
-    --user_log_auto_flush_interval_ms="${USER_LOG_AUTO_FLUSH_INTERVAL_MS}" \
-    --user_log_buffer_flush_threshold="${USER_LOG_BUFFER_FLUSH_THRESHOLD}" \
-    --user_log_rolling_size_limit_mb="${USER_LOG_MAX_ROLLING_FILE_SIZE_MB}" \
-    --user_log_rolling_file_count_limit="${USER_LOG_MAX_ROLLING_LOG_FILE_NUM}" \
-    --npu_collection_enable="${NPU_COLLECTION_ENABLE}" \
-    --user_log_export_mode="${USER_LOG_EXPORT_MODE}" \
-    --npu_collection_mode="${NPU_COLLECTION_MODE}" \
-    --gpu_collection_enable="${GPU_COLLECTION_ENABLE}" \
-    --numa_collection_enable="${NUMA_COLLECTION_ENABLE}" \
-    --proxy_grpc_server_port="${FUNCTION_PROXY_GRPC_PORT}" \
-    --setCmdCred=false \
-    --python_dependency_path="${PYTHONPATH}:${RUNTIME_HOME_DIR}/service/python" \
-    --python_log_config_path="${RUNTIME_HOME_DIR}/service/python/config/python-runtime-log.json" \
-    --java_system_property="${RUNTIME_HOME_DIR}/service/java/log4j2.xml" \
-    --java_system_library_path="${RUNTIME_HOME_DIR}/service/java/lib" \
-    --host_ip="${IP_ADDRESS}" \
-    --port="${FUNCTION_AGENT_PORT}" \
-    --data_system_port="${DS_WORKER_PORT}" \
-    --agent_address="${IP_ADDRESS}:${FUNCTION_AGENT_PORT}" \
-    --enable_metrics="${ENABLE_METRICS}" \
-    --metrics_config="${METRICS_CONFIG}" \
-    --metrics_config_file="${METRICS_CONFIG_FILE}" \
-    --runtime_initial_port="${RUNTIME_INIT_PORT}" \
-    --port_num="${RUNTIME_PORT_NUM}" \
-    --system_timeout="${SYSTEM_TIMEOUT}" \
-    --metrics_collector_type="${METRICS_COLLECTOR_TYPE}" \
-    --proc_metrics_cpu="${CPU4COMP}" \
-    --custom_resources="${CUSTOM_RESOURCES}" \
-    --is_protomsg_to_runtime="${IS_PROTOMSG_TO_RUNTIME}" \
-    --massif_enable="${MASSIF_ENABLE}" \
-    --enable_inherit_env="${ENABLE_INHERIT_ENV}" \
-    --memory_detection_interval="${MEMORY_DETECTION_INTERVAL}" \
-    --oom_kill_enable="${OOM_KILL_ENABLE}" \
-    --oom_kill_control_limit="${OOM_KILL_CONTROL_LIMIT}" \
-    --oom_consecutive_detection_count="${OOM_CONSECUTIVE_DETECTION_COUNT}" \
-    --kill_process_timeout_seconds="${KILL_PROCESS_TIMEOUT_SECONDS}" \
-    --runtime_ds_connect_timeout="${RUNTIME_DS_CONNECT_TIMEOUT}" \
-    --runtime_direct_connection_enable="${RUNTIME_DIRECT_CONNECTION_ENABLE}" \
-    --ssl_enable="${SSL_ENABLE}" --ssl_base_path="${SSL_BASE_PATH}" \
-    --ssl_root_file="${SSL_ROOT_FILE}" --ssl_cert_file="${SSL_CERT_FILE}" --ssl_key_file="${SSL_KEY_FILE}" \
-    --etcd_auth_type="${ETCD_AUTH_TYPE}" --etcd_root_ca_file="${ETCD_CA_FILE}" --etcd_cert_file="${ETCD_CLIENT_CERT_FILE}" --etcd_key_file="${ETCD_CLIENT_KEY_FILE}" \
-    --etcd_ssl_base_path=${ETCD_SSL_BASE_PATH} \
-    --runtime_default_config="${RUNTIME_DEFAULT_CONFIG}" \
-    --proc_metrics_memory="${MEM4COMP}" ${unique_proxy_option} \
-    --enable_dis_conv_call_stack="${ENABLE_DIS_CONV_CALL_STACK}" \
-    --runtime_instance_debug_enable="${RUNTIME_INSTANCE_DEBUG_ENABLE}" ${user_lod_export_option} &
-  FUNCTION_AGENT_PID="$!"
+    ${bin} "${agent_args[@]}" ${unique_proxy_option} &
+    FUNCTION_AGENT_PID="$!"
+  else
+    LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
+    LOCAL_IP="${LOCAL_IP}" \
+    HOST_IP="${IP_ADDRESS}" \
+    RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG \
+    INIT_LABELS=${LABELS} \
+    ${bin} "${agent_args[@]}" ${unique_proxy_option} >>"${FS_LOG_PATH}/${NODE_ID}-function_agent${STD_LOG_SUFFIX}" 2>&1 &
+    FUNCTION_AGENT_PID="$!"
+  fi
   log_info "succeed to start function agent and runtime manager, port=${FUNCTION_AGENT_PORT} pid=${FUNCTION_AGENT_PID}"
 }
 
@@ -466,7 +598,9 @@ function install_function_master() {
       --etcd_table_prefix="${ETCD_TABLE_PREFIX}" --etcd_target_name_override="${ETCD_TARGET_NAME_OVERRIDE}" \
       --ssl_root_file="${SSL_ROOT_FILE}" --ssl_cert_file="${SSL_CERT_FILE}" --ssl_key_file="${SSL_KEY_FILE}" \
       --function_meta_path="${FUNCTION_META_PATH}" \
+      --enable_trace=${ENABLE_TRACE} --trace_config="${TRACE_CONFIG}" \
       --meta_store_max_flush_concurrency="${META_STORE_MAX_FLUSH_CONCURRENCY}" --meta_store_max_flush_batch_size="${META_STORE_MAX_FLUSH_BATCH_SIZE}" \
+      --system_tenant_id="${SYSTEM_TENANT_ID}" \
       >>"${FS_LOG_PATH}/${NODE_ID}-function_master${STD_LOG_SUFFIX}" 2>&1 &
     FUNCTION_MASTER_PID=$!
     if function_system_health_check ${FUNCTION_MASTER_PID} "${GLOBAL_SCHEDULER_PORT}" "global-scheduler"; then
@@ -492,32 +626,30 @@ function install_metaservice() {
   sed -i "s/{frontendAddr}/${IP_ADDRESS}:${FAAS_FRONTEND_HTTP_PORT}/g" ${install_metaservice_config}
   sed -i "s/{etcdAddr}/$(echo ${ETCD_CLUSTER_ADDRESS} | sed 's/,/","/g')/g" ${install_metaservice_config}
   sed -i "s/{sslEnable}/${SSL_ENABLE}/g" ${install_metaservice_config}
+  sed -i "s/{metaserviceSslEnable}/${META_SERVICE_SSL_ENABLE}/g" ${install_metaservice_config}
+  sed -i "s/RequireAndVerifyClientCert/${META_SERVICE_CLIENT_AUTH_TYPE}/g" ${install_metaservice_config}
   sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" ${install_metaservice_config}
   sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" ${install_metaservice_config}
   sed -i "s/{clusters}/${CLUSTER_LIST}/g" ${install_metaservice_config}
   sed -i "s/{sccEnable}/${SCC_ENABLE}/g" ${install_metaservice_config}
   sed -i "s*{sccBasePath}*${SCC_BASE_PATH}*g" ${install_metaservice_config}
-  if [ "X${SSL_ENABLE}" = "Xtrue" ] && [ -n "${SSL_BASE_PATH}" ]; then
+  if [ "X${META_SERVICE_SSL_ENABLE}" = "Xtrue" ] && [ -n "${SSL_BASE_PATH}" ]; then
     sed -i "s*{rootCAFile}*${SSL_BASE_PATH}/${SSL_ROOT_FILE}*g" ${install_metaservice_config}
     sed -i "s*{moduleCertFile}*${SSL_BASE_PATH}/${SSL_CERT_FILE}*g" ${install_metaservice_config}
     sed -i "s*{moduleKeyFile}*${SSL_BASE_PATH}/${SSL_KEY_FILE}*g" ${install_metaservice_config}
-    sed -i "s*{pwdFile}*${SSL_BASE_PATH}/${SSL_PWD_FILE}*g" ${install_metaservice_config}
   else
     sed -i "s*{rootCAFile}**g" ${install_metaservice_config}
     sed -i "s*{moduleCertFile}**g" ${install_metaservice_config}
     sed -i "s*{moduleKeyFile}**g" ${install_metaservice_config}
-    sed -i "s*{pwdFile}**g" ${install_metaservice_config}
   fi
   if [ "X${SSL_ENABLE}" = "Xtrue" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
     sed -i "s*{etcdCAFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}*g" ${install_metaservice_config}
     sed -i "s*{etcdCertFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}*g" ${install_metaservice_config}
     sed -i "s*{etcdKeyFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}*g" ${install_metaservice_config}
-    sed -i "s*{passphraseFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_PWD_FILE}*g" ${install_metaservice_config}
   else
     sed -i "s*{etcdCAFile}**g" ${install_metaservice_config}
     sed -i "s*{etcdCertFile}**g" ${install_metaservice_config}
     sed -i "s*{etcdKeyFile}**g" ${install_metaservice_config}
-    sed -i "s*{passphraseFile}**g" ${install_metaservice_config}
   fi
   if [ "X${SCC_ENABLE}" = "Xtrue" ]; then
     sed -i "s*{sslDecryptTool}*${SSL_DECRYPT_TOOL}*g" ${install_metaservice_config}
@@ -539,6 +671,65 @@ function install_metaservice() {
   if metaservice_health_check ${METASERVICE_PID}; then
     log_info "succeed to start metaservice process, ip=${IP_ADDRESS} port=${META_SERVICE_PORT} pid=${METASERVICE_PID}"
     return 0
+  fi
+  return 1
+}
+
+function install_iam_server() {
+  log_info "start iam_server, ip=${IP_ADDRESS}, port=${IAM_SERVER_PORT}..."
+  local bin=${FUNCTION_SYSTEM_DIR}/bin/iam_server
+
+  jemalloc_path=""
+  if [ "X${ENABLE_JEMALLOC}" == "Xtrue" ]; then
+    jemalloc_path="${JEMALLOC_LIB_PATH}"
+    if [ ! -f "${jemalloc_path}" ]; then
+      log_warning "jemalloc lib path ${jemalloc_path} does not exist!"
+    fi
+  fi
+
+  if [ "x${ENABLE_META_STORE}" == "xtrue" ] && [ "x${META_STORE_MODE}" == "xlocal" ]; then
+    META_STORE_ADDRESS="${IP_ADDRESS}:${GLOBAL_SCHEDULER_PORT}"
+  else
+    META_STORE_ADDRESS="${ETCD_CLUSTER_ADDRESS}"
+  fi
+
+  # Determine if SSL should be enabled for iam_server
+  # SSL is enabled if either global SSL_ENABLE=true or IAM_SSL_ENABLE=true
+  local iam_ssl_enable="false"
+  if [ "X${SSL_ENABLE}" = "Xtrue" ] || [ "X${SSL_ENABLE}" = "XTRUE" ] || \
+     [ "X${IAM_SSL_ENABLE}" = "Xtrue" ] || [ "X${IAM_SSL_ENABLE}" = "XTRUE" ]; then
+    iam_ssl_enable="true"
+    log_info "iam_server mTLS enabled, ssl_base_path=${SSL_BASE_PATH}"
+  fi
+
+  if check_port "${IP_ADDRESS}" "${IAM_SERVER_PORT}"; then
+    OPENSSL_CONF="" LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${LD_LIBRARY_PATH} \
+      LD_PRELOAD="${jemalloc_path}":"${LD_PRELOAD}" \
+      ${bin} --ip="${IP_ADDRESS}" \
+      --http_listen_port="${IAM_SERVER_PORT}" \
+      --meta_store_address="${META_STORE_ADDRESS}" \
+      --log_config="${FS_LOG_CONFIG}" \
+      --node_id="${NODE_ID}" \
+      --enable_iam="true" \
+      --enable_trace="${ENABLE_TRACE}" \
+      --token_expired_time_span="${IAM_TOKEN_EXPIRED_TIME_SPAN}" \
+      --iam_credential_type="${IAM_CREDENTIAL_TYPE}" \
+      --election_mode=${ELECTION_MODE} \
+      --ssl_enable="${iam_ssl_enable}" \
+      --ssl_base_path="${SSL_BASE_PATH}" \
+      --ssl_root_file="${SSL_ROOT_FILE}" \
+      --ssl_cert_file="${SSL_CERT_FILE}" \
+      --ssl_key_file="${SSL_KEY_FILE}" \
+      >>"${FS_LOG_PATH}/${NODE_ID}-iam_server${STD_LOG_SUFFIX}" 2>&1 &
+    IAM_SERVER_PID=$!
+    if function_system_health_check ${IAM_SERVER_PID} "${IAM_SERVER_PORT}" "iam-server"; then
+      log_info "succeed to start iam_server process, ip=${IP_ADDRESS}, port=${IAM_SERVER_PORT}, pid=${IAM_SERVER_PID}"
+      return 0
+    fi
+    if [ ${IAM_SERVER_PID} -gt 0 ]; then
+      log_warning "health check failed, killing iam_server process pid: ${IAM_SERVER_PID}"
+      kill -9 ${IAM_SERVER_PID}
+    fi
   fi
   return 1
 }
@@ -570,6 +761,9 @@ function install_function_system() {
     ;;
   meta_service)
     install_metaservice
+    ;;
+  iam_server)
+    install_iam_server
     ;;
   *)
     log_warning >&2 "Unknown component $1"

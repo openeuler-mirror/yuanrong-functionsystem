@@ -65,11 +65,11 @@ const int32_t RESOURCE_PATH_MAX_SIZE = 255;
 const int32_t LITEBUS_THREAD_NUM = 20;
 
 const uint32_t DEFAULT_SYSTEM_TIMEOUT = 180000;
-const uint64_t DEFAULT_PULL_RESOURCE_INTERVAL = 1000;
+const uint64_t DEFAULT_PULL_RESOURCE_INTERVAL = 500;
 
 const uint32_t DEFAULT_DOMAIN_HEARTBEAT_TIMEOUT = 6000;
 
-enum class EXECUTOR_TYPE { RUNTIME = 0, UNKNOWN = -1 };
+enum class EXECUTOR_TYPE { RUNTIME = 0, CONTAINER = 1, UNKNOWN = -1 };
 
 const int32_t SYSTEM_FUNCTION_INSTANCE_LEVEL = 1;
 
@@ -268,6 +268,26 @@ const std::string CONDA_CONFIG = "CONDA_CONFIG";
 const std::string CONDA_COMMAND = "CONDA_COMMAND";
 const std::string CONDA_PREFIX = "CONDA_PREFIX";
 const std::string CONDA_DEFAULT_ENV = "CONDA_DEFAULT_ENV";
+
+// container
+/* Example of rootfs json:
+{
+    "runtime": "runsc",
+    "type": "s3",
+    "imageurl": "registry.cn-hangzhou.com/runtime-python3.11:latest",
+    "readonly": "true",
+    "storageInfo": {
+        "endpoint": "cn-hangzhou.alipay.aliyun-inc.com",
+        "bucket": "crfs-dev",
+        "object": "akernel/test_img/roorfs_202512251644.img"
+    }
+}
+*/
+const std::string CONTAINER_ROOTFS = "rootfs";
+
+const std::string CONTAINER_EXTRA_CONFIG = "extra_config";
+
+const std::string CONTAINER_NETWORK = "network";
 
 // hibernate
 const std::string ENABLE_SUSPEND_RESUME = "enableSuspendResume";

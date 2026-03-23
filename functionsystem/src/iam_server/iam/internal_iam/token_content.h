@@ -19,16 +19,22 @@
 
 #include "common/status/status.h"
 #include "common/utils/token_transfer.h"
+#include "common/hex/hex.h"
+#include "utils/string_utils.hpp"
+#include <nlohmann/json.hpp>
 
 namespace functionsystem::iamserver {
 
 const int INTERNAL_IAM_TOKEN_MAX_SIZE = 4096;
+const std::string JWT_SEPARATOR = ".";
+const std::string JWT_HEADER = R"({"alg":"HS256","typ":"JWT"})";
 
 struct TokenContent {
     std::string tenantID;
-    uint64_t expiredTimeStamp;
+    uint64_t expiredTimeStamp{0};
     std::string salt;
-    // need to set it to sensitive value
+    std::string role;  // role field for JWT token
+    // JWT token format: base64url(header).base64url(payload).base64url(signature)
     std::string encryptToken;
 
     ~TokenContent()
@@ -47,14 +53,14 @@ struct TokenContent {
         if (tenantID.empty()) {
             return Status(StatusCode::FAILED, "token tenantID is empty");
         }
-        if (salt.empty()) {
+        if (!IsJwtFormat() && salt.empty()) {
             return Status(StatusCode::FAILED, "token salt is empty");
         }
         if (encryptToken.empty()) {
             return Status(StatusCode::FAILED, "token value is empty");
         }
         auto now = static_cast<uint64_t>(std::time(nullptr));
-        if (expiredTimeStamp < now + offset) {
+        if (expiredTimeStamp != UINT64_MAX && expiredTimeStamp < now + offset) {
             return Status(StatusCode::FAILED, "token expired time stamp is earlier than now, expiredTimeStamp: "
                                                   + std::to_string(expiredTimeStamp));
         }
@@ -134,8 +140,181 @@ struct TokenContent {
         tokenContent->salt = salt;
         tokenContent->tenantID = tenantID;
         tokenContent->expiredTimeStamp = expiredTimeStamp;
+        tokenContent->role = role;
         tokenContent->encryptToken = encryptToken;
         return tokenContent;
+    }
+
+    /**
+     * Generate JWT payload JSON string using nlohmann::json
+     * Format: {"sub":"tenantID","exp":expiredTimeStamp,"role":"role"}
+     */
+    std::string GetJwtPayloadJson() const
+    {
+        nlohmann::json payload;
+        payload["sub"] = tenantID;
+        payload["exp"] = expiredTimeStamp;
+        if (!role.empty()) {
+            payload["role"] = role;
+        }
+        return payload.dump();
+    }
+
+    /**
+     * Parse JWT payload JSON string using nlohmann::json
+     * Format: {"sub":"tenantID","exp":expiredTimeStamp,"role":"role"}
+     */
+    Status ParseJwtPayloadJson(const std::string &payloadJson)
+    {
+        try {
+            nlohmann::json payload = nlohmann::json::parse(payloadJson);
+            if (!payload.contains("sub") || !payload["sub"].is_string()) {
+                return Status(StatusCode::FAILED, "JWT payload missing or invalid 'sub' field");
+            }
+            if (!payload.contains("exp") || !payload["exp"].is_number()) {
+                return Status(StatusCode::FAILED, "JWT payload missing or invalid 'exp' field");
+            }
+            tenantID = payload["sub"].get<std::string>();
+            expiredTimeStamp = payload["exp"].get<uint64_t>();
+            // Parse optional role field
+            if (payload.contains("role") && payload["role"].is_string()) {
+                role = payload["role"].get<std::string>();
+            } else {
+                role.clear();
+            }
+            return Status::OK();
+        } catch (const nlohmann::json::exception &e) {
+            return Status(StatusCode::FAILED, "JWT payload parse failed: " + std::string(e.what()));
+        }
+    }
+
+    /**
+     * Sign the token and generate JWT format
+     * JWT format: base64url(header).base64url(payload).base64url(signature)
+     * The result is stored in encryptToken
+     * @param secretKey: the secret key for signing (HMAC-SHA256)
+     * @return Status::OK() if success
+     */
+    Status Sign(const litebus::SensitiveValue &secretKey)
+    {
+        if (tenantID.empty()) {
+            return Status(StatusCode::FAILED, "tenantID is empty, cannot sign");
+        }
+
+        // 1. Encode header
+        std::string headerBase64 = functionsystem::Base64UrlEncodeString(JWT_HEADER);
+
+        // 2. Encode payload
+        std::string payloadJson = GetJwtPayloadJson();
+        std::string payloadBase64 = functionsystem::Base64UrlEncodeString(payloadJson);
+
+        // 3. Create signing input: header.payload
+        std::string signingInput = headerBase64 + JWT_SEPARATOR + payloadBase64;
+
+        // 4. Generate signature using HMAC-SHA256
+        std::string signatureHex = litebus::hmac::HMACAndSHA256(secretKey, signingInput, false);
+        if (signatureHex.empty()) {
+            return Status(StatusCode::FAILED, "failed to generate HMAC signature");
+        }
+
+        // 5. Base64URL encode the signature (hex string directly for simplicity)
+        std::string signatureBase64 = functionsystem::Base64UrlEncodeString(signatureHex);
+
+        // 6. Combine to form JWT: header.payload.signature
+        encryptToken = signingInput + JWT_SEPARATOR + signatureBase64;
+        return Status::OK();
+    }
+
+    /**
+     * Verify JWT signature using HMAC-SHA256
+     * @param secretKey: the secret key for verification
+     * @return true if signature is valid
+     */
+    bool VerifySignature(const litebus::SensitiveValue &secretKey) const
+    {
+        // Split JWT into parts
+        auto firstDot = encryptToken.find(JWT_SEPARATOR);
+        if (firstDot == std::string::npos) {
+            YRLOG_ERROR("JWT format error: first separator not found");
+            return false;
+        }
+        auto secondDot = encryptToken.find(JWT_SEPARATOR, firstDot + 1);
+        if (secondDot == std::string::npos) {
+            YRLOG_ERROR("JWT format error: second separator not found");
+            return false;
+        }
+
+        std::string signingInput = encryptToken.substr(0, secondDot);
+        std::string signatureBase64 = encryptToken.substr(secondDot + 1);
+
+        // Decode stored signature
+        std::string storedSignatureHex = functionsystem::Base64UrlDecode(signatureBase64);
+
+        // Compute expected signature
+        std::string expectedSignatureHex = litebus::hmac::HMACAndSHA256(secretKey, signingInput, false);
+
+        return storedSignatureHex == expectedSignatureHex;
+    }
+
+    /**
+     * Check if the token is in JWT format
+     * @return true if encryptToken contains two JWT separators
+     */
+    bool IsJwtFormat() const
+    {
+        auto firstDot = encryptToken.find(JWT_SEPARATOR);
+        if (firstDot == std::string::npos) {
+            return false;
+        }
+        auto secondDot = encryptToken.find(JWT_SEPARATOR, firstDot + 1);
+        return secondDot != std::string::npos;
+    }
+
+    /**
+     * Parse JWT token from encryptToken field
+     * Extracts tenantID and expiredTimeStamp from payload
+     * @return Status::OK() if parsing succeeded
+     */
+    Status ParseJwt()
+    {
+        // Split JWT into parts: header.payload.signature
+        auto firstDot = encryptToken.find(JWT_SEPARATOR);
+        if (firstDot == std::string::npos) {
+            return Status(StatusCode::FAILED, "JWT format error: first separator not found");
+        }
+        auto secondDot = encryptToken.find(JWT_SEPARATOR, firstDot + 1);
+        if (secondDot == std::string::npos) {
+            return Status(StatusCode::FAILED, "JWT format error: second separator not found");
+        }
+
+        // Extract and decode payload
+        std::string payloadBase64 = encryptToken.substr(firstDot + 1, secondDot - firstDot - 1);
+        std::string payloadJson = functionsystem::Base64UrlDecode(payloadBase64);
+
+        // Parse payload JSON
+        return ParseJwtPayloadJson(payloadJson);
+    }
+
+    /**
+     * Parse token from encryptToken field (supports both JWT and legacy format)
+     * JWT format: base64url(header).base64url(payload).base64url(signature)
+     * Legacy format: tenantID__expiredTimeStamp
+     */
+    Status ParseFromEncryptToken()
+    {
+        if (IsJwtFormat()) {
+            return ParseJwt();
+        }
+        // Fallback to legacy format
+        return Parse(encryptToken.c_str());
+    }
+
+    /**
+     * Check if the token has a signature (JWT format or old signed format)
+     */
+    bool HasSignature() const
+    {
+        return IsJwtFormat();
     }
 };
 }  // namespace functionsystem::iamserver

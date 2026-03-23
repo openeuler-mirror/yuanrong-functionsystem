@@ -27,6 +27,7 @@
 #include "busproxy/startup/busproxy_startup.h"
 #include "common/aksk/aksk_util.h"
 #include "common/constants/constants.h"
+#include "common/constants/actor_name.h"
 #include "common/crypto/crypto.h"
 #include "common/explorer/explorer.h"
 #include "common/explorer/explorer_actor.h"
@@ -45,7 +46,9 @@
 #include "common/utils/param_check.h"
 #include "common/utils/sensitive_value.h"
 #include "common/utils/ssl_config.h"
+#include "common/utils/s3_config.h"
 #include "common/utils/version.h"
+#include "common/trace/trace_manager.h"
 #include "distribute_cache_client/ds_cache_client_impl.h"
 #include "function_agent_manager/function_agent_mgr_actor.h"
 #include "function_proxy/busproxy/invocation_handler/invocation_handler.h"
@@ -57,6 +60,10 @@
 #include "local_scheduler/instance_control/posix_api_handler/posix_api_handler.h"
 #include "local_scheduler/local_sched_driver.h"
 #include "memory_monitor/memory_monitor.h"
+#include "function_agent/driver/function_agent_driver.h"
+#include "function_agent/flags/function_agent_flags.h"
+#include "runtime_manager/config/flags.h"
+#include "runtime_manager/driver/runtime_manager_driver.h"
 #include "meta_store_client/meta_store_client.h"
 #include "openssl/safestack.h"
 #include "openssl/x509.h"
@@ -80,7 +87,106 @@ std::shared_ptr<LocalSchedDriver> g_localSchedDriver{ nullptr };
 std::shared_ptr<CommonDriver> g_commonDriver {nullptr};
 std::shared_ptr<functionsystem::grpc::CommonGrpcServer> g_posixGrpcServer{ nullptr };
 std::shared_ptr<KubeClient> g_kubeClient = nullptr;
+std::shared_ptr<function_agent::FunctionAgentDriver> g_functionAgentDriver{ nullptr };
 std::atomic_bool g_isCentOS{ false };
+
+S3Config GetS3Config(const function_agent::FunctionAgentFlags &flags)
+{
+    S3Config s3Config;
+    s3Config.credentialType = flags.GetCredentialType();
+    if (!flags.GetAccessKey().empty()) {
+        s3Config.accessKey = flags.GetAccessKey();
+    }
+    if (!flags.GetSecretKey().empty()) {
+        s3Config.secretKey = flags.GetSecretKey();
+    }
+    s3Config.endpoint = flags.GetS3Endpoint();
+    s3Config.protocol = flags.GetS3Protocol();
+    return s3Config;
+}
+
+functionsystem::messages::CodePackageThresholds GetCodePackageThresholds(
+    const function_agent::FunctionAgentFlags &flags)
+{
+    functionsystem::messages::CodePackageThresholds codePackageThresholds;
+    codePackageThresholds.set_filecountsmax(flags.GetFileCountMax());
+    codePackageThresholds.set_zipfilesizemaxmb(flags.GetZipFileSizeMaxMB());
+    codePackageThresholds.set_unzipfilesizemaxmb(flags.GetUnzipFileSizeMaxMB());
+    codePackageThresholds.set_dirdepthmax(flags.GetDirDepthMax());
+    codePackageThresholds.set_codeagingtime(flags.GetCodeAgingTime());
+    return codePackageThresholds;
+}
+
+functionsystem::function_agent::FunctionAgentStartParam BuildFunctionAgentStartParam(
+    const function_agent::FunctionAgentFlags &flags,
+    const runtime_manager::Flags &runtimeManagerFlags,
+    bool enableMergeProcess)
+{
+    function_agent::FunctionAgentStartParam startParam{
+        .ip = flags.GetIP(),
+        .localSchedulerAddress = flags.GetLocalSchedulerAddress(),
+        .nodeID = flags.GetNodeID(),
+        .alias = flags.GetAlias(),
+        .modelName = COMPONENT_NAME_FUNCTION_AGENT,
+        .agentPort = flags.GetAgentListenPort(),
+        .decryptAlgorithm = flags.GetDecryptAlgorithm(),
+        .s3Enable = flags.GetS3Enable(),
+        .s3Config = GetS3Config(flags),
+        .codePackageThresholds = GetCodePackageThresholds(flags),
+        .enableHotThresholdsCfg = flags.GetEnableHotThresholdsCfg(),
+        .codePkgThresholdsCfgPath = flags.GetCodePkgThresholdsCfgPath(),
+        .heartbeatTimeoutMs = flags.GetSystemTimeout(),
+        .agentUid = flags.GetAgentUID(),
+        .localNodeID = flags.GetLocalNodeID(),
+        .enableSignatureValidation = flags.GetEnableSignatureValidation(),
+        .componentName = COMPONENT_NAME_FUNCTION_AGENT,
+        .enableMergeProcess = enableMergeProcess,
+        .runtimeManagerFlags = enableMergeProcess ?
+            std::make_shared<runtime_manager::Flags>(runtimeManagerFlags) :
+            nullptr,
+        .dataSystemEnable = flags.GetDataSystemEnable(),
+        .dataSystemHost = flags.GetDataSystemHost(),
+        .dataSystemPort = flags.GetDataSystemPort(),
+        .pluginConfigs = flags.GetPluginConfigs()
+    };
+    return startParam;
+}
+
+void OnCreateFunctionAgent(const function_agent::FunctionAgentFlags &functionAgentFlags,
+                          const runtime_manager::Flags &runtimeManagerFlags,
+                          bool enableMergeProcess)
+{
+    YRLOG_INFO("function_agent is starting{}...",
+               enableMergeProcess ? " with runtime_manager in merged process" : "");
+
+    function_agent::FunctionAgentStartParam startParam =
+        BuildFunctionAgentStartParam(functionAgentFlags, runtimeManagerFlags, enableMergeProcess);
+
+    g_functionAgentDriver = std::make_shared<function_agent::FunctionAgentDriver>(
+        functionAgentFlags.GetNodeID(), startParam);
+
+    if (auto status = g_functionAgentDriver->Start(); status.IsError()) {
+        YRLOG_ERROR("failed to start function_agent, errMsg: {}", status.ToString());
+        g_functionProxySwitcher->SetStop();
+        return;
+    }
+
+    YRLOG_INFO("function_agent{} started successfully",
+               enableMergeProcess ? " and runtime_manager" : "");
+}
+
+void StopFunctionAgent()
+{
+    if (g_functionAgentDriver == nullptr) {
+        return;
+    }
+    g_functionAgentDriver->GracefulShutdown();
+    if (g_functionAgentDriver->Stop().IsOk()) {
+        g_functionAgentDriver->Await();
+        g_functionAgentDriver = nullptr;
+        YRLOG_INFO("success to stop function_agent and runtime_manager");
+    }
+}
 
 void Stop(int signum)
 {
@@ -315,7 +421,6 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
                            .maxCpu = flags.GetMaxInstanceCpuSize(),
                            .maxMemory = flags.GetMaxInstanceMemorySize() },
         .enablePrintResourceView = flags.GetEnablePrintResourceView(),
-        .posixGrpcServer = g_posixGrpcServer,
         .posixService = posixService,
         .creds = InitPosixGrpcServerSecureOption(flags),
         .posixPort = flags.GetGrpcListenPort(),
@@ -333,6 +438,16 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .runtimeInstanceDebugEnable = flags.IsRuntimeInstanceDebugEnable(),
         .unRegisterWhileStop = flags.UnRegisterWhileStop(),
         .enableFakeSuspendResume = flags.GetEnableFakeSuspendResume()
+        .unRegisterWhileStop = flags.UnRegisterWhileStop(),
+        .udsPath = flags.GetDPosixUdsPath(),
+        .sessionGrpcPort = flags.GetSessionGrpcPort(),
+        .address = flags.GetAddress(),  // LiteBus address for extracting IP used by gRPC servers
+        .enableTraefikRegistry = flags.GetEnableTraefikRegistry(),
+        .traefikEtcdPrefix = flags.GetTraefikEtcdPrefix(),
+        .traefikLeaseTTL = flags.GetTraefikLeaseTTL(),
+        .traefikHttpEntryPoint = flags.GetTraefikHttpEntryPoint(),
+        .traefikEnableTLS = flags.GetTraefikEnableTLS(),
+        .traefikServersTransport = flags.GetTraefikServersTransport()
     };
 }
 
@@ -418,7 +533,7 @@ void StartUpModule()
     ModuleIsReady({g_commonDriver, g_localSchedDriver});
 }
 
-void OnCreate(const Flags &flags)
+void OnCreate(const Flags &flags, const function_agent::FunctionAgentFlags &functionAgentFlags, const runtime_manager::Flags &runtimeManagerFlags)
 {
     YRLOG_INFO("{} is starting", COMPONENT_NAME);
     YRLOG_INFO("version:{} branch:{} commit_id:{}", BUILD_VERSION, GIT_BRANCH_NAME, GIT_HASH);
@@ -443,6 +558,13 @@ void OnCreate(const Flags &flags)
         g_functionProxySwitcher->SetStop();
         return;
     }
+
+    trace::TraceManager::GetInstance().InitTrace("yuanrong-kernel", flags.GetNodeID(), flags.GetEnableTrace(),
+                                                 flags.GetTraceConfig());
+    if (flags.GetEnableMergeProcess()) {
+        OnCreateFunctionAgent(functionAgentFlags, runtimeManagerFlags, true);
+    }
+
     InvocationHandler::RegisterCreateCallResultReceiver(PosixAPIHandler::CallResult);
     const auto dsAuthConfig = InitDsAuthConfig(flags);
     if (const auto status = InitCommonDriver(flags, dsAuthConfig); status.IsError()) {
@@ -481,6 +603,10 @@ void OnDestroy()
         (void)g_busproxyStartup->Stop();
     }
 
+    if (g_functionAgentDriver != nullptr) {
+        StopFunctionAgent();
+    }
+
     AwaitModule({g_localSchedDriver, g_commonDriver});
     g_commonDriver = nullptr;
     g_localSchedDriver = nullptr;
@@ -514,7 +640,7 @@ int main(int argc, char **argv)
 
     Flags flags;
 
-    if (const Option<std::string> parse = flags.ParseFlags(argc, argv); parse.IsSome()) {
+    if (const Option<std::string> parse = flags.ParseFlags(argc, argv, true); parse.IsSome()) {
         std::cerr << COMPONENT_NAME << " parse flag error, flags: " << parse.Get() << std::endl
                   << flags.Usage() << std::endl;
         return EXIT_COMMAND_MISUSE;
@@ -522,6 +648,20 @@ int main(int argc, char **argv)
 
     if (!CheckFlags(flags)) {
         return EXIT_COMMAND_MISUSE;
+    }
+
+    function_agent::FunctionAgentFlags functionAgentFlags;
+    runtime_manager::Flags runtimeManagerFlags;
+    if (flags.GetEnableMergeProcess()) {
+        if (auto parse = functionAgentFlags.ParseFlags(argc, argv, true); parse.IsSome()) {
+            std::cerr << COMPONENT_NAME << " parse function_agent flags error: " << parse.Get() << std::endl;
+            return EXIT_COMMAND_MISUSE;
+        }
+
+        if (auto parse = runtimeManagerFlags.ParseFlags(argc, argv, true); parse.IsSome()) {
+            std::cerr << COMPONENT_NAME << " parse runtime_manager flags error: " << parse.Get() << std::endl;
+            return EXIT_COMMAND_MISUSE;
+        }
     }
 
     g_functionProxySwitcher = std::make_shared<ModuleSwitcher>(COMPONENT_NAME, flags.GetNodeID());
@@ -533,7 +673,7 @@ int main(int argc, char **argv)
         return EXIT_ABNORMAL;
     }
 
-    OnCreate(flags);
+    OnCreate(flags, functionAgentFlags, runtimeManagerFlags);
 
     auto memOpt = MemoryOptimizer();
     memOpt.StartTrimming();

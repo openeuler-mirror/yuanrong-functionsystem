@@ -36,7 +36,12 @@ std::shared_ptr<DeployInstanceRequest> GetDeployInstanceReq(const FunctionMeta &
     deployInstanceRequest->set_codesha512(funcMeta.funcMetaData.codeSha512);
     deployInstanceRequest->set_codesha256(funcMeta.funcMetaData.codeSha256);
     deployInstanceRequest->mutable_resources()->CopyFrom(request->instance().resources());
+    if (request->instance().has_snapshotinfo()) {
+        deployInstanceRequest->mutable_snapshotinfo()->CopyFrom(request->instance().snapshotinfo());
+    }
     BuildDeploySpec(funcMeta, deployInstanceRequest);
+    BuildRootfsConfig(funcMeta, deployInstanceRequest);
+    BuildBootstrapConfig(funcMeta, deployInstanceRequest);
     for (auto &[key, handler] : funcMeta.funcMetaData.hookHandler) {
         deployInstanceRequest->mutable_hookhandler()->operator[](key) = handler;
     }
@@ -116,5 +121,45 @@ std::shared_ptr<messages::StaticFunctionChangeRequest> GetStaticFunctionChangeRe
     staticFunctionChangeRequest->set_requestid(instanceInfo.requestid());
     staticFunctionChangeRequest->set_status(status);
     return staticFunctionChangeRequest;
+}
+
+void BuildRootfsConfig(
+    const FunctionMeta &funcMeta, const std::shared_ptr<DeployInstanceRequest> &deployInstanceRequest)
+{
+    if (funcMeta.rootfs.runtime.empty() || funcMeta.rootfs.type == RootfsSrcType::INVALID) {
+        return;
+    }
+    auto container = deployInstanceRequest->mutable_container();
+    container->set_id(std::to_string(std::hash<std::string>{}(funcMeta.funcMetaData.name + funcMeta.funcMetaData.revisionId)));
+    container->set_runtime(funcMeta.rootfs.runtime);
+    container->set_mountpoint(funcMeta.rootfs.mountpoint);
+    container->mutable_rootfsconfig()->set_readonly(funcMeta.rootfs.readonly);
+    container->mutable_rootfsconfig()->set_type(static_cast<runtime::v1::RootfsSrcType>(funcMeta.rootfs.type));
+    if (funcMeta.rootfs.type == RootfsSrcType::S3) {
+        auto s3Config = container->mutable_rootfsconfig()->mutable_s3_config();
+        s3Config->set_endpoint(funcMeta.rootfs.storageInfo.endpoint);
+        s3Config->set_bucket(funcMeta.rootfs.storageInfo.bucket);
+        s3Config->set_object(funcMeta.rootfs.storageInfo.object);
+        s3Config->set_accesskeyid(funcMeta.rootfs.storageInfo.accessKey);
+        s3Config->set_accesskeysecret(funcMeta.rootfs.storageInfo.secretKey);
+    } else if (funcMeta.rootfs.type == RootfsSrcType::IMAGE) {
+        container->mutable_rootfsconfig()->set_image_url(funcMeta.rootfs.imageurl);
+    } else if (funcMeta.rootfs.type == RootfsSrcType::LOCAL) {
+        container->mutable_rootfsconfig()->set_path(funcMeta.rootfs.path);
+    }
+}
+
+void BuildBootstrapConfig(
+    const FunctionMeta &funcMeta, const std::shared_ptr<DeployInstanceRequest> &deployInstanceRequest)
+{
+    if (funcMeta.bootstrap.type.empty() && funcMeta.bootstrap.root.empty() &&
+        funcMeta.bootstrap.entrypoint.empty() && funcMeta.bootstrap.cmd.empty()) {
+        return;
+    }
+    auto bootstrapConfig = deployInstanceRequest->mutable_bootstrapconfig();
+    bootstrapConfig->set_type(funcMeta.bootstrap.type);
+    bootstrapConfig->set_root(funcMeta.bootstrap.root);
+    bootstrapConfig->set_entrypoint(funcMeta.bootstrap.entrypoint);
+    bootstrapConfig->set_cmd(funcMeta.bootstrap.cmd);
 }
 }  // namespace functionsystem

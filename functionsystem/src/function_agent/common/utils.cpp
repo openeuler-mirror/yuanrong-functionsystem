@@ -39,8 +39,9 @@ const int DEFAULT_QUOTA = 512;
 const int QUOTA_NO_MONITOR = -1;
 const std::unordered_set<std::string> DECRYPT_IGNORE_SET = { CRYPTO_ALGORITHM_STR, ENV_KEY };
 
-const std::vector<std::string> DEPLOY_OPTION_KEYS = { CONDA_CONFIG, CONDA_COMMAND, CONDA_PREFIX, CONDA_DEFAULT_ENV,
-                                                      EXEC_PATH };
+const std::vector<std::string> DEPLOY_OPTION_KEYS = { CONDA_CONFIG,       CONDA_COMMAND,         CONDA_PREFIX,
+                                                      CONDA_DEFAULT_ENV,  CONTAINER_ROOTFS,      CONTAINER_EXTRA_CONFIG,
+                                                      CONTAINER_NETWORK, EXEC_PATH };
 const std::vector<std::string> POSIX_ENV_KEYS = { YR_APP_MODE,
                                                   YR_WORKING_DIR,
                                                   UNZIPPED_WORKING_DIR,
@@ -181,7 +182,7 @@ messages::RuntimeConfig SetRuntimeConfig(const std::shared_ptr<messages::DeployI
     SetCreateOptions(req, runtimeConf, { "secretKey", "accessKey", "authToken" });
     SetTLSConfig(req, runtimeConf);
     SetSubDirConfig(req, runtimeConf);
-
+    runtimeConf.set_dposixudspath(req->dposixudspath());
     runtimeConf.mutable_funcmountconfig()->CopyFrom(req->funcmountconfig());
     if (auto mountConfig = req->createoptions().find(DELEGATE_MOUNT); mountConfig != req->createoptions().end()) {
         ParseMountConfig(runtimeConf, mountConfig->second);
@@ -459,7 +460,8 @@ void SetStartRuntimeInstanceRequestConfig(const std::unique_ptr<messages::StartI
     auto runtimeInstanceInfo = SetRuntimeInstanceInfo(req);
     *startInstanceRequest->mutable_runtimeinstanceinfo() = std::move(runtimeInstanceInfo);
     *startInstanceRequest->mutable_scheduleoption() = std::move(req->scheduleoption());
-    startInstanceRequest->set_type(static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME));
+    startInstanceRequest->set_type(!req->has_container() ? static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME)
+                                                         : static_cast<int32_t>(EXECUTOR_TYPE::CONTAINER));
 }
 
 messages::RuntimeInstanceInfo SetRuntimeInstanceInfo(const std::shared_ptr<messages::DeployInstanceRequest> &req)
@@ -474,6 +476,16 @@ messages::RuntimeInstanceInfo SetRuntimeInstanceInfo(const std::shared_ptr<messa
     runtimeInstanceInfo.set_traceid(req->traceid());
     runtimeInstanceInfo.set_requestid(req->requestid());
     runtimeInstanceInfo.set_gracefulshutdowntime(req->gracefulshutdowntime());
+    runtimeInstanceInfo.set_warmuptype(req->warmuptype());
+    if (req->has_container()) {
+        *runtimeInstanceInfo.mutable_container() = std::move(req->container());
+    }
+    if (req->has_bootstrapconfig()) {
+        *runtimeInstanceInfo.mutable_bootstrapconfig() = std::move(req->bootstrapconfig());
+    }
+    if (req->has_snapshotinfo()) {
+        *runtimeInstanceInfo.mutable_snapshotinfo() = std::move(req->snapshotinfo());
+    }
     return runtimeInstanceInfo;
 }
 
@@ -484,7 +496,6 @@ void SetStopRuntimeInstanceRequest(messages::StopInstanceRequest &stopInstanceRe
     stopInstanceRequest.set_runtimeid(req->runtimeid());
     stopInstanceRequest.set_requestid(req->requestid());
     stopInstanceRequest.set_traceid(req->traceid());
-    stopInstanceRequest.set_type(static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME));
 }
 
 std::unordered_map<std::string, std::shared_ptr<messages::Layer>> SetDeployingRequestLayers(

@@ -270,4 +270,5 @@ func SetTLSConfig(metaServCfg *Configs) {
 	metaServCfg.MutualTLSConfig.PwdFile = metaServCfg.MutualSSLConfig.PwdFile
 	metaServCfg.MutualTLSConfig.ServerName = metaServCfg.MutualSSLConfig.ServerName
 	metaServCfg.MutualTLSConfig.DecryptTool = metaServCfg.MutualSSLConfig.DecryptTool
+	metaServCfg.MutualTLSConfig.ClientAuthType = metaServCfg.MutualSSLConfig.ClientAuthType
 }

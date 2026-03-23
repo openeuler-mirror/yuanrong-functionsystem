@@ -241,6 +241,11 @@ public:
         return domainHeartbeatTimeoutMs_;
     }
 
+    const std::string &GetSystemTenantID() const
+    {
+        return systemTenantID_;
+    }
+
 protected:
     void InitScalerFlags();
     void InitMetaStoreFlags();
@@ -311,6 +316,7 @@ protected:
     bool enableFrontendPool_{ false };
     bool enableAbnormalDoubleCheck_{ false };
     uint32_t domainHeartbeatTimeoutMs_{ DEFAULT_DOMAIN_HEARTBEAT_TIMEOUT };
+    std::string systemTenantID_{ "0" };
 };
 
 }  // namespace functionsystem::functionmaster

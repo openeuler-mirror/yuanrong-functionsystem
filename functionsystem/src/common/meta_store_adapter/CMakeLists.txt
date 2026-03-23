@@ -15,6 +15,6 @@
 project(meta_store_adapter)
 add_library(meta_store_adapter STATIC "")
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} META_STORE_ADAPTER_SRCS)
-add_dependencies(meta_store_adapter posix_pb resource_view)
+add_dependencies(meta_store_adapter posix_pb resource_view metadata)
 target_sources(meta_store_adapter PRIVATE ${META_STORE_ADAPTER_SRCS})
-target_link_libraries(meta_store_adapter PUBLIC meta_store_client)
+target_link_libraries(meta_store_adapter PUBLIC meta_store_client metadata)

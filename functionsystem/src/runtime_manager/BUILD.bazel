@@ -1,0 +1,56 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+load("@yuanrong_functionsystem//bazel:yr.bzl", "COPTS")
+
+# runtime_manager_inc: include-provider for -Ifunctionsystem/src/runtime_manager/
+# and -Ifunctionsystem/src/
+cc_library(
+    name = "runtime_manager_inc",
+    includes = ["."],
+    deps = ["//functionsystem/src:src_root_inc"],
+    visibility = ["//visibility:public"],
+)
+
+# runtime_manager_lib — mirrors CMake's runtime_manager_lib STATIC library
+cc_library(
+    name = "runtime_manager_lib",
+    srcs = glob(
+        [
+            "**/*.cpp",
+        ],
+        exclude = ["main.cpp"],
+    ),
+    hdrs = glob(["**/*.h"]),
+    copts = COPTS + ["-fPIE"],
+    deps = [
+        ":runtime_manager_inc",
+        "//functionsystem/src/common:aksk",
+        "//functionsystem/src/common:register",
+        "//functionsystem/src/common:common_flags",
+        "//functionsystem/src/common:http",
+        "//functionsystem/src/common:file_monitor",
+        "//functionsystem/src/common:network",
+        "//functionsystem/src/common:file_storage",
+        "//functionsystem/src/common:utils",
+        "//functionsystem/src/common:metrics_adapter",
+        "//functionsystem/src/common:resource_view",
+        "@litebus//:litebus",
+        "@logs_sdk//:logs_sdk",
+        "@securec//:securec",
+        "@yaml-cpp//:yaml-cpp",
+        "@curl_sdk//:curl",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# runtime_manager binary
+cc_binary(
+    name = "runtime_manager",
+    srcs = ["main.cpp"],
+    copts = COPTS + ["-fPIE"],
+    linkopts = ["-pie"],
+    deps = [
+        ":runtime_manager_inc",
+        ":runtime_manager_lib",
+    ],
+    visibility = ["//visibility:public"],
+)

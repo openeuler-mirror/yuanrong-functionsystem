@@ -292,7 +292,7 @@ Status TransGroupRequest(const std::string &from, std::string &nodeID, std::shar
     *groupInfo->mutable_groupopts() = req->groupopt();
     int index = 0;
     bool insRangeFlag = false;
-    int groupPriority;
+    int groupPriority = 0;
     auto affinityHash =
         std::hash<std::string>()(req->requests(0).schedulingops().scheduleaffinity().ShortDebugString());
     for (CreateRequest createReq : *req->mutable_requests()) {

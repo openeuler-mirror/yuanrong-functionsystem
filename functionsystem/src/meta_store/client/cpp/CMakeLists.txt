@@ -34,6 +34,6 @@ add_library(meta_store_client STATIC "")
 
 file(GLOB_RECURSE META_STORE_CLIENT_SRCS src/*.cpp)
 
-add_dependencies(meta_store_client metrics_adapter status etcdapi heartbeat)
+add_dependencies(meta_store_client metrics_adapter status etcdapi heartbeat metadata)
 target_sources(meta_store_client PRIVATE ${META_STORE_CLIENT_SRCS})
-target_link_libraries(meta_store_client PUBLIC metrics_adapter ${etcdapi_LIB_A} status heartbeat)
+target_link_libraries(meta_store_client PUBLIC metrics_adapter ${etcdapi_LIB_A} status heartbeat metadata)

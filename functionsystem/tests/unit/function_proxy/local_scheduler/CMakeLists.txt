@@ -22,6 +22,7 @@ add_subdirectory(local_group_ctrl)
 add_subdirectory(bundle_manager)
 add_subdirectory(resource_group_controller)
 add_subdirectory(subscription_manager)
+add_subdirectory(gc_actor)
 
 get_property(SRC_LOCAL_SCHEDULER_INCLUDE_DIR GLOBAL PROPERTY "SRC_LOCAL_SCHEDULER_INCLUDE_DIR")
 

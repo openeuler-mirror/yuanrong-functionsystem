@@ -48,6 +48,7 @@ struct InstanceManagerStartParam {
     std::string libPath;
     std::string functionMetaPath;
     bool enableAbnormalDoubleCheck;
+    std::string systemTenantID{ "0" };
 };
 
 class InstanceManagerActor : public litebus::ActorBase, public std::enable_shared_from_this<InstanceManagerActor> {
@@ -94,6 +95,11 @@ public:
 
     bool UpdateLeaderInfo(const explorer::LeaderInfo &leaderInfo);
 
+    void BindQuotaMgrAID(litebus::AID aid)
+    {
+        quotaMgrAID_ = std::move(aid);
+    }
+
     void HandleSystemUpgrade(bool isUpgrading);
 
     void AddNode(const std::string &nodeName);
@@ -132,6 +138,11 @@ public:
 
     void OnQueryDebugInstancesInfoFinished(const litebus::AID &from,
                                       const litebus::Future<messages::QueryDebugInstanceInfosResponse> &rsp);
+
+    const std::string &GetSystemTenantID() const
+    {
+        return member_->systemTenantID;
+    }
 
 protected:
     void Init() override;
@@ -252,6 +263,17 @@ private:
                                 const std::string &nodeName);
 
     void OnLocalScheduleChange(const std::vector<WatchEvent> &events);
+
+    /**
+     * Periodically report instance count metrics
+     */
+    void ReportInstanceCountPeriodically();
+
+    /**
+     * Periodically garbage collect FATAL instances that exceed timeout
+     */
+    void GarbageCollectFatalInstances();
+
     void OnLocalScheduleWatch(const std::shared_ptr<Watcher> &watcher);
 
     litebus::Future<SyncResult> InstanceInfoSyncer();
@@ -327,6 +349,7 @@ private:
 
         std::shared_ptr<litebus::Promise<messages::QueryInstancesInfoResponse>> queryInstancesPromise;
         std::shared_ptr<litebus::Promise<messages::QueryDebugInstanceInfosResponse>> queryDebugInstancesPromise;
+        std::string systemTenantID{ "0" };
     };
 
     class Business : public leader::BusinessPolicy {
@@ -370,6 +393,8 @@ private:
 
         virtual litebus::Future<messages::QueryDebugInstanceInfosResponse> QueryDebugInstancesInfo(
             std::shared_ptr<messages::QueryDebugInstanceInfosRequest> req) = 0;
+
+        virtual void GarbageCollectFatalInstances() = 0;
 
     protected:
         std::shared_ptr<Member> member_;
@@ -444,6 +469,8 @@ private:
 
         litebus::Future<messages::QueryDebugInstanceInfosResponse> QueryDebugInstancesInfo(
             std::shared_ptr<messages::QueryDebugInstanceInfosRequest> req) override;
+
+        void GarbageCollectFatalInstances() override;
     private:
         bool nodeSynced_{false};
         std::unordered_set<std::string> nodes_;
@@ -490,12 +517,15 @@ private:
 
         litebus::Future<messages::QueryDebugInstanceInfosResponse> QueryDebugInstancesInfo(
             std::shared_ptr<messages::QueryDebugInstanceInfosRequest> req) override;
+
+        void GarbageCollectFatalInstances() override {};
     };
 
     litebus::Future<Status>  CheckSyncResponse(const std::shared_ptr<GetResponse> &response);
     void CommitSuicide();
 
     std::shared_ptr<Member> member_{ nullptr };
+    litebus::AID quotaMgrAID_;
 
     std::unordered_map<std::string, std::shared_ptr<Business>> businesses_;
 

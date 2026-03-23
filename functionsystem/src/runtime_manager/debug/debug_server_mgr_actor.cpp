@@ -177,7 +177,7 @@ litebus::Future<Status> DebugServerMgrActor::CreateServer(const std::string &run
     const static std::unordered_map<std::string, std::string> GET_DEBUG_LANG = {
         { "cpp11", "cpp" },         { "cpp", "cpp" },          { "python", "python" },    { "python3", "python" },
         { "python3.6", "python" },  { "python3.7", "python" }, { "python3.8", "python" }, { "python3.9", "python" },
-        { "python3.10", "python" }, { "python3.11", "python" }
+        { "python3.10", "python" }, { "python3.11", "python" }, { "python3.12", "python" }, { "python3.13", "python" }
     };
     auto langIt = languageDebugConfigs_.find(GET_DEBUG_LANG.at(language));
     if (langIt == languageDebugConfigs_.end()) {

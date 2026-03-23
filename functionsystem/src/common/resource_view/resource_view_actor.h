@@ -23,6 +23,7 @@
 #include "async/future.hpp"
 #include "async/option.hpp"
 #include "common/utils/actor_driver.h"
+#include "common/utils/actor_worker.h"
 #include "common/status/status.h"
 #include "resource_type.h"
 #include "resource_poller.h"
@@ -196,6 +197,8 @@ public:
 
     void TryDelResourceUnitChange(uint64_t revision, const std::string &viewInitTime);
 
+    void ToReportResourceViewChanges(const litebus::AID &dst, const std::shared_ptr<ResourceUnitChanges> &changes);
+
     // used by domain
     litebus::Future<PullResourceRequest> GetUnitSnapshotInfo(const std::string &unitID);
 
@@ -253,7 +256,7 @@ public:
     }
 
     // for test
-    [[maybe_unused]] void SetEnableTenantAffinity(bool enable)
+    [[maybe_unused]]static void SetEnableTenantAffinity(bool enable)
     {
         enableTenantAffinity_ = enable;
     }
@@ -288,7 +291,7 @@ private:
     static void AddBucketIndexBySubUnit(ResourceUnit &view, const ResourceUnit &fragmentUnit);
     static void DeleteBucketIndexBySubUnit(ResourceUnit &view, const ResourceUnit &fragmentUnit);
 
-    Resources AddInstanceToAgentView(const InstanceInfo &instance, resources::ResourceUnit &unit);
+    static Resources AddInstanceToAgentView(const InstanceInfo &instance, resources::ResourceUnit &unit);
     void AddInstanceToView(const InstanceInfo &instance);
     void DeleteInstanceFromView(const InstanceInfo &instance);
 
@@ -312,22 +315,39 @@ private:
 
     void UpdateActualUse(const Resources &oldActualUse, const Resources &newActualUse, resources::ResourceUnit &view);
     void UpdateResourceUnitActual(const std::shared_ptr<ResourceUnit> &value);
+    void UpdateResourceUnitDynamic(const std::shared_ptr<ResourceUnit> &value);
     void DeleteLabels(const InstanceInfo &instInfo);
     void AddLabels(const InstanceInfo &instance);
 
-    void AddLabel(const InstanceInfo &instance, ::google::protobuf::Map<std::string, ValueCounter> &nodeLabels);
+    static void AddLabel(const InstanceInfo &instance, ::google::protobuf::Map<std::string, ValueCounter> &nodeLabels);
 
     /**
      * @brief local scheduler merge of changes from multiple revisions, the range is: (startRevision, endRevision]
      */
     void MergeResourceViewChanges(int64_t startRevision, int64_t endRevision, ResourceUnitChanges &result);
+
+    /**
+     * @brief Static version for async merge
+     */
+    static void MergeResourceViewChanges(const std::map<int64_t, ResourceUnitChange> &changes,
+                                         int64_t startRevision, int64_t endRevision,
+                                         const std::string &localId, ResourceUnitChanges &result);
+
+    /**
+     * @brief Async version: copy changes and merge in background, then send result via callback
+     */
+    void MergeResourceViewChangesAsync(int64_t startRevision, int64_t endRevision,
+                                       const std::string &viewInitTime, const std::string &localId,
+                                       const litebus::AID &replyTo);
+
     void StoreChange(int64_t revision, const ResourceUnitChange& change);
     void DelChanges(int64_t newStartRevision);
-    ResourceUnitChange MergeResourceUnitChanges(ResourceUnitChange &previous, const ResourceUnitChange &current);
-    ResourceUnitChange MergeAddAndModify(ResourceUnitChange &previous, const ResourceUnitChange &current);
-    ResourceUnitChange MergeTwoModifies(ResourceUnitChange &previous, const ResourceUnitChange &current);
-    void MergeInstanceChanges(Modification &previous, const Modification &current) const;
-    bool IsValidChangeCombination(const InstanceChange& previous, const InstanceChange& current) const;
+    static ResourceUnitChange MergeResourceUnitChanges(ResourceUnitChange &previous, const ResourceUnitChange &current);
+    static ResourceUnitChange MergeAddAndModify(ResourceUnitChange &previous, const ResourceUnitChange &current);
+    static ResourceUnitChange MergeTwoModifies(ResourceUnitChange &previous, const ResourceUnitChange &current);
+    static void MergeCapacityChange(ResourceUnitChange &previous, const ResourceUnitChange &current);
+    static void MergeInstanceChanges(Modification &previous, const Modification &current);
+    static bool IsValidChangeCombination(const InstanceChange& previous, const InstanceChange& current);
     static bool ShouldMergeInstanceChange(const InstanceChange& previous, const InstanceChange& current);
     static bool ShouldRetainInstanceChange(const InstanceChange& previous, const InstanceChange& current);
     static bool IsResourceUnitChangeEmpty(const ResourceUnitChange& change);
@@ -371,7 +391,7 @@ private:
 
     bool isLocal_;
     bool isHeader_ = false;
-    bool enableTenantAffinity_;
+    static bool enableTenantAffinity_;
     int32_t tenantPodReuseTimeWindow_;
     bool hasResourceUpdated_ = false;
 
@@ -393,6 +413,7 @@ private:
 
     std::string domainUrlForLocal_;
     std::string actorSuffix_;
+    std::shared_ptr<ActorWorker> asyncWorker_;
     void SetResourceMetricsContext(const std::shared_ptr<ResourceUnitChanges> &resourceUnitChanges) const;
 };
 

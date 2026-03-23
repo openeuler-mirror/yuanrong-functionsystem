@@ -46,6 +46,12 @@ inline messages::ScheduleResponse GenScheduleResponse(StatusCode code, const std
 std::shared_ptr<messages::DeployInstanceRequest> GetDeployInstanceReq(
     const FunctionMeta &funcMeta, const std::shared_ptr<messages::ScheduleRequest> &request);
 
+void BuildRootfsConfig(
+    const FunctionMeta &funcMeta, const std::shared_ptr<messages::DeployInstanceRequest> &request);
+
+void BuildBootstrapConfig(
+    const FunctionMeta &funcMeta, const std::shared_ptr<messages::DeployInstanceRequest> &request);
+
 void BuildDeploySpec(const FunctionMeta &funcMeta,
                      const std::shared_ptr<messages::DeployInstanceRequest> &deployInstanceRequest);
 

@@ -133,6 +133,8 @@ Flags::Flags()
             "observability agent's grpc port, default is 4317", DEFAULT_OBSERVABILITY_AGENT_GRPC_PORT);
     AddFlag(&Flags::observabilityPrometheusPort_, "observability_prometheus_port",
             "observability prometheus port, default is 9392", DEFAULT_OBSERVABILITY_PROMETHEUS_PORT);
+    AddFlag(&Flags::enableMergeProcess_, "enable_merge_process",
+            "enable function_proxy, function_agent and runtime_manager merge in the same process", false);
     AddFlag(&Flags::isPseudoDataPlane_, "pseudo_data_plane",
             "set the function proxy is Pseudo Data Plane, example: false", false);
     AddFlag(&Flags::enablePrintResourceView_, "enable_print_resource_view",
@@ -156,6 +158,18 @@ Flags::Flags()
     AddBusProxyInvokeLimitFlags();
     AddFlag(&Flags::redisConfPath_, "redis_conf_path", "redis connection conf file path", "/home/sn/conf/conf.json");
     AddBusProxyCreatRateLimitFlags();
+    AddFlag(&Flags::enableTraefikRegistry_, "enable_traefik_registry",
+            "enable traefik registry for instance route", false);
+    AddFlag(&Flags::traefikEtcdPrefix_, "traefik_etcd_prefix",
+            "etcd key prefix for traefik configuration", "traefik");
+    AddFlag(&Flags::traefikLeaseTTL_, "traefik_lease_ttl",
+            "lease TTL for traefik registry (milliseconds)", 300000);
+    AddFlag(&Flags::traefikHttpEntryPoint_, "traefik_http_entrypoint",
+            "HTTP entryPoint name for traefik routing", "websecure");
+    AddFlag(&Flags::traefikEnableTLS_, "traefik_enable_tls",
+            "enable TLS for HTTP routing", true);
+    AddFlag(&Flags::traefikServersTransport_, "traefik_servers_transport",
+            "ServersTransport name for backend TLS (e.g. yr-backend-tls@file)", "yr-backend-tls@file");
 }
 
 void Flags::AddElectionFlags()
@@ -229,12 +243,16 @@ void Flags::AddGrpcServerFlags()
     AddFlag(&Flags::ip_, "ip", "IP address for listening.", "127.0.0.1", FlagCheckWrraper(IsIPValid));
     AddFlag(&Flags::grpcListenPort_, "grpc_listen_port", "For posix server listening. example: 30001",
             std::string("30001"), FlagCheckWrraper(IsPortValid));
+    AddFlag(&Flags::sessionGrpcPort_, "session_grpc_port",
+            "Session gRPC port for ExecStream. 0 = disabled. example: 30002", std::string("0"));
     AddFlag(&Flags::maxGrpcSize_, "max_grpc_size", "posix max grpc size", DEFAULT_MAX_GRPC_SIZE,
             NumCheck(MIN_MAX_GRPC_SIZE, MAX_MAX_GRPC_SIZE));
     AddFlag(&Flags::enableServerMode_, "enable_server_mode",
             "if on, grpc server will set in proxy and client in runtime", true);
     AddFlag(&Flags::enableDriver_, "enable_driver",
             "Indicates whether to enable the gateway service to discover driver.", false);
+    AddFlag(&Flags::dPosixUdsPath_, "dposix_uds_path",
+            "dposix uds path for communication between runtime and function proxy", "");
 }
 
 void Flags::AddIAMFlags()

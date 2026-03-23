@@ -206,7 +206,7 @@ Status NpuProbe::OnGetNPUInfo(bool countMode)
     auto status = GetNPUSmiInfo();
     if (status.IsError()) {
         InitDevInfo();
-        YRLOG_WARN("There seems to be no npu device on this node. try to get from {}", params_->deviceInfoPath);
+        YRLOG_DEBUG_COUNT_60("There seems to be no npu device on this node. try to get from {}", params_->deviceInfoPath);
         LoadTopoInfo();
         return status;
     }
@@ -396,11 +396,22 @@ Status NpuProbe::ParseNPU310P3()
 
 Status NpuProbe::GetNPUSmiInfo()
 {
+    if (npuUnavailable_) {
+        return Status{ StatusCode::FAILED, "npu not available, skip" };
+    }
     npuSmiCmdOutput_ = cmdTool_->GetCmdResult(getNpuStandardInfoCmd_);  // npu-smi info
     if (npuSmiCmdOutput_.empty()) {
-        YRLOG_ERROR("can not get npu from npu-smi info, make sure npu-smi is exist!");
+        npuRetryCount_++;
+        if (npuRetryCount_ >= kNpuMaxRetryCount) {
+            npuUnavailable_ = true;  // mark as unavailable after max retries
+            YRLOG_DEBUG_COUNT_60("npu not available after {} retries, skip further attempts", kNpuMaxRetryCount);
+        } else {
+            YRLOG_DEBUG_COUNT_60("can not get npu from npu-smi info, retry {}/{}", npuRetryCount_, kNpuMaxRetryCount);
+        }
         return Status{ StatusCode::FAILED, "can not get npu from npu-smi info, make sure npu-smi is exist!" };
     }
+    // reset counter on success
+    npuRetryCount_ = 0;
     std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);
     std::smatch match;
     std::string productModel;
@@ -498,7 +509,7 @@ Status NpuProbe::LoadTopoInfo()
     }
     auto content = procFSTools_->Read(npuDeviceInfoPath_);
     if (content.IsNone() || content.Get().empty()) {
-        YRLOG_ERROR("failed to read json from {}", npuDeviceInfoPath_);
+        YRLOG_DEBUG_COUNT_60("failed to read json from {}", npuDeviceInfoPath_);
         return Status(StatusCode::JSON_PARSE_ERROR, "failed to read json from " + npuDeviceInfoPath_);
     }
     std::lock_guard<std::mutex> lock(refreshNpuInfoMtx_);

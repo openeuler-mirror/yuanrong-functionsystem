@@ -202,6 +202,7 @@ void Executor::InitDefaultArgs(const std::string &configJsonString)
 
 void Executor::InitConfig()
 {
+    YRLOG_INFO("---- InitConfig");
     if (config_.virtualEnvIdleTimeLimit != -1) {
         litebus::Async(GetAID(), &Executor::InitVirtualEnvIdleTimeLimit);
     }

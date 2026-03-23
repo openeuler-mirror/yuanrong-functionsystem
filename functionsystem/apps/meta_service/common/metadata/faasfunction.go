@@ -189,6 +189,7 @@ type FaaSFuncMeta struct {
 	ResourceMetaData FaaSResourceMetaData `json:"resourceMetaData" valid:",optional"`
 	InstanceMetaData FaaSInstanceMetaData `json:"instanceMetaData" valid:",optional"`
 	ExtendedMetaData FaaSExtendedMetaData `json:"extendedMetaData" valid:",optional"`
+	RootfsSpecMeta   RootfsSpecMeta       `json:"rootfs" valid:",optional"`
 }
 
 // FaaSFuncMetaData define meta data of functions for FaaS
@@ -229,6 +230,9 @@ type FaaSFuncMetaData struct {
 	EnableAuthInHeader  bool              `json:"enable_auth_in_header" valid:"optional"`
 	DNSDomainCfg        []DNSDomainInfo   `json:"dns_domain_cfg" valid:",optional"`
 	VPCTriggerImage     string            `json:"vpcTriggerImage" valid:",optional"`
+	IdleTime            int64             `json:"idleTime" valid:",optional"`
+	AutoScaleConfig     AutoScaleConfig   `json:"autoScaleConfig" valid:"optional"`
+	IsFuncPublic        bool              `json:"isFuncPublic" valid:"optional"`
 }
 
 // FaaSResourceMetaData include resource data such as cpu and memory
@@ -244,13 +248,16 @@ type FaaSResourceMetaData struct {
 
 // FaaSInstanceMetaData define instance meta data of FG functions
 type FaaSInstanceMetaData struct {
-	MaxInstance   int64  `json:"maxInstance" valid:",optional"`
-	MinInstance   int64  `json:"minInstance" valid:",optional"`
-	ConcurrentNum int    `json:"concurrentNum" valid:",optional"`
-	InstanceType  string `json:"instanceType" valid:",optional"`
-	IdleMode      bool   `json:"idleMode" valid:",optional"`
-	PoolLabel     string `json:"poolLabel" valid:",optional"`
-	PoolID        string `json:"poolId" valid:",optional"`
+	MaxInstance    int64  `json:"maxInstance" valid:",optional"`
+	MinInstance    int64  `json:"minInstance" valid:",optional"`
+	ConcurrentNum  int    `json:"concurrentNum" valid:",optional"`
+	InstanceType   string `json:"instanceType" valid:",optional"`
+	IdleMode       bool   `json:"idleMode" valid:",optional"`
+	PoolLabel      string `json:"poolLabel" valid:",optional"`
+	PoolID         string `json:"poolId" valid:",optional"`
+	DiskLimit      int64  `json:"diskLimit"   valid:",optional"`
+	SchedulePolicy string `json:"schedulePolicy" valid:",optional"`
+	ScalePolicy    string `json:"scalePolicy" valid:",optional"`
 }
 
 // ReserveInstanceMetaData meta data for reserved instance
@@ -350,4 +357,11 @@ type DNSDomainInfo struct {
 	DomainName string `json:"domain_name"`
 	Type       string `json:"type" valid:",optional"`
 	ZoneType   string `json:"zone_type" valid:",optional"`
+}
+
+// AutoScaleConfig -
+type AutoScaleConfig struct {
+	SLAQuota      int `json:"slaQuota" valid:"optional" default:"-1"`
+	ScaleDownTime int `json:"scaleDownTime" valid:"optional" default:"-1"`
+	BurstScaleNum int `json:"burstScaleNum" valid:"optional" default:"-1"`
 }

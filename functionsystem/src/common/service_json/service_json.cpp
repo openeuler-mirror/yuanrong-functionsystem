@@ -547,6 +547,10 @@ void Parsefunction(service_json::FunctionConfig &functionConfig, const nlohmann:
         }
     }
 
+    if (f.find("warmup") != f.end()) {
+        functionConfig.warmup = StringToWarmupType(f.at("warmup"));
+    }
+
     ParseCodeMeta(functionConfig, f);
 
     ParseEnvMeta(functionConfig, f);
@@ -556,6 +560,59 @@ void Parsefunction(service_json::FunctionConfig &functionConfig, const nlohmann:
     ParseFunctionHookHandlerConfig(functionConfig.functionHookHandlerConfig, f);
 
     ParseDeviceInfo(functionConfig.device, f);
+
+    ParseRootfsSpec(functionConfig.rootfs, f);
+
+    ParseBootstrap(functionConfig.bootstrap, f);
+}
+
+void ParseRootfsSpec(RootfsSpecMeta &rootfs, const nlohmann::json &h)
+{
+    if (h.find("rootfs") == h.end()) {
+        return;
+    }
+    nlohmann::json rf = h.at("rootfs");
+    if (rf.find("runtime") != rf.end()) {
+        rootfs.runtime = rf.at("runtime");
+    }
+    if (rf.find("type") != rf.end()) {
+        rootfs.type = StringToRootfsSrcType(rf.at("type"));
+    }
+    if (rf.find("imageurl") != rf.end()) {
+        rootfs.imageurl = rf.at("imageurl");
+    }
+    if (rf.find("path") != rf.end()) {
+        rootfs.path = rf.at("path");
+    }
+    if (rf.find("mountpoint") != rf.end()) {
+        rootfs.mountpoint = rf.at("mountpoint");
+    }
+    if (rf.find("readonly") != rf.end()) {
+        if (rf.at("readonly").is_boolean()) {
+            rootfs.readonly = rf.at("readonly");
+        } else if (rf.at("readonly").is_string()) {
+            std::string str = rf.at("readonly");
+            rootfs.readonly = (str == "true" || str == "1" );
+        }
+    }
+    if (rf.find("storageInfo") != rf.end()) {
+        nlohmann::json storage = rf.at("storageInfo");
+        if (storage.find("endpoint") != storage.end()) {
+            rootfs.storageInfo.endpoint = storage.at("endpoint");
+        }
+        if (storage.find("bucket") != storage.end()) {
+            rootfs.storageInfo.bucket = storage.at("bucket");
+        }
+        if (storage.find("object") != storage.end()) {
+            rootfs.storageInfo.object = storage.at("object");
+        }
+        if (storage.find("accessKey") != storage.end()) {
+            rootfs.storageInfo.accessKey = storage.at("accessKey");
+        }
+        if (storage.find("secretKey") != storage.end()) {
+            rootfs.storageInfo.secretKey = storage.at("secretKey");
+        }
+    }
 }
 
 void ParseDeviceInfo(DeviceMetaData &device, const nlohmann::json &h)
@@ -597,6 +654,26 @@ void ParseDeviceInfo(DeviceMetaData &device, const nlohmann::json &h)
     }
     if (dev.find("type") != dev.end()) {
         device.type = dev.at("type");
+    }
+}
+
+void ParseBootstrap(BootstrapMetaData &bootstrap, const nlohmann::json &h)
+{
+    if (h.find("bootstrap") == h.end()) {
+        return;
+    }
+    nlohmann::json lang = h.at("bootstrap");
+    if (lang.find("type") != lang.end()) {
+        bootstrap.type = lang.at("type");
+    }
+    if (lang.find("root") != lang.end()) {
+        bootstrap.root = lang.at("root");
+    }
+    if (lang.find("entrypoint") != lang.end()) {
+        bootstrap.entrypoint = lang.at("entrypoint");
+    }
+    if (lang.find("cmd") != lang.end()) {
+        bootstrap.cmd = lang.at("cmd");
     }
 }
 
@@ -661,7 +738,8 @@ litebus::Option<FunctionMeta> BuildFunctionMeta(const ServiceInfo &serviceInfo, 
         return {};
     }
     auto resources = BuildResources(functionConfig.cpu, functionConfig.memory);
-    return FunctionMeta{ .funcMetaData = BuildFuncMetaData(serviceInfo, functionConfig, functionName, mapBuilder),
+    return FunctionMeta{ .warmup = functionConfig.warmup,
+                         .funcMetaData = BuildFuncMetaData(serviceInfo, functionConfig, functionName, mapBuilder),
                          .codeMetaData = CodeMetaData{ .storageType = "local",
                                                        .bucketID = "",
                                                        .objectID = "",
@@ -688,6 +766,8 @@ litebus::Option<FunctionMeta> BuildFunctionMeta(const ServiceInfo &serviceInfo, 
                                                 .type = functionConfig.device.type },
                              .initializer = {}, .userAgency = {}, .customGracefulShutdown = {} },
                          .instanceMetaData = {},
+                         .rootfs = functionConfig.rootfs,
+                         .bootstrap = functionConfig.bootstrap,
                          .rawJsonStr = ""};
 }
 
@@ -755,7 +835,7 @@ litebus::Option<std::vector<FunctionMeta>> GetFuncMetaFromServiceYaml(const std:
     auto jsonStr = yamlToJsonFunc(data);
 
     (void)dlclose(handle);
-
+    YRLOG_INFO("debug:: (funcMeta)services info, {}", jsonStr);
     auto serviceInfosOpt = GetServiceInfosFromJson(jsonStr);
     if (serviceInfosOpt.IsNone()) {
         YRLOG_ERROR("(funcMeta)failed to get services info");

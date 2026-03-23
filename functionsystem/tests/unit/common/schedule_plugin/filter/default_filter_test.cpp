@@ -123,7 +123,7 @@ TEST_F(DefaultFilterTest, ResourceFilterTest)
 
         auto res = filter.Filter(preAllocated, ins, unit);
         EXPECT_EQ(res.status.StatusCode(), StatusCode::RESOURCE_NOT_ENOUGH);
-        EXPECT_STREQ(res.status.GetMessage().c_str(), "[No Resources Available]");
+        EXPECT_NE(res.status.GetMessage().find("Not Enough]"), std::string::npos);
         EXPECT_EQ(res.availableForRequest, -1);
     }
     //  instance request resource not found in unit  --> PARAMETER_ERROR

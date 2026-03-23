@@ -95,7 +95,6 @@ const std::string JAVA_SYSTEM_PROPERTY_FILE = "-Dlog4j2.configurationFile=file:"
 const std::string JAVA_SYSTEM_LIBRARY_PATH = "-Djava.library.path=";
 const std::string JAVA_LOG_LEVEL = "-DlogLevel=";
 const std::string JAVA_JOB_ID = "-DjobId=job-";
-
 const std::string JAVA_MAIN_CLASS = "org.yuanrong.runtime.server.RuntimeServer";
 const std::string PYTHON_SERVER_PATH = "/python/yr/main/yr_runtime_main.py";
 const std::string PYTHON_SERVER_PATH_IN_WHEEL = "/../../main/yr_runtime_main.py";
@@ -579,10 +578,6 @@ litebus::Future<messages::StartInstanceResponse> RuntimeExecutor::StartInstanceW
 {
     const auto &info = request->runtimeinstanceinfo();
     std::string runtimeID = request->runtimeinstanceinfo().runtimeid();
-    if (runtimeID.empty()) {
-        runtimeID = GenerateRuntimeID(info.instanceid());
-        request->mutable_runtimeinstanceinfo()->set_runtimeid(runtimeID);
-    }
     std::string port;
     auto tlsConfig = request->runtimeinstanceinfo().runtimeconfig().tlsconfig();
     RuntimeFeatures features;
@@ -796,7 +791,8 @@ std::shared_ptr<litebus::Exec> RuntimeExecutor::StartRuntimeByRuntimeIDWithRetry
     return nullptr;
 }
 
-Status RuntimeExecutor::StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request, bool oomKilled)
+litebus::Future<Status> RuntimeExecutor::StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request,
+                                                      bool oomKilled)
 {
     std::string runtimeID = request->runtimeid();
     std::string requestID = request->requestid();
@@ -805,6 +801,17 @@ Status RuntimeExecutor::StopInstance(const std::shared_ptr<messages::StopInstanc
         virtualEnvMgr_->RmEnvReferInfos(runtimeID);
     }
     return StopInstanceByRuntimeID(runtimeID, requestID, oomKilled);
+}
+
+litebus::Future<messages::SnapshotRuntimeResponse> RuntimeExecutor::SnapshotRuntime(
+    const std::shared_ptr<messages::SnapshotRuntimeRequest> &request)
+{
+    messages::SnapshotRuntimeResponse response;
+    response.set_requestid(request->requestid());
+    response.set_code(static_cast<int32_t>(StatusCode::GRPC_UNIMPLEMENTED));
+    response.set_message("Snapshot is not supported for process-based runtime");
+    YRLOG_WARN("{}|SnapshotRuntime is not supported for RuntimeExecutor", request->requestid());
+    return response;
 }
 
 std::shared_ptr<StdRedirector> RuntimeExecutor::GetStdRedirector(const std::string &logName)
@@ -1055,6 +1062,7 @@ std::map<std::string, std::string> RuntimeExecutor::CombineEnvs(const Envs &envs
     // framework envs needed by runtime override userEnvs
     combineEnvs[YR_LOG_LEVEL] = config_.runtimeLogLevel;
     combineEnvs[GLOG_LOG_DIR] = config_.runtimeLogPath;
+    combineEnvs["YR_LOG_PATH"] = config_.runtimeLogPath;
     combineEnvs[PYTHON_LOG_CONFIG_PATH] = config_.pythonLogConfigPath;
     combineEnvs[MAX_LOG_SIZE_MB_ENV] = std::to_string(config_.runtimeMaxLogSize);
     combineEnvs[MAX_LOG_FILE_NUM_ENV] = std::to_string(config_.runtimeMaxLogFileNum);
@@ -1276,7 +1284,7 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetCppBuildArgs(
 {
     YRLOG_DEBUG("{}|{}|GetCppBuildArgs start", request->runtimeinstanceinfo().traceid(),
                 request->runtimeinstanceinfo().requestid());
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     auto confPath = litebus::os::Join(config_.runtimeConfigPath, "runtime.json");
 
     auto resultPair = HandleWorkingDirectory(request, request->runtimeinstanceinfo());
@@ -1380,6 +1388,12 @@ std::pair<Status, std::string> RuntimeExecutor::HandleWorkingDirectory(
         return { Status(StatusCode::RUNTIME_MANAGER_WORKING_DIR_FOR_APP_NOTFOUND,
                         "params working dir or unzipped dir is empty"),
                  "" };
+    }
+
+    if (workingDirIter->second.find(".img") != std::string::npos) {
+        YRLOG_WARN("{}|{}| not support mount img now {}", info.traceid(), info.requestid(),
+                    workingDirIter->second);
+        return { Status(StatusCode::RUNTIME_MANAGER_WORKING_DIR_FOR_APP_NOTFOUND, "not support mount img now"), "" };
     }
 
     char canonicalPath[PATH_MAX];
@@ -1497,7 +1511,7 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::PythonBuildFinalArg
     const messages::RuntimeInstanceInfo &info) const
 {
     std::string jobID = PYTHON_JOB_ID_PREFIX + Utils::GetJobIDFromTraceID(info.traceid());
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     std::string pythonServerPath = PYTHON_SERVER_PATH;
     if (pkgType_ == PKG_TYPE_WHEEL) {
         pythonServerPath = PYTHON_SERVER_PATH_IN_WHEEL;
@@ -1550,7 +1564,7 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetNodejsBuildArgs(
     const std::string &port, const std::shared_ptr<messages::StartInstanceRequest> &request) const
 {
     std::string memorySize = "";
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     auto resources = request->runtimeinstanceinfo().runtimeconfig().resources().resources();
     for (auto resource : resources) {
         if (resource.first == resource_view::MEMORY_RESOURCE_NAME && resource.second.mutable_scalar()->value() > 0) {
@@ -1670,7 +1684,7 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetJavaBuildArgs(
             deployDir + "/" + RUNTIME_LAYER_DIR_NAME + "/" + RUNTIME_FUNC_DIR_NAME + "/" + bucketID + "/" + objectID;
     }
     std::string javaClassPath = config_.runtimePath + YR_JAVA_RUNTIME_PATH + ":" + jarPath;
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     std::vector<std::string> args = jvmArgs;
     auto resources = request->runtimeinstanceinfo().runtimeconfig().resources().resources();
     for (auto resource : resources) {
@@ -1713,7 +1727,7 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::GetGoBuildArgs(
     YRLOG_DEBUG("{}|{}|GetGoBuildArgs start, instance({}), runtime({})", request->runtimeinstanceinfo().traceid(),
                 request->runtimeinstanceinfo().requestid(), request->runtimeinstanceinfo().instanceid(),
                 request->runtimeinstanceinfo().runtimeid());
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     return { Status::OK(),
              { GO_PROGRAM_NAME, RUNTIME_ID_ARG_PREFIX + request->runtimeinstanceinfo().runtimeid(),
                INSTANCE_ID_ARG_PREFIX + request->runtimeinstanceinfo().instanceid(),
@@ -1865,7 +1879,7 @@ messages::StartInstanceResponse RuntimeExecutor::GenSuccessStartInstanceResponse
 
     auto instanceResponse = response.mutable_startruntimeinstanceresponse();
     instanceResponse->set_runtimeid(request->runtimeinstanceinfo().runtimeid());
-    instanceResponse->set_address(config_.ip + ":" + port);
+    instanceResponse->set_address(GetPosixAddress(config_, port));
     YRLOG_DEBUG("{}|{}|instance address: ip: {}, port: {}", request->runtimeinstanceinfo().traceid(),
                 request->runtimeinstanceinfo().requestid(), config_.ip, port);
     instanceResponse->set_port(port);
@@ -1896,7 +1910,7 @@ std::vector<std::string> RuntimeExecutor::GetCppBuildArgsForPrestart(const std::
                                                                      const std::string &language) const
 {
     YRLOG_DEBUG("GetCppBuildArgs start {}", language);
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     auto confPath = litebus::os::Join(config_.runtimeConfigPath, "runtime.json");
     return { CPP_PROGRAM_NAME, RUNTIME_ID_ARG_PREFIX + runtimeID, LOG_LEVEL_PREFIX + config_.runtimeLogLevel,
              GRPC_ADDRESS_PREFIX + address, CONFIG_PATH_PREFIX + confPath };
@@ -1908,7 +1922,7 @@ std::vector<std::string> RuntimeExecutor::GetPythonBuildArgsForPrestart(const st
 {
     YRLOG_DEBUG("GetPythonBuildArgs start {}", language);
     std::string execPath = GetExecPath(language);
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     std::string pythonServerPath = PYTHON_SERVER_PATH;
     if (pkgType_ == PKG_TYPE_WHEEL) {
         pythonServerPath = PYTHON_SERVER_PATH_IN_WHEEL;
@@ -1932,7 +1946,7 @@ std::vector<std::string> RuntimeExecutor::GetJavaBuildArgsForPrestart(const std:
 {
     YRLOG_DEBUG("GetJavaBuildArgs start {}", language);
     std::string javaClassPath = config_.runtimePath + YR_JAVA_RUNTIME_PATH;
-    std::string address = config_.ip + ":" + port;
+    std::string address = GetPosixAddress(config_, port);
     std::vector<std::string> args;
     if (language == JAVA11_LANGUAGE) {
         args = config_.jvmArgsForJava11;
@@ -1973,7 +1987,7 @@ void RuntimeExecutor::StartPrestartRuntimeByLanguage(const std::string &language
         return;
     }
     for (int i = 0; i < startCount; i++) {
-        std::string runtimeID = GenerateRuntimeID("");
+        std::string runtimeID = RUNTIME_UUID_PREFIX + litebus::uuid_generator::UUID::GetRandomUUID().ToString();
         if (!StartPrestartRuntimeByRuntimeID(runtimeID, language, execPath, 0)) {
             YRLOG_ERROR("stop to prestart runtime for {}", language);
             break;
@@ -2181,6 +2195,12 @@ litebus::Future<Status> RuntimeExecutorProxy::StopInstance(
     const std::shared_ptr<messages::StopInstanceRequest> &request, bool oomKilled)
 {
     return litebus::Async(executor_->GetAID(), &RuntimeExecutor::StopInstance, request, oomKilled);
+}
+
+litebus::Future<messages::SnapshotRuntimeResponse> RuntimeExecutorProxy::SnapshotRuntime(
+    const std::shared_ptr<messages::SnapshotRuntimeRequest> &request)
+{
+    return litebus::Async(executor_->GetAID(), &RuntimeExecutor::SnapshotRuntime, request);
 }
 
 litebus::Future<std::map<std::string, messages::RuntimeInstanceInfo>> RuntimeExecutorProxy::GetRuntimeInstanceInfos()

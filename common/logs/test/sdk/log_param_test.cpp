@@ -62,4 +62,28 @@ TEST_F(LogParamTest, GetLogFile)
     std::regex fileNamePattern(R"(/tmp/node-mode-\d{14}\.log$)");
     EXPECT_TRUE(std::regex_match(fileName, fileNamePattern));
 }
+
+TEST_F(LogParamTest, UseUtcTimeDefault)
+{
+    // Default should be UTC time (true)
+    std::string confJson = "{\"filepath\": \"/tmp\",\"level\": \"INFO\"}";
+    auto param = ::observability::sdk::logs::GetLogParam(confJson, "node", "mode");
+    EXPECT_EQ(param.useUtcTime, true);
+}
+
+TEST_F(LogParamTest, UseUtcTimeTrue)
+{
+    // Explicitly set to UTC time
+    std::string confJson = "{\"filepath\": \"/tmp\",\"level\": \"INFO\", \"useUtcTime\": true}";
+    auto param = ::observability::sdk::logs::GetLogParam(confJson, "node", "mode");
+    EXPECT_EQ(param.useUtcTime, true);
+}
+
+TEST_F(LogParamTest, UseUtcTimeFalse)
+{
+    // Set to local time
+    std::string confJson = "{\"filepath\": \"/tmp\",\"level\": \"INFO\", \"useUtcTime\": false}";
+    auto param = ::observability::sdk::logs::GetLogParam(confJson, "node", "mode");
+    EXPECT_EQ(param.useUtcTime, false);
+}
 }  // namespace observability::test::sdk

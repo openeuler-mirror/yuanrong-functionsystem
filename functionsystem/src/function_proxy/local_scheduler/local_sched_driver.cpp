@@ -17,17 +17,44 @@
 #include "local_sched_driver.h"
 
 #include "common/constants/actor_name.h"
+#include "local_scheduler/traefik_registry/traefik_registry.h"
 #include "meta_store_monitor/meta_store_monitor_factory.h"
 #include "common/utils/param_check.h"
 #include "local_scheduler/bundle_manager/bundle_mgr_actor.h"
 #include "local_scheduler/debug_instance_info_monitor/debug_instance_info_monitor.h"
 #include "local_scheduler/instance_control/posix_api_handler/posix_api_handler.h"
+#include "local_scheduler/gc_actor/local_gc_actor.h"
 #include "local_scheduler/local_group_ctrl/local_group_ctrl_actor.h"
 #include "local_scheduler/grpc_server/bus_service/bus_service.h"
 
 namespace functionsystem::local_scheduler {
 
 const std::string LOCAL_SCHEDULER = "local-scheduler";
+
+namespace {
+/**
+ * Extract IP address from a full address string (ip:port format).
+ * This is used to get the IP from LiteBus address for gRPC servers.
+ *
+ * @param address Full address in "ip:port" format
+ * @return Extracted IP address, or original address if no colon found
+ */
+std::string ExtractIPFromAddress(const std::string& address)
+{
+    size_t colonPos = address.find_last_of(':');
+    if (colonPos != std::string::npos && colonPos > 0) {
+        // Handle IPv6 addresses like [::1]:port
+        if (address[0] == '[') {
+            size_t closeBracketPos = address.find(']', 1);
+            if (closeBracketPos != std::string::npos && closeBracketPos < colonPos) {
+                return address.substr(1, closeBracketPos - 1);
+            }
+        }
+        return address.substr(0, colonPos);
+    }
+    return address;  // fallback: return as-is
+}
+}  // namespace
 
 void LocalSchedDriver::SetRuntimeConfig(InstanceCtrlConfig &config)
 {
@@ -58,6 +85,7 @@ void LocalSchedDriver::SetRuntimeConfig(InstanceCtrlConfig &config)
 
 Status LocalSchedDriver::Create()
 {
+    metaStorageAccessor_ = std::make_shared<MetaStorageAccessor>(metaStoreClient_);
     resourceViewMgr_ = std::make_shared<resource_view::ResourceViewMgr>();
     resourceViewMgr_->Init(param_.nodeID, param_.resourceViewActorParam);
 
@@ -95,12 +123,36 @@ Status LocalSchedDriver::Create()
     config.maxPriority = param_.maxPriority;
     config.enablePreemption = param_.enablePreemption;
     config.enableFakeSuspendResume = param_.enableFakeSuspendResume;
+    config.udsPath = param_.udsPath;
+    // Set proxy gRPC address (ip:port format)
+    // Use session port when session server is enabled, otherwise use posix port
+    // Extract IP from LiteBus address to ensure external connectivity
+    std::string externalIP = ExtractIPFromAddress(param_.address);
+    if (param_.sessionGrpcPort != "0") {
+        config.proxyGrpcAddress = externalIP + ":" + param_.sessionGrpcPort;
+    } else {
+        config.proxyGrpcAddress = externalIP + ":" + param_.grpcListenPort;
+    }
     instanceCtrl_ = InstanceCtrl::Create(param_.nodeID, config);
     PosixAPIHandler::BindInstanceCtrl(instanceCtrl_);
     PosixAPIHandler::BindControlClientManager(param_.controlInterfacePosixMgr);
     PosixAPIHandler::BindLocalSchedSrv(localSchedSrv_);
     PosixAPIHandler::BindResourceGroupCtrl(rGroupCtrl_);
     PosixAPIHandler::SetMaxPriority(param_.maxPriority);
+
+    if (param_.enableTraefikRegistry) {
+        traefikRegistry_ = std::make_shared<TraefikRegistry>(
+            metaStorageAccessor_,
+            param_.traefikEtcdPrefix,
+            param_.traefikHttpEntryPoint,
+            param_.traefikEnableTLS,
+            param_.traefikServersTransport);
+        instanceCtrl_->SetTraefikRegistry(traefikRegistry_);
+        YRLOG_INFO("TraefikRegistry initialized and injected: prefix={}, entryPoint={}, enableTLS={}, serversTransport={}",
+                  param_.traefikEtcdPrefix, param_.traefikHttpEntryPoint, param_.traefikEnableTLS, param_.traefikServersTransport);
+    } else {
+        YRLOG_INFO("Traefik registry disabled");
+    }
 
     subscriptionMgr_ = SubscriptionMgr::Init(param_.nodeID,
         SubscriptionMgrConfig{ .isPartialWatchInstances = param_.isPartialWatchInstances });
@@ -139,6 +191,18 @@ Status LocalSchedDriver::Start()
         return Status(StatusCode::FAILED);
     }
     BindInstanceCtrl();
+
+    snapCtrl_ = SnapCtrl::Create(param_.nodeID);
+    snapCtrl_->BindFunctionAgentMgr(funcAgentMgr_);
+    snapCtrl_->BindLocalSchedSrv(localSchedSrv_);
+    snapCtrl_->BindInstanceCtrl(instanceCtrl_);
+    snapCtrl_->BindClientManager(param_.controlInterfacePosixMgr);
+    instanceCtrl_->BindSnapCtrl(snapCtrl_);
+
+    gcActor_ = std::make_shared<LocalGcActor>(LOCAL_GC_ACTOR_NAME, param_.nodeID);
+    gcActor_->BindInstanceControlView(instanceCtrl_->GetInstanceControlView());
+    gcActor_->BindInstanceCtrl(instanceCtrl_);
+    litebus::Spawn(gcActor_);
 
     abnormalProcessor_->BindMetaStoreClient(metaStoreClient_);
     abnormalProcessor_->BindObserver(param_.controlPlaneObserver);
@@ -211,7 +275,7 @@ Status LocalSchedDriver::Start()
 Status LocalSchedDriver::Sync()
 {
     auto status =
-        ActorSync({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_ });
+        ActorSync({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
     if (status.IsError()) {
         return status;
     }
@@ -222,7 +286,7 @@ Status LocalSchedDriver::Sync()
 Status LocalSchedDriver::Recover()
 {
     auto status =
-        ActorRecover({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_ });
+        ActorRecover({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
     if (status.IsError()) {
         return status;
     }
@@ -234,7 +298,7 @@ void LocalSchedDriver::ToReady()
 {
     ActorReady({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_,
                  resourceViewMgr_->GetInf(resource_view::ResourceType::PRIMARY),
-                 resourceViewMgr_->GetInf(resource_view::ResourceType::VIRTUAL) });
+                 resourceViewMgr_->GetInf(resource_view::ResourceType::VIRTUAL), snapCtrl_ });
 }
 
 Status LocalSchedDriver::Stop()
@@ -243,13 +307,25 @@ Status LocalSchedDriver::Stop()
         // block to wait instance & agent to be cleared
         (void)localSchedSrv_->GracefulShutdown().Get();
     }
+    if (execStreamService_) {
+        YRLOG_INFO("Closing ExecStreamService sessions");
+        execStreamService_->CloseAllSessions();
+    }
+    if (sessionGrpcServer_) {
+        sessionGrpcServer_.reset();
+        YRLOG_INFO("session grpc server stopped");
+    }
+    execStreamService_.reset();
     if (dsHealthyChecker_) {
         litebus::Terminate(dsHealthyChecker_->GetAID());
     }
     if (httpServer_) {
         litebus::Terminate(httpServer_->GetAID());
     }
-    StopActor({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_ });
+    if (gcActor_) {
+        litebus::Terminate(gcActor_->GetAID());
+    }
+    StopActor({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
     return Status::OK();
 }
 
@@ -261,7 +337,10 @@ void LocalSchedDriver::Await()
     if (httpServer_) {
         litebus::Await(httpServer_->GetAID());
     }
-    AwaitActor({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_ });
+    if (gcActor_) {
+        litebus::Await(gcActor_->GetAID());
+    }
+    AwaitActor({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
 }
 
 void LocalSchedDriver::BindInstanceCtrl()
@@ -303,9 +382,18 @@ void LocalSchedDriver::StartDebugInstanceInfoMonitor()
 
 bool LocalSchedDriver::CreatePosixAndDriverServer()
 {
+    // Port conflict validation: session port must not conflict with posix port
+    if (param_.sessionGrpcPort != "0" && param_.sessionGrpcPort == param_.posixPort) {
+        YRLOG_ERROR("Session gRPC port ({}) conflicts with POSIX port ({}), cannot start",
+                    param_.sessionGrpcPort, param_.posixPort);
+        return false;
+    }
+
+    // Create POSIX gRPC server
     functionsystem::grpc::CommonGrpcServerConfig serverConfig;
     serverConfig.ip = param_.ip;
     serverConfig.listenPort = param_.posixPort;
+    serverConfig.udsPath = param_.udsPath;
     serverConfig.creds = ::grpc::InsecureServerCredentials();
     if (param_.enableSSL) {
         if (param_.creds == nullptr) {
@@ -313,10 +401,10 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
         }
         serverConfig.creds = param_.creds;
     }
-    param_.posixGrpcServer = std::make_shared<functionsystem::grpc::CommonGrpcServer>(serverConfig);
+    posixGrpcServer_ = std::make_shared<functionsystem::grpc::CommonGrpcServer>(serverConfig);
     if (param_.enableServerMode) {
         param_.posixService->BindInternalIAM(param_.internalIAM);
-        param_.posixGrpcServer->RegisterService(param_.posixService);
+        posixGrpcServer_->RegisterService(param_.posixService);
     }
     BusServiceParam serviceParam{ .nodeID = param_.nodeID,
                                   .controlPlaneObserver = param_.controlPlaneObserver,
@@ -326,13 +414,49 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
                                   .isEnableServerMode = param_.enableServerMode,
                                   .hostIP = param_.ip  };
     std::shared_ptr<BusService> busService = std::make_shared<BusService>(std::move(serviceParam));
-    param_.posixGrpcServer->RegisterService(busService);
-    param_.posixGrpcServer->Start();
+    posixGrpcServer_->RegisterService(busService);
 
-    if (!param_.posixGrpcServer->WaitServerReady()) {
+    // Create ExecStreamService instance
+    execStreamService_ = std::make_shared<ExecStreamService>(instanceCtrl_->GetActorAID());
+
+    // Register ExecStreamService based on session server configuration
+    if (param_.sessionGrpcPort != "0") {
+        // Create independent session gRPC server for ExecStreamService
+        // Use same IP as LiteBus for external connectivity
+        functionsystem::grpc::CommonGrpcServerConfig sessionConfig;
+        sessionConfig.ip =
+            ExtractIPFromAddress(param_.address);  // Extract IP from LiteBus address to ensure external connectivity
+        sessionConfig.listenPort = param_.sessionGrpcPort;
+        sessionConfig.creds = ::grpc::InsecureServerCredentials();
+        if (param_.enableSSL) {
+            sessionConfig.creds = param_.creds;
+        }
+
+        sessionGrpcServer_ = std::make_shared<functionsystem::grpc::CommonGrpcServer>(sessionConfig);
+        sessionGrpcServer_->RegisterService(execStreamService_);
+        sessionGrpcServer_->Start();
+
+        if (!sessionGrpcServer_->WaitServerReady()) {
+            YRLOG_ERROR("failed to start session grpc server on port {}", param_.sessionGrpcPort);
+            return false;
+        }
+        YRLOG_INFO("Session gRPC server started on port {}, ExecStreamService listening for connections",
+                   param_.sessionGrpcPort);
+    } else {
+        // Session server disabled, register ExecStreamService on posix server for backward compatibility
+        posixGrpcServer_->RegisterService(execStreamService_);
+        YRLOG_INFO("ExecStreamService registered on posix port {} (session server disabled)",
+                   param_.posixPort);
+    }
+
+    // Start POSIX gRPC server
+    posixGrpcServer_->Start();
+
+    if (!posixGrpcServer_->WaitServerReady()) {
         YRLOG_ERROR("failed to start posix grpc server.");
         return false;
     }
+    YRLOG_INFO("POSIX gRPC server started on port {}", param_.posixPort);
     return true;
 }
 }  // namespace functionsystem::local_scheduler

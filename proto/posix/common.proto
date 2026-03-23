@@ -261,3 +261,8 @@ message EventPayload {
   int32    serverPort       = 2;
   string   serverInstanceId = 3;
 }
+
+enum SnapType {
+  DUMPSTATE = 0;
+  SNAPSHOT = 1;
+}

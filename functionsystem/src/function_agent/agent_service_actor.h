@@ -206,6 +206,22 @@ public:
 
     virtual void SetNetworkIsolationRequest(const litebus::AID &, std::string &&, std::string &&msg);
 
+    /**
+     * request to snapshot a runtime instance from function agent manager to function agent
+     * @param from: function agent manager's AID
+     * @param name: function name
+     * @param msg: request data, type is messages::SnapshotRuntimeRequest
+     */
+    virtual void SnapshotRuntime(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    /**
+     * response to snapshot runtime request from runtime manager to function agent
+     * @param from: runtime manager's AID
+     * @param name: function name
+     * @param msg: response data, type is messages::SnapshotRuntimeResponse
+     */
+    virtual void SnapshotRuntimeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
     litebus::Future<bool> GracefulShutdown();
 
     litebus::Future<Status> SetDeployers(const std::string &storageType, const std::shared_ptr<Deployer> &deployer);
@@ -508,6 +524,8 @@ private:
     std::unordered_map<std::string, DeployInstanceRequestWrapper> deployingRequest_;
     /** <requestID : KillInstanceRequestWrapper> for response */
     std::unordered_map<std::string, KillInstanceRequestWrapper> killingRequest_;
+    /** <requestID : caller's AID> for snapshot response forwarding */
+    std::unordered_map<std::string, litebus::AID> snapshotRequests_;
     std::string agentID_;
     std::string alias_;
     std::unordered_map<std::string, litebus::Promise<DeployResult>> deployingObjects_;

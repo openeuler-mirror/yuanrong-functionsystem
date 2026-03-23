@@ -24,6 +24,7 @@ include_directories(${CMAKE_CURRENT_LIST_DIR})
 
 add_library(runtime_manager_lib STATIC ${RUNTIME_MANAGER_SRCS})
 target_compile_options(runtime_manager_lib PRIVATE -fPIE)
+target_include_directories(runtime_manager_lib PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 
 add_subdirectory(executor)
 add_subdirectory(metrics)
@@ -36,13 +37,20 @@ add_subdirectory(driver)
 add_subdirectory(log)
 add_subdirectory(debug)
 add_subdirectory(virtual_env_manager)
+add_subdirectory(ckpt)
 add_subdirectory(std_monitor)
+
+add_dependencies(runtime_manager_lib aksk
+        register common_flags
+        http file_monitor network file_storage
+        utils metrics_adapter resource_view)
 
 target_link_libraries(runtime_manager_lib ${litebus_ALL_LIB}
         ${yaml_LIB}
+        ${curl_LIBS}
 	aksk
         register common_flags
-        http file_monitor network
+        http file_monitor network file_storage
         utils metrics_adapter resource_view cap numa)
 
 add_executable(runtime_manager main.cpp)

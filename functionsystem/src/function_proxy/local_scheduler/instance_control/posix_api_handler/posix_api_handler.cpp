@@ -24,6 +24,7 @@
 #include "common/status/status.h"
 #include "common/utils/generate_message.h"
 #include "common/utils/struct_transfer.h"
+#include "common/trace/trace_manager.h"
 
 using namespace runtime_rpc;
 using namespace std::placeholders;
@@ -85,9 +86,11 @@ litebus::Future<std::shared_ptr<StreamingMessage>> PosixAPIHandler::Create(
         response->mutable_creatersp()->set_message("instance control is nullptr in local scheduler");
         return response;
     }
-
     YRLOG_INFO("{}|{}|receive a create instance request from {}.", traceID, createReq.requestid(), from);
     auto scheduleReq = TransFromCreateReqToScheduleReq(std::move(createReq), from);
+        // todo(lwy_robb): to use traceID
+    trace::TraceManager::GetInstance().StartSpanWithRecord(
+        { "Create", requestID, "", scheduleReq->instance().function(), scheduleReq->instance().instanceid() });
     scheduleReq->mutable_instance()->set_parentfunctionproxyaid(instanceCtrl->GetActorAID());
     auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
     (void)instanceCtrl->Schedule(scheduleReq, runtimePromise);

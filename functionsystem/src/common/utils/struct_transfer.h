@@ -57,10 +57,25 @@ const std::string RUNTIME_UUID_PREFIX = "runtime-";
 const std::string APP_ENTRYPOINT = "ENTRYPOINT";
 const std::string RUNTIME_ENTRYPOINT = "RUNTIME_ENTRYPOINT";
 const std::string PID = "pid";
+const std::string PORT_FORWARD_KEY = "portForward";
 const std::string CREATE_TIME_STAMP = "createTimestamp";
 const std::string RECEIVED_TIMESTAMP = "receivedTimestamp";
 const std::string INSTANCE_MOD_REVISION = "modRevision";
 const std::string NAMED = "named";
+
+[[maybe_unused]] inline int64_t GetIdleTimeout(const resources::InstanceInfo &instanceInfo)
+{
+    auto iter = instanceInfo.createoptions().find(IDLE_TIMEOUT);
+    if (iter == instanceInfo.createoptions().end()) {
+        return -1;
+    }
+    try {
+        return std::stoll(iter->second);
+    } catch (std::exception &e) {
+        YRLOG_WARN("failed to get idle {} from instance({})", instanceInfo.instanceid(), iter->second);
+    }
+    return -1;
+}
 
 /**
  * transfer from FunctionMeta's hbm value to ScheduleRequest
@@ -908,6 +923,8 @@ static void SetInstanceInfo(::resources::InstanceInfo *instanceInfo, CreateReque
 
     SetGracefulShutdownTime(instanceInfo, callRequest);
     (*instanceInfo->mutable_extensions())[NAMED] = createReq.designatedinstanceid().empty() ? "false" : "true";
+    instanceInfo->set_trafficreporttype(GetIdleTimeout(*instanceInfo) <= 0 ? resources::TrafficReportType::None
+                                                                           : resources::TrafficReportType::Idle);
 }
 
 /**
@@ -972,9 +989,13 @@ static void SetInstanceInfo(::resources::InstanceInfo *instanceInfo, CreateReque
     return keyItems[0];
 }
 
-[[maybe_unused]] static std::string GenerateRuntimeID(const std::string &instanceID)
+[[maybe_unused]] static std::string GenerateRuntimeID(const messages::RuntimeInstanceInfo &info)
 {
     auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
+    const std::string &instanceID = info.instanceid();
+    if (info.warmuptype() != static_cast<int32_t>(WarmupType::NONE)) {
+        return instanceID;
+    }
     if (instanceID.empty()) {
         return RUNTIME_UUID_PREFIX + uuid.ToString();
     }
