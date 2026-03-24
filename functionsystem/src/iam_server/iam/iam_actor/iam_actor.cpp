@@ -17,27 +17,37 @@
 #include "iam_actor.h"
 
 #include <ctime>
-#include "httpd/http.hpp"
+#include <nlohmann/json.hpp>
+
 #include "common/utils/token_transfer.h"
 #include "constants.h"
+#include "httpd/http.hpp"
+#include "iam/internal_iam/keycloak_verifier.h"
 
 namespace functionsystem::iamserver {
 namespace {
 // url for token
-const std::string AUTH_TOKEN_URL = "/v1/token/auth"; // url for verify token when connect instance
-const std::string REQUIRE_TOKEN_URL = "/v1/token/require"; // url for create token when create instance
-const std::string ABANDON_TOKEN_URL = "/v1/token/abandon"; // url for abandon token
+const std::string AUTH_TOKEN_URL = "/v1/token/auth";        // url for verify token when connect instance
+const std::string REQUIRE_TOKEN_URL = "/v1/token/require";  // url for create token when create instance
+const std::string ABANDON_TOKEN_URL = "/v1/token/abandon";  // url for abandon token
 // url for aksk
-const std::string REQUIRE_AKSK_BY_TENANT_ID_URL = "/v1/credential/require"; // url for create aksk when create instance
-const std::string REQUIRE_AKSK_BY_AK_URL = "/v1/credential/auth"; // url for get aksk when verify requests signature
-const std::string ABANDON_AKSK_URL = "/v1/credential/abandon"; // url for abandon aksk
+const std::string REQUIRE_AKSK_BY_TENANT_ID_URL = "/v1/credential/require";  // url for create aksk when create instance
+const std::string REQUIRE_AKSK_BY_AK_URL = "/v1/credential/auth";  // url for get aksk when verify requests signature
+const std::string ABANDON_AKSK_URL = "/v1/credential/abandon";     // url for abandon aksk
+// url for token exchange
+const std::string EXCHANGE_TOKEN_URL = "/v1/token/exchange";
+// url for Keycloak consolidation endpoints
+const std::string LOGIN_URL = "/v1/token/login";
+const std::string CODE_EXCHANGE_URL = "/v1/token/code-exchange";
+const std::string AUTH_URL_URL = "/v1/auth/url";
+const std::string TENANT_QUOTA_URL = "/v1/tenant/quota";
 // key for request header & token response header
-const std::string HEADER_AUTH_KEY = "X-Auth"; // key for token
-const std::string HEADER_TENANT_ID_KEY = "X-Tenant-ID"; // key for tenantID
-const std::string HEADER_TENANT_SALT_KEY = "X-Salt"; // salt for tenant
-const std::string HEADER_EXPIRED_TIME_SPAN = "X-Expired-Time-Span"; // key for expired time
-const std::string HEADER_TTL = "X-TTL"; // key for custom token TTL (in seconds)
-const std::string HEADER_ROLE_KEY = "X-Role"; // key for role
+const std::string HEADER_AUTH_KEY = "X-Auth";                        // key for token
+const std::string HEADER_TENANT_ID_KEY = "X-Tenant-ID";              // key for tenantID
+const std::string HEADER_TENANT_SALT_KEY = "X-Salt";                 // salt for tenant
+const std::string HEADER_EXPIRED_TIME_SPAN = "X-Expired-Time-Span";  // key for expired time
+const std::string HEADER_TTL = "X-TTL";                              // key for custom token TTL (in seconds)
+const std::string HEADER_ROLE_KEY = "X-Role";                        // key for role
 
 Status GetValueFromHeaderMap(const litebus::http::HeaderMap &headerMap, const std::string &key, std::string &value)
 {
@@ -51,7 +61,7 @@ Status GetValueFromHeaderMap(const litebus::http::HeaderMap &headerMap, const st
     value = it->second;
     return Status::OK();
 }
-} // namespace
+}  // namespace
 
 IAMActor::IAMActor(const std::string &name) : ApiRouterRegister(), ActorBase(name)
 {
@@ -75,6 +85,23 @@ IAMActor::IAMActor(const std::string &name) : ApiRouterRegister(), ActorBase(nam
     ApiRouterRegister::RegisterHandler(ABANDON_AKSK_URL, [aid(GetAID())](const HttpRequest &request) {
         return litebus::Async(aid, &IAMActor::AbandonAKSK, request);
     });
+    // token exchange handler (for Keycloak integration)
+    ApiRouterRegister::RegisterHandler(EXCHANGE_TOKEN_URL, [aid(GetAID())](const HttpRequest &request) {
+        return litebus::Async(aid, &IAMActor::ExchangeToken, request);
+    });
+    // Keycloak consolidation handlers
+    ApiRouterRegister::RegisterHandler(LOGIN_URL, [aid(GetAID())](const HttpRequest &request) {
+        return litebus::Async(aid, &IAMActor::Login, request);
+    });
+    ApiRouterRegister::RegisterHandler(CODE_EXCHANGE_URL, [aid(GetAID())](const HttpRequest &request) {
+        return litebus::Async(aid, &IAMActor::ExchangeCode, request);
+    });
+    ApiRouterRegister::RegisterHandler(AUTH_URL_URL, [aid(GetAID())](const HttpRequest &request) {
+        return litebus::Async(aid, &IAMActor::GetAuthUrl, request);
+    });
+    ApiRouterRegister::RegisterHandler(TENANT_QUOTA_URL, [aid(GetAID())](const HttpRequest &request) {
+        return litebus::Async(aid, &IAMActor::QueryTenantQuota, request);
+    });
 }
 
 litebus::Future<HttpResponse> IAMActor::VerifyToken(const functionsystem::HttpRequest &request)
@@ -88,9 +115,9 @@ litebus::Future<HttpResponse> IAMActor::VerifyToken(const functionsystem::HttpRe
         YRLOG_ERROR("parse token from headerMap failed, err: {}", status.ToString());
         return GenerateHttpResponse(
             litebus::http::ResponseCode::BAD_REQUEST,
-            "verify token failed, " +
-            litebus::http::Response::GetStatusDescribe(litebus::http::ResponseCode::BAD_REQUEST) +
-            ", parse token from headerMap failed.");
+            "verify token failed, "
+                + litebus::http::Response::GetStatusDescribe(litebus::http::ResponseCode::BAD_REQUEST)
+                + ", parse token from headerMap failed.");
     }
     auto tokenContent = std::make_shared<TokenContent>();
     tokenContent->encryptToken = token;
@@ -98,18 +125,19 @@ litebus::Future<HttpResponse> IAMActor::VerifyToken(const functionsystem::HttpRe
         if (status.IsError()) {
             YRLOG_ERROR("{}|verify token failed, err: {}", tokenContent->tenantID, status.ToString());
             auto httCode = litebus::http::ResponseCode::FORBIDDEN;
-            if (status.StatusCode() == StatusCode::ERR_INNER_SYSTEM_ERROR ||
-                status.StatusCode() == StatusCode::IAM_WAIT_INITIALIZE_COMPLETE) {
+            if (status.StatusCode() == StatusCode::ERR_INNER_SYSTEM_ERROR
+                || status.StatusCode() == StatusCode::IAM_WAIT_INITIALIZE_COMPLETE) {
                 httCode = litebus::http::ResponseCode::INTERNAL_SERVER_ERROR;
             }
             return GenerateHttpResponse(httCode, "verify token failed, " + status.ToString());
         }
         auto now = static_cast<uint64_t>(std::time(nullptr));
-        HttpResponse response = GenerateHttpResponse(
-            litebus::http::ResponseCode::OK,
-            litebus::http::Response::GetStatusDescribe(litebus::http::ResponseCode::OK));
-        response.headers.insert({{ HEADER_TENANT_ID_KEY, tokenContent->tenantID },
-                                  { HEADER_EXPIRED_TIME_SPAN, std::to_string(tokenContent->expiredTimeStamp - now) }});
+        auto timeSpan = (now >= tokenContent->expiredTimeStamp) ? 0 : (tokenContent->expiredTimeStamp - now);
+        HttpResponse response =
+            GenerateHttpResponse(litebus::http::ResponseCode::OK,
+                                 litebus::http::Response::GetStatusDescribe(litebus::http::ResponseCode::OK));
+        response.headers.insert({ { HEADER_TENANT_ID_KEY, tokenContent->tenantID },
+                                  { HEADER_EXPIRED_TIME_SPAN, std::to_string(timeSpan) } });
         if (!tokenContent->role.empty()) {
             response.headers.insert({ HEADER_ROLE_KEY, tokenContent->role });
         }
@@ -150,21 +178,22 @@ litebus::Future<HttpResponse> IAMActor::RequireEncryptToken(const functionsystem
             YRLOG_WARN("invalid X-TTL header value: {}", ttlStr);
         }
     }
-    return internalIAM_->RequireEncryptToken(tenantID, role, expiredTimeSpan).Then([tenantID](const std::shared_ptr<TokenSalt> &tokenSalt) {
-        if (tokenSalt->status.IsError() || tokenSalt->token.empty()) {
-            YRLOG_ERROR("{}|RequireEncryptToken failed, err is {}", tenantID, tokenSalt->status.ToString());
-            return GenerateHttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR,
-                                        "require token failed, err is " + tokenSalt->status.ToString());
-        }
-        HttpResponse response =
-            GenerateHttpResponse(litebus::http::ResponseCode::OK,
-                                 litebus::http::Response::GetStatusDescribe(litebus::http::ResponseCode::OK));
-        (void)response.headers.insert({ HEADER_AUTH_KEY, tokenSalt->token });
-        (void)response.headers.insert({ HEADER_TENANT_SALT_KEY, tokenSalt->salt });
-        (void)response.headers.insert({ HEADER_EXPIRED_TIME_SPAN, std::to_string(tokenSalt->expiredTimeStamp) });
-        CleanSensitiveStrMemory(tokenSalt->token, "before return encrypt token");
-        return response;
-    });
+    return internalIAM_->RequireEncryptToken(tenantID, role, expiredTimeSpan)
+        .Then([tenantID](const std::shared_ptr<TokenSalt> &tokenSalt) {
+            if (tokenSalt->status.IsError() || tokenSalt->token.empty()) {
+                YRLOG_ERROR("{}|RequireEncryptToken failed, err is {}", tenantID, tokenSalt->status.ToString());
+                return GenerateHttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR,
+                                            "require token failed, err is " + tokenSalt->status.ToString());
+            }
+            HttpResponse response =
+                GenerateHttpResponse(litebus::http::ResponseCode::OK,
+                                     litebus::http::Response::GetStatusDescribe(litebus::http::ResponseCode::OK));
+            (void)response.headers.insert({ HEADER_AUTH_KEY, tokenSalt->token });
+            (void)response.headers.insert({ HEADER_TENANT_SALT_KEY, tokenSalt->salt });
+            (void)response.headers.insert({ HEADER_EXPIRED_TIME_SPAN, std::to_string(tokenSalt->expiredTimeStamp) });
+            CleanSensitiveStrMemory(tokenSalt->token, "before return encrypt token");
+            return response;
+        });
 }
 
 litebus::Future<HttpResponse> IAMActor::AbandonToken(const functionsystem::HttpRequest &request)
@@ -337,16 +366,15 @@ bool IAMActor::VerifyRequest(const HttpRequest &request)
         return true;
     }
     std::shared_ptr<std::map<std::string, std::string>> queries =
-            std::make_shared<std::map<std::string, std::string>>();
-    for (const auto &pair: request.url.query) {
+        std::make_shared<std::map<std::string, std::string>>();
+    for (const auto &pair : request.url.query) {
         queries->insert(pair);
     }
     std::map<std::string, std::string> headers = std::map<std::string, std::string>();
-    for (const auto &pair: request.headers) {
+    for (const auto &pair : request.headers) {
         headers.insert(pair);
     }
-    return VerifyHttpRequest(SignRequest(request.method, request.url.path, queries, headers, request.body),
-                             authKey_);
+    return VerifyHttpRequest(SignRequest(request.method, request.url.path, queries, headers, request.body), authKey_);
 }
 
 void IAMActor::SetAuthKey()
@@ -390,4 +418,258 @@ void IAMMetaStoreObserver::OnHealthyStatus(const Status &status)
     ASSERT_IF_NULL(actor_);
     litebus::Async(actor_->GetAID(), &IAMActor::OnHealthyStatus, status);
 }
+
+void IAMActor::SetExternalVerifier(const std::shared_ptr<ExternalAuthVerifier> &verifier)
+{
+    verifier_ = verifier;
+}
+
+std::shared_ptr<ExternalAuthVerifier> IAMActor::GetExternalVerifier()
+{
+    return verifier_;
+}
+
+litebus::Future<HttpResponse> IAMActor::ExchangeToken(const HttpRequest &request)
+{
+    auto promise = std::make_shared<litebus::Promise<HttpResponse>>();
+
+    if (!verifier_) {
+        HttpResponse response =
+            GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "External auth integration is not enabled");
+        promise->SetValue(response);
+        return promise->GetFuture();
+    }
+
+    try {
+        auto body = nlohmann::json::parse(request.body);
+        std::string idToken = body.value("id_token", "");
+        if (idToken.empty()) {
+            promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "Missing id_token"));
+            return promise->GetFuture();
+        }
+
+        uint64_t expiresIn = body.value("expires_in", 7200);
+        if (expiresIn < 60 || expiresIn > 7200) {
+            promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "Invalid expires_in"));
+            return promise->GetFuture();
+        }
+
+        auto self = shared_from_this();
+        verifier_->Verify(idToken).OnComplete(
+            [self, expiresIn, promise](const litebus::Future<ExternalUserInfo> &future) {
+                if (future.IsError() || future.Get().status.IsError()) {
+                    std::string msg = future.IsError() ? "Future error" : future.Get().status.ToString();
+                    promise->SetValue(
+                        GenerateHttpResponse(litebus::http::ResponseCode::UNAUTHORIZED, "Verification failed: " + msg));
+                    return;
+                }
+
+                ExternalUserInfo userInfo = future.Get();
+                if (!self->internalIAM_) {
+                    promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR,
+                                                           "IAM not initialized"));
+                    return;
+                }
+
+                // Inject quotas into internal IAM token
+                self->internalIAM_
+                    ->RequireEncryptTokenWithQuota(userInfo.tenantId, userInfo.role, userInfo.cpuQuota,
+                                                   std::to_string(userInfo.memQuota), expiresIn)
+                    .OnComplete(
+                        [promise, userInfo, expiresIn](const litebus::Future<std::shared_ptr<TokenSalt>> &tokenFuture) {
+                            if (tokenFuture.IsError() || tokenFuture.Get()->status.IsError()) {
+                                promise->SetValue(GenerateHttpResponse(
+                                    litebus::http::ResponseCode::INTERNAL_SERVER_ERROR, "Token generation failed"));
+                                return;
+                            }
+
+                            auto tokenSalt = tokenFuture.Get();
+                            nlohmann::json resp;
+                            resp["token"] = tokenSalt->token;
+                            resp["tenant_id"] = userInfo.tenantId;
+                            resp["expires_in"] = expiresIn;
+                            resp["role"] = userInfo.role;
+                            if (userInfo.cpuQuota >= 0)
+                                resp["cpu_quota"] = userInfo.cpuQuota;
+                            if (userInfo.memQuota >= 0)
+                                resp["mem_quota"] = userInfo.memQuota;
+
+                            promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::OK, resp.dump()));
+                        });
+            });
+    } catch (const std::exception &e) {
+        promise->SetValue(
+            GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST, std::string("Invalid JSON: ") + e.what()));
+    }
+    return promise->GetFuture();
+}
+
+litebus::Future<HttpResponse> IAMActor::ExchangeCode(const HttpRequest &request)
+{
+    auto promise = std::make_shared<litebus::Promise<HttpResponse>>();
+    if (!verifier_) {
+        promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "External auth disabled"));
+        return promise->GetFuture();
+    }
+
+    try {
+        auto body = nlohmann::json::parse(request.body);
+        std::string code = body.value("code", "");
+        std::string redirectUri = body.value("redirect_uri", "");
+        uint64_t expiresIn = body.value("expires_in", 7200);
+
+        if (code.empty() || redirectUri.empty()) {
+            promise->SetValue(
+                GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "Missing code or redirect_uri"));
+            return promise->GetFuture();
+        }
+
+        auto self = shared_from_this();
+        verifier_->ExchangeCode(code, redirectUri)
+            .OnComplete([self, expiresIn, promise](const litebus::Future<ExternalUserInfo> &future) {
+                if (future.IsError()) {
+                    YRLOG_ERROR("Code exchange future failed");
+                    promise->SetValue(
+                        GenerateHttpResponse(litebus::http::ResponseCode::UNAUTHORIZED, "Code exchange failed"));
+                    return;
+                }
+
+                if (future.Get().status.IsError()) {
+                    YRLOG_ERROR("Code exchange verification failed, reason: {}", future.Get().status.ToString());
+                    promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::UNAUTHORIZED,
+                                                           "Code exchange failed: " + future.Get().status.ToString()));
+                    return;
+                }
+
+                ExternalUserInfo userInfo = future.Get();
+                self->internalIAM_
+                    ->RequireEncryptTokenWithQuota(userInfo.tenantId, userInfo.role, userInfo.cpuQuota,
+                                                   std::to_string(userInfo.memQuota), expiresIn)
+                    .OnComplete(
+                        [promise, userInfo, expiresIn](const litebus::Future<std::shared_ptr<TokenSalt>> &tokenFuture) {
+                            if (tokenFuture.IsError() || tokenFuture.Get()->status.IsError()) {
+                                promise->SetValue(GenerateHttpResponse(
+                                    litebus::http::ResponseCode::INTERNAL_SERVER_ERROR, "Token generation failed"));
+                                return;
+                            }
+                            auto tokenSalt = tokenFuture.Get();
+                            nlohmann::json resp;
+                            resp["token"] = tokenSalt->token;
+                            resp["tenant_id"] = userInfo.tenantId;
+                            resp["expires_in"] = expiresIn;
+                            resp["role"] = userInfo.role;
+                            if (userInfo.cpuQuota >= 0)
+                                resp["cpu_quota"] = userInfo.cpuQuota;
+                            if (userInfo.memQuota >= 0)
+                                resp["mem_quota"] = userInfo.memQuota;
+                            promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::OK, resp.dump()));
+                        });
+            });
+    } catch (...) {
+        promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "Invalid request body"));
+    }
+    return promise->GetFuture();
+}
+
+litebus::Future<HttpResponse> IAMActor::Login(const HttpRequest &request)
+{
+    auto promise = std::make_shared<litebus::Promise<HttpResponse>>();
+    if (!verifier_) {
+        promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "External auth disabled"));
+        return promise->GetFuture();
+    }
+
+    try {
+        auto body = nlohmann::json::parse(request.body);
+        std::string username = body.value("username", "");
+        std::string password = body.value("password", "");
+
+        auto self = shared_from_this();
+        verifier_->LoginWithPassword(username, password)
+            .OnComplete([self, promise](const litebus::Future<ExternalUserInfo> &future) {
+                if (future.IsError() || future.Get().status.IsError()) {
+                    promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::UNAUTHORIZED, "Login failed"));
+                    return;
+                }
+
+                ExternalUserInfo userInfo = future.Get();
+                uint64_t expiresIn = 7200;
+                self->internalIAM_
+                    ->RequireEncryptTokenWithQuota(userInfo.tenantId, userInfo.role, userInfo.cpuQuota,
+                                                   std::to_string(userInfo.memQuota), expiresIn)
+                    .OnComplete(
+                        [promise, userInfo, expiresIn](const litebus::Future<std::shared_ptr<TokenSalt>> &tokenFuture) {
+                            if (tokenFuture.IsError() || tokenFuture.Get()->status.IsError()) {
+                                promise->SetValue(GenerateHttpResponse(
+                                    litebus::http::ResponseCode::INTERNAL_SERVER_ERROR, "Token generation failed"));
+                                return;
+                            }
+                            auto tokenSalt = tokenFuture.Get();
+                            nlohmann::json resp;
+                            resp["token"] = tokenSalt->token;
+                            resp["tenant_id"] = userInfo.tenantId;
+                            resp["expires_in"] = expiresIn;
+                            resp["role"] = userInfo.role;
+                            if (userInfo.cpuQuota >= 0)
+                                resp["cpu_quota"] = userInfo.cpuQuota;
+                            if (userInfo.memQuota >= 0)
+                                resp["mem_quota"] = userInfo.memQuota;
+                            promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::OK, resp.dump()));
+                        });
+            });
+    } catch (...) {
+        promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "Invalid request body"));
+    }
+    return promise->GetFuture();
+}
+
+litebus::Future<HttpResponse> IAMActor::GetAuthUrl(const HttpRequest &request)
+{
+    auto promise = std::make_shared<litebus::Promise<HttpResponse>>();
+    if (!verifier_) {
+        promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "External auth disabled"));
+        return promise->GetFuture();
+    }
+
+    std::string authType = request.url.query.count("type") ? request.url.query.at("type") : "login";
+    std::string redirectUri = request.url.query.count("redirect_uri") ? request.url.query.at("redirect_uri") : "";
+    std::string state = request.url.query.count("state") ? request.url.query.at("state") : "";
+
+    std::string url = verifier_->GetAuthUrl(authType, redirectUri, state);
+    nlohmann::json resp;
+    resp["url"] = url;
+    promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::OK, resp.dump()));
+    return promise->GetFuture();
+}
+
+litebus::Future<HttpResponse> IAMActor::QueryTenantQuota(const HttpRequest &request)
+{
+    auto promise = std::make_shared<litebus::Promise<HttpResponse>>();
+    if (!verifier_) {
+        promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "External auth disabled"));
+        return promise->GetFuture();
+    }
+
+    std::string tenantId = request.url.query.count("tenant_id") ? request.url.query.at("tenant_id") : "";
+    if (tenantId.empty()) {
+        promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "Missing tenant_id"));
+        return promise->GetFuture();
+    }
+
+    verifier_->QueryTenantQuota(tenantId).OnComplete([promise, tenantId](
+                                                         const litebus::Future<std::pair<int64_t, int64_t>> &future) {
+        if (future.IsError()) {
+            promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR, "Query failed"));
+            return;
+        }
+        auto quota = future.Get();
+        nlohmann::json resp;
+        resp["tenant_id"] = tenantId;
+        resp["cpu_quota"] = quota.first;
+        resp["mem_quota"] = quota.second;
+        promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::OK, resp.dump()));
+    });
+    return promise->GetFuture();
+}
+
 }  // namespace functionsystem::iamserver

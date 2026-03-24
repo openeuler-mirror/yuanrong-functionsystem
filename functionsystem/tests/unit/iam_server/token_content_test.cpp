@@ -30,7 +30,7 @@ protected:
         secretKey_ = litebus::SensitiveValue("test_secret_key_for_jwt_signing");
     }
 
-     litebus::SensitiveValue secretKey_;
+    litebus::SensitiveValue secretKey_;
 };
 
 // ==================== JWT Payload JSON Tests ====================
@@ -104,6 +104,17 @@ TEST_F(TokenContentTest, GetJwtPayloadJsonMaxTimestamp)
     EXPECT_EQ(j["exp"].get<uint64_t>(), UINT64_MAX);
 }
 
+TEST_F(TokenContentTest, GetJwtPayloadJsonPermanentTokenUsesMinusOne)
+{
+    TokenContent token;
+    token.tenantID = "tenant_permanent";
+    token.expiredTimeStamp = UINT64_MAX;
+
+    std::string payload = token.GetJwtPayloadJson();
+
+    EXPECT_THAT(payload, ::testing::HasSubstr(R"("exp":-1)"));
+}
+
 TEST_F(TokenContentTest, ParseJwtPayloadJsonBasic)
 {
     TokenContent token;
@@ -126,6 +137,19 @@ TEST_F(TokenContentTest, ParseJwtPayloadJsonWithRole)
     EXPECT_TRUE(status.IsOk());
     EXPECT_EQ(token.tenantID, "tenant456");
     EXPECT_EQ(token.expiredTimeStamp, 1737936000);
+    EXPECT_EQ(token.role, "operator");
+}
+
+TEST_F(TokenContentTest, ParseJwtPayloadJsonPermanentTokenMinusOne)
+{
+    TokenContent token;
+    std::string payload = R"({"sub":"tenant456","exp":-1,"role":"operator"})";
+
+    Status status = token.ParseJwtPayloadJson(payload);
+
+    EXPECT_TRUE(status.IsOk());
+    EXPECT_EQ(token.tenantID, "tenant456");
+    EXPECT_EQ(token.expiredTimeStamp, UINT64_MAX);
     EXPECT_EQ(token.role, "operator");
 }
 
