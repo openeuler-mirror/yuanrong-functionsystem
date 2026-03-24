@@ -347,7 +347,7 @@ Status TransGroupRequest(const std::string &from, std::string &nodeID, std::shar
             auto preOptimal = ctx->maxscore();
             ctx->set_maxscore(preOptimal + score);
         }
-
+        (*instanceInfo->mutable_kvlabels())[groupInfo->groupid()] = "";
         // 设置组调度的 BindOptions 到 extension 中，供 NUMA 亲和性插件使用
         if (groupInfo->groupopts().has_bind()) {
             const auto& bind = groupInfo->groupopts().bind();
