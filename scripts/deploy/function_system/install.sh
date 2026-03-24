@@ -291,6 +291,31 @@ function install_collector() {
 function install_faas_frontend() {
   log_info "start faas frontend, http_ip=${IP_ADDRESS}, http_port=${FAAS_FRONTEND_HTTP_PORT}, grpc_port=${FAAS_FRONTEND_GRPC_PORT}..."
   local meta_service_address="${META_SERVICE_ADDRESS}"
+  local auth_provider="${AUTH_PROVIDER:-casdoor}"
+  
+  local auth_enabled="false"
+  local auth_public_url=""
+  local auth_internal_url=""
+  local auth_realm=""
+  local auth_client_id=""
+  local auth_client_secret=""
+
+  if [ "$auth_provider" == "casdoor" ]; then
+    auth_enabled="${CASDOOR_ENABLED:-false}"
+    auth_public_url="${CASDOOR_PUBLIC_ENDPOINT}"
+    auth_internal_url="${CASDOOR_ENDPOINT}"
+    auth_realm="${CASDOOR_ORGANIZATION:-openyuanrong.org}"
+    auth_client_id="${CASDOOR_CLIENT_ID}"
+    auth_client_secret="${CASDOOR_CLIENT_SECRET}"
+  else
+    auth_enabled="${KEYCLOAK_ENABLED:-false}"
+    auth_public_url="${KEYCLOAK_URL}"
+    auth_internal_url="${KEYCLOAK_INTERNAL_URL:-${KEYCLOAK_URL}}"
+    auth_realm="${KEYCLOAK_REALM:-yuanrong}"
+    auth_client_id="${KEYCLOAK_CLIENT_ID:-frontend}"
+    auth_client_secret="${KEYCLOAK_CLIENT_SECRET}"
+  fi
+
   if [ -z "${meta_service_address}" ]; then
     meta_service_address="${IP_ADDRESS}:${META_SERVICE_PORT}"
   fi
@@ -307,6 +332,22 @@ function install_faas_frontend() {
   sed -i "s/{iam_server_address}/${IAM_SERVER_ADDRESS}/g" ${install_init_frontend_config}
   sed -i "s/{meta_service_address}/${meta_service_address}/g" ${install_init_frontend_config}
   sed -i "s/{enable_func_token_auth}/${ENABLE_FUNCTION_TOKEN_AUTH}/g" ${install_init_frontend_config}
+  
+  # Generic auth placeholders
+  sed -i "s/{auth_enabled}/${auth_enabled}/g" ${install_init_frontend_config}
+  sed -i "s*{auth_public_url}*${auth_public_url}*g" ${install_init_frontend_config}
+  sed -i "s*{auth_internal_url}*${auth_internal_url}*g" ${install_init_frontend_config}
+  sed -i "s/{auth_realm}/${auth_realm}/g" ${install_init_frontend_config}
+  sed -i "s/{auth_client_id}/${auth_client_id}/g" ${install_init_frontend_config}
+  sed -i "s/{auth_client_secret}/${auth_client_secret}/g" ${install_init_frontend_config}
+
+  # Legacy Keycloak placeholders (fallback)
+  sed -i "s/{keycloak_enabled}/${auth_enabled}/g" ${install_init_frontend_config}
+  sed -i "s*{keycloak_url}*${auth_public_url}*g" ${install_init_frontend_config}
+  sed -i "s*{keycloak_internal_url}*${auth_internal_url}*g" ${install_init_frontend_config}
+  sed -i "s/{keycloak_realm}/${auth_realm}/g" ${install_init_frontend_config}
+  sed -i "s/{keycloak_client_id}/${auth_client_id}/g" ${install_init_frontend_config}
+  sed -i "s/{keycloak_client_secret}/${auth_client_secret}/g" ${install_init_frontend_config}
   sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" ${install_init_frontend_config}
   sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" ${install_init_frontend_config}
   sed -i "s*{sslBasePath}*${SSL_BASE_PATH}*g" ${install_init_frontend_config}
@@ -670,6 +711,35 @@ function install_metaservice() {
 function install_iam_server() {
   log_info "start iam_server, ip=${IP_ADDRESS}, port=${IAM_SERVER_PORT}..."
   local bin=${FUNCTION_SYSTEM_DIR}/bin/iam_server
+  local auth_provider="${AUTH_PROVIDER:-casdoor}"
+  
+  # Keycloak configs
+  local keycloak_enabled="${KEYCLOAK_ENABLED}"
+  local keycloak_url="${KEYCLOAK_INTERNAL_URL:-${KEYCLOAK_URL}}"
+  local keycloak_issuer_url="${KEYCLOAK_URL}"
+  local keycloak_realm="${KEYCLOAK_REALM}"
+
+  # Casdoor configs
+  local casdoor_enabled="${CASDOOR_ENABLED:-false}"
+  local casdoor_endpoint="${CASDOOR_ENDPOINT:-http://127.0.0.1:8000}"
+  local casdoor_public_endpoint="${CASDOOR_PUBLIC_ENDPOINT:-${CASDOOR_ENDPOINT}}"
+  local casdoor_client_id="${CASDOOR_CLIENT_ID}"
+  local casdoor_client_secret="${CASDOOR_CLIENT_SECRET}"
+  local casdoor_org="${CASDOOR_ORGANIZATION:-yuanrong}"
+  local casdoor_app="${CASDOOR_APPLICATION:-app-yuanrong}"
+  local casdoor_admin_user="${CASDOOR_ADMIN_USER}"
+  local casdoor_admin_password="${CASDOOR_ADMIN_PASSWORD}"
+  local casdoor_pub_key="${CASDOOR_JWT_PUBLIC_KEY}"
+
+  if [ -z "${keycloak_enabled}" ]; then
+    keycloak_enabled="false"
+  fi
+  if [ -z "${keycloak_url}" ]; then
+    keycloak_url="http://127.0.0.1:8080"
+  fi
+  if [ -z "${keycloak_realm}" ]; then
+    keycloak_realm="yuanrong"
+  fi
 
   jemalloc_path=""
   if [ "X${ENABLE_JEMALLOC}" == "Xtrue" ]; then
@@ -686,7 +756,6 @@ function install_iam_server() {
   fi
 
   # Determine if SSL should be enabled for iam_server
-  # SSL is enabled if either global SSL_ENABLE=true or IAM_SSL_ENABLE=true
   local iam_ssl_enable="false"
   if [ "X${SSL_ENABLE}" = "Xtrue" ] || [ "X${SSL_ENABLE}" = "XTRUE" ] || \
      [ "X${IAM_SSL_ENABLE}" = "Xtrue" ] || [ "X${IAM_SSL_ENABLE}" = "XTRUE" ]; then
@@ -712,6 +781,21 @@ function install_iam_server() {
       --ssl_root_file="${SSL_ROOT_FILE}" \
       --ssl_cert_file="${SSL_CERT_FILE}" \
       --ssl_key_file="${SSL_KEY_FILE}" \
+      --auth_provider="${auth_provider}" \
+      --keycloak_enabled="${keycloak_enabled}" \
+      --keycloak_url="${keycloak_url}" \
+      --keycloak_issuer_url="${keycloak_issuer_url}" \
+      --keycloak_realm="${keycloak_realm}" \
+      --casdoor_enabled="${casdoor_enabled}" \
+      --casdoor_endpoint="${casdoor_endpoint}" \
+      --casdoor_public_endpoint="${casdoor_public_endpoint}" \
+      --casdoor_client_id="${casdoor_client_id}" \
+      --casdoor_client_secret="${casdoor_client_secret}" \
+      --casdoor_organization="${casdoor_org}" \
+      --casdoor_application="${casdoor_app}" \
+      --casdoor_admin_user="${casdoor_admin_user}" \
+      --casdoor_admin_password="${casdoor_admin_password}" \
+      --casdoor_jwt_public_key="${casdoor_pub_key}" \
       >>"${FS_LOG_PATH}/${NODE_ID}-iam_server${STD_LOG_SUFFIX}" 2>&1 &
     IAM_SERVER_PID=$!
     if function_system_health_check ${IAM_SERVER_PID} "${IAM_SERVER_PORT}" "iam-server"; then

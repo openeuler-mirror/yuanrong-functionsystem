@@ -33,16 +33,15 @@
 #include "common/leader/leader_actor.h"
 #include "common/leader/txn_leader_actor.h"
 #include "common/logs/logging.h"
-#include "meta_store_monitor/meta_store_monitor_factory.h"
-#include "meta_store_client/meta_store_client.h"
-#include "meta_store_client/meta_store_struct.h"
 #include "common/rpc/client/grpc_client.h"
 #include "common/utils/module_switcher.h"
 #include "common/utils/ssl_config.h"
 #include "common/utils/version.h"
 #include "iam_server/driver/iam_driver.h"
 #include "iam_server/flags/flags.h"
-
+#include "meta_store_client/meta_store_client.h"
+#include "meta_store_client/meta_store_struct.h"
+#include "meta_store_monitor/meta_store_monitor_factory.h"
 
 using namespace functionsystem;
 using namespace functionsystem::iamserver;
@@ -131,9 +130,10 @@ std::shared_ptr<MetaStoreClient> GetMetaStoreClient(const Flags &flags)
 {
     MetaStoreTimeoutOption option;
     // retries must take longer than health check
-    option.operationRetryTimes = static_cast<int64_t>((flags.GetMaxTolerateMetaStoreFailedTimes() + 1) *
-                                 (flags.GetMetaStoreCheckInterval() + flags.GetMetaStoreCheckTimeout()) /
-                                 KV_OPERATE_RETRY_INTERVAL_LOWER_BOUND);
+    option.operationRetryTimes =
+        static_cast<int64_t>((flags.GetMaxTolerateMetaStoreFailedTimes() + 1)
+                             * (flags.GetMetaStoreCheckInterval() + flags.GetMetaStoreCheckTimeout())
+                             / KV_OPERATE_RETRY_INTERVAL_LOWER_BOUND);
     MetaStoreMonitorParam param{
         .maxTolerateFailedTimes = flags.GetMaxTolerateMetaStoreFailedTimes(),
         .checkIntervalMs = flags.GetMetaStoreCheckInterval(),
@@ -154,8 +154,8 @@ void OnCreate(const Flags &flags)
     if (flags.GetSslEnable()) {
         InitLitebusSSLEnv(GetSSLCertConfig(flags));
     }
-    g_iamServerSwitcher->InitMetrics(flags.GetEnableMetrics(), flags.GetMetricsConfig(),
-                                     flags.GetMetricsConfigFile(), GetSSLCertConfig(flags));
+    g_iamServerSwitcher->InitMetrics(flags.GetEnableMetrics(), flags.GetMetricsConfig(), flags.GetMetricsConfigFile(),
+                                     GetSSLCertConfig(flags));
     if (!InitLitebusAKSKEnv(flags).IsOk()) {
         YRLOG_ERROR("failed to get aksk config");
         g_iamServerSwitcher->SetStop();
@@ -185,6 +185,16 @@ void OnCreate(const Flags &flags)
     } else if (flags.GetIamCredentialType() == IAM_CREDENTIAL_TYPE_AK_SK) {
         iamCredType = InternalIAM::IAMCredType::AK_SK;
     }
+    // Build Keycloak issuer URL (use keycloak_issuer_url if set, else keycloak_url)
+    std::string keycloakIssuer;
+    if (flags.GetKeycloakEnabled()) {
+        const std::string &issuerUrl = flags.GetKeycloakIssuerUrl();
+        const std::string &baseUrl = issuerUrl.empty() ? flags.GetKeycloakUrl() : issuerUrl;
+        keycloakIssuer = baseUrl + "/realms/" + flags.GetKeycloakRealm();
+    } else {
+        keycloakIssuer = "";
+    }
+
     IAMStartParam iamStartParam{ .internalIAMParam = { .tokenExpiredTimeSpan = flags.GetTokenExpiredTimeSpan(),
                                                        .isEnableIAM = flags.GetIsEnableIAM(),
                                                        .clusterID = flags.GetClusterID(),
@@ -194,13 +204,34 @@ void OnCreate(const Flags &flags)
                                                        .credentialHostAddress = flags.GetCredentialHostAddress() },
                                  .nodeID = flags.GetNodeID(),
                                  .ip = flags.GetIP(),
-                                 .metaStoreAddress = flags.GetMetaStoreAddress() };
+                                 .metaStoreAddress = flags.GetMetaStoreAddress(),
+                                 .authProvider = flags.GetAuthProvider(),
+                                 .keycloakConfig = { .url = flags.GetKeycloakUrl(),
+                                                     .publicUrl = flags.GetKeycloakPublicUrl(),
+                                                     .realm = flags.GetKeycloakRealm(),
+                                                     .clientId = flags.GetKeycloakClientId(),
+                                                     .clientSecret = flags.GetKeycloakClientSecret(),
+                                                     .issuer = keycloakIssuer,
+                                                     .audience = "frontend",  // Expected client ID
+                                                     .enabled = flags.GetKeycloakEnabled(),
+                                                     .cacheTtlSeconds = flags.GetKeycloakCacheTtlSeconds() },
+                                 .casdoorConfig = { .endpoint = flags.GetCasdoorEndpoint(),
+                                                    .publicEndpoint = flags.GetCasdoorPublicEndpoint(),
+                                                    .clientId = flags.GetCasdoorClientId(),
+                                                    .clientSecret = flags.GetCasdoorClientSecret(),
+                                                    .organization = flags.GetCasdoorOrganization(),
+                                                    .application = flags.GetCasdoorApplication(),
+                                                    .adminUser = flags.GetCasdoorAdminUser(),
+                                                    .adminPassword = flags.GetCasdoorAdminPassword(),
+                                                    .jwtPublicKey = flags.GetCasdoorJwtPublicKey(),
+                                                    .enabled = flags.GetCasdoorEnabled() } };
     g_iamDriver = std::make_shared<IAMDriver>(iamStartParam, metastoreClient);
     if (auto status = g_iamDriver->Start(); status.IsError()) {
         YRLOG_ERROR("failed to start {}, errMsg: {}", COMPONENT_NAME, status.ToString());
         g_iamServerSwitcher->SetStop();
         return;
     }
+
     YRLOG_INFO("{} is started", COMPONENT_NAME);
 }
 
