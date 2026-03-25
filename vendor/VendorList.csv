@@ -19,5 +19,5 @@ gtest_1_12_1,release-1.12.1,litebus;functionsystem;metrics;logs,false,https://gi
 gtest_1_10_0,release-1.10.0,functionsystem,false,https://gitee.com/mirrors/googletest/repository/archive/release-1.10.0.zip,db55081e6b5a5f820d052f8d37e0d29835dd5a2bd5b8d4d50590b7834f9abfae
 huaweicloud-sdk-c-obs,v3.24.3,functionsystem,false,https://gitee.com/mirrors/huaweicloud-sdk-c-obs/repository/archive/v3.24.3.zip,ed744c92494d2d7fd171e776abfef627ac7bdd0e24910a207e83d3887cafb2bd
 datasystem,0.0.0,functionsystem,false,file://localhost/vendor/src/yr-datasystem.tar.gz,
-opentelemetry,v1.13.0,functionsystem,false,https://github.com/open-telemetry/opentelemetry-cpp/archive/refs/tags/v1.13.0.tar.gz,7735cc56507149686e6019e06f588317099d4522480be5f38a2a09ec69af1706
-opentelemetry_proto,v1.1.0,functionsystem,false,https://github.com/open-telemetry/opentelemetry-proto/archive/refs/tags/v1.1.0.tar.gz,df491a05f3fcbf86cc5ba5c9de81f6a624d74d4773d7009d573e37d6e2b6af64
+opentelemetry,v1.13.0,functionsystem,false,https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/thirdparty/github.com/open-telemetry/opentelemetry-cpp/v1.13.0.tar.gz,7735cc56507149686e6019e06f588317099d4522480be5f38a2a09ec69af1706
+opentelemetry_proto,v1.1.0,functionsystem,false,https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/thirdparty/github.com/open-telemetry/opentelemetry-proto/v1.1.0.tar.gz,df491a05f3fcbf86cc5ba5c9de81f6a624d74d4773d7009d573e37d6e2b6af64
