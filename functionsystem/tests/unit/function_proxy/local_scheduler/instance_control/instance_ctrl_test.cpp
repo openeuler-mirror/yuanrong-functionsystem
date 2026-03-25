@@ -1270,10 +1270,13 @@ TEST_F(InstanceCtrlTest, ScheduleRecoverInstanceSuccess)
     EXPECT_CALL(*instanceControlView, TryGenerateNewInstance).WillOnce(Return(genStates));
     EXPECT_CALL(*instanceControlView, GetInstance).WillOnce(Return(nullptr)).WillRepeatedly(Return(stateMachine));
     EXPECT_CALL(mockStateMachine, IsSaving()).WillRepeatedly(Return(false));
+    auto runningPromise = std::make_shared<litebus::Promise<bool>>();
+    auto runningFut = runningPromise->GetFuture();
     EXPECT_CALL(mockStateMachine, TransitionToImpl)
         .WillOnce(Return(SCHEDULING_RESULT))
         .WillOnce(Return(CREATING_RESULT))
-        .WillOnce(Return(RUNNING_RESULT));
+        .WillOnce(DoAll(InvokeWithoutArgs([runningPromise]() { runningPromise->SetValue(true); }),
+                        Return(RUNNING_RESULT)));
     EXPECT_CALL(mockStateMachine, GetInstanceInfo).WillRepeatedly(Return(instanceInfo));
     EXPECT_CALL(mockStateMachine, GetCancelFuture).WillRepeatedly(Return(litebus::Future<std::string>()));
 
@@ -1297,6 +1300,7 @@ TEST_F(InstanceCtrlTest, ScheduleRecoverInstanceSuccess)
     EXPECT_EQ(result.Get().code(), 0);
     EXPECT_EQ(runtimePromise->GetFuture().Get().code(), 0);
     ASSERT_AWAIT_READY(strFut);
+    ASSERT_AWAIT_READY(runningFut);
     litebus::Terminate(stateActor->GetAID());
     litebus::Await(stateActor->GetAID());
 }

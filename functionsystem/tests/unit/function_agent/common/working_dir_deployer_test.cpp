@@ -40,7 +40,6 @@ protected:
 TEST_F(WorkingDirDeployerTest, PathSchemeAndRawPathResolveToSameDestination)
 {
     functionsystem::function_agent::WorkingDirDeployer deployer;
-
     auto rawDestination = deployer.GetDestination("/tmp/deploy-root", testDir_, "app-id");
     auto schemeDestination = deployer.GetDestination("/tmp/deploy-root", "path://" + testDir_, "app-id");
 
