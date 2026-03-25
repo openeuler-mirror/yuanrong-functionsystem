@@ -243,6 +243,16 @@ public:
 
         instanceCtrl_ = nullptr;
         instanceCtrlWithMockObserver_ = nullptr;
+
+        // Explicitly terminate ResourceView actors to prevent name conflicts in subsequent tests.
+        // InstanceCtrlActor/ScheduleQueueActor may hold shared_ptr<ResourceView> refs beyond the
+        // lifetime of InstanceCtrl, preventing automatic cleanup through ~ResourceView().
+        litebus::Terminate(litebus::AID(nodeID_ + "-ResourceViewActor"));
+        litebus::Terminate(litebus::AID(nodeID_ + "-virtualResourceViewActor"));
+        litebus::Await(litebus::AID(nodeID_ + "-ResourceViewActor"));
+        litebus::Await(litebus::AID(nodeID_ + "-virtualResourceViewActor"));
+        resourceViewMgr_ = nullptr;
+
         metaStorageAccessor_ = nullptr;
         observer_ = nullptr;
         mockObserver_ = nullptr;

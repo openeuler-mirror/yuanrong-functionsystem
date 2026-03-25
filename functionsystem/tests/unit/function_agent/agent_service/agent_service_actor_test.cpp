@@ -259,6 +259,12 @@ public:
         litebus::Await(testMetricsActor_);
         litebus::Await(testRegisterHelperActor_);
 
+        // Explicitly terminate RegisterHelperActor spawned by tests that call RegisterHelper("dstAgentServiceActor").
+        // That actor is stored in dstActor_->registerHelper_ and its destructor may be delayed by thread pool
+        // shared_ptr refs after Await(), causing name conflicts when the next test creates one.
+        litebus::Terminate(litebus::AID("dstAgentServiceActor-RegisterHelper"));
+        litebus::Await(litebus::AID("dstAgentServiceActor-RegisterHelper"));
+
         dstActor_ = nullptr;
         testFuncAgentMgrActor_ = nullptr;
         testRuntimeManager_ = nullptr;

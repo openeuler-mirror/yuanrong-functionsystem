@@ -1062,7 +1062,9 @@ litebus::Future<SyncResult> ObserverActor::InstanceInfoSyncer(const std::shared_
     UpdateInstanceRouteEvent(remoteWatchRouteEvents, true);
 
     for (auto instance : localWatchRouteInfo) {  // check and update local instance info
-        instanceInfoSyncerCbFunc_(instance);
+        if (instanceInfoSyncerCbFunc_) {
+            instanceInfoSyncerCbFunc_(instance);
+        }
     }
     return syncResult;
 }
@@ -1153,7 +1155,9 @@ litebus::Future<SyncResult> ObserverActor::PartialInstanceInfoSyncer(const std::
     }
 
     // (2) owner is self, compare local cache
-    instanceInfoSyncerCbFunc_(routeInfo);
+    if (instanceInfoSyncerCbFunc_) {
+        instanceInfoSyncerCbFunc_(routeInfo);
+    }
     return syncResult;
 }
 

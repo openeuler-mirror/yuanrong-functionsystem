@@ -134,6 +134,11 @@ protected:
     {
         litebus::Terminate(client_->GetAID());
         litebus::Await(client_);
+        // Explicitly terminate the HeartbeatClient actor ("meta-store") created by pingPongDriver_
+        // in MetaStoreMaintenanceClientStrategy::Init(). The destructor of MetaStoreMaintenanceClientStrategy
+        // cleans it up, but that destructor may be delayed by thread pool shared_ptr refs after Await().
+        litebus::Terminate(litebus::AID("meta-store"));
+        litebus::Await(litebus::AID("meta-store"));
         client_ = nullptr;
     }
 

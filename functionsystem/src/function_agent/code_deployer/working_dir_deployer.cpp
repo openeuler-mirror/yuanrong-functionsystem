@@ -37,6 +37,11 @@ const std::string DS_SCHEME = "ds://";
 const std::string APP_FOLDER_PREFIX = "app";
 const std::string WORKING_DIR_FOLDER_PREFIX = "working_dir";
 
+std::string StripScheme(const std::string &uri, const std::string &scheme)
+{
+    return uri.compare(0, scheme.length(), scheme) == 0 ? uri.substr(scheme.length()) : uri;
+}
+
 bool endsWith(const std::string &str, const std::string &suffix)
 {
     if (suffix.size() > str.size())
@@ -79,9 +84,7 @@ public:
 
     std::pair<Status, std::string> GetResource(std::string dst) override
     {
-        std::string realFilePath = (filePath_.compare(0, FILE_SCHEME.length(), FILE_SCHEME) == 0)
-                                       ? filePath_.substr(FILE_SCHEME.length())
-                                       : filePath_;
+        std::string realFilePath = StripScheme(filePath_, FILE_SCHEME);
 
         if (endsWith(realFilePath, ".img")) {
             return std::make_pair(Status::OK(), realFilePath);
@@ -101,7 +104,8 @@ public:
 
     std::string GetHash() override
     {
-        return CalculateFileMD5(filePath_);
+        std::string realFilePath = StripScheme(filePath_, FILE_SCHEME);
+        return CalculateFileMD5(realFilePath);
     }
 
 private:
@@ -117,23 +121,27 @@ public:
 
     std::pair<Status, std::string> GetResource(std::string dst) override
     {
-        std::string realFilePath = (filePath_.compare(0, PATH_SCHEME.length(), PATH_SCHEME) == 0)
-                                       ? filePath_.substr(PATH_SCHEME.length())
-                                       : filePath_;
-        return std::make_pair(Status::OK(), realFilePath);
+        (void)dst;
+        return std::make_pair(Status::OK(), GetRealFilePath());
     }
 
     std::string GetWorkingDir(std::string dst) override
     {
-        return filePath_;
+        (void)dst;
+        return GetRealFilePath();
     }
 
     std::string GetHash() override
     {
-        return CalculateFileMD5(filePath_);
+        return CalculateFileMD5(GetRealFilePath());
     }
 
 private:
+    std::string GetRealFilePath() const
+    {
+        return StripScheme(filePath_, PATH_SCHEME);
+    }
+
     std::string filePath_;
 };
 
@@ -225,7 +233,7 @@ public:
         if (uri.find(PATH_SCHEME) == 0) {
             return std::make_shared<PathResourceAccessor>(uri);
         }
-        if (IsDir(uri)) {
+        if (IsDir(uri) || (!uri.empty() && uri[0] == '/' && uri.find("://") == std::string::npos)) {
             return std::make_shared<PathResourceAccessor>(uri);
         }
         return nullptr;
@@ -300,7 +308,11 @@ DeployResult WorkingDirDeployer::Deploy(const std::shared_ptr<messages::DeployRe
         "destination({})",
         config.deploydir(), config.bucketid(), config.objectid(), result.destination);
 
-    if (result.destination == config.bucketid()) {
+    std::string normalizedBucketID = StripScheme(config.bucketid(), PATH_SCHEME);
+    if (result.destination == config.bucketid() || result.destination == normalizedBucketID) {
+        if (!litebus::os::ExistPath(result.destination)) {
+            (void)litebus::os::Mkdir(result.destination);
+        }
         result.status = Status::OK();
         return result;
     }
@@ -328,8 +340,9 @@ DeployResult WorkingDirDeployer::Deploy(const std::shared_ptr<messages::DeployRe
         return result;
     }
     std::string cmd = "chmod -R 750 " + dst;
-    if (auto code(std::system(cmd.c_str())); code) {
-        YRLOG_WARN("failed to execute chmod cmd({}). code: {}", cmd, code);
+    int chmodCode = std::system(cmd.c_str());
+    if (chmodCode) {
+        YRLOG_WARN("failed to execute chmod cmd({}). code: {}", cmd, chmodCode);
     }
     auto [status, workingDirZipFile] = accessor->GetResource(result.destination);
     if (!status.IsOk()) {
@@ -364,8 +377,9 @@ Status WorkingDirDeployer::UnzipFile(const std::string &destDir, const std::stri
         return Status(StatusCode::PARAMETER_ERROR, "command has invalid characters");
     }
 
-    if (auto code(std::system(cmd.c_str())); code) {
-        YRLOG_ERROR("failed to execute unzip working_dir cmd({}). code: {}", cmd, code);
+    int unzipCode = std::system(cmd.c_str());
+    if (unzipCode) {
+        YRLOG_ERROR("failed to execute unzip working_dir cmd({}). code: {}", cmd, unzipCode);
         return Status(StatusCode::FUNC_AGENT_INVALID_WORKING_DIR_FILE, "failed to unzip working_dir file");
     }
     // keep origin workingDirZipFile
