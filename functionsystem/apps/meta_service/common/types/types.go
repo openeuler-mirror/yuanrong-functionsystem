@@ -242,6 +242,7 @@ type ExtendedMetaData struct {
 	RaspConfig             RaspConfig             `json:"rasp_config"`
 	ServeDeploySchema      ServeDeploySchema      `json:"serveDeploySchema" valid:"optional"`
 	ImagePullConfig        ImagePullConfig        `json:"imagePullConfig,omitempty"`
+	EnableAgentSession     bool                   `json:"enable_agent_session,omitempty"`
 }
 
 // CustomHealthCheck custom health check

@@ -200,6 +200,7 @@ func buildFaaSFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionVa
 	if err != nil {
 		return metadata.FaaSFuncMeta{}, err
 	}
+	info.ExtendedMetaData.EnableAgentSession = fv.FunctionVersion.EnableAgentSession
 	err = buildFaaSInstanceMetaData(txn, fv, tenantInfo, &info.InstanceMetaData)
 	if err != nil {
 		log.GetLogger().Errorf("failed to build faas instance meta data, error: %s", err.Error())
@@ -359,6 +360,7 @@ func buildFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionValue,
 	info.ExtendedMetaData.ExtendedHandler = fv.FunctionVersion.ExtendedHandler
 	info.ExtendedMetaData.ExtendedTimeout = fv.FunctionVersion.ExtendedTimeout
 	info.ExtendedMetaData.Device = fv.FunctionVersion.Device
+	info.ExtendedMetaData.EnableAgentSession = fv.FunctionVersion.EnableAgentSession
 	return info, nil
 }
 

@@ -278,6 +278,7 @@ type FaaSExtendedMetaData struct {
 	RestoreHook           RestoreHook           `json:"restore_hook,omitempty" valid:",optional"`
 	NetworkController     NetworkController     `json:"network_controller" valid:",optional"`
 	UserAgency            UserAgency            `json:"user_agency" valid:",optional"`
+	EnableAgentSession    bool                  `json:"enable_agent_session,omitempty"`
 }
 
 // Heartbeat define user custom heartbeat function config

@@ -107,6 +107,7 @@ type FunctionVersion struct {
 	Device             types.Device
 	PoolLabel          string
 	PoolID             string
+	EnableAgentSession bool
 }
 
 // FunctionLayer defines layer info related to function version.
