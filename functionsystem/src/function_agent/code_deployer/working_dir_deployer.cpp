@@ -273,7 +273,8 @@ std::string WorkingDirDeployer::GetDestination(const std::string &deployDir, con
     std::string hash = accessor->GetHash();
     YRLOG_DEBUG("md5 of workingDirZipFile({}): {}", uriFile, hash);
     if (hash.empty()) {
-        return hash;
+        YRLOG_DEBUG("failed to get hash of workingDirZipFile({}). use workingDir({}) instead", uriFile, workingDir);
+        return accessor->GetWorkingDir(workingDir);
     }
     auto res = litebus::os::Join(workingDir, hash);
     res = accessor->GetWorkingDir(res);
