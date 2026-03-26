@@ -41,18 +41,17 @@ set(${src_name}_CMAKE_ARGS
         -DCMAKE_CXX_FLAGS_RELEASE=${THIRDPARTY_CXX_FLAGS}
         -DCMAKE_SHARED_LINKER_FLAGS=${THIRDPARTY_LINK_FLAGS}
         -DCMAKE_CXX_STANDARD=17 # absl use cpp17 to compile
+        -DOTELCPP_PROTO_PATH=${VENDOR_SRC_DIR}/opentelemetry_proto # use vendored proto to avoid runtime git clone from GitHub
 )
 
 
 set(HISTORY_INSTALLLED "${EP_BUILD_DIR}/Install/${src_name}")
 if (NOT EXISTS ${HISTORY_INSTALLLED})
-    # Compile opentelemetry depends on opentelemetry-proto, need to copy the source code to the opentelemetry/third_party directory.
-    file(COPY ${VENDOR_SRC_DIR}/opentelemetry_proto DESTINATION ${VENDOR_SRC_DIR}/opentelemetry/third_party)
     EXTERNALPROJECT_ADD(${src_name}
             SOURCE_DIR ${src_dir}
             CMAKE_ARGS ${${src_name}_CMAKE_ARGS} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DCMAKE_INSTALL_LIBDIR=lib
             BUILD_COMMAND bash -c "export LD_LIBRARY_PATH=${protobuf_LIB_DIR}:${grpc_LIB_DIR}:$ENV{LD_LIBRARY_PATH} \
-                                && ${CMAKE_MAKE_PROGRAM} -j ${BUILD_THREAD_NUM}"
+                                && ${CMAKE_MAKE_PROGRAM} -j${THIRDPARTY_JOBS}"
             LOG_CONFIGURE ON
             LOG_BUILD ON
             LOG_INSTALL ON
