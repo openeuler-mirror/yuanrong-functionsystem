@@ -32,6 +32,8 @@ namespace functionsystem {
 // Provides a generic fd monitoring mechanism with callback support
 class IOEventActor : public litebus::ActorBase {
 public:
+    explicit IOEventActor(const std::string& name);
+
     // IO callback type: (data, exitCode) -> void
     // exitCode: -1 for normal data, >=0 for EOF/error with exit code
     using IOCallback = std::function<void(const std::string &data, int exitCode)>;
@@ -63,8 +65,6 @@ protected:
     void Finalize() override;
 
 private:
-    explicit IOEventActor(const std::string &name);
-
     // Event loop (scheduled periodically via AsyncAfter)
     void EventLoop();
 

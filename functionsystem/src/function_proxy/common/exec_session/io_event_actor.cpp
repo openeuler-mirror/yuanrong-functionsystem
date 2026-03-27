@@ -36,6 +36,7 @@ void IOEventActor::CreateInstance()
         return;
     }
 
+    // instance_ = std::shared_ptr<IOEventActor>(new IOEventActor("IOEventActor"));
     instance_ = std::make_shared<IOEventActor>("IOEventActor");
     litebus::Spawn(instance_);
     YRLOG_INFO("IOEventActor singleton created");

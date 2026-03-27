@@ -338,7 +338,7 @@ void ExecSessionActor::DoCleanupAfterUnregister()
             YRLOG_INFO("Killing exec process (detached thread), pid: {}, sessionId: {}", pid, sessionId_);
             // Offload the sleep+kill to a detached thread so we never block the calling thread
             // (which may be the IOEventActor event-loop thread, shared by all sessions).
-            constexpr int killDelayMs = 100;  // grace period before SIGTERM
+            static constexpr int killDelayMs = 100;  // grace period before SIGTERM
             std::thread([pid]() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(killDelayMs));
                 kill(pid, SIGTERM);

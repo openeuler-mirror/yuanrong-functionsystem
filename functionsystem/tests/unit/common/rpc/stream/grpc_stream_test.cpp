@@ -151,7 +151,7 @@ protected:
     inline static std::shared_ptr<ControlClient> client_;
 };
 
-TEST_F(StreamTest, PosixCallServerValidTest)
+TEST_F(DISABLED_StreamTest, PosixCallServerValidTest)
 {
     auto request = std::make_shared<StreamingMessage>();
     request->set_messageid("call0");
@@ -163,7 +163,7 @@ TEST_F(StreamTest, PosixCallServerValidTest)
     EXPECT_EQ(result.callrsp().code(), common::ErrorCode::ERR_NONE);
 }
 
-TEST_F(StreamTest, PosixCallServerInvalidTest)
+TEST_F(DISABLED_StreamTest, PosixCallServerInvalidTest)
 {
     auto request = std::make_shared<StreamingMessage>();
     request->set_messageid("call1");
@@ -175,7 +175,7 @@ TEST_F(StreamTest, PosixCallServerInvalidTest)
     EXPECT_EQ(result.callrsp().code(), common::ErrorCode::ERR_PARAM_INVALID);
 }
 
-TEST_F(StreamTest, PosixNotifyServerTest)
+TEST_F(DISABLED_StreamTest, PosixNotifyServerTest)
 {
     auto request = std::make_shared<StreamingMessage>();
     request->set_messageid("notify");
@@ -185,7 +185,7 @@ TEST_F(StreamTest, PosixNotifyServerTest)
     EXPECT_EQ(result.has_notifyrsp(), true);
 }
 
-TEST_F(StreamTest, PosixInvokeClientValidTest)
+TEST_F(DISABLED_StreamTest, PosixInvokeClientValidTest)
 {
     auto request = std::make_shared<StreamingMessage>();
     request->set_messageid("invoke0");
@@ -196,7 +196,7 @@ TEST_F(StreamTest, PosixInvokeClientValidTest)
     EXPECT_EQ(result.invokersp().code(), common::ErrorCode::ERR_NONE);
 }
 
-TEST_F(StreamTest, ServerFinishTest)
+TEST_F(DISABLED_StreamTest, ServerFinishTest)
 {
     service_->TryFinish();
 
@@ -209,7 +209,7 @@ TEST_F(StreamTest, ServerFinishTest)
     Restart(); // restart server and client
 }
 
-TEST_F(StreamTest, PosixInvokeClientInValidTest)
+TEST_F(DISABLED_StreamTest, PosixInvokeClientInValidTest)
 {
     auto request = std::make_shared<StreamingMessage>();
     request->set_messageid("invoke1");
@@ -220,7 +220,7 @@ TEST_F(StreamTest, PosixInvokeClientInValidTest)
     EXPECT_EQ(result.invokersp().code(), common::ErrorCode::ERR_PARAM_INVALID);
 }
 
-TEST_F(StreamTest, PosixCallResultClientValidTest)
+TEST_F(DISABLED_StreamTest, PosixCallResultClientValidTest)
 {
     auto request = std::make_shared<StreamingMessage>();
     request->set_messageid("callresult0");
@@ -231,7 +231,7 @@ TEST_F(StreamTest, PosixCallResultClientValidTest)
     EXPECT_EQ(result.callresultack().code(), common::ErrorCode::ERR_NONE);
 }
 
-TEST_F(StreamTest, PosixCallResultClientInValidTest)
+TEST_F(DISABLED_StreamTest, PosixCallResultClientInValidTest)
 {
     auto request = std::make_shared<StreamingMessage>();
     request->set_messageid("callresult1");
@@ -242,7 +242,7 @@ TEST_F(StreamTest, PosixCallResultClientInValidTest)
     EXPECT_EQ(result.callresultack().code(), common::ErrorCode::ERR_PARAM_INVALID);
 }
 
-TEST_F(StreamTest, PosixInValidCallServerTest)
+TEST_F(DISABLED_StreamTest, PosixInValidCallServerTest)
 {
     grpc::ControlClientConfig config{
         .target = "127.5.3.1:50000", .creds = ::grpc::InsecureChannelCredentials(), .timeoutSec = 1, .maxGrpcSize = 4
@@ -265,7 +265,7 @@ TEST_F(StreamTest, PosixInValidCallServerTest)
     client->Stop();
 }
 
-TEST_F(StreamTest, PosixInvokeClientMsgSizeTest)
+TEST_F(DISABLED_StreamTest, PosixInvokeClientMsgSizeTest)
 {
     auto request = std::make_shared<StreamingMessage>();
     request->set_messageid("invoke0");

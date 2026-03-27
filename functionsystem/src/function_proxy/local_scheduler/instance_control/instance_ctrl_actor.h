@@ -44,18 +44,18 @@
 #include "local_scheduler/resource_group_controller/resource_group_ctrl.h"
 #include "local_scheduler/subscription_manager/subscription_mgr.h"
 
-#include "local_scheduler/function_agent_manager/function_agent_mgr.h"
-#include "local_scheduler/local_scheduler_service/local_sched_srv.h"
-#include "local_scheduler/snap_ctrl/snap_ctrl.h"
-#include "local_scheduler/traefik_registry/traefik_registry.h"
-
 namespace functionsystem::local_scheduler {
 
+class TraefikRegistry;
 using CtrlClientPromise = litebus::Promise<std::shared_ptr<ControlInterfacePosixClient>>;
 using InstanceReadyCallBack = std::function<litebus::Future<Status>(const Status &status)>;
 using ClearGroupInstanceCallBack = std::function<void(const InstanceInfo &instanceInfo)>;
 using CreateCallResultCallBack =
     std::function<litebus::Future<CallResultAck>(const std::shared_ptr<functionsystem::CallResult> &callResult)>;
+
+class FunctionAgentMgr;
+class LocalSchedSrv;
+class SnapCtrl;
 
 struct RuntimeConfig {
     std::string runtimeHeartbeatEnable;

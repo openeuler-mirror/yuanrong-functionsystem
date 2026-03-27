@@ -31,7 +31,7 @@ using namespace test;
 using ::testing::Invoke;
 using ::testing::Return;
 
-class DISABLED_MetaStoreKvTest : public ::testing::Test {
+class MetaStoreKvTest : public ::testing::Test {
 public:
     [[maybe_unused]] static void SetUpTestSuite()
     {

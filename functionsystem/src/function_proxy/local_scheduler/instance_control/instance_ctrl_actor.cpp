@@ -1670,7 +1670,8 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::TryDispatchOnLoca
     transContext.scheduleReq = scheduleReq;
     if (scheduleReq->instance().has_snapshotinfo()) {
         TransInstanceState(stateMachineRef, transContext)
-        .OnComplete([scheduleResp, scheduleReq, result, snapCtrl(snapCtrl_)](const litebus::Future<TransitionResult> &transResult) {
+        .OnComplete([scheduleResp, scheduleReq, result, snapCtrl(snapCtrl_)](
+                        const litebus::Future<TransitionResult> &transResult) {
             ASSERT_FS(transResult.IsOK());
             return snapCtrl->SnapStart(scheduleResp, scheduleReq, result, transResult.Get());
         });

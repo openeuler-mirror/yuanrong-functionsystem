@@ -1,14 +1,30 @@
+/*
+* Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "metrics/exporters/opentelemetry_exporter/opentelemetry_exporter.h"
+#include <iostream>
+#include <fstream>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include "opentelemetry/exporters/otlp/otlp_http_metric_exporter.h"
 #include "opentelemetry/sdk/metrics/data/metric_data.h"
 #include "opentelemetry/sdk/metrics/export/metric_producer.h"
 #include "opentelemetry/sdk/resource/resource.h"
 #include "opentelemetry/sdk/instrumentationscope/instrumentation_scope.h"
-#include <opentelemetry/sdk/common/global_log_handler.h>
-#include <iostream>
-#include <fstream>
-#include <mutex>
+#include "opentelemetry/sdk/common/global_log_handler.h"
 
 
 namespace observability {
@@ -16,7 +32,8 @@ namespace exporters {
 namespace metrics {
 
 namespace {
-opentelemetry::exporter::otlp::OtlpHeaders ToOtlpHeaders(const std::map<std::string, std::string>& headers) {
+opentelemetry::exporter::otlp::OtlpHeaders ToOtlpHeaders(const std::map<std::string, std::string>& headers)
+{
     opentelemetry::exporter::otlp::OtlpHeaders result;
     for (const auto& [key, value] : headers) {
         result.emplace(key, value);
@@ -25,44 +42,37 @@ opentelemetry::exporter::otlp::OtlpHeaders ToOtlpHeaders(const std::map<std::str
 }
 } // namespace
 
-OpenTelemetryExporter::OpenTelemetryExporter(const std::string& config) {
+OpenTelemetryExporter::OpenTelemetryExporter(const std::string& config)
+{
     // Parse JSON configuration
     try {
         nlohmann::json root = nlohmann::json::parse(config);
-
         if (root.contains("endpoint")) {
             options_.endpoint = root["endpoint"].get<std::string>();
         }
-
         if (root.contains("protocol")) {
             options_.protocol = root["protocol"].get<std::string>();
         }
-
         if (root.contains("timeout")) {
             options_.timeout = std::chrono::milliseconds(root["timeout"].get<uint64_t>());
         }
-
         if (root.contains("headers")) {
             for (auto& [key, value] : root["headers"].items()) {
                 options_.headers[key] = value.get<std::string>();
             }
         }
-
         if (root.contains("export_mode")) {
             options_.export_mode = root["export_mode"].get<std::string>();
         }
-
         if (root.contains("batch_size")) {
             options_.batch_size = root["batch_size"].get<uint32_t>();
         }
-
         if (root.contains("batch_interval")) {
             options_.batch_interval = root["batch_interval"].get<uint32_t>();
         }
     } catch (...) {
         // Use default configuration if parsing fails
     }
-
     // Create OpenTelemetry HTTP metric exporter
     opentelemetry::exporter::otlp::OtlpHttpMetricExporterOptions otlp_options;
     otlp_options.url = options_.endpoint;
@@ -73,7 +83,8 @@ OpenTelemetryExporter::OpenTelemetryExporter(const std::string& config) {
 }
 
 OpenTelemetryExporter::OpenTelemetryExporter(const OpenTelemetryExporterOptions& options)
-    : options_(options) {
+    : options_(options)
+{
     // Create OpenTelemetry HTTP metric exporter
     opentelemetry::exporter::otlp::OtlpHttpMetricExporterOptions otlp_options;
     otlp_options.url = options_.endpoint;
@@ -84,7 +95,8 @@ OpenTelemetryExporter::OpenTelemetryExporter(const OpenTelemetryExporterOptions&
 }
 
 ExportResult OpenTelemetryExporter::Export(
-    const std::vector<observability::sdk::metrics::MetricData>& data) noexcept {
+    const std::vector<observability::sdk::metrics::MetricData>& data) noexcept
+{
     // Convert MetricData to opentelemetry::sdk::metrics::MetricData
     std::vector<opentelemetry::sdk::metrics::MetricData> otel_data;
     for (const auto& metric : data) {
@@ -194,19 +206,23 @@ ExportResult OpenTelemetryExporter::Export(
 }
 
 observability::sdk::metrics::AggregationTemporality OpenTelemetryExporter::GetAggregationTemporality(
-    observability::sdk::metrics::InstrumentType /* instrumentType */) const noexcept {
+    observability::sdk::metrics::InstrumentType /* instrumentType */) const noexcept
+{
     return observability::sdk::metrics::AggregationTemporality::CUMULATIVE;
 }
 
-bool OpenTelemetryExporter::ForceFlush(std::chrono::microseconds timeout) noexcept {
+bool OpenTelemetryExporter::ForceFlush(std::chrono::microseconds timeout) noexcept
+{
     return otlp_exporter_->ForceFlush(timeout);
 }
 
-bool OpenTelemetryExporter::Shutdown(std::chrono::microseconds timeout) noexcept {
+bool OpenTelemetryExporter::Shutdown(std::chrono::microseconds timeout) noexcept
+{
     return otlp_exporter_->Shutdown(timeout);
 }
 
-void OpenTelemetryExporter::RegisterOnHealthChangeCb(const std::function<void(bool)>& callback) noexcept {
+void OpenTelemetryExporter::RegisterOnHealthChangeCb(const std::function<void(bool)>& callback) noexcept
+{
     health_callback_ = callback;
 }
 

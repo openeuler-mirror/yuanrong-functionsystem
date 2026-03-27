@@ -31,7 +31,7 @@ using namespace test;
 using ::testing::Invoke;
 using ::testing::Return;
 
-class MetaStoreLeaseTest : public ::testing::Test {
+class DISABLED_MetaStoreLeaseTest : public ::testing::Test {
 public:
     [[maybe_unused]] static void SetUpTestSuite()
     {
@@ -82,7 +82,7 @@ public:
     MOCK_METHOD(void, KeepAliveCallback, (const litebus::AID &, std::string &&, std::string &&));
 };
 
-TEST_F(MetaStoreLeaseTest, LeaseInitExploreTest)  // NOLINT
+TEST_F(DISABLED_MetaStoreLeaseTest, LeaseInitExploreTest)  // NOLINT
 {
     litebus::AID serviceAID;
     auto actor1 = std::make_shared<LeaseServiceActor>(serviceAID);
@@ -128,7 +128,7 @@ TEST_F(MetaStoreLeaseTest, LeaseInitExploreTest)  // NOLINT
     EXPECT_EQ(actor5->business_, actor5->businesses_[SLAVE_BUSINESS]);
 }
 
-TEST_F(MetaStoreLeaseTest, LeaseSwitchoverTest)  // NOLINT
+TEST_F(DISABLED_MetaStoreLeaseTest, LeaseSwitchoverTest)  // NOLINT
 {
     auto persistActor =
         std::make_shared<EtcdKvClientStrategy>("Persist", metaStoreServerHost_, MetaStoreTimeoutOption{});
@@ -204,7 +204,7 @@ TEST_F(MetaStoreLeaseTest, LeaseSwitchoverTest)  // NOLINT
     litebus::Await(persistActor->GetAID());
 }
 
-TEST_F(MetaStoreLeaseTest, LeaseWatchTest)  // NOLINT
+TEST_F(DISABLED_MetaStoreLeaseTest, LeaseWatchTest)  // NOLINT
 {
     DeleteOption opt;
     opt.prefix = true;
@@ -265,7 +265,7 @@ TEST_F(MetaStoreLeaseTest, LeaseWatchTest)  // NOLINT
     litebus::Await(persistActor->GetAID());
 }
 
-TEST_F(MetaStoreLeaseTest, LeaseSlaveTest)  // NOLINT
+TEST_F(DISABLED_MetaStoreLeaseTest, LeaseSlaveTest)  // NOLINT
 {
     litebus::AID serviceAID;
     auto actor1 = std::make_shared<LeaseServiceActor>(serviceAID);

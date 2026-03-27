@@ -43,11 +43,13 @@ const (
 	versionRegex = "^[\\$]?latest$|^[0-9]{1,16}$|^[A-Za-z0-9][A-Za-z0-9._-]{0,40}[A-Za-z0-9]$|^[A-Za-z0-9]$"
 	// The function name can contain the function name with or without the service ID.
 	// Function name without serviceid must start with a letter/digit/dot and end with a letter/digit/dot.
-	// Letters (a-z, A-Z), dot (.), digits (0-9), and hyphens (-) or (@) are supported. The function name contains 1 to 128 characters
+	// Letters (a-z, A-Z), dot (.), digits (0-9), and hyphens (-) or (@) are supported.
+	// The function name contains 1 to 128 characters
 	// Function name with serviceid add a serviceid based on the function name without serviceid.
 	// serviceid must start with 0- and end with a hyphen (-) or (@), and contain 1 to 16 digits or letters.
 	funcNameRegex = "(^0-[0-9a-z]{1,16}-([a-zA-Z0-9.][a-zA-Z0-9.-]{0,126}[a-zA-Z0-9.]|[a-zA-Z0-9.])$)|" +
-		"(^[a-zA-Z0-9.][a-zA-Z0-9.-]{0,126}[a-zA-Z0-9.]$|^[a-zA-Z0-9.]$)|(^0@[0-9a-z]{1,16}@([a-zA-Z0-9.][a-zA-Z0-9.-]{0,126}[a-zA-Z0-9.]|[a-zA-Z0-9.])$)"
+		"(^[a-zA-Z0-9.][a-zA-Z0-9.-]{0,126}[a-zA-Z0-9.]$|^[a-zA-Z0-9.]$)|" +
+		"(^0@[0-9a-z]{1,16}@([a-zA-Z0-9.][a-zA-Z0-9.-]{0,126}[a-zA-Z0-9.]|[a-zA-Z0-9.])$)"
 )
 
 func parseTenantInfo(tenantInfo string) (string, string) {

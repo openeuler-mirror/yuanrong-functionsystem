@@ -402,7 +402,9 @@ func buildCodeMetaData(fv storage.FunctionVersionValue, businessID string) (meta
 		Sha512:         fv.FunctionVersion.Package.Signature,
 	}
 	codeMetaData.StorageType = fv.FunctionVersion.Package.StorageType
-	if codeMetaData.StorageType == common.LocalStorageType || codeMetaData.StorageType == common.CopyStorageType || codeMetaData.StorageType == common.WorkingDirStorageType {
+	storageType := codeMetaData.StorageType
+	if storageType == common.LocalStorageType || storageType == common.CopyStorageType ||
+		storageType == common.WorkingDirStorageType {
 		codeMetaData.LocalMetaData.CodePath = fv.FunctionVersion.Package.CodePath
 	} else {
 		pkg := fv.FunctionVersion.Package

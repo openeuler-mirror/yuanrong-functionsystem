@@ -546,9 +546,9 @@ std::pair<Status, std::vector<std::string>> CommandBuilder::GetPosixCustomBuildA
 
     // entry script case
     if (request->runtimeinstanceinfo().runtimeconfig().posixenvs().find(ENV_DELEGATE_BOOTSTRAP)
-            != request->runtimeinstanceinfo().runtimeconfig().posixenvs().end()
+        != request->runtimeinstanceinfo().runtimeconfig().posixenvs().end()
         && request->runtimeinstanceinfo().runtimeconfig().posixenvs().find(ENV_DELEGATE_DOWNLOAD)
-            != request->runtimeinstanceinfo().runtimeconfig().posixenvs().end()) {
+        != request->runtimeinstanceinfo().runtimeconfig().posixenvs().end()) {
         YRLOG_DEBUG("posix custom runtime will use user define entry file");
         return { Status::OK(), {} };
     }

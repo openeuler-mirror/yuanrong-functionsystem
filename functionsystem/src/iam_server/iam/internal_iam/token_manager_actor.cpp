@@ -643,7 +643,8 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::GenerateNewToken(
         tokenSalt->token = tokenContent->encryptToken;
         tokenSalt->salt = tokenContent->salt;
         tokenSalt->expiredTimeStamp = tokenContent->expiredTimeStamp;
-        // todo(lwy_robb: consider to cache JWT tokens in memory for faster retrieval, which should remove while expired)
+        // todo(lwy_robb: consider to cache JWT tokens in memory for faster retrieval,
+        // which should remove while expired)
         promise->SetValue(tokenSalt);
         (void)member_->newTokenRequestMap.erase(tenantID);
         return promise->GetFuture();

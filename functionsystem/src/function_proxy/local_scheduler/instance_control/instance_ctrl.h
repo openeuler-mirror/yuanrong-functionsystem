@@ -31,12 +31,11 @@
 #include "instance_ctrl_actor.h"
 #include "local_scheduler/subscription_manager/subscription_mgr.h"
 
-#include "local_scheduler/local_scheduler_service/local_sched_srv.h"
-#include "local_scheduler/snap_ctrl/snap_ctrl.h"
-#include "local_scheduler/traefik_registry/traefik_registry.h"
-
 namespace functionsystem::local_scheduler {
 
+class LocalSchedSrv;
+class SnapCtrl;
+class TraefikRegistry;
 class InstanceCtrl : public ActorDriver {
 public:
     explicit InstanceCtrl(const std::shared_ptr<InstanceCtrlActor> &instanceCtrlActor);

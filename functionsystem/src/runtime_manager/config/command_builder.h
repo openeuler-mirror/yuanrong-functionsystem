@@ -27,7 +27,7 @@ public:
     CommandBuilder(RuntimeConfig config, bool execLookPath) : config_(config), execLookPath_(execLookPath)
     {
     }
-    CommandBuilder(bool execLookPath = true) : execLookPath_(execLookPath) {}
+    explicit CommandBuilder(bool execLookPath = true) : execLookPath_(execLookPath) {}
     ~CommandBuilder() = default;
 
     void SetRuntimeConfig(RuntimeConfig config)

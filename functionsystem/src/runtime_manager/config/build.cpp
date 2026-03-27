@@ -213,8 +213,9 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     addIfValid(INSTANCE_ID_ENV, info.instanceid());
     addIfValid(DATA_SYSTEM_ADDR,
                config.hostIP + ":" + config.dataSystemPort);  // the port of datasystem worker should be configurable.
+    // keep same env name for runtime in driver mode and job submission mode
     addIfValid(YR_DS_ADDRESS,
-               config.hostIP + ":" + config.dataSystemPort);  // keep same env name for runtime in driver mode and job submission mode
+               config.hostIP + ":" + config.dataSystemPort);
     addIfValid(DRIVER_SERVER_PORT, config.driverServerPort);
     addIfValid(HOME_ENV, config.runtimeHomeDir);
     addIfValid(HOST_IP, config.hostIP);
@@ -223,8 +224,9 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     addIfValid(LAYER_LIB_PATH, layerPath);
     addIfValid(LD_LIBRARY_PATH, ldLibraryPath);
     addIfValid(PROXY_GRPC_SERVER_PORT, config.proxyGrpcServerPort);
+    // keep same env name for runtime in driver mode and job submission mode
     addIfValid(YR_SERVER_ADDRESS,
-               config.proxyIP + ":" + config.proxyGrpcServerPort);  // keep same env name for runtime in driver mode and job submission mode
+               config.proxyIP + ":" + config.proxyGrpcServerPort);
     addIfValid(YR_DPOSIX_UDS, request->runtimeinstanceinfo().runtimeconfig().dposixudspath());
     addIfValid(CLUSTER_ID, config.clusterID);
     addIfValid(NODE_ID, config.nodeID);
