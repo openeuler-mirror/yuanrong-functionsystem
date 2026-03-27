@@ -386,8 +386,9 @@ void ContainerExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::strin
 
 std::string trimDash(const std::string &s)
 {
-    if (s.empty())
+    if (s.empty()) {
         return s;
+    }
 
     size_t start = s.find_first_not_of('-');
     if (start == std::string::npos) {

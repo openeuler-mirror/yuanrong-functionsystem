@@ -464,6 +464,8 @@ void GlobalSchedActor::DelLocalSchedHandler(const std::string &name, LocalExitTy
         case LocalExitType::UNREGISTER: {
             return OnLocalExit(name);
         }
+        default:
+            break;
     }
 }
 

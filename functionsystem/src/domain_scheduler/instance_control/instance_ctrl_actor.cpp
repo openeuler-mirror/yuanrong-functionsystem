@@ -482,7 +482,9 @@ void InstanceCtrlActor::OnTenantQuotaExceeded(
     }
     const std::string tenantID = event.tenantid();
     int64_t cooldownMs = event.cooldownms();
-    if (cooldownMs <= 0) cooldownMs = 10000;
+    if (cooldownMs <= 0) {
+        cooldownMs = 10000;
+    }
 
     YRLOG_INFO("InstanceCtrlActor: tenant={} blocked for {}ms (quota exceeded)", tenantID, cooldownMs);
 

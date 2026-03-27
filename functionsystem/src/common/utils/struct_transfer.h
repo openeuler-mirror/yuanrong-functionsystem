@@ -739,7 +739,9 @@ static int GetRuntimeRecoverTimes(const resources::InstanceInfo &instanceInfo)
     }
     std::string numaIDsStr;
     for (size_t i = 0; i < vectorAllocation.selectedIndices.size(); ++i) {
-        if (i > 0) numaIDsStr += ",";
+        if (i > 0) {
+            numaIDsStr += ",";
+        }
         numaIDsStr += std::to_string(vectorAllocation.selectedIndices[i]);
     }
     // 写入 scheduleOption.extension，供 runtime_manager 的 StartInstanceRequest 读取

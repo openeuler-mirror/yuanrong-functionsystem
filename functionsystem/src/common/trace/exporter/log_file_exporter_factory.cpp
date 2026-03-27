@@ -22,7 +22,7 @@ namespace trace {
 
 std::unique_ptr<opentelemetry::sdk::trace::SpanExporter> LogFileExporterFactory::Create()
 {
-    return std::unique_ptr<opentelemetry::sdk::trace::SpanExporter>(new LogFileExporter());
+    return std::make_unique<LogFileExporter>();
 }
 
 }  // namespace trace

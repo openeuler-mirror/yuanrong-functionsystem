@@ -44,8 +44,9 @@ std::string StripScheme(const std::string &uri, const std::string &scheme)
 
 bool endsWith(const std::string &str, const std::string &suffix)
 {
-    if (suffix.size() > str.size())
+    if (suffix.size() > str.size()) {
         return false;
+    }
     return str.substr(str.size() - suffix.size()) == suffix;
 }
 
