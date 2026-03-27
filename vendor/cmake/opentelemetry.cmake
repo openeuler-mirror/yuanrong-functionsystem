@@ -60,13 +60,13 @@ if (NOT EXISTS ${HISTORY_INSTALLLED})
     EXTERNALPROJECT_ADD(${src_name}
             SOURCE_DIR ${src_dir}
             CMAKE_ARGS ${${src_name}_CMAKE_ARGS} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DCMAKE_INSTALL_LIBDIR=lib
-            BUILD_COMMAND bash -c "export LD_LIBRARY_PATH=${openssl_LIB_DIR}:${protobuf_LIB_DIR}:${grpc_LIB_DIR}:${curl_LIB_DIR}:$ENV{LD_LIBRARY_PATH} \
+            BUILD_COMMAND bash -c "export LD_LIBRARY_PATH=${openssl_ROOT}/lib:${openssl_ROOT}/lib64:${protobuf_LIB_DIR}:${grpc_LIB_DIR}:${curl_LIB_DIR}:$ENV{LD_LIBRARY_PATH} \
                                 && ${CMAKE_MAKE_PROGRAM} -j${THIRDPARTY_JOBS}"
             LOG_CONFIGURE ON
             LOG_BUILD ON
             LOG_INSTALL ON
             LOG_OUTPUT_ON_FAILURE ON # print build/configure/install logs to console on failure for CI diagnosis
-            DEPENDS protobuf grpc curl
+            DEPENDS openssl protobuf grpc curl
     )
     ExternalProject_Get_Property(${src_name} INSTALL_DIR)
 else()
