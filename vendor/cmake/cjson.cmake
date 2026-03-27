@@ -20,11 +20,9 @@ if (NOT EXISTS ${HISTORY_INSTALLLED})
 EXTERNALPROJECT_ADD(${src_name}
         SOURCE_DIR ${src_dir}
         DOWNLOAD_COMMAND ""
-        CONFIGURE_COMMAND ""
-        BUILD_COMMAND ""
-        INSTALL_COMMAND
-            mkdir -p <INSTALL_DIR>/include/nlohmann &&
-            cp <SOURCE_DIR>/single_include/nlohmann/json.hpp <INSTALL_DIR>/include/nlohmann
+        CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+                   -DJSON_BuildTests=OFF
+                   -DJSON_Install=ON
         )
 
 ExternalProject_Get_Property(${src_name} INSTALL_DIR)
@@ -37,5 +35,7 @@ endif()
 message("install dir of ${src_name}: ${INSTALL_DIR}")
 
 set(json_INCLUDE_DIR ${INSTALL_DIR}/include)
+# cmake config dir for find_package(nlohmann_json): used by opentelemetry to avoid network download
+set(json_CMAKE_DIR ${INSTALL_DIR}/lib/cmake/nlohmann_json)
 
 include_directories(${json_INCLUDE_DIR})

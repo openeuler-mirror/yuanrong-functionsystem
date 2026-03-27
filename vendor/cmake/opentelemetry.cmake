@@ -37,7 +37,7 @@ set(${src_name}_CMAKE_ARGS
         -DProtobuf_DIR:PATH=${protobuf_PKG_PATH}
         -Dutf8_range_DIR:PATH=${utf8_range_PKG_PATH}
         -DOPENTELEMETRY_EXTERNAL_NLOHMANN_JSON=ON
-        -Dnlohmann_json_DIR=${json_INCLUDE_DIR}
+        -Dnlohmann_json_DIR=${json_CMAKE_DIR}
         # Use vendor curl (built against vendor openssl) instead of system curl to avoid ABI mismatch.
         # Without this hint, opentelemetry's find_package(CURL REQUIRED) picks up the system curl,
         # which may be linked against a different openssl and cause linker conflicts.
@@ -66,7 +66,7 @@ if (NOT EXISTS ${HISTORY_INSTALLLED})
             LOG_BUILD ON
             LOG_INSTALL ON
             LOG_OUTPUT_ON_FAILURE ON # print build/configure/install logs to console on failure for CI diagnosis
-            DEPENDS openssl protobuf grpc curl
+            DEPENDS openssl protobuf grpc curl cjson
     )
     ExternalProject_Get_Property(${src_name} INSTALL_DIR)
 else()
