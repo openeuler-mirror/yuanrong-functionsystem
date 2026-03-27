@@ -99,8 +99,8 @@ void SnapshotCache::Clear()
     functionSnapshots_.clear();
 }
 
-std::vector<std::tuple<int64_t, std::string, SnapshotMetadata>>
-    SnapshotCache::GetSnapshotsWithTime(const std::string &functionID) const
+std::vector<std::tuple<int64_t, std::string, SnapshotMetadata>> SnapshotCache::GetSnapshotsWithTime(
+    const std::string &functionID) const
 {
     std::vector<std::tuple<int64_t, std::string, SnapshotMetadata>> result;
 

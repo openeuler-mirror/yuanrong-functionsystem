@@ -30,7 +30,8 @@ public:
     std::unique_ptr<opentelemetry::sdk::trace::Recordable> MakeRecordable() noexcept override;
 
     opentelemetry::sdk::common::ExportResult Export(
-        const opentelemetry::nostd::span<std::unique_ptr<opentelemetry::sdk::trace::Recordable>> &spans) noexcept override;
+        const opentelemetry::nostd::span<
+            std::unique_ptr<opentelemetry::sdk::trace::Recordable>> &spans) noexcept override;
 
     bool Shutdown(std::chrono::microseconds timeout = std::chrono::microseconds::max()) noexcept override;
 };

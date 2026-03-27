@@ -30,6 +30,8 @@
 
 namespace functionsystem::runtime_manager {
 
+constexpr int32_t DEFAULT_CHECKPOINT_TTL_SECONDS = 3600;
+
 /**
  * CheckpointFileInfo: Checkpoint file metadata with reference counting and TTL
  */
@@ -45,7 +47,7 @@ struct CheckpointFileInfo {
     bool ttlActive;      // Whether TTL counting is active
 
     CheckpointFileInfo()
-        : refCount(0), ttlSeconds(3600), ttlActive(false)
+        : refCount(0), ttlSeconds(DEFAULT_CHECKPOINT_TTL_SECONDS), ttlActive(false)
     {
         auto now = std::chrono::steady_clock::now();
         createdTime = now;

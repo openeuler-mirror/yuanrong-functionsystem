@@ -1186,7 +1186,6 @@ void ResourceViewActor::PullResource(const litebus::AID &from, std::string &&nam
     auto viewInitTimeStoredInDomain = pullRequest.localviewinittime();
     bool isViewConsistent = viewInitTimeStoredInDomain == view_->viewinittime();
     bool hasNoNewChanges = pullRequest.version() == view_->revision();
-
     if (isViewConsistent && hasNoNewChanges) {
         Send(from, "ReportResource", "");
         return;
@@ -1207,7 +1206,6 @@ void ResourceViewActor::PullResource(const litebus::AID &from, std::string &&nam
     auto itStart = versionChanges_.upper_bound(startRevision);
     auto itEnd = versionChanges_.upper_bound(endRevision);
     auto changeCount = std::distance(itStart, itEnd);
-
     if (changeCount <= ASYNC_MERGE_THRESHOLD) {
         // 变更数量少，同步处理
         ResourceUnitChanges result;
@@ -1302,8 +1300,8 @@ void ResourceViewActor::MergeResourceViewChanges(int64_t startRevision, int64_t 
 }
 
 void ResourceViewActor::MergeResourceViewChanges(const std::map<int64_t, ResourceUnitChange> &changes,
-                                                       int64_t startRevision, int64_t endRevision,
-                                                       const std::string &localId, ResourceUnitChanges &result)
+                                                 int64_t startRevision, int64_t endRevision,
+                                                 const std::string &localId, ResourceUnitChanges &result)
 {
     std::unordered_map<std::string, ResourceUnitChange> summarizedChanges;
     std::vector<std::string> orderedIds;
@@ -1362,7 +1360,8 @@ void ResourceViewActor::MergeResourceViewChangesAsync(int64_t startRevision, int
     });
 }
 
-void ResourceViewActor::ToReportResourceViewChanges(const litebus::AID &dst, const std::shared_ptr<ResourceUnitChanges> &changes)
+void ResourceViewActor::ToReportResourceViewChanges(const litebus::AID &dst,
+                                                    const std::shared_ptr<ResourceUnitChanges> &changes)
 {
     Send(dst, "ReportResource", changes->SerializeAsString());
 }

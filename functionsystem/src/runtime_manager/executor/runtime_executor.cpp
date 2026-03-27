@@ -1392,7 +1392,7 @@ std::pair<Status, std::string> RuntimeExecutor::HandleWorkingDirectory(
 
     if (workingDirIter->second.find(".img") != std::string::npos) {
         YRLOG_WARN("{}|{}| not support mount img now {}", info.traceid(), info.requestid(),
-                    workingDirIter->second);
+                   workingDirIter->second);
         return { Status(StatusCode::RUNTIME_MANAGER_WORKING_DIR_FOR_APP_NOTFOUND, "not support mount img now"), "" };
     }
 

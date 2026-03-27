@@ -85,12 +85,12 @@ messages::RestoreSnapshotResponse SnapshotScheduler::BuildRestoreResponse(
             rsp.set_instanceid(scheduleReq->instance().instanceid());
         }
         YRLOG_INFO("successfully scheduled restored instance from snapshot {}, instanceID={}",
-                  context.snapshotID, rsp.instanceid());
+                   context.snapshotID, rsp.instanceid());
     } else {
         rsp.set_code(common::ERR_INNER_SYSTEM_ERROR);
         rsp.set_message(status.GetMessage());
         YRLOG_ERROR("failed to schedule restored instance from snapshot {}: {}",
-                   context.snapshotID, status.GetMessage());
+                    context.snapshotID, status.GetMessage());
     }
 
     return rsp;
@@ -98,14 +98,19 @@ messages::RestoreSnapshotResponse SnapshotScheduler::BuildRestoreResponse(
 
 std::string SnapshotScheduler::GenerateInstanceID(const std::string &snapshotID)
 {
+    constexpr size_t kSnapshotIDMaxLen = 50;
+    constexpr size_t kSnapshotIDPrefixLen = 13;
+    constexpr size_t kSnapshotIDSuffixLen = 8;
+    constexpr size_t kUUIDSuffixLen = 8;
     // Format: "{shortened_snapshotID}-{8char_uuid}"
     std::string snapshotIDShort = snapshotID;
-    if (snapshotID.length() > 50) {
+    if (snapshotID.length() > kSnapshotIDMaxLen) {
         // Take first 13 and last 8 chars
-        snapshotIDShort = snapshotID.substr(0, 13) + "-" + snapshotID.substr(snapshotID.length() - 8);
+        snapshotIDShort = snapshotID.substr(0, kSnapshotIDPrefixLen) + "-" +
+                          snapshotID.substr(snapshotID.length() - kSnapshotIDSuffixLen);
     }
     return snapshotIDShort + "-" +
-           litebus::uuid_generator::UUID::GetRandomUUID().ToString().substr(0, 8);
+           litebus::uuid_generator::UUID::GetRandomUUID().ToString().substr(0, kUUIDSuffixLen);
 }
 
 }  // namespace functionsystem::snap_manager

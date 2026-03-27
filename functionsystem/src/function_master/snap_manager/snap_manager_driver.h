@@ -28,6 +28,8 @@ const std::string SNAP_JSON_FORMAT = "json";
 
 class SnapApiRouter : public ApiRouterRegister {
 public:
+    virtual ~SnapApiRouter() = default;
+
     void RegisterHandler(const std::string &url, const HttpHandler &handler) const override
     {
         ApiRouterRegister::RegisterHandler(url, handler);

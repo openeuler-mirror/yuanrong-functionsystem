@@ -16,12 +16,12 @@
 
 #include "label_affinity_scorer.h"
 
+#include <cmath>
 #include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
 #include "common/schedule_plugin/common/affinity_utils.h"
 #include "common/schedule_plugin/common/constants.h"
 #include "common/schedule_plugin/common/plugin_register.h"
-#include <cmath>
 
 namespace functionsystem::schedule_plugin::score {
 std::string LabelAffinityScorer::GetPluginName()
@@ -35,7 +35,7 @@ std::string LabelAffinityScorer::GetPluginName()
 }
 
 double CalculateInstanceAffinityScore(const std::string &unitID, const resource_view::InstanceInfo &instance,
-                                       const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
+                                      const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
 {
     double totalScore = 0.0;
     const auto &affinity = instance.scheduleoption().affinity();
@@ -81,7 +81,7 @@ double CalculateInstanceAffinityScore(const std::string &unitID, const resource_
 }
 
 double CalculateResourceAffinityScore(const std::string &unitID, const resource_view::InstanceInfo &instance,
-                                       const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
+                                      const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
 {
     double totalScore = 0.0;
     const auto &affinity = instance.scheduleoption().affinity();
@@ -127,7 +127,7 @@ double CalculateResourceAffinityScore(const std::string &unitID, const resource_
 }
 
 double CalculatePreemptAffinityScore(const std::string &unitID, const resource_view::InstanceInfo &instance,
-                                      const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
+                                     const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
 {
     double totalScore = 0.0;
     const auto &affinity = instance.scheduleoption().affinity();
@@ -155,7 +155,7 @@ double CalculatePreemptAffinityScore(const std::string &unitID, const resource_v
 }
 
 double CalculateDataAffinityScore(const std::string &unitID, const resource_view::InstanceInfo &instance,
-                                   const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
+                                  const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
 {
     double score = 0.0;
     const auto &affinity = instance.scheduleoption().affinity();
@@ -169,7 +169,7 @@ double CalculateDataAffinityScore(const std::string &unitID, const resource_view
 }
 
 double CalculateTenantAffinityScore(const std::string &unitID, const resource_view::InstanceInfo &instance,
-                                     const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
+                                    const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
 {
     double score = 0.0;
     const auto &affinity = instance.scheduleoption().affinity();
@@ -212,8 +212,8 @@ double CalculateGroupScheduleAffinityScore(
 }
 
 double CalculateInnerAffinityScore(const resource_view::ResourceUnit &resourceUnit,
-                                    const resource_view::InstanceInfo &instance,
-                                    const std::shared_ptr<schedule_framework::PreAllocatedContext> &preContext)
+                                   const resource_view::InstanceInfo &instance,
+                                   const std::shared_ptr<schedule_framework::PreAllocatedContext> &preContext)
 {
     double totalScore = 0.0;
     auto unitId = resourceUnit.id();

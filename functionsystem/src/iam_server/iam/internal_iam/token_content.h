@@ -17,11 +17,11 @@
 #ifndef IAM_SERVER_INTERNAL_IAM_IAM_TOKEN_CONTENT_H
 #define IAM_SERVER_INTERNAL_IAM_IAM_TOKEN_CONTENT_H
 
+#include <nlohmann/json.hpp>
 #include "common/status/status.h"
 #include "common/utils/token_transfer.h"
 #include "common/hex/hex.h"
 #include "utils/string_utils.hpp"
-#include <nlohmann/json.hpp>
 
 namespace functionsystem::iamserver {
 

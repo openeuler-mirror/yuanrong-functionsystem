@@ -149,7 +149,8 @@ Status LocalSchedDriver::Create()
             param_.traefikServersTransport);
         instanceCtrl_->SetTraefikRegistry(traefikRegistry_);
         YRLOG_INFO("TraefikRegistry initialized and injected: prefix={}, entryPoint={}, enableTLS={}, serversTransport={}",
-                  param_.traefikEtcdPrefix, param_.traefikHttpEntryPoint, param_.traefikEnableTLS, param_.traefikServersTransport);
+                   param_.traefikEtcdPrefix, param_.traefikHttpEntryPoint,
+                   param_.traefikEnableTLS, param_.traefikServersTransport);
     } else {
         YRLOG_INFO("Traefik registry disabled");
     }
@@ -274,8 +275,8 @@ Status LocalSchedDriver::Start()
 
 Status LocalSchedDriver::Sync()
 {
-    auto status =
-        ActorSync({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
+    auto status = ActorSync(
+        { abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
     if (status.IsError()) {
         return status;
     }
@@ -285,8 +286,8 @@ Status LocalSchedDriver::Sync()
 
 Status LocalSchedDriver::Recover()
 {
-    auto status =
-        ActorRecover({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
+    auto status = ActorRecover(
+        { abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
     if (status.IsError()) {
         return status;
     }
@@ -325,7 +326,8 @@ Status LocalSchedDriver::Stop()
     if (gcActor_) {
         litebus::Terminate(gcActor_->GetAID());
     }
-    StopActor({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
+    StopActor(
+        { abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
     return Status::OK();
 }
 
@@ -340,7 +342,8 @@ void LocalSchedDriver::Await()
     if (gcActor_) {
         litebus::Await(gcActor_->GetAID());
     }
-    AwaitActor({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
+    AwaitActor(
+        { abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
 }
 
 void LocalSchedDriver::BindInstanceCtrl()

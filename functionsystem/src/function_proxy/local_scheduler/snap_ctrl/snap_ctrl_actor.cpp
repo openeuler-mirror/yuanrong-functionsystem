@@ -117,7 +117,8 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
     // 2. 调用 PrepareSnap 验证实例状态并准备快照
     return PrepareSnap(requestID, instanceID)
         .Then([aid(GetAID()), requestID, instanceID, instanceInfo, ttl,
-               functionAgentMgr(functionAgentMgr_)](const Status &status) -> litebus::Future<messages::SnapshotRuntimeResponse> {
+               functionAgentMgr(functionAgentMgr_)](const Status &status)
+                   -> litebus::Future<messages::SnapshotRuntimeResponse> {
             if (status.IsError()) {
                 YRLOG_ERROR("{}|{}|PrepareSnap failed: {}", requestID, instanceID, status.GetMessage());
                 messages::SnapshotRuntimeResponse errorRsp;

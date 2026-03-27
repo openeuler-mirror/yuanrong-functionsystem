@@ -65,7 +65,9 @@ void CommonGrpcServer::Run()
     if (!config_.udsPath.empty()) {
         if (!litebus::os::ExistPath(config_.udsPath)) {
             if (litebus::os::Mkdir(config_.udsPath).IsSome()) {
-                YRLOG_ERROR("Failed to create UDS directory path: {}, err:{}", config_.udsPath, strerror(errno));
+                char errBuf[256];
+                YRLOG_ERROR("Failed to create UDS directory path: {}, err:{}", config_.udsPath,
+                            strerror_r(errno, errBuf, sizeof(errBuf)));
                 serverReady_.SetValue(false);
                 return;
             }
@@ -83,10 +85,12 @@ void CommonGrpcServer::Run()
         YRLOG_INFO("Grpc Server listening on TCP address: {}", tcpAddress);
         builder.AddListeningPort(tcpAddress, config_.creds);
     }
+    constexpr int kKeepaliveTimeMs = 30000;    // Send ping every 30s
+    constexpr int kKeepaliveTimeoutMs = 10000;  // Wait 10s for ping ack
     (void)builder.AddChannelArgument(GRPC_ARG_ALLOW_REUSEPORT, 0);
     // Enable keepalive to detect dead connections
-    (void)builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_TIME_MS, 30000);  // Send ping every 30s
-    (void)builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_TIMEOUT_MS, 10000);  // Wait 10s for ping ack
+    (void)builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_TIME_MS, kKeepaliveTimeMs);
+    (void)builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_TIMEOUT_MS, kKeepaliveTimeoutMs);
     (void)builder.AddChannelArgument(GRPC_ARG_KEEPALIVE_PERMIT_WITHOUT_CALLS, 1);  // Allow pings without active calls
     server_ = std::move(builder.BuildAndStart());
     if (server_ == nullptr) {

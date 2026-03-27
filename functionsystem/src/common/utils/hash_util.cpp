@@ -52,7 +52,9 @@ std::string CalculateFileMD5(const std::string& filePath)
     // If it's a directory, calculate MD5 of the path name
     if (IsDir(filePath)) {
         unsigned char result[MD5_DIGEST_LENGTH];
-        MD5(reinterpret_cast<const unsigned char *>(filePath.data()), filePath.size(), result);
+        // Use static_cast via unsigned char pointer for safe type conversion required by OpenSSL MD5 API
+        const auto *filePathData = static_cast<const unsigned char *>(static_cast<const void *>(filePath.data()));
+        MD5(filePathData, filePath.size(), result);
         
         // Convert the result to a hexadecimal string
         char md5String[MD5_DIGEST_LENGTH * HEX_WIDTH + 1] = {0}; // MD5_DIGEST_LENGTH is 16， 16 * 2 + 1 = 33

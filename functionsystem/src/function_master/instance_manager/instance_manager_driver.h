@@ -17,13 +17,14 @@
 #ifndef FUNCTION_MASTER_INSTANCE_MANAGER_INSTANCE_MGR_DRIVER_H
 #define FUNCTION_MASTER_INSTANCE_MANAGER_INSTANCE_MGR_DRIVER_H
 
+#include <nlohmann/json.hpp>
+
 #include "common/http/http_server.h"
 #include "common/status/status.h"
 #include "common/utils/module_driver.h"
 #include "function_master/instance_manager/quota_manager/quota_manager_actor.h"
 #include "group_manager_actor.h"
 #include "instance_manager_actor.h"
-#include <nlohmann/json.hpp>
 
 namespace functionsystem::instance_manager {
 
@@ -185,7 +186,8 @@ public:
                             google::protobuf::util::JsonOptions options;
                             options.add_whitespace = false;
                             std::string instanceJsonStr;
-                            auto status = google::protobuf::util::MessageToJsonString(instance, &instanceJsonStr, options);
+                            auto status = google::protobuf::util::MessageToJsonString(
+                                instance, &instanceJsonStr, options);
                             if (status.ok()) {
                                 // Parse the JSON string and add to array
                                 nlohmann::json instanceJson = nlohmann::json::parse(instanceJsonStr);

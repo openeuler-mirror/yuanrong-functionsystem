@@ -15,9 +15,9 @@
  */
 #include "label_affinity_utils.h"
 
+#include <cmath>
 #include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
-#include <cmath>
 
 namespace functionsystem {
 using namespace schedule_framework;
@@ -162,7 +162,7 @@ double AntiAffinityScorer(const std::string &unitID, const affinity::Selector &s
 }
 
 double CalculateInstanceAffinityScore(const std::string &unitID, const resource_view::InstanceInfo &instance,
-                                       const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
+                                      const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
 {
     double totalScore = 0.0;
     const auto &affinity = instance.scheduleoption().affinity();
@@ -212,7 +212,7 @@ double CalculateInstanceAffinityScore(const std::string &unitID, const resource_
 }
 
 double CalculateResourceAffinityScore(const std::string &unitID, const resource_view::InstanceInfo &instance,
-                                       const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
+                                      const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
 {
     double totalScore = 0.0;
     const auto &affinity = instance.scheduleoption().affinity();

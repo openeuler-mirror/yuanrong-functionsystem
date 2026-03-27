@@ -23,11 +23,11 @@
 #include "common/utils/actor_driver.h"
 #include "common/status/status.h"
 #include "snap_ctrl_actor.h"
+#include "local_scheduler/function_agent_manager/function_agent_mgr.h"
+#include "local_scheduler/local_scheduler_service/local_sched_srv.h"
 
 namespace functionsystem::local_scheduler {
 
-class FunctionAgentMgr;
-class LocalSchedSrv;
 class InstanceCtrl;
 
 /**

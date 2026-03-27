@@ -55,10 +55,10 @@ LocalGcActor::LocalGcActor(const std::string &name,
                            uint32_t terminalRetentionMs,
                            uint32_t stuckTimeoutMs)
     : BasisActor(name),
-      member_nodeID(nodeID),
-      member_gcIntervalMs(gcIntervalMs),
-      member_terminalRetentionMs(terminalRetentionMs),
-      member_stuckTimeoutMs(stuckTimeoutMs)
+      memberNodeId(nodeID),
+      memberGcIntervalMs(gcIntervalMs),
+      memberTerminalRetentionMs(terminalRetentionMs),
+      memberStuckTimeoutMs(stuckTimeoutMs)
 {
 }
 
@@ -66,20 +66,20 @@ void LocalGcActor::Init()
 {
     BasisActor::Init();
     YRLOG_INFO("LocalGcActor initialized on node: {}, gcInterval: {}ms, terminalRetention: {}ms, stuckTimeout: {}ms",
-               member_nodeID, member_gcIntervalMs, member_terminalRetentionMs, member_stuckTimeoutMs);
-    (void)litebus::AsyncAfter(member_gcIntervalMs, GetAID(), &LocalGcActor::RunGcCycle);
+               memberNodeId, memberGcIntervalMs, memberTerminalRetentionMs, memberStuckTimeoutMs);
+    (void)litebus::AsyncAfter(memberGcIntervalMs, GetAID(), &LocalGcActor::RunGcCycle);
 }
 
 void LocalGcActor::Finalize()
 {
-    YRLOG_INFO("LocalGcActor finalizing on node: {}", member_nodeID);
+    YRLOG_INFO("LocalGcActor finalizing on node: {}", memberNodeId);
     BasisActor::Finalize();
 }
 
 void LocalGcActor::RunGcCycle()
 {
     CleanupAbnormalInstances();
-    (void)litebus::AsyncAfter(member_gcIntervalMs, GetAID(), &LocalGcActor::RunGcCycle);
+    (void)litebus::AsyncAfter(memberGcIntervalMs, GetAID(), &LocalGcActor::RunGcCycle);
 }
 
 void LocalGcActor::CleanupAbnormalInstances()
@@ -122,7 +122,7 @@ void LocalGcActor::CleanupAbnormalInstances()
             continue;
         }
 
-        uint32_t threshold = IsTerminalAbnormalState(state) ? member_terminalRetentionMs : member_stuckTimeoutMs;
+        uint32_t threshold = IsTerminalAbnormalState(state) ? memberTerminalRetentionMs : memberStuckTimeoutMs;
         int64_t elapsedMs = ElapsedMs(it->second, now);
         if (elapsedMs < static_cast<int64_t>(threshold)) {
             ++pendingCount;
@@ -142,7 +142,7 @@ void LocalGcActor::CleanupAbnormalInstances()
 
     if (cleanedCount > 0 || pendingCount > 0) {
         YRLOG_INFO("LocalGcActor: GC cycle complete on node {}: cleaned {} instances, {} still pending",
-                   member_nodeID, cleanedCount, pendingCount);
+                   memberNodeId, cleanedCount, pendingCount);
     }
 }
 
@@ -150,7 +150,7 @@ Status LocalGcActor::OnForceDeleteComplete(const std::string &instanceID, const 
 {
     if (status.IsError()) {
         YRLOG_WARN("LocalGcActor: ForceDeleteInstance failed for instance {} on node {}: {}",
-                   instanceID, member_nodeID, status.GetMessage());
+                   instanceID, memberNodeId, status.GetMessage());
     }
     return status;
 }
@@ -168,7 +168,7 @@ void LocalGcActor::PurgeVanishedEntries(
 }
 
 int64_t LocalGcActor::ElapsedMs(const std::chrono::steady_clock::time_point &since,
-                                 const std::chrono::steady_clock::time_point &now)
+                                const std::chrono::steady_clock::time_point &now)
 {
     return std::chrono::duration_cast<std::chrono::milliseconds>(now - since).count();
 }

@@ -152,7 +152,8 @@ litebus::Future<HttpResponse> IAMActor::RequireEncryptToken(const functionsystem
             YRLOG_WARN("invalid X-TTL header value: {}", ttlStr);
         }
     }
-    return internalIAM_->RequireEncryptToken(tenantID, role, expiredTimeSpan).Then([tenantID](const std::shared_ptr<TokenSalt> &tokenSalt) {
+    return internalIAM_->RequireEncryptToken(tenantID, role, expiredTimeSpan)
+        .Then([tenantID](const std::shared_ptr<TokenSalt> &tokenSalt) {
         if (tokenSalt->status.IsError() || tokenSalt->token.empty()) {
             YRLOG_ERROR("{}|RequireEncryptToken failed, err is {}", tenantID, tokenSalt->status.ToString());
             return GenerateHttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR,

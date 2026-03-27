@@ -931,7 +931,8 @@ void AgentServiceActor::StartInstanceResponse(const litebus::AID &from, std::str
     // Extract portMappings if present: StartRuntimeInstanceResponse.port carries JSON when it starts with '{' or '['
     // Old format: {"8888":"40001"} (object), New format: ["tcp:40001:8080", ...] (array)
     const auto &portInField = startInstanceResponse.startruntimeinstanceresponse().port();
-    const std::string portMappings = (!portInField.empty() && (portInField[0] == '{' || portInField[0] == '[')) ? portInField : "";
+    const std::string portMappings =
+        (!portInField.empty() && (portInField[0] == '{' || portInField[0] == '[')) ? portInField : "";
     auto deployInstanceResponse = BuildDeployInstanceResponse(startInstanceResponse, request->second.request,
                                                               portMappings);
     (void)runtimesDeploymentCache_->runtimes.emplace(deployInstanceResponse->runtimeid(),

@@ -31,11 +31,12 @@
 #include "instance_ctrl_actor.h"
 #include "local_scheduler/subscription_manager/subscription_mgr.h"
 
+#include "local_scheduler/local_scheduler_service/local_sched_srv.h"
+#include "local_scheduler/snap_ctrl/snap_ctrl.h"
+#include "local_scheduler/traefik_registry/traefik_registry.h"
+
 namespace functionsystem::local_scheduler {
 
-class LocalSchedSrv;
-class SnapCtrl;
-class TraefikRegistry;
 class InstanceCtrl : public ActorDriver {
 public:
     explicit InstanceCtrl(const std::shared_ptr<InstanceCtrlActor> &instanceCtrlActor);
@@ -240,7 +241,7 @@ public:
         const std::string &instanceID, const std::string &runtimeID, const std::string &address)
     {
         return litebus::Async(aid_, &InstanceCtrlActor::CreateInstanceClient, instanceID, runtimeID, address,
-                             nullptr, false);
+                              nullptr, false);
     }
 
     virtual void StartHeartbeat(const std::string &instanceID, uint32_t timeoutTimes,

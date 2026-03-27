@@ -58,7 +58,8 @@ private:
 class ExternalSystemCollector : public BaseMetricsCollector {
 public:
     ExternalSystemCollector() = default;
-    explicit ExternalSystemCollector(const double &limit,const MetricsType &metricsType, const litebus::ActorReference &curlActorRef)
+    explicit ExternalSystemCollector(const double &limit, const MetricsType &metricsType,
+                                     const litebus::ActorReference &curlActorRef)
         : BaseMetricsCollector(metricsType, collector_type::SYSTEM), limit_(limit), curlActorRef_(curlActorRef) {};
     ~ExternalSystemCollector() override = default;
 

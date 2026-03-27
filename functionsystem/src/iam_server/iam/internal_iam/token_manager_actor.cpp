@@ -567,8 +567,8 @@ litebus::Future<Status> TokenManagerActor::AbandonTokenByTenantID(const std::str
 }
 
 litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::RequireEncryptToken(const std::string &tenantID,
-                                                                                  const std::string &role,
-                                                                                  uint64_t expiredTimeSpan)
+                                                                                   const std::string &role,
+                                                                                   uint64_t expiredTimeSpan)
 {
     if (!member_->initialized) {
         auto tokenSalt = std::make_shared<TokenSalt>();
@@ -657,7 +657,7 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::GenerateNewToken(
 }
 
 Status TokenManagerActor::GenerateToken(const std::string &tenantID, const std::shared_ptr<TokenContent> &tokenContent,
-                                         const std::string &role, uint64_t expiredTimeSpan)
+                                        const std::string &role, uint64_t expiredTimeSpan)
 {
     // 1. generate token
     tokenContent->tenantID = tenantID;

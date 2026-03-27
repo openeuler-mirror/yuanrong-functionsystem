@@ -84,7 +84,8 @@ static void SpanIdStrToArr(const std::string &spanID, uint8_t (&arr)[SPAN_ID_BUF
 }
 
 // Initialize and shutdown
-void TraceManager::InitTrace(const std::string &serviceName, const std::string &hostID, const bool &enableTrace, const std::string &traceConfig)
+void TraceManager::InitTrace(const std::string &serviceName, const std::string &hostID, const bool &enableTrace,
+                             const std::string &traceConfig)
 {
     enableTrace_ = enableTrace;
     YRLOG_INFO("init trace, enableTrace is {}, traceConfig is {}", enableTrace, traceConfig);
@@ -192,9 +193,9 @@ TraceManager::OtelSpan TraceManager::CreateNoopSpan()
 
 // Core span creation with full OpenTelemetry parameters
 TraceManager::OtelSpan TraceManager::StartSpan(const std::string &name,
-                                                const opentelemetry::common::KeyValueIterable &attributes,
-                                                const opentelemetry::trace::SpanContextKeyValueIterable &links,
-                                                const opentelemetry::trace::StartSpanOptions &options)
+                                               const opentelemetry::common::KeyValueIterable &attributes,
+                                               const opentelemetry::trace::SpanContextKeyValueIterable &links,
+                                               const opentelemetry::trace::StartSpanOptions &options)
 {
     if (!enableTrace_) {
         return CreateNoopSpan();
@@ -214,10 +215,10 @@ TraceManager::OtelSpan TraceManager::StartSpan(const std::string &name,
 
 // Simple span creation with only options
 TraceManager::OtelSpan TraceManager::StartSpan(const std::string &name,
-                                                const opentelemetry::trace::StartSpanOptions &options)
+                                               const opentelemetry::trace::StartSpanOptions &options)
 {
     return StartSpan(name, opentelemetry::common::NoopKeyValueIterable(),
-                    opentelemetry::trace::NullSpanContext(), options);
+                     opentelemetry::trace::NullSpanContext(), options);
 }
 
 // Span creation with parent context and typed attributes
@@ -234,7 +235,7 @@ TraceManager::OtelSpan TraceManager::StartSpan(
         attrs.emplace_back(it);
     }
     return StartSpan(name, opentelemetry::common::KeyValueIterableView(attrs),
-                    opentelemetry::trace::NullSpanContext(), options);
+                     opentelemetry::trace::NullSpanContext(), options);
 }
 
 // ============================================================================
@@ -260,7 +261,6 @@ TraceManager::OtelSpan TraceManager::StartSpanWithRecord(TraceManager::SpanParam
     }
 
     auto span = StartSpan(spanParam.spanName, spanParam.traceID, spanParam.spanID, attrs);
-
     if (span != nullptr) {
         std::lock_guard<std::mutex> lock(spanMapMutex_);
         spanMap_.emplace(spanKey, span);
@@ -382,7 +382,7 @@ std::unique_ptr<opentelemetry::sdk::trace::SpanExporter> TraceManager::InitOtlpG
 }
 
 opentelemetry::trace::StartSpanOptions TraceManager::BuildOptWithParent(const std::string &traceID,
-                                                                         const std::string &spanID)
+                                                                        const std::string &spanID)
 {
     YRLOG_DEBUG("build options with parent, traceID: {}, spanID: {}", traceID, spanID);
 

@@ -167,15 +167,15 @@ litebus::Future<messages::StaticFunctionChangeResponse> FunctionAgentMgr::Notify
 }
 
 litebus::Future<Status> FunctionAgentMgr::RegisterToWarmUp(
-        const std::shared_ptr<messages::DeployInstanceRequest> &request,
-        const litebus::Option<std::string> &agentID)
+    const std::shared_ptr<messages::DeployInstanceRequest> &request,
+    const litebus::Option<std::string> &agentID)
 {
     ASSERT_IF_NULL(actor_);
     return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::RegisterToWarmUp, request, agentID);
 }
 
 litebus::Future<Status> FunctionAgentMgr::UnRegisterWarmUp(
-        const std::shared_ptr<messages::KillInstanceRequest> &request)
+    const std::shared_ptr<messages::KillInstanceRequest> &request)
 {
     ASSERT_IF_NULL(actor_);
     return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::UnRegisterWarmUp, request);

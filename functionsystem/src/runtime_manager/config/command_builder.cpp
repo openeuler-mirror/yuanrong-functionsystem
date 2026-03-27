@@ -188,13 +188,13 @@ std::map<std::string, std::string> CommandBuilder::CombineEnvs(const Envs &envs)
     combineEnvs[GLOG_LOG_DIR] = config_.runtimeLogPath;
     // todo(lwy_robb): independent env build
     // combineEnvs[PYTHON_LOG_CONFIG_PATH] = config_.pythonLogConfigPath;
-    combineEnvs[MAX_LOG_SIZE_MB_ENV] = std::to_string(config_.runtimeMaxLogSize);
-    combineEnvs[MAX_LOG_FILE_NUM_ENV] = std::to_string(config_.runtimeMaxLogFileNum);
-    std::string pythonPath;
     // std::string pythonPath = config_.runtimePath;
     // if (!config_.pythonDependencyPath.empty()) {
     //     (void)pythonPath.append(":" + config_.pythonDependencyPath);
     // }
+    combineEnvs[MAX_LOG_SIZE_MB_ENV] = std::to_string(config_.runtimeMaxLogSize);
+    combineEnvs[MAX_LOG_FILE_NUM_ENV] = std::to_string(config_.runtimeMaxLogFileNum);
+    std::string pythonPath;
 
     // python job working dir after unzip
     auto workingDirIter = combineEnvs.find(UNZIPPED_WORKING_DIR);
@@ -254,8 +254,8 @@ void CommandBuilder::InheritEnv(std::map<std::string, std::string> &combineEnvs)
 }
 
 Status CommandBuilder::GetBuildArgs(const std::string &language, const std::string &port,
-                                     const std::shared_ptr<messages::StartInstanceRequest> &request,
-                                     std::vector<std::string> &args)
+                                    const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                    std::vector<std::string> &args)
 {
     auto info = request->runtimeinstanceinfo();
     if (chdir(config_.runtimePath.c_str()) != 0) {
@@ -333,7 +333,7 @@ std::pair<Status, std::string> CommandBuilder::GetPythonExecPath(
     return { Status::OK(), execPath };
 }
 
-bool endsWith(const std::string &str, const std::string &suffix)
+bool EndsWith(const std::string &str, const std::string &suffix)
 {
     if (suffix.size() > str.size()) {
         return false;
@@ -358,7 +358,7 @@ std::pair<Status, std::string> CommandBuilder::HandleWorkingDirectory(
                  "" };
     }
 
-    if (endsWith(workingDirIter->second, ".img")) {
+    if (EndsWith(workingDirIter->second, ".img")) {
         (*request->mutable_runtimeinstanceinfo()
               ->mutable_deploymentconfig()
               ->mutable_deployoptions())[CHDIR_PATH_CONFIG] = request->runtimeinstanceinfo().container().mountpoint();
@@ -548,7 +548,7 @@ std::pair<Status, std::vector<std::string>> CommandBuilder::GetPosixCustomBuildA
     if (request->runtimeinstanceinfo().runtimeconfig().posixenvs().find(ENV_DELEGATE_BOOTSTRAP)
             != request->runtimeinstanceinfo().runtimeconfig().posixenvs().end()
         && request->runtimeinstanceinfo().runtimeconfig().posixenvs().find(ENV_DELEGATE_DOWNLOAD)
-               != request->runtimeinstanceinfo().runtimeconfig().posixenvs().end()) {
+            != request->runtimeinstanceinfo().runtimeconfig().posixenvs().end()) {
         YRLOG_DEBUG("posix custom runtime will use user define entry file");
         return { Status::OK(), {} };
     }

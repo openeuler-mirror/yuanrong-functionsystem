@@ -557,7 +557,8 @@ private:
     const uint32_t snapshotRuntimeTimeout_ = 120000;  // snapshot may take longer
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::InstanceStatusInfo, queryTimeout_, queryStatusSync_);
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::UpdateCredResponse, updateTokenTimeout_, updateTokenSync_);
-    REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::SnapshotRuntimeResponse, snapshotRuntimeTimeout_, snapshotRuntimeSync_);
+    REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::SnapshotRuntimeResponse,
+                        snapshotRuntimeTimeout_, snapshotRuntimeSync_);
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::QueryDebugInstanceInfosResponse,
                         QUERY_DEBUG_INSTANCE_INFO_INTERVAL_MS, queryDebugInstInfoSync_);
     // key: request id, value: function agent id

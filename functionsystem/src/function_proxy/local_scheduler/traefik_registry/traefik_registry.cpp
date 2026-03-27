@@ -24,10 +24,10 @@
 namespace functionsystem::local_scheduler {
 
 TraefikRegistry::TraefikRegistry(std::shared_ptr<MetaStorageAccessor> accessor,
-                                   const std::string& keyPrefix,
-                                   const std::string& httpEntryPoint,
-                                   bool enableTLS,
-                                   const std::string& serversTransport)
+                                 const std::string& keyPrefix,
+                                 const std::string& httpEntryPoint,
+                                 bool enableTLS,
+                                 const std::string& serversTransport)
     : accessor_(std::move(accessor)),
       keyPrefix_(keyPrefix),
       httpEntryPoint_(httpEntryPoint),
@@ -41,15 +41,18 @@ TraefikRegistry::TraefikRegistry(std::shared_ptr<MetaStorageAccessor> accessor,
         // Validate format: should be like "name@provider" (e.g., "yr-backend-tls@file")
         static const std::regex transportPattern(R"(^[^@]+@[^@]+$)");
         if (!std::regex_match(serversTransport_, transportPattern)) {
-            YRLOG_ERROR("TraefikRegistry: invalid serversTransport format '{}', expected 'name@provider' (e.g., 'yr-backend-tls@file')",
-                       serversTransport_);
-            throw std::invalid_argument("serversTransport must be in format 'name@provider' (e.g., 'yr-backend-tls@file')");
+            YRLOG_ERROR("TraefikRegistry: invalid serversTransport format '{}', "
+                        "expected 'name@provider' (e.g., 'yr-backend-tls@file')",
+                        serversTransport_);
+            throw std::invalid_argument(
+                "serversTransport must be in format 'name@provider' (e.g., 'yr-backend-tls@file')");
         }
-        YRLOG_INFO("TraefikRegistry: 'https' protocol ports will use backend TLS with ServersTransport: {}", serversTransport_);
+        YRLOG_INFO("TraefikRegistry: 'https' protocol ports will use backend TLS with ServersTransport: {}",
+                   serversTransport_);
     }
 
     YRLOG_INFO("TraefikRegistry initialized: keyPrefix={}, httpEntryPoint={}, enableTLS={}, serversTransport={}",
-              keyPrefix_, httpEntryPoint_, enableTLS_, serversTransport_);
+               keyPrefix_, httpEntryPoint_, enableTLS_, serversTransport_);
 
     // Create global StripPrefix middleware for all instances
     // This middleware removes /{instanceID}/{port} prefix using regex
@@ -104,7 +107,7 @@ litebus::Future<Status> TraefikRegistry::RegisterInstance(
         std::string scheme = useHttpsForBackend ? "https" : "http";
 
         YRLOG_DEBUG("TraefikRegistry: instance {} port {} protocol '{}' -> backend {}",
-                   instanceID, mapping.sandboxPort, mapping.protocol, scheme);
+                    instanceID, mapping.sandboxPort, mapping.protocol, scheme);
 
         // HTTP router rule: PathPrefix(`/{instanceID}/{port}`)
         std::string ruleValue = "PathPrefix(`" + prefixPath + "`)";
@@ -136,7 +139,7 @@ litebus::Future<Status> TraefikRegistry::RegisterInstance(
                 kvs.push_back({keyPrefix_ + "/http/services/" + routerName + "/loadbalancer/serverstransport",
                                serversTransport_});
                 YRLOG_DEBUG("TraefikRegistry: port {} using HTTPS with serversTransport={}",
-                           mapping.sandboxPort, serversTransport_);
+                            mapping.sandboxPort, serversTransport_);
             } else {
                 YRLOG_WARN("TraefikRegistry: port {} has 'https' protocol but serversTransport is empty, skipping TLS",
                            mapping.sandboxPort);
@@ -145,7 +148,7 @@ litebus::Future<Status> TraefikRegistry::RegisterInstance(
     }
 
     YRLOG_INFO("Registering instance {} to Traefik HTTP: {} ports, {} keys",
-              instanceID, portMappings.size(), kvs.size());
+               instanceID, portMappings.size(), kvs.size());
 
     return accessor_->Txn(kvs)
         .Then([instanceID, portMappingsCount = portMappings.size()](const Status& status) -> Status {
@@ -154,7 +157,7 @@ litebus::Future<Status> TraefikRegistry::RegisterInstance(
                 return status;
             }
             YRLOG_INFO("Successfully registered instance {} to Traefik with {} ports",
-                      instanceID, portMappingsCount);
+                       instanceID, portMappingsCount);
             return Status::OK();
         });
 }
@@ -191,12 +194,14 @@ litebus::Future<Status> TraefikRegistry::UnregisterInstance(const std::string& i
 
 std::string TraefikRegistry::SanitizeID(const std::string& id)
 {
+    constexpr size_t atReplacementLen = 4;   // length of "-at-" replacement string
+    constexpr size_t maxRouterNameLen = 200;  // Traefik router name length limit
     std::string result = id;
     // Replace @ with -at- (Traefik doesn't allow @ in router/service names)
     size_t pos = 0;
     while ((pos = result.find('@', pos)) != std::string::npos) {
         result.replace(pos, 1, "-at-");
-        pos += 4; // Skip past the replacement
+        pos += atReplacementLen; // Skip past the replacement
     }
     // Replace other potentially problematic characters
     // Traefik router/service names should be DNS-compatible
@@ -204,8 +209,8 @@ std::string TraefikRegistry::SanitizeID(const std::string& id)
     std::replace(result.begin(), result.end(), '.', '-');
     std::replace(result.begin(), result.end(), '_', '-');
     // Limit length (Traefik may have limits on router names)
-    if (result.length() > 200) {
-        result = result.substr(0, 200);
+    if (result.length() > maxRouterNameLen) {
+        result = result.substr(0, maxRouterNameLen);
     }
     return result;
 }

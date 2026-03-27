@@ -90,7 +90,8 @@ public:
     /**
      * Check if a snapshot exists
      */
-    bool Contains(const std::string &snapshotID) const {
+    bool Contains(const std::string &snapshotID) const
+    {
         return snapshotCache_.find(snapshotID) != snapshotCache_.end();
     }
 

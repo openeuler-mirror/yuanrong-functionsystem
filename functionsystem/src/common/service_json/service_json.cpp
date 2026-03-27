@@ -592,7 +592,7 @@ void ParseRootfsSpec(RootfsSpecMeta &rootfs, const nlohmann::json &h)
             rootfs.readonly = rf.at("readonly");
         } else if (rf.at("readonly").is_string()) {
             std::string str = rf.at("readonly");
-            rootfs.readonly = (str == "true" || str == "1" );
+            rootfs.readonly = (str == "true" || str == "1");
         }
     }
     if (rf.find("storageInfo") != rf.end()) {

@@ -30,14 +30,13 @@
 #include "common/state_machine/instance_state_machine.h"
 #include "common/status/status.h"
 #include "function_proxy/common/posix_client/control_plane_client/control_interface_client_manager_proxy.h"
+#include "local_scheduler/function_agent_manager/function_agent_mgr.h"
 #include "local_scheduler/function_agent_manager/function_agent_mgr_actor.h"
 #include "local_scheduler/instance_control/instance_ctrl.h"
 #include "local_scheduler/local_scheduler_service/local_sched_srv.h"
 
 namespace functionsystem::local_scheduler {
 
-class FunctionAgentMgr;
-class LocalSchedSrv;
 class InstanceCtrlActor;
 
 class SnapCtrlActor : public BasisActor {

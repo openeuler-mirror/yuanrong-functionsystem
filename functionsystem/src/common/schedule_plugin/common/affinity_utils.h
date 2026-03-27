@@ -34,10 +34,10 @@ bool RequiredAntiAffinityFilter(const std::string &unitID, const affinity::Selec
                                 const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
 
 double AffinityScorer(const std::string &unitID, const affinity::Selector &selector,
-                       const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
+                      const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
 
 double AntiAffinityScorer(const std::string &unitID, const affinity::Selector &selector,
-                           const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
+                          const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
 
 bool IsNodeAffinityScope(const resource_view::InstanceInfo &instance);
 

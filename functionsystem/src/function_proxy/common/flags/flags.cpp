@@ -162,8 +162,9 @@ Flags::Flags()
             "enable traefik registry for instance route", false);
     AddFlag(&Flags::traefikEtcdPrefix_, "traefik_etcd_prefix",
             "etcd key prefix for traefik configuration", "traefik");
+    constexpr int traefikDefaultLeaseTtlMs = 300000;  // 5 minutes in milliseconds
     AddFlag(&Flags::traefikLeaseTTL_, "traefik_lease_ttl",
-            "lease TTL for traefik registry (milliseconds)", 300000);
+            "lease TTL for traefik registry (milliseconds)", traefikDefaultLeaseTtlMs);
     AddFlag(&Flags::traefikHttpEntryPoint_, "traefik_http_entrypoint",
             "HTTP entryPoint name for traefik routing", "websecure");
     AddFlag(&Flags::traefikEnableTLS_, "traefik_enable_tls",

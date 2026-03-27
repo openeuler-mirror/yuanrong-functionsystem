@@ -15,9 +15,9 @@
  */
 #include "affinity_utils.h"
 
+#include <cmath>
 #include "common/resource_view/resource_tool.h"
 #include "common/resource_view/resource_type.h"
-#include <cmath>
 
 namespace functionsystem::schedule_plugin {
 // IN indicates that the value of the affinity label must be one of pod label value.
@@ -71,7 +71,7 @@ bool IsAffinityPriority(const affinity::Selector &selector)
 }
 
 double GetAffinityScore(const std::string &unitID, const affinity::Selector &selector,
-                         const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels, bool anti)
+                        const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels, bool anti)
 {
     for (const auto &subcondition : selector.condition().subconditions()) {
         bool isGroupSatified = true;

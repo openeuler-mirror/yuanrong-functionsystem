@@ -2115,14 +2115,15 @@ litebus::Future<Status> FunctionAgentMgrActor::SendStaticFunctionScheduleRespons
 
 litebus::Future<Status> FunctionAgentMgrActor::RegisterToWarmUp(
     const std::shared_ptr<messages::DeployInstanceRequest> &request,
-        const litebus::Option<std::string> &agentID)
+    const litebus::Option<std::string> &agentID)
 {
     std::list<litebus::Future<messages::DeployInstanceResponse>> deployFutures;
     YRLOG_INFO("debug:: {}", request->DebugString());
     if (agentID.IsSome()) {
-        return DeployInstance(request, agentID.Get()).Then([](const messages::DeployInstanceResponse &resp) -> litebus::Future<Status> {
-            return Status(static_cast<StatusCode>(resp.code()), resp.message());
-        });
+        return DeployInstance(request, agentID.Get())
+            .Then([](const messages::DeployInstanceResponse &resp) -> litebus::Future<Status> {
+                return Status(static_cast<StatusCode>(resp.code()), resp.message());
+            });
     }
     for (auto [agentID, agentInfo] : funcAgentTable_) {
         YRLOG_INFO("send warm up deploy request to agent({})({}) for instance({})", agentID, std::string(agentInfo.aid),
@@ -2142,12 +2143,12 @@ litebus::Future<Status> FunctionAgentMgrActor::RegisterToWarmUp(
 }
 
 litebus::Future<Status> FunctionAgentMgrActor::UnRegisterWarmUp(
-        const std::shared_ptr<messages::KillInstanceRequest> &request)
+    const std::shared_ptr<messages::KillInstanceRequest> &request)
 {
     std::list<litebus::Future<messages::KillInstanceResponse>> killFutures;
     for (auto [agentID, agentInfo] : funcAgentTable_) {
-        YRLOG_INFO("send unregister kill request to agent({})({}) for instance({})", agentID, std::string(agentInfo.aid),
-                   request->instanceid());
+        YRLOG_INFO("send unregister kill request to agent({})({}) for instance({})", agentID,
+                   std::string(agentInfo.aid), request->instanceid());
         killFutures.push_back(KillInstance(request, agentID, false));
     }
     return litebus::Collect(killFutures).Then(

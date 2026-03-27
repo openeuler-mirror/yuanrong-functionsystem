@@ -130,7 +130,8 @@ void BuildRootfsConfig(
         return;
     }
     auto container = deployInstanceRequest->mutable_container();
-    container->set_id(std::to_string(std::hash<std::string>{}(funcMeta.funcMetaData.name + funcMeta.funcMetaData.revisionId)));
+    container->set_id(std::to_string(
+        std::hash<std::string>{}(funcMeta.funcMetaData.name + funcMeta.funcMetaData.revisionId)));
     container->set_runtime(funcMeta.rootfs.runtime);
     container->set_mountpoint(funcMeta.rootfs.mountpoint);
     container->mutable_rootfsconfig()->set_readonly(funcMeta.rootfs.readonly);

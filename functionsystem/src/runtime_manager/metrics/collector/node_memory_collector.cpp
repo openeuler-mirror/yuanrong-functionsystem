@@ -43,8 +43,8 @@ Metric NodeMemoryCollector::GetLimit() const
         return metric;
     }
     // no chache meminfo
-    constexpr double DOUBLE_CLOSE_EPS = 1e-9;
-    if (std::abs(totalMem_) <= DOUBLE_CLOSE_EPS && std::abs(availableMem_) <= DOUBLE_CLOSE_EPS) {
+    constexpr double doubleCloseEps = 1e-9;
+    if (std::abs(totalMem_) <= doubleCloseEps && std::abs(availableMem_) <= doubleCloseEps) {
         parseMemInfo();
     }
     metric.value = totalMem_ - overheadMemory_;
@@ -83,8 +83,9 @@ void NodeMemoryCollector::parseMemInfo() const
     const std::regex totalRex(R"(^MemTotal\s*:\s*(\d+)\s*kB$)");
     const std::regex avaliRex(R"(^MemAvailable\s*:\s*(\d+)\s*kB$)");
     std::smatch matches;
-    constexpr double DOUBLE_CLOSE_EPS = 1e-9;
-    for (long unsigned int i = 0; i < meminfos.size() && (std::abs(totalMem_) <= DOUBLE_CLOSE_EPS || std::abs(availableMem_) <= DOUBLE_CLOSE_EPS); i++) {
+    constexpr double doubleCloseEps = 1e-9;
+    for (long unsigned int i = 0; i < meminfos.size()
+         && (std::abs(totalMem_) <= doubleCloseEps || std::abs(availableMem_) <= doubleCloseEps); i++) {
         if (std::regex_search(meminfos[i], matches, totalRex)) {
             try {
                 totalMem_ = std::stod(matches[1]) / MEMORY_CALC_BASE;

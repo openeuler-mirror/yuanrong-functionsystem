@@ -206,7 +206,8 @@ Status NpuProbe::OnGetNPUInfo(bool countMode)
     auto status = GetNPUSmiInfo();
     if (status.IsError()) {
         InitDevInfo();
-        YRLOG_DEBUG_COUNT_60("There seems to be no npu device on this node. try to get from {}", params_->deviceInfoPath);
+        YRLOG_DEBUG_COUNT_60("There seems to be no npu device on this node. try to get from {}",
+                             params_->deviceInfoPath);
         LoadTopoInfo();
         return status;
     }

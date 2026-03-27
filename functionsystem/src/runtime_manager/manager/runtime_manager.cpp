@@ -336,8 +336,8 @@ void RuntimeManager::SnapshotRuntime(const litebus::AID &from, std::string &&, s
     }
 
     // Call executor's SnapshotRuntime method
-    executor->SnapshotRuntime(request).Then(litebus::Defer(GetAID(), &RuntimeManager::SnapshotRuntimeResponse, from,
-                                                            instanceID, request->requestid(), std::placeholders::_1));
+    executor->SnapshotRuntime(request).Then(litebus::Defer(GetAID(), &RuntimeManager::SnapshotRuntimeResponse,
+        from, instanceID, request->requestid(), std::placeholders::_1));
 }
 
 void RuntimeManager::HandlePrestartRuntimeExit(const pid_t pid)

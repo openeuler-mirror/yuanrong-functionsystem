@@ -16,8 +16,8 @@
 
 #include "io_event_actor.h"
 
-#include <errno.h>
-#include <string.h>
+#include <cerrno>
+#include <cstring>
 #include <unistd.h>
 
 #include "actor/aid.hpp"
@@ -36,7 +36,7 @@ void IOEventActor::CreateInstance()
         return;
     }
 
-    instance_ = std::shared_ptr<IOEventActor>(new IOEventActor("IOEventActor"));
+    instance_ = std::make_shared<IOEventActor>("IOEventActor");
     litebus::Spawn(instance_);
     YRLOG_INFO("IOEventActor singleton created");
 }
@@ -76,7 +76,7 @@ void IOEventActor::Init()
     }
 
     running_ = true;
-    eventLoopTimer_ = litebus::AsyncAfter(EVENT_LOOP_INTERVAL_MS, GetAID(), &IOEventActor::EventLoop);
+    eventLoopTimer_ = litebus::AsyncAfter(eventLoopIntervalMs, GetAID(), &IOEventActor::EventLoop);
 }
 
 void IOEventActor::Finalize()
@@ -133,12 +133,11 @@ void IOEventActor::EventLoop()
         return;
     }
 
-    struct epoll_event events[MAX_EVENTS];
-    int nfds = epoll_wait(epollFd_, events, MAX_EVENTS, 0);
-
+    struct epoll_event events[maxEvents];
+    int nfds = epoll_wait(epollFd_, events, maxEvents, 0);
     if (nfds < 0) {
         if (errno == EINTR) {
-            eventLoopTimer_ = litebus::AsyncAfter(EVENT_LOOP_INTERVAL_MS, GetAID(), &IOEventActor::EventLoop);
+            eventLoopTimer_ = litebus::AsyncAfter(eventLoopIntervalMs, GetAID(), &IOEventActor::EventLoop);
             return;
         }
         YRLOG_ERROR("epoll_wait failed, errno: {}", errno);
@@ -160,7 +159,7 @@ void IOEventActor::EventLoop()
     }
 
     if (running_) {
-        eventLoopTimer_ = litebus::AsyncAfter(EVENT_LOOP_INTERVAL_MS, GetAID(), &IOEventActor::EventLoop);
+        eventLoopTimer_ = litebus::AsyncAfter(eventLoopIntervalMs, GetAID(), &IOEventActor::EventLoop);
     }
 }
 

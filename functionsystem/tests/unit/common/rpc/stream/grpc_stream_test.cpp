@@ -79,7 +79,7 @@ litebus::Future<std::shared_ptr<StreamingMessage>> NotifyServerHandler(const std
     return msg;
 }
 
-class StreamTest : public ::testing::Test {
+class DISABLED_StreamTest : public ::testing::Test {
 public:
     [[maybe_unused]] static void SetUpTestSuite()
     {

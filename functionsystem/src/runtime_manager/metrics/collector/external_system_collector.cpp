@@ -22,6 +22,7 @@
 namespace functionsystem::runtime_manager {
 const uint32_t CPU_SCALE = 1000;
 const uint32_t MEMORY_SCALE = 1024 * 1024;
+constexpr long HTTP_OK_STATUS = 200;
 size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp)
 {
     size_t totalSize = size * nmemb;
@@ -72,10 +73,10 @@ litebus::Future<std::string> CurlHelper::Query()
         YRLOG_DEBUG_COUNT_60("curl_easy_perform() failed: {}", curl_easy_strerror(res));
         return "";
     }
-    long http_code = 0;
-    curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &http_code);
-    if (http_code != 200) {
-        YRLOG_DEBUG_COUNT_60("{} for {} with status code: {}, response: {}", externEndpoint_, url_, http_code,
+    long httpCode = 0;
+    curl_easy_getinfo(curl_, CURLINFO_RESPONSE_CODE, &httpCode);
+    if (httpCode != HTTP_OK_STATUS) {
+        YRLOG_DEBUG_COUNT_60("{} for {} with status code: {}, response: {}", externEndpoint_, url_, httpCode,
                              response);
         return "";
     }

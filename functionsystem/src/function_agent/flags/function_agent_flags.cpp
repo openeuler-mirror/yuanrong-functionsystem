@@ -74,7 +74,8 @@ FunctionAgentFlags::FunctionAgentFlags()
             "enable distributed convergent call stack", false);
     AddFlag(&FunctionAgentFlags::dataSystemEnable_, "data_system_enable", "enable data system", false);
     AddFlag(&FunctionAgentFlags::dataSystemHost_, "data_system_host", "data system host", "127.0.0.1");
-    AddFlag(&FunctionAgentFlags::dataSystemPort_, "data_system_port", "data system port", 31501);
+    constexpr int kDefaultDataSystemPort = 31501;
+    AddFlag(&FunctionAgentFlags::dataSystemPort_, "data_system_port", "data system port", kDefaultDataSystemPort);
     AddFlag(&FunctionAgentFlags::pluginConfigs_, "agent_plugin_configs", "plugin configs", false);
 }
 

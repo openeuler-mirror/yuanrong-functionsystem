@@ -45,7 +45,7 @@ class ContainerExecutor : public Executor {
 public:
     explicit ContainerExecutor(const std::string &name, const litebus::AID &functionAgentAID);
 
-    virtual ~ContainerExecutor() override = default;
+    ~ContainerExecutor() override = default;
 
     void SetHealthCheckClient(const std::shared_ptr<HealthCheck> &healthCheck)
     {
@@ -55,7 +55,8 @@ public:
     litebus::Future<messages::StartInstanceResponse> StartInstance(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::vector<int> &cardIDs) override;
 
-    litebus::Future<Status> StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request, bool oomKilled = false) override;
+    litebus::Future<Status> StopInstance(
+        const std::shared_ptr<messages::StopInstanceRequest> &request, bool oomKilled = false) override;
 
     litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(
         const std::shared_ptr<messages::SnapshotRuntimeRequest> &request) override;

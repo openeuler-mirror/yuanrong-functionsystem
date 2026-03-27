@@ -148,7 +148,7 @@ void QuotaManagerActor::CheckAndEnforce(const std::string &tenantID)
     }
 
     YRLOG_WARN("QuotaManagerActor: Tenant {} quota exceeded, cpu={}/{}, mem={}/{}",
-              tenantID, usage.cpuMillicores, quota.cpuMillicores, usage.memMb, quota.memLimitMb);
+               tenantID, usage.cpuMillicores, quota.cpuMillicores, usage.memMb, quota.memLimitMb);
 
     while ((usage.cpuMillicores > quota.cpuMillicores || usage.memMb > quota.memLimitMb)
            && !usage.sortedInstances.empty()) {

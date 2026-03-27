@@ -28,6 +28,7 @@ namespace functionsystem::runtime_manager {
 static const int32_t DEFAULT_TTL_SECONDS = 1800;  // 30 minutes
 static const int32_t DEFAULT_CLEANUP_INTERVAL_SECONDS = 300;  // 5 minutes
 static const std::string DEFAULT_CHECKPOINT_DIR = "/home/yuanrong/checkpoints";
+static constexpr int32_t MILLISECONDS_PER_SECOND = 1000;
 
 CkptFileManagerActor::CkptFileManagerActor(const std::string &name)
     : ActorBase(name),
@@ -254,7 +255,7 @@ litebus::Future<std::string> CkptFileManagerActor::RegisterCheckpoint(
 
         // Register checkpoint info after successful upload with TTL
         litebus::Async(aid, &CkptFileManagerActor::OnUploadSuccess,
-                      checkpointID, localPath, derivedStorageUrl, effectiveTTL, uploadPromise);
+                       checkpointID, localPath, derivedStorageUrl, effectiveTTL, uploadPromise);
     });
 
     return uploadFuture;
@@ -299,7 +300,7 @@ void CkptFileManagerActor::StartCleanupTimer()
     }
 
     YRLOG_INFO("starting checkpoint cleanup timer (interval: {} seconds)", cleanupIntervalSeconds_);
-    cleanupTimer_ = litebus::AsyncAfter(cleanupIntervalSeconds_ * 1000, GetAID(),
+    cleanupTimer_ = litebus::AsyncAfter(cleanupIntervalSeconds_ * MILLISECONDS_PER_SECOND, GetAID(),
                                         &CkptFileManagerActor::PeriodicCleanup);
 }
 
@@ -327,7 +328,7 @@ void CkptFileManagerActor::PeriodicCleanup()
 
     // Schedule next cleanup
     if (cleanupEnabled_) {
-        cleanupTimer_ = litebus::AsyncAfter(cleanupIntervalSeconds_ * 1000, GetAID(),
+        cleanupTimer_ = litebus::AsyncAfter(cleanupIntervalSeconds_ * MILLISECONDS_PER_SECOND, GetAID(),
                                             &CkptFileManagerActor::PeriodicCleanup);
     }
 }
@@ -396,7 +397,6 @@ Status CkptFileManagerActor::DeleteCheckpointFile(const std::string &checkpointI
         // Remove from map
         checkpointFiles_.erase(iter);
         return Status::OK();
-
     } catch (const std::filesystem::filesystem_error &e) {
         YRLOG_ERROR("failed to delete checkpoint {}: {}", checkpointID, e.what());
         return Status(StatusCode::ERR_FILE_OPERATION_FAILED, e.what());
@@ -455,7 +455,6 @@ void CkptFileManagerActor::RestoreCheckpointsFromLocal()
         } else {
             YRLOG_INFO("no checkpoint files found in local directory: {}", checkpointBaseDir_);
         }
-
     } catch (const std::filesystem::filesystem_error &e) {
         YRLOG_ERROR("failed to restore checkpoints from local directory: {}", e.what());
     }

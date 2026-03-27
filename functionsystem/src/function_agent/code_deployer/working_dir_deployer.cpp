@@ -42,7 +42,7 @@ std::string StripScheme(const std::string &uri, const std::string &scheme)
     return uri.compare(0, scheme.length(), scheme) == 0 ? uri.substr(scheme.length()) : uri;
 }
 
-bool endsWith(const std::string &str, const std::string &suffix)
+bool EndsWith(const std::string &str, const std::string &suffix)
 {
     if (suffix.size() > str.size()) {
         return false;
@@ -86,10 +86,9 @@ public:
     std::pair<Status, std::string> GetResource(std::string dst) override
     {
         std::string realFilePath = StripScheme(filePath_, FILE_SCHEME);
-
-        if (endsWith(realFilePath, ".img")) {
+        if (EndsWith(realFilePath, ".img")) {
             return std::make_pair(Status::OK(), realFilePath);
-        } else if (endsWith(realFilePath, ".zip")) {
+        } else if (EndsWith(realFilePath, ".zip")) {
             Status unzipStatus = UnzipFile(dst, realFilePath);
             return std::make_pair(unzipStatus, dst);
         } else {
@@ -119,6 +118,7 @@ public:
     explicit PathResourceAccessor(const std::string &uri) : filePath_(uri)
     {
     }
+    ~PathResourceAccessor() override = default;
 
     std::pair<Status, std::string> GetResource(std::string dst) override
     {
@@ -152,6 +152,7 @@ public:
     explicit DSAccessor(const std::string &uri) : dsKey_(uri)
     {
     }
+    ~DSAccessor() override = default;
 
     std::pair<Status, std::string> GetResource(std::string dst) override
     {
@@ -168,7 +169,7 @@ public:
                 Status(StatusCode::FUNC_AGENT_INVALID_WORKING_DIR_FILE, "invalid package size with " + dsKey_), "");
         }
         auto destinationPath = dst;
-        if (endsWith(dst, ".img")) {
+        if (EndsWith(dst, ".img")) {
             destinationPath = GetDirectoryPath(dst);
         }
         std::string fullpath = litebus::os::Join(destinationPath, filename);
@@ -186,9 +187,9 @@ public:
         }
         file.close();
 
-        if (endsWith(dsKey_, ".img")) {
+        if (EndsWith(dsKey_, ".img")) {
             return std::make_pair(Status::OK(), fullpath);
-        } else if (endsWith(dsKey_, ".zip")) {
+        } else if (EndsWith(dsKey_, ".zip")) {
             Status unzipStatus = UnzipFile(dst, fullpath);
             return std::make_pair(unzipStatus, dst);
         } else {
@@ -201,7 +202,7 @@ public:
 
     std::string GetWorkingDir(std::string dst) override
     {
-        if (endsWith(dsKey_, ".img")) {
+        if (EndsWith(dsKey_, ".img")) {
             return litebus::os::Join(dst, dsKey_.substr(DS_SCHEME.length()));
         }
         return dst;
@@ -288,7 +289,7 @@ bool WorkingDirDeployer::IsDeployed(const std::string &destination, [[maybe_unus
     if (!litebus::os::ExistPath(destination)) {
         return false;
     }
-    if (endsWith(destination, ".img")) {
+    if (EndsWith(destination, ".img")) {
         return true;
     }
     auto option = litebus::os::Ls(destination);
@@ -329,7 +330,7 @@ DeployResult WorkingDirDeployer::Deploy(const std::shared_ptr<messages::DeployRe
         return result;
     }
     auto dst = result.destination;
-    if (endsWith(dst, ".img")) {
+    if (EndsWith(dst, ".img")) {
         dst = GetDirectoryPath(dst);
     }
     // 2. create dest working dir
@@ -362,7 +363,7 @@ bool WorkingDirDeployer::Clear(const std::string &filePath, const std::string &o
 {
     YRLOG_DEBUG("Clear filePath({}), objectKey({})", filePath, objectKey);
     std::string needsClearPath = filePath;
-    if (endsWith(filePath, ".img")) {
+    if (EndsWith(filePath, ".img")) {
         needsClearPath = GetDirectoryPath(filePath);
     }
     return ClearFile(needsClearPath, objectKey);

@@ -47,19 +47,20 @@ const uint64_t FATAL_INSTANCE_TIMEOUT = 3600; // 1 hour in seconds
 
 /**
  * Parse tenantID from instance key.
- * Key format: /sn/instance/business/yrk/tenant/{tenantID}/function/{function}/version/{version}/defaultaz/{requestID}/{instanceID}
+ * Key format: /sn/instance/business/yrk/tenant/{tenantID}/function/{function}/version/{version}/
+ *             defaultaz/{requestID}/{instanceID}
  * @param instanceKey The instance key path
  * @return The tenantID, or empty string if parsing fails
  */
 static std::string ParseTenantIDFromInstanceKey(const std::string &instanceKey)
 {
-    static const std::string PREFIX = INSTANCE_PATH_PREFIX + "/";
-    if (instanceKey.empty() || instanceKey.size() <= PREFIX.size()) {
+    static const std::string prefix = INSTANCE_PATH_PREFIX + "/";
+    if (instanceKey.empty() || instanceKey.size() <= prefix.size()) {
         return "";
     }
 
     // Extract the part after the prefix
-    std::string remaining = instanceKey.substr(PREFIX.size());
+    std::string remaining = instanceKey.substr(prefix.size());
 
     // Split by "/" and get the first segment (tenantID)
     auto pos = remaining.find('/');
@@ -1574,7 +1575,7 @@ void InstanceManagerActor::MasterBusiness::GarbageCollectFatalInstances()
             auto extIter = instance->extensions().find(CREATE_TIME_STAMP);
             if (extIter == instance->extensions().end()) {
                 YRLOG_WARN("Instance({}) in FATAL state has no CREATE_TIME_STAMP, skip garbage collection",
-                          instance->instanceid());
+                           instance->instanceid());
                 continue;
             }
 
@@ -1584,15 +1585,15 @@ void InstanceManagerActor::MasterBusiness::GarbageCollectFatalInstances()
                 createTimestamp = std::stoull(extIter->second);
             } catch (const std::exception &e) {
                 YRLOG_ERROR("Failed to parse CREATE_TIME_STAMP for instance({}): {}",
-                           instance->instanceid(), e.what());
+                            instance->instanceid(), e.what());
                 continue;
             }
 
             // 检查是否超过 1 小时
             if (nowTimestamp > createTimestamp && (nowTimestamp - createTimestamp) > FATAL_INSTANCE_TIMEOUT) {
                 YRLOG_INFO("Found FATAL instance({}) exceeding timeout, created at {}, now {}, age {} seconds",
-                          instance->instanceid(), createTimestamp, nowTimestamp,
-                          nowTimestamp - createTimestamp);
+                           instance->instanceid(), createTimestamp, nowTimestamp,
+                           nowTimestamp - createTimestamp);
                 instancesToDelete.emplace_back(key, instance);
             }
         }
@@ -2199,7 +2200,7 @@ void InstanceManagerActor::ReportInstanceCountPeriodically()
     // 只有 master 节点上报指标
     if (curStatus_ != MASTER_BUSINESS) {
         litebus::AsyncAfter(INSTANCE_COUNT_REPORT_INTERVAL, GetAID(),
-                           &InstanceManagerActor::ReportInstanceCountPeriodically);
+                            &InstanceManagerActor::ReportInstanceCountPeriodically);
         return;
     }
 
@@ -2249,11 +2250,12 @@ void InstanceManagerActor::ReportInstanceCountPeriodically()
     functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(
         totalMeterTitle, totalMeterData, {});
 
-    YRLOG_DEBUG("Report running instance count metrics: total={}, nodes={}", totalInstanceCount, nodeInstanceCount.size());
+    YRLOG_DEBUG("Report running instance count metrics: total={}, nodes={}",
+                totalInstanceCount, nodeInstanceCount.size());
 
     // 调度下一次上报
     litebus::AsyncAfter(INSTANCE_COUNT_REPORT_INTERVAL, GetAID(),
-                       &InstanceManagerActor::ReportInstanceCountPeriodically);
+                        &InstanceManagerActor::ReportInstanceCountPeriodically);
 }
 
 void InstanceManagerActor::GarbageCollectFatalInstances()
@@ -2263,6 +2265,6 @@ void InstanceManagerActor::GarbageCollectFatalInstances()
 
     // 调度下一次垃圾回收
     litebus::AsyncAfter(GARBAGE_COLLECT_INTERVAL, GetAID(),
-                       &InstanceManagerActor::GarbageCollectFatalInstances);
+                        &InstanceManagerActor::GarbageCollectFatalInstances);
 }
 }  // namespace functionsystem::instance_manager

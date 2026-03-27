@@ -267,10 +267,10 @@ void SnapManagerActor::SendRecordSnapshotResponse(const litebus::AID &to,
 }
 
 void SnapManagerActor::SendSnapStartResponse(const litebus::AID &to,
-                               const std::string &requestID,
-                               int32_t code,
-                               const std::string &message,
-                               const std::string &instanceID)
+                                             const std::string &requestID,
+                                             int32_t code,
+                                             const std::string &message,
+                                             const std::string &instanceID)
 {
     messages::RestoreSnapshotResponse rsp;
     rsp.set_requestid(requestID);
@@ -305,8 +305,8 @@ void SnapManagerActor::MasterBusiness::RecordSnapshotMetadata(const litebus::AID
 }
 
 void SnapManagerActor::MasterBusiness::SnapStartCheckpoint(const litebus::AID &from,
-                                                                std::string &&name,
-                                                                std::string &&msg)
+                                                           std::string &&name,
+                                                           std::string &&msg)
 {
     auto req = std::make_shared<messages::RestoreSnapshotRequest>();
     if (!req->ParseFromString(msg)) {
@@ -395,9 +395,11 @@ void SnapManagerActor::MasterBusiness::HandleRecordSnapshot(const litebus::AID &
             if (status.IsOk()) {
                 YRLOG_INFO("snapshot metadata recorded successfully: {}, requestID={}", snapshotID, requestID);
             } else {
-                YRLOG_ERROR("failed to record snapshot metadata: {}, requestID={}, error: {}", snapshotID, requestID, status.GetMessage());
+                YRLOG_ERROR("failed to record snapshot metadata: {}, requestID={}, error: {}",
+                            snapshotID, requestID, status.GetMessage());
             }
-            litebus::Async(actor->GetAID(), &SnapManagerActor::SendRecordSnapshotResponse, from, requestID, status.StatusCode(), status.RawMessage());
+            litebus::Async(actor->GetAID(), &SnapManagerActor::SendRecordSnapshotResponse,
+                           from, requestID, status.StatusCode(), status.RawMessage());
         });
 }
 
@@ -441,7 +443,9 @@ void SnapManagerActor::MasterBusiness::HandleSnapStart(const litebus::AID &from,
             }
             auto code = future.IsError() ? future.GetErrorCode() : future.Get().StatusCode();
             auto message = future.IsError() ? "failed to schedule." : future.Get().RawMessage();
-            litebus::Async(actor->GetAID(), &SnapManagerActor::SendSnapStartResponse, from, req->requestid(), code, message, scheduleReq->instance().instanceid());
+            litebus::Async(actor->GetAID(), &SnapManagerActor::SendSnapStartResponse,
+                           from, req->requestid(), code, message,
+                           scheduleReq->instance().instanceid());
         });
 }
 
@@ -479,7 +483,6 @@ litebus::Future<Status> SnapManagerActor::MasterBusiness::DeleteMetadataFromEtcd
 void SnapManagerActor::MasterBusiness::EnforceSnapshotQuota(const std::string &functionID)
 {
     auto snapshotsWithTime = member_->cache.GetSnapshotsWithTime(functionID);
-
     if (static_cast<int64_t>(snapshotsWithTime.size()) <= member_->config.maxSnapshotsPerFunction) {
         return;
     }
@@ -553,8 +556,8 @@ void SnapManagerActor::SlaveBusiness::RecordSnapshotMetadata(const litebus::AID 
 }
 
 void SnapManagerActor::SlaveBusiness::SnapStartCheckpoint(const litebus::AID &from,
-                                                               std::string &&name,
-                                                               std::string &&msg)
+                                                          std::string &&name,
+                                                          std::string &&msg)
 {
     YRLOG_WARN("SlaveBusiness: SnapStartCheckpoint called on slave, operation not allowed");
 }

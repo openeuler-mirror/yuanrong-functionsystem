@@ -25,6 +25,7 @@ namespace trace {
 
 class LogFileExporterFactory {
 public:
+    virtual ~LogFileExporterFactory() = default;
     static std::unique_ptr<opentelemetry::sdk::trace::SpanExporter> Create();
 };
 

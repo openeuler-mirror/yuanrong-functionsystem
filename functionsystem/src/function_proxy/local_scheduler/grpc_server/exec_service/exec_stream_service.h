@@ -31,11 +31,9 @@
 #include "function_proxy/common/exec_session/exec_session_actor.h"
 #include "function_proxy/common/exec_session/io_event_actor.h"
 
-namespace functionsystem {
+#include "local_scheduler/instance_control/instance_ctrl_actor.h"
 
-namespace local_scheduler {
-class InstanceCtrlActor;
-}
+namespace functionsystem {
 
 using exec_service::ExecInputData;
 using exec_service::ExecMessage;

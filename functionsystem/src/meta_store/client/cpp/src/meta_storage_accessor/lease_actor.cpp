@@ -259,7 +259,7 @@ litebus::Future<Status> LeaseActor::DoTxnWithLease(const Status& status, const s
     auto promise = litebus::Promise<Status>();
     (void)txn->Commit()
         .OnComplete(
-            litebus::Defer(GetAID(), &LeaseActor::OnTxnResponse, std::placeholders::_1, groupKey, promise));
+        litebus::Defer(GetAID(), &LeaseActor::OnTxnResponse, std::placeholders::_1, groupKey, promise));
     return promise.GetFuture();
 }
 
@@ -287,7 +287,7 @@ void LeaseActor::OnTxnResponse(
         YRLOG_ERROR("Txn commit failed for group {}, error: {}", groupKey, response.GetErrorCode());
     } else {
         YRLOG_ERROR("Txn commit failed for group {}, status: {}",
-                   groupKey, fmt::underlying(response.Get()->status.StatusCode()));
+                    groupKey, fmt::underlying(response.Get()->status.StatusCode()));
     }
 
     promise.SetValue(Status(StatusCode::BP_META_STORAGE_PUT_ERROR, "groupKey: " + groupKey));
@@ -345,8 +345,8 @@ void LeaseActor::KeepAliveGroupOnce(const std::string& groupKey, int64_t leaseID
                    return response;
                })
         .OnComplete(
-            litebus::Defer(GetAID(), &LeaseActor::KeepAliveGroupOnceResponse, std::placeholders::_1,
-                          groupKey, leaseID, ttl));
+        litebus::Defer(GetAID(), &LeaseActor::KeepAliveGroupOnceResponse, std::placeholders::_1,
+                       groupKey, leaseID, ttl));
 }
 
 void LeaseActor::KeepAliveGroupOnceResponse(

@@ -351,10 +351,12 @@ private:
     REQUEST_SYNC_HELPER(LocalSchedSrvActor, Status, deletePodTimeout_, deletePodMatch_);
 
     const uint32_t recordSnapshotTimeout_ = 10000;
-    REQUEST_SYNC_HELPER(LocalSchedSrvActor, messages::RecordSnapshotResponse, recordSnapshotTimeout_, recordSnapshotSync_);
+    REQUEST_SYNC_HELPER(LocalSchedSrvActor, messages::RecordSnapshotResponse,
+                        recordSnapshotTimeout_, recordSnapshotSync_);
 
     const uint32_t snapStartCheckpointTimeout_ = 10000;
-    REQUEST_SYNC_HELPER(LocalSchedSrvActor, messages::RestoreSnapshotResponse, snapStartCheckpointTimeout_, snapStartCheckpointSync_);
+    REQUEST_SYNC_HELPER(LocalSchedSrvActor, messages::RestoreSnapshotResponse,
+                        snapStartCheckpointTimeout_, snapStartCheckpointSync_);
 
     litebus::Promise<Status> unRegistered_;
 

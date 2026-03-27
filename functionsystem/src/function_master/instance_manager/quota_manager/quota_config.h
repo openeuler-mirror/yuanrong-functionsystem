@@ -24,6 +24,8 @@ struct TenantQuota {
 
 class QuotaConfig {
 public:
+    virtual ~QuotaConfig() = default;
+
     // Flag 未配置（path 为空）：关闭限额控制，打印 WARNING
     // Flag 已配置但文件不存在或解析失败：YRLOG_FATAL + 终止
     static QuotaConfig LoadFromFile(const std::string &path);

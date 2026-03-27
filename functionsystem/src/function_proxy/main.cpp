@@ -153,8 +153,8 @@ functionsystem::function_agent::FunctionAgentStartParam BuildFunctionAgentStartP
 }
 
 void OnCreateFunctionAgent(const function_agent::FunctionAgentFlags &functionAgentFlags,
-                          const runtime_manager::Flags &runtimeManagerFlags,
-                          bool enableMergeProcess)
+                           const runtime_manager::Flags &runtimeManagerFlags,
+                           bool enableMergeProcess)
 {
     YRLOG_INFO("function_agent is starting{}...",
                enableMergeProcess ? " with runtime_manager in merged process" : "");
@@ -164,7 +164,6 @@ void OnCreateFunctionAgent(const function_agent::FunctionAgentFlags &functionAge
 
     g_functionAgentDriver = std::make_shared<function_agent::FunctionAgentDriver>(
         functionAgentFlags.GetNodeID(), startParam);
-
     if (auto status = g_functionAgentDriver->Start(); status.IsError()) {
         YRLOG_ERROR("failed to start function_agent, errMsg: {}", status.ToString());
         g_functionProxySwitcher->SetStop();
@@ -533,7 +532,8 @@ void StartUpModule()
     ModuleIsReady({g_commonDriver, g_localSchedDriver});
 }
 
-void OnCreate(const Flags &flags, const function_agent::FunctionAgentFlags &functionAgentFlags, const runtime_manager::Flags &runtimeManagerFlags)
+void OnCreate(const Flags &flags, const function_agent::FunctionAgentFlags &functionAgentFlags,
+              const runtime_manager::Flags &runtimeManagerFlags)
 {
     YRLOG_INFO("{} is starting", COMPONENT_NAME);
     YRLOG_INFO("version:{} branch:{} commit_id:{}", BUILD_VERSION, GIT_BRANCH_NAME, GIT_HASH);

@@ -15,10 +15,10 @@
  */
 
 #include "log_file_exporter.h"
-#include "common/logs/logging.h"
 #include <opentelemetry/exporters/ostream/common_utils.h>
 #include <opentelemetry/sdk/trace/recordable.h>
 #include <opentelemetry/sdk/trace/span_data.h>
+#include "common/logs/logging.h"
 
 namespace functionsystem {
 namespace trace {
@@ -58,7 +58,9 @@ opentelemetry::sdk::common::ExportResult LogFileExporter::Export(
                 << "trace_id: " << TraceIdToString(span->GetTraceId()) << ", "
                 << "span_id: " << SpanIdToString(span->GetSpanId()) << ", "
                 << "start_time: " << span->GetStartTime().time_since_epoch().count() << " ns" << ", "
-                << "duration: " << std::chrono::duration_cast<std::chrono::milliseconds>(span->GetDuration()).count() << " ms" << ", ";
+                << "duration: "
+                << std::chrono::duration_cast<std::chrono::milliseconds>(span->GetDuration()).count()
+                << " ms" << ", ";
             auto attributes = span->GetAttributes();
             oss << "attributes: {";
             for (const auto& [key, value] : attributes) {

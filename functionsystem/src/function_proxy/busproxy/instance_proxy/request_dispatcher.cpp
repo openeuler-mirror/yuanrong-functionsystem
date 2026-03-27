@@ -335,7 +335,8 @@ void RequestDispatcher::UpdateInfo(const std::shared_ptr<InstanceRouterInfo> &in
             // enable traffic report
             // same lifecycle with RequestDispatcher which can be safe to capture this pointer
             ASSERT_IF_NULL(callCache_);
-            YRLOG_INFO("enable traffic report for instance({}) report type({})", instanceID_, fmt::underlying(trafficReportType_));
+            YRLOG_INFO("enable traffic report for instance({}) report type({})",
+                       instanceID_, fmt::underlying(trafficReportType_));
             callCache_->SetTrafficReport([this](bool idle, const size_t &size) { ReportTrafficMetrics(idle, size); });
             ReportTrafficMetrics(true, 0);
         }
@@ -475,7 +476,8 @@ void RequestDispatcher::ReportTrafficMetrics(bool idle, const size_t &size)
         return;
     }
     // TODO(Lwy_Robb): resources::TrafficReportType::Periodic metric reporting
-    YRLOG_INFO("instance({}) report traffic idle({}) size({}) current({})", instanceID_, idle, size, currentTrafficIdleState_);
+    YRLOG_INFO("instance({}) report traffic idle({}) size({}) current({})",
+               instanceID_, idle, size, currentTrafficIdleState_);
     // only report when idle state changed
     if (currentTrafficIdleState_ != idle) {
         observer_->ReportTraffic(instanceID_, size);

@@ -48,6 +48,9 @@
 namespace functionsystem::runtime_manager {
 using json = nlohmann::json;
 const int64_t DEFAULT_GRACEFUL_SHUTDOWN = 5;
+constexpr double DEFAULT_CPU_RESOURCE = 500;
+constexpr double DEFAULT_MEMORY_RESOURCE = 500;
+constexpr int MAX_PORT_NUMBER = 65535;
 const int64_t RECONNECT_CONTAINERD_INTERVAL_MS = 5000;
 const std::string PARAM_LANGUAGE = "language";
 const std::string RUNTIME_LAYER_DIR_NAME = "layer";
@@ -202,7 +205,6 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartInstanc
 {
     const auto &info = request->runtimeinstanceinfo();
     std::string runtimeID = info.runtimeid();
-
     if (IsRuntimeActive(runtimeID)) {
         YRLOG_INFO("{}|{}|runtime({}) already active, return successful response", info.traceid(), info.requestid(),
                    runtimeID);
@@ -235,11 +237,6 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartInstanc
         features.serverMode = false;
     }
     YRLOG_DEBUG("enableservermode = {}, port = {}", tlsConfig.enableservermode(), port);
-    // if (CheckRuntimeCredential(request) != StatusCode::SUCCESS) {
-    //     YRLOG_ERROR("{}|{}|CheckRuntimeCredential failed, instanceID({}), runtimeID({})", info.traceid(),
-    //                 info.requestid(), info.instanceid(), runtimeID);
-    //     return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_PARAMS_INVALID);
-    // }
     std::vector<std::string> args;
     if (auto status = cmdBuilder_.GetBuildArgs(language, port, request, args); status.IsError()) {
         YRLOG_ERROR("{}|{}|get build args failed, can not start instanceID({}), runtimeID({})", info.traceid(),
@@ -279,7 +276,6 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnStartRunti
     YRLOG_INFO("{}|{}|start instance success, instanceID({}), runtimeID({}), containerID({}))", info.traceid(),
                info.requestid(), info.instanceid(), info.runtimeid(), containerID);
     runtime2containerID_[info.runtimeid()] = containerID;
-    // pids_.insert(execPtr->GetPid());
     runtimeInstanceInfoMap_[info.runtimeid()] = request->runtimeinstanceinfo();
     return GenSuccessStartInstanceResponse(request, containerID);
 }
@@ -384,7 +380,7 @@ void ContainerExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::strin
     }
 }
 
-std::string trimDash(const std::string &s)
+std::string TrimDash(const std::string &s)
 {
     if (s.empty()) {
         return s;
@@ -418,13 +414,13 @@ std::string DirName(const std::string &path)
 std::vector<std::string> BuildCommand(const std::shared_ptr<messages::StartInstanceRequest> &request,
                                       const std::string &execPath);
 std::string BuildBootstrapWorkingRoot(const std::shared_ptr<messages::StartInstanceRequest> &request,
-                                     runtime::v1::Mount &mount);
+                                      runtime::v1::Mount &mount);
 
 // Unified helper to build runtime commands - works with FunctionRuntime directly
 void ContainerExecutor::BuildRuntimeCommands(runtime::v1::FunctionRuntime *funcRt,
-                                           const std::shared_ptr<messages::StartInstanceRequest> &request,
-                                           const std::string &execPath,
-                                           const std::vector<std::string> &buildArgs)
+                                             const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                             const std::string &execPath,
+                                             const std::vector<std::string> &buildArgs)
 {
     auto commands = BuildCommand(request, execPath);
     for (const auto &cmd : commands) {
@@ -437,19 +433,19 @@ void ContainerExecutor::BuildRuntimeCommands(runtime::v1::FunctionRuntime *funcR
 
 // Unified helper to set request resources - works with protobuf map directly
 void ContainerExecutor::SetRequestResources(google::protobuf::Map<std::string, double> *resourcesMap,
-                                          const std::shared_ptr<messages::StartInstanceRequest> &request)
+                                            const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &resources = request->runtimeinstanceinfo().runtimeconfig().resources();
     if (resources.resources().find(CPU_RESOURCE_NAME) == resources.resources().end()
         || resources.resources().at(CPU_RESOURCE_NAME).type() != ValueType::Value_Type_SCALAR) {
-        (*resourcesMap)[CPU_RESOURCE_NAME] = 500;
+        (*resourcesMap)[CPU_RESOURCE_NAME] = DEFAULT_CPU_RESOURCE;
     } else {
         (*resourcesMap)[CPU_RESOURCE_NAME] =
             resources.resources().at(CPU_RESOURCE_NAME).scalar().value();
     }
     if (resources.resources().find(MEMORY_RESOURCE_NAME) == resources.resources().end()
         || resources.resources().at(MEMORY_RESOURCE_NAME).type() != ValueType::Value_Type_SCALAR) {
-        (*resourcesMap)[MEMORY_RESOURCE_NAME] = 500;
+        (*resourcesMap)[MEMORY_RESOURCE_NAME] = DEFAULT_MEMORY_RESOURCE;
     } else {
         (*resourcesMap)[MEMORY_RESOURCE_NAME] =
             resources.resources().at(MEMORY_RESOURCE_NAME).scalar().value();
@@ -457,35 +453,37 @@ void ContainerExecutor::SetRequestResources(google::protobuf::Map<std::string, d
 }
 
 void ContainerExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req,
-                                                     const std::shared_ptr<messages::StartInstanceRequest> &request,
-                                                     const Envs &envs,
-                                                     const std::string &runtimeID)
+                                                      const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                                      const Envs &envs,
+                                                      const std::string &runtimeID)
 {
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
     req->mutable_userenvs()->insert(combineEnvs.begin(), combineEnvs.end());
     (*req->mutable_userenvs())[YR_ONLY_STDOUT] = "true";
-    std::string stdOut, stdErr;
+    std::string stdOut;
+    std::string stdErr;
     ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID);
     req->set_stdout(stdOut);
     req->set_stderr(stdErr);
 }
 
 void ContainerExecutor::SetRequestEnvsAndLogsForRestore(runtime::v1::RestoreRequest *req,
-                                                       const std::shared_ptr<messages::StartInstanceRequest> &request,
-                                                       const Envs &envs,
-                                                       const std::string &runtimeID)
+                                                        const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                                        const Envs &envs,
+                                                        const std::string &runtimeID)
 {
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
     req->mutable_userenvs()->insert(combineEnvs.begin(), combineEnvs.end());
     (*req->mutable_userenvs())[YR_ONLY_STDOUT] = "true";
-    std::string stdOut, stdErr;
+    std::string stdOut;
+    std::string stdErr;
     ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID);
     req->set_stdout(stdOut);
     req->set_stderr(stdErr);
 }
 
 void ContainerExecutor::SetRequestExtraConfigForStart(runtime::v1::StartRequest *req,
-                                                     const std::shared_ptr<messages::StartInstanceRequest> &request)
+                                                      const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
     if (opts.find(CONTAINER_EXTRA_CONFIG) != opts.end()) {
@@ -494,7 +492,7 @@ void ContainerExecutor::SetRequestExtraConfigForStart(runtime::v1::StartRequest 
 }
 
 void ContainerExecutor::SetRequestExtraConfigForRestore(runtime::v1::RestoreRequest *req,
-                                                       const std::shared_ptr<messages::StartInstanceRequest> &request)
+                                                        const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
     if (opts.find(CONTAINER_EXTRA_CONFIG) != opts.end()) {
@@ -548,7 +546,6 @@ Status RootfsJsonParse(runtime::v1::FunctionRuntime &funcRt, const std::string &
 {
     try {
         nlohmann::json j = nlohmann::json::parse(rootfsJson);
-
         // Set runtime (sandbox)
         if (j.find("runtime") != j.end()) {
             funcRt.set_sandbox(j.at("runtime").get<std::string>());
@@ -572,7 +569,6 @@ Status RootfsJsonParse(runtime::v1::FunctionRuntime &funcRt, const std::string &
         }
 
         std::string typeStr = j.at("type").get<std::string>();
-
         if (typeStr == "s3") {
             funcRt.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::S3);
             if (j.find("storageInfo") == j.end()) {
@@ -607,7 +603,6 @@ Status RootfsJsonParse(runtime::v1::FunctionRuntime &funcRt, const std::string &
                 funcRt.mutable_rootfs()->set_path(j.at("path").get<std::string>());
             }
         }
-
     } catch (std::exception &e) {
         auto err = fmt::format("Failed to parse rootfs JSON: {}", std::string(e.what()));
         YRLOG_ERROR("{}", err);
@@ -646,11 +641,6 @@ std::vector<std::string> BuildCommand(const std::shared_ptr<messages::StartInsta
 {
     std::vector<std::string> commands;
     const auto &bootstrapConfig = request->runtimeinstanceinfo().bootstrapconfig();
-
-    // // Add execPath
-    // if (!execPath.empty()) {
-    //     commands.push_back(execPath);
-    // }
 
     // Add entrypoint from bootstrapConfig, split by spaces
     if (!bootstrapConfig.entrypoint().empty()) {
@@ -719,7 +709,7 @@ std::vector<ContainerExecutor::PortForwardConfig> ContainerExecutor::ParseForwar
                 continue;
             }
             int p = item["port"].get<int>();
-            if (p > 0 && p <= 65535) {
+            if (p > 0 && p <= MAX_PORT_NUMBER) {
                 PortForwardConfig config;
                 config.containerPort = static_cast<uint32_t>(p);
                 // Protocol is stored as lowercase (tcp/udp)
@@ -774,7 +764,8 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
     if (networkIter != deployOpts.end() && !networkIter->second.empty()) {
         const auto forwardConfigs = ParseForwardPorts(networkIter->second);
         if (!forwardConfigs.empty()) {
-            auto hostPorts = PortManager::GetInstance().RequestPorts(runtimeID, static_cast<int>(forwardConfigs.size()));
+            auto hostPorts = PortManager::GetInstance().RequestPorts(
+                runtimeID, static_cast<int>(forwardConfigs.size()));
             if (hostPorts.size() == forwardConfigs.size()) {
                 // Format for runtime_launcher: "protocol:hostPort:containerPort" (e.g., "tcp:40001:8080")
                 for (size_t i = 0; i < forwardConfigs.size(); ++i) {
@@ -799,7 +790,7 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
             }
         }
     }
-     runtime::v1::Mount mount;
+    runtime::v1::Mount mount;
     auto workingRoot = BuildBootstrapWorkingRoot(request, mount);
     if (mount.source().length() > 0 && mount.target().length() > 0) {
         *start->add_mounts() = mount;
@@ -894,13 +885,14 @@ litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::OnCheckpoi
         return response;
     }
 
-    YRLOG_INFO("{}|checkpoint created successfully, uploading to storage: {} with ttl: {}", requestID, checkpointID, ttl);
+    YRLOG_INFO("{}|checkpoint created successfully, uploading to storage: {} with ttl: {}",
+               requestID, checkpointID, ttl);
 
     // Register checkpoint (upload and register in ckptFileManager)
     ASSERT_IF_NULL(ckptFileManager_);
     return ckptFileManager_->RegisterCheckpoint(checkpointID, checkpointPath, checkpointID, ttl)
         .Then(litebus::Defer(GetAID(), &ContainerExecutor::OnRegisterCheckpoint,
-                                std::placeholders::_1, response, requestID, checkpointID, runtimeID, ttl));
+                             std::placeholders::_1, response, requestID, checkpointID, runtimeID, ttl));
 }
 
 litebus::Future<messages::SnapshotRuntimeResponse> ContainerExecutor::OnRegisterCheckpoint(
@@ -1051,9 +1043,6 @@ litebus::Future<Status> ContainerExecutor::OnDeleteContainer(const std::string &
         PortManager::GetInstance().ReleasePorts(runtimeID);
         (void)runtime2portMappings_.erase(portMappingsIter);
     }
-    // if (oomKilled) {
-    //     innerOomKilledruntimes_.insert(runtimeID);
-    // }
     return Status::OK();
 }
 
@@ -1139,7 +1128,7 @@ litebus::Future<messages::UpdateCredResponse> ContainerExecutor::UpdateCredForRu
     return response;
 }
 
- bool ContainerExecutor::IsRuntimeActive(const std::string &runtimeID)
+bool ContainerExecutor::IsRuntimeActive(const std::string &runtimeID)
 {
     return runtime2containerID_.find(runtimeID) != runtime2containerID_.end();
 }
@@ -1348,7 +1337,7 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnAddReferen
         YRLOG_ERROR("{}|{}|failed to add reference for checkpoint {}: {}",
                     info.traceid(), info.requestid(), checkpointID, refStatus.RawMessage());
         return GenFailStartInstanceResponse(request, StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED,
-                                           "Failed to add checkpoint reference: " + refStatus.RawMessage());
+                                            "Failed to add checkpoint reference: " + refStatus.RawMessage());
     }
 
     // Track checkpoint reference for this runtime

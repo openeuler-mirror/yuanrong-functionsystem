@@ -296,7 +296,7 @@ std::string StdRedirector::GetStdLog(const std::string &logFile, const std::stri
     fin.seekg(0);
     fin.close();
     YRLOG_DEBUG("got {} line of runtime {} standard {} output: {} in {} lines", errorLine, runtimeID, level, errMsg,
-               readLineCnt);
+                readLineCnt);
     return errMsg;
 }
 

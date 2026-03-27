@@ -41,10 +41,10 @@ bool RequiredAntiFilter(const std::string &unitID, const affinity::Selector &sel
                         const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
 
 double AffinityScorer(const std::string &unitID, const affinity::Selector &selector,
-                       const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
+                      const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
 
 double AntiAffinityScorer(const std::string &unitID, const affinity::Selector &selector,
-                           const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
+                          const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels);
 
 bool IsResourceRequiredAffinityPassed(
     const std::string &unitID, const resource_view::InstanceInfo &instance,

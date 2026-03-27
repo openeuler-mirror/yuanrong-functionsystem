@@ -92,11 +92,14 @@ std::string Base64UrlDecode(const std::string &input)
     // Replace _ with /
     std::replace(base64.begin(), base64.end(), '_', '/');
     // Add padding if needed
-    switch (base64.length() % 4) {
-        case 2:
+    constexpr size_t kBase64BlockSize = 4;
+    constexpr size_t kBase64TwoCharRemainder = 2;
+    constexpr size_t kBase64ThreeCharRemainder = 3;
+    switch (base64.length() % kBase64BlockSize) {
+        case kBase64TwoCharRemainder:
             base64 += "==";
             break;
-        case 3:
+        case kBase64ThreeCharRemainder:
             base64 += "=";
             break;
         default:

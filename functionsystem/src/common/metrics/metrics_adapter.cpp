@@ -178,7 +178,7 @@ std::shared_ptr<MetricsExporters::Exporter> MetricsAdapter::InitHttpExporter(con
         if (initConfigJson.find("ip") != initConfigJson.end()) {
             ip = initConfigJson.at("ip").get<std::string>();
         }
-        if ( !ip.empty() && initConfigJson.find("port") != initConfigJson.end()) {
+        if (!ip.empty() && initConfigJson.find("port") != initConfigJson.end()) {
             initConfigJson["endpoint"] =
                 ip + ":" + std::to_string(initConfigJson.at("port").get<int>());
         }
@@ -217,7 +217,6 @@ std::shared_ptr<MetricsExporters::Exporter> MetricsAdapter::InitOtelExporter(
     std::string initConfig;
     if (exporterValue.find("initConfig") != exporterValue.end()) {
         auto initConfigJson = exporterValue.at("initConfig");
-
         // Set default endpoint if not provided
         if (initConfigJson.find("endpoint") == initConfigJson.end()) {
             initConfigJson["endpoint"] = "http://localhost:4318/v1/metrics";
@@ -230,7 +229,8 @@ std::shared_ptr<MetricsExporters::Exporter> MetricsAdapter::InitOtelExporter(
 
         // Set default timeout if not provided
         if (initConfigJson.find("timeout") == initConfigJson.end()) {
-            initConfigJson["timeout"] = 10000;  // 10 seconds
+            constexpr int kDefaultTimeoutMs = 10000;  // 10 seconds
+            initConfigJson["timeout"] = kDefaultTimeoutMs;
         }
 
         // Add service.name attribute as header for OTLP

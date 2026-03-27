@@ -125,7 +125,8 @@ void MetricsActor::AddCpuMemoryAndLabelCollectors(const Flags &flags)
     } else if (metricsConfig_.metricsCollectorType == "external") {
         auto curlActorRef = CurlHelper::NewCurlHelper();
         systemCPUCollector = std::make_shared<ExternalSystemCPUCollector>(metricsConfig_.procMetricsCPU, curlActorRef);
-        systemMemoryCollector = std::make_shared<ExternalSystemMemoryCollector>(metricsConfig_.procMetricsMemory, curlActorRef);
+        systemMemoryCollector = std::make_shared<ExternalSystemMemoryCollector>(
+            metricsConfig_.procMetricsMemory, curlActorRef);
     } else {
         systemCPUCollector = std::make_shared<SystemCPUCollector>(procFSTools_);
         systemMemoryCollector = std::make_shared<SystemMemoryCollector>(procFSTools_);

@@ -71,7 +71,7 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
                                currentSessionId, peer);
                     if (!streamCtx->instanceID.empty()) {
                         litebus::Async(instanceCtrlAid_, &local_scheduler::InstanceCtrlActor::SessionCountDelta,
-                                      streamCtx->instanceID, -1);
+                                       streamCtx->instanceID, -1);
                         streamCtx->instanceID.clear();
                     }
                     litebus::Async(sessionAid, &ExecSessionActor::DoClose);
@@ -90,7 +90,7 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
                 AddSession(currentSessionId, sessionAid);
                 if (!request.start_request().instance_id().empty()) {
                     litebus::Async(instanceCtrlAid_, &local_scheduler::InstanceCtrlActor::SessionCountDelta,
-                                  request.start_request().instance_id(), 1);
+                                   request.start_request().instance_id(), 1);
                 }
 
                 SendStatusResponse(stream, currentSessionId, ExecStatusResponse::STARTED);
@@ -118,7 +118,7 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
     }
 
     YRLOG_INFO("ExecStream read loop exited, peer: {}, sessionCount: {}, currentSessionId: {}",
-                peer, GetActiveSessionCount(), currentSessionId);
+               peer, GetActiveSessionCount(), currentSessionId);
 
     // Log all active sessions before closing
     {
@@ -130,7 +130,7 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
     }
 
     YRLOG_INFO("ExecStream connection closed, peer: {}, sessionCount: {}, currentSessionId: {}",
-                peer, GetActiveSessionCount(), currentSessionId);
+               peer, GetActiveSessionCount(), currentSessionId);
 
     // Mark stream as invalid before cleanup
     streamValid->store(false);
@@ -142,7 +142,7 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
         // Decrement instance session count if instanceID was set
         if (!streamCtx->instanceID.empty()) {
             litebus::Async(instanceCtrlAid_, &local_scheduler::InstanceCtrlActor::SessionCountDelta,
-                          streamCtx->instanceID, -1);
+                           streamCtx->instanceID, -1);
         } else {
             YRLOG_DEBUG("session({}) cleanup already handled, skip decrement", currentSessionId);
         }
@@ -194,7 +194,7 @@ void ExecStreamService::WriteToStream(StreamContextPtr streamCtx, const std::str
         YRLOG_INFO("WriteToStream: process exited, sessionId: {}, exitCode: {}", sessionId, exitCode);
         if (!streamCtx->instanceID.empty()) {
             litebus::Async(instanceCtrlAid_, &local_scheduler::InstanceCtrlActor::SessionCountDelta,
-                          streamCtx->instanceID, -1);
+                           streamCtx->instanceID, -1);
             // Clear instanceID so ExecStream's read-loop cleanup skips the double-decrement.
             streamCtx->instanceID.clear();
         } else {
@@ -244,7 +244,6 @@ GrpcStatus ExecStreamService::HandleStartRequest(const std::string &clientSessio
 
     std::vector<std::string> command(request.command().begin(), request.command().end());
     auto env = std::map<std::string, std::string>(request.env().begin(), request.env().end());
-
     if (request.tty() && env.find("TERM") == env.end()) {
         env["TERM"] = "xterm";
     }
