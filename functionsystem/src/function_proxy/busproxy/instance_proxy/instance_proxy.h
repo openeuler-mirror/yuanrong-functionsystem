@@ -16,12 +16,14 @@
 
 #ifndef FUNCTION_PROXY_BUSPROXY_INSTANCE_PROXY_INSTANCE_PROXY_H
 #define FUNCTION_PROXY_BUSPROXY_INSTANCE_PROXY_INSTANCE_PROXY_H
+#include <cstddef>
 #include <memory>
 #include <unordered_map>
 
 #include "actor/actor.hpp"
 #include "async/future.hpp"
 #include "common/constants/actor_name.h"
+#include "common/lru/thread_safe_lru_cache.h"
 #include "common/proto/pb/posix_pb.h"
 #include "common/utils/request_sync_helper.h"
 #include "function_proxy/busproxy/instance_proxy/forward_interface.h"
@@ -77,6 +79,11 @@ public:
 
     void DeleteRemoteDispatcher(const std::string &instanceID);
 
+    void EvictRoute(const std::string &instanceID)
+    {
+        routeCache_.Remove(instanceID);
+    }
+
     bool Delete();
 
     static void BindObserver(const std::shared_ptr<function_proxy::DataPlaneObserver> &observer)
@@ -93,6 +100,21 @@ private:
                      const std::shared_ptr<RequestDispatcher> &dispatcher);
     void OnForwardCall(const litebus::Future<SharedStreamMsg> &callRspFut, const litebus::AID &from,
                        const SharedStreamMsg &callReq, const std::shared_ptr<RequestDispatcher> &dispatcher);
+    litebus::Future<SharedStreamMsg> ForwardWithRouteAndFallback(const litebus::AID &remoteAID,
+                                                                 const std::string &dstInstanceID,
+                                                                 const CallerInfo &callerInfo,
+                                                                 const SharedStreamMsg &request);
+    void OnForwardResult(const std::string &dstInstanceID, const std::string &originalMessageID,
+                         const CallerInfo &callerInfo, const SharedStreamMsg &request,
+                         std::shared_ptr<litebus::Promise<SharedStreamMsg>> promise,
+                         const litebus::Future<SharedStreamMsg> &future);
+    void OnQueryRouteResult(const std::string &dstInstanceID, const std::string &originalMessageID,
+                            const CallerInfo &callerInfo, const SharedStreamMsg &request,
+                            std::shared_ptr<litebus::Promise<SharedStreamMsg>> promise,
+                            const litebus::Future<std::shared_ptr<resources::RouteInfo>> &routeFuture);
+    void OnQueryRouteForwardComplete(const std::string &originalMessageID,
+                                     std::shared_ptr<litebus::Promise<SharedStreamMsg>> promise,
+                                     const litebus::Future<SharedStreamMsg> &future);
 
     void OnForwardCallResult(const litebus::Future<SharedStreamMsg> &callResultAckFut, const litebus::AID &from,
                              const SharedStreamMsg &callResult, const std::string &srcInstance);
@@ -117,6 +139,8 @@ private:
     std::map<std::string, std::shared_ptr<litebus::Promise<SharedStreamMsg>>> forwardCallResultPromises_;
     std::unordered_map<std::string, std::shared_ptr<PerfContext>> perfMap_;
     std::shared_ptr<Perf> perf_;
+    static constexpr size_t ROUTE_CACHE_CAPACITY = 1024;
+    ThreadSafeLruCache<std::string, std::string> routeCache_{ROUTE_CACHE_CAPACITY};
     // callresult subscribe failed times
     std::unordered_map<std::string, uint32_t> failedSubDstRouteOnCallResult_;
 };

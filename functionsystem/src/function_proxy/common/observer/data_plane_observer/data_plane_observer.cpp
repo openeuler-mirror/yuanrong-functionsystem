@@ -29,6 +29,15 @@ litebus::Future<Status> DataPlaneObserver::SubscribeInstanceEvent(const std::str
                           targetInstance, ignoreNonExist);
 }
 
+litebus::Future<std::shared_ptr<resources::RouteInfo>> DataPlaneObserver::QueryInstanceRoute(
+    const std::string &instanceID)
+{
+    if (observerActor_ == nullptr) {
+        return litebus::Future<std::shared_ptr<resources::RouteInfo>>(litebus::Status(-1));
+    }
+    return litebus::Async(observerActor_->GetAID(), &ObserverActor::QueryInstanceRoute, instanceID);
+}
+
 void DataPlaneObserver::NotifyMigratingRequest(const std::string &instanceID)
 {
     RETURN_IF_NULL(observerActor_);
