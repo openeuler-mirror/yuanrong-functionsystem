@@ -41,6 +41,24 @@ const std::map<InstanceState, IsReady> STATUS_READY = {
     { InstanceState::SUSPEND, true },
 };
 
+namespace {
+void RemoveInstanceFromNodeMap(std::unordered_map<std::string, std::unordered_set<std::string>> &nodeInstanceMap,
+                               const std::string &nodeID, const std::string &instanceID)
+{
+    if (nodeID.empty()) {
+        return;
+    }
+    auto iter = nodeInstanceMap.find(nodeID);
+    if (iter == nodeInstanceMap.end()) {
+        return;
+    }
+    iter->second.erase(instanceID);
+    if (iter->second.empty()) {
+        nodeInstanceMap.erase(iter);
+    }
+}
+}  // namespace
+
 const int32_t INT_SIGNAL = 2;
 const int32_t KILL_SIGNAL = 9;
 
@@ -60,6 +78,7 @@ std::shared_ptr<InstanceRouterInfo> TransferInstanceInfo(const resources::Instan
     info->isLocal = instanceInfo.functionproxyid() == currentNode;
     info->runtimeID = instanceInfo.runtimeid();
     info->proxyID = instanceInfo.functionproxyid();
+    info->proxyGrpcAddress = instanceInfo.proxygrpcaddress();
     info->tenantID = instanceInfo.tenantid();
     info->function = instanceInfo.function();
     if (info->isLocal && info->isReady) {
@@ -115,6 +134,10 @@ void InstanceView::Update(const std::string &instanceID, const resources::Instan
                    allInstances_[instanceID].version(), instanceInfo.version());
         return;
     }
+    RemoveInstanceFromNodeMap(nodeInstanceMap_, allInstances_[instanceID].functionproxyid(), instanceID);
+    if (!instanceInfo.functionproxyid().empty()) {
+        nodeInstanceMap_[instanceInfo.functionproxyid()].insert(instanceID);
+    }
     // instance should be subscribed by local parent
     const auto &parentID = instanceInfo.parentid();
     if (auto iter(localInstances_.find(parentID)); iter != localInstances_.end()) {
@@ -138,6 +161,9 @@ void InstanceView::Update(const std::string &instanceID, const resources::Instan
 void InstanceView::Delete(const std::string &instanceID, int64_t)
 {
     YRLOG_DEBUG("instance view delete instance({})", instanceID);
+    if (auto iter = allInstances_.find(instanceID); iter != allInstances_.end()) {
+        RemoveInstanceFromNodeMap(nodeInstanceMap_, iter->second.functionproxyid(), instanceID);
+    }
     (void)allInstances_.erase(instanceID);
     // delete local instance proxy
     if (localInstances_.find(instanceID) != localInstances_.end()) {
@@ -374,6 +400,23 @@ void InstanceView::NotifyMigratingRequest(const std::string &instanceID)
         (void)subscribedInstances_[subscribed].erase(instanceID);
     }
     (void)subscribers_.erase(instanceID);
+}
+
+void InstanceView::OnNodeAbnormal(const std::string &nodeID)
+{
+    auto iter = nodeInstanceMap_.find(nodeID);
+    if (iter == nodeInstanceMap_.end()) {
+        return;
+    }
+
+    auto affectedInstances = iter->second;
+    for (const auto &instanceEntry : localInstances_) {
+        ASSERT_IF_NULL(instanceEntry.second);
+        for (const auto &instanceID : affectedInstances) {
+            litebus::Async(instanceEntry.second->GetAID(), &InstanceProxy::EvictRoute, instanceID);
+        }
+    }
+    nodeInstanceMap_.erase(iter);
 }
 
 void InstanceView::TerminateMigratedInstanceProxy(const std::string &instanceID)
