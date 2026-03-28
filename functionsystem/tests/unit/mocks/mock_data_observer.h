@@ -33,6 +33,8 @@ public:
 
     MOCK_METHOD(litebus::Future<Status>, SubscribeInstanceEvent,
                 (const std::string &subscriber, const std::string &targetInstance, bool ignoreNonExist), (override));
+    MOCK_METHOD((litebus::Future<std::shared_ptr<resources::RouteInfo>>),
+                QueryInstanceRoute, (const std::string &instanceID), (override));
 };
 
 }  // namespace functionsystem::test
