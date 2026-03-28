@@ -31,6 +31,7 @@ const uint32_t CREATE_AGENT_RETRY_TIMES = 3;
 const uint32_t MAX_RETRY_SCHEDULE_TIMES = 0;
 using ScheduleResult = schedule_decision::ScheduleResult;
 using Scheduler = schedule_decision::Scheduler;
+
 litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::Schedule(
     const std::shared_ptr<messages::ScheduleRequest> &req)
 {
@@ -71,12 +72,18 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     }
 
     trace::TraceManager::SpanParam param;
-    param.spanName = "DomainSchedule";
+    param.spanName = trace::SpanName::kDomainSchedule;
     param.spanKey = req->requestid();
     param.traceID = req->traceid();
+    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        req->instance().createoptions(), &req->instance().scheduleoption().extension());
     param.function = req->instance().function();
     param.instanceID = req->instance().instanceid();
-    trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    trace::TraceManager::PropagateSpanToOptions(span,
+                                                req->mutable_instance()->mutable_createoptions(),
+                                                req->mutable_instance()->mutable_scheduleoption()
+                                                    ->mutable_extension());
 
     YRLOG_INFO("instance(req={}, priority={}, timeout={}, enableHorizontalScale={}) schedule decision",
                requestID, req->instance().scheduleoption().priority(), timeout, enableHorizontalScale_);
@@ -116,7 +123,7 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     uint32_t dispatchTimes)
 {
         // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("DomainSchedule", req->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kDomainSchedule, req->requestid());
 
     schedulerQueueMap_.erase(req->requestid());
     auto schedResult = result.Get();
