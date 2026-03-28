@@ -43,6 +43,7 @@
 #include "common/utils/random_number.h"
 #include "common/utils/struct_transfer.h"
 #include "common/trace/trace_manager.h"
+#include "function_proxy/config/direct_routing_config.h"
 #include "instance_ctrl_message.h"
 #include "local_scheduler/snap_ctrl/snap_ctrl.h"
 #include "common/posix_client/control_plane_client/control_interface_posix_client.h"
@@ -2746,6 +2747,13 @@ litebus::Future<CallResultAck> InstanceCtrlActor::SendNotifyResult(
     notifyRequest.mutable_stacktraceinfos()->Swap(callResult->mutable_stacktraceinfos());
     if (callResult->has_runtimeinfo()) {
         notifyRequest.mutable_runtimeinfo()->Swap(callResult->mutable_runtimeinfo());
+    }
+    if (function_proxy::DirectRoutingConfig::IsEnabled()) {
+        ASSERT_IF_NULL(instanceControlView_);
+        auto stateMachine = instanceControlView_->GetInstance(callResult->instanceid());
+        if (stateMachine != nullptr && !stateMachine->GetInstanceInfo().proxygrpcaddress().empty()) {
+            notifyRequest.mutable_readyinstance()->CopyFrom(stateMachine->GetInstanceInfo());
+        }
     }
     auto promise = std::make_shared<litebus::Promise<CallResultAck>>();
     YRLOG_INFO("{}|ready to notify create result to instance({})", requestID, instanceID);
@@ -6013,7 +6021,7 @@ CreateCallResultCallBack InstanceCtrlActor::RegisterCreateCallResultCallback(
             return ack;
         }
         auto instanceInfo = request->instance();
-        if (instanceInfo.lowreliability()) {
+        if (instanceInfo.lowreliability() || function_proxy::DirectRoutingConfig::IsEnabled()) {
             callResult->mutable_runtimeinfo()->set_route(aid.Url());
         }
         if (callResult->code() == common::ErrorCode::ERR_NONE && stateMachine != nullptr &&
@@ -6599,4 +6607,3 @@ litebus::Future<Status> InstanceCtrlActor::UnregisterTraefikRoute(const std::str
         });
 }
 }  // namespace functionsystem::local_scheduler
-
