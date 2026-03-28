@@ -29,10 +29,12 @@
 #include "common/utils/meta_store_kv_operation.h"
 #include "common/utils/struct_transfer.h"
 #include "common/utils/tenant.h"
+#include "function_proxy/config/direct_routing_config.h"
 
 namespace functionsystem::function_proxy {
 const int32_t WATCH_TIMEOUT_MS = 30000;
 const int32_t QUERY_ETCD_INTERVAL = 60000;
+const std::string ABNORMAL_SCHEDULER_PATH_PREFIX = "/yr/abnormal/localscheduler/";
 using messages::RuleType;
 
 Status ObserverActor::Register()
@@ -100,7 +102,7 @@ Status ObserverActor::Register()
             functionMetaSyncer)
         .After(WATCH_TIMEOUT_MS, after);
 
-    if (!isPartialWatchInstances_) {
+    if (!isPartialWatchInstances_ && !DirectRoutingConfig::IsEnabled()) {
         YRLOG_INFO("Register watch with prefix: {}", INSTANCE_ROUTE_PATH_PREFIX);
         watchOpt = WatchOption{ true, false, synced.second + 1, true };
         (void)metaStorageAccessor_
@@ -114,7 +116,42 @@ Status ObserverActor::Register()
                 instanceInfoSyncer)
             .After(WATCH_TIMEOUT_MS, after);
     }
+
+    if (DirectRoutingConfig::IsEnabled()) {
+        YRLOG_INFO("Register watch with prefix: {}", ABNORMAL_SCHEDULER_PATH_PREFIX);
+        watchOpt = WatchOption{ .prefix = true, .prevKv = true, .revision = 0, .keepRetry = true };
+        (void)metaStorageAccessor_
+            ->RegisterObserver(
+                ABNORMAL_SCHEDULER_PATH_PREFIX, watchOpt,
+                [aid(GetAID())](const std::vector<WatchEvent> &events, bool) {
+                    auto respCopy = events;
+                    litebus::Async(aid, &ObserverActor::OnNodeAbnormalEvent, respCopy);
+                    return true;
+                },
+                nullptr)
+            .After(WATCH_TIMEOUT_MS, after);
+    }
     return Status::OK();
+}
+
+void ObserverActor::OnNodeAbnormalEvent(const std::vector<WatchEvent> &events)
+{
+    for (const auto &event : events) {
+        if (event.eventType != EVENT_TYPE_PUT) {
+            continue;
+        }
+
+        auto eventKey = TrimKeyPrefix(event.kv.key(), metaStorageAccessor_->GetMetaClient()->GetTablePrefix());
+        if (eventKey.find(ABNORMAL_SCHEDULER_PATH_PREFIX) != 0) {
+            continue;
+        }
+        auto nodeID = eventKey.substr(ABNORMAL_SCHEDULER_PATH_PREFIX.size());
+        if (nodeID.empty()) {
+            continue;
+        }
+        YRLOG_WARN("receive abnormal scheduler event for node({})", nodeID);
+        instanceView_->OnNodeAbnormal(nodeID);
+    }
 }
 
 void ObserverActor::OnTenantInstanceEvent(const std::string &instanceID,
@@ -1225,6 +1262,21 @@ SyncResult ObserverActor::OnSyncer(const std::shared_ptr<GetResponse> &getRespon
         events.emplace_back(event);
     }
     return SyncResult{ Status::OK() };
+}
+
+litebus::Future<std::shared_ptr<resources::RouteInfo>> ObserverActor::QueryInstanceRoute(const std::string &instanceID)
+{
+    return GetInstanceRouteInfo(instanceID)
+        .Then([](const litebus::Future<resource_view::InstanceInfo> &future)
+                  -> litebus::Future<std::shared_ptr<resources::RouteInfo>> {
+            if (future.IsError()) {
+                return litebus::Future<std::shared_ptr<resources::RouteInfo>>(litebus::Status(-1));
+            }
+
+            auto routeInfo = std::make_shared<resources::RouteInfo>();
+            TransToRouteInfoFromInstanceInfo(future.Get(), *routeInfo);
+            return routeInfo;
+        });
 }
 
 litebus::Future<resource_view::InstanceInfo> ObserverActor::GetInstanceRouteInfo(const std::string &instanceID)
