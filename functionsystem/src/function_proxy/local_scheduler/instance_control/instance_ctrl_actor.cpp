@@ -699,6 +699,36 @@ litebus::Future<std::shared_ptr<KillContext>> InstanceCtrlActor::SignalRoute(
         return killCtx;
     }
 
+    // DR mode: if KillRequest contains routing info, use it directly
+    if (function_proxy::DirectRoutingConfig::IsEnabled() && !killCtx->killRequest->routeaddress().empty()) {
+        if (killCtx->killRequest->proxyid() == nodeID_) {
+            killCtx->isLocal = true;
+            killCtx->killRsp = GenKillResponse(common::ErrorCode::ERR_NONE, "");
+            return killCtx;
+        }
+
+        YRLOG_INFO("{}|(kill)DR mode forwarding kill({}) to owner proxy({})", killCtx->killRequest->requestid(),
+                   killCtx->killRequest->instanceid(), killCtx->killRequest->proxyid());
+        litebus::AID ownerAID(
+            killCtx->killRequest->proxyid() + LOCAL_SCHED_INSTANCE_CTRL_ACTOR_NAME_POSTFIX,
+            killCtx->killRequest->routeaddress());
+        return SendForwardCustomSignalRequest(litebus::Option<litebus::AID>(ownerAID), killCtx->srcInstanceID,
+                                              killCtx->killRequest, killCtx->killRequest->requestid(), false)
+            .Then([killCtx](const KillResponse &rsp) {
+                killCtx->isLocal = false;
+                killCtx->killRsp = rsp;
+                return killCtx;
+            });
+    }
+
+    // Fallback: check instance ownership from instanceContext
+    if (killCtx->instanceContext == nullptr) {
+        YRLOG_ERROR("{}|(kill)DR mode: no route info and no state machine for instance({})",
+                    killCtx->killRequest->requestid(), killCtx->killRequest->instanceid());
+        killCtx->killRsp = GenKillResponse(common::ErrorCode::ERR_INTERNAL, "no route info for DR kill");
+        return killCtx;
+    }
+
     auto &instanceInfo = killCtx->instanceContext->GetInstanceInfo();
     if (instanceInfo.functionproxyid() != nodeID_) {
         killCtx->isLocal = false;

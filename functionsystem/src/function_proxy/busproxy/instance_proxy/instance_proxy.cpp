@@ -149,9 +149,29 @@ void InstanceProxy::OnForwardResult(const std::string &dstInstanceID, const std:
                                              originalMessageID));
         return;
     }
-    observer_->QueryInstanceRoute(dstInstanceID)
-        .Then(litebus::Defer(GetAID(), &InstanceProxy::OnQueryRouteResult, dstInstanceID, originalMessageID,
-                             callerInfo, request, promise, std::placeholders::_1));
+    observer_->QueryInstanceRoute(dstInstanceID).Then(
+        [this, dstInstanceID, originalMessageID, callerInfo, request, promise]
+        (const std::shared_ptr<resources::RouteInfo>& route) -> litebus::Future<SharedStreamMsg> {
+            if (route == nullptr || route->proxygrpcaddress().empty()) {
+                YRLOG_ERROR("{}|QueryInstanceRoute failed for instance {}", request->callreq().traceid(), dstInstanceID);
+                promise->SetValue(CreateCallResponse(common::ErrorCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS,
+                                                     "connection with runtime may be interrupted, please retry.",
+                                                     originalMessageID));
+                litebus::Promise<SharedStreamMsg> errorPromise;
+                errorPromise.SetFailed(-1);
+                return errorPromise.GetFuture();
+            }
+
+            routeCache_.Put(dstInstanceID, route->proxygrpcaddress());
+            auto remoteAID = litebus::AID(dstInstanceID, route->proxygrpcaddress());
+            return SendForwardCall(remoteAID, callerInfo.tenantID, request)
+                .Then([originalMessageID, promise](const SharedStreamMsg& rsp) -> SharedStreamMsg {
+                    auto msg = rsp;
+                    msg->set_messageid(originalMessageID);
+                    promise->SetValue(msg);
+                    return msg;
+                });
+        });
 }
 
 void InstanceProxy::OnQueryRouteResult(const std::string &dstInstanceID, const std::string &originalMessageID,
@@ -170,7 +190,7 @@ void InstanceProxy::OnQueryRouteResult(const std::string &dstInstanceID, const s
     const auto &route = routeFuture.Get()->proxygrpcaddress();
     routeCache_.Put(dstInstanceID, route);
     auto remoteAID = litebus::AID(dstInstanceID, route);
-    SendForwardCall(remoteAID, callerInfo.tenantID, request)
+    (void)SendForwardCall(remoteAID, callerInfo.tenantID, request)
         .OnComplete(litebus::Defer(GetAID(), &InstanceProxy::OnQueryRouteForwardComplete, originalMessageID,
                                    promise, std::placeholders::_1));
 }
