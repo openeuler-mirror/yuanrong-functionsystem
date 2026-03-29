@@ -59,7 +59,7 @@ public:
 
     void SetEnableFakeSuspendResume(bool enable)
     {
-        member_->enableFakeSuspendResume_ = enable;
+        member_->enableFakeSuspendResume = enable;
     }
 
     void UpdateLeaderInfo(const explorer::LeaderInfo &leaderInfo)
@@ -226,7 +226,7 @@ protected:
         std::shared_ptr<functionsystem::global_scheduler::GlobalSched> globalScheduler{ nullptr };
         std::unordered_set<std::string> killingGroups;
         std::unordered_map<std::string, std::shared_ptr<litebus::Promise<Status>>> killRspPromises;
-        bool enableFakeSuspendResume_{ false };
+        bool enableFakeSuspendResume{ false };
     };
 
 protected:
@@ -336,7 +336,7 @@ protected:
         litebus::Future<Status> ReScheduleGroup(const std::string &groupID);
 
         void FakeResumeGroup(const litebus::AID &from, const std::string &groupID,
-                           const std::string &requestID, const std::string &srcInstanceID);
+                             const std::string &requestID);
 
         litebus::Future<Status> DirectedResumeGroup(const std::string &groupID);
 

@@ -403,6 +403,12 @@ public:
                                             const litebus::Option<FunctionMeta> &functionMeta,
                                             const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
     litebus::Future<Status> ToSuspend(const std::string &instanceID);
+    litebus::Future<Status> HandleFakeSuspendTransition(const std::shared_ptr<InstanceStateMachine> &stateMachine,
+                                                        const std::string &instanceID,
+                                                        const TransitionResult &result);
+    litebus::Future<Status> HandleNormalSuspendTransition(const std::shared_ptr<InstanceStateMachine> &stateMachine,
+                                                          const std::string &instanceID,
+                                                          const TransitionResult &result);
     litebus::Future<Status> ToResume(const std::string &instanceID);
     litebus::Future<Status> DoLocalResumeInstance(const std::string &instanceID);
     litebus::Future<Status> MakeCheckpoint(const std::string &instanceID);

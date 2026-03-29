@@ -6134,42 +6134,51 @@ litebus::Future<Status> InstanceCtrlActor::ToSuspend(const std::string &instance
                                     true, StatusCode::ERR_INSTANCE_SUSPEND });
 
     if (config_.enableFakeSuspendResume) {
-        // Fake suspend: stop heartbeat and remove from resource view only, no KillRuntime
-        return future.Then([aid(GetAID()), stateMachine, instanceID]
-                (const TransitionResult &result) -> litebus::Future<Status> {
-            if (result.status.IsError()) {
-                return result.status;
-            }
-            litebus::Async(aid, &InstanceCtrlActor::StopHeartbeat, instanceID);
-            YRLOG_INFO("fake suspend instance({}): remove from resource view without killing runtime", instanceID);
-            auto info = stateMachine->GetInstanceInfo();
-            return litebus::Async(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, Status::OK(), info);
-        });
+        return future.Then(litebus::Defer(GetAID(), &InstanceCtrlActor::HandleFakeSuspendTransition, stateMachine,
+                                          instanceID, std::placeholders::_1));
     }
 
-    return future.Then([aid(GetAID()), stateMachine, instanceID, groupInstanceClear(groupInstanceClear_)]
-            (const TransitionResult &result) -> litebus::Future<Status> {
-        if (result.status.IsError()) {
-            return result.status;
-        }
-        litebus::Async(aid, &InstanceCtrlActor::StopHeartbeat, instanceID);
-        YRLOG_INFO("ready to recycle runtime of instance({})", instanceID);
-        auto info = stateMachine->GetInstanceInfo();
-        return litebus::Async(aid, &InstanceCtrlActor::KillRuntime, info, false)
-            .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, std::placeholders::_1, info))
-            .Then([aid, instanceInfo(info), groupInsClear(groupInstanceClear)]
-                    (const Status &status) -> litebus::Future<Status> {
-                if (status.IsError()) {
-                    return status;
-                }
-                // Delete the reserved resource information corresponding to the group instance
-                // bound to the local node when instance suspend.
-                if (!instanceInfo.groupid().empty() && groupInsClear != nullptr) {
-                    groupInsClear(instanceInfo);
-                }
-                return Status::OK();
-            });
-    });
+    return future.Then(litebus::Defer(GetAID(), &InstanceCtrlActor::HandleNormalSuspendTransition, stateMachine,
+                                      instanceID, std::placeholders::_1));
+}
+
+litebus::Future<Status> InstanceCtrlActor::HandleFakeSuspendTransition(
+    const std::shared_ptr<InstanceStateMachine> &stateMachine, const std::string &instanceID,
+    const TransitionResult &result)
+{
+    if (result.status.IsError()) {
+        return result.status;
+    }
+    StopHeartbeat(instanceID);
+    YRLOG_INFO("fake suspend instance({}): remove from resource view without killing runtime", instanceID);
+    auto info = stateMachine->GetInstanceInfo();
+    return DeleteInstanceInResourceView(Status::OK(), info);
+}
+
+litebus::Future<Status> InstanceCtrlActor::HandleNormalSuspendTransition(
+    const std::shared_ptr<InstanceStateMachine> &stateMachine, const std::string &instanceID,
+    const TransitionResult &result)
+{
+    if (result.status.IsError()) {
+        return result.status;
+    }
+    StopHeartbeat(instanceID);
+    YRLOG_INFO("ready to recycle runtime of instance({})", instanceID);
+    auto info = stateMachine->GetInstanceInfo();
+    return KillRuntime(info, false)
+        .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::DeleteInstanceInResourceView, std::placeholders::_1, info))
+        .Then([instanceInfo(info), groupInsClear(groupInstanceClear_)](
+                  const Status &status) -> litebus::Future<Status> {
+            if (status.IsError()) {
+                return status;
+            }
+            // Delete the reserved resource information corresponding to the group instance
+            // bound to the local node when instance suspend.
+            if (!instanceInfo.groupid().empty() && groupInsClear != nullptr) {
+                groupInsClear(instanceInfo);
+            }
+            return Status::OK();
+        });
 }
 
 litebus::Future<Status> InstanceCtrlActor::MakeCheckpoint(const std::string &instanceID)
@@ -6219,7 +6228,8 @@ litebus::Future<Status> InstanceCtrlActor::DoLocalResumeInstance(const std::stri
     auto state = stateMachine->GetInstanceState();
     if (state != InstanceState::SUSPEND) {
         return Status(StatusCode::ERR_STATE_MACHINE_ERROR,
-                      fmt::format("instance({}) is not in SUSPEND state, current state: {}", instanceID, fmt::underlying(state)));
+                      fmt::format("instance({}) is not in SUSPEND state, current state: {}", instanceID,
+                                  fmt::underlying(state)));
     }
 
     auto transContext = TransContext{ InstanceState::RUNNING, stateMachine->GetVersion(), "running" };
