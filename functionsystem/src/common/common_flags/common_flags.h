@@ -261,6 +261,11 @@ public:
     {
         return enablePreemption_;
     }
+
+    bool GetEnableFakeSuspendResume() const
+    {
+        return enableFakeSuspendResume_;
+    }
 protected:
     void InitMetaHealthyCheckFlag();
     void InitMetricsFlag();
@@ -317,6 +322,7 @@ protected:
     std::string resourcePath_;
     int32_t scheduleRelaxed_;
     bool enablePreemption_;
+    bool enableFakeSuspendResume_;
 };
 
 }  // namespace functionsystem

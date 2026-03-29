@@ -240,6 +240,7 @@ public:
     {
         return domainHeartbeatTimeoutMs_;
     }
+
 protected:
     void InitScalerFlags();
     void InitMetaStoreFlags();

@@ -51,7 +51,8 @@ static const std::unordered_map<InstanceState, std::unordered_set<InstanceState>
     { InstanceState::SCHEDULE_FAILED, { InstanceState::SCHEDULING, InstanceState::EXITING } },
     { InstanceState::EVICTED, { InstanceState::EXITING, InstanceState::FATAL } },
     { InstanceState::SUSPEND,
-      { InstanceState::CREATING, InstanceState::SCHEDULING, InstanceState::FATAL, InstanceState::EXITING } },
+      { InstanceState::CREATING, InstanceState::SCHEDULING, InstanceState::RUNNING,
+        InstanceState::FATAL, InstanceState::EXITING } },
 };
 
 /**

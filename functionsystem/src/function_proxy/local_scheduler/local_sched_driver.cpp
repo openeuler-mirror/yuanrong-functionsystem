@@ -94,6 +94,7 @@ Status LocalSchedDriver::Create()
     config.isPartialWatchInstances = param_.isPartialWatchInstances;
     config.maxPriority = param_.maxPriority;
     config.enablePreemption = param_.enablePreemption;
+    config.enableFakeSuspendResume = param_.enableFakeSuspendResume;
     instanceCtrl_ = InstanceCtrl::Create(param_.nodeID, config);
     PosixAPIHandler::BindInstanceCtrl(instanceCtrl_);
     PosixAPIHandler::BindControlClientManager(param_.controlInterfacePosixMgr);

@@ -331,7 +331,8 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .isPartialWatchInstances = flags.IsPartialWatchInstances(),
         .distributedCacheClient = g_commonDriver->GetDistributedCacheClient(),
         .runtimeInstanceDebugEnable = flags.IsRuntimeInstanceDebugEnable(),
-        .unRegisterWhileStop = flags.UnRegisterWhileStop()
+        .unRegisterWhileStop = flags.UnRegisterWhileStop(),
+        .enableFakeSuspendResume = flags.GetEnableFakeSuspendResume()
     };
 }
 

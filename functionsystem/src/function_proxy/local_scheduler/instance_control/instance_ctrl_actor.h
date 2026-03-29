@@ -149,6 +149,7 @@ struct InstanceCtrlConfig {
     // schedule max priority
     uint16_t maxPriority {0};
     bool enablePreemption {false};
+    bool enableFakeSuspendResume {false};
 };
 
 class InstanceCtrlActor : public BasisActor {
@@ -403,6 +404,7 @@ public:
                                             const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
     litebus::Future<Status> ToSuspend(const std::string &instanceID);
     litebus::Future<Status> ToResume(const std::string &instanceID);
+    litebus::Future<Status> DoLocalResumeInstance(const std::string &instanceID);
     litebus::Future<Status> MakeCheckpoint(const std::string &instanceID);
     void DoCheckpoint(const std::string &instanceID, const litebus::Promise<Status> &promise, uint32_t retryTimes = 3);
     litebus::Future<Status> ToScheduling(const std::shared_ptr<messages::ScheduleRequest> &req);
