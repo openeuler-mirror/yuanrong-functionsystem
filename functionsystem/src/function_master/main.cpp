@@ -349,6 +349,7 @@ bool InitInstanceManagerDriver(const functionmaster::Flags &flags, const std::sh
                                const std::shared_ptr<MetaStoreMonitor> &metaStoreMonitor)
 {
     auto groupMgrActor = std::make_shared<::instance_manager::GroupManagerActor>(metaClient, globalSched);
+    groupMgrActor->SetEnableFakeSuspendResume(flags.GetEnableFakeSuspendResume());
     auto groupManager = std::make_shared<::instance_manager::GroupManager>(groupMgrActor);
     auto resourceGroupManager = std::make_shared<::resource_group_manager::ResourceGroupManager>(
         g_resourceGroupManagerDriver->GetResourceGroupManagerActor());

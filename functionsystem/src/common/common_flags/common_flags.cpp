@@ -88,6 +88,8 @@ CommonFlags::CommonFlags()
             "enable the relaxed scheduling policy. When the relaxed number of available nodes or pods is selected, the "
             "scheduling progress exits without traversing all nodes or pods.(default -1)",
             -1);
+    AddFlag(&CommonFlags::enableFakeSuspendResume_, "enable_fake_suspend_resume",
+            "enable fake suspend resume: resume by sending to original owner proxy instead of rescheduling", false);
     InitMetaHealthyCheckFlag();
     InitMetricsFlag();
     InitTraceFlag();

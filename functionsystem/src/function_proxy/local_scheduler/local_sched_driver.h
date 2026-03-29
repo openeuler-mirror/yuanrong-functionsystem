@@ -87,6 +87,7 @@ struct LocalSchedStartParam {
     std::shared_ptr<DSCacheClientImpl> distributedCacheClient;
     bool runtimeInstanceDebugEnable;
     bool unRegisterWhileStop;
+    bool enableFakeSuspendResume{ false };
 };
 
 class LocalSchedDriver : public ModuleDriver {

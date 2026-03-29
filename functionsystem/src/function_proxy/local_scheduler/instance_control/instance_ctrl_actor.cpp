@@ -382,6 +382,11 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(const std::string &s
                 return StatusToKillResponse(status);
             });
         }
+        case INSTANCE_RESUME_SIGNAL: {
+            return ToResume(killReq->instanceid()).Then([](const Status &status) {
+                return StatusToKillResponse(status);
+            });
+        }
         case MIN_USER_SIGNAL_NUM ... MAX_SIGNAL_NUM: {
             return CheckInstanceExist(srcInstanceID, killReq)
                 .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::AuthorizeKill, srcInstanceID, killReq, isSkipAuth))
@@ -6070,14 +6075,20 @@ litebus::Future<Status> InstanceCtrlActor::ToResume(const std::string &instanceI
     auto stateMachine = instanceControlView_->GetInstance(instanceID);
     if (stateMachine == nullptr) {
         return Status(StatusCode::ERR_INSTANCE_NOT_FOUND,
-                      fmt::format("instance({}) not found for suspend", instanceID));
+                      fmt::format("instance({}) not found for resume", instanceID));
     }
     auto state = stateMachine->GetInstanceState();
     RETURN_STATUS_IF_TRUE(state != InstanceState::SUSPEND && state != InstanceState::RUNNING,
                           StatusCode::ERR_STATE_MACHINE_ERROR,
-                          fmt::format("instance({}) is state in ({}), which is not allow to suspend", instanceID,
+                          fmt::format("instance({}) is state in ({}), which is not allow to resume", instanceID,
                                       fmt::underlying(state)));
     RETURN_STATUS_IF_TRUE(state == InstanceState::RUNNING, StatusCode::SUCCESS, "");
+
+    if (config_.enableFakeSuspendResume) {
+        YRLOG_INFO("fake resume enabled, resume instance({}) on current owner proxy", instanceID);
+        return DoLocalResumeInstance(instanceID);
+    }
+
     auto request = stateMachine->GetScheduleRequest();
     auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
     return Schedule(request, runtimePromise).Then([](const ScheduleResponse &resp) {
@@ -6121,30 +6132,53 @@ litebus::Future<Status> InstanceCtrlActor::ToSuspend(const std::string &instance
                       TransContext{ InstanceState::SUSPEND, stateMachine->GetVersion(),
                                     "WARN: instance is already SUSPEND, please resume instance before you invoke it",
                                     true, StatusCode::ERR_INSTANCE_SUSPEND });
-    
-    return future.Then([aid(GetAID()), stateMachine, instanceID, groupInstanceClear(groupInstanceClear_)]
-            (const TransitionResult &result) -> litebus::Future<Status> {
-        if (result.status.IsError()) {
-            return result.status;
-        }
-        litebus::Async(aid, &InstanceCtrlActor::StopHeartbeat, instanceID);
-        YRLOG_INFO("ready to recycle runtime of instance({})", instanceID);
-        auto info = stateMachine->GetInstanceInfo();
-        return litebus::Async(aid, &InstanceCtrlActor::KillRuntime, info, false)
-            .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, std::placeholders::_1, info))
-            .Then([aid, instanceInfo(info), groupInsClear(groupInstanceClear)]
-                    (const Status &status) -> litebus::Future<Status> {
-                if (status.IsError()) {
-                    return status;
-                }
-                // Delete the reserved resource information corresponding to the group instance
-                // bound to the local node when instance suspend.
-                if (!instanceInfo.groupid().empty() && groupInsClear != nullptr) {
-                    groupInsClear(instanceInfo);
-                }
-                return Status::OK();
-            });
-    });
+
+    if (config_.enableFakeSuspendResume) {
+        return future.Then(litebus::Defer(GetAID(), &InstanceCtrlActor::HandleFakeSuspendTransition, stateMachine,
+                                          instanceID, std::placeholders::_1));
+    }
+
+    return future.Then(litebus::Defer(GetAID(), &InstanceCtrlActor::HandleNormalSuspendTransition, stateMachine,
+                                      instanceID, std::placeholders::_1));
+}
+
+litebus::Future<Status> InstanceCtrlActor::HandleFakeSuspendTransition(
+    const std::shared_ptr<InstanceStateMachine> &stateMachine, const std::string &instanceID,
+    const TransitionResult &result)
+{
+    if (result.status.IsError()) {
+        return result.status;
+    }
+    StopHeartbeat(instanceID);
+    YRLOG_INFO("fake suspend instance({}): remove from resource view without killing runtime", instanceID);
+    auto info = stateMachine->GetInstanceInfo();
+    return DeleteInstanceInResourceView(Status::OK(), info);
+}
+
+litebus::Future<Status> InstanceCtrlActor::HandleNormalSuspendTransition(
+    const std::shared_ptr<InstanceStateMachine> &stateMachine, const std::string &instanceID,
+    const TransitionResult &result)
+{
+    if (result.status.IsError()) {
+        return result.status;
+    }
+    StopHeartbeat(instanceID);
+    YRLOG_INFO("ready to recycle runtime of instance({})", instanceID);
+    auto info = stateMachine->GetInstanceInfo();
+    return KillRuntime(info, false)
+        .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::DeleteInstanceInResourceView, std::placeholders::_1, info))
+        .Then([instanceInfo(info), groupInsClear(groupInstanceClear_)](
+                  const Status &status) -> litebus::Future<Status> {
+            if (status.IsError()) {
+                return status;
+            }
+            // Delete the reserved resource information corresponding to the group instance
+            // bound to the local node when instance suspend.
+            if (!instanceInfo.groupid().empty() && groupInsClear != nullptr) {
+                groupInsClear(instanceInfo);
+            }
+            return Status::OK();
+        });
 }
 
 litebus::Future<Status> InstanceCtrlActor::MakeCheckpoint(const std::string &instanceID)
@@ -6183,4 +6217,58 @@ void InstanceCtrlActor::DoCheckpoint(const std::string &instanceID, const litebu
             return Status::OK();
         });
 }
+litebus::Future<Status> InstanceCtrlActor::DoLocalResumeInstance(const std::string &instanceID)
+{
+    ASSERT_IF_NULL(instanceControlView_);
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        return Status(StatusCode::ERR_INSTANCE_NOT_FOUND,
+                      fmt::format("instance({}) not found for local resume", instanceID));
+    }
+    auto state = stateMachine->GetInstanceState();
+    if (state != InstanceState::SUSPEND) {
+        return Status(StatusCode::ERR_STATE_MACHINE_ERROR,
+                      fmt::format("instance({}) is not in SUSPEND state, current state: {}", instanceID,
+                                  fmt::underlying(state)));
+    }
+
+    auto transContext = TransContext{ InstanceState::RUNNING, stateMachine->GetVersion(), "running" };
+    auto instanceInfo = stateMachine->GetInstanceInfo();
+    ASSERT_IF_NULL(resourceViewMgr_);
+    auto type = resource_view::GetResourceType(instanceInfo);
+    return TransInstanceState(stateMachine, transContext)
+        .Then([aid(GetAID()), stateMachine, instanceID, instanceInfo, type, resourceViewMgr(resourceViewMgr_)]
+                  (const TransitionResult &result) -> litebus::Future<Status> {
+            if (result.status.IsError()) {
+                YRLOG_ERROR("failed to transition instance({}) to RUNNING: {}", instanceID, result.status.ToString());
+                return result.status;
+            }
+            return resourceViewMgr->GetInf(type)->AddInstances({ { instanceID, { instanceInfo, nullptr } } })
+                .Then([aid, stateMachine, instanceID, instanceInfo]
+                          (const Status &status) -> litebus::Future<Status> {
+                    if (status.IsError()) {
+                        YRLOG_ERROR("failed to add instance({}) back to resource view: {}", instanceID,
+                                    status.ToString());
+                        auto rollbackContext =
+                            TransContext{ InstanceState::SUSPEND, stateMachine->GetVersion(), "rollback to suspend" };
+                        return litebus::Async(aid, &InstanceCtrlActor::TransInstanceState, stateMachine,
+                                              rollbackContext)
+                            .Then([instanceID, status](const TransitionResult &rollbackResult)
+                                      -> litebus::Future<Status> {
+                                if (rollbackResult.status.IsError()) {
+                                    YRLOG_ERROR("failed to rollback instance({}) to SUSPEND: {}", instanceID,
+                                                rollbackResult.status.ToString());
+                                    return rollbackResult.status;
+                                }
+                                return status;
+                            });
+                    }
+                    litebus::Async(aid, &InstanceCtrlActor::StartHeartbeat, instanceID, 0, instanceInfo.runtimeid(),
+                                   StatusCode::SUCCESS);
+                    YRLOG_INFO("instance({}) resumed successfully, heartbeat restarted", instanceID);
+                    return Status::OK();
+                });
+        });
+}
+
 }  // namespace functionsystem::local_scheduler

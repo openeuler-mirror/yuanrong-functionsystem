@@ -402,7 +402,8 @@ litebus::Future<Status> GroupManagerActor::MasterBusiness::InnerKillGroup(const 
                    promise.SetValue(Status(StatusCode::REQUEST_TIME_OUT, "kill group timeout"));
                    return promise.GetFuture();
                })
-        .Then(litebus::Defer(actor->GetAID(), &GroupManagerActor::ClearGroupInfo, groupID, std::placeholders::_1, true));
+        .Then(litebus::Defer(actor->GetAID(), &GroupManagerActor::ClearGroupInfo, groupID,
+                             std::placeholders::_1, true));
 }
 
 void GroupManagerActor::OnGroupSuspend(const litebus::Future<Status> &future, const litebus::AID &from,
@@ -467,7 +468,7 @@ void GroupManagerActor::MasterBusiness::SuspendGroup(const litebus::AID &from,
     ASSERT_IF_NULL(actor);
     auto &groupID = killGroupReq->groupid();
     auto &requestID = killGroupReq->grouprequestid();
-    auto srcInstanceID = killGroupReq->srcinstanceid();
+    auto &srcInstanceID = killGroupReq->srcinstanceid();
     auto group = member_->groupCaches->GetGroupInfo(groupID);
     if (!group.second) {
         auto reason = fmt::format("group({}) is not found, unable to be suspend", groupID);
@@ -527,8 +528,13 @@ void GroupManagerActor::MasterBusiness::ResumeGroup(const litebus::AID &from,
         return actor->InnerKillInstanceOnComplete(from, groupID, requestID,
                                                   Status(StatusCode::ERR_STATE_MACHINE_ERROR, reason));
     }
-    ReScheduleGroup(groupID).OnComplete(litebus::Defer(actor->GetAID(), &GroupManagerActor::OnGroupResume,
-                                                       std::placeholders::_1, from, groupID, requestID));
+    if (member_->enableFakeSuspendResume) {
+        YRLOG_INFO("enable_fake_suspend_resume is true, using directed resume for group({})", groupID);
+        FakeResumeGroup(from, groupID, requestID);
+    } else {
+        ReScheduleGroup(groupID).OnComplete(litebus::Defer(actor->GetAID(), &GroupManagerActor::OnGroupResume,
+                                                           std::placeholders::_1, from, groupID, requestID));
+    }
 }
 
 void GroupManagerActor::OnGroupResume(const litebus::Future<Status> &future, const litebus::AID &from,
@@ -576,6 +582,137 @@ litebus::Future<Status> GroupManagerActor::MasterBusiness::ReScheduleGroup(const
         .Then([](const messages::GroupResponse &rsp) {
             return Status(static_cast<StatusCode>(rsp.code()), rsp.message());
         });
+}
+
+void GroupManagerActor::MasterBusiness::FakeResumeGroup(
+    const litebus::AID &from,
+    const std::string &groupID,
+    const std::string &requestID)
+{
+    auto actor = actor_.lock();
+    ASSERT_IF_NULL(actor);
+    DirectedResumeGroup(groupID)
+        .OnComplete([this, from, groupID, requestID](const litebus::Future<Status> &future) {
+            OnFakeResumeComplete(future, from, groupID, requestID);
+        });
+}
+
+litebus::Future<Status> GroupManagerActor::MasterBusiness::DirectedResumeGroup(const std::string &groupID)
+{
+    auto actor = actor_.lock();
+    ASSERT_IF_NULL(actor);
+    auto instances = member_->groupCaches->GetGroupInstances(groupID);
+    if (instances.empty()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("group({}) has no instances to resume", groupID));
+    }
+    YRLOG_INFO("directed resume: sending INSTANCE_RESUME_SIGNAL to {} instances of group({})",
+               instances.size(), groupID);
+    auto futures = std::list<litebus::Future<Status>>();
+    for (const auto &inst : instances) {
+        auto killReq = MakeKillReq(inst.second, GROUP_MANAGER_OWNER, INSTANCE_RESUME_SIGNAL,
+                                   fmt::format("directed resume for group({})", groupID));
+        auto promise = std::make_shared<litebus::Promise<Status>>();
+        futures.emplace_back(promise->GetFuture());
+        member_->killRspPromises[killReq->requestid()] = promise;
+        ASSERT_IF_NULL(member_->globalScheduler);
+        member_->globalScheduler->GetLocalAddress(inst.second->functionproxyid())
+            .Then(litebus::Defer(actor->GetAID(), &GroupManagerActor::InnerKillInstance, std::placeholders::_1,
+                                 inst.second, killReq))
+            .OnComplete([this, instInfo(inst.second), reqID(killReq->requestid())](const litebus::Future<Status> &s) {
+                if (!s.IsOK()) {
+                    YRLOG_ERROR("failed to send INSTANCE_RESUME_SIGNAL to instance {}, on proxy {}, in group {}",
+                                instInfo->instanceid(), instInfo->functionproxyid(), instInfo->groupid());
+                    if (auto iter = member_->killRspPromises.find(reqID); iter != member_->killRspPromises.end()) {
+                        iter->second->SetValue(
+                            Status(StatusCode::ERR_INNER_COMMUNICATION, "failed to send resume signal"));
+                        member_->killRspPromises.erase(iter);
+                    }
+                    return;
+                }
+                if (s.Get().IsError()) {
+                    if (auto iter = member_->killRspPromises.find(reqID); iter != member_->killRspPromises.end()) {
+                        iter->second->SetValue(s.Get());
+                        member_->killRspPromises.erase(iter);
+                    }
+                }
+            });
+    }
+    std::string errDescription = fmt::format("directed resume group({}) instances", groupID);
+    return CollectStatus(futures, errDescription);
+}
+
+void GroupManagerActor::MasterBusiness::OnFakeResumeComplete(
+    const litebus::Future<Status> &future,
+    const litebus::AID &from,
+    const std::string &groupID,
+    const std::string &requestID)
+{
+    auto actor = actor_.lock();
+    ASSERT_IF_NULL(actor);
+    if (!future.IsOK()) {
+        YRLOG_ERROR("directed resume future failed for group({})", groupID);
+        return actor->InnerKillInstanceOnComplete(
+            from, groupID, requestID,
+            Status(StatusCode::ERR_INNER_SYSTEM_ERROR,
+                   fmt::format("failed to resume group({}), reason: future failed", groupID)));
+    }
+    auto status = future.Get();
+    if (status.IsError()) {
+        YRLOG_ERROR("directed resume failed for group({}), reason: {}", groupID, status.RawMessage());
+        auto instances = member_->groupCaches->GetGroupInstances(groupID);
+        std::list<std::shared_ptr<resource_view::InstanceInfo>> resumedInstances;
+        for (const auto &inst : instances) {
+            resumedInstances.push_back(inst.second);
+        }
+        RollbackResumedInstances(groupID, resumedInstances);
+        return actor->InnerKillInstanceOnComplete(
+            from, groupID, requestID,
+            Status(status.StatusCode(),
+                   fmt::format("failed to resume group({}), reason:{}", groupID, status.RawMessage())));
+    }
+    PersistentGroupInfo(groupID, GroupState::RUNNING, "group resumed via directed resume")
+        .OnComplete(litebus::Defer(actor->GetAID(), &GroupManagerActor::InnerKillInstanceOnComplete, from, groupID,
+                                   requestID, std::placeholders::_1));
+}
+
+void GroupManagerActor::MasterBusiness::RollbackResumedInstances(
+    const std::string &groupID, const std::list<std::shared_ptr<resource_view::InstanceInfo>> &resumedInstances)
+{
+    auto actor = actor_.lock();
+    ASSERT_IF_NULL(actor);
+    if (resumedInstances.empty()) {
+        YRLOG_INFO("no resumed instances to rollback for group({})", groupID);
+        return;
+    }
+    YRLOG_INFO("rolling back {} resumed instances for group({})", resumedInstances.size(), groupID);
+    for (const auto &inst : resumedInstances) {
+        auto killReq = MakeKillReq(inst, GROUP_MANAGER_OWNER, INSTANCE_TRANS_SUSPEND_SIGNAL,
+                                   fmt::format("rollback resume for group({})", groupID));
+        auto promise = std::make_shared<litebus::Promise<Status>>();
+        member_->killRspPromises[killReq->requestid()] = promise;
+        ASSERT_IF_NULL(member_->globalScheduler);
+        member_->globalScheduler->GetLocalAddress(inst->functionproxyid())
+            .Then(litebus::Defer(actor->GetAID(), &GroupManagerActor::InnerKillInstance, std::placeholders::_1,
+                                 inst, killReq))
+            .OnComplete([this, instInfo(inst), reqID(killReq->requestid())](const litebus::Future<Status> &s) {
+                if (!s.IsOK()) {
+                    YRLOG_ERROR("failed to rollback instance {} on proxy {} in group {}",
+                                instInfo->instanceid(), instInfo->functionproxyid(), instInfo->groupid());
+                    if (auto iter = member_->killRspPromises.find(reqID); iter != member_->killRspPromises.end()) {
+                        iter->second->SetValue(
+                            Status(StatusCode::ERR_INNER_COMMUNICATION, "failed to send rollback suspend signal"));
+                        member_->killRspPromises.erase(iter);
+                    }
+                    return;
+                }
+                if (s.Get().IsError()) {
+                    if (auto iter = member_->killRspPromises.find(reqID); iter != member_->killRspPromises.end()) {
+                        iter->second->SetValue(s.Get());
+                        member_->killRspPromises.erase(iter);
+                    }
+                }
+            });
+    }
 }
 
 /**

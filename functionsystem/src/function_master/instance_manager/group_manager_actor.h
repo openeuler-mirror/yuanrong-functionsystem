@@ -57,6 +57,11 @@ public:
         member_->instanceManager = instanceManager;
     }
 
+    void SetEnableFakeSuspendResume(bool enable)
+    {
+        member_->enableFakeSuspendResume = enable;
+    }
+
     void UpdateLeaderInfo(const explorer::LeaderInfo &leaderInfo)
     {
         litebus::AID masterAID(GROUP_MANAGER_ACTOR_NAME, leaderInfo.address);
@@ -221,6 +226,7 @@ protected:
         std::shared_ptr<functionsystem::global_scheduler::GlobalSched> globalScheduler{ nullptr };
         std::unordered_set<std::string> killingGroups;
         std::unordered_map<std::string, std::shared_ptr<litebus::Promise<Status>>> killRspPromises;
+        bool enableFakeSuspendResume{ false };
     };
 
 protected:
@@ -328,6 +334,17 @@ protected:
                                                     const std::string &description);
 
         litebus::Future<Status> ReScheduleGroup(const std::string &groupID);
+
+        void FakeResumeGroup(const litebus::AID &from, const std::string &groupID,
+                             const std::string &requestID);
+
+        litebus::Future<Status> DirectedResumeGroup(const std::string &groupID);
+
+        void OnFakeResumeComplete(const litebus::Future<Status> &future, const litebus::AID &from,
+                                 const std::string &groupID, const std::string &requestID);
+
+        void RollbackResumedInstances(const std::string &groupID,
+                                     const std::list<std::shared_ptr<resource_view::InstanceInfo>> &resumedInstances);
     };
 
     class SlaveBusiness : public Business {
