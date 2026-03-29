@@ -20,7 +20,7 @@
 #include <mutex>
 #include <optional>
 
-#include "lru/lru_cache.h"
+#include "lru_cache.h"
 
 namespace functionsystem {
 
