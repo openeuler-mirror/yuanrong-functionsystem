@@ -618,10 +618,22 @@ litebus::Future<Status> GroupManagerActor::MasterBusiness::DirectedResumeGroup(c
         member_->globalScheduler->GetLocalAddress(inst.second->functionproxyid())
             .Then(litebus::Defer(actor->GetAID(), &GroupManagerActor::InnerKillInstance, std::placeholders::_1,
                                  inst.second, killReq))
-            .OnComplete([instInfo(inst.second)](const litebus::Future<Status> &s) {
+            .OnComplete([this, instInfo(inst.second), reqID(killReq->requestid())](const litebus::Future<Status> &s) {
                 if (!s.IsOK()) {
                     YRLOG_ERROR("failed to send INSTANCE_RESUME_SIGNAL to instance {}, on proxy {}, in group {}",
                                 instInfo->instanceid(), instInfo->functionproxyid(), instInfo->groupid());
+                    if (auto iter = member_->killRspPromises.find(reqID); iter != member_->killRspPromises.end()) {
+                        iter->second->SetValue(
+                            Status(StatusCode::ERR_INNER_COMMUNICATION, "failed to send resume signal"));
+                        member_->killRspPromises.erase(iter);
+                    }
+                    return;
+                }
+                if (s.Get().IsError()) {
+                    if (auto iter = member_->killRspPromises.find(reqID); iter != member_->killRspPromises.end()) {
+                        iter->second->SetValue(s.Get());
+                        member_->killRspPromises.erase(iter);
+                    }
                 }
             });
     }
@@ -682,10 +694,22 @@ void GroupManagerActor::MasterBusiness::RollbackResumedInstances(
         member_->globalScheduler->GetLocalAddress(inst->functionproxyid())
             .Then(litebus::Defer(actor->GetAID(), &GroupManagerActor::InnerKillInstance, std::placeholders::_1,
                                  inst, killReq))
-            .OnComplete([instInfo(inst)](const litebus::Future<Status> &s) {
+            .OnComplete([this, instInfo(inst), reqID(killReq->requestid())](const litebus::Future<Status> &s) {
                 if (!s.IsOK()) {
                     YRLOG_ERROR("failed to rollback instance {} on proxy {} in group {}",
                                 instInfo->instanceid(), instInfo->functionproxyid(), instInfo->groupid());
+                    if (auto iter = member_->killRspPromises.find(reqID); iter != member_->killRspPromises.end()) {
+                        iter->second->SetValue(
+                            Status(StatusCode::ERR_INNER_COMMUNICATION, "failed to send rollback suspend signal"));
+                        member_->killRspPromises.erase(iter);
+                    }
+                    return;
+                }
+                if (s.Get().IsError()) {
+                    if (auto iter = member_->killRspPromises.find(reqID); iter != member_->killRspPromises.end()) {
+                        iter->second->SetValue(s.Get());
+                        member_->killRspPromises.erase(iter);
+                    }
                 }
             });
     }

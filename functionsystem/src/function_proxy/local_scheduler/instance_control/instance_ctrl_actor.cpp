@@ -6253,7 +6253,15 @@ litebus::Future<Status> InstanceCtrlActor::DoLocalResumeInstance(const std::stri
                             TransContext{ InstanceState::SUSPEND, stateMachine->GetVersion(), "rollback to suspend" };
                         return litebus::Async(aid, &InstanceCtrlActor::TransInstanceState, stateMachine,
                                               rollbackContext)
-                            .Then([status](const TransitionResult &) -> litebus::Future<Status> { return status; });
+                            .Then([instanceID, status](const TransitionResult &rollbackResult)
+                                      -> litebus::Future<Status> {
+                                if (rollbackResult.status.IsError()) {
+                                    YRLOG_ERROR("failed to rollback instance({}) to SUSPEND: {}", instanceID,
+                                                rollbackResult.status.ToString());
+                                    return rollbackResult.status;
+                                }
+                                return status;
+                            });
                     }
                     litebus::Async(aid, &InstanceCtrlActor::StartHeartbeat, instanceID, 0, instanceInfo.runtimeid(),
                                    StatusCode::SUCCESS);
