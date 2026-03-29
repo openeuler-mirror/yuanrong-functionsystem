@@ -468,6 +468,7 @@ void GroupManagerActor::MasterBusiness::SuspendGroup(const litebus::AID &from,
     ASSERT_IF_NULL(actor);
     auto &groupID = killGroupReq->groupid();
     auto &requestID = killGroupReq->grouprequestid();
+    auto &srcInstanceID = killGroupReq->srcinstanceid();
     auto group = member_->groupCaches->GetGroupInfo(groupID);
     if (!group.second) {
         auto reason = fmt::format("group({}) is not found, unable to be suspend", groupID);
