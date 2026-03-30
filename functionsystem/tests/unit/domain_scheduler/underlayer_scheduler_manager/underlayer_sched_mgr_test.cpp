@@ -20,6 +20,9 @@
 #include <async/async.hpp>
 #include <litebus.hpp>
 
+#define private public
+#define protected public
+
 #include "common/constants/actor_name.h"
 #include "common/resource_view/view_utils.h"
 #include "common/status/status.h"
@@ -887,4 +890,57 @@ TEST_F(UnderlayerSchedMgrTest, DeletePodRequest)
     litebus::Await(mockScalerActor);
     litebus::Await(mockUnderLayerActor);
 }
+
+TEST_F(UnderlayerSchedMgrTest, BroadcastTenantQuotaExceededDeliversToRegistered)
+{
+    UnderlayerSchedMgr underlayer(underlayerSchedMgrActor_->GetAID());
+    auto mockUnderlayerActor = std::make_shared<MockUnderlayer>("BroadcastRecipient");
+    litebus::Spawn(mockUnderlayerActor);
+    UnderlayerRegiter(mockUnderlayerActor, underlayer);
+
+    litebus::Future<std::string> receivedMsg;
+    EXPECT_CALL(*mockUnderlayerActor, MockTenantQuotaExceeded(_, _, _))
+        .WillOnce(FutureArg<2>(&receivedMsg));
+
+    underlayerSchedMgrActor_->BroadcastTenantQuotaExceeded("test_quota_msg");
+
+    ASSERT_AWAIT_READY(receivedMsg);
+    EXPECT_EQ(receivedMsg.Get(), "test_quota_msg");
+
+    litebus::Terminate(mockUnderlayerActor->GetAID());
+    litebus::Await(mockUnderlayerActor);
+}
+
+TEST_F(UnderlayerSchedMgrTest, BroadcastTenantQuotaExceededSkipsEmptyUrl)
+{
+    UnderlayerSchedMgr underlayer(underlayerSchedMgrActor_->GetAID());
+    auto registeredActor = std::make_shared<MockUnderlayer>("RegisteredForSkipTest");
+    litebus::Spawn(registeredActor);
+    UnderlayerRegiter(registeredActor, underlayer);
+
+    // Inject a non-null UnderlayerScheduler with empty AID (simulates a node in topology
+    // that has not yet completed registration — GetAID().Url() is empty)
+    auto unregisteredSched = std::make_shared<UnderlayerScheduler>("unregistered_node", address_, 3, 100);
+    underlayerSchedMgrActor_->underlayers_["unregistered_node"] = unregisteredSched;
+
+    // Only the registered actor should receive the broadcast
+    litebus::Future<std::string> receivedMsg;
+    EXPECT_CALL(*registeredActor, MockTenantQuotaExceeded(_, _, _))
+        .WillOnce(FutureArg<2>(&receivedMsg));
+
+    underlayerSchedMgrActor_->BroadcastTenantQuotaExceeded("skip_url_test_msg");
+
+    ASSERT_AWAIT_READY(receivedMsg);
+
+    litebus::Terminate(registeredActor->GetAID());
+    litebus::Await(registeredActor);
+}
+
+TEST_F(UnderlayerSchedMgrTest, BroadcastTenantQuotaExceededEmptyUnderlayersIsNoop)
+{
+    underlayerSchedMgrActor_->underlayers_.clear();
+
+    underlayerSchedMgrActor_->BroadcastTenantQuotaExceeded("test_msg");
+}
+
 }  // namespace functionsystem::test

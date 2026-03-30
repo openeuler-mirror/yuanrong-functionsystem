@@ -34,7 +34,7 @@
 namespace functionsystem {
 
 namespace local_scheduler {
-class InstanceCtrlActor;
+class IdleMgr;
 }
 
 using exec_service::ExecInputData;
@@ -71,13 +71,13 @@ using StreamContextPtr = std::shared_ptr<StreamContext>;
  * 1. Handle gRPC bidirectional stream Read/Write
  * 2. Manage multiple ExecSessionActor instances
  * 3. Route different message types to appropriate actors
- * 4. Notify InstanceCtrlActor to track per-instance session counts
+ * 4. Notify IdleActor to track per-instance session counts
  *
  * Refactored to use Actor model - delegates session management to ExecSessionActor
  */
 class ExecStreamService : public ExecService::Service {
 public:
-    explicit ExecStreamService(const litebus::AID &instanceCtrlAid);
+    explicit ExecStreamService(const std::shared_ptr<local_scheduler::IdleMgr> &idleMgr);
     ~ExecStreamService() override;
 
     /**
@@ -142,8 +142,7 @@ private:
     mutable std::shared_mutex sessionsMutex_;
     std::unordered_map<std::string, litebus::AID> sessions_;
 
-    // Callback to InstanceCtrlActor
-    litebus::AID instanceCtrlAid_;
+    std::shared_ptr<local_scheduler::IdleMgr> idleMgr_;
 };
 
 }  // namespace functionsystem

@@ -30,7 +30,7 @@ cc_library(
     hdrs = glob(["logs/*.h"]),
     copts = COPTS,
     deps = [
-        "@logs_sdk//:logs_sdk",
+        "//common/logs:logs_sdk",
         "//functionsystem/src:src_root_inc",
     ],
     visibility = ["//visibility:public"],
@@ -127,7 +127,7 @@ cc_library(
         ":posix_pb",
         ":logs",
         ":constants",
-        "@logs_sdk//:logs_sdk",
+        "//common/logs:logs_sdk",
         "@litebus//:litebus",
     ],
     visibility = ["//visibility:public"],
@@ -177,7 +177,7 @@ cc_library(
         ":common_flags",
         ":constants",
         "@etcdapi//:etcdapi",
-        "@metrics_sdk//:metrics_sdk",
+        "//common/metrics:metrics_sdk",
     ],
     linkopts = ["-ldl"],
     visibility = ["//visibility:public"],
@@ -197,7 +197,7 @@ cc_library(
         "@com_google_protobuf//:protobuf",
         "@com_github_grpc_grpc//:grpc++",
         "@com_github_grpc_grpc//:gpr",
-        "@logs_sdk//:logs_sdk",
+        "//common/logs:logs_sdk",
     ],
     visibility = ["//visibility:public"],
 )
@@ -408,7 +408,7 @@ cc_library(
 )
 
 # --- trace_adapter ---
-# Links against pre-built OpenTelemetry .so files from vendor/output/Install/opentelemetry/
+# Statically links OpenTelemetry from source via @opentelemetry_cpp Bazel targets.
 cc_library(
     name = "trace_adapter",
     srcs = glob([
@@ -427,7 +427,11 @@ cc_library(
         ":status",
         ":utils_base",
         ":posix_pb",
-        "@opentelemetry_prebuilt//:opentelemetry_prebuilt",
+        "@opentelemetry_cpp//api:api",
+        "@opentelemetry_cpp//sdk/src/trace:trace",
+        "@opentelemetry_cpp//sdk/src/resource:resource",
+        "@opentelemetry_cpp//exporters/otlp:otlp_grpc_exporter",
+        "@opentelemetry_cpp//exporters/ostream:ostream_span_exporter",
     ],
     visibility = ["//visibility:public"],
 )

@@ -41,6 +41,8 @@ set(${src_name}_CMAKE_ARGS
         -DCMAKE_CXX_FLAGS_RELEASE=${THIRDPARTY_CXX_FLAGS}
         -DCMAKE_SHARED_LINKER_FLAGS=${THIRDPARTY_LINK_FLAGS}
         -DCMAKE_CXX_STANDARD=17 # absl use cpp17 to compile
+        -DCURL_INCLUDE_DIR:PATH=${curl_INCLUDE_DIR}
+        -DCURL_LIBRARY:FILEPATH=${curl_LIB}
 )
 
 
@@ -48,6 +50,15 @@ set(HISTORY_INSTALLLED "${EP_BUILD_DIR}/Install/${src_name}")
 if (NOT EXISTS ${HISTORY_INSTALLLED})
     # Compile opentelemetry depends on opentelemetry-proto, need to copy the source code to the opentelemetry/third_party directory.
     file(COPY ${VENDOR_SRC_DIR}/opentelemetry_proto DESTINATION ${VENDOR_SRC_DIR}/opentelemetry/third_party)
+    # Only depend on protobuf/grpc ExternalProject targets when they exist (vendor top-level build).
+    # In submodule builds (e.g. common/metrics) these targets are absent; curl is always present.
+    set(_otel_depends curl)
+    if (TARGET protobuf)
+        list(APPEND _otel_depends protobuf)
+    endif()
+    if (TARGET grpc)
+        list(APPEND _otel_depends grpc)
+    endif()
     EXTERNALPROJECT_ADD(${src_name}
             SOURCE_DIR ${src_dir}
             CMAKE_ARGS ${${src_name}_CMAKE_ARGS} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DCMAKE_INSTALL_LIBDIR=lib
@@ -56,7 +67,7 @@ if (NOT EXISTS ${HISTORY_INSTALLLED})
             LOG_CONFIGURE ON
             LOG_BUILD ON
             LOG_INSTALL ON
-            DEPENDS protobuf grpc
+            DEPENDS ${_otel_depends}
     )
     ExternalProject_Get_Property(${src_name} INSTALL_DIR)
 else()
