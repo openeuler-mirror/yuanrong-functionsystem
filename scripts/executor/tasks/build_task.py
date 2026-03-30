@@ -28,12 +28,13 @@ def run_build(root_dir, cmd_args):
     log.info(f"Start to build function-system with args: {json.dumps(args)}")
 
     build_vendor(args)
-    build_logs(args)
     build_litebus(args)
-    build_metrics(args)
     if args["builder"] == "bazel":
+        # Bazel builds logs, metrics, and C++ binaries from source itself
         build_functionsystem_bazel(root_dir, args)
     else:
+        build_logs(args)
+        build_metrics(args)
         build_functionsystem(root_dir, args)
     elapsed_time = time.time() - start_time
     log.info(f"Build function-system successfully in {elapsed_time:.2f} seconds")
@@ -54,7 +55,15 @@ def build_vendor(args):
     builder.build_etcd(vendor_path)
 
     log.info("Start to build vendor dependency packages with C++")
-    utils.sync_command(["cmake", "-B", "build", f"-DTHIRDPARTY_JOBS={args['job_num']}"], cwd=os.path.join(vendor_path))
+    cmake_configure_cmd = ["cmake", "-B", "build", f"-DTHIRDPARTY_JOBS={args['job_num']}"]
+    if args.get("builder") == "bazel":
+        # Bazel mode: skip vendor components that Bazel builds from source or does not use.
+        # See vendor/CMakeLists.txt for the full list of skipped components.
+        cmake_configure_cmd.append("-DBAZEL_MODE=ON")
+    else:
+        # Explicitly override any cached BAZEL_MODE=ON left by a previous bazel-mode build.
+        cmake_configure_cmd.append("-DBAZEL_MODE=OFF")
+    utils.sync_command(cmake_configure_cmd, cwd=os.path.join(vendor_path))
     utils.sync_command(["cmake", "--build", "build", "--parallel", str(args["job_num"])], cwd=os.path.join(vendor_path))
 
     # 引入二方件产物

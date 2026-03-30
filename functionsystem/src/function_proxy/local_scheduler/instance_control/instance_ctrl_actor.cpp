@@ -20,6 +20,7 @@
 
 #include "async/async.hpp"
 #include "async/asyncafter.hpp"
+#include "common/proto/pb/posix/message.pb.h"
 #include "async/collect.hpp"
 #include "async/defer.hpp"
 #include "async/option.hpp"
@@ -211,8 +212,40 @@ void InstanceCtrlActor::Init()
 
     Receive("CheckInstanceState", &InstanceCtrlActor::CheckInstanceState);
     Receive("CheckInstanceStateResponse", &InstanceCtrlActor::CheckInstanceStateResponse);
+    Receive("TenantQuotaExceeded", &InstanceCtrlActor::OnTenantQuotaExceededMsg);
 }
 
+
+void InstanceCtrlActor::OnTenantQuotaExceededMsg(const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    OnTenantQuotaExceeded(msg);
+}
+
+void InstanceCtrlActor::OnTenantQuotaExceeded(const std::string &msg)
+{
+    ::messages::TenantQuotaExceeded event;
+    if (!event.ParseFromString(msg)) {
+        YRLOG_WARN("LocalInstanceCtrlActor::OnTenantQuotaExceeded parse failed");
+        return;
+    }
+    const std::string tenantID = event.tenantid();
+    int64_t cooldownMs = event.cooldownms();
+    if (cooldownMs <= 0) {
+        cooldownMs = 10000;
+    }
+    YRLOG_INFO("LocalInstanceCtrlActor: tenant={} blocked for {}ms (quota exceeded)", tenantID, cooldownMs);
+    cooldownMgr_.Apply(tenantID, [&](uint64_t gen) {
+        return litebus::AsyncAfter(
+            static_cast<uint64_t>(cooldownMs), GetAID(), &InstanceCtrlActor::OnTenantCooldownExpired, tenantID, gen);
+    });
+}
+
+void InstanceCtrlActor::OnTenantCooldownExpired(std::string tenantID, uint64_t generation)
+{
+    if (cooldownMgr_.OnExpired(tenantID, generation)) {
+        YRLOG_INFO("LocalInstanceCtrlActor: tenant={} cooldown expired, scheduling resumed", tenantID);
+    }
+}
 
 Status InstanceCtrlActor::UpdateInstanceInfo(const resources::InstanceInfo &instanceInfo)
 {
@@ -1299,6 +1332,16 @@ messages::ScheduleResponse InstanceCtrlActor::PrepareCreateInstance(
     const std::string traceID = scheduleReq->traceid();
     const std::string requestID = scheduleReq->requestid();
     const auto &tenantID = scheduleReq->instance().tenantid();
+    // Quota cooldown interception: block new instance creation for tenants that exceeded quota
+    if (!tenantID.empty() && cooldownMgr_.IsBlocked(tenantID)) {
+        YRLOG_INFO("{}|{}|LocalInstanceCtrlActor::PrepareCreateInstance: BLOCKED by quota cooldown, tenantID={}",
+                   traceID, requestID, tenantID);
+        runtimePromise->SetValue(GenScheduleResponse(StatusCode::RESOURCE_NOT_ENOUGH,
+                                                     "tenant resource quota exceeded, scheduling blocked during cooldown",
+                                                     *scheduleReq));
+        return GenScheduleResponse(StatusCode::RESOURCE_NOT_ENOUGH,
+                                   "tenant resource quota exceeded, scheduling blocked during cooldown", *scheduleReq);
+    }
     bool notLimited = DoRateLimit(scheduleReq);
     if (!notLimited) {
         YRLOG_ERROR("{}|{}|tenant({}) create rate limited on local.", traceID, requestID, tenantID);
@@ -1613,9 +1656,19 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::DoDispatchSchedule(
                     scheduleReq->traceid(), scheduleReq->requestid(), scheduleReq->instance().instanceid());
     }
     ASSERT_IF_NULL(scheduler_);
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord(
-        { "LocalSchedule", scheduleReq->requestid(), "", scheduleReq->instance().function(), scheduleReq->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = trace::SpanName::kLocalSchedule;
+    param.spanKey = scheduleReq->requestid();
+    param.traceID = scheduleReq->traceid();
+    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        scheduleReq->instance().createoptions(), &scheduleReq->instance().scheduleoption().extension());
+    param.function = scheduleReq->instance().function();
+    param.instanceID = scheduleReq->instance().instanceid();
+    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    trace::TraceManager::PropagateSpanToOptions(span,
+                                                scheduleReq->mutable_instance()->mutable_createoptions(),
+                                                scheduleReq->mutable_instance()->mutable_scheduleoption()
+                                                    ->mutable_extension());
     return scheduler_->ScheduleDecision(scheduleReq)
                       .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::ConfirmScheduleDecisionAndDispatch,
                                            scheduleReq, _1, result.preState.Get()));
@@ -1669,7 +1722,7 @@ litebus::Option<TransitionResult> InstanceCtrlActor::OnTryDispatchOnLocal(
     const TransitionResult &transResult)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("LocalSchedule", scheduleReq->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kLocalSchedule, scheduleReq->requestid());
     if (IsLowReliabilityInstance(scheduleReq->instance()) || transResult.version != 0) {
         scheduleResp->SetValue(GenScheduleResponse(result.code, result.reason, *scheduleReq));
         return litebus::None();
@@ -1803,9 +1856,19 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::RetryForwardSched
     const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const messages::ScheduleResponse &resp,
     uint32_t retryTimes, const std::shared_ptr<InstanceStateMachine> &stateMachine)
 {
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord(
-        { "ForwardSchedule", scheduleReq->requestid(), "", scheduleReq->instance().function(), scheduleReq->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = trace::SpanName::kForwardSchedule;
+    param.spanKey = scheduleReq->requestid();
+    param.traceID = scheduleReq->traceid();
+    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        scheduleReq->instance().createoptions(), &scheduleReq->instance().scheduleoption().extension());
+    param.function = scheduleReq->instance().function();
+    param.instanceID = scheduleReq->instance().instanceid();
+    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    trace::TraceManager::PropagateSpanToOptions(span,
+                                                scheduleReq->mutable_instance()->mutable_createoptions(),
+                                                scheduleReq->mutable_instance()->mutable_scheduleoption()
+                                                    ->mutable_extension());
     if (auto cancel = stateMachine->GetCancelFuture(); cancel.IsOK()) {
         YRLOG_WARN("{}|{}|instance canceled before forward schedule, reason({})", scheduleReq->requestid(),
                    scheduleReq->instance().instanceid(), cancel.Get());
@@ -1858,7 +1921,7 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::HandleForwardResponseAndNot
     const std::shared_ptr<ScheduleRequest> &scheduleReq, const ScheduleResponse &resp)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("ForwardSchedule", scheduleReq->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kForwardSchedule, scheduleReq->requestid());
     ASSERT_IF_NULL(instanceControlView_);
     // If the forwarded scheduling request fails, the notify interface is invoked to notify the instance
     // creator of the scheduling failure, and this local scheduler, as the owner scheduling starting point
@@ -2040,9 +2103,19 @@ litebus::Future<Status> InstanceCtrlActor::DeployInstance(const std::shared_ptr<
                                                           bool isRecovering)
 {
     auto requestID = request->requestid();
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord(
-        { "DeployInstance", requestID, "", request->instance().function(), request->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = trace::SpanName::kDeployInstance;
+    param.spanKey = requestID;
+    param.traceID = request->traceid();
+    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        request->instance().createoptions(), &request->instance().scheduleoption().extension());
+    param.function = request->instance().function();
+    param.instanceID = request->instance().instanceid();
+    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    trace::TraceManager::PropagateSpanToOptions(span,
+                                                request->mutable_instance()->mutable_createoptions(),
+                                                request->mutable_instance()->mutable_scheduleoption()
+                                                    ->mutable_extension());
     if (result.IsSome()) {
         YRLOG_DEBUG("{}|{}|failed to deploy instance({}) because failed to update instance info", request->traceid(),
                     requestID, request->instance().instanceid());
@@ -2181,9 +2254,19 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     }
     litebus::Promise<Status> instanceStatusPromise;
     instanceStatusPromises_[request->instance().instanceid()] = instanceStatusPromise;
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord({ "WaitConnection", request->requestid(), "",
-                                                        request->instance().function(), request->instance().instanceid()});
+    trace::TraceManager::SpanParam param;
+    param.spanName = trace::SpanName::kWaitConnection;
+    param.spanKey = request->requestid();
+    param.traceID = request->traceid();
+    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        request->instance().createoptions(), &request->instance().scheduleoption().extension());
+    param.function = request->instance().function();
+    param.instanceID = request->instance().instanceid();
+    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    trace::TraceManager::PropagateSpanToOptions(span,
+                                                request->mutable_instance()->mutable_createoptions(),
+                                                request->mutable_instance()->mutable_scheduleoption()
+                                                    ->mutable_extension());
     return CreateInstanceClient(request->instance().instanceid(), response.runtimeid(), response.address())
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::CheckReadiness, _1, request, retriedTimes, isRecovering))
         .Then([aid(GetAID()), request, isRecovering](const Status &status) -> litebus::Future<Status> {
@@ -2280,7 +2363,7 @@ litebus::Future<Status> InstanceCtrlActor::CheckReadiness(
     uint32_t retriedTimes, bool isRecovering)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("WaitConnection", request->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kWaitConnection, request->requestid());
     auto stateMachine = instanceControlView_->GetInstance(request->instance().instanceid());
     if (stateMachine == nullptr) {
         YRLOG_ERROR("{}|{}|instance({}) stateMachine is nullptr", request->traceid(), request->requestid(),
@@ -2606,7 +2689,7 @@ litebus::Future<CallResultAck> InstanceCtrlActor::SendCallResult(
         }
         ASSERT_IF_NULL(clientManager_);
         // todo(lwy_robb): to use traceID
-        trace::TraceManager::GetInstance().StopSpan("Create", requestID, {{"instance.id", srcInstance}});
+        trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kCreate, requestID, {{"instance.id", srcInstance}});
         auto clientFuture = clientManager_->GetControlInterfacePosixClient(dstInstance);
         return clientFuture.Then(
             litebus::Defer(GetAID(), &InstanceCtrlActor::SendNotifyResult, _1, dstInstance, requestID, callResult));
@@ -2830,7 +2913,7 @@ litebus::Future<Status> InstanceCtrlActor::ScheduleConfirmed(const Status &statu
                                                              const std::shared_ptr<ScheduleRequest> &request)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("DeployInstance", request->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kDeployInstance, request->requestid());
     auto rsp = std::make_shared<ScheduleResponse>();
     rsp->set_code(static_cast<int32_t>(status.StatusCode()));
     rsp->set_requestid(request->requestid());
@@ -3018,7 +3101,7 @@ void InstanceCtrlActor::ScheduleEnd(const litebus::Future<Status> &future,
                                     const std::shared_ptr<ScheduleRequest> &request)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("DeployInstance", request->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kDeployInstance, request->requestid());
     Status status;
     if (future.IsError()) {
         status = Status(static_cast<StatusCode>(future.GetErrorCode()), "failed to create instance");
@@ -4819,8 +4902,8 @@ void InstanceCtrlActor::BindObserver(const std::shared_ptr<function_proxy::Contr
             litebus::Async(aid, &InstanceCtrlActor::UpdateFuncMetas, isAdd, funcMetas);
         });
 
-    observer->SetTrafficReportCbFunc([aid(GetAID())](const std::string &instanceID, const size_t &processingNum) {
-        litebus::Async(aid, &InstanceCtrlActor::TrafficReport, instanceID, processingNum);
+    observer->SetTrafficReportCbFunc([mgr(idleMgr_)](const std::string &instanceID, const size_t &processingNum) {
+        mgr->TrafficReport(instanceID, processingNum);
     });
 
     observer_ = observer;
@@ -6401,20 +6484,12 @@ void InstanceCtrlActor::OnFunctionDelete(
     YRLOG_INFO("function({}) delete succeeded", funcKey);
 }
 
-void InstanceCtrlActor::HandleIdleTimeout(const std::string &instanceID)
+
+void InstanceCtrlActor::EvictByIdleTimeout(const std::string &instanceID)
 {
-    idleTimers_.erase(instanceID);
     ASSERT_IF_NULL(instanceControlView_);
     auto stateMachine = instanceControlView_->GetInstance(instanceID);
     if (stateMachine == nullptr) {
-        return;
-    }
-
-    // Double-check: ensure no active sessions before evicting
-    auto it = instanceActiveSessions_.find(instanceID);
-    if (it != instanceActiveSessions_.end() && it->second) {
-        YRLOG_INFO("{}|instance({}) idle timeout cancelled due to active sessions",
-                   stateMachine->GetInstanceInfo().requestid(), instanceID);
         return;
     }
 
@@ -6439,134 +6514,6 @@ void InstanceCtrlActor::HandleIdleTimeout(const std::string &instanceID)
             }
             return Status::OK();
         });
-}
-
-void InstanceCtrlActor::StartIdleTimer(const std::string &instanceID)
-{
-    if (idleTimers_.find(instanceID) != idleTimers_.end()) {
-        return;
-    }
-    ASSERT_IF_NULL(instanceControlView_);
-    auto stateMachine = instanceControlView_->GetInstance(instanceID);
-    if (stateMachine == nullptr) {
-        return;
-    }
-    const auto &instanceInfo = stateMachine->GetInstanceInfo();
-    if (instanceInfo.functionproxyid() != nodeID_ || instanceInfo.instancestatus().code() != static_cast<int32_t>(InstanceState::RUNNING)) {
-        return;
-    }
-
-    // Additional check: don't start timer if there are active sessions
-    auto it = instanceActiveSessions_.find(instanceID);
-    if (it != instanceActiveSessions_.end() && it->second) {
-        YRLOG_INFO("skip starting idle timer for instance({}) due to active sessions", instanceID);
-        return;
-    }
-
-    int64_t idleTimeout = GetIdleTimeout(instanceInfo);
-    if (idleTimeout <= 0) {
-        return;
-    }
-    YRLOG_INFO("start idle timer for instance({}) with timeout {} seconds", instanceID, idleTimeout);
-    idleTimers_[instanceID] = litebus::AsyncAfter(
-        idleTimeout * 1000, GetAID(), &InstanceCtrlActor::HandleIdleTimeout, instanceID);
-}
-
-void InstanceCtrlActor::CancelIdleTimer(const std::string &instanceID)
-{
-    auto iter = idleTimers_.find(instanceID);
-    if (iter == idleTimers_.end()) {
-        return;
-    }
-    YRLOG_INFO("cancel idle timer for instance({})", instanceID);
-    litebus::TimerTools::Cancel(iter->second);
-    idleTimers_.erase(iter);
-}
-
-void InstanceCtrlActor::TrafficReport(const std::string &instanceID, const size_t &processingNum)
-{
-    YRLOG_DEBUG("debug:: instance({}) processing num: {}", instanceID, processingNum);
-    bool isIdle = (processingNum == 0);
-    ASSERT_IF_NULL(instanceControlView_);
-    if (!isIdle) {
-        instanceTrafficIdle_.erase(instanceID);
-        CancelIdleTimer(instanceID);
-        return;
-    }
-
-    instanceTrafficIdle_[instanceID] = true;
-
-    // Only start idle timer if both traffic idle AND no active sessions
-    bool hasActiveSessions = false;
-    auto it = instanceActiveSessions_.find(instanceID);
-    if (it != instanceActiveSessions_.end()) {
-        hasActiveSessions = it->second;
-    }
-
-    if (!hasActiveSessions) {
-        StartIdleTimer(instanceID);
-    } else {
-        YRLOG_DEBUG("instance({}) is idle but has active exec sessions, skip idle timer", instanceID);
-    }
-}
-
-void InstanceCtrlActor::SessionCountDelta(const std::string &instanceID, int delta)
-{
-    if (instanceID.empty() || delta == 0) {
-        return;
-    }
-
-    auto &count = instanceSessionCounts_[instanceID];
-    size_t oldCount = count;
-
-    if (delta > 0) {
-        count += static_cast<size_t>(delta);
-    } else if (delta < 0 && count > 0) {
-        size_t dec = static_cast<size_t>(-delta);
-        count = (dec >= count) ? 0 : (count - dec);
-    }
-
-    size_t newCount = count;
-    if (newCount == 0) {
-        instanceSessionCounts_.erase(instanceID);
-    }
-
-    // Edge detection: 0->N or N->0
-    if ((oldCount == 0 && newCount > 0) || (oldCount > 0 && newCount == 0)) {
-        bool hasActiveSessions = (newCount > 0);
-        YRLOG_INFO("instance({}) session count edge: {} sessions, hasActiveSessions={}",
-                   instanceID, newCount, hasActiveSessions);
-        SessionAlive(instanceID, hasActiveSessions);
-    }
-}
-
-void InstanceCtrlActor::SessionAlive(const std::string &instanceID, bool hasActiveSessions)
-{
-    YRLOG_INFO("instance({}) session alive status changed: hasActiveSessions={}", instanceID, hasActiveSessions);
-
-    // Update session status
-    if (hasActiveSessions) {
-        instanceActiveSessions_[instanceID] = true;
-        // Cancel idle timer when sessions become active
-        CancelIdleTimer(instanceID);
-    } else {
-        instanceActiveSessions_.erase(instanceID);
-        // When sessions become inactive, check traffic idle status before starting timer
-        bool trafficIdle = false;
-        auto trafficIt = instanceTrafficIdle_.find(instanceID);
-        if (trafficIt != instanceTrafficIdle_.end()) {
-            trafficIdle = trafficIt->second;
-        }
-        ASSERT_IF_NULL(instanceControlView_);
-        auto stateMachine = instanceControlView_->GetInstance(instanceID);
-        if (trafficIdle && stateMachine != nullptr) {
-            const auto &instanceInfo = stateMachine->GetInstanceInfo();
-            if (instanceInfo.functionproxyid() == nodeID_ &&
-                instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)) {
-                StartIdleTimer(instanceID);
-            }
-        }
-    }
 }
 
 void InstanceCtrlActor::BindSnapCtrl(const std::shared_ptr<SnapCtrl> &snapCtrl)
@@ -6692,4 +6639,3 @@ litebus::Future<Status> InstanceCtrlActor::UnregisterTraefikRoute(const std::str
         });
 }
 }  // namespace functionsystem::local_scheduler
-

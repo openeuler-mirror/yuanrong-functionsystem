@@ -1,0 +1,164 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "metrics_headers",
+    hdrs = glob(["include/metrics/**/*.h"]),
+    includes = ["include"],
+)
+
+cc_library(
+    name = "metrics_internal_headers",
+    hdrs = glob([
+        "src/**/*.h",
+        "src/**/include/**/*.h",
+    ]),
+    includes = ["src"],
+)
+
+cc_library(
+    name = "metrics_common",
+    srcs = glob(["src/common/**/*.cpp"]),
+    hdrs = glob([
+        "src/common/**/*.h",
+        "src/common/include/**/*.h",
+    ]),
+    alwayslink = True,
+    includes = ["src"],
+    deps = [
+        ":metrics_headers",
+        ":metrics_internal_headers",
+        "@spdlog//:spdlog",
+    ],
+)
+
+cc_library(
+    name = "observability_metrics",
+    srcs = ["src/api/processor_actor.cpp"],
+    hdrs = glob([
+        "src/api/include/**/*.h",
+        "src/common/include/**/*.h",
+    ]),
+    includes = ["src"],
+    deps = [
+        ":metrics_headers",
+        ":metrics_internal_headers",
+        "//common/logs:yrlogs",
+        "@litebus//:litebus",
+        "@securec//:securec",
+    ],
+)
+
+cc_library(
+    name = "observability_metrics_sdk",
+    srcs = glob(["src/sdk/*.cpp"]),
+    hdrs = glob([
+        "src/sdk/include/**/*.h",
+        "src/api/include/**/*.h",
+        "src/common/include/**/*.h",
+    ]),
+    includes = ["src"],
+    linkopts = ["-ldl"],
+    deps = [
+        ":metrics_headers",
+        ":metrics_internal_headers",
+        ":metrics_common",
+        ":observability_metrics",
+        "//common/logs:yrlogs",
+        "@litebus//:litebus",
+        "@nlohmann_json//:nlohmann_json",
+        "@spdlog//:spdlog",
+        "@zlib//:zlib",
+    ],
+)
+
+cc_library(
+    name = "observability_metrics_exporter_ostream",
+    srcs = glob(["src/exporters/ostream/*.cpp"]),
+    hdrs = glob([
+        "src/exporters/ostream/**/*.h",
+        "src/api/include/**/*.h",
+        "src/common/include/**/*.h",
+    ]),
+    includes = ["src"],
+    deps = [
+        ":metrics_headers",
+        ":metrics_internal_headers",
+    ],
+)
+
+cc_binary(
+    name = "libobservability-metrics-file-exporter.so",
+    srcs = glob([
+        "src/exporters/file_exporter/*.cpp",
+        "src/exporters/file_exporter/**/*.h",
+    ]),
+    includes = ["src"],
+    linkshared = True,
+    linkstatic = True,
+    deps = [
+        ":metrics_headers",
+        ":metrics_internal_headers",
+        ":metrics_common",
+        "//common/logs:yrlogs",
+        "@spdlog//:spdlog",
+        "@zlib//:zlib",
+    ],
+)
+
+cc_binary(
+    name = "libobservability-prometheus-push-exporter.so",
+    srcs = glob([
+        "src/exporters/prometheus_push_exporter/*.cpp",
+        "src/exporters/http_exporter/*.cpp",
+        "src/exporters/common/*.cpp",
+        "src/exporters/prometheus_push_exporter/**/*.h",
+        "src/exporters/http_exporter/**/*.h",
+        "src/exporters/common/**/*.h",
+    ]),
+    includes = ["src"],
+    linkshared = True,
+    linkstatic = True,
+    deps = [
+        ":metrics_headers",
+        ":metrics_internal_headers",
+        ":metrics_common",
+        "//common/logs:yrlogs",
+        "@curl_sdk//:curl",
+        "@litebus//:litebus",
+        "@nlohmann_json//:nlohmann_json",
+        "@securec//:securec",
+    ],
+)
+
+cc_binary(
+    name = "libobservability-metrics-opentelemetry-exporter.so",
+    srcs = glob([
+        "src/exporters/opentelemetry_exporter/*.cpp",
+        "src/exporters/opentelemetry_exporter/**/*.h",
+    ]),
+    copts = ["-DOPENTELEMETRY_STL_VERSION=2017"],
+    includes = ["src"],
+    linkshared = True,
+    linkstatic = True,
+    deps = [
+        ":metrics_headers",
+        ":metrics_internal_headers",
+        ":metrics_common",
+        "@litebus//:litebus",
+        "@nlohmann_json//:nlohmann_json",
+        "@opentelemetry_cpp//exporters/otlp:otlp_http_metric_exporter",
+        "@opentelemetry_cpp//sdk/src/metrics:metrics",
+        "@opentelemetry_cpp//sdk/src/resource:resource",
+    ],
+)
+
+cc_library(
+    name = "metrics_sdk",
+    deps = [
+        ":observability_metrics",
+        ":observability_metrics_sdk",
+        ":observability_metrics_exporter_ostream",
+    ],
+)
