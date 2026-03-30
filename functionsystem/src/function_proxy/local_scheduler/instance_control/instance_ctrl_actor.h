@@ -34,6 +34,7 @@
 #include "common/state_machine/instance_context.h"
 #include "common/status/status.h"
 #include "common/types/instance_state.h"
+#include "common/utils/tenant_cooldown_manager.h"
 #include "function_agent_manager/function_agent_mgr.h"
 #include "function_proxy/common/data_obj_client/data_obj_client.h"
 #include "function_proxy/common/iam/internal_iam.h"
@@ -41,6 +42,7 @@
 #include "function_proxy/common/posix_client/control_plane_client/control_interface_client_manager_proxy.h"
 #include "function_proxy/common/rate_limiter/token_bucket_rate_limiter.h"
 // for remove rgroup, easy for facilitates authentication, which should be extracted in the future
+#include "local_scheduler/instance_control/idle/idle_mgr.h"
 #include "local_scheduler/resource_group_controller/resource_group_ctrl.h"
 #include "local_scheduler/subscription_manager/subscription_mgr.h"
 
@@ -565,7 +567,20 @@ public:
     litebus::Future<messages::DeployInstanceResponse> DeploySnapStartInstance(
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
-    void SessionCountDelta(const std::string &instanceID, int delta);
+    /**
+     * Evict an instance that has exceeded its idle timeout.
+     * Called by IdleActor after idle timer fires.
+     */
+    void EvictByIdleTimeout(const std::string &instanceID);
+
+    /**
+     * Set IdleMgr before Spawn so BindObserver can forward traffic events.
+     */
+    void SetIdleMgr(const std::shared_ptr<IdleMgr> &idleMgr)
+    {
+        idleMgr_ = idleMgr;
+    }
+
 private:
     Status CheckSchedRequestValid(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
@@ -1012,21 +1027,17 @@ private:
 
     std::shared_ptr<TraefikRegistry> traefikRegistry_;
 
-    // todo(Lwy_Robb): idle controller should be mv to a separate actor in future
-    std::unordered_map<std::string, litebus::Timer> idleTimers_;
+    std::shared_ptr<IdleMgr> idleMgr_;
 
-    // Track whether each instance has active exec sessions
-    std::unordered_map<std::string, bool> instanceActiveSessions_;
-    // Track whether each instance is idle by traffic reports
-    std::unordered_map<std::string, bool> instanceTrafficIdle_;
-    // Track per-instance session counts (edge-triggered)
-    std::unordered_map<std::string, size_t> instanceSessionCounts_;
+public:
+    // Tenant quota cooldown: blocks scheduling for tenants that exceeded quota
+    void OnTenantQuotaExceededMsg(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void OnTenantQuotaExceeded(const std::string &msg);
+private:
+    void OnTenantCooldownExpired(std::string tenantID, uint64_t generation);
 
-    void TrafficReport(const std::string &instanceID, const size_t &processingNum);
-    void SessionAlive(const std::string &instanceID, bool hasActiveSessions);
-    void StartIdleTimer(const std::string &instanceID);
-    void HandleIdleTimeout(const std::string &instanceID);
-    void CancelIdleTimer(const std::string &instanceID);
+    // key: tenantID, value: cooldown expiry timer
+    functionsystem::TenantCooldownManager cooldownMgr_;
 };
 }  // namespace functionsystem::local_scheduler
 #endif  // LOCAL_SCHEDULER_INSTANCE_CTRL_ACTOR_H

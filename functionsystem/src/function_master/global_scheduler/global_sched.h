@@ -54,6 +54,8 @@ public:
     virtual void AddLocalSchedAbnormalNotifyCallback(const std::string &name,
                                                      const LocalSchedAbnormalCallbackFunc &func);
 
+    virtual Status AddDomainSchedCallback(const CallbackAddFunc &func);
+
     virtual void BindLocalDeleteCallback(const LocalDeleteCallbackFunc &func);
 
     virtual void BindLocalAddCallback(const LocalAddCallbackFunc &func);
