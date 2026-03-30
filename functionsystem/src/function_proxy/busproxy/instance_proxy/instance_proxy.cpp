@@ -149,6 +149,15 @@ void InstanceProxy::OnForwardResult(const std::string &dstInstanceID, const std:
                                              originalMessageID));
         return;
     }
+    // NOTE: This callback uses direct .Then() chaining instead of litebus::Defer for efficiency.
+    // Thread safety considerations:
+    // - routeCache_ is ThreadSafeLruCache, safe to access from any thread
+    // - SendForwardCall returns Future and is designed for async chaining
+    // - promise is only set once in this callback (Promise is single-assignment)
+    //
+    // If litebus::Then is not guaranteed to execute on actor thread, consider using:
+    //   return litebus::Async(GetAID(), &InstanceProxy::<method>, ...)
+    // to ensure actor-thread execution.
     observer_->QueryInstanceRoute(dstInstanceID).Then(
         [this, dstInstanceID, originalMessageID, callerInfo, request, promise]
         (const std::shared_ptr<resources::RouteInfo>& route) -> litebus::Future<SharedStreamMsg> {
