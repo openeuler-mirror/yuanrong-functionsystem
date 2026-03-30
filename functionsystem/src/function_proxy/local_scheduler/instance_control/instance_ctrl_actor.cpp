@@ -6541,7 +6541,7 @@ void InstanceCtrlActor::CancelIdleTimer(const std::string &instanceID)
 
 void InstanceCtrlActor::TrafficReport(const std::string &instanceID, const size_t &processingNum)
 {
-    YRLOG_DEBUG("debug:: instance({}) processing num: {}", instanceID, processingNum);
+    YRLOG_DEBUG("instance({}) processing num: {}", instanceID, processingNum);
     bool isIdle = (processingNum == 0);
     ASSERT_IF_NULL(instanceControlView_);
     if (!isIdle) {

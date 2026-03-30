@@ -835,7 +835,6 @@ litebus::Option<std::vector<FunctionMeta>> GetFuncMetaFromServiceYaml(const std:
     auto jsonStr = yamlToJsonFunc(data);
 
     (void)dlclose(handle);
-    YRLOG_INFO("debug:: (funcMeta)services info, {}", jsonStr);
     auto serviceInfosOpt = GetServiceInfosFromJson(jsonStr);
     if (serviceInfosOpt.IsNone()) {
         YRLOG_ERROR("(funcMeta)failed to get services info");

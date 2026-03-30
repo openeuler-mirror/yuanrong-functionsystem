@@ -2118,7 +2118,7 @@ litebus::Future<Status> FunctionAgentMgrActor::RegisterToWarmUp(
     const litebus::Option<std::string> &agentID)
 {
     std::list<litebus::Future<messages::DeployInstanceResponse>> deployFutures;
-    YRLOG_INFO("debug:: {}", request->DebugString());
+    YRLOG_DEBUG("RegisterToWarmUp deploy request: {}", request->ShortDebugString());
     if (agentID.IsSome()) {
         return DeployInstance(request, agentID.Get())
             .Then([](const messages::DeployInstanceResponse &resp) -> litebus::Future<Status> {
