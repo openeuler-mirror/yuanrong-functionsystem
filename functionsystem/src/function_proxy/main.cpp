@@ -436,8 +436,7 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .distributedCacheClient = g_commonDriver->GetDistributedCacheClient(),
         .runtimeInstanceDebugEnable = flags.IsRuntimeInstanceDebugEnable(),
         .unRegisterWhileStop = flags.UnRegisterWhileStop(),
-        .enableFakeSuspendResume = flags.GetEnableFakeSuspendResume()
-        .unRegisterWhileStop = flags.UnRegisterWhileStop(),
+        .enableFakeSuspendResume = flags.GetEnableFakeSuspendResume(),
         .udsPath = flags.GetDPosixUdsPath(),
         .sessionGrpcPort = flags.GetSessionGrpcPort(),
         .address = flags.GetAddress(),  // LiteBus address for extracting IP used by gRPC servers
