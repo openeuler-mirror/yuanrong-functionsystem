@@ -36,6 +36,7 @@ message("install dir of ${src_name}: ${INSTALL_DIR}")
 
 set(json_INCLUDE_DIR ${INSTALL_DIR}/include)
 # cmake config dir for find_package(nlohmann_json): used by opentelemetry to avoid network download
-set(json_CMAKE_DIR ${INSTALL_DIR}/lib/cmake/nlohmann_json)
+# nlohmann_json installs cmake config to share/cmake (not lib/cmake) per GNUInstallDirs on Linux
+set(json_CMAKE_DIR ${INSTALL_DIR}/share/cmake/nlohmann_json)
 
 include_directories(${json_INCLUDE_DIR})
