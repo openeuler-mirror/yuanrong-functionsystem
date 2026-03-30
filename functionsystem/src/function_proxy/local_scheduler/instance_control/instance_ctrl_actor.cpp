@@ -699,8 +699,10 @@ litebus::Future<std::shared_ptr<KillContext>> InstanceCtrlActor::SignalRoute(
         return killCtx;
     }
 
-    // DR mode: if KillRequest contains routing info, use it directly
-    if (function_proxy::DirectRoutingConfig::IsEnabled() && !killCtx->killRequest->routeaddress().empty()) {
+    // DR mode: if KillRequest contains complete routing info (both routeAddress and proxyID), use it directly
+    if (function_proxy::DirectRoutingConfig::IsEnabled() &&
+        !killCtx->killRequest->routeaddress().empty() &&
+        !killCtx->killRequest->proxyid().empty()) {
         if (killCtx->killRequest->proxyid() == nodeID_) {
             killCtx->isLocal = true;
             killCtx->killRsp = GenKillResponse(common::ErrorCode::ERR_NONE, "");
@@ -719,6 +721,15 @@ litebus::Future<std::shared_ptr<KillContext>> InstanceCtrlActor::SignalRoute(
                 killCtx->killRsp = rsp;
                 return killCtx;
             });
+    }
+
+    // Fallback: if DR mode enabled but routing info is incomplete, fall back to observer/state-machine path
+    if (function_proxy::DirectRoutingConfig::IsEnabled() &&
+        (!killCtx->killRequest->routeaddress().empty() || !killCtx->killRequest->proxyid().empty())) {
+        YRLOG_DEBUG("{}|(kill)DR mode enabled but routing info incomplete (route={}, proxyID={}), falling back to observer path",
+                    killCtx->killRequest->requestid(),
+                    killCtx->killRequest->routeaddress().empty() ? "empty" : "present",
+                    killCtx->killRequest->proxyid().empty() ? "empty" : "present");
     }
 
     // Fallback: check instance ownership from instanceContext
@@ -6053,6 +6064,7 @@ CreateCallResultCallBack InstanceCtrlActor::RegisterCreateCallResultCallback(
         auto instanceInfo = request->instance();
         if (instanceInfo.lowreliability() || function_proxy::DirectRoutingConfig::IsEnabled()) {
             callResult->mutable_runtimeinfo()->set_route(aid.Url());
+            callResult->mutable_runtimeinfo()->set_proxyid(nodeID_);
         }
         if (callResult->code() == common::ErrorCode::ERR_NONE && stateMachine != nullptr &&
             stateMachine->GetInstanceState() != InstanceState::RUNNING) {
