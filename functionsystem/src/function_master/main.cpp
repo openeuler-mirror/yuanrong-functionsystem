@@ -391,6 +391,15 @@ bool InitInstanceManagerDriver(const functionmaster::Flags &flags, const std::sh
     g_instanceMgrDriver = std::make_shared<::instance_manager::InstanceManagerDriver>(
         instanceMgrActor, groupMgrActor, quotaMgrActor);
 
+    // Bind DomainSchedSrvActor AID to QuotaManagerActor when domain scheduler registers
+    if (quotaMgrActor != nullptr) {
+        (void)globalSched->AddDomainSchedCallback(
+            [quotaMgrActor](const litebus::AID &from, const std::string &name, const std::string &) {
+                quotaMgrActor->BindDomainSchedSrvAID(from);
+                YRLOG_INFO("QuotaManagerActor: bound DomainSchedSrvActor AID from domain '{}'", name);
+            });
+    }
+
     g_handlers.systemUpgradeHandler = [aid(instanceMgrActor->GetAID())](bool isUpgrading) {
         litebus::Async(aid, &instance_manager::InstanceManagerActor::HandleSystemUpgrade, isUpgrading);
     };
@@ -530,7 +539,7 @@ void OnCreate(const functionmaster::Flags &flags)
     auto memOpt = MemoryOptimizer();
     memOpt.StartTrimming();
 
-    trace::TraceManager::GetInstance().InitTrace("yuanrong-kernel", flags.GetNodeID(), flags.GetEnableTrace(),
+    trace::TraceManager::GetInstance().InitTrace(COMPONENT_NAME, flags.GetNodeID(), flags.GetEnableTrace(),
                                                  flags.GetTraceConfig());
     // meta-store relay on k8s election
     if (flags.GetElectionMode() == K8S_ELECTION_MODE && !CreateExplorer(flags, nullptr)) {

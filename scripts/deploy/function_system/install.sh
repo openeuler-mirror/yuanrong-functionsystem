@@ -381,6 +381,8 @@ function install_faas_frontend() {
   DATASYSTEM_ADDR=${IP_ADDRESS}:${DS_WORKER_PORT} \
   INSTANCE_ID="driver-faas-frontend-${NODE_ID}" \
   FAAS_LOG_PATH=${FS_LOG_PATH} \
+  ENABLE_TRACE="${ENABLE_TRACE}" \
+  TRACE_CONFIG="${TRACE_CONFIG}" \
   ${GO_RUNTIME_BIN}/goruntime \
   -jobId=${NODE_ID} \
   -runtimeId='faas_frontend_libruntime' \
@@ -408,6 +410,7 @@ function install_function_scheduler() {
   install_init_scheduler_config=${config_install_dir}/init_scheduler_args_temp.json
   cp ${init_scheduler_config} ${install_init_scheduler_config}
   sed -i "s/{etcdAddr}/$(echo ${ETCD_CLUSTER_ADDRESS} | sed 's/,/","/g')/g" ${install_init_scheduler_config}
+  sed -i "s/{functionSchedulerLeasePort}/${FUNCTION_SCHEDULER_LEASE_PORT}/g" ${install_init_scheduler_config}
   sed -i "s/{sslEnable}/${SSL_ENABLE}/g" ${install_init_scheduler_config}
   sed -i "s/{sccEnable}/${SCC_ENABLE}/g" ${install_init_scheduler_config}
   sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" ${install_init_scheduler_config}

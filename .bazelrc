@@ -1,6 +1,9 @@
 # C++17 standard
 build --action_env=BAZEL_CXXOPTS=-std=c++17
 
+# Use external abseil for OpenTelemetry to avoid namespace conflicts with protobuf's abseil
+build --@opentelemetry_cpp//api:with_abseil=true
+
 # gRPC build options — disable unused features to reduce build scope
 build --define=grpc_no_xds=true
 build --define=grpc_no_binder=true

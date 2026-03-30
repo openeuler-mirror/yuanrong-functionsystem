@@ -608,6 +608,17 @@ void LocalSchedSrvActor::Init()
     Receive("TryCancelResponse", &LocalSchedSrvActor::TryCancelResponse);
     Receive("RecordSnapshotMetadataResponse", &LocalSchedSrvActor::OnRecordSnapshotMetadataResponse);
     Receive("SnapStartCheckpointResponse", &LocalSchedSrvActor::OnSnapStartCheckpointResponse);
+    Receive("TenantQuotaExceeded", &LocalSchedSrvActor::OnTenantQuotaExceeded);
+}
+
+void LocalSchedSrvActor::OnTenantQuotaExceeded(const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    auto instanceCtrl = instanceCtrl_.lock();
+    if (instanceCtrl == nullptr) {
+        YRLOG_WARN("OnTenantQuotaExceeded: instance control is null, ignored");
+        return;
+    }
+    instanceCtrl->OnTenantQuotaExceeded(msg);
 }
 
 void LocalSchedSrvActor::Finalize()

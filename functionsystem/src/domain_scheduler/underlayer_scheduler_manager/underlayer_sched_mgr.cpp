@@ -68,4 +68,9 @@ void UnderlayerSchedMgr::SetScalerAddress(const std::string &address)
 {
     litebus::Async(aid_, &UnderlayerSchedMgrActor::SetScalerAddress, address);
 }
+
+void UnderlayerSchedMgr::BroadcastTenantQuotaExceeded(const std::string &msg)
+{
+    litebus::Async(aid_, &UnderlayerSchedMgrActor::BroadcastTenantQuotaExceeded, msg);
+}
 } // namespace functionsystem::domain_scheduler
