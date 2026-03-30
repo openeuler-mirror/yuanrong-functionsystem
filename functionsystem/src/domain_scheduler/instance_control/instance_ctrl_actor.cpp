@@ -31,6 +31,7 @@ const uint32_t CREATE_AGENT_RETRY_TIMES = 3;
 const uint32_t MAX_RETRY_SCHEDULE_TIMES = 0;
 using ScheduleResult = schedule_decision::ScheduleResult;
 using Scheduler = schedule_decision::Scheduler;
+
 litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::Schedule(
     const std::shared_ptr<messages::ScheduleRequest> &req)
 {
@@ -38,7 +39,8 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
 
     // Quota cooldown interception
     const std::string &tenantID = req->instance().tenantid();
-    if (!tenantID.empty() && blockedTenants_.count(tenantID)) {
+    if (!tenantID.empty() && cooldownMgr_.IsBlocked(tenantID)) {
+        YRLOG_INFO("InstanceCtrlActor::Schedule: BLOCKED by quota cooldown, tenantID={}", tenantID);
         schedule_decision::ScheduleResult result;
         result.code   = static_cast<int32_t>(StatusCode::RESOURCE_NOT_ENOUGH);
         result.reason = "QUOTA_EXCEEDED|tenantID=" + tenantID +
@@ -69,9 +71,19 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
         (*createOpts)[ENABLE_HORIZONTAL_SCALE_KEY] = "true";
     }
 
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord(
-        { "DomainSchedule", req->requestid(), "", req->instance().function(), req->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = trace::SpanName::kDomainSchedule;
+    param.spanKey = req->requestid();
+    param.traceID = req->traceid();
+    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        req->instance().createoptions(), &req->instance().scheduleoption().extension());
+    param.function = req->instance().function();
+    param.instanceID = req->instance().instanceid();
+    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    trace::TraceManager::PropagateSpanToOptions(span,
+                                                req->mutable_instance()->mutable_createoptions(),
+                                                req->mutable_instance()->mutable_scheduleoption()
+                                                    ->mutable_extension());
 
     YRLOG_INFO("instance(req={}, priority={}, timeout={}, enableHorizontalScale={}) schedule decision",
                requestID, req->instance().scheduleoption().priority(), timeout, enableHorizontalScale_);
@@ -111,7 +123,7 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     uint32_t dispatchTimes)
 {
         // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("DomainSchedule", req->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kDomainSchedule, req->requestid());
 
     schedulerQueueMap_.erase(req->requestid());
     auto schedResult = result.Get();
@@ -475,6 +487,7 @@ void InstanceCtrlActor::Init()
 void InstanceCtrlActor::OnTenantQuotaExceeded(
     const litebus::AID &from, std::string &&name, std::string &&msg)
 {
+    std::string serializedMsg = msg;  // preserve original payload to forward to local schedulers after parsing
     ::messages::TenantQuotaExceeded event;
     if (!event.ParseFromString(msg)) {
         YRLOG_WARN("InstanceCtrlActor::OnTenantQuotaExceeded parse failed");
@@ -486,8 +499,15 @@ void InstanceCtrlActor::OnTenantQuotaExceeded(
 
     YRLOG_INFO("InstanceCtrlActor: tenant={} blocked for {}ms (quota exceeded)", tenantID, cooldownMs);
 
-    blockedTenants_[tenantID] = litebus::AsyncAfter(
-        cooldownMs, GetAID(), &InstanceCtrlActor::OnTenantCooldownExpired, tenantID);
+    cooldownMgr_.Apply(tenantID, [&](uint64_t gen) {
+        return litebus::AsyncAfter(
+            cooldownMs, GetAID(), &InstanceCtrlActor::OnTenantCooldownExpired, tenantID, gen);
+    });
+
+    // Forward to all local schedulers (function_proxy) so their Schedule() also blocks
+    if (underlayer_ != nullptr) {
+        underlayer_->BroadcastTenantQuotaExceeded(serializedMsg);
+    }
 }
 
 void InstanceCtrlActor::HandleTenantQuotaExceeded(std::string msg)
@@ -497,10 +517,11 @@ void InstanceCtrlActor::HandleTenantQuotaExceeded(std::string msg)
     OnTenantQuotaExceeded(from, std::move(name), std::move(msg));
 }
 
-void InstanceCtrlActor::OnTenantCooldownExpired(std::string tenantID)
+void InstanceCtrlActor::OnTenantCooldownExpired(std::string tenantID, uint64_t generation)
 {
-    blockedTenants_.erase(tenantID);
-    YRLOG_INFO("InstanceCtrlActor: tenant={} cooldown expired, scheduling resumed", tenantID);
+    if (cooldownMgr_.OnExpired(tenantID, generation)) {
+        YRLOG_INFO("InstanceCtrlActor: tenant={} cooldown expired, scheduling resumed", tenantID);
+    }
 }
 
 void InstanceCtrlActor::SetScalerAddress(const std::string &address)

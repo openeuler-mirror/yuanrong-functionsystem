@@ -416,7 +416,7 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
     posixGrpcServer_->RegisterService(busService);
 
     // Create ExecStreamService instance
-    execStreamService_ = std::make_shared<ExecStreamService>(instanceCtrl_->GetActorAID());
+    execStreamService_ = std::make_shared<ExecStreamService>(instanceCtrl_->GetIdleMgr());
 
     // Register ExecStreamService based on session server configuration
     if (param_.sessionGrpcPort != "0") {

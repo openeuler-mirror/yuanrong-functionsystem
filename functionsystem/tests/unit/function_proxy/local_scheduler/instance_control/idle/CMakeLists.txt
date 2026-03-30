@@ -12,8 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/posix_api_handler POSIX_API_HANDLER_TEST_SRC)
-aux_source_directory(${CMAKE_CURRENT_LIST_DIR} INSTANCE_CONTROL_TEST_SRCS)
-aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/idle IDLE_TEST_SRCS)
-
-target_sources(${UNIT_TEST_MODULE} PRIVATE ${INSTANCE_CONTROL_TEST_SRCS} ${POSIX_API_HANDLER_TEST_SRC} ${IDLE_TEST_SRCS})
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR} TEST_SRCS)
+target_sources(${UNIT_TEST_MODULE} PRIVATE ${TEST_SRCS})

@@ -1,0 +1,46 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "logs_headers",
+    hdrs = glob(["include/**/*.h"]),
+    includes = ["include"],
+    deps = [
+        "@nlohmann_json//:nlohmann_json",
+        "@spdlog//:spdlog",
+    ],
+)
+
+cc_library(
+    name = "logs_internal_headers",
+    hdrs = glob(["src/sdk/*.h"]),
+    includes = ["src/sdk"],
+    deps = [":logs_headers"],
+)
+
+cc_library(
+    name = "yrlogs",
+    srcs = glob(["src/sdk/*.cpp"]),
+    hdrs = glob([
+        "include/**/*.h",
+        "src/sdk/*.h",
+    ]),
+    includes = [
+        "include",
+        "src/sdk",
+    ],
+    linkopts = ["-lpthread"],
+    deps = [
+        ":logs_headers",
+        ":logs_internal_headers",
+        "@nlohmann_json//:nlohmann_json",
+        "@spdlog//:spdlog",
+        "@zlib//:zlib",
+    ],
+)
+
+alias(
+    name = "logs_sdk",
+    actual = ":yrlogs",
+)
