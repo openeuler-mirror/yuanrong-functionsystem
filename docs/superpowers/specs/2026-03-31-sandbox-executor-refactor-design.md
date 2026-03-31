@@ -335,6 +335,253 @@ Future<StartInstanceResponse> SandboxExecutor::StartInstance(request, cardIDs) {
 
 ---
 
+## 不变量与 Corner Case 保护
+
+> 目标：关键资源（map 条目、ckpt 引用计数、端口）在任意失败路径下均不泄露。
+
+### 7.1 `SandboxStartGuard`：启动流程的 RAII 守卫
+
+**问题**：`MarkStartInProgress` → gRPC 超时 / 语言策略返回错误 → `MarkStartDone`/`Unregister` 没有被调用，`inProgressStarts_` 永久堆积。
+
+**方案**：在 `SandboxExecutor::StartInstance` 创建 `SandboxStartGuard`，析构时自动回滚。
+
+```cpp
+// executor/sandbox/sandbox_executor.h（内部）
+class SandboxStartGuard {
+public:
+    SandboxStartGuard(RuntimeStateManager& mgr, std::string runtimeID)
+        : mgr_(mgr), runtimeID_(std::move(runtimeID)) {
+        mgr_.MarkStartInProgress(runtimeID_);
+    }
+    ~SandboxStartGuard() {
+        if (!committed_) {
+            // 启动未成功提交：清除 in-progress 标记并确保 map 一致
+            mgr_.Unregister(runtimeID_);
+        }
+    }
+    // 启动成功后调用，析构时不再回滚
+    void Commit() {
+        committed_ = true;
+        mgr_.MarkStartDone(runtimeID_);
+    }
+private:
+    RuntimeStateManager& mgr_;
+    std::string runtimeID_;
+    bool committed_ = false;
+};
+```
+
+**使用约束**：`StartNormal` / `StartWarmUp` / `RestoreFromSnapshot` 三条路径各自在 `.OnError()` 回调里调用 guard 析构，`.OnComplete()` 里调用 `Commit()`。
+
+---
+
+### 7.2 Checkpoint 引用计数不泄露
+
+**问题**：`RestoreFromSnapshot` 的链路为：
+
+```
+DownloadCheckpoint → AddReference → DoRestore → OnRestoreCompleted
+```
+
+若 `DoRestore` 失败（gRPC 错误、超时），`AddReference` 已增加引用计数，但 `ReleaseCheckpointRef` 不会被调用，导致 ckpt 文件永久不被 GC。
+
+**方案**：`CheckpointOrchestrator::RestoreFromSnapshot` 在 `AddReference` 成功后，立即在 Future 链上注册 `.OnError()` 释放引用：
+
+```cpp
+// checkpoint_orchestrator.cpp（关键片段）
+Future<string> CheckpointOrchestrator::RestoreFromSnapshot(const SandboxStartParams& p) {
+    return ckptFileManager_->DownloadCheckpoint(p.checkpointID)
+        .Then([this, p](auto&&) {
+            return ckptFileManager_->AddReference(p.checkpointID);
+        })
+        .Then([this, p](auto&&) {
+            auto req = requestBuilder_.BuildRequest(p);  // 构建 RestoreRequest
+            return DoRestore(req)
+                .OnError([this, id = p.checkpointID](auto&&) {
+                    // DoRestore 失败：释放刚才增加的引用
+                    ckptFileManager_->RemoveReference(id);
+                });
+        });
+}
+```
+
+**调用方合约**：`SandboxExecutor` 在容器正常/异常停止时，均须调用 `checkpointOrchestrator_->ReleaseCheckpointRef(runtimeID)`，包括：
+- 正常 `StopInstance`
+- OOM Kill 路径（`oomKilled = true`）
+- `StopAllContainers`
+
+`RuntimeStateManager::Unregister` 内部**不**隐式释放 ckpt 引用（职责分离：状态清理 vs. 存储引用计数）。
+
+---
+
+### 7.3 端口不泄露
+
+**问题**：`PortManager::RequestPorts` 成功，但后续 `DoStart` 失败，端口未释放。
+
+**方案**：端口分配在 `SandboxRequestBuilder::BuildRequest` 内完成，`BuildRequest` 返回 `StatusOr<SandboxRequest>`；若后续 `DoStart` 返回错误，`SandboxExecutor::StartNormal` 的 `.OnError()` 中调用 `PortManager::ReleasePorts`（通过 `stateManager_->Find(runtimeID)->portMappingsJson`）。
+
+`RuntimeStateManager::Unregister` 不释放端口（同上，职责分离）。
+
+---
+
+### 7.4 Stop 期间收到 Start 的竞态
+
+**问题**：容器正在 `DoDelete`，同时收到新的 `StartInstance` 请求。
+
+**行为约定**：
+- `StartInstance` 发现 `IsPendingDelete == true` 时直接返回 `RESOURCE_BUSY` 错误，不进入启动流程。
+- `TerminateSandbox` 完成后（`Unregister` 之后），调用方可重新发起 `StartInstance`。
+
+---
+
+### 7.5 不变量汇总
+
+| 不变量 | 保障机制 |
+|---|---|
+| `inProgressStarts_` 条目最终必须被清除 | `SandboxStartGuard` RAII |
+| `ckptFileManager_` 引用计数与 sandbox 生命周期一致 | `OnError` 补偿 + stop 路径显式调用 `ReleaseCheckpointRef` |
+| `PortManager` 分配的端口最终必须释放 | `StartNormal.OnError` 补偿 + `Unregister` 后显式 `ReleasePorts` |
+| `RuntimeStateManager` 中无孤儿条目（无 sandbox 但有 map 残留） | `Unregister` 原子清除所有 map；`SandboxStartGuard` 在失败路径触发 |
+| Stop 期间不允许重新 Start | `IsPendingDelete` 检查前置 |
+
+---
+
+## Unit Test Cases
+
+> 测试框架：Google Test (gtest) + Google Mock (gmock)  
+> 异步工具：`future_test_helper.h`（`EXPECT_AWAIT_READY`、`EXPECT_AWAIT_TRUE`、`AsyncReturn`）  
+> 新增测试目录：`tests/unit/runtime_manager/executor/sandbox/`、`tests/unit/runtime_manager/config/language/`
+
+---
+
+### 8.1 `LanguageCommandStrategy` 测试（`config/language/`）
+
+#### `JavaStrategyTest`
+
+| 测试名 | 场景 | 关键断言 |
+|---|---|---|
+| `BuildArgs_Java11_UsesJava11JvmArgs` | config.javaVersion = "11" | args 中包含 Java11 对应的 jvmArgs |
+| `BuildArgs_Java17_UsesJava17JvmArgs` | config.javaVersion = "17" | args 中包含 Java17 对应的 jvmArgs |
+| `BuildArgs_Java21_UsesJava21JvmArgs` | config.javaVersion = "21" | args 中包含 Java21 对应的 jvmArgs |
+| `BuildArgs_DoesNotMutateRequest` | 正常输入 | 调用前后 request 内容完全相同（对比序列化结果） |
+| `BuildArgs_DoesNotCallChdir` | 正常输入 | `getcwd()` 在调用前后结果一致 |
+
+#### `PythonStrategyTest`
+
+| 测试名 | 场景 | 关键断言 |
+|---|---|---|
+| `BuildArgs_ReturnsWorkingDir_NotChdirSideEffect` | 有自定义 workingDir | `CommandArgs.workingDir` 非空，`getcwd()` 未改变 |
+| `BuildArgs_DoesNotMutateRequest` | 有 workingDir 字段 | request 的 deployDir 调用前后相同 |
+| `BuildArgs_InvalidWorkingDir_ReturnsError` | workingDir 不存在 | `StatusOr` 返回非 OK |
+
+---
+
+### 8.2 `CommandBuilder` 测试
+
+| 测试名 | 场景 | 关键断言 |
+|---|---|---|
+| `BuildArgs_UnknownLanguage_ReturnsError` | language = "ruby" | status 非 OK，error message 含语言名 |
+| `BuildArgs_DispatchesToCorrectStrategy` | language = "python3.9" | 调用 `PythonStrategy::BuildArgs`（gmock verify） |
+| `CombineEnvs_UserOverridesFramework` | user env 与 framework env 同名 | user 值胜出 |
+| `CombineEnvs_LdLibraryPath_Appended` | 两处都有 `LD_LIBRARY_PATH` | 值拼接而非覆盖 |
+| `CombineEnvs_FrameworkEnvNotOverridable` | user 设置 `ENABLE_METRICS=true` | 最终值为 framework 的 `false` |
+
+---
+
+### 8.3 `RuntimeStateManager` 测试
+
+| 测试名 | 场景 | 关键断言 |
+|---|---|---|
+| `Register_Then_Find_ReturnsInfo` | 正常注册 | `Find` 返回 `optional<SandboxInfo>` 非空，字段匹配 |
+| `Unregister_ClearsAllFields` | 注册后注销 | `Find` 返回 `nullopt`；`IsActive` 返回 false；`IsStartInProgress` 返回 false |
+| `Unregister_NonExistent_IsNoop` | 注销不存在的 runtimeID | 不抛异常，不崩溃 |
+| `MarkStartInProgress_Then_MarkStartDone` | 正常启动完成 | `IsStartInProgress` 先 true 后 false |
+| `MarkPendingDelete_BlocksIsActive` | 标记 pending delete | `IsPendingDelete` 返回 true |
+| `UpdateSandboxID_Persists` | 启动后补充 sandboxID | `Find()->sandboxID` 更新 |
+| `RegisterWarmUp_And_UnregisterWarmUp` | 预热注册/注销 | `IsWarmUp` 先 true 后 false；`GetWarmUp` 先有值后 nullopt |
+| `GetAllInstanceInfos_ReturnsAllRegistered` | 注册 3 个 runtime | 返回 map size == 3 |
+
+**Corner Case 专项：**
+
+| 测试名 | 场景 | 关键断言 |
+|---|---|---|
+| `DoubleRegister_SameRuntimeID` | 对同一 runtimeID 注册两次 | 第二次覆盖，map 中只有一条 |
+| `Unregister_AfterPartialUpdate` | 只调用了 `UpdateSandboxID` 未调用 `UpdateCheckpoint`，就 `Unregister` | `Find` 返回 nullopt，无残留 |
+
+---
+
+### 8.4 `SandboxRequestBuilder` 测试
+
+| 测试名 | 场景 | 关键断言 |
+|---|---|---|
+| `BuildRequest_NoCheckpoint_ReturnsStartRequest` | `checkpointID` 为空 | `std::holds_alternative<StartRequest>(result)` |
+| `BuildRequest_WithCheckpoint_ReturnsRestoreRequest` | `checkpointID` 非空 | `std::holds_alternative<RestoreRequest>(result)` |
+| `BuildRequest_InvalidRootfs_ReturnsError` | rootfs JSON 格式错误 | `StatusOr` 返回非 OK |
+| `BuildRequest_ResourcesApplied` | 有 GPU cardIDs | StartRequest 中 resources 包含 GPU 信息 |
+| `BuildRequest_EnvsApplied` | request 含用户 env | StartRequest 中 envs 包含用户值 |
+
+---
+
+### 8.5 `CheckpointOrchestrator` 测试
+
+#### Mock 依赖：`MockCkptFileManager`、`MockGrpcClient`
+
+| 测试名 | 场景 | 关键断言 |
+|---|---|---|
+| `TakeSnapshot_Success` | gRPC Checkpoint 成功，RegisterCheckpoint 成功 | response.code() == SUCCESS；`stateManager.Find()->checkpointID` 更新 |
+| `TakeSnapshot_GrpcFailed_ReturnsError` | DoCheckpoint 返回 gRPC 错误 | Future error；`stateManager` 无 checkpointID 残留 |
+| `RestoreFromSnapshot_Success` | Download → AddRef → DoRestore 均成功 | 返回有效 sandboxID |
+| **`RestoreFromSnapshot_DoRestoreFailed_RefReleased`** | DoRestore 失败 | `MockCkptFileManager::RemoveReference` 被调用一次（不泄露引用） |
+| **`RestoreFromSnapshot_AddRefFailed_NoRemoveCalled`** | AddReference 失败 | `RemoveReference` 未被调用（未增加引用，不需要释放） |
+| `ReleaseCheckpointRef_CallsRemoveReference` | 正常调用 | `RemoveReference` 被调用一次 |
+| `ReleaseCheckpointRef_NoCheckpoint_IsNoop` | runtimeID 无 checkpoint 记录 | 不崩溃，`RemoveReference` 未被调用 |
+
+---
+
+### 8.6 `SandboxExecutor` 集成测试
+
+#### Mock 依赖：`MockRuntimeStateManager`、`MockSandboxRequestBuilder`、`MockGrpcClient`
+
+| 测试名 | 场景 | 关键断言 |
+|---|---|---|
+| `StartInstance_Normal_Success` | 普通启动，gRPC 成功 | response.code() == SUCCESS；`stateManager.IsActive()` 为 true |
+| `StartInstance_AlreadyActive_ReturnsError` | runtimeID 已在运行 | 立即返回 ALREADY_EXISTS，不发起 gRPC |
+| **`StartInstance_InProgress_ReturnsSameFuture`** | 同一 runtimeID 并发两次 Start | 两次调用返回同一个 Future（或等价结果），gRPC 只调用一次 |
+| **`StartInstance_BuildArgsFailed_MapNotLeaked`** | `CommandBuilder` 返回错误 | `stateManager.IsStartInProgress()` 最终为 false |
+| **`StartInstance_GrpcFailed_MapNotLeaked`** | `DoStart` gRPC 失败 | `stateManager.IsActive()` 为 false；`stateManager.IsStartInProgress()` 为 false |
+| **`StartInstance_GrpcFailed_PortReleased`** | `DoStart` gRPC 失败 | `PortManager::ReleasePorts` 被调用 |
+| `StartInstance_WarmUp_RegistersInStateManager` | warmup 类型请求 | `stateManager.IsWarmUp()` 为 true |
+| `StartInstance_WithCheckpoint_DelegatesOrchestrator` | checkpointID 非空 | `MockCheckpointOrchestrator::RestoreFromSnapshot` 被调用 |
+| `StopInstance_Normal_UnregistersState` | 正常停止 | `stateManager.IsActive()` 为 false；gRPC Delete 被调用 |
+| **`StopInstance_OomKilled_ReleasesCheckpointRef`** | oomKilled = true | `checkpointOrchestrator.ReleaseCheckpointRef` 被调用 |
+| **`StopInstance_DuringStart_MarksPendingDelete`** | start in progress 时发起 stop | `stateManager.IsPendingDelete()` 为 true；start 完成后 container 被删除 |
+| **`StartInstance_PendingDelete_ReturnsError`** | `IsPendingDelete` 为 true | 立即返回 RESOURCE_BUSY |
+| `StopAllContainers_StopsAll_ReleasesAllRefs` | 3 个活跃 sandbox | 3 次 gRPC Delete；3 次 `ReleaseCheckpointRef`（有 ckpt 的那些） |
+
+---
+
+### 8.7 测试文件位置
+
+```
+tests/unit/runtime_manager/
+├── config/
+│   └── language/
+│       ├── CMakeLists.txt
+│       ├── java_strategy_test.cpp
+│       ├── python_strategy_test.cpp
+│       └── command_builder_test.cpp
+│
+└── executor/
+    └── sandbox/
+        ├── CMakeLists.txt
+        ├── runtime_state_manager_test.cpp
+        ├── sandbox_request_builder_test.cpp
+        ├── checkpoint_orchestrator_test.cpp
+        └── sandbox_executor_test.cpp
+```
+
+---
+
 ## 迁移策略
 
 1. 保留 `container_executor.h/.cpp`，内部转发到 `SandboxExecutor`，确保调用方零改动
