@@ -198,4 +198,36 @@ TEST_F(Heartbeat, ObserverResetHandler)
     litebus::Terminate(heartbeatClient->GetAID());
     litebus::Await(heartbeatClient->GetAID());
 }
+
+TEST_F(Heartbeat, CancelAllHeartbeatNodes)
+{
+    auto observer = std::make_shared<HeartbeatObserveDriver>("Test");
+    bool heartbeatLost = false;
+    observer->AddNewHeartbeatNode(HEARTBEAT_CLIENT_BASENAME + "pinger1", 300,
+                                  [&heartbeatLost](const litebus::AID &, HeartbeatConnection) {
+                                      heartbeatLost = true;
+                                  });
+    observer->AddNewHeartbeatNode(HEARTBEAT_CLIENT_BASENAME + "pinger2", 300,
+                                  [&heartbeatLost](const litebus::AID &, HeartbeatConnection) {
+                                      heartbeatLost = true;
+                                  });
+    uint16_t port = GetPortEnv("LITEBUS_PORT", 0);
+    litebus::AID aid(HEARTBEAT_OBSERVER_BASENAME + "Test", "127.0.0.1:" + std::to_string(port));
+    aid.SetProtocol(litebus::BUS_TCP);
+    auto heartbeatClient1 = std::make_shared<HeartbeatClient>("pinger1", 3, 100, [](const litebus::AID &) {});
+    auto heartbeatClient2 = std::make_shared<HeartbeatClient>("pinger2", 3, 100, [](const litebus::AID &) {});
+    litebus::Spawn(heartbeatClient1);
+    litebus::Spawn(heartbeatClient2);
+    heartbeatClient1->Start(aid);
+    heartbeatClient2->Start(aid);
+    heartbeatClient1->Stop();
+    heartbeatClient2->Stop();
+    observer->CancelAllHeartbeatNodes();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    EXPECT_FALSE(heartbeatLost);
+    litebus::Terminate(heartbeatClient1->GetAID());
+    litebus::Terminate(heartbeatClient2->GetAID());
+    litebus::Await(heartbeatClient1->GetAID());
+    litebus::Await(heartbeatClient2->GetAID());
+}
 }  // namespace functionsystem::test

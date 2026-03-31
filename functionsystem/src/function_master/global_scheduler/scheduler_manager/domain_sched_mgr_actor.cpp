@@ -160,6 +160,9 @@ Status DomainSchedMgrActor::Connect(const std::string &name, const std::string &
 
 void DomainSchedMgrActor::Disconnect()
 {
+    if (heartbeatObserveDriver_ != nullptr) {
+        heartbeatObserveDriver_->CancelAllHeartbeatNodes();
+    }
 }
 
 litebus::Future<Status> DomainSchedMgrActor::Schedule(const std::string &name, const std::string &address,

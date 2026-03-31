@@ -127,4 +127,13 @@ void HeartbeatObserver::ResetHeartbeatNode(const litebus::AID &aid, uint32_t tim
     YRLOG_INFO("Reset node {} with timeout {} ms", key, timeoutMs);
 }
 
+void HeartbeatObserver::CancelAllHeartbeatNodes()
+{
+    YRLOG_DEBUG("CancelAllHeartbeatNodes, GetAID():{}", std::string(GetAID()));
+    for (auto it = nodeInfos_.begin(); it != nodeInfos_.end();) {
+        (void)litebus::TimerTools::Cancel(it->second.timer);
+        it = nodeInfos_.erase(it);
+    }
+}
+
 }  // namespace functionsystem
