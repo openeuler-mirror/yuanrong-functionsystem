@@ -588,3 +588,39 @@ tests/unit/runtime_manager/
 2. 优先实现 `RuntimeStateManager` + `CommandBuilder` 重构（风险最低）
 3. 逐步迁移 `SandboxRequestBuilder`、`CheckpointOrchestrator`
 4. 待全部迁移完成后，`container_executor.*` 改为 deprecated alias
+
+---
+
+## 实现计划（Task Breakdown）
+
+> 执行顺序按依赖图，带 ✦ 的是 corner case 保护的关键 task。
+
+```
+T1 ──► T2 ──────────────────────────────────────► T9（UT）
+T3 ──► T4 ✦                                   ► T10（UT）
+T3 ──► T6 ✦ ──────────────────────────────────► T11（UT）
+T2 ──► T5 ──────────────────────────────────────► T11
+T3,T4,T5,T6 ──► T7 ──► T8（转发层）──► T12（UT）
+```
+
+| ID | 任务 | 关键产出 | 依赖 |
+|---|---|---|---|
+| T1 | LanguageCommandStrategy 接口 + 各语言实现 | `config/language/*.h/.cpp` | — |
+| T2 | CommandBuilder 重构为薄 dispatcher | `config/command_builder.h/.cpp` 重写 | T1 |
+| T3 | RuntimeStateManager 实现 | `executor/sandbox/runtime_state_manager.h/.cpp` | — |
+| T4 ✦ | SandboxStartGuard RAII | `SandboxStartGuard`（内嵌于 sandbox_executor.h） | T3 |
+| T5 | SandboxRequestBuilder 实现 | `executor/sandbox/sandbox_request_builder.h/.cpp` | T2 |
+| T6 ✦ | CheckpointOrchestrator 实现 | `executor/sandbox/checkpoint_orchestrator.h/.cpp` | T3 |
+| T7 | SandboxExecutor 实现 | `executor/sandbox/sandbox_executor.h/.cpp` | T3–T6 |
+| T8 | container_executor 转发层 | 现有文件改为转发，对外接口不变 | T7 |
+| T9 | UT：LanguageStrategy + CommandBuilder | 覆盖纯函数约束、Java 版本分发、env precedence | T1,T2 |
+| T10 | UT：RuntimeStateManager | 覆盖 Unregister 原子性、double-register | T3 |
+| T11 | UT：RequestBuilder + CheckpointOrchestrator | 覆盖 ckpt 引用不泄露 | T5,T6 |
+| T12 | UT：SandboxExecutor | 覆盖并发去重、gRPC 失败清理、OOM/竞态 | T7 |
+
+**可并行执行的 task 组：**
+- 第一批（无依赖）：**T1、T3** 可并行
+- 第二批：**T2**（依赖 T1）、**T4、T6**（依赖 T3）可并行
+- 第三批：**T5**（依赖 T2）、**T9**（依赖 T1,T2）、**T10**（依赖 T3）可并行
+- 第四批：**T7**（依赖 T3-T6）
+- 第五批：**T8、T11、T12**
