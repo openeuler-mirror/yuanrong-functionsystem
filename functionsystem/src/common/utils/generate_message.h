@@ -168,11 +168,13 @@ inline std::shared_ptr<KillRequest> GenKillRequest(const std::string &instanceID
     return killRequest;
 }
 
-inline KillResponse GenKillResponse(const common::ErrorCode &errCode, const std::string &message)
+inline KillResponse GenKillResponse(const common::ErrorCode &errCode, const std::string &message,
+                                    const std::string &payload = "")
 {
     KillResponse killRsp;
     killRsp.set_code(errCode);
     killRsp.set_message(message);
+    killRsp.set_payload(payload);
 
     return killRsp;
 }

@@ -1073,7 +1073,7 @@ litebus::Future<KillResponse> InstanceCtrlActor::SendSignal(const std::shared_pt
                        instanceInfo.instanceid());
             return instanceClient->Signal(std::move(*signalReq))
                 .Then([instanceID(instanceInfo.instanceid())](const runtime::SignalResponse &signalRsp) {
-                    return GenKillResponse(signalRsp.code(), signalRsp.message());
+                    return GenKillResponse(signalRsp.code(), signalRsp.message(), signalRsp.payload());
                 });
         });
 }
