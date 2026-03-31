@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-aux_source_directory(${CMAKE_CURRENT_LIST_DIR} EXECUTOR_SRCS)
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR} SANDBOX_EXECUTOR_SRCS)
 
-target_sources(runtime_manager_lib PRIVATE ${EXECUTOR_SRCS})
-
-add_subdirectory(sandbox)
+target_sources(runtime_manager_lib PRIVATE ${SANDBOX_EXECUTOR_SRCS})

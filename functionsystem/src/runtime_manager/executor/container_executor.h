@@ -267,7 +267,7 @@ private:
     std::shared_ptr<GrpcClient<runtime::v1::RuntimeLauncher>> containerd_ {nullptr};
     std::shared_ptr<HealthCheck> healthCheckClient_;
     std::shared_ptr<CkptFileManager> ckptFileManager_;
-    CommandBuilder cmdBuilder_ = {false};
+    CommandBuilder cmdBuilder_{false};
     bool reconnecting_ = false;
     bool synced_ = false;
     std::unordered_map<std::string, runtime::v1::FunctionRuntime> registeredWarmUp_;

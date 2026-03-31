@@ -241,11 +241,13 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::StartInstanc
     //     return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_PARAMS_INVALID);
     // }
     std::vector<std::string> args;
-    if (auto status = cmdBuilder_.GetBuildArgs(language, port, request, args); status.IsError()) {
+    auto [buildStatus, cmdArgs] = cmdBuilder_.BuildArgs(language, port, *request);
+    if (buildStatus.IsError()) {
         YRLOG_ERROR("{}|{}|get build args failed, can not start instanceID({}), runtimeID({})", info.traceid(),
                     info.requestid(), info.instanceid(), runtimeID);
-        return GenFailStartInstanceResponse(request, status.StatusCode(), status.GetMessage());
+        return GenFailStartInstanceResponse(request, buildStatus.StatusCode(), buildStatus.GetMessage());
     }
+    args = std::move(cmdArgs.args);
     YRLOG_INFO("{}|{}|advance to start instanceID({}) runtimeID({})", info.traceid(), info.requestid(),
                info.instanceid(), runtimeID);
     // todo lwy runtime directly call
