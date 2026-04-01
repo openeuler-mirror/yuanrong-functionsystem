@@ -389,6 +389,9 @@ public:
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
         const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise);
 
+    Status NormalizeCreateTenantID(const litebus::Option<FunctionMeta> &functionMeta,
+                                   const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
+
     litebus::Future<Status> AuthorizeKill(const std::string &callerInstanceID,
                                           const std::shared_ptr<KillRequest> &killReq, bool isSkipAuth = false);
 

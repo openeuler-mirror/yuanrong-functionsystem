@@ -161,6 +161,21 @@ static std::shared_ptr<messages::ScheduleRequest> GenScheduleReq(std::shared_ptr
     return scheduleReq;
 }
 
+static resources::InstanceInfo GenParentInstanceInfo(const std::string &parentID, const std::string &proxyAID,
+                                                     const std::string &tenantID)
+{
+    resources::InstanceInfo parentInfo;
+    parentInfo.set_instanceid(parentID);
+    parentInfo.set_requestid(parentID + "-request");
+    parentInfo.set_function("default/parent/$latest");
+    parentInfo.set_functionproxyid(ExtractProxyIDFromProxyAID(proxyAID));
+    parentInfo.set_parentfunctionproxyaid(proxyAID);
+    parentInfo.set_tenantid(tenantID);
+    parentInfo.set_issystemfunc(false);
+    parentInfo.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::RUNNING));
+    return parentInfo;
+}
+
 class InstanceCtrlTest : public ::testing::Test {
 public:
     void SetUp() override
@@ -599,10 +614,24 @@ TEST_F(InstanceCtrlTest, DeployInstanceRetry)
 
     auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeID");
     auto &mockStateMachine = *stateMachine;
+    auto parentStateMachine = std::make_shared<MockInstanceStateMachine>("nodeID");
+    auto parentInfo = GenParentInstanceInfo("parent", actor->GetAID(), "tenant001");
+    EXPECT_CALL(*parentStateMachine, GetInstanceInfo).WillRepeatedly(Return(parentInfo));
+    int selfLookupTimes = 0;
 
     GeneratedInstanceStates genStates{ "DesignatedInstanceID", InstanceState::NEW, false };
     EXPECT_CALL(*instanceControlView, TryGenerateNewInstance).WillOnce(Return(genStates));
-    EXPECT_CALL(*instanceControlView, GetInstance).WillOnce(Return(nullptr)).WillRepeatedly(Return(stateMachine));
+    EXPECT_CALL(*instanceControlView, GetInstance(testing::_))
+        .WillRepeatedly(Invoke([stateMachine, parentStateMachine, &selfLookupTimes](const std::string &instanceID) {
+            if (instanceID == "parent") {
+                return std::static_pointer_cast<InstanceStateMachine>(parentStateMachine);
+            }
+            if (instanceID == "DesignatedInstanceID") {
+                return selfLookupTimes++ == 0 ? std::shared_ptr<InstanceStateMachine>(nullptr)
+                                              : std::static_pointer_cast<InstanceStateMachine>(stateMachine);
+            }
+            return std::static_pointer_cast<InstanceStateMachine>(stateMachine);
+        }));
     EXPECT_CALL(mockStateMachine, IsSaving()).WillRepeatedly(Return(false));
     EXPECT_CALL(mockStateMachine, TransitionToImpl)
         .WillOnce(Return(SCHEDULING_RESULT))
@@ -793,6 +822,8 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForResourceNotEnough)
 
     auto metaClient = MetaStoreClient::Create({ .etcdAddress = metaStoreServerHost_ });
     instanceControlView->BindMetaStoreClient(metaClient);
+    instanceControlView->GenerateStateMachine(
+        "DesignatedParentID", GenParentInstanceInfo("DesignatedParentID", actor->GetAID(), "tenant-parent"));
 
     auto localSchedSrv = std::make_shared<MockLocalSchedSrv>();
     messages::ScheduleResponse scheduleResponse;
@@ -866,6 +897,8 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForDeployInstanceFailed)
 
     auto metaClient = MetaStoreClient::Create({ .etcdAddress = metaStoreServerHost_ });
     instanceControlView->BindMetaStoreClient(metaClient);
+    instanceControlView->GenerateStateMachine(
+        "DesignatedParentID", GenParentInstanceInfo("DesignatedParentID", actor->GetAID(), "tenant-parent"));
 
     auto functionAgentMgr = std::make_shared<MockFunctionAgentMgr>("funcAgentMgr", metaClient);
     messages::DeployInstanceResponse deployInstanceResponse;
@@ -947,6 +980,8 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForInitRuntimeFailed)
     auto metaClient = MetaStoreClient::Create({ .etcdAddress = metaStoreServerHost_ });
 
     instanceControlView->BindMetaStoreClient(metaClient);
+    instanceControlView->GenerateStateMachine(
+        "DesignatedParentID", GenParentInstanceInfo("DesignatedParentID", actor->GetAID(), "tenant-parent"));
 
     auto functionAgentMgr = std::make_shared<MockFunctionAgentMgr>("funcAgentMgr", metaClient);
     messages::DeployInstanceResponse deployInstanceResponse;
@@ -1042,6 +1077,8 @@ TEST_F(InstanceCtrlTest, CreateInstanceSuccess)
 
     auto metaClient = MetaStoreClient::Create({ .etcdAddress = metaStoreServerHost_ });
     instanceControlView->BindMetaStoreClient(metaClient);
+    auto parentInfo = GenParentInstanceInfo("DesignatedParentID", actor->GetAID(), "tenant001");
+    instanceControlView->GenerateStateMachine("DesignatedParentID", parentInfo);
 
     auto functionAgentMgr = std::make_shared<MockFunctionAgentMgr>("funcAgentMgr", metaClient);
     messages::DeployInstanceResponse deployInstanceResponse;
@@ -1094,6 +1131,55 @@ TEST_F(InstanceCtrlTest, CreateInstanceSuccess)
     litebus::Await(stateActor->GetAID());
 }
 
+TEST_F(InstanceCtrlTest, AuthorizeCreateShouldNotOverrideNormalizedTenantID)
+{
+    InternalIAM::Param internalIAMParam;
+    internalIAMParam.isEnableIAM = true;
+    auto mockInternalIAM = std::make_shared<MockInternalIAM>(internalIAMParam);
+
+    auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActorTest", "nodeID", instanceCtrlConfig);
+    auto instanceControlView = std::make_shared<MockInstanceControlView>("nodeID");
+    actor->BindInstanceControlView(instanceControlView);
+    actor->BindInternalIAM(mockInternalIAM);
+
+    resource_view::InstanceInfo parentInfo;
+    parentInfo.set_instanceid("parentID");
+    parentInfo.set_function("default/parent/$latest");
+    parentInfo.set_tenantid("parentTenant");
+    parentInfo.set_issystemfunc(false);
+
+    auto parentStateMachine = std::make_shared<MockInstanceStateMachine>("nodeID");
+    EXPECT_CALL(*instanceControlView, GetInstance("parentID")).WillRepeatedly(Return(parentStateMachine));
+    EXPECT_CALL(*parentStateMachine, GetInstanceInfo).WillRepeatedly(Return(parentInfo));
+
+    FunctionMeta functionMeta = functionMeta_;
+    functionMeta.funcMetaData.tenantId = "funcTenant";
+    functionMeta.funcMetaData.isSystemFunc = false;
+
+    auto scheduleReq = GenScheduleReq(actor);
+    scheduleReq->mutable_instance()->set_parentid("parentID");
+    (*scheduleReq->mutable_instance()->mutable_createoptions())[TENANT_ID] = "createOptionTenant";
+
+    auto normalizeStatus = actor->NormalizeCreateTenantID(functionMeta, scheduleReq);
+    EXPECT_TRUE(normalizeStatus.IsOk());
+    EXPECT_EQ(scheduleReq->instance().tenantid(), "parentTenant");
+
+    EXPECT_CALL(*mockInternalIAM, IsIAMEnabled()).WillRepeatedly(Return(true));
+    EXPECT_CALL(*mockInternalIAM, Authorize(_))
+        .WillOnce(Invoke([](function_proxy::AuthorizeParam &authorizeParam) -> Status {
+            EXPECT_EQ(authorizeParam.callerTenantID, "parentTenant");
+            EXPECT_EQ(authorizeParam.calleeTenantID, "funcTenant");
+            EXPECT_EQ(authorizeParam.callMethod, function_proxy::CALL_METHOD_CREATE);
+            return Status::OK();
+        }));
+
+    auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    auto authorizeFuture = actor->AuthorizeCreate(functionMeta, scheduleReq, runtimePromise);
+    EXPECT_AWAIT_READY(authorizeFuture);
+    EXPECT_TRUE(authorizeFuture.Get().IsOk());
+    EXPECT_EQ(scheduleReq->instance().tenantid(), "parentTenant");
+}
+
 TEST_F(InstanceCtrlTest, ScheduleSuccess)
 {
     auto mockSharedClient = std::make_shared<MockSharedClient>();
@@ -1141,10 +1227,24 @@ TEST_F(InstanceCtrlTest, ScheduleSuccess)
 
     auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeID");
     auto &mockStateMachine = *stateMachine;
+    auto parentStateMachine = std::make_shared<MockInstanceStateMachine>("nodeID");
+    auto parentInfo = GenParentInstanceInfo("DesignatedParentID", actor->GetAID(), "tenant001");
+    EXPECT_CALL(*parentStateMachine, GetInstanceInfo).WillRepeatedly(Return(parentInfo));
+    int selfLookupTimes = 0;
 
     GeneratedInstanceStates genStates{ "DesignatedInstanceID", InstanceState::NEW, false };
     EXPECT_CALL(*instanceControlView, TryGenerateNewInstance).WillOnce(Return(genStates));
-    EXPECT_CALL(*instanceControlView, GetInstance).WillOnce(Return(nullptr)).WillRepeatedly(Return(stateMachine));
+    EXPECT_CALL(*instanceControlView, GetInstance(testing::_))
+        .WillRepeatedly(Invoke([stateMachine, parentStateMachine, &selfLookupTimes](const std::string &instanceID) {
+            if (instanceID == "DesignatedParentID") {
+                return std::static_pointer_cast<InstanceStateMachine>(parentStateMachine);
+            }
+            if (instanceID == "DesignatedInstanceID") {
+                return selfLookupTimes++ == 0 ? std::shared_ptr<InstanceStateMachine>(nullptr)
+                                              : std::static_pointer_cast<InstanceStateMachine>(stateMachine);
+            }
+            return std::static_pointer_cast<InstanceStateMachine>(stateMachine);
+        }));
     EXPECT_CALL(mockStateMachine, IsSaving()).WillRepeatedly(Return(false));
     EXPECT_CALL(*stateMachine, GetOwner()).WillRepeatedly(Return("nodeID"));
     EXPECT_CALL(mockStateMachine, TransitionToImpl)
@@ -2369,10 +2469,13 @@ TEST_F(InstanceCtrlTest, CreateInstanceClientTest)
     actor->BindControlInterfaceClientManager(clientManager);
     auto instanceControlView = std::make_shared<MockInstanceControlView>("nodeID");
     actor->BindInstanceControlView(instanceControlView);
+    auto parentStateMachine = std::make_shared<MockInstanceStateMachine>("nodeID");
+    auto parentInfo = GenParentInstanceInfo("parent", actor->GetAID(), "tenant001");
+    EXPECT_CALL(*parentStateMachine, GetInstanceInfo).WillRepeatedly(Return(parentInfo));
     EXPECT_CALL(*instanceControlView, GetInstance("GeneratedInstanceID"))
         .WillRepeatedly(Return(stateMachine));
     EXPECT_CALL(*instanceControlView, GetInstance("parent"))
-        .WillRepeatedly(Return(nullptr));
+        .WillRepeatedly(Return(parentStateMachine));
     auto observer = std::make_shared<MockObserver>();
     auto instanceCtrl = std::make_shared<InstanceCtrl>(actor);
     instanceCtrl->Start(nullptr, mockResourceViewMgr_, mockObserver_);
@@ -5765,6 +5868,7 @@ TEST_F(InstanceCtrlTest, PersistentNewToSchedulingFailed)
 
     auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
     auto scheduleReq = GenScheduleReq(actor);
+    scheduleReq->mutable_instance()->clear_parentid();
 
     auto result = instanceCtrl->Schedule(scheduleReq, runtimePromise);
     ASSERT_AWAIT_READY(result);
@@ -5844,6 +5948,7 @@ TEST_F(InstanceCtrlTest, DISABLED_PersistentSchedulingToCreatingFailed)
 
     auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
     auto scheduleReq = GenScheduleReq(actor);
+    scheduleReq->mutable_instance()->clear_parentid();
 
     auto result = instanceCtrl->Schedule(scheduleReq, runtimePromise);
     ASSERT_AWAIT_READY(result);
@@ -5917,6 +6022,8 @@ TEST_F(InstanceCtrlTest, PersistentCreatingToRunningFailed)
 
     auto metaClient = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
     instanceControlView->BindMetaStoreClient(metaClient);
+    instanceControlView->GenerateStateMachine(
+        "DesignatedParentID", GenParentInstanceInfo("DesignatedParentID", actor->GetAID(), "tenant-parent"));
 
     auto txnResponseSuccess = std::make_shared<TxnResponse>();
     txnResponseSuccess->success = true;
