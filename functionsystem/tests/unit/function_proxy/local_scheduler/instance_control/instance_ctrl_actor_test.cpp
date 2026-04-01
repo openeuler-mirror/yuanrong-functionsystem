@@ -316,7 +316,7 @@ TEST_F(DISABLED_InstanceCtrlActorTest, DeployAppDriver)
 
 TEST_F(DISABLED_InstanceCtrlActorTest, StopAppDriver)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(3);
     scheduleReq->mutable_instance()->set_function(function);
@@ -561,7 +561,7 @@ TEST_F(DISABLED_InstanceCtrlActorTest, SetInstanceBillingContext)
  */
 TEST_F(DISABLED_InstanceCtrlActorTest, SetScheduleReqConfigSuccess)
 {
-    const std::string function = "12345678901234561234567890123456/0-test-helloWorld/$latest";
+    const std::string function = "default/0-test-helloWorld/$latest";
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
     scheduleReq->mutable_instance()->set_function(function);

@@ -156,6 +156,8 @@ ScheduleResults FrameworkImpl::SelectFeasible(const std::shared_ptr<ScheduleCont
             continue;
         }
         auto score = Score(ctx, instance, unit);
+        YRLOG_DEBUG("{}|resourceUnit({}) passed filtering, score: {}, availableForRequest: {}",
+                    instance.requestid(), unit.id(), score.score, filterStatus.availableForRequest);
         score.availableForRequest = filterStatus.availableForRequest;
         sortedFeasibleNodes.push(score);
         latelySelected = unit.id();

@@ -34,6 +34,8 @@
 namespace functionsystem::local_scheduler {
 
 class LocalSchedSrv;
+class SnapCtrl;
+class TraefikRegistry;
 class InstanceCtrl : public ActorDriver {
 public:
     explicit InstanceCtrl(const std::shared_ptr<InstanceCtrlActor> &instanceCtrlActor);
@@ -105,6 +107,8 @@ public:
         return litebus::Async(aid_, &InstanceCtrlActor::GetFuncMeta, funcKey);
     }
 
+    virtual void TriggerToWarmUpFunction(const std::string &agentID);
+
     litebus::Future<Status> UpdateInstanceStatusPromise(const std::string &instanceID, const std::string &errMsg) const;
 
     virtual void SetAbnormal();
@@ -163,6 +167,11 @@ public:
         litebus::Async(aid_, &InstanceCtrlActor::BindSubscriptionMgr, subscriptionMgr);
     }
 
+    void BindSnapCtrl(const std::shared_ptr<SnapCtrl> &snapCtrl)
+    {
+        litebus::Async(aid_, &InstanceCtrlActor::BindSnapCtrl, snapCtrl);
+    }
+
     void OnHealthyStatus(const Status &status) const
     {
         ASSERT_IF_NULL(instanceCtrlActor_);
@@ -179,12 +188,20 @@ public:
         return aid_;
     }
 
+    void SetTraefikRegistry(const std::shared_ptr<TraefikRegistry> &registry);
+
     virtual litebus::Future<KillResponse> KillInstancesOfJob(const std::shared_ptr<KillRequest> &killReq) const;
 
     void BindInstanceControlView(const std::shared_ptr<InstanceControlView> &view)
     {
         ASSERT_IF_NULL(instanceCtrlActor_);
         instanceCtrlActor_->BindInstanceControlView(view);
+    }
+
+    std::shared_ptr<InstanceControlView> GetInstanceControlView() const
+    {
+        ASSERT_IF_NULL(instanceCtrlActor_);
+        return instanceCtrlActor_->GetInstanceControlView();
     }
 
     virtual litebus::Future<Status> RescheduleWithID(const std::string &instanceID);
@@ -218,6 +235,31 @@ public:
                                        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
                                        InstanceReadyCallBack callback);
     virtual litebus::Future<Status> ForceDeleteInstance(const std::string &instanceID);
+
+    virtual litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> CreateInstanceClient(
+        const std::string &instanceID, const std::string &runtimeID, const std::string &address)
+    {
+        return litebus::Async(aid_, &InstanceCtrlActor::CreateInstanceClient, instanceID, runtimeID, address,
+                              nullptr, false);
+    }
+
+    virtual void StartHeartbeat(const std::string &instanceID, uint32_t timeoutTimes,
+                               const std::string &runtimeID, const StatusCode &prevStatus)
+    {
+        litebus::Async(aid_, &InstanceCtrlActor::StartHeartbeat, instanceID, timeoutTimes, runtimeID, prevStatus);
+    }
+
+    virtual litebus::Future<TransitionResult> TransInstanceState(
+        const std::shared_ptr<InstanceStateMachine> machine, const TransContext &context)
+    {
+        return litebus::Async(aid_, &InstanceCtrlActor::TransInstanceState, machine, context);
+    }
+
+    virtual litebus::Future<messages::DeployInstanceResponse> DeploySnapStartInstance(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq)
+    {
+        return litebus::Async(aid_, &InstanceCtrlActor::DeploySnapStartInstance, scheduleReq);
+    }
 
     virtual void RegisterClearGroupInstanceCallBack(ClearGroupInstanceCallBack callback);
     // only for test

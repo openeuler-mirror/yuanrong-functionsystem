@@ -32,7 +32,7 @@ const uint32_t DEFAULT_REGISTER_INTERVAL = 5000;
 const uint32_t DEFAULT_MAX_REGISTER_TIMES = 10;
 const uint32_t DEFAULT_PING_RECEIVE_LOST_TIMEOUT = 6000;
 const uint32_t RESOURCE_UPDATE_INTERVAL = 1000;
-const uint32_t CLUSTER_METRICS_INTERVAL = 60 * 1000;  // ms
+const uint32_t CLUSTER_METRICS_INTERVAL = 10 * 1000;  // ms
 const uint32_t PUT_READY_RES_CYCLE_MS = 5000;         // ms
 const int MAX_RETURN_SCHEDULING_QUEUE_SIZE = 10000;
 
@@ -328,6 +328,7 @@ void DomainSchedSrvActor::Registered(const litebus::AID &from, std::string &&nam
 
     if (from.Name() == uplayer_.aid.Name()) {
         Registered(message, uplayer_);
+        StartPingPong(uplayer_.aid.Url());
         return;
     }
 }
@@ -508,6 +509,15 @@ void DomainSchedSrvActor::ResponseNotifySchedAbnormal(const litebus::AID &from, 
     notifyAbnormalSync_.Synchronized(rsp.schedname(), Status::OK());
 }
 
+void DomainSchedSrvActor::OnTenantQuotaExceeded(const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    if (!instanceCtrl_) {
+        YRLOG_WARN("DomainSchedSrvActor::OnTenantQuotaExceeded: instanceCtrl_ is null");
+        return;
+    }
+    instanceCtrl_->OnTenantQuotaExceeded(std::move(msg));
+}
+
 void DomainSchedSrvActor::ResponseNotifyWorkerStatus(const litebus::AID &from, std::string &&, std::string &&msg)
 {
     messages::NotifyWorkerStatusResponse rsp;
@@ -562,6 +572,7 @@ void DomainSchedSrvActor::Init()
     Receive("ResponseForwardSchedule", &DomainSchedSrvActor::ResponseForwardSchedule);
     Receive("Schedule", &DomainSchedSrvActor::Schedule);
     Receive("ResponseNotifySchedAbnormal", &DomainSchedSrvActor::ResponseNotifySchedAbnormal);
+    Receive("TenantQuotaExceeded", &DomainSchedSrvActor::OnTenantQuotaExceeded);
     Receive("ResponseNotifyWorkerStatus", &DomainSchedSrvActor::ResponseNotifyWorkerStatus);
     Receive("QueryAgentInfo", &DomainSchedSrvActor::QueryAgentInfo);
     Receive("QueryResourcesInfo", &DomainSchedSrvActor::QueryResourcesInfo);

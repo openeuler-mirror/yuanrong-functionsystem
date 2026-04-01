@@ -22,9 +22,10 @@ import (
 	"github.com/asaskevich/govalidator/v11"
 )
 
-const funNameReg = "(^0-[0-9a-zA-Z]{1,16}-([a-z0-9][a-z0-9-]{0,126}[a-z0-9]|" +
-	"[a-z])$)|(^[a-z][a-z0-9-]{0,126}[a-z0-9]$|^[a-z]$)|(^0@[0-9a-zA-Z]{1,16}@([a-z0-9][a-z0-9-]{0," +
-	"126}[a-z0-9]|[a-z])$)"
+const funNameReg = "(^0-[0-9a-zA-Z]{1,16}-([a-zA-Z0-9.][a-zA-Z0-9.-]{0,126}[a-zA-Z0-9.]|" +
+	"[a-zA-Z0-9.])$)|(^[a-zA-Z0-9.][a-zA-Z0-9.-]{0,126}[a-zA-Z0-9.]$|^[a-zA-Z0-9.]$)|" +
+	"(^0@[0-9a-zA-Z]{1,16}@([a-zA-Z0-9.][a-zA-Z0-9.-]{0," +
+	"126}[a-zA-Z0-9.]|[a-zA-Z0-9.])$)"
 
 const poolIDReg = "^[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?$"
 

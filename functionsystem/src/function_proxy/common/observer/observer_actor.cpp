@@ -62,16 +62,6 @@ Status ObserverActor::Register()
         [aid(GetAID())](const std::shared_ptr<GetResponse> &getResponse) -> litebus::Future<SyncResult> {
         return litebus::Async(aid, &ObserverActor::BusProxySyncer, getResponse);
     };
-    (void)metaStorageAccessor_
-        ->RegisterObserver(
-            FUNC_META_PATH_PREFIX, watchOpt,
-            [aid(GetAID())](const std::vector<WatchEvent> &events, bool) {
-                auto respCopy = events;
-                litebus::Async(aid, &ObserverActor::UpdateFuncMetaEvent, respCopy);
-                return true;
-            },
-            functionMetaSyncer)
-        .After(WATCH_TIMEOUT_MS, after);
 
     YRLOG_INFO("Register watch with prefix: {}", BUSPROXY_PATH_PREFIX);
     (void)metaStorageAccessor_
@@ -90,6 +80,26 @@ Status ObserverActor::Register()
     YRLOG_DEBUG("sync key({}) finished", INSTANCE_PATH_PREFIX);
     instanceSyncDone_.SetValue(true);
 
+    YRLOG_INFO("load local function");
+    LoadLocalFuncMeta(funcMetaMap_, observerParam_.functionMetaPath);
+    service_json::LoadFuncMetaFromServiceYaml(funcMetaMap_, observerParam_.servicesPath, observerParam_.libPath);
+    for (auto it = funcMetaMap_.begin(); it != funcMetaMap_.end(); ++it) {
+        localFuncMetaSet_.emplace(it->first);
+    }
+    if (updateFuncMetasFunc_ != nullptr) {
+        updateFuncMetasFunc_(true, funcMetaMap_);
+    }
+    (void)metaStorageAccessor_
+        ->RegisterObserver(
+            FUNC_META_PATH_PREFIX, watchOpt,
+            [aid(GetAID())](const std::vector<WatchEvent> &events, bool) {
+                auto respCopy = events;
+                litebus::Async(aid, &ObserverActor::UpdateFuncMetaEvent, respCopy);
+                return true;
+            },
+            functionMetaSyncer)
+        .After(WATCH_TIMEOUT_MS, after);
+
     if (!isPartialWatchInstances_) {
         YRLOG_INFO("Register watch with prefix: {}", INSTANCE_ROUTE_PATH_PREFIX);
         watchOpt = WatchOption{ true, false, synced.second + 1, true };
@@ -103,16 +113,6 @@ Status ObserverActor::Register()
                 },
                 instanceInfoSyncer)
             .After(WATCH_TIMEOUT_MS, after);
-    }
-
-    YRLOG_INFO("load local function");
-    LoadLocalFuncMeta(funcMetaMap_, observerParam_.functionMetaPath);
-    service_json::LoadFuncMetaFromServiceYaml(funcMetaMap_, observerParam_.servicesPath, observerParam_.libPath);
-    for (auto it = funcMetaMap_.begin(); it != funcMetaMap_.end(); ++it) {
-        localFuncMetaSet_.emplace(it->first);
-    }
-    if (updateFuncMetasFunc_ != nullptr) {
-        updateFuncMetasFunc_(true, funcMetaMap_);
     }
     return Status::OK();
 }
@@ -639,7 +639,6 @@ litebus::Future<litebus::Option<resource_view::InstanceInfo>> ObserverActor::Get
 litebus::Option<InstanceInfoMap> ObserverActor::GetAgentInstanceInfoByID(const std::string &funcAgentID)
 {
     if (agentInstanceInfoMap_.find(funcAgentID) == agentInstanceInfoMap_.end()) {
-        YRLOG_WARN("there is no element of funcAgentID: {}", funcAgentID);
         return litebus::None();
     }
 
@@ -879,6 +878,14 @@ void ObserverActor::NotifyMigratingRequest(const std::string &instanceID)
     instanceView_->NotifyMigratingRequest(instanceID);
 }
 
+void ObserverActor::ReportTraffic(const std::string &instanceID, const size_t &size)
+{
+    if (trafficReportCbFunc_ == nullptr) {
+        return;
+    }
+    trafficReportCbFunc_(instanceID, size);
+}
+
 void ObserverActor::SetInstanceBillingContext(const resource_view::InstanceInfo &instanceInfo, bool synced)
 {
     if (synced && instanceInfo.functionproxyid() == nodeID_) {
@@ -1055,7 +1062,9 @@ litebus::Future<SyncResult> ObserverActor::InstanceInfoSyncer(const std::shared_
     UpdateInstanceRouteEvent(remoteWatchRouteEvents, true);
 
     for (auto instance : localWatchRouteInfo) {  // check and update local instance info
-        instanceInfoSyncerCbFunc_(instance);
+        if (instanceInfoSyncerCbFunc_) {
+            instanceInfoSyncerCbFunc_(instance);
+        }
     }
     return syncResult;
 }
@@ -1146,7 +1155,9 @@ litebus::Future<SyncResult> ObserverActor::PartialInstanceInfoSyncer(const std::
     }
 
     // (2) owner is self, compare local cache
-    instanceInfoSyncerCbFunc_(routeInfo);
+    if (instanceInfoSyncerCbFunc_) {
+        instanceInfoSyncerCbFunc_(routeInfo);
+    }
     return syncResult;
 }
 

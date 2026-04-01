@@ -209,6 +209,16 @@ public:
 
     litebus::Future<Status> TryCancelSchedule(const std::shared_ptr<messages::CancelSchedule> &cancelRequest);
 
+    litebus::Future<messages::RecordSnapshotResponse> RecordSnapshotMetadata(
+        const std::shared_ptr<messages::RecordSnapshotRequest> &req);
+    void OnRecordSnapshotMetadataResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    litebus::Future<messages::RestoreSnapshotResponse> SnapStartCheckpoint(
+        const std::shared_ptr<messages::RestoreSnapshotRequest> &req);
+    void DoSnapStartCheckpoint(const std::shared_ptr<litebus::Promise<messages::RestoreSnapshotResponse>> &promise,
+                               const std::shared_ptr<messages::RestoreSnapshotRequest> &req);
+    void OnSnapStartCheckpointResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
     litebus::Future<Status> IsRegisteredToGlobal();
 
     // for test
@@ -339,6 +349,14 @@ private:
     REQUEST_SYNC_HELPER(LocalSchedSrvActor, Status, groupKillTimeout_, requestGroupKillMatch_);
     const uint32_t deletePodTimeout_ = 5000;
     REQUEST_SYNC_HELPER(LocalSchedSrvActor, Status, deletePodTimeout_, deletePodMatch_);
+
+    const uint32_t recordSnapshotTimeout_ = 10000;
+    REQUEST_SYNC_HELPER(LocalSchedSrvActor, messages::RecordSnapshotResponse,
+                        recordSnapshotTimeout_, recordSnapshotSync_);
+
+    const uint32_t snapStartCheckpointTimeout_ = 10000;
+    REQUEST_SYNC_HELPER(LocalSchedSrvActor, messages::RestoreSnapshotResponse,
+                        snapStartCheckpointTimeout_, snapStartCheckpointSync_);
 
     litebus::Promise<Status> unRegistered_;
 

@@ -22,13 +22,17 @@
 #include "common/utils/files.h"
 #include "function_agent/code_deployer/deployer.h"
 #include "function_agent/code_deployer/s3_deployer.h"
+#include "mocks/mock_obs_wrapper.h"
 
 using namespace functionsystem::function_agent;
 
 namespace functionsystem::test {
 class MockAgentS3Deployer : public S3Deployer {
 public:
-    explicit MockAgentS3Deployer(std::shared_ptr<S3Config> config, messages::CodePackageThresholds msg) : S3Deployer(config, msg)
+    // Use MockObsWrapper to avoid calling obs_initialize()/obs_deinitialize() from the real OBS SDK.
+    // obs_initialize() must only be called once per process; multiple calls corrupt the heap.
+    explicit MockAgentS3Deployer(std::shared_ptr<S3Config> config, messages::CodePackageThresholds msg)
+        : S3Deployer(config, std::make_shared<MockObsWrapper>(), msg)
     {
     }
 

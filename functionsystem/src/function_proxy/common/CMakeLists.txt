@@ -21,6 +21,7 @@ add_subdirectory(flags)
 add_subdirectory(posix_client)
 add_subdirectory(posix_service)
 add_subdirectory(posix_auth_interceptor)
+add_subdirectory(exec_session)
 add_subdirectory(communication)
 add_subdirectory(data_view)
 add_subdirectory(observer)
@@ -33,6 +34,6 @@ add_subdirectory(rate_limiter)
 add_subdirectory(common_driver)
 
 add_dependencies(function_proxy_common_lib service_json rpc meta_store_client
-        common_flags)
+        common_flags metadata)
 target_link_libraries(function_proxy_common_lib aksk service_json rpc meta_store_client
-        common_flags ${datasystem_LIB} busproxy_lib)
+        common_flags ${datasystem_LIB} busproxy_lib metadata)

@@ -123,6 +123,8 @@ public:
         return metricsConfigFile_;
     }
 
+    std::string GetQuotaConfigFile() const { return quotaConfigFile_; }
+
     bool GetEnableTrace() const
     {
         return enableTrace_;
@@ -291,6 +293,7 @@ protected:
     bool metricsSslEnable_{ false };
     std::string metricsConfig_;
     std::string metricsConfigFile_;
+    std::string quotaConfigFile_{ "" };
     bool enableTrace_{ false };
     std::string traceConfig_;
     uint32_t prometheusPushgatewayPort_{ DEFAULT_OBSERVABILITY_PUSHGATEWAY_PORT };

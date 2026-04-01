@@ -31,6 +31,8 @@ const std::string LOCAL_SCHED_FUNC_AGENT_MGR_ACTOR_NAME_POSTFIX = "-LocalSchedFu
 const std::string LOCAL_GROUP_CTRL_ACTOR_NAME = "LocalGroupCtrlActor";
 const std::string BUNDLE_MGR_ACTOR_NAME = "BundleMgrActor";
 const std::string SUBSCRIPTION_MGR_ACTOR_NAME_POSTFIX = "-SubscriptionMgrActor";
+const std::string SNAP_CTRL_ACTOR_NAME = "SnapCtrlActor";
+const std::string LOCAL_GC_ACTOR_NAME = "LocalGcActor";
 
 // GlobalScheduler
 const std::string GLOBAL_SCHED_ACTOR_NAME = "GlobalSchedActor";
@@ -79,6 +81,9 @@ const std::string GROUP_MANAGER_ACTOR_NAME = "GroupManagerActor";
 const std::string TOKEN_MANAGER_ACTOR_NAME = "TokenManagerActor";
 // AKSKManagerActor
 const std::string AKSK_MANAGER_ACTOR_NAME = "AKSKManagerActor";
+
+// SnapManagerActor
+const std::string SNAP_MANAGER_ACTOR_NAME = "SnapManagerActor";
 
 // IAMServer
 const std::string IAM_ACTOR = "IAMActor";

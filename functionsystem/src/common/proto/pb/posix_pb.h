@@ -44,6 +44,10 @@ namespace functionsystem {
     using InstanceRange = core_service::InstanceRange;
     using CreateResourceGroupRequest = core_service::CreateResourceGroupRequest;
     using CreateResourceGroupResponse = core_service::CreateResourceGroupResponse;
+    using SnapOptions = core_service::SnapOptions;
+    using SnapStartOptions = core_service::SnapStartOptions;
+    using SnapInfo = core_service::SnapInfo;
+    using SnapStartedInfo = core_service::SnapStartedInfo;
 }
 
 namespace internal {
@@ -71,6 +75,10 @@ namespace runtime {
     using CheckpointResponse = runtime_service::CheckpointResponse;
     using RecoverRequest = runtime_service::RecoverRequest;
     using RecoverResponse = runtime_service::RecoverResponse;
+    using PrepareSnapRequest = runtime_service::PrepareSnapRequest;
+    using PrepareSnapResponse = runtime_service::PrepareSnapResponse;
+    using SnapStartedRequest = runtime_service::SnapStartedRequest;
+    using SnapStartedResponse = runtime_service::SnapStartedResponse;
 }
 
 namespace common {
@@ -81,6 +89,7 @@ namespace common {
     using ServerInfo = common::ServerInfo;
     using FunctionGroupRunningInfo = common::FunctionGroupRunningInfo;
     using ResourceGroupSpec = common::ResourceGroupSpec;
+    using SnapType = common::SnapType;
 }
 
 namespace affinity {

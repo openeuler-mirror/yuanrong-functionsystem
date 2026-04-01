@@ -41,6 +41,7 @@ const static std::string INSTANCE_ID_ENV = "INSTANCE_ID";
 const static std::string HOME_ENV = "HOME";
 const static std::string DATA_SYSTEM_ADDR = "DATASYSTEM_ADDR";
 const static std::string YR_DS_ADDRESS = "YR_DS_ADDRESS";
+const static std::string YR_DPOSIX_UDS = "YR_DPOSIX_UDS";
 const static std::string YR_SERVER_ADDRESS = "YR_SERVER_ADDRESS";
 const static std::string DRIVER_SERVER_PORT = "DRIVER_SERVER_PORT";
 const static std::string FUNCTION_LIB_PATH = "FUNCTION_LIB_PATH";
@@ -142,7 +143,7 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     const std::string &debugServerPort = request->runtimeinstanceinfo().runtimeconfig().debugserverport();
 
     std::string deployFilePath = deployDir;
-    std::string layerPath = deployDir;
+    std::string layerPath;
     if (storageType == S3_STORAGE_TYPE && request->scheduleoption().schedpolicyname() != MONOPOLY_SCHEDULE) {
         deployFilePath = deployFilePath.append("/" + RUNTIME_LAYER_DIR_NAME)
                              .append("/" + RUNTIME_FUNC_DIR_NAME)
@@ -152,11 +153,14 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     }
     std::stringstream ss;
     // The third-party dependency libraries of functions are stored in the lib directory.
-    if (info.runtimeconfig().posixenvs().find(ENV_DELEGATE_DOWNLOAD) == info.runtimeconfig().posixenvs().end()) {
+    if (!deployFilePath.empty() && deployFilePath != "/") {
         ss << deployFilePath << ":" << deployFilePath << "/lib";
     } else {
+        deployFilePath = "";
+    }
+    if (info.runtimeconfig().posixenvs().find(ENV_DELEGATE_DOWNLOAD) != info.runtimeconfig().posixenvs().end()) {
         std::string delegateDownload = info.runtimeconfig().posixenvs().find(ENV_DELEGATE_DOWNLOAD)->second;
-        ss << deployFilePath << ":" << deployFilePath << "/lib:" << delegateDownload << ":" << delegateDownload
+        ss << ":" << delegateDownload << ":" << delegateDownload
            << "/lib";
     }
     std::string language = info.runtimeconfig().language();
@@ -164,7 +168,8 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     if (language.find(CPP_LANGUAGE) != std::string::npos) {
         ss << ":" << config.runtimePath << "/cpp/lib";
     }
-    if (!config.runtimeLdLibraryPath.empty()) {
+    if (!config.runtimeLdLibraryPath.empty() &&
+        request->type() == static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME)) {
         ss << ":" << config.runtimeLdLibraryPath;
     }
     std::string ldLibraryPath = ss.str();
@@ -195,6 +200,39 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
         { ENABLE_DIS_CONV_CALL_STACK, config.enableDisConvCallStack ? "true" : "false" },
         { YR_DEBUG_SERVER_PORT, debugServerPort }
     };
+    auto addIfValid = [&posixEnvs](const std::string &key, const std::string &value) {
+        if (value.empty() || value == "0") {
+            return;
+        }
+        (void)posixEnvs.emplace(std::make_pair(key, value));
+    };
+
+    addIfValid(POSIX_LISTEN_ADDR, GetPosixAddress(config, port));
+    addIfValid(POD_IP, config.ip);
+    addIfValid(YR_RUNTIME_ID, info.runtimeid());
+    addIfValid(INSTANCE_ID_ENV, info.instanceid());
+    addIfValid(DATA_SYSTEM_ADDR,
+               config.hostIP + ":" + config.dataSystemPort);  // the port of datasystem worker should be configurable.
+    // keep same env name for runtime in driver mode and job submission mode
+    addIfValid(YR_DS_ADDRESS,
+               config.hostIP + ":" + config.dataSystemPort);
+    addIfValid(DRIVER_SERVER_PORT, config.driverServerPort);
+    addIfValid(HOME_ENV, config.runtimeHomeDir);
+    addIfValid(HOST_IP, config.hostIP);
+    addIfValid(FUNCTION_LIB_PATH, deployFilePath);
+    addIfValid("YR_FUNCTION_LIB_PATH", deployFilePath);
+    addIfValid(LAYER_LIB_PATH, layerPath);
+    addIfValid(LD_LIBRARY_PATH, ldLibraryPath);
+    addIfValid(PROXY_GRPC_SERVER_PORT, config.proxyGrpcServerPort);
+    // keep same env name for runtime in driver mode and job submission mode
+    addIfValid(YR_SERVER_ADDRESS,
+               config.proxyIP + ":" + config.proxyGrpcServerPort);
+    addIfValid(YR_DPOSIX_UDS, request->runtimeinstanceinfo().runtimeconfig().dposixudspath());
+    addIfValid(CLUSTER_ID, config.clusterID);
+    addIfValid(NODE_ID, config.nodeID);
+    addIfValid(ENABLE_DIS_CONV_CALL_STACK, config.enableDisConvCallStack ? "true" : "");
+    addIfValid(YR_DEBUG_SERVER_PORT, debugServerPort);
+    addIfValid("YR_JOB_ID", "job-" + Utils::GetJobIDFromTraceID(info.traceid()));
 
     AddYuanRongEnvs(posixEnvs);
 
@@ -218,7 +256,7 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
             posixEnvs.emplace(env.first, env.second);
         }
     }
-
+    // todo(lwy_robb): which should be removed in the future
     auto hookHandler = info.runtimeconfig().hookhandler();
     for (const auto &handlerIter : HANDLER_MAP) {
         auto hookHandlerIter = hookHandler.find(handlerIter.first);
@@ -258,8 +296,8 @@ std::map<std::string, std::string> GenerateUserEnvs(const ::messages::RuntimeIns
                 auto realIDs = SelectRealIDs(envIter.second, cardsIDs);
                 auto visibleDevicesEnvKey = key == "NPU-DEVICE-IDS" ? ASCEND_RT_VISIBLE_DEVICES : CUDA_VISIBLE_DEVICES;
                 (void)envs.emplace(std::make_pair(key, envIter.second));
-                // XXX_VISIBLE_DEVICES need to set logic id, not physical id, so we used sorted schedule result
-                (void)envs.emplace(std::make_pair(visibleDevicesEnvKey, realIDs));
+                // XXX_VISIBLE_DEVICES need to set logic id, not physical id
+                (void)envs.emplace(std::make_pair(visibleDevicesEnvKey, envIter.second));
                 YRLOG_DEBUG("select {} realIDs, mappingIDS: physical[{}], logical[{}]", key, realIDs, envIter.second);
                 continue;
             }
@@ -274,34 +312,63 @@ std::map<std::string, std::string> GenerateUserEnvs(const ::messages::RuntimeIns
 
 void AddYuanRongEnvs(std::map<std::string, std::string> &envs)
 {
+    auto addIfPresent = [&envs](const std::string &key, const litebus::Option<std::string> &opt) {
+        if (opt.IsNone()) {
+            return;
+        }
+        const auto value = opt.Get();
+        if (value.empty()) {
+            return;
+        }
+        (void)envs.emplace(std::make_pair(key, value));
+    };
+    auto addIfEnabled = [&envs](const std::string &key, const litebus::Option<std::string> &opt) {
+        if (opt.IsNone()) {
+            return;
+        }
+        auto value = opt.Get();
+        if (value.empty()) {
+            return;
+        }
+        auto lower = value;
+        (void)transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+        if (lower == "false" || lower == "0") {
+            return;
+        }
+        (void)envs.emplace(std::make_pair(key, value));
+    };
+
     // ENABLE_DS_CLIENT : 当前云助端默认不连接数据系统，后续统一需要支持连接数据系统
     auto enableDsClientOpt = litebus::os::GetEnv(ENABLE_DS_CLIENT);
-    auto enableDsClient = enableDsClientOpt.IsNone() ? "0" : enableDsClientOpt.Get();
-    (void)envs.emplace(std::make_pair(ENABLE_DS_CLIENT, enableDsClient));
+    addIfEnabled(ENABLE_DS_CLIENT, enableDsClientOpt);
 
     auto enableMetricsOpt = litebus::os::GetEnv(ENABLE_METRICS);
-    auto enableMetrics = enableMetricsOpt.IsNone() ? "false" : enableMetricsOpt.Get();
-    (void)envs.emplace(std::make_pair(ENABLE_METRICS, enableMetrics));
+    {
+        std::string metricsValue = "false";
+        if (!enableMetricsOpt.IsNone() && !enableMetricsOpt.Get().empty()) {
+            auto lower = enableMetricsOpt.Get();
+            (void)transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+            if (lower != "false" && lower != "0") {
+                metricsValue = enableMetricsOpt.Get();
+            }
+        }
+        (void)envs.emplace(std::make_pair(ENABLE_METRICS, metricsValue));
+    }
 
     auto metricsConfigOpt = litebus::os::GetEnv(RUNTIME_METRICS_CONFIG);
-    auto metricsConfig = metricsConfigOpt.IsNone() ? "" : metricsConfigOpt.Get();
-    (void)envs.emplace(std::make_pair(METRICS_CONFIG, metricsConfig));
+    addIfPresent(METRICS_CONFIG, metricsConfigOpt);
 
     const auto enableAlarmOpt = litebus::os::GetEnv("ENABLE_DS_HEALTH_CHECK");
-    auto enableAlarm = enableAlarmOpt.IsNone() ? "false" : enableAlarmOpt.Get();
-    (void)envs.emplace(std::make_pair("ENABLE_DS_HEALTH_CHECK", enableAlarm));
+    addIfEnabled("ENABLE_DS_HEALTH_CHECK", enableAlarmOpt);
 
     auto metricsConfigFileOpt = litebus::os::GetEnv(RUNTIME_METRICS_CONFIG_FILE);
-    auto metricsConfigFile = metricsConfigFileOpt.IsNone() ? "" : metricsConfigFileOpt.Get();
-    (void)envs.emplace(std::make_pair(METRICS_CONFIG_FILE, metricsConfigFile));
+    addIfPresent(METRICS_CONFIG_FILE, metricsConfigFileOpt);
 
     auto enableTraceOpt = litebus::os::GetEnv(ENABLE_TRACE);
-    auto enableTrace = enableTraceOpt.IsNone() ? "false" : enableTraceOpt.Get();
-    (void)envs.emplace(std::make_pair(ENABLE_TRACE, enableTrace));
+    addIfEnabled(ENABLE_TRACE, enableTraceOpt);
 
     auto runtimeTraceConfigOpt = litebus::os::GetEnv(RUNTIME_TRACE_CONFIG);
-    auto runtimeTraceConfig = runtimeTraceConfigOpt.IsNone() ? "" : runtimeTraceConfigOpt.Get();
-    (void)envs.emplace(std::make_pair(RUNTIME_TRACE_CONFIG, runtimeTraceConfig));
+    addIfPresent(RUNTIME_TRACE_CONFIG, runtimeTraceConfigOpt);
 
     auto requestAckAccMaxSecOpt = litebus::os::GetEnv(REQUEST_ACK_ACC_MAX_SEC);
     if (!requestAckAccMaxSecOpt.IsNone()) {
@@ -373,5 +440,10 @@ std::string ReplaceDollarContent(const std::string &source, std::map<std::string
 bool IsPreconfiguredEnv(std::string& key)
 {
     return std::find(PRE_CONFIG_ENV.begin(), PRE_CONFIG_ENV.end(), key) != PRE_CONFIG_ENV.end();
+}
+
+std::string GetPosixAddress(const RuntimeConfig config, const std::string &port)
+{
+    return config.proxyIP + ":" + port;
 }
 }  // namespace functionsystem::runtime_manager

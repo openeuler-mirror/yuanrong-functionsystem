@@ -41,6 +41,10 @@ def run_test(root_dir, cmd_args):
     if args["action"] in ["all", "exec"]:
         # 执行测试用例
         log.info(f"Step(2/3, action = [exec]): Exec test case with args: {json.dumps(args)}")
+        # Set BIN_PATH for integration tests that require spawning compiled binaries
+        bin_output_path = os.path.join(root_dir, "functionsystem", "output", "bin")
+        os.environ["BIN_PATH"] = bin_output_path
+        log.info(f"Set BIN_PATH={bin_output_path} for integration tests")
         exit_code = tasks.run_code_gate(
             args["it_bin"],
             args["ut_bin"],

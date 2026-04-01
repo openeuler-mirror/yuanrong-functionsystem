@@ -95,7 +95,7 @@ public:
         return codeAgingTime_;
     }
 
-const std::string &GetAccessKey() const
+    const std::string &GetAccessKey() const
     {
         return accessKey;
     }
@@ -145,6 +145,21 @@ const std::string &GetAccessKey() const
         return enableSignatureValidation_;
     }
 
+    const bool &GetDataSystemEnable() const
+    {
+        return dataSystemEnable_;
+    }
+
+    const std::string &GetDataSystemHost() const
+    {
+        return dataSystemHost_;
+    }
+
+    const int32_t &GetDataSystemPort() const
+    {
+        return dataSystemPort_;
+    }
+
     const std::string &GetPluginConfigs() const
     {
         return pluginConfigs_;
@@ -179,6 +194,10 @@ protected:
     bool enableDisConvCallStack = false;
     std::string agentUID = "";
     bool enableSignatureValidation_ = false;
+
+    std::string dataSystemHost_;
+    int32_t dataSystemPort_;
+    bool dataSystemEnable_ = false;
 
     std::string pluginConfigs_ = "";
 };

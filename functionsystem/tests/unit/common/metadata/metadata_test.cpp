@@ -55,11 +55,11 @@ public:
 TEST_F(LoaderTest, LoadFunctionWithDeviceSuccess)
 {
     const std::string content =
-            R"({"funcMetaData":{"layers":[],"name":"faascontroller","description":"","version":"$latest","functionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:faascontroller","functionVersionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:faascontroller:$latest","codeSize":22029378,"codeSha256":"1211a06","codeSha512":"1211a07","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"12345678901234561234567890123456","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"local","code_path":"/tmp/home/sn/function"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":"","cryptoAlgorithm":"GCM"},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}, "extendedMetaData":{"instance_meta_data":{"maxInstance":100, "minInstance":0, "concurrentNum":10, "cacheInstance":0},"device": {"name": "saxpy", "entrypoint": "saxpy.cubin", "model": "cuda", "hbm": 1000, "type": "GPU", "count": 8, "stream": 100, "latency": 120}}})";
+            R"({"funcMetaData":{"layers":[],"name":"faascontroller","description":"","version":"$latest","functionUrn":"sn:cn:yrk:default:function:faascontroller","functionVersionUrn":"sn:cn:yrk:default:function:faascontroller:$latest","codeSize":22029378,"codeSha256":"1211a06","codeSha512":"1211a07","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"local","code_path":"/tmp/home/sn/function"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":"","cryptoAlgorithm":"GCM"},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}, "extendedMetaData":{"instance_meta_data":{"maxInstance":100, "minInstance":0, "concurrentNum":10, "cacheInstance":0},"device": {"name": "saxpy", "entrypoint": "saxpy.cubin", "model": "cuda", "hbm": 1000, "type": "GPU", "count": 8, "stream": 100, "latency": 120}}})";
     LoaderTest::GenFunctionMetaFile("/tmp/meta", content);
     std::unordered_map<std::string, FunctionMeta> map;
     LoadLocalFuncMeta(map, "/tmp/meta");
-    auto funcMeta = map["12345678901234561234567890123456/faascontroller/$latest"];
+    auto funcMeta = map["default/faascontroller/$latest"];
 
     DeviceMetaData nf {
         .hbm = 1000,
@@ -92,15 +92,15 @@ TEST_F(LoaderTest, LoadFunctionWithDeviceSuccess)
 TEST_F(LoaderTest, LoadFunctionSuccess)
 {
     const std::string content =
-        R"({"funcMetaData":{"layers":[],"name":"faascontroller","description":"","version":"$latest","functionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:faascontroller","functionVersionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:faascontroller:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"12345678901234561234567890123456","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"local","code_path":"/tmp/home/sn/function"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}, "extendedMetaData":{"instance_meta_data":{"maxInstance":100, "minInstance":0, "concurrentNum":10, "cacheInstance":0}}})";
+        R"({"funcMetaData":{"layers":[],"name":"faascontroller","description":"","version":"$latest","functionUrn":"sn:cn:yrk:default:function:faascontroller","functionVersionUrn":"sn:cn:yrk:default:function:faascontroller:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"local","code_path":"/tmp/home/sn/function"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}, "extendedMetaData":{"instance_meta_data":{"maxInstance":100, "minInstance":0, "concurrentNum":10, "cacheInstance":0}}})";
     LoaderTest::GenFunctionMetaFile("/tmp/meta", content);
     std::unordered_map<std::string, FunctionMeta> map;
     LoadLocalFuncMeta(map, "/tmp/meta");
-    auto funcMeta = map["12345678901234561234567890123456/faascontroller/$latest"];
+    auto funcMeta = map["default/faascontroller/$latest"];
 
     // check FuncMataData
     EXPECT_TRUE(funcMeta.funcMetaData.urn ==
-        "sn:cn:yrk:12345678901234561234567890123456:function:faascontroller:$latest");
+        "sn:cn:yrk:default:function:faascontroller:$latest");
     EXPECT_TRUE(funcMeta.funcMetaData.runtime == "java1.8");
     EXPECT_TRUE(funcMeta.funcMetaData.entryFile == "fusion_computation_handler.fusion_computation_handler");
     EXPECT_TRUE(funcMeta.funcMetaData.handler.empty());
@@ -108,7 +108,7 @@ TEST_F(LoaderTest, LoadFunctionSuccess)
     EXPECT_TRUE(funcMeta.funcMetaData.hookHandler["call"] == "com.actorTaskCallHandler");
     EXPECT_TRUE(funcMeta.funcMetaData.name == "faascontroller");
     EXPECT_TRUE(funcMeta.funcMetaData.version == "$latest");
-    EXPECT_TRUE(funcMeta.funcMetaData.tenantId == "12345678901234561234567890123456");
+    EXPECT_TRUE(funcMeta.funcMetaData.tenantId == "default");
 
     // check CodeMetaData
     EXPECT_TRUE(funcMeta.codeMetaData.storageType == "local");
@@ -139,12 +139,12 @@ TEST_F(LoaderTest, LoadFunctionSuccess)
 TEST_F(LoaderTest, LoadFunctionFailedWhenMetadataInvalid)
 {
     const std::string content =
-        R"({"funcMetaData":"layers":[],"name":"faascontroller","description":"","version":"$latest","functionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:faascontroller","functionVersionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:faascontroller:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"12345678901234561234567890123456","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"local","code_path":"/tmp/home/sn/function"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}, "extendedMetaData":{"instance_meta_data":{"maxInstance":100, "minInstance":0, "concurrentNum":10, "cacheInstance":0}}})";
+        R"({"funcMetaData":"layers":[],"name":"faascontroller","description":"","version":"$latest","functionUrn":"sn:cn:yrk:default:function:faascontroller","functionVersionUrn":"sn:cn:yrk:default:function:faascontroller:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"local","code_path":"/tmp/home/sn/function"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}, "extendedMetaData":{"instance_meta_data":{"maxInstance":100, "minInstance":0, "concurrentNum":10, "cacheInstance":0}}})";
     LoaderTest::GenFunctionMetaFile("/tmp/meta", content);
     std::unordered_map<std::string, FunctionMeta> map;
     LoadLocalFuncMeta(map, "/tmp/meta");
 
-    EXPECT_TRUE(map.find("12345678901234561234567890123456/faascontroller/$latest") == map.end());
+    EXPECT_TRUE(map.find("default/faascontroller/$latest") == map.end());
 
     LoaderTest::DeleteFunctionMetaFile("/tmp/meta");
 }
@@ -160,12 +160,12 @@ TEST_F(LoaderTest, LoadFunctionFailedWhenMetadataInvalid)
 TEST_F(LoaderTest, LoadFunctionFailedWhenMetadataLackInformation)
 {
     const std::string content =
-        R"({"funcMetaData":{"layers":[],"name":"","description":"","version":"$latest","functionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:faascontroller","functionVersionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:faascontroller:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"12345678901234561234567890123456","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"local","code_path":"/tmp/home/sn/function"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}, "extendedMetaData":{"instance_meta_data":{"maxInstance":100, "minInstance":0, "concurrentNum":10, "cacheInstance":0}}})";
+        R"({"funcMetaData":{"layers":[],"name":"","description":"","version":"$latest","functionUrn":"sn:cn:yrk:default:function:faascontroller","functionVersionUrn":"sn:cn:yrk:default:function:faascontroller:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"local","code_path":"/tmp/home/sn/function"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}, "extendedMetaData":{"instance_meta_data":{"maxInstance":100, "minInstance":0, "concurrentNum":10, "cacheInstance":0}}})";
     LoaderTest::GenFunctionMetaFile("/tmp/meta", content);
     std::unordered_map<std::string, FunctionMeta> map;
     LoadLocalFuncMeta(map, "/tmp/meta");
 
-    EXPECT_TRUE(map.find("12345678901234561234567890123456/faascontroller/$latest") == map.end());
+    EXPECT_TRUE(map.find("default/faascontroller/$latest") == map.end());
 
     LoaderTest::DeleteFunctionMetaFile("/tmp/meta");
 }
@@ -198,11 +198,11 @@ TEST_F(LoaderTest, GetFuncMetaFromJson)
         "layers": [],
         "name": "0-system-faascontroller",
         "description": "",
-        "functionUrn": "sn:cn:yrk:12345678901234561234567890123456:function:0-system-faascontroller",
+        "functionUrn": "sn:cn:yrk:default:function:0-system-faascontroller",
         "reversedConcurrency": 0,
         "tags": null,
         "functionUpdateTime": "",
-        "functionVersionUrn": "sn:cn:yrk:12345678901234561234567890123456:function:0-system-faascontroller:$latest",
+        "functionVersionUrn": "sn:cn:yrk:default:function:0-system-faascontroller:$latest",
         "codeSize": 5789050,
         "codeSha256": "9114f5795c215b6f8b8d506bd7502c3582b9425538c30d54ba8d722d2947156e",
         "handler": "",
@@ -214,7 +214,7 @@ TEST_F(LoaderTest, GetFuncMetaFromJson)
         "latestVersionUpdateTime": "",
         "publishTime": "",
         "businessId": "yrk",
-        "tenantId": "12345678901234561234567890123456",
+        "tenantId": "default",
         "domain_id": "",
         "project_name": "",
         "revisionId": "20230203063332624",
@@ -333,11 +333,11 @@ TEST_F(LoaderTest, GetEntryFileAndHandler)
             "layers": [],
             "name": "0-system-faascontroller",
             "description": "",
-            "functionUrn": "sn:cn:yrk:12345678901234561234567890123456:function:0-system-faascontroller",
+            "functionUrn": "sn:cn:yrk:default:function:0-system-faascontroller",
             "reversedConcurrency": 0,
             "tags": null,
             "functionUpdateTime": "",
-            "functionVersionUrn": "sn:cn:yrk:12345678901234561234567890123456:function:0-system-faascontroller:$latest",
+            "functionVersionUrn": "sn:cn:yrk:default:function:0-system-faascontroller:$latest",
             "codeSize": 5789050,
             "codeSha256": "9114f5795c215b6f8b8d506bd7502c3582b9425538c30d54ba8d722d2947156e",
             "handler": "",
@@ -349,7 +349,7 @@ TEST_F(LoaderTest, GetEntryFileAndHandler)
             "latestVersionUpdateTime": "",
             "publishTime": "",
             "businessId": "yrk",
-            "tenantId": "12345678901234561234567890123456",
+            "tenantId": "default",
             "domain_id": "",
             "project_name": "",
             "revisionId": "20230203063332624",

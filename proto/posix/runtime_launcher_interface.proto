@@ -1,0 +1,173 @@
+syntax = "proto3";
+
+package runtime.v1;
+service RuntimeLauncher {
+  rpc Start(StartRequest) returns (StartResponse) {}
+  rpc Delete(DeleteRequest) returns (DeleteResponse) {}
+  rpc Wait(WaitRequest) returns (WaitResponse) {}
+  rpc Register(RegisterRequest) returns (NormalResponse) {}
+  rpc Unregister(UnregisterRequest) returns (NormalResponse) {}
+  rpc GetRegistered(GetRegisteredRequest) returns (GetRegisteredResponse) {}
+  rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
+  rpc Restore(RestoreRequest) returns (RestoreResponse) {}
+}
+
+enum RootfsSrcType {
+  S3    = 0;
+  IMAGE = 1;
+  LOCAL = 2;
+}
+
+message S3Config {
+  string Endpoint        = 1;
+  string Bucket          = 2;
+  string Object          = 3;
+  string AccessKeyID     = 4; // omitempty
+  string AccessKeySecret = 5; // omitempty
+}
+
+message RootfsConfig {
+  bool          readonly = 1;
+  RootfsSrcType type     = 2;
+
+  oneof source {
+    string   image_url = 3;
+    S3Config s3_config = 4;
+    string   path      = 5;
+  }
+}
+
+message Mount {
+  // Type defines the nature of the mount.
+  string type = 1;
+
+  // Source specifies the name of the mount. Depending on mount type, this
+  // may be a volume name or a host path, or even ignored.
+  string source = 2;
+
+  // Target path in container
+  string target = 3;
+
+  // Options specifies zero or more fstab style mount options.
+  repeated string options = 4;
+}
+
+message FunctionRuntime {
+  string              id          = 1;
+  string              sandbox     = 2;
+  RootfsConfig        rootfs      = 3;
+  bool                makeSeed    = 4;
+  repeated string     command     = 5;
+  map<string, string> runtimeEnvs = 6;
+  string              cwd         = 7;
+  repeated Mount      mounts      = 8;
+}
+
+message StartRequest {
+  FunctionRuntime funcRuntime = 1;
+  repeated Mount  mounts      = 2;
+  // resource request of function
+  // etc: CPU millicore
+  //      Memory MB
+  map<string, double> resources = 3;
+  map<string, string> userEnvs  = 4;
+  // redirect path for stdout
+  string stdout = 5;
+  // redirect path for stderr
+  string stderr = 6;
+  // json string for customized config
+  string extraConfig = 7;
+  // network indicates the type of network the function use,
+  // default is sandbox, support: sandbox, host, none
+  string network  = 8;
+  string ckpt_dir = 9;
+  string trace_id = 10;
+  repeated string ports = 11;
+}
+
+message StartResponse {
+  // success:0
+  int32 code = 1;
+  // message indicating details about why start return with specific code
+  string message = 2;
+  // unique id of process/container
+  string id = 3;
+}
+
+message DeleteRequest {
+  string id = 1;
+  // timeout in seconds to wait for the process/container to graceful stop
+  // before force delete
+  int64 timeout = 2;
+}
+
+message DeleteResponse {}
+
+message WaitRequest { string id = 1; }
+
+message WaitResponse {
+  int32 status = 1;
+  // Exit code of the container. Only required when finished_at != 0. Default:
+  // 0.
+  int32 exit_code = 2;
+  // Human-readable message indicating details about why container is in its
+  // current state.
+  string message = 3;
+}
+
+message RegisterRequest { repeated FunctionRuntime funcRuntimes = 1; }
+
+message NormalResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+message UnregisterRequest { repeated string ids = 1; }
+
+message GetRegisteredRequest {}
+
+message GetRegisteredResponse { repeated FunctionRuntime funcRuntimes = 1; }
+
+message CheckpointRequest {
+  string id       = 1;
+  string ckpt_dir = 2;
+  int64  timeout  = 3;
+  bool   compress = 4;
+  string trace_id = 5;
+}
+
+message CheckpointResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+message RestoreRequest {
+  FunctionRuntime funcRuntime = 1;
+  repeated Mount  mounts      = 2;
+  // resource request of function
+  // etc: CPU millicore
+  //      Memory MB
+  map<string, double> resources = 3;
+  map<string, string> userEnvs  = 4;
+  // redirect path for stdout
+  string stdout = 5;
+  // redirect path for stderr
+  string stderr = 6;
+  // json string for customized config
+  string extraConfig = 7;
+  // network indicates the type of network the function use,
+  // default is sandbox, support: sandbox, host, none
+  string network  = 8;
+  string ckpt_dir = 9;
+  string trace_id = 10;
+  repeated string ports = 11;
+}
+
+message RestoreResponse {
+  // success:0
+  int32 code = 1;
+  // message indicating details about why start return with specific code
+  string message = 2;
+  // unique id of process/container
+  string id = 3;
+}

@@ -1,10 +1,21 @@
 ### IDE
+.ccb
 .idea
 .vscode
+.claude
+.specify
+CLAUDE.md
+SKILL.md
+AGENTS.md
+**/.cache/*
 
 ### output dir
 **/output/*
 **/_output/*
+common/litebus/build/
+functionsystem/build/
+functionsystem/src/common/utils/version.h
+bazel-*
 
 ### protobuf
 *.pb.go
@@ -19,9 +30,18 @@
 build.ninja
 
 ### copied files
-functionsystem/src/common/proto/*
+functionsystem/src/common/proto/posix/*.proto
 
 ### build files
 common/litebus/build
 functionsystem/build
 functionsystem/apps/meta_service/function_repo/storage/kv.go
+
+functionsystem/build_llt
+resource
+build/
+functionsystem/src/common/utils/version.h
+runtime-launcher/bin
+thirdparty/runtime_deps/
+*.log
+fake_file

@@ -48,6 +48,8 @@ const uint8_t TENANT_POSITION = 3;        // function tenant position from back 
  */
 const std::string RELIABILITY_TYPE = "ReliabilityType";  // NOLINT
 
+const std::string IDLE_TIMEOUT = "idle_timeout";  // NOLINT
+
 struct ProxyMeta {
     std::string node;
     std::string aid;
@@ -78,6 +80,7 @@ struct FuncMetaData {
     std::string name;
     std::string version;
     std::string tenantId;
+    std::string revisionId;
     bool isSystemFunc{ false };
     // static function add
     uint32_t timeout = 0;
@@ -144,6 +147,13 @@ struct MountConfig {
     std::vector<FuncMount> funcMounts;
 };
 
+struct BootstrapMetaData {
+    std::string type;
+    std::string root;
+    std::string entrypoint;
+    std::string cmd;
+};
+
 struct DeviceMetaData {
     float hbm = 0;
     float latency = 0;
@@ -151,6 +161,54 @@ struct DeviceMetaData {
     uint32_t count = 0;
     std::string model;
     std::string type;
+};
+
+struct RootfsStorageInfo {
+    std::string endpoint;
+    std::string bucket;
+    std::string object;
+    std::string accessKey;
+    std::string secretKey;
+};
+
+enum class RootfsSrcType {
+    S3 = 0,
+    IMAGE = 1,
+    LOCAL = 2,
+    INVALID = 255,
+};
+
+inline RootfsSrcType StringToRootfsSrcType(const std::string &str)
+{
+    static std::unordered_map<std::string, RootfsSrcType> rootfsSrcTypeMap = {
+        { "s3", RootfsSrcType::S3 },
+        { "image", RootfsSrcType::IMAGE },
+        { "local", RootfsSrcType::LOCAL },
+        { "invalid", RootfsSrcType::INVALID }
+    };
+    if (auto iter = rootfsSrcTypeMap.find(str); iter != rootfsSrcTypeMap.end()) {
+        return iter->second;
+    }
+    return RootfsSrcType::INVALID;
+}
+
+struct RootfsSpecMeta {
+    // for runtime etc: runsc, runc ...
+    std::string runtime;
+    // for rootfs source type
+    RootfsSrcType type;
+    // to define whether the rootfs is readonly
+    bool readonly;
+
+    // for s3 storage info
+    RootfsStorageInfo storageInfo;
+    // for custom image url
+    std::string imageurl;
+    // for local path
+    std::string path;
+
+    // for mount point
+    std::string mountpoint;
 };
 
 struct Initializer {
@@ -180,13 +238,36 @@ struct ExtendedMetaData {
     CustomGracefulShutdown customGracefulShutdown;
 };
 
+enum class WarmupType {
+    NONE = 0,
+    SEED = 1,
+    PRELOAD = 2,
+    INVALID = 255,
+};
+
+inline WarmupType StringToWarmupType(const std::string &str)
+{
+    static std::unordered_map<std::string, WarmupType> warmupTypeMap = {
+        { "seed", WarmupType::SEED },
+        { "preload",  WarmupType::PRELOAD },
+        { "none", WarmupType::NONE }
+    };
+    if (auto iter = warmupTypeMap.find(str); iter != warmupTypeMap.end()) {
+        return iter->second;
+    }
+    return WarmupType::INVALID;
+}
+
 struct FunctionMeta {
+    WarmupType warmup;
     FuncMetaData funcMetaData;
     CodeMetaData codeMetaData;
     EnvMetaData envMetaData;
     resource_view::Resources resources;
     ExtendedMetaData extendedMetaData;
     InstanceMetaData instanceMetaData;
+    RootfsSpecMeta rootfs;
+    BootstrapMetaData bootstrap;
     std::string rawJsonStr;
 };
 

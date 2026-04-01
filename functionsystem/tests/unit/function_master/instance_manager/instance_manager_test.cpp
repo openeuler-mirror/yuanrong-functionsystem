@@ -1656,8 +1656,8 @@ TEST_F(DISABLED_InstanceManagerTest, FunctionMetaSyncerTest)  // NOLINT
     }
 
     {   // for get response is not empty
-        auto meta = R"({"funcMetaData":{"layers":[],"name":"0@faaspy@hello","description":"empty function","functionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0@faaspy@hello","reversedConcurrency":0})";
-        auto funcKey = R"(/yr/functions/business/yrk/tenant/12345678901234561234567890123456/function/0@faaspy@hello/version/latest)";
+        auto meta = R"({"funcMetaData":{"layers":[],"name":"0@faaspy@hello","description":"empty function","functionUrn":"sn:cn:yrk:default:function:0@faaspy@hello","reversedConcurrency":0})";
+        auto funcKey = R"(/yr/functions/business/yrk/tenant/default/function/0@faaspy@hello/version/latest)";
         KeyValue getKeyValue;
         getKeyValue.set_key(funcKey);
         getKeyValue.set_value(meta);
@@ -1683,10 +1683,10 @@ TEST_F(DISABLED_InstanceManagerTest, FunctionMetaSyncerTest)  // NOLINT
         std::string instanceIDB = "instanceB";
         auto instanceInfoB =
             GenInstanceInfo(instanceIDB, "funcAgent",
-                            "12345678901234561234567890123456/0-defaultservice-default/$latest", instanceStatusA);
+                            "default/0-defaultservice-default/$latest", instanceStatusA);
         instanceInfoB.set_functionproxyid(NODE_ID_1);
         instanceInfoB.set_jobid("job-1");
-        auto keyB = GenInstanceKey("12345678901234561234567890123456/0-defaultservice-default/$latest", instanceIDA,
+        auto keyB = GenInstanceKey("default/0-defaultservice-default/$latest", instanceIDA,
                                    instanceIDA)
                         .Get();
         instanceMgrActor->OnInstancePut(keyA, std::make_shared<resource_view::InstanceInfo>(instanceInfoA));
@@ -1764,17 +1764,17 @@ TEST_F(DISABLED_InstanceManagerTest, InstanceInfoSyncerTest)  // NOLINT
     }
 
     {
-        auto instanceKey1 = R"(/sn/instance/business/yrk/tenant/12345678901234561234567890123456/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/d4f050f90ee2b90b00/609d910b-f65d-4efc-8000-000000000046)";
-        auto instanceInfoJson1 = R"({"instanceID":"609d910b-f65d-4efc-8000-000000000046","requestID":"d4f050f90ee2b90b00","runtimeID":"runtime-6de59705-0000-4000-8000-00abf61502f6","runtimeAddress":"10.42.2.100:22771","functionAgentID":"functionagent-pool1-776c6db574-nnmrn","functionProxyID":"siaphisprg00912","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","scheduleTimes":1,"instanceStatus":{"code":1,"msg":"scheduling"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"1"})";
+        auto instanceKey1 = R"(/sn/instance/business/yrk/tenant/default/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/d4f050f90ee2b90b00/609d910b-f65d-4efc-8000-000000000046)";
+        auto instanceInfoJson1 = R"({"instanceID":"609d910b-f65d-4efc-8000-000000000046","requestID":"d4f050f90ee2b90b00","runtimeID":"runtime-6de59705-0000-4000-8000-00abf61502f6","runtimeAddress":"10.42.2.100:22771","functionAgentID":"functionagent-pool1-776c6db574-nnmrn","functionProxyID":"siaphisprg00912","function":"default/0-system-faasExecutorPython3.9/$latest","scheduleTimes":1,"instanceStatus":{"code":1,"msg":"scheduling"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"1"})";
         auto instance1 = std::make_shared<resource_view::InstanceInfo>();
         ASSERT_TRUE(TransToInstanceInfoFromJson(*instance1, instanceInfoJson1));
 
-        auto instanceKey2 = R"(/sn/instance/business/yrk/tenant/12345678901234561234567890123456/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/xxxxxxxx999/aaaaa88888)";
-        auto instanceInfoJson2 = R"({"instanceID":"aaaaa88888","requestID":"xxxxxxxx999","runtimeID":"runtime-6de59705-0000-4000-8000-00abf61502f6","runtimeAddress":"10.42.2.100:22771","functionAgentID":"functionagent-pool1-776c6db574-nnmrn","functionProxyID":"siaphisprg00912","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","instanceStatus":{"code":1,"msg":"scheduling"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"1"})";
+        auto instanceKey2 = R"(/sn/instance/business/yrk/tenant/default/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/xxxxxxxx999/aaaaa88888)";
+        auto instanceInfoJson2 = R"({"instanceID":"aaaaa88888","requestID":"xxxxxxxx999","runtimeID":"runtime-6de59705-0000-4000-8000-00abf61502f6","runtimeAddress":"10.42.2.100:22771","functionAgentID":"functionagent-pool1-776c6db574-nnmrn","functionProxyID":"siaphisprg00912","function":"default/0-system-faasExecutorPython3.9/$latest","instanceStatus":{"code":1,"msg":"scheduling"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"1"})";
         InstanceInfo instance2;
         ASSERT_TRUE(TransToInstanceInfoFromJson(instance2, instanceInfoJson2));
 
-        auto instanceInfoJson2forRunning = R"({"instanceID":"aaaaa88888","requestID":"xxxxxxxx999","runtimeID":"runtime-6de59705-0000-4000-8000-00abf61502f6","runtimeAddress":"10.42.2.100:22771","functionAgentID":"functionagent-pool1-776c6db574-nnmrn","functionProxyID":"siaphisprg00912","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"3"})";
+        auto instanceInfoJson2forRunning = R"({"instanceID":"aaaaa88888","requestID":"xxxxxxxx999","runtimeID":"runtime-6de59705-0000-4000-8000-00abf61502f6","runtimeAddress":"10.42.2.100:22771","functionAgentID":"functionagent-pool1-776c6db574-nnmrn","functionProxyID":"siaphisprg00912","function":"default/0-system-faasExecutorPython3.9/$latest","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"3"})";
         auto instanceRunning = std::make_shared<resource_view::InstanceInfo>();
         ASSERT_TRUE(TransToInstanceInfoFromJson(*instanceRunning, instanceInfoJson2forRunning));
 
@@ -1851,9 +1851,9 @@ TEST_F(DISABLED_InstanceManagerTest, InstanceInfoSyncerOperationReplayTest)  // 
             .WillOnce(testing::Return(OperateResult{ Status::OK(), "", 3 }));
 
         auto instanceKey1 =
-            R"(/sn/instance/business/yrk/tenant/12345678901234561234567890123456/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/d4f050f90ee2b90b00/609d910b-f65d-4efc-8000-000000000046)";
+            R"(/sn/instance/business/yrk/tenant/default/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/d4f050f90ee2b90b00/609d910b-f65d-4efc-8000-000000000046)";
         auto instanceInfoJson1 =
-            R"({"instanceID":"609d910b-f65d-4efc-8000-000000000046","requestID":"d4f050f90ee2b90b00","runtimeID":"runtime-6de59705-0000-4000-8000-00abf61502f6","runtimeAddress":"10.42.2.100:22771","functionAgentID":"functionagent-pool1-776c6db574-nnmrn","functionProxyID":"siaphisprg00912","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","scheduleTimes":1,"instanceStatus":{"code":1,"msg":"scheduling"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"1"})";
+            R"({"instanceID":"609d910b-f65d-4efc-8000-000000000046","requestID":"d4f050f90ee2b90b00","runtimeID":"runtime-6de59705-0000-4000-8000-00abf61502f6","runtimeAddress":"10.42.2.100:22771","functionAgentID":"functionagent-pool1-776c6db574-nnmrn","functionProxyID":"siaphisprg00912","function":"default/0-system-faasExecutorPython3.9/$latest","scheduleTimes":1,"instanceStatus":{"code":1,"msg":"scheduling"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"1"})";
         std::shared_ptr<resource_view::InstanceInfo> instance1 = std::make_shared<resource_view::InstanceInfo>();
         ASSERT_TRUE(TransToInstanceInfoFromJson(*instance1, instanceInfoJson1));
 
@@ -2100,9 +2100,9 @@ TEST_F(DISABLED_InstanceManagerTest, CompleteKillInstance)
     std::string instanceID = "609d910b-f65d-4efc-8000-000000000046";
 
     auto instanceKey1 =
-        R"(/sn/instance/business/yrk/tenant/12345678901234561234567890123456/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/d4f050f90ee2b90b00/609d910b-f65d-4efc-8000-000000000046)";
+        R"(/sn/instance/business/yrk/tenant/default/function/0-system-faasExecutorPython3.9/version/$latest/defaultaz/d4f050f90ee2b90b00/609d910b-f65d-4efc-8000-000000000046)";
     auto instanceInfoJson1 =
-        R"({"instanceID":"609d910b-f65d-4efc-8000-000000000046","requestID":"d4f050f90ee2b90b00","runtimeID":"runtime-6de59705-0000-4000-8000-00abf61502f6","runtimeAddress":"10.42.2.100:22771","functionAgentID":"functionagent-pool1-776c6db574-nnmrn","functionProxyID":"siaphisprg00912","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","scheduleTimes":1,"instanceStatus":{"code":1,"msg":"scheduling"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"1"})";
+        R"({"instanceID":"609d910b-f65d-4efc-8000-000000000046","requestID":"d4f050f90ee2b90b00","runtimeID":"runtime-6de59705-0000-4000-8000-00abf61502f6","runtimeAddress":"10.42.2.100:22771","functionAgentID":"functionagent-pool1-776c6db574-nnmrn","functionProxyID":"siaphisprg00912","function":"default/0-system-faasExecutorPython3.9/$latest","scheduleTimes":1,"instanceStatus":{"code":1,"msg":"scheduling"},"jobID":"job-12345678","parentID":"4e7cd507-8645-4600-b33c-f045f13e4beb","deployTimes":1,"version":"1"})";
 
     std::shared_ptr<resource_view::InstanceInfo> instance1 = std::make_shared<resource_view::InstanceInfo>();
     ASSERT_TRUE(TransToInstanceInfoFromJson(*instance1, instanceInfoJson1));
@@ -2158,8 +2158,8 @@ TEST_F(DISABLED_InstanceManagerTest, NodesTest)
     instance001->set_functionproxyid("nodeA");
     instance001->set_instanceid("instanceA");
     instance001->set_requestid("941e253514a11c24");
-    instance001->set_function("12345678901234561234567890123456/0-system-faasscheduler/$latest");
-    std::string key = "/sn/instance/business/yrk/tenant/12345678901234561234567890123456/function/0-system"
+    instance001->set_function("default/0-system-faasscheduler/$latest");
+    std::string key = "/sn/instance/business/yrk/tenant/default/function/0-system"
         "-faasscheduler/version/$latest/defaultaz/941e253514a11c24/instanceA";
     litebus::Async(instanceMgrActor->GetAID(), &InstanceManagerActor::OnInstancePut, key, instance001);
 
@@ -2167,8 +2167,8 @@ TEST_F(DISABLED_InstanceManagerTest, NodesTest)
     instance002->set_functionproxyid("nodeB");
     instance002->set_instanceid("instanceB");
     instance002->set_requestid("941e253514a11c25");
-    instance002->set_function("12345678901234561234567890123456/0-system-faasscheduler/$latest");
-    std::string key1 = "/sn/instance/business/yrk/tenant/12345678901234561234567890123456/function/0-system"
+    instance002->set_function("default/0-system-faasscheduler/$latest");
+    std::string key1 = "/sn/instance/business/yrk/tenant/default/function/0-system"
         "-faasscheduler/version/$latest/defaultaz/941e253514a11c25/instanceB";
     litebus::Async(instanceMgrActor->GetAID(), &InstanceManagerActor::OnInstancePut, key1, instance002);
 

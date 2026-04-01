@@ -19,6 +19,7 @@
 #include <sys/statvfs.h>
 #include <cstring>
 #include <cerrno>
+#include <cmath>
 
 namespace functionsystem::runtime_manager {
 
@@ -50,7 +51,8 @@ Metric NodeDiskCollector::GetLimit() const
     YRLOG_DEBUG_COUNT_60("node disk collector get limit.");
     Metric metric;
     // no chache diskinfo
-    if (totalDiskSpace_ == 0.0 && availableDiskSpace_ == 0.0) {
+    constexpr double doubleCloseEps = 1e-9;
+    if (std::abs(totalDiskSpace_) <= doubleCloseEps && std::abs(availableDiskSpace_) <= doubleCloseEps) {
         getFileSystemInfo(TARGET_PATH_);
     }
     metric.value = totalDiskSpace_;

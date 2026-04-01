@@ -73,6 +73,7 @@ using StatusChange = ::resources::StatusChange;
 using InstanceChange = ::resources::InstanceChange;
 using ResourceUnitChange = ::resources::ResourceUnitChange;
 using ResourceUnitChanges = ::resources::ResourceUnitChanges;
+using CapacityChange = ::resources::CapacityChange;
 using PullResourceRequest = ::messages::PullResourceRequest;
 
 using ResourceUpdateHandler = std::function<void()>;
@@ -86,6 +87,7 @@ using ValueLessFunc = std::function<bool(const Resource &, const Resource &)>;
 enum class UpdateType {
     UPDATE_ACTUAL,
     UPDATE_STATIC,
+    UPDATE_DYNAMIC,
     UPDATE_UNDEFINED,
 };
 

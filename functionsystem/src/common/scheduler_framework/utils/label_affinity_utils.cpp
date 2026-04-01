@@ -15,6 +15,7 @@
  */
 #include "label_affinity_utils.h"
 
+#include <cmath>
 #include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
 
@@ -124,7 +125,7 @@ bool IsResourceRequiredAffinityPassed(const std::string &unitID, const resource_
     return resourceRequiredAffinityPassed;
 }
 
-int64_t GetAffinityScore(const std::string &unitID, const affinity::Selector &selector,
+double GetAffinityScore(const std::string &unitID, const affinity::Selector &selector,
     const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels, bool anti)
 {
     for (const auto &subcondition : selector.condition().subconditions()) {
@@ -148,22 +149,22 @@ int64_t GetAffinityScore(const std::string &unitID, const affinity::Selector &se
     return 0;
 }
 
-int64_t AffinityScorer(const std::string &unitID, const affinity::Selector &selector,
+double AffinityScorer(const std::string &unitID, const affinity::Selector &selector,
     const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
 {
     return GetAffinityScore(unitID, selector, labels, false);
 }
 
-int64_t AntiAffinityScorer(const std::string &unitID, const affinity::Selector &selector,
+double AntiAffinityScorer(const std::string &unitID, const affinity::Selector &selector,
     const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
 {
     return GetAffinityScore(unitID, selector, labels, true);
 }
 
-int64_t CalculateInstanceAffinityScore(const std::string &unitID, const resource_view::InstanceInfo &instance,
-                                       const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
+double CalculateInstanceAffinityScore(const std::string &unitID, const resource_view::InstanceInfo &instance,
+                                      const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
 {
-    int64_t totalScore = 0;
+    double totalScore = 0.0;
     const auto &affinity = instance.scheduleoption().affinity();
     if (!affinity.has_instance()) {
         return totalScore;
@@ -171,7 +172,7 @@ int64_t CalculateInstanceAffinityScore(const std::string &unitID, const resource
 
     if (affinity.instance().has_preferredaffinity()) {
         auto score = AffinityScorer(unitID, affinity.instance().preferredaffinity(), labels);
-        if (score == ZERO_SCORE) {
+        if (std::abs(score - ZERO_SCORE) <= SCORE_EPSILON) {
             YRLOG_DEBUG("resourceUnit({}) instance preferredaffinity score is 0", unitID);
         }
         totalScore += score;
@@ -179,7 +180,7 @@ int64_t CalculateInstanceAffinityScore(const std::string &unitID, const resource
 
     if (affinity.instance().has_preferredantiaffinity()) {
         auto score = AntiAffinityScorer(unitID, affinity.instance().preferredantiaffinity(), labels);
-        if (score == ZERO_SCORE) {
+        if (std::abs(score - ZERO_SCORE) <= SCORE_EPSILON) {
             YRLOG_DEBUG("resourceUnit({}) instance preferredantiaffinity score is 0", unitID);
         }
         totalScore += score;
@@ -187,7 +188,7 @@ int64_t CalculateInstanceAffinityScore(const std::string &unitID, const resource
 
     if (affinity.instance().has_requiredaffinity() && IsAffinityPriority(affinity.instance().requiredaffinity())) {
         auto score = AffinityScorer(unitID, affinity.instance().requiredaffinity(), labels);
-        if (score == ZERO_SCORE) {
+        if (std::abs(score - ZERO_SCORE) <= SCORE_EPSILON) {
             YRLOG_DEBUG("resourceUnit({}) instance requiredaffinity score is 0, "
                         "since it is a required affinity with configured priority, the returned score is -1", unitID);
             return REQUIRED_AFFINITY_PRIORITY_NOT_MET;
@@ -198,7 +199,7 @@ int64_t CalculateInstanceAffinityScore(const std::string &unitID, const resource
     if (affinity.instance().has_requiredantiaffinity() &&
         IsAffinityPriority(affinity.instance().requiredantiaffinity())) {
         auto score = AntiAffinityScorer(unitID, affinity.instance().requiredantiaffinity(), labels);
-        if (score == ZERO_SCORE) {
+        if (std::abs(score - ZERO_SCORE) <= SCORE_EPSILON) {
             YRLOG_DEBUG("resourceUnit({}) instance requiredantiaffinity score is 0, "
                         "since it is a required affinity with configured priority, the returned score is -1", unitID);
             return REQUIRED_AFFINITY_PRIORITY_NOT_MET;
@@ -210,10 +211,10 @@ int64_t CalculateInstanceAffinityScore(const std::string &unitID, const resource
     return totalScore;
 }
 
-int64_t CalculateResourceAffinityScore(const std::string &unitID, const resource_view::InstanceInfo &instance,
-                                       const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
+double CalculateResourceAffinityScore(const std::string &unitID, const resource_view::InstanceInfo &instance,
+                                      const ::google::protobuf::Map<std::string, resource_view::ValueCounter> &labels)
 {
-    int64_t totalScore = 0;
+    double totalScore = 0.0;
     const auto &affinity = instance.scheduleoption().affinity();
     if (!affinity.has_resource()) {
         return totalScore;
@@ -221,7 +222,7 @@ int64_t CalculateResourceAffinityScore(const std::string &unitID, const resource
 
     if (affinity.resource().has_preferredaffinity()) {
         auto score = AffinityScorer(unitID, affinity.resource().preferredaffinity(), labels);
-        if (score == ZERO_SCORE) {
+        if (std::abs(score - ZERO_SCORE) <= SCORE_EPSILON) {
             YRLOG_DEBUG("resourceUnit({}) resource preferredaffinity score is 0", unitID);
         }
         totalScore += score;
@@ -229,7 +230,7 @@ int64_t CalculateResourceAffinityScore(const std::string &unitID, const resource
 
     if (affinity.resource().has_preferredantiaffinity()) {
         auto score = AntiAffinityScorer(unitID, affinity.resource().preferredantiaffinity(), labels);
-        if (score == ZERO_SCORE) {
+        if (std::abs(score - ZERO_SCORE) <= SCORE_EPSILON) {
             YRLOG_DEBUG("resourceUnit({}) resource preferredantiaffinity score is 0", unitID);
         }
         totalScore += score;
@@ -237,7 +238,7 @@ int64_t CalculateResourceAffinityScore(const std::string &unitID, const resource
 
     if (affinity.resource().has_requiredaffinity() && IsAffinityPriority(affinity.resource().requiredaffinity())) {
         auto score = AffinityScorer(unitID, affinity.resource().requiredaffinity(), labels);
-        if (score == ZERO_SCORE) {
+        if (std::abs(score - ZERO_SCORE) <= SCORE_EPSILON) {
             YRLOG_DEBUG("resourceUnit({}) resource requiredaffinity score is 0, "
                         "since it is a required affinity with configured priority, the returned score is -1", unitID);
             return REQUIRED_AFFINITY_PRIORITY_NOT_MET;
@@ -248,7 +249,7 @@ int64_t CalculateResourceAffinityScore(const std::string &unitID, const resource
     if (affinity.resource().has_requiredantiaffinity() &&
         IsAffinityPriority(affinity.resource().requiredantiaffinity())) {
         auto score = AntiAffinityScorer(unitID, affinity.resource().requiredantiaffinity(), labels);
-        if (score == ZERO_SCORE) {
+        if (std::abs(score - ZERO_SCORE) <= SCORE_EPSILON) {
             YRLOG_DEBUG("resourceUnit({}) resource requiredantiaffinity score is 0, "
                         "since it is a required affinity with configured priority, the returned score is -1", unitID);
             return REQUIRED_AFFINITY_PRIORITY_NOT_MET;

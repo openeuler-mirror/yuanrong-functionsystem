@@ -89,6 +89,9 @@ private:
     bool IsNpuTopoCommandValid(std::vector<std::string> lines);
     std::string nodeID;
     bool init = false;
+    int npuRetryCount_ = 0;  // retry counter before marking as unavailable
+    static constexpr int kNpuMaxRetryCount = 10;
+    bool npuUnavailable_ = false;  // skip npu-smi calls if not available
     std::shared_ptr<ProcFSTools> procFSTools_;
 
     std::string getNpuTopoInfoCmd_ = "";            // npu-smi info -t topo

@@ -83,12 +83,14 @@ const std::string PYTHON38_RUNTIME_VERSION = "python3.8";
 const std::string PYTHON39_RUNTIME_VERSION = "python3.9";
 const std::string PYTHON310_RUNTIME_VERSION = "python3.10";
 const std::string PYTHON311_RUNTIME_VERSION = "python3.11";
+const std::string PYTHON312_RUNTIME_VERSION = "python3.12";
+const std::string PYTHON313_RUNTIME_VERSION = "python3.13";
 const std::string GO_RUNTIME_VERSION = "go1.13";
 const std::string POSIX_CUSTOM_RUNTIME_VERSION = "posix-custom-runtime";
 
 const std::string LATEST_VERSION = "$latest";
 
-const std::string DEFAULT_TENANT_ID = "12345678901234561234567890123456";
+const std::string DEFAULT_TENANT_ID = "default";
 const std::string DEFAULT_STORAGE_TYPE = "local";
 
 const std::string FAAS = "faas";
@@ -129,6 +131,9 @@ struct FunctionConfig {
     int32_t cacheInstance{ 0 };
     FunctionHookHandlerConfig functionHookHandlerConfig;
     DeviceMetaData device;
+    WarmupType warmup {0};
+    RootfsSpecMeta rootfs;
+    BootstrapMetaData bootstrap;
 };
 
 struct ServiceInfo {

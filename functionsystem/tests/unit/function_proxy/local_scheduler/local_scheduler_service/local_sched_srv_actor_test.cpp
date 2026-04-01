@@ -116,11 +116,19 @@ public:
 
         explorer::Explorer::GetInstance().Clear();
 
+        // Explicitly terminate SubscriptionMgr actor to prevent name conflicts in subsequent tests.
+        // LocalSchedSrvActor holds a shared_ptr<SubscriptionMgr> that may survive beyond
+        // dstActor_ termination due to thread pool ref timing, keeping the actor registered.
+        litebus::Terminate(litebus::AID("SubscriptionMgr"));
+        litebus::Await(litebus::AID("SubscriptionMgr"));
+
         dstActor_ = nullptr;
         driverActor_ = nullptr;
         mockInstanceCtrl_ = nullptr;
         globalSchedStubActor_ = nullptr;
         domainSchedStubActor_ = nullptr;
+        subscriptionMgr_ = nullptr;
+        functionAgentMgr_ = nullptr;
         primary_ = nullptr;
         virtual_ = nullptr;
     }

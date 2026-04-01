@@ -1,0 +1,16 @@
+--- a/cmake/tools.cmake
++++ b/cmake/tools.cmake	2026-03-27 12:04:56
+@@ -142,6 +142,13 @@
+       IMPORTED_SONAME)
+   foreach(TARGET_NAME ${ARGN})
+     if(TARGET ${TARGET_NAME})
++      # Skip ALIAS targets - set_target_properties cannot be used on them.
++      # Newer gRPC versions expose some targets as aliases (e.g. gRPC::grpc++),
++      # which causes a hard CMake error when this function tries to patch them.
++      get_target_property(_aliased_target ${TARGET_NAME} ALIASED_TARGET)
++      if(_aliased_target)
++        continue()
++      endif()
+       get_target_property(IS_IMPORTED_TARGET ${TARGET_NAME} IMPORTED)
+       if(NOT IS_IMPORTED_TARGET)
+         continue()

@@ -632,6 +632,7 @@ func untilAgentDeploySucceed(ctx context.Context, block bool) error {
 				return nil
 			}
 		}
+		time.Sleep(time.Second)
 	}
 }
 

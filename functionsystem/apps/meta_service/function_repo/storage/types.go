@@ -108,6 +108,13 @@ type FunctionVersion struct {
 	PoolLabel          string
 	PoolID             string
 	EnableAgentSession bool
+	ScalePolicy        string
+	SchedulePolicy     string
+	IdleTime           int64
+	AutoScaleConfig    AutoScaleConfig
+	WarmupType         string
+	RootfsSpecMeta     types.RootfsSpecMeta
+	IsFuncPublic       bool
 }
 
 // FunctionLayer defines layer info related to function version.
@@ -400,4 +407,11 @@ func GetTxnByKind(ctx server.Context, kind string) Transaction {
 		return NewMetaTxn(ctx)
 	}
 	return NewTxn(ctx)
+}
+
+// AutoScaleConfig -
+type AutoScaleConfig struct {
+	SLAQuota      int
+	ScaleDownTime int
+	BurstScaleNum int
 }

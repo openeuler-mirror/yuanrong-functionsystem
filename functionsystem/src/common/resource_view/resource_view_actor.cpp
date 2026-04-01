@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "async/async.hpp"
+#include "litebus.hpp"
 #include "async/asyncafter.hpp"
 #include "async/uuid_generator.hpp"
 #include "common/constants/constants.h"
@@ -33,10 +34,17 @@ namespace functionsystem::resource_view {
 static const int32_t DEFAULT_PRINT_RESOURCE_VIEW_TIMER_COUNT = 60;
 static const std::string NEED_RECOVER_VIEW = "needRecoverView";
 static const std::string IDLE_TO_RECYCLE = "yr-idle-to-recycle";
+// 当变更数量超过此阈值时，使用异步处理
+static const int64_t ASYNC_MERGE_THRESHOLD = 50;
+
+// 静态成员变量定义
+bool ResourceViewActor::enableTenantAffinity_ = true;
+
 ResourceViewActor::ResourceViewActor(const std::string &name, std::string id, const Param &param)
     : BasisActor(name), unitID_(std::move(id)), isLocal_(param.isLocal),
-      enableTenantAffinity_(param.enableTenantAffinity), tenantPodReuseTimeWindow_(param.tenantPodReuseTimeWindow)
+      tenantPodReuseTimeWindow_(param.tenantPodReuseTimeWindow)
 {
+    enableTenantAffinity_ = param.enableTenantAffinity;
     if (auto pos = name.find_last_of('-'); pos != std::string::npos) {
         actorSuffix_ = name.substr(pos);
     }
@@ -398,6 +406,9 @@ Status ResourceViewActor::UpdateResourceUnit(const std::shared_ptr<ResourceUnit>
         case UpdateType::UPDATE_ACTUAL:
             UpdateResourceUnitActual(value);
             break;
+        case UpdateType::UPDATE_DYNAMIC:
+            UpdateResourceUnitDynamic(value);
+            break;
         case UpdateType::UPDATE_STATIC:
         case UpdateType::UPDATE_UNDEFINED:
         default:
@@ -478,6 +489,14 @@ Status ResourceViewActor::AddInstances(const std::map<std::string, InstanceAlloc
         if (view_->fragment().find(selected) == view_->fragment().end()
             || view_->fragment().at(selected).status() != static_cast<uint32_t>(UnitStatus::NORMAL)) {
             YRLOG_WARN("unable to allocate instances({}). the ({}) is unavailable", inst.first, selected);
+            inst.second.allocatedPromise->SetValue(Status(StatusCode::ERR_INNER_SYSTEM_ERROR));
+            continue;
+        }
+        if (simplifyInstance.resources() > view_->fragment().at(selected).allocatable()) {
+            YRLOG_WARN(
+                "unable to allocate instances({}). the ({}) has insufficient resources may caused by capacity "
+                "decrement",
+                inst.first, selected);
             inst.second.allocatedPromise->SetValue(Status(StatusCode::ERR_INNER_SYSTEM_ERROR));
             continue;
         }
@@ -1059,6 +1078,51 @@ void ResourceViewActor::DeleteInstanceFromView(const InstanceInfo &instance)
     }
 }
 
+void ResourceViewActor::UpdateResourceUnitDynamic(const std::shared_ptr<ResourceUnit> &value)
+{
+    ASSERT_IF_NULL(view_);
+    auto unit = view_->mutable_fragment()->find(value->id());
+    if (unit == view_->mutable_fragment()->end()) {
+        YRLOG_ERROR("resource view does not have a resource unit with ID {}.", value->id());
+        return;
+    }
+    if (value->capacity() == unit->second.capacity()) {
+        return;
+    }
+    YRLOG_DEBUG("for test: Unit({}) current:{} allocatable:{} received:{}", value->id(),
+                unit->second.capacity().ShortDebugString(), unit->second.allocatable().ShortDebugString(),
+                value->capacity().ShortDebugString());
+    /*
+        unit capacity : 上一次的容量
+        value capacity: 本次更新的容量
+        delta: 两次容量的差值
+        capacityChange.increment(): 本次容量是否上升
+    */
+    (*view_->mutable_capacity()) = view_->capacity() - unit->second.capacity() + value->capacity();
+    // cap decreased
+    CapacityChange capacityChange;
+    auto delta = capacityChange.mutable_delta();
+    delta->CopyFrom(value->capacity() - unit->second.capacity());
+    YRLOG_DEBUG("for test: Unit({}) delta:{}", value->id(), delta->ShortDebugString());
+
+    // maybe negative allocatable
+    // todo: while negative allocatable, need to trigger some alert event to evict/migrate instances
+    (*view_->mutable_allocatable()) = view_->allocatable() + *delta;
+
+    // update in fragment
+    *unit->second.mutable_capacity() = value->capacity();
+    *unit->second.mutable_allocatable() = unit->second.allocatable() + *delta;
+
+    // make change record
+    Modification modification;
+    *modification.mutable_capacitychange() = std::move(capacityChange);
+    ResourceUnitChange resourceUnitChange;
+    resourceUnitChange.set_resourceunitid(value->id());
+    *resourceUnitChange.mutable_modification() = std::move(modification);
+    view_->set_revision(view_->revision() + 1);
+    StoreChange(view_->revision(), resourceUnitChange);
+}
+
 void ResourceViewActor::UpdateResourceUnitActual(const std::shared_ptr<ResourceUnit> &value)
 {
     ASSERT_IF_NULL(view_);
@@ -1117,24 +1181,44 @@ void ResourceViewActor::PullResource(const litebus::AID &from, std::string &&nam
         return;
     }
     ASSERT_IF_NULL(view_);
-    ResourceUnitChanges result;
     // lastReportedRevision_ is only used for obtaining incremental updates for scheduling requests
     lastReportedRevision_ = view_->revision();
     auto viewInitTimeStoredInDomain = pullRequest.localviewinittime();
     bool isViewConsistent = viewInitTimeStoredInDomain == view_->viewinittime();
     bool hasNoNewChanges = pullRequest.version() == view_->revision();
-    result.set_localviewinittime(view_->viewinittime());
-    if (isViewConsistent) {
-        MergeResourceViewChanges(pullRequest.version(), view_->revision(), result);
-        DelChanges(pullRequest.version());
-    } else {
-        ConvertFullResourceviewToChanges(result);
-    }
     if (isViewConsistent && hasNoNewChanges) {
         Send(from, "ReportResource", "");
         return;
     }
-    Send(from, "ReportResource", result.SerializeAsString());
+
+    if (!isViewConsistent) {
+        // 全量同步，直接处理
+        ResourceUnitChanges result;
+        result.set_localviewinittime(view_->viewinittime());
+        ConvertFullResourceviewToChanges(result);
+        Send(from, "ReportResource", result.SerializeAsString());
+        return;
+    }
+
+    // 增量同步：根据变更数量决定同步或异步处理
+    auto startRevision = pullRequest.version();
+    auto endRevision = view_->revision();
+    auto itStart = versionChanges_.upper_bound(startRevision);
+    auto itEnd = versionChanges_.upper_bound(endRevision);
+    auto changeCount = std::distance(itStart, itEnd);
+    if (changeCount <= ASYNC_MERGE_THRESHOLD) {
+        // 变更数量少，同步处理
+        ResourceUnitChanges result;
+        result.set_localviewinittime(view_->viewinittime());
+        MergeResourceViewChanges(startRevision, endRevision, result);
+        DelChanges(startRevision);
+        Send(from, "ReportResource", result.SerializeAsString());
+    } else {
+        // 变更数量多，异步处理避免阻塞 Actor
+        YRLOG_INFO("PullResource: {} changes to merge, using async processing", changeCount);
+        MergeResourceViewChangesAsync(startRevision, endRevision, view_->viewinittime(), view_->id(), from);
+        DelChanges(startRevision);
+    }
 }
 
 std::string GetUnitIDFromAID(const litebus::AID &from)
@@ -1211,32 +1295,90 @@ bool ResourceViewActor::IsModifyEmpty(const ResourceUnitChange &modify)
 void ResourceViewActor::MergeResourceViewChanges(int64_t startRevision, int64_t endRevision,
                                                  ResourceUnitChanges &result)
 {
-    std::vector<std::pair<std::string, ResourceUnitChange>> summarizedChanges;
+    ASSERT_IF_NULL(view_);
+    MergeResourceViewChanges(versionChanges_, startRevision, endRevision, view_->id(), result);
+}
 
-    for (auto it = versionChanges_.upper_bound(startRevision); it != versionChanges_.upper_bound(endRevision); ++it) {
-        auto change = it->second;
-        auto resourceUnitId = change.resourceunitid();
-        auto iter = std::find_if(summarizedChanges.begin(), summarizedChanges.end(),
-                                 [&resourceUnitId](const auto& pair) { return pair.first == resourceUnitId; });
+void ResourceViewActor::MergeResourceViewChanges(const std::map<int64_t, ResourceUnitChange> &changes,
+                                                 int64_t startRevision, int64_t endRevision,
+                                                 const std::string &localId, ResourceUnitChanges &result)
+{
+    std::unordered_map<std::string, ResourceUnitChange> summarizedChanges;
+    std::vector<std::string> orderedIds;
+    auto itEnd = changes.upper_bound(endRevision);
+    for (auto it = changes.upper_bound(startRevision); it != itEnd; ++it) {
+        const auto& change = it->second;
+        const auto& resourceUnitId = change.resourceunitid();
+        auto iter = summarizedChanges.find(resourceUnitId);
         if (iter == summarizedChanges.end()) {
-            summarizedChanges.push_back({resourceUnitId, change});
+            summarizedChanges.emplace(resourceUnitId, change);
+            orderedIds.push_back(resourceUnitId);
             continue;
         }
         auto mergeChange = MergeResourceUnitChanges(iter->second, change);
         if (IsResourceUnitChangeEmpty(mergeChange)) {
             summarizedChanges.erase(iter);
+            orderedIds.erase(std::remove(orderedIds.begin(), orderedIds.end(), resourceUnitId), orderedIds.end());
         } else {
-            iter->second = mergeChange;
+            iter->second = std::move(mergeChange);
         }
     }
-
-    for (auto& change : summarizedChanges) {
-        *result.add_changes() = change.second;
+    result.mutable_changes()->Reserve(static_cast<int>(summarizedChanges.size()));
+    for (const auto& id : orderedIds) {
+        auto it = summarizedChanges.find(id);
+        if (it != summarizedChanges.end()) {
+            *result.add_changes() = std::move(it->second);
+        }
     }
-    ASSERT_IF_NULL(view_);
     result.set_startrevision(startRevision);
     result.set_endrevision(endRevision);
-    result.set_localid(view_->id());
+    result.set_localid(localId);
+}
+
+void ResourceViewActor::MergeResourceViewChangesAsync(int64_t startRevision, int64_t endRevision,
+                                                      const std::string &viewInitTime, const std::string &localId,
+                                                      const litebus::AID &replyTo)
+{
+    // 使用迭代器范围构造拷贝需要处理的 changes 数据
+    auto itStart = versionChanges_.upper_bound(startRevision);
+    auto itEnd = versionChanges_.upper_bound(endRevision);
+    auto changesCopy = std::make_shared<std::map<int64_t, ResourceUnitChange>>(itStart, itEnd);
+
+    // 懒初始化 asyncWorker_
+    if (asyncWorker_ == nullptr) {
+        asyncWorker_ = std::make_shared<ActorWorker>();
+    }
+
+    auto selfAid = GetAID();
+    // 在 Worker 中执行合并，完成后通过 Async 回调到 Actor 线程发送结果
+    asyncWorker_->AsyncWork([changesCopy, startRevision, endRevision, viewInitTime, localId, replyTo, selfAid]() {
+        auto result = std::make_shared<ResourceUnitChanges>() ;
+        result->set_localviewinittime(viewInitTime);
+        MergeResourceViewChanges(*changesCopy, startRevision, endRevision, localId, *result);
+        // 回调到 Actor 线程发送结果
+        litebus::Async(selfAid, &ResourceViewActor::ToReportResourceViewChanges, replyTo, result);
+    });
+}
+
+void ResourceViewActor::ToReportResourceViewChanges(const litebus::AID &dst,
+                                                    const std::shared_ptr<ResourceUnitChanges> &changes)
+{
+    Send(dst, "ReportResource", changes->SerializeAsString());
+}
+
+void ResourceViewActor::MergeCapacityChange(ResourceUnitChange &previous, const ResourceUnitChange &current)
+{
+    if (!current.has_modification() || !current.modification().has_capacitychange()) {
+        return;
+    }
+    if (!previous.has_modification() || !previous.modification().has_capacitychange()) {
+        previous.mutable_modification()->mutable_capacitychange()->CopyFrom(current.modification().capacitychange());
+        return;
+    }
+    auto previousCapacityChange = previous.mutable_modification()->mutable_capacitychange();
+    auto currentCapacityChange = current.modification().capacitychange();
+    (*previousCapacityChange->mutable_delta()) =
+        previousCapacityChange->delta() + currentCapacityChange.delta();
 }
 
 ResourceUnitChange ResourceViewActor::MergeResourceUnitChanges(ResourceUnitChange &previous,
@@ -1251,7 +1393,7 @@ ResourceUnitChange ResourceViewActor::MergeResourceUnitChanges(ResourceUnitChang
      * 6.any changes + add          --x Non-existent combination
      */
     ASSERT_FS(previous.resourceunitid() == current.resourceunitid());
-
+    MergeCapacityChange(previous, current);
     if (previous.has_addition() && current.has_modification()) {
         return MergeAddAndModify(previous, current);
     }
@@ -1313,7 +1455,7 @@ ResourceUnitChange ResourceViewActor::MergeTwoModifies(ResourceUnitChange &previ
     return previous;
 }
 
-bool ResourceViewActor::IsValidChangeCombination(const InstanceChange& previous, const InstanceChange& current) const
+bool ResourceViewActor::IsValidChangeCombination(const InstanceChange& previous, const InstanceChange& current)
 {
     if (previous.instanceid() != current.instanceid()) {
         return false;
@@ -1340,7 +1482,7 @@ bool ResourceViewActor::ShouldRetainInstanceChange(const InstanceChange& previou
     return previous.changetype() == InstanceChange::DELETE && current.changetype() == InstanceChange::ADD;
 }
 
-void ResourceViewActor::MergeInstanceChanges(Modification &previous, const Modification &current) const
+void ResourceViewActor::MergeInstanceChanges(Modification &previous, const Modification &current)
 {
     /**
      * 1.add/delete instance1  + add/delete instance2  --> add/delete instance1 + add/delete instance2
@@ -1542,6 +1684,16 @@ Status ResourceViewActor::HandleReportedModification(const ResourceUnitChange &c
 
     if (modification.has_statuschange()) {
         agentResourceUnit.set_status(static_cast<uint32_t>(modification.statuschange().status()));
+    }
+
+    if (modification.has_capacitychange()) {
+        auto delta = modification.capacitychange().delta();
+        YRLOG_DEBUG("for test: Unit({}) delta:{}", agentResourceUnit.id(), delta.ShortDebugString());
+        (*agentResourceUnit.mutable_capacity()) = agentResourceUnit.capacity() + delta;
+        (*agentResourceUnit.mutable_allocatable()) = agentResourceUnit.allocatable() + delta;
+        (*view_->mutable_capacity()) = view_->capacity() + delta;
+        (*view_->mutable_allocatable()) = view_->allocatable() + delta;
+        MarkResourceUpdated();
     }
 
     if (modification.instancechanges().empty()) {

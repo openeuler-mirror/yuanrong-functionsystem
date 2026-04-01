@@ -21,6 +21,7 @@
 #include "common/aksk/aksk_util.h"
 #include "common/utils/token_transfer.h"
 #include "httpd/http.hpp"
+#include "constants.h"
 
 namespace functionsystem::iamserver {
 namespace {
@@ -37,6 +38,8 @@ const std::string HEADER_AUTH_KEY = "X-Auth"; // key for token
 const std::string HEADER_TENANT_ID_KEY = "X-Tenant-ID"; // key for tenantID
 const std::string HEADER_TENANT_SALT_KEY = "X-Salt"; // salt for tenant
 const std::string HEADER_EXPIRED_TIME_SPAN = "X-Expired-Time-Span"; // key for expired time
+const std::string HEADER_TTL = "X-TTL"; // key for custom token TTL (in seconds)
+const std::string HEADER_ROLE_KEY = "X-Role"; // key for role
 
 Status GetValueFromHeaderMap(const litebus::http::HeaderMap &headerMap, const std::string &key, std::string &value)
 {
@@ -109,6 +112,9 @@ litebus::Future<HttpResponse> IAMActor::VerifyToken(const functionsystem::HttpRe
             litebus::http::Response::GetStatusDescribe(litebus::http::ResponseCode::OK));
         response.headers.insert({{ HEADER_TENANT_ID_KEY, tokenContent->tenantID },
                                   { HEADER_EXPIRED_TIME_SPAN, std::to_string(tokenContent->expiredTimeStamp - now) }});
+        if (!tokenContent->role.empty()) {
+            response.headers.insert({ HEADER_ROLE_KEY, tokenContent->role });
+        }
         return response;
     });
 }
@@ -125,7 +131,29 @@ litebus::Future<HttpResponse> IAMActor::RequireEncryptToken(const functionsystem
         return GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST,
                                     "require token failed, parse TenantID from headerMap failed.");
     }
-    return internalIAM_->RequireEncryptToken(tenantID).Then([tenantID](const std::shared_ptr<TokenSalt> &tokenSalt) {
+    // Optional: get role from header
+    std::string role;
+    (void)GetValueFromHeaderMap(request.headers, HEADER_ROLE_KEY, role);
+    // Optional: get custom TTL from header (in seconds)
+    // Not present: use global config; -1: token never expires; >0: custom TTL
+    uint64_t expiredTimeSpan = 0;
+    std::string ttlStr;
+    if (GetValueFromHeaderMap(request.headers, HEADER_TTL, ttlStr).IsOk()) {
+        try {
+            auto ttlValue = std::stoll(ttlStr);
+            if (ttlValue == -1) {
+                expiredTimeSpan = UINT64_MAX;
+            } else if (ttlValue > 0) {
+                expiredTimeSpan = static_cast<uint64_t>(ttlValue);
+            } else {
+                YRLOG_WARN("invalid X-TTL header value: {}, must be -1 or positive", ttlStr);
+            }
+        } catch (...) {
+            YRLOG_WARN("invalid X-TTL header value: {}", ttlStr);
+        }
+    }
+    return internalIAM_->RequireEncryptToken(tenantID, role, expiredTimeSpan)
+        .Then([tenantID](const std::shared_ptr<TokenSalt> &tokenSalt) {
         if (tokenSalt->status.IsError() || tokenSalt->token.empty()) {
             YRLOG_ERROR("{}|RequireEncryptToken failed, err is {}", tenantID, tokenSalt->status.ToString());
             return GenerateHttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR,

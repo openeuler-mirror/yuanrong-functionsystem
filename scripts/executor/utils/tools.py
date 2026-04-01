@@ -1,5 +1,7 @@
 # coding=UTF-8
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
+import ctypes
+import importlib.metadata
 import os
 import sys
 import ctypes
@@ -9,7 +11,6 @@ import subprocess
 from typing import Tuple
 import importlib.metadata
 from importlib.metadata import PackageNotFoundError
-
 
 # 请勿在此声明全局变量
 
@@ -45,7 +46,7 @@ def get_linux_resources() -> Tuple[int, int]:
                 total_mem_kb = int(line.split()[1])
                 break
 
-    total_mem_gb = round(total_mem_kb / (1024 ** 2), 2)
+    total_mem_gb = round(total_mem_kb / (1024**2), 2)
     return cpu_count, total_mem_gb
 
 

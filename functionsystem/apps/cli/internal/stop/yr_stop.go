@@ -162,7 +162,7 @@ func filterProcesses(processes []process, keywords []string) []process {
 	}
 	for _, p := range processes {
 		for keyword := range keywordSet {
-			if strings.Contains(p.Cmdline, keyword) {
+			if strings.Contains(p.Cmdline, keyword) && p.PID != os.Getpid() {
 				p.Keyword = keyword
 				filtered = append(filtered, p)
 				break
@@ -230,7 +230,6 @@ func handleProcess(p process, graceExitTimeout time.Duration) {
 	if err != nil {
 		return
 	}
-
 	select {
 	case <-time.After(graceExitTimeout):
 		colorMap := []colorprint.StringColorInfo{

@@ -96,6 +96,17 @@ public:
 
     void OnHealthyStatus(const Status &status) override;
 
+    virtual litebus::Future<Status> RegisterToWarmUp(
+        const std::shared_ptr<messages::DeployInstanceRequest> &request,
+        const litebus::Option<std::string> &agentID);
+
+    virtual litebus::Future<Status> UnRegisterWarmUp(
+        const std::shared_ptr<messages::KillInstanceRequest> &request);
+
+    virtual litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(
+        const std::string &requestID,
+        const resource_view::InstanceInfo &instanceInfo,
+        int32_t ttl = 0);
     // for test
     [[maybe_unused]] litebus::Future<bool> IsRegistered(const std::string &funcAgentID) const
     {

@@ -17,6 +17,10 @@
 #ifndef COMMON_RPC_SERVER_COMMON_GRPC_SERVER_H
 #define COMMON_RPC_SERVER_COMMON_GRPC_SERVER_H
 
+#include <string>
+#include <thread>
+#include <vector>
+#include <memory>
 #include <grpcpp/server.h>
 #include "async/future.hpp"
 
@@ -24,14 +28,20 @@ namespace functionsystem::grpc {
 const int DEFAULT_GRPC_MESSAGE_MAX_SIZE = 500 * 1024 * 1024;
 struct CommonGrpcServerConfig {
     int grpcMessageMaxSize{ DEFAULT_GRPC_MESSAGE_MAX_SIZE };
+    // For TCP listen (existing behavior), fill `ip` and `listenPort`.
     std::string ip;
     std::string listenPort;
+    // If `udsPath` is non-empty, server will listen on unix domain socket at this path
+    // using the address string "unix:/path/to/socket". When using UDS, `ip`/`listenPort`
+    // are ignored.
+    std::string udsPath;
     std::shared_ptr<::grpc::ServerCredentials> creds;
 };
 
 class CommonGrpcServer {
 public:
-    explicit CommonGrpcServer(const CommonGrpcServerConfig &serverConfig) : config_(std::move(serverConfig)) {};
+    // Take config by value so it can be moved in easily by caller.
+    explicit CommonGrpcServer(CommonGrpcServerConfig serverConfig) : config_(std::move(serverConfig)) {}
     ~CommonGrpcServer();
 
     void Start();

@@ -13,7 +13,9 @@
 # limitations under the License.
 
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/bus_service LOCAL_SCHEDULER_GRPC_SERVER_BUS_SERVICE_SRCS)
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/exec_service LOCAL_SCHEDULER_GRPC_SERVER_EXEC_SERVICE_SRCS)
 
 target_sources(local_scheduler_lib
         PRIVATE
-        ${LOCAL_SCHEDULER_GRPC_SERVER_BUS_SERVICE_SRCS})
+        ${LOCAL_SCHEDULER_GRPC_SERVER_BUS_SERVICE_SRCS}
+        ${LOCAL_SCHEDULER_GRPC_SERVER_EXEC_SERVICE_SRCS})

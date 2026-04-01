@@ -160,6 +160,35 @@ std::vector<WatchEvent> GetProxyEventRsp(const EventType &eventType, const std::
     return events;
 }
 
+// Generate 6 WatchEvents for PartialInstanceInfoSyncer tests.
+// events[0]: PUT InstanceID1, SCHEDULING, non-local node
+// events[1]: kv for InstanceID1 RUNNING (used as GetResponse kv)
+// events[2]: kv for InstanceID2 RUNNING (used as GetResponse kv)
+// events[3]: PUT InstanceID3, non-local node
+// events[4]: PUT InstanceID4, local node (nodeID)
+// events[5]: PUT InstanceID5, local node (nodeID)
+std::vector<WatchEvent> GenerateResponseRouteEvent(const std::string &nodeID)
+{
+    auto makeKv = [](const std::string &instanceID, int32_t statusCode, const std::string &proxyID,
+                     int64_t revision) {
+        KeyValue kv;
+        kv.set_key(INSTANCE_ROUTE_PATH_PREFIX + "/" + instanceID);
+        kv.set_value("{\"instanceID\":\"" + instanceID + "\",\"functionProxyID\":\"" + proxyID +
+                     "\",\"instanceStatus\":{\"code\":" + std::to_string(statusCode) + "}}");
+        kv.set_mod_revision(revision);
+        return kv;
+    };
+
+    std::vector<WatchEvent> events;
+    events.push_back(WatchEvent{EVENT_TYPE_PUT, makeKv("InstanceID1", static_cast<int32_t>(InstanceState::SCHEDULING), "otherNode", 1), {}});
+    events.push_back(WatchEvent{EVENT_TYPE_PUT, makeKv("InstanceID1", static_cast<int32_t>(InstanceState::RUNNING), "otherNode", 2), {}});
+    events.push_back(WatchEvent{EVENT_TYPE_PUT, makeKv("InstanceID2", static_cast<int32_t>(InstanceState::RUNNING), "otherNode", 1), {}});
+    events.push_back(WatchEvent{EVENT_TYPE_PUT, makeKv("InstanceID3", static_cast<int32_t>(InstanceState::RUNNING), "otherNode", 1), {}});
+    events.push_back(WatchEvent{EVENT_TYPE_PUT, makeKv("InstanceID4", static_cast<int32_t>(InstanceState::RUNNING), nodeID, 1), {}});
+    events.push_back(WatchEvent{EVENT_TYPE_PUT, makeKv("InstanceID5", static_cast<int32_t>(InstanceState::RUNNING), nodeID, 1), {}});
+    return events;
+}
+
 TEST_F(ObserverTest, GetInstanceInfo)
 {
     // get non exited instance info
@@ -323,7 +352,7 @@ TEST_F(ObserverTest, ErrMetaStorageAccessor)
 
     std::string funcAgentID = "funcAgent";
     std::string function = "0-yrjava-yr-smoke/version/$latest";
-    std::string funcKey = "12345678901234561234567890123456/0-yrjava-yr-smoke/$latest";
+    std::string funcKey = "default/0-yrjava-yr-smoke/$latest";
 
     std::string instanceIDA = "instanceA";
     InstanceState instanceStatusA = InstanceState::RUNNING;
@@ -380,7 +409,7 @@ TEST_F(ObserverTest, FastPutRemoteInstanceEvent)
 {
     auto mockMetaStoreClient  = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
     metaStorageAccessor_->metaClient_ = mockMetaStoreClient;
-    std::string funcKey = "12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest";
+    std::string funcKey = "default/0-system-faasExecutorPython3.9/$latest";
     std::string funcAgentID = "funcAgent";
     InstanceState instanceStatusA = InstanceState::RUNNING;
     auto instanceInfo1 = GenInstanceInfo("instance0001", funcAgentID, funcKey, instanceStatusA);
@@ -392,7 +421,7 @@ TEST_F(ObserverTest, FastPutRemoteInstanceEvent)
     EXPECT_EQ(GetModRevisionFromInstanceInfo(instanceInfo1), 10);
 
     auto key1 = R"(/yr/route/business/yrk/instance0001)";
-    auto value1status3 = R"({"instanceID":"instance0001","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-2","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","functionProxyID":"dggpalpha00001","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID1","tenantID":"12345678901234561234567890123456","version":"3"})";
+    auto value1status3 = R"({"instanceID":"instance0001","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-2","function":"default/0-system-faasExecutorPython3.9/$latest","functionProxyID":"dggpalpha00001","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID1","tenantID":"default","version":"3"})";
     litebus::Future<std::shared_ptr<GetResponse>> getResponseFuture;
     std::shared_ptr<GetResponse> rep = std::make_shared<GetResponse>();
     rep->header.revision = 10;
@@ -425,7 +454,7 @@ TEST_F(ObserverTest, FastPutRemoteInstanceEvent)
 TEST_F(ObserverTest, PutDeleteEvent)
 {
     std::string funcAgentID = "funcAgent";
-    std::string funcKey = "12345678901234561234567890123456/0-yrjava-yr-smoke/$latest/err";
+    std::string funcKey = "default/0-yrjava-yr-smoke/$latest/err";
 
     std::string instanceIDA = "instanceA";
     InstanceState instanceStatusA = InstanceState::RUNNING;
@@ -451,10 +480,10 @@ TEST_F(ObserverTest, PutDeleteEvent)
 TEST_F(ObserverTest, ProcFuncMetaEvent)
 {
     std::string funcMetaJson =
-        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"12345678901234561234567890123456","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
+        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
     std::string path =
-        "/yr/functions/business/yrk/tenant/12345678901234561234567890123456/function/0-yrjava-yr-smoke/version/$latest";
-    std::string funcKey = "12345678901234561234567890123456/0-yrjava-yr-smoke/$latest";
+        "/yr/functions/business/yrk/tenant/default/function/0-yrjava-yr-smoke/version/$latest";
+    std::string funcKey = "default/0-yrjava-yr-smoke/$latest";
 
     // put function meta to meta store
     auto status = metaStorageAccessor_->Put(path, funcMetaJson).Get();
@@ -480,22 +509,22 @@ TEST_F(ObserverTest, ProcFuncMetaEvent)
 TEST_F(ObserverTest, GetFuncMetaInfo)
 {
     std::string funcMetaJson =
-        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"12345678901234561234567890123456","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
+        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
     std::string path =
-        "/yr/functions/business/yrk/tenant/12345678901234561234567890123456/function/0-yrjava-yr-smoke/version/$latest";
+        "/yr/functions/business/yrk/tenant/default/function/0-yrjava-yr-smoke/version/$latest";
 
     // put function meta to meta store
     auto status = metaStorageAccessor_->Put(path, funcMetaJson).Get();
     EXPECT_TRUE(status.IsOk());
 
-    auto funcKey = "12345678901234561234567890123456/0-yrjava-yr-smoke/$latest";
+    auto funcKey = "default/0-yrjava-yr-smoke/$latest";
     ASSERT_AWAIT_TRUE([&]() -> bool { return controlPlaneObserver_->GetFuncMeta(funcKey).Get().IsSome(); });
     auto getFuncMetaOpt = controlPlaneObserver_->GetFuncMeta(funcKey).Get();
 
     auto funcMeta = getFuncMetaOpt.Get();
     // check FuncMataData
     EXPECT_TRUE(funcMeta.funcMetaData.urn
-                == "sn:cn:yrk:12345678901234561234567890123456:function:0-yrjava-yr-smoke:$latest");
+                == "sn:cn:yrk:default:function:0-yrjava-yr-smoke:$latest");
     EXPECT_TRUE(funcMeta.funcMetaData.runtime == "java1.8");
     EXPECT_TRUE(funcMeta.funcMetaData.entryFile == "fusion_computation_handler.fusion_computation_handler");
     EXPECT_TRUE(funcMeta.funcMetaData.handler.empty());
@@ -537,9 +566,9 @@ TEST_F(ObserverTest, GetFuncMetaWithOutCache)
     const auto &aid = litebus::Spawn(observerActor);
 
     const std::string funcMetaJson =
-        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"12345678901234561234567890123456","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
+        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
     const std::string path =
-        "/yr/functions/business/yrk/tenant/12345678901234561234567890123456/function/0-yrjava-yr-smoke/version/$latest";
+        "/yr/functions/business/yrk/tenant/default/function/0-yrjava-yr-smoke/version/$latest";
 
     const auto f = metaStorageAccessor_->Put(path, funcMetaJson);
     EXPECT_AWAIT_READY(f);  // wait for ready
@@ -549,12 +578,12 @@ TEST_F(ObserverTest, GetFuncMetaWithOutCache)
     EXPECT_AWAIT_READY(future);  // wait for ready
     EXPECT_TRUE(future.Get().IsNone());
 
-    auto funcKey = "12345678901234561234567890123456/0-yrjava-yr-smoke/$latest";
+    auto funcKey = "default/0-yrjava-yr-smoke/$latest";
     future = litebus::Async(aid, &ObserverActor::GetFuncMeta, funcKey);
     EXPECT_AWAIT_READY(future);
 
     EXPECT_EQ(future.Get().Get().funcMetaData.urn,
-              "sn:cn:yrk:12345678901234561234567890123456:function:0-yrjava-yr-smoke:$latest");
+              "sn:cn:yrk:default:function:0-yrjava-yr-smoke:$latest");
 
     litebus::Terminate(observerActor->GetAID());
     litebus::Await(observerActor);
@@ -568,10 +597,10 @@ public:
 TEST_F(ObserverTest, SetUpdateFuncMetasFunc)
 {
     std::string funcMetaJson =
-        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"12345678901234561234567890123456","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
+        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
     std::string path =
-        "/yr/functions/business/yrk/tenant/12345678901234561234567890123456/function/0-yrjava-yr-smoke/version/$latest";
-    std::string funcKey = "12345678901234561234567890123456/0-yrjava-yr-smoke/$latest";
+        "/yr/functions/business/yrk/tenant/default/function/0-yrjava-yr-smoke/version/$latest";
+    std::string funcKey = "default/0-yrjava-yr-smoke/$latest";
 
     bool isFinished = false;
     auto mockUpdateFuncMetasFunc = std::make_shared<MockUpdateFuncMetasFunc>();
@@ -615,8 +644,6 @@ TEST_F(ObserverTest, SetUpdateFuncMetasFunc)
     EXPECT_TRUE(funcMetas2.Get().find(funcKey) != funcMetas2.Get().end());
 
     controlPlaneObserver_->SetUpdateFuncMetasFunc(nullptr);
-
-    ASSERT_AWAIT_TRUE([&]() -> bool { return controlPlaneObserver_->GetFuncMeta(funcKey).Get().IsNone(); });
 }
 
 TEST_F(ObserverTest, SetUpdateSysFuncMetasFunc)
@@ -629,7 +656,7 @@ TEST_F(ObserverTest, SetUpdateSysFuncMetasFunc)
     EXPECT_CALL(*internalIAM, IsSystemTenant).WillRepeatedly(testing::Return(true));
 
     std::string funcMetaJson =
-        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"0","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
+        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"0","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
     std::string path =
         "/yr/functions/business/yrk/tenant/0/function/0-yrjava-yr-smoke/version/$latest";
     std::string funcKey = "0/0-yrjava-yr-smoke/$latest";
@@ -767,7 +794,7 @@ TEST_F(ObserverTest, NotifyTenantEvent_EmptyFunctionAgentID_When_ResourcesNotEno
     controlPlaneObserver_->AttachTenantListener(listener);
     std::unordered_map<std::string, TenantEvent> lastTenantEventCacheMap;
     std::string mockEventKvKey =
-        "/sn/instance/business/yrk/tenant/12345678901234561234567890123456/function/0-yrcpp-yr-tenantid/version/"
+        "/sn/instance/business/yrk/tenant/default/function/0-yrcpp-yr-tenantid/version/"
         "$latest/defaultaz/c81bdbb95673c89300/db690100-0000-4000-8018-320280e3b05f";
 
     TenantEvent event1;
@@ -874,11 +901,14 @@ TEST_F(ObserverTest, FunctionMetaSyncerTest)
     auto mockMetaStoreClient  = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
     metaStorageAccessor_->metaClient_ = mockMetaStoreClient;
 
-    auto key = R"(/yr/functions/business/yrk/tenant/12345678901234561234567890123456/function/0@faaspy@hello/version/latest)";
-    auto meta = R"({"funcMetaData":{"layers":[],"name":"0-yrcc0260e787-test-func-serialization","description":"","functionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-yrcc0260e787-test-func-serialization","reversedConcurrency":0,"tags":null,"functionUpdateTime":"","functionVersionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-yrcc0260e787-test-func-serialization:$latest","codeSize":3020,"codeSha256":"","codeSha512":"123","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"python3.9","timeout":900,"version":"$latest","versionDescription":"$latest","deadLetterConfig":"","latestVersionUpdateTime":"","publishTime":"","businessId":"yrk","tenantId":"12345678901234561234567890123456","domain_id":"","project_name":"","revisionId":"20240822042544986","created":"2024-08-13 08:27:19.912 UTC","statefulFlag":false,"hookHandler":{"call":"yrlib_handler.call","checkpoint":"yrlib_handler.checkpoint","init":"yrlib_handler.init","recover":"yrlib_handler.recover","shutdown":"yrlib_handler.shutdown","signal":"yrlib_handler.signal"}}})";
-    std::string meta1Json = R"({"funcMetaData":{"layers":[],"name":"0-system-faasExecutorGo1.x","description":"","functionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-system-faasExecutorGo1.x","reversedConcurrency":0,"tags":null,"functionUpdateTime":"","functionVersionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-system-faasExecutorGo1.x:$latest","codeSize":0,"codeSha256":"0","handler":"","runtime":"go1.13","timeout":900,"version":"$latest","versionDescription":"$latest","deadLetterConfig":"","latestVersionUpdateTime":"","publishTime":"","businessId":"yrk","tenantId":"12345678901234561234567890123456","domain_id":"","project_name":"","revisionId":"20230116102015135","created":"2023-01-1610:20:15.135UTC","statefulFlag":false,"hookHandler":{"call":"faas-executor.CallHandler","checkpoint":"faas-executor.CheckPointHandler","init":"faas-executor.InitHandler","recover":"faas-executor.RecoverHandler","shutdown":"faas-executor.ShutDownHandler","signal":"faas-executor.SignalHandler","health":"faas-executor.HealthCheckHandler"}},"codeMetaData":{"storage_type":"local","code_path":"/tmp/home/sn/system-function-packages/executor-function/go1.x"},"envMetaData":{"envKey":"","environment":"","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""},"extendedMetaData":{"image_name":"","role":{"xrole":"","app_xrole":""},"mount_config":{"mount_user":{"user_id":0,"user_group_id":0},"func_mounts":null},"strategy_config":{"concurrency":0},"extend_config":"","initializer":{"initializer_handler":"","initializer_timeout":0},"enterprise_project_id":"","log_tank_service":{"logGroupId":"","logStreamId":""},"tracing_config":{"tracing_ak":"","tracing_sk":"","project_name":""},"user_type":"","instance_meta_data":{"maxInstance":100,"minInstance":0,"concurrentNum":100,"cacheInstance":0},"extended_handler":null,"extended_timeout":null}})";
-    std::string meta2Json = R"({"funcMetaData":{"layers":[],"name":"0-system-faasExecutorPython3.9","description":"","functionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-system-faasExecutorPython3.9","reversedConcurrency":0,"tags":null,"functionUpdateTime":"","functionVersionUrn":"sn:cn:yrk:12345678901234561234567890123456:function:0-system-faasExecutorPython3.9:$latest","codeSize":0,"codeSha256":"0","handler":"","runtime":"python3.9","timeout":900,"version":"$latest","versionDescription":"$latest","deadLetterConfig":"","latestVersionUpdateTime":"","publishTime":"","businessId":"yrk","tenantId":"12345678901234561234567890123456","domain_id":"","project_name":"","revisionId":"20230116102015135","created":"2023-01-1610:20:15.135UTC","statefulFlag":false,"hookHandler":{"call":"faas_executor.faasCallHandler","checkpoint":"faas_executor.faasCheckPointHandler","init":"faas_executor.faasInitHandler","recover":"faas_executor.faasRecoverHandler","shutdown":"faas_executor.faasShutDownHandler","signal":"faas_executor.faasSignalHandler"}},"codeMetaData":{"storage_type":"local","code_path":"/tmp/home/sn/system-function-packages/executor-function/python3.8"},"envMetaData":{"envKey":"","environment":"","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""},"extendedMetaData":{"image_name":"","role":{"xrole":"","app_xrole":""},"mount_config":{"mount_user":{"user_id":0,"user_group_id":0},"func_mounts":null},"strategy_config":{"concurrency":0},"extend_config":"","initializer":{"initializer_handler":"","initializer_timeout":0},"enterprise_project_id":"","log_tank_service":{"logGroupId":"","logStreamId":""},"tracing_config":{"tracing_ak":"","tracing_sk":"","project_name":""},"user_type":"","instance_meta_data":{"maxInstance":100,"minInstance":0,"concurrentNum":100,"cacheInstance":0},"extended_handler":null,"extended_timeout":null}})";
-    std::string meta3Json = R"({"funcMetaData":{"layers":[],"name":"0-system-faascontroller","description":"","functionUrn":"sn:cn:yrk:0:function:0-system-faascontroller","reversedConcurrency":0,"tags":null,"functionUpdateTime":"","functionVersionUrn":"sn:cn:yrk:0:function:0-system-faascontroller:$latest","codeSize":14391796,"codeSha256":"0","handler":"","runtime":"go1.13","timeout":900,"version":"$latest","versionDescription":"$latest","deadLetterConfig":"","latestVersionUpdateTime":"","publishTime":"","businessId":"yrk","tenantId":"0","domain_id":"","project_name":"","revisionId":"20230116102015135","created":"2023-01-16 10:20:15.135 UTC","statefulFlag":false,"hookHandler":{"call":"faascontroller.CallHandler","init":"faascontroller.InitHandler","checkpoint":"faascontroller.CheckpointHandler","recover":"faascontroller.RecoverHandler","shutdown":"faascontroller.ShutdownHandler","signal":"faascontroller.SignalHandler"}},"codeMetaData":{"storage_type":"local","code_path":"/tmp/home/sn/system-function-packages/faascontroller"},"envMetaData":{"envKey":"","environment":"","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""},"extendedMetaData":{"image_name":"","role":{"xrole":"","app_xrole":""},"mount_config":{"mount_user":{"user_id":0,"user_group_id":0},"func_mounts":null},"strategy_config":{"concurrency":0},"extend_config":"","initializer":{"initializer_handler":"","initializer_timeout":0},"enterprise_project_id":"","log_tank_service":{"logGroupId":"","logStreamId":""},"tracing_config":{"tracing_ak":"","tracing_sk":"","project_name":""},"user_type":"","instance_meta_data":{"maxInstance":100,"minInstance":0,"concurrentNum":100,"cacheInstance":0},"extended_handler":null,"extended_timeout":null}})";
+    auto key = R"(/yr/functions/business/yrk/tenant/default/function/0@faaspy@hello/version/latest)";
+    auto meta = R"({"funcMetaData":{"layers":[],"name":"0-yrcc0260e787-test-func-serialization","description":"","functionUrn":"sn:cn:yrk:default:function:0-yrcc0260e787-test-func-serialization","reversedConcurrency":0,"tags":null,"functionUpdateTime":"","functionVersionUrn":"sn:cn:yrk:default:function:0-yrcc0260e787-test-func-serialization:$latest","codeSize":3020,"codeSha256":"","codeSha512":"123","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"python3.9","timeout":900,"version":"$latest","versionDescription":"$latest","deadLetterConfig":"","latestVersionUpdateTime":"","publishTime":"","businessId":"yrk","tenantId":"default","domain_id":"","project_name":"","revisionId":"20240822042544986","created":"2024-08-13 08:27:19.912 UTC","statefulFlag":false,"hookHandler":{"call":"yrlib_handler.call","checkpoint":"yrlib_handler.checkpoint","init":"yrlib_handler.init","recover":"yrlib_handler.recover","shutdown":"yrlib_handler.shutdown","signal":"yrlib_handler.signal"}}})";
+    auto key1 = R"(/yr/functions/business/yrk/tenant/default/function/0-system-faasExecutorGo1.x/version/$latest)";
+    std::string meta1Json = R"({"funcMetaData":{"layers":[],"name":"0-system-faasExecutorGo1.x","description":"","functionUrn":"sn:cn:yrk:default:function:0-system-faasExecutorGo1.x","reversedConcurrency":0,"tags":null,"functionUpdateTime":"","functionVersionUrn":"sn:cn:yrk:default:function:0-system-faasExecutorGo1.x:$latest","codeSize":0,"codeSha256":"0","handler":"","runtime":"go1.13","timeout":900,"version":"$latest","versionDescription":"$latest","deadLetterConfig":"","latestVersionUpdateTime":"","publishTime":"","businessId":"yrk","tenantId":"default","domain_id":"","project_name":"","revisionId":"20230116102015135","created":"2023-01-1610:20:15.135UTC","statefulFlag":false,"hookHandler":{"call":"faas-executor.CallHandler","checkpoint":"faas-executor.CheckPointHandler","init":"faas-executor.InitHandler","recover":"faas-executor.RecoverHandler","shutdown":"faas-executor.ShutDownHandler","signal":"faas-executor.SignalHandler","health":"faas-executor.HealthCheckHandler"}},"codeMetaData":{"storage_type":"local","code_path":"/tmp/home/sn/system-function-packages/executor-function/go1.x"},"envMetaData":{"envKey":"","environment":"","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""},"extendedMetaData":{"image_name":"","role":{"xrole":"","app_xrole":""},"mount_config":{"mount_user":{"user_id":0,"user_group_id":0},"func_mounts":null},"strategy_config":{"concurrency":0},"extend_config":"","initializer":{"initializer_handler":"","initializer_timeout":0},"enterprise_project_id":"","log_tank_service":{"logGroupId":"","logStreamId":""},"tracing_config":{"tracing_ak":"","tracing_sk":"","project_name":""},"user_type":"","instance_meta_data":{"maxInstance":100,"minInstance":0,"concurrentNum":100,"cacheInstance":0},"extended_handler":null,"extended_timeout":null}})";
+    auto key2 = R"(/yr/functions/business/yrk/tenant/default/function/0-system-faasExecutorPython3.9/version/$latest)";
+    std::string meta2Json = R"({"funcMetaData":{"layers":[],"name":"0-system-faasExecutorPython3.9","description":"","functionUrn":"sn:cn:yrk:default:function:0-system-faasExecutorPython3.9","reversedConcurrency":0,"tags":null,"functionUpdateTime":"","functionVersionUrn":"sn:cn:yrk:default:function:0-system-faasExecutorPython3.9:$latest","codeSize":0,"codeSha256":"0","handler":"","runtime":"python3.9","timeout":900,"version":"$latest","versionDescription":"$latest","deadLetterConfig":"","latestVersionUpdateTime":"","publishTime":"","businessId":"yrk","tenantId":"default","domain_id":"","project_name":"","revisionId":"20230116102015135","created":"2023-01-1610:20:15.135UTC","statefulFlag":false,"hookHandler":{"call":"faas_executor.faasCallHandler","checkpoint":"faas_executor.faasCheckPointHandler","init":"faas_executor.faasInitHandler","recover":"faas_executor.faasRecoverHandler","shutdown":"faas_executor.faasShutDownHandler","signal":"faas_executor.faasSignalHandler"}},"codeMetaData":{"storage_type":"local","code_path":"/tmp/home/sn/system-function-packages/executor-function/python3.8"},"envMetaData":{"envKey":"","environment":"","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""},"extendedMetaData":{"image_name":"","role":{"xrole":"","app_xrole":""},"mount_config":{"mount_user":{"user_id":0,"user_group_id":0},"func_mounts":null},"strategy_config":{"concurrency":0},"extend_config":"","initializer":{"initializer_handler":"","initializer_timeout":0},"enterprise_project_id":"","log_tank_service":{"logGroupId":"","logStreamId":""},"tracing_config":{"tracing_ak":"","tracing_sk":"","project_name":""},"user_type":"","instance_meta_data":{"maxInstance":100,"minInstance":0,"concurrentNum":100,"cacheInstance":0},"extended_handler":null,"extended_timeout":null}})";
+    auto key3 = R"(/yr/functions/business/yrk/tenant/0/function/0-system-faascontroller/version/$latest)";
+    std::string meta3Json = R"({"funcMetaData":{"layers":[],"name":"0-system-faascontroller","description":"","functionUrn":"sn:cn:yrk:0:function:0-system-faascontroller","functionVersionUrn":"sn:cn:yrk:0:function:0-system-faascontroller:$latest","codeSize":14391796,"codeSha256":"0","handler":"","runtime":"go1.13","timeout":900,"version":"$latest","versionDescription":"$latest","deadLetterConfig":"","latestVersionUpdateTime":"","publishTime":"","businessId":"yrk","tenantId":"0","domain_id":"","project_name":"","revisionId":"20230116102015135","created":"2023-01-16 10:20:15.135 UTC","statefulFlag":false,"hookHandler":{"call":"faascontroller.CallHandler","init":"faascontroller.InitHandler","checkpoint":"faascontroller.CheckpointHandler","recover":"faascontroller.RecoverHandler","shutdown":"faascontroller.ShutdownHandler","signal":"faascontroller.SignalHandler"}},"codeMetaData":{"storage_type":"local","code_path":"/tmp/home/sn/system-function-packages/faascontroller"},"envMetaData":{"envKey":"","environment":"","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""},"extendedMetaData":{"image_name":"","role":{"xrole":"","app_xrole":""},"mount_config":{"mount_user":{"user_id":0,"user_group_id":0},"func_mounts":null},"strategy_config":{"concurrency":0},"extend_config":"","initializer":{"initializer_handler":"","initializer_timeout":0},"enterprise_project_id":"","log_tank_service":{"logGroupId":"","logStreamId":""},"tracing_config":{"tracing_ak":"","tracing_sk":"","project_name":""},"user_type":"","instance_meta_data":{"maxInstance":100,"minInstance":0,"concurrentNum":100,"cacheInstance":0},"extended_handler":null,"extended_timeout":null}})";
     FunctionMeta meta1 = GetFuncMetaFromJson(meta1Json);
     FunctionMeta meta2 = GetFuncMetaFromJson(meta2Json);
     FunctionMeta meta3 = GetFuncMetaFromJson(meta3Json);
@@ -925,249 +955,6 @@ TEST_F(ObserverTest, FunctionMetaSyncerTest)
     EXPECT_EQ(observerActor_->localFuncMetaSet_.count(funcKey1.Get()), size_t{1});
     EXPECT_EQ(observerActor_->systemFuncMetaMap_.count(funcKey3.Get()), size_t{0});
     observerActor_->SetUpdateFuncMetasFunc(nullptr);
-}
-
-std::vector<WatchEvent> GenerateResponseRouteEvent(std::string NodeID) {
-
-    // write into cache and need to update
-    auto key1 = R"(/yr/route/business/yrk/InstanceID1)";
-    auto value1status1 = R"({"instanceID":"InstanceID1","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-1","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","functionProxyID":"dggpalpha00001","instanceStatus":{"code":1,"msg":"scheduling"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID1","tenantID":"12345678901234561234567890123456","version":"1"})";
-    auto value1status3 = R"({"instanceID":"InstanceID1","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-2","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","functionProxyID":"dggpalpha00001","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID1","tenantID":"12345678901234561234567890123456","version":"3"})";
-
-    // get from etcd and need to write into cache
-    auto key2 = R"(/yr/route/business/yrk/InstanceID2)";
-    auto value2  = R"({"instanceID":"InstanceID2","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-2","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","functionProxyID":"dggpalpha00001","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID2","tenantID":"12345678901234561234567890123456","version":"3"})";
-
-    // not in etcd but in cache need to delete
-    auto key3 = R"(/yr/route/business/yrk/InstanceID3)";
-    auto value3 = R"({"instanceID":"InstanceID3","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-3","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","functionProxyID":"dggpalpha00001","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID3","tenantID":"12345678901234561234567890123456","version":"3"})";
-
-    // belong to self, need to update by self
-    auto key4 = R"(/yr/route/business/yrk/InstanceID4)";
-    std::string value4 = R"({"instanceID":"InstanceID4","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-4","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","functionProxyID":"XXXXXXX","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID4","tenantID":"12345678901234561234567890123456","version":"3"})";
-
-    auto key5 = R"(/yr/route/business/yrk/InstanceID5)";
-    std::string value5 = R"({"instanceID":"InstanceID5","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-5","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","functionProxyID":"XXXXXXX","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID5","tenantID":"12345678901234561234567890123456","version":"5","createOptions":{"ReliabilityType":"low"}})";
-
-    std::string from = "XXXXXXX";
-    size_t start_pos = 0;
-    while ((start_pos = value4.find(from, start_pos)) != std::string::npos) {
-        value4.replace(start_pos, from.length(), NodeID);
-        start_pos += NodeID.length(); // Move past the replaced substring
-    }
-
-    start_pos = 0;
-    while ((start_pos = value5.find(from, start_pos)) != std::string::npos) {
-        value5.replace(start_pos, from.length(), NodeID);
-        start_pos += NodeID.length(); // Move past the replaced substring
-    }
-
-    std::vector<WatchEvent> events;
-    std::list<std::pair<std::string, std::string>> kvMap = {
-        {key1, value1status1},
-        {key1, value1status3},
-        {key2, value2},
-        {key3, value3},
-        {key4, value4},
-        {key5, value5},
-    };
-    auto mod = 0;
-    for (auto elem : kvMap) {
-        KeyValue inst1;
-        inst1.set_key(elem.first) ;
-        inst1.set_value(elem.second);
-        inst1.set_mod_revision(mod++);
-        WatchEvent event{ .eventType = EVENT_TYPE_PUT, .kv = inst1, .prevKv = {} };
-        events.emplace_back(event);
-    }
-    return events;
-
-}
-
-TEST_F(ObserverTest, InstanceInfoSyncerTest)
-{
-    auto mockMetaStoreClient  = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
-    metaStorageAccessor_->metaClient_ = mockMetaStoreClient;
-
-    observerActor_->instanceInfoMap_.clear();
-    auto events = GenerateResponseRouteEvent(observerActor_->nodeID_);
-    std::vector<WatchEvent> putEvents({events[0], events[3], events[4]}); // put key1(status 1), key3 in cache
-    observerActor_->UpdateInstanceRouteEvent(putEvents, true);
-    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID1") != 0);
-    EXPECT_TRUE(observerActor_->instanceInfoMap_["InstanceID1"].instancestatus().code() == static_cast<int32_t>(InstanceState::SCHEDULING));
-    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID3") != 0);
-    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID4") != 0);
-
-    // get key1(status 3), key2, key4 in etcd
-    std::shared_ptr<GetResponse> rep = std::make_shared<GetResponse>();
-    rep->header.revision = 4;
-    rep->status = Status::OK();
-    rep->kvs.emplace_back(events[1].kv);
-    rep->kvs.emplace_back(events[2].kv);
-    std::string cbFuncInstanceID;
-    controlPlaneObserver_->SetInstanceInfoSyncerCbFunc([&cbFuncInstanceID](const resource_view::RouteInfo &routeInfo) {
-        YRLOG_DEBUG("{}|{}execute instance info sync callback function, create client for instance({}), job({})",
-                    routeInfo.requestid(), routeInfo.instanceid());
-        cbFuncInstanceID = routeInfo.instanceid();
-        return Status::OK();
-    });
-    auto future = observerActor_->InstanceInfoSyncer(rep);
-    ASSERT_AWAIT_READY(future);
-    ASSERT_TRUE(future.Get().status.IsOk());
-
-    // test exist in etcd and in cache, need update by etcd
-    ASSERT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID1") != 0);
-    EXPECT_TRUE(observerActor_->instanceInfoMap_["InstanceID1"].instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING));
-
-    // test exist in etcd but not in cache, need update
-    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID2") != 0);
-
-    // test not in etcd but in cache, need delete
-    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID3") == 0);
-
-    // test belong to self, not found in remote, don't delete
-    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID4") == 1);
-
-    // test belong to self, need to update by callback function
-    rep = std::make_shared<GetResponse>();
-    rep->status = Status::OK();
-    rep->header.revision = 2;
-    rep->kvs.emplace_back(events[2].kv);
-    rep->kvs.emplace_back(events[4].kv);
-
-    cbFuncInstanceID = "";
-    EXPECT_EQ(cbFuncInstanceID, "");
-    future = observerActor_->InstanceInfoSyncer(rep);
-    ASSERT_AWAIT_READY(future);
-    ASSERT_TRUE(future.Get().status.IsOk());
-    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID1") == 0); // rep don't have key1, so need to delete
-    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID4") == 1);
-    EXPECT_EQ(cbFuncInstanceID, "InstanceID4");
-}
-
-TEST_F(ObserverTest, WatchInstanceTest)
-{
-    controlPlaneObserver_->WatchInstance("InstanceID1");
-    EXPECT_TRUE(observerActor_->instanceWatchers_.find("InstanceID1") == observerActor_->instanceWatchers_.end());
-
-    auto events = GenerateResponseRouteEvent(observerActor_->nodeID_);
-    metaStorageAccessor_->Put(GenInstanceRouteKey("InstanceID1"), events[0].kv.value());
-    observerActor_->isPartialWatchInstances_ = true;
-
-    controlPlaneObserver_->WatchInstance("InstanceID1");
-    ASSERT_AWAIT_TRUE([&]() {
-        return observerActor_->instanceWatchers_.find("InstanceID1") != observerActor_->instanceWatchers_.end();
-    });
-
-    controlPlaneObserver_->WatchInstance("InstanceID1");
-    metaStorageAccessor_->Delete(GenInstanceRouteKey("InstanceID1"));
-    ASSERT_AWAIT_TRUE([&]() {
-        return observerActor_->instanceWatchers_.find("InstanceID1") == observerActor_->instanceWatchers_.end();
-    });
-
-    controlPlaneObserver_->WatchInstance("InstanceID1");
-    ASSERT_AWAIT_TRUE([&]() {
-        return observerActor_->instanceWatchers_.find("InstanceID1") != observerActor_->instanceWatchers_.end();
-    });
-    controlPlaneObserver_->CancelWatchInstance("InstanceID1");
-    ASSERT_AWAIT_TRUE([&]() {
-        return observerActor_->instanceWatchers_.find("InstanceID1") == observerActor_->instanceWatchers_.end();
-    });
-
-    observerActor_->isPartialWatchInstances_ = false;
-}
-
-TEST_F(ObserverTest, GetAndWatchInstanceTest)
-{
-    auto future = controlPlaneObserver_->GetAndWatchInstance("InstanceID1");
-    ASSERT_AWAIT_TRUE([&]() { return future.IsError(); });
-
-    auto events = GenerateResponseRouteEvent(observerActor_->nodeID_);
-    metaStorageAccessor_->Put(GenInstanceRouteKey("InstanceID1"), events[0].kv.value());
-    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 1;});
-
-    future = controlPlaneObserver_->GetAndWatchInstance("InstanceID1");
-    ASSERT_AWAIT_READY(future);
-    EXPECT_EQ(future.Get().instanceid(), "InstanceID1");
-
-    metaStorageAccessor_->Delete(GenInstanceRouteKey("InstanceID1"));
-    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 0;});
-
-    observerActor_->isPartialWatchInstances_ = true;
-    future = controlPlaneObserver_->GetAndWatchInstance("InstanceID1");
-    ASSERT_AWAIT_TRUE([&]() { return future.IsError(); });
-
-    metaStorageAccessor_->Put(GenInstanceRouteKey("InstanceID1"), events[0].kv.value());
-    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 1;});
-
-    future = controlPlaneObserver_->GetAndWatchInstance("InstanceID1");
-    ASSERT_AWAIT_READY(future);
-    EXPECT_EQ(future.Get().instanceid(), "InstanceID1");
-
-    metaStorageAccessor_->Delete(GenInstanceRouteKey("InstanceID1"));
-    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 0;});
-
-    observerActor_->isPartialWatchInstances_ = false;
-}
-
-TEST_F(ObserverTest, GetOrWatchInstanceTest)
-{
-    auto future = controlPlaneObserver_->GetOrWatchInstance("InstanceID1");
-    ASSERT_AWAIT_TRUE([&]() { return future.IsError(); });
-
-    auto events = GenerateResponseRouteEvent(observerActor_->nodeID_);
-    metaStorageAccessor_->Put(GenInstanceRouteKey("InstanceID1"), events[0].kv.value());
-    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 1;});
-
-    future = controlPlaneObserver_->GetOrWatchInstance("InstanceID1");
-    ASSERT_AWAIT_READY(future);
-    EXPECT_EQ(future.Get().instanceid(), "InstanceID1");
-
-    metaStorageAccessor_->Delete(GenInstanceRouteKey("InstanceID1"));
-    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 0;});
-
-    observerActor_->isPartialWatchInstances_ = true;
-    future = controlPlaneObserver_->GetOrWatchInstance("InstanceID1");
-    ASSERT_AWAIT_TRUE([&]() { return future.IsError(); });
-
-    metaStorageAccessor_->Put(GenInstanceRouteKey("InstanceID1"), events[0].kv.value());
-    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 1;});
-
-    future = controlPlaneObserver_->GetOrWatchInstance("InstanceID1");
-    ASSERT_AWAIT_READY(future);
-    EXPECT_EQ(future.Get().instanceid(), "InstanceID1");
-
-    metaStorageAccessor_->Delete(GenInstanceRouteKey("InstanceID1"));
-    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 0;});
-
-    future = controlPlaneObserver_->GetOrWatchInstance("InstanceID02");
-    ASSERT_AWAIT_TRUE([&]() { return future.IsError(); });
-
-    observerActor_->isPartialWatchInstances_ = false;
-}
-
-
-TEST_F(ObserverTest, SubscribeInstanceEventTest)
-{
-    auto future = controlPlaneObserver_->GetAndWatchInstance("InstanceID1");
-    ASSERT_AWAIT_TRUE([&]() { return future.IsError(); });
-
-    auto events = GenerateResponseRouteEvent(observerActor_->nodeID_);
-    metaStorageAccessor_->Put(GenInstanceRouteKey("InstanceID1"), events[0].kv.value());
-    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 1;});
-    controlPlaneObserver_->DelInstanceEvent("InstanceID1", 100);
-    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 0;});
-    observerActor_->isPartialWatchInstances_ = false;
-    auto future1 = observerActor_->TrySubscribeInstanceEvent("InstanceID-NotExist", "InstanceID1", false);
-    ASSERT_AWAIT_READY(future1);
-    EXPECT_EQ(future1.Get().StatusCode(), StatusCode::ERR_INSTANCE_EXITED);
-    metaStorageAccessor_->Delete(GenInstanceRouteKey("InstanceID1")).Get();
-    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 0;});
-    auto future2 = observerActor_->TrySubscribeInstanceEvent("InstanceID-NotExist", "InstanceID1", false);
-    ASSERT_AWAIT_READY(future2);
-    EXPECT_TRUE(future2.Get().IsOk());
-    EXPECT_TRUE(observerActor_->instanceView_->subscribedInstances_.find("InstanceID1") ==
-                observerActor_->instanceView_->subscribedInstances_.end());
 }
 
 TEST_F(ObserverTest, PartialInstanceInfoSyncerTest)
@@ -1228,6 +1015,26 @@ TEST_F(ObserverTest, PartialInstanceInfoSyncerTest)
     ASSERT_TRUE(future.Get().status.IsOk());
     // test belong to self, not found in remote, don't delete
     EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID4") == 1);
+}
+
+TEST_F(ObserverTest, PartialInstanceInfoSyncerWithoutCallbackTest)
+{
+    auto mockMetaStoreClient = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
+    metaStorageAccessor_->metaClient_ = mockMetaStoreClient;
+
+    observerActor_->instanceInfoMap_.clear();
+    observerActor_->instanceModRevisionMap_.clear();
+    observerActor_->SetInstanceInfoSyncerFunc({});
+    auto events = GenerateResponseRouteEvent(observerActor_->nodeID_);
+
+    std::shared_ptr<GetResponse> rep = std::make_shared<GetResponse>();
+    rep->header.revision = 5;
+    rep->status = Status::OK();
+    rep->kvs.emplace_back(events[1].kv);
+
+    auto future = observerActor_->PartialInstanceInfoSyncer(rep, "InstanceID1");
+    ASSERT_AWAIT_READY(future);
+    ASSERT_TRUE(future.Get().status.IsOk());
 }
 
 TEST_F(ObserverTest, PartialInstanceInfoSyncerLowReliabilityTest)

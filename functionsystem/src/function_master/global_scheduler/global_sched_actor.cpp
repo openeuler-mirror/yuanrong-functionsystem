@@ -375,6 +375,7 @@ litebus::Option<NodeInfo> GlobalSchedActor::GetRootDomainInfo()
 void GlobalSchedActor::AddLocalSchedHandler(const litebus::AID &from, const std::string &name,
                                             const std::string &address)
 {
+    RETURN_IF_NULL(checkLocalAbnormalCallbackFunc_);
     checkLocalAbnormalCallbackFunc_(name).OnComplete(
         litebus::Defer(GetAID(), &GlobalSchedActor::AddLocalSched, std::placeholders::_1, from, name, address));
 }
@@ -463,6 +464,8 @@ void GlobalSchedActor::DelLocalSchedHandler(const std::string &name, LocalExitTy
         case LocalExitType::UNREGISTER: {
             return OnLocalExit(name);
         }
+        default:
+            break;
     }
 }
 

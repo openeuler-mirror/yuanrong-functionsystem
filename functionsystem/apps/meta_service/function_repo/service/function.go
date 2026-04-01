@@ -15,11 +15,13 @@
  */
 
 // Package service is processing service codes
+
 package service
 
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 
@@ -28,6 +30,7 @@ import (
 	"meta_service/common/logger/log"
 	"meta_service/common/snerror"
 	"meta_service/common/timeutil"
+	"meta_service/common/types"
 	"meta_service/common/urnutils"
 	"meta_service/function_repo/errmsg"
 	"meta_service/function_repo/model"
@@ -75,6 +78,14 @@ func CreateFunctionInfo(ctx server.Context, req model.FunctionCreateRequest, isA
 		log.GetLogger().Errorf("failed to check layer :%s", err.Error())
 		return model.FunctionVersion{}, err
 	}
+
+	// Validate rootfs specification if provided
+	err = ValidateRootfsSpec(&req.RootfsSpecMeta)
+	if err != nil {
+		log.GetLogger().Errorf("failed to validate rootfs specification: %s", err.Error())
+		return model.FunctionVersion{}, err
+	}
+
 	functionVersion, err := buildFunctionVersion(req)
 	if err != nil {
 		log.GetLogger().Errorf("failed to build function version when creating :%s", err.Error())
@@ -186,6 +197,14 @@ func UpdateFunctionInfo(ctx server.Context, f model.FunctionQueryInfo,
 		log.GetLogger().Errorf("failed to check layer :%s", err.Error())
 		return model.FunctionVersion{}, err
 	}
+
+	// Validate rootfs specification if provided
+	err = ValidateRootfsSpec(&fv.RootfsSpecMeta)
+	if err != nil {
+		log.GetLogger().Errorf("failed to validate rootfs specification: %s", err.Error())
+		return model.FunctionVersion{}, err
+	}
+
 	err = buildUpdateFunctionVersion(fv, &funcVersion)
 	if err != nil {
 		log.GetLogger().Errorf("failed to build update function version :%s", err.Error())
@@ -239,11 +258,30 @@ func buildBasicUpdateFunctionVersion(request model.FunctionUpdateRequest,
 	fv.FunctionVersion.PoolLabel = poolLabel
 	fv.FunctionVersion.PoolID = request.PoolID
 	fv.FunctionVersion.EnableAgentSession = request.EnableAgentSession
+	fv.FunctionVersion.IdleTime = request.IdleTime
+	fv.FunctionVersion.IsFuncPublic = request.IsFuncPublic
 	fv.FunctionVersion.Package.BucketID = request.S3CodePath.BucketID
 	fv.FunctionVersion.Package.ObjectID = request.S3CodePath.ObjectID
 	fv.FunctionVersion.Package.BucketUrl = request.S3CodePath.BucketUrl
 	fv.FunctionVersion.Package.Token = request.S3CodePath.Token
 	fv.FunctionVersion.Package.Signature = request.S3CodePath.Sha512
+	fv.FunctionVersion.WarmupType = request.WarmupType
+	fv.FunctionVersion.RootfsSpecMeta = request.RootfsSpecMeta
+
+	// Log rootfs specification update if provided
+	if request.RootfsSpecMeta.Type != "" {
+		log.GetLogger().Infof("updating function rootfs: type=%s, runtime=%s, imageurl=%s, readonly=%v",
+			request.RootfsSpecMeta.Type, request.RootfsSpecMeta.Runtime,
+			request.RootfsSpecMeta.ImageURL, request.RootfsSpecMeta.ReadOnly)
+	}
+
+	fv.FunctionVersion.ScalePolicy = request.ScalePolicy
+	fv.FunctionVersion.SchedulePolicy = request.SchedulePolicy
+	fv.FunctionVersion.AutoScaleConfig = storage.AutoScaleConfig{
+		SLAQuota:      request.AutoScaleConfig.SLAQuota,
+		ScaleDownTime: request.AutoScaleConfig.ScaleDownTime,
+		BurstScaleNum: request.AutoScaleConfig.BurstScaleNum,
+	}
 }
 
 func buildUpdateFunctionVersion(request model.FunctionUpdateRequest,
@@ -427,6 +465,14 @@ func getFunctionVersion(request model.FunctionCreateRequest, env string,
 	if len(poolLabel) == 0 {
 		poolLabel = utils.GetPoolLabels(request.SchedulePolicies)
 	}
+
+	// Log rootfs specification if provided
+	if request.RootfsSpecMeta.Type != "" {
+		log.GetLogger().Infof("creating function with rootfs: type=%s, runtime=%s, imageurl=%s, readonly=%v",
+			request.RootfsSpecMeta.Type, request.RootfsSpecMeta.Runtime,
+			request.RootfsSpecMeta.ImageURL, request.RootfsSpecMeta.ReadOnly)
+	}
+
 	version := storage.FunctionVersion{
 		Package: storage.Package{
 			StorageType: request.StorageType,
@@ -441,28 +487,39 @@ func getFunctionVersion(request model.FunctionCreateRequest, env string,
 				Signature: request.S3CodePath.Sha512,
 			},
 		},
-		RevisionID:         utils.GetUTCRevisionID(),
-		Handler:            request.Handler,
-		CPU:                request.CPU,
-		Memory:             request.Memory,
-		Runtime:            utils.GetRuntimeName(request.Kind, request.Runtime),
-		Timeout:            request.Timeout,
-		Version:            utils.GetDefaultVersion(),
-		Environment:        env,
-		CustomResources:    customResources,
-		Description:        utils.GetDefaultVersion(),
-		PublishTime:        utils.NowTimeF(),
-		MinInstance:        w.minInstance,
-		MaxInstance:        w.maxInstance,
-		ConcurrentNum:      w.concurrentNum,
-		CacheInstance:      request.CacheInstance,
-		HookHandler:        getHookHandler(request.Kind, request.Runtime, request.Handler, request.HookHandler),
-		ExtendedHandler:    request.ExtendedHandler,
-		ExtendedTimeout:    request.ExtendedTimeout,
-		Device:             request.Device,
-		PoolLabel:          poolLabel,
-		PoolID:             request.PoolID,
+		RevisionID:      utils.GetUTCRevisionID(),
+		Handler:         request.Handler,
+		CPU:             request.CPU,
+		Memory:          request.Memory,
+		Runtime:         utils.GetRuntimeName(request.Kind, request.Runtime),
+		Timeout:         request.Timeout,
+		Version:         utils.GetDefaultVersion(),
+		Environment:     env,
+		CustomResources: customResources,
+		Description:     utils.GetDefaultVersion(),
+		PublishTime:     utils.NowTimeF(),
+		MinInstance:     w.minInstance,
+		MaxInstance:     w.maxInstance,
+		ConcurrentNum:   w.concurrentNum,
+		CacheInstance:   request.CacheInstance,
+		HookHandler:     getHookHandler(request.Kind, request.Runtime, request.Handler, request.HookHandler),
+		ExtendedHandler: request.ExtendedHandler,
+		ExtendedTimeout: request.ExtendedTimeout,
+		Device:          request.Device,
+		PoolLabel:       poolLabel,
+		PoolID:          request.PoolID,
 		EnableAgentSession: request.EnableAgentSession,
+        IsFuncPublic:    request.IsFuncPublic,
+        IdleTime:        request.IdleTime,
+        WarmupType:      request.WarmupType,
+        RootfsSpecMeta:  request.RootfsSpecMeta,
+        ScalePolicy:     request.ScalePolicy,
+        SchedulePolicy:  request.SchedulePolicy,
+        AutoScaleConfig: storage.AutoScaleConfig{
+            SLAQuota:      request.AutoScaleConfig.SLAQuota,
+            ScaleDownTime: request.AutoScaleConfig.ScaleDownTime,
+            BurstScaleNum: request.AutoScaleConfig.BurstScaleNum,
+        },
 	}
 	if request.Kind == common.Faas {
 		version.Kind = common.Faas
@@ -838,8 +895,10 @@ func buildFunctionVersionInfo(function model.Function, functionVersionURN string
 		Function:           function,
 		FunctionVersionURN: functionVersionURN,
 		RevisionID:         version.FunctionVersion.RevisionID,
+		StorageType:        version.FunctionVersion.Package.StorageType,
 		CodeSize:           version.FunctionVersion.Package.Size,
 		CodeSha256:         version.FunctionVersion.Package.Signature,
+		CodePath:           version.FunctionVersion.Package.CodePath,
 		BucketID:           version.FunctionVersion.Package.BucketID,
 		ObjectID:           version.FunctionVersion.Package.ObjectID,
 		Handler:            version.FunctionVersion.Handler,
@@ -860,6 +919,8 @@ func buildFunctionVersionInfo(function model.Function, functionVersionURN string
 		Status:             version.FunctionVersion.Status,
 		InstanceNum:        version.FunctionVersion.InstanceNum,
 		Device:             version.FunctionVersion.Device,
+		Kind:               version.FunctionVersion.Kind,
+		RootfsSpecMeta:     version.FunctionVersion.RootfsSpecMeta,
 	}
 	if version.FunctionVersion.CustomResources != "" {
 		err := json.Unmarshal([]byte(version.FunctionVersion.CustomResources), &v.CustomResources)
@@ -1143,6 +1204,94 @@ func buildFunctionVersionEntity(key storage.FunctionVersionKey, v storage.Functi
 		ConcurrentNum:      v.FunctionVersion.ConcurrentNum,
 		FunctionVersionURN: functionVersionURN,
 		Device:             v.FunctionVersion.Device,
+		Kind:               v.FunctionVersion.Kind,
+		RootfsSpecMeta:     v.FunctionVersion.RootfsSpecMeta,
 	}
 	return funcVer
+}
+
+// ValidateRootfsSpec validates rootfs specification metadata with the following rules:
+// 1. If all fields are empty, validation passes
+// 2. If path is set, type must be 'local' and vice versa
+// 3. If imageurl is set, type must be 'image' and vice versa
+// 4. If type is 's3', StorageInfo.Endpoint, Bucket, Object must all be set
+// 5. If any field is set but runtime is empty, runtime defaults to 'runsc'
+func ValidateRootfsSpec(rootfs *types.RootfsSpecMeta) error {
+	if rootfs == nil {
+		return nil
+	}
+
+	// Check if rootfs is completely empty
+	hasPath := rootfs.Path != ""
+	hasImageURL := rootfs.ImageURL != ""
+	hasStorageInfo := rootfs.StorageInfo.Endpoint != "" || rootfs.StorageInfo.Bucket != "" ||
+		rootfs.StorageInfo.Object != "" || rootfs.StorageInfo.AccessKey != "" || rootfs.StorageInfo.SecretKey != ""
+	hasType := rootfs.Type != ""
+	hasMountPoint := rootfs.MountPoint != ""
+	hasReadOnly := rootfs.ReadOnly
+
+	// Rule 1: If all fields are empty, validation passes
+	if !hasPath && !hasImageURL && !hasStorageInfo && !hasType && !hasMountPoint && !hasReadOnly && rootfs.Runtime == "" {
+		return nil
+	}
+
+	// Rule 5: If any field is set but runtime is empty, default to 'runsc'
+	if (hasPath || hasImageURL || hasStorageInfo || hasType || hasMountPoint) && rootfs.Runtime == "" {
+		rootfs.Runtime = "runsc"
+		log.GetLogger().Infof("rootfs runtime not specified, defaulting to 'runsc'")
+	}
+
+	// Rule 2: Path and Type validation (path requires type='local')
+	if hasPath {
+		if rootfs.Type != "local" {
+			log.GetLogger().Errorf("rootfs path is set, but type is not 'local': %s", rootfs.Type)
+			return errmsg.NewParamError("when rootfs path is set, type must be 'local'")
+		}
+	}
+	if rootfs.Type == "local" && !hasPath {
+		log.GetLogger().Errorf("rootfs type is 'local', but path is not set")
+		return errmsg.NewParamError("when rootfs type is 'local', path must be set")
+	}
+
+	// Rule 3: ImageURL and Type validation (imageurl requires type='image')
+	if hasImageURL {
+		if rootfs.Type != "image" {
+			log.GetLogger().Errorf("rootfs imageurl is set, but type is not 'image': %s", rootfs.Type)
+			return errmsg.NewParamError("when rootfs imageurl is set, type must be 'image'")
+		}
+	}
+	if rootfs.Type == "image" && !hasImageURL {
+		log.GetLogger().Errorf("rootfs type is 'image', but imageurl is not set")
+		return errmsg.NewParamError("when rootfs type is 'image', imageurl must be set")
+	}
+
+	// Rule 4: S3 configuration validation
+	if rootfs.Type == "s3" {
+		if rootfs.StorageInfo.Endpoint == "" {
+			log.GetLogger().Errorf("rootfs type is 's3', but endpoint is not set")
+			return errmsg.NewParamError("when rootfs type is 's3', storageInfo.endpoint must be set")
+		}
+		if rootfs.StorageInfo.Bucket == "" {
+			log.GetLogger().Errorf("rootfs type is 's3', but bucket is not set")
+			return errmsg.NewParamError("when rootfs type is 's3', storageInfo.bucket must be set")
+		}
+		if rootfs.StorageInfo.Object == "" {
+			log.GetLogger().Errorf("rootfs type is 's3', but object is not set")
+			return errmsg.NewParamError("when rootfs type is 's3', storageInfo.object must be set")
+		}
+	}
+
+	// Validate that S3 storageInfo is only set when type is 's3'
+	if hasStorageInfo && rootfs.Type != "s3" {
+		log.GetLogger().Errorf("rootfs storageInfo is set, but type is not 's3': %s", rootfs.Type)
+		return errmsg.NewParamError("storageInfo can only be set when rootfs type is 's3'")
+	}
+
+	// Validate type value
+	if hasType && rootfs.Type != "local" && rootfs.Type != "image" && rootfs.Type != "s3" {
+		log.GetLogger().Errorf("invalid rootfs type: %s, must be 'local', 'image', or 's3'", rootfs.Type)
+		return errmsg.NewParamError(fmt.Sprintf("invalid rootfs type: %s, must be 'local', 'image', or 's3'", rootfs.Type))
+	}
+
+	return nil
 }

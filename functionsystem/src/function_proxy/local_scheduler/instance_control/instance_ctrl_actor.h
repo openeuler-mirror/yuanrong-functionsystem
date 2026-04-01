@@ -45,6 +45,8 @@
 #include "local_scheduler/subscription_manager/subscription_mgr.h"
 
 namespace functionsystem::local_scheduler {
+
+class TraefikRegistry;
 using CtrlClientPromise = litebus::Promise<std::shared_ptr<ControlInterfacePosixClient>>;
 using InstanceReadyCallBack = std::function<litebus::Future<Status>(const Status &status)>;
 using ClearGroupInstanceCallBack = std::function<void(const InstanceInfo &instanceInfo)>;
@@ -53,6 +55,7 @@ using CreateCallResultCallBack =
 
 class FunctionAgentMgr;
 class LocalSchedSrv;
+class SnapCtrl;
 
 struct RuntimeConfig {
     std::string runtimeHeartbeatEnable;
@@ -150,6 +153,10 @@ struct InstanceCtrlConfig {
     uint16_t maxPriority {0};
     bool enablePreemption {false};
     bool enableFakeSuspendResume {false};
+    // dposix uds endpoint pass to runtime
+    std::string udsPath;
+    // proxy gRPC service address (ip:port format)
+    std::string proxyGrpcAddress;
 };
 
 class InstanceCtrlActor : public BasisActor {
@@ -178,7 +185,7 @@ public:
                                        bool isSkipAuth = false);
 
     /**
-     * receive exit instance from client
+     * receive exit instance from clientd
      * @param exitReq: exit request
      * @return exit instance response
      */
@@ -218,6 +225,10 @@ public:
     void ForwardCallResultRequest(const litebus::AID &from, std::string &&, std::string &&msg);
 
     void ForwardCallResultResponse(const litebus::AID &from, std::string &&, std::string &&msg);
+
+    void OnCheckpointRuntimeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    void OnCheckpointMetadataResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     litebus::Future<CallResultAck> CallResult(const std::string &from,
                                               const std::shared_ptr<functionsystem::CallResult> &callResult);
@@ -277,11 +288,31 @@ public:
     litebus::Future<Status> InstanceRouteInfoSyncer(const resource_view::RouteInfo &routeInfo);
     void UpdateFuncMetas(bool isAdd, const std::unordered_map<std::string, FunctionMeta> &funcMetas);
 
+    void TriggerToWarmUpFunction(const std::string &agentID);
+
+    void FunctionWarmUp(const std::string &funcKey, const FunctionMeta &funcMeta,
+        const litebus::Option<std::string> &agentID = litebus::None());
+
+    void OnFunctionWarmUp(const std::string &funcKey, const litebus::Future<Status> &future,
+                          const litebus::Option<std::string> &agentID);
+
+    void FunctionDelete(const std::string &funcKey, const FunctionMeta &funcMeta);
+
+    void OnFunctionDelete(const std::string &funcKey, const litebus::Future<Status> &future);
+
     // for test
     [[maybe_unused]] void BindInstanceControlView(const std::shared_ptr<InstanceControlView> &view)
     {
         ASSERT_IF_NULL(view);
         instanceControlView_ = view;
+    }
+
+    // Thread-safety note: instanceControlView_ is set once during construction and
+    // never reassigned afterwards, so copying the shared_ptr here is safe even when
+    // called from outside the actor thread (e.g., from LocalSchedDriver::Start).
+    std::shared_ptr<InstanceControlView> GetInstanceControlView() const
+    {
+        return instanceControlView_;
     }
 
     litebus::Future<Status> SyncInstance(const std::shared_ptr<resource_view::ResourceUnit> &resourceUnit);
@@ -326,6 +357,11 @@ public:
         subscriptionMgr_->BindInstanceControlView(instanceControlView_);
         ASSERT_IF_NULL(observer_);
         subscriptionMgr_->BindObserver(observer_);
+    }
+
+    void SetTraefikRegistry(const std::shared_ptr<TraefikRegistry> &registry)
+    {
+        traefikRegistry_ = registry;
     }
 
     litebus::Future<Status> Checkpoint(const std::string &instanceID);
@@ -412,6 +448,13 @@ public:
     litebus::Future<Status> ToResume(const std::string &instanceID);
     litebus::Future<Status> DoLocalResumeInstance(const std::string &instanceID);
     litebus::Future<Status> MakeCheckpoint(const std::string &instanceID);
+
+    /**
+     * Bind the SnapCtrl for handling snapshot signals
+     * @param snapCtrl: The snap control interface
+     */
+    void BindSnapCtrl(const std::shared_ptr<SnapCtrl> &snapCtrl);
+
     void DoCheckpoint(const std::string &instanceID, const litebus::Promise<Status> &promise, uint32_t retryTimes = 3);
     litebus::Future<Status> ToScheduling(const std::shared_ptr<messages::ScheduleRequest> &req);
     litebus::Future<Status> ToCreating(const std::shared_ptr<messages::ScheduleRequest> &req,
@@ -503,6 +546,10 @@ public:
                                                               const std::shared_ptr<KillRequest> &killReq,
                                                               uint32_t cnt);
 
+    litebus::Future<KillResponse> HandleSnapshotSignal(const std::shared_ptr<KillContext> &killCtx,
+                                                       const std::string &srcInstanceID,
+                                                       const std::shared_ptr<KillRequest> &killReq);
+
     litebus::Future<KillResponse> ProcessSubscribeRequest(const std::string &srcInstanceID,
                                                           const std::shared_ptr<KillRequest> &killReq);
 
@@ -515,6 +562,18 @@ public:
 
     litebus::Future<KillResponse> ForwardSubscriptionEvent(const std::shared_ptr<KillContext> &ctx);
 
+    litebus::Future<TransitionResult> TransInstanceState(const std::shared_ptr<InstanceStateMachine> machine,
+                                                        const TransContext &context);
+
+    /**
+     * Deploy a snapstart instance (without CheckReadiness and InitCall)
+     * @param scheduleReq: The schedule request for the restored instance
+     * @return Future of DeployInstanceResponse
+     */
+    litebus::Future<messages::DeployInstanceResponse> DeploySnapStartInstance(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
+
+    void SessionCountDelta(const std::string &instanceID, int delta);
 private:
     Status CheckSchedRequestValid(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
@@ -773,9 +832,6 @@ private:
 
     void DeleteDriverClient(const std::string &instanceID, const std::string &jobID);
 
-    litebus::Future<TransitionResult> TransInstanceState(const std::shared_ptr<InstanceStateMachine> machine,
-                                                         const TransContext &context);
-
     litebus::Future<Status> TryExitInstance(const std::shared_ptr<InstanceStateMachine> stateMachine,
                                             const std::shared_ptr<KillContext> &killCtx,
                                             bool isSynchronized);
@@ -870,6 +926,9 @@ private:
 
     void ClearLocalDriver();
 private:
+    litebus::Future<Status> RegisterTraefikRoute(const InstanceInfo& instanceInfo);
+    litebus::Future<Status> UnregisterTraefikRoute(const std::string& instanceID);
+private:
     litebus::Future<Status> FcAccessorHeartbeatEnable(bool enable)
     {
         fcAccessorHeartbeat_ = enable;
@@ -887,6 +946,7 @@ private:
     std::shared_ptr<InstanceControlView> instanceControlView_;
 
     std::shared_ptr<LocalSchedSrv> localSchedSrv_;
+    std::shared_ptr<SnapCtrl> snapCtrl_;
     std::shared_ptr<function_proxy::InternalIAM> internalIAM_;
     std::unordered_map<std::string, std::unordered_set<std::string>> internalCredReferenceMap_;
     std::unordered_map<std::string, litebus::Promise<::messages::UpdateCredResponse>> updateTokenPromises_;
@@ -919,6 +979,7 @@ private:
     std::unordered_map<std::string, std::shared_ptr<TokenBucketRateLimiter>> rateLimiterMap_;
 
     std::unordered_map<std::string, FunctionMeta> funcMetaMap_;
+    std::unordered_set<std::string> funcTag_;
 
     uint32_t maxForwardKillRetryTimes_ = MAX_FORWARD_KILL_RETRY_TIMES;
     uint32_t maxForwardKillRetryCycleMs_ = MAX_FORWARD_KILL_RETRY_CYCLE_MS;
@@ -956,6 +1017,24 @@ private:
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<KillResponse>>> killingRequest_;
 
     BACK_OFF_RETRY_HELPER(InstanceCtrlActor, litebus::Option<InstanceState>, checkStateHelper_);
+
+    std::shared_ptr<TraefikRegistry> traefikRegistry_;
+
+    // todo(Lwy_Robb): idle controller should be mv to a separate actor in future
+    std::unordered_map<std::string, litebus::Timer> idleTimers_;
+
+    // Track whether each instance has active exec sessions
+    std::unordered_map<std::string, bool> instanceActiveSessions_;
+    // Track whether each instance is idle by traffic reports
+    std::unordered_map<std::string, bool> instanceTrafficIdle_;
+    // Track per-instance session counts (edge-triggered)
+    std::unordered_map<std::string, size_t> instanceSessionCounts_;
+
+    void TrafficReport(const std::string &instanceID, const size_t &processingNum);
+    void SessionAlive(const std::string &instanceID, bool hasActiveSessions);
+    void StartIdleTimer(const std::string &instanceID);
+    void HandleIdleTimeout(const std::string &instanceID);
+    void CancelIdleTimer(const std::string &instanceID);
 };
 }  // namespace functionsystem::local_scheduler
 #endif  // LOCAL_SCHEDULER_INSTANCE_CTRL_ACTOR_H

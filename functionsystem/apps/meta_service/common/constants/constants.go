@@ -315,6 +315,8 @@ const (
 	LocalStorageType = "local"
 	// CopyStorageType the code is stored in the disk and need to copy to container path
 	CopyStorageType = "copy"
+	// WorkingDirStorageType the code is stored in the working directory
+	WorkingDirStorageType = "working_dir"
 	// Faas kind of function creation
 	Faas = "faas"
 )
@@ -407,7 +409,7 @@ const (
 	// AppFN -
 	FunctionNameApp = "app"
 	// AppFuncId -
-	AppFuncId = "12345678901234561234567890123456/0-system-faasExecutorPosixCustom/$latest"
+	AppFuncId = "default/0-system-faasExecutorPosixCustom/$latest"
 	// AppType type for invoking create-app
 	AppType = "SUBMISSION"
 	// AppStatusPending -

@@ -12,20 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(GRPC_PROTO_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/posix/common.proto"
-        "${CMAKE_CURRENT_SOURCE_DIR}/posix/core_service.proto"
-        "${CMAKE_CURRENT_SOURCE_DIR}/posix/runtime_rpc.proto"
-        "${CMAKE_CURRENT_SOURCE_DIR}/posix/runtime_service.proto"
-        "${CMAKE_CURRENT_SOURCE_DIR}/posix/affinity.proto"
-        "${CMAKE_CURRENT_SOURCE_DIR}/posix/inner_service.proto"
-        "${CMAKE_CURRENT_SOURCE_DIR}/posix/bus_service.proto"
-        "${CMAKE_CURRENT_SOURCE_DIR}/posix/message.proto"
-        "${CMAKE_CURRENT_SOURCE_DIR}/posix/resource.proto"
-        "${CMAKE_CURRENT_SOURCE_DIR}/posix/agent_plugin.proto"
-        "${CMAKE_CURRENT_SOURCE_DIR}/posix/bus_adapter.proto")
+set(PROTO_SRC_PATH "${CMAKE_CURRENT_SOURCE_DIR}/../../../../proto")
+set(GRPC_PROTO_SRCS "${PROTO_SRC_PATH}/posix/common.proto"
+        "${PROTO_SRC_PATH}/posix/core_service.proto"
+        "${PROTO_SRC_PATH}/posix/runtime_rpc.proto"
+        "${PROTO_SRC_PATH}/posix/runtime_service.proto"
+        "${PROTO_SRC_PATH}/posix/affinity.proto"
+        "${PROTO_SRC_PATH}/posix/inner_service.proto"
+        "${PROTO_SRC_PATH}/posix/bus_service.proto"
+        "${PROTO_SRC_PATH}/posix/message.proto"
+        "${PROTO_SRC_PATH}/posix/resource.proto"
+        "${PROTO_SRC_PATH}/posix/bus_adapter.proto"
+        "${PROTO_SRC_PATH}/posix/agent_plugin.proto"
+        "${PROTO_SRC_PATH}/posix/runtime_launcher_interface.proto"
+        "${PROTO_SRC_PATH}/posix/exec_service.proto")
 GENERATE_GRPC_CPP(GRPCPB_SRCS GRPCPB_HDRS ${CMAKE_CURRENT_SOURCE_DIR}/pb/posix
         PROTO_FILES  ${GRPC_PROTO_SRCS}
-        SOURCE_ROOT  ${CMAKE_CURRENT_SOURCE_DIR}/posix)
+        SOURCE_ROOT  ${PROTO_SRC_PATH}/posix)
 include_directories(${CMAKE_CURRENT_LIST_DIR}/pb)
 add_library(posix_pb STATIC ${GRPCPB_SRCS})
 add_dependencies(posix_pb protobuf grpc)

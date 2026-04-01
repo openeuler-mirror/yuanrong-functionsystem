@@ -1,0 +1,441 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "snap_ctrl_actor.h"
+
+#include <chrono>
+#include <nlohmann/json.hpp>
+
+#include "async/async.hpp"
+#include "async/defer.hpp"
+#include "common/constants/actor_name.h"
+#include "common/logs/logging.h"
+#include "common/proto/pb/message_pb.h"
+#include "common/proto/pb/posix_pb.h"
+#include "common/resource_view/resource_type.h"
+#include "local_scheduler/function_agent_manager/function_agent_mgr.h"
+#include "local_scheduler/instance_control/instance_ctrl_message.h"
+#include "local_scheduler/local_scheduler_service/local_sched_srv.h"
+
+namespace functionsystem::local_scheduler {
+
+SnapCtrlActor::SnapCtrlActor(const std::string &name, const std::string &nodeID)
+    : BasisActor(name), nodeID_(nodeID)
+{
+}
+
+void SnapCtrlActor::Init()
+{
+    BasisActor::Init();
+    YRLOG_INFO("SnapCtrlActor initialized on node: {}", nodeID_);
+}
+
+static litebus::Future<SnapshotResult> RecordSnapshotMetadata(const std::shared_ptr<LocalSchedSrv> &localSchedSrv,
+                                                              const messages::SnapshotRuntimeResponse &runtimeRsp,
+                                                              const resource_view::InstanceInfo &instanceInfo)
+{
+    auto requestID = runtimeRsp.requestid();
+    if (runtimeRsp.code() != common::ERR_NONE) {
+        YRLOG_ERROR("{}|SnapshotRuntime failed: {}", requestID, runtimeRsp.message());
+        return SnapshotResult{ .code = runtimeRsp.code(),
+                               .message = runtimeRsp.message(),
+                               .snapshotInfo = runtimeRsp.snapshotinfo() };
+    }
+    auto req = std::make_shared<messages::RecordSnapshotRequest>();
+    *req->mutable_snapshotinfo() = runtimeRsp.snapshotinfo();
+    *req->mutable_instanceinfo() = instanceInfo;
+    req->mutable_instanceinfo()->clear_args();
+    req->set_requestid(requestID);
+    const auto &ckptID = runtimeRsp.snapshotinfo().checkpointid();
+    const auto &storagePath = runtimeRsp.snapshotinfo().storage();
+    const auto size = runtimeRsp.snapshotinfo().size();
+
+    YRLOG_INFO("{}|recording snapshot metadata, checkpointID: {}, storagePath:{}, size: {}", requestID, ckptID,
+               storagePath, size);
+
+    return localSchedSrv->RecordSnapshotMetadata(req).Then(
+        [requestID, runtimeRsp](const messages::RecordSnapshotResponse &rsp) -> litebus::Future<SnapshotResult> {
+            SnapshotResult result;
+            result.code = rsp.code();
+            result.message = rsp.message();
+            result.snapshotInfo = runtimeRsp.snapshotinfo();
+            if (result.code == common::ERR_NONE) {
+                YRLOG_INFO("{}|snapshot metadata recorded successfully, checkpointID: {}", requestID,
+                           runtimeRsp.snapshotinfo().checkpointid());
+            } else {
+                YRLOG_ERROR("{}|failed to record snapshot metadata, checkpointID: {}, code: {}, message: {}", requestID,
+                            runtimeRsp.snapshotinfo().checkpointid(), result.code, result.message);
+            }
+            return result;
+        });
+}
+
+litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &requestID, const std::string &instanceID,
+                                                            const std::string &payload)
+{
+    // 1. 解析 payload 获取参数（core_service::SnapOptions）
+    bool leaveRunning = false;
+    int32_t ttl = 0;  // Default TTL is 0 (no expiration)
+    if (!payload.empty()) {
+        SnapOptions options;
+        if (!options.ParseFromString(payload)) {
+            YRLOG_ERROR("{}|{}|failed to parse snapshot payload", requestID, instanceID);
+            KillResponse errorRsp;
+            errorRsp.set_code(static_cast<common::ErrorCode>(StatusCode::ERR_PARAM_INVALID));
+            errorRsp.set_message("invalid payload format");
+            return errorRsp;
+        }
+        leaveRunning = options.leaverunning();
+        ttl = options.ttl();  // Extract TTL from SnapOptions
+    }
+    // 1. 获取实例状态机
+    ASSERT_IF_NULL(instanceControlView_);
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        YRLOG_ERROR("{}|{}|failed to get instance state machine for snapshot", requestID, instanceID);
+        KillResponse errorRsp;
+        errorRsp.set_code(static_cast<common::ErrorCode>(StatusCode::ERR_INSTANCE_NOT_FOUND));
+        errorRsp.set_message("instance not found");
+        return errorRsp;
+    }
+    YRLOG_INFO("{}|{}|start snapshot, leave_running: {}", requestID, instanceID, leaveRunning);
+    auto instanceInfo = stateMachine->GetInstanceInfo();
+    ASSERT_IF_NULL(functionAgentMgr_);
+    // 2. 调用 PrepareSnap 验证实例状态并准备快照
+    return PrepareSnap(requestID, instanceID)
+        .Then([aid(GetAID()), requestID, instanceID, instanceInfo, ttl,
+               functionAgentMgr(functionAgentMgr_)](const Status &status)
+                   -> litebus::Future<messages::SnapshotRuntimeResponse> {
+            if (status.IsError()) {
+                YRLOG_ERROR("{}|{}|PrepareSnap failed: {}", requestID, instanceID, status.GetMessage());
+                messages::SnapshotRuntimeResponse errorRsp;
+                errorRsp.set_code(Status::GetPosixErrorCode(status.StatusCode()));
+                errorRsp.set_message(status.RawMessage());
+                return errorRsp;
+            }
+            // 2. 通过 functionAgentMgr_ 发送 SnapshotRuntime 请求到 function_agent
+            return functionAgentMgr->SnapshotRuntime(requestID, instanceInfo, ttl);
+        })
+        .Then([aid(GetAID()), localSchedSrv(localSchedSrv_), requestID,
+               instanceInfo](const messages::SnapshotRuntimeResponse &runtimeRsp) -> litebus::Future<SnapshotResult> {
+            // 4. SnapshotRuntime 返回后，通过 local_srv_actor 发送 RecordSnapshotMetadata
+            return RecordSnapshotMetadata(localSchedSrv, runtimeRsp, instanceInfo);
+        })
+        .Then([requestID, instanceID, leaveRunning, aid(GetAID()),
+               instanceCtrl(instanceCtrl_)](const SnapshotResult &result) -> litebus::Future<SnapshotResult> {
+            if (result.code != common::ERR_NONE) {
+                return result;
+            }
+
+            // 5. 日志记录最终状态
+            if (!leaveRunning) {
+                YRLOG_INFO("{}|{}|snapshot completed, deleting instance", requestID, instanceID);
+                // 调用 ForceDeleteInstance 删除实例
+                if (instanceCtrl != nullptr) {
+                    instanceCtrl->ForceDeleteInstance(instanceID);
+                } else {
+                    YRLOG_WARN("{}|{}|instanceCtrl not bound, cannot delete instance", requestID, instanceID);
+                }
+            } else {
+                YRLOG_INFO("{}|{}|snapshot completed, instance continues running", requestID, instanceID);
+            }
+
+            return result;
+        })
+        .Then(litebus::Defer(GetAID(), &SnapCtrlActor::OnHandleSnapshot, std::placeholders::_1));
+}
+
+KillResponse SnapCtrlActor::OnHandleSnapshot(const SnapshotResult &result)
+{
+    KillResponse rsp;
+    rsp.set_code(static_cast<common::ErrorCode>(result.code));
+    rsp.set_message(result.message);
+
+    // 在 payload 中返回 core_service::SnapInfo 序列化结果
+    if (result.code == common::ERR_NONE && !result.snapshotInfo.checkpointid().empty()) {
+        SnapInfo info;
+        info.set_snapshotid(result.snapshotInfo.checkpointid());
+        info.set_size(result.snapshotInfo.size());
+        rsp.set_payload(info.SerializeAsString());
+        YRLOG_INFO("snapshot completed, checkpointID: {}, size: {}", result.snapshotInfo.checkpointid(),
+                   result.snapshotInfo.size());
+    }
+    return rsp;
+}
+
+litebus::Future<KillResponse> SnapCtrlActor::HandleSnapStart(const std::string &requestID,
+                                                             const std::string &checkpointID,
+                                                             const std::string &payload)
+{
+    // 1. 验证 checkpointID
+    if (checkpointID.empty()) {
+        YRLOG_ERROR("{}|HandleSnapStart: empty checkpointID", requestID);
+        KillResponse errorRsp;
+        errorRsp.set_code(static_cast<common::ErrorCode>(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID)));
+        errorRsp.set_message("empty checkpointID");
+        return errorRsp;
+    }
+
+    // 2. 解析 SnapStartOptions payload
+    SnapStartOptions options;
+    if (!payload.empty() && !options.ParseFromString(payload)) {
+        YRLOG_ERROR("{}|failed to parse SnapStartOptions payload", requestID);
+        KillResponse errorRsp;
+        errorRsp.set_code(static_cast<common::ErrorCode>(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID)));
+        errorRsp.set_message("invalid SnapStartOptions payload");
+        return errorRsp;
+    }
+
+    YRLOG_INFO("{}|start snapstart from checkpoint: {}", requestID, checkpointID);
+
+    // 3. 构造 RestoreSnapshotRequest
+    auto req = std::make_shared<messages::RestoreSnapshotRequest>();
+    req->set_requestid(requestID);
+    req->set_checkpointid(checkpointID);
+    *req->mutable_snapstartoptions() = options;
+
+    // 4. 通过 localSchedSrv_ 转发到 function_master 的 ckpt_manager
+    ASSERT_IF_NULL(localSchedSrv_);
+    return localSchedSrv_->SnapStartCheckpoint(req).Then(
+        [requestID, checkpointID](const messages::RestoreSnapshotResponse &rsp) -> KillResponse {
+            KillResponse killRsp;
+            killRsp.set_code(static_cast<common::ErrorCode>(rsp.code()));
+            killRsp.set_message(rsp.message());
+
+            if (rsp.code() == common::ERR_NONE) {
+                YRLOG_INFO("{}|snapstart checkpoint {} succeeded, new instanceID: {}", requestID, checkpointID,
+                           rsp.instanceid());
+                // 在 payload 中返回新的 instanceID
+                SnapStartedInfo info;
+                info.set_instanceid(rsp.instanceid());
+                killRsp.set_payload(info.SerializeAsString());
+            } else {
+                YRLOG_ERROR("{}|snapstart checkpoint {} failed: {}", requestID, checkpointID, rsp.message());
+            }
+
+            return killRsp;
+        });
+}
+
+void SnapCtrlActor::SnapStart(
+    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result,
+    const TransitionResult &transResult)
+{
+    const auto &instanceID = scheduleReq->instance().instanceid();
+    const auto &requestID = scheduleReq->requestid();
+
+    YRLOG_INFO("{}|{}|SnapStarted: start snapstart instance initialization flow", requestID, instanceID);
+
+    // todo(lwy) :Check transition result
+
+    // 1. DeployInstance - call InstanceCtrl to deploy the snapstart instance
+    ASSERT_IF_NULL(instanceCtrl_);
+    YRLOG_INFO("{}|{}|calling DeploySnapStartInstance", requestID, instanceID);
+    instanceCtrl_->DeploySnapStartInstance(scheduleReq)
+        .OnComplete(litebus::Defer(GetAID(), &SnapCtrlActor::OnDeploySnapStartInstanceComplete, scheduleResp,
+                                   scheduleReq, std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnDeploySnapStartInstanceComplete(
+    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+    const litebus::Future<messages::DeployInstanceResponse> &deployFuture)
+{
+    const auto &instanceID = scheduleReq->instance().instanceid();
+    const auto &requestID = scheduleReq->requestid();
+
+    if (deployFuture.IsError()) {
+        YRLOG_ERROR("{}|{}|DeploySnapStartInstance future failed, error code: {}", requestID, instanceID,
+                    deployFuture.GetErrorCode());
+        scheduleResp->SetValue(GenScheduleResponse(StatusCode::FAILED, "DeploySnapStartInstance failed", *scheduleReq));
+        return;
+    }
+
+    const auto &deployResponse = deployFuture.Get();
+    if (deployResponse.code() != 0) {
+        YRLOG_ERROR("{}|{}|deploy snapstart instance failed, code: {}, message: {}", requestID, instanceID,
+                    deployResponse.code(), deployResponse.message());
+        scheduleResp->SetValue(GenScheduleResponse(static_cast<StatusCode>(deployResponse.code()),
+                                                   deployResponse.message(), *scheduleReq));
+        return;
+    }
+
+    const auto &runtimeID = deployResponse.runtimeid();
+    const auto &address = deployResponse.address();
+    YRLOG_INFO("{}|{}|deploy snapstart instance succeeded, runtimeID: {}, address: {}", requestID, instanceID,
+               runtimeID, address);
+
+    // Update scheduleReq with runtime details
+    scheduleReq->mutable_instance()->set_runtimeid(runtimeID);
+    scheduleReq->mutable_instance()->set_runtimeaddress(address);
+    scheduleReq->mutable_instance()->set_starttime(deployResponse.timeinfo());
+    (*scheduleReq->mutable_instance()->mutable_extensions())["PID"] = std::to_string(deployResponse.pid());
+
+    // 2. CreateInstanceClient
+    ASSERT_IF_NULL(instanceCtrl_);
+    YRLOG_INFO("{}|{}|creating instance client", requestID, instanceID);
+    instanceCtrl_->CreateInstanceClient(instanceID, runtimeID, address)
+        .OnComplete(litebus::Defer(GetAID(), &SnapCtrlActor::OnCreateInstanceClientComplete, scheduleResp, scheduleReq,
+                                   std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnCreateInstanceClientComplete(
+    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+    const litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> &clientResult)
+{
+    const auto &instanceID = scheduleReq->instance().instanceid();
+    const auto &requestID = scheduleReq->requestid();
+    const auto &runtimeID = scheduleReq->instance().runtimeid();
+
+    if (clientResult.IsError() || clientResult.Get() == nullptr) {
+        YRLOG_ERROR("{}|{}|failed to create instance client, error code: {}", requestID, instanceID,
+                    clientResult.GetErrorCode());
+        scheduleResp->SetValue(
+            GenScheduleResponse(StatusCode::FAILED, "failed to create instance client", *scheduleReq));
+        return;
+    }
+
+    auto client = clientResult.Get();
+    YRLOG_INFO("{}|{}|instance client created successfully", requestID, instanceID);
+
+    // 3. StartHeartbeat
+    ASSERT_IF_NULL(instanceCtrl_);
+    YRLOG_INFO("{}|{}|starting heartbeat for snapstart instance", requestID, instanceID);
+    instanceCtrl_->StartHeartbeat(instanceID, 0, runtimeID, StatusCode::SUCCESS);
+
+    // 4. Call SnapStarted RPC
+    YRLOG_INFO("{}|{}|calling SnapStarted RPC on runtime", requestID, instanceID);
+    runtime::SnapStartedRequest snapStartedReq{};
+    client->SnapStarted(std::move(snapStartedReq))
+        .OnComplete(litebus::Defer(GetAID(), &SnapCtrlActor::OnSnapStartedRpcComplete, scheduleResp, scheduleReq,
+                                   std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnSnapStartedRpcComplete(
+    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+    const litebus::Future<runtime::SnapStartedResponse> &snapStartedResult)
+{
+    const auto &instanceID = scheduleReq->instance().instanceid();
+    const auto &requestID = scheduleReq->requestid();
+
+    if (snapStartedResult.IsError()) {
+        YRLOG_ERROR("{}|{}|SnapStarted RPC failed, error code: {}", requestID, instanceID,
+                    snapStartedResult.GetErrorCode());
+        scheduleResp->SetValue(GenScheduleResponse(StatusCode::FAILED, "SnapStarted RPC failed", *scheduleReq));
+        return;
+    }
+
+    auto response = snapStartedResult.Get();
+    if (response.code() != common::ERR_NONE) {
+        YRLOG_ERROR("{}|{}|SnapStarted RPC returned error: code={}, message={}", requestID, instanceID, response.code(),
+                    response.message());
+        scheduleResp->SetValue(
+            GenScheduleResponse(static_cast<StatusCode>(response.code()), response.message(), *scheduleReq));
+        return;
+    }
+
+    YRLOG_INFO("{}|{}|SnapStarted RPC succeeded", requestID, instanceID);
+
+    // 5. TransInstanceState to RUNNING
+    ASSERT_IF_NULL(instanceControlView_);
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        YRLOG_ERROR("{}|{}|failed to get instance state machine", requestID, instanceID);
+        scheduleResp->SetValue(
+            GenScheduleResponse(StatusCode::ERR_INSTANCE_NOT_FOUND, "instance state machine not found", *scheduleReq));
+        return;
+    }
+
+    YRLOG_INFO("{}|{}|transitioning instance state to RUNNING", requestID, instanceID);
+    TransContext transContext{ InstanceState::RUNNING, stateMachine->GetVersion(), "running" };
+    transContext.scheduleReq = scheduleReq;
+
+    ASSERT_IF_NULL(instanceCtrl_);
+    instanceCtrl_->TransInstanceState(stateMachine, transContext)
+        .OnComplete(litebus::Defer(GetAID(), &SnapCtrlActor::OnTransInstanceStateComplete, scheduleResp, scheduleReq,
+                                   std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnTransInstanceStateComplete(
+    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const litebus::Future<TransitionResult> &transResult)
+{
+    const auto &instanceID = scheduleReq->instance().instanceid();
+    const auto &requestID = scheduleReq->requestid();
+
+    if (transResult.IsError()) {
+        YRLOG_ERROR("{}|{}|failed to transition instance to RUNNING state, error code: {}", requestID, instanceID,
+                    transResult.GetErrorCode());
+        scheduleResp->SetValue(
+            GenScheduleResponse(StatusCode::ERR_ETCD_OPERATION_ERROR, "failed to update instance state", *scheduleReq));
+        return;
+    }
+
+    const auto &result = transResult.Get();
+    if (result.status.IsError()) {
+        YRLOG_ERROR("{}|{}|failed to transition instance to RUNNING state: {}", requestID, instanceID,
+                    result.status.GetMessage());
+        scheduleResp->SetValue(
+            GenScheduleResponse(result.status.StatusCode(), result.status.GetMessage(), *scheduleReq));
+        return;
+    }
+
+    // 6. SetValue to complete schedule
+    YRLOG_INFO("{}|{}|snapstart instance initialized successfully, state: RUNNING", requestID, instanceID);
+    scheduleResp->SetValue(GenScheduleResponse(StatusCode::SUCCESS, "success", *scheduleReq));
+}
+
+litebus::Future<Status> SnapCtrlActor::PrepareSnap(const std::string &requestID, const std::string &instanceID)
+{
+    YRLOG_INFO("{}|{}|PrepareSnap: instance is running, getting client", requestID, instanceID);
+    // 3. 获取 client 并调用 PrepareSnap
+    ASSERT_IF_NULL(clientManager_);
+    return clientManager_->GetControlInterfacePosixClient(instanceID)
+        .Then([requestID, instanceID](const litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> &clientFuture)
+                  -> litebus::Future<Status> {
+            if (clientFuture.IsError() || clientFuture.Get() == nullptr) {
+                YRLOG_ERROR("{}|{}|failed to get control interface client, error code: {}", requestID, instanceID,
+                            clientFuture.GetErrorCode());
+                return Status(StatusCode::FAILED, "failed to get control interface client");
+            }
+            auto client = clientFuture.Get();
+            // 4. 调用 PrepareSnap 接口
+            runtime::PrepareSnapRequest prepareReq{};
+            return client->PrepareSnap(std::move(prepareReq))
+                .Then([requestID,
+                       instanceID](const litebus::Future<runtime::PrepareSnapResponse> &prepareResult) -> Status {
+                    if (prepareResult.IsError()) {
+                        YRLOG_ERROR("{}|{}|PrepareSnap RPC failed, error code: {}", requestID, instanceID,
+                                    prepareResult.GetErrorCode());
+                        return Status(StatusCode::FAILED, "PrepareSnap RPC failed");
+                    }
+
+                    auto response = prepareResult.Get();
+                    if (response.code() != common::ERR_NONE) {
+                        YRLOG_ERROR("{}|{}|PrepareSnap failed: code={}, message={}", requestID, instanceID,
+                                    response.code(), response.message());
+                        return Status(StatusCode::FAILED, response.message());
+                    }
+
+                    YRLOG_INFO("{}|{}|PrepareSnap succeeded", requestID, instanceID);
+                    return Status::OK();
+                });
+        });
+}
+}  // namespace functionsystem::local_scheduler

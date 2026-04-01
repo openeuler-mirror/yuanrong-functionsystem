@@ -1,0 +1,62 @@
+# C++17 standard
+build --action_env=BAZEL_CXXOPTS=-std=c++17
+
+# gRPC build options — disable unused features to reduce build scope
+build --define=grpc_no_xds=true
+build --define=grpc_no_binder=true
+build --define=grpc_no_ares=true
+
+# Suppress warnings in generated code
+build --per_file_copt=+com_google_protobuf@-fvisibility=hidden
+build --per_file_copt="\.cc$@-w"
+
+# Platform
+build --platforms=@local_config_platform//:host
+
+# Default: optimized build
+build -c opt
+
+# Replace external dependencies with Huawei mirror
+build --experimental_downloader_config=.bazel_redirect.cfg
+
+# Offline dependency cache: distdir for filename-based lookup, repository_cache for sha256-based lookup.
+# All gitee archives in thirdparty/runtime_deps must also be populated into repository_cache
+# with {sha256}/file format to ensure reliable offline fetching.
+build --distdir=./thirdparty/runtime_deps
+build --repository_cache=/root/.cache/bazel/_bazel_root/cache/repos/v1
+
+# --- ASan build ---
+build:sanitize_address --define sanitize=address
+build:sanitize_address --copt=-fsanitize=address
+build:sanitize_address --copt=-fno-omit-frame-pointer
+build:sanitize_address --copt=-g
+build:sanitize_address --linkopt=-fsanitize=address
+build:sanitize_address --strip=never
+build:sanitize_address --copt '-fPIC'
+
+# --- TSan build ---
+build:sanitize_thread --define sanitize=thread
+build:sanitize_thread --copt=-fsanitize=thread
+build:sanitize_thread --copt '-fPIC'
+build:sanitize_thread --linkopt=-fsanitize=thread
+build:sanitize_thread --copt=-fno-omit-frame-pointer
+build:sanitize_thread --copt=-g
+build:sanitize_thread --copt=-Wno-error=maybe-uninitialized
+build:sanitize_thread --strip=never
+
+# --- Release build ---
+build:release --copt '-fPIC'
+build:release --copt "-U_FORTIFY_SOURCE"
+build:release --copt "-D_FORTIFY_SOURCE=2"
+
+# --- Debug build ---
+build:debug -c dbg
+build:debug --copt="-g3"
+build:debug --copt -fno-omit-frame-pointer
+build:debug --strip="never"
+build:debug --copt "-U_FORTIFY_SOURCE"
+
+# --- Test options ---
+test --test_output=errors
+test --define mode=test
+test --test_env HOST_IP=127.0.0.1

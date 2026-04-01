@@ -6,7 +6,7 @@
       "cafile": "{etcdCAFile}",
       "certfile": "{etcdCertFile}",
       "keyfile": "{etcdKeyFile}",
-      "passphraseFile": "{passphraseFile}",
+      "passphraseFile": "",
       "azPrefix": "{azPrefix}"
     },
     "metaEtcdEnable": true,
@@ -19,7 +19,7 @@
       "cafile": "{etcdCAFile}",
       "certfile": "{etcdCertFile}",
       "keyfile": "{etcdKeyFile}",
-      "passphraseFile": "{passphraseFile}",
+      "passphraseFile": "",
       "azPrefix": "{azPrefix}"
     },
     "clusters": "{clusters}",
@@ -50,6 +50,8 @@
         "python3.9",
         "python3.10",
         "python3.11",
+        "python3.12",
+        "python3.13",
         "cpp11",
         "cpp11-bin",
         "custom-runtime",
@@ -85,6 +87,10 @@
         "python3.7",
         "python3.8",
         "python3.9",
+        "python3.10",
+        "python3.11",
+        "python3.12",
+        "python3.13",
         "cpp11",
         "cpp11-bin",
         "custom-runtime",
@@ -141,7 +147,7 @@
       "port": {port}
     },
     "mutualTLSConfig": {
-      "tlsEnable": {sslEnable},
+      "tlsEnable": {metaserviceSslEnable},
       "rootCAFile": "",
       "moduleCertFile": "",
       "moduleKeyFile": "",
@@ -153,12 +159,13 @@
       "sccConfigPath": "{sccBasePath}"
     },
     "mutualSSLConfig": {
-      "sslEnable": {sslEnable},
+      "sslEnable": {metaserviceSslEnable},
       "rootCAFile": "{rootCAFile}",
       "moduleCertFile": "{moduleCertFile}",
       "moduleKeyFile": "{moduleKeyFile}",
-      "pwdFile": "{pwdFile}",
+      "pwdFile": "",
       "serverName": "",
-      "sslDecryptTool": "{sslDecryptTool}"
+      "sslDecryptTool": "{sslDecryptTool}",
+      "clientAuthType": "RequireAndVerifyClientCert"
     }
   }

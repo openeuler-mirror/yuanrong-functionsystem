@@ -33,6 +33,8 @@ type Function struct {
 	EnvMetaData      EnvMetaData      `json:"envMetaData" valid:",optional"`
 	ResourceMetaData ResourceMetaData `json:"resourceMetaData" valid:",optional"`
 	ExtendedMetaData ExtendedMetaData `json:"extendedMetaData" valid:",optional"`
+	WarmupType       string           `json:"warmup" valid:",optional"`
+	RootfsSpecMeta   RootfsSpecMeta   `json:"rootfs" valid:",optional"`
 }
 
 // FuncMetaData define meta data of functions
@@ -64,6 +66,8 @@ type FuncMetaData struct {
 	CreationTime            string            `json:"created" valid:",optional"`
 	StatefulFlag            bool              `json:"statefulFlag"`
 	HookHandler             map[string]string `json:"hookHandler" valid:",optional"`
+	IdleTime                int64             `json:"idleTime" valid:",optional"`
+	IsFuncPublic            bool              `json:"isFuncPublic" valid:"optional"`
 }
 
 // Layer define layer info
@@ -149,4 +153,23 @@ func (f *FunctionKey) ToAnonymousString() string {
 // FullName return full function name(0-$serviceID-$funcName) of function
 func (f *FunctionKey) FullName() string {
 	return fmt.Sprintf("0-%s-%s", f.ServiceID, f.FuncName)
+}
+
+// RootfsSpecMeta defines rootfs specification metadata
+type RootfsSpecMeta struct {
+	Runtime     string            `json:"runtime" valid:",optional"`
+	Type        string            `json:"type" valid:",optional"`
+	ImageURL    string            `json:"imageurl" valid:",optional"`
+	ReadOnly    bool              `json:"readonly" valid:",optional"`
+	StorageInfo RootfsStorageInfo `json:"storageInfo" valid:",optional"`
+	MountPoint  string            `json:"mountpoint" valid:",optional"`
+}
+
+// RootfsStorageInfo defines rootfs storage information
+type RootfsStorageInfo struct {
+	Endpoint  string `json:"endpoint" valid:",optional"`
+	Bucket    string `json:"bucket" valid:",optional"`
+	Object    string `json:"object" valid:",optional"`
+	AccessKey string `json:"accessKey" valid:",optional"`
+	SecretKey string `json:"secretKey" valid:",optional"`
 }

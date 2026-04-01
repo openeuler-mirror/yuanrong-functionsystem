@@ -1,0 +1,283 @@
+load("@rules_proto//proto:defs.bzl", "proto_library")
+load("@com_github_grpc_grpc//bazel:cc_grpc_library.bzl", "cc_grpc_library")
+
+# strip_import_prefix = "/proto/posix" makes protoc treat files as if they live
+# at the workspace root's "proto/posix/" level, so `import "common.proto"` resolves
+# correctly (matching the bare-filename imports used throughout all .proto files here).
+
+# --- Leaf proto targets (no imports) ---
+
+proto_library(
+    name = "affinity_proto",
+    srcs = ["affinity.proto"],
+    strip_import_prefix = "/proto/posix",
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "affinity_cc_proto",
+    deps = [":affinity_proto"],
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "common_proto",
+    srcs = ["common.proto"],
+    strip_import_prefix = "/proto/posix",
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "common_cc_proto",
+    deps = [":common_proto"],
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "exec_service_proto",
+    srcs = ["exec_service.proto"],
+    strip_import_prefix = "/proto/posix",
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "exec_service_cc_proto",
+    deps = [":exec_service_proto"],
+    visibility = ["//visibility:public"],
+)
+
+cc_grpc_library(
+    name = "exec_service_cc_grpc",
+    srcs = [":exec_service_proto"],
+    grpc_only = True,
+    deps = [":exec_service_cc_proto"],
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "runtime_launcher_interface_proto",
+    srcs = ["runtime_launcher_interface.proto"],
+    strip_import_prefix = "/proto/posix",
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "runtime_launcher_interface_cc_proto",
+    deps = [":runtime_launcher_interface_proto"],
+    visibility = ["//visibility:public"],
+)
+
+cc_grpc_library(
+    name = "runtime_launcher_interface_cc_grpc",
+    srcs = [":runtime_launcher_interface_proto"],
+    grpc_only = True,
+    deps = [":runtime_launcher_interface_cc_proto"],
+    visibility = ["//visibility:public"],
+)
+
+# --- Proto targets with dependencies ---
+
+proto_library(
+    name = "core_service_proto",
+    srcs = ["core_service.proto"],
+    strip_import_prefix = "/proto/posix",
+    deps = [
+        ":common_proto",
+        ":affinity_proto",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "core_service_cc_proto",
+    deps = [":core_service_proto"],
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "runtime_service_proto",
+    srcs = ["runtime_service.proto"],
+    strip_import_prefix = "/proto/posix",
+    deps = [":common_proto"],
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "runtime_service_cc_proto",
+    deps = [":runtime_service_proto"],
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "runtime_rpc_proto",
+    srcs = ["runtime_rpc.proto"],
+    strip_import_prefix = "/proto/posix",
+    deps = [
+        ":core_service_proto",
+        ":runtime_service_proto",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "runtime_rpc_cc_proto",
+    deps = [":runtime_rpc_proto"],
+    visibility = ["//visibility:public"],
+)
+
+cc_grpc_library(
+    name = "runtime_rpc_cc_grpc",
+    srcs = [":runtime_rpc_proto"],
+    grpc_only = True,
+    deps = [":runtime_rpc_cc_proto"],
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "bus_adapter_proto",
+    srcs = ["bus_adapter.proto"],
+    strip_import_prefix = "/proto/posix",
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "bus_adapter_cc_proto",
+    deps = [":bus_adapter_proto"],
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "bus_service_proto",
+    srcs = ["bus_service.proto"],
+    strip_import_prefix = "/proto/posix",
+    deps = [":common_proto"],
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "bus_service_cc_proto",
+    deps = [":bus_service_proto"],
+    visibility = ["//visibility:public"],
+)
+
+cc_grpc_library(
+    name = "bus_service_cc_grpc",
+    srcs = [":bus_service_proto"],
+    grpc_only = True,
+    deps = [":bus_service_cc_proto"],
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "log_service_proto",
+    srcs = ["log_service.proto"],
+    strip_import_prefix = "/proto/posix",
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "log_service_cc_proto",
+    deps = [":log_service_proto"],
+    visibility = ["//visibility:public"],
+)
+
+cc_grpc_library(
+    name = "log_service_cc_grpc",
+    srcs = [":log_service_proto"],
+    grpc_only = True,
+    deps = [":log_service_cc_proto"],
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "message_proto",
+    srcs = ["message.proto"],
+    strip_import_prefix = "/proto/posix",
+    deps = [
+        ":common_proto",
+        ":core_service_proto",
+        ":resource_proto",
+        ":runtime_launcher_interface_proto",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "message_cc_proto",
+    deps = [":message_proto"],
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "resource_proto",
+    srcs = ["resource.proto"],
+    strip_import_prefix = "/proto/posix",
+    deps = [
+        ":common_proto",
+        ":affinity_proto",
+        ":core_service_proto",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "resource_cc_proto",
+    deps = [":resource_proto"],
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
+    name = "inner_service_proto",
+    srcs = ["inner_service.proto"],
+    strip_import_prefix = "/proto/posix",
+    deps = [
+        ":common_proto",
+        ":core_service_proto",
+        ":bus_service_proto",
+        ":runtime_service_proto",
+        ":resource_proto",
+        ":runtime_rpc_proto",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "inner_service_cc_proto",
+    deps = [":inner_service_proto"],
+    visibility = ["//visibility:public"],
+)
+
+cc_grpc_library(
+    name = "inner_service_cc_grpc",
+    srcs = [":inner_service_proto"],
+    grpc_only = True,
+    deps = [":inner_service_cc_proto"],
+    visibility = ["//visibility:public"],
+)
+
+# --- Aggregate target: all posix protos ---
+cc_library(
+    name = "posix_protos_cc",
+    deps = [
+        ":affinity_cc_proto",
+        ":common_cc_proto",
+        ":core_service_cc_proto",
+        ":exec_service_cc_proto",
+        ":exec_service_cc_grpc",
+        ":runtime_launcher_interface_cc_proto",
+        ":runtime_launcher_interface_cc_grpc",
+        ":runtime_service_cc_proto",
+        ":runtime_rpc_cc_proto",
+        ":runtime_rpc_cc_grpc",
+        ":bus_adapter_cc_proto",
+        ":bus_service_cc_proto",
+        ":bus_service_cc_grpc",
+        ":log_service_cc_proto",
+        ":log_service_cc_grpc",
+        ":message_cc_proto",
+        ":inner_service_cc_proto",
+        ":inner_service_cc_grpc",
+        ":resource_cc_proto",
+    ],
+    visibility = ["//visibility:public"],
+)

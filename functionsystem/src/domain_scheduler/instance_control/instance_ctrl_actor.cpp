@@ -21,6 +21,8 @@
 #include "common/constants/actor_name.h"
 #include "common/create_agent_decision/create_agent_decision.h"
 #include "common/logs/logging.h"
+#include "common/trace/trace_manager.h"
+#include "common/proto/pb/posix/message.pb.h"
 #include "nlohmann/json.hpp"
 
 namespace functionsystem::domain_scheduler {
@@ -33,6 +35,19 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     const std::shared_ptr<messages::ScheduleRequest> &req)
 {
     ASSERT_IF_NULL(req);
+
+    // Quota cooldown interception
+    const std::string &tenantID = req->instance().tenantid();
+    if (!tenantID.empty() && blockedTenants_.count(tenantID)) {
+        schedule_decision::ScheduleResult result;
+        result.code   = static_cast<int32_t>(StatusCode::RESOURCE_NOT_ENOUGH);
+        result.reason = "QUOTA_EXCEEDED|tenantID=" + tenantID +
+                        "|reason=tenant resource quota exceeded";
+        auto promise = std::make_shared<litebus::Promise<std::shared_ptr<messages::ScheduleResponse>>>();
+        promise->SetValue(BuildErrorScheduleRsp(result, req));
+        return promise->GetFuture();
+    }
+
     if (requestTrySchedTimes_.find(req->requestid()) == requestTrySchedTimes_.end()) {
         requestTrySchedTimes_[req->requestid()] = 0;
     }
@@ -53,6 +68,11 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
         auto createOpts = req->mutable_instance()->mutable_createoptions();
         (*createOpts)[ENABLE_HORIZONTAL_SCALE_KEY] = "true";
     }
+
+    // todo(lwy_robb): to use traceID
+    trace::TraceManager::GetInstance().StartSpanWithRecord(
+        { "DomainSchedule", req->requestid(), "", req->instance().function(), req->instance().instanceid() });
+
     YRLOG_INFO("instance(req={}, priority={}, timeout={}, enableHorizontalScale={}) schedule decision",
                requestID, req->instance().scheduleoption().priority(), timeout, enableHorizontalScale_);
     auto cancelPromise = GetCancelTag(requestID);
@@ -90,6 +110,9 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     const litebus::Future<ScheduleResult> &result, const std::shared_ptr<messages::ScheduleRequest> &req,
     uint32_t dispatchTimes)
 {
+        // todo(lwy_robb): to use traceID
+    trace::TraceManager::GetInstance().StopSpan("DomainSchedule", req->requestid());
+
     schedulerQueueMap_.erase(req->requestid());
     auto schedResult = result.Get();
     if (schedResult.code == static_cast<int32_t>(StatusCode::INVALID_RESOURCE_PARAMETER)) {
@@ -446,6 +469,41 @@ void InstanceCtrlActor::CreateAgentResponse(const litebus::AID &from, std::strin
 void InstanceCtrlActor::Init()
 {
     Receive("CreateAgentResponse", &InstanceCtrlActor::CreateAgentResponse);
+    Receive("TenantQuotaExceeded", &InstanceCtrlActor::OnTenantQuotaExceeded);
+}
+
+void InstanceCtrlActor::OnTenantQuotaExceeded(
+    const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    ::messages::TenantQuotaExceeded event;
+    if (!event.ParseFromString(msg)) {
+        YRLOG_WARN("InstanceCtrlActor::OnTenantQuotaExceeded parse failed");
+        return;
+    }
+    const std::string tenantID = event.tenantid();
+    constexpr int64_t kDefaultCooldownMs = 10000;
+    int64_t cooldownMs = event.cooldownms();
+    if (cooldownMs <= 0) {
+        cooldownMs = kDefaultCooldownMs;
+    }
+
+    YRLOG_INFO("InstanceCtrlActor: tenant={} blocked for {}ms (quota exceeded)", tenantID, cooldownMs);
+
+    blockedTenants_[tenantID] = litebus::AsyncAfter(
+        cooldownMs, GetAID(), &InstanceCtrlActor::OnTenantCooldownExpired, tenantID);
+}
+
+void InstanceCtrlActor::HandleTenantQuotaExceeded(std::string msg)
+{
+    litebus::AID from;
+    std::string name = "TenantQuotaExceeded";
+    OnTenantQuotaExceeded(from, std::move(name), std::move(msg));
+}
+
+void InstanceCtrlActor::OnTenantCooldownExpired(std::string tenantID)
+{
+    blockedTenants_.erase(tenantID);
+    YRLOG_INFO("InstanceCtrlActor: tenant={} cooldown expired, scheduling resumed", tenantID);
 }
 
 void InstanceCtrlActor::SetScalerAddress(const std::string &address)

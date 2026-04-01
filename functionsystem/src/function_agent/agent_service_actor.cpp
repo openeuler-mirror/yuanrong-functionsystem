@@ -113,7 +113,9 @@ void AgentServiceActor::DeployInstance(const litebus::AID &from, std::string &&n
                     deployInstanceRequest->requestid(), deployInstanceRequest->instanceid());
         return;
     }
-
+    YRLOG_DEBUG("{}|{}|DeployInstance request for instance({}): {}", deployInstanceRequest->traceid(),
+                deployInstanceRequest->requestid(), deployInstanceRequest->instanceid(),
+                deployInstanceRequest->ShortDebugString());
     const std::string &requestID = deployInstanceRequest->requestid();
     // if functionAgent registration to localScheduler is not complete, refuse request from localScheduler
     if (!isRegisterCompleted_) {
@@ -499,11 +501,9 @@ std::shared_ptr<std::queue<DeployerParameters>> AgentServiceActor::BuildDeployer
         destination = config->deploymentconfig().deploydir();
     }
     if (info.Get().storageType == WORKING_DIR_STORAGE_TYPE) {
-        if (destination == info.Get().codePath) {
-            // delegate working dir
-            req->mutable_funcdeployspec()->set_deploydir(destination);
-            req->mutable_funcdeployspec()->set_storagetype(WORKING_DIR_STORAGE_TYPE);
-        }
+        // delegate working dir
+        req->mutable_funcdeployspec()->set_deploydir(destination);
+        req->mutable_funcdeployspec()->set_storagetype(WORKING_DIR_STORAGE_TYPE);
         // pass unzipped working dir to runtime_manager
         (void)req->mutable_createoptions()->insert({ UNZIPPED_WORKING_DIR, destination });
         // pass origin config (src working dir zip file)
@@ -702,6 +702,66 @@ void AgentServiceActor::KillInstance(const litebus::AID &from, std::string &&nam
          stopInstanceRequest.SerializeAsString());
 }
 
+void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    auto request = std::make_shared<messages::SnapshotRuntimeRequest>();
+    if (!request->ParseFromString(msg)) {
+        YRLOG_ERROR("failed to parse SnapshotRuntimeRequest");
+        return;
+    }
+
+    const std::string &instanceID = request->instanceid();
+    const std::string &runtimeID = request->runtimeid();
+    YRLOG_INFO("{}|received SnapshotRuntime request for instance({}), runtime({})",
+               request->requestid(), instanceID, runtimeID);
+
+    // Prepare response
+    messages::SnapshotRuntimeResponse response;
+    response.set_requestid(request->requestid());
+
+    // Check if agent is registered
+    if (!registerRuntimeMgr_.registered || !isRegisterCompleted_) {
+        response.set_code(static_cast<int32_t>(StatusCode::FUNC_AGENT_NOT_REGISTERED));
+        response.set_message("function agent is not registered");
+        YRLOG_ERROR("{}|registration is not complete, ignore snapshot request for instance({})",
+                    request->requestid(), instanceID);
+        Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
+        return;
+    }
+
+    // Forward snapshot request to RuntimeManager
+    YRLOG_INFO("{}|forward SnapshotRuntime request to RuntimeManager({}-{}) for instance({}), runtime({})",
+               request->requestid(), registerRuntimeMgr_.name, registerRuntimeMgr_.address, instanceID, runtimeID);
+
+    // Store the caller's AID to send response back later
+    snapshotRequests_[request->requestid()] = from;
+
+    Send(litebus::AID(registerRuntimeMgr_.name, registerRuntimeMgr_.address), "SnapshotRuntime", std::move(msg));
+}
+
+void AgentServiceActor::SnapshotRuntimeResponse(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    messages::SnapshotRuntimeResponse response;
+    if (!response.ParseFromString(msg)) {
+        YRLOG_ERROR("failed to parse SnapshotRuntimeResponse");
+        return;
+    }
+
+    const std::string &requestID = response.requestid();
+    auto iter = snapshotRequests_.find(requestID);
+    if (iter == snapshotRequests_.end()) {
+        YRLOG_WARN("{}|snapshot request not found in snapshotRequests_", requestID);
+        return;
+    }
+
+    YRLOG_INFO("{}|received SnapshotRuntimeResponse from RuntimeManager, code: {}",
+               requestID, response.code());
+
+    // Forward response back to the original caller (FunctionAgentMgrActor)
+    Send(iter->second, "SnapshotRuntimeResponse", std::move(msg));
+    snapshotRequests_.erase(iter);
+}
+
 litebus::Future<Status> AgentServiceActor::SetDeployers(const std::string &storageType,
                                                         const std::shared_ptr<Deployer> &deployer)
 {
@@ -734,6 +794,8 @@ void AgentServiceActor::Init()
     ActorBase::Receive("QueryDebugInstanceInfosResponse", &AgentServiceActor::QueryDebugInstanceInfosResponse);
     ActorBase::Receive("StaticFunctionScheduleResponse", &AgentServiceActor::StaticFunctionScheduleResponse);
     ActorBase::Receive("NotifyFunctionStatusChange", &AgentServiceActor::NotifyFunctionStatusChange);
+    ActorBase::Receive("SnapshotRuntime", &AgentServiceActor::SnapshotRuntime);
+    ActorBase::Receive("SnapshotRuntimeResponse", &AgentServiceActor::SnapshotRuntimeResponse);
 
     litebus::Async(GetAID(), &AgentServiceActor::RemoveCodePackageAsync);
 
@@ -855,11 +917,12 @@ void AgentServiceActor::StartInstanceResponse(const litebus::AID &from, std::str
                     std::string(from), startInstanceResponse.code());
         DeleteCodeReferByDeployInstanceRequest(request->second.request);
     } else {
-        YRLOG_INFO("{}|received start instance response. instance({}) runtime({}) address({}) pid({})",
+        YRLOG_INFO("{}|received start instance response. instance({}) runtime({}) address({}) pid({}) containerID({})",
                    startInstanceResponse.requestid(), request->second.request->instanceid(),
                    startInstanceResponse.startruntimeinstanceresponse().runtimeid(),
                    startInstanceResponse.startruntimeinstanceresponse().address(),
-                   startInstanceResponse.startruntimeinstanceresponse().pid());
+                   startInstanceResponse.startruntimeinstanceresponse().pid(),
+                   startInstanceResponse.startruntimeinstanceresponse().containerid());
         if (!pluginClient_) {
             pluginClient_ = std::make_shared<MultiPluginClient>();
         }
@@ -867,7 +930,13 @@ void AgentServiceActor::StartInstanceResponse(const litebus::AID &from, std::str
                                       startInstanceResponse.startruntimeinstanceresponse().runtimeid());
     }
 
-    auto deployInstanceResponse = BuildDeployInstanceResponse(startInstanceResponse, request->second.request);
+    // Extract portMappings if present: StartRuntimeInstanceResponse.port carries JSON when it starts with '{' or '['
+    // Old format: {"8888":"40001"} (object), New format: ["tcp:40001:8080", ...] (array)
+    const auto &portInField = startInstanceResponse.startruntimeinstanceresponse().port();
+    const std::string portMappings =
+        (!portInField.empty() && (portInField[0] == '{' || portInField[0] == '[')) ? portInField : "";
+    auto deployInstanceResponse = BuildDeployInstanceResponse(startInstanceResponse, request->second.request,
+                                                              portMappings);
     (void)runtimesDeploymentCache_->runtimes.emplace(deployInstanceResponse->runtimeid(),
                                                      SetRuntimeInstanceInfo(request->second.request));
     if (auto ret =
@@ -1118,6 +1187,8 @@ Status AgentServiceActor::StartRuntime(const DeployInstanceRequest &request,
     }
     auto startInstanceRequest = std::make_unique<messages::StartInstanceRequest>();
     function_agent::SetStartRuntimeInstanceRequestConfig(startInstanceRequest, request);
+    YRLOG_DEBUG("{}|{}|StartRuntime request for instance({}): {}", request->traceid(), request->requestid(),
+                request->instanceid(), startInstanceRequest->ShortDebugString());
     if (request->funcdeployspec().storagetype() == COPY_STORAGE_TYPE) {
         startInstanceRequest->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->set_deploydir(
             deployers_[COPY_STORAGE_TYPE]->GetDestination("", "", request->funcdeployspec().deploydir()));

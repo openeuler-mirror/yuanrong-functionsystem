@@ -55,7 +55,11 @@ public:
     litebus::Future<messages::StartInstanceResponse> StartInstance(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::vector<int> &cardIDs) override;
 
-    Status StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request, bool oomKilled = false) override;
+    litebus::Future<Status> StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request,
+                                         bool oomKilled = false) override;
+
+    litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(
+        const std::shared_ptr<messages::SnapshotRuntimeRequest> &request) override;
 
     std::map<std::string, messages::RuntimeInstanceInfo> GetRuntimeInstanceInfos() override;
 
@@ -377,6 +381,15 @@ public:
      */
     litebus::Future<Status> StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request,
                                          bool oomKilled = false) override;
+
+    /**
+     * Snapshot Runtime when receive message from function agent.
+     *
+     * @param request Include snapshot arguments.
+     * @return response Include snapshot result with checkpoint info.
+     */
+    litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(
+        const std::shared_ptr<messages::SnapshotRuntimeRequest> &request) override;
 
     /**
      * Get runtime instance infos.

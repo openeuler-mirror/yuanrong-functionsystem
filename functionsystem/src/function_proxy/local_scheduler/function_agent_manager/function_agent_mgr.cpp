@@ -96,6 +96,15 @@ litebus::Future<messages::UpdateCredResponse> FunctionAgentMgr::UpdateCred(
     return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::UpdateCred, funcAgentID, request);
 }
 
+litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgr::SnapshotRuntime(
+    const std::string &requestID,
+    const resource_view::InstanceInfo &instanceInfo,
+    int32_t ttl)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::SnapshotRuntime, requestID, instanceInfo, ttl);
+}
+
 litebus::Future<Status> FunctionAgentMgr::EvictAgent(const std::shared_ptr<messages::EvictAgentRequest> &req)
 {
     ASSERT_IF_NULL(actor_);
@@ -157,4 +166,18 @@ litebus::Future<messages::StaticFunctionChangeResponse> FunctionAgentMgr::Notify
     return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::NotifyFunctionStatusChange, request, funcAgentID);
 }
 
+litebus::Future<Status> FunctionAgentMgr::RegisterToWarmUp(
+    const std::shared_ptr<messages::DeployInstanceRequest> &request,
+    const litebus::Option<std::string> &agentID)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::RegisterToWarmUp, request, agentID);
+}
+
+litebus::Future<Status> FunctionAgentMgr::UnRegisterWarmUp(
+    const std::shared_ptr<messages::KillInstanceRequest> &request)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::UnRegisterWarmUp, request);
+}
 }  // namespace functionsystem::local_scheduler

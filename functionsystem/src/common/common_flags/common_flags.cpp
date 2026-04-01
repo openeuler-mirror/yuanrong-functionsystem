@@ -121,6 +121,8 @@ void CommonFlags::InitMetricsFlag()
     AddFlag(&CommonFlags::metricsSslEnable_, "metrics_ssl_enable", "enable ssl metrics", false);
     AddFlag(&CommonFlags::metricsConfig_, "metrics_config", "set the config json string of metrics", "");
     AddFlag(&CommonFlags::metricsConfigFile_, "metrics_config_file", "set the config file of metrics", "");
+    AddFlag(&CommonFlags::quotaConfigFile_, "quota_config_file",
+            "set the quota config json file path for tenant resource quota management", "");
 }
 
 void CommonFlags::InitTraceFlag()

@@ -18,6 +18,7 @@
 
 #include "async/defer.hpp"
 #include "common/metrics/metrics_adapter.h"
+#include "meta_store_client/txn_transaction.h"
 
 namespace functionsystem {
 const int MSECOND = 1000;
@@ -178,4 +179,214 @@ litebus::Future<Status> LeaseActor::RevokeResponse(const litebus::Future<LeaseRe
     (void)leaseIDMap_.erase(key);
     return Status::OK();
 }
+
+// ============================================================================
+// TxnWithLease: Transactional put multiple key-values with a shared lease
+// ============================================================================
+
+litebus::Future<Status> LeaseActor::TxnWithLease(
+    const std::string& groupKey,
+    const std::vector<std::pair<std::string, std::string>>& kvs,
+    const int ttl)
+{
+    YRLOG_INFO("TxnWithLease: groupKey={}, keys={}, ttl={}", groupKey, kvs.size(), ttl);
+    if (ttl < 0) {
+        YRLOG_ERROR("failed to txn with lease, groupKey: {}, ttl is less than zero", groupKey);
+        return Status(StatusCode::PARAMETER_ERROR, "ttl is less than zero");
+    }
+
+    if (kvs.empty()) {
+        YRLOG_WARN("TxnWithLease: groupKey={}, no keys to write", groupKey);
+        return Status::OK();
+    }
+
+    // Save kvs and ttl for retry
+    groupKVsMap_[groupKey] = kvs;
+    groupTTLMap_[groupKey] = ttl;
+
+    // Check whether leaseID exists for this group
+    if (auto iter = groupLeaseIDMap_.find(groupKey); iter == groupLeaseIDMap_.end()) {
+        // Grant a new lease
+        ASSERT_IF_NULL(metaClient_);
+        return metaClient_->Grant(int(ttl / MSECOND))
+            .Then(litebus::Defer(GetAID(), [this, groupKey](const LeaseGrantResponse& rsp) -> Status {
+                if (rsp.status.IsError()) {
+                    YRLOG_ERROR("failed to grant lease for group {}: {}", groupKey, rsp.status.GetMessage());
+                    return Status(StatusCode::BP_META_STORAGE_GRANT_ERROR, "groupKey: " + groupKey);
+                }
+
+                int64_t leaseID = rsp.leaseId;
+                YRLOG_INFO("grant a lease ID {} for group {}", leaseID, groupKey);
+                groupLeaseIDMap_[groupKey] = leaseID;
+                return Status::OK();
+            }))
+            .Then(litebus::Defer(GetAID(), &LeaseActor::DoTxnWithLease, std::placeholders::_1, groupKey));
+    }
+
+    // Already have leaseID, directly do txn
+    return DoTxnWithLease(Status::OK(), groupKey);
+}
+
+litebus::Future<Status> LeaseActor::DoTxnWithLease(const Status& status, const std::string& groupKey)
+{
+    if (status.IsError()) {
+        YRLOG_WARN("failed to get lease id for group {}, retry later", groupKey);
+        auto ttl = groupTTLMap_[groupKey];
+        auto interval = uint32_t(ttl / DEFAULT_LEASE_TIME);
+        groupLeaseTimerMap_[groupKey] = litebus::AsyncAfter(
+            interval ? interval : DEFAULT_LEASE_INTERVAL, GetAID(),
+            &LeaseActor::RetryTxnWithLease, groupKey, groupKVsMap_[groupKey], ttl);
+        return status;
+    }
+
+    auto leaseIDIter = groupLeaseIDMap_.find(groupKey);
+    if (leaseIDIter == groupLeaseIDMap_.end()) {
+        YRLOG_ERROR("leaseID not found for group {}", groupKey);
+        return Status(StatusCode::BP_LEASE_ID_NOT_FOUND, "groupKey: " + groupKey);
+    }
+
+    int64_t leaseID = leaseIDIter->second;
+    const auto& kvs = groupKVsMap_[groupKey];
+
+    ASSERT_IF_NULL(metaClient_);
+    auto txn = metaClient_->BeginTransaction();
+    PutOption opt{.leaseId = leaseID};
+
+    for (const auto& [key, value] : kvs) {
+        txn->Then(meta_store::TxnOperation::Create(key, value, opt));
+    }
+
+    auto promise = litebus::Promise<Status>();
+    (void)txn->Commit()
+        .OnComplete(
+        litebus::Defer(GetAID(), &LeaseActor::OnTxnResponse, std::placeholders::_1, groupKey, promise));
+    return promise.GetFuture();
+}
+
+void LeaseActor::OnTxnResponse(
+    const litebus::Future<std::shared_ptr<TxnResponse>>& response,
+    const std::string& groupKey,
+    const litebus::Promise<Status>& promise)
+{
+    auto ttl = groupTTLMap_[groupKey];
+    auto interval = uint32_t(ttl / DEFAULT_LEASE_TIME);
+    auto aid = GetAID();
+
+    if (response.IsOK() && response.Get()->status.IsOk()) {
+        // Success: start KeepAlive
+        int64_t leaseID = groupLeaseIDMap_[groupKey];
+        (void)litebus::AsyncAfter(interval ? interval : DEFAULT_LEASE_INTERVAL, aid,
+            &LeaseActor::KeepAliveGroupOnce, groupKey, leaseID, ttl);
+        promise.SetValue(Status::OK());
+        YRLOG_INFO("TxnWithLease success: groupKey={}, leaseID={}, keys={}",
+                   groupKey, leaseID, groupKVsMap_[groupKey].size());
+        return;
+    }
+
+    if (response.IsError()) {
+        YRLOG_ERROR("Txn commit failed for group {}, error: {}", groupKey, response.GetErrorCode());
+    } else {
+        YRLOG_ERROR("Txn commit failed for group {}, status: {}",
+                    groupKey, fmt::underlying(response.Get()->status.StatusCode()));
+    }
+
+    promise.SetValue(Status(StatusCode::BP_META_STORAGE_PUT_ERROR, "groupKey: " + groupKey));
+
+    // Retry
+    (void)litebus::AsyncAfter(interval ? interval : DEFAULT_LEASE_INTERVAL, aid,
+        &LeaseActor::RetryTxnWithLease, groupKey, groupKVsMap_[groupKey], ttl);
+}
+
+litebus::Future<Status> LeaseActor::RevokeGroup(const std::string& groupKey)
+{
+    YRLOG_INFO("RevokeGroup: groupKey={}", groupKey);
+
+    auto iter = groupLeaseIDMap_.find(groupKey);
+    if (iter == groupLeaseIDMap_.end()) {
+        YRLOG_WARN("Group {} not found in lease map", groupKey);
+        return Status::OK();
+    }
+
+    // Cancel timer
+    auto timerIter = groupLeaseTimerMap_.find(groupKey);
+    if (timerIter != groupLeaseTimerMap_.end()) {
+        (void)litebus::TimerTools::Cancel(timerIter->second);
+        groupLeaseTimerMap_.erase(timerIter);
+    }
+
+    int64_t leaseID = iter->second;
+    groupLeaseIDMap_.erase(iter);
+
+    // Clean up maps
+    groupKVsMap_.erase(groupKey);
+    groupTTLMap_.erase(groupKey);
+
+    ASSERT_IF_NULL(metaClient_);
+    return metaClient_->Revoke(leaseID)
+        .Then(litebus::Defer(GetAID(), [groupKey](const LeaseRevokeResponse& rsp) -> Status {
+            if (rsp.status.IsError()) {
+                YRLOG_ERROR("failed to revoke lease for group {}: {}", groupKey, rsp.status.GetMessage());
+                return Status(StatusCode::BP_META_STORAGE_REVOKE_ERROR, "groupKey: " + groupKey);
+            }
+            YRLOG_INFO("Successfully revoked group {}", groupKey);
+            return Status::OK();
+        }));
+}
+
+void LeaseActor::KeepAliveGroupOnce(const std::string& groupKey, int64_t leaseID, const int ttl)
+{
+    auto timeout = uint32_t(ttl / (DEFAULT_LEASE_TIME * 2));
+    ASSERT_IF_NULL(metaClient_);
+    (void)metaClient_->KeepAliveOnce(leaseID)
+        .After(timeout,
+               [](const litebus::Future<LeaseKeepAliveResponse>& future) -> litebus::Future<LeaseKeepAliveResponse> {
+                   LeaseKeepAliveResponse response;
+                   response.ttl = 0;
+                   return response;
+               })
+        .OnComplete(
+        litebus::Defer(GetAID(), &LeaseActor::KeepAliveGroupOnceResponse, std::placeholders::_1,
+                       groupKey, leaseID, ttl));
+}
+
+void LeaseActor::KeepAliveGroupOnceResponse(
+    const litebus::Future<LeaseKeepAliveResponse>& rsp,
+    const std::string& groupKey, int64_t leaseID, const int ttl)
+{
+    if (rsp.IsOK() && rsp.Get().ttl != 0) {
+        YRLOG_DEBUG("keep lease {} once success for group {}", leaseID, groupKey);
+        auto interval = uint32_t(ttl / DEFAULT_LEASE_TIME);
+        groupLeaseTimerMap_[groupKey] = litebus::AsyncAfter(
+            interval ? interval : DEFAULT_LEASE_INTERVAL, GetAID(),
+            &LeaseActor::KeepAliveGroupOnce, groupKey, leaseID, ttl);
+        return;
+    }
+    YRLOG_WARN("lease {} keep alive failed for group {}, try to re-txn", leaseID, groupKey);
+    RetryTxnWithLease(groupKey, groupKVsMap_[groupKey], ttl);
+}
+
+void LeaseActor::RetryTxnWithLease(
+    const std::string& groupKey,
+    const std::vector<std::pair<std::string, std::string>>& kvs,
+    const int ttl)
+{
+    YRLOG_WARN("try to re-txn with lease, groupKey:{}", groupKey);
+
+    // Cancel timer
+    auto timerIter = groupLeaseTimerMap_.find(groupKey);
+    if (timerIter != groupLeaseTimerMap_.end()) {
+        (void)litebus::TimerTools::Cancel(timerIter->second);
+        groupLeaseTimerMap_.erase(timerIter);
+    }
+
+    // Clean up leaseID and retry
+    groupLeaseIDMap_.erase(groupKey);
+
+    // Save kvs and ttl again
+    groupKVsMap_[groupKey] = kvs;
+    groupTTLMap_[groupKey] = ttl;
+
+    (void)litebus::Async(GetAID(), &LeaseActor::TxnWithLease, groupKey, kvs, ttl);
+}
+
 }  // namespace functionsystem

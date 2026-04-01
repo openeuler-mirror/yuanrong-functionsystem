@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <iostream>
@@ -32,6 +33,14 @@
 #include "common/utils/module_switcher.h"
 #include "common/utils/param_check.h"
 #include "common/utils/s3_config.h"
+#include "common/utils/sensitive_value.h"
+#include "common/utils/ssl_config.h"
+#include "common/utils/version.h"
+#include "common/kv_client/kv_client.h"
+#include "function_agent/driver/function_agent_driver.h"
+#include "function_agent/flags/function_agent_flags.h"
+#include "runtime_manager/config/flags.h"
+#include "runtime_manager/driver/runtime_manager_driver.h"
 #include "common/utils/ssl_config.h"
 #include "common/utils/version.h"
 #include "function_agent/driver/function_agent_driver.h"
@@ -109,7 +118,12 @@ functionsystem::function_agent::FunctionAgentStartParam BuildStartParam(const fu
         .localNodeID = flags.GetLocalNodeID(),
         .enableSignatureValidation = flags.GetEnableSignatureValidation(),
         .componentName = COMPONENT_NAME,
-        .pluginConfigs = flags.GetPluginConfigs(),
+        .enableMergeProcess = false,  // 在 main 函数中设置
+        .runtimeManagerFlags = nullptr,
+        .dataSystemEnable = flags.GetDataSystemEnable(),
+        .dataSystemHost = flags.GetDataSystemHost(),
+        .dataSystemPort = flags.GetDataSystemPort(),
+        .pluginConfigs = flags.GetPluginConfigs()
     };
     return startParam;
 }
@@ -123,31 +137,6 @@ void OnStopHandler(int signum)
         raise(SIGKILL);
     }
     g_stopSignal->SetValue(true);
-}
-
-void OnCreateFunctionAgent(const function_agent::FunctionAgentFlags &flags)
-{
-    YRLOG_INFO("{} is starting...", COMPONENT_NAME);
-    YRLOG_INFO("version:{} branch:{} commit_id:{}", BUILD_VERSION, GIT_BRANCH_NAME, GIT_HASH);
-    g_functionAgentDriver =
-        std::make_shared<function_agent::FunctionAgentDriver>(flags.GetNodeID(), BuildStartParam(flags));
-    if (auto status = g_functionAgentDriver->Start(); status.IsError()) {
-        YRLOG_ERROR("failed to start function_agent, errMsg: {}", status.ToString());
-        g_functionAgentSwitcher->SetStop();
-        return;
-    }
-}
-
-void OnCreateRuntimeManager(const runtime_manager::Flags &runtimeManagerFlags)
-{
-    // function agent and runtime manager deploy in the same process
-    g_runtimeManagerDriver =
-        std::make_shared<runtime_manager::RuntimeManagerDriver>(runtimeManagerFlags, "runtime_manager");
-    if (auto status = g_runtimeManagerDriver->Start(); status.IsError()) {
-        YRLOG_ERROR("failed to start runtime_manager, errMsg: {}", status.ToString());
-        g_functionAgentSwitcher->SetStop();
-        return;
-    }
 }
 
 void StopFunctionAgent()
@@ -164,37 +153,10 @@ void StopFunctionAgent()
     } else {
         YRLOG_WARN("failed to stop {}", COMPONENT_NAME);
     }
-    return;
-}
-
-void StopRuntimeManager()
-{
-    if (g_runtimeManagerDriver == nullptr) {
-        YRLOG_WARN("runtime manager is not started");
-        return;
-    }
-    if (g_runtimeManagerDriver->Stop().IsOk()) {
-        g_runtimeManagerDriver->Await();
-        g_runtimeManagerDriver = nullptr;
-        YRLOG_INFO("success to stop runtime_manager");
-    } else {
-        YRLOG_WARN("failed to stop runtime_manager");
-    }
-    return;
 }
 
 void OnDestroy()
 {
-    StopRuntimeManager();
-    if (g_runtimeManagerDriver != nullptr) {
-        if (g_runtimeManagerDriver->Stop().IsOk()) {
-            g_runtimeManagerDriver->Await();
-            g_runtimeManagerDriver = nullptr;
-            YRLOG_INFO("success to stop runtime_manager");
-        } else {
-            YRLOG_WARN("failed to stop runtime_manager");
-        }
-    }
     StopFunctionAgent();
     g_functionAgentSwitcher->CleanMetrics();
     g_functionAgentSwitcher->FinalizeLiteBus();
@@ -286,14 +248,22 @@ int main(int argc, char **argv)
         g_functionAgentSwitcher->SetStop();
         return EXIT_ABNORMAL;
     }
-    YRLOG_DEBUG("function_agent GetEnableDisConvCallStack = {}", flags.GetEnableDisConvCallStack());
     if (!g_functionAgentSwitcher->InitLiteBus(address, flags.GetLitebusThreadNum())) {
         g_functionAgentSwitcher->SetStop();
     } else {
+        function_agent::FunctionAgentStartParam startParam = BuildStartParam(flags);
         if (flags.GetEnableMergeProcess()) {
-            OnCreateRuntimeManager(runtimeManagerFlags);
+            startParam.enableMergeProcess = true;
+            startParam.runtimeManagerFlags = std::make_shared<runtime_manager::Flags>(runtimeManagerFlags);
         }
-        OnCreateFunctionAgent(flags);
+
+        YRLOG_INFO("{} is starting...", COMPONENT_NAME);
+        YRLOG_INFO("version:{} branch:{} commit_id:{}", BUILD_VERSION, GIT_BRANCH_NAME, GIT_HASH);
+        g_functionAgentDriver = std::make_shared<function_agent::FunctionAgentDriver>(flags.GetNodeID(), startParam);
+        if (auto status = g_functionAgentDriver->Start(); status.IsError()) {
+            YRLOG_ERROR("failed to start function_agent, errMsg: {}", status.ToString());
+            g_functionAgentSwitcher->SetStop();
+        }
     }
     g_functionAgentSwitcher->WaitStop();
 

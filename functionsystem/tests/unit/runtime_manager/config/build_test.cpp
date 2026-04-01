@@ -136,8 +136,8 @@ TEST_F(BuildTest, GenerateEnvsTest)
     EXPECT_TRUE(env.userEnvs.find("POSIX_LISTEN_ADDR") == env.userEnvs.end());
     EXPECT_TRUE(env.posixEnvs["YR_FUNCTION_LIB_PATH"] == "/dcache/layer/func/test/test-a-b-c");
     EXPECT_TRUE(env.posixEnvs["LAYER_LIB_PATH"] == "/dcache/layer/test/layer-a-b");
-    EXPECT_TRUE(env.userEnvs["ASCEND_RT_VISIBLE_DEVICES"] == "0,4,7");
-    EXPECT_TRUE(env.userEnvs["CUDA_VISIBLE_DEVICES"] == "4,6,7");
+    EXPECT_TRUE(env.userEnvs["ASCEND_RT_VISIBLE_DEVICES"] == "0,1,3");
+    EXPECT_TRUE(env.userEnvs["CUDA_VISIBLE_DEVICES"] == "1,2,3");
     EXPECT_TRUE(env.customResourceEnvs.find("YR_LOG_PREFIX") == env.customResourceEnvs.end());
 
     startReq->set_logprefix("YR_123_000001");
