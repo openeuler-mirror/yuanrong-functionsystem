@@ -736,7 +736,7 @@ litebus::Future<std::shared_ptr<KillContext>> InstanceCtrlActor::SignalRoute(
     if (killCtx->instanceContext == nullptr) {
         YRLOG_ERROR("{}|(kill)DR mode: no route info and no state machine for instance({})",
                     killCtx->killRequest->requestid(), killCtx->killRequest->instanceid());
-        killCtx->killRsp = GenKillResponse(common::ErrorCode::ERR_INTERNAL, "no route info for DR kill");
+        killCtx->killRsp = GenKillResponse(common::ErrorCode::ERR_STATE_MACHINE_ERROR, "no route info for DR kill");
         return killCtx;
     }
 
@@ -6064,7 +6064,7 @@ CreateCallResultCallBack InstanceCtrlActor::RegisterCreateCallResultCallback(
         auto instanceInfo = request->instance();
         if (instanceInfo.lowreliability() || function_proxy::DirectRoutingConfig::IsEnabled()) {
             callResult->mutable_runtimeinfo()->set_route(aid.Url());
-            callResult->mutable_runtimeinfo()->set_proxyid(nodeID_);
+            callResult->mutable_runtimeinfo()->set_proxyid(nodeID);
         }
         if (callResult->code() == common::ErrorCode::ERR_NONE && stateMachine != nullptr &&
             stateMachine->GetInstanceState() != InstanceState::RUNNING) {
