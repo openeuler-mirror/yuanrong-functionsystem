@@ -15,98 +15,95 @@
  */
 
 #include "gtest/gtest.h"
-#include "runtime_manager/executor/container_executor.h"
+#include "runtime_manager/executor/sandbox/sandbox_executor.h"
 
 namespace functionsystem::runtime_manager {
 namespace {
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_ValidJson)
+TEST(SandboxExecutorNetworkTest, ParseForwardPorts_ValidJson)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts(
+    auto configs = SandboxExecutor::ParseForwardPorts(
         R"({"portForwardings": [{"port": 8888, "protocol": "TCP"}, {"port": 443, "protocol": "TCP"}]})");
     ASSERT_EQ(2u, configs.size());
     EXPECT_EQ(8888u, configs[0].containerPort);
-    EXPECT_EQ("tcp", configs[0].protocol);  // Should be lowercase
+    EXPECT_EQ("tcp", configs[0].protocol);
     EXPECT_EQ(443u, configs[1].containerPort);
     EXPECT_EQ("tcp", configs[1].protocol);
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_EmptyString)
+TEST(SandboxExecutorNetworkTest, ParseForwardPorts_EmptyString)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts("");
+    auto configs = SandboxExecutor::ParseForwardPorts("");
     EXPECT_EQ(0u, configs.size());
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_InvalidJson)
+TEST(SandboxExecutorNetworkTest, ParseForwardPorts_InvalidJson)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts("not-json");
+    auto configs = SandboxExecutor::ParseForwardPorts("not-json");
     EXPECT_EQ(0u, configs.size());
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_NoPortForwardingsKey)
+TEST(SandboxExecutorNetworkTest, ParseForwardPorts_NoPortForwardingsKey)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts(R"({"forward": [{"port": 8888}]})");
+    auto configs = SandboxExecutor::ParseForwardPorts(R"({"forward": [{"port": 8888}]})");
     EXPECT_EQ(0u, configs.size());
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_EmptyArray)
+TEST(SandboxExecutorNetworkTest, ParseForwardPorts_EmptyArray)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts(R"({"portForwardings": []})");
+    auto configs = SandboxExecutor::ParseForwardPorts(R"({"portForwardings": []})");
     EXPECT_EQ(0u, configs.size());
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_SinglePort)
+TEST(SandboxExecutorNetworkTest, ParseForwardPorts_SinglePort)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts(
+    auto configs = SandboxExecutor::ParseForwardPorts(
         R"({"portForwardings": [{"port": 8080, "protocol": "TCP"}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(8080u, configs[0].containerPort);
     EXPECT_EQ("tcp", configs[0].protocol);
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_FilterInvalidPortValues)
+TEST(SandboxExecutorNetworkTest, ParseForwardPorts_FilterInvalidPortValues)
 {
-    // Port 0 and 65536+ are invalid, only 80 is valid
-    auto configs = ContainerExecutor::ParseForwardPorts(
+    auto configs = SandboxExecutor::ParseForwardPorts(
         R"({"portForwardings": [{"port": 0, "protocol": "TCP"}, {"port": 80, "protocol": "UDP"}, {"port": 65536, "protocol": "TCP"}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(80u, configs[0].containerPort);
-    EXPECT_EQ("udp", configs[0].protocol);  // Should be lowercase
+    EXPECT_EQ("udp", configs[0].protocol);
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_NotArrayValue)
+TEST(SandboxExecutorNetworkTest, ParseForwardPorts_NotArrayValue)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts(R"({"portForwardings": "8888"})");
+    auto configs = SandboxExecutor::ParseForwardPorts(R"({"portForwardings": "8888"})");
     EXPECT_EQ(0u, configs.size());
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_MissingPortField)
+TEST(SandboxExecutorNetworkTest, ParseForwardPorts_MissingPortField)
 {
-    // Entry without "port" key should be skipped
-    auto configs = ContainerExecutor::ParseForwardPorts(
+    auto configs = SandboxExecutor::ParseForwardPorts(
         R"({"portForwardings": [{"protocol": "TCP"}, {"port": 9090, "protocol": "UDP"}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(9090u, configs[0].containerPort);
     EXPECT_EQ("udp", configs[0].protocol);
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_UDPProtocol)
+TEST(SandboxExecutorNetworkTest, ParseForwardPorts_UDPProtocol)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts(
+    auto configs = SandboxExecutor::ParseForwardPorts(
         R"({"portForwardings": [{"port": 53, "protocol": "UDP"}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(53u, configs[0].containerPort);
-    EXPECT_EQ("udp", configs[0].protocol);  // Should be lowercase
+    EXPECT_EQ("udp", configs[0].protocol);
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_DefaultProtocol)
+TEST(SandboxExecutorNetworkTest, ParseForwardPorts_DefaultProtocol)
 {
-    // When protocol is missing, default to "tcp"
-    auto configs = ContainerExecutor::ParseForwardPorts(
+    auto configs = SandboxExecutor::ParseForwardPorts(
         R"({"portForwardings": [{"port": 8080}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(8080u, configs[0].containerPort);
-    EXPECT_EQ("tcp", configs[0].protocol);  // Default to tcp
+    EXPECT_EQ("tcp", configs[0].protocol);
 }
 
 }  // namespace

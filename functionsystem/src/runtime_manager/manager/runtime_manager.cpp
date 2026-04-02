@@ -25,7 +25,6 @@
 #include "common/proto/pb/message_pb.h"
 #include "common/status/status.h"
 #include "executor/runtime_executor.h"
-#include "executor/container_executor.h"
 #include "executor/sandbox/sandbox_executor.h"
 #include "port/port_manager.h"
 #include "runtime_manager/executor/executor.h"

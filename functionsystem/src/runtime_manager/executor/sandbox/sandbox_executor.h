@@ -129,6 +129,13 @@ public:
 
     void InitConfig() override;
 
+    struct PortForwardConfig {
+        uint32_t containerPort = 0;
+        std::string protocol   = "tcp";
+    };
+
+    static std::vector<PortForwardConfig> ParseForwardPorts(const std::string &networkJson);
+
 protected:
     void Init() override;
     void Finalize() override;
@@ -221,15 +228,6 @@ private:
     void OnReconnectContainerd();
     void CheckConnectivity();
 
-    // ── Utilities ─────────────────────────────────────────────────────────────
-
-    struct PortForwardConfig {
-        uint32_t containerPort = 0;
-        std::string protocol   = "tcp";
-    };
-
-    std::vector<PortForwardConfig> ParseForwardPorts(const std::string &networkJson);
-
     messages::StartInstanceResponse MakeSuccessStartResponse(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &sandboxID);
 
@@ -242,7 +240,7 @@ private:
     // ── State ─────────────────────────────────────────────────────────────────
 
     RuntimeStateManager stateManager_;
-    CommandBuilder cmdBuilder_;
+    CommandBuilder cmdBuilder_{true};
     std::shared_ptr<GrpcClient<runtime::v1::RuntimeLauncher>> containerd_{nullptr};
     std::shared_ptr<HealthCheck> healthCheckClient_;
     std::shared_ptr<CkptFileManager> ckptFileManager_;

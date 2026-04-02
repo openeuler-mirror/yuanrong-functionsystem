@@ -13,4 +13,7 @@
 # limitations under the License.
 # Only include the new sandbox tests; the other executor tests are disabled
 # pending fixes (see original comment: "todo: debug")
+target_sources(${UNIT_TEST_MODULE} PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/sandbox_executor_network_test.cpp
+)
 add_subdirectory(sandbox)
