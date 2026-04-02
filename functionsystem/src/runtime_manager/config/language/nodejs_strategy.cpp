@@ -138,13 +138,17 @@ std::pair<Status, CommandArgs> PosixCustomCommandStrategy::BuildArgs(const messa
         YRLOG_ERROR("{}|{}|posix-custom entryFile not found: {}", info.traceid(), info.requestid(), entryFile);
         return {Status(StatusCode::RUNTIME_MANAGER_EXECUTABLE_PATH_INVALID, "entryFile path not found"), {}};
     }
+    const std::string bootstrapPath = entryFile + "/bootstrap";
+    if (!litebus::os::ExistPath(bootstrapPath)) {
+        YRLOG_ERROR("{}|{}|posix-custom bootstrap not found: {}", info.traceid(), info.requestid(), bootstrapPath);
+        return {Status(StatusCode::RUNTIME_MANAGER_EXECUTABLE_PATH_INVALID, "bootstrap script not found"), {}};
+    }
 
     CommandArgs result;
     result.execPath = BASH_PATH;
-    result.args = {entryFile + "/bootstrap"};
+    result.args = {bootstrapPath};
     result.workingDir = entryFile;
     result.deployOptionOverrides[CHDIR_PATH_CONFIG] = entryFile;
     return {Status::OK(), std::move(result)};
-}
 
 }  // namespace functionsystem::runtime_manager

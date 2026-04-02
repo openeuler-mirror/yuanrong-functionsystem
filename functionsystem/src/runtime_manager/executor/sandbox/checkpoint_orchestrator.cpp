@@ -54,6 +54,15 @@ litebus::Future<messages::SnapshotRuntimeResponse> CheckpointOrchestrator::TakeS
         return response;
     }
 
+    // Validate instanceID to prevent path traversal when building checkpoint path
+    if (instanceID.find("..") != std::string::npos || instanceID.find('/') != std::string::npos ||
+        instanceID.empty()) {
+        YRLOG_ERROR("{}|TakeSnapshot: invalid instanceID({})", requestID, instanceID);
+        response.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
+        response.set_message("invalid instanceID");
+        return response;
+    }
+
     // Generate unique checkpoint ID and local path
     const std::string sandboxID = stateManager_.GetSandboxID(runtimeID);
     const std::string checkpointID = fmt::format("ckpt-{}-{}",
@@ -105,6 +114,13 @@ litebus::Future<messages::SnapshotRuntimeResponse> CheckpointOrchestrator::OnReg
     info->set_checkpointid(checkpointID);
     info->set_storage(storageUrl);
     info->set_ttlseconds(ttl);
+
+    if (storageUrl.empty()) {
+        YRLOG_ERROR("{}|RegisterCheckpoint returned empty storageUrl for runtime({})", requestID, runtimeID);
+        response.set_code(static_cast<int32_t>(StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED));
+        response.set_message("checkpoint registration failed: empty storage URL");
+        return response;
+    }
 
     // Register in state manager — must happen before returning success so that
     // subsequent StopInstance calls can release the reference.
@@ -216,7 +232,7 @@ litebus::Future<runtime::v1::RestoreResponse> CheckpointOrchestrator::DoRestore(
             err.set_code(static_cast<int32_t>(status.StatusCode()));
             err.set_message(fmt::format("restore gRPC failed for checkpoint {}: {}",
                                         req->ckpt_dir(), status.RawMessage()));
-            YRLOG_ERROR("{}", err.message());
+            YRLOG_ERROR("{}|{}", req->trace_id(), err.message());
             return err;
         });
 }
