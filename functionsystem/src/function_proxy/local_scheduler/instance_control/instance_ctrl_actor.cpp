@@ -4145,10 +4145,81 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::DoAuthorizeCreate
     const litebus::Option<FunctionMeta> &functionMeta, const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
     const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise)
 {
+    auto status = NormalizeCreateTenantID(functionMeta, scheduleReq);
+    if (status.IsError()) {
+        runtimePromise->SetValue(GenScheduleResponse(status.StatusCode(), status.GetMessage(), *scheduleReq));
+        return GenScheduleResponse(status.StatusCode(), status.GetMessage(), *scheduleReq);
+    }
     return AuthorizeCreate(functionMeta, scheduleReq, runtimePromise)
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::GetAffinity, _1, scheduleReq))
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::DoCreateInstance, _1, functionMeta, scheduleReq,
                              runtimePromise));
+}
+
+Status InstanceCtrlActor::NormalizeCreateTenantID(
+    const litebus::Option<FunctionMeta> &functionMeta, const std::shared_ptr<messages::ScheduleRequest> &scheduleReq)
+{
+    // 1. Verify the function meta information.
+    if (functionMeta.IsNone() ||
+        scheduleReq->instance().instancestatus().code() != static_cast<int32_t>(InstanceState::NEW)) {
+        return Status::OK();
+    }
+    // 2. Determine tenantId for create request. This is part of normal create semantics and
+    // should not depend on whether IAM authorization is enabled.
+    auto parentInstanceID = scheduleReq->instance().parentid();
+    if (parentInstanceID.empty() && IsStaticFunctionInstance(scheduleReq->instance())) {
+        auto createOptions = scheduleReq->instance().createoptions();
+        if (createOptions.find(TENANT_ID) == createOptions.end() || createOptions[TENANT_ID].empty()) {
+            YRLOG_ERROR("{}|static function instance({}), tenantId is empty", scheduleReq->requestid(),
+                        scheduleReq->instance().instanceid());
+            return Status(StatusCode::FAILED);
+        }
+        // if static function, use tenant id from create options.
+        scheduleReq->mutable_instance()->set_tenantid(createOptions[TENANT_ID]);
+        scheduleReq->mutable_instance()->set_parentid(STATIC_FUNCTION_OWNER_VALUE);
+        YRLOG_INFO("{}|static function instance({}), no need to authorize, tenantId={}", scheduleReq->requestid(),
+                   scheduleReq->instance().instanceid(), scheduleReq->instance().tenantid());
+        return Status::OK();
+    }
+    if (parentInstanceID.empty()) {
+        auto createOptions = scheduleReq->instance().createoptions();
+        auto createTenantIter = createOptions.find(TENANT_ID);
+        const auto &tenantID = (createTenantIter != createOptions.end() && !createTenantIter->second.empty()) ?
+            createTenantIter->second : functionMeta.Get().funcMetaData.tenantId;
+        scheduleReq->mutable_instance()->set_tenantid(tenantID);
+        YRLOG_INFO("{}|system function instance({}), tenantId is set to {}", scheduleReq->requestid(),
+                   scheduleReq->instance().instanceid(), scheduleReq->instance().tenantid());
+        return Status::OK();
+    }
+    // 3. Verify the parent instance:
+    // 3.1. FaaS-Controller create FaaS-Schedule during Init. Because not running, the state has not be sync to other
+    // nodes. Therefore, all states of system function instances must be persistent in MetaStore.
+    // 3.2. The parent and child instances are not on the same node. After the parent instance is created, the child
+    // instance is created immediately. The parent instance's 'router' is not synchronized in time. As a result, the
+    // parent instance's 'router' cannot be found when the child instance is created.
+    auto parentStateMachine = instanceControlView_->GetInstance(parentInstanceID);
+    if (parentStateMachine == nullptr) {
+        YRLOG_ERROR("{}|not found parent instance({}) when authorize Create", scheduleReq->requestid(),
+                    parentInstanceID);
+        return Status(StatusCode::FAILED);
+    }
+
+    if (functionMeta.Get().funcMetaData.isSystemFunc) {
+        scheduleReq->mutable_instance()->set_tenantid(functionMeta.Get().funcMetaData.tenantId);
+    } else {
+        if (parentStateMachine->GetInstanceInfo().issystemfunc()) {
+            auto createOptions = scheduleReq->instance().createoptions();
+            if (createOptions.find(TENANT_ID) != createOptions.end() && !createOptions[TENANT_ID].empty()) {
+                scheduleReq->mutable_instance()->set_tenantid(createOptions[TENANT_ID]);
+            } else {
+                scheduleReq->mutable_instance()->set_tenantid(functionMeta.Get().funcMetaData.tenantId);
+            }
+        } else {
+            scheduleReq->mutable_instance()->set_tenantid(parentStateMachine->GetInstanceInfo().tenantid());
+        }
+    }
+    YRLOG_INFO("{}|tenantId is set to {}", scheduleReq->requestid(), scheduleReq->instance().tenantid());
+    return Status::OK();
 }
 
 litebus::Future<Status> InstanceCtrlActor::AuthorizeCreate(
@@ -4156,10 +4227,6 @@ litebus::Future<Status> InstanceCtrlActor::AuthorizeCreate(
     const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise)
 {
     // todo(lwy): should be jwt or other auth info in create options, and should not be required for system function.
-    auto createOptions = scheduleReq->instance().createoptions();
-    if (createOptions.find(TENANT_ID) != createOptions.end() && !createOptions[TENANT_ID].empty()) {
-        scheduleReq->mutable_instance()->set_tenantid(createOptions[TENANT_ID]);
-    }
     // 1. Verify the IAM function's switch.
     if (internalIAM_ == nullptr || !internalIAM_->IsIAMEnabled()) {
         return Status::OK();
@@ -4173,64 +4240,23 @@ litebus::Future<Status> InstanceCtrlActor::AuthorizeCreate(
     }
     // 3. The head functions are created by bootstrap. Bootstrap is not instance, no InstanceID.
     auto parentInstanceID = scheduleReq->instance().parentid();
-    if (parentInstanceID.empty() && IsStaticFunctionInstance(scheduleReq->instance())) {
-        auto createOptions = scheduleReq->instance().createoptions();
-        if (createOptions.find(TENANT_ID) == createOptions.end() || createOptions[TENANT_ID].empty()) {
-            YRLOG_ERROR("{}|static function instance({}), tenantId is empty", scheduleReq->requestid(),
-                       scheduleReq->instance().instanceid());
-            return Status(StatusCode::FAILED);
-        }
-        // if static function, use tenant id from create options.
-        scheduleReq->mutable_instance()->set_tenantid(createOptions[TENANT_ID]);
-        scheduleReq->mutable_instance()->set_parentid(STATIC_FUNCTION_OWNER_VALUE);
-        YRLOG_INFO("{}|static function instance({}), no need to authorize, tenantId={}", scheduleReq->requestid(),
-                   scheduleReq->instance().instanceid(), scheduleReq->instance().tenantid());
-        return Status::OK();
-    }
     if (parentInstanceID.empty()) {
-        YRLOG_INFO("{}|system function instance({}), no need to authorize", scheduleReq->requestid(),
-                   scheduleReq->instance().instanceid());
-        scheduleReq->mutable_instance()->set_tenantid(functionMeta.Get().funcMetaData.tenantId);
         return Status::OK();
     }
-    // 4. Verify the parent instance:
-    // 4.1. FaaS-Controller create FaaS-Schedule during Init. Because not running, the state has not be sync to other
-    // nodes. Therefore, all states of system function instances must be persistent in MetaStore.
-    // 4.2. The parent and child instances are not on the same node. After the parent instance is created, the child
-    // instance is created immediately. The parent instance's 'router' is not synchronized in time. As a result, the
-    // parent instance's 'router' cannot be found when the child instance is created.
+    // 4. Verify the parent instance.
     auto parentStateMachine = instanceControlView_->GetInstance(parentInstanceID);
     if (parentStateMachine == nullptr) {
         YRLOG_ERROR("{}|not found parent instance({}) when authorize Create", scheduleReq->requestid(),
                     parentInstanceID);
         return Status(StatusCode::FAILED);
     }
-
-    auto parentTenantID = parentStateMachine->GetInstanceInfo().tenantid();
     const auto &calleeTenantID = functionMeta.Get().funcMetaData.tenantId;
     function_proxy::AuthorizeParam authorizeParam{
-        .callerTenantID = parentTenantID,
+        .callerTenantID = parentStateMachine->GetInstanceInfo().tenantid(),
         .calleeTenantID = calleeTenantID,
         .callMethod = function_proxy::CALL_METHOD_CREATE,
         .funcName = parentStateMachine->GetInstanceInfo().function(),
     };
-
-    if (functionMeta.Get().funcMetaData.isSystemFunc) {
-        scheduleReq->mutable_instance()->set_tenantid(calleeTenantID);
-    } else {
-        if (parentStateMachine->GetInstanceInfo().issystemfunc()) {
-            auto createOptions = scheduleReq->instance().createoptions();
-            if (createOptions.find(TENANT_ID) != createOptions.end() && !createOptions[TENANT_ID].empty()) {
-                scheduleReq->mutable_instance()->set_tenantid(createOptions[TENANT_ID]);
-            } else {
-                scheduleReq->mutable_instance()->set_tenantid(calleeTenantID);
-            }
-        } else {
-            scheduleReq->mutable_instance()->set_tenantid(parentTenantID);
-        }
-    }
-
-    YRLOG_DEBUG("{}|instance tenantId is set to {}", scheduleReq->requestid(), scheduleReq->instance().tenantid());
     return internalIAM_->Authorize(authorizeParam);
 }
 
@@ -6804,4 +6830,3 @@ litebus::Future<Status> InstanceCtrlActor::DoLocalResumeInstance(const std::stri
 }
 
 }  // namespace functionsystem::local_scheduler
-
