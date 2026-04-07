@@ -28,6 +28,7 @@
 #include "common/status/status.h"
 #include "common/types/instance_state.h"
 #include "resource_tool.h"
+#include "scala_resource_tool.h"
 #include "utils/string_utils.hpp"
 
 namespace functionsystem::resource_view {
@@ -492,7 +493,18 @@ Status ResourceViewActor::AddInstances(const std::map<std::string, InstanceAlloc
             inst.second.allocatedPromise->SetValue(Status(StatusCode::ERR_INNER_SYSTEM_ERROR));
             continue;
         }
-        if (simplifyInstance.resources() > view_->fragment().at(selected).allocatable()) {
+        // Check capacity: skip resources with value 0 (e.g. nvidia.com/gpu:0) to avoid
+        // false "insufficient resource" when the node has no such resource type at all.
+        auto checkResources = simplifyInstance.resources();
+        for (auto it = checkResources.mutable_resources()->begin();
+             it != checkResources.mutable_resources()->end();) {
+            if (ScalaValueIsEmpty(it->second)) {
+                it = checkResources.mutable_resources()->erase(it);
+            } else {
+                ++it;
+            }
+        }
+        if (checkResources > view_->fragment().at(selected).allocatable()) {
             YRLOG_WARN(
                 "unable to allocate instances({}). the ({}) has insufficient resources may caused by capacity "
                 "decrement",
