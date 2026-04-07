@@ -732,9 +732,13 @@ litebus::Future<std::shared_ptr<KillContext>> InstanceCtrlActor::SignalRoute(
                     killCtx->killRequest->requestid(),
                     killCtx->killRequest->routeaddress().empty() ? "empty" : "present",
                     killCtx->killRequest->proxyid().empty() ? "empty" : "present");
+        // Fall through to observer/state-machine path below
+    } else {
+        // DR mode with complete routing info already handled above, return here
+        return killCtx;
     }
 
-    // Fallback: check instance ownership from instanceContext
+    // Check instance ownership from instanceContext
     if (killCtx->instanceContext == nullptr) {
         YRLOG_ERROR("{}|(kill)DR mode: no route info and no state machine for instance({})",
                     killCtx->killRequest->requestid(), killCtx->killRequest->instanceid());
@@ -1798,7 +1802,8 @@ litebus::Option<TransitionResult> InstanceCtrlActor::OnTryDispatchOnLocal(
             // Query etcd to get the actual instance location
             auto instanceKey = GenInstanceRouteKey(scheduleReq->instance().instanceid());
             instanceOpt_->GetInstance(instanceKey)
-                .Then([scheduleResp, scheduleReq, instanceID(scheduleReq->instance().instanceid()),
+                .Then([scheduleResp, scheduleReq /* capture shared_ptr to extend lifetime */,
+                        instanceID(scheduleReq->instance().instanceid()),
                         requestID(scheduleReq->requestid()), traceID(scheduleReq->traceid())]
                     (const litebus::Future<OperateResult> &future) -> litebus::Option<Status> {
                     if (future.IsError() || future.Get().status.IsError()) {
