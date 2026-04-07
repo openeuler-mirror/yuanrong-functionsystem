@@ -1700,9 +1700,19 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::DoDispatchSchedule(
                     scheduleReq->traceid(), scheduleReq->requestid(), scheduleReq->instance().instanceid());
     }
     ASSERT_IF_NULL(scheduler_);
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord(
-        { "LocalSchedule", scheduleReq->requestid(), "", scheduleReq->instance().function(), scheduleReq->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = trace::SpanName::kLocalSchedule;
+    param.spanKey = scheduleReq->requestid();
+    param.traceID = scheduleReq->traceid();
+    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        scheduleReq->instance().createoptions(), &scheduleReq->instance().scheduleoption().extension());
+    param.function = scheduleReq->instance().function();
+    param.instanceID = scheduleReq->instance().instanceid();
+    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    trace::TraceManager::PropagateSpanToOptions(span,
+                                                scheduleReq->mutable_instance()->mutable_createoptions(),
+                                                scheduleReq->mutable_instance()->mutable_scheduleoption()
+                                                    ->mutable_extension());
     return scheduler_->ScheduleDecision(scheduleReq)
                       .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::ConfirmScheduleDecisionAndDispatch,
                                            scheduleReq, _1, result.preState.Get()));
@@ -1756,7 +1766,7 @@ litebus::Option<TransitionResult> InstanceCtrlActor::OnTryDispatchOnLocal(
     const TransitionResult &transResult)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("LocalSchedule", scheduleReq->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kLocalSchedule, scheduleReq->requestid());
     if (IsLowReliabilityInstance(scheduleReq->instance()) || transResult.version != 0) {
         scheduleResp->SetValue(GenScheduleResponse(result.code, result.reason, *scheduleReq));
         return litebus::None();
@@ -2002,9 +2012,19 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::RetryForwardSched
     const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const messages::ScheduleResponse &resp,
     uint32_t retryTimes, const std::shared_ptr<InstanceStateMachine> &stateMachine)
 {
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord(
-        { "ForwardSchedule", scheduleReq->requestid(), "", scheduleReq->instance().function(), scheduleReq->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = trace::SpanName::kForwardSchedule;
+    param.spanKey = scheduleReq->requestid();
+    param.traceID = scheduleReq->traceid();
+    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        scheduleReq->instance().createoptions(), &scheduleReq->instance().scheduleoption().extension());
+    param.function = scheduleReq->instance().function();
+    param.instanceID = scheduleReq->instance().instanceid();
+    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    trace::TraceManager::PropagateSpanToOptions(span,
+                                                scheduleReq->mutable_instance()->mutable_createoptions(),
+                                                scheduleReq->mutable_instance()->mutable_scheduleoption()
+                                                    ->mutable_extension());
     if (auto cancel = stateMachine->GetCancelFuture(); cancel.IsOK()) {
         YRLOG_WARN("{}|{}|instance canceled before forward schedule, reason({})", scheduleReq->requestid(),
                    scheduleReq->instance().instanceid(), cancel.Get());
@@ -2121,7 +2141,7 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::HandleForwardResponseAndNot
     const std::shared_ptr<ScheduleRequest> &scheduleReq, const ScheduleResponse &resp)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("ForwardSchedule", scheduleReq->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kForwardSchedule, scheduleReq->requestid());
     ASSERT_IF_NULL(instanceControlView_);
     // If the forwarded scheduling request fails, the notify interface is invoked to notify the instance
     // creator of the scheduling failure, and this local scheduler, as the owner scheduling starting point
@@ -2303,9 +2323,19 @@ litebus::Future<Status> InstanceCtrlActor::DeployInstance(const std::shared_ptr<
                                                           bool isRecovering)
 {
     auto requestID = request->requestid();
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord(
-        { "DeployInstance", requestID, "", request->instance().function(), request->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = trace::SpanName::kDeployInstance;
+    param.spanKey = requestID;
+    param.traceID = request->traceid();
+    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        request->instance().createoptions(), &request->instance().scheduleoption().extension());
+    param.function = request->instance().function();
+    param.instanceID = request->instance().instanceid();
+    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    trace::TraceManager::PropagateSpanToOptions(span,
+                                                request->mutable_instance()->mutable_createoptions(),
+                                                request->mutable_instance()->mutable_scheduleoption()
+                                                    ->mutable_extension());
     if (result.IsSome()) {
         YRLOG_DEBUG("{}|{}|failed to deploy instance({}) because failed to update instance info", request->traceid(),
                     requestID, request->instance().instanceid());
@@ -2444,9 +2474,19 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     }
     litebus::Promise<Status> instanceStatusPromise;
     instanceStatusPromises_[request->instance().instanceid()] = instanceStatusPromise;
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord({ "WaitConnection", request->requestid(), "",
-                                                        request->instance().function(), request->instance().instanceid()});
+    trace::TraceManager::SpanParam param;
+    param.spanName = trace::SpanName::kWaitConnection;
+    param.spanKey = request->requestid();
+    param.traceID = request->traceid();
+    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        request->instance().createoptions(), &request->instance().scheduleoption().extension());
+    param.function = request->instance().function();
+    param.instanceID = request->instance().instanceid();
+    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    trace::TraceManager::PropagateSpanToOptions(span,
+                                                request->mutable_instance()->mutable_createoptions(),
+                                                request->mutable_instance()->mutable_scheduleoption()
+                                                    ->mutable_extension());
     return CreateInstanceClient(request->instance().instanceid(), response.runtimeid(), response.address())
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::CheckReadiness, _1, request, retriedTimes, isRecovering))
         .Then([aid(GetAID()), request, isRecovering](const Status &status) -> litebus::Future<Status> {
@@ -2543,7 +2583,7 @@ litebus::Future<Status> InstanceCtrlActor::CheckReadiness(
     uint32_t retriedTimes, bool isRecovering)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("WaitConnection", request->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kWaitConnection, request->requestid());
     auto stateMachine = instanceControlView_->GetInstance(request->instance().instanceid());
     if (stateMachine == nullptr) {
         YRLOG_ERROR("{}|{}|instance({}) stateMachine is nullptr", request->traceid(), request->requestid(),
@@ -2869,7 +2909,7 @@ litebus::Future<CallResultAck> InstanceCtrlActor::SendCallResult(
         }
         ASSERT_IF_NULL(clientManager_);
         // todo(lwy_robb): to use traceID
-        trace::TraceManager::GetInstance().StopSpan("Create", requestID, {{"instance.id", srcInstance}});
+        trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kCreate, requestID, {{"instance.id", srcInstance}});
         auto clientFuture = clientManager_->GetControlInterfacePosixClient(dstInstance);
         return clientFuture.Then(
             litebus::Defer(GetAID(), &InstanceCtrlActor::SendNotifyResult, _1, dstInstance, requestID, callResult));
@@ -3100,7 +3140,7 @@ litebus::Future<Status> InstanceCtrlActor::ScheduleConfirmed(const Status &statu
                                                              const std::shared_ptr<ScheduleRequest> &request)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("DeployInstance", request->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kDeployInstance, request->requestid());
     auto rsp = std::make_shared<ScheduleResponse>();
     rsp->set_code(static_cast<int32_t>(status.StatusCode()));
     rsp->set_requestid(request->requestid());
@@ -3288,7 +3328,7 @@ void InstanceCtrlActor::ScheduleEnd(const litebus::Future<Status> &future,
                                     const std::shared_ptr<ScheduleRequest> &request)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("DeployInstance", request->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kDeployInstance, request->requestid());
     Status status;
     if (future.IsError()) {
         status = Status(static_cast<StatusCode>(future.GetErrorCode()), "failed to create instance");

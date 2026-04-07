@@ -20,13 +20,12 @@
 #include "common/constants/actor_name.h"
 #include "common/explorer/explorer.h"
 #include "common/leader/business_policy.h"
-#include "meta_storage_accessor/meta_storage_accessor.h"
-#include "common/utils/request_sync_helper.h"
 #include "common/proto/pb/message_pb.h"
-#include "common/utils/token_transfer.h"
 #include "common/utils/actor_driver.h"
-
+#include "common/utils/request_sync_helper.h"
+#include "common/utils/token_transfer.h"
 #include "iam_server/constants.h"
+#include "meta_storage_accessor/meta_storage_accessor.h"
 #include "token_content.h"
 
 namespace functionsystem::iamserver {
@@ -49,25 +48,33 @@ public:
     void UpdateLeaderInfo(const explorer::LeaderInfo &leaderInfo);
 
     litebus::Future<std::shared_ptr<messages::GetTokenResponse>> SendForwardGetToken(const std::string &tenantID,
-                                                                                 const bool needCreate);
+                                                                                     const bool needCreate);
 
-    void OnForwardGetNewToken(
-        const litebus::Future<std::shared_ptr<messages::GetTokenResponse>> future,
-        const std::shared_ptr<litebus::Promise<std::shared_ptr<TokenSalt>>> &promise, const std::string &tenantID);
+    void OnForwardGetNewToken(const litebus::Future<std::shared_ptr<messages::GetTokenResponse>> future,
+                              const std::shared_ptr<litebus::Promise<std::shared_ptr<TokenSalt>>> &promise,
+                              const std::string &tenantID);
 
     void OnForwardGetCacheToken(const litebus::Future<std::shared_ptr<messages::GetTokenResponse>> future,
-                                  const std::shared_ptr<litebus::Promise<Status>> &promise,
-                                  const std::shared_ptr<TokenContent> &tokenContent);
+                                const std::shared_ptr<litebus::Promise<Status>> &promise,
+                                const std::shared_ptr<TokenContent> &tokenContent);
 
     litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptToken(const std::string &tenantID,
                                                                     const std::string &role = "",
                                                                     uint64_t expiredTimeSpan = 0);
+    litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptTokenWithQuota(const std::string &tenantID,
+                                                                             const std::string &role, int64_t cpuLimit,
+                                                                             const std::string &memLimit,
+                                                                             uint64_t expiredTimeSpan = 0);
     litebus::Future<Status> VerifyToken(const std::shared_ptr<TokenContent> &tokenContent);
     litebus::Future<Status> AbandonTokenByTenantID(const std::string &tenantID);
 
     litebus::Future<std::shared_ptr<TokenSalt>> GenerateNewToken(const std::string &tenantID,
                                                                  const std::string &role = "",
                                                                  uint64_t expiredTimeSpan = 0);
+    litebus::Future<std::shared_ptr<TokenSalt>> GenerateNewTokenWithQuota(const std::string &tenantID,
+                                                                          const std::string &role, int64_t cpuLimit,
+                                                                          const std::string &memLimit,
+                                                                          uint64_t expiredTimeSpan = 0);
 
     std::shared_ptr<TokenSalt> GetLocalNewToken(const std::string &tenantID);
 
@@ -80,8 +87,8 @@ public:
 protected:
     void Init() override;
     void Finalize() override;
-private:
 
+private:
     static Status DecryptToken(const std::string &tokenStr, const std::shared_ptr<TokenContent> &tokenContent);
 
     static Status EncryptToken(const std::shared_ptr<TokenContent> &tokenContent);
@@ -100,7 +107,8 @@ private:
     const std::shared_ptr<TokenContent> FindTokenFromCache(const std::string &tenantID, const bool &isNewTokenMap);
 
     Status GenerateToken(const std::string &tenantID, const std::shared_ptr<TokenContent> &tokenContent,
-                         const std::string &role = "", uint64_t expiredTimeSpan = 0);
+                         const std::string &role = "", uint64_t expiredTimeSpan = 0, int64_t cpuLimit = -1,
+                         const std::string &memLimit = "");
 
     Status OnRequireEncryptToken(const std::shared_ptr<TokenSalt> &tokenSalt, const litebus::AID &from,
                                  const std::shared_ptr<messages::GetTokenRequest> &tokenRequest);
@@ -184,12 +192,18 @@ private:
     class Business : public leader::BusinessPolicy {
     public:
         Business(const std::shared_ptr<TokenManagerActor> &actor, const std::shared_ptr<Member> &member)
-            : actor_(actor), member_(member) {}
+            : actor_(actor), member_(member)
+        {
+        }
         ~Business() override = default;
 
         virtual litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptToken(const std::string &tenantID,
-                                                                                 const std::string &role = "",
-                                                                                 uint64_t expiredTimeSpan = 0) = 0;
+                                                                                const std::string &role = "",
+                                                                                uint64_t expiredTimeSpan = 0) = 0;
+        virtual litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptTokenWithQuota(
+            const std::string &tenantID, const std::string &role, int64_t cpuLimit, const std::string &memLimit,
+            uint64_t expiredTimeSpan = 0) = 0;
+
         virtual litebus::Future<Status> VerifyToken(const std::shared_ptr<TokenContent> &tokenContent) = 0;
         virtual litebus::Future<Status> AbandonTokenByTenantID(const std::string &tenantID) = 0;
         virtual litebus::Future<Status> UpdateTokenInAdvance(const std::string &tenantID) = 0;
@@ -212,8 +226,14 @@ private:
 
         void OnChange() override;
         litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptToken(const std::string &tenantID,
-                                                                         const std::string &role = "",
-                                                                         uint64_t expiredTimeSpan = 0) override;
+                                                                        const std::string &role = "",
+                                                                        uint64_t expiredTimeSpan = 0) override;
+        litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptTokenWithQuota(const std::string &tenantID,
+                                                                                 const std::string &role,
+                                                                                 int64_t cpuLimit,
+                                                                                 const std::string &memLimit,
+                                                                                 uint64_t expiredTimeSpan = 0) override;
+
         litebus::Future<Status> VerifyToken(const std::shared_ptr<TokenContent> &tokenContent) override;
         litebus::Future<Status> AbandonTokenByTenantID(const std::string &tenantID) override;
         litebus::Future<Status> UpdateTokenInAdvance(const std::string &tenantID) override;
@@ -232,8 +252,14 @@ private:
 
         void OnChange() override;
         litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptToken(const std::string &tenantID,
-                                                                         const std::string &role = "",
-                                                                         uint64_t expiredTimeSpan = 0) override;
+                                                                        const std::string &role = "",
+                                                                        uint64_t expiredTimeSpan = 0) override;
+        litebus::Future<std::shared_ptr<TokenSalt>> RequireEncryptTokenWithQuota(const std::string &tenantID,
+                                                                                 const std::string &role,
+                                                                                 int64_t cpuLimit,
+                                                                                 const std::string &memLimit,
+                                                                                 uint64_t expiredTimeSpan = 0) override;
+
         litebus::Future<Status> VerifyToken(const std::shared_ptr<TokenContent> &tokenContent) override;
         litebus::Future<Status> AbandonTokenByTenantID(const std::string &tenantID) override;
         litebus::Future<Status> UpdateTokenInAdvance(const std::string &tenantID) override;
@@ -252,5 +278,5 @@ private:
                         forwardGetTokenSync_);
 };
 
-}
+}  // namespace functionsystem::iamserver
 #endif  // IAM_SERVER_INTERNAL_IAM_TOKEN_MANAGER_ACTOR_H

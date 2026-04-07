@@ -19,11 +19,12 @@
 #include <utility>
 
 #include "common/constants/actor_name.h"
+#include "iam/internal_iam/casdoor_verifier.h"
+#include "iam/internal_iam/keycloak_verifier.h"
 #include "meta_store_monitor/meta_store_monitor_factory.h"
 
 namespace functionsystem::iamserver {
-IAMDriver::IAMDriver(functionsystem::iamserver::IAMStartParam param,
-                     const std::shared_ptr<MetaStoreClient> &metaClient)
+IAMDriver::IAMDriver(functionsystem::iamserver::IAMStartParam param, const std::shared_ptr<MetaStoreClient> &metaClient)
     : param_(std::move(param))
 {
     internalIAM_ = std::make_shared<InternalIAM>(param_.internalIAMParam);
@@ -32,7 +33,7 @@ IAMDriver::IAMDriver(functionsystem::iamserver::IAMStartParam param,
 
 Status IAMDriver::Start()
 {
-    YRLOG_INFO("Start IAMDriver, nodeID: {}, ip: {}", param_.nodeID, param_.ip);
+    YRLOG_INFO("Start IAMDriver, nodeID: {}, ip: {}, provider: {}", param_.nodeID, param_.ip, param_.authProvider);
 
     // create
     if (auto status(Create()); status != StatusCode::SUCCESS) {
@@ -67,6 +68,22 @@ Status IAMDriver::Create()
     }
     iamActor_->BindInternalIAM(internalIAM_);
     iamActor_->SetAuthKey();
+
+    // Initialize external auth verifier (Keycloak or Casdoor)
+    if (param_.authProvider == "casdoor" && param_.casdoorConfig.enabled) {
+        YRLOG_INFO("Casdoor integration enabled: endpoint={}, org={}", param_.casdoorConfig.endpoint,
+                   param_.casdoorConfig.organization);
+        auto casdoorVerifier = std::make_shared<CasdoorVerifier>(param_.casdoorConfig);
+        iamActor_->SetExternalVerifier(casdoorVerifier);
+    } else if (param_.keycloakConfig.enabled) {
+        YRLOG_INFO("Keycloak integration enabled: url={}, realm={}", param_.keycloakConfig.url,
+                   param_.keycloakConfig.realm);
+        auto keycloakVerifier = std::make_shared<KeycloakVerifier>(param_.keycloakConfig);
+        iamActor_->SetExternalVerifier(keycloakVerifier);
+    } else {
+        YRLOG_INFO("External auth integration not enabled");
+    }
+
     auto metaStoreObserver = std::make_shared<IAMMetaStoreObserver>(iamActor_);
     auto monitor = MetaStoreMonitorFactory::GetInstance().GetMonitor(param_.metaStoreAddress);
     if (monitor != nullptr) {
@@ -109,4 +126,4 @@ void IAMDriver::Await()
         litebus::Await(iamActor_->GetAID());
     }
 }
-} // functionsystem::iamserver
+}  // namespace functionsystem::iamserver

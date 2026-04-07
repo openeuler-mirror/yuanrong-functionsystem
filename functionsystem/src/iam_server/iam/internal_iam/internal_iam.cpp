@@ -69,12 +69,23 @@ litebus::Future<Status> InternalIAM::VerifyToken(const std::shared_ptr<TokenCont
 }
 
 litebus::Future<std::shared_ptr<TokenSalt>> InternalIAM::RequireEncryptToken(const std::string &tenantID,
-                                                                                  const std::string &role,
-                                                                                  uint64_t expiredTimeSpan)
+                                                                             const std::string &role,
+                                                                             uint64_t expiredTimeSpan)
 {
     ASSERT_IF_NULL(tokenManagerActor_);
     return litebus::Async(tokenManagerActor_->GetAID(), &TokenManagerActor::RequireEncryptToken, tenantID, role,
                           expiredTimeSpan);
+}
+
+litebus::Future<std::shared_ptr<TokenSalt>> InternalIAM::RequireEncryptTokenWithQuota(const std::string &tenantID,
+                                                                                      const std::string &role,
+                                                                                      int64_t cpuLimit,
+                                                                                      const std::string &memLimit,
+                                                                                      uint64_t expiredTimeSpan)
+{
+    ASSERT_IF_NULL(tokenManagerActor_);
+    return litebus::Async(tokenManagerActor_->GetAID(), &TokenManagerActor::RequireEncryptTokenWithQuota, tenantID,
+                          role, cpuLimit, memLimit, expiredTimeSpan);
 }
 
 litebus::Future<Status> InternalIAM::AbandonTokenByTenantID(const std::string &tenantID)
@@ -124,4 +135,5 @@ std::vector<std::shared_ptr<PermanentCredential>> InternalIAM::LoadPermanentCred
     std::string jsonStr = Read(configPath);
     return TransToPermanentCredFromJson(jsonStr);
 }
+
 }  // namespace functionsystem::iamserver
