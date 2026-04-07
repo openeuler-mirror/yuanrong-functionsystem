@@ -51,7 +51,7 @@ resources::InstanceInfo GenInstanceInfo(const std::string &instanceID, const std
     instanceInfo.set_jobid(jobID);
     instanceInfo.set_runtimeid(instanceID);
     instanceInfo.set_runtimeaddress(addr);
-    instanceInfo.set_tenantid(jobID);
+    instanceInfo.set_tenantid("default");
     instanceInfo.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::RUNNING));
     (*instanceInfo.mutable_extensions())[SOURCE] = DRIVER_DSTID;
     return instanceInfo;
