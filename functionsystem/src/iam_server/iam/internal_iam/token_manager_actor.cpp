@@ -18,8 +18,8 @@
 
 #include <async/defer.hpp>
 
-#include "common/utils/meta_store_kv_operation.h"
 #include "common/aksk/aksk_util.h"
+#include "common/utils/meta_store_kv_operation.h"
 
 namespace functionsystem::iamserver {
 
@@ -104,7 +104,6 @@ Status TokenManagerActor::Register()
         .After(WATCH_TIMEOUT_MS, after);
     return Status::OK();
 }
-
 
 void TokenManagerActor::Finalize()
 {
@@ -238,7 +237,6 @@ litebus::Future<TokenMap> TokenManagerActor::AsyncGetTokenFromMetaStore(bool isN
     };
     return member_->metaStoreClient->Get(prefix, { .prefix = true }).Then(then);
 }
-
 
 std::shared_ptr<TokenContent> TokenManagerActor::GetTokenContentFromEventValue(const std::string &value)
 {
@@ -407,10 +405,9 @@ Status TokenManagerActor::DecryptToken(const std::string &tokenStr, const std::s
     }
     std::string key = tokenStr.substr(0, pos);
     std::string info = tokenStr.substr(pos + 1);
-    auto tokenDecrypt =  SensitiveValue(info);
+    auto tokenDecrypt = SensitiveValue(info);
     char decryptedToken[INTERNAL_IAM_TOKEN_MAX_SIZE + 1] = { 0 };
-    auto ret = memcpy_s(decryptedToken, INTERNAL_IAM_TOKEN_MAX_SIZE, tokenDecrypt.GetData(),
-                        tokenDecrypt.GetSize());
+    auto ret = memcpy_s(decryptedToken, INTERNAL_IAM_TOKEN_MAX_SIZE, tokenDecrypt.GetData(), tokenDecrypt.GetSize());
     if (ret != 0) {
         YRLOG_ERROR("decrypted token copy failed! err:{}", std::to_string(ret));
         return Status(StatusCode::PARAMETER_ERROR, "decrypted token copy failed! err: " + std::to_string(ret));
@@ -540,8 +537,8 @@ litebus::Future<Status> TokenManagerActor::AbandonTokenByTenantID(const std::str
 }
 
 litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::RequireEncryptToken(const std::string &tenantID,
-                                                                                  const std::string &role,
-                                                                                  uint64_t expiredTimeSpan)
+                                                                                   const std::string &role,
+                                                                                   uint64_t expiredTimeSpan)
 {
     if (!member_->initialized) {
         auto tokenSalt = std::make_shared<TokenSalt>();
@@ -559,6 +556,22 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::RequireEncryptTok
     // 2. try to generate new
     ASSERT_IF_NULL(business_);
     return business_->RequireEncryptToken(tenantID, role, expiredTimeSpan);
+}
+
+litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::RequireEncryptTokenWithQuota(const std::string &tenantID,
+                                                                                            const std::string &role,
+                                                                                            int64_t cpuLimit,
+                                                                                            const std::string &memLimit,
+                                                                                            uint64_t expiredTimeSpan)
+{
+    if (!member_->initialized) {
+        auto tokenSalt = std::make_shared<TokenSalt>();
+        tokenSalt->status = Status(StatusCode::IAM_WAIT_INITIALIZE_COMPLETE, "iam-server is initializing");
+        return tokenSalt;
+    }
+    // For quota-specific requests, we always generate a new token to ensure quotas are fresh
+    ASSERT_IF_NULL(business_);
+    return business_->RequireEncryptTokenWithQuota(tenantID, role, cpuLimit, memLimit, expiredTimeSpan);
 }
 
 litebus::Future<Status> TokenManagerActor::VerifyToken(const std::shared_ptr<TokenContent> &tokenContent)
@@ -616,7 +629,8 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::GenerateNewToken(
         tokenSalt->token = tokenContent->encryptToken;
         tokenSalt->salt = tokenContent->salt;
         tokenSalt->expiredTimeStamp = tokenContent->expiredTimeStamp;
-        // todo(lwy_robb: consider to cache JWT tokens in memory for faster retrieval, which should remove while expired)
+        // todo(lwy_robb: consider to cache JWT tokens in memory for faster retrieval, which should remove while
+        // expired)
         promise->SetValue(tokenSalt);
         (void)member_->newTokenRequestMap.erase(tenantID);
         return promise->GetFuture();
@@ -629,23 +643,63 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::GenerateNewToken(
     return promise->GetFuture();
 }
 
+litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::GenerateNewTokenWithQuota(const std::string &tenantID,
+                                                                                         const std::string &role,
+                                                                                         int64_t cpuLimit,
+                                                                                         const std::string &memLimit,
+                                                                                         uint64_t expiredTimeSpan)
+{
+    YRLOG_INFO("{}|start to generate new token with quota", tenantID);
+    auto promise = std::make_shared<litebus::Promise<std::shared_ptr<TokenSalt>>>();
+    member_->newTokenRequestMap[tenantID] = promise;
+    auto tokenContent = std::make_shared<TokenContent>();
+    auto tokenSalt = std::make_shared<TokenSalt>();
+    Status status = GenerateToken(tenantID, tokenContent, role, expiredTimeSpan, cpuLimit, memLimit);
+    if (status.IsError()) {
+        tokenSalt->status = status;
+        YRLOG_ERROR("{}|failed to generate new token with quota, err:{}", tenantID, status.ToString());
+        (void)member_->newTokenRequestMap.erase(tenantID);
+        return tokenSalt;
+    }
+
+    // If JWT format token (signed), skip persistence to MetaStore
+    if (tokenContent->IsJwtFormat()) {
+        YRLOG_INFO("{}|JWT format token (with quota) generated, skip persistence", tenantID);
+        tokenSalt->status = Status::OK();
+        tokenSalt->token = tokenContent->encryptToken;
+        tokenSalt->salt = tokenContent->salt;
+        tokenSalt->expiredTimeStamp = tokenContent->expiredTimeStamp;
+        promise->SetValue(tokenSalt);
+        (void)member_->newTokenRequestMap.erase(tenantID);
+        return promise->GetFuture();
+    }
+
+    YRLOG_DEBUG("{}|success to generate new token with quota, start to put it to metastore", tenantID);
+    (void)PutTokenToMetaStore(tokenContent, true)
+        .Then(litebus::Defer(GetAID(), &TokenManagerActor::OnPutTokenFromMetaStore, std::placeholders::_1, tokenContent,
+                             true, true));
+    return promise->GetFuture();
+}
+
 Status TokenManagerActor::GenerateToken(const std::string &tenantID, const std::shared_ptr<TokenContent> &tokenContent,
-                                         const std::string &role, uint64_t expiredTimeSpan)
+                                        const std::string &role, uint64_t expiredTimeSpan, int64_t cpuLimit,
+                                        const std::string &memLimit)
 {
     // 1. generate token
     tokenContent->tenantID = tenantID;
     tokenContent->role = role;
+    tokenContent->cpuLimit = cpuLimit;
+    tokenContent->memLimit = memLimit;
     auto now = static_cast<uint64_t>(std::time(nullptr));
     // Use per-request expiredTimeSpan if provided, otherwise fall back to global config
     // UINT64_MAX means never expire (from X-TTL: -1), 0 means use global default
-    uint64_t effectiveTimeSpan = (expiredTimeSpan > 0 && expiredTimeSpan != UINT64_MAX)
-        ? expiredTimeSpan : member_->tokenExpiredTimeSpan;
+    uint64_t effectiveTimeSpan =
+        (expiredTimeSpan > 0 && expiredTimeSpan != UINT64_MAX) ? expiredTimeSpan : member_->tokenExpiredTimeSpan;
     // if effectiveTimeSpan is 0 or expiredTimeSpan is UINT64_MAX, token never expires
     if (effectiveTimeSpan == TOKEN_NEVER_EXPIRE || expiredTimeSpan == UINT64_MAX) {
         tokenContent->expiredTimeStamp = UINT64_MAX;
     } else {
-        tokenContent->expiredTimeStamp =
-            (UINT64_MAX - now < effectiveTimeSpan) ? now : now + effectiveTimeSpan;
+        tokenContent->expiredTimeStamp = (UINT64_MAX - now < effectiveTimeSpan) ? now : now + effectiveTimeSpan;
     }
 
     Status status = EncryptToken(tokenContent);
@@ -952,8 +1006,8 @@ litebus::Future<Status> TokenManagerActor::HandleUpdateTokenInAdvance(const std:
         .Then(litebus::Defer(GetAID(), &TokenManagerActor::OnUpdateTokenInAdvance, std::placeholders::_1, tenantID));
 }
 
-litebus::Future<Status> TokenManagerActor::UpdateTokenInAdvancePutNew(
-    const Status &status, const std::shared_ptr<TokenContent> &tokenContent)
+litebus::Future<Status> TokenManagerActor::UpdateTokenInAdvancePutNew(const Status &status,
+                                                                      const std::shared_ptr<TokenContent> &tokenContent)
 {
     if (status.IsError()) {
         return status;
@@ -1100,6 +1154,15 @@ litebus::Future<Status> TokenManagerActor::SlaveBusiness::UpdateTokenInAdvance(c
     return promise->GetFuture();
 }
 
+litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::MasterBusiness::RequireEncryptTokenWithQuota(
+    const std::string &tenantID, const std::string &role, int64_t cpuLimit, const std::string &memLimit,
+    uint64_t expiredTimeSpan)
+{
+    auto actor = actor_.lock();
+    ASSERT_IF_NULL(actor);
+    return actor->GenerateNewTokenWithQuota(tenantID, role, cpuLimit, memLimit, expiredTimeSpan);
+}
+
 litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::SlaveBusiness::RequireEncryptToken(
     const std::string &tenantID, const std::string &role, uint64_t expiredTimeSpan)
 {
@@ -1113,8 +1176,26 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::SlaveBusiness::Re
     return promise->GetFuture();
 }
 
-litebus::Future<Status> TokenManagerActor::SlaveBusiness::VerifyToken(
-    const std::shared_ptr<TokenContent> &tokenContent)
+litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::SlaveBusiness::RequireEncryptTokenWithQuota(
+    const std::string &tenantID, const std::string &role, int64_t cpuLimit, const std::string &memLimit,
+    uint64_t expiredTimeSpan)
+{
+    auto actor = actor_.lock();
+    ASSERT_IF_NULL(actor);
+    auto promise = std::make_shared<litebus::Promise<std::shared_ptr<TokenSalt>>>();
+
+    // TODO(Cluster-Enhancement): Extend GetTokenRequest in message.proto to include
+    // cpuLimit, memLimit, and role. Currently, these are lost during forwarding to Master.
+    YRLOG_WARN("{}|Quota forwarding to Master is not yet supported in cluster mode. Defaulting to standard token.",
+               tenantID);
+
+    (void)actor->SendForwardGetToken(tenantID, true)
+        .OnComplete(litebus::Defer(actor->GetAID(), &TokenManagerActor::OnForwardGetNewToken, std::placeholders::_1,
+                                   promise, tenantID));
+    return promise->GetFuture();
+}
+
+litebus::Future<Status> TokenManagerActor::SlaveBusiness::VerifyToken(const std::shared_ptr<TokenContent> &tokenContent)
 {
     auto actor = actor_.lock();
     ASSERT_IF_NULL(actor);
@@ -1149,4 +1230,4 @@ litebus::Future<Status> TokenManagerActor::SlaveBusiness::AbandonTokenByTenantID
     // current we don't hava abandonToken operation
     return Status::OK();
 }
-}
+}  // namespace functionsystem::iamserver
