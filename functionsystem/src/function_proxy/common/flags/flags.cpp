@@ -153,6 +153,8 @@ Flags::Flags()
             "whether disk usage monitor force delete pod", true);
     AddFlag(&Flags::unRegisterWhileStop_, "unregister_while_stop",
             "if true, all instance & agent would be evicted while function-proxy receive SIGTERM/SIGINT", false);
+    AddFlag(&Flags::enableDirectRouting_, "enable_direct_routing",
+            "enable direct routing read path with LRU cache and on-demand route query", false);
     AddElectionFlags();
     AddDSFlags();
     AddRuntimeFlags();
