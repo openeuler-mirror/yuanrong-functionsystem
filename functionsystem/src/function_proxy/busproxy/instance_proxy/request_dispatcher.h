@@ -38,6 +38,7 @@ struct InstanceRouterInfo {
     bool isReady = false;
     std::string runtimeID;
     std::string proxyID;
+    std::string proxyGrpcAddress;
     litebus::AID remote;
     std::string tenantID;
     std::string function;

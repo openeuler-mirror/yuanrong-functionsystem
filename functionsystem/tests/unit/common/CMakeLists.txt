@@ -51,6 +51,7 @@ aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/resource_lock RESOURCE_LOCK_SRCS)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/aksk AKSK_TEST_SRCS)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/profile PROFILE_TEST_SRCS)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/hex HEX_TEST_SRCS)
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/lru LRU_TEST_SRCS)
 
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/schedule_plugin/prefilter SCHEDULE_PLUGIN_SRCS)
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/schedule_plugin/filter SCHEDULE_PLUGIN_SRCS)
@@ -90,4 +91,5 @@ target_sources(
           ${AKSK_TEST_SRCS}
           ${PROFILE_TEST_SRCS}
           ${HEX_TEST_SRCS}
-          ${SCHEDULE_PLUGIN_SRCS})
+          ${SCHEDULE_PLUGIN_SRCS}
+          ${LRU_TEST_SRCS})

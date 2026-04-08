@@ -20,6 +20,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "common/data_view/proxy_view/proxy_view.h"
 #include "common/posix_client/data_plane_client/data_interface_client_manager_proxy.h"
@@ -54,6 +55,7 @@ public:
                                   bool ignoreNonExist = false);
 
     void NotifyMigratingRequest(const std::string &instanceID);
+    void OnNodeAbnormal(const std::string &nodeID);
 
 private:
     void Creating(const std::string &instanceID, const resources::InstanceInfo &instanceInfo);
@@ -73,6 +75,7 @@ private:
     std::unordered_map<std::string, std::shared_ptr<InstanceProxy>> localInstances_;
     // InstanceInfo should be replaced by shared ptr in future
     std::unordered_map<std::string, resources::InstanceInfo> allInstances_;
+    std::unordered_map<std::string, std::unordered_set<std::string>> nodeInstanceMap_;
     // key : subscribed instance value: subscribers
     std::unordered_map<std::string, std::unordered_set<std::string>> subscribedInstances_;
     // key : subscriber value: subscribed instance
