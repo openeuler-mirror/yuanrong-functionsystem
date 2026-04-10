@@ -24,6 +24,8 @@
 
 namespace functionsystem {
 
+const size_t MAX_PATH_LENGTH = 4096;
+
 // LookPath searches for an executable named file in the
 // directories named by the PATH environment variable.
 [[maybe_unused]] static litebus::Option<std::string> LookPath(const std::string &file)
@@ -37,7 +39,7 @@ namespace functionsystem {
         return {};
     }
 
-    litebus::Option<std::string> path = litebus::os::GetEnv("PATH");
+    litebus::Option<std::string> path = litebus::os::GetEnv("PATH", MAX_PATH_LENGTH);
     if (path.IsNone()) {
         return {};
     }
