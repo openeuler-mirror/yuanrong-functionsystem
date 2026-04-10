@@ -554,7 +554,7 @@ Status RuntimeExecutor::CreateSubDir(const std::shared_ptr<messages::StartInstan
         }
 
         // set 750 permission, dir is still owned by sn, which will prevent snuser change dir permissions
-        int result = chmod(workDir.c_str(), 0750);
+        int result = chmod(workDir.c_str(), 0770);
         if (result != 0) {
             YRLOG_ERROR("failed to execute chmod error msg: {}", litebus::os::Strerror(errno));
             (void)litebus::os::Rmdir(workDir);
