@@ -52,6 +52,7 @@ public:
     void PingTimeout(const litebus::AID &from);
     void ResetHeartbeatNode(const litebus::AID &aid, uint32_t timeoutMs,
                                    const HeartbeatObserver::TimeOutHandler &handler);
+    void CancelAllHeartbeatNodes();
 
 private:
     uint32_t timeoutMs_;
@@ -115,6 +116,13 @@ public:
     {
         if (actor != nullptr) {
             litebus::Async(actor->GetAID(), &HeartbeatObserver::ResetHeartbeatNode, aid, timeoutMs, handler);
+        }
+    }
+
+    void CancelAllHeartbeatNodes() const
+    {
+        if (actor != nullptr) {
+            litebus::Async(actor->GetAID(), &HeartbeatObserver::CancelAllHeartbeatNodes);
         }
     }
 

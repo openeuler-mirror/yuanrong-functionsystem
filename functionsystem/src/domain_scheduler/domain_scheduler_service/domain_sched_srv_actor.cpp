@@ -551,6 +551,10 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> DomainSchedSrvActor
 
 void DomainSchedSrvActor::Finalize()
 {
+    if (pingpong_ != nullptr) {
+        YRLOG_INFO("stop domain {} pingpong actor", domainName_);
+        pingpong_->Stop();
+    }
     (void)litebus::TimerTools::Cancel(uplayer_.reRegisterTimer);
     (void)litebus::TimerTools::Cancel(global_.reRegisterTimer);
     StopCollectClusterResourceState();

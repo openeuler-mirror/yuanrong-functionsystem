@@ -384,6 +384,52 @@ TEST_F(DomainSchedMgrActorTest, ConnectFail)
 
 /**
  * Feature: DomainSchedMgrActor
+ * Description: disconnect should cancel all heartbeat nodes without callback
+ * Steps:
+ * 1. connect multiple nodes
+ * 2. disconnect
+ * 3. wait for timeout
+ * Expectation:
+ * 1. callback should not be called
+ */
+TEST_F(DomainSchedMgrActorTest, DisconnectCancelAllHeartbeats)
+{
+    auto actor = std::make_shared<functionsystem::global_scheduler::DomainSchedMgrActor>("TestDomainSchedMgrActor",
+                                                                                         300);
+    bool callbackCalled = false;
+    actor->DelDomainSchedCallback([&callbackCalled](const std::string &name, const std::string &ip) {
+        callbackCalled = true;
+    });
+    litebus::Spawn(actor);
+
+    litebus::Async(actor->GetAID(), &DomainSchedMgrActor::UpdateLeaderInfo, GetLeaderInfo(actor->GetAID()));
+
+    HeartbeatClientDriver pingpong1("node1", [](const litebus::AID &aid) {});
+    HeartbeatClientDriver pingpong2("node2", [](const litebus::AID &aid) {});
+    pingpong1.Start(actor->GetAID());
+    pingpong2.Start(actor->GetAID());
+
+    litebus::Async(actor->GetAID(), &DomainSchedMgrActor::Connect, "node1",
+                   pingpong1.GetActorAID().GetIp() + ":" + std::to_string(pingpong1.GetActorAID().GetPort()))
+        .Get();
+    litebus::Async(actor->GetAID(), &DomainSchedMgrActor::Connect, "node2",
+                   pingpong2.GetActorAID().GetIp() + ":" + std::to_string(pingpong2.GetActorAID().GetPort()))
+        .Get();
+
+    pingpong1.Stop();
+    pingpong2.Stop();
+
+    litebus::Async(actor->GetAID(), &DomainSchedMgrActor::Disconnect);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    EXPECT_FALSE(callbackCalled);
+
+    litebus::Terminate(actor->GetAID());
+    litebus::Await(actor->GetAID());
+}
+
+/**
+ * Feature: DomainSchedMgrActor
  * Description: re-connect to an address
  * Steps:
  * 1. connect
