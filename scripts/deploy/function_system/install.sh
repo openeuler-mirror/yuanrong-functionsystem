@@ -81,7 +81,6 @@ function install_function_proxy() {
     --runtime_home_dir="${RUNTIME_USER_HOME_DIR}" \
     --runtime_logs_dir="${RUNTIME_LOG_PATH}" \
     --runtime_std_log_dir="" \
-    --runtime_ld_library_path="${ld_library_path}:${RUNTIME_HOME_DIR}/service/cpp/snlib:${RUNTIME_HOME_DIR}/sdk/cpp/lib" \
     --runtime_log_level="${RUNTIME_LOG_LEVEL}" \
     --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}" \
     --runtime_max_log_file_num="${RUNTIME_LOG_ROLLING_MAX_FILES}" \
@@ -455,7 +454,7 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     --runtime_home_dir="${RUNTIME_USER_HOME_DIR}"
     --runtime_logs_dir="${RUNTIME_LOG_PATH}"
     --runtime_std_log_dir=""
-    --runtime_ld_library_path="${ld_library_path}:${RUNTIME_HOME_DIR}/service/cpp/snlib:${RUNTIME_HOME_DIR}/sdk/cpp/lib"
+    --runtime_ld_library_path="${ld_library_path}"
     --runtime_log_level="${RUNTIME_LOG_LEVEL}"
     --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}"
     --runtime_max_log_file_num="${RUNTIME_LOG_ROLLING_MAX_FILES}"
