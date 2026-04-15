@@ -119,6 +119,13 @@ def pack_metrics(args):
     root_dir = args["root_dir"]
     pack_base_dir = os.path.join(root_dir, "output", "metrics")  # ./output/metrics
 
+    # Check if C++ metrics build output exists (not produced by Rust builder)
+    include_src_path = os.path.join(root_dir, "common", "metrics", "output", "include")
+    lib_src_path = os.path.join(root_dir, "common", "metrics", "output", "lib")
+    if not os.path.exists(include_src_path) or not os.path.exists(lib_src_path):
+        log.warning("Metrics build output not found (expected for Rust builder), skipping metrics packaging")
+        return
+
     # 拷贝配置文件
     log.info("Copy metrics config files")
     config_src_path = os.path.join(root_dir, "scripts", "config", "metrics")
@@ -127,13 +134,11 @@ def pack_metrics(args):
 
     # 拷贝头文件
     log.info("Copy metrics include files")
-    include_src_path = os.path.join(root_dir, "common", "metrics", "output", "include")
     include_dst_path = os.path.join(pack_base_dir, "include")
     shutil.copytree(include_src_path, include_dst_path, copy_function=shutil.copy2)
 
     # 拷贝 lib 库
     log.info("Copy metrics library products")
-    lib_src_path = os.path.join(root_dir, "common", "metrics", "output", "lib")
     lib_dst_path = os.path.join(pack_base_dir, "lib")
     shutil.copytree(lib_src_path, lib_dst_path, copy_function=shutil.copy2, symlinks=True)
 

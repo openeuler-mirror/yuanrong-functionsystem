@@ -59,6 +59,35 @@ def download_vendor(config_path, download_path):
     return 0
 
 
+def download_vendor_single(config, download_path):
+    """Download and extract a single vendor dependency given its config dict."""
+    download_path = os.path.abspath(download_path)
+    os.makedirs(download_path, exist_ok=True)
+
+    repo_parsed = urlparse(config["repo"])
+    archive_name = config["repo"].split("/")[-1]
+    package_name = archive_name.replace(".tar.gz", "").replace(".tar", "").replace(".zip", "")
+    archive_path = os.path.join(download_path, archive_name)
+    vendor_path = os.path.join(download_path, config["name"])
+
+    if os.path.exists(vendor_path):
+        log.info(f"Dependency {config['name']}-{config['version']} already exists, skipping")
+        return
+
+    if repo_parsed.scheme == "file":
+        log.info(f"Extracting {config['name']}-{config['version']} with local file: {repo_parsed.path}")
+        extract_name = utils.extract_file(archive_path, download_path)
+        package_path = os.path.join(download_path, extract_name)
+        os.rename(package_path, vendor_path)
+    else:
+        log.info(f"Downloading {config['name']}-{config['version']} from {config['repo']}")
+        download_zipfile(package_name, config["repo"], archive_path)
+        verify_checksum(package_name, archive_path, config["sha256"])
+        extract_name = utils.extract_file(archive_path, download_path)
+        package_path = os.path.join(download_path, extract_name)
+        os.rename(package_path, vendor_path)
+
+
 def download_zipfile(package_name, download_url, download_path):
     """下载文件到指定路径"""
     try:

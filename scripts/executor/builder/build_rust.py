@@ -23,7 +23,9 @@ def build_rust_binaries(root_dir):
     """Build all Rust workspace binaries and install to functionsystem/output/bin/."""
     root_dir = os.path.abspath(root_dir)
     output_bin = os.path.join(root_dir, "functionsystem", "output", "bin")
+    output_lib = os.path.join(root_dir, "functionsystem", "output", "lib")
     os.makedirs(output_bin, exist_ok=True)
+    os.makedirs(output_lib, exist_ok=True)
 
     log.info("Building Rust workspace with cargo build --workspace --release")
     utils.sync_command(

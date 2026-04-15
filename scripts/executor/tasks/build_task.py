@@ -127,7 +127,11 @@ def build_functionsystem_bazel(root_dir, args):
 
 def build_rust(args):
     root_dir = args["root_dir"]
+    vendor_path = os.path.join(root_dir, "vendor")
     log.info("Start to build functionsystem with Rust")
+
+    # Download and build etcd (needed for deploy package)
+    _ensure_etcd(vendor_path)
 
     # Rust binaries replace C++ binaries
     builder.build_rust_binaries(root_dir)
@@ -135,3 +139,21 @@ def build_rust(args):
     # Go components remain unchanged
     builder.build_cli(root_dir)
     builder.build_meta_service(root_dir)
+
+
+def _ensure_etcd(vendor_path):
+    """Download etcd source if needed and build it."""
+    import csv
+    etcd_src = os.path.join(vendor_path, "src", "etcd")
+    if not os.path.exists(etcd_src):
+        log.info("Downloading etcd source for Rust build")
+        config_path = os.path.join(vendor_path, "VendorList.csv")
+        download_path = os.path.join(vendor_path, "src")
+        reader = csv.DictReader(open(config_path, mode="r", encoding="utf-8"))
+        for row in reader:
+            if row["name"] == "etcd":
+                tasks.download_vendor_single(row, download_path)
+                break
+        else:
+            raise RuntimeError("etcd not found in VendorList.csv")
+    builder.build_etcd(vendor_path)
