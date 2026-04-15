@@ -1,0 +1,564 @@
+//! Unit-style coverage for [`yr_proxy::busproxy::invocation_handler::InvocationHandler`].
+
+mod common;
+
+use common::new_bus;
+use prost::Message;
+use yr_proto::common::ErrorCode;
+use yr_proto::core_service::{
+    CreateRequest, CreateRequests, CreateResourceGroupRequest, ExitRequest, InvokeRequest,
+    KillRequest,
+};
+use yr_proto::runtime_rpc::{streaming_message, StreamingMessage};
+use yr_proto::runtime_service::{HeartbeatRequest, NotifyRequest};
+use yr_proxy::busproxy::invocation_handler::{InboundAction, InvocationHandler};
+use yr_proxy::state_machine::{InstanceMetadata, InstanceState};
+use yr_proto::resources::MetaData;
+
+#[test]
+fn invoke_to_call_copies_core_fields() {
+    let inv = InvokeRequest {
+        function: "foo".into(),
+        args: vec![],
+        trace_id: "t1".into(),
+        request_id: "r1".into(),
+        return_object_i_ds: vec!["o1".into()],
+        span_id: "s1".into(),
+        ..Default::default()
+    };
+    let msg = InvocationHandler::invoke_to_call(&inv, "mid");
+    assert_eq!(msg.message_id, "mid");
+    let body = msg.body.as_ref().expect("body");
+    let streaming_message::Body::CallReq(call) = body else {
+        panic!("expected CallReq");
+    };
+    assert_eq!(call.function, "foo");
+    assert_eq!(call.trace_id, "t1");
+    assert_eq!(call.request_id, "r1");
+    assert_eq!(call.return_object_i_ds, vec!["o1"]);
+    assert_eq!(call.span_id, "s1");
+}
+
+#[tokio::test]
+async fn create_req_scheduling_failure_returns_create_rsp_and_notify() {
+    let bus = new_bus("node-a", 29001);
+    let create = CreateRequest {
+        function: "f".into(),
+        request_id: "creq-1".into(),
+        ..Default::default()
+    };
+    let msg = StreamingMessage {
+        message_id: "m1".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CreateReq(create)),
+    };
+    let act = InvocationHandler::handle_runtime_inbound("driver-1", msg, &bus).await;
+    let InboundAction::Reply(outs) = act else {
+        panic!("expected Reply");
+    };
+    assert_eq!(outs.len(), 2);
+    let b0 = outs[0].body.as_ref().unwrap();
+    let streaming_message::Body::CreateRsp(rsp) = b0 else {
+        panic!("CreateRsp");
+    };
+    assert_eq!(rsp.code, ErrorCode::ErrInnerSystemError as i32);
+    assert!(!rsp.instance_id.is_empty());
+    let b1 = outs[1].body.as_ref().unwrap();
+    let streaming_message::Body::NotifyReq(n) = b1 else {
+        panic!("NotifyReq");
+    };
+    assert_eq!(n.request_id, "creq-1");
+}
+
+#[tokio::test]
+async fn create_req_respects_designated_instance_id_on_failure() {
+    let bus = new_bus("node-a", 29002);
+    let create = CreateRequest {
+        function: "f".into(),
+        request_id: "r".into(),
+        designated_instance_id: "deadbeef".into(),
+        ..Default::default()
+    };
+    let msg = StreamingMessage {
+        message_id: "mid".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CreateReq(create)),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound("drv", msg, &bus).await
+    else {
+        panic!("Reply");
+    };
+    let streaming_message::Body::CreateRsp(rsp) = outs[0].body.as_ref().unwrap() else {
+        panic!("CreateRsp");
+    };
+    assert_eq!(rsp.instance_id, "deadbeef");
+}
+
+#[tokio::test]
+async fn group_create_empty_requests_succeeds() {
+    let bus = new_bus("node-a", 29003);
+    let batch = CreateRequests {
+        requests: vec![],
+        request_id: "batch".into(),
+        ..Default::default()
+    };
+    let msg = StreamingMessage {
+        message_id: "g0".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CreateReqs(batch)),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound("driver", msg, &bus).await
+    else {
+        panic!("Reply");
+    };
+    let streaming_message::Body::CreateRsps(rsps) = outs[0].body.as_ref().unwrap() else {
+        panic!("CreateRsps");
+    };
+    assert_eq!(rsps.code, ErrorCode::ErrNone as i32);
+    assert!(rsps.instance_i_ds.is_empty());
+    assert!(!rsps.group_id.is_empty());
+}
+
+#[tokio::test]
+async fn group_create_first_schedule_failure_marks_batch_failed() {
+    let bus = new_bus("node-a", 29004);
+    let batch = CreateRequests {
+        requests: vec![
+            CreateRequest {
+                function: "a".into(),
+                request_id: "a1".into(),
+                ..Default::default()
+            },
+            CreateRequest {
+                function: "b".into(),
+                request_id: "b1".into(),
+                ..Default::default()
+            },
+        ],
+        request_id: "batch2".into(),
+        ..Default::default()
+    };
+    let msg = StreamingMessage {
+        message_id: "g1".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CreateReqs(batch)),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound("driver", msg, &bus).await
+    else {
+        panic!("Reply");
+    };
+    let streaming_message::Body::CreateRsps(rsps) = outs[0].body.as_ref().unwrap() else {
+        panic!("CreateRsps");
+    };
+    assert_eq!(rsps.code, ErrorCode::ErrInnerSystemError as i32);
+    assert!(!rsps.message.is_empty());
+}
+
+#[tokio::test]
+async fn r_group_req_returns_stub_ok() {
+    let bus = new_bus("node-a", 29005);
+    let msg = StreamingMessage {
+        message_id: "rg".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::RGroupReq(
+            CreateResourceGroupRequest {
+                request_id: "rr".into(),
+                trace_id: "tt".into(),
+                ..Default::default()
+            },
+        )),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound("d", msg, &bus).await
+    else {
+        panic!("Reply");
+    };
+    assert!(matches!(
+        outs[0].body,
+        Some(streaming_message::Body::RGroupRsp(_))
+    ));
+}
+
+#[tokio::test]
+async fn invoke_req_without_target_stream_replies_call() {
+    let bus = new_bus("node-a", 29006);
+    let msg = StreamingMessage {
+        message_id: "inv".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::InvokeReq(InvokeRequest {
+            function: "g".into(),
+            request_id: "ir1".into(),
+            ..Default::default()
+        })),
+    };
+    let act = InvocationHandler::handle_runtime_inbound("caller", msg, &bus).await;
+    let InboundAction::Reply(outs) = act else {
+        panic!("Reply");
+    };
+    assert!(matches!(outs[0].body, Some(streaming_message::Body::CallReq(_))));
+}
+
+#[tokio::test]
+async fn invoke_req_routes_to_named_runtime_stream() {
+    let bus = new_bus("node-a", 29007);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let target = "target-inst";
+    bus.attach_runtime_stream(target, tx);
+    let msg = StreamingMessage {
+        message_id: "inv2".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::InvokeReq(InvokeRequest {
+            function: "h".into(),
+            request_id: "ir2".into(),
+            instance_id: target.into(),
+            ..Default::default()
+        })),
+    };
+    let act = InvocationHandler::handle_runtime_inbound("driver-x", msg, &bus).await;
+    assert!(matches!(act, InboundAction::None));
+    let got = rx.recv().await.expect("msg").expect("ok");
+    assert!(matches!(got.body, Some(streaming_message::Body::CallReq(_))));
+}
+
+#[tokio::test]
+async fn call_result_from_runtime_returns_none_action() {
+    let bus = new_bus("node-a", 29008);
+    let msg = StreamingMessage {
+        message_id: "cr".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CallResultReq(
+            yr_proto::core_service::CallResult {
+                request_id: "x".into(),
+                code: 0,
+                message: "ok".into(),
+                ..Default::default()
+            },
+        )),
+    };
+    let act = InvocationHandler::handle_runtime_inbound("run-1", msg, &bus).await;
+    assert!(matches!(act, InboundAction::None));
+}
+
+#[tokio::test]
+async fn notify_req_returns_ack() {
+    let bus = new_bus("node-a", 29009);
+    let msg = StreamingMessage {
+        message_id: "n1".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::NotifyReq(NotifyRequest {
+            request_id: "nr".into(),
+            ..Default::default()
+        })),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound("inst", msg, &bus).await
+    else {
+        panic!("Reply");
+    };
+    assert!(matches!(outs[0].body, Some(streaming_message::Body::NotifyRsp(_))));
+}
+
+#[tokio::test]
+async fn kill_req_local_empty_target_uses_caller() {
+    let bus = new_bus("node-a", 29010);
+    let caller = "caller-iid";
+    let meta = InstanceMetadata {
+        id: caller.into(),
+        function_name: "f".into(),
+        tenant: String::new(),
+        node_id: "node-a".into(),
+        runtime_id: "".into(),
+        runtime_port: 0,
+        state: InstanceState::Running,
+        created_at_ms: InstanceMetadata::now_ms(),
+        updated_at_ms: InstanceMetadata::now_ms(),
+        group_id: None,
+        trace_id: String::new(),
+        resources: Default::default(),
+        etcd_kv_version: None,
+        etcd_mod_revision: None,
+    };
+    bus.instance_ctrl_ref().insert_metadata(meta);
+    let msg = StreamingMessage {
+        message_id: "k1".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::KillReq(KillRequest {
+            instance_id: String::new(),
+            signal: 1,
+            ..Default::default()
+        })),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound(caller, msg, &bus).await
+    else {
+        panic!("Reply");
+    };
+    assert!(matches!(outs[0].body, Some(streaming_message::Body::KillRsp(_))));
+}
+
+#[tokio::test]
+async fn kill_req_local_explicit_target() {
+    let bus = new_bus("node-a", 29011);
+    let tid = "tgt-kill";
+    let meta = InstanceMetadata {
+        id: tid.into(),
+        function_name: "f".into(),
+        tenant: String::new(),
+        node_id: "node-a".into(),
+        runtime_id: "r".into(),
+        runtime_port: 0,
+        state: InstanceState::Running,
+        created_at_ms: InstanceMetadata::now_ms(),
+        updated_at_ms: InstanceMetadata::now_ms(),
+        group_id: None,
+        trace_id: String::new(),
+        resources: Default::default(),
+        etcd_kv_version: None,
+        etcd_mod_revision: None,
+    };
+    bus.instance_ctrl_ref().insert_metadata(meta);
+    let msg = StreamingMessage {
+        message_id: "k2".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::KillReq(KillRequest {
+            instance_id: tid.into(),
+            signal: 2,
+            ..Default::default()
+        })),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound("other", msg, &bus).await
+    else {
+        panic!("Reply");
+    };
+    let streaming_message::Body::KillRsp(k) = outs[0].body.as_ref().unwrap() else {
+        panic!("KillRsp");
+    };
+    assert_eq!(k.code, ErrorCode::ErrNone as i32);
+}
+
+#[tokio::test]
+async fn exit_req_normal_triggers_kill_signal_1() {
+    let bus = new_bus("node-a", 29012);
+    let iid = "exit-ok";
+    bus.instance_ctrl_ref().insert_metadata(InstanceMetadata {
+        id: iid.into(),
+        function_name: "f".into(),
+        tenant: String::new(),
+        node_id: "node-a".into(),
+        runtime_id: "".into(),
+        runtime_port: 0,
+        state: InstanceState::Running,
+        created_at_ms: InstanceMetadata::now_ms(),
+        updated_at_ms: InstanceMetadata::now_ms(),
+        group_id: None,
+        trace_id: String::new(),
+        resources: Default::default(),
+        etcd_kv_version: None,
+        etcd_mod_revision: None,
+    });
+    let msg = StreamingMessage {
+        message_id: "e0".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::ExitReq(ExitRequest {
+            code: 0,
+            message: String::new(),
+            ..Default::default()
+        })),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound(iid, msg, &bus).await
+    else {
+        panic!("Reply");
+    };
+    assert!(matches!(outs[0].body, Some(streaming_message::Body::ExitRsp(_))));
+}
+
+#[tokio::test]
+async fn exit_req_error_applies_failed_exit() {
+    let bus = new_bus("node-a", 29013);
+    let iid = "exit-bad";
+    bus.instance_ctrl_ref().insert_metadata(InstanceMetadata {
+        id: iid.into(),
+        function_name: "f".into(),
+        tenant: String::new(),
+        node_id: "node-a".into(),
+        runtime_id: "".into(),
+        runtime_port: 0,
+        state: InstanceState::Running,
+        created_at_ms: InstanceMetadata::now_ms(),
+        updated_at_ms: InstanceMetadata::now_ms(),
+        group_id: None,
+        trace_id: String::new(),
+        resources: Default::default(),
+        etcd_kv_version: None,
+        etcd_mod_revision: None,
+    });
+    let msg = StreamingMessage {
+        message_id: "e1".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::ExitReq(ExitRequest {
+            code: 1,
+            message: "boom".into(),
+            ..Default::default()
+        })),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound(iid, msg, &bus).await
+    else {
+        panic!("Reply");
+    };
+    assert!(matches!(outs[0].body, Some(streaming_message::Body::ExitRsp(_))));
+    let st = bus
+        .instance_ctrl_ref()
+        .get(iid)
+        .expect("meta")
+        .state;
+    assert_eq!(st, InstanceState::Failed);
+}
+
+#[tokio::test]
+async fn heartbeat_req_replies() {
+    let bus = new_bus("node-a", 29014);
+    let msg = StreamingMessage {
+        message_id: "hb".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::HeartbeatReq(HeartbeatRequest::default())),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound("x", msg, &bus).await
+    else {
+        panic!("Reply");
+    };
+    assert!(matches!(
+        outs[0].body,
+        Some(streaming_message::Body::HeartbeatRsp(_))
+    ));
+}
+
+#[tokio::test]
+async fn call_rsp_and_call_result_ack_are_noops() {
+    let bus = new_bus("node-a", 29015);
+    for body in [
+        streaming_message::Body::CallRsp(Default::default()),
+        streaming_message::Body::CallResultAck(Default::default()),
+    ] {
+        let msg = StreamingMessage {
+            message_id: "z".into(),
+            meta_data: Default::default(),
+            body: Some(body),
+        };
+        let act = InvocationHandler::handle_runtime_inbound("z", msg, &bus).await;
+        assert!(matches!(act, InboundAction::None));
+    }
+}
+
+#[tokio::test]
+async fn notify_rsp_is_noop() {
+    let bus = new_bus("node-a", 29016);
+    let msg = StreamingMessage {
+        message_id: "q".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::NotifyRsp(Default::default())),
+    };
+    let act = InvocationHandler::handle_runtime_inbound("q", msg, &bus).await;
+    assert!(matches!(act, InboundAction::None));
+}
+
+#[tokio::test]
+async fn checkpoint_req_is_unhandled_none() {
+    let bus = new_bus("node-a", 29017);
+    let msg = StreamingMessage {
+        message_id: "cp".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CheckpointReq(Default::default())),
+    };
+    let act = InvocationHandler::handle_runtime_inbound("cp", msg, &bus).await;
+    assert!(matches!(act, InboundAction::None));
+}
+
+#[tokio::test]
+async fn recover_req_is_unhandled_none() {
+    let bus = new_bus("node-a", 29018);
+    let msg = StreamingMessage {
+        message_id: "rv".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::RecoverReq(Default::default())),
+    };
+    let act = InvocationHandler::handle_runtime_inbound("rv", msg, &bus).await;
+    assert!(matches!(act, InboundAction::None));
+}
+
+#[tokio::test]
+async fn empty_body_yields_none() {
+    let bus = new_bus("node-a", 29019);
+    let msg = StreamingMessage {
+        message_id: "eb".into(),
+        meta_data: Default::default(),
+        body: None,
+    };
+    let act = InvocationHandler::handle_runtime_inbound("eb", msg, &bus).await;
+    assert!(matches!(act, InboundAction::None));
+}
+
+#[tokio::test]
+async fn preserves_nonempty_message_id_on_invoke() {
+    let bus = new_bus("node-a", 29020);
+    let msg = StreamingMessage {
+        message_id: "stable-mid".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::InvokeReq(InvokeRequest {
+            function: "f".into(),
+            request_id: "r".into(),
+            ..Default::default()
+        })),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound("c", msg, &bus).await
+    else {
+        panic!("Reply");
+    };
+    assert_eq!(outs[0].message_id, "stable-mid");
+}
+
+#[test]
+fn metadata_wire_decode_invoke_type_create_instance_zero() {
+    let md = MetaData::decode(&[0x08, 0x00][..]).expect("decode");
+    assert_eq!(md.invoke_type, 0);
+}
+
+#[test]
+fn metadata_wire_decode_invoke_type_value_two_stateless_init_tag() {
+    let md = MetaData::decode(&[0x08, 0x02][..]).expect("decode");
+    assert_eq!(md.invoke_type, 2);
+}
+
+#[test]
+fn metadata_round_trip_invoke_type_via_prost() {
+    let mut buf = Vec::new();
+    let md = MetaData {
+        invoke_type: yr_proto::resources::InvokeType::CreateInstance as i32,
+        function_meta: None,
+        config: None,
+    };
+    md.encode(&mut buf).expect("encode");
+    let got = MetaData::decode(&buf[..]).expect("decode");
+    assert_eq!(got.invoke_type, yr_proto::resources::InvokeType::CreateInstance as i32);
+}
+
+#[test]
+fn metadata_round_trip_preserves_numeric_invoke_type_extensions() {
+    let mut buf = Vec::new();
+    MetaData {
+        invoke_type: 7,
+        function_meta: None,
+        config: None,
+    }
+    .encode(&mut buf)
+    .unwrap();
+    let md = MetaData::decode(&buf[..]).expect("decode");
+    assert_eq!(md.invoke_type, 7);
+}

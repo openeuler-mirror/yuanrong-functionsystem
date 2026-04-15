@@ -1,0 +1,22 @@
+[package]
+name = "yr-metastore-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+yr-common = { workspace = true }
+yr-proto = { workspace = true }
+
+tokio = { workspace = true }
+tokio-stream = { version = "0.1", features = ["sync"] }
+etcd-client = { workspace = true, features = ["pub-response-field"] }
+tonic = { workspace = true }
+prost = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures = { workspace = true }
+async-stream = "0.3"

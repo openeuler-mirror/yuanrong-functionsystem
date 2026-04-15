@@ -1,0 +1,392 @@
+use crate::container::detect_accelerators;
+use crate::state::RuntimeManagerState;
+use anyhow::Context;
+use prometheus::{Encoder, Gauge, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder};
+use serde::Serialize;
+use std::collections::HashSet;
+use std::ffi::CString;
+use std::fs;
+use std::path::Path;
+use std::sync::{Arc, OnceLock};
+use std::time::Instant;
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct NodeMetricsSample {
+    pub cpu_usage_ratio: f64,
+    pub memory_total_kb: u64,
+    pub memory_available_kb: u64,
+    pub memory_used_ratio: f64,
+    pub disk_total_bytes: u64,
+    pub disk_avail_bytes: u64,
+    pub disk_used_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InstanceMetric {
+    pub instance_id: String,
+    pub runtime_id: String,
+    pub pid: i32,
+    pub rss_kb: u64,
+    pub port: u16,
+    pub net_rx_bytes: u64,
+    pub net_tx_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MetricsSnapshot {
+    pub node_id: String,
+    pub node: NodeMetricsSample,
+    pub instances: Vec<InstanceMetric>,
+    pub accelerators: crate::container::AcceleratorSnapshot,
+}
+
+pub struct MetricsCollector {
+    last_cpu: Option<(Instant, CpuStat)>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CpuStat {
+    idle: u64,
+    total: u64,
+}
+
+impl MetricsCollector {
+    pub fn new() -> Self {
+        Self { last_cpu: None }
+    }
+
+    fn read_proc_stat_cpu() -> anyhow::Result<CpuStat> {
+        let line = fs::read_to_string("/proc/stat")
+            .context("read /proc/stat")?
+            .lines()
+            .next()
+            .context("empty /proc/stat")?
+            .to_string();
+        let mut parts = line.split_whitespace();
+        let _cpu = parts.next();
+        let mut nums = Vec::new();
+        for p in parts {
+            if let Ok(v) = p.parse::<u64>() {
+                nums.push(v);
+            }
+        }
+        if nums.len() < 4 {
+            anyhow::bail!("unexpected /proc/stat cpu line");
+        }
+        let idle = nums[3] + nums.get(4).copied().unwrap_or(0);
+        let total: u64 = nums.iter().sum();
+        Ok(CpuStat { idle, total })
+    }
+
+    fn sample_cpu_usage_ratio(&mut self) -> f64 {
+        let now = Instant::now();
+        let cur = Self::read_proc_stat_cpu().unwrap_or_default();
+        let ratio = self
+            .last_cpu
+            .as_ref()
+            .and_then(|(t0, prev)| {
+                if now.duration_since(*t0) < std::time::Duration::from_millis(100) {
+                    return None;
+                }
+                let didle = cur.idle.saturating_sub(prev.idle);
+                let dtotal = cur.total.saturating_sub(prev.total);
+                if dtotal == 0 {
+                    return None;
+                }
+                Some((1.0 - (didle as f64 / dtotal as f64)).clamp(0.0, 1.0))
+            })
+            .unwrap_or(0.0);
+        self.last_cpu = Some((now, cur));
+        ratio
+    }
+
+    fn meminfo_kb(keys: &[&str]) -> anyhow::Result<std::collections::HashMap<String, u64>> {
+        let text = fs::read_to_string("/proc/meminfo").context("read /proc/meminfo")?;
+        let mut m = std::collections::HashMap::new();
+        for line in text.lines() {
+            for k in keys {
+                if line.starts_with(&format!("{k}:")) {
+                    let v = line
+                        .split_whitespace()
+                        .nth(1)
+                        .and_then(|s| s.parse().ok());
+                    if let Some(v) = v {
+                        m.insert((*k).to_string(), v);
+                    }
+                }
+            }
+        }
+        Ok(m)
+    }
+
+    fn sample_memory() -> (u64, u64, f64) {
+        let Ok(map) = Self::meminfo_kb(&["MemTotal", "MemAvailable"]) else {
+            return (0, 0, 0.0);
+        };
+        let total = *map.get("MemTotal").unwrap_or(&0);
+        let avail = *map.get("MemAvailable").unwrap_or(&0);
+        let used_ratio = if total > 0 {
+            ((total.saturating_sub(avail)) as f64 / total as f64).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (total, avail, used_ratio)
+    }
+
+    fn sample_disk_root() -> (u64, u64, f64) {
+        let mut vfs: libc::statvfs = unsafe { std::mem::zeroed() };
+        let root = CString::new("/").unwrap();
+        let rc = unsafe { libc::statvfs(root.as_ptr(), &mut vfs) };
+        if rc != 0 {
+            return (0, 0, 0.0);
+        }
+        let frsize = vfs.f_frsize as u64;
+        let blocks = vfs.f_blocks as u64;
+        let bavail = vfs.f_bavail as u64;
+        let total = blocks.saturating_mul(frsize);
+        let avail = bavail.saturating_mul(frsize);
+        let used_ratio = if total > 0 {
+            ((total.saturating_sub(avail)) as f64 / total as f64).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        (total, avail, used_ratio)
+    }
+
+    fn net_bytes_for_pid(pid: i32) -> (u64, u64) {
+        let path = format!("/proc/{pid}/net/dev");
+        let Ok(text) = fs::read_to_string(path) else {
+            return (0, 0);
+        };
+        let mut rx = 0u64;
+        let mut tx = 0u64;
+        for line in text.lines().skip(2) {
+            let cols: Vec<&str> = line.trim().split_whitespace().collect();
+            if cols.len() < 10 {
+                continue;
+            }
+            if cols[0].starts_with("lo:") {
+                continue;
+            }
+            let Ok(rxb) = cols[1].parse::<u64>() else {
+                continue;
+            };
+            let Ok(txb) = cols[9].parse::<u64>() else {
+                continue;
+            };
+            rx += rxb;
+            tx += txb;
+        }
+        (rx, tx)
+    }
+
+    fn rss_kb_for_pid(pid: i32) -> u64 {
+        let path = format!("/proc/{pid}/status");
+        let Ok(text) = fs::read_to_string(path) else {
+            return 0;
+        };
+        for line in text.lines() {
+            if line.starts_with("VmRSS:") {
+                if let Some(kb) = line.split_whitespace().nth(1).and_then(|s| s.parse().ok()) {
+                    return kb;
+                }
+            }
+        }
+        0
+    }
+
+    pub fn collect(&mut self, state: &Arc<RuntimeManagerState>) -> MetricsSnapshot {
+        let cpu_usage_ratio = self.sample_cpu_usage_ratio();
+        let (memory_total_kb, memory_available_kb, memory_used_ratio) = Self::sample_memory();
+        let (disk_total_bytes, disk_avail_bytes, disk_used_ratio) = Self::sample_disk_root();
+
+        let mut instances = Vec::new();
+        for pid in state.list_running_pids() {
+            if let Some(rid) = state.runtime_id_for_pid(pid) {
+                if let Some(p) = state.get_by_runtime(&rid) {
+                    if Path::new(&format!("/proc/{pid}")).exists() {
+                        let (net_rx_bytes, net_tx_bytes) = Self::net_bytes_for_pid(pid);
+                        instances.push(InstanceMetric {
+                            instance_id: p.instance_id.clone(),
+                            runtime_id: p.runtime_id.clone(),
+                            pid,
+                            rss_kb: Self::rss_kb_for_pid(pid),
+                            port: p.port,
+                            net_rx_bytes,
+                            net_tx_bytes,
+                        });
+                    }
+                }
+            }
+        }
+
+        let accelerators = detect_accelerators();
+
+        MetricsSnapshot {
+            node_id: state.config.node_id.clone(),
+            node: NodeMetricsSample {
+                cpu_usage_ratio,
+                memory_total_kb,
+                memory_available_kb,
+                memory_used_ratio,
+                disk_total_bytes,
+                disk_avail_bytes,
+                disk_used_ratio,
+            },
+            instances,
+            accelerators,
+        }
+    }
+}
+
+struct PromBundle {
+    reg: Registry,
+    node_cpu: Gauge,
+    node_mem: Gauge,
+    node_disk: Gauge,
+    inst_rss: IntGaugeVec,
+    inst_rx: IntGaugeVec,
+    inst_tx: IntGaugeVec,
+    accel_nvidia: IntGauge,
+    accel_davinci: IntGauge,
+}
+
+static PROM: OnceLock<PromBundle> = OnceLock::new();
+
+fn prom() -> &'static PromBundle {
+    PROM.get_or_init(|| {
+        let reg = Registry::new();
+        let node_cpu = Gauge::with_opts(Opts::new(
+            "yr_rm_node_cpu_usage_ratio",
+            "Host CPU busy ratio from /proc/stat",
+        ))
+        .unwrap();
+        let node_mem = Gauge::with_opts(Opts::new(
+            "yr_rm_node_memory_used_ratio",
+            "Host memory used ratio from /proc/meminfo",
+        ))
+        .unwrap();
+        let node_disk = Gauge::with_opts(Opts::new(
+            "yr_rm_node_disk_used_ratio",
+            "Root filesystem used ratio",
+        ))
+        .unwrap();
+        let inst_rss = IntGaugeVec::new(
+            Opts::new(
+                "yr_rm_instance_rss_bytes",
+                "Runtime process RSS (approx from VmRSS)",
+            ),
+            &["node_id", "instance_id", "runtime_id"],
+        )
+        .unwrap();
+        let inst_rx = IntGaugeVec::new(
+            Opts::new(
+                "yr_rm_instance_net_rx_bytes",
+                "Sum of per-interface RX bytes for process network ns",
+            ),
+            &["node_id", "instance_id", "runtime_id"],
+        )
+        .unwrap();
+        let inst_tx = IntGaugeVec::new(
+            Opts::new(
+                "yr_rm_instance_net_tx_bytes",
+                "Sum of per-interface TX bytes for process network ns",
+            ),
+            &["node_id", "instance_id", "runtime_id"],
+        )
+        .unwrap();
+        let accel_nvidia = IntGauge::with_opts(Opts::new(
+            "yr_rm_accelerator_nvidia_devices",
+            "Count of /dev/nvidia* nodes",
+        ))
+        .unwrap();
+        let accel_davinci = IntGauge::with_opts(Opts::new(
+            "yr_rm_accelerator_davinci_devices",
+            "Count of /dev/davinci* nodes",
+        ))
+        .unwrap();
+        reg.register(Box::new(node_cpu.clone())).ok();
+        reg.register(Box::new(node_mem.clone())).ok();
+        reg.register(Box::new(node_disk.clone())).ok();
+        reg.register(Box::new(inst_rss.clone())).ok();
+        reg.register(Box::new(inst_rx.clone())).ok();
+        reg.register(Box::new(inst_tx.clone())).ok();
+        reg.register(Box::new(accel_nvidia.clone())).ok();
+        reg.register(Box::new(accel_davinci.clone())).ok();
+        PromBundle {
+            reg,
+            node_cpu,
+            node_mem,
+            node_disk,
+            inst_rss,
+            inst_rx,
+            inst_tx,
+            accel_nvidia,
+            accel_davinci,
+        }
+    })
+}
+
+/// Updates Prometheus gauges from a snapshot; clears stale per-instance label sets.
+pub fn apply_prometheus_snapshot(snap: &MetricsSnapshot) {
+    let p = prom();
+    p.node_cpu.set(snap.node.cpu_usage_ratio);
+    p.node_mem.set(snap.node.memory_used_ratio);
+    p.node_disk.set(snap.node.disk_used_ratio);
+    p.accel_nvidia
+        .set(i64::from(snap.accelerators.nvidia));
+    p.accel_davinci
+        .set(i64::from(snap.accelerators.davinci));
+
+    let mut seen = HashSet::new();
+    for i in &snap.instances {
+        let key = format!("{}|{}|{}", snap.node_id, i.instance_id, i.runtime_id);
+        seen.insert(key.clone());
+        p.inst_rss
+            .with_label_values(&[
+                snap.node_id.as_str(),
+                i.instance_id.as_str(),
+                i.runtime_id.as_str(),
+            ])
+            .set((i.rss_kb.saturating_mul(1024)) as i64);
+        p.inst_rx
+            .with_label_values(&[
+                snap.node_id.as_str(),
+                i.instance_id.as_str(),
+                i.runtime_id.as_str(),
+            ])
+            .set(i.net_rx_bytes as i64);
+        p.inst_tx
+            .with_label_values(&[
+                snap.node_id.as_str(),
+                i.instance_id.as_str(),
+                i.runtime_id.as_str(),
+            ])
+            .set(i.net_tx_bytes as i64);
+    }
+
+    // Remove series for instances that disappeared (best-effort: track prior run).
+    static PREV: OnceLock<std::sync::Mutex<HashSet<String>>> = OnceLock::new();
+    let prev = PREV.get_or_init(|| std::sync::Mutex::new(HashSet::new()));
+    let mut prev_g = prev.lock().unwrap();
+    for k in prev_g.clone().difference(&seen) {
+        let parts: Vec<&str> = k.split('|').collect();
+        if parts.len() == 3 {
+            let _ = p.inst_rss.remove_label_values(&[parts[0], parts[1], parts[2]]);
+            let _ = p.inst_rx.remove_label_values(&[parts[0], parts[1], parts[2]]);
+            let _ = p.inst_tx.remove_label_values(&[parts[0], parts[1], parts[2]]);
+        }
+    }
+    *prev_g = seen;
+}
+
+pub fn prometheus_text() -> String {
+    let p = prom();
+    let encoder = TextEncoder::new();
+    let mut buf = Vec::new();
+    if encoder.encode(&p.reg.gather(), &mut buf).is_ok() {
+        String::from_utf8_lossy(&buf).into_owned()
+    } else {
+        String::new()
+    }
+}

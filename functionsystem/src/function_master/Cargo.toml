@@ -1,0 +1,51 @@
+[package]
+name = "yr-master"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "yr_master"
+path = "src/lib.rs"
+
+[[bin]]
+name = "yr-master"
+path = "src/main.rs"
+
+[[bin]]
+name = "function_master"
+path = "src/main.rs"
+
+[dependencies]
+yr-common = { workspace = true }
+yr-proto = { workspace = true }
+yr-metastore-client = { workspace = true }
+yr-metastore-server = { path = "../meta_store" }
+
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+# Pin to axum 0.7 for compatibility with tonic's router stack (tonic 0.13 pulls axum 0.7).
+axum = "0.7"
+tower-http = { version = "0.5", features = ["trace"] }
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
+async-trait = { workspace = true }
+etcd-client = { workspace = true }
+uuid = { workspace = true }
+prost = { workspace = true }
+futures = { workspace = true }
+
+[dev-dependencies]
+clap = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+serde_json = { workspace = true }
+prost = { workspace = true }
+yr-proto = { workspace = true }

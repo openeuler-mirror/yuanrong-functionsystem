@@ -1,2 +1,0 @@
-aux_source_directory(${CMAKE_CURRENT_LIST_DIR} DOMAIN_SCHEDULER_DRIVER_SRCS)
-target_sources(domain_scheduler_lib PRIVATE ${DOMAIN_SCHEDULER_DRIVER_SRCS})

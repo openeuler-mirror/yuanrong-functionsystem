@@ -1,0 +1,184 @@
+syntax = "proto3";
+
+package yr.internal.metastore;
+
+// gRPC façade for yr-metastore-server → etcd. Logical keys are prefixed server-side;
+// this wire format uses physical keys as sent to etcd after table prefixing.
+
+service MetaStoreService {
+  rpc Put (PutKvRequest) returns (PutKvResponse);
+  rpc Get (GetKvRequest) returns (GetKvResponse);
+  rpc GetPrefix (GetPrefixRequest) returns (GetKvResponse);
+  rpc Delete (DeleteKvRequest) returns (DeleteKvResponse);
+  rpc DeletePrefix (DeletePrefixRequest) returns (DeletePrefixResponse);
+
+  rpc Watch (stream WatchClientMsg) returns (stream WatchServerMsg);
+
+  rpc GrantLease (GrantLeaseRequest) returns (GrantLeaseResponse);
+  rpc RevokeLease (RevokeLeaseRequest) returns (RevokeLeaseResponse);
+  rpc KeepAliveOnce (KeepAliveOnceRequest) returns (KeepAliveOnceResponse);
+  rpc KeepAlive (stream KeepAliveClientMsg) returns (stream KeepAliveServerMsg);
+
+  rpc Campaign (CampaignRequest) returns (CampaignResponse);
+  rpc Leader (LeaderRequest) returns (LeaderResponse);
+  rpc Resign (ResignRequest) returns (ResignResponse);
+  rpc Observe (ObserveRequest) returns (stream LeaderResponse);
+
+  rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+message PutKvRequest {
+  bytes key = 1;
+  bytes value = 2;
+  int64 lease = 3;
+}
+
+message PutKvResponse {}
+
+message GetKvRequest {
+  bytes key = 1;
+}
+
+message MsKeyValue {
+  bytes key = 1;
+  bytes value = 2;
+  int64 create_revision = 3;
+  int64 mod_revision = 4;
+  int64 version = 5;
+  int64 lease = 6;
+}
+
+message GetKvResponse {
+  repeated MsKeyValue kvs = 1;
+  bool more = 2;
+  int64 count = 3;
+  int64 header_revision = 4;
+}
+
+message GetPrefixRequest {
+  bytes prefix = 1;
+  int64 limit = 2;
+}
+
+message DeleteKvRequest {
+  bytes key = 1;
+}
+
+message DeleteKvResponse {
+  int64 deleted = 1;
+}
+
+message DeletePrefixRequest {
+  bytes prefix = 1;
+}
+
+message DeletePrefixResponse {
+  int64 deleted = 1;
+}
+
+message WatchClientMsg {
+  oneof union {
+    WatchCreate create = 1;
+    int64 cancel_watch_id = 2;
+  }
+}
+
+message WatchCreate {
+  bytes key = 1;
+  bool prefix = 2;
+  bool prev_kv = 3;
+  int64 start_revision = 4;
+}
+
+enum WatchEventType {
+  WATCH_PUT = 0;
+  WATCH_DELETE = 1;
+}
+
+message WatchEventMsg {
+  WatchEventType event_type = 1;
+  bytes key = 2;
+  bytes value = 3;
+  bytes prev_value = 4;
+  int64 mod_revision = 5;
+}
+
+message WatchServerMsg {
+  int64 watch_id = 1;
+  WatchEventMsg event = 2;
+  bool canceled = 3;
+  string cancel_reason = 4;
+}
+
+message GrantLeaseRequest {
+  int64 ttl = 1;
+}
+
+message GrantLeaseResponse {
+  int64 id = 1;
+  int64 ttl = 2;
+}
+
+message RevokeLeaseRequest {
+  int64 id = 1;
+}
+
+message RevokeLeaseResponse {}
+
+message KeepAliveOnceRequest {
+  int64 id = 1;
+}
+
+message KeepAliveOnceResponse {
+  int64 id = 1;
+  int64 ttl = 2;
+}
+
+message KeepAliveClientMsg {
+  int64 id = 1;
+}
+
+message KeepAliveServerMsg {
+  int64 id = 1;
+  int64 ttl = 2;
+}
+
+message CampaignRequest {
+  bytes name = 1;
+  bytes value = 2;
+  int64 lease = 3;
+}
+
+message CampaignResponse {
+  bytes leader_key = 1;
+}
+
+message LeaderRequest {
+  bytes name = 1;
+}
+
+message LeaderResponse {
+  bytes kv_key = 1;
+  bytes kv_value = 2;
+  int64 mod_revision = 3;
+}
+
+message ResignRequest {
+  bytes name = 1;
+  bytes key = 2;
+  int64 rev = 3;
+  int64 lease_id = 4;
+}
+
+message ResignResponse {}
+
+message ObserveRequest {
+  bytes name = 1;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  bool ok = 1;
+  string detail = 2;
+}

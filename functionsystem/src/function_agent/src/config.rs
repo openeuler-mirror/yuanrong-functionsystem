@@ -1,0 +1,317 @@
+use clap::builder::BoolishValueParser;
+use clap::Parser;
+
+/// C++ `function_agent` flags without Rust behavior yet (accepted for `install.sh`).
+#[derive(Parser, Debug, Clone)]
+#[allow(dead_code)]
+pub struct AgentCppIgnored {
+    #[arg(long = "agent_uid", default_value = "")]
+    pub agent_uid: String,
+    #[arg(long = "alias", default_value = "")]
+    pub alias: String,
+    #[arg(long = "log_config", default_value = "")]
+    pub log_config: String,
+    #[arg(long = "litebus_thread_num", default_value = "")]
+    pub litebus_thread_num: String,
+    #[arg(long = "runtime_dir", default_value = "")]
+    pub runtime_dir: String,
+    #[arg(long = "runtime_home_dir", default_value = "")]
+    pub runtime_home_dir: String,
+    #[arg(long = "runtime_std_log_dir", default_value = "")]
+    pub runtime_std_log_dir: String,
+    #[arg(long = "runtime_config_dir", default_value = "")]
+    pub runtime_config_dir: String,
+    #[arg(long = "enable_separated_redirect_runtime_std", default_value = "")]
+    pub enable_separated_redirect_runtime_std: String,
+    #[arg(long = "user_log_export_mode", default_value = "")]
+    pub user_log_export_mode: String,
+    #[arg(long = "npu_collection_mode", default_value = "")]
+    pub npu_collection_mode: String,
+    #[arg(long = "gpu_collection_enable", default_value = "")]
+    pub gpu_collection_enable: String,
+    #[arg(long = "proxy_ip", default_value = "")]
+    pub proxy_ip: String,
+    #[arg(long = "proxy_grpc_server_port", default_value = "")]
+    pub proxy_grpc_server_port: String,
+    #[arg(long = "setCmdCred", default_value = "")]
+    pub set_cmd_cred: String,
+    #[arg(long = "python_dependency_path", default_value = "")]
+    pub python_dependency_path: String,
+    #[arg(long = "python_log_config_path", default_value = "")]
+    pub python_log_config_path: String,
+    #[arg(long = "java_system_property", default_value = "")]
+    pub java_system_property: String,
+    #[arg(long = "java_system_library_path", default_value = "")]
+    pub java_system_library_path: String,
+    #[arg(long = "host_ip", default_value = "")]
+    pub host_ip: String,
+    #[arg(long = "enable_metrics", default_value = "")]
+    pub enable_metrics: String,
+    #[arg(long = "metrics_config", default_value = "")]
+    pub metrics_config: String,
+    #[arg(long = "metrics_config_file", default_value = "")]
+    pub metrics_config_file: String,
+    #[arg(long = "system_timeout", default_value = "")]
+    pub system_timeout: String,
+    #[arg(long = "metrics_collector_type", default_value = "")]
+    pub metrics_collector_type: String,
+    #[arg(long = "proc_metrics_cpu", default_value = "")]
+    pub proc_metrics_cpu: String,
+    #[arg(long = "is_protomsg_to_runtime", default_value = "")]
+    pub is_protomsg_to_runtime: String,
+    #[arg(long = "massif_enable", default_value = "")]
+    pub massif_enable: String,
+    #[arg(long = "memory_detection_interval", default_value = "")]
+    pub memory_detection_interval: String,
+    #[arg(long = "runtime_ds_connect_timeout", default_value = "")]
+    pub runtime_ds_connect_timeout: String,
+    #[arg(long = "runtime_direct_connection_enable", default_value = "")]
+    pub runtime_direct_connection_enable: String,
+    #[arg(long = "ssl_enable", default_value = "")]
+    pub ssl_enable: String,
+    #[arg(long = "ssl_base_path", default_value = "")]
+    pub ssl_base_path: String,
+    #[arg(long = "ssl_root_file", default_value = "")]
+    pub ssl_root_file: String,
+    #[arg(long = "ssl_cert_file", default_value = "")]
+    pub ssl_cert_file: String,
+    #[arg(long = "ssl_key_file", default_value = "")]
+    pub ssl_key_file: String,
+    #[arg(long = "etcd_auth_type", default_value = "")]
+    pub etcd_auth_type: String,
+    #[arg(long = "etcd_root_ca_file", default_value = "")]
+    pub etcd_root_ca_file: String,
+    #[arg(long = "etcd_cert_file", default_value = "")]
+    pub etcd_cert_file: String,
+    #[arg(long = "etcd_key_file", default_value = "")]
+    pub etcd_key_file: String,
+    #[arg(long = "etcd_ssl_base_path", default_value = "")]
+    pub etcd_ssl_base_path: String,
+    #[arg(long = "runtime_default_config", default_value = "")]
+    pub runtime_default_config: String,
+    #[arg(long = "proc_metrics_memory", default_value = "")]
+    pub proc_metrics_memory: String,
+    #[arg(long = "enable_dis_conv_call_stack", default_value = "")]
+    pub enable_dis_conv_call_stack: String,
+    #[arg(long = "data_system_enable", default_value = "")]
+    pub data_system_enable: String,
+    #[arg(long = "runtime_instance_debug_enable", default_value = "")]
+    pub runtime_instance_debug_enable: String,
+    #[arg(long = "log_expiration_enable", default_value = "")]
+    pub log_expiration_enable: String,
+    #[arg(long = "log_expiration_time_threshold", default_value = "")]
+    pub log_expiration_time_threshold: String,
+    #[arg(long = "log_expiration_cleanup_interval", default_value = "")]
+    pub log_expiration_cleanup_interval: String,
+    #[arg(long = "log_expiration_max_file_count", default_value = "")]
+    pub log_expiration_max_file_count: String,
+    #[arg(long = "user_log_auto_flush_interval_ms", default_value = "")]
+    pub user_log_auto_flush_interval_ms: String,
+    #[arg(long = "user_log_buffer_flush_threshold", default_value = "")]
+    pub user_log_buffer_flush_threshold: String,
+    #[arg(long = "user_log_rolling_size_limit_mb", default_value = "")]
+    pub user_log_rolling_size_limit_mb: String,
+    #[arg(long = "user_log_rolling_file_count_limit", default_value = "")]
+    pub user_log_rolling_file_count_limit: String,
+    #[arg(long = "npu_collection_enable", default_value = "")]
+    pub npu_collection_enable: String,
+    #[arg(long = "runtime_ld_library_path", default_value = "")]
+    pub runtime_ld_library_path: String,
+    #[arg(long = "runtime_log_level", default_value = "")]
+    pub runtime_log_level: String,
+    #[arg(long = "runtime_max_log_size", default_value = "")]
+    pub runtime_max_log_size: String,
+    #[arg(long = "runtime_max_log_file_num", default_value = "")]
+    pub runtime_max_log_file_num: String,
+    #[arg(long = "local_node_id", default_value = "")]
+    pub local_node_id: String,
+}
+
+#[derive(Parser, Debug, Clone)]
+#[command(name = "function_agent", about = "openYuanrong function agent (Rust)")]
+pub struct Config {
+    #[arg(
+        long = "ip",
+        default_value = "0.0.0.0",
+        aliases = ["host", "host-ip"]
+    )]
+    pub host: String,
+
+    /// HTTP probe port (C++ `--port` in agent+RM combined start).
+    #[arg(long = "port", default_value_t = 18403)]
+    pub port: u16,
+
+    #[arg(long = "node_id", default_value = "", aliases = ["node-id"])]
+    pub node_id: String,
+
+    #[arg(
+        long = "local_scheduler_address",
+        default_value = "http://127.0.0.1:8402",
+        aliases = ["local-scheduler-address"]
+    )]
+    pub local_scheduler_address: String,
+
+    #[arg(
+        long = "agent_listen_port",
+        default_value_t = 22799,
+        aliases = ["agent-listen-port"]
+    )]
+    pub agent_listen_port: u16,
+
+    #[arg(long = "s3_endpoint", default_value = "", aliases = ["s3-endpoint"])]
+    pub s3_endpoint: String,
+
+    #[arg(long = "s3_bucket", default_value = "", aliases = ["s3-bucket"])]
+    pub s3_bucket: String,
+
+    #[arg(
+        long = "code_package_dir",
+        default_value = "/tmp/yr-agent-code",
+        aliases = ["code-package-dir"]
+    )]
+    pub code_package_dir: String,
+
+    #[arg(
+        long = "runtime_manager_address",
+        default_value = "",
+        aliases = ["runtime-manager-address"]
+    )]
+    pub runtime_manager_address: String,
+
+    #[arg(
+        long = "data_system_host",
+        default_value = "127.0.0.1",
+        aliases = ["data-system-host"]
+    )]
+    pub data_system_host: String,
+
+    #[arg(
+        long = "data_system_port",
+        default_value_t = 31501,
+        aliases = ["data-system-port"]
+    )]
+    pub data_system_port: u16,
+
+    #[arg(
+        long = "enable_merge_process",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = false,
+        value_parser = BoolishValueParser::new(),
+        aliases = ["enable-merge-process"]
+    )]
+    pub enable_merge_process: bool,
+
+    #[arg(
+        long = "merge_runtime_paths",
+        default_value = "/bin/sleep",
+        aliases = ["merge-runtime-paths"]
+    )]
+    pub merge_runtime_paths: String,
+
+    #[arg(
+        long = "runtime_initial_port",
+        default_value_t = 9000,
+        aliases = [
+            "merge_runtime_initial_port",
+            "merge-runtime-initial-port"
+        ]
+    )]
+    pub merge_runtime_initial_port: u16,
+
+    #[arg(
+        long = "port_num",
+        default_value_t = 1000,
+        aliases = ["merge_port_count", "merge-port-count"]
+    )]
+    pub merge_port_count: u32,
+
+    #[arg(
+        long = "runtime_logs_dir",
+        default_value = "/tmp/yr-agent-runtime-logs",
+        aliases = ["merge_runtime_log_path", "merge-runtime-log-path"]
+    )]
+    pub merge_runtime_log_path: String,
+
+    #[arg(
+        long = "merge_runtime_bind_mounts",
+        default_value = "",
+        aliases = ["merge-runtime-bind-mounts"]
+    )]
+    pub merge_runtime_bind_mounts: String,
+
+    #[arg(long = "custom_resources", default_value = "", aliases = ["custom-resources"])]
+    pub custom_resources: String,
+
+    #[arg(
+        long = "enable_inherit_env",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = false,
+        value_parser = BoolishValueParser::new(),
+        aliases = ["enable-inherit-env"]
+    )]
+    pub enable_inherit_env: bool,
+
+    #[arg(
+        long = "oom_kill_enable",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = false,
+        value_parser = BoolishValueParser::new(),
+        aliases = ["oom-kill-enable"]
+    )]
+    pub oom_kill_enable: bool,
+
+    #[arg(
+        long = "oom_kill_control_limit",
+        default_value_t = 0,
+        aliases = ["oom-kill-control-limit"]
+    )]
+    pub oom_kill_control_limit: i32,
+
+    #[arg(
+        long = "oom_consecutive_detection_count",
+        default_value_t = 3,
+        aliases = ["oom-consecutive-detection-count"]
+    )]
+    pub oom_consecutive_detection_count: i32,
+
+    #[arg(
+        long = "kill_process_timeout_seconds",
+        default_value_t = 0,
+        aliases = ["kill-process-timeout-seconds"]
+    )]
+    pub kill_process_timeout_seconds: u32,
+
+    /// C++ `agent_address` (accepted; gRPC advertisement still uses `ip` + `agent_listen_port`).
+    #[arg(long = "agent_address", default_value = "", aliases = ["agent-address"])]
+    pub agent_address: String,
+
+    #[command(flatten)]
+    pub cpp_ignored: AgentCppIgnored,
+}
+
+impl Config {
+    pub fn grpc_listen_addr(&self) -> String {
+        format!("{}:{}", self.host, self.agent_listen_port)
+    }
+
+    /// Endpoint advertised to schedulers (Register, etc.).
+    pub fn agent_grpc_endpoint(&self) -> String {
+        format!("http://{}:{}", self.host, self.agent_listen_port)
+    }
+
+    pub fn http_listen_addr(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
+
+    pub fn normalize_grpc_uri(addr: &str) -> String {
+        let a = addr.trim();
+        if a.starts_with("http://") || a.starts_with("https://") {
+            a.to_string()
+        } else {
+            format!("http://{a}")
+        }
+    }
+}

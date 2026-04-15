@@ -1,0 +1,54 @@
+[package]
+name = "yr-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "yr-agent"
+path = "src/main.rs"
+
+[[bin]]
+name = "function_agent"
+path = "src/main.rs"
+
+[dependencies]
+yr-common = { workspace = true }
+yr-proto = { workspace = true }
+yr-runtime-manager = { path = "../runtime_manager" }
+
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tokio-stream = { version = "0.1", features = ["net"] }
+tonic = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+flate2 = "1"
+tar = "0.4"
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+
+axum = "0.7"
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["trace"] }
+
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dashmap = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+uuid = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+clap = { workspace = true }
+yr-proto = { workspace = true }
+async-trait = { workspace = true }
+http-body-util = "0.1"

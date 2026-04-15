@@ -1,0 +1,43 @@
+[package]
+name = "yr-domain-scheduler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "yr_domain_scheduler"
+path = "src/lib.rs"
+
+[[bin]]
+name = "yr-domain-scheduler"
+path = "src/main.rs"
+
+[[bin]]
+name = "domain_scheduler"
+path = "src/main.rs"
+
+[dependencies]
+yr-common = { workspace = true }
+yr-proto = { workspace = true }
+yr-metastore-client = { workspace = true }
+
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
+etcd-client = { workspace = true }
+uuid = { workspace = true }
+# Pin to axum 0.7 for compatibility with tonic's router stack (tonic 0.13 pulls axum 0.7).
+axum = "0.7"
+tower-http = { version = "0.5", features = ["trace"] }
+
+[dev-dependencies]
+clap = { workspace = true }

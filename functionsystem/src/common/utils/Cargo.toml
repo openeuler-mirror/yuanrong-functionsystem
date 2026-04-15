@@ -1,0 +1,49 @@
+[package]
+name = "yr-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+yr-proto = { workspace = true }
+
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+clap = { workspace = true }
+uuid = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+parking_lot = { workspace = true }
+dashmap = { workspace = true }
+libc = { workspace = true }
+regex = { workspace = true }
+
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+notify = { workspace = true }
+chrono = { workspace = true }
+axum = { workspace = true }
+
+[dev-dependencies]
+clap = { workspace = true }
+prost = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tonic = { workspace = true }
+uuid = { workspace = true }
+yr-proto = { workspace = true }

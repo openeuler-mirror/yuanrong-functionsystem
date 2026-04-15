@@ -1,0 +1,47 @@
+[package]
+name = "yr-runtime-manager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "yr_runtime_manager"
+path = "src/lib.rs"
+
+[[bin]]
+name = "yr-runtime-manager"
+path = "src/main.rs"
+
+[[bin]]
+name = "runtime_manager"
+path = "src/main.rs"
+
+[dependencies]
+yr-common = { workspace = true }
+yr-proto = { workspace = true }
+
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tonic = { workspace = true }
+axum = "0.7"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.5", features = ["trace"] }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+parking_lot = { workspace = true }
+nix = { workspace = true, features = ["sched", "mount", "process"] }
+libc = { workspace = true }
+prometheus = { workspace = true }
+reqwest = { workspace = true }
+
+[dev-dependencies]
+clap = { workspace = true }
+tonic = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { version = "0.1", features = ["net"] }
+yr-proto = { workspace = true }

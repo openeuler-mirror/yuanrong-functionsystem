@@ -1,0 +1,166 @@
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::Context;
+use clap::Parser;
+use tokio_stream::wrappers::TcpListenerStream;
+use tracing::info;
+use yr_agent::config::Config;
+use yr_agent::deployer::DeployRouter;
+use yr_agent::http_api;
+use yr_agent::node_manager::NodeManager;
+use yr_agent::registration::{spawn_registration_tasks, SchedulerLink};
+use yr_agent::rm_client::RuntimeManagerClient;
+use yr_agent::service::AgentService;
+use yr_proto::internal::function_agent_service_server::FunctionAgentServiceServer;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    yr_common::logging::init_logging();
+    let mut config = Config::parse();
+    if config.node_id.trim().is_empty() {
+        config.node_id = uuid::Uuid::new_v4().to_string();
+    }
+    let config = Arc::new(config);
+
+    info!(
+        data_system_host = %config.data_system_host,
+        data_system_port = config.data_system_port,
+        merge_process = config.enable_merge_process,
+        "yr-agent settings"
+    );
+
+    std::fs::create_dir_all(&config.code_package_dir).with_context(|| {
+        format!(
+            "create code_package_dir {}",
+            config.code_package_dir
+        )
+    })?;
+
+    let merge_runtime = if config.enable_merge_process {
+        let agent_ep = config.agent_grpc_endpoint();
+        let rm_cfg = Arc::new(yr_runtime_manager::Config::embedded_in_agent(
+            config.node_id.clone(),
+            agent_ep,
+            config.merge_runtime_paths.clone(),
+            config.merge_runtime_initial_port,
+            config.merge_port_count,
+            std::path::PathBuf::from(&config.merge_runtime_log_path),
+            config.merge_runtime_bind_mounts.clone(),
+        ));
+        rm_cfg.ensure_log_dir()?;
+        let ports = Arc::new(yr_runtime_manager::port_manager::SharedPortManager::new(
+            config.merge_runtime_initial_port,
+            config.merge_port_count,
+        )?);
+        let st = Arc::new(yr_runtime_manager::state::RuntimeManagerState::new(
+            rm_cfg.clone(),
+            ports,
+        ));
+        Some((rm_cfg, st))
+    } else {
+        None
+    };
+
+    let deploy = Arc::new(DeployRouter::new(
+        std::path::PathBuf::from(&config.code_package_dir),
+        config.s3_endpoint.clone(),
+        config.s3_bucket.clone(),
+    ));
+
+    let rm: Arc<RuntimeManagerClient> = match &merge_runtime {
+        Some((rm_cfg, st)) => Arc::new(RuntimeManagerClient::in_process(
+            st.clone(),
+            rm_cfg.runtime_path_list(),
+        )),
+        None => Arc::new(RuntimeManagerClient::remote(
+            config.runtime_manager_address.clone(),
+        )),
+    };
+
+    let scheduler = SchedulerLink::new_arc(
+        config.local_scheduler_address.clone(),
+        config.node_id.clone(),
+        config.agent_grpc_endpoint(),
+    );
+
+    let agent = AgentService::new(deploy, rm.clone(), scheduler.clone());
+    let runtimes = agent.runtimes_handle();
+    let node = NodeManager::new_arc();
+    spawn_registration_tasks(
+        scheduler.clone(),
+        rm.clone(),
+        runtimes,
+        node.clone(),
+    );
+
+    let http_state = http_api::HealthState {
+        rm: rm.clone(),
+        scheduler: scheduler.clone(),
+        node_id: config.node_id.clone(),
+        node: node.clone(),
+    };
+    let http_addr: SocketAddr = config
+        .http_listen_addr()
+        .parse()
+        .context("parse http listen addr")?;
+    let http_srv = axum::serve(
+        tokio::net::TcpListener::bind(http_addr).await?,
+        http_api::router(http_state).into_make_service(),
+    );
+    tokio::spawn(async move {
+        if let Err(e) = http_srv.await {
+            tracing::error!(error = %e, "http server");
+        }
+    });
+
+    let grpc_addr: SocketAddr = config
+        .grpc_listen_addr()
+        .parse()
+        .context("parse grpc listen addr")?;
+    let listener = tokio::net::TcpListener::bind(grpc_addr)
+        .await
+        .context("bind agent gRPC")?;
+    let local = listener.local_addr()?;
+    info!(%local, "yr-agent FunctionAgentService listening");
+    node.set_ready(true);
+
+    if let Some((rm_cfg, st)) = merge_runtime {
+        yr_runtime_manager::http_api::mark_process_start();
+        let (tx, rx) = tokio::sync::mpsc::channel(256);
+        let reaper = yr_runtime_manager::health_check::spawn_child_reaper(tx);
+        let ag = Arc::new(yr_runtime_manager::agent::AgentClient::new(&rm_cfg)?);
+        yr_runtime_manager::oom::spawn_user_space_oom_supervision(st.clone(), ag.clone());
+        tokio::spawn(yr_runtime_manager::health_check::handle_child_exits(
+            rx,
+            st.clone(),
+            ag.clone(),
+        ));
+        tokio::spawn(yr_runtime_manager::instance_health::supervision_loop(
+            st.clone(),
+        ));
+        let metrics_every = Duration::from_millis(rm_cfg.metrics_interval_ms.max(100));
+        let st_m = st.clone();
+        tokio::spawn(async move {
+            let mut col = yr_runtime_manager::metrics::MetricsCollector::new();
+            loop {
+                tokio::time::sleep(metrics_every).await;
+                let snap = col.collect(&st_m);
+                yr_runtime_manager::metrics::apply_prometheus_snapshot(&snap);
+                let json = serde_json::to_string(&snap).unwrap_or_else(|_| "{}".to_string());
+                ag.update_resources_retry(json).await;
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        std::mem::forget(reaper);
+    }
+
+    let incoming = TcpListenerStream::new(listener);
+    tonic::transport::Server::builder()
+        .add_service(FunctionAgentServiceServer::from_arc(agent))
+        .serve_with_incoming(incoming)
+        .await?;
+
+    Ok(())
+}

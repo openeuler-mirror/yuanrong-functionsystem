@@ -1,0 +1,87 @@
+[workspace]
+members = [
+    "functionsystem/src/common/proto",
+    "functionsystem/src/common/utils",
+    "functionsystem/src/common/meta_store_client",
+    "functionsystem/src/common/data_client",
+    "functionsystem/src/meta_store",
+    "functionsystem/src/iam_server",
+    "functionsystem/src/function_master",
+    "functionsystem/src/domain_scheduler",
+    "functionsystem/src/function_proxy",
+    "functionsystem/src/function_agent",
+    "functionsystem/src/runtime_manager",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# Internal crates
+yr-proto = { path = "functionsystem/src/common/proto" }
+yr-common = { path = "functionsystem/src/common/utils" }
+yr-metastore-client = { path = "functionsystem/src/common/meta_store_client" }
+yr-metastore-server = { path = "functionsystem/src/meta_store" }
+yr-data-client-lite = { path = "functionsystem/src/common/data_client" }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+# gRPC / protobuf
+tonic = "0.13"
+prost = "0.13"
+prost-types = "0.13"
+tonic-build = "0.13"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# etcd
+etcd-client = "0.15"
+
+# HTTP
+axum = "0.8"
+tower-http = { version = "0.6", features = ["trace"] }
+hyper = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+opentelemetry = "0.28"
+prometheus = "0.13"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Utilities
+clap = { version = "4", features = ["derive"] }
+uuid = { version = "1", features = ["v4"] }
+bytes = "1"
+futures = "0.3"
+async-trait = "0.1"
+parking_lot = "0.12"
+dashmap = "6"
+
+# Unix process / signals (yr-runtime-manager)
+nix = { version = "0.29", features = ["signal", "process", "resource"] }
+libc = "0.2"
+
+# Crypto / encoding (yr-iam, yr-common)
+hmac = "0.12"
+sha2 = "0.10"
+rand = "0.8"
+base64 = "0.22"
+hex = "0.4"
+
+# yr-common helpers
+notify = "6"
+regex = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
