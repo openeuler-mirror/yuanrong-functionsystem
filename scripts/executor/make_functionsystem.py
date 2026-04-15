@@ -43,9 +43,9 @@ def parser_args():
     build_parser.add_argument(
         "--builder",
         type=str,
-        choices=["cmake", "bazel"],
+        choices=["cmake", "bazel", "rust"],
         default="cmake",
-        help="Choose build system to use: cmake or bazel. Default: cmake",
+        help="Choose build system to use: cmake, bazel, or rust. Default: cmake",
     )
     build_parser.set_defaults(func=lambda func_args: tasks.run_build(ROOT_DIR, func_args))
     # 清理缓存执行参数

@@ -27,15 +27,18 @@ def run_build(root_dir, cmd_args):
         log.warning(f"The -j {args['job_num']} is over the max logical cpu count({os.cpu_count()}) * 2")
     log.info(f"Start to build function-system with args: {json.dumps(args)}")
 
-    build_vendor(args)
-    build_litebus(args)
-    if args["builder"] == "bazel":
-        # Bazel builds logs, metrics, and C++ binaries from source itself
-        build_functionsystem_bazel(root_dir, args)
+    if builder_name == "rust":
+        build_rust(args)
     else:
-        build_logs(args)
-        build_metrics(args)
-        build_functionsystem(root_dir, args)
+        build_vendor(args)
+        build_litebus(args)
+        if args["builder"] == "bazel":
+            # Bazel builds logs, metrics, and C++ binaries from source itself
+            build_functionsystem_bazel(root_dir, args)
+        else:
+            build_logs(args)
+            build_metrics(args)
+            build_functionsystem(root_dir, args)
     elapsed_time = time.time() - start_time
     log.info(f"Build function-system successfully in {elapsed_time:.2f} seconds")
 
@@ -119,4 +122,19 @@ def build_functionsystem_bazel(root_dir, args):
     # 编译 CLI 程序 (same as cmake, CLI uses Go)
     builder.build_cli(root_dir)
     # 编译 meta-service (same as cmake, meta-service uses Go)
+    builder.build_meta_service(root_dir)
+
+
+def build_rust(args):
+    root_dir = args["root_dir"]
+    log.info("Start to build functionsystem with Rust")
+
+    # Vendor: still needed for etcd binary (packaged in deploy)
+    build_vendor(args)
+
+    # Rust binaries replace C++ binaries
+    builder.build_rust_binaries(root_dir)
+
+    # Go components remain unchanged
+    builder.build_cli(root_dir)
     builder.build_meta_service(root_dir)

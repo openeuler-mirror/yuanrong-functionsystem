@@ -5,3 +5,4 @@ from .build_cpp import build_binary, build_gtest
 from .build_go import build_cli, build_etcd, build_golang, build_meta_service
 from .build_whl import build_wheel
 from .build_bazel import build_binary_bazel
+from .build_rust import build_rust_binaries
