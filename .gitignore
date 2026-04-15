@@ -44,4 +44,6 @@ functionsystem/src/common/utils/version.h
 runtime-launcher/bin
 thirdparty/runtime_deps/
 *.log
-fake_file
+fake_filetarget/
+output/
+vendor/

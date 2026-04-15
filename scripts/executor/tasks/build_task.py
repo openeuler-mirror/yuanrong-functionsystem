@@ -129,9 +129,6 @@ def build_rust(args):
     root_dir = args["root_dir"]
     log.info("Start to build functionsystem with Rust")
 
-    # Vendor: still needed for etcd binary (packaged in deploy)
-    build_vendor(args)
-
     # Rust binaries replace C++ binaries
     builder.build_rust_binaries(root_dir)
 
