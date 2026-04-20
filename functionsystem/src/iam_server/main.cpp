@@ -151,11 +151,19 @@ void OnCreate(const Flags &flags)
     YRLOG_INFO("version:{} branch:{} commit_id:{}", BUILD_VERSION, GIT_BRANCH_NAME, GIT_HASH);
     CreateKubeClient(flags);
     auto address = flags.GetIP() + ":" + flags.GetHTTPListenPort();
-    if (flags.GetSslEnable()) {
-        InitLitebusSSLEnv(GetSSLCertConfig(flags));
+
+    /* Build SSL config: use IAM-specific toggle (falls back to global if unset),
+     * certificate paths always come from global ssl_base_path/cert/key/root. */
+    SSLCertConfig iamSslConfig = GetSSLCertConfig(flags);
+    if (flags.HasIAMSslOverride()) {
+        // IAM explicitly controls SSL; override the isEnable from global config
+        iamSslConfig.isEnable = flags.GetIAMSslEnable();
+    }
+    if (iamSslConfig.isEnable) {
+        InitLitebusSSLEnv(iamSslConfig);
     }
     g_iamServerSwitcher->InitMetrics(flags.GetEnableMetrics(), flags.GetMetricsConfig(), flags.GetMetricsConfigFile(),
-                                     GetSSLCertConfig(flags));
+                                     iamSslConfig);
     if (!InitLitebusAKSKEnv(flags).IsOk()) {
         YRLOG_ERROR("failed to get aksk config");
         g_iamServerSwitcher->SetStop();

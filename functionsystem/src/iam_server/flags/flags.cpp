@@ -84,6 +84,9 @@ Flags::Flags()
     AddFlag(&Flags::casdoorAdminUser_, "casdoor_admin_user", "Casdoor admin username", "");
     AddFlag(&Flags::casdoorAdminPassword_, "casdoor_admin_password", "Casdoor admin password", "");
     AddFlag(&Flags::casdoorJwtPublicKey_, "casdoor_jwt_public_key", "Casdoor JWT Public Key (PEM)", "");
+
+    AddFlag(&Flags::iamSslEnable_, "iam_ssl_enable",
+            "Enable SSL/TLS for IAM listener independently (overrides global ssl_enable). Empty = use global.", "");
 }
 
 Flags::~Flags()

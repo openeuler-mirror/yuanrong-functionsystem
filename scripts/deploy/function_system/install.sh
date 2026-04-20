@@ -329,7 +329,37 @@ function install_faas_frontend() {
   sed -i "s/{frontendSslEnable}/${FRONTEND_SSL_ENABLE}/g" ${install_init_frontend_config}
   sed -i "s/RequireAndVerifyClientCert/${FRONTEND_CLIENT_AUTH_TYPE}/g" ${install_init_frontend_config}
   sed -i "s/{sccEnable}/${SCC_ENABLE}/g" ${install_init_frontend_config}
-  sed -i "s/{iam_server_address}/${IAM_SERVER_ADDRESS}/g" ${install_init_frontend_config}
+  # Smart IAM routing: prefer local plaintext when co-deployed, else use configured address
+  local effective_iam_address="${IAM_SERVER_ADDRESS}"
+  if [ -n "${IAM_LOCAL_ADDRESS}" ]; then
+    # Co-deployed: use local plaintext address
+    effective_iam_address="${IAM_LOCAL_ADDRESS}"
+    log_info "frontend using local IAM address: ${effective_iam_address}"
+  fi
+  sed -i "s/{iam_server_address}/${effective_iam_address}/g" ${install_init_frontend_config}
+
+  # IAM TLS config for frontend -> IAM connections (cert paths reuse global)
+  local iam_tls_enable="false"
+  local iam_tls_ca_file=""
+  local iam_tls_cert_file=""
+  local iam_tls_key_file=""
+  if [ -z "${IAM_LOCAL_ADDRESS}" ]; then
+    # Remote IAM: configure TLS if IAM or global SSL is enabled
+    if [ "X${IAM_SSL_ENABLE}" = "Xtrue" ] || [ "X${IAM_SSL_ENABLE}" = "XTRUE" ] || \
+       [ "X${SSL_ENABLE}" = "Xtrue" ] || [ "X${SSL_ENABLE}" = "XTRUE" ]; then
+      iam_tls_enable="true"
+      if [ -n "${SSL_BASE_PATH}" ]; then
+        iam_tls_ca_file="${SSL_BASE_PATH}/${SSL_ROOT_FILE}"
+        iam_tls_cert_file="${SSL_BASE_PATH}/${SSL_CERT_FILE}"
+        iam_tls_key_file="${SSL_BASE_PATH}/${SSL_KEY_FILE}"
+      fi
+      log_info "frontend IAM TLS enabled, ca=${iam_tls_ca_file}"
+    fi
+  fi
+  sed -i "s/{iam_tls_enable}/${iam_tls_enable}/g" ${install_init_frontend_config}
+  sed -i "s*{iam_tls_ca_file}*${iam_tls_ca_file}*g" ${install_init_frontend_config}
+  sed -i "s*{iam_tls_cert_file}*${iam_tls_cert_file}*g" ${install_init_frontend_config}
+  sed -i "s*{iam_tls_key_file}*${iam_tls_key_file}*g" ${install_init_frontend_config}
   sed -i "s/{meta_service_address}/${meta_service_address}/g" ${install_init_frontend_config}
   sed -i "s/{enable_func_token_auth}/${ENABLE_FUNCTION_TOKEN_AUTH}/g" ${install_init_frontend_config}
   
@@ -759,11 +789,27 @@ function install_iam_server() {
   fi
 
   # Determine if SSL should be enabled for iam_server
+  # IAM_SSL_ENABLE independently toggles SSL for IAM; cert paths reuse global ssl_* values
   local iam_ssl_enable="false"
-  if [ "X${SSL_ENABLE}" = "Xtrue" ] || [ "X${SSL_ENABLE}" = "XTRUE" ] || \
-     [ "X${IAM_SSL_ENABLE}" = "Xtrue" ] || [ "X${IAM_SSL_ENABLE}" = "XTRUE" ]; then
+  if [ "X${IAM_SSL_ENABLE}" = "Xtrue" ] || [ "X${IAM_SSL_ENABLE}" = "XTRUE" ] || \
+     [ "X${SSL_ENABLE}" = "Xtrue" ] || [ "X${SSL_ENABLE}" = "XTRUE" ]; then
     iam_ssl_enable="true"
     log_info "iam_server mTLS enabled, ssl_base_path=${SSL_BASE_PATH}"
+  fi
+
+  # Pass --iam_ssl_enable only when IAM_SSL_ENABLE is explicitly set (independent from global)
+  local iam_ssl_args=""
+  if [ -n "${IAM_SSL_ENABLE}" ] && ([ "X${IAM_SSL_ENABLE}" = "Xtrue" ] || [ "X${IAM_SSL_ENABLE}" = "XTRUE" ]); then
+    iam_ssl_args="--iam_ssl_enable=true"
+    log_info "iam_server independent SSL override enabled"
+  fi
+
+  # Local plaintext listener for co-deployed components
+  local iam_local_args=""
+  if [ -n "${IAM_LOCAL_LISTEN_PORT}" ] && [ "${IAM_LOCAL_LISTEN_PORT}" != "0" ]; then
+    local iam_local_ip="${IAM_LOCAL_IP:-127.0.0.1}"
+    iam_local_args="--local_ip=${iam_local_ip} --local_listen_port=${IAM_LOCAL_LISTEN_PORT}"
+    log_info "iam_server local plaintext listener: ${iam_local_ip}:${IAM_LOCAL_LISTEN_PORT}"
   fi
 
   if check_port "${IP_ADDRESS}" "${IAM_SERVER_PORT}"; then
@@ -784,6 +830,8 @@ function install_iam_server() {
       --ssl_root_file="${SSL_ROOT_FILE}" \
       --ssl_cert_file="${SSL_CERT_FILE}" \
       --ssl_key_file="${SSL_KEY_FILE}" \
+      ${iam_ssl_args} \
+      ${iam_local_args} \
       --auth_provider="${auth_provider}" \
       --keycloak_enabled="${keycloak_enabled}" \
       --keycloak_url="${keycloak_url}" \

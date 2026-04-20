@@ -223,6 +223,21 @@ public:
         return casdoorEnabled_;
     }
 
+    /* IAM-specific SSL toggle.
+     * When --iam_ssl_enable is set, it overrides the global --ssl_enable for IAM's listener.
+     * Certificate paths are always reused from the global ssl_base_path/ssl_cert_file/etc.
+     * When --iam_ssl_enable is not set (empty), falls back to global --ssl_enable. */
+    bool GetIAMSslEnable() const
+    {
+        if (iamSslEnable_.empty()) return GetSslEnable();
+        return iamSslEnable_ == "true";
+    }
+
+    bool HasIAMSslOverride() const
+    {
+        return !iamSslEnable_.empty();
+    }
+
 private:
     std::string logConfig;
     std::string nodeID;
@@ -266,6 +281,8 @@ private:
     std::string casdoorAdminPassword_;
     std::string casdoorJwtPublicKey_;
     bool casdoorEnabled_ = false;
+
+    std::string iamSslEnable_;
 };
 }  // namespace functionsystem::iamserver
 #endif  // IAM_SERVER_FLAGS_FLAGS_H

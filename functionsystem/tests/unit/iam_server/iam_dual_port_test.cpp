@@ -320,3 +320,119 @@ TEST_F(IAMActorDualPortTest, RequestFilterInternalSrcPostMethodStillRejected)
 }
 
 }  // namespace functionsystem::iamserver::test
+
+/* ═══════════════════════════════════════════════════════════════
+ * IAM SSL independent toggle tests
+ * ═══════════════════════════════════════════════════════════════ */
+
+namespace functionsystem::iamserver::ssltest {
+
+/**
+ * Feature: IAM SSL toggle - fallback to global
+ * Description: When --iam_ssl_enable is NOT set, GetIAMSslEnable()
+ *              falls back to global --ssl_enable.
+ */
+TEST(IAMSSLFlagsTest, FallbackToGlobalEnabled)
+{
+    Flags flags;
+    const char *argv[] = {
+        "iam_server",
+        "--ip=192.168.1.1",
+        "--http_listen_port=8080",
+        "--ssl_enable=true",
+        "--ssl_base_path=/etc/ssl/global"
+    };
+    int argc = 5;
+    flags.ParseFlags(argc, argv);
+
+    EXPECT_FALSE(flags.HasIAMSslOverride());
+    EXPECT_TRUE(flags.GetIAMSslEnable());
+}
+
+TEST(IAMSSLFlagsTest, FallbackToGlobalDisabled)
+{
+    Flags flags;
+    const char *argv[] = {
+        "iam_server",
+        "--ip=192.168.1.1",
+        "--http_listen_port=8080"
+    };
+    int argc = 3;
+    flags.ParseFlags(argc, argv);
+
+    EXPECT_FALSE(flags.HasIAMSslOverride());
+    EXPECT_FALSE(flags.GetIAMSslEnable());
+}
+
+/**
+ * Feature: IAM SSL independent enable
+ * Description: --iam_ssl_enable=true enables SSL for IAM even when global is off.
+ */
+TEST(IAMSSLFlagsTest, IndependentEnableOverridesGlobalOff)
+{
+    Flags flags;
+    const char *argv[] = {
+        "iam_server",
+        "--ip=192.168.1.1",
+        "--http_listen_port=8080",
+        "--ssl_enable=false",
+        "--iam_ssl_enable=true"
+    };
+    int argc = 5;
+    flags.ParseFlags(argc, argv);
+
+    EXPECT_TRUE(flags.HasIAMSslOverride());
+    EXPECT_TRUE(flags.GetIAMSslEnable());
+    // Global stays off
+    EXPECT_FALSE(flags.GetSslEnable());
+}
+
+/**
+ * Feature: IAM SSL independent disable
+ * Description: --iam_ssl_enable=false disables SSL for IAM even when global is on.
+ */
+TEST(IAMSSLFlagsTest, IndependentDisableOverridesGlobalOn)
+{
+    Flags flags;
+    const char *argv[] = {
+        "iam_server",
+        "--ip=192.168.1.1",
+        "--http_listen_port=8080",
+        "--ssl_enable=true",
+        "--ssl_base_path=/etc/ssl",
+        "--iam_ssl_enable=false"
+    };
+    int argc = 6;
+    flags.ParseFlags(argc, argv);
+
+    EXPECT_TRUE(flags.HasIAMSslOverride());
+    EXPECT_FALSE(flags.GetIAMSslEnable());
+}
+
+/**
+ * Feature: IAM SSL + dual-port coexistence
+ * Description: Both IAM SSL override and local listen port can be configured
+ *              simultaneously (TLS on external, plaintext on local).
+ */
+TEST(IAMSSLFlagsTest, SSLAndDualPortCoexist)
+{
+    Flags flags;
+    const char *argv[] = {
+        "iam_server",
+        "--ip=10.0.0.1",
+        "--http_listen_port=8443",
+        "--ssl_base_path=/etc/ssl",
+        "--iam_ssl_enable=true",
+        "--local_ip=127.0.0.1",
+        "--local_listen_port=8080"
+    };
+    int argc = 7;
+    flags.ParseFlags(argc, argv);
+
+    EXPECT_TRUE(flags.HasIAMSslOverride());
+    EXPECT_TRUE(flags.GetIAMSslEnable());
+    EXPECT_EQ(flags.GetLocalIP(), "127.0.0.1");
+    EXPECT_EQ(flags.GetLocalListenPort(), 8080u);
+}
+
+}  // namespace functionsystem::iamserver::ssltest
