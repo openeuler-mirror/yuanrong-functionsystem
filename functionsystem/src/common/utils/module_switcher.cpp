@@ -43,10 +43,14 @@ void ModuleSwitcher::WaitStop()
     stopSignal_ = nullptr;
 }
 
-bool ModuleSwitcher::InitLiteBus(const std::string &address, int32_t threadNum, bool enableUDP)
+bool ModuleSwitcher::InitLiteBus(const std::string &address, int32_t threadNum, bool enableUDP,
+                                 const std::string &localAddress)
 {
-    YRLOG_INFO("initialize LiteBus with address: {}, threadNum: {}", address, threadNum);
-    auto result = litebus::Initialize("tcp://" + address, "", enableUDP ? "udp://" + address : "", "", threadNum);
+    YRLOG_INFO("initialize LiteBus with address: {}, threadNum: {}, localAddress: {}", address, threadNum,
+               localAddress);
+    auto result = litebus::Initialize("tcp://" + address, "", enableUDP ? "udp://" + address : "", "", threadNum,
+                                      localAddress.empty() ? "" : "tcp://" + localAddress,
+                                      localAddress.empty() ? "" : "tcp://" + localAddress);
     if (result != BUS_OK) {
         YRLOG_ERROR("HTTP server start failed: LiteBus initialize failed, address: {}, result: {}", address, result);
         return false;

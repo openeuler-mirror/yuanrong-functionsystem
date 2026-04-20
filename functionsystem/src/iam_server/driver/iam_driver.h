@@ -30,6 +30,8 @@ struct IAMStartParam {
     InternalIAM::Param internalIAMParam;
     std::string nodeID;
     std::string ip;
+    std::string localIp;     /* plaintext local listener IP, e.g. "127.0.0.1"; empty = disabled */
+    uint16_t localPort = 0;  /* plaintext local listener port; 0 = disabled */
     std::string metaStoreAddress;
     std::string authProvider{ "keycloak" };  // "keycloak" or "casdoor"
     KeycloakConfig keycloakConfig;           // Keycloak configuration

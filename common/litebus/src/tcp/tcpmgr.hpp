@@ -63,6 +63,7 @@ public:
     void Finish() override;
     void FinishDestruct();
     bool StartIOServer(const std::string &url, const std::string &aAdvertiseUrl) override;
+    bool StartLocalListener(const std::string &localUrl, const std::string &localAdvUrl);
     uint64_t GetOutBufSize() override;
     void CollectMetrics() override;
     static uint64_t GetTCPOutSize();
@@ -107,6 +108,7 @@ private:
     std::string url_;
 
     int serverFd = -1;
+    int serverFdLocal = -1;  /* second listen fd for the local plaintext listener */
     static uint64_t outTcpBufSize;
     static IOMgr::MsgHandler tcpMsgHandler;
 #ifdef HTTP_ENABLED

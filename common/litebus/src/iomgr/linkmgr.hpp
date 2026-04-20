@@ -148,6 +148,7 @@ public:
     int fd;
     bool isRemote;
     bool isExited;
+    bool isLocalConn = false;  /* accepted on the local plaintext listener */
     ConnectionType type;
     // "tcp://ip:port"
     std::string from;

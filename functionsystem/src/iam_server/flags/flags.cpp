@@ -33,6 +33,11 @@ Flags::Flags()
     AddFlag(&Flags::ip, "ip", "IP address for listening.", true, FlagCheckWrraper(IsIPValid));
     AddFlag(&Flags::httpListenPort, "http_listen_port", "For posix server listening. example: 8080", true,
             FlagCheckWrraper(IsPortValid));
+    AddFlag(&Flags::localIp_, "local_ip",
+            "Local IP for plaintext listener (internal access without TLS). Defaults to 127.0.0.1 when local_listen_port is set.",
+            std::string("127.0.0.1"));
+    AddFlag(&Flags::localListenPort_, "local_listen_port",
+            "Port for the local plaintext listener (empty = disabled). example: 8081", std::string(""));
     AddFlag(&Flags::metaStoreAddress, "meta_store_address", "For MetaStorage service discover", "");
     AddFlag(&Flags::enableTrace, "enable_trace", "For trace enable, example: false", false);
     AddFlag(&Flags::enableIAM_, "enable_iam", "enable verify and authorize token of internal request", false);

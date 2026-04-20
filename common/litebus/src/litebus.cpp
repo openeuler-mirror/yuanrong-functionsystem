@@ -56,7 +56,8 @@ int LitebusInitializeC(const struct LitebusConfig *config)
     litebus::SetHttpKmsgFlag(config->httpKmsgFlag);
 
     return litebus::Initialize(std::string(config->tcpUrl), std::string(config->tcpUrlAdv),
-                               std::string(config->udpUrl), std::string(config->udpUrlAdv), config->threadCount);
+                               std::string(config->udpUrl), std::string(config->udpUrlAdv), config->threadCount,
+                               std::string(config->tcpLocalUrl), std::string(config->tcpLocalUrlAdv));
 }
 
 void LitebusFinalizeC()
@@ -224,7 +225,8 @@ public:
 };
 
 int InitializeImp(const std::string &tcpUrl, const std::string &tcpUrlAdv, const std::string &udpUrl,
-                  const std::string &udpUrlAdv, int threadCount)
+                  const std::string &udpUrlAdv, int threadCount,
+                  const std::string &tcpLocalUrl, const std::string &tcpLocalUrlAdv)
 {
     BUSLOG_INFO("litebus starts ......");
     (void)signal(SIGPIPE, SIG_IGN);
@@ -269,6 +271,24 @@ int InitializeImp(const std::string &tcpUrl, const std::string &tcpUrlAdv, const
         }
     }
 
+    if (!tcpLocalUrl.empty()) {
+        BUSLOG_INFO("start local listener. Url={},advertiseUrl={}", tcpLocalUrl.c_str(), tcpLocalUrlAdv.c_str());
+        std::shared_ptr<litebus::IOMgr> tcpIOMgr = ActorMgr::GetIOMgrRef(std::string("tcp"));
+        if (tcpIOMgr == nullptr) {
+            BUSLOG_ERROR("cannot start local listener: tcp IOMgr not initialized");
+            return BUS_ERROR;
+        }
+        auto *tcpMgr = dynamic_cast<TCPMgr *>(tcpIOMgr.get());
+        if (tcpMgr == nullptr) {
+            BUSLOG_ERROR("cannot start local listener: IOMgr is not TCPMgr");
+            return BUS_ERROR;
+        }
+        const std::string &localAdv = tcpLocalUrlAdv.empty() ? tcpLocalUrl : tcpLocalUrlAdv;
+        if (!tcpMgr->StartLocalListener(tcpLocalUrl, localAdv)) {
+            return BUS_ERROR;
+        }
+    }
+
     (void)litebus::Spawn(std::make_shared<SysMgrActor>(SYSMGR_ACTOR_NAME, SYSMGR_TIMER_DURATION));
 
     BUSLOG_INFO("litebus has started.");
@@ -276,7 +296,8 @@ int InitializeImp(const std::string &tcpUrl, const std::string &tcpUrlAdv, const
 }
 
 int Initialize(const std::string &tcpUrl, const std::string &tcpUrlAdv, const std::string &udpUrl,
-               const std::string &udpUrlAdv, int threadCount)
+               const std::string &udpUrlAdv, int threadCount,
+               const std::string &tcpLocalUrl, const std::string &tcpLocalUrlAdv)
 {
     static std::atomic_bool initLitebusStatus(false);
     bool inite = false;
@@ -289,7 +310,7 @@ int Initialize(const std::string &tcpUrl, const std::string &tcpUrlAdv, const st
 
     do {
         try {
-            result = InitializeImp(tcpUrl, tcpUrlAdv, udpUrl, udpUrlAdv, threadCount);
+            result = InitializeImp(tcpUrl, tcpUrlAdv, udpUrl, udpUrlAdv, threadCount, tcpLocalUrl, tcpLocalUrlAdv);
         } catch (const std::exception &e) {
             BUSLOG_ERROR("Litebus catch exception, what={}", e.what());
             result = BUS_ERROR;

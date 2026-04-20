@@ -351,6 +351,11 @@ void HttpIOMgr::HandleRequest(litebus::http::Request *request, Connection *conne
     BUSLOG_DEBUG("url,method,client,body size, u:{},m:{},c:{},s:{}", request->url.path, request->method,
                  request->client.Get(), request->body.size());
 
+    /* Mark requests from the local plaintext listener so upper layers can skip TLS-based auth. */
+    if (connection->isLocalConn) {
+        request->headers["X-Internal-Src"] = "1";
+    }
+
     // NOTE : we need delete request ptr here
     bool isKMsg = false;
     if ((request->headers.find("Libprocess-From") != request->headers.end())

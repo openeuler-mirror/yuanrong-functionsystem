@@ -46,6 +46,18 @@ public:
         return httpListenPort;
     }
 
+    const std::string &GetLocalIP() const
+    {
+        return localIp_;
+    }
+
+    uint16_t GetLocalListenPort() const
+    {
+        if (localListenPort_.empty()) return 0;
+        try { return static_cast<uint16_t>(std::stoul(localListenPort_)); }
+        catch (...) { return 0; }
+    }
+
     const std::string &GetMetaStoreAddress() const
     {
         return metaStoreAddress;
@@ -216,6 +228,8 @@ private:
     std::string nodeID;
     std::string ip;
     std::string httpListenPort;
+    std::string localIp_;
+    std::string localListenPort_;
     std::string metaStoreAddress;
     bool enableTrace = false;
     std::string servicesPath_;

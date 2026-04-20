@@ -30,7 +30,8 @@ struct LitebusAddress {
 
 // brief initialize the library
 int Initialize(const std::string &tcpUrl, const std::string &tcpUrlAdv = "", const std::string &udpUrl = "",
-               const std::string &udpUrlAdv = "", int threadCount = 0);
+               const std::string &udpUrlAdv = "", int threadCount = 0,
+               const std::string &tcpLocalUrl = "", const std::string &tcpLocalUrlAdv = "");
 
 // brief spawn a process to run an actor
 AID Spawn(ActorReference actor, bool sharedThread = true, bool start = true);
