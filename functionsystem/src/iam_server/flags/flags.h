@@ -53,7 +53,9 @@ public:
 
     uint16_t GetLocalListenPort() const
     {
-        if (localListenPort_.empty()) return 0;
+        if (localListenPort_.empty()) {
+            return 0;
+        }
         try { return static_cast<uint16_t>(std::stoul(localListenPort_)); }
         catch (...) { return 0; }
     }
@@ -229,7 +231,9 @@ public:
      * When --iam_ssl_enable is not set (empty), falls back to global --ssl_enable. */
     bool GetIAMSslEnable() const
     {
-        if (iamSslEnable_.empty()) return GetSslEnable();
+        if (iamSslEnable_.empty()) {
+            return GetSslEnable();
+        }
         return iamSslEnable_ == "true";
     }
 
@@ -239,6 +243,7 @@ public:
     }
 
 private:
+    void RegisterDualPortAndSslFlags();
     std::string logConfig;
     std::string nodeID;
     std::string ip;
