@@ -381,6 +381,11 @@ bool TCPMgr::StartIOServer(const std::string &url, const std::string &aAdvertise
 
 bool TCPMgr::StartLocalListener(const std::string &localUrl, const std::string &localAdvUrl)
 {
+    /* The local plaintext listener is intentionally not registered with the routing layer:
+     * its advertise URL (localAdvUrl) is kept for diagnostics only.  Remote peers should
+     * never be told about this port — it is exclusively for same-node internal access and
+     * trusts connections implicitly (no TLS, no AKSK).  Publishing it would undermine the
+     * security model. */
     serverFdLocal = SocketOperate::Listen(localUrl);
     if (serverFdLocal < 0) {
         BUSLOG_ERROR("local listener bind failed. url={}", localUrl);

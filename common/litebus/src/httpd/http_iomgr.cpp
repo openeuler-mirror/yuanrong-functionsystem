@@ -351,7 +351,11 @@ void HttpIOMgr::HandleRequest(litebus::http::Request *request, Connection *conne
     BUSLOG_DEBUG("url,method,client,body size, u:{},m:{},c:{},s:{}", request->url.path, request->method,
                  request->client.Get(), request->body.size());
 
-    /* Mark requests from the local plaintext listener so upper layers can skip TLS-based auth. */
+    /* Strip any client-supplied X-Internal-Src header first to prevent forgery on the external
+     * TLS port, then re-inject it only for connections that arrived on the local plaintext
+     * listener.  The server is the sole authority for this header; clients must never be
+     * trusted to set it themselves. */
+    request->headers.erase("X-Internal-Src");
     if (connection->isLocalConn) {
         request->headers["X-Internal-Src"] = "1";
     }
