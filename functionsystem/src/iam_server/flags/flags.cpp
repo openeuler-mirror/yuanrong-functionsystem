@@ -33,11 +33,6 @@ Flags::Flags()
     AddFlag(&Flags::ip, "ip", "IP address for listening.", true, FlagCheckWrraper(IsIPValid));
     AddFlag(&Flags::httpListenPort, "http_listen_port", "For posix server listening. example: 8080", true,
             FlagCheckWrraper(IsPortValid));
-    AddFlag(&Flags::localIp_, "local_ip",
-            "Local IP for plaintext listener (internal access without TLS). Defaults to 127.0.0.1 when local_listen_port is set.",
-            std::string("127.0.0.1"));
-    AddFlag(&Flags::localListenPort_, "local_listen_port",
-            "Port for the local plaintext listener (empty = disabled). example: 8081", std::string(""));
     AddFlag(&Flags::metaStoreAddress, "meta_store_address", "For MetaStorage service discover", "");
     AddFlag(&Flags::enableTrace, "enable_trace", "For trace enable, example: false", false);
     AddFlag(&Flags::enableIAM_, "enable_iam", "enable verify and authorize token of internal request", false);
@@ -85,6 +80,16 @@ Flags::Flags()
     AddFlag(&Flags::casdoorAdminPassword_, "casdoor_admin_password", "Casdoor admin password", "");
     AddFlag(&Flags::casdoorJwtPublicKey_, "casdoor_jwt_public_key", "Casdoor JWT Public Key (PEM)", "");
 
+    RegisterDualPortAndSslFlags();
+}
+
+void Flags::RegisterDualPortAndSslFlags()
+{
+    AddFlag(&Flags::localIp_, "local_ip",
+            "Local IP for the plaintext listener (loopback only, no TLS). Default: 127.0.0.1.",
+            std::string("127.0.0.1"));
+    AddFlag(&Flags::localListenPort_, "local_listen_port",
+            "Port for the local plaintext listener (empty = disabled). example: 8081", std::string(""));
     AddFlag(&Flags::iamSslEnable_, "iam_ssl_enable",
             "Enable SSL/TLS for IAM listener independently (overrides global ssl_enable). Empty = use global.", "");
 }

@@ -195,7 +195,13 @@ protected:
 
         BUSLOG_INFO("DualPortE2ETest: extUrl={} localUrl={}", extUrl, localUrl);
 
-        int rc = litebus::Initialize(extUrl, extUrl, "", "", 4, localUrl, localUrl);
+        litebus::LitebusInitOptions opts;
+        opts.tcpUrl = extUrl;
+        opts.tcpUrlAdv = extUrl;
+        opts.threadCount = 4;
+        opts.tcpLocalUrl = localUrl;
+        opts.tcpLocalUrlAdv = localUrl;
+        int rc = litebus::Initialize(opts);
         ASSERT_EQ(rc, BUS_OK) << "litebus::Initialize failed: " << rc;
         initialized_ = true;
 

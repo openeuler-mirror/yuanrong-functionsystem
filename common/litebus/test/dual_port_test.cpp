@@ -288,7 +288,13 @@ TEST(DualPortIntegrationTest, InitializeWithLocalListenerSucceeds)
     const std::string extUrl = "tcp://127.0.0.1:19080";
     const std::string localUrl = "tcp://127.0.0.1:19081";
 
-    int result = litebus::Initialize(extUrl, extUrl, "", "", 4, localUrl, localUrl);
+    litebus::LitebusInitOptions opts;
+    opts.tcpUrl = extUrl;
+    opts.tcpUrlAdv = extUrl;
+    opts.threadCount = 4;
+    opts.tcpLocalUrl = localUrl;
+    opts.tcpLocalUrlAdv = localUrl;
+    int result = litebus::Initialize(opts);
 
     if (result != BUS_OK) {
         /* Already initialized in another test — skip rather than fail */
