@@ -385,7 +385,17 @@ bool TCPMgr::StartLocalListener(const std::string &localUrl, const std::string &
      * its advertise URL (localAdvUrl) is kept for diagnostics only.  Remote peers should
      * never be told about this port — it is exclusively for same-node internal access and
      * trusts connections implicitly (no TLS, no AKSK).  Publishing it would undermine the
-     * security model. */
+     * security model.
+     *
+     * Safety: reject any URL that does not bind to a loopback interface.
+     * A non-loopback bind would expose an unauthenticated (no TLS, no AKSK)
+     * port to the network, directly violating the security model. */
+    bool isLoopback = (localUrl.find("tcp://127.") != std::string::npos) ||
+                      (localUrl.find("tcp://::1") != std::string::npos);
+    if (!isLoopback) {
+        BUSLOG_ERROR("StartLocalListener: localUrl must bind to loopback (127.x.x.x or ::1), got: {}", localUrl);
+        return false;
+    }
     serverFdLocal = SocketOperate::Listen(localUrl);
     if (serverFdLocal < 0) {
         BUSLOG_ERROR("local listener bind failed. url={}", localUrl);

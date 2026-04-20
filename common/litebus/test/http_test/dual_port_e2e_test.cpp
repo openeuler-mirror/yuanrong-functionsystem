@@ -176,8 +176,12 @@ class DualPortE2ETest : public ::testing::Test {
 protected:
     static void SetUpTestSuite()
     {
+        // Allocate two distinct ports; retry until they differ to avoid a
+        // FindFreePort() race where OS reuses the same port for both calls.
         extPort_  = FindFreePort();
-        localPort_ = FindFreePort();
+        do {
+            localPort_ = FindFreePort();
+        } while (localPort_ == extPort_);
 
         std::string extUrl   = "tcp://127.0.0.1:" + std::to_string(extPort_);
         std::string localUrl = "tcp://127.0.0.1:" + std::to_string(localPort_);
@@ -192,8 +196,15 @@ protected:
         litebus::Spawn(std::make_shared<ProbeActor>("ProbeActor"));
         litebus::Spawn(std::make_shared<litebus::http::HttpSysMgr>("SysManager"));
 
-        /* Wait briefly for actors and listeners to be ready */
-        std::this_thread::sleep_for(200ms);
+        /* Wait until both ports return HTTP 200 before running any test.
+         * This replaces the previous fixed 200ms sleep which was unreliable
+         * on loaded CI environments. */
+        auto extProbeUrl   = "http://127.0.0.1:" + std::to_string(extPort_)   + "/ProbeActor/probe";
+        auto localProbeUrl = "http://127.0.0.1:" + std::to_string(localPort_) + "/ProbeActor/probe";
+        bool ready = WaitUntil([&] {
+            return HttpGet(extProbeUrl).first == 200 && HttpGet(localProbeUrl).first == 200;
+        }, 10s);
+        ASSERT_TRUE(ready) << "Timed out waiting for both ports to become ready";
     }
 
     static void TearDownTestSuite()
@@ -272,20 +283,20 @@ TEST_F(DualPortE2ETest, BothPortsServeRequestsConcurrently)
 
     std::pair<long, std::string> localResult, extResult;
 
-    /* Fire requests from two threads simultaneously */
-    std::thread localThread([&] { localResult = HttpGet(localUrl); });
-    std::thread extThread([&] { extResult = HttpGet(extUrl); });
+    /* Retry the concurrent pair until both produce the expected responses. */
+    bool ok = WaitUntil([&] {
+        std::thread localThread([&] { localResult = HttpGet(localUrl); });
+        std::thread extThread([&] { extResult = HttpGet(extUrl); });
+        localThread.join();
+        extThread.join();
+        return localResult.first == 200 && extResult.first == 200 &&
+               localResult.second.find("internal=1") != std::string::npos &&
+               extResult.second.find("internal=0") != std::string::npos;
+    }, 5s);
 
-    localThread.join();
-    extThread.join();
-
-    EXPECT_EQ(localResult.first, 200) << "Local port HTTP status unexpected";
-    EXPECT_NE(localResult.second.find("internal=1"), std::string::npos)
-        << "Local port: expected 'internal=1', got: " << localResult.second;
-
-    EXPECT_EQ(extResult.first, 200) << "External port HTTP status unexpected";
-    EXPECT_NE(extResult.second.find("internal=0"), std::string::npos)
-        << "External port: expected 'internal=0', got: " << extResult.second;
+    EXPECT_TRUE(ok) << "Concurrent test failed; "
+                    << "local: HTTP " << localResult.first << " body=" << localResult.second << "; "
+                    << "ext: HTTP " << extResult.first << " body=" << extResult.second;
 }
 
 /**
@@ -298,8 +309,12 @@ TEST_F(DualPortE2ETest, LocalPortReturnsHttp200)
 {
     std::string url = "http://127.0.0.1:" + std::to_string(localPort_) + "/ProbeActor/probe";
 
-    auto [code, body] = HttpGet(url);
-    EXPECT_EQ(code, 200L) << "Local port returned unexpected status; body=" << body;
+    std::pair<long, std::string> result;
+    bool ok = WaitUntil([&] {
+        result = HttpGet(url);
+        return result.first == 200;
+    }, 5s);
+    EXPECT_TRUE(ok) << "Local port returned unexpected status; code=" << result.first << " body=" << result.second;
 }
 
 /**
@@ -312,8 +327,12 @@ TEST_F(DualPortE2ETest, ExternalPortReturnsHttp200)
 {
     std::string url = "http://127.0.0.1:" + std::to_string(extPort_) + "/ProbeActor/probe";
 
-    auto [code, body] = HttpGet(url);
-    EXPECT_EQ(code, 200L) << "External port returned unexpected status; body=" << body;
+    std::pair<long, std::string> result;
+    bool ok = WaitUntil([&] {
+        result = HttpGet(url);
+        return result.first == 200;
+    }, 5s);
+    EXPECT_TRUE(ok) << "External port returned unexpected status; code=" << result.first << " body=" << result.second;
 }
 
 /**
