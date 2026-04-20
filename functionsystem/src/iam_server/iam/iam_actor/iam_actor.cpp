@@ -329,10 +329,18 @@ std::pair<litebus::http::ResponseCode, std::string> IAMActor::RequestFilter(cons
                                                                             const InternalIAM::IAMCredType &type,
                                                                             const HttpRequest &request)
 {
-    if (!VerifyRequest(request)) {
+    /* Requests arriving on the local plaintext listener are trusted at the network level
+     * (127.0.0.1 is only reachable by co-located processes) and bypass AKSK signature verification. */
+    bool isInternalSrc = (request.headers.count("X-Internal-Src") &&
+                          request.headers.at("X-Internal-Src") == "1");
+    if (!isInternalSrc && !VerifyRequest(request)) {
         YRLOG_DEBUG("{}: verifyRequest Failed from {}", methodName,
                     request.client.IsSome() ? request.client.Get() : "unknown ip");
         return std::make_pair(litebus::http::ResponseCode::FORBIDDEN, "verify failed");
+    }
+    if (isInternalSrc) {
+        YRLOG_DEBUG("{}: internal source request, skipping AKSK verification from {}", methodName,
+                    request.client.IsSome() ? request.client.Get() : "unknown ip");
     }
     if (request.method != "GET") {
         YRLOG_ERROR("{}: expecting GET but receive invalid method '{}' from {}", methodName, request.method,

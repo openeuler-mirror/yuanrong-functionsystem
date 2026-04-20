@@ -161,7 +161,11 @@ void OnCreate(const Flags &flags)
         g_iamServerSwitcher->SetStop();
         return;
     }
-    if (!g_iamServerSwitcher->InitLiteBus(address, flags.GetLitebusThreadNum(), false)) {
+    if (!g_iamServerSwitcher->InitLiteBus(address, flags.GetLitebusThreadNum(), false,
+                                          flags.GetLocalListenPort() == 0
+                                              ? ""
+                                              : flags.GetLocalIP() + ":" +
+                                                    std::to_string(flags.GetLocalListenPort()))) {
         g_iamServerSwitcher->SetStop();
         return;
     }
@@ -204,6 +208,8 @@ void OnCreate(const Flags &flags)
                                                        .credentialHostAddress = flags.GetCredentialHostAddress() },
                                  .nodeID = flags.GetNodeID(),
                                  .ip = flags.GetIP(),
+                                 .localIp = flags.GetLocalIP(),
+                                 .localPort = flags.GetLocalListenPort(),
                                  .metaStoreAddress = flags.GetMetaStoreAddress(),
                                  .authProvider = flags.GetAuthProvider(),
                                  .keycloakConfig = { .url = flags.GetKeycloakUrl(),

@@ -28,6 +28,8 @@ extern "C" {
 struct LitebusConfig {
     char tcpUrl[LITEBUS_URL_MAX_LEN];
     char tcpUrlAdv[LITEBUS_URL_MAX_LEN];
+    char tcpLocalUrl[LITEBUS_URL_MAX_LEN];     /* local plaintext listener, e.g. "tcp://127.0.0.1:port" */
+    char tcpLocalUrlAdv[LITEBUS_URL_MAX_LEN];  /* advertise address for local listener */
     char udpUrl[LITEBUS_URL_MAX_LEN];
     char udpUrlAdv[LITEBUS_URL_MAX_LEN];
     int threadCount;
