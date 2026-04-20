@@ -95,6 +95,34 @@ static std::pair<long, std::string> HttpGet(const std::string &url)
     return {code, body};
 }
 
+/* Perform an HTTP GET with a single extra request header. */
+static std::pair<long, std::string> HttpGetWithHeader(const std::string &url, const std::string &header)
+{
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+        return {-1, ""};
+    }
+
+    std::string body;
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+
+    curl_slist *hdrs = curl_slist_append(nullptr, header.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, hdrs);
+
+    CURLcode res = curl_easy_perform(curl);
+    long code = 0;
+    if (res == CURLE_OK) {
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+    }
+    curl_slist_free_all(hdrs);
+    curl_easy_cleanup(curl);
+    return {code, body};
+}
+
 /* ─────────────────────────────────────────────────────────────
  * ProbeActor — echoes X-Internal-Src header value in response
  * ───────────────────────────────────────────────────────────── */
@@ -286,6 +314,27 @@ TEST_F(DualPortE2ETest, ExternalPortReturnsHttp200)
 
     auto [code, body] = HttpGet(url);
     EXPECT_EQ(code, 200L) << "External port returned unexpected status; body=" << body;
+}
+
+/**
+ * Feature: External port strips forged X-Internal-Src header
+ * Description: A malicious client that sends "X-Internal-Src: 1" to the external port
+ *              must have the header stripped by the server before it reaches any actor.
+ *              The ProbeActor must therefore still report "internal=0".
+ * Expected: response body == "internal=0" even when the client supplies the header
+ */
+TEST_F(DualPortE2ETest, ExternalPortStripsForgedInternalSrcHeader)
+{
+    std::string url = "http://127.0.0.1:" + std::to_string(extPort_) + "/ProbeActor/probe";
+
+    std::pair<long, std::string> result;
+    bool ok = WaitUntil([&] {
+        result = HttpGetWithHeader(url, "X-Internal-Src: 1");
+        return result.first == 200 && result.second.find("internal=0") != std::string::npos;
+    }, 5s);
+
+    EXPECT_TRUE(ok) << "External port must strip a client-forged X-Internal-Src header; "
+                    << "HTTP " << result.first << " body=" << result.second;
 }
 
 /* ─────────────────────────────────────────────────────────────
