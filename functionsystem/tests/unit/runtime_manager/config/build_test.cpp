@@ -65,7 +65,7 @@ TEST_F(BuildTest, GeneratePosixEnvsTest)
         EXPECT_EQ(envMap["METRICS_CONFIG_FILE"], "/tmp/home/snuser/config.json");
         auto ldPath = envMap["LD_LIBRARY_PATH"];
         EXPECT_EQ(envMap["LD_LIBRARY_PATH"],
-                  "/dcache/layer/func/test/test:/dcache/layer/func/test/test/lib:/runtime/sdk/lib");
+                  "/dcache/layer/func/test/test:/dcache/layer/func/test/test/lib:/python/yr:/runtime/sdk/lib");
     }
     {
         auto startReq = std::make_shared<messages::StartInstanceRequest>();
