@@ -46,6 +46,7 @@
 
 #include "actor/buslog.hpp"
 #include "async/future.hpp"
+#include "executils.hpp"
 #include "httpd/http_actor.hpp"
 #include "httpd/http_sysmgr.hpp"
 #include "litebus.hpp"
@@ -62,6 +63,7 @@ using namespace std::chrono_literals;
 static int FindFreePort()
 {
     int port = litebus::find_available_port();
+    EXPECT_GT(port, 0) << "find_available_port() returned invalid port: " << port;
     return port;
 }
 
@@ -178,10 +180,15 @@ protected:
     {
         // Allocate two distinct ports; retry until they differ to avoid a
         // FindFreePort() race where OS reuses the same port for both calls.
-        extPort_  = FindFreePort();
+        // Bound the retry count to prevent an infinite loop.
+        extPort_ = FindFreePort();
+        constexpr int kMaxPortRetries = 100;
+        int portRetries = 0;
         do {
             localPort_ = FindFreePort();
-        } while (localPort_ == extPort_);
+            ++portRetries;
+        } while (localPort_ == extPort_ && portRetries < kMaxPortRetries);
+        ASSERT_LT(portRetries, kMaxPortRetries) << "Failed to find two distinct free ports after 100 attempts";
 
         std::string extUrl   = "tcp://127.0.0.1:" + std::to_string(extPort_);
         std::string localUrl = "tcp://127.0.0.1:" + std::to_string(localPort_);
@@ -283,20 +290,22 @@ TEST_F(DualPortE2ETest, BothPortsServeRequestsConcurrently)
 
     std::pair<long, std::string> localResult, extResult;
 
-    /* Retry the concurrent pair until both produce the expected responses. */
-    bool ok = WaitUntil([&] {
-        std::thread localThread([&] { localResult = HttpGet(localUrl); });
-        std::thread extThread([&] { extResult = HttpGet(extUrl); });
-        localThread.join();
-        extThread.join();
-        return localResult.first == 200 && extResult.first == 200 &&
-               localResult.second.find("internal=1") != std::string::npos &&
-               extResult.second.find("internal=0") != std::string::npos;
-    }, 5s);
+    /* Both ports are proven ready by SetUpTestSuite; a single concurrent pair
+     * of requests is sufficient.  Threads are created once here, not inside a
+     * retry loop, to avoid spawning O(N) threads on transient failures. */
+    std::thread localThread([&] { localResult = HttpGet(localUrl); });
+    std::thread extThread([&] { extResult = HttpGet(extUrl); });
+    localThread.join();
+    extThread.join();
 
-    EXPECT_TRUE(ok) << "Concurrent test failed; "
-                    << "local: HTTP " << localResult.first << " body=" << localResult.second << "; "
-                    << "ext: HTTP " << extResult.first << " body=" << extResult.second;
+    EXPECT_EQ(localResult.first, 200)
+        << "local port HTTP error; body=" << localResult.second;
+    EXPECT_NE(localResult.second.find("internal=1"), std::string::npos)
+        << "local port response missing internal=1 flag; body=" << localResult.second;
+    EXPECT_EQ(extResult.first, 200)
+        << "external port HTTP error; body=" << extResult.second;
+    EXPECT_NE(extResult.second.find("internal=0"), std::string::npos)
+        << "external port response missing internal=0 flag; body=" << extResult.second;
 }
 
 /**

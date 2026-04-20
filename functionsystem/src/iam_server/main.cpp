@@ -169,11 +169,14 @@ void OnCreate(const Flags &flags)
         g_iamServerSwitcher->SetStop();
         return;
     }
-    if (!g_iamServerSwitcher->InitLiteBus(address, flags.GetLitebusThreadNum(), false,
-                                          flags.GetLocalListenPort() == 0
-                                              ? ""
-                                              : flags.GetLocalIP() + ":" +
-                                                    std::to_string(flags.GetLocalListenPort()))) {
+    /* Build the optional local-loopback listen address.
+     * Only set it when both IP and port are configured; an empty IP with a
+     * non-zero port would produce an invalid ":8080" bind address. */
+    std::string localAddress;
+    if (flags.GetLocalListenPort() != 0 && !flags.GetLocalIP().empty()) {
+        localAddress = flags.GetLocalIP() + ":" + std::to_string(flags.GetLocalListenPort());
+    }
+    if (!g_iamServerSwitcher->InitLiteBus(address, flags.GetLitebusThreadNum(), false, localAddress)) {
         g_iamServerSwitcher->SetStop();
         return;
     }

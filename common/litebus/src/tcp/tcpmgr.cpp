@@ -379,6 +379,24 @@ bool TCPMgr::StartIOServer(const std::string &url, const std::string &aAdvertise
     return true;
 }
 
+/* Extract the host portion from a "tcp://HOST:PORT" URL.
+ * Returns an empty string if the URL does not match the expected format. */
+static std::string TcpUrlHost(const std::string &url)
+{
+    constexpr std::string_view kPrefix = "tcp://";
+    if (url.size() <= kPrefix.size() || url.compare(0, kPrefix.size(), kPrefix) != 0) {
+        return {};
+    }
+    std::string hostPort = url.substr(kPrefix.size());
+    /* Use rfind to strip the trailing ':PORT', keeping only HOST.
+     * For IPv6 addresses like ::1:port this correctly finds the last colon. */
+    auto colonPos = hostPort.rfind(':');
+    if (colonPos == std::string::npos) {
+        return {};
+    }
+    return hostPort.substr(0, colonPos);
+}
+
 bool TCPMgr::StartLocalListener(const std::string &localUrl, const std::string &localAdvUrl)
 {
     /* The local plaintext listener is intentionally not registered with the routing layer:
@@ -389,9 +407,13 @@ bool TCPMgr::StartLocalListener(const std::string &localUrl, const std::string &
      *
      * Safety: reject any URL that does not bind to a loopback interface.
      * A non-loopback bind would expose an unauthenticated (no TLS, no AKSK)
-     * port to the network, directly violating the security model. */
-    bool isLoopback = (localUrl.find("tcp://127.") != std::string::npos) ||
-                      (localUrl.find("tcp://::1") != std::string::npos);
+     * port to the network, directly violating the security model.
+     *
+     * Substring search (find "tcp://127.") is insufficient — it would also match
+     * tcp://127.attacker.com:port.  Extract and validate HOST explicitly instead. */
+    std::string host = TcpUrlHost(localUrl);
+    bool isLoopback = (host.size() >= 4 && host.compare(0, 4, "127.") == 0) ||
+                      (host == "::1");
     if (!isLoopback) {
         BUSLOG_ERROR("StartLocalListener: localUrl must bind to loopback (127.x.x.x or ::1), got: {}", localUrl);
         return false;

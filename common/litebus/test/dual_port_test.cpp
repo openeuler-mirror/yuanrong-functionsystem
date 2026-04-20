@@ -34,6 +34,7 @@
 #include <gtest/gtest.h>
 #include <signal.h>
 
+#include "actor/actormgr.hpp"
 #include "actor/buslog.hpp"
 #include "litebus.hpp"
 #include "litebus.h"
@@ -295,7 +296,7 @@ TEST(DualPortIntegrationTest, InitializeWithLocalListenerSucceeds)
     }
 
     /* Retrieve the TCPMgr and verify serverFdLocal was set */
-    auto ioMgrRef = ActorMgr::GetIOMgrRef("tcp");
+    auto ioMgrRef = ActorMgr::GetIOMgrRef(std::string("tcp"));
     ASSERT_NE(ioMgrRef, nullptr);
     auto *tcpMgr = dynamic_cast<TCPMgr *>(ioMgrRef.get());
     ASSERT_NE(tcpMgr, nullptr);

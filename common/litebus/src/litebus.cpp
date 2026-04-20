@@ -57,7 +57,8 @@ int LitebusInitializeC(const struct LitebusConfig *config)
 
     return litebus::Initialize(std::string(config->tcpUrl), std::string(config->tcpUrlAdv),
                                std::string(config->udpUrl), std::string(config->udpUrlAdv), config->threadCount,
-                               std::string(config->tcpLocalUrl), std::string(config->tcpLocalUrlAdv));
+                               config->tcpLocalUrl ? std::string(config->tcpLocalUrl) : std::string(),
+                               config->tcpLocalUrlAdv ? std::string(config->tcpLocalUrlAdv) : std::string());
 }
 
 void LitebusFinalizeC()
