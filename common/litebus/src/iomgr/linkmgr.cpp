@@ -445,8 +445,8 @@ void ConnectionUtil::SetSocketOperate(Connection *conn)
         return;
     }
 #ifdef SSL_ENABLED
-
-    if (openssl::IsSslEnabled()) {
+    /* Local connections (127.0.0.1 listener) skip TLS regardless of the global SSL setting. */
+    if (!conn->isLocalConn && openssl::IsSslEnabled()) {
         conn->socketOperate = new (std::nothrow) SSLSocketOperate();
         conn->type = ConnectionType::TYPE_SSL;
     } else {

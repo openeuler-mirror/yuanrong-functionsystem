@@ -22,7 +22,15 @@ set(INSTALL_DIR "${EP_BUILD_DIR}/Install/${src_name}")
 message("include datasystem lib from ${INSTALL_DIR}")
 set(datasystem_INCLUDE_DIR ${INSTALL_DIR}/sdk/cpp/include)
 set(datasystem_LIB_DIR ${INSTALL_DIR}/sdk/cpp/lib)
-set(datasystem_LIB ${datasystem_LIB_DIR}/libdatasystem.so ${datasystem_LIB_DIR}/libds_router_client.so)
+# datasystem was built against OpenSSL 1.1; explicitly add the bundled 1.1 libraries so the
+# linker can resolve @OPENSSL_1_1_0 versioned symbols without conflicting with the vendor
+# OpenSSL 3.0 used by other components.
+set(datasystem_LIB
+    ${datasystem_LIB_DIR}/libdatasystem.so
+    ${datasystem_LIB_DIR}/libds_router_client.so
+    ${datasystem_LIB_DIR}/libssl.so.1.1
+    ${datasystem_LIB_DIR}/libcrypto.so.1.1
+)
 
 include_directories(${datasystem_INCLUDE_DIR})
 

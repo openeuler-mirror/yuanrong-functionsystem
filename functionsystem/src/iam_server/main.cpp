@@ -151,17 +151,32 @@ void OnCreate(const Flags &flags)
     YRLOG_INFO("version:{} branch:{} commit_id:{}", BUILD_VERSION, GIT_BRANCH_NAME, GIT_HASH);
     CreateKubeClient(flags);
     auto address = flags.GetIP() + ":" + flags.GetHTTPListenPort();
-    if (flags.GetSslEnable()) {
-        InitLitebusSSLEnv(GetSSLCertConfig(flags));
+
+    /* Build SSL config: use IAM-specific toggle (falls back to global if unset),
+     * certificate paths always come from global ssl_base_path/cert/key/root. */
+    SSLCertConfig iamSslConfig = GetSSLCertConfig(flags);
+    if (flags.HasIAMSslOverride()) {
+        // IAM explicitly controls SSL; override the isEnable from global config
+        iamSslConfig.isEnable = flags.GetIAMSslEnable();
+    }
+    if (iamSslConfig.isEnable) {
+        InitLitebusSSLEnv(iamSslConfig);
     }
     g_iamServerSwitcher->InitMetrics(flags.GetEnableMetrics(), flags.GetMetricsConfig(), flags.GetMetricsConfigFile(),
-                                     GetSSLCertConfig(flags));
+                                     iamSslConfig);
     if (!InitLitebusAKSKEnv(flags).IsOk()) {
         YRLOG_ERROR("failed to get aksk config");
         g_iamServerSwitcher->SetStop();
         return;
     }
-    if (!g_iamServerSwitcher->InitLiteBus(address, flags.GetLitebusThreadNum(), false)) {
+    /* Build the optional local-loopback listen address.
+     * Only set it when both IP and port are configured; an empty IP with a
+     * non-zero port would produce an invalid ":8080" bind address. */
+    std::string localAddress;
+    if (flags.GetLocalListenPort() != 0 && !flags.GetLocalIP().empty()) {
+        localAddress = flags.GetLocalIP() + ":" + std::to_string(flags.GetLocalListenPort());
+    }
+    if (!g_iamServerSwitcher->InitLiteBus(address, flags.GetLitebusThreadNum(), false, localAddress)) {
         g_iamServerSwitcher->SetStop();
         return;
     }
@@ -204,6 +219,8 @@ void OnCreate(const Flags &flags)
                                                        .credentialHostAddress = flags.GetCredentialHostAddress() },
                                  .nodeID = flags.GetNodeID(),
                                  .ip = flags.GetIP(),
+                                 .localIp = flags.GetLocalIP(),
+                                 .localPort = flags.GetLocalListenPort(),
                                  .metaStoreAddress = flags.GetMetaStoreAddress(),
                                  .authProvider = flags.GetAuthProvider(),
                                  .keycloakConfig = { .url = flags.GetKeycloakUrl(),

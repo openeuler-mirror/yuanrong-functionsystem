@@ -33,7 +33,8 @@ public:
     ~ModuleSwitcher() = default;
     void SetStop();
     void WaitStop();
-    bool InitLiteBus(const std::string &address, int32_t threadNum = LITEBUS_THREAD_NUM, bool enableUDP = true);
+    bool InitLiteBus(const std::string &address, int32_t threadNum = LITEBUS_THREAD_NUM, bool enableUDP = true,
+                     const std::string &localAddress = "");
     void FinalizeLiteBus();
     bool RegisterHandler(sighandler_t handler, std::shared_ptr<litebus::Promise<bool>> &stopSignal);
 

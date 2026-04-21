@@ -28,9 +28,22 @@ struct LitebusAddress {
     uint16_t port;
 };
 
-// brief initialize the library
+struct LitebusInitOptions {
+    std::string tcpUrl;
+    std::string tcpUrlAdv;
+    std::string udpUrl;
+    std::string udpUrlAdv;
+    int threadCount = 0;
+    std::string tcpLocalUrl;
+    std::string tcpLocalUrlAdv;
+};
+
+// brief initialize the library (legacy overload, no dual-port)
 int Initialize(const std::string &tcpUrl, const std::string &tcpUrlAdv = "", const std::string &udpUrl = "",
                const std::string &udpUrlAdv = "", int threadCount = 0);
+
+// brief initialize the library with full options (supports dual-port)
+int Initialize(const LitebusInitOptions &opts);
 
 // brief spawn a process to run an actor
 AID Spawn(ActorReference actor, bool sharedThread = true, bool start = true);
