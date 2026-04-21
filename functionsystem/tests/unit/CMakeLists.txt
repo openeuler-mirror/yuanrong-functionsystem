@@ -71,6 +71,7 @@ target_include_directories(${UNIT_TEST_MODULE} PRIVATE
         ${GLOBAL_SCHEDULER_DIR}
         ${SRC_RUNTIME_MANAGER_INCLUDE_DIR}
         ${SRC_DOMAIN_SCHEDULER_INCLUDE_DIR}
+        ${SRC_IAM_SERVER_INCLUDE_DIR}
 )
 target_compile_options(${UNIT_TEST_MODULE} PRIVATE "-fvisibility=hidden")
 get_property(PLUGIN_LIB GLOBAL PROPERTY "PLUGIN_LIB")
@@ -95,6 +96,7 @@ target_link_libraries(${UNIT_TEST_MODULE} PRIVATE
         local_scheduler_lib
         runtime_manager_lib
         function_proxy_common_lib
+        iam_server_lib
         leader
         explorer
         profile
