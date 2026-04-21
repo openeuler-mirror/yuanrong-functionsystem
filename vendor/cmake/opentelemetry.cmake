@@ -63,7 +63,7 @@ if (NOT EXISTS ${HISTORY_INSTALLLED})
             SOURCE_DIR ${src_dir}
             CMAKE_ARGS ${${src_name}_CMAKE_ARGS} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DCMAKE_INSTALL_LIBDIR=lib
             BUILD_COMMAND bash -c "export LD_LIBRARY_PATH=${protobuf_LIB_DIR}:${grpc_LIB_DIR}:$ENV{LD_LIBRARY_PATH} \
-                                && ${CMAKE_MAKE_PROGRAM} -j ${BUILD_THREAD_NUM}"
+                                && ${CMAKE_MAKE_PROGRAM} -j${BUILD_THREAD_NUM}"
             LOG_CONFIGURE ON
             LOG_BUILD ON
             LOG_INSTALL ON
