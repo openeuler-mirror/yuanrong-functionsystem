@@ -168,6 +168,9 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     if (language.find(CPP_LANGUAGE) != std::string::npos) {
         ss << ":" << config.runtimePath << "/cpp/lib";
     }
+    if (language.find(PYTHON_LANGUAGE) != std::string::npos) {
+        ss << ":" << config.runtimePath << "/python/yr";
+    }
     if (!config.runtimeLdLibraryPath.empty() &&
         request->type() == static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME)) {
         ss << ":" << config.runtimeLdLibraryPath;

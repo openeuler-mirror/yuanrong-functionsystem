@@ -99,7 +99,7 @@ inline std::shared_ptr<observability::exporters::metrics::Exporter> LoadExporter
 {
     auto factory = LoadFactoryFromLibrary(libPath, error);
     if (factory == nullptr) {
-        std::cerr << "null factory: " << error << std::endl;
+        std::cerr << "null factory: " << error << ",path is " << libPath << ",config is " << config << std::endl;
         return nullptr;
     }
     auto exporter = factory->MakeExporter(config, error);
