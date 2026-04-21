@@ -46,6 +46,10 @@ include(curl)
 include(obs)
 include(opentelemetry)
 
+# 引入商用版本配置（请勿移除该标签）
+# ===== BEG =====
+# ===== END =====
+
 add_custom_target(main
     DEPENDS
     gtest_1_12_1
