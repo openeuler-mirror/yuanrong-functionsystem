@@ -976,6 +976,7 @@ litebus::Future<messages::KillInstanceResponse> InstanceCtrlActor::SendKillReque
     auto killInstanceReq =
         GenKillInstanceRequest(requestID, instanceInfo.instanceid(), traceID, instanceInfo.storagetype(), isMonopoly);
     killInstanceReq->set_runtimeid(instanceInfo.runtimeid());
+    killInstanceReq->set_executortype(instanceInfo.executortype());
 
     ASSERT_IF_NULL(clientManager_);
     ASSERT_IF_NULL(functionAgentMgr_);
@@ -2188,6 +2189,7 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     request->mutable_instance()->set_runtimeid(response.runtimeid());
     request->mutable_instance()->set_starttime(response.timeinfo());
     request->mutable_instance()->set_runtimeaddress(response.address());
+    request->mutable_instance()->set_executortype(response.executortype());
     (*request->mutable_instance()->mutable_extensions())[PID] = std::to_string(response.pid());
     request->mutable_instance()->set_containerid(response.containerid());
     if (!response.portmappings().empty()) {

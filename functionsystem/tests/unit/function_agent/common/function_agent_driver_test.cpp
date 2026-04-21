@@ -18,15 +18,10 @@
 
 #include <gtest/gtest.h>
 #include <memory>
-#include <thread>
-#include <chrono>
 
 #define private public  // onle for test
-#include "function_agent/driver/function_agent_driver.h"
 #include "function_agent/flags/function_agent_flags.h"
 #include "runtime_manager/config/flags.h"
-#include "common/utils/module_switcher.h"
-#include "common/logs/logging.h"
 
 using namespace functionsystem::function_agent;
 using namespace functionsystem::runtime_manager;
@@ -137,6 +132,7 @@ TEST_F(FunctionAgentDriverTest, DriverTest)
 
 TEST_F(FunctionAgentDriverTest, MergeProcessMode_StartSuccess)
 {
+    // litebus::os::SetEnv("SKIP_SUPERVISOR", "true");
     auto param = CreateBasicStartParam();
     param.enableMergeProcess = true;
     param.runtimeManagerFlags = CreateRuntimeManagerFlags();
@@ -148,6 +144,7 @@ TEST_F(FunctionAgentDriverTest, MergeProcessMode_StartSuccess)
     Status stopStatus = driver.Stop();
     EXPECT_EQ(stopStatus, Status::OK());
     driver.Await();
+    // litebus::os::UnSetEnv("SKIP_SUPERVISOR");
 }
 
 TEST_F(FunctionAgentDriverTest, MergeProcessMode_WithoutRuntimeManagerFlags)
