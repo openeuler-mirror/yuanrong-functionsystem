@@ -122,6 +122,8 @@ type ExtendedMetaData struct {
 	ExtendedTimeout     map[string]int            `json:"extended_timeout" valid:",optional"`
 	Device              types.Device              `json:"device,omitempty" valid:",optional"`
 	EnableAgentSession  bool                      `json:"enable_agent_session,omitempty"`
+	CustomContainerConfig CustomContainerConfig   `json:"custom_container_config" valid:",optional"`
+	CustomHealthCheck     CustomHealthCheck       `json:"custom_health_check" valid:",optional"`
 }
 
 // FuncCode include function code file and link info

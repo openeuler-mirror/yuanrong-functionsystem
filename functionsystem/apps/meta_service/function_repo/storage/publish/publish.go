@@ -209,6 +209,20 @@ func buildFaaSFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionVa
 		return metadata.FaaSFuncMeta{}, err
 	}
 	info.ExtendedMetaData.EnableAgentSession = fv.FunctionVersion.EnableAgentSession
+	info.ExtendedMetaData.CustomContainerConfig = metadata.CustomContainerConfig{
+		ControlPath: fv.FunctionVersion.CustomContainerConfig.ControlPath,
+		Image:       fv.FunctionVersion.CustomContainerConfig.Image,
+		Command:     fv.FunctionVersion.CustomContainerConfig.Command,
+		Args:        fv.FunctionVersion.CustomContainerConfig.Args,
+		WorkingDir:  fv.FunctionVersion.CustomContainerConfig.WorkingDir,
+		UID:         fv.FunctionVersion.CustomContainerConfig.UID,
+		GID:         fv.FunctionVersion.CustomContainerConfig.GID,
+	}
+	info.ExtendedMetaData.CustomHealthCheck = metadata.CustomHealthCheck{
+		TimeoutSeconds:   fv.FunctionVersion.CustomHealthCheck.TimeoutSeconds,
+		PeriodSeconds:    fv.FunctionVersion.CustomHealthCheck.PeriodSeconds,
+		FailureThreshold: fv.FunctionVersion.CustomHealthCheck.FailureThreshold,
+	}
 	err = buildFaaSInstanceMetaData(txn, fv, tenantInfo, &info.InstanceMetaData)
 	if err != nil {
 		log.GetLogger().Errorf("failed to build faas instance meta data, error: %s", err.Error())
@@ -376,6 +390,20 @@ func buildFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionValue,
 	info.ExtendedMetaData.ExtendedTimeout = fv.FunctionVersion.ExtendedTimeout
 	info.ExtendedMetaData.Device = fv.FunctionVersion.Device
 	info.ExtendedMetaData.EnableAgentSession = fv.FunctionVersion.EnableAgentSession
+	info.ExtendedMetaData.CustomContainerConfig = metadata.CustomContainerConfig{
+		ControlPath: fv.FunctionVersion.CustomContainerConfig.ControlPath,
+		Image:       fv.FunctionVersion.CustomContainerConfig.Image,
+		Command:     fv.FunctionVersion.CustomContainerConfig.Command,
+		Args:        fv.FunctionVersion.CustomContainerConfig.Args,
+		WorkingDir:  fv.FunctionVersion.CustomContainerConfig.WorkingDir,
+		UID:         fv.FunctionVersion.CustomContainerConfig.UID,
+		GID:         fv.FunctionVersion.CustomContainerConfig.GID,
+	}
+	info.ExtendedMetaData.CustomHealthCheck = metadata.CustomHealthCheck{
+		TimeoutSeconds:   fv.FunctionVersion.CustomHealthCheck.TimeoutSeconds,
+		PeriodSeconds:    fv.FunctionVersion.CustomHealthCheck.PeriodSeconds,
+		FailureThreshold: fv.FunctionVersion.CustomHealthCheck.FailureThreshold,
+	}
 	return info, nil
 }
 
