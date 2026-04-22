@@ -99,6 +99,7 @@ type FunctionBasicInfo struct {
 	AutoScaleConfig           AutoScaleConfig            `json:"autoScaleConfig" valid:",optional"`
 	SchedulePolicy            string                     `json:"schedulePolicy" valid:",optional"`
 	ScalePolicy               string                     `json:"scalePolicy" valid:",optional"`
+	PriorityAZ                string                     `json:"priorityAz" valid:",optional"`
 	IsFuncPublic              bool                       `json:"isFuncPublic" valid:"optional"`
 	ExtendedMetaData          types.ExtendedMetaData     `form:"extendedMetaData" json:"extendedMetaData" valid:",optional"`
 }
@@ -424,6 +425,7 @@ type FunctionVersion struct {
 	Device             types.Device         `json:"device,omitempty"`
 	Kind               string               `json:"kind,omitempty"`
 	RootfsSpecMeta     types.RootfsSpecMeta `json:"rootfs" valid:",optional"`
+	PriorityAZ         string               `json:"priorityAz,omitempty"`
 }
 
 // Function is function entity

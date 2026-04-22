@@ -259,6 +259,7 @@ func buildBasicUpdateFunctionVersion(request model.FunctionUpdateRequest,
 	fv.FunctionVersion.PoolID = request.PoolID
 	fv.FunctionVersion.EnableMetrics = request.EnableMetrics
 	fv.FunctionVersion.EnableAgentSession = request.EnableAgentSession
+	fv.FunctionVersion.PriorityAZ = request.PriorityAZ
 	fv.FunctionVersion.IdleTime = request.IdleTime
 	fv.FunctionVersion.IsFuncPublic = request.IsFuncPublic
 	fv.FunctionVersion.Package.BucketID = request.S3CodePath.BucketID
@@ -511,21 +512,22 @@ func getFunctionVersion(request model.FunctionCreateRequest, env string,
 		Device:             request.Device,
 		PoolLabel:          poolLabel,
 		PoolID:             request.PoolID,
-		EnableMetrics:      request.EnableMetrics,
 		EnableAgentSession: request.EnableAgentSession,
-		IsFuncPublic:       request.IsFuncPublic,
-		IdleTime:           request.IdleTime,
-		WarmupType:         request.WarmupType,
-		RootfsSpecMeta:     request.RootfsSpecMeta,
-		ScalePolicy:        request.ScalePolicy,
-		SchedulePolicy:     request.SchedulePolicy,
+		PriorityAZ:             request.PriorityAZ,
+		EnableMetrics:          request.EnableMetrics,
+		IsFuncPublic:           request.IsFuncPublic,
+		IdleTime:               request.IdleTime,
+		WarmupType:             request.WarmupType,
+		RootfsSpecMeta:         request.RootfsSpecMeta,
+		ScalePolicy:            request.ScalePolicy,
+		SchedulePolicy:         request.SchedulePolicy,
 		AutoScaleConfig: storage.AutoScaleConfig{
 			SLAQuota:      request.AutoScaleConfig.SLAQuota,
 			ScaleDownTime: request.AutoScaleConfig.ScaleDownTime,
 			BurstScaleNum: request.AutoScaleConfig.BurstScaleNum,
 		},
-		CustomContainerConfig: request.ExtendedMetaData.CustomContainerConfig,
-		CustomHealthCheck:     request.ExtendedMetaData.CustomHealthCheck,
+		CustomContainerConfig:  request.ExtendedMetaData.CustomContainerConfig,
+		CustomHealthCheck:      request.ExtendedMetaData.CustomHealthCheck,
 	}
 	if request.Kind == common.Faas {
 		version.Kind = common.Faas
@@ -1214,6 +1216,7 @@ func buildFunctionVersionEntity(key storage.FunctionVersionKey, v storage.Functi
 		Device:             v.FunctionVersion.Device,
 		Kind:               v.FunctionVersion.Kind,
 		RootfsSpecMeta:     v.FunctionVersion.RootfsSpecMeta,
+		PriorityAZ:         v.FunctionVersion.PriorityAZ,
 	}
 	return funcVer
 }
