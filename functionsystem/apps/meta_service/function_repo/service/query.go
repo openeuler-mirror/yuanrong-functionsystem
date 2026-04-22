@@ -49,7 +49,7 @@ const (
 	// serviceid must start with 0- and end with a hyphen (-) or (@), and contain 1 to 16 digits or letters.
 	funcNameRegex = "(^0-[0-9a-z]{1,16}-([a-zA-Z0-9.][a-zA-Z0-9.-]{0,126}[a-zA-Z0-9.]|[a-zA-Z0-9.])$)|" +
 		"(^[a-zA-Z0-9.][a-zA-Z0-9.-]{0,126}[a-zA-Z0-9.]$|^[a-zA-Z0-9.]$)|" +
-		"(^0@[0-9a-z]{1,16}@([a-zA-Z0-9.][a-zA-Z0-9.-]{0,126}[a-zA-Z0-9.]|[a-zA-Z0-9.])$)"
+		"(^0@[0-9a-zA-Z]{1,16}@([a-zA-Z0-9.][a-zA-Z0-9.-]{0,126}[a-zA-Z0-9.]|[a-zA-Z0-9.])$)"
 )
 
 func parseTenantInfo(tenantInfo string) (string, string) {
