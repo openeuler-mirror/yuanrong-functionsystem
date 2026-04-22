@@ -277,6 +277,8 @@ func buildBasicUpdateFunctionVersion(request model.FunctionUpdateRequest,
 
 	fv.FunctionVersion.ScalePolicy = request.ScalePolicy
 	fv.FunctionVersion.SchedulePolicy = request.SchedulePolicy
+	fv.FunctionVersion.CustomContainerConfig = request.ExtendedMetaData.CustomContainerConfig
+	fv.FunctionVersion.CustomHealthCheck = request.ExtendedMetaData.CustomHealthCheck
 	fv.FunctionVersion.AutoScaleConfig = storage.AutoScaleConfig{
 		SLAQuota:      request.AutoScaleConfig.SLAQuota,
 		ScaleDownTime: request.AutoScaleConfig.ScaleDownTime,
@@ -520,6 +522,8 @@ func getFunctionVersion(request model.FunctionCreateRequest, env string,
             ScaleDownTime: request.AutoScaleConfig.ScaleDownTime,
             BurstScaleNum: request.AutoScaleConfig.BurstScaleNum,
         },
+        CustomContainerConfig: request.ExtendedMetaData.CustomContainerConfig,
+        CustomHealthCheck:     request.ExtendedMetaData.CustomHealthCheck,
 	}
 	if request.Kind == common.Faas {
 		version.Kind = common.Faas

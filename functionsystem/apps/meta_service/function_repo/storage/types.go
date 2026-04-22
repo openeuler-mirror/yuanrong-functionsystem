@@ -113,8 +113,10 @@ type FunctionVersion struct {
 	IdleTime           int64
 	AutoScaleConfig    AutoScaleConfig
 	WarmupType         string
-	RootfsSpecMeta     types.RootfsSpecMeta
-	IsFuncPublic       bool
+	RootfsSpecMeta        types.RootfsSpecMeta
+	CustomContainerConfig types.CustomContainerConfig
+	CustomHealthCheck     types.CustomHealthCheck
+	IsFuncPublic          bool
 }
 
 // FunctionLayer defines layer info related to function version.

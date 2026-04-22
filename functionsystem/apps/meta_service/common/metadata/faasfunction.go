@@ -281,6 +281,7 @@ type FaaSExtendedMetaData struct {
 	LogTankService        LogTankService        `json:"log_tank_service" valid:",optional"`
 	TraceService          TraceService          `json:"tracing_config" valid:",optional"`
 	CustomContainerConfig CustomContainerConfig `json:"custom_container_config" valid:",optional"`
+	CustomHealthCheck     CustomHealthCheck     `json:"custom_health_check" valid:",optional"`
 	AsyncConfigLoaded     bool                  `json:"async_config_loaded" valid:",optional"`
 	RestoreHook           RestoreHook           `json:"restore_hook,omitempty" valid:",optional"`
 	NetworkController     NetworkController     `json:"network_controller" valid:",optional"`
@@ -303,6 +304,13 @@ type CustomContainerConfig struct {
 	WorkingDir  string   `json:"working_dir" valid:",optional"`
 	UID         int      `json:"uid" valid:",optional"`
 	GID         int      `json:"gid" valid:",optional"`
+}
+
+// CustomHealthCheck custom health check
+type CustomHealthCheck struct {
+	TimeoutSeconds   int `json:"timeoutSeconds" valid:",optional"`
+	PeriodSeconds    int `json:"periodSeconds" valid:",optional"`
+	FailureThreshold int `json:"failureThreshold" valid:",optional"`
 }
 
 // RestoreHook include restorehook handler and timeout

@@ -99,6 +99,7 @@ type FunctionBasicInfo struct {
 	SchedulePolicy            string                     `json:"schedulePolicy" valid:",optional"`
 	ScalePolicy               string                     `json:"scalePolicy" valid:",optional"`
 	IsFuncPublic              bool                       `json:"isFuncPublic" valid:"optional"`
+	ExtendedMetaData          types.ExtendedMetaData     `form:"extendedMetaData" json:"extendedMetaData" valid:",optional"`
 }
 
 // FunctionCreateRequest -
