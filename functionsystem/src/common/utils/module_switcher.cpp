@@ -52,8 +52,13 @@ bool ModuleSwitcher::InitLiteBus(const std::string &address, int32_t threadNum, 
      * loopback address.  There is no NAT between the bind and the peer so no separate
      * advertise URL is needed. */
     std::string localUrl = localAddress.empty() ? "" : "tcp://" + localAddress;
-    auto result = litebus::Initialize("tcp://" + address, "", enableUDP ? "udp://" + address : "", "", threadNum,
-                                      localUrl, localUrl);
+    litebus::LitebusInitOptions opts;
+    opts.tcpUrl = "tcp://" + address;
+    opts.udpUrl = enableUDP ? "udp://" + address : "";
+    opts.threadCount = threadNum;
+    opts.tcpLocalUrl = localUrl;
+    opts.tcpLocalUrlAdv = localUrl;
+    auto result = litebus::Initialize(opts);
     if (result != BUS_OK) {
         YRLOG_ERROR("HTTP server start failed: LiteBus initialize failed, address: {}, result: {}", address, result);
         return false;
