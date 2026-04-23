@@ -9,6 +9,7 @@ import builder
 import utils
 
 import tasks
+from . import vendor_cache
 
 log = utils.stream_logger()
 
@@ -43,12 +44,15 @@ def run_build(root_dir, cmd_args):
 def build_vendor(args):
     log.info(f"Building vendor with root_dir={args['root_dir']} and job_num={args['job_num']}")
     vendor_path = os.path.join(args["root_dir"], "vendor")
+    cache_manager = vendor_cache.VendorCacheManager(args["root_dir"], args["builder"])
+    log.info(f"Functionsystem vendor cache root: {cache_manager.cache_root}")
 
     # 根据下载清单下载第三方依赖
     log.info("Start to download vendor dependency packages")
     tasks.download_vendor(
         config_path=os.path.join(vendor_path, "VendorList.csv"), download_path=os.path.join(vendor_path, "src")
     )
+    cache_manager.prepare_workspace()
 
     # 编译三方件依赖
     log.info("Start to build etcd/etcdctl/etcdutl with golang")
@@ -65,6 +69,7 @@ def build_vendor(args):
         cmake_configure_cmd.append("-DBAZEL_MODE=OFF")
     utils.sync_command(cmake_configure_cmd, cwd=os.path.join(vendor_path))
     utils.sync_command(["cmake", "--build", "build", "--parallel", str(args["job_num"])], cwd=os.path.join(vendor_path))
+    cache_manager.publish_workspace()
 
     # 引入二方件产物
     log.info("Auto install yuanrong-datasystem production from tar file")
