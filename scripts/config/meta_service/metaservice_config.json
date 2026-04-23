@@ -54,7 +54,7 @@
         "python3.13",
         "cpp11",
         "cpp11-bin",
-        "custom-runtime",
+        "custom runtime",
         "posix-custom-runtime",
         "go1.13"
     ],
@@ -93,7 +93,7 @@
         "python3.13",
         "cpp11",
         "cpp11-bin",
-        "custom-runtime",
+        "custom runtime",
         "posix-custom-runtime",
         "go1.13"
     ],
