@@ -288,6 +288,24 @@ GlobalSchedDriver::GlobalSchedDriver(std::shared_ptr<GlobalSched> globalSched, c
         registerStatus != StatusCode::SUCCESS) {
         YRLOG_ERROR("register resources api router failed.");
     }
+
+    // add Traefik HTTP provider route (must be registered before Spawn)
+    if (flags.GetEnableTraefikProvider()) {
+        TraefikConfig traefikCfg;
+        traefikCfg.httpEntryPoint   = flags.GetTraefikHttpEntryPoint();
+        traefikCfg.enableTLS        = flags.GetTraefikEnableTLS();
+        traefikCfg.serversTransport = flags.GetTraefikServersTransport();
+        traefikRouteCache_ = std::make_shared<TraefikRouteCache>(std::move(traefikCfg));
+        traefikLeaderCtx_ = std::make_shared<TraefikLeaderContext>();
+        traefikLeaderCtx_->selfHttpAddress = flags.GetIP();
+        traefikApiRouteRegister_ = std::make_shared<TraefikApiRouterRegister>(
+            traefikRouteCache_, traefikLeaderCtx_, flags.GetTraefikForwardTimeoutMs());
+        if (auto registerStatus(httpServer_->RegisterRoute(traefikApiRouteRegister_));
+            registerStatus != StatusCode::SUCCESS) {
+            YRLOG_ERROR("register traefik api router failed.");
+        }
+        YRLOG_INFO("Traefik HTTP provider enabled at /traefik/config");
+    }
 }
 
 Status GlobalSchedDriver::Start()
@@ -343,6 +361,16 @@ void GlobalSchedDriver::Await() const
 std::shared_ptr<GlobalSched> GlobalSchedDriver::GetGlobalSched() const
 {
     return globalSched_;
+}
+
+std::shared_ptr<TraefikRouteCache> GlobalSchedDriver::GetTraefikRouteCache() const
+{
+    return traefikRouteCache_;
+}
+
+std::shared_ptr<TraefikLeaderContext> GlobalSchedDriver::GetTraefikLeaderContext() const
+{
+    return traefikLeaderCtx_;
 }
 
 void GlobalSchedDriver::BindComponentName(const std::string &componentName)

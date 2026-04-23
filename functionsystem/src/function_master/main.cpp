@@ -382,6 +382,12 @@ bool InitInstanceManagerDriver(const functionmaster::Flags &flags, const std::sh
     metaStoreMonitor->RegisterHealthyObserver(g_instanceMgr);
     groupMgrActor->BindInstanceManager(g_instanceMgr);
 
+    // Wire Traefik route cache from GlobalSchedDriver to InstanceManagerActor
+    if (g_globalSchedDriver && g_globalSchedDriver->GetTraefikRouteCache()) {
+        instanceMgrActor->SetTraefikRouteCache(g_globalSchedDriver->GetTraefikRouteCache());
+        YRLOG_INFO("Traefik route cache wired to InstanceManagerActor");
+    }
+
     // Create QuotaManagerActor if quota config file is specified
     std::shared_ptr<function_master::QuotaManagerActor> quotaMgrActor;
     auto quotaConfig = function_master::QuotaConfig::LoadFromFile(flags.GetQuotaConfigFile());
@@ -578,6 +584,24 @@ void OnCreate(const functionmaster::Flags &flags)
     metaStoreMonitor->RegisterHealthyObserver(globalSched);
     if (!InitGlobalSchedDriver(flags, metaClient, globalSched)) {
         return;
+    }
+
+    // Wire Traefik leader context to Explorer leader-change callback
+    if (g_globalSchedDriver && g_globalSchedDriver->GetTraefikLeaderContext()) {
+        auto traefikLeaderCtx = g_globalSchedDriver->GetTraefikLeaderContext();
+        if (flags.GetElectionMode() == STANDALONE_MODE) {
+            traefikLeaderCtx->isLeader.store(true);
+        } else {
+            explorer::Explorer::GetInstance().AddLeaderChangedCallback(
+                "TraefikProvider",
+                [ctx = traefikLeaderCtx, selfAddr = flags.GetIP()]
+                (const explorer::LeaderInfo &leaderInfo) {
+                    bool isSelf = (leaderInfo.address == selfAddr);
+                    ctx->UpdateLeader(leaderInfo.address, isSelf);
+                    YRLOG_INFO("TraefikProvider: leader updated to '{}', isSelf={}",
+                               leaderInfo.address, isSelf);
+                });
+        }
     }
 
     if (!InitInstanceManagerDriver(flags, metaClient, globalSched, metaStoreMonitor)) {

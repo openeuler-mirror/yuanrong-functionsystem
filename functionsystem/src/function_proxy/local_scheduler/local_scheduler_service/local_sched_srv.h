@@ -64,11 +64,20 @@ public:
 
     virtual litebus::Future<std::string> QueryMasterIP();
 
-    virtual litebus::Future<messages::RecordSnapshotResponse> RecordSnapshotMetadata(
-        const std::shared_ptr<messages::RecordSnapshotRequest> &req);
+    virtual litebus::Future<::messages::RecordSnapshotResponse> RecordSnapshotMetadata(
+        const std::shared_ptr<::messages::RecordSnapshotRequest> &req);
 
-    virtual litebus::Future<messages::RestoreSnapshotResponse> SnapStartCheckpoint(
-        const std::shared_ptr<messages::RestoreSnapshotRequest> &req);
+    virtual litebus::Future<::messages::RestoreSnapshotResponse> SnapStartCheckpoint(
+        const std::shared_ptr<::messages::RestoreSnapshotRequest> &req);
+
+    virtual litebus::Future<::messages::ListSnapshotsByFunctionKeyResponse> ListSnapshotsByFunctionKey(
+        const std::shared_ptr<::messages::ListSnapshotsByFunctionKeyRequest> &req);
+
+    virtual litebus::Future<::messages::ListSnapshotsByTenantResponse> ListSnapshotsByTenant(
+        const std::shared_ptr<::messages::ListSnapshotsByTenantRequest> &req);
+
+    virtual litebus::Future<::messages::DeleteSnapshotResponse> DeleteSnapshot(
+        const std::shared_ptr<::messages::DeleteSnapshotRequest> &req);
 
     virtual void BindSubscriptionMgr(const std::shared_ptr<SubscriptionMgr> &subscriptionMgr);
 
