@@ -209,15 +209,27 @@ public:
 
     litebus::Future<Status> TryCancelSchedule(const std::shared_ptr<messages::CancelSchedule> &cancelRequest);
 
-    litebus::Future<messages::RecordSnapshotResponse> RecordSnapshotMetadata(
-        const std::shared_ptr<messages::RecordSnapshotRequest> &req);
+    litebus::Future<::messages::RecordSnapshotResponse> RecordSnapshotMetadata(
+        const std::shared_ptr<::messages::RecordSnapshotRequest> &req);
     void OnRecordSnapshotMetadataResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 
-    litebus::Future<messages::RestoreSnapshotResponse> SnapStartCheckpoint(
-        const std::shared_ptr<messages::RestoreSnapshotRequest> &req);
-    void DoSnapStartCheckpoint(const std::shared_ptr<litebus::Promise<messages::RestoreSnapshotResponse>> &promise,
-                               const std::shared_ptr<messages::RestoreSnapshotRequest> &req);
+    litebus::Future<::messages::RestoreSnapshotResponse> SnapStartCheckpoint(
+        const std::shared_ptr<::messages::RestoreSnapshotRequest> &req);
+    void DoSnapStartCheckpoint(const std::shared_ptr<litebus::Promise<::messages::RestoreSnapshotResponse>> &promise,
+                               const std::shared_ptr<::messages::RestoreSnapshotRequest> &req);
     void OnSnapStartCheckpointResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    litebus::Future<::messages::ListSnapshotsByFunctionKeyResponse> ListSnapshotsByFunctionKey(
+        const std::shared_ptr<::messages::ListSnapshotsByFunctionKeyRequest> &req);
+    void OnListSnapshotsByFunctionKeyResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    litebus::Future<::messages::ListSnapshotsByTenantResponse> ListSnapshotsByTenant(
+        const std::shared_ptr<::messages::ListSnapshotsByTenantRequest> &req);
+    void OnListSnapshotsByTenantResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    litebus::Future<::messages::DeleteSnapshotResponse> DeleteSnapshot(
+        const std::shared_ptr<::messages::DeleteSnapshotRequest> &req);
+    void OnDeleteSnapshotResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     /**
      * Receive tenant quota exceeded notification from domain scheduler.
@@ -364,6 +376,13 @@ private:
 
     const uint32_t snapStartCheckpointTimeout_ = 10000;
     REQUEST_SYNC_HELPER(LocalSchedSrvActor, messages::RestoreSnapshotResponse, snapStartCheckpointTimeout_, snapStartCheckpointSync_);
+    const uint32_t listSnapshotTimeout_ = 10000;
+    REQUEST_SYNC_HELPER(LocalSchedSrvActor, ::messages::ListSnapshotsByFunctionKeyResponse, listSnapshotTimeout_,
+                        listSnapshotsByFunctionKeySync_);
+    REQUEST_SYNC_HELPER(LocalSchedSrvActor, ::messages::ListSnapshotsByTenantResponse, listSnapshotTimeout_,
+                        listSnapshotsByTenantSync_);
+    REQUEST_SYNC_HELPER(LocalSchedSrvActor, ::messages::DeleteSnapshotResponse, listSnapshotTimeout_,
+                        deleteSnapshotSync_);
 
     litebus::Promise<Status> unRegistered_;
 

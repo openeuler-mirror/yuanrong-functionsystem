@@ -36,6 +36,9 @@ Status SnapManagerDriver::Start()
     snapApiRouteRegister_ = std::make_shared<SnapApiRouter>();
     snapApiRouteRegister_->InitQuerySnapshotHandler(snapManagerActor_);
     snapApiRouteRegister_->InitListSnapshotsHandler(snapManagerActor_);
+    snapApiRouteRegister_->InitListByFunctionKeyHandler(snapManagerActor_);
+    snapApiRouteRegister_->InitListByTenantHandler(snapManagerActor_);
+    snapApiRouteRegister_->InitDeleteSnapshotHandler(snapManagerActor_);
     if (auto registerStatus(httpServer_->RegisterRoute(snapApiRouteRegister_));
         registerStatus != StatusCode::SUCCESS) {
         YRLOG_ERROR("register snap api router failed.");

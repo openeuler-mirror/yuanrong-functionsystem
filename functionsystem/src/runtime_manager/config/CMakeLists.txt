@@ -15,3 +15,5 @@
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} CONFIG_SRCS)
 
 target_sources(runtime_manager_lib PRIVATE ${CONFIG_SRCS})
+
+add_subdirectory(language)

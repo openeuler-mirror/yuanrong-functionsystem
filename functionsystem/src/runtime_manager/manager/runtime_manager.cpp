@@ -25,7 +25,7 @@
 #include "common/proto/pb/message_pb.h"
 #include "common/status/status.h"
 #include "executor/runtime_executor.h"
-#include "executor/container_executor.h"
+#include "executor/sandbox/sandbox_executor.h"
 #include "port/port_manager.h"
 #include "runtime_manager/executor/executor.h"
 #include "common/utils/struct_transfer.h"
@@ -468,18 +468,13 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::FindExecutor(EXECUTOR_TYPE type)
         return executorProxy;
     }
     if (type == EXECUTOR_TYPE::CONTAINER) {
-        auto ep = litebus::os::GetEnv("CONTAINER_EP");
-        if (ep.IsNone()) {
-            YRLOG_INFO("container executor disabled, no containerd endpoint found");
-            return nullptr;
-        }
-        YRLOG_INFO("create a container executor.");
+        YRLOG_INFO("create a sandbox executor.");
         auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
         const std::string name = "RuntimeExecutor_" + uuid.ToString();
-        auto executor = std::make_shared<ContainerExecutor>(name, functionAgentAID_);
+        auto executor = std::make_shared<SandboxExecutor>(name, functionAgentAID_);
         executor->SetHealthCheckClient(healthCheckClient_);
         litebus::Spawn(executor, false);
-        auto executorProxy = std::make_shared<ContainerExecutorProxy>(executor);
+        auto executorProxy = std::make_shared<SandboxExecutorProxy>(executor);
         (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::CONTAINER, executorProxy));
         return executorProxy;
     }

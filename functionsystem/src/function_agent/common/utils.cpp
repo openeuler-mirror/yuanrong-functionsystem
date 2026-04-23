@@ -40,8 +40,8 @@ const int QUOTA_NO_MONITOR = -1;
 const std::unordered_set<std::string> DECRYPT_IGNORE_SET = { CRYPTO_ALGORITHM_STR, ENV_KEY };
 
 const std::vector<std::string> DEPLOY_OPTION_KEYS = { CONDA_CONFIG,       CONDA_COMMAND,         CONDA_PREFIX,
-                                                      CONDA_DEFAULT_ENV,  CONTAINER_ROOTFS,      CONTAINER_EXTRA_CONFIG,
-                                                      CONTAINER_NETWORK };
+                                                      CONDA_DEFAULT_ENV,  CONTAINER_ROOTFS,      CONTAINER_MOUNTS,
+                                                      CONTAINER_EXTRA_CONFIG, CONTAINER_NETWORK };
 const std::vector<std::string> POSIX_ENV_KEYS = { YR_APP_MODE,
                                                   YR_WORKING_DIR,
                                                   UNZIPPED_WORKING_DIR,
@@ -359,6 +359,11 @@ void SetDeploymentConfig(messages::DeploymentConfig *deploymentConf,
         if (auto iter(req->createoptions().find(str)); iter != req->createoptions().end()) {
             (*deploymentConf->mutable_deployoptions())[str] = iter->second;
         }
+    }
+
+    // Pass tenant_id for DataSystem KV operations (e.g., working_dir ds:// download)
+    if (!req->tenantid().empty()) {
+        (*deploymentConf->mutable_deployoptions())["tenant_id"] = req->tenantid();
     }
 }
 

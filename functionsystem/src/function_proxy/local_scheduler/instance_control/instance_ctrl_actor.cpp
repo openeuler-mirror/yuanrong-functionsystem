@@ -471,6 +471,52 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(const std::string &s
             ASSERT_IF_NULL(snapCtrl_);
             return snapCtrl_->HandleSnapStart(killReq->requestid(), killReq->instanceid(), killReq->payload());
         }
+        case LIST_CHECKPOINTS_BY_FUNCTION_KEY_SIGNAL: {
+            ASSERT_IF_NULL(localSchedSrv_);
+            auto req = std::make_shared<::messages::ListSnapshotsByFunctionKeyRequest>();
+            if (!req->ParseFromString(killReq->payload())) {
+                return GenKillResponse(common::ErrorCode::ERR_PARAM_INVALID,
+                                       "failed to parse ListSnapshotsByFunctionKeyRequest");
+            }
+            return localSchedSrv_->ListSnapshotsByFunctionKey(req).Then(
+                [](const ::messages::ListSnapshotsByFunctionKeyResponse &rsp) {
+                    KillResponse killRsp;
+                    killRsp.set_code(rsp.code());
+                    killRsp.set_message(rsp.message());
+                    killRsp.set_payload(rsp.SerializeAsString());
+                    return killRsp;
+                });
+        }
+        case LIST_CHECKPOINTS_BY_TENANT_SIGNAL: {
+            ASSERT_IF_NULL(localSchedSrv_);
+            auto req = std::make_shared<::messages::ListSnapshotsByTenantRequest>();
+            if (!req->ParseFromString(killReq->payload())) {
+                return GenKillResponse(common::ErrorCode::ERR_PARAM_INVALID,
+                                       "failed to parse ListSnapshotsByTenantRequest");
+            }
+            return localSchedSrv_->ListSnapshotsByTenant(req).Then([](const ::messages::ListSnapshotsByTenantResponse &rsp) {
+                KillResponse killRsp;
+                killRsp.set_code(rsp.code());
+                killRsp.set_message(rsp.message());
+                killRsp.set_payload(rsp.SerializeAsString());
+                return killRsp;
+            });
+        }
+        case DELETE_CHECKPOINT_SIGNAL: {
+            ASSERT_IF_NULL(localSchedSrv_);
+            auto req = std::make_shared<::messages::DeleteSnapshotRequest>();
+            if (!req->ParseFromString(killReq->payload())) {
+                return GenKillResponse(common::ErrorCode::ERR_PARAM_INVALID,
+                                       "failed to parse DeleteSnapshotRequest");
+            }
+            return localSchedSrv_->DeleteSnapshot(req).Then([](const ::messages::DeleteSnapshotResponse &rsp) {
+                KillResponse killRsp;
+                killRsp.set_code(rsp.code());
+                killRsp.set_message(rsp.message());
+                killRsp.set_payload(rsp.SerializeAsString());
+                return killRsp;
+            });
+        }
         case MIN_USER_SIGNAL_NUM ... MAX_SIGNAL_NUM: {
             return CheckInstanceExist(srcInstanceID, killReq)
                 .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::AuthorizeKill, srcInstanceID, killReq, isSkipAuth))
@@ -808,7 +854,8 @@ litebus::Future<Status> InstanceCtrlActor::SendForwardCustomSignalResponse(const
                                                                            const std::string &requestID)
 {
     YRLOG_INFO("{}|(custom signal)send response, aid: {}", requestID, from.HashString());
-    auto forwardKillResponse = GenForwardKillResponse(requestID, killResponse.code(), killResponse.message());
+    auto forwardKillResponse = GenForwardKillResponse(requestID, killResponse.code(), killResponse.message(),
+                                                      killResponse.payload());
     Send(from, "ForwardCustomSignalResponse", forwardKillResponse.SerializeAsString());
     (void)forwardCustomSignalRequestIDs_.erase(requestID);
 
@@ -832,6 +879,9 @@ void InstanceCtrlActor::ForwardCustomSignalResponse(const litebus::AID &from, st
     KillResponse killResponse;
     killResponse.set_code(forwardKillResponse.code());
     killResponse.set_message(forwardKillResponse.message());
+    if (!forwardKillResponse.payload().empty()) {
+        killResponse.set_payload(forwardKillResponse.payload());
+    }
     forwardCustomSignalNotifyPromise_[requestID]->SetValue(killResponse);
     (void)forwardCustomSignalNotifyPromise_.erase(requestID);
 

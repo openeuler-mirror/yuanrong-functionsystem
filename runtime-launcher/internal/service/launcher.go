@@ -35,6 +35,16 @@ func (s *LauncherService) Start(ctx context.Context, req *pb.StartRequest) (*pb.
 		return &pb.StartResponse{Code: 1, Message: "funcRuntime 不能为空"}, nil
 	}
 
+	// 如果指定了 ckpt_dir，走 restore 流程：校验检查点目录存在
+	if ckptDir := req.GetCkptDir(); ckptDir != "" {
+		if _, err := os.Stat(ckptDir); os.IsNotExist(err) {
+			return &pb.StartResponse{
+				Code:    1,
+				Message: fmt.Sprintf("检查点目录不存在: %s", ckptDir),
+			}, nil
+		}
+	}
+
 	funcRt := req.GetFuncRuntime()
 	runtimeID := funcRt.GetId()
 
@@ -179,15 +189,7 @@ func (s *LauncherService) buildCreateConfig(req *pb.StartRequest) *rt.CreateConf
 	}
 
 	// 转换挂载配置
-	mounts := make([]rt.MountConfig, 0, len(req.GetMounts()))
-	for _, m := range req.GetMounts() {
-		mounts = append(mounts, rt.MountConfig{
-			Type:    m.GetType(),
-			Source:  m.GetSource(),
-			Target:  m.GetTarget(),
-			Options: m.GetOptions(),
-		})
-	}
+	mounts := convertProtoMounts(req.GetMounts())
 
 	// 转换 rootfs 配置
 	rootfs := rt.RootfsConfig{}
@@ -276,130 +278,56 @@ func (s *LauncherService) Checkpoint(ctx context.Context, req *pb.CheckpointRequ
 	return &pb.CheckpointResponse{Success: true, Message: "checkpoint mock 成功"}, nil
 }
 
-// Restore 从检查点恢复容器（mock 实现：校验 ckpt_dir 存在后按 Start 方式启动新容器）。
-func (s *LauncherService) Restore(ctx context.Context, req *pb.RestoreRequest) (*pb.RestoreResponse, error) {
-	ckptDir := req.GetCkptDir()
+// List 返回容器列表。
+func (s *LauncherService) List(ctx context.Context, req *pb.ListContainersRequest) (*pb.ListContainersResponse, error) {
+	log.Printf("[service] List: id=%s", req.GetId())
+	return &pb.ListContainersResponse{}, nil
+}
 
-	if req.GetFuncRuntime() == nil {
-		return &pb.RestoreResponse{Code: 1, Message: "funcRuntime 不能为空"}, nil
-	}
-	if ckptDir == "" {
-		return &pb.RestoreResponse{Code: 1, Message: "ckpt_dir 不能为空"}, nil
-	}
+// Stats 返回容器资源使用统计。
+func (s *LauncherService) Stats(ctx context.Context, req *pb.StatsRequest) (*pb.StatsResponse, error) {
+	log.Printf("[service] Stats: id=%s", req.GetId())
+	return &pb.StatsResponse{}, nil
+}
 
-	// 检查 ckpt_dir 是否存在
-	if _, err := os.Stat(ckptDir); os.IsNotExist(err) {
-		return &pb.RestoreResponse{
-			Code:    1,
-			Message: fmt.Sprintf("检查点目录不存在: %s", ckptDir),
-		}, nil
-	}
-
-	funcRt := req.GetFuncRuntime()
-	runtimeID := funcRt.GetId()
-
-	log.Printf("[service] Restore(mock): runtimeID=%s, ckpt_dir=%s", runtimeID, ckptDir)
-
-	// 按照 Start 的方式构建配置并启动新容器
-	cfg := s.buildCreateConfigFromRestore(req)
-
-	// 如果此 runtimeID 已注册（预热），合并注册时的环境变量
-	if regRt, ok := s.stateMgr.GetRegisteredRuntime(runtimeID); ok {
-		for k, v := range regRt.GetRuntimeEnvs() {
-			if _, exists := cfg.Envs[k]; !exists {
-				cfg.Envs[k] = v
-			}
-		}
-	}
-
-	containerID, err := s.runtime.Create(ctx, cfg)
-	if err != nil {
-		log.Printf("[service] Restore(mock) 创建容器失败: %v", err)
-		return &pb.RestoreResponse{
-			Code:    1,
-			Message: fmt.Sprintf("创建容器失败: %v", err),
-		}, nil
-	}
-
-	s.stateMgr.AddContainer(containerID, runtimeID)
-	go s.watchContainer(containerID)
-
-	log.Printf("[service] Restore(mock): 成功，containerID=%s", containerID)
-	return &pb.RestoreResponse{
-		Code: 0,
-		Id:   containerID,
+// Version 返回运行时版本信息。
+func (s *LauncherService) Version(ctx context.Context, req *pb.VersionRequest) (*pb.VersionResponse, error) {
+	return &pb.VersionResponse{
+		Version: "0.1.0",
+		Runtimes: []*pb.RuntimeVersion{
+			{RuntimeName: s.runtime.Name(), RuntimeVersion: "0.1.0"},
+		},
 	}, nil
 }
 
-// buildCreateConfigFromRestore 从 proto RestoreRequest 构建 CreateConfig。
-// RestoreRequest 与 StartRequest 结构相同（额外多 ckpt_dir 和 trace_id）。
-func (s *LauncherService) buildCreateConfigFromRestore(req *pb.RestoreRequest) *rt.CreateConfig {
-	funcRt := req.GetFuncRuntime()
-
-	envs := make(map[string]string)
-	for k, v := range funcRt.GetRuntimeEnvs() {
-		envs[k] = v
-	}
-	for k, v := range req.GetUserEnvs() {
-		envs[k] = v
-	}
-
-	mounts := make([]rt.MountConfig, 0, len(req.GetMounts()))
-	for _, m := range req.GetMounts() {
-		mounts = append(mounts, rt.MountConfig{
+// convertProtoMounts 将 proto Mount 列表转为内部 MountConfig 列表。
+func convertProtoMounts(protoMounts []*pb.Mount) []rt.MountConfig {
+	mounts := make([]rt.MountConfig, 0, len(protoMounts))
+	for _, m := range protoMounts {
+		mc := rt.MountConfig{
 			Type:    m.GetType(),
-			Source:  m.GetSource(),
 			Target:  m.GetTarget(),
 			Options: m.GetOptions(),
-		})
-	}
-
-	rootfs := rt.RootfsConfig{}
-	if funcRt.GetRootfs() != nil {
-		protoRootfs := funcRt.GetRootfs()
-		rootfs.Readonly = protoRootfs.GetReadonly()
-		rootfs.Type = rt.RootfsSrcType(protoRootfs.GetType())
-		rootfs.ImageURL = protoRootfs.GetImageUrl()
-		if protoRootfs.GetS3Config() != nil {
-			rootfs.S3 = &rt.S3Config{
-				Endpoint:        protoRootfs.GetS3Config().GetEndpoint(),
-				Bucket:          protoRootfs.GetS3Config().GetBucket(),
-				Object:          protoRootfs.GetS3Config().GetObject(),
-				AccessKeyID:     protoRootfs.GetS3Config().GetAccessKeyID(),
-				AccessKeySecret: protoRootfs.GetS3Config().GetAccessKeySecret(),
-			}
 		}
+		switch src := m.GetSource().(type) {
+		case *pb.Mount_HostPath:
+			mc.HostPath = src.HostPath
+		case *pb.Mount_S3Config:
+			if src.S3Config != nil {
+				mc.S3 = &rt.S3Config{
+					Endpoint:        src.S3Config.GetEndpoint(),
+					Bucket:          src.S3Config.GetBucket(),
+					Object:          src.S3Config.GetObject(),
+					AccessKeyID:     src.S3Config.GetAccessKeyID(),
+					AccessKeySecret: src.S3Config.GetAccessKeySecret(),
+				}
+			}
+		case *pb.Mount_ImageUrl:
+			mc.ImageURL = src.ImageUrl
+		}
+		mounts = append(mounts, mc)
 	}
-
-	cpuMilli := 500.0
-	memMB := 512.0
-	if v, ok := req.GetResources()["CPU"]; ok {
-		cpuMilli = v
-	}
-	if v, ok := req.GetResources()["Memory"]; ok {
-		memMB = v
-	}
-
-	network := req.GetNetwork()
-	if network == "" {
-		network = "host"
-	}
-
-	return &rt.CreateConfig{
-		ID:           funcRt.GetId(),
-		Sandbox:      funcRt.GetSandbox(),
-		Rootfs:       rootfs,
-		Command:      funcRt.GetCommand(),
-		Envs:         envs,
-		Mounts:       mounts,
-		CPUMillicore: cpuMilli,
-		MemoryMB:     memMB,
-		Stdout:       req.GetStdout(),
-		Stderr:       req.GetStderr(),
-		ExtraConfig:  req.GetExtraConfig(),
-		MakeSeed:     funcRt.GetMakeSeed(),
-		Network:      network,
-	}
+	return mounts
 }
 
 // watchContainer 后台监听容器退出，更新状态。

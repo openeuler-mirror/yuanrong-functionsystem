@@ -45,7 +45,8 @@ void SnapCtrlActor::Init()
 
 static litebus::Future<SnapshotResult> RecordSnapshotMetadata(const std::shared_ptr<LocalSchedSrv> &localSchedSrv,
                                                               const messages::SnapshotRuntimeResponse &runtimeRsp,
-                                                              const resource_view::InstanceInfo &instanceInfo)
+                                                              const resource_view::InstanceInfo &instanceInfo,
+                                                              const std::string &functionType)
 {
     auto requestID = runtimeRsp.requestid();
     if (runtimeRsp.code() != common::ERR_NONE) {
@@ -59,6 +60,10 @@ static litebus::Future<SnapshotResult> RecordSnapshotMetadata(const std::shared_
     *req->mutable_instanceinfo() = instanceInfo;
     req->mutable_instanceinfo()->clear_args();
     req->set_requestid(requestID);
+    auto *fk = req->mutable_functionkey();
+    fk->set_tenantid(instanceInfo.tenantid());
+    fk->set_functiontype(functionType.empty() ? instanceInfo.function() : functionType);
+    // namespace: no reliable source in instanceInfo or function metadata
     const auto &ckptID = runtimeRsp.snapshotinfo().checkpointid();
     const auto &storagePath = runtimeRsp.snapshotinfo().storage();
     const auto size = runtimeRsp.snapshotinfo().size();
@@ -89,6 +94,7 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
     // 1. 解析 payload 获取参数（core_service::SnapOptions）
     bool leaveRunning = false;
     int32_t ttl = 0;  // Default TTL is 0 (no expiration)
+    std::string functionType;
     if (!payload.empty()) {
         SnapOptions options;
         if (!options.ParseFromString(payload)) {
@@ -100,6 +106,7 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
         }
         leaveRunning = options.leaverunning();
         ttl = options.ttl();  // Extract TTL from SnapOptions
+        functionType = options.functiontype();
     }
     // 1. 获取实例状态机
     ASSERT_IF_NULL(instanceControlView_);
@@ -129,9 +136,9 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
             return functionAgentMgr->SnapshotRuntime(requestID, instanceInfo, ttl);
         })
         .Then([aid(GetAID()), localSchedSrv(localSchedSrv_), requestID,
-               instanceInfo](const messages::SnapshotRuntimeResponse &runtimeRsp) -> litebus::Future<SnapshotResult> {
+               instanceInfo, functionType](const messages::SnapshotRuntimeResponse &runtimeRsp) -> litebus::Future<SnapshotResult> {
             // 4. SnapshotRuntime 返回后，通过 local_srv_actor 发送 RecordSnapshotMetadata
-            return RecordSnapshotMetadata(localSchedSrv, runtimeRsp, instanceInfo);
+            return RecordSnapshotMetadata(localSchedSrv, runtimeRsp, instanceInfo, functionType);
         })
         .Then([requestID, instanceID, leaveRunning, aid(GetAID()),
                instanceCtrl(instanceCtrl_)](const SnapshotResult &result) -> litebus::Future<SnapshotResult> {
@@ -217,9 +224,15 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapStart(const std::string &
             if (rsp.code() == common::ERR_NONE) {
                 YRLOG_INFO("{}|snapstart checkpoint {} succeeded, new instanceID: {}", requestID, checkpointID,
                            rsp.instanceid());
-                // 在 payload 中返回新的 instanceID
                 SnapStartedInfo info;
                 info.set_instanceid(rsp.instanceid());
+                if (rsp.has_snapstartinfo()) {
+                    info.set_routeaddress(rsp.snapstartinfo().routeaddress());
+                    info.set_portmappings(rsp.snapstartinfo().portmappings());
+                    info.set_functionproxyid(rsp.snapstartinfo().functionproxyid());
+                    info.set_nodeid(rsp.snapstartinfo().nodeid());
+                    info.set_namespace_(rsp.snapstartinfo().namespace_());
+                }
                 killRsp.set_payload(info.SerializeAsString());
             } else {
                 YRLOG_ERROR("{}|snapstart checkpoint {} failed: {}", requestID, checkpointID, rsp.message());
