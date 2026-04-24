@@ -198,6 +198,7 @@ struct TokenContent {
                 expiredTimeStamp = static_cast<uint64_t>(exp);
             }
             // Parse optional fields
+            role.clear();
             if (payload.contains("role") && payload["role"].is_string()) {
                 role = payload["role"].get<std::string>();
             }

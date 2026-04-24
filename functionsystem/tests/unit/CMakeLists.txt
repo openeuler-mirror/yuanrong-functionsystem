@@ -76,7 +76,7 @@ target_include_directories(${UNIT_TEST_MODULE} PRIVATE
 target_compile_options(${UNIT_TEST_MODULE} PRIVATE "-fvisibility=hidden")
 get_property(PLUGIN_LIB GLOBAL PROPERTY "PLUGIN_LIB")
 target_link_libraries(${UNIT_TEST_MODULE} PRIVATE
-        ${crypto_LIB} ${ssl_LIB} ${protobuf_LIB}
+        ${crypto_LIB} ${ssl_LIB} ${zlib_LIB} ${protobuf_LIB}
         ${grpcpp_LIB} ${gpr_LIB} ${etcdapi_LIB_A}
         ${securec_LIB}
         ${gtest_LIB_A}

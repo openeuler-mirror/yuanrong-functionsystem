@@ -40,6 +40,7 @@ add_executable(domain_scheduler main.cpp)
 target_compile_options(domain_scheduler PRIVATE -fPIE)
 target_compile_options(domain_scheduler PRIVATE "-fvisibility=hidden")
 target_link_libraries(domain_scheduler PRIVATE domain_scheduler_lib
+        ${zlib_LIB}
         ${protobuf_LIB}
         ${grpcpp_LIB}
         ${gpr_LIB}

@@ -61,7 +61,9 @@ public:
     void SetUp() override
     {
         uint16_t port = GetPortEnv("LITEBUS_PORT", 8080);
-        litebus::Initialize("tcp://127.0.0.1:" + std::to_string(port));
+        litebus::LitebusInitOptions opts;
+        opts.tcpUrl = "tcp://127.0.0.1:" + std::to_string(port);
+        litebus::Initialize(opts);
 
         auto metaClient = MetaStoreClient::Create({ .etcdAddress = metaStoreServerHost_ });
         auto metaStorageAccessor = std::make_shared<MetaStorageAccessor>(metaClient);

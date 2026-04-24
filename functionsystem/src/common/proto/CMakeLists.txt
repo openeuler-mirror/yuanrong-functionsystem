@@ -33,4 +33,4 @@ add_library(posix_pb STATIC ${GRPCPB_SRCS})
 add_dependencies(posix_pb protobuf grpc)
 target_compile_options(posix_pb PRIVATE "-fvisibility=hidden")
 target_link_libraries(posix_pb PUBLIC
-        ${protobuf_LIB} ${grpcpp_LIB} ${gpr_LIB})
+        ${zlib_LIB} ${protobuf_LIB} ${grpcpp_LIB} ${gpr_LIB})
