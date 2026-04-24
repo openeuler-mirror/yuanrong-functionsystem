@@ -45,3 +45,4 @@ runtime-launcher/bin
 thirdparty/runtime_deps/
 *.log
 fake_file
+.omx/
