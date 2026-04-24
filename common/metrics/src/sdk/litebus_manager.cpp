@@ -27,7 +27,11 @@ bool LiteBusManager::InitLiteBus(const std::string &address, int32_t threadNum, 
     std::string udpAddr = enableUDP ? "udp://" + address : "";
     std::cerr << "Initialize LiteBus, tcp addr:" << tcpAddr << "u dp addr: " << udpAddr <<
         " threadNum: " << threadNum << std::endl;
-    auto result = litebus::Initialize(tcpAddr, "", udpAddr, "", threadNum);
+    litebus::LitebusInitOptions opts;
+    opts.tcpUrl = tcpAddr;
+    opts.udpUrl = udpAddr;
+    opts.threadCount = threadNum;
+    auto result = litebus::Initialize(opts);
     if (result != BUS_OK) {
         std::cerr << "LiteBus initialize failed, address:" << address << "result: " << result << std::endl;
         return false;

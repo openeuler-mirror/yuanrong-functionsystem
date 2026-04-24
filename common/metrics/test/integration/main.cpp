@@ -23,7 +23,8 @@ const std::string LITEBUS_UDP_URL("udp://127.0.0.1:8081");  // NOLINT
 int main(int argc, char **argv)
 {
     testing::InitGoogleTest(&argc, argv);
-    auto res = litebus::Initialize("", "", "", "");
+    litebus::LitebusInitOptions opts;
+    auto res = litebus::Initialize(opts);
     if (res != BUS_OK) {
         std::cerr << "failed to initialize litebus!" << std::endl;
         return -1;

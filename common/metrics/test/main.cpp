@@ -67,7 +67,10 @@ int main(int argc, char **argv)
     (void)lp->CreateYrLogger(param);
     LogsApi::Provider::SetLoggerProvider(lp);
 
-    auto res = litebus::Initialize(LITEBUS_TCP_URL, "", LITEBUS_UDP_URL);
+    litebus::LitebusInitOptions opts;
+    opts.tcpUrl = LITEBUS_TCP_URL;
+    opts.udpUrl = LITEBUS_UDP_URL;
+    auto res = litebus::Initialize(opts);
     if (res != BUS_OK) {
         std::cerr << "failed to initialize litebus!" << std::endl;
         return -1;

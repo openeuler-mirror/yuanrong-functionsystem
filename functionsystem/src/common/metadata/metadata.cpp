@@ -247,6 +247,9 @@ void GetCodeMetaData(FunctionMeta &funcMeta, const nlohmann::json &j)
     if (codeMetaData.find("storage_type") != codeMetaData.end()) {
         funcMeta.codeMetaData.storageType = codeMetaData.at("storage_type");
     }
+    if (codeMetaData.find("deployDir") != codeMetaData.end() && !codeMetaData.at("deployDir").empty()) {
+        funcMeta.codeMetaData.deployDir = codeMetaData.at("deployDir");
+    }
 
     if (funcMeta.codeMetaData.storageType == LOCAL_STORAGE_TYPE ||
         funcMeta.codeMetaData.storageType == COPY_STORAGE_TYPE) {  // code in local

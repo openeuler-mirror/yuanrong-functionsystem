@@ -52,6 +52,7 @@ target_compile_options(function_proxy PRIVATE "-fvisibility=hidden")
 get_property(PLUGIN_LIB GLOBAL PROPERTY "PLUGIN_LIB")
 target_link_libraries(function_proxy PRIVATE
         ${crypto_LIB} ${ssl_LIB}
+        ${zlib_LIB}
         ${protobuf_LIB} ${grpcpp_LIB} ${gpr_LIB}
         ${litebus_ALL_LIB}
         busproxy_lib local_scheduler_lib

@@ -13,6 +13,45 @@ import utils
 log = utils.stream_logger()
 _env = utils.pipeline_env()
 
+SERIAL_TEST_SUITES = {
+    "InstanceCtrlTest": 300,
+    "StdMonitorActorTest": 120,
+}
+
+SERIAL_TEST_ORDER = {
+    "StdMonitorActorTest": 0,
+    "InstanceCtrlTest": 1,
+}
+
+
+def get_suite_timeout(test_suite: str, default_timeout: int) -> int:
+    return SERIAL_TEST_SUITES.get(test_suite, default_timeout)
+
+
+def test_runtime_env(path: str) -> dict[str, str]:
+    """
+    Build the runtime environment for gtest binaries.
+
+    The built test binaries depend on shared libraries staged into
+    `functionsystem/output/lib` during `cmake --build --target install`.
+    """
+    env = os.environ.copy()
+    root_dir = os.path.abspath(os.path.join(os.path.dirname(path), "..", "..", ".."))
+    lib_dirs = [
+        os.path.join(root_dir, "functionsystem", "output", "lib"),
+        os.path.join(root_dir, "common", "logs", "output", "lib"),
+        os.path.join(root_dir, "common", "litebus", "output", "lib"),
+        os.path.join(root_dir, "common", "metrics", "output", "lib"),
+    ]
+    existing = [lib_dir for lib_dir in lib_dirs if os.path.isdir(lib_dir)]
+    ld_library_path = env.get("LD_LIBRARY_PATH", "")
+    if existing:
+        env["LD_LIBRARY_PATH"] = ":".join(existing + ([ld_library_path] if ld_library_path else []))
+    output_bin = os.path.join(root_dir, "functionsystem", "output", "bin")
+    if os.path.isdir(output_bin):
+        env.setdefault("BIN_PATH", output_bin)
+    return env
+
 
 def decode_args():
     """
@@ -82,10 +121,19 @@ def run_code_gate(
     # 执行全部测试用例
     executor = ProcessPoolExecutor(max_workers=job_num)
     futures = []
+    serial_tasks = []
     for test_suite in sorted(collector["it_index"].keys()):
-        futures.append(executor.submit(run_test_unit_proc, it_bin, test_suite, "*", exec_timeout, retry_times))
+        timeout_for_suite = get_suite_timeout(test_suite, exec_timeout)
+        if test_suite in SERIAL_TEST_SUITES:
+            serial_tasks.append((it_bin, test_suite, timeout_for_suite))
+            continue
+        futures.append(executor.submit(run_test_unit_proc, it_bin, test_suite, "*", timeout_for_suite, retry_times))
     for test_suite in sorted(collector["ut_index"].keys()):
-        futures.append(executor.submit(run_test_unit_proc, ut_bin, test_suite, "*", exec_timeout, retry_times))
+        timeout_for_suite = get_suite_timeout(test_suite, exec_timeout)
+        if test_suite in SERIAL_TEST_SUITES:
+            serial_tasks.append((ut_bin, test_suite, timeout_for_suite))
+            continue
+        futures.append(executor.submit(run_test_unit_proc, ut_bin, test_suite, "*", timeout_for_suite, retry_times))
 
     proc_results = []
     case_results = []
@@ -93,17 +141,32 @@ def run_code_gate(
         result = future.result()
         case_results.extend(parse_test_output(*result, print_logs=print_logs))
         proc_results.append(result)
+    executor.shutdown(wait=True)
+
+    serial_tasks.sort(key=lambda item: (SERIAL_TEST_ORDER.get(item[1], 100), item[1]))
+    for path, test_suite, timeout_for_suite in serial_tasks:
+        result = run_test_unit_proc(path, test_suite, "*", timeout_for_suite, retry_times)
+        case_results.extend(parse_test_output(*result, print_logs=print_logs))
+        proc_results.append(result)
 
     return summarize(start_time, collector, proc_results, case_results)
 
 
 def gather_tests_index(path):
+    env = test_runtime_env(path)
     # 先收集非期望的输出
-    _, main_output, _ = utils.pipe_command([path, "--gtest_color=no", "--gtest_list_tests", "--gtest_filter=-*"])
+    main_code, main_output, main_err = utils.pipe_command(
+        [path, "--gtest_color=no", "--gtest_list_tests", "--gtest_filter=-*"], env=env
+    )
     main_output = main_output.split("\n")
     # 收集全量的用例输出
-    _, tests_list, _ = utils.pipe_command([path, "--gtest_color=no", "--gtest_list_tests"])
+    tests_code, tests_list, tests_err = utils.pipe_command([path, "--gtest_color=no", "--gtest_list_tests"], env=env)
     tests_list = tests_list.split("\n")
+    if main_code != 0:
+        log.error(f"List filtered tests from {path} failed with code {main_code}: {main_err.strip()}")
+    if tests_code != 0:
+        log.error(f"List tests from {path} failed with code {tests_code}: {tests_err.strip()}")
+        return {}
     # 对比计算测试用例输出
     it = 0  # 虚拟指针指向非期望的输出内容的行
     tests_index = {}
@@ -118,7 +181,7 @@ def gather_tests_index(path):
         ):
             it += 1
             continue  # 跳过元戎日志输出
-        elif main_output[it] == line:
+        elif it < len(main_output) and main_output[it] == line:
             it += 1
             continue  # 跳过内容一直的输出
         elif line.startswith("  "):
@@ -141,6 +204,7 @@ def run_test_unit_proc(path, test_suite, test_case, exec_timeout, retry_times):
     proc_desc = f"<{proc_name}>[{test_suite}.{test_case}]"
 
     try:
+        exec_timeout = get_suite_timeout(test_suite, exec_timeout)
         while retry_times + 1 > 0:
             result = run_test_unit(path, test_suite, test_case, exec_timeout)
             retry_times -= 1
@@ -172,6 +236,7 @@ def run_test_unit(path, test_suite, test_case, exec_timeout):
             timeout=exec_timeout,
             errors="replace",
             text=True,
+            env=test_runtime_env(path),
         )
     except subprocess.TimeoutExpired as e:  # 捕获子进程超时异常
         log.error(f"Run test {proc_desc} timeout: {e}")

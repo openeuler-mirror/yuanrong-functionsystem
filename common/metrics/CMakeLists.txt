@@ -1,6 +1,8 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2023. All rights reserved.
 
 cmake_minimum_required(VERSION 3.16.1)
+include(CheckCCompilerFlag)
+include(CheckCXXCompilerFlag)
 project(observability-metrics LANGUAGES CXX C)
 
 find_program(CCACHE_PROGRAM ccache)
@@ -78,15 +80,25 @@ set(LANGUAGE_FLAGS "-fsigned-char -funsigned-char")
 set(CODE_GENERATE_FLAGS "-fno-common -freg-struct-return -fstrong-eval-order")
 set(OPTIMIZE_FLAGS "-fno-omit-frame-pointer")
 set(COMPILE_SAFE_FLAGS "-fPIC -fstack-protector-strong -D_FORTIFY_SOURCE=2")
+set(DEBUG_STACK_GUARD_C_FLAG "-fstack-check")
+set(DEBUG_STACK_GUARD_CXX_FLAG "-fstack-check")
+check_c_compiler_flag("-fstack-clash-protection" COMPILER_SUPPORTS_STACK_CLASH_PROTECTION_C)
+check_cxx_compiler_flag("-fstack-clash-protection" COMPILER_SUPPORTS_STACK_CLASH_PROTECTION_CXX)
+if(COMPILER_SUPPORTS_STACK_CLASH_PROTECTION_C)
+    set(DEBUG_STACK_GUARD_C_FLAG "-fstack-clash-protection")
+endif()
+if(COMPILER_SUPPORTS_STACK_CLASH_PROTECTION_CXX)
+    set(DEBUG_STACK_GUARD_CXX_FLAG "-fstack-clash-protection")
+endif()
 set(CMAKE_CXX_FLAGS
     "-fuse-ld=gold -pipe ${CXX_WANR_FLAGS} ${LANGUAGE_FLAGS} ${CODE_GENERATE_FLAGS} ${OPTIMIZE_FLAGS} ${COMPILE_SAFE_FLAGS}"
 )
-set(CMAKE_CXX_FLAGS_DEBUG "-O2 -g3 -ftrapv -fstack-check")
+set(CMAKE_CXX_FLAGS_DEBUG "-O2 -g3 -ftrapv ${DEBUG_STACK_GUARD_CXX_FLAG}")
 set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG")
 set(CMAKE_C_FLAGS
     "-fuse-ld=gold -pipe ${C_WANR_FLAGS} ${LANGUAGE_FLAGS} ${CODE_GENERATE_FLAGS} ${OPTIMIZE_FLAGS} ${COMPILE_SAFE_FLAGS}"
 )
-set(CMAKE_C_FLAGS_DEBUG "-O2 -g3 -ftrapv -fstack-check")
+set(CMAKE_C_FLAGS_DEBUG "-O2 -g3 -ftrapv ${DEBUG_STACK_GUARD_C_FLAG}")
 set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG")
 
 set(LINK_SAFE_FLAGS "-Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack -s")
