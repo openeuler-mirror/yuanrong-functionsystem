@@ -143,10 +143,10 @@ TEST_F(SandboxRequestBuilderTest, PortMappingsAppliedToStartRequest)
 TEST_F(SandboxRequestBuilderTest, BuildWithInvalidRootfsJsonReturnsError)
 {
     auto params = MakeMinimalParams();
-    // Add invalid JSON to the CONTAINER_ROOTFS deploy option
+    // Add invalid JSON to the "rootfs" deploy option (the value of CONTAINER_ROOTFS constant)
     (*params.request->mutable_runtimeinstanceinfo()
          ->mutable_deploymentconfig()
-         ->mutable_deployoptions())["CONTAINER_ROOTFS"] = "not-valid-json";
+         ->mutable_deployoptions())["rootfs"] = "not-valid-json";
 
     auto [status, startReq] = builder_->Build(params);
 
