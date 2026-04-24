@@ -725,17 +725,14 @@ litebus::Future<std::shared_ptr<KillContext>> InstanceCtrlActor::SignalRoute(
             });
     }
 
-    // Fallback: if DR mode enabled but routing info is incomplete, fall back to observer/state-machine path
+    // Fallback: if DR mode is enabled but routing info is incomplete, continue
+    // through the legacy observer/state-machine path below.
     if (function_proxy::DirectRoutingConfig::IsEnabled() &&
         (!killCtx->killRequest->routeaddress().empty() || !killCtx->killRequest->proxyid().empty())) {
         YRLOG_DEBUG("{}|(kill)DR mode enabled but routing info incomplete (route={}, proxyID={}), falling back to observer path",
                     killCtx->killRequest->requestid(),
                     killCtx->killRequest->routeaddress().empty() ? "empty" : "present",
                     killCtx->killRequest->proxyid().empty() ? "empty" : "present");
-        // Fall through to observer/state-machine path below
-    } else {
-        // DR mode with complete routing info already handled above, return here
-        return killCtx;
     }
 
     // Check instance ownership from instanceContext
