@@ -33,9 +33,7 @@ const int32_t LITEBUS_THREAD_NUM = 3;
 
 MeterProvider::MeterProvider()
 {
-    litebus::LitebusInitOptions opts;
-    opts.threadCount = LITEBUS_THREAD_NUM;
-    auto res = litebus::Initialize(opts);
+    auto res = litebus::Initialize("", "", "", "", LITEBUS_THREAD_NUM);
     if (res != BUS_OK) {
         std::cerr << "<MeterProvider> Failed to initialize the Litebus!" << std::endl;
     }
