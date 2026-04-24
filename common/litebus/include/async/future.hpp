@@ -564,6 +564,17 @@ public:
     void Associate(const Future<T> &f) const
     {
         bool associated = false;
+        if (!future.data) {
+            BUSLOG_ERROR("future.data is nullptr");
+            return;
+        }
+        if (!f.data) {
+            BUSLOG_ERROR("f.data is nullptr");
+            if (future.IsInit() && !future.data->associated) {
+                future.SetFailed(Status::KERROR);
+            }
+            return;
+        }
 
         future.data->lock.Lock();
         if (future.IsInit() && !future.data->associated) {
