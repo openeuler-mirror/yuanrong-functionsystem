@@ -298,6 +298,11 @@ GlobalSchedDriver::GlobalSchedDriver(std::shared_ptr<GlobalSched> globalSched, c
         traefikRouteCache_ = std::make_shared<TraefikRouteCache>(std::move(traefikCfg));
         traefikLeaderCtx_ = std::make_shared<TraefikLeaderContext>();
         traefikLeaderCtx_->selfHttpAddress = flags.GetIP();
+        (void)explorer::Explorer::GetInstance().AddLeaderChangedCallback(
+            "TraefikLeaderCtx",
+            [ctx = traefikLeaderCtx_, selfAddr = flags.GetIP()](const explorer::LeaderInfo &leaderInfo) {
+                ctx->UpdateLeader(leaderInfo.address, leaderInfo.address == selfAddr);
+            });
         traefikApiRouteRegister_ = std::make_shared<TraefikApiRouterRegister>(
             traefikRouteCache_, traefikLeaderCtx_, flags.GetTraefikForwardTimeoutMs());
         if (auto registerStatus(httpServer_->RegisterRoute(traefikApiRouteRegister_));
