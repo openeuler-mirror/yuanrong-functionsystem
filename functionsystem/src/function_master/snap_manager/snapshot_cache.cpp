@@ -34,6 +34,12 @@ void SnapshotCache::Put(const std::string &snapshotID, const SnapshotMetadata &m
     if (!functionID.empty()) {
         functionSnapshots_[functionID].insert(snapshotID);
     }
+
+    // Update functionKey index
+    const auto &fkIndex = MakeFunctionKeyIndex(meta);
+    if (!fkIndex.empty()) {
+        functionKeySnapshots_[fkIndex].insert(snapshotID);
+    }
 }
 
 std::optional<SnapshotMetadata> SnapshotCache::Get(const std::string &snapshotID) const
@@ -60,6 +66,18 @@ bool SnapshotCache::Remove(const std::string &snapshotID)
             funcIt->second.erase(snapshotID);
             if (funcIt->second.empty()) {
                 functionSnapshots_.erase(funcIt);
+            }
+        }
+    }
+
+    // Remove from functionKey index
+    const auto &fkIndex = MakeFunctionKeyIndex(it->second);
+    if (!fkIndex.empty()) {
+        auto fkIt = functionKeySnapshots_.find(fkIndex);
+        if (fkIt != functionKeySnapshots_.end()) {
+            fkIt->second.erase(snapshotID);
+            if (fkIt->second.empty()) {
+                functionKeySnapshots_.erase(fkIt);
             }
         }
     }
@@ -97,6 +115,7 @@ void SnapshotCache::Clear()
 {
     snapshotCache_.clear();
     functionSnapshots_.clear();
+    functionKeySnapshots_.clear();
 }
 
 std::vector<std::tuple<int64_t, std::string, SnapshotMetadata>>
@@ -152,6 +171,112 @@ int64_t SnapshotCache::GetCreateTime(const SnapshotMetadata &meta)
     } catch (const std::exception &) {
         return 0;
     }
+}
+
+std::string SnapshotCache::MakeFunctionKeyIndex(const SnapshotMetadata &meta)
+{
+    if (!meta.has_functionkey()) {
+        return "";
+    }
+    const auto &fk = meta.functionkey();
+    if (fk.tenantid().empty() || fk.functiontype().empty()) {
+        return "";
+    }
+    return fk.tenantid() + "/" + fk.functiontype();
+}
+
+std::vector<SnapshotMetadata> SnapshotCache::GetByFunctionKey(
+    const std::string &tenantID, const std::string &functionType, const std::string &ns) const
+{
+    std::string key = tenantID + "/" + functionType;
+    std::vector<SnapshotMetadata> result;
+    auto it = functionKeySnapshots_.find(key);
+    if (it == functionKeySnapshots_.end()) {
+        return result;
+    }
+    for (const auto &snapshotID : it->second) {
+        auto snapIt = snapshotCache_.find(snapshotID);
+        if (snapIt == snapshotCache_.end()) {
+            continue;
+        }
+        if (!ns.empty() && snapIt->second.functionkey().namespace_() != ns) {
+            continue;
+        }
+        result.push_back(snapIt->second);
+    }
+    return result;
+}
+
+std::vector<std::string> SnapshotCache::GetByFunctionKeyCheckpointIDs(
+    const std::string &tenantID, const std::string &functionType, const std::string &ns) const
+{
+    std::string key = tenantID + "/" + functionType;
+    std::vector<std::tuple<int64_t, std::string>> idTimePairs;
+    auto it = functionKeySnapshots_.find(key);
+    if (it == functionKeySnapshots_.end()) {
+        return {};
+    }
+    for (const auto &snapshotID : it->second) {
+        auto snapIt = snapshotCache_.find(snapshotID);
+        if (snapIt == snapshotCache_.end()) {
+            continue;
+        }
+        if (!ns.empty() && snapIt->second.functionkey().namespace_() != ns) {
+            continue;
+        }
+        int64_t createTime = GetCreateTime(snapIt->second);
+        idTimePairs.emplace_back(createTime, snapshotID);
+    }
+    std::sort(idTimePairs.begin(), idTimePairs.end(),
+              [](const auto &a, const auto &b) { return std::get<0>(a) < std::get<0>(b); });
+    std::vector<std::string> result;
+    for (const auto &pair : idTimePairs) {
+        result.push_back(std::get<1>(pair));
+    }
+    return result;
+}
+
+std::vector<SnapshotMetadata> SnapshotCache::GetByTenant(const std::string &tenantID) const
+{
+    std::vector<SnapshotMetadata> result;
+    std::string prefix = tenantID + "/";
+    for (const auto &[key, ids] : functionKeySnapshots_) {
+        if (key.rfind(prefix, 0) != 0) {
+            continue;
+        }
+        for (const auto &snapshotID : ids) {
+            auto it = snapshotCache_.find(snapshotID);
+            if (it != snapshotCache_.end()) {
+                result.push_back(it->second);
+            }
+        }
+    }
+    return result;
+}
+
+std::vector<std::string> SnapshotCache::GetByTenantCheckpointIDs(const std::string &tenantID) const
+{
+    std::vector<std::tuple<int64_t, std::string>> idTimePairs;
+    std::string prefix = tenantID + "/";
+    for (const auto &[key, ids] : functionKeySnapshots_) {
+        if (key.rfind(prefix, 0) != 0) {
+            continue;
+        }
+        for (const auto &snapshotID : ids) {
+            auto it = snapshotCache_.find(snapshotID);
+            if (it != snapshotCache_.end()) {
+                int64_t createTime = GetCreateTime(it->second);
+                idTimePairs.emplace_back(createTime, snapshotID);
+            }
+        }
+    }
+    std::sort(idTimePairs.begin(), idTimePairs.end(),
+              [](const auto &a, const auto &b) { return std::get<0>(a) < std::get<0>(b); });
+    std::vector<std::string> result;
+    for (const auto &pair : idTimePairs) {
+        result.push_back(std::get<1>(pair));
+    }
+    return result;
 }
 
 }  // namespace functionsystem::snap_manager

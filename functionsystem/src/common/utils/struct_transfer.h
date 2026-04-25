@@ -278,11 +278,17 @@ static void SetInstanceInfoResources(::resources::InstanceInfo *instanceInfo, co
 {
     // InstanceInfo: resources
     auto resources = instanceInfo->mutable_resources()->mutable_resources();
+    auto &extensions = createReq.schedulingops().extension();
     for (auto &r : createReq.schedulingops().resources()) {
         resource_view::Resource resource;
         resource.set_name(r.first);
         resource.set_type(resource_view::ValueType::Value_Type_SCALAR);
         resource.mutable_scalar()->set_value(r.second);
+        // Set resource limit from extension if present (e.g. CPU_LIMIT, MEMORY_LIMIT)
+        std::string limitKey = r.first + "_LIMIT";
+        if (auto it = extensions.find(limitKey); it != extensions.end()) {
+            resource.mutable_scalar()->set_limit(std::stod(it->second));
+        }
         (*resources)[r.first] = std::move(resource);
     }
 }

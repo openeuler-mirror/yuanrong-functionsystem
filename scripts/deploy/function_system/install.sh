@@ -128,7 +128,6 @@ function install_function_proxy() {
     --log_expiration_cleanup_interval="${LOG_EXPIRATION_CLEANUP_INTERVAL}" \
     --log_expiration_max_file_count="${LOG_EXPIRATION_MAX_FILE_COUNT}""
   fi
-
   LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${LD_LIBRARY_PATH} \
     LD_PRELOAD="${jemalloc_path}" \
     LOCAL_IP="${LOCAL_IP}" \
@@ -186,6 +185,8 @@ function install_function_proxy() {
     --traefik_etcd_prefix="${TRAEFIK_ETCD_PREFIX}" --traefik_lease_ttl="${TRAEFIK_LEASE_TTL}" \
     --traefik_http_entrypoint="${TRAEFIK_HTTP_ENTRYPOINT}" --traefik_enable_tls="${TRAEFIK_ENABLE_TLS}" \
     --traefik_servers_transport="${TRAEFIK_SERVERS_TRANSPORT}" \
+    --fc_agent_mgr_retry_times="${FC_AGENT_MGR_RETRY_TIMES}" \
+    --fc_agent_mgr_retry_cycle="${FC_AGENT_MGR_RETRY_CYCLE}" \
     ${merge_process_args} >>"${FS_LOG_PATH}/${NODE_ID}-function_proxy${STD_LOG_SUFFIX}" 2>&1 &
 
   FUNCTION_PROXY_PID="$!"
@@ -428,7 +429,7 @@ function install_faas_frontend() {
   -primaryKeyStoreFile=${PRIMARY_KEY_STORE_FILE} \
   -standbyKeyStoreFile=${STANDBY_KEY_STORE_FILE} \
   -enableDsEncrypt=${RUNTIME_DS_ENCRYPT_ENABLE} \
-  -functionSystemAddress="${IP_ADDRESS}:${FUNCTION_PROXY_GRPC_PORT}" \
+  -functionSystemAddress="${LOCAL_IP}:${FUNCTION_PROXY_GRPC_PORT}" \
   -driverMode true  >> "${FS_LOG_PATH}/${NODE_ID}-faas_frontend${STD_LOG_SUFFIX}"  2>&1 &
   FAAS_FRONTEND_PID="$!"
   log_info "succeed to start faas frontend, http_ip=${IP_ADDRESS}, http_port=${FAAS_FRONTEND_HTTP_PORT}, grpc_port=${FAAS_FRONTEND_GRPC_PORT}, pid=${FAAS_FRONTEND_PID}"
@@ -491,7 +492,7 @@ function install_function_scheduler() {
   -primaryKeyStoreFile=${PRIMARY_KEY_STORE_FILE} \
   -standbyKeyStoreFile=${STANDBY_KEY_STORE_FILE} \
   -enableDsEncrypt=${RUNTIME_DS_ENCRYPT_ENABLE} \
-  -functionSystemAddress="${IP_ADDRESS}:${FUNCTION_PROXY_GRPC_PORT}" \
+  -functionSystemAddress="${LOCAL_IP}:${FUNCTION_PROXY_GRPC_PORT}" \
   -driverMode true  >> "${FS_LOG_PATH}/${NODE_ID}-scheduler${STD_LOG_SUFFIX}"  2>&1 &
   SCHEDULER_PID="$!"
   log_info "succeed to scheduler, pid=${SCHEDULER_PID}"
@@ -667,6 +668,11 @@ function install_function_master() {
       --enable_trace=${ENABLE_TRACE} --trace_config="${TRACE_CONFIG}" \
       --meta_store_max_flush_concurrency="${META_STORE_MAX_FLUSH_CONCURRENCY}" --meta_store_max_flush_batch_size="${META_STORE_MAX_FLUSH_BATCH_SIZE}" \
       --system_tenant_id="${SYSTEM_TENANT_ID}" \
+      --enable_traefik_provider="${ENABLE_TRAEFIK_PROVIDER}" \
+      --traefik_http_entry_point="${TRAEFIK_HTTP_ENTRY_POINT}" \
+      --traefik_enable_tls="${TRAEFIK_ENABLE_TLS}" \
+      --traefik_servers_transport="${TRAEFIK_SERVERS_TRANSPORT}" \
+      --traefik_forward_timeout_ms="${TRAEFIK_FORWARD_TIMEOUT_MS}" \
       >>"${FS_LOG_PATH}/${NODE_ID}-function_master${STD_LOG_SUFFIX}" 2>&1 &
     FUNCTION_MASTER_PID=$!
     if function_system_health_check ${FUNCTION_MASTER_PID} "${GLOBAL_SCHEDULER_PORT}" "global-scheduler"; then

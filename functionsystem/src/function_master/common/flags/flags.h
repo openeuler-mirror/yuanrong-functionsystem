@@ -248,6 +248,31 @@ public:
         return systemTenantID_;
     }
 
+    bool GetEnableTraefikProvider() const
+    {
+        return enableTraefikProvider_;
+    }
+
+    const std::string &GetTraefikHttpEntryPoint() const
+    {
+        return traefikHttpEntryPoint_;
+    }
+
+    bool GetTraefikEnableTLS() const
+    {
+        return traefikEnableTLS_;
+    }
+
+    const std::string &GetTraefikServersTransport() const
+    {
+        return traefikServersTransport_;
+    }
+
+    uint32_t GetTraefikForwardTimeoutMs() const
+    {
+        return traefikForwardTimeoutMs_;
+    }
+
 protected:
     void InitScalerFlags();
     void InitMetaStoreFlags();
@@ -321,6 +346,12 @@ protected:
     bool enableAbnormalDoubleCheck_{ false };
     uint32_t domainHeartbeatTimeoutMs_{ DEFAULT_DOMAIN_HEARTBEAT_TIMEOUT };
     std::string systemTenantID_{ "0" };
+
+    bool enableTraefikProvider_{ false };
+    std::string traefikHttpEntryPoint_{ "websecure" };
+    bool traefikEnableTLS_{ true };
+    std::string traefikServersTransport_{ "yr-backend-tls@file" };
+    uint32_t traefikForwardTimeoutMs_{ 3000 };
 };
 
 }  // namespace functionsystem::functionmaster

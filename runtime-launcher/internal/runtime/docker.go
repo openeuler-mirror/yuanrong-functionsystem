@@ -227,8 +227,17 @@ func (d *DockerRuntime) Close() error {
 func convertMounts(mounts []MountConfig) []mount.Mount {
 	result := make([]mount.Mount, 0, len(mounts))
 	for _, m := range mounts {
+		// 确定挂载源：优先 HostPath，S3/Image 暂不支持
+		source := m.HostPath
+		if source == "" && m.ImageURL != "" {
+			log.Printf("[docker] mount image_url 源暂不支持: target=%s, image=%s", m.Target, m.ImageURL)
+		}
+		if source == "" && m.S3 != nil {
+			log.Printf("[docker] mount s3 源暂不支持: target=%s, bucket=%s", m.Target, m.S3.Bucket)
+		}
+
 		dm := mount.Mount{
-			Source: m.Source,
+			Source: source,
 			Target: m.Target,
 		}
 		switch strings.ToLower(m.Type) {
@@ -238,13 +247,12 @@ func convertMounts(mounts []MountConfig) []mount.Mount {
 			dm.Type = mount.TypeVolume
 		case "tmpfs":
 			dm.Type = mount.TypeTmpfs
-		default:
-			dm.Type = mount.TypeBind
-		}
-		if m.Type == "erofs" {
+		case "erofs":
 			// erofs 作为只读 bind mount 处理
 			dm.Type = mount.TypeBind
 			dm.ReadOnly = true
+		default:
+			dm.Type = mount.TypeBind
 		}
 		result = append(result, dm)
 	}

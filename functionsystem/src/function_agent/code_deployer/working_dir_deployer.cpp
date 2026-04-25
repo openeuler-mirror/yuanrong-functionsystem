@@ -25,6 +25,7 @@
 #include "common/utils/exec_utils.h"
 #include "common/utils/hash_util.h"
 #include "common/kv_client/kv_client.h"
+#include "datasystem/context/context.h"
 #include "function_agent/flags/function_agent_flags.h"
 #include "utils/os_utils.hpp"
 
@@ -140,12 +141,15 @@ private:
 // 'ds://'
 class DSAccessor : public ResourceAccessor {
 public:
-    explicit DSAccessor(const std::string &uri) : dsKey_(uri)
+    explicit DSAccessor(const std::string &uri, const std::string &tenantId = "") : dsKey_(uri), tenantId_(tenantId)
     {
     }
 
     std::pair<Status, std::string> GetResource(std::string dst) override
     {
+        if (!tenantId_.empty()) {
+            datasystem::Context::SetTenantId(tenantId_);
+        }
         auto filename = dsKey_.substr(DS_SCHEME.length());
         auto splits = litebus::strings::Split(filename, ".");
         auto [s, buffer] = KVClient::GetInstance().Get(splits[0]);
@@ -205,19 +209,20 @@ public:
 
 private:
     std::string dsKey_;
+    std::string tenantId_;
 };
 
 class ResourceAccessorFactory {
 public:
     // auto choose ResourceAccessor based on user input
-    static std::shared_ptr<ResourceAccessor> CreateAccessor(const std::string &uri)
+    static std::shared_ptr<ResourceAccessor> CreateAccessor(const std::string &uri, const std::string &tenantId = "")
     {
         if (uri.find(FTP_SCHEME) == 0) {
             // not support yet
             return nullptr;
         }
         if (uri.find(DS_SCHEME) == 0) {
-            return std::make_shared<DSAccessor>(uri);
+            return std::make_shared<DSAccessor>(uri, tenantId);
         }
         if (uri.find(FILE_SCHEME) == 0) {
             return std::make_shared<FileResourceAccessor>(uri);
@@ -305,9 +310,16 @@ DeployResult WorkingDirDeployer::Deploy(const std::shared_ptr<messages::DeployRe
         return result;
     }
 
+    // Get tenant_id for DataSystem KV operations (ds:// download)
+    std::string tenantId;
+    auto tenantIdIter = config.deployoptions().find("tenant_id");
+    if (tenantIdIter != config.deployoptions().end()) {
+        tenantId = tenantIdIter->second;
+    }
+
     // 1. verify input user params
     std::shared_ptr<ResourceAccessor> accessor =
-        ResourceAccessorFactory::CreateAccessor(config.bucketid());  // like: "file:///home/xxx/xxy.zip"
+        ResourceAccessorFactory::CreateAccessor(config.bucketid(), tenantId);  // like: "file:///home/xxx/xxy.zip"
     if (!accessor) {
         YRLOG_WARN("Unsupported working_dir schema: {}", config.bucketid());
         result.status = Status(StatusCode::FUNC_AGENT_UNSUPPORTED_WORKING_DIR_SCHEMA,
