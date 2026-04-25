@@ -26,39 +26,40 @@ class VendorTarget:
     name: str
     workspace_relpath: str
     command_fingerprints: tuple[str, ...] = ("cc", "cxx", "cmake")
+    required_paths: tuple[str, ...] = ()
 
 
-def _install_target(name: str) -> VendorTarget:
-    return VendorTarget(name=name, workspace_relpath=f"output/Install/{name}")
+def _install_target(name: str, required_paths: tuple[str, ...] = ()) -> VendorTarget:
+    return VendorTarget(name=name, workspace_relpath=f"output/Install/{name}", required_paths=required_paths)
 
 
 ALL_VENDOR_TARGETS = {
-    name: _install_target(name)
-    for name in (
-        "openssl",
-        "securec",
-        "spdlog",
-        "zlib",
-        "cjson",
-        "yaml",
-        "jemalloc",
-        "gtest_1_10_0",
-        "gtest_1_12_1",
-        "absl",
-        "protobuf",
-        "c-ares",
-        "re2",
-        "grpc",
-        "curl",
-        "obs",
-        "etcdapi",
-        "opentelemetry",
-    )
+    "openssl": _install_target("openssl", ("include/openssl/ssl.h", "lib/libssl.so", "lib/libcrypto.so")),
+    "securec": _install_target("securec", ("include/securec.h", "lib/libsecurec.so")),
+    "spdlog": _install_target("spdlog", ("include/spdlog/spdlog.h", "lib/libspdlog.so")),
+    "zlib": _install_target("zlib", ("include/zlib.h", "lib/libz.so", "lib/libminizip.a")),
+    "cjson": _install_target("cjson", ("include/nlohmann/json.hpp",)),
+    "yaml": _install_target("yaml", ("include/yaml-cpp/yaml.h", "lib/libyaml-cpp.so")),
+    "jemalloc": _install_target("jemalloc", ("include/jemalloc/jemalloc.h", "lib/libjemalloc.so")),
+    "gtest_1_10_0": _install_target("gtest_1_10_0", ("include/gtest/gtest.h", "lib/libgtest.a")),
+    "gtest_1_12_1": _install_target("gtest_1_12_1", ("include/gtest/gtest.h", "lib/libgtest.a")),
+    "absl": _install_target("absl", ("include/absl/base/config.h", "lib/libabsl_base.a")),
+    "protobuf": _install_target("protobuf", ("include/google/protobuf/message.h", "lib/libprotobuf.a")),
+    "c-ares": _install_target("c-ares", ("include/ares.h", "lib/libcares.a")),
+    "re2": _install_target("re2", ("include/re2/re2.h", "lib/libre2.a")),
+    "grpc": _install_target("grpc", ("include/grpc/grpc.h", "lib/libgrpc.so")),
+    "curl": _install_target("curl", ("include/curl/curl.h", "lib/libcurl.so")),
+    "obs": _install_target("obs", ("include/eSDKOBS.h", "lib/libeSDKOBS.so")),
+    "etcdapi": _install_target("etcdapi", ("include/etcd/api/etcdserverpb/rpc.grpc.pb.h", "lib/libetcdapi_proto.a")),
+    "opentelemetry": _install_target(
+        "opentelemetry", ("include/opentelemetry/version.h", "lib/libopentelemetry_trace.so")
+    ),
 }
 ALL_VENDOR_TARGETS["etcd-bin"] = VendorTarget(
     name="etcd-bin",
     workspace_relpath="src/etcd/bin",
     command_fingerprints=("go",),
+    required_paths=("etcd", "etcdctl", "etcdutl"),
 )
 
 BAZEL_REQUIRED_TARGETS = ("openssl", "securec", "spdlog", "zlib", "curl", "obs", "etcd-bin")
@@ -91,11 +92,16 @@ class VendorCacheManager:
         for name, target in self.targets.items():
             cache_path = self._cache_entry_path(name)
             workspace_path = self._workspace_path(target)
-            if self._is_cache_ready(cache_path):
+            if self._is_cache_ready(name, cache_path):
                 self._materialize_symlink(workspace_path, cache_path)
                 self.hits.add(name)
                 log.info(f"Vendor cache hit: {name} -> {cache_path}")
             else:
+                if os.path.exists(cache_path):
+                    with self._flock(name):
+                        if not self._is_cache_ready(name, cache_path):
+                            log.warning(f"Remove invalid vendor cache for {name}: {cache_path}")
+                            self._remove_path(cache_path)
                 self._remove_path(workspace_path)
                 self.misses.add(name)
                 log.info(f"Vendor cache miss: {name}")
@@ -108,10 +114,12 @@ class VendorCacheManager:
             if not os.path.exists(workspace_path):
                 log.warning(f"Skip publishing vendor cache for {name}: workspace output not found at {workspace_path}")
                 continue
+            if not self._is_target_output_valid(name, workspace_path):
+                raise RuntimeError(f"Refuse to publish incomplete vendor cache for {name}: {workspace_path}")
             cache_path = self._cache_entry_path(name)
             with self._flock(name):
-                if not self._is_cache_ready(cache_path):
-                    self._publish_directory(workspace_path, cache_path)
+                if not self._is_cache_ready(name, cache_path):
+                    self._publish_directory(name, workspace_path, cache_path)
                     log.info(f"Published vendor cache: {name} -> {cache_path}")
                 self._materialize_symlink(workspace_path, cache_path)
         self._ensure_output_layout()
@@ -150,11 +158,32 @@ class VendorCacheManager:
         os.makedirs(self.openEuler_root, exist_ok=True)
         self._materialize_symlink(os.path.join(self.openEuler_root, "Install"), self.install_root)
 
-    def _is_cache_ready(self, cache_path: str) -> bool:
-        return os.path.exists(os.path.join(cache_path, READY_MARKER))
+    def _is_cache_ready(self, name: str, cache_path: str) -> bool:
+        return os.path.exists(os.path.join(cache_path, READY_MARKER)) and self._is_target_output_valid(name, cache_path)
 
-    def _publish_directory(self, src_dir: str, dst_dir: str):
-        if os.path.exists(dst_dir) and not self._is_cache_ready(dst_dir):
+    def _is_target_output_valid(self, name: str, root_path: str) -> bool:
+        if not os.path.isdir(root_path):
+            return False
+        target = self.targets[name]
+        if target.required_paths:
+            return all(os.path.isfile(os.path.join(root_path, relpath)) for relpath in target.required_paths)
+        return self._has_payload(root_path)
+
+    def _has_payload(self, root_path: str) -> bool:
+        for current_root, dirnames, filenames in os.walk(root_path):
+            dirnames[:] = [dirname for dirname in dirnames if dirname != ".staging"]
+            for filename in filenames:
+                if filename != READY_MARKER:
+                    return True
+            for dirname in dirnames:
+                if os.listdir(os.path.join(current_root, dirname)):
+                    return True
+        return False
+
+    def _publish_directory(self, name: str, src_dir: str, dst_dir: str):
+        if not self._is_target_output_valid(name, src_dir):
+            raise RuntimeError(f"Refuse to publish incomplete vendor cache for {name}: {src_dir}")
+        if os.path.exists(dst_dir) and not self._is_cache_ready(name, dst_dir):
             self._remove_path(dst_dir)
         if os.path.exists(dst_dir):
             return
@@ -164,6 +193,8 @@ class VendorCacheManager:
         try:
             snapshot_dir = os.path.join(temp_dir, "snapshot")
             shutil.copytree(src_dir, snapshot_dir, symlinks=True)
+            if not self._is_target_output_valid(name, snapshot_dir):
+                raise RuntimeError(f"Refuse to publish incomplete vendor cache snapshot for {name}: {src_dir}")
             with open(os.path.join(snapshot_dir, READY_MARKER), "w", encoding="utf-8") as marker:
                 marker.write("ready\n")
             os.replace(snapshot_dir, dst_dir)
