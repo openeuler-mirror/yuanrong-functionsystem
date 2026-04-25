@@ -130,11 +130,19 @@ def build_rust(args):
     vendor_path = os.path.join(root_dir, "vendor")
     log.info("Start to build functionsystem with Rust")
 
+    # Keep the official build pipeline's shared dependency surfaces available so
+    # pack/install can consume the same output layout even though program
+    # binaries are produced by Cargo rather than the legacy CMake tree.
+    build_vendor(args)
+    build_litebus(args)
+    build_logs(args)
+    build_metrics(args)
+
     # Download and build etcd (needed for deploy package)
     _ensure_etcd(vendor_path)
 
     # Rust binaries replace C++ binaries
-    builder.build_rust_binaries(root_dir)
+    builder.build_rust_binaries(root_dir, args["job_num"])
 
     # Go components remain unchanged
     builder.build_cli(root_dir)

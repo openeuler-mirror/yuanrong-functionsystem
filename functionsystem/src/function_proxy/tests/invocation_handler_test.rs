@@ -98,6 +98,42 @@ async fn create_req_respects_designated_instance_id_on_failure() {
 }
 
 #[tokio::test]
+async fn duplicate_create_during_pending_init_only_returns_create_rsp() {
+    let bus = new_bus("node-a", 29002);
+    let create = CreateRequest {
+        function: "f".into(),
+        request_id: "inst-1".into(),
+        ..Default::default()
+    };
+    bus.register_pending_instance("inst-1", "driver-1", &create);
+    let (tx, _rx) = tokio::sync::mpsc::channel(4);
+    bus.attach_runtime_stream("inst-1", tx);
+    let bus2 = bus.clone();
+    let connect = tokio::spawn(async move {
+        bus2.on_runtime_connected("inst-1", "rt-inst-1").await;
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    assert!(bus.is_pending_init("inst-1"));
+
+    let msg = StreamingMessage {
+        message_id: "dup-mid".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CreateReq(create.clone())),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound("driver-1", msg, &bus).await
+    else {
+        panic!("Reply");
+    };
+    assert_eq!(outs.len(), 1, "duplicate create must not emit NotifyReq before init");
+    let streaming_message::Body::CreateRsp(rsp) = outs[0].body.as_ref().unwrap() else {
+        panic!("CreateRsp");
+    };
+    assert_eq!(rsp.code, ErrorCode::ErrNone as i32);
+    connect.abort();
+}
+
+#[tokio::test]
 async fn group_create_empty_requests_succeeds() {
     let bus = new_bus("node-a", 29003);
     let batch = CreateRequests {

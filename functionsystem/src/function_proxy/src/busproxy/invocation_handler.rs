@@ -161,23 +161,26 @@ impl InvocationHandler {
             "CreateReq: scheduling instance via agent"
         );
 
-        if bus.pending_creates.contains_key(&instance_id) || bus.has_runtime_stream(&instance_id) {
+        let pending_create = bus.is_pending_create(&instance_id);
+        let pending_init = bus.is_pending_init(&instance_id);
+        let recovering = bus.is_recovering(&instance_id);
+        if pending_create || pending_init || recovering || bus.has_runtime_stream(&instance_id) {
             info!(
                 %instance_id,
                 request_id = %create.request_id,
                 "CreateReq: duplicate create for existing/pending instance, returning idempotent success"
             );
-            return InboundAction::Reply(vec![
-                StreamingMessage {
-                    message_id: msg_id.to_string(),
-                    meta_data: Default::default(),
-                    body: Some(streaming_message::Body::CreateRsp(cs::CreateResponse {
-                        code: ErrorCode::ErrNone as i32,
-                        message: "instance already scheduled".to_string(),
-                        instance_id: instance_id.clone(),
-                    })),
-                },
-                StreamingMessage {
+            let mut replies = vec![StreamingMessage {
+                message_id: msg_id.to_string(),
+                meta_data: Default::default(),
+                body: Some(streaming_message::Body::CreateRsp(cs::CreateResponse {
+                    code: ErrorCode::ErrNone as i32,
+                    message: "instance already scheduled".to_string(),
+                    instance_id: instance_id.clone(),
+                })),
+            }];
+            if !(pending_create || pending_init || recovering) {
+                replies.push(StreamingMessage {
                     message_id: create.request_id.clone(),
                     meta_data: Default::default(),
                     body: Some(streaming_message::Body::NotifyReq(rs::NotifyRequest {
@@ -188,8 +191,9 @@ impl InvocationHandler {
                         stack_trace_infos: Vec::new(),
                         runtime_info: None,
                     })),
-                },
-            ]);
+                });
+            }
+            return InboundAction::Reply(replies);
         }
 
         bus.register_pending_instance(&instance_id, caller_stream_id, create);

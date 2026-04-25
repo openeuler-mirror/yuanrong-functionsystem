@@ -730,6 +730,12 @@ impl BusProxyCoordinator {
         let Some(px) = self.instance_view.proxies().get(instance_id) else {
             return;
         };
+        if self.is_pending_create(instance_id)
+            || self.is_pending_init(instance_id)
+            || self.is_recovering(instance_id)
+        {
+            return;
+        }
         if !px.dispatcher.route_ready() {
             return;
         }

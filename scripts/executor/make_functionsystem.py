@@ -37,15 +37,16 @@ def parser_args():
     build_parser.add_argument(
         "--build_type",
         type=str,
-        default="Release",
-        help="Set program compilation mode(Debug/Release). Default: Release",
+        choices=["release", "debug"],
+        default="release",
+        help="Set program compilation mode(release/debug). Default: release",
     )
     build_parser.add_argument(
         "--builder",
         type=str,
         choices=["cmake", "bazel", "rust"],
-        default="cmake",
-        help="Choose build system to use: cmake, bazel, or rust. Default: cmake",
+        default="rust",
+        help="Choose build system to use: cmake, bazel, or rust. Default: rust",
     )
     build_parser.set_defaults(func=lambda func_args: tasks.run_build(ROOT_DIR, func_args))
     # 清理缓存执行参数
