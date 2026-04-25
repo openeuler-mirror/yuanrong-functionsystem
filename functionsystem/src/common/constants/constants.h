@@ -284,9 +284,56 @@ const std::string CONDA_DEFAULT_ENV = "CONDA_DEFAULT_ENV";
 */
 const std::string CONTAINER_ROOTFS = "rootfs";
 
+/* Example of mounts json (array of mount objects):
+[
+    {
+        "type": "bind",
+        "target": "/data",
+        "host_path": "/mnt/nas/shared-data",
+        "options": ["ro"]
+    },
+    {
+        "type": "bind",
+        "target": "/models",
+        "host_path": "/mnt/models/llama"
+    },
+    {
+        "type": "volume",
+        "target": "/cache",
+        "s3_config": {
+            "endpoint": "cn-hangzhou.alipay.aliyun-inc.com",
+            "bucket": "crfs-dev",
+            "object": "akernel/cache/cache_v1.img",
+            "accessKey": "",
+            "secretKey": ""
+        }
+    },
+    {
+        "type": "bind",
+        "target": "/rootfs",
+        "image_url": "registry.cn-hangzhou.com/overlay:latest"
+    }
+]
+
+Each mount supports one of three source types (mutually exclusive):
+  - host_path:  bind mount from host filesystem path
+  - s3_config:  S3-based mount source (endpoint, bucket, object, accessKey, secretKey)
+  - image_url:  OCI image URL for image-based mount
+
+Fields:
+  - type    (string, required): mount type, e.g. "bind", "volume", "tmpfs", "erofs"
+  - target  (string, required): mount point inside the container
+  - options (array of string, optional): fstab-style mount options, e.g. ["ro"], ["noexec","nosuid"]
+*/
+const std::string CONTAINER_MOUNTS = "mounts";
+
 const std::string CONTAINER_EXTRA_CONFIG = "extra_config";
 
 const std::string CONTAINER_NETWORK = "network";
+
+// port forwarding internal env vars
+const std::string YR_INTERNAL_HOST_IP = "YR_INTERNAL_HOST_IP";
+const std::string YR_PORT_FORWARDINGS = "YR_PORT_FORWARDINGS";
 
 // hibernate
 const std::string ENABLE_SUSPEND_RESUME = "enableSuspendResume";

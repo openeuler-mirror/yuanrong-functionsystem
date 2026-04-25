@@ -112,7 +112,6 @@ void AgentServiceActor::DeployInstance(const litebus::AID &from, std::string &&n
                     deployInstanceRequest->requestid(), deployInstanceRequest->instanceid());
         return;
     }
-    YRLOG_INFO("debug:: {}", deployInstanceRequest->DebugString());
     const std::string &requestID = deployInstanceRequest->requestid();
     // if functionAgent registration to localScheduler is not complete, refuse request from localScheduler
     if (!isRegisterCompleted_) {
@@ -1127,7 +1126,6 @@ Status AgentServiceActor::StartRuntime(const DeployInstanceRequest &request)
 {
     auto startInstanceRequest = std::make_unique<messages::StartInstanceRequest>();
     function_agent::SetStartRuntimeInstanceRequestConfig(startInstanceRequest, request);
-    YRLOG_INFO("debug:: {}", startInstanceRequest->DebugString());
     if (request->funcdeployspec().storagetype() == COPY_STORAGE_TYPE) {
         startInstanceRequest->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->set_deploydir(
             deployers_[COPY_STORAGE_TYPE]->GetDestination("", "", request->funcdeployspec().deploydir()));

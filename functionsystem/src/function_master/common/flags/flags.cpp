@@ -109,6 +109,22 @@ Flags::Flags()
     AddFlag(&Flags::domainHeartbeatTimeoutMs_, "domain_heartbeat_timeout", "set the domain heartbeat timeout, ms",
             DEFAULT_DOMAIN_HEARTBEAT_TIMEOUT, NumCheck(MIN_DOMAIN_HEARTBEAT_TIMEOUT, MAX_DOMAIN_HEARTBEAT_TIMEOUT));
     AddFlag(&Flags::systemTenantID_, "system_tenant_id", "system tenant id for querying all tenants' instances", "0");
+    AddFlag(&Flags::enableTraefikProvider_, "enable_traefik_provider",
+            "enable Traefik HTTP provider endpoint /traefik/config", false);
+    AddFlag(&Flags::traefikHttpEntryPoint_, "traefik_http_entry_point",
+            "Traefik entryPoint name for generated routers", "websecure");
+    AddFlag(&Flags::traefikEnableTLS_, "traefik_enable_tls",
+            "enable TLS on generated Traefik routers", true);
+    AddFlag(&Flags::traefikServersTransport_, "traefik_servers_transport",
+            "Traefik serversTransport for HTTPS backends", "yr-backend-tls@file");
+    // Timeout for standby FunctionMaster to forward /traefik/config requests to the leader.
+    // Must be strictly less than Traefik's providers.http.pollTimeout (default 5s),
+    // otherwise Traefik will time out before the forward completes, making the forward useless.
+    // Default 3000ms leaves ~2s headroom for network RTT and LB processing.
+    AddFlag(&Flags::traefikForwardTimeoutMs_, "traefik_forward_timeout_ms",
+            "timeout in ms for standby to forward traefik config requests to leader, "
+            "must be less than Traefik providers.http.pollTimeout (default 5s)",
+            3000u, NumCheck(500u, 10000u));
     InitScalerFlags();
     InitMetaStoreFlags();
 }

@@ -159,7 +159,7 @@ std::shared_ptr<schedule_decision::ScheduleQueueActor> InstanceCtrl::CreateSched
     scheduleQueueActor->RegisterResourceView(resourceView);
     scheduleQueueActor->SetAllocateType(schedule_decision::AllocateType::ALLOCATION);
     // need to spawn and keep lifetime
-    litebus::Spawn(scheduleQueueActor);
+    litebus::Spawn(scheduleQueueActor, false);
     return scheduleQueueActor;
 }
 

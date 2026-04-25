@@ -114,7 +114,8 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
     rows_ = rows;
     cols_ = cols;
 
-    std::vector<std::string> argv = { "docker", "exec", "-i" };
+    // Build docker exec command
+    std::vector<std::string> argv = {"sbox", "exec"}; 
 
     for (const auto &[key, value] : env) {
         argv.push_back("-e");
@@ -127,7 +128,7 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
     argv.push_back(containerId_);
     argv.insert(argv.end(), command_.begin(), command_.end());
 
-    YRLOG_INFO("Starting docker exec, sessionId: {}, container: {}", sessionId_, containerId);
+    YRLOG_INFO("Starting sbox exec, sessionId: {}, container: {}", sessionId_, containerId);
 
     if (tty_) {
         auto ptyResult = litebus::PtyExecIO::Create(rows_, cols_);
@@ -153,7 +154,7 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
         };
 
         exec_ = litebus::Exec::CreateExec(
-            "docker", argv, litebus::None(),
+            "sbox", argv, litebus::None(),
             *ptyIO_->stdIn, *ptyIO_->stdOut, *ptyIO_->stdErr,
             childInitHooks, {}, true);
         // Exec::CreateExec closes the slave fd in the parent process (via CloseFD after fork).
@@ -162,7 +163,7 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
 
     } else {
         exec_ = litebus::Exec::CreateExec(
-            "docker", argv, litebus::None(),
+            "sbox", argv, litebus::None(),
             litebus::ExecIO::CreatePipeIO(),
             litebus::ExecIO::CreatePipeIO(),
             litebus::ExecIO::CreatePipeIO(),
@@ -242,6 +243,16 @@ void ExecSessionActor::DoResize(int rows, int cols)
 
     rows_ = rows;
     cols_ = cols;
+
+    // TIOCSCTTY may not have been established correctly, so the PTY TIOCSWINSZ
+    // might not deliver SIGWINCH to the sbox exec process automatically.
+    // Explicitly send SIGWINCH to ensure sbox exec picks up the new window size.
+    if (exec_) {
+        int pid = exec_->GetPid();
+        if (pid > 0) {
+            kill(pid, SIGWINCH);
+        }
+    }
 }
 
 void ExecSessionActor::DoClose()

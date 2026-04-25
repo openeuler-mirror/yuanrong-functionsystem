@@ -108,6 +108,42 @@ public:
      */
     std::vector<std::tuple<int64_t, std::string, SnapshotMetadata>> GetAllSnapshotsWithTime() const;
 
+    /**
+     * Get all snapshots for a (tenantID, functionType, optional ns)
+     * @param tenantID Tenant ID
+     * @param functionType Function type (moduleName.className for actors)
+     * @param ns Optional namespace
+     * @return Vector of snapshot metadata
+     */
+    std::vector<SnapshotMetadata> GetByFunctionKey(const std::string &tenantID,
+                                                   const std::string &functionType,
+                                                   const std::string &ns = "") const;
+
+    /**
+     * Get all checkpoint IDs for a (tenantID, functionType, optional ns)
+     * @param tenantID Tenant ID
+     * @param functionType Function type (moduleName.className for actors)
+     * @param ns Optional namespace
+     * @return Vector of checkpoint IDs sorted by create time
+     */
+    std::vector<std::string> GetByFunctionKeyCheckpointIDs(const std::string &tenantID,
+                                                           const std::string &functionType,
+                                                           const std::string &ns = "") const;
+
+    /**
+     * Get all snapshots for a tenant (all functionTypes)
+     * @param tenantID Tenant ID
+     * @return Vector of snapshot metadata
+     */
+    std::vector<SnapshotMetadata> GetByTenant(const std::string &tenantID) const;
+
+    /**
+     * Get all checkpoint IDs for a tenant (all functionTypes)
+     * @param tenantID Tenant ID
+     * @return Vector of checkpoint IDs sorted by create time
+     */
+    std::vector<std::string> GetByTenantCheckpointIDs(const std::string &tenantID) const;
+
 private:
     // Snapshot cache: snapshotID -> metadata
     std::unordered_map<std::string, SnapshotMetadata> snapshotCache_;
@@ -115,11 +151,17 @@ private:
     // Function to snapshots mapping: functionID -> set of snapshotIDs
     std::unordered_map<std::string, std::unordered_set<std::string>> functionSnapshots_;
 
+    // functionKey index: "tenantID/functionType" -> set of snapshotIDs
+    std::unordered_map<std::string, std::unordered_set<std::string>> functionKeySnapshots_;
+
     // Helper: Extract function ID from metadata
     static std::string GetFunctionID(const SnapshotMetadata &meta);
 
     // Helper: Extract create time from metadata
     static int64_t GetCreateTime(const SnapshotMetadata &meta);
+
+    // Helper: Build functionKey index from metadata
+    static std::string MakeFunctionKeyIndex(const SnapshotMetadata &meta);
 };
 
 }  // namespace functionsystem::snap_manager

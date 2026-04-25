@@ -938,7 +938,7 @@ std::vector<WatchEvent> GenerateResponseRouteEvent(std::string NodeID) {
     std::string value4 = R"({"instanceID":"InstanceID4","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-4","function":"default/0-system-faasExecutorPython3.9/$latest","functionProxyID":"XXXXXXX","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID4","tenantID":"default","version":"3"})";
 
     auto key5 = R"(/yr/route/business/yrk/InstanceID5)";
-    std::string value5 = R"({"instanceID":"InstanceID5","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-5","function":"default/0-system-faasExecutorPython3.9/$latest","functionProxyID":"XXXXXXX","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID5","tenantID":"default","version":"5","createOptions":{"ReliabilityType":"low"}})";
+    std::string value5 = R"({"instanceID":"InstanceID5","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-5","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","functionProxyID":"XXXXXXX","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID5","tenantID":"12345678901234561234567890123456","version":"5","createOptions":{"ReliabilityType":"low"}})";
 
     std::string from = "XXXXXXX";
     size_t start_pos = 0;

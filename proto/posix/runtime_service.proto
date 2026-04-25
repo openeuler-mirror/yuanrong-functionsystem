@@ -38,6 +38,7 @@ message CallRequest {
   repeated string     returnObjectIDs      = 8;
   map<string, string> createOptions        = 9;
   string              spanID               = 10;
+  bool                bypass_datasystem    = 11;
 }
 
 message CallResponse {

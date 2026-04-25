@@ -128,8 +128,8 @@ func mustStart(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd,
 			}
 			mt := &pb.Mount{
 				Type:   "bind",
-				Source: parts[0],
 				Target: parts[1],
+				Source: &pb.Mount_HostPath{HostPath: parts[0]},
 			}
 			if len(parts) == 3 && parts[2] == "ro" {
 				mt.Options = []string{"ro"}
@@ -188,7 +188,7 @@ func mustStart(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd,
 	if len(mountList) > 0 {
 		fmt.Printf("  挂载:\n")
 		for _, m := range mountList {
-			fmt.Printf("    %s -> %s\n", m.Source, m.Target)
+			fmt.Printf("    %s -> %s\n", m.GetHostPath(), m.Target)
 		}
 	}
 	if len(userEnvs) > 0 {

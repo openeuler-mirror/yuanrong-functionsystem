@@ -22,6 +22,8 @@
 #include "function_master/common/flags/flags.h"
 #include "global_sched.h"
 #include "global_sched_actor.h"
+#include "traefik_api_router_register.h"
+#include "traefik_route_cache.h"
 
 namespace functionsystem::global_scheduler {
 
@@ -62,6 +64,10 @@ public:
 
     std::shared_ptr<GlobalSched> GetGlobalSched() const;
 
+    std::shared_ptr<TraefikRouteCache> GetTraefikRouteCache() const;
+
+    std::shared_ptr<TraefikLeaderContext> GetTraefikLeaderContext() const;
+
     void BindComponentName(const std::string &componentName);
 
 private:
@@ -89,6 +95,10 @@ private:
     bool enablePreemption_{ false };
     std::string componentName_{};
     bool enableHorizontalScale_{ false };
+
+    std::shared_ptr<TraefikRouteCache> traefikRouteCache_;
+    std::shared_ptr<TraefikApiRouterRegister> traefikApiRouteRegister_;
+    std::shared_ptr<TraefikLeaderContext> traefikLeaderCtx_;
 };
 
 }  // namespace functionsystem::global_scheduler
