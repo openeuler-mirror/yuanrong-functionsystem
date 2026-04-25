@@ -18,10 +18,7 @@ pub struct BusProxyRegistration {
     pub grpc: String,
 }
 
-pub async fn run_busproxy_registration(
-    etcd: Arc<Mutex<MetaStoreClient>>,
-    config: Arc<Config>,
-) {
+pub async fn run_busproxy_registration(etcd: Arc<Mutex<MetaStoreClient>>, config: Arc<Config>) {
     let aid = if config.proxy_aid.trim().is_empty() {
         config.node_id.clone()
     } else {

@@ -57,9 +57,8 @@ fn merge_process_proxy_config_embeds_rm_network_shape() {
     assert_eq!(rm.runtime_initial_port, 40100);
     assert_eq!(rm.port_count, 16);
 
-    let ports = Arc::new(
-        SharedPortManager::new(rm.runtime_initial_port, rm.port_count).expect("ports"),
-    );
+    let ports =
+        Arc::new(SharedPortManager::new(rm.runtime_initial_port, rm.port_count).expect("ports"));
     let state = Arc::new(RuntimeManagerState::new(rm.clone(), ports));
     let paths = rm.runtime_path_list();
     let start = StartInstanceRequest {

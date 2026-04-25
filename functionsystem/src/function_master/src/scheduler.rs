@@ -6,7 +6,9 @@ use std::time::Duration;
 use parking_lot::Mutex;
 
 use async_trait::async_trait;
+use etcd_client::Client;
 use tonic::{Request, Response, Status};
+use tracing::warn;
 use yr_proto::internal::global_scheduler_service_server::GlobalSchedulerService;
 use yr_proto::internal::{
     EvictAgentRequest, EvictAgentResponse, GroupScheduleRequest, GroupScheduleResponse,
@@ -19,11 +21,11 @@ use crate::config::MasterConfig;
 use crate::domain_activator::DomainActivator;
 use crate::domain_sched_mgr::DomainSchedMgr;
 use crate::instances::InstanceManager;
+use crate::local_sched_mgr::LocalSchedMgr;
 use crate::node_manager::NodeManager;
 use crate::schedule_decision::ScheduleDecisionManager;
 use crate::schedule_manager::ScheduleManager;
 use crate::snapshot::SnapshotManager;
-use crate::local_sched_mgr::LocalSchedMgr;
 use crate::system_func_loader::SystemFunctionLoader;
 use crate::topology::TopologyManager;
 
@@ -130,8 +132,7 @@ impl MasterState {
         let this = Arc::clone(self);
         let req = req;
         match tokio::task::spawn_blocking(move || {
-            this
-                .schedule_mgr
+            this.schedule_mgr
                 .process_schedule_request(req, &this.topology)
         })
         .await
@@ -149,7 +150,10 @@ impl MasterState {
     }
 
     /// C++ `DoGroupSchedule` / `GroupSchedule` with retry interval from config.
-    pub async fn do_group_schedule(self: &Arc<Self>, req: GroupScheduleRequest) -> GroupScheduleResponse {
+    pub async fn do_group_schedule(
+        self: &Arc<Self>,
+        req: GroupScheduleRequest,
+    ) -> GroupScheduleResponse {
         if !self.require_leader() {
             return GroupScheduleResponse {
                 success: false,
@@ -179,15 +183,15 @@ impl MasterState {
         }
         loop {
             if self.topology.root_domain().is_none() {
-                tokio::time::sleep(Duration::from_secs(self.config.schedule_retry_sec.max(1))).await;
+                tokio::time::sleep(Duration::from_secs(self.config.schedule_retry_sec.max(1)))
+                    .await;
                 continue;
             }
             let this = Arc::clone(self);
             let req = req.clone();
             let group_id_for_err = req.group_id.clone();
             return match tokio::task::spawn_blocking(move || {
-                this
-                    .schedule_mgr
+                this.schedule_mgr
                     .process_group_schedule_request(req, &this.topology)
             })
             .await
@@ -213,6 +217,31 @@ impl GlobalSchedulerImpl {
     pub fn new(state: Arc<MasterState>) -> Self {
         Self { state }
     }
+
+    async fn publish_ready_agent_count(&self) {
+        let endpoints: Vec<&str> = self
+            .state
+            .config
+            .etcd_endpoints
+            .iter()
+            .map(String::as_str)
+            .collect();
+        if endpoints.is_empty() {
+            return;
+        }
+        let key = self.state.config.ready_agent_count_key();
+        let value = self.state.topology.agent_count().to_string();
+        match Client::connect(endpoints, None).await {
+            Ok(mut c) => {
+                if let Err(e) = c.put(key.clone(), value.clone(), None).await {
+                    warn!(error = %e, %key, %value, "publish ready-agent count failed");
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, %key, %value, "connect etcd to publish ready-agent count failed")
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -233,20 +262,16 @@ impl GlobalSchedulerService for GlobalSchedulerImpl {
         let (domain_address, rec) = self
             .state
             .topology
-            .register_local(
-                r.node_id,
-                r.address,
-                r.resource_json,
-                r.agent_info_json,
-            )
+            .register_local(r.node_id, r.address, r.resource_json, r.agent_info_json)
             .await;
-        self.state.local_sched_mgr.register(&rec.node_id, &rec.address);
-        self.state.node_manager.on_proxy_register(
-            &rec.node_id,
-            &rec.address,
-            &rec.domain_id,
-        );
+        self.state
+            .local_sched_mgr
+            .register(&rec.node_id, &rec.address);
+        self.state
+            .node_manager
+            .on_proxy_register(&rec.node_id, &rec.address, &rec.domain_id);
         self.state.rebuild_domain_routes();
+        self.publish_ready_agent_count().await;
         let topology = self.state.topology.topology_json();
         Ok(Response::new(RegisterResponse {
             success: true,

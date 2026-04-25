@@ -76,7 +76,9 @@ impl SchedulerLink {
         })
     }
 
-    async fn connect_local(&self) -> Result<LocalSchedulerServiceClient<tonic::transport::Channel>, tonic::Status> {
+    async fn connect_local(
+        &self,
+    ) -> Result<LocalSchedulerServiceClient<tonic::transport::Channel>, tonic::Status> {
         let uri = Config::normalize_grpc_uri(&self.local_uri);
         let channel = tonic::transport::Endpoint::from_shared(uri)
             .map_err(|e| tonic::Status::internal(e.to_string()))?
@@ -87,7 +89,9 @@ impl SchedulerLink {
         Ok(LocalSchedulerServiceClient::new(channel))
     }
 
-    async fn cached_local(&self) -> Result<LocalSchedulerServiceClient<tonic::transport::Channel>, tonic::Status> {
+    async fn cached_local(
+        &self,
+    ) -> Result<LocalSchedulerServiceClient<tonic::transport::Channel>, tonic::Status> {
         let mut guard = self.local_client.lock().await;
         if guard.is_none() {
             let c = self.connect_local().await?;
@@ -130,7 +134,10 @@ impl SchedulerLink {
         Ok(())
     }
 
-    pub async fn forward_update_resources(&self, req: UpdateResourcesRequest) -> Result<bool, tonic::Status> {
+    pub async fn forward_update_resources(
+        &self,
+        req: UpdateResourcesRequest,
+    ) -> Result<bool, tonic::Status> {
         let uri = Config::normalize_grpc_uri(&self.local_uri);
         let mut client = GlobalSchedulerServiceClient::connect(uri)
             .await
@@ -177,7 +184,10 @@ pub fn spawn_registration_tasks(
         for attempt in 0u32..32 {
             match l.try_register_global().await {
                 Ok(()) => {
-                    info!(attempt, "registered with global scheduler (function_proxy / master)");
+                    info!(
+                        attempt,
+                        "registered with global scheduler (function_proxy / master)"
+                    );
                     break;
                 }
                 Err(e) => {

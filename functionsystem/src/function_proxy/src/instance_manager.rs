@@ -84,9 +84,7 @@ impl InstanceManager {
             let m = e.value();
             s.total += 1;
             *s.by_state.entry(m.state).or_insert(0) += 1;
-            *s.by_function
-                .entry(m.function_name.clone())
-                .or_insert(0) += 1;
+            *s.by_function.entry(m.function_name.clone()).or_insert(0) += 1;
         }
         s
     }
@@ -196,8 +194,10 @@ impl InstanceManager {
         let before = meta.state;
         let release = Self::had_committed_usage(before) || before == InstanceState::Evicting;
 
-        if matches!(before, InstanceState::Running | InstanceState::SubHealth | InstanceState::Suspend)
-        {
+        if matches!(
+            before,
+            InstanceState::Running | InstanceState::SubHealth | InstanceState::Suspend
+        ) {
             let _ = self
                 .ctrl
                 .transition_with_version(instance_id, InstanceState::Exiting, None)
@@ -310,7 +310,8 @@ mod tests {
 
     fn test_manager() -> Arc<InstanceManager> {
         let cfg = Arc::new(
-            Config::try_parse_from(["yr-proxy", "--node-id", "n1", "--grpc-listen-port", "1"]).unwrap(),
+            Config::try_parse_from(["yr-proxy", "--node-id", "n1", "--grpc-listen-port", "1"])
+                .unwrap(),
         );
         let rv = ResourceView::new(ResourceVector {
             cpu: 8.0,
@@ -333,7 +334,11 @@ mod tests {
             } else {
                 String::new()
             },
-            runtime_port: if state == InstanceState::Running { 1 } else { 0 },
+            runtime_port: if state == InstanceState::Running {
+                1
+            } else {
+                0
+            },
             state,
             created_at_ms: now,
             updated_at_ms: now,
@@ -348,9 +353,12 @@ mod tests {
     #[test]
     fn statistics_counts_by_state_and_function() {
         let m = test_manager();
-        m.controller().insert_metadata(meta("a", InstanceState::Running, "f1"));
-        m.controller().insert_metadata(meta("b", InstanceState::Running, "f1"));
-        m.controller().insert_metadata(meta("c", InstanceState::Creating, "f2"));
+        m.controller()
+            .insert_metadata(meta("a", InstanceState::Running, "f1"));
+        m.controller()
+            .insert_metadata(meta("b", InstanceState::Running, "f1"));
+        m.controller()
+            .insert_metadata(meta("c", InstanceState::Creating, "f2"));
         let s = m.statistics();
         assert_eq!(s.total, 3);
         assert_eq!(*s.by_state.get(&InstanceState::Running).unwrap(), 2);
@@ -362,7 +370,8 @@ mod tests {
     #[test]
     fn list_by_node_and_function_filters() {
         let m = test_manager();
-        m.controller().insert_metadata(meta("x", InstanceState::Scheduling, "fn"));
+        m.controller()
+            .insert_metadata(meta("x", InstanceState::Scheduling, "fn"));
         assert_eq!(m.list_by_node("n1").len(), 1);
         assert_eq!(m.list_by_function("fn").len(), 1);
         assert_eq!(m.list_by_state(InstanceState::Scheduling).len(), 1);

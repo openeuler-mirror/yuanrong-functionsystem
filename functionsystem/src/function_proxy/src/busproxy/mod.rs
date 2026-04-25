@@ -1,5 +1,7 @@
 //! BusProxy data plane: routes, per-instance dispatch, and peer InnerService forwarding.
 
+use prost::Message;
+use std::fs;
 use std::sync::Arc;
 
 mod instance_proxy;
@@ -37,8 +39,22 @@ struct PendingCreateInfo {
     function_name: String,
     /// Original args from CreateReq (may contain MetaData for stateful actors).
     create_args: Vec<yr_proto::common::Arg>,
+    /// Original CreateReq options (e.g. need_order, graceful shutdown, etc).
+    create_options: HashMap<String, String>,
     /// Timestamp when the create was registered (for timeout detection).
     created_at: std::time::Instant,
+}
+
+/// Durable launch metadata needed to restart a runtime for RecoverRetryTimes.
+#[derive(Clone, Debug)]
+struct ActiveInstanceInfo {
+    driver_stream_id: String,
+    function_name: String,
+    trace_id: String,
+    create_options: HashMap<String, String>,
+    create_args: Vec<yr_proto::common::Arg>,
+    remaining_recoveries: i32,
+    recovering: bool,
 }
 
 /// Maps instance_id → PendingCreateInfo for notifying the driver on runtime connect-back.
@@ -59,6 +75,24 @@ struct PendingInitInfo {
 /// strictly one at a time.
 type InstanceMailbox = dashmap::DashMap<String, Arc<tokio::sync::Mutex<()>>>;
 
+fn recover_retry_times(create_options: &HashMap<String, String>) -> i32 {
+    create_options
+        .get("RecoverRetryTimes")
+        .or_else(|| create_options.get("RECOVER_RETRY_TIMES"))
+        .and_then(|v| v.trim().parse::<i32>().ok())
+        .unwrap_or(0)
+        .max(0)
+}
+
+fn graceful_shutdown_seconds(create_options: &HashMap<String, String>) -> u64 {
+    create_options
+        .get("GRACEFUL_SHUTDOWN_TIME")
+        .or_else(|| create_options.get("GracefulShutdownTime"))
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(60)
+}
+
 /// Coordinates runtime streams, etcd routes, and peer gRPC forwards (LiteBus → InnerService).
 pub struct BusProxyCoordinator {
     local_node_id: String,
@@ -75,6 +109,40 @@ pub struct BusProxyCoordinator {
     retry: RouteRetry,
     pending_creates: PendingCreateMap,
     instance_to_driver: InstanceDriverMap,
+    instance_to_job: dashmap::DashMap<String, String>,
+    /// CallResult routing table keyed by request_id. Driver-origin invokes route
+    /// back to the driver stream; nested runtime-origin invokes route back to
+    /// the source runtime stream.
+    result_to_caller: dashmap::DashMap<String, String>,
+    /// Preserve the original outer StreamingMessage.message_id for a request_id.
+    request_to_message_id: dashmap::DashMap<String, String>,
+    /// Preserve the original CallRequest so in-flight ordered calls can be replayed after recovery.
+    request_to_call: dashmap::DashMap<String, CallRequest>,
+    /// Ordered actor invoke sequence keyed by request_id.
+    request_to_sequence: dashmap::DashMap<String, i64>,
+    /// Next expected ordered invoke sequence per instance.
+    instance_next_sequence: dashmap::DashMap<String, i64>,
+    /// Requests that have actually been sent to runtime and are waiting for result.
+    dispatched_request_to_instance: dashmap::DashMap<String, String>,
+    /// When a direct CallResult is forwarded to a driver/runtime as NotifyReq, the
+    /// consumer's NotifyRsp must be translated back to CallResultAck for the source runtime.
+    notify_ack_to_runtime: dashmap::DashMap<String, String>,
+    /// Tracks which target instance currently owns a given request_id so stream
+    /// close can fail outstanding requests instead of hanging callers forever.
+    request_to_instance: dashmap::DashMap<String, String>,
+    /// CallRsp routing table keyed by outer StreamingMessage.message_id.
+    call_ack_to_caller: dashmap::DashMap<String, String>,
+    /// Lightweight in-proxy checkpoint store for actor save/load/recover flows.
+    state_snapshots: dashmap::DashMap<String, Vec<u8>>,
+    /// Launch metadata for currently owned instances. Unlike pending_creates,
+    /// this survives the initial create and is used for abnormal runtime restart.
+    active_instances: dashmap::DashMap<String, ActiveInstanceInfo>,
+    /// Instances with a RecoverReq in flight; queued invokes flush only after RecoverRsp.
+    pending_recovers: dashmap::DashMap<String, ()>,
+    /// Owners/groups whose in-flight GroupCreate should stop scheduling new instances.
+    /// This mirrors C++ range/group termination: once Terminate is requested, an
+    /// already-running batch scheduler must not keep launching children.
+    cancelled_group_creates: dashmap::DashMap<String, ()>,
     /// Instances waiting for init CallResult before we send NotifyReq to driver.
     pending_inits: dashmap::DashMap<String, PendingInitInfo>,
     /// Per-instance serialization locks: all send paths acquire this before pushing
@@ -85,10 +153,7 @@ pub struct BusProxyCoordinator {
 }
 
 impl BusProxyCoordinator {
-    pub fn new(
-        config: Arc<Config>,
-        instance_ctrl: Arc<InstanceController>,
-    ) -> Arc<Self> {
+    pub fn new(config: Arc<Config>, instance_ctrl: Arc<InstanceController>) -> Arc<Self> {
         Arc::new(Self {
             local_node_id: config.node_id.clone(),
             local_grpc_endpoint: config.advertise_grpc_endpoint(),
@@ -105,6 +170,20 @@ impl BusProxyCoordinator {
             retry: RouteRetry::default(),
             pending_creates: dashmap::DashMap::new(),
             instance_to_driver: dashmap::DashMap::new(),
+            instance_to_job: dashmap::DashMap::new(),
+            result_to_caller: dashmap::DashMap::new(),
+            request_to_message_id: dashmap::DashMap::new(),
+            request_to_call: dashmap::DashMap::new(),
+            request_to_sequence: dashmap::DashMap::new(),
+            instance_next_sequence: dashmap::DashMap::new(),
+            dispatched_request_to_instance: dashmap::DashMap::new(),
+            notify_ack_to_runtime: dashmap::DashMap::new(),
+            request_to_instance: dashmap::DashMap::new(),
+            call_ack_to_caller: dashmap::DashMap::new(),
+            state_snapshots: dashmap::DashMap::new(),
+            active_instances: dashmap::DashMap::new(),
+            pending_recovers: dashmap::DashMap::new(),
+            cancelled_group_creates: dashmap::DashMap::new(),
             pending_inits: dashmap::DashMap::new(),
             instance_mailbox: dashmap::DashMap::new(),
         })
@@ -164,17 +243,27 @@ impl BusProxyCoordinator {
                 create_request_id: create.request_id.clone(),
                 function_name: create.function.clone(),
                 create_args: create.args.clone(),
+                create_options: create.create_options.clone(),
                 created_at: std::time::Instant::now(),
             },
         );
-        self.instance_to_driver.insert(
+        self.instance_next_sequence
+            .entry(instance_id.to_string())
+            .or_insert(1);
+        self.active_instances.insert(
             instance_id.to_string(),
-            caller_stream_id.to_string(),
+            ActiveInstanceInfo {
+                driver_stream_id: caller_stream_id.to_string(),
+                function_name: create.function.clone(),
+                trace_id: create.trace_id.clone(),
+                create_options: create.create_options.clone(),
+                create_args: create.args.clone(),
+                remaining_recoveries: recover_retry_times(&create.create_options),
+                recovering: false,
+            },
         );
-
-        if let Some(tx) = self.runtime_tx.get(caller_stream_id) {
-            self.runtime_tx.insert(instance_id.to_string(), tx.clone());
-        }
+        self.instance_to_driver
+            .insert(instance_id.to_string(), caller_stream_id.to_string());
     }
 
     pub fn attach_runtime_stream(
@@ -184,16 +273,268 @@ impl BusProxyCoordinator {
     ) {
         self.runtime_tx.insert(instance_id.to_string(), tx);
         self.instance_view.mark_route_ready(instance_id);
-        self.flush_pending(instance_id);
     }
 
     pub fn detach_runtime_stream(&self, instance_id: &str) {
         self.runtime_tx.remove(instance_id);
         self.instance_view.remove_proxy(instance_id);
         self.instance_to_driver.remove(instance_id);
+        self.instance_to_job.remove(instance_id);
         self.pending_inits.remove(instance_id);
         self.pending_creates.remove(instance_id);
+        self.active_instances.remove(instance_id);
+        self.pending_recovers.remove(instance_id);
+        self.instance_next_sequence.remove(instance_id);
         self.instance_mailbox.remove(instance_id);
+    }
+
+    pub fn cancel_group_creates_for(&self, owner_or_group_id: &str) {
+        if !owner_or_group_id.is_empty() {
+            self.cancelled_group_creates
+                .insert(owner_or_group_id.to_string(), ());
+        }
+    }
+
+    pub fn clear_group_create_cancel(&self, owner_or_group_id: &str) {
+        self.cancelled_group_creates.remove(owner_or_group_id);
+    }
+
+    pub fn is_group_create_cancelled(&self, owner_or_group_id: &str) -> bool {
+        !owner_or_group_id.is_empty()
+            && self.cancelled_group_creates.contains_key(owner_or_group_id)
+    }
+
+    /// Record the runtime id as soon as StartInstance succeeds.
+    ///
+    /// C++ can force-delete CREATING/SCHEDULING instances during group/range
+    /// failure. Rust previously only filled runtime_id after runtime
+    /// connect-back, so create-timeout cleanup could not stop already-forked
+    /// runtimes that never finished init/connect-back.
+    pub async fn mark_instance_started(
+        &self,
+        instance_id: &str,
+        runtime_id: &str,
+        runtime_port: i32,
+    ) {
+        let mut updated = None;
+        if let Some(mut m) = self.instance_ctrl.instances().get_mut(instance_id) {
+            m.runtime_id = runtime_id.to_string();
+            m.runtime_port = runtime_port;
+            let _ = m.transition(yr_common::types::InstanceState::Creating);
+            updated = Some(m.clone());
+        }
+        if let Some(meta) = updated {
+            self.instance_ctrl.persist_if_policy(&meta).await;
+        }
+    }
+
+    /// Best-effort C++ ForceDeleteInstance equivalent for Rust-owned local instances.
+    ///
+    /// This is intentionally stronger than `detach_runtime_stream`: it stops the
+    /// runtime process when a runtime_id is known, terminalizes local metadata, and
+    /// then clears all proxy routing/mailbox maps. It is used by timeout/rollback
+    /// paths where leaving a process alive poisons later ST cases.
+    pub async fn force_cleanup_instance(&self, instance_id: &str, reason: &str) {
+        // Intentional cleanup must not be mistaken for an abnormal runtime exit.
+        // `handle_runtime_stream_closed` restarts instances while they remain in
+        // `active_instances`, so remove recovery/create indices before sending
+        // StopInstance. This mirrors C++ ForceDeleteInstance semantics: once a
+        // range/group/timeout path decides to delete an instance, recovery is no
+        // longer allowed to resurrect it.
+        self.active_instances.remove(instance_id);
+        self.pending_recovers.remove(instance_id);
+        self.pending_creates.remove(instance_id);
+        self.pending_inits.remove(instance_id);
+
+        if let Some(m) = self.instance_ctrl.get(instance_id) {
+            if !m.runtime_id.is_empty() {
+                if let Err(e) = self
+                    .instance_ctrl
+                    .stop_instance(instance_id, &m.runtime_id, true)
+                    .await
+                {
+                    warn!(
+                        %instance_id,
+                        runtime_id = %m.runtime_id,
+                        %reason,
+                        error = %e,
+                        "force cleanup: stop_instance failed"
+                    );
+                }
+            }
+        }
+
+        let mut updated = None;
+        if let Some(mut m) = self.instance_ctrl.instances().get_mut(instance_id) {
+            if m.transition(yr_common::types::InstanceState::Exiting)
+                .is_err()
+            {
+                m.state = yr_common::types::InstanceState::Exiting;
+                m.updated_at_ms = crate::state_machine::InstanceMetadata::now_ms();
+            }
+            updated = Some(m.clone());
+        }
+        if let Some(meta) = updated {
+            self.instance_ctrl.persist_if_policy(&meta).await;
+        }
+
+        self.detach_runtime_stream(instance_id);
+        info!(%instance_id, %reason, "force cleanup completed");
+    }
+
+    /// C++ `SHUT_DOWN_SIGNAL_GROUP` / `KillGroupInstance` equivalent.
+    ///
+    /// The C++ SDK may send signal=4 either with an explicit group id, or from
+    /// inside a runtime with an empty/own instance id while terminating a range
+    /// handle created by that runtime. In the latter case the children are the
+    /// instances whose owner stream is the caller runtime; killing the caller
+    /// itself is wrong and leaves the children alive.
+    pub async fn execute_group_kill(
+        &self,
+        target_id: &str,
+        caller_id: &str,
+        signal: i32,
+    ) -> (i32, String) {
+        self.cancel_group_creates_for(target_id);
+        self.cancel_group_creates_for(caller_id);
+        let mut owned: Vec<String> = Vec::new();
+
+        if target_id.starts_with("grp-") {
+            owned.extend(
+                self.instance_ctrl
+                    .instances()
+                    .iter()
+                    .filter(|e| e.group_id.as_deref() == Some(target_id))
+                    .map(|e| e.key().clone()),
+            );
+        } else {
+            owned.extend(
+                self.instance_to_driver
+                    .iter()
+                    .filter(|e| {
+                        let owner = e.value().as_str();
+                        owner == caller_id || owner == target_id
+                    })
+                    .map(|e| e.key().clone()),
+            );
+            owned.extend(
+                self.instance_ctrl
+                    .instances()
+                    .iter()
+                    .filter(|e| e.group_id.as_deref() == Some(target_id))
+                    .map(|e| e.key().clone()),
+            );
+        }
+
+        owned.retain(|id| id != target_id && id != caller_id);
+        owned.sort();
+        owned.dedup();
+
+        let count = owned.len();
+        for id in owned {
+            self.force_cleanup_instance(&id, "group kill request").await;
+        }
+        info!(%target_id, %caller_id, signal, count, "execute_group_kill completed");
+        (yr_proto::common::ErrorCode::ErrNone as i32, String::new())
+    }
+
+    pub async fn handle_runtime_stream_closed(self: &Arc<Self>, instance_id: &str) {
+        let runtime_id = self
+            .instance_ctrl
+            .get(instance_id)
+            .map(|m| m.runtime_id)
+            .unwrap_or_default();
+        self.runtime_tx.remove(instance_id);
+        self.pending_inits.remove(instance_id);
+        self.pending_recovers.remove(instance_id);
+        self.instance_mailbox.remove(instance_id);
+
+        let Some(mut active) = self.active_instances.get_mut(instance_id) else {
+            self.instance_view.remove_proxy(instance_id);
+            self.instance_to_driver.remove(instance_id);
+            self.instance_to_job.remove(instance_id);
+            return;
+        };
+
+        if active.remaining_recoveries <= 0 {
+            drop(active);
+            self.fail_inflight_requests_for_instance(instance_id, &runtime_id)
+                .await;
+            self.detach_runtime_stream(instance_id);
+            return;
+        }
+
+        active.remaining_recoveries -= 1;
+        active.recovering = true;
+        let launch = active.clone();
+        drop(active);
+
+        self.instance_view.ensure_proxy(instance_id);
+        self.requeue_requests_for_recovery(instance_id);
+        warn!(
+            %instance_id,
+            remaining_recoveries = launch.remaining_recoveries,
+            "runtime stream closed; restarting instance for RecoverRetryTimes"
+        );
+
+        let bus = Arc::clone(self);
+        let iid = instance_id.to_string();
+        tokio::spawn(async move {
+            let mut last_error = String::new();
+            for attempt in 1..=20 {
+                match bus
+                    .schedule_instance_via_agent(
+                        &iid,
+                        &launch.function_name,
+                        &launch.trace_id,
+                        &launch.create_options,
+                        &launch.create_args,
+                    )
+                    .await
+                {
+                    Ok((runtime_id, runtime_port)) => {
+                        info!(instance_id = %iid, %runtime_id, runtime_port, attempt, "recover restart scheduled");
+                        return;
+                    }
+                    Err(e) => {
+                        last_error = e.to_string();
+                        warn!(instance_id = %iid, attempt, error = %last_error, "recover restart scheduling failed; retrying");
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                }
+            }
+            warn!(instance_id = %iid, error = %last_error, "recover restart retries exhausted");
+            if let Some(mut a) = bus.active_instances.get_mut(&iid) {
+                a.recovering = false;
+            }
+            let runtime_id = bus
+                .instance_ctrl
+                .get(&iid)
+                .map(|m| m.runtime_id)
+                .unwrap_or_default();
+            bus.fail_inflight_requests_for_instance(&iid, &runtime_id)
+                .await;
+            bus.instance_view.remove_proxy(&iid);
+        });
+    }
+
+    pub async fn cleanup_driver_stream(&self, driver_id: &str) {
+        let owned: Vec<String> = self
+            .instance_to_driver
+            .iter()
+            .filter(|e| e.value().as_str() == driver_id)
+            .map(|e| e.key().clone())
+            .collect();
+        for id in owned {
+            if let Some(m) = self.instance_ctrl.get(&id) {
+                let _ = self
+                    .instance_ctrl
+                    .stop_instance(&id, &m.runtime_id, true)
+                    .await;
+            }
+            self.detach_runtime_stream(&id);
+        }
+        self.detach_runtime_stream(driver_id);
     }
 
     pub fn upsert_peer_from_json(&self, node_id: &str, value: &[u8]) {
@@ -205,14 +546,9 @@ impl BusProxyCoordinator {
             grpc: Option<String>,
         }
         if let Ok(r) = serde_json::from_slice::<Reg>(value) {
-            let ep = r
-                .address
-                .or(r.grpc)
-                .filter(|s| !s.is_empty());
+            let ep = r.address.or(r.grpc).filter(|s| !s.is_empty());
             if let Some(ep) = ep {
-                self.peer_by_node
-                    .write()
-                    .insert(node_id.to_string(), ep);
+                self.peer_by_node.write().insert(node_id.to_string(), ep);
             }
         }
     }
@@ -229,7 +565,9 @@ impl BusProxyCoordinator {
             },
             Err(_) => InstanceRouteRecord::default(),
         };
-        self.routes.write().insert(instance_id.to_string(), rec.clone());
+        self.routes
+            .write()
+            .insert(instance_id.to_string(), rec.clone());
         let local = self.is_local_route(&rec, instance_id);
         if local {
             self.instance_view.mark_route_ready(instance_id);
@@ -249,6 +587,118 @@ impl BusProxyCoordinator {
         self.instance_ctrl.get(instance_id).is_some() || rec.owner_node_id == self.local_node_id
     }
 
+    fn resolve_known_instance_id(&self, instance_id: &str) -> Option<String> {
+        if self.runtime_tx.contains_key(instance_id)
+            || self.instance_ctrl.get(instance_id).is_some()
+            || self.routes.read().contains_key(instance_id)
+        {
+            return Some(instance_id.to_string());
+        }
+        if instance_id.trim().is_empty() || instance_id.contains('-') {
+            return None;
+        }
+        let suffix = format!("-{}", instance_id);
+        let mut matches = Vec::new();
+        for key in self.runtime_tx.iter().map(|e| e.key().clone()) {
+            if key.ends_with(&suffix) {
+                matches.push(key);
+            }
+        }
+        for key in self
+            .instance_ctrl
+            .instances()
+            .iter()
+            .map(|e| e.key().clone())
+        {
+            if key.ends_with(&suffix) {
+                matches.push(key);
+            }
+        }
+        for key in self.routes.read().keys().cloned() {
+            if key.ends_with(&suffix) {
+                matches.push(key);
+            }
+        }
+        matches.sort();
+        matches.dedup();
+        (matches.len() == 1).then(|| matches.remove(0))
+    }
+
+    fn get_instance_response_json(&self, instance_id: &str) -> Option<String> {
+        let resolved = self.resolve_known_instance_id(instance_id)?;
+        let meta = self.instance_ctrl.get(&resolved)?;
+        if matches!(
+            meta.state,
+            yr_common::types::InstanceState::Exiting | yr_common::types::InstanceState::Exited
+        ) {
+            return None;
+        }
+        let active = self.active_instances.get(&resolved);
+        let create_options = active
+            .as_ref()
+            .map(|a| a.create_options.clone())
+            .unwrap_or_default();
+        let create_args = active
+            .as_ref()
+            .map(|a| a.create_args.clone())
+            .unwrap_or_default();
+        let mut module_name = String::new();
+        let mut function_name = meta.function_name.clone();
+        let mut class_name = String::new();
+        let mut language = 0i32;
+        let mut function_id = String::new();
+        let mut name = String::new();
+        let mut ns = String::new();
+        let mut is_async = false;
+        let mut is_generator = false;
+        if let Some(first) = create_args.first() {
+            if let Ok(md) = yr_proto::resources::MetaData::decode(first.value.as_slice()) {
+                if let Some(fm) = md.function_meta {
+                    module_name = fm.module_name;
+                    function_name = fm.function_name;
+                    class_name = fm.class_name;
+                    language = fm.language;
+                    function_id = fm.function_id;
+                    name = fm.name;
+                    ns = fm.ns;
+                    is_async = fm.is_async;
+                    is_generator = fm.is_generator;
+                }
+            }
+        }
+        if name.is_empty() {
+            if let Some((prefix, tail)) = resolved.rsplit_once('-') {
+                if !tail.is_empty() {
+                    name = tail.to_string();
+                    ns = prefix.to_string();
+                }
+            }
+        }
+        let need_order = create_options.contains_key("need_order")
+            || create_options.contains_key("NEED_ORDER")
+            || create_options.contains_key("needOrder");
+        Some(
+            serde_json::json!({
+                "applicationName": "",
+                "moduleName": module_name,
+                "functionName": function_name,
+                "className": class_name,
+                "language": language,
+                "codeID": "",
+                "signature": "",
+                "apiType": 2,
+                "name": name,
+                "ns": ns,
+                "functionID": function_id,
+                "initializerCodeID": "",
+                "isAsync": is_async,
+                "isGenerator": is_generator,
+                "needOrder": need_order,
+            })
+            .to_string(),
+        )
+    }
+
     fn resolve_peer_endpoint(&self, rec: &InstanceRouteRecord) -> Option<String> {
         if let Some(ep) = &rec.proxy_endpoint {
             if !ep.is_empty() {
@@ -258,10 +708,7 @@ impl BusProxyCoordinator {
         if rec.owner_node_id.is_empty() {
             return None;
         }
-        self.peer_by_node
-            .read()
-            .get(&rec.owner_node_id)
-            .cloned()
+        self.peer_by_node.read().get(&rec.owner_node_id).cloned()
     }
 
     async fn inner_client(
@@ -279,7 +726,7 @@ impl BusProxyCoordinator {
         Ok(c)
     }
 
-    fn flush_pending(&self, instance_id: &str) {
+    pub(crate) fn flush_pending(&self, instance_id: &str) {
         let Some(px) = self.instance_view.proxies().get(instance_id) else {
             return;
         };
@@ -291,21 +738,45 @@ impl BusProxyCoordinator {
         };
         let tx = tx_entry.clone();
         drop(tx_entry);
-        let pending = px.dispatcher.drain();
-        if pending.is_empty() {
-            return;
-        }
         let lock = self.mailbox(instance_id);
+        let sequential = self.should_serialize_instance_invokes(instance_id);
+        let dispatcher = px.dispatcher.clone();
+        let dispatched = self.dispatched_request_to_instance.clone();
+        let iid = instance_id.to_string();
         tokio::spawn(async move {
             let _guard = lock.lock().await;
-            for p in pending {
-                let Some(call) = p.req.req else { continue };
+            if sequential {
+                if dispatched.iter().any(|e| e.value().as_str() == iid) {
+                    return;
+                }
+                let Some(p) = dispatcher.pop_front() else {
+                    return;
+                };
+                let Some(call) = p.req.req else {
+                    return;
+                };
+                dispatched.insert(call.request_id.clone(), iid.clone());
                 let msg = StreamingMessage {
                     message_id: uuid::Uuid::new_v4().to_string(),
                     meta_data: Default::default(),
                     body: Some(streaming_message::Body::CallReq(call)),
                 };
                 let _ = tx.send(Ok(msg)).await;
+            } else {
+                let pending = dispatcher.drain();
+                if pending.is_empty() {
+                    return;
+                }
+                for p in pending {
+                    let Some(call) = p.req.req else { continue };
+                    dispatched.insert(call.request_id.clone(), iid.clone());
+                    let msg = StreamingMessage {
+                        message_id: uuid::Uuid::new_v4().to_string(),
+                        meta_data: Default::default(),
+                        body: Some(streaming_message::Body::CallReq(call)),
+                    };
+                    let _ = tx.send(Ok(msg)).await;
+                }
             }
         });
     }
@@ -377,9 +848,7 @@ impl BusProxyCoordinator {
             return true;
         }
         route
-            .map(|rec| {
-                rec.owner_node_id == self.local_node_id || rec.owner_node_id.is_empty()
-            })
+            .map(|rec| rec.owner_node_id == self.local_node_id || rec.owner_node_id.is_empty())
             .unwrap_or(false)
     }
 
@@ -403,14 +872,16 @@ impl BusProxyCoordinator {
         }
 
         let px = self.instance_view.ensure_proxy(instance_id);
-        px.dispatcher.enqueue(crate::busproxy::request_dispatcher::PendingForward {
-            req: ForwardCallRequest {
-                req: Some(call),
-                instance_id: instance_id.to_string(),
-                src_ip: self.config.host.clone(),
-                src_node: self.local_node_id.clone(),
-            },
-        });
+        px.dispatcher
+            .enqueue(crate::busproxy::request_dispatcher::PendingForward {
+                req: ForwardCallRequest {
+                    req: Some(call),
+                    instance_id: instance_id.to_string(),
+                    src_ip: self.config.host.clone(),
+                    src_node: self.local_node_id.clone(),
+                },
+                seq_no: None,
+            });
         Ok(())
     }
 
@@ -468,7 +939,10 @@ impl BusProxyCoordinator {
         }
     }
 
-    pub async fn forward_kill(&self, req: ForwardKillRequest) -> Result<ForwardKillResponse, tonic::Status> {
+    pub async fn forward_kill(
+        &self,
+        req: ForwardKillRequest,
+    ) -> Result<ForwardKillResponse, tonic::Status> {
         let id = req.instance_id.clone();
         if !self.should_dispatch_locally(&id) {
             let rec = self.routes.read().get(&id).cloned().unwrap_or_default();
@@ -651,16 +1125,23 @@ impl BusProxyCoordinator {
 
         // If the runtime's stream is already connected, send a recoverReq
         if let Some(tx) = self.runtime_tx.get(instance_id) {
+            let state = self.load_state_snapshot(instance_id).unwrap_or_default();
+            let create_options = self
+                .active_instances
+                .get(instance_id)
+                .map(|a| a.create_options.clone())
+                .unwrap_or_default();
             let recover_msg = StreamingMessage {
                 message_id: format!("recover-{}", instance_id),
                 meta_data: Default::default(),
                 body: Some(streaming_message::Body::RecoverReq(
                     yr_proto::runtime_service::RecoverRequest {
-                        state: Vec::new(),
-                        ..Default::default()
+                        state,
+                        create_options,
                     },
                 )),
             };
+            self.pending_recovers.insert(instance_id.to_string(), ());
             let _ = tx.send(Ok(recover_msg)).await;
             info!(%instance_id, "ForwardRecover: sent recoverReq to runtime");
         } else {
@@ -677,18 +1158,6 @@ impl BusProxyCoordinator {
     }
 
     pub async fn on_runtime_call_result(&self, instance_id: &str, res: CallResult) {
-        let ack = StreamingMessage {
-            message_id: res.request_id.clone(),
-            meta_data: Default::default(),
-            body: Some(streaming_message::Body::CallResultAck(CallResultAck {
-                code: yr_proto::common::ErrorCode::ErrNone as i32,
-                message: String::new(),
-            })),
-        };
-        if let Some(tx) = self.runtime_tx.get(instance_id) {
-            let _ = tx.send(Ok(ack)).await;
-        }
-
         // Check if this CallResult is the response to our init CallReq.
         // If so, send NotifyReq to the driver and flush pending invocations.
         if let Some((_, init_info)) = self.pending_inits.remove(instance_id) {
@@ -705,7 +1174,8 @@ impl BusProxyCoordinator {
             let target_stream = if !init_info.driver_stream_id.is_empty() {
                 init_info.driver_stream_id.clone()
             } else {
-                self.runtime_tx.iter()
+                self.runtime_tx
+                    .iter()
                     .find(|e| e.key().starts_with("driver-"))
                     .map(|e| e.key().clone())
                     .unwrap_or_default()
@@ -741,44 +1211,103 @@ impl BusProxyCoordinator {
             }
 
             self.flush_pending(instance_id);
+            if let Some(tx) = self.runtime_tx.get(instance_id) {
+                let ack = StreamingMessage {
+                    message_id: res.request_id.clone(),
+                    meta_data: Default::default(),
+                    body: Some(streaming_message::Body::CallResultAck(CallResultAck {
+                        code: yr_proto::common::ErrorCode::ErrNone as i32,
+                        message: String::new(),
+                    })),
+                };
+                let _ = tx.send(Ok(ack)).await;
+            }
             return;
         }
 
-        // Normal CallResult: forward to the driver (only via explicit instance_to_driver mapping).
-        let driver_id = self
-            .instance_to_driver
-            .get(instance_id)
-            .map(|e| e.value().clone());
+        // Normal CallResult: route back to the stream that issued the InvokeReq.
+        // For driver-origin calls this is the driver stream; for nested actor calls
+        // it is the source runtime stream. Falling back to instance_to_driver keeps
+        // older one-hop calls working when a request was not recorded.
+        let pending_request = self.request_to_instance.contains_key(&res.request_id)
+            || self.request_to_call.contains_key(&res.request_id);
+        let target_id = self
+            .result_to_caller
+            .remove(&res.request_id)
+            .map(|(_, v)| v)
+            .or_else(|| {
+                if !pending_request {
+                    return None;
+                }
+                self.instance_to_driver
+                    .get(instance_id)
+                    .map(|e| e.value().clone())
+            });
 
-        if let Some(did) = driver_id {
+        let outer_message_id = self
+            .request_to_message_id
+            .remove(&res.request_id)
+            .map(|(_, v)| v);
+
+        if let (Some(did), Some(outer_message_id)) = (target_id, outer_message_id) {
             if let Some(tx) = self.runtime_tx.get(&did) {
                 let fwd = StreamingMessage {
-                    message_id: res.request_id.clone(),
+                    message_id: outer_message_id.clone(),
                     meta_data: Default::default(),
                     body: Some(streaming_message::Body::CallResultReq(res.clone())),
                 };
                 let _ = tx.send(Ok(fwd)).await;
-                info!(%instance_id, driver = %did, request_id = %res.request_id, "forwarded CallResult to driver");
+                self.notify_ack_to_runtime
+                    .insert(outer_message_id.clone(), instance_id.to_string());
+                info!(%instance_id, target = %did, request_id = %res.request_id, "forwarded CallResult to requester");
             }
         } else {
             warn!(
                 %instance_id,
                 request_id = %res.request_id,
-                "CallResult: no instance_to_driver mapping, dropping"
+                "CallResult: no pending caller/message mapping, dropping"
             );
         }
+
+        self.request_to_instance.remove(&res.request_id);
+        self.request_to_call.remove(&res.request_id);
+        self.dispatched_request_to_instance.remove(&res.request_id);
+        self.request_to_sequence.remove(&res.request_id);
 
         debug!(%instance_id, request_id = %res.request_id, "runtime CallResult handled");
     }
 
-    pub async fn notify_inner(&self, instance_id: &str, n: &yr_proto::runtime_service::NotifyRequest) -> Result<(), tonic::Status> {
-        let _ = self
-            .posix
-            .lock()
-            .await
-            .notify_result(instance_id, n)
-            .await;
+    pub async fn notify_inner(
+        &self,
+        instance_id: &str,
+        n: &yr_proto::runtime_service::NotifyRequest,
+    ) -> Result<(), tonic::Status> {
+        let _ = self.posix.lock().await.notify_result(instance_id, n).await;
         Ok(())
+    }
+
+    fn enrich_create_metadata_code_path(
+        &self,
+        function_name: &str,
+        args: &mut [yr_proto::common::Arg],
+    ) {
+        let Some(code_path) = self.instance_ctrl.service_code_path_for(function_name) else {
+            return;
+        };
+        let Some(first) = args.first_mut() else {
+            return;
+        };
+        let Ok(mut meta) = yr_proto::resources::MetaData::decode(first.value.as_slice()) else {
+            return;
+        };
+        let cfg = meta.config.get_or_insert_with(Default::default);
+        if cfg.code_paths.is_empty() {
+            cfg.code_paths.push(code_path);
+            let mut buf = Vec::new();
+            if meta.encode(&mut buf).is_ok() {
+                first.value = buf;
+            }
+        }
     }
 
     /// Called when a runtime process connects back to the proxy via MessageStream.
@@ -799,20 +1328,57 @@ impl BusProxyCoordinator {
             }
         }
 
-        let pending_info = self
-            .pending_creates
-            .remove(instance_id)
-            .map(|(_, v)| v)
-            .unwrap_or_else(|| {
-                warn!(%instance_id, "no pending create found for runtime connect-back");
-                PendingCreateInfo {
-                    driver_stream_id: String::new(),
-                    create_request_id: instance_id.to_string(),
-                    function_name: String::new(),
-                    create_args: Vec::new(),
-                    created_at: std::time::Instant::now(),
+        let pending_info = self.pending_creates.remove(instance_id).map(|(_, v)| v);
+
+        if pending_info.is_none() {
+            if let Some(active) = self
+                .active_instances
+                .get(instance_id)
+                .filter(|a| a.recovering)
+                .map(|a| a.clone())
+            {
+                let state = self.load_state_snapshot(instance_id).unwrap_or_default();
+                let recover_msg = StreamingMessage {
+                    message_id: format!("recover-{}", instance_id),
+                    meta_data: Default::default(),
+                    body: Some(streaming_message::Body::RecoverReq(
+                        yr_proto::runtime_service::RecoverRequest {
+                            state,
+                            create_options: active.create_options.clone(),
+                        },
+                    )),
+                };
+                self.pending_recovers.insert(instance_id.to_string(), ());
+                if let Some(tx) = self.runtime_tx.get(instance_id) {
+                    let lock = self.mailbox(instance_id);
+                    let _guard = lock.lock().await;
+                    let _ = tx.send(Ok(recover_msg)).await;
+                    info!(%instance_id, "sent RecoverReq to restarted runtime");
                 }
-            });
+                return;
+            }
+
+            warn!(%instance_id, "no pending create found for runtime connect-back");
+            return;
+        }
+
+        let pending_info = pending_info.expect("checked is_some above");
+
+        // Mark init-pending before the create ack can release the caller. Group
+        // creates can be followed immediately by invokes; those must be buffered
+        // until the runtime has completed its isCreate=true initialization call.
+        self.pending_inits.insert(
+            instance_id.to_string(),
+            PendingInitInfo {
+                driver_stream_id: pending_info.driver_stream_id.clone(),
+                create_request_id: pending_info.create_request_id.clone(),
+            },
+        );
+
+        // Give the CreateReq handler a chance to flush CreateRsp to the driver before
+        // the runtime init NotifyReq/CallResult path starts. C++ sends create ack before
+        // later readiness notification; the C++ SDK is order-sensitive here.
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
 
         // Step 1: Send isCreate=true CallRequest to the runtime to trigger init handler.
         // The C++ libruntime requires this before processing any isCreate=false calls.
@@ -821,19 +1387,35 @@ impl BusProxyCoordinator {
         // __create_instance is called. Otherwise, use a default minimal MetaData with
         // InvokeType::CreateInstanceStateless for stateless functions.
         let init_args = if pending_info.create_args.is_empty() {
-            let metadata_bytes: Vec<u8> = vec![0x08, 0x02]; // InvokeType::CreateInstanceStateless
+            let mut meta = yr_proto::resources::MetaData {
+                invoke_type: 2, // InvokeType::CreateInstanceStateless
+                function_meta: None,
+                config: Some(yr_proto::resources::MetaConfig::default()),
+            };
+            if let Some(code_path) = self
+                .instance_ctrl
+                .service_code_path_for(&pending_info.function_name)
+            {
+                if let Some(cfg) = meta.config.as_mut() {
+                    cfg.code_paths.push(code_path);
+                }
+            }
+            let mut metadata_bytes = Vec::new();
+            let _ = meta.encode(&mut metadata_bytes);
             vec![yr_proto::common::Arg {
                 value: metadata_bytes,
                 ..Default::default()
             }]
         } else {
+            let mut args = pending_info.create_args.clone();
+            self.enrich_create_metadata_code_path(&pending_info.function_name, &mut args);
             info!(
                 %instance_id,
-                args_count = pending_info.create_args.len(),
-                first_arg_bytes = ?pending_info.create_args.first().map(|a| &a.value[..]),
+                args_count = args.len(),
+                first_arg_bytes = ?args.first().map(|a| &a.value[..]),
                 "using driver-provided CreateReq args for init CallReq (stateful actor)"
             );
-            pending_info.create_args.clone()
+            args
         };
         let init_call = StreamingMessage {
             message_id: format!("init-{}", instance_id),
@@ -868,13 +1450,6 @@ impl BusProxyCoordinator {
         // The runtime must complete initialization (Python __create_instance for stateful actors)
         // before the driver gets NotifyReq, otherwise the driver may send InvokeReqs to an
         // uninitialized instance.
-        self.pending_inits.insert(
-            instance_id.to_string(),
-            PendingInitInfo {
-                driver_stream_id: pending_info.driver_stream_id.clone(),
-                create_request_id: pending_info.create_request_id.clone(),
-            },
-        );
         info!(
             %instance_id,
             create_request_id = %pending_info.create_request_id,
@@ -889,11 +1464,22 @@ impl BusProxyCoordinator {
         &self,
         instance_id: &str,
         function_name: &str,
-        _trace_id: &str,
+        trace_id: &str,
+        create_options: &std::collections::HashMap<String, String>,
+        create_args: &[yr_proto::common::Arg],
     ) -> Result<(String, i32), tonic::Status> {
         let resources = self.instance_ctrl.clamp_resources(&Default::default());
         self.instance_ctrl
-            .start_instance(instance_id, function_name, "", resources, "default")
+            .start_instance(
+                instance_id,
+                function_name,
+                "",
+                resources,
+                "default",
+                create_options,
+                trace_id,
+                create_args,
+            )
             .await
     }
 
@@ -948,10 +1534,8 @@ impl BusProxyCoordinator {
                     }
 
                     bus.pending_inits.remove(&iid);
-
-                    if let Some(mut m) = bus.instance_ctrl.instances().get_mut(&iid) {
-                        let _ = m.transition(yr_common::types::InstanceState::Exiting);
-                    }
+                    bus.force_cleanup_instance(&iid, "pending create connect-back timeout")
+                        .await;
                 }
             }
         });
@@ -963,30 +1547,64 @@ impl BusProxyCoordinator {
     /// If the instance is local, stops the runtime and transitions to Exiting.
     /// If remote, forwards via InnerService.ForwardKill.
     pub async fn execute_kill(&self, instance_id: &str, signal: i32) -> (i32, String) {
+        if instance_id.starts_with("grp-") {
+            self.cancel_group_creates_for(instance_id);
+            let owned: Vec<String> = self
+                .instance_ctrl
+                .instances()
+                .iter()
+                .filter(|e| e.group_id.as_deref() == Some(instance_id))
+                .map(|e| e.key().clone())
+                .collect();
+            let count = owned.len();
+            for id in owned {
+                self.force_cleanup_instance(&id, "group kill request").await;
+            }
+            info!(group_id = %instance_id, signal, count, "execute_kill: group cleanup completed");
+            return (yr_proto::common::ErrorCode::ErrNone as i32, String::new());
+        }
+
+        if instance_id.starts_with("job-") {
+            let driver_id = format!("driver-{instance_id}");
+            let mut owned: Vec<String> = self
+                .instance_to_job
+                .iter()
+                .filter(|e| e.value().as_str() == instance_id)
+                .map(|e| e.key().clone())
+                .collect();
+            owned.extend(
+                self.instance_to_driver
+                    .iter()
+                    .filter(|e| e.value().as_str() == driver_id)
+                    .map(|e| e.key().clone()),
+            );
+            owned.sort();
+            owned.dedup();
+            let count = owned.len();
+            for id in owned {
+                self.force_cleanup_instance(&id, "job kill request").await;
+            }
+            info!(job_id = %instance_id, signal, count, "execute_kill: job cleanup completed");
+            return (yr_proto::common::ErrorCode::ErrNone as i32, String::new());
+        }
         if self.should_dispatch_locally(instance_id) {
-            let meta = self.instance_ctrl.get(instance_id);
-            if let Some(ref m) = meta {
-                if let Err(e) = self
-                    .instance_ctrl
-                    .stop_instance(instance_id, &m.runtime_id, signal != 2)
-                    .await
-                {
-                    warn!(
-                        %instance_id,
-                        error = %e,
-                        "execute_kill: stop_instance failed"
-                    );
+            let force = !matches!(signal, 1 | 3);
+            if !force && self.has_runtime_stream(instance_id) {
+                let grace_period_second = self
+                    .active_instances
+                    .get(instance_id)
+                    .map(|a| graceful_shutdown_seconds(&a.create_options))
+                    .unwrap_or(60);
+                self.request_runtime_shutdown(instance_id, grace_period_second)
+                    .await;
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                while self.has_runtime_stream(instance_id) && std::time::Instant::now() < deadline {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 }
             }
 
-            if let Some(mut m) = self.instance_ctrl.instances().get_mut(instance_id) {
-                let _ = m.transition(yr_common::types::InstanceState::Exiting);
-                let snap = m.clone();
-                drop(m);
-                self.instance_ctrl.persist_if_policy(&snap).await;
-            }
-
-            self.detach_runtime_stream(instance_id);
+            self.force_cleanup_instance(instance_id, "instance kill request")
+                .await;
 
             info!(%instance_id, signal, "execute_kill: local kill completed");
             (yr_proto::common::ErrorCode::ErrNone as i32, String::new())
@@ -1045,7 +1663,10 @@ impl BusProxyCoordinator {
                 Ok(r) => (r.code, r.message),
                 Err(e) => {
                     warn!(target = %target_id, error = %e, "forward_user_signal: peer forward failed");
-                    (yr_proto::common::ErrorCode::ErrInnerSystemError as i32, e.message().to_string())
+                    (
+                        yr_proto::common::ErrorCode::ErrInnerSystemError as i32,
+                        e.message().to_string(),
+                    )
                 }
             }
         } else {
@@ -1055,8 +1676,10 @@ impl BusProxyCoordinator {
                 signal = kill.signal,
                 "forward_user_signal: no stream for local target"
             );
-            (yr_proto::common::ErrorCode::ErrInstanceNotFound as i32,
-             format!("no runtime stream for instance {target_id}"))
+            (
+                yr_proto::common::ErrorCode::ErrInstanceNotFound as i32,
+                format!("no runtime stream for instance {target_id}"),
+            )
         }
     }
 
@@ -1072,6 +1695,325 @@ impl BusProxyCoordinator {
         self.runtime_tx.contains_key(instance_id)
     }
 
+    pub fn is_pending_init(&self, instance_id: &str) -> bool {
+        self.pending_inits.contains_key(instance_id)
+    }
+
+    pub fn is_pending_create(&self, instance_id: &str) -> bool {
+        self.pending_creates.contains_key(instance_id)
+    }
+
+    pub fn is_recovering(&self, instance_id: &str) -> bool {
+        self.active_instances
+            .get(instance_id)
+            .map(|a| a.recovering)
+            .unwrap_or(false)
+            || self.pending_recovers.contains_key(instance_id)
+    }
+
+    pub fn on_runtime_recover_response(
+        &self,
+        instance_id: &str,
+        rsp: &yr_proto::runtime_service::RecoverResponse,
+    ) {
+        self.pending_recovers.remove(instance_id);
+        if rsp.code == yr_proto::common::ErrorCode::ErrNone as i32 {
+            if let Some(mut active) = self.active_instances.get_mut(instance_id) {
+                active.recovering = false;
+            }
+            if let Some(mut m) = self.instance_ctrl.instances().get_mut(instance_id) {
+                let _ = m.transition(yr_common::types::InstanceState::Running);
+            }
+            info!(%instance_id, "RecoverRsp success; flushing queued invokes");
+            self.flush_pending(instance_id);
+        } else {
+            warn!(
+                %instance_id,
+                code = rsp.code,
+                message = %rsp.message,
+                "RecoverRsp failed"
+            );
+            self.instance_view.remove_proxy(instance_id);
+        }
+    }
+
+    pub fn remember_result_target(&self, request_id: &str, caller_stream_id: &str) {
+        if request_id.trim().is_empty() || caller_stream_id.trim().is_empty() {
+            return;
+        }
+        self.result_to_caller
+            .insert(request_id.to_string(), caller_stream_id.to_string());
+    }
+
+    pub fn remember_request_target(&self, request_id: &str, target_instance: &str) {
+        if request_id.trim().is_empty() || target_instance.trim().is_empty() {
+            return;
+        }
+        self.request_to_instance
+            .insert(request_id.to_string(), target_instance.to_string());
+    }
+
+    pub fn remember_request_sequence(&self, request_id: &str, seq_no: i64) {
+        if request_id.trim().is_empty() || seq_no <= 0 {
+            return;
+        }
+        self.request_to_sequence
+            .insert(request_id.to_string(), seq_no);
+    }
+
+    pub fn expected_sequence_for_instance(&self, instance_id: &str) -> i64 {
+        self.instance_next_sequence
+            .get(instance_id)
+            .map(|v| *v)
+            .unwrap_or(1)
+    }
+
+    pub fn has_inflight_request_for_instance(&self, instance_id: &str) -> bool {
+        self.request_to_instance
+            .iter()
+            .any(|e| e.value().as_str() == instance_id)
+    }
+
+    pub fn has_other_inflight_request_for_instance(
+        &self,
+        instance_id: &str,
+        request_id: &str,
+    ) -> bool {
+        self.dispatched_request_to_instance
+            .iter()
+            .any(|e| e.key().as_str() != request_id && e.value().as_str() == instance_id)
+    }
+
+    pub fn remember_dispatched_request(&self, request_id: &str, instance_id: &str) {
+        if request_id.trim().is_empty() || instance_id.trim().is_empty() {
+            return;
+        }
+        self.dispatched_request_to_instance
+            .insert(request_id.to_string(), instance_id.to_string());
+    }
+
+    pub fn should_serialize_instance_invokes(&self, instance_id: &str) -> bool {
+        let Some(active) = self.active_instances.get(instance_id) else {
+            return false;
+        };
+        let opts = &active.create_options;
+        let concurrency = opts
+            .get("Concurrency")
+            .or_else(|| opts.get("CONCURRENCY"))
+            .and_then(|v| v.parse::<i32>().ok())
+            .unwrap_or(1);
+        concurrency <= 1
+    }
+
+    pub fn remember_request_message_id(&self, request_id: &str, message_id: &str) {
+        if request_id.trim().is_empty() || message_id.trim().is_empty() {
+            return;
+        }
+        self.request_to_message_id
+            .insert(request_id.to_string(), message_id.to_string());
+    }
+
+    pub fn remember_request_call(&self, request_id: &str, call: &CallRequest) {
+        if request_id.trim().is_empty() {
+            return;
+        }
+        self.request_to_call
+            .insert(request_id.to_string(), call.clone());
+    }
+
+    pub fn remember_call_ack_target(&self, message_id: &str, caller_stream_id: &str) {
+        if message_id.trim().is_empty() || caller_stream_id.trim().is_empty() {
+            return;
+        }
+        self.call_ack_to_caller
+            .insert(message_id.to_string(), caller_stream_id.to_string());
+    }
+
+    pub async fn on_runtime_call_ack(
+        &self,
+        instance_id: &str,
+        message_id: &str,
+        rsp: yr_proto::runtime_service::CallResponse,
+    ) {
+        let Some((_, caller_id)) = self.call_ack_to_caller.remove(message_id) else {
+            debug!(%instance_id, %message_id, "CallRsp: no caller mapping, dropping");
+            return;
+        };
+        let forwarded = StreamingMessage {
+            message_id: message_id.to_string(),
+            meta_data: Default::default(),
+            body: Some(streaming_message::Body::CallRsp(rsp)),
+        };
+        if let Some(tx) = self.runtime_tx.get(&caller_id) {
+            let _ = tx.send(Ok(forwarded)).await;
+            debug!(%instance_id, caller = %caller_id, %message_id, "forwarded CallRsp to requester");
+        } else {
+            warn!(%instance_id, caller = %caller_id, %message_id, "CallRsp: caller stream missing");
+        }
+    }
+
+    pub fn save_state_snapshot(&self, instance_id: &str, state: Vec<u8>) {
+        self.state_snapshots.insert(instance_id.to_string(), state);
+    }
+
+    pub fn load_state_snapshot(&self, checkpoint_id: &str) -> Option<Vec<u8>> {
+        self.state_snapshots
+            .get(checkpoint_id)
+            .map(|v| v.value().clone())
+    }
+
+    pub async fn forward_notify_rsp_ack(&self, message_id: &str) {
+        let Some((_, runtime_instance)) = self.notify_ack_to_runtime.remove(message_id) else {
+            return;
+        };
+        let Some(tx) = self.runtime_tx.get(&runtime_instance) else {
+            return;
+        };
+        let ack = StreamingMessage {
+            message_id: message_id.to_string(),
+            meta_data: Default::default(),
+            body: Some(streaming_message::Body::CallResultAck(CallResultAck {
+                code: yr_proto::common::ErrorCode::ErrNone as i32,
+                message: String::new(),
+            })),
+        };
+        let _ = tx.send(Ok(ack)).await;
+    }
+
+    fn detect_runtime_signal(&self, runtime_id: &str) -> Option<String> {
+        if runtime_id.trim().is_empty() {
+            return None;
+        }
+        let deploy_root = std::path::Path::new("/tmp/deploy");
+        let signals = [
+            "SIGFPE", "SIGSEGV", "SIGILL", "SIGABRT", "SIGINT", "SIGTERM",
+        ];
+        let dirs = fs::read_dir(deploy_root).ok()?;
+        for dir in dirs.flatten() {
+            let log_dir = dir.path().join("log");
+            if !log_dir.is_dir() {
+                continue;
+            }
+            let entries = match fs::read_dir(&log_dir) {
+                Ok(x) => x,
+                Err(_) => continue,
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if !name.starts_with(runtime_id) || !name.ends_with(".stderr.log") {
+                    continue;
+                }
+                let text = match fs::read_to_string(&path) {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                for sig in signals {
+                    if text.contains(sig) {
+                        return Some(sig.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    async fn fail_inflight_requests_for_instance(&self, instance_id: &str, runtime_id: &str) {
+        let signal = self.detect_runtime_signal(runtime_id);
+        let message = signal
+            .clone()
+            .unwrap_or_else(|| "instance occurs fatal error".to_string());
+        let code = yr_proto::common::ErrorCode::ErrUserFunctionException as i32;
+        let request_ids: Vec<String> = self
+            .request_to_instance
+            .iter()
+            .filter(|e| e.value().as_str() == instance_id)
+            .map(|e| e.key().clone())
+            .collect();
+        for request_id in request_ids {
+            self.request_to_instance.remove(&request_id);
+            self.request_to_call.remove(&request_id);
+            let outer_message_id = self
+                .request_to_message_id
+                .remove(&request_id)
+                .map(|(_, v)| v)
+                .unwrap_or_else(|| request_id.clone());
+            let Some((_, caller_id)) = self.result_to_caller.remove(&request_id) else {
+                continue;
+            };
+            let Some(tx) = self.runtime_tx.get(&caller_id) else {
+                continue;
+            };
+            let fwd = StreamingMessage {
+                message_id: outer_message_id,
+                meta_data: Default::default(),
+                body: Some(streaming_message::Body::CallResultReq(CallResult {
+                    request_id: request_id.clone(),
+                    code,
+                    message: message.clone(),
+                    small_objects: Vec::new(),
+                    stack_trace_infos: Vec::new(),
+                    runtime_info: None,
+                    instance_id: instance_id.to_string(),
+                })),
+            };
+            let _ = tx.send(Ok(fwd)).await;
+            warn!(%instance_id, %caller_id, %request_id, error = %message, "failed inflight request after runtime stream close");
+        }
+    }
+
+    fn requeue_requests_for_recovery(&self, instance_id: &str) {
+        let Some(px) = self.instance_view.proxies().get(instance_id) else {
+            return;
+        };
+        let existing = px.dispatcher.drain();
+        let mut existing_request_ids = std::collections::HashSet::new();
+        for pending in existing {
+            if let Some(call) = pending.req.req.as_ref() {
+                existing_request_ids.insert(call.request_id.clone());
+            }
+            px.dispatcher.enqueue(pending);
+        }
+
+        let dispatched_ids: Vec<String> = self
+            .dispatched_request_to_instance
+            .iter()
+            .filter(|e| e.value().as_str() == instance_id)
+            .map(|e| e.key().clone())
+            .collect();
+        for request_id in dispatched_ids {
+            self.dispatched_request_to_instance.remove(&request_id);
+        }
+
+        let request_ids: Vec<String> = self
+            .request_to_instance
+            .iter()
+            .filter(|e| e.value().as_str() == instance_id)
+            .map(|e| e.key().clone())
+            .collect();
+        for request_id in request_ids {
+            if existing_request_ids.contains(&request_id) {
+                continue;
+            }
+            let Some(call) = self.request_to_call.get(&request_id).map(|v| v.clone()) else {
+                continue;
+            };
+            let seq_no = self.request_to_sequence.get(&request_id).map(|v| *v);
+            px.dispatcher
+                .enqueue(crate::busproxy::request_dispatcher::PendingForward {
+                    req: ForwardCallRequest {
+                        req: Some(call),
+                        instance_id: instance_id.to_string(),
+                        src_ip: String::new(),
+                        src_node: String::new(),
+                    },
+                    seq_no,
+                });
+        }
+    }
+
     pub async fn send_to_runtime(&self, instance_id: &str, msg: StreamingMessage) {
         if let Some(tx) = self.runtime_tx.get(instance_id) {
             let lock = self.mailbox(instance_id);
@@ -1084,6 +2026,22 @@ impl BusProxyCoordinator {
         } else {
             warn!(%instance_id, "no runtime stream found for send_to_runtime");
         }
+    }
+
+    pub async fn request_runtime_shutdown(&self, instance_id: &str, grace_period_second: u64) {
+        self.send_to_runtime(
+            instance_id,
+            StreamingMessage {
+                message_id: uuid::Uuid::new_v4().to_string(),
+                meta_data: Default::default(),
+                body: Some(streaming_message::Body::ShutdownReq(
+                    yr_proto::runtime_service::ShutdownRequest {
+                        grace_period_second,
+                    },
+                )),
+            },
+        )
+        .await;
     }
 
     pub async fn handle_runtime_message(

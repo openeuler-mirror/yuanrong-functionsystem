@@ -9,11 +9,11 @@ use yr_proto::core_service::{
     CreateRequest, CreateRequests, CreateResourceGroupRequest, ExitRequest, InvokeRequest,
     KillRequest,
 };
+use yr_proto::resources::MetaData;
 use yr_proto::runtime_rpc::{streaming_message, StreamingMessage};
 use yr_proto::runtime_service::{HeartbeatRequest, NotifyRequest};
 use yr_proxy::busproxy::invocation_handler::{InboundAction, InvocationHandler};
 use yr_proxy::state_machine::{InstanceMetadata, InstanceState};
-use yr_proto::resources::MetaData;
 
 #[test]
 fn invoke_to_call_copies_core_fields() {
@@ -26,7 +26,7 @@ fn invoke_to_call_copies_core_fields() {
         span_id: "s1".into(),
         ..Default::default()
     };
-    let msg = InvocationHandler::invoke_to_call(&inv, "mid");
+    let msg = InvocationHandler::invoke_to_call(&inv, "mid", "driver-1");
     assert_eq!(msg.message_id, "mid");
     let body = msg.body.as_ref().expect("body");
     let streaming_message::Body::CallReq(call) = body else {
@@ -35,6 +35,8 @@ fn invoke_to_call_copies_core_fields() {
     assert_eq!(call.function, "foo");
     assert_eq!(call.trace_id, "t1");
     assert_eq!(call.request_id, "r1");
+    assert_eq!(call.return_object_id, "mid");
+    assert_eq!(call.sender_id, "driver-1");
     assert_eq!(call.return_object_i_ds, vec!["o1"]);
     assert_eq!(call.span_id, "s1");
 }
@@ -198,7 +200,10 @@ async fn invoke_req_without_target_stream_replies_call() {
     let InboundAction::Reply(outs) = act else {
         panic!("Reply");
     };
-    assert!(matches!(outs[0].body, Some(streaming_message::Body::CallReq(_))));
+    assert!(matches!(
+        outs[0].body,
+        Some(streaming_message::Body::CallReq(_))
+    ));
 }
 
 #[tokio::test]
@@ -220,7 +225,10 @@ async fn invoke_req_routes_to_named_runtime_stream() {
     let act = InvocationHandler::handle_runtime_inbound("driver-x", msg, &bus).await;
     assert!(matches!(act, InboundAction::None));
     let got = rx.recv().await.expect("msg").expect("ok");
-    assert!(matches!(got.body, Some(streaming_message::Body::CallReq(_))));
+    assert!(matches!(
+        got.body,
+        Some(streaming_message::Body::CallReq(_))
+    ));
 }
 
 #[tokio::test]
@@ -258,7 +266,10 @@ async fn notify_req_returns_ack() {
     else {
         panic!("Reply");
     };
-    assert!(matches!(outs[0].body, Some(streaming_message::Body::NotifyRsp(_))));
+    assert!(matches!(
+        outs[0].body,
+        Some(streaming_message::Body::NotifyRsp(_))
+    ));
 }
 
 #[tokio::test]
@@ -296,7 +307,10 @@ async fn kill_req_local_empty_target_uses_caller() {
     else {
         panic!("Reply");
     };
-    assert!(matches!(outs[0].body, Some(streaming_message::Body::KillRsp(_))));
+    assert!(matches!(
+        outs[0].body,
+        Some(streaming_message::Body::KillRsp(_))
+    ));
 }
 
 #[tokio::test]
@@ -374,7 +388,10 @@ async fn exit_req_normal_triggers_kill_signal_1() {
     else {
         panic!("Reply");
     };
-    assert!(matches!(outs[0].body, Some(streaming_message::Body::ExitRsp(_))));
+    assert!(matches!(
+        outs[0].body,
+        Some(streaming_message::Body::ExitRsp(_))
+    ));
 }
 
 #[tokio::test]
@@ -411,12 +428,11 @@ async fn exit_req_error_applies_failed_exit() {
     else {
         panic!("Reply");
     };
-    assert!(matches!(outs[0].body, Some(streaming_message::Body::ExitRsp(_))));
-    let st = bus
-        .instance_ctrl_ref()
-        .get(iid)
-        .expect("meta")
-        .state;
+    assert!(matches!(
+        outs[0].body,
+        Some(streaming_message::Body::ExitRsp(_))
+    ));
+    let st = bus.instance_ctrl_ref().get(iid).expect("meta").state;
     assert_eq!(st, InstanceState::Failed);
 }
 
@@ -426,7 +442,9 @@ async fn heartbeat_req_replies() {
     let msg = StreamingMessage {
         message_id: "hb".into(),
         meta_data: Default::default(),
-        body: Some(streaming_message::Body::HeartbeatReq(HeartbeatRequest::default())),
+        body: Some(streaming_message::Body::HeartbeatReq(
+            HeartbeatRequest::default(),
+        )),
     };
     let InboundAction::Reply(outs) =
         InvocationHandler::handle_runtime_inbound("x", msg, &bus).await
@@ -546,7 +564,10 @@ fn metadata_round_trip_invoke_type_via_prost() {
     };
     md.encode(&mut buf).expect("encode");
     let got = MetaData::decode(&buf[..]).expect("decode");
-    assert_eq!(got.invoke_type, yr_proto::resources::InvokeType::CreateInstance as i32);
+    assert_eq!(
+        got.invoke_type,
+        yr_proto::resources::InvokeType::CreateInstance as i32
+    );
 }
 
 #[test]

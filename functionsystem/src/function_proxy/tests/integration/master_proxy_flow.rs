@@ -60,17 +60,15 @@ async fn agent_registration_updates_topology_and_queryagents() {
 #[tokio::test]
 async fn resources_protobuf_includes_resource_unit_and_instances_map() {
     let state = test_master_state();
-    state
-        .instances
-        .upsert_instance(
-            "/instance/i1",
-            json!({
-                "id": "i1",
-                "requestID": "rid-1",
-                "function": "f",
-                "tenant": "t1",
-            }),
-        );
+    state.instances.upsert_instance(
+        "/instance/i1",
+        json!({
+            "id": "i1",
+            "requestID": "rid-1",
+            "function": "f",
+            "tenant": "t1",
+        }),
+    );
 
     let app = build_router(state, None);
     let resp = app

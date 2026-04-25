@@ -29,10 +29,7 @@ fn start_instance_request_proto_fields_match_proxy_builder() {
                 "POSIX_LISTEN_ADDR".into(),
                 format!("{}:{}", cfg.host, cfg.posix_port),
             ),
-            (
-                "PROXY_GRPC_SERVER_PORT".into(),
-                cfg.posix_port.to_string(),
-            ),
+            ("PROXY_GRPC_SERVER_PORT".into(), cfg.posix_port.to_string()),
         ]),
         resources: HashMap::from([("cpu".into(), 1.0), ("memory".into(), 512.0)]),
         code_path: String::new(),
@@ -65,7 +62,9 @@ async fn heartbeat_streaming_req_response_contract() {
     let msg = StreamingMessage {
         message_id: "hb-1".into(),
         meta_data: Default::default(),
-        body: Some(streaming_message::Body::HeartbeatReq(HeartbeatRequest::default())),
+        body: Some(streaming_message::Body::HeartbeatReq(
+            HeartbeatRequest::default(),
+        )),
     };
     let InboundAction::Reply(outs) =
         InvocationHandler::handle_runtime_inbound("any-stream", msg, &bus).await

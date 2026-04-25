@@ -27,9 +27,17 @@ fn sample_mem_kb() -> (u64, u64, f64) {
     let mut avail = 0u64;
     for line in text.lines() {
         if line.starts_with("MemTotal:") {
-            total = line.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+            total = line
+                .split_whitespace()
+                .nth(1)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
         } else if line.starts_with("MemAvailable:") {
-            avail = line.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+            avail = line
+                .split_whitespace()
+                .nth(1)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
         }
     }
     let ratio = if total > 0 {

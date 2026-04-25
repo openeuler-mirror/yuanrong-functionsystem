@@ -15,10 +15,7 @@ impl ResourceVector {
         Self {
             cpu: *map.get("cpu").unwrap_or(&0.0),
             memory: *map.get("memory").unwrap_or(&0.0),
-            npu: *map
-                .get("npu")
-                .or_else(|| map.get("ascend"))
-                .unwrap_or(&0.0),
+            npu: *map.get("npu").or_else(|| map.get("ascend")).unwrap_or(&0.0),
         }
     }
 

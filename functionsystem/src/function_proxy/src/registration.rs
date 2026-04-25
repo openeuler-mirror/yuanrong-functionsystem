@@ -71,7 +71,11 @@ async fn register_global_and_domain(ctx: &AppContext, global: &str) -> anyhow::R
         match serde_json::from_str::<serde_json::Value>(&resp.topology) {
             Ok(v) => {
                 *ctx.topology.write() = Some(v.clone());
-                if let Some(addr) = v.get("leader").and_then(|l| l.get("address")).and_then(|a| a.as_str()) {
+                if let Some(addr) = v
+                    .get("leader")
+                    .and_then(|l| l.get("address"))
+                    .and_then(|a| a.as_str())
+                {
                     if !addr.is_empty() {
                         info!(leader = %addr, "topology leader from global register");
                     }

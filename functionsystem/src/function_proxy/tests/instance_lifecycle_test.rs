@@ -202,10 +202,7 @@ async fn concurrent_insert_distinct_ids() {
     for i in 0..32 {
         let c = Arc::clone(&ctrl);
         handles.push(tokio::spawn(async move {
-            c.insert_metadata(sample_meta(
-                &format!("conc-{i}"),
-                InstanceState::Scheduling,
-            ));
+            c.insert_metadata(sample_meta(&format!("conc-{i}"), InstanceState::Scheduling));
         }));
     }
     for h in handles {
@@ -244,6 +241,8 @@ fn schedule_hooks_authorize_and_meta_noop() {
         ctrl.schedule_get_func_meta("t", "f", "$latest")
             .await
             .expect("ok");
-        ctrl.schedule_do_authorize_create("t", "f").await.expect("ok");
+        ctrl.schedule_do_authorize_create("t", "f")
+            .await
+            .expect("ok");
     });
 }

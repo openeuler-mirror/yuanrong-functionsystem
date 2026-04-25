@@ -10,8 +10,8 @@ use clap::Parser;
 use etcd_client::Client;
 use parking_lot::Mutex;
 use tokio::net::TcpListener;
-use yr_metastore_server::MetaStoreServerConfig;
 use tokio_util::sync::CancellationToken;
+use tonic::service::Routes;
 use tonic::transport::Server;
 use tracing::info;
 use yr_common::etcd_keys::{
@@ -23,15 +23,16 @@ use yr_master::domain_activator::DomainActivator;
 use yr_master::domain_sched_mgr::DomainSchedMgr;
 use yr_master::http::build_router;
 use yr_master::instances::InstanceManager;
+use yr_master::local_sched_mgr::LocalSchedMgr;
 use yr_master::node_manager::NodeManager;
 use yr_master::schedule_decision::ScheduleDecisionManager;
 use yr_master::schedule_manager::ScheduleManager;
-use yr_master::snapshot::SnapshotManager;
-use yr_master::local_sched_mgr::LocalSchedMgr;
 use yr_master::scheduler::{GlobalSchedulerImpl, MasterState};
+use yr_master::snapshot::SnapshotManager;
 use yr_master::system_func_loader::SystemFunctionLoader;
 use yr_master::topology::{spawn_metastore_topology_watch, TopologyManager};
 use yr_metastore_client::{MetaStoreClient, MetaStoreClientConfig};
+use yr_metastore_server::MetaStoreServerConfig;
 use yr_proto::internal::global_scheduler_service_server::GlobalSchedulerServiceServer;
 
 use yr_master::election;
@@ -41,9 +42,7 @@ async fn main() -> anyhow::Result<()> {
     init_logging();
     let cli = CliArgs::parse();
     let config = Arc::new(MasterConfig::from_cli(cli).map_err(|e| anyhow::anyhow!(e))?);
-    config
-        .validate()
-        .map_err(|e| anyhow::anyhow!(e))?;
+    config.validate().map_err(|e| anyhow::anyhow!(e))?;
 
     let endpoints: Vec<&str> = config.etcd_endpoints.iter().map(|s| s.as_str()).collect();
 
@@ -121,7 +120,9 @@ async fn main() -> anyhow::Result<()> {
 
     if config.enable_meta_store {
         let Some(ms) = metastore.clone() else {
-            anyhow::bail!("internal error: metastore client missing while enable_meta_store is true");
+            anyhow::bail!(
+                "internal error: metastore client missing while enable_meta_store is true"
+            );
         };
         let topo = topology.clone();
         let watch_cancel = shutdown.child_token();
@@ -218,14 +219,27 @@ async fn main() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("invalid HTTP host/port: {e}"))?;
 
     let grpc_cancel = shutdown.child_token();
+    // The upstream deploy scripts health-check function_master by curling
+    // `http://<GLOBAL_SCHEDULER_PORT>/global-scheduler/healthy`, i.e. the
+    // same port used by the global scheduler gRPC service. Use tonic Routes
+    // so HTTP compatibility endpoints and real gRPC methods are both served
+    // correctly on the C++-compatible port.
+    let grpc_health = axum08::Router::new()
+        .route("/healthy", axum08::routing::get(|| async { "" }))
+        .route(
+            "/global-scheduler/healthy",
+            axum08::routing::get(|| async { "" }),
+        );
+    let grpc_routes = Routes::from(grpc_health).add_service(grpc_service);
     let grpc_task = tokio::spawn(async move {
         let serve = Server::builder()
-            .add_service(grpc_service)
+            .accept_http1(true)
+            .add_routes(grpc_routes)
             .serve_with_shutdown(grpc_addr, async move {
                 grpc_cancel.cancelled().await;
             });
         if let Err(e) = serve.await {
-            tracing::error!(error = %e, "gRPC server error");
+            tracing::error!(error = %e, "combined gRPC/HTTP server error");
         }
     });
 

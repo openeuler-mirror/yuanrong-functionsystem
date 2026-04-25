@@ -191,6 +191,12 @@ fn serialized_registration_matches_service_registry_put_payload_shape() {
 
 fn sample_config() -> Config {
     // `Config` is a clap Parser; fill required fields for struct update syntax.
-    Config::try_parse_from(["yr-proxy", "--host", "127.0.0.1", "--grpc-listen-port", "8402"])
-        .expect("default config from clap")
+    Config::try_parse_from([
+        "yr-proxy",
+        "--host",
+        "127.0.0.1",
+        "--grpc-listen-port",
+        "8402",
+    ])
+    .expect("default config from clap")
 }

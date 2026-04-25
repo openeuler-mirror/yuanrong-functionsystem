@@ -1,9 +1,9 @@
 //! Shared helpers for functionsystem integration tests.
 
+mod e2e_scenario;
 mod master_proxy_flow;
 mod proxy_agent_flow;
 mod proxy_runtime_flow;
-mod e2e_scenario;
 
 pub use crate::common::{make_proxy_config, new_bus};
 

@@ -84,14 +84,8 @@ async fn recovery_rehydrates_running_and_marks_stale_scheduling_failed() {
     store.put(&run_key, &meta_json(&running)).await.unwrap();
 
     let cfg = Arc::new(
-        Config::try_parse_from([
-            "yr-proxy",
-            "--node-id",
-            node_id,
-            "--grpc-listen-port",
-            "1",
-        ])
-        .unwrap(),
+        Config::try_parse_from(["yr-proxy", "--node-id", node_id, "--grpc-listen-port", "1"])
+            .unwrap(),
     );
     let rv = ResourceView::new(ResourceVector {
         cpu: 16.0,

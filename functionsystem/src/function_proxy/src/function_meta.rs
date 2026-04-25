@@ -122,14 +122,16 @@ pub async fn run_watch_loop(ctx: Arc<AppContext>) {
                                 if let Some(fk) =
                                     FunctionMetaCache::logical_key_to_function_key(logical.as_ref())
                                 {
-                                    ctx_w
-                                        .instance_manager
-                                        .on_function_meta_change(&fk, FunctionMetaChangeKind::Upsert);
+                                    ctx_w.instance_manager.on_function_meta_change(
+                                        &fk,
+                                        FunctionMetaChangeKind::Upsert,
+                                    );
                                 }
                             }
                             WatchEventType::Delete => {
-                                let fk =
-                                    FunctionMetaCache::logical_key_to_function_key(logical.as_ref());
+                                let fk = FunctionMetaCache::logical_key_to_function_key(
+                                    logical.as_ref(),
+                                );
                                 cache_w.apply_watch_delete(logical.as_ref());
                                 if let Some(ref func_key) = fk {
                                     ctx_w.instance_manager.on_function_meta_change(

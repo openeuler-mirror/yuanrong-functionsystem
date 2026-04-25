@@ -10,17 +10,26 @@ use yr_proto::core_service::{ExitRequest, KillRequest, KillResponse};
 
 #[test]
 fn kill_state_transition_running_to_exiting() {
-    assert!(transition_allowed(InstanceState::Running, InstanceState::Exiting));
+    assert!(transition_allowed(
+        InstanceState::Running,
+        InstanceState::Exiting
+    ));
 }
 
 #[test]
 fn kill_state_transition_creating_to_exiting() {
-    assert!(transition_allowed(InstanceState::Creating, InstanceState::Exiting));
+    assert!(transition_allowed(
+        InstanceState::Creating,
+        InstanceState::Exiting
+    ));
 }
 
 #[test]
 fn kill_state_transition_scheduling_to_exiting() {
-    assert!(transition_allowed(InstanceState::Scheduling, InstanceState::Exiting));
+    assert!(transition_allowed(
+        InstanceState::Scheduling,
+        InstanceState::Exiting
+    ));
 }
 
 #[test]
@@ -35,7 +44,10 @@ fn exit_normal_converts_to_kill_signal_1() {
 
 #[test]
 fn exit_abnormal_transitions_to_failed() {
-    assert!(transition_allowed(InstanceState::Running, InstanceState::Failed));
+    assert!(transition_allowed(
+        InstanceState::Running,
+        InstanceState::Failed
+    ));
 }
 
 #[test]
@@ -87,7 +99,10 @@ fn exit_request_with_nonzero_code_is_abnormal() {
         message: "segfault".into(),
         ..Default::default()
     };
-    assert_ne!(exit.code, 0, "non-zero exit code = abnormal exit → Failed state");
+    assert_ne!(
+        exit.code, 0,
+        "non-zero exit code = abnormal exit → Failed state"
+    );
 }
 
 #[test]

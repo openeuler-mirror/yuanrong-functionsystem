@@ -66,7 +66,8 @@ impl AppContext {
     }
 
     pub fn mark_ready(&self) {
-        self.ready_flag.store(true, std::sync::atomic::Ordering::Release);
+        self.ready_flag
+            .store(true, std::sync::atomic::Ordering::Release);
         self.ready.notify_waiters();
     }
 }

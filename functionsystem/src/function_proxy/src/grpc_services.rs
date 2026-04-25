@@ -11,14 +11,17 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::Stream;
 use tracing::{debug, info, warn};
 use yr_proto::bus_service::bus_service_server::BusService;
-use yr_proto::bus_service::{DiscoverDriverRequest, DiscoverDriverResponse, QueryInstanceRequest, QueryInstanceResponse};
+use yr_proto::bus_service::{
+    DiscoverDriverRequest, DiscoverDriverResponse, QueryInstanceRequest, QueryInstanceResponse,
+};
 use yr_proto::common::ErrorCode;
 use yr_proto::exec_service::exec_message::Payload as ExecPayload;
 use yr_proto::exec_service::exec_output_data::StreamType as ExecStreamType;
-use yr_proto::exec_service::exec_status_response::Status as ExecSessionStatus;
 use yr_proto::exec_service::exec_service_server::ExecService;
+use yr_proto::exec_service::exec_status_response::Status as ExecSessionStatus;
 use yr_proto::exec_service::{
-    ExecInputData, ExecMessage, ExecOutputData, ExecResizeRequest, ExecStartRequest, ExecStatusResponse,
+    ExecInputData, ExecMessage, ExecOutputData, ExecResizeRequest, ExecStartRequest,
+    ExecStatusResponse,
 };
 use yr_proto::inner_service::inner_service_server::InnerService;
 use yr_proto::inner_service::{
@@ -54,7 +57,9 @@ impl ProxyGrpc {
             .to_str()
             .map_err(|_| tonic::Status::invalid_argument("instance-id metadata not utf-8"))?;
         if s.trim().is_empty() {
-            return Err(tonic::Status::invalid_argument("empty instance-id metadata"));
+            return Err(tonic::Status::invalid_argument(
+                "empty instance-id metadata",
+            ));
         }
         Ok(s.to_string())
     }
@@ -196,10 +201,9 @@ impl RuntimeRpc for ProxyGrpc {
 
         // Runtime connect-back: instance_id matches a known scheduled instance.
         // Driver streams have instance_id starting with "driver-" or unknown.
-        let is_runtime_connect_back = iid_from_meta.as_deref()
-            .is_some_and(|id| {
-                !id.starts_with("driver-") && self.ctx.instance_ctrl.get(id).is_some()
-            });
+        let is_runtime_connect_back = iid_from_meta.as_deref().is_some_and(|id| {
+            !id.starts_with("driver-") && self.ctx.instance_ctrl.get(id).is_some()
+        });
 
         info!(
             instance_id = ?iid_from_meta,
@@ -208,16 +212,13 @@ impl RuntimeRpc for ProxyGrpc {
             "MessageStream opened"
         );
 
-        let instance_id = iid_from_meta.unwrap_or_else(|| {
-            format!("driver-{}", uuid::Uuid::new_v4())
-        });
+        let instance_id =
+            iid_from_meta.unwrap_or_else(|| format!("driver-{}", uuid::Uuid::new_v4()));
 
         let mut inbound = request.into_inner();
         let (tx, rx) = mpsc::channel::<Result<StreamingMessage, tonic::Status>>(64);
         let bus = self.ctx.bus.clone();
-        self.ctx
-            .bus
-            .attach_runtime_stream(&instance_id, tx.clone());
+        self.ctx.bus.attach_runtime_stream(&instance_id, tx.clone());
 
         if is_runtime_connect_back {
             info!(
@@ -225,7 +226,8 @@ impl RuntimeRpc for ProxyGrpc {
                 runtime_id = ?rid_from_meta,
                 "Runtime connected back → notifying driver"
             );
-            bus.on_runtime_connected(&instance_id, rid_from_meta.as_deref().unwrap_or("")).await;
+            bus.on_runtime_connected(&instance_id, rid_from_meta.as_deref().unwrap_or(""))
+                .await;
         }
 
         let iid = instance_id.clone();
@@ -253,7 +255,11 @@ impl RuntimeRpc for ProxyGrpc {
                 }
             }
             info!(iid = %iid, "MessageStream closed");
-            bus.detach_runtime_stream(&iid);
+            if iid.starts_with("driver-") {
+                bus.cleanup_driver_stream(&iid).await;
+            } else {
+                bus.handle_runtime_stream_closed(&iid).await;
+            }
         });
 
         let stream: MessageStreamOut = Box::pin(ReceiverStream::new(rx));
@@ -266,7 +272,8 @@ struct ExecSession {
     buf: Vec<u8>,
 }
 
-pub type ExecStreamOut = Pin<Box<dyn Stream<Item = Result<ExecMessage, tonic::Status>> + Send + 'static>>;
+pub type ExecStreamOut =
+    Pin<Box<dyn Stream<Item = Result<ExecMessage, tonic::Status>> + Send + 'static>>;
 
 #[async_trait]
 impl ExecService for ProxyGrpc {
@@ -331,7 +338,8 @@ impl ExecService for ProxyGrpc {
                                     },
                                 );
                                 let cmd_hint = command.join(" ");
-                                let echo = format!("started exec on {}: {}\n", container_id, cmd_hint);
+                                let echo =
+                                    format!("started exec on {}: {}\n", container_id, cmd_hint);
                                 let _ = tx_in
                                     .send(Ok(ExecMessage {
                                         session_id: sid.clone(),

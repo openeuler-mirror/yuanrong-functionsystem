@@ -7,6 +7,7 @@ use yr_proto::inner_service::ForwardCallRequest;
 #[derive(Debug)]
 pub struct PendingForward {
     pub req: ForwardCallRequest,
+    pub seq_no: Option<i64>,
 }
 
 #[derive(Debug, Default)]
@@ -25,10 +26,31 @@ impl RequestDispatcher {
     }
 
     pub fn enqueue(&self, p: PendingForward) {
-        self.pending.lock().push_back(p);
+        let mut q = self.pending.lock();
+        if let Some(seq) = p.seq_no {
+            let idx = q
+                .iter()
+                .position(|existing| existing.seq_no.unwrap_or(i64::MAX) > seq)
+                .unwrap_or(q.len());
+            q.insert(idx, p);
+        } else {
+            q.push_back(p);
+        }
     }
 
     pub fn drain(&self) -> VecDeque<PendingForward> {
         std::mem::take(&mut *self.pending.lock())
+    }
+
+    pub fn pop_front(&self) -> Option<PendingForward> {
+        self.pending.lock().pop_front()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pending.lock().is_empty()
+    }
+
+    pub fn front_seq_no(&self) -> Option<i64> {
+        self.pending.lock().front().and_then(|p| p.seq_no)
     }
 }

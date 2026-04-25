@@ -99,3 +99,22 @@ fn help_documents_key_operational_flags() {
         assert!(help.contains(needle), "help should mention `{needle}`");
     }
 }
+
+#[test]
+fn cpp_runtime_dir_feeds_merge_runtime_paths_and_library_path() {
+    let c = Config::try_parse_from([
+        "yr-agent",
+        "--enable_merge_process=true",
+        "--runtime_dir=/opt/yr/runtime/service",
+        "--runtime_ld_library_path=/opt/yr/runtime/service/python/yr:/usr/lib64",
+    ])
+    .expect("parse runtime dir flags");
+
+    assert_eq!(
+        c.effective_merge_runtime_paths(),
+        "/opt/yr/runtime/service/cpp/bin/runtime,/opt/yr/runtime/service/go/bin/goruntime"
+    );
+    let ld = c.effective_runtime_ld_library_path();
+    assert!(ld.contains("/opt/yr/runtime/service/cpp/lib"));
+    assert!(ld.contains("/opt/yr/runtime/service/python/yr"));
+}

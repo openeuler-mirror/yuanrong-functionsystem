@@ -20,18 +20,17 @@ impl DataInterfacePosixClient {
     }
 
     /// Deliver async notify bytes on UDS when a path is configured.
-    pub async fn notify_result(&mut self, instance_id: &str, n: &NotifyRequest) -> std::io::Result<()> {
+    pub async fn notify_result(
+        &mut self,
+        instance_id: &str,
+        n: &NotifyRequest,
+    ) -> std::io::Result<()> {
         let path = self.uds_path.trim();
         if path.is_empty() {
             return Ok(());
         }
         let mut stream = UnixStream::connect(path).await?;
-        let payload = format!(
-            "NOTIFY:{}:{}:{}\n",
-            instance_id,
-            n.request_id,
-            n.message
-        );
+        let payload = format!("NOTIFY:{}:{}:{}\n", instance_id, n.request_id, n.message);
         use tokio::io::AsyncWriteExt;
         stream.write_all(payload.as_bytes()).await?;
         stream.flush().await?;

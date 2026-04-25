@@ -1,12 +1,11 @@
 //! Compile-time and structural checks for gRPC request/response shapes used by yr-proxy.
 
 use async_trait::async_trait;
+use yr_proto::bus_service::QueryInstanceRequest;
 use yr_proto::bus_service::{DiscoverDriverRequest, DiscoverDriverResponse};
 use yr_proto::exec_service::exec_message::Payload as ExecPayload;
 use yr_proto::exec_service::exec_service_server::ExecService;
-use yr_proto::exec_service::{
-    ExecMessage, ExecOutputData, ExecStartRequest, ExecStatusResponse,
-};
+use yr_proto::exec_service::{ExecMessage, ExecOutputData, ExecStartRequest, ExecStatusResponse};
 use yr_proto::inner_service::inner_service_server::InnerService;
 use yr_proto::inner_service::{
     ForwardCallRequest, ForwardCallResponse, ForwardCallResultRequest, ForwardCallResultResponse,
@@ -14,7 +13,6 @@ use yr_proto::inner_service::{
     NotifyRequest, NotifyResponse,
 };
 use yr_proto::runtime_rpc::{streaming_message, StreamingMessage};
-use yr_proto::bus_service::QueryInstanceRequest;
 use yr_proto::runtime_service::CallRequest;
 
 #[test]

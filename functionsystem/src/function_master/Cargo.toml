@@ -32,8 +32,8 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
-# Pin to axum 0.7 for compatibility with tonic's router stack (tonic 0.13 pulls axum 0.7).
 axum = "0.7"
+axum08 = { package = "axum", version = "0.8" }
 tower-http = { version = "0.5", features = ["trace"] }
 dashmap = { workspace = true }
 parking_lot = { workspace = true }

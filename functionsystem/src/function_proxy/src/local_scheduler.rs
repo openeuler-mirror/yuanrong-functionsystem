@@ -74,9 +74,7 @@ impl LocalSchedulerGrpc {
         let mut client = DomainSchedulerServiceClient::connect(domain)
             .await
             .map_err(|e| tonic::Status::internal(e.to_string()))?;
-        client
-            .forward_schedule(req)
-            .await
+        client.forward_schedule(req).await
     }
 
     async fn schedule_local(
@@ -96,7 +94,11 @@ impl LocalSchedulerGrpc {
             .instance_ctrl
             .schedule_do_authorize_create(&req.tenant_id, &req.function_name)
             .await?;
-        if self.ctx.instance_ctrl.tenant_cooldown_active(&req.tenant_id) {
+        if self
+            .ctx
+            .instance_ctrl
+            .tenant_cooldown_active(&req.tenant_id)
+        {
             return Ok(tonic::Response::new(ScheduleResponse {
                 success: false,
                 error_code: yr_proto::common::ErrorCode::ErrCreateRateLimited as i32,
@@ -186,6 +188,9 @@ impl LocalSchedulerGrpc {
                 &req.tenant_id,
                 clamped.clone(),
                 &rt,
+                &Default::default(),
+                &req.trace_id,
+                &[],
             )
             .await
         {
@@ -352,13 +357,9 @@ impl LocalSchedulerService for LocalSchedulerGrpc {
         let mut ids = Vec::new();
         for mut sub in r.requests {
             if sub.extension.get("group_id").is_none() && !r.group_id.is_empty() {
-                sub.extension
-                    .insert("group_id".into(), r.group_id.clone());
+                sub.extension.insert("group_id".into(), r.group_id.clone());
             }
-            let resp = self
-                .schedule(tonic::Request::new(sub))
-                .await?
-                .into_inner();
+            let resp = self.schedule(tonic::Request::new(sub)).await?.into_inner();
             if !resp.success {
                 return Ok(tonic::Response::new(GroupScheduleResponse {
                     success: false,

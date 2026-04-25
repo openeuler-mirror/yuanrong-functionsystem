@@ -16,7 +16,9 @@ use crate::config::Config;
 
 #[derive(Clone)]
 enum Inner {
-    Remote { addr: String },
+    Remote {
+        addr: String,
+    },
     Local {
         state: Arc<RuntimeManagerState>,
         paths: Vec<String>,

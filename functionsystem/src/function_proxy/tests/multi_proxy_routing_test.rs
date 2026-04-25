@@ -14,8 +14,8 @@ use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
 use yr_proto::bus_service::{QueryInstanceRequest, QueryInstanceResponse};
 use yr_proto::common::ErrorCode;
-use yr_proto::inner_service::inner_service_server::{InnerService, InnerServiceServer};
 use yr_proto::core_service::{CallResult, KillRequest};
+use yr_proto::inner_service::inner_service_server::{InnerService, InnerServiceServer};
 use yr_proto::inner_service::{
     ForwardCallRequest, ForwardCallResponse, ForwardCallResultRequest, ForwardCallResultResponse,
     ForwardKillRequest, ForwardKillResponse, ForwardRecoverRequest, ForwardRecoverResponse,
@@ -95,10 +95,7 @@ fn busproxy_registration_json_exposes_grpc_for_peer_discovery() {
         br#"{"node":"proxy-a","grpc":"http://127.0.0.1:18401","aid":"x","ak":""}"#,
     );
     let route = serde_json::json!({ "nodeId": "proxy-a" });
-    bus_b.apply_instance_route_put(
-        "i-peer",
-        &serde_json::to_vec(&route).unwrap(),
-    );
+    bus_b.apply_instance_route_put("i-peer", &serde_json::to_vec(&route).unwrap());
     // resolve_peer_endpoint is private; forward path uses it after should_dispatch_locally is false
     assert!(!bus_b.should_dispatch_locally("i-peer"));
 }
@@ -292,10 +289,7 @@ impl InnerService for CountingPeerAll {
 #[test]
 fn upsert_peer_accepts_address_field() {
     let bus = new_bus("local", 28001);
-    bus.upsert_peer_from_json(
-        "n1",
-        br#"{"address":"http://127.0.0.1:9001","grpc":""}"#,
-    );
+    bus.upsert_peer_from_json("n1", br#"{"address":"http://127.0.0.1:9001","grpc":""}"#);
     let route = serde_json::json!({ "nodeId": "n1" });
     bus.apply_instance_route_put("i1", &serde_json::to_vec(&route).unwrap());
     assert!(!bus.should_dispatch_locally("i1"));
@@ -304,10 +298,7 @@ fn upsert_peer_accepts_address_field() {
 #[test]
 fn upsert_peer_falls_back_to_grpc_when_address_missing() {
     let bus = new_bus("local", 28002);
-    bus.upsert_peer_from_json(
-        "n2",
-        br#"{"grpc":"http://127.0.0.1:9002"}"#,
-    );
+    bus.upsert_peer_from_json("n2", br#"{"grpc":"http://127.0.0.1:9002"}"#);
     let route = serde_json::json!({ "node": "n2" });
     bus.apply_instance_route_put("i2", &serde_json::to_vec(&route).unwrap());
     assert!(!bus.should_dispatch_locally("i2"));

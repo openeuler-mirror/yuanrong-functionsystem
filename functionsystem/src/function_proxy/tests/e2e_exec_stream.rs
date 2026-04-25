@@ -10,10 +10,8 @@ use tonic::transport::Server;
 use yr_proto::exec_service::exec_message::Payload as ExecPayload;
 use yr_proto::exec_service::exec_service_client::ExecServiceClient;
 use yr_proto::exec_service::exec_service_server::ExecServiceServer;
-use yr_proto::exec_service::{
-    ExecMessage, ExecOutputData, ExecStartRequest, ExecStatusResponse,
-};
 use yr_proto::exec_service::exec_status_response::Status as ExecSessionStatus;
+use yr_proto::exec_service::{ExecMessage, ExecOutputData, ExecStartRequest, ExecStatusResponse};
 use yr_proxy::agent_manager::AgentManager;
 use yr_proxy::busproxy::BusProxyCoordinator;
 use yr_proxy::config::Config;

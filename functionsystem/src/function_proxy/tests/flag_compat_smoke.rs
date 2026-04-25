@@ -244,3 +244,27 @@ fn help_documents_key_operational_flags() {
         assert!(help.contains(needle), "help should mention `{needle}`");
     }
 }
+
+#[test]
+fn cpp_merge_process_flags_parse_with_equals_form() {
+    let c = Config::try_parse_from([
+        "yr-proxy",
+        "--node_id=deploy-node",
+        "--enable_merge_process=true",
+        "--address=172.17.0.3:28527",
+        "--grpc_listen_port=23363",
+        "--agent_listen_port=28527",
+        "--local_scheduler_address=172.17.0.3:28527",
+        "--agent_address=172.17.0.3:28527",
+        "--runtime_initial_port=21820",
+        "--port_num=65535",
+    ])
+    .expect("parse C++ deploy merge-process flags");
+
+    assert!(c.enable_merge_process);
+    assert_eq!(c.node_id, "deploy-node");
+    assert_eq!(c.cpp_ignored.address, "172.17.0.3:28527");
+    assert_eq!(c.port, 23363);
+    assert_eq!(c.merge_runtime_initial_port, 21820);
+    assert!(c.merge_port_count > 0);
+}

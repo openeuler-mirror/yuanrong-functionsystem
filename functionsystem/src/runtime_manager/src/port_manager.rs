@@ -15,11 +15,12 @@ impl PortManager {
         if count == 0 {
             bail!("port_count must be > 0");
         }
-        let end = u64::from(base) + u64::from(count);
-        if end > u64::from(u16::MAX) {
-            bail!("port range overflows u16 (base={base}, count={count})");
-        }
-        let mut free: Vec<u16> = (0..count)
+        // C++ deploy frequently passes `--port_num=65535` together with a
+        // random high base port. Treat that as "use the available tail of the
+        // u16 port range" instead of rejecting the process at startup.
+        let max_count = u32::from(u16::MAX) - u32::from(base) + 1;
+        let effective_count = count.min(max_count);
+        let mut free: Vec<u16> = (0..effective_count)
             .map(|i| {
                 base.checked_add(i as u16).ok_or_else(|| {
                     anyhow::anyhow!("port range arithmetic overflow (base={base}, index={i})")
@@ -29,7 +30,7 @@ impl PortManager {
         free.reverse();
         Ok(Self {
             base,
-            count,
+            count: effective_count,
             free,
             by_runtime: HashMap::new(),
         })
@@ -39,10 +40,13 @@ impl PortManager {
         if self.by_runtime.contains_key(runtime_id) {
             bail!("runtime_id already has a port: {runtime_id}");
         }
-        let p = self
-            .free
-            .pop()
-            .with_context(|| format!("no free ports in pool [{}, {})", self.base, self.base as u32 + self.count))?;
+        let p = self.free.pop().with_context(|| {
+            format!(
+                "no free ports in pool [{}, {})",
+                self.base,
+                self.base as u32 + self.count
+            )
+        })?;
         self.by_runtime.insert(runtime_id.to_string(), p);
         Ok(p)
     }
@@ -89,11 +93,6 @@ impl SharedPortManager {
 
     /// Distinct ports currently allocated (sanity).
     pub fn allocated_ports(&self) -> HashSet<u16> {
-        self.inner
-            .lock()
-            .by_runtime
-            .values()
-            .copied()
-            .collect()
+        self.inner.lock().by_runtime.values().copied().collect()
     }
 }

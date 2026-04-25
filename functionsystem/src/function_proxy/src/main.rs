@@ -3,9 +3,8 @@ use clap::Parser;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use tonic::service::Routes;
 use tracing::info;
-use yr_runtime_manager::config::Config as RmConfig;
-use yr_runtime_manager::state::RuntimeManagerState;
 use yr_proto::bus_service::bus_service_server::BusServiceServer;
 use yr_proto::exec_service::exec_service_server::ExecServiceServer;
 use yr_proto::inner_service::inner_service_server::InnerServiceServer;
@@ -13,18 +12,20 @@ use yr_proto::internal::global_scheduler_service_server::GlobalSchedulerServiceS
 use yr_proto::internal::local_scheduler_service_server::LocalSchedulerServiceServer;
 use yr_proto::runtime_rpc::runtime_rpc_server::RuntimeRpcServer;
 use yr_proxy::agent_manager::AgentManager;
+use yr_proxy::busproxy::service_registry;
+use yr_proxy::busproxy::BusProxyCoordinator;
 use yr_proxy::config::Config;
 use yr_proxy::grpc_services::ProxyGrpc;
 use yr_proxy::http_api;
 use yr_proxy::instance_ctrl::InstanceController;
 use yr_proxy::instance_manager::InstanceManager;
 use yr_proxy::local_scheduler::LocalSchedulerGrpc;
-use yr_proxy::busproxy::service_registry;
 use yr_proxy::observer;
 use yr_proxy::registration;
 use yr_proxy::resource_view::{ResourceVector, ResourceView};
-use yr_proxy::busproxy::BusProxyCoordinator;
 use yr_proxy::AppContext;
+use yr_runtime_manager::config::Config as RmConfig;
+use yr_runtime_manager::state::RuntimeManagerState;
 
 /// Spawns child reaper, exit handler, instance health supervision, and metrics → agent (merge mode).
 async fn start_embedded_runtime_manager(
@@ -143,11 +144,12 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
-    let instance_ctrl = InstanceController::new(
+    let instance_ctrl = InstanceController::new_with_agent_manager(
         config.clone(),
         resource_view.clone(),
         etcd.clone(),
         embedded_rm,
+        agent_manager.clone(),
     );
 
     if let Some(store) = etcd.clone() {
@@ -163,8 +165,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let instance_manager =
-        InstanceManager::new(instance_ctrl.clone(), config.clone());
+    let instance_manager = InstanceManager::new(instance_ctrl.clone(), config.clone());
 
     let bus = BusProxyCoordinator::new(config.clone(), instance_ctrl.clone());
     bus.spawn_pending_create_reaper(std::time::Duration::from_secs(60));
@@ -221,19 +222,63 @@ async fn main() -> anyhow::Result<()> {
     let http_addr: SocketAddr = format!("{}:{}", config.host, config.http_port)
         .parse()
         .context("parse http listen addr")?;
-    let http_srv = axum::serve(
-        tokio::net::TcpListener::bind(http_addr).await?,
-        http_api::router(http_api::HttpState {
-            resource_view: resource_view.clone(),
-            node_id: config.node_id.clone(),
-        })
-        .into_make_service(),
-    );
-    tokio::spawn(async move {
-        if let Err(e) = http_srv.await {
-            tracing::error!(error = %e, "http server");
+
+    let cpp_address = config.cpp_ignored.address.trim();
+    // In C++ deploy mode `--address` is the local-scheduler HTTP/gRPC endpoint
+    // used by health checks and peer callbacks.  Multiple local schedulers can
+    // run on one host, each with a unique `--address`, while Rust's standalone
+    // `http_port` default is process-global (18402).  Binding that default for
+    // every proxy makes the second data plane fail with EADDRINUSE.  Therefore
+    // keep the standalone HTTP listener only when no C++ compatibility address
+    // is provided; the compatibility listener below serves the required HTTP
+    // routes on the per-proxy address.
+    if cpp_address.is_empty() {
+        let http_srv = axum::serve(
+            tokio::net::TcpListener::bind(http_addr).await?,
+            http_api::router(http_api::HttpState {
+                resource_view: resource_view.clone(),
+                node_id: config.node_id.clone(),
+            })
+            .into_make_service(),
+        );
+        tokio::spawn(async move {
+            if let Err(e) = http_srv.await {
+                tracing::error!(error = %e, "http server");
+            }
+        });
+    }
+
+    if !cpp_address.is_empty() {
+        let compat_addr: SocketAddr = cpp_address
+            .parse()
+            .context("parse C++ --address compatibility HTTP listen addr")?;
+        if compat_addr != http_addr {
+            let compat_http = http_api::router(http_api::HttpState {
+                resource_view: resource_view.clone(),
+                node_id: config.node_id.clone(),
+            });
+            let compat_routes = Routes::from(compat_http)
+                .add_service(LocalSchedulerServiceServer::new(LocalSchedulerGrpc::new(
+                    ctx.clone(),
+                )))
+                .add_service(GlobalSchedulerServiceServer::new(
+                    yr_proxy::global_scheduler_forward::GlobalSchedulerForward::new(
+                        &config,
+                        Some(ctx.agent_manager.clone()),
+                    ),
+                ));
+            let compat_srv = tonic::transport::Server::builder()
+                .accept_http1(true)
+                .add_routes(compat_routes)
+                .serve(compat_addr);
+            info!(%compat_addr, "starting yr-proxy C++ compatibility HTTP/gRPC");
+            tokio::spawn(async move {
+                if let Err(e) = compat_srv.await {
+                    tracing::error!(error = %e, "compat http/grpc server");
+                }
+            });
         }
-    });
+    }
 
     let grpc = Arc::new(ProxyGrpc::new(ctx.clone()));
     let local = LocalSchedulerGrpc::new(ctx.clone());
@@ -243,16 +288,31 @@ async fn main() -> anyhow::Result<()> {
         .parse()
         .context("parse grpc listen addr")?;
 
-    let gs_forward = yr_proxy::global_scheduler_forward::GlobalSchedulerForward::new(&config);
+    let gs_forward = yr_proxy::global_scheduler_forward::GlobalSchedulerForward::new(
+        &config,
+        Some(ctx.agent_manager.clone()),
+    );
 
-    info!(%grpc_addr, "starting yr-proxy gRPC");
-    let server = tonic::transport::Server::builder()
+    // The upstream deploy script health-checks function_proxy by curling
+    // `http://<FUNCTION_PROXY_PORT>/local-scheduler/healthy`, i.e. the same
+    // port configured as `--address`.  Serve HTTP compatibility routes on
+    // that port and fall back to the tonic gRPC services so Rust remains a
+    // drop-in replacement for the C++ binary.
+    let grpc_http = http_api::router(http_api::HttpState {
+        resource_view: resource_view.clone(),
+        node_id: config.node_id.clone(),
+    });
+    let routes = Routes::from(grpc_http)
         .add_service(LocalSchedulerServiceServer::new(local))
         .add_service(BusServiceServer::from_arc(grpc.clone()))
         .add_service(InnerServiceServer::from_arc(grpc.clone()))
         .add_service(RuntimeRpcServer::from_arc(grpc.clone()))
         .add_service(ExecServiceServer::from_arc(grpc))
         .add_service(GlobalSchedulerServiceServer::new(gs_forward));
+    info!(%grpc_addr, "starting yr-proxy combined HTTP/gRPC");
+    let server = tonic::transport::Server::builder()
+        .accept_http1(true)
+        .add_routes(routes);
 
     // POSIX / driver gRPC: serves RuntimeRPC, BusService, ExecService on the legacy port
     // that the Python SDK (libruntime) connects to via YR_SERVER_ADDRESS.

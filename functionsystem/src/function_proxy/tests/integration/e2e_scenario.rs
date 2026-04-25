@@ -11,8 +11,10 @@ use super::new_bus;
 #[tokio::test]
 async fn stateless_invoke_create_connect_init_notify_invoke_result() {
     let bus = new_bus("e2e-node", 30301);
-    let (tx_drv, mut rx_drv) = tokio::sync::mpsc::channel::<Result<StreamingMessage, tonic::Status>>(32);
-    let (tx_rt, mut rx_rt) = tokio::sync::mpsc::channel::<Result<StreamingMessage, tonic::Status>>(32);
+    let (tx_drv, mut rx_drv) =
+        tokio::sync::mpsc::channel::<Result<StreamingMessage, tonic::Status>>(32);
+    let (tx_rt, mut rx_rt) =
+        tokio::sync::mpsc::channel::<Result<StreamingMessage, tonic::Status>>(32);
 
     bus.attach_runtime_stream("driver-e2e", tx_drv.clone());
 
@@ -126,18 +128,23 @@ async fn running_instance_exit_req_zero_cleans_up_stream_attachment() {
     let msg = StreamingMessage {
         message_id: "exit".into(),
         meta_data: Default::default(),
-        body: Some(streaming_message::Body::ExitReq(yr_proto::core_service::ExitRequest {
-            code: 0,
-            message: String::new(),
-            ..Default::default()
-        })),
+        body: Some(streaming_message::Body::ExitReq(
+            yr_proto::core_service::ExitRequest {
+                code: 0,
+                message: String::new(),
+                ..Default::default()
+            },
+        )),
     };
     let InboundAction::Reply(outs) =
         InvocationHandler::handle_runtime_inbound(iid, msg, &bus).await
     else {
         panic!("Reply");
     };
-    assert!(matches!(outs[0].body, Some(streaming_message::Body::ExitRsp(_))));
+    assert!(matches!(
+        outs[0].body,
+        Some(streaming_message::Body::ExitRsp(_))
+    ));
     assert!(
         !bus.has_runtime_stream(iid),
         "ExitReq(0) kill path should detach runtime stream"
@@ -197,9 +204,12 @@ async fn group_create_three_designated_ids_proto_and_partial_schedule_response()
 #[tokio::test]
 async fn multi_tenant_instances_isolated_call_result_routing_per_driver() {
     let bus = new_bus("e2e-node", 30304);
-    let (tx_da, mut rx_da) = tokio::sync::mpsc::channel::<Result<StreamingMessage, tonic::Status>>(16);
-    let (tx_db, mut rx_db) = tokio::sync::mpsc::channel::<Result<StreamingMessage, tonic::Status>>(16);
-    let (tx_ra, mut rx_ra) = tokio::sync::mpsc::channel::<Result<StreamingMessage, tonic::Status>>(16);
+    let (tx_da, mut rx_da) =
+        tokio::sync::mpsc::channel::<Result<StreamingMessage, tonic::Status>>(16);
+    let (tx_db, mut rx_db) =
+        tokio::sync::mpsc::channel::<Result<StreamingMessage, tonic::Status>>(16);
+    let (tx_ra, mut rx_ra) =
+        tokio::sync::mpsc::channel::<Result<StreamingMessage, tonic::Status>>(16);
     let (tx_rb, _rx_rb) = tokio::sync::mpsc::channel::<Result<StreamingMessage, tonic::Status>>(16);
 
     bus.attach_runtime_stream("driver-a", tx_da);

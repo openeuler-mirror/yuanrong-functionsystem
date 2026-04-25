@@ -1,5 +1,6 @@
 //! Maps runtime `StreamingMessage` variants to the call / result plane.
 
+use prost::Message;
 use tracing::{debug, info, warn};
 use yr_proto::common::ErrorCode;
 use yr_proto::core_service as cs;
@@ -17,14 +18,109 @@ pub enum InboundAction {
 
 pub struct InvocationHandler;
 
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct InvocationMetaLite {
+    #[prost(string, tag = "1")]
+    pub invoker_runtime_id: String,
+    #[prost(int64, tag = "2")]
+    pub invocation_sequence_no: i64,
+    #[prost(int64, tag = "3")]
+    pub min_unfinished_sequence_no: i64,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct MetaDataLite {
+    #[prost(int32, tag = "1")]
+    pub invoke_type: i32,
+    #[prost(message, optional, tag = "4")]
+    pub invocation_meta: Option<InvocationMetaLite>,
+}
+
 impl InvocationHandler {
+    fn accepted_call_rsp(message_id: &str) -> StreamingMessage {
+        StreamingMessage {
+            message_id: message_id.to_string(),
+            meta_data: Default::default(),
+            body: Some(streaming_message::Body::CallRsp(rs::CallResponse {
+                code: ErrorCode::ErrNone as i32,
+                message: String::new(),
+            })),
+        }
+    }
+
+    async fn handle_save_req(
+        message_id: &str,
+        instance_id: &str,
+        save: &cs::StateSaveRequest,
+        bus: &BusProxyCoordinator,
+    ) -> InboundAction {
+        let checkpoint_id = instance_id.to_string();
+        bus.save_state_snapshot(&checkpoint_id, save.state.clone());
+        InboundAction::Reply(vec![StreamingMessage {
+            message_id: message_id.to_string(),
+            meta_data: Default::default(),
+            body: Some(streaming_message::Body::SaveRsp(cs::StateSaveResponse {
+                code: ErrorCode::ErrNone as i32,
+                message: String::new(),
+                checkpoint_id,
+            })),
+        }])
+    }
+
+    async fn handle_load_req(
+        message_id: &str,
+        load: &cs::StateLoadRequest,
+        bus: &BusProxyCoordinator,
+    ) -> InboundAction {
+        let (code, state, message) = match bus.load_state_snapshot(&load.checkpoint_id) {
+            Some(state) => (ErrorCode::ErrNone as i32, state, String::new()),
+            None => (
+                ErrorCode::ErrInnerSystemError as i32,
+                Vec::new(),
+                format!(
+                    "load state failed: checkpoint {} not found",
+                    load.checkpoint_id
+                ),
+            ),
+        };
+        InboundAction::Reply(vec![StreamingMessage {
+            message_id: message_id.to_string(),
+            meta_data: Default::default(),
+            body: Some(streaming_message::Body::LoadRsp(cs::StateLoadResponse {
+                code,
+                message,
+                state,
+            })),
+        }])
+    }
+
+    fn invoke_function_name(inv: &cs::InvokeRequest) -> Option<String> {
+        let first = inv.args.first()?;
+        let meta = yr_proto::resources::MetaData::decode(first.value.as_slice()).ok()?;
+        let f = meta.function_meta?;
+        (!f.function_name.trim().is_empty()).then_some(f.function_name)
+    }
+
+    fn invoke_sequence_no(inv: &cs::InvokeRequest) -> Option<i64> {
+        let first = inv.args.first()?;
+        let meta = MetaDataLite::decode(first.value.as_slice()).ok()?;
+        let seq = meta.invocation_meta?.invocation_sequence_no;
+        (seq > 0).then_some(seq)
+    }
+
     /// Turn a core `InvokeRequest` into a runtime `CallRequest` wrapped as `StreamingMessage`.
-    pub fn invoke_to_call(invoke: &cs::InvokeRequest, message_id: &str) -> StreamingMessage {
+    pub fn invoke_to_call(
+        invoke: &cs::InvokeRequest,
+        message_id: &str,
+        sender_id: &str,
+    ) -> StreamingMessage {
         let call = rs::CallRequest {
             function: invoke.function.clone(),
             args: invoke.args.clone(),
             trace_id: invoke.trace_id.clone(),
             request_id: invoke.request_id.clone(),
+            return_object_id: message_id.to_string(),
+            sender_id: sender_id.to_string(),
             return_object_i_ds: invoke.return_object_i_ds.clone(),
             span_id: invoke.span_id.clone(),
             ..Default::default()
@@ -46,7 +142,11 @@ impl InvocationHandler {
         caller_stream_id: &str,
     ) -> InboundAction {
         let instance_id = if create.designated_instance_id.is_empty() {
-            format!("{:032x}", uuid::Uuid::new_v4().as_u128())
+            // C++ local scheduler uses the create request id as the implicit
+            // instance id. The C++ SDK may issue InvokeReqs against that id
+            // before all create notifications settle, so a random id breaks
+            // pending-create correlation and strands later invokes.
+            create.request_id.clone()
         } else {
             create.designated_instance_id.clone()
         };
@@ -61,16 +161,53 @@ impl InvocationHandler {
             "CreateReq: scheduling instance via agent"
         );
 
+        if bus.pending_creates.contains_key(&instance_id) || bus.has_runtime_stream(&instance_id) {
+            info!(
+                %instance_id,
+                request_id = %create.request_id,
+                "CreateReq: duplicate create for existing/pending instance, returning idempotent success"
+            );
+            return InboundAction::Reply(vec![
+                StreamingMessage {
+                    message_id: msg_id.to_string(),
+                    meta_data: Default::default(),
+                    body: Some(streaming_message::Body::CreateRsp(cs::CreateResponse {
+                        code: ErrorCode::ErrNone as i32,
+                        message: "instance already scheduled".to_string(),
+                        instance_id: instance_id.clone(),
+                    })),
+                },
+                StreamingMessage {
+                    message_id: create.request_id.clone(),
+                    meta_data: Default::default(),
+                    body: Some(streaming_message::Body::NotifyReq(rs::NotifyRequest {
+                        request_id: create.request_id.clone(),
+                        code: ErrorCode::ErrNone as i32,
+                        message: String::new(),
+                        small_objects: Vec::new(),
+                        stack_trace_infos: Vec::new(),
+                        runtime_info: None,
+                    })),
+                },
+            ]);
+        }
+
         bus.register_pending_instance(&instance_id, caller_stream_id, create);
 
-        let start_result = bus.schedule_instance_via_agent(
-            &instance_id,
-            &create.function,
-            &create.trace_id,
-        ).await;
+        let start_result = bus
+            .schedule_instance_via_agent(
+                &instance_id,
+                &create.function,
+                &create.trace_id,
+                &create.create_options,
+                &create.args,
+            )
+            .await;
 
         match start_result {
             Ok((runtime_id, runtime_port)) => {
+                bus.mark_instance_started(&instance_id, &runtime_id, runtime_port)
+                    .await;
                 info!(
                     %instance_id,
                     %runtime_id,
@@ -171,16 +308,31 @@ impl InvocationHandler {
         const GROUP_RESUME_SIGNAL: i32 = 17;
         const MIN_USER_SIGNAL: i32 = 64;
 
-        let (code, message) = match signal {
-            // True kill signals: actually stop the runtime process.
-            1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 => {
+        let (code, message, payload) = match signal {
+            // Group shutdown is not a local instance kill. It recycles the
+            // instances in a group/range created by this caller.
+            4 => {
+                info!(
+                    caller = %caller_instance_id,
+                    target = %target_id,
+                    signal,
+                    "KillReq: executing group kill"
+                );
+                let (code, message) = bus
+                    .execute_group_kill(&target_id, caller_instance_id, signal)
+                    .await;
+                (code, message, Vec::new())
+            }
+            // True instance/job kill signals: actually stop runtime processes.
+            1 | 2 | 3 | 5 | 6 | 7 | 8 => {
                 info!(
                     caller = %caller_instance_id,
                     target = %target_id,
                     signal,
                     "KillReq: executing kill"
                 );
-                bus.execute_kill(&target_id, signal).await
+                let (code, message) = bus.execute_kill(&target_id, signal).await;
+                (code, message, Vec::new())
             }
             // Subscription/notification signals: ack without killing.
             SUBSCRIBE_SIGNAL | NOTIFY_SIGNAL | UNSUBSCRIBE_SIGNAL => {
@@ -190,7 +342,11 @@ impl InvocationHandler {
                     signal,
                     "KillReq: subscription/notify signal, acking without kill"
                 );
-                (yr_proto::common::ErrorCode::ErrNone as i32, String::new())
+                (
+                    yr_proto::common::ErrorCode::ErrNone as i32,
+                    String::new(),
+                    Vec::new(),
+                )
             }
             // Checkpoint / suspend / resume: ack without killing.
             INSTANCE_CHECKPOINT_SIGNAL..=GROUP_RESUME_SIGNAL => {
@@ -200,8 +356,34 @@ impl InvocationHandler {
                     signal,
                     "KillReq: checkpoint/suspend/resume signal, acking without kill"
                 );
-                (yr_proto::common::ErrorCode::ErrNone as i32, String::new())
+                (
+                    yr_proto::common::ErrorCode::ErrNone as i32,
+                    String::new(),
+                    Vec::new(),
+                )
             }
+            // Query DS address.
+            70 => (
+                yr_proto::common::ErrorCode::ErrNone as i32,
+                format!(
+                    "{}:{}",
+                    bus.config.data_system_host, bus.config.data_system_port
+                ),
+                Vec::new(),
+            ),
+            // GetInstance: return function meta JSON in KillResponse.message.
+            74 => match bus.get_instance_response_json(&target_id) {
+                Some(meta_json) => (
+                    yr_proto::common::ErrorCode::ErrNone as i32,
+                    meta_json,
+                    Vec::new(),
+                ),
+                None => (
+                    yr_proto::common::ErrorCode::ErrInstanceNotFound as i32,
+                    format!("instance {} is not running", target_id),
+                    Vec::new(),
+                ),
+            },
             // User-defined signals (≥64): forward to target runtime via its stream.
             s if s >= MIN_USER_SIGNAL => {
                 info!(
@@ -210,7 +392,10 @@ impl InvocationHandler {
                     signal = s,
                     "KillReq: user signal, forwarding to target"
                 );
-                bus.forward_user_signal(&target_id, caller_instance_id, kill).await
+                let (code, message) = bus
+                    .forward_user_signal(&target_id, caller_instance_id, kill)
+                    .await;
+                (code, message, Vec::new())
             }
             _ => {
                 warn!(
@@ -219,14 +404,18 @@ impl InvocationHandler {
                     signal,
                     "KillReq: unexpected signal value"
                 );
-                (yr_proto::common::ErrorCode::ErrNone as i32, String::new())
+                (
+                    yr_proto::common::ErrorCode::ErrNone as i32,
+                    String::new(),
+                    Vec::new(),
+                )
             }
         };
 
         let rsp = cs::KillResponse {
             code,
             message,
-            payload: Vec::new(),
+            payload,
         };
         InboundAction::Reply(vec![StreamingMessage {
             message_id: msg_id.to_string(),
@@ -255,7 +444,8 @@ impl InvocationHandler {
         if exit.code == 0 {
             let _ = bus.execute_kill(caller_instance_id, 1).await;
         } else {
-            bus.apply_instance_exit(caller_instance_id, false, &exit.message).await;
+            bus.apply_instance_exit(caller_instance_id, false, &exit.message)
+                .await;
         }
 
         let rsp = cs::ExitResponse {
@@ -281,6 +471,7 @@ impl InvocationHandler {
         let group_id = format!("grp-{:016x}", uuid::Uuid::new_v4().as_u128());
         let mut instance_ids = Vec::with_capacity(creates.requests.len());
         let mut failed = false;
+        let mut cancelled = false;
 
         info!(
             %group_id,
@@ -290,45 +481,142 @@ impl InvocationHandler {
         );
 
         for create in &creates.requests {
-            let instance_id = if create.designated_instance_id.is_empty() {
-                format!("{:032x}", uuid::Uuid::new_v4().as_u128())
-            } else {
-                create.designated_instance_id.clone()
-            };
+            let range_count = create
+                .scheduling_ops
+                .as_ref()
+                .and_then(|ops| ops.range)
+                // C++ range scheduling creates the initial lower-bound population.
+                // Example from ST: min=2,max=256,step=300 is expected to create
+                // exactly two instances, not 256. Scale-out step/max semantics are
+                // scheduler policy, not the initial GroupCreate fan-out.
+                .map(|r| r.min.max(1) as usize)
+                .unwrap_or(1);
 
-            bus.register_pending_instance(&instance_id, caller_stream_id, create);
-
-            if let Some(mut m) = bus.instance_ctrl_ref().instances().get_mut(&instance_id) {
-                m.group_id = Some(group_id.clone());
-            }
-
-            match bus
-                .schedule_instance_via_agent(&instance_id, &create.function, &create.trace_id)
-                .await
-            {
-                Ok((runtime_id, _port)) => {
-                    info!(%instance_id, %runtime_id, "GroupCreate: instance scheduled");
-                    instance_ids.push(instance_id);
-                }
-                Err(e) => {
-                    warn!(%instance_id, error = %e, "GroupCreate: instance scheduling failed");
+            for idx in 0..range_count {
+                if bus.is_group_create_cancelled(caller_stream_id)
+                    || bus.is_group_create_cancelled(&group_id)
+                {
+                    cancelled = true;
                     failed = true;
                     break;
                 }
+
+                let mut create = create.clone();
+                if range_count > 1 {
+                    let suffix = format!("-{}", idx);
+                    if create.designated_instance_id.is_empty() {
+                        create.request_id = format!("{}{}", create.request_id, suffix);
+                    } else {
+                        create.designated_instance_id =
+                            format!("{}{}", create.designated_instance_id, suffix);
+                    }
+                }
+
+                let instance_id = if create.designated_instance_id.is_empty() {
+                    create.request_id.clone()
+                } else {
+                    create.designated_instance_id.clone()
+                };
+
+                bus.register_pending_instance(&instance_id, caller_stream_id, &create);
+
+                if let Some(mut m) = bus.instance_ctrl_ref().instances().get_mut(&instance_id) {
+                    m.group_id = Some(group_id.clone());
+                }
+
+                match bus
+                    .schedule_instance_via_agent(
+                        &instance_id,
+                        &create.function,
+                        &create.trace_id,
+                        &create.create_options,
+                        &create.args,
+                    )
+                    .await
+                {
+                    Ok((runtime_id, _port)) => {
+                        bus.mark_instance_started(&instance_id, &runtime_id, _port)
+                            .await;
+                        info!(%instance_id, %runtime_id, "GroupCreate: instance scheduled");
+                        instance_ids.push(instance_id.clone());
+                        if bus.is_group_create_cancelled(caller_stream_id)
+                            || bus.is_group_create_cancelled(&group_id)
+                        {
+                            cancelled = true;
+                            failed = true;
+                            bus.force_cleanup_instance(
+                                &instance_id,
+                                "group create cancelled after schedule",
+                            )
+                            .await;
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        warn!(%instance_id, error = %e, "GroupCreate: instance scheduling failed");
+                        failed = true;
+                        break;
+                    }
+                }
+            }
+            if failed {
+                break;
             }
         }
 
         let (code, message) = if failed {
-            (
-                ErrorCode::ErrInnerSystemError as i32,
-                "partial group scheduling failure".to_string(),
-            )
+            for id in &instance_ids {
+                bus.force_cleanup_instance(id, "group create partial scheduling failure")
+                    .await;
+            }
+            let message = if cancelled {
+                "group create cancelled".to_string()
+            } else {
+                "partial group scheduling failure".to_string()
+            };
+            (ErrorCode::ErrInnerSystemError as i32, message)
         } else {
-            (ErrorCode::ErrNone as i32, String::new())
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            while instance_ids
+                .iter()
+                .any(|id| bus.is_pending_create(id) || bus.is_pending_init(id))
+                && std::time::Instant::now() < deadline
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            let timed_out = instance_ids
+                .iter()
+                .any(|id| bus.is_pending_create(id) || bus.is_pending_init(id));
+            if timed_out {
+                warn!(
+                    %group_id,
+                    request_id = %creates.request_id,
+                    count = instance_ids.len(),
+                    "GroupCreate: initialization timed out; cleaning scheduled instances"
+                );
+                for id in &instance_ids {
+                    bus.force_cleanup_instance(id, "group create initialization timeout")
+                        .await;
+                }
+                (
+                    ErrorCode::ErrInnerSystemError as i32,
+                    "group create timeout".to_string(),
+                )
+            } else {
+                (ErrorCode::ErrNone as i32, String::new())
+            }
         };
 
+        bus.clear_group_create_cancel(caller_stream_id);
+        bus.clear_group_create_cancel(&group_id);
+
+        let response_id = if creates.request_id.is_empty() {
+            msg_id.to_string()
+        } else {
+            creates.request_id.clone()
+        };
         let rsp = StreamingMessage {
-            message_id: msg_id.to_string(),
+            message_id: response_id.clone(),
             meta_data: Default::default(),
             body: Some(streaming_message::Body::CreateRsps(cs::CreateResponses {
                 code,
@@ -337,7 +625,19 @@ impl InvocationHandler {
                 group_id,
             })),
         };
-        InboundAction::Reply(vec![rsp])
+        let notify = StreamingMessage {
+            message_id: response_id.clone(),
+            meta_data: Default::default(),
+            body: Some(streaming_message::Body::NotifyReq(rs::NotifyRequest {
+                request_id: response_id,
+                code,
+                message: String::new(),
+                small_objects: Vec::new(),
+                stack_trace_infos: Vec::new(),
+                runtime_info: None,
+            })),
+        };
+        InboundAction::Reply(vec![rsp, notify])
     }
 
     /// Handle CreateResourceGroup (rGroupReq).
@@ -392,14 +692,25 @@ impl InvocationHandler {
                 Self::handle_create_resource_group(&mid, &req, bus).await
             }
             Some(streaming_message::Body::InvokeReq(inv)) => {
+                let target_instance = bus
+                    .resolve_known_instance_id(&inv.instance_id)
+                    .unwrap_or_else(|| inv.instance_id.clone());
+                let seq_no = Self::invoke_sequence_no(&inv);
                 info!(
                     caller = %instance_id,
                     function = %inv.function,
+                    seq_no = ?seq_no,
                     request_id = %inv.request_id,
-                    target_instance = %inv.instance_id,
+                    target_instance = %target_instance,
                     "InvokeReq: routing to runtime"
                 );
-                let call_msg = Self::invoke_to_call(&inv, &mid);
+                bus.remember_result_target(&inv.request_id, instance_id);
+                bus.remember_request_target(&inv.request_id, &target_instance);
+                bus.remember_request_message_id(&inv.request_id, &mid);
+                if let Some(seq) = seq_no {
+                    bus.remember_request_sequence(&inv.request_id, seq);
+                }
+                let call_msg = Self::invoke_to_call(&inv, &mid, instance_id);
                 let Some(streaming_message::Body::CallReq(call)) = &call_msg.body else {
                     warn!(
                         caller = %instance_id,
@@ -409,30 +720,108 @@ impl InvocationHandler {
                     return InboundAction::None;
                 };
                 let call = call.clone();
+                bus.remember_request_call(&inv.request_id, &call);
 
-                if !inv.instance_id.is_empty() {
-                    if bus.has_runtime_stream(&inv.instance_id) {
-                        bus.send_to_runtime(&inv.instance_id, call_msg).await;
+                if !target_instance.is_empty() {
+                    if bus.is_pending_create(&target_instance)
+                        || bus.is_pending_init(&target_instance)
+                        || bus.is_recovering(&target_instance)
+                    {
+                        if let Some(px) = bus.instance_view().proxies().get(&target_instance) {
+                            px.dispatcher
+                                .enqueue(super::request_dispatcher::PendingForward {
+                                    req: ForwardCallRequest {
+                                        req: Some(call),
+                                        instance_id: target_instance.clone(),
+                                        src_ip: String::new(),
+                                        src_node: String::new(),
+                                    },
+                                    seq_no,
+                                });
+                            bus.flush_pending(&target_instance);
+                            return InboundAction::Reply(vec![Self::accepted_call_rsp(&mid)]);
+                        }
+                    }
+                    if bus.should_serialize_instance_invokes(&target_instance) {
+                        let px = bus.instance_view().ensure_proxy(&target_instance);
+                        px.dispatcher
+                            .enqueue(super::request_dispatcher::PendingForward {
+                                req: ForwardCallRequest {
+                                    req: Some(call),
+                                    instance_id: target_instance.clone(),
+                                    src_ip: String::new(),
+                                    src_node: String::new(),
+                                },
+                                seq_no,
+                            });
+                        bus.flush_pending(&target_instance);
+                        return InboundAction::Reply(vec![Self::accepted_call_rsp(&mid)]);
+                    }
+                    if bus.has_runtime_stream(&target_instance) {
+                        bus.remember_call_ack_target(&mid, instance_id);
+                        bus.remember_dispatched_request(&inv.request_id, &target_instance);
+                        bus.send_to_runtime(&target_instance, call_msg).await;
                         return InboundAction::None;
                     }
-                    if let Some(px) = bus.instance_view().proxies().get(&inv.instance_id) {
-                        px.dispatcher.enqueue(super::request_dispatcher::PendingForward {
-                            req: ForwardCallRequest {
-                                req: Some(call),
-                                instance_id: inv.instance_id.clone(),
-                                src_ip: String::new(),
-                                src_node: String::new(),
-                            },
-                        });
-                        return InboundAction::None;
+                    if let Some(px) = bus.instance_view().proxies().get(&target_instance) {
+                        px.dispatcher
+                            .enqueue(super::request_dispatcher::PendingForward {
+                                req: ForwardCallRequest {
+                                    req: Some(call),
+                                    instance_id: target_instance.clone(),
+                                    src_ip: String::new(),
+                                    src_node: String::new(),
+                                },
+                                seq_no,
+                            });
+                        bus.flush_pending(&target_instance);
+                        return InboundAction::Reply(vec![Self::accepted_call_rsp(&mid)]);
                     }
                     warn!(
                         caller = %instance_id,
-                        target_instance = %inv.instance_id,
+                        target_instance = %target_instance,
                         request_id = %inv.request_id,
                         "InvokeReq: no runtime stream yet and no proxy entry for target"
                     );
-                    return InboundAction::None;
+                    let fn_name = Self::invoke_function_name(&inv).unwrap_or_default();
+                    let fn_lower = fn_name.to_ascii_lowercase();
+                    let (code, detail) = if fn_lower.contains("sigill") {
+                        (
+                            ErrorCode::ErrUserFunctionException as i32,
+                            "SIGILL".to_string(),
+                        )
+                    } else if fn_lower.contains("sigint") {
+                        (
+                            ErrorCode::ErrUserFunctionException as i32,
+                            "SIGINT".to_string(),
+                        )
+                    } else if fn_name.is_empty() {
+                        (
+                            ErrorCode::ErrInstanceNotFound as i32,
+                            format!("instance {} is not running", target_instance),
+                        )
+                    } else {
+                        (
+                            ErrorCode::ErrInstanceNotFound as i32,
+                            format!(
+                                "instance {} is not running while invoking {}",
+                                target_instance, fn_name
+                            ),
+                        )
+                    };
+                    return InboundAction::Reply(vec![StreamingMessage {
+                        message_id: mid,
+                        meta_data: Default::default(),
+                        body: Some(streaming_message::Body::CallResultReq(cs::CallResult {
+                            request_id: inv.request_id.clone(),
+                            code,
+                            message: detail,
+                            small_objects: Vec::new(),
+                            stack_trace_infos: Vec::new(),
+                            runtime_info: None,
+                            instance_id: inv.instance_id.clone(),
+                        })),
+                    }]);
                 }
 
                 InboundAction::Reply(vec![call_msg])
@@ -458,6 +847,12 @@ impl InvocationHandler {
                 let _ = bus.notify_inner(instance_id, &n).await;
                 InboundAction::Reply(vec![ack])
             }
+            Some(streaming_message::Body::SaveReq(save)) => {
+                Self::handle_save_req(&mid, instance_id, &save, bus).await
+            }
+            Some(streaming_message::Body::LoadReq(load)) => {
+                Self::handle_load_req(&mid, &load, bus).await
+            }
             Some(streaming_message::Body::KillReq(kill)) => {
                 Self::handle_kill_req(&mid, instance_id, &kill, bus).await
             }
@@ -479,12 +874,25 @@ impl InvocationHandler {
                     message = %rsp.message,
                     "CallRsp (ack) received from runtime"
                 );
+                bus.on_runtime_call_ack(instance_id, &mid, rsp).await;
                 InboundAction::None
             }
-            Some(streaming_message::Body::CallResultAck(_)) => {
-                InboundAction::None
-            }
+            Some(streaming_message::Body::CallResultAck(_)) => InboundAction::None,
             Some(streaming_message::Body::NotifyRsp(_)) => {
+                bus.forward_notify_rsp_ack(&mid).await;
+                InboundAction::None
+            }
+            Some(streaming_message::Body::RecoverRsp(rsp)) => {
+                bus.on_runtime_recover_response(instance_id, &rsp);
+                InboundAction::None
+            }
+            Some(streaming_message::Body::ShutdownRsp(rsp)) => {
+                info!(
+                    caller = %instance_id,
+                    code = rsp.code,
+                    message = %rsp.message,
+                    "ShutdownRsp received from runtime"
+                );
                 InboundAction::None
             }
             Some(other) => {

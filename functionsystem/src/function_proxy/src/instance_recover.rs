@@ -73,7 +73,8 @@ mod tests {
     #[tokio::test]
     async fn stale_scheduling_marked_failed_without_etcd() {
         let cfg = Arc::new(
-            Config::try_parse_from(["yr-proxy", "--node-id", "n1", "--grpc-listen-port", "1"]).unwrap(),
+            Config::try_parse_from(["yr-proxy", "--node-id", "n1", "--grpc-listen-port", "1"])
+                .unwrap(),
         );
         let rv = ResourceView::new(ResourceVector {
             cpu: 8.0,
@@ -100,9 +101,6 @@ mod tests {
         });
         let n = resume_stale_in_flight(&ctrl).await;
         assert_eq!(n, 1);
-        assert_eq!(
-            ctrl.get("stale-1").unwrap().state,
-            InstanceState::Failed
-        );
+        assert_eq!(ctrl.get("stale-1").unwrap().state, InstanceState::Failed);
     }
 }

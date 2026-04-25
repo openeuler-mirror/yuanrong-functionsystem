@@ -15,7 +15,9 @@ use yr_agent::http_api::{router, HealthState};
 use yr_agent::node_manager::NodeManager;
 use yr_agent::registration::SchedulerLink;
 use yr_agent::rm_client::RuntimeManagerClient;
-use yr_proto::internal::local_scheduler_service_server::{LocalSchedulerService, LocalSchedulerServiceServer};
+use yr_proto::internal::local_scheduler_service_server::{
+    LocalSchedulerService, LocalSchedulerServiceServer,
+};
 use yr_proto::internal::{
     EvictInstancesRequest, EvictInstancesResponse, GroupScheduleRequest, GroupScheduleResponse,
     KillGroupRequest, KillGroupResponse, PreemptInstancesRequest, PreemptInstancesResponse,
@@ -79,10 +81,11 @@ fn in_process_rm() -> Arc<RuntimeManagerClient> {
         "".into(),
     ));
     cfg.ensure_log_dir().unwrap();
-    let ports = Arc::new(
-        yr_runtime_manager::port_manager::SharedPortManager::new(40200, 10).unwrap(),
-    );
-    let st = Arc::new(yr_runtime_manager::state::RuntimeManagerState::new(cfg, ports));
+    let ports =
+        Arc::new(yr_runtime_manager::port_manager::SharedPortManager::new(40200, 10).unwrap());
+    let st = Arc::new(yr_runtime_manager::state::RuntimeManagerState::new(
+        cfg, ports,
+    ));
     Arc::new(RuntimeManagerClient::in_process(
         st,
         vec!["/bin/true".to_string()],
@@ -203,11 +206,7 @@ async fn healthy_rejects_bad_pid() {
 async fn readiness_ok_when_rm_local_and_scheduler_reachable() {
     let (uri, _h) = start_mock_local_scheduler().await;
     let rm = in_process_rm();
-    let sched = SchedulerLink::new_arc(
-        uri,
-        "n1".into(),
-        "http://127.0.0.1:22799".into(),
-    );
+    let sched = SchedulerLink::new_arc(uri, "n1".into(), "http://127.0.0.1:22799".into());
     let node = NodeManager::new_arc();
     node.set_ready(true);
     let app = router(HealthState {
@@ -217,7 +216,12 @@ async fn readiness_ok_when_rm_local_and_scheduler_reachable() {
         node,
     });
     let res = app
-        .oneshot(Request::builder().uri("/readiness").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -246,7 +250,12 @@ async fn readiness_fails_when_scheduler_unreachable() {
         node,
     });
     let res = app
-        .oneshot(Request::builder().uri("/readiness").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/readiness")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);

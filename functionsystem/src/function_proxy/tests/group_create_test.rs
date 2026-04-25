@@ -2,8 +2,8 @@
 
 use yr_proto::common::ErrorCode;
 use yr_proto::core_service::{
-    CreateRequests, CreateRequest, CreateResourceGroupRequest,
-    CreateResourceGroupResponse, CreateResponses, GroupOptions,
+    CreateRequest, CreateRequests, CreateResourceGroupRequest, CreateResourceGroupResponse,
+    CreateResponses, GroupOptions,
 };
 
 #[test]

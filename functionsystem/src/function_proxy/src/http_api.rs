@@ -43,9 +43,7 @@ async fn healthy(State(st): State<HttpState>, headers: HeaderMap) -> Response {
         return (StatusCode::BAD_REQUEST, "error nodeID").into_response();
     }
     let pid = std::process::id();
-    let pid_ok = pid_hdr
-        .and_then(|s| s.parse::<u32>().ok())
-        == Some(pid);
+    let pid_ok = pid_hdr.and_then(|s| s.parse::<u32>().ok()) == Some(pid);
     if !pid_ok {
         return (StatusCode::BAD_REQUEST, "error PID").into_response();
     }

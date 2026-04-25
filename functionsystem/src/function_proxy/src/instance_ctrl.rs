@@ -1,9 +1,12 @@
+use crate::agent_manager::AgentManager;
 use crate::config::Config;
 use crate::function_meta::FunctionMetaCache;
 use crate::resource_view::ResourceView;
 use crate::state_machine::{InstanceMetadata, InstanceState};
 use dashmap::DashMap;
+use prost::Message;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use tracing::{info, warn};
 use yr_common::etcd_keys::{gen_func_meta_key, INSTANCE_PATH_PREFIX};
@@ -12,6 +15,87 @@ use yr_proto::internal::function_agent_service_client::FunctionAgentServiceClien
 use yr_proto::internal::{StartInstanceRequest, StopInstanceRequest};
 use yr_runtime_manager::runtime_ops::{start_instance_op, stop_instance_op};
 use yr_runtime_manager::state::RuntimeManagerState;
+
+#[derive(Debug, Clone, Default)]
+struct ServiceFunctionMeta {
+    runtime_type: String,
+    code_path: String,
+    env: HashMap<String, String>,
+}
+
+fn function_name_candidates(function_name: &str) -> Vec<String> {
+    let without_version = function_name
+        .split('/')
+        .rev()
+        .find(|part| !part.starts_with('$'))
+        .unwrap_or(function_name);
+    let mut out = vec![function_name.to_string(), without_version.to_string()];
+    if let Some((_, suffix)) = without_version.rsplit_once('-') {
+        out.push(suffix.to_string());
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn yaml_str<'a>(v: &'a serde_yaml::Value, key: &str) -> Option<&'a str> {
+    v.get(serde_yaml::Value::String(key.to_string()))?.as_str()
+}
+
+fn parse_env(v: &serde_yaml::Value) -> HashMap<String, String> {
+    let mut env = HashMap::new();
+    let Some(map) = v.as_mapping() else {
+        return env;
+    };
+    for (k, val) in map {
+        let Some(key) = k.as_str() else {
+            continue;
+        };
+        let value = val.as_str().map(str::to_string).unwrap_or_else(|| {
+            serde_yaml::to_string(val)
+                .unwrap_or_default()
+                .trim()
+                .to_string()
+        });
+        env.insert(key.to_string(), value);
+    }
+    env
+}
+
+fn job_id_from_trace(trace_id: &str) -> Option<String> {
+    trace_id
+        .split("-trace")
+        .next()
+        .filter(|s| s.starts_with("job-") && s.len() > "job-".len())
+        .map(str::to_string)
+}
+
+fn custom_envs_from_create_args(args: &[yr_proto::common::Arg]) -> HashMap<String, String> {
+    let Some(first) = args.first() else {
+        return HashMap::new();
+    };
+    let Ok(meta) = yr_proto::resources::MetaData::decode(first.value.as_slice()) else {
+        return HashMap::new();
+    };
+    meta.config.map(|cfg| cfg.custom_envs).unwrap_or_default()
+}
+
+fn delegate_envs_from_create_options(
+    create_options: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let Some(raw) = create_options.get("DELEGATE_ENV_VAR") else {
+        return HashMap::new();
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return HashMap::new();
+    };
+    let Some(map) = v.as_object() else {
+        return HashMap::new();
+    };
+    map.iter()
+        .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+        .collect()
+}
 
 /// Owns in-memory instance metadata, optional etcd persistence, and instance start/stop dispatch.
 pub struct InstanceController {
@@ -23,6 +107,8 @@ pub struct InstanceController {
     tenant_cooldown_until_ms: DashMap<String, i64>,
     /// In-process runtime manager state when `enable_merge_process` (C++ `function_proxy` parity).
     embedded_rm: Option<Arc<RuntimeManagerState>>,
+    /// Local function_agent registry populated from C++-compatible Register RPCs.
+    agent_manager: Option<Arc<AgentManager>>,
     /// Keys present under function-meta etcd prefix (`tenant/func/version`).
     function_meta: Arc<FunctionMetaCache>,
 }
@@ -41,12 +127,73 @@ impl InstanceController {
             etcd,
             tenant_cooldown_until_ms: DashMap::new(),
             embedded_rm,
+            agent_manager: None,
+            function_meta: Arc::new(FunctionMetaCache::new()),
+        })
+    }
+
+    pub fn new_with_agent_manager(
+        config: Arc<Config>,
+        resource_view: Arc<ResourceView>,
+        etcd: Option<Arc<tokio::sync::Mutex<yr_metastore_client::MetaStoreClient>>>,
+        embedded_rm: Option<Arc<RuntimeManagerState>>,
+        agent_manager: Arc<AgentManager>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            config,
+            resource_view,
+            instances: Arc::new(DashMap::new()),
+            etcd,
+            tenant_cooldown_until_ms: DashMap::new(),
+            embedded_rm,
+            agent_manager: Some(agent_manager),
             function_meta: Arc::new(FunctionMetaCache::new()),
         })
     }
 
     pub fn function_meta_cache(&self) -> &Arc<FunctionMetaCache> {
         &self.function_meta
+    }
+
+    pub fn service_code_path_for(&self, function_name: &str) -> Option<String> {
+        self.service_function_meta(function_name)
+            .and_then(|m| (!m.code_path.trim().is_empty()).then_some(m.code_path))
+    }
+
+    fn service_function_meta(&self, function_name: &str) -> Option<ServiceFunctionMeta> {
+        let path = self.config.cpp_ignored.services_path.trim();
+        if path.is_empty() || !Path::new(path).is_file() {
+            return None;
+        }
+        let text = std::fs::read_to_string(path).ok()?;
+        let root: serde_yaml::Value = serde_yaml::from_str(&text).ok()?;
+        let candidates = function_name_candidates(function_name);
+        let services = root.as_sequence()?;
+        for service in services {
+            let Some(functions) = service.get(serde_yaml::Value::String("functions".into())) else {
+                continue;
+            };
+            let Some(map) = functions.as_mapping() else {
+                continue;
+            };
+            for (name, spec) in map {
+                let Some(name) = name.as_str() else {
+                    continue;
+                };
+                if !candidates.iter().any(|c| c == name) {
+                    continue;
+                }
+                return Some(ServiceFunctionMeta {
+                    runtime_type: yaml_str(spec, "runtime").unwrap_or_default().to_string(),
+                    code_path: yaml_str(spec, "codePath").unwrap_or_default().to_string(),
+                    env: spec
+                        .get(serde_yaml::Value::String("environment".into()))
+                        .map(parse_env)
+                        .unwrap_or_default(),
+                });
+            }
+        }
+        None
     }
 
     /// Resolve function metadata before local placement (etcd catalog).
@@ -107,7 +254,8 @@ impl InstanceController {
 
     pub fn set_tenant_cooldown_ms(&self, tenant: &str, cooldown_ms: i64) {
         let until = InstanceMetadata::now_ms() + cooldown_ms;
-        self.tenant_cooldown_until_ms.insert(tenant.to_string(), until);
+        self.tenant_cooldown_until_ms
+            .insert(tenant.to_string(), until);
     }
 
     /// Apply a state change with optional etcd KV `version` check (optimistic concurrency).
@@ -213,8 +361,17 @@ impl InstanceController {
         tenant_id: &str,
         resources: HashMap<String, f64>,
         runtime_type: &str,
+        create_options: &HashMap<String, String>,
+        trace_id: &str,
+        create_args: &[yr_proto::common::Arg],
     ) -> Result<(String, i32), tonic::Status> {
-        let mut env_vars = HashMap::new();
+        let service_meta = self.service_function_meta(function_name);
+        let mut env_vars = service_meta
+            .as_ref()
+            .map(|m| m.env.clone())
+            .unwrap_or_default();
+        env_vars.extend(custom_envs_from_create_args(create_args));
+        env_vars.extend(delegate_envs_from_create_options(create_options));
         env_vars.insert(
             "YR_SERVER_ADDRESS".into(),
             format!("{}:{}", self.config.host, self.config.posix_port),
@@ -227,6 +384,13 @@ impl InstanceController {
             "PROXY_GRPC_SERVER_PORT".into(),
             self.config.posix_port.to_string(),
         );
+        env_vars.insert("ENABLE_DS_CLIENT".into(), "true".into());
+        env_vars.insert("POD_IP".into(), self.config.host.clone());
+        env_vars.insert("HOST_IP".into(), self.config.host.clone());
+        env_vars.insert(
+            "DRIVER_SERVER_PORT".into(),
+            self.config.posix_port.to_string(),
+        );
         if self.config.data_system_port > 0 {
             let ds_addr = format!(
                 "{}:{}",
@@ -235,15 +399,83 @@ impl InstanceController {
             env_vars.insert("DATASYSTEM_ADDR".into(), ds_addr.clone());
             env_vars.insert("YR_DS_ADDRESS".into(), ds_addr);
         }
+        if let Some(parent) = create_options
+            .get("DELEGATE_DIRECTORY_INFO")
+            .filter(|v| !v.trim().is_empty())
+        {
+            let parent = if std::path::Path::new(parent).is_dir() {
+                parent.trim().to_string()
+            } else {
+                "/tmp".to_string()
+            };
+            let work_dir = format!("{}/{}", parent.trim_end_matches('/'), instance_id);
+            env_vars.insert("INSTANCE_WORK_DIR".into(), work_dir.clone());
+            env_vars.insert("DELEGATE_DIRECTORY_INFO".into(), parent);
+            env_vars.insert("YR_INSTANCE_WORK_DIR".into(), work_dir);
+        }
+        for (k, v) in create_options {
+            env_vars.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        if let Some(job_id) = job_id_from_trace(trace_id) {
+            env_vars.insert("YR_JOB_ID".into(), job_id);
+        }
+
+        let resolved_runtime_type = service_meta
+            .as_ref()
+            .and_then(|m| (!m.runtime_type.trim().is_empty()).then(|| m.runtime_type.clone()))
+            .unwrap_or_else(|| runtime_type.to_string());
+        if resolved_runtime_type
+            .to_ascii_lowercase()
+            .contains("python")
+        {
+            env_vars
+                .entry("INIT_HANDLER".into())
+                .or_insert_with(|| "yrlib_handler.init".into());
+            env_vars
+                .entry("CALL_HANDLER".into())
+                .or_insert_with(|| "yrlib_handler.call".into());
+            env_vars
+                .entry("CHECKPOINT_HANDLER".into())
+                .or_insert_with(|| "yrlib_handler.checkpoint".into());
+            env_vars
+                .entry("RECOVER_HANDLER".into())
+                .or_insert_with(|| "yrlib_handler.recover".into());
+            env_vars
+                .entry("SHUTDOWN_HANDLER".into())
+                .or_insert_with(|| "yrlib_handler.shutdown".into());
+            env_vars
+                .entry("SIGNAL_HANDLER".into())
+                .or_insert_with(|| "yrlib_handler.signal".into());
+        }
+        let resolved_code_path = service_meta
+            .as_ref()
+            .and_then(|m| (!m.code_path.trim().is_empty()).then(|| m.code_path.clone()))
+            .unwrap_or_default();
+        if !resolved_code_path.trim().is_empty() {
+            env_vars.insert("FUNCTION_LIB_PATH".into(), resolved_code_path.clone());
+            env_vars.insert("YR_FUNCTION_LIB_PATH".into(), resolved_code_path.clone());
+        }
+
+        if let Some(ld) = env_vars.get("LD_LIBRARY_PATH") {
+            if ld.contains("depend") || ld.contains("${") {
+                info!(
+                    %instance_id,
+                    %function_name,
+                    ld_library_path = %ld,
+                    yr_function_lib_path = ?env_vars.get("YR_FUNCTION_LIB_PATH"),
+                    "start_instance prepared custom LD_LIBRARY_PATH"
+                );
+            }
+        }
 
         let req = StartInstanceRequest {
             instance_id: instance_id.to_string(),
             function_name: function_name.to_string(),
             tenant_id: tenant_id.to_string(),
-            runtime_type: runtime_type.to_string(),
+            runtime_type: resolved_runtime_type,
             env_vars,
             resources,
-            code_path: String::new(),
+            code_path: resolved_code_path,
             config_json: String::new(),
         };
 
@@ -258,14 +490,22 @@ impl InstanceController {
             return Ok((resp.runtime_id, resp.runtime_port));
         }
 
-        let addr = self.config.runtime_manager_address.trim();
+        let configured_addr = self.config.runtime_manager_address.trim().to_string();
+        let addr = if configured_addr.is_empty() {
+            self.agent_manager
+                .as_ref()
+                .and_then(|m| m.first_grpc_endpoint())
+                .unwrap_or_default()
+        } else {
+            configured_addr
+        };
         if addr.is_empty() {
             return Err(tonic::Status::failed_precondition(
-                "runtime_manager_address is not configured",
+                "runtime_manager_address is not configured and no local function_agent is registered",
             ));
         }
         let uri = if addr.starts_with("http://") || addr.starts_with("https://") {
-            addr.to_string()
+            addr
         } else {
             format!("http://{addr}")
         };
@@ -274,10 +514,7 @@ impl InstanceController {
             .await
             .map_err(|e| tonic::Status::internal(format!("connect agent: {e}")))?;
 
-        let resp = client
-            .start_instance(req)
-            .await?
-            .into_inner();
+        let resp = client.start_instance(req).await?.into_inner();
         if !resp.success {
             return Err(tonic::Status::internal(resp.message));
         }
@@ -306,12 +543,20 @@ impl InstanceController {
             return Ok(());
         }
 
-        let addr = self.config.runtime_manager_address.trim();
+        let configured_addr = self.config.runtime_manager_address.trim().to_string();
+        let addr = if configured_addr.is_empty() {
+            self.agent_manager
+                .as_ref()
+                .and_then(|m| m.first_grpc_endpoint())
+                .unwrap_or_default()
+        } else {
+            configured_addr
+        };
         if addr.is_empty() {
             return Ok(());
         }
         let uri = if addr.starts_with("http://") || addr.starts_with("https://") {
-            addr.to_string()
+            addr
         } else {
             format!("http://{addr}")
         };

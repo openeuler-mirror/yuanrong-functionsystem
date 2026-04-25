@@ -113,7 +113,8 @@ mod tests {
     #[test]
     fn report_includes_instance_aggregates() {
         let cfg = Arc::new(
-            Config::try_parse_from(["yr-proxy", "--node-id", "nid", "--grpc-listen-port", "1"]).unwrap(),
+            Config::try_parse_from(["yr-proxy", "--node-id", "nid", "--grpc-listen-port", "1"])
+                .unwrap(),
         );
         let rv = ResourceView::new(ResourceVector {
             cpu: 8.0,

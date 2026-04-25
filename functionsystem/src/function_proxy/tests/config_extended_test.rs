@@ -125,12 +125,7 @@ fn enable_flags_merge_driver_meta_combo() {
 
 #[test]
 fn etcd_endpoints_vec_trims_and_skips_empty() {
-    let c = parse(&[
-        "--node-id",
-        "n",
-        "--etcd-endpoints",
-        " http:1 , ,http:2 ",
-    ]);
+    let c = parse(&["--node-id", "n", "--etcd-endpoints", " http:1 , ,http:2 "]);
     assert_eq!(c.etcd_endpoints_vec(), vec!["http:1", "http:2"]);
 }
 
@@ -143,12 +138,7 @@ fn schedule_plugins_empty_string_yields_empty_object() {
 
 #[test]
 fn schedule_plugins_explicit_json_round_trips() {
-    let c = parse(&[
-        "--node-id",
-        "n",
-        "--schedule-plugins",
-        r#"{"a":1,"b":"x"}"#,
-    ]);
+    let c = parse(&["--node-id", "n", "--schedule-plugins", r#"{"a":1,"b":"x"}"#]);
     let p = c.schedule_plugins_config().expect("plugins");
     assert_eq!(p.raw["a"], 1);
     assert_eq!(p.raw["b"], "x");
@@ -185,13 +175,7 @@ fn start_instance_without_runtime_address_is_rejected() {
     let ctrl = InstanceController::new(c.clone(), rv, None, None);
     let rt = tokio::runtime::Runtime::new().unwrap();
     let err = rt
-        .block_on(ctrl.start_instance(
-            "i1",
-            "fn",
-            "t",
-            Default::default(),
-            "default",
-        ))
+        .block_on(ctrl.start_instance("i1", "fn", "t", Default::default(), "default"))
         .expect_err("missing runtime_manager_address");
     assert_eq!(err.code(), tonic::Code::FailedPrecondition);
 }

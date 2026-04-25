@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Parser;
 use tokio_stream::wrappers::TcpListenerStream;
+use tonic::service::Routes;
 use tracing::info;
 use yr_agent::config::Config;
 use yr_agent::deployer::DeployRouter;
@@ -31,19 +32,28 @@ async fn main() -> anyhow::Result<()> {
         "yr-agent settings"
     );
 
-    std::fs::create_dir_all(&config.code_package_dir).with_context(|| {
-        format!(
-            "create code_package_dir {}",
-            config.code_package_dir
-        )
-    })?;
+    std::fs::create_dir_all(&config.code_package_dir)
+        .with_context(|| format!("create code_package_dir {}", config.code_package_dir))?;
 
     let merge_runtime = if config.enable_merge_process {
+        let runtime_ld_library_path = config.effective_runtime_ld_library_path();
+        if !runtime_ld_library_path.is_empty() {
+            std::env::set_var("LD_LIBRARY_PATH", runtime_ld_library_path);
+        }
+        if !config.cpp_ignored.python_dependency_path.trim().is_empty() {
+            let existing = std::env::var("PYTHONPATH").unwrap_or_default();
+            let python_path = if existing.is_empty() {
+                config.cpp_ignored.python_dependency_path.clone()
+            } else {
+                format!("{}:{}", config.cpp_ignored.python_dependency_path, existing)
+            };
+            std::env::set_var("PYTHONPATH", python_path);
+        }
         let agent_ep = config.agent_grpc_endpoint();
         let rm_cfg = Arc::new(yr_runtime_manager::Config::embedded_in_agent(
             config.node_id.clone(),
             agent_ep,
-            config.merge_runtime_paths.clone(),
+            config.effective_merge_runtime_paths(),
             config.merge_runtime_initial_port,
             config.merge_port_count,
             std::path::PathBuf::from(&config.merge_runtime_log_path),
@@ -88,12 +98,7 @@ async fn main() -> anyhow::Result<()> {
     let agent = AgentService::new(deploy, rm.clone(), scheduler.clone());
     let runtimes = agent.runtimes_handle();
     let node = NodeManager::new_arc();
-    spawn_registration_tasks(
-        scheduler.clone(),
-        rm.clone(),
-        runtimes,
-        node.clone(),
-    );
+    spawn_registration_tasks(scheduler.clone(), rm.clone(), runtimes, node.clone());
 
     let http_state = http_api::HealthState {
         rm: rm.clone(),
@@ -105,20 +110,23 @@ async fn main() -> anyhow::Result<()> {
         .http_listen_addr()
         .parse()
         .context("parse http listen addr")?;
-    let http_srv = axum::serve(
-        tokio::net::TcpListener::bind(http_addr).await?,
-        http_api::router(http_state).into_make_service(),
-    );
-    tokio::spawn(async move {
-        if let Err(e) = http_srv.await {
-            tracing::error!(error = %e, "http server");
-        }
-    });
-
     let grpc_addr: SocketAddr = config
         .grpc_listen_addr()
         .parse()
         .context("parse grpc listen addr")?;
+
+    if http_addr != grpc_addr {
+        let http_srv = axum::serve(
+            tokio::net::TcpListener::bind(http_addr).await?,
+            http_api::router(http_state).into_make_service(),
+        );
+        tokio::spawn(async move {
+            if let Err(e) = http_srv.await {
+                tracing::error!(error = %e, "http server");
+            }
+        });
+    }
+
     let listener = tokio::net::TcpListener::bind(grpc_addr)
         .await
         .context("bind agent gRPC")?;
@@ -157,10 +165,30 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let incoming = TcpListenerStream::new(listener);
-    tonic::transport::Server::builder()
-        .add_service(FunctionAgentServiceServer::from_arc(agent))
-        .serve_with_incoming(incoming)
-        .await?;
+    if http_addr == grpc_addr {
+        // C++ deploy uses the same `--port` for function-agent health probes
+        // and gRPC callbacks. Serve the minimal health endpoints plus gRPC on
+        // that single port so deploy's curl health check and function_proxy
+        // callbacks both work.
+        let health_routes = axum08::Router::new()
+            .route("/healthy", axum08::routing::get(|| async { "" }))
+            .route(
+                "/function-agent/healthy",
+                axum08::routing::get(|| async { "" }),
+            );
+        let routes =
+            Routes::from(health_routes).add_service(FunctionAgentServiceServer::from_arc(agent));
+        tonic::transport::Server::builder()
+            .accept_http1(true)
+            .add_routes(routes)
+            .serve_with_incoming(incoming)
+            .await?;
+    } else {
+        tonic::transport::Server::builder()
+            .add_service(FunctionAgentServiceServer::from_arc(agent))
+            .serve_with_incoming(incoming)
+            .await?;
+    }
 
     Ok(())
 }

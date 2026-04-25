@@ -33,6 +33,7 @@ hex = { workspace = true }
 
 
 axum = "0.7"
+axum08 = { package = "axum", version = "0.8" }
 tower = { version = "0.4", features = ["util"] }
 tower-http = { version = "0.5", features = ["trace"] }
 

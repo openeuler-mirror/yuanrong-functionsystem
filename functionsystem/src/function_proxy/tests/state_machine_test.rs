@@ -56,10 +56,22 @@ fn invalid_transition_rejected() {
 
 #[test]
 fn transition_table_from_yr_common() {
-    assert!(transition_allowed(InstanceState::New, InstanceState::Scheduling));
-    assert!(transition_allowed(InstanceState::Scheduling, InstanceState::Creating));
-    assert!(transition_allowed(InstanceState::Creating, InstanceState::Running));
-    assert!(!transition_allowed(InstanceState::New, InstanceState::Creating));
+    assert!(transition_allowed(
+        InstanceState::New,
+        InstanceState::Scheduling
+    ));
+    assert!(transition_allowed(
+        InstanceState::Scheduling,
+        InstanceState::Creating
+    ));
+    assert!(transition_allowed(
+        InstanceState::Creating,
+        InstanceState::Running
+    ));
+    assert!(!transition_allowed(
+        InstanceState::New,
+        InstanceState::Creating
+    ));
 }
 
 #[tokio::test]

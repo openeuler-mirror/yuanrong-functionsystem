@@ -23,10 +23,13 @@ impl DeployMode {
     pub fn from_proto(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
             "" | "local" | "local_deployer" | "local_storage" => DeployMode::Local,
-            "copy" | "copy_storage" | "copy_deployer" | "working_dir" | "working"
-                => DeployMode::Copy,
+            "copy" | "copy_storage" | "copy_deployer" | "working_dir" | "working" => {
+                DeployMode::Copy
+            }
             "s3" | "obs" | "s3_storage" => DeployMode::S3,
-            "shared" | "shared_dir" | "shared_dir_deployer" | "shared_storage" => DeployMode::SharedDir,
+            "shared" | "shared_dir" | "shared_dir_deployer" | "shared_storage" => {
+                DeployMode::SharedDir
+            }
             _ => DeployMode::Unknown,
         }
     }
@@ -211,7 +214,9 @@ impl S3Deployer {
             let bucket = parts.next().unwrap_or("");
             let key = parts.next().unwrap_or("");
             if !self.bucket.is_empty() && bucket != self.bucket {
-                return Err(anyhow!("s3 URI bucket {bucket} does not match configured bucket"));
+                return Err(anyhow!(
+                    "s3 URI bucket {bucket} does not match configured bucket"
+                ));
             }
             let b = if self.bucket.is_empty() {
                 bucket
@@ -244,7 +249,10 @@ impl Deployer for S3Deployer {
         std::fs::create_dir_all(&dst_dir)?;
         let file_name = reqwest::Url::parse(&url)
             .ok()
-            .and_then(|u| u.path_segments().and_then(|mut s| s.next_back().map(|x| x.to_string())))
+            .and_then(|u| {
+                u.path_segments()
+                    .and_then(|mut s| s.next_back().map(|x| x.to_string()))
+            })
             .filter(|s| !s.is_empty())
             .or_else(|| {
                 Path::new(ctx.code_uri)
@@ -284,19 +292,13 @@ pub struct DeployRouter {
 }
 
 impl DeployRouter {
-    pub fn new(
-        code_package_dir: PathBuf,
-        s3_endpoint: String,
-        s3_bucket: String,
-    ) -> Self {
+    pub fn new(code_package_dir: PathBuf, s3_endpoint: String, s3_bucket: String) -> Self {
         let s3 = if !s3_endpoint.is_empty() && !s3_bucket.is_empty() {
             Some(S3Deployer {
                 endpoint: s3_endpoint,
                 bucket: s3_bucket,
                 dest_root: code_package_dir.clone(),
-                client: reqwest::Client::builder()
-                    .build()
-                    .expect("reqwest client"),
+                client: reqwest::Client::builder().build().expect("reqwest client"),
             })
         } else {
             None

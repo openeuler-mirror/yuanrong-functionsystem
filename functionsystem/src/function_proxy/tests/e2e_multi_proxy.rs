@@ -111,10 +111,7 @@ async fn e2e_multi_proxy_forward_call_between_two_proxy_configs() {
         "nodeId": "proxy-alpha",
         "proxyAddress": peer_url
     });
-    bus_beta.apply_instance_route_put(
-        "inst-on-alpha",
-        &serde_json::to_vec(&route).unwrap(),
-    );
+    bus_beta.apply_instance_route_put("inst-on-alpha", &serde_json::to_vec(&route).unwrap());
     assert!(!bus_beta.should_dispatch_locally("inst-on-alpha"));
 
     let res = bus_beta

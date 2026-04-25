@@ -20,9 +20,8 @@ where
     D: Deserializer<'de>,
 {
     let raw = String::deserialize(de)?;
-    InstanceState::from_str(raw.trim()).map_err(|_| {
-        serde::de::Error::custom(format!("unknown InstanceState {:?}", raw.trim()))
-    })
+    InstanceState::from_str(raw.trim())
+        .map_err(|_| serde::de::Error::custom(format!("unknown InstanceState {:?}", raw.trim())))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,7 +102,13 @@ mod tests {
 
     #[test]
     fn uses_global_transition_table() {
-        assert!(transition_allowed(InstanceState::New, InstanceState::Scheduling));
-        assert!(!transition_allowed(InstanceState::New, InstanceState::Running));
+        assert!(transition_allowed(
+            InstanceState::New,
+            InstanceState::Scheduling
+        ));
+        assert!(!transition_allowed(
+            InstanceState::New,
+            InstanceState::Running
+        ));
     }
 }

@@ -78,8 +78,10 @@ async fn invoke_req_builds_call_request_on_same_stream() {
 #[tokio::test]
 async fn call_result_routes_to_driver_stream() {
     let bus = new_bus("node-rt", 30203);
-    let (tx_drv, mut rx_drv) = tokio::sync::mpsc::channel::<Result<StreamingMessage, tonic::Status>>(8);
-    let (tx_rt, mut rx_rt) = tokio::sync::mpsc::channel::<Result<StreamingMessage, tonic::Status>>(8);
+    let (tx_drv, mut rx_drv) =
+        tokio::sync::mpsc::channel::<Result<StreamingMessage, tonic::Status>>(8);
+    let (tx_rt, mut rx_rt) =
+        tokio::sync::mpsc::channel::<Result<StreamingMessage, tonic::Status>>(8);
     bus.attach_runtime_stream("driver-d3", tx_drv);
     bus.register_pending_instance(
         "inst-cr",
@@ -192,7 +194,10 @@ async fn exit_req_zero_triggers_exiting_via_kill_shim() {
     else {
         panic!("Reply");
     };
-    assert!(matches!(outs[0].body, Some(streaming_message::Body::ExitRsp(_))));
+    assert!(matches!(
+        outs[0].body,
+        Some(streaming_message::Body::ExitRsp(_))
+    ));
     assert_eq!(
         bus.instance_ctrl_ref().get(iid).unwrap().state,
         InstanceState::Exiting

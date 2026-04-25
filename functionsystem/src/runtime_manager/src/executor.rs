@@ -1,8 +1,8 @@
 use crate::config::Config;
 use crate::container::{self, CgroupIsolate};
 use crate::instance_health;
-use crate::state::InstanceHealthSpec;
 use crate::log_manager::InstanceLogPaths;
+use crate::state::InstanceHealthSpec;
 use crate::state::RunningProcess;
 use crate::venv;
 use crate::volume::{self, BindMount};
@@ -21,6 +21,9 @@ pub fn pick_runtime_executable(paths: &[String], runtime_type: &str) -> Option<S
     if paths.is_empty() {
         return None;
     }
+    if is_python_runtime(runtime_type) {
+        return python_interpreter(runtime_type).or_else(|| Some("python3".to_string()));
+    }
     if let Ok(idx) = runtime_type.parse::<usize>() {
         if let Some(p) = paths.get(idx) {
             return Some(p.clone());
@@ -37,6 +40,84 @@ pub fn pick_runtime_executable(paths: &[String], runtime_type: &str) -> Option<S
         })
         .cloned()
         .or_else(|| paths.first().cloned())
+}
+
+fn is_python_runtime(runtime_type: &str) -> bool {
+    runtime_type.to_ascii_lowercase().contains("python")
+}
+
+fn python_interpreter(runtime_type: &str) -> Option<String> {
+    let lower = runtime_type.to_ascii_lowercase();
+    if lower.contains("3.11") {
+        Some("python3.11".to_string())
+    } else if lower.contains("3.10") {
+        Some("python3.10".to_string())
+    } else if lower.contains("3.9") {
+        Some("python3.9".to_string())
+    } else if lower.contains("3.8") {
+        Some("python3.8".to_string())
+    } else if lower.contains("3.7") {
+        Some("python3.7".to_string())
+    } else if lower.contains("3.6") {
+        Some("python3.6".to_string())
+    } else if lower.contains("python3") {
+        Some("python3".to_string())
+    } else {
+        None
+    }
+}
+
+fn python_server_path(paths: &[String]) -> Option<PathBuf> {
+    paths
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n == "yr_runtime_main.py")
+        })
+        .or_else(|| {
+            paths.iter().find_map(|p| {
+                let path = Path::new(p);
+                let service = path
+                    .ancestors()
+                    .find(|a| a.file_name().and_then(|n| n.to_str()) == Some("service"))?;
+                Some(service.join("python/yr/main/yr_runtime_main.py"))
+            })
+        })
+}
+
+fn job_id_for(req: &StartInstanceRequest) -> String {
+    req.env_vars
+        .get("YR_JOB_ID")
+        .filter(|v| v.starts_with("job-"))
+        .cloned()
+        .unwrap_or_else(|| format!("job-{}", &req.instance_id.get(..8).unwrap_or("ffffffff")))
+}
+
+fn python_path_for(cfg: &Config, req: &StartInstanceRequest) -> String {
+    let mut parts = Vec::new();
+    if !req.code_path.trim().is_empty() {
+        parts.push(req.code_path.clone());
+    }
+    if !cfg.python_dependency_path.trim().is_empty() && cfg.python_dependency_path.trim() != "/" {
+        parts.push(cfg.python_dependency_path.clone());
+    }
+    if let Ok(existing) = std::env::var("PYTHONPATH") {
+        parts.push(existing);
+    }
+    parts.join(":")
+}
+
+fn expand_env_value(value: &str, vars: &HashMap<String, String>) -> String {
+    let mut out = value.to_string();
+    for (k, v) in vars {
+        let pat = format!("${{{}}}", k);
+        if out.contains(&pat) {
+            out = out.replace(&pat, v);
+        }
+    }
+    out
 }
 
 unsafe fn apply_rlimits_libc(resources: &HashMap<String, f64>) {
@@ -105,19 +186,48 @@ pub fn start_runtime_process(
     });
 
     let logs = InstanceLogPaths::new(&cfg.log_path, runtime_id);
-    let (stdout, stderr) = logs.open_append_rotated(cfg.log_rotate_max_bytes, cfg.log_rotate_keep)?;
+    let (stdout, stderr) =
+        logs.open_append_rotated(cfg.log_rotate_max_bytes, cfg.log_rotate_keep)?;
 
-    let health_spec: InstanceHealthSpec =
-        instance_health::parse_from_config_json(
-            &req.config_json,
-            Duration::from_secs(cfg.manager_startup_probe_secs.max(1)),
-        );
+    let health_spec: InstanceHealthSpec = instance_health::parse_from_config_json(
+        &req.config_json,
+        Duration::from_secs(cfg.manager_startup_probe_secs.max(1)),
+    );
 
     let listen_addr = format!("{}:{}", cfg.host.trim(), port);
 
     let mut cmd = Command::new(&exe);
-    cmd.arg(&req.instance_id)
-        .current_dir(&workdir)
+    if is_python_runtime(&req.runtime_type) {
+        let server = python_server_path(paths)
+            .ok_or_else(|| anyhow!("python runtime server path not found"))?;
+        cmd.arg("-u")
+            .arg(server)
+            .arg("--rt_server_address")
+            .arg(&listen_addr)
+            .arg("--deploy_dir")
+            .arg(&req.code_path)
+            .arg("--runtime_id")
+            .arg(runtime_id)
+            .arg("--job_id")
+            .arg(job_id_for(req))
+            .arg("--log_level")
+            .arg(&cfg.runtime_log_level);
+        let python_path = python_path_for(cfg, req);
+        if !python_path.is_empty() {
+            cmd.env("PYTHONPATH", python_path);
+        }
+    } else if req.runtime_type.contains("cpp")
+        || Path::new(&exe).file_name().and_then(|n| n.to_str()) == Some("runtime")
+    {
+        // C++ ST and legacy tooling locate worker processes by `cppruntime`.
+        // The packaged executable is `cpp/bin/runtime`, but C++ function-agent
+        // starts it with the legacy process name. Keep that black-box contract.
+        cmd.arg0("cppruntime");
+        cmd.arg(&req.instance_id);
+    } else {
+        cmd.arg(&req.instance_id);
+    }
+    cmd.current_dir(&workdir)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
@@ -129,25 +239,58 @@ pub fn start_runtime_process(
         .env("RUNTIME_PORT", port.to_string())
         .env("RUNTIME_TYPE", &req.runtime_type)
         .env("POSIX_LISTEN_ADDR", &listen_addr)
-        .env("YR_JOB_ID", format!("job-{}", &req.instance_id.get(..8).unwrap_or("ffffffff")))
+        .env(
+            "YR_JOB_ID",
+            format!("job-{}", &req.instance_id.get(..8).unwrap_or("ffffffff")),
+        )
         .env("PYTHONUNBUFFERED", "1")
         .env("YR_BARE_MENTAL", "1");
 
-    for (k, v) in &req.env_vars {
-        cmd.env(k, v);
-    }
-    for (k, v) in java_env {
-        cmd.env(k, v);
-    }
-
+    let mut expand_vars = HashMap::new();
     if let Ok(ld) = std::env::var("LD_LIBRARY_PATH") {
-        cmd.env("LD_LIBRARY_PATH", &ld);
+        expand_vars.insert("LD_LIBRARY_PATH".to_string(), ld.clone());
+        cmd.env("LD_LIBRARY_PATH", ld);
     }
     if let Ok(pp) = std::env::var("PYTHONPATH") {
-        cmd.env("PYTHONPATH", &pp);
+        expand_vars.insert("PYTHONPATH".to_string(), pp.clone());
+        cmd.env("PYTHONPATH", pp);
     }
     if let Ok(path) = std::env::var("PATH") {
-        cmd.env("PATH", &path);
+        expand_vars.insert("PATH".to_string(), path.clone());
+        cmd.env("PATH", path);
+    }
+    for (k, v) in &req.env_vars {
+        let mut vars = expand_vars.clone();
+        for (other_k, other_v) in &req.env_vars {
+            if other_k != k {
+                vars.insert(other_k.clone(), other_v.clone());
+            }
+        }
+        let expanded = expand_env_value(v, &vars);
+        if k == "LD_LIBRARY_PATH" && (expanded.contains("depend") || v.contains("${")) {
+            info!(
+                instance_id = %req.instance_id,
+                original = %v,
+                expanded = %expanded,
+                "runtime_manager applying LD_LIBRARY_PATH"
+            );
+        }
+        cmd.env(k, expanded);
+    }
+    for (k, v) in java_env {
+        cmd.env(k, expand_env_value(&v, &expand_vars));
+    }
+    if let Some(instance_work_dir) = req.env_vars.get("INSTANCE_WORK_DIR") {
+        if !instance_work_dir.trim().is_empty() {
+            let p = Path::new(instance_work_dir);
+            std::fs::create_dir_all(p)
+                .with_context(|| format!("create INSTANCE_WORK_DIR {}", p.display()))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o770));
+            }
+        }
     }
 
     let res = req.resources.clone();
@@ -162,7 +305,9 @@ pub fn start_runtime_process(
         });
     }
 
-    let child = cmd.spawn().with_context(|| format!("spawn runtime {exe:?}"))?;
+    let child = cmd
+        .spawn()
+        .with_context(|| format!("spawn runtime {exe:?}"))?;
     let pid = child.id() as i32;
 
     if cfg.runtime_child_oom_score_adj != 0 {
@@ -223,7 +368,11 @@ fn term_timeout(cfg: &Config) -> Duration {
 }
 
 /// SIGTERM to the runtime process group, poll `/proc`, then SIGKILL. Cleans cgroup + bind mounts.
-pub fn stop_runtime_process(cfg: &Config, proc: &RunningProcess, force: bool) -> anyhow::Result<()> {
+pub fn stop_runtime_process(
+    cfg: &Config,
+    proc: &RunningProcess,
+    force: bool,
+) -> anyhow::Result<()> {
     volume::unmount_all(&proc.bind_mount_points);
     if let Some(ref p) = proc.cgroup_path {
         container::remove_cgroup_dir(p);

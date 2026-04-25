@@ -12,11 +12,11 @@ use axum::http::{Request, StatusCode};
 use clap::Parser;
 use futures::future::join_all;
 use tower::ServiceExt;
+use yr_agent::config::Config as AgentConfig;
 use yr_agent::http_api::{router as agent_router, HealthState};
 use yr_agent::node_manager::NodeManager;
 use yr_agent::registration::SchedulerLink;
 use yr_agent::rm_client::RuntimeManagerClient;
-use yr_agent::config::Config as AgentConfig;
 use yr_iam::config::CliArgs as IamCliArgs;
 use yr_iam::routes::build_router as iam_build_router;
 use yr_iam::state::AppState;
@@ -309,10 +309,11 @@ fn in_process_rm_for_health() -> Arc<RuntimeManagerClient> {
         "".into(),
     ));
     cfg.ensure_log_dir().unwrap();
-    let ports = Arc::new(
-        yr_runtime_manager::port_manager::SharedPortManager::new(40200, 10).unwrap(),
-    );
-    let st = Arc::new(yr_runtime_manager::state::RuntimeManagerState::new(cfg, ports));
+    let ports =
+        Arc::new(yr_runtime_manager::port_manager::SharedPortManager::new(40200, 10).unwrap());
+    let st = Arc::new(yr_runtime_manager::state::RuntimeManagerState::new(
+        cfg, ports,
+    ));
     Arc::new(RuntimeManagerClient::in_process(
         st,
         vec!["/bin/true".to_string()],
@@ -337,10 +338,7 @@ async fn scenario2_master_health_ok_without_headers_is_simple_liveness() {
         .uri("/healthy")
         .body(Body::empty())
         .unwrap();
-    assert_eq!(
-        app.oneshot(simple).await.unwrap().status(),
-        StatusCode::OK
-    );
+    assert_eq!(app.oneshot(simple).await.unwrap().status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -361,10 +359,7 @@ async fn scenario2_proxy_health_ok_without_headers_is_simple_liveness() {
         .uri("/healthy")
         .body(Body::empty())
         .unwrap();
-    assert_eq!(
-        app.oneshot(simple).await.unwrap().status(),
-        StatusCode::OK
-    );
+    assert_eq!(app.oneshot(simple).await.unwrap().status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -398,10 +393,7 @@ async fn scenario2_agent_health_ok_without_headers_is_simple_liveness() {
         .uri("/healthy")
         .body(Body::empty())
         .unwrap();
-    assert_eq!(
-        app.oneshot(simple).await.unwrap().status(),
-        StatusCode::OK
-    );
+    assert_eq!(app.oneshot(simple).await.unwrap().status(), StatusCode::OK);
 }
 
 #[tokio::test]
@@ -464,10 +456,7 @@ async fn scenario2_iam_health_ok_without_headers_is_simple_liveness() {
         .uri("/healthy")
         .body(Body::empty())
         .unwrap();
-    assert_eq!(
-        app.oneshot(simple).await.unwrap().status(),
-        StatusCode::OK
-    );
+    assert_eq!(app.oneshot(simple).await.unwrap().status(), StatusCode::OK);
 }
 
 // --- Scenario 4: full happy-path state chain on instance metadata. ---
@@ -551,7 +540,11 @@ async fn scenario5_batch_concurrent_instances_reach_running() {
 
 // --- Scenario 6: KillReq → Exiting, then normal exit → Exited; multiple signals. ---
 
-async fn kill_then_finalize_exited(bus: &std::sync::Arc<yr_proxy::busproxy::BusProxyCoordinator>, iid: &str, signal: i32) {
+async fn kill_then_finalize_exited(
+    bus: &std::sync::Arc<yr_proxy::busproxy::BusProxyCoordinator>,
+    iid: &str,
+    signal: i32,
+) {
     let msg = StreamingMessage {
         message_id: format!("kill-{signal}"),
         meta_data: Default::default(),
@@ -561,12 +554,14 @@ async fn kill_then_finalize_exited(bus: &std::sync::Arc<yr_proxy::busproxy::BusP
             ..Default::default()
         })),
     };
-    let InboundAction::Reply(outs) =
-        InvocationHandler::handle_runtime_inbound(iid, msg, bus).await
+    let InboundAction::Reply(outs) = InvocationHandler::handle_runtime_inbound(iid, msg, bus).await
     else {
         panic!("KillReq should yield Reply");
     };
-    assert!(matches!(outs[0].body, Some(streaming_message::Body::KillRsp(_))));
+    assert!(matches!(
+        outs[0].body,
+        Some(streaming_message::Body::KillRsp(_))
+    ));
     assert_eq!(
         bus.instance_ctrl_ref().get(iid).unwrap().state,
         CommonInstanceState::Exiting

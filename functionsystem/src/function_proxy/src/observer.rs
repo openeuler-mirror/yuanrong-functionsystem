@@ -48,9 +48,7 @@ impl InstanceInfoSyncer {
         };
         for kv in res.kvs {
             if let Some(id) = route_instance_id_from_key(&kv.key) {
-                self.ctx
-                    .bus
-                    .apply_instance_route_put(&id, &kv.value);
+                self.ctx.bus.apply_instance_route_put(&id, &kv.value);
             }
         }
     }

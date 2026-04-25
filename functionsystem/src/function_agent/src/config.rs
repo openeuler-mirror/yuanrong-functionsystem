@@ -115,6 +115,8 @@ pub struct AgentCppIgnored {
     pub user_log_rolling_file_count_limit: String,
     #[arg(long = "npu_collection_enable", default_value = "")]
     pub npu_collection_enable: String,
+    #[arg(long = "numa_collection_enable", default_value = "")]
+    pub numa_collection_enable: String,
     #[arg(long = "runtime_ld_library_path", default_value = "")]
     pub runtime_ld_library_path: String,
     #[arg(long = "runtime_log_level", default_value = "")]
@@ -293,6 +295,46 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn effective_merge_runtime_paths(&self) -> String {
+        if self.merge_runtime_paths.trim() != "/bin/sleep"
+            || self.cpp_ignored.runtime_dir.trim().is_empty()
+        {
+            return self.merge_runtime_paths.clone();
+        }
+        let runtime_dir = self.cpp_ignored.runtime_dir.trim().trim_end_matches('/');
+        [
+            format!("{runtime_dir}/cpp/bin/runtime"),
+            format!("{runtime_dir}/go/bin/goruntime"),
+            format!("{runtime_dir}/python/yr/main/yr_runtime_main.py"),
+        ]
+        .join(",")
+    }
+
+    pub fn effective_runtime_ld_library_path(&self) -> String {
+        let mut parts: Vec<String> = self
+            .cpp_ignored
+            .runtime_ld_library_path
+            .split(':')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let runtime_dir = self.cpp_ignored.runtime_dir.trim().trim_end_matches('/');
+        if !runtime_dir.is_empty() {
+            let runtime_root = runtime_dir.strip_suffix("/service").unwrap_or(runtime_dir);
+            parts.extend([
+                format!("{runtime_dir}/cpp/lib"),
+                format!("{runtime_root}/sdk/cpp/lib"),
+                format!("{runtime_dir}/go/bin"),
+                format!("{runtime_root}/sdk/go/lib"),
+                format!("{runtime_dir}/java/lib"),
+                format!("{runtime_root}/sdk/java/lib"),
+                format!("{runtime_dir}/python/yr"),
+            ]);
+        }
+        parts.dedup();
+        parts.join(":")
+    }
+
     pub fn grpc_listen_addr(&self) -> String {
         format!("{}:{}", self.host, self.agent_listen_port)
     }

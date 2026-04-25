@@ -57,9 +57,6 @@ fn merge_process_related_flags_parse() {
     ])
     .unwrap();
     assert_eq!(c.merge_runtime_paths, "/opt/a,/opt/b");
-    assert_eq!(
-        c.merge_runtime_bind_mounts,
-        "/host/data:/work:ro,/tmp/x:/y"
-    );
+    assert_eq!(c.merge_runtime_bind_mounts, "/host/data:/work:ro,/tmp/x:/y");
     assert_eq!(c.merge_runtime_log_path, "/var/log/yr-merge");
 }
