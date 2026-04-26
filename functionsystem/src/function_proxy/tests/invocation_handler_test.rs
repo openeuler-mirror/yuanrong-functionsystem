@@ -4,7 +4,7 @@ mod common;
 
 use common::new_bus;
 use prost::Message;
-use yr_proto::common::ErrorCode;
+use yr_proto::common::{Arg, ErrorCode};
 use yr_proto::core_service::{
     CreateRequest, CreateRequests, CreateResourceGroupRequest, ExitRequest, InvokeRequest,
     KillRequest,
@@ -14,6 +14,41 @@ use yr_proto::runtime_rpc::{streaming_message, StreamingMessage};
 use yr_proto::runtime_service::{HeartbeatRequest, NotifyRequest};
 use yr_proxy::busproxy::invocation_handler::{InboundAction, InvocationHandler};
 use yr_proxy::state_machine::{InstanceMetadata, InstanceState};
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct TestInvocationMeta {
+    #[prost(string, tag = "1")]
+    pub invoker_runtime_id: String,
+    #[prost(int64, tag = "2")]
+    pub invocation_sequence_no: i64,
+    #[prost(int64, tag = "3")]
+    pub min_unfinished_sequence_no: i64,
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct TestMetaData {
+    #[prost(int32, tag = "1")]
+    pub invoke_type: i32,
+    #[prost(message, optional, tag = "4")]
+    pub invocation_meta: Option<TestInvocationMeta>,
+}
+
+fn arg_with_sequence(seq: i64) -> Arg {
+    let meta = TestMetaData {
+        invoke_type: 0,
+        invocation_meta: Some(TestInvocationMeta {
+            invoker_runtime_id: String::new(),
+            invocation_sequence_no: seq,
+            min_unfinished_sequence_no: seq,
+        }),
+    };
+    let mut value = Vec::new();
+    meta.encode(&mut value).expect("encode invocation meta");
+    Arg {
+        value,
+        ..Default::default()
+    }
+}
 
 #[test]
 fn invoke_to_call_copies_core_fields() {
@@ -125,7 +160,11 @@ async fn duplicate_create_during_pending_init_only_returns_create_rsp() {
     else {
         panic!("Reply");
     };
-    assert_eq!(outs.len(), 1, "duplicate create must not emit NotifyReq before init");
+    assert_eq!(
+        outs.len(),
+        1,
+        "duplicate create must not emit NotifyReq before init"
+    );
     let streaming_message::Body::CreateRsp(rsp) = outs[0].body.as_ref().unwrap() else {
         panic!("CreateRsp");
     };
@@ -134,8 +173,41 @@ async fn duplicate_create_during_pending_init_only_returns_create_rsp() {
 }
 
 #[tokio::test]
-async fn group_create_empty_requests_succeeds() {
+async fn duplicate_create_with_stream_before_init_result_does_not_notify() {
     let bus = new_bus("node-a", 29003);
+    let create = CreateRequest {
+        function: "f".into(),
+        request_id: "inst-streaming".into(),
+        ..Default::default()
+    };
+    let (tx, _rx) = tokio::sync::mpsc::channel(4);
+    bus.attach_runtime_stream("inst-streaming", tx);
+    assert!(!bus.is_init_completed("inst-streaming"));
+
+    let msg = StreamingMessage {
+        message_id: "dup-mid".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CreateReq(create)),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound("driver-1", msg, &bus).await
+    else {
+        panic!("Reply");
+    };
+    assert_eq!(
+        outs.len(),
+        1,
+        "duplicate create must wait for init CallResult before NotifyReq"
+    );
+    let streaming_message::Body::CreateRsp(rsp) = outs[0].body.as_ref().unwrap() else {
+        panic!("CreateRsp");
+    };
+    assert_eq!(rsp.code, ErrorCode::ErrNone as i32);
+}
+
+#[tokio::test]
+async fn group_create_empty_requests_succeeds() {
+    let bus = new_bus("node-a", 29004);
     let batch = CreateRequests {
         requests: vec![],
         request_id: "batch".into(),
@@ -248,6 +320,13 @@ async fn invoke_req_routes_to_named_runtime_stream() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
     let target = "target-inst";
     bus.attach_runtime_stream(target, tx);
+    bus.on_runtime_recover_response(
+        target,
+        &yr_proto::runtime_service::RecoverResponse {
+            code: ErrorCode::ErrNone as i32,
+            ..Default::default()
+        },
+    );
     let msg = StreamingMessage {
         message_id: "inv2".into(),
         meta_data: Default::default(),
@@ -265,6 +344,92 @@ async fn invoke_req_routes_to_named_runtime_stream() {
         got.body,
         Some(streaming_message::Body::CallReq(_))
     ));
+}
+
+#[tokio::test]
+async fn ordered_invokes_from_distinct_callers_start_at_sequence_one() {
+    let bus = new_bus("node-a", 29021);
+    let target = "ordered-target";
+    let create = CreateRequest {
+        function: "f".into(),
+        request_id: "create-ordered-target".into(),
+        create_options: [("Concurrency".to_string(), "1".to_string())]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
+    bus.register_pending_instance(target, "driver-1", &create);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    bus.attach_runtime_stream(target, tx);
+    bus.on_runtime_connected(target, "runtime-ordered").await;
+    rx.recv().await.expect("init call").expect("init call ok");
+
+    let init_result = StreamingMessage {
+        message_id: "init-result".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CallResultReq(
+            yr_proto::core_service::CallResult {
+                request_id: "create-ordered-target".into(),
+                code: ErrorCode::ErrNone as i32,
+                message: "ok".into(),
+                ..Default::default()
+            },
+        )),
+    };
+    InvocationHandler::handle_runtime_inbound(target, init_result, &bus).await;
+    rx.recv()
+        .await
+        .expect("init result ack")
+        .expect("init result ack ok");
+    assert!(bus.is_init_completed(target));
+
+    for (caller, request_id) in [("driver-1", "driver-seq-1"), ("actor-1", "actor-seq-1")] {
+        let msg = StreamingMessage {
+            message_id: format!("mid-{request_id}"),
+            meta_data: Default::default(),
+            body: Some(streaming_message::Body::InvokeReq(InvokeRequest {
+                function: "f".into(),
+                request_id: request_id.into(),
+                instance_id: target.into(),
+                args: vec![arg_with_sequence(1)],
+                ..Default::default()
+            })),
+        };
+        assert!(matches!(
+            InvocationHandler::handle_runtime_inbound(caller, msg, &bus).await,
+            InboundAction::Reply(_)
+        ));
+        let got = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("ordered call should dispatch")
+            .expect("ordered call")
+            .expect("ordered call ok");
+        let Some(streaming_message::Body::CallReq(call)) = got.body else {
+            panic!("expected CallReq");
+        };
+        assert_eq!(call.request_id, request_id);
+
+        let result = StreamingMessage {
+            message_id: format!("result-{request_id}"),
+            meta_data: Default::default(),
+            body: Some(streaming_message::Body::CallResultReq(
+                yr_proto::core_service::CallResult {
+                    request_id: request_id.into(),
+                    code: ErrorCode::ErrNone as i32,
+                    message: "ok".into(),
+                    ..Default::default()
+                },
+            )),
+        };
+        InvocationHandler::handle_runtime_inbound(target, result, &bus).await;
+        if request_id == "driver-seq-1" {
+            let driver_scope = bus
+                .sequence_scope_for_invocation("driver-1", target)
+                .expect("driver sequence scope");
+            assert_eq!(bus.expected_sequence_for_scope(&driver_scope), 2);
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
 }
 
 #[tokio::test]

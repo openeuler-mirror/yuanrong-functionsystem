@@ -8,6 +8,7 @@ use yr_proto::inner_service::ForwardCallRequest;
 pub struct PendingForward {
     pub req: ForwardCallRequest,
     pub seq_no: Option<i64>,
+    pub sequence_scope: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -27,10 +28,13 @@ impl RequestDispatcher {
 
     pub fn enqueue(&self, p: PendingForward) {
         let mut q = self.pending.lock();
-        if let Some(seq) = p.seq_no {
+        if let (Some(scope), Some(seq)) = (p.sequence_scope.as_ref(), p.seq_no) {
             let idx = q
                 .iter()
-                .position(|existing| existing.seq_no.unwrap_or(i64::MAX) > seq)
+                .position(|existing| {
+                    existing.sequence_scope.as_ref() == Some(scope)
+                        && existing.seq_no.unwrap_or(i64::MAX) > seq
+                })
                 .unwrap_or(q.len());
             q.insert(idx, p);
         } else {
@@ -44,6 +48,15 @@ impl RequestDispatcher {
 
     pub fn pop_front(&self) -> Option<PendingForward> {
         self.pending.lock().pop_front()
+    }
+
+    pub fn pop_ready<F>(&self, is_ready: F) -> Option<PendingForward>
+    where
+        F: Fn(&PendingForward) -> bool,
+    {
+        let mut q = self.pending.lock();
+        let idx = q.iter().position(is_ready)?;
+        q.remove(idx)
     }
 
     pub fn is_empty(&self) -> bool {

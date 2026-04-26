@@ -164,10 +164,17 @@ impl InvocationHandler {
         let pending_create = bus.is_pending_create(&instance_id);
         let pending_init = bus.is_pending_init(&instance_id);
         let recovering = bus.is_recovering(&instance_id);
-        if pending_create || pending_init || recovering || bus.has_runtime_stream(&instance_id) {
+        let has_runtime_stream = bus.has_runtime_stream(&instance_id);
+        let init_completed = bus.is_init_completed(&instance_id);
+        if pending_create || pending_init || recovering || has_runtime_stream {
             info!(
                 %instance_id,
                 request_id = %create.request_id,
+                pending_create,
+                pending_init,
+                recovering,
+                has_runtime_stream,
+                init_completed,
                 "CreateReq: duplicate create for existing/pending instance, returning idempotent success"
             );
             let mut replies = vec![StreamingMessage {
@@ -179,7 +186,10 @@ impl InvocationHandler {
                     instance_id: instance_id.clone(),
                 })),
             }];
-            if !(pending_create || pending_init || recovering) {
+            if has_runtime_stream
+                && init_completed
+                && !(pending_create || pending_init || recovering)
+            {
                 replies.push(StreamingMessage {
                     message_id: create.request_id.clone(),
                     meta_data: Default::default(),
@@ -700,10 +710,13 @@ impl InvocationHandler {
                     .resolve_known_instance_id(&inv.instance_id)
                     .unwrap_or_else(|| inv.instance_id.clone());
                 let seq_no = Self::invoke_sequence_no(&inv);
+                let sequence_scope = seq_no
+                    .and_then(|_| bus.sequence_scope_for_invocation(instance_id, &target_instance));
                 info!(
                     caller = %instance_id,
                     function = %inv.function,
                     seq_no = ?seq_no,
+                    sequence_scope = ?sequence_scope,
                     request_id = %inv.request_id,
                     target_instance = %target_instance,
                     "InvokeReq: routing to runtime"
@@ -712,7 +725,7 @@ impl InvocationHandler {
                 bus.remember_request_target(&inv.request_id, &target_instance);
                 bus.remember_request_message_id(&inv.request_id, &mid);
                 if let Some(seq) = seq_no {
-                    bus.remember_request_sequence(&inv.request_id, seq);
+                    bus.remember_request_sequence(&inv.request_id, seq, sequence_scope.as_deref());
                 }
                 let call_msg = Self::invoke_to_call(&inv, &mid, instance_id);
                 let Some(streaming_message::Body::CallReq(call)) = &call_msg.body else {
@@ -730,6 +743,8 @@ impl InvocationHandler {
                     if bus.is_pending_create(&target_instance)
                         || bus.is_pending_init(&target_instance)
                         || bus.is_recovering(&target_instance)
+                        || (bus.has_runtime_stream(&target_instance)
+                            && !bus.is_init_completed(&target_instance))
                     {
                         if let Some(px) = bus.instance_view().proxies().get(&target_instance) {
                             px.dispatcher
@@ -741,6 +756,7 @@ impl InvocationHandler {
                                         src_node: String::new(),
                                     },
                                     seq_no,
+                                    sequence_scope: sequence_scope.clone(),
                                 });
                             bus.flush_pending(&target_instance);
                             return InboundAction::Reply(vec![Self::accepted_call_rsp(&mid)]);
@@ -757,6 +773,7 @@ impl InvocationHandler {
                                     src_node: String::new(),
                                 },
                                 seq_no,
+                                sequence_scope: sequence_scope.clone(),
                             });
                         bus.flush_pending(&target_instance);
                         return InboundAction::Reply(vec![Self::accepted_call_rsp(&mid)]);
@@ -777,6 +794,7 @@ impl InvocationHandler {
                                     src_node: String::new(),
                                 },
                                 seq_no,
+                                sequence_scope: sequence_scope.clone(),
                             });
                         bus.flush_pending(&target_instance);
                         return InboundAction::Reply(vec![Self::accepted_call_rsp(&mid)]);

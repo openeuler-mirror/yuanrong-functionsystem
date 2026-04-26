@@ -120,8 +120,10 @@ pub struct BusProxyCoordinator {
     request_to_call: dashmap::DashMap<String, CallRequest>,
     /// Ordered actor invoke sequence keyed by request_id.
     request_to_sequence: dashmap::DashMap<String, i64>,
-    /// Next expected ordered invoke sequence per instance.
-    instance_next_sequence: dashmap::DashMap<String, i64>,
+    /// Ordered actor invoke sequence scope keyed by request_id.
+    request_to_sequence_scope: dashmap::DashMap<String, String>,
+    /// Next expected ordered invoke sequence per caller-target scope.
+    sequence_scope_next: dashmap::DashMap<String, i64>,
     /// Requests that have actually been sent to runtime and are waiting for result.
     dispatched_request_to_instance: dashmap::DashMap<String, String>,
     /// When a direct CallResult is forwarded to a driver/runtime as NotifyReq, the
@@ -145,6 +147,12 @@ pub struct BusProxyCoordinator {
     cancelled_group_creates: dashmap::DashMap<String, ()>,
     /// Instances waiting for init CallResult before we send NotifyReq to driver.
     pending_inits: dashmap::DashMap<String, PendingInitInfo>,
+    /// Instances whose runtime init CallResult has completed successfully.
+    ///
+    /// A runtime stream can exist before the C++ runtime has processed the
+    /// isCreate=true init call. Duplicate CreateReq retries must not be treated
+    /// as ready during that window, or the SDK can send InvokeReq before init.
+    init_completed: dashmap::DashMap<String, ()>,
     /// Per-instance serialization locks: all send paths acquire this before pushing
     /// CallReq/CallResult onto the runtime channel, ensuring strict FIFO ordering
     /// even when multiple tasks (flush_pending, dispatch_local_call, send_to_runtime)
@@ -175,7 +183,8 @@ impl BusProxyCoordinator {
             request_to_message_id: dashmap::DashMap::new(),
             request_to_call: dashmap::DashMap::new(),
             request_to_sequence: dashmap::DashMap::new(),
-            instance_next_sequence: dashmap::DashMap::new(),
+            request_to_sequence_scope: dashmap::DashMap::new(),
+            sequence_scope_next: dashmap::DashMap::new(),
             dispatched_request_to_instance: dashmap::DashMap::new(),
             notify_ack_to_runtime: dashmap::DashMap::new(),
             request_to_instance: dashmap::DashMap::new(),
@@ -185,6 +194,7 @@ impl BusProxyCoordinator {
             pending_recovers: dashmap::DashMap::new(),
             cancelled_group_creates: dashmap::DashMap::new(),
             pending_inits: dashmap::DashMap::new(),
+            init_completed: dashmap::DashMap::new(),
             instance_mailbox: dashmap::DashMap::new(),
         })
     }
@@ -235,6 +245,7 @@ impl BusProxyCoordinator {
         self.instance_ctrl.insert_metadata(meta);
         self.instance_view.ensure_proxy(instance_id);
         self.instance_view.mark_route_ready(instance_id);
+        self.init_completed.remove(instance_id);
 
         self.pending_creates.insert(
             instance_id.to_string(),
@@ -247,9 +258,6 @@ impl BusProxyCoordinator {
                 created_at: std::time::Instant::now(),
             },
         );
-        self.instance_next_sequence
-            .entry(instance_id.to_string())
-            .or_insert(1);
         self.active_instances.insert(
             instance_id.to_string(),
             ActiveInstanceInfo {
@@ -282,9 +290,10 @@ impl BusProxyCoordinator {
         self.instance_to_job.remove(instance_id);
         self.pending_inits.remove(instance_id);
         self.pending_creates.remove(instance_id);
+        self.init_completed.remove(instance_id);
         self.active_instances.remove(instance_id);
         self.pending_recovers.remove(instance_id);
-        self.instance_next_sequence.remove(instance_id);
+        self.clear_sequence_scopes_for_instance(instance_id);
         self.instance_mailbox.remove(instance_id);
     }
 
@@ -345,6 +354,7 @@ impl BusProxyCoordinator {
         self.pending_recovers.remove(instance_id);
         self.pending_creates.remove(instance_id);
         self.pending_inits.remove(instance_id);
+        self.init_completed.remove(instance_id);
 
         if let Some(m) = self.instance_ctrl.get(instance_id) {
             if !m.runtime_id.is_empty() {
@@ -447,6 +457,7 @@ impl BusProxyCoordinator {
         self.runtime_tx.remove(instance_id);
         self.pending_inits.remove(instance_id);
         self.pending_recovers.remove(instance_id);
+        self.init_completed.remove(instance_id);
         self.instance_mailbox.remove(instance_id);
 
         let Some(mut active) = self.active_instances.get_mut(instance_id) else {
@@ -747,44 +758,65 @@ impl BusProxyCoordinator {
         let lock = self.mailbox(instance_id);
         let sequential = self.should_serialize_instance_invokes(instance_id);
         let dispatcher = px.dispatcher.clone();
-        let dispatched = self.dispatched_request_to_instance.clone();
-        let iid = instance_id.to_string();
-        tokio::spawn(async move {
-            let _guard = lock.lock().await;
-            if sequential {
-                if dispatched.iter().any(|e| e.value().as_str() == iid) {
-                    return;
+        if sequential {
+            if self
+                .dispatched_request_to_instance
+                .iter()
+                .any(|e| e.value().as_str() == instance_id)
+            {
+                return;
+            }
+            let Some(p) = dispatcher.pop_ready(|pending| {
+                match (pending.seq_no, pending.sequence_scope.as_ref()) {
+                    (Some(seq), Some(scope)) => seq == self.expected_sequence_for_scope(scope),
+                    _ => true,
                 }
-                let Some(p) = dispatcher.pop_front() else {
-                    return;
-                };
-                let Some(call) = p.req.req else {
-                    return;
-                };
-                dispatched.insert(call.request_id.clone(), iid.clone());
-                let msg = StreamingMessage {
+            }) else {
+                if !dispatcher.is_empty() {
+                    debug!(
+                        %instance_id,
+                        "ordered invoke waiting for missing earlier sequence in its caller scope"
+                    );
+                }
+                return;
+            };
+            let Some(call) = p.req.req else {
+                return;
+            };
+            self.dispatched_request_to_instance
+                .insert(call.request_id.clone(), instance_id.to_string());
+            let msg = StreamingMessage {
+                message_id: uuid::Uuid::new_v4().to_string(),
+                meta_data: Default::default(),
+                body: Some(streaming_message::Body::CallReq(call)),
+            };
+            tokio::spawn(async move {
+                let _guard = lock.lock().await;
+                let _ = tx.send(Ok(msg)).await;
+            });
+        } else {
+            let pending = dispatcher.drain();
+            if pending.is_empty() {
+                return;
+            }
+            let mut messages = Vec::new();
+            for p in pending {
+                let Some(call) = p.req.req else { continue };
+                self.dispatched_request_to_instance
+                    .insert(call.request_id.clone(), instance_id.to_string());
+                messages.push(StreamingMessage {
                     message_id: uuid::Uuid::new_v4().to_string(),
                     meta_data: Default::default(),
                     body: Some(streaming_message::Body::CallReq(call)),
-                };
-                let _ = tx.send(Ok(msg)).await;
-            } else {
-                let pending = dispatcher.drain();
-                if pending.is_empty() {
-                    return;
-                }
-                for p in pending {
-                    let Some(call) = p.req.req else { continue };
-                    dispatched.insert(call.request_id.clone(), iid.clone());
-                    let msg = StreamingMessage {
-                        message_id: uuid::Uuid::new_v4().to_string(),
-                        meta_data: Default::default(),
-                        body: Some(streaming_message::Body::CallReq(call)),
-                    };
+                });
+            }
+            tokio::spawn(async move {
+                let _guard = lock.lock().await;
+                for msg in messages {
                     let _ = tx.send(Ok(msg)).await;
                 }
-            }
-        });
+            });
+        }
     }
 
     pub async fn forward_call(
@@ -887,6 +919,7 @@ impl BusProxyCoordinator {
                     src_node: self.local_node_id.clone(),
                 },
                 seq_no: None,
+                sequence_scope: None,
             });
         Ok(())
     }
@@ -1216,6 +1249,11 @@ impl BusProxyCoordinator {
                 );
             }
 
+            if code == yr_proto::common::ErrorCode::ErrNone as i32 {
+                self.init_completed.insert(instance_id.to_string(), ());
+            } else {
+                self.init_completed.remove(instance_id);
+            }
             self.flush_pending(instance_id);
             if let Some(tx) = self.runtime_tx.get(instance_id) {
                 let ack = StreamingMessage {
@@ -1278,7 +1316,21 @@ impl BusProxyCoordinator {
         self.request_to_instance.remove(&res.request_id);
         self.request_to_call.remove(&res.request_id);
         self.dispatched_request_to_instance.remove(&res.request_id);
+        if let Some(seq) = self.request_to_sequence.get(&res.request_id).map(|v| *v) {
+            if let Some(scope) = self
+                .request_to_sequence_scope
+                .get(&res.request_id)
+                .map(|v| v.clone())
+            {
+                let mut next = self.sequence_scope_next.entry(scope).or_insert(1);
+                if *next <= seq {
+                    *next = seq + 1;
+                }
+            }
+        }
         self.request_to_sequence.remove(&res.request_id);
+        self.request_to_sequence_scope.remove(&res.request_id);
+        self.flush_pending(instance_id);
 
         debug!(%instance_id, request_id = %res.request_id, "runtime CallResult handled");
     }
@@ -1705,6 +1757,10 @@ impl BusProxyCoordinator {
         self.pending_inits.contains_key(instance_id)
     }
 
+    pub fn is_init_completed(&self, instance_id: &str) -> bool {
+        self.init_completed.contains_key(instance_id)
+    }
+
     pub fn is_pending_create(&self, instance_id: &str) -> bool {
         self.pending_creates.contains_key(instance_id)
     }
@@ -1727,6 +1783,7 @@ impl BusProxyCoordinator {
             if let Some(mut active) = self.active_instances.get_mut(instance_id) {
                 active.recovering = false;
             }
+            self.init_completed.insert(instance_id.to_string(), ());
             if let Some(mut m) = self.instance_ctrl.instances().get_mut(instance_id) {
                 let _ = m.transition(yr_common::types::InstanceState::Running);
             }
@@ -1759,19 +1816,74 @@ impl BusProxyCoordinator {
             .insert(request_id.to_string(), target_instance.to_string());
     }
 
-    pub fn remember_request_sequence(&self, request_id: &str, seq_no: i64) {
+    pub fn remember_request_sequence(
+        &self,
+        request_id: &str,
+        seq_no: i64,
+        sequence_scope: Option<&str>,
+    ) {
         if request_id.trim().is_empty() || seq_no <= 0 {
             return;
         }
         self.request_to_sequence
             .insert(request_id.to_string(), seq_no);
+        if let Some(scope) = sequence_scope.filter(|s| !s.trim().is_empty()) {
+            self.request_to_sequence_scope
+                .insert(request_id.to_string(), scope.to_string());
+            self.sequence_scope_next
+                .entry(scope.to_string())
+                .or_insert(1);
+        }
     }
 
     pub fn expected_sequence_for_instance(&self, instance_id: &str) -> i64 {
-        self.instance_next_sequence
+        self.sequence_scope_next
             .get(instance_id)
             .map(|v| *v)
             .unwrap_or(1)
+    }
+
+    pub fn sequence_scope_for_invocation(
+        &self,
+        caller_id: &str,
+        target_instance: &str,
+    ) -> Option<String> {
+        if caller_id.trim().is_empty() || target_instance.trim().is_empty() {
+            return None;
+        }
+        Some(format!("{caller_id}\u{1f}{target_instance}"))
+    }
+
+    pub fn expected_sequence_for_scope(&self, scope: &str) -> i64 {
+        self.sequence_scope_next.get(scope).map(|v| *v).unwrap_or(1)
+    }
+
+    fn clear_sequence_scopes_for_instance(&self, instance_id: &str) {
+        if instance_id.trim().is_empty() {
+            return;
+        }
+        let as_caller = format!("{instance_id}\u{1f}");
+        let as_target = format!("\u{1f}{instance_id}");
+        let scopes: Vec<String> = self
+            .sequence_scope_next
+            .iter()
+            .filter(|e| e.key().starts_with(&as_caller) || e.key().ends_with(&as_target))
+            .map(|e| e.key().clone())
+            .collect();
+        for scope in scopes {
+            self.sequence_scope_next.remove(&scope);
+        }
+
+        let request_ids: Vec<String> = self
+            .request_to_sequence_scope
+            .iter()
+            .filter(|e| e.value().starts_with(&as_caller) || e.value().ends_with(&as_target))
+            .map(|e| e.key().clone())
+            .collect();
+        for request_id in request_ids {
+            self.request_to_sequence.remove(&request_id);
+            self.request_to_sequence_scope.remove(&request_id);
+        }
     }
 
     pub fn has_inflight_request_for_instance(&self, instance_id: &str) -> bool {
@@ -2007,6 +2119,10 @@ impl BusProxyCoordinator {
                 continue;
             };
             let seq_no = self.request_to_sequence.get(&request_id).map(|v| *v);
+            let sequence_scope = self
+                .request_to_sequence_scope
+                .get(&request_id)
+                .map(|v| v.clone());
             px.dispatcher
                 .enqueue(crate::busproxy::request_dispatcher::PendingForward {
                     req: ForwardCallRequest {
@@ -2016,6 +2132,7 @@ impl BusProxyCoordinator {
                         src_node: String::new(),
                     },
                     seq_no,
+                    sequence_scope,
                 });
         }
     }
