@@ -43,8 +43,7 @@ fn minimal_start(instance_id: &str) -> StartInstanceRequest {
 fn start_instance_rejects_empty_id() {
     let st = test_state();
     let paths = vec!["/bin/true".into()];
-    let err = start_instance_op(&st, &paths, minimal_start("   "))
-        .expect_err("empty instance_id");
+    let err = start_instance_op(&st, &paths, minimal_start("   ")).expect_err("empty instance_id");
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
 }
 
@@ -65,6 +64,28 @@ fn start_then_stop_succeeds() {
     )
     .expect("stop");
     assert!(stop.success);
+}
+
+#[test]
+fn stop_accepts_instance_id_when_runtime_id_is_stale() {
+    let st = test_state();
+    let paths = vec!["/bin/true".into()];
+    let resp = start_instance_op(&st, &paths, minimal_start("inst-by-id")).expect("start");
+    assert!(resp.success);
+    let rid = resp.runtime_id;
+
+    let stop = stop_instance_op(
+        &st,
+        StopInstanceRequest {
+            instance_id: "inst-by-id".into(),
+            runtime_id: "stale-runtime-id".into(),
+            force: true,
+        },
+    )
+    .expect("stop by instance id");
+
+    assert!(stop.success);
+    assert!(st.get_by_runtime(&rid).is_none());
 }
 
 #[test]

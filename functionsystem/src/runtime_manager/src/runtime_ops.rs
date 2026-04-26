@@ -2,10 +2,10 @@
 
 use crate::executor;
 use crate::state::RuntimeManagerState;
-use std::path::Path;
-use std::sync::Arc;
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
+use std::path::Path;
+use std::sync::Arc;
 use tonic::Status;
 use tracing::{info, warn};
 use yr_proto::internal::{
@@ -61,23 +61,27 @@ pub fn stop_instance_op(
     state: &Arc<RuntimeManagerState>,
     req: StopInstanceRequest,
 ) -> Result<StopInstanceResponse, Status> {
-    let Some(proc) = state.get_by_runtime(&req.runtime_id) else {
+    let Some(proc) = state
+        .get_by_runtime(&req.runtime_id)
+        .or_else(|| state.get_by_instance(&req.instance_id))
+    else {
         return Ok(StopInstanceResponse {
             success: false,
-            message: "unknown runtime_id".into(),
+            message: "unknown runtime_id or instance_id".into(),
         });
     };
+    let runtime_id = proc.runtime_id.clone();
 
     if let Err(e) = executor::stop_runtime_process(&state.config, &proc, req.force) {
         warn!(error = %e, pid = proc.pid, "StopInstance kill sequence");
     }
 
-    state.remove_by_runtime(&req.runtime_id);
-    state.ports.release(&req.runtime_id);
+    state.remove_by_runtime(&runtime_id);
+    state.ports.release(&runtime_id);
 
     info!(
         instance_id = %proc.instance_id,
-        runtime_id = %req.runtime_id,
+        runtime_id = %runtime_id,
         pid = proc.pid,
         "StopInstance completed"
     );
@@ -149,8 +153,5 @@ pub fn get_runtime_status_op(
         (proc.status.clone(), proc.exit_code.unwrap_or(-1))
     };
 
-    Ok(RuntimeStatusResponse {
-        status,
-        exit_code,
-    })
+    Ok(RuntimeStatusResponse { status, exit_code })
 }

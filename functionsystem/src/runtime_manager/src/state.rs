@@ -66,6 +66,14 @@ impl RuntimeManagerState {
         self.by_runtime.read().get(runtime_id).cloned()
     }
 
+    pub fn get_by_instance(&self, instance_id: &str) -> Option<RunningProcess> {
+        self.by_runtime
+            .read()
+            .values()
+            .find(|p| p.instance_id == instance_id)
+            .cloned()
+    }
+
     pub fn runtime_id_for_pid(&self, pid: i32) -> Option<String> {
         self.by_pid.read().get(&pid).cloned()
     }
