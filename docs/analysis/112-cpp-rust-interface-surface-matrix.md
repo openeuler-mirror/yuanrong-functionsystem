@@ -1,0 +1,156 @@
+# C++/Rust Interface Surface Matrix
+
+Date: 2026-04-27
+Branch: `rust-rewrite`
+Audit input:
+
+- C++ control source: `/workspace/clean_0_8/src/yuanrong-functionsystem`
+- Rust source: `/home/lzc/workspace/code/yr_rust/yuanrong-functionsystem`
+- Rust proof package: `/workspace/proof_source_replace_0_8/src/yuanrong-functionsystem/output/yr-functionsystem-v0.0.0.tar.gz`
+
+## Summary
+
+Rust is compatible with the source-replacement ST handoff surface, but not yet proven byte-for-byte or surface-complete against every C++ 0.8 contract. The most important non-ST risks are protobuf schema drift and broad CLI flag/config parity.
+
+## Artifact and installed layout
+
+| Surface | C++ control | Rust replacement | Status | Evidence |
+| --- | --- | --- | --- | --- |
+| Functionsystem tar name | `yr-functionsystem-v0.0.0.tar.gz` | same | Equivalent / ST verified | `docs/analysis/109-release-artifact-audit.md` |
+| Functionsystem wheel name | `openyuanrong_functionsystem-0.0.0-py3-none-manylinux_2_34_x86_64.whl` | same | Equivalent / ST verified | `docs/analysis/109-release-artifact-audit.md` |
+| Aggregate openYuanrong tar consumption | upper layer consumes same tar name | same | ST verified | `docs/analysis/110-source-replacement-final-111-proof.md` |
+| Core binary names | `domain_scheduler`, `function_agent`, `function_master`, `function_proxy`, `iam_server`, `meta_service`, `runtime_manager`, `yr` | all present | Equivalent | package list audit |
+| Extra Rust binary | none | `meta_store` | Needs release decision | Rust embeds a metastore server binary; no ST failure observed |
+| C++ libs missing in Rust package | `libcrypto.so.3`, `libssl.so.3`, `libyaml_tool.so`, `cmake/opentelemetry-cpp` | absent | Needs release decision | no ST failure, but packaging consumers may inspect these files |
+| Extra Rust libs | none | grpc/protobuf/datasystem/xml/pcre/iconv libs plus `libdatasystem_worker.so` | Needs release decision | harmless for ST, may affect minimality/security/license audit |
+
+Package list comparison captured on 2026-04-27:
+
+```text
+C++ entries:       160
+Rust entries:      183
+C++ minus Rust:    4
+Rust minus C++:    27
+```
+
+## Binary map
+
+| Component | C++ source role | Rust source role | Status |
+| --- | --- | --- | --- |
+| `function_proxy` | local scheduler, bus proxy, POSIX stream, runtime route, instance control | `functionsystem/src/function_proxy` | ST verified for create/init/invoke/result/kill/recover/order/collective-forward paths |
+| `runtime_manager` | runtime process start/stop, ports, env, logs, DS env | `functionsystem/src/runtime_manager` | ST verified for Python/C++ runtime launch paths used by cpp ST; needs broader config parity audit |
+| `function_agent` | code package deployer and runtime manager bridge | `functionsystem/src/function_agent` | ST verified through source-replacement lane; needs plugin/deployer breadth audit |
+| `function_master` | global scheduling, instance manager HTTP, named instance query | `functionsystem/src/function_master` | ST verified for named instance and scheduling basics; needs HTTP API parity audit |
+| `domain_scheduler` | domain scheduler service and resource topology | `functionsystem/src/domain_scheduler` | lightly ST verified; needs scale/failure-mode audit |
+| `iam_server` | IAM token/credential HTTP service | `functionsystem/src/iam_server` | mostly unit verified; current cpp ST does not strongly cover IAM |
+| `meta_service` / `meta_store` | C++ package has `meta_service`; Rust package has compatibility `meta_service` and extra `meta_store` | `functionsystem/src/meta_store` | Needs release decision for extra binary and operational mode support |
+| `yr` CLI | functionsystem CLI/app surface | Rust pack emits `yr` | Needs CLI parity audit beyond ST |
+
+## Protobuf and gRPC wire surface
+
+Direct proto comparison found several files identical, several whitespace-only changes, and several field/message removals in Rust.
+
+Identical files:
+
+```text
+proto/posix/bus_adapter.proto
+proto/posix/bus_service.proto
+proto/posix/exec_service.proto
+proto/posix/log_service.proto
+proto/posix/message.proto
+proto/posix/resource.proto
+proto/posix/runtime_launcher_interface.proto
+```
+
+Rust-only internal protos:
+
+```text
+proto/inner/metastore.proto
+proto/inner/scheduler.proto
+```
+
+C++-only internal protos:
+
+```text
+proto/inner/core_service.proto
+proto/inner/runtime_service.proto
+```
+
+Observed wire-schema deltas:
+
+| Proto | C++ field/message | Rust status | Risk |
+| --- | --- | --- | --- |
+| `posix/common.proto` | `BindStrategy` enum | removed | Medium: group bind policy callers could fail at source/API layer |
+| `posix/common.proto` | `EventPayload` message | removed | Medium: stream event paths not covered by ST |
+| `posix/core_service.proto` | `BindOptions` message | removed | Medium: resource bind policy not represented in Rust generated API |
+| `posix/core_service.proto` | `GroupOptions.bind = 6` | removed | Medium: unknown field may be dropped if Rust decodes/re-encodes group options |
+| `posix/core_service.proto` | `EventRequest` message | removed | Medium: event request path absent |
+| `posix/runtime_rpc.proto` | `StreamingMessage.eventReq = 38` | removed | Medium: runtime stream event data not handled by Rust |
+| `posix/runtime_service.proto` | `SignalResponse.payload = 3` | removed | Medium: custom signal response payload may be dropped |
+
+Current classification: `Needs test` / possible `Needs implementation` depending on whether upstream 0.8 callers use these paths. The green 111 ST does not exercise them.
+
+## Runtime stream message handling
+
+| Message variant | C++ evidence | Rust evidence | Status |
+| --- | --- | --- | --- |
+| `CreateReq` | local scheduler / instance control creates instance and sends init call | `invocation_handler.rs::handle_create_req` | ST + unit verified |
+| `CreateReqs` group create | C++ group scheduling and local group control | `invocation_handler.rs::handle_create_reqs` | ST verified for 7/8 collective under `-G`; duplicate invalid-group is control-failing |
+| `InvokeReq` -> `CallReq` | C++ `InvokeRequestToCallRequest` copies function/args/request/trace/sender | Rust `invoke_to_call` copies function/args/request/trace/sender/returns | ST + unit verified |
+| `CallResultReq` | C++ routes initcall specially, normal results to instance proxy | Rust `on_runtime_call_result` handles init result, normal routing, ack | ST + unit verified |
+| `NotifyReq`/`NotifyRsp` | C++ translates notify/call-result ack paths | Rust ack/routing tables in `BusProxyCoordinator` | ST verified |
+| `KillReq` | C++ signal route, local/remote forward, shutdown semantics | Rust local kill, group kill, forward user signal | ST + unit verified for common signals |
+| `ExitReq` | C++ converts exit into kill/cleanup side effects | Rust `handle_exit_req` and `apply_exit_event` | ST + unit verified |
+| `SaveReq`/`LoadReq` | C++ state handler / DS-backed state path | Rust in-memory snapshot map by checkpoint id | ST partially verified; persistence semantics need broader state tests |
+| `RecoverReq`/`RecoverRsp` | C++ control plane recover through posix client | Rust `forward_recover`, runtime reconnect recover | ST + unit verified for covered recovery paths |
+| `eventReq` | C++ proto exposes stream event data | Rust proto lacks variant | Needs test / likely implementation if upstream uses stream events |
+
+## Etcd/metastore key surface
+
+Rust has a dedicated compatibility module:
+
+```text
+functionsystem/src/common/utils/src/etcd_keys.rs
+```
+
+It maps key constants from C++ files such as `metastore_keys.h`, `meta_store_kv_operation.h`, and explorer/election constants.
+
+| Key family | C++ source | Rust source | Status |
+| --- | --- | --- | --- |
+| scheduler topology | `SCHEDULER_TOPOLOGY = /scheduler/topology` | same constant | Unit verified |
+| group schedule | `/yr/group` | same constant | Unit verified / ST exercised by collective |
+| ready agent count | `/yr/readyAgentCount` | same constant | Unit verified |
+| instance info | `/sn/instance/business/yrk/tenant/...` | `gen_instance_key` | Unit verified |
+| route info | `/yr/route/business/yrk/{instance}` | `gen_instance_route_key` | Unit verified |
+| bus proxy node | `/yr/busproxy/business/yrk/tenant/{tenant}/node/{node}` | `gen_busproxy_node_key` | Unit verified |
+| function meta | `/yr/functions/business/yrk/tenant/...` | `gen_func_meta_key` | Unit verified |
+| IAM token / AKSK | `/yr/iam/token`, `/yr/iam/aksk` | same constants/generators | Unit verified |
+| metastore table prefix | C++ concatenates prefix + logical key | Rust `with_prefix` does concatenation | Unit verified |
+
+## CLI/config surface
+
+C++ exposes a broad flag surface through `AddFlag(...)` in each component. Rust uses `clap` with both underscore and hyphen aliases for many operational flags.
+
+Current audit finding:
+
+- Rust clearly covers the ST-required launch flags and many compatibility aliases.
+- Rust has more aliases than C++ in several components because it accepts both C++ underscore spelling and CLI-friendly hyphen spelling.
+- A complete release gate should run each packaged binary with `--help` and compare accepted flags against the C++ binary, because source regex alone is not reliable enough.
+
+High-priority CLI areas needing explicit compatibility tests:
+
+```text
+function_proxy: memory limit/rate-limit flags, tenant isolation, traefik, DS auth/encryption, state storage
+runtime_manager: disk/log/oom/runtime env/runtime direct-connection options
+function_agent: S3, package deployer limits, plugin config options
+function_master: migration/upgrade/frontend-pool/health-monitor options
+iam_server: credential provider and token TTL options
+```
+
+## Current interface conclusion
+
+Rust satisfies the proven ST replacement interface, but the audit identifies non-ST deltas that should be handled before calling the project a broad production black-box replacement:
+
+1. Proto schema drift needs either restoration or explicit compatibility tests proving the removed paths are unused.
+2. CLI flag parity needs binary-level `--help` comparison, not just source inspection.
+3. Package extra/missing libraries need a release decision: acceptable superset vs minimal byte-for-byte layout.
