@@ -70,6 +70,13 @@ struct PendingInitInfo {
     create_request_id: String,
 }
 
+/// User-defined signal request waiting for the target runtime's SignalRsp.
+#[derive(Clone, Debug)]
+struct PendingSignalInfo {
+    caller_stream_id: String,
+    reply_message_id: String,
+}
+
 /// Per-instance serialization lock: ensures only one CallReq is in-flight at a time,
 /// replicating C++ LiteBus actor mailbox semantics where each actor processes messages
 /// strictly one at a time.
@@ -134,6 +141,8 @@ pub struct BusProxyCoordinator {
     request_to_instance: dashmap::DashMap<String, String>,
     /// CallRsp routing table keyed by outer StreamingMessage.message_id.
     call_ack_to_caller: dashmap::DashMap<String, String>,
+    /// SignalRsp routing table keyed by proxy-generated SignalReq.message_id.
+    pending_signals: dashmap::DashMap<String, PendingSignalInfo>,
     /// Lightweight in-proxy checkpoint store for actor save/load/recover flows.
     state_snapshots: dashmap::DashMap<String, Vec<u8>>,
     /// Launch metadata for currently owned instances. Unlike pending_creates,
@@ -189,6 +198,7 @@ impl BusProxyCoordinator {
             notify_ack_to_runtime: dashmap::DashMap::new(),
             request_to_instance: dashmap::DashMap::new(),
             call_ack_to_caller: dashmap::DashMap::new(),
+            pending_signals: dashmap::DashMap::new(),
             state_snapshots: dashmap::DashMap::new(),
             active_instances: dashmap::DashMap::new(),
             pending_recovers: dashmap::DashMap::new(),
@@ -1697,18 +1707,36 @@ impl BusProxyCoordinator {
         &self,
         target_id: &str,
         caller_id: &str,
+        reply_message_id: &str,
         kill: &yr_proto::core_service::KillRequest,
-    ) -> (i32, String) {
+    ) -> Result<Option<yr_proto::core_service::KillResponse>, (i32, String)> {
         if let Some(tx) = self.runtime_tx.get(target_id) {
+            let signal_message_id = uuid::Uuid::new_v4().to_string();
+            self.pending_signals.insert(
+                signal_message_id.clone(),
+                PendingSignalInfo {
+                    caller_stream_id: caller_id.to_string(),
+                    reply_message_id: reply_message_id.to_string(),
+                },
+            );
             let fwd = yr_proto::runtime_rpc::StreamingMessage {
-                message_id: uuid::Uuid::new_v4().to_string(),
+                message_id: signal_message_id.clone(),
                 meta_data: Default::default(),
-                body: Some(yr_proto::runtime_rpc::streaming_message::Body::KillReq(
-                    kill.clone(),
+                body: Some(yr_proto::runtime_rpc::streaming_message::Body::SignalReq(
+                    yr_proto::runtime_service::SignalRequest {
+                        signal: kill.signal,
+                        payload: kill.payload.clone(),
+                    },
                 )),
             };
-            let _ = tx.send(Ok(fwd)).await;
-            (yr_proto::common::ErrorCode::ErrNone as i32, String::new())
+            if tx.send(Ok(fwd)).await.is_err() {
+                self.pending_signals.remove(&signal_message_id);
+                return Err((
+                    yr_proto::common::ErrorCode::ErrRequestBetweenRuntimeBus as i32,
+                    "target runtime stream closed while sending signal".into(),
+                ));
+            }
+            Ok(None)
         } else if !self.should_dispatch_locally(target_id) {
             let req = ForwardKillRequest {
                 request_id: uuid::Uuid::new_v4().to_string(),
@@ -1718,13 +1746,17 @@ impl BusProxyCoordinator {
                 ..Default::default()
             };
             match self.forward_kill(req).await {
-                Ok(r) => (r.code, r.message),
+                Ok(r) => Ok(Some(yr_proto::core_service::KillResponse {
+                    code: r.code,
+                    message: r.message,
+                    payload: Vec::new(),
+                })),
                 Err(e) => {
                     warn!(target = %target_id, error = %e, "forward_user_signal: peer forward failed");
-                    (
+                    Err((
                         yr_proto::common::ErrorCode::ErrInnerSystemError as i32,
                         e.message().to_string(),
-                    )
+                    ))
                 }
             }
         } else {
@@ -1734,10 +1766,89 @@ impl BusProxyCoordinator {
                 signal = kill.signal,
                 "forward_user_signal: no stream for local target"
             );
-            (
+            Err((
                 yr_proto::common::ErrorCode::ErrInstanceNotFound as i32,
                 format!("no runtime stream for instance {target_id}"),
-            )
+            ))
+        }
+    }
+
+    pub async fn forward_signal_response(
+        &self,
+        instance_id: &str,
+        signal_message_id: &str,
+        rsp: &yr_proto::runtime_service::SignalResponse,
+    ) {
+        let Some((_, pending)) = self.pending_signals.remove(signal_message_id) else {
+            debug!(
+                %instance_id,
+                %signal_message_id,
+                "SignalRsp: no pending signal mapping, dropping"
+            );
+            return;
+        };
+
+        let kill_rsp = yr_proto::core_service::KillResponse {
+            code: rsp.code,
+            message: rsp.message.clone(),
+            payload: rsp.payload.clone(),
+        };
+        let forwarded = StreamingMessage {
+            message_id: pending.reply_message_id.clone(),
+            meta_data: Default::default(),
+            body: Some(streaming_message::Body::KillRsp(kill_rsp)),
+        };
+
+        if let Some(tx) = self.runtime_tx.get(&pending.caller_stream_id) {
+            if tx.send(Ok(forwarded)).await.is_err() {
+                warn!(
+                    %instance_id,
+                    caller = %pending.caller_stream_id,
+                    %signal_message_id,
+                    "SignalRsp: caller stream closed"
+                );
+            }
+        } else {
+            warn!(
+                %instance_id,
+                caller = %pending.caller_stream_id,
+                %signal_message_id,
+                "SignalRsp: caller stream missing"
+            );
+        }
+    }
+
+    pub async fn forward_event_request(
+        &self,
+        source_id: &str,
+        message_id: &str,
+        event: &yr_proto::core_service::EventRequest,
+    ) {
+        if event.instance_id.trim().is_empty() {
+            warn!(%source_id, %message_id, "EventReq: empty target instance id");
+            return;
+        }
+        let Some(tx) = self.runtime_tx.get(&event.instance_id) else {
+            warn!(
+                %source_id,
+                %message_id,
+                target = %event.instance_id,
+                "EventReq: target runtime stream missing"
+            );
+            return;
+        };
+        let forwarded = StreamingMessage {
+            message_id: message_id.to_string(),
+            meta_data: Default::default(),
+            body: Some(streaming_message::Body::EventReq(event.clone())),
+        };
+        if tx.send(Ok(forwarded)).await.is_err() {
+            warn!(
+                %source_id,
+                %message_id,
+                target = %event.instance_id,
+                "EventReq: target runtime stream closed"
+            );
         }
     }
 

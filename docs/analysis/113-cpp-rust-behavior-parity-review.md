@@ -132,16 +132,16 @@ C++ behavior:
 Rust behavior:
 
 - Rust handles local kill, group kill, notify/subscription ack, checkpoint/suspend/resume ack, user signal forwarding, and exit side effects.
-- Rust proto currently lacks `SignalResponse.payload`.
+- Rust forwards local user-defined signals as runtime `SignalReq`, waits for `SignalRsp`, and returns `KillRsp` with `SignalResponse.payload` preserved.
 
 Evidence:
 
 - ST covers graceful shutdown and kill/terminate paths that are in the 111 green set.
-- Unit tests cover local/explicit kill and exit normal/error behavior.
+- Unit tests cover local/explicit kill, exit normal/error behavior, and payload-carrying custom signal bridging.
 
-Status: `ST verified` for covered signals; `Needs test` for payload-carrying custom signals.
+Status: `ST verified` for covered signals; custom signal payload bridge is `Unit verified`.
 
-Risk: if an upstream caller depends on `SignalResponse.payload`, Rust-generated code cannot currently express it and may drop it.
+Residual risk: cross-proxy user signal forwarding still uses the existing synchronous inner `ForwardKill` RPC, whose response schema has no payload field. This preserves the pre-existing cross-proxy code/message behavior but cannot carry a signal payload until the inner RPC contract is widened.
 
 ## Save/load state
 
@@ -192,21 +192,23 @@ C++ behavior:
 Rust behavior:
 
 - Rust protos now restore those C++ 0.8 wire fields/messages and include round-trip tests for `GroupOptions.bind`, `SignalResponse.payload`, and `StreamingMessage.eventReq`.
+- Rust proxy now implements the first behavior layer for those restored fields: custom signal payload bridge, `eventReq` forwarding by target instance id, and `GroupOptions.bind` propagation into scheduling extensions.
 
 Evidence:
 
 - Direct diff between `/workspace/clean_0_8/src/yuanrong-functionsystem/proto` and Rust `proto` after restoration.
 - `functionsystem/src/common/utils/tests/proto_builder_tests.rs` has the compatibility round-trip tests.
+- `functionsystem/src/function_proxy/tests/invocation_handler_test.rs` has behavior tests for signal payload, event forwarding, and group bind metadata mapping.
 
-Status: schema compatibility is `Unit verified`; behavior handling remains `Needs test` for group bind/NUMA propagation, custom signal payload forwarding, and event stream handling.
+Status: schema compatibility is `Unit verified`; first proxy behavior layer is `Unit verified`.
 
-Risk: schema restoration prevents Rust generated code from making these fields impossible to express, but it does not by itself prove the Rust services implement every C++ behavior path using the fields.
+Risk: group bind first-hop metadata is not the same as full NUMA filter/scorer placement parity, and proxy `eventReq` forwarding is not the same as an end-to-end upper-layer runtime/fsclient direct event proof.
 
 ## Behavior conclusion
 
 The Rust implementation is strong for the behavior paths exercised by the official ST and by focused Rust regression tests. The remaining black-box uncertainty is concentrated in contracts that ST does not exercise:
 
-1. Behavior use of restored proto fields/messages: group bind/NUMA, signal payload, and event stream.
+1. Broader integration semantics beyond the restored proto first-hop behavior: full NUMA placement and runtime/fsclient direct event path.
 2. Full CLI/config flag parity.
 3. DS-backed state persistence beyond in-memory snapshot handling.
 4. IAM, plugin/deployer, traefik, tenant-isolation, and advanced resource/bind policy paths.

@@ -37,6 +37,24 @@ struct MetaDataLite {
 }
 
 impl InvocationHandler {
+    pub fn apply_group_bind_options(create: &mut cs::CreateRequest, group: Option<&cs::GroupOptions>) {
+        let Some(bind) = group.and_then(|g| g.bind.as_ref()) else {
+            return;
+        };
+        let scheduling = create.scheduling_ops.get_or_insert_with(Default::default);
+        scheduling
+            .extension
+            .insert("bind_resource".into(), bind.resource.clone());
+        let strategy = match bind.policy {
+            x if x == yr_proto::common::BindStrategy::BindPack as i32 => "BIND_Pack",
+            x if x == yr_proto::common::BindStrategy::BindSpread as i32 => "BIND_Spread",
+            _ => "BIND_None",
+        };
+        scheduling
+            .extension
+            .insert("bind_strategy".into(), strategy.into());
+    }
+
     fn accepted_call_rsp(message_id: &str) -> StreamingMessage {
         StreamingMessage {
             message_id: message_id.to_string(),
@@ -406,10 +424,14 @@ impl InvocationHandler {
                     signal = s,
                     "KillReq: user signal, forwarding to target"
                 );
-                let (code, message) = bus
-                    .forward_user_signal(&target_id, caller_instance_id, kill)
-                    .await;
-                (code, message, Vec::new())
+                match bus
+                    .forward_user_signal(&target_id, caller_instance_id, msg_id, kill)
+                    .await
+                {
+                    Ok(None) => return InboundAction::None,
+                    Ok(Some(rsp)) => (rsp.code, rsp.message, rsp.payload),
+                    Err((code, message)) => (code, message, Vec::new()),
+                }
             }
             _ => {
                 warn!(
@@ -516,6 +538,7 @@ impl InvocationHandler {
                 }
 
                 let mut create = create.clone();
+                Self::apply_group_bind_options(&mut create, creates.group_opt.as_ref());
                 if range_count > 1 {
                     let suffix = format!("-{}", idx);
                     if create.designated_instance_id.is_empty() {
@@ -915,6 +938,14 @@ impl InvocationHandler {
                     message = %rsp.message,
                     "ShutdownRsp received from runtime"
                 );
+                InboundAction::None
+            }
+            Some(streaming_message::Body::SignalRsp(rsp)) => {
+                bus.forward_signal_response(instance_id, &mid, &rsp).await;
+                InboundAction::None
+            }
+            Some(streaming_message::Body::EventReq(event)) => {
+                bus.forward_event_request(instance_id, &mid, &event).await;
                 InboundAction::None
             }
             Some(other) => {

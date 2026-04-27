@@ -80,13 +80,13 @@ Observed wire-schema deltas after proto restoration:
 
 | Proto | Former gap | Rust status after 2026-04-27 hardening | Remaining risk |
 | --- | --- | --- | --- |
-| `posix/common.proto` | `BindStrategy` enum | restored and round-trip tested | behavior propagation through Rust group scheduling still needs a focused bind/NUMA test |
+| `posix/common.proto` | `BindStrategy` enum | restored and round-trip tested | first-hop group scheduling extension mapping is unit-verified; full NUMA placement still needs a focused test if required |
 | `posix/common.proto` | `EventPayload` message | restored | event behavior still needs a focused runtime/fsclient path test |
-| `posix/core_service.proto` | `BindOptions` message | restored and round-trip tested | behavior propagation through scheduling extension still needs a focused test |
+| `posix/core_service.proto` | `BindOptions` message | restored and round-trip tested | first-hop scheduling extension mapping is unit-verified; full NUMA placement still open |
 | `posix/core_service.proto` | `GroupOptions.bind = 6` | restored and round-trip tested | same as above |
-| `posix/core_service.proto` | `EventRequest` message | restored and round-trip tested via `StreamingMessage.eventReq` | handler behavior still needs a focused event stream test |
-| `posix/runtime_rpc.proto` | `StreamingMessage.eventReq = 38` | restored and round-trip tested | runtime event handling remains non-ST-covered |
-| `posix/runtime_service.proto` | `SignalResponse.payload = 3` | restored and round-trip tested | signal payload forwarding remains non-ST-covered |
+| `posix/core_service.proto` | `EventRequest` message | restored and round-trip tested via `StreamingMessage.eventReq` | proxy forwarding is unit-verified; end-to-end runtime/fsclient direct event path remains non-ST-covered |
+| `posix/runtime_rpc.proto` | `StreamingMessage.eventReq = 38` | restored and round-trip tested | proxy forwarding is unit-verified; runtime direct event handling remains non-ST-covered |
+| `posix/runtime_service.proto` | `SignalResponse.payload = 3` | restored and round-trip tested | local proxy `SignalRsp.payload` -> `KillRsp.payload` bridge is unit-verified |
 
 Direct proto comparison now shows `posix/core_service.proto` is byte-identical to the C++ control. The remaining diffs in `common.proto`, `runtime_rpc.proto`, and `runtime_service.proto` are newline/formatting only for the restored fields, while `affinity.proto` and `inner_service.proto` retain pre-existing whitespace-only diffs. Internal proto layout still differs intentionally (`inner/metastore.proto` and `inner/scheduler.proto` are Rust-only; `inner/core_service.proto`, `inner/runtime_service.proto`, and `posix/agent_plugin.proto` remain C++-only).
 
@@ -103,7 +103,7 @@ Direct proto comparison now shows `posix/core_service.proto` is byte-identical t
 | `ExitReq` | C++ converts exit into kill/cleanup side effects | Rust `handle_exit_req` and `apply_exit_event` | ST + unit verified |
 | `SaveReq`/`LoadReq` | C++ state handler / DS-backed state path | Rust in-memory snapshot map by checkpoint id | ST partially verified; persistence semantics need broader state tests |
 | `RecoverReq`/`RecoverRsp` | C++ control plane recover through posix client | Rust `forward_recover`, runtime reconnect recover | ST + unit verified for covered recovery paths |
-| `eventReq` | C++ proto exposes stream event data | Rust proto now exposes variant | Schema restored; handler behavior still needs focused event stream test |
+| `eventReq` | C++ proto exposes stream event data and upper-layer runtime uses direct event writes | Rust proto exposes variant and proxy forwards it to `EventRequest.instanceID` if seen | Schema + proxy behavior unit-verified; runtime direct event path still needs end-to-end coverage if required |
 
 ## Etcd/metastore key surface
 
@@ -151,6 +151,6 @@ iam_server: credential provider and token TTL options
 
 Rust satisfies the proven ST replacement interface, but the audit identifies non-ST deltas that should be handled before calling the project a broad production black-box replacement:
 
-1. Proto schema drift needs either restoration or explicit compatibility tests proving the removed paths are unused.
+1. Restored proto fields now have schema tests and first-hop proxy behavior tests, but full NUMA placement and runtime direct event integration remain broader non-ST risks.
 2. CLI flag parity needs binary-level `--help` comparison, not just source inspection.
 3. Package extra/missing libraries need a release decision: acceptable superset vs minimal byte-for-byte layout.

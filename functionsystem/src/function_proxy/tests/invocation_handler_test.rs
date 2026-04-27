@@ -4,14 +4,15 @@ mod common;
 
 use common::new_bus;
 use prost::Message;
-use yr_proto::common::{Arg, ErrorCode};
+use tokio::sync::mpsc;
+use yr_proto::common::{Arg, BindStrategy, ErrorCode};
 use yr_proto::core_service::{
-    CreateRequest, CreateRequests, CreateResourceGroupRequest, ExitRequest, InvokeRequest,
-    KillRequest,
+    BindOptions, CreateRequest, CreateRequests, CreateResourceGroupRequest, EventRequest,
+    ExitRequest, GroupOptions, InvokeRequest, KillRequest,
 };
 use yr_proto::resources::MetaData;
 use yr_proto::runtime_rpc::{streaming_message, StreamingMessage};
-use yr_proto::runtime_service::{HeartbeatRequest, NotifyRequest};
+use yr_proto::runtime_service::{HeartbeatRequest, NotifyRequest, SignalResponse};
 use yr_proxy::busproxy::invocation_handler::{InboundAction, InvocationHandler};
 use yr_proxy::state_machine::{InstanceMetadata, InstanceState};
 
@@ -265,6 +266,49 @@ async fn group_create_first_schedule_failure_marks_batch_failed() {
     };
     assert_eq!(rsps.code, ErrorCode::ErrInnerSystemError as i32);
     assert!(!rsps.message.is_empty());
+}
+
+#[test]
+fn group_bind_options_are_mapped_to_scheduling_extension() {
+    let mut create = CreateRequest {
+        function: "f".into(),
+        request_id: "r".into(),
+        ..Default::default()
+    };
+    let group = GroupOptions {
+        bind: Some(BindOptions {
+            resource: "NUMA".into(),
+            policy: BindStrategy::BindPack as i32,
+        }),
+        ..Default::default()
+    };
+
+    InvocationHandler::apply_group_bind_options(&mut create, Some(&group));
+
+    let ext = &create
+        .scheduling_ops
+        .as_ref()
+        .expect("scheduling ops created")
+        .extension;
+    assert_eq!(ext.get("bind_resource").map(String::as_str), Some("NUMA"));
+    assert_eq!(ext.get("bind_strategy").map(String::as_str), Some("BIND_Pack"));
+}
+
+#[test]
+fn group_bind_unknown_policy_defaults_to_cpp_bind_none_string() {
+    let mut create = CreateRequest::default();
+    let group = GroupOptions {
+        bind: Some(BindOptions {
+            resource: "NUMA".into(),
+            policy: 999,
+        }),
+        ..Default::default()
+    };
+
+    InvocationHandler::apply_group_bind_options(&mut create, Some(&group));
+
+    let ext = &create.scheduling_ops.as_ref().unwrap().extension;
+    assert_eq!(ext.get("bind_strategy").map(String::as_str), Some("BIND_None"));
 }
 
 #[tokio::test]
@@ -553,6 +597,93 @@ async fn kill_req_local_explicit_target() {
         panic!("KillRsp");
     };
     assert_eq!(k.code, ErrorCode::ErrNone as i32);
+}
+
+#[tokio::test]
+async fn user_signal_forwards_signal_req_and_returns_signal_payload() {
+    let bus = new_bus("node-a", 29012);
+    let caller = "driver-signal";
+    let target = "target-signal";
+    let (caller_tx, mut caller_rx) = mpsc::channel(4);
+    let (target_tx, mut target_rx) = mpsc::channel(4);
+    bus.attach_runtime_stream(caller, caller_tx);
+    bus.attach_runtime_stream(target, target_tx);
+
+    let msg = StreamingMessage {
+        message_id: "kill-msg".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::KillReq(KillRequest {
+            instance_id: target.into(),
+            signal: 99,
+            payload: b"signal-in".to_vec(),
+            ..Default::default()
+        })),
+    };
+
+    let act = InvocationHandler::handle_runtime_inbound(caller, msg, &bus).await;
+    assert!(matches!(act, InboundAction::None));
+
+    let forwarded = target_rx.recv().await.expect("target signal request").unwrap();
+    let signal_msg_id = forwarded.message_id.clone();
+    let streaming_message::Body::SignalReq(req) = forwarded.body.expect("SignalReq") else {
+        panic!("user signals must be forwarded as runtime SignalReq, not KillReq");
+    };
+    assert_eq!(req.signal, 99);
+    assert_eq!(req.payload, b"signal-in");
+
+    let rsp = StreamingMessage {
+        message_id: signal_msg_id,
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::SignalRsp(SignalResponse {
+            code: ErrorCode::ErrNone as i32,
+            message: "ok".into(),
+            payload: b"signal-out".to_vec(),
+        })),
+    };
+    let act = InvocationHandler::handle_runtime_inbound(target, rsp, &bus).await;
+    assert!(matches!(act, InboundAction::None));
+
+    let reply = caller_rx.recv().await.expect("caller kill response").unwrap();
+    assert_eq!(reply.message_id, "kill-msg");
+    let streaming_message::Body::KillRsp(kill_rsp) = reply.body.expect("KillRsp") else {
+        panic!("SignalRsp must be bridged back to KillRsp");
+    };
+    assert_eq!(kill_rsp.code, ErrorCode::ErrNone as i32);
+    assert_eq!(kill_rsp.message, "ok");
+    assert_eq!(kill_rsp.payload, b"signal-out");
+}
+
+#[tokio::test]
+async fn event_req_forwards_to_target_runtime_stream() {
+    let bus = new_bus("node-a", 29013);
+    let (target_tx, mut target_rx) = mpsc::channel(4);
+    bus.attach_runtime_stream("event-target", target_tx);
+
+    let msg = StreamingMessage {
+        message_id: "event-mid".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::EventReq(EventRequest {
+            request_id: "event-req".into(),
+            message: "payload".into(),
+            instance_id: "event-target".into(),
+        })),
+    };
+
+    let act = InvocationHandler::handle_runtime_inbound("event-source", msg, &bus).await;
+    assert!(matches!(act, InboundAction::None));
+
+    let forwarded = tokio::time::timeout(std::time::Duration::from_secs(1), target_rx.recv())
+        .await
+        .expect("event should be forwarded without hanging")
+        .expect("forwarded event")
+        .unwrap();
+    assert_eq!(forwarded.message_id, "event-mid");
+    let streaming_message::Body::EventReq(event) = forwarded.body.expect("EventReq") else {
+        panic!("expected EventReq forwarded to target runtime");
+    };
+    assert_eq!(event.request_id, "event-req");
+    assert_eq!(event.message, "payload");
+    assert_eq!(event.instance_id, "event-target");
 }
 
 #[tokio::test]
