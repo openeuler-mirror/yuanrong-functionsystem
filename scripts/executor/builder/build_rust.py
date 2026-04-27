@@ -28,6 +28,7 @@ def build_rust_binaries(root_dir, job_num):
     os.makedirs(output_bin, exist_ok=True)
     os.makedirs(output_lib, exist_ok=True)
     os.makedirs(os.path.join(output_lib, "cmake"), exist_ok=True)
+    os.makedirs(os.path.join(output_lib, "cmake", "opentelemetry-cpp"), exist_ok=True)
     os.makedirs(os.path.join(output_lib, "pkgconfig"), exist_ok=True)
 
     log.info(f"Building Rust workspace with cargo build --workspace --release -j {job_num}")

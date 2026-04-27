@@ -155,7 +155,7 @@ Comparison result:
 ```text
 clean C++ entries: 160
 Rust entries:      183
-C++ minus Rust:    4
+C++ minus Rust:    1
 Rust minus C++:    27
 ```
 
@@ -203,8 +203,8 @@ functionsystem/sym/meta_store.sym
 Interpretation:
 
 1. The extra Rust-side libraries did not block the filtered 104 ST source-replacement proof.
-2. Missing `libcrypto.so.3` and `libssl.so.3` are worth a dependency audit before release hardening, even though current ST passed.
-3. Missing `libyaml_tool.so` and `opentelemetry-cpp` cmake metadata should be checked against downstream runtime/build consumers before declaring byte-for-byte delivery parity.
+2. `libcrypto.so.3` and `libssl.so.3` are now present in the R4 package audit.
+3. `opentelemetry-cpp` CMake metadata directory is now restored; `libyaml_tool.so` remains a release-policy boundary because Rust parses service YAML via `serde_yaml` rather than the C++ dlopen helper.
 
 The comparison artifacts are stored in:
 
@@ -216,7 +216,7 @@ The comparison artifacts are stored in:
 
 ## Remaining audit items
 
-1. Decide whether `libcrypto.so.3`, `libssl.so.3`, `libyaml_tool.so`, and `opentelemetry-cpp` metadata must be restored in the Rust package for release parity.
+1. Decide whether the C++-only `libyaml_tool.so` helper must be restored for byte-for-byte/minimal release parity; current black-box Rust path does not use it.
 2. Decide later whether version strings should become strict release criteria. Do not make this a blocker before full ST closure.
 3. If release parity becomes strict, decide whether the aggregate openYuanrong package needs separate non-Gloo and
    Gloo-profile hashes.

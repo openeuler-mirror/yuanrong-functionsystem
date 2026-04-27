@@ -9,6 +9,11 @@ import utils
 
 log = utils.stream_logger()
 
+PACKAGE_TOOL_EXCLUDES = {
+    "compare_binary_flags.py",
+    "probe_deployment_flags.py",
+}
+
 
 def run_pack(root_dir, cmd_args):
     args = {
@@ -66,7 +71,13 @@ def pack_functionsystem(args):
     log.info("Copy function system ops tools products")
     lib_src_path = os.path.join(root_dir, "tools", "ops")
     lib_dst_path = os.path.join(pack_base_dir, "tools")
-    shutil.copytree(lib_src_path, lib_dst_path, copy_function=shutil.copy2, symlinks=True)
+    shutil.copytree(
+        lib_src_path,
+        lib_dst_path,
+        copy_function=shutil.copy2,
+        ignore=shutil.ignore_patterns(*PACKAGE_TOOL_EXCLUDES),
+        symlinks=True,
+    )
 
     # CPP程序去符号
     if args["strip_symbols"] is True:

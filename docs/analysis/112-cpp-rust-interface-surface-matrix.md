@@ -21,7 +21,7 @@ Rust is compatible with the source-replacement ST handoff surface, but not yet p
 | Aggregate openYuanrong tar consumption | upper layer consumes same tar name | same | ST verified | `docs/analysis/110-source-replacement-final-111-proof.md` |
 | Core binary names | `domain_scheduler`, `function_agent`, `function_master`, `function_proxy`, `iam_server`, `meta_service`, `runtime_manager`, `yr` | all present | Equivalent | package list audit |
 | Extra Rust binary | none | `meta_store` | Needs release decision | Rust embeds a metastore server binary; no ST failure observed |
-| C++ libs missing in Rust package | `libcrypto.so.3`, `libssl.so.3`, `libyaml_tool.so`, `cmake/opentelemetry-cpp` | absent | Needs release decision | no ST failure, but packaging consumers may inspect these files |
+| C++ libs missing in Rust package | only `libyaml_tool.so` remains after R4 layout closure | absent by policy | Release-policy boundary | Rust parses service YAML with `serde_yaml`; do not add copied C++ helper unless byte-for-byte/minimal package parity is required |
 | Extra Rust libs | none | grpc/protobuf/datasystem/xml/pcre/iconv libs plus `libdatasystem_worker.so` | Needs release decision | harmless for ST, may affect minimality/security/license audit |
 
 Package list comparison captured on 2026-04-27:
