@@ -131,6 +131,16 @@ Rust does not use this C++ dlopen path. Rust `function_proxy/src/instance_ctrl.r
 
 Therefore this change does **not** add a copied C++ `libyaml_tool.so` binary into the Rust package. Doing so would be a C++ compatibility shim inside the Rust rewrite package, and should only be done if release owners explicitly require byte-for-byte/minimal C++ helper retention rather than black-box behavior compatibility.
 
+## ST regression proof
+
+R4 layout tightening was followed by a fresh source-replacement ST run:
+
+```text
+Deploy: /tmp/deploy/27150146
+Result: 111/111 PASS
+Proof: docs/analysis/120-r4-layout-st-proof.md
+```
+
 ## Status
 
 R4 is closed for current black-box package compatibility:
