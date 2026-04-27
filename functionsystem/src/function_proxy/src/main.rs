@@ -168,7 +168,15 @@ async fn main() -> anyhow::Result<()> {
 
     let instance_manager = InstanceManager::new(instance_ctrl.clone(), config.clone());
 
-    let bus = BusProxyCoordinator::new(config.clone(), instance_ctrl.clone());
+    let state_store = etcd.clone().map(|store| {
+        Arc::new(yr_proxy::busproxy::MetaStoreStateStore::new(store))
+            as Arc<dyn yr_proxy::busproxy::StateStore>
+    });
+    let bus = BusProxyCoordinator::new_with_state_store(
+        config.clone(),
+        instance_ctrl.clone(),
+        state_store,
+    );
     bus.spawn_pending_create_reaper(std::time::Duration::from_secs(60));
 
     let domain_addr = Arc::new(parking_lot::RwLock::new(

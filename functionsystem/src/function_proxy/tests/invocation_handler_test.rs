@@ -4,17 +4,47 @@ mod common;
 
 use common::new_bus;
 use prost::Message;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use yr_proto::common::{Arg, BindStrategy, ErrorCode};
 use yr_proto::core_service::{
     BindOptions, CreateRequest, CreateRequests, CreateResourceGroupRequest, EventRequest,
-    ExitRequest, GroupOptions, InvokeRequest, KillRequest,
+    ExitRequest, GroupOptions, InvokeRequest, KillRequest, StateLoadRequest, StateSaveRequest,
 };
 use yr_proto::resources::MetaData;
 use yr_proto::runtime_rpc::{streaming_message, StreamingMessage};
 use yr_proto::runtime_service::{HeartbeatRequest, NotifyRequest, SignalResponse};
 use yr_proxy::busproxy::invocation_handler::{InboundAction, InvocationHandler};
+use yr_proxy::busproxy::{BusProxyCoordinator, StateStore};
+use yr_proxy::instance_ctrl::InstanceController;
+use yr_proxy::resource_view::{ResourceVector, ResourceView};
 use yr_proxy::state_machine::{InstanceMetadata, InstanceState};
+
+#[derive(Default)]
+struct FakeStateStore {
+    states: dashmap::DashMap<String, Vec<u8>>,
+}
+
+#[async_trait::async_trait]
+impl StateStore for FakeStateStore {
+    async fn set_state(&self, checkpoint_id: &str, state: &[u8]) -> Result<(), String> {
+        self.states
+            .insert(checkpoint_id.to_string(), state.to_vec());
+        Ok(())
+    }
+
+    async fn get_state(&self, checkpoint_id: &str) -> Result<Option<Vec<u8>>, String> {
+        Ok(self
+            .states
+            .get(checkpoint_id)
+            .map(|state| state.value().clone()))
+    }
+
+    async fn delete_state(&self, checkpoint_id: &str) -> Result<(), String> {
+        self.states.remove(checkpoint_id);
+        Ok(())
+    }
+}
 
 #[derive(Clone, PartialEq, ::prost::Message)]
 struct TestInvocationMeta {
@@ -49,6 +79,23 @@ fn arg_with_sequence(seq: i64) -> Arg {
         value,
         ..Default::default()
     }
+}
+
+fn new_persistent_bus(
+    node_id: &str,
+    grpc_port: u16,
+    store: Arc<dyn StateStore>,
+) -> Arc<BusProxyCoordinator> {
+    let mut cfg = (*common::make_proxy_config(node_id, grpc_port)).clone();
+    cfg.state_storage_type = "datasystem".into();
+    let config = Arc::new(cfg);
+    let resource_view = ResourceView::new(ResourceVector {
+        cpu: 8.0,
+        memory: 64.0,
+        npu: 0.0,
+    });
+    let instance_ctrl = InstanceController::new(config.clone(), resource_view, None, None);
+    BusProxyCoordinator::new_with_state_store(config, instance_ctrl, Some(store))
 }
 
 #[test]
@@ -291,7 +338,10 @@ fn group_bind_options_are_mapped_to_scheduling_extension() {
         .expect("scheduling ops created")
         .extension;
     assert_eq!(ext.get("bind_resource").map(String::as_str), Some("NUMA"));
-    assert_eq!(ext.get("bind_strategy").map(String::as_str), Some("BIND_Pack"));
+    assert_eq!(
+        ext.get("bind_strategy").map(String::as_str),
+        Some("BIND_Pack")
+    );
 }
 
 #[test]
@@ -308,7 +358,10 @@ fn group_bind_unknown_policy_defaults_to_cpp_bind_none_string() {
     InvocationHandler::apply_group_bind_options(&mut create, Some(&group));
 
     let ext = &create.scheduling_ops.as_ref().unwrap().extension;
-    assert_eq!(ext.get("bind_strategy").map(String::as_str), Some("BIND_None"));
+    assert_eq!(
+        ext.get("bind_strategy").map(String::as_str),
+        Some("BIND_None")
+    );
 }
 
 #[tokio::test]
@@ -623,7 +676,11 @@ async fn user_signal_forwards_signal_req_and_returns_signal_payload() {
     let act = InvocationHandler::handle_runtime_inbound(caller, msg, &bus).await;
     assert!(matches!(act, InboundAction::None));
 
-    let forwarded = target_rx.recv().await.expect("target signal request").unwrap();
+    let forwarded = target_rx
+        .recv()
+        .await
+        .expect("target signal request")
+        .unwrap();
     let signal_msg_id = forwarded.message_id.clone();
     let streaming_message::Body::SignalReq(req) = forwarded.body.expect("SignalReq") else {
         panic!("user signals must be forwarded as runtime SignalReq, not KillReq");
@@ -643,7 +700,11 @@ async fn user_signal_forwards_signal_req_and_returns_signal_payload() {
     let act = InvocationHandler::handle_runtime_inbound(target, rsp, &bus).await;
     assert!(matches!(act, InboundAction::None));
 
-    let reply = caller_rx.recv().await.expect("caller kill response").unwrap();
+    let reply = caller_rx
+        .recv()
+        .await
+        .expect("caller kill response")
+        .unwrap();
     assert_eq!(reply.message_id, "kill-msg");
     let streaming_message::Body::KillRsp(kill_rsp) = reply.body.expect("KillRsp") else {
         panic!("SignalRsp must be bridged back to KillRsp");
@@ -872,6 +933,81 @@ async fn preserves_nonempty_message_id_on_invoke() {
         panic!("Reply");
     };
     assert_eq!(outs[0].message_id, "stable-mid");
+}
+
+#[tokio::test]
+async fn state_save_load_survives_new_bus_with_shared_store() {
+    let store = Arc::new(FakeStateStore::default());
+    let bus_a = new_persistent_bus("node-a", 29021, store.clone());
+    let save = StreamingMessage {
+        message_id: "save-mid".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::SaveReq(StateSaveRequest {
+            state: b"durable-checkpoint".to_vec(),
+            request_id: "save-req".into(),
+        })),
+    };
+    let InboundAction::Reply(save_outs) =
+        InvocationHandler::handle_runtime_inbound("instance-1", save, &bus_a).await
+    else {
+        panic!("SaveRsp");
+    };
+    let streaming_message::Body::SaveRsp(save_rsp) = save_outs[0].body.as_ref().unwrap() else {
+        panic!("SaveRsp body");
+    };
+    assert_eq!(save_rsp.code, ErrorCode::ErrNone as i32);
+    assert_eq!(save_rsp.checkpoint_id, "instance-1");
+
+    let bus_b = new_persistent_bus("node-b", 29022, store);
+    let load = StreamingMessage {
+        message_id: "load-mid".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::LoadReq(StateLoadRequest {
+            checkpoint_id: "instance-1".into(),
+            request_id: "load-req".into(),
+        })),
+    };
+    let InboundAction::Reply(load_outs) =
+        InvocationHandler::handle_runtime_inbound("instance-1", load, &bus_b).await
+    else {
+        panic!("LoadRsp");
+    };
+    let streaming_message::Body::LoadRsp(load_rsp) = load_outs[0].body.as_ref().unwrap() else {
+        panic!("LoadRsp body");
+    };
+    assert_eq!(load_rsp.code, ErrorCode::ErrNone as i32);
+    assert_eq!(load_rsp.state, b"durable-checkpoint");
+}
+
+#[tokio::test]
+async fn state_delete_removes_memory_and_persistent_checkpoint() {
+    let store = Arc::new(FakeStateStore::default());
+    let bus_a = new_persistent_bus("node-a", 29023, store.clone());
+    bus_a
+        .save_state_snapshot_persistent("instance-1", b"stale-checkpoint".to_vec())
+        .await
+        .expect("save checkpoint");
+
+    bus_a
+        .delete_state_snapshot_persistent("instance-1")
+        .await
+        .expect("delete checkpoint");
+    assert_eq!(
+        bus_a
+            .load_state_snapshot_persistent("instance-1")
+            .await
+            .expect("load after delete"),
+        None
+    );
+
+    let bus_b = new_persistent_bus("node-b", 29024, store);
+    assert_eq!(
+        bus_b
+            .load_state_snapshot_persistent("instance-1")
+            .await
+            .expect("load from shared store after delete"),
+        None
+    );
 }
 
 #[test]

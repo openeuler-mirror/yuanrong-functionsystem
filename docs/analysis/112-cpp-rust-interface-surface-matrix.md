@@ -101,7 +101,7 @@ Direct proto comparison now shows `posix/core_service.proto` is byte-identical t
 | `NotifyReq`/`NotifyRsp` | C++ translates notify/call-result ack paths | Rust ack/routing tables in `BusProxyCoordinator` | ST verified |
 | `KillReq` | C++ signal route, local/remote forward, shutdown semantics | Rust local kill, group kill, forward user signal | ST + unit verified for common signals |
 | `ExitReq` | C++ converts exit into kill/cleanup side effects | Rust `handle_exit_req` and `apply_exit_event` | ST + unit verified |
-| `SaveReq`/`LoadReq` | C++ state handler / DS-backed state path | Rust in-memory snapshot map by checkpoint id | ST partially verified; persistence semantics need broader state tests |
+| `SaveReq`/`LoadReq` | C++ state handler / DistributedCacheClient state path, checkpoint id = instance id | Rust keeps memory fast path and mirrors to persistent `StateStore` when enabled | Regression verifies load from a new BusProxyCoordinator with empty memory; see `docs/analysis/117-state-persistence-parity.md` |
 | `RecoverReq`/`RecoverRsp` | C++ control plane recover through posix client | Rust `forward_recover`, runtime reconnect recover | ST + unit verified for covered recovery paths |
 | `eventReq` | C++ proto exposes stream event data and upper-layer runtime uses direct event writes | Rust proto exposes variant and proxy forwards it to `EventRequest.instanceID` if seen | Schema + proxy behavior unit-verified; runtime direct event path still needs end-to-end coverage if required |
 

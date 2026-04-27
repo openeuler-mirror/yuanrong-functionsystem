@@ -37,7 +37,10 @@ struct MetaDataLite {
 }
 
 impl InvocationHandler {
-    pub fn apply_group_bind_options(create: &mut cs::CreateRequest, group: Option<&cs::GroupOptions>) {
+    pub fn apply_group_bind_options(
+        create: &mut cs::CreateRequest,
+        group: Option<&cs::GroupOptions>,
+    ) {
         let Some(bind) = group.and_then(|g| g.bind.as_ref()) else {
             return;
         };
@@ -73,7 +76,20 @@ impl InvocationHandler {
         bus: &BusProxyCoordinator,
     ) -> InboundAction {
         let checkpoint_id = instance_id.to_string();
-        bus.save_state_snapshot(&checkpoint_id, save.state.clone());
+        if let Err(e) = bus
+            .save_state_snapshot_persistent(&checkpoint_id, save.state.clone())
+            .await
+        {
+            return InboundAction::Reply(vec![StreamingMessage {
+                message_id: message_id.to_string(),
+                meta_data: Default::default(),
+                body: Some(streaming_message::Body::SaveRsp(cs::StateSaveResponse {
+                    code: ErrorCode::ErrInnerSystemError as i32,
+                    message: format!("save state failed: {e}"),
+                    checkpoint_id: String::new(),
+                })),
+            }]);
+        }
         InboundAction::Reply(vec![StreamingMessage {
             message_id: message_id.to_string(),
             meta_data: Default::default(),
@@ -90,15 +106,23 @@ impl InvocationHandler {
         load: &cs::StateLoadRequest,
         bus: &BusProxyCoordinator,
     ) -> InboundAction {
-        let (code, state, message) = match bus.load_state_snapshot(&load.checkpoint_id) {
-            Some(state) => (ErrorCode::ErrNone as i32, state, String::new()),
-            None => (
+        let (code, state, message) = match bus
+            .load_state_snapshot_persistent(&load.checkpoint_id)
+            .await
+        {
+            Ok(Some(state)) => (ErrorCode::ErrNone as i32, state, String::new()),
+            Ok(None) => (
                 ErrorCode::ErrInnerSystemError as i32,
                 Vec::new(),
                 format!(
                     "load state failed: checkpoint {} not found",
                     load.checkpoint_id
                 ),
+            ),
+            Err(e) => (
+                ErrorCode::ErrInnerSystemError as i32,
+                Vec::new(),
+                format!("load state failed: {e}"),
             ),
         };
         InboundAction::Reply(vec![StreamingMessage {

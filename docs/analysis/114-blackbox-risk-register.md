@@ -14,7 +14,7 @@ Rust `yuanrong-functionsystem` is complete for the proven 0.8 ST source-replacem
 | --- | --- | --- | --- | --- | --- |
 | R1 | Rust proto schema formerly omitted C++ 0.8 fields/messages (`BindStrategy`, `BindOptions`, `GroupOptions.bind`, `EventRequest`, `StreamingMessage.eventReq`, `SignalResponse.payload`) | Schema restored / Unit verified | Low for schema, Medium for behavior | direct proto diff plus round-trip tests on 2026-04-27 | Keep schema restored; add behavior tests for group bind/NUMA, signal payload forwarding, and event stream handling |
 | R2 | CLI/config flag parity at binary startup level | Closed for startup parse compatibility | Low/Medium | `docs/analysis/116-binary-flag-parity-gate.md`: C++ help-only hidden flags rejected by Rust = 0; official deployment flags rejected by Rust = 0 | Keep the scripted gates in CI/release checks; treat ignored flags as behavior-specific risks only if those modes become release gates |
-| R3 | DS-backed state persistence may not be equivalent to C++ state handler | Needs test / possible implementation | High | Rust `SaveReq`/`LoadReq` uses in-memory snapshots; C++ has state handler/client subsystem | Add state persistence ST or integration test covering restart/recover/cross-proxy checkpoint load |
+| R3 | State checkpoint persistence formerly depended on Rust proxy process memory | Closed for Rust-owned black-box state loss | Low/Medium | `docs/analysis/117-state-persistence-parity.md`: C++ state flow inspected; Rust SaveReq/LoadReq now mirror to a persistent StateStore when persistence is enabled; regressions prove load from a new BusProxyCoordinator and checkpoint deletion cleanup | Optional: add full process-kill ST; exact C++ DS cache backend parity remains a release-policy question if required |
 | R4 | Package is not byte-for-byte/minimal equivalent | Needs release decision | Medium | C++ package has 160 entries, Rust 183; missing `libcrypto.so.3`, `libssl.so.3`, `libyaml_tool.so`; extra `meta_store` and libs | Decide policy: compatible superset is allowed, or tighten packaging to match C++ minimal layout |
 | R5 | `SignalResponse.payload` behavior is not ST-covered | Proxy behavior unit-verified | Low/Medium | schema restored and round-trip tested; `user_signal_forwards_signal_req_and_returns_signal_payload` verifies `SignalRsp.payload` -> `KillRsp.payload` bridge | Keep unit test; rerun full source-replacement ST only if this path becomes part of an acceptance scenario |
 | R6 | Stream event data path (`eventReq`) schema exists but behavior is not ST-covered | Proxy forwarding unit-verified | Medium | schema restored and round-trip tested; `event_req_forwards_to_target_runtime_stream` verifies proxy forwards `eventReq` by `instanceID` | Add end-to-end runtime/fsclient event test if the direct runtime event path becomes a release gate |
@@ -55,8 +55,9 @@ These tasks are safe, Rust-owned, and do not require changing non-Rust code.
    - Remaining boundary: ignored compatibility flags are not full behavior parity for every optional advanced mode.
 
 3. State persistence parity gate:
-   - Add focused Rust integration test for save -> process/proxy restart -> load.
-   - If current in-memory implementation fails, implement DS/metastore-backed state compatible with C++ storage mode.
+   - Done for Rust-owned proxy-memory loss: `docs/analysis/117-state-persistence-parity.md`.
+   - `SaveReq` / `LoadReq` now use a persistent `StateStore` when persistence is enabled.
+   - Remaining optional hardening: full process-kill ST and exact C++ DS cache backend equivalence if release owners require internals parity.
 
 4. Release layout decision:
    - Decide whether Rust package may be a compatible superset.
@@ -64,4 +65,4 @@ These tasks are safe, Rust-owned, and do not require changing non-Rust code.
 
 ## Stop conditions for this audit
 
-Do not claim broader production black-box parity until R3 is resolved or explicitly accepted as out-of-scope by release owners, and until R4 release-layout policy is decided if byte-for-byte/minimal packaging is required. The 111 ST proof remains valid, but it is narrower than full black-box equivalence.
+Do not claim byte-for-byte/minimal packaging parity until R4 release-layout policy is decided. The 111 ST proof remains valid; R1/R2/R3 Rust-owned black-box gaps are now closed at schema/startup/state-loss level, with optional feature-specific hardening listed in each report.

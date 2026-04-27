@@ -10,8 +10,10 @@ pub mod invocation_handler;
 mod request_dispatcher;
 mod request_router;
 pub mod service_registry;
+pub mod state_store;
 
 pub use instance_view::{InstanceRouteRecord, InstanceView, RouteJson};
+pub use state_store::{MetaStoreStateStore, StateStore};
 
 use crate::config::Config;
 use crate::instance_ctrl::InstanceController;
@@ -145,6 +147,10 @@ pub struct BusProxyCoordinator {
     pending_signals: dashmap::DashMap<String, PendingSignalInfo>,
     /// Lightweight in-proxy checkpoint store for actor save/load/recover flows.
     state_snapshots: dashmap::DashMap<String, Vec<u8>>,
+    /// Optional durable checkpoint store. C++ persists state through
+    /// StateClient/DistributedCacheClient; Rust keeps memory as a fast path and
+    /// mirrors saves here when state persistence is enabled.
+    state_store: Option<Arc<dyn StateStore>>,
     /// Launch metadata for currently owned instances. Unlike pending_creates,
     /// this survives the initial create and is used for abnormal runtime restart.
     active_instances: dashmap::DashMap<String, ActiveInstanceInfo>,
@@ -171,6 +177,14 @@ pub struct BusProxyCoordinator {
 
 impl BusProxyCoordinator {
     pub fn new(config: Arc<Config>, instance_ctrl: Arc<InstanceController>) -> Arc<Self> {
+        Self::new_with_state_store(config, instance_ctrl, None)
+    }
+
+    pub fn new_with_state_store(
+        config: Arc<Config>,
+        instance_ctrl: Arc<InstanceController>,
+        state_store: Option<Arc<dyn StateStore>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             local_node_id: config.node_id.clone(),
             local_grpc_endpoint: config.advertise_grpc_endpoint(),
@@ -200,6 +214,7 @@ impl BusProxyCoordinator {
             call_ack_to_caller: dashmap::DashMap::new(),
             pending_signals: dashmap::DashMap::new(),
             state_snapshots: dashmap::DashMap::new(),
+            state_store,
             active_instances: dashmap::DashMap::new(),
             pending_recovers: dashmap::DashMap::new(),
             cancelled_group_creates: dashmap::DashMap::new(),
@@ -207,6 +222,17 @@ impl BusProxyCoordinator {
             init_completed: dashmap::DashMap::new(),
             instance_mailbox: dashmap::DashMap::new(),
         })
+    }
+
+    fn state_persistence_enabled(&self) -> bool {
+        matches!(
+            self.config
+                .state_storage_type
+                .trim()
+                .to_ascii_lowercase()
+                .as_str(),
+            "datasystem" | "data_system" | "metastore" | "meta_store"
+        )
     }
 
     pub fn instance_view(&self) -> &Arc<InstanceView> {
@@ -399,6 +425,9 @@ impl BusProxyCoordinator {
         }
 
         self.detach_runtime_stream(instance_id);
+        if let Err(e) = self.delete_state_snapshot_persistent(instance_id).await {
+            warn!(%instance_id, error = %e, "force cleanup: delete checkpoint state failed");
+        }
         info!(%instance_id, %reason, "force cleanup completed");
     }
 
@@ -1174,7 +1203,14 @@ impl BusProxyCoordinator {
 
         // If the runtime's stream is already connected, send a recoverReq
         if let Some(tx) = self.runtime_tx.get(instance_id) {
-            let state = self.load_state_snapshot(instance_id).unwrap_or_default();
+            let state = match self.load_state_snapshot_persistent(instance_id).await {
+                Ok(Some(state)) => state,
+                Ok(None) => Vec::new(),
+                Err(e) => {
+                    warn!(%instance_id, error = %e, "ForwardRecover: load checkpoint state failed");
+                    Vec::new()
+                }
+            };
             let create_options = self
                 .active_instances
                 .get(instance_id)
@@ -1405,7 +1441,14 @@ impl BusProxyCoordinator {
                 .filter(|a| a.recovering)
                 .map(|a| a.clone())
             {
-                let state = self.load_state_snapshot(instance_id).unwrap_or_default();
+                let state = match self.load_state_snapshot_persistent(instance_id).await {
+                    Ok(Some(state)) => state,
+                    Ok(None) => Vec::new(),
+                    Err(e) => {
+                        warn!(%instance_id, error = %e, "load checkpoint state for RecoverReq failed");
+                        Vec::new()
+                    }
+                };
                 let recover_msg = StreamingMessage {
                     message_id: format!("recover-{}", instance_id),
                     meta_data: Default::default(),
@@ -1858,6 +1901,9 @@ impl BusProxyCoordinator {
             .apply_exit_event(instance_id, ok, message)
             .await;
         self.detach_runtime_stream(instance_id);
+        if let Err(e) = self.delete_state_snapshot_persistent(instance_id).await {
+            warn!(%instance_id, error = %e, "exit cleanup: delete checkpoint state failed");
+        }
     }
 
     pub fn has_runtime_stream(&self, instance_id: &str) -> bool {
@@ -2089,6 +2135,51 @@ impl BusProxyCoordinator {
         self.state_snapshots
             .get(checkpoint_id)
             .map(|v| v.value().clone())
+    }
+
+    pub async fn save_state_snapshot_persistent(
+        &self,
+        checkpoint_id: &str,
+        state: Vec<u8>,
+    ) -> Result<(), String> {
+        self.save_state_snapshot(checkpoint_id, state.clone());
+        if self.state_persistence_enabled() {
+            if let Some(store) = &self.state_store {
+                store.set_state(checkpoint_id, &state).await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn load_state_snapshot_persistent(
+        &self,
+        checkpoint_id: &str,
+    ) -> Result<Option<Vec<u8>>, String> {
+        if let Some(state) = self.load_state_snapshot(checkpoint_id) {
+            return Ok(Some(state));
+        }
+        if self.state_persistence_enabled() {
+            if let Some(store) = &self.state_store {
+                if let Some(state) = store.get_state(checkpoint_id).await? {
+                    self.save_state_snapshot(checkpoint_id, state.clone());
+                    return Ok(Some(state));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn delete_state_snapshot_persistent(
+        &self,
+        checkpoint_id: &str,
+    ) -> Result<(), String> {
+        self.state_snapshots.remove(checkpoint_id);
+        if self.state_persistence_enabled() {
+            if let Some(store) = &self.state_store {
+                store.delete_state(checkpoint_id).await?;
+            }
+        }
+        Ok(())
     }
 
     pub async fn forward_notify_rsp_ack(&self, message_id: &str) {
