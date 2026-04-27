@@ -29,12 +29,15 @@ class CommonDriverTest : public ::testing::Test {
 public:
     inline static std::unique_ptr<meta_store::test::EtcdServiceDriver> etcdSrvDriver_;
     inline static std::string metaStoreServerHost_;
+    inline static std::string iamServerHost_;
 
     [[maybe_unused]] static void SetUpTestSuite()
     {
         etcdSrvDriver_ = std::make_unique<meta_store::test::EtcdServiceDriver>();
         int metaStoreServerPort = functionsystem::test::FindAvailablePort();
         metaStoreServerHost_ = "127.0.0.1:" + std::to_string(metaStoreServerPort);
+        int iamServerPort = functionsystem::test::FindAvailablePort();
+        iamServerHost_ = "127.0.0.1:" + std::to_string(iamServerPort);
         etcdSrvDriver_->StartServer(metaStoreServerHost_);
     }
 
@@ -48,6 +51,19 @@ TEST_F(CommonDriverTest, MetaConnectedFailed)
 {
     auto helper = GrpcClientHelper(10);
     auto flags = Flags();
+    auto dsConfig = std::make_shared<DSAuthConfig>();
+    auto commonDriver = std::make_shared<CommonDriver>(flags, dsConfig);
+    auto status = commonDriver->Init();
+    EXPECT_EQ(status, StatusCode::FAILED);
+}
+
+TEST_F(CommonDriverTest, IAMConnectedFailed)
+{
+    auto helper = GrpcClientHelper(10);
+    auto flags = Flags();
+    flags.metaStoreAddress_ = metaStoreServerHost_;
+    flags.etcdAddress_ = metaStoreServerHost_;
+    flags.iamMetastoreAddress_ = iamServerHost_;
     auto dsConfig = std::make_shared<DSAuthConfig>();
     auto commonDriver = std::make_shared<CommonDriver>(flags, dsConfig);
     auto status = commonDriver->Init();

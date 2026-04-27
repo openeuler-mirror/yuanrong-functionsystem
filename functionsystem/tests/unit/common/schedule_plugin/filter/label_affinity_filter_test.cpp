@@ -23,14 +23,18 @@
 #include "common/logs/logging.h"
 #include "common/resource_view/resource_type.h"
 #include "common/resource_view/view_utils.h"
+#include "common/schedule_plugin/common/constants.h"
 #include "common/schedule_plugin/common/plugin_utils.h"
+#include "common/schedule_plugin/common/plugin_factory.h"
 #include "common/schedule_plugin/common/preallocated_context.h"
 #include "common/scheduler_framework/utils/label_affinity_selector.h"
 
 namespace functionsystem::test {
 using namespace ::testing;
 using namespace functionsystem::schedule_plugin::filter;
+using namespace functionsystem::schedule_plugin;
 using namespace functionsystem::test::schedule_plugin;
+using namespace functionsystem::schedule_framework;
 
 class LabelAffinityFilterTest : public Test {};
 
@@ -933,5 +937,31 @@ TEST_F(LabelAffinityFilterTest, GroupSchedulePolicyAffinityTest)
         result = strictNonRootFilterPlugin.Filter(preAllocated, instance1, agent3);
         EXPECT_EQ(result.status.IsOk(), true);
     }
+}
+
+TEST_F(LabelAffinityFilterTest, GetPluginNameTest)
+{
+    LabelAffinityFilter relaxedNonRootFilterPlugin(true, false);
+    LabelAffinityFilter strictNonRootFilterPlugin(false, false);
+    LabelAffinityFilter relaxedRootFilterPlugin(true, true);
+    LabelAffinityFilter strictRootFilterPlugin(false, true);
+
+    EXPECT_EQ(relaxedNonRootFilterPlugin.GetPluginName(), RELAXED_NON_ROOT_LABEL_AFFINITY_FILTER_NAME);
+    EXPECT_EQ(strictNonRootFilterPlugin.GetPluginName(), STRICT_NON_ROOT_LABEL_AFFINITY_FILTER_NAME);
+    EXPECT_EQ(relaxedRootFilterPlugin.GetPluginName(), RELAXED_ROOT_LABEL_AFFINITY_FILTER_NAME);
+    EXPECT_EQ(strictRootFilterPlugin.GetPluginName(), STRICT_ROOT_LABEL_AFFINITY_FILTER_NAME);
+}
+
+TEST_F(LabelAffinityFilterTest, FilterPolicyCreatorTest)
+{
+    auto relaxedNonRootFilterPlugin = PluginFactory::GetInstance().CreatePlugin(RELAXED_NON_ROOT_LABEL_AFFINITY_FILTER_NAME);
+    auto strictNonRootFilterPlugin = PluginFactory::GetInstance().CreatePlugin(STRICT_NON_ROOT_LABEL_AFFINITY_FILTER_NAME);
+    auto relaxedRootFilterPlugin = PluginFactory::GetInstance().CreatePlugin(RELAXED_ROOT_LABEL_AFFINITY_FILTER_NAME);
+    auto strictRootFilterPlugin = PluginFactory::GetInstance().CreatePlugin(STRICT_ROOT_LABEL_AFFINITY_FILTER_NAME);
+
+    EXPECT_EQ(relaxedNonRootFilterPlugin->GetPluginName(), RELAXED_NON_ROOT_LABEL_AFFINITY_FILTER_NAME);
+    EXPECT_EQ(strictNonRootFilterPlugin->GetPluginName(), STRICT_NON_ROOT_LABEL_AFFINITY_FILTER_NAME);
+    EXPECT_EQ(relaxedRootFilterPlugin->GetPluginName(), RELAXED_ROOT_LABEL_AFFINITY_FILTER_NAME);
+    EXPECT_EQ(strictRootFilterPlugin->GetPluginName(), STRICT_ROOT_LABEL_AFFINITY_FILTER_NAME);
 }
 }

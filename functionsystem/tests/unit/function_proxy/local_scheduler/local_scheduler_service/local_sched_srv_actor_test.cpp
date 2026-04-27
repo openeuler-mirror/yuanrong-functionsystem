@@ -253,7 +253,7 @@ TEST_F(LocalSchedSrvActorTest, ScheduleResourceNotEnough)
     EXPECT_EQ(getRsp.instanceid(), instanceID);
     EXPECT_EQ(getRsp.requestid(), requestID);
 }
-#if 0
+
 /**
  * Feature: LocalSchedSrvActor
  * Description: Simulates receiving a Schedule request from DomainSchedule and LocalScheduler resource not enough
@@ -262,18 +262,33 @@ TEST_F(LocalSchedSrvActorTest, ScheduleResourceNotEnough)
  * 2. send Schedule request to LocalSchedSrvActorTestDriver(LocalSchedSrvActorTestDriver simulates DomainScheduler
  *    and send schedule request to LocalSchedSrvActor).
  * 3. get Schedule result.
- * Expectation: schedule error code result is ScheduleResourceNotEnough
+ * Expectation: schedule error code result is PARAMETER_ERROR
  */
 TEST_F(LocalSchedSrvActorTest, ScheduleWithEmptyRequest)
 {
     RegisterLocalScheduler();
+    dstActor_->domainSchedRegisterInfo_.aid = driverActor_->GetAID();
     messages::ScheduleRequest req;
     auto rspFuture =
         litebus::Async(driverActor_->GetAID(), &LocalSchedSrvActorTestDriver::Schedule, dstActor_->GetAID(), req);
     const auto &getRsp = rspFuture.Get();
     EXPECT_EQ(getRsp.code(), StatusCode::PARAMETER_ERROR);
 }
-#endif
+
+TEST_F(LocalSchedSrvActorTest, ScheduleWithNullInstanceCtrl)
+{
+    RegisterLocalScheduler();
+    dstActor_->domainSchedRegisterInfo_.aid = driverActor_->GetAID();
+    dstActor_->BindInstanceCtrl(nullptr);
+    auto requestID = "requestA";
+    messages::ScheduleRequest req;
+    req.set_requestid(requestID);
+    auto rspFuture =
+        litebus::Async(driverActor_->GetAID(), &LocalSchedSrvActorTestDriver::Schedule, dstActor_->GetAID(), req);
+    const auto &getRsp = rspFuture.Get();
+    dstActor_->BindInstanceCtrl(mockInstanceCtrl_);
+    EXPECT_EQ(getRsp.code(), StatusCode::LS_INSTANCE_CTRL_IS_NULL);
+}
 
 // test for LocalSchedSrvActor::UpdateSchedTopoViewTest
 // receive update domain scheduler request from global scheduler
@@ -882,6 +897,21 @@ TEST_F(LocalSchedSrvActorTest, QueryMasterIPTest)
     future = litebus::Async(dstActor_->GetAID(), &LocalSchedSrvActor::QueryMasterIP);
     EXPECT_AWAIT_READY(future);
     EXPECT_EQ(future.Get(), expectAddress);
+}
+
+TEST_F(LocalSchedSrvActorTest, BindPingPongDriverTest)
+{
+    auto componentName = "aaa";
+    auto nodeID = "bbb";
+    auto pingPongDriver = std::make_shared<HeartbeatClientDriver>(
+            litebus::os::Join(componentName, nodeID, '-'),
+            [aid(dstActor_->GetAID()), nodeID = nodeID](const litebus::AID &dst) {
+                YRLOG_WARN("pingpong {} timeout, from proxy to domain. dst: {}", nodeID, std::string(dst));
+                litebus::Async(aid, &LocalSchedSrvActor::TimeOutEvent);
+            });
+    dstActor_->BindPingPongDriver(pingPongDriver);
+    auto name = dstActor_->pingPongDriver_->GetActorAID().Name();
+    EXPECT_EQ(name, "HeartbeatClient-aaa-bbb");
 }
 
 }  // namespace functionsystem::test
