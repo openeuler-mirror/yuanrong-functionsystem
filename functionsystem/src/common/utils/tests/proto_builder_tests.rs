@@ -502,3 +502,65 @@ fn heartbeat_request_response_roundtrip() {
         HealthCheckCode::Healthy as i32
     );
 }
+
+#[test]
+fn group_options_bind_roundtrip_matches_cpp_wire_contract() {
+    use yr_proto::common::BindStrategy;
+    use yr_proto::core_service::{BindOptions, GroupOptions};
+
+    let group = GroupOptions {
+        timeout: 60,
+        group_name: "numa-group".into(),
+        same_running_lifecycle: true,
+        r_group_name: "primary".into(),
+        group_policy: yr_proto::common::GroupPolicy::StrictPack as i32,
+        bind: Some(BindOptions {
+            resource: "NUMA".into(),
+            policy: BindStrategy::BindPack as i32,
+        }),
+    };
+
+    let decoded = GroupOptions::decode(group.encode_to_vec().as_slice()).unwrap();
+    let bind = decoded.bind.expect("C++ 0.8 GroupOptions.bind field 6");
+    assert_eq!(bind.resource, "NUMA");
+    assert_eq!(bind.policy, BindStrategy::BindPack as i32);
+}
+
+#[test]
+fn signal_response_payload_roundtrip_matches_cpp_wire_contract() {
+    use yr_proto::runtime_service::SignalResponse;
+
+    let rsp = SignalResponse {
+        code: ErrorCode::ErrNone as i32,
+        message: "ok".into(),
+        payload: b"snapshot-or-custom-signal-payload".to_vec(),
+    };
+
+    let decoded = SignalResponse::decode(rsp.encode_to_vec().as_slice()).unwrap();
+    assert_eq!(decoded.payload, b"snapshot-or-custom-signal-payload");
+}
+
+#[test]
+fn streaming_message_event_req_roundtrip_matches_cpp_wire_contract() {
+    use yr_proto::core_service::EventRequest;
+
+    let event = EventRequest {
+        request_id: "event-req".into(),
+        message: "payload".into(),
+        instance_id: "inst-event-server".into(),
+    };
+    let sm = StreamingMessage {
+        message_id: "event-message".into(),
+        meta_data: HashMap::new(),
+        body: Some(streaming_message::Body::EventReq(event)),
+    };
+
+    let decoded = StreamingMessage::decode(sm.encode_to_vec().as_slice()).unwrap();
+    match decoded.body {
+        Some(streaming_message::Body::EventReq(event)) => {
+            assert_eq!(event.request_id, "event-req");
+            assert_eq!(event.instance_id, "inst-event-server");
+        }
+        _ => panic!("expected C++ 0.8 StreamingMessage.eventReq field 38"),
+    }
+}

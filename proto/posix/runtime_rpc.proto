@@ -124,6 +124,9 @@ message StreamingMessage {
     // handle by runtime
     runtime_service.SnapStartedRequest snapStartedReq = 36;
     runtime_service.SnapStartedResponse snapStartedRsp = 37;
+
+    // Send stream event data
+    core_service.EventRequest          eventReq      = 38;
   }
   map<string, string> metaData = 100;
 }

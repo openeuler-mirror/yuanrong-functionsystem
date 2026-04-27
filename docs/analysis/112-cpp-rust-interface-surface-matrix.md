@@ -76,19 +76,19 @@ proto/inner/core_service.proto
 proto/inner/runtime_service.proto
 ```
 
-Observed wire-schema deltas:
+Observed wire-schema deltas after proto restoration:
 
-| Proto | C++ field/message | Rust status | Risk |
+| Proto | Former gap | Rust status after 2026-04-27 hardening | Remaining risk |
 | --- | --- | --- | --- |
-| `posix/common.proto` | `BindStrategy` enum | removed | Medium: group bind policy callers could fail at source/API layer |
-| `posix/common.proto` | `EventPayload` message | removed | Medium: stream event paths not covered by ST |
-| `posix/core_service.proto` | `BindOptions` message | removed | Medium: resource bind policy not represented in Rust generated API |
-| `posix/core_service.proto` | `GroupOptions.bind = 6` | removed | Medium: unknown field may be dropped if Rust decodes/re-encodes group options |
-| `posix/core_service.proto` | `EventRequest` message | removed | Medium: event request path absent |
-| `posix/runtime_rpc.proto` | `StreamingMessage.eventReq = 38` | removed | Medium: runtime stream event data not handled by Rust |
-| `posix/runtime_service.proto` | `SignalResponse.payload = 3` | removed | Medium: custom signal response payload may be dropped |
+| `posix/common.proto` | `BindStrategy` enum | restored and round-trip tested | behavior propagation through Rust group scheduling still needs a focused bind/NUMA test |
+| `posix/common.proto` | `EventPayload` message | restored | event behavior still needs a focused runtime/fsclient path test |
+| `posix/core_service.proto` | `BindOptions` message | restored and round-trip tested | behavior propagation through scheduling extension still needs a focused test |
+| `posix/core_service.proto` | `GroupOptions.bind = 6` | restored and round-trip tested | same as above |
+| `posix/core_service.proto` | `EventRequest` message | restored and round-trip tested via `StreamingMessage.eventReq` | handler behavior still needs a focused event stream test |
+| `posix/runtime_rpc.proto` | `StreamingMessage.eventReq = 38` | restored and round-trip tested | runtime event handling remains non-ST-covered |
+| `posix/runtime_service.proto` | `SignalResponse.payload = 3` | restored and round-trip tested | signal payload forwarding remains non-ST-covered |
 
-Current classification: `Needs test` / possible `Needs implementation` depending on whether upstream 0.8 callers use these paths. The green 111 ST does not exercise them.
+Direct proto comparison now shows `posix/core_service.proto` is byte-identical to the C++ control. The remaining diffs in `common.proto`, `runtime_rpc.proto`, and `runtime_service.proto` are newline/formatting only for the restored fields, while `affinity.proto` and `inner_service.proto` retain pre-existing whitespace-only diffs. Internal proto layout still differs intentionally (`inner/metastore.proto` and `inner/scheduler.proto` are Rust-only; `inner/core_service.proto`, `inner/runtime_service.proto`, and `posix/agent_plugin.proto` remain C++-only).
 
 ## Runtime stream message handling
 
@@ -103,7 +103,7 @@ Current classification: `Needs test` / possible `Needs implementation` depending
 | `ExitReq` | C++ converts exit into kill/cleanup side effects | Rust `handle_exit_req` and `apply_exit_event` | ST + unit verified |
 | `SaveReq`/`LoadReq` | C++ state handler / DS-backed state path | Rust in-memory snapshot map by checkpoint id | ST partially verified; persistence semantics need broader state tests |
 | `RecoverReq`/`RecoverRsp` | C++ control plane recover through posix client | Rust `forward_recover`, runtime reconnect recover | ST + unit verified for covered recovery paths |
-| `eventReq` | C++ proto exposes stream event data | Rust proto lacks variant | Needs test / likely implementation if upstream uses stream events |
+| `eventReq` | C++ proto exposes stream event data | Rust proto now exposes variant | Schema restored; handler behavior still needs focused event stream test |
 
 ## Etcd/metastore key surface
 

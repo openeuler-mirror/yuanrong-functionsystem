@@ -87,6 +87,7 @@ fn group_options_supports_rgroup_name() {
         same_running_lifecycle: false,
         r_group_name: "pool-gpu".into(),
         group_policy: 0,
+        bind: None,
     };
     assert_eq!(opts.r_group_name, "pool-gpu");
     assert_eq!(opts.timeout, 60);

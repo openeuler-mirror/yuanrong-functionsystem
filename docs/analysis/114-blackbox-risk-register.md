@@ -12,13 +12,13 @@ Rust `yuanrong-functionsystem` is complete for the proven 0.8 ST source-replacem
 
 | ID | Risk | Status | Severity | Evidence | Recommended next action |
 | --- | --- | --- | --- | --- | --- |
-| R1 | Rust proto schema omits C++ 0.8 fields/messages (`BindStrategy`, `BindOptions`, `GroupOptions.bind`, `EventRequest`, `StreamingMessage.eventReq`, `SignalResponse.payload`) | Needs test / possible implementation | High | direct proto diff on 2026-04-27 | Restore schema fields or add compatibility tests proving paths are unused and messages are never decode/re-encoded through Rust |
+| R1 | Rust proto schema formerly omitted C++ 0.8 fields/messages (`BindStrategy`, `BindOptions`, `GroupOptions.bind`, `EventRequest`, `StreamingMessage.eventReq`, `SignalResponse.payload`) | Schema restored / Unit verified | Low for schema, Medium for behavior | direct proto diff plus round-trip tests on 2026-04-27 | Keep schema restored; add behavior tests for group bind/NUMA, signal payload forwarding, and event stream handling |
 | R2 | CLI/config flag parity is not fully proven at binary level | Needs test | High | source regex shows broad C++ `AddFlag` surface and broad Rust clap surface, but not exact accepted binary flags | Build both packages and compare `--help`/startup accepted flags for every binary under a scripted gate |
 | R3 | DS-backed state persistence may not be equivalent to C++ state handler | Needs test / possible implementation | High | Rust `SaveReq`/`LoadReq` uses in-memory snapshots; C++ has state handler/client subsystem | Add state persistence ST or integration test covering restart/recover/cross-proxy checkpoint load |
 | R4 | Package is not byte-for-byte/minimal equivalent | Needs release decision | Medium | C++ package has 160 entries, Rust 183; missing `libcrypto.so.3`, `libssl.so.3`, `libyaml_tool.so`; extra `meta_store` and libs | Decide policy: compatible superset is allowed, or tighten packaging to match C++ minimal layout |
-| R5 | `SignalResponse.payload` cannot be represented by current Rust proto | Needs implementation if used | Medium | direct proto diff; ST does not cover payload-carrying custom signal response | Add custom signal payload round-trip test; restore field if any caller depends on it |
-| R6 | Stream event data path (`eventReq`) absent in Rust | Needs implementation if used | Medium | direct proto diff; no current Rust handler | Search upper-layer/runtime use of stream events; add test or explicitly mark out-of-scope |
-| R7 | Group bind/resource policy fields absent in Rust proto | Needs implementation if used | Medium | `BindStrategy`, `BindOptions`, `GroupOptions.bind` removed | Add group bind policy test or restore wire fields to avoid message loss |
+| R5 | `SignalResponse.payload` behavior is not ST-covered | Needs behavior test | Medium | schema restored and round-trip tested; C++ proxy maps `signalRsp.payload()` into `KillResponse.payload` | Add custom signal payload forwarding test and implement forwarding if the Rust proxy path drops it |
+| R6 | Stream event data path (`eventReq`) schema exists but behavior is not ST-covered | Needs behavior test | Medium | schema restored and round-trip tested; upper-layer runtime/fsclient has event request paths | Add event stream behavior test or explicitly mark event handling out-of-scope |
+| R7 | Group bind/resource policy schema exists but Rust scheduling propagation is not proven | Needs behavior test | Medium | schema restored and round-trip tested; C++ maps bind options to `bind_resource`/`bind_strategy` NUMA extensions | Add group bind/NUMA scheduling propagation test and implement equivalent propagation if missing |
 | R8 | IAM behavior is mostly unit-level, not ST-level | Needs test | Medium | Rust IAM tests exist; current cpp ST does not strongly exercise IAM server | Add IAM route/token e2e in source-replacement package or mark IAM out of current delivery scope |
 | R9 | Function agent deployer/plugin breadth not fully covered by ST | Needs test | Medium | C++ agent supports multiple deployers/plugins; Rust tests cover config/registration more than every deployer backend | Add local/copy/S3/plugin matrix tests or document unsupported deployer modes |
 | R10 | Advanced scheduler/resource behavior under scale/failure not covered by ST | Needs test | Medium | ST is small relative to scheduler topology, taint, upgrade, migration, pool features | Add targeted scheduler HTTP/resource/eviction tests with C++ control comparison |
@@ -44,9 +44,9 @@ Rust `yuanrong-functionsystem` is complete for the proven 0.8 ST source-replacem
 These tasks are safe, Rust-owned, and do not require changing non-Rust code.
 
 1. Proto parity hardening:
-   - Restore removed C++ 0.8 fields/messages in Rust proto files with the same tag numbers.
-   - Add round-trip tests for `GroupOptions.bind`, `StreamingMessage.eventReq`, and `SignalResponse.payload`.
-   - Verify generated Rust code compiles and existing ST remains green.
+   - Done for schema: restored C++ 0.8 fields/messages in Rust proto files with the same tag numbers.
+   - Done for schema: added round-trip tests for `GroupOptions.bind`, `StreamingMessage.eventReq`, and `SignalResponse.payload`.
+   - Next: add behavior tests for group bind/NUMA propagation, custom signal payload forwarding, and event stream handling.
 
 2. Binary flag parity gate:
    - Package clean C++ and Rust functionsystem.

@@ -191,21 +191,22 @@ C++ behavior:
 
 Rust behavior:
 
-- Rust protos remove several of those messages/fields.
+- Rust protos now restore those C++ 0.8 wire fields/messages and include round-trip tests for `GroupOptions.bind`, `SignalResponse.payload`, and `StreamingMessage.eventReq`.
 
 Evidence:
 
-- Direct diff between `/workspace/clean_0_8/src/yuanrong-functionsystem/proto` and Rust `proto`.
+- Direct diff between `/workspace/clean_0_8/src/yuanrong-functionsystem/proto` and Rust `proto` after restoration.
+- `functionsystem/src/common/utils/tests/proto_builder_tests.rs` has the compatibility round-trip tests.
 
-Status: `Needs test` / potential `Needs implementation`.
+Status: schema compatibility is `Unit verified`; behavior handling remains `Needs test` for group bind/NUMA propagation, custom signal payload forwarding, and event stream handling.
 
-Risk: protobuf unknown fields are not a safe black-box guarantee if Rust decodes and re-encodes messages on the path; fields can be lost or code paths can be impossible to construct.
+Risk: schema restoration prevents Rust generated code from making these fields impossible to express, but it does not by itself prove the Rust services implement every C++ behavior path using the fields.
 
 ## Behavior conclusion
 
 The Rust implementation is strong for the behavior paths exercised by the official ST and by focused Rust regression tests. The remaining black-box uncertainty is concentrated in contracts that ST does not exercise:
 
-1. Removed proto fields/messages.
+1. Behavior use of restored proto fields/messages: group bind/NUMA, signal payload, and event stream.
 2. Full CLI/config flag parity.
 3. DS-backed state persistence beyond in-memory snapshot handling.
 4. IAM, plugin/deployer, traefik, tenant-isolation, and advanced resource/bind policy paths.
