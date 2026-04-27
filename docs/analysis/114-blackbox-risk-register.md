@@ -13,7 +13,7 @@ Rust `yuanrong-functionsystem` is complete for the proven 0.8 ST source-replacem
 | ID | Risk | Status | Severity | Evidence | Recommended next action |
 | --- | --- | --- | --- | --- | --- |
 | R1 | Rust proto schema formerly omitted C++ 0.8 fields/messages (`BindStrategy`, `BindOptions`, `GroupOptions.bind`, `EventRequest`, `StreamingMessage.eventReq`, `SignalResponse.payload`) | Schema restored / Unit verified | Low for schema, Medium for behavior | direct proto diff plus round-trip tests on 2026-04-27 | Keep schema restored; add behavior tests for group bind/NUMA, signal payload forwarding, and event stream handling |
-| R2 | CLI/config flag parity is not fully proven at binary level | Needs test | High | source regex shows broad C++ `AddFlag` surface and broad Rust clap surface, but not exact accepted binary flags | Build both packages and compare `--help`/startup accepted flags for every binary under a scripted gate |
+| R2 | CLI/config flag parity at binary startup level | Closed for startup parse compatibility | Low/Medium | `docs/analysis/116-binary-flag-parity-gate.md`: C++ help-only hidden flags rejected by Rust = 0; official deployment flags rejected by Rust = 0 | Keep the scripted gates in CI/release checks; treat ignored flags as behavior-specific risks only if those modes become release gates |
 | R3 | DS-backed state persistence may not be equivalent to C++ state handler | Needs test / possible implementation | High | Rust `SaveReq`/`LoadReq` uses in-memory snapshots; C++ has state handler/client subsystem | Add state persistence ST or integration test covering restart/recover/cross-proxy checkpoint load |
 | R4 | Package is not byte-for-byte/minimal equivalent | Needs release decision | Medium | C++ package has 160 entries, Rust 183; missing `libcrypto.so.3`, `libssl.so.3`, `libyaml_tool.so`; extra `meta_store` and libs | Decide policy: compatible superset is allowed, or tighten packaging to match C++ minimal layout |
 | R5 | `SignalResponse.payload` behavior is not ST-covered | Proxy behavior unit-verified | Low/Medium | schema restored and round-trip tested; `user_signal_forwards_signal_req_and_returns_signal_payload` verifies `SignalRsp.payload` -> `KillRsp.payload` bridge | Keep unit test; rerun full source-replacement ST only if this path becomes part of an acceptance scenario |
@@ -50,9 +50,9 @@ These tasks are safe, Rust-owned, and do not require changing non-Rust code.
    - Next: only broader integration remains: full NUMA placement and runtime/fsclient direct event path if they are release gates.
 
 2. Binary flag parity gate:
-   - Package clean C++ and Rust functionsystem.
-   - For each binary, capture `--help` output and startup parse behavior.
-   - Classify every C++ flag as supported, ignored-compatible, intentionally unsupported, or missing.
+   - Done for startup parse compatibility: `docs/analysis/116-binary-flag-parity-gate.md`.
+   - Reusable gates: `tools/ops/compare_binary_flags.py` and `tools/ops/probe_deployment_flags.py`.
+   - Remaining boundary: ignored compatibility flags are not full behavior parity for every optional advanced mode.
 
 3. State persistence parity gate:
    - Add focused Rust integration test for save -> process/proxy restart -> load.
@@ -64,4 +64,4 @@ These tasks are safe, Rust-owned, and do not require changing non-Rust code.
 
 ## Stop conditions for this audit
 
-Do not claim broader production black-box parity until R1, R2, and R3 are resolved or explicitly accepted as out-of-scope by release owners. The 111 ST proof remains valid, but it is narrower than full black-box equivalence.
+Do not claim broader production black-box parity until R3 is resolved or explicitly accepted as out-of-scope by release owners, and until R4 release-layout policy is decided if byte-for-byte/minimal packaging is required. The 111 ST proof remains valid, but it is narrower than full black-box equivalence.

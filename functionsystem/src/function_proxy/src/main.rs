@@ -1,5 +1,4 @@
 use anyhow::Context;
-use clap::Parser;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,7 +64,9 @@ async fn start_embedded_runtime_manager(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     yr_common::logging::init_logging();
-    let mut config = Config::parse();
+    let mut config = yr_common::cli_compat::parse_with_legacy_flags::<Config>(
+        yr_common::cli_compat::legacy_flags::FUNCTION_PROXY,
+    );
     if config.node_id.trim().is_empty() {
         config.node_id = uuid::Uuid::new_v4().to_string();
     }

@@ -1,5 +1,6 @@
 pub mod actor;
 pub mod aksk;
+pub mod cli_compat;
 pub mod config;
 pub use config::CommonConfig;
 pub mod constants;

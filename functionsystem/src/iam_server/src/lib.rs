@@ -14,7 +14,6 @@ use std::cmp;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use clap::Parser;
 use etcd_client::Client;
 use tokio::net::TcpListener;
 use tracing::info;
@@ -28,7 +27,9 @@ use crate::token::TokenManager;
 
 pub async fn run() -> anyhow::Result<()> {
     init_logging();
-    let cli = CliArgs::parse();
+    let cli = yr_common::cli_compat::parse_with_legacy_flags::<CliArgs>(
+        yr_common::cli_compat::legacy_flags::IAM_SERVER,
+    );
     let config = IamConfig::from_cli(cli).map_err(|e| anyhow::anyhow!(e))?;
     config.validate().map_err(|e| anyhow::anyhow!(e))?;
 

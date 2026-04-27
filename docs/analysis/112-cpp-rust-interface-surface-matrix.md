@@ -129,22 +129,22 @@ It maps key constants from C++ files such as `metastore_keys.h`, `meta_store_kv_
 
 ## CLI/config surface
 
-C++ exposes a broad flag surface through `AddFlag(...)` in each component. Rust uses `clap` with both underscore and hyphen aliases for many operational flags.
+C++ exposes a broad flag surface through `AddFlag(...)` in each component. Rust uses `clap`, plus a centralized compatibility adapter in `functionsystem/src/common/utils/src/cli_compat.rs`.
 
-Current audit finding:
+Current audit finding after `docs/analysis/116-binary-flag-parity-gate.md`:
 
-- Rust clearly covers the ST-required launch flags and many compatibility aliases.
-- Rust has more aliases than C++ in several components because it accepts both C++ underscore spelling and CLI-friendly hyphen spelling.
-- A complete release gate should run each packaged binary with `--help` and compare accepted flags against the C++ binary, because source regex alone is not reliable enough.
+- Every C++ help-only flag missing from Rust help is accepted by the Rust binary under a black-box startup probe: 297/297 accepted, 0 rejected.
+- Every official deployment-layer flag extracted from process install scripts and TOML/Jinja launch templates is accepted: function_proxy 173/173, function_agent 106/106, function_master 75/75, runtime_manager 69/69, iam_server 46/46.
+- Rust still does not advertise every C++ legacy flag in `--help`; hidden accepted flags are intentionally accepted/ignored for startup compatibility.
 
-High-priority CLI areas needing explicit compatibility tests:
+Behavioral boundaries that are not closed by launch-parser acceptance:
 
 ```text
-function_proxy: memory limit/rate-limit flags, tenant isolation, traefik, DS auth/encryption, state storage
-runtime_manager: disk/log/oom/runtime env/runtime direct-connection options
-function_agent: S3, package deployer limits, plugin config options
-function_master: migration/upgrade/frontend-pool/health-monitor options
-iam_server: credential provider and token TTL options
+function_proxy: optional rate-limit, tenant isolation, OIDC/workload identity, and advanced auth knobs
+runtime_manager: optional tracing/metrics/log reuse/direct-connection/massif modes
+function_agent: optional SCC/signature-validation/metrics SSL/deployer mode knobs
+function_master: optional upgrade/fake suspend-resume/etcd decrypt knobs
+iam_server: credential provider and token TTL are parser-compatible; broader IAM e2e remains a separate risk
 ```
 
 ## Current interface conclusion

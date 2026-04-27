@@ -6,7 +6,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::Parser;
 use etcd_client::Client;
 use parking_lot::Mutex;
 use tokio::net::TcpListener;
@@ -40,7 +39,9 @@ use yr_master::election;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_logging();
-    let cli = CliArgs::parse();
+    let cli = yr_common::cli_compat::parse_with_legacy_flags::<CliArgs>(
+        yr_common::cli_compat::legacy_flags::FUNCTION_MASTER,
+    );
     let config = Arc::new(MasterConfig::from_cli(cli).map_err(|e| anyhow::anyhow!(e))?);
     config.validate().map_err(|e| anyhow::anyhow!(e))?;
 

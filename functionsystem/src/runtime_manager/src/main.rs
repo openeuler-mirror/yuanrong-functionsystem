@@ -1,4 +1,3 @@
-use clap::Parser;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +17,9 @@ use yr_runtime_manager::state::RuntimeManagerState;
 async fn main() -> anyhow::Result<()> {
     yr_common::logging::init_logging();
     yr_runtime_manager::http_api::mark_process_start();
-    let cfg = Arc::new(Config::parse());
+    let cfg = Arc::new(yr_common::cli_compat::parse_with_legacy_flags::<Config>(
+        yr_common::cli_compat::legacy_flags::RUNTIME_MANAGER,
+    ));
     cfg.ensure_log_dir()?;
 
     let ports = Arc::new(SharedPortManager::new(
