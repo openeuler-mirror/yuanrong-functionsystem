@@ -43,6 +43,7 @@ public:
     void TearDown() override
     {
         client_ = nullptr;
+        serviceRegistry_->Stop();
         serviceRegistry_ = nullptr;
         metaStorageAccessor_ = nullptr;
     }

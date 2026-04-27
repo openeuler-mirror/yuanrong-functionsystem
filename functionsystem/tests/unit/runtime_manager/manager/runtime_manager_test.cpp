@@ -681,6 +681,28 @@ TEST_F(DISABLED_RuntimeManagerTest, StopInstanceFailTest)
     litebus::Await(testActor_->GetAID());
 }
 
+TEST_F(DISABLED_RuntimeManagerTest, StopInstanceFailWithUnknowExecutorTypeTest)
+{
+    testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
+    litebus::Spawn(testActor_, true);
+
+    messages::StopInstanceRequest request;
+    request.set_runtimeid("test_runtimeID");
+    request.set_requestid("test_requestID");
+    request.set_type(static_cast<int32_t>(EXECUTOR_TYPE::UNKNOWN));
+    testActor_->StopInstance(manager_->GetAID(), request);
+
+    auto stopResponse = testActor_->GetStopInstanceResponse();
+    ASSERT_AWAIT_TRUE([=]() -> bool { return testActor_->GetStopInstanceResponse()->requestid() == "test_requestID"; });
+    EXPECT_EQ(testActor_->GetStopInstanceResponse()->runtimeid(), "test_runtimeID");
+    EXPECT_EQ(testActor_->GetStopInstanceResponse()->code(),
+              static_cast<int32_t>(RUNTIME_MANAGER_PARAMS_INVALID));
+    EXPECT_EQ(testActor_->GetStopInstanceResponse()->message(), "unknown instance type, cannot stop instance");
+
+    litebus::Terminate(testActor_->GetAID());
+    litebus::Await(testActor_->GetAID());
+}
+
 /**
  * Feature: StopInstanceWithInvalidRequestTest
  * Description: Stop Instance When sending invalid request

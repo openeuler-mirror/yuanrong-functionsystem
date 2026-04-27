@@ -88,5 +88,12 @@ softirq 453483073 2 21784959 1 4296888 291448 0 6383 180613657 0 246489735)"}));
     YRLOG_INFO("result is {}", metric.value.Get());
     EXPECT_NEAR(metric.value.Get(), 38.74, 0.9); // Solving the precision issue in floating-point number comparison
 }
+
+TEST_F(NodeCPUUtilizationCollectorTest, GetUsageFailed)
+{
+    auto collector = std::make_shared<runtime_manager::NodeCPUUtilizationCollector>(nullptr);
+    auto metrics = collector->GetUsage().Get();
+    EXPECT_EQ(metrics.instanceID.IsNone(), true);
+}
 }
 
