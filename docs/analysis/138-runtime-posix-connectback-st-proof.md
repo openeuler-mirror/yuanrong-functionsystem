@@ -212,6 +212,45 @@ The successful deployment also produced the expected abnormal runtime stderr evi
 /workspace/proof_source_replace_0_8/logs/runtime004_posix_fix_deployed_path_evidence.txt
 ```
 
+
+## Full ST Regression After Fix
+
+After the targeted abnormal-exit slice passed, the same replaced Rust functionsystem package was also verified with the current accepted single-shot cpp ST baseline:
+
+```bash
+cd /workspace/proof_source_replace_0_8/src/yuanrong/test/st
+bash test.sh -b -l cpp -f "*-CollectiveTest.InvalidGroupNameTest"
+# Success to run cpp st
+```
+
+Deployment:
+
+```text
+/tmp/deploy/28094358
+```
+
+GTest result:
+
+```text
+[==========] Running 111 tests from 6 test cases.
+[==========] 111 tests from 6 test cases ran. (233432 ms total)
+[  PASSED  ] 111 tests.
+```
+
+Connect-back samples in the full run also show C++ runtimes targeting the proxy POSIX gRPC endpoint instead of allocated runtime ports:
+
+```text
+starting yr-proxy POSIX gRPC posix_addr=172.17.0.2:8403
+grpc client target is function-proxy:172.17.0.2:8403
+```
+
+Additional evidence file:
+
+```text
+/workspace/proof_source_replace_0_8/logs/runtime004_posix_fix_full_cpp_st.log
+/workspace/proof_source_replace_0_8/logs/runtime004_posix_fix_full_cpp_st_evidence.txt
+```
+
 ## Status
 
 `RUNTIME-004` deployed exception path is now proven for the C++ ST abnormal-exit cases that previously exposed the port bug. The remaining RUNTIME-004 work, if release scope requires it, is a dedicated resource-pressure/OOM proof rather than the runtime connect-back path.
