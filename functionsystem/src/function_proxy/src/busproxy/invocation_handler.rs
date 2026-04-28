@@ -69,6 +69,29 @@ impl InvocationHandler {
         }
     }
 
+    fn authorize_failed_call_rsp(message_id: &str) -> StreamingMessage {
+        StreamingMessage {
+            message_id: message_id.to_string(),
+            meta_data: Default::default(),
+            body: Some(streaming_message::Body::CallRsp(rs::CallResponse {
+                code: ErrorCode::ErrAuthorizeFailed as i32,
+                message: "authorize failed".into(),
+            })),
+        }
+    }
+
+    fn authorize_failed_create_rsp(message_id: &str, instance_id: &str) -> StreamingMessage {
+        StreamingMessage {
+            message_id: message_id.to_string(),
+            meta_data: Default::default(),
+            body: Some(streaming_message::Body::CreateRsp(cs::CreateResponse {
+                code: ErrorCode::ErrAuthorizeFailed as i32,
+                message: "authorize failed".into(),
+                instance_id: instance_id.to_string(),
+            })),
+        }
+    }
+
     async fn handle_save_req(
         message_id: &str,
         instance_id: &str,
@@ -251,6 +274,19 @@ impl InvocationHandler {
                 });
             }
             return InboundAction::Reply(replies);
+        }
+
+        if let Err(e) = bus.authorize_create_request(caller_stream_id, create) {
+            warn!(
+                %instance_id,
+                caller = %caller_stream_id,
+                error = %e,
+                "CreateReq: IAM authorize failed"
+            );
+            return InboundAction::Reply(vec![Self::authorize_failed_create_rsp(
+                msg_id,
+                &instance_id,
+            )]);
         }
 
         bus.register_pending_instance(&instance_id, caller_stream_id, create);
@@ -773,6 +809,18 @@ impl InvocationHandler {
                     target_instance = %target_instance,
                     "InvokeReq: routing to runtime"
                 );
+                if let Err(e) =
+                    bus.authorize_invoke_request(instance_id, &target_instance, &inv.function)
+                {
+                    warn!(
+                        caller = %instance_id,
+                        target_instance = %target_instance,
+                        request_id = %inv.request_id,
+                        error = %e,
+                        "InvokeReq: IAM authorize failed"
+                    );
+                    return InboundAction::Reply(vec![Self::authorize_failed_call_rsp(&mid)]);
+                }
                 bus.remember_result_target(&inv.request_id, instance_id);
                 bus.remember_request_target(&inv.request_id, &target_instance);
                 bus.remember_request_message_id(&inv.request_id, &mid);

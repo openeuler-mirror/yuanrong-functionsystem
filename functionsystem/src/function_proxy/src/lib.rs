@@ -9,6 +9,7 @@ pub mod function_meta;
 pub mod global_scheduler_forward;
 pub mod grpc_services;
 pub mod http_api;
+pub mod iam_policy;
 pub mod instance_ctrl;
 pub mod instance_manager;
 pub mod instance_recover;

@@ -17,6 +17,7 @@ use yr_proto::runtime_rpc::{streaming_message, StreamingMessage};
 use yr_proto::runtime_service::{HeartbeatRequest, NotifyRequest, SignalResponse};
 use yr_proxy::busproxy::invocation_handler::{InboundAction, InvocationHandler};
 use yr_proxy::busproxy::{BusProxyCoordinator, StateStore};
+use yr_proxy::config::Config;
 use yr_proxy::instance_ctrl::InstanceController;
 use yr_proxy::resource_view::{ResourceVector, ResourceView};
 use yr_proxy::state_machine::{InstanceMetadata, InstanceState};
@@ -99,6 +100,68 @@ fn new_persistent_bus(
     BusProxyCoordinator::new_with_state_store(config, instance_ctrl, Some(store))
 }
 
+fn write_iam_policy(contents: &str) -> String {
+    let path = std::env::temp_dir().join(format!(
+        "yr-proxy-iam-policy-{}-{}.json",
+        std::process::id(),
+        InstanceMetadata::now_ms()
+    ));
+    std::fs::write(&path, contents).expect("write iam policy");
+    path.to_string_lossy().into_owned()
+}
+
+fn new_iam_bus(node_id: &str, grpc_port: u16, policy: &str) -> Arc<BusProxyCoordinator> {
+    let mut cfg: Config = (*common::make_proxy_config(node_id, grpc_port)).clone();
+    cfg.enable_iam = true;
+    cfg.iam_policy_file = write_iam_policy(policy);
+    let config = Arc::new(cfg);
+    let resource_view = ResourceView::new(ResourceVector {
+        cpu: 8.0,
+        memory: 64.0,
+        npu: 0.0,
+    });
+    let instance_ctrl = InstanceController::new(config.clone(), resource_view, None, None);
+    BusProxyCoordinator::new(config, instance_ctrl)
+}
+
+fn insert_instance_meta(
+    bus: &BusProxyCoordinator,
+    instance_id: &str,
+    tenant: &str,
+    function: &str,
+) {
+    bus.instance_ctrl_ref().insert_metadata(InstanceMetadata {
+        id: instance_id.into(),
+        function_name: function.into(),
+        tenant: tenant.into(),
+        node_id: "node-a".into(),
+        runtime_id: "rt".into(),
+        runtime_port: 0,
+        state: InstanceState::Running,
+        created_at_ms: InstanceMetadata::now_ms(),
+        updated_at_ms: InstanceMetadata::now_ms(),
+        group_id: None,
+        trace_id: String::new(),
+        resources: Default::default(),
+        etcd_kv_version: None,
+        etcd_mod_revision: None,
+    });
+}
+
+fn same_tenant_iam_policy() -> &'static str {
+    r#"{
+        "tenant_group": { "external": {} },
+        "white_list": {},
+        "policy": {
+            "allow": {
+                "invoke": { "external": { "external": ["="] } },
+                "create": { "external": { "external": ["="] } }
+            },
+            "deny": {}
+        }
+    }"#
+}
+
 #[test]
 fn invoke_to_call_copies_core_fields() {
     let inv = InvokeRequest {
@@ -147,7 +210,9 @@ fn invoke_to_call_copies_invoke_custom_tags_to_call_create_options() {
     };
 
     assert_eq!(
-        call.create_options.get("ENABLE_FORCE_INVOKE").map(String::as_str),
+        call.create_options
+            .get("ENABLE_FORCE_INVOKE")
+            .map(String::as_str),
         Some("true")
     );
     assert_eq!(
@@ -185,6 +250,39 @@ async fn create_req_scheduling_failure_returns_create_rsp_and_notify() {
         panic!("NotifyReq");
     };
     assert_eq!(n.request_id, "creq-1");
+}
+
+#[tokio::test]
+async fn create_req_denied_by_iam_policy_returns_authorize_failed_before_scheduling() {
+    let bus = new_iam_bus("node-a", 29091, same_tenant_iam_policy());
+    insert_instance_meta(&bus, "parent-inst", "tenant-a", "parent-func");
+    let create = CreateRequest {
+        function: "child-func".into(),
+        request_id: "create-denied".into(),
+        create_options: [("tenantId".to_string(), "tenant-b".to_string())]
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    };
+    let msg = StreamingMessage {
+        message_id: "create-denied-mid".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CreateReq(create)),
+    };
+
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound("parent-inst", msg, &bus).await
+    else {
+        panic!("expected IAM denial reply");
+    };
+
+    assert_eq!(outs.len(), 1, "IAM denial must not continue to scheduling");
+    let streaming_message::Body::CreateRsp(rsp) = outs[0].body.as_ref().unwrap() else {
+        panic!("CreateRsp");
+    };
+    assert_eq!(rsp.code, ErrorCode::ErrAuthorizeFailed as i32);
+    assert_eq!(rsp.message, "authorize failed");
+    assert_eq!(rsp.instance_id, "create-denied");
 }
 
 #[tokio::test]
@@ -473,6 +571,50 @@ async fn invoke_req_routes_to_named_runtime_stream() {
         got.body,
         Some(streaming_message::Body::CallReq(_))
     ));
+}
+
+#[tokio::test]
+async fn invoke_req_denied_by_iam_policy_returns_authorize_failed_before_runtime_send() {
+    let bus = new_iam_bus("node-a", 29092, same_tenant_iam_policy());
+    insert_instance_meta(&bus, "caller-inst", "tenant-a", "caller-func");
+    insert_instance_meta(&bus, "target-inst", "tenant-b", "target-func");
+    let (tx, mut rx) = mpsc::channel(4);
+    bus.attach_runtime_stream("target-inst", tx);
+    bus.on_runtime_recover_response(
+        "target-inst",
+        &yr_proto::runtime_service::RecoverResponse {
+            code: ErrorCode::ErrNone as i32,
+            ..Default::default()
+        },
+    );
+
+    let msg = StreamingMessage {
+        message_id: "invoke-denied-mid".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::InvokeReq(InvokeRequest {
+            function: "target-func".into(),
+            request_id: "invoke-denied".into(),
+            instance_id: "target-inst".into(),
+            ..Default::default()
+        })),
+    };
+
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound("caller-inst", msg, &bus).await
+    else {
+        panic!("expected IAM denial reply");
+    };
+
+    assert!(
+        rx.try_recv().is_err(),
+        "denied invoke must not reach runtime"
+    );
+    assert_eq!(outs.len(), 1);
+    let streaming_message::Body::CallRsp(rsp) = outs[0].body.as_ref().unwrap() else {
+        panic!("CallRsp");
+    };
+    assert_eq!(rsp.code, ErrorCode::ErrAuthorizeFailed as i32);
+    assert_eq!(rsp.message, "authorize failed");
 }
 
 #[tokio::test]

@@ -16,6 +16,9 @@ pub use instance_view::{InstanceRouteRecord, InstanceView, RouteJson};
 pub use state_store::{MetaStoreStateStore, StateStore};
 
 use crate::config::Config;
+use crate::iam_policy::{
+    AuthorizeParam, IamAuthorizer, CALL_METHOD_CREATE, CALL_METHOD_INVOKE, TENANT_ID,
+};
 use crate::instance_ctrl::InstanceController;
 use crate::posix_client::DataInterfacePosixClient;
 use invocation_handler::InvocationHandler;
@@ -114,6 +117,7 @@ pub struct BusProxyCoordinator {
     instance_view: Arc<InstanceView>,
     instance_ctrl: Arc<InstanceController>,
     config: Arc<Config>,
+    iam_authorizer: IamAuthorizer,
     posix: Arc<Mutex<DataInterfacePosixClient>>,
     retry: RouteRetry,
     pending_creates: PendingCreateMap,
@@ -185,6 +189,7 @@ impl BusProxyCoordinator {
         instance_ctrl: Arc<InstanceController>,
         state_store: Option<Arc<dyn StateStore>>,
     ) -> Arc<Self> {
+        let iam_authorizer = IamAuthorizer::from_config(config.as_ref());
         Arc::new(Self {
             local_node_id: config.node_id.clone(),
             local_grpc_endpoint: config.advertise_grpc_endpoint(),
@@ -194,6 +199,7 @@ impl BusProxyCoordinator {
             inner_clients: Mutex::new(HashMap::new()),
             instance_view: Arc::new(InstanceView::new(config.node_id.clone())),
             instance_ctrl,
+            iam_authorizer,
             posix: Arc::new(Mutex::new(DataInterfacePosixClient::new(
                 config.posix_uds_path.clone(),
             ))),
@@ -249,6 +255,65 @@ impl BusProxyCoordinator {
 
     pub fn instance_ctrl_ref(&self) -> &Arc<InstanceController> {
         &self.instance_ctrl
+    }
+
+    pub fn authorize_create_request(
+        &self,
+        caller_stream_id: &str,
+        create: &cs::CreateRequest,
+    ) -> Result<(), String> {
+        if !self.iam_authorizer.is_enabled() {
+            return Ok(());
+        }
+        let Some(parent) = self.instance_ctrl.get(caller_stream_id) else {
+            // C++ skips create authorization for bootstrap/head-function creates
+            // that have no parent instance.
+            return Ok(());
+        };
+        let callee_tenant = create
+            .create_options
+            .get(TENANT_ID)
+            .filter(|v| !v.trim().is_empty())
+            .cloned()
+            .unwrap_or_else(|| parent.tenant.clone());
+        self.iam_authorizer.authorize(&AuthorizeParam {
+            caller_tenant_id: parent.tenant,
+            callee_tenant_id: callee_tenant,
+            call_method: CALL_METHOD_CREATE.into(),
+            func_name: parent.function_name,
+        })
+    }
+
+    pub fn authorize_invoke_request(
+        &self,
+        caller_instance_id: &str,
+        target_instance_id: &str,
+        invoke_function: &str,
+    ) -> Result<(), String> {
+        if !self.iam_authorizer.is_enabled() {
+            return Ok(());
+        }
+        let Some(target) = self.instance_ctrl.get(target_instance_id) else {
+            // Preserve the existing not-found routing response; there is no
+            // callee tenant available for a C++-equivalent policy check.
+            return Ok(());
+        };
+        let caller_tenant = self
+            .instance_ctrl
+            .get(caller_instance_id)
+            .map(|m| m.tenant)
+            .unwrap_or_default();
+        let func_name = if target.function_name.trim().is_empty() {
+            invoke_function.to_string()
+        } else {
+            target.function_name
+        };
+        self.iam_authorizer.authorize(&AuthorizeParam {
+            caller_tenant_id: caller_tenant,
+            callee_tenant_id: target.tenant,
+            call_method: CALL_METHOD_INVOKE.into(),
+            func_name,
+        })
     }
 
     /// Register a pending instance created by a driver's CreateReq.
