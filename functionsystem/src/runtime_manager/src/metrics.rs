@@ -1,9 +1,10 @@
+use crate::config::Config;
 use crate::container::detect_accelerators;
 use crate::state::RuntimeManagerState;
 use anyhow::Context;
 use prometheus::{Encoder, Gauge, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder};
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::ffi::CString;
 use std::fs;
 use std::path::Path;
@@ -30,6 +31,7 @@ pub struct InstanceMetric {
     pub port: u16,
     pub net_rx_bytes: u64,
     pub net_tx_bytes: u64,
+    pub resource_limits: BTreeMap<String, f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -38,6 +40,28 @@ pub struct MetricsSnapshot {
     pub node: NodeMetricsSample,
     pub instances: Vec<InstanceMetric>,
     pub accelerators: crate::container::AcceleratorSnapshot,
+    #[serde(flatten)]
+    pub resource_projection: ResourceProjection,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct ResourceProjection {
+    pub capacity: BTreeMap<String, f64>,
+    pub used: BTreeMap<String, f64>,
+    pub allocatable: BTreeMap<String, f64>,
+    /// Compatibility shortcut for existing Rust schedulers that parse
+    /// C++-style scalar resources from a top-level `resources` object.
+    pub resources: BTreeMap<String, ScalarResource>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScalarResource {
+    pub scalar: ScalarValue,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScalarValue {
+    pub value: f64,
 }
 
 pub struct MetricsCollector {
@@ -106,10 +130,7 @@ impl MetricsCollector {
         for line in text.lines() {
             for k in keys {
                 if line.starts_with(&format!("{k}:")) {
-                    let v = line
-                        .split_whitespace()
-                        .nth(1)
-                        .and_then(|s| s.parse().ok());
+                    let v = line.split_whitespace().nth(1).and_then(|s| s.parse().ok());
                     if let Some(v) = v {
                         m.insert((*k).to_string(), v);
                     }
@@ -151,6 +172,12 @@ impl MetricsCollector {
             0.0
         };
         (total, avail, used_ratio)
+    }
+
+    fn cpu_capacity_from_host() -> f64 {
+        std::thread::available_parallelism()
+            .map(|n| n.get() as f64 * 1000.0)
+            .unwrap_or(0.0)
     }
 
     fn net_bytes_for_pid(pid: i32) -> (u64, u64) {
@@ -214,6 +241,11 @@ impl MetricsCollector {
                             port: p.port,
                             net_rx_bytes,
                             net_tx_bytes,
+                            resource_limits: p
+                                .resources
+                                .iter()
+                                .map(|(k, v)| (k.clone(), *v))
+                                .collect(),
                         });
                     }
                 }
@@ -221,21 +253,97 @@ impl MetricsCollector {
         }
 
         let accelerators = detect_accelerators();
+        let node = NodeMetricsSample {
+            cpu_usage_ratio,
+            memory_total_kb,
+            memory_available_kb,
+            memory_used_ratio,
+            disk_total_bytes,
+            disk_avail_bytes,
+            disk_used_ratio,
+        };
+        let resource_projection = build_resource_projection(&state.config, &node, &instances);
 
         MetricsSnapshot {
             node_id: state.config.node_id.clone(),
-            node: NodeMetricsSample {
-                cpu_usage_ratio,
-                memory_total_kb,
-                memory_available_kb,
-                memory_used_ratio,
-                disk_total_bytes,
-                disk_avail_bytes,
-                disk_used_ratio,
-            },
+            node,
             instances,
             accelerators,
+            resource_projection,
         }
+    }
+}
+
+pub fn build_resource_projection(
+    cfg: &Config,
+    node: &NodeMetricsSample,
+    instances: &[InstanceMetric],
+) -> ResourceProjection {
+    let mut capacity = BTreeMap::new();
+    let mut used = BTreeMap::new();
+
+    let metrics_mode = cfg.metrics_collector_type.trim();
+    let node_mode = metrics_mode.eq_ignore_ascii_case("node");
+    let cpu_capacity = if node_mode {
+        (MetricsCollector::cpu_capacity_from_host() - cfg.overhead_cpu).max(0.0)
+    } else {
+        cfg.proc_metrics_cpu.max(0.0)
+    };
+    let memory_capacity = if node_mode {
+        ((node.memory_total_kb as f64 / 1024.0) - cfg.overhead_memory).max(0.0)
+    } else {
+        cfg.proc_metrics_memory.max(0.0)
+    };
+
+    capacity.insert("cpu".to_string(), cpu_capacity);
+    capacity.insert("memory".to_string(), memory_capacity);
+
+    let memory_used_mb = if node_mode {
+        node.memory_total_kb
+            .saturating_sub(node.memory_available_kb) as f64
+            / 1024.0
+    } else {
+        instances.iter().map(|i| i.rss_kb as f64 / 1024.0).sum()
+    };
+    used.insert("cpu".to_string(), 0.0);
+    used.insert("memory".to_string(), memory_used_mb);
+
+    if node.disk_total_bytes > 0 {
+        let total_gb = node.disk_total_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
+        let used_gb = node.disk_total_bytes.saturating_sub(node.disk_avail_bytes) as f64
+            / 1024.0
+            / 1024.0
+            / 1024.0;
+        capacity.insert("disk".to_string(), total_gb);
+        used.insert("disk".to_string(), used_gb);
+    }
+
+    if let Ok(custom) = serde_json::from_str::<BTreeMap<String, f64>>(&cfg.custom_resources) {
+        for (k, v) in custom {
+            if v >= 0.0 {
+                capacity.insert(k, v);
+            }
+        }
+    }
+
+    let allocatable = capacity.clone();
+    let resources = capacity
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.clone(),
+                ScalarResource {
+                    scalar: ScalarValue { value: *value },
+                },
+            )
+        })
+        .collect();
+
+    ResourceProjection {
+        capacity,
+        used,
+        allocatable,
+        resources,
     }
 }
 
@@ -333,10 +441,8 @@ pub fn apply_prometheus_snapshot(snap: &MetricsSnapshot) {
     p.node_cpu.set(snap.node.cpu_usage_ratio);
     p.node_mem.set(snap.node.memory_used_ratio);
     p.node_disk.set(snap.node.disk_used_ratio);
-    p.accel_nvidia
-        .set(i64::from(snap.accelerators.nvidia));
-    p.accel_davinci
-        .set(i64::from(snap.accelerators.davinci));
+    p.accel_nvidia.set(i64::from(snap.accelerators.nvidia));
+    p.accel_davinci.set(i64::from(snap.accelerators.davinci));
 
     let mut seen = HashSet::new();
     for i in &snap.instances {
@@ -372,9 +478,15 @@ pub fn apply_prometheus_snapshot(snap: &MetricsSnapshot) {
     for k in prev_g.clone().difference(&seen) {
         let parts: Vec<&str> = k.split('|').collect();
         if parts.len() == 3 {
-            let _ = p.inst_rss.remove_label_values(&[parts[0], parts[1], parts[2]]);
-            let _ = p.inst_rx.remove_label_values(&[parts[0], parts[1], parts[2]]);
-            let _ = p.inst_tx.remove_label_values(&[parts[0], parts[1], parts[2]]);
+            let _ = p
+                .inst_rss
+                .remove_label_values(&[parts[0], parts[1], parts[2]]);
+            let _ = p
+                .inst_rx
+                .remove_label_values(&[parts[0], parts[1], parts[2]]);
+            let _ = p
+                .inst_tx
+                .remove_label_values(&[parts[0], parts[1], parts[2]]);
         }
     }
     *prev_g = seen;

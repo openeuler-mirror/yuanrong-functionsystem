@@ -140,6 +140,16 @@ fn agent_cpp_runtime_flags_feed_embedded_runtime_manager_config() {
         "/java/log.xml",
         "--java_system_library_path",
         "/java/lib",
+        "--metrics_collector_type",
+        "node",
+        "--proc_metrics_cpu",
+        "2000",
+        "--proc_metrics_memory",
+        "8192",
+        "--overhead_cpu",
+        "100",
+        "--overhead_memory",
+        "256",
         "--enable_inherit_env=true",
         "--setCmdCred=true",
     ])
@@ -174,6 +184,11 @@ fn agent_cpp_runtime_flags_feed_embedded_runtime_manager_config() {
     assert_eq!(rm.python_log_config_path, "/py/log.json");
     assert_eq!(rm.java_system_property, "/java/log.xml");
     assert_eq!(rm.java_system_library_path, "/java/lib");
+    assert_eq!(rm.metrics_collector_type, "node");
+    assert_eq!(rm.proc_metrics_cpu, 2000.0);
+    assert_eq!(rm.proc_metrics_memory, 8192.0);
+    assert_eq!(rm.overhead_cpu, 100.0);
+    assert_eq!(rm.overhead_memory, 256.0);
     assert!(rm.enable_inherit_env);
     assert!(rm.set_cmd_cred);
 }

@@ -98,6 +98,10 @@ pub struct AgentCppIgnored {
     pub runtime_default_config: String,
     #[arg(long = "proc_metrics_memory", default_value = "")]
     pub proc_metrics_memory: String,
+    #[arg(long = "overhead_cpu", default_value = "")]
+    pub overhead_cpu: String,
+    #[arg(long = "overhead_memory", default_value = "")]
+    pub overhead_memory: String,
     #[arg(long = "enable_dis_conv_call_stack", default_value = "")]
     pub enable_dis_conv_call_stack: String,
     #[arg(long = "data_system_enable", default_value = "")]
@@ -371,6 +375,9 @@ impl Config {
         fn parse_u32(src: &str, default: u32) -> u32 {
             src.trim().parse().unwrap_or(default)
         }
+        fn parse_f64(src: &str, default: f64) -> f64 {
+            src.trim().parse().unwrap_or(default)
+        }
         fn parse_bool(src: &str, default: bool) -> bool {
             match src.trim().to_ascii_lowercase().as_str() {
                 "true" | "1" | "yes" | "on" => true,
@@ -413,6 +420,17 @@ impl Config {
             &self.cpp_ignored.runtime_std_log_dir,
         );
         set_if_present(&mut rm.runtime_home_dir, &self.cpp_ignored.runtime_home_dir);
+        set_if_present(
+            &mut rm.metrics_collector_type,
+            &self.cpp_ignored.metrics_collector_type,
+        );
+        rm.proc_metrics_cpu = parse_f64(&self.cpp_ignored.proc_metrics_cpu, rm.proc_metrics_cpu);
+        rm.proc_metrics_memory = parse_f64(
+            &self.cpp_ignored.proc_metrics_memory,
+            rm.proc_metrics_memory,
+        );
+        rm.overhead_cpu = parse_f64(&self.cpp_ignored.overhead_cpu, rm.overhead_cpu);
+        rm.overhead_memory = parse_f64(&self.cpp_ignored.overhead_memory, rm.overhead_memory);
         set_if_present(
             &mut rm.runtime_config_dir,
             &self.cpp_ignored.runtime_config_dir,

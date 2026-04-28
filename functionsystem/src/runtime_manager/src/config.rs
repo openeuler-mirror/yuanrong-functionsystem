@@ -60,6 +60,42 @@ pub struct Config {
     #[arg(long, default_value_t = 5000)]
     pub metrics_interval_ms: u64,
 
+    /// C++ `metrics_collector_type`; `proc` uses configured capacity, `node` reads host capacity.
+    #[arg(
+        long = "metrics_collector_type",
+        default_value = "proc",
+        alias = "metrics-collector-type"
+    )]
+    pub metrics_collector_type: String,
+
+    /// C++ default logical CPU capacity for `proc` metrics mode.
+    #[arg(
+        long = "proc_metrics_cpu",
+        default_value_t = 1000.0,
+        alias = "proc-metrics-cpu"
+    )]
+    pub proc_metrics_cpu: f64,
+
+    /// C++ default logical memory capacity (MB) for `proc` metrics mode.
+    #[arg(
+        long = "proc_metrics_memory",
+        default_value_t = 4000.0,
+        alias = "proc-metrics-memory"
+    )]
+    pub proc_metrics_memory: f64,
+
+    /// CPU capacity reserved from node metrics mode.
+    #[arg(long = "overhead_cpu", default_value_t = 0.0, alias = "overhead-cpu")]
+    pub overhead_cpu: f64,
+
+    /// Memory capacity reserved from node metrics mode (MB).
+    #[arg(
+        long = "overhead_memory",
+        default_value_t = 0.0,
+        alias = "overhead-memory"
+    )]
+    pub overhead_memory: f64,
+
     /// cgroup v2 parent directory (e.g. `/sys/fs/cgroup/yr_runtime_manager`). Empty disables cgroups.
     #[arg(long, default_value = "", value_parser = cgroup_parent_from_flag)]
     pub cgroup_parent: PathBuf,
@@ -309,6 +345,11 @@ impl Config {
             runtime_paths,
             log_path,
             metrics_interval_ms: 5000,
+            metrics_collector_type: "proc".into(),
+            proc_metrics_cpu: 1000.0,
+            proc_metrics_memory: 4000.0,
+            overhead_cpu: 0.0,
+            overhead_memory: 0.0,
             cgroup_parent: PathBuf::new(),
             cgroup_enable_cpu: true,
             cgroup_enable_memory: true,
