@@ -60,6 +60,52 @@ fn cpp_runtime_launch_args_match_cpp_command_builder_shape() {
 }
 
 #[test]
+fn cpp_runtime_launch_args_use_proxy_posix_address_when_server_mode_env_is_supplied() {
+    let cfg = Config::try_parse_from([
+        "yr-runtime-manager",
+        "--host",
+        "127.0.0.1",
+        "--proxy-ip",
+        "10.0.0.2",
+        "--runtime-log-level",
+        "INFO",
+        "--runtime-config-dir",
+        "/runtime/config",
+    ])
+    .unwrap();
+    let mut req = start_req("cpp");
+    req.env_vars
+        .insert("POSIX_LISTEN_ADDR".into(), "10.0.0.2:8403".into());
+    req.env_vars
+        .insert("PROXY_GRPC_SERVER_PORT".into(), "8403".into());
+
+    let spec = build_runtime_launch_spec(
+        &cfg,
+        &req,
+        &["/runtime/cpp/bin/runtime".into()],
+        "rt-inst-12345678-1",
+        30123,
+    )
+    .unwrap();
+
+    assert!(spec
+        .args
+        .iter()
+        .any(|arg| arg == "-grpcAddress=10.0.0.2:8403"));
+    assert!(
+        !spec
+            .args
+            .iter()
+            .any(|arg| arg == "-grpcAddress=10.0.0.2:30123"),
+        "server-mode C++ runtime must connect back to the proxy POSIX gRPC port, not the allocated runtime port"
+    );
+    assert_eq!(
+        spec.env.get("POSIX_LISTEN_ADDR").map(String::as_str),
+        Some("10.0.0.2:8403")
+    );
+}
+
+#[test]
 fn launch_env_contains_cpp_runtime_manager_framework_values() {
     let cfg = Config::try_parse_from([
         "yr-runtime-manager",

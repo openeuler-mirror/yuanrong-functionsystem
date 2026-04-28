@@ -121,6 +121,15 @@ fn runtime_grpc_address(cfg: &Config, port: u16) -> String {
     format!("{host}:{port}")
 }
 
+fn runtime_connect_address(cfg: &Config, req: &StartInstanceRequest, port: u16) -> String {
+    req.env_vars
+        .get("POSIX_LISTEN_ADDR")
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty() && *v != "0")
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| runtime_grpc_address(cfg, port))
+}
+
 fn job_id_env_for(req: &StartInstanceRequest) -> String {
     req.env_vars
         .get("YR_JOB_ID")
@@ -222,7 +231,7 @@ fn build_runtime_env(
     port: u16,
     workdir: &Path,
 ) -> HashMap<String, String> {
-    let listen_addr = runtime_grpc_address(cfg, port);
+    let listen_addr = runtime_connect_address(cfg, req, port);
     let host_ip = cfg.host_ip.trim();
     let host_ip = if host_ip.is_empty() {
         cfg.host.trim()
@@ -393,7 +402,7 @@ pub fn build_runtime_launch_spec(
     let executable = pick_runtime_executable(paths, &req.runtime_type)
         .ok_or_else(|| anyhow!("no runtime executable configured"))?;
     let current_dir = resolve_workdir(req);
-    let listen_addr = runtime_grpc_address(cfg, port);
+    let listen_addr = runtime_connect_address(cfg, req, port);
 
     let mut arg0 = None;
     let args = if is_python_runtime(&req.runtime_type) {
@@ -421,7 +430,7 @@ pub fn build_runtime_launch_spec(
             format!("-runtimeId={runtime_id}"),
             format!("-logLevel={}", cfg.runtime_log_level),
             format!("-jobId={}", job_id_for(req)),
-            format!("-grpcAddress={}", runtime_grpc_address(cfg, port)),
+            format!("-grpcAddress={listen_addr}"),
             format!(
                 "-runtimeConfigPath={}/runtime.json",
                 cfg.runtime_config_dir.trim_end_matches('/')
@@ -435,7 +444,7 @@ pub fn build_runtime_launch_spec(
             format!("-runtimeId={runtime_id}"),
             format!("-instanceId={}", req.instance_id),
             format!("-logLevel={}", cfg.runtime_log_level),
-            format!("-grpcAddress={}", runtime_grpc_address(cfg, port)),
+            format!("-grpcAddress={listen_addr}"),
         ]
     } else {
         vec![req.instance_id.clone()]
