@@ -36,6 +36,22 @@ use yr_proto::internal::global_scheduler_service_server::GlobalSchedulerServiceS
 
 use yr_master::election;
 
+fn init_litebus_ssl_env(config: &MasterConfig) -> anyhow::Result<()> {
+    let inputs = yr_common::ssl_config::SslInputs::from_flag_strings(
+        &config.ssl_enable,
+        &config.metrics_ssl_enable,
+        &config.ssl_base_path,
+        &config.ssl_root_file,
+        &config.ssl_cert_file,
+        &config.ssl_key_file,
+    );
+    let ssl = yr_common::ssl_config::get_ssl_cert_config(&inputs);
+    if inputs.ssl_enable {
+        yr_common::ssl_config::apply_litebus_ssl_envs(&ssl).map_err(|e| anyhow::anyhow!(e))?;
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_logging();
@@ -44,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let config = Arc::new(MasterConfig::from_cli(cli).map_err(|e| anyhow::anyhow!(e))?);
     config.validate().map_err(|e| anyhow::anyhow!(e))?;
+    init_litebus_ssl_env(&config)?;
 
     let endpoints: Vec<&str> = config.etcd_endpoints.iter().map(|s| s.as_str()).collect();
 

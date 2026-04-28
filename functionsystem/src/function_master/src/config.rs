@@ -39,7 +39,7 @@ fn election_mode_from_cpp(s: &str) -> Result<ElectionMode, YrError> {
         _ => {
             return Err(YrError::Config(format!(
                 "invalid election_mode {s:?} (expected standalone|etcd|txn|k8s or 0-3)"
-            )))
+            )));
         }
     })
 }
@@ -98,6 +98,8 @@ pub struct MasterCppIgnored {
     pub ssl_cert_file: String,
     #[arg(long = "ssl_key_file", default_value = "")]
     pub ssl_key_file: String,
+    #[arg(long = "metrics_ssl_enable", default_value = "")]
+    pub metrics_ssl_enable: String,
     #[arg(long = "enable_trace", default_value = "")]
     pub enable_trace: String,
     #[arg(long = "trace_config", default_value = "")]
@@ -161,7 +163,11 @@ pub struct CliArgs {
     )]
     pub etcd_endpoints: Vec<String>,
 
-    #[arg(long = "etcd_table_prefix", default_value = "", alias = "etcd-table-prefix")]
+    #[arg(
+        long = "etcd_table_prefix",
+        default_value = "",
+        alias = "etcd-table-prefix"
+    )]
     pub etcd_table_prefix: String,
 
     #[arg(
@@ -217,7 +223,11 @@ pub struct CliArgs {
     )]
     pub enable_meta_store: bool,
 
-    #[arg(long = "meta_store_address", default_value = "", alias = "meta-store-address")]
+    #[arg(
+        long = "meta_store_address",
+        default_value = "",
+        alias = "meta-store-address"
+    )]
     pub meta_store_address: String,
 
     #[arg(
@@ -282,7 +292,11 @@ pub struct CliArgs {
     )]
     pub decrypt_algorithm: String,
 
-    #[arg(long = "schedule_plugins", default_value = "", alias = "schedule-plugins")]
+    #[arg(
+        long = "schedule_plugins",
+        default_value = "",
+        alias = "schedule-plugins"
+    )]
     pub schedule_plugins: String,
 
     #[arg(
@@ -362,7 +376,11 @@ pub struct CliArgs {
     )]
     pub system_tenant_id: String,
 
-    #[arg(long = "services_path", default_value = "/", visible_alias = "services-path")]
+    #[arg(
+        long = "services_path",
+        default_value = "/",
+        visible_alias = "services-path"
+    )]
     pub services_path: String,
 
     #[arg(long = "lib_path", default_value = "/", visible_alias = "lib-path")]
@@ -451,6 +469,12 @@ pub struct MasterConfig {
     pub meta_store_mode: String,
     pub meta_store_max_flush_concurrency: u32,
     pub meta_store_max_flush_batch_size: u32,
+    pub ssl_enable: String,
+    pub metrics_ssl_enable: String,
+    pub ssl_base_path: String,
+    pub ssl_root_file: String,
+    pub ssl_cert_file: String,
+    pub ssl_key_file: String,
     pub instance_id: String,
 }
 
@@ -461,7 +485,9 @@ impl MasterConfig {
 
         let (host, port) = if let Some(ref ip) = args.ip {
             parse_cpp_listen(ip).ok_or_else(|| {
-                YrError::Config(format!("invalid --ip {ip:?} (expected host:port or [ipv6]:port)"))
+                YrError::Config(format!(
+                    "invalid --ip {ip:?} (expected host:port or [ipv6]:port)"
+                ))
             })?
         } else {
             (args.host.clone(), args.port)
@@ -506,6 +532,12 @@ impl MasterConfig {
             meta_store_mode: args.meta_store_mode,
             meta_store_max_flush_concurrency: args.meta_store_max_flush_concurrency,
             meta_store_max_flush_batch_size: args.meta_store_max_flush_batch_size,
+            ssl_enable: args.cpp_ignored.ssl_enable,
+            metrics_ssl_enable: args.cpp_ignored.metrics_ssl_enable,
+            ssl_base_path: args.cpp_ignored.ssl_base_path,
+            ssl_root_file: args.cpp_ignored.ssl_root_file,
+            ssl_cert_file: args.cpp_ignored.ssl_cert_file,
+            ssl_key_file: args.cpp_ignored.ssl_key_file,
             instance_id,
         })
     }

@@ -2,7 +2,9 @@ use clap::builder::BoolishValueParser;
 use clap::Parser;
 use clap::ValueEnum;
 use yr_common::error::{YrError, YrResult};
-use yr_common::etcd_keys::{with_prefix, SCHEDULER_TOPOLOGY, YR_DOMAIN_SCHEDULER_PREFIX, YR_MASTER_PREFIX};
+use yr_common::etcd_keys::{
+    with_prefix, SCHEDULER_TOPOLOGY, YR_DOMAIN_SCHEDULER_PREFIX, YR_MASTER_PREFIX,
+};
 
 /// Leader election backend (same semantics as yr-master).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
@@ -65,6 +67,36 @@ pub struct CliArgs {
     /// Heartbeat staleness / housekeeping interval (ms).
     #[arg(long, default_value_t = 5000)]
     pub pull_resource_interval_ms: u64,
+
+    #[arg(
+        long = "ssl_enable",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = false,
+        value_parser = BoolishValueParser::new()
+    )]
+    pub ssl_enable: bool,
+
+    #[arg(
+        long = "metrics_ssl_enable",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = false,
+        value_parser = BoolishValueParser::new()
+    )]
+    pub metrics_ssl_enable: bool,
+
+    #[arg(long = "ssl_base_path", default_value = "/")]
+    pub ssl_base_path: String,
+
+    #[arg(long = "ssl_root_file", default_value = "")]
+    pub ssl_root_file: String,
+
+    #[arg(long = "ssl_cert_file", default_value = "")]
+    pub ssl_cert_file: String,
+
+    #[arg(long = "ssl_key_file", default_value = "")]
+    pub ssl_key_file: String,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +112,12 @@ pub struct DomainSchedulerConfig {
     pub enable_preemption: bool,
     pub max_priority: i32,
     pub pull_resource_interval_ms: u64,
+    pub ssl_enable: bool,
+    pub metrics_ssl_enable: bool,
+    pub ssl_base_path: String,
+    pub ssl_root_file: String,
+    pub ssl_cert_file: String,
+    pub ssl_key_file: String,
     /// Process identity for etcd campaign (HOSTNAME or random UUID).
     pub instance_id: String,
 }
@@ -100,6 +138,12 @@ impl DomainSchedulerConfig {
             enable_preemption: args.enable_preemption,
             max_priority: args.max_priority,
             pull_resource_interval_ms: args.pull_resource_interval_ms,
+            ssl_enable: args.ssl_enable,
+            metrics_ssl_enable: args.metrics_ssl_enable,
+            ssl_base_path: args.ssl_base_path,
+            ssl_root_file: args.ssl_root_file,
+            ssl_cert_file: args.ssl_cert_file,
+            ssl_key_file: args.ssl_key_file,
             instance_id,
         })
     }

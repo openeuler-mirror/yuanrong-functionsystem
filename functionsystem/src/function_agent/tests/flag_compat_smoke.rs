@@ -112,7 +112,7 @@ fn cpp_runtime_dir_feeds_merge_runtime_paths_and_library_path() {
 
     assert_eq!(
         c.effective_merge_runtime_paths(),
-        "/opt/yr/runtime/service/cpp/bin/runtime,/opt/yr/runtime/service/go/bin/goruntime"
+        "/opt/yr/runtime/service/cpp/bin/runtime,/opt/yr/runtime/service/go/bin/goruntime,/opt/yr/runtime/service/python/yr/main/yr_runtime_main.py"
     );
     let ld = c.effective_runtime_ld_library_path();
     assert!(ld.contains("/opt/yr/runtime/service/cpp/lib"));

@@ -61,6 +61,22 @@ async fn start_embedded_runtime_manager(
     Ok(())
 }
 
+fn init_litebus_ssl_env(config: &Config) -> anyhow::Result<()> {
+    let inputs = yr_common::ssl_config::SslInputs::from_flag_strings(
+        &config.cpp_ignored.ssl_enable,
+        &config.cpp_ignored.metrics_ssl_enable,
+        &config.cpp_ignored.ssl_base_path,
+        &config.cpp_ignored.ssl_root_file,
+        &config.cpp_ignored.ssl_cert_file,
+        &config.cpp_ignored.ssl_key_file,
+    );
+    let ssl = yr_common::ssl_config::get_ssl_cert_config(&inputs);
+    if inputs.ssl_enable {
+        yr_common::ssl_config::apply_litebus_ssl_envs(&ssl).context("init LiteBus SSL env")?;
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     yr_common::logging::init_logging();
@@ -70,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
     if config.node_id.trim().is_empty() {
         config.node_id = uuid::Uuid::new_v4().to_string();
     }
+    init_litebus_ssl_env(&config)?;
     let _plugins = config
         .schedule_plugins_config()
         .context("parse schedule_plugins JSON")?;

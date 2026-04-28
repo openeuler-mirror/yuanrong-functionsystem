@@ -64,6 +64,8 @@ pub struct ProxyCppIgnored {
     pub ssl_cert_file: String,
     #[arg(long = "ssl_key_file", default_value = "")]
     pub ssl_key_file: String,
+    #[arg(long = "metrics_ssl_enable", default_value = "")]
+    pub metrics_ssl_enable: String,
     #[arg(long = "etcd_auth_type", default_value = "")]
     pub etcd_auth_type: String,
     #[arg(long = "etcd_root_ca_file", default_value = "")]

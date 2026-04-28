@@ -6,11 +6,11 @@ use std::time::Duration;
 
 use etcd_client::Client;
 use tokio::net::TcpListener;
+use tokio::sync::Mutex as AsyncMetaMutex;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 use tracing::info;
 use yr_common::logging::init_logging;
-use tokio::sync::Mutex as AsyncMetaMutex;
 use yr_metastore_client::{MetaStoreClient, MetaStoreClientConfig};
 use yr_proto::internal::domain_scheduler_service_server::DomainSchedulerServiceServer;
 
@@ -23,6 +23,22 @@ use yr_domain_scheduler::scheduler::SchedulingEngine;
 use yr_domain_scheduler::service::{pending_reconcile_tick, DomainSchedulerGrpc};
 use yr_domain_scheduler::state::DomainSchedulerState;
 
+fn init_litebus_ssl_env(config: &DomainSchedulerConfig) -> anyhow::Result<()> {
+    let inputs = yr_common::ssl_config::SslInputs {
+        ssl_enable: config.ssl_enable,
+        metrics_ssl_enable: config.metrics_ssl_enable,
+        ssl_base_path: config.ssl_base_path.clone(),
+        ssl_root_file: config.ssl_root_file.clone(),
+        ssl_cert_file: config.ssl_cert_file.clone(),
+        ssl_key_file: config.ssl_key_file.clone(),
+    };
+    let ssl = yr_common::ssl_config::get_ssl_cert_config(&inputs);
+    if inputs.ssl_enable {
+        yr_common::ssl_config::apply_litebus_ssl_envs(&ssl).map_err(|e| anyhow::anyhow!(e))?;
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_logging();
@@ -31,6 +47,7 @@ async fn main() -> anyhow::Result<()> {
     );
     let config = Arc::new(DomainSchedulerConfig::from_cli(cli).map_err(|e| anyhow::anyhow!(e))?);
     config.validate().map_err(|e| anyhow::anyhow!(e))?;
+    init_litebus_ssl_env(&config)?;
 
     let endpoints: Vec<&str> = config.etcd_endpoints.iter().map(|s| s.as_str()).collect();
 
@@ -86,7 +103,9 @@ async fn main() -> anyhow::Result<()> {
                 }
                 metastore = Some(std::sync::Arc::new(AsyncMetaMutex::new(c)));
             }
-            Err(e) => tracing::warn!(error = %e, "etcd metastore connect failed (topology load skipped)"),
+            Err(e) => {
+                tracing::warn!(error = %e, "etcd metastore connect failed (topology load skipped)")
+            }
         }
     }
 
