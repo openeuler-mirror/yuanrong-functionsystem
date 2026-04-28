@@ -29,6 +29,12 @@ fn default_values_match_expectations() {
     assert_eq!(c.data_system_host, "127.0.0.1");
     assert_eq!(c.data_system_port, 0);
     assert_eq!(c.runtime_manager_address, "");
+    assert!(!c.invoke_limitation_enable);
+    assert_eq!(c.low_memory_threshold, 0.6);
+    assert_eq!(c.high_memory_threshold, 0.8);
+    assert_eq!(c.message_size_threshold, 20 * 1024);
+    assert!(!c.create_limitation_enable);
+    assert_eq!(c.token_bucket_capacity, 1000);
     assert_eq!(c.create_rate_limit_per_sec, 0);
     assert_eq!(c.proxy_aid, "");
     assert_eq!(c.proxy_access_key, "");
@@ -101,6 +107,16 @@ fn key_flags_parse_correctly() {
         "--enable-preemption",
         "--runtime-manager-address",
         "http://127.0.0.1:8404",
+        "--invoke-limitation-enable",
+        "--low_memory_threshold",
+        "0.2",
+        "--high_memory_threshold",
+        "0.7",
+        "--message_size_threshold",
+        "4096",
+        "--create-limitation-enable",
+        "--token_bucket_capacity",
+        "42",
         "--data-system-host",
         "10.0.0.5",
         "--data-system-port",
@@ -172,6 +188,12 @@ fn key_flags_parse_correctly() {
     assert_eq!(c.node_id, "proxy-1");
     assert!(c.enable_preemption);
     assert_eq!(c.runtime_manager_address, "http://127.0.0.1:8404");
+    assert!(c.invoke_limitation_enable);
+    assert_eq!(c.low_memory_threshold, 0.2);
+    assert_eq!(c.high_memory_threshold, 0.7);
+    assert_eq!(c.message_size_threshold, 4096);
+    assert!(c.create_limitation_enable);
+    assert_eq!(c.token_bucket_capacity, 42);
     assert_eq!(c.data_system_host, "10.0.0.5");
     assert_eq!(c.data_system_port, 31501);
     assert_eq!(c.exec_session_idle_sec, 60);

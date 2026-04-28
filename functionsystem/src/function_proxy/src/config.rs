@@ -340,6 +340,40 @@ pub struct Config {
     pub runtime_manager_address: String,
 
     #[arg(
+        long = "invoke_limitation_enable",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = false,
+        value_parser = BoolishValueParser::new(),
+        visible_alias = "invoke-limitation-enable",
+        aliases = ["invoke-limitation-enable"]
+    )]
+    pub invoke_limitation_enable: bool,
+
+    #[arg(long = "low_memory_threshold", default_value = "0.6")]
+    pub low_memory_threshold: f64,
+
+    #[arg(long = "high_memory_threshold", default_value = "0.8")]
+    pub high_memory_threshold: f64,
+
+    #[arg(long = "message_size_threshold", default_value = "20480")]
+    pub message_size_threshold: u64,
+
+    #[arg(
+        long = "create_limitation_enable",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = false,
+        value_parser = BoolishValueParser::new(),
+        visible_alias = "create-limitation-enable",
+        aliases = ["create-limitation-enable"]
+    )]
+    pub create_limitation_enable: bool,
+
+    #[arg(long = "token_bucket_capacity", default_value = "1000")]
+    pub token_bucket_capacity: u32,
+
+    #[arg(
         long = "create_rate_limit_per_sec",
         default_value = "0",
         visible_alias = "create-rate-limit-per-sec",

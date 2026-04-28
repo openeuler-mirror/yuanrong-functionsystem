@@ -13,6 +13,7 @@ pub mod iam_policy;
 pub mod instance_ctrl;
 pub mod instance_manager;
 pub mod instance_recover;
+pub mod invoke_admission;
 pub mod local_scheduler;
 pub mod observer;
 pub mod posix_client;

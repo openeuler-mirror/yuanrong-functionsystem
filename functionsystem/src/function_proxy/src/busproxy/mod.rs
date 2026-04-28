@@ -20,6 +20,7 @@ use crate::iam_policy::{
     AuthorizeParam, IamAuthorizer, CALL_METHOD_CREATE, CALL_METHOD_INVOKE, TENANT_ID,
 };
 use crate::instance_ctrl::InstanceController;
+use crate::invoke_admission::{InvokeMemoryMonitor, MSG_ESTIMATED_FACTOR};
 use crate::posix_client::DataInterfacePosixClient;
 use invocation_handler::InvocationHandler;
 use parking_lot::RwLock;
@@ -118,6 +119,7 @@ pub struct BusProxyCoordinator {
     instance_ctrl: Arc<InstanceController>,
     config: Arc<Config>,
     iam_authorizer: IamAuthorizer,
+    invoke_memory: InvokeMemoryMonitor,
     posix: Arc<Mutex<DataInterfacePosixClient>>,
     retry: RouteRetry,
     pending_creates: PendingCreateMap,
@@ -190,6 +192,7 @@ impl BusProxyCoordinator {
         state_store: Option<Arc<dyn StateStore>>,
     ) -> Arc<Self> {
         let iam_authorizer = IamAuthorizer::from_config(config.as_ref());
+        let invoke_memory = InvokeMemoryMonitor::from_proxy_config(config.as_ref());
         Arc::new(Self {
             local_node_id: config.node_id.clone(),
             local_grpc_endpoint: config.advertise_grpc_endpoint(),
@@ -200,6 +203,7 @@ impl BusProxyCoordinator {
             instance_view: Arc::new(InstanceView::new(config.node_id.clone())),
             instance_ctrl,
             iam_authorizer,
+            invoke_memory,
             posix: Arc::new(Mutex::new(DataInterfacePosixClient::new(
                 config.posix_uds_path.clone(),
             ))),
@@ -314,6 +318,21 @@ impl BusProxyCoordinator {
             call_method: CALL_METHOD_INVOKE.into(),
             func_name,
         })
+    }
+
+    pub fn allow_invoke_memory(
+        &self,
+        target_instance_id: &str,
+        request_id: &str,
+        encoded_len: usize,
+    ) -> bool {
+        let estimated = encoded_len.saturating_mul(MSG_ESTIMATED_FACTOR) as u64;
+        self.invoke_memory
+            .allow(target_instance_id, request_id, estimated)
+    }
+
+    pub fn release_invoke_memory(&self, instance_id: &str, request_id: &str) {
+        self.invoke_memory.release(instance_id, request_id);
     }
 
     /// Register a pending instance created by a driver's CreateReq.

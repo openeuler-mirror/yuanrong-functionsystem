@@ -92,6 +92,18 @@ impl InvocationHandler {
         }
     }
 
+    fn invoke_rate_limited_rsp(message_id: &str) -> StreamingMessage {
+        StreamingMessage {
+            message_id: message_id.to_string(),
+            meta_data: Default::default(),
+            body: Some(streaming_message::Body::InvokeRsp(cs::InvokeResponse {
+                code: ErrorCode::ErrInvokeRateLimited as i32,
+                message: "system memory usage not enough, reject invoke request".into(),
+                return_object_id: String::new(),
+            })),
+        }
+    }
+
     async fn handle_save_req(
         message_id: &str,
         instance_id: &str,
@@ -809,6 +821,15 @@ impl InvocationHandler {
                     target_instance = %target_instance,
                     "InvokeReq: routing to runtime"
                 );
+                if !bus.allow_invoke_memory(&target_instance, &inv.request_id, inv.encoded_len()) {
+                    warn!(
+                        caller = %instance_id,
+                        target_instance = %target_instance,
+                        request_id = %inv.request_id,
+                        "InvokeReq: memory admission rejected request"
+                    );
+                    return InboundAction::Reply(vec![Self::invoke_rate_limited_rsp(&mid)]);
+                }
                 if let Err(e) =
                     bus.authorize_invoke_request(instance_id, &target_instance, &inv.function)
                 {
@@ -957,6 +978,7 @@ impl InvocationHandler {
                     instance_id_in_result = %res.instance_id,
                     "CallResult received from runtime"
                 );
+                bus.release_invoke_memory(instance_id, &res.request_id);
                 bus.on_runtime_call_result(instance_id, res).await;
                 InboundAction::None
             }

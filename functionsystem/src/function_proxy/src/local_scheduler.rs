@@ -19,7 +19,7 @@ use yr_proto::internal::{
 #[derive(Debug)]
 pub struct CreateRateLimiter {
     per_sec: u32,
-    inner: Mutex<(f64, Instant)>,
+    buckets: dashmap::DashMap<String, Arc<Mutex<(f64, Instant)>>>,
 }
 
 impl CreateRateLimiter {
@@ -29,12 +29,24 @@ impl CreateRateLimiter {
         }
         Some(Arc::new(Self {
             per_sec,
-            inner: Mutex::new((per_sec as f64, Instant::now())),
+            buckets: dashmap::DashMap::new(),
         }))
     }
 
-    pub async fn acquire(&self) -> bool {
-        let mut g = self.inner.lock().await;
+    pub async fn acquire_for_tenant(&self, tenant_id: &str) -> bool {
+        if tenant_id == "0" {
+            return true;
+        }
+        let bucket = self
+            .buckets
+            .entry(tenant_id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new((self.per_sec as f64, Instant::now()))))
+            .clone();
+        let mut g = bucket.lock().await;
+        self.acquire_bucket(&mut g)
+    }
+
+    fn acquire_bucket(&self, g: &mut (f64, Instant)) -> bool {
         let now = Instant::now();
         let elapsed = now.duration_since(g.1).as_secs_f64();
         g.0 = (g.0 + elapsed * self.per_sec as f64).min(self.per_sec as f64);
@@ -55,7 +67,11 @@ pub struct LocalSchedulerGrpc {
 
 impl LocalSchedulerGrpc {
     pub fn new(ctx: Arc<AppContext>) -> Self {
-        let rate = CreateRateLimiter::new(ctx.config.create_rate_limit_per_sec);
+        let rate = if ctx.config.create_limitation_enable {
+            CreateRateLimiter::new(ctx.config.token_bucket_capacity)
+        } else {
+            CreateRateLimiter::new(ctx.config.create_rate_limit_per_sec)
+        };
         Self { ctx, rate }
     }
 
@@ -110,7 +126,7 @@ impl LocalSchedulerGrpc {
         }
 
         if let Some(lim) = &self.rate {
-            if !lim.acquire().await {
+            if !lim.acquire_for_tenant(&req.tenant_id).await {
                 return Ok(tonic::Response::new(ScheduleResponse {
                     success: false,
                     error_code: yr_proto::common::ErrorCode::ErrCreateRateLimited as i32,
