@@ -9,7 +9,8 @@ use tokio::sync::mpsc;
 use yr_proto::common::{Arg, BindStrategy, ErrorCode};
 use yr_proto::core_service::{
     BindOptions, CreateRequest, CreateRequests, CreateResourceGroupRequest, EventRequest,
-    ExitRequest, GroupOptions, InvokeRequest, KillRequest, StateLoadRequest, StateSaveRequest,
+    ExitRequest, GroupOptions, InvokeOptions, InvokeRequest, KillRequest, StateLoadRequest,
+    StateSaveRequest,
 };
 use yr_proto::resources::MetaData;
 use yr_proto::runtime_rpc::{streaming_message, StreamingMessage};
@@ -122,6 +123,37 @@ fn invoke_to_call_copies_core_fields() {
     assert_eq!(call.sender_id, "driver-1");
     assert_eq!(call.return_object_i_ds, vec!["o1"]);
     assert_eq!(call.span_id, "s1");
+}
+
+#[test]
+fn invoke_to_call_copies_invoke_custom_tags_to_call_create_options() {
+    let inv = InvokeRequest {
+        function: "foo".into(),
+        request_id: "r-custom".into(),
+        invoke_options: Some(InvokeOptions {
+            custom_tag: [
+                ("ENABLE_FORCE_INVOKE".to_string(), "true".to_string()),
+                ("YR_ROUTE_KEY".to_string(), "proxy-a".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        }),
+        ..Default::default()
+    };
+
+    let msg = InvocationHandler::invoke_to_call(&inv, "mid-custom", "driver-1");
+    let Some(streaming_message::Body::CallReq(call)) = msg.body.as_ref() else {
+        panic!("expected CallReq");
+    };
+
+    assert_eq!(
+        call.create_options.get("ENABLE_FORCE_INVOKE").map(String::as_str),
+        Some("true")
+    );
+    assert_eq!(
+        call.create_options.get("YR_ROUTE_KEY").map(String::as_str),
+        Some("proxy-a")
+    );
 }
 
 #[tokio::test]

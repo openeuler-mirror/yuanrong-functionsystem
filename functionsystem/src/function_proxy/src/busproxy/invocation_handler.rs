@@ -165,6 +165,11 @@ impl InvocationHandler {
             sender_id: sender_id.to_string(),
             return_object_i_ds: invoke.return_object_i_ds.clone(),
             span_id: invoke.span_id.clone(),
+            create_options: invoke
+                .invoke_options
+                .as_ref()
+                .map(|opts| opts.custom_tag.clone())
+                .unwrap_or_default(),
             ..Default::default()
         };
         StreamingMessage {
