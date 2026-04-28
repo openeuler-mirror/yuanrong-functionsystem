@@ -155,6 +155,13 @@ pub struct Config {
     pub runtime_logs_dir: String,
 
     #[arg(
+        long = "runtime_std_log_dir",
+        default_value = "",
+        alias = "runtime-std-log-dir"
+    )]
+    pub runtime_std_log_dir: String,
+
+    #[arg(
         long = "runtime_home_dir",
         default_value = "/home/snuser",
         alias = "runtime-home-dir"
@@ -323,6 +330,7 @@ impl Config {
             runtime_dir: "/home/snuser".into(),
             snuser_lib_dir: "/home/snuser/lib".into(),
             runtime_logs_dir: "/home/snuser".into(),
+            runtime_std_log_dir: String::new(),
             runtime_home_dir: "/home/snuser".into(),
             runtime_config_dir: "/home/snuser/config".into(),
             python_log_config_path: "/home/snuser/config/python-runtime-log.json".into(),

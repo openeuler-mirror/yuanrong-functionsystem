@@ -408,6 +408,10 @@ impl Config {
         set_if_present(&mut rm.runtime_dir, &self.cpp_ignored.runtime_dir);
         set_if_present(&mut rm.snuser_lib_dir, &self.cpp_ignored.snuser_lib_dir);
         set_if_present(&mut rm.runtime_logs_dir, &self.merge_runtime_log_path);
+        set_if_present(
+            &mut rm.runtime_std_log_dir,
+            &self.cpp_ignored.runtime_std_log_dir,
+        );
         set_if_present(&mut rm.runtime_home_dir, &self.cpp_ignored.runtime_home_dir);
         set_if_present(
             &mut rm.runtime_config_dir,

@@ -104,6 +104,8 @@ fn agent_cpp_runtime_flags_feed_embedded_runtime_manager_config() {
         "/runtime/config",
         "--runtime_logs_dir",
         "/runtime/logs",
+        "--runtime_std_log_dir",
+        "std-runtime",
         "--snuser_lib_dir",
         "/runtime/lib",
         "--runtime_ld_library_path",
@@ -151,6 +153,7 @@ fn agent_cpp_runtime_flags_feed_embedded_runtime_manager_config() {
     assert_eq!(rm.runtime_home_dir, "/home/runtime");
     assert_eq!(rm.runtime_config_dir, "/runtime/config");
     assert_eq!(rm.runtime_logs_dir, "/runtime/logs");
+    assert_eq!(rm.runtime_std_log_dir, "std-runtime");
     assert_eq!(rm.snuser_lib_dir, "/runtime/lib");
     assert!(rm.runtime_ld_library_path.contains("/operator/lib"));
     assert!(rm

@@ -4,6 +4,8 @@ use nix::errno::Errno;
 use nix::sys::signal::Signal;
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -18,6 +20,11 @@ pub struct ChildExitEvent {
     pub error_message: String,
 }
 
+const STD_POSTFIX: &str = "-user_func_std.log";
+const STD_ERROR_LEVEL: &str = "ERROR";
+const STD_TARGET_LINE_COUNT: usize = 20;
+const STD_READ_LINE_COUNT: usize = 1000;
+
 /// Best-effort: look for OOM killer mention of `pid` in recent `dmesg` output.
 fn dmesg_suggests_oom(pid: i32) -> bool {
     let out = std::process::Command::new("dmesg")
@@ -30,6 +37,142 @@ fn dmesg_suggests_oom(pid: i32) -> bool {
     let needle = format!("Killed process {pid}");
     let needle2 = format!("pid {pid} ");
     out.contains(&needle) || out.contains(&needle2)
+}
+
+/// C++ `HealthCheckActor::GetRuntimeException` equivalent for Rust-managed paths.
+///
+/// Priority follows C++ for the safe local artifacts Rust can read:
+/// exception `BackTrace_<runtimeID>.log` first, then standard ERROR logs.
+pub fn runtime_exit_log_message(
+    runtime_id: &str,
+    instance_id: &str,
+    exit_code: i32,
+    runtime_logs_dir: &Path,
+    runtime_std_log_dir: &str,
+    std_log_name: &str,
+    raw_log_dir: &Path,
+) -> Option<String> {
+    let exception_path = runtime_logs_dir
+        .join("exception")
+        .join(format!("BackTrace_{runtime_id}.log"));
+    if let Some(content) = read_non_empty(&exception_path) {
+        return Some(content);
+    }
+
+    std_error_message(
+        runtime_id,
+        instance_id,
+        exit_code,
+        runtime_logs_dir,
+        runtime_std_log_dir,
+        std_log_name,
+        raw_log_dir,
+    )
+}
+
+fn std_error_message(
+    runtime_id: &str,
+    instance_id: &str,
+    exit_code: i32,
+    runtime_logs_dir: &Path,
+    runtime_std_log_dir: &str,
+    std_log_name: &str,
+    raw_log_dir: &Path,
+) -> Option<String> {
+    let runtime_std_dir = join_optional(runtime_logs_dir, runtime_std_log_dir);
+    let mut candidates = Vec::new();
+    if !std_log_name.trim().is_empty() {
+        candidates.push(runtime_std_dir.join(format!("{std_log_name}{STD_POSTFIX}")));
+    }
+    candidates.push(runtime_std_dir.join(format!("{runtime_id}{STD_POSTFIX}")));
+    candidates.push(runtime_std_dir.join(format!("{runtime_id}.out")));
+
+    for path in candidates {
+        let Some(content) = read_non_empty(&path) else {
+            continue;
+        };
+        if let Some(lines) = select_std_error_lines(&content, runtime_id) {
+            return Some(format_std_message(
+                instance_id,
+                runtime_id,
+                exit_code,
+                &lines,
+            ));
+        }
+    }
+    for path in [
+        raw_log_dir.join(format!("{runtime_id}.stderr.log")),
+        raw_log_dir.join(format!("{runtime_id}.stdout.log")),
+    ] {
+        let Some(content) = read_non_empty(&path) else {
+            continue;
+        };
+        if let Some(lines) = select_raw_log_lines(&content) {
+            return Some(format_std_message(
+                instance_id,
+                runtime_id,
+                exit_code,
+                &lines,
+            ));
+        }
+    }
+    None
+}
+
+fn join_optional(root: &Path, child: &str) -> PathBuf {
+    let child = child.trim().trim_matches('/');
+    if child.is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(child)
+    }
+}
+
+fn read_non_empty(path: &Path) -> Option<String> {
+    let content = fs::read_to_string(path).ok()?;
+    (!content.is_empty()).then_some(content)
+}
+
+fn select_std_error_lines(content: &str, runtime_id: &str) -> Option<String> {
+    let mut lines: Vec<&str> = content
+        .lines()
+        .rev()
+        .take(STD_READ_LINE_COUNT)
+        .filter(|line| line.contains(runtime_id) && line.contains(STD_ERROR_LEVEL))
+        .take(STD_TARGET_LINE_COUNT)
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    lines.reverse();
+    Some(format!("{}\n", lines.join("\n")))
+}
+
+fn select_raw_log_lines(content: &str) -> Option<String> {
+    let mut lines: Vec<&str> = content
+        .lines()
+        .rev()
+        .take(STD_READ_LINE_COUNT)
+        .filter(|line| !line.trim().is_empty())
+        .take(STD_TARGET_LINE_COUNT)
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    lines.reverse();
+    Some(format!("{}\n", lines.join("\n")))
+}
+
+fn format_std_message(
+    instance_id: &str,
+    runtime_id: &str,
+    exit_code: i32,
+    std_error_lines: &str,
+) -> String {
+    format!(
+        "instance({instance_id}) runtime({runtime_id}) exit code({exit_code}) with exitState({}) exitStatus({exit_code})\n{std_error_lines}",
+        i32::from(exit_code >= 0)
+    )
 }
 
 pub fn classify_wait_status(status: WaitStatus) -> Option<ChildExitEvent> {
@@ -111,6 +254,21 @@ pub async fn handle_child_exits(
             Some(p) => p,
             None => continue,
         };
+        let mut ev = ev;
+        if ev.exit_code != 0 {
+            if let Some(msg) = runtime_exit_log_message(
+                &rid,
+                &proc.instance_id,
+                ev.exit_code,
+                Path::new(&state.config.runtime_logs_dir),
+                &state.config.runtime_std_log_dir,
+                &state.config.node_id,
+                &state.config.log_path,
+            ) {
+                ev.error_message = msg;
+            }
+        }
+
         let status = ev.status.as_str();
         state.update_status(&rid, status, Some(ev.exit_code), &ev.error_message);
         state.remove_by_runtime(&rid);
