@@ -195,6 +195,41 @@ fn tenant_cooldown_round_trip() {
     assert!(ctrl.tenant_cooldown_active("ten"));
 }
 
+#[test]
+fn service_yaml_with_reserved_env_is_rejected_before_metadata_use() {
+    let path = std::env::temp_dir().join(format!(
+        "yr-invalid-service-{}-{}.yaml",
+        std::process::id(),
+        InstanceMetadata::now_ms()
+    ));
+    std::fs::write(
+        &path,
+        r#"
+- service: demo
+  kind: yrlib
+  functions:
+    hello:
+      runtime: python3
+      codePath: /tmp/hello
+      environment:
+        FAAS_FUNCTION_NAME: should-be-rejected
+"#,
+    )
+    .expect("write services yaml");
+
+    let mut cfg = (*make_proxy_config("lc-node", 30003)).clone();
+    cfg.cpp_ignored.services_path = path.to_string_lossy().into_owned();
+    let rv = ResourceView::new(ResourceVector {
+        cpu: 16.0,
+        memory: 128.0,
+        npu: 0.0,
+    });
+    let ctrl = InstanceController::new(Arc::new(cfg), rv, None, None);
+
+    assert_eq!(ctrl.service_code_path_for("hello"), None);
+    let _ = std::fs::remove_file(path);
+}
+
 #[tokio::test]
 async fn concurrent_insert_distinct_ids() {
     let ctrl = test_ctrl();

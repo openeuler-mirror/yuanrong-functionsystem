@@ -10,6 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tracing::{info, warn};
 use yr_common::etcd_keys::{gen_func_meta_key, INSTANCE_PATH_PREFIX};
+use yr_common::service_json::{validate_service_infos, ServiceInfo};
 use yr_common::types::need_persistence_state;
 use yr_proto::internal::function_agent_service_client::FunctionAgentServiceClient;
 use yr_proto::internal::{StartInstanceRequest, StopInstanceRequest};
@@ -36,30 +37,6 @@ fn function_name_candidates(function_name: &str) -> Vec<String> {
     out.sort();
     out.dedup();
     out
-}
-
-fn yaml_str<'a>(v: &'a serde_yaml::Value, key: &str) -> Option<&'a str> {
-    v.get(serde_yaml::Value::String(key.to_string()))?.as_str()
-}
-
-fn parse_env(v: &serde_yaml::Value) -> HashMap<String, String> {
-    let mut env = HashMap::new();
-    let Some(map) = v.as_mapping() else {
-        return env;
-    };
-    for (k, val) in map {
-        let Some(key) = k.as_str() else {
-            continue;
-        };
-        let value = val.as_str().map(str::to_string).unwrap_or_else(|| {
-            serde_yaml::to_string(val)
-                .unwrap_or_default()
-                .trim()
-                .to_string()
-        });
-        env.insert(key.to_string(), value);
-    }
-    env
 }
 
 fn job_id_from_trace(trace_id: &str) -> Option<String> {
@@ -166,30 +143,27 @@ impl InstanceController {
             return None;
         }
         let text = std::fs::read_to_string(path).ok()?;
-        let root: serde_yaml::Value = serde_yaml::from_str(&text).ok()?;
+        let services: Vec<ServiceInfo> = match serde_yaml::from_str(&text) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(error = %e, %path, "failed to parse services metadata");
+                return None;
+            }
+        };
+        if let Err(e) = validate_service_infos(&services) {
+            warn!(error = %e, %path, "invalid services metadata");
+            return None;
+        }
         let candidates = function_name_candidates(function_name);
-        let services = root.as_sequence()?;
         for service in services {
-            let Some(functions) = service.get(serde_yaml::Value::String("functions".into())) else {
-                continue;
-            };
-            let Some(map) = functions.as_mapping() else {
-                continue;
-            };
-            for (name, spec) in map {
-                let Some(name) = name.as_str() else {
-                    continue;
-                };
-                if !candidates.iter().any(|c| c == name) {
+            for (name, spec) in service.functions {
+                if !candidates.iter().any(|c| c == &name) {
                     continue;
                 }
                 return Some(ServiceFunctionMeta {
-                    runtime_type: yaml_str(spec, "runtime").unwrap_or_default().to_string(),
-                    code_path: yaml_str(spec, "codePath").unwrap_or_default().to_string(),
-                    env: spec
-                        .get(serde_yaml::Value::String("environment".into()))
-                        .map(parse_env)
-                        .unwrap_or_default(),
+                    runtime_type: spec.runtime,
+                    code_path: spec.code_path,
+                    env: spec.environment,
                 });
             }
         }
