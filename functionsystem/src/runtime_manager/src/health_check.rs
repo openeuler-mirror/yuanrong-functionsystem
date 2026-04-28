@@ -13,6 +13,7 @@ use yr_proto::internal::UpdateInstanceStatusRequest;
 #[derive(Debug)]
 pub struct ChildExitEvent {
     pub pid: i32,
+    pub status: String,
     pub exit_code: i32,
     pub error_message: String,
 }
@@ -31,16 +32,24 @@ fn dmesg_suggests_oom(pid: i32) -> bool {
     out.contains(&needle) || out.contains(&needle2)
 }
 
-fn describe_exit(status: WaitStatus) -> Option<(i32, i32, String)> {
+pub fn classify_wait_status(status: WaitStatus) -> Option<ChildExitEvent> {
     match status {
         WaitStatus::StillAlive => None,
         WaitStatus::Exited(p, code) => {
-            let msg = if code == 0 {
-                "exited normally".into()
+            let (status, msg) = if code == 0 {
+                ("returned", "runtime had been returned".to_string())
             } else {
-                format!("exited with status {code}")
+                (
+                    "failed",
+                    format!("an unknown error caused the instance exited. exit code:{code}"),
+                )
             };
-            Some((p.as_raw(), code, msg))
+            Some(ChildExitEvent {
+                pid: p.as_raw(),
+                status: status.to_string(),
+                exit_code: code,
+                error_message: msg,
+            })
         }
         WaitStatus::Signaled(p, sig, core) => {
             let mut msg = format!("terminated by signal {sig:?}");
@@ -53,7 +62,12 @@ fn describe_exit(status: WaitStatus) -> Option<(i32, i32, String)> {
             } else if sig == Signal::SIGKILL {
                 msg.push_str("; possible OOM or external SIGKILL");
             }
-            Some((p.as_raw(), code, msg))
+            Some(ChildExitEvent {
+                pid: p.as_raw(),
+                status: "failed".into(),
+                exit_code: code,
+                error_message: msg,
+            })
         }
         _ => None,
     }
@@ -75,14 +89,10 @@ pub fn spawn_child_reaper(tx: mpsc::Sender<ChildExitEvent>) -> std::thread::Join
             if matches!(w, WaitStatus::StillAlive) {
                 break;
             }
-            let Some((pid, exit_code, err)) = describe_exit(w) else {
+            let Some(ev) = classify_wait_status(w) else {
                 continue;
             };
-            let _ = tx.blocking_send(ChildExitEvent {
-                pid,
-                exit_code,
-                error_message: err,
-            });
+            let _ = tx.blocking_send(ev);
         }
     })
 }
@@ -101,11 +111,7 @@ pub async fn handle_child_exits(
             Some(p) => p,
             None => continue,
         };
-        let status = if ev.exit_code == 0 {
-            "exited"
-        } else {
-            "failed"
-        };
+        let status = ev.status.as_str();
         state.update_status(&rid, status, Some(ev.exit_code), &ev.error_message);
         state.remove_by_runtime(&rid);
         state.ports.release(&rid);
@@ -122,7 +128,7 @@ pub async fn handle_child_exits(
         let req = UpdateInstanceStatusRequest {
             instance_id: proc.instance_id.clone(),
             runtime_id: rid.clone(),
-            status: status.to_string(),
+            status: status.into(),
             exit_code: ev.exit_code,
             error_message: ev.error_message.clone(),
         };
