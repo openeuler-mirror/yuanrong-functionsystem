@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use yr_runtime_manager::oom::monitor::{
-    oom_kill_status_request, RUNTIME_MEMORY_EXCEED_LIMIT_MESSAGE,
+    memory_limit_mb_for_resource, oom_kill_status_request, RUNTIME_MEMORY_EXCEED_LIMIT_MESSAGE,
 };
 use yr_runtime_manager::port_manager::SharedPortManager;
 use yr_runtime_manager::state::{RunningProcess, RuntimeManagerState};
@@ -53,6 +53,14 @@ fn oom_status_request_matches_cpp_runtime_memory_exceed_limit() {
     assert_eq!(req.status, "oom_killed");
     assert_eq!(req.exit_code, -1);
     assert_eq!(req.error_message, RUNTIME_MEMORY_EXCEED_LIMIT_MESSAGE);
+}
+
+#[test]
+fn memory_resource_values_are_megabytes_like_cpp_metrics() {
+    assert_eq!(memory_limit_mb_for_resource(500.0), Some(500));
+    assert_eq!(memory_limit_mb_for_resource(128.0), Some(128));
+    assert_eq!(memory_limit_mb_for_resource(0.0), None);
+    assert_eq!(memory_limit_mb_for_resource(-1.0), None);
 }
 
 #[test]

@@ -20,12 +20,12 @@ pub fn read_cgroup_memory(path: &Path) -> Option<(u64, Option<u64>)> {
     }
 }
 
-/// Set `memory.max` from a GiB limit (same sizing as `CgroupIsolate::apply`).
-pub fn write_memory_max_from_gib(cgroup: &Path, mem_gib: f64) -> io::Result<()> {
-    if mem_gib <= 0.0 {
+/// Set `memory.max` from a MiB limit (same sizing as `CgroupIsolate::apply`).
+pub fn write_memory_max_from_mb(cgroup: &Path, mem_mb: f64) -> io::Result<()> {
+    if mem_mb <= 0.0 {
         return Ok(());
     }
-    let bytes = (mem_gib * 1024.0 * 1024.0 * 1024.0).ceil() as u64;
+    let bytes = (mem_mb * 1024.0 * 1024.0).ceil() as u64;
     let bytes = bytes.max(4 * 1024 * 1024);
     fs::write(cgroup.join("memory.max"), bytes.to_string())
 }

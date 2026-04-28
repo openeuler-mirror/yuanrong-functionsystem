@@ -79,8 +79,8 @@ git diff --check
 
 ## Boundary / Remaining RUNTIME-004 Work
 
-This closes wait-status classification, local log-message enrichment, internal OOM advance-notify dedupe, and C++-ordered dmesg OOM attribution. A follow-up deployed-path proof fixed the server-mode connect-back address and passed the C++ abnormal-exit ST slice; see `docs/analysis/138-runtime-posix-connectback-st-proof.md`. Remaining `RUNTIME-004` work:
+This closes wait-status classification, local log-message enrichment, internal OOM advance-notify dedupe, and C++-ordered dmesg OOM attribution. Follow-up deployed-path proofs fixed the server-mode connect-back address and aligned memory resource units with C++ MB semantics; see `docs/analysis/138-runtime-posix-connectback-st-proof.md` and `docs/analysis/139-runtime-memory-resource-unit-proof.md`. Remaining `RUNTIME-004` work:
 
-- End-to-end MetricsActor-style memory-limit callback proof under deployed runtime resource pressure.
+- End-to-end MetricsActor-style over-limit callback proof under deployed runtime resource pressure.
 - Privileged/container verification that production `dmesg` access is available in the deployed target, or documented fallback behavior when it is not.
 - Java crash files and user std-log deployed-path parity if Java/runtime-log behavior becomes release scope.

@@ -68,7 +68,13 @@ impl CgroupIsolate {
         }
         let safe_id = runtime_id
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '_' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect::<String>();
         let cg = base.join(&safe_id);
         fs::create_dir_all(&cg).with_context(|| format!("mkdir cgroup {}", cg.display()))?;
@@ -84,7 +90,7 @@ impl CgroupIsolate {
             }
         }
         if cfg.cgroup_enable_memory {
-            if let Some(bytes) = memory_max_bytes(resources.get("memory").copied()) {
+            if let Some(bytes) = memory_max_bytes_for_resource(resources.get("memory").copied()) {
                 write_ctrl(&cg, "memory.max", &bytes.to_string())?;
             }
         }
@@ -102,7 +108,10 @@ impl CgroupIsolate {
 
 fn enable_controllers_parent(cfg: &Config) -> std::io::Result<()> {
     let parent = cfg.cgroup_parent.parent().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "cgroup_parent has no parent")
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "cgroup_parent has no parent",
+        )
     })?;
     let sc = parent.join("cgroup.subtree_control");
     if !sc.exists() {
@@ -136,12 +145,8 @@ pub unsafe fn maybe_unshare_namespaces(isolate: bool) -> std::io::Result<()> {
     if !isolate {
         return Ok(());
     }
-    unshare(
-        CloneFlags::CLONE_NEWIPC
-            | CloneFlags::CLONE_NEWUTS
-            | CloneFlags::CLONE_NEWNS,
-    )
-    .map_err(|e| std::io::Error::other(e.to_string()))
+    unshare(CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWUTS | CloneFlags::CLONE_NEWNS)
+        .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
 /// cgroup v2 `cpu.max` first field: quota in microseconds per 100ms period (100000 us).
@@ -154,11 +159,11 @@ fn cpu_quota_nanos(cpu_cores: Option<f64>) -> Option<u64> {
     Some(us.clamp(1000, 100_000 * 1024))
 }
 
-fn memory_max_bytes(mem_gb: Option<f64>) -> Option<u64> {
-    let g = mem_gb?;
-    if g <= 0.0 {
+pub fn memory_max_bytes_for_resource(mem_mb: Option<f64>) -> Option<u64> {
+    let mb = mem_mb?;
+    if mb <= 0.0 {
         return None;
     }
-    let bytes = (g * 1024.0 * 1024.0 * 1024.0).ceil() as u64;
+    let bytes = (mb * 1024.0 * 1024.0).ceil() as u64;
     Some(bytes.max(4 * 1024 * 1024))
 }

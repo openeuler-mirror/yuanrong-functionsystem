@@ -150,16 +150,7 @@ fn expand_env_value(value: &str, vars: &HashMap<String, String>) -> String {
 }
 
 unsafe fn apply_rlimits_libc(resources: &HashMap<String, f64>) {
-    if let Some(mem) = resources.get("memory").copied() {
-        if mem > 0.0 {
-            let bytes = (mem * 1024.0 * 1024.0 * 1024.0).ceil() as libc::rlim_t;
-            let lim = libc::rlimit {
-                rlim_cur: bytes,
-                rlim_max: bytes,
-            };
-            let _ = libc::setrlimit(libc::RLIMIT_AS, &lim);
-        }
-    }
+    // C++ enforces runtime memory through metrics/OOM callbacks, not RLIMIT_AS.
     if let Some(cpu) = resources.get("cpu").copied() {
         if cpu > 0.0 {
             let sec = (cpu * 3600.0).ceil().max(60.0) as libc::rlim_t;

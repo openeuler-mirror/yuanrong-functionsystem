@@ -46,7 +46,11 @@ fn usage_mb_for_process(pid: i32, cgroup: Option<&std::path::PathBuf>) -> u64 {
     rss_kb(pid) / 1024
 }
 
-/// When `oom_kill_enable`, periodically compares usage to `resources["memory"]` (GiB) plus `oom_kill_control_limit` (MiB slack).
+pub fn memory_limit_mb_for_resource(memory_resource: f64) -> Option<u64> {
+    (memory_resource > 0.0).then(|| memory_resource.ceil() as u64)
+}
+
+/// When `oom_kill_enable`, periodically compares usage to `resources["memory"]` (MiB) plus `oom_kill_control_limit` (MiB slack).
 pub async fn supervision_loop(state: Arc<RuntimeManagerState>, agent: Arc<AgentClient>) {
     let counts: Arc<Mutex<HashMap<String, u32>>> = Arc::new(Mutex::new(HashMap::new()));
 
@@ -67,12 +71,12 @@ pub async fn supervision_loop(state: Arc<RuntimeManagerState>, agent: Arc<AgentC
             let Some(proc) = state.get_by_runtime(&rid) else {
                 continue;
             };
-            let limit_gib = proc.resources.get("memory").copied().unwrap_or(0.0);
-            if limit_gib <= 0.0 {
+            let Some(limit_mb) =
+                memory_limit_mb_for_resource(proc.resources.get("memory").copied().unwrap_or(0.0))
+            else {
                 counts.lock().remove(&proc.instance_id);
                 continue;
-            }
-            let limit_mb = (limit_gib * 1024.0).ceil() as u64;
+            };
             let used_mb = usage_mb_for_process(proc.pid, proc.cgroup_path.as_ref());
             let threshold = limit_mb.saturating_add(slack_mb);
 

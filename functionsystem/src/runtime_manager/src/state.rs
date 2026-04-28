@@ -28,7 +28,7 @@ pub struct RunningProcess {
     pub bind_mount_points: Vec<std::path::PathBuf>,
     pub health_spec: InstanceHealthSpec,
     pub started_at: Instant,
-    /// Resource limits from StartInstance (e.g. `memory` in GiB, `cpu` cores) for OOM / reporting.
+    /// Resource limits from StartInstance (e.g. `memory` in MiB, `cpu` cores) for OOM / reporting.
     pub resources: HashMap<String, f64>,
 }
 
