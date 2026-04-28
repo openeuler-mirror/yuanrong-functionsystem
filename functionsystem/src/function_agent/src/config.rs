@@ -128,6 +128,10 @@ pub struct AgentCppIgnored {
     pub runtime_ld_library_path: String,
     #[arg(long = "runtime_log_level", default_value = "")]
     pub runtime_log_level: String,
+    #[arg(long = "runtime_uid", default_value = "")]
+    pub runtime_uid: String,
+    #[arg(long = "runtime_gid", default_value = "")]
+    pub runtime_gid: String,
     #[arg(long = "runtime_max_log_size", default_value = "")]
     pub runtime_max_log_size: String,
     #[arg(long = "runtime_max_log_file_num", default_value = "")]
@@ -442,6 +446,8 @@ impl Config {
             &self.cpp_ignored.runtime_ds_connect_timeout,
             rm.runtime_ds_connect_timeout,
         );
+        rm.runtime_uid = parse_i32(&self.cpp_ignored.runtime_uid, rm.runtime_uid);
+        rm.runtime_gid = parse_i32(&self.cpp_ignored.runtime_gid, rm.runtime_gid);
         rm.enable_inherit_env = self.enable_inherit_env;
         rm.set_cmd_cred = parse_bool(&self.cpp_ignored.set_cmd_cred, rm.set_cmd_cred);
         rm.oom_kill_enable = self.oom_kill_enable;

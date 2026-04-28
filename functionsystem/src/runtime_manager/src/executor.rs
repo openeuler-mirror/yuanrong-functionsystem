@@ -184,12 +184,19 @@ fn bind_mounts_for_instance(cfg: &Config, workdir: &Path) -> Vec<BindMount> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCredential {
+    pub uid: u32,
+    pub gid: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeLaunchSpec {
     pub executable: String,
     pub arg0: Option<String>,
     pub args: Vec<String>,
     pub current_dir: PathBuf,
     pub env: HashMap<String, String>,
+    pub credential: Option<RuntimeCredential>,
 }
 
 fn base_ld_library_path(cfg: &Config, req: &StartInstanceRequest) -> String {
@@ -435,12 +442,17 @@ pub fn build_runtime_launch_spec(
     };
 
     let env = build_runtime_env(cfg, req, runtime_id, port, &current_dir);
+    let credential = cfg.set_cmd_cred.then_some(RuntimeCredential {
+        uid: cfg.runtime_uid.max(0) as u32,
+        gid: cfg.runtime_gid.max(0) as u32,
+    });
     Ok(RuntimeLaunchSpec {
         executable,
         arg0,
         args,
         current_dir,
         env,
+        credential,
     })
 }
 
@@ -499,11 +511,20 @@ pub fn start_runtime_process(
 
     let res = req.resources.clone();
     let isolate = cfg.isolate_namespaces;
+    let credential = spec.credential.clone();
     unsafe {
         cmd.pre_exec(move || {
             let _ = container::maybe_unshare_namespaces(isolate);
             // New process group so SIGTERM/SIGKILL can target the whole runtime tree (negative pid).
             let _ = setpgid(Pid::from_raw(0), Pid::from_raw(0));
+            if let Some(cred) = &credential {
+                if libc::setuid(cred.uid) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                if libc::setgid(cred.gid) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
             apply_rlimits_libc(&res);
             Ok(())
         });

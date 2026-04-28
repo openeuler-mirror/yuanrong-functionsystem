@@ -116,6 +116,10 @@ fn agent_cpp_runtime_flags_feed_embedded_runtime_manager_config() {
         "11",
         "--runtime_ds_connect_timeout",
         "66",
+        "--runtime_uid",
+        "1003",
+        "--runtime_gid",
+        "1004",
         "--proxy_ip",
         "10.0.0.2",
         "--host_ip",
@@ -149,11 +153,15 @@ fn agent_cpp_runtime_flags_feed_embedded_runtime_manager_config() {
     assert_eq!(rm.runtime_logs_dir, "/runtime/logs");
     assert_eq!(rm.snuser_lib_dir, "/runtime/lib");
     assert!(rm.runtime_ld_library_path.contains("/operator/lib"));
-    assert!(rm.runtime_ld_library_path.contains("/runtime/service/cpp/lib"));
+    assert!(rm
+        .runtime_ld_library_path
+        .contains("/runtime/service/cpp/lib"));
     assert_eq!(rm.runtime_log_level, "INFO");
     assert_eq!(rm.runtime_max_log_size, 88);
     assert_eq!(rm.runtime_max_log_file_num, 11);
     assert_eq!(rm.runtime_ds_connect_timeout, 66);
+    assert_eq!(rm.runtime_uid, 1003);
+    assert_eq!(rm.runtime_gid, 1004);
     assert_eq!(rm.proxy_ip, "10.0.0.2");
     assert_eq!(rm.host_ip, "10.0.0.1");
     assert_eq!(rm.proxy_grpc_server_port, "22775");

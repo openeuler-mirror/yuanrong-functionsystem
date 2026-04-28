@@ -25,12 +25,13 @@ Clean C++ 0.8 control inspected in `yr-e2e-master:/workspace/clean_0_8/src/yuanr
 
 ## Rust Changes
 
-- Added `RuntimeLaunchSpec` and `build_runtime_launch_spec(...)` so command/env construction is testable without spawning child processes.
+- Added `RuntimeLaunchSpec` and `build_runtime_launch_spec(...)` so command/env/credential construction is testable without spawning child processes.
 - Refactored `start_runtime_process(...)` to build a launch spec first, then apply it to `std::process::Command`.
 - Changed C++ runtime command from legacy bare `instance_id` to C++ 0.8 shape:
   - `arg0 = cppruntime`
   - args: `-runtimeId`, `-logLevel`, `-jobId`, `-grpcAddress`, `-runtimeConfigPath`
 - Added Go runtime command shape matching C++ `goruntime` args.
+- Added C++ `setCmdCred` process-credential hook parity: launch specs carry `runtime_uid`/`runtime_gid`, and `start_runtime_process` applies `setuid`/`setgid` in the child pre-exec hook when enabled.
 - Expanded runtime-manager config with C++ command/env flags:
   - `runtime_logs_dir`
   - `runtime_home_dir`
@@ -46,7 +47,7 @@ Clean C++ 0.8 control inspected in `yr-e2e-master:/workspace/clean_0_8/src/yuanr
   - `YR_LOG_LEVEL`, `GLOG_log_dir`, `YR_MAX_LOG_SIZE_MB`, `YR_MAX_LOG_FILE_NUM`
   - `DS_CONNECT_TIMEOUT_SEC`
   - C++-style `UNZIPPED_WORKING_DIR` exclusion and `YR_` env inheritance.
-- Added `function_agent::Config::embedded_runtime_manager_config()` so C++ launch flags parsed by `yr-agent` are passed into the embedded Rust runtime-manager instead of being parse-only.
+- Added `function_agent::Config::embedded_runtime_manager_config()` so C++ launch flags parsed by `yr-agent` are passed into the embedded Rust runtime-manager instead of being parse-only, including `runtime_uid`/`runtime_gid` for `setCmdCred`.
 
 ## Tests Added / Updated
 
@@ -54,6 +55,7 @@ Clean C++ 0.8 control inspected in `yr-e2e-master:/workspace/clean_0_8/src/yuanr
   - C++ runtime args snapshot.
   - C++ framework env snapshot.
   - Python runtime command shape + C++ env snapshot.
+  - `setCmdCred` credential snapshot.
 - `functionsystem/src/function_agent/tests/merge_process_config.rs`
   - Embedded runtime-manager now receives C++ runtime flags from agent config.
 - `functionsystem/src/runtime_manager/tests/executor_pick_runtime.rs`
@@ -65,16 +67,14 @@ All commands used `CARGO_BUILD_JOBS=8`.
 
 ```bash
 cargo test -p yr-runtime-manager --test command_env_snapshot_test -- --nocapture
-# 3 passed
+# 4 passed
 
-cargo test -p yr-runtime-manager --test command_env_snapshot_test --test executor_pick_runtime --test flag_compat_smoke --test config_defaults_grouped -- --nocapture
-# 17 passed
+cargo test -p yr-runtime-manager --test command_env_snapshot_test --test executor_pick_runtime --test flag_compat_smoke --test config_defaults_grouped --test runtime_ops_start_stop --test standalone_mode_test -- --nocapture
+# 37 passed
 
 cargo test -p yr-agent --test merge_process_config --test flag_compat_smoke -- --nocapture
 # 9 passed
 
-cargo test -p yr-runtime-manager --test runtime_ops_start_stop --test standalone_mode_test -- --nocapture
-# 19 passed
 
 cargo check --workspace --lib --bins
 # passed; only pre-existing yr-proxy warnings remain
