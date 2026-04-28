@@ -23,12 +23,138 @@
 #include "function_master/instance_manager/quota_manager/quota_manager_actor.h"
 #include "group_manager_actor.h"
 #include "instance_manager_actor.h"
+#include <algorithm>
+#include <cstdint>
+#include <exception>
 #include <nlohmann/json.hpp>
+#include <vector>
 
 namespace functionsystem::instance_manager {
 
 const std::string APP_JSON_FORMAT = "application/json";
 const std::string JSON_FORMAT = "json";
+constexpr uint64_t QUERY_INSTANCES_MAX_PAGE_SIZE = 1000;
+const std::string JSON_SERIALIZE_ERROR = "{\"error\":\"Failed to serialize response\"}";
+
+struct QueryInstancesPagination {
+    bool enabled = false;
+    uint64_t page = 1;
+    uint64_t pageSize = 10;
+    std::string error;
+};
+
+struct QueryInstancesPageRange {
+    uint64_t start = 0;
+    uint64_t end = 0;
+};
+
+inline bool IsTenantInstanceMatched(const resources::InstanceInfo &instance, const std::string &tenantID,
+                                    const std::string &instanceID, bool isSystemTenant)
+{
+    if (!isSystemTenant && instance.tenantid() != tenantID) {
+        return false;
+    }
+    return instanceID.empty() || instance.instanceid() == instanceID;
+}
+
+inline std::vector<int> CollectSortedTenantInstanceIndexes(
+    const google::protobuf::RepeatedPtrField<resources::InstanceInfo> &instances, const std::string &tenantID,
+    const std::string &instanceID, bool isSystemTenant)
+{
+    std::vector<int> matchedIndexes;
+    matchedIndexes.reserve(static_cast<size_t>(instances.size()));
+    for (int index = 0; index < instances.size(); ++index) {
+        const auto &instance = instances.Get(index);
+        if (IsTenantInstanceMatched(instance, tenantID, instanceID, isSystemTenant)) {
+            matchedIndexes.push_back(index);
+        }
+    }
+    std::sort(matchedIndexes.begin(), matchedIndexes.end(), [&instances](int lhs, int rhs) {
+        const auto &lhsInstance = instances.Get(lhs);
+        const auto &rhsInstance = instances.Get(rhs);
+        if (lhsInstance.instanceid() != rhsInstance.instanceid()) {
+            return lhsInstance.instanceid() < rhsInstance.instanceid();
+        }
+        return lhsInstance.tenantid() < rhsInstance.tenantid();
+    });
+    return matchedIndexes;
+}
+
+inline QueryInstancesPageRange GetQueryInstancesPageRange(uint64_t total, const QueryInstancesPagination &pagination)
+{
+    QueryInstancesPageRange range{ .start = 0, .end = total };
+    if (!pagination.enabled) {
+        return range;
+    }
+
+    if (pagination.page > 1) {
+        range.start = pagination.page - 1 > total / pagination.pageSize
+                          ? total
+                          : (pagination.page - 1) * pagination.pageSize;
+    }
+    range.end = range.start < total ? range.start + std::min(pagination.pageSize, total - range.start) : total;
+    return range;
+}
+
+inline bool ParsePositiveUInt64Param(
+    const std::string &value, const std::string &name, uint64_t &out, std::string &error)
+{
+    try {
+        size_t parsed = 0;
+        auto result = std::stoull(value, &parsed);
+        if (parsed != value.size() || result == 0) {
+            error = name + " must be a positive integer";
+            return false;
+        }
+        out = result;
+        return true;
+    } catch (const std::exception &) {
+        error = name + " must be a positive integer";
+        return false;
+    }
+}
+
+template <typename QueryMap>
+QueryInstancesPagination ParseQueryInstancesPagination(const QueryMap &query)
+{
+    QueryInstancesPagination pagination;
+    auto pageIt = query.find("page");
+    auto pageSizeIt = query.find("page_size");
+    bool hasPage = pageIt != query.end() && !pageIt->second.empty();
+    bool hasPageSize = pageSizeIt != query.end() && !pageSizeIt->second.empty();
+    if (!hasPage && !hasPageSize) {
+        return pagination;
+    }
+
+    pagination.enabled = true;
+    if (hasPage && !ParsePositiveUInt64Param(pageIt->second, "page", pagination.page, pagination.error)) {
+        return pagination;
+    }
+    if (hasPageSize &&
+        !ParsePositiveUInt64Param(pageSizeIt->second, "page_size", pagination.pageSize, pagination.error)) {
+        return pagination;
+    }
+    if (pagination.pageSize > QUERY_INSTANCES_MAX_PAGE_SIZE) {
+        pagination.error = "page_size exceeds maximum limit";
+        return pagination;
+    }
+    return pagination;
+}
+
+inline litebus::Future<litebus::http::Response> JsonResponseOrInternalError(const nlohmann::json &responseJson)
+{
+    try {
+        return litebus::http::Ok(responseJson.dump(), litebus::http::ResponseBodyType::JSON);
+    } catch (const std::exception &e) {
+        YRLOG_ERROR("Failed to serialize tenant instances response: {}", e.what());
+    } catch (...) {
+        YRLOG_ERROR("Failed to serialize tenant instances response: unknown exception");
+    }
+    return HttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR,
+                        JSON_SERIALIZE_ERROR,
+                        litebus::http::ResponseBodyType::JSON);
+}
+
 class InstancesApiRouter : public ApiRouterRegister {
 public:
     void RegisterHandler(const std::string &url, const HttpHandler &handler) const override
@@ -159,47 +285,64 @@ public:
                 instanceID = instanceIt->second;
             }
 
+            auto pagination = ParseQueryInstancesPagination(request.url.query);
+            if (!pagination.error.empty()) {
+                YRLOG_ERROR("Invalid pagination parameter: {}", pagination.error);
+                nlohmann::json errorJson;
+                errorJson["error"] = pagination.error;
+                try {
+                    return HttpResponse(litebus::http::ResponseCode::BAD_REQUEST,
+                                        errorJson.dump(),
+                                        litebus::http::ResponseBodyType::JSON);
+                } catch (const std::exception &e) {
+                    YRLOG_ERROR("Failed to serialize pagination error response: {}", e.what());
+                } catch (...) {
+                    YRLOG_ERROR("Failed to serialize pagination error response: unknown exception");
+                }
+                return HttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR,
+                                    JSON_SERIALIZE_ERROR,
+                                    litebus::http::ResponseBodyType::JSON);
+            }
+
             // Check if this is a system tenant query
             bool isSystemTenant = (tenantID == imActor->GetSystemTenantID());
 
             auto req = std::make_shared<messages::QueryInstancesInfoRequest>();
             req->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
 
-            // Capture tenantID, instanceID, and isSystemTenant for the lambda
+            // Capture tenantID, instanceID, isSystemTenant, and pagination for the lambda
             return litebus::Async(imActor->GetAID(), &InstanceManagerActor::QueryInstancesInfo, req)
-                .Then([tenantID, instanceID, isSystemTenant](const messages::QueryInstancesInfoResponse &rsp)
+                .Then([tenantID, instanceID, isSystemTenant, pagination](
+                          const messages::QueryInstancesInfoResponse &rsp)
                           -> litebus::Future<litebus::http::Response> {
-                    // Filter instances based on tenantID
-                    // If isSystemTenant is true, return all instances; otherwise filter by tenantID
+                    auto matchedIndexes =
+                        CollectSortedTenantInstanceIndexes(rsp.instanceinfos(), tenantID, instanceID, isSystemTenant);
+                    auto totalCount = matchedIndexes.size();
+                    auto range = GetQueryInstancesPageRange(static_cast<uint64_t>(totalCount), pagination);
+
                     nlohmann::json instancesArray = nlohmann::json::array();
-
-                    for (const auto &instance : rsp.instanceinfos()) {
-                        // If system tenant, return all instances; otherwise filter by tenantID
-                        if (isSystemTenant || instance.tenantid() == tenantID) {
-                            // If instanceID is specified, also filter by instanceID
-                            if (!instanceID.empty() && instance.instanceid() != instanceID) {
-                                continue;
-                            }
-
-                            // Use protobuf's JSON converter
-                            google::protobuf::util::JsonOptions options;
-                            options.add_whitespace = false;
-                            std::string instanceJsonStr;
-                            auto status = google::protobuf::util::MessageToJsonString(instance, &instanceJsonStr, options);
-                            if (status.ok()) {
-                                // Parse the JSON string and add to array
-                                nlohmann::json instanceJson = nlohmann::json::parse(instanceJsonStr);
-                                instancesArray.push_back(instanceJson);
-                            } else {
-                                YRLOG_WARN("Failed to convert instance to JSON: {}", status.ToString());
-                            }
+                    for (uint64_t index = range.start; index < range.end; ++index) {
+                        const auto &instance = rsp.instanceinfos().Get(matchedIndexes[static_cast<size_t>(index)]);
+                        google::protobuf::util::JsonOptions options;
+                        options.add_whitespace = false;
+                        std::string instanceJsonStr;
+                        auto status = google::protobuf::util::MessageToJsonString(instance, &instanceJsonStr, options);
+                        if (status.ok()) {
+                            nlohmann::json instanceJson = nlohmann::json::parse(instanceJsonStr);
+                            instancesArray.push_back(instanceJson);
+                        } else {
+                            YRLOG_WARN("Failed to convert instance to JSON: {}", status.ToString());
                         }
                     }
 
                     nlohmann::json responseJson;
                     responseJson["instances"] = instancesArray;
-                    responseJson["count"] = instancesArray.size();
+                    responseJson["count"] = totalCount;
                     responseJson["tenantID"] = tenantID;
+                    if (pagination.enabled) {
+                        responseJson["page"] = pagination.page;
+                        responseJson["pageSize"] = pagination.pageSize;
+                    }
                     
                     // Add a flag to indicate if this is a system tenant query
                     if (isSystemTenant) {
@@ -211,8 +354,7 @@ public:
                         responseJson["instanceID"] = instanceID;
                     }
 
-                    std::string jsonStr = responseJson.dump();
-                    return litebus::http::Ok(jsonStr, litebus::http::ResponseBodyType::JSON);
+                    return JsonResponseOrInternalError(responseJson);
                 });
         };
         RegisterHandler("/query-tenant-instances", handler);
