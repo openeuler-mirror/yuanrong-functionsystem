@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::port_manager::SharedPortManager;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 /// Parsed from instance `config_json` for optional HTTP/TCP probes.
@@ -37,6 +37,7 @@ pub struct RuntimeManagerState {
     pub ports: Arc<SharedPortManager>,
     by_runtime: RwLock<HashMap<String, RunningProcess>>,
     by_pid: RwLock<HashMap<i32, String>>,
+    oom_kill_marks: RwLock<HashSet<String>>,
 }
 
 impl RuntimeManagerState {
@@ -46,6 +47,7 @@ impl RuntimeManagerState {
             ports,
             by_runtime: RwLock::new(HashMap::new()),
             by_pid: RwLock::new(HashMap::new()),
+            oom_kill_marks: RwLock::new(HashSet::new()),
         }
     }
 
@@ -59,6 +61,7 @@ impl RuntimeManagerState {
     pub fn remove_by_runtime(&self, runtime_id: &str) -> Option<RunningProcess> {
         let p = self.by_runtime.write().remove(runtime_id)?;
         self.by_pid.write().remove(&p.pid);
+        self.oom_kill_marks.write().remove(runtime_id);
         Some(p)
     }
 
@@ -89,6 +92,14 @@ impl RuntimeManagerState {
 
     pub fn remove_pid_mapping(&self, pid: i32) {
         self.by_pid.write().remove(&pid);
+    }
+
+    pub fn mark_oom_kill_in_advance(&self, runtime_id: &str) {
+        self.oom_kill_marks.write().insert(runtime_id.to_string());
+    }
+
+    pub fn take_oom_kill_mark(&self, runtime_id: &str) -> bool {
+        self.oom_kill_marks.write().remove(runtime_id)
     }
 
     pub fn list_running_pids(&self) -> Vec<i32> {

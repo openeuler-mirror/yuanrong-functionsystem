@@ -2,7 +2,7 @@
 
 Date: 2026-04-28
 Branch: `rust-rewrite`
-Scope: Rust-only `runtime_manager` child-exit classification and log-message enrichment
+Scope: Rust-only `runtime_manager` child-exit classification, log-message enrichment, and internal OOM advance-notify dedupe
 
 ## Goal
 
@@ -22,6 +22,10 @@ Clean C++ 0.8 control inspected in `yr-e2e-master:/workspace/clean_0_8/src/yuanr
 - `runtime_manager/utils/std_redirector.cpp` / `.h`
   - `STD_POSTFIX = -user_func_std.log`, `ERROR_LEVEL = ERROR`.
   - `GetStdLog` scans backward from the log tail, selecting recent lines containing both runtimeID and ERROR (default 20 hits within 1000 scanned lines).
+- `runtime_manager/manager/runtime_manager.cpp` and `runtime_manager/metrics/metrics_actor.cpp`
+  - `MetricsActor::SetRuntimeMemoryExceedLimitCallback(...)` wires memory-limit events into `RuntimeManager::OomKillInstance(...)`.
+  - `OomKillInstance(...)` calls `HealthCheckActor::NotifyOomKillInstanceInAdvance(...)` before `InnerOomKillInstance(...)` force-stops the runtime.
+  - `NotifyOomKillInstanceInAdvance(...)` sends status `-1` / `runtime memory exceed limit` first and records the OOM pid so later process reaping does not emit a second generic exit report.
 
 ## Rust Changes
 
@@ -39,6 +43,10 @@ Clean C++ 0.8 control inspected in `yr-e2e-master:/workspace/clean_0_8/src/yuanr
   - then scan C++ std-log candidates (`${runtime_logs_dir}/${runtime_std_log_dir}/${std_log_name}-user_func_std.log`, runtime-id variants) for recent runtime ERROR lines, followed by Rust-captured per-runtime stderr/stdout tails;
   - preserve unknown fallback when no log artifact exists.
 - Added `runtime_std_log_dir` to Rust runtime-manager config and propagated `function_agent --runtime_std_log_dir` into embedded runtime-manager config so the C++ flag no longer parse-only.
+- Added an internal OOM advance-notify marker matching the C++ `NotifyOomKillInstanceInAdvance(...) -> InnerOomKillInstance(...)` ordering:
+  - user-space OOM supervision now marks the runtime and sends `runtime memory exceed limit` / exit code `-1` before force-stopping the runtime;
+  - the child reaper consumes that mark and suppresses the duplicate generic child-exit report if waitpid wins the stop race;
+  - removing the runtime clears any stale OOM mark.
 
 ## Verification
 
@@ -48,8 +56,8 @@ All commands used `CARGO_BUILD_JOBS=8`.
 cargo test -p yr-runtime-manager --test health_exit_classification -- --nocapture
 # 7 passed
 
-cargo test -p yr-runtime-manager --test runtime_ops_start_stop --test standalone_mode_test -- --nocapture
-# 19 passed
+cargo test -p yr-runtime-manager --test oom_lifecycle --test health_exit_classification --test runtime_ops_start_stop --test standalone_mode_test --test oom_config --test config_defaults_grouped -- --nocapture
+# 35 passed
 
 cargo test -p yr-agent --test merge_process_config -- --nocapture
 # 4 passed
@@ -66,8 +74,8 @@ git diff --check
 
 ## Boundary / Remaining RUNTIME-004 Work
 
-This closes wait-status classification plus the safe local log-message enrichment slice. Remaining `RUNTIME-004` work:
+This closes wait-status classification, local log-message enrichment, and internal OOM advance-notify dedupe. Remaining `RUNTIME-004` work:
 
-- OOM-log / dmesg / cgroup OOM attribution parity with C++ `GetOOMInfo(...)` and MetricsActor callbacks.
-- Full runtime-manager OOM callback lifecycle parity with C++ `MetricsActor` and `NotifyOomKillInstanceInAdvance(...)`.
+- External OOM-log / dmesg attribution parity with C++ `GetOOMInfo(...)`.
+- End-to-end MetricsActor-style memory-limit callback proof under deployed runtime resource pressure.
 - End-to-end ST/runtime proof that Java crash files and user std logs are produced at the expected deployed paths under the Rust black-box package.

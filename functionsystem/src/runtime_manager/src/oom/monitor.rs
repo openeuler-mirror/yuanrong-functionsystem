@@ -3,12 +3,24 @@
 use crate::agent::AgentClient;
 use crate::runtime_ops;
 use crate::state::RuntimeManagerState;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
-use parking_lot::Mutex;
 use tokio::time::Duration;
 use tracing::warn;
 use yr_proto::internal::{StopInstanceRequest, UpdateInstanceStatusRequest};
+
+pub const RUNTIME_MEMORY_EXCEED_LIMIT_MESSAGE: &str = "runtime memory exceed limit";
+
+pub fn oom_kill_status_request(instance_id: &str, runtime_id: &str) -> UpdateInstanceStatusRequest {
+    UpdateInstanceStatusRequest {
+        instance_id: instance_id.to_string(),
+        runtime_id: runtime_id.to_string(),
+        status: "oom_killed".into(),
+        exit_code: -1,
+        error_message: RUNTIME_MEMORY_EXCEED_LIMIT_MESSAGE.into(),
+    }
+}
 
 fn rss_kb(pid: i32) -> u64 {
     let path = format!("/proc/{pid}/status");
@@ -83,6 +95,13 @@ pub async fn supervision_loop(state: Arc<RuntimeManagerState>, agent: Arc<AgentC
                     "runtime memory over limit; stopping instance"
                 );
 
+                state.mark_oom_kill_in_advance(&rid);
+                let status_req = oom_kill_status_request(&proc.instance_id, &rid);
+                let ag = agent.clone();
+                tokio::spawn(async move {
+                    ag.update_instance_status_retry(status_req).await;
+                });
+
                 let stop_req = StopInstanceRequest {
                     instance_id: proc.instance_id.clone(),
                     runtime_id: rid.clone(),
@@ -95,21 +114,6 @@ pub async fn supervision_loop(state: Arc<RuntimeManagerState>, agent: Arc<AgentC
                 }
 
                 counts.lock().remove(&proc.instance_id);
-
-                let msg = format!(
-                    "oom policy: usage {used_mb} MiB exceeded limit {limit_mb} MiB (+{slack_mb} MiB slack)"
-                );
-                let status_req = UpdateInstanceStatusRequest {
-                    instance_id: proc.instance_id.clone(),
-                    runtime_id: rid.clone(),
-                    status: "oom_killed".into(),
-                    exit_code: 137,
-                    error_message: msg,
-                };
-                let ag = agent.clone();
-                tokio::spawn(async move {
-                    ag.update_instance_status_retry(status_req).await;
-                });
             } else {
                 counts.lock().remove(&proc.instance_id);
             }

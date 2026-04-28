@@ -250,6 +250,17 @@ pub async fn handle_child_exits(
             debug!(pid = ev.pid, "reaped unknown child (not tracked)");
             continue;
         };
+        if state.take_oom_kill_mark(&rid) {
+            debug!(
+                runtime_id = %rid,
+                pid = ev.pid,
+                "reaped runtime after advance OOM status; suppress duplicate child-exit report"
+            );
+            state.remove_by_runtime(&rid);
+            state.ports.release(&rid);
+            state.remove_pid_mapping(ev.pid);
+            continue;
+        }
         let proc = match state.get_by_runtime(&rid) {
             Some(p) => p,
             None => continue,
