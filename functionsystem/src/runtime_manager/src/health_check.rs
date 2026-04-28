@@ -24,6 +24,13 @@ const STD_POSTFIX: &str = "-user_func_std.log";
 const STD_ERROR_LEVEL: &str = "ERROR";
 const STD_TARGET_LINE_COUNT: usize = 20;
 const STD_READ_LINE_COUNT: usize = 1000;
+const CONTAINER_OOM_LIMIT_MARKER: &str = "killed as a result of limit of /kubepods";
+const OOM_PATTERNS: &[&str] = &[
+    "Memory cgroup out of memory: Kill process",
+    "Memory cgroup out of memory: Killed process",
+    "Killed process",
+    "Out of memory: Kill process",
+];
 
 /// Best-effort: look for OOM killer mention of `pid` in recent `dmesg` output.
 fn dmesg_suggests_oom(pid: i32) -> bool {
@@ -42,7 +49,7 @@ fn dmesg_suggests_oom(pid: i32) -> bool {
 /// C++ `HealthCheckActor::GetRuntimeException` equivalent for Rust-managed paths.
 ///
 /// Priority follows C++ for the safe local artifacts Rust can read:
-/// exception `BackTrace_<runtimeID>.log` first, then standard ERROR logs.
+/// exception `BackTrace_<runtimeID>.log`, OOM dmesg, then standard ERROR logs.
 pub fn runtime_exit_log_message(
     runtime_id: &str,
     instance_id: &str,
@@ -52,11 +59,45 @@ pub fn runtime_exit_log_message(
     std_log_name: &str,
     raw_log_dir: &Path,
 ) -> Option<String> {
+    let dmesg_output = best_effort_dmesg_output();
+    runtime_exit_log_message_with_dmesg(
+        runtime_id,
+        instance_id,
+        exit_code,
+        runtime_logs_dir,
+        runtime_std_log_dir,
+        std_log_name,
+        raw_log_dir,
+        dmesg_output.as_deref(),
+        is_bare_metal_env(),
+    )
+}
+
+pub fn runtime_exit_log_message_with_dmesg(
+    runtime_id: &str,
+    instance_id: &str,
+    exit_code: i32,
+    runtime_logs_dir: &Path,
+    runtime_std_log_dir: &str,
+    std_log_name: &str,
+    raw_log_dir: &Path,
+    dmesg_output: Option<&str>,
+    is_bare_metal: bool,
+) -> Option<String> {
     let exception_path = runtime_logs_dir
         .join("exception")
         .join(format!("BackTrace_{runtime_id}.log"));
     if let Some(content) = read_non_empty(&exception_path) {
         return Some(content);
+    }
+
+    if dmesg_output
+        .and_then(|out| dmesg_oom_info(out, is_bare_metal))
+        .is_some()
+    {
+        return Some(format!(
+            "runtime({runtime_id}) process may be killed for some reason"
+        ));
     }
 
     std_error_message(
@@ -68,6 +109,34 @@ pub fn runtime_exit_log_message(
         std_log_name,
         raw_log_dir,
     )
+}
+
+pub fn dmesg_oom_info(output: &str, is_bare_metal: bool) -> Option<String> {
+    let relevant = if is_bare_metal {
+        output
+    } else {
+        let idx = output.find(CONTAINER_OOM_LIMIT_MARKER)?;
+        &output[idx + CONTAINER_OOM_LIMIT_MARKER.len()..]
+    };
+    OOM_PATTERNS
+        .iter()
+        .any(|pattern| relevant.contains(pattern))
+        .then(|| relevant.to_string())
+}
+
+fn best_effort_dmesg_output() -> Option<String> {
+    let out = std::process::Command::new("dmesg")
+        .arg("-T")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    Some(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+fn is_bare_metal_env() -> bool {
+    std::env::var("YR_BARE_MENTAL")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
 }
 
 fn std_error_message(

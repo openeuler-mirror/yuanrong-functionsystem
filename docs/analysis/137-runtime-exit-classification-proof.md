@@ -2,7 +2,7 @@
 
 Date: 2026-04-28
 Branch: `rust-rewrite`
-Scope: Rust-only `runtime_manager` child-exit classification, log-message enrichment, and internal OOM advance-notify dedupe
+Scope: Rust-only `runtime_manager` child-exit classification, log-message enrichment, internal OOM advance-notify dedupe, and dmesg OOM attribution
 
 ## Goal
 
@@ -47,6 +47,11 @@ Clean C++ 0.8 control inspected in `yr-e2e-master:/workspace/clean_0_8/src/yuanr
   - user-space OOM supervision now marks the runtime and sends `runtime memory exceed limit` / exit code `-1` before force-stopping the runtime;
   - the child reaper consumes that mark and suppresses the duplicate generic child-exit report if waitpid wins the stop race;
   - removing the runtime clears any stale OOM mark.
+- Added C++ `GetOOMInfo(...)`-style dmesg attribution between BackTrace and std-log fallback:
+  - bare-metal mode matches the C++ OOM patterns directly;
+  - container mode first requires the C++ `killed as a result of limit of /kubepods` marker before matching OOM patterns;
+  - on match, Rust returns the C++ OOM text `runtime(<runtimeID>) process may be killed for some reason`;
+  - production dmesg probing is best-effort, so unavailable `dmesg` falls through to std-log/raw-log/unknown fallback.
 
 ## Verification
 
@@ -54,10 +59,10 @@ All commands used `CARGO_BUILD_JOBS=8`.
 
 ```bash
 cargo test -p yr-runtime-manager --test health_exit_classification -- --nocapture
-# 7 passed
+# 9 passed
 
 cargo test -p yr-runtime-manager --test oom_lifecycle --test health_exit_classification --test runtime_ops_start_stop --test standalone_mode_test --test oom_config --test config_defaults_grouped -- --nocapture
-# 35 passed
+# 37 passed
 
 cargo test -p yr-agent --test merge_process_config -- --nocapture
 # 4 passed
@@ -74,8 +79,8 @@ git diff --check
 
 ## Boundary / Remaining RUNTIME-004 Work
 
-This closes wait-status classification, local log-message enrichment, and internal OOM advance-notify dedupe. Remaining `RUNTIME-004` work:
+This closes wait-status classification, local log-message enrichment, internal OOM advance-notify dedupe, and C++-ordered dmesg OOM attribution. Remaining `RUNTIME-004` work:
 
-- External OOM-log / dmesg attribution parity with C++ `GetOOMInfo(...)`.
 - End-to-end MetricsActor-style memory-limit callback proof under deployed runtime resource pressure.
+- Privileged/container verification that production `dmesg` access is available in the deployed target, or documented fallback behavior when it is not.
 - End-to-end ST/runtime proof that Java crash files and user std logs are produced at the expected deployed paths under the Rust black-box package.
