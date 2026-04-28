@@ -150,6 +150,8 @@ fn agent_cpp_runtime_flags_feed_embedded_runtime_manager_config() {
         "100",
         "--overhead_memory",
         "256",
+        "--resource_label_path",
+        "/pod/labels",
         "--enable_inherit_env=true",
         "--setCmdCred=true",
     ])
@@ -189,6 +191,7 @@ fn agent_cpp_runtime_flags_feed_embedded_runtime_manager_config() {
     assert_eq!(rm.proc_metrics_memory, 8192.0);
     assert_eq!(rm.overhead_cpu, 100.0);
     assert_eq!(rm.overhead_memory, 256.0);
+    assert_eq!(rm.resource_label_path, PathBuf::from("/pod/labels"));
     assert!(rm.enable_inherit_env);
     assert!(rm.set_cmd_cred);
 }

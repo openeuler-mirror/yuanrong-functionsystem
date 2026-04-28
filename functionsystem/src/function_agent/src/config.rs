@@ -96,6 +96,8 @@ pub struct AgentCppIgnored {
     pub etcd_ssl_base_path: String,
     #[arg(long = "runtime_default_config", default_value = "")]
     pub runtime_default_config: String,
+    #[arg(long = "resource_label_path", default_value = "")]
+    pub resource_label_path: String,
     #[arg(long = "proc_metrics_memory", default_value = "")]
     pub proc_metrics_memory: String,
     #[arg(long = "overhead_cpu", default_value = "")]
@@ -431,6 +433,9 @@ impl Config {
         );
         rm.overhead_cpu = parse_f64(&self.cpp_ignored.overhead_cpu, rm.overhead_cpu);
         rm.overhead_memory = parse_f64(&self.cpp_ignored.overhead_memory, rm.overhead_memory);
+        if !self.cpp_ignored.resource_label_path.trim().is_empty() {
+            rm.resource_label_path = self.cpp_ignored.resource_label_path.trim().into();
+        }
         set_if_present(
             &mut rm.runtime_config_dir,
             &self.cpp_ignored.runtime_config_dir,

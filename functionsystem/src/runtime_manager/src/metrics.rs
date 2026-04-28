@@ -5,6 +5,7 @@ use anyhow::Context;
 use prometheus::{Encoder, Gauge, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
+use std::env;
 use std::ffi::CString;
 use std::fs;
 use std::path::Path;
@@ -49,6 +50,8 @@ pub struct ResourceProjection {
     pub capacity: BTreeMap<String, f64>,
     pub used: BTreeMap<String, f64>,
     pub allocatable: BTreeMap<String, f64>,
+    /// C++ `ResourceLabelsCollector` equivalent in JSON form for Rust schedulers.
+    pub labels: BTreeMap<String, String>,
     /// Compatibility shortcut for existing Rust schedulers that parse
     /// C++-style scalar resources from a top-level `resources` object.
     pub resources: BTreeMap<String, ScalarResource>,
@@ -338,13 +341,71 @@ pub fn build_resource_projection(
             )
         })
         .collect();
+    let labels = collect_node_labels(cfg);
 
     ResourceProjection {
         capacity,
         used,
         allocatable,
+        labels,
         resources,
     }
+}
+
+fn collect_node_labels(cfg: &Config) -> BTreeMap<String, String> {
+    collect_node_labels_from_sources(
+        env::var("INIT_LABELS").ok().as_deref(),
+        env::var("NODE_ID").ok().as_deref(),
+        env::var("HOST_IP").ok().as_deref(),
+        &cfg.resource_label_path,
+    )
+}
+
+pub fn collect_node_labels_from_sources(
+    init_labels: Option<&str>,
+    node_id: Option<&str>,
+    host_ip: Option<&str>,
+    resource_label_path: &Path,
+) -> BTreeMap<String, String> {
+    let mut labels = BTreeMap::new();
+
+    if let Some(raw) = init_labels.filter(|s| !s.is_empty()) {
+        if let Ok(serde_json::Value::Object(obj)) = serde_json::from_str::<serde_json::Value>(raw) {
+            for (k, v) in obj {
+                if let Some(s) = v.as_str() {
+                    labels.insert(k, s.to_string());
+                }
+            }
+        }
+    }
+
+    if let Some(v) = node_id.filter(|s| !s.is_empty()) {
+        labels.insert("NODE_ID".to_string(), v.to_string());
+    }
+    if let Some(v) = host_ip.filter(|s| !s.is_empty()) {
+        labels.insert("HOST_IP".to_string(), v.to_string());
+    }
+
+    if let Ok(text) = fs::read_to_string(resource_label_path) {
+        for line in text.lines() {
+            if let Some((k, v)) = parse_label_file_line(line) {
+                labels.insert(k, v);
+            }
+        }
+    }
+
+    labels
+}
+
+fn parse_label_file_line(line: &str) -> Option<(String, String)> {
+    let (key, raw_value) = line.split_once('=')?;
+    if raw_value.len() < 2 || !raw_value.starts_with('"') || !raw_value.ends_with('"') {
+        return None;
+    }
+    Some((
+        key.to_string(),
+        raw_value[1..raw_value.len() - 1].to_string(),
+    ))
 }
 
 struct PromBundle {

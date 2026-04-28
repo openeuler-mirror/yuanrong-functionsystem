@@ -159,5 +159,5 @@ GTest result:
 This closes the scheduler-facing CPU/memory/custom-resource projection slice. Remaining code-level parity work, if release scope requires it:
 
 - Byte-level `ResourceUnit` protobuf propagation between runtime-manager, agent, proxy/master instead of JSON projection.
-- GPU/NPU, NUMA vectors, disk extensions, and resource labels with the exact C++ `Resource` shape.
+- GPU/NPU, NUMA vectors, disk extensions, and byte-level C++ `Resource` shape. Resource-label JSON projection is covered separately by `docs/analysis/141-runtime-resource-labels-proof.md`.
 - CPU usage percentage parity for per-instance collectors.

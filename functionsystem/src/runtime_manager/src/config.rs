@@ -96,6 +96,14 @@ pub struct Config {
     )]
     pub overhead_memory: f64,
 
+    /// C++ `resource_label_path` for node labels (Kubernetes downward API style key="value" file).
+    #[arg(
+        long = "resource_label_path",
+        default_value = "/home/sn/podInfo/labels",
+        alias = "resource-label-path"
+    )]
+    pub resource_label_path: PathBuf,
+
     /// cgroup v2 parent directory (e.g. `/sys/fs/cgroup/yr_runtime_manager`). Empty disables cgroups.
     #[arg(long, default_value = "", value_parser = cgroup_parent_from_flag)]
     pub cgroup_parent: PathBuf,
@@ -350,6 +358,7 @@ impl Config {
             proc_metrics_memory: 4000.0,
             overhead_cpu: 0.0,
             overhead_memory: 0.0,
+            resource_label_path: PathBuf::from("/home/sn/podInfo/labels"),
             cgroup_parent: PathBuf::new(),
             cgroup_enable_cpu: true,
             cgroup_enable_memory: true,

@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use yr_runtime_manager::config::Config;
-use yr_runtime_manager::metrics::{build_resource_projection, InstanceMetric, NodeMetricsSample};
+use yr_runtime_manager::metrics::{
+    build_resource_projection, collect_node_labels_from_sources, InstanceMetric, NodeMetricsSample,
+};
 
 fn test_config() -> Config {
     Config::embedded_in_agent(
@@ -46,6 +48,7 @@ fn proc_metrics_projection_uses_cpp_default_capacity_and_instance_rss_mb() {
     assert_eq!(p.used.get("disk"), Some(&5.0));
     assert_eq!(p.resources["cpu"].scalar.value, 1000.0);
     assert_eq!(p.resources["memory"].scalar.value, 4000.0);
+    assert!(p.labels.is_empty());
 }
 
 #[test]
@@ -64,4 +67,39 @@ fn node_metrics_projection_uses_host_memory_minus_cpp_overhead() {
     assert_eq!(p.capacity.get("memory"), Some(&896.0));
     assert_eq!(p.used.get("memory"), Some(&256.0));
     assert!(p.capacity.get("cpu").copied().unwrap_or_default() > 0.0);
+}
+
+#[test]
+fn node_labels_follow_cpp_resource_label_sources() {
+    let dir = std::env::temp_dir().join(format!(
+        "yr_rm_labels_{}_{}",
+        std::process::id(),
+        "resource_projection"
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let labels_file = dir.join("labels");
+    std::fs::write(
+        &labels_file,
+        "zone=\"cn-south-1\"\ninvalid\nteam=\"runtime\"\nempty=\n",
+    )
+    .unwrap();
+
+    let labels = collect_node_labels_from_sources(
+        Some(r#"{"init":"true","rank":"3","ignored_number":3}"#),
+        Some("node-7"),
+        Some("10.0.0.7"),
+        &labels_file,
+    );
+
+    assert_eq!(labels.get("init").map(String::as_str), Some("true"));
+    assert_eq!(labels.get("rank").map(String::as_str), Some("3"));
+    assert!(!labels.contains_key("ignored_number"));
+    assert_eq!(labels.get("NODE_ID").map(String::as_str), Some("node-7"));
+    assert_eq!(labels.get("HOST_IP").map(String::as_str), Some("10.0.0.7"));
+    assert_eq!(labels.get("zone").map(String::as_str), Some("cn-south-1"));
+    assert_eq!(labels.get("team").map(String::as_str), Some("runtime"));
+    assert!(!labels.contains_key("empty"));
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
