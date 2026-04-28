@@ -74,7 +74,7 @@ Rust reference inspected:
 
 | Flag group | C++ behavior | Rust status | Evidence | Next action |
 | --- | --- | --- | --- | --- |
-| `runtime_dir`, runtime home/config/std-log dirs, LD/Python/Java paths | Command builder and runtime env construction | Partial | Rust `effective_merge_runtime_paths` and `effective_runtime_ld_library_path`; test adjusted to current Python-inclusive behavior | `RUNTIME-002` should capture A/B command/env snapshots. |
+| `runtime_dir`, runtime home/config/std-log dirs, LD/Python/Java paths | Command builder and runtime env construction | Implemented for core C++/Go/Python launch shape | Rust launch spec builder, embedded agent config propagation, proof `docs/analysis/136-runtime-command-env-parity-proof.md` | Keep Java/custom-runtime/NUMA working-dir details as follow-up runtime parity rows. |
 | `data_system_enable`, DS host/port/connect timeout | Runtime DS access | Partial | Rust config and agent/runtime paths exist; ObjRef/DS exactness remains separate | Keep DS A/B probes. |
 | `oom_kill_*`, `massif_enable`, memory detection interval | OOM/health/exit classification | Partial | Rust OOM modules exist; exact semantics unproven | `RUNTIME-004` safe OOM/exit probes. |
 | `user_log_*`, log expiration/reuse | User log routing/retention | Partial/no-op likely | Runtime manager log code exists; C++ parity not audited | P2 unless log compatibility is release scope. |

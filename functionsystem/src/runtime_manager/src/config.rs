@@ -119,7 +119,6 @@ pub struct Config {
     pub manager_startup_probe_secs: u64,
 
     // --- C++ runtime-manager flag parity ---
-
     /// Visible IP for runtime to connect back (`host_ip`).
     #[arg(long, default_value = "")]
     pub host_ip: String,
@@ -142,16 +141,58 @@ pub struct Config {
     #[arg(long, default_value_t = 0)]
     pub runtime_gid: i32,
 
-    #[arg(long, default_value = "/home/snuser")]
+    #[arg(long, default_value = "/home/snuser", alias = "runtime_dir")]
     pub runtime_dir: String,
 
-    #[arg(long, default_value = "/home/snuser/lib")]
+    #[arg(long, default_value = "/home/snuser/lib", alias = "snuser_lib_dir")]
     pub snuser_lib_dir: String,
 
-    #[arg(long, default_value = "")]
+    #[arg(
+        long = "runtime_logs_dir",
+        default_value = "/home/snuser",
+        alias = "runtime-logs-dir"
+    )]
+    pub runtime_logs_dir: String,
+
+    #[arg(
+        long = "runtime_home_dir",
+        default_value = "/home/snuser",
+        alias = "runtime-home-dir"
+    )]
+    pub runtime_home_dir: String,
+
+    #[arg(
+        long = "runtime_config_dir",
+        default_value = "/home/snuser/config",
+        alias = "runtime-config-dir"
+    )]
+    pub runtime_config_dir: String,
+
+    #[arg(
+        long = "python_log_config_path",
+        default_value = "/home/snuser/config/python-runtime-log.json",
+        alias = "python-log-config-path"
+    )]
+    pub python_log_config_path: String,
+
+    #[arg(
+        long = "java_system_property",
+        default_value = "-Dlog4j2.configurationFile=file:/home/snuser/runtime/java/log4j2.xml",
+        alias = "java-system-property"
+    )]
+    pub java_system_property: String,
+
+    #[arg(
+        long = "java_system_library_path",
+        default_value = "/home/snuser/runtime/java/lib",
+        alias = "java-system-library-path"
+    )]
+    pub java_system_library_path: String,
+
+    #[arg(long, default_value = "", alias = "runtime_ld_library_path")]
     pub runtime_ld_library_path: String,
 
-    #[arg(long, default_value = "DEBUG")]
+    #[arg(long, default_value = "DEBUG", alias = "runtime_log_level")]
     pub runtime_log_level: String,
 
     /// Maximum runtime log size (MB).
@@ -227,7 +268,14 @@ pub struct Config {
     )]
     pub set_cmd_cred: bool,
 
-    #[arg(long, default_value_t = 0)]
+    #[arg(
+        long = "runtime_ds_connect_timeout",
+        default_value_t = 60,
+        alias = "runtime-ds-connect-timeout"
+    )]
+    pub runtime_ds_connect_timeout: u32,
+
+    #[arg(long, default_value_t = 0, alias = "kill_process_timeout_seconds")]
     pub kill_process_timeout_seconds: u32,
 }
 
@@ -274,6 +322,13 @@ impl Config {
             runtime_gid: 0,
             runtime_dir: "/home/snuser".into(),
             snuser_lib_dir: "/home/snuser/lib".into(),
+            runtime_logs_dir: "/home/snuser".into(),
+            runtime_home_dir: "/home/snuser".into(),
+            runtime_config_dir: "/home/snuser/config".into(),
+            python_log_config_path: "/home/snuser/config/python-runtime-log.json".into(),
+            java_system_property:
+                "-Dlog4j2.configurationFile=file:/home/snuser/runtime/java/log4j2.xml".into(),
+            java_system_library_path: "/home/snuser/runtime/java/lib".into(),
             runtime_ld_library_path: String::new(),
             runtime_log_level: "DEBUG".into(),
             runtime_max_log_size: 40,
@@ -290,6 +345,7 @@ impl Config {
             custom_resources: String::new(),
             enable_inherit_env: false,
             set_cmd_cred: false,
+            runtime_ds_connect_timeout: 60,
             kill_process_timeout_seconds: 0,
         }
     }
@@ -333,12 +389,8 @@ impl Config {
     }
 
     pub fn ensure_log_dir(&self) -> anyhow::Result<()> {
-        std::fs::create_dir_all(&self.log_path).with_context(|| {
-            format!(
-                "create log directory {}",
-                self.log_path.display()
-            )
-        })
+        std::fs::create_dir_all(&self.log_path)
+            .with_context(|| format!("create log directory {}", self.log_path.display()))
     }
 
     pub fn parse_bind_mounts(&self) -> Vec<BindMount> {

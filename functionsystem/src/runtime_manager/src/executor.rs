@@ -16,6 +16,9 @@ use std::time::{Duration, Instant};
 use tracing::{info, warn};
 use yr_proto::internal::StartInstanceRequest;
 
+const CPP_PROGRAM_NAME: &str = "cppruntime";
+const GO_PROGRAM_NAME: &str = "goruntime";
+
 /// Resolve executable path from `runtime_type` and configured path list.
 pub fn pick_runtime_executable(paths: &[String], runtime_type: &str) -> Option<String> {
     if paths.is_empty() {
@@ -109,6 +112,23 @@ fn python_path_for(cfg: &Config, req: &StartInstanceRequest) -> String {
     parts.join(":")
 }
 
+fn runtime_grpc_address(cfg: &Config, port: u16) -> String {
+    let host = if cfg.proxy_ip.trim().is_empty() {
+        cfg.host.trim()
+    } else {
+        cfg.proxy_ip.trim()
+    };
+    format!("{host}:{port}")
+}
+
+fn job_id_env_for(req: &StartInstanceRequest) -> String {
+    req.env_vars
+        .get("YR_JOB_ID")
+        .filter(|v| !v.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| format!("job-{}", &req.instance_id.get(..8).unwrap_or("ffffffff")))
+}
+
 fn expand_env_value(value: &str, vars: &HashMap<String, String>) -> String {
     let mut out = value.to_string();
     for (k, v) in vars {
@@ -163,6 +183,267 @@ fn bind_mounts_for_instance(cfg: &Config, workdir: &Path) -> Vec<BindMount> {
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeLaunchSpec {
+    pub executable: String,
+    pub arg0: Option<String>,
+    pub args: Vec<String>,
+    pub current_dir: PathBuf,
+    pub env: HashMap<String, String>,
+}
+
+fn base_ld_library_path(cfg: &Config, req: &StartInstanceRequest) -> String {
+    let mut parts = Vec::new();
+    let code_path = req.code_path.trim();
+    if !code_path.is_empty() && code_path != "/" {
+        parts.push(code_path.to_string());
+        parts.push(format!("{code_path}/lib"));
+    }
+    if req.runtime_type.to_ascii_lowercase().contains("cpp") {
+        parts.push(format!("{}/cpp/lib", cfg.runtime_dir.trim_end_matches('/')));
+    }
+    if !cfg.runtime_ld_library_path.trim().is_empty() {
+        parts.push(cfg.runtime_ld_library_path.clone());
+    }
+    parts.join(":")
+}
+
+fn build_runtime_env(
+    cfg: &Config,
+    req: &StartInstanceRequest,
+    runtime_id: &str,
+    port: u16,
+    workdir: &Path,
+) -> HashMap<String, String> {
+    let listen_addr = runtime_grpc_address(cfg, port);
+    let host_ip = cfg.host_ip.trim();
+    let host_ip = if host_ip.is_empty() {
+        cfg.host.trim()
+    } else {
+        host_ip
+    };
+    let mut env = HashMap::from([
+        ("INSTANCE_ID".to_string(), req.instance_id.clone()),
+        ("RUNTIME_ID".to_string(), runtime_id.to_string()),
+        ("YR_RUNTIME_ID".to_string(), runtime_id.to_string()),
+        ("FUNCTION_NAME".to_string(), req.function_name.clone()),
+        ("TENANT_ID".to_string(), req.tenant_id.clone()),
+        ("RUNTIME_PORT".to_string(), port.to_string()),
+        ("RUNTIME_TYPE".to_string(), req.runtime_type.clone()),
+        ("POSIX_LISTEN_ADDR".to_string(), listen_addr),
+        ("POD_IP".to_string(), cfg.host.trim().to_string()),
+        ("SNUSER_LIB_PATH".to_string(), cfg.snuser_lib_dir.clone()),
+        (
+            "DATASYSTEM_ADDR".to_string(),
+            format!("{host_ip}:{}", cfg.data_system_port),
+        ),
+        (
+            "YR_DS_ADDRESS".to_string(),
+            format!("{host_ip}:{}", cfg.data_system_port),
+        ),
+        (
+            "DRIVER_SERVER_PORT".to_string(),
+            cfg.driver_server_port.clone(),
+        ),
+        ("HOME".to_string(), cfg.runtime_home_dir.clone()),
+        ("HOST_IP".to_string(), host_ip.to_string()),
+        ("FUNCTION_LIB_PATH".to_string(), req.code_path.clone()),
+        ("YR_FUNCTION_LIB_PATH".to_string(), req.code_path.clone()),
+        ("LAYER_LIB_PATH".to_string(), String::new()),
+        (
+            "LD_LIBRARY_PATH".to_string(),
+            base_ld_library_path(cfg, req),
+        ),
+        (
+            "PROXY_GRPC_SERVER_PORT".to_string(),
+            cfg.proxy_grpc_server_port.clone(),
+        ),
+        (
+            "YR_SERVER_ADDRESS".to_string(),
+            format!(
+                "{}:{}",
+                cfg.proxy_ip.trim(),
+                cfg.proxy_grpc_server_port.trim()
+            ),
+        ),
+        ("NODE_ID".to_string(), cfg.node_id.clone()),
+        ("YR_JOB_ID".to_string(), job_id_env_for(req)),
+        ("PYTHONUNBUFFERED".to_string(), "1".to_string()),
+        ("YR_BARE_MENTAL".to_string(), "1".to_string()),
+    ]);
+
+    let mut expand_vars = env.clone();
+    for key in ["LD_LIBRARY_PATH", "PYTHONPATH", "PATH"] {
+        if let Ok(value) = std::env::var(key) {
+            expand_vars.entry(key.to_string()).or_insert(value);
+        }
+    }
+
+    for (k, v) in &req.env_vars {
+        if k == "UNZIPPED_WORKING_DIR" {
+            continue;
+        }
+        let mut vars = expand_vars.clone();
+        for (other_k, other_v) in &req.env_vars {
+            if other_k != k {
+                vars.insert(other_k.clone(), other_v.clone());
+            }
+        }
+        let expanded = expand_env_value(v, &vars);
+        if k == "LD_LIBRARY_PATH" {
+            if v.contains("${LD_LIBRARY_PATH}") {
+                env.insert(k.clone(), expanded);
+            } else {
+                let base = env.get(k).cloned().unwrap_or_default();
+                env.insert(
+                    k.clone(),
+                    if base.is_empty() {
+                        expanded
+                    } else {
+                        format!("{base}:{expanded}")
+                    },
+                );
+            }
+        } else {
+            env.insert(k.clone(), expanded);
+        }
+    }
+
+    env.insert("YR_LOG_LEVEL".to_string(), cfg.runtime_log_level.clone());
+    env.insert("GLOG_log_dir".to_string(), cfg.runtime_logs_dir.clone());
+    env.insert(
+        "YR_MAX_LOG_SIZE_MB".to_string(),
+        cfg.runtime_max_log_size.to_string(),
+    );
+    env.insert(
+        "YR_MAX_LOG_FILE_NUM".to_string(),
+        cfg.runtime_max_log_file_num.to_string(),
+    );
+    env.insert(
+        "DS_CONNECT_TIMEOUT_SEC".to_string(),
+        cfg.runtime_ds_connect_timeout.to_string(),
+    );
+
+    let mut python_path = String::new();
+    if let Some(working_dir) = req.env_vars.get("UNZIPPED_WORKING_DIR") {
+        if !working_dir.trim().is_empty() {
+            python_path.push(':');
+            python_path.push_str(working_dir);
+        }
+    }
+    if let Some(existing) = env.get("PYTHONPATH").filter(|v| !v.is_empty()) {
+        python_path.push(':');
+        python_path.push_str(existing);
+    } else {
+        let fallback = python_path_for(cfg, req);
+        if !fallback.is_empty() {
+            python_path.push(':');
+            python_path.push_str(&fallback);
+        }
+    }
+    env.insert("PYTHONPATH".to_string(), python_path);
+
+    if let Ok(path) = std::env::var("PATH") {
+        let existing = env.get("PATH").cloned().unwrap_or_default();
+        if cfg.enable_inherit_env {
+            env.insert(
+                "PATH".to_string(),
+                if existing.is_empty() {
+                    path
+                } else {
+                    format!("{existing}:{path}")
+                },
+            );
+        } else {
+            env.entry("PATH".to_string()).or_insert(path);
+        }
+    }
+    for (k, v) in std::env::vars() {
+        if k.starts_with("YR_") {
+            env.entry(k).or_insert(v);
+        } else if cfg.enable_inherit_env && k != "PATH" {
+            env.entry(k).or_insert(v);
+        }
+    }
+    if env.contains_key("YR_NOSET_ASCEND_RT_VISIBLE_DEVICES") {
+        env.remove("ASCEND_RT_VISIBLE_DEVICES");
+    }
+
+    for (k, v) in venv::java_env_hints(workdir, &req.runtime_type) {
+        env.insert(k, expand_env_value(&v, &expand_vars));
+    }
+
+    env
+}
+
+pub fn build_runtime_launch_spec(
+    cfg: &Config,
+    req: &StartInstanceRequest,
+    paths: &[String],
+    runtime_id: &str,
+    port: u16,
+) -> anyhow::Result<RuntimeLaunchSpec> {
+    let executable = pick_runtime_executable(paths, &req.runtime_type)
+        .ok_or_else(|| anyhow!("no runtime executable configured"))?;
+    let current_dir = resolve_workdir(req);
+    let listen_addr = runtime_grpc_address(cfg, port);
+
+    let mut arg0 = None;
+    let args = if is_python_runtime(&req.runtime_type) {
+        let server = python_server_path(paths)
+            .ok_or_else(|| anyhow!("python runtime server path not found"))?;
+        vec![
+            "-u".to_string(),
+            server.to_string_lossy().into_owned(),
+            "--rt_server_address".to_string(),
+            listen_addr,
+            "--deploy_dir".to_string(),
+            req.code_path.clone(),
+            "--runtime_id".to_string(),
+            runtime_id.to_string(),
+            "--job_id".to_string(),
+            job_id_for(req),
+            "--log_level".to_string(),
+            cfg.runtime_log_level.clone(),
+        ]
+    } else if req.runtime_type.to_ascii_lowercase().contains("cpp")
+        || Path::new(&executable).file_name().and_then(|n| n.to_str()) == Some("runtime")
+    {
+        arg0 = Some(CPP_PROGRAM_NAME.to_string());
+        vec![
+            format!("-runtimeId={runtime_id}"),
+            format!("-logLevel={}", cfg.runtime_log_level),
+            format!("-jobId={}", job_id_for(req)),
+            format!("-grpcAddress={}", runtime_grpc_address(cfg, port)),
+            format!(
+                "-runtimeConfigPath={}/runtime.json",
+                cfg.runtime_config_dir.trim_end_matches('/')
+            ),
+        ]
+    } else if req.runtime_type.to_ascii_lowercase().contains("go")
+        || Path::new(&executable).file_name().and_then(|n| n.to_str()) == Some("goruntime")
+    {
+        arg0 = Some(GO_PROGRAM_NAME.to_string());
+        vec![
+            format!("-runtimeId={runtime_id}"),
+            format!("-instanceId={}", req.instance_id),
+            format!("-logLevel={}", cfg.runtime_log_level),
+            format!("-grpcAddress={}", runtime_grpc_address(cfg, port)),
+        ]
+    } else {
+        vec![req.instance_id.clone()]
+    };
+
+    let env = build_runtime_env(cfg, req, runtime_id, port, &current_dir);
+    Ok(RuntimeLaunchSpec {
+        executable,
+        arg0,
+        args,
+        current_dir,
+        env,
+    })
+}
+
 /// Spawn a runtime child with env, logs, cgroups, optional bind mounts, venv hints.
 pub fn start_runtime_process(
     cfg: &Config,
@@ -171,13 +452,11 @@ pub fn start_runtime_process(
     runtime_id: &str,
     port: u16,
 ) -> anyhow::Result<RunningProcess> {
-    let exe = pick_runtime_executable(paths, &req.runtime_type)
-        .ok_or_else(|| anyhow!("no runtime executable configured"))?;
     cfg.ensure_log_dir()?;
 
     let workdir = resolve_workdir(req);
     let _ = venv::prepare_python_env(&workdir, &req.runtime_type);
-    let java_env = venv::java_env_hints(&workdir, &req.runtime_type);
+    let spec = build_runtime_launch_spec(cfg, req, paths, runtime_id, port)?;
 
     let mounts = bind_mounts_for_instance(cfg, &workdir);
     let mount_points = volume::apply_bind_mounts(&mounts).unwrap_or_else(|e| {
@@ -194,92 +473,17 @@ pub fn start_runtime_process(
         Duration::from_secs(cfg.manager_startup_probe_secs.max(1)),
     );
 
-    let listen_addr = format!("{}:{}", cfg.host.trim(), port);
-
-    let mut cmd = Command::new(&exe);
-    if is_python_runtime(&req.runtime_type) {
-        let server = python_server_path(paths)
-            .ok_or_else(|| anyhow!("python runtime server path not found"))?;
-        cmd.arg("-u")
-            .arg(server)
-            .arg("--rt_server_address")
-            .arg(&listen_addr)
-            .arg("--deploy_dir")
-            .arg(&req.code_path)
-            .arg("--runtime_id")
-            .arg(runtime_id)
-            .arg("--job_id")
-            .arg(job_id_for(req))
-            .arg("--log_level")
-            .arg(&cfg.runtime_log_level);
-        let python_path = python_path_for(cfg, req);
-        if !python_path.is_empty() {
-            cmd.env("PYTHONPATH", python_path);
-        }
-    } else if req.runtime_type.contains("cpp")
-        || Path::new(&exe).file_name().and_then(|n| n.to_str()) == Some("runtime")
-    {
-        // C++ ST and legacy tooling locate worker processes by `cppruntime`.
-        // The packaged executable is `cpp/bin/runtime`, but C++ function-agent
-        // starts it with the legacy process name. Keep that black-box contract.
-        cmd.arg0("cppruntime");
-        cmd.arg(&req.instance_id);
-    } else {
-        cmd.arg(&req.instance_id);
+    let mut cmd = Command::new(&spec.executable);
+    if let Some(arg0) = &spec.arg0 {
+        cmd.arg0(arg0);
     }
-    cmd.current_dir(&workdir)
+    cmd.args(&spec.args)
+        .current_dir(&spec.current_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
-        .env("INSTANCE_ID", &req.instance_id)
-        .env("RUNTIME_ID", runtime_id)
-        .env("YR_RUNTIME_ID", runtime_id)
-        .env("FUNCTION_NAME", &req.function_name)
-        .env("TENANT_ID", &req.tenant_id)
-        .env("RUNTIME_PORT", port.to_string())
-        .env("RUNTIME_TYPE", &req.runtime_type)
-        .env("POSIX_LISTEN_ADDR", &listen_addr)
-        .env(
-            "YR_JOB_ID",
-            format!("job-{}", &req.instance_id.get(..8).unwrap_or("ffffffff")),
-        )
-        .env("PYTHONUNBUFFERED", "1")
-        .env("YR_BARE_MENTAL", "1");
+        .envs(&spec.env);
 
-    let mut expand_vars = HashMap::new();
-    if let Ok(ld) = std::env::var("LD_LIBRARY_PATH") {
-        expand_vars.insert("LD_LIBRARY_PATH".to_string(), ld.clone());
-        cmd.env("LD_LIBRARY_PATH", ld);
-    }
-    if let Ok(pp) = std::env::var("PYTHONPATH") {
-        expand_vars.insert("PYTHONPATH".to_string(), pp.clone());
-        cmd.env("PYTHONPATH", pp);
-    }
-    if let Ok(path) = std::env::var("PATH") {
-        expand_vars.insert("PATH".to_string(), path.clone());
-        cmd.env("PATH", path);
-    }
-    for (k, v) in &req.env_vars {
-        let mut vars = expand_vars.clone();
-        for (other_k, other_v) in &req.env_vars {
-            if other_k != k {
-                vars.insert(other_k.clone(), other_v.clone());
-            }
-        }
-        let expanded = expand_env_value(v, &vars);
-        if k == "LD_LIBRARY_PATH" && (expanded.contains("depend") || v.contains("${")) {
-            info!(
-                instance_id = %req.instance_id,
-                original = %v,
-                expanded = %expanded,
-                "runtime_manager applying LD_LIBRARY_PATH"
-            );
-        }
-        cmd.env(k, expanded);
-    }
-    for (k, v) in java_env {
-        cmd.env(k, expand_env_value(&v, &expand_vars));
-    }
     if let Some(instance_work_dir) = req.env_vars.get("INSTANCE_WORK_DIR") {
         if !instance_work_dir.trim().is_empty() {
             let p = Path::new(instance_work_dir);
@@ -307,7 +511,7 @@ pub fn start_runtime_process(
 
     let child = cmd
         .spawn()
-        .with_context(|| format!("spawn runtime {exe:?}"))?;
+        .with_context(|| format!("spawn runtime {:?}", spec.executable))?;
     let pid = child.id() as i32;
 
     if cfg.runtime_child_oom_score_adj != 0 {
@@ -329,7 +533,7 @@ pub fn start_runtime_process(
         %runtime_id,
         pid,
         port,
-        exe = %exe,
+        exe = %spec.executable,
         "started runtime process"
     );
 

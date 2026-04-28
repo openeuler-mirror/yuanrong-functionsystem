@@ -67,16 +67,7 @@ async fn main() -> anyhow::Result<()> {
             };
             std::env::set_var("PYTHONPATH", python_path);
         }
-        let agent_ep = config.agent_grpc_endpoint();
-        let rm_cfg = Arc::new(yr_runtime_manager::Config::embedded_in_agent(
-            config.node_id.clone(),
-            agent_ep,
-            config.effective_merge_runtime_paths(),
-            config.merge_runtime_initial_port,
-            config.merge_port_count,
-            std::path::PathBuf::from(&config.merge_runtime_log_path),
-            config.merge_runtime_bind_mounts.clone(),
-        ));
+        let rm_cfg = Arc::new(config.embedded_runtime_manager_config());
         rm_cfg.ensure_log_dir()?;
         let ports = Arc::new(yr_runtime_manager::port_manager::SharedPortManager::new(
             config.merge_runtime_initial_port,

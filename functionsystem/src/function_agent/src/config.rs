@@ -1,5 +1,6 @@
 use clap::builder::BoolishValueParser;
 use clap::Parser;
+use std::path::PathBuf;
 
 /// C++ `function_agent` flags without Rust behavior yet (accepted for `install.sh`).
 #[derive(Parser, Debug, Clone)]
@@ -17,6 +18,8 @@ pub struct AgentCppIgnored {
     pub runtime_dir: String,
     #[arg(long = "runtime_home_dir", default_value = "")]
     pub runtime_home_dir: String,
+    #[arg(long = "snuser_lib_dir", default_value = "")]
+    pub snuser_lib_dir: String,
     #[arg(long = "runtime_std_log_dir", default_value = "")]
     pub runtime_std_log_dir: String,
     #[arg(long = "runtime_config_dir", default_value = "")]
@@ -33,6 +36,8 @@ pub struct AgentCppIgnored {
     pub proxy_ip: String,
     #[arg(long = "proxy_grpc_server_port", default_value = "")]
     pub proxy_grpc_server_port: String,
+    #[arg(long = "driver_server_port", default_value = "")]
+    pub driver_server_port: String,
     #[arg(long = "setCmdCred", default_value = "")]
     pub set_cmd_cred: String,
     #[arg(long = "python_dependency_path", default_value = "")]
@@ -348,6 +353,103 @@ impl Config {
 
     pub fn http_listen_addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
+    }
+
+    pub fn embedded_runtime_manager_config(&self) -> yr_runtime_manager::Config {
+        fn set_if_present(dst: &mut String, src: &str) {
+            if !src.trim().is_empty() {
+                *dst = src.trim().to_string();
+            }
+        }
+        fn parse_i32(src: &str, default: i32) -> i32 {
+            src.trim().parse().unwrap_or(default)
+        }
+        fn parse_u32(src: &str, default: u32) -> u32 {
+            src.trim().parse().unwrap_or(default)
+        }
+        fn parse_bool(src: &str, default: bool) -> bool {
+            match src.trim().to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" | "on" => true,
+                "false" | "0" | "no" | "off" | "" => default,
+                _ => default,
+            }
+        }
+
+        let mut rm = yr_runtime_manager::Config::embedded_in_agent(
+            self.node_id.clone(),
+            self.agent_grpc_endpoint(),
+            self.effective_merge_runtime_paths(),
+            self.merge_runtime_initial_port,
+            self.merge_port_count,
+            PathBuf::from(&self.merge_runtime_log_path),
+            self.merge_runtime_bind_mounts.clone(),
+        );
+
+        rm.host = self.host.clone();
+        rm.host_ip = if self.cpp_ignored.host_ip.trim().is_empty() {
+            self.data_system_host.clone()
+        } else {
+            self.cpp_ignored.host_ip.trim().to_string()
+        };
+        rm.data_system_port = self.data_system_port.to_string();
+        set_if_present(
+            &mut rm.driver_server_port,
+            &self.cpp_ignored.driver_server_port,
+        );
+        set_if_present(
+            &mut rm.proxy_grpc_server_port,
+            &self.cpp_ignored.proxy_grpc_server_port,
+        );
+        set_if_present(&mut rm.proxy_ip, &self.cpp_ignored.proxy_ip);
+        set_if_present(&mut rm.runtime_dir, &self.cpp_ignored.runtime_dir);
+        set_if_present(&mut rm.snuser_lib_dir, &self.cpp_ignored.snuser_lib_dir);
+        set_if_present(&mut rm.runtime_logs_dir, &self.merge_runtime_log_path);
+        set_if_present(&mut rm.runtime_home_dir, &self.cpp_ignored.runtime_home_dir);
+        set_if_present(
+            &mut rm.runtime_config_dir,
+            &self.cpp_ignored.runtime_config_dir,
+        );
+        set_if_present(
+            &mut rm.python_log_config_path,
+            &self.cpp_ignored.python_log_config_path,
+        );
+        set_if_present(
+            &mut rm.java_system_property,
+            &self.cpp_ignored.java_system_property,
+        );
+        set_if_present(
+            &mut rm.java_system_library_path,
+            &self.cpp_ignored.java_system_library_path,
+        );
+        rm.runtime_ld_library_path = self.effective_runtime_ld_library_path();
+        set_if_present(
+            &mut rm.runtime_log_level,
+            &self.cpp_ignored.runtime_log_level,
+        );
+        rm.runtime_max_log_size = parse_i32(
+            &self.cpp_ignored.runtime_max_log_size,
+            rm.runtime_max_log_size,
+        );
+        rm.runtime_max_log_file_num = parse_i32(
+            &self.cpp_ignored.runtime_max_log_file_num,
+            rm.runtime_max_log_file_num,
+        );
+        set_if_present(
+            &mut rm.python_dependency_path,
+            &self.cpp_ignored.python_dependency_path,
+        );
+        rm.runtime_ds_connect_timeout = parse_u32(
+            &self.cpp_ignored.runtime_ds_connect_timeout,
+            rm.runtime_ds_connect_timeout,
+        );
+        rm.enable_inherit_env = self.enable_inherit_env;
+        rm.set_cmd_cred = parse_bool(&self.cpp_ignored.set_cmd_cred, rm.set_cmd_cred);
+        rm.oom_kill_enable = self.oom_kill_enable;
+        rm.oom_kill_control_limit = self.oom_kill_control_limit;
+        rm.oom_consecutive_detection_count = self.oom_consecutive_detection_count;
+        rm.kill_process_timeout_seconds = self.kill_process_timeout_seconds;
+        rm.custom_resources = self.custom_resources.clone();
+        rm
     }
 
     pub fn normalize_grpc_uri(addr: &str) -> String {

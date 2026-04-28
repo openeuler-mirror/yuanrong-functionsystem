@@ -26,14 +26,18 @@ fn pick_numeric_runtime_type_selects_by_index() {
 }
 
 #[test]
-fn pick_matches_substring_in_path_or_filename() {
+fn python_runtime_uses_language_interpreter_like_cpp_lookpath() {
     let paths = vec![
         "/opt/bin/generic-runner".into(),
         "/usr/bin/python3.11".into(),
     ];
     assert_eq!(
         pick_runtime_executable(&paths, "python"),
-        Some("/usr/bin/python3.11".into())
+        Some("python3".into())
+    );
+    assert_eq!(
+        pick_runtime_executable(&paths, "python3.11"),
+        Some("python3.11".into())
     );
 }
 
