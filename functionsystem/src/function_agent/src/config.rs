@@ -436,6 +436,10 @@ impl Config {
         if !self.cpp_ignored.resource_label_path.trim().is_empty() {
             rm.resource_label_path = self.cpp_ignored.resource_label_path.trim().into();
         }
+        rm.numa_collection_enable = parse_bool(
+            &self.cpp_ignored.numa_collection_enable,
+            rm.numa_collection_enable,
+        );
         set_if_present(
             &mut rm.runtime_config_dir,
             &self.cpp_ignored.runtime_config_dir,

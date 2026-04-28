@@ -69,6 +69,7 @@ fn defaults_disk_oom_env_and_kill_timeout() {
     assert_eq!(c.disk_usage_monitor_path, "/tmp");
     assert_eq!(c.disk_usage_limit, -1);
     assert_eq!(c.custom_resources, "");
+    assert!(!c.numa_collection_enable);
     assert!(!c.enable_inherit_env);
     assert!(!c.set_cmd_cred);
     assert_eq!(c.kill_process_timeout_seconds, 0);

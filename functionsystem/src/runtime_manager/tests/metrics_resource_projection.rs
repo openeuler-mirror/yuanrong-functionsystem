@@ -3,7 +3,8 @@ use std::path::PathBuf;
 
 use yr_runtime_manager::config::Config;
 use yr_runtime_manager::metrics::{
-    build_resource_projection, collect_node_labels_from_sources, InstanceMetric, NodeMetricsSample,
+    build_numa_vectors, build_resource_projection, collect_node_labels_from_sources,
+    collect_numa_cpu_counts_from_root, InstanceMetric, NodeMetricsSample,
 };
 
 fn test_config() -> Config {
@@ -49,6 +50,7 @@ fn proc_metrics_projection_uses_cpp_default_capacity_and_instance_rss_mb() {
     assert_eq!(p.resources["cpu"].scalar.value, 1000.0);
     assert_eq!(p.resources["memory"].scalar.value, 4000.0);
     assert!(p.labels.is_empty());
+    assert!(p.vectors.is_empty());
 }
 
 #[test]
@@ -102,4 +104,58 @@ fn node_labels_follow_cpp_resource_label_sources() {
     assert!(!labels.contains_key("empty"));
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn numa_vectors_follow_cpp_resource_shape() {
+    let (count, vector) = build_numa_vectors("node-a", &[(0, 2), (1, 4)]).expect("numa vectors");
+
+    assert_eq!(count, 2.0);
+    assert_eq!(
+        vector.values["ids"].vectors["node-a"].values,
+        vec![0.0, 1.0]
+    );
+    assert_eq!(
+        vector.values["CPU"].vectors["node-a"].values,
+        vec![2000.0, 4000.0]
+    );
+}
+
+#[test]
+fn numa_cpu_counts_parse_sysfs_cpulists() {
+    let dir = std::env::temp_dir().join(format!(
+        "yr_rm_numa_{}_{}",
+        std::process::id(),
+        "resource_projection"
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("node1")).unwrap();
+    std::fs::create_dir_all(dir.join("node0")).unwrap();
+    std::fs::write(dir.join("node1/cpulist"), "4-7,10\n").unwrap();
+    std::fs::write(dir.join("node0/cpulist"), "0,2-3\n").unwrap();
+
+    let counts = collect_numa_cpu_counts_from_root(&dir);
+
+    assert_eq!(counts, vec![(0, 3), (1, 5)]);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn numa_projection_is_flag_gated() {
+    let mut cfg = test_config();
+    let node = NodeMetricsSample::default();
+    assert!(!build_resource_projection(&cfg, &node, &[])
+        .capacity
+        .contains_key("NUMA"));
+
+    cfg.numa_collection_enable = true;
+    let projection = build_resource_projection(&cfg, &node, &[]);
+
+    // Host may expose zero or more NUMA nodes; this assertion locks the gate:
+    // if projected, scalar capacity and vector resource appear together.
+    assert_eq!(
+        projection.capacity.contains_key("NUMA"),
+        projection.vectors.contains_key("NUMA")
+    );
 }

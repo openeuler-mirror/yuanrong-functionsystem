@@ -56,6 +56,7 @@ fn default_values_match_expectations() {
     assert_eq!(c.disk_usage_monitor_path, "/tmp");
     assert_eq!(c.disk_usage_limit, -1);
     assert_eq!(c.custom_resources, "");
+    assert!(!c.numa_collection_enable);
     assert!(!c.enable_inherit_env);
     assert!(!c.set_cmd_cred);
     assert_eq!(c.kill_process_timeout_seconds, 0);
@@ -108,10 +109,7 @@ fn key_flags_parse_correctly() {
     assert_eq!(c.runtime_paths, "/opt/r1,/opt/r2");
     assert_eq!(c.log_path.to_string_lossy(), "/var/log/yr-rm");
     assert_eq!(c.metrics_interval_ms, 2500);
-    assert_eq!(
-        c.cgroup_parent.to_string_lossy(),
-        "/sys/fs/cgroup/yr_test"
-    );
+    assert_eq!(c.cgroup_parent.to_string_lossy(), "/sys/fs/cgroup/yr_test");
     assert!(c.cgroup_enable_cpu);
     assert!(c.isolate_namespaces);
     assert_eq!(c.instance_health_interval_ms, 8000);
@@ -163,6 +161,7 @@ fn cpp_parity_flags_parse_explicitly() {
         "1024",
         "--custom-resources",
         "gpu:1",
+        "--numa_collection_enable=true",
         "--enable-inherit-env",
         "--setCmdCred",
         "--kill-process-timeout-seconds",
@@ -191,6 +190,7 @@ fn cpp_parity_flags_parse_explicitly() {
     assert_eq!(c.disk_usage_monitor_path, "/data");
     assert_eq!(c.disk_usage_limit, 1024);
     assert_eq!(c.custom_resources, "gpu:1");
+    assert!(c.numa_collection_enable);
     assert!(c.enable_inherit_env);
     assert!(c.set_cmd_cred);
     assert_eq!(c.kill_process_timeout_seconds, 120);
@@ -199,7 +199,10 @@ fn cpp_parity_flags_parse_explicitly() {
 #[test]
 fn port_defaults_match_cpp_conventions() {
     let c = Config::try_parse_from(["yr-runtime-manager"]).expect("parse defaults");
-    assert_eq!(c.port, 8404, "runtime manager gRPC (after 8402 proxy / 8403 posix)");
+    assert_eq!(
+        c.port, 8404,
+        "runtime manager gRPC (after 8402 proxy / 8403 posix)"
+    );
     assert_eq!(
         c.http_listen_addr(),
         "0.0.0.0:8405",

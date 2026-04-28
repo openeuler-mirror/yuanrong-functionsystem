@@ -52,9 +52,28 @@ pub struct ResourceProjection {
     pub allocatable: BTreeMap<String, f64>,
     /// C++ `ResourceLabelsCollector` equivalent in JSON form for Rust schedulers.
     pub labels: BTreeMap<String, String>,
+    /// C++ vector-resource projection (for NUMA/GPU/NPU/disk shapes) without
+    /// changing the existing scalar `resources` compatibility map.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub vectors: BTreeMap<String, VectorResource>,
     /// Compatibility shortcut for existing Rust schedulers that parse
     /// C++-style scalar resources from a top-level `resources` object.
     pub resources: BTreeMap<String, ScalarResource>,
+}
+
+#[derive(Debug, Clone, Serialize, Default, PartialEq)]
+pub struct VectorResource {
+    pub values: BTreeMap<String, VectorCategory>,
+}
+
+#[derive(Debug, Clone, Serialize, Default, PartialEq)]
+pub struct VectorCategory {
+    pub vectors: BTreeMap<String, VectorValues>,
+}
+
+#[derive(Debug, Clone, Serialize, Default, PartialEq)]
+pub struct VectorValues {
+    pub values: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -329,6 +348,17 @@ pub fn build_resource_projection(
         }
     }
 
+    let mut vectors = BTreeMap::new();
+    if cfg.numa_collection_enable {
+        if let Some((numa_count, numa_vectors)) =
+            build_numa_vectors(&cfg.node_id, &collect_numa_cpu_counts())
+        {
+            capacity.insert("NUMA".to_string(), numa_count);
+            used.insert("NUMA".to_string(), 0.0);
+            vectors.insert("NUMA".to_string(), numa_vectors);
+        }
+    }
+
     let allocatable = capacity.clone();
     let resources = capacity
         .iter()
@@ -348,8 +378,88 @@ pub fn build_resource_projection(
         used,
         allocatable,
         labels,
+        vectors,
         resources,
     }
+}
+
+pub fn build_numa_vectors(
+    node_id: &str,
+    cpu_counts: &[(u32, u32)],
+) -> Option<(f64, VectorResource)> {
+    if cpu_counts.is_empty() {
+        return None;
+    }
+    let node_ids = cpu_counts
+        .iter()
+        .map(|(node, _)| *node as f64)
+        .collect::<Vec<_>>();
+    let cpu_millicores = cpu_counts
+        .iter()
+        .map(|(_, cpus)| (*cpus as f64) * 1000.0)
+        .collect::<Vec<_>>();
+
+    let mut values = BTreeMap::new();
+    values.insert("ids".to_string(), vector_category(node_id, node_ids));
+    values.insert("CPU".to_string(), vector_category(node_id, cpu_millicores));
+
+    Some((cpu_counts.len() as f64, VectorResource { values }))
+}
+
+fn vector_category(node_id: &str, values: Vec<f64>) -> VectorCategory {
+    VectorCategory {
+        vectors: BTreeMap::from([(node_id.to_string(), VectorValues { values })]),
+    }
+}
+
+fn collect_numa_cpu_counts() -> Vec<(u32, u32)> {
+    collect_numa_cpu_counts_from_root(Path::new("/sys/devices/system/node"))
+}
+
+pub fn collect_numa_cpu_counts_from_root(root: &Path) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    let Ok(entries) = fs::read_dir(root) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(id) = name
+            .strip_prefix("node")
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let cpulist = entry.path().join("cpulist");
+        let Ok(text) = fs::read_to_string(cpulist) else {
+            continue;
+        };
+        let count = parse_cpu_list_count(text.trim());
+        if count > 0 {
+            out.push((id, count));
+        }
+    }
+    out.sort_by_key(|(id, _)| *id);
+    out
+}
+
+fn parse_cpu_list_count(s: &str) -> u32 {
+    let mut count = 0u32;
+    for part in s.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        if let Some((start, end)) = part.split_once('-') {
+            let (Ok(start), Ok(end)) = (start.parse::<u32>(), end.parse::<u32>()) else {
+                continue;
+            };
+            if end >= start {
+                count = count.saturating_add(end - start + 1);
+            }
+        } else if part.parse::<u32>().is_ok() {
+            count = count.saturating_add(1);
+        }
+    }
+    count
 }
 
 fn collect_node_labels(cfg: &Config) -> BTreeMap<String, String> {
