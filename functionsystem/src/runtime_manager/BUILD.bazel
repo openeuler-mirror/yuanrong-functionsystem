@@ -20,7 +20,7 @@ cc_library(
         exclude = ["main.cpp"],
     ),
     hdrs = glob(["**/*.h"]),
-    copts = COPTS + ["-fPIE"],
+    copts = COPTS + ["-fPIC"],
     deps = [
         ":runtime_manager_inc",
         "//functionsystem/src/common:aksk",

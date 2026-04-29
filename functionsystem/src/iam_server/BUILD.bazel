@@ -23,7 +23,7 @@ cc_library(
         exclude = ["main.cpp"],
     ),
     hdrs = glob(["**/*.h"]),
-    copts = COPTS + ["-fPIE"],
+    copts = COPTS + ["-fPIC"],
     deps = [
         ":iam_server_inc",
         "@etcdapi//:etcdapi",

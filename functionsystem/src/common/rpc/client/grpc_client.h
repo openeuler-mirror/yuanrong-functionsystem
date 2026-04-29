@@ -51,8 +51,13 @@ const int32_t GRPC_KEEPALIVE_TIME_MS = 30000;
 const int32_t GRPC_KEEPALIVE_TIMEOUT_MS = 5000;
 
 struct GrpcSslConfig {
-    std::shared_ptr<::grpc::ChannelCredentials> sslCredentials = ::grpc::InsecureChannelCredentials();
+    std::shared_ptr<::grpc::ChannelCredentials> sslCredentials = nullptr;
     std::string targetName = "";
+
+    std::shared_ptr<::grpc::ChannelCredentials> GetChannelCredentials() const
+    {
+        return sslCredentials == nullptr ? ::grpc::InsecureChannelCredentials() : sslCredentials;
+    }
 };
 
 GrpcSslConfig GetGrpcSSLConfig(const CommonFlags &flags);
@@ -148,7 +153,7 @@ public:
         if (!sslConfig.targetName.empty()) {
             args.SetSslTargetNameOverride(sslConfig.targetName);
         }
-        auto channel = ::grpc::CreateCustomChannel(prefix + addr, sslConfig.sslCredentials, args);
+        auto channel = ::grpc::CreateCustomChannel(prefix + addr, sslConfig.GetChannelCredentials(), args);
         auto stub = T::NewStub(static_cast<const std::shared_ptr<::grpc::ChannelInterface> &>(channel));
         if (!stub) {
             YRLOG_ERROR("Create grpc client stub failed, addr = {}", addr);
@@ -169,7 +174,7 @@ public:
         args.SetInt(GRPC_ARG_MAX_RECONNECT_BACKOFF_MS, MAX_RECONNECT_BACKOFF_MS);
         args.SetMaxSendMessageSize(std::numeric_limits<int>::max());
         args.SetMaxReceiveMessageSize(std::numeric_limits<int>::max());
-        auto channel = ::grpc::CreateCustomChannel(endpoint, sslConfig.sslCredentials, args);
+        auto channel = ::grpc::CreateCustomChannel(endpoint, sslConfig.GetChannelCredentials(), args);
         auto stub = T::NewStub(static_cast<const std::shared_ptr<::grpc::ChannelInterface> &>(channel));
         if (!stub) {
             YRLOG_ERROR("Create grpc client stub failed, addr = {}", endpoint);

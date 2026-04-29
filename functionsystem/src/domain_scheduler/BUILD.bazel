@@ -26,7 +26,7 @@ cc_library(
         "include/**/*.h",
         "**/*.h",
     ]),
-    copts = COPTS + ["-fPIE"],
+    copts = COPTS + ["-fPIC"],
     deps = [
         ":domain_scheduler_inc",
         "//functionsystem/src/meta_store/client/cpp:meta_store_client",
