@@ -38,6 +38,16 @@ namespace functionsystem {
 
 static const int WRITE_BUFFER_SIZE = 4096;
 
+std::vector<std::string> ExecSessionActor::BuildExecBaseArgv()
+{
+    // If the container ID carries a "sbox" prefix (e.g. "sbox-<id>"), use sbox exec;
+    // otherwise fall back to docker exec.
+    if (containerId_.rfind("sbox", 0) == 0) {
+        return {"sbox", "exec"};
+    }
+    return {"docker", "exec", "-i"};
+}
+
 std::string ExecSessionActor::GenerateSessionId()
 {
     static std::random_device rd;
@@ -114,8 +124,8 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
     rows_ = rows;
     cols_ = cols;
 
-    // Build docker exec command
-    std::vector<std::string> argv = {"sbox", "exec"}; 
+    // Build container exec command (sbox exec or docker exec depending on availability)
+    std::vector<std::string> argv = BuildExecBaseArgv();
 
     for (const auto &[key, value] : env) {
         argv.push_back("-e");
@@ -128,7 +138,7 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
     argv.push_back(containerId_);
     argv.insert(argv.end(), command_.begin(), command_.end());
 
-    YRLOG_INFO("Starting sbox exec, sessionId: {}, container: {}", sessionId_, containerId);
+    YRLOG_INFO("Starting container exec ({}), sessionId: {}, container: {}", argv[0], sessionId_, containerId);
 
     if (tty_) {
         auto ptyResult = litebus::PtyExecIO::Create(rows_, cols_);
@@ -154,7 +164,7 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
         };
 
         exec_ = litebus::Exec::CreateExec(
-            "sbox", argv, litebus::None(),
+            argv[0], argv, litebus::None(),
             *ptyIO_->stdIn, *ptyIO_->stdOut, *ptyIO_->stdErr,
             childInitHooks, {}, true);
         // Exec::CreateExec closes the slave fd in the parent process (via CloseFD after fork).
@@ -163,7 +173,7 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
 
     } else {
         exec_ = litebus::Exec::CreateExec(
-            "sbox", argv, litebus::None(),
+            argv[0], argv, litebus::None(),
             litebus::ExecIO::CreatePipeIO(),
             litebus::ExecIO::CreatePipeIO(),
             litebus::ExecIO::CreatePipeIO(),
