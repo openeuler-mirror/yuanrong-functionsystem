@@ -82,6 +82,8 @@ private:
     void Cleanup();
     void DoCleanupAfterUnregister();  // Called after fd unregistered; closes pty/fds
     void Close();
+    // Returns {"sbox", "exec"} if containerId_ has "sbox" prefix, otherwise {"docker", "exec"}.
+    std::vector<std::string> BuildExecBaseArgv();
 
     // Session parameters
     StreamWriter streamWriter_;
