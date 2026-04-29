@@ -3,8 +3,9 @@ use std::path::PathBuf;
 
 use yr_runtime_manager::config::Config;
 use yr_runtime_manager::metrics::{
-    build_numa_vectors, build_resource_projection, collect_node_labels_from_sources,
-    collect_numa_cpu_counts_from_root, InstanceMetric, NodeMetricsSample,
+    build_disk_vectors, build_numa_vectors, build_resource_projection,
+    collect_node_labels_from_sources, collect_numa_cpu_counts_from_root, InstanceMetric,
+    NodeMetricsSample,
 };
 
 fn test_config() -> Config {
@@ -158,4 +159,68 @@ fn numa_projection_is_flag_gated() {
         projection.capacity.contains_key("NUMA"),
         projection.vectors.contains_key("NUMA")
     );
+}
+
+#[test]
+fn disk_vectors_follow_cpp_disk_resources_shape() {
+    let config = r#"[
+        {"name":"fast","size":"40G","mountPoints":"/mnt/fast/"},
+        {"name":"bulk","size":"100G","mountPoints":"/mnt/bulk/"}
+    ]"#;
+
+    let vector = build_disk_vectors("node-a", config).expect("disk vector");
+
+    assert_eq!(
+        vector.values["disk"].vectors["node-a"].values,
+        vec![40.0, 100.0]
+    );
+    assert_eq!(vector.extensions.len(), 2);
+    assert_eq!(vector.extensions[0].disk.name, "fast");
+    assert_eq!(vector.extensions[0].disk.size, 40);
+    assert_eq!(vector.extensions[0].disk.mount_points, "/mnt/fast/");
+    assert_eq!(vector.extensions[1].disk.name, "bulk");
+    assert_eq!(vector.extensions[1].disk.size, 100);
+    assert_eq!(vector.extensions[1].disk.mount_points, "/mnt/bulk/");
+}
+
+#[test]
+fn disk_vectors_skip_invalid_entries_like_cpp() {
+    let config = r#"[
+        {"name":"ok","size":"8G","mountPoints":"/mnt/ok/"},
+        {"name":"bad_size","size":"8M","mountPoints":"/mnt/bad/"},
+        {"name":"bad_path","size":"9G","mountPoints":"/mnt/../bad/"},
+        {"name":"bad_root","size":"10G","mountPoints":"/"},
+        {"name":"bad_double_slash","size":"11G","mountPoints":"//"},
+        {"name":"missing_path","size":"12G"}
+    ]"#;
+
+    let vector = build_disk_vectors("node-a", config).expect("one valid disk vector");
+
+    assert_eq!(vector.values["disk"].vectors["node-a"].values, vec![8.0]);
+    assert_eq!(vector.extensions.len(), 1);
+    assert_eq!(vector.extensions[0].disk.name, "ok");
+}
+
+#[test]
+fn disk_projection_is_config_gated_and_preserves_scalar_root_disk() {
+    let mut cfg = test_config();
+    let node = NodeMetricsSample {
+        disk_total_bytes: 20 * 1024 * 1024 * 1024,
+        disk_avail_bytes: 15 * 1024 * 1024 * 1024,
+        ..Default::default()
+    };
+    assert!(!build_resource_projection(&cfg, &node, &[])
+        .vectors
+        .contains_key("disk"));
+
+    cfg.disk_resources = r#"[{"name":"fast","size":"40G","mountPoints":"/mnt/fast/"}]"#.into();
+    let projection = build_resource_projection(&cfg, &node, &[]);
+
+    assert_eq!(projection.capacity.get("disk"), Some(&20.0));
+    assert_eq!(projection.used.get("disk"), Some(&5.0));
+    assert_eq!(
+        projection.vectors["disk"].values["disk"].vectors["node-a"].values,
+        vec![40.0]
+    );
+    assert_eq!(projection.vectors["disk"].extensions[0].disk.name, "fast");
 }

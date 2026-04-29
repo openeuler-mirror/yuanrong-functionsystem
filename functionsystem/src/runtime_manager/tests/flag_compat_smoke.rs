@@ -55,6 +55,7 @@ fn default_values_match_expectations() {
     assert!(!c.disk_usage_monitor_notify_failure_enable);
     assert_eq!(c.disk_usage_monitor_path, "/tmp");
     assert_eq!(c.disk_usage_limit, -1);
+    assert_eq!(c.disk_resources, "");
     assert_eq!(c.custom_resources, "");
     assert!(!c.numa_collection_enable);
     assert!(!c.enable_inherit_env);
@@ -159,6 +160,8 @@ fn cpp_parity_flags_parse_explicitly() {
         "/data",
         "--disk-usage-limit",
         "1024",
+        "--disk_resources",
+        r#"[{"name":"fast","size":"40G","mountPoints":"/mnt/fast/"}]"#,
         "--custom-resources",
         "gpu:1",
         "--numa_collection_enable=true",
@@ -189,6 +192,10 @@ fn cpp_parity_flags_parse_explicitly() {
     assert!(c.disk_usage_monitor_notify_failure_enable);
     assert_eq!(c.disk_usage_monitor_path, "/data");
     assert_eq!(c.disk_usage_limit, 1024);
+    assert_eq!(
+        c.disk_resources,
+        r#"[{"name":"fast","size":"40G","mountPoints":"/mnt/fast/"}]"#
+    );
     assert_eq!(c.custom_resources, "gpu:1");
     assert!(c.numa_collection_enable);
     assert!(c.enable_inherit_env);
@@ -225,6 +232,7 @@ fn help_documents_key_operational_flags() {
         "--host-ip",
         "--data-system-port",
         "--runtime-dir",
+        "--disk_resources",
         "--setCmdCred",
         "--kill-process-timeout-seconds",
     ] {

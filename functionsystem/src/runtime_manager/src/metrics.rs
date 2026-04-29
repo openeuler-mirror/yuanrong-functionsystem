@@ -64,6 +64,21 @@ pub struct ResourceProjection {
 #[derive(Debug, Clone, Serialize, Default, PartialEq)]
 pub struct VectorResource {
     pub values: BTreeMap<String, VectorCategory>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extensions: Vec<ResourceExtension>,
+}
+
+#[derive(Debug, Clone, Serialize, Default, PartialEq)]
+pub struct ResourceExtension {
+    pub disk: DiskContent,
+}
+
+#[derive(Debug, Clone, Serialize, Default, PartialEq)]
+pub struct DiskContent {
+    pub name: String,
+    pub size: u64,
+    #[serde(rename = "mountPoints")]
+    pub mount_points: String,
 }
 
 #[derive(Debug, Clone, Serialize, Default, PartialEq)]
@@ -358,6 +373,9 @@ pub fn build_resource_projection(
             vectors.insert("NUMA".to_string(), numa_vectors);
         }
     }
+    if let Some(disk_vectors) = build_disk_vectors(&cfg.node_id, &cfg.disk_resources) {
+        vectors.insert("disk".to_string(), disk_vectors);
+    }
 
     let allocatable = capacity.clone();
     let resources = capacity
@@ -403,13 +421,83 @@ pub fn build_numa_vectors(
     values.insert("ids".to_string(), vector_category(node_id, node_ids));
     values.insert("CPU".to_string(), vector_category(node_id, cpu_millicores));
 
-    Some((cpu_counts.len() as f64, VectorResource { values }))
+    Some((
+        cpu_counts.len() as f64,
+        VectorResource {
+            values,
+            extensions: Vec::new(),
+        },
+    ))
 }
 
 fn vector_category(node_id: &str, values: Vec<f64>) -> VectorCategory {
     VectorCategory {
         vectors: BTreeMap::from([(node_id.to_string(), VectorValues { values })]),
     }
+}
+
+pub fn build_disk_vectors(node_id: &str, disk_resources: &str) -> Option<VectorResource> {
+    let raw = disk_resources.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let Ok(serde_json::Value::Array(disks)) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return None;
+    };
+
+    let mut sizes = Vec::new();
+    let mut extensions = Vec::new();
+    for disk in disks {
+        let Some((name, size, mount_points)) = parse_disk_resource_entry(&disk) else {
+            continue;
+        };
+        sizes.push(size as f64);
+        extensions.push(ResourceExtension {
+            disk: DiskContent {
+                name,
+                size,
+                mount_points,
+            },
+        });
+    }
+    if sizes.is_empty() {
+        return None;
+    }
+
+    Some(VectorResource {
+        values: BTreeMap::from([("disk".to_string(), vector_category(node_id, sizes))]),
+        extensions,
+    })
+}
+
+fn parse_disk_resource_entry(disk: &serde_json::Value) -> Option<(String, u64, String)> {
+    let name = disk.get("name")?.as_str()?.to_string();
+    let size = parse_cpp_disk_size_gb(disk.get("size")?.as_str()?)?;
+    let mount_points = disk.get("mountPoints")?.as_str()?.to_string();
+    if !validate_cpp_disk_mount_path(&mount_points) {
+        return None;
+    }
+    Some((name, size, mount_points))
+}
+
+fn parse_cpp_disk_size_gb(size: &str) -> Option<u64> {
+    let digits = size.strip_suffix('G')?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
+}
+
+fn validate_cpp_disk_mount_path(path: &str) -> bool {
+    const MAX_PATH_LEN: usize = 8192;
+    path.len() <= MAX_PATH_LEN
+        && path.len() >= 3
+        && path.starts_with('/')
+        && path.ends_with('/')
+        && !path.contains("..")
+        && path
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'/' | b'.'))
 }
 
 fn collect_numa_cpu_counts() -> Vec<(u32, u32)> {

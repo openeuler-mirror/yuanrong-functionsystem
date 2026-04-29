@@ -115,6 +115,10 @@ pub struct Config {
     )]
     pub numa_collection_enable: bool,
 
+    /// C++ `disk_resources`; JSON array describing named disk vector resources.
+    #[arg(long = "disk_resources", default_value = "", alias = "disk-resources")]
+    pub disk_resources: String,
+
     /// cgroup v2 parent directory (e.g. `/sys/fs/cgroup/yr_runtime_manager`). Empty disables cgroups.
     #[arg(long, default_value = "", value_parser = cgroup_parent_from_flag)]
     pub cgroup_parent: PathBuf,
@@ -371,6 +375,7 @@ impl Config {
             overhead_memory: 0.0,
             resource_label_path: PathBuf::from("/home/sn/podInfo/labels"),
             numa_collection_enable: false,
+            disk_resources: String::new(),
             cgroup_parent: PathBuf::new(),
             cgroup_enable_cpu: true,
             cgroup_enable_memory: true,

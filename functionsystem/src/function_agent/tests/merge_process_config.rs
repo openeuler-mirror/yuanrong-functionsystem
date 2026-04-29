@@ -152,6 +152,8 @@ fn agent_cpp_runtime_flags_feed_embedded_runtime_manager_config() {
         "256",
         "--resource_label_path",
         "/pod/labels",
+        "--disk_resources",
+        r#"[{"name":"fast","size":"40G","mountPoints":"/mnt/fast/"}]"#,
         "--numa_collection_enable=true",
         "--enable_inherit_env=true",
         "--setCmdCred=true",
@@ -193,6 +195,10 @@ fn agent_cpp_runtime_flags_feed_embedded_runtime_manager_config() {
     assert_eq!(rm.overhead_cpu, 100.0);
     assert_eq!(rm.overhead_memory, 256.0);
     assert_eq!(rm.resource_label_path, PathBuf::from("/pod/labels"));
+    assert_eq!(
+        rm.disk_resources,
+        r#"[{"name":"fast","size":"40G","mountPoints":"/mnt/fast/"}]"#
+    );
     assert!(rm.numa_collection_enable);
     assert!(rm.enable_inherit_env);
     assert!(rm.set_cmd_cred);
