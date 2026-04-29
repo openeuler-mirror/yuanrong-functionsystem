@@ -604,7 +604,7 @@ void AgentServiceActor::RetryUpdateAgentStatusToLocal(const std::string &request
         YRLOG_ERROR("requestID {} is not in UpdateAgentStatusInfos.", requestID);
         return;
     }
-
+    YRLOG_INFO("{}|retry send UpdateAgentStatus to FuncAgentMgr.", requestID);
     Send(localSchedFuncAgentMgrAID_, "UpdateAgentStatus", std::string(msg));
     updateAgentStatusInfos_[requestID] = litebus::AsyncAfter(
         UPDATE_AGENT_STATUS_TIMEOUT, GetAID(), &AgentServiceActor::RetryUpdateAgentStatusToLocal, requestID, msg);
@@ -1013,6 +1013,10 @@ void AgentServiceActor::StopInstanceResponse(const litebus::AID &from, std::stri
 
 void AgentServiceActor::UpdateResources(const litebus::AID &from, std::string &&, std::string &&msg)
 {
+    if (exiting_) {
+        YRLOG_INFO("agent is exiting, ignore update resources requests.");
+        return;
+    }
     messages::UpdateResourcesRequest req;
     if (!req.ParseFromString(msg)) {
         YRLOG_WARN("invalid update resource request msg from {} msg {}", std::string(from), msg);
@@ -1600,6 +1604,8 @@ litebus::Future<bool> AgentServiceActor::GracefulShutdown()
     YRLOG_INFO("graceful shutdown agent service, gracefulShutdownTime: {}", gracefulShutdownTime_);
     exiting_ = true;
     CleanRuntimeManagerStatus(0);
+    litebus::Async(GetAID(), &AgentServiceActor::UpdateAgentStatusToLocal,
+        static_cast<int32_t>(FUNC_AGENT_EXITING), "function_agent exiting");
     (void)litebus::TimerTools::AddTimer(gracefulShutdownTime_ * GRACE_SHUTDOWN_TIMEOUT_MS, GetAID(),
                                         [promise(runtimeManagerGracefulShutdown_)]() { promise.SetValue(true); });
     return runtimeManagerGracefulShutdown_.GetFuture().Then([aid(GetAID())](const bool res) {
