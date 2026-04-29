@@ -16,7 +16,7 @@
 
 #ifndef FUNCTION_PROXY_COMMON_COMMONDRIVER_H
 #define FUNCTION_PROXY_COMMON_COMMONDRIVER_H
-#include "common/flags/flags.h"
+#include "function_proxy/common/flags/flags.h"
 #include "common/utils/module_driver.h"
 #include "function_proxy/common/data_obj_client/data_obj_client.h"
 #include "function_proxy/common/distribute_cache_client/ds_cache_client_impl.h"

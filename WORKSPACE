@@ -28,12 +28,10 @@ http_archive(
     urls = ["https://gitee.com/mirrors/nlohmann-json/repository/archive/v3.11.3.zip"],
 )
 
-# --- gtest --- gitee.com mirror zip
-http_archive(
+# --- gtest --- use checked-in vendor source for deterministic offline test builds.
+local_repository(
     name = "gtest",
-    sha256 = "647924848ca7cb91ba5e34260132902886e1bd140428bd3bd7b4e8fa6c6c8904",
-    strip_prefix = "googletest-v1.13.0",
-    urls = ["https://gitee.com/mirrors/googletest/repository/archive/v1.13.0.zip"],
+    path = "./vendor/src/gtest_1_12_1",
 )
 
 # --- grpc dependency chain (abseil, protobuf, zlib, grpc, boringssl, re2, etc.) ---

@@ -31,7 +31,7 @@ cc_library(
         "traefik_registry/**/*.cpp",
     ]),
     hdrs = glob(["**/*.h"]),
-    copts = COPTS + ["-fPIE"],
+    copts = COPTS + ["-fPIC"],
     deps = [
         ":local_scheduler_inc",
         "//functionsystem/src/common:http",

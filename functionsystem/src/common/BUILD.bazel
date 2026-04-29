@@ -47,6 +47,15 @@ cc_library(
     visibility = ["//visibility:public"],
 )
 
+# --- lru: header-only LRU cache helpers ---
+cc_library(
+    name = "lru",
+    hdrs = glob(["lru/*.h"]),
+    copts = COPTS,
+    deps = ["//functionsystem/src:src_root_inc"],
+    visibility = ["//visibility:public"],
+)
+
 # --- types: header-only shared type definitions ---
 cc_library(
     name = "types",

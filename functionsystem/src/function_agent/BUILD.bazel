@@ -38,7 +38,7 @@ cc_library(
         exclude = ["main.cpp"],
     ),
     hdrs = glob(["**/*.h"]),
-    copts = COPTS + ["-fPIE"],
+    copts = COPTS + ["-fPIC"],
     deps = [
         ":function_agent_inc",
         "//functionsystem/src/common:rpc",
