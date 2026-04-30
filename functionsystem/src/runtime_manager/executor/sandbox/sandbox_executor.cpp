@@ -25,6 +25,7 @@
 #include "common/constants/constants.h"
 #include "common/logs/logging.h"
 #include "common/metrics/metrics_adapter.h"
+#include "common/trace/create_trace_helper.h"
 #include "common/utils/actor_worker.h"
 #include "common/utils/collect_status.h"
 #include "common/utils/generate_message.h"
@@ -44,6 +45,17 @@ constexpr int64_t DEFAULT_GRACEFUL_SHUTDOWN         = 5;
 constexpr int64_t RECONNECT_INTERVAL_MS             = 5000;
 const std::string YR_ONLY_STDOUT                    = "YR_ONLY_STDOUT";
 }  // namespace
+
+void SandboxExecutor::StartSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    trace::StartSandboxCreateSpan(request);
+}
+
+void SandboxExecutor::StopSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                            const runtime::v1::StartResponse &response)
+{
+    trace::StopSandboxCreateSpan(request, response);
+}
 
 // ── Construction ──────────────────────────────────────────────────────────────
 
@@ -205,6 +217,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::StartNormal(
         PortManager::GetInstance().ReleasePorts(params.runtimeID);
         return GenFailStartInstanceResponse(request, status.StatusCode(), status.RawMessage());
     }
+    StartSandboxCreateSpan(request);
     return DoStart(request, startReq)
         .Then(litebus::Defer(GetAID(), &SandboxExecutor::OnStartDone, std::placeholders::_1, request, guard));
 }
@@ -216,6 +229,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnStartDone(
 {
     const auto &info      = request->runtimeinstanceinfo();
     const auto &runtimeID = info.runtimeid();
+    StopSandboxCreateSpan(request, response);
 
     if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
         YRLOG_ERROR("{}|{}|StartNormal failed for instance({}) runtime({}): {}", info.traceid(), info.requestid(),
@@ -360,6 +374,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnCheckpointRe
         return GenFailStartInstanceResponse(request, status.StatusCode(), status.RawMessage());
     }
 
+    StartSandboxCreateSpan(request);
     return DoStart(request, startReq)
         .Then(litebus::Defer(GetAID(), &SandboxExecutor::OnRestoreDone, std::placeholders::_1, request, guard));
 }
@@ -370,6 +385,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnRestoreDone(
     std::shared_ptr<SandboxStartGuard> guard)
 {
     const auto &info = request->runtimeinstanceinfo();
+    StopSandboxCreateSpan(request, response);
     if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
         YRLOG_ERROR("{}|{}|restore failed for runtime({}): {}", info.traceid(), info.requestid(),
                     info.runtimeid(), response.message());
