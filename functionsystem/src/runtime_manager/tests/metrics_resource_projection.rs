@@ -3,7 +3,8 @@ use std::path::PathBuf;
 
 use yr_runtime_manager::config::Config;
 use yr_runtime_manager::metrics::{
-    build_disk_vectors, build_numa_vectors, build_resource_projection,
+    build_disk_vectors, build_gpu_vectors_from_ids, build_npu_count_vectors_from_ids,
+    build_npu_topology_vectors_from_json, build_numa_vectors, build_resource_projection,
     collect_node_labels_from_sources, collect_numa_cpu_counts_from_root, InstanceMetric,
     NodeMetricsSample,
 };
@@ -223,4 +224,152 @@ fn disk_projection_is_config_gated_and_preserves_scalar_root_disk() {
         vec![40.0]
     );
     assert_eq!(projection.vectors["disk"].extensions[0].disk.name, "fast");
+}
+
+#[test]
+fn xpu_vectors_follow_cpp_heterogeneous_resource_shape() {
+    let (name, count, vector) =
+        build_npu_count_vectors_from_ids("node-a", &[0, 2]).expect("npu count vectors");
+
+    assert_eq!(name, "NPU/Ascend");
+    assert_eq!(count, 2.0);
+    assert_eq!(
+        vector.values["ids"].vectors["node-a"].values,
+        vec![0.0, 2.0]
+    );
+    assert_eq!(
+        vector.values["HBM"].vectors["node-a"].values,
+        vec![1000.0, 1000.0]
+    );
+    assert_eq!(
+        vector.values["stream"].vectors["node-a"].values,
+        vec![110.0, 110.0]
+    );
+    assert_eq!(
+        vector.values["latency"].vectors["node-a"].values,
+        vec![0.0, 0.0]
+    );
+    assert_eq!(
+        vector.values["health"].vectors["node-a"].values,
+        vec![0.0, 0.0]
+    );
+    assert_eq!(
+        vector.heterogeneous_info.get("vendor").map(String::as_str),
+        Some("huawei.com")
+    );
+    assert_eq!(
+        vector
+            .heterogeneous_info
+            .get("product_model")
+            .map(String::as_str),
+        Some("Ascend")
+    );
+}
+
+#[test]
+fn gpu_vectors_are_available_for_flag_gated_projection_inputs() {
+    let (name, count, vector) = build_gpu_vectors_from_ids("node-a", &[0, 1]).expect("gpu vectors");
+
+    assert_eq!(name, "GPU/cuda");
+    assert_eq!(count, 2.0);
+    assert_eq!(
+        vector.values["ids"].vectors["node-a"].values,
+        vec![0.0, 1.0]
+    );
+    assert_eq!(
+        vector.heterogeneous_info.get("vendor").map(String::as_str),
+        Some("nvidia.com")
+    );
+    assert_eq!(
+        vector
+            .heterogeneous_info
+            .get("product_model")
+            .map(String::as_str),
+        Some("cuda")
+    );
+}
+
+#[test]
+fn npu_topology_json_fallback_matches_cpp_node_filter_and_partition_shape() {
+    let json = r#"{
+        "worker-a": {
+            "nodeName": "node-a",
+            "number": 2,
+            "vDeviceIDs": [3, 5],
+            "vDevicePartition": ["0", "1"]
+        },
+        "worker-b": {
+            "nodeName": "node-b",
+            "number": 1,
+            "vDeviceIDs": [9],
+            "vDevicePartition": ["0"]
+        }
+    }"#;
+
+    let (name, count, vector) =
+        build_npu_topology_vectors_from_json("node-a", json).expect("topology fallback");
+
+    assert_eq!(name, "NPU");
+    assert_eq!(count, 2.0);
+    assert_eq!(
+        vector.values["ids"].vectors["node-a"].values,
+        vec![3.0, 5.0]
+    );
+    assert_eq!(
+        vector
+            .heterogeneous_info
+            .get("partition")
+            .map(String::as_str),
+        Some("0,1")
+    );
+    assert!(build_npu_topology_vectors_from_json("missing-node", json).is_none());
+}
+
+#[test]
+fn npu_topology_fallback_is_wired_into_resource_projection_for_supported_modes() {
+    let dir = std::env::temp_dir().join(format!(
+        "yr_rm_npu_topology_{}_{}",
+        std::process::id(),
+        "resource_projection"
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("topology-info.json");
+    std::fs::write(
+        &path,
+        r#"{
+            "worker-a": {
+                "nodeName": "node-a",
+                "number": 2,
+                "vDeviceIDs": [1, 4],
+                "vDevicePartition": ["left", "right"]
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let mut cfg = test_config();
+    cfg.npu_device_info_path = path;
+    cfg.npu_collection_mode = "all".into();
+    let projection = build_resource_projection(&cfg, &NodeMetricsSample::default(), &[]);
+
+    assert_eq!(projection.capacity.get("NPU"), Some(&2.0));
+    assert_eq!(
+        projection.vectors["NPU"].values["ids"].vectors["node-a"].values,
+        vec![1.0, 4.0]
+    );
+    assert_eq!(
+        projection.vectors["NPU"]
+            .heterogeneous_info
+            .get("partition")
+            .map(String::as_str),
+        Some("left,right")
+    );
+
+    cfg.npu_collection_mode = "unsupported".into();
+    let projection = build_resource_projection(&cfg, &NodeMetricsSample::default(), &[]);
+    assert!(!projection.capacity.contains_key("NPU"));
+    assert!(!projection.vectors.contains_key("NPU"));
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

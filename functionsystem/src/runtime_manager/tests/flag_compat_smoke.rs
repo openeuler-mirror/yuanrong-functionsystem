@@ -58,6 +58,12 @@ fn default_values_match_expectations() {
     assert_eq!(c.disk_resources, "");
     assert_eq!(c.custom_resources, "");
     assert!(!c.numa_collection_enable);
+    assert!(!c.gpu_collection_enable);
+    assert_eq!(c.npu_collection_mode, "all");
+    assert_eq!(
+        c.npu_device_info_path,
+        std::path::PathBuf::from("/home/sn/config/topology-info.json")
+    );
     assert!(!c.enable_inherit_env);
     assert!(!c.set_cmd_cred);
     assert_eq!(c.kill_process_timeout_seconds, 0);
@@ -165,6 +171,11 @@ fn cpp_parity_flags_parse_explicitly() {
         "--custom-resources",
         "gpu:1",
         "--numa_collection_enable=true",
+        "--gpu_collection_enable=true",
+        "--npu_collection_mode",
+        "count",
+        "--npu_device_info_path",
+        "/tmp/topology-info.json",
         "--enable-inherit-env",
         "--setCmdCred",
         "--kill-process-timeout-seconds",
@@ -198,6 +209,12 @@ fn cpp_parity_flags_parse_explicitly() {
     );
     assert_eq!(c.custom_resources, "gpu:1");
     assert!(c.numa_collection_enable);
+    assert!(c.gpu_collection_enable);
+    assert_eq!(c.npu_collection_mode, "count");
+    assert_eq!(
+        c.npu_device_info_path,
+        std::path::PathBuf::from("/tmp/topology-info.json")
+    );
     assert!(c.enable_inherit_env);
     assert!(c.set_cmd_cred);
     assert_eq!(c.kill_process_timeout_seconds, 120);
@@ -235,6 +252,9 @@ fn help_documents_key_operational_flags() {
         "--disk_resources",
         "--setCmdCred",
         "--kill-process-timeout-seconds",
+        "--gpu_collection_enable",
+        "--npu_collection_mode",
+        "--npu_device_info_path",
     ] {
         assert!(help.contains(needle), "help should mention `{needle}`");
     }

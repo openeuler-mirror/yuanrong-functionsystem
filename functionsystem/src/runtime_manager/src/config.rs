@@ -104,6 +104,33 @@ pub struct Config {
     )]
     pub resource_label_path: PathBuf,
 
+    /// C++ `npu_device_info_path`; fallback topology-info JSON for NPU collection.
+    #[arg(
+        long = "npu_device_info_path",
+        default_value = "/home/sn/config/topology-info.json",
+        alias = "npu-device-info-path"
+    )]
+    pub npu_device_info_path: PathBuf,
+
+    /// C++ `npu_collection_mode`; supported modes are count/hbm/sfmd/topo/all.
+    #[arg(
+        long = "npu_collection_mode",
+        default_value = "all",
+        alias = "npu-collection-mode"
+    )]
+    pub npu_collection_mode: String,
+
+    /// C++ `gpu_collection_enable`; when enabled, project GPU vector resources when present.
+    #[arg(
+        long = "gpu_collection_enable",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = false,
+        value_parser = BoolishValueParser::new(),
+        alias = "gpu-collection-enable"
+    )]
+    pub gpu_collection_enable: bool,
+
     /// C++ `numa_collection_enable`; when enabled, project NUMA node CPU vectors.
     #[arg(
         long = "numa_collection_enable",
@@ -374,6 +401,9 @@ impl Config {
             overhead_cpu: 0.0,
             overhead_memory: 0.0,
             resource_label_path: PathBuf::from("/home/sn/podInfo/labels"),
+            npu_device_info_path: PathBuf::from("/home/sn/config/topology-info.json"),
+            npu_collection_mode: "all".into(),
+            gpu_collection_enable: false,
             numa_collection_enable: false,
             disk_resources: String::new(),
             cgroup_parent: PathBuf::new(),

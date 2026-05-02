@@ -9,6 +9,7 @@ use std::env;
 use std::ffi::CString;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
@@ -64,6 +65,11 @@ pub struct ResourceProjection {
 #[derive(Debug, Clone, Serialize, Default, PartialEq)]
 pub struct VectorResource {
     pub values: BTreeMap<String, VectorCategory>,
+    #[serde(
+        rename = "heterogeneousInfo",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub heterogeneous_info: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extensions: Vec<ResourceExtension>,
 }
@@ -376,6 +382,11 @@ pub fn build_resource_projection(
     if let Some(disk_vectors) = build_disk_vectors(&cfg.node_id, &cfg.disk_resources) {
         vectors.insert("disk".to_string(), disk_vectors);
     }
+    for (name, count, vector) in collect_xpu_vectors(cfg) {
+        capacity.insert(name.clone(), count);
+        used.insert(name.clone(), count);
+        vectors.insert(name, vector);
+    }
 
     let allocatable = capacity.clone();
     let resources = capacity
@@ -425,6 +436,7 @@ pub fn build_numa_vectors(
         cpu_counts.len() as f64,
         VectorResource {
             values,
+            heterogeneous_info: BTreeMap::new(),
             extensions: Vec::new(),
         },
     ))
@@ -466,8 +478,310 @@ pub fn build_disk_vectors(node_id: &str, disk_resources: &str) -> Option<VectorR
 
     Some(VectorResource {
         values: BTreeMap::from([("disk".to_string(), vector_category(node_id, sizes))]),
+        heterogeneous_info: BTreeMap::new(),
         extensions,
     })
+}
+
+const NPU_COLLECT_MODES: &[&str] = &["count", "hbm", "sfmd", "topo", "all"];
+
+pub fn build_gpu_vectors_from_ids(
+    node_id: &str,
+    ids: &[u32],
+) -> Option<(String, f64, VectorResource)> {
+    build_xpu_vectors(XpuVectorSpec {
+        node_id,
+        resource_type: "GPU",
+        product_model: Some("cuda"),
+        vendor: Some("nvidia.com"),
+        ids,
+        hbm: &[],
+        used_hbm: &[],
+        memory: &[],
+        used_memory: &[],
+        stream: &[],
+        latency: &[],
+        health: &[],
+        partition: &[],
+        dev_cluster_ips: &[],
+    })
+}
+
+pub fn build_npu_count_vectors_from_ids(
+    node_id: &str,
+    ids: &[u32],
+) -> Option<(String, f64, VectorResource)> {
+    if ids.is_empty() {
+        return None;
+    }
+    let defaults_hbm = vec![1000; ids.len()];
+    let zeros = vec![0; ids.len()];
+    let streams = vec![110; ids.len()];
+
+    build_xpu_vectors(XpuVectorSpec {
+        node_id,
+        resource_type: "NPU",
+        product_model: Some("Ascend"),
+        vendor: Some("huawei.com"),
+        ids,
+        hbm: &defaults_hbm,
+        used_hbm: &zeros,
+        memory: &zeros,
+        used_memory: &zeros,
+        stream: &streams,
+        latency: &zeros,
+        health: &zeros,
+        partition: &[],
+        dev_cluster_ips: &[],
+    })
+}
+
+pub fn build_npu_topology_vectors_from_json(
+    node_id: &str,
+    json: &str,
+) -> Option<(String, f64, VectorResource)> {
+    let serde_json::Value::Object(nodes) = serde_json::from_str::<serde_json::Value>(json).ok()?
+    else {
+        return None;
+    };
+
+    for config in nodes.values() {
+        if let Some(config_node) = config.get("nodeName").and_then(|v| v.as_str()) {
+            if config_node != node_id {
+                continue;
+            }
+        }
+        let number = config.get("number")?.as_u64()? as usize;
+        let ids = json_u32_array(config.get("vDeviceIDs")?)?;
+        let partition = json_string_array(config.get("vDevicePartition")?)?;
+        if number == 0 || number != ids.len() || number != partition.len() {
+            continue;
+        }
+        return build_xpu_vectors(XpuVectorSpec {
+            node_id,
+            resource_type: "NPU",
+            product_model: None,
+            vendor: None,
+            ids: &ids,
+            hbm: &[],
+            used_hbm: &[],
+            memory: &[],
+            used_memory: &[],
+            stream: &[],
+            latency: &[],
+            health: &[],
+            partition: &partition,
+            dev_cluster_ips: &[],
+        });
+    }
+    None
+}
+
+struct XpuVectorSpec<'a> {
+    node_id: &'a str,
+    resource_type: &'a str,
+    product_model: Option<&'a str>,
+    vendor: Option<&'a str>,
+    ids: &'a [u32],
+    hbm: &'a [u32],
+    used_hbm: &'a [u32],
+    memory: &'a [u32],
+    used_memory: &'a [u32],
+    stream: &'a [u32],
+    latency: &'a [u32],
+    health: &'a [u32],
+    partition: &'a [String],
+    dev_cluster_ips: &'a [String],
+}
+
+fn build_xpu_vectors(spec: XpuVectorSpec<'_>) -> Option<(String, f64, VectorResource)> {
+    if spec.ids.is_empty() {
+        return None;
+    }
+    let mut values = BTreeMap::new();
+    insert_u32_vector(&mut values, spec.node_id, "ids", spec.ids);
+    insert_u32_vector(&mut values, spec.node_id, "HBM", spec.hbm);
+    insert_u32_vector(&mut values, spec.node_id, "usedHBM", spec.used_hbm);
+    insert_u32_vector(&mut values, spec.node_id, "memory", spec.memory);
+    insert_u32_vector(&mut values, spec.node_id, "usedMemory", spec.used_memory);
+    insert_u32_vector(&mut values, spec.node_id, "stream", spec.stream);
+    insert_u32_vector(&mut values, spec.node_id, "latency", spec.latency);
+    insert_u32_vector(&mut values, spec.node_id, "health", spec.health);
+
+    let mut heterogeneous_info = BTreeMap::new();
+    if let Some(vendor) = spec.vendor.filter(|s| !s.is_empty()) {
+        heterogeneous_info.insert("vendor".to_string(), vendor.to_string());
+    }
+    if let Some(product_model) = spec.product_model.filter(|s| !s.is_empty()) {
+        heterogeneous_info.insert("product_model".to_string(), product_model.to_string());
+    }
+    if !spec.partition.is_empty() {
+        heterogeneous_info.insert("partition".to_string(), spec.partition.join(","));
+    }
+    if !spec.dev_cluster_ips.is_empty() {
+        heterogeneous_info.insert(
+            "dev_cluster_ips".to_string(),
+            spec.dev_cluster_ips.join(","),
+        );
+    }
+
+    let name = spec
+        .product_model
+        .filter(|s| !s.is_empty())
+        .map(|model| format!("{}/{}", spec.resource_type, model))
+        .unwrap_or_else(|| spec.resource_type.to_string());
+
+    Some((
+        name,
+        spec.ids.len() as f64,
+        VectorResource {
+            values,
+            heterogeneous_info,
+            extensions: Vec::new(),
+        },
+    ))
+}
+
+fn insert_u32_vector(
+    values: &mut BTreeMap<String, VectorCategory>,
+    node_id: &str,
+    key: &str,
+    items: &[u32],
+) {
+    if items.is_empty() {
+        return;
+    }
+    values.insert(
+        key.to_string(),
+        vector_category(node_id, items.iter().map(|v| *v as f64).collect()),
+    );
+}
+
+fn collect_xpu_vectors(cfg: &Config) -> Vec<(String, f64, VectorResource)> {
+    let mut out = Vec::new();
+    if cfg.gpu_collection_enable {
+        if let Some(gpu) = collect_gpu_vectors_from_nvidia_smi(&cfg.node_id) {
+            out.push(gpu);
+        }
+    }
+
+    let mode = cfg.npu_collection_mode.trim().to_ascii_lowercase();
+    if !NPU_COLLECT_MODES.contains(&mode.as_str()) {
+        return out;
+    }
+    let npu = if mode == "count" {
+        build_npu_count_vectors_from_ids(&cfg.node_id, &collect_numeric_device_ids("davinci"))
+    } else {
+        fs::read_to_string(&cfg.npu_device_info_path)
+            .ok()
+            .and_then(|json| build_npu_topology_vectors_from_json(&cfg.node_id, &json))
+    };
+    if let Some(npu) = npu {
+        out.push(npu);
+    }
+    out
+}
+
+fn collect_gpu_vectors_from_nvidia_smi(node_id: &str) -> Option<(String, f64, VectorResource)> {
+    let output = Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=index,name,memory.total,memory.used",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut ids = Vec::new();
+    let mut product_model = None;
+    let mut hbm = Vec::new();
+    let mut used_hbm = Vec::new();
+    for line in stdout.lines() {
+        let columns = line.split(',').map(str::trim).collect::<Vec<_>>();
+        if columns.len() < 4 {
+            continue;
+        }
+        let Ok(id) = columns[0].parse::<u32>() else {
+            continue;
+        };
+        ids.push(id);
+        if product_model.is_none() && !columns[1].is_empty() {
+            product_model = Some(columns[1].to_string());
+        }
+        if let Ok(total) = columns[2].parse::<u32>() {
+            hbm.push(total);
+        }
+        if let Ok(used) = columns[3].parse::<u32>() {
+            used_hbm.push(used);
+        }
+    }
+    if ids.is_empty() {
+        return None;
+    }
+    let zeros = vec![0; ids.len()];
+    let streams = vec![110; ids.len()];
+    build_xpu_vectors(XpuVectorSpec {
+        node_id,
+        resource_type: "GPU",
+        product_model: product_model.as_deref().or(Some("cuda")),
+        vendor: Some("nvidia.com"),
+        ids: &ids,
+        hbm: &hbm,
+        used_hbm: &used_hbm,
+        memory: &zeros,
+        used_memory: &zeros,
+        stream: &streams,
+        latency: &zeros,
+        health: &zeros,
+        partition: &[],
+        dev_cluster_ips: &[],
+    })
+}
+
+fn collect_numeric_device_ids(prefix: &str) -> Vec<u32> {
+    let mut ids = Vec::new();
+    let Ok(entries) = fs::read_dir("/dev") else {
+        return ids;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(suffix) = name.strip_prefix(prefix) else {
+            continue;
+        };
+        if let Ok(id) = suffix.parse::<u32>() {
+            ids.push(id);
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+fn json_u32_array(value: &serde_json::Value) -> Option<Vec<u32>> {
+    let serde_json::Value::Array(items) = value else {
+        return None;
+    };
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        out.push(item.as_u64()? as u32);
+    }
+    Some(out)
+}
+
+fn json_string_array(value: &serde_json::Value) -> Option<Vec<String>> {
+    let serde_json::Value::Array(items) = value else {
+        return None;
+    };
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        out.push(item.as_str()?.to_string());
+    }
+    Some(out)
 }
 
 fn parse_disk_resource_entry(disk: &serde_json::Value) -> Option<(String, u64, String)> {

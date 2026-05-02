@@ -155,6 +155,11 @@ fn agent_cpp_runtime_flags_feed_embedded_runtime_manager_config() {
         "--disk_resources",
         r#"[{"name":"fast","size":"40G","mountPoints":"/mnt/fast/"}]"#,
         "--numa_collection_enable=true",
+        "--gpu_collection_enable=true",
+        "--npu_collection_mode",
+        "count",
+        "--npu_device_info_path",
+        "/tmp/topology-info.json",
         "--enable_inherit_env=true",
         "--setCmdCred=true",
     ])
@@ -200,6 +205,12 @@ fn agent_cpp_runtime_flags_feed_embedded_runtime_manager_config() {
         r#"[{"name":"fast","size":"40G","mountPoints":"/mnt/fast/"}]"#
     );
     assert!(rm.numa_collection_enable);
+    assert!(rm.gpu_collection_enable);
+    assert_eq!(rm.npu_collection_mode, "count");
+    assert_eq!(
+        rm.npu_device_info_path,
+        PathBuf::from("/tmp/topology-info.json")
+    );
     assert!(rm.enable_inherit_env);
     assert!(rm.set_cmd_cred);
 }

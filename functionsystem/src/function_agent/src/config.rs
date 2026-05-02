@@ -98,6 +98,8 @@ pub struct AgentCppIgnored {
     pub runtime_default_config: String,
     #[arg(long = "resource_label_path", default_value = "")]
     pub resource_label_path: String,
+    #[arg(long = "npu_device_info_path", default_value = "")]
+    pub npu_device_info_path: String,
     #[arg(long = "disk_resources", default_value = "")]
     pub disk_resources: String,
     #[arg(long = "proc_metrics_memory", default_value = "")]
@@ -438,7 +440,18 @@ impl Config {
         if !self.cpp_ignored.resource_label_path.trim().is_empty() {
             rm.resource_label_path = self.cpp_ignored.resource_label_path.trim().into();
         }
+        if !self.cpp_ignored.npu_device_info_path.trim().is_empty() {
+            rm.npu_device_info_path = self.cpp_ignored.npu_device_info_path.trim().into();
+        }
         set_if_present(&mut rm.disk_resources, &self.cpp_ignored.disk_resources);
+        set_if_present(
+            &mut rm.npu_collection_mode,
+            &self.cpp_ignored.npu_collection_mode,
+        );
+        rm.gpu_collection_enable = parse_bool(
+            &self.cpp_ignored.gpu_collection_enable,
+            rm.gpu_collection_enable,
+        );
         rm.numa_collection_enable = parse_bool(
             &self.cpp_ignored.numa_collection_enable,
             rm.numa_collection_enable,
