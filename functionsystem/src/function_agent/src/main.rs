@@ -165,8 +165,10 @@ async fn main() -> anyhow::Result<()> {
                 tokio::time::sleep(metrics_every).await;
                 let snap = col.collect(&st_m);
                 yr_runtime_manager::metrics::apply_prometheus_snapshot(&snap);
-                let json = serde_json::to_string(&snap).unwrap_or_else(|_| "{}".to_string());
-                ag.update_resources_retry(json).await;
+                let json =
+                    yr_runtime_manager::metrics::build_resource_update_json(&snap).to_string();
+                let unit = yr_runtime_manager::metrics::build_resource_unit(&snap);
+                ag.update_resources_retry(json, Some(unit)).await;
             }
         });
         tokio::time::sleep(Duration::from_millis(150)).await;

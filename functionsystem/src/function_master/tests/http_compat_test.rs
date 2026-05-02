@@ -26,11 +26,11 @@ async fn queryagentcount_returns_plain_text_number() {
     // Register two agents
     state
         .topology
-        .register_local("a1".into(), "h1".into(), "{}".into(), "{}".into())
+        .register_local("a1".into(), "h1".into(), "{}".into(), None, "{}".into())
         .await;
     state
         .topology
-        .register_local("a2".into(), "h2".into(), "{}".into(), "{}".into())
+        .register_local("a2".into(), "h2".into(), "{}".into(), None, "{}".into())
         .await;
 
     let resp = app
@@ -88,7 +88,13 @@ async fn evictagent_accepts_original_field_names() {
     let state = test_master_state();
     state
         .topology
-        .register_local("agent-42".into(), "h:1".into(), "{}".into(), "{}".into())
+        .register_local(
+            "agent-42".into(),
+            "h:1".into(),
+            "{}".into(),
+            None,
+            "{}".into(),
+        )
         .await;
 
     let app = build_router(state, None);
@@ -99,9 +105,7 @@ async fn evictagent_accepts_original_field_names() {
                 .method("POST")
                 .uri("/evictagent")
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"agentid":"agent-42","timeoutsec":30}"#,
-                ))
+                .body(Body::from(r#"{"agentid":"agent-42","timeoutsec":30}"#))
                 .unwrap(),
         )
         .await
@@ -133,9 +137,7 @@ async fn evictagent_returns_error_code_for_missing_agent() {
                 .method("POST")
                 .uri("/evictagent")
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"agentid":"nonexistent","timeoutsec":10}"#,
-                ))
+                .body(Body::from(r#"{"agentid":"nonexistent","timeoutsec":10}"#))
                 .unwrap(),
         )
         .await
@@ -160,7 +162,13 @@ async fn evictagent_accepts_node_id_alias() {
     let state = test_master_state();
     state
         .topology
-        .register_local("agent-99".into(), "h:1".into(), "{}".into(), "{}".into())
+        .register_local(
+            "agent-99".into(),
+            "h:1".into(),
+            "{}".into(),
+            None,
+            "{}".into(),
+        )
         .await;
 
     let app = build_router(state, None);
@@ -183,7 +191,10 @@ async fn evictagent_accepts_node_id_alias() {
         .await
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(v["code"], 0, "node_id alias should work for backward compat");
+    assert_eq!(
+        v["code"], 0,
+        "node_id alias should work for backward compat"
+    );
 }
 
 // --- ST: master_http_resources_type_header ---
@@ -1042,7 +1053,9 @@ async fn evictagent_empty_agentid_returns_bad_request() {
 #[tokio::test]
 async fn evictagent_not_leader_returns_service_unavailable() {
     let state = test_master_state();
-    state.is_leader.store(false, std::sync::atomic::Ordering::SeqCst);
+    state
+        .is_leader
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     let app = build_router(state, None);
 
     let resp = app

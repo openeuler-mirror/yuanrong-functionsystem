@@ -19,6 +19,7 @@ async fn e2e_evict_http_removes_agent_from_topology() {
             "agent-evict-1".into(),
             "10.8.0.1:1".into(),
             "{}".into(),
+            None,
             "{}".into(),
         )
         .await;
@@ -30,9 +31,7 @@ async fn e2e_evict_http_removes_agent_from_topology() {
                 .method("POST")
                 .uri("/evictagent")
                 .header("content-type", "application/json")
-                .body(Body::from(
-                    r#"{"agentid":"agent-evict-1","timeoutsec":5}"#,
-                ))
+                .body(Body::from(r#"{"agentid":"agent-evict-1","timeoutsec":5}"#))
                 .unwrap(),
         )
         .await
@@ -51,7 +50,13 @@ async fn e2e_evict_instances_on_node_remain_until_explicit_lifecycle() {
     let state = test_master_state();
     state
         .topology
-        .register_local("agent-with-ins".into(), "10.8.1.1:1".into(), "{}".into(), "{}".into())
+        .register_local(
+            "agent-with-ins".into(),
+            "10.8.1.1:1".into(),
+            "{}".into(),
+            None,
+            "{}".into(),
+        )
         .await;
     state.instances.upsert_instance(
         "/instances/e2e-ev-1",
@@ -75,11 +80,11 @@ async fn e2e_evict_queryagentcount_drops_after_eviction() {
     let state = test_master_state();
     state
         .topology
-        .register_local("c1".into(), "h1".into(), "{}".into(), "{}".into())
+        .register_local("c1".into(), "h1".into(), "{}".into(), None, "{}".into())
         .await;
     state
         .topology
-        .register_local("c2".into(), "h2".into(), "{}".into(), "{}".into())
+        .register_local("c2".into(), "h2".into(), "{}".into(), None, "{}".into())
         .await;
     let app = build_router(state.clone(), None);
     let before = app

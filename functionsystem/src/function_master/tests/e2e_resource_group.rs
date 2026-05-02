@@ -47,7 +47,13 @@ async fn group_schedule_accepts_batch_when_topology_has_root() {
     let state = test_master_state();
     state
         .topology
-        .register_local("node-g".into(), "10.0.0.2:1".into(), "{}".into(), "{}".into())
+        .register_local(
+            "node-g".into(),
+            "10.0.0.2:1".into(),
+            "{}".into(),
+            None,
+            "{}".into(),
+        )
         .await;
     state.rebuild_domain_routes();
 
@@ -83,9 +89,10 @@ async fn query_group_instances_http_lists_members() {
         "/i/b",
         json!({"id": "b", "tenant": "t", "groupID": "G-E2E"}),
     );
-    state
-        .instances
-        .upsert_instance("/i/c", json!({"id": "c", "tenant": "t", "group_id": "other"}));
+    state.instances.upsert_instance(
+        "/i/c",
+        json!({"id": "c", "tenant": "t", "group_id": "other"}),
+    );
 
     let resp = app
         .oneshot(
@@ -102,10 +109,7 @@ async fn query_group_instances_http_lists_members() {
         .unwrap();
     let v: Value = serde_json::from_slice(&body).unwrap();
     let inst = v["instances"].as_array().expect("instances array");
-    let ids: Vec<_> = inst
-        .iter()
-        .filter_map(|x| x["id"].as_str())
-        .collect();
+    let ids: Vec<_> = inst.iter().filter_map(|x| x["id"].as_str()).collect();
     assert!(ids.contains(&"a"));
     assert!(ids.contains(&"b"));
     assert!(!ids.contains(&"c"));
@@ -141,14 +145,12 @@ async fn group_scale_down_via_instance_removal_updates_query() {
     let state = test_master_state();
     let app = build_router(state.clone(), None);
 
-    state.instances.upsert_instance(
-        "/i/x1",
-        json!({"id": "x1", "group_id": "G-SCALE"}),
-    );
-    state.instances.upsert_instance(
-        "/i/x2",
-        json!({"id": "x2", "group_id": "G-SCALE"}),
-    );
+    state
+        .instances
+        .upsert_instance("/i/x1", json!({"id": "x1", "group_id": "G-SCALE"}));
+    state
+        .instances
+        .upsert_instance("/i/x2", json!({"id": "x2", "group_id": "G-SCALE"}));
 
     let resp1 = app
         .clone()

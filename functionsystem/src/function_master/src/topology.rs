@@ -1,12 +1,15 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use base64::Engine;
 use dashmap::DashMap;
 use parking_lot::Mutex;
+use prost::Message;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 use yr_metastore_client::MetaStoreClient;
+use yr_proto::resources::ResourceUnit as ProtoResourceUnit;
 
 use crate::config::{AssignmentStrategy, MasterConfig};
 use crate::sched_node::NodeInfo;
@@ -19,6 +22,8 @@ pub struct LocalNodeRecord {
     pub domain_id: String,
     pub domain_address: String,
     pub resource_json: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub resource_unit_b64: String,
     pub agent_info_json: String,
     pub last_seen_ms: i64,
 }
@@ -143,6 +148,7 @@ impl TopologyManager {
                 domain_id: parent.name(),
                 domain_address: parent.address(),
                 resource_json: "{}".into(),
+                resource_unit_b64: String::new(),
                 agent_info_json: "{}".into(),
                 last_seen_ms: now_ms(),
             };
@@ -174,14 +180,22 @@ impl TopologyManager {
         node_id: String,
         address: String,
         resource_json: String,
+        resource_unit: Option<ProtoResourceUnit>,
         agent_info_json: String,
     ) -> (String, LocalNodeRecord) {
         let now = now_ms();
         self.ensure_domain_layer();
+        let resource_unit_b64 = resource_unit
+            .as_ref()
+            .map(encode_resource_unit_b64)
+            .unwrap_or_default();
 
         if let Some(mut existing) = self.locals.get_mut(&node_id) {
             existing.address = address.clone();
             existing.resource_json = resource_json;
+            if !resource_unit_b64.is_empty() {
+                existing.resource_unit_b64 = resource_unit_b64;
+            }
             existing.agent_info_json = agent_info_json;
             existing.last_seen_ms = now;
             let rec = existing.clone();
@@ -223,6 +237,7 @@ impl TopologyManager {
                 domain_id: String::new(),
                 domain_address: String::new(),
                 resource_json: resource_json.clone(),
+                resource_unit_b64: resource_unit_b64.clone(),
                 agent_info_json: agent_info_json.clone(),
                 last_seen_ms: now,
             };
@@ -239,6 +254,7 @@ impl TopologyManager {
                 domain_id: String::new(),
                 domain_address: String::new(),
                 resource_json: resource_json.clone(),
+                resource_unit_b64: resource_unit_b64.clone(),
                 agent_info_json: agent_info_json.clone(),
                 last_seen_ms: now,
             };
@@ -251,6 +267,7 @@ impl TopologyManager {
             domain_id: parent.name(),
             domain_address: parent.address(),
             resource_json,
+            resource_unit_b64,
             agent_info_json,
             last_seen_ms: now,
         };
@@ -259,11 +276,19 @@ impl TopologyManager {
         (rec.domain_address.clone(), rec)
     }
 
-    pub async fn update_resources(&self, node_id: &str, resource_json: String) -> bool {
+    pub async fn update_resources(
+        &self,
+        node_id: &str,
+        resource_json: String,
+        resource_unit: Option<ProtoResourceUnit>,
+    ) -> bool {
         let Some(mut v) = self.locals.get_mut(node_id) else {
             return false;
         };
         v.resource_json = resource_json;
+        if let Some(resource_unit) = resource_unit.as_ref() {
+            v.resource_unit_b64 = encode_resource_unit_b64(resource_unit);
+        }
         v.last_seen_ms = now_ms();
         drop(v);
         self.queue_persist();
@@ -281,17 +306,13 @@ impl TopologyManager {
     }
 
     pub fn list_agents_json(&self, filter: &str) -> String {
-        let mut rows: Vec<LocalNodeRecord> = self
-            .locals
-            .iter()
-            .map(|e| e.value().clone())
-            .collect();
+        let mut rows: Vec<LocalNodeRecord> =
+            self.locals.iter().map(|e| e.value().clone()).collect();
         rows.sort_by(|a, b| a.node_id.cmp(&b.node_id));
         let rows: Vec<LocalNodeRecord> = if filter.is_empty() {
             rows
         } else {
-            rows
-                .into_iter()
+            rows.into_iter()
                 .filter(|r| {
                     r.node_id.contains(filter)
                         || r.address.contains(filter)
@@ -308,22 +329,15 @@ impl TopologyManager {
 
     /// Snapshot of registered proxy (local scheduler) rows for resource aggregation / node health.
     pub fn locals_snapshot(&self) -> Vec<LocalNodeRecord> {
-        let mut rows: Vec<LocalNodeRecord> = self
-            .locals
-            .iter()
-            .map(|e| e.value().clone())
-            .collect();
+        let mut rows: Vec<LocalNodeRecord> =
+            self.locals.iter().map(|e| e.value().clone()).collect();
         rows.sort_by(|a, b| a.node_id.cmp(&b.node_id));
         rows
     }
 
     pub fn topology_json(&self) -> String {
         let snap = TopologySnapshot {
-            locals: self
-                .locals
-                .iter()
-                .map(|e| e.value().clone())
-                .collect(),
+            locals: self.locals.iter().map(|e| e.value().clone()).collect(),
         };
         serde_json::to_string_pretty(&snap).unwrap_or_else(|_| "{}".to_string())
     }
@@ -350,9 +364,7 @@ impl TopologyManager {
     }
 
     pub fn root_domain(&self) -> Option<(String, String)> {
-        self.tree
-            .get_root_node()
-            .map(|n| (n.name(), n.address()))
+        self.tree.get_root_node().map(|n| (n.name(), n.address()))
     }
 
     pub fn recover_tree_from_bytes(&self, bytes: &[u8]) -> Result<(), RecoverError> {
@@ -366,6 +378,10 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn encode_resource_unit_b64(unit: &ProtoResourceUnit) -> String {
+    base64::engine::general_purpose::STANDARD.encode(unit.encode_to_vec())
 }
 
 /// Watch `with_prefix(prefix, SCHEDULER_TOPOLOGY)` via MetaStore and refresh the in-memory [`SchedTree`].

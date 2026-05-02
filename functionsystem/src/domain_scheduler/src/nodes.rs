@@ -11,14 +11,16 @@ use tonic::{Request, Status};
 use tracing::{info, warn};
 use yr_proto::internal::local_scheduler_service_client::LocalSchedulerServiceClient;
 use yr_proto::internal::{
-    EvictInstancesRequest, RegisterRequest, ScheduleRequest, ScheduleResponse,
+    global_scheduler_service_client::GlobalSchedulerServiceClient, RegisterResponse,
 };
 use yr_proto::internal::{
-    global_scheduler_service_client::GlobalSchedulerServiceClient, RegisterResponse,
+    EvictInstancesRequest, RegisterRequest, ScheduleRequest, ScheduleResponse,
 };
 
 use crate::config::DomainSchedulerConfig;
-use crate::resource_view::{merge_topology_resource, ResourceView};
+use crate::resource_view::{
+    merge_topology_resource, merge_topology_resource_unit_b64, ResourceView,
+};
 use crate::scheduler_framework::NodeInfo;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -37,6 +39,8 @@ struct LocalNodeRecord {
     domain_id: String,
     domain_address: String,
     resource_json: String,
+    #[serde(default)]
+    resource_unit_b64: String,
     #[allow(dead_code)]
     agent_info_json: String,
     #[allow(dead_code)]
@@ -73,9 +77,30 @@ impl LocalNodeManager {
         }
     }
 
-    pub fn upsert_local(&self, node_id: String, address: String, resource_json: &str) {
-        merge_topology_resource(&node_id, resource_json, &self.resource_view);
-        let (labels, failure_domain) = parse_node_labels_and_domain(resource_json);
+    pub fn upsert_local(
+        &self,
+        node_id: String,
+        address: String,
+        resource_json: &str,
+        resource_unit_b64: Option<&str>,
+    ) {
+        if let Some(resource_unit_b64) = resource_unit_b64.filter(|value| !value.is_empty()) {
+            merge_topology_resource_unit_b64(&node_id, resource_unit_b64, &self.resource_view);
+        } else {
+            merge_topology_resource(&node_id, resource_json, &self.resource_view);
+        }
+        let (json_labels, mut failure_domain) = parse_node_labels_and_domain(resource_json);
+        let mut labels = self
+            .resource_view
+            .snapshot_unit(&node_id)
+            .map(|unit| unit.labels)
+            .unwrap_or_default();
+        for (key, value) in json_labels {
+            labels.entry(key).or_insert(value);
+        }
+        if failure_domain.is_none() {
+            failure_domain = labels.get("zone").cloned();
+        }
         self.nodes.insert(
             node_id.clone(),
             NodeEntry {
@@ -136,7 +161,10 @@ impl LocalNodeManager {
             .collect()
     }
 
-    pub async fn get_client(&self, node_id: &str) -> Result<LocalSchedulerServiceClient<Channel>, Status> {
+    pub async fn get_client(
+        &self,
+        node_id: &str,
+    ) -> Result<LocalSchedulerServiceClient<Channel>, Status> {
         if let Some(c) = self.clients.get(node_id) {
             return Ok(c.clone());
         }
@@ -200,7 +228,12 @@ impl LocalNodeManager {
         };
         for l in snap.locals {
             if l.domain_address == domain_advertise_addr {
-                self.upsert_local(l.node_id, l.address, &l.resource_json);
+                self.upsert_local(
+                    l.node_id,
+                    l.address,
+                    &l.resource_json,
+                    Some(&l.resource_unit_b64),
+                );
             }
         }
     }
@@ -331,6 +364,7 @@ pub async fn register_with_global(
         address: config.advertise_grpc_addr(),
         resource_json: "{}".into(),
         agent_info_json: agent,
+        resource_unit: None,
     };
     let resp = client
         .register(Request::new(req))

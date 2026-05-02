@@ -16,6 +16,12 @@ fn sample_config() -> DomainSchedulerConfig {
         enable_preemption: false,
         max_priority: 100,
         pull_resource_interval_ms: 5000,
+        ssl_enable: false,
+        metrics_ssl_enable: false,
+        ssl_base_path: String::new(),
+        ssl_root_file: String::new(),
+        ssl_cert_file: String::new(),
+        ssl_key_file: String::new(),
         instance_id: "test-instance".into(),
     }
 }
@@ -51,7 +57,8 @@ fn validate_etcd_not_required_for_standalone_even_when_empty() {
     let mut cfg = sample_config();
     cfg.election_mode = ElectionMode::Standalone;
     cfg.etcd_endpoints.clear();
-    cfg.validate().expect("standalone allows empty etcd_endpoints");
+    cfg.validate()
+        .expect("standalone allows empty etcd_endpoints");
 }
 
 #[test]
@@ -59,7 +66,8 @@ fn validate_etcd_election_succeeds_when_endpoints_present() {
     let mut cfg = sample_config();
     cfg.election_mode = ElectionMode::Etcd;
     cfg.etcd_endpoints = vec!["http://etcd:2379".into()];
-    cfg.validate().expect("etcd mode with endpoints should validate");
+    cfg.validate()
+        .expect("etcd mode with endpoints should validate");
 }
 
 #[test]

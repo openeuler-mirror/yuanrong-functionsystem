@@ -262,7 +262,13 @@ impl GlobalSchedulerService for GlobalSchedulerImpl {
         let (domain_address, rec) = self
             .state
             .topology
-            .register_local(r.node_id, r.address, r.resource_json, r.agent_info_json)
+            .register_local(
+                r.node_id,
+                r.address,
+                r.resource_json,
+                r.resource_unit,
+                r.agent_info_json,
+            )
             .await;
         self.state
             .local_sched_mgr
@@ -297,7 +303,7 @@ impl GlobalSchedulerService for GlobalSchedulerImpl {
         let ok = self
             .state
             .topology
-            .update_resources(&r.node_id, r.resource_json)
+            .update_resources(&r.node_id, r.resource_json, r.resource_unit)
             .await;
         if !ok {
             return Err(Status::not_found("unknown node_id"));

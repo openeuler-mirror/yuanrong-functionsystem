@@ -6,7 +6,8 @@ use std::collections::HashMap;
 use yr_proto::common::arg::ArgType;
 use yr_proto::common::{Arg, ErrorCode};
 use yr_proto::core_service::{CreateRequest, SchedulingOptions};
-use yr_proto::internal::ScheduleRequest;
+use yr_proto::internal::{RegisterRequest, ScheduleRequest, UpdateResourcesRequest};
+use yr_proto::resources::ResourceUnit;
 
 #[test]
 fn create_request_round_trip() {
@@ -61,6 +62,41 @@ fn internal_schedule_request_round_trip() {
 
     let bytes = original.encode_to_vec();
     let decoded = ScheduleRequest::decode(bytes.as_slice()).expect("decode ScheduleRequest");
+    assert_eq!(decoded, original);
+}
+
+#[test]
+fn internal_register_request_round_trip_with_resource_unit() {
+    let original = RegisterRequest {
+        node_id: "node-a".into(),
+        address: "http://127.0.0.1:8401".into(),
+        resource_json: r#"{"capacity":{"cpu":8000}}"#.into(),
+        agent_info_json: r#"{"role":"function_proxy"}"#.into(),
+        resource_unit: Some(ResourceUnit {
+            id: "node-a".into(),
+            ..Default::default()
+        }),
+    };
+
+    let bytes = original.encode_to_vec();
+    let decoded = RegisterRequest::decode(bytes.as_slice()).expect("decode RegisterRequest");
+    assert_eq!(decoded, original);
+}
+
+#[test]
+fn internal_update_resources_request_round_trip_with_resource_unit() {
+    let original = UpdateResourcesRequest {
+        node_id: "node-a".into(),
+        resource_json: r#"{"capacity":{"cpu":8000},"used":{"cpu":1000}}"#.into(),
+        resource_unit: Some(ResourceUnit {
+            id: "node-a".into(),
+            ..Default::default()
+        }),
+    };
+
+    let bytes = original.encode_to_vec();
+    let decoded =
+        UpdateResourcesRequest::decode(bytes.as_slice()).expect("decode UpdateResourcesRequest");
     assert_eq!(decoded, original);
 }
 

@@ -1,5 +1,6 @@
 //! E2E: ExecStream bidirectional gRPC — start command, stdout, stream end.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use clap::Parser;
@@ -43,6 +44,7 @@ async fn exec_stream_start_emits_stdout_and_closes_on_inbound_drop() {
     let instance_ctrl = InstanceController::new(config.clone(), resource_view.clone(), None, None);
     let instance_manager = InstanceManager::new(instance_ctrl.clone(), config.clone());
     let bus = BusProxyCoordinator::new(config.clone(), instance_ctrl.clone());
+    let ready = Arc::new(tokio::sync::Notify::new());
     let ctx = Arc::new(AppContext {
         config: config.clone(),
         resource_view: resource_view.clone(),
@@ -53,6 +55,8 @@ async fn exec_stream_start_emits_stdout_and_closes_on_inbound_drop() {
         etcd: None,
         domain_addr: Arc::new(RwLock::new(String::new())),
         topology: Arc::new(RwLock::new(None)),
+        ready: ready.clone(),
+        ready_flag: Arc::new(AtomicBool::new(true)),
     });
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

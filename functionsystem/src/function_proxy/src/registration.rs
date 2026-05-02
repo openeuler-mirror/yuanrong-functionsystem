@@ -61,6 +61,7 @@ async fn register_global_and_domain(ctx: &AppContext, global: &str) -> anyhow::R
             address: ctx.config.advertise_grpc_endpoint(),
             resource_json,
             agent_info_json,
+            resource_unit: None,
         })
         .await?
         .into_inner();
@@ -127,6 +128,7 @@ async fn push_resources(ctx: &AppContext, global: &str) -> anyhow::Result<()> {
         .update_resources(UpdateResourcesRequest {
             node_id: ctx.config.node_id.clone(),
             resource_json,
+            resource_unit: None,
         })
         .await?;
     Ok(())

@@ -106,7 +106,13 @@ async fn do_schedule_with_registered_agent_still_fails_forward_but_enqueues() {
     let state = test_master_state();
     state
         .topology
-        .register_local("ag".into(), "10.0.0.1:1".into(), "{}".into(), "{}".into())
+        .register_local(
+            "ag".into(),
+            "10.0.0.1:1".into(),
+            "{}".into(),
+            None,
+            "{}".into(),
+        )
         .await;
     let r = state
         .do_schedule(ScheduleRequest {

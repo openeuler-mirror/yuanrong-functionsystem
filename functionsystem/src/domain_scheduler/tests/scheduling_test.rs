@@ -4,13 +4,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine;
+use prost::Message;
 use yr_domain_scheduler::config::{DomainSchedulerConfig, ElectionMode};
 use yr_domain_scheduler::nodes::LocalNodeManager;
 use yr_domain_scheduler::resource_view::ResourceView;
 use yr_domain_scheduler::scheduler::SchedulingEngine;
-use yr_domain_scheduler::scheduler_framework::{ScheduleContext, SchedulerFramework};
 use yr_domain_scheduler::scheduler_framework::{default_plugin_register, NodeInfo};
+use yr_domain_scheduler::scheduler_framework::{ScheduleContext, SchedulerFramework};
 use yr_proto::internal::ScheduleRequest;
+use yr_proto::resources::value::{Counter, Scalar};
+use yr_proto::resources::{Resource, ResourceUnit as ProtoResourceUnit, Resources};
 
 fn sample_domain_config() -> Arc<DomainSchedulerConfig> {
     Arc::new(DomainSchedulerConfig {
@@ -25,6 +29,12 @@ fn sample_domain_config() -> Arc<DomainSchedulerConfig> {
         enable_preemption: false,
         max_priority: 100,
         pull_resource_interval_ms: 5000,
+        ssl_enable: false,
+        metrics_ssl_enable: false,
+        ssl_base_path: String::new(),
+        ssl_root_file: String::new(),
+        ssl_cert_file: String::new(),
+        ssl_key_file: String::new(),
         instance_id: "inst".into(),
     })
 }
@@ -80,8 +90,8 @@ fn scheduling_engine_select_node_least_loaded_free_score() {
 
     let heavy_json = r#"{"capacity":{"cpu":10.0},"used":{"cpu":8.0}}"#;
     let light_json = r#"{"capacity":{"cpu":10.0},"used":{"cpu":1.0}}"#;
-    nodes.upsert_local("heavy".into(), "h:1".into(), heavy_json);
-    nodes.upsert_local("light".into(), "l:1".into(), light_json);
+    nodes.upsert_local("heavy".into(), "h:1".into(), heavy_json, None);
+    nodes.upsert_local("light".into(), "l:1".into(), light_json, None);
 
     let engine = SchedulingEngine::new(sample_domain_config(), view, nodes);
     let mut req = ScheduleRequest::default();
@@ -100,6 +110,7 @@ fn scheduling_engine_no_fit_returns_none() {
         "tiny".into(),
         "t:1".into(),
         r#"{"capacity":{"cpu":1.0},"used":{"cpu":0.99}}"#,
+        None,
     );
 
     let engine = SchedulingEngine::new(sample_domain_config(), view, nodes);
@@ -116,12 +127,85 @@ fn label_on_request_filters_nodes() {
     let nodes = Arc::new(LocalNodeManager::new(view.clone()));
     let ok_json = r#"{"capacity":{"cpu":4.0},"used":{"cpu":0.0},"labels":{"rack":"r1"}}"#;
     let wrong_json = r#"{"capacity":{"cpu":4.0},"used":{"cpu":0.0},"labels":{"rack":"r2"}}"#;
-    nodes.upsert_local("a".into(), "a:1".into(), ok_json);
-    nodes.upsert_local("b".into(), "b:1".into(), wrong_json);
+    nodes.upsert_local("a".into(), "a:1".into(), ok_json, None);
+    nodes.upsert_local("b".into(), "b:1".into(), wrong_json, None);
 
     let engine = SchedulingEngine::new(sample_domain_config(), view, nodes);
     let mut req = ScheduleRequest::default();
     req.request_id = "l1".into();
+    req.required_resources = HashMap::from([("cpu".into(), 0.5)]);
+    req.labels.insert("rack".into(), "r1".into());
+
+    let picked = engine.select_node(&req, false).expect("node");
+    assert_eq!(picked.node_id, "a");
+}
+
+fn encode_resource_unit_with_label(label_key: &str, label_value: &str) -> String {
+    let unit = ProtoResourceUnit {
+        id: format!("node-{label_value}"),
+        capacity: Some(Resources {
+            resources: HashMap::from([(
+                "cpu".into(),
+                Resource {
+                    name: "cpu".into(),
+                    scalar: Some(Scalar {
+                        value: 4.0,
+                        limit: 0.0,
+                    }),
+                    ..Default::default()
+                },
+            )]),
+        }),
+        allocatable: Some(Resources {
+            resources: HashMap::from([(
+                "cpu".into(),
+                Resource {
+                    name: "cpu".into(),
+                    scalar: Some(Scalar {
+                        value: 4.0,
+                        limit: 0.0,
+                    }),
+                    ..Default::default()
+                },
+            )]),
+        }),
+        actual_use: Some(Resources {
+            resources: HashMap::from([(
+                "cpu".into(),
+                Resource {
+                    name: "cpu".into(),
+                    scalar: Some(Scalar {
+                        value: 0.0,
+                        limit: 0.0,
+                    }),
+                    ..Default::default()
+                },
+            )]),
+        }),
+        node_labels: HashMap::from([(
+            label_key.into(),
+            Counter {
+                items: HashMap::from([(label_value.into(), 1_u64)]),
+            },
+        )]),
+        ..Default::default()
+    };
+    base64::engine::general_purpose::STANDARD.encode(unit.encode_to_vec())
+}
+
+#[test]
+fn label_on_request_uses_authoritative_resource_unit_labels_when_json_is_lossy() {
+    let view = Arc::new(ResourceView::new());
+    let nodes = Arc::new(LocalNodeManager::new(view.clone()));
+    let resource_json = r#"{"labels":{"rack":"wrong"},"node":{"labels":{"rack":"r1"}}}"#;
+    let ok_unit = encode_resource_unit_with_label("rack", "r1");
+    let wrong_unit = encode_resource_unit_with_label("rack", "r2");
+    nodes.upsert_local("a".into(), "a:1".into(), resource_json, Some(&ok_unit));
+    nodes.upsert_local("b".into(), "b:1".into(), resource_json, Some(&wrong_unit));
+
+    let engine = SchedulingEngine::new(sample_domain_config(), view, nodes);
+    let mut req = ScheduleRequest::default();
+    req.request_id = "l2".into();
     req.required_resources = HashMap::from([("cpu".into(), 0.5)]);
     req.labels.insert("rack".into(), "r1".into());
 
@@ -184,6 +268,7 @@ fn schedule_recorder_retains_entries() {
         "only".into(),
         "o:1".into(),
         r#"{"capacity":{"cpu":2.0},"used":{"cpu":0.0}}"#,
+        None,
     );
     let engine = SchedulingEngine::new(sample_domain_config(), view, nodes);
     let mut req = ScheduleRequest::default();

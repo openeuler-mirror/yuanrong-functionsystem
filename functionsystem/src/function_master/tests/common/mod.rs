@@ -12,9 +12,9 @@ use yr_master::domain_sched_mgr::DomainSchedMgr;
 use yr_master::instances::InstanceManager;
 use yr_master::local_sched_mgr::LocalSchedMgr;
 use yr_master::node_manager::NodeManager;
+use yr_master::sched_tree::SchedTree;
 use yr_master::schedule_decision::ScheduleDecisionManager;
 use yr_master::schedule_manager::ScheduleManager;
-use yr_master::sched_tree::SchedTree;
 use yr_master::scheduler::MasterState;
 use yr_master::snapshot::SnapshotManager;
 use yr_master::system_func_loader::SystemFunctionLoader;
@@ -59,6 +59,12 @@ pub fn test_master_state() -> Arc<MasterState> {
         meta_store_mode: "local".into(),
         meta_store_max_flush_concurrency: 100,
         meta_store_max_flush_batch_size: 50,
+        ssl_enable: String::new(),
+        metrics_ssl_enable: String::new(),
+        ssl_base_path: String::new(),
+        ssl_root_file: String::new(),
+        ssl_cert_file: String::new(),
+        ssl_key_file: String::new(),
         aggregated_schedule_strategy: "no_aggregate".into(),
         sched_max_priority: 16,
         instance_id: "test-master".into(),
@@ -156,6 +162,12 @@ pub fn test_master_config(cluster_id: &str) -> Arc<MasterConfig> {
         meta_store_mode: "local".into(),
         meta_store_max_flush_concurrency: 100,
         meta_store_max_flush_batch_size: 50,
+        ssl_enable: String::new(),
+        metrics_ssl_enable: String::new(),
+        ssl_base_path: String::new(),
+        ssl_root_file: String::new(),
+        ssl_cert_file: String::new(),
+        ssl_key_file: String::new(),
         aggregated_schedule_strategy: "no_aggregate".into(),
         sched_max_priority: 16,
         instance_id: "test-master".into(),

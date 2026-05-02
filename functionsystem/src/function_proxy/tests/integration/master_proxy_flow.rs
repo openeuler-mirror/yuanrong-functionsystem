@@ -2,6 +2,7 @@
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use http_body_util::BodyExt;
 use prost::Message;
 use serde_json::json;
 use tower::ServiceExt;
@@ -19,6 +20,7 @@ fn register_request_proto_matches_proxy_registration_shape() {
         address: "http://127.0.0.1:9000".into(),
         resource_json: r#"{"cpu":{"scalar":{"value":8.0}}}"#.into(),
         agent_info_json: r#"{"agents":[]}"#.into(),
+        resource_unit: None,
     };
     let v = req.encode_to_vec();
     let dec = RegisterRequest::decode(v.as_slice()).unwrap();
@@ -35,6 +37,7 @@ async fn agent_registration_updates_topology_and_queryagents() {
             "agent-a".into(),
             "10.0.0.1:1".into(),
             r#"{"cpu":1}"#.into(),
+            None,
             "{}".into(),
         )
         .await;
@@ -50,9 +53,7 @@ async fn agent_registration_updates_topology_and_queryagents() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(v.is_array() || v.is_object(), "queryagents returns JSON");
 }
@@ -82,9 +83,7 @@ async fn resources_protobuf_includes_resource_unit_and_instances_map() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .unwrap();
+    let body = resp.into_body().collect().await.unwrap().to_bytes();
     let info = ResourceInfo::decode(body.as_ref()).expect("ResourceInfo protobuf");
     let unit = info.resource.expect("resource unit");
     assert_eq!(unit.id, "test-cluster");
@@ -96,7 +95,13 @@ async fn evict_agent_removes_leaf_and_queryagentcount_drops() {
     let state = test_master_state();
     state
         .topology
-        .register_local("to-evict".into(), "h:1".into(), "{}".into(), "{}".into())
+        .register_local(
+            "to-evict".into(),
+            "h:1".into(),
+            "{}".into(),
+            None,
+            "{}".into(),
+        )
         .await;
 
     let app = build_router(state.clone(), None);
@@ -112,9 +117,12 @@ async fn evict_agent_removes_leaf_and_queryagentcount_drops() {
         .await
         .unwrap();
     let n0 = String::from_utf8(
-        axum::body::to_bytes(count_before.into_body(), usize::MAX)
+        count_before
+            .into_body()
+            .collect()
             .await
             .unwrap()
+            .to_bytes()
             .to_vec(),
     )
     .unwrap();
@@ -146,9 +154,12 @@ async fn evict_agent_removes_leaf_and_queryagentcount_drops() {
         .await
         .unwrap();
     let n1 = String::from_utf8(
-        axum::body::to_bytes(count_after.into_body(), usize::MAX)
+        count_after
+            .into_body()
+            .collect()
             .await
             .unwrap()
+            .to_bytes()
             .to_vec(),
     )
     .unwrap();
@@ -185,9 +196,7 @@ async fn scheduling_queue_json_and_protobuf_formats() {
         .await
         .unwrap();
     assert_eq!(j.status(), StatusCode::OK);
-    let jb = axum::body::to_bytes(j.into_body(), usize::MAX)
-        .await
-        .unwrap();
+    let jb = j.into_body().collect().await.unwrap().to_bytes();
     let jq: serde_json::Value = serde_json::from_slice(&jb).unwrap();
     assert_eq!(jq["len"], 1);
     assert_eq!(jq["queue"].as_array().unwrap().len(), 1);
@@ -203,9 +212,7 @@ async fn scheduling_queue_json_and_protobuf_formats() {
         .await
         .unwrap();
     assert_eq!(p.status(), StatusCode::OK);
-    let pb = axum::body::to_bytes(p.into_body(), usize::MAX)
-        .await
-        .unwrap();
+    let pb = p.into_body().collect().await.unwrap().to_bytes();
     let qi = QueryInstancesInfoResponse::decode(pb.as_ref()).unwrap();
     assert_eq!(qi.instance_infos.len(), 1);
     assert_eq!(qi.instance_infos[0].request_id, "sched-req-1");

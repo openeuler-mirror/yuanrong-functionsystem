@@ -4,6 +4,7 @@ use crate::state::RuntimeManagerState;
 use anyhow::Context;
 use prometheus::{Encoder, Gauge, IntGauge, IntGaugeVec, Opts, Registry, TextEncoder};
 use serde::Serialize;
+use serde_json::json;
 use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::ffi::CString;
@@ -12,6 +13,16 @@ use std::path::Path;
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
+use yr_proto::resources::resource::extension::Content as ProtoExtensionContent;
+use yr_proto::resources::value::vectors::{Category as ProtoVectorCategory, Vector as ProtoVector};
+use yr_proto::resources::value::{
+    Counter as ProtoCounter, Scalar as ProtoScalar, Type as ProtoValueType, Vectors as ProtoVectors,
+};
+use yr_proto::resources::{
+    resource::Extension as ProtoExtension, DiskContent as ProtoDiskContent,
+    InstanceInfo as ProtoInstanceInfo, Resource as ProtoResource,
+    ResourceUnit as ProtoResourceUnit, Resources as ProtoResources,
+};
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct NodeMetricsSample {
@@ -384,7 +395,7 @@ pub fn build_resource_projection(
     }
     for (name, count, vector) in collect_xpu_vectors(cfg) {
         capacity.insert(name.clone(), count);
-        used.insert(name.clone(), count);
+        used.insert(name.clone(), 0.0);
         vectors.insert(name, vector);
     }
 
@@ -410,6 +421,198 @@ pub fn build_resource_projection(
         vectors,
         resources,
     }
+}
+
+pub fn build_resource_update_json(snap: &MetricsSnapshot) -> serde_json::Value {
+    let projection = &snap.resource_projection;
+    let instances = snap
+        .instances
+        .iter()
+        .map(|instance| {
+            (
+                instance.instance_id.clone(),
+                json!({
+                    "instanceid": instance.instance_id,
+                    "runtimeid": instance.runtime_id,
+                    "pid": instance.pid,
+                    "runtimeaddress": format!("{}:{}", snap.node_id, instance.port),
+                    "actualUse": {
+                        "resources": json_resources_from_limits(&instance.resource_limits),
+                    },
+                }),
+            )
+        })
+        .collect::<serde_json::Map<String, serde_json::Value>>();
+
+    json!({
+        "node_id": snap.node_id,
+        "node": snap.node,
+        "accelerators": snap.accelerators,
+        "capacity": projection.capacity,
+        "used": projection.used,
+        "allocatable": projection.allocatable,
+        "labels": projection.labels,
+        "vectors": projection.vectors,
+        "resources": projection.resources,
+        "instances": instances,
+    })
+}
+
+pub fn build_resource_unit(snap: &MetricsSnapshot) -> ProtoResourceUnit {
+    let projection = &snap.resource_projection;
+    ProtoResourceUnit {
+        id: snap.node_id.clone(),
+        capacity: Some(proto_resources_from_projection(
+            &projection.capacity,
+            &projection.vectors,
+        )),
+        allocatable: Some(proto_resources_from_projection(
+            &projection.allocatable,
+            &projection.vectors,
+        )),
+        actual_use: Some(proto_resources_from_scalars(&projection.used)),
+        instances: snap
+            .instances
+            .iter()
+            .map(|instance| {
+                (
+                    instance.instance_id.clone(),
+                    ProtoInstanceInfo {
+                        instance_id: instance.instance_id.clone(),
+                        runtime_id: instance.runtime_id.clone(),
+                        actual_use: Some(ProtoResources {
+                            resources: instance
+                                .resource_limits
+                                .iter()
+                                .map(|(name, value)| {
+                                    (
+                                        name.clone(),
+                                        ProtoResource {
+                                            name: name.clone(),
+                                            r#type: ProtoValueType::Scalar as i32,
+                                            scalar: Some(ProtoScalar {
+                                                value: *value,
+                                                limit: 0.0,
+                                            }),
+                                            ..Default::default()
+                                        },
+                                    )
+                                })
+                                .collect(),
+                        }),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect(),
+        node_labels: projection
+            .labels
+            .iter()
+            .map(|(key, value)| {
+                (
+                    key.clone(),
+                    ProtoCounter {
+                        items: BTreeMap::from([(value.clone(), 1_u64)])
+                            .into_iter()
+                            .collect(),
+                    },
+                )
+            })
+            .collect(),
+        ..Default::default()
+    }
+}
+
+fn json_resources_from_limits(
+    limits: &BTreeMap<String, f64>,
+) -> serde_json::Map<String, serde_json::Value> {
+    limits
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.clone(),
+                json!({
+                    "name": name,
+                    "scalar": { "value": value },
+                }),
+            )
+        })
+        .collect()
+}
+
+fn proto_resources_from_projection(
+    scalars: &BTreeMap<String, f64>,
+    vectors: &BTreeMap<String, VectorResource>,
+) -> ProtoResources {
+    let mut resources = std::collections::HashMap::new();
+    for name in scalars.keys().chain(vectors.keys()) {
+        let scalar = scalars.get(name).copied().unwrap_or_default();
+        let vector = vectors.get(name);
+        resources.insert(name.clone(), proto_resource(name, scalar, vector));
+    }
+    ProtoResources { resources }
+}
+
+fn proto_resources_from_scalars(scalars: &BTreeMap<String, f64>) -> ProtoResources {
+    let resources = scalars
+        .iter()
+        .map(|(name, value)| (name.clone(), proto_resource(name, *value, None)))
+        .collect();
+    ProtoResources { resources }
+}
+
+fn proto_resource(name: &str, scalar_value: f64, vector: Option<&VectorResource>) -> ProtoResource {
+    let mut resource = ProtoResource {
+        name: name.to_string(),
+        scalar: Some(ProtoScalar {
+            value: scalar_value,
+            limit: 0.0,
+        }),
+        ..Default::default()
+    };
+    if let Some(vector) = vector {
+        resource.r#type = ProtoValueType::Vectors as i32;
+        resource.vectors = Some(ProtoVectors {
+            values: vector
+                .values
+                .iter()
+                .map(|(category, value)| {
+                    (
+                        category.clone(),
+                        ProtoVectorCategory {
+                            vectors: value
+                                .vectors
+                                .iter()
+                                .map(|(uuid, vector_values)| {
+                                    (
+                                        uuid.clone(),
+                                        ProtoVector {
+                                            values: vector_values.values.clone(),
+                                        },
+                                    )
+                                })
+                                .collect(),
+                        },
+                    )
+                })
+                .collect(),
+        });
+        resource.heterogeneous_info = vector.heterogeneous_info.clone().into_iter().collect();
+        resource.extensions = vector
+            .extensions
+            .iter()
+            .map(|extension| ProtoExtension {
+                content: Some(ProtoExtensionContent::Disk(ProtoDiskContent {
+                    name: extension.disk.name.clone(),
+                    size: extension.disk.size,
+                    mount_points: extension.disk.mount_points.clone(),
+                })),
+            })
+            .collect();
+    } else {
+        resource.r#type = ProtoValueType::Scalar as i32;
+    }
+    resource
 }
 
 pub fn build_numa_vectors(

@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package yr.internal;
 
+import "resource.proto";
+
 // Internal gRPC services replacing LiteBus inter-process messages.
 // Self-contained types (no cross-package imports) to avoid protobuf module path issues.
 
@@ -50,6 +52,7 @@ message RegisterRequest {
   string address = 2;
   string resource_json = 3;
   string agent_info_json = 4;
+  resources.ResourceUnit resource_unit = 5;
 }
 
 message RegisterResponse {
@@ -63,6 +66,7 @@ message RegisterResponse {
 message UpdateResourcesRequest {
   string node_id = 1;
   string resource_json = 2;
+  resources.ResourceUnit resource_unit = 3;
 }
 
 message UpdateResourcesResponse {

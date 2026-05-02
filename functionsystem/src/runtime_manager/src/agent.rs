@@ -7,6 +7,7 @@ use yr_proto::internal::{
     UpdateInstanceStatusRequest, UpdateInstanceStatusResponse, UpdateResourcesRequest,
     UpdateResourcesResponse,
 };
+use yr_proto::resources::ResourceUnit;
 
 /// gRPC client to the function agent with simple retry for status acknowledgements.
 #[derive(Clone)]
@@ -39,7 +40,11 @@ impl AgentClient {
             match self.update_instance_status(req.clone()).await {
                 Ok(r) if r.acknowledged => return,
                 Ok(r) => {
-                    debug!(attempt, acknowledged = r.acknowledged, "agent status not acked");
+                    debug!(
+                        attempt,
+                        acknowledged = r.acknowledged,
+                        "agent status not acked"
+                    );
                 }
                 Err(e) => {
                     warn!(attempt, error = %e, "UpdateInstanceStatus RPC failed");
@@ -55,26 +60,42 @@ impl AgentClient {
         );
     }
 
-    pub async fn update_resources(&self, resource_json: String) -> anyhow::Result<UpdateResourcesResponse> {
+    pub async fn update_resources(
+        &self,
+        resource_json: String,
+        resource_unit: Option<ResourceUnit>,
+    ) -> anyhow::Result<UpdateResourcesResponse> {
         let mut client = FunctionAgentServiceClient::connect(self.endpoint.clone()).await?;
         let resp = client
             .update_resources(UpdateResourcesRequest {
                 node_id: self.node_id.clone(),
                 resource_json,
+                resource_unit,
             })
             .await?
             .into_inner();
         Ok(resp)
     }
 
-    pub async fn update_resources_retry(&self, resource_json: String) {
+    pub async fn update_resources_retry(
+        &self,
+        resource_json: String,
+        resource_unit: Option<ResourceUnit>,
+    ) {
         const MAX_ATTEMPTS: u32 = 5;
         let mut delay = Duration::from_millis(300);
         for attempt in 0..MAX_ATTEMPTS {
-            match self.update_resources(resource_json.clone()).await {
+            match self
+                .update_resources(resource_json.clone(), resource_unit.clone())
+                .await
+            {
                 Ok(r) if r.success => return,
                 Ok(r) => {
-                    warn!(attempt, success = r.success, "UpdateResources not successful");
+                    warn!(
+                        attempt,
+                        success = r.success,
+                        "UpdateResources not successful"
+                    );
                 }
                 Err(e) => {
                     warn!(attempt, error = %e, "UpdateResources RPC failed");

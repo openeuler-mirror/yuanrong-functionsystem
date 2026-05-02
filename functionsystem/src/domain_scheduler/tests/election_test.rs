@@ -22,6 +22,12 @@ fn sample_config() -> DomainSchedulerConfig {
         enable_preemption: false,
         max_priority: 100,
         pull_resource_interval_ms: 5000,
+        ssl_enable: false,
+        metrics_ssl_enable: false,
+        ssl_base_path: String::new(),
+        ssl_root_file: String::new(),
+        ssl_cert_file: String::new(),
+        ssl_key_file: String::new(),
         instance_id: "ds-instance-1".into(),
     }
 }
@@ -32,7 +38,11 @@ fn standalone_election_domain_scheduler_starts_as_leader() {
     assert_eq!(cfg.election_mode, ElectionMode::Standalone);
     let rv = Arc::new(ResourceView::new());
     let nodes = Arc::new(LocalNodeManager::new(rv.clone()));
-    let scheduler = Arc::new(SchedulingEngine::new(cfg.clone(), rv.clone(), nodes.clone()));
+    let scheduler = Arc::new(SchedulingEngine::new(
+        cfg.clone(),
+        rv.clone(),
+        nodes.clone(),
+    ));
     let state = DomainSchedulerState::new(cfg, rv, nodes, scheduler, None);
     assert!(state.require_leader());
     assert!(state.is_leader());
@@ -56,21 +66,13 @@ fn election_mode_cli_parsing_for_domain_scheduler() {
         ("txn", ElectionMode::Txn),
         ("k8s", ElectionMode::K8s),
     ] {
-        let args = CliArgs::try_parse_from([
-            "yr-domain-scheduler",
-            "--election-mode",
-            flag,
-        ])
-        .unwrap_or_else(|e| panic!("parse {flag}: {e}"));
+        let args = CliArgs::try_parse_from(["yr-domain-scheduler", "--election-mode", flag])
+            .unwrap_or_else(|e| panic!("parse {flag}: {e}"));
         assert_eq!(args.election_mode, expected, "flag {flag}");
     }
 
     assert!(
-        CliArgs::try_parse_from([
-            "yr-domain-scheduler",
-            "--election-mode",
-            "invalid-mode",
-        ])
-        .is_err()
+        CliArgs::try_parse_from(["yr-domain-scheduler", "--election-mode", "invalid-mode",])
+            .is_err()
     );
 }

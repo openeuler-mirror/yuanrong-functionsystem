@@ -5,6 +5,7 @@ use std::sync::Arc;
 use yr_common::etcd_keys::{with_prefix, SCHEDULER_TOPOLOGY};
 use yr_master::config::{AssignmentStrategy, ElectionMode, MasterConfig};
 use yr_master::topology::TopologyManager;
+use yr_proto::resources::ResourceUnit as ProtoResourceUnit;
 
 fn test_config(strategy: AssignmentStrategy, max_per_domain: u32) -> Arc<MasterConfig> {
     Arc::new(MasterConfig {
@@ -45,6 +46,12 @@ fn test_config(strategy: AssignmentStrategy, max_per_domain: u32) -> Arc<MasterC
         meta_store_mode: "local".into(),
         meta_store_max_flush_concurrency: 100,
         meta_store_max_flush_batch_size: 50,
+        ssl_enable: String::new(),
+        metrics_ssl_enable: String::new(),
+        ssl_base_path: String::new(),
+        ssl_root_file: String::new(),
+        ssl_cert_file: String::new(),
+        ssl_key_file: String::new(),
         aggregated_schedule_strategy: "no_aggregate".into(),
         sched_max_priority: 16,
         instance_id: "test-master".into(),
@@ -60,6 +67,7 @@ async fn register_node_assigns_domain_and_persists_record() {
             "node-1".into(),
             "10.0.0.1:1".into(),
             r#"{"capacity":{"cpu":4},"used":{"cpu":0}}"#.into(),
+            None,
             "{}".into(),
         )
         .await;
@@ -76,29 +84,14 @@ async fn round_robin_spills_to_new_domain_when_full() {
     let cfg = test_config(AssignmentStrategy::RoundRobin, 2);
     let tm = TopologyManager::new(cfg, None);
     let (_, a) = tm
-        .register_local(
-            "n-a".into(),
-            "a:1".into(),
-            "{}".into(),
-            "{}".into(),
-        )
+        .register_local("n-a".into(), "a:1".into(), "{}".into(), None, "{}".into())
         .await;
     let (_, b) = tm
-        .register_local(
-            "n-b".into(),
-            "b:1".into(),
-            "{}".into(),
-            "{}".into(),
-        )
+        .register_local("n-b".into(), "b:1".into(), "{}".into(), None, "{}".into())
         .await;
     assert_eq!(a.domain_id, b.domain_id);
     let (_, c) = tm
-        .register_local(
-            "n-c".into(),
-            "c:1".into(),
-            "{}".into(),
-            "{}".into(),
-        )
+        .register_local("n-c".into(), "c:1".into(), "{}".into(), None, "{}".into())
         .await;
     assert_ne!(c.domain_id, a.domain_id);
     assert!(c.domain_id.starts_with("slot-"));
@@ -109,16 +102,16 @@ async fn least_loaded_prefers_domain_with_fewer_locals() {
     let cfg = test_config(AssignmentStrategy::LeastLoaded, 2);
     let tm = TopologyManager::new(cfg.clone(), None);
     let (_, first) = tm
-        .register_local("p1".into(), "h1".into(), "{}".into(), "{}".into())
+        .register_local("p1".into(), "h1".into(), "{}".into(), None, "{}".into())
         .await;
     let (_, second) = tm
-        .register_local("p2".into(), "h2".into(), "{}".into(), "{}".into())
+        .register_local("p2".into(), "h2".into(), "{}".into(), None, "{}".into())
         .await;
     assert_eq!(first.domain_id, second.domain_id);
 
     tm.evict("p1").await;
     let (_, third) = tm
-        .register_local("p3".into(), "h3".into(), "{}".into(), "{}".into())
+        .register_local("p3".into(), "h3".into(), "{}".into(), None, "{}".into())
         .await;
     assert_eq!(third.domain_id, second.domain_id);
 }
@@ -127,7 +120,7 @@ async fn least_loaded_prefers_domain_with_fewer_locals() {
 async fn evict_removes_node() {
     let cfg = test_config(AssignmentStrategy::LeastLoaded, 64);
     let tm = TopologyManager::new(cfg, None);
-    tm.register_local("z1".into(), "z:1".into(), "{}".into(), "{}".into())
+    tm.register_local("z1".into(), "z:1".into(), "{}".into(), None, "{}".into())
         .await;
     assert!(tm.evict("z1").await);
     assert_eq!(tm.agent_count(), 0);
@@ -142,6 +135,7 @@ async fn query_agents_json_filter() {
         "alpha-1".into(),
         "10.0.0.2".into(),
         "{}".into(),
+        None,
         "{}".into(),
     )
     .await;
@@ -149,6 +143,7 @@ async fn query_agents_json_filter() {
         "beta-2".into(),
         "10.0.0.3".into(),
         "{}".into(),
+        None,
         "{}".into(),
     )
     .await;
@@ -161,10 +156,22 @@ async fn query_agents_json_filter() {
 async fn resource_summary_aggregates_node_count_and_samples() {
     let cfg = test_config(AssignmentStrategy::LeastLoaded, 64);
     let tm = TopologyManager::new(cfg, None);
-    tm.register_local("n1".into(), "h1".into(), r#"{"cpu":2}"#.into(), "{}".into())
-        .await;
-    tm.register_local("n2".into(), "h2".into(), r#"{"cpu":4}"#.into(), "{}".into())
-        .await;
+    tm.register_local(
+        "n1".into(),
+        "h1".into(),
+        r#"{"cpu":2}"#.into(),
+        None,
+        "{}".into(),
+    )
+    .await;
+    tm.register_local(
+        "n2".into(),
+        "h2".into(),
+        r#"{"cpu":4}"#.into(),
+        None,
+        "{}".into(),
+    )
+    .await;
     let v = tm.resource_summary_json();
     assert_eq!(v["node_count"], serde_json::json!(2));
     let nodes = v["nodes"].as_array().unwrap();
@@ -176,9 +183,9 @@ async fn agent_count_tracks_registrations() {
     let cfg = test_config(AssignmentStrategy::LeastLoaded, 64);
     let tm = TopologyManager::new(cfg, None);
     assert_eq!(tm.agent_count(), 0);
-    tm.register_local("a".into(), "1".into(), "{}".into(), "{}".into())
+    tm.register_local("a".into(), "1".into(), "{}".into(), None, "{}".into())
         .await;
-    tm.register_local("b".into(), "2".into(), "{}".into(), "{}".into())
+    tm.register_local("b".into(), "2".into(), "{}".into(), None, "{}".into())
         .await;
     assert_eq!(tm.agent_count(), 2);
 }
@@ -187,7 +194,7 @@ async fn agent_count_tracks_registrations() {
 async fn root_domain_present_after_local_registration() {
     let cfg = test_config(AssignmentStrategy::LeastLoaded, 64);
     let tm = TopologyManager::new(cfg.clone(), None);
-    tm.register_local("leaf".into(), "addr".into(), "{}".into(), "{}".into())
+    tm.register_local("leaf".into(), "addr".into(), "{}".into(), None, "{}".into())
         .await;
     let root = tm.root_domain();
     assert!(root.is_some());
@@ -199,25 +206,34 @@ async fn root_domain_present_after_local_registration() {
 async fn update_resources_succeeds_for_known_agent() {
     let cfg = test_config(AssignmentStrategy::LeastLoaded, 64);
     let tm = TopologyManager::new(cfg, None);
-    tm.register_local("agent".into(), "h".into(), r#"{"a":1}"#.into(), "{}".into())
-        .await;
-    assert!(tm.update_resources("agent", r#"{"a":2}"#.into()).await);
+    tm.register_local(
+        "agent".into(),
+        "h".into(),
+        r#"{"a":1}"#.into(),
+        None,
+        "{}".into(),
+    )
+    .await;
+    assert!(
+        tm.update_resources("agent", r#"{"a":2}"#.into(), None)
+            .await
+    );
 }
 
 #[tokio::test]
 async fn update_resources_fails_for_unknown_agent() {
     let cfg = test_config(AssignmentStrategy::LeastLoaded, 64);
     let tm = TopologyManager::new(cfg, None);
-    assert!(!tm.update_resources("missing", "{}".into()).await);
+    assert!(!tm.update_resources("missing", "{}".into(), None).await);
 }
 
 #[tokio::test]
 async fn list_agents_json_empty_filter_returns_all_sorted() {
     let cfg = test_config(AssignmentStrategy::LeastLoaded, 64);
     let tm = TopologyManager::new(cfg, None);
-    tm.register_local("z".into(), "1".into(), "{}".into(), "{}".into())
+    tm.register_local("z".into(), "1".into(), "{}".into(), None, "{}".into())
         .await;
-    tm.register_local("a".into(), "2".into(), "{}".into(), "{}".into())
+    tm.register_local("a".into(), "2".into(), "{}".into(), None, "{}".into())
         .await;
     let json = tm.list_agents_json("");
     assert!(json.starts_with('['));
@@ -251,7 +267,7 @@ async fn domain_id_slot_naming_on_first_registration() {
     let cfg = test_config(AssignmentStrategy::LeastLoaded, 64);
     let tm = TopologyManager::new(cfg, None);
     let (_, rec) = tm
-        .register_local("n1".into(), "h1".into(), "{}".into(), "{}".into())
+        .register_local("n1".into(), "h1".into(), "{}".into(), None, "{}".into())
         .await;
     assert!(rec.domain_id.starts_with("slot-"));
 }
@@ -262,7 +278,7 @@ async fn register_local_preserves_resource_json_for_aggregation() {
     let tm = TopologyManager::new(cfg, None);
     let r = r#"{"capacity":{"cpu":8}}"#;
     let (_, rec) = tm
-        .register_local("agent-1".into(), "h".into(), r.into(), "{}".into())
+        .register_local("agent-1".into(), "h".into(), r.into(), None, "{}".into())
         .await;
     assert_eq!(rec.resource_json, r);
     let summary = tm.resource_summary_json();
@@ -277,18 +293,48 @@ async fn register_local_preserves_agent_info_json() {
     let tm = TopologyManager::new(cfg, None);
     let info = r#"{"labels":{"zone":"a"}}"#;
     let (_, rec) = tm
-        .register_local("x".into(), "h".into(), "{}".into(), info.into())
+        .register_local("x".into(), "h".into(), "{}".into(), None, info.into())
         .await;
     assert_eq!(rec.agent_info_json, info);
+}
+
+#[tokio::test]
+async fn register_local_without_resource_unit_preserves_existing_authoritative_unit() {
+    let cfg = test_config(AssignmentStrategy::LeastLoaded, 64);
+    let tm = TopologyManager::new(cfg, None);
+    let (_, first) = tm
+        .register_local(
+            "node-u".into(),
+            "h".into(),
+            "{}".into(),
+            Some(ProtoResourceUnit {
+                id: "node-u".into(),
+                ..Default::default()
+            }),
+            "{}".into(),
+        )
+        .await;
+    assert!(!first.resource_unit_b64.is_empty());
+
+    let (_, second) = tm
+        .register_local("node-u".into(), "h".into(), "{}".into(), None, "{}".into())
+        .await;
+    assert_eq!(second.resource_unit_b64, first.resource_unit_b64);
 }
 
 #[tokio::test]
 async fn update_resources_changes_resource_summary_sample() {
     let cfg = test_config(AssignmentStrategy::LeastLoaded, 64);
     let tm = TopologyManager::new(cfg, None);
-    tm.register_local("n".into(), "h".into(), r#"{"v":1}"#.into(), "{}".into())
-        .await;
-    assert!(tm.update_resources("n", r#"{"v":2}"#.into()).await);
+    tm.register_local(
+        "n".into(),
+        "h".into(),
+        r#"{"v":1}"#.into(),
+        None,
+        "{}".into(),
+    )
+    .await;
+    assert!(tm.update_resources("n", r#"{"v":2}"#.into(), None).await);
     let summary = tm.resource_summary_json();
     let nodes = summary["nodes"].as_array().unwrap();
     assert!(nodes.iter().any(|x| x["resource_json"] == "{\"v\":2}"));
@@ -298,14 +344,23 @@ async fn update_resources_changes_resource_summary_sample() {
 async fn topology_json_exposes_domain_and_address_per_agent() {
     let cfg = test_config(AssignmentStrategy::LeastLoaded, 64);
     let tm = TopologyManager::new(cfg.clone(), None);
-    tm.register_local("leaf".into(), "10.0.0.5:1".into(), "{}".into(), "{}".into())
-        .await;
+    tm.register_local(
+        "leaf".into(),
+        "10.0.0.5:1".into(),
+        "{}".into(),
+        None,
+        "{}".into(),
+    )
+    .await;
     let v: serde_json::Value = serde_json::from_str(&tm.topology_json()).unwrap();
     let locals = v["locals"].as_array().unwrap();
     assert_eq!(locals.len(), 1);
     assert_eq!(locals[0]["node_id"], "leaf");
     assert_eq!(locals[0]["domain_address"], cfg.default_domain_address);
-    assert!(locals[0]["domain_id"].as_str().unwrap().starts_with("slot-"));
+    assert!(locals[0]["domain_id"]
+        .as_str()
+        .unwrap()
+        .starts_with("slot-"));
 }
 
 #[test]
@@ -319,11 +374,17 @@ fn persisted_topology_key_matches_with_prefix_helper() {
 async fn resource_summary_node_count_drops_after_evict() {
     let cfg = test_config(AssignmentStrategy::LeastLoaded, 64);
     let tm = TopologyManager::new(cfg, None);
-    tm.register_local("keep".into(), "h1".into(), "{}".into(), "{}".into())
+    tm.register_local("keep".into(), "h1".into(), "{}".into(), None, "{}".into())
         .await;
-    tm.register_local("gone".into(), "h2".into(), "{}".into(), "{}".into())
+    tm.register_local("gone".into(), "h2".into(), "{}".into(), None, "{}".into())
         .await;
-    assert_eq!(tm.resource_summary_json()["node_count"], serde_json::json!(2));
+    assert_eq!(
+        tm.resource_summary_json()["node_count"],
+        serde_json::json!(2)
+    );
     assert!(tm.evict("gone").await);
-    assert_eq!(tm.resource_summary_json()["node_count"], serde_json::json!(1));
+    assert_eq!(
+        tm.resource_summary_json()["node_count"],
+        serde_json::json!(1)
+    );
 }

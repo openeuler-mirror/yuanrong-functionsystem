@@ -2,8 +2,8 @@
 
 mod common;
 
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use serde_json::json;
 use yr_master::config::{AssignmentStrategy, ElectionMode, MasterConfig};
@@ -51,6 +51,12 @@ fn topo_config(strategy: AssignmentStrategy, max_locals: u32) -> Arc<MasterConfi
         meta_store_mode: "local".into(),
         meta_store_max_flush_concurrency: 100,
         meta_store_max_flush_batch_size: 50,
+        ssl_enable: String::new(),
+        metrics_ssl_enable: String::new(),
+        ssl_base_path: String::new(),
+        ssl_root_file: String::new(),
+        ssl_cert_file: String::new(),
+        ssl_key_file: String::new(),
         aggregated_schedule_strategy: "no_aggregate".into(),
         sched_max_priority: 16,
         instance_id: "test-master".into(),
@@ -66,6 +72,7 @@ async fn e2e_scaling_register_proxies_and_verify_topology() {
             "proxy-1".into(),
             "10.0.1.1:9001".into(),
             r#"{"capacity":{"cpu":4}}"#.into(),
+            None,
             "{}".into(),
         )
         .await;
@@ -75,6 +82,7 @@ async fn e2e_scaling_register_proxies_and_verify_topology() {
             "proxy-2".into(),
             "10.0.1.2:9001".into(),
             r#"{"capacity":{"cpu":4}}"#.into(),
+            None,
             "{}".into(),
         )
         .await;
@@ -95,7 +103,13 @@ async fn e2e_scaling_schedule_enqueues_when_proxies_present() {
     let state = test_master_state();
     state
         .topology
-        .register_local("proxy-a".into(), "10.0.2.1:1".into(), "{}".into(), "{}".into())
+        .register_local(
+            "proxy-a".into(),
+            "10.0.2.1:1".into(),
+            "{}".into(),
+            None,
+            "{}".into(),
+        )
         .await;
     let r = state
         .clone()
@@ -114,14 +128,14 @@ async fn e2e_scaling_add_proxy_rebalances_round_robin_domains() {
     let cfg = topo_config(AssignmentStrategy::RoundRobin, 2);
     let tm = TopologyManager::new(cfg, None);
     let (_, n1) = tm
-        .register_local("rr-1".into(), "h1".into(), "{}".into(), "{}".into())
+        .register_local("rr-1".into(), "h1".into(), "{}".into(), None, "{}".into())
         .await;
     let (_, n2) = tm
-        .register_local("rr-2".into(), "h2".into(), "{}".into(), "{}".into())
+        .register_local("rr-2".into(), "h2".into(), "{}".into(), None, "{}".into())
         .await;
     assert_eq!(n1.domain_id, n2.domain_id);
     let (_, n3) = tm
-        .register_local("rr-3".into(), "h3".into(), "{}".into(), "{}".into())
+        .register_local("rr-3".into(), "h3".into(), "{}".into(), None, "{}".into())
         .await;
     assert_ne!(n3.domain_id, n1.domain_id);
     assert!(n3.domain_id.starts_with("slot-"));
@@ -132,7 +146,13 @@ async fn e2e_scaling_evict_proxy_removes_node_instances_remain_queryable() {
     let state = test_master_state();
     state
         .topology
-        .register_local("proxy-drop".into(), "10.0.3.1:1".into(), "{}".into(), "{}".into())
+        .register_local(
+            "proxy-drop".into(),
+            "10.0.3.1:1".into(),
+            "{}".into(),
+            None,
+            "{}".into(),
+        )
         .await;
     state.instances.upsert_instance(
         "/instances/on-drop",
@@ -159,7 +179,13 @@ async fn e2e_scaling_follower_master_blocks_schedule_after_eviction_context() {
     let state = test_master_state();
     state
         .topology
-        .register_local("px".into(), "10.0.4.1:1".into(), "{}".into(), "{}".into())
+        .register_local(
+            "px".into(),
+            "10.0.4.1:1".into(),
+            "{}".into(),
+            None,
+            "{}".into(),
+        )
         .await;
     state.is_leader.store(false, Ordering::SeqCst);
     let r = state

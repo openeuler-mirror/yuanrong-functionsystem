@@ -42,6 +42,7 @@ pub fn build_global_register_request(
         address: agent_endpoint,
         resource_json: "{}".into(),
         agent_info_json,
+        resource_unit: None,
     }
 }
 
@@ -53,6 +54,7 @@ pub fn build_resource_update_request(
     UpdateResourcesRequest {
         node_id: node_id.into(),
         resource_json,
+        resource_unit: None,
     }
 }
 

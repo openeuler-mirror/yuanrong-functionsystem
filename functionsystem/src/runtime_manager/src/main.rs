@@ -40,7 +40,9 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     let health_state = state.clone();
-    tokio::spawn(yr_runtime_manager::instance_health::supervision_loop(health_state));
+    tokio::spawn(yr_runtime_manager::instance_health::supervision_loop(
+        health_state,
+    ));
 
     let metrics_state = state.clone();
     let metrics_agent = agent.clone();
@@ -51,11 +53,11 @@ async fn main() -> anyhow::Result<()> {
             tokio::time::sleep(metrics_every).await;
             let snap = col.collect(&metrics_state);
             yr_runtime_manager::metrics::apply_prometheus_snapshot(&snap);
-            let json = serde_json::to_string(&snap).unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "metrics json");
-                "{}".to_string()
-            });
-            metrics_agent.update_resources_retry(json).await;
+            let resource_unit = yr_runtime_manager::metrics::build_resource_unit(&snap);
+            let json = yr_runtime_manager::metrics::build_resource_update_json(&snap).to_string();
+            metrics_agent
+                .update_resources_retry(json, Some(resource_unit))
+                .await;
         }
     });
 
@@ -91,11 +93,7 @@ async fn main() -> anyhow::Result<()> {
         });
 
     tokio::try_join!(
-        async move {
-            tonic_srv
-                .await
-                .map_err(|e| anyhow::anyhow!(e))
-        },
+        async move { tonic_srv.await.map_err(|e| anyhow::anyhow!(e)) },
         yr_runtime_manager::http_api::serve(http_addr, shutdown_http, cfg.clone())
     )?;
 

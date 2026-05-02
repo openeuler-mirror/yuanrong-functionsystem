@@ -53,7 +53,11 @@ pub mod bus_adapter {
 }
 
 pub mod internal {
-    tonic::include_proto!("yr.internal");
+    pub mod generated {
+        tonic::include_proto!("yr.internal");
+    }
+
+    pub use generated::*;
 }
 
 pub mod metastore {

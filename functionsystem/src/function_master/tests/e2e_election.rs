@@ -34,7 +34,13 @@ async fn e2e_election_leader_allows_scheduling_queue_mutations() {
     assert!(state.require_leader());
     state
         .topology
-        .register_local("ag".into(), "10.0.0.1:1".into(), "{}".into(), "{}".into())
+        .register_local(
+            "ag".into(),
+            "10.0.0.1:1".into(),
+            "{}".into(),
+            None,
+            "{}".into(),
+        )
         .await;
     let r = state
         .clone()
@@ -43,7 +49,10 @@ async fn e2e_election_leader_allows_scheduling_queue_mutations() {
             ..Default::default()
         })
         .await;
-    assert!(!r.success, "schedule worker returns pending/failure without full runtime");
+    assert!(
+        !r.success,
+        "schedule worker returns pending/failure without full runtime"
+    );
     let q = state.scheduling_queue.lock();
     assert!(q.contains(&"lead-ok".to_string()));
 }
@@ -53,7 +62,13 @@ async fn e2e_election_follower_rejects_schedule_without_enqueue() {
     let state = test_master_state();
     state
         .topology
-        .register_local("ag2".into(), "10.0.0.2:1".into(), "{}".into(), "{}".into())
+        .register_local(
+            "ag2".into(),
+            "10.0.0.2:1".into(),
+            "{}".into(),
+            None,
+            "{}".into(),
+        )
         .await;
     state.is_leader.store(false, Ordering::SeqCst);
     let r = state
