@@ -3,7 +3,8 @@
 Date: 2026-05-02
 Repo: `/home/lzc/workspace/code/yr_rust/yuanrong-functionsystem`
 Branch: `rust-rewrite`
-Latest pushed commit at handoff: `8d9bda6 fix(runtime): project C++ XPU metrics surfaces`
+Latest branch commit at handoff: `0222889 docs: add black-box closure handoff`
+Latest verified code commit: `8d9bda6 fix(runtime): project C++ XPU metrics surfaces`
 
 ## 0. One-line mission for the next AI
 
@@ -40,7 +41,8 @@ At handoff:
 Repo: /home/lzc/workspace/code/yr_rust/yuanrong-functionsystem
 Branch: rust-rewrite
 Remote: origin
-Latest pushed commit: 8d9bda6 fix(runtime): project C++ XPU metrics surfaces
+Latest branch commit: 0222889 docs: add black-box closure handoff
+Latest verified code commit: 8d9bda6 fix(runtime): project C++ XPU metrics surfaces
 Working tree: clean except local untracked .omx/ state
 ```
 
@@ -646,7 +648,10 @@ Do not start from scratch. Work in:
 /home/lzc/workspace/code/yr_rust/yuanrong-functionsystem
 branch rust-rewrite.
 
-Current latest pushed commit is:
+Current latest branch commit is:
+0222889 docs: add black-box closure handoff
+
+Current latest verified code commit is:
 8d9bda6 fix(runtime): project C++ XPU metrics surfaces
 
 Ultimate goal:
