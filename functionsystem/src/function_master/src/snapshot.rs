@@ -5,9 +5,15 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
+use prost::Message;
 use serde::Serialize;
 use serde_json::Value;
 use yr_common::types::InstanceState;
+use yr_proto::messages::SnapshotMetadata;
+use yr_proto::resources::{
+    value::{Scalar, Type as ValueType},
+    InstanceInfo, InstanceStatus, Resource, Resources, SnapshotInfo,
+};
 
 /// Metadata captured when an instance reaches a snapshot-worthy terminal state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -82,6 +88,81 @@ impl SnapshotManager {
         out.sort_by(|a, b| b.exit_time.cmp(&a.exit_time));
         out
     }
+}
+
+pub fn snapshot_to_proto(snapshot: &InstanceSnapshot) -> SnapshotMetadata {
+    let state_code = InstanceState::from_str(snapshot.state.as_str())
+        .map(|st| st.as_i32())
+        .unwrap_or_default();
+    let resources = snapshot_resources(snapshot);
+
+    SnapshotMetadata {
+        instance_info: Some(InstanceInfo {
+            instance_id: snapshot.instance_id.clone(),
+            function_proxy_id: snapshot.proxy_id.clone(),
+            function: snapshot.function_name.clone(),
+            tenant_id: snapshot.tenant_id.clone(),
+            resources,
+            instance_status: Some(InstanceStatus {
+                code: state_code,
+                msg: snapshot.exit_reason.clone(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        snapshot_info: Some(SnapshotInfo {
+            checkpoint_id: snapshot.snapshot_id.clone(),
+            create_time: snapshot.create_time.to_string(),
+            ..Default::default()
+        }),
+    }
+}
+
+fn snapshot_resources(snapshot: &InstanceSnapshot) -> Option<Resources> {
+    let mut resources = HashMap::new();
+    if snapshot.resource_cpu > 0 {
+        resources.insert(
+            "cpu".into(),
+            Resource {
+                name: "cpu".into(),
+                r#type: ValueType::Scalar as i32,
+                scalar: Some(Scalar {
+                    value: snapshot.resource_cpu as f64,
+                    limit: 0.0,
+                }),
+                ..Default::default()
+            },
+        );
+    }
+    if snapshot.resource_memory > 0 {
+        resources.insert(
+            "memory".into(),
+            Resource {
+                name: "memory".into(),
+                r#type: ValueType::Scalar as i32,
+                scalar: Some(Scalar {
+                    value: snapshot.resource_memory as f64,
+                    limit: 0.0,
+                }),
+                ..Default::default()
+            },
+        );
+    }
+    if resources.is_empty() {
+        None
+    } else {
+        Some(Resources { resources })
+    }
+}
+
+pub fn snapshots_to_proto_bytes(snapshots: &[InstanceSnapshot]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for snapshot in snapshots {
+        snapshot_to_proto(snapshot)
+            .encode(&mut out)
+            .expect("Vec<u8> should not fail protobuf encoding");
+    }
+    out
 }
 
 /// States that trigger a master-side snapshot (aligns with C++ snap-on-terminal behaviour).

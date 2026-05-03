@@ -33,6 +33,7 @@ fn parse_type_header(headers: &HeaderMap) -> bool {
 const TYPE_PROTOBUF: &str = "protobuf";
 
 use crate::scheduler::MasterState;
+use crate::snapshot::{snapshot_to_proto, snapshots_to_proto_bytes};
 
 #[derive(Clone)]
 pub struct HttpState {
@@ -665,12 +666,11 @@ async fn query_snapshot(
             return Err(StatusCode::NOT_FOUND);
         };
         Ok(Json(s).into_response())
-    } else if snap.is_some() {
-        // No protobuf schema for `InstanceSnapshot`; mirror legacy empty body on success.
+    } else if let Some(s) = snap {
         Ok((
             StatusCode::OK,
             [("content-type", "application/x-protobuf")],
-            Vec::<u8>::new(),
+            snapshot_to_proto(&s).encode_to_vec(),
         )
             .into_response())
     } else {
@@ -797,7 +797,7 @@ async fn list_snapshots(
         Ok((
             StatusCode::OK,
             [("content-type", "application/x-protobuf")],
-            Vec::<u8>::new(),
+            snapshots_to_proto_bytes(&list),
         )
             .into_response())
     }

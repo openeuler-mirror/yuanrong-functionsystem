@@ -10,7 +10,7 @@ use tower::ServiceExt;
 use yr_master::http::{build_grpc_compat_router, build_router};
 use yr_master::snapshot::InstanceSnapshot;
 use yr_proto::common::ErrorCode;
-use yr_proto::messages::QueryInstancesInfoResponse;
+use yr_proto::messages::{QueryInstancesInfoResponse, SnapshotMetadata};
 use yr_proto::resources::InstanceInfo;
 
 use common::test_master_state;
@@ -35,6 +35,7 @@ async fn queryagentcount_returns_plain_text_number() {
         .await;
 
     let resp = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/queryagentcount")
@@ -66,6 +67,7 @@ async fn queryagentcount_returns_zero_when_empty() {
     let app = build_router(state, None);
 
     let resp = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/queryagentcount")
@@ -101,6 +103,7 @@ async fn evictagent_accepts_original_field_names() {
     let app = build_router(state, None);
 
     let resp = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -586,6 +589,70 @@ async fn query_snapshot_returns_json() {
 }
 
 #[tokio::test]
+async fn query_snapshot_returns_protobuf_metadata() {
+    let state = test_master_state();
+    state.instances.upsert_instance(
+        "/instances/snap-pb-001",
+        serde_json::json!({
+            "id": "snap-pb-001",
+            "function_name": "my-fn",
+            "tenant": "t1",
+            "state": "FAILED",
+            "created_at_ms": 100,
+            "updated_at_ms": 200,
+            "functionProxyID": "proxy-a",
+            "instanceStatus": { "msg": "boom" },
+            "resources": {
+                "cpu": { "scalar": { "value": 2.0 } },
+                "memory": { "scalar": { "value": 512.0 } }
+            }
+        }),
+    );
+    let app = build_router(state, None);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/query-snapshot")
+                .header("Type", "protobuf")
+                .body(Body::from("snap-pb-001"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("content-type").unwrap(),
+        "application/x-protobuf"
+    );
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let decoded = SnapshotMetadata::decode(body.as_ref()).unwrap();
+    let instance_info = decoded.instance_info.as_ref().unwrap();
+    assert_eq!(instance_info.instance_id, "snap-pb-001");
+    assert_eq!(instance_info.function_proxy_id, "proxy-a");
+    assert_eq!(instance_info.function, "my-fn");
+    assert_eq!(instance_info.tenant_id, "t1");
+    let status = instance_info.instance_status.as_ref().unwrap();
+    assert_eq!(status.code, 4);
+    assert_eq!(status.msg, "boom");
+    let resources = instance_info.resources.as_ref().unwrap();
+    assert_eq!(
+        resources.resources["cpu"].scalar.as_ref().unwrap().value,
+        2.0
+    );
+    assert_eq!(
+        resources.resources["memory"].scalar.as_ref().unwrap().value,
+        512.0
+    );
+    let snapshot_info = decoded.snapshot_info.as_ref().unwrap();
+    assert_eq!(snapshot_info.checkpoint_id, "snap-pb-001");
+    assert_eq!(snapshot_info.create_time, "100");
+}
+
+#[tokio::test]
 async fn query_snapshot_missing_returns_404() {
     let state = test_master_state();
     let app = build_router(state, None);
@@ -658,6 +725,126 @@ async fn list_snapshots_returns_matching_snapshots() {
     assert_eq!(v.as_array().unwrap().len(), 1);
     assert_eq!(v[0]["instanceID"], "i-list-1");
     assert_eq!(v[0]["functionName"], "fn-001");
+}
+
+#[tokio::test]
+async fn list_snapshots_returns_protobuf_metadata_bytes() {
+    let state = test_master_state();
+    state.instances.upsert_instance(
+        "/instances/pb-1",
+        serde_json::json!({
+            "id": "pb-1",
+            "function_name": "fn-pb",
+            "tenant": "t1",
+            "state": "FAILED",
+            "created_at_ms": 9,
+            "updated_at_ms": 20,
+            "functionProxyID": "proxy-a",
+            "instanceStatus": { "msg": "boom" }
+        }),
+    );
+    state.instances.upsert_instance(
+        "/instances/pb-2",
+        serde_json::json!({
+            "id": "pb-2",
+            "function_name": "fn-pb",
+            "tenant": "t1",
+            "state": "EXITED",
+            "created_at_ms": 10,
+            "updated_at_ms": 30,
+            "functionProxyID": "proxy-b",
+            "instanceStatus": { "msg": "done" }
+        }),
+    );
+    let app = build_router(state, None);
+
+    let json_list = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/list-snapshots")
+                .body(Body::from("fn-pb"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let json_list_body = axum::body::to_bytes(json_list.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json_list_value: serde_json::Value = serde_json::from_slice(&json_list_body).unwrap();
+    let expected_order: Vec<String> = json_list_value
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["instanceID"].as_str().unwrap().to_string())
+        .collect();
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/list-snapshots")
+                .header("Type", "protobuf")
+                .body(Body::from("fn-pb"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("content-type").unwrap(),
+        "application/x-protobuf"
+    );
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let mut expected = Vec::new();
+    for instance_id in expected_order {
+        let query_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/query-snapshot")
+                    .header("Type", "protobuf")
+                    .body(Body::from(instance_id))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let query_body = axum::body::to_bytes(query_resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        expected.extend_from_slice(&query_body);
+    }
+    assert_eq!(body.as_ref(), expected.as_slice());
+}
+
+#[tokio::test]
+async fn list_snapshots_protobuf_zero_match_returns_empty_body() {
+    let state = test_master_state();
+    let app = build_router(state, None);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/list-snapshots")
+                .header("Type", "protobuf")
+                .body(Body::from("fn-missing"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("content-type").unwrap(),
+        "application/x-protobuf"
+    );
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(body.is_empty());
 }
 
 #[tokio::test]
