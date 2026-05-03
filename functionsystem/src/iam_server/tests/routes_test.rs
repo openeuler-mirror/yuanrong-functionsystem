@@ -306,6 +306,20 @@ async fn get_v1_token_auth_requires_metastore() {
 }
 
 #[tokio::test]
+async fn legacy_prefixed_token_require_returns_bad_request_when_iam_disabled() {
+    let mut cfg = base_config();
+    cfg.enable_iam = false;
+    let router = app(cfg, None);
+    let req = Request::builder()
+        .uri("/iam-server/v1/token/require")
+        .header("x-tenant-id", "t1")
+        .body(Body::empty())
+        .unwrap();
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn get_v1_token_abandon_missing_tenant_is_bad_request() {
     let cfg = base_config();
     let router = app(cfg, None);

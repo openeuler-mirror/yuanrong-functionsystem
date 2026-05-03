@@ -57,6 +57,14 @@ async fn read_json(res: axum::response::Response) -> Value {
     serde_json::from_slice(&body).unwrap_or(Value::Null)
 }
 
+fn header_str<'a>(res: &'a axum::response::Response, name: &str) -> &'a str {
+    res.headers()
+        .get(name)
+        .unwrap_or_else(|| panic!("missing header {name}"))
+        .to_str()
+        .unwrap()
+}
+
 #[tokio::test]
 async fn e2e_auth_token_issue_verify_abandon_flow() {
     let (_addr, ms, _jh) = spawn_embedded_metastore().await;
@@ -272,7 +280,7 @@ async fn e2e_auth_rejects_invalid_token_on_token_auth_route() {
         )
         .await
         .unwrap();
-    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
@@ -295,4 +303,103 @@ async fn e2e_auth_follower_rejects_token_issue() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn legacy_prefixed_token_routes_match_header_contract() {
+    let (_addr, ms, _jh) = spawn_embedded_metastore().await;
+    let cfg = e2e_iam_config();
+    let router = build_router(Arc::new(AppState::new(cfg, Some(ms))));
+
+    let require = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/iam-server/v1/token/require")
+                .header("x-tenant-id", "legacy-tenant")
+                .header("x-role", "editor")
+                .header("x-ttl", "600")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(require.status(), StatusCode::OK);
+    let token = header_str(&require, "x-auth").to_string();
+    assert!(!token.is_empty());
+    assert!(!header_str(&require, "x-salt").is_empty());
+    assert!(header_str(&require, "x-expired-time-span")
+        .parse::<u64>()
+        .unwrap()
+        > 0);
+
+    let verify = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/iam-server/v1/token/auth")
+                .header("x-auth", &token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(verify.status(), StatusCode::OK);
+    assert_eq!(header_str(&verify, "x-tenant-id"), "legacy-tenant");
+    assert_eq!(header_str(&verify, "x-role"), "editor");
+    assert!(header_str(&verify, "x-expired-time-span")
+        .parse::<u64>()
+        .unwrap()
+        > 0);
+
+    let abandon = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/iam-server/v1/token/abandon")
+                .header("x-tenant-id", "legacy-tenant")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(abandon.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn legacy_prefixed_token_auth_returns_forbidden_for_invalid_token() {
+    let (_addr, ms, _jh) = spawn_embedded_metastore().await;
+    let cfg = e2e_iam_config();
+    let router = build_router(Arc::new(AppState::new(cfg, Some(ms))));
+
+    let res = router
+        .oneshot(
+            Request::builder()
+                .uri("/iam-server/v1/token/auth")
+                .header("x-auth", "not.a.valid.token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn legacy_prefixed_credential_require_route_exists() {
+    let (_addr, ms, _jh) = spawn_embedded_metastore().await;
+    let cfg = e2e_iam_config();
+    let router = build_router(Arc::new(AppState::new(cfg, Some(ms))));
+
+    let res = router
+        .oneshot(
+            Request::builder()
+                .uri("/iam-server/v1/credential/require")
+                .header("x-tenant-id", "legacy-credential-tenant")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
 }

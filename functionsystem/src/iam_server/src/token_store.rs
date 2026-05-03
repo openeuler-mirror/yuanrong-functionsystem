@@ -13,7 +13,7 @@ use yr_metastore_client::MetaStoreClient;
 
 use crate::aksk::AkskRecord;
 use crate::config::IamConfig;
-use crate::token::{TokenClaims, TokenManager};
+use crate::token::{IssuedToken, TokenClaims, TokenManager};
 
 const MAX_POSITIVE_CACHE_SECS: u64 = 60;
 
@@ -101,20 +101,32 @@ impl TokenStore {
         role: &str,
         ttl: Duration,
     ) -> YrResult<String> {
-        let token = TokenManager::issue(ms, cfg, tenant_id, role, ttl).await?;
-        if let Ok(claims) = TokenManager::parse_and_verify(cfg, &token) {
-            let valid_until = Self::cache_valid_until(&claims);
-            let mut g = self.by_token.write().expect("token cache lock");
-            g.retain(|_, v| v.claims.tenant_id != tenant_id);
-            g.insert(
-                token.clone(),
-                CacheEntry {
-                    claims,
-                    valid_until,
-                },
-            );
-        }
-        Ok(token)
+        Ok(self
+            .issue_with_metadata(ms, cfg, tenant_id, role, ttl)
+            .await?
+            .token)
+    }
+
+    pub async fn issue_with_metadata(
+        &self,
+        ms: &mut MetaStoreClient,
+        cfg: &IamConfig,
+        tenant_id: &str,
+        role: &str,
+        ttl: Duration,
+    ) -> YrResult<IssuedToken> {
+        let issued = TokenManager::issue_with_metadata(ms, cfg, tenant_id, role, ttl).await?;
+        let valid_until = Self::cache_valid_until(&issued.claims);
+        let mut g = self.by_token.write().expect("token cache lock");
+        g.retain(|_, v| v.claims.tenant_id != tenant_id);
+        g.insert(
+            issued.token.clone(),
+            CacheEntry {
+                claims: issued.claims.clone(),
+                valid_until,
+            },
+        );
+        Ok(issued)
     }
 
     pub async fn abandon(

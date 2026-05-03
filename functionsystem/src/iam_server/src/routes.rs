@@ -43,6 +43,22 @@ fn err_json(status: StatusCode, msg: impl Into<String>) -> Response {
         .into_response()
 }
 
+fn legacy_text(status: StatusCode, body: impl Into<String>) -> Response {
+    (status, body.into()).into_response()
+}
+
+fn legacy_ok(headers: &[(&str, String)]) -> Response {
+    let mut response = legacy_text(StatusCode::OK, "OK");
+    for (name, value) in headers {
+        if let Ok(header_name) = axum::http::header::HeaderName::from_bytes(name.as_bytes()) {
+            if let Ok(header_value) = axum::http::HeaderValue::from_str(value) {
+                response.headers_mut().insert(header_name, header_value);
+            }
+        }
+    }
+    response
+}
+
 fn map_yr_err(e: YrError) -> Response {
     let status = match &e {
         YrError::Internal(s) if s.contains("expired") || s.contains("not present") => {
@@ -59,6 +75,22 @@ fn map_yr_err(e: YrError) -> Response {
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     err_json(status, e.to_string())
+}
+
+fn legacy_token_err(e: YrError) -> Response {
+    let status = match &e {
+        YrError::Internal(s)
+            if s.contains("expired")
+                || s.contains("not present")
+                || s.contains("malformed")
+                || s.contains("invalid token") =>
+        {
+            StatusCode::FORBIDDEN
+        }
+        YrError::Serialization(_) => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    legacy_text(status, e.to_string())
 }
 
 async fn lock_meta(
@@ -106,16 +138,16 @@ pub async fn healthy(State(state): State<Arc<AppState>>, headers: HeaderMap) -> 
 
 pub async fn token_auth(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if !state.config.enable_iam {
-        return err_json(StatusCode::SERVICE_UNAVAILABLE, "IAM disabled");
+        return legacy_text(StatusCode::BAD_REQUEST, "iam is not enabled");
     }
     if !matches!(
         state.config.iam_credential_type,
         IamCredentialType::Token | IamCredentialType::Both
     ) {
-        return err_json(StatusCode::NOT_FOUND, "token credential mode disabled");
+        return legacy_text(StatusCode::BAD_REQUEST, "iam cred type is error");
     }
     let Some(token) = header(&headers, "x-auth") else {
-        return err_json(StatusCode::BAD_REQUEST, "missing X-Auth");
+        return legacy_text(StatusCode::BAD_REQUEST, "verify token failed, parse token from headerMap failed.");
     };
     let mut ms = match lock_meta(&state).await {
         Ok(g) => g,
@@ -126,31 +158,42 @@ pub async fn token_auth(State(state): State<Arc<AppState>>, headers: HeaderMap) 
         .verify(&mut ms, &state.config, token)
         .await
     {
-        Ok(claims) => ok_json(json!({
-            "tenant_id": claims.tenant_id,
-            "role": claims.role,
-            "iat": claims.iat,
-            "exp": claims.exp,
-        })),
-        Err(e) => map_yr_err(e),
+        Ok(claims) => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let mut extra = vec![
+                ("x-tenant-id", claims.tenant_id),
+                (
+                    "x-expired-time-span",
+                    claims.exp.saturating_sub(now).to_string(),
+                ),
+            ];
+            if !claims.role.is_empty() {
+                extra.push(("x-role", claims.role));
+            }
+            legacy_ok(&extra)
+        }
+        Err(e) => legacy_token_err(e),
     }
 }
 
 pub async fn token_require(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if !state.config.enable_iam {
-        return err_json(StatusCode::SERVICE_UNAVAILABLE, "IAM disabled");
+        return legacy_text(StatusCode::BAD_REQUEST, "iam is not enabled");
     }
     if !matches!(
         state.config.iam_credential_type,
         IamCredentialType::Token | IamCredentialType::Both
     ) {
-        return err_json(StatusCode::NOT_FOUND, "token credential mode disabled");
+        return legacy_text(StatusCode::BAD_REQUEST, "iam cred type is error");
     }
     if !state.require_leader() {
-        return err_json(StatusCode::SERVICE_UNAVAILABLE, "not leader");
+        return legacy_text(StatusCode::SERVICE_UNAVAILABLE, "not leader");
     }
     let Some(tenant) = header(&headers, "x-tenant-id") else {
-        return err_json(StatusCode::BAD_REQUEST, "missing X-Tenant-ID");
+        return legacy_text(StatusCode::BAD_REQUEST, "require token failed, parse TenantID from headerMap failed.");
     };
     let role = header(&headers, "x-role").unwrap_or("default");
     let ttl_secs = header(&headers, "x-ttl")
@@ -163,11 +206,15 @@ pub async fn token_require(State(state): State<Arc<AppState>>, headers: HeaderMa
     };
     match state
         .token_store
-        .issue(&mut ms, &state.config, tenant, role, ttl_secs)
+        .issue_with_metadata(&mut ms, &state.config, tenant, role, ttl_secs)
         .await
     {
-        Ok(token) => ok_json(json!({ "token": token })),
-        Err(e) => map_yr_err(e),
+        Ok(issued) => legacy_ok(&[
+            ("x-auth", issued.token),
+            ("x-salt", issued.salt),
+            ("x-expired-time-span", issued.claims.exp.to_string()),
+        ]),
+        Err(e) => legacy_text(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
 
@@ -221,19 +268,19 @@ pub async fn token_refresh(State(state): State<Arc<AppState>>, headers: HeaderMa
 
 pub async fn token_abandon(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response {
     if !state.config.enable_iam {
-        return err_json(StatusCode::SERVICE_UNAVAILABLE, "IAM disabled");
+        return legacy_text(StatusCode::BAD_REQUEST, "iam is not enabled");
     }
     if !matches!(
         state.config.iam_credential_type,
         IamCredentialType::Token | IamCredentialType::Both
     ) {
-        return err_json(StatusCode::NOT_FOUND, "token credential mode disabled");
+        return legacy_text(StatusCode::BAD_REQUEST, "iam cred type is error");
     }
     if !state.require_leader() {
-        return err_json(StatusCode::SERVICE_UNAVAILABLE, "not leader");
+        return legacy_text(StatusCode::SERVICE_UNAVAILABLE, "not leader");
     }
     let Some(tenant) = header(&headers, "x-tenant-id") else {
-        return err_json(StatusCode::BAD_REQUEST, "missing X-Tenant-ID");
+        return legacy_text(StatusCode::BAD_REQUEST, "abandon token failed, parse tenantID from headerMap failed.");
     };
     let mut ms = match lock_meta(&state).await {
         Ok(g) => g,
@@ -244,8 +291,8 @@ pub async fn token_abandon(State(state): State<Arc<AppState>>, headers: HeaderMa
         .abandon(&mut ms, &state.config, tenant)
         .await
     {
-        Ok(()) => ok_json(json!({ "abandoned": true })),
-        Err(e) => map_yr_err(e),
+        Ok(()) => legacy_text(StatusCode::OK, "OK"),
+        Err(e) => legacy_text(StatusCode::NOT_FOUND, e.to_string()),
     }
 }
 
@@ -615,7 +662,6 @@ pub async fn v1_tokens_get(
             Ok(claims) => ok_json(json!({
                 "tenant_id": claims.tenant_id,
                 "role": claims.role,
-                "iat": claims.iat,
                 "exp": claims.exp,
             })),
             Err(e) => map_yr_err(e),
@@ -626,7 +672,6 @@ pub async fn v1_tokens_get(
             Ok(Some(c)) => ok_json(json!({
                 "tenant_id": c.tenant_id,
                 "role": c.role,
-                "iat": c.iat,
                 "exp": c.exp,
             })),
             Ok(None) => err_json(StatusCode::NOT_FOUND, "no active token for tenant"),
@@ -993,5 +1038,11 @@ pub fn build_router(state: Arc<AppState>) -> Router<()> {
         .route("/v1/credential/require", get(credential_require))
         .route("/v1/credential/auth", get(credential_auth))
         .route("/v1/credential/abandon", get(credential_abandon))
+        .route("/iam-server/v1/token/auth", get(token_auth))
+        .route("/iam-server/v1/token/require", get(token_require))
+        .route("/iam-server/v1/token/abandon", get(token_abandon))
+        .route("/iam-server/v1/credential/require", get(credential_require))
+        .route("/iam-server/v1/credential/auth", get(credential_auth))
+        .route("/iam-server/v1/credential/abandon", get(credential_abandon))
         .with_state(state)
 }

@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde_json::json;
 use yr_iam::config::{ElectionMode, IamConfig, IamCredentialType};
 use yr_iam::routes::{CodeExchangeBody, LoginBody, TokenExchangeBody};
@@ -22,13 +24,21 @@ fn test_iam_config() -> IamConfig {
 }
 
 #[test]
-fn mint_token_has_payload_and_signature_segments() {
+fn mint_token_has_cxx_jwt_shape() {
     let cfg = test_iam_config();
     let token = TokenManager::mint(&cfg, "t1", "admin", Duration::from_secs(600)).unwrap();
     let parts: Vec<&str> = token.split('.').collect();
-    assert_eq!(parts.len(), 2);
-    assert!(!parts[0].is_empty());
-    assert_eq!(parts[1].len(), 64);
+    assert_eq!(parts.len(), 3);
+    let header = String::from_utf8(URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
+    let payload = String::from_utf8(URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
+    let header_json: serde_json::Value = serde_json::from_str(&header).unwrap();
+    let payload_json: serde_json::Value = serde_json::from_str(&payload).unwrap();
+    assert_eq!(header_json["alg"], json!("HS256"));
+    assert_eq!(header_json["typ"], json!("JWT"));
+    assert_eq!(payload_json["sub"], json!("t1"));
+    assert_eq!(payload_json["role"], json!("admin"));
+    assert!(payload_json["exp"].as_u64().unwrap() > 0);
+    assert!(!parts[2].is_empty());
 }
 
 #[test]
@@ -46,7 +56,7 @@ fn parse_and_verify_round_trips_minted_token() {
     let claims = TokenManager::parse_and_verify(&cfg, &token).unwrap();
     assert_eq!(claims.tenant_id, "tenant-x");
     assert_eq!(claims.role, "role1");
-    assert!(claims.exp > claims.iat);
+    assert!(claims.exp > 0);
 }
 
 #[test]
