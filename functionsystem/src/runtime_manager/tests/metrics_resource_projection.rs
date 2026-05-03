@@ -3,10 +3,11 @@ use std::path::PathBuf;
 
 use yr_runtime_manager::config::Config;
 use yr_runtime_manager::metrics::{
-    build_disk_vectors, build_gpu_vectors_from_ids, build_npu_count_vectors_from_ids,
-    build_npu_topology_vectors_from_json, build_numa_vectors, build_resource_projection,
-    collect_node_labels_from_sources, collect_numa_cpu_counts_from_root, InstanceMetric,
-    NodeMetricsSample,
+    build_disk_vectors, build_gpu_vectors_from_ids, build_gpu_vectors_from_ids_visible,
+    build_npu_count_vectors_from_ids, build_npu_count_vectors_from_ids_visible,
+    build_npu_topology_vectors_from_json, build_npu_topology_vectors_from_json_visible,
+    build_numa_vectors, build_resource_projection, collect_node_labels_from_sources,
+    collect_numa_cpu_counts_from_root, parse_gpu_query_csv, InstanceMetric, NodeMetricsSample,
 };
 
 fn test_config() -> Config {
@@ -290,6 +291,50 @@ fn gpu_vectors_are_available_for_flag_gated_projection_inputs() {
 }
 
 #[test]
+fn gpu_query_csv_parser_skips_malformed_rows_and_keeps_first_model() {
+    let csv = "\
+0, NVIDIA A800, 81920, 4096\n\
+bad,row\n\
+2, NVIDIA A800, 81920, 0\n";
+
+    let (name, count, vector) = parse_gpu_query_csv("node-a", csv, None).expect("gpu vectors");
+
+    assert_eq!(name, "GPU/NVIDIA A800");
+    assert_eq!(count, 2.0);
+    assert_eq!(
+        vector.values["ids"].vectors["node-a"].values,
+        vec![0.0, 2.0]
+    );
+    assert_eq!(
+        vector.values["HBM"].vectors["node-a"].values,
+        vec![81920.0, 81920.0]
+    );
+    assert_eq!(
+        vector.values["usedHBM"].vectors["node-a"].values,
+        vec![4096.0, 0.0]
+    );
+}
+
+#[test]
+fn gpu_visible_devices_filter_matches_cpp_slot_semantics() {
+    let (name, count, vector) =
+        build_gpu_vectors_from_ids_visible("node-a", &[3, 5], Some("1")).expect("gpu visible filter");
+
+    assert_eq!(name, "GPU/cuda");
+    assert_eq!(count, 1.0);
+    assert_eq!(vector.values["ids"].vectors["node-a"].values, vec![5.0]);
+}
+
+#[test]
+fn gpu_visible_devices_invalid_env_falls_back_to_detected_result() {
+    let (_, count, vector) =
+        build_gpu_vectors_from_ids_visible("node-a", &[3, 5], Some("oops")).expect("gpu fallback");
+
+    assert_eq!(count, 2.0);
+    assert_eq!(vector.values["ids"].vectors["node-a"].values, vec![3.0, 5.0]);
+}
+
+#[test]
 fn npu_topology_json_fallback_matches_cpp_node_filter_and_partition_shape() {
     let json = r#"{
         "worker-a": {
@@ -323,6 +368,41 @@ fn npu_topology_json_fallback_matches_cpp_node_filter_and_partition_shape() {
         Some("0,1")
     );
     assert!(build_npu_topology_vectors_from_json("missing-node", json).is_none());
+}
+
+#[test]
+fn npu_count_visible_devices_filter_matches_cpp_slot_semantics() {
+    let (name, count, vector) = build_npu_count_vectors_from_ids_visible("node-a", &[10, 12], Some("1"))
+        .expect("npu count visible filter");
+
+    assert_eq!(name, "NPU/Ascend");
+    assert_eq!(count, 1.0);
+    assert_eq!(vector.values["ids"].vectors["node-a"].values, vec![12.0]);
+    assert_eq!(vector.values["HBM"].vectors["node-a"].values, vec![1000.0]);
+}
+
+#[test]
+fn npu_topology_visible_devices_filter_matches_cpp_slot_semantics() {
+    let json = r#"{
+        "worker-a": {
+            "nodeName": "node-a",
+            "number": 2,
+            "vDeviceIDs": [3, 5],
+            "vDevicePartition": ["left", "right"]
+        }
+    }"#;
+
+    let (name, count, vector) =
+        build_npu_topology_vectors_from_json_visible("node-a", json, Some("1"))
+            .expect("topology visible filter");
+
+    assert_eq!(name, "NPU");
+    assert_eq!(count, 1.0);
+    assert_eq!(vector.values["ids"].vectors["node-a"].values, vec![5.0]);
+    assert_eq!(
+        vector.heterogeneous_info.get("partition").map(String::as_str),
+        Some("right")
+    );
 }
 
 #[test]

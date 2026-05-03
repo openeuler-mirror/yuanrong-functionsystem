@@ -692,7 +692,15 @@ pub fn build_gpu_vectors_from_ids(
     node_id: &str,
     ids: &[u32],
 ) -> Option<(String, f64, VectorResource)> {
-    build_xpu_vectors(XpuVectorSpec {
+    build_gpu_vectors_from_ids_visible(node_id, ids, None)
+}
+
+pub fn build_gpu_vectors_from_ids_visible(
+    node_id: &str,
+    ids: &[u32],
+    visible_devices: Option<&str>,
+) -> Option<(String, f64, VectorResource)> {
+    let built = build_xpu_vectors(XpuVectorSpec {
         node_id,
         resource_type: "GPU",
         product_model: Some("cuda"),
@@ -707,12 +715,21 @@ pub fn build_gpu_vectors_from_ids(
         health: &[],
         partition: &[],
         dev_cluster_ips: &[],
-    })
+    })?;
+    Some(apply_visible_device_filter(built, visible_devices))
 }
 
 pub fn build_npu_count_vectors_from_ids(
     node_id: &str,
     ids: &[u32],
+) -> Option<(String, f64, VectorResource)> {
+    build_npu_count_vectors_from_ids_visible(node_id, ids, None)
+}
+
+pub fn build_npu_count_vectors_from_ids_visible(
+    node_id: &str,
+    ids: &[u32],
+    visible_devices: Option<&str>,
 ) -> Option<(String, f64, VectorResource)> {
     if ids.is_empty() {
         return None;
@@ -721,7 +738,7 @@ pub fn build_npu_count_vectors_from_ids(
     let zeros = vec![0; ids.len()];
     let streams = vec![110; ids.len()];
 
-    build_xpu_vectors(XpuVectorSpec {
+    let built = build_xpu_vectors(XpuVectorSpec {
         node_id,
         resource_type: "NPU",
         product_model: Some("Ascend"),
@@ -736,12 +753,21 @@ pub fn build_npu_count_vectors_from_ids(
         health: &zeros,
         partition: &[],
         dev_cluster_ips: &[],
-    })
+    })?;
+    Some(apply_visible_device_filter(built, visible_devices))
 }
 
 pub fn build_npu_topology_vectors_from_json(
     node_id: &str,
     json: &str,
+) -> Option<(String, f64, VectorResource)> {
+    build_npu_topology_vectors_from_json_visible(node_id, json, None)
+}
+
+pub fn build_npu_topology_vectors_from_json_visible(
+    node_id: &str,
+    json: &str,
+    visible_devices: Option<&str>,
 ) -> Option<(String, f64, VectorResource)> {
     let serde_json::Value::Object(nodes) = serde_json::from_str::<serde_json::Value>(json).ok()?
     else {
@@ -760,7 +786,7 @@ pub fn build_npu_topology_vectors_from_json(
         if number == 0 || number != ids.len() || number != partition.len() {
             continue;
         }
-        return build_xpu_vectors(XpuVectorSpec {
+        let built = build_xpu_vectors(XpuVectorSpec {
             node_id,
             resource_type: "NPU",
             product_model: None,
@@ -775,7 +801,8 @@ pub fn build_npu_topology_vectors_from_json(
             health: &[],
             partition: &partition,
             dev_cluster_ips: &[],
-        });
+        })?;
+        return Some(apply_visible_device_filter(built, visible_devices));
     }
     None
 }
@@ -872,12 +899,23 @@ fn collect_xpu_vectors(cfg: &Config) -> Vec<(String, f64, VectorResource)> {
     if !NPU_COLLECT_MODES.contains(&mode.as_str()) {
         return out;
     }
+    let visible = env::var("ASCEND_RT_VISIBLE_DEVICES").ok();
     let npu = if mode == "count" {
-        build_npu_count_vectors_from_ids(&cfg.node_id, &collect_numeric_device_ids("davinci"))
+        build_npu_count_vectors_from_ids_visible(
+            &cfg.node_id,
+            &collect_numeric_device_ids("davinci"),
+            visible.as_deref(),
+        )
     } else {
         fs::read_to_string(&cfg.npu_device_info_path)
             .ok()
-            .and_then(|json| build_npu_topology_vectors_from_json(&cfg.node_id, &json))
+            .and_then(|json| {
+                build_npu_topology_vectors_from_json_visible(
+                    &cfg.node_id,
+                    &json,
+                    visible.as_deref(),
+                )
+            })
     };
     if let Some(npu) = npu {
         out.push(npu);
@@ -896,7 +934,18 @@ fn collect_gpu_vectors_from_nvidia_smi(node_id: &str) -> Option<(String, f64, Ve
     if !output.status.success() {
         return None;
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_gpu_query_csv(
+        node_id,
+        String::from_utf8_lossy(&output.stdout).as_ref(),
+        env::var("CUDA_VISIBLE_DEVICES").ok().as_deref(),
+    )
+}
+
+pub fn parse_gpu_query_csv(
+    node_id: &str,
+    stdout: &str,
+    visible_devices: Option<&str>,
+) -> Option<(String, f64, VectorResource)> {
     let mut ids = Vec::new();
     let mut product_model = None;
     let mut hbm = Vec::new();
@@ -913,19 +962,15 @@ fn collect_gpu_vectors_from_nvidia_smi(node_id: &str) -> Option<(String, f64, Ve
         if product_model.is_none() && !columns[1].is_empty() {
             product_model = Some(columns[1].to_string());
         }
-        if let Ok(total) = columns[2].parse::<u32>() {
-            hbm.push(total);
-        }
-        if let Ok(used) = columns[3].parse::<u32>() {
-            used_hbm.push(used);
-        }
+        hbm.push(columns[2].parse::<u32>().unwrap_or_default());
+        used_hbm.push(columns[3].parse::<u32>().unwrap_or_default());
     }
     if ids.is_empty() {
         return None;
     }
     let zeros = vec![0; ids.len()];
     let streams = vec![110; ids.len()];
-    build_xpu_vectors(XpuVectorSpec {
+    let built = build_xpu_vectors(XpuVectorSpec {
         node_id,
         resource_type: "GPU",
         product_model: product_model.as_deref().or(Some("cuda")),
@@ -940,7 +985,8 @@ fn collect_gpu_vectors_from_nvidia_smi(node_id: &str) -> Option<(String, f64, Ve
         health: &zeros,
         partition: &[],
         dev_cluster_ips: &[],
-    })
+    })?;
+    Some(apply_visible_device_filter(built, visible_devices))
 }
 
 fn collect_numeric_device_ids(prefix: &str) -> Vec<u32> {
@@ -985,6 +1031,77 @@ fn json_string_array(value: &serde_json::Value) -> Option<Vec<String>> {
         out.push(item.as_str()?.to_string());
     }
     Some(out)
+}
+
+fn apply_visible_device_filter(
+    (name, count, mut vector): (String, f64, VectorResource),
+    visible_devices: Option<&str>,
+) -> (String, f64, VectorResource) {
+    let Some(ids) = vector
+        .values
+        .get("ids")
+        .and_then(|category| category.vectors.values().next())
+        .map(|values| values.values.clone())
+    else {
+        return (name, count, vector);
+    };
+    let Some(slots) = parse_visible_device_slots(visible_devices, ids.len()) else {
+        return (name, count, vector);
+    };
+
+    for category in vector.values.values_mut() {
+        for values in category.vectors.values_mut() {
+            values.values = slots
+                .iter()
+                .filter_map(|idx| values.values.get(*idx).copied())
+                .collect();
+        }
+    }
+    filter_heterogeneous_info_list(&mut vector.heterogeneous_info, "partition", &slots);
+    filter_heterogeneous_info_list(&mut vector.heterogeneous_info, "dev_cluster_ips", &slots);
+    let filtered_count = vector
+        .values
+        .get("ids")
+        .and_then(|category| category.vectors.values().next())
+        .map(|values| values.values.len() as f64)
+        .unwrap_or(count);
+    (name, filtered_count, vector)
+}
+
+fn parse_visible_device_slots(raw: Option<&str>, detected_count: usize) -> Option<Vec<usize>> {
+    let raw = raw?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let mut slots = Vec::new();
+    for item in raw.split(',').map(str::trim) {
+        let Ok(slot) = item.parse::<usize>() else {
+            return None;
+        };
+        slots.push(slot);
+    }
+    if slots.is_empty() || slots.len() > detected_count || slots.iter().any(|slot| *slot >= detected_count) {
+        return None;
+    }
+    Some(slots)
+}
+
+fn filter_heterogeneous_info_list(
+    info: &mut BTreeMap<String, String>,
+    key: &str,
+    slots: &[usize],
+) {
+    let Some(raw) = info.get(key).cloned() else {
+        return;
+    };
+    let items = raw.split(',').map(str::to_string).collect::<Vec<_>>();
+    let filtered = slots
+        .iter()
+        .filter_map(|idx| items.get(*idx).cloned())
+        .collect::<Vec<_>>();
+    if !filtered.is_empty() {
+        info.insert(key.to_string(), filtered.join(","));
+    }
 }
 
 fn parse_disk_resource_entry(disk: &serde_json::Value) -> Option<(String, u64, String)> {
