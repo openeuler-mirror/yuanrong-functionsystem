@@ -177,3 +177,38 @@ So the final release claim should remain:
 Rust FunctionSystem is a black-box replacement for the current accepted upper-layer build/pack/install/ST lane,
 but not a byte-for-byte or file-inventory-identical replacement for every external package consumer.
 ```
+
+
+## Final policy after follow-up review
+
+The remaining package inventory drift is now treated as an explicit release-policy boundary, not an unexamined implementation gap:
+
+- Do **not** add `libssl.so.3` or `libcrypto.so.3` as symlinks to the Rust package without an ABI-compatible OpenSSL 3 provider. The current Rust lane packages OpenSSL 1.1 libraries and the accepted upper-layer lane does not require the missing OpenSSL 3 sonames.
+- Do **not** add a fake `libyaml_tool.so` shim without a confirmed external file-level consumer. Rust uses serde YAML internally and current build/pack/install/ST flows do not load this helper.
+- Keep Rust-only extras documented as compatible-superset entries unless a concrete consumer requires minimal inventory identity.
+
+Therefore the deliverable claim remains intentionally scoped:
+
+```text
+Rust FunctionSystem is accepted as a black-box replacement for the current official upper-layer build/pack/install/ST lane. It is not claimed to be byte-for-byte or file-inventory-identical to the C++ package for arbitrary external consumers.
+```
+
+### Final follow-up artifact hashes
+
+The final `masterinfo` Type follow-up preserved the accepted package lane with these hashes:
+
+```text
+c575ad7db3d28fa94f190364424037e2ad90bd23bb2be3e9dec798beb4639c0d  output/yr-functionsystem-v0.0.0.tar.gz
+b5f783a527576182f1581f2c6275bd42e01395b7d5c6ff09406f52f4219939f9  output/openyuanrong_functionsystem-0.0.0-py3-none-manylinux_2_34_x86_64.whl
+7694438e64df090a955f7518115a0aa7341d2243fedc0487cb70c8b0c35a8d95  output/metrics.tar.gz
+daf66e0702d3d8cba3db4ea09c21fa8df37b680061ab324611767ad7f42c2e8e  output/openyuanrong-v0.0.1.tar.gz
+3a63f3471cc006f81612d0298d9023ff9406308995866fa2f8b0872eb05e9683  output/openyuanrong-0.7.0.dev0-cp39-cp39-manylinux_2_34_x86_64.whl
+```
+
+Final single-shot cpp ST evidence:
+
+```text
+deploy=/tmp/deploy/03041832
+[==========] Running 111 tests from 6 test cases.
+[  PASSED  ] 111 tests.
+```

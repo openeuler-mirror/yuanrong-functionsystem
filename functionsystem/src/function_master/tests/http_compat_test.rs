@@ -846,7 +846,8 @@ async fn masterinfo_returns_cpp_shape_on_root_and_prefixed_routes() {
 #[tokio::test]
 async fn masterinfo_rejects_non_json_type() {
     let state = test_master_state();
-    let app = build_router(state, None);
+    let app = build_router(state.clone(), None);
+    let grpc_app = build_grpc_compat_router(state);
 
     let resp = app
         .oneshot(
@@ -854,6 +855,19 @@ async fn masterinfo_rejects_non_json_type() {
                 .uri("/masterinfo")
                 .header("Type", "protobuf")
                 .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let resp = grpc_app
+        .oneshot(
+            Request::builder()
+                .uri("/global-scheduler/masterinfo")
+                .header("Type", "application/json")
+                .body(Body08::empty())
                 .unwrap(),
         )
         .await

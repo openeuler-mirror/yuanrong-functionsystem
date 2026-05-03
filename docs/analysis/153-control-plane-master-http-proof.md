@@ -17,7 +17,7 @@ This slice is intentionally narrow. It closes the first clean P1 management-API 
 
 - `function_master/global_scheduler/global_sched_driver.cpp`
   - `/masterinfo` is `GET`-only
-  - `Type` must be absent/`json`; unsupported values return `400`
+  - `Type` must be absent/`json` exactly; unsupported values, including `application/json`, return `400`
   - body shape is:
     - `master_address`
     - `meta_store_address`
@@ -202,3 +202,54 @@ What remains open is now narrower and explicit:
 - broader resource-group parity
 - meta/lease/watch edge compatibility
 - IAM byte-level route/body parity
+
+
+## Follow-up exact Type closure
+
+Review after commit `33321db` found that the first `masterinfo` slice accepted any `Type` header containing `json`. The C++ 0.8 handler only accepts an absent `Type` header or exact `Type: json`; every other value returns `400 BAD_REQUEST`.
+
+This follow-up narrows only the `masterinfo` Type gate to the C++ contract:
+
+```text
+Type absent              -> 200 JSON
+Type: json               -> 200 JSON
+Type: protobuf           -> 400 BAD_REQUEST
+Type: application/json   -> 400 BAD_REQUEST
+```
+
+The broader route helper remains unchanged for endpoints whose legacy Rust compatibility tests intentionally use `application/json` or non-json Type headers. This avoids changing unrelated control-plane behavior while closing the concrete `masterinfo` parity gap.
+
+### Final follow-up verification evidence
+
+After narrowing the `masterinfo` Type gate, verification was rerun through the full accepted lane:
+
+```text
+Host targeted test:
+- cargo test -p yr-master --test http_compat_test masterinfo -- --nocapture
+- 3 passed; 0 failed
+
+Host workspace preflight:
+- cargo check --workspace --lib --bins
+- git diff --check
+- both passed
+
+Container targeted test:
+- /workspace/proof_source_replace_0_8/logs/final_masterinfo_type_container_test.log
+- 3 passed; 0 failed
+
+Container build/pack:
+- /workspace/proof_source_replace_0_8/logs/final_masterinfo_type_container_build.log
+- /workspace/proof_source_replace_0_8/logs/final_masterinfo_type_container_pack.log
+- ./run.sh build -j 8 and ./run.sh pack both passed
+
+Proof lane:
+- /workspace/proof_source_replace_0_8/logs/final_masterinfo_type_package_yuanrong.log
+- /workspace/proof_source_replace_0_8/logs/final_masterinfo_type_functionsystem_hashes.txt
+- /workspace/proof_source_replace_0_8/logs/final_masterinfo_type_openyuanrong_hashes.txt
+
+Single-shot cpp ST:
+- deploy=/tmp/deploy/03041832
+- /workspace/proof_source_replace_0_8/logs/final_masterinfo_type_full_cpp_st.log
+- /workspace/proof_source_replace_0_8/logs/final_masterinfo_type_full_cpp_st_evidence.txt
+- 111/111 PASS
+```

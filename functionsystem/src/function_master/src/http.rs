@@ -286,7 +286,7 @@ fn master_info_type_supported(headers: &HeaderMap) -> bool {
     headers
         .get("Type")
         .and_then(|v| v.to_str().ok())
-        .is_none_or(|v| is_json_type(Some(v)))
+        .is_none_or(|v| v == TYPE_JSON)
 }
 
 fn master_info_payload(st: &MasterState) -> Value {
