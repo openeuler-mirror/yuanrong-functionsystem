@@ -1,6 +1,6 @@
 //! Lease grant / revoke / keepalive; expiry deletes keys bound to the lease.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -62,6 +62,61 @@ impl LeaseService {
             .get(&id)
             .map(|r| r.deadline > Instant::now())
             .unwrap_or(false)
+    }
+
+    pub async fn restore_leases(&self, recovered: &[(i64, i64)]) {
+        if recovered.is_empty() {
+            return;
+        }
+        let mut g = self.inner.state.lock().await;
+        let now = Instant::now();
+        for (lease_id, ttl) in recovered {
+            if *lease_id <= 0 {
+                continue;
+            }
+            let ttl_secs = (*ttl).max(1);
+            g.leases.insert(
+                *lease_id,
+                LeaseRecord {
+                    ttl_secs,
+                    deadline: now + Duration::from_secs(ttl_secs as u64),
+                },
+            );
+            g.next_id = g.next_id.max(*lease_id + 1);
+        }
+    }
+
+    pub async fn sync_backup_snapshot(&self, recovered: &[(i64, i64)]) {
+        let mut g = self.inner.state.lock().await;
+        let now = Instant::now();
+        let remote_ids: HashSet<i64> = recovered
+            .iter()
+            .filter_map(|(lease_id, _)| (*lease_id > 0).then_some(*lease_id))
+            .collect();
+        g.leases.retain(|lease_id, _| remote_ids.contains(lease_id));
+        for (lease_id, ttl) in recovered {
+            if *lease_id <= 0 {
+                continue;
+            }
+            let ttl_secs = (*ttl).max(1);
+            g.leases.insert(
+                *lease_id,
+                LeaseRecord {
+                    ttl_secs,
+                    deadline: now + Duration::from_secs(ttl_secs as u64),
+                },
+            );
+            g.next_id = g.next_id.max(*lease_id + 1);
+        }
+    }
+
+    pub async fn apply_backup_put(&self, lease_id: i64, ttl: i64) {
+        self.restore_leases(&[(lease_id, ttl)]).await;
+    }
+
+    pub async fn apply_backup_delete(&self, lease_id: i64) {
+        let mut g = self.inner.state.lock().await;
+        g.leases.remove(&lease_id);
     }
 
     pub async fn grant(

@@ -3,6 +3,7 @@
 use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::Stream;
@@ -12,7 +13,9 @@ use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
 
-use crate::backup::{recover_from_etcd, start_backup, BackupHandle, BackupOp};
+use crate::backup::{
+    recover_from_etcd, recover_leases_snapshot_from_etcd, start_backup, BackupHandle, BackupOp,
+};
 use crate::config::{MetaStoreRole, MetaStoreServerConfig};
 use crate::error::MetaStoreError;
 use crate::kv_store::KvStore;
@@ -35,6 +38,7 @@ use crate::pb::etcdserverpb::{
 use crate::pb::etcdserverpb::{kv_server::{Kv, KvServer}, ResponseHeader};
 use crate::pb::mvccpb::KeyValue;
 use crate::watch_service::WatchHub;
+use tracing::warn;
 
 /// Embedded MetaStore: in-memory KV + revision + watch + lease + optional etcd backup.
 #[derive(Clone)]
@@ -50,6 +54,10 @@ pub(crate) struct Inner {
     pub(crate) backup: Option<BackupHandle>,
     pub(crate) cfg: MetaStoreServerConfig,
     pub(crate) next_watch_id: Arc<AtomicI64>,
+}
+
+fn should_resync_after_idle_timeout(idle_timeouts: u64, idle_timeout_secs: u64) -> bool {
+    idle_timeout_secs > 0 && idle_timeouts >= idle_timeout_secs
 }
 
 impl MetaStoreServer {
@@ -72,6 +80,8 @@ impl MetaStoreServer {
 
         let watch = WatchHub::new();
         let lease = LeaseService::new(backup.clone(), cfg.role);
+        let recovered_leases = recover_leases_snapshot_from_etcd(&cfg).await?;
+        lease.sync_backup_snapshot(&recovered_leases.leases).await;
         let lease_dyn: Arc<dyn LeaseValidator> = Arc::new(lease.clone());
         lease.clone().spawn_expiry(kv.clone(), watch.clone(), cfg.clone());
 
@@ -90,6 +100,7 @@ impl MetaStoreServer {
 
         if slave_sync {
             s.spawn_slave_watcher();
+            s.spawn_slave_lease_watcher(recovered_leases.revision);
         }
 
         if s.inner.cfg.role == MetaStoreRole::Master {
@@ -175,6 +186,128 @@ impl MetaStoreServer {
         });
     }
 
+    fn spawn_slave_lease_watcher(&self, start_revision: i64) {
+        let lease = self.inner.lease.clone();
+        let cfg = self.inner.cfg.clone();
+        tokio::spawn(async move {
+            use etcd_client::WatchOptions;
+            let mut watch_revision = start_revision;
+            let mut backoff = Duration::from_millis(200);
+            let mut need_snapshot_sync = false;
+            loop {
+                if need_snapshot_sync {
+                    match recover_leases_snapshot_from_etcd(&cfg).await {
+                        Ok(snapshot) => {
+                            lease.sync_backup_snapshot(&snapshot.leases).await;
+                            watch_revision = snapshot.revision;
+                            backoff = Duration::from_millis(200);
+                        }
+                        Err(err) => {
+                            warn!(error = %err, "slave lease resync failed");
+                            tokio::time::sleep(backoff).await;
+                            backoff = (backoff * 2).min(Duration::from_secs(3));
+                            continue;
+                        }
+                    }
+                }
+                let sl: Vec<&str> = cfg.etcd_endpoints.iter().map(|s| s.as_str()).collect();
+                let client = match etcd_client::Client::connect(&sl, None).await {
+                    Ok(client) => client,
+                    Err(err) => {
+                        warn!(error = %err, "slave lease watch connect failed");
+                        need_snapshot_sync = true;
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(Duration::from_secs(3));
+                        continue;
+                    }
+                };
+                let mut wc = client.watch_client();
+                let opts = WatchOptions::new()
+                    .with_prefix()
+                    .with_progress_notify()
+                    .with_start_revision(watch_revision);
+                let (_w, mut stream) = match wc
+                    .watch(cfg.lease_backup_prefix.as_bytes().to_vec(), Some(opts))
+                    .await
+                {
+                    Ok(stream) => stream,
+                    Err(err) => {
+                        warn!(error = %err, revision = watch_revision, "slave lease watch start failed");
+                        need_snapshot_sync = true;
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(Duration::from_secs(3));
+                        continue;
+                    }
+                };
+                backoff = Duration::from_millis(200);
+                let mut idle_timeouts = 0_u64;
+                loop {
+                    let msg = match tokio::time::timeout(
+                        Duration::from_secs(1),
+                        stream.message(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(m)) => m,
+                        Ok(Err(err)) => {
+                            warn!(error = %err, "slave lease watch stream failed");
+                            need_snapshot_sync = true;
+                            break;
+                        }
+                        Err(_) => {
+                            idle_timeouts += 1;
+                            if should_resync_after_idle_timeout(
+                                idle_timeouts,
+                                cfg.lease_watch_idle_resync_secs,
+                            ) {
+                                need_snapshot_sync = true;
+                                break;
+                            }
+                            continue;
+                        }
+                    };
+                    let Some(msg) = msg else {
+                        need_snapshot_sync = true;
+                        break;
+                    };
+                    idle_timeouts = 0;
+                    if let Some(header) = msg.header() {
+                        watch_revision = watch_revision.max(header.revision());
+                    }
+                    for ev in msg.events() {
+                        let Some(kv) = ev.kv() else { continue };
+                        let Ok(full) = std::str::from_utf8(kv.key()) else {
+                            continue;
+                        };
+                        let Some(rest) = full.strip_prefix(&cfg.lease_backup_prefix) else {
+                            continue;
+                        };
+                        let Ok(lease_id) = rest.parse::<i64>() else {
+                            continue;
+                        };
+                        match ev.event_type() {
+                            etcd_client::EventType::Put => {
+                                let Ok((decoded_id, ttl)) =
+                                    crate::backup::decode_persisted_lease(kv.value())
+                                else {
+                                    continue;
+                                };
+                                watch_revision = watch_revision.max(kv.mod_revision());
+                                lease.apply_backup_put(decoded_id, ttl).await;
+                            }
+                            etcd_client::EventType::Delete => {
+                                watch_revision = watch_revision.max(kv.mod_revision());
+                                lease.apply_backup_delete(lease_id).await;
+                            }
+                        }
+                    }
+                }
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(Duration::from_secs(3));
+            }
+        });
+    }
+
     pub(crate) async fn hdr(&self) -> ResponseHeader {
         let rev = self.inner.kv.current_revision().await;
         ResponseHeader {
@@ -228,6 +361,18 @@ impl MetaStoreServer {
             .serve_with_incoming(TcpListenerStream::new(listener))
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_resync_after_idle_timeout;
+
+    #[test]
+    fn idle_timeout_requires_long_silence_before_resync() {
+        assert!(!should_resync_after_idle_timeout(1, 30));
+        assert!(!should_resync_after_idle_timeout(29, 30));
+        assert!(should_resync_after_idle_timeout(30, 30));
     }
 }
 

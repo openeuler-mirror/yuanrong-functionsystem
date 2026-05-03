@@ -26,6 +26,7 @@ pub struct MetaStoreServerConfig {
     pub backup_max_batch_bytes: usize,
     pub backup_max_concurrent_flushes: usize,
     pub backup_max_ops_per_txn: usize,
+    pub lease_watch_idle_resync_secs: u64,
     pub cluster_id: u64,
     pub member_id: u64,
     /// When set, master periodically snapshots full KV state to this path (bincode).
@@ -44,6 +45,7 @@ impl Default for MetaStoreServerConfig {
             backup_max_batch_bytes: DEFAULT_BACKUP_MAX_BATCH_BYTES,
             backup_max_concurrent_flushes: 4,
             backup_max_ops_per_txn: 128,
+            lease_watch_idle_resync_secs: 30,
             cluster_id: 1,
             member_id: 1,
             local_snapshot_path: None,
