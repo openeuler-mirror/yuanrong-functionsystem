@@ -4,9 +4,10 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use axum08::body::Body as Body08;
 use prost::Message;
 use tower::ServiceExt;
-use yr_master::http::build_router;
+use yr_master::http::{build_grpc_compat_router, build_router};
 use yr_master::snapshot::InstanceSnapshot;
 use yr_proto::common::ErrorCode;
 use yr_proto::messages::QueryInstancesInfoResponse;
@@ -538,7 +539,7 @@ async fn query_snapshot_requires_body() {
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
 /// ST: /query-snapshot with instance id returns stored snapshot JSON.
@@ -734,6 +735,154 @@ async fn rgroup_post_returns_json() {
     assert_eq!(v["requestID"], "rg-1");
     assert!(v["groups"].is_array());
     assert_eq!(v["count"], 0);
+}
+
+/// ST: /masterinfo returns the C++ JSON contract on both the dedicated HTTP router
+/// and the combined global-scheduler listener.
+#[tokio::test]
+async fn masterinfo_returns_cpp_shape_on_root_and_prefixed_routes() {
+    let state = test_master_state();
+    state
+        .topology
+        .register_local(
+            "agent-b".into(),
+            "10.0.0.2:1000".into(),
+            "{}".into(),
+            None,
+            "{}".into(),
+        )
+        .await;
+    state
+        .topology
+        .register_local(
+            "agent-a".into(),
+            "10.0.0.1:1000".into(),
+            "{}".into(),
+            None,
+            "{}".into(),
+        )
+        .await;
+    let app = build_router(state.clone(), None);
+    let grpc_app = build_grpc_compat_router(state);
+
+    let http_root = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/masterinfo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let http_prefixed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/global-scheduler/masterinfo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let grpc_root = grpc_app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/masterinfo")
+                .body(Body08::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let grpc_prefixed = grpc_app
+        .oneshot(
+            Request::builder()
+                .uri("/global-scheduler/masterinfo")
+                .body(Body08::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(http_root.status(), StatusCode::OK);
+    assert_eq!(http_prefixed.status(), StatusCode::OK);
+    assert_eq!(grpc_root.status(), StatusCode::OK);
+    assert_eq!(grpc_prefixed.status(), StatusCode::OK);
+
+    let http_root_body = axum::body::to_bytes(http_root.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let http_prefixed_body = axum::body::to_bytes(http_prefixed.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let grpc_root_body = axum08::body::to_bytes(grpc_root.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let grpc_prefixed_body = axum08::body::to_bytes(grpc_prefixed.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let http_root_v: serde_json::Value = serde_json::from_slice(&http_root_body).unwrap();
+    let http_prefixed_v: serde_json::Value = serde_json::from_slice(&http_prefixed_body).unwrap();
+    let grpc_root_v: serde_json::Value = serde_json::from_slice(&grpc_root_body).unwrap();
+    let grpc_prefixed_v: serde_json::Value = serde_json::from_slice(&grpc_prefixed_body).unwrap();
+
+    assert_eq!(http_root_v, http_prefixed_v);
+    assert_eq!(http_root_v, grpc_root_v);
+    assert_eq!(http_root_v, grpc_prefixed_v);
+    assert_eq!(http_root_v["master_address"], "0.0.0.0:8400");
+    assert_eq!(http_root_v["meta_store_address"], "127.0.0.1:2389");
+    assert!(http_root_v["schedule_topo"].get("leader").is_none());
+    let members = http_root_v["schedule_topo"]["members"]
+        .as_array()
+        .expect("members array");
+    let names: Vec<_> = members
+        .iter()
+        .filter_map(|row| row["name"].as_str())
+        .collect();
+    assert_eq!(names, vec!["agent-a", "agent-b"]);
+}
+
+#[tokio::test]
+async fn masterinfo_rejects_non_json_type() {
+    let state = test_master_state();
+    let app = build_router(state, None);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/masterinfo")
+                .header("Type", "protobuf")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn masterinfo_empty_topology_keeps_members_array() {
+    let state = test_master_state();
+    let grpc_app = build_grpc_compat_router(state);
+
+    let resp = grpc_app
+        .oneshot(
+            Request::builder()
+                .uri("/global-scheduler/masterinfo")
+                .body(Body08::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum08::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["schedule_topo"]["members"], serde_json::json!([]));
 }
 
 // --- Prefixed routes (global-scheduler / instance-manager) ---

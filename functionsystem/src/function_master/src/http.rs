@@ -6,6 +6,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use axum08 as axum_compat;
 use prost::Message;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -232,6 +233,118 @@ fn protobuf_http_response(buf: Vec<u8>) -> Response {
         .into_response()
 }
 
+fn current_master_address(st: &MasterState) -> String {
+    format!("{}:{}", st.config.host, st.config.port)
+}
+
+fn current_meta_store_address(st: &MasterState) -> String {
+    let configured = st.config.meta_store_address.trim();
+    if !configured.is_empty() {
+        configured.to_string()
+    } else {
+        format!("127.0.0.1:{}", st.config.meta_store_port)
+    }
+}
+
+fn schedule_topology_json(st: &MasterState) -> Value {
+    let mut topo = serde_json::Map::from_iter([("members".into(), Value::Array(Vec::new()))]);
+    let Some(root) = st.topology.sched_tree().get_root_node() else {
+        return Value::Object(topo);
+    };
+
+    if let Some(parent) = root.parent() {
+        topo.insert(
+            "leader".into(),
+            json!({
+                "name": parent.name(),
+                "address": parent.address(),
+            }),
+        );
+    }
+
+    let mut members: Vec<_> = root.children().into_values().collect();
+    members.sort_by(|a, b| a.name().cmp(&b.name()));
+    topo.insert(
+        "members".into(),
+        Value::Array(
+            members
+                .into_iter()
+                .map(|node| {
+                    json!({
+                        "name": node.name(),
+                        "address": node.address(),
+                    })
+                })
+                .collect(),
+        ),
+    );
+
+    Value::Object(topo)
+}
+
+fn master_info_type_supported(headers: &HeaderMap) -> bool {
+    headers
+        .get("Type")
+        .and_then(|v| v.to_str().ok())
+        .is_none_or(|v| is_json_type(Some(v)))
+}
+
+fn master_info_payload(st: &MasterState) -> Value {
+    json!({
+        "master_address": current_master_address(st),
+        "meta_store_address": current_meta_store_address(st),
+        "schedule_topo": schedule_topology_json(st),
+    })
+}
+
+pub fn build_grpc_compat_router(state: Arc<MasterState>) -> axum_compat::Router {
+    let master_info_state = state;
+    axum_compat::Router::new()
+        .route("/healthy", axum_compat::routing::get(|| async { "" }))
+        .route(
+            "/global-scheduler/healthy",
+            axum_compat::routing::get(|| async { "" }),
+        )
+        .route(
+            "/masterinfo",
+            axum_compat::routing::get({
+                let state = master_info_state.clone();
+                move |headers: axum_compat::http::HeaderMap| {
+                    let state = state.clone();
+                    async move {
+                        if !master_info_type_supported(&headers) {
+                            return axum_compat::response::IntoResponse::into_response(
+                                axum_compat::http::StatusCode::BAD_REQUEST,
+                            );
+                        }
+                        axum_compat::response::IntoResponse::into_response(axum_compat::Json(
+                            master_info_payload(&state),
+                        ))
+                    }
+                }
+            }),
+        )
+        .route(
+            "/global-scheduler/masterinfo",
+            axum_compat::routing::get({
+                let state = master_info_state;
+                move |headers: axum_compat::http::HeaderMap| {
+                    let state = state.clone();
+                    async move {
+                        if !master_info_type_supported(&headers) {
+                            return axum_compat::response::IntoResponse::into_response(
+                                axum_compat::http::StatusCode::BAD_REQUEST,
+                            );
+                        }
+                        axum_compat::response::IntoResponse::into_response(axum_compat::Json(
+                            master_info_payload(&state),
+                        ))
+                    }
+                }
+            }),
+        )
+}
+
 pub fn build_router(
     state: Arc<MasterState>,
     metastore: Option<Arc<tokio::sync::Mutex<MetaStoreClient>>>,
@@ -248,6 +361,8 @@ pub fn build_router(
         .route("/queryagentcount", get(query_agent_count))
         .route("/global-scheduler/queryagentcount", get(query_agent_count))
         .route("/evictagent", post(evict_agent))
+        .route("/masterinfo", get(master_info))
+        .route("/global-scheduler/masterinfo", get(master_info))
         .route("/resources", get(resources))
         .route("/global-scheduler/resources", get(resources))
         .route("/instance-manager/resources", get(resources))
@@ -539,7 +654,7 @@ async fn query_snapshot(
         .and_then(|b| String::from_utf8(b.to_vec()).ok())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .ok_or(StatusCode::BAD_REQUEST)?;
 
     let use_json = parse_type_header(&headers);
 
@@ -561,6 +676,17 @@ async fn query_snapshot(
     } else {
         Err(StatusCode::NOT_FOUND)
     }
+}
+
+async fn master_info(
+    State(st): State<HttpState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode> {
+    if !master_info_type_supported(&headers) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+
+    Ok(Json(master_info_payload(&st.master)))
 }
 
 #[derive(Debug, Deserialize, Default)]

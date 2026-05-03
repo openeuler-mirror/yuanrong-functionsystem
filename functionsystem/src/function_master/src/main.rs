@@ -20,7 +20,7 @@ use yr_common::logging::init_logging;
 use yr_master::config::{CliArgs, ElectionMode, MasterConfig};
 use yr_master::domain_activator::DomainActivator;
 use yr_master::domain_sched_mgr::DomainSchedMgr;
-use yr_master::http::build_router;
+use yr_master::http::{build_grpc_compat_router, build_router};
 use yr_master::instances::InstanceManager;
 use yr_master::local_sched_mgr::LocalSchedMgr;
 use yr_master::node_manager::NodeManager;
@@ -242,12 +242,7 @@ async fn main() -> anyhow::Result<()> {
     // same port used by the global scheduler gRPC service. Use tonic Routes
     // so HTTP compatibility endpoints and real gRPC methods are both served
     // correctly on the C++-compatible port.
-    let grpc_health = axum08::Router::new()
-        .route("/healthy", axum08::routing::get(|| async { "" }))
-        .route(
-            "/global-scheduler/healthy",
-            axum08::routing::get(|| async { "" }),
-        );
+    let grpc_health = build_grpc_compat_router(state.clone());
     let grpc_routes = Routes::from(grpc_health).add_service(grpc_service);
     let grpc_task = tokio::spawn(async move {
         let serve = Server::builder()
