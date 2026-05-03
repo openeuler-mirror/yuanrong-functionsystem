@@ -37,6 +37,11 @@ struct MetaDataLite {
 }
 
 impl InvocationHandler {
+    const MAX_GROUP_INSTANCE_SIZE: usize = 256;
+    const MIN_INSTANCE_RANGE_NUM: i32 = 1;
+    const MAX_INSTANCE_RANGE_NUM: i32 = 256;
+    const DEFAULT_INSTANCE_RANGE_STEP: i32 = 2;
+
     pub fn apply_group_bind_options(
         create: &mut cs::CreateRequest,
         group: Option<&cs::GroupOptions>,
@@ -56,6 +61,129 @@ impl InvocationHandler {
         scheduling
             .extension
             .insert("bind_strategy".into(), strategy.into());
+    }
+
+    fn normalized_instance_range(range: &cs::InstanceRange) -> Result<cs::InstanceRange, String> {
+        let mut normalized = range.clone();
+        if matches!(normalized.min, 0 | -1) {
+            normalized.min = Self::MIN_INSTANCE_RANGE_NUM;
+        }
+        if matches!(normalized.max, 0 | -1) {
+            normalized.max = Self::MAX_INSTANCE_RANGE_NUM;
+        }
+        if matches!(normalized.step, 0 | -1) {
+            normalized.step = Self::DEFAULT_INSTANCE_RANGE_STEP;
+        }
+        if normalized.min <= 0 {
+            return Err(format!(
+                "invalid range param min({}), should bigger than 0",
+                normalized.min
+            ));
+        }
+        if normalized.max <= 0 {
+            return Err(format!(
+                "invalid range param max({}), should bigger than 0",
+                normalized.max
+            ));
+        }
+        if normalized.max < normalized.min {
+            return Err(format!(
+                "invalid range param max({}), should bigger than min({})",
+                normalized.max, normalized.min
+            ));
+        }
+        if normalized.max > Self::MAX_INSTANCE_RANGE_NUM {
+            return Err(format!(
+                "invalid range param max({}), should be range (0, {}]",
+                normalized.max,
+                Self::MAX_INSTANCE_RANGE_NUM
+            ));
+        }
+        if normalized.step <= 0 {
+            return Err(format!(
+                "invalid range param step({}), should bigger than 0",
+                normalized.step
+            ));
+        }
+        Ok(normalized)
+    }
+
+    fn schedule_affinity_fingerprint(create: &cs::CreateRequest) -> Vec<u8> {
+        create
+            .scheduling_ops
+            .as_ref()
+            .and_then(|ops| ops.schedule_affinity.as_ref())
+            .map(Message::encode_to_vec)
+            .unwrap_or_default()
+    }
+
+    fn validate_group_create_requests(creates: &cs::CreateRequests) -> Result<(), String> {
+        let count = creates.requests.len();
+        if !(1..=Self::MAX_GROUP_INSTANCE_SIZE).contains(&count) {
+            return Err(format!(
+                "invalid instance num({count}) of group, should be range (0, {}]",
+                Self::MAX_GROUP_INSTANCE_SIZE
+            ));
+        }
+
+        let strict_pack = creates
+            .group_opt
+            .as_ref()
+            .is_some_and(|g| g.group_policy == yr_proto::common::GroupPolicy::StrictPack as i32);
+        let first_affinity = creates
+            .requests
+            .first()
+            .map(Self::schedule_affinity_fingerprint)
+            .unwrap_or_default();
+        let mut range_seen = false;
+        let mut group_priority: Option<i32> = None;
+
+        for create in &creates.requests {
+            if create
+                .create_options
+                .get("lifecycle")
+                .is_some_and(|v| v == "detached")
+            {
+                return Err("group schedule does not support detached instance.".into());
+            }
+
+            let priority = create
+                .scheduling_ops
+                .as_ref()
+                .map(|ops| ops.priority)
+                .unwrap_or_default();
+            if let Some(existing) = group_priority {
+                if existing != priority {
+                    return Err("instance priority does not support more than one".into());
+                }
+            } else {
+                group_priority = Some(priority);
+            }
+
+            if let Some(range) = create
+                .scheduling_ops
+                .as_ref()
+                .and_then(|ops| ops.range.as_ref())
+            {
+                if range_seen {
+                    return Err("instance range does not support more than one".into());
+                }
+                range_seen = true;
+                Self::normalized_instance_range(range)?;
+            }
+
+            if strict_pack && Self::schedule_affinity_fingerprint(create) != first_affinity {
+                return Err(
+                    "group schedule with strict pack does not support different affinity.".into(),
+                );
+            }
+        }
+
+        if range_seen && creates.requests.len() != 1 {
+            return Err("instance range does not support more than one".into());
+        }
+
+        Ok(())
     }
 
     fn accepted_call_rsp(message_id: &str) -> StreamingMessage {
@@ -581,6 +709,39 @@ impl InvocationHandler {
         bus: &BusProxyCoordinator,
         caller_stream_id: &str,
     ) -> InboundAction {
+        if let Err(message) = Self::validate_group_create_requests(creates) {
+            let response_id = if creates.request_id.is_empty() {
+                msg_id.to_string()
+            } else {
+                creates.request_id.clone()
+            };
+            let code = ErrorCode::ErrParamInvalid as i32;
+            return InboundAction::Reply(vec![
+                StreamingMessage {
+                    message_id: response_id.clone(),
+                    meta_data: Default::default(),
+                    body: Some(streaming_message::Body::CreateRsps(cs::CreateResponses {
+                        code,
+                        message: message.clone(),
+                        instance_i_ds: Vec::new(),
+                        group_id: String::new(),
+                    })),
+                },
+                StreamingMessage {
+                    message_id: response_id.clone(),
+                    meta_data: Default::default(),
+                    body: Some(streaming_message::Body::NotifyReq(rs::NotifyRequest {
+                        request_id: response_id,
+                        code,
+                        message,
+                        small_objects: Vec::new(),
+                        stack_trace_infos: Vec::new(),
+                        runtime_info: None,
+                    })),
+                },
+            ]);
+        }
+
         let group_id = format!("grp-{:016x}", uuid::Uuid::new_v4().as_u128());
         let mut instance_ids = Vec::with_capacity(creates.requests.len());
         let mut failed = false;
@@ -597,12 +758,16 @@ impl InvocationHandler {
             let range_count = create
                 .scheduling_ops
                 .as_ref()
-                .and_then(|ops| ops.range)
+                .and_then(|ops| ops.range.as_ref())
                 // C++ range scheduling creates the initial lower-bound population.
                 // Example from ST: min=2,max=256,step=300 is expected to create
                 // exactly two instances, not 256. Scale-out step/max semantics are
                 // scheduler policy, not the initial GroupCreate fan-out.
-                .map(|r| r.min.max(1) as usize)
+                .map(|r| {
+                    Self::normalized_instance_range(r)
+                        .map(|nr| nr.min.max(1) as usize)
+                        .unwrap_or(1)
+                })
                 .unwrap_or(1);
 
             for idx in 0..range_count {

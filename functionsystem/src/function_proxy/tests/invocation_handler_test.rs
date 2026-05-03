@@ -6,11 +6,15 @@ use common::new_bus;
 use prost::Message;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use yr_proto::common::{Arg, BindStrategy, ErrorCode};
+use yr_proto::affinity::{
+    label_operator, Affinity, Condition, InstanceAffinity, LabelExists, LabelExpression,
+    LabelOperator, Selector, SubCondition,
+};
+use yr_proto::common::{Arg, BindStrategy, ErrorCode, GroupPolicy};
 use yr_proto::core_service::{
     BindOptions, CreateRequest, CreateRequests, CreateResourceGroupRequest, EventRequest,
-    ExitRequest, GroupOptions, InvokeOptions, InvokeRequest, KillRequest, StateLoadRequest,
-    StateSaveRequest,
+    ExitRequest, GroupOptions, InstanceRange, InvokeOptions, InvokeRequest, KillRequest,
+    SchedulingOptions, StateLoadRequest, StateSaveRequest,
 };
 use yr_proto::resources::MetaData;
 use yr_proto::runtime_rpc::{streaming_message, StreamingMessage};
@@ -160,6 +164,48 @@ fn same_tenant_iam_policy() -> &'static str {
             "deny": {}
         }
     }"#
+}
+
+fn extract_group_response(action: InboundAction) -> yr_proto::core_service::CreateResponses {
+    let InboundAction::Reply(outs) = action else {
+        panic!("expected Reply");
+    };
+    let streaming_message::Body::CreateRsps(rsps) = outs[0].body.as_ref().unwrap() else {
+        panic!("CreateRsps");
+    };
+    rsps.clone()
+}
+
+fn scheduling_ops_with(priority: i32) -> SchedulingOptions {
+    SchedulingOptions {
+        priority,
+        ..Default::default()
+    }
+}
+
+fn required_label_exists_affinity(key: &str) -> Affinity {
+    Affinity {
+        instance: Some(InstanceAffinity {
+            required_affinity: Some(Selector {
+                condition: Some(Condition {
+                    sub_conditions: vec![SubCondition {
+                        expressions: vec![LabelExpression {
+                            key: key.into(),
+                            op: Some(LabelOperator {
+                                label_operator: Some(label_operator::LabelOperator::Exists(
+                                    LabelExists {},
+                                )),
+                            }),
+                        }],
+                        weight: 1,
+                    }],
+                    order_priority: false,
+                }),
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
 }
 
 #[test]
@@ -384,7 +430,7 @@ async fn duplicate_create_with_stream_before_init_result_does_not_notify() {
 }
 
 #[tokio::test]
-async fn group_create_empty_requests_succeeds() {
+async fn group_create_empty_requests_is_invalid() {
     let bus = new_bus("node-a", 29004);
     let batch = CreateRequests {
         requests: vec![],
@@ -396,17 +442,38 @@ async fn group_create_empty_requests_succeeds() {
         meta_data: Default::default(),
         body: Some(streaming_message::Body::CreateReqs(batch)),
     };
-    let InboundAction::Reply(outs) =
-        InvocationHandler::handle_runtime_inbound("driver", msg, &bus).await
-    else {
-        panic!("Reply");
-    };
-    let streaming_message::Body::CreateRsps(rsps) = outs[0].body.as_ref().unwrap() else {
-        panic!("CreateRsps");
-    };
-    assert_eq!(rsps.code, ErrorCode::ErrNone as i32);
+    let rsps = extract_group_response(
+        InvocationHandler::handle_runtime_inbound("driver", msg, &bus).await,
+    );
+    assert_eq!(rsps.code, ErrorCode::ErrParamInvalid as i32);
     assert!(rsps.instance_i_ds.is_empty());
-    assert!(!rsps.group_id.is_empty());
+    assert!(rsps.group_id.is_empty());
+}
+
+#[tokio::test]
+async fn group_create_rejects_oversized_batch() {
+    let bus = new_bus("node-a", 29004);
+    let batch = CreateRequests {
+        requests: (0..257)
+            .map(|idx| CreateRequest {
+                function: "a".into(),
+                request_id: format!("a{idx}"),
+                ..Default::default()
+            })
+            .collect(),
+        request_id: "batch-oversized".into(),
+        ..Default::default()
+    };
+    let msg = StreamingMessage {
+        message_id: "g-oversized".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CreateReqs(batch)),
+    };
+    let rsps = extract_group_response(
+        InvocationHandler::handle_runtime_inbound("driver", msg, &bus).await,
+    );
+    assert_eq!(rsps.code, ErrorCode::ErrParamInvalid as i32);
+    assert!(rsps.message.contains("group"));
 }
 
 #[tokio::test]
@@ -443,6 +510,182 @@ async fn group_create_first_schedule_failure_marks_batch_failed() {
     };
     assert_eq!(rsps.code, ErrorCode::ErrInnerSystemError as i32);
     assert!(!rsps.message.is_empty());
+}
+
+#[tokio::test]
+async fn group_create_rejects_detached_lifecycle() {
+    let bus = new_bus("node-a", 29004);
+    let batch = CreateRequests {
+        requests: vec![CreateRequest {
+            function: "a".into(),
+            request_id: "a1".into(),
+            create_options: [("lifecycle".to_string(), "detached".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        }],
+        request_id: "batch-detached".into(),
+        ..Default::default()
+    };
+    let msg = StreamingMessage {
+        message_id: "g-detached".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CreateReqs(batch)),
+    };
+    let rsps = extract_group_response(
+        InvocationHandler::handle_runtime_inbound("driver", msg, &bus).await,
+    );
+    assert_eq!(rsps.code, ErrorCode::ErrParamInvalid as i32);
+    assert!(rsps.message.contains("detached"));
+}
+
+#[tokio::test]
+async fn group_create_rejects_mixed_priorities() {
+    let bus = new_bus("node-a", 29004);
+    let batch = CreateRequests {
+        requests: vec![
+            CreateRequest {
+                function: "a".into(),
+                request_id: "a1".into(),
+                scheduling_ops: Some(scheduling_ops_with(1)),
+                ..Default::default()
+            },
+            CreateRequest {
+                function: "b".into(),
+                request_id: "b1".into(),
+                scheduling_ops: Some(scheduling_ops_with(2)),
+                ..Default::default()
+            },
+        ],
+        request_id: "batch-priority".into(),
+        ..Default::default()
+    };
+    let msg = StreamingMessage {
+        message_id: "g-priority".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CreateReqs(batch)),
+    };
+    let rsps = extract_group_response(
+        InvocationHandler::handle_runtime_inbound("driver", msg, &bus).await,
+    );
+    assert_eq!(rsps.code, ErrorCode::ErrParamInvalid as i32);
+    assert!(rsps.message.contains("priority"));
+}
+
+#[tokio::test]
+async fn group_create_rejects_multiple_range_requests() {
+    let bus = new_bus("node-a", 29004);
+    let range = InstanceRange {
+        min: 1,
+        max: 2,
+        step: 1,
+    };
+    let batch = CreateRequests {
+        requests: vec![
+            CreateRequest {
+                function: "a".into(),
+                request_id: "a1".into(),
+                scheduling_ops: Some(SchedulingOptions {
+                    range: Some(range.clone()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            CreateRequest {
+                function: "b".into(),
+                request_id: "b1".into(),
+                scheduling_ops: Some(SchedulingOptions {
+                    range: Some(range),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ],
+        request_id: "batch-range".into(),
+        ..Default::default()
+    };
+    let msg = StreamingMessage {
+        message_id: "g-range".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CreateReqs(batch)),
+    };
+    let rsps = extract_group_response(
+        InvocationHandler::handle_runtime_inbound("driver", msg, &bus).await,
+    );
+    assert_eq!(rsps.code, ErrorCode::ErrParamInvalid as i32);
+    assert!(rsps.message.contains("range"));
+}
+
+#[tokio::test]
+async fn group_create_rejects_invalid_range_bounds() {
+    let bus = new_bus("node-a", 29004);
+    let batch = CreateRequests {
+        requests: vec![CreateRequest {
+            function: "a".into(),
+            request_id: "a1".into(),
+            scheduling_ops: Some(SchedulingOptions {
+                range: Some(InstanceRange {
+                    min: 3,
+                    max: 2,
+                    step: 1,
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        request_id: "batch-invalid-range".into(),
+        ..Default::default()
+    };
+    let msg = StreamingMessage {
+        message_id: "g-invalid-range".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CreateReqs(batch)),
+    };
+    let rsps = extract_group_response(
+        InvocationHandler::handle_runtime_inbound("driver", msg, &bus).await,
+    );
+    assert_eq!(rsps.code, ErrorCode::ErrParamInvalid as i32);
+    assert!(rsps.message.contains("range"));
+}
+
+#[tokio::test]
+async fn group_create_rejects_strict_pack_with_different_affinity() {
+    let bus = new_bus("node-a", 29004);
+    let batch = CreateRequests {
+        requests: vec![
+            CreateRequest {
+                function: "a".into(),
+                request_id: "a1".into(),
+                scheduling_ops: Some(SchedulingOptions {
+                    schedule_affinity: Some(required_label_exists_affinity("rack")),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            CreateRequest {
+                function: "b".into(),
+                request_id: "b1".into(),
+                scheduling_ops: Some(SchedulingOptions::default()),
+                ..Default::default()
+            },
+        ],
+        request_id: "batch-strict-pack".into(),
+        group_opt: Some(GroupOptions {
+            group_policy: GroupPolicy::StrictPack as i32,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let msg = StreamingMessage {
+        message_id: "g-strict-pack".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::CreateReqs(batch)),
+    };
+    let rsps = extract_group_response(
+        InvocationHandler::handle_runtime_inbound("driver", msg, &bus).await,
+    );
+    assert_eq!(rsps.code, ErrorCode::ErrParamInvalid as i32);
+    assert!(rsps.message.contains("strict pack"));
 }
 
 #[test]
