@@ -738,13 +738,22 @@ fn group_bind_unknown_policy_defaults_to_cpp_bind_none_string() {
 }
 
 #[tokio::test]
-async fn r_group_req_returns_stub_ok() {
+async fn r_group_req_fails_fast_until_resource_group_manager_exists() {
     let bus = new_bus("node-a", 29005);
     let msg = StreamingMessage {
         message_id: "rg".into(),
         meta_data: Default::default(),
         body: Some(streaming_message::Body::RGroupReq(
             CreateResourceGroupRequest {
+                r_group_spec: Some(yr_proto::common::ResourceGroupSpec {
+                    name: "pool-a".into(),
+                    tenant_id: "tenant-a".into(),
+                    bundles: vec![yr_proto::common::Bundle {
+                        resources: [("cpu".into(), 1.0)].into_iter().collect(),
+                        labels: vec!["zone:a".into()],
+                    }],
+                    ..Default::default()
+                }),
                 request_id: "rr".into(),
                 trace_id: "tt".into(),
                 ..Default::default()
@@ -756,10 +765,16 @@ async fn r_group_req_returns_stub_ok() {
     else {
         panic!("Reply");
     };
-    assert!(matches!(
-        outs[0].body,
-        Some(streaming_message::Body::RGroupRsp(_))
-    ));
+    let Some(streaming_message::Body::RGroupRsp(rsp)) = &outs[0].body else {
+        panic!("expected RGroupRsp");
+    };
+    assert_eq!(rsp.request_id, "rr");
+    assert_eq!(rsp.code, ErrorCode::ErrInnerSystemError as i32);
+    assert!(
+        rsp.message.contains("resource group"),
+        "unexpected message: {}",
+        rsp.message
+    );
 }
 
 #[tokio::test]

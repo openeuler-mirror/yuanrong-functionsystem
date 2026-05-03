@@ -939,8 +939,9 @@ impl InvocationHandler {
             meta_data: Default::default(),
             body: Some(streaming_message::Body::RGroupRsp(
                 cs::CreateResourceGroupResponse {
-                    code: ErrorCode::ErrNone as i32,
-                    message: String::new(),
+                    code: ErrorCode::ErrInnerSystemError as i32,
+                    message: "resource group state machine is not implemented in the current Rust lane"
+                        .into(),
                     request_id: req.request_id.clone(),
                 },
             )),
