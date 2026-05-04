@@ -261,6 +261,96 @@ fn scheduler_framework_resource_selector_match_labels() {
 }
 
 #[test]
+fn scheduler_framework_resource_selector_match_expression_not_exist() {
+    let view = ResourceView::new();
+    view.upsert_node_resources(
+        "n1",
+        HashMap::from([("cpu".into(), 4.0)]),
+        HashMap::from([("cpu".into(), 0.0)]),
+    );
+    view.upsert_node_resources(
+        "n2",
+        HashMap::from([("cpu".into(), 4.0)]),
+        HashMap::from([("cpu".into(), 0.0)]),
+    );
+    let reg = default_plugin_register();
+    let fw = SchedulerFramework::from_register(&reg);
+    let mut req = ScheduleRequest::default();
+    req.required_resources = HashMap::from([("cpu".into(), 1.0)]);
+    req.extension.insert(
+        "resource_selector".into(),
+        r#"{"matchExpressions":[{"key":"dedicated","operator":"NotExist"}]}"#.into(),
+    );
+    let meta = yr_domain_scheduler::function_meta::parse_function_schedule_meta(&req);
+    let ctx = ScheduleContext {
+        resource_view: &view,
+        exclude_node_id: None,
+        function_meta: Some(&meta),
+    };
+    let nodes = vec![
+        NodeInfo {
+            node_id: "n1".into(),
+            address: "x".into(),
+            labels: HashMap::from([("zone".into(), "z1".into())]),
+            failure_domain: None,
+        },
+        NodeInfo {
+            node_id: "n2".into(),
+            address: "y".into(),
+            labels: HashMap::from([
+                ("zone".into(), "z1".into()),
+                ("dedicated".into(), "gpu".into()),
+            ]),
+            failure_domain: None,
+        },
+    ];
+    let best = fw
+        .select_best(&ctx, &req, &nodes)
+        .expect("selector should reject nodes with dedicated label");
+    assert_eq!(best.node_id, "n1");
+}
+
+#[test]
+fn scheduling_engine_failure_domains_match_zone_fallback_from_resource_json() {
+    let view = Arc::new(ResourceView::new());
+    let nodes = Arc::new(LocalNodeManager::new(view.clone()));
+    nodes.upsert_local(
+        "az1-node".into(),
+        "a:1".into(),
+        r#"{"capacity":{"cpu":4.0},"used":{"cpu":0.0},"labels":{"rack":"r1","zone":"az1"}}"#,
+        None,
+    );
+    nodes.upsert_local(
+        "az2-node".into(),
+        "b:1".into(),
+        r#"{"capacity":{"cpu":4.0},"used":{"cpu":3.0},"labels":{"rack":"r1","zone":"az2"}}"#,
+        None,
+    );
+
+    let engine = SchedulingEngine::new(sample_domain_config(), view, nodes);
+    let mut baseline = ScheduleRequest::default();
+    baseline.request_id = "fd-0".into();
+    baseline.required_resources = HashMap::from([("cpu".into(), 1.0)]);
+    let baseline_picked = engine
+        .select_node(&baseline, false)
+        .expect("without failure-domain filter the freer node should win");
+    assert_eq!(baseline_picked.node_id, "az1-node");
+
+    let mut req = ScheduleRequest::default();
+    req.request_id = "fd-1".into();
+    req.required_resources = HashMap::from([("cpu".into(), 1.0)]);
+    req.extension.insert(
+        "scheduling".into(),
+        r#"{"failure_domains":["az2"]}"#.into(),
+    );
+
+    let picked = engine
+        .select_node(&req, false)
+        .expect("matching failure domain should be selected");
+    assert_eq!(picked.node_id, "az2-node");
+}
+
+#[test]
 fn schedule_recorder_retains_entries() {
     let view = Arc::new(ResourceView::new());
     let nodes = Arc::new(LocalNodeManager::new(view.clone()));

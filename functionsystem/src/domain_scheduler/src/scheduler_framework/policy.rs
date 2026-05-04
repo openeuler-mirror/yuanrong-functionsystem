@@ -236,6 +236,7 @@ enum SelectorExpr {
     In { key: String, values: Vec<String> },
     NotIn { key: String, values: Vec<String> },
     Exists { key: String },
+    NotExist { key: String },
 }
 
 fn parse_selector_json(s: &str) -> Option<SelectorSpec> {
@@ -271,6 +272,7 @@ fn parse_selector_json(s: &str) -> Option<SelectorSpec> {
                     }
                 }
                 "exists" => spec.expressions.push(SelectorExpr::Exists { key }),
+                "notexist" => spec.expressions.push(SelectorExpr::NotExist { key }),
                 _ => {}
             }
         }
@@ -316,6 +318,11 @@ impl FilterPlugin for ResourceSelectorFilter {
                 SelectorExpr::Exists { key } => {
                     if !node.labels.contains_key(key) {
                         return FilterResult::fail(format!("selector Exists {key}"));
+                    }
+                }
+                SelectorExpr::NotExist { key } => {
+                    if node.labels.contains_key(key) {
+                        return FilterResult::fail(format!("selector NotExist {key}"));
                     }
                 }
             }
