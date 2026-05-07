@@ -155,6 +155,7 @@ public:
     [[maybe_unused]] void ClearEnabledInstruments()
     {
         enabledInstruments_.clear();
+        observableInstrumentMap_.clear();
     }
 
 private:

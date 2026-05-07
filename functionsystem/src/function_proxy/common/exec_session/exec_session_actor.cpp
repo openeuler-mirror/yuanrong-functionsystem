@@ -311,6 +311,14 @@ void ExecSessionActor::Cleanup()
 
     YRLOG_INFO("Cleanup session, sessionId: {}, outFd: {}, errFd: {}", sessionId_, outFd, errFd);
 
+    // When called from the destructor the last shared_ptr has already been released,
+    // so shared_from_this() would throw std::bad_weak_ptr.  Fall back to a direct,
+    // synchronous cleanup that does not need to extend the object's lifetime.
+    if (weak_from_this().expired()) {
+        DoCleanupAfterUnregister();
+        return;
+    }
+
     // Use shared_from_this() to keep the actor alive until the callback fires,
     // even if litebus::Terminate+Await has already completed on the gRPC handler thread.
     auto onAllUnregistered = [self = shared_from_this()]() {

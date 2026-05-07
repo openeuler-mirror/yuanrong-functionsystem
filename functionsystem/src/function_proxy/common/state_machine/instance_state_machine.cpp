@@ -293,8 +293,11 @@ litebus::Future<Status> InstanceStateMachine::DelInstance(const std::string &ins
         return instanceOpt_
             ->Delete(instancePutInfo, routePutInfo, debugInstPutInfo, instanceInfo.version(),
                      IsLowReliabilityInstance(instanceInfo))
-            .Then([key(keyPath), self(shared_from_this())](const OperateResult &result) {
+            .Then([key(keyPath), instanceID, self(shared_from_this())](const OperateResult &result) {
                 if (result.status.IsOk()) {
+                    if (controlPlaneObserver_ != nullptr) {
+                        controlPlaneObserver_->CancelWatchInstance(instanceID);
+                    }
                     return Status::OK();
                 }
                 YRLOG_ERROR("failed to delete key {} from metastore, errorCode: {}, error: {}", key,
