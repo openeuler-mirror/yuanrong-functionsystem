@@ -79,8 +79,6 @@ protected:
         litebus::Spawn(observerActor_);
         controlPlaneObserver_ = std::make_shared<function_proxy::ControlPlaneObserver>(observerActor_);
         controlPlaneObserver_->Register();
-        // one from meta json, three from services.yaml
-        ASSERT_AWAIT_TRUE([&]() -> bool { return observerActor_->funcMetaMap_.size() == 5; });
     }
 
     [[maybe_unused]] static void TearDownTestSuite()

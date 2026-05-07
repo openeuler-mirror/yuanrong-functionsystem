@@ -67,6 +67,7 @@ int main(int argc, char **argv)
     litebus::LitebusInitOptions opts;
     opts.tcpUrl = "tcp://127.0.0.1:" + std::to_string(port);
     opts.udpUrl = "udp://127.0.0.1:" + std::to_string(port);
+    opts.threadCount = 20;
     auto res = litebus::Initialize(opts);
     if (res != BUS_OK) {
         YRLOG_ERROR("Failed to initialize litebus!");
