@@ -222,6 +222,10 @@ private:
     litebus::Future<runtime::v1::NormalResponse> DoUnregisterWarmUp(
         const std::shared_ptr<runtime::v1::UnregisterRequest> &req);
 
+    static void StartSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request);
+    static void StopSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                      const runtime::v1::StartResponse &response);
+
     // ── Connectivity ──────────────────────────────────────────────────────────
 
     void Sync();
