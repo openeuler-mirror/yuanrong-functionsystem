@@ -27,7 +27,6 @@ namespace functionsystem::runtime_manager {
 
 static const int32_t DEFAULT_TTL_SECONDS = 1800;  // 30 minutes
 static const int32_t DEFAULT_CLEANUP_INTERVAL_SECONDS = 300;  // 5 minutes
-static const std::string DEFAULT_CHECKPOINT_DIR = "/home/yuanrong/checkpoints";
 
 CkptFileManagerActor::CkptFileManagerActor(const std::string &name)
     : ActorBase(name),
@@ -36,13 +35,23 @@ CkptFileManagerActor::CkptFileManagerActor(const std::string &name)
       checkpointBaseDir_(DEFAULT_CHECKPOINT_DIR),
       cleanupEnabled_(true)
 {
-    // Create checkpoint base directory if not exists
-    std::filesystem::create_directories(checkpointBaseDir_);
+}
+
+CkptFileManagerActor::CkptFileManagerActor(const std::string &name, const std::string &checkpointDir)
+    : ActorBase(name),
+      defaultTTLSeconds_(DEFAULT_TTL_SECONDS),
+      cleanupIntervalSeconds_(DEFAULT_CLEANUP_INTERVAL_SECONDS),
+      checkpointBaseDir_(checkpointDir),
+      cleanupEnabled_(true)
+{
 }
 
 void CkptFileManagerActor::Init()
 {
     YRLOG_INFO("init CkptFileManagerActor {}", GetAID().Name());
+
+    // Create checkpoint base directory if not exists
+    std::filesystem::create_directories(checkpointBaseDir_);
 
     // Restore checkpoint files from local directory
     RestoreCheckpointsFromLocal();

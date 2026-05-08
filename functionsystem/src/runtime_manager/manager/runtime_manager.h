@@ -159,6 +159,7 @@ private:
 
     litebus::AID functionAgentAID_;
     std::string runtimeManagerID_;
+    std::string checkpointDir_;
     bool isUnitTestSituation_{ false };
     uint32_t pingTimeoutMs_{ DEFAULT_PING_PONG_TIMEOUT };
 

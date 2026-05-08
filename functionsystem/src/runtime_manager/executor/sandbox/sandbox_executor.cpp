@@ -59,10 +59,12 @@ void SandboxExecutor::StopSandboxCreateSpan(const std::shared_ptr<messages::Star
 
 // ── Construction ──────────────────────────────────────────────────────────────
 
-SandboxExecutor::SandboxExecutor(const std::string &name, const litebus::AID &functionAgentAID)
+SandboxExecutor::SandboxExecutor(const std::string &name, const litebus::AID &functionAgentAID,
+                                 const std::string &checkpointDir)
     : Executor(name), functionAgentAID_(functionAgentAID)
 {
-    auto ckptActor = std::make_shared<CkptFileManagerActor>(name + "_CkptFileManager");
+    const std::string &dir = checkpointDir.empty() ? DEFAULT_CHECKPOINT_DIR : checkpointDir;
+    auto ckptActor = std::make_shared<CkptFileManagerActor>(name + "_CkptFileManager", dir);
     litebus::Spawn(ckptActor);
     ckptFileManager_ = std::make_shared<CkptFileManager>(ckptActor);
 }
