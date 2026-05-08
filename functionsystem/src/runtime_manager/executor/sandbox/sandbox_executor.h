@@ -91,7 +91,8 @@ private:
  */
 class SandboxExecutor : public Executor {
 public:
-    explicit SandboxExecutor(const std::string &name, const litebus::AID &functionAgentAID);
+    SandboxExecutor(const std::string &name, const litebus::AID &functionAgentAID,
+                    const std::string &checkpointDir = {});
 
     ~SandboxExecutor() override = default;
 

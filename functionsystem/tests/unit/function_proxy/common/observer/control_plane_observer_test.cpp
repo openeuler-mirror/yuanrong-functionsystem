@@ -112,6 +112,7 @@ protected:
         metaStoreClient_->Delete("/sn/ins", { .prefix = true }).Get();
         YRLOG_INFO("TearDown......");
         metaStorageAccessor_->metaClient_ = metaStoreClient_;
+        observerActor_->isPartialWatchInstances_ = false;
         YRLOG_INFO("TearDown......Finish");
     }
 
@@ -994,12 +995,12 @@ TEST_F(ObserverTest, InstanceInfoSyncerTest)
     rep->kvs.emplace_back(events[1].kv);
     rep->kvs.emplace_back(events[2].kv);
     std::string cbFuncInstanceID;
-    controlPlaneObserver_->SetInstanceInfoSyncerCbFunc([&cbFuncInstanceID](const resource_view::RouteInfo &routeInfo) {
+    observerActor_->instanceInfoSyncerCbFunc_ = [&cbFuncInstanceID](const resource_view::RouteInfo &routeInfo) {
         YRLOG_DEBUG("{}|{}execute instance info sync callback function, create client for instance({}), job({})",
                     routeInfo.requestid(), routeInfo.instanceid());
         cbFuncInstanceID = routeInfo.instanceid();
         return Status::OK();
-    });
+    };
     auto future = observerActor_->InstanceInfoSyncer(rep);
     ASSERT_AWAIT_READY(future);
     ASSERT_TRUE(future.Get().status.IsOk());
@@ -1032,6 +1033,7 @@ TEST_F(ObserverTest, InstanceInfoSyncerTest)
     EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID1") == 0); // rep don't have key1, so need to delete
     EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID4") == 1);
     EXPECT_EQ(cbFuncInstanceID, "InstanceID4");
+    observerActor_->instanceInfoSyncerCbFunc_ = nullptr;
 }
 
 TEST_F(ObserverTest, WatchInstanceTest)
