@@ -17,7 +17,7 @@
 #include "exec_session_actor.h"
 
 #include <fcntl.h>
-#include <signal.h>
+#include <csignal>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -69,7 +69,9 @@ std::shared_ptr<ExecSessionActor> ExecSessionActor::Create(const CreateParams &p
 }
 
 ExecSessionActor::ExecSessionActor(const CreateParams &params)
-    : litebus::ActorBase("ExecSessionActor-" + params.sessionId), streamWriter_(params.writer), sessionId_(params.sessionId)
+    : litebus::ActorBase("ExecSessionActor-" + params.sessionId),
+      streamWriter_(params.writer),
+      sessionId_(params.sessionId)
 {
     YRLOG_INFO("ExecSessionActor created, sessionId: {}", sessionId_);
 }
@@ -352,7 +354,7 @@ void ExecSessionActor::DoCleanupAfterUnregister()
     }
 
     YRLOG_INFO("DoCleanupAfterUnregister: exec_={}, sessionId: {}",
-                (exec_ ? "valid" : "null"), sessionId_);
+               (exec_ ? "valid" : "null"), sessionId_);
 
     if (ptyIO_) {
         ptyIO_->Close();
@@ -366,8 +368,9 @@ void ExecSessionActor::DoCleanupAfterUnregister()
             YRLOG_INFO("Killing exec process (detached thread), pid: {}, sessionId: {}", pid, sessionId_);
             // Offload the sleep+kill to a detached thread so we never block the calling thread
             // (which may be the IOEventActor event-loop thread, shared by all sessions).
+            static constexpr int killDelayMs = 100;  // grace period before SIGTERM
             std::thread([pid]() {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                std::this_thread::sleep_for(std::chrono::milliseconds(killDelayMs));
                 kill(pid, SIGTERM);
             }).detach();
         }
