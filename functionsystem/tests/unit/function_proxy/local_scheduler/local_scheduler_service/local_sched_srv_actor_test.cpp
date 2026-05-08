@@ -422,11 +422,11 @@ TEST_F(LocalSchedSrvActorTest, RegisteredFailedFromScheduler)
     masterAID.SetName(LOCAL_SCHED_MGR_ACTOR_NAME);
     masterAID.SetUrl("10.10.10.10:11111");
     litebus::Async(dstActor_->GetAID(), &LocalSchedSrvActor::ToReady);
-    dstActor_->UpdateMasterInfo(GetLeaderInfo(masterAID));
+    litebus::Async(dstActor_->GetAID(), &LocalSchedSrvActor::UpdateMasterInfo, GetLeaderInfo(masterAID));
     globalSchedStubActor_->Send(dstActor_->GetAID(), "Registered", registeredToGlobal.SerializeAsString());
-    dstActor_->domainSchedRegisterInfo_.aid.SetName(REGISTERED_DOMAIN_SCHED_NAME +
-                                                    DOMAIN_UNDERLAYER_SCHED_MGR_ACTOR_NAME_POSTFIX);
-    dstActor_->domainSchedRegisterInfo_.aid.SetUrl("10.10.10.10:11111");
+    litebus::Async(dstActor_->GetAID(), &LocalSchedSrvActor::UpdateDomainSchedulerAddress,
+                   litebus::AID(REGISTERED_DOMAIN_SCHED_NAME + DOMAIN_UNDERLAYER_SCHED_MGR_ACTOR_NAME_POSTFIX,
+                                "10.10.10.10:11111"));
     messages::Registered registeredToDomainSuccess;
     registeredToDomainSuccess.set_code(StatusCode::SUCCESS);
     domainSchedStubActor_->Send(dstActor_->GetAID(), "Registered", registeredToDomainSuccess.SerializeAsString());

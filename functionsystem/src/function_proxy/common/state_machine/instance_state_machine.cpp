@@ -250,7 +250,7 @@ litebus::Future<TransitionResult> InstanceStateMachine::TransitionTo(const Trans
         if (auto iter = instanceInfo.createoptions().find(RELIABILITY_TYPE);
             (iter != instanceInfo.createoptions().end() && iter->second == "low")
             || context.newState == InstanceState::FATAL) {
-            YRLOG_WARN("{}|the {} is low  or instance state({}) is fatal, rm the init args", instanceInfo.requestid(),
+            YRLOG_WARN("{}|the {} is low or instance state({}) is fatal, rm the init args", instanceInfo.requestid(),
                 RELIABILITY_TYPE, static_cast<int32_t>(context.newState));
             instanceInfo.clear_args();
         }
