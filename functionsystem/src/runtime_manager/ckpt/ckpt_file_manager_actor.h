@@ -30,6 +30,8 @@
 
 namespace functionsystem::runtime_manager {
 
+inline constexpr const char* DEFAULT_CHECKPOINT_DIR = "/home/yuanrong/checkpoints";
+
 /**
  * CheckpointFileInfo: Checkpoint file metadata with reference counting and TTL
  */
@@ -60,6 +62,15 @@ struct CheckpointFileInfo {
 class CkptFileManagerActor : public litebus::ActorBase {
 public:
     explicit CkptFileManagerActor(const std::string &name);
+
+    /**
+     * Constructor that allows overriding the default checkpoint directory.
+     * Intended for use in tests that run in environments without access to the
+     * default path.
+     * @param name   Actor name
+     * @param checkpointDir  Base directory for checkpoint file storage
+     */
+    CkptFileManagerActor(const std::string &name, const std::string &checkpointDir);
 
     ~CkptFileManagerActor() override = default;
 

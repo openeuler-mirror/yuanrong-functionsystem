@@ -20,7 +20,7 @@
 #include "function_master/global_scheduler/global_sched.h"
 #include "common/scheduler_topology/sched_node.h"
 #include "domain_activator.h"
-#include "function_master/common/flags/flags.cpp"
+#include "function_master/common/flags/flags.h"
 #include "global_sched_driver.h"
 #include "mocks/mock_domain_sched_mgr.h"
 #include "mocks/mock_domain_scheduler_launcher.h"

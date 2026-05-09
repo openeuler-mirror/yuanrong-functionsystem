@@ -352,6 +352,7 @@ void RuntimeManager::HandlePrestartRuntimeExit(const pid_t pid)
 void RuntimeManager::SetConfig(const Flags &flags)
 {
     functionAgentAID_ = litebus::AID(FUNCTION_AGENT_AGENT_SERVICE_ACTOR_NAME, flags.GetAgentAddress());
+    checkpointDir_ = flags.GetCheckpointDir();
     for (auto type : {EXECUTOR_TYPE::RUNTIME, EXECUTOR_TYPE::CONTAINER}) {
         auto executor = FindExecutor(type);
         YRLOG_INFO("SetRuntimeConfig for type({})", fmt::underlying(type));
@@ -471,7 +472,7 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::FindExecutor(EXECUTOR_TYPE type)
         YRLOG_INFO("create a sandbox executor.");
         auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
         const std::string name = "RuntimeExecutor_" + uuid.ToString();
-        auto executor = std::make_shared<SandboxExecutor>(name, functionAgentAID_);
+        auto executor = std::make_shared<SandboxExecutor>(name, functionAgentAID_, checkpointDir_);
         executor->SetHealthCheckClient(healthCheckClient_);
         litebus::Spawn(executor, false);
         auto executorProxy = std::make_shared<SandboxExecutorProxy>(executor);

@@ -17,7 +17,7 @@
 #include "exec_session_actor.h"
 
 #include <fcntl.h>
-#include <signal.h>
+#include <csignal>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -69,7 +69,9 @@ std::shared_ptr<ExecSessionActor> ExecSessionActor::Create(const CreateParams &p
 }
 
 ExecSessionActor::ExecSessionActor(const CreateParams &params)
-    : litebus::ActorBase("ExecSessionActor-" + params.sessionId), streamWriter_(params.writer), sessionId_(params.sessionId)
+    : litebus::ActorBase("ExecSessionActor-" + params.sessionId),
+      streamWriter_(params.writer),
+      sessionId_(params.sessionId)
 {
     YRLOG_INFO("ExecSessionActor created, sessionId: {}", sessionId_);
 }
@@ -311,6 +313,14 @@ void ExecSessionActor::Cleanup()
 
     YRLOG_INFO("Cleanup session, sessionId: {}, outFd: {}, errFd: {}", sessionId_, outFd, errFd);
 
+    // When called from the destructor the last shared_ptr has already been released,
+    // so shared_from_this() would throw std::bad_weak_ptr.  Fall back to a direct,
+    // synchronous cleanup that does not need to extend the object's lifetime.
+    if (weak_from_this().expired()) {
+        DoCleanupAfterUnregister();
+        return;
+    }
+
     // Use shared_from_this() to keep the actor alive until the callback fires,
     // even if litebus::Terminate+Await has already completed on the gRPC handler thread.
     auto onAllUnregistered = [self = shared_from_this()]() {
@@ -344,7 +354,7 @@ void ExecSessionActor::DoCleanupAfterUnregister()
     }
 
     YRLOG_INFO("DoCleanupAfterUnregister: exec_={}, sessionId: {}",
-                (exec_ ? "valid" : "null"), sessionId_);
+               (exec_ ? "valid" : "null"), sessionId_);
 
     if (ptyIO_) {
         ptyIO_->Close();
@@ -358,8 +368,9 @@ void ExecSessionActor::DoCleanupAfterUnregister()
             YRLOG_INFO("Killing exec process (detached thread), pid: {}, sessionId: {}", pid, sessionId_);
             // Offload the sleep+kill to a detached thread so we never block the calling thread
             // (which may be the IOEventActor event-loop thread, shared by all sessions).
+            static constexpr int killDelayMs = 100;  // grace period before SIGTERM
             std::thread([pid]() {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                std::this_thread::sleep_for(std::chrono::milliseconds(killDelayMs));
                 kill(pid, SIGTERM);
             }).detach();
         }
