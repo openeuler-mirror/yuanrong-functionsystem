@@ -291,6 +291,10 @@ std::string GetInstallationType()
     ssize_t count = readlink("/proc/self/exe", result, PATH_MAX);
     std::string exePath(result, (count > 0) ? count : 0);
 
+    if (exePath.find("inner") != std::string::npos) {
+        return PKG_TYPE_TARBALL;
+    }
+
     if (exePath.find("site-packages") != std::string::npos || exePath.find("venv") != std::string::npos) {
         return PKG_TYPE_WHEEL;
     }
