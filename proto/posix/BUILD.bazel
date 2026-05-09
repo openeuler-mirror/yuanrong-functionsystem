@@ -98,7 +98,10 @@ proto_library(
     name = "runtime_service_proto",
     srcs = ["runtime_service.proto"],
     strip_import_prefix = "/proto/posix",
-    deps = [":common_proto"],
+    deps = [
+        ":common_proto",
+        ":resource_proto",
+    ],
     visibility = ["//visibility:public"],
 )
 

@@ -237,7 +237,9 @@ Status NpuProbe::RefreshTopo()
         refreshThread_ = std::make_unique<std::thread>([this, func]() { // a new refresh thread is initiated.
             while (refreshFlag_) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(UPDATE_METRICS_DURATION));
-                (this->*(func))(); // Refresh the HBM or memory of the NPU
+                if (refreshFlag_) {
+                    (this->*(func))(); // Refresh the HBM or memory of the NPU
+                }
             }
         });
         return status;

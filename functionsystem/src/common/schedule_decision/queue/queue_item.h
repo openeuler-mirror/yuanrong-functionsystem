@@ -182,7 +182,7 @@ public:
     std::string groupReqID;
     GroupSpec::RangeOpt opt;
     int64_t timeout;
-    common::GroupPolicy groupSchedulePolicy;
+    common::GroupPolicy groupSchedulePolicy = common::GroupPolicy::None;
 };
 
 

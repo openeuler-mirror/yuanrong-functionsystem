@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#include <atomic>
 #include <fcntl.h>
+#include <memory>
 #include <unistd.h>
 #include <sys/stat.h>
 #include "gtest/gtest.h"
@@ -57,9 +59,9 @@ TEST_F(StdMonitorActorTest, AddValidFdWithCallback) {
     int pipeFds[2];
     ASSERT_EQ(pipe(pipeFds), 0);
 
-    bool callbackTriggered = false;
-    auto callback = [&callbackTriggered](int fd, int event) {
-        callbackTriggered = true;
+    auto callbackTriggered = std::make_shared<std::atomic<bool>>(false);
+    auto callback = [callbackTriggered](int, int) {
+        callbackTriggered->store(true);
     };
 
     auto addResult = litebus::Async(actor_->GetAID(), &StdMonitorActor::AddFd, pipeFds[0],
@@ -71,7 +73,7 @@ TEST_F(StdMonitorActorTest, AddValidFdWithCallback) {
     write(pipeFds[1], data, sizeof(data));
 
     // Wait for event processing
-    ASSERT_AWAIT_TRUE([&callbackTriggered]() -> bool { return callbackTriggered == true; });
+    ASSERT_AWAIT_TRUE([callbackTriggered]() -> bool { return callbackTriggered->load(); });
 
     close(pipeFds[0]);
     close(pipeFds[1]);
@@ -102,10 +104,12 @@ TEST_F(StdMonitorActorTest, MultipleFdMonitoring) {
     pipe(fd2);
     pipe(fd3);
 
-    std::vector<bool> callbacksTriggered(3, false);
-    auto cb1 = [&callbacksTriggered](int, int) { callbacksTriggered[0] = true; };
-    auto cb2 = [&callbacksTriggered](int, int) { callbacksTriggered[1] = true; };
-    auto cb3 = [&callbacksTriggered](int, int) { callbacksTriggered[2] = true; };
+    auto triggered1 = std::make_shared<std::atomic<bool>>(false);
+    auto triggered2 = std::make_shared<std::atomic<bool>>(false);
+    auto triggered3 = std::make_shared<std::atomic<bool>>(false);
+    auto cb1 = [triggered1](int, int) { triggered1->store(true); };
+    auto cb2 = [triggered2](int, int) { triggered2->store(true); };
+    auto cb3 = [triggered3](int, int) { triggered3->store(true); };
 
     litebus::Async(actor_->GetAID(), &StdMonitorActor::AddFd, fd1[0], DEFAULT_STD_MONITOR_EVENT, cb1).Get();
     litebus::Async(actor_->GetAID(), &StdMonitorActor::AddFd, fd2[0], DEFAULT_STD_MONITOR_EVENT, cb2).Get();
@@ -116,9 +120,9 @@ TEST_F(StdMonitorActorTest, MultipleFdMonitoring) {
     write(fd2[1], "2", 1);
     write(fd3[1], "3", 1);
 
-    for (auto&& value : callbacksTriggered) {
-        ASSERT_AWAIT_TRUE([&value]() -> bool { return value == true; });
-    }
+    ASSERT_AWAIT_TRUE([triggered1]() -> bool { return triggered1->load(); });
+    ASSERT_AWAIT_TRUE([triggered2]() -> bool { return triggered2->load(); });
+    ASSERT_AWAIT_TRUE([triggered3]() -> bool { return triggered3->load(); });
 
     close(fd1[0]); close(fd1[1]);
     close(fd2[0]); close(fd2[1]);
