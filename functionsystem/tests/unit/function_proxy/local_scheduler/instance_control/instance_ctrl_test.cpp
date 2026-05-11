@@ -189,6 +189,7 @@ public:
         instanceCtrlConfig.schedulePlugins = "[plugin]";
         instanceCtrl_ = InstanceCtrl::Create(nodeID_, instanceCtrlConfig);
         instanceControlView_ = std::make_shared<MockInstanceControlView>("nodeID");
+        ON_CALL(*instanceControlView_, DelInstance).WillByDefault(Return(Status::OK()));
         instanceCtrl_->BindInstanceControlView(instanceControlView_);
         instanceCtrl_->Start(funcAgentMgr_, resourceViewMgr_, observer_);
         instanceCtrl_->BindFunctionAgentMgr(funcAgentMgr_);
@@ -200,7 +201,8 @@ public:
         instanceCtrl_->BindControlInterfaceClientManager(mockSharedClientManagerProxy_);
 
         instanceCtrlWithMockObserver_ = InstanceCtrl::Create("nodeID", instanceCtrlConfig);
-        mockObserver_ = std::make_shared<MockObserver>();
+        mockObserver_ = std::shared_ptr<MockObserver>(new MockObserver(), [](MockObserver *) {});
+        ::testing::Mock::AllowLeak(mockObserver_.get());
         instanceCtrlWithMockObserver_->BindInstanceControlView(instanceControlView_);
         instanceCtrlWithMockObserver_->Start(funcAgentMgr_, resourceViewMgr_, mockObserver_);
         instanceCtrlWithMockObserver_->BindControlInterfaceClientManager(mockSharedClientManagerProxy_);
@@ -944,8 +946,9 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForInitRuntimeFailed)
     litebus::Future<runtime::CallResponse> sendRet;
     runtime::CallResponse callRsp;
     callRsp.set_code(common::ERR_REQUEST_BETWEEN_RUNTIME_BUS);
-    auto expectMsg = "call runtime failed! client may already closed";
-    callRsp.set_message(expectMsg);
+    std::string runtimeErrMsg = "call runtime failed! client may already closed";
+    auto expectMsg = runtimeErrMsg + " on nodeID";
+    callRsp.set_message(runtimeErrMsg);
     sendRet.SetValue(callRsp);
     EXPECT_CALL(*mockSharedClient, InitCallWrapper).WillOnce(Return(sendRet));
 
@@ -969,6 +972,13 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForInitRuntimeFailed)
     ASSERT_AWAIT_TRUE([&]() { return scheduleReq->instance().instancestatus().code() == static_cast<int32_t>(InstanceState::FATAL); });
     auto machine = instanceControlView->GetInstance("DesignatedInstanceID");
     ASSERT_AWAIT_TRUE([&]() { return machine->GetInstanceState() == InstanceState::FATAL; });
+    ::testing::Mock::VerifyAndClearExpectations(observer.get());
+    ::testing::Mock::AllowLeak(observer.get());
+    instanceCtrl->Stop();
+    instanceCtrl->Await();
+    InstanceStateMachine::UnBindControlPlaneObserver();
+    instanceCtrl.reset();
+    observer.reset();
 }
 
 /**
@@ -1313,26 +1323,22 @@ TEST_F(InstanceCtrlTest, KillInstanceWithCreating)
     auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeN");
     auto &mockStateMachine = *stateMachine;
     EXPECT_CALL(*instanceControlView_, GetInstance).WillRepeatedly(Return(stateMachine));
-    EXPECT_CALL(mockStateMachine, IsSaving).WillOnce(Return(false));
-    EXPECT_CALL(mockStateMachine, TryExitInstance)
-        .WillOnce(Invoke([](const std::shared_ptr<litebus::Promise<Status>> &promise,
-                const std::shared_ptr<KillContext> &killCtx, bool isSynchronized) {
-            promise->SetValue(Status::OK());
-            return Status::OK();
-        }));
     resources::InstanceInfo instance;
     instance.set_instanceid(instanceID);
     instance.set_requestid("request");
     instance.set_functionproxyid("nodeN");
     instance.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::CREATING));
+    auto readyInstance = instance;
+    readyInstance.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::EXITED));
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->CopyFrom(instance);
     auto instanceContext = std::make_shared<InstanceContext>(scheduleReq);
     EXPECT_CALL(mockStateMachine, GetInstanceContextCopy).WillRepeatedly(Return(instanceContext));
+    EXPECT_CALL(mockStateMachine, GetInstanceInfo).WillRepeatedly(Return(readyInstance));
     EXPECT_CALL(mockStateMachine, AddStateChangeCallback)
-        .WillOnce(Invoke([instance](const std::unordered_set<InstanceState> &statesConcerned,
-                                    const std::function<void(const resources::InstanceInfo &)> &callback,
-                                    const std::string &eventKey) { callback(instance); }));
+        .WillRepeatedly(Invoke([readyInstance](const std::unordered_set<InstanceState> &statesConcerned,
+                                               const std::function<void(const resources::InstanceInfo &)> &callback,
+                                               const std::string &eventKey) { callback(readyInstance); }));
     EXPECT_CALL(mockStateMachine, GetCancelFuture).WillOnce(Return(litebus::Future<std::string>()));
 
     auto killReq = GenKillRequest(instanceID, SHUT_DOWN_SIGNAL);
@@ -1756,6 +1762,7 @@ TEST_F(InstanceCtrlTest, ForwardCustomSignalSuccess)
     auto mockInstanceCtrlActor =
         std::make_shared<MockInstanceCtrlActor>(mockInstanceCtrlActorName, proxyID1, instanceCtrlConfig);
     litebus::Spawn(mockInstanceCtrlActor);
+    ::testing::Mock::AllowLeak(mockInstanceCtrlActor.get());
 
     auto killReq = GenKillRequest(instanceID1, customSignal);
 
@@ -1787,6 +1794,7 @@ TEST_F(InstanceCtrlTest, ForwardCustomSignalSuccess)
 
     litebus::Terminate(mockInstanceCtrlActor->GetAID());
     litebus::Await(mockInstanceCtrlActor);
+    mockInstanceCtrlActor.reset();
 }
 
 TEST_F(InstanceCtrlTest, ForwardCustomSignalRequestDuplicate)
@@ -1811,6 +1819,7 @@ TEST_F(InstanceCtrlTest, ForwardCustomSignalRequestDuplicate)
     auto mockInstanceCtrlActor =
         std::make_shared<MockInstanceCtrlActor>(mockInstanceCtrlActorName, proxyID1, instanceCtrlConfig);
     litebus::Spawn(mockInstanceCtrlActor);
+    ::testing::Mock::AllowLeak(mockInstanceCtrlActor.get());
 
     auto promise = litebus::Promise<core_service::KillResponse>();
     instanceCtrlActor->forwardCustomSignalRequestIDs_.emplace(requestID,
@@ -1829,8 +1838,10 @@ TEST_F(InstanceCtrlTest, ForwardCustomSignalRequestDuplicate)
     ASSERT_AWAIT_READY(called->GetFuture());
     litebus::Terminate(mockInstanceCtrlActor->GetAID());
     litebus::Await(mockInstanceCtrlActor);
+    mockInstanceCtrlActor.reset();
     litebus::Terminate(instanceCtrlActor->GetAID());
     litebus::Await(instanceCtrlActor);
+    instanceCtrlActor.reset();
 }
 
 TEST_F(InstanceCtrlTest, SendForwardCustomSignalRequestDuplicate)
@@ -1865,6 +1876,7 @@ TEST_F(InstanceCtrlTest, SendForwardCustomSignalRequestDuplicate)
 
     litebus::Terminate(instanceCtrlActor->GetAID());
     litebus::Await(instanceCtrlActor);
+    instanceCtrlActor.reset();
 }
 
 /**
@@ -1884,6 +1896,7 @@ TEST_F(InstanceCtrlTest, ForwardCustomSignalFail)
     auto mockInstanceCtrlActor =
         std::make_shared<MockInstanceCtrlActor>(mockInstanceCtrlActorName, proxyID1, instanceCtrlConfig);
     litebus::Spawn(mockInstanceCtrlActor);
+    ::testing::Mock::AllowLeak(mockInstanceCtrlActor.get());
 
     auto killReq = GenKillRequest(instanceID1, customSignal);
 
@@ -1913,6 +1926,7 @@ TEST_F(InstanceCtrlTest, ForwardCustomSignalFail)
 
     litebus::Terminate(mockInstanceCtrlActor->GetAID());
     litebus::Await(mockInstanceCtrlActor);
+    mockInstanceCtrlActor.reset();
 }
 
 /**
@@ -1934,6 +1948,7 @@ TEST_F(InstanceCtrlTest, RetryForwardCustomSignalSucess)
     auto mockInstanceCtrlActor =
         std::make_shared<MockInstanceCtrlActor>(mockInstanceCtrlActorName, proxyID1, instanceCtrlConfig);
     litebus::Spawn(mockInstanceCtrlActor);
+    ::testing::Mock::AllowLeak(mockInstanceCtrlActor.get());
 
     auto killReq = GenKillRequest(instanceID1, customSignal);
 
@@ -1965,6 +1980,7 @@ TEST_F(InstanceCtrlTest, RetryForwardCustomSignalSucess)
 
     litebus::Terminate(mockInstanceCtrlActor->GetAID());
     litebus::Await(mockInstanceCtrlActor);
+    mockInstanceCtrlActor.reset();
 }
 
 /**
@@ -1985,6 +2001,7 @@ TEST_F(InstanceCtrlTest, RetryForwardCustomSignalFail)
     auto mockInstanceCtrlActor =
         std::make_shared<MockInstanceCtrlActor>(mockInstanceCtrlActorName, proxyID1, instanceCtrlConfig);
     litebus::Spawn(mockInstanceCtrlActor);
+    ::testing::Mock::AllowLeak(mockInstanceCtrlActor.get());
 
     auto killReq = GenKillRequest(instanceID1, customSignal);
 
@@ -2016,6 +2033,7 @@ TEST_F(InstanceCtrlTest, RetryForwardCustomSignalFail)
 
     litebus::Terminate(mockInstanceCtrlActor->GetAID());
     litebus::Await(mockInstanceCtrlActor);
+    mockInstanceCtrlActor.reset();
 }
 
 /**
@@ -2037,6 +2055,7 @@ TEST_F(InstanceCtrlTest, ProcessCustomSignalSuccess)
     auto mockInstanceCtrlActor =
         std::make_shared<MockInstanceCtrlActor>(mockInstanceCtrlActorName, proxyID1, instanceCtrlConfig);
     litebus::Spawn(mockInstanceCtrlActor);
+    ::testing::Mock::AllowLeak(mockInstanceCtrlActor.get());
 
     auto killReq = GenKillRequest(instanceID1, customSignal);
 
@@ -2082,6 +2101,7 @@ TEST_F(InstanceCtrlTest, ProcessCustomSignalSuccess)
 
     litebus::Terminate(mockInstanceCtrlActor->GetAID());
     litebus::Await(mockInstanceCtrlActor);
+    mockInstanceCtrlActor.reset();
 }
 
 TEST_F(InstanceCtrlTest, ProcessCustomSignalInstanceNotFound)
@@ -2089,6 +2109,7 @@ TEST_F(InstanceCtrlTest, ProcessCustomSignalInstanceNotFound)
     auto mockInstanceCtrlActor =
         std::make_shared<MockInstanceCtrlActor>(mockInstanceCtrlActorName, proxyID1, instanceCtrlConfig);
     litebus::Spawn(mockInstanceCtrlActor);
+    ::testing::Mock::AllowLeak(mockInstanceCtrlActor.get());
     auto killReq = GenKillRequest(instanceID1, customSignal);
     resource_view::InstanceInfo instanceInfo =
         GenInstanceInfo(instanceID1, "nodeID", runtimeID1, static_cast<int32_t>(InstanceState::RUNNING));
@@ -2117,6 +2138,7 @@ TEST_F(InstanceCtrlTest, ProcessCustomSignalInstanceNotFound)
     EXPECT_EQ(forwardKillResponse.code(), static_cast<int32_t>(common::ErrorCode::ERR_INSTANCE_NOT_FOUND));
     litebus::Terminate(mockInstanceCtrlActor->GetAID());
     litebus::Await(mockInstanceCtrlActor);
+    mockInstanceCtrlActor.reset();
 }
 
 /**

@@ -1149,7 +1149,6 @@ message TenantQuotaExceeded {
     string tenantID   = 1;
     int64  cooldownMs = 2;
 }
-
 // ── Runtime reconciliation ──────────────────────────────────────────
 
 message RuntimeReconcileEntry {

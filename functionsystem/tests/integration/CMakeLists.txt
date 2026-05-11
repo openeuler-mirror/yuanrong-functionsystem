@@ -34,6 +34,7 @@ target_include_directories(${INTEGRATION_TEST_MODULE} PRIVATE
 add_subdirectory(stubs)
 target_compile_options(${INTEGRATION_TEST_MODULE} PRIVATE "-fvisibility=hidden")
 target_link_libraries(${INTEGRATION_TEST_MODULE} PRIVATE
+        ${zlib_LIB}
         ${grpcpp_LIB}
         ${gpr_LIB}
         ${protobuf_LIB}

@@ -35,6 +35,18 @@ Status IAMDriver::Start()
 {
     YRLOG_INFO("Start IAMDriver, nodeID: {}, ip: {}, provider: {}", param_.nodeID, param_.ip, param_.authProvider);
 
+    // Validate localIp is a loopback address when local listener is enabled.
+    // The local listener has no TLS or AKSK; binding it to a non-loopback interface
+    // would silently expose an unauthenticated port to the network.
+    if (param_.localPort != 0) {
+        const std::string &lip = param_.localIp;
+        bool isLoopback = lip.empty() || (lip.rfind("127.", 0) == 0) || (lip == "::1");
+        if (!isLoopback) {
+            YRLOG_ERROR("IAMDriver: localIp '{}' must be a loopback address (127.x.x.x or ::1)", lip);
+            return Status(StatusCode::FAILED, "localIp must be a loopback address");
+        }
+    }
+
     // create
     if (auto status(Create()); status != StatusCode::SUCCESS) {
         YRLOG_ERROR("IAMDriver start Create failed, err: {}", status.ToString());

@@ -15,6 +15,7 @@
  */
 
 // Must be included before #define private public to avoid redeclaration errors in STL headers
+#include <any>
 #include <sstream>
 #include <string>
 

@@ -62,6 +62,7 @@ TEST_F(Heartbeat, ObserverSuccessWithoutAddNode)
         return heartbeatClient->GetStatus().IsOk();
     });
     litebus::Terminate(heartbeatClient->GetAID());
+    litebus::Await(heartbeatClient->GetAID());
 }
 
 TEST_F(Heartbeat, ObserverSuccessAddNode)
@@ -83,6 +84,7 @@ TEST_F(Heartbeat, ObserverSuccessAddNode)
         return heartbeatClient->GetStatus().IsOk();
     });
     litebus::Terminate(heartbeatClient->GetAID());
+    litebus::Await(heartbeatClient->GetAID());
 }
 
 TEST_F(Heartbeat, ObserverSuccessClientDied)

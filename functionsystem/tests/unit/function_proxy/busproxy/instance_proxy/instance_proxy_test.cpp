@@ -26,6 +26,7 @@
 #include "function_proxy/busproxy/instance_view/instance_view.h"
 #include "function_proxy/busproxy/invocation_handler/invocation_handler.h"
 #include "function_proxy/common/observer/data_plane_observer/data_plane_observer.h"
+#include "function_proxy/config/direct_routing_config.h"
 #include "mocks/mock_internal_iam.h"
 #include "mocks/mock_shared_client.h"
 #include "mocks/mock_shared_client_manager_proxy.h"
@@ -901,6 +902,185 @@ TEST_F(InstanceProxyTest, ForwardCallWithoutCallee)
 
     litebus::Terminate(forwardCallActor->GetAID());
     litebus::Await(forwardCallActor->GetAID());
+}
+
+// Helper: spawn a ready callee InstanceProxy that handles ForwardCall via a mock local client.
+static std::shared_ptr<MockSharedClient> SpawnReadyCalleeProxy(
+    const std::string &calleeIns, const std::string &proxyID,
+    std::function<litebus::Future<SharedStreamMsg>(const SharedStreamMsg &)> callHandler)
+{
+    auto calleeProxyActor = std::make_shared<InstanceProxy>(calleeIns, "");
+    calleeProxyActor->InitDispatcher();
+    auto info = std::make_shared<InstanceRouterInfo>();
+    info->isReady = true;
+    info->isLocal = true;
+    info->runtimeID = calleeIns;
+    info->proxyID = proxyID;
+    auto mockCalleeClient = std::make_shared<MockSharedClient>();
+    info->localClient = mockCalleeClient;
+    calleeProxyActor->NotifyChanged(calleeIns, info);
+    litebus::Spawn(calleeProxyActor);
+    EXPECT_CALL(*mockCalleeClient, Call(_)).WillRepeatedly(Invoke(callHandler));
+    return mockCalleeClient;
+}
+
+/**
+ * Feature: LRU route cache – rule 3.1 + 3.2
+ * Description: When DirectRoutingConfig is enabled and a call with YR_ROUTE populates
+ *   the LRU cache, subsequent calls to the same callee WITHOUT YR_ROUTE must use the
+ *   cached route directly (ForwardWithRouteAndFallback path), NOT trigger the observer
+ *   subscribe path.
+ * Steps:
+ * 1. Enable DirectRoutingConfig
+ * 2. Spawn a ready callee InstanceProxy
+ * 3. Call with YR_ROUTE → cache populated, forward succeeds (ERR_NONE)
+ * 4. Call without YR_ROUTE → LRU cache hit, forward succeeds (ERR_NONE)
+ * Expectation: observer subscribe (ignoreNonExist=false) is never triggered for either call
+ */
+TEST_F(InstanceProxyTest, RouteFromLRUCacheWhenFlagEnabled)
+{
+    function_proxy::DirectRoutingConfig::SetEnabled(true);
+
+    std::string callerIns = "callerIns";
+    std::string calleeIns = "calleeIns";
+
+    // Spawn a ready callee proxy that returns ERR_NONE for every forwarded call.
+    (void)SpawnReadyCalleeProxy(calleeIns, local_, [](const SharedStreamMsg &) -> litebus::Future<SharedStreamMsg> {
+        auto msg = std::make_shared<runtime_rpc::StreamingMessage>();
+        msg->mutable_callrsp()->set_code(::common::ErrorCode::ERR_NONE);
+        return msg;
+    });
+
+    // SubscribeInstanceEvent with ignoreNonExist=true may be called from the callee's
+    // DoForwardCall handler (registering the caller as a remote sender) -- allow it.
+    EXPECT_CALL(*observer_, SendSubscribeInstanceEvent(_, _, true)).WillRepeatedly(Return(Status::OK()));
+    // The normal routing-subscribe path (ignoreNonExist=false) must never be taken when
+    // the LRU cache holds a valid route.
+    EXPECT_CALL(*observer_, SendSubscribeInstanceEvent(_, _, false)).Times(0);
+
+    auto mockSharedClient = PrepareCaller(callerIns);
+    litebus::AID callerProxy(callerIns, observer_->GetAID().Url());
+    ASSERT_AWAIT_TRUE([&]() { return litebus::GetActor(callerProxy) != nullptr; });
+
+    // First call WITH YR_ROUTE: rule 3.1 – puts route into LRU cache and forwards.
+    std::string route = observer_->GetAID().Url();
+    auto firstCall = litebus::Async(callerProxy, &InstanceProxy::Call,
+                                    busproxy::CallerInfo{.instanceID = callerIns}, calleeIns,
+                                    CallRequest(callerIns, calleeIns, "Request-lru-1", route), nullptr);
+    ASSERT_AWAIT_SET(firstCall);
+    EXPECT_TRUE(firstCall.Get()->has_callrsp() &&
+                firstCall.Get()->callrsp().code() == common::ERR_NONE);
+
+    // Second call WITHOUT YR_ROUTE: rule 3.2 – should use the LRU-cached route.
+    auto secondCall = litebus::Async(callerProxy, &InstanceProxy::Call,
+                                     busproxy::CallerInfo{.instanceID = callerIns}, calleeIns,
+                                     CallRequest(callerIns, calleeIns, "Request-lru-2"), nullptr);
+    ASSERT_AWAIT_SET(secondCall);
+    EXPECT_TRUE(secondCall.Get()->has_callrsp() &&
+                secondCall.Get()->callrsp().code() == common::ERR_NONE);
+
+    function_proxy::DirectRoutingConfig::SetEnabled(false);
+}
+
+/**
+ * Feature: LRU route cache – NotifyChanged update path
+ * Description: When DirectRoutingConfig is enabled and NotifyChanged is received with a
+ *   non-empty proxyGrpcAddress, that address is stored in routeCache_. A subsequent call
+ *   without YR_ROUTE should use that cached address (not the subscribe path).
+ * Steps:
+ * 1. Enable DirectRoutingConfig
+ * 2. Spawn a ready callee InstanceProxy at the local URL
+ * 3. Call with YR_ROUTE to populate the LRU cache with the local URL
+ * 4. Call again with YR_ROUTE carrying the same URL to confirm cache update (re-put)
+ * 5. Call without YR_ROUTE → uses cached route, forward succeeds (ERR_NONE)
+ * Expectation: mock callee client is invoked for all three forwarded calls;
+ *   observer subscribe (ignoreNonExist=false) is never triggered
+ */
+TEST_F(InstanceProxyTest, UpdateLRUCacheOnCallWithRoute)
+{
+    function_proxy::DirectRoutingConfig::SetEnabled(true);
+
+    std::string callerIns = "callerIns";
+    std::string calleeIns = "calleeIns";
+
+    int callCount = 0;
+    (void)SpawnReadyCalleeProxy(calleeIns, local_, [&callCount](const SharedStreamMsg &) -> litebus::Future<SharedStreamMsg> {
+        ++callCount;
+        auto msg = std::make_shared<runtime_rpc::StreamingMessage>();
+        msg->mutable_callrsp()->set_code(::common::ErrorCode::ERR_NONE);
+        return msg;
+    });
+
+    EXPECT_CALL(*observer_, SendSubscribeInstanceEvent(_, _, true)).WillRepeatedly(Return(Status::OK()));
+    EXPECT_CALL(*observer_, SendSubscribeInstanceEvent(_, _, false)).Times(0);
+
+    auto mockSharedClient = PrepareCaller(callerIns);
+    litebus::AID callerProxy(callerIns, observer_->GetAID().Url());
+    ASSERT_AWAIT_TRUE([&]() { return litebus::GetActor(callerProxy) != nullptr; });
+
+    std::string route = observer_->GetAID().Url();
+
+    // First call WITH YR_ROUTE: puts route = local URL into the LRU cache.
+    auto call1 = litebus::Async(callerProxy, &InstanceProxy::Call,
+                                busproxy::CallerInfo{.instanceID = callerIns}, calleeIns,
+                                CallRequest(callerIns, calleeIns, "Request-update-1", route), nullptr);
+    ASSERT_AWAIT_SET(call1);
+    EXPECT_TRUE(call1.Get()->has_callrsp() && call1.Get()->callrsp().code() == common::ERR_NONE);
+
+    // Second call WITH YR_ROUTE: updates (re-puts) the same route in the cache.
+    auto call2 = litebus::Async(callerProxy, &InstanceProxy::Call,
+                                busproxy::CallerInfo{.instanceID = callerIns}, calleeIns,
+                                CallRequest(callerIns, calleeIns, "Request-update-2", route), nullptr);
+    ASSERT_AWAIT_SET(call2);
+    EXPECT_TRUE(call2.Get()->has_callrsp() && call2.Get()->callrsp().code() == common::ERR_NONE);
+
+    // Third call WITHOUT YR_ROUTE: must use the cached route – the callee mock is invoked.
+    auto call3 = litebus::Async(callerProxy, &InstanceProxy::Call,
+                                busproxy::CallerInfo{.instanceID = callerIns}, calleeIns,
+                                CallRequest(callerIns, calleeIns, "Request-update-3"), nullptr);
+    ASSERT_AWAIT_SET(call3);
+    EXPECT_TRUE(call3.Get()->has_callrsp() && call3.Get()->callrsp().code() == common::ERR_NONE);
+
+    // All three requests were forwarded to the callee's mock client.
+    EXPECT_EQ(callCount, 3);
+
+    function_proxy::DirectRoutingConfig::SetEnabled(false);
+}
+
+/**
+ * Feature: LRU route cache – fallback when flag disabled
+ * Description: When DirectRoutingConfig is disabled (default), calling without YR_ROUTE
+ *   and with an empty LRU cache must fall back to the observer subscribe path (rule 3.3).
+ * Steps:
+ * 1. DirectRoutingConfig is disabled (default)
+ * 2. Prepare caller but do not register callee
+ * 3. Call without YR_ROUTE
+ * Expectation: observer subscribe (ignoreNonExist=false) IS triggered;
+ *   response indicates instance-not-found
+ */
+TEST_F(InstanceProxyTest, FallbackToObserverWhenLRUEmpty)
+{
+    // Flag is disabled by default; assert it explicitly for clarity.
+    ASSERT_FALSE(function_proxy::DirectRoutingConfig::IsEnabled());
+
+    std::string callerIns = "callerIns";
+    std::string calleeIns = "calleeIns";
+
+    // The subscribe path must be taken since LRU is disabled and cache is empty.
+    EXPECT_CALL(*observer_, SendSubscribeInstanceEvent(_, _, false))
+        .WillOnce(Return(Status::OK()));
+
+    auto mockSharedClient = PrepareCaller(callerIns);
+    litebus::AID callerProxy(callerIns, observer_->GetAID().Url());
+    ASSERT_AWAIT_TRUE([&]() { return litebus::GetActor(callerProxy) != nullptr; });
+
+    // Call to a callee that has no info in the instanceView_ – triggers subscribe path.
+    auto call = litebus::Async(callerProxy, &InstanceProxy::Call,
+                               busproxy::CallerInfo{.instanceID = callerIns}, calleeIns,
+                               CallRequest(callerIns, calleeIns, "Request-fallback"), nullptr);
+    ASSERT_AWAIT_SET(call);
+    EXPECT_TRUE(call.Get()->has_callrsp() &&
+                call.Get()->callrsp().code() == common::ERR_INSTANCE_NOT_FOUND);
 }
 
 }  // namespace functionsystem::test

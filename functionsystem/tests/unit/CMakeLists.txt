@@ -71,11 +71,12 @@ target_include_directories(${UNIT_TEST_MODULE} PRIVATE
         ${GLOBAL_SCHEDULER_DIR}
         ${SRC_RUNTIME_MANAGER_INCLUDE_DIR}
         ${SRC_DOMAIN_SCHEDULER_INCLUDE_DIR}
+        ${SRC_IAM_SERVER_INCLUDE_DIR}
 )
 target_compile_options(${UNIT_TEST_MODULE} PRIVATE "-fvisibility=hidden")
 get_property(PLUGIN_LIB GLOBAL PROPERTY "PLUGIN_LIB")
 target_link_libraries(${UNIT_TEST_MODULE} PRIVATE
-        ${crypto_LIB} ${ssl_LIB} ${protobuf_LIB}
+        ${crypto_LIB} ${ssl_LIB} ${zlib_LIB} ${protobuf_LIB}
         ${grpcpp_LIB} ${gpr_LIB} ${etcdapi_LIB_A}
         ${securec_LIB}
         ${gtest_LIB_A}
@@ -95,6 +96,7 @@ target_link_libraries(${UNIT_TEST_MODULE} PRIVATE
         local_scheduler_lib
         runtime_manager_lib
         function_proxy_common_lib
+        iam_server_lib
         leader
         explorer
         profile

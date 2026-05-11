@@ -1306,6 +1306,7 @@ void ResourceViewActor::MergeResourceViewChanges(const std::map<int64_t, Resourc
                                                        const std::string &localId, ResourceUnitChanges &result)
 {
     std::unordered_map<std::string, ResourceUnitChange> summarizedChanges;
+    std::vector<std::string> changeOrder;
     auto itEnd = changes.upper_bound(endRevision);
     for (auto it = changes.upper_bound(startRevision); it != itEnd; ++it) {
         const auto& change = it->second;
@@ -1313,6 +1314,9 @@ void ResourceViewActor::MergeResourceViewChanges(const std::map<int64_t, Resourc
         auto iter = summarizedChanges.find(resourceUnitId);
         if (iter == summarizedChanges.end()) {
             summarizedChanges.emplace(resourceUnitId, change);
+            if (std::find(changeOrder.begin(), changeOrder.end(), resourceUnitId) == changeOrder.end()) {
+                changeOrder.push_back(resourceUnitId);
+            }
             continue;
         }
         auto mergeChange = MergeResourceUnitChanges(iter->second, change);
@@ -1323,8 +1327,12 @@ void ResourceViewActor::MergeResourceViewChanges(const std::map<int64_t, Resourc
         }
     }
     result.mutable_changes()->Reserve(static_cast<int>(summarizedChanges.size()));
-    for (auto& [id, change] : summarizedChanges) {
-        *result.add_changes() = std::move(change);
+    for (const auto &id : changeOrder) {
+        auto iter = summarizedChanges.find(id);
+        if (iter == summarizedChanges.end()) {
+            continue;
+        }
+        *result.add_changes() = iter->second;
     }
     result.set_startrevision(startRevision);
     result.set_endrevision(endRevision);

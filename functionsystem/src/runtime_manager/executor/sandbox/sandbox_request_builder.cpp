@@ -347,7 +347,7 @@ void SandboxRequestBuilder::ApplyBootstrapMount(
         return;
     }
     auto *mount = mounts->Add();
-    const std::string mountDst = "/__yuanrong";
+    const std::string mountDst = "/__yuanrong/";
     mount->set_host_path(bc.root());
     mount->set_target(mountDst);
     mount->set_type((bc.type() == "erofs") ? "erofs" : "bind");

@@ -17,7 +17,7 @@
 #include "exec_session_actor.h"
 
 #include <fcntl.h>
-#include <signal.h>
+#include <csignal>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -37,6 +37,16 @@
 namespace functionsystem {
 
 static const int WRITE_BUFFER_SIZE = 4096;
+
+std::vector<std::string> ExecSessionActor::BuildExecBaseArgv()
+{
+    // If the container ID carries a "sbox" prefix (e.g. "sbox-<id>"), use sbox exec;
+    // otherwise fall back to docker exec.
+    if (containerId_.rfind("sbox", 0) == 0) {
+        return {"sbox", "exec"};
+    }
+    return {"docker", "exec", "-i"};
+}
 
 std::string ExecSessionActor::GenerateSessionId()
 {
@@ -59,7 +69,9 @@ std::shared_ptr<ExecSessionActor> ExecSessionActor::Create(const CreateParams &p
 }
 
 ExecSessionActor::ExecSessionActor(const CreateParams &params)
-    : litebus::ActorBase("ExecSessionActor-" + params.sessionId), streamWriter_(params.writer), sessionId_(params.sessionId)
+    : litebus::ActorBase("ExecSessionActor-" + params.sessionId),
+      streamWriter_(params.writer),
+      sessionId_(params.sessionId)
 {
     YRLOG_INFO("ExecSessionActor created, sessionId: {}", sessionId_);
 }
@@ -114,8 +126,8 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
     rows_ = rows;
     cols_ = cols;
 
-    // Build docker exec command
-    std::vector<std::string> argv = {"sbox", "exec"}; 
+    // Build container exec command (sbox exec or docker exec depending on availability)
+    std::vector<std::string> argv = BuildExecBaseArgv();
 
     for (const auto &[key, value] : env) {
         argv.push_back("-e");
@@ -128,7 +140,7 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
     argv.push_back(containerId_);
     argv.insert(argv.end(), command_.begin(), command_.end());
 
-    YRLOG_INFO("Starting sbox exec, sessionId: {}, container: {}", sessionId_, containerId);
+    YRLOG_INFO("Starting container exec ({}), sessionId: {}, container: {}", argv[0], sessionId_, containerId);
 
     if (tty_) {
         auto ptyResult = litebus::PtyExecIO::Create(rows_, cols_);
@@ -154,7 +166,7 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
         };
 
         exec_ = litebus::Exec::CreateExec(
-            "sbox", argv, litebus::None(),
+            argv[0], argv, litebus::None(),
             *ptyIO_->stdIn, *ptyIO_->stdOut, *ptyIO_->stdErr,
             childInitHooks, {}, true);
         // Exec::CreateExec closes the slave fd in the parent process (via CloseFD after fork).
@@ -163,7 +175,7 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
 
     } else {
         exec_ = litebus::Exec::CreateExec(
-            "sbox", argv, litebus::None(),
+            argv[0], argv, litebus::None(),
             litebus::ExecIO::CreatePipeIO(),
             litebus::ExecIO::CreatePipeIO(),
             litebus::ExecIO::CreatePipeIO(),
@@ -301,6 +313,14 @@ void ExecSessionActor::Cleanup()
 
     YRLOG_INFO("Cleanup session, sessionId: {}, outFd: {}, errFd: {}", sessionId_, outFd, errFd);
 
+    // When called from the destructor the last shared_ptr has already been released,
+    // so shared_from_this() would throw std::bad_weak_ptr.  Fall back to a direct,
+    // synchronous cleanup that does not need to extend the object's lifetime.
+    if (weak_from_this().expired()) {
+        DoCleanupAfterUnregister();
+        return;
+    }
+
     // Use shared_from_this() to keep the actor alive until the callback fires,
     // even if litebus::Terminate+Await has already completed on the gRPC handler thread.
     auto onAllUnregistered = [self = shared_from_this()]() {
@@ -334,7 +354,7 @@ void ExecSessionActor::DoCleanupAfterUnregister()
     }
 
     YRLOG_INFO("DoCleanupAfterUnregister: exec_={}, sessionId: {}",
-                (exec_ ? "valid" : "null"), sessionId_);
+               (exec_ ? "valid" : "null"), sessionId_);
 
     if (ptyIO_) {
         ptyIO_->Close();
@@ -348,8 +368,9 @@ void ExecSessionActor::DoCleanupAfterUnregister()
             YRLOG_INFO("Killing exec process (detached thread), pid: {}, sessionId: {}", pid, sessionId_);
             // Offload the sleep+kill to a detached thread so we never block the calling thread
             // (which may be the IOEventActor event-loop thread, shared by all sessions).
+            static constexpr int killDelayMs = 100;  // grace period before SIGTERM
             std::thread([pid]() {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                std::this_thread::sleep_for(std::chrono::milliseconds(killDelayMs));
                 kill(pid, SIGTERM);
             }).detach();
         }

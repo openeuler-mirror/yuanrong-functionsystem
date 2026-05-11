@@ -33,6 +33,7 @@ else()
         timer/timer_tests.cpp
         utils_test
         sysmgr_test.cpp
+        dual_port_test.cpp
         ${LIBPROCESS_TCP}
     )
 
@@ -192,6 +193,14 @@ else()
         target_link_libraries(httpkmsg_enable_client ${LITEBUS_TEST_LIB_DIRS} pthread)
         add_dependencies(http-client-test curl)
         add_dependencies(httpkmsg_enable_client curl)
+
+        # Standalone E2E test for dual-port (local listener) feature.
+        # Must be a separate binary because litebus::Initialize is one-shot per process.
+        add_executable(dual-port-e2e-test http_test/dual_port_e2e_test.cpp)
+        target_compile_options(dual-port-e2e-test PRIVATE -Wno-error)
+        target_link_libraries(dual-port-e2e-test ${LITEBUS_TEST_LIB_DIRS} pthread)
+        add_dependencies(dual-port-e2e-test curl litebus_shared)
+        add_test(NAME DualPortE2ETest COMMAND ./dual-port-e2e-test)
 
     endif(${HTTP_ENABLED} STREQUAL "on")
 

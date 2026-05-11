@@ -178,6 +178,7 @@ void OnAccept(int server, uint32_t events, void *arg)
         return;
     }
 
+    conn->isLocalConn = (server == tcpmgr->serverFdLocal);
     ConnectionUtil::SetSocketOperate(conn);
 
     // register read event callback for server socket
@@ -375,6 +376,66 @@ bool TCPMgr::StartIOServer(const std::string &url, const std::string &aAdvertise
 
     BUSLOG_INFO("start server succ, fd:{},url:{},advertiseUrl:{}", serverFd, url, advertiseUrl);
 
+    return true;
+}
+
+/* Extract the host portion from a "tcp://HOST:PORT" URL.
+ * Returns an empty string if the URL does not match the expected format. */
+static std::string TcpUrlHost(const std::string &url)
+{
+    constexpr std::string_view kPrefix = "tcp://";
+    if (url.size() <= kPrefix.size() || url.compare(0, kPrefix.size(), kPrefix) != 0) {
+        return {};
+    }
+    std::string hostPort = url.substr(kPrefix.size());
+    /* Use rfind to strip the trailing ':PORT', keeping only HOST.
+     * For IPv6 addresses like ::1:port this correctly finds the last colon. */
+    auto colonPos = hostPort.rfind(':');
+    if (colonPos == std::string::npos) {
+        return {};
+    }
+    return hostPort.substr(0, colonPos);
+}
+
+bool TCPMgr::StartLocalListener(const std::string &localUrl, const std::string &localAdvUrl)
+{
+    /* The local plaintext listener is intentionally not registered with the routing layer:
+     * its advertise URL (localAdvUrl) is kept for diagnostics only.  Remote peers should
+     * never be told about this port — it is exclusively for same-node internal access and
+     * trusts connections implicitly (no TLS, no AKSK).  Publishing it would undermine the
+     * security model.
+     *
+     * Safety: reject any URL that does not bind to a loopback interface.
+     * A non-loopback bind would expose an unauthenticated (no TLS, no AKSK)
+     * port to the network, directly violating the security model.
+     *
+     * Substring search (find "tcp://127.") is insufficient — it would also match
+     * tcp://127.attacker.com:port.  Extract and validate HOST explicitly instead. */
+    std::string host = TcpUrlHost(localUrl);
+    bool isLoopback = (host.size() >= 4 && host.compare(0, 4, "127.") == 0) ||
+                      (host == "::1");
+    if (!isLoopback) {
+        BUSLOG_ERROR("StartLocalListener: localUrl must bind to loopback (127.x.x.x or ::1), got: {}", localUrl);
+        return false;
+    }
+    serverFdLocal = SocketOperate::Listen(localUrl);
+    if (serverFdLocal < 0) {
+        BUSLOG_ERROR("local listener bind failed. url={}", localUrl);
+        return false;
+    }
+
+    int retval = recvEvloop->AddFdEvent(
+        serverFdLocal,
+        static_cast<unsigned int>(EPOLLIN) | static_cast<unsigned int>(EPOLLHUP) | static_cast<unsigned int>(EPOLLERR),
+        tcpUtil::OnAccept, static_cast<void *>(this));
+    if (retval != BUS_OK) {
+        BUSLOG_ERROR("add local server event fail, url={}", localUrl);
+        (void)close(serverFdLocal);
+        serverFdLocal = -1;
+        return false;
+    }
+
+    BUSLOG_INFO("start local listener succ, fd:{},url:{},advUrl:{}", serverFdLocal, localUrl, localAdvUrl);
     return true;
 }
 
@@ -937,6 +998,9 @@ void TCPMgr::FinishDestruct()
         if (recvEvloop->DelFdEvent(serverFd) != BUS_OK) {
             BUSLOG_ERROR("failed to delete server fd event");
         }
+        if (serverFdLocal >= 0 && recvEvloop->DelFdEvent(serverFdLocal) != BUS_OK) {
+            BUSLOG_ERROR("failed to delete local server fd event");
+        }
         delete recvEvloop;
         recvEvloop = nullptr;
     }
@@ -944,6 +1008,11 @@ void TCPMgr::FinishDestruct()
     if (serverFd > 0) {
         (void)close(serverFd);
         serverFd = -1;
+    }
+
+    if (serverFdLocal >= 0) {
+        (void)close(serverFdLocal);
+        serverFdLocal = -1;
     }
 }
 

@@ -68,10 +68,10 @@ TEST_F(DefaultScorerTest, DefaultScorer)
         preAllocated->allocated[unit.id()].resource = std::move(rs);
 
         auto score = scorer.Score(preAllocated, ins, unit);
-        int64_t cpuScore = (1.0f - 500.0 / 900.0) * 100;
-        int64_t memScore = (1.0f - 512.0 / 924.0) * 100;
-        int64_t expectScore = (memScore + cpuScore) / 2;
-        EXPECT_EQ(expectScore, score.score);
+        double cpuScore = (1.0 - 500.0 / 900.0) * 100.0;
+        double memScore = (1.0 - 512.0 / 924.0) * 100.0;
+        double expectScore = (memScore + cpuScore) / 2.0;
+        EXPECT_DOUBLE_EQ(expectScore, score.score);
     }
 }
 
