@@ -162,4 +162,14 @@ TEST_F(SandboxExecutorTest, CommitThenOutOfScopeMgrIsActiveTrue)
     EXPECT_TRUE(mgr_.IsActive(runtimeID));
 }
 
+TEST_F(SandboxExecutorTest, ReconcileRuntimesRejectsNullRequest)
+{
+    SandboxExecutor executor("sandbox-executor-test", litebus::AID(), "/tmp/sandbox-executor-test-ckpt");
+
+    const auto response = executor.ReconcileRuntimes(nullptr).Get();
+
+    EXPECT_EQ(response.code(), static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
+    EXPECT_EQ(response.message(), "request is null");
+}
+
 }  // namespace functionsystem::test
