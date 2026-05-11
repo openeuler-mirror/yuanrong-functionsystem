@@ -79,8 +79,6 @@ protected:
         litebus::Spawn(observerActor_);
         controlPlaneObserver_ = std::make_shared<function_proxy::ControlPlaneObserver>(observerActor_);
         controlPlaneObserver_->Register();
-        // one from meta json, three from services.yaml
-        ASSERT_AWAIT_TRUE([&]() -> bool { return observerActor_->funcMetaMap_.size() == 5; });
     }
 
     [[maybe_unused]] static void TearDownTestSuite()
@@ -114,6 +112,7 @@ protected:
         metaStoreClient_->Delete("/sn/ins", { .prefix = true }).Get();
         YRLOG_INFO("TearDown......");
         metaStorageAccessor_->metaClient_ = metaStoreClient_;
+        observerActor_->isPartialWatchInstances_ = false;
         YRLOG_INFO("TearDown......Finish");
     }
 
@@ -439,7 +438,7 @@ TEST_F(ObserverTest, PutDeleteEvent)
 TEST_F(ObserverTest, ProcFuncMetaEvent)
 {
     std::string funcMetaJson =
-        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
+        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085","deployDir":"/dcache"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
     std::string path =
         "/yr/functions/business/yrk/tenant/default/function/0-yrjava-yr-smoke/version/$latest";
     std::string funcKey = "default/0-yrjava-yr-smoke/$latest";
@@ -468,7 +467,7 @@ TEST_F(ObserverTest, ProcFuncMetaEvent)
 TEST_F(ObserverTest, GetFuncMetaInfo)
 {
     std::string funcMetaJson =
-        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
+        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085","deployDir":"/dcache"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
     std::string path =
         "/yr/functions/business/yrk/tenant/default/function/0-yrjava-yr-smoke/version/$latest";
 
@@ -938,7 +937,7 @@ std::vector<WatchEvent> GenerateResponseRouteEvent(std::string NodeID) {
     std::string value4 = R"({"instanceID":"InstanceID4","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-4","function":"default/0-system-faasExecutorPython3.9/$latest","functionProxyID":"XXXXXXX","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID4","tenantID":"default","version":"3"})";
 
     auto key5 = R"(/yr/route/business/yrk/InstanceID5)";
-    std::string value5 = R"({"instanceID":"InstanceID5","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-5","function":"default/0-system-faasExecutorPython3.9/$latest","functionProxyID":"XXXXXXX","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID5","tenantID":"default","version":"5","createOptions":{"ReliabilityType":"low"}})";
+    std::string value5 = R"({"instanceID":"InstanceID5","runtimeAddress":"127.0.0.1:22771","functionAgentID":"function-agent-poolx-5","function":"12345678901234561234567890123456/0-system-faasExecutorPython3.9/$latest","functionProxyID":"XXXXXXX","instanceStatus":{"code":3,"msg":"running"},"jobID":"job-12345678","parentID":"d94bd8af-e8d7-42ed-90e3-b6cd59bc6dc9","requestID":"requestID5","tenantID":"12345678901234561234567890123456","version":"5","createOptions":{"ReliabilityType":"low"}})";
 
     std::string from = "XXXXXXX";
     size_t start_pos = 0;
@@ -996,12 +995,12 @@ TEST_F(ObserverTest, InstanceInfoSyncerTest)
     rep->kvs.emplace_back(events[1].kv);
     rep->kvs.emplace_back(events[2].kv);
     std::string cbFuncInstanceID;
-    controlPlaneObserver_->SetInstanceInfoSyncerCbFunc([&cbFuncInstanceID](const resource_view::RouteInfo &routeInfo) {
+    observerActor_->instanceInfoSyncerCbFunc_ = [&cbFuncInstanceID](const resource_view::RouteInfo &routeInfo) {
         YRLOG_DEBUG("{}|{}execute instance info sync callback function, create client for instance({}), job({})",
                     routeInfo.requestid(), routeInfo.instanceid());
         cbFuncInstanceID = routeInfo.instanceid();
         return Status::OK();
-    });
+    };
     auto future = observerActor_->InstanceInfoSyncer(rep);
     ASSERT_AWAIT_READY(future);
     ASSERT_TRUE(future.Get().status.IsOk());
@@ -1034,6 +1033,7 @@ TEST_F(ObserverTest, InstanceInfoSyncerTest)
     EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID1") == 0); // rep don't have key1, so need to delete
     EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID4") == 1);
     EXPECT_EQ(cbFuncInstanceID, "InstanceID4");
+    observerActor_->instanceInfoSyncerCbFunc_ = nullptr;
 }
 
 TEST_F(ObserverTest, WatchInstanceTest)

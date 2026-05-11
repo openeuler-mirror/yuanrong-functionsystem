@@ -113,7 +113,6 @@ std::string RuntimeStateManager::FindRuntimeIDBySandboxID(const std::string &san
     }
     return "";
 }
-
 std::string RuntimeStateManager::GetPortMappingsJson(const std::string &runtimeID) const
 {
     auto it = sandboxes_.find(runtimeID);

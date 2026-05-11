@@ -17,8 +17,8 @@
 #ifndef RUNTIME_MANAGER_EXECUTOR_SANDBOX_SANDBOX_EXECUTOR_H
 #define RUNTIME_MANAGER_EXECUTOR_SANDBOX_SANDBOX_EXECUTOR_H
 
-#include <memory>
 #include <chrono>
+#include <memory>
 #include <unordered_map>
 
 #include "async/defer.hpp"
@@ -93,7 +93,8 @@ private:
  */
 class SandboxExecutor : public Executor {
 public:
-    explicit SandboxExecutor(const std::string &name, const litebus::AID &functionAgentAID);
+    SandboxExecutor(const std::string &name, const litebus::AID &functionAgentAID,
+                    const std::string &checkpointDir = {});
 
     ~SandboxExecutor() override = default;
 
@@ -119,7 +120,6 @@ public:
     bool IsRuntimeActive(const std::string &runtimeID) override;
 
     std::shared_ptr<litebus::Exec> GetExecByRuntimeID(const std::string &runtimeID) override;
-
     void ClearCapability() override {}
 
     void UpdatePrestartRuntimePromise(pid_t /*pid*/) override {}
@@ -142,7 +142,6 @@ public:
     void WaitAndReconcile(
         const std::shared_ptr<messages::ReconcileRuntimesRequest> &request, int32_t retryCount,
         const std::shared_ptr<litebus::Promise<messages::ReconcileRuntimesResponse>> &promise);
-
     void InitConfig() override;
 
     struct PortForwardConfig {
@@ -224,7 +223,6 @@ private:
     // ── gRPC call wrappers (thin, no business logic) ──────────────────────────
 
     litebus::Future<runtime::v1::ListContainersResponse> DoList();
-
     litebus::Future<runtime::v1::StartResponse> DoStart(
         const std::shared_ptr<messages::StartInstanceRequest> &request,
         const std::shared_ptr<runtime::v1::StartRequest> &startReq);
@@ -245,6 +243,9 @@ private:
 
     litebus::Future<Status> OnWaitDone(
         const std::string &runtimeID, const runtime::v1::WaitResponse &response);
+    static void StartSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request);
+    static void StopSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                      const runtime::v1::StartResponse &response);
 
     // ── Connectivity ──────────────────────────────────────────────────────────
 
@@ -330,7 +331,6 @@ public:
     {
         return litebus::Async(sandbox_->GetAID(), &SandboxExecutor::ReconcileRuntimes, request);
     }
-
 private:
     std::shared_ptr<SandboxExecutor> sandbox_;
 };

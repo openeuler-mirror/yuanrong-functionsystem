@@ -91,7 +91,6 @@ public:
     // Reverse lookup: find the runtimeID that owns a given sandboxID.
     // Returns empty string if no match found.
     std::string FindRuntimeIDBySandboxID(const std::string &sandboxID) const;
-
     // Returns the port-mappings JSON for runtimeID, or empty string if none.
     std::string GetPortMappingsJson(const std::string &runtimeID) const;
 

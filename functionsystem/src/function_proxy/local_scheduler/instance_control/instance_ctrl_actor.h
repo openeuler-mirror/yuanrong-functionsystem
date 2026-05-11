@@ -99,6 +99,8 @@ const uint32_t MAX_FORWARD_KILL_RETRY_CYCLE_SYNC_MS = 3 * 60 * 1000;
 const uint32_t MAX_FORWARD_SCHEDULE_RETRY_TIMES = 3;
 const uint32_t MAX_NOTIFICATION_SIGNAL_RETRY_TIMES = 3;
 
+const uint32_t INSTANCE_CREATE_GC_TIMEOUT_MS = 5000;  // 5 seconds timeout for GC orphaned state machine
+
 struct InstanceCtrlConfig {
     // maxInstanceReconnectTimes is max number of times to reconnect an instance.
     uint8_t maxInstanceReconnectTimes{ DEFAULT_MAX_INSTANCE_RECONNECT_TIMES };
@@ -838,6 +840,9 @@ private:
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
     void DeleteDriverClient(const std::string &instanceID, const std::string &jobID);
+
+    // GC orphaned state machine in DirectRouting mode (scenario: schedule succeeded but ownership transferred to remote node)
+    void GCOrphanStateMachine(const std::string &instanceID, const std::string &requestID);
 
     litebus::Future<Status> TryExitInstance(const std::shared_ptr<InstanceStateMachine> stateMachine,
                                             const std::shared_ptr<KillContext> &killCtx,

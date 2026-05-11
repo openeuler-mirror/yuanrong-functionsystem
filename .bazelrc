@@ -4,6 +4,11 @@ build --action_env=BAZEL_CXXOPTS=-std=c++17
 # Use external abseil for OpenTelemetry to avoid namespace conflicts with protobuf's abseil
 build --@opentelemetry_cpp//api:with_abseil=true
 
+# Ensure consistent nostd::shared_ptr ABI across SDK and all consumers (must be global).
+# Without this, the OTel SDK uses a custom 32-byte nostd::shared_ptr while our code uses
+# std::shared_ptr (16 bytes), causing a calling-convention ABI mismatch and SIGSEGV.
+build --copt=-DOPENTELEMETRY_STL_VERSION=2017
+
 # gRPC build options — disable unused features to reduce build scope
 build --define=grpc_no_xds=true
 build --define=grpc_no_binder=true

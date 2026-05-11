@@ -34,9 +34,10 @@ set(${src_name}_CMAKE_ARGS
         -DProtobuf_DIR:PATH=${protobuf_PKG_PATH}
         -Dutf8_range_DIR:PATH=${utf8_range_PKG_PATH}
         -DOPENTELEMETRY_EXTERNAL_NLOHMANN_JSON=ON
-        -Dnlohmann_json_DIR=${json_INCLUDE_DIR}
+        -Dnlohmann_json_DIR=${json_CMAKE_DIR}
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON
         -DOPENTELEMETRY_INSTALL=ON
+        -DOTELCPP_PROTO_PATH=${VENDOR_SRC_DIR}/opentelemetry_proto
         -DCMAKE_C_FLAGS_RELEASE=${THIRDPARTY_C_FLAGS}
         -DCMAKE_CXX_FLAGS_RELEASE=${THIRDPARTY_CXX_FLAGS}
         -DCMAKE_SHARED_LINKER_FLAGS=${THIRDPARTY_LINK_FLAGS}
@@ -59,11 +60,14 @@ if (NOT EXISTS ${HISTORY_INSTALLLED})
     if (TARGET grpc)
         list(APPEND _otel_depends grpc)
     endif()
+    if (TARGET cjson)
+        list(APPEND _otel_depends cjson)
+    endif()
     EXTERNALPROJECT_ADD(${src_name}
             SOURCE_DIR ${src_dir}
             CMAKE_ARGS ${${src_name}_CMAKE_ARGS} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DCMAKE_INSTALL_LIBDIR=lib
             BUILD_COMMAND bash -c "export LD_LIBRARY_PATH=${protobuf_LIB_DIR}:${grpc_LIB_DIR}:$ENV{LD_LIBRARY_PATH} \
-                                && ${CMAKE_MAKE_PROGRAM} -j ${BUILD_THREAD_NUM}"
+                                && ${CMAKE_MAKE_PROGRAM} -j${BUILD_THREAD_NUM}"
             LOG_CONFIGURE ON
             LOG_BUILD ON
             LOG_INSTALL ON

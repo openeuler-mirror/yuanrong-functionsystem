@@ -79,6 +79,19 @@ Flags::Flags()
     AddFlag(&Flags::casdoorAdminUser_, "casdoor_admin_user", "Casdoor admin username", "");
     AddFlag(&Flags::casdoorAdminPassword_, "casdoor_admin_password", "Casdoor admin password", "");
     AddFlag(&Flags::casdoorJwtPublicKey_, "casdoor_jwt_public_key", "Casdoor JWT Public Key (PEM)", "");
+
+    RegisterDualPortAndSslFlags();
+}
+
+void Flags::RegisterDualPortAndSslFlags()
+{
+    AddFlag(&Flags::localIp_, "local_ip",
+            "Local IP for the plaintext listener (loopback only, no TLS). Default: 127.0.0.1.",
+            std::string("127.0.0.1"));
+    AddFlag(&Flags::localListenPort_, "local_listen_port",
+            "Port for the local plaintext listener (empty = disabled). example: 8081", std::string(""));
+    AddFlag(&Flags::iamSslEnable_, "iam_ssl_enable",
+            "Enable SSL/TLS for IAM listener independently (overrides global ssl_enable). Empty = use global.", "");
 }
 
 Flags::~Flags()

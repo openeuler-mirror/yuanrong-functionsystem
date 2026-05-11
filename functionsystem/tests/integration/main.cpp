@@ -63,8 +63,10 @@ int main(int argc, char **argv)
     int port = functionsystem::test::FindAvailablePort();
     litebus::os::SetEnv("LITEBUS_PORT", std::to_string(port));
     std::cout << "Start LITEBUS on net port: " << port << std::endl;
-    auto res = litebus::Initialize("tcp://127.0.0.1:" + std::to_string(port), "",
-                                   "udp://127.0.0.1:" + std::to_string(port), "");
+    litebus::LitebusInitOptions opts;
+    opts.tcpUrl = "tcp://127.0.0.1:" + std::to_string(port);
+    opts.udpUrl = "udp://127.0.0.1:" + std::to_string(port);
+    auto res = litebus::Initialize(opts);
     if (res != BUS_OK) {
         std::cout << "failed to initialize litebus" << std::endl;
     }

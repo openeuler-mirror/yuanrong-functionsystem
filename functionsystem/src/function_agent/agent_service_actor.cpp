@@ -27,6 +27,7 @@
 #include "common/constants/actor_name.h"
 #include "common/logs/logging.h"
 #include "common/metrics/metrics_adapter.h"
+#include "common/trace/create_trace_helper.h"
 #include "common/resource_view/resource_tool.h"
 #include "common/types/instance_state.h"
 #include "common/utils/actor_worker.h"
@@ -95,6 +96,16 @@ messages::DeployInstanceResponse AgentServiceActor::InitDeployInstanceResponse(
     target.set_code(code);
     target.set_message(message);
     return target;
+}
+
+void AgentServiceActor::StartCodeDownloadSpan(const DeployInstanceRequest &request)
+{
+    trace::StartCodeDownloadSpan(request);
+}
+
+void AgentServiceActor::StopCodeDownloadSpan(const DeployInstanceRequest &request, const DeployResult &result)
+{
+    trace::StopCodeDownloadSpan(request, result);
 }
 
 void AgentServiceActor::InitKillInstanceResponse(messages::KillInstanceResponse *target,
@@ -221,6 +232,7 @@ void AgentServiceActor::DeployInstance(const litebus::AID &from, std::string &&n
     }
     // 5. deploy code package (including main, layer, and delegate package) and start runtime
     auto parameters = BuildDeployerParameters(deployInstanceRequest);
+    StartCodeDownloadSpan(deployInstanceRequest);
     DownloadCodeAndStartRuntime(parameters, deployInstanceRequest);
 }
 
@@ -234,6 +246,9 @@ void AgentServiceActor::DownloadCodeAndStartRuntime(
     }
     if (deployObjects->empty()) {
         YRLOG_INFO("{}|directly start runtime({}).", req->requestid(), req->instanceid());
+        DeployResult result;
+        result.status = Status::OK();
+        StopCodeDownloadSpan(req, result);
         (void)StartRuntime(req);
         return;
     }
@@ -322,6 +337,7 @@ bool AgentServiceActor::IsDownloadFailed(const std::shared_ptr<messages::DeployI
     }
     auto from = deployingRequest_[req->requestid()].from;
     auto deployResult = failedDownloadRequests_[req->requestid()];
+    StopCodeDownloadSpan(req, deployResult);
     auto resp = InitDeployInstanceResponse(static_cast<int32_t>(deployResult.status.StatusCode()),
                                            deployResult.status.GetMessage(), *req);
     (void)Send(from, "DeployInstanceResponse", resp.SerializeAsString());

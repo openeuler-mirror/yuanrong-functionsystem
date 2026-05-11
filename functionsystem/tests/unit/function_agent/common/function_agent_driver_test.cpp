@@ -75,9 +75,10 @@ public:
             "--runtime_home_dir=/tmp",
             "--runtime_logs_dir=/tmp",
             "--runtime_ld_library_path=/tmp",
+            "--checkpoint_dir=/tmp",
             R"(--log_config={"filepath": "/tmp/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
         };
-        flags->ParseFlags(10, argv, true);
+        flags->ParseFlags(11, argv, true);
         return flags;
     }
 };

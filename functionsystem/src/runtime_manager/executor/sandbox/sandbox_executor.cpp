@@ -27,6 +27,7 @@
 #include "common/constants/constants.h"
 #include "common/logs/logging.h"
 #include "common/metrics/metrics_adapter.h"
+#include "common/trace/create_trace_helper.h"
 #include "common/utils/actor_worker.h"
 #include "common/utils/collect_status.h"
 #include "common/utils/generate_message.h"
@@ -52,10 +53,28 @@ const std::string YR_ONLY_STDOUT                    = "YR_ONLY_STDOUT";
 
 // ── Construction ──────────────────────────────────────────────────────────────
 
-SandboxExecutor::SandboxExecutor(const std::string &name, const litebus::AID &functionAgentAID)
+const std::string YR_ONLY_STDOUT                    = "YR_ONLY_STDOUT";
+}  // namespace
+
+void SandboxExecutor::StartSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    trace::StartSandboxCreateSpan(request);
+}
+
+void SandboxExecutor::StopSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                            const runtime::v1::StartResponse &response)
+{
+    trace::StopSandboxCreateSpan(request, response);
+}
+
+// ── Construction ──────────────────────────────────────────────────────────────
+
+SandboxExecutor::SandboxExecutor(const std::string &name, const litebus::AID &functionAgentAID,
+                                 const std::string &checkpointDir)
     : Executor(name), functionAgentAID_(functionAgentAID)
 {
-    auto ckptActor = std::make_shared<CkptFileManagerActor>(name + "_CkptFileManager");
+    const std::string &dir = checkpointDir.empty() ? DEFAULT_CHECKPOINT_DIR : checkpointDir;
+    auto ckptActor = std::make_shared<CkptFileManagerActor>(name + "_CkptFileManager", dir);
     litebus::Spawn(ckptActor);
     ckptFileManager_ = std::make_shared<CkptFileManager>(ckptActor);
 }
@@ -210,6 +229,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::StartNormal(
         PortManager::GetInstance().ReleasePorts(params.runtimeID);
         return GenFailStartInstanceResponse(request, status.StatusCode(), status.RawMessage());
     }
+    StartSandboxCreateSpan(request);
     return DoStart(request, startReq)
         .Then(litebus::Defer(GetAID(), &SandboxExecutor::OnStartDone, std::placeholders::_1, request, guard));
 }
@@ -221,6 +241,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnStartDone(
 {
     const auto &info      = request->runtimeinstanceinfo();
     const auto &runtimeID = info.runtimeid();
+    StopSandboxCreateSpan(request, response);
 
     if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
         YRLOG_ERROR("{}|{}|StartNormal failed for instance({}) runtime({}): {}", info.traceid(), info.requestid(),
@@ -234,7 +255,6 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnStartDone(
     guard->Commit();
 
     DoWait(sandboxID, runtimeID);
-
     ReportMetrics(info.instanceid(), runtimeID, sandboxID,
                   {"yr_app_instance_start_time", " start timestamp", "ms"});
     YRLOG_INFO("{}|{}|StartNormal success: instance({}) runtime({}) sandbox({})", info.traceid(), info.requestid(),
@@ -369,6 +389,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnCheckpointRe
         ckptOrch_->ReleaseRef(info.runtimeid(), info.requestid());
         return GenFailStartInstanceResponse(request, status.StatusCode(), status.RawMessage());
     }
+    StartSandboxCreateSpan(request);
     return DoStart(request, startReq)
         .Then(litebus::Defer(GetAID(), &SandboxExecutor::OnRestoreDone, std::placeholders::_1, request, guard));
 }
@@ -379,6 +400,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnRestoreDone(
     std::shared_ptr<SandboxStartGuard> guard)
 {
     const auto &info = request->runtimeinstanceinfo();
+    StopSandboxCreateSpan(request, response);
     if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
         YRLOG_ERROR("{}|{}|restore failed for runtime({}): {}", info.traceid(), info.requestid(),
                     info.runtimeid(), response.message());
@@ -390,9 +412,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnRestoreDone(
     const std::string sandboxID = response.id();
     stateManager_.UpdateSandboxID(info.runtimeid(), sandboxID);
     guard->Commit();
-
     DoWait(sandboxID, info.runtimeid());
-
     YRLOG_INFO("{}|{}|restore success: instance({}) runtime({}) sandbox({})", info.traceid(), info.requestid(),
                info.instanceid(), info.runtimeid(), sandboxID);
     return MakeSuccessStartResponse(request, sandboxID);
@@ -543,7 +563,6 @@ std::shared_ptr<litebus::Exec> SandboxExecutor::GetExecByRuntimeID(const std::st
     YRLOG_ERROR("can not find exec by runtimeID: {}", runtimeID);
     return nullptr;
 }
-
 litebus::Future<messages::UpdateCredResponse> SandboxExecutor::UpdateCredForRuntime(
     const std::shared_ptr<messages::UpdateCredRequest> &request)
 {
@@ -777,7 +796,6 @@ messages::ReconcileRuntimesResponse SandboxExecutor::OnReconcileRuntimes(
                response.confirmedentries_size());
     return response;
 }
-
 // ── Connectivity ──────────────────────────────────────────────────────────────
 
 void SandboxExecutor::CheckConnectivity()
@@ -834,7 +852,6 @@ void SandboxExecutor::Sync()
             YRLOG_INFO("SandboxExecutor: initial sync done, status: {}", status.RawMessage());
             return Status::OK();
         });
-
     // Discover running sandboxes and resume Wait for them
     DoList().Then([aid(GetAID())](const runtime::v1::ListContainersResponse &listResp) -> litebus::Future<Status> {
         int resumed = 0;
@@ -977,7 +994,6 @@ litebus::Future<Status> SandboxExecutor::OnWaitDone(
     return healthCheckClient_->NotifySandboxExit(
         instanceID, runtimeID, response.exit_code(), response.message(), requestID);
 }
-
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
 messages::StartInstanceResponse SandboxExecutor::MakeSuccessStartResponse(

@@ -42,6 +42,11 @@ EXPORTER_TARGETS = [
     "//common/metrics:libobservability-metrics-opentelemetry-exporter.so",
 ]
 
+TEST_TARGETS = [
+    "//functionsystem/tests/unit:functionsystem_unit_test",
+    "//functionsystem/tests/integration:functionsystem_integration_test",
+]
+
 PROTO_FILES = [
     "common.proto",
     "core_service.proto",
@@ -332,6 +337,72 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     _copy_shared_libraries(root_dir, output_dir)
 
     log.info(f"Bazel build complete. Binaries installed to {bin_output_dir}")
+
+
+def build_gtest_bazel(root_dir: str, job_num: int):
+    """Build functionsystem test binaries with Bazel."""
+    bazel_output_root, distdir = _prepare_bazel_workspace(root_dir, job_num)
+    bazel_cmd = [
+        "bazel",
+        f"--output_user_root={bazel_output_root}",
+        "build",
+        f"--distdir={distdir}",
+        f"--jobs={job_num}",
+        "--config=debug",
+        *TEST_TARGETS,
+    ]
+    utils.sync_command(bazel_cmd, cwd=root_dir)
+
+
+def _bazel_test_env_flags(root_dir: str):
+    lib_dirs = [
+        os.path.join(root_dir, "functionsystem", "output", "lib"),
+        os.path.join(root_dir, "common", "logs", "output", "lib"),
+        os.path.join(root_dir, "common", "litebus", "output", "lib"),
+        os.path.join(root_dir, "common", "metrics", "output", "lib"),
+    ]
+    existing = [lib_dir for lib_dir in lib_dirs if os.path.isdir(lib_dir)]
+    env_flags = []
+    ld_library_path = os.environ.get("LD_LIBRARY_PATH", "")
+    if existing:
+        value = ":".join(existing + ([ld_library_path] if ld_library_path else []))
+        env_flags.append(f"--test_env=LD_LIBRARY_PATH={value}")
+    output_bin = os.path.join(root_dir, "functionsystem", "output", "bin")
+    if os.path.isdir(output_bin):
+        env_flags.append(f"--test_env=BIN_PATH={output_bin}")
+    return env_flags
+
+
+def run_gtest_bazel(root_dir: str, job_num: int, test_suite: str = "*", test_case: str = "*"):
+    """Run functionsystem tests with Bazel, preserving the legacy gtest filter flags."""
+    bazel_output_root, distdir = _prepare_bazel_workspace(root_dir, job_num)
+    gtest_filter = f"{test_suite}.{test_case}"
+    bazel_cmd = [
+        "bazel",
+        f"--output_user_root={bazel_output_root}",
+        "test",
+        f"--distdir={distdir}",
+        f"--jobs={job_num}",
+        "--config=debug",
+        *_bazel_test_env_flags(root_dir),
+        f"--test_arg=--gtest_filter={gtest_filter}",
+        "--test_output=errors",
+        *TEST_TARGETS,
+    ]
+    utils.sync_command(bazel_cmd, cwd=root_dir)
+
+
+def _prepare_bazel_workspace(root_dir: str, job_num: int):
+    check_bazel_available()
+    ensure_bazel_deps(root_dir)
+
+    bazel_output_root = os.path.join(root_dir, "build", "bazel_root")
+    os.makedirs(bazel_output_root, exist_ok=True)
+    distdir = os.path.join(root_dir, "thirdparty", "runtime_deps")
+
+    build_proto_tools(root_dir, bazel_output_root, distdir, job_num)
+    generate_proto_sources(root_dir)
+    return bazel_output_root, distdir
 
 
 def _copy_bazel_outputs(root_dir: str, bin_output_dir: str):
