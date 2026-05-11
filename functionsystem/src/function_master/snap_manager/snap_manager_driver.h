@@ -115,6 +115,125 @@ public:
         };
         RegisterHandler("/list-snapshots", handler);
     }
+
+    void InitListByFunctionKeyHandler(std::shared_ptr<SnapManagerActor> snapActor)
+    {
+        auto handler = [snapActor](const HttpRequest &request) -> litebus::Future<HttpResponse> {
+            if (request.method != "POST") {
+                return HttpResponse(litebus::http::ResponseCode::METHOD_NOT_ALLOWED);
+            }
+
+            bool useJsonFormat = request.headers.find("Type") == request.headers.end() ||
+                request.headers.find("Type")->second == SNAP_JSON_FORMAT;
+
+            ::messages::ListSnapshotsByFunctionKeyRequest req;
+            if (!req.ParseFromString(request.body)) {
+                YRLOG_ERROR("failed to parse ListSnapshotsByFunctionKeyRequest");
+                return HttpResponse(litebus::http::ResponseCode::BAD_REQUEST);
+            }
+
+            const auto &fk = req.functionkey();
+            YRLOG_INFO("list snapshots by functionKey: tenantID={}, functionType={}, ns={}",
+                       fk.tenantid(), fk.functiontype(), fk.namespace_());
+
+            return litebus::Async(snapActor->GetAID(), &SnapManagerActor::ListCheckpointIDsByFunctionKey,
+                                  fk.tenantid(), fk.functiontype(), fk.namespace_())
+                .Then([useJsonFormat, req](const std::vector<std::string> &checkpointIDs)
+                          -> litebus::Future<litebus::http::Response> {
+                    ::messages::ListSnapshotsByFunctionKeyResponse rsp;
+                    rsp.set_code(common::ERR_NONE);
+                    rsp.set_message("success");
+                    rsp.set_requestid(req.requestid());
+                    for (const auto &id : checkpointIDs) {
+                        rsp.add_checkpointids(id);
+                    }
+                    if (!useJsonFormat) {
+                        return litebus::http::Ok(rsp.SerializeAsString());
+                    }
+                    google::protobuf::util::JsonOptions options;
+                    std::string jsonStr;
+                    (void)google::protobuf::util::MessageToJsonString(rsp, &jsonStr, options);
+                    return litebus::http::Ok(jsonStr);
+                });
+        };
+        RegisterHandler("/list-snapshots-by-function-key", handler);
+    }
+
+    void InitListByTenantHandler(std::shared_ptr<SnapManagerActor> snapActor)
+    {
+        auto handler = [snapActor](const HttpRequest &request) -> litebus::Future<HttpResponse> {
+            if (request.method != "POST") {
+                return HttpResponse(litebus::http::ResponseCode::METHOD_NOT_ALLOWED);
+            }
+
+            bool useJsonFormat = request.headers.find("Type") == request.headers.end() ||
+                request.headers.find("Type")->second == SNAP_JSON_FORMAT;
+
+            ::messages::ListSnapshotsByTenantRequest req;
+            if (!req.ParseFromString(request.body)) {
+                YRLOG_ERROR("failed to parse ListSnapshotsByTenantRequest");
+                return HttpResponse(litebus::http::ResponseCode::BAD_REQUEST);
+            }
+
+            YRLOG_INFO("list snapshots by tenant: tenantID={}", req.tenantid());
+
+            return litebus::Async(snapActor->GetAID(), &SnapManagerActor::ListCheckpointIDsByTenant, req.tenantid())
+                .Then([useJsonFormat, req](const std::vector<std::string> &checkpointIDs)
+                          -> litebus::Future<litebus::http::Response> {
+                    ::messages::ListSnapshotsByTenantResponse rsp;
+                    rsp.set_code(common::ERR_NONE);
+                    rsp.set_message("success");
+                    rsp.set_requestid(req.requestid());
+                    for (const auto &id : checkpointIDs) {
+                        rsp.add_checkpointids(id);
+                    }
+                    if (!useJsonFormat) {
+                        return litebus::http::Ok(rsp.SerializeAsString());
+                    }
+                    google::protobuf::util::JsonOptions options;
+                    std::string jsonStr;
+                    (void)google::protobuf::util::MessageToJsonString(rsp, &jsonStr, options);
+                    return litebus::http::Ok(jsonStr);
+                });
+        };
+        RegisterHandler("/list-snapshots-by-tenant", handler);
+    }
+
+    void InitDeleteSnapshotHandler(std::shared_ptr<SnapManagerActor> snapActor)
+    {
+        auto handler = [snapActor](const HttpRequest &request) -> litebus::Future<HttpResponse> {
+            if (request.method != "POST") {
+                return HttpResponse(litebus::http::ResponseCode::METHOD_NOT_ALLOWED);
+            }
+
+            bool useJsonFormat = request.headers.find("Type") == request.headers.end() ||
+                request.headers.find("Type")->second == SNAP_JSON_FORMAT;
+
+            ::messages::DeleteSnapshotRequest req;
+            if (!req.ParseFromString(request.body)) {
+                YRLOG_ERROR("failed to parse DeleteSnapshotRequest");
+                return HttpResponse(litebus::http::ResponseCode::BAD_REQUEST);
+            }
+
+            YRLOG_INFO("delete snapshot by checkpointID={}", req.checkpointid());
+
+            return litebus::Async(snapActor->GetAID(), &SnapManagerActor::DeleteSnapshot, req.checkpointid())
+                .Then([useJsonFormat, req](const Status &status) -> litebus::Future<litebus::http::Response> {
+                    ::messages::DeleteSnapshotResponse rsp;
+                    rsp.set_requestid(req.requestid());
+                    rsp.set_code(static_cast<common::ErrorCode>(status.StatusCode()));
+                    rsp.set_message(status.RawMessage());
+                    if (!useJsonFormat) {
+                        return litebus::http::Ok(rsp.SerializeAsString());
+                    }
+                    google::protobuf::util::JsonOptions options;
+                    std::string jsonStr;
+                    (void)google::protobuf::util::MessageToJsonString(rsp, &jsonStr, options);
+                    return litebus::http::Ok(jsonStr);
+                });
+        };
+        RegisterHandler("/delete-snapshot", handler);
+    }
 };
 
 class SnapManagerDriver : public ModuleDriver {

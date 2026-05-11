@@ -444,7 +444,8 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .traefikLeaseTTL = flags.GetTraefikLeaseTTL(),
         .traefikHttpEntryPoint = flags.GetTraefikHttpEntryPoint(),
         .traefikEnableTLS = flags.GetTraefikEnableTLS(),
-        .traefikServersTransport = flags.GetTraefikServersTransport()
+        .traefikServersTransport = flags.GetTraefikServersTransport(),
+        .enableMergeProcess = flags.GetEnableMergeProcess()
     };
 }
 
@@ -648,7 +649,6 @@ int main(int argc, char **argv)
             std::cerr << COMPONENT_NAME << " parse function_agent flags error: " << parse.Get() << std::endl;
             return EXIT_COMMAND_MISUSE;
         }
-
         if (auto parse = runtimeManagerFlags.ParseFlags(argc, argv, true); parse.IsSome()) {
             std::cerr << COMPONENT_NAME << " parse runtime_manager flags error: " << parse.Get() << std::endl;
             return EXIT_COMMAND_MISUSE;

@@ -80,7 +80,7 @@ void InstanceControlView::Update(const std::string &instanceID, const resources:
             return;
         }
         if (newOwner != currentOwner) {
-            YRLOG_INFO("change instance({}) state machine's owner to {} from {}.", instanceID, newOwner, currentOwner);
+            YRLOG_DEBUG("change instance({}) state machine's owner to {} from {}.", instanceID, newOwner, currentOwner);
         }
         machines_.at(instanceID)->UpdateInstanceInfo(instanceInfo);
         // 实例休眠状态下，使所有节点的version一致，避免休眠实例唤醒到其他节点后，因version=0无法更新实例状态
@@ -95,7 +95,7 @@ void InstanceControlView::Update(const std::string &instanceID, const resources:
             }
         }
     } else {
-        YRLOG_INFO("create instance({}) state machine. owner:{}, state:{}", instanceID, newOwner, state);
+        YRLOG_DEBUG("create instance({}) state machine. owner:{}, state:{}", instanceID, newOwner, state);
         machines_[instanceID] = NewStateMachine(instanceID, instanceInfo);
         requestInstances_[instanceInfo.requestid()] = instanceID;
     }

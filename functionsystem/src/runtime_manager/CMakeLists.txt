@@ -51,7 +51,8 @@ target_link_libraries(runtime_manager_lib ${litebus_ALL_LIB}
 	aksk
         register common_flags
         http file_monitor network file_storage
-        utils metrics_adapter resource_view)
+        utils metrics_adapter resource_view
+        posix_pb)
 
 add_executable(runtime_manager main.cpp)
 target_compile_options(runtime_manager PRIVATE -fPIE)

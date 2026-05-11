@@ -29,8 +29,8 @@ static const uint32_t SERVICE_NAME_MAX_LEN = 16;
 static std::unordered_set<std::string> runtimeEnum = {
     CPP_RUNTIME_VERSION,         JAVA_RUNTIME_VERSION,      JAVA11_RUNTIME_VERSION,    PYTHON_RUNTIME_VERSION,
     PYTHON3_RUNTIME_VERSION,     PYTHON36_RUNTIME_VERSION,  PYTHON37_RUNTIME_VERSION,  PYTHON38_RUNTIME_VERSION,
-    PYTHON39_RUNTIME_VERSION,    PYTHON310_RUNTIME_VERSION, PYTHON311_RUNTIME_VERSION, GO_RUNTIME_VERSION,
-    POSIX_CUSTOM_RUNTIME_VERSION
+    PYTHON39_RUNTIME_VERSION,    PYTHON310_RUNTIME_VERSION, PYTHON311_RUNTIME_VERSION, PYTHON312_RUNTIME_VERSION, 
+    PYTHON313_RUNTIME_VERSION,   GO_RUNTIME_VERSION,        POSIX_CUSTOM_RUNTIME_VERSION
 };
 
 bool NameMatch(const std::string &str, const std::string &regex)
@@ -306,6 +306,8 @@ bool CheckHookHandlerRegularization(const std::string &handler, const std::strin
         { PYTHON39_RUNTIME_VERSION, { DEFAULT_HANDLER_REGEX, DEFAULT_HANDLER_MAX_LENGTH } },
         { PYTHON310_RUNTIME_VERSION, { DEFAULT_HANDLER_REGEX, DEFAULT_HANDLER_MAX_LENGTH } },
         { PYTHON311_RUNTIME_VERSION, { DEFAULT_HANDLER_REGEX, DEFAULT_HANDLER_MAX_LENGTH } },
+        { PYTHON312_RUNTIME_VERSION, { DEFAULT_HANDLER_REGEX, DEFAULT_HANDLER_MAX_LENGTH } },
+        { PYTHON313_RUNTIME_VERSION, { DEFAULT_HANDLER_REGEX, DEFAULT_HANDLER_MAX_LENGTH } },
         { GO_RUNTIME_VERSION, { DEFAULT_HANDLER_REGEX, DEFAULT_HANDLER_MAX_LENGTH } },
         { JAVA_RUNTIME_VERSION, { JAVA_HANDLER_REGEX, JAVA_HANDLER_MAX_LENGTH } }
     };
@@ -835,7 +837,6 @@ litebus::Option<std::vector<FunctionMeta>> GetFuncMetaFromServiceYaml(const std:
     auto jsonStr = yamlToJsonFunc(data);
 
     (void)dlclose(handle);
-    YRLOG_INFO("debug:: (funcMeta)services info, {}", jsonStr);
     auto serviceInfosOpt = GetServiceInfosFromJson(jsonStr);
     if (serviceInfosOpt.IsNone()) {
         YRLOG_ERROR("(funcMeta)failed to get services info");

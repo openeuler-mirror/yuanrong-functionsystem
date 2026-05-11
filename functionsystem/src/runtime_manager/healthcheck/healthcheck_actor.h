@@ -61,6 +61,10 @@ public:
     litebus::Future<Status> SendInstanceStatus(const std::string &instanceID, const std::string &runtimeID,
                                                     const int status, const std::string &requestID);
 
+    litebus::Future<Status> NotifySandboxExit(const std::string &instanceID, const std::string &runtimeID,
+                                               int exitCode, const std::string &exitMessage,
+                                               const std::string &requestID);
+
     Status StopReapProcessByPID(const std::shared_ptr<litebus::Exec> &exec);
 
     litebus::Future<Status> GetRuntimeStatus(const std::string &runtimeID);

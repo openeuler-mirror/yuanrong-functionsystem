@@ -66,6 +66,83 @@ go build -buildvcs=false -o bin/rl-client ./cmd/rl-client/
 | `Register` | 将运行时注册到预热表 |
 | `Unregister` | 从预热表中移除 |
 | `GetRegistered` | 查询所有已注册的运行时 |
+| `Checkpoint` | 对容器创建检查点 |
+| `List` | 按条件列出容器 |
+| `Stats` | 返回容器资源使用统计 |
+| `Version` | 返回运行时版本信息 |
+
+## Mount 配置
+
+`StartRequest.mounts` 支持三种挂载源类型，通过 proto `oneof source` 区分：
+
+### 1. 主机路径挂载 (host_path)
+
+最常见的 bind mount，将宿主机路径挂载到容器内：
+
+```json
+{
+    "type": "bind",
+    "target": "/data",
+    "host_path": "/mnt/nas/shared-data",
+    "options": ["ro"]
+}
+```
+
+### 2. S3 对象存储挂载 (s3_config)
+
+从 S3 兼容存储挂载数据：
+
+```json
+{
+    "type": "volume",
+    "target": "/cache",
+    "s3_config": {
+        "endpoint": "cn-hangzhou.alipay.aliyun-inc.com",
+        "bucket": "crfs-dev",
+        "object": "akernel/cache/cache_v1.img",
+        "accessKey": "",
+        "secretKey": ""
+    }
+}
+```
+
+### 3. OCI 镜像挂载 (image_url)
+
+从容器镜像提取文件系统作为挂载源：
+
+```json
+{
+    "type": "bind",
+    "target": "/rootfs",
+    "image_url": "registry.cn-hangzhou.com/overlay:latest"
+}
+```
+
+### 字段说明
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `type` | string | 是 | 挂载类型：`bind`、`volume`、`tmpfs`、`erofs` |
+| `target` | string | 是 | 容器内挂载点路径 |
+| `options` | string[] | 否 | fstab 风格挂载选项，如 `["ro"]`、`["noexec","nosuid"]` |
+| `host_path` | string | 三选一 | 宿主机路径（bind mount） |
+| `s3_config` | object | 三选一 | S3 存储配置（endpoint, bucket, object, accessKey, secretKey） |
+| `image_url` | string | 三选一 | OCI 镜像 URL |
+
+> **注意**：`host_path`、`s3_config`、`image_url` 三者互斥，每个 mount 只能指定其中一个。
+
+### 自定义 Mount（通过 deployOptions）
+
+functionsystem 侧支持通过 `deployOptions["mounts"]` 传入自定义挂载配置（JSON 数组）：
+
+```json
+[
+    {"type": "bind", "target": "/data", "host_path": "/mnt/data", "options": ["ro"]},
+    {"type": "bind", "target": "/models", "host_path": "/mnt/models/llama"}
+]
+```
+
+此配置方式与 `deployOptions["rootfs"]` 的自定义 rootfs 模式类似。
 
 ## 测试客户端 (rl-client)
 

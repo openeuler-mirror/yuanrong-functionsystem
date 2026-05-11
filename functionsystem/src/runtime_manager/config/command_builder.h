@@ -17,101 +17,89 @@
 #ifndef RUNTIME_MANAGER_CONFIG_COMMAND_BUILDER_H
 #define RUNTIME_MANAGER_CONFIG_COMMAND_BUILDER_H
 
+#include <memory>
+#include <unordered_map>
+
 #include "build.h"
 #include "common/proto/pb/message_pb.h"
+#include "language/language_strategy.h"
 #include "runtime_manager/executor/executor.h"
 
 namespace functionsystem::runtime_manager {
+
+/**
+ * CommandBuilder: thin dispatcher from language tag → LanguageCommandStrategy.
+ *
+ * Responsibilities:
+ *   - Route BuildArgs() calls to the correct per-language strategy.
+ *   - Merge environment variables with documented precedence rules.
+ *   - Resolve exec path from RuntimeConfig (for POSIX custom runtime).
+ *
+ * CommandBuilder itself contains NO language-specific logic.
+ * All language knowledge lives in the LanguageCommandStrategy implementations.
+ */
 class CommandBuilder {
 public:
-    CommandBuilder(RuntimeConfig config, bool execLookPath) : config_(config), execLookPath_(execLookPath)
-    {
-    }
-    CommandBuilder(bool execLookPath = true) : execLookPath_(execLookPath) {}
+    CommandBuilder() = default;
+    explicit CommandBuilder(bool execLookPath);
 
     void SetRuntimeConfig(RuntimeConfig config)
     {
-        config_ = config;
+        config_ = std::move(config);
     }
 
-    std::string GetExecPath(const std::string &language) const;
+    const RuntimeConfig &GetConfig() const
+    {
+        return config_;
+    }
 
-    std::string GetExecPathFromRuntimeConfig(const messages::RuntimeConfig &config) const;
+    /**
+     * Register a strategy for a language tag.
+     * Multiple tags may map to the same strategy type (e.g. python3.6..python3.11).
+     * Called during Init; not thread-safe after construction.
+     */
+    void RegisterStrategy(const std::string &languageTag, std::unique_ptr<LanguageCommandStrategy> strategy);
 
-    std::string GetLanguageArg(const std::string &language) const;
+    /**
+     * Build startup arguments for the given language.
+     * Pure: does not modify request, does not call chdir().
+     *
+     * @param language  Language tag (e.g. "python3.9", "java17").
+     * @param port      Allocated port string.
+     * @param request   StartInstanceRequest (read-only).
+     * @return          CommandArgs on success; error Status on failure.
+     */
+    std::pair<Status, CommandArgs> BuildArgs(const std::string &language, const std::string &port,
+                                             const messages::StartInstanceRequest &request) const;
 
+    /**
+     * Merge environment variable sources with the following precedence
+     * (highest wins, except LD_LIBRARY_PATH which is appended):
+     *
+     *   1. Framework envs (log level, log path, ds timeout) — always override
+     *   2. User envs — override posix/custom envs
+     *   3. Custom resource envs — override posix envs
+     *   4. Posix envs — base layer
+     *   5. Inherited host envs (YR_* prefix, or all if inheritEnv=true) — fill gaps only
+     */
     std::map<std::string, std::string> CombineEnvs(const Envs &envs) const;
 
-    Status GetBuildArgs(const std::string &language, const std::string &port,
-                        const std::shared_ptr<messages::StartInstanceRequest> &request, std::vector<std::string> &args);
+    /**
+     * Resolve the executable path from a RuntimeConfig proto.
+     * Handles POSIX custom runtime's multiple exec-path cases.
+     */
+    std::string GetExecPathFromRuntimeConfig(const messages::RuntimeConfig &config) const;
 
 private:
-    void InheritEnv(std::map<std::string, std::string> &combineEnvs) const;
+    std::string GetExecPath(const std::string &language) const;
+    std::string GetLanguageTag(const std::string &language) const;
+    void InheritEnv(std::map<std::string, std::string> &envs) const;
 
-    std::pair<Status, std::vector<std::string>> GetCppBuildArgs(
-        const std::string &port, const std::shared_ptr<messages::StartInstanceRequest> &request) const;
-
-    std::pair<Status, std::vector<std::string>> GetGoBuildArgs(
-        const std::string &port, const std::shared_ptr<messages::StartInstanceRequest> &request) const;
-
-    std::pair<Status, std::string> GetPythonExecPath(
-        const google::protobuf::Map<std::string, std::string> &deployOptions,
-        const messages::RuntimeInstanceInfo &info) const;
-    std::pair<Status, std::string> HandleWorkingDirectory(
-        const std::shared_ptr<messages::StartInstanceRequest> &request,
-        const messages::RuntimeInstanceInfo &info) const;
-
-    std::pair<Status, std::vector<std::string>> GetPythonBuildArgs(
-        const std::string &port, const std::shared_ptr<messages::StartInstanceRequest> &request) const;
-
-    std::pair<Status, std::vector<std::string>> PythonBuildFinalArgs(const std::string &port,
-                                                                     const std::string &execPath,
-                                                                     const std::string &deployDir,
-                                                                     const messages::RuntimeInstanceInfo &info) const;
-
-    std::pair<Status, std::vector<std::string>> GetJavaBuildArgs(
-        const std::string &port, const std::vector<std::string> &jvmArgs,
-        const std::shared_ptr<messages::StartInstanceRequest> &request) const;
-        
-    std::pair<Status, std::vector<std::string>> GetJavaBuildArgsDefault(
-        const std::string &port, const std::shared_ptr<messages::StartInstanceRequest> &request) const;
-
-    std::pair<Status, std::vector<std::string>> GetJavaBuildArgsForJava11(
-        const std::string &port, const std::shared_ptr<messages::StartInstanceRequest> &request) const;
-
-    std::pair<Status, std::vector<std::string>> GetJavaBuildArgsForJava17(
-        const std::string &port, const std::shared_ptr<messages::StartInstanceRequest> &request) const;
-
-    std::pair<Status, std::vector<std::string>> GetJavaBuildArgsForJava21(
-        const std::string &port, const std::shared_ptr<messages::StartInstanceRequest> &request) const;
-
-    std::pair<Status, std::vector<std::string>> GetNodejsBuildArgs(
-        const std::string &port, const std::shared_ptr<messages::StartInstanceRequest> &request) const;
-
-    std::pair<Status, std::vector<std::string>> GetPosixCustomBuildArgs(
-        const std::string &, const std::shared_ptr<messages::StartInstanceRequest> &request) const;
-
-    std::map<const std::string, std::pair<Status, std::vector<std::string>> (CommandBuilder::*)(
-                                    const std::string &, const std::shared_ptr<messages::StartInstanceRequest> &) const>
-        buildArgsFunc_ = { { CPP_LANGUAGE, &CommandBuilder::GetCppBuildArgs },
-                           { GO_LANGUAGE, &CommandBuilder::GetGoBuildArgs },
-                           { JAVA_LANGUAGE, &CommandBuilder::GetJavaBuildArgsDefault },
-                           { JAVA11_LANGUAGE, &CommandBuilder::GetJavaBuildArgsForJava11 },
-                           { JAVA17_LANGUAGE, &CommandBuilder::GetJavaBuildArgsForJava17 },
-                           { JAVA21_LANGUAGE, &CommandBuilder::GetJavaBuildArgsForJava21 },
-                           { POSIX_CUSTOM_RUNTIME, &CommandBuilder::GetPosixCustomBuildArgs },
-                           { NODE_JS, &CommandBuilder::GetNodejsBuildArgs },
-                           { PYTHON_LANGUAGE, &CommandBuilder::GetPythonBuildArgs },
-                           { PYTHON3_LANGUAGE, &CommandBuilder::GetPythonBuildArgs },
-                           { PYTHON36_LANGUAGE, &CommandBuilder::GetPythonBuildArgs },
-                           { PYTHON37_LANGUAGE, &CommandBuilder::GetPythonBuildArgs },
-                           { PYTHON38_LANGUAGE, &CommandBuilder::GetPythonBuildArgs },
-                           { PYTHON39_LANGUAGE, &CommandBuilder::GetPythonBuildArgs },
-                           { PYTHON310_LANGUAGE, &CommandBuilder::GetPythonBuildArgs },
-                           { PYTHON311_LANGUAGE, &CommandBuilder::GetPythonBuildArgs } };
+    std::unordered_map<std::string, std::shared_ptr<LanguageCommandStrategy>> strategies_;
     RuntimeConfig config_;
     bool execLookPath_ = true;
 };
-}
 
-#endif
+}  // namespace functionsystem::runtime_manager
+
+#endif  // RUNTIME_MANAGER_CONFIG_COMMAND_BUILDER_H

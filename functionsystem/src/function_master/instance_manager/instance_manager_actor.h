@@ -30,6 +30,7 @@
 #include "meta_store_client/meta_store_struct.h"
 #include "common/resource_view/resource_type.h"
 #include "function_master/global_scheduler/global_sched.h"
+#include "function_master/global_scheduler/traefik_route_cache.h"
 #include "group_manager.h"
 #include "instance_family_caches.h"
 
@@ -94,6 +95,11 @@ public:
     void BindQuotaMgrAID(litebus::AID aid)
     {
         quotaMgrAID_ = std::move(aid);
+    }
+
+    void SetTraefikRouteCache(std::shared_ptr<global_scheduler::TraefikRouteCache> cache)
+    {
+        traefikRouteCache_ = std::move(cache);
     }
 
     void HandleSystemUpgrade(bool isUpgrading);
@@ -533,6 +539,8 @@ private:
     bool isSuicide_{ false };
 
     litebus::Promise<bool> isInstancesReady_;
+
+    std::shared_ptr<global_scheduler::TraefikRouteCache> traefikRouteCache_;
 
     friend class DISABLED_InstanceManagerTest;
 };  // class InstanceManagerActor

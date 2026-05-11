@@ -190,17 +190,22 @@ inline messages::StartInstanceResponse GenFailStartInstanceResponse(
 
 inline internal::ForwardKillResponse GenForwardKillResponse(const std::string &requestID,
                                                             const common::ErrorCode errorCode,
-                                                            const std::string &message)
+                                                            const std::string &message,
+                                                            const std::string &payload = "")
 {
     internal::ForwardKillResponse forwardKillResponse;
     forwardKillResponse.set_requestid(requestID);
     forwardKillResponse.set_code(errorCode);
     forwardKillResponse.set_message(message);
+    if (!payload.empty()) {
+        forwardKillResponse.set_payload(payload);
+    }
     return forwardKillResponse;
 }
 
 inline messages::ForwardKillResponse GenForwardKillResponse(const std::string &requestID, const int errorCode,
-                                                            const std::string &message)
+                                                            const std::string &message,
+                                                            const std::string &payload = "")
 {
     messages::ForwardKillResponse forwardKillResponse;
     forwardKillResponse.set_requestid(requestID);

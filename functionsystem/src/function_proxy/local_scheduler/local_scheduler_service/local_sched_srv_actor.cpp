@@ -608,6 +608,9 @@ void LocalSchedSrvActor::Init()
     Receive("TryCancelResponse", &LocalSchedSrvActor::TryCancelResponse);
     Receive("RecordSnapshotMetadataResponse", &LocalSchedSrvActor::OnRecordSnapshotMetadataResponse);
     Receive("SnapStartCheckpointResponse", &LocalSchedSrvActor::OnSnapStartCheckpointResponse);
+    Receive("ListSnapshotsByFunctionKeyResponse", &LocalSchedSrvActor::OnListSnapshotsByFunctionKeyResponse);
+    Receive("ListSnapshotsByTenantResponse", &LocalSchedSrvActor::OnListSnapshotsByTenantResponse);
+    Receive("DeleteSnapshotResponse", &LocalSchedSrvActor::OnDeleteSnapshotResponse);
     Receive("TenantQuotaExceeded", &LocalSchedSrvActor::OnTenantQuotaExceeded);
 }
 
@@ -976,8 +979,8 @@ litebus::Future<Status> LocalSchedSrvActor::IsRegisteredToGlobal()
 }
 
 
-litebus::Future<messages::RecordSnapshotResponse> LocalSchedSrvActor::RecordSnapshotMetadata(
-    const std::shared_ptr<messages::RecordSnapshotRequest> &req)
+litebus::Future<::messages::RecordSnapshotResponse> LocalSchedSrvActor::RecordSnapshotMetadata(
+    const std::shared_ptr<::messages::RecordSnapshotRequest> &req)
 {
     if (masterAid_.Name().empty()) {
         YRLOG_ERROR("master AID is empty, failed to send RecordSnapshotMetadata");
@@ -1028,8 +1031,8 @@ void LocalSchedSrvActor::OnRecordSnapshotMetadataResponse(
     }
 }
 
-litebus::Future<messages::RestoreSnapshotResponse> LocalSchedSrvActor::SnapStartCheckpoint(
-    const std::shared_ptr<messages::RestoreSnapshotRequest> &req)
+litebus::Future<::messages::RestoreSnapshotResponse> LocalSchedSrvActor::SnapStartCheckpoint(
+    const std::shared_ptr<::messages::RestoreSnapshotRequest> &req)
 {
     auto promise = std::make_shared<litebus::Promise<messages::RestoreSnapshotResponse>>();
     DoSnapStartCheckpoint(promise, req);
@@ -1037,8 +1040,8 @@ litebus::Future<messages::RestoreSnapshotResponse> LocalSchedSrvActor::SnapStart
 }
 
 void LocalSchedSrvActor::DoSnapStartCheckpoint(
-    const std::shared_ptr<litebus::Promise<messages::RestoreSnapshotResponse>> &promise,
-    const std::shared_ptr<messages::RestoreSnapshotRequest> &req)
+    const std::shared_ptr<litebus::Promise<::messages::RestoreSnapshotResponse>> &promise,
+    const std::shared_ptr<::messages::RestoreSnapshotRequest> &req)
 {
     if (masterAid_.Name().empty()) {
         YRLOG_ERROR("master AID is empty, failed to send SnapStartCheckpoint");
@@ -1084,6 +1087,92 @@ void LocalSchedSrvActor::OnSnapStartCheckpointResponse(
 
     if (auto status = snapStartCheckpointSync_.Synchronized(rsp.requestid(), rsp); status.IsError()) {
         YRLOG_WARN("no matching request found for requestID: {}", rsp.requestid());
+    }
+}
+
+litebus::Future<::messages::ListSnapshotsByFunctionKeyResponse> LocalSchedSrvActor::ListSnapshotsByFunctionKey(
+    const std::shared_ptr<::messages::ListSnapshotsByFunctionKeyRequest> &req)
+{
+    if (masterAid_.Name().empty()) {
+        ::messages::ListSnapshotsByFunctionKeyResponse errorRsp;
+        errorRsp.set_requestid(req->requestid());
+        errorRsp.set_code(common::ERR_INNER_COMMUNICATION);
+        errorRsp.set_message("master AID not available");
+        return errorRsp;
+    }
+    auto future = listSnapshotsByFunctionKeySync_.AddSynchronizer(req->requestid());
+    litebus::AID snapMgrAid(SNAP_MANAGER_ACTOR_NAME, masterAid_.Url());
+    Send(snapMgrAid, "ListSnapshotsByFunctionKey", req->SerializeAsString());
+    return future.Then([](const ::messages::ListSnapshotsByFunctionKeyResponse &rsp) { return rsp; });
+}
+
+void LocalSchedSrvActor::OnListSnapshotsByFunctionKeyResponse(
+    const litebus::AID &, std::string &&, std::string &&msg)
+{
+    ::messages::ListSnapshotsByFunctionKeyResponse rsp;
+    if (!rsp.ParseFromString(msg)) {
+        YRLOG_ERROR("failed to parse ListSnapshotsByFunctionKeyResponse");
+        return;
+    }
+    if (auto status = listSnapshotsByFunctionKeySync_.Synchronized(rsp.requestid(), rsp); status.IsError()) {
+        YRLOG_WARN("no matching function-key checkpoint request found for requestID: {}", rsp.requestid());
+    }
+}
+
+litebus::Future<::messages::ListSnapshotsByTenantResponse> LocalSchedSrvActor::ListSnapshotsByTenant(
+    const std::shared_ptr<::messages::ListSnapshotsByTenantRequest> &req)
+{
+    if (masterAid_.Name().empty()) {
+        ::messages::ListSnapshotsByTenantResponse errorRsp;
+        errorRsp.set_requestid(req->requestid());
+        errorRsp.set_code(common::ERR_INNER_COMMUNICATION);
+        errorRsp.set_message("master AID not available");
+        return errorRsp;
+    }
+    auto future = listSnapshotsByTenantSync_.AddSynchronizer(req->requestid());
+    litebus::AID snapMgrAid(SNAP_MANAGER_ACTOR_NAME, masterAid_.Url());
+    Send(snapMgrAid, "ListSnapshotsByTenant", req->SerializeAsString());
+    return future.Then([](const ::messages::ListSnapshotsByTenantResponse &rsp) { return rsp; });
+}
+
+void LocalSchedSrvActor::OnListSnapshotsByTenantResponse(
+    const litebus::AID &, std::string &&, std::string &&msg)
+{
+    ::messages::ListSnapshotsByTenantResponse rsp;
+    if (!rsp.ParseFromString(msg)) {
+        YRLOG_ERROR("failed to parse ListSnapshotsByTenantResponse");
+        return;
+    }
+    if (auto status = listSnapshotsByTenantSync_.Synchronized(rsp.requestid(), rsp); status.IsError()) {
+        YRLOG_WARN("no matching tenant checkpoint request found for requestID: {}", rsp.requestid());
+    }
+}
+
+litebus::Future<::messages::DeleteSnapshotResponse> LocalSchedSrvActor::DeleteSnapshot(
+    const std::shared_ptr<::messages::DeleteSnapshotRequest> &req)
+{
+    if (masterAid_.Name().empty()) {
+        ::messages::DeleteSnapshotResponse errorRsp;
+        errorRsp.set_requestid(req->requestid());
+        errorRsp.set_code(common::ERR_INNER_COMMUNICATION);
+        errorRsp.set_message("master AID not available");
+        return errorRsp;
+    }
+    auto future = deleteSnapshotSync_.AddSynchronizer(req->requestid());
+    litebus::AID snapMgrAid(SNAP_MANAGER_ACTOR_NAME, masterAid_.Url());
+    Send(snapMgrAid, "DeleteSnapshot", req->SerializeAsString());
+    return future.Then([](const ::messages::DeleteSnapshotResponse &rsp) { return rsp; });
+}
+
+void LocalSchedSrvActor::OnDeleteSnapshotResponse(const litebus::AID &, std::string &&, std::string &&msg)
+{
+    ::messages::DeleteSnapshotResponse rsp;
+    if (!rsp.ParseFromString(msg)) {
+        YRLOG_ERROR("failed to parse DeleteSnapshotResponse");
+        return;
+    }
+    if (auto status = deleteSnapshotSync_.Synchronized(rsp.requestid(), rsp); status.IsError()) {
+        YRLOG_WARN("no matching delete checkpoint request found for requestID: {}", rsp.requestid());
     }
 }
 }

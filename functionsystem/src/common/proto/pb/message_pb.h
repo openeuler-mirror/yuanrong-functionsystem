@@ -182,6 +182,10 @@ using RecordSnapshotRequest = ::messages::RecordSnapshotRequest;
 using RecordSnapshotResponse = ::messages::RecordSnapshotResponse;
 using SnapshotInfo = ::resources::SnapshotInfo;
 
+using RuntimeReconcileEntry = ::messages::RuntimeReconcileEntry;
+using ReconcileRuntimesRequest = ::messages::ReconcileRuntimesRequest;
+using ReconcileRuntimesResponse = ::messages::ReconcileRuntimesResponse;
+
 namespace MetaStore {
 using PutRequest = ::messages::PutRequest;
 using PutResponse = ::messages::PutResponse;
