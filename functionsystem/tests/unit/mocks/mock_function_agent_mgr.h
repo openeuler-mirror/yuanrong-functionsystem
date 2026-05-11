@@ -59,6 +59,11 @@ public:
 
     MOCK_METHOD(litebus::Future<Status>, GracefulShutdown, (), (override));
     MOCK_METHOD(void, SetAbnormal, (), (override));
+
+    MOCK_METHOD(litebus::Future<messages::ReconcileRuntimesResponse>, ReconcileRuntimes,
+                (const std::string &funcAgentID,
+                 const std::shared_ptr<messages::ReconcileRuntimesRequest> &request),
+                (override));
 };
 
 }  // namespace functionsystem::test

@@ -92,6 +92,9 @@ public:
      * Handle snapstart request (called via message)
      */
     void SnapStartCheckpoint(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void ListSnapshotsByFunctionKeyMessage(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void ListSnapshotsByTenantMessage(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void DeleteSnapshotMessage(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     /**
      * Query snapshot by ID
@@ -102,6 +105,30 @@ public:
      * List all snapshots for a function
      */
     litebus::Future<std::vector<SnapshotMetadata>> ListSnapshotsByFunction(const std::string &functionID);
+
+    /**
+     * List all snapshots for a (tenantID, functionType, optional ns)
+     */
+    litebus::Future<std::vector<SnapshotMetadata>> ListSnapshotsByFunctionKey(const std::string &tenantID,
+                                                                               const std::string &functionType,
+                                                                               const std::string &ns = "");
+
+    /**
+     * List checkpoint IDs for a (tenantID, functionType, optional ns)
+     */
+    litebus::Future<std::vector<std::string>> ListCheckpointIDsByFunctionKey(const std::string &tenantID,
+                                                                            const std::string &functionType,
+                                                                            const std::string &ns = "");
+
+    /**
+     * List all snapshots for a tenant (all functionTypes)
+     */
+    litebus::Future<std::vector<SnapshotMetadata>> ListSnapshotsByTenant(const std::string &tenantID);
+
+    /**
+     * List checkpoint IDs for a tenant (all functionTypes)
+     */
+    litebus::Future<std::vector<std::string>> ListCheckpointIDsByTenant(const std::string &tenantID);
 
     /**
      * Delete a snapshot
@@ -117,7 +144,14 @@ public:
                                const std::string &requestID,
                                int32_t code,
                                const std::string &message,
-                               const std::string &instanceID);
+                               const std::string &instanceID,
+                               const ::messages::SnapstartInfo &snapstartInfo = ::messages::SnapstartInfo{});
+    void SendListSnapshotsByFunctionKeyResponse(const litebus::AID &to,
+                                                const ::messages::ListSnapshotsByFunctionKeyResponse &rsp);
+    void SendListSnapshotsByTenantResponse(const litebus::AID &to,
+                                           const ::messages::ListSnapshotsByTenantResponse &rsp);
+    void SendDeleteSnapshotResponse(const litebus::AID &to,
+                                    const ::messages::DeleteSnapshotResponse &rsp);
 protected:
     void Init() override;
     void Finalize() override;
@@ -189,7 +223,8 @@ private:
         void SendRecordSnapshotResponse(const litebus::AID &to, const std::string &requestID, int32_t code, const std::string &message) const;
         void SendSnapStartResponse(const litebus::AID &to, const std::string &requestID,
                                   int32_t code, const std::string &message,
-                                  const std::string &instanceID = "") const;
+                                  const std::string &instanceID = "",
+                                  const ::messages::SnapstartInfo &snapstartInfo = ::messages::SnapstartInfo{}) const;
     };
 
     /**

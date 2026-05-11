@@ -256,6 +256,8 @@ private:
 
     void UpdateCredResponse(const litebus::AID &to, const litebus::Future<messages::UpdateCredResponse> &rsp);
 
+    void ReconcileRuntimes(const litebus::AID &from, std::string &&name, std::string &&msg);
+
     bool CheckStartInstanceRequest(const messages::RuntimeInstanceInfo &instance);
 
     bool CheckInstanceIsDeployed(const litebus::AID &to, const messages::RuntimeInstanceInfo &instance);

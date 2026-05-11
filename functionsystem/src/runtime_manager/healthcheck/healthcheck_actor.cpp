@@ -187,6 +187,23 @@ litebus::Future<Status> HealthCheckActor::SendInstanceStatus(const std::string &
         });
 }
 
+litebus::Future<Status> HealthCheckActor::NotifySandboxExit(const std::string &instanceID,
+                                                             const std::string &runtimeID, int exitCode,
+                                                             const std::string &exitMessage,
+                                                             const std::string &requestID)
+{
+    auto req = GenUpdateInstanceStatusRequest(instanceID, exitCode, requestID);
+    auto info = req->mutable_instancestatusinfo();
+    info->set_instancemsg(exitMessage);
+    info->set_type(exitCode == 0 ? static_cast<int32_t>(EXIT_TYPE::RETURN)
+                                  : static_cast<int32_t>(EXIT_TYPE::UNKNOWN_ERROR));
+    YRLOG_INFO("{}|NotifySandboxExit: instanceID({}) runtimeID({}) exitCode({})", requestID, instanceID, runtimeID,
+               exitCode);
+    litebus::Async(GetAID(), &HealthCheckActor::StartUpdateInstanceStatus, req, functionAgentAID_, runtimeID, exitCode);
+    return exitCode == 0 ? Status{ StatusCode::SUCCESS, exitMessage }
+                         : Status{ StatusCode::FAILED, exitMessage };
+}
+
 void HealthCheckActor::StartUpdateInstanceStatus(const std::shared_ptr<messages::UpdateInstanceStatusRequest> &req,
                                                  const litebus::AID &to, const std::string &runtimeID, const int status)
 {
