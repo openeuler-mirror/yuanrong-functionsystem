@@ -51,11 +51,6 @@ constexpr int32_t RECONCILE_MAX_RETRIES             = 30;
 const std::string YR_ONLY_STDOUT                    = "YR_ONLY_STDOUT";
 }  // namespace
 
-// ── Construction ──────────────────────────────────────────────────────────────
-
-const std::string YR_ONLY_STDOUT                    = "YR_ONLY_STDOUT";
-}  // namespace
-
 void SandboxExecutor::StartSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     trace::StartSandboxCreateSpan(request);
@@ -603,6 +598,12 @@ litebus::Future<runtime::v1::ListContainersResponse> SandboxExecutor::DoList()
 litebus::Future<messages::ReconcileRuntimesResponse> SandboxExecutor::ReconcileRuntimes(
     const std::shared_ptr<messages::ReconcileRuntimesRequest> &request)
 {
+    if (!request) {
+        messages::ReconcileRuntimesResponse resp;
+        resp.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
+        resp.set_message("request is null");
+        return resp;
+    }
     if (!containerd_) {
         // No CONTAINER_EP configured — return empty success (nothing to reconcile)
         messages::ReconcileRuntimesResponse resp;

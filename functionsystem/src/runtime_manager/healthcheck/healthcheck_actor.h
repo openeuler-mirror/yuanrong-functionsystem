@@ -119,6 +119,8 @@ private:
     std::unordered_map<pid_t, std::pair<std::string, std::string>> oomMap_;
     // key: requestID
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<Status>>> oomNotifyMap_;
+    // key: requestID
+    std::unordered_map<std::string, std::shared_ptr<litebus::Promise<Status>>> sandboxExitNotifyMap_;
     // key: runtimeID
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<Status>>> runtimeStatus_;
 };

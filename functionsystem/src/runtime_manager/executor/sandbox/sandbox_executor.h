@@ -93,6 +93,8 @@ private:
  */
 class SandboxExecutor : public Executor {
 public:
+    static constexpr uint32_t kDefaultOrphanGracePeriodSec = 600;
+
     SandboxExecutor(const std::string &name, const litebus::AID &functionAgentAID,
                     const std::string &checkpointDir = {});
 
@@ -276,7 +278,7 @@ private:
     bool synced_       = false;
 
     // ── Reconciliation state ─────────────────────────────────────────────────
-    uint32_t orphanGracePeriodSec_ = 600;
+    uint32_t orphanGracePeriodSec_ = kDefaultOrphanGracePeriodSec;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> orphanFirstSeen_;
 };
 
