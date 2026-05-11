@@ -295,9 +295,12 @@ std::string GetInstallationType()
         return PKG_TYPE_TARBALL;
     }
 
-    if (exePath.find("site-packages") != std::string::npos || exePath.find("venv") != std::string::npos) {
+    if (exePath.find("dist-packages") != std::string::npos ||
+        exePath.find("site-packages") != std::string::npos ||
+        exePath.find("venv") != std::string::npos) {
         return PKG_TYPE_WHEEL;
     }
+    
     return PKG_TYPE_TARBALL;
 }
 
