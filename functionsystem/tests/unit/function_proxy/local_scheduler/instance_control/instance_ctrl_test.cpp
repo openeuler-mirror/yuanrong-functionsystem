@@ -1377,6 +1377,34 @@ TEST_F(InstanceCtrlTest, KillInstanceRemote)
     EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_INSTANCE_NOT_FOUND);
 }
 
+TEST_F(InstanceCtrlTest, SignalRouteUsesStateMachineOwnerWhenInstanceInfoProxyIsStale)
+{
+    const std::string instanceID = "InstanceA";
+    auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
+    actor->BindInstanceControlView(instanceControlView_);
+
+    auto stateMachine = std::make_shared<MockInstanceStateMachine>("proxyID1");
+    EXPECT_CALL(*instanceControlView_, GetInstance(instanceID)).WillOnce(Return(stateMachine));
+    EXPECT_CALL(*stateMachine, GetOwner()).WillOnce(Return("proxyID1"));
+
+    resources::InstanceInfo instanceInfo;
+    instanceInfo.set_instanceid(instanceID);
+    instanceInfo.set_functionproxyid("nodeID");
+    instanceInfo.mutable_instancestatus()->set_code(int32_t(InstanceState::RUNNING));
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->mutable_instance()->CopyFrom(instanceInfo);
+
+    auto killCtx = std::make_shared<KillContext>();
+    killCtx->killRsp = GenKillResponse(common::ErrorCode::ERR_NONE, "");
+    killCtx->killRequest = GenKillRequest(instanceID, SHUT_DOWN_SIGNAL);
+    killCtx->instanceContext = std::make_shared<InstanceContext>(scheduleReq);
+
+    auto routedCtx = actor->SignalRoute(killCtx).Get();
+
+    EXPECT_FALSE(routedCtx->isLocal);
+    EXPECT_EQ(routedCtx->killRsp.code(), common::ErrorCode::ERR_NONE);
+}
+
 TEST_F(InstanceCtrlTest, DISABLED_KillInstanceLocal)
 {
     const std::string instanceID = "InstanceA";

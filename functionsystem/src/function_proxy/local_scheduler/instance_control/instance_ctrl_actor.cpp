@@ -790,6 +790,20 @@ litebus::Future<std::shared_ptr<KillContext>> InstanceCtrlActor::SignalRoute(
     }
 
     auto &instanceInfo = killCtx->instanceContext->GetInstanceInfo();
+    if (instanceControlView_ != nullptr) {
+        auto stateMachine = instanceControlView_->GetInstance(instanceInfo.instanceid());
+        if (stateMachine != nullptr) {
+            auto owner = stateMachine->GetOwner();
+            if (!owner.empty()) {
+                killCtx->isLocal = (owner == nodeID_);
+                killCtx->killRsp = GenKillResponse(common::ErrorCode::ERR_NONE, "");
+                YRLOG_DEBUG("(kill)owner({}) of instance({}), nodeID({}), is local({})", owner,
+                            instanceInfo.instanceid(), nodeID_, killCtx->isLocal);
+                return killCtx;
+            }
+        }
+    }
+
     if (instanceInfo.functionproxyid() != nodeID_) {
         killCtx->isLocal = false;
     } else {
