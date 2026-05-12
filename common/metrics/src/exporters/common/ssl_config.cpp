@@ -15,11 +15,72 @@
  */
 #include "metrics/exporters/common/ssl_config.h"
 
+#include <array>
+#include <cctype>
+#include <string>
+
 #include <nlohmann/json.hpp>
 
 #include "metrics/exporters/common/sensitive_data.h"
 
 namespace observability::exporters::metrics {
+namespace {
+constexpr std::array<int, 256> BuildBase64DecodeTable()
+{
+    std::array<int, 256> table {};
+    for (auto &item : table) {
+        item = -1;
+    }
+    for (int i = 0; i < 26; ++i) {
+        table[static_cast<size_t>('A' + i)] = i;
+        table[static_cast<size_t>('a' + i)] = i + 26;
+    }
+    for (int i = 0; i < 10; ++i) {
+        table[static_cast<size_t>('0' + i)] = i + 52;
+    }
+    table[static_cast<size_t>('+')] = 62;
+    table[static_cast<size_t>('/')] = 63;
+    return table;
+}
+
+std::string DecodeBase64(const std::string &input)
+{
+    static constexpr auto table = BuildBase64DecodeTable();
+    std::string output;
+    int val = 0;
+    int valb = -8;
+    for (const auto ch : input) {
+        const auto uch = static_cast<unsigned char>(ch);
+        if (std::isspace(uch)) {
+            continue;
+        }
+        if (ch == '=') {
+            break;
+        }
+        const int decoded = table[uch];
+        if (decoded < 0) {
+            return "";
+        }
+        val = (val << 6) + decoded;
+        valb += 6;
+        if (valb >= 0) {
+            output.push_back(static_cast<char>((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return output;
+}
+
+std::string DecodeCertData(const nlohmann::json &configJson, const std::string &key)
+{
+    if (configJson.find(key) == configJson.end()) {
+        return "";
+    }
+    const auto data = configJson.at(key).get<std::string>();
+    return DecodeBase64(data);
+}
+}  // namespace
+
 void SSLConfig::Parse(const std::string &config)
 {
     try {
@@ -35,6 +96,11 @@ void SSLConfig::Parse(const std::string &config)
         }
         if (isSSLEnable_ && configJson.find("keyFile") != configJson.end()) {
             keyFile_ = configJson.at("keyFile");
+        }
+        if (isSSLEnable_) {
+            rootCertData_ = DecodeCertData(configJson, "rootCertData");
+            certData_ = DecodeCertData(configJson, "certData");
+            keyData_ = DecodeCertData(configJson, "keyData");
         }
         if (isSSLEnable_ && configJson.find("passphrase") != configJson.end()) {
             passphrase_ = configJson.at("passphrase");

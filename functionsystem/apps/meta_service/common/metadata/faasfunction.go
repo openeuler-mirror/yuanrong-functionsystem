@@ -286,6 +286,7 @@ type FaaSExtendedMetaData struct {
 	RestoreHook           RestoreHook           `json:"restore_hook,omitempty" valid:",optional"`
 	NetworkController     NetworkController     `json:"network_controller" valid:",optional"`
 	UserAgency            UserAgency            `json:"user_agency" valid:",optional"`
+	EnableMetrics         bool                  `json:"enable_metrics,omitempty"`
 	EnableAgentSession    bool                  `json:"enable_agent_session,omitempty"`
 }
 
