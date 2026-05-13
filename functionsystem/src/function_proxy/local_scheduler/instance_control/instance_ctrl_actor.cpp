@@ -2492,6 +2492,9 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
         std::string message = response.message().empty() ? "failed to deploy instance" : response.message();
         StatusCode errCode = static_cast<StatusCode>(response.code());
         auto instanceInfo = stateMachine->GetInstanceInfo();
+        metrics::MetricsAdapter::GetInstance().SendInstanceCreateFailureAlarm(
+            request->requestid(), request->instance().instanceid(), response.runtimeid(), response.address(),
+            static_cast<int64_t>(errCode), "deploy", message);
         auto status = IsRuntimeRecoverEnable(instanceInfo, stateMachine->GetCancelFuture()) ? InstanceState::FAILED
                                                                                             : InstanceState::FATAL;
         // monopoly need to send kill to avoid pod reused
@@ -2616,12 +2619,17 @@ litebus::Future<Status> InstanceCtrlActor::HandleCheckReadinessFailure(const std
     return instanceStatusPromises_[request->instance().instanceid()]
         .GetFuture()
         .After(config_.waitStatusCodeUpdateMs,
-               [instanceStatusPromise, errMsg](const litebus::Future<Status> &future) {
-                   instanceStatusPromise.SetValue(
-                       Status(StatusCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS,
-                              "unable to init runtime, because " + errMsg + " and not received exit info of runtime"));
+               [instanceStatusPromise, errMsg, request](const litebus::Future<Status> &future) {
+                   Status status(StatusCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS,
+                                 "unable to init runtime, because " + errMsg +
+                                     " and not received exit info of runtime");
+                   metrics::MetricsAdapter::GetInstance().SendInstanceCreateFailureAlarm(
+                       request->requestid(), request->instance().instanceid(), request->instance().runtimeid(),
+                       request->instance().runtimeaddress(), static_cast<int64_t>(status.StatusCode()),
+                       "check_readiness", status.RawMessage());
+                   instanceStatusPromise.SetValue(status);
                    return instanceStatusPromise.GetFuture();
-               })
+                })
         .OnComplete([aid(GetAID()), request, isRecovering](const litebus::Future<Status> &future) {
             (void)litebus::Async(aid, &InstanceCtrlActor::KillRuntime, request->instance(), isRecovering);
             return future;

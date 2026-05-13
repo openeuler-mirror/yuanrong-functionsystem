@@ -703,6 +703,41 @@ void MetricsAdapter::SendPodAlarm(const std::string &podName, const std::string 
     alarmHandler_.SendPodAlarm(podName, cause);
 }
 
+void MetricsAdapter::SendInstanceCreateFailureAlarm(const std::string &requestID, const std::string &instanceID,
+                                                    const std::string &runtimeID, const std::string &locationInfo,
+                                                    int64_t statusCode, const std::string &stage,
+                                                    const std::string &cause)
+{
+    if (enabledInstruments_.find(YRInstrument::YR_INSTANCE_CREATE_FAILURE_ALARM) == enabledInstruments_.end()) {
+        YRLOG_DEBUG("instance create failure alarm is not enabled");
+        return;
+    }
+    if (metricsContext_.GetAttr("component_name") != "function_proxy") {
+        YRLOG_DEBUG("current component({}) is not function proxy, do not send instance create failure alarm",
+                    metricsContext_.GetAttr("component_name"));
+        return;
+    }
+
+    MetricsApi::AlarmInfo alarmInfo;
+    AddAlarmCommonAttrs(alarmInfo);
+    alarmInfo.id = "YuanrongInstanceCreateFailure00001-" + requestID;
+    alarmInfo.alarmName = INSTANCE_CREATE_FAILURE_ALARM;
+    alarmInfo.alarmSeverity = MetricsApi::AlarmSeverity::MAJOR;
+    alarmInfo.locationInfo = locationInfo;
+    alarmInfo.cause = cause;
+    alarmInfo.startsAt = GetCurrentTimeInMilliSec();
+    alarmInfo.endsAt = 0;
+    alarmInfo.customOptions["source_tag"] = GetSourceTag() + "YuanrongInstanceCreateFailure";
+    alarmInfo.customOptions["resource_id"] = instanceID;
+    alarmInfo.customOptions["request_id"] = requestID;
+    alarmInfo.customOptions["runtime_id"] = runtimeID;
+    alarmInfo.customOptions["stage"] = stage;
+    alarmInfo.customOptions["status_code"] = statusCode;
+    alarmInfo.customOptions["op_type"] = "firing";
+    metricsContext_.SetAlarm(alarmInfo.id, alarmInfo);
+    alarmHandler_.SendInstanceCreateFailureAlarm(alarmInfo);
+}
+
 void MetricsAdapter::InitObservableCounter(const struct MeterTitle &title, int interval, MetricsApi::CallbackPtr &cb,
                                            observability::sdk::metrics::InstrumentValueType observableType)
 {
