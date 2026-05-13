@@ -17,6 +17,7 @@
 #ifndef FUNCTIONSYSTEM_METRICSADAPTER_H
 #define FUNCTIONSYSTEM_METRICSADAPTER_H
 
+#include <cstdint>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
@@ -138,6 +139,9 @@ public:
     void SendTokenRotationFailureAlarm();
     void SendS3Alarm();
     void SendPodAlarm(const std::string &podName, const std::string &cause);
+    void SendInstanceCreateFailureAlarm(const std::string &requestID, const std::string &instanceID,
+                                        const std::string &runtimeID, const std::string &locationInfo,
+                                        int64_t statusCode, const std::string &stage, const std::string &cause);
 
     // for test
     [[maybe_unused]] std::map<std::string, std::shared_ptr<observability::api::metrics::ObservableInstrument>>

@@ -96,6 +96,15 @@ void AlarmHandler::SendElectionAlarm(const MetricsApi::AlarmInfo &electionAlarmI
     electionAlarm->Set(electionAlarmInfo);
 }
 
+void AlarmHandler::SendInstanceCreateFailureAlarm(const MetricsApi::AlarmInfo &alarmInfo)
+{
+    auto alarm = InitAlarm(INSTANCE_CREATE_FAILURE_ALARM, "instance create failure alarm");
+    if (alarm == nullptr) {
+        return;
+    }
+    alarm->Set(alarmInfo);
+}
+
 void AlarmHandler::SendTokenRotationFailureAlarm()
 {
     auto tokenRotationFailureAlarm = InitAlarm(TOKEN_ROTATION_FAILURE_ALARM, "token rotation failure alarm");

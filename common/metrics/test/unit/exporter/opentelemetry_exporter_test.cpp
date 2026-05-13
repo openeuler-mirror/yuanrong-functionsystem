@@ -53,6 +53,38 @@ TEST(OpenTelemetryAttributeUtilsTest, FlattensJsonAlarmLabelToStructuredAttribut
     EXPECT_EQ(attributes.at("yrAlarmLabelKey"), labels.front().second);
 }
 
+TEST(OpenTelemetryAttributeUtilsTest, FlattensInstanceCreateFailureAlarmToStructuredAttributes)
+{
+    MetricsSdk::PointLabels labels;
+    labels.emplace_back(std::pair{
+        "yrAlarmLabelKey",
+        R"({"id":"YuanrongInstanceCreateFailure00001-request-1","name":"yr_instance_create_failure_alarm","severity":4,"locationInfo":"127.0.0.1:3000","cause":"unable to init runtime, because connect runtime failed and not received exit info of runtime","startsAt":1727611921601,"endsAt":0,"request_id":"request-1","resource_id":"instance-1","runtime_id":"runtime-1","stage":"check_readiness","status_code":3001,"site":"cn-north-7","tenant_id":"tenant-1","application_id":"app-1","service_id":"svc-1","op_type":"firing"})"
+    });
+    labels.emplace_back(std::pair{ "component_name", "function_proxy" });
+
+    auto attributes =
+        MetricsExporter::BuildPointAttributes(BuildGaugeDescriptor("yr_instance_create_failure_alarm"), labels);
+
+    EXPECT_EQ(attributes.at("yr.event.type"), "alarm");
+    EXPECT_EQ(attributes.at("yr.alarm.id"), "YuanrongInstanceCreateFailure00001-request-1");
+    EXPECT_EQ(attributes.at("yr.alarm.name"), "yr_instance_create_failure_alarm");
+    EXPECT_EQ(attributes.at("yr.alarm.severity"), "4");
+    EXPECT_EQ(attributes.at("yr.alarm.location_info"), "127.0.0.1:3000");
+    EXPECT_EQ(attributes.at("yr.alarm.cause"),
+              "unable to init runtime, because connect runtime failed and not received exit info of runtime");
+    EXPECT_EQ(attributes.at("yr.alarm.request_id"), "request-1");
+    EXPECT_EQ(attributes.at("yr.alarm.resource_id"), "instance-1");
+    EXPECT_EQ(attributes.at("yr.alarm.runtime_id"), "runtime-1");
+    EXPECT_EQ(attributes.at("yr.alarm.stage"), "check_readiness");
+    EXPECT_EQ(attributes.at("yr.alarm.status_code"), "3001");
+    EXPECT_EQ(attributes.at("yr.alarm.site"), "cn-north-7");
+    EXPECT_EQ(attributes.at("yr.alarm.tenant_id"), "tenant-1");
+    EXPECT_EQ(attributes.at("yr.alarm.application_id"), "app-1");
+    EXPECT_EQ(attributes.at("yr.alarm.service_id"), "svc-1");
+    EXPECT_EQ(attributes.at("yr.alarm.op_type"), "firing");
+    EXPECT_EQ(attributes.at("component_name"), "function_proxy");
+}
+
 TEST(OpenTelemetryAttributeUtilsTest, FlattensLegacyAlarmGaugeLabelsToStructuredAttributes)
 {
     MetricsSdk::PointLabels labels;

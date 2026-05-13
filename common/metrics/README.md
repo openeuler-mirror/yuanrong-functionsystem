@@ -119,6 +119,7 @@ auto diskGauge = meter->CreateUint64ObservableCounter("interval_1_disk_usage", "
     "yr_etcd_alarm",
     "yr_metastore_alarm",
     "yr_election_alarm",
+    "yr_instance_create_failure_alarm",
     "yr_token_rotation_failure_alarm",
     "yr_obs_alarm",
     "yr_pod_alarm"
@@ -146,6 +147,7 @@ auto diskGauge = meter->CreateUint64ObservableCounter("interval_1_disk_usage", "
                 "yr_etcd_alarm",
                 "yr_metastore_alarm",
                 "yr_election_alarm",
+                "yr_instance_create_failure_alarm",
                 "yr_token_rotation_failure_alarm",
                 "yr_obs_alarm",
                 "yr_pod_alarm",
@@ -183,6 +185,7 @@ auto diskGauge = meter->CreateUint64ObservableCounter("interval_1_disk_usage", "
 | `yr_token_rotation_failure_alarm` | `MetricsAdapter::SendTokenRotationFailureAlarm` | STS token 轮换失败 |
 | `yr_obs_alarm` | `MetricsAdapter::SendS3Alarm` | OBS / S3 异常告警 |
 | `yr_pod_alarm` | `MetricsAdapter::SendPodAlarm` | Pod 异常告警 |
+| `yr_instance_create_failure_alarm` | `MetricsAdapter::SendInstanceCreateFailureAlarm` | 实例创建阶段最终失败（当前覆盖 readiness / runtime 初始化失败） |
 | `alarm_meter_gauge` | `MetricsAdapter::StsUnhealthyFiring` | 历史兼容标签告警，导出到 OTEL 时会归一化为 `yr.alarm.*` attributes |
 
 ### 新增告警的方法
