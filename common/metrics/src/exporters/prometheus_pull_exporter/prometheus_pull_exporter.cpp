@@ -109,7 +109,7 @@ void ShutdownSslSession(SSL *ssl)
     }
 }
 
-int PasswordCallback(char *buf, int size, int, void *userdata)
+int PasswordCallback(char *buf, int size, int, void *userdata)  // NOLINT
 {
     if (buf == nullptr || userdata == nullptr || size <= 0) {
         return 0;
@@ -221,14 +221,42 @@ bool PrometheusPullExporter::Start()
     if (running_.load()) {
         return true;
     }
-    if (options_.sslConfig.isSSLEnable_) {
-        sslContext_ = BuildSslContext();
-        options_.sslConfig.passphrase_.Clear();
-        if (sslContext_ == nullptr) {
-            return false;
-        }
+    if (!PrepareSslContext()) {
+        return false;
     }
 
+    int serverFd = OpenServerSocket();
+    if (serverFd < 0) {
+        METRICS_LOG_ERROR("Bind/listen prometheus pull exporter {}:{} failed", options_.ip, options_.port);
+        CleanupSslContext();
+        return false;
+    }
+    if (!ResolveBoundPort(serverFd, options_.port)) {
+        METRICS_LOG_ERROR("Resolve prometheus pull exporter bound port failed");
+        CloseFd(serverFd);
+        CleanupSslContext();
+        return false;
+    }
+
+    serverFd_ = serverFd;
+    running_.store(true);
+    worker_ = std::thread([this]() { ServeLoop(); });
+    NotifyHealthChange(true);
+    return true;
+}
+
+bool PrometheusPullExporter::PrepareSslContext()
+{
+    if (!options_.sslConfig.isSSLEnable_) {
+        return true;
+    }
+    sslContext_ = BuildSslContext();
+    options_.sslConfig.passphrase_.Clear();
+    return sslContext_ != nullptr;
+}
+
+int PrometheusPullExporter::OpenServerSocket()
+{
     addrinfo hints {};
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -240,14 +268,17 @@ bool PrometheusPullExporter::Start()
     if (getAddrInfoRet != 0) {
         METRICS_LOG_ERROR("Getaddrinfo for prometheus pull exporter {}:{} failed, error {}", options_.ip,
                           options_.port, gai_strerror(getAddrInfoRet));
-        if (sslContext_ != nullptr) {
-            SSL_CTX_free(sslContext_);
-            sslContext_ = nullptr;
-        }
-        return false;
+        CleanupSslContext();
+        return -1;
     }
-
     int serverFd = -1;
+    const bool bindSuccess = BindServerSocket(result, serverFd);
+    freeaddrinfo(result);
+    return bindSuccess ? serverFd : -1;
+}
+
+bool PrometheusPullExporter::BindServerSocket(addrinfo *result, int &serverFd)
+{
     for (addrinfo *it = result; it != nullptr; it = it->ai_next) {
         serverFd = socket(it->ai_family, it->ai_socktype, it->ai_protocol);
         if (serverFd < 0) {
@@ -259,37 +290,20 @@ bool PrometheusPullExporter::Start()
         if (flags >= 0) {
             (void)fcntl(serverFd, F_SETFL, flags | O_NONBLOCK);
         }
-        if (bind(serverFd, it->ai_addr, it->ai_addrlen) == 0 &&
-            listen(serverFd, SOMAXCONN) == 0) {
-            break;
+        if (bind(serverFd, it->ai_addr, it->ai_addrlen) == 0 && listen(serverFd, SOMAXCONN) == 0) {
+            return true;
         }
         CloseFd(serverFd);
     }
-    freeaddrinfo(result);
+    return false;
+}
 
-    if (serverFd < 0) {
-        METRICS_LOG_ERROR("Bind/listen prometheus pull exporter {}:{} failed", options_.ip, options_.port);
-        if (sslContext_ != nullptr) {
-            SSL_CTX_free(sslContext_);
-            sslContext_ = nullptr;
-        }
-        return false;
+void PrometheusPullExporter::CleanupSslContext()
+{
+    if (sslContext_ != nullptr) {
+        SSL_CTX_free(sslContext_);
+        sslContext_ = nullptr;
     }
-    if (!ResolveBoundPort(serverFd, options_.port)) {
-        METRICS_LOG_ERROR("Resolve prometheus pull exporter bound port failed");
-        CloseFd(serverFd);
-        if (sslContext_ != nullptr) {
-            SSL_CTX_free(sslContext_);
-            sslContext_ = nullptr;
-        }
-        return false;
-    }
-
-    serverFd_ = serverFd;
-    running_.store(true);
-    worker_ = std::thread([this]() { ServeLoop(); });
-    NotifyHealthChange(true);
-    return true;
 }
 
 void PrometheusPullExporter::Stop()
@@ -509,12 +523,8 @@ bool PrometheusPullExporter::LoadCertificateChainFromData(SSL_CTX *ctx)
     }
     X509_free(cert);
 
-    while (true) {
-        X509 *chainCert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
-        if (chainCert == nullptr) {
-            ERR_clear_error();
-            break;
-        }
+    for (X509 *chainCert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr); chainCert != nullptr;
+         chainCert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr)) {
         if (SSL_CTX_add_extra_chain_cert(ctx, chainCert) != 1) {
             METRICS_LOG_ERROR("Load prometheus pull exporter certificate chain data failed");
             X509_free(chainCert);
@@ -522,6 +532,7 @@ bool PrometheusPullExporter::LoadCertificateChainFromData(SSL_CTX *ctx)
             return false;
         }
     }
+    ERR_clear_error();
     BIO_free(bio);
     return true;
 }
@@ -534,8 +545,8 @@ bool PrometheusPullExporter::LoadPrivateKeyFromData(SSL_CTX *ctx)
         METRICS_LOG_ERROR("Create prometheus pull exporter private key bio failed");
         return false;
     }
-    void *password = options_.sslConfig.passphrase_.Empty() ? nullptr : &options_.sslConfig.passphrase_;
-    EVP_PKEY *privateKey = PEM_read_bio_PrivateKey(bio, nullptr, PasswordCallback, password);
+    void *callbackData = options_.sslConfig.passphrase_.Empty() ? nullptr : &options_.sslConfig.passphrase_;
+    EVP_PKEY *privateKey = PEM_read_bio_PrivateKey(bio, nullptr, PasswordCallback, callbackData);
     BIO_free(bio);
     if (privateKey == nullptr) {
         METRICS_LOG_ERROR("Parse prometheus pull exporter private key data failed");
@@ -568,12 +579,8 @@ bool PrometheusPullExporter::LoadRootCertsFromData(SSL_CTX *ctx)
         return false;
     }
     bool loaded = false;
-    while (true) {
-        X509 *rootCert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
-        if (rootCert == nullptr) {
-            ERR_clear_error();
-            break;
-        }
+    for (X509 *rootCert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr); rootCert != nullptr;
+         rootCert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr)) {
         if (X509_STORE_add_cert(store, rootCert) != 1) {
             METRICS_LOG_ERROR("Load prometheus pull exporter root cert data failed");
             X509_free(rootCert);
@@ -583,6 +590,7 @@ bool PrometheusPullExporter::LoadRootCertsFromData(SSL_CTX *ctx)
         loaded = true;
         X509_free(rootCert);
     }
+    ERR_clear_error();
     BIO_free(bio);
     if (!loaded) {
         METRICS_LOG_ERROR("Prometheus pull exporter root cert data is empty");

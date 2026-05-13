@@ -890,7 +890,8 @@ Status RuntimeExecutor::FillMetricsTLSConfig(::messages::TLSConfig &tlsConfig) c
         if (status.IsError()) {
             return status;
         }
-    } else if (initConfig.contains("rootCertData") || initConfig.contains("certData") || initConfig.contains("keyData")) {
+    } else if (initConfig.contains("rootCertData") || initConfig.contains("certData") ||
+               initConfig.contains("keyData")) {
         SetMetricsTLSConfigFromBase64(tlsConfig, initConfig);
     } else {
         SetMetricsTLSConfigFromFiles(tlsConfig, initConfig);

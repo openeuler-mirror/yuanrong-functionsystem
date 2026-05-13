@@ -25,21 +25,32 @@
 
 namespace observability::exporters::metrics {
 namespace {
-constexpr std::array<int, 256> BuildBase64DecodeTable()
+constexpr size_t BASE64_TABLE_SIZE = 256;
+constexpr int ALPHABET_SIZE = 26;
+constexpr int DIGIT_SIZE = 10;
+constexpr int LOWER_CASE_OFFSET = 26;
+constexpr int DIGIT_OFFSET = 52;
+constexpr int PLUS_OFFSET = 62;
+constexpr int SLASH_OFFSET = 63;
+constexpr int BITS_PER_BASE64_CHAR = 6;
+constexpr int BITS_PER_BYTE = 8;
+constexpr int BYTE_MASK = (1 << BITS_PER_BYTE) - 1;
+
+constexpr std::array<int, BASE64_TABLE_SIZE> BuildBase64DecodeTable()
 {
-    std::array<int, 256> table {};
+    std::array<int, BASE64_TABLE_SIZE> table {};
     for (auto &item : table) {
         item = -1;
     }
-    for (int i = 0; i < 26; ++i) {
+    for (int i = 0; i < ALPHABET_SIZE; ++i) {
         table[static_cast<size_t>('A' + i)] = i;
-        table[static_cast<size_t>('a' + i)] = i + 26;
+        table[static_cast<size_t>('a' + i)] = i + LOWER_CASE_OFFSET;
     }
-    for (int i = 0; i < 10; ++i) {
-        table[static_cast<size_t>('0' + i)] = i + 52;
+    for (int i = 0; i < DIGIT_SIZE; ++i) {
+        table[static_cast<size_t>('0' + i)] = i + DIGIT_OFFSET;
     }
-    table[static_cast<size_t>('+')] = 62;
-    table[static_cast<size_t>('/')] = 63;
+    table[static_cast<size_t>('+')] = PLUS_OFFSET;
+    table[static_cast<size_t>('/')] = SLASH_OFFSET;
     return table;
 }
 
@@ -48,7 +59,7 @@ std::string DecodeBase64(const std::string &input)
     static constexpr auto table = BuildBase64DecodeTable();
     std::string output;
     int val = 0;
-    int valb = -8;
+    int valb = -BITS_PER_BYTE;
     for (const auto ch : input) {
         const auto uch = static_cast<unsigned char>(ch);
         if (std::isspace(uch)) {
@@ -61,11 +72,11 @@ std::string DecodeBase64(const std::string &input)
         if (decoded < 0) {
             return "";
         }
-        val = (val << 6) + decoded;
-        valb += 6;
+        val = (val << BITS_PER_BASE64_CHAR) + decoded;
+        valb += BITS_PER_BASE64_CHAR;
         if (valb >= 0) {
-            output.push_back(static_cast<char>((val >> valb) & 0xFF));
-            valb -= 8;
+            output.push_back(static_cast<char>((val >> valb) & BYTE_MASK));
+            valb -= BITS_PER_BYTE;
         }
     }
     return output;

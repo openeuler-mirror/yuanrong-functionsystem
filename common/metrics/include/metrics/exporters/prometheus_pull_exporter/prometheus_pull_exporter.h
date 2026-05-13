@@ -22,6 +22,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <netdb.h>
 #include <string>
 #include <thread>
 
@@ -61,6 +62,10 @@ public:
 private:
     void Init(const PrometheusPullExportOptions &options);
     bool Start();
+    bool PrepareSslContext();
+    int OpenServerSocket();
+    bool BindServerSocket(addrinfo *result, int &serverFd);
+    void CleanupSslContext();
     void Stop();
     void NotifyHealthChange(bool healthy) const noexcept;
     void ServeLoop();

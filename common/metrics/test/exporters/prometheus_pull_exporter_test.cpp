@@ -40,9 +40,16 @@
 namespace MetricsSdk = observability::sdk::metrics;
 
 namespace {
-constexpr const char *libName = "libobservability-prometheus-pull-exporter.so";
-constexpr size_t maxAttempts = 10;
+constexpr const char *LIB_NAME = "libobservability-prometheus-pull-exporter.so";
+constexpr size_t MAX_ATTEMPTS = 10;
 constexpr int COMMAND_BUFFER_SIZE = 4096;
+constexpr int BITS_PER_BYTE = 8;
+constexpr int BITS_PER_BASE64_CHAR = 6;
+constexpr int BASE64_GROUP_SIZE = 4;
+constexpr int BASE64_VALUE_MASK = (1 << BITS_PER_BASE64_CHAR) - 1;
+constexpr int RETRY_INTERVAL_MS = 20;
+constexpr int EXPORTER_READY_TIMEOUT_SEC = 2;
+constexpr int RESET_REQUEST_WAIT_MS = 100;
 
 const MetricsSdk::InstrumentDescriptor INSTRUMENT_DESCRIPTOR = {
     .name = "test_metric",
@@ -79,14 +86,14 @@ void RetainExporter(const std::shared_ptr<observability::exporters::metrics::Exp
 {
     // Keep dlopen handles alive across tests. Unloading one exporter plugin before loading another can make weak
     // plugin hooks resolve to the wrong shared object in this single-process test binary.
-    static auto *exporters = new std::vector<std::shared_ptr<observability::exporters::metrics::Exporter>>();
+    static std::vector<std::shared_ptr<observability::exporters::metrics::Exporter>> exporters;
     exporters->push_back(exporter);
 }
 
 std::string GetLibraryPath()
 {
     if (const char *libDir = std::getenv("OBSERVABILITY_METRICS_LIB_DIR"); libDir != nullptr && libDir[0] != '\0') {
-        const std::string filePath = std::string(libDir) + "/" + libName;
+        const std::string filePath = std::string(libDir) + "/" + LIB_NAME;
         if (access(filePath.c_str(), R_OK) == 0) {
             return filePath;
         }
@@ -99,7 +106,7 @@ std::string GetLibraryPath()
         const auto slashPos = executablePath.find_last_of('/');
         if (slashPos != std::string::npos) {
             const std::string directoryPath = executablePath.substr(0, slashPos);
-            const std::string filePath = directoryPath + "/../lib/" + libName;
+            const std::string filePath = directoryPath + "/../lib/" + LIB_NAME;
             if (access(filePath.c_str(), R_OK) == 0) {
                 return filePath;
             }
@@ -237,10 +244,10 @@ std::string RunCommand(const std::string &command)
 bool GenerateSelfSignedCert(const std::string &certFile, const std::string &keyFile)
 {
     std::ostringstream command;
-    command << "openssl req -x509 -newkey rsa:2048 -nodes -days 1 "
-            << "-subj /CN=127.0.0.1 "
-            << "-keyout " << keyFile << " "
-            << "-out " << certFile << " >/dev/null 2>&1";
+    command << "openssl req -x509 -newkey rsa:2048 -nodes -days 1 " <<
+        "-subj /CN=127.0.0.1 " <<
+        "-keyout " << keyFile << " " <<
+        "-out " << certFile << " >/dev/null 2>&1";
     return std::system(command.str().c_str()) == 0;
 }
 
@@ -257,19 +264,19 @@ std::string Base64Encode(const std::string &input)
     static constexpr char table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     std::string output;
     int val = 0;
-    int valb = -6;
+    int valb = -BITS_PER_BASE64_CHAR;
     for (const auto ch : input) {
-        val = (val << 8) + static_cast<unsigned char>(ch);
-        valb += 8;
+        val = (val << BITS_PER_BYTE) + static_cast<unsigned char>(ch);
+        valb += BITS_PER_BYTE;
         while (valb >= 0) {
-            output.push_back(table[(val >> valb) & 0x3F]);
-            valb -= 6;
+            output.push_back(table[(val >> valb) & BASE64_VALUE_MASK]);
+            valb -= BITS_PER_BASE64_CHAR;
         }
     }
-    if (valb > -6) {
-        output.push_back(table[((val << 8) >> (valb + 8)) & 0x3F]);
+    if (valb > -BITS_PER_BASE64_CHAR) {
+        output.push_back(table[((val << BITS_PER_BYTE) >> (valb + BITS_PER_BYTE)) & BASE64_VALUE_MASK]);
     }
-    while (output.size() % 4 != 0) {
+    while (output.size() % BASE64_GROUP_SIZE != 0) {
         output.push_back('=');
     }
     return output;
@@ -278,10 +285,10 @@ std::string Base64Encode(const std::string &input)
 std::string SendHttpsRequest(uint16_t port, const std::string &path)
 {
     std::ostringstream command;
-    command << "printf 'GET " << path
-            << " HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n' | "
-            << "openssl s_client -connect 127.0.0.1:" << port
-            << " -quiet -ign_eof 2>/dev/null";
+    command << "printf 'GET " << path <<
+        " HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n' | " <<
+        "openssl s_client -connect 127.0.0.1:" << port <<
+        " -quiet -ign_eof 2>/dev/null";
     return RunCommand(command.str());
 }
 
@@ -302,7 +309,7 @@ bool WaitForExporterReady(uint16_t port, const std::string &path, std::chrono::m
         if (HttpGet(port, path).has_value()) {
             return true;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        std::this_thread::sleep_for(std::chrono::milliseconds(RETRY_INTERVAL_MS));
     }
     return false;
 }
@@ -310,7 +317,7 @@ bool WaitForExporterReady(uint16_t port, const std::string &path, std::chrono::m
 std::shared_ptr<observability::exporters::metrics::Exporter> LoadReadyExporter(const std::string &libraryPath,
     nlohmann::json &jsonConfig, std::string &error)
 {
-    for (size_t attempt = 0; attempt < maxAttempts; ++attempt) {
+    for (size_t attempt = 0; attempt < MAX_ATTEMPTS; ++attempt) {
         const auto port = GetAvailablePort();
         if (!port.has_value()) {
             continue;
@@ -327,7 +334,8 @@ std::shared_ptr<observability::exporters::metrics::Exporter> LoadReadyExporter(c
             continue;
         }
         RetainExporter(exporter);
-        if (WaitForExporterReady(port.value(), jsonConfig["metricsPath"].get<std::string>(), std::chrono::seconds(2))) {
+        if (WaitForExporterReady(port.value(), jsonConfig["metricsPath"].get<std::string>(),
+                                 std::chrono::seconds(EXPORTER_READY_TIMEOUT_SEC))) {
             return exporter;
         }
         (void)exporter->Shutdown(std::chrono::microseconds());
@@ -389,7 +397,8 @@ TEST_F(PrometheusPullExporterTest, CustomMetricsPathAndMultipleMetricTypes)
     auto exporter = observability::plugin::metrics::LoadExporterFromLibrary(libraryPath, jsonConfig.dump(), error);
     ASSERT_NE(exporter, nullptr);
     RetainExporter(exporter);
-    ASSERT_TRUE(WaitForExporterReady(port.value(), "/custom-metrics", std::chrono::seconds(2)));
+    ASSERT_TRUE(WaitForExporterReady(port.value(), "/custom-metrics",
+                                     std::chrono::seconds(EXPORTER_READY_TIMEOUT_SEC)));
 
     EXPECT_EQ(exporter->Export({ METRIC_DATA, GAUGE_DATA }), observability::exporters::metrics::ExportResult::SUCCESS);
 
@@ -500,7 +509,7 @@ TEST_F(PrometheusPullExporterTest, MockResetClientDoesNotBreakExporter)
     EXPECT_EQ(exporter->Export({ METRIC_DATA }), observability::exporters::metrics::ExportResult::SUCCESS);
 
     ASSERT_TRUE(SendResetHttpRequest(jsonConfig["port"].get<uint16_t>()));
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(RESET_REQUEST_WAIT_MS));
 
     const auto response = HttpGet(jsonConfig["port"].get<uint16_t>(), "/metrics");
     ASSERT_TRUE(response.has_value());
@@ -806,7 +815,8 @@ TEST_F(PrometheusPullExporterTest, EmptyExportAndShutdownBehavior)
     ASSERT_NE(exporter, nullptr);
 
     EXPECT_EQ(exporter->Export({}), observability::exporters::metrics::ExportResult::EMPTY_DATA);
-    EXPECT_TRUE(WaitForExporterReady(jsonConfig["port"].get<uint16_t>(), "/metrics", std::chrono::seconds(2)));
+    EXPECT_TRUE(WaitForExporterReady(jsonConfig["port"].get<uint16_t>(), "/metrics",
+                                     std::chrono::seconds(EXPORTER_READY_TIMEOUT_SEC)));
 
     std::vector<MetricsSdk::MetricData> vec = { METRIC_DATA };
     EXPECT_EQ(exporter->Export(vec), observability::exporters::metrics::ExportResult::SUCCESS);
@@ -835,7 +845,7 @@ TEST_F(PrometheusPullExporterTest, DefaultMetricsPathAndHealthCallback)
     std::vector<bool> healthEvents;
     exporter->RegisterOnHealthChangeCb([&healthEvents](bool healthy) { healthEvents.push_back(healthy); });
 
-    EXPECT_TRUE(WaitForExporterReady(port.value(), "/metrics", std::chrono::seconds(2)));
+    EXPECT_TRUE(WaitForExporterReady(port.value(), "/metrics", std::chrono::seconds(EXPORTER_READY_TIMEOUT_SEC)));
     ASSERT_FALSE(healthEvents.empty());
     EXPECT_TRUE(healthEvents.front());
 
