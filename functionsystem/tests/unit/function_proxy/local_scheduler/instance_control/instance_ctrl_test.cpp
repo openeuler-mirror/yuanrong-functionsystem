@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
 #include <async/async.hpp>
 
@@ -21,6 +22,7 @@
 #include "common/constants/signal.h"
 #include "common/etcd_service/etcd_service_driver.h"
 #include "common/logs/logging.h"
+#include "common/metrics/metrics_adapter.h"
 #include "common/metadata/metadata.h"
 #include "common/proto/pb/message_pb.h"
 #include "common/proto/pb/posix_pb.h"
@@ -73,6 +75,25 @@ const RuntimeConfig runtimeConfig{
     .runtimeInitCallTimeoutMS = 3000,
     .runtimeShutdownTimeoutSeconds = 3,
 };
+
+const std::string InstanceCreateFailureAlarmExporterJsonStr = R"(
+{
+    "enabledMetrics": ["yr_instance_create_failure_alarm"],
+    "backends": [{
+        "immediatelyExport": {
+            "name": "Alarm",
+            "enable": true,
+            "exporters": [{
+                "aomAlarmExporter": {
+                    "enable": true,
+                    "ip": "127.0.0.1:8080/",
+                    "port": 9091
+                }
+            }]
+        }
+    }]
+}
+)";
 
 const TransitionResult NONE_RESULT = TransitionResult{ litebus::None(), InstanceInfo() };
 const TransitionResult NEW_RESULT = TransitionResult{ InstanceState::NEW, InstanceInfo() };
@@ -161,6 +182,11 @@ static std::shared_ptr<messages::ScheduleRequest> GenScheduleReq(std::shared_ptr
     return scheduleReq;
 }
 
+static std::string GetMetricsFilesName(const std::string &backendName)
+{
+    return backendName + "-metrics.data";
+}
+
 class InstanceCtrlTest : public ::testing::Test {
 public:
     void SetUp() override
@@ -224,6 +250,13 @@ public:
 
     void TearDown() override
     {
+        functionsystem::metrics::MetricsAdapter::GetInstance().GetMetricsContext().SetEnabledInstruments({});
+        functionsystem::metrics::MetricsAdapter::GetInstance().ClearEnabledInstruments();
+        functionsystem::metrics::MetricsAdapter::GetInstance().GetMetricsContext().SetAttr("component_name", "");
+        functionsystem::metrics::MetricsAdapter::GetInstance().GetMetricsContext().EraseAlarm(
+            "YuanrongInstanceCreateFailure00001-requestID_CreateInstanceClientTest");
+        functionsystem::metrics::MetricsAdapter::GetInstance().CleanMetrics();
+
         // clear meta info
         auto client = MetaStoreClient::Create({ .etcdAddress = metaStoreServerHost_ });
         ASSERT_TRUE(
@@ -823,6 +856,10 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForResourceNotEnough)
  */
 TEST_F(InstanceCtrlTest, CreateInstanceFailedForDeployInstanceFailed)
 {
+    functionsystem::metrics::MetricsAdapter::GetInstance().InitMetricsFromJson(
+        nlohmann::json::parse(InstanceCreateFailureAlarmExporterJsonStr), GetMetricsFilesName, {});
+    functionsystem::metrics::MetricsAdapter::GetInstance().SetContextAttr("component_name", "function_proxy");
+
     auto mockSharedClient = std::make_shared<MockSharedClient>();
     auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActorTest", "nodeID", instanceCtrlConfig);
     EXPECT_CALL(*mockSharedClientManagerProxy_, GetControlInterfacePosixClient(_))
@@ -878,6 +915,14 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForDeployInstanceFailed)
     });
     auto machine = instanceControlView->GetInstance("DesignatedInstanceID");
     ASSERT_AWAIT_TRUE([&]() { return machine->GetInstanceState() == InstanceState::FATAL; });
+
+    auto alarmInfoMap = functionsystem::metrics::MetricsAdapter::GetInstance().GetMetricsContext().GetAlarmInfoMap();
+    ASSERT_TRUE(alarmInfoMap.find("YuanrongInstanceCreateFailure00001-requestID") != alarmInfoMap.end());
+    const auto &alarmInfo = alarmInfoMap.at("YuanrongInstanceCreateFailure00001-requestID");
+    EXPECT_EQ(alarmInfo.alarmName, "yr_instance_create_failure_alarm");
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("stage")), "deploy");
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("resource_id")), "DesignatedInstanceID");
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("request_id")), "requestID");
 }
 
 /**
@@ -2297,6 +2342,10 @@ TEST_F(InstanceCtrlTest, RecoverTest)
 */
 TEST_F(InstanceCtrlTest, CreateInstanceClientTest)
 {
+    functionsystem::metrics::MetricsAdapter::GetInstance().InitMetricsFromJson(
+        nlohmann::json::parse(InstanceCreateFailureAlarmExporterJsonStr), GetMetricsFilesName, {});
+    functionsystem::metrics::MetricsAdapter::GetInstance().SetContextAttr("component_name", "function_proxy");
+
     // clientManager, funcAgentMgr, scheduler and observer stubs
     auto clientManager = std::make_shared<MockSharedClientManagerProxy>();
     litebus::Future<std::string> fut;
@@ -2404,6 +2453,19 @@ TEST_F(InstanceCtrlTest, CreateInstanceClientTest)
     ASSERT_AWAIT_READY_FOR(notifyCalled.GetFuture(), 60000);
     EXPECT_EQ(static_cast<StatusCode>(notifyCalled.GetFuture().Get().code()),
               StatusCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS);
+
+    auto alarmInfoMap = functionsystem::metrics::MetricsAdapter::GetInstance().GetMetricsContext().GetAlarmInfoMap();
+    ASSERT_TRUE(alarmInfoMap.find("YuanrongInstanceCreateFailure00001-requestID_CreateInstanceClientTest") !=
+                alarmInfoMap.end());
+    const auto &alarmInfo = alarmInfoMap.at("YuanrongInstanceCreateFailure00001-requestID_CreateInstanceClientTest");
+    EXPECT_EQ(alarmInfo.alarmName, "yr_instance_create_failure_alarm");
+    EXPECT_EQ(alarmInfo.cause, "unable to init runtime, because connect runtime failed and not received exit info of runtime");
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("resource_id")), "GeneratedInstanceID");
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("request_id")), requestID);
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("runtime_id")), runtimeIDA);
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("stage")), "check_readiness");
+    EXPECT_EQ(std::get<int64_t>(alarmInfo.customOptions.at("status_code")),
+              int64_t(StatusCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS));
 }
 
 TEST_F(InstanceCtrlTest, TransitionStateToSchedulingFailed)
