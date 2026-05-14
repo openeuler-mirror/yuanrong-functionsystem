@@ -41,6 +41,7 @@ public:
     void SendS3Alarm();
     void SendPodAlarm(const std::string &podName, const std::string &cause);
     void SendElectionAlarm(const MetricsApi::AlarmInfo &electionAlarmInfo);
+    void SendInstanceCreateFailureAlarm(const MetricsApi::AlarmInfo &alarmInfo);
 
     [[maybe_unused]] std::unordered_map<std::string, std::shared_ptr<observability::api::metrics::Alarm>> GetAlarmMap()
     {
