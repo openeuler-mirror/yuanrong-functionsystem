@@ -699,7 +699,7 @@ TEST_F(RuntimeExecutorTest, StartInstanceWithSubDirTest)
     stopRequest->set_requestid("test_requestID");
     stopRequest->set_runtimeid(instanceResponse.mutable_startruntimeinstanceresponse()->runtimeid());
     auto stopResponse = executor_->StopInstance(stopRequest);
-    EXPECT_EQ(stopResponse.StatusCode(), SUCCESS);
+    EXPECT_EQ(stopResponse.Get().StatusCode(), SUCCESS);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     EXPECT_FALSE(FileExists("/test_instanceID"));
 
@@ -723,7 +723,7 @@ TEST_F(RuntimeExecutorTest, StartInstanceWithSubDirTest)
     instanceResponse = future.Get();
     stopRequest->set_runtimeid(instanceResponse.mutable_startruntimeinstanceresponse()->runtimeid());
     stopResponse = executor_->StopInstance(stopRequest);
-    EXPECT_EQ(stopResponse.StatusCode(), SUCCESS);
+    EXPECT_EQ(stopResponse.Get().StatusCode(), SUCCESS);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     EXPECT_FALSE(FileExists("/tmp/test_instanceID"));
 
@@ -775,7 +775,7 @@ TEST_F(RuntimeExecutorTest, StopInstanceTest)
     stopRequest->set_runtimeid(resRuntimeID);
 
     auto stopResponse = executor_->StopInstance(stopRequest);
-    EXPECT_EQ(stopResponse.StatusCode(), SUCCESS);
+    EXPECT_EQ(stopResponse.Get().StatusCode(), SUCCESS);
     EXPECT_FALSE(executor_->IsRuntimeActive(resRuntimeID));
     EXPECT_FALSE(executor_->IsRuntimeActiveByPid(resPid));
 }
@@ -787,7 +787,7 @@ TEST_F(RuntimeExecutorTest, StopInstanceFailTest)
     request->set_requestid("test_requestID");
 
     auto response = executor_->StopInstance(request);
-    EXPECT_EQ(response.StatusCode(), RUNTIME_MANAGER_RUNTIME_PROCESS_NOT_FOUND);
+    EXPECT_EQ(response.Get().StatusCode(), RUNTIME_MANAGER_RUNTIME_PROCESS_NOT_FOUND);
 }
 
 /**
@@ -2211,10 +2211,10 @@ TEST_F(RuntimeExecutorTest, EpollRedirectorStdLogRollingCompressTest)
     // 1.init StdRedirectParam
     std::string command = "rm -rf /home/snuser/instances/test_runtime_id*";
     (void)std::system(command.c_str());
-    executor_->config_.userLogBufferFlushThreshold_ = 1024;
-    executor_->config_.userLogAutoFlushIntervalMs_ = 10;
-    executor_->config_.userLogRollingSizeLimitMb_ = 1;
-    executor_->config_.userLogRollingFileCountLimit_ = 3;
+    executor_->config_.userLogBufferFlushThreshold = 1024;
+    executor_->config_.userLogAutoFlushIntervalMs = 10;
+    executor_->config_.userLogRollingSizeLimitMb = 1;
+    executor_->config_.userLogRollingFileCountLimit = 3;
 
     // 2.StartRuntimeStdRedirection
     runtime_manager::Flags flags;
