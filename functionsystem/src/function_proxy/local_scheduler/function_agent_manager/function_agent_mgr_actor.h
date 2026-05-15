@@ -574,7 +574,7 @@ private:
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::SnapshotRuntimeResponse, snapshotRuntimeTimeout_, snapshotRuntimeSync_);
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::QueryDebugInstanceInfosResponse,
                         QUERY_DEBUG_INSTANCE_INFO_INTERVAL_MS, queryDebugInstInfoSync_);
-    const uint32_t reconcileTimeout_ = 120000;
+    const uint32_t reconcileTimeout_ = 120000;  // reconcile may take longer (waits for containerd)
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::ReconcileRuntimesResponse, reconcileTimeout_, reconcileSync_);
     // key: request id, value: function agent id
     std::unordered_map<std::string, std::string> queryReqMap_;

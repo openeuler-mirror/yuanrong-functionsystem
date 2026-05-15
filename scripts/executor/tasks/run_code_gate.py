@@ -14,13 +14,17 @@ log = utils.stream_logger()
 _env = utils.pipeline_env()
 
 SERIAL_TEST_SUITES = {
+    "StreamTest": 120,
+    "StreamTestV2": 120,
     "InstanceCtrlTest": 300,
     "StdMonitorActorTest": 120,
 }
 
 SERIAL_TEST_ORDER = {
-    "StdMonitorActorTest": 0,
-    "InstanceCtrlTest": 1,
+    "StreamTest": 0,
+    "StreamTestV2": 1,
+    "StdMonitorActorTest": 2,
+    "InstanceCtrlTest": 3,
 }
 
 

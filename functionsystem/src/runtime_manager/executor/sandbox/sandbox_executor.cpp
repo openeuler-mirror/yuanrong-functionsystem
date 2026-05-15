@@ -48,6 +48,7 @@ constexpr int64_t DEFAULT_GRACEFUL_SHUTDOWN         = 5;
 constexpr int64_t RECONNECT_INTERVAL_MS             = 5000;
 constexpr int64_t RECONCILE_RETRY_INTERVAL_MS       = 1000;
 constexpr int32_t RECONCILE_MAX_RETRIES             = 30;
+constexpr int32_t CONTAINER_DELETE_TIMEOUT_SEC      = 10;
 const std::string YR_ONLY_STDOUT                    = "YR_ONLY_STDOUT";
 }  // namespace
 
@@ -688,45 +689,60 @@ messages::ReconcileRuntimesResponse SandboxExecutor::OnReconcileRuntimes(
     auto now = std::chrono::steady_clock::now();
     int32_t orphansCleaned = 0;
 
-    // Clean up exited containers immediately — no grace period needed
+    CleanupExitedContainers(request->requestid(), listResp, &response, &orphansCleaned);
+    CleanupOrphanContainers(request->requestid(), listResp, expectedIDs, now, &response,
+                            &orphansCleaned, &actualRunningIDs);
+    AddMissingAndConfirmedEntries(request, actualRunningIDs, &response);
+    PurgeOrphanTracking(actualRunningIDs);
+
+    response.set_orphanscleaned(orphansCleaned);
+    YRLOG_INFO("{}|ReconcileRuntimes: {} orphans cleaned, {} missing, {} confirmed",
+               request->requestid(), orphansCleaned, response.missingids_size(),
+               response.confirmedentries_size());
+    return response;
+}
+
+void SandboxExecutor::CleanupExitedContainers(const std::string &requestID,
+                                              const std::shared_ptr<runtime::v1::ListContainersResponse> &listResp,
+                                              messages::ReconcileRuntimesResponse *response,
+                                              int32_t *orphansCleaned)
+{
     for (const auto &container : listResp->containers()) {
         if (container.state() != runtime::v1::CONTAINER_EXITED) {
             continue;
         }
         const auto &containerID = container.id();
-        YRLOG_INFO("{}|ReconcileRuntimes: deleting exited container {}",
-                   request->requestid(), containerID);
-        auto deleteReq = std::make_shared<runtime::v1::DeleteRequest>();
-        deleteReq->set_id(containerID);
-        deleteReq->set_timeout(10);
-        containerd_->CallAsync("Delete", *deleteReq,
-                               static_cast<runtime::v1::DeleteResponse *>(nullptr),
-                               &runtime::v1::RuntimeLauncher::Stub::AsyncDelete);
+        YRLOG_INFO("{}|ReconcileRuntimes: deleting exited container {}", requestID, containerID);
+        DeleteContainerAsync(containerID);
         orphanFirstSeen_.erase(containerID);
-        response.add_orphanids(containerID);
-        ++orphansCleaned;
+        response->add_orphanids(containerID);
+        ++(*orphansCleaned);
     }
+}
 
-    // Identify orphan containers: running in sandboxd but not in expected or stateManager
+void SandboxExecutor::CleanupOrphanContainers(const std::string &requestID,
+                                              const std::shared_ptr<runtime::v1::ListContainersResponse> &listResp,
+                                              const std::unordered_set<std::string> &expectedIDs,
+                                              const std::chrono::steady_clock::time_point &now,
+                                              messages::ReconcileRuntimesResponse *response,
+                                              int32_t *orphansCleaned,
+                                              std::unordered_set<std::string> *actualRunningIDs)
+{
     for (const auto &container : listResp->containers()) {
         if (container.state() != runtime::v1::CONTAINER_RUNNING) {
             continue;
         }
         const auto &containerID = container.id();
 
-        // Known by proxy or by local stateManager → not orphan
-        if (expectedIDs.count(containerID) > 0 ||
-            !stateManager_.FindRuntimeIDBySandboxID(containerID).empty()) {
+        if (expectedIDs.count(containerID) > 0 || !stateManager_.FindRuntimeIDBySandboxID(containerID).empty()) {
             orphanFirstSeen_.erase(containerID);
             continue;
         }
 
-        // Orphan candidate
         auto it = orphanFirstSeen_.find(containerID);
         if (it == orphanFirstSeen_.end()) {
             orphanFirstSeen_.emplace(containerID, now);
-            YRLOG_INFO("{}|ReconcileRuntimes: orphan candidate container {} (first seen)",
-                       request->requestid(), containerID);
+            YRLOG_INFO("{}|ReconcileRuntimes: orphan candidate container {} (first seen)", requestID, containerID);
             continue;
         }
 
@@ -735,54 +751,53 @@ messages::ReconcileRuntimesResponse SandboxExecutor::OnReconcileRuntimes(
             continue;
         }
 
-        // Grace period exceeded — delete orphan
         YRLOG_INFO("{}|ReconcileRuntimes: deleting orphan container {} (orphan for {}s)",
-                   request->requestid(), containerID, elapsedSec);
-        auto deleteReq = std::make_shared<runtime::v1::DeleteRequest>();
-        deleteReq->set_id(containerID);
-        deleteReq->set_timeout(10);
-        containerd_->CallAsync("Delete", *deleteReq,
-                               static_cast<runtime::v1::DeleteResponse *>(nullptr),
-                               &runtime::v1::RuntimeLauncher::Stub::AsyncDelete);
+                   requestID, containerID, elapsedSec);
+        DeleteContainerAsync(containerID);
         orphanFirstSeen_.erase(it);
-        response.add_orphanids(containerID);
-        ++orphansCleaned;
+        actualRunningIDs->erase(containerID);
+        response->add_orphanids(containerID);
+        ++(*orphansCleaned);
     }
+}
 
-    // Identify missing: proxy expects them but sandboxd doesn't have them
+void SandboxExecutor::AddMissingAndConfirmedEntries(
+    const std::shared_ptr<messages::ReconcileRuntimesRequest> &request,
+    const std::unordered_set<std::string> &actualRunningIDs,
+    messages::ReconcileRuntimesResponse *response)
+{
     for (const auto &entry : request->entries()) {
-        if (!entry.containerid().empty() &&
-            actualRunningIDs.count(entry.containerid()) == 0) {
-            response.add_missingids(entry.containerid());
+        if (!entry.containerid().empty() && actualRunningIDs.count(entry.containerid()) == 0) {
+            response->add_missingids(entry.containerid());
         }
     }
 
-    // Confirmed entries: expected by proxy AND running in sandboxd
     std::unordered_set<std::string> missingSet;
-    for (const auto &id : response.missingids()) {
+    for (const auto &id : response->missingids()) {
         missingSet.insert(id);
     }
     for (const auto &entry : request->entries()) {
-        if (!entry.containerid().empty() &&
-            actualRunningIDs.count(entry.containerid()) > 0 &&
-            missingSet.count(entry.containerid()) == 0) {
-            auto *confirmed = response.add_confirmedentries();
-            confirmed->set_runtimeid(entry.runtimeid());
-            confirmed->set_containerid(entry.containerid());
-            confirmed->set_instanceid(entry.instanceid());
-            // Re-register to stateManager so subsequent Stop/Delete operations work
-            if (!stateManager_.IsActive(entry.runtimeid())) {
-                messages::RuntimeInstanceInfo instanceInfo;
-                instanceInfo.set_instanceid(entry.instanceid());
-                instanceInfo.set_runtimeid(entry.runtimeid());
-                stateManager_.Register({entry.runtimeid(), entry.containerid(), {}, {}, instanceInfo});
-                stateManager_.MarkStartDone(entry.runtimeid());
-                DoWait(entry.containerid(), entry.runtimeid());
-            }
+        if (entry.containerid().empty() || actualRunningIDs.count(entry.containerid()) == 0 ||
+            missingSet.count(entry.containerid()) > 0) {
+            continue;
+        }
+        auto *confirmed = response->add_confirmedentries();
+        confirmed->set_runtimeid(entry.runtimeid());
+        confirmed->set_containerid(entry.containerid());
+        confirmed->set_instanceid(entry.instanceid());
+        if (!stateManager_.IsActive(entry.runtimeid())) {
+            messages::RuntimeInstanceInfo instanceInfo;
+            instanceInfo.set_instanceid(entry.instanceid());
+            instanceInfo.set_runtimeid(entry.runtimeid());
+            stateManager_.Register({entry.runtimeid(), entry.containerid(), {}, {}, instanceInfo});
+            stateManager_.MarkStartDone(entry.runtimeid());
+            DoWait(entry.containerid(), entry.runtimeid());
         }
     }
+}
 
-    // Purge orphan tracking for containers no longer reported
+void SandboxExecutor::PurgeOrphanTracking(const std::unordered_set<std::string> &actualRunningIDs)
+{
     for (auto it = orphanFirstSeen_.begin(); it != orphanFirstSeen_.end();) {
         if (actualRunningIDs.count(it->first) == 0) {
             it = orphanFirstSeen_.erase(it);
@@ -790,12 +805,16 @@ messages::ReconcileRuntimesResponse SandboxExecutor::OnReconcileRuntimes(
             ++it;
         }
     }
+}
 
-    response.set_orphanscleaned(orphansCleaned);
-    YRLOG_INFO("{}|ReconcileRuntimes: {} orphans cleaned, {} missing, {} confirmed",
-               request->requestid(), orphansCleaned, response.missingids_size(),
-               response.confirmedentries_size());
-    return response;
+void SandboxExecutor::DeleteContainerAsync(const std::string &containerID)
+{
+    auto deleteReq = std::make_shared<runtime::v1::DeleteRequest>();
+    deleteReq->set_id(containerID);
+    deleteReq->set_timeout(CONTAINER_DELETE_TIMEOUT_SEC);
+    containerd_->CallAsync("Delete", *deleteReq,
+                           static_cast<runtime::v1::DeleteResponse *>(nullptr),
+                           &runtime::v1::RuntimeLauncher::Stub::AsyncDelete);
 }
 // ── Connectivity ──────────────────────────────────────────────────────────────
 

@@ -20,6 +20,7 @@
 #include <chrono>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "async/defer.hpp"
 #include "common/metrics/metrics_adapter.h"
@@ -137,13 +138,6 @@ public:
     litebus::Future<messages::ReconcileRuntimesResponse> ReconcileRuntimes(
         const std::shared_ptr<messages::ReconcileRuntimesRequest> &request);
 
-    messages::ReconcileRuntimesResponse OnReconcileRuntimes(
-        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request,
-        const std::shared_ptr<runtime::v1::ListContainersResponse> &listResp);
-
-    void WaitAndReconcile(
-        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request, int32_t retryCount,
-        const std::shared_ptr<litebus::Promise<messages::ReconcileRuntimesResponse>> &promise);
     void InitConfig() override;
 
     struct PortForwardConfig {
@@ -264,6 +258,37 @@ private:
 
     void DoReportMetrics(const std::string &instanceID, const std::string &runtimeID,
                          const std::string &sandboxID, const functionsystem::metrics::MeterTitle &title);
+
+    // ── Reconciliation helpers ────────────────────────────────────────────────
+
+    void WaitAndReconcile(
+        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request, int32_t retryCount,
+        const std::shared_ptr<litebus::Promise<messages::ReconcileRuntimesResponse>> &promise);
+
+    messages::ReconcileRuntimesResponse OnReconcileRuntimes(
+        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request,
+        const std::shared_ptr<runtime::v1::ListContainersResponse> &listResp);
+
+    void CleanupExitedContainers(const std::string &requestID,
+                                 const std::shared_ptr<runtime::v1::ListContainersResponse> &listResp,
+                                 messages::ReconcileRuntimesResponse *response,
+                                 int32_t *orphansCleaned);
+
+    void CleanupOrphanContainers(const std::string &requestID,
+                                 const std::shared_ptr<runtime::v1::ListContainersResponse> &listResp,
+                                 const std::unordered_set<std::string> &expectedIDs,
+                                 const std::chrono::steady_clock::time_point &now,
+                                 messages::ReconcileRuntimesResponse *response,
+                                 int32_t *orphansCleaned,
+                                 std::unordered_set<std::string> *actualRunningIDs);
+
+    void AddMissingAndConfirmedEntries(
+        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request,
+        const std::unordered_set<std::string> &actualRunningIDs,
+        messages::ReconcileRuntimesResponse *response);
+
+    void PurgeOrphanTracking(const std::unordered_set<std::string> &actualRunningIDs);
+    void DeleteContainerAsync(const std::string &containerID);
 
     // ── State ─────────────────────────────────────────────────────────────────
 
