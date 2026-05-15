@@ -91,6 +91,7 @@ type FunctionBasicInfo struct {
 	ResourceAffinitySelectors []ResourceAffinitySelector `form:"resourceAffinitySelectors" json:"resourceAffinitySelectors"`
 	CodeUploadType            string                     `form:"codeUploadType" json:"codeUploadType"`
 	PoolID                    string                     `form:"poolId" json:"poolId" valid:"optional,poolId~pool id can contain only lowercase letters;digits and - it cannot start or end with - and cannot exceed 40 characters or less than 1 characters"`
+	EnableMetrics             bool                       `form:"enableMetrics" json:"enableMetrics"`
 	EnableAgentSession        bool                       `form:"enableAgentSession" json:"enableAgentSession"`
 	IdleTime                  int64                      `form:"idleTime" json:"idleTime"`
 	WarmupType                string                     `json:"warmup" valid:",optional"`
@@ -416,6 +417,7 @@ type FunctionVersion struct {
 	MinInstance        int64                `json:"minInstance"`
 	MaxInstance        int64                `json:"maxInstance"`
 	ConcurrentNum      int                  `json:"concurrentNum"`
+	EnableMetrics      bool                 `json:"enableMetrics"`
 	FuncLayer          []FunctionLayer      `json:"funcLayer"`
 	Status             string               `json:"status"`
 	InstanceNum        int64                `json:"instanceNum"`
@@ -474,6 +476,7 @@ type FunctionForUser struct {
 	MinInstance         int                  `json:"minInstance"`
 	MaxInstance         int                  `json:"maxInstance"`
 	ConcurrentNum       int                  `json:"concurrentNum"`
+	EnableMetrics       bool                 `json:"enableMetrics"`
 	FuncLayer           []Layer              `json:"funcLayer"`
 	Status              string               `json:"status"`
 	InstanceNum         int                  `json:"instanceNum"`

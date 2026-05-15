@@ -208,6 +208,7 @@ func buildFaaSFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionVa
 	if err != nil {
 		return metadata.FaaSFuncMeta{}, err
 	}
+	info.ExtendedMetaData.EnableMetrics = fv.FunctionVersion.EnableMetrics
 	info.ExtendedMetaData.EnableAgentSession = fv.FunctionVersion.EnableAgentSession
 	info.ExtendedMetaData.CustomContainerConfig = metadata.CustomContainerConfig{
 		ControlPath: fv.FunctionVersion.CustomContainerConfig.ControlPath,
@@ -389,6 +390,7 @@ func buildFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionValue,
 	info.ExtendedMetaData.ExtendedHandler = fv.FunctionVersion.ExtendedHandler
 	info.ExtendedMetaData.ExtendedTimeout = fv.FunctionVersion.ExtendedTimeout
 	info.ExtendedMetaData.Device = fv.FunctionVersion.Device
+	info.ExtendedMetaData.EnableMetrics = fv.FunctionVersion.EnableMetrics
 	info.ExtendedMetaData.EnableAgentSession = fv.FunctionVersion.EnableAgentSession
 	info.ExtendedMetaData.CustomContainerConfig = metadata.CustomContainerConfig{
 		ControlPath: fv.FunctionVersion.CustomContainerConfig.ControlPath,

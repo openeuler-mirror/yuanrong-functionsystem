@@ -107,6 +107,7 @@ type FunctionVersion struct {
 	Device             types.Device
 	PoolLabel          string
 	PoolID             string
+	EnableMetrics      bool
 	EnableAgentSession bool
 	ScalePolicy        string
 	SchedulePolicy     string
