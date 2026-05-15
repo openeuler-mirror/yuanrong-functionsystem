@@ -262,21 +262,30 @@ func buildBasicUpdateFunctionVersion(request model.FunctionUpdateRequest,
 	fv.FunctionVersion.PriorityAZ = request.PriorityAZ
 	fv.FunctionVersion.IdleTime = request.IdleTime
 	fv.FunctionVersion.IsFuncPublic = request.IsFuncPublic
+	setFunctionS3CodePath(fv, request)
+	fv.FunctionVersion.WarmupType = request.WarmupType
+	fv.FunctionVersion.RootfsSpecMeta = request.RootfsSpecMeta
+	logRootfsUpdate(request)
+	setFunctionScaleConfig(fv, request)
+}
+
+func setFunctionS3CodePath(fv *storage.FunctionVersionValue, request model.FunctionUpdateRequest) {
 	fv.FunctionVersion.Package.BucketID = request.S3CodePath.BucketID
 	fv.FunctionVersion.Package.ObjectID = request.S3CodePath.ObjectID
 	fv.FunctionVersion.Package.BucketUrl = request.S3CodePath.BucketUrl
 	fv.FunctionVersion.Package.Token = request.S3CodePath.Token
 	fv.FunctionVersion.Package.Signature = request.S3CodePath.Sha512
-	fv.FunctionVersion.WarmupType = request.WarmupType
-	fv.FunctionVersion.RootfsSpecMeta = request.RootfsSpecMeta
+}
 
-	// Log rootfs specification update if provided
+func logRootfsUpdate(request model.FunctionUpdateRequest) {
 	if request.RootfsSpecMeta.Type != "" {
 		log.GetLogger().Infof("updating function rootfs: type=%s, runtime=%s, imageurl=%s, readonly=%v",
 			request.RootfsSpecMeta.Type, request.RootfsSpecMeta.Runtime,
 			request.RootfsSpecMeta.ImageURL, request.RootfsSpecMeta.ReadOnly)
 	}
+}
 
+func setFunctionScaleConfig(fv *storage.FunctionVersionValue, request model.FunctionUpdateRequest) {
 	fv.FunctionVersion.ScalePolicy = request.ScalePolicy
 	fv.FunctionVersion.SchedulePolicy = request.SchedulePolicy
 	fv.FunctionVersion.CustomContainerConfig = request.ExtendedMetaData.CustomContainerConfig
