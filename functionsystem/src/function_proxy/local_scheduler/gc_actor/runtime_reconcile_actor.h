@@ -85,7 +85,7 @@ private:
                         const std::shared_ptr<messages::ReconcileRuntimesRequest> &request);
 
     void OnReconcileComplete(const messages::ReconcileRuntimesResponse &resp,
-                              const std::string &funcAgentID);
+                             const std::string &funcAgentID);
 
     void CleanGhostInstance(const std::string &instanceID);
 

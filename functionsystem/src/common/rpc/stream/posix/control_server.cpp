@@ -27,7 +27,10 @@ using namespace runtime_rpc;
     isConnected_ = std::make_shared<litebus::Promise<bool>>();
     isConnected_->SetValue(true);
     reactor_ = std::make_shared<ServerReactor>();
-    reactor_->RegisterClosedCallback([this]() { ServerClosedCallback(); });
+    reactor_->RegisterClosedCallback([this]() {
+        context_ = nullptr;
+        ServerClosedCallback();
+    });
     reactor_->RegisterReceiver(std::bind(&ControlServer::Receiver, this, std::placeholders::_1));
     // In future it should be set by reading from grpc metadata
     reactor_->SetID("MessageStreamServer");
@@ -123,12 +126,12 @@ void ControlServer::Receiver(const std::shared_ptr<StreamingMessage> &recv)
 
 void ControlServer::Finish() const
 {
-    if (reactor_ == nullptr || reactor_->IsDone()) {
+    auto reactor = reactor_;
+    if (reactor == nullptr || reactor->IsDone()) {
         return;
     }
-    if (context_ != nullptr && !context_->IsCancelled()) {
-        context_->TryCancel();
-    }
+    reactor->TryFinish();
+    reactor->Wait();
 }
 
 litebus::Future<bool> ControlServer::IsConnected()

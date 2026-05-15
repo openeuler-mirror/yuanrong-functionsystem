@@ -133,7 +133,7 @@ void RuntimeReconcileActor::ReconcileAgent(
 }
 
 void RuntimeReconcileActor::OnReconcileComplete(const messages::ReconcileRuntimesResponse &resp,
-                                                  const std::string &funcAgentID)
+                                                const std::string &funcAgentID)
 {
     if (resp.code() != 0) {
         YRLOG_WARN("{}|RuntimeReconcileActor: ReconcileRuntimes returned error for agent {}: {}, "

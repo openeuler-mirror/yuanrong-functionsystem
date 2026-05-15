@@ -105,15 +105,15 @@ void HealthCheck::StartUpdateInstanceStatus(const std::shared_ptr<messages::Upda
 }
 
 litebus::Future<Status> HealthCheck::SendInstanceStatus(const std::string &instanceID, const std::string &runtimeID,
-                                                         const int status, const std::string &requestID) const
+                                                        const int status, const std::string &requestID) const
 {
     return litebus::Async(actor_->GetAID(), &HealthCheckActor::SendInstanceStatus, instanceID, runtimeID, status,
                           requestID);
 }
 
 litebus::Future<Status> HealthCheck::NotifySandboxExit(const std::string &instanceID, const std::string &runtimeID,
-                                                        int exitCode, const std::string &exitMessage,
-                                                        const std::string &requestID) const
+                                                       int exitCode, const std::string &exitMessage,
+                                                       const std::string &requestID) const
 {
     return litebus::Async(actor_->GetAID(), &HealthCheckActor::NotifySandboxExit, instanceID, runtimeID, exitCode,
                           exitMessage, requestID);
