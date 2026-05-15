@@ -17,7 +17,6 @@
 #include "sandbox_request_builder.h"
 
 #include <algorithm>
-#include <sstream>
 
 #include "common/constants/constants.h"
 #include "common/logs/logging.h"
@@ -25,6 +24,7 @@
 #include "common/utils/files.h"
 #include "common/utils/path.h"
 #include "runtime_manager/executor/executor.h"
+#include "sandbox_command_utils.h"
 
 namespace functionsystem::runtime_manager {
 
@@ -60,24 +60,6 @@ std::string DirName(const std::string &path)
         return "";
     }
     return pos == 0 ? "/" : path.substr(0, pos);
-}
-
-// Build the entrypoint + cmd vector from bootstrapConfig
-std::vector<std::string> BuildCommands(const std::shared_ptr<messages::StartInstanceRequest> &request)
-{
-    std::vector<std::string> cmds;
-    const auto &bc = request->runtimeinstanceinfo().bootstrapconfig();
-    for (const std::string *src : {&bc.entrypoint(), &bc.cmd()}) {
-        if (src->empty()) {
-            continue;
-        }
-        std::istringstream iss(*src);
-        std::string tok;
-        while (iss >> tok) {
-            cmds.push_back(tok);
-        }
-    }
-    return cmds;
 }
 
 Status RootfsJsonParse(runtime::v1::FunctionRuntime &funcRt, const std::string &rootfsJson)
@@ -376,7 +358,7 @@ void SandboxRequestBuilder::ApplyCommands(const std::shared_ptr<messages::StartI
                                            const CommandArgs &cmdArgs,
                                            runtime::v1::FunctionRuntime *funcRt) const
 {
-    for (const auto &cmd : BuildCommands(request)) {
+    for (const auto &cmd : BuildBootstrapCommands(request)) {
         *funcRt->add_command() = cmd;
     }
     for (const auto &arg : cmdArgs.args) {

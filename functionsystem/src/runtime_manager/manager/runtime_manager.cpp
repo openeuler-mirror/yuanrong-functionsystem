@@ -48,6 +48,7 @@ void RuntimeManager::Init()
     ActorBase::Receive("CleanStatus", &RuntimeManager::CleanStatus);
     ActorBase::Receive("UpdateCred", &RuntimeManager::UpdateCred);
     ActorBase::Receive("QueryDebugInstanceInfos", &RuntimeManager::QueryDebugInstanceInfos);
+    ActorBase::Receive("ReconcileRuntimes", &RuntimeManager::ReconcileRuntimes);
     metricsClient_ = std::make_shared<MetricsClient>();
     healthCheckClient_ = std::make_shared<HealthCheck>();
     auto logManagerActor =
@@ -1125,5 +1126,48 @@ EXECUTOR_TYPE RuntimeManager::GetRuntimeType(const std::string &runtimeID)
         }
     }
     return type;
+}
+void RuntimeManager::ReconcileRuntimes(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    auto request = std::make_shared<messages::ReconcileRuntimesRequest>();
+    if (!request->ParseFromString(msg)) {
+        YRLOG_ERROR("failed to parse ReconcileRuntimesRequest");
+        return;
+    }
+    auto executor = FindExecutor(EXECUTOR_TYPE::CONTAINER);
+    if (executor == nullptr) {
+        YRLOG_WARN("{}|no container executor available for ReconcileRuntimes", request->requestid());
+        messages::ReconcileRuntimesResponse resp;
+        resp.set_requestid(request->requestid());
+        resp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
+        resp.set_message("container executor not available");
+        Send(from, "ReconcileRuntimesResponse", resp.SerializeAsString());
+        return;
+    }
+    executor->ReconcileRuntimes(request)
+        .OnComplete(litebus::Defer(GetAID(),
+            [this, from, requestID = request->requestid()](
+                const litebus::Future<messages::ReconcileRuntimesResponse> &resp) {
+                if (resp.IsError()) {
+                    YRLOG_ERROR("{}|ReconcileRuntimes failed: {}", requestID, resp.GetErrorCode());
+                    messages::ReconcileRuntimesResponse errResp;
+                    errResp.set_requestid(requestID);
+                    errResp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
+                    errResp.set_message("ReconcileRuntimes execution failed");
+                    Send(from, "ReconcileRuntimesResponse", errResp.SerializeAsString());
+                    return;
+                }
+                // Register confirmed entries in instanceInfoMap_ so GetRuntimeType
+                // routes subsequent Stop requests to the CONTAINER executor.
+                const auto &result = resp.Get();
+                for (const auto &entry : result.confirmedentries()) {
+                    if (instanceInfoMap_.find(entry.runtimeid()) == instanceInfoMap_.end()) {
+                        messages::RuntimeInstanceInfo info;
+                        info.mutable_container()->set_id(entry.containerid());
+                        instanceInfoMap_[entry.runtimeid()] = info;
+                    }
+                }
+                Send(from, "ReconcileRuntimesResponse", result.SerializeAsString());
+            }));
 }
 }  // namespace functionsystem::runtime_manager

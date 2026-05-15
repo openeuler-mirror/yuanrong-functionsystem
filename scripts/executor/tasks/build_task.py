@@ -14,6 +14,21 @@ from . import vendor_cache
 log = utils.stream_logger()
 
 
+def reset_stale_vendor_externalprojects(root_dir, target_names):
+    vendor_output = os.path.join(root_dir, "vendor", "output")
+    for target_name in sorted(target_names):
+        for relpath in (
+            os.path.join("Build", target_name),
+            os.path.join("Install", target_name),
+            os.path.join("Stamp", target_name),
+        ):
+            abs_path = os.path.join(vendor_output, relpath)
+            if os.path.islink(abs_path) or os.path.isfile(abs_path):
+                os.unlink(abs_path)
+            elif os.path.isdir(abs_path):
+                shutil.rmtree(abs_path, ignore_errors=True)
+
+
 def run_build(root_dir, cmd_args):
     start_time = time.time()
     builder_name = getattr(cmd_args, "builder", "cmake")
@@ -53,6 +68,7 @@ def build_vendor(args):
         config_path=os.path.join(vendor_path, "VendorList.csv"), download_path=os.path.join(vendor_path, "src")
     )
     cache_manager.prepare_workspace()
+    reset_stale_vendor_externalprojects(args["root_dir"], cache_manager.misses)
 
     # 编译三方件依赖
     log.info("Start to build etcd/etcdctl/etcdutl with golang")

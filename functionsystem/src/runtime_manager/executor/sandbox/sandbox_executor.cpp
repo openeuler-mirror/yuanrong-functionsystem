@@ -17,6 +17,8 @@
 #include "sandbox_executor.h"
 
 #include <algorithm>
+#include <chrono>
+#include <unordered_set>
 #include <nlohmann/json.hpp>
 
 #include "async/asyncafter.hpp"
@@ -34,6 +36,7 @@
 #include "runtime_manager/ckpt/ckpt_file_manager_actor.h"
 #include "runtime_manager/config/build.h"
 #include "sandbox_request_builder.h"
+#include "sandbox_command_utils.h"
 #include "utils/utils.h"
 
 namespace functionsystem::runtime_manager {
@@ -43,6 +46,9 @@ using json = nlohmann::json;
 namespace {
 constexpr int64_t DEFAULT_GRACEFUL_SHUTDOWN         = 5;
 constexpr int64_t RECONNECT_INTERVAL_MS             = 5000;
+constexpr int64_t RECONCILE_RETRY_INTERVAL_MS       = 1000;
+constexpr int32_t RECONCILE_MAX_RETRIES             = 30;
+constexpr int32_t CONTAINER_DELETE_TIMEOUT_SEC      = 10;
 const std::string YR_ONLY_STDOUT                    = "YR_ONLY_STDOUT";
 }  // namespace
 
@@ -112,7 +118,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::StartInstance(
         return *existing;
     }
 
-    stateManager_.Register(SandboxInfo{runtimeID, {}, {}, {}, {}});
+    stateManager_.Register(SandboxInfo{runtimeID, {}, {}, {}, info});
     stateManager_.ClearPendingDelete(runtimeID);
 
     std::string language = info.runtimeconfig().language();
@@ -244,6 +250,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnStartDone(
     stateManager_.UpdateSandboxID(runtimeID, sandboxID);
     guard->Commit();
 
+    DoWait(sandboxID, runtimeID);
     ReportMetrics(info.instanceid(), runtimeID, sandboxID,
                   {"yr_app_instance_start_time", " start timestamp", "ms"});
     YRLOG_INFO("{}|{}|StartNormal success: instance({}) runtime({}) sandbox({})", info.traceid(), info.requestid(),
@@ -272,6 +279,9 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::StartWarmUp(
     builder.ApplyBootstrapMount(request, warmup->mutable_mounts(), workingRoot);
     (*warmup->mutable_runtimeenvs())["YR_RT_WORKING_DIR"] = workingRoot;
 
+    for (const auto &cmd : BuildBootstrapCommands(request)) {
+        *warmup->add_command() = cmd;
+    }
     for (const auto &arg : cmdArgs.args) {
         *warmup->add_command() = arg;
     }
@@ -375,7 +385,6 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnCheckpointRe
         ckptOrch_->ReleaseRef(info.runtimeid(), info.requestid());
         return GenFailStartInstanceResponse(request, status.StatusCode(), status.RawMessage());
     }
-
     StartSandboxCreateSpan(request);
     return DoStart(request, startReq)
         .Then(litebus::Defer(GetAID(), &SandboxExecutor::OnRestoreDone, std::placeholders::_1, request, guard));
@@ -399,6 +408,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnRestoreDone(
     const std::string sandboxID = response.id();
     stateManager_.UpdateSandboxID(info.runtimeid(), sandboxID);
     guard->Commit();
+    DoWait(sandboxID, info.runtimeid());
     YRLOG_INFO("{}|{}|restore success: instance({}) runtime({}) sandbox({})", info.traceid(), info.requestid(),
                info.instanceid(), info.runtimeid(), sandboxID);
     return MakeSuccessStartResponse(request, sandboxID);
@@ -533,6 +543,22 @@ bool SandboxExecutor::IsRuntimeActive(const std::string &runtimeID)
     return stateManager_.IsActive(runtimeID);
 }
 
+std::shared_ptr<litebus::Exec> SandboxExecutor::GetExecByRuntimeID(const std::string &runtimeID)
+{
+    // Check base class map first (for runtimes started in this process lifetime)
+    if (auto it = runtime2Exec_.find(runtimeID); it != runtime2Exec_.end()) {
+        return it->second;
+    }
+    // For runtimes restored via reconciliation, stateManager_ knows them but
+    // runtime2Exec_ does not. Return nullptr — the health-check stop path
+    // handles nullptr gracefully, and StopInstance uses stateManager_ directly.
+    if (stateManager_.IsActive(runtimeID)) {
+        YRLOG_INFO("GetExecByRuntimeID: runtime({}) found in stateManager (reconciled), no local exec", runtimeID);
+        return nullptr;
+    }
+    YRLOG_ERROR("can not find exec by runtimeID: {}", runtimeID);
+    return nullptr;
+}
 litebus::Future<messages::UpdateCredResponse> SandboxExecutor::UpdateCredForRuntime(
     const std::shared_ptr<messages::UpdateCredRequest> &request)
 {
@@ -551,6 +577,245 @@ litebus::Future<Status> SandboxExecutor::NotifyInstancesDiskUsageExceedLimit(con
     return Status::OK();
 }
 
+// ── Runtime reconciliation ────────────────────────────────────────────────────
+
+litebus::Future<runtime::v1::ListContainersResponse> SandboxExecutor::DoList()
+{
+    ASSERT_IF_NULL(containerd_);
+    auto req = std::make_shared<runtime::v1::ListContainersRequest>();
+    auto resp = std::make_shared<runtime::v1::ListContainersResponse>();
+    return containerd_
+        ->CallAsyncX("List", *req, resp.get(),
+                     &runtime::v1::RuntimeLauncher::Stub::AsyncList)
+        .Then([resp](const Status &status) -> litebus::Future<runtime::v1::ListContainersResponse> {
+            if (status.IsOk()) {
+                return *resp;
+            }
+            YRLOG_ERROR("List gRPC failed: {}", status.RawMessage());
+            return runtime::v1::ListContainersResponse{};
+        });
+}
+
+litebus::Future<messages::ReconcileRuntimesResponse> SandboxExecutor::ReconcileRuntimes(
+    const std::shared_ptr<messages::ReconcileRuntimesRequest> &request)
+{
+    if (!request) {
+        messages::ReconcileRuntimesResponse resp;
+        resp.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
+        resp.set_message("request is null");
+        return resp;
+    }
+    if (!containerd_) {
+        // No CONTAINER_EP configured — return empty success (nothing to reconcile)
+        messages::ReconcileRuntimesResponse resp;
+        resp.set_requestid(request->requestid());
+        resp.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+        return resp;
+    }
+
+    auto promise = std::make_shared<litebus::Promise<messages::ReconcileRuntimesResponse>>();
+    WaitAndReconcile(request, 0, promise);
+    return promise->GetFuture();
+}
+
+void SandboxExecutor::WaitAndReconcile(
+    const std::shared_ptr<messages::ReconcileRuntimesRequest> &request, int32_t retryCount,
+    const std::shared_ptr<litebus::Promise<messages::ReconcileRuntimesResponse>> &promise)
+{
+    if (!containerd_->IsConnected()) {
+        if (retryCount >= RECONCILE_MAX_RETRIES) {
+            YRLOG_ERROR("{}|ReconcileRuntimes: containerd still not connected after {} retries, returning error",
+                        request->requestid(), retryCount);
+            messages::ReconcileRuntimesResponse errResp;
+            errResp.set_requestid(request->requestid());
+            errResp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
+            errResp.set_message("containerd not connected after max retries");
+            promise->SetValue(errResp);
+            return;
+        }
+
+        YRLOG_INFO("{}|ReconcileRuntimes: containerd not connected yet, retry {}/{}",
+                   request->requestid(), retryCount + 1, RECONCILE_MAX_RETRIES);
+        litebus::AsyncAfter(RECONCILE_RETRY_INTERVAL_MS, GetAID(),
+                            &SandboxExecutor::WaitAndReconcile, request, retryCount + 1, promise);
+        return;
+    }
+
+    auto req = std::make_shared<runtime::v1::ListContainersRequest>();
+    auto resp = std::make_shared<runtime::v1::ListContainersResponse>();
+    auto resultFuture = containerd_
+        ->CallAsyncX("List", *req, resp.get(),
+                     &runtime::v1::RuntimeLauncher::Stub::AsyncList)
+        .Then([aid = GetAID(), request, resp](const Status &status)
+                  -> litebus::Future<messages::ReconcileRuntimesResponse> {
+            if (!status.IsOk()) {
+                YRLOG_ERROR("{}|ReconcileRuntimes: DoList gRPC failed: {}",
+                            request->requestid(), status.RawMessage());
+                messages::ReconcileRuntimesResponse errResp;
+                errResp.set_requestid(request->requestid());
+                errResp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
+                errResp.set_message("DoList gRPC failed: " + status.RawMessage());
+                return errResp;
+            }
+            return litebus::Async(aid, &SandboxExecutor::OnReconcileRuntimes, request, resp);
+        });
+    promise->Associate(resultFuture);
+}
+
+messages::ReconcileRuntimesResponse SandboxExecutor::OnReconcileRuntimes(
+    const std::shared_ptr<messages::ReconcileRuntimesRequest> &request,
+    const std::shared_ptr<runtime::v1::ListContainersResponse> &listResp)
+{
+    messages::ReconcileRuntimesResponse response;
+    response.set_requestid(request->requestid());
+    response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+
+    // Build expected containerID set from proxy's view
+    std::unordered_set<std::string> expectedIDs;
+    for (const auto &entry : request->entries()) {
+        if (!entry.containerid().empty()) {
+            expectedIDs.insert(entry.containerid());
+        }
+    }
+
+    // Build actual running containerID set from sandboxd
+    std::unordered_set<std::string> actualRunningIDs;
+    for (const auto &container : listResp->containers()) {
+        if (container.state() == runtime::v1::CONTAINER_RUNNING) {
+            actualRunningIDs.insert(container.id());
+        }
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    int32_t orphansCleaned = 0;
+
+    CleanupExitedContainers(request->requestid(), listResp, &response, &orphansCleaned);
+    CleanupOrphanContainers(request->requestid(), listResp, expectedIDs, now, &response,
+                            &orphansCleaned, &actualRunningIDs);
+    AddMissingAndConfirmedEntries(request, actualRunningIDs, &response);
+    PurgeOrphanTracking(actualRunningIDs);
+
+    response.set_orphanscleaned(orphansCleaned);
+    YRLOG_INFO("{}|ReconcileRuntimes: {} orphans cleaned, {} missing, {} confirmed",
+               request->requestid(), orphansCleaned, response.missingids_size(),
+               response.confirmedentries_size());
+    return response;
+}
+
+void SandboxExecutor::CleanupExitedContainers(const std::string &requestID,
+                                              const std::shared_ptr<runtime::v1::ListContainersResponse> &listResp,
+                                              messages::ReconcileRuntimesResponse *response,
+                                              int32_t *orphansCleaned)
+{
+    for (const auto &container : listResp->containers()) {
+        if (container.state() != runtime::v1::CONTAINER_EXITED) {
+            continue;
+        }
+        const auto &containerID = container.id();
+        YRLOG_INFO("{}|ReconcileRuntimes: deleting exited container {}", requestID, containerID);
+        DeleteContainerAsync(containerID);
+        orphanFirstSeen_.erase(containerID);
+        response->add_orphanids(containerID);
+        ++(*orphansCleaned);
+    }
+}
+
+void SandboxExecutor::CleanupOrphanContainers(const std::string &requestID,
+                                              const std::shared_ptr<runtime::v1::ListContainersResponse> &listResp,
+                                              const std::unordered_set<std::string> &expectedIDs,
+                                              const std::chrono::steady_clock::time_point &now,
+                                              messages::ReconcileRuntimesResponse *response,
+                                              int32_t *orphansCleaned,
+                                              std::unordered_set<std::string> *actualRunningIDs)
+{
+    for (const auto &container : listResp->containers()) {
+        if (container.state() != runtime::v1::CONTAINER_RUNNING) {
+            continue;
+        }
+        const auto &containerID = container.id();
+
+        if (expectedIDs.count(containerID) > 0 || !stateManager_.FindRuntimeIDBySandboxID(containerID).empty()) {
+            orphanFirstSeen_.erase(containerID);
+            continue;
+        }
+
+        auto it = orphanFirstSeen_.find(containerID);
+        if (it == orphanFirstSeen_.end()) {
+            orphanFirstSeen_.emplace(containerID, now);
+            YRLOG_INFO("{}|ReconcileRuntimes: orphan candidate container {} (first seen)", requestID, containerID);
+            continue;
+        }
+
+        auto elapsedSec = std::chrono::duration_cast<std::chrono::seconds>(now - it->second).count();
+        if (elapsedSec < static_cast<int64_t>(orphanGracePeriodSec_)) {
+            continue;
+        }
+
+        YRLOG_INFO("{}|ReconcileRuntimes: deleting orphan container {} (orphan for {}s)",
+                   requestID, containerID, elapsedSec);
+        DeleteContainerAsync(containerID);
+        orphanFirstSeen_.erase(it);
+        actualRunningIDs->erase(containerID);
+        response->add_orphanids(containerID);
+        ++(*orphansCleaned);
+    }
+}
+
+void SandboxExecutor::AddMissingAndConfirmedEntries(
+    const std::shared_ptr<messages::ReconcileRuntimesRequest> &request,
+    const std::unordered_set<std::string> &actualRunningIDs,
+    messages::ReconcileRuntimesResponse *response)
+{
+    for (const auto &entry : request->entries()) {
+        if (!entry.containerid().empty() && actualRunningIDs.count(entry.containerid()) == 0) {
+            response->add_missingids(entry.containerid());
+        }
+    }
+
+    std::unordered_set<std::string> missingSet;
+    for (const auto &id : response->missingids()) {
+        missingSet.insert(id);
+    }
+    for (const auto &entry : request->entries()) {
+        if (entry.containerid().empty() || actualRunningIDs.count(entry.containerid()) == 0 ||
+            missingSet.count(entry.containerid()) > 0) {
+            continue;
+        }
+        auto *confirmed = response->add_confirmedentries();
+        confirmed->set_runtimeid(entry.runtimeid());
+        confirmed->set_containerid(entry.containerid());
+        confirmed->set_instanceid(entry.instanceid());
+        if (!stateManager_.IsActive(entry.runtimeid())) {
+            messages::RuntimeInstanceInfo instanceInfo;
+            instanceInfo.set_instanceid(entry.instanceid());
+            instanceInfo.set_runtimeid(entry.runtimeid());
+            stateManager_.Register({entry.runtimeid(), entry.containerid(), {}, {}, instanceInfo});
+            stateManager_.MarkStartDone(entry.runtimeid());
+            DoWait(entry.containerid(), entry.runtimeid());
+        }
+    }
+}
+
+void SandboxExecutor::PurgeOrphanTracking(const std::unordered_set<std::string> &actualRunningIDs)
+{
+    for (auto it = orphanFirstSeen_.begin(); it != orphanFirstSeen_.end();) {
+        if (actualRunningIDs.count(it->first) == 0) {
+            it = orphanFirstSeen_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void SandboxExecutor::DeleteContainerAsync(const std::string &containerID)
+{
+    auto deleteReq = std::make_shared<runtime::v1::DeleteRequest>();
+    deleteReq->set_id(containerID);
+    deleteReq->set_timeout(CONTAINER_DELETE_TIMEOUT_SEC);
+    containerd_->CallAsync("Delete", *deleteReq,
+                           static_cast<runtime::v1::DeleteResponse *>(nullptr),
+                           &runtime::v1::RuntimeLauncher::Stub::AsyncDelete);
+}
 // ── Connectivity ──────────────────────────────────────────────────────────────
 
 void SandboxExecutor::CheckConnectivity()
@@ -607,6 +872,19 @@ void SandboxExecutor::Sync()
             YRLOG_INFO("SandboxExecutor: initial sync done, status: {}", status.RawMessage());
             return Status::OK();
         });
+    // Discover running sandboxes and resume Wait for them
+    DoList().Then([aid(GetAID())](const runtime::v1::ListContainersResponse &listResp) -> litebus::Future<Status> {
+        int resumed = 0;
+        for (const auto &container : listResp.containers()) {
+            if (container.state() == runtime::v1::CONTAINER_RUNNING) {
+                YRLOG_INFO("Sync: resume Wait for running sandbox({})", container.id());
+                litebus::Async(aid, &SandboxExecutor::RestoreWait, container.id());
+                ++resumed;
+            }
+        }
+        YRLOG_INFO("Sync: resumed Wait for {} running sandboxes", resumed);
+        return Status::OK();
+    });
 }
 
 // ── gRPC wrappers ─────────────────────────────────────────────────────────────
@@ -690,6 +968,52 @@ litebus::Future<runtime::v1::NormalResponse> SandboxExecutor::DoUnregisterWarmUp
         });
 }
 
+void SandboxExecutor::DoWait(
+    const std::string &sandboxID, const std::string &runtimeID)
+{
+    ASSERT_IF_NULL(containerd_);
+    auto req = std::make_shared<runtime::v1::WaitRequest>();
+    req->set_id(sandboxID);
+    auto resp = std::make_shared<runtime::v1::WaitResponse>();
+    YRLOG_INFO("DoWait: sandbox({}) runtime({})", sandboxID, runtimeID);
+    containerd_
+        ->CallAsyncX("Wait", *req, resp.get(), &runtime::v1::RuntimeLauncher::Stub::AsyncWait)
+        .Then([req, resp, runtimeID, aid(GetAID())](const Status &status) -> litebus::Future<Status> {
+            runtime::v1::WaitResponse response;
+            if (status.IsOk()) {
+                response = *resp;
+            } else {
+                auto msg = fmt::format("failed to wait sandbox {}, grpc err: {}", req->id(), status.RawMessage());
+                YRLOG_ERROR("{}", msg);
+                response.set_status(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+                response.set_message(msg);
+            }
+            return litebus::Async(aid, &SandboxExecutor::OnWaitDone, runtimeID, response);
+        });
+}
+void SandboxExecutor::RestoreWait(const std::string &sandboxID)
+{
+    DoWait(sandboxID, sandboxID);
+}
+
+litebus::Future<Status> SandboxExecutor::OnWaitDone(
+    const std::string &runtimeID, const runtime::v1::WaitResponse &response)
+{
+    auto info = stateManager_.Find(runtimeID);
+    if (!info.has_value()) {
+        YRLOG_INFO("OnWaitDone: runtime({}) already unregistered, skip", runtimeID);
+        return Status::OK();
+    }
+
+    const auto &instanceID = info->instanceInfo.instanceid();
+    auto requestID = litebus::os::Join("update-instance-status-request", runtimeID, '-');
+
+    YRLOG_INFO("{}|OnWaitDone: sandbox exited for runtime({}), exit_code({}), status({})",
+               requestID, runtimeID, response.exit_code(), response.status());
+
+    return healthCheckClient_->NotifySandboxExit(
+        instanceID, runtimeID, response.exit_code(), response.message(), requestID);
+}
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
 messages::StartInstanceResponse SandboxExecutor::MakeSuccessStartResponse(

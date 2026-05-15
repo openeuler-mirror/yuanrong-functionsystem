@@ -104,6 +104,15 @@ std::unordered_map<std::string, SandboxInfo> RuntimeStateManager::GetAllSandboxe
     return sandboxes_;
 }
 
+std::string RuntimeStateManager::FindRuntimeIDBySandboxID(const std::string &sandboxID) const
+{
+    for (const auto &[runtimeID, info] : sandboxes_) {
+        if (info.sandboxID == sandboxID) {
+            return runtimeID;
+        }
+    }
+    return "";
+}
 std::string RuntimeStateManager::GetPortMappingsJson(const std::string &runtimeID) const
 {
     auto it = sandboxes_.find(runtimeID);

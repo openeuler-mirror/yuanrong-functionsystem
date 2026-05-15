@@ -1149,3 +1149,25 @@ message TenantQuotaExceeded {
     string tenantID   = 1;
     int64  cooldownMs = 2;
 }
+// ── Runtime reconciliation ──────────────────────────────────────────
+
+message RuntimeReconcileEntry {
+  string runtimeID    = 1;
+  string containerID  = 2;  // executor implementation identifier (sandboxID for sandbox executor)
+  string instanceID   = 3;
+}
+
+message ReconcileRuntimesRequest {
+  string requestID                         = 1;
+  repeated RuntimeReconcileEntry entries   = 2;
+}
+
+message ReconcileRuntimesResponse {
+  string requestID           = 1;
+  int32  code                = 2;
+  string message             = 3;
+  int32  orphansCleaned      = 4;
+  repeated string orphanIDs  = 5;  // cleaned orphan containerIDs
+  repeated string missingIDs = 6;  // expected but not found containerIDs
+  repeated RuntimeReconcileEntry confirmedEntries = 7;  // confirmed running entries
+}

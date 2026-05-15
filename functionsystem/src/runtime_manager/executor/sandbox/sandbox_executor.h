@@ -17,7 +17,10 @@
 #ifndef RUNTIME_MANAGER_EXECUTOR_SANDBOX_SANDBOX_EXECUTOR_H
 #define RUNTIME_MANAGER_EXECUTOR_SANDBOX_SANDBOX_EXECUTOR_H
 
+#include <chrono>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "async/defer.hpp"
 #include "common/metrics/metrics_adapter.h"
@@ -91,6 +94,8 @@ private:
  */
 class SandboxExecutor : public Executor {
 public:
+    static constexpr uint32_t kDefaultOrphanGracePeriodSec = 600;
+
     SandboxExecutor(const std::string &name, const litebus::AID &functionAgentAID,
                     const std::string &checkpointDir = {});
 
@@ -117,6 +122,7 @@ public:
 
     bool IsRuntimeActive(const std::string &runtimeID) override;
 
+    std::shared_ptr<litebus::Exec> GetExecByRuntimeID(const std::string &runtimeID) override;
     void ClearCapability() override {}
 
     void UpdatePrestartRuntimePromise(pid_t /*pid*/) override {}
@@ -128,6 +134,9 @@ public:
                                                                 const int limit) override;
 
     litebus::Future<bool> StopAllSandboxes();
+
+    litebus::Future<messages::ReconcileRuntimesResponse> ReconcileRuntimes(
+        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request);
 
     void InitConfig() override;
 
@@ -209,6 +218,7 @@ private:
 
     // ── gRPC call wrappers (thin, no business logic) ──────────────────────────
 
+    litebus::Future<runtime::v1::ListContainersResponse> DoList();
     litebus::Future<runtime::v1::StartResponse> DoStart(
         const std::shared_ptr<messages::StartInstanceRequest> &request,
         const std::shared_ptr<runtime::v1::StartRequest> &startReq);
@@ -223,6 +233,12 @@ private:
     litebus::Future<runtime::v1::NormalResponse> DoUnregisterWarmUp(
         const std::shared_ptr<runtime::v1::UnregisterRequest> &req);
 
+    void DoWait(const std::string &sandboxID, const std::string &runtimeID);
+
+    void RestoreWait(const std::string &sandboxID);
+
+    litebus::Future<Status> OnWaitDone(
+        const std::string &runtimeID, const runtime::v1::WaitResponse &response);
     static void StartSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request);
     static void StopSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request,
                                       const runtime::v1::StartResponse &response);
@@ -243,6 +259,37 @@ private:
     void DoReportMetrics(const std::string &instanceID, const std::string &runtimeID,
                          const std::string &sandboxID, const functionsystem::metrics::MeterTitle &title);
 
+    // ── Reconciliation helpers ────────────────────────────────────────────────
+
+    void WaitAndReconcile(
+        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request, int32_t retryCount,
+        const std::shared_ptr<litebus::Promise<messages::ReconcileRuntimesResponse>> &promise);
+
+    messages::ReconcileRuntimesResponse OnReconcileRuntimes(
+        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request,
+        const std::shared_ptr<runtime::v1::ListContainersResponse> &listResp);
+
+    void CleanupExitedContainers(const std::string &requestID,
+                                 const std::shared_ptr<runtime::v1::ListContainersResponse> &listResp,
+                                 messages::ReconcileRuntimesResponse *response,
+                                 int32_t *orphansCleaned);
+
+    void CleanupOrphanContainers(const std::string &requestID,
+                                 const std::shared_ptr<runtime::v1::ListContainersResponse> &listResp,
+                                 const std::unordered_set<std::string> &expectedIDs,
+                                 const std::chrono::steady_clock::time_point &now,
+                                 messages::ReconcileRuntimesResponse *response,
+                                 int32_t *orphansCleaned,
+                                 std::unordered_set<std::string> *actualRunningIDs);
+
+    void AddMissingAndConfirmedEntries(
+        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request,
+        const std::unordered_set<std::string> &actualRunningIDs,
+        messages::ReconcileRuntimesResponse *response);
+
+    void PurgeOrphanTracking(const std::unordered_set<std::string> &actualRunningIDs);
+    void DeleteContainerAsync(const std::string &containerID);
+
     // ── State ─────────────────────────────────────────────────────────────────
 
     RuntimeStateManager stateManager_;
@@ -254,6 +301,10 @@ private:
     litebus::AID functionAgentAID_;
     bool reconnecting_ = false;
     bool synced_       = false;
+
+    // ── Reconciliation state ─────────────────────────────────────────────────
+    uint32_t orphanGracePeriodSec_ = kDefaultOrphanGracePeriodSec;
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> orphanFirstSeen_;
 };
 
 /**
@@ -302,6 +353,11 @@ public:
         return litebus::Async(sandbox_->GetAID(), &SandboxExecutor::StopAllSandboxes);
     }
 
+    litebus::Future<messages::ReconcileRuntimesResponse> ReconcileRuntimes(
+        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request) override
+    {
+        return litebus::Async(sandbox_->GetAID(), &SandboxExecutor::ReconcileRuntimes, request);
+    }
 private:
     std::shared_ptr<SandboxExecutor> sandbox_;
 };

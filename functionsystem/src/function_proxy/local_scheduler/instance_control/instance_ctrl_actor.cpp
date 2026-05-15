@@ -2509,7 +2509,9 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     YRLOG_DEBUG("{}|{}|success to deploy instance({}) with runtimeID({}), runtimeAddress({}), startTime({}), pid({}), containerID({})",
                 request->traceid(), request->requestid(), request->instance().instanceid(), response.runtimeid(),
                 response.address(), response.timeinfo(), response.pid(), response.containerid());
-    request->mutable_instance()->set_runtimeid(response.runtimeid());
+    if (!response.runtimeid().empty()) {
+        request->mutable_instance()->set_runtimeid(response.runtimeid());
+    }
     request->mutable_instance()->set_starttime(response.timeinfo());
     request->mutable_instance()->set_runtimeaddress(response.address());
     (*request->mutable_instance()->mutable_extensions())[PID] = std::to_string(response.pid());
@@ -4691,6 +4693,7 @@ litebus::Future<Status> InstanceCtrlActor::RecoverRunningInstance(
     RETURN_STATUS_IF_TRUE(isAbnormal_, StatusCode::ERR_INNER_SYSTEM_ERROR, "abnormal local scheduler " + nodeID_);
     YRLOG_INFO("{}|{}|instance({}) status is running, only need to create client", request->traceid(),
                request->requestid(), request->instance().instanceid());
+    (void)concernedInstance_.insert(request->instance().instanceid());
     auto promise = std::make_shared<litebus::Promise<Status>>();
     auto instanceInfo = stateMachine->GetInstanceInfo();
     (void)CreateInstanceClient(request->instance().instanceid(), request->instance().runtimeid(),

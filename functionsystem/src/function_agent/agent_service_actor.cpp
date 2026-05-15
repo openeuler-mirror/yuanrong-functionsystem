@@ -783,6 +783,8 @@ void AgentServiceActor::Init()
     ActorBase::Receive("NotifyFunctionStatusChange", &AgentServiceActor::NotifyFunctionStatusChange);
     ActorBase::Receive("SnapshotRuntime", &AgentServiceActor::SnapshotRuntime);
     ActorBase::Receive("SnapshotRuntimeResponse", &AgentServiceActor::SnapshotRuntimeResponse);
+    ActorBase::Receive("ReconcileRuntimes", &AgentServiceActor::ReconcileRuntimes);
+    ActorBase::Receive("ReconcileRuntimesResponse", &AgentServiceActor::ReconcileRuntimesResponse);
 
     litebus::Async(GetAID(), &AgentServiceActor::RemoveCodePackageAsync);
 
@@ -1638,6 +1640,27 @@ void AgentServiceActor::QueryDebugInstanceInfosResponse(const litebus::AID &from
     YRLOG_DEBUG("{}|got instance status response from({}), {}", rsp.requestid(), std::string(from),
                 rsp.ShortDebugString());
     (void)Send(localSchedFuncAgentMgrAID_, "QueryDebugInstanceInfosResponse", std::move(msg));
+}
+
+void AgentServiceActor::ReconcileRuntimes(const litebus::AID &, std::string &&, std::string &&msg)
+{
+    if (!registerRuntimeMgr_.registered) {
+        YRLOG_ERROR("{}|registration is not complete, ignore ReconcileRuntimes.", agentID_);
+        return;
+    }
+
+    (void)Send(litebus::AID(registerRuntimeMgr_.name, registerRuntimeMgr_.address), "ReconcileRuntimes",
+               std::move(msg));
+}
+
+void AgentServiceActor::ReconcileRuntimesResponse(const litebus::AID &, std::string &&, std::string &&msg)
+{
+    if (!registerRuntimeMgr_.registered || !isRegisterCompleted_) {
+        YRLOG_ERROR("agent({}) registration is not complete, ignore ReconcileRuntimesResponse.", agentID_);
+        return;
+    }
+
+    (void)Send(localSchedFuncAgentMgrAID_, "ReconcileRuntimesResponse", std::move(msg));
 }
 
 void AgentServiceActor::SetNetworkIsolationRequest(const litebus::AID &, std::string &&, std::string &&msg)
