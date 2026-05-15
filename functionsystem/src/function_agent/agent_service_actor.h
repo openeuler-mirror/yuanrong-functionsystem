@@ -232,6 +232,9 @@ public:
 
     virtual void QueryDebugInstanceInfosResponse(const litebus::AID &, std::string &&, std::string &&msg);
 
+    virtual void ReconcileRuntimes(const litebus::AID &from, std::string &&name, std::string &&msg);
+    virtual void ReconcileRuntimesResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
     litebus::Future<Status> CreateStaticFunctionInstance();
 
     // for test

@@ -17,6 +17,7 @@
 #ifndef LOCAL_SCHEDULER_FUNCTION_AGENT_MGR_FUNCTION_AGENT_MGR_ACTOR_H
 #define LOCAL_SCHEDULER_FUNCTION_AGENT_MGR_FUNCTION_AGENT_MGR_ACTOR_H
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -96,6 +97,7 @@ public:
         bool enableForceDeletePod { true };
         uint32_t getAgentInfoRetryMs {function_agent_mgr::GET_FUNC_AGENT_REGIS_INFO_CYCLE_MS};
         uint64_t invalidAgentGCInterval {function_agent_mgr::AGENT_FAILED_GC_TIME};
+        bool enableCoProcessMode { false };
     };
     FunctionAgentMgrActor(const std::string &name, const Param &param, const std::string &nodeID,
                           std::shared_ptr<MetaStoreClient> metaStoreClient);
@@ -257,6 +259,11 @@ public:
                                                      int32_t ttl);
     void SnapshotRuntimeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 
+    litebus::Future<messages::ReconcileRuntimesResponse> ReconcileRuntimes(
+        const std::string &funcAgentID,
+        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request);
+    void ReconcileRuntimesResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
     // for test
     [[maybe_unused]] void SetFuncAgentsRegis(
         std::unordered_map<std::string, messages::FuncAgentRegisInfo> &funcAgentsRegis)
@@ -381,6 +388,11 @@ public:
     litebus::Future<bool> IsFuncAgentRecovering(const std::string &funcAgentID);
 
     void SetAbnormal();
+
+    void SetCoProcessReconcileCallback(std::function<void(const std::string &)> callback)
+    {
+        reconcileCallback_ = std::move(callback);
+    }
 
 protected:
     void Init() override;
@@ -542,6 +554,8 @@ private:
     std::string nodeID_;
     std::shared_ptr<MetaStoreClient> metaStoreClient_;
     bool enableForceDeletePod_{ true };
+    bool coProcessMode_{ false };
+    std::function<void(const std::string &)> reconcileCallback_;
 
     // use function-agent ID as key, corresponding function agent ResourceUnit as value
     std::unordered_map<std::string, litebus::Promise<std::shared_ptr<resource_view::ResourceUnit>>>
@@ -560,6 +574,8 @@ private:
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::SnapshotRuntimeResponse, snapshotRuntimeTimeout_, snapshotRuntimeSync_);
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::QueryDebugInstanceInfosResponse,
                         QUERY_DEBUG_INSTANCE_INFO_INTERVAL_MS, queryDebugInstInfoSync_);
+    const uint32_t reconcileTimeout_ = 120000;  // reconcile may take longer (waits for containerd)
+    REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::ReconcileRuntimesResponse, reconcileTimeout_, reconcileSync_);
     // key: request id, value: function agent id
     std::unordered_map<std::string, std::string> queryReqMap_;
 

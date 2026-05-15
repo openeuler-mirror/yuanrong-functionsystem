@@ -118,6 +118,10 @@ void HealthCheckActor::CheckHealthResponse(const litebus::AID &from, std::string
                         res.status(), res.message());
         }
     }
+    if (sandboxExitNotifyMap_.find(res.requestid()) != sandboxExitNotifyMap_.end()) {
+        sandboxExitNotifyMap_[res.requestid()]->SetValue(Status{ StatusCode(res.status()), res.message() });
+        (void)sandboxExitNotifyMap_.erase(res.requestid());
+    }
 }
 
 void HealthCheckActor::SetConfig(const Flags &flags)
@@ -187,6 +191,24 @@ litebus::Future<Status> HealthCheckActor::SendInstanceStatus(const std::string &
         });
 }
 
+litebus::Future<Status> HealthCheckActor::NotifySandboxExit(const std::string &instanceID,
+                                                            const std::string &runtimeID, int exitCode,
+                                                            const std::string &exitMessage,
+                                                            const std::string &requestID)
+{
+    auto req = GenUpdateInstanceStatusRequest(instanceID, exitCode, requestID);
+    auto info = req->mutable_instancestatusinfo();
+    info->set_instancemsg(exitMessage);
+    info->set_type(exitCode == 0 ? static_cast<int32_t>(EXIT_TYPE::RETURN)
+                                  : static_cast<int32_t>(EXIT_TYPE::UNKNOWN_ERROR));
+    YRLOG_INFO("{}|NotifySandboxExit: instanceID({}) runtimeID({}) exitCode({})", requestID, instanceID, runtimeID,
+               exitCode);
+    auto promise = std::make_shared<litebus::Promise<Status>>();
+    sandboxExitNotifyMap_[requestID] = promise;
+    litebus::Async(GetAID(), &HealthCheckActor::StartUpdateInstanceStatus, req, functionAgentAID_, runtimeID, exitCode);
+    return promise->GetFuture();
+}
+
 void HealthCheckActor::StartUpdateInstanceStatus(const std::shared_ptr<messages::UpdateInstanceStatusRequest> &req,
                                                  const litebus::AID &to, const std::string &runtimeID, const int status)
 {
@@ -208,6 +230,11 @@ void HealthCheckActor::UpdateInstanceStatus(const std::shared_ptr<messages::Upda
         sendCounter_[requestID] == sendFrequency_) {
         (void)timers_.erase(requestID);
         (void)sendCounter_.erase(requestID);
+        if (sandboxExitNotifyMap_.find(requestID) != sandboxExitNotifyMap_.end()) {
+            sandboxExitNotifyMap_[requestID]->SetValue(
+                Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "update instance status response timeout"));
+            (void)sandboxExitNotifyMap_.erase(requestID);
+        }
         return;
     }
     StartUpdateInstanceStatus(req, to, runtimeID, status);
