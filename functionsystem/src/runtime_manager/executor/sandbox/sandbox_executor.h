@@ -147,6 +147,10 @@ public:
 
     static std::vector<PortForwardConfig> ParseForwardPorts(const std::string &networkJson);
 
+    // Returns true when a Wait RPC status indicates sandboxd transport-layer failure
+    // and the call should be retried rather than treated as a sandbox exit.
+    static bool IsRetryableWaitError(const Status &status);
+
 protected:
     void Init() override;
     void Finalize() override;
@@ -236,6 +240,12 @@ private:
     void DoWait(const std::string &sandboxID, const std::string &runtimeID);
 
     void RestoreWait(const std::string &sandboxID);
+
+    // ── Wait retry on sandboxd disconnection ─────────────────────────────────
+    void DoWaitWithRetry(const std::string &sandboxID, const std::string &runtimeID, int retryCount);
+
+    litebus::Future<Status> CleanupSandboxAfterMaxRetries(const std::string &runtimeID,
+                                                          const std::string &sandboxID);
 
     litebus::Future<Status> OnWaitDone(
         const std::string &runtimeID, const runtime::v1::WaitResponse &response);
