@@ -363,6 +363,7 @@ function install_faas_frontend() {
   sed -i "s*{iam_tls_key_file}*${iam_tls_key_file}*g" ${install_init_frontend_config}
   sed -i "s/{meta_service_address}/${meta_service_address}/g" ${install_init_frontend_config}
   sed -i "s/{enable_func_token_auth}/${ENABLE_FUNCTION_TOKEN_AUTH}/g" ${install_init_frontend_config}
+  sed -i "s/{frontend_lease_bypass}/${FRONTEND_LEASE_BYPASS}/g" ${install_init_frontend_config}
   
   # Generic auth placeholders
   sed -i "s/{auth_enabled}/${auth_enabled}/g" ${install_init_frontend_config}

@@ -50,7 +50,21 @@ constexpr int64_t RECONCILE_RETRY_INTERVAL_MS       = 1000;
 constexpr int32_t RECONCILE_MAX_RETRIES             = 30;
 constexpr int32_t CONTAINER_DELETE_TIMEOUT_SEC      = 10;
 const std::string YR_ONLY_STDOUT                    = "YR_ONLY_STDOUT";
+
+// Wait retry on sandboxd disconnection (total 5 minutes tolerance)
+constexpr int32_t WAIT_MAX_RETRIES                  = 30;
+constexpr int64_t WAIT_RETRY_INTERVAL_MS            = 10000;
+
 }  // namespace
+
+bool SandboxExecutor::IsRetryableWaitError(const Status &status)
+{
+    const auto code = status.StatusCode();
+    return code == GRPC_UNAVAILABLE
+        || code == GRPC_CANCELLED
+        || code == GRPC_DEADLINE_EXCEEDED
+        || code == GRPC_INTERNAL;
+}
 
 void SandboxExecutor::StartSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
@@ -250,7 +264,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnStartDone(
     stateManager_.UpdateSandboxID(runtimeID, sandboxID);
     guard->Commit();
 
-    DoWait(sandboxID, runtimeID);
+    DoWaitWithRetry(sandboxID, runtimeID, 0);
     ReportMetrics(info.instanceid(), runtimeID, sandboxID,
                   {"yr_app_instance_start_time", " start timestamp", "ms"});
     YRLOG_INFO("{}|{}|StartNormal success: instance({}) runtime({}) sandbox({})", info.traceid(), info.requestid(),
@@ -408,7 +422,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnRestoreDone(
     const std::string sandboxID = response.id();
     stateManager_.UpdateSandboxID(info.runtimeid(), sandboxID);
     guard->Commit();
-    DoWait(sandboxID, info.runtimeid());
+    DoWaitWithRetry(sandboxID, info.runtimeid(), 0);
     YRLOG_INFO("{}|{}|restore success: instance({}) runtime({}) sandbox({})", info.traceid(), info.requestid(),
                info.instanceid(), info.runtimeid(), sandboxID);
     return MakeSuccessStartResponse(request, sandboxID);
@@ -791,7 +805,7 @@ void SandboxExecutor::AddMissingAndConfirmedEntries(
             instanceInfo.set_runtimeid(entry.runtimeid());
             stateManager_.Register({entry.runtimeid(), entry.containerid(), {}, {}, instanceInfo});
             stateManager_.MarkStartDone(entry.runtimeid());
-            DoWait(entry.containerid(), entry.runtimeid());
+            DoWaitWithRetry(entry.containerid(), entry.runtimeid(), 0);
         }
     }
 }
@@ -993,8 +1007,68 @@ void SandboxExecutor::DoWait(
 }
 void SandboxExecutor::RestoreWait(const std::string &sandboxID)
 {
-    DoWait(sandboxID, sandboxID);
+    DoWaitWithRetry(sandboxID, sandboxID, 0);
 }
+
+// ── Wait retry on sandboxd disconnection ──────────────────────────────────────
+
+void SandboxExecutor::DoWaitWithRetry(const std::string &sandboxID, const std::string &runtimeID, int retryCount)
+{
+    ASSERT_IF_NULL(containerd_);
+    auto req = std::make_shared<runtime::v1::WaitRequest>();
+    req->set_id(sandboxID);
+    auto resp = std::make_shared<runtime::v1::WaitResponse>();
+    YRLOG_INFO("DoWaitWithRetry: sandbox({}) runtime({}) retry({})", sandboxID, runtimeID, retryCount);
+    containerd_
+        ->CallAsyncX("Wait", *req, resp.get(), &runtime::v1::RuntimeLauncher::Stub::AsyncWait)
+        .Then([req, resp, sandboxID, runtimeID, retryCount, aid(GetAID())]
+              (const Status &status) -> litebus::Future<Status> {
+            YRLOG_INFO("DoWaitWithRetry returned: sandbox({}) runtime({}) retry({}) statusCode({}) msg({})",
+                       sandboxID, runtimeID, retryCount,
+                       fmt::underlying(status.StatusCode()), status.RawMessage());
+            if (status.IsOk()) {
+                return litebus::Async(aid, &SandboxExecutor::OnWaitDone, runtimeID, *resp);
+            }
+            if (!SandboxExecutor::IsRetryableWaitError(status)) {
+                runtime::v1::WaitResponse response;
+                response.set_status(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+                response.set_message(fmt::format("failed to wait sandbox {}, non-retryable grpc err: {}",
+                                                 req->id(), status.RawMessage()));
+                return litebus::Async(aid, &SandboxExecutor::OnWaitDone, runtimeID, response);
+            }
+            if (retryCount >= WAIT_MAX_RETRIES) {
+                return litebus::Async(aid, &SandboxExecutor::CleanupSandboxAfterMaxRetries, runtimeID, sandboxID);
+            }
+            YRLOG_WARN("DoWait failed for sandbox {}, retryable error ({}), will retry in {}ms (attempt {}/{})",
+                       req->id(), status.RawMessage(), WAIT_RETRY_INTERVAL_MS, retryCount + 1, WAIT_MAX_RETRIES);
+            (void)litebus::AsyncAfter(WAIT_RETRY_INTERVAL_MS, aid, &SandboxExecutor::DoWaitWithRetry,
+                                      sandboxID, runtimeID, retryCount + 1);
+            return Status::OK();
+        });
+}
+
+litebus::Future<Status> SandboxExecutor::CleanupSandboxAfterMaxRetries(const std::string &runtimeID,
+                                                                       const std::string &sandboxID)
+{
+    auto info = stateManager_.Find(runtimeID);
+    if (!info.has_value()) {
+        YRLOG_WARN("CleanupSandboxAfterMaxRetries: runtime({}) already unregistered", runtimeID);
+        return Status::OK();
+    }
+
+    const auto &instanceID = info->instanceInfo.instanceid();
+    auto requestID = litebus::os::Join("update-instance-status-request", runtimeID, '-');
+
+    auto msg = fmt::format("Sandbox {} wait failed after {} retries, marking instance fatal",
+                           sandboxID, WAIT_MAX_RETRIES);
+    YRLOG_ERROR("{}|{}", requestID, msg);
+
+    stateManager_.Unregister(runtimeID);
+
+    return healthCheckClient_->NotifySandboxExit(
+        instanceID, runtimeID, -1, msg, requestID);
+}
+
 
 litebus::Future<Status> SandboxExecutor::OnWaitDone(
     const std::string &runtimeID, const runtime::v1::WaitResponse &response)
