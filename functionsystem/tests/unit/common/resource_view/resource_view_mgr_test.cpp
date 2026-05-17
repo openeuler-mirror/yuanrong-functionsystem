@@ -111,4 +111,42 @@ TEST_F(ResourceViewMgrTest, GetChanges)
     EXPECT_EQ(resources.size(), (size_t)0);
 }
 
+TEST_F(ResourceViewMgrTest, UpdateAllUnitStatus)
+{
+    auto mgr_ = std::make_shared<ResourceViewMgr>();
+    auto mockPrimary = MockResourceView::CreateMockResourceView();
+    auto mockVirtual = MockResourceView::CreateMockResourceView();
+
+    mgr_->primary_ = mockPrimary;
+    mgr_->virtual_ = mockVirtual;
+
+    auto primaryUnit = std::make_shared<ResourceUnit>();
+    auto primaryNormal = ResourceUnit();
+    primaryNormal.set_id("primary-normal");
+    primaryNormal.set_status(static_cast<uint32_t>(UnitStatus::NORMAL));
+    auto primaryEvicting = ResourceUnit();
+    primaryEvicting.set_id("primary-evicting");
+    primaryEvicting.set_status(static_cast<uint32_t>(UnitStatus::EVICTING));
+    (*primaryUnit->mutable_fragment())["primary-normal"] = primaryNormal;
+    (*primaryUnit->mutable_fragment())["primary-evicting"] = primaryEvicting;
+
+    auto virtualUnit = std::make_shared<ResourceUnit>();
+    auto virtualNormal = ResourceUnit();
+    virtualNormal.set_id("virtual-normal");
+    virtualNormal.set_status(static_cast<uint32_t>(UnitStatus::NORMAL));
+    (*virtualUnit->mutable_fragment())["virtual-normal"] = virtualNormal;
+
+    EXPECT_CALL(*mockPrimary, GetFullResourceView()).WillOnce(Return(AsyncReturn(primaryUnit)));
+    EXPECT_CALL(*mockVirtual, GetFullResourceView()).WillOnce(Return(AsyncReturn(virtualUnit)));
+    EXPECT_CALL(*mockPrimary, UpdateUnitStatus("primary-normal", UnitStatus::EVICTING))
+        .WillOnce(Return(AsyncReturn(Status::OK())));
+    EXPECT_CALL(*mockPrimary, UpdateUnitStatus("primary-evicting", UnitStatus::EVICTING)).Times(0);
+    EXPECT_CALL(*mockVirtual, UpdateUnitStatus("virtual-normal", UnitStatus::EVICTING))
+        .WillOnce(Return(AsyncReturn(Status::OK())));
+
+    auto future = mgr_->UpdateAllUnitStatus(UnitStatus::EVICTING);
+    ASSERT_AWAIT_READY(future);
+    EXPECT_TRUE(future.Get().IsOk());
+}
+
 }

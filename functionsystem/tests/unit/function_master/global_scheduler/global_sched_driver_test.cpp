@@ -477,7 +477,11 @@ TEST_F(GlobalSchedDriverTest, QueryResourcesRouter)
     // query resource info case2: query successful (empty header)
     {
         auto resp = messages::QueryResourcesInfoResponse();
-        (*resp.mutable_resource()) = std::move(view_utils::Get1DResourceUnit(resourceId));
+        auto resource = view_utils::Get1DResourceUnit(resourceId);
+        auto fragment = view_utils::Get1DResourceUnit("fragment-1");
+        fragment.set_status(static_cast<uint32_t>(resource_view::UnitStatus::EVICTING));
+        (*resource.mutable_fragment())[fragment.id()] = fragment;
+        (*resp.mutable_resource()) = std::move(resource);
         EXPECT_CALL(*mockGlobalSched_, QueryResourcesInfo(_)).WillOnce(Return(resp));
         auto response = litebus::http::Get(urlQueryResource, litebus::None());
         response.Wait();
@@ -486,6 +490,8 @@ TEST_F(GlobalSchedDriverTest, QueryResourcesRouter)
         auto infos = messages::QueryResourcesInfoResponse();
         EXPECT_EQ(google::protobuf::util::JsonStringToMessage(body, &infos).ok(), true);
         EXPECT_EQ(infos.resource().id(), resourceId);
+        EXPECT_EQ(infos.resource().fragment().at("fragment-1").status(),
+                  static_cast<uint32_t>(resource_view::UnitStatus::EVICTING));
     }
 
     // query resource info case3: query successful (header: type is json)

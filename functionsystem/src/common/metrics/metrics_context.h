@@ -69,6 +69,7 @@ struct PodResource {
     resources::Resources capacity;
     resources::Resources allocatable;
     NodeLabelsType nodeLabels;
+    std::string status;
 };
 
 struct PhysicalMetrics {

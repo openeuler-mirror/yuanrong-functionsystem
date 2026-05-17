@@ -33,6 +33,7 @@ public:
     virtual std::shared_ptr<ResourceView> GetInf(const ResourceType &type = ResourceType::PRIMARY);
     virtual litebus::Future<std::unordered_map<ResourceType, std::shared_ptr<ResourceUnit>>> GetResources();
     virtual litebus::Future<std::unordered_map<ResourceType, std::shared_ptr<ResourceUnitChanges>>> GetChanges();
+    virtual litebus::Future<Status> UpdateAllUnitStatus(UnitStatus status);
     virtual void RegisterResourceUnit(const messages::Register &registerMsg, const std::string &url);
     virtual void UnRegisterResourceUnit(const std::string &id);
     virtual void UpdateDomainUrlForLocal(const std::string &addr);
