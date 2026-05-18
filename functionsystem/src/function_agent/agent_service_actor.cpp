@@ -50,6 +50,8 @@ static const std::string SF_INSTANCE_TYPE_NOTE = "SF_INSTANCE_TYPE_NOTE";
 static const std::string SF_DELEGATE_DIRECTORY_INFO = "SF_DELEGATE_DIRECTORY_INFO";
 static const std::string SF_INVOKE_LABELS = "SF_INVOKE_LABELS";
 static const std::string SF_FUNCTION_SIGNATURE = "SF_FUNCTION_SIGNATURE";
+static const std::string RUNTIME_MICROSERVICE_AZ_ENV = "RUNTIME_MICROSERVICE_AZ";
+static const std::string INSTANCE_AZ = "az";
 
 DeployResult AgentServiceActor::PrepareSharedDir(std::shared_ptr<messages::DeployInstanceRequest> &req)
 {
@@ -1773,6 +1775,10 @@ litebus::Option<StaticFunctionConfig> GetFunctionCfgFromEnv()
 
     if (auto deploymentName = litebus::os::GetEnv("POD_DEPLOYMENT_NAME"); deploymentName.IsSome()) {
         cfg.extensions["podDeploymentName"] = deploymentName.Get();
+    }
+
+    if (auto instanceAz = litebus::os::GetEnv(RUNTIME_MICROSERVICE_AZ_ENV); instanceAz.IsSome()) {
+        cfg.extensions[INSTANCE_AZ] = instanceAz.Get();
     }
 
     if (auto dataSystemFeatureUsed = litebus::os::GetEnv("DATA_SYSTEM_FEATURE_USED"); dataSystemFeatureUsed.IsSome()) {

@@ -111,6 +111,7 @@ type FunctionVersion struct {
 	EnableAgentSession bool
 	ScalePolicy        string
 	SchedulePolicy     string
+	PriorityAZ         string
 	IdleTime           int64
 	AutoScaleConfig    AutoScaleConfig
 	WarmupType         string
