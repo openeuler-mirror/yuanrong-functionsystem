@@ -195,6 +195,20 @@ litebus::Future<Status> GlobalSched::EvictAgent(const std::string &localID,
     return litebus::Async(globalSchedActor_->GetAID(), &GlobalSchedActor::EvictAgent, localID, req);
 }
 
+litebus::Future<Status> GlobalSched::UpdateLocalSchedulingStatus(const std::string &localID, bool evicting)
+{
+    ASSERT_IF_NULL(localSchedMgr_);
+    return GetLocalAddress(localID).Then(
+        [localSchedMgr(localSchedMgr_), localID, evicting](const litebus::Option<std::string> &address)
+            -> litebus::Future<Status> {
+            if (address.IsNone()) {
+                YRLOG_ERROR("failed to update scheduling status, local scheduler({}) not found", localID);
+                return Status(StatusCode::PARAMETER_ERROR, "Invalid nodeID");
+            }
+            return localSchedMgr->UpdateSchedulingStatusOnLocal(address.Get(), evicting);
+        });
+}
+
 litebus::Future<messages::QueryAgentInfoResponse> GlobalSched::QueryAgentInfo(
     const std::shared_ptr<messages::QueryAgentInfoRequest> &req)
 {

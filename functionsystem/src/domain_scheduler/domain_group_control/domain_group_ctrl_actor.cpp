@@ -50,6 +50,9 @@ std::shared_ptr<GroupScheduleContext> DomainGroupCtrlActor::NewGroupContext(
     auto groupCtx = std::make_shared<GroupScheduleContext>();
     groupCtx->beginTime = std::chrono::high_resolution_clock::now();
     groupCtx->rangeScheduleLoopTime = std::chrono::high_resolution_clock::now();
+    groupCtx->enqueueTimeMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count();
     groupCtx->retryTimes = 0;
     groupCtx->schedulePromise = std::make_shared<litebus::Promise<Status>>();
     groupCtx->groupInfo = groupInfo;
@@ -795,5 +798,17 @@ std::vector<std::shared_ptr<messages::ScheduleRequest>> DomainGroupCtrlActor::Ge
     }
 
     return requests;
+}
+
+std::vector<schedule_decision::ScheduleQueueRecord> DomainGroupCtrlActor::GetQueueRecords()
+{
+    std::vector<schedule_decision::ScheduleQueueRecord> records;
+    for (const auto &entry : groupScheduleCtx_) {
+        const auto &ctx = entry.second;
+        for (const auto &request : ctx->requests) {
+            records.push_back({ request, ctx->enqueueTimeMs });
+        }
+    }
+    return records;
 }
 }  // namespace functionsystem::domain_scheduler

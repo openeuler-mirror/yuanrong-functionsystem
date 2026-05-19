@@ -71,6 +71,7 @@ public:
 
     virtual litebus::Future<Status> EvictAgent(const std::string &localID,
                                                const std::shared_ptr<messages::EvictAgentRequest> &req);
+    virtual litebus::Future<Status> UpdateLocalSchedulingStatus(const std::string &localID, bool evicting);
 
     virtual litebus::Future<std::unordered_set<std::string>> QueryNodes();
 

@@ -67,7 +67,7 @@ TEST(InstanceManagerDriverTest, CollectSortedTenantInstanceIndexesSortsAfterFilt
     otherTenant->set_instanceid("instance-b");
     otherTenant->set_tenantid("tenant-b");
 
-    auto matched = CollectSortedTenantInstanceIndexes(response.instanceinfos(), "tenant-a", "", false);
+    auto matched = CollectSortedTenantInstanceIndexes(response.instanceinfos(), "tenant-a", "", "", false);
 
     ASSERT_EQ(matched.size(), 2U);
     EXPECT_EQ(response.instanceinfos().Get(matched[0]).instanceid(), "instance-a");
@@ -84,10 +84,28 @@ TEST(InstanceManagerDriverTest, CollectSortedTenantInstanceIndexesFiltersByInsta
     first->set_instanceid("instance-a");
     first->set_tenantid("tenant-a");
 
-    auto matched = CollectSortedTenantInstanceIndexes(response.instanceinfos(), "tenant-a", "instance-b", false);
+    auto matched = CollectSortedTenantInstanceIndexes(response.instanceinfos(), "tenant-a", "instance-b", "", false);
 
     ASSERT_EQ(matched.size(), 1U);
     EXPECT_EQ(response.instanceinfos().Get(matched[0]).instanceid(), "instance-b");
+}
+
+TEST(InstanceManagerDriverTest, CollectSortedTenantInstanceIndexesFiltersByNodeID)
+{
+    messages::QueryInstancesInfoResponse response;
+    auto *matched = response.add_instanceinfos();
+    matched->set_instanceid("instance-a");
+    matched->set_tenantid("tenant-a");
+    matched->set_functionproxyid("node-a");
+    auto *otherNode = response.add_instanceinfos();
+    otherNode->set_instanceid("instance-b");
+    otherNode->set_tenantid("tenant-a");
+    otherNode->set_functionproxyid("node-b");
+
+    auto indexes = CollectSortedTenantInstanceIndexes(response.instanceinfos(), "tenant-a", "", "node-a", false);
+
+    ASSERT_EQ(indexes.size(), 1U);
+    EXPECT_EQ(response.instanceinfos().Get(indexes[0]).functionproxyid(), "node-a");
 }
 
 TEST(InstanceManagerDriverTest, CollectSortedTenantInstanceIndexesBreaksInstanceIDTiesByTenantID)
@@ -100,7 +118,7 @@ TEST(InstanceManagerDriverTest, CollectSortedTenantInstanceIndexesBreaksInstance
     first->set_instanceid("instance-a");
     first->set_tenantid("tenant-a");
 
-    auto matched = CollectSortedTenantInstanceIndexes(response.instanceinfos(), "system", "", true);
+    auto matched = CollectSortedTenantInstanceIndexes(response.instanceinfos(), "system", "", "", true);
 
     ASSERT_EQ(matched.size(), 2U);
     EXPECT_EQ(response.instanceinfos().Get(matched[0]).tenantid(), "tenant-a");

@@ -20,6 +20,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "common/utils/generate_message.h"
 #include "function_proxy/local_scheduler/local_scheduler_service/local_sched_srv_actor.h"
 
 namespace functionsystem::test {
@@ -46,6 +47,7 @@ public:
         Receive("UnRegistered", &MockLocalSchedSrvActor::UnRegistered);
         Receive("UpdateSchedTopoView", &MockLocalSchedSrvActor::UpdateSchedTopoView);
         Receive("ResponseNotifyWorkerStatus", &MockLocalSchedSrvActor::ResponseNotifyWorkerStatus);
+        Receive("UpdateSchedulingStatus", &MockLocalSchedSrvActor::UpdateSchedulingStatus);
         Receive("EvictAgent", &MockLocalSchedSrvActor::EvictAgent);
     }
 
@@ -77,6 +79,13 @@ public:
 
     MOCK_METHOD3(MockResponseNotifyWorkerStatus, void(const litebus::AID from, std::string name, std::string msg));
 
+    void UpdateSchedulingStatus(const litebus::AID &from, std::string &&name, std::string &&msg)
+    {
+        MockUpdateSchedulingStatus(from, name, msg);
+    }
+
+    MOCK_METHOD3(MockUpdateSchedulingStatus, void(const litebus::AID from, std::string name, std::string msg));
+
     void RegisterToGlobalScheduler(const litebus::AID &to, const std::string &msg)
     {
         Send(to, "Register", std::string(msg));
@@ -102,6 +111,13 @@ public:
     void NotifyEvictResult(const litebus::AID &to, const std::string &msg)
     {
         Send(to, "NotifyEvictResult", std::string(msg));
+    }
+
+    void UpdateSchedulingStatusResponse(const litebus::AID &to, const std::string &requestID,
+                                        StatusCode code = StatusCode::SUCCESS, const std::string &message = "")
+    {
+        Send(to, "UpdateSchedulingStatusResponse",
+             GenUpdateAgentStatusResponse(requestID, static_cast<int32_t>(code), message).SerializeAsString());
     }
 };
 

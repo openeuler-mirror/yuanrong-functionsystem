@@ -15,6 +15,7 @@
  */
 #ifndef DOMAIN_SCHEDULER_DOMAIN_GROUP_CTRL_ACTOR_H
 #define DOMAIN_SCHEDULER_DOMAIN_GROUP_CTRL_ACTOR_H
+#include <chrono>
 #include "actor/actor.hpp"
 #include "async/future.hpp"
 #include "common/proto/pb/posix_pb.h"
@@ -29,6 +30,7 @@ namespace functionsystem::domain_scheduler {
 struct GroupScheduleContext {
     std::chrono::time_point<std::chrono::high_resolution_clock> beginTime;
     std::chrono::time_point<std::chrono::high_resolution_clock> rangeScheduleLoopTime;
+    int64_t enqueueTimeMs{ 0 };
     int32_t retryTimes;
     std::shared_ptr<litebus::Promise<Status>> schedulePromise;
     std::shared_ptr<messages::GroupInfo> groupInfo;
@@ -77,6 +79,7 @@ public:
     }
 
     std::vector<std::shared_ptr<messages::ScheduleRequest>> GetRequests();
+    std::vector<schedule_decision::ScheduleQueueRecord> GetQueueRecords();
 
     inline void BindScheduleRecorder(const std::shared_ptr<schedule_decision::ScheduleRecorder> &recorder)
     {

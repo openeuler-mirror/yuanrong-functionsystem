@@ -45,4 +45,22 @@ void ScheduleRecorder::EraseScheduleErr(const std::string &requestID)
     return litebus::Async(recorder_->GetAID(), &ScheduleRecorderActor::EraseScheduleErr, requestID);
 }
 
+void ScheduleRecorder::RecordScheduleRequest(const std::shared_ptr<messages::ScheduleRequest> &request)
+{
+    ASSERT_IF_NULL(recorder_);
+    return litebus::Async(recorder_->GetAID(), &ScheduleRecorderActor::RecordScheduleRequest, request);
+}
+
+void ScheduleRecorder::EraseScheduleRequest(const std::string &requestID)
+{
+    ASSERT_IF_NULL(recorder_);
+    return litebus::Async(recorder_->GetAID(), &ScheduleRecorderActor::EraseScheduleRequest, requestID);
+}
+
+litebus::Future<std::vector<ScheduleQueueRecord>> ScheduleRecorder::QueryScheduleQueue()
+{
+    ASSERT_IF_NULL(recorder_);
+    return litebus::Async(recorder_->GetAID(), &ScheduleRecorderActor::QueryScheduleQueue);
+}
+
 }  // namespace functionsystem::schedule_decision

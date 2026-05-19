@@ -615,6 +615,18 @@ TEST_F(GlobalSchedTest, EvictAgent)
     globalSched_.Await();
 }
 
+TEST_F(GlobalSchedTest, UpdateLocalSchedulingStatus)
+{
+    EXPECT_CALL(*mockLocalSchedMgr_, UpdateSchedulingStatusOnLocal(Eq("local"), true)).WillOnce(Return(Status::OK()));
+    EXPECT_CALL(*mockSchedTree_, FindLeafNode(Eq("localID")))
+        .WillOnce(Return(localSched_))
+        .WillOnce(Return(localSched_));
+
+    auto future = globalSched_.UpdateLocalSchedulingStatus("localID", true);
+    EXPECT_AWAIT_READY(future);
+    EXPECT_EQ(future.IsOK(), true);
+}
+
 // SlaveBusiness test cases
 TEST_F(GlobalSchedTest, SlaveBusinessTest)  // NOLINT
 {

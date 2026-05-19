@@ -37,6 +37,8 @@ public:
                 (const, override));
     MOCK_METHOD(litebus::Future<Status>, EvictAgentOnLocal,
                 (const std::string &address, const std::shared_ptr<messages::EvictAgentRequest> &req), (override));
+    MOCK_METHOD(litebus::Future<Status>, UpdateSchedulingStatusOnLocal,
+                (const std::string &address, bool evicting), (override));
 };
 
 }  // namespace functionsystem::test

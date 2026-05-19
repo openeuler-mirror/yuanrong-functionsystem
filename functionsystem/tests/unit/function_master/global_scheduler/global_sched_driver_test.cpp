@@ -29,6 +29,7 @@
 #include "mocks/mock_meta_store_client.h"
 #include "nlohmann/json.hpp"
 #include "utils/generate_info.h"
+#include "utils/future_test_helper.h"
 
 namespace functionsystem::test {
 const std::string HEALTHY_URL = "/healthy";
@@ -38,6 +39,7 @@ const std::string EVICT_AGENT_URL = "/evictagent";
 const std::string QUERY_AGENT_COUNT_URL = "/queryagentcount";
 const std::string QUERY_RESOURCES_URL = "/resources";
 const std::string GET_SCHEDULING_QUEUE_URL = "/scheduling_queue";
+const std::string NODE_LOCAL_SCHEDULING_STATUS_URL = "/node/localschedulingstatus";
 
 using namespace ::testing;
 
@@ -436,20 +438,42 @@ TEST_F(GlobalSchedDriverTest, GetSchedulingQueue)
         google::protobuf::RepeatedPtrField<resource_view::InstanceInfo> &instanceinfos = *resp.mutable_instanceinfos();
         instanceinfos.Add(std::move(GetInstanceInfo("app-script-1-instanceid")));
         instanceinfos.Add(std::move(GetInstanceInfo("app-script-2-instanceid")));
+        (*instanceinfos.Mutable(0)->mutable_extensions())["scheduleQueueWaitDurationMs"] = "100";
         EXPECT_CALL(*mockGlobalSched_, GetSchedulingQueue(_)).WillOnce(Return(resp));
 
         auto response = litebus::http::Get(urlGetSchedulingQueue, litebus::None());
         response.Wait();
         EXPECT_EQ(response.Get().retCode, litebus::http::ResponseCode::OK);
         auto body = response.Get().body;
-        auto infos = messages::QueryInstancesInfoResponse();
-
-        EXPECT_EQ(google::protobuf::util::JsonStringToMessage(body, &infos).ok(), true);
-        EXPECT_EQ(infos.instanceinfos_size(), 2);
+        auto jsonBody = nlohmann::json::parse(body);
+        EXPECT_EQ(jsonBody.at("count"), 2);
+        EXPECT_EQ(jsonBody.at("instanceInfos").size(), 2UL);
+        EXPECT_EQ(jsonBody.at("instanceInfos").at(0).at("extensions").at("scheduleQueueWaitDurationMs"), "100");
     }
 
     globalSchedDriver_->Stop();
     globalSchedDriver_->Await();
+}
+
+TEST_F(GlobalSchedDriverTest, NodeLocalSchedulingStatusRouter)
+{
+    global_scheduler::AgentApiRouter router;
+    router.InitUpdateLocalSchedulingStatusHandler(mockGlobalSched_);
+
+    auto handlers = router.GetHandlers();
+    ASSERT_NE(handlers, nullptr);
+    ASSERT_NE(handlers->find(NODE_LOCAL_SCHEDULING_STATUS_URL), handlers->end());
+
+    HttpRequest request;
+    request.method = "POST";
+    request.url.query["node_id"] = "node-a";
+
+    EXPECT_CALL(*mockGlobalSched_, UpdateLocalSchedulingStatus("node-a", true)).WillOnce(Return(Status::OK()));
+
+    auto response = handlers->at(NODE_LOCAL_SCHEDULING_STATUS_URL)(request);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().retCode, litebus::http::ResponseCode::OK);
+    EXPECT_THAT(response.Get().body, HasSubstr("evicting"));
 }
 
 // test query resource info

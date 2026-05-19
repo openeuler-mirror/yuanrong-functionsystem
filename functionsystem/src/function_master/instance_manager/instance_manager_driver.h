@@ -49,23 +49,26 @@ struct QueryInstancesPageRange {
 };
 
 inline bool IsTenantInstanceMatched(const resources::InstanceInfo &instance, const std::string &tenantID,
-                                    const std::string &instanceID, bool isSystemTenant)
+                                    const std::string &instanceID, const std::string &nodeID, bool isSystemTenant)
 {
     if (!isSystemTenant && instance.tenantid() != tenantID) {
         return false;
     }
-    return instanceID.empty() || instance.instanceid() == instanceID;
+    if (!instanceID.empty() && instance.instanceid() != instanceID) {
+        return false;
+    }
+    return nodeID.empty() || instance.functionproxyid() == nodeID;
 }
 
 inline std::vector<int> CollectSortedTenantInstanceIndexes(
     const google::protobuf::RepeatedPtrField<resources::InstanceInfo> &instances, const std::string &tenantID,
-    const std::string &instanceID, bool isSystemTenant)
+    const std::string &instanceID, const std::string &nodeID, bool isSystemTenant)
 {
     std::vector<int> matchedIndexes;
     matchedIndexes.reserve(static_cast<size_t>(instances.size()));
     for (int index = 0; index < instances.size(); ++index) {
         const auto &instance = instances.Get(index);
-        if (IsTenantInstanceMatched(instance, tenantID, instanceID, isSystemTenant)) {
+        if (IsTenantInstanceMatched(instance, tenantID, instanceID, nodeID, isSystemTenant)) {
             matchedIndexes.push_back(index);
         }
     }
@@ -285,6 +288,12 @@ public:
                 instanceID = instanceIt->second;
             }
 
+            std::string nodeID;
+            auto nodeIt = request.url.query.find("node_id");
+            if (nodeIt != request.url.query.end() && !nodeIt->second.empty()) {
+                nodeID = nodeIt->second;
+            }
+
             auto pagination = ParseQueryInstancesPagination(request.url.query);
             if (!pagination.error.empty()) {
                 YRLOG_ERROR("Invalid pagination parameter: {}", pagination.error);
@@ -312,11 +321,12 @@ public:
 
             // Capture tenantID, instanceID, isSystemTenant, and pagination for the lambda
             return litebus::Async(imActor->GetAID(), &InstanceManagerActor::QueryInstancesInfo, req)
-                .Then([tenantID, instanceID, isSystemTenant, pagination](
+                .Then([tenantID, instanceID, nodeID, isSystemTenant, pagination](
                           const messages::QueryInstancesInfoResponse &rsp)
                           -> litebus::Future<litebus::http::Response> {
                     auto matchedIndexes =
-                        CollectSortedTenantInstanceIndexes(rsp.instanceinfos(), tenantID, instanceID, isSystemTenant);
+                        CollectSortedTenantInstanceIndexes(rsp.instanceinfos(), tenantID, instanceID, nodeID,
+                                                           isSystemTenant);
                     auto totalCount = matchedIndexes.size();
                     auto range = GetQueryInstancesPageRange(static_cast<uint64_t>(totalCount), pagination);
 
@@ -352,6 +362,9 @@ public:
                     // Add instanceID to response if it was specified in request
                     if (!instanceID.empty()) {
                         responseJson["instanceID"] = instanceID;
+                    }
+                    if (!nodeID.empty()) {
+                        responseJson["nodeID"] = nodeID;
                     }
 
                     return JsonResponseOrInternalError(responseJson);

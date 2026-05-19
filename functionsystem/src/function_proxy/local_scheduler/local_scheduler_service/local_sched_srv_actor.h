@@ -31,10 +31,13 @@
 #include "common/resource_view/resource_view_mgr.h"
 #include "common/status/status.h"
 #include "common/utils/actor_driver.h"
-#include "local_scheduler/function_agent_manager/function_agent_mgr.h"
-#include "local_scheduler/instance_control/instance_ctrl.h"
+#include "common/utils/request_sync_helper.h"
 
 namespace functionsystem::local_scheduler {
+class FunctionAgentMgr;
+class InstanceCtrl;
+class SubscriptionMgr;
+
 const int32_t PING_TIME_OUT_MS = 6000;
 const uint32_t DEFAULT_REGISTER_CYCLE_MS = 1000;
 const int32_t UPDATE_RESOURCE_CYCLE_MS = 1000;     // ms
@@ -125,6 +128,11 @@ public:
      * @return status
      */
     litebus::Future<Status> NotifyWorkerStatus(const bool healthy);
+    litebus::Future<Status> UpdateSchedulingStatus(bool evicting);
+    void OnUpdateSchedulingStatus(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void SendUpdateSchedulingStatusResponse(const litebus::Future<Status> &status,
+                                            const litebus::AID &to,
+                                            const std::string &requestID);
 
     /**
      * receive forwarding schedule response from domain scheduler

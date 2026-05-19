@@ -80,6 +80,12 @@ litebus::Future<Status> LocalSchedMgr::EvictAgentOnLocal(const std::string &addr
     return litebus::Async(localSchedMgrActor_->GetAID(), &LocalSchedMgrActor::EvictAgentOnLocal, address, req);
 }
 
+litebus::Future<Status> LocalSchedMgr::UpdateSchedulingStatusOnLocal(const std::string &address, bool evicting)
+{
+    return litebus::Async(localSchedMgrActor_->GetAID(), &LocalSchedMgrActor::UpdateSchedulingStatusOnLocal, address,
+                          evicting);
+}
+
 void LocalSchedMgr::OnLocalAbnormal(const std::string &localID, const std::string &address)
 {
     litebus::Async(localSchedMgrActor_->GetAID(), &LocalSchedMgrActor::OnLocalAbnormal, localID, address);

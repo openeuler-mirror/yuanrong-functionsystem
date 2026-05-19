@@ -60,4 +60,28 @@ TEST_F(ScheduleRecorderTest, MultipleRecordScheduleErr)
     EXPECT_EQ(future.Get().IsOk(), true);
     recorder = nullptr;
 }
+
+TEST_F(ScheduleRecorderTest, RecordScheduleRequestAndQueryQueue)
+{
+    auto recorder = ScheduleRecorder::CreateScheduleRecorder();
+    auto request = std::make_shared<messages::ScheduleRequest>();
+    request->set_requestid("queue-request");
+    request->mutable_instance()->set_requestid("queue-request");
+    request->mutable_instance()->set_instanceid("instance-1");
+    recorder->RecordScheduleRequest(request);
+
+    auto future = recorder->QueryScheduleQueue();
+    ASSERT_AWAIT_READY(future);
+    const auto records = future.Get();
+    ASSERT_EQ(records.size(), 1U);
+    ASSERT_NE(records[0].request, nullptr);
+    EXPECT_EQ(records[0].request->requestid(), "queue-request");
+    EXPECT_GT(records[0].enqueueTimeMs, 0);
+
+    recorder->EraseScheduleRequest("queue-request");
+    future = recorder->QueryScheduleQueue();
+    ASSERT_AWAIT_READY(future);
+    EXPECT_TRUE(future.Get().empty());
+    recorder = nullptr;
+}
 }  // namespace functionsystem::test
