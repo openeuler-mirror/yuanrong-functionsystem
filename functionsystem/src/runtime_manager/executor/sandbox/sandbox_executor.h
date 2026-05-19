@@ -96,6 +96,13 @@ class SandboxExecutor : public Executor {
 public:
     static constexpr uint32_t kDefaultOrphanGracePeriodSec = 600;
 
+    enum class SandboxLifecycleStatus : int32_t {
+        CREATING = 1,
+        RUNNING = 2,
+        COMPLETED = 3,
+        ABNORMAL = 4,
+    };
+
     SandboxExecutor(const std::string &name, const litebus::AID &functionAgentAID,
                     const std::string &checkpointDir = {});
 
@@ -244,14 +251,30 @@ private:
     // ── Wait retry on sandboxd disconnection ─────────────────────────────────
     void DoWaitWithRetry(const std::string &sandboxID, const std::string &runtimeID, int retryCount);
 
+    void CollectSandboxStats(const std::string &runtimeID, const std::string &sandboxID);
+    void ScheduleSandboxStatsCollection(const std::string &runtimeID, const std::string &sandboxID);
+    litebus::Future<Status> OnSandboxStatsCollected(const std::string &runtimeID, const std::string &sandboxID,
+                                                    const Status &status,
+                                                    const runtime::v1::StatsResponse &response,
+                                                    std::chrono::steady_clock::time_point collectedAt);
+
     litebus::Future<Status> CleanupSandboxAfterMaxRetries(const std::string &runtimeID,
                                                           const std::string &sandboxID);
 
     litebus::Future<Status> OnWaitDone(
         const std::string &runtimeID, const runtime::v1::WaitResponse &response);
+
     static void StartSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request);
     static void StopSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request,
                                       const runtime::v1::StartResponse &response);
+
+    void ReportSandboxLifecycleStatus(const messages::RuntimeInstanceInfo &info, const std::string &runtimeID,
+                                      SandboxLifecycleStatus lifecycleStatus);
+    void ReportSandboxRequestedResources(const messages::RuntimeInstanceInfo &info, const std::string &runtimeID);
+    void ReportSandboxUsageMetrics(const messages::RuntimeInstanceInfo &info, const std::string &runtimeID,
+                                   const runtime::v1::StatsResponse &response,
+                                   std::chrono::steady_clock::time_point collectedAt);
+    void ClearSandboxMetricsState(const std::string &runtimeID);
 
     // ── Connectivity ──────────────────────────────────────────────────────────
 
@@ -315,6 +338,15 @@ private:
     // ── Reconciliation state ─────────────────────────────────────────────────
     uint32_t orphanGracePeriodSec_ = kDefaultOrphanGracePeriodSec;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> orphanFirstSeen_;
+
+    struct SandboxStatsSnapshot {
+        uint64_t cpuUsageNs = 0;
+        std::chrono::steady_clock::time_point collectedAt{};
+    };
+
+    std::unordered_map<std::string, SandboxStatsSnapshot> sandboxStatsSnapshots_;
+    std::unordered_set<std::string> sandboxStatsPollingRuntimes_;
+    std::unordered_map<std::string, SandboxLifecycleStatus> sandboxLifecycleStates_;
 };
 
 /**
