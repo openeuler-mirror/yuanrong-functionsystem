@@ -397,7 +397,7 @@ TEST_F(GlobalSchedDriverTest, QueryAgentCountRouter)
     globalSchedDriver_->Await();
 }
 
-resource_view::InstanceInfo GetInstanceInfo(std::string instanceId)
+resource_view::SchedulingQueueInfo GetSchedulingQueueInfo(std::string instanceId)
 {
     Resources resources;
     Resource resource_cpu = view_utils::GetCpuResource();
@@ -405,11 +405,12 @@ resource_view::InstanceInfo GetInstanceInfo(std::string instanceId)
     Resource resource_memory = view_utils::GetMemResource();
     (*resources.mutable_resources())["Memory"] = resource_memory;
 
-    InstanceInfo instanceInfo;
+    resource_view::SchedulingQueueInfo instanceInfo;
     instanceInfo.set_instanceid(instanceId);
     instanceInfo.set_requestid("requestIdIdId");
-    instanceInfo.set_parentid("parentidIdId");
     instanceInfo.mutable_resources()->CopyFrom(resources);
+    instanceInfo.set_enqueuetimems(1000);
+    instanceInfo.set_waitdurationms(100);
 
     return instanceInfo;
 }
@@ -433,12 +434,12 @@ TEST_F(GlobalSchedDriverTest, GetSchedulingQueue)
 
     // case2: query successful
     {
-        auto resp = messages::QueryInstancesInfoResponse();
+        auto resp = messages::QuerySchedulingQueueResponse();
         resp.set_requestid("requestIdIdId");
-        google::protobuf::RepeatedPtrField<resource_view::InstanceInfo> &instanceinfos = *resp.mutable_instanceinfos();
-        instanceinfos.Add(std::move(GetInstanceInfo("app-script-1-instanceid")));
-        instanceinfos.Add(std::move(GetInstanceInfo("app-script-2-instanceid")));
-        (*instanceinfos.Mutable(0)->mutable_extensions())["scheduleQueueWaitDurationMs"] = "100";
+        google::protobuf::RepeatedPtrField<resource_view::SchedulingQueueInfo> &instanceinfos =
+           *resp.mutable_instanceinfos();
+        instanceinfos.Add(std::move(GetSchedulingQueueInfo("app-script-1-instanceid")));
+        instanceinfos.Add(std::move(GetSchedulingQueueInfo("app-script-2-instanceid")));
         EXPECT_CALL(*mockGlobalSched_, GetSchedulingQueue(_)).WillOnce(Return(resp));
 
         auto response = litebus::http::Get(urlGetSchedulingQueue, litebus::None());
@@ -448,7 +449,10 @@ TEST_F(GlobalSchedDriverTest, GetSchedulingQueue)
         auto jsonBody = nlohmann::json::parse(body);
         EXPECT_EQ(jsonBody.at("count"), 2);
         EXPECT_EQ(jsonBody.at("instanceInfos").size(), 2UL);
-        EXPECT_EQ(jsonBody.at("instanceInfos").at(0).at("extensions").at("scheduleQueueWaitDurationMs"), "100");
+        EXPECT_EQ(jsonBody.at("instanceInfos").at(0).at("enqueueTimeMs"), "1000");
+        EXPECT_EQ(jsonBody.at("instanceInfos").at(0).at("waitDurationMs"), "100");
+        EXPECT_FALSE(jsonBody.at("instanceInfos").at(0).contains("extensions"));
+        EXPECT_FALSE(jsonBody.at("instanceInfos").at(0).contains("parentID"));
     }
 
     globalSchedDriver_->Stop();

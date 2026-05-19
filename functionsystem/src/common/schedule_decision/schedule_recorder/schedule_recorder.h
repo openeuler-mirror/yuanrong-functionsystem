@@ -23,13 +23,15 @@
 #include "litebus.hpp"
 
 #include "common/proto/pb/message_pb.h"
+#include "common/resource_view/resource_type.h"
 #include "common/status/status.h"
 
 namespace functionsystem::schedule_decision {
 struct ScheduleQueueRecord {
-    std::shared_ptr<messages::ScheduleRequest> request;
-    int64_t enqueueTimeMs{ 0 };
+    resource_view::SchedulingQueueInfo info;
 };
+
+resource_view::SchedulingQueueInfo BuildSchedulingQueueInfo(const messages::ScheduleRequest &request, int64_t enqueueTimeMs);
 
 class ScheduleRecorder {
 public:

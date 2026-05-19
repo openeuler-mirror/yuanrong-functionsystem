@@ -220,7 +220,12 @@ litebus::Future<std::vector<std::shared_ptr<messages::ScheduleRequest>>> Instanc
         std::vector<std::shared_ptr<messages::ScheduleRequest>> requests;
         requests.reserve(records.size());
         for (const auto &record : records) {
-            requests.emplace_back(record.request);
+            auto request = std::make_shared<messages::ScheduleRequest>();
+            request->set_requestid(record.info.requestid());
+            request->mutable_instance()->set_requestid(record.info.requestid());
+            request->mutable_instance()->set_instanceid(record.info.instanceid());
+            request->mutable_instance()->mutable_resources()->CopyFrom(record.info.resources());
+            requests.emplace_back(std::move(request));
         }
         return requests;
     });

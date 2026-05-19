@@ -84,13 +84,13 @@ void AgentApiRouter::InitGetSchedulingQueueHandler(const std::shared_ptr<GlobalS
         bool useJsonFormat = request.headers.find("Type") == request.headers.end()
                              || request.headers.find("Type")->second == JSON_FORMAT;
 
-        auto req = std::make_shared<messages::QueryInstancesInfoRequest>();
+        auto req = std::make_shared<messages::QuerySchedulingQueueRequest>();
         auto requestID = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
         req->set_requestid(requestID);
         YRLOG_INFO("{}|get scheduling queue", requestID);
 
         return globalSched->GetSchedulingQueue(req).Then(
-            [useJsonFormat](const messages::QueryInstancesInfoResponse &resp) -> litebus::Future<HttpResponse> {
+            [useJsonFormat](const messages::QuerySchedulingQueueResponse &resp) -> litebus::Future<HttpResponse> {
                 if (!useJsonFormat) {
                     return litebus::http::Ok(resp.SerializeAsString());
                 }

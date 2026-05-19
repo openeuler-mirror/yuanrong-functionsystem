@@ -63,8 +63,8 @@ public:
     virtual litebus::Future<messages::QueryAgentInfoResponse> QueryAgentInfo(
         const std::shared_ptr<messages::QueryAgentInfoRequest> &req);
 
-    virtual litebus::Future<messages::QueryInstancesInfoResponse> GetSchedulingQueue(
-        const std::shared_ptr<messages::QueryInstancesInfoRequest> &req);
+    virtual litebus::Future<messages::QuerySchedulingQueueResponse> GetSchedulingQueue(
+        const std::shared_ptr<messages::QuerySchedulingQueueRequest> &req);
 
     virtual litebus::Future<messages::QueryResourcesInfoResponse> QueryResourcesInfo(
         const std::shared_ptr<messages::QueryResourcesInfoRequest> &req);

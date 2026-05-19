@@ -14,8 +14,8 @@
 | `count` | number | 当前返回的排队实例数量，等于 `instanceInfos` 长度 |
 | `instanceInfos` | array | 排队中的实例信息 |
 | `instanceInfos[].resources` | object | 该实例等待的资源请求 |
-| `instanceInfos[].extensions.scheduleQueueEnqueueTimeMs` | string | 实例进入调度队列的 Unix 毫秒时间戳 |
-| `instanceInfos[].extensions.scheduleQueueWaitDurationMs` | string | 从入队到查询时刻的等待时长，单位毫秒 |
+| `instanceInfos[].enqueueTimeMs` | string | 实例进入调度队列的 Unix 毫秒时间戳 |
+| `instanceInfos[].waitDurationMs` | string | 从入队到查询时刻的等待时长，单位毫秒 |
 
 ### 示例
 
@@ -31,10 +31,8 @@ curl -s http://127.0.0.1:8080/global-scheduler/scheduling_queue | jq
       "instanceID": "req-a-instance",
       "requestID": "req-a",
       "resources": {},
-      "extensions": {
-        "scheduleQueueEnqueueTimeMs": "1715060000000",
-        "scheduleQueueWaitDurationMs": "183"
-      }
+      "enqueueTimeMs": "1715060000000",
+      "waitDurationMs": "183"
     }
   ]
 }

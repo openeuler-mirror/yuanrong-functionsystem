@@ -19,6 +19,16 @@
 #include "schedule_recorder_actor.h"
 namespace functionsystem::schedule_decision {
 
+resource_view::SchedulingQueueInfo BuildSchedulingQueueInfo(const messages::ScheduleRequest &request, int64_t enqueueTimeMs)
+{
+    resource_view::SchedulingQueueInfo info;
+    info.set_instanceid(request.instance().instanceid());
+    info.set_requestid(request.requestid());
+    info.mutable_resources()->CopyFrom(request.instance().resources());
+    info.set_enqueuetimems(enqueueTimeMs);
+    return info;
+}
+
 std::shared_ptr<ScheduleRecorder> ScheduleRecorder::CreateScheduleRecorder()
 {
     auto actor = std::make_shared<ScheduleRecorderActor>("ScheduleRecorderActor-"

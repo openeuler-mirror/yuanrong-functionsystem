@@ -806,7 +806,7 @@ std::vector<schedule_decision::ScheduleQueueRecord> DomainGroupCtrlActor::GetQue
     for (const auto &entry : groupScheduleCtx_) {
         const auto &ctx = entry.second;
         for (const auto &request : ctx->requests) {
-            records.push_back({ request, ctx->enqueueTimeMs });
+            records.push_back({ schedule_decision::BuildSchedulingQueueInfo(*request, ctx->enqueueTimeMs) });
         }
     }
     return records;

@@ -1004,7 +1004,7 @@ schedule_decision::ScheduleQueueRecord GetQueueRecord(const std::string &request
     request->set_requestid(requestID);
     request->mutable_instance()->set_requestid(requestID);
     request->mutable_instance()->set_instanceid(requestID + "-instance");
-    return { request, enqueueTimeMs };
+    return { schedule_decision::BuildSchedulingQueueInfo(*request, enqueueTimeMs) };
 }
 
 TEST_F(DomainSchedSrvTest, GetSchedulingQueue)
@@ -1018,12 +1018,15 @@ TEST_F(DomainSchedSrvTest, GetSchedulingQueue)
     EXPECT_CALL(*globalStub, MockResponseGetSchedulingQueue(_, _, _))
         .WillOnce(testing::DoAll(FutureArg<1>(&name), FutureArg<2>(&msg)));
 
-    auto instanceRequest = GetQueueRecord("instance-request", 1000);
-    recorder_->RecordScheduleRequest(instanceRequest.request);
+    auto instanceRequest = std::make_shared<messages::ScheduleRequest>();
+    instanceRequest->set_requestid("instance-request");
+    instanceRequest->mutable_instance()->set_requestid("instance-request");
+    instanceRequest->mutable_instance()->set_instanceid("instance-request-instance");
+    recorder_->RecordScheduleRequest(instanceRequest);
     std::vector<schedule_decision::ScheduleQueueRecord> groupRequest = { GetQueueRecord("group-request", 2000) };
     EXPECT_CALL(*mockGroupCtrl_, GetQueueRecords()).WillOnce(Return(AsyncReturn(groupRequest)));
 
-    auto req = std::make_shared<messages::QueryInstancesInfoRequest>();
+    auto req = std::make_shared<messages::QuerySchedulingQueueRequest>();
     std::string requestId = "requestIdIdId";
     req->set_requestid(requestId);
 
@@ -1031,13 +1034,13 @@ TEST_F(DomainSchedSrvTest, GetSchedulingQueue)
                    "GetSchedulingQueue", req->SerializeAsString());
 
     ASSERT_AWAIT_READY_FOR(msg, 1000);
-    messages::QueryInstancesInfoResponse rsp;
+    messages::QuerySchedulingQueueResponse rsp;
     EXPECT_TRUE(rsp.ParseFromString(msg.Get()));
     EXPECT_EQ(rsp.requestid(), requestId);
     ASSERT_EQ(rsp.instanceinfos_size(), 2);
     for (const auto &instanceInfo : rsp.instanceinfos()) {
-        EXPECT_TRUE(instanceInfo.extensions().contains("scheduleQueueEnqueueTimeMs"));
-        EXPECT_TRUE(instanceInfo.extensions().contains("scheduleQueueWaitDurationMs"));
+        EXPECT_GT(instanceInfo.enqueuetimems(), 0);
+        EXPECT_GE(instanceInfo.waitdurationms(), 0);
     }
 
     litebus::Terminate(globalStub->GetAID());

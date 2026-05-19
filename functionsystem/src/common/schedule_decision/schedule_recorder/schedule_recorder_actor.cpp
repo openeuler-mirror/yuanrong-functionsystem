@@ -64,7 +64,7 @@ void ScheduleRecorderActor::EraseScheduleErr(const std::string &requestID)
 void ScheduleRecorderActor::RecordScheduleRequest(const std::shared_ptr<messages::ScheduleRequest> &request)
 {
     ASSERT_IF_NULL(request);
-    queueRecords_[request->requestid()] = { std::make_shared<messages::ScheduleRequest>(*request), CurrentTimeMs() };
+    queueRecords_[request->requestid()] = { BuildSchedulingQueueInfo(*request, CurrentTimeMs()) };
 }
 
 void ScheduleRecorderActor::EraseScheduleRequest(const std::string &requestID)
@@ -80,7 +80,7 @@ std::vector<ScheduleQueueRecord> ScheduleRecorderActor::QueryScheduleQueue()
         records.emplace_back(entry.second);
     }
     std::sort(records.begin(), records.end(), [](const ScheduleQueueRecord &lhs, const ScheduleQueueRecord &rhs) {
-        return lhs.enqueueTimeMs < rhs.enqueueTimeMs;
+        return lhs.info.enqueuetimems() < rhs.info.enqueuetimems();
     });
     return records;
 }

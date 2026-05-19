@@ -31,9 +31,6 @@
 
 namespace functionsystem::domain_scheduler {
 namespace {
-constexpr char SCHEDULE_QUEUE_ENQUEUE_TIME_MS[] = "scheduleQueueEnqueueTimeMs";
-constexpr char SCHEDULE_QUEUE_WAIT_DURATION_MS[] = "scheduleQueueWaitDurationMs";
-
 int64_t CurrentTimeMs()
 {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -41,14 +38,11 @@ int64_t CurrentTimeMs()
         .count();
 }
 
-resource_view::InstanceInfo BuildQueueInstanceInfo(const schedule_decision::ScheduleQueueRecord &record)
+resource_view::SchedulingQueueInfo BuildQueueInstanceInfo(const schedule_decision::ScheduleQueueRecord &record)
 {
-    ASSERT_IF_NULL(record.request);
-    auto instanceInfo = record.request->instance();
+    auto instanceInfo = record.info;
     auto nowMs = CurrentTimeMs();
-    (*instanceInfo.mutable_extensions())[SCHEDULE_QUEUE_ENQUEUE_TIME_MS] = std::to_string(record.enqueueTimeMs);
-    (*instanceInfo.mutable_extensions())[SCHEDULE_QUEUE_WAIT_DURATION_MS] =
-        std::to_string(std::max<int64_t>(0, nowMs - record.enqueueTimeMs));
+    instanceInfo.set_waitdurationms(std::max<int64_t>(0, nowMs - record.info.enqueuetimems()));
     return instanceInfo;
 }
 }  // namespace
@@ -717,7 +711,7 @@ void DomainSchedSrvActor::QueryAgentInfo(const litebus::AID &from, std::string &
 
 void DomainSchedSrvActor::GetSchedulingQueue(const litebus::AID &from, std::string &&, std::string &&msg)
 {
-    auto req = std::make_shared<messages::QueryInstancesInfoRequest>();
+    auto req = std::make_shared<messages::QuerySchedulingQueueRequest>();
     if (!req->ParseFromString(msg)) {
         YRLOG_ERROR("invalid get scheduling queue request from({}), {}", std::string(from), msg);
         return;
@@ -743,7 +737,7 @@ litebus::Future<std::vector<schedule_decision::ScheduleQueueRecord>> DomainSched
             std::sort(requests.begin(), requests.end(),
                       [](const schedule_decision::ScheduleQueueRecord &lhs,
                          const schedule_decision::ScheduleQueueRecord &rhs) {
-                          return lhs.enqueueTimeMs < rhs.enqueueTimeMs;
+                          return lhs.info.enqueuetimems() < rhs.info.enqueuetimems();
                       });
             return requests;
         });
@@ -753,7 +747,7 @@ void DomainSchedSrvActor::GetSchedulingQueueCallBack(
     const litebus::AID &to, const std::string &requestID,
     const litebus::Future<std::vector<schedule_decision::ScheduleQueueRecord>> &future)
 {
-    messages::QueryInstancesInfoResponse rsp;
+    messages::QuerySchedulingQueueResponse rsp;
     rsp.set_requestid(requestID);
     ASSERT_FS(future.IsOK());
     auto scheduleRequests = future.Get();

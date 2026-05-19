@@ -216,8 +216,8 @@ litebus::Future<messages::QueryAgentInfoResponse> GlobalSched::QueryAgentInfo(
     return litebus::Async(globalSchedActor_->GetAID(), &GlobalSchedActor::QueryAgentInfo, req);
 }
 
-litebus::Future<messages::QueryInstancesInfoResponse> GlobalSched::GetSchedulingQueue(
-    const std::shared_ptr<messages::QueryInstancesInfoRequest> &req)
+litebus::Future<messages::QuerySchedulingQueueResponse> GlobalSched::GetSchedulingQueue(
+    const std::shared_ptr<messages::QuerySchedulingQueueRequest> &req)
 {
     ASSERT_IF_NULL(globalSchedActor_);
     return litebus::Async(globalSchedActor_->GetAID(), &GlobalSchedActor::GetSchedulingQueue, req);

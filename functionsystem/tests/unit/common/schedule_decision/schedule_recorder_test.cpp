@@ -74,9 +74,9 @@ TEST_F(ScheduleRecorderTest, RecordScheduleRequestAndQueryQueue)
     ASSERT_AWAIT_READY(future);
     const auto records = future.Get();
     ASSERT_EQ(records.size(), 1U);
-    ASSERT_NE(records[0].request, nullptr);
-    EXPECT_EQ(records[0].request->requestid(), "queue-request");
-    EXPECT_GT(records[0].enqueueTimeMs, 0);
+    EXPECT_EQ(records[0].info.requestid(), "queue-request");
+    EXPECT_EQ(records[0].info.instanceid(), "instance-1");
+    EXPECT_GT(records[0].info.enqueuetimems(), 0);
 
     recorder->EraseScheduleRequest("queue-request");
     future = recorder->QueryScheduleQueue();
