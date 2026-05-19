@@ -60,10 +60,12 @@ type CreateConfig struct {
 
 // MountConfig 对应 proto Mount 消息。
 type MountConfig struct {
-	Type    string
-	Source  string
-	Target  string
-	Options []string
+	Type     string
+	Target   string
+	Options  []string
+	HostPath string
+	S3       *S3Config
+	ImageURL string
 }
 
 // RootfsConfig 对应 proto RootfsConfig 消息。
@@ -80,6 +82,7 @@ type RootfsSrcType int
 const (
 	RootfsSrcS3    RootfsSrcType = 0
 	RootfsSrcImage RootfsSrcType = 1
+	RootfsSrcLocal RootfsSrcType = 2
 )
 
 // S3Config S3 存储配置。

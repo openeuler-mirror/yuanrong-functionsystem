@@ -62,6 +62,10 @@ const int32_t GROUP_RESUME_SIGNAL = 17;
 const int32_t INSTANCE_SNAPSHOT_SIGNAL = 18;
 // signal for instance snapstart (restore from snapshot)
 const int32_t INSTANCE_SNAPSTART_SIGNAL = 19;
+// checkpoint query/delete control-plane signals
+const int32_t LIST_CHECKPOINTS_BY_FUNCTION_KEY_SIGNAL = 20;
+const int32_t LIST_CHECKPOINTS_BY_TENANT_SIGNAL = 21;
+const int32_t DELETE_CHECKPOINT_SIGNAL = 22;
 
 inline std::string SignalToString(int32_t signal)
 {
@@ -84,7 +88,10 @@ inline std::string SignalToString(int32_t signal)
         { GROUP_SUSPEND_SIGNAL, "GROUP_SUSPEND_SIGNAL" },
         { GROUP_RESUME_SIGNAL, "GROUP_RESUME_SIGNAL" },
         { INSTANCE_SNAPSHOT_SIGNAL, "INSTANCE_SNAPSHOT_SIGNAL" },
-        { INSTANCE_SNAPSTART_SIGNAL, "INSTANCE_SNAPSTART_SIGNAL" }
+        { INSTANCE_SNAPSTART_SIGNAL, "INSTANCE_SNAPSTART_SIGNAL" },
+        { LIST_CHECKPOINTS_BY_FUNCTION_KEY_SIGNAL, "LIST_CHECKPOINTS_BY_FUNCTION_KEY_SIGNAL" },
+        { LIST_CHECKPOINTS_BY_TENANT_SIGNAL, "LIST_CHECKPOINTS_BY_TENANT_SIGNAL" },
+        { DELETE_CHECKPOINT_SIGNAL, "DELETE_CHECKPOINT_SIGNAL" }
     };
     return signalMap.find(signal) != signalMap.end() ? signalMap.at(signal) : "UnknownSignal";
 }

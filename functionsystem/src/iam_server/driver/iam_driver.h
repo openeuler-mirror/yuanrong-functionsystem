@@ -20,7 +20,9 @@
 #include "common/http/http_server.h"
 #include "common/utils/module_driver.h"
 #include "iam/iam_actor/iam_actor.h"
+#include "iam/internal_iam/casdoor_config.h"
 #include "iam/internal_iam/internal_iam.h"
+#include "iam/internal_iam/keycloak_config.h"
 
 namespace functionsystem::iamserver {
 
@@ -28,7 +30,12 @@ struct IAMStartParam {
     InternalIAM::Param internalIAMParam;
     std::string nodeID;
     std::string ip;
+    std::string localIp;     /* plaintext local listener IP, e.g. "127.0.0.1"; empty = disabled */
+    uint16_t localPort = 0;  /* plaintext local listener port; 0 = disabled */
     std::string metaStoreAddress;
+    std::string authProvider{ "keycloak" };  // "keycloak" or "casdoor"
+    KeycloakConfig keycloakConfig;           // Keycloak configuration
+    CasdoorConfig casdoorConfig;             // Casdoor configuration
 };
 
 class IAMDriver : public ModuleDriver {
@@ -49,5 +56,5 @@ private:
     std::shared_ptr<InternalIAM> internalIAM_;
     std::shared_ptr<IAMActor> iamActor_;
 };
-} // functionsystem::iamserver
-#endif // IAM_SERVER_DRIVER_IAM_DRIVER_H
+}  // namespace functionsystem::iamserver
+#endif  // IAM_SERVER_DRIVER_IAM_DRIVER_H

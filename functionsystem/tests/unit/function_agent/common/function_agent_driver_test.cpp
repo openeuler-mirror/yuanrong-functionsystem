@@ -77,9 +77,10 @@ public:
             "--runtime_home_dir=/tmp",
             "--runtime_logs_dir=/tmp",
             "--runtime_ld_library_path=/tmp",
+            "--checkpoint_dir=/tmp",
             R"(--log_config={"filepath": "/tmp/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
         };
-        flags->ParseFlags(10, argv, true);
+        flags->ParseFlags(11, argv, true);
         return flags;
     }
 };
@@ -133,6 +134,52 @@ TEST_F(FunctionAgentDriverTest, DriverTest)
         litebus::Await(aid);
         driver.Await();
     }
+}
+
+TEST_F(FunctionAgentDriverTest, MergeProcessMode_StartSuccess)
+{
+    auto param = CreateBasicStartParam();
+    param.enableMergeProcess = true;
+    param.runtimeManagerFlags = CreateRuntimeManagerFlags();
+
+    FunctionAgentDriver driver("test_node", param);
+    Status status = driver.Start();
+    EXPECT_EQ(status, Status::OK());
+
+    Status stopStatus = driver.Stop();
+    EXPECT_EQ(stopStatus, Status::OK());
+    driver.Await();
+}
+
+TEST_F(FunctionAgentDriverTest, MergeProcessMode_WithoutRuntimeManagerFlags)
+{
+    auto param = CreateBasicStartParam();
+    param.enableMergeProcess = true;
+    param.runtimeManagerFlags = nullptr;
+
+    FunctionAgentDriver driver("test_node", param);
+    Status status = driver.Start();
+    EXPECT_EQ(status, Status::OK());
+
+    driver.Stop();
+    driver.Await();
+}
+
+TEST_F(FunctionAgentDriverTest, MergeProcessModeGracefulShutdown)
+{
+    auto param = CreateBasicStartParam();
+    param.enableMergeProcess = true;
+    param.runtimeManagerFlags = CreateRuntimeManagerFlags();
+
+    FunctionAgentDriver driver("test_node", param);
+    ASSERT_EQ(driver.Start(), Status::OK());
+
+    driver.GracefulShutdown();
+    
+    Status stopStatus = driver.Stop();
+    EXPECT_EQ(stopStatus, Status::OK());
+
+    driver.Await();
 }
 
 TEST_F(FunctionAgentDriverTest, MergeProcessMode_StartSuccess)

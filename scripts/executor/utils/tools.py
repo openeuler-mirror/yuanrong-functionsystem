@@ -3,21 +3,13 @@
 import ctypes
 import importlib.metadata
 import os
-import sys
-import ctypes
-import argparse
 import platform
 import subprocess
-from typing import Tuple
-import importlib.metadata
+import sys
 from importlib.metadata import PackageNotFoundError
+from typing import Tuple
 
 # 请勿在此声明全局变量
-
-def parse_kv_args(string: str):
-    if '=' not in string:
-        raise argparse.ArgumentTypeError(f"参数必须为 key=value 格式")
-    return string.split('=', 1)
 
 
 def pipeline_env() -> dict:

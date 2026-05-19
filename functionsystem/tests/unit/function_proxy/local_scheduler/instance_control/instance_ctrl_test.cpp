@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <gtest/gtest.h>
+#include <nlohmann/json.hpp>
 
 #include <async/async.hpp>
 
@@ -21,6 +22,7 @@
 #include "common/constants/signal.h"
 #include "common/etcd_service/etcd_service_driver.h"
 #include "common/logs/logging.h"
+#include "common/metrics/metrics_adapter.h"
 #include "common/metadata/metadata.h"
 #include "common/proto/pb/message_pb.h"
 #include "common/proto/pb/posix_pb.h"
@@ -73,6 +75,25 @@ const RuntimeConfig runtimeConfig{
     .runtimeInitCallTimeoutMS = 3000,
     .runtimeShutdownTimeoutSeconds = 3,
 };
+
+const std::string InstanceCreateFailureAlarmExporterJsonStr = R"(
+{
+    "enabledMetrics": ["yr_instance_create_failure_alarm"],
+    "backends": [{
+        "immediatelyExport": {
+            "name": "Alarm",
+            "enable": true,
+            "exporters": [{
+                "aomAlarmExporter": {
+                    "enable": true,
+                    "ip": "127.0.0.1:8080/",
+                    "port": 9091
+                }
+            }]
+        }
+    }]
+}
+)";
 
 const TransitionResult NONE_RESULT = TransitionResult{ litebus::None(), InstanceInfo() };
 const TransitionResult NEW_RESULT = TransitionResult{ InstanceState::NEW, InstanceInfo() };
@@ -176,6 +197,11 @@ static resources::InstanceInfo GenParentInstanceInfo(const std::string &parentID
     return parentInfo;
 }
 
+static std::string GetMetricsFilesName(const std::string &backendName)
+{
+    return backendName + "-metrics.data";
+}
+
 class InstanceCtrlTest : public ::testing::Test {
 public:
     void SetUp() override
@@ -204,6 +230,7 @@ public:
         instanceCtrlConfig.schedulePlugins = "[plugin]";
         instanceCtrl_ = InstanceCtrl::Create(nodeID_, instanceCtrlConfig);
         instanceControlView_ = std::make_shared<MockInstanceControlView>("nodeID");
+        ON_CALL(*instanceControlView_, DelInstance).WillByDefault(Return(Status::OK()));
         instanceCtrl_->BindInstanceControlView(instanceControlView_);
         instanceCtrl_->Start(funcAgentMgr_, resourceViewMgr_, observer_);
         instanceCtrl_->BindFunctionAgentMgr(funcAgentMgr_);
@@ -215,7 +242,8 @@ public:
         instanceCtrl_->BindControlInterfaceClientManager(mockSharedClientManagerProxy_);
 
         instanceCtrlWithMockObserver_ = InstanceCtrl::Create("nodeID", instanceCtrlConfig);
-        mockObserver_ = std::make_shared<MockObserver>();
+        mockObserver_ = std::shared_ptr<MockObserver>(new MockObserver(), [](MockObserver *) {});
+        ::testing::Mock::AllowLeak(mockObserver_.get());
         instanceCtrlWithMockObserver_->BindInstanceControlView(instanceControlView_);
         instanceCtrlWithMockObserver_->Start(funcAgentMgr_, resourceViewMgr_, mockObserver_);
         instanceCtrlWithMockObserver_->BindControlInterfaceClientManager(mockSharedClientManagerProxy_);
@@ -237,6 +265,13 @@ public:
 
     void TearDown() override
     {
+        functionsystem::metrics::MetricsAdapter::GetInstance().GetMetricsContext().SetEnabledInstruments({});
+        functionsystem::metrics::MetricsAdapter::GetInstance().ClearEnabledInstruments();
+        functionsystem::metrics::MetricsAdapter::GetInstance().GetMetricsContext().SetAttr("component_name", "");
+        functionsystem::metrics::MetricsAdapter::GetInstance().GetMetricsContext().EraseAlarm(
+            "YuanrongInstanceCreateFailure00001-requestID_CreateInstanceClientTest");
+        functionsystem::metrics::MetricsAdapter::GetInstance().CleanMetrics();
+
         // clear meta info
         auto client = MetaStoreClient::Create({ .etcdAddress = metaStoreServerHost_ });
         ASSERT_TRUE(
@@ -865,6 +900,10 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForResourceNotEnough)
  */
 TEST_F(InstanceCtrlTest, CreateInstanceFailedForDeployInstanceFailed)
 {
+    functionsystem::metrics::MetricsAdapter::GetInstance().InitMetricsFromJson(
+        nlohmann::json::parse(InstanceCreateFailureAlarmExporterJsonStr), GetMetricsFilesName, {});
+    functionsystem::metrics::MetricsAdapter::GetInstance().SetContextAttr("component_name", "function_proxy");
+
     auto mockSharedClient = std::make_shared<MockSharedClient>();
     auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActorTest", "nodeID", instanceCtrlConfig);
     EXPECT_CALL(*mockSharedClientManagerProxy_, GetControlInterfacePosixClient(_))
@@ -922,6 +961,14 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForDeployInstanceFailed)
     });
     auto machine = instanceControlView->GetInstance("DesignatedInstanceID");
     ASSERT_AWAIT_TRUE([&]() { return machine->GetInstanceState() == InstanceState::FATAL; });
+
+    auto alarmInfoMap = functionsystem::metrics::MetricsAdapter::GetInstance().GetMetricsContext().GetAlarmInfoMap();
+    ASSERT_TRUE(alarmInfoMap.find("YuanrongInstanceCreateFailure00001-requestID") != alarmInfoMap.end());
+    const auto &alarmInfo = alarmInfoMap.at("YuanrongInstanceCreateFailure00001-requestID");
+    EXPECT_EQ(alarmInfo.alarmName, "yr_instance_create_failure_alarm");
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("stage")), "deploy");
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("resource_id")), "DesignatedInstanceID");
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("request_id")), "requestID");
 }
 
 /**
@@ -992,9 +1039,9 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForInitRuntimeFailed)
     litebus::Future<runtime::CallResponse> sendRet;
     runtime::CallResponse callRsp;
     callRsp.set_code(common::ERR_REQUEST_BETWEEN_RUNTIME_BUS);
-    auto baseMsg = "call runtime failed! client may already closed";
-    auto expectMsg = std::string(baseMsg) + " on nodeID";
-    callRsp.set_message(baseMsg);
+    std::string runtimeErrMsg = "call runtime failed! client may already closed";
+    auto expectMsg = runtimeErrMsg + " on nodeID";
+    callRsp.set_message(runtimeErrMsg);
     sendRet.SetValue(callRsp);
     EXPECT_CALL(*mockSharedClient, InitCallWrapper).WillOnce(Return(sendRet));
 
@@ -1018,6 +1065,13 @@ TEST_F(InstanceCtrlTest, CreateInstanceFailedForInitRuntimeFailed)
     ASSERT_AWAIT_TRUE([&]() { return scheduleReq->instance().instancestatus().code() == static_cast<int32_t>(InstanceState::FATAL); });
     auto machine = instanceControlView->GetInstance("DesignatedInstanceID");
     ASSERT_AWAIT_TRUE([&]() { return machine->GetInstanceState() == InstanceState::FATAL; });
+    ::testing::Mock::VerifyAndClearExpectations(observer.get());
+    ::testing::Mock::AllowLeak(observer.get());
+    instanceCtrl->Stop();
+    instanceCtrl->Await();
+    InstanceStateMachine::UnBindControlPlaneObserver();
+    instanceCtrl.reset();
+    observer.reset();
 }
 
 /**
@@ -1426,12 +1480,14 @@ TEST_F(InstanceCtrlTest, KillInstanceWithCreating)
     const std::string instanceID = "InstanceA";
     auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeN");
     auto &mockStateMachine = *stateMachine;
-
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillRepeatedly(Return(stateMachine));
     resources::InstanceInfo instance;
     instance.set_instanceid(instanceID);
     instance.set_requestid("request");
     instance.set_functionproxyid("nodeN");
     instance.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::CREATING));
+    auto readyInstance = instance;
+    readyInstance.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::EXITED));
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->CopyFrom(instance);
     auto instanceContext = std::make_shared<InstanceContext>(scheduleReq);
@@ -1440,8 +1496,6 @@ TEST_F(InstanceCtrlTest, KillInstanceWithCreating)
     EXPECT_CALL(mockStateMachine, GetInstanceContextCopy).WillRepeatedly(Return(instanceContext));
     EXPECT_CALL(mockStateMachine, GetInstanceInfo).WillRepeatedly(Return(instance));
     EXPECT_CALL(mockStateMachine, GetCancelFuture).WillRepeatedly(Return(litebus::Future<std::string>()));
-    // Exit now calls ForceDeleteInstance instead of TryExitInstance.
-    // ForceDeleteInstance registers a second AddStateChangeCallback for RUNNING/FATAL/EXITED.
     EXPECT_CALL(mockStateMachine, AddStateChangeCallback)
         .WillOnce(Invoke([instance](const std::unordered_set<InstanceState> &statesConcerned,
                                     const std::function<void(const resources::InstanceInfo &)> &callback,
@@ -1875,6 +1929,7 @@ TEST_F(InstanceCtrlTest, ForwardCustomSignalSuccess)
     auto mockInstanceCtrlActor =
         std::make_shared<MockInstanceCtrlActor>(mockInstanceCtrlActorName, proxyID1, instanceCtrlConfig);
     litebus::Spawn(mockInstanceCtrlActor);
+    ::testing::Mock::AllowLeak(mockInstanceCtrlActor.get());
 
     auto killReq = GenKillRequest(instanceID1, customSignal);
 
@@ -1906,6 +1961,7 @@ TEST_F(InstanceCtrlTest, ForwardCustomSignalSuccess)
 
     litebus::Terminate(mockInstanceCtrlActor->GetAID());
     litebus::Await(mockInstanceCtrlActor);
+    mockInstanceCtrlActor.reset();
 }
 
 TEST_F(InstanceCtrlTest, ForwardCustomSignalRequestDuplicate)
@@ -1930,6 +1986,7 @@ TEST_F(InstanceCtrlTest, ForwardCustomSignalRequestDuplicate)
     auto mockInstanceCtrlActor =
         std::make_shared<MockInstanceCtrlActor>(mockInstanceCtrlActorName, proxyID1, instanceCtrlConfig);
     litebus::Spawn(mockInstanceCtrlActor);
+    ::testing::Mock::AllowLeak(mockInstanceCtrlActor.get());
 
     auto promise = litebus::Promise<core_service::KillResponse>();
     instanceCtrlActor->forwardCustomSignalRequestIDs_.emplace(requestID,
@@ -1948,8 +2005,10 @@ TEST_F(InstanceCtrlTest, ForwardCustomSignalRequestDuplicate)
     ASSERT_AWAIT_READY(called->GetFuture());
     litebus::Terminate(mockInstanceCtrlActor->GetAID());
     litebus::Await(mockInstanceCtrlActor);
+    mockInstanceCtrlActor.reset();
     litebus::Terminate(instanceCtrlActor->GetAID());
     litebus::Await(instanceCtrlActor);
+    instanceCtrlActor.reset();
 }
 
 TEST_F(InstanceCtrlTest, SendForwardCustomSignalRequestDuplicate)
@@ -1984,6 +2043,7 @@ TEST_F(InstanceCtrlTest, SendForwardCustomSignalRequestDuplicate)
 
     litebus::Terminate(instanceCtrlActor->GetAID());
     litebus::Await(instanceCtrlActor);
+    instanceCtrlActor.reset();
 }
 
 /**
@@ -2003,6 +2063,7 @@ TEST_F(InstanceCtrlTest, ForwardCustomSignalFail)
     auto mockInstanceCtrlActor =
         std::make_shared<MockInstanceCtrlActor>(mockInstanceCtrlActorName, proxyID1, instanceCtrlConfig);
     litebus::Spawn(mockInstanceCtrlActor);
+    ::testing::Mock::AllowLeak(mockInstanceCtrlActor.get());
 
     auto killReq = GenKillRequest(instanceID1, customSignal);
 
@@ -2032,6 +2093,7 @@ TEST_F(InstanceCtrlTest, ForwardCustomSignalFail)
 
     litebus::Terminate(mockInstanceCtrlActor->GetAID());
     litebus::Await(mockInstanceCtrlActor);
+    mockInstanceCtrlActor.reset();
 }
 
 /**
@@ -2053,6 +2115,7 @@ TEST_F(InstanceCtrlTest, RetryForwardCustomSignalSucess)
     auto mockInstanceCtrlActor =
         std::make_shared<MockInstanceCtrlActor>(mockInstanceCtrlActorName, proxyID1, instanceCtrlConfig);
     litebus::Spawn(mockInstanceCtrlActor);
+    ::testing::Mock::AllowLeak(mockInstanceCtrlActor.get());
 
     auto killReq = GenKillRequest(instanceID1, customSignal);
 
@@ -2084,6 +2147,7 @@ TEST_F(InstanceCtrlTest, RetryForwardCustomSignalSucess)
 
     litebus::Terminate(mockInstanceCtrlActor->GetAID());
     litebus::Await(mockInstanceCtrlActor);
+    mockInstanceCtrlActor.reset();
 }
 
 /**
@@ -2104,6 +2168,7 @@ TEST_F(InstanceCtrlTest, RetryForwardCustomSignalFail)
     auto mockInstanceCtrlActor =
         std::make_shared<MockInstanceCtrlActor>(mockInstanceCtrlActorName, proxyID1, instanceCtrlConfig);
     litebus::Spawn(mockInstanceCtrlActor);
+    ::testing::Mock::AllowLeak(mockInstanceCtrlActor.get());
 
     auto killReq = GenKillRequest(instanceID1, customSignal);
 
@@ -2135,6 +2200,7 @@ TEST_F(InstanceCtrlTest, RetryForwardCustomSignalFail)
 
     litebus::Terminate(mockInstanceCtrlActor->GetAID());
     litebus::Await(mockInstanceCtrlActor);
+    mockInstanceCtrlActor.reset();
 }
 
 /**
@@ -2156,6 +2222,7 @@ TEST_F(InstanceCtrlTest, ProcessCustomSignalSuccess)
     auto mockInstanceCtrlActor =
         std::make_shared<MockInstanceCtrlActor>(mockInstanceCtrlActorName, proxyID1, instanceCtrlConfig);
     litebus::Spawn(mockInstanceCtrlActor);
+    ::testing::Mock::AllowLeak(mockInstanceCtrlActor.get());
 
     auto killReq = GenKillRequest(instanceID1, customSignal);
 
@@ -2201,6 +2268,7 @@ TEST_F(InstanceCtrlTest, ProcessCustomSignalSuccess)
 
     litebus::Terminate(mockInstanceCtrlActor->GetAID());
     litebus::Await(mockInstanceCtrlActor);
+    mockInstanceCtrlActor.reset();
 }
 
 TEST_F(InstanceCtrlTest, ProcessCustomSignalInstanceNotFound)
@@ -2208,6 +2276,7 @@ TEST_F(InstanceCtrlTest, ProcessCustomSignalInstanceNotFound)
     auto mockInstanceCtrlActor =
         std::make_shared<MockInstanceCtrlActor>(mockInstanceCtrlActorName, proxyID1, instanceCtrlConfig);
     litebus::Spawn(mockInstanceCtrlActor);
+    ::testing::Mock::AllowLeak(mockInstanceCtrlActor.get());
     auto killReq = GenKillRequest(instanceID1, customSignal);
     resource_view::InstanceInfo instanceInfo =
         GenInstanceInfo(instanceID1, "nodeID", runtimeID1, static_cast<int32_t>(InstanceState::RUNNING));
@@ -2236,6 +2305,7 @@ TEST_F(InstanceCtrlTest, ProcessCustomSignalInstanceNotFound)
     EXPECT_EQ(forwardKillResponse.code(), static_cast<int32_t>(common::ErrorCode::ERR_INSTANCE_NOT_FOUND));
     litebus::Terminate(mockInstanceCtrlActor->GetAID());
     litebus::Await(mockInstanceCtrlActor);
+    mockInstanceCtrlActor.reset();
 }
 
 /**
@@ -2394,6 +2464,10 @@ TEST_F(InstanceCtrlTest, RecoverTest)
 */
 TEST_F(InstanceCtrlTest, CreateInstanceClientTest)
 {
+    functionsystem::metrics::MetricsAdapter::GetInstance().InitMetricsFromJson(
+        nlohmann::json::parse(InstanceCreateFailureAlarmExporterJsonStr), GetMetricsFilesName, {});
+    functionsystem::metrics::MetricsAdapter::GetInstance().SetContextAttr("component_name", "function_proxy");
+
     // clientManager, funcAgentMgr, scheduler and observer stubs
     auto clientManager = std::make_shared<MockSharedClientManagerProxy>();
     litebus::Future<std::string> fut;
@@ -2504,6 +2578,19 @@ TEST_F(InstanceCtrlTest, CreateInstanceClientTest)
     ASSERT_AWAIT_READY_FOR(notifyCalled.GetFuture(), 60000);
     EXPECT_EQ(static_cast<StatusCode>(notifyCalled.GetFuture().Get().code()),
               StatusCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS);
+
+    auto alarmInfoMap = functionsystem::metrics::MetricsAdapter::GetInstance().GetMetricsContext().GetAlarmInfoMap();
+    ASSERT_TRUE(alarmInfoMap.find("YuanrongInstanceCreateFailure00001-requestID_CreateInstanceClientTest") !=
+                alarmInfoMap.end());
+    const auto &alarmInfo = alarmInfoMap.at("YuanrongInstanceCreateFailure00001-requestID_CreateInstanceClientTest");
+    EXPECT_EQ(alarmInfo.alarmName, "yr_instance_create_failure_alarm");
+    EXPECT_EQ(alarmInfo.cause, "unable to init runtime, because connect runtime failed and not received exit info of runtime");
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("resource_id")), "GeneratedInstanceID");
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("request_id")), requestID);
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("runtime_id")), runtimeIDA);
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("stage")), "check_readiness");
+    EXPECT_EQ(std::get<int64_t>(alarmInfo.customOptions.at("status_code")),
+              int64_t(StatusCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS));
 }
 
 TEST_F(InstanceCtrlTest, TransitionStateToSchedulingFailed)
@@ -5823,7 +5910,7 @@ TEST_F(InstanceCtrlTest, KillFatalInstance)
     future = instanceCtrlWithMockObserver_->Kill("src", killReq);
     ASSERT_AWAIT_READY(future);
     resp = future.Get();
-    EXPECT_EQ(static_cast<int>(resp.code()), static_cast<int>(StatusCode::ERR_INNER_SYSTEM_ERROR));
+    EXPECT_EQ(resp.code(), (int32_t)StatusCode::ERR_INNER_SYSTEM_ERROR);
 }
 
 /**

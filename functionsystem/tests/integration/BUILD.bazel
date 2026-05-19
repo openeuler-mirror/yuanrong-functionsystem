@@ -1,0 +1,49 @@
+load("@rules_cc//cc:defs.bzl", "cc_library", "cc_test")
+load("@yuanrong_functionsystem//bazel:yr.bzl", "COPTS")
+
+cc_library(
+    name = "future_test_helper",
+    hdrs = ["utils/future_test_helper.h"],
+    visibility = ["//visibility:public"],
+)
+
+cc_test(
+    name = "functionsystem_integration_test",
+    linkstatic = True,
+    srcs = glob(["**/*.cpp", "**/*.h"]),
+    copts = COPTS + [
+        "-Wno-error",
+        "-fvisibility=hidden",
+        "-Ifunctionsystem/src",
+        "-Ifunctionsystem/src/meta_store/server/src",
+        "-Ifunctionsystem/tests/integration",
+    ],
+    linkopts = [
+        "-Wl,--no-as-needed",
+        "-pthread",
+        "-lcap",
+        "-ldl",
+    ],
+    deps = [
+        "//common/logs:logs_sdk",
+        "//functionsystem/src/common:posix_pb",
+        "//functionsystem/src/common:register",
+        "//functionsystem/src/common:resource_view",
+        "//functionsystem/src/common:rpc",
+        "//functionsystem/src/common:status",
+        "//functionsystem/src/common:utils",
+        "//functionsystem/src/function_agent:function_agent_lib",
+        "//functionsystem/src/function_proxy:function_proxy_base_lib",
+        "//functionsystem/src/function_proxy/local_scheduler:local_scheduler_lib",
+        "//functionsystem/src/meta_store/client/cpp:meta_store_client",
+        "//functionsystem/src/meta_store/server:meta_store_lib",
+        "//functionsystem/src/runtime_manager:runtime_manager_lib",
+        "@com_github_grpc_grpc//:gpr",
+        "@com_github_grpc_grpc//:grpc++",
+        "@com_google_protobuf//:protobuf",
+        "@etcdapi//:etcdapi",
+        "@gtest//:gtest",
+        "@litebus//:litebus",
+        "@securec//:securec",
+    ],
+)

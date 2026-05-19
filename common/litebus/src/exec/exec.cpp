@@ -454,8 +454,7 @@ std::shared_ptr<Exec> Exec::CreateExec(const std::string &path, const std::vecto
 
 Try<PtyExecIO> PtyExecIO::Create(int rows, int cols)
 {
-    int master;
-    int slave;
+    int master, slave;
 
     // Set window size
     struct winsize ws;

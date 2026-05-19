@@ -32,6 +32,9 @@ struct LitebusConfig {
     char udpUrlAdv[LITEBUS_URL_MAX_LEN];
     int threadCount;
     int httpKmsgFlag;
+    /* New fields appended at the end to preserve ABI for existing positional initializers */
+    char tcpLocalUrl[LITEBUS_URL_MAX_LEN];     /* local plaintext listener, e.g. "tcp://127.0.0.1:port" */
+    char tcpLocalUrlAdv[LITEBUS_URL_MAX_LEN];  /* advertise address for local listener (diagnostics only) */
 };
 
 int LitebusInitializeC(const struct LitebusConfig *config);

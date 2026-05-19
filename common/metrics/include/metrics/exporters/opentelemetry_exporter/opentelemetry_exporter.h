@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#ifndef OPENTELEMETRY_EXPORTS_H
-#define OPENTELEMETRY_EXPORTS_H
+#pragma once
 
+#include "metrics/exporters/exporter.h"
 #include <string>
 #include <vector>
 #include <map>
@@ -25,7 +25,6 @@
 // OpenTelemetry headers
 #include "opentelemetry/exporters/otlp/otlp_http_metric_exporter.h"
 
-#include "metrics/exporters/exporter.h"
 
 namespace observability {
 namespace exporters {
@@ -66,4 +65,3 @@ private:
 } // namespace metrics
 } // namespace exporters
 } // namespace observability
-#endif // OPENTELEMETRY_EXPORTS_H

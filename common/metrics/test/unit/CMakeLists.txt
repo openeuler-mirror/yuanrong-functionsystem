@@ -23,6 +23,7 @@ target_link_libraries(
           observability-metrics-sdk
           observability-metrics-exporter-ostream
           observability-metrics-file-exporter
+          observability-metrics-opentelemetry-exporter
           observability-prometheus-push-exporter)
 
 target_include_directories(

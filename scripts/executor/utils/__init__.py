@@ -6,7 +6,6 @@ from .archive import archive_tar, extract_file, extract_tar, extract_zip
 from .files import copy2_skip_exists, copy2_when_modify
 from .process import exec_command, pipe_command, sync_command
 from .tools import (
-    parse_kv_args,
     auto_install_and_upgrade,
     check_package_metadata,
     compare_version,

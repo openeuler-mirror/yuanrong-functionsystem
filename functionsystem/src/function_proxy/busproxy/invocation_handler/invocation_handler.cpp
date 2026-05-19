@@ -42,6 +42,7 @@ std::shared_ptr<StreamingMessage> InvokeRequestToCallRequest(const std::string &
     *callRequest->mutable_returnobjectids() = std::move(*request->mutable_returnobjectids());
     callRequest->set_senderid(from);
     *callRequest->mutable_createoptions() = request->invokeoptions().customtag();
+    callRequest->set_bypass_datasystem(request->invokeoptions().bypass_datasystem());
     return retRequest;
 }
 

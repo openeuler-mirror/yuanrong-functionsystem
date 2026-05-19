@@ -16,27 +16,39 @@ set(src_name cjson)
 set(src_dir ${VENDOR_SRC_DIR}/${src_name})
 
 set(HISTORY_INSTALLLED "${EP_BUILD_DIR}/Install/${src_name}")
+set(INSTALL_DIR "${HISTORY_INSTALLLED}")
+set(json_CONFIG_FILE "${CMAKE_CURRENT_BINARY_DIR}/nlohmann_jsonConfig.cmake")
+file(WRITE "${json_CONFIG_FILE}"
+"if(NOT TARGET nlohmann_json::nlohmann_json)\n"
+"    add_library(nlohmann_json::nlohmann_json INTERFACE IMPORTED)\n"
+"    set_target_properties(nlohmann_json::nlohmann_json PROPERTIES\n"
+"        INTERFACE_INCLUDE_DIRECTORIES \"${INSTALL_DIR}/include\")\n"
+"endif()\n"
+"set(nlohmann_json_FOUND TRUE)\n"
+)
 if (NOT EXISTS ${HISTORY_INSTALLLED})
 EXTERNALPROJECT_ADD(${src_name}
         SOURCE_DIR ${src_dir}
+        INSTALL_DIR ${INSTALL_DIR}
         DOWNLOAD_COMMAND ""
-        CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
-                   -DJSON_BuildTests=OFF
-                   -DJSON_Install=ON
+        CONFIGURE_COMMAND ""
+        BUILD_COMMAND ""
+        INSTALL_COMMAND
+            ${CMAKE_COMMAND} -E make_directory <INSTALL_DIR>/include/nlohmann
+            COMMAND ${CMAKE_COMMAND} -E copy <SOURCE_DIR>/single_include/nlohmann/json.hpp <INSTALL_DIR>/include/nlohmann/json.hpp
+            COMMAND ${CMAKE_COMMAND} -E make_directory <INSTALL_DIR>/lib/cmake/nlohmann_json
+            COMMAND ${CMAKE_COMMAND} -E copy ${json_CONFIG_FILE} <INSTALL_DIR>/lib/cmake/nlohmann_json/nlohmann_jsonConfig.cmake
         )
 
 ExternalProject_Get_Property(${src_name} INSTALL_DIR)
 else()
 message(STATUS "${src_name} has already installed in ${HISTORY_INSTALLLED}")
 add_custom_target(${src_name})
-set(INSTALL_DIR "${HISTORY_INSTALLLED}")
 endif()
 
 message("install dir of ${src_name}: ${INSTALL_DIR}")
 
 set(json_INCLUDE_DIR ${INSTALL_DIR}/include)
-# cmake config dir for find_package(nlohmann_json): used by opentelemetry to avoid network download
-# nlohmann_json installs cmake config to share/cmake (not lib/cmake) per GNUInstallDirs on Linux
-set(json_CMAKE_DIR ${INSTALL_DIR}/share/cmake/nlohmann_json)
+set(json_CMAKE_DIR ${INSTALL_DIR}/lib/cmake/nlohmann_json)
 
 include_directories(${json_INCLUDE_DIR})

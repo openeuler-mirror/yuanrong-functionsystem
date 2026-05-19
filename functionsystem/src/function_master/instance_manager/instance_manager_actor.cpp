@@ -54,13 +54,13 @@ const uint64_t FATAL_INSTANCE_TIMEOUT = 3600; // 1 hour in seconds
  */
 static std::string ParseTenantIDFromInstanceKey(const std::string &instanceKey)
 {
-    static const std::string prefix = INSTANCE_PATH_PREFIX + "/";
-    if (instanceKey.empty() || instanceKey.size() <= prefix.size()) {
+    static const std::string PREFIX = INSTANCE_PATH_PREFIX + "/";
+    if (instanceKey.empty() || instanceKey.size() <= PREFIX.size()) {
         return "";
     }
 
     // Extract the part after the prefix
-    std::string remaining = instanceKey.substr(prefix.size());
+    std::string remaining = instanceKey.substr(PREFIX.size());
 
     // Split by "/" and get the first segment (tenantID)
     auto pos = remaining.find('/');
@@ -454,6 +454,19 @@ void InstanceManagerActor::OnInstancePut(const std::string &key,
     }
     business_->OnInstancePutForFamilyManagement(instance);
     member_->instID2Instance[instance->instanceid()] = std::make_pair(key, instance);
+
+    // Traefik route cache: maintain routes based on instance state changes
+    if (traefikRouteCache_) {
+        auto state = static_cast<InstanceState>(instance->instancestatus().code());
+        if (state == InstanceState::RUNNING) {
+            traefikRouteCache_->OnInstanceRunning(*instance);
+        } else if (state == InstanceState::FATAL ||
+                   state == InstanceState::EVICTED ||
+                   state == InstanceState::EXITED) {
+            traefikRouteCache_->OnInstanceExited(instance->instanceid());
+        }
+    }
+
     if (IsInstanceManagedByJob(instance)) {
         member_->jobID2InstanceIDs[instance->jobid()].emplace(instance->instanceid());
     }
@@ -497,6 +510,11 @@ void InstanceManagerActor::OnInstanceDelete(const std::string &key,
         Send(quotaMgrAID_, "OnInstanceExited", instance->SerializeAsString());
     }
     member_->instID2Instance.erase(instance->instanceid());
+
+    // Traefik route cache: remove routes when instance is deleted
+    if (traefikRouteCache_) {
+        traefikRouteCache_->OnInstanceExited(instance->instanceid());
+    }
 
     if (!instance->jobid().empty() &&
         member_->jobID2InstanceIDs.find(instance->jobid()) != member_->jobID2InstanceIDs.end()) {

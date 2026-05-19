@@ -86,6 +86,14 @@ public:
     void StartUpdateInstanceStatus(const std::shared_ptr<messages::UpdateInstanceStatusRequest> &req,
                                    const litebus::AID &to, const std::string &runtimeID, const int status);
 
+    litebus::Future<Status> SendInstanceStatus(const std::string &instanceID, const std::string &runtimeID,
+                                               const int status, const std::string &requestID) const;
+
+    litebus::Future<Status> NotifySandboxExit(const std::string &instanceID, const std::string &runtimeID,
+                                               int exitCode, const std::string &exitMessage,
+                                               const std::string &requestID) const;
+
+
 private:
     std::shared_ptr<HealthCheckActor> actor_;
 };

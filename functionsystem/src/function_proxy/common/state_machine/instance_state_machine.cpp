@@ -251,7 +251,7 @@ litebus::Future<TransitionResult> InstanceStateMachine::TransitionTo(const Trans
         if (auto iter = instanceInfo.createoptions().find(RELIABILITY_TYPE);
             (iter != instanceInfo.createoptions().end() && iter->second == "low")
             || context.newState == InstanceState::FATAL) {
-            YRLOG_WARN("{}|the {} is low  or instance state({}) is fatal, rm the init args", instanceInfo.requestid(),
+            YRLOG_WARN("{}|the {} is low or instance state({}) is fatal, rm the init args", instanceInfo.requestid(),
                 RELIABILITY_TYPE, static_cast<int32_t>(context.newState));
             instanceInfo.clear_args();
         }
@@ -294,8 +294,11 @@ litebus::Future<Status> InstanceStateMachine::DelInstance(const std::string &ins
         return instanceOpt_
             ->Delete(instancePutInfo, routePutInfo, debugInstPutInfo, instanceInfo.version(),
                      IsLowReliabilityInstance(instanceInfo))
-            .Then([key(keyPath), self(shared_from_this())](const OperateResult &result) {
+            .Then([key(keyPath), instanceID, self(shared_from_this())](const OperateResult &result) {
                 if (result.status.IsOk()) {
+                    if (controlPlaneObserver_ != nullptr) {
+                        controlPlaneObserver_->CancelWatchInstance(instanceID);
+                    }
                     return Status::OK();
                 }
                 YRLOG_ERROR("failed to delete key {} from metastore, errorCode: {}, error: {}", key,

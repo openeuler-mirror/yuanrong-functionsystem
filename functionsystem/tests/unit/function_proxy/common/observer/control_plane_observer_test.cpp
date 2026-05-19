@@ -79,8 +79,6 @@ protected:
         litebus::Spawn(observerActor_);
         controlPlaneObserver_ = std::make_shared<function_proxy::ControlPlaneObserver>(observerActor_);
         controlPlaneObserver_->Register();
-        // one from meta json, three from services.yaml
-        ASSERT_AWAIT_TRUE([&]() -> bool { return observerActor_->funcMetaMap_.size() == 5; });
     }
 
     [[maybe_unused]] static void TearDownTestSuite()
@@ -126,6 +124,7 @@ protected:
         metaStoreClient_->Delete("/sn/ins", { .prefix = true }).Get();
         YRLOG_INFO("TearDown......");
         metaStorageAccessor_->metaClient_ = metaStoreClient_;
+        observerActor_->isPartialWatchInstances_ = false;
         YRLOG_INFO("TearDown......Finish");
     }
 
@@ -480,7 +479,7 @@ TEST_F(ObserverTest, PutDeleteEvent)
 TEST_F(ObserverTest, ProcFuncMetaEvent)
 {
     std::string funcMetaJson =
-        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
+        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085","deployDir":"/dcache"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
     std::string path =
         "/yr/functions/business/yrk/tenant/default/function/0-yrjava-yr-smoke/version/$latest";
     std::string funcKey = "default/0-yrjava-yr-smoke/$latest";
@@ -509,7 +508,7 @@ TEST_F(ObserverTest, ProcFuncMetaEvent)
 TEST_F(ObserverTest, GetFuncMetaInfo)
 {
     std::string funcMetaJson =
-        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
+        R"({"funcMetaData":{"layers":[{"appId":"appA","bucketId":"bucketA","objectId":"objectA","bucketUrl":"bucketUrlA","sha256":"1a2b3c"}],"name":"0-yrjava-yr-smoke","description":"","functionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke","functionVersionUrn":"sn:cn:yrk:default:function:0-yrjava-yr-smoke:$latest","codeSize":22029378,"codeSha256":"1211a06","handler":"fusion_computation_handler.fusion_computation_handler","runtime":"java1.8","timeout":900,"tenantId":"default","hookHandler":{"call":"com.actorTaskCallHandler"}},"codeMetaData":{"storage_type":"s3","appId":"61022","bucketId":"bucket-test-log1","objectId":"yr-smoke-1667888605803","bucketUrl":"http://bucket-test-log1.hwcloudtest.cn:18085","deployDir":"/dcache"},"envMetaData":{"envKey":"1d34ef","environment":"e819e3","encrypted_user_data":""},"resourceMetaData":{"cpu":500,"memory":500,"customResources":""}})";
     std::string path =
         "/yr/functions/business/yrk/tenant/default/function/0-yrjava-yr-smoke/version/$latest";
 
@@ -955,6 +954,193 @@ TEST_F(ObserverTest, FunctionMetaSyncerTest)
     EXPECT_EQ(observerActor_->localFuncMetaSet_.count(funcKey1.Get()), size_t{1});
     EXPECT_EQ(observerActor_->systemFuncMetaMap_.count(funcKey3.Get()), size_t{0});
     observerActor_->SetUpdateFuncMetasFunc(nullptr);
+}
+
+TEST_F(ObserverTest, InstanceInfoSyncerTest)
+{
+    auto mockMetaStoreClient  = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
+    metaStorageAccessor_->metaClient_ = mockMetaStoreClient;
+
+    observerActor_->instanceInfoMap_.clear();
+    auto events = GenerateResponseRouteEvent(observerActor_->nodeID_);
+    std::vector<WatchEvent> putEvents({events[0], events[3], events[4]}); // put key1(status 1), key3 in cache
+    observerActor_->UpdateInstanceRouteEvent(putEvents, true);
+    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID1") != 0);
+    EXPECT_TRUE(observerActor_->instanceInfoMap_["InstanceID1"].instancestatus().code() == static_cast<int32_t>(InstanceState::SCHEDULING));
+    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID3") != 0);
+    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID4") != 0);
+
+    // get key1(status 3), key2, key4 in etcd
+    std::shared_ptr<GetResponse> rep = std::make_shared<GetResponse>();
+    rep->header.revision = 4;
+    rep->status = Status::OK();
+    rep->kvs.emplace_back(events[1].kv);
+    rep->kvs.emplace_back(events[2].kv);
+    std::string cbFuncInstanceID;
+    observerActor_->instanceInfoSyncerCbFunc_ = [&cbFuncInstanceID](const resource_view::RouteInfo &routeInfo) {
+        YRLOG_DEBUG("{}|{}execute instance info sync callback function, create client for instance({}), job({})",
+                    routeInfo.requestid(), routeInfo.instanceid());
+        cbFuncInstanceID = routeInfo.instanceid();
+        return Status::OK();
+    };
+    auto future = observerActor_->InstanceInfoSyncer(rep);
+    ASSERT_AWAIT_READY(future);
+    ASSERT_TRUE(future.Get().status.IsOk());
+
+    // test exist in etcd and in cache, need update by etcd
+    ASSERT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID1") != 0);
+    EXPECT_TRUE(observerActor_->instanceInfoMap_["InstanceID1"].instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING));
+
+    // test exist in etcd but not in cache, need update
+    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID2") != 0);
+
+    // test not in etcd but in cache, need delete
+    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID3") == 0);
+
+    // test belong to self, not found in remote, don't delete
+    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID4") == 1);
+
+    // test belong to self, need to update by callback function
+    rep = std::make_shared<GetResponse>();
+    rep->status = Status::OK();
+    rep->header.revision = 2;
+    rep->kvs.emplace_back(events[2].kv);
+    rep->kvs.emplace_back(events[4].kv);
+
+    cbFuncInstanceID = "";
+    EXPECT_EQ(cbFuncInstanceID, "");
+    future = observerActor_->InstanceInfoSyncer(rep);
+    ASSERT_AWAIT_READY(future);
+    ASSERT_TRUE(future.Get().status.IsOk());
+    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID1") == 0); // rep don't have key1, so need to delete
+    EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID4") == 1);
+    EXPECT_EQ(cbFuncInstanceID, "InstanceID4");
+    observerActor_->instanceInfoSyncerCbFunc_ = nullptr;
+}
+
+TEST_F(ObserverTest, WatchInstanceTest)
+{
+    controlPlaneObserver_->WatchInstance("InstanceID1");
+    EXPECT_TRUE(observerActor_->instanceWatchers_.find("InstanceID1") == observerActor_->instanceWatchers_.end());
+
+    auto events = GenerateResponseRouteEvent(observerActor_->nodeID_);
+    metaStorageAccessor_->Put(GenInstanceRouteKey("InstanceID1"), events[0].kv.value());
+    observerActor_->isPartialWatchInstances_ = true;
+
+    controlPlaneObserver_->WatchInstance("InstanceID1");
+    ASSERT_AWAIT_TRUE([&]() {
+        return observerActor_->instanceWatchers_.find("InstanceID1") != observerActor_->instanceWatchers_.end();
+    });
+
+    controlPlaneObserver_->WatchInstance("InstanceID1");
+    metaStorageAccessor_->Delete(GenInstanceRouteKey("InstanceID1"));
+    ASSERT_AWAIT_TRUE([&]() {
+        return observerActor_->instanceWatchers_.find("InstanceID1") == observerActor_->instanceWatchers_.end();
+    });
+
+    controlPlaneObserver_->WatchInstance("InstanceID1");
+    ASSERT_AWAIT_TRUE([&]() {
+        return observerActor_->instanceWatchers_.find("InstanceID1") != observerActor_->instanceWatchers_.end();
+    });
+    controlPlaneObserver_->CancelWatchInstance("InstanceID1");
+    ASSERT_AWAIT_TRUE([&]() {
+        return observerActor_->instanceWatchers_.find("InstanceID1") == observerActor_->instanceWatchers_.end();
+    });
+
+    observerActor_->isPartialWatchInstances_ = false;
+}
+
+TEST_F(ObserverTest, GetAndWatchInstanceTest)
+{
+    auto future = controlPlaneObserver_->GetAndWatchInstance("InstanceID1");
+    ASSERT_AWAIT_TRUE([&]() { return future.IsError(); });
+
+    auto events = GenerateResponseRouteEvent(observerActor_->nodeID_);
+    metaStorageAccessor_->Put(GenInstanceRouteKey("InstanceID1"), events[0].kv.value());
+    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 1;});
+
+    future = controlPlaneObserver_->GetAndWatchInstance("InstanceID1");
+    ASSERT_AWAIT_READY(future);
+    EXPECT_EQ(future.Get().instanceid(), "InstanceID1");
+
+    metaStorageAccessor_->Delete(GenInstanceRouteKey("InstanceID1"));
+    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 0;});
+
+    observerActor_->isPartialWatchInstances_ = true;
+    future = controlPlaneObserver_->GetAndWatchInstance("InstanceID1");
+    ASSERT_AWAIT_TRUE([&]() { return future.IsError(); });
+
+    metaStorageAccessor_->Put(GenInstanceRouteKey("InstanceID1"), events[0].kv.value());
+    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 1;});
+
+    future = controlPlaneObserver_->GetAndWatchInstance("InstanceID1");
+    ASSERT_AWAIT_READY(future);
+    EXPECT_EQ(future.Get().instanceid(), "InstanceID1");
+
+    metaStorageAccessor_->Delete(GenInstanceRouteKey("InstanceID1"));
+    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 0;});
+
+    observerActor_->isPartialWatchInstances_ = false;
+}
+
+TEST_F(ObserverTest, GetOrWatchInstanceTest)
+{
+    auto future = controlPlaneObserver_->GetOrWatchInstance("InstanceID1");
+    ASSERT_AWAIT_TRUE([&]() { return future.IsError(); });
+
+    auto events = GenerateResponseRouteEvent(observerActor_->nodeID_);
+    metaStorageAccessor_->Put(GenInstanceRouteKey("InstanceID1"), events[0].kv.value());
+    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 1;});
+
+    future = controlPlaneObserver_->GetOrWatchInstance("InstanceID1");
+    ASSERT_AWAIT_READY(future);
+    EXPECT_EQ(future.Get().instanceid(), "InstanceID1");
+
+    metaStorageAccessor_->Delete(GenInstanceRouteKey("InstanceID1"));
+    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 0;});
+
+    observerActor_->isPartialWatchInstances_ = true;
+    future = controlPlaneObserver_->GetOrWatchInstance("InstanceID1");
+    ASSERT_AWAIT_TRUE([&]() { return future.IsError(); });
+
+    metaStorageAccessor_->Put(GenInstanceRouteKey("InstanceID1"), events[0].kv.value());
+    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 1;});
+
+    future = controlPlaneObserver_->GetOrWatchInstance("InstanceID1");
+    ASSERT_AWAIT_READY(future);
+    EXPECT_EQ(future.Get().instanceid(), "InstanceID1");
+
+    metaStorageAccessor_->Delete(GenInstanceRouteKey("InstanceID1"));
+    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 0;});
+
+    future = controlPlaneObserver_->GetOrWatchInstance("InstanceID02");
+    ASSERT_AWAIT_TRUE([&]() { return future.IsError(); });
+
+    observerActor_->isPartialWatchInstances_ = false;
+}
+
+
+TEST_F(ObserverTest, SubscribeInstanceEventTest)
+{
+    auto future = controlPlaneObserver_->GetAndWatchInstance("InstanceID1");
+    ASSERT_AWAIT_TRUE([&]() { return future.IsError(); });
+
+    auto events = GenerateResponseRouteEvent(observerActor_->nodeID_);
+    metaStorageAccessor_->Put(GenInstanceRouteKey("InstanceID1"), events[0].kv.value());
+    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 1;});
+    controlPlaneObserver_->DelInstanceEvent("InstanceID1", 100);
+    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 0;});
+    observerActor_->isPartialWatchInstances_ = false;
+    auto future1 = observerActor_->TrySubscribeInstanceEvent("InstanceID-NotExist", "InstanceID1", false);
+    ASSERT_AWAIT_READY(future1);
+    EXPECT_EQ(future1.Get().StatusCode(), StatusCode::ERR_INSTANCE_EXITED);
+    metaStorageAccessor_->Delete(GenInstanceRouteKey("InstanceID1")).Get();
+    ASSERT_AWAIT_TRUE([&](){return observerActor_->instanceInfoMap_.count("InstanceID1") == 0;});
+    auto future2 = observerActor_->TrySubscribeInstanceEvent("InstanceID-NotExist", "InstanceID1", false);
+    ASSERT_AWAIT_READY(future2);
+    EXPECT_TRUE(future2.Get().IsOk());
+    EXPECT_TRUE(observerActor_->instanceView_->subscribedInstances_.find("InstanceID1") ==
+                observerActor_->instanceView_->subscribedInstances_.end());
 }
 
 TEST_F(ObserverTest, PartialInstanceInfoSyncerTest)

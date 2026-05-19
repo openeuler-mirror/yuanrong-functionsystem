@@ -72,6 +72,8 @@ public:
 
     MOCK_METHOD(void, SetUpdateFuncMetasFunc,
                 (const function_proxy::UpdateFuncMetasFunc &updateFuncMetasFunc), (override));
+    MOCK_METHOD(void, SetTrafficReportCbFunc,
+                (const function_proxy::TrafficReportCbFunc &trafficReportCbFunc), (override));
 
     MOCK_METHOD(void, SetTrafficReportCbFunc,
                 (const function_proxy::TrafficReportCbFunc &trafficReportCbFunc), (override));

@@ -356,6 +356,11 @@ public:
         return runtimeHomeDir_;
     }
 
+    const std::string &GetCheckpointDir() const
+    {
+        return checkpointDir_;
+    }
+
     const std::string &GetNodeJsEntryPath() const
     {
         return nodeJsEntryPath_;
@@ -473,6 +478,7 @@ protected:
     int oomKillControlLimit_ = 0; // MB
     int oomConsecutiveDetectionCount_ = 3;
     std::string runtimeHomeDir_;
+    std::string checkpointDir_;
     std::string nodeJsEntryPath_;
     std::string resourceLabelPath_;
     std::string npuDeviceInfoPath_;

@@ -15,9 +15,7 @@
  */
 
 #include "metrics/exporters/opentelemetry_exporter/opentelemetry_exporter.h"
-#include <iostream>
-#include <fstream>
-#include <mutex>
+#include "metrics/exporters/opentelemetry_exporter/attribute_utils.h"
 #include <nlohmann/json.hpp>
 #include "opentelemetry/exporters/otlp/otlp_http_metric_exporter.h"
 #include "opentelemetry/sdk/metrics/data/metric_data.h"
@@ -25,6 +23,9 @@
 #include "opentelemetry/sdk/resource/resource.h"
 #include "opentelemetry/sdk/instrumentationscope/instrumentation_scope.h"
 #include "opentelemetry/sdk/common/global_log_handler.h"
+#include <iostream>
+#include <fstream>
+#include <mutex>
 
 
 namespace observability {
@@ -127,8 +128,8 @@ ExportResult OpenTelemetryExporter::Export(
         for (const auto& point : metric.pointData) {
             opentelemetry::sdk::metrics::PointDataAttributes otel_point;
 
-            // Convert labels to OpenTelemetry OrderedAttributeMap
-            for (const auto& [key, value] : point.labels) {
+            const auto attributes = BuildPointAttributes(metric.instrumentDescriptor, point.labels);
+            for (const auto& [key, value] : attributes) {
                 otel_point.attributes[key] = value;
             }
 

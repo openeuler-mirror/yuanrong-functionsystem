@@ -133,6 +133,7 @@ Flags::Flags()
             "observability agent's grpc port, default is 4317", DEFAULT_OBSERVABILITY_AGENT_GRPC_PORT);
     AddFlag(&Flags::observabilityPrometheusPort_, "observability_prometheus_port",
             "observability prometheus port, default is 9392", DEFAULT_OBSERVABILITY_PROMETHEUS_PORT);
+    AddFlag(&Flags::enableTrace_, "enable_trace", "for trace enable, example: false", false);
     AddFlag(&Flags::enableMergeProcess_, "enable_merge_process",
             "enable function_proxy, function_agent and runtime_manager merge in the same process", false);
     AddFlag(&Flags::isPseudoDataPlane_, "pseudo_data_plane",
@@ -150,6 +151,8 @@ Flags::Flags()
             "whether disk usage monitor force delete pod", true);
     AddFlag(&Flags::unRegisterWhileStop_, "unregister_while_stop",
             "if true, all instance & agent would be evicted while function-proxy receive SIGTERM/SIGINT", false);
+    AddFlag(&Flags::enableDirectRouting_, "enable_direct_routing",
+            "enable direct routing read path with LRU cache and on-demand route query", false);
     AddElectionFlags();
     AddDSFlags();
     AddRuntimeFlags();

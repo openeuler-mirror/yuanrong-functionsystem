@@ -38,6 +38,17 @@ namespace functionsystem {
 
 static const int WRITE_BUFFER_SIZE = 4096;
 
+std::vector<std::string> ExecSessionActor::BuildExecBaseArgv()
+{
+    // If the container ID carries a "sbox" prefix (e.g. "sbox-<id>"), use sbox exec;
+    // otherwise fall back to docker exec.
+    if (containerId_.rfind("sbox", 0) == 0) {
+        return {"sbox", "exec"};
+    }
+    return {"docker", "exec", "-i"};
+}
+
+
 std::string ExecSessionActor::GenerateSessionId()
 {
     static std::random_device rd;
@@ -116,7 +127,8 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
     rows_ = rows;
     cols_ = cols;
 
-    std::vector<std::string> argv = { "docker", "exec", "-i" };
+    // Build container exec command (sbox exec or docker exec depending on availability)
+    std::vector<std::string> argv = BuildExecBaseArgv();
 
     for (const auto &[key, value] : env) {
         argv.push_back("-e");
@@ -129,7 +141,7 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
     argv.push_back(containerId_);
     argv.insert(argv.end(), command_.begin(), command_.end());
 
-    YRLOG_INFO("Starting docker exec, sessionId: {}, container: {}", sessionId_, containerId);
+    YRLOG_INFO("Starting container exec ({}), sessionId: {}, container: {}", argv[0], sessionId_, containerId);
 
     if (tty_) {
         auto ptyResult = litebus::PtyExecIO::Create(rows_, cols_);
@@ -155,15 +167,16 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
         };
 
         exec_ = litebus::Exec::CreateExec(
-            "docker", argv, litebus::None(),
+            argv[0], argv, litebus::None(),
             *ptyIO_->stdIn, *ptyIO_->stdOut, *ptyIO_->stdErr,
             childInitHooks, {}, true);
         // Exec::CreateExec closes the slave fd in the parent process (via CloseFD after fork).
         // Reset slaveFd to -1 so PtyExecIO::Close() does not double-close a possibly reused fd.
         ptyIO_->slaveFd = -1;
+
     } else {
         exec_ = litebus::Exec::CreateExec(
-            "docker", argv, litebus::None(),
+            argv[0], argv, litebus::None(),
             litebus::ExecIO::CreatePipeIO(),
             litebus::ExecIO::CreatePipeIO(),
             litebus::ExecIO::CreatePipeIO(),
@@ -243,6 +256,16 @@ void ExecSessionActor::DoResize(int rows, int cols)
 
     rows_ = rows;
     cols_ = cols;
+
+    // TIOCSCTTY may not have been established correctly, so the PTY TIOCSWINSZ
+    // might not deliver SIGWINCH to the sbox exec process automatically.
+    // Explicitly send SIGWINCH to ensure sbox exec picks up the new window size.
+    if (exec_) {
+        int pid = exec_->GetPid();
+        if (pid > 0) {
+            kill(pid, SIGWINCH);
+        }
+    }
 }
 
 void ExecSessionActor::DoClose()
@@ -290,6 +313,15 @@ void ExecSessionActor::Cleanup()
     stderrFd_ = -1;
 
     YRLOG_INFO("Cleanup session, sessionId: {}, outFd: {}, errFd: {}", sessionId_, outFd, errFd);
+
+    // When called from the destructor the last shared_ptr has already been released,
+    // so shared_from_this() would throw std::bad_weak_ptr.  Fall back to a direct,
+    // synchronous cleanup that does not need to extend the object's lifetime.
+    if (weak_from_this().expired()) {
+        DoCleanupAfterUnregister();
+        return;
+    }
+
 
     // Use shared_from_this() to keep the actor alive until the callback fires,
     // even if litebus::Terminate+Await has already completed on the gRPC handler thread.

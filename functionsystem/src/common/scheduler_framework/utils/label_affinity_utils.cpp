@@ -18,6 +18,7 @@
 #include <cmath>
 #include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
+#include <cmath>
 
 namespace functionsystem {
 using namespace schedule_framework;

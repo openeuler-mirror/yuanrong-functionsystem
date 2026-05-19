@@ -168,6 +168,7 @@ public:
      * @param events: instanceRoute event info
      */
     void UpdateInstanceRouteEvent(const std::vector<WatchEvent> &events, bool synced);
+    void OnNodeAbnormalEvent(const std::vector<WatchEvent> &events);
 
     /**
      * callback of update function meta event
@@ -285,6 +286,8 @@ public:
     void NotifyDeleteTenantInstance(const TenantEvent &event);
 
     void OnTenantInstanceEvent(const std::string &instanceID, const resource_view::InstanceInfo &instanceInfo);
+
+    litebus::Future<std::shared_ptr<resources::RouteInfo>> QueryInstanceRoute(const std::string &instanceID);
 
     litebus::Future<resource_view::InstanceInfo> GetInstanceRouteInfo(const std::string &instanceID);
 

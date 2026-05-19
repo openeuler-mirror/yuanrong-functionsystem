@@ -41,6 +41,7 @@
 #include "common/utils/ssl_config.h"
 #include "common/utils/version.h"
 #include "common/trace/trace_manager.h"
+#include "flags/flags.h"
 #include "global_scheduler/global_sched.h"
 #include "global_scheduler/global_sched_driver.h"
 #include "group_manager.h"
@@ -382,6 +383,12 @@ bool InitInstanceManagerDriver(const functionmaster::Flags &flags, const std::sh
     metaStoreMonitor->RegisterHealthyObserver(g_instanceMgr);
     groupMgrActor->BindInstanceManager(g_instanceMgr);
 
+    // Wire Traefik route cache from GlobalSchedDriver to InstanceManagerActor
+    if (g_globalSchedDriver && g_globalSchedDriver->GetTraefikRouteCache()) {
+        instanceMgrActor->SetTraefikRouteCache(g_globalSchedDriver->GetTraefikRouteCache());
+        YRLOG_INFO("Traefik route cache wired to InstanceManagerActor");
+    }
+
     // Create QuotaManagerActor if quota config file is specified
     std::shared_ptr<function_master::QuotaManagerActor> quotaMgrActor;
     auto quotaConfig = function_master::QuotaConfig::LoadFromFile(flags.GetQuotaConfigFile());
@@ -390,6 +397,15 @@ bool InitInstanceManagerDriver(const functionmaster::Flags &flags, const std::sh
 
     g_instanceMgrDriver = std::make_shared<::instance_manager::InstanceManagerDriver>(
         instanceMgrActor, groupMgrActor, quotaMgrActor);
+
+    // Bind DomainSchedSrvActor AID to QuotaManagerActor when domain scheduler registers
+    if (quotaMgrActor != nullptr) {
+        (void)globalSched->AddDomainSchedCallback(
+            [quotaMgrActor](const litebus::AID &from, const std::string &name, const std::string &) {
+                quotaMgrActor->BindDomainSchedSrvAID(from);
+                YRLOG_INFO("QuotaManagerActor: bound DomainSchedSrvActor AID from domain '{}'", name);
+            });
+    }
 
     g_handlers.systemUpgradeHandler = [aid(instanceMgrActor->GetAID())](bool isUpgrading) {
         litebus::Async(aid, &instance_manager::InstanceManagerActor::HandleSystemUpgrade, isUpgrading);
@@ -530,7 +546,7 @@ void OnCreate(const functionmaster::Flags &flags)
     auto memOpt = MemoryOptimizer();
     memOpt.StartTrimming();
 
-    trace::TraceManager::GetInstance().InitTrace("yuanrong-kernel", flags.GetNodeID(), flags.GetEnableTrace(),
+    trace::TraceManager::GetInstance().InitTrace(COMPONENT_NAME, flags.GetNodeID(), flags.GetEnableTrace(),
                                                  flags.GetTraceConfig());
     // meta-store relay on k8s election
     if (flags.GetElectionMode() == K8S_ELECTION_MODE && !CreateExplorer(flags, nullptr)) {
@@ -569,6 +585,24 @@ void OnCreate(const functionmaster::Flags &flags)
     metaStoreMonitor->RegisterHealthyObserver(globalSched);
     if (!InitGlobalSchedDriver(flags, metaClient, globalSched)) {
         return;
+    }
+
+    // Wire Traefik leader context to Explorer leader-change callback
+    if (g_globalSchedDriver && g_globalSchedDriver->GetTraefikLeaderContext()) {
+        auto traefikLeaderCtx = g_globalSchedDriver->GetTraefikLeaderContext();
+        if (flags.GetElectionMode() == STANDALONE_MODE) {
+            traefikLeaderCtx->isLeader.store(true);
+        } else {
+            explorer::Explorer::GetInstance().AddLeaderChangedCallback(
+                "TraefikProvider",
+                [ctx = traefikLeaderCtx, selfAddr = flags.GetIP()]
+                (const explorer::LeaderInfo &leaderInfo) {
+                    bool isSelf = (leaderInfo.address == selfAddr);
+                    ctx->UpdateLeader(leaderInfo.address, isSelf);
+                    YRLOG_INFO("TraefikProvider: leader updated to '{}', isSelf={}",
+                               leaderInfo.address, isSelf);
+                });
+        }
     }
 
     if (!InitResourceGroupManager(metaClient, globalSched)) {

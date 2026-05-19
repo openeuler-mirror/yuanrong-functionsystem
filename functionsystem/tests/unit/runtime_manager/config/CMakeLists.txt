@@ -14,3 +14,5 @@
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} CONFIG_TEST_SRCS)
 
 target_sources(${UNIT_TEST_MODULE} PRIVATE ${CONFIG_TEST_SRCS})
+
+add_subdirectory(language)

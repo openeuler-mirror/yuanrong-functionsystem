@@ -18,6 +18,7 @@
 #include <cmath>
 #include "common/resource_view/resource_tool.h"
 #include "common/resource_view/resource_type.h"
+#include <cmath>
 
 namespace functionsystem::schedule_plugin {
 // IN indicates that the value of the affinity label must be one of pod label value.

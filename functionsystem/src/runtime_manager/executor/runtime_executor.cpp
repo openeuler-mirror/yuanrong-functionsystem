@@ -103,6 +103,7 @@ const std::string JAVA_LOG_LEVEL = "-DlogLevel=";
 const std::string JAVA_JOB_ID = "-DjobId=job-";
 const std::string JAVA_MAIN_CLASS = "org.yuanrong.runtime.server.RuntimeServer";
 const std::string PYTHON_SERVER_PATH = "/python/yr/main/yr_runtime_main.py";
+const std::string PYTHON_NEW_SERVER_PATH = "/python/yr/main/yr_runtime_main.py";
 const std::string PYTHON_SERVER_PATH_IN_WHEEL = "/../../main/yr_runtime_main.py";
 
 const std::string YR_JAVA_RUNTIME_PATH = "/java/yr-runtime-1.0.0.jar";
@@ -1241,10 +1242,7 @@ std::map<std::string, std::string> RuntimeExecutor::CombineEnvs(const Envs &envs
     combineEnvs[MAX_LOG_FILE_NUM_ENV] = std::to_string(config_.runtimeMaxLogFileNum);
     // set distributed convergent call stack enable environment variable
     combineEnvs[ENABLE_DIS_CONV_CALL_STACK] = config_.enableDisConvCallStack ? "true" : "false";
-    std::string pythonPath = "";
-    if (pkgType_ == PKG_TYPE_WHEEL) {
-        pythonPath = config_.runtimePath + "/../../../";
-    }
+    std::string pythonPath = config_.runtimePath;
     if (!config_.pythonDependencyPath.empty()) {
         (void)pythonPath.append(":" + config_.pythonDependencyPath);
     }
@@ -1685,10 +1683,8 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::PythonBuildFinalArg
 {
     std::string jobID = PYTHON_JOB_ID_PREFIX + Utils::GetJobIDFromTraceID(info.traceid());
     std::string address = GetPosixAddress(config_, port);
-    std::string pythonServerPath = PYTHON_SERVER_PATH;
-    if (pkgType_ == PKG_TYPE_WHEEL) {
-        pythonServerPath = PYTHON_SERVER_PATH_IN_WHEEL;
-    }
+
+    std::string pythonServerPath = PYTHON_NEW_SERVER_PATH;
 
     return { Status::OK(),
              { execPath, "-u", config_.runtimePath + pythonServerPath, "--rt_server_address", address, "--deploy_dir",
@@ -2096,10 +2092,7 @@ std::vector<std::string> RuntimeExecutor::GetPythonBuildArgsForPrestart(const st
     YRLOG_DEBUG("GetPythonBuildArgs start {}", language);
     std::string execPath = GetExecPath(language);
     std::string address = GetPosixAddress(config_, port);
-    std::string pythonServerPath = PYTHON_SERVER_PATH;
-    if (pkgType_ == PKG_TYPE_WHEEL) {
-        pythonServerPath = PYTHON_SERVER_PATH_IN_WHEEL;
-    }
+    std::string pythonServerPath = PYTHON_NEW_SERVER_PATH;
     return { execPath,
              "-u",
              config_.runtimePath + pythonServerPath,

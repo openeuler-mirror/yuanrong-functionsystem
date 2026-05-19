@@ -23,7 +23,7 @@ def download_vendor(config_path, download_path):
     os.makedirs(download_path, exist_ok=True)
 
     reader = csv.DictReader(open(config_path, mode="r", encoding="utf-8"))
-    configs = list(reader)  # name, version, module, repo, sha256
+    configs = list(reader)  # name, version, module, repo, sha256, integrated_by
 
     log.info("Download vendor package with TLS info: {}".format(ssl.get_default_verify_paths()))
     for config in configs:
@@ -32,6 +32,24 @@ def download_vendor(config_path, download_path):
         package_name = archive_name.replace(".tar.gz", "").replace(".tar", "").replace(".zip", "")
         archive_path = os.path.join(download_path, archive_name)  # vendor/src/xxx-vvv.zip
         vendor_path = os.path.join(download_path, config["name"])  # vendor/src/xxx
+        install_path = os.path.join(download_path, "../output/Install", config["name"])
+        integrated_by = config.get("integrated_by", "").strip()  # 可选字段：被哪个已编译库整合
+
+        # 检查是否被其他已编译库整合
+        if integrated_by:
+            integrated_install_path = os.path.join(download_path, "../output/Install", integrated_by)
+            if os.path.exists(integrated_install_path):
+                log.info(
+                    f"Dependency {config['name']}-{config['version']} is integrated by {integrated_by} "
+                    f"(install path exists: {integrated_install_path}), skipping download"
+                )
+                continue
+
+        if os.path.exists(install_path):
+            log.info(
+                f"Dependency {config['name']}-{config['version']} already exists, skipping download and extraction"
+            )
+            continue
 
         if os.path.exists(vendor_path):
             log.info(
@@ -53,10 +71,7 @@ def download_vendor(config_path, download_path):
             )
             download_zipfile(package_name, config["repo"], archive_path)
             verify_checksum(package_name, archive_path, config["sha256"])
-            if config["bomb"] == "false":
-                extract_name = utils.extract_file(archive_path, download_path)  # 无根目录的压缩包
-            else:
-                extract_name = utils.extract_file(archive_path, download_path, config["name"])
+            extract_name = utils.extract_file(archive_path, download_path)
             package_path = os.path.join(download_path, extract_name)  # vendor/src/xxx-vvv
             os.rename(package_path, vendor_path)
     return 0

@@ -20,6 +20,7 @@
 
 #include "async/async.hpp"
 #include "async/asyncafter.hpp"
+#include "common/proto/pb/posix/message.pb.h"
 #include "async/collect.hpp"
 #include "async/defer.hpp"
 #include "async/option.hpp"
@@ -42,9 +43,12 @@
 #include "common/utils/generate_message.h"
 #include "common/utils/random_number.h"
 #include "common/utils/struct_transfer.h"
+#include "common/utils/meta_store_kv_operation.h"
 #include "common/trace/trace_manager.h"
+#include "function_proxy/config/direct_routing_config.h"
 #include "instance_ctrl_message.h"
 #include "local_scheduler/snap_ctrl/snap_ctrl.h"
+#include "common/posix_client/control_plane_client/control_interface_posix_client.h"
 #include "local_scheduler/grpc_server/bus_service/bus_service.h"
 #include "local_scheduler_service/local_sched_srv.h"
 #include "local_scheduler/traefik_registry/traefik_registry.h"
@@ -53,6 +57,7 @@ namespace functionsystem::local_scheduler {
 using namespace messages;
 using namespace std::placeholders;
 using schedule_decision::ScheduleResult;
+using functionsystem::GenInstanceRouteKey;
 
 static const uint32_t MAX_INIT_CALL_TIMEOUT_MS = 60 * 60 * 1000;
 
@@ -177,6 +182,17 @@ void InstanceCtrlActor::Init()
                                  instanceInfo))
             .Then(litebus::Defer(aid, &InstanceCtrlActor::ReportInstanceExitLatency, std::placeholders::_1,
                                  startTimeMillis, instanceInfo));
+        // return litebus::Async(aid, &InstanceCtrlActor::ShutDownInstance, instanceInfo,
+        //                       static_cast<uint32_t>(instanceInfo.gracefulshutdowntime()))
+        //     .Then([instanceInfo, aid](const Status &) {
+        //         return litebus::Async(aid, &InstanceCtrlActor::KillRuntime, instanceInfo, false);
+        //     })
+        //     .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInResourceView, std::placeholders::_1,
+        //                          instanceInfo))
+        //     .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInControlView, std::placeholders::_1,
+        //                          instanceInfo))
+        //     .Then(litebus::Defer(aid, &InstanceCtrlActor::ReportInstanceExitLatency, std::placeholders::_1,
+        //                          startTimeMillis, instanceInfo));
     };
     InstanceStateMachine::SetExitHandler(exitHandler_);
     InstanceStateMachine::SetExitFailedHandler([aid(GetAID()), nodeID(nodeID_)](const TransitionResult &result) {
@@ -200,8 +216,40 @@ void InstanceCtrlActor::Init()
 
     Receive("CheckInstanceState", &InstanceCtrlActor::CheckInstanceState);
     Receive("CheckInstanceStateResponse", &InstanceCtrlActor::CheckInstanceStateResponse);
+    Receive("TenantQuotaExceeded", &InstanceCtrlActor::OnTenantQuotaExceededMsg);
 }
 
+
+void InstanceCtrlActor::OnTenantQuotaExceededMsg(const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    OnTenantQuotaExceeded(msg);
+}
+
+void InstanceCtrlActor::OnTenantQuotaExceeded(const std::string &msg)
+{
+    ::messages::TenantQuotaExceeded event;
+    if (!event.ParseFromString(msg)) {
+        YRLOG_WARN("LocalInstanceCtrlActor::OnTenantQuotaExceeded parse failed");
+        return;
+    }
+    const std::string tenantID = event.tenantid();
+    int64_t cooldownMs = event.cooldownms();
+    if (cooldownMs <= 0) {
+        cooldownMs = 10000;
+    }
+    YRLOG_INFO("LocalInstanceCtrlActor: tenant={} blocked for {}ms (quota exceeded)", tenantID, cooldownMs);
+    cooldownMgr_.Apply(tenantID, [&](uint64_t gen) {
+        return litebus::AsyncAfter(
+            static_cast<uint64_t>(cooldownMs), GetAID(), &InstanceCtrlActor::OnTenantCooldownExpired, tenantID, gen);
+    });
+}
+
+void InstanceCtrlActor::OnTenantCooldownExpired(std::string tenantID, uint64_t generation)
+{
+    if (cooldownMgr_.OnExpired(tenantID, generation)) {
+        YRLOG_INFO("LocalInstanceCtrlActor: tenant={} cooldown expired, scheduling resumed", tenantID);
+    }
+}
 
 Status InstanceCtrlActor::UpdateInstanceInfo(const resources::InstanceInfo &instanceInfo)
 {
@@ -315,8 +363,8 @@ litebus::Future<KillResponse> InstanceCtrlActor::ProcessUnsubscribeRequest(const
 }
 
 litebus::Future<KillResponse> InstanceCtrlActor::HandleSnapshotSignal(const std::shared_ptr<KillContext> &killCtx,
-    const std::string &srcInstanceID,
-    const std::shared_ptr<KillRequest> &killReq)
+                                                                       const std::string &srcInstanceID,
+                                                                       const std::shared_ptr<KillRequest> &killReq)
 {
     // 如果 SignalRoute 失败，返回错误
     if (killCtx->killRsp.code() != common::ErrorCode::ERR_NONE) {
@@ -428,6 +476,52 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(const std::string &s
             // snapstart不需要路由，直接处理
             ASSERT_IF_NULL(snapCtrl_);
             return snapCtrl_->HandleSnapStart(killReq->requestid(), killReq->instanceid(), killReq->payload());
+        }
+        case LIST_CHECKPOINTS_BY_FUNCTION_KEY_SIGNAL: {
+            ASSERT_IF_NULL(localSchedSrv_);
+            auto req = std::make_shared<::messages::ListSnapshotsByFunctionKeyRequest>();
+            if (!req->ParseFromString(killReq->payload())) {
+                return GenKillResponse(common::ErrorCode::ERR_PARAM_INVALID,
+                                       "failed to parse ListSnapshotsByFunctionKeyRequest");
+            }
+            return localSchedSrv_->ListSnapshotsByFunctionKey(req).Then(
+                [](const ::messages::ListSnapshotsByFunctionKeyResponse &rsp) {
+                    KillResponse killRsp;
+                    killRsp.set_code(rsp.code());
+                    killRsp.set_message(rsp.message());
+                    killRsp.set_payload(rsp.SerializeAsString());
+                    return killRsp;
+                });
+        }
+        case LIST_CHECKPOINTS_BY_TENANT_SIGNAL: {
+            ASSERT_IF_NULL(localSchedSrv_);
+            auto req = std::make_shared<::messages::ListSnapshotsByTenantRequest>();
+            if (!req->ParseFromString(killReq->payload())) {
+                return GenKillResponse(common::ErrorCode::ERR_PARAM_INVALID,
+                                       "failed to parse ListSnapshotsByTenantRequest");
+            }
+            return localSchedSrv_->ListSnapshotsByTenant(req).Then([](const ::messages::ListSnapshotsByTenantResponse &rsp) {
+                KillResponse killRsp;
+                killRsp.set_code(rsp.code());
+                killRsp.set_message(rsp.message());
+                killRsp.set_payload(rsp.SerializeAsString());
+                return killRsp;
+            });
+        }
+        case DELETE_CHECKPOINT_SIGNAL: {
+            ASSERT_IF_NULL(localSchedSrv_);
+            auto req = std::make_shared<::messages::DeleteSnapshotRequest>();
+            if (!req->ParseFromString(killReq->payload())) {
+                return GenKillResponse(common::ErrorCode::ERR_PARAM_INVALID,
+                                       "failed to parse DeleteSnapshotRequest");
+            }
+            return localSchedSrv_->DeleteSnapshot(req).Then([](const ::messages::DeleteSnapshotResponse &rsp) {
+                KillResponse killRsp;
+                killRsp.set_code(rsp.code());
+                killRsp.set_message(rsp.message());
+                killRsp.set_payload(rsp.SerializeAsString());
+                return killRsp;
+            });
         }
         case MIN_USER_SIGNAL_NUM ... MAX_SIGNAL_NUM: {
             return CheckInstanceExist(srcInstanceID, killReq)
@@ -679,6 +773,48 @@ litebus::Future<std::shared_ptr<KillContext>> InstanceCtrlActor::SignalRoute(
         return killCtx;
     }
 
+    // DR mode: if KillRequest contains complete routing info (both routeAddress and proxyID), use it directly
+    if (function_proxy::DirectRoutingConfig::IsEnabled() &&
+        !killCtx->killRequest->routeaddress().empty() &&
+        !killCtx->killRequest->proxyid().empty()) {
+        if (killCtx->killRequest->proxyid() == nodeID_) {
+            killCtx->isLocal = true;
+            killCtx->killRsp = GenKillResponse(common::ErrorCode::ERR_NONE, "");
+            return killCtx;
+        }
+
+        YRLOG_INFO("{}|(kill)DR mode forwarding kill({}) to owner proxy({})", killCtx->killRequest->requestid(),
+                   killCtx->killRequest->instanceid(), killCtx->killRequest->proxyid());
+        litebus::AID ownerAID(
+            killCtx->killRequest->proxyid() + LOCAL_SCHED_INSTANCE_CTRL_ACTOR_NAME_POSTFIX,
+            killCtx->killRequest->routeaddress());
+        return SendForwardCustomSignalRequest(litebus::Option<litebus::AID>(ownerAID), killCtx->srcInstanceID,
+                                              killCtx->killRequest, killCtx->killRequest->requestid(), false)
+            .Then([killCtx](const KillResponse &rsp) {
+                killCtx->isLocal = false;
+                killCtx->killRsp = rsp;
+                return killCtx;
+            });
+    }
+
+    // Fallback: if DR mode is enabled but routing info is incomplete, continue
+    // through the legacy observer/state-machine path below.
+    if (function_proxy::DirectRoutingConfig::IsEnabled() &&
+        (!killCtx->killRequest->routeaddress().empty() || !killCtx->killRequest->proxyid().empty())) {
+        YRLOG_DEBUG("{}|(kill)DR mode enabled but routing info incomplete (route={}, proxyID={}), falling back to observer path",
+                    killCtx->killRequest->requestid(),
+                    killCtx->killRequest->routeaddress().empty() ? "empty" : "present",
+                    killCtx->killRequest->proxyid().empty() ? "empty" : "present");
+    }
+
+    // Check instance ownership from instanceContext
+    if (killCtx->instanceContext == nullptr) {
+        YRLOG_ERROR("{}|(kill)DR mode: no route info and no state machine for instance({})",
+                    killCtx->killRequest->requestid(), killCtx->killRequest->instanceid());
+        killCtx->killRsp = GenKillResponse(common::ErrorCode::ERR_STATE_MACHINE_ERROR, "no route info for DR kill");
+        return killCtx;
+    }
+
     auto &instanceInfo = killCtx->instanceContext->GetInstanceInfo();
     if (instanceInfo.functionproxyid() != nodeID_) {
         killCtx->isLocal = false;
@@ -744,7 +880,8 @@ litebus::Future<Status> InstanceCtrlActor::SendForwardCustomSignalResponse(const
                                                                            const std::string &requestID)
 {
     YRLOG_INFO("{}|(custom signal)send response, aid: {}", requestID, from.HashString());
-    auto forwardKillResponse = GenForwardKillResponse(requestID, killResponse.code(), killResponse.message());
+    auto forwardKillResponse = GenForwardKillResponse(requestID, killResponse.code(), killResponse.message(),
+                                                      killResponse.payload());
     Send(from, "ForwardCustomSignalResponse", forwardKillResponse.SerializeAsString());
     (void)forwardCustomSignalRequestIDs_.erase(requestID);
 
@@ -768,6 +905,9 @@ void InstanceCtrlActor::ForwardCustomSignalResponse(const litebus::AID &from, st
     KillResponse killResponse;
     killResponse.set_code(forwardKillResponse.code());
     killResponse.set_message(forwardKillResponse.message());
+    if (!forwardKillResponse.payload().empty()) {
+        killResponse.set_payload(forwardKillResponse.payload());
+    }
     forwardCustomSignalNotifyPromise_[requestID]->SetValue(killResponse);
     (void)forwardCustomSignalNotifyPromise_.erase(requestID);
 
@@ -1313,6 +1453,16 @@ messages::ScheduleResponse InstanceCtrlActor::PrepareCreateInstance(
     const std::string traceID = scheduleReq->traceid();
     const std::string requestID = scheduleReq->requestid();
     const auto &tenantID = scheduleReq->instance().tenantid();
+    // Quota cooldown interception: block new instance creation for tenants that exceeded quota
+    if (!tenantID.empty() && cooldownMgr_.IsBlocked(tenantID)) {
+        YRLOG_INFO("{}|{}|LocalInstanceCtrlActor::PrepareCreateInstance: BLOCKED by quota cooldown, tenantID={}",
+                   traceID, requestID, tenantID);
+        runtimePromise->SetValue(GenScheduleResponse(StatusCode::RESOURCE_NOT_ENOUGH,
+                                                     "tenant resource quota exceeded, scheduling blocked during cooldown",
+                                                     *scheduleReq));
+        return GenScheduleResponse(StatusCode::RESOURCE_NOT_ENOUGH,
+                                   "tenant resource quota exceeded, scheduling blocked during cooldown", *scheduleReq);
+    }
     bool notLimited = DoRateLimit(scheduleReq);
     if (!notLimited) {
         YRLOG_ERROR("{}|{}|tenant({}) create rate limited on local.", traceID, requestID, tenantID);
@@ -1632,10 +1782,19 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::DoDispatchSchedule(
                     scheduleReq->traceid(), scheduleReq->requestid(), scheduleReq->instance().instanceid());
     }
     ASSERT_IF_NULL(scheduler_);
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord(
-        { "LocalSchedule", scheduleReq->requestid(), "",
-          scheduleReq->instance().function(), scheduleReq->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = trace::SpanName::kLocalSchedule;
+    param.spanKey = scheduleReq->requestid();
+    param.traceID = scheduleReq->traceid();
+    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        scheduleReq->instance().createoptions(), &scheduleReq->instance().scheduleoption().extension());
+    param.function = scheduleReq->instance().function();
+    param.instanceID = scheduleReq->instance().instanceid();
+    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    trace::TraceManager::PropagateSpanToOptions(span,
+                                                scheduleReq->mutable_instance()->mutable_createoptions(),
+                                                scheduleReq->mutable_instance()->mutable_scheduleoption()
+                                                    ->mutable_extension());
     return scheduler_->ScheduleDecision(scheduleReq)
                       .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::ConfirmScheduleDecisionAndDispatch,
                                            scheduleReq, _1, result.preState.Get()));
@@ -1691,7 +1850,7 @@ litebus::Option<TransitionResult> InstanceCtrlActor::OnTryDispatchOnLocal(
     const TransitionResult &transResult)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("LocalSchedule", scheduleReq->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kLocalSchedule, scheduleReq->requestid());
     if (IsLowReliabilityInstance(scheduleReq->instance()) || transResult.version != 0) {
         scheduleResp->SetValue(GenScheduleResponse(result.code, result.reason, *scheduleReq));
         return litebus::None();
@@ -1706,6 +1865,87 @@ litebus::Option<TransitionResult> InstanceCtrlActor::OnTryDispatchOnLocal(
     }
     YRLOG_INFO("failed to update instance info, instance({}) is on local scheduler({})",
                transResult.savedInfo.instanceid(), transResult.savedInfo.functionproxyid());
+
+    // DirectRouting mode: handle version conflict (duplicate schedule, another node won)
+    if (function_proxy::DirectRoutingConfig::IsEnabled() &&
+        transResult.status.StatusCode() == StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION) {
+        // Check if this is a parent node request
+        if (scheduleReq->instance().parentfunctionproxyaid().empty() ||
+            ExtractProxyIDFromProxyAID(scheduleReq->instance().parentfunctionproxyaid()) == nodeID_) {
+            // This is a parent node request, version conflict occurred
+            // Another node succeeded in persistence
+            YRLOG_WARN("{}|{}|DirectRouting mode: instance({}) version conflict, "
+                       "another node succeeded in persistence, querying instance location from etcd",
+                       scheduleReq->requestid(), scheduleReq->traceid(),
+                       scheduleReq->instance().instanceid());
+
+            // Query etcd to get the actual instance location
+            auto instanceKey = GenInstanceRouteKey(scheduleReq->instance().instanceid());
+            instanceOpt_->GetInstance(instanceKey)
+                .Then([scheduleResp, scheduleReq /* capture shared_ptr to extend lifetime */,
+                        instanceID(scheduleReq->instance().instanceid()),
+                        requestID(scheduleReq->requestid()), traceID(scheduleReq->traceid())]
+                    (const litebus::Future<OperateResult> &future) -> litebus::Option<Status> {
+                    if (future.IsError() || future.Get().status.IsError()) {
+                        YRLOG_ERROR("{}|{}|Failed to query instance({}) from etcd after version conflict",
+                                   traceID, requestID, instanceID);
+                        // Return error if failed to query instance location
+                        scheduleResp->SetValue(GenScheduleResponse(
+                            StatusCode::ERR_ETCD_OPERATION_ERROR,
+                            "version conflict: failed to query instance location",
+                            *scheduleReq));
+                        return Status::OK();
+                    }
+
+                    // Parse instance info from etcd response
+                    InstanceInfo instanceInfo;
+                    auto result = future.Get();
+                    if (!instanceInfo.ParseFromString(result.value)) {
+                        YRLOG_ERROR("{}|{}|Failed to parse instance({}) info from etcd after version conflict",
+                                   traceID, requestID, instanceID);
+                        scheduleResp->SetValue(GenScheduleResponse(
+                            StatusCode::ERR_ETCD_OPERATION_ERROR,
+                            "version conflict: failed to parse instance location",
+                            *scheduleReq));
+                        return Status::OK();
+                    }
+
+                    // Return success with actual node location
+                    auto response = GenScheduleResponse(StatusCode::SUCCESS,
+                        "instance scheduled to another node due to version conflict",
+                        *scheduleReq);
+
+                    // Set schedule result with actual node ID
+                    messages::ScheduleResult scheduleResult;
+                    scheduleResult.set_nodeid(instanceInfo.functionproxyid());
+                    *response.mutable_scheduleresult() = scheduleResult;
+
+                    YRLOG_INFO("{}|{}|Instance({}) version conflict: returning success with actual node({})",
+                               traceID, requestID, instanceID, instanceInfo.functionproxyid());
+
+                    scheduleResp->SetValue(response);
+                    return Status::OK();
+                })
+                .Then([instanceCtrlView = instanceControlView_, scheduleReq](const litebus::Option<Status>&) {
+                    // DirectRouting mode: force cleanup state machine after version conflict
+                    if (function_proxy::DirectRoutingConfig::IsEnabled()) {
+                        auto stateMachine = instanceCtrlView->GetInstance(scheduleReq->instance().instanceid());
+                        if (stateMachine != nullptr) {
+                            YRLOG_INFO("{}|{}|DirectRouting mode: cleanup state machine for instance({}) after version conflict",
+                                       scheduleReq->requestid(), scheduleReq->traceid(),
+                                       scheduleReq->instance().instanceid());
+                        }
+                        instanceCtrlView->OnDelInstance(scheduleReq->instance().instanceid(),
+                                                        scheduleReq->requestid(),
+                                                        true);  // needErase=true
+                    }
+                    return litebus::None();
+                });
+
+            return litebus::None();
+        }
+    }
+
     // version is incorrect and own by proxy which location is parent, need to reschedule by parent
     if (transResult.status.StatusCode() == StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION &&
         (scheduleReq->instance().parentfunctionproxyaid().empty() ||
@@ -1803,10 +2043,19 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::ConfirmScheduleDe
                                    stateMachineRef)
             .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::HandleForwardResponseAndNotifyCreator, scheduleReq, _1));
     } else if (code != static_cast<int32_t>(StatusCode::SUCCESS)) {
-        // partial watch schedule from domain failed need to clear the state machine cache, because of failed schedule
-        // would not watch the instance which caused state machine leak.
-        if (ExtractProxyIDFromProxyAID(scheduleReq->instance().parentfunctionproxyaid()) != nodeID_) {
+        // DirectRouting mode: all schedule failures need to cleanup state machine (no etcd watch events)
+        // Partial Watch mode: only cleanup requests from other nodes (preserve existing behavior)
+        // Traditional full-watch mode: only cleanup requests from other nodes (preserve existing behavior)
+        if (function_proxy::DirectRoutingConfig::IsEnabled()) {
             TryClearStateMachineCache(scheduleReq);
+        } else if (config_.isPartialWatchInstances) {
+            if (ExtractProxyIDFromProxyAID(scheduleReq->instance().parentfunctionproxyaid()) != nodeID_) {
+                TryClearStateMachineCache(scheduleReq);
+            }
+        } else {
+            if (ExtractProxyIDFromProxyAID(scheduleReq->instance().parentfunctionproxyaid()) != nodeID_) {
+                TryClearStateMachineCache(scheduleReq);
+            }
         }
     }
     return resp;
@@ -1814,21 +2063,53 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::ConfirmScheduleDe
 
 void InstanceCtrlActor::TryClearStateMachineCache(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq)
 {
-    if (!config_.isPartialWatchInstances) {
+    ASSERT_IF_NULL(instanceControlView_);
+
+    // DirectRouting mode: no etcd watch events, must proactively cleanup state machine to avoid memory leak
+    if (function_proxy::DirectRoutingConfig::IsEnabled()) {
+        auto stateMachine = instanceControlView_->GetInstance(scheduleReq->instance().instanceid());
+        if (stateMachine != nullptr) {
+            YRLOG_INFO("{}|{}|DirectRouting mode: force cleanup state machine for instance({}), state({})",
+                       scheduleReq->requestid(), scheduleReq->traceid(),
+                       scheduleReq->instance().instanceid(),
+                       fmt::underlying(stateMachine->GetInstanceState()));
+        }
+        instanceControlView_->OnDelInstance(scheduleReq->instance().instanceid(),
+                                           scheduleReq->requestid(),
+                                           true);  // needErase=true
         return;
     }
-    ASSERT_IF_NULL(instanceControlView_);
-    instanceControlView_->OnDelInstance(scheduleReq->instance().instanceid(), scheduleReq->requestid(), true);
+
+    // Partial Watch mode: only cleanup requests from other nodes, preserve existing behavior
+    if (config_.isPartialWatchInstances) {
+        if (ExtractProxyIDFromProxyAID(scheduleReq->instance().parentfunctionproxyaid()) != nodeID_) {
+            instanceControlView_->OnDelInstance(scheduleReq->instance().instanceid(),
+                                               scheduleReq->requestid(),
+                                               true);
+        }
+        return;
+    }
+
+    // Traditional full-watch mode: rely on etcd watch events for cleanup, preserve existing behavior
 }
 
 litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::RetryForwardSchedule(
     const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const messages::ScheduleResponse &resp,
     uint32_t retryTimes, const std::shared_ptr<InstanceStateMachine> &stateMachine)
 {
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord(
-        { "ForwardSchedule", scheduleReq->requestid(), "",
-          scheduleReq->instance().function(), scheduleReq->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = trace::SpanName::kForwardSchedule;
+    param.spanKey = scheduleReq->requestid();
+    param.traceID = scheduleReq->traceid();
+    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        scheduleReq->instance().createoptions(), &scheduleReq->instance().scheduleoption().extension());
+    param.function = scheduleReq->instance().function();
+    param.instanceID = scheduleReq->instance().instanceid();
+    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    trace::TraceManager::PropagateSpanToOptions(span,
+                                                scheduleReq->mutable_instance()->mutable_createoptions(),
+                                                scheduleReq->mutable_instance()->mutable_scheduleoption()
+                                                    ->mutable_extension());
     if (auto cancel = stateMachine->GetCancelFuture(); cancel.IsOK()) {
         YRLOG_WARN("{}|{}|instance canceled before forward schedule, reason({})", scheduleReq->requestid(),
                    scheduleReq->instance().instanceid(), cancel.Get());
@@ -1841,8 +2122,72 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::RetryForwardSched
     if (retryTimes < maxForwardScheduleRetryTimes_) {
         ASSERT_IF_NULL(localSchedSrv_);
         return localSchedSrv_->ForwardSchedule(scheduleReq)
-            .Then([aid(GetAID()), retryTimes, scheduleReq, instanceControlView(instanceControlView_)](
+            .Then([this, aid(GetAID()), retryTimes, scheduleReq, instanceControlView(instanceControlView_)](
                       const ScheduleResponse &resp) -> litebus::Future<messages::ScheduleResponse> {
+                // DirectRouting mode: handle version conflict (duplicate schedule, another node won)
+                if (function_proxy::DirectRoutingConfig::IsEnabled() &&
+                    resp.code() == static_cast<int32_t>(StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION)) {
+                    auto stateMachineRef = instanceControlView->GetInstance(scheduleReq->instance().instanceid());
+                    if (stateMachineRef == nullptr) {
+                        YRLOG_DEBUG("{}|{} failed to get state machine", scheduleReq->requestid(),
+                                    scheduleReq->instance().instanceid());
+                        return resp;
+                    }
+
+                    YRLOG_WARN("{}|{}|DirectRouting mode: forward schedule got version conflict, "
+                               "another node may have succeeded, querying instance location from etcd",
+                               scheduleReq->requestid(), scheduleReq->traceid());
+
+                    // Cleanup local state machine first
+                    instanceControlView->OnDelInstance(scheduleReq->instance().instanceid(),
+                                                    scheduleReq->requestid(),
+                                                    true);
+
+                    // Query etcd to get the actual instance location and return response
+                    auto instanceKey = GenInstanceRouteKey(scheduleReq->instance().instanceid());
+                    return instanceOpt_->GetInstance(instanceKey)
+                        .Then([this, scheduleReq](const litebus::Future<OperateResult> &future) -> messages::ScheduleResponse {
+                            if (future.IsError() || future.Get().status.IsError()) {
+                                YRLOG_ERROR("{}|{}|Failed to query instance({}) from etcd after version conflict",
+                                           scheduleReq->requestid(), scheduleReq->traceid(),
+                                           scheduleReq->instance().instanceid());
+                                // Return error if failed to query instance location
+                                return GenScheduleResponse(StatusCode::ERR_ETCD_OPERATION_ERROR,
+                                    "version conflict: failed to query instance location",
+                                    *scheduleReq);
+                            }
+
+                            // Parse instance info from etcd response
+                            InstanceInfo instanceInfo;
+                            auto result = future.Get();
+                            if (!instanceInfo.ParseFromString(result.value)) {
+                                YRLOG_ERROR("{}|{}|Failed to parse instance({}) info from etcd after version conflict",
+                                           scheduleReq->requestid(), scheduleReq->traceid(),
+                                           scheduleReq->instance().instanceid());
+                                return GenScheduleResponse(StatusCode::ERR_ETCD_OPERATION_ERROR,
+                                    "version conflict: failed to parse instance location",
+                                    *scheduleReq);
+                            }
+
+                            // Return success with actual node location
+                            auto response = GenScheduleResponse(StatusCode::SUCCESS,
+                                "instance scheduled to another node due to version conflict",
+                                *scheduleReq);
+
+                            // Set schedule result with actual node ID
+                            messages::ScheduleResult scheduleResult;
+                            scheduleResult.set_nodeid(instanceInfo.functionproxyid());
+                            *response.mutable_scheduleresult() = scheduleResult;
+
+                            YRLOG_INFO("{}|{}|Instance({}) version conflict: returning success with actual node({})",
+                                       scheduleReq->requestid(), scheduleReq->traceid(),
+                                       scheduleReq->instance().instanceid(), instanceInfo.functionproxyid());
+
+                            return response;
+                        });
+                }
+
+                // Non-DirectRouting mode or other errors: preserve existing behavior
                 if (resp.code() == static_cast<int32_t>(StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION)) {
                     auto stateMachineRef = instanceControlView->GetInstance(scheduleReq->instance().instanceid());
                     if (stateMachineRef == nullptr) {
@@ -1881,7 +2226,7 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::HandleForwardResponseAndNot
     const std::shared_ptr<ScheduleRequest> &scheduleReq, const ScheduleResponse &resp)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("ForwardSchedule", scheduleReq->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kForwardSchedule, scheduleReq->requestid());
     ASSERT_IF_NULL(instanceControlView_);
     // If the forwarded scheduling request fails, the notify interface is invoked to notify the instance
     // creator of the scheduling failure, and this local scheduler, as the owner scheduling starting point
@@ -2063,9 +2408,19 @@ litebus::Future<Status> InstanceCtrlActor::DeployInstance(const std::shared_ptr<
                                                           bool isRecovering)
 {
     auto requestID = request->requestid();
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord(
-        { "DeployInstance", requestID, "", request->instance().function(), request->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = trace::SpanName::kDeployInstance;
+    param.spanKey = requestID;
+    param.traceID = request->traceid();
+    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        request->instance().createoptions(), &request->instance().scheduleoption().extension());
+    param.function = request->instance().function();
+    param.instanceID = request->instance().instanceid();
+    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    trace::TraceManager::PropagateSpanToOptions(span,
+                                                request->mutable_instance()->mutable_createoptions(),
+                                                request->mutable_instance()->mutable_scheduleoption()
+                                                    ->mutable_extension());
     if (result.IsSome()) {
         YRLOG_DEBUG("{}|{}|failed to deploy instance({}) because failed to update instance info", request->traceid(),
                     requestID, request->instance().instanceid());
@@ -2170,6 +2525,9 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
         std::string message = response.message().empty() ? "failed to deploy instance" : response.message();
         StatusCode errCode = static_cast<StatusCode>(response.code());
         auto instanceInfo = stateMachine->GetInstanceInfo();
+        metrics::MetricsAdapter::GetInstance().SendInstanceCreateFailureAlarm(
+            request->requestid(), request->instance().instanceid(), response.runtimeid(), response.address(),
+            static_cast<int64_t>(errCode), "deploy", message);
         auto status = IsRuntimeRecoverEnable(instanceInfo, stateMachine->GetCancelFuture()) ? InstanceState::FAILED
                                                                                             : InstanceState::FATAL;
         // monopoly need to send kill to avoid pod reused
@@ -2185,7 +2543,9 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
                 "containerID({})",
                 request->traceid(), request->requestid(), request->instance().instanceid(), response.runtimeid(),
                 response.address(), response.timeinfo(), response.pid(), response.containerid());
-    request->mutable_instance()->set_runtimeid(response.runtimeid());
+    if (!response.runtimeid().empty()) {
+        request->mutable_instance()->set_runtimeid(response.runtimeid());
+    }
     request->mutable_instance()->set_starttime(response.timeinfo());
     request->mutable_instance()->set_runtimeaddress(response.address());
     (*request->mutable_instance()->mutable_extensions())[PID] = std::to_string(response.pid());
@@ -2205,9 +2565,19 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     }
     litebus::Promise<Status> instanceStatusPromise;
     instanceStatusPromises_[request->instance().instanceid()] = instanceStatusPromise;
-    // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StartSpanWithRecord({ "WaitConnection", request->requestid(), "",
-        request->instance().function(), request->instance().instanceid() });
+    trace::TraceManager::SpanParam param;
+    param.spanName = trace::SpanName::kWaitConnection;
+    param.spanKey = request->requestid();
+    param.traceID = request->traceid();
+    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        request->instance().createoptions(), &request->instance().scheduleoption().extension());
+    param.function = request->instance().function();
+    param.instanceID = request->instance().instanceid();
+    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    trace::TraceManager::PropagateSpanToOptions(span,
+                                                request->mutable_instance()->mutable_createoptions(),
+                                                request->mutable_instance()->mutable_scheduleoption()
+                                                    ->mutable_extension());
     return CreateInstanceClient(request->instance().instanceid(), response.runtimeid(), response.address())
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::CheckReadiness, _1, request, retriedTimes, isRecovering))
         .Then([aid(GetAID()), request, isRecovering](const Status &status) -> litebus::Future<Status> {
@@ -2285,12 +2655,17 @@ litebus::Future<Status> InstanceCtrlActor::HandleCheckReadinessFailure(const std
     return instanceStatusPromises_[request->instance().instanceid()]
         .GetFuture()
         .After(config_.waitStatusCodeUpdateMs,
-               [instanceStatusPromise, errMsg](const litebus::Future<Status> &future) {
-                   instanceStatusPromise.SetValue(
-                       Status(StatusCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS,
-                              "unable to init runtime, because " + errMsg + " and not received exit info of runtime"));
+               [instanceStatusPromise, errMsg, request](const litebus::Future<Status> &future) {
+                   Status status(StatusCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS,
+                                 "unable to init runtime, because " + errMsg +
+                                     " and not received exit info of runtime");
+                   metrics::MetricsAdapter::GetInstance().SendInstanceCreateFailureAlarm(
+                       request->requestid(), request->instance().instanceid(), request->instance().runtimeid(),
+                       request->instance().runtimeaddress(), static_cast<int64_t>(status.StatusCode()),
+                       "check_readiness", status.RawMessage());
+                   instanceStatusPromise.SetValue(status);
                    return instanceStatusPromise.GetFuture();
-               })
+                })
         .OnComplete([aid(GetAID()), request, isRecovering](const litebus::Future<Status> &future) {
             (void)litebus::Async(aid, &InstanceCtrlActor::KillRuntime, request->instance(), isRecovering);
             return future;
@@ -2304,7 +2679,7 @@ litebus::Future<Status> InstanceCtrlActor::CheckReadiness(
     uint32_t retriedTimes, bool isRecovering)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("WaitConnection", request->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kWaitConnection, request->requestid());
     auto stateMachine = instanceControlView_->GetInstance(request->instance().instanceid());
     if (stateMachine == nullptr) {
         YRLOG_ERROR("{}|{}|instance({}) stateMachine is nullptr", request->traceid(), request->requestid(),
@@ -2630,7 +3005,7 @@ litebus::Future<CallResultAck> InstanceCtrlActor::SendCallResult(
         }
         ASSERT_IF_NULL(clientManager_);
         // todo(lwy_robb): to use traceID
-        trace::TraceManager::GetInstance().StopSpan("Create", requestID, {{"instance.id", srcInstance}});
+        trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kCreate, requestID, {{"instance.id", srcInstance}});
         auto clientFuture = clientManager_->GetControlInterfacePosixClient(dstInstance);
         return clientFuture.Then(
             litebus::Defer(GetAID(), &InstanceCtrlActor::SendNotifyResult, _1, dstInstance, requestID, callResult));
@@ -2727,6 +3102,13 @@ litebus::Future<CallResultAck> InstanceCtrlActor::SendNotifyResult(
     notifyRequest.mutable_stacktraceinfos()->Swap(callResult->mutable_stacktraceinfos());
     if (callResult->has_runtimeinfo()) {
         notifyRequest.mutable_runtimeinfo()->Swap(callResult->mutable_runtimeinfo());
+    }
+    if (function_proxy::DirectRoutingConfig::IsEnabled()) {
+        ASSERT_IF_NULL(instanceControlView_);
+        auto stateMachine = instanceControlView_->GetInstance(callResult->instanceid());
+        if (stateMachine != nullptr && !stateMachine->GetInstanceInfo().proxygrpcaddress().empty()) {
+            notifyRequest.mutable_readyinstance()->CopyFrom(stateMachine->GetInstanceInfo());
+        }
     }
     auto promise = std::make_shared<litebus::Promise<CallResultAck>>();
     YRLOG_INFO("{}|ready to notify create result to instance({})", requestID, instanceID);
@@ -2854,7 +3236,7 @@ litebus::Future<Status> InstanceCtrlActor::ScheduleConfirmed(const Status &statu
                                                              const std::shared_ptr<ScheduleRequest> &request)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("DeployInstance", request->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kDeployInstance, request->requestid());
     auto rsp = std::make_shared<ScheduleResponse>();
     rsp->set_code(static_cast<int32_t>(status.StatusCode()));
     rsp->set_requestid(request->requestid());
@@ -3042,7 +3424,7 @@ void InstanceCtrlActor::ScheduleEnd(const litebus::Future<Status> &future,
                                     const std::shared_ptr<ScheduleRequest> &request)
 {
     // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan("DeployInstance", request->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kDeployInstance, request->requestid());
     Status status;
     if (future.IsError()) {
         status = Status(static_cast<StatusCode>(future.GetErrorCode()), "failed to create instance");
@@ -3058,6 +3440,35 @@ void InstanceCtrlActor::ScheduleEnd(const litebus::Future<Status> &future,
     (void)scheduler_->ScheduleConfirm(rsp, request->instance(), ScheduleResult{});
 
     auto statusCode = status.StatusCode();
+    auto instanceID = request->instance().instanceid();
+
+    // DirectRouting mode: handle version conflict (duplicate schedule, another node won)
+    // Note: Version conflict should be handled in OnTryDispatchOnLocal or RetryForwardSchedule
+    // This code path is a fallback for unexpected cases
+    if (statusCode == StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION) {
+        if (function_proxy::DirectRoutingConfig::IsEnabled()) {
+            YRLOG_WARN("{}|{}|DirectRouting mode: instance({}) version conflict in ScheduleEnd, "
+                       "this should have been handled earlier, cleaning up local state machine",
+                       request->traceid(), request->requestid(), instanceID);
+
+            // Cleanup local state machine
+            // Note: Response should have been set in earlier handlers
+            auto stateMachine = instanceControlView_->GetInstance(instanceID);
+            if (stateMachine != nullptr) {
+                YRLOG_INFO("{}|{}|cleaning up orphan state machine for instance({}) after version conflict",
+                           request->traceid(), request->requestid(), instanceID);
+                instanceControlView_->OnDelInstance(instanceID, request->requestid(), true);  // needErase=true
+            }
+            return;
+        }
+
+        // Non-DirectRouting mode: preserve existing behavior (ignore version conflict)
+        YRLOG_DEBUG("{}|{}|instance({}) version conflict, ignored in non-DR mode",
+                    request->traceid(), request->requestid(), instanceID);
+        return;
+    }
+
+    // Handle other failures
     if (statusCode != StatusCode::SUCCESS && statusCode != StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION) {
         auto instanceID = request->instance().instanceid();
         const std::string &parent = request->instance().parentid();
@@ -3095,6 +3506,39 @@ void InstanceCtrlActor::ScheduleEnd(const litebus::Future<Status> &future,
             transContext.scheduleReq = request;
             (void)TransInstanceState(stateMachine, transContext);
         }
+    }
+}
+
+void InstanceCtrlActor::GCOrphanStateMachine(const std::string &instanceID, const std::string &requestID)
+{
+    ASSERT_IF_NULL(instanceControlView_);
+
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        YRLOG_DEBUG("GC orphan SM: instance({}) already cleaned, requestID({})", instanceID, requestID);
+        return;
+    }
+
+    // Check if this is the same request (not a reschedule)
+    if (stateMachine->GetRequestID() != requestID) {
+        YRLOG_DEBUG("GC orphan SM: instance({}) has new request({}), old request({}), skip",
+                   instanceID, stateMachine->GetRequestID(), requestID);
+        return;
+    }
+
+    // If still in SCHEDULING state after timeout, it's a remote-owner orphan
+    if (stateMachine->GetInstanceState() == InstanceState::SCHEDULING) {
+        if (stateMachine->GetOwner() != nodeID_) {
+            YRLOG_WARN("GC orphan SM: instance({}) still SCHEDULING with remote owner({}), cleaning up",
+                       instanceID, stateMachine->GetOwner());
+            instanceControlView_->Delete(instanceID, 0);
+        } else {
+            YRLOG_DEBUG("GC orphan SM: instance({}) SCHEDULING but local owner, skip cleanup",
+                       instanceID);
+        }
+    } else {
+        YRLOG_DEBUG("GC orphan SM: instance({}) state changed to {}, no longer orphan",
+                   instanceID, fmt::underlying(stateMachine->GetInstanceState()));
     }
 }
 
@@ -4308,6 +4752,7 @@ litebus::Future<Status> InstanceCtrlActor::RecoverRunningInstance(
     RETURN_STATUS_IF_TRUE(isAbnormal_, StatusCode::ERR_INNER_SYSTEM_ERROR, "abnormal local scheduler " + nodeID_);
     YRLOG_INFO("{}|{}|instance({}) status is running, only need to create client", request->traceid(),
                request->requestid(), request->instance().instanceid());
+    (void)concernedInstance_.insert(request->instance().instanceid());
     auto promise = std::make_shared<litebus::Promise<Status>>();
     auto instanceInfo = stateMachine->GetInstanceInfo();
     (void)CreateInstanceClient(request->instance().instanceid(), request->instance().runtimeid(),
@@ -4868,8 +5313,8 @@ void InstanceCtrlActor::BindObserver(const std::shared_ptr<function_proxy::Contr
             litebus::Async(aid, &InstanceCtrlActor::UpdateFuncMetas, isAdd, funcMetas);
         });
 
-    observer->SetTrafficReportCbFunc([aid(GetAID())](const std::string &instanceID, const size_t &processingNum) {
-        litebus::Async(aid, &InstanceCtrlActor::TrafficReport, instanceID, processingNum);
+    observer->SetTrafficReportCbFunc([mgr(idleMgr_)](const std::string &instanceID, const size_t &processingNum) {
+        mgr->TrafficReport(instanceID, processingNum);
     });
 
     observer_ = observer;
@@ -6019,8 +6464,9 @@ CreateCallResultCallBack InstanceCtrlActor::RegisterCreateCallResultCallback(
             return ack;
         }
         auto instanceInfo = request->instance();
-        if (instanceInfo.lowreliability()) {
+        if (instanceInfo.lowreliability() || function_proxy::DirectRoutingConfig::IsEnabled()) {
             callResult->mutable_runtimeinfo()->set_route(aid.Url());
+            callResult->mutable_runtimeinfo()->set_proxyid(nodeID);
         }
         if (callResult->code() == common::ErrorCode::ERR_NONE && stateMachine != nullptr &&
             stateMachine->GetInstanceState() != InstanceState::RUNNING) {
@@ -6234,6 +6680,22 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::DeleteRequestFuture(
         && (scheduleResponse.IsError() || scheduleResponse.Get().code() != 0)) {
         stateMachine->ReleaseOwner();
     }
+
+    // DirectRouting mode: register GC timer for remote-owner orphan state machine
+    // Sub-scenario A: schedule succeeded but ownership transferred to remote node
+    // OnCallResult will never arrive to local node in DR mode, so we need GC to cleanup
+    if (scheduleResponse.IsOK() || (!scheduleResponse.IsError() && scheduleResponse.Get().code() == 0)) {
+        bool scheduleSucceeded = (scheduleResponse.Get().code() == static_cast<int32_t>(StatusCode::SUCCESS) ||
+                                 scheduleResponse.Get().code() == static_cast<int32_t>(StatusCode::INSTANCE_ALLOCATED));
+        if (!scheduleSucceeded && function_proxy::DirectRoutingConfig::IsEnabled() && stateMachine != nullptr) {
+            auto instanceID = scheduleReq->instance().instanceid();
+            YRLOG_INFO("{}|{}|DirectRouting mode: register GC timer for remote-owner orphan SM check, instance({})",
+                       requestID, scheduleReq->traceid(), instanceID);
+            litebus::AsyncAfter(INSTANCE_CREATE_GC_TIMEOUT_MS, GetAID(),
+                                &InstanceCtrlActor::GCOrphanStateMachine, instanceID, requestID);
+        }
+    }
+
     return scheduleResponse;
 }
 
@@ -6827,5 +7289,4 @@ litebus::Future<Status> InstanceCtrlActor::DoLocalResumeInstance(const std::stri
                 });
         });
 }
-
 }  // namespace functionsystem::local_scheduler

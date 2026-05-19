@@ -53,6 +53,34 @@ public:
     MOCK_METHOD3(MockUpdateInstanceStatus, void(litebus::AID from, std::string name, std::string msg));
 };
 
+class FunctionAgentWithStatusReply : public litebus::ActorBase {
+public:
+    FunctionAgentWithStatusReply(int32_t status, std::string message)
+        : ActorBase("FunctionAgentWithStatusReply"), status_(status), message_(std::move(message))
+    {
+    }
+
+    void Init() override
+    {
+        Receive("UpdateInstanceStatus", &FunctionAgentWithStatusReply::UpdateInstanceStatus);
+    }
+
+    void UpdateInstanceStatus(const litebus::AID &from, std::string &&, std::string &&msg)
+    {
+        messages::UpdateInstanceStatusRequest req;
+        ASSERT_TRUE(req.ParseFromString(msg));
+        messages::UpdateInstanceStatusResponse res;
+        res.set_requestid(req.requestid());
+        res.set_status(status_);
+        res.set_message(message_);
+        Send(from, "UpdateInstanceStatusResponse", res.SerializeAsString());
+    }
+
+private:
+    int32_t status_;
+    std::string message_;
+};
+
 class HealthCheckTest : public testing::Test {
 public:
     void SetUp() override
@@ -185,6 +213,24 @@ TEST_F(HealthCheckTest, HealthCheckWithRuntimeMemoryExceedLimit)
         return client->actor_->oomMap_.count(execPtr->GetPid()) == 0
                && client->actor_->instanceID2PidMap_.count(instanceID) == 0;
     });
+    litebus::Terminate(functionAgent->GetAID());
+    litebus::Await(functionAgent->GetAID());
+}
+
+TEST_F(HealthCheckTest, NotifySandboxExitReturnsUpdateInstanceStatusFailure)
+{
+    auto client = std::make_shared<runtime_manager::HealthCheck>();
+    auto functionAgent = std::make_shared<FunctionAgentWithStatusReply>(
+        static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR), "update instance status failed");
+    litebus::Spawn(functionAgent);
+    client->UpdateAgentInfo(functionAgent->GetAID());
+    client->SetMaxSendFrequency(1);
+
+    auto status = client->NotifySandboxExit("Instance-ID", "runtime-ID", 0, "sandbox exit", "Request-ID").Get();
+
+    EXPECT_EQ(status.StatusCode(), StatusCode::ERR_INNER_SYSTEM_ERROR);
+    EXPECT_THAT(status.GetMessage(), ::testing::HasSubstr("update instance status failed"));
+
     litebus::Terminate(functionAgent->GetAID());
     litebus::Await(functionAgent->GetAID());
 }

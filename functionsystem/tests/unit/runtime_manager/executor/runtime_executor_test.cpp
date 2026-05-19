@@ -2211,10 +2211,10 @@ TEST_F(RuntimeExecutorTest, EpollRedirectorStdLogRollingCompressTest)
     // 1.init StdRedirectParam
     std::string command = "rm -rf /home/snuser/instances/test_runtime_id*";
     (void)std::system(command.c_str());
-    executor_->config_.userLogBufferFlushThreshold = 1024;
-    executor_->config_.userLogAutoFlushIntervalMs = 10;
-    executor_->config_.userLogRollingSizeLimitMb = 1;
-    executor_->config_.userLogRollingFileCountLimit = 3;
+    executor_->config_.userLogBufferFlushThreshold_ = 1024;
+    executor_->config_.userLogAutoFlushIntervalMs_ = 10;
+    executor_->config_.userLogRollingSizeLimitMb_ = 1;
+    executor_->config_.userLogRollingFileCountLimit_ = 3;
 
     // 2.StartRuntimeStdRedirection
     runtime_manager::Flags flags;

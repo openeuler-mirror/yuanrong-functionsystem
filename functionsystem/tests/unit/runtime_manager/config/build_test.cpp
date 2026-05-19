@@ -57,10 +57,9 @@ TEST_F(BuildTest, GeneratePosixEnvsTest)
         auto envMap = GeneratePosixEnvs(runtimeConfig, startReq, "21000");
         EXPECT_TRUE(envMap.find("LD_LIBRARY_PATH") != envMap.end());
         EXPECT_TRUE(envMap.find("METRICS_CONFIG") != envMap.end());
-        EXPECT_TRUE(envMap.find("ENABLE_METRICS") != envMap.end());
-        EXPECT_TRUE(envMap.find("POD_IP") != envMap.end());
+        EXPECT_TRUE(envMap.find("ENABLE_METRICS") == envMap.end());
+        EXPECT_TRUE(envMap.find("POD_IP") == envMap.end());
         EXPECT_EQ(envMap["PYTHONUNBUFFERED"], "1");
-        EXPECT_EQ(envMap["ENABLE_METRICS"], "false");
         EXPECT_EQ(envMap["METRICS_CONFIG"], "{}");
         EXPECT_EQ(envMap["METRICS_CONFIG_FILE"], "/tmp/home/snuser/config.json");
         auto ldPath = envMap["LD_LIBRARY_PATH"];

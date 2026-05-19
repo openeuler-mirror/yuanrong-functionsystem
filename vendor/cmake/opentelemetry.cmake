@@ -14,9 +14,6 @@
 
 set(src_dir ${VENDOR_SRC_DIR}/opentelemetry)
 set(src_name opentelemetry)
-set(opentelemetry_PATCHES
-        ${VENDOR_PATCHES_DIR}/opentelemetry/fix-alias-target-set-properties.patch
-)
 
 set(${src_name}_CMAKE_ARGS
         -DBUILD_SHARED_LIBS=ON
@@ -38,35 +35,43 @@ set(${src_name}_CMAKE_ARGS
         -Dutf8_range_DIR:PATH=${utf8_range_PKG_PATH}
         -DOPENTELEMETRY_EXTERNAL_NLOHMANN_JSON=ON
         -Dnlohmann_json_DIR=${json_CMAKE_DIR}
-        # Use vendor curl (built against vendor openssl) instead of system curl to avoid ABI mismatch.
-        # Without this hint, opentelemetry's find_package(CURL REQUIRED) picks up the system curl,
-        # which may be linked against a different openssl and cause linker conflicts.
-        -DCURL_ROOT=${curl_ROOT}
-        -DCURL_INCLUDE_DIR=${curl_INCLUDE_DIR}
-        -DCURL_LIBRARY=${curl_LIB}
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON
         -DOPENTELEMETRY_INSTALL=ON
+        -DOTELCPP_PROTO_PATH=${VENDOR_SRC_DIR}/opentelemetry_proto
         -DCMAKE_C_FLAGS_RELEASE=${THIRDPARTY_C_FLAGS}
         -DCMAKE_CXX_FLAGS_RELEASE=${THIRDPARTY_CXX_FLAGS}
         -DCMAKE_SHARED_LINKER_FLAGS=${THIRDPARTY_LINK_FLAGS}
         -DCMAKE_CXX_STANDARD=17 # absl use cpp17 to compile
-        -DOTELCPP_PROTO_PATH=${VENDOR_SRC_DIR}/opentelemetry_proto # use vendored proto to avoid runtime git clone from GitHub
+        -DCURL_INCLUDE_DIR:PATH=${curl_INCLUDE_DIR}
+        -DCURL_LIBRARY:FILEPATH=${curl_LIB}
 )
 
 
 set(HISTORY_INSTALLLED "${EP_BUILD_DIR}/Install/${src_name}")
 if (NOT EXISTS ${HISTORY_INSTALLLED})
-    PATCH_FOR_SOURCE(${src_dir} ${opentelemetry_PATCHES})
+    # Compile opentelemetry depends on opentelemetry-proto, need to copy the source code to the opentelemetry/third_party directory.
+    file(COPY ${VENDOR_SRC_DIR}/opentelemetry_proto DESTINATION ${VENDOR_SRC_DIR}/opentelemetry/third_party)
+    # Only depend on protobuf/grpc ExternalProject targets when they exist (vendor top-level build).
+    # In submodule builds (e.g. common/metrics) these targets are absent; curl is always present.
+    set(_otel_depends curl)
+    if (TARGET protobuf)
+        list(APPEND _otel_depends protobuf)
+    endif()
+    if (TARGET grpc)
+        list(APPEND _otel_depends grpc)
+    endif()
+    if (TARGET cjson)
+        list(APPEND _otel_depends cjson)
+    endif()
     EXTERNALPROJECT_ADD(${src_name}
             SOURCE_DIR ${src_dir}
             CMAKE_ARGS ${${src_name}_CMAKE_ARGS} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DCMAKE_INSTALL_LIBDIR=lib
-            BUILD_COMMAND bash -c "export LD_LIBRARY_PATH=${openssl_ROOT}/lib:${openssl_ROOT}/lib64:${protobuf_LIB_DIR}:${grpc_LIB_DIR}:${curl_LIB_DIR}:$ENV{LD_LIBRARY_PATH} \
-                                && ${CMAKE_MAKE_PROGRAM} -j${THIRDPARTY_JOBS}"
+            BUILD_COMMAND bash -c "export LD_LIBRARY_PATH=${protobuf_LIB_DIR}:${grpc_LIB_DIR}:$ENV{LD_LIBRARY_PATH} \
+                                && ${CMAKE_MAKE_PROGRAM} -j${BUILD_THREAD_NUM}"
             LOG_CONFIGURE ON
             LOG_BUILD ON
             LOG_INSTALL ON
-            LOG_OUTPUT_ON_FAILURE ON # print build/configure/install logs to console on failure for CI diagnosis
-            DEPENDS openssl protobuf grpc curl cjson
+            DEPENDS ${_otel_depends}
     )
     ExternalProject_Get_Property(${src_name} INSTALL_DIR)
 else()

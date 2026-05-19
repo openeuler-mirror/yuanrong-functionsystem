@@ -102,10 +102,8 @@ std::string SnapshotScheduler::GenerateInstanceID(const std::string &snapshotID)
     constexpr size_t kSnapshotIDPrefixLen = 13;
     constexpr size_t kSnapshotIDSuffixLen = 8;
     constexpr size_t kUUIDSuffixLen = 8;
-    // Format: "{shortened_snapshotID}-{8char_uuid}"
     std::string snapshotIDShort = snapshotID;
     if (snapshotID.length() > kSnapshotIDMaxLen) {
-        // Take first 13 and last 8 chars
         snapshotIDShort = snapshotID.substr(0, kSnapshotIDPrefixLen) + "-" +
                           snapshotID.substr(snapshotID.length() - kSnapshotIDSuffixLen);
     }

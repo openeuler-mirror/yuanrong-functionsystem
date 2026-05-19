@@ -28,6 +28,7 @@
 #include "common/constants/actor_name.h"
 #include "common/logs/logging.h"
 #include "common/metrics/metrics_adapter.h"
+#include "common/trace/create_trace_helper.h"
 #include "common/resource_view/resource_tool.h"
 #include "common/types/instance_state.h"
 #include "common/utils/actor_worker.h"
@@ -98,6 +99,16 @@ messages::DeployInstanceResponse AgentServiceActor::InitDeployInstanceResponse(
     target.set_code(code);
     target.set_message(message);
     return target;
+}
+
+void AgentServiceActor::StartCodeDownloadSpan(const DeployInstanceRequest &request)
+{
+    trace::StartCodeDownloadSpan(request);
+}
+
+void AgentServiceActor::StopCodeDownloadSpan(const DeployInstanceRequest &request, const DeployResult &result)
+{
+    trace::StopCodeDownloadSpan(request, result);
 }
 
 void AgentServiceActor::InitKillInstanceResponse(messages::KillInstanceResponse *target,
@@ -227,6 +238,7 @@ void AgentServiceActor::DeployInstance(const litebus::AID &from, std::string &&n
     }
     // 5. deploy code package (including main, layer, and delegate package) and start runtime
     auto parameters = BuildDeployerParameters(deployInstanceRequest);
+    StartCodeDownloadSpan(deployInstanceRequest);
     DownloadCodeAndStartRuntime(parameters, deployInstanceRequest);
 }
 
@@ -240,6 +252,9 @@ void AgentServiceActor::DownloadCodeAndStartRuntime(
     }
     if (deployObjects->empty()) {
         YRLOG_INFO("{}|directly start runtime({}).", req->requestid(), req->instanceid());
+        DeployResult result;
+        result.status = Status::OK();
+        StopCodeDownloadSpan(req, result);
         PrepareEnv(req).OnComplete(
             litebus::Defer(GetAID(), &AgentServiceActor::StartRuntime, req, std::placeholders::_1));
         return;
@@ -353,6 +368,7 @@ bool AgentServiceActor::IsDownloadFailed(const std::shared_ptr<messages::DeployI
     }
     auto from = deployingRequest_[req->requestid()].from;
     auto deployResult = failedDownloadRequests_[req->requestid()];
+    StopCodeDownloadSpan(req, deployResult);
     auto resp = InitDeployInstanceResponse(static_cast<int32_t>(deployResult.status.StatusCode()),
                                            deployResult.status.GetMessage(), *req);
     (void)Send(from, "DeployInstanceResponse", resp.SerializeAsString());
@@ -798,6 +814,8 @@ void AgentServiceActor::Init()
     ActorBase::Receive("NotifyFunctionStatusChange", &AgentServiceActor::NotifyFunctionStatusChange);
     ActorBase::Receive("SnapshotRuntime", &AgentServiceActor::SnapshotRuntime);
     ActorBase::Receive("SnapshotRuntimeResponse", &AgentServiceActor::SnapshotRuntimeResponse);
+    ActorBase::Receive("ReconcileRuntimes", &AgentServiceActor::ReconcileRuntimes);
+    ActorBase::Receive("ReconcileRuntimesResponse", &AgentServiceActor::ReconcileRuntimesResponse);
 
     litebus::Async(GetAID(), &AgentServiceActor::RemoveCodePackageAsync);
 
@@ -1705,6 +1723,27 @@ void AgentServiceActor::QueryDebugInstanceInfosResponse(const litebus::AID &from
     YRLOG_DEBUG("{}|got instance status response from({}), {}", rsp.requestid(), std::string(from),
                 rsp.ShortDebugString());
     (void)Send(localSchedFuncAgentMgrAID_, "QueryDebugInstanceInfosResponse", std::move(msg));
+}
+
+void AgentServiceActor::ReconcileRuntimes(const litebus::AID &, std::string &&, std::string &&msg)
+{
+    if (!registerRuntimeMgr_.registered) {
+        YRLOG_ERROR("{}|registration is not complete, ignore ReconcileRuntimes.", agentID_);
+        return;
+    }
+
+    (void)Send(litebus::AID(registerRuntimeMgr_.name, registerRuntimeMgr_.address), "ReconcileRuntimes",
+               std::move(msg));
+}
+
+void AgentServiceActor::ReconcileRuntimesResponse(const litebus::AID &, std::string &&, std::string &&msg)
+{
+    if (!registerRuntimeMgr_.registered || !isRegisterCompleted_) {
+        YRLOG_ERROR("agent({}) registration is not complete, ignore ReconcileRuntimesResponse.", agentID_);
+        return;
+    }
+
+    (void)Send(localSchedFuncAgentMgrAID_, "ReconcileRuntimesResponse", std::move(msg));
 }
 
 void AgentServiceActor::SetNetworkIsolationRequest(const litebus::AID &, std::string &&, std::string &&msg)

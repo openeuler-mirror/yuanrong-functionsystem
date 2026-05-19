@@ -107,6 +107,18 @@ public:
         const std::string &requestID,
         const resource_view::InstanceInfo &instanceInfo,
         int32_t ttl = 0);
+
+    virtual litebus::Future<messages::ReconcileRuntimesResponse> ReconcileRuntimes(
+        const std::string &funcAgentID,
+        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request);
+
+    void SetCoProcessReconcileCallback(std::function<void(const std::string &)> callback)
+    {
+        ASSERT_IF_NULL(actor_);
+        actor_->SetCoProcessReconcileCallback(std::move(callback));
+    }
+
+
     // for test
     [[maybe_unused]] litebus::Future<bool> IsRegistered(const std::string &funcAgentID) const
     {

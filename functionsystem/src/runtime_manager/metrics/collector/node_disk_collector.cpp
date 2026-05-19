@@ -51,8 +51,8 @@ Metric NodeDiskCollector::GetLimit() const
     YRLOG_DEBUG_COUNT_60("node disk collector get limit.");
     Metric metric;
     // no chache diskinfo
-    constexpr double doubleCloseEps = 1e-9;
-    if (std::abs(totalDiskSpace_) <= doubleCloseEps && std::abs(availableDiskSpace_) <= doubleCloseEps) {
+    constexpr double DOUBLE_CLOSE_EPS = 1e-9;
+    if (std::abs(totalDiskSpace_) <= DOUBLE_CLOSE_EPS && std::abs(availableDiskSpace_) <= DOUBLE_CLOSE_EPS) {
         getFileSystemInfo(TARGET_PATH_);
     }
     metric.value = totalDiskSpace_;

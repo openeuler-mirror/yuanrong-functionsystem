@@ -55,6 +55,7 @@
 #include "function_proxy/common/common_driver/common_driver.h"
 #include "function_proxy/common/observer/control_plane_observer/control_plane_observer.h"
 #include "function_proxy/common/observer/data_plane_observer/data_plane_observer.h"
+#include "function_proxy/config/direct_routing_config.h"
 #include "grpc/grpc_security_constants.h"
 #include "grpcpp/security/server_credentials.h"
 #include "local_scheduler/instance_control/posix_api_handler/posix_api_handler.h"
@@ -445,7 +446,8 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .traefikLeaseTTL = flags.GetTraefikLeaseTTL(),
         .traefikHttpEntryPoint = flags.GetTraefikHttpEntryPoint(),
         .traefikEnableTLS = flags.GetTraefikEnableTLS(),
-        .traefikServersTransport = flags.GetTraefikServersTransport()
+        .traefikServersTransport = flags.GetTraefikServersTransport(),
+        .enableMergeProcess = flags.GetEnableMergeProcess()
     };
 }
 
@@ -564,6 +566,12 @@ void OnCreate(const Flags &flags, const function_agent::FunctionAgentFlags &func
         OnCreateFunctionAgent(functionAgentFlags, runtimeManagerFlags, true);
     }
 
+    trace::TraceManager::GetInstance().InitTrace(COMPONENT_NAME, flags.GetNodeID(), flags.GetEnableTrace(),
+                                                 flags.GetTraceConfig());
+    if (flags.GetEnableMergeProcess()) {
+        OnCreateFunctionAgent(functionAgentFlags, runtimeManagerFlags, true);
+    }
+
     InvocationHandler::RegisterCreateCallResultReceiver(PosixAPIHandler::CallResult);
     const auto dsAuthConfig = InitDsAuthConfig(flags);
     if (const auto status = InitCommonDriver(flags, dsAuthConfig); status.IsError()) {
@@ -649,6 +657,8 @@ int main(int argc, char **argv)
         return EXIT_COMMAND_MISUSE;
     }
 
+    DirectRoutingConfig::SetEnabled(flags.GetEnableDirectRouting());
+
     function_agent::FunctionAgentFlags functionAgentFlags;
     runtime_manager::Flags runtimeManagerFlags;
     if (flags.GetEnableMergeProcess()) {
@@ -667,6 +677,8 @@ int main(int argc, char **argv)
     if (!g_functionProxySwitcher->InitLogger(flags)) {
         return EXIT_ABNORMAL;
     }
+
+    YRLOG_INFO("DirectRouting feature flag: {}", flags.GetEnableDirectRouting());
 
     if (!g_functionProxySwitcher->RegisterHandler(Stop, stopSignal)) {
         return EXIT_ABNORMAL;

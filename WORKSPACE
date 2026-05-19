@@ -28,12 +28,10 @@ http_archive(
     urls = ["https://gitee.com/mirrors/nlohmann-json/repository/archive/v3.11.3.zip"],
 )
 
-# --- gtest --- gitee.com mirror zip
-http_archive(
+# --- gtest --- use checked-in vendor source for deterministic offline test builds.
+local_repository(
     name = "gtest",
-    sha256 = "647924848ca7cb91ba5e34260132902886e1bd140428bd3bd7b4e8fa6c6c8904",
-    strip_prefix = "googletest-v1.13.0",
-    urls = ["https://gitee.com/mirrors/googletest/repository/archive/v1.13.0.zip"],
+    path = "./vendor/src/gtest_1_12_1",
 )
 
 # --- grpc dependency chain (abseil, protobuf, zlib, grpc, boringssl, re2, etc.) ---
@@ -113,10 +111,12 @@ new_local_repository(
 )
 
 # --- Pre-built vendor libraries (built by run.sh vendor step) ---
+# etcdapi: Bazel source build — proto/gRPC stubs generated from vendor/src/etcd/.
+# The vendor/etcdapi/ directory is a placeholder; all real deps are in @yuanrong_functionsystem//vendor/src/.
 new_local_repository(
     name = "etcdapi",
     build_file = "@//bazel:etcdapi.bzl",
-    path = "./vendor/output/Install/etcdapi/",
+    path = "./vendor/etcdapi/",
 )
 
 new_local_repository(
@@ -131,11 +131,6 @@ new_local_repository(
     path = "./vendor/output/Install/curl/",
 )
 
-new_local_repository(
-    name = "opentelemetry_prebuilt",
-    build_file = "@//bazel:opentelemetry_prebuilt.bzl",
-    path = "./vendor/output/Install/opentelemetry/",
-)
 
 new_local_repository(
     name = "minizip_sdk",

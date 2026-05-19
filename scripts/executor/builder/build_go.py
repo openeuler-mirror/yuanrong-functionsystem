@@ -32,12 +32,15 @@ def build_cli(root_path):
 
 def build_meta_service(root_path):
     app_path = os.path.join(root_path, "functionsystem", "apps", "meta_service")
+    build_env = os.environ.copy()
+    build_env["GOWORK"] = "off"
     utils.sync_command(
         cmd=[
             "bash",
             "gen/gen.sh",
         ],
         cwd=app_path,
+        env=build_env,
     )
     main_path = os.path.join(app_path, "cmd", "main.go")
     output_path = os.path.join(root_path, "functionsystem", "output", "bin")
@@ -50,6 +53,7 @@ def build_golang(app_path, app_name, main_path, output_path, go_ldflags="-s -w",
     """
     build_env = os.environ.copy()
     build_env["CGO_ENABLED"] = "1" if cgo_enabled else "0"
+    build_env["GOWORK"] = "off"
     bin_path = os.path.join(output_path, app_name)
     log.info(f"Build golang app[{app_name}] to {bin_path}.")
     log.info(f"Go build ldflags: {go_ldflags}")
@@ -78,6 +82,4 @@ def build_etcd(vendor_path):
         log.warning("Skip ETCD compilation. Compilation product already exists")
         return
     # 原地编译ETCD
-    build_env = os.environ.copy()
-    build_env["GOTOOLCHAIN"]="local"
-    utils.sync_command(["bash", "build.sh"], cwd=os.path.join(etcd_path), env=build_env)
+    utils.sync_command(["bash", "build.sh"], cwd=os.path.join(etcd_path))

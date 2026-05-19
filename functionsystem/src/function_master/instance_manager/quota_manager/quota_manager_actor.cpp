@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "async/async.hpp"
+#include "common/constants/signal.h"
 #include "common/logs/logging.h"
 #include "common/proto/pb/posix/message.pb.h"
 #include "common/proto/pb/posix/inner_service.pb.h"
@@ -164,9 +165,10 @@ void QuotaManagerActor::CheckAndEnforce(const std::string &tenantID)
         }
 
         if (!instanceMgrAID_.Name().empty()) {
-            inner_service::ForwardKillRequest killReq;
-            killReq.set_instanceid(instanceID);
+            messages::ForwardKillRequest killReq;
             killReq.set_requestid("QUOTA_EVICT|tenantID=" + tenantID + "|instanceID=" + instanceID);
+            killReq.mutable_instance()->set_instanceid(instanceID);
+            killReq.mutable_req()->set_signal(functionsystem::SHUT_DOWN_SIGNAL);
             Send(instanceMgrAID_, "ForwardKill", killReq.SerializeAsString());
             YRLOG_INFO("QuotaManagerActor: Evicting instance {} from tenant {} due to quota exceeded",
                        instanceID, tenantID);

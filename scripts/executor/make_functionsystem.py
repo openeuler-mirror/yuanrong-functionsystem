@@ -37,43 +37,17 @@ def parser_args():
     build_parser.add_argument(
         "--build_type",
         type=str,
-        choices=["release", "debug"],
-        default="release",
-        help="Set program compilation mode(release/debug). Default: release",
+        default="Release",
+        help="Set program compilation mode(Debug/Release). Default: Release",
     )
     build_parser.add_argument(
-        "--cmake_args",
-        type=utils.parse_kv_args,
-        nargs='+',
-        default = {},
-        help="Add CMAKE compilation parameters. Format: <key>=<val>",
-    )
-    build_parser.add_argument(
-        "--component",
+        "--builder",
         type=str,
-        choices=[
-            "all",
-            "cli",
-            "iam_server",
-            "meta_service",
-            "function_master",
-            "domain_scheduler",
-            "runtime_manager",
-            "function_proxy",
-            "function_agent",
-        ],
-        default="all",
-        help="Build a specific component. Support cpp binaries and go modules(cli/meta_service). Default: all",
-    )
-    build_parser.add_argument(
-        "--linker",
-        type=str,
-        choices=["auto", "gold", "lld", "mold"],
-        default="auto",
-        help="Select cpp linker backend. Default: auto (legacy behavior, no mold unless explicitly selected)",
+        choices=["cmake", "bazel"],
+        default="cmake",
+        help="Choose build system to use: cmake or bazel. Default: cmake",
     )
     build_parser.set_defaults(func=lambda func_args: tasks.run_build(ROOT_DIR, func_args))
-
     # 清理缓存执行参数
     clean_parser = subparsers.add_parser("clean", help="Clean all build artifacts and caches")
     clean_parser.add_argument(
@@ -83,7 +57,6 @@ def parser_args():
         "--skip_change", type=bool, default=True, help="Skip clean all code change and the files that ignored by git"
     )
     clean_parser.set_defaults(func=lambda func_args: tasks.run_clean(ROOT_DIR, func_args))
-
     # 测试用例执行参数
     test_parser = subparsers.add_parser("test", help="Run tests for function system")
     test_parser.add_argument(
@@ -116,8 +89,14 @@ def parser_args():
         default=True,
         help="Set whether to print test case standard output. Default: True",
     )
+    test_parser.add_argument(
+        "--builder",
+        type=str,
+        choices=["cmake", "bazel"],
+        default="cmake",
+        help="Choose build system used for test artifacts: cmake or bazel. Default: cmake",
+    )
     test_parser.set_defaults(func=lambda func_args: tasks.run_test(ROOT_DIR, func_args))
-
     # 打包函数系统构建产物
     pack_parser = subparsers.add_parser("pack", help="Copy and package all compiled products of function system")
     pack_parser.add_argument(

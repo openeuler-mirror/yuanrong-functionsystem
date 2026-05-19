@@ -81,7 +81,7 @@ const std::string FileExporterJsonStr = R"(
 
 const std::string AlarmExporterJsonStr = R"(
 {
-    "enabledMetrics": ["yr_k8s_alarm", "yr_proxy_alarm", "fake_metrics", "yr_election_alarm", "yr_etcd_alarm", "yr_metastore_alarm"],
+    "enabledMetrics": ["yr_k8s_alarm", "yr_proxy_alarm", "fake_metrics", "yr_election_alarm", "yr_etcd_alarm", "yr_metastore_alarm", "yr_instance_create_failure_alarm"],
     "backends": [
         {
             "immediatelyExport": {
@@ -151,6 +151,7 @@ protected:
         MetricsAdapter::GetInstance().ClearEnabledInstruments();
         MetricsAdapter::GetInstance().GetMetricsContext().EraseBillingInstance();
         MetricsAdapter::GetInstance().GetMetricsContext().EraseExtraBillingInstance();
+        MetricsAdapter::GetInstance().GetMetricsContext().EraseAlarm("YuanrongInstanceCreateFailure00001-request-1");
         MetricsAdapter::GetInstance().GetMetricsContext().SetAttr("component_name", "");
         MetricsAdapter::GetInstance().GetMetricsContext().ErasePodResource();
         litebus::Terminate(metricsActor_->GetAID());
@@ -171,7 +172,7 @@ TEST_F(MetricsAdapterTest, NrGaugeInstrument)
     EXPECT_NO_THROW(metrics_::MetricsAdapter::GetInstance().ReportGauge(title, data));
 }
 
-std::string GetMetricsFilesName(const std::string &backendName)
+static std::string GetMetricsFilesName(const std::string &backendName)
 {
     return "nodeID-componentName-metrics.data";
 }
@@ -1072,6 +1073,41 @@ TEST_F(MetricsAdapterTest, SendSchedulerAlarm)
     metrics::MetricsAdapter::GetInstance().SendSchedulerAlarm("proxy,127.0.0.1");
     auto alarmMap = metrics::MetricsAdapter::GetInstance().GetAlarmHandler().GetAlarmMap();
     EXPECT_TRUE(alarmMap.find(metrics::SCHEDULER_ALARM) != alarmMap.end());
+}
+
+TEST_F(MetricsAdapterTest, SendInstanceCreateFailureAlarm)
+{
+    MetricsAdapter::GetInstance().InitMetricsFromJson(nlohmann::json::parse(AlarmExporterJsonStr),
+                                                      GetMetricsFilesName, {});
+    MetricsAdapter::GetInstance().GetMetricsContext().SetAttr("component_name", "function_proxy");
+    MetricsAdapter::GetInstance().SetContextAttr("site", "cn-north-7");
+    MetricsAdapter::GetInstance().SetContextAttr("tenant_id", "tenant-1");
+    MetricsAdapter::GetInstance().SetContextAttr("application_id", "app-1");
+    MetricsAdapter::GetInstance().SetContextAttr("service_id", "svc-1");
+
+    MetricsAdapter::GetInstance().SendInstanceCreateFailureAlarm("request-1", "instance-1", "runtime-1",
+                                                                 "127.0.0.1:3000", int64_t(StatusCode::FAILED),
+                                                                 "create_client", "connect runtime failed");
+
+    auto alarmMap = MetricsAdapter::GetInstance().GetAlarmHandler().GetAlarmMap();
+    EXPECT_TRUE(alarmMap.find(metrics::INSTANCE_CREATE_FAILURE_ALARM) != alarmMap.end());
+
+    auto alarmInfoMap = MetricsAdapter::GetInstance().GetMetricsContext().GetAlarmInfoMap();
+    ASSERT_TRUE(alarmInfoMap.find("YuanrongInstanceCreateFailure00001-request-1") != alarmInfoMap.end());
+    const auto &alarmInfo = alarmInfoMap.at("YuanrongInstanceCreateFailure00001-request-1");
+    EXPECT_EQ(alarmInfo.alarmName, metrics::INSTANCE_CREATE_FAILURE_ALARM);
+    EXPECT_EQ(alarmInfo.locationInfo, "127.0.0.1:3000");
+    EXPECT_EQ(alarmInfo.cause, "connect runtime failed");
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("resource_id")), "instance-1");
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("request_id")), "request-1");
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("runtime_id")), "runtime-1");
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("stage")), "create_client");
+    EXPECT_EQ(std::get<int64_t>(alarmInfo.customOptions.at("status_code")), int64_t(StatusCode::FAILED));
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("site")), "cn-north-7");
+    EXPECT_EQ(std::get<std::string>(alarmInfo.customOptions.at("tenant_id")), "tenant-1");
+
+    MetricsAdapter::GetInstance().CleanMetrics();
+    EXPECT_EQ(MetricsApi::Provider::GetMeterProvider(), nullptr);
 }
 
 TEST_F(MetricsAdapterTest, PodResourceContextTest)
