@@ -13,28 +13,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-function function_system_health_check() {
+function is_true() {
+  [ "X${1}" = "Xtrue" ] || [ "X${1}" = "XTRUE" ]
+}
+
+function function_system_health_check_with_addr() {
   local pid=$1
-  local port=$2
+  local addr=$2
   local dest=$3
-  local addr="${IP_ADDRESS}:${port}"
-  local node_id=${NODE_ID}
-  local protocol="http"
+  local protocol=$4
+  shift 4
+  local curl_args=("$@")
   if ! kill -0 "${pid}" &>/dev/null; then
     # process not exist
     log_warning "process ${pid} is not exist"
     return 1
   fi
   local i
-  local tls_opt=""
-  if [ "X${SSL_ENABLE}" = "Xtrue" ]; then
-      tls_opt="--cert ${CERTIFICATE_FILE_PATH} --key ${PRIVATE_KEY_PATH} --cacert ${VERIFY_FILE_PATH}"
-      protocol="https"
-  fi
-
   for ((i = 1; i <= FS_HEALTH_CHECK_RETRY_TIMES; i++)); do
-    local ret_code=$(LD_LIBRARY_PATH="" timeout ${FS_HEALTH_CHECK_TIMEOUT} curl ${tls_opt} -s -m "${FS_HEALTH_CHECK_TIMEOUT}" -H "Node-ID:${NODE_ID}" -H "PID:${pid}" \
-                         "${protocol}://${addr}/${dest}/healthy" -w %{http_code};echo $?)
+    local ret_code
+    if [ ${#curl_args[@]} -gt 0 ]; then
+      ret_code=$(LD_LIBRARY_PATH="" timeout ${FS_HEALTH_CHECK_TIMEOUT} curl "${curl_args[@]}" -s \
+                     -m "${FS_HEALTH_CHECK_TIMEOUT}" -H "Node-ID:${NODE_ID}" -H "PID:${pid}" \
+                     "${protocol}://${addr}/${dest}/healthy" -w %{http_code}; echo $?)
+    else
+      ret_code=$(LD_LIBRARY_PATH="" timeout ${FS_HEALTH_CHECK_TIMEOUT} curl -s -m "${FS_HEALTH_CHECK_TIMEOUT}" \
+                     -H "Node-ID:${NODE_ID}" -H "PID:${pid}" "${protocol}://${addr}/${dest}/healthy" \
+                     -w %{http_code}; echo $?)
+    fi
     # ret_code长度为4时，一般前三位为curl返回的状态码，最后一位为curl退出码
     # ret_code长度为3时，一般表示curl执行超时（timeout命令返回124）
     if [ "x${ret_code:0:3}" = "x200" ]; then
@@ -53,6 +59,49 @@ function function_system_health_check() {
     sleep $FS_HEALTH_CHECK_RETRY_INTERVAL
   done
   return 1
+}
+
+function function_system_health_check() {
+  local pid=$1
+  local port=$2
+  local dest=$3
+  local addr="${IP_ADDRESS}:${port}"
+  local protocol="http"
+  local curl_args=()
+  if is_true "${SSL_ENABLE}"; then
+    curl_args=(--cert "${CERTIFICATE_FILE_PATH}" --key "${PRIVATE_KEY_PATH}" --cacert "${VERIFY_FILE_PATH}")
+    protocol="https"
+  fi
+  if [ ${#curl_args[@]} -gt 0 ]; then
+    function_system_health_check_with_addr "${pid}" "${addr}" "${dest}" "${protocol}" "${curl_args[@]}"
+  else
+    function_system_health_check_with_addr "${pid}" "${addr}" "${dest}" "${protocol}"
+  fi
+}
+
+function iam_server_health_check() {
+  local pid=$1
+  local addr="${IP_ADDRESS}:${IAM_SERVER_PORT}"
+  local protocol="http"
+  local curl_args=()
+  if [ -n "${IAM_LOCAL_LISTEN_PORT}" ] && [ "${IAM_LOCAL_LISTEN_PORT}" != "0" ]; then
+    local local_ip="${IAM_LOCAL_IP:-127.0.0.1}"
+    addr="${local_ip}:${IAM_LOCAL_LISTEN_PORT}"
+  else
+    local iam_tls_enable="${SSL_ENABLE}"
+    if [ -n "${IAM_SSL_ENABLE}" ]; then
+      iam_tls_enable="${IAM_SSL_ENABLE}"
+    fi
+    if is_true "${iam_tls_enable}"; then
+      curl_args=(--cert "${CERTIFICATE_FILE_PATH}" --key "${PRIVATE_KEY_PATH}" --cacert "${VERIFY_FILE_PATH}")
+      protocol="https"
+    fi
+  fi
+  if [ ${#curl_args[@]} -gt 0 ]; then
+    function_system_health_check_with_addr "${pid}" "${addr}" "iam-server" "${protocol}" "${curl_args[@]}"
+  else
+    function_system_health_check_with_addr "${pid}" "${addr}" "iam-server" "${protocol}"
+  fi
 }
 
 function dashboard_health_check() {
