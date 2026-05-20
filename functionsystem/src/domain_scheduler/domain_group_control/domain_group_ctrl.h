@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "common/proto/pb/message_pb.h"
+#include "common/schedule_decision/schedule_recorder/schedule_recorder.h"
 #include "litebus.hpp"
 
 namespace functionsystem::domain_scheduler {
@@ -32,6 +33,7 @@ public:
     virtual ~DomainGroupCtrl() = default;
     virtual void TryCancelSchedule(const std::shared_ptr<messages::CancelSchedule> &cancelRequest);
     virtual litebus::Future<std::vector<std::shared_ptr<messages::ScheduleRequest>>> GetRequests();
+    virtual litebus::Future<std::vector<schedule_decision::ScheduleQueueRecord>> GetQueueRecords();
 
 private:
     litebus::ActorReference actor_;

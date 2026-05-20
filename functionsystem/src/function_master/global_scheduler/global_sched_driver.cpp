@@ -26,6 +26,7 @@
 #include "common/logs/logging.h"
 #include "meta_store_client/meta_store_client.h"
 #include "common/scheduler_topology/sched_tree.h"
+#include "nlohmann/json.hpp"
 
 namespace functionsystem::global_scheduler {
 
@@ -43,8 +44,10 @@ const std::string GET_SCHEDULING_QUEUE_URL = "/scheduling_queue";
 const std::string EVICT_AGENT_URL = "/evictagent";
 const std::string QUERY_AGENT_COUNT_URL = "/queryagentcount";
 const std::string QUERY_RESOURCES_URL = "/resources";
+const std::string NODE_LOCAL_SCHEDULING_STATUS_URL = "/node/localschedulingstatus";
 const std::string JSON_FORMAT = "json";
 const std::string PROTOBUF_FORMAT = "protobuf";
+const std::string NODE_ID_QUERY_KEY = "node_id";
 
 std::string EvictResultBody(common::ErrorCode code, const std::string &message)
 {
@@ -60,6 +63,16 @@ std::string EvictResultBody(common::ErrorCode code, const std::string &message)
     return rspBody;
 }
 
+std::string GetLocalSchedulingStatusLabel(bool evicting)
+{
+    return evicting ? "evicting" : "normal";
+}
+
+std::string BuildUpdateLocalSchedulingStatusBody(const std::string &status, const std::string &message)
+{
+    return "{\"status\":\"" + status + "\",\"message\":\"" + message + "\"}";
+}
+
 void AgentApiRouter::InitGetSchedulingQueueHandler(const std::shared_ptr<GlobalSched> &globalSched)
 {
     auto getSchedulingQueue = [globalSched](const HttpRequest &request) -> litebus::Future<HttpResponse> {
@@ -71,13 +84,13 @@ void AgentApiRouter::InitGetSchedulingQueueHandler(const std::shared_ptr<GlobalS
         bool useJsonFormat = request.headers.find("Type") == request.headers.end()
                              || request.headers.find("Type")->second == JSON_FORMAT;
 
-        auto req = std::make_shared<messages::QueryInstancesInfoRequest>();
+        auto req = std::make_shared<messages::QuerySchedulingQueueRequest>();
         auto requestID = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
         req->set_requestid(requestID);
         YRLOG_INFO("{}|get scheduling queue", requestID);
 
         return globalSched->GetSchedulingQueue(req).Then(
-            [useJsonFormat](const messages::QueryInstancesInfoResponse &resp) -> litebus::Future<HttpResponse> {
+            [useJsonFormat](const messages::QuerySchedulingQueueResponse &resp) -> litebus::Future<HttpResponse> {
                 if (!useJsonFormat) {
                     return litebus::http::Ok(resp.SerializeAsString());
                 }
@@ -86,13 +99,53 @@ void AgentApiRouter::InitGetSchedulingQueueHandler(const std::shared_ptr<GlobalS
                 google::protobuf::util::JsonOptions options;
                 options.always_print_primitive_fields = true;
                 (void)google::protobuf::util::MessageToJsonString(resp, &rspBody, options);
+                auto body = nlohmann::json::parse(rspBody, nullptr, false);
+                if (body.is_discarded()) {
+                    YRLOG_ERROR("failed to parse scheduling queue response");
+                    return HttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR);
+                }
+                body["count"] = resp.instanceinfos_size();
                 YRLOG_DEBUG("GetSchedulingQueue: size {}", resp.instanceinfos_size());
 
-                return litebus::http::Ok(rspBody);
+                return litebus::http::Ok(body.dump(), litebus::http::ResponseBodyType::JSON);
             });
     };
 
     RegisterHandler(GET_SCHEDULING_QUEUE_URL, getSchedulingQueue);
+}
+
+void AgentApiRouter::InitUpdateLocalSchedulingStatusHandler(const std::shared_ptr<GlobalSched> &globalSched)
+{
+    auto updateSchedulingStatusHandler = [globalSched](const HttpRequest &request) -> litebus::Future<HttpResponse> {
+        if (request.method != "POST" && request.method != "DELETE") {
+            return GenerateHttpResponse(litebus::http::ResponseCode::METHOD_NOT_ALLOWED,
+                                        BuildUpdateLocalSchedulingStatusBody(
+                                            "unknown", "only POST and DELETE are supported"));
+        }
+
+        const auto nodeIDIt = request.url.query.find(NODE_ID_QUERY_KEY);
+        if (nodeIDIt == request.url.query.end() || nodeIDIt->second.empty()) {
+            return GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST,
+                                        BuildUpdateLocalSchedulingStatusBody(
+                                            "unknown", "node_id query parameter is required"));
+        }
+
+        const bool evicting = request.method == "POST";
+        const auto statusLabel = GetLocalSchedulingStatusLabel(evicting);
+        return globalSched->UpdateLocalSchedulingStatus(nodeIDIt->second, evicting).Then(
+            [statusLabel](const Status &status) -> litebus::Future<HttpResponse> {
+                if (!status.IsOk()) {
+                    auto httpCode = status.StatusCode() == StatusCode::PARAMETER_ERROR
+                                        ? litebus::http::ResponseCode::NOT_FOUND
+                                        : litebus::http::ResponseCode::SERVICE_UNAVAILABLE;
+                    return GenerateHttpResponse(httpCode,
+                                                BuildUpdateLocalSchedulingStatusBody(statusLabel, status.ToString()));
+                }
+                return GenerateHttpResponse(litebus::http::ResponseCode::OK,
+                                            BuildUpdateLocalSchedulingStatusBody(statusLabel, "success"));
+            });
+    };
+    RegisterHandler(NODE_LOCAL_SCHEDULING_STATUS_URL, updateSchedulingStatusHandler);
 }
 
 void AgentApiRouter::InitQueryAgentHandler(const std::shared_ptr<GlobalSched> &globalSched)
@@ -277,6 +330,7 @@ GlobalSchedDriver::GlobalSchedDriver(std::shared_ptr<GlobalSched> globalSched, c
     agentApiRouteRegister_->InitEvictAgentHandler(globalSched_);
     agentApiRouteRegister_->InitGetSchedulingQueueHandler(globalSched_);
     agentApiRouteRegister_->InitQueryAgentCountHandler(metaStoreClient_);
+    agentApiRouteRegister_->InitUpdateLocalSchedulingStatusHandler(globalSched_);
     if (auto registerStatus(httpServer_->RegisterRoute(agentApiRouteRegister_));
         registerStatus != StatusCode::SUCCESS) {
         YRLOG_ERROR("register agent api router failed.");

@@ -1329,6 +1329,7 @@ std::pair<MetricsApi::MetricLabels, double> MetricsAdapter::BuildPodResourceData
                     resource_view::MEMORY_RESOURCE_NAME) },
             { "memory_capacity", GetResourceScalar(podResource.capacity, resource_view::MEMORY_RESOURCE_NAME) },
             { "pool_label", poolLabelsJson.dump() },
+            { "status", podResource.status.empty() ? "unknown" : podResource.status },
  			{ "agent_id", agentID },
             { "report_ms", std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
                                               std::chrono::system_clock::now().time_since_epoch())

@@ -677,6 +677,16 @@ message QueryResourcesInfoResponse {
   resources.ResourceUnit resource = 2;
 }
 
+message QuerySchedulingQueueRequest {
+  string requestID = 1;
+}
+
+message QuerySchedulingQueueResponse {
+  string requestID                                   = 1;
+  common.ErrorCode code                              = 2;
+  repeated resources.SchedulingQueueInfo instanceInfos = 3;
+}
+
 message QueryInstancesInfoRequest {
   string requestID = 1;
 }

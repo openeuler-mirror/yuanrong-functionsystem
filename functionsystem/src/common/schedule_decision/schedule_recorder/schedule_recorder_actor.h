@@ -16,10 +16,13 @@
 #ifndef SCHEDULE_RECORDER_ACTOR_H
 #define SCHEDULE_RECORDER_ACTOR_H
 #include <unordered_map>
+#include <vector>
 
 #include "async/future.hpp"
 #include "litebus.hpp"
+#include "common/proto/pb/message_pb.h"
 #include "common/status/status.h"
+#include "common/schedule_decision/schedule_recorder/schedule_recorder.h"
 namespace functionsystem::schedule_decision {
 struct ScheduleRecordInfo {
     Status latelyStatus;
@@ -36,8 +39,12 @@ public:
     litebus::Future<Status> TryQueryScheduleErr(const std::string &requestID);
     void RecordScheduleErr(const std::string &requestID, const Status &status);
     void EraseScheduleErr(const std::string &requestID);
+    void RecordScheduleRequest(const std::shared_ptr<messages::ScheduleRequest> &request);
+    void EraseScheduleRequest(const std::string &requestID);
+    std::vector<ScheduleQueueRecord> QueryScheduleQueue();
 private:
     std::unordered_map<std::string, ScheduleRecordInfo> records_;
+    std::unordered_map<std::string, ScheduleQueueRecord> queueRecords_;
 };
 
 }  // namespace functionsystem::schedule_decision

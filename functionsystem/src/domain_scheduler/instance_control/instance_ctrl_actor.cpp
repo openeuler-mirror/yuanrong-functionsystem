@@ -55,7 +55,8 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     }
     requestTrySchedTimes_[req->requestid()]++;
 
-    schedulerQueueMap_[req->requestid()] = req;
+    ASSERT_IF_NULL(recorder_);
+    recorder_->RecordScheduleRequest(req);
 
     return ScheduleDecision(req);
 }
@@ -125,7 +126,8 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
         // todo(lwy_robb): to use traceID
     trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kDomainSchedule, req->requestid());
 
-    schedulerQueueMap_.erase(req->requestid());
+    ASSERT_IF_NULL(recorder_);
+    recorder_->EraseScheduleRequest(req->requestid());
     auto schedResult = result.Get();
     if (schedResult.code == static_cast<int32_t>(StatusCode::INVALID_RESOURCE_PARAMETER)) {
         if (isHeader_) {
@@ -209,6 +211,24 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     YRLOG_INFO("{}|{}|schedule request response code: {} msg: {}", req->traceid(), req->requestid(), rsp->code(),
                rsp->message());
     return rsp;
+}
+
+litebus::Future<std::vector<std::shared_ptr<messages::ScheduleRequest>>> InstanceCtrlActor::GetSchedulerQueue()
+{
+    ASSERT_IF_NULL(recorder_);
+    return recorder_->QueryScheduleQueue().Then([](const std::vector<schedule_decision::ScheduleQueueRecord> &records) {
+        std::vector<std::shared_ptr<messages::ScheduleRequest>> requests;
+        requests.reserve(records.size());
+        for (const auto &record : records) {
+            auto request = std::make_shared<messages::ScheduleRequest>();
+            request->set_requestid(record.info.requestid());
+            request->mutable_instance()->set_requestid(record.info.requestid());
+            request->mutable_instance()->set_instanceid(record.info.instanceid());
+            request->mutable_instance()->mutable_resources()->CopyFrom(record.info.resources());
+            requests.emplace_back(std::move(request));
+        }
+        return requests;
+    });
 }
 
 void InstanceCtrlActor::UpdateMaxSchedRetryTimes(const uint32_t &retrys)

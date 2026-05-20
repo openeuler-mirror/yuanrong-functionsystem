@@ -69,6 +69,7 @@ public:
 
     virtual litebus::Future<Status> EvictAgentOnLocal(const std::string &address,
                                                       const std::shared_ptr<messages::EvictAgentRequest> &req);
+    virtual litebus::Future<Status> UpdateSchedulingStatusOnLocal(const std::string &address, bool evicting);
 
     void OnLocalAbnormal(const std::string &localID, const std::string &address);
 

@@ -32,6 +32,7 @@ public:
     ~MockDomainGroupCtrl() override = default;
     MOCK_METHOD(void, TryCancelSchedule, (const std::shared_ptr<messages::CancelSchedule> &cancelRequest), (override));
     MOCK_METHOD(litebus::Future<std::vector<std::shared_ptr<messages::ScheduleRequest>>>, GetRequests, (), (override));
+    MOCK_METHOD(litebus::Future<std::vector<schedule_decision::ScheduleQueueRecord>>, GetQueueRecords, (), (override));
 };
 }  // namespace functionsystem::test
 

@@ -15,9 +15,11 @@
  */
 #include "domain_sched_srv_actor.h"
 
+#include <algorithm>
 #include <async/async.hpp>
 #include <async/asyncafter.hpp>
 #include <async/defer.hpp>
+#include <chrono>
 
 #include "common/constants/actor_name.h"
 #include "common/constants/constants.h"
@@ -28,6 +30,23 @@
 #include "common/resource_view/resource_type.h"
 
 namespace functionsystem::domain_scheduler {
+namespace {
+int64_t CurrentTimeMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+resource_view::SchedulingQueueInfo BuildQueueInstanceInfo(const schedule_decision::ScheduleQueueRecord &record)
+{
+    auto instanceInfo = record.info;
+    auto nowMs = CurrentTimeMs();
+    instanceInfo.set_waitdurationms(std::max<int64_t>(0, nowMs - record.info.enqueuetimems()));
+    return instanceInfo;
+}
+}  // namespace
+
 const uint32_t DEFAULT_REGISTER_INTERVAL = 5000;
 const uint32_t DEFAULT_MAX_REGISTER_TIMES = 10;
 const uint32_t DEFAULT_PING_RECEIVE_LOST_TIMEOUT = 6000;
@@ -692,7 +711,7 @@ void DomainSchedSrvActor::QueryAgentInfo(const litebus::AID &from, std::string &
 
 void DomainSchedSrvActor::GetSchedulingQueue(const litebus::AID &from, std::string &&, std::string &&msg)
 {
-    auto req = std::make_shared<messages::QueryInstancesInfoRequest>();
+    auto req = std::make_shared<messages::QuerySchedulingQueueRequest>();
     if (!req->ParseFromString(msg)) {
         YRLOG_ERROR("invalid get scheduling queue request from({}), {}", std::string(from), msg);
         return;
@@ -701,41 +720,45 @@ void DomainSchedSrvActor::GetSchedulingQueue(const litebus::AID &from, std::stri
 
     ASSERT_IF_NULL(instanceCtrl_);
     ASSERT_IF_NULL(groupCtrl_);
+    ASSERT_IF_NULL(recorder_);
 
-    instanceCtrl_->GetSchedulerQueue()
+    recorder_->QueryScheduleQueue()
         .Then(litebus::Defer(GetAID(), &DomainSchedSrvActor::CombineInstanceAndGroup, std::placeholders::_1))
         .OnComplete(litebus::Defer(GetAID(), &DomainSchedSrvActor::GetSchedulingQueueCallBack, from, req->requestid(),
                                    std::placeholders::_1));
 }
 
-litebus::Future<std::vector<std::shared_ptr<messages::ScheduleRequest>>> DomainSchedSrvActor::CombineInstanceAndGroup(
-    const std::vector<std::shared_ptr<messages::ScheduleRequest>> &instanceQueue)
+litebus::Future<std::vector<schedule_decision::ScheduleQueueRecord>> DomainSchedSrvActor::CombineInstanceAndGroup(
+    const std::vector<schedule_decision::ScheduleQueueRecord> &instanceQueue)
 {
-    return groupCtrl_->GetRequests().Then(
-        [instanceQueue](std::vector<std::shared_ptr<messages::ScheduleRequest>> requests) {
+    return groupCtrl_->GetQueueRecords().Then(
+        [instanceQueue](std::vector<schedule_decision::ScheduleQueueRecord> requests) {
             requests.insert(requests.end(), instanceQueue.begin(), instanceQueue.end());
+            std::sort(requests.begin(), requests.end(),
+                      [](const schedule_decision::ScheduleQueueRecord &lhs,
+                         const schedule_decision::ScheduleQueueRecord &rhs) {
+                          return lhs.info.enqueuetimems() < rhs.info.enqueuetimems();
+                      });
             return requests;
         });
 }
 
 void DomainSchedSrvActor::GetSchedulingQueueCallBack(
     const litebus::AID &to, const std::string &requestID,
-    const litebus::Future<std::vector<std::shared_ptr<messages::ScheduleRequest>>> &future)
+    const litebus::Future<std::vector<schedule_decision::ScheduleQueueRecord>> &future)
 {
-    messages::QueryInstancesInfoResponse rsp;
+    messages::QuerySchedulingQueueResponse rsp;
     rsp.set_requestid(requestID);
     ASSERT_FS(future.IsOK());
     auto scheduleRequests = future.Get();
 
     int size = 0;
-    for (std::shared_ptr<messages::ScheduleRequest> scheduleRequest : scheduleRequests) {
-        ASSERT_IF_NULL(scheduleRequest);
-
+    for (const auto &scheduleRequest : scheduleRequests) {
         if (size >= MAX_RETURN_SCHEDULING_QUEUE_SIZE) {
             break;
         }
 
-        *rsp.add_instanceinfos() = std::move((*scheduleRequest).instance());
+        *rsp.add_instanceinfos() = BuildQueueInstanceInfo(scheduleRequest);
 
         size++;
     }

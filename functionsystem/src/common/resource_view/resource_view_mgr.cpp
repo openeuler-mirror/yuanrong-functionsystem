@@ -15,6 +15,7 @@
  */
 #include "resource_view_mgr.h"
 #include "common/constants/constants.h"
+#include "common/utils/collect_status.h"
 
 #include "async/defer.hpp"
 #include "async/collect.hpp"
@@ -149,6 +150,38 @@ litebus::Future<std::unordered_map<ResourceType, std::shared_ptr<ResourceUnitCha
             promise->SetValue(changes);
         });
     return promise->GetFuture();
+}
+
+litebus::Future<Status> UpdateViewUnitStatus(const std::shared_ptr<ResourceView> &view, UnitStatus status)
+{
+    ASSERT_IF_NULL(view);
+    return view->GetFullResourceView().Then(
+        [view, status](const std::shared_ptr<ResourceUnit> &resourceUnit) -> litebus::Future<Status> {
+            if (resourceUnit == nullptr) {
+                return Status(PARAMETER_ERROR, "resource view is null");
+            }
+            std::list<litebus::Future<Status>> futures;
+            for (const auto &[unitID, unit] : resourceUnit->fragment()) {
+                if (unit.status() == static_cast<uint32_t>(status)) {
+                    continue;
+                }
+                futures.emplace_back(view->UpdateUnitStatus(unitID, status));
+            }
+            if (futures.empty()) {
+                return Status::OK();
+            }
+            return CollectStatus(futures, "update local unit status");
+        });
+}
+
+litebus::Future<Status> ResourceViewMgr::UpdateAllUnitStatus(UnitStatus status)
+{
+    ASSERT_IF_NULL(primary_);
+    ASSERT_IF_NULL(virtual_);
+    std::list<litebus::Future<Status>> futures;
+    futures.emplace_back(UpdateViewUnitStatus(primary_, status));
+    futures.emplace_back(UpdateViewUnitStatus(virtual_, status));
+    return CollectStatus(futures, "update local scheduling status");
 }
 
 void ResourceViewMgr::UpdateDomainUrlForLocal(const std::string &addr)

@@ -270,15 +270,15 @@ void DomainSchedMgrActor::ResponseQueryResourcesInfo(const litebus::AID &from, s
     queryResourcePromise_ = nullptr;
 }
 
-litebus::Future<messages::QueryInstancesInfoResponse> DomainSchedMgrActor::GetSchedulingQueue(
+litebus::Future<messages::QuerySchedulingQueueResponse> DomainSchedMgrActor::GetSchedulingQueue(
     const std::string &name, const std::string &address,
-    const std::shared_ptr<messages::QueryInstancesInfoRequest> &req)
+    const std::shared_ptr<messages::QuerySchedulingQueueRequest> &req)
 {
     if (getSchedulingQueuePromise_) {
         YRLOG_INFO("{}|another getSchedulingQueuePromise_ is in progress", req->requestid());
         return getSchedulingQueuePromise_->GetFuture();
     }
-    getSchedulingQueuePromise_ = std::make_shared<litebus::Promise<messages::QueryInstancesInfoResponse>>();
+    getSchedulingQueuePromise_ = std::make_shared<litebus::Promise<messages::QuerySchedulingQueueResponse>>();
     auto future = getSchedulingQueuePromise_->GetFuture();
     YRLOG_DEBUG("{}|send a get scheduling queue request to domainScheduler.", req->requestid());
 
@@ -286,7 +286,7 @@ litebus::Future<messages::QueryInstancesInfoResponse> DomainSchedMgrActor::GetSc
          req->SerializeAsString());
 
     return future.OnComplete(
-        [req, aid(GetAID()), name, address](const litebus::Future<messages::QueryInstancesInfoResponse> &future) {
+        [req, aid(GetAID()), name, address](const litebus::Future<messages::QuerySchedulingQueueResponse> &future) {
             if (future.IsError()) {
                 YRLOG_DEBUG("{}|send a get scheduling queue request to domainScheduler timeout.", req->requestid());
                 return litebus::Async(aid, &DomainSchedMgrActor::GetSchedulingQueue, name, address, req);
@@ -298,16 +298,16 @@ litebus::Future<messages::QueryInstancesInfoResponse> DomainSchedMgrActor::GetSc
 
 void DomainSchedMgrActor::ResponseGetSchedulingQueue(const litebus::AID &from, std::string &&name, std::string &&msg)
 {
-    auto resp = messages::QueryInstancesInfoResponse();
+    auto resp = messages::QuerySchedulingQueueResponse();
     if (msg.empty() || !resp.ParseFromString(msg)) {
-        YRLOG_WARN("invalid QueryInstancesInfoResponse {}", msg);
+        YRLOG_WARN("invalid QuerySchedulingQueueResponse {}", msg);
         return;
     }
     if (!getSchedulingQueuePromise_) {
-        YRLOG_WARN("{}|No task exists for QueryInstancesInfoResponse.", resp.requestid());
+        YRLOG_WARN("{}|No task exists for QuerySchedulingQueueResponse.", resp.requestid());
         return;
     }
-    YRLOG_DEBUG("{}|received a response from domainScheduler for QueryInstancesInfoResponse: {}", resp.requestid(),
+    YRLOG_DEBUG("{}|received a response from domainScheduler for QuerySchedulingQueueResponse: {}", resp.requestid(),
                 resp.DebugString());
 
     getSchedulingQueuePromise_->SetValue(resp);

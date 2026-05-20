@@ -27,6 +27,7 @@
 #include "common/constants/constants.h"
 #include "common/logs/logging.h"
 #include "common/metrics/metrics_adapter.h"
+#include "common/resource_view/resource_type.h"
 #include "common/trace/create_trace_helper.h"
 #include "common/utils/actor_worker.h"
 #include "common/utils/collect_status.h"
@@ -54,6 +55,152 @@ const std::string YR_ONLY_STDOUT                    = "YR_ONLY_STDOUT";
 // Wait retry on sandboxd disconnection (total 5 minutes tolerance)
 constexpr int32_t WAIT_MAX_RETRIES                  = 30;
 constexpr int64_t WAIT_RETRY_INTERVAL_MS            = 10000;
+constexpr int64_t SANDBOX_STATS_COLLECT_INTERVAL_MS = 10000;
+constexpr double CPU_MILLICORES_PER_CORE            = 1000.0;
+constexpr double BYTES_PER_MB                       = 1024.0 * 1024.0;
+constexpr double DEFAULT_SANDBOX_CPU_MILLICORES     = 500.0;
+constexpr double DEFAULT_SANDBOX_MEMORY_MB          = 500.0;
+
+struct SandboxRequestedResources {
+    double cpuCores = 0.0;
+    double memoryBytes = 0.0;
+};
+
+std::string RootfsTypeToLabel(runtime::v1::RootfsSrcType rootfsType)
+{
+    switch (rootfsType) {
+        case runtime::v1::IMAGE:
+            return "image";
+        case runtime::v1::S3:
+            return "s3";
+        case runtime::v1::LOCAL:
+            return "local";
+        default:
+            return "unknown";
+    }
+}
+
+std::string BuildS3RootfsRef(const runtime::v1::S3Config &s3Config)
+{
+    if (!s3Config.object().empty()) {
+        return s3Config.bucket().empty() ? s3Config.object() : s3Config.bucket() + "/" + s3Config.object();
+    }
+    return s3Config.bucket();
+}
+
+std::string ResolveSandboxImage(const messages::RuntimeInstanceInfo &info)
+{
+    const auto &rootfs = info.container().rootfsconfig();
+    switch (rootfs.type()) {
+        case runtime::v1::IMAGE:
+            if (!rootfs.image_url().empty()) {
+                return rootfs.image_url();
+            }
+            break;
+        case runtime::v1::LOCAL:
+            if (!rootfs.path().empty()) {
+                return rootfs.path();
+            }
+            break;
+        case runtime::v1::S3:
+            if (rootfs.has_s3_config()) {
+                return BuildS3RootfsRef(rootfs.s3_config());
+            }
+            break;
+        default:
+            break;
+    }
+
+    auto it = info.deploymentconfig().deployoptions().find("rootfs");
+    if (it == info.deploymentconfig().deployoptions().end() || it->second.empty()) {
+        return "";
+    }
+
+    try {
+        auto parser = json::parse(it->second);
+        if (parser.contains("imageurl") && parser.at("imageurl").is_string()) {
+            return parser.at("imageurl").get<std::string>();
+        }
+        if (parser.contains("image_url") && parser.at("image_url").is_string()) {
+            return parser.at("image_url").get<std::string>();
+        }
+        if (parser.contains("path") && parser.at("path").is_string()) {
+            return parser.at("path").get<std::string>();
+        }
+        if (parser.contains("s3Config") && parser.at("s3Config").is_object()) {
+            const auto &s3Config = parser.at("s3Config");
+            const auto bucket = s3Config.contains("Bucket") && s3Config.at("Bucket").is_string()
+                ? s3Config.at("Bucket").get<std::string>()
+                : "";
+            const auto object = s3Config.contains("Object") && s3Config.at("Object").is_string()
+                ? s3Config.at("Object").get<std::string>()
+                : "";
+            return object.empty() ? bucket : bucket + "/" + object;
+        }
+    } catch (const std::exception &e) {
+        YRLOG_WARN("ResolveSandboxImage: failed to parse rootfs deploy option: {}", e.what());
+    }
+    return "";
+}
+
+double GetEffectiveScalarLimit(const resource_view::Resource &resource, double defaultValue)
+{
+    if (resource.type() != resource_view::ValueType::Value_Type_SCALAR) {
+        return defaultValue;
+    }
+    if (resource.scalar().limit() > 0) {
+        return resource.scalar().limit();
+    }
+    if (resource.scalar().value() > 0) {
+        return resource.scalar().value();
+    }
+    return defaultValue;
+}
+
+SandboxRequestedResources GetSandboxRequestedResources(const messages::RuntimeInstanceInfo &info)
+{
+    SandboxRequestedResources requested;
+    const auto &resources = info.runtimeconfig().resources().resources();
+
+    auto cpuIt = resources.find(resource_view::CPU_RESOURCE_NAME);
+    double cpuMillicores = cpuIt != resources.end()
+        ? GetEffectiveScalarLimit(cpuIt->second, DEFAULT_SANDBOX_CPU_MILLICORES)
+        : DEFAULT_SANDBOX_CPU_MILLICORES;
+    requested.cpuCores = cpuMillicores / CPU_MILLICORES_PER_CORE;
+
+    auto memoryIt = resources.find(resource_view::MEMORY_RESOURCE_NAME);
+    double memoryMb = memoryIt != resources.end()
+        ? GetEffectiveScalarLimit(memoryIt->second, DEFAULT_SANDBOX_MEMORY_MB)
+        : DEFAULT_SANDBOX_MEMORY_MB;
+    requested.memoryBytes = memoryMb * BYTES_PER_MB;
+
+    return requested;
+}
+
+functionsystem::metrics::LabelType BuildSandboxMetricLabels(const messages::RuntimeInstanceInfo &info,
+                                                            const std::string &runtimeID)
+{
+    return {
+        { "instance_id", info.instanceid() },
+        { "runtime_id", runtimeID },
+        { "sandbox_runtime", info.container().runtime() },
+        { "rootfs_type", RootfsTypeToLabel(info.container().rootfsconfig().type()) },
+        { "image", ResolveSandboxImage(info) },
+    };
+}
+
+void ReportSandboxGauge(const functionsystem::metrics::MeterTitle &title,
+                        const functionsystem::metrics::LabelType &labels,
+                        double value)
+{
+    functionsystem::metrics::MeterData data{ value, labels };
+    functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(title, data, { "node_id", "ip" });
+}
+
+bool IsNormalSandboxExit(const runtime::v1::WaitResponse &response)
+{
+    return response.exit_code() == 0 && response.status() == 0;
+}
 
 }  // namespace
 
@@ -134,6 +281,12 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::StartInstance(
 
     stateManager_.Register(SandboxInfo{runtimeID, {}, {}, {}, info});
     stateManager_.ClearPendingDelete(runtimeID);
+    sandboxLifecycleStates_.erase(runtimeID);
+
+    bool isWarmUp = info.warmuptype() != static_cast<int32_t>(WarmupType::NONE);
+    if (!isWarmUp) {
+        ReportSandboxLifecycleStatus(info, runtimeID, SandboxLifecycleStatus::CREATING);
+    }
 
     std::string language = info.runtimeconfig().language();
     std::transform(language.begin(), language.end(), language.begin(), ::tolower);
@@ -147,6 +300,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::StartInstance(
     if (buildStatus.IsError()) {
         YRLOG_ERROR("{}|{}|BuildArgs failed for instanceID({}): {}", info.traceid(), info.requestid(),
                     info.instanceid(), buildStatus.RawMessage());
+        ReportSandboxLifecycleStatus(info, runtimeID, SandboxLifecycleStatus::ABNORMAL);
         stateManager_.Unregister(runtimeID);
         return GenFailStartInstanceResponse(request, buildStatus.StatusCode(), buildStatus.GetMessage());
     }
@@ -159,7 +313,6 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::StartInstance(
     litebus::Promise<messages::StartInstanceResponse> promise;
     auto guard = std::make_shared<SandboxStartGuard>(stateManager_, runtimeID, promise.GetFuture());
 
-    bool isWarmUp = info.warmuptype() != static_cast<int32_t>(WarmupType::NONE);
     YRLOG_INFO("{}|{}|StartInstance: route to {}", info.traceid(), info.requestid(),
                isWarmUp ? "WarmUp" : (info.snapshotinfo().checkpointid().empty() ? "Normal" : "Restore"));
 
@@ -235,6 +388,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::StartNormal(
 
     auto [status, startReq] = builder.Build(params);
     if (!status.IsOk()) {
+        ReportSandboxLifecycleStatus(request->runtimeinstanceinfo(), params.runtimeID, SandboxLifecycleStatus::ABNORMAL);
         stateManager_.UpdatePortMappings(params.runtimeID, "");
         PortManager::GetInstance().ReleasePorts(params.runtimeID);
         return GenFailStartInstanceResponse(request, status.StatusCode(), status.RawMessage());
@@ -256,6 +410,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnStartDone(
     if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
         YRLOG_ERROR("{}|{}|StartNormal failed for instance({}) runtime({}): {}", info.traceid(), info.requestid(),
                     info.instanceid(), runtimeID, response.message());
+        ReportSandboxLifecycleStatus(info, runtimeID, SandboxLifecycleStatus::ABNORMAL);
         // guard destructor rolls back state
         return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_CREATE_EXEC_FAILED, response.message());
     }
@@ -264,6 +419,8 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnStartDone(
     stateManager_.UpdateSandboxID(runtimeID, sandboxID);
     guard->Commit();
 
+    sandboxStatsPollingRuntimes_.insert(runtimeID);
+    CollectSandboxStats(runtimeID, sandboxID);
     DoWaitWithRetry(sandboxID, runtimeID, 0);
     ReportMetrics(info.instanceid(), runtimeID, sandboxID,
                   {"yr_app_instance_start_time", " start timestamp", "ms"});
@@ -381,6 +538,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnCheckpointRe
 {
     const auto &info = request->runtimeinstanceinfo();
     if (refStatus.IsError()) {
+        ReportSandboxLifecycleStatus(info, info.runtimeid(), SandboxLifecycleStatus::ABNORMAL);
         return GenFailStartInstanceResponse(request, StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED,
                                             "add checkpoint reference failed: " + refStatus.RawMessage());
     }
@@ -395,6 +553,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnCheckpointRe
 
     auto [status, startReq] = builder.Build(params);
     if (!status.IsOk()) {
+        ReportSandboxLifecycleStatus(info, info.runtimeid(), SandboxLifecycleStatus::ABNORMAL);
         // Compensate: remove the reference we just added
         ckptOrch_->ReleaseRef(info.runtimeid(), info.requestid());
         return GenFailStartInstanceResponse(request, status.StatusCode(), status.RawMessage());
@@ -414,6 +573,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnRestoreDone(
     if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
         YRLOG_ERROR("{}|{}|restore failed for runtime({}): {}", info.traceid(), info.requestid(),
                     info.runtimeid(), response.message());
+        ReportSandboxLifecycleStatus(info, info.runtimeid(), SandboxLifecycleStatus::ABNORMAL);
         // Compensate: release the checkpoint ref we added before start
         ckptOrch_->ReleaseRef(info.runtimeid(), info.requestid());
         // guard destructor rolls back state
@@ -422,7 +582,11 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnRestoreDone(
     const std::string sandboxID = response.id();
     stateManager_.UpdateSandboxID(info.runtimeid(), sandboxID);
     guard->Commit();
+    sandboxStatsPollingRuntimes_.insert(info.runtimeid());
+    CollectSandboxStats(info.runtimeid(), sandboxID);
     DoWaitWithRetry(sandboxID, info.runtimeid(), 0);
+    ReportMetrics(info.instanceid(), info.runtimeid(), sandboxID,
+                  {"yr_app_instance_start_time", " start timestamp", "ms"});
     YRLOG_INFO("{}|{}|restore success: instance({}) runtime({}) sandbox({})", info.traceid(), info.requestid(),
                info.instanceid(), info.runtimeid(), sandboxID);
     return MakeSuccessStartResponse(request, sandboxID);
@@ -493,10 +657,17 @@ litebus::Future<Status> SandboxExecutor::OnDeleteDone(const std::string &runtime
 
     // Report metrics
     if (auto info = stateManager_.Find(runtimeID)) {
+        auto lifecycleIt = sandboxLifecycleStates_.find(runtimeID);
+        if (lifecycleIt == sandboxLifecycleStates_.end()
+            || lifecycleIt->second != SandboxLifecycleStatus::ABNORMAL) {
+            ReportSandboxLifecycleStatus(info->instanceInfo, runtimeID, SandboxLifecycleStatus::COMPLETED);
+        }
         ReportMetrics(info->instanceInfo.instanceid(), runtimeID, sandboxID,
                       {"yr_instance_stop_time", "stop timestamp", "num"});
     }
 
+    ClearSandboxMetricsState(runtimeID);
+    sandboxLifecycleStates_.erase(runtimeID);
     stateManager_.Unregister(runtimeID);
     return Status::OK();
 }
@@ -1047,6 +1218,71 @@ void SandboxExecutor::DoWaitWithRetry(const std::string &sandboxID, const std::s
         });
 }
 
+void SandboxExecutor::ScheduleSandboxStatsCollection(const std::string &runtimeID, const std::string &sandboxID)
+{
+    if (sandboxStatsPollingRuntimes_.count(runtimeID) == 0) {
+        return;
+    }
+    if (stateManager_.GetSandboxID(runtimeID) != sandboxID) {
+        return;
+    }
+    (void)litebus::AsyncAfter(SANDBOX_STATS_COLLECT_INTERVAL_MS, GetAID(),
+                              &SandboxExecutor::CollectSandboxStats, runtimeID, sandboxID);
+}
+
+void SandboxExecutor::CollectSandboxStats(const std::string &runtimeID, const std::string &sandboxID)
+{
+    if (sandboxStatsPollingRuntimes_.count(runtimeID) == 0) {
+        return;
+    }
+    if (sandboxID.empty() || stateManager_.GetSandboxID(runtimeID) != sandboxID) {
+        return;
+    }
+
+    auto req = std::make_shared<runtime::v1::StatsRequest>();
+    req->set_id(sandboxID);
+    auto resp = std::make_shared<runtime::v1::StatsResponse>();
+    auto collectedAt = std::chrono::steady_clock::now();
+
+    ASSERT_IF_NULL(containerd_);
+    containerd_
+        ->CallAsyncX("Stats", *req, resp.get(), &runtime::v1::RuntimeLauncher::Stub::AsyncStats)
+        .Then([runtimeID, sandboxID, resp, collectedAt, aid(GetAID())]
+              (const Status &status) -> litebus::Future<Status> {
+            runtime::v1::StatsResponse statsResponse;
+            if (status.IsOk()) {
+                statsResponse = *resp;
+            }
+            return litebus::Async(aid, &SandboxExecutor::OnSandboxStatsCollected,
+                                  runtimeID, sandboxID, status, statsResponse, collectedAt);
+        });
+}
+
+litebus::Future<Status> SandboxExecutor::OnSandboxStatsCollected(
+    const std::string &runtimeID, const std::string &sandboxID, const Status &status,
+    const runtime::v1::StatsResponse &response, std::chrono::steady_clock::time_point collectedAt)
+{
+    if (sandboxStatsPollingRuntimes_.count(runtimeID) == 0) {
+        return Status::OK();
+    }
+    if (sandboxID.empty() || stateManager_.GetSandboxID(runtimeID) != sandboxID) {
+        return Status::OK();
+    }
+
+    if (!status.IsOk()) {
+        YRLOG_WARN("OnSandboxStatsCollected: runtime({}) sandbox({}) stats failed: {}",
+                   runtimeID, sandboxID, status.RawMessage());
+        ScheduleSandboxStatsCollection(runtimeID, sandboxID);
+        return Status::OK();
+    }
+
+    if (auto info = stateManager_.Find(runtimeID)) {
+        ReportSandboxUsageMetrics(info->instanceInfo, runtimeID, response, collectedAt);
+    }
+    ScheduleSandboxStatsCollection(runtimeID, sandboxID);
+    return Status::OK();
+}
+
 litebus::Future<Status> SandboxExecutor::CleanupSandboxAfterMaxRetries(const std::string &runtimeID,
                                                                        const std::string &sandboxID)
 {
@@ -1063,6 +1299,9 @@ litebus::Future<Status> SandboxExecutor::CleanupSandboxAfterMaxRetries(const std
                            sandboxID, WAIT_MAX_RETRIES);
     YRLOG_ERROR("{}|{}", requestID, msg);
 
+    ReportSandboxLifecycleStatus(info->instanceInfo, runtimeID, SandboxLifecycleStatus::ABNORMAL);
+    ClearSandboxMetricsState(runtimeID);
+    sandboxLifecycleStates_.erase(runtimeID);
     stateManager_.Unregister(runtimeID);
 
     return healthCheckClient_->NotifySandboxExit(
@@ -1084,6 +1323,12 @@ litebus::Future<Status> SandboxExecutor::OnWaitDone(
 
     YRLOG_INFO("{}|OnWaitDone: sandbox exited for runtime({}), exit_code({}), status({})",
                requestID, runtimeID, response.exit_code(), response.status());
+
+    ReportSandboxLifecycleStatus(info->instanceInfo, runtimeID,
+                                 IsNormalSandboxExit(response)
+                                     ? SandboxLifecycleStatus::COMPLETED
+                                     : SandboxLifecycleStatus::ABNORMAL);
+    ClearSandboxMetricsState(runtimeID);
 
     return healthCheckClient_->NotifySandboxExit(
         instanceID, runtimeID, response.exit_code(), response.message(), requestID);
@@ -1115,18 +1360,113 @@ void SandboxExecutor::ReportMetrics(const std::string &instanceID, const std::st
                                      const std::string &sandboxID,
                                      const functionsystem::metrics::MeterTitle &title)
 {
-    litebus::Async(GetAID(), &SandboxExecutor::DoReportMetrics, instanceID, runtimeID, sandboxID, title);
+    DoReportMetrics(instanceID, runtimeID, sandboxID, title);
+}
+
+void SandboxExecutor::ReportSandboxLifecycleStatus(const messages::RuntimeInstanceInfo &info,
+                                                  const std::string &runtimeID,
+                                                  SandboxLifecycleStatus lifecycleStatus)
+{
+    sandboxLifecycleStates_[runtimeID] = lifecycleStatus;
+    ReportSandboxGauge(
+        { functionsystem::metrics::YR_SANDBOX_LIFECYCLE_STATUS,
+          "sandbox lifecycle status: 1-Creating, 2-Running, 3-Completed, 4-Abnormal",
+          "enum" },
+        BuildSandboxMetricLabels(info, runtimeID),
+        static_cast<double>(lifecycleStatus));
+}
+
+void SandboxExecutor::ReportSandboxRequestedResources(const messages::RuntimeInstanceInfo &info,
+                                                     const std::string &runtimeID)
+{
+    const auto labels = BuildSandboxMetricLabels(info, runtimeID);
+    const auto requested = GetSandboxRequestedResources(info);
+
+    ReportSandboxGauge(
+        { functionsystem::metrics::YR_SANDBOX_REQUESTED_CPU_CORES,
+          "requested cpu limit for sandbox", "cores" },
+        labels, requested.cpuCores);
+    ReportSandboxGauge(
+        { functionsystem::metrics::YR_SANDBOX_REQUESTED_MEMORY_BYTES,
+          "requested memory limit for sandbox", "By" },
+        labels, requested.memoryBytes);
+}
+
+void SandboxExecutor::ReportSandboxUsageMetrics(const messages::RuntimeInstanceInfo &info,
+                                               const std::string &runtimeID,
+                                               const runtime::v1::StatsResponse &response,
+                                               std::chrono::steady_clock::time_point collectedAt)
+{
+    auto labels = BuildSandboxMetricLabels(info, runtimeID);
+
+    ReportSandboxGauge(
+        { functionsystem::metrics::YR_SANDBOX_MEMORY_USAGE_BYTES,
+          "sandbox memory usage in bytes", "By" },
+        labels, static_cast<double>(response.memory_usage_bytes()));
+    ReportSandboxGauge(
+        { functionsystem::metrics::YR_SANDBOX_MEMORY_LIMIT_BYTES,
+          "sandbox memory limit in bytes", "By" },
+        labels, static_cast<double>(response.memory_limit_bytes()));
+    ReportSandboxGauge(
+        { functionsystem::metrics::YR_SANDBOX_MEMORY_USAGE_RATIO,
+          "sandbox memory usage ratio", "ratio" },
+        labels,
+        response.memory_limit_bytes() == 0
+            ? 0.0
+            : static_cast<double>(response.memory_usage_bytes()) /
+                  static_cast<double>(response.memory_limit_bytes()));
+
+    auto previousIt = sandboxStatsSnapshots_.find(runtimeID);
+    if (previousIt != sandboxStatsSnapshots_.end()) {
+        const auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            collectedAt - previousIt->second.collectedAt).count();
+        if (elapsedNs > 0 && response.cpu_usage_ns() >= previousIt->second.cpuUsageNs) {
+            const double cpuUsageCores =
+                static_cast<double>(response.cpu_usage_ns() - previousIt->second.cpuUsageNs) /
+                static_cast<double>(elapsedNs);
+            ReportSandboxGauge(
+                { functionsystem::metrics::YR_SANDBOX_CPU_USAGE_CORES,
+                  "sandbox cpu usage expressed as used cores", "cores" },
+                labels, cpuUsageCores);
+        }
+    }
+
+    sandboxStatsSnapshots_[runtimeID] = SandboxStatsSnapshot{ response.cpu_usage_ns(), collectedAt };
+}
+
+void SandboxExecutor::ClearSandboxMetricsState(const std::string &runtimeID)
+{
+    sandboxStatsSnapshots_.erase(runtimeID);
+    sandboxStatsPollingRuntimes_.erase(runtimeID);
 }
 
 void SandboxExecutor::DoReportMetrics(const std::string &instanceID, const std::string &runtimeID,
                                        const std::string &sandboxID,
                                        const functionsystem::metrics::MeterTitle &title)
 {
-    // Thin wrapper to keep metrics call off critical path
     (void)instanceID;
-    (void)runtimeID;
     (void)sandboxID;
-    (void)title;
+
+    auto info = stateManager_.Find(runtimeID);
+    if (!info.has_value()) {
+        return;
+    }
+
+    auto labels = BuildSandboxMetricLabels(info->instanceInfo, runtimeID);
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    ReportSandboxGauge(title, labels, static_cast<double>(nowMs));
+    ReportSandboxRequestedResources(info->instanceInfo, runtimeID);
+
+    if (title.name == "yr_app_instance_start_time") {
+        ReportSandboxLifecycleStatus(info->instanceInfo, runtimeID, SandboxLifecycleStatus::RUNNING);
+    } else if (title.name == "yr_instance_stop_time") {
+        auto lifecycleIt = sandboxLifecycleStates_.find(runtimeID);
+        if (lifecycleIt == sandboxLifecycleStates_.end()
+            || lifecycleIt->second != SandboxLifecycleStatus::ABNORMAL) {
+            ReportSandboxLifecycleStatus(info->instanceInfo, runtimeID, SandboxLifecycleStatus::COMPLETED);
+        }
+    }
 }
 
 // ── Port forward helpers ──────────────────────────────────────────────────────

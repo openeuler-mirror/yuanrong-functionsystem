@@ -38,6 +38,7 @@ public:
     void InitEvictAgentHandler(const std::shared_ptr<GlobalSched> &globalSched);
     void InitQueryAgentCountHandler(const std::shared_ptr<MetaStoreClient> &metaStoreClient);
     void InitGetSchedulingQueueHandler(const std::shared_ptr<GlobalSched> &globalSched);
+    void InitUpdateLocalSchedulingStatusHandler(const std::shared_ptr<GlobalSched> &globalSched);
 };
 
 class ResourcesApiRouter : public ApiRouterRegister {

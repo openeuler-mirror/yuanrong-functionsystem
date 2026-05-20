@@ -167,6 +167,12 @@ Status LocalSchedDriver::Create()
     if (auto registerStatus(httpServer_->RegisterRoute(apiRouteRegister_)); registerStatus != StatusCode::SUCCESS) {
         YRLOG_ERROR("failed to register health check api router.");
     }
+    localSchedulingApiRouteRegister_ = std::make_shared<LocalSchedulingApiRouter>();
+    localSchedulingApiRouteRegister_->InitUpdateSchedulingStatusHandler(resourceViewMgr_);
+    if (auto registerStatus(httpServer_->RegisterRoute(localSchedulingApiRouteRegister_));
+        registerStatus != StatusCode::SUCCESS) {
+        YRLOG_ERROR("failed to register local scheduling api router.");
+    }
     return Status::OK();
 }
 

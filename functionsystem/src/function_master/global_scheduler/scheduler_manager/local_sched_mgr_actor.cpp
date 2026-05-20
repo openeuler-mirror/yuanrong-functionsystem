@@ -46,6 +46,7 @@ void LocalSchedMgrActor::Init()
     Receive("UnRegister", &LocalSchedMgrActor::UnRegister);
     Receive("EvictAck", &LocalSchedMgrActor::EvictAck);
     Receive("NotifyEvictResult", &LocalSchedMgrActor::NotifyEvictResult);
+    Receive("UpdateSchedulingStatusResponse", &LocalSchedMgrActor::UpdateSchedulingStatusResponse);
 }
 
 void LocalSchedMgrActor::Register(const litebus::AID &from, std::string &&name, std::string &&msg)
@@ -132,6 +133,18 @@ litebus::Future<Status> LocalSchedMgrActor::EvictAgentOnLocal(const std::string 
     return ctx->resultPromise->GetFuture();
 }
 
+litebus::Future<Status> LocalSchedMgrActor::UpdateSchedulingStatusOnLocal(const std::string &address, bool evicting)
+{
+    auto requestID = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
+    auto future = updateSchedulingStatusSync_.AddSynchronizer(requestID);
+    messages::UpdateAgentStatusRequest request;
+    request.set_requestid(requestID);
+    request.set_status(evicting ? 1 : 0);
+    request.set_message(evicting ? "evicting" : "normal");
+    Send(litebus::AID(LOCAL_SCHED_SRV_ACTOR_NAME, address), "UpdateSchedulingStatus", request.SerializeAsString());
+    return future;
+}
+
 void LocalSchedMgrActor::SendEvict(const std::shared_ptr<EvictContext> &ctx, const std::string &address,
                                    const std::shared_ptr<messages::EvictAgentRequest> &req)
 {
@@ -205,6 +218,19 @@ void LocalSchedMgrActor::NotifyEvictResult(const litebus::AID &from, std::string
     (void)evictCtxs_[address].erase(result.agentid());
     if (evictCtxs_[address].empty()) {
         (void)evictCtxs_.erase(address);
+    }
+}
+
+void LocalSchedMgrActor::UpdateSchedulingStatusResponse(const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    messages::UpdateAgentStatusResponse response;
+    if (msg.empty() || !response.ParseFromString(msg)) {
+        YRLOG_WARN("invalid {} from {}, msg: {}", name, from.HashString(), msg);
+        return;
+    }
+    auto status = Status(static_cast<StatusCode>(response.status()), response.message());
+    if (updateSchedulingStatusSync_.Synchronized(response.requestid(), status).IsError()) {
+        YRLOG_WARN("{}|unexpected UpdateSchedulingStatusResponse from {}", response.requestid(), from.HashString());
     }
 }
 
