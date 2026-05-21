@@ -65,42 +65,38 @@ function function_system_health_check() {
   local pid=$1
   local port=$2
   local dest=$3
+  local tls_var_name="${4:-}"
+  local local_port_var_name="${5:-}"
+  local local_ip_var_name="${6:-}"
   local addr="${IP_ADDRESS}:${port}"
   local protocol="http"
   local curl_args=()
-  if is_true "${SSL_ENABLE}"; then
-    curl_args=(--cert "${CERTIFICATE_FILE_PATH}" --key "${PRIVATE_KEY_PATH}" --cacert "${VERIFY_FILE_PATH}")
-    protocol="https"
+  local tls_enable="${SSL_ENABLE}"
+  local local_port=""
+  local local_ip=""
+  if [ -n "${local_port_var_name}" ]; then
+    local_port="${!local_port_var_name:-}"
   fi
-  if [ ${#curl_args[@]} -gt 0 ]; then
-    function_system_health_check_with_addr "${pid}" "${addr}" "${dest}" "${protocol}" "${curl_args[@]}"
-  else
-    function_system_health_check_with_addr "${pid}" "${addr}" "${dest}" "${protocol}"
-  fi
-}
-
-function iam_server_health_check() {
-  local pid=$1
-  local addr="${IP_ADDRESS}:${IAM_SERVER_PORT}"
-  local protocol="http"
-  local curl_args=()
-  if [ -n "${IAM_LOCAL_LISTEN_PORT}" ] && [ "${IAM_LOCAL_LISTEN_PORT}" != "0" ]; then
-    local local_ip="${IAM_LOCAL_IP:-127.0.0.1}"
-    addr="${local_ip}:${IAM_LOCAL_LISTEN_PORT}"
-  else
-    local iam_tls_enable="${SSL_ENABLE}"
-    if [ -n "${IAM_SSL_ENABLE}" ]; then
-      iam_tls_enable="${IAM_SSL_ENABLE}"
+  if [ -n "${local_port}" ] && [ "${local_port}" != "0" ]; then
+    if [ -n "${local_ip_var_name}" ]; then
+      local_ip="${!local_ip_var_name:-127.0.0.1}"
+    else
+      local_ip="127.0.0.1"
     fi
-    if is_true "${iam_tls_enable}"; then
+    addr="${local_ip}:${local_port}"
+  else
+    if [ -n "${tls_var_name}" ] && [ -n "${!tls_var_name:-}" ]; then
+      tls_enable="${!tls_var_name}"
+    fi
+    if is_true "${tls_enable}"; then
       curl_args=(--cert "${CERTIFICATE_FILE_PATH}" --key "${PRIVATE_KEY_PATH}" --cacert "${VERIFY_FILE_PATH}")
       protocol="https"
     fi
   fi
   if [ ${#curl_args[@]} -gt 0 ]; then
-    function_system_health_check_with_addr "${pid}" "${addr}" "iam-server" "${protocol}" "${curl_args[@]}"
+    function_system_health_check_with_addr "${pid}" "${addr}" "${dest}" "${protocol}" "${curl_args[@]}"
   else
-    function_system_health_check_with_addr "${pid}" "${addr}" "iam-server" "${protocol}"
+    function_system_health_check_with_addr "${pid}" "${addr}" "${dest}" "${protocol}"
   fi
 }
 

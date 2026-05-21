@@ -857,7 +857,8 @@ function install_iam_server() {
       --casdoor_jwt_public_key="${casdoor_pub_key}" \
       >>"${FS_LOG_PATH}/${NODE_ID}-iam_server${STD_LOG_SUFFIX}" 2>&1 &
     IAM_SERVER_PID=$!
-    if iam_server_health_check ${IAM_SERVER_PID}; then
+    if function_system_health_check "${IAM_SERVER_PID}" "${IAM_SERVER_PORT}" "iam-server" \
+      "IAM_SSL_ENABLE" "IAM_LOCAL_LISTEN_PORT" "IAM_LOCAL_IP"; then
       log_info "succeed to start iam_server process, ip=${IP_ADDRESS}, port=${IAM_SERVER_PORT}, pid=${IAM_SERVER_PID}"
       return 0
     fi

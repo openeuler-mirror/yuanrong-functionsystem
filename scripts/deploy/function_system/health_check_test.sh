@@ -78,6 +78,10 @@ function reset_env() {
   IAM_LOCAL_LISTEN_PORT="0"
   IAM_LOCAL_IP="127.0.0.1"
   IAM_SSL_ENABLE=""
+  FOO_SERVER_PORT="32222"
+  FOO_LOCAL_LISTEN_PORT="0"
+  FOO_LOCAL_IP="127.0.0.2"
+  FOO_SSL_ENABLE=""
   SSL_ENABLE="false"
   CERTIFICATE_FILE_PATH="/tmp/module.crt"
   PRIVATE_KEY_PATH="/tmp/module.key"
@@ -87,13 +91,14 @@ function reset_env() {
   FS_HEALTH_CHECK_RETRY_INTERVAL=0
 }
 
-function test_iam_health_check_prefers_local_plaintext_listener() {
+function test_generic_health_check_prefers_local_plaintext_listener() {
   reset_env
   IAM_LOCAL_LISTEN_PORT="31113"
   IAM_SSL_ENABLE="true"
   SSL_ENABLE="true"
 
-  iam_server_health_check 12345
+  function_system_health_check 12345 "${IAM_SERVER_PORT}" "iam-server" \
+    "IAM_SSL_ENABLE" "IAM_LOCAL_LISTEN_PORT" "IAM_LOCAL_IP"
 
   local captured
   captured=$(cat "${CAPTURE_FILE}")
@@ -103,11 +108,12 @@ function test_iam_health_check_prefers_local_plaintext_listener() {
   assert_not_contains "${captured}" "--cacert"
 }
 
-function test_iam_health_check_uses_tls_for_remote_tls_only_listener() {
+function test_generic_health_check_uses_tls_for_remote_tls_only_listener() {
   reset_env
   IAM_SSL_ENABLE="true"
 
-  iam_server_health_check 12345
+  function_system_health_check 12345 "${IAM_SERVER_PORT}" "iam-server" \
+    "IAM_SSL_ENABLE" "IAM_LOCAL_LISTEN_PORT" "IAM_LOCAL_IP"
 
   local captured
   captured=$(cat "${CAPTURE_FILE}")
@@ -117,8 +123,26 @@ function test_iam_health_check_uses_tls_for_remote_tls_only_listener() {
   assert_contains "${captured}" "--cacert /tmp/ca.crt"
 }
 
-test_iam_health_check_prefers_local_plaintext_listener
-test_iam_health_check_uses_tls_for_remote_tls_only_listener
+function test_generic_health_check_supports_future_dual_port_process() {
+  reset_env
+  FOO_LOCAL_LISTEN_PORT="32223"
+  FOO_SSL_ENABLE="true"
+  SSL_ENABLE="true"
+
+  function_system_health_check 12345 "${FOO_SERVER_PORT}" "foo-server" \
+    "FOO_SSL_ENABLE" "FOO_LOCAL_LISTEN_PORT" "FOO_LOCAL_IP"
+
+  local captured
+  captured=$(cat "${CAPTURE_FILE}")
+  assert_contains "${captured}" "http://127.0.0.2:32223/foo-server/healthy"
+  assert_not_contains "${captured}" "--cert"
+  assert_not_contains "${captured}" "--key"
+  assert_not_contains "${captured}" "--cacert"
+}
+
+test_generic_health_check_prefers_local_plaintext_listener
+test_generic_health_check_uses_tls_for_remote_tls_only_listener
+test_generic_health_check_supports_future_dual_port_process
 
 if [ -n "${CAPTURE_FILE}" ] && [ -f "${CAPTURE_FILE}" ]; then
   rm -f "${CAPTURE_FILE}"
