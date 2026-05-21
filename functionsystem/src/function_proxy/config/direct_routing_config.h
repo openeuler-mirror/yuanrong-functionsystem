@@ -19,6 +19,16 @@ public:
         enabled_.store(enabled, std::memory_order_relaxed);
     }
 
+    // RAII guard for unit tests: enables DR mode and restores to false on destruction.
+    struct TestGuard {
+        ~TestGuard() { SetEnabled(false); }
+    };
+    static TestGuard EnableForTest()
+    {
+        SetEnabled(true);
+        return TestGuard{};
+    }
+
 private:
     inline static std::atomic<bool> enabled_{ false };
 };

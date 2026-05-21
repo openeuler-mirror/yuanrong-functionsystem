@@ -23,6 +23,7 @@
 #include "common/proto/pb/message_pb.h"
 #include "common/utils/actor_worker.h"
 #include "function_proxy/common/state_machine/instance_state_machine.h"
+#include "function_proxy/config/direct_routing_config.h"
 #include "function_proxy/local_scheduler/instance_control/instance_ctrl_actor.h"
 #include "mocks/mock_instance_operator.h"
 #include "mocks/mock_instance_state_machine.h"
@@ -152,6 +153,90 @@ TEST_F(InstanceStateMachineTest, HighReliabilityTypeTransitionStateToRunning)
     ret = instanceStateMachine->TransitionTo(TransContext{ InstanceState::RUNNING, 0, "" });
     ASSERT_AWAIT_READY(ret);
     ASSERT_TRUE(ret.Get().preState.IsSome());
+    ASSERT_TRUE(!ret.Get().status.IsError());
+    EXPECT_EQ(ret.Get().preState, InstanceState::CREATING);
+
+    EXPECT_EQ(instanceStateMachine->GetLastSaveFailedState(), -1);
+    ret = instanceStateMachine->TransitionTo(TransContext{ InstanceState::FATAL, 0, "" });
+    ASSERT_AWAIT_READY(ret);
+    ASSERT_TRUE(ret.Get().status.IsError());
+    EXPECT_EQ(instanceStateMachine->GetLastSaveFailedState(), 6);
+}
+
+TEST_F(InstanceStateMachineTest, DRModeHighReliabilitySkipsSchedulingCreatingWriteOnlyRunning)
+{
+    auto drGuard = function_proxy::DirectRoutingConfig::EnableForTest();
+
+    const std::string function = "default/0-test-helloWorld/$latest";
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
+    scheduleReq->mutable_instance()->set_function(function);
+    scheduleReq->mutable_instance()->mutable_createoptions()->operator[](functionsystem::RELIABILITY_TYPE) = "high";
+    auto context = std::make_shared<InstanceContext>(scheduleReq);
+    auto instanceStateMachine = std::make_shared<InstanceStateMachine>(TEST_NODE_ID, context, false);
+
+    auto mockInstanceOpt = std::make_shared<MockInstanceOperator>();
+    instanceStateMachine->instanceOpt_ = mockInstanceOpt;
+
+    // DR mode: SCHEDULING and CREATING are PERSISTENT_NOT (no etcd call).
+    // First etcd write happens at RUNNING (Create), subsequent writes use Modify.
+    EXPECT_CALL(*mockInstanceOpt, Create).WillOnce(Return(OperateResult{ Status::OK(), "", 0 }));
+    EXPECT_CALL(*mockInstanceOpt, Modify)
+        .WillOnce(Return(OperateResult{ Status(StatusCode::FAILED), "", 1 }));  // FATAL fails
+
+    instanceStateMachine->SetDataSystemHost("127.0.0.1");
+
+    // SCHEDULING: PERSISTENT_NOT in DR mode → no etcd call
+    auto ret = instanceStateMachine->TransitionTo(TransContext{ InstanceState::SCHEDULING, 0, "" });
+    ASSERT_AWAIT_READY(ret);
+    EXPECT_TRUE(!ret.Get().status.IsError());
+
+    // CREATING: PERSISTENT_NOT in DR mode → no etcd call
+    ret = instanceStateMachine->TransitionTo(TransContext{ InstanceState::CREATING, 0, "" });
+    ASSERT_AWAIT_READY(ret);
+    EXPECT_TRUE(!ret.Get().status.IsError());
+
+    // RUNNING: first etcd write → Create (version == 0 → IsFirstPersistence returns true)
+    ret = instanceStateMachine->TransitionTo(
+        TransContext{ InstanceState::RUNNING, instanceStateMachine->GetVersion(), "" });
+    ASSERT_AWAIT_READY(ret);
+    ASSERT_TRUE(!ret.Get().status.IsError());
+    EXPECT_EQ(ret.Get().preState, InstanceState::CREATING);
+
+    // FATAL: update existing entry → Modify (version > 0 → IsFirstPersistence returns false)
+    EXPECT_EQ(instanceStateMachine->GetLastSaveFailedState(), -1);
+    ret = instanceStateMachine->TransitionTo(
+        TransContext{ InstanceState::FATAL, instanceStateMachine->GetVersion(), "" });
+    ASSERT_AWAIT_READY(ret);
+    ASSERT_TRUE(ret.Get().status.IsError());
+    EXPECT_EQ(instanceStateMachine->GetLastSaveFailedState(), 6);  // FATAL state code
+}
+
+TEST_F(InstanceStateMachineTest, NonDRModeUnchangedByDRConfig)
+{
+    // Verify non-DR mode is unaffected: behavior identical to HighReliabilityTypeTransitionStateToRunning
+    const std::string function = "default/0-test-helloWorld/$latest";
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(0);
+    scheduleReq->mutable_instance()->set_function(function);
+    scheduleReq->mutable_instance()->mutable_createoptions()->operator[](functionsystem::RELIABILITY_TYPE) = "high";
+    auto context = std::make_shared<InstanceContext>(scheduleReq);
+    auto instanceStateMachine = std::make_shared<InstanceStateMachine>(TEST_NODE_ID, context, false);
+
+    auto mockInstanceOpt = std::make_shared<MockInstanceOperator>();
+    instanceStateMachine->instanceOpt_ = mockInstanceOpt;
+    // Non-DR: Create at SCHEDULING, Modify at CREATING, RUNNING, FATAL (3 Modify calls)
+    EXPECT_CALL(*mockInstanceOpt, Create).WillOnce(Return(OperateResult{ Status::OK(), "", 0 }));
+    EXPECT_CALL(*mockInstanceOpt, Modify)
+        .WillOnce(Return(OperateResult{ Status::OK(), "", 1 }))
+        .WillOnce(Return(OperateResult{ Status::OK(), "", 2 }))
+        .WillOnce(Return(OperateResult{ Status(StatusCode::FAILED), "", 3 }));
+
+    instanceStateMachine->SetDataSystemHost("127.0.0.1");
+    auto ret = instanceStateMachine->TransitionTo(TransContext{ InstanceState::SCHEDULING, 0, "" });
+    ret = instanceStateMachine->TransitionTo(TransContext{ InstanceState::CREATING, 0, "" });
+    ret = instanceStateMachine->TransitionTo(TransContext{ InstanceState::RUNNING, 0, "" });
+    ASSERT_AWAIT_READY(ret);
     ASSERT_TRUE(!ret.Get().status.IsError());
     EXPECT_EQ(ret.Get().preState, InstanceState::CREATING);
 
