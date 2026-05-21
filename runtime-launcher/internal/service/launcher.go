@@ -284,10 +284,25 @@ func (s *LauncherService) List(ctx context.Context, req *pb.ListContainersReques
 	return &pb.ListContainersResponse{}, nil
 }
 
-// Stats 返回容器资源使用统计。
+// Stats 返回容器真实资源使用统计，通过 Docker API 读取 cgroup 数据。
 func (s *LauncherService) Stats(ctx context.Context, req *pb.StatsRequest) (*pb.StatsResponse, error) {
-	log.Printf("[service] Stats: id=%s", req.GetId())
-	return &pb.StatsResponse{}, nil
+	id := req.GetId()
+
+	cs, err := s.runtime.Stats(ctx, id)
+	if err != nil {
+		log.Printf("[service] Stats: id=%s err=%v", id, err)
+		return &pb.StatsResponse{}, nil
+	}
+
+	log.Printf("[service] Stats: id=%s cpu_ns=%d mem=%dMiB limit=%dMiB",
+		id, cs.CPUUsageNs, cs.MemoryUsageBytes/1024/1024, cs.MemoryLimitBytes/1024/1024)
+
+	return &pb.StatsResponse{
+		CpuUsageNs:          cs.CPUUsageNs,
+		MemoryUsageBytes:    cs.MemoryUsageBytes,
+		MemoryLimitBytes:    cs.MemoryLimitBytes,
+		MemoryMaxUsageBytes: cs.MemoryMaxUsageBytes,
+	}, nil
 }
 
 // Version 返回运行时版本信息。
@@ -301,29 +316,15 @@ func (s *LauncherService) Version(ctx context.Context, req *pb.VersionRequest) (
 }
 
 // convertProtoMounts 将 proto Mount 列表转为内部 MountConfig 列表。
+// proto Mount.Source 为字符串，直接映射到 MountConfig.HostPath。
 func convertProtoMounts(protoMounts []*pb.Mount) []rt.MountConfig {
 	mounts := make([]rt.MountConfig, 0, len(protoMounts))
 	for _, m := range protoMounts {
 		mc := rt.MountConfig{
-			Type:    m.GetType(),
-			Target:  m.GetTarget(),
-			Options: m.GetOptions(),
-		}
-		switch src := m.GetSource().(type) {
-		case *pb.Mount_HostPath:
-			mc.HostPath = src.HostPath
-		case *pb.Mount_S3Config:
-			if src.S3Config != nil {
-				mc.S3 = &rt.S3Config{
-					Endpoint:        src.S3Config.GetEndpoint(),
-					Bucket:          src.S3Config.GetBucket(),
-					Object:          src.S3Config.GetObject(),
-					AccessKeyID:     src.S3Config.GetAccessKeyID(),
-					AccessKeySecret: src.S3Config.GetAccessKeySecret(),
-				}
-			}
-		case *pb.Mount_ImageUrl:
-			mc.ImageURL = src.ImageUrl
+			Type:     m.GetType(),
+			Target:   m.GetTarget(),
+			Options:  m.GetOptions(),
+			HostPath: m.GetHostPath(),
 		}
 		mounts = append(mounts, mc)
 	}

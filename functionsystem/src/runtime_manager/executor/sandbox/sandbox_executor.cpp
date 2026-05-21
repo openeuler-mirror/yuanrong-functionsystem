@@ -1354,9 +1354,18 @@ litebus::Future<Status> SandboxExecutor::OnWaitDone(
     YRLOG_INFO("{}|OnWaitDone: sandbox exited for runtime({}), exit_code({}), status({})",
                requestID, runtimeID, response.exit_code(), response.status());
 
+    // If TerminateSandbox was already called (userInitiatedTerminateRuntimes_ contains runtimeID),
+    // OnDeleteDone will handle lifecycle reporting, metrics cleanup, and Unregister.
+    // Doing it here too would cause double-reporting and a spurious NotifySandboxExit to
+    // function_proxy (which already initiated the eviction and does not expect this notification).
+    if (userInitiatedTerminateRuntimes_.count(runtimeID) > 0) {
+        YRLOG_INFO("{}|OnWaitDone: user-initiated terminate for runtime({}), defer to OnDeleteDone",
+                   requestID, runtimeID);
+        return Status::OK();
+    }
+
     ReportSandboxLifecycleStatus(info->instanceInfo, runtimeID,
-                                 (IsNormalSandboxExit(response) ||
-                                  userInitiatedTerminateRuntimes_.count(runtimeID) > 0)
+                                 IsNormalSandboxExit(response)
                                      ? SandboxLifecycleStatus::COMPLETED
                                      : SandboxLifecycleStatus::ABNORMAL);
     ClearSandboxMetricsState(runtimeID);
@@ -1402,7 +1411,8 @@ void SandboxExecutor::ReportSandboxLifecycleStatus(const messages::RuntimeInstan
     const auto sandboxID = stateManager_.GetSandboxID(runtimeID);
 
     if (lifecycleStatus == SandboxLifecycleStatus::RUNNING) {
-        sandboxRunningStartTimes_[runtimeID] = std::chrono::steady_clock::now();
+        // Only record start time once; heartbeat re-fires RUNNING but must NOT reset the clock.
+        sandboxRunningStartTimes_.emplace(runtimeID, std::chrono::steady_clock::now());
         // Start periodic heartbeat so Prometheus staleness clears stale RUNNING entries on cluster restart
         ScheduleRunningStatusHeartbeat(runtimeID);
     } else if (lifecycleStatus == SandboxLifecycleStatus::COMPLETED ||
