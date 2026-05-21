@@ -201,13 +201,16 @@ func (d *DockerRuntime) Wait(ctx context.Context, containerID string) (*Containe
 }
 
 func (d *DockerRuntime) Delete(ctx context.Context, containerID string, timeoutSeconds int64) error {
-	if timeoutSeconds > 0 {
-		// 优雅停止：先发 SIGTERM，等待超时后 SIGKILL
-		timeout := int(timeoutSeconds)
-		stopOpts := container.StopOptions{Timeout: &timeout}
-		if err := d.client.ContainerStop(ctx, containerID, stopOpts); err != nil {
-			log.Printf("[docker] 优雅停止容器 %s 失败: %v，尝试强制删除", containerID[:12], err)
-		}
+	// Always stop with timeout=0 (immediate SIGKILL).
+	// A graceful SIGTERM wait is pointless here: the caller has already performed
+	// application-level shutdown (ShutDownInstance) before invoking Delete.
+	// Waiting for SIGTERM only delays the kill by up to gracefulshutdowntime seconds
+	// and causes the container's Wait RPC to return before OnDeleteDone can unregister
+	// the runtimeID, triggering a spurious NotifySandboxExit from OnWaitDone.
+	zeroTimeout := 0
+	stopOpts := container.StopOptions{Timeout: &zeroTimeout}
+	if err := d.client.ContainerStop(ctx, containerID, stopOpts); err != nil {
+		log.Printf("[docker] 停止容器 %s 失败: %v，尝试强制删除", containerID[:12], err)
 	}
 
 	// 强制删除容器

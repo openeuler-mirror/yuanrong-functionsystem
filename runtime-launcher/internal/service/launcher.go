@@ -4,14 +4,25 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	pb "runtime-launcher/api/proto/runtime/v1"
 	rt "runtime-launcher/internal/runtime"
 	"runtime-launcher/internal/state"
 )
+
+// mockStatsState 记录每个 sandbox 的累积 CPU 用量，用于计算 delta。
+type mockStatsState struct {
+	cpuUsageNs   uint64    // 累积 CPU 纳秒
+	lastCalledAt time.Time // 上次 Stats 调用时刻
+	// 当前周期 CPU 利用率（0.0-1.0），在一定范围内缓慢漂移，增加真实感
+	cpuFraction float64
+}
 
 // LauncherService 实现 RuntimeLauncher gRPC 服务的 8 个 RPC 方法。
 type LauncherService struct {
@@ -19,13 +30,17 @@ type LauncherService struct {
 
 	runtime  rt.ContainerRuntime
 	stateMgr *state.Manager
+
+	mockMu    sync.Mutex
+	mockStats map[string]*mockStatsState // containerID -> state
 }
 
 // NewLauncherService 创建 LauncherService 实例。
 func NewLauncherService(runtime rt.ContainerRuntime, stateMgr *state.Manager) *LauncherService {
 	return &LauncherService{
-		runtime:  runtime,
-		stateMgr: stateMgr,
+		runtime:   runtime,
+		stateMgr:  stateMgr,
+		mockStats: make(map[string]*mockStatsState),
 	}
 }
 
@@ -135,6 +150,10 @@ func (s *LauncherService) Delete(ctx context.Context, req *pb.DeleteRequest) (*p
 	}
 
 	s.stateMgr.RemoveContainer(containerID)
+
+	s.mockMu.Lock()
+	delete(s.mockStats, containerID)
+	s.mockMu.Unlock()
 
 	return &pb.DeleteResponse{}, nil
 }
@@ -284,10 +303,78 @@ func (s *LauncherService) List(ctx context.Context, req *pb.ListContainersReques
 	return &pb.ListContainersResponse{}, nil
 }
 
-// Stats 返回容器资源使用统计。
+// Stats 返回容器资源使用统计（mock 实现，带随机性）。
+//
+// CPU 采用累积纳秒计数，C++ 侧对相邻两次快照做差分得到利用率曲线。
+// Memory 使用固定上限（500 MiB）+ 随机基础值漂移，模拟真实波动。
 func (s *LauncherService) Stats(ctx context.Context, req *pb.StatsRequest) (*pb.StatsResponse, error) {
-	log.Printf("[service] Stats: id=%s", req.GetId())
-	return &pb.StatsResponse{}, nil
+	id := req.GetId()
+
+	s.mockMu.Lock()
+	st, ok := s.mockStats[id]
+	if !ok {
+		// 首次调用：随机初始化，CPU 利用率 10%~45%
+		st = &mockStatsState{
+			cpuUsageNs:   0,
+			lastCalledAt: time.Now(),
+			cpuFraction:  0.10 + rand.Float64()*0.35,
+		}
+		s.mockStats[id] = st
+		s.mockMu.Unlock()
+		// 首次无 delta，直接返回初始内存数据
+		memUsage := mockMemoryUsage()
+		const memLimit = 524288000 // 500 MiB
+		return &pb.StatsResponse{
+			MemoryUsageBytes:    memUsage,
+			MemoryLimitBytes:    memLimit,
+			MemoryMaxUsageBytes: memUsage + 10*1024*1024,
+		}, nil
+	}
+
+	now := time.Now()
+	elapsedNs := uint64(now.Sub(st.lastCalledAt).Nanoseconds())
+
+	// CPU 利用率缓慢随机漂移 ±10%，保持在 [5%, 80%] 区间
+	drift := (rand.Float64()*0.20 - 0.10)
+	st.cpuFraction = clampFloat(st.cpuFraction+drift, 0.05, 0.80)
+
+	// 累积 CPU 纳秒 = 已消耗实际时间 × CPU 利用率
+	st.cpuUsageNs += uint64(float64(elapsedNs) * st.cpuFraction)
+	st.lastCalledAt = now
+	cpuUsageNs := st.cpuUsageNs
+
+	s.mockMu.Unlock()
+
+	memUsage := mockMemoryUsage()
+	const memLimit = 524288000 // 500 MiB
+
+	log.Printf("[service] Stats(mock): id=%s cpu_ns=%d mem=%dMiB cpu_frac=%.2f",
+		id, cpuUsageNs, memUsage/1024/1024, st.cpuFraction)
+
+	return &pb.StatsResponse{
+		CpuUsageNs:          cpuUsageNs,
+		MemoryUsageBytes:    memUsage,
+		MemoryLimitBytes:    memLimit,
+		MemoryMaxUsageBytes: memUsage + 20*1024*1024,
+	}, nil
+}
+
+// mockMemoryUsage 返回带随机波动的内存用量（100~350 MiB）。
+func mockMemoryUsage() uint64 {
+	const base = 150 * 1024 * 1024  // 150 MiB 基础
+	const jitter = 200 * 1024 * 1024 // ±200 MiB 抖动范围
+	return uint64(base) + uint64(rand.Int63n(jitter))
+}
+
+// clampFloat 将 v 限制在 [lo, hi] 区间。
+func clampFloat(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // Version 返回运行时版本信息。
@@ -301,29 +388,15 @@ func (s *LauncherService) Version(ctx context.Context, req *pb.VersionRequest) (
 }
 
 // convertProtoMounts 将 proto Mount 列表转为内部 MountConfig 列表。
+// proto Mount.Source 为字符串，直接映射到 MountConfig.HostPath。
 func convertProtoMounts(protoMounts []*pb.Mount) []rt.MountConfig {
 	mounts := make([]rt.MountConfig, 0, len(protoMounts))
 	for _, m := range protoMounts {
 		mc := rt.MountConfig{
-			Type:    m.GetType(),
-			Target:  m.GetTarget(),
-			Options: m.GetOptions(),
-		}
-		switch src := m.GetSource().(type) {
-		case *pb.Mount_HostPath:
-			mc.HostPath = src.HostPath
-		case *pb.Mount_S3Config:
-			if src.S3Config != nil {
-				mc.S3 = &rt.S3Config{
-					Endpoint:        src.S3Config.GetEndpoint(),
-					Bucket:          src.S3Config.GetBucket(),
-					Object:          src.S3Config.GetObject(),
-					AccessKeyID:     src.S3Config.GetAccessKeyID(),
-					AccessKeySecret: src.S3Config.GetAccessKeySecret(),
-				}
-			}
-		case *pb.Mount_ImageUrl:
-			mc.ImageURL = src.ImageUrl
+			Type:     m.GetType(),
+			Target:   m.GetTarget(),
+			Options:  m.GetOptions(),
+			HostPath: m.GetHostPath(),
 		}
 		mounts = append(mounts, mc)
 	}
