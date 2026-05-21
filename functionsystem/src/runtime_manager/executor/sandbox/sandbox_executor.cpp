@@ -1411,7 +1411,8 @@ void SandboxExecutor::ReportSandboxLifecycleStatus(const messages::RuntimeInstan
     const auto sandboxID = stateManager_.GetSandboxID(runtimeID);
 
     if (lifecycleStatus == SandboxLifecycleStatus::RUNNING) {
-        sandboxRunningStartTimes_[runtimeID] = std::chrono::steady_clock::now();
+        // Only record start time once; heartbeat re-fires RUNNING but must NOT reset the clock.
+        sandboxRunningStartTimes_.emplace(runtimeID, std::chrono::steady_clock::now());
         // Start periodic heartbeat so Prometheus staleness clears stale RUNNING entries on cluster restart
         ScheduleRunningStatusHeartbeat(runtimeID);
     } else if (lifecycleStatus == SandboxLifecycleStatus::COMPLETED ||
