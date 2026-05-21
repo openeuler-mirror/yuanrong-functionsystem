@@ -1354,9 +1354,18 @@ litebus::Future<Status> SandboxExecutor::OnWaitDone(
     YRLOG_INFO("{}|OnWaitDone: sandbox exited for runtime({}), exit_code({}), status({})",
                requestID, runtimeID, response.exit_code(), response.status());
 
+    // If TerminateSandbox was already called (userInitiatedTerminateRuntimes_ contains runtimeID),
+    // OnDeleteDone will handle lifecycle reporting, metrics cleanup, and Unregister.
+    // Doing it here too would cause double-reporting and a spurious NotifySandboxExit to
+    // function_proxy (which already initiated the eviction and does not expect this notification).
+    if (userInitiatedTerminateRuntimes_.count(runtimeID) > 0) {
+        YRLOG_INFO("{}|OnWaitDone: user-initiated terminate for runtime({}), defer to OnDeleteDone",
+                   requestID, runtimeID);
+        return Status::OK();
+    }
+
     ReportSandboxLifecycleStatus(info->instanceInfo, runtimeID,
-                                 (IsNormalSandboxExit(response) ||
-                                  userInitiatedTerminateRuntimes_.count(runtimeID) > 0)
+                                 IsNormalSandboxExit(response)
                                      ? SandboxLifecycleStatus::COMPLETED
                                      : SandboxLifecycleStatus::ABNORMAL);
     ClearSandboxMetricsState(runtimeID);
