@@ -43,6 +43,7 @@ const std::string YR_SANDBOX_CPU_USAGE_CORES = "yr_sandbox_cpu_usage_cores";
 const std::string YR_SANDBOX_MEMORY_USAGE_RATIO = "yr_sandbox_memory_usage_ratio";
 const std::string YR_SANDBOX_MEMORY_USAGE_BYTES = "yr_sandbox_memory_usage_bytes";
 const std::string YR_SANDBOX_MEMORY_LIMIT_BYTES = "yr_sandbox_memory_limit_bytes";
+const std::string YR_SANDBOX_LIFECYCLE_SECONDS = "yr_sandbox_lifecycle_seconds";
 
 
 // alarm
