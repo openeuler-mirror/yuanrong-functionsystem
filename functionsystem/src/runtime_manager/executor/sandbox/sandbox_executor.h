@@ -253,6 +253,8 @@ private:
 
     void CollectSandboxStats(const std::string &runtimeID, const std::string &sandboxID);
     void ScheduleSandboxStatsCollection(const std::string &runtimeID, const std::string &sandboxID);
+    void ScheduleRunningStatusHeartbeat(const std::string &runtimeID);
+    void ReportRunningStatusHeartbeat(const std::string &runtimeID);
     litebus::Future<Status> OnSandboxStatsCollected(const std::string &runtimeID, const std::string &sandboxID,
                                                     const Status &status,
                                                     const runtime::v1::StatsResponse &response,
@@ -347,6 +349,10 @@ private:
     std::unordered_map<std::string, SandboxStatsSnapshot> sandboxStatsSnapshots_;
     std::unordered_set<std::string> sandboxStatsPollingRuntimes_;
     std::unordered_map<std::string, SandboxLifecycleStatus> sandboxLifecycleStates_;
+    // runtimeIDs for which user explicitly called terminate() — used to report COMPLETED on Wait
+    std::unordered_set<std::string> userInitiatedTerminateRuntimes_;
+    // RUNNING start time for each sandbox — used to report lifecycle duration
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> sandboxRunningStartTimes_;
 };
 
 /**

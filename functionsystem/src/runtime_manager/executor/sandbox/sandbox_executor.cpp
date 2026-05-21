@@ -55,7 +55,9 @@ const std::string YR_ONLY_STDOUT                    = "YR_ONLY_STDOUT";
 // Wait retry on sandboxd disconnection (total 5 minutes tolerance)
 constexpr int32_t WAIT_MAX_RETRIES                  = 30;
 constexpr int64_t WAIT_RETRY_INTERVAL_MS            = 10000;
-constexpr int64_t SANDBOX_STATS_COLLECT_INTERVAL_MS = 10000;
+constexpr int64_t SANDBOX_STATS_COLLECT_INTERVAL_MS    = 10000;
+// Heartbeat interval for RUNNING status re-reporting (30s < Prometheus stale window ~2x scrape_interval)
+constexpr int64_t SANDBOX_RUNNING_HEARTBEAT_INTERVAL_MS = 30000;
 constexpr double CPU_MILLICORES_PER_CORE            = 1000.0;
 constexpr double BYTES_PER_MB                       = 1024.0 * 1024.0;
 constexpr double DEFAULT_SANDBOX_CPU_MILLICORES     = 500.0;
@@ -178,11 +180,13 @@ SandboxRequestedResources GetSandboxRequestedResources(const messages::RuntimeIn
 }
 
 functionsystem::metrics::LabelType BuildSandboxMetricLabels(const messages::RuntimeInstanceInfo &info,
-                                                            const std::string &runtimeID)
+                                                            const std::string &runtimeID,
+                                                            const std::string &sandboxID)
 {
     return {
         { "instance_id", info.instanceid() },
         { "runtime_id", runtimeID },
+        { "sandbox_id", sandboxID },
         { "sandbox_runtime", info.container().runtime() },
         { "rootfs_type", RootfsTypeToLabel(info.container().rootfsconfig().type()) },
         { "image", ResolveSandboxImage(info) },
@@ -640,6 +644,7 @@ litebus::Future<Status> SandboxExecutor::TerminateSandbox(const std::string &run
     del->set_id(sandboxID);
     del->set_timeout(force ? 0 : timeout);
     YRLOG_INFO("{}|terminating sandbox({}) runtime({})", requestID, sandboxID, runtimeID);
+    userInitiatedTerminateRuntimes_.insert(runtimeID);
     return DoDelete("", runtimeID, requestID, del)
         .Then(litebus::Defer(GetAID(), &SandboxExecutor::OnDeleteDone, runtimeID, requestID, sandboxID,
                              std::placeholders::_1));
@@ -1230,6 +1235,31 @@ void SandboxExecutor::ScheduleSandboxStatsCollection(const std::string &runtimeI
                               &SandboxExecutor::CollectSandboxStats, runtimeID, sandboxID);
 }
 
+void SandboxExecutor::ScheduleRunningStatusHeartbeat(const std::string &runtimeID)
+{
+    // Guard: only heartbeat while sandbox is still tracked as RUNNING
+    auto it = sandboxLifecycleStates_.find(runtimeID);
+    if (it == sandboxLifecycleStates_.end() || it->second != SandboxLifecycleStatus::RUNNING) {
+        return;
+    }
+    (void)litebus::AsyncAfter(SANDBOX_RUNNING_HEARTBEAT_INTERVAL_MS, GetAID(),
+                              &SandboxExecutor::ReportRunningStatusHeartbeat, runtimeID);
+}
+
+void SandboxExecutor::ReportRunningStatusHeartbeat(const std::string &runtimeID)
+{
+    auto infoOpt = stateManager_.Find(runtimeID);
+    if (!infoOpt.has_value()) {
+        return;
+    }
+    auto stateIt = sandboxLifecycleStates_.find(runtimeID);
+    if (stateIt == sandboxLifecycleStates_.end() || stateIt->second != SandboxLifecycleStatus::RUNNING) {
+        return;  // sandbox already in terminal state, stop heartbeat
+    }
+    ReportSandboxLifecycleStatus(infoOpt->instanceInfo, runtimeID, SandboxLifecycleStatus::RUNNING);
+    ScheduleRunningStatusHeartbeat(runtimeID);
+}
+
 void SandboxExecutor::CollectSandboxStats(const std::string &runtimeID, const std::string &sandboxID)
 {
     if (sandboxStatsPollingRuntimes_.count(runtimeID) == 0) {
@@ -1325,7 +1355,8 @@ litebus::Future<Status> SandboxExecutor::OnWaitDone(
                requestID, runtimeID, response.exit_code(), response.status());
 
     ReportSandboxLifecycleStatus(info->instanceInfo, runtimeID,
-                                 IsNormalSandboxExit(response)
+                                 (IsNormalSandboxExit(response) ||
+                                  userInitiatedTerminateRuntimes_.count(runtimeID) > 0)
                                      ? SandboxLifecycleStatus::COMPLETED
                                      : SandboxLifecycleStatus::ABNORMAL);
     ClearSandboxMetricsState(runtimeID);
@@ -1368,18 +1399,38 @@ void SandboxExecutor::ReportSandboxLifecycleStatus(const messages::RuntimeInstan
                                                   SandboxLifecycleStatus lifecycleStatus)
 {
     sandboxLifecycleStates_[runtimeID] = lifecycleStatus;
+    const auto sandboxID = stateManager_.GetSandboxID(runtimeID);
+
+    if (lifecycleStatus == SandboxLifecycleStatus::RUNNING) {
+        sandboxRunningStartTimes_[runtimeID] = std::chrono::steady_clock::now();
+        // Start periodic heartbeat so Prometheus staleness clears stale RUNNING entries on cluster restart
+        ScheduleRunningStatusHeartbeat(runtimeID);
+    } else if (lifecycleStatus == SandboxLifecycleStatus::COMPLETED ||
+               lifecycleStatus == SandboxLifecycleStatus::ABNORMAL) {
+        auto startIt = sandboxRunningStartTimes_.find(runtimeID);
+        if (startIt != sandboxRunningStartTimes_.end()) {
+            const double durationSec = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - startIt->second).count();
+            ReportSandboxGauge(
+                { functionsystem::metrics::YR_SANDBOX_LIFECYCLE_SECONDS,
+                  "sandbox lifecycle duration in seconds", "s" },
+                BuildSandboxMetricLabels(info, runtimeID, sandboxID), durationSec);
+        }
+    }
+
     ReportSandboxGauge(
         { functionsystem::metrics::YR_SANDBOX_LIFECYCLE_STATUS,
           "sandbox lifecycle status: 1-Creating, 2-Running, 3-Completed, 4-Abnormal",
           "enum" },
-        BuildSandboxMetricLabels(info, runtimeID),
+        BuildSandboxMetricLabels(info, runtimeID, sandboxID),
         static_cast<double>(lifecycleStatus));
 }
 
 void SandboxExecutor::ReportSandboxRequestedResources(const messages::RuntimeInstanceInfo &info,
                                                      const std::string &runtimeID)
 {
-    const auto labels = BuildSandboxMetricLabels(info, runtimeID);
+    const auto sandboxID = stateManager_.GetSandboxID(runtimeID);
+    const auto labels = BuildSandboxMetricLabels(info, runtimeID, sandboxID);
     const auto requested = GetSandboxRequestedResources(info);
 
     ReportSandboxGauge(
@@ -1397,7 +1448,8 @@ void SandboxExecutor::ReportSandboxUsageMetrics(const messages::RuntimeInstanceI
                                                const runtime::v1::StatsResponse &response,
                                                std::chrono::steady_clock::time_point collectedAt)
 {
-    auto labels = BuildSandboxMetricLabels(info, runtimeID);
+    const auto sandboxID = stateManager_.GetSandboxID(runtimeID);
+    auto labels = BuildSandboxMetricLabels(info, runtimeID, sandboxID);
 
     ReportSandboxGauge(
         { functionsystem::metrics::YR_SANDBOX_MEMORY_USAGE_BYTES,
@@ -1432,12 +1484,16 @@ void SandboxExecutor::ReportSandboxUsageMetrics(const messages::RuntimeInstanceI
     }
 
     sandboxStatsSnapshots_[runtimeID] = SandboxStatsSnapshot{ response.cpu_usage_ns(), collectedAt };
+
+    ReportSandboxRequestedResources(info, runtimeID);
 }
 
 void SandboxExecutor::ClearSandboxMetricsState(const std::string &runtimeID)
 {
     sandboxStatsSnapshots_.erase(runtimeID);
     sandboxStatsPollingRuntimes_.erase(runtimeID);
+    userInitiatedTerminateRuntimes_.erase(runtimeID);
+    sandboxRunningStartTimes_.erase(runtimeID);
 }
 
 void SandboxExecutor::DoReportMetrics(const std::string &instanceID, const std::string &runtimeID,
@@ -1445,14 +1501,13 @@ void SandboxExecutor::DoReportMetrics(const std::string &instanceID, const std::
                                        const functionsystem::metrics::MeterTitle &title)
 {
     (void)instanceID;
-    (void)sandboxID;
 
     auto info = stateManager_.Find(runtimeID);
     if (!info.has_value()) {
         return;
     }
 
-    auto labels = BuildSandboxMetricLabels(info->instanceInfo, runtimeID);
+    auto labels = BuildSandboxMetricLabels(info->instanceInfo, runtimeID, sandboxID);
     const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     ReportSandboxGauge(title, labels, static_cast<double>(nowMs));
