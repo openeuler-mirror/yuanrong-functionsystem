@@ -187,6 +187,7 @@ function install_function_proxy() {
     --traefik_servers_transport="${TRAEFIK_SERVERS_TRANSPORT}" \
     --fc_agent_mgr_retry_times="${FC_AGENT_MGR_RETRY_TIMES}" \
     --fc_agent_mgr_retry_cycle="${FC_AGENT_MGR_RETRY_CYCLE}" \
+    --enable_direct_routing="${ENABLE_DIRECT_ROUTING}" \
     ${merge_process_args} >>"${FS_LOG_PATH}/${NODE_ID}-function_proxy${STD_LOG_SUFFIX}" 2>&1 &
 
   FUNCTION_PROXY_PID="$!"
