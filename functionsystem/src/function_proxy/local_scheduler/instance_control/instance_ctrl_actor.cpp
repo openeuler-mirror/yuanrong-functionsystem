@@ -1818,7 +1818,11 @@ litebus::Option<TransitionResult> InstanceCtrlActor::OnTryDispatchOnLocal(
 {
     // todo(lwy_robb): to use traceID
     trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kLocalSchedule, scheduleReq->requestid());
-    if (IsLowReliabilityInstance(scheduleReq->instance()) || transResult.version != 0) {
+    // In DR mode (Gap 2), SCHEDULING/CREATING transitions use PERSISTENT_NOT (no etcd write),
+    // so version stays 0 and savedInfo is empty. Skip the savedInfo check and proceed with
+    // local dispatch; the single etcd write happens at RUNNING state.
+    if (IsLowReliabilityInstance(scheduleReq->instance()) || transResult.version != 0 ||
+        function_proxy::DirectRoutingConfig::IsEnabled()) {
         scheduleResp->SetValue(GenScheduleResponse(result.code, result.reason, *scheduleReq));
         return litebus::None();
     }
