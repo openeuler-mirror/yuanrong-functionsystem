@@ -162,6 +162,20 @@ public:
     {
     }
 
+    // Close the stdin write-end and reset inStream to None so the destructor
+    // does not attempt a double-close.  Must be called instead of a raw
+    // ::close(GetIn().Get()) to prevent fd-reuse races: if the caller closes
+    // the fd and then the next session reuses that fd number before this
+    // Exec object is destroyed, ~Exec() would silently close the new session's
+    // stdin pipe, resulting in EBADF errors in that session.
+    void CloseIn()
+    {
+        if (inStream.IsSome()) {
+            (void)::close(inStream.Get());
+            inStream = None();
+        }
+    }
+
     // use bit to discript wether enable or disable
     ~Exec()
     {

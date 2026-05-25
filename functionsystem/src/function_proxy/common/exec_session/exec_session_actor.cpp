@@ -40,6 +40,10 @@ static const int WRITE_BUFFER_SIZE = 4096;
 
 std::vector<std::string> ExecSessionActor::BuildExecBaseArgv()
 {
+    // Empty container ID means "direct exec" (process-mode sandbox, no container).
+    if (containerId_.empty()) {
+        return {};
+    }
     // If the container ID carries a "sbox" prefix (e.g. "sbox-<id>"), use sbox exec;
     // otherwise fall back to docker exec.
     if (containerId_.rfind("sbox", 0) == 0) {
@@ -104,7 +108,17 @@ void ExecSessionActor::DoOutput(const std::string &data, int exitCode)
         running_ = false;
         stdoutFd_ = -1;  // Mark unregistered so Cleanup skips (IOEventActor handles EOF path)
         stderrFd_ = -1;
-        WriteToStream("", exitCode);
+        // Ensure pendingExitCode_ is set BEFORE calling Close()/DoCleanupAfterUnregister().
+        // OnProcessExit() may not have fired yet (IOEventActor EOF and exec status completion
+        // are two independent events; EOF often arrives first).  Without this store,
+        // DoCleanupAfterUnregister would see pendingExitCode_ == -1 and send an unnecessary
+        // SIGTERM that can hit a new process that reused the same PID (kernel PID recycling).
+        int actualExitCode = pendingExitCode_.load();
+        if (actualExitCode < 0) {
+            pendingExitCode_.store(exitCode);
+            actualExitCode = exitCode;
+        }
+        WriteToStream("", actualExitCode);
         Close();
     } else {
         WriteToStream(data, -1);
@@ -126,21 +140,41 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
     rows_ = rows;
     cols_ = cols;
 
-    // Build container exec command (sbox exec or docker exec depending on availability)
+    // Build exec argv:
+    //   - containerId_ empty  → direct exec (process-mode sandbox)
+    //   - containerId_ "sbox-*" → sbox exec
+    //   - otherwise            → docker exec -i
     std::vector<std::string> argv = BuildExecBaseArgv();
+    std::vector<std::string> extraEnv;
 
-    for (const auto &[key, value] : env) {
-        argv.push_back("-e");
-        argv.push_back(key + "=" + value);
+    if (containerId_.empty()) {
+        // Direct mode: run the command without any container wrapper.
+        // Collect env vars as "KEY=VAL" pairs for the child environment.
+        for (const auto &[key, value] : env) {
+            extraEnv.push_back(key + "=" + value);
+        }
+        // If the caller sends a single command string (e.g. "echo AAA"), wrap it via
+        // /bin/sh -c so that shell built-ins and word splitting work correctly.
+        // If the caller already provides a multi-element argv (e.g. ["/bin/sh","-c","echo AAA"])
+        // use it as-is.
+        if (command_.size() == 1 && command_[0].find(' ') != std::string::npos) {
+            argv = {"/bin/sh", "-c", command_[0]};
+        } else {
+            argv.insert(argv.end(), command_.begin(), command_.end());
+        }
+        YRLOG_INFO("Starting direct exec (no container), sessionId: {}, cmd: {}", sessionId_, argv[0]);
+    } else {
+        for (const auto &[key, value] : env) {
+            argv.push_back("-e");
+            argv.push_back(key + "=" + value);
+        }
+        if (tty_) {
+            argv.push_back("-t");
+        }
+        argv.push_back(containerId_);
+        argv.insert(argv.end(), command_.begin(), command_.end());
+        YRLOG_INFO("Starting container exec ({}), sessionId: {}, container: {}", argv[0], sessionId_, containerId);
     }
-
-    if (tty_) {
-        argv.push_back("-t");
-    }
-    argv.push_back(containerId_);
-    argv.insert(argv.end(), command_.begin(), command_.end());
-
-    YRLOG_INFO("Starting container exec ({}), sessionId: {}, container: {}", argv[0], sessionId_, containerId);
 
     if (tty_) {
         auto ptyResult = litebus::PtyExecIO::Create(rows_, cols_);
@@ -220,14 +254,19 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
         if (stderrFd_ >= 0) {
             litebus::Async(IOEventActor::GetInstance(), &IOEventActor::DoRegister, stderrFd_,
                            [aid = GetAID()](const std::string &data, int exitCode) {
-                               litebus::Async(aid, &ExecSessionActor::DoOutput, data, exitCode);
+                               // For stderr, only forward data; ignore EOF (exitCode >= 0).
+                               // Exit signaling is driven exclusively by the stdout EOF path so
+                               // that stderr closing before stdout is fully drained does not
+                               // cause a premature EXITED status (which would truncate stdout).
+                               if (exitCode < 0) {
+                                   litebus::Async(aid, &ExecSessionActor::DoOutput, data, exitCode);
+                               }
                            },
                            nullptr);  // stdout's onUnregister triggers DoCleanupAfterUnregister
         }
     }
 
     RegisterExitHandler();
-    WriteToStream("", -1);
 }
 
 void ExecSessionActor::DoInput(const std::string &data)
@@ -239,6 +278,29 @@ void ExecSessionActor::DoInput(const std::string &data)
     ssize_t written = write(stdinFd_, data.c_str(), data.size());
     if (written < 0) {
         YRLOG_ERROR("Write failed, sessionId: {}, errno: {}", sessionId_, errno);
+    }
+}
+
+void ExecSessionActor::DoStdinEof()
+{
+    if (closed_.load() || stdinFd_ < 0) {
+        return;
+    }
+    // Close the write end of the stdin pipe so the child process receives EOF.
+    // Only close if it is not the PTY master fd (TTY sessions share ptyMasterFd_).
+    // Use exec_->CloseIn() instead of a raw close() so that the Exec destructor
+    // does not attempt a double-close: if exec_ is destroyed *after* this point
+    // the OS may have already reused the fd number for a new session's stdin
+    // pipe, and a second close() there would silently close that new pipe,
+    // causing EBADF write errors in the next session.
+    if (stdinFd_ != ptyMasterFd_) {
+        if (exec_) {
+            exec_->CloseIn();
+        } else {
+            close(stdinFd_);
+        }
+        stdinFd_ = -1;
+        YRLOG_INFO("DoStdinEof: closed stdin pipe, sessionId: {}", sessionId_);
     }
 }
 
@@ -290,14 +352,23 @@ void ExecSessionActor::OnProcessExit(const litebus::Future<litebus::Option<int>>
         return;
     }
 
-    running_ = false;
-
     int exitCode = 0;
     if (!future.IsError() && future.Get().IsSome()) {
         exitCode = future.Get().Get();
     }
 
     YRLOG_INFO("Process exited, sessionId: {}, exitCode: {}", sessionId_, exitCode);
+
+    // If IOEventActor is still monitoring stdout (stdoutFd_ >= 0), store the exit code
+    // and let IOEventActor drain the pipe first.  DoOutput(exitCode >= 0) will pick up
+    // pendingExitCode_ and call WriteToStream + Close after all data is flushed.
+    // This prevents a race where OnProcessExit fires before IOEventActor reads buffered data.
+    if (stdoutFd_ >= 0) {
+        pendingExitCode_.store(exitCode);
+        return;
+    }
+
+    running_ = false;
     WriteToStream("", exitCode);
     Close();
 }
@@ -365,14 +436,22 @@ void ExecSessionActor::DoCleanupAfterUnregister()
         int pid = exec_->GetPid();
         YRLOG_INFO("DoCleanupAfterUnregister: pid={}, sessionId: {}", pid, sessionId_);
         if (pid > 0) {
-            YRLOG_INFO("Killing exec process (detached thread), pid: {}, sessionId: {}", pid, sessionId_);
-            // Offload the sleep+kill to a detached thread so we never block the calling thread
-            // (which may be the IOEventActor event-loop thread, shared by all sessions).
-            static constexpr int killDelayMs = 100;  // grace period before SIGTERM
-            std::thread([pid]() {
-                std::this_thread::sleep_for(std::chrono::milliseconds(killDelayMs));
-                kill(pid, SIGTERM);
-            }).detach();
+            // Only send SIGTERM if the process has not already exited naturally.
+            // pendingExitCode_ >= 0 means OnProcessExit() fired, so the child is gone.
+            // Sending SIGTERM after natural exit risks killing an unrelated process that
+            // reused the same PID (kernel PID recycling), which would corrupt its output.
+            if (pendingExitCode_.load() >= 0) {
+                YRLOG_INFO("Process already exited naturally, skip SIGTERM, pid: {}, sessionId: {}", pid, sessionId_);
+            } else {
+                YRLOG_INFO("Killing exec process (detached thread), pid: {}, sessionId: {}", pid, sessionId_);
+                // Offload the sleep+kill to a detached thread so we never block the calling thread
+                // (which may be the IOEventActor event-loop thread, shared by all sessions).
+                static constexpr int killDelayMs = 100;  // grace period before SIGTERM
+                std::thread([pid]() {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(killDelayMs));
+                    kill(pid, SIGTERM);
+                }).detach();
+            }
         }
     }
 }
