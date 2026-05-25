@@ -16,8 +16,6 @@
 
 #include "command_builder.h"
 
-#include <unordered_set>
-
 #include "common/constants/constants.h"
 #include "common/logs/logging.h"
 #include "common/resource_view/resource_type.h"
@@ -56,8 +54,6 @@ const std::string GRPC_ADDRESS_PREFIX = "-grpcAddress=";
 const std::string CONFIG_PATH_PREFIX = "-runtimeConfigPath=";
 const std::string JOB_ID_PREFIX = "-jobId=job-";
 const std::string PYTHON_JOB_ID_PREFIX = "job-";
-const std::string RUNTIME_LAYER_DIR_NAME = "layer";
-const std::string RUNTIME_FUNC_DIR_NAME = "func";
 const std::string PYTHON_PRESTART_DEPLOY_DIR = "/dcache";
 const std::string JAVA_SYSTEM_PROPERTY_FILE = "-Dlog4j2.configurationFile=file:";
 const std::string JAVA_SYSTEM_LIBRARY_PATH = "-Djava.library.path=";

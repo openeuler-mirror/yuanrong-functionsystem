@@ -457,8 +457,21 @@ void SetStartRuntimeInstanceRequestConfig(const std::unique_ptr<messages::StartI
     auto runtimeInstanceInfo = SetRuntimeInstanceInfo(req);
     *startInstanceRequest->mutable_runtimeinstanceinfo() = std::move(runtimeInstanceInfo);
     *startInstanceRequest->mutable_scheduleoption() = std::move(req->scheduleoption());
-    startInstanceRequest->set_type(!req->has_container() ? static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME)
-                                                         : static_cast<int32_t>(EXECUTOR_TYPE::CONTAINER));
+
+    // Check sandbox_type from createOptions
+    if (const auto sandboxTypeIter = req->createoptions().find("sandbox_type");
+        sandboxTypeIter != req->createoptions().end() && sandboxTypeIter->second == "supervisor") {
+        YRLOG_INFO("{}|Using sandbox executor for {}", req->requestid(), sandboxTypeIter->second.c_str());
+        startInstanceRequest->set_type(static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
+        return;
+    }
+
+    // Check for container configuration
+    if (req->has_container()) {
+        startInstanceRequest->set_type(static_cast<int32_t>(EXECUTOR_TYPE::CONTAINER));
+    } else {
+        startInstanceRequest->set_type(static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME));
+    }
 }
 
 messages::RuntimeInstanceInfo SetRuntimeInstanceInfo(const std::shared_ptr<messages::DeployInstanceRequest> &req)
@@ -493,6 +506,7 @@ void SetStopRuntimeInstanceRequest(messages::StopInstanceRequest &stopInstanceRe
     stopInstanceRequest.set_runtimeid(req->runtimeid());
     stopInstanceRequest.set_requestid(req->requestid());
     stopInstanceRequest.set_traceid(req->traceid());
+    stopInstanceRequest.set_executortype(req->executortype());
 }
 
 std::unordered_map<std::string, std::shared_ptr<messages::Layer>> SetDeployingRequestLayers(

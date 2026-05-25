@@ -43,7 +43,6 @@
 #include "utils/os_utils.hpp"
 #include "utils/utils.h"
 #include "runtime_manager/ckpt/ckpt_file_manager_actor.h"
-#include "common/constants/actor_name.h"
 
 namespace functionsystem::runtime_manager {
 using json = nlohmann::json;
@@ -52,10 +51,6 @@ constexpr double DEFAULT_CPU_RESOURCE = 500;
 constexpr double DEFAULT_MEMORY_RESOURCE = 500;
 constexpr int MAX_PORT_NUMBER = 65535;
 const int64_t RECONNECT_CONTAINERD_INTERVAL_MS = 5000;
-const std::string PARAM_LANGUAGE = "language";
-const std::string RUNTIME_LAYER_DIR_NAME = "layer";
-const std::string RUNTIME_FUNC_DIR_NAME = "func";
-const std::string PARAM_EXEC_PATH = "execPath";
 const std::string PARAM_RUNTIME_ID = "runtimeID";
 const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 // used to chdir for runtime entrypoint

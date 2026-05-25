@@ -1248,4 +1248,115 @@ TEST_F(DISABLED_RuntimeManagerDebugServerTest, EnablePythonDebugInstanceIDTest)
     litebus::Await(testActor_->GetAID());
 }
 
+
+/**
+ * Feature: GetRuntimeType with SUPERVISOR executor type
+ * Description: Test GetRuntimeType returns correct executor type from instance response
+ */
+TEST_F(DISABLED_RuntimeManagerTest, GetRuntimeType_SupervisorExecutor)
+{
+    // Setup instance info map
+    messages::RuntimeInstanceInfo instanceInfo;
+    instanceInfo.set_instanceid("test_instance_id");
+    instanceInfo.set_runtimeid("test_runtime_id");
+    instanceInfo.set_requestid("test_request_id");
+    manager_->instanceInfoMap_["test_runtime_id"] = instanceInfo;
+
+    // Setup instance response map with SUPERVISOR executor type
+    messages::StartInstanceResponse startResponse;
+    startResponse.set_requestid("test_request_id");
+    startResponse.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+    startResponse.mutable_startruntimeinstanceresponse()->set_runtimeid("test_runtime_id");
+    startResponse.mutable_startruntimeinstanceresponse()->set_executortype(
+        static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
+    manager_->instanceResponseMap_["test_instance_id"] = startResponse;
+
+    // Get runtime type
+    EXECUTOR_TYPE runtimeType = manager_->GetRuntimeType("test_runtime_id");
+
+    EXPECT_EQ(runtimeType, EXECUTOR_TYPE::SUPERVISOR);
+}
+
+/**
+ * Feature: GetRuntimeType with multiple executor types
+ * Description: Test GetRuntimeType with multiple runtimes of different executor types
+ */
+TEST_F(DISABLED_RuntimeManagerTest, GetRuntimeType_MultipleExecutorTypes)
+{
+    // Setup RUNTIME runtime
+    messages::RuntimeInstanceInfo instanceInfo1;
+    instanceInfo1.set_instanceid("instance1");
+    instanceInfo1.set_runtimeid("runtime1");
+    instanceInfo1.set_requestid("request1");
+    manager_->instanceInfoMap_["runtime1"] = instanceInfo1;
+
+    messages::StartInstanceResponse startResponse1;
+    startResponse1.set_requestid("request1");
+    startResponse1.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+    startResponse1.mutable_startruntimeinstanceresponse()->set_runtimeid("runtime1");
+    startResponse1.mutable_startruntimeinstanceresponse()->set_executortype(
+        static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME));
+    manager_->instanceResponseMap_["instance1"] = startResponse1;
+
+    // Setup SUPERVISOR runtime
+    messages::RuntimeInstanceInfo instanceInfo2;
+    instanceInfo2.set_instanceid("instance2");
+    instanceInfo2.set_runtimeid("runtime2");
+    instanceInfo2.set_requestid("request2");
+    manager_->instanceInfoMap_["runtime2"] = instanceInfo2;
+
+    messages::StartInstanceResponse startResponse2;
+    startResponse2.set_requestid("request2");
+    startResponse2.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+    startResponse2.mutable_startruntimeinstanceresponse()->set_runtimeid("runtime2");
+    startResponse2.mutable_startruntimeinstanceresponse()->set_executortype(
+        static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
+    manager_->instanceResponseMap_["instance2"] = startResponse2;
+
+    // Setup CONTAINER runtime
+    messages::RuntimeInstanceInfo instanceInfo3;
+    instanceInfo3.set_instanceid("instance3");
+    instanceInfo3.set_runtimeid("runtime3");
+    instanceInfo3.set_requestid("request3");
+    manager_->instanceInfoMap_["runtime3"] = instanceInfo3;
+
+    messages::StartInstanceResponse startResponse3;
+    startResponse3.set_requestid("request3");
+    startResponse3.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+    startResponse3.mutable_startruntimeinstanceresponse()->set_runtimeid("runtime3");
+    startResponse3.mutable_startruntimeinstanceresponse()->set_executortype(
+        static_cast<int32_t>(EXECUTOR_TYPE::CONTAINER));
+    manager_->instanceResponseMap_["instance3"] = startResponse3;
+
+    // Get runtime types
+    EXECUTOR_TYPE type1 = manager_->GetRuntimeType("runtime1");
+    EXECUTOR_TYPE type2 = manager_->GetRuntimeType("runtime2");
+    EXECUTOR_TYPE type3 = manager_->GetRuntimeType("runtime3");
+
+    EXPECT_EQ(type1, EXECUTOR_TYPE::RUNTIME);
+    EXPECT_EQ(type2, EXECUTOR_TYPE::SUPERVISOR);
+    EXPECT_EQ(type3, EXECUTOR_TYPE::CONTAINER);
+}
+
+/**
+ * Feature: FindExecutor caching
+ * Description: Test that FindExecutor caches SUPERVISOR executor correctly
+ */
+TEST_F(DISABLED_RuntimeManagerTest, FindExecutor_Caching_Supervisor)
+{
+    // First call - creates executor
+    auto executor1 = manager_->FindExecutor(EXECUTOR_TYPE::SUPERVISOR);
+    EXPECT_NE(executor1, nullptr);
+
+    // Second call - should return cached executor
+    auto executor2 = manager_->FindExecutor(EXECUTOR_TYPE::SUPERVISOR);
+    EXPECT_NE(executor2, nullptr);
+    EXPECT_EQ(executor1, executor2);
+
+    // Different executor type - should create new executor
+    auto runtimeExecutor = manager_->FindExecutor(EXECUTOR_TYPE::RUNTIME);
+    EXPECT_NE(runtimeExecutor, nullptr);
+    EXPECT_NE(executor1, runtimeExecutor);
+}
+
 }  // namespace functionsystem::runtime_manager

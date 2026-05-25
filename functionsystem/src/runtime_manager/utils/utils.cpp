@@ -21,7 +21,6 @@
 #include <utils/string_utils.hpp>
 
 namespace functionsystem::runtime_manager {
-const std::string RUNTIME_UUID_PREFIX = "runtime-";
 const std::string JOB_ID_STR = "job";
 const int32_t JOB_INDEX = 1;
 

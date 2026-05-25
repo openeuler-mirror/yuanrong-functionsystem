@@ -332,6 +332,7 @@ message DeployInstanceResponse {
   string containerID = 10;
   // port forward mappings allocated by container executor, JSON: {"8888":"40001","443":"40002"}
   string portMappings = 11;
+  int32 executorType =12;
 }
 
 message KillInstanceRequest {
@@ -341,6 +342,7 @@ message KillInstanceRequest {
   string traceID = 4;
   string storageType = 5;
   bool isMonopoly = 6;
+  int32 executorType = 7;
 }
 
 message KillInstanceResponse {
@@ -542,6 +544,7 @@ message StartRuntimeInstanceResponse {
   int64  pid = 4;
   string cpuType = 5;
   string containerID = 6;
+  int32 executorType = 7;  // Executor type (RUNTIME/CONTAINER/SANDBOX)
 }
 
 message StartInstanceResponse {
@@ -556,6 +559,7 @@ message StopInstanceRequest {
   string requestID = 2;
   string traceID = 3;
   int32 type = 4;
+  int32 executorType = 5;
 }
 
 message StopInstanceResponse {

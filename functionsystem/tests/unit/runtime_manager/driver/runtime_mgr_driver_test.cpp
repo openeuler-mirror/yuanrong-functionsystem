@@ -56,6 +56,8 @@ TEST_F(RuntimeMgrDriverTest, DriverTest)
         "--npu_device_info_path=/tmp/home/sn/config/topology-info.json",
         R"(--log_config={"filepath": "/tmp/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
     };
+    // litebus::os::SetEnv("SKIP_SUPERVISOR", "true");
+
     flags.ParseFlags(std::size(argv), argv);
     EXPECT_EQ(flags.GetRuntimeHomeDir(), litebus::os::GetEnv("HOME").Get());
     std::cout << "flags.GetRuntimeHomeDir(): " << flags.GetRuntimeHomeDir() << std::endl;
@@ -68,6 +70,7 @@ TEST_F(RuntimeMgrDriverTest, DriverTest)
     EXPECT_EQ(driver.Start(), Status::OK());
     EXPECT_EQ(driver.Stop(), Status::OK());
     driver.Await();
+    // litebus::os::UnSetEnv("SKIP_SUPERVISOR");
 }
 
 TEST_F(RuntimeMgrDriverTest, DriverParseFailTest)

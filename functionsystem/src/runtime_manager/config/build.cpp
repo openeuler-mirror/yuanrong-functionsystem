@@ -64,8 +64,6 @@ const static std::string ENABLE_DIS_CONV_CALL_STACK = "ENABLE_DIS_CONV_CALL_STAC
 
 const static std::string S3_STORAGE_TYPE = "s3";
 
-const static std::string RUNTIME_LAYER_DIR_NAME = "layer";
-const static std::string RUNTIME_FUNC_DIR_NAME = "func";
 const static std::string GRACEFUL_SHUTDOWN_TIME = "GRACEFUL_SHUTDOWN_TIME";
 const static std::string PYTHONUNBUFFERED = "PYTHONUNBUFFERED";
 
