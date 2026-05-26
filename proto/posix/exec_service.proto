@@ -47,8 +47,17 @@ message ExecMessage {
 
     // Status response (server -> client)
     ExecStatusResponse status = 6;
+
+    // Signal stdin EOF (client -> server): close the process stdin pipe so that
+    // commands like `tar -xmf -` exit cleanly without needing head -c SIZE.
+    ExecStdinEof stdin_eof = 7;
   }
 }
+
+// ExecStdinEof signals that the client has finished writing to stdin.
+// The server closes the process stdin pipe upon receipt, allowing commands that
+// read until EOF (e.g. `tar -xmf -`) to terminate naturally.
+message ExecStdinEof {}
 
 // ExecStartRequest starts a new exec session
 message ExecStartRequest {

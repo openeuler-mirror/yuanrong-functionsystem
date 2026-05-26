@@ -82,6 +82,7 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
                                                  sessionAid, currentSessionId);
                 if (!status.ok()) {
                     YRLOG_ERROR("HandleStartRequest failed: {}", status.error_message());
+                    std::lock_guard<std::mutex> wlock(streamCtx->writeMutex);
                     SendStatusResponse(stream, "", ExecStatusResponse::ERROR, 0, status.error_message());
                     continue;
                 }
@@ -91,7 +92,10 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
                     idleMgr_->SessionCountDelta(request.start_request().instance_id(), 1);
                 }
 
-                SendStatusResponse(stream, currentSessionId, ExecStatusResponse::STARTED);
+                {
+                    std::lock_guard<std::mutex> wlock(streamCtx->writeMutex);
+                    SendStatusResponse(stream, currentSessionId, ExecStatusResponse::STARTED);
+                }
                 YRLOG_INFO("Session {} started, peer: {}", currentSessionId, peer);
                 break;
             }
@@ -106,6 +110,13 @@ GrpcStatus ExecStreamService::ExecStream(ServerContext *context, ServerReaderWri
             case ExecMessage::kResize: {
                 if (!sessionAid.Name().empty()) {
                     HandleResize(request.resize(), sessionAid);
+                }
+                break;
+            }
+
+            case ExecMessage::kStdinEof: {
+                if (!sessionAid.Name().empty()) {
+                    HandleStdinEof(sessionAid);
                 }
                 break;
             }
@@ -181,6 +192,8 @@ void ExecStreamService::WriteToStream(StreamContextPtr streamCtx, const std::str
         auto *output = response.mutable_output_data();
         output->set_data(data);
         output->set_stream_type(ExecOutputData::STDOUT);
+    } else {
+        return;  // No payload to send
     }
 
     if (!streamCtx->stream->Write(response)) {
@@ -213,9 +226,8 @@ GrpcStatus ExecStreamService::HandleStartRequest(const std::string &clientSessio
                                                  StreamContextPtr streamCtx,
                                                  litebus::AID &outSessionAid, std::string &outSessionId)
 {
-    if (request.container_id().empty()) {
-        return GrpcStatus(::grpc::StatusCode::INVALID_ARGUMENT, "container_id is required");
-    }
+    // container_id may be empty when the runtime runs as a plain process (no container).
+    // In that case ExecSessionActor will fork+exec the command directly.
 
     std::string sessionId =
         clientSessionId.empty() ? ExecSessionActor::GenerateSessionId() : clientSessionId;
@@ -260,6 +272,12 @@ GrpcStatus ExecStreamService::HandleInputData(const ExecInputData &input, const 
 GrpcStatus ExecStreamService::HandleResize(const ExecResizeRequest &resize, const litebus::AID &sessionAid)
 {
     litebus::Async(sessionAid, &ExecSessionActor::DoResize, resize.rows(), resize.cols());
+    return GrpcStatus::OK;
+}
+
+GrpcStatus ExecStreamService::HandleStdinEof(const litebus::AID &sessionAid)
+{
+    litebus::Async(sessionAid, &ExecSessionActor::DoStdinEof);
     return GrpcStatus::OK;
 }
 

@@ -92,6 +92,42 @@ std::string BuildS3RootfsRef(const runtime::v1::S3Config &s3Config)
 
 std::string ResolveSandboxImage(const messages::RuntimeInstanceInfo &info)
 {
+    // First, try to get rootfs from deployoptions
+    auto it = info.deploymentconfig().deployoptions().find("rootfs");
+    if (it != info.deploymentconfig().deployoptions().end() && !it->second.empty()) {
+        try {
+            auto parser = json::parse(it->second);
+            if (!parser.contains("type")) {
+                return "";
+            }
+            const std::string typeStr = parser.at("type").get<std::string>();
+            if (typeStr == "s3") {
+                if (!parser.contains("storageInfo")) {
+                    return "";
+                }
+                const auto &si = parser.at("storageInfo");
+                const auto bucket = si.contains("bucket") && si.at("bucket").is_string()
+                    ? si.at("bucket").get<std::string>()
+                    : "";
+                const auto object = si.contains("object") && si.at("object").is_string()
+                    ? si.at("object").get<std::string>()
+                    : "";
+                return object.empty() ? bucket : bucket + "/" + object;
+            } else if (typeStr == "image") {
+                if (parser.contains("imageurl") && parser.at("imageurl").is_string()) {
+                    return parser.at("imageurl").get<std::string>();
+                }
+            } else if (typeStr == "local") {
+                if (parser.contains("path") && parser.at("path").is_string()) {
+                    return parser.at("path").get<std::string>();
+                }
+            }
+        } catch (const std::exception &e) {
+            YRLOG_WARN("ResolveSandboxImage: failed to parse rootfs deploy option: {}", e.what());
+        }
+    }
+
+    // Fallback: use container().rootfsconfig()
     const auto &rootfs = info.container().rootfsconfig();
     switch (rootfs.type()) {
         case runtime::v1::IMAGE:
@@ -113,35 +149,6 @@ std::string ResolveSandboxImage(const messages::RuntimeInstanceInfo &info)
             break;
     }
 
-    auto it = info.deploymentconfig().deployoptions().find("rootfs");
-    if (it == info.deploymentconfig().deployoptions().end() || it->second.empty()) {
-        return "";
-    }
-
-    try {
-        auto parser = json::parse(it->second);
-        if (parser.contains("imageurl") && parser.at("imageurl").is_string()) {
-            return parser.at("imageurl").get<std::string>();
-        }
-        if (parser.contains("image_url") && parser.at("image_url").is_string()) {
-            return parser.at("image_url").get<std::string>();
-        }
-        if (parser.contains("path") && parser.at("path").is_string()) {
-            return parser.at("path").get<std::string>();
-        }
-        if (parser.contains("s3Config") && parser.at("s3Config").is_object()) {
-            const auto &s3Config = parser.at("s3Config");
-            const auto bucket = s3Config.contains("Bucket") && s3Config.at("Bucket").is_string()
-                ? s3Config.at("Bucket").get<std::string>()
-                : "";
-            const auto object = s3Config.contains("Object") && s3Config.at("Object").is_string()
-                ? s3Config.at("Object").get<std::string>()
-                : "";
-            return object.empty() ? bucket : bucket + "/" + object;
-        }
-    } catch (const std::exception &e) {
-        YRLOG_WARN("ResolveSandboxImage: failed to parse rootfs deploy option: {}", e.what());
-    }
     return "";
 }
 

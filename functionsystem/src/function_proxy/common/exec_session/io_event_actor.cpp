@@ -166,7 +166,7 @@ void IOEventActor::EventLoop()
 
 void IOEventActor::ReadAndDispatch(int fd)
 {
-    char buffer[4096];
+    char buffer[65536];
     ssize_t bytesRead = read(fd, buffer, sizeof(buffer));
 
     auto it = fdToInfo_.find(fd);

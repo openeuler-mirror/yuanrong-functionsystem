@@ -115,6 +115,11 @@ private:
     GrpcStatus HandleResize(const ExecResizeRequest &resize, const litebus::AID &sessionAid);
 
     /**
+     * Handle stdin EOF: close child process stdin pipe
+     */
+    GrpcStatus HandleStdinEof(const litebus::AID &sessionAid);
+
+    /**
      * Send status response
      */
     void SendStatusResponse(ServerReaderWriter<ExecMessage, ExecMessage> *stream, const std::string &sessionId,

@@ -59,6 +59,7 @@ public:
     void DoInput(const std::string &data);
     void DoOutput(const std::string &data, int exitCode);  // exitCode: -1=normal, >=0=exit
     void DoResize(int rows, int cols);
+    void DoStdinEof();  // Close the process stdin pipe (enables streaming tar without head -c)
     void DoClose();
 
     // Get session ID
@@ -108,6 +109,9 @@ private:
     std::atomic<bool> running_{ false };
     std::atomic<bool> closed_{ false };
     std::atomic<bool> cleanupDone_{ false };
+    // Stores the process exit code from OnProcessExit when IOEventActor has not yet drained
+    // stdout.  DoOutput(exitCode >= 0) picks it up to report the real exit code.
+    std::atomic<int> pendingExitCode_{ -1 };
 };
 
 }  // namespace functionsystem
