@@ -18,8 +18,9 @@
 #define FUNCTIONSYSTEM_NUMA_BINDING_H
 
 #include "common/status/status.h"
-
-#include <numa.h>
+#ifdef ENABLE_NUMA
+#include "common/utils/numa_dl.h"
+#endif
 
 namespace functionsystem::utils {
 
@@ -54,8 +55,10 @@ public:
     static int GetCurrentMemoryBinding();
 
 private:
-    static struct bitmask* CreateNodeMask(int nodeId);
-    static struct bitmask* CreateNodeMask(const std::vector<int>& nodeIds);
+#ifdef ENABLE_NUMA
+    static Bitmask* CreateNodeMask(int nodeId);
+    static Bitmask* CreateNodeMask(const std::vector<int>& nodeIds);
+#endif
 };
 
 } // namespace functionsystem::utils

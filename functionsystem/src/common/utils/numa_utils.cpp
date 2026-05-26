@@ -28,14 +28,15 @@ std::once_flag NUMAUtils::initFlag_;
 
 void NUMAUtils::Initialize()
 {
-    if (numa_available() < 0) {
+#ifdef ENABLE_NUMA
+    if (FsNumaAvailable() < 0) {
         YRLOG_WARN("NUMA is not available on this system");
         numaAvailable_ = false;
         maxNode_ = -1;
         return;
     }
     numaAvailable_ = true;
-    maxNode_ = numa_max_node();
+    maxNode_ = FsNumaMaxNode();
     if (maxNode_ < 0) {
         YRLOG_WARN("Failed to get NUMA max node, treating as non-NUMA system");
         numaAvailable_ = false;
@@ -43,49 +44,68 @@ void NUMAUtils::Initialize()
     } else {
         YRLOG_INFO("NUMA is available, max node: {}", maxNode_);
     }
+#else
+    YRLOG_INFO("NUMA support is disabled at compile time");
+    numaAvailable_ = false;
+    maxNode_ = -1;
+#endif
 }
 
 bool NUMAUtils::IsNUMAAvailable()
 {
+#ifdef ENABLE_NUMA
     std::call_once(initFlag_, Initialize);
     return numaAvailable_.load();
+#else
+    return false;
+#endif
 }
 
 int NUMAUtils::GetNUMANodeCount()
 {
+#ifdef ENABLE_NUMA
     if (!IsNUMAAvailable()) {
         return 1; // 非 NUMA 系统返回单节点
     }
     return maxNode_.load() + 1;
+#else
+    return 1;
+#endif
 }
 
 int NUMAUtils::GetNUMANodeCPUCount(int nodeId)
 {
+#ifdef ENABLE_NUMA
     if (!IsNUMAAvailable()) {
         return 0;
     }
     
-    struct bitmask* cpus = numa_allocate_cpumask();
-    if (numa_node_to_cpus(nodeId, cpus) != 0) {
+    Bitmask* cpus = FsNumaAllocateCpumask();
+    if (FsNumaNodeToCpus(nodeId, cpus) != 0) {
         YRLOG_ERROR("Failed to get CPU mask for NUMA node {}", nodeId);
-        numa_free_cpumask(cpus);
+        FsNumaFreeCpumask(cpus);
         return 0;
     }
     
     int count = 0;
-    int maxCpu = numa_num_configured_cpus();
+    int maxCpu = FsNumaNumConfiguredCpus();
     for (int i = 0; i < maxCpu; ++i) {
-        if (numa_bitmask_isbitset(cpus, i)) {
+        if (FsNumaBitmaskIsbitset(cpus, i)) {
             count++;
         }
     }
     
-    numa_free_cpumask(cpus);
+    FsNumaFreeCpumask(cpus);
     return count;
+#else
+    (void)nodeId;
+    return 0;
+#endif
 }
 
 std::vector<int> NUMAUtils::GetNUMANodeCPUCounts()
 {
+#ifdef ENABLE_NUMA
     std::vector<int> cpuCounts;
     
     if (!IsNUMAAvailable()) {
@@ -102,6 +122,9 @@ std::vector<int> NUMAUtils::GetNUMANodeCPUCounts()
     }
     
     return cpuCounts;
+#else
+    return {};
+#endif
 }
 
 static std::vector<double> GetNUMANodeCPUsFromAllocatableImpl(const resource_view::Resources& allocatable,

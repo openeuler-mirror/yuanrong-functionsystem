@@ -19,8 +19,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <numa.h>
-
 #include "common/utils/numa_utils.h"
 
 namespace functionsystem::test {
@@ -60,8 +58,8 @@ TEST_F(NUMABindingTest, BindCPUToNUMANodeInvalidNodeId) {
 // BindCPUToNUMANode: 无效 nodeId (超出范围) 返回 PARAMETER_ERROR
 TEST_F(NUMABindingTest, BindCPUToNUMANodeNodeIdOutOfRange) {
     int invalidNodeId = 99999;
-    if (NUMAUtils::IsNUMAAvailable() && numa_max_node() >= 0) {
-        invalidNodeId = numa_max_node() + 10;
+    if (NUMAUtils::IsNUMAAvailable()) {
+        invalidNodeId = NUMAUtils::GetNUMANodeCount() + 9;
     }
     auto status = NUMABinding::BindCPUToNUMANode(invalidNodeId);
     EXPECT_FALSE(status.IsOk());
