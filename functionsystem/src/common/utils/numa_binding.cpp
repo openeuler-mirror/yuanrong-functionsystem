@@ -26,61 +26,64 @@
 
 namespace functionsystem::utils {
 
-struct bitmask* NUMABinding::CreateNodeMask(int nodeId)
+#ifdef ENABLE_NUMA
+Bitmask* NUMABinding::CreateNodeMask(int nodeId)
 {
     if (!NUMAUtils::IsNUMAAvailable()) {
         return nullptr;
     }
-    if (nodeId < 0 || nodeId > numa_max_node()) {
-        YRLOG_ERROR("Invalid NUMA node ID {} (valid range: 0-{})", nodeId, numa_max_node());
+    if (nodeId < 0 || nodeId > FsNumaMaxNode()) {
+        YRLOG_ERROR("Invalid NUMA node ID {} (valid range: 0-{})", nodeId, FsNumaMaxNode());
         return nullptr;
     }
 
-    struct bitmask* mask = numa_allocate_nodemask();
+    Bitmask* mask = FsNumaAllocateNodemask();
     if (mask == nullptr) {
         YRLOG_ERROR("Failed to allocate NUMA node mask");
         return nullptr;
     }
 
-    numa_bitmask_setbit(mask, nodeId);
+    FsNumaBitmaskSetbit(mask, nodeId);
     return mask;
 }
 
-struct bitmask* NUMABinding::CreateNodeMask(const std::vector<int>& nodeIds)
+Bitmask* NUMABinding::CreateNodeMask(const std::vector<int>& nodeIds)
 {
     if (!NUMAUtils::IsNUMAAvailable()) {
         return nullptr;
     }
 
-    struct bitmask* mask = numa_allocate_nodemask();
+    Bitmask* mask = FsNumaAllocateNodemask();
     if (mask == nullptr) {
         YRLOG_ERROR("Failed to allocate NUMA node mask");
         return nullptr;
     }
 
-    int maxNode = numa_max_node();
+    int maxNode = FsNumaMaxNode();
     for (int nodeId : nodeIds) {
         if (nodeId >= 0 && nodeId <= maxNode) {
-            numa_bitmask_setbit(mask, nodeId);
+            FsNumaBitmaskSetbit(mask, nodeId);
         } else {
             YRLOG_WARN("Skip invalid NUMA node ID {} (valid range: 0-{})", nodeId, maxNode);
         }
     }
     return mask;
 }
+#endif
 
 Status NUMABinding::BindCPUToNUMANode(int nodeId)
 {
+#ifdef ENABLE_NUMA
     if (!NUMAUtils::IsNUMAAvailable()) {
         return Status(StatusCode::PARAMETER_ERROR, "NUMA is not available on this system");
     }
-    if (nodeId < 0 || nodeId > numa_max_node()) {
+    if (nodeId < 0 || nodeId > FsNumaMaxNode()) {
         return Status(StatusCode::PARAMETER_ERROR,
                       "Invalid NUMA node ID " + std::to_string(nodeId) + " (valid range: 0-" +
-                          std::to_string(numa_max_node()) + ")");
+                          std::to_string(FsNumaMaxNode()) + ")");
     }
 
-    int ret = numa_run_on_node(nodeId);
+    int ret = FsNumaRunOnNode(nodeId);
     if (ret < 0) {
         YRLOG_ERROR("Failed to bind CPU to NUMA node {}: {}", nodeId, litebus::os::Strerror(errno));
         return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "Failed to bind CPU to NUMA node");
@@ -88,10 +91,15 @@ Status NUMABinding::BindCPUToNUMANode(int nodeId)
     
     YRLOG_INFO("Successfully bound CPU to NUMA node {}", nodeId);
     return Status::OK();
+#else
+    (void)nodeId;
+    return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "NUMA support is disabled at compile time");
+#endif
 }
 
 Status NUMABinding::BindCPUToNUMANodes(const std::vector<int>& nodeIds)
 {
+#ifdef ENABLE_NUMA
     if (!NUMAUtils::IsNUMAAvailable()) {
         return Status(StatusCode::PARAMETER_ERROR, "NUMA is not available on this system");
     }
@@ -100,13 +108,13 @@ Status NUMABinding::BindCPUToNUMANodes(const std::vector<int>& nodeIds)
         return Status(StatusCode::PARAMETER_ERROR, "Empty NUMA node IDs list");
     }
     
-    struct bitmask* mask = CreateNodeMask(nodeIds);
+    Bitmask* mask = CreateNodeMask(nodeIds);
     if (mask == nullptr) {
         return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "Failed to create NUMA node mask");
     }
     
-    int ret = numa_run_on_node_mask(mask);
-    numa_bitmask_free(mask);
+    int ret = FsNumaRunOnNodeMask(mask);
+    FsNumaBitmaskFree(mask);
     
     if (ret < 0) {
         YRLOG_ERROR("Failed to bind CPU to NUMA nodes: {}", litebus::os::Strerror(errno));
@@ -120,33 +128,43 @@ Status NUMABinding::BindCPUToNUMANodes(const std::vector<int>& nodeIds)
     }
     YRLOG_INFO("Successfully bound CPU to NUMA nodes [{}]", nodesStr);
     return Status::OK();
+#else
+    (void)nodeIds;
+    return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "NUMA support is disabled at compile time");
+#endif
 }
 
 Status NUMABinding::BindMemoryToNUMANode(int nodeId)
 {
+#ifdef ENABLE_NUMA
     if (!NUMAUtils::IsNUMAAvailable()) {
         return Status(StatusCode::PARAMETER_ERROR, "NUMA is not available on this system");
     }
     
-    struct bitmask* mask = CreateNodeMask(nodeId);
+    Bitmask* mask = CreateNodeMask(nodeId);
     if (mask == nullptr) {
         return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "Failed to create NUMA node mask");
     }
 
     errno = 0;
-    numa_set_membind(mask);
+    FsNumaSetMembind(mask);
     if (errno != 0) {
         YRLOG_ERROR("Failed to set memory binding to NUMA node {}: {}", nodeId, litebus::os::Strerror(errno));
-        numa_bitmask_free(mask);
+        FsNumaBitmaskFree(mask);
         return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "Failed to set memory binding");
     }
-    numa_bitmask_free(mask);
+    FsNumaBitmaskFree(mask);
     YRLOG_INFO("Successfully bound memory to NUMA node {}", nodeId);
     return Status::OK();
+#else
+    (void)nodeId;
+    return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "NUMA support is disabled at compile time");
+#endif
 }
 
 Status NUMABinding::BindMemoryToNUMANodes(const std::vector<int>& nodeIds)
 {
+#ifdef ENABLE_NUMA
     if (!NUMAUtils::IsNUMAAvailable()) {
         return Status(StatusCode::PARAMETER_ERROR, "NUMA is not available on this system");
     }
@@ -155,19 +173,19 @@ Status NUMABinding::BindMemoryToNUMANodes(const std::vector<int>& nodeIds)
         return Status(StatusCode::PARAMETER_ERROR, "Empty NUMA node IDs list");
     }
     
-    struct bitmask* mask = CreateNodeMask(nodeIds);
+    Bitmask* mask = CreateNodeMask(nodeIds);
     if (mask == nullptr) {
         return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "Failed to create NUMA node mask");
     }
 
     errno = 0;
-    numa_set_membind(mask);
+    FsNumaSetMembind(mask);
     if (errno != 0) {
         YRLOG_ERROR("Failed to set memory binding to NUMA nodes: {}", litebus::os::Strerror(errno));
-        numa_bitmask_free(mask);
+        FsNumaBitmaskFree(mask);
         return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "Failed to set memory binding");
     }
-    numa_bitmask_free(mask);
+    FsNumaBitmaskFree(mask);
 
     std::string nodesStr;
     for (size_t i = 0; i < nodeIds.size(); ++i) {
@@ -176,29 +194,36 @@ Status NUMABinding::BindMemoryToNUMANodes(const std::vector<int>& nodeIds)
     }
     YRLOG_INFO("Successfully bound memory to NUMA nodes [{}]", nodesStr);
     return Status::OK();
+#else
+    (void)nodeIds;
+    return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "NUMA support is disabled at compile time");
+#endif
 }
 
 Status NUMABinding::BindToNUMANode(int nodeId)
 {
-    // 先绑定 CPU
+#ifdef ENABLE_NUMA
     auto cpuStatus = BindCPUToNUMANode(nodeId);
     if (!cpuStatus.IsOk()) {
         return cpuStatus;
     }
     
-    // 再绑定内存
     auto memStatus = BindMemoryToNUMANode(nodeId);
     if (!memStatus.IsOk()) {
         YRLOG_WARN("CPU bound to node {} but memory binding failed", nodeId);
         return memStatus;
     }
     
-    // 验证绑定
     return VerifyBinding(nodeId);
+#else
+    (void)nodeId;
+    return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "NUMA support is disabled at compile time");
+#endif
 }
 
 Status NUMABinding::BindToNUMANodes(const std::vector<int>& nodeIds)
 {
+#ifdef ENABLE_NUMA
     if (nodeIds.empty()) {
         return Status(StatusCode::PARAMETER_ERROR, "Empty NUMA node IDs list");
     }
@@ -217,85 +242,97 @@ Status NUMABinding::BindToNUMANodes(const std::vector<int>& nodeIds)
     }
     
     return Status::OK();
+#else
+    (void)nodeIds;
+    return Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "NUMA support is disabled at compile time");
+#endif
 }
 
 Status NUMABinding::VerifyBinding(int expectedNodeId)
 {
+#ifdef ENABLE_NUMA
     if (!NUMAUtils::IsNUMAAvailable()) {
         return Status::OK(); // 非 NUMA 系统，无需验证
     }
     
     // 验证 CPU 绑定
-    struct bitmask* cpuMask = numa_get_run_node_mask();
+    Bitmask* cpuMask = FsNumaGetRunNodeMask();
     if (cpuMask != nullptr) {
-        if (!numa_bitmask_isbitset(cpuMask, expectedNodeId)) {
+        if (!FsNumaBitmaskIsbitset(cpuMask, expectedNodeId)) {
             YRLOG_WARN("CPU binding verification failed: expected node {} but got different binding",
                        expectedNodeId);
-            // 不返回错误，因为可能有多个节点
         }
-        numa_bitmask_free(cpuMask);
+        FsNumaBitmaskFree(cpuMask);
     }
     
-    // 验证内存绑定
-    struct bitmask* memMask = numa_get_membind();
+    Bitmask* memMask = FsNumaGetMembind();
     if (memMask != nullptr) {
-        if (!numa_bitmask_isbitset(memMask, expectedNodeId)) {
+        if (!FsNumaBitmaskIsbitset(memMask, expectedNodeId)) {
             YRLOG_WARN("Memory binding verification failed: expected node {} but got different binding",
                        expectedNodeId);
-            // 不返回错误，因为可能有多个节点
         }
-        numa_bitmask_free(memMask);
+        FsNumaBitmaskFree(memMask);
     }
     
     return Status::OK();
+#else
+    (void)expectedNodeId;
+    return Status::OK();
+#endif
 }
 
 int NUMABinding::GetCurrentCPUBinding()
 {
+#ifdef ENABLE_NUMA
     if (!NUMAUtils::IsNUMAAvailable()) {
         return -1;
     }
     
-    struct bitmask* mask = numa_get_run_node_mask();
+    Bitmask* mask = FsNumaGetRunNodeMask();
     if (mask == nullptr) {
         return -1;
     }
     
-    // 返回第一个设置的节点
-    const int maxNode = numa_max_node();
+    const int maxNode = FsNumaMaxNode();
     for (int i = 0; i <= maxNode; ++i) {
-        if (numa_bitmask_isbitset(mask, i)) {
-            numa_bitmask_free(mask);
+        if (FsNumaBitmaskIsbitset(mask, i)) {
+            FsNumaBitmaskFree(mask);
             return i;
         }
     }
 
-    numa_bitmask_free(mask);
+    FsNumaBitmaskFree(mask);
     return -1;
+#else
+    return -1;
+#endif
 }
 
 int NUMABinding::GetCurrentMemoryBinding()
 {
+#ifdef ENABLE_NUMA
     if (!NUMAUtils::IsNUMAAvailable()) {
         return -1;
     }
     
-    struct bitmask* mask = numa_get_membind();
+    Bitmask* mask = FsNumaGetMembind();
     if (mask == nullptr) {
         return -1;
     }
     
-    // 返回第一个设置的节点
-    const int maxNode = numa_max_node();
+    const int maxNode = FsNumaMaxNode();
     for (int i = 0; i <= maxNode; ++i) {
-        if (numa_bitmask_isbitset(mask, i)) {
-            numa_bitmask_free(mask);
+        if (FsNumaBitmaskIsbitset(mask, i)) {
+            FsNumaBitmaskFree(mask);
             return i;
         }
     }
 
-    numa_bitmask_free(mask);
+    FsNumaBitmaskFree(mask);
     return -1;
+#else
+    return -1;
+#endif
 }
 
 } // namespace functionsystem::utils
