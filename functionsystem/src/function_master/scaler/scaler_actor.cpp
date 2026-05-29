@@ -3173,7 +3173,9 @@ std::shared_ptr<V2HorizontalPodAutoscaler> ScalerActor::GenerateV2HorizontalPodA
         return nullptr;
     }
 
-    pool.horizontalPodAutoscaler->SetApiVersion("autoscaling/v2beta2");
+    const char* env = std::getenv("K8S_API_VERSION");
+    std::string version = (env && std::string(env) == "v2") ? "v2" : "v2beta2";
+    pool.horizontalPodAutoscaler->SetApiVersion("autoscaling/" + version);
     pool.horizontalPodAutoscaler->SetKind("HorizontalPodAutoscaler");
 
     auto metaData = std::make_shared<V1ObjectMeta>();

@@ -584,6 +584,27 @@ TEST_F(KubeClientApiTest, CreateNamespacedHorizontalPodAutoscaler)
     std::cout << result.Get()->ToJson().dump() << std::endl;
 }
 
+TEST_F(KubeClientApiTest, CreateNamespacedHorizontalPodAutoscalerV2)
+{
+    std::string r_namespace = "default";
+    std::shared_ptr<V2HorizontalPodAutoscaler> body;
+    auto result = kubeClient_->CreateNamespacedHorizontalPodAutoscaler(r_namespace, body);
+    result.Get();
+    EXPECT_TRUE(result.IsError());
+
+    body = std::make_shared<V2HorizontalPodAutoscaler>();
+    body->SetApiVersion("autoscaling/v2");
+    body->SetKind("HorizontalPodAutoscaler");
+    auto metaData = std::make_shared<V1ObjectMeta>();
+    metaData->SetName("function-agent-pool1-hpa");
+    metaData->SetRNamespace(r_namespace);
+    body->SetMetadata(metaData);
+    result = kubeClient_->CreateNamespacedHorizontalPodAutoscaler(r_namespace, body);
+    result.Get();
+    EXPECT_TRUE(result.IsOK());
+    std::cout << result.Get()->ToJson().dump() << std::endl;
+}
+
 TEST_F(KubeClientApiTest, DeleteNamespacedHorizontalPodAutoscaler)
 {
     std::string r_namespace = "default";
