@@ -27,6 +27,13 @@ namespace api {
 
 using namespace functionsystem::kube_client::model;
 
+// 兼容性考虑，默认v2beta2
+static std::string GetHpaApiSuffix()
+{
+    const char* env = std::getenv("K8S_API_VERSION");
+    return (env && std::string(env) == "v2") ? "v2" : "v2beta2";
+}
+
 AutoscalingV2Api::AutoscalingV2Api(std::shared_ptr<const ApiClient> apiClient) : m_apiClient(apiClient)
 {}
 
@@ -46,7 +53,8 @@ litebus::Future<std::shared_ptr<V2HorizontalPodAutoscaler>> AutoscalingV2Api::Cr
         return promise.GetFuture();
     }
 
-    std::string localVarPath = "/apis/autoscaling/v2beta2/namespaces/" + rNamespace + "/horizontalpodautoscalers";
+    std::string localVarPath = "/apis/autoscaling/" + GetHpaApiSuffix() + "/namespaces/" +
+        rNamespace + "/horizontalpodautoscalers";
     nlohmann::json localVarJson = ModelUtils::ToJson(body);
     std::shared_ptr<IHttpBody> localVarHttpBody = std::make_shared<JsonBody>(localVarJson);
 
@@ -71,7 +79,7 @@ litebus::Future<std::shared_ptr<V1Status>> AutoscalingV2Api::DeleteNamespacedHor
     const std::string &rNamespace) const
 {
     litebus::Promise<std::shared_ptr<V1Status>> promise;
-    std::string localVarPath = "/apis/autoscaling/v2beta2/namespaces/" +
+    std::string localVarPath = "/apis/autoscaling/" + GetHpaApiSuffix() + "/namespaces/" +
         rNamespace + "/horizontalpodautoscalers/" + name;
     std::map<std::string, std::string> localVarQueryParams;
     ASSERT_IF_NULL(m_apiClient);
@@ -97,7 +105,8 @@ litebus::Future<std::shared_ptr<V2HorizontalPodAutoscalerList>> AutoscalingV2Api
     const litebus::Option<bool> &watch) const
 {
     litebus::Promise<std::shared_ptr<V2HorizontalPodAutoscalerList>> promise;
-    std::string localVarPath = "/apis/autoscaling/v2beta2/namespaces/" + rNamespace + "/horizontalpodautoscalers";
+    std::string localVarPath = "/apis/autoscaling/" + GetHpaApiSuffix() + "/namespaces/" +
+        rNamespace + "/horizontalpodautoscalers";
     std::map<std::string, std::string> localVarQueryParams = ApiClient::GetLocalQueryParams(rContinue, limit, watch);
     ASSERT_IF_NULL(m_apiClient);
     m_apiClient->CallApi(localVarPath, std::string("GET"), localVarQueryParams, nullptr)
@@ -132,7 +141,7 @@ litebus::Future<std::shared_ptr<V2HorizontalPodAutoscaler>> AutoscalingV2Api::Pa
     const std::shared_ptr<Object> &body) const
 {
     litebus::Promise<std::shared_ptr<V2HorizontalPodAutoscaler>> promise;
-    std::string localVarPath = "/apis/autoscaling/v2beta2/namespaces/" +
+    std::string localVarPath = "/apis/autoscaling/" + GetHpaApiSuffix() + "/namespaces/" +
         rNamespace + "/horizontalpodautoscalers/" + name;
     nlohmann::json localVarJson = ModelUtils::ToJson(body);
     std::shared_ptr<IHttpBody> localVarHttpBody = std::make_shared<JsonBody>(localVarJson);
