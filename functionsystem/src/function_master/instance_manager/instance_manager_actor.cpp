@@ -1321,6 +1321,22 @@ void InstanceManagerActor::MasterBusiness::ForwardKill(const litebus::AID &from,
     }
 
     auto info = std::make_shared<InstanceInfo>(req.instance());
+    // A route-less kill forwarded by a proxy (e.g. originating from the frontend
+    // instance kill interface) carries only the target instance id, not the full
+    // InstanceInfo. Resolve the instance from master's global view so it can be
+    // routed to its owner. If master also cannot find it, return an error.
+    if (info->instanceid().empty()) {
+        auto [instanceKey, found] = actor->GetInstanceInfoByInstanceID(req.req().instanceid());
+        (void)instanceKey;
+        if (found == nullptr) {
+            YRLOG_WARN("{}|forward kill: instance({}) not found on master", req.requestid(), req.req().instanceid());
+            messages::ForwardKillResponse rsp = GenerateForwardKillResponse(
+                req, static_cast<int32_t>(StatusCode::ERR_INSTANCE_NOT_FOUND), "instance not found on master");
+            (void)actor->Send(from, "ResponseForwardKill", std::move(rsp.SerializeAsString()));
+            return;
+        }
+        info = found;
+    }
     KillInstance(info, req.req().signal(), req.req().payload())
         .OnComplete(
         litebus::Defer(actor->GetAID(), &InstanceManagerActor::OnKillInstance, std::placeholders::_1, req, from));
