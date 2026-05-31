@@ -17,6 +17,7 @@
 #include "metrics_adapter.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -238,6 +239,45 @@ std::shared_ptr<MetricsExporters::Exporter> MetricsAdapter::InitOtelExporter(
             initConfigJson["headers"] = nlohmann::json::object();
         }
         initConfigJson["headers"]["service.name"] = metricsContext_.GetAttr("component_name");
+
+        // Inject per-instance OTLP resource attributes so each producer
+        // (function_master / function_proxy / function_agent on every node)
+        // emits a unique target_info labelset.  Without this the same series is
+        // written by multiple processes, which causes Prometheus remote-write
+        // to reject the whole batch with "out of order sample" and silently
+        // drops co-batched cluster metrics such as yr_cluster_cpu_capacity.
+        if (initConfigJson.find("resource_attrs") == initConfigJson.end()) {
+            initConfigJson["resource_attrs"] = nlohmann::json::object();
+        }
+        const auto componentName = metricsContext_.GetAttr("component_name");
+        const auto nodeId = metricsContext_.GetAttr("node_id");
+        const auto agentId = metricsContext_.GetAttr("agent_id");
+        std::string instanceId = componentName;
+        if (!nodeId.empty()) {
+            instanceId += "_" + nodeId;
+        }
+        if (!agentId.empty()) {
+            instanceId += "_" + agentId;
+        }
+        initConfigJson["resource_attrs"]["component"] = componentName;
+        if (!nodeId.empty()) {
+            initConfigJson["resource_attrs"]["node_id"] = nodeId;
+        }
+        if (!agentId.empty()) {
+            initConfigJson["resource_attrs"]["agent_id"] = agentId;
+        }
+        initConfigJson["resource_attrs"]["service.instance.id"] = instanceId;
+        // Optional pod / host identity from K8s downward API or shell env;
+        // harmless when not present.
+        if (const char* podName = std::getenv("POD_NAME"); podName != nullptr && podName[0] != '\0') {
+            initConfigJson["resource_attrs"]["pod_name"] = podName;
+        }
+        if (const char* nodeName = std::getenv("NODE_NAME"); nodeName != nullptr && nodeName[0] != '\0') {
+            initConfigJson["resource_attrs"]["node_name"] = nodeName;
+        }
+        if (const char* instanceIp = std::getenv("INSTANCE_IP"); instanceIp != nullptr && instanceIp[0] != '\0') {
+            initConfigJson["resource_attrs"]["instance_ip"] = instanceIp;
+        }
 
         try {
             YRLOG_INFO("metrics opentelemetry exporter for backend {}, initConfig: {}",
