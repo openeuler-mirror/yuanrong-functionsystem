@@ -259,13 +259,18 @@ std::shared_ptr<MetricsExporters::Exporter> MetricsAdapter::InitOtelExporter(
         if (!agentId.empty()) {
             instanceId += "_" + agentId;
         }
+        // NOTE: do NOT inject keys here that are also used as per-data-point
+        // metric labels (e.g. "node_id", "agent_id").  When the OTLP receiver
+        // (Prometheus remote-write, otel-collector) flattens resource attrs
+        // into label sets, a same-named resource attribute will collide with
+        // and overwrite the data-point label, collapsing every reported series
+        // onto the producer's own node_id/agent_id and dropping the real
+        // dimensional split (e.g. yr_nodes_cpu_capacity_vmillicore from master
+        // would show only the master's node_id instead of one series per node).
         initConfigJson["resource_attrs"]["component"] = componentName;
-        if (!nodeId.empty()) {
-            initConfigJson["resource_attrs"]["node_id"] = nodeId;
-        }
-        if (!agentId.empty()) {
-            initConfigJson["resource_attrs"]["agent_id"] = agentId;
-        }
+        // "service.instance.id" is a standard OTel resource attribute; it is
+        // not used as a metric label anywhere, so it's safe and sufficient
+        // to uniquely identify the producer for target_info de-duplication.
         initConfigJson["resource_attrs"]["service.instance.id"] = instanceId;
         // Optional pod / host identity from K8s downward API or shell env;
         // harmless when not present.
