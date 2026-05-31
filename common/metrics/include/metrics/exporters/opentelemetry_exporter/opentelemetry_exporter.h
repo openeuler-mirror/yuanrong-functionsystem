@@ -21,6 +21,10 @@ struct OpenTelemetryExporterOptions {
     std::string export_mode = "BATCH";
     uint32_t batch_size = 100;
     uint32_t batch_interval = 5;
+    // Per-instance resource attributes injected into every OTLP ResourceMetrics.
+    // Used to disambiguate producers sharing the same service.name so Prometheus
+    // does not see out-of-order samples from different instances.
+    std::map<std::string, std::string> resource_attrs;
 };
 
 class OpenTelemetryExporter : public Exporter {

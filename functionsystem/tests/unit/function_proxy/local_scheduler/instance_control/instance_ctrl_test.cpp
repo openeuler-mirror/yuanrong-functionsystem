@@ -32,6 +32,7 @@
 #include "function_proxy/common/posix_client/shared_client/shared_client_manager.h"
 #include "function_proxy/common/posix_client/shared_client/posix_stream_manager_proxy.h"
 #include "function_proxy/common/state_handler/state_handler.h"
+#include "function_proxy/config/direct_routing_config.h"
 #include "local_scheduler/instance_control/instance_ctrl_actor.h"
 #include "local_scheduler/instance_control/instance_ctrl_message.h"
 #include "mocks/mock_distributed_cache_client.h"
@@ -1501,6 +1502,84 @@ TEST_F(InstanceCtrlTest, KillInstanceByJob)
     ASSERT_AWAIT_READY(killRsp);
     EXPECT_EQ(killRsp.Get().code(), common::ErrorCode::ERR_PARAM_INVALID);
 }
+
+/**
+ * Feature: instance ctrl (direct routing).
+ * Description: when direct routing is enabled and a route-less kill targets an
+ *              instance that is not in this proxy's local view, the kill must be
+ *              forwarded to function_master, and master's result relayed back.
+ */
+TEST_F(InstanceCtrlTest, KillForwardsToMasterWhenLocalMissAndDirectRoutingEnabled)
+{
+    auto guard = DirectRoutingConfig::EnableForTest();
+    const std::string instanceID = "InstanceNotLocal";
+    auto killReq = GenKillRequest(instanceID, SHUT_DOWN_SIGNAL);
+
+    auto localSchedSrv = std::make_shared<MockLocalSchedSrv>();
+    instanceCtrl_->BindLocalSchedSrv(localSchedSrv);
+
+    // Instance is unknown locally -> proxy must forward the kill to function_master.
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillRepeatedly(Return(nullptr));
+
+    messages::ForwardKillResponse response;
+    response.set_code(common::ErrorCode::ERR_NONE);
+    EXPECT_CALL(*localSchedSrv, ForwardKillToInstanceManager).WillOnce(Return(response));
+
+    auto killRsp = instanceCtrl_->Kill("src", killReq);
+    ASSERT_AWAIT_READY(killRsp);
+    EXPECT_EQ(killRsp.Get().code(), common::ErrorCode::ERR_NONE);
+}
+
+/**
+ * Feature: instance ctrl (direct routing).
+ * Description: a route-less kill forwarded to function_master for an instance that
+ *              master also cannot find must relay ERR_INSTANCE_NOT_FOUND back.
+ */
+TEST_F(InstanceCtrlTest, KillForwardedToMasterRelaysNotFound)
+{
+    auto guard = DirectRoutingConfig::EnableForTest();
+    const std::string instanceID = "InstanceUnknownEverywhere";
+    auto killReq = GenKillRequest(instanceID, SHUT_DOWN_SIGNAL);
+
+    auto localSchedSrv = std::make_shared<MockLocalSchedSrv>();
+    instanceCtrl_->BindLocalSchedSrv(localSchedSrv);
+
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillRepeatedly(Return(nullptr));
+
+    messages::ForwardKillResponse response;
+    response.set_code(common::ErrorCode::ERR_INSTANCE_NOT_FOUND);
+    EXPECT_CALL(*localSchedSrv, ForwardKillToInstanceManager).WillOnce(Return(response));
+
+    auto killRsp = instanceCtrl_->Kill("src", killReq);
+    ASSERT_AWAIT_READY(killRsp);
+    EXPECT_EQ(killRsp.Get().code(), common::ErrorCode::ERR_INSTANCE_NOT_FOUND);
+}
+
+/**
+ * Feature: instance ctrl (direct routing).
+ * Description: a kill that already carries routing information must NOT be
+ *              forwarded to function_master even when the instance is not local;
+ *              it follows the normal routing path (here: not found locally).
+ */
+TEST_F(InstanceCtrlTest, KillWithRouteInfoIsNotForwardedToMaster)
+{
+    auto guard = DirectRoutingConfig::EnableForTest();
+    const std::string instanceID = "InstanceWithRoute";
+    auto killReq = GenKillRequest(instanceID, SHUT_DOWN_SIGNAL);
+    killReq->set_proxyid("ownerProxy");
+    killReq->set_routeaddress("127.0.0.1:1234");
+
+    auto localSchedSrv = std::make_shared<MockLocalSchedSrv>();
+    instanceCtrl_->BindLocalSchedSrv(localSchedSrv);
+
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillRepeatedly(Return(nullptr));
+    // The kill carries routing info, so it must not be forwarded to master.
+    EXPECT_CALL(*localSchedSrv, ForwardKillToInstanceManager).Times(0);
+
+    auto killRsp = instanceCtrl_->Kill("src", killReq).Get();
+    EXPECT_EQ(killRsp.code(), common::ErrorCode::ERR_INSTANCE_NOT_FOUND);
+}
+
 
 /**
  * Feature: instance ctrl.

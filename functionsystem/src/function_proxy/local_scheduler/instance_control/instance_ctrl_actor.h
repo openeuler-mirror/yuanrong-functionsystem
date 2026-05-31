@@ -324,6 +324,15 @@ public:
 
     litebus::Future<KillResponse> KillInstancesOfJob(const std::shared_ptr<KillRequest> &killReq);
 
+    // Returns true when a route-less kill should be forwarded to function_master:
+    // direct routing is enabled, the request carries no route/proxy info, and the
+    // target instance is not present in this proxy's local instance view.
+    bool ShouldForwardKillToMaster(const std::shared_ptr<KillRequest> &killReq) const;
+
+    // Forwards a kill to function_master so it can resolve the instance owner from
+    // the global view (or report that the instance does not exist).
+    litebus::Future<KillResponse> ForwardKillToMaster(const std::shared_ptr<KillRequest> &killReq);
+
     void BindControlInterfaceClientManager(const std::shared_ptr<ControlInterfaceClientManagerProxy> &mgr)
     {
         ASSERT_IF_NULL(mgr);

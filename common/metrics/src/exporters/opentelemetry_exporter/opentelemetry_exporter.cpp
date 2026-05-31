@@ -48,6 +48,11 @@ OpenTelemetryExporter::OpenTelemetryExporter(const std::string& config) {
                 options_.headers[key] = value.get<std::string>();
             }
         }
+        if (root.contains("resource_attrs")) {
+            for (auto& [key, value] : root["resource_attrs"].items()) {
+                options_.resource_attrs[key] = value.get<std::string>();
+            }
+        }
 
         if (root.contains("export_mode")) {
             options_.export_mode = root["export_mode"].get<std::string>();
@@ -162,10 +167,19 @@ ExportResult OpenTelemetryExporter::Export(
     // Create a Resource with service attributes so the OTLP exporter sends
     // non-empty resource attributes.  resource_ is a raw pointer so the
     // Resource object must outlive the Export() call.
-    auto resource = opentelemetry::sdk::resource::Resource::Create(
-        opentelemetry::sdk::resource::ResourceAttributes{
-            {"service.name", "yuanrong-functionsystem"}
-        });
+    //
+    // Inject per-instance attributes (e.g. service.instance.id, component,
+    // node_id) so that producers sharing the same service.name do not collapse
+    // into a single Prometheus labelset.  Without this, target_info from
+    // multiple instances would share one series and trigger out-of-order sample
+    // rejection by Prometheus remote-write.
+    opentelemetry::sdk::resource::ResourceAttributes resource_attributes{
+        {"service.name", "yuanrong-functionsystem"}
+    };
+    for (const auto& [key, value] : options_.resource_attrs) {
+        resource_attributes.SetAttribute(key, value);
+    }
+    auto resource = opentelemetry::sdk::resource::Resource::Create(resource_attributes);
 
     opentelemetry::sdk::metrics::ResourceMetrics resource_metrics;
     resource_metrics.resource_ = &resource;

@@ -396,6 +396,11 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(const std::string &s
         case SHUT_DOWN_SIGNAL:
             [[fallthrough]];
         case SHUT_DOWN_SIGNAL_SYNC: {
+            if (ShouldForwardKillToMaster(killReq)) {
+                YRLOG_INFO("instance({}) not found locally, forward route-less kill to function_master",
+                           killReq->instanceid());
+                return ForwardKillToMaster(killReq);
+            }
             return CheckInstanceExist(srcInstanceID, killReq)
                 .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::AuthorizeKill, srcInstanceID, killReq, isSkipAuth))
                 .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::CheckKillParam, _1, srcInstanceID, killReq))
@@ -1246,6 +1251,42 @@ litebus::Future<KillResponse> InstanceCtrlActor::KillInstancesOfJob(const std::s
         return GenKillResponse(common::ErrorCode::ERR_PARAM_INVALID, "instance id is empty");
     }
 
+    auto req = std::make_shared<messages::ForwardKillRequest>();
+    req->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
+    req->mutable_req()->CopyFrom(*killReq);
+    ASSERT_IF_NULL(localSchedSrv_);
+    return localSchedSrv_->ForwardKillToInstanceManager(req).Then([](const messages::ForwardKillResponse &response) {
+        KillResponse killResp;
+        killResp.set_code(Status::GetPosixErrorCode(response.code()));
+        killResp.set_message(response.message());
+        return killResp;
+    });
+}
+
+bool InstanceCtrlActor::ShouldForwardKillToMaster(const std::shared_ptr<KillRequest> &killReq) const
+{
+    if (!function_proxy::DirectRoutingConfig::IsEnabled()) {
+        return false;
+    }
+    // Only forward kills that carry no routing information (e.g. issued by the
+    // frontend instance kill interface). Kills that already carry a route/proxy
+    // are handled by the normal routing path.
+    if (!killReq->routeaddress().empty() || !killReq->proxyid().empty()) {
+        return false;
+    }
+    if (killReq->instanceid().empty()) {
+        return false;
+    }
+    // When the instance is not in this proxy's local view, the owner cannot be
+    // resolved here; let function_master resolve and route it (or report that
+    // the instance does not exist).
+    ASSERT_IF_NULL(instanceControlView_);
+    return instanceControlView_->GetInstance(killReq->instanceid()) == nullptr;
+}
+
+litebus::Future<KillResponse> InstanceCtrlActor::ForwardKillToMaster(const std::shared_ptr<KillRequest> &killReq)
+{
+    YRLOG_INFO("forward kill of instance({}) to function_master", killReq->instanceid());
     auto req = std::make_shared<messages::ForwardKillRequest>();
     req->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
     req->mutable_req()->CopyFrom(*killReq);

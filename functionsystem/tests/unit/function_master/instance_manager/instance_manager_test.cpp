@@ -1025,6 +1025,45 @@ TEST_F(DISABLED_InstanceManagerTest, ForwardKillInstance)
     instanceMgrDriver->Await();
 }
 
+/**
+ * Feature: instance manager (direct routing).
+ * Description: a route-less kill forwarded by a proxy carries only the target
+ *              instance id (empty InstanceInfo). When master also cannot find the
+ *              instance, ForwardKill must respond ERR_INSTANCE_NOT_FOUND.
+ */
+TEST_F(DISABLED_InstanceManagerTest, ForwardKillRouteLessUnknownInstanceReturnsNotFound)
+{
+    auto scheduler = std::make_shared<MockGlobalSched>();
+    auto groupMgrActor = std::make_shared<MockGroupManagerActor>(
+        MetaStoreClient::Create(MetaStoreConfig{ .etcdAddress = metaStoreServerHost_ }), scheduler);
+    auto groupMgr = std::make_shared<MockGroupManager>(groupMgrActor);
+    auto instanceMgrActor = std::make_shared<InstanceManagerActor>(
+        MetaStoreClient::Create(MetaStoreConfig{ .etcdAddress = metaStoreServerHost_ }), scheduler, groupMgr,
+        InstanceManagerStartParam{ .runtimeRecoverEnable = false });
+    auto instanceMgrDriver = std::make_shared<InstanceManagerDriver>(instanceMgrActor, groupMgrActor);
+    instanceMgrDriver->Start();
+    auto mockBootstrapActor = std::make_shared<MockBootstrapStubActor>("MockBootstrapStubActor");
+    litebus::Spawn(mockBootstrapActor);
+    litebus::Async(instanceMgrActor->GetAID(), &InstanceManagerActor::UpdateLeaderInfo,
+                   GetLeaderInfo(instanceMgrActor->GetAID()));
+
+    // Route-less forwarded kill: instance() is empty, only req().instanceid() is set.
+    messages::ForwardKillRequest req;
+    req.set_requestid("kill-routeless-0001");
+    req.mutable_req()->set_instanceid("UnknownInstanceID");
+    req.mutable_req()->set_signal(SHUT_DOWN_SIGNAL);
+
+    auto future = litebus::Async(mockBootstrapActor->GetAID(), &MockBootstrapStubActor::SendForwardKill,
+                                 instanceMgrActor->GetAID(), req);
+    ASSERT_AWAIT_READY(future);
+    EXPECT_EQ(future.Get().StatusCode(), StatusCode::ERR_INSTANCE_NOT_FOUND);
+
+    litebus::Terminate(mockBootstrapActor->GetAID());
+    litebus::Await(mockBootstrapActor->GetAID());
+    instanceMgrDriver->Stop();
+    instanceMgrDriver->Await();
+}
+
 // FamilyManagement test cases
 TEST_F(DISABLED_InstanceManagerTest, FamilyManagement_OnParentMissingInstancePut)  // NOLINT
 {
