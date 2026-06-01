@@ -263,11 +263,14 @@ void SandboxExecutor::InitConfig()
         YRLOG_INFO("SandboxExecutor: no containerd endpoint, executor disabled");
     }
     ckptOrch_ = std::make_shared<CheckpointOrchestrator>(GetAID(), containerd_, ckptFileManager_, stateManager_);
+    // Sync MUST run after containerd_ is created. Init() runs before InitConfig()
+    // (via Executor::SetRuntimeConfig), so calling Sync() there would be a silent no-op.
+    Sync();
 }
 
 void SandboxExecutor::Init()
 {
-    Sync();
+    // intentionally empty: real init happens in InitConfig() once containerd_ is ready
 }
 
 void SandboxExecutor::Finalize()
