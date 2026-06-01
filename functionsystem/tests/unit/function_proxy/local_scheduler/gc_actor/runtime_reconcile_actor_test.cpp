@@ -238,24 +238,33 @@ TEST_F(RuntimeReconcileActorTest, NoActionWhenAllContainersMatch)
 }
 
 /**
- * Feature: Empty instances map skips reconciliation for that agent.
+ * Feature: First-pass with empty instances still triggers reconcile.
  * Description:
- *   When InstanceControlView returns no instances for the triggered agent,
- *   ReconcileRuntimes should not be called.
+ *   When proxy has no local instance for the agent (e.g. proxy restart with
+ *   empty etcd sync), first-pass reconcile should still send an empty-entries
+ *   request so the executor can detect and clean orphans from its own view.
  */
-TEST_F(RuntimeReconcileActorTest, EmptyInstancesSkipsReconcile)
+TEST_F(RuntimeReconcileActorTest, EmptyInstancesStillTriggersReconcile)
 {
     std::unordered_map<std::string, std::shared_ptr<InstanceStateMachine>> emptyInstances;
     EXPECT_CALL(*mockInstanceControlView_, GetInstances())
         .WillRepeatedly(Return(emptyInstances));
 
-    EXPECT_CALL(*mockFunctionAgentMgr_, ReconcileRuntimes(_, _)).Times(0);
+    std::atomic<bool> called{false};
+    EXPECT_CALL(*mockFunctionAgentMgr_, ReconcileRuntimes(TEST_AGENT_ID, _))
+        .WillRepeatedly(Invoke([&called](const std::string &,
+                                          const std::shared_ptr<messages::ReconcileRuntimesRequest> &request) {
+            EXPECT_EQ(request->entries_size(), 0);
+            messages::ReconcileRuntimesResponse resp;
+            resp.set_requestid(request->requestid());
+            resp.set_code(0);
+            called = true;
+            return AsyncReturn(resp);
+        }));
 
     CreateAndSpawnActor();
     reconcileActor_->TriggerOnce(TEST_AGENT_ID);
-
-    // Give the actor time to process the trigger — ReconcileRuntimes should not be called
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ASSERT_AWAIT_TRUE([&called]() { return called.load(); });
 }
 
 /**
@@ -301,12 +310,13 @@ TEST_F(RuntimeReconcileActorTest, OnlyRunsOnTrigger)
 }
 
 /**
- * Feature: Reconcile response error code is handled gracefully with fail-open.
+ * Feature: Reconcile response error code does not crash, no ghost cleanup.
  * Description:
- *   When ReconcileRuntimes returns a non-zero error code, the actor should
- *   log the error, not crash, and not attempt ghost cleanup.
+ *   When ReconcileRuntimes returns a non-zero error code, the actor logs the
+ *   error and skips ghost cleanup. UnitStatus is NOT mutated; the next periodic
+ *   cycle will retry the reconcile.
  */
-TEST_F(RuntimeReconcileActorTest, ErrorResponseFailOpenGracefully)
+TEST_F(RuntimeReconcileActorTest, ErrorResponseNoCrashNoGhostCleanup)
 {
     auto instances = MakeInstancesMap({
         {TEST_INSTANCE_ID_1, TEST_AGENT_ID, TEST_RUNTIME_ID_1, TEST_CONTAINER_ID_1},

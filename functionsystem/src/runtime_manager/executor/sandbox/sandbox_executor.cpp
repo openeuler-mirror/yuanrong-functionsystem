@@ -47,8 +47,13 @@ using json = nlohmann::json;
 namespace {
 constexpr int64_t DEFAULT_GRACEFUL_SHUTDOWN         = 5;
 constexpr int64_t RECONNECT_INTERVAL_MS             = 5000;
-constexpr int64_t RECONCILE_RETRY_INTERVAL_MS       = 1000;
-constexpr int32_t RECONCILE_MAX_RETRIES             = 30;
+// Backoff bounds for ReconcileRuntimes when containerd is still connecting.
+// Exponential: 1s, 2s, 4s, 8s, capped at RECONCILE_RETRY_MAX_INTERVAL_MS.
+// MAX_RETRIES is intentionally generous so a slow containerd cold start
+// (image pull etc.) doesn't fail-open the reconcile and let orphans survive.
+constexpr int64_t RECONCILE_RETRY_INITIAL_MS        = 1000;
+constexpr int64_t RECONCILE_RETRY_MAX_INTERVAL_MS   = 10000;
+constexpr int32_t RECONCILE_MAX_RETRIES             = 120;
 constexpr int32_t CONTAINER_DELETE_TIMEOUT_SEC      = 10;
 const std::string YR_ONLY_STDOUT                    = "YR_ONLY_STDOUT";
 
@@ -200,10 +205,33 @@ functionsystem::metrics::LabelType BuildSandboxMetricLabels(const messages::Runt
     };
 }
 
+// Switch (env YR_SANDBOX_METRICS_ENABLED) for the new sandbox-level metrics added in this branch.
+// Default OFF to avoid the high-cardinality storm (sandbox_id / runtime_id labels) that overloads
+// the OTel collector (10+ CPU cores) and triggers downstream actor stalls / OtlpHttpClient mutex
+// assertion on shutdown. Set to "1" / "true" to re-enable.
+bool IsSandboxMetricsEnabled()
+{
+    static const bool enabled = []() {
+        auto envOpt = litebus::os::GetEnv("YR_SANDBOX_METRICS_ENABLED");
+        bool e = false;
+        if (envOpt.IsSome()) {
+            const auto &v = envOpt.Get();
+            e = (v == "1" || v == "true" || v == "TRUE" || v == "True");
+        }
+        YRLOG_INFO("[sandbox-metrics] YR_SANDBOX_METRICS_ENABLED={} (default OFF; set to 1 to enable)",
+                   e ? "true" : "false");
+        return e;
+    }();
+    return enabled;
+}
+
 void ReportSandboxGauge(const functionsystem::metrics::MeterTitle &title,
                         const functionsystem::metrics::LabelType &labels,
                         double value)
 {
+    if (!IsSandboxMetricsEnabled()) {
+        return;
+    }
     functionsystem::metrics::MeterData data{ value, labels };
     functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(title, data, { "node_id", "ip" });
 }
@@ -263,11 +291,14 @@ void SandboxExecutor::InitConfig()
         YRLOG_INFO("SandboxExecutor: no containerd endpoint, executor disabled");
     }
     ckptOrch_ = std::make_shared<CheckpointOrchestrator>(GetAID(), containerd_, ckptFileManager_, stateManager_);
+    // Sync MUST run after containerd_ is created. Init() runs before InitConfig()
+    // (via Executor::SetRuntimeConfig), so calling Sync() there would be a silent no-op.
+    Sync();
 }
 
 void SandboxExecutor::Init()
 {
-    Sync();
+    // intentionally empty: real init happens in InitConfig() once containerd_ is ready
 }
 
 void SandboxExecutor::Finalize()
@@ -833,7 +864,12 @@ void SandboxExecutor::WaitAndReconcile(
 
         YRLOG_INFO("{}|ReconcileRuntimes: containerd not connected yet, retry {}/{}",
                    request->requestid(), retryCount + 1, RECONCILE_MAX_RETRIES);
-        litebus::AsyncAfter(RECONCILE_RETRY_INTERVAL_MS, GetAID(),
+        // Exponential backoff capped at RECONCILE_RETRY_MAX_INTERVAL_MS.
+        int64_t delayMs = RECONCILE_RETRY_INITIAL_MS << std::min(retryCount, 6);
+        if (delayMs > RECONCILE_RETRY_MAX_INTERVAL_MS || delayMs <= 0) {
+            delayMs = RECONCILE_RETRY_MAX_INTERVAL_MS;
+        }
+        litebus::AsyncAfter(delayMs, GetAID(),
                             &SandboxExecutor::WaitAndReconcile, request, retryCount + 1, promise);
         return;
     }
@@ -1009,9 +1045,34 @@ void SandboxExecutor::DeleteContainerAsync(const std::string &containerID)
     auto deleteReq = std::make_shared<runtime::v1::DeleteRequest>();
     deleteReq->set_id(containerID);
     deleteReq->set_timeout(CONTAINER_DELETE_TIMEOUT_SEC);
-    containerd_->CallAsync("Delete", *deleteReq,
-                           static_cast<runtime::v1::DeleteResponse *>(nullptr),
-                           &runtime::v1::RuntimeLauncher::Stub::AsyncDelete);
+    // Capture container ID so we can re-arm orphan tracking on failure: the next
+    // reconcile cycle will pick it up again as an orphan candidate and retry
+    // after the grace period, instead of silently leaking the container.
+    // Lambda captures only the actor AID; the completion is dispatched back to
+    // the actor via litebus::Async so the member-state mutation (orphanFirstSeen_)
+    // runs on the actor's own thread instead of the gRPC callback thread.
+    containerd_
+        ->CallAsync("Delete", *deleteReq, static_cast<runtime::v1::DeleteResponse *>(nullptr),
+                    &runtime::v1::RuntimeLauncher::Stub::AsyncDelete)
+        .Then([aid(GetAID()), containerID](
+                  litebus::Try<runtime::v1::DeleteResponse> rsp) -> litebus::Future<Status> {
+            return litebus::Async(aid, &SandboxExecutor::OnDeleteContainerComplete, containerID, rsp);
+        });
+}
+
+Status SandboxExecutor::OnDeleteContainerComplete(const std::string &containerID,
+                                                  litebus::Try<runtime::v1::DeleteResponse> rsp)
+{
+    if (rsp.IsOK()) {
+        YRLOG_INFO("DeleteContainerAsync: container({}) deleted", containerID);
+        return Status::OK();
+    }
+    YRLOG_ERROR("DeleteContainerAsync: container({}) delete failed: {}, will retry on next reconcile",
+                containerID, rsp.GetErrorCode());
+    // Re-arm orphan timer: emplace if absent so it becomes eligible after
+    // another grace period elapses; existing entries are preserved.
+    orphanFirstSeen_.emplace(containerID, std::chrono::steady_clock::now());
+    return Status(StatusCode::ERR_INNER_SYSTEM_ERROR);
 }
 // ── Connectivity ──────────────────────────────────────────────────────────────
 
@@ -1232,6 +1293,9 @@ void SandboxExecutor::DoWaitWithRetry(const std::string &sandboxID, const std::s
 
 void SandboxExecutor::ScheduleSandboxStatsCollection(const std::string &runtimeID, const std::string &sandboxID)
 {
+    if (!IsSandboxMetricsEnabled()) {
+        return;
+    }
     if (sandboxStatsPollingRuntimes_.count(runtimeID) == 0) {
         return;
     }
@@ -1244,6 +1308,9 @@ void SandboxExecutor::ScheduleSandboxStatsCollection(const std::string &runtimeI
 
 void SandboxExecutor::ScheduleRunningStatusHeartbeat(const std::string &runtimeID)
 {
+    if (!IsSandboxMetricsEnabled()) {
+        return;
+    }
     // Guard: only heartbeat while sandbox is still tracked as RUNNING
     auto it = sandboxLifecycleStates_.find(runtimeID);
     if (it == sandboxLifecycleStates_.end() || it->second != SandboxLifecycleStatus::RUNNING) {
@@ -1269,6 +1336,9 @@ void SandboxExecutor::ReportRunningStatusHeartbeat(const std::string &runtimeID)
 
 void SandboxExecutor::CollectSandboxStats(const std::string &runtimeID, const std::string &sandboxID)
 {
+    if (!IsSandboxMetricsEnabled()) {
+        return;
+    }
     if (sandboxStatsPollingRuntimes_.count(runtimeID) == 0) {
         return;
     }
