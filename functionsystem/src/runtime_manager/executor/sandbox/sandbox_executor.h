@@ -324,6 +324,8 @@ private:
 
     void PurgeOrphanTracking(const std::unordered_set<std::string> &actualRunningIDs);
     void DeleteContainerAsync(const std::string &containerID);
+    Status OnDeleteContainerComplete(const std::string &containerID,
+                                     litebus::Try<runtime::v1::DeleteResponse> rsp);
 
     // ── State ─────────────────────────────────────────────────────────────────
 

@@ -20,6 +20,7 @@
 #include <actor/actor.hpp>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "common/proto/pb/message_pb.h"
@@ -74,22 +75,39 @@ public:
 
     /**
      * Co-process mode: trigger a single reconciliation cycle for specified agent.
+     * Used at agent (re)registration to transition RECOVERING → NORMAL once.
      */
     void TriggerOnce(const std::string &funcAgentID);
 
 private:
     void OnTrigger(const std::string &funcAgentID);
-    void RunReconcileCycle();
+
+    // Run a reconcile pass for a specific subset of agents.
+    //   firstPassAgents: agents that just registered; eligible for RECOVERING→NORMAL
+    //                    transition when reconcile reports success/empty.
+    // Periodic passes (no firstPassAgents) reconcile every agent that owns at least
+    // one instance in proxy's local view, but never mutate UnitStatus.
+    void RunReconcileCycle(const std::vector<std::string> &firstPassAgents);
 
     void ReconcileAgent(const std::string &funcAgentID,
-                        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request);
+                        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request,
+                        bool isFirstPass);
 
     void OnReconcileComplete(const messages::ReconcileRuntimesResponse &resp,
-                             const std::string &funcAgentID);
+                             const std::string &funcAgentID,
+                             bool isFirstPass);
+
+    void OnReconcileError(const std::string &funcAgentID, bool isFirstPass,
+                          const std::string &reason);
 
     void CleanGhostInstance(const std::string &instanceID);
 
     Status OnForceDeleteComplete(const std::string &instanceID, const Status &status);
+
+    void SchedulePeriodicCycle();
+    void RunPeriodicCycle();
+
+    void RetryPendingGhosts();
 
     std::string nodeID_;
 
@@ -97,7 +115,19 @@ private:
     std::shared_ptr<InstanceCtrl> instanceCtrl_;
     std::shared_ptr<FunctionAgentMgr> functionAgentMgr_;
     std::shared_ptr<resource_view::ResourceView> resourceView_;
+
+    // Agents pending first-pass transition (RECOVERING → NORMAL on success).
     std::vector<std::string> pendingAgents_;
+
+    // In-flight reconcile RPCs per agent: prevents overlap between first-pass and
+    // periodic passes, or two periodic passes if a previous one is slow.
+    std::unordered_set<std::string> inProgressAgents_;
+
+    // Ghost instances (proxy says it exists, executor says it does not) whose
+    // ForceDelete attempt did not succeed yet. Retried on next periodic cycle.
+    std::unordered_set<std::string> pendingGhostInstances_;
+
+    static constexpr uint64_t kPeriodicReconcileIntervalMs = 60ULL * 1000ULL;
 };
 
 }  // namespace functionsystem::local_scheduler
