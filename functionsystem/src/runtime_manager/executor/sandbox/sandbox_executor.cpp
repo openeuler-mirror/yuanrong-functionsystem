@@ -205,10 +205,33 @@ functionsystem::metrics::LabelType BuildSandboxMetricLabels(const messages::Runt
     };
 }
 
+// Switch (env YR_SANDBOX_METRICS_ENABLED) for the new sandbox-level metrics added in this branch.
+// Default OFF to avoid the high-cardinality storm (sandbox_id / runtime_id labels) that overloads
+// the OTel collector (10+ CPU cores) and triggers downstream actor stalls / OtlpHttpClient mutex
+// assertion on shutdown. Set to "1" / "true" to re-enable.
+bool IsSandboxMetricsEnabled()
+{
+    static const bool enabled = []() {
+        auto envOpt = litebus::os::GetEnv("YR_SANDBOX_METRICS_ENABLED");
+        bool e = false;
+        if (envOpt.IsSome()) {
+            const auto &v = envOpt.Get();
+            e = (v == "1" || v == "true" || v == "TRUE" || v == "True");
+        }
+        YRLOG_INFO("[sandbox-metrics] YR_SANDBOX_METRICS_ENABLED={} (default OFF; set to 1 to enable)",
+                   e ? "true" : "false");
+        return e;
+    }();
+    return enabled;
+}
+
 void ReportSandboxGauge(const functionsystem::metrics::MeterTitle &title,
                         const functionsystem::metrics::LabelType &labels,
                         double value)
 {
+    if (!IsSandboxMetricsEnabled()) {
+        return;
+    }
     functionsystem::metrics::MeterData data{ value, labels };
     functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(title, data, { "node_id", "ip" });
 }
@@ -1270,6 +1293,9 @@ void SandboxExecutor::DoWaitWithRetry(const std::string &sandboxID, const std::s
 
 void SandboxExecutor::ScheduleSandboxStatsCollection(const std::string &runtimeID, const std::string &sandboxID)
 {
+    if (!IsSandboxMetricsEnabled()) {
+        return;
+    }
     if (sandboxStatsPollingRuntimes_.count(runtimeID) == 0) {
         return;
     }
@@ -1282,6 +1308,9 @@ void SandboxExecutor::ScheduleSandboxStatsCollection(const std::string &runtimeI
 
 void SandboxExecutor::ScheduleRunningStatusHeartbeat(const std::string &runtimeID)
 {
+    if (!IsSandboxMetricsEnabled()) {
+        return;
+    }
     // Guard: only heartbeat while sandbox is still tracked as RUNNING
     auto it = sandboxLifecycleStates_.find(runtimeID);
     if (it == sandboxLifecycleStates_.end() || it->second != SandboxLifecycleStatus::RUNNING) {
@@ -1307,6 +1336,9 @@ void SandboxExecutor::ReportRunningStatusHeartbeat(const std::string &runtimeID)
 
 void SandboxExecutor::CollectSandboxStats(const std::string &runtimeID, const std::string &sandboxID)
 {
+    if (!IsSandboxMetricsEnabled()) {
+        return;
+    }
     if (sandboxStatsPollingRuntimes_.count(runtimeID) == 0) {
         return;
     }
