@@ -968,7 +968,11 @@ void SandboxExecutor::CleanupOrphanContainers(const std::string &requestID,
         const auto &containerID = container.id();
 
         if (expectedIDs.count(containerID) > 0 || !stateManager_.FindRuntimeIDBySandboxID(containerID).empty()) {
-            orphanFirstSeen_.erase(containerID);
+            if (orphanFirstSeen_.erase(containerID)) {
+                YRLOG_INFO("{}|ReconcileRuntimes: orphan timer cleared for {} "
+                           "(re-appeared in expected or stateManager)",
+                           requestID, containerID);
+            }
             continue;
         }
 
@@ -1067,11 +1071,16 @@ Status SandboxExecutor::OnDeleteContainerComplete(const std::string &containerID
         YRLOG_INFO("DeleteContainerAsync: container({}) deleted", containerID);
         return Status::OK();
     }
-    YRLOG_ERROR("DeleteContainerAsync: container({}) delete failed: {}, will retry on next reconcile",
-                containerID, rsp.GetErrorCode());
-    // Re-arm orphan timer: emplace if absent so it becomes eligible after
-    // another grace period elapses; existing entries are preserved.
-    orphanFirstSeen_.emplace(containerID, std::chrono::steady_clock::now());
+    YRLOG_ERROR("DeleteContainerAsync: container({}) delete failed: {}, scheduling retry in ~{}s",
+                containerID, rsp.GetErrorCode(), kOrphanDeleteRetryIntervalSec);
+    // Re-arm the orphan timer so the delete is retried on the *next* reconcile
+    // cycle rather than after a full grace period.  We set first-seen to
+    // (now - gracePeriodSec + retryIntervalSec), which means elapsed will reach
+    // gracePeriodSec after approximately retryIntervalSec seconds.
+    auto retryFirstSeen = std::chrono::steady_clock::now() -
+                          std::chrono::seconds(static_cast<int64_t>(orphanGracePeriodSec_)) +
+                          std::chrono::seconds(static_cast<int64_t>(kOrphanDeleteRetryIntervalSec));
+    orphanFirstSeen_.emplace(containerID, retryFirstSeen);
     return Status(StatusCode::ERR_INNER_SYSTEM_ERROR);
 }
 // ── Connectivity ──────────────────────────────────────────────────────────────

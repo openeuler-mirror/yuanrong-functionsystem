@@ -113,6 +113,16 @@ void RuntimeReconcileActor::RunReconcileCycle(const std::vector<std::string> &fi
 
     std::unordered_set<std::string> firstPassSet(firstPassAgents.begin(), firstPassAgents.end());
 
+    // Always include the local node in every periodic cycle, even when it has
+    // no live instances in etcd.  Orphan containers survive instance deletion,
+    // so without this the local SandboxExecutor would never receive a reconcile
+    // request and the orphan grace-period timer would never fire.
+    if (agentRequests.find(nodeID_) == agentRequests.end()) {
+        auto request = std::make_shared<messages::ReconcileRuntimesRequest>();
+        request->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
+        agentRequests.emplace(nodeID_, std::move(request));
+    }
+
     YRLOG_INFO("RuntimeReconcileActor: starting reconcile cycle, {} agents from instance view, {} first-pass agents",
                agentRequests.size(), firstPassSet.size());
 

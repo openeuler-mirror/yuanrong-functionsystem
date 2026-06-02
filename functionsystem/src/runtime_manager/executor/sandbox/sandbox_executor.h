@@ -94,7 +94,12 @@ private:
  */
 class SandboxExecutor : public Executor {
 public:
-    static constexpr uint32_t kDefaultOrphanGracePeriodSec = 600;
+    static constexpr uint32_t kDefaultOrphanGracePeriodSec = 180;
+    // After a failed orphan-container Delete RPC, re-arm the timer so that the
+    // next reconcile cycle re-attempts the delete instead of waiting a full
+    // grace period again.  Set to one reconcile interval (60 s) plus a small
+    // buffer so the re-attempt fires on the very next reconcile tick.
+    static constexpr uint32_t kOrphanDeleteRetryIntervalSec = 70;
 
     enum class SandboxLifecycleStatus : int32_t {
         CREATING = 1,
