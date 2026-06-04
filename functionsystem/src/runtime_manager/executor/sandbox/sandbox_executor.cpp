@@ -967,10 +967,10 @@ void SandboxExecutor::CleanupOrphanContainers(const std::string &requestID,
         }
         const auto &containerID = container.id();
 
-        if (expectedIDs.count(containerID) > 0 || !stateManager_.FindRuntimeIDBySandboxID(containerID).empty()) {
+        if (expectedIDs.count(containerID) > 0) {
             if (orphanFirstSeen_.erase(containerID)) {
                 YRLOG_INFO("{}|ReconcileRuntimes: orphan timer cleared for {} "
-                           "(re-appeared in expected or stateManager)",
+                           "(re-appeared in expected)",
                            requestID, containerID);
             }
             continue;
@@ -990,6 +990,7 @@ void SandboxExecutor::CleanupOrphanContainers(const std::string &requestID,
 
         YRLOG_INFO("{}|ReconcileRuntimes: deleting orphan container {} (orphan for {}s)",
                    requestID, containerID, elapsedSec);
+        CleanupLocalRuntimeStateForOrphan(requestID, containerID);
         DeleteContainerAsync(containerID);
         orphanFirstSeen_.erase(it);
         actualRunningIDs->erase(containerID);
@@ -1031,6 +1032,27 @@ void SandboxExecutor::AddMissingAndConfirmedEntries(
             DoWaitWithRetry(entry.containerid(), entry.runtimeid(), 0);
         }
     }
+}
+
+void SandboxExecutor::CleanupLocalRuntimeStateForOrphan(const std::string &requestID,
+                                                        const std::string &containerID)
+{
+    const auto runtimeID = stateManager_.FindRuntimeIDBySandboxID(containerID);
+    if (runtimeID.empty()) {
+        return;
+    }
+
+    YRLOG_WARN("{}|ReconcileRuntimes: orphan container {} is still registered as runtime({}); "
+               "releasing local runtime resources before orphan delete",
+               requestID, containerID, runtimeID);
+
+    if (ckptOrch_ != nullptr) {
+        ckptOrch_->ReleaseRef(runtimeID, requestID);
+    }
+    PortManager::GetInstance().ReleasePorts(runtimeID);
+    ClearSandboxMetricsState(runtimeID);
+    sandboxLifecycleStates_.erase(runtimeID);
+    stateManager_.Unregister(runtimeID);
 }
 
 void SandboxExecutor::PurgeOrphanTracking(const std::unordered_set<std::string> &actualRunningIDs)
