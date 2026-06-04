@@ -190,6 +190,7 @@ type FaaSFuncMeta struct {
 	InstanceMetaData FaaSInstanceMetaData `json:"instanceMetaData" valid:",optional"`
 	ExtendedMetaData FaaSExtendedMetaData `json:"extendedMetaData" valid:",optional"`
 	RootfsSpecMeta   RootfsSpecMeta       `json:"rootfs" valid:",optional"`
+	SandboxType      string               `json:"sandboxType" valid:"optional"`
 }
 
 // FaaSFuncMetaData define meta data of functions for FaaS

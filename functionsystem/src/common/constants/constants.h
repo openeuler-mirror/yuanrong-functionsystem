@@ -307,5 +307,6 @@ const std::vector<std::string> VIRTUALENV_KEYS = {VIRTUALENV_KIND, VIRTUALENV_NA
 
 // deploy options
 const std::string EXEC_PATH = "exec_path";
+const std::string HOST_USER = "host_user";
 }  // namespace functionsystem
 #endif  // COMMON_CONSTANTS_CONSTANTS_H

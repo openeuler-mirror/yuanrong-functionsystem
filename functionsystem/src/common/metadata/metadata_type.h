@@ -268,6 +268,7 @@ struct FunctionMeta {
     InstanceMetaData instanceMetaData;
     RootfsSpecMeta rootfs;
     BootstrapMetaData bootstrap;
+    std::string sandboxType;
     std::string rawJsonStr;
 };
 
