@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use common::{make_proxy_config, new_bus};
+use common::{make_proxy_config, new_bus, new_bus_dr};
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
@@ -555,7 +555,9 @@ async fn forward_kill_uses_request_route_hint_when_route_cache_missing() {
     });
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-    let bus = new_bus("proxy-b", 28131);
+    // DR mode (gap2): complete KillRequest routing hints are honored when the
+    // route cache is empty.
+    let bus = new_bus_dr("proxy-b", 28131);
     let iid = "hint-kill";
     let res = bus
         .forward_kill(ForwardKillRequest {
@@ -574,6 +576,53 @@ async fn forward_kill_uses_request_route_hint_when_route_cache_missing() {
         .expect("forward_kill");
     assert_eq!(res.code, ErrorCode::ErrNone as i32);
     assert_eq!(hits.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn on_node_abnormal_evicts_only_that_nodes_routes() {
+    // DR mode (gap2): an abnormal scheduler node evicts exactly the routes it owns.
+    let bus = new_bus("proxy-local", 28140);
+    bus.apply_instance_route_put(
+        "i-a",
+        &serde_json::to_vec(&serde_json::json!({ "nodeId": "node-x" })).unwrap(),
+    );
+    bus.apply_instance_route_put(
+        "i-b",
+        &serde_json::to_vec(&serde_json::json!({ "nodeId": "node-y" })).unwrap(),
+    );
+
+    assert_eq!(bus.on_node_abnormal("node-x"), 1);
+    // Already evicted: a second event is a no-op.
+    assert_eq!(bus.on_node_abnormal("node-x"), 0);
+    // Other node's route is untouched.
+    assert_eq!(bus.on_node_abnormal("node-y"), 1);
+    // Empty node id is ignored.
+    assert_eq!(bus.on_node_abnormal(""), 0);
+}
+
+#[tokio::test]
+async fn forward_kill_ignores_route_hint_when_dr_disabled() {
+    // Non-DR mode: KillRequest routing hints are ignored, so with no route cache
+    // and no peer there is no endpoint and forward_kill fails (C++ 94b02900 parity:
+    // direct routing only applies under enable_direct_routing).
+    let bus = new_bus("proxy-b", 28132);
+    let iid = "hint-kill-nodr";
+    let err = bus
+        .forward_kill(ForwardKillRequest {
+            request_id: "k-hint-nodr".into(),
+            instance_id: iid.to_string(),
+            req: Some(KillRequest {
+                instance_id: iid.to_string(),
+                signal: 1,
+                route_address: "http://127.0.0.1:59999".into(),
+                proxy_id: "proxy-a".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .expect_err("hint must be ignored without DR mode");
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
 }
 
 #[tokio::test]

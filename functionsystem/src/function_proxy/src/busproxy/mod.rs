@@ -185,20 +185,46 @@ pub struct BusProxyCoordinator {
 }
 
 impl BusProxyCoordinator {
+    /// DR mode (gap2, C++ 94b02900 `SignalRoute`): a kill is direct-routed from
+    /// the `KillRequest` hints only when direct routing is enabled AND the routing
+    /// info is **complete** (both routeAddress and proxyID present). Otherwise the
+    /// hints are ignored and the caller falls back to the route-record / peer-lookup
+    /// (observer) path. In non-DR mode the hints are never consulted.
     fn merge_route_hint(
         mut rec: InstanceRouteRecord,
         kill: Option<&cs::KillRequest>,
+        dr_enabled: bool,
     ) -> InstanceRouteRecord {
+        if !dr_enabled {
+            return rec;
+        }
         let Some(kill) = kill else {
             return rec;
         };
-        if rec.proxy_endpoint.is_none() && !kill.route_address.trim().is_empty() {
-            rec.proxy_endpoint = Some(kill.route_address.trim().to_string());
+        let route = kill.route_address.trim();
+        let proxy = kill.proxy_id.trim();
+        if route.is_empty() || proxy.is_empty() {
+            // Incomplete routing info: fall back to the observer / route-record path.
+            return rec;
         }
-        if rec.owner_node_id.is_empty() && !kill.proxy_id.trim().is_empty() {
-            rec.owner_node_id = kill.proxy_id.trim().to_string();
+        if rec.proxy_endpoint.is_none() {
+            rec.proxy_endpoint = Some(route.to_string());
+        }
+        if rec.owner_node_id.is_empty() {
+            rec.owner_node_id = proxy.to_string();
         }
         rec
+    }
+
+    /// DR mode (gap2, C++ 94b02900): outgoing kill routing hints (routeAddress +
+    /// proxyID) are only stamped on a forwarded `KillRequest` in direct-routing
+    /// mode; non-DR forwards carry no hints and rely on the peer's route records.
+    fn outgoing_kill_route_hint(&self, instance_id: &str) -> (String, String) {
+        if !self.config.enable_direct_routing {
+            return (String::new(), String::new());
+        }
+        let route = self.route_hint_for_instance(instance_id);
+        (route.proxy_endpoint.unwrap_or_default(), route.owner_node_id)
     }
 
     fn route_hint_for_instance(&self, instance_id: &str) -> InstanceRouteRecord {
@@ -763,6 +789,30 @@ impl BusProxyCoordinator {
         self.instance_view.remove_proxy(instance_id);
     }
 
+    /// DR mode (gap2, C++ 3001bcd9 `InstanceView::OnNodeAbnormal`): a local
+    /// scheduler node was marked abnormal under `/yr/abnormal/localscheduler/`.
+    /// Evict every cached route owned by that node so stale routes to a dead node
+    /// are dropped; the route watch repopulates them once instances reschedule.
+    /// Returns the number of evicted route entries.
+    pub fn on_node_abnormal(&self, node_id: &str) -> usize {
+        if node_id.is_empty() {
+            return 0;
+        }
+        let evicted: Vec<String> = {
+            let routes = self.routes.read();
+            routes
+                .iter()
+                .filter(|(_, rec)| rec.owner_node_id == node_id)
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        for instance_id in &evicted {
+            self.routes.write().remove(instance_id);
+            self.instance_view.remove_proxy(instance_id);
+        }
+        evicted.len()
+    }
+
     fn is_local_route(&self, rec: &InstanceRouteRecord, instance_id: &str) -> bool {
         if !rec.owner_node_id.is_empty() && rec.owner_node_id != self.local_node_id {
             return false;
@@ -1157,7 +1207,8 @@ impl BusProxyCoordinator {
         let id = req.instance_id.clone();
         if !self.should_dispatch_locally(&id) {
             let cached = self.routes.read().get(&id).cloned().unwrap_or_default();
-            let rec = Self::merge_route_hint(cached, req.req.as_ref());
+            let rec =
+                Self::merge_route_hint(cached, req.req.as_ref(), self.config.enable_direct_routing);
             let endpoint = self
                 .resolve_peer_endpoint(&rec)
                 .ok_or_else(|| tonic::Status::failed_precondition("no peer for forward_kill"))?;
@@ -1854,15 +1905,15 @@ impl BusProxyCoordinator {
             info!(%instance_id, signal, "execute_kill: local kill completed");
             (yr_proto::common::ErrorCode::ErrNone as i32, String::new())
         } else {
-            let route = self.route_hint_for_instance(instance_id);
+            let (route_address, proxy_id) = self.outgoing_kill_route_hint(instance_id);
             let req = ForwardKillRequest {
                 request_id: uuid::Uuid::new_v4().to_string(),
                 src_instance_id: String::new(),
                 req: Some(cs::KillRequest {
                     instance_id: instance_id.to_string(),
                     signal,
-                    route_address: route.proxy_endpoint.unwrap_or_default(),
-                    proxy_id: route.owner_node_id,
+                    route_address,
+                    proxy_id,
                     ..Default::default()
                 }),
                 instance_id: instance_id.to_string(),
@@ -1919,7 +1970,11 @@ impl BusProxyCoordinator {
             Ok(None)
         } else if !self.should_dispatch_locally(target_id) {
             let mut forwarded = kill.clone();
-            if forwarded.route_address.trim().is_empty() || forwarded.proxy_id.trim().is_empty() {
+            // DR mode (gap2): only stamp missing routing hints in direct-routing mode.
+            if self.config.enable_direct_routing
+                && (forwarded.route_address.trim().is_empty()
+                    || forwarded.proxy_id.trim().is_empty())
+            {
                 let route = self.route_hint_for_instance(target_id);
                 if forwarded.route_address.trim().is_empty() {
                     forwarded.route_address = route.proxy_endpoint.unwrap_or_default();

@@ -4,13 +4,26 @@ use crate::AppContext;
 use futures::StreamExt;
 use std::sync::Arc;
 use tracing::{info, warn};
-use yr_common::etcd_keys::{gen_busproxy_node_prefix, INSTANCE_ROUTE_PATH_PREFIX};
+use yr_common::etcd_keys::{
+    gen_busproxy_node_prefix, ABNORMAL_SCHEDULER_PREFIX, INSTANCE_ROUTE_PATH_PREFIX,
+};
 use yr_metastore_client::{MetaStoreClient, WatchEventType};
 
 fn route_instance_id_from_key(logical_key: &[u8]) -> Option<String> {
     let s = std::str::from_utf8(logical_key).ok()?;
     let rest = s.strip_prefix(INSTANCE_ROUTE_PATH_PREFIX)?;
     let rest = rest.strip_prefix('/')?;
+    if rest.is_empty() {
+        return None;
+    }
+    Some(rest.to_string())
+}
+
+/// Extract the node id from an abnormal-scheduler key `/yr/abnormal/localscheduler/<nodeID>`.
+fn node_id_from_abnormal_key(logical_key: &[u8]) -> Option<String> {
+    let s = std::str::from_utf8(logical_key).ok()?;
+    let rest = s.strip_prefix(ABNORMAL_SCHEDULER_PREFIX)?;
+    let rest = rest.trim_start_matches('/');
     if rest.is_empty() {
         return None;
     }
@@ -185,5 +198,51 @@ pub async fn run_watch_loops(ctx: Arc<AppContext>) {
         }
     });
 
-    info!("etcd watch loops started (routes + busproxy)");
+    // DR mode (gap2, C++ 3001bcd9): in direct-routing mode, watch the
+    // abnormal-scheduler prefix and evict routes owned by any node marked abnormal.
+    // NOTE: C++ also drops the full instance-route watch in DR mode and relies on an
+    // on-demand route query (LRU read path); that read path is not yet ported to the
+    // Rust lane, so the route watch above is intentionally kept. See
+    // docs/analysis/168-dr-mode-parity-matrix.md (sub-gap D2).
+    if ctx.config.enable_direct_routing {
+        let ctx_a = ctx.clone();
+        let etcd_a = etcd.clone();
+        let abnormal_prefix = ABNORMAL_SCHEDULER_PREFIX.to_string();
+        tokio::spawn(async move {
+            loop {
+                let mut stream = {
+                    let mut c = etcd_a.lock().await;
+                    c.watch_prefix(&abnormal_prefix)
+                };
+                loop {
+                    match stream.next().await {
+                        Some(Ok(ev)) => {
+                            if ev.event_type == WatchEventType::Put {
+                                if let Some(node) = node_id_from_abnormal_key(&ev.key) {
+                                    let evicted = ctx_a.bus.on_node_abnormal(&node);
+                                    warn!(
+                                        node = %node,
+                                        evicted_routes = evicted,
+                                        "abnormal scheduler event: evicted routes"
+                                    );
+                                }
+                            }
+                        }
+                        Some(Err(e)) => {
+                            warn!(error = %e, "abnormal scheduler watch");
+                            break;
+                        }
+                        None => {
+                            warn!("abnormal scheduler watch ended");
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        info!("etcd watch loops started (routes + busproxy + abnormal-scheduler/DR)");
+    } else {
+        info!("etcd watch loops started (routes + busproxy)");
+    }
 }

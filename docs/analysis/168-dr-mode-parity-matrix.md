@@ -60,11 +60,13 @@ functionsystem/src/function_proxy/src/busproxy/instance_view.rs (InstanceRouteRe
 | ID | Status | Evidence / gap |
 | --- | --- | --- |
 | Wire surface (proto) | **Closed** | `fbfb4073`: `RuntimeInfo.proxyID`, `KillRequest.routeAddress/proxyID`, snapshot DR fields + mgmt RPCs. `proto_builder_tests::runtime_info_proxy_id_roundtrip_matches_feature_sandbox_wire_contract` |
-| C (kill-route data plane) | **Partial** | `fbfb4073`: busproxy merges route_address/proxy_id hints from `KillRequest` into route records and populates them on forward/execute kill. Missing: DR-gated "require both, else fallback" decision; `runtimeinfo.proxyid = node_id` is never set on the producing/create path (Rust derives owner from `instance_view.owner_node()` instead — parity unconfirmed). |
-| A (single-write persistence) | **Closed this session** | G1+G2 below. |
-| G1 DR feature flag | **Closed this session** | `config.rs` `enable_direct_routing` (default false, mirrors C++ flag); reachable via `InstanceController`/`BusProxyCoordinator` `Arc<Config>`. Test: `config_extended_test::enable_direct_routing_defaults_false_and_parses`. |
-| B (dispatch savedInfo skip) | **Open** | Rust dispatch path is not DR-aware. Note: Rust `persist()` uses `put` (upsert), so the C++ IsFirstPersistence Create-vs-Modify distinction is already satisfied; only the dispatch-side savedInfo skip remains. |
-| D (observer node-abnormal) | **Open** | Rust has `domain_scheduler/abnormal_processor` (node_abnormal) but not the DR-conditional observer rewiring to `/yr/abnormal/localscheduler/`. |
+| A (single-write persistence) | **Closed** | G1+G2 (commit `39768232`). |
+| G1 DR feature flag | **Closed** | `config.rs` `enable_direct_routing` (default false, mirrors C++ flag); reachable via `InstanceController`/`BusProxyCoordinator` `Arc<Config>`. Test: `config_extended_test::enable_direct_routing_defaults_false_and_parses`. |
+| B (dispatch savedInfo skip) | **N/A (closed by analysis)** | Rust local scheduling (`local_scheduler.rs schedule_local`, `group_schedule`) has no savedInfo etcd-readback / version-conflict duplicate-schedule detection — there is no `OnTryDispatchOnLocal` analogue to gate. Nothing to skip. Note: Rust `persist()` uses upsert `put`, so the C++ IsFirstPersistence Create-vs-Modify distinction is also moot. |
+| C1 (runtimeinfo.proxyid on create) | **N/A (intent satisfied)** | Rust propagates instance ownership via the etcd route record JSON (`RouteJson.node_id` → `InstanceRouteRecord.owner_node_id`), not via a `RuntimeInfo` proto on the create-call result. The `RuntimeInfo.proxyID` proto field exists for wire compatibility but is not part of the Rust route mechanism, so owner-proxy id is already known to the kill router. |
+| C2 (DR kill-route gating) | **Closed this session** | `merge_route_hint` now applies `KillRequest` hints only when `enable_direct_routing` AND both route_address+proxy_id present (else falls back to route-record/peer path); outgoing forwards stamp hints only in DR mode (`outgoing_kill_route_hint`). Tests: `multi_proxy_routing_test::{forward_kill_uses_request_route_hint_when_route_cache_missing (DR), forward_kill_ignores_route_hint_when_dr_disabled}`. |
+| D1 (observer node-abnormal watch) | **Closed this session** | In DR mode `observer.rs run_watch_loops` watches `/yr/abnormal/localscheduler/` and calls `BusProxyCoordinator::on_node_abnormal(node)` to evict routes owned by the abnormal node (analogue of C++ `InstanceView::OnNodeAbnormal`). Test: `multi_proxy_routing_test::on_node_abnormal_evicts_only_that_nodes_routes`. |
+| D2 (drop full route watch + on-demand query) | **Deferred (blocked)** | C++ also drops the full instance-route watch in DR mode and relies on an on-demand LRU route-query read path. That read path is not yet ported to Rust, so the route watch is intentionally kept; dropping it without on-demand query would break DR routing. Port the on-demand query first. |
 | E (health_check dual-port) | **Open / low priority** | Shared deploy shell scripts; confirm whether the rustfs lane ships its own copy or reuses sandbox scripts before porting. |
 
 ## Closed in this session (A + G1)
@@ -85,12 +87,15 @@ Tests (arm64, all pass): `instance_state_tests::dr_mode_skips_only_scheduling_an
 `config_extended_test::enable_direct_routing_defaults_false_and_parses`; yr-common 33 /
 yr-proxy lib 7 / config_extended 22, 0 failed; `cargo check` clean.
 
-## Recommended next order
+## Closed in the B→C→D session (commit pending)
 
-1. **B** — make the local-dispatch path DR-aware (skip savedInfo / proceed with single write at RUNNING).
-2. **C remainder** — set `runtime_info.proxy_id = node_id` on the create-call-result path; gate kill
-   direct-routing on DR + both-fields-present with explicit observer fallback.
-3. **D** — observer node-abnormal subscription under DR mode.
-4. **E** — health_check dual-port, only if the rustfs lane owns the deploy scripts.
+- **B** — verified N/A: Rust has no savedInfo/version-conflict local-dispatch race path.
+- **C2** — DR kill-route gating (`merge_route_hint` + `outgoing_kill_route_hint`); C1 verified N/A.
+- **D1** — DR-mode abnormal-scheduler watch + `on_node_abnormal` route eviction.
+
+## Remaining
+
+1. **D2** — port the on-demand LRU route-query read path, then drop the full instance-route watch in DR mode (C++ parity for the read side). Currently the route watch is kept.
+2. **E** — health_check dual-port, only if the rustfs lane owns the deploy scripts.
 
 These remain behavior-only risks until an end-to-end DR-mode ST exists; current closure is unit/contract level.
