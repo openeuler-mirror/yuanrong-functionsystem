@@ -7,6 +7,7 @@ pub mod election;
 pub mod http;
 pub mod instances;
 pub mod node_manager;
+pub mod quota;
 pub mod resource_agg;
 pub mod schedule_decision;
 pub mod schedule_manager;
