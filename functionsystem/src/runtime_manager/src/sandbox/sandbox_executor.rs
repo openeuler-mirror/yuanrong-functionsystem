@@ -1,24 +1,27 @@
-//! CONTAINER executor — port of C++ `SandboxExecutor`. M3 implements the
-//! `start_normal` (cold-start) path; WarmUp/Restore (M4) and lifecycle (M6) follow.
+//! CONTAINER executor — port of C++ `SandboxExecutor`. Implements the three start
+//! paths: `start_normal` (cold start, M3), `start_warmup` + `start_by_snapshot`
+//! (M4). Lifecycle (delete/stats) follows in M6.
 
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use tracing::{info, warn};
 
+use super::checkpoint_orchestrator::CheckpointOrchestrator;
 use super::launcher_client::LauncherClient;
-use super::request_builder::{
-    build_start_request, encode_port_mapping, PortForward, SandboxStartParams,
-};
+use super::request_builder::{build_start_request, encode_port_mapping, PortForward, SandboxStartParams};
 use super::runtime_state_manager::{RuntimeStateManager, SandboxInfo};
 use super::start_guard::SandboxStartGuard;
 use crate::port_manager::SharedPortManager;
+use yr_proto::runtime::v1::{FunctionRuntime, RegisterRequest, UnregisterRequest};
 
-/// Owns the sandbox state + launcher client + host-port allocator.
+/// Owns the sandbox state + launcher client + host-port allocator (+ optional
+/// checkpoint orchestrator for the Restore path).
 pub struct SandboxExecutor {
     state: Arc<RuntimeStateManager>,
     launcher: LauncherClient,
     ports: Arc<SharedPortManager>,
+    ckpt: Option<Arc<CheckpointOrchestrator>>,
 }
 
 /// Result of a successful sandbox start.
@@ -38,7 +41,13 @@ impl SandboxExecutor {
             state,
             launcher,
             ports,
+            ckpt: None,
         }
+    }
+
+    pub fn with_checkpoint(mut self, ckpt: Arc<CheckpointOrchestrator>) -> Self {
+        self.ckpt = Some(ckpt);
+        self
     }
 
     pub fn state(&self) -> &Arc<RuntimeStateManager> {
@@ -51,10 +60,71 @@ impl SandboxExecutor {
         }
     }
 
-    /// Standard container cold start (C++ `StartNormal`): allocate host ports for
-    /// each requested forward, build the `StartRequest`, call the launcher, and
-    /// register the sandbox on success. On any failure the [`SandboxStartGuard`]
-    /// rolls back state and allocated ports are released.
+    /// Allocate one host port per forward (key = `runtime_id#index`). Releases any
+    /// already-allocated ports and errors if a later allocation fails.
+    fn alloc_forward_ports(
+        &self,
+        runtime_id: &str,
+        forwards: &[PortForward],
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        let mut keys = Vec::new();
+        let mut mappings = Vec::new();
+        for (i, f) in forwards.iter().enumerate() {
+            let key = format!("{runtime_id}#{i}");
+            match self.ports.allocate(&key) {
+                Ok(host) => {
+                    keys.push(key);
+                    mappings.push(encode_port_mapping(&f.protocol, host, f.container_port));
+                }
+                Err(e) => {
+                    self.release_ports(&keys);
+                    return Err(anyhow!("allocate host port: {e}"));
+                }
+            }
+        }
+        Ok((keys, mappings))
+    }
+
+    /// Build → launcher.start → register on success. On launcher rejection/transport
+    /// error, releases `port_keys` and returns Err (the caller's `SandboxStartGuard`
+    /// rolls back state; restore callers also release the checkpoint ref).
+    async fn build_start_register(
+        &self,
+        params: &SandboxStartParams,
+        port_keys: &[String],
+        checkpoint_id: &str,
+    ) -> Result<SandboxStarted> {
+        let rid = &params.runtime_id;
+        let req = build_start_request(params);
+        match self.launcher.start(req).await {
+            Ok(resp) if resp.code == 0 => {
+                let port_json = serde_json::to_string(&params.port_mappings).unwrap_or_default();
+                self.state.register(SandboxInfo {
+                    runtime_id: rid.clone(),
+                    sandbox_id: resp.id.clone(),
+                    checkpoint_id: checkpoint_id.to_string(),
+                    port_mappings_json: port_json.clone(),
+                    ..Default::default()
+                });
+                info!(runtime_id = %rid, sandbox_id = %resp.id, "sandbox start ok");
+                Ok(SandboxStarted {
+                    sandbox_id: resp.id,
+                    port_mappings_json: port_json,
+                })
+            }
+            Ok(resp) => {
+                self.release_ports(port_keys);
+                warn!(runtime_id = %rid, code = resp.code, msg = %resp.message, "sandbox launcher rejected");
+                Err(anyhow!("launcher start failed: code={} {}", resp.code, resp.message))
+            }
+            Err(e) => {
+                self.release_ports(port_keys);
+                Err(e)
+            }
+        }
+    }
+
+    /// Standard container cold start (C++ `StartNormal`).
     pub async fn start_normal(
         &self,
         mut params: SandboxStartParams,
@@ -65,53 +135,92 @@ impl SandboxExecutor {
             return Err(anyhow!("start_normal: empty runtime_id"));
         }
         let guard = SandboxStartGuard::begin(self.state.clone(), &rid);
+        let (keys, mappings) = self.alloc_forward_ports(&rid, &forwards)?;
+        params.port_mappings = mappings;
+        let started = self.build_start_register(&params, &keys, "").await?;
+        guard.commit();
+        Ok(started)
+    }
 
-        // Allocate one host port per forward (key = runtime_id#index for multi-port).
-        let mut keys: Vec<String> = Vec::new();
-        let mut mappings: Vec<String> = Vec::new();
-        for (i, f) in forwards.iter().enumerate() {
-            let key = format!("{rid}#{i}");
-            match self.ports.allocate(&key) {
-                Ok(host) => {
-                    keys.push(key);
-                    mappings.push(encode_port_mapping(&f.protocol, host, f.container_port));
-                }
-                Err(e) => {
-                    self.release_ports(&keys);
-                    return Err(anyhow!("allocate host port: {e}")); // guard drops -> state rollback
-                }
-            }
+    /// WarmUp registration (C++ `StartWarmUp`): register the FunctionRuntime in the
+    /// shim's warm pool — no container started, no ports allocated.
+    pub async fn start_warmup(&self, func_runtime: FunctionRuntime) -> Result<()> {
+        let rid = func_runtime.id.clone();
+        if rid.is_empty() {
+            return Err(anyhow!("start_warmup: empty runtime id"));
         }
-        params.port_mappings = mappings.clone();
+        let resp = self
+            .launcher
+            .register(RegisterRequest {
+                func_runtimes: vec![func_runtime.clone()],
+            })
+            .await?;
+        if !resp.success {
+            return Err(anyhow!("warmup register failed: {}", resp.message));
+        }
+        self.state.register_warm_up(&rid, func_runtime);
+        info!(runtime_id = %rid, "sandbox warmup registered");
+        Ok(())
+    }
 
-        let req = build_start_request(&params);
-        match self.launcher.start(req).await {
-            Ok(resp) if resp.code == 0 => {
-                let port_json = serde_json::to_string(&mappings).unwrap_or_default();
-                self.state.register(SandboxInfo {
-                    runtime_id: rid.clone(),
-                    sandbox_id: resp.id.clone(),
-                    port_mappings_json: port_json.clone(),
-                    ..Default::default()
-                });
-                guard.commit();
-                info!(runtime_id = %rid, sandbox_id = %resp.id, ports = mappings.len(), "sandbox start_normal ok");
-                Ok(SandboxStarted {
-                    sandbox_id: resp.id,
-                    port_mappings_json: port_json,
-                })
+    /// Remove a warm-up registration (C++ `UnregisterWarmUp`).
+    pub async fn stop_warmup(&self, runtime_id: &str) -> Result<()> {
+        let resp = self
+            .launcher
+            .unregister(UnregisterRequest {
+                ids: vec![runtime_id.to_string()],
+            })
+            .await?;
+        self.state.unregister_warm_up(runtime_id);
+        if !resp.success {
+            return Err(anyhow!("warmup unregister failed: {}", resp.message));
+        }
+        Ok(())
+    }
+
+    /// Checkpoint-based start (C++ `StartBySnapshot`): download → add-ref → start
+    /// with `ckpt_dir` → release-ref on any failure.
+    pub async fn start_by_snapshot(
+        &self,
+        mut params: SandboxStartParams,
+        checkpoint_id: &str,
+        storage_url: &str,
+        forwards: Vec<PortForward>,
+    ) -> Result<SandboxStarted> {
+        let rid = params.runtime_id.clone();
+        if rid.is_empty() {
+            return Err(anyhow!("start_by_snapshot: empty runtime_id"));
+        }
+        let ckpt = self
+            .ckpt
+            .as_ref()
+            .ok_or_else(|| anyhow!("start_by_snapshot: no checkpoint orchestrator configured"))?;
+
+        let guard = SandboxStartGuard::begin(self.state.clone(), &rid);
+
+        let ckpt_dir = ckpt.download_for_restore(checkpoint_id, storage_url).await?;
+        if let Err(e) = ckpt.add_ref(checkpoint_id, &rid).await {
+            return Err(e); // guard drops -> state rollback; nothing referenced yet
+        }
+
+        // From here a failure must also release the checkpoint ref.
+        let (keys, mappings) = match self.alloc_forward_ports(&rid, &forwards) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = ckpt.release_ref(&rid).await;
+                return Err(e);
             }
-            Ok(resp) => {
-                self.release_ports(&keys);
-                warn!(runtime_id = %rid, code = resp.code, msg = %resp.message, "sandbox launcher start rejected");
-                Err(anyhow!(
-                    "launcher start failed: code={} {}",
-                    resp.code,
-                    resp.message
-                ))
+        };
+        params.port_mappings = mappings;
+        params.ckpt_dir = ckpt_dir;
+
+        match self.build_start_register(&params, &keys, checkpoint_id).await {
+            Ok(started) => {
+                guard.commit();
+                Ok(started)
             }
             Err(e) => {
-                self.release_ports(&keys);
+                let _ = ckpt.release_ref(&rid).await;
                 Err(e)
             }
         }

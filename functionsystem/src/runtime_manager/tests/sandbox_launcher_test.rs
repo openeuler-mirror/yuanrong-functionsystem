@@ -16,8 +16,29 @@ use yr_proto::runtime::v1::{
 };
 use yr_runtime_manager::port_manager::SharedPortManager;
 use yr_runtime_manager::sandbox::{
-    LauncherClient, PortForward, RuntimeStateManager, SandboxExecutor, SandboxStartParams,
+    CheckpointOrchestrator, CkptFileManager, LauncherClient, PortForward, RuntimeStateManager,
+    SandboxExecutor, SandboxStartParams,
 };
+
+/// Test CkptFileManager: records add/release refs; can force a download failure.
+#[derive(Default)]
+struct TestCkpt {
+    released: Arc<parking_lot::Mutex<Vec<String>>>,
+}
+
+#[tonic::async_trait]
+impl CkptFileManager for TestCkpt {
+    async fn download_checkpoint(&self, id: &str, _url: &str) -> anyhow::Result<String> {
+        Ok(format!("/ckpt/{id}"))
+    }
+    async fn add_reference(&self, _id: &str, _runtime_id: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn release_reference(&self, runtime_id: &str) -> anyhow::Result<()> {
+        self.released.lock().push(runtime_id.to_string());
+        Ok(())
+    }
+}
 
 #[derive(Default)]
 struct MockLauncher {
@@ -240,6 +261,87 @@ async fn start_normal_rolls_back_on_launcher_rejection() {
     // SandboxStartGuard rolled back: no sandbox, no in-progress
     assert!(!exec.state().has_sandbox("r2"));
     assert!(!exec.state().is_start_in_progress("r2"));
+
+    let _ = std::fs::remove_file(&sock);
+}
+
+#[tokio::test]
+async fn start_warmup_registers_in_pool_and_unregister_removes() {
+    let sock = format!("/tmp/yr_sbx_warm_{}.sock", std::process::id());
+    let _ = std::fs::remove_file(&sock);
+    let mock = spawn_mock(&sock).await;
+    let exec = executor(&sock);
+
+    let rt = FunctionRuntime {
+        id: "w1".into(),
+        ..Default::default()
+    };
+    exec.start_warmup(rt).await.expect("warmup");
+    assert_eq!(*mock.last_registered.lock(), vec!["w1".to_string()]);
+    assert!(exec.state().is_warm_up("w1"));
+    assert!(!exec.state().has_sandbox("w1")); // warmup is orthogonal: no container
+
+    exec.stop_warmup("w1").await.expect("unregister");
+    assert!(!exec.state().is_warm_up("w1"));
+
+    let _ = std::fs::remove_file(&sock);
+}
+
+#[tokio::test]
+async fn start_by_snapshot_sets_ckpt_dir_and_registers_checkpoint() {
+    let sock = format!("/tmp/yr_sbx_restore_{}.sock", std::process::id());
+    let _ = std::fs::remove_file(&sock);
+    let _mock = spawn_mock(&sock).await;
+    let released = Arc::new(parking_lot::Mutex::new(vec![]));
+    let ckpt = Arc::new(CheckpointOrchestrator::new(Arc::new(TestCkpt {
+        released: released.clone(),
+    })));
+    let state = Arc::new(RuntimeStateManager::new());
+    let ports = Arc::new(SharedPortManager::new(41000, 100).unwrap());
+    let exec = SandboxExecutor::new(state, LauncherClient::new(sock.clone()), ports)
+        .with_checkpoint(ckpt);
+
+    let params = SandboxStartParams {
+        runtime_id: "r3".into(),
+        trace_id: "t3".into(),
+        ..Default::default()
+    };
+    let started = exec
+        .start_by_snapshot(params, "ckpt-9", "s3://b/o", vec![])
+        .await
+        .expect("restore");
+    assert_eq!(started.sandbox_id, "sandbox-t3");
+    let info = exec.state().find("r3").expect("registered");
+    assert_eq!(info.checkpoint_id, "ckpt-9"); // checkpoint recorded on restore
+    assert!(released.lock().is_empty()); // success path: no release
+
+    let _ = std::fs::remove_file(&sock);
+}
+
+#[tokio::test]
+async fn start_by_snapshot_releases_ref_on_launcher_failure() {
+    let sock = format!("/tmp/yr_sbx_restore_fail_{}.sock", std::process::id());
+    let _ = std::fs::remove_file(&sock);
+    let _mock = spawn_mock_opts(&sock, true).await; // launcher rejects start
+    let released = Arc::new(parking_lot::Mutex::new(vec![]));
+    let ckpt = Arc::new(CheckpointOrchestrator::new(Arc::new(TestCkpt {
+        released: released.clone(),
+    })));
+    let state = Arc::new(RuntimeStateManager::new());
+    let ports = Arc::new(SharedPortManager::new(42000, 100).unwrap());
+    let exec = SandboxExecutor::new(state, LauncherClient::new(sock.clone()), ports)
+        .with_checkpoint(ckpt);
+
+    let params = SandboxStartParams {
+        runtime_id: "r4".into(),
+        ..Default::default()
+    };
+    let res = exec
+        .start_by_snapshot(params, "ckpt-x", "s3://b/o", vec![])
+        .await;
+    assert!(res.is_err());
+    assert!(!exec.state().has_sandbox("r4")); // guard rollback
+    assert_eq!(*released.lock(), vec!["r4".to_string()]); // ckpt ref released on failure
 
     let _ = std::fs::remove_file(&sock);
 }

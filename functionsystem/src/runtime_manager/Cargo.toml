@@ -46,3 +46,6 @@ tonic = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { version = "0.1", features = ["net"] }
 yr-proto = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+parking_lot = { workspace = true }

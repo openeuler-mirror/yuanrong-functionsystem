@@ -6,12 +6,14 @@
 //! manager, request builder, checkpoint orchestrator, port manager, and the three
 //! start paths.
 
+pub mod checkpoint_orchestrator;
 pub mod launcher_client;
 pub mod request_builder;
 pub mod runtime_state_manager;
 pub mod sandbox_executor;
 pub mod start_guard;
 
+pub use checkpoint_orchestrator::{CheckpointOrchestrator, CkptFileManager};
 pub use launcher_client::{LauncherClient, CONTAINER_EP_ENV};
 pub use request_builder::{
     build_start_request, encode_port_mapping, parse_forward_ports, PortForward, RootfsSpec,
