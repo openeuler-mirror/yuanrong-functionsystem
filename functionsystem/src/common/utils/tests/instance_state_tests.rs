@@ -3,9 +3,9 @@
 use std::str::FromStr;
 
 use yr_common::types::{
-    instance_state_transition_map, is_non_recoverable_status, is_terminal_status,
-    is_waiting_status, need_persistence_state, need_update_route_state, transition_allowed,
-    BundleState, GroupState, InstanceState, ResourceGroupState,
+    dr_mode_skips_persistence, instance_state_transition_map, is_non_recoverable_status,
+    is_terminal_status, is_waiting_status, need_persistence_state, need_update_route_state,
+    transition_allowed, BundleState, GroupState, InstanceState, ResourceGroupState,
 };
 
 #[test]
@@ -214,4 +214,22 @@ fn is_terminal_status_matches_static_set() {
 fn instance_state_equality() {
     assert_eq!(InstanceState::Failed, InstanceState::Failed);
     assert_ne!(InstanceState::Failed, InstanceState::Running);
+}
+
+// DR mode (gap2) single-write persistence. Mirrors C++ state_machine_test.cpp
+// DRModeHighReliabilitySkipsSchedulingCreatingWriteOnlyRunning: in DR mode only
+// SCHEDULING/CREATING are skipped; RUNNING and crash-recovery states still persist.
+#[test]
+fn dr_mode_skips_only_scheduling_and_creating() {
+    assert!(dr_mode_skips_persistence(InstanceState::Scheduling));
+    assert!(dr_mode_skips_persistence(InstanceState::Creating));
+
+    // RUNNING carries the route address and must still be persisted.
+    assert!(!dr_mode_skips_persistence(InstanceState::Running));
+    // Crash-recovery / cleanup states are unaffected by the DR fast-path.
+    assert!(!dr_mode_skips_persistence(InstanceState::Failed));
+    assert!(!dr_mode_skips_persistence(InstanceState::Fatal));
+    assert!(!dr_mode_skips_persistence(InstanceState::Exited));
+    assert!(!dr_mode_skips_persistence(InstanceState::Evicted));
+    assert!(!dr_mode_skips_persistence(InstanceState::New));
 }

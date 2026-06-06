@@ -124,6 +124,19 @@ fn enable_flags_merge_driver_meta_combo() {
 }
 
 #[test]
+fn enable_direct_routing_defaults_false_and_parses() {
+    // DR mode (gap2) feature switch; mirrors C++ `enable_direct_routing`.
+    let off = parse(&["--node-id", "n"]);
+    assert!(!off.enable_direct_routing);
+
+    let on = parse(&["--node-id", "n", "--enable-direct-routing"]);
+    assert!(on.enable_direct_routing);
+
+    let on_explicit = parse(&["--node-id", "n", "--enable_direct_routing", "true"]);
+    assert!(on_explicit.enable_direct_routing);
+}
+
+#[test]
 fn etcd_endpoints_vec_trims_and_skips_empty() {
     let c = parse(&["--node-id", "n", "--etcd-endpoints", " http:1 , ,http:2 "]);
     assert_eq!(c.etcd_endpoints_vec(), vec!["http:1", "http:2"]);

@@ -442,6 +442,21 @@ pub struct Config {
     )]
     pub enable_driver: bool,
 
+    /// DR mode (gap2) feature switch. Mirrors C++ `enable_direct_routing`
+    /// (function_proxy `flags.cpp` / `DirectRoutingConfig`): enables the direct
+    /// routing read path with single-writer persistence. When true, SCHEDULING /
+    /// CREATING states skip etcd writes and only RUNNING is persisted.
+    #[arg(
+        long = "enable_direct_routing",
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = false,
+        value_parser = BoolishValueParser::new(),
+        visible_alias = "enable-direct-routing",
+        aliases = ["enable-direct-routing"]
+    )]
+    pub enable_direct_routing: bool,
+
     #[arg(
         long = "runtime_recover_enable",
         num_args = 0..=1,

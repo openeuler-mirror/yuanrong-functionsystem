@@ -159,6 +159,15 @@ pub fn need_persistence_state(state: InstanceState) -> bool {
     persistence_state_set().contains(&state)
 }
 
+/// DR mode (gap2) single-write persistence: when direct routing is enabled,
+/// SCHEDULING and CREATING carry no route address yet and are not persisted to
+/// etcd; only RUNNING (and crash-recovery states) are written. Mirrors the C++
+/// `InstanceStateMachine::GetPersistenceType` DR fast-path (feature 178e4368):
+/// all other states fall through to the existing persistence policy.
+pub fn dr_mode_skips_persistence(state: InstanceState) -> bool {
+    matches!(state, InstanceState::Scheduling | InstanceState::Creating)
+}
+
 pub fn is_non_recoverable_status(code: i32) -> bool {
     code == InstanceState::Fatal as i32
         || code == InstanceState::ScheduleFailed as i32

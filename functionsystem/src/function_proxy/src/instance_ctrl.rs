@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 use yr_common::etcd_keys::{gen_func_meta_key, INSTANCE_PATH_PREFIX};
 use yr_common::service_json::{validate_service_infos, ServiceInfo};
-use yr_common::types::need_persistence_state;
+use yr_common::types::{dr_mode_skips_persistence, need_persistence_state};
 use yr_proto::internal::function_agent_service_client::FunctionAgentServiceClient;
 use yr_proto::internal::{StartInstanceRequest, StopInstanceRequest};
 use yr_runtime_manager::runtime_ops::{start_instance_op, stop_instance_op};
@@ -268,6 +268,13 @@ impl InstanceController {
             return;
         }
         let s = meta.state;
+        // DR mode (gap2): single-write persistence at RUNNING. In direct-routing
+        // mode SCHEDULING/CREATING are not yet route-bearing, so skip their etcd
+        // writes; the single durable write happens at RUNNING. All other states
+        // keep the existing policy. Mirrors C++ GetPersistenceType DR fast-path.
+        if self.config.enable_direct_routing && dr_mode_skips_persistence(s) {
+            return;
+        }
         if need_persistence_state(s)
             || matches!(
                 s,
