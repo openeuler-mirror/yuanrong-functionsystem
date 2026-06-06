@@ -137,6 +137,7 @@ async fn rgroup_query_returns_stable_json_shape() {
     let v: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["requestID"], "rid-e2e");
     assert!(v["groups"].is_array());
+    assert!(v["rGroup"].is_array());
     assert_eq!(v["count"], 0);
 }
 

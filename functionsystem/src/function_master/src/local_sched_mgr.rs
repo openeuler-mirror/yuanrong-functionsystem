@@ -2,12 +2,13 @@
 
 use std::time::Duration;
 
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use tracing::debug;
 
 /// Registered local scheduler (`node_id` → gRPC / LiteBus address).
 pub struct LocalSchedMgr {
     locals: DashMap<String, String>,
+    evicting: DashSet<String>,
     evict_timeout: Duration,
     evict_retries: u32,
 }
@@ -16,6 +17,7 @@ impl LocalSchedMgr {
     pub fn new(evict_timeout: Duration, evict_retries: u32) -> Self {
         Self {
             locals: DashMap::new(),
+            evicting: DashSet::new(),
             evict_timeout,
             evict_retries: evict_retries.max(1),
         }
@@ -30,10 +32,27 @@ impl LocalSchedMgr {
 
     pub fn unregister(&self, node_id: &str) {
         self.locals.remove(node_id);
+        self.evicting.remove(node_id);
     }
 
     pub fn address_of(&self, node_id: &str) -> Option<String> {
         self.locals.get(node_id).map(|e| e.clone())
+    }
+
+    pub fn update_scheduling_status(&self, node_id: &str, evicting: bool) -> Result<(), String> {
+        if !self.locals.contains_key(node_id) {
+            return Err("Invalid nodeID".into());
+        }
+        if evicting {
+            self.evicting.insert(node_id.to_string());
+        } else {
+            self.evicting.remove(node_id);
+        }
+        Ok(())
+    }
+
+    pub fn is_evicting(&self, node_id: &str) -> bool {
+        self.evicting.contains(node_id)
     }
 
     /// Evict with grace wait + retry placeholder until `LocalSchedulerService` RPC is wired.
@@ -52,10 +71,12 @@ impl LocalSchedMgr {
             tokio::time::sleep(wait).await;
         }
         self.locals.remove(node_id);
+        self.evicting.remove(node_id);
         Ok(())
     }
 
     pub fn disconnect_all(&self) {
         self.locals.clear();
+        self.evicting.clear();
     }
 }

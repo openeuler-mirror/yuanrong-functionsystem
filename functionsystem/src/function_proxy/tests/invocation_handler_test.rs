@@ -5,7 +5,11 @@ mod common;
 use common::new_bus;
 use prost::Message;
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
+use yr_metastore_client::{MetaStoreClient, MetaStoreClientConfig};
+use yr_metastore_server::{MetaStoreServer, MetaStoreServerConfig};
 use yr_proto::affinity::{
     label_operator, Affinity, Condition, InstanceAffinity, LabelExists, LabelExpression,
     LabelOperator, Selector, SubCondition,
@@ -125,6 +129,34 @@ fn new_iam_bus(node_id: &str, grpc_port: u16, policy: &str) -> Arc<BusProxyCoord
         npu: 0.0,
     });
     let instance_ctrl = InstanceController::new(config.clone(), resource_view, None, None);
+    BusProxyCoordinator::new(config, instance_ctrl)
+}
+
+async fn start_metastore() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().unwrap();
+    let mut cfg = MetaStoreServerConfig::default();
+    cfg.listen_addr = addr.to_string();
+    let server = MetaStoreServer::new(cfg).await.expect("server");
+    let h = tokio::spawn(async move {
+        let _ = server.serve(listener).await;
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    (addr, h)
+}
+
+fn new_bus_with_metastore(
+    node_id: &str,
+    grpc_port: u16,
+    store: Arc<tokio::sync::Mutex<MetaStoreClient>>,
+) -> Arc<BusProxyCoordinator> {
+    let config = common::make_proxy_config(node_id, grpc_port);
+    let resource_view = ResourceView::new(ResourceVector {
+        cpu: 8.0,
+        memory: 64.0,
+        npu: 0.0,
+    });
+    let instance_ctrl = InstanceController::new(config.clone(), resource_view, Some(store), None);
     BusProxyCoordinator::new(config, instance_ctrl)
 }
 
@@ -738,7 +770,7 @@ fn group_bind_unknown_policy_defaults_to_cpp_bind_none_string() {
 }
 
 #[tokio::test]
-async fn r_group_req_fails_fast_until_resource_group_manager_exists() {
+async fn r_group_req_accepts_basic_spec_in_minimal_rust_lane() {
     let bus = new_bus("node-a", 29005);
     let msg = StreamingMessage {
         message_id: "rg".into(),
@@ -769,12 +801,146 @@ async fn r_group_req_fails_fast_until_resource_group_manager_exists() {
         panic!("expected RGroupRsp");
     };
     assert_eq!(rsp.request_id, "rr");
-    assert_eq!(rsp.code, ErrorCode::ErrInnerSystemError as i32);
-    assert!(
-        rsp.message.contains("resource group"),
-        "unexpected message: {}",
-        rsp.message
-    );
+    assert_eq!(rsp.code, ErrorCode::ErrNone as i32);
+    assert_eq!(rsp.message, "");
+}
+
+#[tokio::test]
+async fn r_group_req_rejects_oversized_bundle_vector() {
+    let bus = new_bus("node-a", 29005);
+    let msg = StreamingMessage {
+        message_id: "rg-too-many".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::RGroupReq(
+            CreateResourceGroupRequest {
+                r_group_spec: Some(yr_proto::common::ResourceGroupSpec {
+                    name: "pool-a".into(),
+                    tenant_id: "tenant-a".into(),
+                    bundles: (0..5001)
+                        .map(|_| yr_proto::common::Bundle {
+                            resources: [("cpu".into(), 1.0)].into_iter().collect(),
+                            labels: Vec::new(),
+                        })
+                        .collect(),
+                    ..Default::default()
+                }),
+                request_id: "rr-too-many".into(),
+                trace_id: "tt-too-many".into(),
+                ..Default::default()
+            },
+        )),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound("d", msg, &bus).await
+    else {
+        panic!("Reply");
+    };
+    let Some(streaming_message::Body::RGroupRsp(rsp)) = &outs[0].body else {
+        panic!("expected RGroupRsp");
+    };
+    assert_eq!(rsp.request_id, "rr-too-many");
+    assert_eq!(rsp.code, ErrorCode::ErrParamInvalid as i32);
+    assert_eq!(rsp.message, "bundle request size over max size");
+}
+
+#[tokio::test]
+async fn remove_resource_group_signal_deletes_metastore_metadata() {
+    let (addr, _h) = start_metastore().await;
+    let ep = format!("http://{addr}");
+    let store = MetaStoreClient::connect(MetaStoreClientConfig::direct_etcd(&ep, ""))
+        .await
+        .expect("connect");
+    let bus = new_bus_with_metastore("node-a", 29015, Arc::new(tokio::sync::Mutex::new(store)));
+
+    let create = StreamingMessage {
+        message_id: "rg-create".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::RGroupReq(
+            CreateResourceGroupRequest {
+                r_group_spec: Some(yr_proto::common::ResourceGroupSpec {
+                    name: "pool-a".into(),
+                    tenant_id: "tenant-a".into(),
+                    bundles: vec![yr_proto::common::Bundle {
+                        resources: [("cpu".into(), 1.0)].into_iter().collect(),
+                        labels: vec!["zone:a".into()],
+                    }],
+                    ..Default::default()
+                }),
+                request_id: "rg-create-1".into(),
+                trace_id: "trace-rg-create-1".into(),
+                ..Default::default()
+            },
+        )),
+    };
+    let InboundAction::Reply(_) = InvocationHandler::handle_runtime_inbound("driver-a", create, &bus).await
+    else {
+        panic!("Reply");
+    };
+
+    let mut verify = MetaStoreClient::connect(MetaStoreClientConfig::direct_etcd(&ep, ""))
+        .await
+        .expect("connect verify");
+    let before = verify
+        .get_prefix("/yr/resourcegroup")
+        .await
+        .expect("load before delete");
+    assert_eq!(before.kvs.len(), 1);
+
+    let remove = StreamingMessage {
+        message_id: "rg-remove".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::KillReq(KillRequest {
+            instance_id: "pool-a".into(),
+            signal: 8,
+            ..Default::default()
+        })),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound("driver-a", remove, &bus).await
+    else {
+        panic!("Reply");
+    };
+    let streaming_message::Body::KillRsp(rsp) = outs[0].body.as_ref().unwrap() else {
+        panic!("KillRsp");
+    };
+    assert_eq!(rsp.code, ErrorCode::ErrNone as i32);
+    assert_eq!(rsp.message, "");
+
+    let after = verify
+        .get_prefix("/yr/resourcegroup")
+        .await
+        .expect("load after delete");
+    assert!(after.kvs.is_empty());
+}
+
+#[tokio::test]
+async fn remove_resource_group_signal_returns_not_found_when_metadata_missing() {
+    let (addr, _h) = start_metastore().await;
+    let ep = format!("http://{addr}");
+    let store = MetaStoreClient::connect(MetaStoreClientConfig::direct_etcd(&ep, ""))
+        .await
+        .expect("connect");
+    let bus = new_bus_with_metastore("node-a", 29016, Arc::new(tokio::sync::Mutex::new(store)));
+
+    let remove = StreamingMessage {
+        message_id: "rg-remove-missing".into(),
+        meta_data: Default::default(),
+        body: Some(streaming_message::Body::KillReq(KillRequest {
+            instance_id: "missing-rg".into(),
+            signal: 8,
+            ..Default::default()
+        })),
+    };
+    let InboundAction::Reply(outs) =
+        InvocationHandler::handle_runtime_inbound("driver-a", remove, &bus).await
+    else {
+        panic!("Reply");
+    };
+    let streaming_message::Body::KillRsp(rsp) = outs[0].body.as_ref().unwrap() else {
+        panic!("KillRsp");
+    };
+    assert_eq!(rsp.code, ErrorCode::ErrInstanceNotFound as i32);
+    assert_eq!(rsp.message, "resource group not found");
 }
 
 #[tokio::test]

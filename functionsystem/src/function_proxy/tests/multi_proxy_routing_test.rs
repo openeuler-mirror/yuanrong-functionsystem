@@ -535,6 +535,48 @@ async fn forward_kill_fails_without_peer_endpoint() {
 }
 
 #[tokio::test]
+async fn forward_kill_uses_request_route_hint_when_route_cache_missing() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr: SocketAddr = listener.local_addr().expect("addr");
+    let peer_url = format!("http://{}", addr);
+
+    let hits = Arc::new(AtomicUsize::new(0));
+    let stub = CountingPeerAll {
+        forward_kill_hits: Arc::clone(&hits),
+        ..Default::default()
+    };
+    let incoming = TcpListenerStream::new(listener);
+    tokio::spawn(async move {
+        Server::builder()
+            .add_service(InnerServiceServer::new(stub))
+            .serve_with_incoming(incoming)
+            .await
+            .expect("server");
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let bus = new_bus("proxy-b", 28131);
+    let iid = "hint-kill";
+    let res = bus
+        .forward_kill(ForwardKillRequest {
+            request_id: "k-hint".into(),
+            instance_id: iid.to_string(),
+            req: Some(KillRequest {
+                instance_id: iid.to_string(),
+                signal: 1,
+                route_address: peer_url,
+                proxy_id: "proxy-a".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .expect("forward_kill");
+    assert_eq!(res.code, ErrorCode::ErrNone as i32);
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn forward_call_fails_without_peer_endpoint() {
     let bus = new_bus("proxy-b", 28014);
     let iid = "no-peer-call";

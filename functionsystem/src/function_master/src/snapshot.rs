@@ -9,7 +9,7 @@ use prost::Message;
 use serde::Serialize;
 use serde_json::Value;
 use yr_common::types::InstanceState;
-use yr_proto::messages::SnapshotMetadata;
+use yr_proto::messages::{FunctionKey, SnapshotMetadata};
 use yr_proto::resources::{
     value::{Scalar, Type as ValueType},
     InstanceInfo, InstanceStatus, Resource, Resources, SnapshotInfo,
@@ -88,6 +88,32 @@ impl SnapshotManager {
         out.sort_by(|a, b| b.exit_time.cmp(&a.exit_time));
         out
     }
+
+    pub fn list_checkpoint_ids_by_function_key(
+        &self,
+        tenant_id: &str,
+        function_type: &str,
+        namespace: &str,
+    ) -> Vec<String> {
+        if !namespace.trim().is_empty() {
+            return Vec::new();
+        }
+        self.list_by_function_and_tenant(function_type, Some(tenant_id))
+            .into_iter()
+            .map(|s| s.snapshot_id)
+            .collect()
+    }
+
+    pub fn list_checkpoint_ids_by_tenant(&self, tenant_id: &str) -> Vec<String> {
+        let g = self.inner.read();
+        let mut out: Vec<InstanceSnapshot> = g
+            .values()
+            .filter(|s| s.tenant_id == tenant_id)
+            .cloned()
+            .collect();
+        out.sort_by(|a, b| b.exit_time.cmp(&a.exit_time));
+        out.into_iter().map(|s| s.snapshot_id).collect()
+    }
 }
 
 pub fn snapshot_to_proto(snapshot: &InstanceSnapshot) -> SnapshotMetadata {
@@ -114,6 +140,11 @@ pub fn snapshot_to_proto(snapshot: &InstanceSnapshot) -> SnapshotMetadata {
             checkpoint_id: snapshot.snapshot_id.clone(),
             create_time: snapshot.create_time.to_string(),
             ..Default::default()
+        }),
+        function_key: Some(FunctionKey {
+            tenant_id: snapshot.tenant_id.clone(),
+            function_type: snapshot.function_name.clone(),
+            namespace: String::new(),
         }),
     }
 }
@@ -364,6 +395,8 @@ mod tests {
 
         let listed = m.list_by_function_and_tenant("f", Some("t"));
         assert_eq!(listed.len(), 1);
+        assert_eq!(m.list_checkpoint_ids_by_function_key("t", "f", ""), vec!["i1"]);
+        assert_eq!(m.list_checkpoint_ids_by_tenant("t"), vec!["i1"]);
 
         assert_eq!(m.remove("i1"), Some(s));
         assert!(m.get("i1").is_none());
@@ -383,6 +416,7 @@ mod tests {
         v2["updated_at_ms"] = serde_json::json!(3000);
         maybe_record_snapshot_transition(&m, Some(&v1), &v2);
         assert_eq!(m.get("a").unwrap().exit_time, 3000);
+        assert_eq!(m.list_checkpoint_ids_by_function_key("ten", "fn", ""), vec!["a"]);
     }
 
     #[test]

@@ -137,6 +137,9 @@ pub struct BusProxyCoordinator {
     request_to_sequence: dashmap::DashMap<String, i64>,
     /// Ordered actor invoke sequence scope keyed by request_id.
     request_to_sequence_scope: dashmap::DashMap<String, String>,
+    /// Last CreateResourceGroup response keyed by request_id so retries can observe
+    /// the same result shape as the original submission.
+    resource_group_responses: dashmap::DashMap<String, cs::CreateResourceGroupResponse>,
     /// Next expected ordered invoke sequence per caller-target scope.
     sequence_scope_next: dashmap::DashMap<String, i64>,
     /// Requests that have actually been sent to runtime and are waiting for result.
@@ -182,6 +185,30 @@ pub struct BusProxyCoordinator {
 }
 
 impl BusProxyCoordinator {
+    fn merge_route_hint(
+        mut rec: InstanceRouteRecord,
+        kill: Option<&cs::KillRequest>,
+    ) -> InstanceRouteRecord {
+        let Some(kill) = kill else {
+            return rec;
+        };
+        if rec.proxy_endpoint.is_none() && !kill.route_address.trim().is_empty() {
+            rec.proxy_endpoint = Some(kill.route_address.trim().to_string());
+        }
+        if rec.owner_node_id.is_empty() && !kill.proxy_id.trim().is_empty() {
+            rec.owner_node_id = kill.proxy_id.trim().to_string();
+        }
+        rec
+    }
+
+    fn route_hint_for_instance(&self, instance_id: &str) -> InstanceRouteRecord {
+        self.routes
+            .read()
+            .get(instance_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     pub fn new(config: Arc<Config>, instance_ctrl: Arc<InstanceController>) -> Arc<Self> {
         Self::new_with_state_store(config, instance_ctrl, None)
     }
@@ -217,6 +244,7 @@ impl BusProxyCoordinator {
             request_to_call: dashmap::DashMap::new(),
             request_to_sequence: dashmap::DashMap::new(),
             request_to_sequence_scope: dashmap::DashMap::new(),
+            resource_group_responses: dashmap::DashMap::new(),
             sequence_scope_next: dashmap::DashMap::new(),
             dispatched_request_to_instance: dashmap::DashMap::new(),
             notify_ack_to_runtime: dashmap::DashMap::new(),
@@ -259,6 +287,27 @@ impl BusProxyCoordinator {
 
     pub fn instance_ctrl_ref(&self) -> &Arc<InstanceController> {
         &self.instance_ctrl
+    }
+
+    pub fn remembered_resource_group_response(
+        &self,
+        request_id: &str,
+    ) -> Option<cs::CreateResourceGroupResponse> {
+        self.resource_group_responses
+            .get(request_id)
+            .map(|rsp| rsp.value().clone())
+    }
+
+    pub fn remember_resource_group_response(
+        &self,
+        request_id: &str,
+        response: &cs::CreateResourceGroupResponse,
+    ) {
+        if request_id.is_empty() {
+            return;
+        }
+        self.resource_group_responses
+            .insert(request_id.to_string(), response.clone());
     }
 
     pub fn authorize_create_request(
@@ -1107,7 +1156,8 @@ impl BusProxyCoordinator {
     ) -> Result<ForwardKillResponse, tonic::Status> {
         let id = req.instance_id.clone();
         if !self.should_dispatch_locally(&id) {
-            let rec = self.routes.read().get(&id).cloned().unwrap_or_default();
+            let cached = self.routes.read().get(&id).cloned().unwrap_or_default();
+            let rec = Self::merge_route_hint(cached, req.req.as_ref());
             let endpoint = self
                 .resolve_peer_endpoint(&rec)
                 .ok_or_else(|| tonic::Status::failed_precondition("no peer for forward_kill"))?;
@@ -1804,12 +1854,15 @@ impl BusProxyCoordinator {
             info!(%instance_id, signal, "execute_kill: local kill completed");
             (yr_proto::common::ErrorCode::ErrNone as i32, String::new())
         } else {
+            let route = self.route_hint_for_instance(instance_id);
             let req = ForwardKillRequest {
                 request_id: uuid::Uuid::new_v4().to_string(),
                 src_instance_id: String::new(),
                 req: Some(cs::KillRequest {
                     instance_id: instance_id.to_string(),
                     signal,
+                    route_address: route.proxy_endpoint.unwrap_or_default(),
+                    proxy_id: route.owner_node_id,
                     ..Default::default()
                 }),
                 instance_id: instance_id.to_string(),
@@ -1865,10 +1918,20 @@ impl BusProxyCoordinator {
             }
             Ok(None)
         } else if !self.should_dispatch_locally(target_id) {
+            let mut forwarded = kill.clone();
+            if forwarded.route_address.trim().is_empty() || forwarded.proxy_id.trim().is_empty() {
+                let route = self.route_hint_for_instance(target_id);
+                if forwarded.route_address.trim().is_empty() {
+                    forwarded.route_address = route.proxy_endpoint.unwrap_or_default();
+                }
+                if forwarded.proxy_id.trim().is_empty() {
+                    forwarded.proxy_id = route.owner_node_id;
+                }
+            }
             let req = ForwardKillRequest {
                 request_id: uuid::Uuid::new_v4().to_string(),
                 src_instance_id: caller_id.to_string(),
-                req: Some(kill.clone()),
+                req: Some(forwarded),
                 instance_id: target_id.to_string(),
                 ..Default::default()
             };

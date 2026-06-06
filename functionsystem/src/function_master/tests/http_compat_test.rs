@@ -2,20 +2,45 @@
 
 mod common;
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum08::body::Body as Body08;
 use prost::Message;
+use tokio::net::TcpListener;
 use tower::ServiceExt;
+use yr_metastore_client::{MetaStoreClient, MetaStoreClientConfig};
+use yr_metastore_server::{MetaStoreServer, MetaStoreServerConfig};
 use yr_master::http::{build_grpc_compat_router, build_router};
 use yr_master::snapshot::InstanceSnapshot;
 use yr_proto::common::ErrorCode;
-use yr_proto::messages::{QueryInstancesInfoResponse, SnapshotMetadata};
+use yr_proto::messages::{
+    BundleInfo, CommonStatus, ResourceGroupInfo,
+    DeleteSnapshotRequest, DeleteSnapshotResponse, FunctionKey, ListSnapshotsByFunctionKeyRequest,
+    ListSnapshotsByFunctionKeyResponse, ListSnapshotsByTenantRequest, ListSnapshotsByTenantResponse,
+    QueryInstancesInfoResponse, QueryResourceGroupRequest, QueryResourceGroupResponse,
+    SnapshotMetadata,
+};
 use yr_proto::resources::InstanceInfo;
 
 use common::test_master_state;
 
 use serde_json;
+
+async fn start_metastore() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().unwrap();
+    let mut cfg = MetaStoreServerConfig::default();
+    cfg.listen_addr = addr.to_string();
+    let server = MetaStoreServer::new(cfg).await.expect("server");
+    let h = tokio::spawn(async move {
+        let _ = server.serve(listener).await;
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    (addr, h)
+}
 
 /// ST: master_http_queryagentcount_format
 /// Original C++ returns a plain-text integer string, not JSON.
@@ -635,6 +660,9 @@ async fn query_snapshot_returns_protobuf_metadata() {
     assert_eq!(instance_info.function_proxy_id, "proxy-a");
     assert_eq!(instance_info.function, "my-fn");
     assert_eq!(instance_info.tenant_id, "t1");
+    let function_key = decoded.function_key.as_ref().unwrap();
+    assert_eq!(function_key.tenant_id, "t1");
+    assert_eq!(function_key.function_type, "my-fn");
     let status = instance_info.instance_status.as_ref().unwrap();
     assert_eq!(status.code, 4);
     assert_eq!(status.msg, "boom");
@@ -921,7 +949,457 @@ async fn rgroup_post_returns_json() {
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(v["requestID"], "rg-1");
     assert!(v["groups"].is_array());
+    assert!(v["rGroup"].is_array());
     assert_eq!(v["count"], 0);
+}
+
+#[tokio::test]
+async fn resource_group_prefixed_route_accepts_protobuf_and_returns_groups() {
+    let state = test_master_state();
+    state.instances.upsert_instance(
+        "/instances/bundle-1",
+        serde_json::json!({
+            "id": "bundle-1",
+            "tenant": "t1",
+            "group_id": "pool-a",
+            "functionProxyID": "proxy-1",
+            "functionAgentID": "agent-1",
+            "resources": {
+                "cpu": { "scalar": { "value": 1.0 } }
+            }
+        }),
+    );
+    state.instances.upsert_instance(
+        "/instances/bundle-2",
+        serde_json::json!({
+            "id": "bundle-2",
+            "tenant": "t1",
+            "groupID": "pool-a",
+            "functionProxyID": "proxy-2",
+            "resources": {
+                "memory": { "scalar": { "value": 256.0 } }
+            }
+        }),
+    );
+    let app = build_router(state, None);
+    let req = QueryResourceGroupRequest {
+        request_id: "rg-pb-1".into(),
+        r_group_name: "pool-a".into(),
+    };
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/resource-group/rgroup")
+                .header("Type", "protobuf")
+                .body(Body::from(req.encode_to_vec()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers().get("content-type").unwrap(),
+        "application/x-protobuf"
+    );
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let decoded = QueryResourceGroupResponse::decode(body.as_ref()).unwrap();
+    assert_eq!(decoded.request_id, "rg-pb-1");
+    assert_eq!(decoded.r_group.len(), 1);
+    let group = &decoded.r_group[0];
+    assert_eq!(group.name, "pool-a");
+    assert_eq!(group.tenant_id, "t1");
+    assert_eq!(group.request_id, "rg-pb-1");
+    assert_eq!(group.bundles.len(), 2);
+    assert_eq!(group.bundles[0].bundle_id, "bundle-1");
+    assert_eq!(group.bundles[0].r_group_name, "pool-a");
+    assert_eq!(group.bundles[0].function_proxy_id, "proxy-1");
+    assert_eq!(group.bundles[1].bundle_id, "bundle-2");
+    assert_eq!(group.bundles[1].r_group_name, "pool-a");
+}
+
+#[tokio::test]
+async fn resource_group_prefixed_route_reads_metastore_groups() {
+    let (addr, _h) = start_metastore().await;
+    let ep = format!("http://{addr}");
+    let store = MetaStoreClient::connect(MetaStoreClientConfig::direct_etcd(&ep, ""))
+        .await
+        .expect("connect");
+    let store = Arc::new(tokio::sync::Mutex::new(store));
+
+    let persisted = ResourceGroupInfo {
+        name: "pool-meta".into(),
+        tenant_id: "tenant-meta".into(),
+        request_id: "persisted-rg-1".into(),
+        trace_id: "persisted-trace-1".into(),
+        bundles: vec![BundleInfo {
+            bundle_id: "13_pool-meta_req_0".into(),
+            r_group_name: "pool-meta".into(),
+            tenant_id: "tenant-meta".into(),
+            function_proxy_id: "proxy-meta-1".into(),
+            function_agent_id: "agent-meta-1".into(),
+            status: Some(CommonStatus {
+                code: 0,
+                message: String::new(),
+            }),
+            ..Default::default()
+        }],
+        status: Some(CommonStatus {
+            code: 0,
+            message: String::new(),
+        }),
+        ..Default::default()
+    };
+    store
+        .lock()
+        .await
+        .put(
+            "/yr/resourcegroup/tenant-meta/pool-meta",
+            &persisted.encode_to_vec(),
+        )
+        .await
+        .expect("put resource group");
+
+    let state = test_master_state();
+    let app = build_router(state, Some(store));
+    let req = QueryResourceGroupRequest {
+        request_id: "rg-meta-query".into(),
+        r_group_name: "pool-meta".into(),
+    };
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/resource-group/rgroup")
+                .header("Type", "protobuf")
+                .body(Body::from(req.encode_to_vec()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let decoded = QueryResourceGroupResponse::decode(body.as_ref()).unwrap();
+    assert_eq!(decoded.request_id, "rg-meta-query");
+    assert_eq!(decoded.r_group.len(), 1);
+    let group = &decoded.r_group[0];
+    assert_eq!(group.name, "pool-meta");
+    assert_eq!(group.tenant_id, "tenant-meta");
+    assert_eq!(group.request_id, "persisted-rg-1");
+    assert_eq!(group.bundles.len(), 1);
+    assert_eq!(group.bundles[0].bundle_id, "13_pool-meta_req_0");
+    assert_eq!(group.bundles[0].function_proxy_id, "proxy-meta-1");
+}
+
+#[tokio::test]
+async fn resource_group_prefixed_route_merges_metastore_metadata_with_live_bundles() {
+    let (addr, _h) = start_metastore().await;
+    let ep = format!("http://{addr}");
+    let store = MetaStoreClient::connect(MetaStoreClientConfig::direct_etcd(&ep, ""))
+        .await
+        .expect("connect");
+    let store = Arc::new(tokio::sync::Mutex::new(store));
+
+    let persisted = ResourceGroupInfo {
+        name: "pool-merge".into(),
+        owner: "owner-a".into(),
+        tenant_id: "tenant-a".into(),
+        request_id: "persisted-rg-merge".into(),
+        bundles: vec![BundleInfo {
+            bundle_id: "stale-bundle".into(),
+            r_group_name: "pool-merge".into(),
+            tenant_id: "tenant-a".into(),
+            function_proxy_id: "proxy-stale".into(),
+            status: Some(CommonStatus {
+                code: 0,
+                message: "pending".into(),
+            }),
+            ..Default::default()
+        }],
+        status: Some(CommonStatus {
+            code: 0,
+            message: "pending".into(),
+        }),
+        ..Default::default()
+    };
+    store
+        .lock()
+        .await
+        .put(
+            "/yr/resourcegroup/tenant-a/pool-merge",
+            &persisted.encode_to_vec(),
+        )
+        .await
+        .expect("put resource group");
+
+    let state = test_master_state();
+    state.instances.upsert_instance(
+        "/instances/live-bundle-1",
+        serde_json::json!({
+            "id": "live-bundle-1",
+            "tenant": "tenant-a",
+            "group_id": "pool-merge",
+            "functionProxyID": "proxy-live-1",
+            "resources": {
+                "cpu": { "scalar": { "value": 2.0 } }
+            }
+        }),
+    );
+    let app = build_router(state, Some(store));
+    let req = QueryResourceGroupRequest {
+        request_id: "rg-merge-query".into(),
+        r_group_name: "pool-merge".into(),
+    };
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/resource-group/rgroup")
+                .header("Type", "protobuf")
+                .body(Body::from(req.encode_to_vec()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let decoded = QueryResourceGroupResponse::decode(body.as_ref()).unwrap();
+    assert_eq!(decoded.request_id, "rg-merge-query");
+    assert_eq!(decoded.r_group.len(), 1);
+    let group = &decoded.r_group[0];
+    assert_eq!(group.name, "pool-merge");
+    assert_eq!(group.owner, "owner-a");
+    assert_eq!(group.request_id, "persisted-rg-merge");
+    assert_eq!(group.bundles.len(), 1);
+    assert_eq!(group.bundles[0].bundle_id, "live-bundle-1");
+    assert_eq!(group.bundles[0].function_proxy_id, "proxy-live-1");
+}
+
+#[tokio::test]
+async fn local_scheduling_status_requires_node_id() {
+    let state = test_master_state();
+    let app = build_router(state, None);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/node/localschedulingstatus")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["status"], "unknown");
+    assert_eq!(v["message"], "node_id query parameter is required");
+}
+
+#[tokio::test]
+async fn local_scheduling_status_toggles_evicting_state() {
+    let state = test_master_state();
+    state.local_sched_mgr.register("node-rg", "10.0.0.1:1234");
+    let app = build_router(state.clone(), None);
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/node/localschedulingstatus?node_id=node-rg")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["status"], "evicting");
+    assert_eq!(v["message"], "success");
+    assert!(state.local_sched_mgr.is_evicting("node-rg"));
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/node/localschedulingstatus?node_id=node-rg")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(v["status"], "normal");
+    assert_eq!(v["message"], "success");
+    assert!(!state.local_sched_mgr.is_evicting("node-rg"));
+}
+
+#[tokio::test]
+async fn list_snapshots_by_function_key_protobuf_returns_checkpoint_ids() {
+    let state = test_master_state();
+    state.instances.upsert_instance(
+        "/instances/a",
+        serde_json::json!({
+            "id": "a",
+            "function_name": "f-key",
+            "tenant": "t1",
+            "state": "EXITED",
+            "created_at_ms": 1,
+            "updated_at_ms": 2,
+        }),
+    );
+    state.instances.upsert_instance(
+        "/instances/b",
+        serde_json::json!({
+            "id": "b",
+            "function_name": "f-key",
+            "tenant": "t2",
+            "state": "EXITED",
+            "created_at_ms": 1,
+            "updated_at_ms": 3,
+        }),
+    );
+    let app = build_router(state, None);
+    let req = ListSnapshotsByFunctionKeyRequest {
+        request_id: "fk-1".into(),
+        function_key: Some(FunctionKey {
+            tenant_id: "t1".into(),
+            function_type: "f-key".into(),
+            namespace: String::new(),
+        }),
+    };
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/list-snapshots-by-function-key")
+                .header("Type", "protobuf")
+                .body(Body::from(req.encode_to_vec()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let decoded = ListSnapshotsByFunctionKeyResponse::decode(body.as_ref()).unwrap();
+    assert_eq!(decoded.request_id, "fk-1");
+    assert_eq!(decoded.checkpoint_i_ds, vec!["a"]);
+}
+
+#[tokio::test]
+async fn list_snapshots_by_tenant_protobuf_returns_checkpoint_ids() {
+    let state = test_master_state();
+    state.instances.upsert_instance(
+        "/instances/a",
+        serde_json::json!({
+            "id": "a",
+            "function_name": "f-a",
+            "tenant": "tenant-z",
+            "state": "EXITED",
+            "created_at_ms": 1,
+            "updated_at_ms": 2,
+        }),
+    );
+    state.instances.upsert_instance(
+        "/instances/b",
+        serde_json::json!({
+            "id": "b",
+            "function_name": "f-b",
+            "tenant": "tenant-z",
+            "state": "FAILED",
+            "created_at_ms": 1,
+            "updated_at_ms": 3,
+        }),
+    );
+    let app = build_router(state, None);
+    let req = ListSnapshotsByTenantRequest {
+        request_id: "tenant-1".into(),
+        tenant_id: "tenant-z".into(),
+    };
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/list-snapshots-by-tenant")
+                .header("Type", "protobuf")
+                .body(Body::from(req.encode_to_vec()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let decoded = ListSnapshotsByTenantResponse::decode(body.as_ref()).unwrap();
+    assert_eq!(decoded.request_id, "tenant-1");
+    assert_eq!(decoded.checkpoint_i_ds, vec!["b", "a"]);
+}
+
+#[tokio::test]
+async fn delete_snapshot_protobuf_removes_snapshot() {
+    let state = test_master_state();
+    state.instances.upsert_instance(
+        "/instances/del-1",
+        serde_json::json!({
+            "id": "del-1",
+            "function_name": "f-del",
+            "tenant": "t1",
+            "state": "EXITED",
+            "created_at_ms": 1,
+            "updated_at_ms": 2,
+        }),
+    );
+    assert!(state.snapshots.get("del-1").is_some());
+    let app = build_router(state.clone(), None);
+    let req = DeleteSnapshotRequest {
+        request_id: "del-req".into(),
+        checkpoint_id: "del-1".into(),
+    };
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/delete-snapshot")
+                .header("Type", "protobuf")
+                .body(Body::from(req.encode_to_vec()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let decoded = DeleteSnapshotResponse::decode(body.as_ref()).unwrap();
+    assert_eq!(decoded.request_id, "del-req");
+    assert!(state.snapshots.get("del-1").is_none());
 }
 
 /// ST: /masterinfo returns the C++ JSON contract on both the dedicated HTTP router

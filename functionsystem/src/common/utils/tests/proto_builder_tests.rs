@@ -381,9 +381,13 @@ fn kill_request_roundtrip() {
         signal: 15,
         payload: vec![1, 2],
         request_id: "r".into(),
+        route_address: "http://127.0.0.1:8402".into(),
+        proxy_id: "proxy-a".into(),
     };
     let d = KillRequest::decode(m.encode_to_vec().as_slice()).unwrap();
     assert_eq!(d.signal, 15);
+    assert_eq!(d.route_address, "http://127.0.0.1:8402");
+    assert_eq!(d.proxy_id, "proxy-a");
 }
 
 #[test]
@@ -427,6 +431,8 @@ fn streaming_message_kill_req_variant() {
         signal: 9,
         payload: vec![],
         request_id: "kr".into(),
+        route_address: "http://127.0.0.1:28011".into(),
+        proxy_id: "proxy-z".into(),
     };
     let sm = StreamingMessage {
         message_id: "kill".into(),
@@ -524,6 +530,21 @@ fn group_options_bind_roundtrip_matches_cpp_wire_contract() {
     let bind = decoded.bind.expect("C++ 0.8 GroupOptions.bind field 6");
     assert_eq!(bind.resource, "NUMA");
     assert_eq!(bind.policy, BindStrategy::BindPack as i32);
+}
+
+#[test]
+fn runtime_info_proxy_id_roundtrip_matches_feature_sandbox_wire_contract() {
+    use yr_proto::common::RuntimeInfo;
+
+    let info = RuntimeInfo {
+        server_ip_addr: "127.0.0.1".into(),
+        server_port: 8403,
+        route: "litebus://proxy-a".into(),
+        proxy_id: "proxy-a".into(),
+    };
+
+    let decoded = RuntimeInfo::decode(info.encode_to_vec().as_slice()).unwrap();
+    assert_eq!(decoded.proxy_id, "proxy-a");
 }
 
 #[test]

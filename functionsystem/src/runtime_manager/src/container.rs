@@ -2,11 +2,13 @@
 
 use crate::config::Config;
 use anyhow::Context;
-use nix::sched::{unshare, CloneFlags};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+#[cfg(target_os = "linux")]
+use nix::sched::{unshare, CloneFlags};
 
 /// Best-effort NVIDIA / Ascend NPU device presence (device-node scan).
 pub fn detect_accelerators() -> AcceleratorSnapshot {
@@ -145,8 +147,14 @@ pub unsafe fn maybe_unshare_namespaces(isolate: bool) -> std::io::Result<()> {
     if !isolate {
         return Ok(());
     }
+    #[cfg(target_os = "linux")]
     unshare(CloneFlags::CLONE_NEWIPC | CloneFlags::CLONE_NEWUTS | CloneFlags::CLONE_NEWNS)
-        .map_err(|e| std::io::Error::other(e.to_string()))
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    #[cfg(not(target_os = "linux"))]
+    {
+        tracing::debug!("namespace isolation skipped on non-Linux host");
+    }
+    Ok(())
 }
 
 /// cgroup v2 `cpu.max` first field: quota in microseconds per 100ms period (100000 us).

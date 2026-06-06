@@ -211,13 +211,20 @@ message SnapInfo {
 
 message SnapStartedInfo {
   string instanceID = 1;
+  string routeAddress = 2;
+  string portMappings = 3;
+  string functionProxyID = 4;
+  string nodeID = 5;
+  string namespace = 6;
 }
 
 message KillRequest {
-  string instanceID = 1;
-  int32  signal     = 2;
-  bytes  payload    = 3;
-  string requestID  = 4;
+  string instanceID   = 1;
+  int32  signal       = 2;
+  bytes  payload      = 3;
+  string requestID    = 4;
+  string routeAddress = 5; // owner proxy endpoint hint for DR kill routing
+  string proxyID      = 6; // owner functionProxyID hint for DR kill routing
 }
 
 message KillResponse {

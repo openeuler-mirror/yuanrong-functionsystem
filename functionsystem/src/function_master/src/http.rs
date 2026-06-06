@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
@@ -12,13 +12,19 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use yr_metastore_client::MetaStoreClient;
 use yr_proto::common::ErrorCode;
-use yr_proto::messages::{QueryInstancesInfoResponse, ResourceInfo};
+use yr_proto::messages::{
+    BundleInfo, CommonStatus, DeleteSnapshotRequest, DeleteSnapshotResponse,
+    ListSnapshotsByFunctionKeyRequest, ListSnapshotsByFunctionKeyResponse,
+    ListSnapshotsByTenantRequest, ListSnapshotsByTenantResponse, QueryInstancesInfoResponse,
+    QueryResourceGroupRequest, QueryResourceGroupResponse, ResourceGroupInfo, ResourceInfo,
+};
 use yr_proto::resources::{
     value::{Scalar, Type as ValueType},
     InstanceInfo, InstanceStatus, Resource, Resources, ResourceUnit,
 };
 
 const TYPE_JSON: &str = "json";
+const RESOURCE_GROUP_KEY_PREFIX: &str = "/yr/resourcegroup";
 
 fn is_json_type(val: Option<&str>) -> bool {
     match val {
@@ -367,6 +373,10 @@ pub fn build_router(
         .route("/resources", get(resources))
         .route("/global-scheduler/resources", get(resources))
         .route("/instance-manager/resources", get(resources))
+        .route(
+            "/node/localschedulingstatus",
+            post(mark_local_scheduler_evicting).delete(clear_local_scheduler_evicting),
+        )
         .route("/scheduling_queue", get(scheduling_queue))
         .route("/global-scheduler/scheduling_queue", get(scheduling_queue))
         .route("/named-ins", get(query_named_instances))
@@ -379,7 +389,14 @@ pub fn build_router(
         .route("/query-group-instances", get(query_group_instances))
         .route("/query-snapshot", get(query_snapshot).post(query_snapshot))
         .route("/list-snapshots", get(list_snapshots).post(list_snapshots))
+        .route(
+            "/list-snapshots-by-function-key",
+            post(list_snapshots_by_function_key),
+        )
+        .route("/list-snapshots-by-tenant", post(list_snapshots_by_tenant))
+        .route("/delete-snapshot", post(delete_snapshot))
         .route("/rgroup", post(query_resource_group))
+        .route("/resource-group/rgroup", post(query_resource_group))
         .route("/metastore/explore", post(metastore_explore))
         .with_state(s)
 }
@@ -803,6 +820,99 @@ async fn list_snapshots(
     }
 }
 
+async fn list_snapshots_by_function_key(
+    State(st): State<HttpState>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Result<Response, StatusCode> {
+    let raw = body.ok_or(StatusCode::BAD_REQUEST)?;
+    let req =
+        ListSnapshotsByFunctionKeyRequest::decode(raw.as_ref()).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let fk = req.function_key.unwrap_or_default();
+    let checkpoint_ids = st.master.snapshots.list_checkpoint_ids_by_function_key(
+        fk.tenant_id.as_str(),
+        fk.function_type.as_str(),
+        fk.namespace.as_str(),
+    );
+    let use_json = parse_type_header(&headers);
+    if use_json {
+        Ok(Json(json!({
+            "message": "success",
+            "requestID": req.request_id,
+            "checkpointIDs": checkpoint_ids,
+        }))
+        .into_response())
+    } else {
+        Ok(protobuf_http_response(
+            ListSnapshotsByFunctionKeyResponse {
+                code: ErrorCode::ErrNone as i32,
+                message: "success".into(),
+                request_id: req.request_id,
+                checkpoint_i_ds: checkpoint_ids,
+            }
+            .encode_to_vec(),
+        ))
+    }
+}
+
+async fn list_snapshots_by_tenant(
+    State(st): State<HttpState>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Result<Response, StatusCode> {
+    let raw = body.ok_or(StatusCode::BAD_REQUEST)?;
+    let req = ListSnapshotsByTenantRequest::decode(raw.as_ref()).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let checkpoint_ids = st
+        .master
+        .snapshots
+        .list_checkpoint_ids_by_tenant(req.tenant_id.as_str());
+    let use_json = parse_type_header(&headers);
+    if use_json {
+        Ok(Json(json!({
+            "message": "success",
+            "requestID": req.request_id,
+            "checkpointIDs": checkpoint_ids,
+        }))
+        .into_response())
+    } else {
+        Ok(protobuf_http_response(
+            ListSnapshotsByTenantResponse {
+                code: ErrorCode::ErrNone as i32,
+                message: "success".into(),
+                request_id: req.request_id,
+                checkpoint_i_ds: checkpoint_ids,
+            }
+            .encode_to_vec(),
+        ))
+    }
+}
+
+async fn delete_snapshot(
+    State(st): State<HttpState>,
+    headers: HeaderMap,
+    body: Option<axum::body::Bytes>,
+) -> Result<Response, StatusCode> {
+    let raw = body.ok_or(StatusCode::BAD_REQUEST)?;
+    let req = DeleteSnapshotRequest::decode(raw.as_ref()).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let _ = st.master.snapshots.remove(req.checkpoint_id.as_str());
+    let use_json = parse_type_header(&headers);
+    if use_json {
+        Ok(Json(json!({
+            "requestID": req.request_id,
+        }))
+        .into_response())
+    } else {
+        Ok(protobuf_http_response(
+            DeleteSnapshotResponse {
+                code: ErrorCode::ErrNone as i32,
+                message: String::new(),
+                request_id: req.request_id,
+            }
+            .encode_to_vec(),
+        ))
+    }
+}
+
 #[derive(Debug, Deserialize, Default)]
 pub struct ResourceGroupQuery {
     #[serde(default, alias = "requestID")]
@@ -811,15 +921,338 @@ pub struct ResourceGroupQuery {
     pub r_group_name: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct LocalSchedulingStatusQuery {
+    #[serde(default, alias = "nodeID")]
+    pub node_id: Option<String>,
+}
+
+fn common_status_from_json(v: Option<&Value>) -> Option<CommonStatus> {
+    let o = v?.as_object()?;
+    Some(CommonStatus {
+        code: json_pick_i32(o, &["code"]).unwrap_or(0),
+        message: json_pick_str(o, &["msg", "message"]),
+    })
+}
+
+fn json_pick_group_name(obj: &serde_json::Map<String, Value>) -> String {
+    json_pick_str(
+        obj,
+        &[
+            "rGroupName",
+            "r_group_name",
+            "rgroupname",
+            "group_id",
+            "groupID",
+            "groupId",
+            "r_group_id",
+            "rGroupId",
+        ],
+    )
+}
+
+fn json_to_bundle_info(instance_id: &str, group_name: &str, v: &Value) -> BundleInfo {
+    let Some(o) = v.as_object() else {
+        return BundleInfo {
+            bundle_id: instance_id.to_string(),
+            r_group_name: group_name.to_string(),
+            ..Default::default()
+        };
+    };
+    BundleInfo {
+        bundle_id: instance_id.to_string(),
+        r_group_name: group_name.to_string(),
+        parent_r_group_name: json_pick_str(o, &["parentRGroupName", "parent_r_group_name"]),
+        function_proxy_id: json_pick_str(o, &["functionProxyID", "function_proxy_id"]),
+        function_agent_id: json_pick_str(o, &["functionAgentID", "function_agent_id"]),
+        tenant_id: json_pick_str(o, &["tenantID", "tenant_id", "tenant"]),
+        resources: instance_resources_from_json(v),
+        labels: vec![],
+        status: common_status_from_json(
+            v.get("instanceStatus").or_else(|| v.get("instance_status")),
+        ),
+        parent_id: json_pick_str(o, &["parentID", "parent_id"]),
+        kv_labels: HashMap::new(),
+    }
+}
+
+fn collect_resource_group_infos(
+    list_json: &str,
+    filter_name: &str,
+    request_id: &str,
+) -> Vec<ResourceGroupInfo> {
+    let Ok(map) = serde_json::from_str::<serde_json::Map<String, Value>>(list_json) else {
+        return vec![];
+    };
+    let mut grouped: BTreeMap<String, Vec<(String, Value)>> = BTreeMap::new();
+    for (instance_id, value) in map {
+        let Some(obj) = value.as_object() else {
+            continue;
+        };
+        let group_name = json_pick_group_name(obj);
+        if group_name.is_empty() {
+            continue;
+        }
+        if !filter_name.is_empty() && group_name != filter_name {
+            continue;
+        }
+        grouped
+            .entry(group_name)
+            .or_default()
+            .push((instance_id, value));
+    }
+
+    grouped
+        .into_iter()
+        .map(|(group_name, mut instances)| {
+            instances.sort_by(|a, b| a.0.cmp(&b.0));
+            let tenant_id = instances
+                .iter()
+                .find_map(|(_, value)| {
+                    value
+                        .as_object()
+                        .map(|o| json_pick_str(o, &["tenantID", "tenant_id", "tenant"]))
+                        .filter(|v| !v.is_empty())
+                })
+                .unwrap_or_default();
+            let status = instances
+                .iter()
+                .find_map(|(_, value)| {
+                    common_status_from_json(
+                        value
+                            .get("instanceStatus")
+                            .or_else(|| value.get("instance_status")),
+                    )
+                })
+                .or(Some(CommonStatus {
+                    code: 0,
+                    message: String::new(),
+                }));
+            let bundles = instances
+                .into_iter()
+                .map(|(instance_id, value)| json_to_bundle_info(&instance_id, &group_name, &value))
+                .collect();
+            ResourceGroupInfo {
+                name: group_name,
+                owner: String::new(),
+                app_id: String::new(),
+                tenant_id,
+                bundles,
+                status,
+                parent_id: String::new(),
+                request_id: request_id.to_string(),
+                trace_id: String::new(),
+                opt: None,
+            }
+        })
+        .collect()
+}
+
+fn resource_group_map_key(info: &ResourceGroupInfo) -> String {
+    format!("{}\u{0}{}", info.tenant_id, info.name)
+}
+
+fn merge_resource_group_info(
+    mut persisted: ResourceGroupInfo,
+    observed: &ResourceGroupInfo,
+) -> ResourceGroupInfo {
+    if persisted.name.is_empty() {
+        persisted.name = observed.name.clone();
+    }
+    if persisted.owner.is_empty() {
+        persisted.owner = observed.owner.clone();
+    }
+    if persisted.app_id.is_empty() {
+        persisted.app_id = observed.app_id.clone();
+    }
+    if persisted.tenant_id.is_empty() {
+        persisted.tenant_id = observed.tenant_id.clone();
+    }
+    if persisted.parent_id.is_empty() {
+        persisted.parent_id = observed.parent_id.clone();
+    }
+    if persisted.request_id.is_empty() {
+        persisted.request_id = observed.request_id.clone();
+    }
+    if persisted.trace_id.is_empty() {
+        persisted.trace_id = observed.trace_id.clone();
+    }
+    if persisted.opt.is_none() {
+        persisted.opt = observed.opt.clone();
+    }
+    if persisted.bundles.is_empty() && !observed.bundles.is_empty() {
+        persisted.bundles = observed.bundles.clone();
+    } else if !observed.bundles.is_empty() {
+        persisted.bundles = observed.bundles.clone();
+    }
+    if (persisted.status.is_none() || !observed.bundles.is_empty()) && observed.status.is_some() {
+        persisted.status = observed.status.clone();
+    }
+    persisted
+}
+
+async fn load_resource_group_infos_from_metastore(
+    metastore: Option<Arc<tokio::sync::Mutex<MetaStoreClient>>>,
+    filter_name: &str,
+) -> Vec<ResourceGroupInfo> {
+    let Some(store) = metastore else {
+        return vec![];
+    };
+    let mut guard = store.lock().await;
+    let Ok(resp) = guard.get_prefix(RESOURCE_GROUP_KEY_PREFIX).await else {
+        return vec![];
+    };
+    let mut out: Vec<ResourceGroupInfo> = resp
+        .kvs
+        .into_iter()
+        .filter_map(|kv| ResourceGroupInfo::decode(kv.value.as_slice()).ok())
+        .filter(|info| filter_name.is_empty() || info.name == filter_name)
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name).then(a.tenant_id.cmp(&b.tenant_id)));
+    out
+}
+
+fn common_status_to_json(status: Option<&CommonStatus>) -> Value {
+    let status = status.cloned().unwrap_or(CommonStatus {
+        code: 0,
+        message: String::new(),
+    });
+    json!({
+        "code": status.code,
+        "message": status.message,
+    })
+}
+
+fn resources_to_json(resources: Option<&Resources>) -> Value {
+    let Some(resources) = resources else {
+        return json!({ "resources": {} });
+    };
+    let mut out = serde_json::Map::new();
+    for (name, resource) in &resources.resources {
+        let scalar = resource.scalar.as_ref().map(|s| json!({ "value": s.value }));
+        out.insert(
+            name.clone(),
+            json!({
+                "name": resource.name,
+                "type": resource.r#type,
+                "scalar": scalar,
+            }),
+        );
+    }
+    json!({ "resources": Value::Object(out) })
+}
+
+fn resource_group_info_to_json(info: &ResourceGroupInfo) -> Value {
+    let bundles: Vec<Value> = info
+        .bundles
+        .iter()
+        .map(|bundle| {
+            json!({
+                "bundleID": bundle.bundle_id,
+                "rGroupName": bundle.r_group_name,
+                "parentRGroupName": bundle.parent_r_group_name,
+                "functionProxyID": bundle.function_proxy_id,
+                "functionAgentID": bundle.function_agent_id,
+                "tenantID": bundle.tenant_id,
+                "resources": resources_to_json(bundle.resources.as_ref()),
+                "labels": bundle.labels,
+                "status": common_status_to_json(bundle.status.as_ref()),
+                "parentId": bundle.parent_id,
+                "kvLabels": bundle.kv_labels,
+            })
+        })
+        .collect();
+    let opt_json = info
+        .opt
+        .as_ref()
+        .map(|opt| {
+            json!({
+                "priority": opt.priority,
+                "groupPolicy": opt.group_policy,
+                "extension": opt.extension,
+            })
+        })
+        .unwrap_or(Value::Null);
+    json!({
+        "name": info.name,
+        "owner": info.owner,
+        "appID": info.app_id,
+        "tenantID": info.tenant_id,
+        "bundles": bundles,
+        "status": common_status_to_json(info.status.as_ref()),
+        "parentID": info.parent_id,
+        "requestID": info.request_id,
+        "traceID": info.trace_id,
+        "opt": opt_json,
+    })
+}
+
+fn local_scheduling_status_json(status: &str, message: &str) -> Value {
+    json!({
+        "status": status,
+        "message": message,
+    })
+}
+
+async fn update_local_scheduling_status(
+    st: HttpState,
+    q: LocalSchedulingStatusQuery,
+    evicting: bool,
+) -> Response {
+    let Some(node_id) = q.node_id.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(local_scheduling_status_json(
+                "unknown",
+                "node_id query parameter is required",
+            )),
+        )
+            .into_response();
+    };
+    let status_label = if evicting { "evicting" } else { "normal" };
+    match st
+        .master
+        .local_sched_mgr
+        .update_scheduling_status(node_id.as_str(), evicting)
+    {
+        Ok(()) => (StatusCode::OK, Json(local_scheduling_status_json(status_label, "success")))
+            .into_response(),
+        Err(msg) if msg == "Invalid nodeID" => (
+            StatusCode::NOT_FOUND,
+            Json(local_scheduling_status_json(status_label, msg.as_str())),
+        )
+            .into_response(),
+        Err(msg) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(local_scheduling_status_json(status_label, msg.as_str())),
+        )
+            .into_response(),
+    }
+}
+
+async fn mark_local_scheduler_evicting(
+    State(st): State<HttpState>,
+    Query(q): Query<LocalSchedulingStatusQuery>,
+) -> Response {
+    update_local_scheduling_status(st, q, true).await
+}
+
+async fn clear_local_scheduler_evicting(
+    State(st): State<HttpState>,
+    Query(q): Query<LocalSchedulingStatusQuery>,
+) -> Response {
+    update_local_scheduling_status(st, q, false).await
+}
+
 /// C++ resource_group_manager_driver.h: QueryRGroupHandler
 async fn query_resource_group(
-    State(_st): State<HttpState>,
+    State(st): State<HttpState>,
     headers: HeaderMap,
     body: Option<axum::body::Bytes>,
 ) -> Response {
     let use_json = parse_type_header(&headers);
 
-    let (request_id, _r_group_name) = if use_json {
+    let (request_id, r_group_name) = if use_json {
         let q: ResourceGroupQuery = body
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
@@ -828,21 +1261,54 @@ async fn query_resource_group(
             q.r_group_name.unwrap_or_default(),
         )
     } else {
-        (uuid::Uuid::new_v4().to_string(), String::new())
+        let req = body
+            .and_then(|b| QueryResourceGroupRequest::decode(b.as_ref()).ok())
+            .unwrap_or_default();
+        (
+            if req.request_id.is_empty() {
+                uuid::Uuid::new_v4().to_string()
+            } else {
+                req.request_id
+            },
+            req.r_group_name,
+        )
     };
 
-    // Resource group store not yet populated; return empty
+    let mut groups = collect_resource_group_infos(
+        st.master.instances.list_json().as_str(),
+        r_group_name.as_str(),
+        request_id.as_str(),
+    );
+    let metastore_groups =
+        load_resource_group_infos_from_metastore(st.metastore.clone(), r_group_name.as_str()).await;
+    if !metastore_groups.is_empty() {
+        let mut merged = BTreeMap::new();
+        for group in metastore_groups {
+            merged.insert(resource_group_map_key(&group), group);
+        }
+        for group in groups {
+            let key = resource_group_map_key(&group);
+            if let Some(persisted) = merged.get_mut(&key) {
+                *persisted = merge_resource_group_info(persisted.clone(), &group);
+            } else {
+                merged.insert(key, group);
+            }
+        }
+        groups = merged.into_values().collect();
+    }
     if use_json {
+        let groups_json: Vec<Value> = groups.iter().map(resource_group_info_to_json).collect();
         Json(json!({
             "requestID": request_id,
-            "groups": [],
-            "count": 0,
+            "rGroup": groups_json,
+            "groups": groups_json,
+            "count": groups.len(),
         }))
         .into_response()
     } else {
-        let resp = yr_proto::messages::QueryResourceGroupResponse {
+        let resp = QueryResourceGroupResponse {
             request_id,
-            ..Default::default()
+            r_group: groups,
         };
         protobuf_http_response(resp.encode_to_vec())
     }

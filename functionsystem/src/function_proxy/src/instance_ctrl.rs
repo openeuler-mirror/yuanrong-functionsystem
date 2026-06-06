@@ -128,6 +128,12 @@ impl InstanceController {
         })
     }
 
+    pub fn metastore(
+        &self,
+    ) -> Option<Arc<tokio::sync::Mutex<yr_metastore_client::MetaStoreClient>>> {
+        self.etcd.clone()
+    }
+
     pub fn function_meta_cache(&self) -> &Arc<FunctionMetaCache> {
         &self.function_meta
     }

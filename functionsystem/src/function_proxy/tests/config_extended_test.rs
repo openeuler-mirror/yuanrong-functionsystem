@@ -175,7 +175,16 @@ fn start_instance_without_runtime_address_is_rejected() {
     let ctrl = InstanceController::new(c.clone(), rv, None, None);
     let rt = tokio::runtime::Runtime::new().unwrap();
     let err = rt
-        .block_on(ctrl.start_instance("i1", "fn", "t", Default::default(), "default"))
+        .block_on(ctrl.start_instance(
+            "i1",
+            "fn",
+            "t",
+            Default::default(),
+            "default",
+            &Default::default(),
+            "",
+            &[],
+        ))
         .expect_err("missing runtime_manager_address");
     assert_eq!(err.code(), tonic::Code::FailedPrecondition);
 }

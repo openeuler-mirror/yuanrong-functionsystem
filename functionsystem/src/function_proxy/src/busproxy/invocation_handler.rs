@@ -1,10 +1,18 @@
 //! Maps runtime `StreamingMessage` variants to the call / result plane.
 
+use std::collections::HashMap;
+
 use prost::Message;
 use tracing::{debug, info, warn};
+use yr_common::types::{BundleState, ResourceGroupState};
 use yr_proto::common::ErrorCode;
 use yr_proto::core_service as cs;
 use yr_proto::inner_service::ForwardCallRequest;
+use yr_proto::messages::{resource_group_info, BundleInfo, CommonStatus, ResourceGroupInfo};
+use yr_proto::resources::{
+    value::{Scalar, Type as ValueType},
+    Resource, Resources,
+};
 use yr_proto::runtime_rpc::{streaming_message, StreamingMessage};
 use yr_proto::runtime_service as rs;
 
@@ -38,6 +46,182 @@ struct MetaDataLite {
 
 impl InvocationHandler {
     const MAX_GROUP_INSTANCE_SIZE: usize = 256;
+    const MAX_RESOURCE_GROUP_BUNDLES: usize = 5000;
+    const RESOURCE_GROUP_KEY_PREFIX: &str = "/yr/resourcegroup";
+
+    fn resource_group_key(tenant_id: &str, name: &str) -> String {
+        format!("{}/{tenant_id}/{name}", Self::RESOURCE_GROUP_KEY_PREFIX)
+    }
+
+    fn resource_group_info_from_request(
+        req: &cs::CreateResourceGroupRequest,
+    ) -> Option<ResourceGroupInfo> {
+        let spec = req.r_group_spec.as_ref()?;
+        let bundles = spec
+            .bundles
+            .iter()
+            .enumerate()
+            .map(|(index, bundle)| BundleInfo {
+                bundle_id: format!(
+                    "{}_{}_{}_{}",
+                    spec.name.len(),
+                    spec.name,
+                    req.request_id,
+                    index
+                ),
+                r_group_name: spec.name.clone(),
+                parent_r_group_name: spec.owner.clone(),
+                function_proxy_id: String::new(),
+                function_agent_id: String::new(),
+                tenant_id: spec.tenant_id.clone(),
+                resources: Some(Resources {
+                    resources: bundle
+                        .resources
+                        .iter()
+                        .map(|(name, value)| {
+                            (
+                                name.clone(),
+                                Resource {
+                                    name: name.clone(),
+                                    r#type: ValueType::Scalar as i32,
+                                    scalar: Some(Scalar {
+                                        value: *value,
+                                        limit: 0.0,
+                                    }),
+                                    ..Default::default()
+                                },
+                            )
+                        })
+                        .collect::<HashMap<_, _>>(),
+                }),
+                labels: bundle.labels.clone(),
+                status: Some(CommonStatus {
+                    code: BundleState::Pending as i32,
+                    message: String::new(),
+                }),
+                parent_id: String::new(),
+                kv_labels: HashMap::new(),
+            })
+            .collect();
+        Some(ResourceGroupInfo {
+            name: spec.name.clone(),
+            owner: spec.owner.clone(),
+            app_id: spec.app_id.clone(),
+            tenant_id: spec.tenant_id.clone(),
+            bundles,
+            status: Some(CommonStatus {
+                code: ResourceGroupState::Pending as i32,
+                message: String::new(),
+            }),
+            parent_id: String::new(),
+            request_id: req.request_id.clone(),
+            trace_id: req.trace_id.clone(),
+            opt: spec.opt.as_ref().map(|opt| resource_group_info::Option {
+                priority: opt.priority,
+                group_policy: opt.group_policy,
+                extension: opt.extension.clone(),
+            }),
+        })
+    }
+
+    async fn persist_resource_group_metadata(
+        req: &cs::CreateResourceGroupRequest,
+        bus: &BusProxyCoordinator,
+    ) -> Result<(), String> {
+        let Some(spec) = req.r_group_spec.as_ref() else {
+            return Ok(());
+        };
+        let Some(store) = bus.instance_ctrl_ref().metastore() else {
+            return Ok(());
+        };
+        let Some(info) = Self::resource_group_info_from_request(req) else {
+            return Ok(());
+        };
+        let key = Self::resource_group_key(spec.tenant_id.as_str(), spec.name.as_str());
+        let mut guard = store.lock().await;
+        guard
+            .put(&key, &info.encode_to_vec())
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    async fn delete_resource_group_metadata(
+        resource_group_name: &str,
+        bus: &BusProxyCoordinator,
+    ) -> Result<bool, String> {
+        let Some(store) = bus.instance_ctrl_ref().metastore() else {
+            return Ok(false);
+        };
+        let mut guard = store.lock().await;
+        let resp = guard
+            .get_prefix(Self::RESOURCE_GROUP_KEY_PREFIX)
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut keys = Vec::new();
+        for kv in resp.kvs {
+            let Ok(key) = String::from_utf8(kv.key) else {
+                continue;
+            };
+            let Some((_, name)) = key.rsplit_once('/') else {
+                continue;
+            };
+            if name == resource_group_name {
+                keys.push(key);
+            }
+        }
+        if keys.is_empty() {
+            return Ok(false);
+        }
+        for key in keys {
+            guard.delete(&key).await.map_err(|e| e.to_string())?;
+        }
+        Ok(true)
+    }
+
+    async fn handle_remove_resource_group(
+        resource_group_name: &str,
+        caller_instance_id: &str,
+        bus: &BusProxyCoordinator,
+    ) -> (i32, String) {
+        if resource_group_name.trim().is_empty() {
+            return (
+                ErrorCode::ErrParamInvalid as i32,
+                "resource group name is required".into(),
+            );
+        }
+
+        let (code, message) = bus
+            .execute_group_kill(resource_group_name, caller_instance_id, 8)
+            .await;
+        if code != ErrorCode::ErrNone as i32 {
+            return (code, message);
+        }
+
+        if bus.instance_ctrl_ref().metastore().is_none() {
+            return (ErrorCode::ErrNone as i32, String::new());
+        }
+
+        match Self::delete_resource_group_metadata(resource_group_name, bus).await {
+            Ok(true) => (ErrorCode::ErrNone as i32, String::new()),
+            Ok(false) => (
+                ErrorCode::ErrInstanceNotFound as i32,
+                "resource group not found".into(),
+            ),
+            Err(err) => {
+                warn!(
+                    resource_group_name,
+                    caller = %caller_instance_id,
+                    error = %err,
+                    "RemoveResourceGroup: failed to delete metastore metadata"
+                );
+                (
+                    ErrorCode::ErrEtcdOperationError as i32,
+                    "failed to delete cluster info from metastore".into(),
+                )
+            }
+        }
+    }
     const MIN_INSTANCE_RANGE_NUM: i32 = 1;
     const MAX_INSTANCE_RANGE_NUM: i32 = 256;
     const DEFAULT_INSTANCE_RANGE_STEP: i32 = 2;
@@ -523,13 +707,14 @@ impl InvocationHandler {
         kill: &cs::KillRequest,
         bus: &BusProxyCoordinator,
     ) -> InboundAction {
-        let target_id = if kill.instance_id.is_empty() {
+        let signal = kill.signal;
+        let target_id = if signal == 8 {
+            kill.instance_id.clone()
+        } else if kill.instance_id.is_empty() {
             caller_instance_id.to_string()
         } else {
             kill.instance_id.clone()
         };
-
-        let signal = kill.signal;
 
         // Signals 9-11 are subscription/notification management, NOT actual kills.
         // In C++ these route to SubscriptionMgr and never stop a runtime process.
@@ -560,8 +745,21 @@ impl InvocationHandler {
                     .await;
                 (code, message, Vec::new())
             }
+            // RemoveResourceGroup is not an instance kill. C++ routes it through
+            // resource-group control and deletes persisted RG metadata.
+            8 => {
+                info!(
+                    caller = %caller_instance_id,
+                    target = %target_id,
+                    signal,
+                    "KillReq: removing resource group"
+                );
+                let (code, message) =
+                    Self::handle_remove_resource_group(&target_id, caller_instance_id, bus).await;
+                (code, message, Vec::new())
+            }
             // True instance/job kill signals: actually stop runtime processes.
-            1 | 2 | 3 | 5 | 6 | 7 | 8 => {
+            1 | 2 | 3 | 5 | 6 | 7 => {
                 info!(
                     caller = %caller_instance_id,
                     target = %target_id,
@@ -925,8 +1123,17 @@ impl InvocationHandler {
     async fn handle_create_resource_group(
         msg_id: &str,
         req: &cs::CreateResourceGroupRequest,
-        _bus: &BusProxyCoordinator,
+        bus: &BusProxyCoordinator,
     ) -> InboundAction {
+        if let Some(existing) = bus.remembered_resource_group_response(&req.request_id) {
+            let rsp = StreamingMessage {
+                message_id: msg_id.to_string(),
+                meta_data: Default::default(),
+                body: Some(streaming_message::Body::RGroupRsp(existing)),
+            };
+            return InboundAction::Reply(vec![rsp]);
+        }
+
         info!(
             request_id = %req.request_id,
             trace_id = %req.trace_id,
@@ -934,17 +1141,52 @@ impl InvocationHandler {
             "CreateResourceGroup: processing"
         );
 
+        let mut rsp_body = match req.r_group_spec.as_ref() {
+            None => cs::CreateResourceGroupResponse {
+                code: ErrorCode::ErrParamInvalid as i32,
+                message: "resource group spec is required".into(),
+                request_id: req.request_id.clone(),
+            },
+            Some(spec) if spec.bundles.len() > Self::MAX_RESOURCE_GROUP_BUNDLES => {
+                cs::CreateResourceGroupResponse {
+                    code: ErrorCode::ErrParamInvalid as i32,
+                    message: "bundle request size over max size".into(),
+                    request_id: req.request_id.clone(),
+                }
+            }
+            Some(spec) => {
+                info!(
+                    request_id = %req.request_id,
+                    trace_id = %req.trace_id,
+                    rgroup_name = %spec.name,
+                    bundle_count = spec.bundles.len(),
+                    "CreateResourceGroup: accepted in Rust minimal lane"
+                );
+                cs::CreateResourceGroupResponse {
+                    code: ErrorCode::ErrNone as i32,
+                    message: String::new(),
+                    request_id: req.request_id.clone(),
+                }
+            }
+        };
+        if rsp_body.code == ErrorCode::ErrNone as i32 {
+            if let Err(err) = Self::persist_resource_group_metadata(req, bus).await {
+                warn!(
+                    request_id = %req.request_id,
+                    trace_id = %req.trace_id,
+                    error = %err,
+                    "CreateResourceGroup: failed to persist metastore metadata"
+                );
+                rsp_body.code = ErrorCode::ErrEtcdOperationError as i32;
+                rsp_body.message = format!("failed to put metastore, err is {err}");
+            }
+        }
+        bus.remember_resource_group_response(&req.request_id, &rsp_body);
+
         let rsp = StreamingMessage {
             message_id: msg_id.to_string(),
             meta_data: Default::default(),
-            body: Some(streaming_message::Body::RGroupRsp(
-                cs::CreateResourceGroupResponse {
-                    code: ErrorCode::ErrInnerSystemError as i32,
-                    message: "resource group state machine is not implemented in the current Rust lane"
-                        .into(),
-                    request_id: req.request_id.clone(),
-                },
-            )),
+            body: Some(streaming_message::Body::RGroupRsp(rsp_body)),
         };
         InboundAction::Reply(vec![rsp])
     }
