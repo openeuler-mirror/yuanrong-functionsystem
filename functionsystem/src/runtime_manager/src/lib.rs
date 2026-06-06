@@ -13,6 +13,7 @@ pub mod metrics;
 pub mod oom;
 pub mod port_manager;
 pub mod runtime_ops;
+pub mod sandbox;
 pub mod service;
 pub mod state;
 pub mod venv;

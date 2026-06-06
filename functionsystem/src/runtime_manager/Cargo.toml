@@ -38,6 +38,7 @@ nix = { workspace = true, features = ["sched", "mount", "process"] }
 libc = { workspace = true }
 prometheus = { workspace = true }
 reqwest = { workspace = true }
+hyper-util = { version = "0.1", features = ["tokio"] }
 
 [dev-dependencies]
 clap = { workspace = true }
