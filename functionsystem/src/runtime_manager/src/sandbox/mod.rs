@@ -7,5 +7,9 @@
 //! start paths.
 
 pub mod launcher_client;
+pub mod runtime_state_manager;
+pub mod start_guard;
 
 pub use launcher_client::{LauncherClient, CONTAINER_EP_ENV};
+pub use runtime_state_manager::{RuntimeStateManager, SandboxInfo};
+pub use start_guard::SandboxStartGuard;
