@@ -13,7 +13,7 @@ use super::request_builder::{build_start_request, encode_port_mapping, PortForwa
 use super::runtime_state_manager::{RuntimeStateManager, SandboxInfo};
 use super::start_guard::SandboxStartGuard;
 use crate::port_manager::SharedPortManager;
-use yr_proto::runtime::v1::{FunctionRuntime, RegisterRequest, UnregisterRequest};
+use yr_proto::runtime::v1::{DeleteRequest, FunctionRuntime, RegisterRequest, UnregisterRequest};
 
 /// Owns the sandbox state + launcher client + host-port allocator (+ optional
 /// checkpoint orchestrator for the Restore path).
@@ -58,6 +58,19 @@ impl SandboxExecutor {
         for k in keys {
             self.ports.release(k);
         }
+    }
+
+    /// Release every forward port keyed `runtime_id#*` (used on stop, where the
+    /// per-forward count is not tracked separately).
+    fn release_all_forward_ports(&self, runtime_id: &str) {
+        let prefix = format!("{runtime_id}#");
+        let keys: Vec<String> = self
+            .ports
+            .snapshot_allocations()
+            .into_keys()
+            .filter(|k| k.starts_with(&prefix))
+            .collect();
+        self.release_ports(&keys);
     }
 
     /// Allocate one host port per forward (key = `runtime_id#index`). Releases any
@@ -221,6 +234,48 @@ impl SandboxExecutor {
             }
             Err(e) => {
                 let _ = ckpt.release_ref(&rid).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Stop & delete a sandbox (C++ `StopInstance` → `Delete`). WarmUp entries are
+    /// unregistered from the pool; active sandboxes are deleted via the launcher,
+    /// then host ports and any checkpoint ref are released and state is cleared.
+    /// State teardown happens even if the launcher Delete errors (best-effort).
+    pub async fn stop(&self, runtime_id: &str, timeout_secs: i64, _force: bool) -> Result<()> {
+        if self.state.is_warm_up(runtime_id) {
+            return self.stop_warmup(runtime_id).await;
+        }
+        let sandbox_id = self.state.get_sandbox_id(runtime_id);
+        // Prefer the launcher's sandbox id; fall back to runtime_id if unset.
+        let delete_id = if sandbox_id.is_empty() {
+            runtime_id.to_string()
+        } else {
+            sandbox_id
+        };
+        let delete_res = self
+            .launcher
+            .delete(DeleteRequest {
+                id: delete_id,
+                timeout: timeout_secs,
+            })
+            .await;
+
+        // Always release local resources + state, even if Delete failed.
+        self.release_all_forward_ports(runtime_id);
+        if let Some(ckpt) = self.ckpt.as_ref() {
+            let _ = ckpt.release_ref(runtime_id).await;
+        }
+        self.state.unregister(runtime_id);
+
+        match delete_res {
+            Ok(_) => {
+                info!(runtime_id, "sandbox stopped");
+                Ok(())
+            }
+            Err(e) => {
+                warn!(runtime_id, error = %e, "sandbox launcher delete failed; state cleaned anyway");
                 Err(e)
             }
         }

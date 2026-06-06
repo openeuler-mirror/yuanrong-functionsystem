@@ -45,6 +45,7 @@ struct MockLauncher {
     last_start_trace: Arc<parking_lot::Mutex<String>>,
     last_start_ports: Arc<parking_lot::Mutex<Vec<String>>>,
     last_registered: Arc<parking_lot::Mutex<Vec<String>>>,
+    last_deleted: Arc<parking_lot::Mutex<String>>,
     fail_start: bool,
 }
 
@@ -68,7 +69,8 @@ impl RuntimeLauncher for MockLauncher {
         }))
     }
 
-    async fn delete(&self, _req: Request<DeleteRequest>) -> Result<Response<DeleteResponse>, Status> {
+    async fn delete(&self, req: Request<DeleteRequest>) -> Result<Response<DeleteResponse>, Status> {
+        *self.last_deleted.lock() = req.into_inner().id;
         Ok(Response::new(DeleteResponse {}))
     }
 
@@ -157,6 +159,7 @@ async fn spawn_mock_opts(sock: &str, fail_start: bool) -> Arc<MockLauncher> {
         last_start_trace: mock.last_start_trace.clone(),
         last_start_ports: mock.last_start_ports.clone(),
         last_registered: mock.last_registered.clone(),
+        last_deleted: mock.last_deleted.clone(),
         fail_start,
     };
     let listener = UnixListener::bind(sock).expect("bind uds");
@@ -261,6 +264,31 @@ async fn start_normal_rolls_back_on_launcher_rejection() {
     // SandboxStartGuard rolled back: no sandbox, no in-progress
     assert!(!exec.state().has_sandbox("r2"));
     assert!(!exec.state().is_start_in_progress("r2"));
+
+    let _ = std::fs::remove_file(&sock);
+}
+
+#[tokio::test]
+async fn stop_deletes_sandbox_releases_ports_and_clears_state() {
+    let sock = format!("/tmp/yr_sbx_stop_{}.sock", std::process::id());
+    let _ = std::fs::remove_file(&sock);
+    let mock = spawn_mock(&sock).await;
+    let exec = executor(&sock);
+
+    let params = SandboxStartParams {
+        runtime_id: "r5".into(),
+        trace_id: "t5".into(),
+        ..Default::default()
+    };
+    let forwards = vec![PortForward { container_port: 8080, protocol: "tcp".into() }];
+    exec.start_normal(params, forwards).await.expect("start");
+    assert!(exec.state().has_sandbox("r5"));
+
+    exec.stop("r5", 5, false).await.expect("stop");
+    // launcher.delete called with the sandbox id from state ("sandbox-t5")
+    assert_eq!(*mock.last_deleted.lock(), "sandbox-t5");
+    // state cleared + forward port released (re-allocatable)
+    assert!(!exec.state().has_sandbox("r5"));
 
     let _ = std::fs::remove_file(&sock);
 }
