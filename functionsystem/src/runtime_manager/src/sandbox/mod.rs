@@ -9,12 +9,14 @@
 pub mod checkpoint_orchestrator;
 pub mod executor_select;
 pub mod launcher_client;
+pub mod param_extract;
 pub mod request_builder;
 pub mod runtime_state_manager;
 pub mod sandbox_executor;
 pub mod start_guard;
 
 pub use checkpoint_orchestrator::{CheckpointOrchestrator, CkptFileManager};
+pub use param_extract::{extract_start, ExtractedStart};
 pub use executor_select::{
     select_executor, select_start_path, ExecutorKind, StartPath, EXECUTOR_TYPE_CONTAINER,
     EXECUTOR_TYPE_RUNTIME,

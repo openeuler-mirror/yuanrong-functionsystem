@@ -10,6 +10,16 @@ use yr_proto::runtime::v1::{
     rootfs_config, FunctionRuntime, Mount, RootfsConfig, RootfsSrcType, S3Config, StartRequest,
 };
 
+/// Resolve the effective rootfs for a build: an explicit proto `RootfsConfig`
+/// (extracted from `RuntimeInstanceInfo.container.rootfsConfig`) takes precedence
+/// over the higher-level [`RootfsSpec`].
+fn resolve_rootfs(params: &SandboxStartParams) -> Option<RootfsConfig> {
+    if let Some(rc) = &params.rootfs_config {
+        return Some(rc.clone());
+    }
+    params.rootfs.as_ref().map(|r| r.to_config(params.rootfs_readonly))
+}
+
 /// One requested port-forward (C++ `PortForwardConfig`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortForward {
@@ -98,6 +108,8 @@ pub struct SandboxStartParams {
     pub resources: HashMap<String, f64>,
     pub rootfs: Option<RootfsSpec>,
     pub rootfs_readonly: bool,
+    /// Explicit proto rootfs (from `container.rootfsConfig`); takes precedence over `rootfs`.
+    pub rootfs_config: Option<RootfsConfig>,
     pub mounts: Vec<Mount>,
     /// network mode string ("sandbox" default / "host" / "none").
     pub network: String,
@@ -116,7 +128,7 @@ pub fn build_start_request(params: &SandboxStartParams) -> StartRequest {
     let func_runtime = FunctionRuntime {
         id: params.runtime_id.clone(),
         sandbox: String::new(),
-        rootfs: params.rootfs.as_ref().map(|r| r.to_config(params.rootfs_readonly)),
+        rootfs: resolve_rootfs(params),
         make_seed: false,
         command: params.command.clone(),
         runtime_envs: params.runtime_envs.clone(),
