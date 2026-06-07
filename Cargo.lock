@@ -3317,6 +3317,7 @@ dependencies = [
  "async-trait",
  "axum 0.7.9",
  "clap",
+ "hyper-util",
  "libc",
  "nix",
  "parking_lot",
