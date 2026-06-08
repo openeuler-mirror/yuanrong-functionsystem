@@ -3,7 +3,7 @@
 
   [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
   [![Version](https://img.shields.io/badge/version-0.8.0.dev-orange)](https://gitcode.com/openeuler/yuanrong/releases)
-  [![Documentation](https://img.shields.io/badge/docs-latest-green)](https://docs.openyuanrong.org/zh-cn/latest/index.html)
+  [![Documentation](https://img.shields.io/badge/docs-latest-green)](https://docs.openyuanrong.org/en/latest/index.html)
 
   English | [简体中文](README.md)
 
@@ -33,14 +33,14 @@ openYuanrong consists of three code repositories:
 
 ## Getting Started
 
-Check the [openYuanrong documentation](https://docs.openyuanrong.org/zh-cn/latest/index.html) to learn how to develop distributed applications with openYuanrong.
+Check the [openYuanrong documentation](https://docs.openyuanrong.org/en/latest/index.html) to learn how to develop distributed applications with openYuanrong.
 
-- Installation：`pip install https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/release/0.7.0/linux/x86_64/openyuanrong-0.7.0-cp39-cp39-manylinux_2_34_x86_64.whl`，[More Details](https://docs.openyuanrong.org/zh-cn/latest/deploy/installation.html).
-- [Quick Start Guide](https://docs.openyuanrong.org/zh-cn/latest/getting_started.html)
+- Installation：`pip install https://openyuanrong.obs.cn-southwest-2.myhuaweicloud.com/release/0.7.0/linux/x86_64/openyuanrong-0.7.0-cp39-cp39-manylinux_2_34_x86_64.whl`，[More Details](https://docs.openyuanrong.org/en/latest/deploy/installation.html).
+- [Quick Start Guide](https://docs.openyuanrong.org/en/latest/getting_started.html)
 
 ## Contributing
 
-We welcome all forms of contributions to openYuanrong. Please refer to our [contributor guide](https://docs.openyuanrong.org/zh-cn/latest/contributor_guide/index.html).
+We welcome all forms of contributions to openYuanrong. Please refer to our [contributor guide](https://docs.openyuanrong.org/en/latest/contributor_guide/index.html).
 
 ## License
 
