@@ -13,7 +13,7 @@ use yr_proto::internal::{
     StartInstanceRequest, StartInstanceResponse, StopInstanceRequest, StopInstanceResponse,
 };
 
-pub fn start_instance_op(
+pub async fn start_instance_op(
     state: &Arc<RuntimeManagerState>,
     paths: &[String],
     req: StartInstanceRequest,
@@ -26,6 +26,12 @@ pub fn start_instance_op(
             "instance {} already running",
             req.instance_id
         )));
+    }
+
+    // CONTAINER backend: config_json carries a `"sandbox": true` block. Process-mode
+    // requests (empty/no marker) fall through to the unchanged RUNTIME path below.
+    if let Some(cfg) = crate::sandbox::parse_sandbox_config(&req.config_json) {
+        return start_container_instance(state, &req, &cfg).await;
     }
 
     let ts = std::time::SystemTime::now()
@@ -55,6 +61,98 @@ pub fn start_instance_op(
             Err(Status::internal(e.to_string()))
         }
     }
+}
+
+/// CONTAINER backend dispatch (C++ `EXECUTOR_TYPE::CONTAINER`). Decodes the sandbox
+/// config carried in `config_json`, picks the start path, and drives the
+/// `SandboxExecutor` (RuntimeLauncher gRPC over CONTAINER_EP).
+async fn start_container_instance(
+    state: &Arc<RuntimeManagerState>,
+    req: &StartInstanceRequest,
+    cfg: &crate::sandbox::SandboxConfig,
+) -> Result<StartInstanceResponse, Status> {
+    let Some(sandbox) = state.sandbox.as_ref() else {
+        return Err(Status::failed_precondition(
+            "CONTAINER backend unavailable (CONTAINER_EP not set)",
+        ));
+    };
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let runtime_id = format!("rt-{}-{}", req.instance_id, ts);
+    let trace_id = req
+        .env_vars
+        .get("YR_JOB_ID")
+        .cloned()
+        .unwrap_or_else(|| req.instance_id.clone());
+
+    let extracted =
+        crate::sandbox::extract_from_config(cfg, &runtime_id, &trace_id, req.resources.clone());
+    use crate::sandbox::StartPath;
+    let result = match extracted.path {
+        StartPath::Normal => sandbox.start_normal(extracted.params, extracted.forwards).await,
+        StartPath::Restore => {
+            sandbox
+                .start_by_snapshot(
+                    extracted.params,
+                    &extracted.checkpoint_id,
+                    &extracted.storage_url,
+                    extracted.forwards,
+                )
+                .await
+        }
+        StartPath::WarmUp => {
+            // WarmUp registers a pre-warm entry (no container, no port); report success.
+            let fr = yr_proto::runtime::v1::FunctionRuntime {
+                id: runtime_id.clone(),
+                command: extracted.params.command.clone(),
+                runtime_envs: extracted.params.runtime_envs.clone(),
+                cwd: extracted.params.cwd.clone(),
+                rootfs: extracted.params.rootfs.as_ref().map(|r| r.to_config(false)),
+                ..Default::default()
+            };
+            return match sandbox.start_warmup(fr).await {
+                Ok(()) => Ok(StartInstanceResponse {
+                    success: true,
+                    message: String::new(),
+                    runtime_id,
+                    runtime_port: 0,
+                }),
+                Err(e) => Err(Status::internal(e.to_string())),
+            };
+        }
+    };
+
+    match result {
+        Ok(started) => {
+            // First host port from "proto:host:container" mappings (0 if none).
+            let runtime_port = first_host_port(&started.port_mappings_json);
+            info!(
+                instance_id = %req.instance_id, runtime_id = %runtime_id,
+                sandbox_id = %started.sandbox_id, "CONTAINER StartInstance ok"
+            );
+            Ok(StartInstanceResponse {
+                success: true,
+                message: String::new(),
+                runtime_id,
+                runtime_port,
+            })
+        }
+        Err(e) => {
+            warn!(instance_id = %req.instance_id, error = %e, "CONTAINER StartInstance failed");
+            Err(Status::internal(e.to_string()))
+        }
+    }
+}
+
+/// Extract the first host port from a JSON array of "proto:host:container" mappings.
+fn first_host_port(port_mappings_json: &str) -> i32 {
+    serde_json::from_str::<Vec<String>>(port_mappings_json)
+        .ok()
+        .and_then(|v| v.into_iter().next())
+        .and_then(|m| m.split(':').nth(1).and_then(|p| p.parse::<i32>().ok()))
+        .unwrap_or(0)
 }
 
 pub fn stop_instance_op(

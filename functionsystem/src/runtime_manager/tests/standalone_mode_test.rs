@@ -219,8 +219,8 @@ fn stop_instance_request_matches_runtime_manager_contract() {
     assert!(req.force);
 }
 
-#[test]
-fn port_allocation_in_standalone_shaped_config_uses_shared_manager_range() {
+#[tokio::test]
+async fn port_allocation_in_standalone_shaped_config_uses_shared_manager_range() {
     let log = std::env::temp_dir().join(format!("yr_rm_standalone_ports_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&log);
     let cfg = Arc::new(Config::try_parse_from([
@@ -258,7 +258,7 @@ fn port_allocation_in_standalone_shaped_config_uses_shared_manager_range() {
         code_path: ".".into(),
         config_json: "{}".into(),
     };
-    let resp = start_instance_op(&state, &paths, start).expect("start");
+    let resp = start_instance_op(&state, &paths, start).await.expect("start");
     assert!(resp.success);
     assert!(resp.runtime_port >= 43000 && (resp.runtime_port as u32) < 43000 + 8);
 }

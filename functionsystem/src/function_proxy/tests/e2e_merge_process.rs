@@ -12,8 +12,8 @@ use yr_runtime_manager::runtime_ops::{start_instance_op, stop_instance_op};
 use yr_runtime_manager::state::RuntimeManagerState;
 use yr_runtime_manager::Config as RmConfig;
 
-#[test]
-fn merge_process_proxy_config_embeds_rm_network_shape() {
+#[tokio::test]
+async fn merge_process_proxy_config_embeds_rm_network_shape() {
     let log = std::env::temp_dir().join(format!("yr_merge_e2e_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&log);
     let c = Config::try_parse_from([
@@ -71,7 +71,7 @@ fn merge_process_proxy_config_embeds_rm_network_shape() {
         code_path: ".".into(),
         config_json: "{}".into(),
     };
-    let out = start_instance_op(&state, &paths, start).expect("start");
+    let out = start_instance_op(&state, &paths, start).await.expect("start");
     assert!(out.success);
     let stop = stop_instance_op(
         &state,

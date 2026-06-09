@@ -14,11 +14,15 @@ use yr_proto::runtime::v1::{
     GetRegisteredRequest, GetRegisteredResponse, NormalResponse, RegisterRequest, StartRequest,
     StartResponse, UnregisterRequest, VersionRequest, VersionResponse, WaitRequest, WaitResponse,
 };
+use yr_proto::internal::StartInstanceRequest;
 use yr_runtime_manager::port_manager::SharedPortManager;
+use yr_runtime_manager::runtime_ops::start_instance_op;
 use yr_runtime_manager::sandbox::{
     CheckpointOrchestrator, CkptFileManager, LauncherClient, PortForward, RuntimeStateManager,
     SandboxExecutor, SandboxStartParams,
 };
+use yr_runtime_manager::state::RuntimeManagerState;
+use yr_runtime_manager::Config;
 
 /// Test CkptFileManager: records add/release refs; can force a download failure.
 #[derive(Default)]
@@ -370,6 +374,53 @@ async fn start_by_snapshot_releases_ref_on_launcher_failure() {
     assert!(res.is_err());
     assert!(!exec.state().has_sandbox("r4")); // guard rollback
     assert_eq!(*released.lock(), vec!["r4".to_string()]); // ckpt ref released on failure
+
+    let _ = std::fs::remove_file(&sock);
+}
+
+// M5 hot-path: start_instance_op routes a CONTAINER config_json to the SandboxExecutor.
+#[tokio::test]
+async fn start_instance_op_routes_container_config_to_sandbox() {
+    let sock = format!("/tmp/yr_rm_container_{}.sock", std::process::id());
+    let _ = std::fs::remove_file(&sock);
+    let mock = spawn_mock(&sock).await;
+
+    // RuntimeManagerState::new builds state.sandbox from CONTAINER_EP.
+    std::env::set_var("CONTAINER_EP", &sock);
+    let log = std::env::temp_dir().join(format!("yr_rm_container_log_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&log);
+    let cfg = Arc::new(Config::embedded_in_agent(
+        "node-c".into(),
+        "http://127.0.0.1:9999".into(),
+        "/bin/true".into(),
+        40500,
+        20,
+        log,
+        "".into(),
+    ));
+    cfg.ensure_log_dir().unwrap();
+    let ports = Arc::new(SharedPortManager::new(40500, 20).unwrap());
+    let state = Arc::new(RuntimeManagerState::new(cfg, ports));
+    std::env::remove_var("CONTAINER_EP");
+    assert!(state.sandbox.is_some(), "CONTAINER_EP should build the sandbox backend");
+
+    let req = StartInstanceRequest {
+        instance_id: "cinst-1".into(),
+        function_name: "fn".into(),
+        tenant_id: "t".into(),
+        runtime_type: "container".into(),
+        env_vars: std::collections::HashMap::new(),
+        resources: std::collections::HashMap::new(),
+        code_path: String::new(),
+        config_json: r#"{"sandbox":true,"image":"aio-yr-runtime:latest","ports":["8080"]}"#.into(),
+    };
+    let resp = start_instance_op(&state, &[], req).await.expect("container start_instance");
+    assert!(resp.success, "container start should succeed");
+    assert!(resp.runtime_port > 0, "a host port should be allocated for the 8080 forward");
+    // the launcher received a start carrying the forwarded port mapping
+    let ports = mock.last_start_ports.lock().clone();
+    assert_eq!(ports.len(), 1);
+    assert!(ports[0].ends_with(":8080"));
 
     let _ = std::fs::remove_file(&sock);
 }

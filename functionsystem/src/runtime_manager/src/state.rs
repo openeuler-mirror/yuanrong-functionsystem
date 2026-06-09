@@ -35,6 +35,9 @@ pub struct RunningProcess {
 pub struct RuntimeManagerState {
     pub config: Arc<Config>,
     pub ports: Arc<SharedPortManager>,
+    /// CONTAINER backend (sandbox/containerd). `Some` only when `CONTAINER_EP` is
+    /// set, so process-mode deployments are unaffected.
+    pub sandbox: Option<Arc<crate::sandbox::SandboxExecutor>>,
     by_runtime: RwLock<HashMap<String, RunningProcess>>,
     by_pid: RwLock<HashMap<i32, String>>,
     oom_kill_marks: RwLock<HashSet<String>>,
@@ -42,9 +45,18 @@ pub struct RuntimeManagerState {
 
 impl RuntimeManagerState {
     pub fn new(config: Arc<Config>, ports: Arc<SharedPortManager>) -> Self {
+        // Build the CONTAINER backend only when CONTAINER_EP is configured.
+        let sandbox = crate::sandbox::LauncherClient::from_env().ok().map(|launcher| {
+            Arc::new(crate::sandbox::SandboxExecutor::new(
+                Arc::new(crate::sandbox::RuntimeStateManager::new()),
+                launcher,
+                ports.clone(),
+            ))
+        });
         Self {
             config,
             ports,
+            sandbox,
             by_runtime: RwLock::new(HashMap::new()),
             by_pid: RwLock::new(HashMap::new()),
             oom_kill_marks: RwLock::new(HashSet::new()),

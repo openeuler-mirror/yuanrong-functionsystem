@@ -30,7 +30,7 @@ impl RuntimeManagerService for RuntimeManagerGrpc {
         request: Request<StartInstanceRequest>,
     ) -> Result<Response<StartInstanceResponse>, Status> {
         let req = request.into_inner();
-        let resp = start_instance_op(&self.state, &self.paths, req)?;
+        let resp = start_instance_op(&self.state, &self.paths, req).await?;
         Ok(Response::new(resp))
     }
 

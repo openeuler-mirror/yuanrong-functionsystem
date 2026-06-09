@@ -469,7 +469,7 @@ impl InstanceController {
         if let Some(st) = self.embedded_rm.as_ref() {
             let paths = st.config.runtime_path_list();
             info!(%instance_id, %function_name, "StartInstance → embedded runtime manager");
-            let resp = start_instance_op(st, &paths, req)?;
+            let resp = start_instance_op(st, &paths, req).await?;
             if !resp.success {
                 return Err(tonic::Status::internal(resp.message));
             }

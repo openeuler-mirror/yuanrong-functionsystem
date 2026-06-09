@@ -4,10 +4,124 @@
 
 use std::collections::HashMap;
 
+use serde::Deserialize;
 use yr_proto::messages::RuntimeInstanceInfo;
 
 use super::executor_select::{select_start_path, StartPath};
-use super::request_builder::{parse_forward_ports, PortForward, SandboxStartParams};
+use super::request_builder::{
+    parse_forward_ports, PortForward, RootfsSpec, SandboxStartParams,
+};
+
+/// Container config carried in the internal `StartInstanceRequest.config_json`
+/// (the proxy serializes this when the instance is CONTAINER-mode). This is the
+/// runtime_manager-boundary contract — see docs/analysis/173.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SandboxConfig {
+    /// Marker: presence of this object in config_json => CONTAINER backend.
+    #[serde(default)]
+    pub sandbox: bool,
+    /// Custom rootfs/container image (image url, local path, or s3 — see rootfs_type).
+    #[serde(default)]
+    pub image: String,
+    /// "image" (default) | "local" | "s3".
+    #[serde(default)]
+    pub rootfs_type: String,
+    /// Port forwards as "PORT" or "PROTOCOL:PORT" (e.g. "8080", "tcp:9090").
+    #[serde(default)]
+    pub ports: Vec<String>,
+    #[serde(default)]
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub cwd: String,
+    #[serde(default)]
+    pub runtime_envs: HashMap<String, String>,
+    #[serde(default)]
+    pub user_envs: HashMap<String, String>,
+    /// network mode ("sandbox"|"host"|"none"); empty => sandbox.
+    #[serde(default)]
+    pub network: String,
+    #[serde(default)]
+    pub warmup: bool,
+    #[serde(default)]
+    pub checkpoint_id: String,
+    #[serde(default)]
+    pub storage: String,
+}
+
+/// Parse the container config from `config_json`. Returns None when the string is
+/// empty, not JSON, or lacks the `"sandbox": true` marker (i.e. a process-mode req).
+pub fn parse_sandbox_config(config_json: &str) -> Option<SandboxConfig> {
+    if config_json.trim().is_empty() {
+        return None;
+    }
+    let cfg: SandboxConfig = serde_json::from_str(config_json).ok()?;
+    cfg.sandbox.then_some(cfg)
+}
+
+fn parse_port_spec(spec: &str) -> Option<PortForward> {
+    let s = spec.trim();
+    let (proto, port) = match s.split_once(':') {
+        Some((p, n)) => (p.trim().to_ascii_lowercase(), n.trim()),
+        None => ("tcp".to_string(), s),
+    };
+    let port: u32 = port.parse().ok()?;
+    (port >= 1 && port <= 65535).then_some(PortForward {
+        container_port: port,
+        protocol: if proto.is_empty() { "tcp".into() } else { proto },
+    })
+}
+
+/// Build the start inputs from a CONTAINER `SandboxConfig` + the internal request's
+/// instance_id / resources / trace_id.
+pub fn extract_from_config(
+    cfg: &SandboxConfig,
+    runtime_id: &str,
+    trace_id: &str,
+    resources: HashMap<String, f64>,
+) -> ExtractedStart {
+    let path = if cfg.warmup {
+        StartPath::WarmUp
+    } else if !cfg.checkpoint_id.trim().is_empty() {
+        StartPath::Restore
+    } else {
+        StartPath::Normal
+    };
+    let rootfs = if cfg.image.trim().is_empty() {
+        None
+    } else {
+        Some(match cfg.rootfs_type.as_str() {
+            "local" => RootfsSpec::Local(cfg.image.clone()),
+            _ => RootfsSpec::Image(cfg.image.clone()),
+        })
+    };
+    let forwards = cfg.ports.iter().filter_map(|p| parse_port_spec(p)).collect();
+    let params = SandboxStartParams {
+        runtime_id: runtime_id.to_string(),
+        command: cfg.command.clone(),
+        cwd: cfg.cwd.clone(),
+        runtime_envs: cfg.runtime_envs.clone(),
+        user_envs: cfg.user_envs.clone(),
+        resources,
+        rootfs,
+        rootfs_readonly: false,
+        rootfs_config: None,
+        mounts: Vec::new(),
+        network: cfg.network.clone(),
+        port_mappings: Vec::new(),
+        ckpt_dir: String::new(),
+        trace_id: trace_id.to_string(),
+        stdout: String::new(),
+        stderr: String::new(),
+        extra_config: String::new(),
+    };
+    ExtractedStart {
+        params,
+        forwards,
+        path,
+        checkpoint_id: cfg.checkpoint_id.clone(),
+        storage_url: cfg.storage.clone(),
+    }
+}
 
 /// Everything needed to dispatch one CONTAINER StartInstance.
 pub struct ExtractedStart {
@@ -182,6 +296,52 @@ mod tests {
         let e = extract_start(&info);
         assert_eq!(e.path, StartPath::Restore);
         assert_eq!(e.checkpoint_id, "ckpt-9");
+        assert_eq!(e.storage_url, "s3://b/o");
+    }
+
+    #[test]
+    fn parse_sandbox_config_requires_marker() {
+        assert!(parse_sandbox_config("").is_none());
+        assert!(parse_sandbox_config("not json").is_none());
+        // valid json but no sandbox marker => process-mode (None)
+        assert!(parse_sandbox_config(r#"{"image":"x"}"#).is_none());
+        assert!(parse_sandbox_config(r#"{"sandbox":false,"image":"x"}"#).is_none());
+        // marker present => Some
+        assert!(parse_sandbox_config(r#"{"sandbox":true}"#).is_some());
+    }
+
+    #[test]
+    fn extract_from_config_maps_image_ports_path() {
+        let cfg = parse_sandbox_config(
+            r#"{"sandbox":true,"image":"aio-yr-runtime:latest","ports":["8080","tcp:9090"],
+                "command":["/runtime"],"cwd":"/w","network":"host"}"#,
+        )
+        .unwrap();
+        let mut res = HashMap::new();
+        res.insert("cpu".to_string(), 2000.0);
+        let e = extract_from_config(&cfg, "r1", "t1", res);
+        assert_eq!(e.path, StartPath::Normal);
+        assert_eq!(e.params.runtime_id, "r1");
+        assert_eq!(e.params.command, vec!["/runtime"]);
+        assert_eq!(e.params.network, "host");
+        assert!(matches!(&e.params.rootfs, Some(RootfsSpec::Image(u)) if u == "aio-yr-runtime:latest"));
+        assert_eq!(
+            e.forwards,
+            vec![
+                PortForward { container_port: 8080, protocol: "tcp".into() },
+                PortForward { container_port: 9090, protocol: "tcp".into() },
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_from_config_warmup_and_restore_paths() {
+        let warm = parse_sandbox_config(r#"{"sandbox":true,"warmup":true}"#).unwrap();
+        assert_eq!(extract_from_config(&warm, "r", "t", HashMap::new()).path, StartPath::WarmUp);
+        let restore = parse_sandbox_config(r#"{"sandbox":true,"checkpoint_id":"c1","storage":"s3://b/o"}"#).unwrap();
+        let e = extract_from_config(&restore, "r", "t", HashMap::new());
+        assert_eq!(e.path, StartPath::Restore);
+        assert_eq!(e.checkpoint_id, "c1");
         assert_eq!(e.storage_url, "s3://b/o");
     }
 

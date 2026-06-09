@@ -85,7 +85,7 @@ impl RuntimeManagerClient {
             config_json,
         };
         match &self.inner {
-            Inner::Local { state, paths } => start_instance_op(state, paths, req),
+            Inner::Local { state, paths } => start_instance_op(state, paths, req).await,
             Inner::Remote { addr } => {
                 if addr.trim().is_empty() {
                     return Err(tonic::Status::failed_precondition(

@@ -16,7 +16,9 @@ pub mod sandbox_executor;
 pub mod start_guard;
 
 pub use checkpoint_orchestrator::{CheckpointOrchestrator, CkptFileManager};
-pub use param_extract::{extract_start, ExtractedStart};
+pub use param_extract::{
+    extract_from_config, extract_start, parse_sandbox_config, ExtractedStart, SandboxConfig,
+};
 pub use executor_select::{
     select_executor, select_start_path, ExecutorKind, StartPath, EXECUTOR_TYPE_CONTAINER,
     EXECUTOR_TYPE_RUNTIME,
