@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use yr_proto::messages::RuntimeInstanceInfo;
 
 use super::executor_select::{select_start_path, StartPath};
@@ -15,7 +15,7 @@ use super::request_builder::{
 /// Container config carried in the internal `StartInstanceRequest.config_json`
 /// (the proxy serializes this when the instance is CONTAINER-mode). This is the
 /// runtime_manager-boundary contract — see docs/analysis/173.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct SandboxConfig {
     /// Marker: presence of this object in config_json => CONTAINER backend.
     #[serde(default)]
@@ -26,6 +26,16 @@ pub struct SandboxConfig {
     /// "image" (default) | "local" | "s3".
     #[serde(default)]
     pub rootfs_type: String,
+    /// Sandbox runtime from services.yaml `rootfs.runtime` (e.g. "runc"). Maps to
+    /// the C++ `FunctionRuntime.sandbox` field. Empty => runc default.
+    #[serde(default)]
+    pub sandbox_runtime: String,
+    /// rootfs readonly flag (services.yaml `rootfs.readonly`).
+    #[serde(default)]
+    pub readonly: bool,
+    /// rootfs mount point inside the container (services.yaml `rootfs.mountpoint`).
+    #[serde(default)]
+    pub mountpoint: String,
     /// Port forwards as "PORT" or "PROTOCOL:PORT" (e.g. "8080", "tcp:9090").
     #[serde(default)]
     pub ports: Vec<String>,
@@ -103,7 +113,7 @@ pub fn extract_from_config(
         user_envs: cfg.user_envs.clone(),
         resources,
         rootfs,
-        rootfs_readonly: false,
+        rootfs_readonly: cfg.readonly,
         rootfs_config: None,
         mounts: Vec::new(),
         network: cfg.network.clone(),

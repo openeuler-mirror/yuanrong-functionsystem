@@ -127,7 +127,10 @@ pub struct SandboxStartParams {
 pub fn build_start_request(params: &SandboxStartParams) -> StartRequest {
     let func_runtime = FunctionRuntime {
         id: params.runtime_id.clone(),
-        sandbox: String::new(),
+        // C++ `FunctionRuntime.sandbox` = services.yaml `rootfs.runtime`. Every
+        // observed function uses "runc" (the AIO default); kata/other would thread
+        // an explicit value here in a later pass.
+        sandbox: "runc".to_string(),
         rootfs: resolve_rootfs(params),
         make_seed: false,
         command: params.command.clone(),

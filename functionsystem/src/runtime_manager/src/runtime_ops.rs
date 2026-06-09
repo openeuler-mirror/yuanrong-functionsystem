@@ -87,8 +87,55 @@ async fn start_container_instance(
         .cloned()
         .unwrap_or_else(|| req.instance_id.clone());
 
-    let extracted =
+    let mut extracted =
         crate::sandbox::extract_from_config(cfg, &runtime_id, &trace_id, req.resources.clone());
+
+    // The container's userEnvs are the full instance env (C++ parity: the sandbox
+    // FunctionRuntime carries the instance's env_vars as userEnvs). config_json only
+    // carries container shape, so fold the request env in here without clobbering it.
+    for (k, v) in &req.env_vars {
+        extracted
+            .params
+            .user_envs
+            .entry(k.clone())
+            .or_insert_with(|| v.clone());
+    }
+
+    // Append the runtime CLI args after the services.yaml bootstrap entrypoint
+    // (C++ `python_strategy::BuildArgs`): --rt_server_address <posix-addr>
+    // --deploy_dir <dir> --runtime_id <id> --job_id <job> --log_level <level>.
+    if !extracted.params.command.is_empty() {
+        let addr = req
+            .env_vars
+            .get("YR_SERVER_ADDRESS")
+            .or_else(|| req.env_vars.get("POSIX_LISTEN_ADDR"))
+            .cloned()
+            .unwrap_or_default();
+        let deploy_dir = req
+            .env_vars
+            .get("YR_RUNTIME_DEPLOY_DIR")
+            .or_else(|| req.env_vars.get("DEPLOY_DIR"))
+            .cloned()
+            .unwrap_or_else(|| "/openyuanrong/".to_string());
+        let log_level = req
+            .env_vars
+            .get("RUNTIME_LOG_LEVEL")
+            .cloned()
+            .unwrap_or_else(|| "INFO".to_string());
+        extracted.params.command.extend([
+            "--rt_server_address".to_string(),
+            addr,
+            "--deploy_dir".to_string(),
+            deploy_dir,
+            "--runtime_id".to_string(),
+            runtime_id.clone(),
+            "--job_id".to_string(),
+            trace_id.clone(),
+            "--log_level".to_string(),
+            log_level,
+        ]);
+    }
+
     use crate::sandbox::StartPath;
     let result = match extracted.path {
         StartPath::Normal => sandbox.start_normal(extracted.params, extracted.forwards).await,

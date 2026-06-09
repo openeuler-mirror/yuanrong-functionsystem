@@ -15,6 +15,7 @@ use yr_common::types::{dr_mode_skips_persistence, need_persistence_state};
 use yr_proto::internal::function_agent_service_client::FunctionAgentServiceClient;
 use yr_proto::internal::{StartInstanceRequest, StopInstanceRequest};
 use yr_runtime_manager::runtime_ops::{start_instance_op, stop_instance_op};
+use yr_runtime_manager::sandbox::{parse_forward_ports, SandboxConfig};
 use yr_runtime_manager::state::RuntimeManagerState;
 
 #[derive(Debug, Clone, Default)]
@@ -22,6 +23,11 @@ struct ServiceFunctionMeta {
     runtime_type: String,
     code_path: String,
     env: HashMap<String, String>,
+    /// CONTAINER backend marker: when the function's services.yaml entry carries a
+    /// `rootfs` block, the C++ runtime_manager runs it as a runc container. We carry
+    /// the whole spec so `start_instance` can emit the internal sandbox config_json.
+    rootfs: yr_common::metadata::RootfsSpecMeta,
+    bootstrap: yr_common::metadata::BootstrapMetaData,
 }
 
 fn function_name_candidates(function_name: &str) -> Vec<String> {
@@ -72,6 +78,57 @@ fn delegate_envs_from_create_options(
     map.iter()
         .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
         .collect()
+}
+
+/// When the function's services.yaml entry carries a `rootfs` block, the C++
+/// runtime_manager runs it as a runc container (CONTAINER backend, selected
+/// per-function — see [[yr-rust-rewrite-parity-state]] ground-truth). Serialize the
+/// internal sandbox `config_json` the runtime_manager decodes. Returns None for
+/// process-mode functions (no rootfs), leaving the unchanged RUNTIME path.
+fn sandbox_config_json(
+    meta: &ServiceFunctionMeta,
+    create_options: &HashMap<String, String>,
+) -> Option<String> {
+    use yr_common::metadata::RootfsSrcType;
+    let rootfs = &meta.rootfs;
+    if rootfs.image_url.trim().is_empty() && rootfs.path.trim().is_empty() {
+        return None; // process-mode function
+    }
+    let (image, rootfs_type) = match rootfs.r#type {
+        RootfsSrcType::Local => (rootfs.path.clone(), "local".to_string()),
+        RootfsSrcType::S3 => (rootfs.image_url.clone(), "s3".to_string()),
+        _ => (rootfs.image_url.clone(), "image".to_string()),
+    };
+    // Per-request port forwards from CreateOpt["network"] (portForwardings JSON),
+    // re-encoded as "proto:port" for the runtime_manager's parse_port_spec.
+    let ports = create_options
+        .get("network")
+        .map(|j| parse_forward_ports(j))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|f| format!("{}:{}", f.protocol, f.container_port))
+        .collect::<Vec<_>>();
+    // Command = services.yaml bootstrap.entrypoint, whitespace-split (the launcher
+    // contract). runtime_manager appends --rt_server_address/--deploy_dir/
+    // --runtime_id/--job_id/--log_level (C++ python_strategy BuildArgs parity).
+    let command = meta
+        .bootstrap
+        .entrypoint
+        .split_whitespace()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let cfg = SandboxConfig {
+        sandbox: true,
+        image,
+        rootfs_type,
+        sandbox_runtime: rootfs.runtime.clone(),
+        readonly: rootfs.readonly,
+        mountpoint: rootfs.mountpoint.clone(),
+        ports,
+        command,
+        ..Default::default()
+    };
+    serde_json::to_string(&cfg).ok()
 }
 
 /// Owns in-memory instance metadata, optional etcd persistence, and instance start/stop dispatch.
@@ -170,6 +227,8 @@ impl InstanceController {
                     runtime_type: spec.runtime,
                     code_path: spec.code_path,
                     env: spec.environment,
+                    rootfs: spec.rootfs,
+                    bootstrap: spec.bootstrap,
                 });
             }
         }
@@ -455,6 +514,17 @@ impl InstanceController {
             }
         }
 
+        // CONTAINER backend: functions whose services.yaml entry has a `rootfs` block
+        // carry a sandbox config_json so the runtime_manager routes them to the
+        // SandboxExecutor. Process-mode functions get an empty config_json (unchanged).
+        let config_json = service_meta
+            .as_ref()
+            .and_then(|m| sandbox_config_json(m, create_options))
+            .unwrap_or_default();
+        if !config_json.is_empty() {
+            info!(%instance_id, %function_name, "StartInstance → CONTAINER backend (services.yaml rootfs)");
+        }
+
         let req = StartInstanceRequest {
             instance_id: instance_id.to_string(),
             function_name: function_name.to_string(),
@@ -463,7 +533,7 @@ impl InstanceController {
             env_vars,
             resources,
             code_path: resolved_code_path,
-            config_json: String::new(),
+            config_json,
         };
 
         if let Some(st) = self.embedded_rm.as_ref() {
@@ -663,5 +733,70 @@ impl InstanceController {
             info!(%loaded, node_id = %self.config.node_id, "rehydrated instances from MetaStore");
         }
         loaded
+    }
+}
+
+#[cfg(test)]
+mod sandbox_config_tests {
+    use super::*;
+    use yr_common::metadata::{BootstrapMetaData, RootfsSpecMeta, RootfsSrcType};
+    use yr_runtime_manager::sandbox::parse_sandbox_config;
+
+    fn container_meta() -> ServiceFunctionMeta {
+        ServiceFunctionMeta {
+            runtime_type: "python3.10".into(),
+            rootfs: RootfsSpecMeta {
+                runtime: "runc".into(),
+                r#type: RootfsSrcType::Image,
+                readonly: true,
+                image_url: "aio-yr-runtime:latest".into(),
+                mountpoint: "/mnt".into(),
+                ..Default::default()
+            },
+            bootstrap: BootstrapMetaData {
+                entrypoint: "set -e; python ${YR_RUNTIME_MAIN}".into(),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn process_mode_function_emits_no_sandbox_config() {
+        let meta = ServiceFunctionMeta {
+            runtime_type: "python3.10".into(),
+            ..Default::default()
+        };
+        assert!(sandbox_config_json(&meta, &HashMap::new()).is_none());
+    }
+
+    #[test]
+    fn rootfs_function_emits_container_config_with_port_forwards() {
+        let mut opts = HashMap::new();
+        // CreateOpt["network"] is the frontend's portForwardings JSON.
+        opts.insert(
+            "network".to_string(),
+            r#"{"portForwardings":[{"port":8080,"protocol":"tcp"}]}"#.to_string(),
+        );
+        let json = sandbox_config_json(&container_meta(), &opts).expect("container config");
+        // Round-trips through the runtime_manager's decoder (the "sandbox":true gate).
+        let cfg = parse_sandbox_config(&json).expect("decodes as sandbox config");
+        assert_eq!(cfg.image, "aio-yr-runtime:latest");
+        assert_eq!(cfg.rootfs_type, "image");
+        assert_eq!(cfg.sandbox_runtime, "runc");
+        assert!(cfg.readonly);
+        assert_eq!(cfg.mountpoint, "/mnt");
+        assert_eq!(cfg.ports, vec!["tcp:8080".to_string()]);
+        // entrypoint is whitespace-split; runtime args are appended later by the RM.
+        assert_eq!(cfg.command.first().map(String::as_str), Some("set"));
+        assert!(cfg.command.iter().any(|t| t == "${YR_RUNTIME_MAIN}"));
+    }
+
+    #[test]
+    fn rootfs_function_without_ports_still_routes_to_container() {
+        let json = sandbox_config_json(&container_meta(), &HashMap::new()).expect("container");
+        let cfg = parse_sandbox_config(&json).expect("decodes");
+        assert!(cfg.sandbox);
+        assert!(cfg.ports.is_empty());
     }
 }
