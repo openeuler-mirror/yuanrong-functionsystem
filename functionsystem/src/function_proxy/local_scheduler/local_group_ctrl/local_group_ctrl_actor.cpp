@@ -704,10 +704,6 @@ Status GenerateDeviceInfo(const std::shared_ptr<ResourceUnit> &view, const sched
         device.set_deviceid(deviceIds.values().at(realID));
         if (realID < static_cast<int>(deviceIps.size())) {
             device.set_deviceip(deviceIps[realID]);
-        } else {
-            YRLOG_ERROR("realID is {}, however deviceIps's length is {}, it should be larger than realID",
-                std::to_string(realID), std::to_string(deviceIps.size()));
-            return Status(ERR_INNER_SYSTEM_ERROR, "deviceIps is invalid");
         }
         deviceInfos.insert(device);
     }
