@@ -210,6 +210,9 @@ message StartInstanceResponse {
   string message = 2;
   string runtime_id = 3;
   int32 runtime_port = 4;
+  // CONTAINER backend: allocated port forwards as a JSON array of
+  // "protocol:hostPort:containerPort" (consumed by the proxy's traefik registry).
+  string port_mappings_json = 5;
 }
 
 message StopInstanceRequest {

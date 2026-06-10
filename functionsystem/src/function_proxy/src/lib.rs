@@ -22,6 +22,7 @@ pub mod resource_reporter;
 pub mod resource_view;
 pub mod schedule_reporter;
 pub mod state_machine;
+pub mod traefik_registry;
 
 pub use config::Config;
 

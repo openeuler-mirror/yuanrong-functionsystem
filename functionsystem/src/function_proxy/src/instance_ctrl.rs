@@ -145,6 +145,31 @@ pub struct InstanceController {
     agent_manager: Option<Arc<AgentManager>>,
     /// Keys present under function-meta etcd prefix (`tenant/func/version`).
     function_meta: Arc<FunctionMetaCache>,
+    /// Sandbox port-forward route registration (`--enable_traefik_registry`).
+    traefik: Option<Arc<crate::traefik_registry::TraefikRegistry>>,
+}
+
+/// Build the traefik registry when `--enable_traefik_registry=true` and etcd is
+/// available (C++ `LocalSchedDriver` injects it into the instance controller).
+fn build_traefik_registry(
+    config: &Config,
+    etcd: &Option<Arc<tokio::sync::Mutex<yr_metastore_client::MetaStoreClient>>>,
+) -> Option<Arc<crate::traefik_registry::TraefikRegistry>> {
+    if config.cpp_ignored.enable_traefik_registry.trim() != "true" {
+        return None;
+    }
+    let etcd = etcd.as_ref()?.clone();
+    let ig = &config.cpp_ignored;
+    let registry = crate::traefik_registry::TraefikRegistry::new(
+        etcd,
+        &ig.traefik_etcd_prefix,
+        &ig.traefik_http_entrypoint,
+        ig.traefik_enable_tls.trim() == "true",
+        &ig.traefik_servers_transport,
+        &config.host,
+    );
+    info!("traefik registry enabled for sandbox port forwards");
+    Some(Arc::new(registry))
 }
 
 impl InstanceController {
@@ -154,6 +179,7 @@ impl InstanceController {
         etcd: Option<Arc<tokio::sync::Mutex<yr_metastore_client::MetaStoreClient>>>,
         embedded_rm: Option<Arc<RuntimeManagerState>>,
     ) -> Arc<Self> {
+        let traefik = build_traefik_registry(&config, &etcd);
         Arc::new(Self {
             config,
             resource_view,
@@ -163,6 +189,7 @@ impl InstanceController {
             embedded_rm,
             agent_manager: None,
             function_meta: Arc::new(FunctionMetaCache::new()),
+            traefik,
         })
     }
 
@@ -173,6 +200,7 @@ impl InstanceController {
         embedded_rm: Option<Arc<RuntimeManagerState>>,
         agent_manager: Arc<AgentManager>,
     ) -> Arc<Self> {
+        let traefik = build_traefik_registry(&config, &etcd);
         Arc::new(Self {
             config,
             resource_view,
@@ -182,6 +210,7 @@ impl InstanceController {
             embedded_rm,
             agent_manager: Some(agent_manager),
             function_meta: Arc::new(FunctionMetaCache::new()),
+            traefik,
         })
     }
 
@@ -544,6 +573,7 @@ impl InstanceController {
                 return Err(tonic::Status::internal(resp.message));
             }
             info!(%instance_id, runtime_id = %resp.runtime_id, runtime_port = resp.runtime_port, "StartInstance success");
+            self.register_traefik(instance_id, &resp.port_mappings_json);
             return Ok((resp.runtime_id, resp.runtime_port));
         }
 
@@ -576,7 +606,33 @@ impl InstanceController {
             return Err(tonic::Status::internal(resp.message));
         }
         info!(%instance_id, runtime_id = %resp.runtime_id, runtime_port = resp.runtime_port, "StartInstance success");
+        self.register_traefik(instance_id, &resp.port_mappings_json);
         Ok((resp.runtime_id, resp.runtime_port))
+    }
+
+    /// Fire-and-forget traefik route registration for forwarded ports (C++ registers
+    /// asynchronously on the RUNNING transition; no-op without `--enable_traefik_registry`).
+    fn register_traefik(&self, instance_id: &str, port_mappings_json: &str) {
+        let Some(reg) = self.traefik.as_ref() else {
+            return;
+        };
+        if port_mappings_json.trim().is_empty() {
+            return;
+        }
+        let reg = reg.clone();
+        let iid = instance_id.to_string();
+        let json = port_mappings_json.to_string();
+        tokio::spawn(async move { reg.register_instance(&iid, &json).await });
+    }
+
+    /// Fire-and-forget traefik route removal (stop + abnormal-exit paths; idempotent).
+    fn unregister_traefik(&self, instance_id: &str) {
+        let Some(reg) = self.traefik.as_ref() else {
+            return;
+        };
+        let reg = reg.clone();
+        let iid = instance_id.to_string();
+        tokio::spawn(async move { reg.unregister_instance(&iid).await });
     }
 
     pub async fn stop_instance(
@@ -585,6 +641,7 @@ impl InstanceController {
         runtime_id: &str,
         force: bool,
     ) -> Result<(), tonic::Status> {
+        self.unregister_traefik(instance_id);
         if let Some(st) = self.embedded_rm.as_ref() {
             let resp = stop_instance_op(
                 st,
@@ -641,6 +698,8 @@ impl InstanceController {
         exit_ok: bool,
         message: &str,
     ) -> Option<InstanceMetadata> {
+        // Route cleanup also on abnormal exits (C++ unregisters on instance removal).
+        self.unregister_traefik(instance_id);
         let mut updated = None;
         if let Some(mut ent) = self.instances.get_mut(instance_id) {
             let next = if exit_ok {

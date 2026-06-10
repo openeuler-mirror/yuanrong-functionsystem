@@ -53,6 +53,7 @@ pub async fn start_instance_op(
                 message: String::new(),
                 runtime_id,
                 runtime_port: i32::from(port),
+                port_mappings_json: String::new(),
             })
         }
         Err(e) => {
@@ -165,6 +166,7 @@ async fn start_container_instance(
                     message: String::new(),
                     runtime_id,
                     runtime_port: 0,
+                    port_mappings_json: String::new(),
                 }),
                 Err(e) => Err(Status::internal(e.to_string())),
             };
@@ -184,6 +186,7 @@ async fn start_container_instance(
                 message: String::new(),
                 runtime_id,
                 runtime_port,
+                port_mappings_json: started.port_mappings_json.clone(),
             })
         }
         Err(e) => {
