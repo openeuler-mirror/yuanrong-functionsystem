@@ -177,6 +177,14 @@ pub struct CliArgs {
     )]
     pub cluster_id: String,
 
+    /// Tenant quota JSON (C++ `--quota_config_file`); empty disables enforcement.
+    #[arg(
+        long = "quota_config_file",
+        default_value = "",
+        visible_alias = "quota-config-file"
+    )]
+    pub quota_config_file: String,
+
     #[arg(
         long = "election_mode",
         default_value = "standalone",
@@ -436,6 +444,8 @@ pub struct MasterConfig {
     pub etcd_endpoints: Vec<String>,
     pub etcd_table_prefix: String,
     pub cluster_id: String,
+    /// Tenant quota JSON path; empty disables enforcement.
+    pub quota_config_file: String,
     pub election_mode: ElectionMode,
     pub max_locals_per_domain: u32,
     pub max_domain_sched_per_domain: u32,
@@ -499,6 +509,7 @@ impl MasterConfig {
             etcd_endpoints: args.etcd_endpoints,
             etcd_table_prefix: args.etcd_table_prefix,
             cluster_id: args.cluster_id,
+            quota_config_file: args.quota_config_file,
             election_mode: args.election_mode,
             max_locals_per_domain: args.max_locals_per_domain,
             max_domain_sched_per_domain: args.max_domain_sched_per_domain,

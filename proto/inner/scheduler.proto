@@ -29,6 +29,17 @@ service LocalSchedulerService {
   rpc PreemptInstances (PreemptInstancesRequest) returns (PreemptInstancesResponse) {}
   rpc GroupSchedule (GroupScheduleRequest) returns (GroupScheduleResponse) {}
   rpc KillGroup (KillGroupRequest) returns (KillGroupResponse) {}
+  // Tenant over-quota cooldown push (C++ TenantQuotaExceeded master→proxy flow).
+  rpc NotifyTenantCooldown (TenantCooldownRequest) returns (TenantCooldownResponse) {}
+}
+
+message TenantCooldownRequest {
+  string tenant_id = 1;
+  int64 cooldown_ms = 2;
+}
+
+message TenantCooldownResponse {
+  bool success = 1;
 }
 
 service FunctionAgentService {

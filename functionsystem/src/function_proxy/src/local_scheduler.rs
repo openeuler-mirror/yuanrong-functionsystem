@@ -12,7 +12,7 @@ use yr_proto::internal::local_scheduler_service_server::LocalSchedulerService;
 use yr_proto::internal::{
     EvictInstancesRequest, EvictInstancesResponse, GroupScheduleRequest, GroupScheduleResponse,
     KillGroupRequest, KillGroupResponse, PreemptInstancesRequest, PreemptInstancesResponse,
-    ScheduleRequest, ScheduleResponse,
+    ScheduleRequest, ScheduleResponse, TenantCooldownRequest, TenantCooldownResponse,
 };
 
 /// Optional token bucket for limiting instance creates per second.
@@ -320,6 +320,30 @@ impl LocalSchedulerService for LocalSchedulerGrpc {
             success: true,
             evicted_ids: evicted,
         }))
+    }
+
+    /// Tenant over-quota cooldown push from the master (C++ `TenantQuotaExceeded`
+    /// → InstanceCtrlActor blocked-tenant flow). `schedule_local` rejects creates
+    /// for the tenant until the cooldown expires.
+    async fn notify_tenant_cooldown(
+        &self,
+        request: tonic::Request<TenantCooldownRequest>,
+    ) -> Result<tonic::Response<TenantCooldownResponse>, tonic::Status> {
+        let r = request.into_inner();
+        if r.tenant_id.trim().is_empty() || r.cooldown_ms <= 0 {
+            return Err(tonic::Status::invalid_argument(
+                "tenant_id and a positive cooldown_ms are required",
+            ));
+        }
+        warn!(
+            tenant = %r.tenant_id,
+            cooldown_ms = r.cooldown_ms,
+            "tenant quota exceeded; applying schedule cooldown"
+        );
+        self.ctx
+            .instance_ctrl
+            .set_tenant_cooldown_ms(&r.tenant_id, r.cooldown_ms);
+        Ok(tonic::Response::new(TenantCooldownResponse { success: true }))
     }
 
     async fn preempt_instances(

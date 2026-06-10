@@ -23,6 +23,8 @@ pub struct InstanceManager {
     snapshots: Arc<SnapshotManager>,
     /// When set, leader upserts mirror instance JSON back to MetaStore (same key as watch path).
     metastore: Option<Arc<tokio::sync::Mutex<MetaStoreClient>>>,
+    /// Tenant quota enforcement (None when `--quota_config_file` is unset).
+    quota: Option<Arc<crate::quota_wiring::QuotaState>>,
 }
 
 impl InstanceManager {
@@ -40,7 +42,35 @@ impl InstanceManager {
             abnormal: DashMap::new(),
             snapshots,
             metastore,
+            quota: None,
         }
+    }
+
+    /// Enable tenant quota enforcement (driven from the instance watch).
+    pub fn with_quota(mut self, quota: Option<Arc<crate::quota_wiring::QuotaState>>) -> Self {
+        self.quota = quota;
+        self
+    }
+
+    /// Resolve a node's proxy gRPC endpoint from its busproxy registration
+    /// (`{aid, node, ak, grpc}` under `.../node/{node_id}`).
+    pub fn proxy_grpc_for_node(&self, node_id: &str) -> Option<String> {
+        if node_id.trim().is_empty() {
+            return None;
+        }
+        let suffix = format!("/node/{node_id}");
+        self.busproxy
+            .iter()
+            .find(|e| {
+                e.key().ends_with(&suffix)
+                    || e.value().get("node").and_then(|n| n.as_str()) == Some(node_id)
+            })
+            .and_then(|e| {
+                e.value()
+                    .get("grpc")
+                    .and_then(|g| g.as_str())
+                    .map(str::to_string)
+            })
     }
 
     pub fn generation(&self) -> u64 {
@@ -97,6 +127,9 @@ impl InstanceManager {
         let old = self.instances.get(&id).map(|e| e.value().clone());
         self.instances.insert(id, value.clone());
         maybe_record_snapshot_transition(&self.snapshots, old.as_ref(), &value);
+        if let Some(q) = &self.quota {
+            q.on_instance_upsert(old.as_ref(), &value, |node| self.proxy_grpc_for_node(node));
+        }
         if self.leader.load(Ordering::SeqCst) {
             if let Some(ms) = self.metastore.clone() {
                 let key = key.to_string();
@@ -114,7 +147,10 @@ impl InstanceManager {
 
     pub fn remove_instance_key(&self, key: &str) {
         let id = extract_instance_id(key);
-        self.instances.remove(&id);
+        let old = self.instances.remove(&id).map(|(_, v)| v);
+        if let Some(q) = &self.quota {
+            q.on_instance_removed(old.as_ref());
+        }
         if self.leader.load(Ordering::SeqCst) {
             if let Some(ms) = self.metastore.clone() {
                 let key = key.to_string();

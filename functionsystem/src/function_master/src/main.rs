@@ -128,11 +128,23 @@ async fn main() -> anyhow::Result<()> {
         ElectionMode::Standalone
     )));
     let snapshots = SnapshotManager::new();
-    let instances = Arc::new(InstanceManager::new(
-        is_leader.clone(),
-        snapshots.clone(),
-        metastore.clone(),
-    ));
+
+    // Tenant quota enforcement (C++ QuotaManagerActor): bad file is fatal (C++
+    // parity); empty path disables. Actions (evict + cooldown) run on a task.
+    let quota_config = yr_master::quota::QuotaConfig::load_from_file(&config.quota_config_file)?;
+    let quota_state = yr_master::quota_wiring::QuotaState::new(
+        yr_master::quota::QuotaEnforcer::new(quota_config),
+    )
+    .map(|(state, rx)| {
+        yr_master::quota_wiring::spawn_action_executor(rx);
+        tracing::info!("tenant quota enforcement enabled");
+        state
+    });
+
+    let instances = Arc::new(
+        InstanceManager::new(is_leader.clone(), snapshots.clone(), metastore.clone())
+            .with_quota(quota_state),
+    );
 
     let shutdown = CancellationToken::new();
 
