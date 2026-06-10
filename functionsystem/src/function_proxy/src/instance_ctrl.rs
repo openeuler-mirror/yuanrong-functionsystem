@@ -447,25 +447,14 @@ impl InstanceController {
             .unwrap_or_default();
         env_vars.extend(custom_envs_from_create_args(create_args));
         env_vars.extend(delegate_envs_from_create_options(create_options));
-        env_vars.insert(
-            "YR_SERVER_ADDRESS".into(),
-            format!("{}:{}", self.config.host, self.config.posix_port),
-        );
-        env_vars.insert(
-            "POSIX_LISTEN_ADDR".into(),
-            format!("{}:{}", self.config.host, self.config.posix_port),
-        );
-        env_vars.insert(
-            "PROXY_GRPC_SERVER_PORT".into(),
-            self.config.posix_port.to_string(),
-        );
+        let grpc_addr = format!("{}:{}", self.config.host, self.config.port);
+        env_vars.insert("YR_SERVER_ADDRESS".into(), grpc_addr.clone());
+        env_vars.insert("POSIX_LISTEN_ADDR".into(), grpc_addr.clone());
+        env_vars.insert("PROXY_GRPC_SERVER_PORT".into(), self.config.port.to_string());
         env_vars.insert("ENABLE_DS_CLIENT".into(), "true".into());
         env_vars.insert("POD_IP".into(), self.config.host.clone());
         env_vars.insert("HOST_IP".into(), self.config.host.clone());
-        env_vars.insert(
-            "DRIVER_SERVER_PORT".into(),
-            self.config.posix_port.to_string(),
-        );
+        env_vars.insert("DRIVER_SERVER_PORT".into(), self.config.port.to_string());
         if self.config.data_system_port > 0 {
             let ds_addr = format!(
                 "{}:{}",
