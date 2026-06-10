@@ -104,6 +104,18 @@ pub struct MasterCppIgnored {
     pub enable_trace: String,
     #[arg(long = "trace_config", default_value = "")]
     pub trace_config: String,
+    // Master-side traefik provider flags (deploy always passes them; the Rust
+    // master uses the proxy-side traefik registry instead).
+    #[arg(long = "enable_traefik_provider", default_value = "")]
+    pub enable_traefik_provider: String,
+    #[arg(long = "traefik_http_entry_point", default_value = "")]
+    pub traefik_http_entry_point: String,
+    #[arg(long = "traefik_enable_tls", default_value = "")]
+    pub traefik_enable_tls: String,
+    #[arg(long = "traefik_servers_transport", default_value = "")]
+    pub traefik_servers_transport: String,
+    #[arg(long = "traefik_forward_timeout_ms", default_value = "")]
+    pub traefik_forward_timeout_ms: String,
 }
 use yr_common::etcd_keys::{
     explorer, with_prefix, INSTANCE_PATH_PREFIX, READY_AGENT_CNT_KEY, SCHEDULER_TOPOLOGY,
