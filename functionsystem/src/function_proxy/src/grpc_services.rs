@@ -201,6 +201,8 @@ impl RuntimeRpc for ProxyGrpc {
 
         // Runtime connect-back: instance_id matches a known scheduled instance.
         // Driver streams have instance_id starting with "driver-" or unknown.
+        // CONTAINER runtimes carry their identity via the INSTANCE_ID env injected
+        // by the runtime manager, so they connect back like process runtimes.
         let is_runtime_connect_back = iid_from_meta.as_deref().is_some_and(|id| {
             !id.starts_with("driver-") && self.ctx.instance_ctrl.get(id).is_some()
         });

@@ -101,6 +101,21 @@ async fn start_container_instance(
             .entry(k.clone())
             .or_insert_with(|| v.clone());
     }
+    // Identity envs (same as the process-mode executor): the runtime uses these to
+    // connect back to the proxy under its real instance_id, which is what the
+    // proxy's connect-back detection and init-call flow key on.
+    extracted
+        .params
+        .user_envs
+        .insert("INSTANCE_ID".to_string(), req.instance_id.clone());
+    extracted
+        .params
+        .user_envs
+        .insert("RUNTIME_ID".to_string(), runtime_id.clone());
+    extracted
+        .params
+        .user_envs
+        .insert("YR_RUNTIME_ID".to_string(), runtime_id.clone());
 
     // Append the runtime CLI args after the services.yaml bootstrap entrypoint
     // (C++ `python_strategy::BuildArgs`): --rt_server_address <posix-addr>

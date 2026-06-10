@@ -453,6 +453,22 @@ impl BusProxyCoordinator {
                 created_at: std::time::Instant::now(),
             },
         );
+
+        // Record job → instance mapping (consumed by the per-job cleanup sweep,
+        // which reverse-scans instance_to_job; it was never populated before).
+        let job_keys = {
+            let mut keys = Vec::new();
+            if let Some(job_id) = crate::instance_ctrl::job_id_from_trace(&create.trace_id) {
+                keys.push(job_id.clone());
+            }
+            if !create.trace_id.is_empty() {
+                keys.push(create.trace_id.clone());
+            }
+            keys
+        };
+        for key in job_keys {
+            self.instance_to_job.insert(key, instance_id.to_string());
+        }
         self.active_instances.insert(
             instance_id.to_string(),
             ActiveInstanceInfo {

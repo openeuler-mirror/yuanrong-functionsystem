@@ -45,7 +45,7 @@ fn function_name_candidates(function_name: &str) -> Vec<String> {
     out
 }
 
-fn job_id_from_trace(trace_id: &str) -> Option<String> {
+pub(crate) fn job_id_from_trace(trace_id: &str) -> Option<String> {
     trace_id
         .split("-trace")
         .next()
