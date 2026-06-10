@@ -2231,6 +2231,7 @@ void InstanceManagerActor::ReportInstanceCountPeriodically()
 
     // 统计各个节点的 RUNNING 状态实例数量
     std::unordered_map<std::string, size_t> nodeInstanceCount;
+    std::unordered_set<std::string> currentReportedNodeIDs;
     size_t totalInstanceCount = 0;
 
     for (const auto &[nodeID, instanceMap] : member_->instances) {
@@ -2247,6 +2248,7 @@ void InstanceManagerActor::ReportInstanceCountPeriodically()
         }
         nodeInstanceCount[nodeID] = count;
         totalInstanceCount += count;
+        (void)currentReportedNodeIDs.emplace(nodeID);
 
         // 为每个节点上报 RUNNING 状态实例数量
         functionsystem::metrics::MeterTitle meterTitle{
@@ -2261,6 +2263,24 @@ void InstanceManagerActor::ReportInstanceCountPeriodically()
         functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(
             meterTitle, meterData, {});
     }
+
+    // 对于已从 member_->instances 中移除的节点，显式上报 0 以防止 Prometheus gauge 保留僵尸值
+    for (const auto &prevNodeID : member_->reportedNodeIDs) {
+        if (currentReportedNodeIDs.find(prevNodeID) == currentReportedNodeIDs.end()) {
+            functionsystem::metrics::MeterTitle meterTitle{
+                "yr_instance_count",
+                "Number of running instances on each node",
+                "count"
+            };
+            functionsystem::metrics::MeterData meterData{
+                0.0,
+                { { "node_id", prevNodeID } }
+            };
+            functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(
+                meterTitle, meterData, {});
+        }
+    }
+    member_->reportedNodeIDs = std::move(currentReportedNodeIDs);
 
     // 上报集群总 RUNNING 状态实例数量
     functionsystem::metrics::MeterTitle totalMeterTitle{
