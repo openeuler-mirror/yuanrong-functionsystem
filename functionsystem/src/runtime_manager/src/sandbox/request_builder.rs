@@ -111,7 +111,7 @@ pub struct SandboxStartParams {
     /// Explicit proto rootfs (from `container.rootfsConfig`); takes precedence over `rootfs`.
     pub rootfs_config: Option<RootfsConfig>,
     pub mounts: Vec<Mount>,
-    /// network mode string ("sandbox" default / "host" / "none").
+    /// network mode string ("host" / "bridge" / "none"); empty => launcher default (bridge).
     pub network: String,
     /// Allocated `proto:host:container` mappings (see [`encode_port_mapping`]).
     pub port_mappings: Vec<String>,
@@ -146,11 +146,11 @@ pub fn build_start_request(params: &SandboxStartParams) -> StartRequest {
         stdout: params.stdout.clone(),
         stderr: params.stderr.clone(),
         extra_config: params.extra_config.clone(),
-        network: if params.network.is_empty() {
-            "sandbox".to_string()
-        } else {
-            params.network.clone()
-        },
+        // Pass the network mode through as-is. C++ leaves StartRequest.network empty
+        // for the default function and the Go runtime-launcher applies its own
+        // default ("bridge"); forcing a non-existent "sandbox" network here makes
+        // dockerd reject the container ("network sandbox not found").
+        network: params.network.clone(),
         ckpt_dir: params.ckpt_dir.clone(),
         trace_id: params.trace_id.clone(),
         ports: params.port_mappings.clone(),
@@ -216,7 +216,10 @@ mod tests {
         assert_eq!(req.resources.get("CPU"), Some(&2000.0));
         assert_eq!(req.ports, vec!["tcp:40001:8080"]);
         assert_eq!(req.trace_id, "t1");
-        assert_eq!(req.network, "sandbox"); // defaulted
+        // Empty network passes through; the Go runtime-launcher applies its "bridge"
+        // default (C++ parity — see build_start_request).
+        assert_eq!(req.network, "");
+        assert_eq!(fr.sandbox, "runc");
     }
 
     #[test]
