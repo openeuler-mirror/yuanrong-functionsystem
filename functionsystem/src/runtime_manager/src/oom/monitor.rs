@@ -81,13 +81,16 @@ pub async fn supervision_loop(state: Arc<RuntimeManagerState>, agent: Arc<AgentC
             let threshold = limit_mb.saturating_add(slack_mb);
 
             if used_mb > threshold {
-                let mut g = counts.lock();
-                let n = g.entry(proc.instance_id.clone()).or_insert(0);
-                *n += 1;
-                if *n < need {
+                // Scope the lock so it is provably released before the await below.
+                let confirmed = {
+                    let mut g = counts.lock();
+                    let n = g.entry(proc.instance_id.clone()).or_insert(0);
+                    *n += 1;
+                    *n >= need
+                };
+                if !confirmed {
                     continue;
                 }
-                drop(g);
 
                 warn!(
                     instance_id = %proc.instance_id,
@@ -111,7 +114,7 @@ pub async fn supervision_loop(state: Arc<RuntimeManagerState>, agent: Arc<AgentC
                     runtime_id: rid.clone(),
                     force: true,
                 };
-                if let Err(e) = runtime_ops::stop_instance_op(&state, stop_req) {
+                if let Err(e) = runtime_ops::stop_instance_op(&state, stop_req).await {
                     warn!(error = %e, "OOM stop_instance failed");
                     counts.lock().remove(&proc.instance_id);
                     continue;

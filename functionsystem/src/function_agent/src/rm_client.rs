@@ -110,7 +110,7 @@ impl RuntimeManagerClient {
             force,
         };
         match &self.inner {
-            Inner::Local { state, .. } => stop_instance_op(state, req),
+            Inner::Local { state, .. } => stop_instance_op(state, req).await,
             Inner::Remote { addr } => {
                 if addr.trim().is_empty() {
                     return Err(tonic::Status::failed_precondition(

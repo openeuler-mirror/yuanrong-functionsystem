@@ -202,7 +202,74 @@ fn first_host_port(port_mappings_json: &str) -> i32 {
         .unwrap_or(0)
 }
 
-pub fn stop_instance_op(
+/// Graceful container shutdown when the request is not a force-kill
+/// (C++ `DEFAULT_GRACEFUL_SHUTDOWN`, sandbox_executor.cpp:48).
+const CONTAINER_GRACEFUL_SHUTDOWN_SECS: i64 = 5;
+
+/// Resolve a CONTAINER-backed runtime for a stop request: prefer the explicit
+/// runtime_id, falling back to the `rt-{instance_id}-{ts}` naming when only the
+/// instance_id is known.
+fn container_runtime_for(
+    sandbox: &crate::sandbox::SandboxExecutor,
+    req: &StopInstanceRequest,
+) -> Option<String> {
+    let st = sandbox.state();
+    let rid = req.runtime_id.trim();
+    if !rid.is_empty()
+        && (st.has_sandbox(rid) || st.is_warm_up(rid) || st.is_start_in_progress(rid))
+    {
+        return Some(rid.to_string());
+    }
+    let iid = req.instance_id.trim();
+    if iid.is_empty() {
+        return None;
+    }
+    let prefix = format!("rt-{iid}-");
+    st.all_sandboxes()
+        .keys()
+        .find(|k| k.starts_with(&prefix))
+        .cloned()
+}
+
+/// CONTAINER stop dispatch (C++ `SandboxExecutor::StopSandbox`): a start still in
+/// progress is marked pending-delete; otherwise delete the sandbox via the launcher.
+async fn stop_container_instance(
+    sandbox: &crate::sandbox::SandboxExecutor,
+    runtime_id: &str,
+    force: bool,
+) -> Result<StopInstanceResponse, Status> {
+    if sandbox.state().is_start_in_progress(runtime_id) {
+        info!(%runtime_id, "container start in progress; marking pending delete");
+        sandbox.state().mark_pending_delete(runtime_id);
+        return Ok(StopInstanceResponse {
+            success: true,
+            message: String::new(),
+        });
+    }
+    let timeout = if force {
+        0
+    } else {
+        CONTAINER_GRACEFUL_SHUTDOWN_SECS
+    };
+    match sandbox.stop(runtime_id, timeout, force).await {
+        Ok(()) => {
+            info!(%runtime_id, "CONTAINER StopInstance completed");
+            Ok(StopInstanceResponse {
+                success: true,
+                message: String::new(),
+            })
+        }
+        Err(e) => {
+            warn!(%runtime_id, error = %e, "CONTAINER StopInstance failed");
+            Ok(StopInstanceResponse {
+                success: false,
+                message: e.to_string(),
+            })
+        }
+    }
+}
+
+pub async fn stop_instance_op(
     state: &Arc<RuntimeManagerState>,
     req: StopInstanceRequest,
 ) -> Result<StopInstanceResponse, Status> {
@@ -210,6 +277,13 @@ pub fn stop_instance_op(
         .get_by_runtime(&req.runtime_id)
         .or_else(|| state.get_by_instance(&req.instance_id))
     else {
+        // Not a tracked process: CONTAINER instances live in the sandbox state
+        // manager instead (C++ routes StopInstance through the sandbox executor).
+        if let Some(sandbox) = state.sandbox.as_ref() {
+            if let Some(rid) = container_runtime_for(sandbox, &req) {
+                return stop_container_instance(sandbox, &rid, req.force).await;
+            }
+        }
         return Ok(StopInstanceResponse {
             success: false,
             message: "unknown runtime_id or instance_id".into(),
@@ -266,7 +340,7 @@ pub fn snapshot_runtime_op(
 }
 
 /// Best-effort stop of every tracked runtime (shutdown / exit cleanup).
-pub fn shutdown_all_runtimes(state: &Arc<RuntimeManagerState>, force: bool) {
+pub async fn shutdown_all_runtimes(state: &Arc<RuntimeManagerState>, force: bool) {
     let ids = state.list_runtime_ids();
     for runtime_id in ids {
         let Some(proc) = state.get_by_runtime(&runtime_id) else {
@@ -277,6 +351,19 @@ pub fn shutdown_all_runtimes(state: &Arc<RuntimeManagerState>, force: bool) {
         }
         state.remove_by_runtime(&runtime_id);
         state.ports.release(&runtime_id);
+    }
+    // CONTAINER backend sweep: delete any sandboxes still registered.
+    if let Some(sandbox) = state.sandbox.as_ref() {
+        let timeout = if force {
+            0
+        } else {
+            CONTAINER_GRACEFUL_SHUTDOWN_SECS
+        };
+        for runtime_id in sandbox.state().all_sandboxes().into_keys() {
+            if let Err(e) = sandbox.stop(&runtime_id, timeout, force).await {
+                tracing::warn!(error = %e, %runtime_id, "shutdown_all sandbox stop");
+            }
+        }
     }
 }
 

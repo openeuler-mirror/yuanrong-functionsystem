@@ -89,7 +89,8 @@ async fn main() -> anyhow::Result<()> {
         .add_service(grpc_service)
         .serve_with_shutdown(grpc_addr, async move {
             let _ = shutdown_grpc.recv().await;
-            yr_runtime_manager::runtime_ops::shutdown_all_runtimes(&state_grpc_shutdown, false);
+            yr_runtime_manager::runtime_ops::shutdown_all_runtimes(&state_grpc_shutdown, false)
+                .await;
         });
 
     tokio::try_join!(

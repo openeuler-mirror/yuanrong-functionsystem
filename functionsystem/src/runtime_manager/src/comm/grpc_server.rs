@@ -39,7 +39,7 @@ impl RuntimeManagerService for RuntimeManagerGrpc {
         request: Request<StopInstanceRequest>,
     ) -> Result<Response<StopInstanceResponse>, Status> {
         let req = request.into_inner();
-        let resp = stop_instance_op(&self.state, req)?;
+        let resp = stop_instance_op(&self.state, req).await?;
         Ok(Response::new(resp))
     }
 

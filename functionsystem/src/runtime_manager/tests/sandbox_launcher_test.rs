@@ -16,7 +16,12 @@ use yr_proto::runtime::v1::{
 };
 use yr_proto::internal::StartInstanceRequest;
 use yr_runtime_manager::port_manager::SharedPortManager;
-use yr_runtime_manager::runtime_ops::start_instance_op;
+use yr_runtime_manager::runtime_ops::{start_instance_op, stop_instance_op};
+
+/// Serializes the CONTAINER_EP set_var -> RuntimeManagerState::new -> remove_var
+/// window: parallel tests otherwise race the process-global env and connect each
+/// other's mock sockets.
+static ENV_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 use yr_runtime_manager::sandbox::{
     CheckpointOrchestrator, CkptFileManager, LauncherClient, PortForward, RuntimeStateManager,
     SandboxExecutor, SandboxStartParams,
@@ -386,6 +391,7 @@ async fn start_instance_op_routes_container_config_to_sandbox() {
     let mock = spawn_mock(&sock).await;
 
     // RuntimeManagerState::new builds state.sandbox from CONTAINER_EP.
+    let env_guard = ENV_LOCK.lock();
     std::env::set_var("CONTAINER_EP", &sock);
     let log = std::env::temp_dir().join(format!("yr_rm_container_log_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&log);
@@ -402,6 +408,7 @@ async fn start_instance_op_routes_container_config_to_sandbox() {
     let ports = Arc::new(SharedPortManager::new(40500, 20).unwrap());
     let state = Arc::new(RuntimeManagerState::new(cfg, ports));
     std::env::remove_var("CONTAINER_EP");
+    drop(env_guard);
     assert!(state.sandbox.is_some(), "CONTAINER_EP should build the sandbox backend");
 
     let req = StartInstanceRequest {
@@ -421,6 +428,124 @@ async fn start_instance_op_routes_container_config_to_sandbox() {
     let ports = mock.last_start_ports.lock().clone();
     assert_eq!(ports.len(), 1);
     assert!(ports[0].ends_with(":8080"));
+
+    let _ = std::fs::remove_file(&sock);
+}
+
+/// stop_instance_op must route CONTAINER instances (absent from the process map)
+/// to SandboxExecutor::stop: launcher Delete called, state + ports cleaned.
+#[tokio::test]
+async fn stop_instance_op_routes_container_stop_to_sandbox() {
+    let sock = format!("/tmp/yr_rm_cstop_{}.sock", std::process::id());
+    let _ = std::fs::remove_file(&sock);
+    let mock = spawn_mock(&sock).await;
+
+    let env_guard = ENV_LOCK.lock();
+    std::env::set_var("CONTAINER_EP", &sock);
+    let log = std::env::temp_dir().join(format!("yr_rm_cstop_log_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&log);
+    let cfg = Arc::new(Config::embedded_in_agent(
+        "node-cs".into(),
+        "http://127.0.0.1:9999".into(),
+        "/bin/true".into(),
+        40550,
+        20,
+        log,
+        "".into(),
+    ));
+    cfg.ensure_log_dir().unwrap();
+    let ports = Arc::new(SharedPortManager::new(40550, 20).unwrap());
+    let state = Arc::new(RuntimeManagerState::new(cfg, ports));
+    std::env::remove_var("CONTAINER_EP");
+    drop(env_guard);
+
+    let req = StartInstanceRequest {
+        instance_id: "cstop-1".into(),
+        function_name: "fn".into(),
+        tenant_id: "t".into(),
+        runtime_type: "container".into(),
+        env_vars: std::collections::HashMap::new(),
+        resources: std::collections::HashMap::new(),
+        code_path: String::new(),
+        config_json: r#"{"sandbox":true,"image":"img:v1","ports":["8080"]}"#.into(),
+    };
+    let resp = start_instance_op(&state, &[], req).await.expect("container start");
+    assert!(resp.success);
+    let rid = resp.runtime_id.clone();
+    let sandbox = state.sandbox.as_ref().expect("sandbox backend");
+    assert!(sandbox.state().has_sandbox(&rid), "registered after start");
+
+    // Stop by the exact runtime_id (the proxy passes it from metadata).
+    let stop = stop_instance_op(
+        &state,
+        yr_proto::internal::StopInstanceRequest {
+            instance_id: "cstop-1".into(),
+            runtime_id: rid.clone(),
+            force: false,
+        },
+    )
+    .await
+    .expect("container stop");
+    assert!(stop.success, "container stop should succeed: {}", stop.message);
+    assert!(!mock.last_deleted.lock().is_empty(), "launcher Delete called");
+    assert!(!sandbox.state().has_sandbox(&rid), "state cleaned after stop");
+
+    let _ = std::fs::remove_file(&sock);
+}
+
+/// Stop with a stale runtime_id still resolves the container via the
+/// rt-{instance_id}- naming fallback.
+#[tokio::test]
+async fn stop_instance_op_resolves_container_by_instance_id() {
+    let sock = format!("/tmp/yr_rm_cstop2_{}.sock", std::process::id());
+    let _ = std::fs::remove_file(&sock);
+    let _mock = spawn_mock(&sock).await;
+
+    let env_guard = ENV_LOCK.lock();
+    std::env::set_var("CONTAINER_EP", &sock);
+    let log = std::env::temp_dir().join(format!("yr_rm_cstop2_log_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&log);
+    let cfg = Arc::new(Config::embedded_in_agent(
+        "node-cs2".into(),
+        "http://127.0.0.1:9999".into(),
+        "/bin/true".into(),
+        40580,
+        20,
+        log,
+        "".into(),
+    ));
+    cfg.ensure_log_dir().unwrap();
+    let ports = Arc::new(SharedPortManager::new(40580, 20).unwrap());
+    let state = Arc::new(RuntimeManagerState::new(cfg, ports));
+    std::env::remove_var("CONTAINER_EP");
+    drop(env_guard);
+
+    let req = StartInstanceRequest {
+        instance_id: "cstop-2".into(),
+        function_name: "fn".into(),
+        tenant_id: "t".into(),
+        runtime_type: "container".into(),
+        env_vars: std::collections::HashMap::new(),
+        resources: std::collections::HashMap::new(),
+        code_path: String::new(),
+        config_json: r#"{"sandbox":true,"image":"img:v1"}"#.into(),
+    };
+    let resp = start_instance_op(&state, &[], req).await.expect("container start");
+    let rid = resp.runtime_id.clone();
+
+    let stop = stop_instance_op(
+        &state,
+        yr_proto::internal::StopInstanceRequest {
+            instance_id: "cstop-2".into(),
+            runtime_id: "stale".into(),
+            force: true,
+        },
+    )
+    .await
+    .expect("container stop by instance");
+    assert!(stop.success);
+    let sandbox = state.sandbox.as_ref().unwrap();
+    assert!(!sandbox.state().has_sandbox(&rid));
 
     let _ = std::fs::remove_file(&sock);
 }

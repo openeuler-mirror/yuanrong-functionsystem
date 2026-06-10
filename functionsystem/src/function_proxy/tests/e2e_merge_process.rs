@@ -81,6 +81,7 @@ async fn merge_process_proxy_config_embeds_rm_network_shape() {
             force: true,
         },
     )
+    .await
     .expect("stop");
     assert!(stop.success);
 }

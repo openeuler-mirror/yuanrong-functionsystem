@@ -593,7 +593,8 @@ impl InstanceController {
                     runtime_id: runtime_id.to_string(),
                     force,
                 },
-            )?;
+            )
+            .await?;
             if !resp.success {
                 return Err(tonic::Status::internal(resp.message));
             }

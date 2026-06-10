@@ -62,6 +62,7 @@ async fn start_then_stop_succeeds() {
             force: true,
         },
     )
+    .await
     .expect("stop");
     assert!(stop.success);
 }
@@ -82,6 +83,7 @@ async fn stop_accepts_instance_id_when_runtime_id_is_stale() {
             force: true,
         },
     )
+    .await
     .expect("stop by instance id");
 
     assert!(stop.success);
@@ -98,8 +100,8 @@ async fn duplicate_start_returns_already_exists() {
     assert_eq!(err.code(), tonic::Code::AlreadyExists);
 }
 
-#[test]
-fn stop_unknown_runtime_returns_failure_response() {
+#[tokio::test]
+async fn stop_unknown_runtime_returns_failure_response() {
     let st = test_state();
     let out = stop_instance_op(
         &st,
@@ -109,6 +111,7 @@ fn stop_unknown_runtime_returns_failure_response() {
             force: false,
         },
     )
+    .await
     .unwrap();
     assert!(!out.success);
     assert!(out.message.contains("unknown"));
