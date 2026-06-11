@@ -325,6 +325,8 @@ private:
         std::unordered_map<std::string, litebus::Timer> abnormalDeferTimer;
         std::unordered_map<std::string, InstanceManagerMap> instances;
         std::unordered_map<std::string, InstanceKeyInfoPair> instID2Instance;
+        // 追踪已上报 per-node gauge 的节点 ID，用于在节点移除时显式上报 0 防止僵尸指标
+        std::unordered_set<std::string> reportedNodeIDs;
         // key is instanceID
         std::unordered_map<std::string, std::shared_ptr<messages::DebugInstanceInfo>> debugInstInfoMap;
         bool isUpgrading{ false };
