@@ -88,6 +88,7 @@ namespace common {
     using HeteroDeviceInfo = common::HeteroDeviceInfo;
     using ServerInfo = common::ServerInfo;
     using FunctionGroupRunningInfo = common::FunctionGroupRunningInfo;
+    using RouteUpdateHint = common::RouteUpdateHint;
     using ResourceGroupSpec = common::ResourceGroupSpec;
     using SnapType = common::SnapType;
 }

@@ -25,6 +25,7 @@
 #include "common/proto/pb/posix/resource.pb.h"
 #include "common/state_machine/instance_context.h"
 #include "common/utils/struct_transfer.h"
+#include "function_proxy/busproxy/instance_proxy/instance_proxy.h"
 
 namespace functionsystem::busproxy {
 using IsReady = bool;

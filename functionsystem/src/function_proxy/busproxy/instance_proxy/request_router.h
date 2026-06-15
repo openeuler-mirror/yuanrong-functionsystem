@@ -19,6 +19,8 @@
 
 #include "actor/actor.hpp"
 #include "common/constants/actor_name.h"
+#include "common/proto/pb/posix_pb.h"
+#include "function_proxy/common/observer/data_plane_observer/data_plane_observer.h"
 
 namespace functionsystem::busproxy {
 class RequestRouter : public litebus::ActorBase {
@@ -30,8 +32,19 @@ public:
 
     void ForwardCall(const litebus::AID &from, std::string &&, std::string &&msg);
 
+    static void BindObserver(const std::shared_ptr<function_proxy::DataPlaneObserver> &observer)
+    {
+        observer_ = observer;
+    }
+
 protected:
     void Init() override;
+
+private:
+    void OnMissingActorRouteQuery(const litebus::AID &from, const internal::RouteCallRequest &routeReq,
+                                  const litebus::Future<function_proxy::DirectRouteQueryResult> &routeFuture);
+
+    inline static std::shared_ptr<function_proxy::DataPlaneObserver> observer_ { nullptr };
 };
 }  // namespace functionsystem::busproxy
 

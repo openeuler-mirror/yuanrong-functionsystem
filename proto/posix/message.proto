@@ -616,6 +616,7 @@ message ForwardKillResponse {
   int32 code = 2;
   string message = 3;
   string instanceID = 4;
+  common.RouteUpdateHint routeUpdateHint = 5;
 }
 
 message PullResourceRequest {

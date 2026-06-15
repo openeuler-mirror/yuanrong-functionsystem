@@ -16,6 +16,7 @@
 #ifndef FUNCTION_PROXY_BUSPROXY_INSTANCE_VIEW_H
 #define FUNCTION_PROXY_BUSPROXY_INSTANCE_VIEW_H
 
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -27,9 +28,11 @@
 #include "common/state_machine//instance_listener.h"
 #include "common/status/status.h"
 #include "common/types/instance_state.h"
-#include "function_proxy/busproxy/instance_proxy/instance_proxy.h"
 
 namespace functionsystem::busproxy {
+class InstanceProxy;
+struct InstanceRouterInfo;
+
 using EventHandler = std::function<void(const std::string &, const resources::InstanceInfo &)>;
 // InstanceView used for manager lifecycle of instance proxy.
 class InstanceView : public InstanceListener {

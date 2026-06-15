@@ -24,6 +24,7 @@
 #include "function_proxy/busproxy/registry/constants.h"
 #include "function_proxy/common/data_view/local_scheduler_view/local_scheduler_view.h"
 #include "function_proxy/common/data_view/proxy_view/proxy_view.h"
+#include "function_proxy/common/observer/data_plane_observer/data_plane_observer.h"
 #include "function_proxy/common/posix_client/data_plane_client/data_interface_client_manager_proxy.h"
 #include "instance_observer.h"
 #include "meta_storage_accessor/meta_storage_accessor.h"
@@ -38,6 +39,7 @@
 #include "tenant_observer.h"
 
 namespace functionsystem::function_proxy {
+class InternalIAM;
 
 // key: instance id
 using InstanceInfoMap = std::unordered_map<std::string, resource_view::InstanceInfo>;
@@ -284,6 +286,8 @@ public:
     void OnTenantInstanceEvent(const std::string &instanceID, const resource_view::InstanceInfo &instanceInfo);
 
     litebus::Future<std::shared_ptr<resources::RouteInfo>> QueryInstanceRoute(const std::string &instanceID);
+
+    litebus::Future<DirectRouteQueryResult> QueryInstanceRouteForDirectRouting(const std::string &instanceID);
 
     litebus::Future<resource_view::InstanceInfo> GetInstanceRouteInfo(const std::string &instanceID);
 

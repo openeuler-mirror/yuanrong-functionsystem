@@ -38,6 +38,16 @@ litebus::Future<std::shared_ptr<resources::RouteInfo>> DataPlaneObserver::QueryI
     return litebus::Async(observerActor_->GetAID(), &ObserverActor::QueryInstanceRoute, instanceID);
 }
 
+litebus::Future<DirectRouteQueryResult> DataPlaneObserver::QueryInstanceRouteForDirectRouting(
+    const std::string &instanceID)
+{
+    if (observerActor_ == nullptr) {
+        return DirectRouteQueryResult{ .status = Status(StatusCode::POINTER_IS_NULL, "observerActor_ is nullptr"),
+                                       .routeInfo = nullptr, .negativeCacheable = false };
+    }
+    return litebus::Async(observerActor_->GetAID(), &ObserverActor::QueryInstanceRouteForDirectRouting, instanceID);
+}
+
 void DataPlaneObserver::NotifyMigratingRequest(const std::string &instanceID)
 {
     RETURN_IF_NULL(observerActor_);

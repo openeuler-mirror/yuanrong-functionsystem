@@ -221,6 +221,17 @@ litebus::Future<resource_view::InstanceInfo> ControlPlaneObserver::GetOrWatchIns
     return litebus::Async(observerActor_->GetAID(), &ObserverActor::GetOrWatchInstance, instanceID);
 }
 
+litebus::Future<DirectRouteQueryResult> ControlPlaneObserver::QueryInstanceRouteForDirectRouting(
+    const std::string &instanceID) const
+{
+    if (observerActor_ == nullptr) {
+        return DirectRouteQueryResult{ .status = Status(StatusCode::POINTER_IS_NULL, "observerActor_ is nullptr"),
+                                       .routeInfo = nullptr,
+                                       .negativeCacheable = false };
+    }
+    return litebus::Async(observerActor_->GetAID(), &ObserverActor::QueryInstanceRouteForDirectRouting, instanceID);
+}
+
 void ControlPlaneObserver::CancelWatchInstance(const std::string &instanceID)
 {
     ASSERT_IF_NULL(observerActor_);

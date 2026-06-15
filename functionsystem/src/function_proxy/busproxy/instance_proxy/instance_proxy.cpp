@@ -19,13 +19,23 @@
 #include "common/metrics/metrics_adapter.h"
 #include "common/status/status.h"
 #include "busproxy/invocation_handler/invocation_handler.h"
+#include "function_proxy/busproxy/instance_proxy/request_router.h"
 #include "function_proxy/config/direct_routing_config.h"
 
 namespace functionsystem::busproxy {
 
 const std::string INSTANCE_EXIT_MESSAGE = "instance has been killed or exited.";
 const std::string YR_ROUTE_KEY = "YR_ROUTE";
+const std::string YR_ROUTE_RETRY_ATTEMPT_KEY = "YR_ROUTE_RETRY_ATTEMPT";
 const uint32_t MAX_CALL_RESULT_RETRY_TIMES = 3;
+
+void InstanceProxy::BindObserver(const std::shared_ptr<function_proxy::DataPlaneObserver> &observer)
+{
+    observer_ = observer;
+    RequestDispatcher::BindObserver(observer);
+    RequestRouter::BindObserver(observer);
+}
+
 void InstanceProxy::Init()
 {
     ActorBase::Init();
@@ -64,7 +74,11 @@ litebus::Future<SharedStreamMsg> InstanceProxy::Call(const CallerInfo &callerInf
     if (const auto it = callReq.createoptions().find(YR_ROUTE_KEY);
         it != callReq.createoptions().end() && !it->second.empty()) {
         if (function_proxy::DirectRoutingConfig::IsEnabled()) {
-            routeCache_.Put(dstInstanceID, it->second);
+            routeCache_.Put(dstInstanceID, DirectRouteCacheEntry{ .kind = DirectRouteCacheEntry::Kind::RUNNING_ROUTE,
+                                                                   .routeAddress = it->second,
+                                                                   .proxyID = "",
+                                                                   .errorCode = common::ERR_INSTANCE_NOT_FOUND,
+                                                                   .reason = "" });
             auto remoteAID = litebus::AID(dstInstanceID, it->second);
             return ForwardWithRouteAndFallback(remoteAID, dstInstanceID, callerInfo, request);
         }
@@ -91,10 +105,27 @@ litebus::Future<SharedStreamMsg> InstanceProxy::Call(const CallerInfo &callerInf
 
     if (function_proxy::DirectRoutingConfig::IsEnabled()) {
         auto cachedRoute = routeCache_.Get(dstInstanceID);
-        if (cachedRoute.has_value() && !cachedRoute->empty()) {
-            auto remoteAID = litebus::AID(dstInstanceID, *cachedRoute);
-            return ForwardWithRouteAndFallback(remoteAID, dstInstanceID, callerInfo, request);
+        if (cachedRoute.has_value()) {
+            if (cachedRoute->kind == DirectRouteCacheEntry::Kind::NEGATIVE) {
+                return CreateCallResponse(cachedRoute->errorCode, cachedRoute->reason, request->messageid());
+            }
+            if (!cachedRoute->routeAddress.empty()) {
+                auto remoteAID = litebus::AID(dstInstanceID, cachedRoute->routeAddress);
+                return ForwardWithRouteAndFallback(remoteAID, dstInstanceID, callerInfo, request);
+            }
         }
+
+        auto promise = std::make_shared<litebus::Promise<SharedStreamMsg>>();
+        if (observer_ == nullptr) {
+            promise->SetValue(CreateCallResponse(common::ErrorCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS,
+                                                 "connection with runtime may be interrupted, please retry.",
+                                                 request->messageid()));
+            return promise->GetFuture();
+        }
+        observer_->QueryInstanceRouteForDirectRouting(dstInstanceID)
+            .OnComplete(litebus::Defer(GetAID(), &InstanceProxy::OnQueryRouteResult, dstInstanceID,
+                                       request->messageid(), callerInfo, request, promise, std::placeholders::_1));
+        return promise->GetFuture();
     }
 
     // If the corresponding instance is not found in the dispatcher,
@@ -149,7 +180,7 @@ void InstanceProxy::OnForwardResult(const std::string &dstInstanceID, const std:
                                              originalMessageID));
         return;
     }
-    observer_->QueryInstanceRoute(dstInstanceID).OnComplete(
+    observer_->QueryInstanceRouteForDirectRouting(dstInstanceID).OnComplete(
         litebus::Defer(GetAID(), &InstanceProxy::OnQueryRouteResult, dstInstanceID, originalMessageID,
                        callerInfo, request, promise, std::placeholders::_1));
 }
@@ -157,18 +188,56 @@ void InstanceProxy::OnForwardResult(const std::string &dstInstanceID, const std:
 void InstanceProxy::OnQueryRouteResult(const std::string &dstInstanceID, const std::string &originalMessageID,
                                        const CallerInfo &callerInfo, const SharedStreamMsg &request,
                                        std::shared_ptr<litebus::Promise<SharedStreamMsg>> promise,
-                                       const litebus::Future<std::shared_ptr<resources::RouteInfo>> &routeFuture)
+                                       const litebus::Future<function_proxy::DirectRouteQueryResult> &routeFuture)
 {
-    if (routeFuture.IsError() || routeFuture.Get() == nullptr || routeFuture.Get()->proxygrpcaddress().empty()) {
-        YRLOG_ERROR("{}|QueryInstanceRoute failed for instance {}", request->callreq().traceid(), dstInstanceID);
+    if (routeFuture.IsError()) {
+        YRLOG_ERROR("{}|direct route query future failed for instance {}", request->callreq().traceid(), dstInstanceID);
         promise->SetValue(CreateCallResponse(common::ErrorCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS,
                                              "connection with runtime may be interrupted, please retry.",
                                              originalMessageID));
         return;
     }
 
-    const auto &route = routeFuture.Get()->proxygrpcaddress();
-    routeCache_.Put(dstInstanceID, route);
+    const auto routeResult = routeFuture.Get();
+    if (routeResult.status.IsError()) {
+        const auto errorCode = Status::GetPosixErrorCode(routeResult.status.StatusCode());
+        const auto reason = routeResult.status.GetMessage().empty() ? routeResult.status.ToString()
+                                                                    : routeResult.status.GetMessage();
+        if (routeResult.negativeCacheable) {
+            routeCache_.Put(dstInstanceID, DirectRouteCacheEntry{ .kind = DirectRouteCacheEntry::Kind::NEGATIVE,
+                                                                  .routeAddress = "",
+                                                                  .proxyID = "",
+                                                                  .errorCode = errorCode,
+                                                                  .reason = reason });
+        }
+        promise->SetValue(CreateCallResponse(errorCode, reason, originalMessageID));
+        return;
+    }
+
+    if (routeResult.routeInfo == nullptr || routeResult.routeInfo->proxygrpcaddress().empty()) {
+        YRLOG_ERROR("{}|direct route query returned empty route for instance {}", request->callreq().traceid(),
+                    dstInstanceID);
+        promise->SetValue(CreateCallResponse(common::ErrorCode::ERR_INNER_COMMUNICATION,
+                                             "instance route is empty for direct routing.", originalMessageID));
+        return;
+    }
+
+    const auto &route = routeResult.routeInfo->proxygrpcaddress();
+    routeCache_.Put(dstInstanceID, DirectRouteCacheEntry{ .kind = DirectRouteCacheEntry::Kind::RUNNING_ROUTE,
+                                                          .routeAddress = route,
+                                                          .proxyID = routeResult.routeInfo->functionproxyid(),
+                                                          .errorCode = common::ERR_INSTANCE_NOT_FOUND,
+                                                          .reason = "" });
+    const auto &createOptions = request->callreq().createoptions();
+    const bool retryConsumed = createOptions.find(YR_ROUTE_RETRY_ATTEMPT_KEY) != createOptions.end();
+    if (retryConsumed) {
+        promise->SetValue(CreateCallResponseWithRouteUpdate(common::ErrorCode::ERR_INNER_COMMUNICATION,
+                                                            "stale route updated", originalMessageID, dstInstanceID,
+                                                            route, routeResult.routeInfo->functionproxyid(),
+                                                            routeResult.routeInfo->version()));
+        return;
+    }
+
     auto remoteAID = litebus::AID(dstInstanceID, route);
     (void)SendForwardCall(remoteAID, callerInfo.tenantID, request)
         .OnComplete(litebus::Defer(GetAID(), &InstanceProxy::OnQueryRouteForwardComplete, originalMessageID,
@@ -523,7 +592,11 @@ void InstanceProxy::NotifyChanged(const std::string &instanceID, const std::shar
 {
     ASSERT_IF_NULL(info);
     if (function_proxy::DirectRoutingConfig::IsEnabled() && !info->proxyGrpcAddress.empty()) {
-        routeCache_.Put(instanceID, info->proxyGrpcAddress);
+        routeCache_.Put(instanceID, DirectRouteCacheEntry{ .kind = DirectRouteCacheEntry::Kind::RUNNING_ROUTE,
+                                                           .routeAddress = info->proxyGrpcAddress,
+                                                           .proxyID = info->proxyID,
+                                                           .errorCode = common::ERR_INSTANCE_NOT_FOUND,
+                                                           .reason = "" });
     }
     if (instanceID == instanceID_) {
         ASSERT_FS(selfDispatcher_);

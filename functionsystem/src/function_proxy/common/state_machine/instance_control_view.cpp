@@ -145,6 +145,27 @@ bool InstanceControlView::ReleaseOwner(const std::string &instanceID)
     return true;
 }
 
+bool InstanceControlView::ReleaseSchedulingOwnerIfRequestMatches(const std::string &instanceID,
+                                                                 const std::string &requestID)
+{
+    std::lock_guard<std::mutex> guard(lock_);
+    auto iter = machines_.find(instanceID);
+    if (iter == machines_.end()) {
+        YRLOG_WARN("could not get instance({}) context, unable to release owner", instanceID);
+        return false;
+    }
+
+    const auto currentRequestID = iter->second->GetRequestID();
+    if (iter->second->GetInstanceState() != InstanceState::SCHEDULING || currentRequestID != requestID) {
+        YRLOG_WARN("skip release scheduling owner for instance({}), old request({}), current request({})", instanceID,
+                   requestID, currentRequestID);
+        return false;
+    }
+
+    iter->second->ReleaseOwner();
+    return true;
+}
+
 void InstanceControlView::Delete(const std::string &instanceID, int64_t modRevision)
 {
     std::lock_guard<std::mutex> guard(lock_);
@@ -393,6 +414,29 @@ void InstanceControlView::DeleteRequestFuture(const std::string &requestID)
         (void)createRequestRuntimeFuture_.erase(requestID);
     }
 }
+
+void InstanceControlView::RollbackDirectRoutingScheduleFailure(const std::string &instanceID,
+                                                               const std::string &requestID)
+{
+    std::lock_guard<std::mutex> guard(lock_);
+    auto iter = machines_.find(instanceID);
+    if (iter == machines_.end()) {
+        return;
+    }
+
+    const auto currentRequestID = iter->second->GetRequestID();
+    if (currentRequestID != requestID) {
+        YRLOG_WARN("skip direct routing schedule rollback for instance({}), old request({}), current request({})",
+                   instanceID, requestID, currentRequestID);
+        return;
+    }
+
+    (void)requestInstances_.erase(requestID);
+    (void)createRequestFuture_.erase(requestID);
+    (void)createRequestRuntimeFuture_.erase(requestID);
+    (void)machines_.erase(iter);
+}
+
 void InstanceControlView::SetLocalAbnormal()
 {
     std::lock_guard<std::mutex> guard(lock_);

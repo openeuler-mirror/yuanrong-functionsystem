@@ -14,33 +14,91 @@
  * limitations under the License.
  */
 
-/**
- * DirectRouting Mode State Machine Leak Prevention Tests
- *
- * This test file verifies that state machines are properly cleaned up in DirectRouting mode
- * for the following scenarios:
- * 1. Schedule failed - immediate cleanup
- * 2. Schedule succeeded but ownership transferred to remote node - delayed GC cleanup
- * 3. Duplicate schedule with version conflict - immediate cleanup and return actual node location
- */
-
-#include "function_proxy/config/direct_routing_config.h"
-#include "function_proxy/local_scheduler/instance_control/instance_ctrl_actor.h"
+#include "function_proxy/common/state_machine/instance_control_view.h"
 
 #include <gtest/gtest.h>
 
+#include "function_proxy/config/direct_routing_config.h"
+
 namespace functionsystem::test {
+namespace {
 
-// Placeholder test for DirectRouting state machine cleanup
-// The full implementation requires complex mock setup and integration testing
-TEST(DirectRoutingStateMachineTest, Placeholder_VerifyDirectRoutingConfig)
+std::shared_ptr<messages::ScheduleRequest> MakeScheduleRequest(const std::string &requestID,
+                                                               const std::string &instanceID)
 {
-    // Basic test to verify DirectRoutingConfig functionality
-    function_proxy::DirectRoutingConfig::SetEnabled(true);
-    EXPECT_TRUE(function_proxy::DirectRoutingConfig::IsEnabled());
-
-    function_proxy::DirectRoutingConfig::SetEnabled(false);
-    EXPECT_FALSE(function_proxy::DirectRoutingConfig::IsEnabled());
+    auto req = std::make_shared<messages::ScheduleRequest>();
+    req->set_requestid(requestID);
+    req->set_traceid("trace-" + requestID);
+    req->mutable_instance()->set_instanceid(instanceID);
+    req->mutable_instance()->set_functionproxyid("node-a");
+    req->mutable_instance()->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::SCHEDULING));
+    return req;
 }
 
-} // namespace functionsystem::test
+class DirectRoutingStateMachineTest : public ::testing::Test {
+protected:
+    void SetUp() override
+    {
+        function_proxy::DirectRoutingConfig::SetEnabled(true);
+    }
+
+    void TearDown() override
+    {
+        function_proxy::DirectRoutingConfig::SetEnabled(false);
+    }
+};
+
+}  // namespace
+
+TEST_F(DirectRoutingStateMachineTest, ScheduleFailureRollbackDeletesLocalMachine)
+{
+    InstanceControlView view("node-a", true);
+    auto req = MakeScheduleRequest("req-1", "inst-1");
+
+    auto gen = view.TryGenerateNewInstance(req);
+    ASSERT_FALSE(gen.instanceID.empty());
+    ASSERT_NE(nullptr, view.GetInstance("inst-1"));
+
+    view.RollbackDirectRoutingScheduleFailure("inst-1", "req-1");
+
+    EXPECT_EQ(nullptr, view.GetInstance("inst-1"));
+    EXPECT_TRUE(view.TryGetInstanceIDByReq("req-1").empty());
+}
+
+TEST_F(DirectRoutingStateMachineTest, RollbackSkipsNewerRequest)
+{
+    InstanceControlView view("node-a", true);
+    auto req = MakeScheduleRequest("req-new", "inst-1");
+
+    auto gen = view.TryGenerateNewInstance(req);
+    ASSERT_FALSE(gen.instanceID.empty());
+    ASSERT_NE(nullptr, view.GetInstance("inst-1"));
+
+    view.RollbackDirectRoutingScheduleFailure("inst-1", "req-old");
+
+    EXPECT_NE(nullptr, view.GetInstance("inst-1"));
+    EXPECT_EQ("inst-1", view.TryGetInstanceIDByReq("req-new"));
+}
+
+TEST_F(DirectRoutingStateMachineTest, StaleFailureDoesNotReleaseOrDeleteNewerRequest)
+{
+    InstanceControlView view("node-a", true);
+    auto req = MakeScheduleRequest("req-new", "inst-1");
+
+    auto gen = view.TryGenerateNewInstance(req);
+    ASSERT_FALSE(gen.instanceID.empty());
+    auto stateMachine = view.GetInstance("inst-1");
+    ASSERT_NE(nullptr, stateMachine);
+    ASSERT_EQ("req-new", stateMachine->GetRequestID());
+    ASSERT_EQ("node-a", stateMachine->GetOwner());
+
+    EXPECT_FALSE(view.ReleaseSchedulingOwnerIfRequestMatches("inst-1", "req-old"));
+    view.RollbackDirectRoutingScheduleFailure("inst-1", "req-old");
+
+    stateMachine = view.GetInstance("inst-1");
+    ASSERT_NE(nullptr, stateMachine);
+    EXPECT_EQ("req-new", stateMachine->GetRequestID());
+    EXPECT_EQ("node-a", stateMachine->GetOwner());
+}
+
+}  // namespace functionsystem::test

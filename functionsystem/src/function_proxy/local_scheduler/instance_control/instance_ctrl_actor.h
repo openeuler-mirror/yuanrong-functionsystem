@@ -757,6 +757,9 @@ private:
     litebus::Future<std::shared_ptr<KillContext>> ProcessKillCtxByInstanceState(
         const std::shared_ptr<KillContext> &killCtx);
 
+    litebus::Future<std::shared_ptr<KillContext>> TryBuildDirectRouteKillUpdate(
+        const std::shared_ptr<KillContext> &killCtx);
+
     litebus::Future<Status> CheckInstanceExist(const std::string &srcInstanceID,
                                                const std::shared_ptr<KillRequest> &killReq);
     litebus::Future<Status> DeleteInstanceInResourceView(const Status &status, const InstanceInfo &instanceInfo);

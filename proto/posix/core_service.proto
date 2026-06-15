@@ -127,9 +127,10 @@ message InvokeRequest {
 }
 
 message InvokeResponse {
-  common.ErrorCode code           = 1;
-  string           message        = 2;
-  string           returnObjectID = 3;
+  common.ErrorCode       code            = 1;
+  string                 message         = 2;
+  string                 returnObjectID  = 3;
+  common.RouteUpdateHint routeUpdateHint = 4;
 }
 
 message CallResult {
@@ -143,8 +144,9 @@ message CallResult {
 }
 
 message CallResultAck {
-  common.ErrorCode code           = 1;
-  string           message        = 2;
+  common.ErrorCode       code            = 1;
+  string                 message         = 2;
+  common.RouteUpdateHint routeUpdateHint = 3;
 }
 
 message TerminateRequest {
@@ -224,7 +226,8 @@ message KillRequest {
 }
 
 message KillResponse {
-  common.ErrorCode code    = 1;
-  string           message = 2;
-  bytes            payload = 3;
+  common.ErrorCode       code            = 1;
+  string                 message         = 2;
+  bytes                  payload         = 3;
+  common.RouteUpdateHint routeUpdateHint = 4;
 }

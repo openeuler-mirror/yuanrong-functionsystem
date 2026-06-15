@@ -644,6 +644,7 @@ int main(int argc, char **argv)
     }
 
     DirectRoutingConfig::SetEnabled(flags.GetEnableDirectRouting());
+    DirectRoutingConfig::SetRouteCacheCapacity(flags.GetDirectRouteCacheCapacity());
 
     function_agent::FunctionAgentFlags functionAgentFlags;
     runtime_manager::Flags runtimeManagerFlags;

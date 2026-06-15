@@ -95,6 +95,8 @@ public:
 
     MOCK_METHOD(litebus::Future<Status>, SendSubscribeInstanceEvent,
                 (const std::string &subscriber, const std::string &targetInstance, bool ignoreNonExist));
+    MOCK_METHOD(litebus::Future<function_proxy::DirectRouteQueryResult>, QueryInstanceRouteForDirectRouting,
+                (const std::string &instanceID), (override));
 
 private:
     std::shared_ptr<InstanceView> instanceView_;
@@ -112,7 +114,7 @@ resources::InstanceInfo NewInstance(const std::string &instanceID, const std::st
 }
 
 SharedStreamMsg CallRequest(const std::string &caller, const std::string &callee, const std::string &requestID,
-                            const std::string &route = "")
+                            const std::string &route = "", bool routeRetryAttempt = false)
 {
     auto msg = std::make_shared<runtime_rpc::StreamingMessage>();
     auto callreq = msg->mutable_callreq();
@@ -121,6 +123,9 @@ SharedStreamMsg CallRequest(const std::string &caller, const std::string &callee
     (*callreq->mutable_createoptions())[CUSTOMS_TAG] = requestID;
     if (!route.empty()) {
         (*callreq->mutable_createoptions())["YR_ROUTE"] = route;
+    }
+    if (routeRetryAttempt) {
+        (*callreq->mutable_createoptions())["YR_ROUTE_RETRY_ATTEMPT"] = "1";
     }
     return msg;
 }
@@ -1081,6 +1086,122 @@ TEST_F(InstanceProxyTest, FallbackToObserverWhenLRUEmpty)
     ASSERT_AWAIT_SET(call);
     EXPECT_TRUE(call.Get()->has_callrsp() &&
                 call.Get()->callrsp().code() == common::ERR_INSTANCE_NOT_FOUND);
+}
+
+static litebus::Future<function_proxy::DirectRouteQueryResult> DirectRouteResultFuture(
+    const function_proxy::DirectRouteQueryResult &result)
+{
+    litebus::Future<function_proxy::DirectRouteQueryResult> future;
+    future.SetValue(result);
+    return future;
+}
+
+TEST_F(InstanceProxyTest, DirectRoutingNegativeCacheReturnsCachedFailure)
+{
+    auto guard = function_proxy::DirectRoutingConfig::EnableForTest();
+
+    std::string callerIns = "callerIns";
+    std::string calleeIns = "calleeIns";
+
+    auto mockSharedClient = PrepareCaller(callerIns);
+    litebus::AID callerProxy(callerIns, observer_->GetAID().Url());
+    ASSERT_AWAIT_TRUE([&]() { return litebus::GetActor(callerProxy) != nullptr; });
+
+    auto callerActor = std::dynamic_pointer_cast<InstanceProxy>(litebus::GetActor(callerProxy));
+    ASSERT_NE(callerActor, nullptr);
+    callerActor->routeCache_.Put(calleeIns, InstanceProxy::DirectRouteCacheEntry{
+        .kind = InstanceProxy::DirectRouteCacheEntry::Kind::NEGATIVE,
+        .errorCode = common::ERR_INSTANCE_NOT_FOUND,
+        .reason = "cached direct route miss" });
+
+    EXPECT_CALL(*observer_, SendSubscribeInstanceEvent(_, _, false)).Times(0);
+    EXPECT_CALL(*observer_, QueryInstanceRouteForDirectRouting(_)).Times(0);
+
+    auto call = litebus::Async(callerProxy, &InstanceProxy::Call,
+                               busproxy::CallerInfo{ .instanceID = callerIns, .tenantID = tenantID_ }, calleeIns,
+                               CallRequest(callerIns, calleeIns, "Request-negative-cache"), nullptr);
+    ASSERT_AWAIT_SET(call);
+    ASSERT_TRUE(call.Get()->has_callrsp());
+    EXPECT_EQ(call.Get()->callrsp().code(), common::ERR_INSTANCE_NOT_FOUND);
+    EXPECT_EQ(call.Get()->callrsp().message(), "cached direct route miss");
+}
+
+TEST_F(InstanceProxyTest, DirectRoutingRouteMissQueriesAndCachesNegativeResult)
+{
+    auto guard = function_proxy::DirectRoutingConfig::EnableForTest();
+
+    std::string callerIns = "callerIns";
+    std::string calleeIns = "calleeIns";
+
+    auto mockSharedClient = PrepareCaller(callerIns);
+    litebus::AID callerProxy(callerIns, observer_->GetAID().Url());
+    ASSERT_AWAIT_TRUE([&]() { return litebus::GetActor(callerProxy) != nullptr; });
+
+    EXPECT_CALL(*observer_, SendSubscribeInstanceEvent(_, _, false)).Times(0);
+    EXPECT_CALL(*observer_, QueryInstanceRouteForDirectRouting(calleeIns))
+        .Times(1)
+        .WillOnce(Return(DirectRouteResultFuture(function_proxy::DirectRouteQueryResult{
+            .status = Status(StatusCode::ERR_INSTANCE_NOT_FOUND, "direct route missing"),
+            .routeInfo = nullptr,
+            .negativeCacheable = true })));
+
+    auto firstCall = litebus::Async(callerProxy, &InstanceProxy::Call,
+                                    busproxy::CallerInfo{ .instanceID = callerIns, .tenantID = tenantID_ }, calleeIns,
+                                    CallRequest(callerIns, calleeIns, "Request-query-negative-1"), nullptr);
+    ASSERT_AWAIT_SET(firstCall);
+    ASSERT_TRUE(firstCall.Get()->has_callrsp());
+    EXPECT_EQ(firstCall.Get()->callrsp().code(), common::ERR_INSTANCE_NOT_FOUND);
+    EXPECT_EQ(firstCall.Get()->callrsp().message(), "direct route missing");
+
+    auto secondCall = litebus::Async(callerProxy, &InstanceProxy::Call,
+                                     busproxy::CallerInfo{ .instanceID = callerIns, .tenantID = tenantID_ }, calleeIns,
+                                     CallRequest(callerIns, calleeIns, "Request-query-negative-2"), nullptr);
+    ASSERT_AWAIT_SET(secondCall);
+    ASSERT_TRUE(secondCall.Get()->has_callrsp());
+    EXPECT_EQ(secondCall.Get()->callrsp().code(), common::ERR_INSTANCE_NOT_FOUND);
+    EXPECT_EQ(secondCall.Get()->callrsp().message(), "direct route missing");
+}
+
+TEST_F(InstanceProxyTest, DirectRoutingRetryMarkerReturnsRouteUpdateHint)
+{
+    auto guard = function_proxy::DirectRoutingConfig::EnableForTest();
+
+    std::string callerIns = "callerIns";
+    std::string calleeIns = "calleeIns";
+    const std::string newRoute = "new-route";
+    const std::string newProxy = "new-proxy";
+
+    auto mockSharedClient = PrepareCaller(callerIns);
+    litebus::AID callerProxy(callerIns, observer_->GetAID().Url());
+    ASSERT_AWAIT_TRUE([&]() { return litebus::GetActor(callerProxy) != nullptr; });
+
+    auto routeInfo = std::make_shared<resources::RouteInfo>();
+    routeInfo->set_instanceid(calleeIns);
+    routeInfo->set_proxygrpcaddress(newRoute);
+    routeInfo->set_functionproxyid(newProxy);
+    routeInfo->set_version(7);
+
+    EXPECT_CALL(*observer_, SendSubscribeInstanceEvent(_, _, false)).Times(0);
+    EXPECT_CALL(*observer_, QueryInstanceRouteForDirectRouting(calleeIns))
+        .Times(1)
+        .WillOnce(Return(DirectRouteResultFuture(function_proxy::DirectRouteQueryResult{
+            .status = Status::OK(),
+            .routeInfo = routeInfo,
+            .negativeCacheable = false })));
+
+    auto call = litebus::Async(callerProxy, &InstanceProxy::Call,
+                               busproxy::CallerInfo{ .instanceID = callerIns, .tenantID = tenantID_ }, calleeIns,
+                               CallRequest(callerIns, calleeIns, "Request-route-hint", "", true), nullptr);
+    ASSERT_AWAIT_SET(call);
+    ASSERT_TRUE(call.Get()->has_callrsp());
+    EXPECT_EQ(call.Get()->callrsp().code(), common::ERR_INNER_COMMUNICATION);
+    ASSERT_TRUE(call.Get()->callrsp().has_routeupdatehint());
+    EXPECT_EQ(call.Get()->callrsp().routeupdatehint().instanceid(), calleeIns);
+    EXPECT_EQ(call.Get()->callrsp().routeupdatehint().routeaddress(), newRoute);
+    EXPECT_EQ(call.Get()->callrsp().routeupdatehint().proxyid(), newProxy);
+    EXPECT_TRUE(call.Get()->callrsp().routeupdatehint().retryable());
+    EXPECT_EQ(call.Get()->callrsp().routeupdatehint().reason(), "stale_route");
+    EXPECT_EQ(call.Get()->callrsp().routeupdatehint().modrevision(), 7);
 }
 
 }  // namespace functionsystem::test

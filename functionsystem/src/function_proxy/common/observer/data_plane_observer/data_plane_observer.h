@@ -25,6 +25,13 @@
 
 namespace functionsystem::function_proxy {
 class ObserverActor;
+
+struct DirectRouteQueryResult {
+    Status status;
+    std::shared_ptr<resources::RouteInfo> routeInfo;
+    bool negativeCacheable { false };
+};
+
 class DataPlaneObserver {
 public:
     explicit DataPlaneObserver(const std::shared_ptr<ObserverActor> &observerActor) : observerActor_(observerActor){};
@@ -36,6 +43,8 @@ public:
                                                            bool ignoreNonExist = false);
 
     virtual litebus::Future<std::shared_ptr<resources::RouteInfo>> QueryInstanceRoute(const std::string &instanceID);
+
+    virtual litebus::Future<DirectRouteQueryResult> QueryInstanceRouteForDirectRouting(const std::string &instanceID);
 
     virtual void NotifyMigratingRequest(const std::string &instanceID);
 

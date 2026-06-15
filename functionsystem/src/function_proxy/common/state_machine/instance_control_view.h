@@ -54,6 +54,7 @@ public:
     virtual std::shared_ptr<InstanceStateMachine> GetInstance(const std::string &instanceID);
     bool SetOwner(const std::string &instanceID);
     bool ReleaseOwner(const std::string &instanceID);
+    bool ReleaseSchedulingOwnerIfRequestMatches(const std::string &instanceID, const std::string &requestID);
     std::string TryGetInstanceIDByReq(const std::string &requestID);
     bool IsRescheduledRequest(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
     virtual litebus::Option<litebus::Future<messages::ScheduleResponse>> IsDuplicateRequest(
@@ -63,6 +64,7 @@ public:
         const std::string &requestID, const litebus::Future<messages::ScheduleResponse> &future,
         const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise);
     virtual void DeleteRequestFuture(const std::string &requestID);
+    void RollbackDirectRoutingScheduleFailure(const std::string &instanceID, const std::string &requestID);
 
     virtual GeneratedInstanceStates TryGenerateNewInstance(
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);

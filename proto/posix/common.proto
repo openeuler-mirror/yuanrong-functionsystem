@@ -186,6 +186,15 @@ message RuntimeInfo {
   string proxyID      = 4; // functionProxyID of owner proxy
 }
 
+message RouteUpdateHint {
+  string instanceID    = 1;
+  string routeAddress  = 2;
+  string proxyID       = 3;
+  bool retryable       = 4;
+  string reason        = 5;
+  int64  modRevision   = 6;
+}
+
 message Bundle {
     map<string, double>  resources   = 1;
     // custom label for reserved unit

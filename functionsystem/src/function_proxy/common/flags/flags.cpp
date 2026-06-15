@@ -155,6 +155,8 @@ Flags::Flags()
             "if true, all instance & agent would be evicted while function-proxy receive SIGTERM/SIGINT", false);
     AddFlag(&Flags::enableDirectRouting_, "enable_direct_routing",
             "enable direct routing read path with LRU cache and on-demand route query", false);
+    AddFlag(&Flags::directRouteCacheCapacity_, "direct_route_cache_capacity",
+            "direct routing route/negative LRU cache capacity", static_cast<uint32_t>(1024));
     AddElectionFlags();
     AddDSFlags();
     AddRuntimeFlags();

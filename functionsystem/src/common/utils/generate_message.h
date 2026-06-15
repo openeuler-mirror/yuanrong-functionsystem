@@ -177,6 +177,22 @@ inline KillResponse GenKillResponse(const common::ErrorCode &errCode, const std:
     return killRsp;
 }
 
+inline KillResponse GenKillResponseWithRouteUpdate(const common::ErrorCode &errCode, const std::string &message,
+                                                   const std::string &instanceID,
+                                                   const std::string &routeAddress,
+                                                   const std::string &proxyID, int64_t modRevision = 0)
+{
+    auto killRsp = GenKillResponse(errCode, message);
+    auto hint = killRsp.mutable_routeupdatehint();
+    hint->set_instanceid(instanceID);
+    hint->set_routeaddress(routeAddress);
+    hint->set_proxyid(proxyID);
+    hint->set_retryable(true);
+    hint->set_reason("stale_route");
+    hint->set_modrevision(modRevision);
+    return killRsp;
+}
+
 inline messages::StartInstanceResponse GenFailStartInstanceResponse(
     const std::shared_ptr<messages::StartInstanceRequest> &request, const StatusCode &code,
     const std::string &msg = "start instance failed")

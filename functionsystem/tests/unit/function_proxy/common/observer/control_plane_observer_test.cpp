@@ -1249,4 +1249,148 @@ TEST_F(ObserverTest, PartialInstanceInfoSyncerLowReliabilityTest)
     ASSERT_TRUE(future.Get().status.IsOk());
     EXPECT_TRUE(observerActor_->instanceInfoMap_.count("InstanceID5") == 0);
 }
+static std::string MakeDirectRouteJson(const std::string &instanceID, InstanceState state,
+                                       const std::string &routeAddress = "127.0.0.1:12345",
+                                       const std::string &proxyID = "proxy-direct")
+{
+    resource_view::RouteInfo routeInfo;
+    routeInfo.set_instanceid(instanceID);
+    routeInfo.set_functionproxyid(proxyID);
+    routeInfo.set_proxygrpcaddress(routeAddress);
+    routeInfo.mutable_instancestatus()->set_code(static_cast<int32_t>(state));
+    std::string jsonStr;
+    (void)TransToJsonFromRouteInfo(jsonStr, routeInfo);
+    return jsonStr;
+}
+
+static litebus::Future<std::shared_ptr<GetResponse>> MakeDirectRouteGetResponse(const std::string &instanceID,
+                                                                                const std::string &value)
+{
+    litebus::Future<std::shared_ptr<GetResponse>> future;
+    auto response = std::make_shared<GetResponse>();
+    response->status = Status::OK();
+    if (!value.empty()) {
+        KeyValue kv;
+        kv.set_key(GenInstanceRouteKey(instanceID));
+        kv.set_value(value);
+        kv.set_mod_revision(1);
+        response->kvs.emplace_back(kv);
+    }
+    future.SetValue(response);
+    return future;
+}
+
+TEST_F(ObserverTest, DirectRoutingRouteQueryClassifiesRunningWithoutCreatingRemoteState)
+{
+    auto mockMetaStoreClient = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
+    metaStorageAccessor_->metaClient_ = mockMetaStoreClient;
+    observerActor_->instanceInfoMap_.clear();
+
+    const std::string instanceID = "dr-running-instance";
+    EXPECT_CALL(*mockMetaStoreClient, Get(GenInstanceRouteKey(instanceID), testing::_))
+        .WillOnce(testing::Return(MakeDirectRouteGetResponse(
+            instanceID, MakeDirectRouteJson(instanceID, InstanceState::RUNNING, "127.0.0.1:41000", "proxy-running"))));
+
+    auto resultFuture = observerActor_->QueryInstanceRouteForDirectRouting(instanceID);
+    ASSERT_AWAIT_READY(resultFuture);
+    const auto result = resultFuture.Get();
+    EXPECT_TRUE(result.status.IsOk());
+    ASSERT_NE(result.routeInfo, nullptr);
+    EXPECT_EQ(result.routeInfo->proxygrpcaddress(), "127.0.0.1:41000");
+    EXPECT_FALSE(result.negativeCacheable);
+    EXPECT_EQ(observerActor_->instanceInfoMap_.count(instanceID), 0);
+}
+
+TEST_F(ObserverTest, DirectRoutingRouteQueryClassifiesIntermediateAsRetryable)
+{
+    auto mockMetaStoreClient = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
+    metaStorageAccessor_->metaClient_ = mockMetaStoreClient;
+    observerActor_->instanceInfoMap_.clear();
+
+    const std::string instanceID = "dr-creating-instance";
+    EXPECT_CALL(*mockMetaStoreClient, Get(GenInstanceRouteKey(instanceID), testing::_))
+        .WillOnce(testing::Return(MakeDirectRouteGetResponse(
+            instanceID, MakeDirectRouteJson(instanceID, InstanceState::CREATING))));
+
+    auto resultFuture = observerActor_->QueryInstanceRouteForDirectRouting(instanceID);
+    ASSERT_AWAIT_READY(resultFuture);
+    const auto result = resultFuture.Get();
+    EXPECT_EQ(result.status.StatusCode(), StatusCode::ERR_INNER_COMMUNICATION);
+    EXPECT_EQ(result.routeInfo, nullptr);
+    EXPECT_FALSE(result.negativeCacheable);
+    EXPECT_EQ(observerActor_->instanceInfoMap_.count(instanceID), 0);
+}
+
+
+TEST_F(ObserverTest, DirectRoutingRouteQueryClassifiesMetaStoreReadErrorAsRetryable)
+{
+    auto mockMetaStoreClient = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
+    metaStorageAccessor_->metaClient_ = mockMetaStoreClient;
+    observerActor_->instanceInfoMap_.clear();
+
+    const std::string instanceID = "dr-metastore-error-instance";
+    EXPECT_CALL(*mockMetaStoreClient, Get(GenInstanceRouteKey(instanceID), testing::_))
+        .WillOnce(testing::Return(litebus::Future<std::shared_ptr<GetResponse>>(litebus::Status(-1))));
+
+    auto resultFuture = observerActor_->QueryInstanceRouteForDirectRouting(instanceID);
+    ASSERT_AWAIT_READY(resultFuture);
+    const auto result = resultFuture.Get();
+    EXPECT_EQ(result.status.StatusCode(), StatusCode::ERR_INNER_COMMUNICATION);
+    EXPECT_EQ(result.routeInfo, nullptr);
+    EXPECT_FALSE(result.negativeCacheable);
+    EXPECT_EQ(observerActor_->instanceInfoMap_.count(instanceID), 0);
+}
+
+TEST_F(ObserverTest, DirectRoutingRouteQueryClassifiesRunningEmptyRouteAsRetryable)
+{
+    auto mockMetaStoreClient = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
+    metaStorageAccessor_->metaClient_ = mockMetaStoreClient;
+    observerActor_->instanceInfoMap_.clear();
+
+    const std::string instanceID = "dr-empty-running-route-instance";
+    EXPECT_CALL(*mockMetaStoreClient, Get(GenInstanceRouteKey(instanceID), testing::_))
+        .WillOnce(testing::Return(MakeDirectRouteGetResponse(
+            instanceID, MakeDirectRouteJson(instanceID, InstanceState::RUNNING, ""))));
+
+    auto resultFuture = observerActor_->QueryInstanceRouteForDirectRouting(instanceID);
+    ASSERT_AWAIT_READY(resultFuture);
+    const auto result = resultFuture.Get();
+    EXPECT_EQ(result.status.StatusCode(), StatusCode::ERR_INNER_COMMUNICATION);
+    EXPECT_EQ(result.routeInfo, nullptr);
+    EXPECT_FALSE(result.negativeCacheable);
+    EXPECT_EQ(observerActor_->instanceInfoMap_.count(instanceID), 0);
+}
+
+TEST_F(ObserverTest, DirectRoutingRouteQueryClassifiesFatalAndMissingAsNegative)
+{
+    auto mockMetaStoreClient = std::make_shared<MockMetaStoreClient>(metaStoreServerHost_);
+    metaStorageAccessor_->metaClient_ = mockMetaStoreClient;
+    observerActor_->instanceInfoMap_.clear();
+
+    const std::string fatalInstanceID = "dr-fatal-instance";
+    EXPECT_CALL(*mockMetaStoreClient, Get(GenInstanceRouteKey(fatalInstanceID), testing::_))
+        .WillOnce(testing::Return(MakeDirectRouteGetResponse(
+            fatalInstanceID, MakeDirectRouteJson(fatalInstanceID, InstanceState::FATAL))));
+
+    auto fatalFuture = observerActor_->QueryInstanceRouteForDirectRouting(fatalInstanceID);
+    ASSERT_AWAIT_READY(fatalFuture);
+    const auto fatalResult = fatalFuture.Get();
+    EXPECT_EQ(fatalResult.status.StatusCode(), StatusCode::ERR_INSTANCE_NOT_FOUND);
+    EXPECT_EQ(fatalResult.routeInfo, nullptr);
+    EXPECT_TRUE(fatalResult.negativeCacheable);
+    EXPECT_EQ(observerActor_->instanceInfoMap_.count(fatalInstanceID), 0);
+
+    const std::string missingInstanceID = "dr-missing-instance";
+    EXPECT_CALL(*mockMetaStoreClient, Get(GenInstanceRouteKey(missingInstanceID), testing::_))
+        .WillOnce(testing::Return(MakeDirectRouteGetResponse(missingInstanceID, "")));
+
+    auto missingFuture = observerActor_->QueryInstanceRouteForDirectRouting(missingInstanceID);
+    ASSERT_AWAIT_READY(missingFuture);
+    const auto missingResult = missingFuture.Get();
+    EXPECT_EQ(missingResult.status.StatusCode(), StatusCode::ERR_INSTANCE_NOT_FOUND);
+    EXPECT_EQ(missingResult.routeInfo, nullptr);
+    EXPECT_TRUE(missingResult.negativeCacheable);
+    EXPECT_EQ(observerActor_->instanceInfoMap_.count(missingInstanceID), 0);
+}
+
 }  // namespace functionsystem::test

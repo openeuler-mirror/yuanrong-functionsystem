@@ -31,6 +31,25 @@ SharedStreamMsg CreateCallResponse(const common::ErrorCode &code, const std::str
     return response;
 }
 
+SharedStreamMsg CreateCallResponseWithRouteUpdate(const common::ErrorCode &code,
+                                                  const std::string &message,
+                                                  const std::string &messageID,
+                                                  const std::string &instanceID,
+                                                  const std::string &routeAddress,
+                                                  const std::string &proxyID,
+                                                  int64_t modRevision)
+{
+    auto response = CreateCallResponse(code, message, messageID);
+    auto hint = response->mutable_callrsp()->mutable_routeupdatehint();
+    hint->set_instanceid(instanceID);
+    hint->set_routeaddress(routeAddress);
+    hint->set_proxyid(proxyID);
+    hint->set_retryable(true);
+    hint->set_reason("stale_route");
+    hint->set_modrevision(modRevision);
+    return response;
+}
+
 SharedStreamMsg CreateCallResultAck(const common::ErrorCode &code, const std::string &message,
                                     const std::string &messageID)
 {

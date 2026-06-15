@@ -861,6 +861,9 @@ litebus::Future<Status> InstanceCtrlActor::SendForwardCustomSignalResponse(const
     YRLOG_INFO("{}|(custom signal)send response, aid: {}", requestID, from.HashString());
     auto forwardKillResponse = GenForwardKillResponse(requestID, killResponse.code(), killResponse.message(),
                                                       killResponse.payload());
+    if (killResponse.has_routeupdatehint()) {
+        forwardKillResponse.mutable_routeupdatehint()->CopyFrom(killResponse.routeupdatehint());
+    }
     Send(from, "ForwardCustomSignalResponse", forwardKillResponse.SerializeAsString());
     (void)forwardCustomSignalRequestIDs_.erase(requestID);
 
@@ -886,6 +889,9 @@ void InstanceCtrlActor::ForwardCustomSignalResponse(const litebus::AID &from, st
     killResponse.set_message(forwardKillResponse.message());
     if (!forwardKillResponse.payload().empty()) {
         killResponse.set_payload(forwardKillResponse.payload());
+    }
+    if (forwardKillResponse.has_routeupdatehint()) {
+        killResponse.mutable_routeupdatehint()->CopyFrom(forwardKillResponse.routeupdatehint());
     }
     forwardCustomSignalNotifyPromise_[requestID]->SetValue(killResponse);
     (void)forwardCustomSignalNotifyPromise_.erase(requestID);
@@ -1054,6 +1060,9 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleRemoteInstanceKill(const 
                 KillResponse killResp;
                 killResp.set_code(Status::GetPosixErrorCode(response.code()));
                 killResp.set_message(response.message());
+                if (response.has_routeupdatehint()) {
+                    killResp.mutable_routeupdatehint()->CopyFrom(response.routeupdatehint());
+                }
                 if (response.code() == SUCCESS) {
                     return observer->DelInstanceEvent(instanceID, -1).Then([killResp]() { return killResp; });
                 }
@@ -1259,6 +1268,9 @@ litebus::Future<KillResponse> InstanceCtrlActor::KillInstancesOfJob(const std::s
         KillResponse killResp;
         killResp.set_code(Status::GetPosixErrorCode(response.code()));
         killResp.set_message(response.message());
+        if (response.has_routeupdatehint()) {
+            killResp.mutable_routeupdatehint()->CopyFrom(response.routeupdatehint());
+        }
         return killResp;
     });
 }
@@ -1295,6 +1307,9 @@ litebus::Future<KillResponse> InstanceCtrlActor::ForwardKillToMaster(const std::
         KillResponse killResp;
         killResp.set_code(Status::GetPosixErrorCode(response.code()));
         killResp.set_message(response.message());
+        if (response.has_routeupdatehint()) {
+            killResp.mutable_routeupdatehint()->CopyFrom(response.routeupdatehint());
+        }
         return killResp;
     });
 }
@@ -1764,7 +1779,13 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::DoDispatchSchedule(
                                     + " to metastore, err: " + result.status.GetMessage();
             YRLOG_ERROR("{}|{}|{}", scheduleReq->traceid(), scheduleReq->requestid(), msg);
             runtimePromise->SetValue(GenScheduleResponse(StatusCode::ERR_ETCD_OPERATION_ERROR, msg, *scheduleReq));
-            instanceControlView_->OnDelInstance(scheduleReq->instance().instanceid(), scheduleReq->requestid(), true);
+            if (function_proxy::DirectRoutingConfig::IsEnabled()) {
+                instanceControlView_->RollbackDirectRoutingScheduleFailure(scheduleReq->instance().instanceid(),
+                                                                           scheduleReq->requestid());
+            } else {
+                instanceControlView_->OnDelInstance(scheduleReq->instance().instanceid(), scheduleReq->requestid(),
+                                                   true);
+            }
             return GenScheduleResponse(StatusCode::ERR_ETCD_OPERATION_ERROR, msg, *scheduleReq);
         } else {
             // failed during Txn, return status according to current state
@@ -1938,18 +1959,19 @@ litebus::Option<TransitionResult> InstanceCtrlActor::OnTryDispatchOnLocal(
                     scheduleResp->SetValue(response);
                     return Status::OK();
                 })
-                .Then([instanceCtrlView = instanceControlView_, scheduleReq](const litebus::Option<Status>&) {
+                .Then([instanceCtrlView = instanceControlView_, scheduleReq](const litebus::Option<Status> &) {
                     // DirectRouting mode: force cleanup state machine after version conflict
                     if (function_proxy::DirectRoutingConfig::IsEnabled()) {
                         auto stateMachine = instanceCtrlView->GetInstance(scheduleReq->instance().instanceid());
                         if (stateMachine != nullptr) {
-                            YRLOG_INFO("{}|{}|DirectRouting mode: cleanup state machine for instance({}) after version conflict",
+                            YRLOG_INFO("{}|{}|DirectRouting mode: cleanup state machine for instance({}) after "
+                                       "version conflict",
                                        scheduleReq->requestid(), scheduleReq->traceid(),
                                        scheduleReq->instance().instanceid());
                         }
-                        instanceCtrlView->OnDelInstance(scheduleReq->instance().instanceid(),
-                                                        scheduleReq->requestid(),
-                                                        true);  // needErase=true
+                        const auto &instanceID = scheduleReq->instance().instanceid();
+                        const auto &requestID = scheduleReq->requestid();
+                        instanceCtrlView->RollbackDirectRoutingScheduleFailure(instanceID, requestID);
                     }
                     return litebus::None();
                 });
@@ -2086,9 +2108,8 @@ void InstanceCtrlActor::TryClearStateMachineCache(const std::shared_ptr<messages
                        scheduleReq->instance().instanceid(),
                        fmt::underlying(stateMachine->GetInstanceState()));
         }
-        instanceControlView_->OnDelInstance(scheduleReq->instance().instanceid(),
-                                           scheduleReq->requestid(),
-                                           true);  // needErase=true
+        instanceControlView_->RollbackDirectRoutingScheduleFailure(scheduleReq->instance().instanceid(),
+                                                                   scheduleReq->requestid());
         return;
     }
 
@@ -2151,9 +2172,9 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::RetryForwardSched
                                scheduleReq->requestid(), scheduleReq->traceid());
 
                     // Cleanup local state machine first
-                    instanceControlView->OnDelInstance(scheduleReq->instance().instanceid(),
-                                                    scheduleReq->requestid(),
-                                                    true);
+                    const auto &instanceID = scheduleReq->instance().instanceid();
+                    const auto &requestID = scheduleReq->requestid();
+                    instanceControlView->RollbackDirectRoutingScheduleFailure(instanceID, requestID);
 
                     // Query etcd to get the actual instance location and return response
                     auto instanceKey = GenInstanceRouteKey(scheduleReq->instance().instanceid());
@@ -3468,7 +3489,7 @@ void InstanceCtrlActor::ScheduleEnd(const litebus::Future<Status> &future,
             if (stateMachine != nullptr) {
                 YRLOG_INFO("{}|{}|cleaning up orphan state machine for instance({}) after version conflict",
                            request->traceid(), request->requestid(), instanceID);
-                instanceControlView_->OnDelInstance(instanceID, request->requestid(), true);  // needErase=true
+                instanceControlView_->RollbackDirectRoutingScheduleFailure(instanceID, request->requestid());
             }
             return;
         }
@@ -4354,6 +4375,36 @@ litebus::Future<Status> InstanceCtrlActor::CheckInstanceExist(const std::string 
     return instanceExistStatus.GetFuture();
 }
 
+
+litebus::Future<std::shared_ptr<KillContext>> InstanceCtrlActor::TryBuildDirectRouteKillUpdate(
+    const std::shared_ptr<KillContext> &killCtx)
+{
+    ASSERT_IF_NULL(observer_);
+    const auto instanceID = killCtx->killRequest->instanceid();
+    return observer_->QueryInstanceRouteForDirectRouting(instanceID)
+        .Then([killCtx, instanceID](const function_proxy::DirectRouteQueryResult &routeResult) {
+            if (!routeResult.status.IsError() && routeResult.routeInfo != nullptr &&
+                !routeResult.routeInfo->proxygrpcaddress().empty()) {
+                killCtx->killRsp = GenKillResponseWithRouteUpdate(common::ErrorCode::ERR_INNER_COMMUNICATION,
+                                                                  "stale route updated", instanceID,
+                                                                  routeResult.routeInfo->proxygrpcaddress(),
+                                                                  routeResult.routeInfo->functionproxyid(),
+                                                                  routeResult.routeInfo->version());
+                return killCtx;
+            }
+
+            const auto errorCode = routeResult.status.IsError()
+                ? Status::GetPosixErrorCode(routeResult.status.StatusCode())
+                : common::ErrorCode::ERR_INSTANCE_NOT_FOUND;
+            const auto reason = routeResult.status.IsError()
+                ? (routeResult.status.GetMessage().empty() ? routeResult.status.ToString()
+                                                           : routeResult.status.GetMessage())
+                : "instance not found, the instance may have been killed";
+            killCtx->killRsp = GenKillResponse(errorCode, reason);
+            return killCtx;
+        });
+}
+
 litebus::Future<std::shared_ptr<KillContext>> InstanceCtrlActor::ProcessKillCtxByInstanceState(
     const std::shared_ptr<KillContext> &killCtx)
 {
@@ -4368,6 +4419,9 @@ litebus::Future<std::shared_ptr<KillContext>> InstanceCtrlActor::ProcessKillCtxB
     auto stateMachine = instanceControlView_->GetInstance(instanceID);
     if (stateMachine == nullptr) {
         YRLOG_WARN("failed to kill instance, instance({}) is not found.", instanceID);
+        if (function_proxy::DirectRoutingConfig::IsEnabled() && !killCtx->killRequest->routeaddress().empty()) {
+            return TryBuildDirectRouteKillUpdate(killCtx);
+        }
         killRsp = GenKillResponse(common::ErrorCode::ERR_INSTANCE_NOT_FOUND,
                                   "instance not found, the instance may have been killed");
         return killCtx;
@@ -6660,26 +6714,21 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::DeleteRequestFuture(
 {
     instanceControlView_->DeleteRequestFuture(requestID);
 
-    // release owner after failed forward schedule from domain
-    auto stateMachine = instanceControlView_->GetInstance(scheduleReq->instance().instanceid());
-    if (stateMachine != nullptr && stateMachine->GetInstanceState() == InstanceState::SCHEDULING
-        && (scheduleResponse.IsError() || scheduleResponse.Get().code() != 0)) {
-        stateMachine->ReleaseOwner();
+    const auto &instanceID = scheduleReq->instance().instanceid();
+    const bool scheduleSucceeded =
+        scheduleResponse.IsOK() &&
+        (scheduleResponse.Get().code() == static_cast<int32_t>(StatusCode::SUCCESS) ||
+         scheduleResponse.Get().code() == static_cast<int32_t>(StatusCode::INSTANCE_ALLOCATED));
+    const bool scheduleFailed = scheduleResponse.IsError() || (scheduleResponse.IsOK() && !scheduleSucceeded);
+
+    // release owner after failed forward schedule from domain; stale futures must not mutate newer schedules
+    if (scheduleFailed && !instanceID.empty()) {
+        (void)instanceControlView_->ReleaseSchedulingOwnerIfRequestMatches(instanceID, requestID);
     }
 
-    // DirectRouting mode: register GC timer for remote-owner orphan state machine
-    // Sub-scenario A: schedule succeeded but ownership transferred to remote node
-    // OnCallResult will never arrive to local node in DR mode, so we need GC to cleanup
-    if (scheduleResponse.IsOK() || (!scheduleResponse.IsError() && scheduleResponse.Get().code() == 0)) {
-        bool scheduleSucceeded = (scheduleResponse.Get().code() == static_cast<int32_t>(StatusCode::SUCCESS) ||
-                                 scheduleResponse.Get().code() == static_cast<int32_t>(StatusCode::INSTANCE_ALLOCATED));
-        if (!scheduleSucceeded && function_proxy::DirectRoutingConfig::IsEnabled() && stateMachine != nullptr) {
-            auto instanceID = scheduleReq->instance().instanceid();
-            YRLOG_INFO("{}|{}|DirectRouting mode: register GC timer for remote-owner orphan SM check, instance({})",
-                       requestID, scheduleReq->traceid(), instanceID);
-            litebus::AsyncAfter(INSTANCE_CREATE_GC_TIMEOUT_MS, GetAID(),
-                                &InstanceCtrlActor::GCOrphanStateMachine, instanceID, requestID);
-        }
+    if (function_proxy::DirectRoutingConfig::IsEnabled() && scheduleFailed && !instanceID.empty()) {
+        instanceControlView_->RollbackDirectRoutingScheduleFailure(instanceID, requestID);
+        return scheduleResponse;
     }
 
     return scheduleResponse;

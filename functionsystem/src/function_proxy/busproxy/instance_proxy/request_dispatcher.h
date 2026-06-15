@@ -17,6 +17,7 @@
 #ifndef FUNCTION_PROXY_BUSPROXY_INSTANCE_PROXY_REQUEST_DISPATCHER_H
 #define FUNCTION_PROXY_BUSPROXY_INSTANCE_PROXY_REQUEST_DISPATCHER_H
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
@@ -32,6 +33,14 @@ namespace functionsystem::busproxy {
 
 SharedStreamMsg CreateCallResponse(const common::ErrorCode &code, const std::string &message,
                                    const std::string &messageID);
+
+SharedStreamMsg CreateCallResponseWithRouteUpdate(const common::ErrorCode &code,
+                                                  const std::string &message,
+                                                  const std::string &messageID,
+                                                  const std::string &instanceID,
+                                                  const std::string &routeAddress,
+                                                  const std::string &proxyID,
+                                                  int64_t modRevision = 0);
 
 struct InstanceRouterInfo {
     bool isLocal = false;

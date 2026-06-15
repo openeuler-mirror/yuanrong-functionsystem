@@ -30,6 +30,7 @@
 #include "function_proxy/busproxy/instance_proxy/request_dispatcher.h"
 #include "function_proxy/busproxy/instance_proxy/perf.h"
 #include "function_proxy/common/observer/data_plane_observer/data_plane_observer.h"
+#include "function_proxy/config/direct_routing_config.h"
 
 namespace functionsystem::busproxy {
 class InstanceProxy : public litebus::ActorBase,
@@ -84,13 +85,17 @@ public:
         routeCache_.Remove(instanceID);
     }
 
+    struct DirectRouteCacheEntry {
+        enum class Kind { RUNNING_ROUTE, NEGATIVE } kind { Kind::NEGATIVE };
+        std::string routeAddress;
+        std::string proxyID;
+        common::ErrorCode errorCode { common::ERR_INSTANCE_NOT_FOUND };
+        std::string reason;
+    };
+
     bool Delete();
 
-    static void BindObserver(const std::shared_ptr<function_proxy::DataPlaneObserver> &observer)
-    {
-        observer_ = observer;
-        RequestDispatcher::BindObserver(observer);
-    }
+    static void BindObserver(const std::shared_ptr<function_proxy::DataPlaneObserver> &observer);
 
 protected:
     void Init() override;
@@ -111,7 +116,7 @@ private:
     void OnQueryRouteResult(const std::string &dstInstanceID, const std::string &originalMessageID,
                             const CallerInfo &callerInfo, const SharedStreamMsg &request,
                             std::shared_ptr<litebus::Promise<SharedStreamMsg>> promise,
-                            const litebus::Future<std::shared_ptr<resources::RouteInfo>> &routeFuture);
+                            const litebus::Future<function_proxy::DirectRouteQueryResult> &routeFuture);
     void OnQueryRouteForwardComplete(const std::string &originalMessageID,
                                      std::shared_ptr<litebus::Promise<SharedStreamMsg>> promise,
                                      const litebus::Future<SharedStreamMsg> &future);
@@ -139,8 +144,9 @@ private:
     std::map<std::string, std::shared_ptr<litebus::Promise<SharedStreamMsg>>> forwardCallResultPromises_;
     std::unordered_map<std::string, std::shared_ptr<PerfContext>> perfMap_;
     std::shared_ptr<Perf> perf_;
-    static constexpr size_t ROUTE_CACHE_CAPACITY = 1024;
-    ThreadSafeLruCache<std::string, std::string> routeCache_{ROUTE_CACHE_CAPACITY};
+    ThreadSafeLruCache<std::string, DirectRouteCacheEntry> routeCache_{
+        function_proxy::DirectRoutingConfig::GetRouteCacheCapacity()
+    };
     // callresult subscribe failed times
     std::unordered_map<std::string, uint32_t> failedSubDstRouteOnCallResult_;
 };

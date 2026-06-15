@@ -23,6 +23,7 @@
 
 #include "function_proxy/busproxy/invocation_handler/invocation_handler.h"
 #include "function_proxy/common/observer/data_plane_observer/data_plane_observer.h"
+#include "function_proxy/config/direct_routing_config.h"
 #include "utils/future_test_helper.h"
 
 namespace functionsystem::test {
@@ -42,6 +43,22 @@ public:
     MOCK_METHOD(void, ResponseForwardCall, (const litebus::AID &, std::string &&, std::string &&msg), (override));
 };
 
+class MockRouteObserver : public function_proxy::DataPlaneObserver {
+public:
+    MockRouteObserver() : function_proxy::DataPlaneObserver(nullptr) {}
+    ~MockRouteObserver() override = default;
+
+    MOCK_METHOD(litebus::Future<function_proxy::DirectRouteQueryResult>, QueryInstanceRouteForDirectRouting,
+                (const std::string &instanceID), (override));
+};
+
+static litebus::Future<function_proxy::DirectRouteQueryResult> DirectRouteResultFuture(
+    const function_proxy::DirectRouteQueryResult &result)
+{
+    litebus::Future<function_proxy::DirectRouteQueryResult> future;
+    future.SetValue(result);
+    return future;
+}
 
 class RequestRouterTest : public ::testing::Test {
 public:
@@ -70,6 +87,8 @@ public:
         litebus::Terminate(requestRouter_->GetAID());
         litebus::Await(requestRouter_->GetAID());
         requestRouter_ = nullptr;
+        busproxy::RequestRouter::BindObserver(nullptr);
+        function_proxy::DirectRoutingConfig::SetEnabled(false);
     }
 
     ::internal::RouteCallRequest GenRouteCallRequest(const std::string& requestID, const std::string& messageID) {
@@ -115,6 +134,101 @@ TEST_F(RequestRouterTest, InstanceNotFound)
     EXPECT_EQ(response->messageid(), "messageID");
     ASSERT_TRUE(response->has_callrsp());
     EXPECT_EQ(response->callrsp().code(), ERR_INSTANCE_NOT_FOUND);
+}
+
+TEST_F(RequestRouterTest, DirectRoutingMissingActorReturnsRouteUpdateHintWhenMetastoreHasRunningRoute)
+{
+    auto guard = function_proxy::DirectRoutingConfig::EnableForTest();
+    auto observer = std::make_shared<MockRouteObserver>();
+    busproxy::RequestRouter::BindObserver(observer);
+
+    const std::string newRoute = "new-route";
+    const std::string newProxy = "new-proxy";
+    auto routeInfo = std::make_shared<resources::RouteInfo>();
+    routeInfo->set_instanceid(remote_);
+    routeInfo->set_proxygrpcaddress(newRoute);
+    routeInfo->set_functionproxyid(newProxy);
+    routeInfo->set_version(42);
+
+    auto routeReq = GenRouteCallRequest("requestID", "messageID");
+    routeReq.set_instanceid(remote_);
+
+    EXPECT_CALL(*toProxy_, DoForwardCall(_, _)).Times(0);
+    EXPECT_CALL(*observer, QueryInstanceRouteForDirectRouting(remote_))
+        .WillOnce(Return(DirectRouteResultFuture(function_proxy::DirectRouteQueryResult{
+            .status = Status::OK(),
+            .routeInfo = routeInfo,
+            .negativeCacheable = false })));
+
+    std::string testMsg;
+    bool flag = false;
+    EXPECT_CALL(*fromProxy_, ResponseForwardCall(_, _, _))
+        .WillOnce([&](const litebus::AID &, std::string &&, std::string &&msg) {
+            testMsg = std::move(msg);
+            flag = true;
+        });
+
+    litebus::Terminate(toProxy_->GetAID());
+    litebus::Await(toProxy_->GetAID());
+    requestRouter_->ForwardCall(fromProxy_->GetAID(), std::string(), routeReq.SerializeAsString());
+
+    EXPECT_AWAIT_TRUE([&]() -> bool { return flag; });
+    auto response = std::make_shared<runtime_rpc::StreamingMessage>();
+    (void)response->ParseFromString(testMsg);
+    EXPECT_EQ(response->messageid(), "messageID");
+    ASSERT_TRUE(response->has_callrsp());
+    EXPECT_EQ(response->callrsp().code(), common::ERR_INNER_COMMUNICATION);
+    ASSERT_TRUE(response->callrsp().has_routeupdatehint());
+    EXPECT_EQ(response->callrsp().routeupdatehint().instanceid(), remote_);
+    EXPECT_EQ(response->callrsp().routeupdatehint().routeaddress(), newRoute);
+    EXPECT_EQ(response->callrsp().routeupdatehint().proxyid(), newProxy);
+    EXPECT_TRUE(response->callrsp().routeupdatehint().retryable());
+    EXPECT_EQ(response->callrsp().routeupdatehint().reason(), "stale_route");
+    EXPECT_EQ(response->callrsp().routeupdatehint().modrevision(), 42);
+
+    toProxy_ = std::make_shared<MockTmpInstanceProxy>(remote_, "");
+    litebus::Spawn(toProxy_);
+}
+
+TEST_F(RequestRouterTest, DirectRoutingMissingActorReturnsRetryableNoHintWhenRunningRouteIsEmpty)
+{
+    auto guard = function_proxy::DirectRoutingConfig::EnableForTest();
+    auto observer = std::make_shared<MockRouteObserver>();
+    busproxy::RequestRouter::BindObserver(observer);
+
+    auto routeReq = GenRouteCallRequest("requestID", "messageID");
+    routeReq.set_instanceid(remote_);
+
+    EXPECT_CALL(*toProxy_, DoForwardCall(_, _)).Times(0);
+    EXPECT_CALL(*observer, QueryInstanceRouteForDirectRouting(remote_))
+        .WillOnce(Return(DirectRouteResultFuture(function_proxy::DirectRouteQueryResult{
+            .status = Status(StatusCode::ERR_INNER_COMMUNICATION,
+                             "instance running route is empty for direct routing: " + remote_),
+            .routeInfo = nullptr,
+            .negativeCacheable = false })));
+
+    std::string testMsg;
+    bool flag = false;
+    EXPECT_CALL(*fromProxy_, ResponseForwardCall(_, _, _))
+        .WillOnce([&](const litebus::AID &, std::string &&, std::string &&msg) {
+            testMsg = std::move(msg);
+            flag = true;
+        });
+
+    litebus::Terminate(toProxy_->GetAID());
+    litebus::Await(toProxy_->GetAID());
+    requestRouter_->ForwardCall(fromProxy_->GetAID(), std::string(), routeReq.SerializeAsString());
+
+    EXPECT_AWAIT_TRUE([&]() -> bool { return flag; });
+    auto response = std::make_shared<runtime_rpc::StreamingMessage>();
+    (void)response->ParseFromString(testMsg);
+    EXPECT_EQ(response->messageid(), "messageID");
+    ASSERT_TRUE(response->has_callrsp());
+    EXPECT_EQ(response->callrsp().code(), common::ERR_INNER_COMMUNICATION);
+    EXPECT_FALSE(response->callrsp().has_routeupdatehint());
+
+    toProxy_ = std::make_shared<MockTmpInstanceProxy>(remote_, "");
+    litebus::Spawn(toProxy_);
 }
 
 TEST_F(RequestRouterTest, InstanceFound)

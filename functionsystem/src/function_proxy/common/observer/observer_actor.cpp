@@ -29,6 +29,7 @@
 #include "common/utils/meta_store_kv_operation.h"
 #include "common/utils/struct_transfer.h"
 #include "common/utils/tenant.h"
+#include "function_proxy/common/iam/internal_iam.h"
 #include "function_proxy/config/direct_routing_config.h"
 
 namespace functionsystem::function_proxy {
@@ -36,6 +37,44 @@ const int32_t WATCH_TIMEOUT_MS = 30000;
 const int32_t QUERY_ETCD_INTERVAL = 60000;
 const std::string ABNORMAL_SCHEDULER_PATH_PREFIX = "/yr/abnormal/localscheduler/";
 using messages::RuleType;
+
+namespace {
+
+bool IsDirectRouteIntermediateState(int32_t code)
+{
+    auto state = static_cast<InstanceState>(code);
+    return state == InstanceState::SCHEDULING || state == InstanceState::CREATING || state == InstanceState::EXITING ||
+           state == InstanceState::EVICTING || state == InstanceState::SUSPEND;
+}
+
+DirectRouteQueryResult MakeDirectRouteError(StatusCode code, const std::string &message, bool negativeCacheable)
+{
+    return DirectRouteQueryResult{ .status = Status(code, message), .routeInfo = nullptr,
+                                   .negativeCacheable = negativeCacheable };
+}
+
+DirectRouteQueryResult ClassifyDirectRouteInfo(const std::string &instanceID, const resource_view::RouteInfo &routeInfo)
+{
+    const auto statusCode = routeInfo.instancestatus().code();
+    if (statusCode == static_cast<int32_t>(InstanceState::RUNNING)) {
+        if (routeInfo.proxygrpcaddress().empty()) {
+            return MakeDirectRouteError(StatusCode::ERR_INNER_COMMUNICATION,
+                                        "instance running route is empty for direct routing: " + instanceID, false);
+        }
+        auto routeInfoPtr = std::make_shared<resources::RouteInfo>(routeInfo);
+        return DirectRouteQueryResult{ .status = Status::OK(), .routeInfo = routeInfoPtr, .negativeCacheable = false };
+    }
+
+    if (IsDirectRouteIntermediateState(statusCode)) {
+        return MakeDirectRouteError(StatusCode::ERR_INNER_COMMUNICATION,
+                                    "instance route is not ready for direct routing: " + instanceID, false);
+    }
+
+    return MakeDirectRouteError(StatusCode::ERR_INSTANCE_NOT_FOUND,
+                                "instance route is not available for direct routing: " + instanceID, true);
+}
+
+}  // namespace
 
 Status ObserverActor::Register()
 {
@@ -1273,6 +1312,17 @@ SyncResult ObserverActor::OnSyncer(const std::shared_ptr<GetResponse> &getRespon
 
 litebus::Future<std::shared_ptr<resources::RouteInfo>> ObserverActor::QueryInstanceRoute(const std::string &instanceID)
 {
+    if (DirectRoutingConfig::IsEnabled()) {
+        return QueryInstanceRouteForDirectRouting(instanceID)
+            .Then([](const litebus::Future<DirectRouteQueryResult> &future)
+                      -> litebus::Future<std::shared_ptr<resources::RouteInfo>> {
+                if (future.IsError() || future.Get().status.IsError() || future.Get().routeInfo == nullptr) {
+                    return litebus::Future<std::shared_ptr<resources::RouteInfo>>(litebus::Status(-1));
+                }
+                return future.Get().routeInfo;
+            });
+    }
+
     return GetInstanceRouteInfo(instanceID)
         .Then([](const litebus::Future<resource_view::InstanceInfo> &future)
                   -> litebus::Future<std::shared_ptr<resources::RouteInfo>> {
@@ -1283,6 +1333,36 @@ litebus::Future<std::shared_ptr<resources::RouteInfo>> ObserverActor::QueryInsta
             auto routeInfo = std::make_shared<resources::RouteInfo>();
             TransToRouteInfoFromInstanceInfo(future.Get(), *routeInfo);
             return routeInfo;
+        });
+}
+
+litebus::Future<DirectRouteQueryResult> ObserverActor::QueryInstanceRouteForDirectRouting(const std::string &instanceID)
+{
+    if (metaStorageAccessor_ == nullptr || metaStorageAccessor_->GetMetaClient() == nullptr) {
+        return MakeDirectRouteError(StatusCode::POINTER_IS_NULL, "meta storage accessor is nullptr", false);
+    }
+    return metaStorageAccessor_->GetMetaClient()
+        ->Get(GenInstanceRouteKey(instanceID), {})
+        .Then([instanceID](const litebus::Future<std::shared_ptr<GetResponse>> &getResponse) {
+            if (getResponse.IsError() || getResponse.Get() == nullptr) {
+                YRLOG_ERROR("failed to query direct route for instance({}) from meta store", instanceID);
+                return MakeDirectRouteError(StatusCode::ERR_INNER_COMMUNICATION,
+                                            "failed to query instance route for direct routing: " + instanceID, false);
+            }
+            if (getResponse.Get()->kvs.empty() || getResponse.Get()->kvs.front().value().empty()) {
+                YRLOG_INFO("direct route query found no route for instance({})", instanceID);
+                return MakeDirectRouteError(StatusCode::ERR_INSTANCE_NOT_FOUND,
+                                            "instance route is not found for direct routing: " + instanceID, true);
+            }
+
+            resource_view::RouteInfo routeInfo;
+            if (!TransToRouteInfoFromJson(routeInfo, getResponse.Get()->kvs.front().value())) {
+                YRLOG_ERROR("failed to trans to routeInfo from json string during direct route query, instance({})",
+                            instanceID);
+                return MakeDirectRouteError(StatusCode::ERR_INNER_COMMUNICATION,
+                                            "failed to parse instance route for direct routing: " + instanceID, false);
+            }
+            return ClassifyDirectRouteInfo(instanceID, routeInfo);
         });
 }
 

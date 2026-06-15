@@ -126,6 +126,9 @@ public:
 
     virtual litebus::Future<resource_view::InstanceInfo> GetOrWatchInstance(const std::string &instanceID);
 
+    virtual litebus::Future<DirectRouteQueryResult> QueryInstanceRouteForDirectRouting(
+        const std::string &instanceID) const;
+
     virtual void CancelWatchInstance(const std::string &instanceID);
 
     litebus::Future<bool> InstanceSyncDone();
