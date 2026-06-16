@@ -115,7 +115,10 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
         messages::StartInstanceResponse response;
         response.set_requestid(instance.requestid());
         response.set_code(static_cast<int32_t>(RUNTIME_MANAGER_PARAMS_INVALID));
-        response.set_message("unknown instance type, cannot start instance");
+        response.set_message(static_cast<EXECUTOR_TYPE>(type) == EXECUTOR_TYPE::SUPERVISOR
+                                 ? "supervisor service is not ready, please check whether the service is abnormal"
+                                 : "unknown instance type, cannot start instance");
+
         litebus::Future<messages::StartInstanceResponse> promise;
         promise.SetValue(response);
         litebus::Async(this->GetAID(), &RuntimeManager::StartInstanceResponse, from,
@@ -455,8 +458,6 @@ std::string RuntimeManager::GetCpuType() const
 
 std::shared_ptr<ExecutorProxy> RuntimeManager::FindExecutor(EXECUTOR_TYPE type)
 {
-    YRLOG_INFO("infoinfoinfo");
-
     if (auto iter(executorMap_.find(type)); iter != executorMap_.end()) {
         return iter->second;
     }
