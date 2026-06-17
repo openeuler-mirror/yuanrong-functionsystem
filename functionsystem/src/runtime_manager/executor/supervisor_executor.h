@@ -115,12 +115,7 @@ private:
     litebus::AID functionAgentAID_;
     CommandBuilder cmdBuilder_{ false };
 
-    // Supervisor process and HTTP communication
-    pid_t supervisorPid_ = -1;             // superviser process PID
     std::shared_ptr<litebus::Exec> exec_;  // exec handle for supervisor process
-    void LaunchSupervisorProcess();
-    void StopSupervisorProcess();
-    void CreateSupervisorLogs();
     void ParseResponse(litebus::Promise<nlohmann::json> promise, std::string response);
     litebus::Future<nlohmann::json> SendRequestToSupervisor(const std::string &method, const std::string &path,
                                                             const nlohmann::json &body);

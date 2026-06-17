@@ -45,11 +45,7 @@ constexpr int64_t HTTP_TIMEOUT_MS = 30000;
 constexpr unsigned short DEFAULT_SUPERVISOR_PORT = 9321;
 const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 const std::string SUPERVISOR_SANDBOX_PREFIX = "/api/v1/sandboxes";
-const std::string SUPERVISOR_LOG_PATH = "/tmp/supervisor";
-const std::string ERR_LOG = litebus::os::Join(SUPERVISOR_LOG_PATH, "supervisor_stderr.log");
-const std::string OUT_LOG = litebus::os::Join(SUPERVISOR_LOG_PATH, "supervisor_stdout.log");
 const std::string SUPERVISOR_UDS_SOCKET = "/run/jiuwenbox/jiuwenbox.sock";
-const std::string SUPERVISOR_LISTEN_URL = "unix:///run/jiuwenbox/jiuwenbox.sock";
 
 SupervisorExecutor::SupervisorExecutor(const std::string &name, const litebus::AID &functionAgentAID)
     : Executor(name), functionAgentAID_(functionAgentAID)
@@ -65,72 +61,12 @@ void SupervisorExecutor::Finalize()
 {
     YRLOG_INFO("Start finalize SupervisorExecutor");
     runtime2portMappings_.clear();
-    StopSupervisorProcess();
     Executor::Finalize();
 }
 
 void SupervisorExecutor::InitConfig()
 {
     cmdBuilder_.SetRuntimeConfig(config_);
-
-    LaunchSupervisorProcess();
-}
-
-void SupervisorExecutor::LaunchSupervisorProcess()
-{
-    auto supervisorListenUrl = litebus::os::GetEnv("SUPERVISOR_LISTEN_URL");
-    if (supervisorListenUrl.IsNone()) {
-        YRLOG_INFO("supervisor executor disabled, no supervisorListenUrl found");
-        return;
-    }
-
-    CreateSupervisorLogs();
-
-    std::string supervisorListenUrlStr =
-        supervisorListenUrl.IsSome() ? supervisorListenUrl.Get() : SUPERVISOR_LISTEN_URL;
-
-    // Use UDS (Unix Domain Socket) to start jiuwenbox service
-    std::vector<std::string> argv = { "env", "JIUWENBOX_LISTEN=" + supervisorListenUrlStr, "python", "-m",
-                                      "jiuwenbox.server.launcher" };
-    auto exec =
-        litebus::Exec::CreateExec("env", argv, litebus::None(), litebus::ExecIO::CreateFileIO("/dev/null"),
-                                  litebus::ExecIO::CreateFileIO(OUT_LOG), litebus::ExecIO::CreateFileIO(ERR_LOG),
-                                  { litebus::ChildInitHook::EXITWITHPARENT() });
-    if (!exec) {
-        YRLOG_ERROR("failed to create exec");
-        return;
-    }
-
-    supervisorPid_ = exec->GetPid();
-    exec_ = std::move(exec);
-    YRLOG_INFO("success to started supervisor process, pid={},uds={}", supervisorPid_, SUPERVISOR_LISTEN_URL);
-}
-
-void SupervisorExecutor::StopSupervisorProcess()
-{
-    if (supervisorPid_ > 0) {
-        YRLOG_INFO("stopping supervisor process with pid: {}", supervisorPid_);
-        kill(supervisorPid_, SIGTERM);
-        int status;
-        waitpid(supervisorPid_, &status, 0);
-        YRLOG_INFO("process stopped, pid={}", supervisorPid_);
-        supervisorPid_ = -1;
-    }
-}
-
-void SupervisorExecutor::CreateSupervisorLogs()
-{
-    litebus::os::Mkdir(SUPERVISOR_LOG_PATH);
-
-    if (litebus::os::ExistPath(ERR_LOG)) {
-        litebus::os::Rm(ERR_LOG);
-    }
-    TouchFile(ERR_LOG);
-
-    if (litebus::os::ExistPath(OUT_LOG)) {
-        litebus::os::Rm(OUT_LOG);
-    }
-    TouchFile(OUT_LOG);
 }
 
 void SupervisorExecutor::ParseResponse(litebus::Promise<nlohmann::json> promise, std::string response)
@@ -166,16 +102,14 @@ litebus::Future<nlohmann::json> SupervisorExecutor::SendRequestToSupervisor(cons
     int fd = ConnectUdsSocket(SUPERVISOR_UDS_SOCKET);
     if (fd < 0) {
         YRLOG_ERROR("failed to connect to UDS socket: {}", SUPERVISOR_UDS_SOCKET);
-        promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
-        return result;
+        return nlohmann::json::object();
     }
     std::string httpRequest = BuildUdsHttpRequest(method, path, body.dump());
     if (ssize_t sent = send(fd, httpRequest.c_str(), httpRequest.length(), 0);
         sent < 0 || static_cast<size_t>(sent) != httpRequest.length()) {
         YRLOG_ERROR("failed to send request to UDS socket: {}", std::strerror(errno));
         (void)close(fd);
-        promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
-        return result;
+        return nlohmann::json::object();
     }
     // Receive response
     std::string response;
@@ -207,8 +141,7 @@ litebus::Future<nlohmann::json> SupervisorExecutor::SendRequestToSupervisor(cons
     if (received < 0) {
         YRLOG_ERROR("failed to receive response from UDS socket: {}", std::strerror(errno));
         (void)close(fd);
-        promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
-        return result;
+        return nlohmann::json::object();
     }
     (void)close(fd);
     // Parse HTTP response
@@ -334,17 +267,13 @@ litebus::Future<std::string> SupervisorExecutor::CreateSandbox(const std::string
         .Then([this, runtimeID](litebus::Try<nlohmann::json> createResponse) -> litebus::Future<std::string> {
             if (!createResponse.IsOK()) {
                 YRLOG_ERROR("{}|Create sandbox failed: {}", runtimeID, static_cast<int>(createResponse.GetErrorCode()));
-                litebus::Promise<std::string> promise;
-                promise.SetFailed(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
-                return promise.GetFuture();
+                return "";
             }
 
             auto createResp = createResponse.Get();
             if (!createResp.contains("id") || !createResp["id"].is_string()) {
                 YRLOG_ERROR("{}|Create sandbox failed: response not contains id", runtimeID);
-                litebus::Promise<std::string> promise;
-                promise.SetFailed(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
-                return promise.GetFuture();
+                return "";
             }
 
             std::string sandboxId = createResp["id"];
@@ -576,9 +505,9 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::StartByRuntimeID
     const auto &runtimeID = request->runtimeinstanceinfo().runtimeid();
 
     std::string cmd = execPath;
-    runtime::v1::StartResponse rsp{};
     // java has jvm args check so ignore here
     if (language.find(JAVA_LANGUAGE_PREFIX) == std::string::npos && !CheckIllegalChars(cmd)) {
+        runtime::v1::StartResponse rsp{};
         rsp.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
         rsp.set_message(fmt::format("invalid cmd: {}", cmd));
         return rsp;
@@ -592,7 +521,15 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::StartByRuntimeID
     SetRequestEnvsAndLogsForStart(start.get(), updateEnv, runtimeID);
 
     return CreateSandbox(runtimeID).Then(
-        [this, start, runtimeID](const std::string &sandboxId) { return ExecInSandbox(runtimeID, start, sandboxId); });
+        [this, start, runtimeID](const std::string &sandboxId) -> litebus::Future<runtime::v1::StartResponse> {
+            if (sandboxId == "") {
+                runtime::v1::StartResponse rsp{};
+                rsp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+                rsp.set_message("Failed to create sandbox");
+                return rsp;
+            }
+            return ExecInSandbox(runtimeID, start, sandboxId);
+        });
 }
 
 litebus::Future<Status> SupervisorExecutor::TerminateSandbox(const std::string &runtimeID, const std::string &sandboxID)
@@ -637,6 +574,11 @@ litebus::Future<messages::StartInstanceResponse> SupervisorExecutor::OnStartRunt
     const runtime::v1::StartResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &info = request->runtimeinstanceinfo();
+    if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+        YRLOG_ERROR("{}|{}|failed to start runtime in supervisor, code({}) message({})", info.traceid(),
+                    info.requestid(), response.code(), response.message());
+        return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_CREATE_EXEC_FAILED, response.message());
+    }
 
     // On start runtime
     auto runtimeID = info.runtimeid();
