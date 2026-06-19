@@ -13,7 +13,7 @@ def build_cli(root_path):
     main_path = os.path.join(app_path, "cmd", "main.go")
     output_path = os.path.join(root_path, "functionsystem", "output", "bin")
     utils.sync_command(
-        cmd=["go", "install", "google.golang.org/protobuf/cmd/protoc-gen-go@latest"],
+        cmd=["go", "install", "google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6"],
         cwd=app_path,
     )
     utils.sync_command(cmd=["mkdir", "-p", f"{app_path}/internal/pb"], cwd=app_path)
