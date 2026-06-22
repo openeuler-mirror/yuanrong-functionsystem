@@ -15,14 +15,14 @@
  */
 
 #include "gtest/gtest.h"
-#include "runtime_manager/executor/container_executor.h"
+#include "runtime_manager/utils/utils.h"
 
 namespace functionsystem::runtime_manager {
 namespace {
 
 TEST(ContainerExecutorNetworkTest, ParseForwardPorts_ValidJson)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts(
+    auto configs = ParseForwardPorts(
         R"({"portForwardings": [{"port": 8888, "protocol": "TCP"}, {"port": 443, "protocol": "TCP"}]})");
     ASSERT_EQ(2u, configs.size());
     EXPECT_EQ(8888u, configs[0].containerPort);
@@ -33,31 +33,31 @@ TEST(ContainerExecutorNetworkTest, ParseForwardPorts_ValidJson)
 
 TEST(ContainerExecutorNetworkTest, ParseForwardPorts_EmptyString)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts("");
+    auto configs = ParseForwardPorts("");
     EXPECT_EQ(0u, configs.size());
 }
 
 TEST(ContainerExecutorNetworkTest, ParseForwardPorts_InvalidJson)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts("not-json");
+    auto configs = ParseForwardPorts("not-json");
     EXPECT_EQ(0u, configs.size());
 }
 
 TEST(ContainerExecutorNetworkTest, ParseForwardPorts_NoPortForwardingsKey)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts(R"({"forward": [{"port": 8888}]})");
+    auto configs = ParseForwardPorts(R"({"forward": [{"port": 8888}]})");
     EXPECT_EQ(0u, configs.size());
 }
 
 TEST(ContainerExecutorNetworkTest, ParseForwardPorts_EmptyArray)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts(R"({"portForwardings": []})");
+    auto configs = ParseForwardPorts(R"({"portForwardings": []})");
     EXPECT_EQ(0u, configs.size());
 }
 
 TEST(ContainerExecutorNetworkTest, ParseForwardPorts_SinglePort)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts(
+    auto configs = ParseForwardPorts(
         R"({"portForwardings": [{"port": 8080, "protocol": "TCP"}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(8080u, configs[0].containerPort);
@@ -67,7 +67,7 @@ TEST(ContainerExecutorNetworkTest, ParseForwardPorts_SinglePort)
 TEST(ContainerExecutorNetworkTest, ParseForwardPorts_FilterInvalidPortValues)
 {
     // Port 0 and 65536+ are invalid, only 80 is valid
-    auto configs = ContainerExecutor::ParseForwardPorts(
+    auto configs = ParseForwardPorts(
         R"({"portForwardings": [{"port": 0, "protocol": "TCP"}, {"port": 80, "protocol": "UDP"}, {"port": 65536, "protocol": "TCP"}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(80u, configs[0].containerPort);
@@ -76,14 +76,14 @@ TEST(ContainerExecutorNetworkTest, ParseForwardPorts_FilterInvalidPortValues)
 
 TEST(ContainerExecutorNetworkTest, ParseForwardPorts_NotArrayValue)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts(R"({"portForwardings": "8888"})");
+    auto configs = ParseForwardPorts(R"({"portForwardings": "8888"})");
     EXPECT_EQ(0u, configs.size());
 }
 
 TEST(ContainerExecutorNetworkTest, ParseForwardPorts_MissingPortField)
 {
     // Entry without "port" key should be skipped
-    auto configs = ContainerExecutor::ParseForwardPorts(
+    auto configs = ParseForwardPorts(
         R"({"portForwardings": [{"protocol": "TCP"}, {"port": 9090, "protocol": "UDP"}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(9090u, configs[0].containerPort);
@@ -92,7 +92,7 @@ TEST(ContainerExecutorNetworkTest, ParseForwardPorts_MissingPortField)
 
 TEST(ContainerExecutorNetworkTest, ParseForwardPorts_UDPProtocol)
 {
-    auto configs = ContainerExecutor::ParseForwardPorts(
+    auto configs = ParseForwardPorts(
         R"({"portForwardings": [{"port": 53, "protocol": "UDP"}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(53u, configs[0].containerPort);
@@ -102,7 +102,7 @@ TEST(ContainerExecutorNetworkTest, ParseForwardPorts_UDPProtocol)
 TEST(ContainerExecutorNetworkTest, ParseForwardPorts_DefaultProtocol)
 {
     // When protocol is missing, default to "tcp"
-    auto configs = ContainerExecutor::ParseForwardPorts(
+    auto configs = ParseForwardPorts(
         R"({"portForwardings": [{"port": 8080}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(8080u, configs[0].containerPort);

@@ -17,11 +17,47 @@
 #ifndef RUNTIME_MANAGER_UTILS_UTILS_H
 #define RUNTIME_MANAGER_UTILS_UTILS_H
 
+#include <cstdint>
+#include <string>
 #include <vector>
+
 #include <async/uuid_generator.hpp>
 #include <functional>
 
 namespace functionsystem::runtime_manager {
+
+// Port forward configuration parsed from network JSON.
+struct PortForwardConfig {
+    uint32_t containerPort;  // Container port to forward
+    std::string protocol;    // "tcp" or "udp" (lowercase)
+};
+
+// Parse the list of port forward configs from a network JSON string.
+// Expected format: {"portForwardings": [{"port": 8080, "protocol": "tcp"}, ...]}
+std::vector<PortForwardConfig> ParseForwardPorts(const std::string &networkJson);
+
+// Extract the image URL from a rootfs JSON of type "image".
+// Expected format: {"type": "image", "imageurl": "repo/image:tag", ...}
+// Returns empty string if the JSON is not type=image or has no imageurl.
+std::string ParseRootfsImageUrl(const std::string &rootfsJson);
+
+// Extract the working directory from a rootfs JSON.
+// Expected format: {"type": "image", "imageurl": "...", "workdir": "/data", ...}
+// Returns empty string if not set.
+std::string ParseRootfsWorkdir(const std::string &rootfsJson);
+
+// Host directory mount parsed from a rootfs JSON "mounts" entry.
+struct RootfsMount {
+    std::string source;    // host path
+    std::string target;    // container path
+    bool readonly = false; // mount read-only
+};
+
+// Parse the mounts list from a rootfs JSON.
+// Expected format: {"mounts": [{"source": "/data/host", "target": "/data", "readonly": false}, ...]}
+// Skips entries with empty source/target. Returns empty vector on parse failure.
+std::vector<RootfsMount> ParseRootfsMounts(const std::string &rootfsJson);
+
 class Utils {
 public:
     static std::string JoinToString(std::vector<std::string> const &strings, std::string delim);

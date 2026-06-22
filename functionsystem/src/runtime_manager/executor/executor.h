@@ -203,9 +203,9 @@ public:
                                                                         const int limit) = 0;
 
 protected:
-    void Init() override;
+    virtual void Init();
 
-    void Finalize() override;
+    virtual void Finalize();
 
     RuntimeConfig config_{};
 

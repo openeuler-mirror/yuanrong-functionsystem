@@ -38,6 +38,7 @@
 #include "common/proto/pb/posix/runtime_launcher_interface.grpc.pb.h"
 #include "common/file_storage/file_storage_client.h"
 #include "runtime_manager/ckpt/ckpt_file_manager.h"
+#include "runtime_manager/utils/utils.h"
 
 namespace functionsystem::runtime_manager {
 
@@ -77,23 +78,6 @@ public:
     bool IsRuntimeActive(const std::string &runtimeID) override;
 
     litebus::Future<bool> StopAllContainers();
-
-    /**
-     * Port forward configuration parsed from network JSON.
-     */
-    struct PortForwardConfig {
-        uint32_t containerPort;  // Container port to forward
-        std::string protocol;    // "TCP" or "UDP"
-    };
-
-    /**
-     * Parse the list of port forward configs from a network JSON string.
-     * Expected format: {"portForwardings": [{"port": 8080, "protocol": "TCP"}, ...]}
-     *
-     * @param networkJson JSON string from deployOptions["network"].
-     * @return Parsed port forward configs, empty on error.
-     */
-    static std::vector<PortForwardConfig> ParseForwardPorts(const std::string &networkJson);
 
 protected:
     void Init() override;
