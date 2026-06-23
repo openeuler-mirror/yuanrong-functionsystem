@@ -63,30 +63,7 @@ litebus::Future<SharedStreamMsg> InstanceProxy::Call(const CallerInfo &callerInf
     // If invoke instance with route, just forward it to other node
     if (const auto it = callReq.createoptions().find(YR_ROUTE_KEY);
         it != callReq.createoptions().end() && !it->second.empty()) {
-        if (function_proxy::DirectRoutingConfig::IsEnabled()) {
-            routeCache_.Put(dstInstanceID, it->second);
-            auto remoteAID = litebus::AID(dstInstanceID, it->second);
-            return ForwardWithRouteAndFallback(remoteAID, dstInstanceID, callerInfo, request);
-        }
-        auto remoteAID = litebus::AID(dstInstanceID, it->second);
-        auto promise = std::make_shared<litebus::Promise<SharedStreamMsg>>();
-        SendForwardCall(remoteAID, callerInfo.tenantID, request)
-            .OnComplete([messageID(request->messageid()), promise](const litebus::Future<SharedStreamMsg> &future) {
-                if (future.IsError()) {
-                    auto response = std::make_shared<runtime_rpc::StreamingMessage>();
-                    response->set_messageid(messageID);
-                    auto callResponse = response->mutable_callrsp();
-                    callResponse->set_code(
-                        Status::GetPosixErrorCode(common::ErrorCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS));
-                    callResponse->set_message("connection with runtime may be interrupted, please retry.");
-                    promise->SetValue(response);
-                } else {
-                    auto rsp = future.Get();
-                    rsp->set_messageid(messageID);
-                    promise->SetValue(rsp);
-                }
-            });
-        return promise->GetFuture();
+        return CallWithExplicitRoute(callerInfo, dstInstanceID, request, it->second);
     }
 
     if (function_proxy::DirectRoutingConfig::IsEnabled()) {
@@ -99,13 +76,7 @@ litebus::Future<SharedStreamMsg> InstanceProxy::Call(const CallerInfo &callerInf
 
     // If the corresponding instance is not found in the dispatcher,
     // the instance information needs to be subscribed to from the observer.
-    if (remoteDispatchers_.find(dstInstanceID) == remoteDispatchers_.end()) {
-        auto dispatcher = std::make_shared<RequestDispatcher>(dstInstanceID, false, "", shared_from_this(), perf_);
-        ASSERT_FS(observer_);
-        (void)observer_->SubscribeInstanceEvent(instanceID_, dstInstanceID);
-        remoteDispatchers_[dstInstanceID] = std::move(dispatcher);
-    }
-    const auto &dispatcher = remoteDispatchers_[dstInstanceID];
+    auto dispatcher = GetOrCreateRemoteDispatcher(dstInstanceID);
     // remote response received by this actor, so the callback can be called in this actor thread
     auto func = [traceID(callReq.traceid()), requestID(callReq.requestid()),
                  dispatcher](const SharedStreamMsg &callRsp) {
@@ -113,6 +84,46 @@ litebus::Future<SharedStreamMsg> InstanceProxy::Call(const CallerInfo &callerInf
         return callRsp;
     };
     return dispatcher->Call(request, callerInfo).Then(func);
+}
+
+litebus::Future<SharedStreamMsg> InstanceProxy::CallWithExplicitRoute(
+    const CallerInfo &callerInfo, const std::string &dstInstanceID, const SharedStreamMsg &request,
+    const std::string &route)
+{
+    auto remoteAID = litebus::AID(dstInstanceID, route);
+    if (function_proxy::DirectRoutingConfig::IsEnabled()) {
+        routeCache_.Put(dstInstanceID, route);
+        return ForwardWithRouteAndFallback(remoteAID, dstInstanceID, callerInfo, request);
+    }
+
+    auto promise = std::make_shared<litebus::Promise<SharedStreamMsg>>();
+    SendForwardCall(remoteAID, callerInfo.tenantID, request)
+        .OnComplete([messageID(request->messageid()), promise](const litebus::Future<SharedStreamMsg> &future) {
+            if (future.IsError()) {
+                auto response = std::make_shared<runtime_rpc::StreamingMessage>();
+                response->set_messageid(messageID);
+                auto callResponse = response->mutable_callrsp();
+                callResponse->set_code(Status::GetPosixErrorCode(common::ErrorCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS));
+                callResponse->set_message("connection with runtime may be interrupted, please retry.");
+                promise->SetValue(response);
+                return;
+            }
+            auto rsp = future.Get();
+            rsp->set_messageid(messageID);
+            promise->SetValue(rsp);
+        });
+    return promise->GetFuture();
+}
+
+std::shared_ptr<RequestDispatcher> InstanceProxy::GetOrCreateRemoteDispatcher(const std::string &dstInstanceID)
+{
+    if (remoteDispatchers_.find(dstInstanceID) == remoteDispatchers_.end()) {
+        auto dispatcher = std::make_shared<RequestDispatcher>(dstInstanceID, false, "", shared_from_this(), perf_);
+        ASSERT_FS(observer_);
+        (void)observer_->SubscribeInstanceEvent(instanceID_, dstInstanceID);
+        remoteDispatchers_[dstInstanceID] = std::move(dispatcher);
+    }
+    return remoteDispatchers_[dstInstanceID];
 }
 
 litebus::Future<SharedStreamMsg> InstanceProxy::ForwardWithRouteAndFallback(const litebus::AID &remoteAID,

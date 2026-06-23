@@ -281,6 +281,8 @@ inline std::shared_ptr<messages::DeployInstanceResponse> BuildDeployInstanceResp
     deployInstanceResponse->set_cputype(startInstanceResponse.startruntimeinstanceresponse().cputype());
     deployInstanceResponse->set_pid(startInstanceResponse.startruntimeinstanceresponse().pid());
     deployInstanceResponse->set_containerid(startInstanceResponse.startruntimeinstanceresponse().containerid());
+    deployInstanceResponse->set_executortype(startInstanceResponse.startruntimeinstanceresponse().executortype());
+
     if (!portMappings.empty()) {
         deployInstanceResponse->set_portmappings(portMappings);
     }

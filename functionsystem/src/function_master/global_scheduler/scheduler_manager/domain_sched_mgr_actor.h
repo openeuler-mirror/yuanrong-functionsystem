@@ -79,9 +79,9 @@ public:
     litebus::Future<messages::QueryAgentInfoResponse> QueryAgentInfo(const std::string &name,
         const std::string &address, const std::shared_ptr<messages::QueryAgentInfoRequest> &req);
 
-    litebus::Future<messages::QueryInstancesInfoResponse> GetSchedulingQueue(
+    litebus::Future<messages::QuerySchedulingQueueResponse> GetSchedulingQueue(
         const std::string &name, const std::string &address,
-        const std::shared_ptr<messages::QueryInstancesInfoRequest> &req);
+        const std::shared_ptr<messages::QuerySchedulingQueueRequest> &req);
 
     void ResponseGetSchedulingQueue(const litebus::AID &from, std::string &&name, std::string &&msg);
 
@@ -174,7 +174,7 @@ private:
 
     std::shared_ptr<litebus::Promise<messages::QueryResourcesInfoResponse>> queryResourcePromise_;
 
-    std::shared_ptr<litebus::Promise<messages::QueryInstancesInfoResponse>> getSchedulingQueuePromise_;
+    std::shared_ptr<litebus::Promise<messages::QuerySchedulingQueueResponse>> getSchedulingQueuePromise_;
 
     BACK_OFF_RETRY_HELPER(DomainSchedMgrActor, messages::QueryResourcesInfoResponse, queryResourceHelper_);
     std::shared_ptr<litebus::AID> domainSchedulerAID_;

@@ -162,6 +162,7 @@ TEST_F(HealthCheckTest, HealthCheckWithKill)
     EXPECT_EQ(info.instanceid(), "Instance-ID");
     EXPECT_EQ(captureStr, "runtime-ID");
     EXPECT_TRUE(info.instancemsg().find("exitState:0 exitStatus:0") != std::string::npos);
+    EXPECT_TRUE(info.instancemsg().find("receive signal") != std::string::npos);
 
     litebus::Terminate(functionAgent->GetAID());
     litebus::Await(functionAgent->GetAID());

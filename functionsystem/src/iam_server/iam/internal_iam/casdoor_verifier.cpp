@@ -39,6 +39,12 @@ namespace {
 const std::string JWT_SEPARATOR = ".";
 const std::string CASDOOR_BUILTIN_ORG = "built-in";
 const std::string CASDOOR_BUILTIN_APP = "app-built-in";
+constexpr size_t URL_ENCODE_EXPANSION_FACTOR = 3;
+constexpr size_t BASE64_BLOCK_SIZE = 4;
+constexpr size_t PEM_BODY_LINE_LENGTH = 64;
+constexpr unsigned int HEX_NIBBLE_BITS = 4;
+constexpr unsigned int HEX_NIBBLE_MASK = 0x0F;
+const char HEX_DIGITS[] = "0123456789ABCDEF";
 
 bool IsKnownRole(const std::string &role)
 {
@@ -76,14 +82,14 @@ std::string ExtractPersistedRole(const nlohmann::json &userJson)
 std::string UrlEncode(const std::string &value)
 {
     std::string encoded;
-    encoded.reserve(value.size() * 3);
+    encoded.reserve(value.size() * URL_ENCODE_EXPANSION_FACTOR);
     for (unsigned char c : value) {
         if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
             encoded += static_cast<char>(c);
         } else {
-            char buf[4];
-            snprintf(buf, sizeof(buf), "%%%02X", c);
-            encoded += buf;
+            encoded += '%';
+            encoded += HEX_DIGITS[c >> HEX_NIBBLE_BITS];
+            encoded += HEX_DIGITS[c & HEX_NIBBLE_MASK];
         }
     }
     return encoded;
@@ -94,7 +100,7 @@ std::string Base64UrlDecode(const std::string &input)
     std::string base64 = input;
     std::replace(base64.begin(), base64.end(), '-', '+');
     std::replace(base64.begin(), base64.end(), '_', '/');
-    while (base64.size() % 4 != 0) {
+    while (base64.size() % BASE64_BLOCK_SIZE != 0) {
         base64 += '=';
     }
 
@@ -104,12 +110,13 @@ std::string Base64UrlDecode(const std::string &input)
     b64 = BIO_push(b64, bmem);
 
     std::vector<char> buffer(base64.length());
-    int decoded_len = BIO_read(b64, buffer.data(), static_cast<int>(buffer.size()));
+    int decodedLen = BIO_read(b64, buffer.data(), static_cast<int>(buffer.size()));
     BIO_free_all(b64);
 
-    if (decoded_len < 0)
+    if (decodedLen < 0) {
         return "";
-    return std::string(buffer.data(), decoded_len);
+    }
+    return std::string(buffer.data(), decodedLen);
 }
 
 std::string NormalizePem(const std::string &pem)
@@ -137,8 +144,8 @@ std::string NormalizePem(const std::string &pem)
     body.erase(std::remove_if(body.begin(), body.end(), [](unsigned char c) { return std::isspace(c); }), body.end());
 
     std::string normalized = beginLine + "\n";
-    for (size_t i = 0; i < body.size(); i += 64) {
-        normalized += body.substr(i, 64);
+    for (size_t i = 0; i < body.size(); i += PEM_BODY_LINE_LENGTH) {
+        normalized += body.substr(i, PEM_BODY_LINE_LENGTH);
         normalized += "\n";
     }
     normalized += endLine + "\n";
@@ -188,6 +195,51 @@ litebus::Future<ExternalUserInfo> CasdoorVerifier::Verify(const std::string &idT
     return promise->GetFuture();
 }
 
+Status CasdoorVerifier::DecodeJwtPayload(const std::string &idToken, nlohmann::json *payload)
+{
+    size_t firstDot = idToken.find(JWT_SEPARATOR);
+    if (firstDot == std::string::npos) {
+        return Status(StatusCode::FAILED, "Casdoor JWT format error: first separator not found");
+    }
+    size_t secondDot = idToken.rfind(JWT_SEPARATOR);
+    if (secondDot == std::string::npos || secondDot == firstDot) {
+        return Status(StatusCode::FAILED, "Casdoor JWT format error: second separator not found");
+    }
+    if (idToken.find(JWT_SEPARATOR, firstDot + 1) != secondDot) {
+        return Status(StatusCode::FAILED, "Casdoor JWT format error: too many separators");
+    }
+
+    std::string payloadJson = Base64UrlDecode(idToken.substr(firstDot + 1, secondDot - firstDot - 1));
+    *payload = nlohmann::json::parse(payloadJson);
+    return Status::OK();
+}
+
+void CasdoorVerifier::ExtractJwtUserInfo(const nlohmann::json &payload, ExternalUserInfo& info)
+{
+    info.userId = payload.value("name", "");
+    info.tenantId = payload.value("owner", "");
+    info.role = payload.value("role", "");
+    info.exp = payload.value("exp", 0LL);
+    if (info.role.empty()) {
+        info.role = ResolveUserRole(info.tenantId, info.userId);
+    }
+    if (info.role.empty()) {
+        info.role = ROLE_USER;
+    }
+}
+
+void CasdoorVerifier::ExtractJwtQuotas(const nlohmann::json &payload, ExternalUserInfo& info) const
+{
+    if (payload.contains("cpu_quota")) {
+        info.cpuQuota = payload["cpu_quota"].is_number() ? payload["cpu_quota"].get<int64_t>()
+                                                         : std::stoll(payload["cpu_quota"].get<std::string>());
+    }
+    if (payload.contains("mem_quota")) {
+        info.memQuota = payload["mem_quota"].is_number() ? payload["mem_quota"].get<int64_t>()
+                                                         : std::stoll(payload["mem_quota"].get<std::string>());
+    }
+}
+
 ExternalUserInfo CasdoorVerifier::VerifyJwt(const std::string &idToken)
 {
     ExternalUserInfo info;
@@ -202,39 +254,19 @@ ExternalUserInfo CasdoorVerifier::VerifyJwt(const std::string &idToken)
     }
 
     try {
-        size_t firstDot = idToken.find(JWT_SEPARATOR);
-        size_t secondDot = idToken.find(JWT_SEPARATOR, firstDot + 1);
-        std::string payloadJson = Base64UrlDecode(idToken.substr(firstDot + 1, secondDot - firstDot - 1));
-        auto payload = nlohmann::json::parse(payloadJson);
-
-        info.userId = payload.value("name", "");
-        info.tenantId = payload.value("owner", "");
-        info.role = payload.value("role", "");
-        info.exp = payload.value("exp", 0LL);
-
+        nlohmann::json payload;
+        Status status = DecodeJwtPayload(idToken, &payload);
+        if (status.IsError()) {
+            info.status = status;
+            return info;
+        }
+        ExtractJwtUserInfo(payload, info);
         auto now = static_cast<int64_t>(std::time(nullptr));
         if (info.exp > 0 && info.exp < now) {
             info.status = Status(StatusCode::FAILED, "Casdoor JWT token has expired");
             return info;
         }
-
-        if (info.role.empty()) {
-            info.role = ResolveUserRole(info.tenantId, info.userId);
-        }
-        if (info.role.empty()) {
-            info.role = ROLE_USER;
-        }
-
-        // Extract quotas if available in custom attributes
-        if (payload.contains("cpu_quota")) {
-            info.cpuQuota = payload["cpu_quota"].is_number() ? payload["cpu_quota"].get<int64_t>()
-                                                             : std::stoll(payload["cpu_quota"].get<std::string>());
-        }
-        if (payload.contains("mem_quota")) {
-            info.memQuota = payload["mem_quota"].is_number() ? payload["mem_quota"].get<int64_t>()
-                                                             : std::stoll(payload["mem_quota"].get<std::string>());
-        }
-
+        ExtractJwtQuotas(payload, info);
         info.status = Status::OK();
     } catch (const std::exception &e) {
         info.status = Status(StatusCode::FAILED, std::string("Failed to parse Casdoor JWT: ") + e.what());
@@ -242,12 +274,8 @@ ExternalUserInfo CasdoorVerifier::VerifyJwt(const std::string &idToken)
     return info;
 }
 
-std::string CasdoorVerifier::ResolveUserRole(const std::string &owner, const std::string &name)
+std::string CasdoorVerifier::LoginAdminAndGetCookie() const
 {
-    if (owner.empty() || name.empty() || config_.adminUser.empty() || config_.adminPassword.empty()) {
-        return "";
-    }
-
     std::string loginUrl = config_.endpoint + "/api/login";
     litebus::Try<litebus::http::URL> loginParsed = litebus::http::URL::Decode(loginUrl);
     if (loginParsed.IsError()) {
@@ -270,13 +298,13 @@ std::string CasdoorVerifier::ResolveUserRole(const std::string &owner, const std
     std::string cookie = ExtractCookieHeader(loginResponse.Get());
     if (cookie.empty()) {
         YRLOG_WARN("Casdoor admin login did not return session cookie");
-        return "";
     }
+    return cookie;
+}
 
-    std::unordered_map<std::string, std::string> headers;
-    headers["Cookie"] = cookie;
-
-    std::string userId = owner + "/" + name;
+std::string CasdoorVerifier::QueryUserForRole(const std::string &userId, const std::string &cookie)
+{
+    std::unordered_map<std::string, std::string> headers = {{"Cookie", cookie}};
     std::string getUserUrl = config_.endpoint + "/api/get-user?id=" + UrlEncode(userId);
     auto getUserParsed = litebus::http::URL::Decode(getUserUrl);
     if (getUserParsed.IsError()) {
@@ -301,34 +329,54 @@ std::string CasdoorVerifier::ResolveUserRole(const std::string &owner, const std
             return persistedRole;
         }
 
-        std::string signupApplication = userJson.value("signupApplication", "");
-        std::string registerSource = userJson.value("registerSource", "");
-        const std::string expectedSource = config_.organization + "/" + config_.application;
-        bool isManagedSignup = signupApplication == config_.application || registerSource == expectedSource;
-        if (!isManagedSignup) {
-            return "";
-        }
-
-        userJson["tag"] = ROLE_DEVELOPER;
-        std::string updateUserUrl = config_.endpoint + "/api/update-user?id=" + UrlEncode(userId);
-        auto updateUserParsed = litebus::http::URL::Decode(updateUserUrl);
-        if (updateUserParsed.IsError()) {
-            return "";
-        }
-
-        auto updateResponse = litebus::http::Post(updateUserParsed.Get(), litebus::Some(headers), userJson.dump(),
-                                                  std::string("application/json"), 5000);
-        if (updateResponse.IsError() || updateResponse.Get().retCode != litebus::http::OK) {
-            YRLOG_WARN("Failed to persist Casdoor role tag for user {}", userId);
-            return "";
-        }
-
-        YRLOG_INFO("Assigned Casdoor user {} developer role tag after signup", userId);
-        return ROLE_DEVELOPER;
+        return PersistDeveloperRole(userId, headers, &userJson);
     } catch (const std::exception &e) {
         YRLOG_WARN("Failed to resolve Casdoor role for {}: {}", userId, e.what());
         return "";
     }
+}
+
+std::string CasdoorVerifier::PersistDeveloperRole(const std::string &userId,
+                                                  const std::unordered_map<std::string, std::string> &headers,
+                                                  nlohmann::json *userJson) const
+{
+    std::string signupApplication = userJson->value("signupApplication", "");
+    std::string registerSource = userJson->value("registerSource", "");
+    const std::string expectedSource = config_.organization + "/" + config_.application;
+    bool isManagedSignup = signupApplication == config_.application || registerSource == expectedSource;
+    if (!isManagedSignup) {
+        return "";
+    }
+
+    (*userJson)["tag"] = ROLE_DEVELOPER;
+    std::string updateUserUrl = config_.endpoint + "/api/update-user?id=" + UrlEncode(userId);
+    auto updateUserParsed = litebus::http::URL::Decode(updateUserUrl);
+    if (updateUserParsed.IsError()) {
+        return "";
+    }
+
+    auto updateResponse = litebus::http::Post(updateUserParsed.Get(), litebus::Some(headers), userJson->dump(),
+                                              std::string("application/json"), 5000);
+    if (updateResponse.IsError() || updateResponse.Get().retCode != litebus::http::OK) {
+        YRLOG_WARN("Failed to persist Casdoor role tag for user {}", userId);
+        return "";
+    }
+
+    YRLOG_INFO("Assigned Casdoor user {} developer role tag after signup", userId);
+    return ROLE_DEVELOPER;
+}
+
+std::string CasdoorVerifier::ResolveUserRole(const std::string &owner, const std::string &name)
+{
+    if (owner.empty() || name.empty() || config_.adminUser.empty() || config_.adminPassword.empty()) {
+        return "";
+    }
+
+    std::string cookie = LoginAdminAndGetCookie();
+    if (cookie.empty()) {
+        return "";
+    }
+    return QueryUserForRole(owner + "/" + name, cookie);
 }
 
 bool CasdoorVerifier::VerifySignature(const std::string &token)
@@ -339,8 +387,9 @@ bool CasdoorVerifier::VerifySignature(const std::string &token)
     }
 
     size_t secondDot = token.rfind(JWT_SEPARATOR);
-    if (secondDot == std::string::npos)
+    if (secondDot == std::string::npos) {
         return false;
+    }
 
     std::string signingInput = token.substr(0, secondDot);
     std::string signature = Base64UrlDecode(token.substr(secondDot + 1));
@@ -354,8 +403,9 @@ bool CasdoorVerifier::VerifySignature(const std::string &token)
 
     EVP_MD_CTX *mdCtx = EVP_MD_CTX_new();
     EVP_DigestVerifyInit(mdCtx, nullptr, EVP_sha256(), nullptr, pkey);
-    int ret = EVP_DigestVerify(mdCtx, reinterpret_cast<const unsigned char *>(signature.data()), signature.length(),
-                               reinterpret_cast<const unsigned char *>(signingInput.data()), signingInput.length());
+    auto signatureBytes = static_cast<const unsigned char *>(static_cast<const void *>(signature.data()));
+    auto signingInputBytes = static_cast<const unsigned char *>(static_cast<const void *>(signingInput.data()));
+    int ret = EVP_DigestVerify(mdCtx, signatureBytes, signature.length(), signingInputBytes, signingInput.length());
 
     EVP_MD_CTX_free(mdCtx);
     EVP_PKEY_free(pkey);
@@ -386,10 +436,12 @@ litebus::Future<ExternalUserInfo> CasdoorVerifier::ExchangeCode(const std::strin
     // Casdoor's authorization-code token exchange endpoint is under /api/login/oauth/access_token.
     std::string tokenUrl = config_.endpoint + "/api/login/oauth/access_token";
     std::string body =
-        "grant_type=authorization_code"
-        "&client_id="
-        + UrlEncode(config_.clientId) + "&client_secret=" + UrlEncode(config_.clientSecret) + "&code=" + UrlEncode(code)
-        + "&redirect_uri=" + UrlEncode(redirectUri);
+        "grant_type=authorization_code" +
+        std::string("&client_id=") +
+        UrlEncode(config_.clientId) +
+        "&client_secret=" + UrlEncode(config_.clientSecret) +
+        "&code=" + UrlEncode(code) +
+        "&redirect_uri=" + UrlEncode(redirectUri);
 
     litebus::Try<litebus::http::URL> url = litebus::http::URL::Decode(tokenUrl);
     litebus::http::Post(url.Get(), litebus::None(), litebus::Some(body),
@@ -457,7 +509,7 @@ litebus::Future<std::pair<int64_t, int64_t>> CasdoorVerifier::QueryTenantQuota(c
 
     // In Casdoor, we query the user to get attributes.
     // This requires a client-credentials token first (similar to Keycloak).
-    // TODO: Implement Casdoor User API query
+    // Casdoor User API quota query is not implemented yet.
     promise->SetValue(std::make_pair(static_cast<int64_t>(-1), static_cast<int64_t>(-1)));
     return promise->GetFuture();
 }

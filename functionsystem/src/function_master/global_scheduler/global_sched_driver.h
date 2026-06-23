@@ -38,6 +38,7 @@ public:
     void InitEvictAgentHandler(const std::shared_ptr<GlobalSched> &globalSched);
     void InitQueryAgentCountHandler(const std::shared_ptr<MetaStoreClient> &metaStoreClient);
     void InitGetSchedulingQueueHandler(const std::shared_ptr<GlobalSched> &globalSched);
+    void InitUpdateLocalSchedulingStatusHandler(const std::shared_ptr<GlobalSched> &globalSched);
 };
 
 class ResourcesApiRouter : public ApiRouterRegister {
@@ -74,6 +75,10 @@ public:
     void BindComponentName(const std::string &componentName);
 
 private:
+    void InitAgentApiRoutes(const std::shared_ptr<MetaStoreClient> &metaStoreClient);
+    void InitResourcesApiRoutes();
+    void InitTraefikRoutes(const functionmaster::Flags &flags);
+
     std::shared_ptr<GlobalSched> globalSched_ = nullptr;
     std::shared_ptr<HttpServer> httpServer_ = nullptr;
     std::shared_ptr<DefaultHealthyRouter> apiRouteRegister_ = nullptr;

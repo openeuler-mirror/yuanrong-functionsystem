@@ -30,13 +30,9 @@
 #include "common/proto/pb/posix/exec_service.grpc.pb.h"
 #include "function_proxy/common/exec_session/exec_session_actor.h"
 #include "function_proxy/common/exec_session/io_event_actor.h"
+#include "function_proxy/local_scheduler/instance_control/idle/idle_mgr.h"
 
 namespace functionsystem {
-
-namespace local_scheduler {
-class IdleMgr;
-}
-
 
 using exec_service::ExecInputData;
 using exec_service::ExecMessage;
@@ -114,6 +110,11 @@ private:
      * Handle window resize
      */
     GrpcStatus HandleResize(const ExecResizeRequest &resize, const litebus::AID &sessionAid);
+
+    /**
+     * Handle stdin EOF: close child process stdin pipe
+     */
+    GrpcStatus HandleStdinEof(const litebus::AID &sessionAid);
 
     /**
      * Send status response

@@ -12,6 +12,15 @@ import tasks
 from . import vendor_cache
 
 log = utils.stream_logger()
+CXX_MODULES = {
+    "all",
+    "function_master",
+    "domain_scheduler",
+    "runtime_manager",
+    "function_proxy",
+    "function_agent",
+    "iam_server",
+}
 
 
 def reset_stale_vendor_externalprojects(root_dir, target_names):
@@ -32,23 +41,40 @@ def reset_stale_vendor_externalprojects(root_dir, target_names):
 def run_build(root_dir, cmd_args):
     start_time = time.time()
     builder_name = getattr(cmd_args, "builder", "cmake")
+    component = getattr(cmd_args, "component", "all")
+    cmake_args = {}
+    raw_cmake_args = getattr(cmd_args, "cmake_args", [])
+    if isinstance(raw_cmake_args, dict):
+        cmake_args.update(raw_cmake_args)
+    else:
+        for item in raw_cmake_args:
+            cmake_args.update(item)
     args = {
         "root_dir": root_dir,
         "job_num": cmd_args.job_num,
         "version": cmd_args.version,
         "build_type": cmd_args.build_type.capitalize(),  # 设置为首字母大写
         "builder": builder_name,
+        "component": component,
+        "linker": getattr(cmd_args, "linker", "auto"),
+        "cmake_args": cmake_args,
     }
     if args["job_num"] > (os.cpu_count() or 1) * 2:
         log.warning(f"The -j {args['job_num']} is over the max logical cpu count({os.cpu_count()}) * 2")
     log.info(f"Start to build function-system with args: {json.dumps(args)}")
 
-    build_vendor(args)
-    build_litebus(args)
-    if args["builder"] == "bazel":
+    if args["component"] in ["all", "cli"]:
+        builder.build_cli(root_dir)
+    if args["component"] in ["all", "meta_service"]:
+        builder.build_meta_service(root_dir)
+
+    if args["component"] in CXX_MODULES:
+        build_vendor(args)
+        build_litebus(args)
+    if args["builder"] == "bazel" and args["component"] in CXX_MODULES:
         # Bazel builds logs, metrics, and C++ binaries from source itself
         build_functionsystem_bazel(root_dir, args)
-    else:
+    elif args["component"] in CXX_MODULES:
         build_logs(args)
         build_metrics(args)
         build_functionsystem(root_dir, args)
@@ -126,18 +152,18 @@ def build_metrics(args):
 def build_functionsystem(root_dir, args):
     log.info("Start to build functionsystem")
     # 编译 CPP 程序
-    builder.build_binary(root_dir, args["job_num"], args["version"], args["build_type"])
-    # 编译 CLI 程序
-    builder.build_cli(root_dir)
-    # 编译 meta-service
-    builder.build_meta_service(root_dir)
+    builder.build_binary(
+        root_dir=root_dir,
+        job_num=args["job_num"],
+        version=args["version"],
+        build_type=args["build_type"],
+        component=args["component"],
+        linker=args["linker"],
+        cmake_args=args["cmake_args"],
+    )
 
 
 def build_functionsystem_bazel(root_dir, args):
     log.info("Start to build functionsystem with Bazel")
     # 编译 CPP 程序 (Bazel)
-    builder.build_binary_bazel(root_dir, args["job_num"], args["version"], args["build_type"])
-    # 编译 CLI 程序 (same as cmake, CLI uses Go)
-    builder.build_cli(root_dir)
-    # 编译 meta-service (same as cmake, meta-service uses Go)
-    builder.build_meta_service(root_dir)
+    builder.build_binary_bazel(root_dir, args["job_num"], args["version"], args["build_type"], args["component"])

@@ -29,13 +29,35 @@ namespace functionsystem::runtime_manager {
 namespace {
 const std::string CHDIR_PATH_CONFIG = "CHDIR_PATH";
 const std::string BASH_PATH = "/bin/bash";
+
+std::pair<Status, CommandArgs> BuildExplicitEntrypoint(const messages::RuntimeInstanceInfo &info)
+{
+    std::string entryFile = info.runtimeconfig().entryfile();
+    if (entryFile.empty()) {
+        YRLOG_ERROR("{}|{}|posix-custom entryFile is empty", info.traceid(), info.requestid());
+        return {Status(StatusCode::RUNTIME_MANAGER_EXECUTABLE_PATH_INVALID, "entryFile is empty"), {}};
+    }
+    if (!litebus::os::ExistPath(entryFile)) {
+        YRLOG_ERROR("{}|{}|posix-custom entryFile not found: {}", info.traceid(), info.requestid(), entryFile);
+        return {Status(StatusCode::RUNTIME_MANAGER_EXECUTABLE_PATH_INVALID, "entryFile path not found"), {}};
+    }
+    const std::string bootstrapPath = entryFile + "/bootstrap";
+    if (!litebus::os::ExistPath(bootstrapPath)) {
+        YRLOG_ERROR("{}|{}|posix-custom bootstrap not found: {}", info.traceid(), info.requestid(), bootstrapPath);
+        return {Status(StatusCode::RUNTIME_MANAGER_EXECUTABLE_PATH_INVALID, "bootstrap script not found"), {}};
+    }
+
+    CommandArgs result;
+    result.execPath = BASH_PATH;
+    result.args = {bootstrapPath};
+    result.workingDir = entryFile;
+    result.deployOptionOverrides[CHDIR_PATH_CONFIG] = entryFile;
+    return {Status::OK(), std::move(result)};
+}
 }  // namespace
 
-// ── NodejsCommandStrategy ────────────────────────────────────────────────────
-
-std::pair<Status, CommandArgs> NodejsCommandStrategy::BuildArgs(const messages::StartInstanceRequest &request,
-                                                                  const std::string &port,
-                                                                  const RuntimeConfig &config) const
+std::pair<Status, CommandArgs> NodejsCommandStrategy::BuildArgs(
+    const messages::StartInstanceRequest &request, const std::string &port, const RuntimeConfig &config) const
 {
     const auto &info = request.runtimeinstanceinfo();
     YRLOG_DEBUG("{}|{}|NodejsCommandStrategy::BuildArgs", info.traceid(), info.requestid());
@@ -55,7 +77,7 @@ std::pair<Status, CommandArgs> NodejsCommandStrategy::BuildArgs(const messages::
     std::string address = GetPosixAddress(config, port);
     std::string jobID = Utils::GetJobIDFromTraceID(info.traceid());
 
-    // Optionally cap V8 heap from memory resource
+    // Optionally cap V8 heap from memory resource.
     std::string memoryFlag;
     for (const auto &resource : info.runtimeconfig().resources().resources()) {
         if (resource.first == resource_view::MEMORY_RESOURCE_NAME) {
@@ -83,11 +105,9 @@ std::pair<Status, CommandArgs> NodejsCommandStrategy::BuildArgs(const messages::
     return {Status::OK(), std::move(result)};
 }
 
-// ── PosixCustomCommandStrategy ───────────────────────────────────────────────
-
-std::pair<Status, CommandArgs> PosixCustomCommandStrategy::BuildArgs(const messages::StartInstanceRequest &request,
-                                                                       const std::string & /*port*/,
-                                                                       const RuntimeConfig & /*config*/) const
+std::pair<Status, CommandArgs> PosixCustomCommandStrategy::BuildArgs(
+    const messages::StartInstanceRequest &request, const std::string & /* port */,
+    const RuntimeConfig & /* config */) const
 {
     const auto &info = request.runtimeinstanceinfo();
     const auto &posixEnvs = info.runtimeconfig().posixenvs();
@@ -128,27 +148,6 @@ std::pair<Status, CommandArgs> PosixCustomCommandStrategy::BuildArgs(const messa
         return {Status::OK(), std::move(result)};
     }
 
-    // Case 3: explicit entryFile + /bootstrap
-    std::string entryFile = info.runtimeconfig().entryfile();
-    if (entryFile.empty()) {
-        YRLOG_ERROR("{}|{}|posix-custom entryFile is empty", info.traceid(), info.requestid());
-        return {Status(StatusCode::RUNTIME_MANAGER_EXECUTABLE_PATH_INVALID, "entryFile is empty"), {}};
-    }
-    if (!litebus::os::ExistPath(entryFile)) {
-        YRLOG_ERROR("{}|{}|posix-custom entryFile not found: {}", info.traceid(), info.requestid(), entryFile);
-        return {Status(StatusCode::RUNTIME_MANAGER_EXECUTABLE_PATH_INVALID, "entryFile path not found"), {}};
-    }
-    const std::string bootstrapPath = entryFile + "/bootstrap";
-    if (!litebus::os::ExistPath(bootstrapPath)) {
-        YRLOG_ERROR("{}|{}|posix-custom bootstrap not found: {}", info.traceid(), info.requestid(), bootstrapPath);
-        return {Status(StatusCode::RUNTIME_MANAGER_EXECUTABLE_PATH_INVALID, "bootstrap script not found"), {}};
-    }
-
-    CommandArgs result;
-    result.execPath = BASH_PATH;
-    result.args = {bootstrapPath};
-    result.workingDir = entryFile;
-    result.deployOptionOverrides[CHDIR_PATH_CONFIG] = entryFile;
-    return {Status::OK(), std::move(result)};
+    return BuildExplicitEntrypoint(info);
 }
 }  // namespace functionsystem::runtime_manager

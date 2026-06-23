@@ -42,6 +42,9 @@ const std::string LOGIN_URL = "/v1/token/login";
 const std::string CODE_EXCHANGE_URL = "/v1/token/code-exchange";
 const std::string AUTH_URL_URL = "/v1/auth/url";
 const std::string TENANT_QUOTA_URL = "/v1/tenant/quota";
+constexpr uint64_t MIN_TOKEN_EXPIRES_SECONDS = 60;
+constexpr uint64_t MAX_TOKEN_EXPIRES_SECONDS = 7200;
+constexpr uint64_t DEFAULT_TOKEN_EXPIRES_SECONDS = 7200;
 // key for request header & token response header
 const std::string HEADER_AUTH_KEY = "X-Auth";                        // key for token
 const std::string HEADER_TENANT_ID_KEY = "X-Tenant-ID";              // key for tenantID
@@ -438,6 +441,45 @@ std::shared_ptr<ExternalAuthVerifier> IAMActor::GetExternalVerifier()
     return verifier_;
 }
 
+HttpResponse IAMActor::BuildExternalTokenResponse(const ExternalUserInfo &userInfo,
+                                                  const std::shared_ptr<TokenSalt> &tokenSalt,
+                                                  uint64_t expiresIn)
+{
+    nlohmann::json resp;
+    resp["token"] = tokenSalt->token;
+    resp["tenant_id"] = userInfo.tenantId;
+    resp["expires_in"] = expiresIn;
+    resp["role"] = userInfo.role;
+    if (userInfo.cpuQuota >= 0) {
+        resp["cpu_quota"] = userInfo.cpuQuota;
+    }
+    if (userInfo.memQuota >= 0) {
+        resp["mem_quota"] = userInfo.memQuota;
+    }
+    return GenerateHttpResponse(litebus::http::ResponseCode::OK, resp.dump());
+}
+
+void IAMActor::CompleteExternalToken(const ExternalUserInfo &userInfo, uint64_t expiresIn,
+                                     const std::shared_ptr<litebus::Promise<HttpResponse>> &promise)
+{
+    if (!internalIAM_) {
+        promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR,
+                                               "IAM not initialized"));
+        return;
+    }
+
+    internalIAM_->RequireEncryptTokenWithQuota(userInfo.tenantId, userInfo.role, userInfo.cpuQuota,
+                                               std::to_string(userInfo.memQuota), expiresIn)
+        .OnComplete([promise, userInfo, expiresIn](const litebus::Future<std::shared_ptr<TokenSalt>> &tokenFuture) {
+            if (tokenFuture.IsError() || tokenFuture.Get()->status.IsError()) {
+                promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR,
+                                                       "Token generation failed"));
+                return;
+            }
+            promise->SetValue(BuildExternalTokenResponse(userInfo, tokenFuture.Get(), expiresIn));
+        });
+}
+
 litebus::Future<HttpResponse> IAMActor::ExchangeToken(const HttpRequest &request)
 {
     auto promise = std::make_shared<litebus::Promise<HttpResponse>>();
@@ -457,8 +499,8 @@ litebus::Future<HttpResponse> IAMActor::ExchangeToken(const HttpRequest &request
             return promise->GetFuture();
         }
 
-        uint64_t expiresIn = body.value("expires_in", 7200);
-        if (expiresIn < 60 || expiresIn > 7200) {
+        uint64_t expiresIn = body.value("expires_in", DEFAULT_TOKEN_EXPIRES_SECONDS);
+        if (expiresIn < MIN_TOKEN_EXPIRES_SECONDS || expiresIn > MAX_TOKEN_EXPIRES_SECONDS) {
             promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "Invalid expires_in"));
             return promise->GetFuture();
         }
@@ -474,37 +516,7 @@ litebus::Future<HttpResponse> IAMActor::ExchangeToken(const HttpRequest &request
                 }
 
                 ExternalUserInfo userInfo = future.Get();
-                if (!self->internalIAM_) {
-                    promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR,
-                                                           "IAM not initialized"));
-                    return;
-                }
-
-                // Inject quotas into internal IAM token
-                self->internalIAM_
-                    ->RequireEncryptTokenWithQuota(userInfo.tenantId, userInfo.role, userInfo.cpuQuota,
-                                                   std::to_string(userInfo.memQuota), expiresIn)
-                    .OnComplete(
-                        [promise, userInfo, expiresIn](const litebus::Future<std::shared_ptr<TokenSalt>> &tokenFuture) {
-                            if (tokenFuture.IsError() || tokenFuture.Get()->status.IsError()) {
-                                promise->SetValue(GenerateHttpResponse(
-                                    litebus::http::ResponseCode::INTERNAL_SERVER_ERROR, "Token generation failed"));
-                                return;
-                            }
-
-                            auto tokenSalt = tokenFuture.Get();
-                            nlohmann::json resp;
-                            resp["token"] = tokenSalt->token;
-                            resp["tenant_id"] = userInfo.tenantId;
-                            resp["expires_in"] = expiresIn;
-                            resp["role"] = userInfo.role;
-                            if (userInfo.cpuQuota >= 0)
-                                resp["cpu_quota"] = userInfo.cpuQuota;
-                            if (userInfo.memQuota >= 0)
-                                resp["mem_quota"] = userInfo.memQuota;
-
-                            promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::OK, resp.dump()));
-                        });
+                self->CompleteExternalToken(userInfo, expiresIn, promise);
             });
     } catch (const std::exception &e) {
         promise->SetValue(
@@ -525,7 +537,7 @@ litebus::Future<HttpResponse> IAMActor::ExchangeCode(const HttpRequest &request)
         auto body = nlohmann::json::parse(request.body);
         std::string code = body.value("code", "");
         std::string redirectUri = body.value("redirect_uri", "");
-        uint64_t expiresIn = body.value("expires_in", 7200);
+        uint64_t expiresIn = body.value("expires_in", DEFAULT_TOKEN_EXPIRES_SECONDS);
 
         if (code.empty() || redirectUri.empty()) {
             promise->SetValue(
@@ -551,28 +563,7 @@ litebus::Future<HttpResponse> IAMActor::ExchangeCode(const HttpRequest &request)
                 }
 
                 ExternalUserInfo userInfo = future.Get();
-                self->internalIAM_
-                    ->RequireEncryptTokenWithQuota(userInfo.tenantId, userInfo.role, userInfo.cpuQuota,
-                                                   std::to_string(userInfo.memQuota), expiresIn)
-                    .OnComplete(
-                        [promise, userInfo, expiresIn](const litebus::Future<std::shared_ptr<TokenSalt>> &tokenFuture) {
-                            if (tokenFuture.IsError() || tokenFuture.Get()->status.IsError()) {
-                                promise->SetValue(GenerateHttpResponse(
-                                    litebus::http::ResponseCode::INTERNAL_SERVER_ERROR, "Token generation failed"));
-                                return;
-                            }
-                            auto tokenSalt = tokenFuture.Get();
-                            nlohmann::json resp;
-                            resp["token"] = tokenSalt->token;
-                            resp["tenant_id"] = userInfo.tenantId;
-                            resp["expires_in"] = expiresIn;
-                            resp["role"] = userInfo.role;
-                            if (userInfo.cpuQuota >= 0)
-                                resp["cpu_quota"] = userInfo.cpuQuota;
-                            if (userInfo.memQuota >= 0)
-                                resp["mem_quota"] = userInfo.memQuota;
-                            promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::OK, resp.dump()));
-                        });
+                self->CompleteExternalToken(userInfo, expiresIn, promise);
             });
     } catch (...) {
         promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "Invalid request body"));
@@ -602,12 +593,12 @@ litebus::Future<HttpResponse> IAMActor::Login(const HttpRequest &request)
                 }
 
                 ExternalUserInfo userInfo = future.Get();
-                uint64_t expiresIn = 7200;
+                uint64_t expiresIn = DEFAULT_TOKEN_EXPIRES_SECONDS;
                 self->internalIAM_
                     ->RequireEncryptTokenWithQuota(userInfo.tenantId, userInfo.role, userInfo.cpuQuota,
                                                    std::to_string(userInfo.memQuota), expiresIn)
                     .OnComplete(
-                        [promise, userInfo, expiresIn](const litebus::Future<std::shared_ptr<TokenSalt>> &tokenFuture) {
+                    [promise, userInfo, expiresIn](const litebus::Future<std::shared_ptr<TokenSalt>> &tokenFuture) {
                             if (tokenFuture.IsError() || tokenFuture.Get()->status.IsError()) {
                                 promise->SetValue(GenerateHttpResponse(
                                     litebus::http::ResponseCode::INTERNAL_SERVER_ERROR, "Token generation failed"));
@@ -619,10 +610,12 @@ litebus::Future<HttpResponse> IAMActor::Login(const HttpRequest &request)
                             resp["tenant_id"] = userInfo.tenantId;
                             resp["expires_in"] = expiresIn;
                             resp["role"] = userInfo.role;
-                            if (userInfo.cpuQuota >= 0)
+                            if (userInfo.cpuQuota >= 0) {
                                 resp["cpu_quota"] = userInfo.cpuQuota;
-                            if (userInfo.memQuota >= 0)
+                            }
+                            if (userInfo.memQuota >= 0) {
                                 resp["mem_quota"] = userInfo.memQuota;
+                            }
                             promise->SetValue(GenerateHttpResponse(litebus::http::ResponseCode::OK, resp.dump()));
                         });
             });

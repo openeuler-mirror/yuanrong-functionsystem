@@ -17,8 +17,8 @@
 #ifndef FUNCTIONSYSTEM_COMMON_LRU_LRU_CACHE_H
 #define FUNCTIONSYSTEM_COMMON_LRU_LRU_CACHE_H
 
-#include <cassert>
 #include <cstddef>
+#include <stdexcept>
 #include <functional>
 #include <list>
 #include <optional>
@@ -35,7 +35,9 @@ public:
     explicit LruCache(size_t capacity, EvictionCallback onEvict = nullptr)
         : member_capacity(capacity), member_onEvict(std::move(onEvict))
     {
-        assert(capacity > 0 && "LruCache capacity must be greater than 0");
+        if (capacity == 0) {
+            throw std::invalid_argument("LruCache capacity must be greater than 0");
+        }
     }
 
     LruCache(const LruCache&) = delete;

@@ -29,8 +29,26 @@ namespace functionsystem::domain_scheduler {
 const uint32_t MAX_REQUEST_RETRY_TIMES = 3;
 const uint32_t CREATE_AGENT_RETRY_TIMES = 3;
 const uint32_t MAX_RETRY_SCHEDULE_TIMES = 0;
+constexpr int64_t DEFAULT_TENANT_COOLDOWN_MS = 10000;
 using ScheduleResult = schedule_decision::ScheduleResult;
 using Scheduler = schedule_decision::Scheduler;
+
+static auto StartDomainScheduleSpan(const std::shared_ptr<messages::ScheduleRequest> &req)
+{
+    trace::TraceManager::SpanParam param;
+    param.spanName = trace::SpanName::K_DOMAIN_SCHEDULE;
+    param.spanKey = req->requestid();
+    param.traceID = req->traceid();
+    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
+        req->instance().createoptions(), &req->instance().scheduleoption().extension());
+    param.function = req->instance().function();
+    param.instanceID = req->instance().instanceid();
+    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
+    trace::TraceManager::PropagateSpanToOptions(span,
+                                                req->mutable_instance()->mutable_createoptions(),
+                                                req->mutable_instance()->mutable_scheduleoption()->mutable_extension());
+    return span;
+}
 
 litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::Schedule(
     const std::shared_ptr<messages::ScheduleRequest> &req)
@@ -55,7 +73,8 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     }
     requestTrySchedTimes_[req->requestid()]++;
 
-    schedulerQueueMap_[req->requestid()] = req;
+    ASSERT_IF_NULL(recorder_);
+    recorder_->RecordScheduleRequest(req);
 
     return ScheduleDecision(req);
 }
@@ -71,19 +90,7 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
         (*createOpts)[ENABLE_HORIZONTAL_SCALE_KEY] = "true";
     }
 
-    trace::TraceManager::SpanParam param;
-    param.spanName = trace::SpanName::kDomainSchedule;
-    param.spanKey = req->requestid();
-    param.traceID = req->traceid();
-    param.traceParent = trace::TraceManager::GetTraceParentFromOptions(
-        req->instance().createoptions(), &req->instance().scheduleoption().extension());
-    param.function = req->instance().function();
-    param.instanceID = req->instance().instanceid();
-    auto span = trace::TraceManager::GetInstance().StartSpanWithRecord(std::move(param));
-    trace::TraceManager::PropagateSpanToOptions(span,
-                                                req->mutable_instance()->mutable_createoptions(),
-                                                req->mutable_instance()->mutable_scheduleoption()
-                                                    ->mutable_extension());
+    auto span = StartDomainScheduleSpan(req);
 
     YRLOG_INFO("instance(req={}, priority={}, timeout={}, enableHorizontalScale={}) schedule decision",
                requestID, req->instance().scheduleoption().priority(), timeout, enableHorizontalScale_);
@@ -123,9 +130,10 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     uint32_t dispatchTimes)
 {
         // todo(lwy_robb): to use traceID
-    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::kDomainSchedule, req->requestid());
+    trace::TraceManager::GetInstance().StopSpan(trace::SpanName::K_DOMAIN_SCHEDULE, req->requestid());
 
-    schedulerQueueMap_.erase(req->requestid());
+    ASSERT_IF_NULL(recorder_);
+    recorder_->EraseScheduleRequest(req->requestid());
     auto schedResult = result.Get();
     if (schedResult.code == static_cast<int32_t>(StatusCode::INVALID_RESOURCE_PARAMETER)) {
         if (isHeader_) {
@@ -209,6 +217,24 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     YRLOG_INFO("{}|{}|schedule request response code: {} msg: {}", req->traceid(), req->requestid(), rsp->code(),
                rsp->message());
     return rsp;
+}
+
+litebus::Future<std::vector<std::shared_ptr<messages::ScheduleRequest>>> InstanceCtrlActor::GetSchedulerQueue()
+{
+    ASSERT_IF_NULL(recorder_);
+    return recorder_->QueryScheduleQueue().Then([](const std::vector<schedule_decision::ScheduleQueueRecord> &records) {
+        std::vector<std::shared_ptr<messages::ScheduleRequest>> requests;
+        requests.reserve(records.size());
+        for (const auto &record : records) {
+            auto request = std::make_shared<messages::ScheduleRequest>();
+            request->set_requestid(record.info.requestid());
+            request->mutable_instance()->set_requestid(record.info.requestid());
+            request->mutable_instance()->set_instanceid(record.info.instanceid());
+            request->mutable_instance()->mutable_resources()->CopyFrom(record.info.resources());
+            requests.emplace_back(std::move(request));
+        }
+        return requests;
+    });
 }
 
 void InstanceCtrlActor::UpdateMaxSchedRetryTimes(const uint32_t &retrys)
@@ -495,7 +521,9 @@ void InstanceCtrlActor::OnTenantQuotaExceeded(
     }
     const std::string tenantID = event.tenantid();
     int64_t cooldownMs = event.cooldownms();
-    if (cooldownMs <= 0) cooldownMs = 10000;
+    if (cooldownMs <= 0) {
+        cooldownMs = DEFAULT_TENANT_COOLDOWN_MS;
+    }
 
     YRLOG_INFO("InstanceCtrlActor: tenant={} blocked for {}ms (quota exceeded)", tenantID, cooldownMs);
 

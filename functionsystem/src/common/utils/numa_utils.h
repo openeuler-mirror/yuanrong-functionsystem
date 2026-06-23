@@ -21,8 +21,9 @@
 #include <mutex>
 #include <atomic>
 
-#include <numa.h>
-
+#ifdef ENABLE_NUMA
+#include "common/utils/numa_dl.h"
+#endif
 #include "common/resource_view/resource_type.h"
 
 namespace functionsystem::utils {

@@ -91,7 +91,7 @@ litebus::Future<std::shared_ptr<StreamingMessage>> PosixAPIHandler::Create(
         createReq.createoptions(), createReq.has_schedulingops() ? &createReq.schedulingops().extension() : nullptr);
     auto scheduleReq = TransFromCreateReqToScheduleReq(std::move(createReq), from);
     trace::TraceManager::SpanParam param;
-    param.spanName = trace::SpanName::kCreate;
+    param.spanName = trace::SpanName::K_CREATE;
     param.spanKey = requestID;
     param.traceID = traceID;
     param.traceParent = traceParent;

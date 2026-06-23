@@ -25,6 +25,13 @@
 #include "common/logs/logging.h"
 
 namespace functionsystem {
+namespace {
+class IoEventActor : public IOEventActor {
+public:
+    explicit IoEventActor(const std::string &name) : IOEventActor(name) {}
+    ~IoEventActor() override = default;
+};
+}  // namespace
 
 // Static member initialization
 std::shared_ptr<IOEventActor> IOEventActor::instance_ = nullptr;
@@ -36,7 +43,7 @@ void IOEventActor::CreateInstance()
         return;
     }
 
-    instance_ = std::shared_ptr<IOEventActor>(new IOEventActor("IOEventActor"));
+    instance_ = std::make_shared<IoEventActor>("IOEventActor");
     litebus::Spawn(instance_);
     YRLOG_INFO("IOEventActor singleton created");
 }
@@ -76,7 +83,7 @@ void IOEventActor::Init()
     }
 
     running_ = true;
-    eventLoopTimer_ = litebus::AsyncAfter(EVENT_LOOP_INTERVAL_MS, GetAID(), &IOEventActor::EventLoop);
+    eventLoopTimer_ = litebus::AsyncAfter(eventLoopIntervalMs, GetAID(), &IOEventActor::EventLoop);
 }
 
 void IOEventActor::Finalize()
@@ -133,12 +140,11 @@ void IOEventActor::EventLoop()
         return;
     }
 
-    struct epoll_event events[MAX_EVENTS];
-    int nfds = epoll_wait(epollFd_, events, MAX_EVENTS, 0);
-
+    struct epoll_event events[maxEvents];
+    int nfds = epoll_wait(epollFd_, events, maxEvents, 0);
     if (nfds < 0) {
         if (errno == EINTR) {
-            eventLoopTimer_ = litebus::AsyncAfter(EVENT_LOOP_INTERVAL_MS, GetAID(), &IOEventActor::EventLoop);
+            eventLoopTimer_ = litebus::AsyncAfter(eventLoopIntervalMs, GetAID(), &IOEventActor::EventLoop);
             return;
         }
         YRLOG_ERROR("epoll_wait failed, errno: {}", errno);
@@ -160,13 +166,13 @@ void IOEventActor::EventLoop()
     }
 
     if (running_) {
-        eventLoopTimer_ = litebus::AsyncAfter(EVENT_LOOP_INTERVAL_MS, GetAID(), &IOEventActor::EventLoop);
+        eventLoopTimer_ = litebus::AsyncAfter(eventLoopIntervalMs, GetAID(), &IOEventActor::EventLoop);
     }
 }
 
 void IOEventActor::ReadAndDispatch(int fd)
 {
-    char buffer[4096];
+    char buffer[65536];
     ssize_t bytesRead = read(fd, buffer, sizeof(buffer));
 
     auto it = fdToInfo_.find(fd);

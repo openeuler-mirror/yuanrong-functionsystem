@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-
 #ifndef COMMON_TRACE_TRACE_MANAGER_H
 #define COMMON_TRACE_TRACE_MANAGER_H
 
@@ -45,12 +44,12 @@ namespace trace {
 using AttributesVector = std::vector<std::pair<const std::string, const opentelemetry::common::AttributeValue>>;
 
 namespace SpanName {
-inline constexpr char kCreate[] = "yr.create";
-inline constexpr char kDomainSchedule[] = "yr.schedule.domain";
-inline constexpr char kLocalSchedule[] = "yr.schedule.local";
-inline constexpr char kForwardSchedule[] = "yr.schedule.forward";
-inline constexpr char kDeployInstance[] = "yr.instance.deploy";
-inline constexpr char kWaitConnection[] = "yr.instance.wait_connection";
+inline constexpr char K_CREATE[] = "yr.create";
+inline constexpr char K_DOMAIN_SCHEDULE[] = "yr.schedule.domain";
+inline constexpr char K_LOCAL_SCHEDULE[] = "yr.schedule.local";
+inline constexpr char K_FORWARD_SCHEDULE[] = "yr.schedule.forward";
+inline constexpr char K_DEPLOY_INSTANCE[] = "yr.instance.deploy";
+inline constexpr char K_WAIT_CONNECTION[] = "yr.instance.wait_connection";
 }  // namespace SpanName
 
 class TraceManager : public Singleton<TraceManager> {

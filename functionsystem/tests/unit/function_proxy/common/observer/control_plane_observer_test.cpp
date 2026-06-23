@@ -125,6 +125,10 @@ protected:
         YRLOG_INFO("TearDown......");
         metaStorageAccessor_->metaClient_ = metaStoreClient_;
         observerActor_->isPartialWatchInstances_ = false;
+        observerActor_->instanceInfoMap_.clear();
+        observerActor_->instanceModRevisionMap_.clear();
+        observerActor_->instanceWatchers_.clear();
+        observerActor_->instanceInfoSyncerCbFunc_ = nullptr;
         YRLOG_INFO("TearDown......Finish");
     }
 
@@ -1003,7 +1007,7 @@ TEST_F(ObserverTest, InstanceInfoSyncerTest)
     // test belong to self, need to update by callback function
     rep = std::make_shared<GetResponse>();
     rep->status = Status::OK();
-    rep->header.revision = 2;
+    rep->header.revision = 5;
     rep->kvs.emplace_back(events[2].kv);
     rep->kvs.emplace_back(events[4].kv);
 

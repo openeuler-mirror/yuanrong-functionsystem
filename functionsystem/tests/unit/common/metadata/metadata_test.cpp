@@ -306,6 +306,41 @@ TEST_F(LoaderTest, GetNspFuncMetaFromJson)
     EXPECT_EQ(nsp_function.codeMetaData.bucketUrl, "https://bucket-test-*.**.cn:**");
 }
 
+TEST_F(LoaderTest, GetRemoteFuncMetaUsesDefaultDeployDirWhenMissing)
+{
+    litebus::os::SetEnv("DEPLOY_DIR", "/tmp/yr-default-deploy");
+    const std::string remote_json = R"({
+          "codeMetaData": {
+            "storage_type": "s3",
+            "appId": "app-test",
+            "bucketId": "bucket-test",
+            "objectId": "object-test",
+            "bucketUrl": "https://bucket-test.example.com"
+          }
+          })";
+    FunctionMeta remote_function = GetFuncMetaFromJson(remote_json);
+    EXPECT_EQ(remote_function.codeMetaData.deployDir, "/tmp/yr-default-deploy");
+    litebus::os::UnSetEnv("DEPLOY_DIR");
+}
+
+TEST_F(LoaderTest, GetRemoteFuncMetaKeepsExplicitDeployDir)
+{
+    litebus::os::SetEnv("DEPLOY_DIR", "/tmp/yr-default-deploy");
+    const std::string remote_json = R"({
+          "codeMetaData": {
+            "storage_type": "s3",
+            "appId": "app-test",
+            "bucketId": "bucket-test",
+            "objectId": "object-test",
+            "bucketUrl": "https://bucket-test.example.com",
+            "deployDir": "/tmp/yr-explicit-deploy"
+          }
+          })";
+    FunctionMeta remote_function = GetFuncMetaFromJson(remote_json);
+    EXPECT_EQ(remote_function.codeMetaData.deployDir, "/tmp/yr-explicit-deploy");
+    litebus::os::UnSetEnv("DEPLOY_DIR");
+}
+
 TEST_F(LoaderTest, GetFuncMounts)
 {
     const std::string FUNC_MOUNTS = "func_mounts";

@@ -13,12 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "affinity_utils.h"
 
 #include <cmath>
+
 #include "common/resource_view/resource_tool.h"
 #include "common/resource_view/resource_type.h"
-#include <cmath>
 
 namespace functionsystem::schedule_plugin {
 // IN indicates that the value of the affinity label must be one of pod label value.

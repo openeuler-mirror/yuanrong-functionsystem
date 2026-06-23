@@ -121,14 +121,13 @@ Status ObserverActor::Register()
         YRLOG_INFO("Register watch with prefix: {}", ABNORMAL_SCHEDULER_PATH_PREFIX);
         watchOpt = WatchOption{ .prefix = true, .prevKv = true, .revision = 0, .keepRetry = true };
         (void)metaStorageAccessor_
-            ->RegisterObserver(
-                ABNORMAL_SCHEDULER_PATH_PREFIX, watchOpt,
+            ->RegisterObserver(ABNORMAL_SCHEDULER_PATH_PREFIX, watchOpt,
                 [aid(GetAID())](const std::vector<WatchEvent> &events, bool) {
-                    auto respCopy = events;
-                    litebus::Async(aid, &ObserverActor::OnNodeAbnormalEvent, respCopy);
-                    return true;
-                },
-                nullptr)
+                auto respCopy = events;
+                litebus::Async(aid, &ObserverActor::OnNodeAbnormalEvent, respCopy);
+                return true;
+            },
+            nullptr)
             .After(WATCH_TIMEOUT_MS, after);
     }
     return Status::OK();

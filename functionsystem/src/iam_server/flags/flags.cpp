@@ -24,6 +24,7 @@ namespace {
 const uint32_t DEFAULT_TOKEN_EXPIRED_TIME_SPAN = 24 * 60 * 60;  // 24 hours, unit: s
 const uint32_t MIN_TOKEN_EXPIRED_TIME_SPAN = 12 * 60;           // unit: s
 const uint32_t MAX_TOKEN_EXPIRED_TIME_SPAN = 7 * 24 * 60 * 60;  // unit: s
+const uint64_t DEFAULT_KEYCLOAK_CACHE_TTL_SECONDS = 300;
 }  // namespace
 using namespace litebus::flag;
 Flags::Flags()
@@ -64,7 +65,8 @@ Flags::Flags()
             "Keycloak issuer URL for JWT iss validation (defaults to keycloak_url)", "");
     AddFlag(&Flags::keycloakRealm_, "keycloak_realm", "Keycloak realm name", "");
     AddFlag(&Flags::keycloakEnabled_, "keycloak_enabled", "Enable Keycloak token exchange", false);
-    AddFlag(&Flags::keycloakCacheTtlSeconds_, "keycloak_cache_ttl_seconds", "JWKS cache TTL in seconds", 300);
+    AddFlag(&Flags::keycloakCacheTtlSeconds_, "keycloak_cache_ttl_seconds", "JWKS cache TTL in seconds",
+            DEFAULT_KEYCLOAK_CACHE_TTL_SECONDS);
 
     AddFlag(&Flags::authProvider_, "auth_provider", "External auth provider: keycloak or casdoor",
             std::string("casdoor"));

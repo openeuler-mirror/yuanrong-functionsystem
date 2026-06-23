@@ -56,6 +56,11 @@ func (p *PodmanRuntime) Delete(ctx context.Context, containerID string, timeoutS
 	return p.inner.Delete(ctx, containerID, timeoutSeconds)
 }
 
+// Stats returns runtime resource usage for a Podman container.
+func (p *PodmanRuntime) Stats(ctx context.Context, containerID string) (*ContainerStats, error) {
+	return p.inner.Stats(ctx, containerID)
+}
+
 func (p *PodmanRuntime) Close() error {
 	return p.inner.Close()
 }

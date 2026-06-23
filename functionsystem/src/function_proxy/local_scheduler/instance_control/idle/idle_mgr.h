@@ -20,9 +20,9 @@
 #include <memory>
 #include <string>
 
-namespace functionsystem::local_scheduler {
+#include "function_proxy/local_scheduler/instance_control/idle/idle_actor.h"
 
-class IdleActor;
+namespace functionsystem::local_scheduler {
 
 /**
  * IdleMgr owns the IdleActor lifecycle and is the unified external interface

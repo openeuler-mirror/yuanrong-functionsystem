@@ -21,12 +21,16 @@
 
 namespace functionsystem::runtime_manager {
 
-class GoCommandStrategy : public LanguageCommandStrategy {
+class GoStrategy : public LanguageStrategy {
 public:
+    ~GoStrategy() override = default;
+
     std::pair<Status, CommandArgs> BuildArgs(const messages::StartInstanceRequest &request,
                                              const std::string &port,
                                              const RuntimeConfig &config) const override;
 };
+
+using GoCommandStrategy = GoStrategy;
 
 }  // namespace functionsystem::runtime_manager
 

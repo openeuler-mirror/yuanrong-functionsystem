@@ -27,6 +27,7 @@
 #include "common/logs/logging.h"
 #include "meta_store_client/meta_store_client.h"
 #include "common/resource_view/view_utils.h"
+#include "common/schedule_decision/schedule_recorder/schedule_recorder.h"
 #include "mocks/mock_domain_group_ctrl.h"
 #include "mocks/mock_resource_view.h"
 #include "uplayer_stub.h"
@@ -112,10 +113,12 @@ protected:
         resourceViewMgr->virtual_ = virtual_;
         mockInstanceCtrl_ = std::make_shared<MockDomainInstanceCtrl>();
         mockGroupCtrl_ = std::make_shared<MockDomainGroupCtrl>();
+        recorder_ = schedule_decision::ScheduleRecorder::CreateScheduleRecorder();
         domainSchedSrvActor_->BindUnderlayerMgr(mockUnderlayerSchedMgr_);
         domainSchedSrvActor_->BindResourceView(resourceViewMgr);
         domainSchedSrvActor_->BindInstanceCtrl(mockInstanceCtrl_);
         domainSchedSrvActor_->BindDomainGroupCtrl(mockGroupCtrl_);
+        domainSchedSrvActor_->BindScheduleRecorder(recorder_);
         litebus::Spawn(domainSchedSrvActor_);
     }
 
@@ -128,6 +131,7 @@ protected:
         primary_ = nullptr;
         virtual_ = nullptr;
         mockInstanceCtrl_ = nullptr;
+        recorder_ = nullptr;
     }
 
     void RegisterUplayer(const std::string &upDomainName, const std::string &selfName,
@@ -172,6 +176,7 @@ protected:
     inline static std::string address_;
     std::shared_ptr<MockDomainInstanceCtrl> mockInstanceCtrl_;
     std::shared_ptr<MockDomainGroupCtrl> mockGroupCtrl_;
+    std::shared_ptr<schedule_decision::ScheduleRecorder> recorder_;
     std::shared_ptr<MockDomainUnderlayerSchedMgr> mockUnderlayerSchedMgr_;
     std::shared_ptr<MockResourceView> primary_;
     std::shared_ptr<MockResourceView> virtual_;
@@ -993,6 +998,15 @@ std::vector<std::shared_ptr<messages::ScheduleRequest>> GetGroupRequest()
     return vector;
 }
 
+schedule_decision::ScheduleQueueRecord GetQueueRecord(const std::string &requestID, int64_t enqueueTimeMs)
+{
+    auto request = std::make_shared<messages::ScheduleRequest>();
+    request->set_requestid(requestID);
+    request->mutable_instance()->set_requestid(requestID);
+    request->mutable_instance()->set_instanceid(requestID + "-instance");
+    return { schedule_decision::BuildSchedulingQueueInfo(*request, enqueueTimeMs) };
+}
+
 TEST_F(DomainSchedSrvTest, GetSchedulingQueue)
 {
     InitCase("GetSchedulingQueueSuccess", 5, 1000);
@@ -1004,13 +1018,15 @@ TEST_F(DomainSchedSrvTest, GetSchedulingQueue)
     EXPECT_CALL(*globalStub, MockResponseGetSchedulingQueue(_, _, _))
         .WillOnce(testing::DoAll(FutureArg<1>(&name), FutureArg<2>(&msg)));
 
-    std::vector<std::shared_ptr<messages::ScheduleRequest>> instanceRequest = GetInstanceRequest();
-    EXPECT_CALL(*mockInstanceCtrl_, GetSchedulerQueue()).WillOnce(Return(AsyncReturn(instanceRequest)));
+    auto instanceRequest = std::make_shared<messages::ScheduleRequest>();
+    instanceRequest->set_requestid("instance-request");
+    instanceRequest->mutable_instance()->set_requestid("instance-request");
+    instanceRequest->mutable_instance()->set_instanceid("instance-request-instance");
+    recorder_->RecordScheduleRequest(instanceRequest);
+    std::vector<schedule_decision::ScheduleQueueRecord> groupRequest = { GetQueueRecord("group-request", 2000) };
+    EXPECT_CALL(*mockGroupCtrl_, GetQueueRecords()).WillOnce(Return(AsyncReturn(groupRequest)));
 
-    std::vector<std::shared_ptr<messages::ScheduleRequest>> groupRequest = GetGroupRequest();
-    EXPECT_CALL(*mockGroupCtrl_, GetRequests()).WillOnce(Return(AsyncReturn(groupRequest)));
-
-    auto req = std::make_shared<messages::QueryInstancesInfoResponse>();
+    auto req = std::make_shared<messages::QuerySchedulingQueueRequest>();
     std::string requestId = "requestIdIdId";
     req->set_requestid(requestId);
 
@@ -1018,9 +1034,14 @@ TEST_F(DomainSchedSrvTest, GetSchedulingQueue)
                    "GetSchedulingQueue", req->SerializeAsString());
 
     ASSERT_AWAIT_READY_FOR(msg, 1000);
-    messages::QueryInstancesInfoResponse rsp;
+    messages::QuerySchedulingQueueResponse rsp;
     EXPECT_TRUE(rsp.ParseFromString(msg.Get()));
     EXPECT_EQ(rsp.requestid(), requestId);
+    ASSERT_EQ(rsp.instanceinfos_size(), 2);
+    for (const auto &instanceInfo : rsp.instanceinfos()) {
+        EXPECT_GT(instanceInfo.enqueuetimems(), 0);
+        EXPECT_GE(instanceInfo.waitdurationms(), 0);
+    }
 
     litebus::Terminate(globalStub->GetAID());
     litebus::Await(globalStub);

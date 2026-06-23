@@ -53,12 +53,14 @@ public:
 
     litebus::Future<Status> EvictAgentOnLocal(const std::string &address,
                                               const std::shared_ptr<messages::EvictAgentRequest> &req);
+    litebus::Future<Status> UpdateSchedulingStatusOnLocal(const std::string &address, bool evicting);
 
     void OnLocalAbnormal(const std::string &localID, const std::string &address);
 
     void EvictAck(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     void NotifyEvictResult(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void UpdateSchedulingStatusResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 
 protected:
     void Init() override;
@@ -117,6 +119,8 @@ private:
     std::unordered_map<std::string, std::shared_ptr<Business>> businesses_;
     const uint32_t evictAckTimeout_ = 5000;
     REQUEST_SYNC_HELPER(LocalSchedMgrActor, Status, evictAckTimeout_, evictAckSync_);
+    const uint32_t updateSchedulingStatusTimeout_ = 5000;
+    REQUEST_SYNC_HELPER(LocalSchedMgrActor, Status, updateSchedulingStatusTimeout_, updateSchedulingStatusSync_);
     using AgentEvictResultContexts = std::unordered_map<std::string, std::shared_ptr<EvictContext>>;
     // key is local address
     std::unordered_map<std::string, AgentEvictResultContexts> evictCtxs_;

@@ -20,6 +20,9 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
+
+#include <nlohmann/json.hpp>
 
 #include "async/future.hpp"
 #include "casdoor_config.h"
@@ -65,6 +68,15 @@ public:
     }
 
 private:
+    static Status DecodeJwtPayload(const std::string &idToken, nlohmann::json *payload);
+    void ExtractJwtUserInfo(const nlohmann::json &payload, ExternalUserInfo& info);
+    void ExtractJwtQuotas(const nlohmann::json &payload, ExternalUserInfo& info) const;
+    std::string LoginAdminAndGetCookie() const;
+    std::string QueryUserForRole(const std::string &userId, const std::string &cookie);
+    std::string PersistDeveloperRole(const std::string &userId,
+                                     const std::unordered_map<std::string, std::string> &headers,
+                                     nlohmann::json *userJson) const;
+
     /**
      * Internal JWT verification using the configured public key
      */

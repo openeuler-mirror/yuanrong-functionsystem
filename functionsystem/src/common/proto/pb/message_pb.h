@@ -152,6 +152,9 @@ using CancelType = ::messages::CancelType;
 using CancelSchedule = ::messages::CancelSchedule;
 using CancelScheduleResponse = ::messages::CancelScheduleResponse;
 
+using QuerySchedulingQueueRequest = ::messages::QuerySchedulingQueueRequest;
+using QuerySchedulingQueueResponse = ::messages::QuerySchedulingQueueResponse;
+
 using QueryInstancesInfoRequest = ::messages::QueryInstancesInfoRequest;
 using QueryInstancesInfoResponse = ::messages::QueryInstancesInfoResponse;
 

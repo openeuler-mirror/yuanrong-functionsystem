@@ -81,6 +81,8 @@ public:
 
     MOCK_METHOD(void, AddResourceUpdateHandler, (const resource_view::ResourceUpdateHandler &handler), (override));
 
+    MOCK_METHOD(void, UpdateDomainUrlForLocal, (const std::string &addr), (override));
+
     MOCK_METHOD(litebus::Future<litebus::Option<std::string>>, GetUnitByInstReqID, (const std::string &instReqID),
                 (override));
 

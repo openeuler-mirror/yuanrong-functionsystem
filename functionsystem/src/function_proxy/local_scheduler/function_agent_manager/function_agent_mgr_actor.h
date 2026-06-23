@@ -264,7 +264,6 @@ public:
         const std::shared_ptr<messages::ReconcileRuntimesRequest> &request);
     void ReconcileRuntimesResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 
-
     // for test
     [[maybe_unused]] void SetFuncAgentsRegis(
         std::unordered_map<std::string, messages::FuncAgentRegisInfo> &funcAgentsRegis)

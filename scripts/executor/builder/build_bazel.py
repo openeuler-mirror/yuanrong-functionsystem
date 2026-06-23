@@ -26,6 +26,14 @@ BINARY_TARGETS = [
     "//functionsystem/src/runtime_manager:runtime_manager",
     "//functionsystem/src/iam_server:iam_server",
 ]
+BINARY_TARGET_BY_COMPONENT = {
+    "function_proxy": "//functionsystem/src/function_proxy:function_proxy",
+    "function_master": "//functionsystem/src/function_master:function_master",
+    "function_agent": "//functionsystem/src/function_agent:function_agent",
+    "domain_scheduler": "//functionsystem/src/domain_scheduler:domain_scheduler",
+    "runtime_manager": "//functionsystem/src/runtime_manager:runtime_manager",
+    "iam_server": "//functionsystem/src/iam_server:iam_server",
+}
 
 # Proto generation tools — built from Bazel source rather than CMake vendor.
 # Outputs land in bazel-bin/external/... and are statically linked (system libs only).
@@ -277,7 +285,7 @@ def _build_grpc_plugin_env(root_dir: str, grpc_cpp_plugin: str = ""):
     return env
 
 
-def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: str = "Release"):
+def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: str = "Release", component: str = "all"):
     """Build all functionsystem C++ binaries using Bazel and copy artifacts to output/.
 
     Args:
@@ -296,7 +304,9 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     bin_output_dir = os.path.join(output_dir, "bin")
     os.makedirs(bin_output_dir, exist_ok=True)
 
-    log.info(f"Running Bazel build with config={config}, jobs={job_num}")
+    build_targets = BINARY_TARGETS if component == "all" else [BINARY_TARGET_BY_COMPONENT[component]]
+
+    log.info(f"Running Bazel build with config={config}, jobs={job_num}, component={component}")
 
     # Place Bazel output under workspace/build/ (bind-mounted via -v /home/:/home/).
     # Without this, the default output root lands on Docker overlayfs (/root/.cache/bazel/),
@@ -325,13 +335,13 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
         f"--distdir={distdir}",
         f"--jobs={job_num}",
         f"--config={config}",
-        *BINARY_TARGETS,
+        *build_targets,
         *EXPORTER_TARGETS,
     ]
     utils.sync_command(bazel_cmd, cwd=root_dir)
 
     # Copy Bazel-built binaries to functionsystem/output/bin/
-    _copy_bazel_outputs(root_dir, bin_output_dir)
+    _copy_bazel_outputs(root_dir, bin_output_dir, component)
 
     # Copy required shared libraries to functionsystem/output/lib/
     _copy_shared_libraries(root_dir, output_dir)
@@ -405,7 +415,7 @@ def _prepare_bazel_workspace(root_dir: str, job_num: int):
     return bazel_output_root, distdir
 
 
-def _copy_bazel_outputs(root_dir: str, bin_output_dir: str):
+def _copy_bazel_outputs(root_dir: str, bin_output_dir: str, component: str = "all"):
     """Copy compiled binaries from bazel-bin/ into functionsystem/output/bin/."""
     binary_names = [
         "function_proxy",
@@ -425,6 +435,8 @@ def _copy_bazel_outputs(root_dir: str, bin_output_dir: str):
         os.path.join(bazel_bin, "functionsystem", "src", "iam_server"),
     ]
     for binary, src_dir in zip(binary_names, src_dirs):
+        if component != "all" and binary != component:
+            continue
         src_binary = os.path.join(src_dir, binary)
         dst_binary = os.path.join(bin_output_dir, binary)
         if os.path.isfile(src_binary):
@@ -440,7 +452,7 @@ def _copy_shared_libraries(root_dir: str, output_dir: str):
     Bazel-built sources:
       logs (//common/logs:yrlogs)       → statically linked into consumers; no .so needed
       metrics API/SDK                   → statically linked into binaries; no .so needed
-      OTel (@opentelemetry_cpp)         → statically linked into binaries; plugin linkage follows the Bazel plugin targets
+      OTel (@opentelemetry_cpp)         → statically linked into binaries; plugin linkage follows Bazel plugin targets
       metrics exporter plugins          → cc_binary(linkshared) in bazel-bin/common/metrics/
 
     Pre-built .so dependencies still needed at runtime:

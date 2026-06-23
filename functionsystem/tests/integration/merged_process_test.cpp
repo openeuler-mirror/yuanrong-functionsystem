@@ -36,6 +36,31 @@
 using namespace functionsystem;
 
 namespace functionsystem::test {
+namespace {
+const int PROCESS_EXIT_CHECK_TIMES = 20;
+const int PROCESS_EXIT_CHECK_INTERVAL_MS = 100;
+
+bool IsProcessAlive(pid_t pid)
+{
+    return ::kill(pid, 0) == 0;
+}
+
+void StopProcessForTest(const std::shared_ptr<litebus::Exec> &process)
+{
+    pid_t pid = process->GetPid();
+    KillProcess(pid, SIGTERM);
+    for (int i = 0; i < PROCESS_EXIT_CHECK_TIMES; ++i) {
+        if (!IsProcessAlive(pid)) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(PROCESS_EXIT_CHECK_INTERVAL_MS));
+    }
+    if (IsProcessAlive(pid)) {
+        KillProcess(pid, SIGKILL);
+    }
+    (void)process->GetStatus().Get();
+}
+}  // namespace
 
 class MergedProcessTest : public ::testing::Test {
 public:
@@ -161,6 +186,7 @@ public:
             args.push_back("--s3_endpoint=");
             args.push_back("--runtime_dir=" + testRuntimeDir_);
             args.push_back("--runtime_home_dir=" + testRuntimeDir_);
+            args.push_back("--checkpoint_dir=" + testRuntimeDir_ + "/checkpoints");
             args.push_back("--runtime_logs_dir=" + testLogDir_);
             args.push_back("--runtime_ld_library_path=" + testRuntimeDir_);
             args.push_back("--port=" + std::to_string(runtimeManagerPort_));
@@ -194,8 +220,7 @@ TEST_F(MergedProcessTest, FunctionProxyWithAgentAndRuntimeManager_MergedProcess)
     auto functionProxyProcess = StartFunctionProxy(true);
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     EXPECT_NE(functionProxyProcess->GetPid(), 0);
-    KillProcess(functionProxyProcess->GetPid(), SIGTERM);
-    (void)functionProxyProcess->GetStatus().Get();
+    StopProcessForTest(functionProxyProcess);
 }
 
 }  // namespace functionsystem::test

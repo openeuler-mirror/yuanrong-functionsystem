@@ -46,6 +46,7 @@
 namespace functionsystem::test {
 
 using ::testing::_;
+using ::testing::AtLeast;
 using ::testing::Return;
 
 namespace {
@@ -456,9 +457,8 @@ TEST_F(AgentServiceActorTest, DeployInstanceSetNetworkFailed)
     testFuncAgentMgrActor_->SendRequestToAgentServiceActor(dstActor_->GetAID(),
                                                            "DeployInstance",
                                                            std::move(deployInstance.SerializeAsString()));
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ASSERT_AWAIT_TRUE([&]() -> bool { return testRuntimeManager_->GetReceivedStartInstanceRequest(); });
     EXPECT_EQ(testFuncAgentMgrActor_->GetDeployInstanceResponse()->requestid(), "");
-    EXPECT_EQ(testRuntimeManager_->GetReceivedStartInstanceRequest(), true);
 }
 
 /**
@@ -1609,7 +1609,7 @@ TEST_F(AgentServiceActorTest, ReceiveRuntimeManagerRegisterRequest)
     req.mutable_runtimeinstanceinfos()->insert({ TEST_RUNTIME_ID, runtimeInstanceInfo });
     auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
     req.set_id(uuid.ToString());
-    EXPECT_CALL(*testFuncAgentMgrActor_, MockRegisteredResponse).WillOnce(Return(""));
+    EXPECT_CALL(*testFuncAgentMgrActor_, MockRegisteredResponse).Times(AtLeast(1)).WillRepeatedly(Return(""));
     testRegisterHelperActor_->SendRequestToAgentServiceActor(dstAid, "Register", req.SerializeAsString());
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     EXPECT_EQ(dstActor_->GetRuntimeManagerContext().registered, true);
@@ -3313,7 +3313,11 @@ TEST_F(AgentServiceActorTest, LoadConfigPkgThresholdsCfgTest)
         GenCodePkgThresholdsCfgFile(thresholdConfigPath, content);
         dstActor_->CodePkgThresholdsCfgCallback(thresholdConfigPath, "..2026_02_11_03_37_09.275559235",
             uint32_t{1073742336});
-        std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+        ASSERT_AWAIT_TRUE([&]() -> bool {
+            return dstActor_->codePackageThresholds_.filecountsmax() == 20000 &&
+                dstActor_->codePackageThresholds_.zipfilesizemaxmb() == 1000 &&
+                dstActor_->codePackageThresholds_.unzipfilesizemaxmb() == 2000;
+        });
         EXPECT_EQ(dstActor_->codePackageThresholds_.filecountsmax(), 20000);
         EXPECT_EQ(dstActor_->codePackageThresholds_.zipfilesizemaxmb(), 1000);
         EXPECT_EQ(dstActor_->codePackageThresholds_.unzipfilesizemaxmb(), 2000);

@@ -17,6 +17,7 @@
 #include "trace_manager.h"
 
 #include <array>
+#include <functional>
 #include <nlohmann/json.hpp>
 #include <opentelemetry/exporters/ostream/common_utils.h>
 #include <opentelemetry/sdk/common/attribute_utils.h>
@@ -34,12 +35,19 @@ namespace functionsystem {
 namespace trace {
 
 using std::string;
+using ProcessorList = std::vector<std::unique_ptr<opentelemetry::sdk::trace::SpanProcessor>>;
+using GrpcExporterFactory = std::function<std::unique_ptr<opentelemetry::sdk::trace::SpanExporter>(
+    const OtelGrpcExporterConfig &)>;
+using LogExporterFactory = std::function<std::unique_ptr<opentelemetry::sdk::trace::SpanExporter>()>;
 
 constexpr uint32_t TRACE_ID_LENGTH = 32;
 constexpr uint32_t SPAN_ID_LENGTH = 16;
 constexpr uint32_t TRACE_ID_BUF_LENGTH = 16;
 constexpr uint32_t SPAN_ID_BUF_LENGTH = 8;
 constexpr uint32_t TRACE_PARENT_PARTS = 4;
+constexpr uint32_t TRACE_PARENT_TRACE_ID_INDEX = 1;
+constexpr uint32_t TRACE_PARENT_SPAN_ID_INDEX = 2;
+constexpr uint32_t TRACE_PARENT_FLAGS_INDEX = 3;
 constexpr uint32_t TRACE_PARENT_FLAGS_LENGTH = 2;
 constexpr const char *TRACE_PARENT_VERSION = "00";
 constexpr const char *TRACE_PARENT_DEFAULT_FLAGS = "01";
@@ -120,14 +128,16 @@ static bool TrySetParentFromTraceParent(opentelemetry::trace::StartSpanOptions &
         YRLOG_WARN("invalid traceparent format: {}", traceParent);
         return false;
     }
-    if (parts[3].length() != TRACE_PARENT_FLAGS_LENGTH || !IsHexDecimal(parts[3])) {
+    if (parts[TRACE_PARENT_FLAGS_INDEX].length() != TRACE_PARENT_FLAGS_LENGTH ||
+        !IsHexDecimal(parts[TRACE_PARENT_FLAGS_INDEX])) {
         YRLOG_WARN("invalid traceparent trace flags: {}", traceParent);
         return false;
     }
 
     uint8_t traceIdArr[TRACE_ID_BUF_LENGTH] = {};
     uint8_t spanIdArr[SPAN_ID_BUF_LENGTH] = {};
-    if (!TraceIdStrToArr(parts[1], traceIdArr) || !SpanIdStrToArr(parts[2], spanIdArr)) {
+    if (!TraceIdStrToArr(parts[TRACE_PARENT_TRACE_ID_INDEX], traceIdArr) ||
+        !SpanIdStrToArr(parts[TRACE_PARENT_SPAN_ID_INDEX], spanIdArr)) {
         YRLOG_WARN("failed to parse traceparent: {}", traceParent);
         return false;
     }
@@ -187,6 +197,38 @@ void TraceManager::PropagateSpanToOptions(const OtelSpan &span,
     }
 }
 
+void AppendGrpcProcessor(const nlohmann::json &exporterConfig, ProcessorList *processors,
+                         const GrpcExporterFactory &factory)
+{
+    if (!exporterConfig.contains("enable") || !exporterConfig.at("enable").get<bool>()) {
+        YRLOG_INFO("Trace exporter {} is not enabled", OTLP_GRPC_EXPORTER);
+        return;
+    }
+    if (!exporterConfig.contains("endpoint") || exporterConfig.at("endpoint").get<std::string>().empty()) {
+        YRLOG_INFO("Trace exporter {} endpoint is not valid", OTLP_GRPC_EXPORTER);
+        return;
+    }
+    OtelGrpcExporterConfig config;
+    config.endpoint = exporterConfig.at("endpoint").get<std::string>();
+    opentelemetry::sdk::trace::BatchSpanProcessorOptions options;
+    YRLOG_INFO("OtelGrpcExporter is enable, endpoint is {}", config.endpoint);
+    processors->push_back(std::unique_ptr<opentelemetry::sdk::trace::SpanProcessor>(
+        opentelemetry::sdk::trace::BatchSpanProcessorFactory::Create(factory(config), options)));
+}
+
+void AppendLogFileProcessor(const nlohmann::json &exporterConfig, ProcessorList *processors,
+                            const LogExporterFactory &factory)
+{
+    if (!exporterConfig.contains("enable") || !exporterConfig.at("enable").get<bool>()) {
+        YRLOG_INFO("Trace exporter {} is not enabled", LOG_FILE_EXPORTER);
+        return;
+    }
+    opentelemetry::sdk::trace::BatchSpanProcessorOptions options;
+    YRLOG_INFO("logFileExporter is enable");
+    processors->push_back(std::unique_ptr<opentelemetry::sdk::trace::SpanProcessor>(
+        opentelemetry::sdk::trace::BatchSpanProcessorFactory::Create(factory(), options)));
+}
+
 // Initialize and shutdown
 void TraceManager::InitTrace(const std::string &serviceName, const std::string &hostID,
                              const bool &enableTrace, const std::string &traceConfig)
@@ -197,40 +239,19 @@ void TraceManager::InitTrace(const std::string &serviceName, const std::string &
         return;
     }
     hostID_ = hostID;
-    std::vector<std::unique_ptr<opentelemetry::sdk::trace::SpanProcessor>> processors;
+    ProcessorList processors;
     try {
         auto confJson = nlohmann::json::parse(traceConfig);
         for (auto &element : confJson.items()) {
             if (element.key() == OTLP_GRPC_EXPORTER) {
-                if (!element.value().contains("enable") || !element.value().at("enable").get<bool>()) {
-                    YRLOG_INFO("Trace exporter {} is not enabled", OTLP_GRPC_EXPORTER);
-                    continue;
-                }
-                if (!element.value().contains("endpoint")
-                    || element.value().at("endpoint").get<std::string>().empty()) {
-                    YRLOG_INFO("Trace exporter {} endpoint is not valid", OTLP_GRPC_EXPORTER);
-                    continue;
-                }
-                OtelGrpcExporterConfig config;
-                config.endpoint = element.value().at("endpoint").get<std::string>();
-                opentelemetry::sdk::trace::BatchSpanProcessorOptions batchSpanProcessorOptions;
-                YRLOG_INFO("OtelGrpcExporter is enable, endpoint is {}", config.endpoint);
-                processors.push_back(
-                    std::unique_ptr<opentelemetry::sdk::trace::SpanProcessor>(
-                        opentelemetry::sdk::trace::BatchSpanProcessorFactory::Create(
-                            std::move(InitOtlpGrpcExporter(config)), batchSpanProcessorOptions)));
+                AppendGrpcProcessor(element.value(), &processors,
+                                    [this](const OtelGrpcExporterConfig &config) {
+                                        return InitOtlpGrpcExporter(config);
+                                    });
             } else if (element.key() == LOG_FILE_EXPORTER) {
-                if (!element.value().contains("enable")
-                    || !element.value().at("enable").get<bool>()) {
-                    YRLOG_INFO("Trace exporter {} is not enabled", LOG_FILE_EXPORTER);
-                    continue;
-                }
-                opentelemetry::sdk::trace::BatchSpanProcessorOptions batchSpanProcessorOptions;
-                YRLOG_INFO("logFileExporter is enable");
-                processors.push_back(
-                    std::unique_ptr<opentelemetry::sdk::trace::SpanProcessor>(
-                        opentelemetry::sdk::trace::BatchSpanProcessorFactory::Create(
-                            std::move(InitLogFileExporter()), batchSpanProcessorOptions)));
+                AppendLogFileProcessor(element.value(), &processors, [this]() {
+                    return InitLogFileExporter();
+                });
             }
         }
     } catch (nlohmann::detail::parse_error &e) {
@@ -352,7 +373,7 @@ TraceManager::OtelSpan TraceManager::StartSpan(
 TraceManager::OtelSpan TraceManager::StartSpanWithRecord(TraceManager::SpanParam &&spanParam)
 {
     std::string spanKey = spanParam.spanKey + "_" + spanParam.spanName;
-    YRLOG_DEBUG("(trace)start span, spanName: {}, traceID: {}, spanID: {}, traceParent: {}, function: {}, instanceID: {}",
+    YRLOG_DEBUG("(trace)start span, name: {}, traceID: {}, spanID: {}, traceParent: {}, function: {}, instanceID: {}",
                 spanParam.spanName, spanParam.traceID, spanParam.spanID, spanParam.traceParent,
                 spanParam.function, spanParam.instanceID);
 

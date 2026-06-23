@@ -54,13 +54,13 @@ const uint64_t FATAL_INSTANCE_TIMEOUT = 3600; // 1 hour in seconds
  */
 static std::string ParseTenantIDFromInstanceKey(const std::string &instanceKey)
 {
-    static const std::string PREFIX = INSTANCE_PATH_PREFIX + "/";
-    if (instanceKey.empty() || instanceKey.size() <= PREFIX.size()) {
+    static const std::string prefix = INSTANCE_PATH_PREFIX + "/";
+    if (instanceKey.empty() || instanceKey.size() <= prefix.size()) {
         return "";
     }
 
     // Extract the part after the prefix
-    std::string remaining = instanceKey.substr(PREFIX.size());
+    std::string remaining = instanceKey.substr(prefix.size());
 
     // Split by "/" and get the first segment (tenantID)
     auto pos = remaining.find('/');
@@ -80,6 +80,20 @@ static messages::ForwardKillResponse GenerateForwardKillResponse(const messages:
     rsp.set_code(state);
     rsp.set_message(msg);
     return rsp;
+}
+
+static void ReportInstanceCountMetric(const std::string &nodeID, double count)
+{
+    functionsystem::metrics::MeterTitle meterTitle{
+        "yr_instance_count",
+        "Number of running instances on each node",
+        "count"
+    };
+    functionsystem::metrics::MeterData meterData{
+        count,
+        { { "node_id", nodeID } }
+    };
+    functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(meterTitle, meterData, {});
 }
 
 InstanceManagerActor::InstanceManagerActor(const std::shared_ptr<MetaStoreClient> &metaClient,
@@ -455,17 +469,7 @@ void InstanceManagerActor::OnInstancePut(const std::string &key,
     business_->OnInstancePutForFamilyManagement(instance);
     member_->instID2Instance[instance->instanceid()] = std::make_pair(key, instance);
 
-    // Traefik route cache: maintain routes based on instance state changes
-    if (traefikRouteCache_) {
-        auto state = static_cast<InstanceState>(instance->instancestatus().code());
-        if (state == InstanceState::RUNNING) {
-            traefikRouteCache_->OnInstanceRunning(*instance);
-        } else if (state == InstanceState::FATAL ||
-                   state == InstanceState::EVICTED ||
-                   state == InstanceState::EXITED) {
-            traefikRouteCache_->OnInstanceExited(instance->instanceid());
-        }
-    }
+    UpdateTraefikRouteCache(instance);
 
     if (IsInstanceManagedByJob(instance)) {
         member_->jobID2InstanceIDs[instance->jobid()].emplace(instance->instanceid());
@@ -474,23 +478,7 @@ void InstanceManagerActor::OnInstancePut(const std::string &key,
     if (!funcKey.empty() && !IsDriver(instance)) {
         member_->funcMeta2InstanceIDs[funcKey].emplace(instance->instanceid());
     }
-    // 1. You can determine whether a node is faulty based on the faulty node record and delete the function instances
-    // on the faulty node.
-    if (member_->abnormalScheduler->find(instance->functionproxyid()) != member_->abnormalScheduler->end()
-        && !member_->runtimeRecoverEnable) {
-        YRLOG_INFO("change instance({}) state to FATAL, because scheduler({}) is abnormal.", instance->instanceid(),
-                   instance->functionproxyid());
-        ASSERT_IF_NULL(business_);
-        business_->OnFaultLocalInstancePut(key, instance, instance->functionproxyid() + " is abnormal");
-        return;
-    }
-    // 2. If the node does not exist in the faulty node record but does not exist in the resource view, delete all
-    // function instances under the node.
-    if (!business_->NodeExists(instance->functionproxyid())) {
-        YRLOG_INFO("try to take over instance({}), because scheduler({}) is exited.", instance->instanceid(),
-                   instance->functionproxyid());
-        ASSERT_IF_NULL(business_);
-        business_->OnFaultLocalInstancePut(key, instance, instance->functionproxyid() + " is exited");
+    if (HandleFaultedInstancePut(key, instance)) {
         return;
     }
     member_->instances[instance->functionproxyid()][key] = instance;
@@ -500,6 +488,42 @@ void InstanceManagerActor::OnInstancePut(const std::string &key,
         && instanceManagerOwner.find(key) != instanceManagerOwner.end()) {
         (void)instanceManagerOwner.erase(key);
     }
+}
+
+void InstanceManagerActor::UpdateTraefikRouteCache(const std::shared_ptr<resource_view::InstanceInfo> &instance)
+{
+    if (!traefikRouteCache_) {
+        return;
+    }
+    auto state = static_cast<InstanceState>(instance->instancestatus().code());
+    if (state == InstanceState::RUNNING) {
+        traefikRouteCache_->OnInstanceRunning(*instance);
+        return;
+    }
+    if (state == InstanceState::FATAL || state == InstanceState::EVICTED || state == InstanceState::EXITED) {
+        traefikRouteCache_->OnInstanceExited(instance->instanceid());
+    }
+}
+
+bool InstanceManagerActor::HandleFaultedInstancePut(
+    const std::string &key, const std::shared_ptr<resource_view::InstanceInfo> &instance)
+{
+    if (member_->abnormalScheduler->find(instance->functionproxyid()) != member_->abnormalScheduler->end()
+        && !member_->runtimeRecoverEnable) {
+        YRLOG_INFO("change instance({}) state to FATAL, because scheduler({}) is abnormal.", instance->instanceid(),
+                   instance->functionproxyid());
+        ASSERT_IF_NULL(business_);
+        business_->OnFaultLocalInstancePut(key, instance, instance->functionproxyid() + " is abnormal");
+        return true;
+    }
+    if (!business_->NodeExists(instance->functionproxyid())) {
+        YRLOG_INFO("try to take over instance({}), because scheduler({}) is exited.", instance->instanceid(),
+                   instance->functionproxyid());
+        ASSERT_IF_NULL(business_);
+        business_->OnFaultLocalInstancePut(key, instance, instance->functionproxyid() + " is exited");
+        return true;
+    }
+    return false;
 }
 
 void InstanceManagerActor::OnInstanceDelete(const std::string &key,
@@ -1331,6 +1355,22 @@ void InstanceManagerActor::MasterBusiness::ForwardKill(const litebus::AID &from,
     }
 
     auto info = std::make_shared<InstanceInfo>(req.instance());
+    // A route-less kill forwarded by a proxy (e.g. originating from the frontend
+    // instance kill interface) carries only the target instance id, not the full
+    // InstanceInfo. Resolve the instance from master's global view so it can be
+    // routed to its owner. If master also cannot find it, return an error.
+    if (info->instanceid().empty()) {
+        auto [instanceKey, found] = actor->GetInstanceInfoByInstanceID(req.req().instanceid());
+        (void)instanceKey;
+        if (found == nullptr) {
+            YRLOG_WARN("{}|forward kill: instance({}) not found on master", req.requestid(), req.req().instanceid());
+            messages::ForwardKillResponse rsp = GenerateForwardKillResponse(
+                req, static_cast<int32_t>(StatusCode::ERR_INSTANCE_NOT_FOUND), "instance not found on master");
+            (void)actor->Send(from, "ResponseForwardKill", std::move(rsp.SerializeAsString()));
+            return;
+        }
+        info = found;
+    }
     KillInstance(info, req.req().signal(), req.req().payload())
         .OnComplete(
         litebus::Defer(actor->GetAID(), &InstanceManagerActor::OnKillInstance, std::placeholders::_1, req, from));
@@ -2213,50 +2253,40 @@ void InstanceManagerActor::SetInstancesReady()
 {
     isInstancesReady_.SetValue(true);
 }
-// todo(lwy_robb): should caculated in instance on etcd event
-void InstanceManagerActor::ReportInstanceCountPeriodically()
+
+size_t InstanceManagerActor::ReportNodeInstanceCountMetrics(std::unordered_set<std::string> &currentReportedNodeIDs)
 {
-    // 只有 master 节点上报指标
-    if (curStatus_ != MASTER_BUSINESS) {
-        litebus::AsyncAfter(INSTANCE_COUNT_REPORT_INTERVAL, GetAID(),
-                            &InstanceManagerActor::ReportInstanceCountPeriodically);
-        return;
-    }
-
-    // 统计各个节点的 RUNNING 状态实例数量
-    std::unordered_map<std::string, size_t> nodeInstanceCount;
     size_t totalInstanceCount = 0;
-
     for (const auto &[nodeID, instanceMap] : member_->instances) {
         if (nodeID == INSTANCE_MANAGER_OWNER) {
-            continue;  // 跳过 master 自身实例
+            continue;
         }
         size_t count = 0;
-        // 只统计 RUNNING 状态的实例
         for (const auto &[key, instance] : instanceMap) {
             if (instance && instance->instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)
                 && !instance->issystemfunc()) {
                 count++;
             }
         }
-        nodeInstanceCount[nodeID] = count;
         totalInstanceCount += count;
-
-        // 为每个节点上报 RUNNING 状态实例数量
-        functionsystem::metrics::MeterTitle meterTitle{
-            "yr_instance_count",
-            "Number of running instances on each node",
-            "count"
-        };
-        functionsystem::metrics::MeterData meterData{
-            static_cast<double>(count),
-            { { "node_id", nodeID } }
-        };
-        functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(
-            meterTitle, meterData, {});
+        (void)currentReportedNodeIDs.emplace(nodeID);
+        ReportInstanceCountMetric(nodeID, static_cast<double>(count));
     }
+    return totalInstanceCount;
+}
 
-    // 上报集群总 RUNNING 状态实例数量
+void InstanceManagerActor::ClearRemovedNodeInstanceCountMetrics(
+    const std::unordered_set<std::string> &currentReportedNodeIDs)
+{
+    for (const auto &prevNodeID : member_->reportedNodeIDs) {
+        if (currentReportedNodeIDs.find(prevNodeID) == currentReportedNodeIDs.end()) {
+            ReportInstanceCountMetric(prevNodeID, 0.0);
+        }
+    }
+}
+
+void InstanceManagerActor::ReportClusterInstanceTotalMetric(size_t totalInstanceCount, size_t nodeCount)
+{
     functionsystem::metrics::MeterTitle totalMeterTitle{
         "yr_cluster_instance_total",
         "Total number of running instances in the cluster",
@@ -2266,13 +2296,26 @@ void InstanceManagerActor::ReportInstanceCountPeriodically()
         static_cast<double>(totalInstanceCount),
         {}
     };
-    functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(
-        totalMeterTitle, totalMeterData, {});
+    functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(totalMeterTitle, totalMeterData, {});
 
-    YRLOG_DEBUG("Report running instance count metrics: total={}, nodes={}",
-                totalInstanceCount, nodeInstanceCount.size());
+    YRLOG_DEBUG("Report running instance count metrics: total={}, nodes={}", totalInstanceCount, nodeCount);
+}
 
-    // 调度下一次上报
+// todo(lwy_robb): should calculated in instance on etcd event
+void InstanceManagerActor::ReportInstanceCountPeriodically()
+{
+    if (curStatus_ != MASTER_BUSINESS) {
+        litebus::AsyncAfter(INSTANCE_COUNT_REPORT_INTERVAL, GetAID(),
+                            &InstanceManagerActor::ReportInstanceCountPeriodically);
+        return;
+    }
+
+    std::unordered_set<std::string> currentReportedNodeIDs;
+    size_t totalInstanceCount = ReportNodeInstanceCountMetrics(currentReportedNodeIDs);
+    ClearRemovedNodeInstanceCountMetrics(currentReportedNodeIDs);
+    member_->reportedNodeIDs = std::move(currentReportedNodeIDs);
+    ReportClusterInstanceTotalMetric(totalInstanceCount, member_->reportedNodeIDs.size());
+
     litebus::AsyncAfter(INSTANCE_COUNT_REPORT_INTERVAL, GetAID(),
                         &InstanceManagerActor::ReportInstanceCountPeriodically);
 }

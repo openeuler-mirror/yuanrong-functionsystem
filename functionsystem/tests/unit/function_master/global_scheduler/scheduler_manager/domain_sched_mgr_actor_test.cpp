@@ -302,7 +302,7 @@ TEST_F(DomainSchedMgrActorTest, GetSchedulingQueue)
     litebus::Spawn(actor);
     litebus::Spawn(scheduler);
 
-    auto req = std::make_shared<messages::QueryInstancesInfoRequest>();
+    auto req = std::make_shared<messages::QuerySchedulingQueueRequest>();
     req->set_requestid("request");
     EXPECT_CALL(*scheduler.get(), MockGetSchedulingQueue(testing::_, testing::_, testing::_)).Times(1);
 
@@ -310,7 +310,7 @@ TEST_F(DomainSchedMgrActorTest, GetSchedulingQueue)
                                  scheduler->GetAID().Url(), req);
 
     scheduler->ResponseGetSchedulingQueue(actor->GetAID(), "");
-    messages::QueryInstancesInfoResponse rsp;
+    messages::QuerySchedulingQueueResponse rsp;
     rsp.set_requestid("request");
     scheduler->ResponseGetSchedulingQueue(actor->GetAID(), rsp.SerializeAsString());
 

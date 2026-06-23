@@ -32,7 +32,7 @@ class VendorCacheManagerTest(unittest.TestCase):
 
     def test_prepare_rejects_ready_marker_without_securec_artifacts(self):
         manager = VendorCacheManager(self.root_dir, "bazel")
-        cache_path = manager._cache_entry_path("securec")
+        cache_path = self._cache_entry_path(manager, "securec")
         os.makedirs(cache_path, exist_ok=True)
         self._write(os.path.join(cache_path, READY_MARKER), "ready\n")
 
@@ -45,7 +45,7 @@ class VendorCacheManagerTest(unittest.TestCase):
 
     def test_prepare_accepts_complete_securec_cache(self):
         manager = VendorCacheManager(self.root_dir, "bazel")
-        cache_path = manager._cache_entry_path("securec")
+        cache_path = self._cache_entry_path(manager, "securec")
         self._write(os.path.join(cache_path, "include", "securec.h"), "header\n")
         self._write(os.path.join(cache_path, "lib", "libsecurec.so"), "library\n")
         self._write(os.path.join(cache_path, READY_MARKER), "ready\n")
@@ -66,8 +66,11 @@ class VendorCacheManagerTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "incomplete vendor cache for securec"):
             manager.publish_workspace()
 
-        cache_path = manager._cache_entry_path("securec")
+        cache_path = self._cache_entry_path(manager, "securec")
         self.assertFalse(os.path.exists(os.path.join(cache_path, READY_MARKER)))
+
+    def _cache_entry_path(self, manager, vendor):
+        return manager._cache_entry_path(vendor)  # pylint: disable=protected-access
 
     def _write(self, path, content):
         os.makedirs(os.path.dirname(path), exist_ok=True)

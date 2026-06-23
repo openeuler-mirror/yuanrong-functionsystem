@@ -135,8 +135,8 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
             // 2. 通过 functionAgentMgr_ 发送 SnapshotRuntime 请求到 function_agent
             return functionAgentMgr->SnapshotRuntime(requestID, instanceInfo, ttl);
         })
-        .Then([aid(GetAID()), localSchedSrv(localSchedSrv_), requestID,
-               instanceInfo, functionType](const messages::SnapshotRuntimeResponse &runtimeRsp) -> litebus::Future<SnapshotResult> {
+        .Then([aid(GetAID()), localSchedSrv(localSchedSrv_), requestID, instanceInfo,
+               functionType](const messages::SnapshotRuntimeResponse &runtimeRsp) -> litebus::Future<SnapshotResult> {
             return RecordSnapshotMetadata(localSchedSrv, runtimeRsp, instanceInfo, functionType);
         })
         .Then([requestID, instanceID, leaveRunning, aid(GetAID()),

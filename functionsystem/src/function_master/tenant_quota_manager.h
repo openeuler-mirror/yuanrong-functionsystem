@@ -24,6 +24,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include "async/future.hpp"
 #include "common/status/status.h"
@@ -52,6 +53,9 @@ public:
 
 private:
     void PollQuotas();
+    std::vector<std::string> CollectTenantsToQuery();
+    void QueryTenantQuota(const std::string &tenantId);
+    void UpdateTenantQuota(const std::string &tenantId, const std::string &body);
 
     std::string iamServerAddr_;
     std::atomic<bool> running_{ false };

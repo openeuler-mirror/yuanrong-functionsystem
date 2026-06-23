@@ -25,6 +25,8 @@
 #include <string>
 #include <unordered_map>
 
+#include <nlohmann/json.hpp>
+
 #include "async/future.hpp"
 #include "common/status/status.h"
 #include "external_auth_verifier.h"
@@ -99,6 +101,25 @@ private:
      * @return Status indicating success or failure
      */
     Status FetchJwksSync();
+    Status ParseJwksResponse(const std::string &responseBody, const std::string &jwksUrl);
+    Status EnsureEnabledAndJwks();
+    Status ExtractJwtHeader(const std::string &headerJson, std::string *kid) const;
+    Status ResolveJwkKey(const std::string &kid, JwkKey *jwkKey);
+    Status PopulateUserInfoFromPayload(const std::string &payloadJson, ExternalUserInfo& info);
+    Status ExtractSubjectAndTenant(const nlohmann::json &payload, ExternalUserInfo& info) const;
+    Status ValidateTokenClaims(const nlohmann::json &payload, ExternalUserInfo& info) const;
+    void ExtractRolesAndQuotas(const nlohmann::json &payload, ExternalUserInfo& info);
+    bool IsConfigured() const;
+    std::string BuildTokenUrl() const;
+    ExternalUserInfo MakeFailureInfo(const std::string &message) const;
+    Status PostTokenRequest(const std::string &body, const std::string &failureMessage,
+                            std::string *responseBody) const;
+    ExternalUserInfo VerifyTokenResponse(const std::string &responseBody, const std::string &missingTokenMessage);
+    bool GetCachedServiceAccountToken(std::string& accessToken) const;
+    Status FetchServiceAccountToken(std::string& accessToken);
+    std::pair<int64_t, int64_t> QueryTenantQuotaWithToken(const std::string &tenantId,
+                                                          const std::string &accessToken) const;
+    static std::pair<int64_t, int64_t> ParseQuotaResponse(const std::string &responseBody);
 
     /**
      * Check if JWKS cache needs refresh

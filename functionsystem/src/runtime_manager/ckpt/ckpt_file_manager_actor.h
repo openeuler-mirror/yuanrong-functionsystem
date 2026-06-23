@@ -73,7 +73,6 @@ public:
      */
     CkptFileManagerActor(const std::string &name, const std::string &checkpointDir);
 
-
     ~CkptFileManagerActor() override = default;
 
     /**

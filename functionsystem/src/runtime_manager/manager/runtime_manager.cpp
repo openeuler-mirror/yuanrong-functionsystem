@@ -17,20 +17,20 @@
 #include "runtime_manager.h"
 
 #include "async/async.hpp"
-#include "async/asyncafter.hpp"
 #include "async/defer.hpp"
 #include "async/future.hpp"
 #include "common/constants/actor_name.h"
 #include "common/logs/logging.h"
 #include "common/proto/pb/message_pb.h"
 #include "common/status/status.h"
-#include "executor/runtime_executor.h"
+#include "common/utils/exec_utils.h"
+#include "common/utils/struct_transfer.h"
 #include "executor/container_executor.h"
+#include "executor/runtime_executor.h"
 #include "executor/sandbox/sandbox_executor.h"
+#include "executor/supervisor_executor.h"
 #include "port/port_manager.h"
 #include "runtime_manager/executor/executor.h"
-#include "common/utils/struct_transfer.h"
-#include "common/utils/exec_utils.h"
 
 namespace functionsystem::runtime_manager {
 const uint32_t HALF = 2;
@@ -66,6 +66,7 @@ void RuntimeManager::Finalize()
     for (const auto &iter : executorMap_) {
         iter.second->Stop();
     }
+    healthCheckClient_.reset();
     ActorBase::Finalize();
     PortManager::GetInstance().Clear();
 }
@@ -131,6 +132,7 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
     auto vecs = metricsClient_->GetCardIDs();
     messages::StartInstanceResponse response;
     response.mutable_startruntimeinstanceresponse()->set_runtimeid(runtimeID);
+    response.mutable_startruntimeinstanceresponse()->set_executortype(type);
 
     // start debug server ahead of runtime
     CreateDebugServer(response, request)
@@ -286,7 +288,7 @@ void RuntimeManager::StopInstance(const litebus::AID &from, std::string && /* na
             request->traceid(), request->requestid(), request->runtimeid());
         return;
     }
-    auto executor = FindExecutor(GetRuntimeType(request->runtimeid()));
+    auto executor = FindExecutor(static_cast<EXECUTOR_TYPE>(request->executortype()));
     if (executor == nullptr) {
         YRLOG_ERROR("{}|{}|the type({}) is not supported to stop runtime({})", request->traceid(), request->requestid(),
                     request->type(), request->runtimeid());
@@ -338,8 +340,9 @@ void RuntimeManager::SnapshotRuntime(const litebus::AID &from, std::string &&, s
     }
 
     // Call executor's SnapshotRuntime method
-    executor->SnapshotRuntime(request).Then(litebus::Defer(GetAID(), &RuntimeManager::SnapshotRuntimeResponse, from,
-                                                            instanceID, request->requestid(), std::placeholders::_1));
+    executor->SnapshotRuntime(request)
+        .Then(litebus::Defer(GetAID(), &RuntimeManager::SnapshotRuntimeResponse, from, instanceID,
+            request->requestid(), std::placeholders::_1));
 }
 
 void RuntimeManager::HandlePrestartRuntimeExit(const pid_t pid)
@@ -355,7 +358,7 @@ void RuntimeManager::SetConfig(const Flags &flags)
 {
     functionAgentAID_ = litebus::AID(FUNCTION_AGENT_AGENT_SERVICE_ACTOR_NAME, flags.GetAgentAddress());
     checkpointDir_ = flags.GetCheckpointDir();
-    for (auto type : {EXECUTOR_TYPE::RUNTIME, EXECUTOR_TYPE::CONTAINER}) {
+    for (auto type : {EXECUTOR_TYPE::RUNTIME, EXECUTOR_TYPE::CONTAINER, EXECUTOR_TYPE::SUPERVISOR}) {
         auto executor = FindExecutor(type);
         YRLOG_INFO("SetRuntimeConfig for type({})", fmt::underlying(type));
         if (executor != nullptr) {
@@ -457,6 +460,8 @@ std::string RuntimeManager::GetCpuType() const
 
 std::shared_ptr<ExecutorProxy> RuntimeManager::FindExecutor(EXECUTOR_TYPE type)
 {
+    YRLOG_INFO("infoinfoinfo");
+
     if (auto iter(executorMap_.find(type)); iter != executorMap_.end()) {
         return iter->second;
     }
@@ -479,6 +484,19 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::FindExecutor(EXECUTOR_TYPE type)
         litebus::Spawn(executor, false);
         auto executorProxy = std::make_shared<SandboxExecutorProxy>(executor);
         (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::CONTAINER, executorProxy));
+        return executorProxy;
+    }
+    if (type == EXECUTOR_TYPE::SUPERVISOR) {
+        auto supervisorListenUrl = litebus::os::GetEnv("SUPERVISOR_LISTEN_URL");
+        if (supervisorListenUrl.IsNone()) {
+            YRLOG_INFO("supervisor executor disabled, no supervisorListenUrl found");
+            return nullptr;
+        }
+        YRLOG_INFO("not found a executor, create a supervisor executor.");
+        auto executor = std::make_shared<SupervisorExecutor>("SupervisorExecutor", functionAgentAID_);
+        litebus::Spawn(executor, false);
+        auto executorProxy = std::make_shared<SupervisorExecutorProxy>(executor);
+        (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::SUPERVISOR, executorProxy));
         return executorProxy;
     }
     return nullptr;
@@ -1119,14 +1137,20 @@ litebus::Future<bool> RuntimeManager::IsRuntimeActiveByPid(const pid_t &pid)
 
 EXECUTOR_TYPE RuntimeManager::GetRuntimeType(const std::string &runtimeID)
 {
-    auto type = EXECUTOR_TYPE::RUNTIME;
-    if (instanceInfoMap_.find(runtimeID) != instanceInfoMap_.end()) {
-        auto info = instanceInfoMap_[runtimeID];
-        if (info.has_container()) {
-            type = EXECUTOR_TYPE::CONTAINER;
-        }
+    const auto instance = instanceInfoMap_.find(runtimeID);
+    if (instance == instanceInfoMap_.end()) {
+        return EXECUTOR_TYPE::RUNTIME;
     }
-    return type;
+
+    const auto response = instanceResponseMap_.find(instance->second.instanceid());
+    if (response != instanceResponseMap_.end()) {
+        return static_cast<EXECUTOR_TYPE>(response->second.startruntimeinstanceresponse().executortype());
+    }
+
+    if (instance->second.has_container()) {
+        return EXECUTOR_TYPE::CONTAINER;
+    }
+    return EXECUTOR_TYPE::RUNTIME;
 }
 void RuntimeManager::ReconcileRuntimes(const litebus::AID &from, std::string &&, std::string &&msg)
 {
@@ -1164,6 +1188,10 @@ void RuntimeManager::ReconcileRuntimes(const litebus::AID &from, std::string &&,
                 for (const auto &entry : result.confirmedentries()) {
                     if (instanceInfoMap_.find(entry.runtimeid()) == instanceInfoMap_.end()) {
                         messages::RuntimeInstanceInfo info;
+                        info.set_runtimeid(entry.runtimeid());
+                        if (!entry.instanceid().empty()) {
+                            info.set_instanceid(entry.instanceid());
+                        }
                         info.mutable_container()->set_id(entry.containerid());
                         instanceInfoMap_[entry.runtimeid()] = info;
                     }

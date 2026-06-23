@@ -103,14 +103,7 @@ void TenantQuotaManager::PollQuotas()
             break;
         }
 
-        std::vector<std::string> tenantsToQuery;
-        {
-            std::lock_guard<std::mutex> lock(quotaMutex_);
-            for (const auto &tenantId : tenantsToPoll_) {
-                tenantsToQuery.push_back(tenantId);
-            }
-        }
-
+        std::vector<std::string> tenantsToQuery = CollectTenantsToQuery();
         if (tenantsToQuery.empty()) {
             YRLOG_DEBUG("TenantQuotaManager: no tenants registered for polling");
             continue;
@@ -121,53 +114,68 @@ void TenantQuotaManager::PollQuotas()
                 break;
             }
 
-            std::string url = "http://" + iamServerAddr_ + "/v1/tenant/quota?tenant_id=" + tenantId;
-
-            litebus::Try<litebus::http::URL> parsedUrl = litebus::http::URL::Decode(url);
-            if (parsedUrl.IsError()) {
-                YRLOG_ERROR("Failed to parse quota URL for tenant {}: {}", tenantId, parsedUrl.GetErrorCode());
-                continue;
-            }
-
-            litebus::Future<litebus::http::Response> response =
-                litebus::http::Get(parsedUrl.Get(), litebus::None(), HTTP_TIMEOUT_MS);
-            response.Wait();
-
-            if (response.IsError()) {
-                YRLOG_ERROR("Failed to query quota for tenant {}: {}", tenantId, response.GetErrorCode());
-                continue;
-            }
-
-            const auto &httpResponse = response.Get();
-            if (httpResponse.retCode != litebus::http::OK) {
-                YRLOG_ERROR("HTTP error querying quota for tenant {}: {} - {}", tenantId, httpResponse.retCode,
-                            httpResponse.body);
-                continue;
-            }
-
-            try {
-                auto json = nlohmann::json::parse(httpResponse.body);
-                TenantQuota quota;
-                if (json.contains("cpu_quota")) {
-                    quota.cpuQuota = json["cpu_quota"].get<int64_t>();
-                }
-                if (json.contains("mem_quota")) {
-                    quota.memQuota = json["mem_quota"].get<int64_t>();
-                }
-
-                {
-                    std::lock_guard<std::mutex> lock(quotaMutex_);
-                    quotas_[tenantId] = quota;
-                }
-
-                YRLOG_DEBUG("Updated quota for tenant {}: cpu={}, mem={}", tenantId, quota.cpuQuota, quota.memQuota);
-            } catch (const std::exception &e) {
-                YRLOG_ERROR("Failed to parse quota response for tenant {}: {}", tenantId, e.what());
-            }
+            QueryTenantQuota(tenantId);
         }
     }
 
     YRLOG_INFO("TenantQuotaManager: polling stopped");
+}
+
+std::vector<std::string> TenantQuotaManager::CollectTenantsToQuery()
+{
+    std::vector<std::string> tenantsToQuery;
+    std::lock_guard<std::mutex> lock(quotaMutex_);
+    for (const auto &tenantId : tenantsToPoll_) {
+        tenantsToQuery.push_back(tenantId);
+    }
+    return tenantsToQuery;
+}
+
+void TenantQuotaManager::QueryTenantQuota(const std::string &tenantId)
+{
+    std::string url = "http://" + iamServerAddr_ + "/v1/tenant/quota?tenant_id=" + tenantId;
+    litebus::Try<litebus::http::URL> parsedUrl = litebus::http::URL::Decode(url);
+    if (parsedUrl.IsError()) {
+        YRLOG_ERROR("Failed to parse quota URL for tenant {}: {}", tenantId, parsedUrl.GetErrorCode());
+        return;
+    }
+
+    litebus::Future<litebus::http::Response> response =
+        litebus::http::Get(parsedUrl.Get(), litebus::None(), HTTP_TIMEOUT_MS);
+    response.Wait();
+
+    if (response.IsError()) {
+        YRLOG_ERROR("Failed to query quota for tenant {}: {}", tenantId, response.GetErrorCode());
+        return;
+    }
+
+    const auto &httpResponse = response.Get();
+    if (httpResponse.retCode != litebus::http::OK) {
+        YRLOG_ERROR("HTTP error querying quota for tenant {}: {} - {}", tenantId, httpResponse.retCode,
+                    httpResponse.body);
+        return;
+    }
+    UpdateTenantQuota(tenantId, httpResponse.body);
+}
+
+void TenantQuotaManager::UpdateTenantQuota(const std::string &tenantId, const std::string &body)
+{
+    try {
+        auto json = nlohmann::json::parse(body);
+        TenantQuota quota;
+        if (json.contains("cpu_quota")) {
+            quota.cpuQuota = json["cpu_quota"].get<int64_t>();
+        }
+        if (json.contains("mem_quota")) {
+            quota.memQuota = json["mem_quota"].get<int64_t>();
+        }
+
+        std::lock_guard<std::mutex> lock(quotaMutex_);
+        quotas_[tenantId] = quota;
+        YRLOG_DEBUG("Updated quota for tenant {}: cpu={}, mem={}", tenantId, quota.cpuQuota, quota.memQuota);
+    } catch (const std::exception &e) {
+        YRLOG_ERROR("Failed to parse quota response for tenant {}: {}", tenantId, e.what());
+    }
 }
 
 }  // namespace functionsystem

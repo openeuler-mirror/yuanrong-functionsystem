@@ -21,12 +21,16 @@
 
 namespace functionsystem::runtime_manager {
 
-class CppCommandStrategy : public LanguageCommandStrategy {
+class CppStrategy : public LanguageStrategy {
 public:
+    ~CppStrategy() override = default;
+
     std::pair<Status, CommandArgs> BuildArgs(const messages::StartInstanceRequest &request,
                                              const std::string &port,
                                              const RuntimeConfig &config) const override;
 };
+
+using CppCommandStrategy = CppStrategy;
 
 }  // namespace functionsystem::runtime_manager
 

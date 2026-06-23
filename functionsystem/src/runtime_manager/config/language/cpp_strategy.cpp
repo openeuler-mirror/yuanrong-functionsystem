@@ -16,6 +16,9 @@
 
 #include "cpp_strategy.h"
 
+#include <filesystem>
+#include <system_error>
+
 #include "common/constants/constants.h"
 #include "common/logs/logging.h"
 #include "runtime_manager/config/build.h"
@@ -33,6 +36,13 @@ const std::string GRPC_ADDRESS_PREFIX = "-grpcAddress=";
 const std::string CONFIG_PATH_PREFIX = "-runtimeConfigPath=";
 const std::string JOB_ID_PREFIX = "-jobId=job-";
 const std::string CHDIR_PATH_CONFIG = "CHDIR_PATH";
+const std::string IMAGE_FILE_SUFFIX = ".img";
+
+bool IsImagePath(const std::string &path)
+{
+    return path.size() > IMAGE_FILE_SUFFIX.size() &&
+           path.substr(path.size() - IMAGE_FILE_SUFFIX.size()) == IMAGE_FILE_SUFFIX;
+}
 }  // namespace
 
 static std::pair<Status, std::string> ResolveCppWorkingDir(const messages::RuntimeInstanceInfo &info)
@@ -40,7 +50,6 @@ static std::pair<Status, std::string> ResolveCppWorkingDir(const messages::Runti
     const auto &posixEnvs = info.runtimeconfig().posixenvs();
     auto workingDirIter = posixEnvs.find(UNZIPPED_WORKING_DIR);
     auto fileIter = posixEnvs.find(YR_WORKING_DIR);
-
     if (workingDirIter == posixEnvs.end() || fileIter == posixEnvs.end()) {
         return {Status::OK(), info.deploymentconfig().deploydir()};
     }
@@ -51,25 +60,25 @@ static std::pair<Status, std::string> ResolveCppWorkingDir(const messages::Runti
                        "params working dir or unzipped dir is empty"),
                 ""};
     }
-    if (workingDirIter->second.size() > 4 &&
-        workingDirIter->second.substr(workingDirIter->second.size() - 4) == ".img") {
+    if (IsImagePath(workingDirIter->second)) {
         return {Status::OK(), info.container().mountpoint()};
     }
 
-    char canonicalPath[PATH_MAX];
-    if (realpath(workingDirIter->second.c_str(), canonicalPath) == nullptr) {
+    std::error_code ec;
+    std::filesystem::path canonicalPath = std::filesystem::canonical(workingDirIter->second, ec);
+    if (ec) {
         return {Status(StatusCode::RUNTIME_MANAGER_WORKING_DIR_FOR_APP_NOTFOUND, "cannot resolve path"), ""};
     }
-    if (access(canonicalPath, R_OK | W_OK | X_OK) != 0) {
+    std::string canonicalPathStr = canonicalPath.string();
+    if (access(canonicalPathStr.c_str(), R_OK | W_OK | X_OK) != 0) {
         return {Status(StatusCode::RUNTIME_MANAGER_WORKING_DIR_FOR_APP_NOTFOUND, "insufficient directory permissions"),
                 ""};
     }
     return {Status::OK(), workingDirIter->second};
 }
 
-std::pair<Status, CommandArgs> CppCommandStrategy::BuildArgs(const messages::StartInstanceRequest &request,
-                                                              const std::string &port,
-                                                              const RuntimeConfig &config) const
+std::pair<Status, CommandArgs> CppStrategy::BuildArgs(
+    const messages::StartInstanceRequest &request, const std::string &port, const RuntimeConfig &config) const
 {
     const auto &info = request.runtimeinstanceinfo();
     YRLOG_DEBUG("{}|{}|CppCommandStrategy::BuildArgs", info.traceid(), info.requestid());

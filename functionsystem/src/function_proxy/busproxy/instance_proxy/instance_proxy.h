@@ -104,6 +104,10 @@ private:
                                                                  const std::string &dstInstanceID,
                                                                  const CallerInfo &callerInfo,
                                                                  const SharedStreamMsg &request);
+    litebus::Future<SharedStreamMsg> CallWithExplicitRoute(
+        const CallerInfo &callerInfo, const std::string &dstInstanceID, const SharedStreamMsg &request,
+        const std::string &route);
+    std::shared_ptr<RequestDispatcher> GetOrCreateRemoteDispatcher(const std::string &dstInstanceID);
     void OnForwardResult(const std::string &dstInstanceID, const std::string &originalMessageID,
                          const CallerInfo &callerInfo, const SharedStreamMsg &request,
                          std::shared_ptr<litebus::Promise<SharedStreamMsg>> promise,
@@ -139,8 +143,8 @@ private:
     std::map<std::string, std::shared_ptr<litebus::Promise<SharedStreamMsg>>> forwardCallResultPromises_;
     std::unordered_map<std::string, std::shared_ptr<PerfContext>> perfMap_;
     std::shared_ptr<Perf> perf_;
-    static constexpr size_t ROUTE_CACHE_CAPACITY = 1024;
-    ThreadSafeLruCache<std::string, std::string> routeCache_{ROUTE_CACHE_CAPACITY};
+    static constexpr size_t routeCacheCapacity = 1024;
+    ThreadSafeLruCache<std::string, std::string> routeCache_{routeCacheCapacity};
     // callresult subscribe failed times
     std::unordered_map<std::string, uint32_t> failedSubDstRouteOnCallResult_;
 };

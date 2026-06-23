@@ -642,7 +642,7 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::GenerateNewToken(
     member_->newTokenRequestMap[tenantID] = promise;
     auto tokenContent = std::make_shared<TokenContent>();
     auto tokenSalt = std::make_shared<TokenSalt>();
-    Status status = GenerateToken(tenantID, tokenContent, role, expiredTimeSpan);
+    Status status = GenerateToken({tenantID, role, expiredTimeSpan}, tokenContent);
     if (status.IsError()) {
         tokenSalt->status = status;
         YRLOG_ERROR("{}|failed to generate new token, err:", tenantID, status.ToString());
@@ -682,7 +682,7 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::GenerateNewTokenW
     member_->newTokenRequestMap[tenantID] = promise;
     auto tokenContent = std::make_shared<TokenContent>();
     auto tokenSalt = std::make_shared<TokenSalt>();
-    Status status = GenerateToken(tenantID, tokenContent, role, expiredTimeSpan, cpuLimit, memLimit);
+    Status status = GenerateToken({tenantID, role, expiredTimeSpan, cpuLimit, memLimit}, tokenContent);
     if (status.IsError()) {
         tokenSalt->status = status;
         YRLOG_ERROR("{}|failed to generate new token with quota, err:{}", tenantID, status.ToString());
@@ -709,22 +709,21 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::GenerateNewTokenW
     return promise->GetFuture();
 }
 
-Status TokenManagerActor::GenerateToken(const std::string &tenantID, const std::shared_ptr<TokenContent> &tokenContent,
-                                        const std::string &role, uint64_t expiredTimeSpan, int64_t cpuLimit,
-                                        const std::string &memLimit)
+Status TokenManagerActor::GenerateToken(const TokenGenerateContext &context,
+                                        const std::shared_ptr<TokenContent> &tokenContent)
 {
     // 1. generate token
-    tokenContent->tenantID = tenantID;
-    tokenContent->role = role;
-    tokenContent->cpuLimit = cpuLimit;
-    tokenContent->memLimit = memLimit;
+    tokenContent->tenantID = context.tenantID;
+    tokenContent->role = context.role;
+    tokenContent->cpuLimit = context.cpuLimit;
+    tokenContent->memLimit = context.memLimit;
     auto now = static_cast<uint64_t>(std::time(nullptr));
     // Use per-request expiredTimeSpan if provided, otherwise fall back to global config
     // UINT64_MAX means never expire (from X-TTL: -1), 0 means use global default
-    uint64_t effectiveTimeSpan =
-        (expiredTimeSpan > 0 && expiredTimeSpan != UINT64_MAX) ? expiredTimeSpan : member_->tokenExpiredTimeSpan;
+    uint64_t effectiveTimeSpan = (context.expiredTimeSpan > 0 && context.expiredTimeSpan != UINT64_MAX) ?
+        context.expiredTimeSpan : member_->tokenExpiredTimeSpan;
     // if effectiveTimeSpan is 0 or expiredTimeSpan is UINT64_MAX, token never expires
-    if (effectiveTimeSpan == TOKEN_NEVER_EXPIRE || expiredTimeSpan == UINT64_MAX) {
+    if (effectiveTimeSpan == TOKEN_NEVER_EXPIRE || context.expiredTimeSpan == UINT64_MAX) {
         tokenContent->expiredTimeStamp = UINT64_MAX;
     } else {
         tokenContent->expiredTimeStamp = (UINT64_MAX - now < effectiveTimeSpan) ? now : now + effectiveTimeSpan;
@@ -732,12 +731,12 @@ Status TokenManagerActor::GenerateToken(const std::string &tenantID, const std::
 
     Status status = EncryptToken(tokenContent);
     if (status.IsError()) {
-        YRLOG_ERROR("{}|failed to encrypt token, err: {}", tenantID, status.ToString());
+        YRLOG_ERROR("{}|failed to encrypt token, err: {}", context.tenantID, status.ToString());
         return Status(StatusCode::FAILED, "encrypt token failed, err: " + status.ToString());
     }
     status = tokenContent->IsValid(NEW_TOKEN_EXPIRED_OFFSET);
     if (status.IsError()) {
-        YRLOG_ERROR("{}|tokenContent is not valid, err: {}", tenantID, status.ToString());
+        YRLOG_ERROR("{}|tokenContent is not valid, err: {}", context.tenantID, status.ToString());
         return Status(StatusCode::FAILED, "tokenContent is not valid, err: " + status.ToString());
     }
     return Status::OK();
@@ -1212,7 +1211,7 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::SlaveBusiness::Re
     ASSERT_IF_NULL(actor);
     auto promise = std::make_shared<litebus::Promise<std::shared_ptr<TokenSalt>>>();
 
-    // TODO(Cluster-Enhancement): Extend GetTokenRequest in message.proto to include
+    // Cluster enhancement: extend GetTokenRequest in message.proto to include
     // cpuLimit, memLimit, and role. Currently, these are lost during forwarding to Master.
     YRLOG_WARN("{}|Quota forwarding to Master is not yet supported in cluster mode. Defaulting to standard token.",
                tenantID);

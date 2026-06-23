@@ -16,6 +16,9 @@
 
 #include "python_strategy.h"
 
+#include <filesystem>
+#include <system_error>
+
 #include "common/constants/constants.h"
 #include "common/logs/logging.h"
 #include "common/utils/path.h"
@@ -28,6 +31,13 @@ namespace functionsystem::runtime_manager {
 namespace {
 const std::string PYTHON_JOB_ID_PREFIX = "job-";
 const std::string CHDIR_PATH_CONFIG = "CHDIR_PATH";
+const std::string IMAGE_FILE_SUFFIX = ".img";
+
+bool IsImagePath(const std::string &path)
+{
+    return path.size() > IMAGE_FILE_SUFFIX.size() &&
+           path.substr(path.size() - IMAGE_FILE_SUFFIX.size()) == IMAGE_FILE_SUFFIX;
+}
 }  // namespace
 
 static bool IsEnableConda(const google::protobuf::Map<std::string, std::string> &deployOptions)
@@ -35,7 +45,7 @@ static bool IsEnableConda(const google::protobuf::Map<std::string, std::string> 
     return deployOptions.count(CONDA_PREFIX) && deployOptions.count(CONDA_DEFAULT_ENV);
 }
 
-std::pair<Status, std::string> PythonCommandStrategy::ResolveExecPath(
+std::pair<Status, std::string> PythonStrategy::ResolveExecPath(
     const google::protobuf::Map<std::string, std::string> &deployOptions,
     const messages::RuntimeInstanceInfo &info,
     const RuntimeConfig &config) const
@@ -63,13 +73,12 @@ std::pair<Status, std::string> PythonCommandStrategy::ResolveExecPath(
     return {Status::OK(), path.Get()};
 }
 
-std::pair<Status, std::string> PythonCommandStrategy::ResolveWorkingDir(
+std::pair<Status, std::string> PythonStrategy::ResolveWorkingDir(
     const messages::RuntimeInstanceInfo &info) const
 {
     const auto &posixEnvs = info.runtimeconfig().posixenvs();
     auto workingDirIter = posixEnvs.find(UNZIPPED_WORKING_DIR);
     auto fileIter = posixEnvs.find(YR_WORKING_DIR);
-
     if (workingDirIter == posixEnvs.end() || fileIter == posixEnvs.end()) {
         return {Status::OK(), info.deploymentconfig().deploydir()};
     }
@@ -80,25 +89,25 @@ std::pair<Status, std::string> PythonCommandStrategy::ResolveWorkingDir(
                        "params working dir or unzipped dir is empty"),
                 ""};
     }
-    if (workingDirIter->second.size() > 4 &&
-        workingDirIter->second.substr(workingDirIter->second.size() - 4) == ".img") {
+    if (IsImagePath(workingDirIter->second)) {
         return {Status::OK(), info.container().mountpoint()};
     }
 
-    char canonicalPath[PATH_MAX];
-    if (realpath(workingDirIter->second.c_str(), canonicalPath) == nullptr) {
+    std::error_code ec;
+    std::filesystem::path canonicalPath = std::filesystem::canonical(workingDirIter->second, ec);
+    if (ec) {
         return {Status(StatusCode::RUNTIME_MANAGER_WORKING_DIR_FOR_APP_NOTFOUND, "cannot resolve path"), ""};
     }
-    if (access(canonicalPath, R_OK | W_OK | X_OK) != 0) {
+    std::string canonicalPathStr = canonicalPath.string();
+    if (access(canonicalPathStr.c_str(), R_OK | W_OK | X_OK) != 0) {
         return {Status(StatusCode::RUNTIME_MANAGER_WORKING_DIR_FOR_APP_NOTFOUND, "insufficient directory permissions"),
                 ""};
     }
     return {Status::OK(), workingDirIter->second};
 }
 
-std::pair<Status, CommandArgs> PythonCommandStrategy::BuildArgs(const messages::StartInstanceRequest &request,
-                                                                  const std::string &port,
-                                                                  const RuntimeConfig &config) const
+std::pair<Status, CommandArgs> PythonStrategy::BuildArgs(
+    const messages::StartInstanceRequest &request, const std::string &port, const RuntimeConfig &config) const
 {
     const auto &info = request.runtimeinstanceinfo();
     const auto &deployOptions = info.deploymentconfig().deployoptions();

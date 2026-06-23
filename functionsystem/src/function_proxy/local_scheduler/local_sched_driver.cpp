@@ -150,8 +150,9 @@ Status LocalSchedDriver::Create()
             param_.traefikEnableTLS,
             param_.traefikServersTransport);
         instanceCtrl_->SetTraefikRegistry(traefikRegistry_);
-        YRLOG_INFO("TraefikRegistry initialized and injected: prefix={}, entryPoint={}, enableTLS={}, serversTransport={}",
-                  param_.traefikEtcdPrefix, param_.traefikHttpEntryPoint, param_.traefikEnableTLS, param_.traefikServersTransport);
+        YRLOG_INFO("TraefikRegistry initialized: prefix={}, entryPoint={}, enableTLS={}, serversTransport={}",
+            param_.traefikEtcdPrefix, param_.traefikHttpEntryPoint, param_.traefikEnableTLS,
+            param_.traefikServersTransport);
     } else {
         YRLOG_INFO("Traefik registry disabled");
     }
@@ -167,6 +168,12 @@ Status LocalSchedDriver::Create()
     metaStoreHealthyObserver_ = std::make_shared<InstanceCtrlMetaStoreHealthyObserver>(instanceCtrl_);
     if (auto registerStatus(httpServer_->RegisterRoute(apiRouteRegister_)); registerStatus != StatusCode::SUCCESS) {
         YRLOG_ERROR("failed to register health check api router.");
+    }
+    localSchedulingApiRouteRegister_ = std::make_shared<LocalSchedulingApiRouter>();
+    localSchedulingApiRouteRegister_->InitUpdateSchedulingStatusHandler(resourceViewMgr_);
+    if (auto registerStatus(httpServer_->RegisterRoute(localSchedulingApiRouteRegister_));
+        registerStatus != StatusCode::SUCCESS) {
+        YRLOG_ERROR("failed to register local scheduling api router.");
     }
     return Status::OK();
 }

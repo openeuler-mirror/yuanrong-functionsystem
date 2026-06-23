@@ -39,19 +39,28 @@ const std::string ROLE_ADMIN = "admin";
 const std::string ROLE_DEVELOPER = "developer";
 const std::string ROLE_USER = "user";
 const std::string ROLE_VIEWER = "viewer";
+const int ROLE_ADMIN_PRIORITY = 4;
+const int ROLE_DEVELOPER_PRIORITY = 3;
+const int ROLE_USER_PRIORITY = 2;
+const int ROLE_VIEWER_PRIORITY = 1;
+const int ROLE_UNKNOWN_PRIORITY = 0;
 
 // Role priority map (higher number = higher priority)
 inline int GetRolePriority(const std::string &role)
 {
-    if (role == ROLE_ADMIN)
-        return 4;
-    if (role == ROLE_DEVELOPER)
-        return 3;
-    if (role == ROLE_USER)
-        return 2;
-    if (role == ROLE_VIEWER)
-        return 1;
-    return 0;
+    if (role == ROLE_ADMIN) {
+        return ROLE_ADMIN_PRIORITY;
+    }
+    if (role == ROLE_DEVELOPER) {
+        return ROLE_DEVELOPER_PRIORITY;
+    }
+    if (role == ROLE_USER) {
+        return ROLE_USER_PRIORITY;
+    }
+    if (role == ROLE_VIEWER) {
+        return ROLE_VIEWER_PRIORITY;
+    }
+    return ROLE_UNKNOWN_PRIORITY;
 }
 }  // namespace functionsystem::iamserver
 

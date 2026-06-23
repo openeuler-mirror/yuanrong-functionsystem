@@ -36,6 +36,14 @@ const std::string YR_NODE_DISK_CAPACITY = "yr_node_disk_capacity";
 const std::string YR_NODE_NPU = "yr_node_npu";
 const std::string YR_INSTANCE_CPU_USAGE = "yr_instance_cpu_usage";
 const std::string YR_INSTANCE_NPU = "yr_instance_npu";
+const std::string YR_SANDBOX_LIFECYCLE_STATUS = "yr_sandbox_lifecycle_status";
+const std::string YR_SANDBOX_LIFECYCLE_SECONDS = "yr_sandbox_lifecycle_seconds";
+const std::string YR_SANDBOX_REQUESTED_CPU_CORES = "yr_sandbox_requested_cpu_cores";
+const std::string YR_SANDBOX_REQUESTED_MEMORY_BYTES = "yr_sandbox_requested_memory_bytes";
+const std::string YR_SANDBOX_CPU_USAGE_CORES = "yr_sandbox_cpu_usage_cores";
+const std::string YR_SANDBOX_MEMORY_USAGE_RATIO = "yr_sandbox_memory_usage_ratio";
+const std::string YR_SANDBOX_MEMORY_USAGE_BYTES = "yr_sandbox_memory_usage_bytes";
+const std::string YR_SANDBOX_MEMORY_LIMIT_BYTES = "yr_sandbox_memory_limit_bytes";
 
 
 // alarm

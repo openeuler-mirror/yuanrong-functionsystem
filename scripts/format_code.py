@@ -22,12 +22,16 @@ For full formatting support, install clang-format:
     macOS: brew install clang-format
 """
 
+import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
-import shutil
 from pathlib import Path
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+LOGGER = logging.getLogger(__name__)
 
 # ANSI color codes
 RED = '\033[91m'
@@ -61,7 +65,7 @@ class LineFormatter:
             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                 lines = f.readlines()
         except Exception as e:
-            print(f"{YELLOW}Warning: Cannot read {filepath}: {e}{RESET}")
+            LOGGER.info(f"{YELLOW}Warning: Cannot read {filepath}: {e}{RESET}")
             return None
 
         formatted_lines = []
@@ -105,7 +109,8 @@ class LineFormatter:
 
         return False
 
-    def format_multiline_block(self, lines, idx):
+    @staticmethod
+    def format_multiline_block(lines, idx):
         """Format a multi-line block (if/while/for with long conditions)."""
         result = []
         consumed = 0
@@ -149,7 +154,8 @@ class LineFormatter:
         # Fallback: simple break at word boundary
         return self.break_at_word_boundary(stripped, line)
 
-    def should_skip(self, line):
+    @staticmethod
+    def should_skip(line):
         """Check if line should not be reformatted."""
         if not line or line.isspace():
             return True
@@ -173,7 +179,8 @@ class LineFormatter:
 
         return False
 
-    def get_indent(self, line):
+    @staticmethod
+    def get_indent(line):
         """Get the indentation of a line."""
         match = re.match(r'^(\s*)', line)
         return match.group(1) if match else ''
@@ -280,20 +287,28 @@ def find_clang_format():
             return path, 'local'
 
     # Check if Docker is available
+    docker_path = shutil.which('docker')
+    if not docker_path:
+        return None, None
     try:
-        result = subprocess.run(['docker', '--version'], capture_output=True, timeout=5)
+        result = subprocess.run([docker_path, '--version'], capture_output=True, timeout=5)
         if result.returncode == 0:
-            return 'docker', 'docker'
-    except Exception:
-        pass
+            return docker_path, 'docker'
+    except Exception as exc:
+        LOGGER.debug("Failed to inspect docker clang-format fallback: %s", exc)
 
     return None, None
 
 
 def get_clang_format_docker():
     """Get clang-format via Docker. Returns a partial command that needs filename appended."""
-    install_and_format = 'apt-get update -qq && apt-get install -y -qq clang-format >/dev/null 2>&1 && clang-format -i -style=file'
-    return ['docker', 'run', '--rm', '-v', os.getcwd() + ':/workspace', '-w', '/workspace',
+    install_and_format = (
+        'apt-get update -qq && apt-get install -y -qq clang-format >/dev/null 2>&1 '
+        '&& clang-format -i -style=file'
+    )
+    docker_path = shutil.which('docker') or 'docker'
+    workspace_mount = os.getcwd() + ':/workspace'
+    return [docker_path, 'run', '--rm', '-v', workspace_mount, '-w', '/workspace',
             'ubuntu:22.04', 'sh', '-c', install_and_format + ' "$0"']
 
 
@@ -301,13 +316,13 @@ def get_changed_files(diff_base):
     """Get list of changed C++ files from git diff."""
     try:
         result = subprocess.run(
-            ['git', 'diff', '--name-only', diff_base, 'HEAD'],
+            [shutil.which('git') or 'git', 'diff', '--name-only', diff_base, 'HEAD'],
             capture_output=True, text=True
         )
         files = result.stdout.strip().split('\n')
         return [f for f in files if f and re.match(r'.*\.(cpp|cc|h|hpp)$', f)]
     except Exception as e:
-        print(f"{RED}Error getting changed files: {e}{RESET}")
+        LOGGER.info(f"{RED}Error getting changed files: {e}{RESET}")
         return []
 
 
@@ -329,14 +344,15 @@ def format_with_clang_format(filepath, clang_format_cmd, source='local'):
             # os.getcwd() is mounted at /workspace in the container
             cwd = os.getcwd()
             if filepath.startswith(cwd):
-                container_path = '/workspace/' + filepath[len(cwd):].lstrip('/')
+                container_path = os.path.join('/workspace', filepath[len(cwd):].lstrip('/'))
             else:
                 # File not under cwd, can't use Docker mode
                 return False
 
             # Build Docker command
             install_cmd = 'apt-get update -qq && apt-get install -y -qq clang-format >/dev/null 2>&1'
-            cmd = ['docker', 'run', '--rm', '-v', cwd + ':/workspace', '-w', '/workspace',
+            workspace_mount = cwd + ':/workspace'
+            cmd = [clang_format_cmd, 'run', '--rm', '-v', workspace_mount, '-w', '/workspace',
                    'ubuntu:22.04', 'sh', '-c', f'{install_cmd} && clang-format -i -style=file {container_path}']
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         else:
@@ -348,7 +364,8 @@ def format_with_clang_format(filepath, clang_format_cmd, source='local'):
         if result.returncode != 0:
             return False
         return True
-    except Exception:
+    except Exception as exc:
+        LOGGER.debug("Failed to format %s: %s", filepath, exc)
         return False
 
 
@@ -363,7 +380,7 @@ def format_file_simple(filepath, formatter):
             f.write(content)
         return True
     except Exception as e:
-        print(f"{YELLOW}Warning: Failed for {filepath}: {e}{RESET}")
+        LOGGER.info(f"{YELLOW}Warning: Failed for {filepath}: {e}{RESET}")
         return False
 
 
@@ -385,14 +402,14 @@ def check_file(filepath, max_length=120):
 
                 if len(line.rstrip()) > max_length:
                     issues.append((i, len(line.rstrip())))
-    except Exception:
-        pass
+    except Exception as exc:
+        LOGGER.debug("Failed to check %s: %s", filepath, exc)
     return issues
 
 
 def show_install_help():
     """Show how to install clang-format."""
-    print(f"""
+    LOGGER.info(f"""
 {BOLD}clang-format Installation:{RESET}
 
 Ubuntu/Debian:
@@ -459,7 +476,7 @@ def main():
     if args.install:
         return show_install_help()
 
-    print(f"{BOLD}Huawei C++ Code Formatter{RESET}")
+    LOGGER.info(f"{BOLD}Huawei C++ Code Formatter{RESET}")
 
     # Find clang-format
     clang_format_path, clang_format_source = find_clang_format()
@@ -467,42 +484,41 @@ def main():
 
     if use_clang:
         if clang_format_source == 'docker':
-            print(f"Using: {CYAN}Docker clang-format{RESET} (recommended)")
+            LOGGER.info(f"Using: {CYAN}Docker clang-format{RESET} (recommended)")
         else:
-            print(f"Using: {CYAN}{clang_format_path}{RESET} (recommended)")
+            LOGGER.info(f"Using: {CYAN}{clang_format_path}{RESET} (recommended)")
     else:
         if not args.force_simple:
-            print(f"clang-format not found. Using: {CYAN}Simple Line Formatter{RESET}")
-            print(f"  For better results, install clang-format or use --install")
+            LOGGER.info(f"clang-format not found. Using: {CYAN}Simple Line Formatter{RESET}")
+            LOGGER.info(f"  For better results, install clang-format or use --install")
         else:
-            print(f"Using: {CYAN}Simple Line Formatter{RESET}")
+            LOGGER.info(f"Using: {CYAN}Simple Line Formatter{RESET}")
 
     # Get files to format
     path = args.path
     if args.diff:
         files = get_changed_files(args.diff)
-        print(f"Changed files since {args.diff}: {len(files)}")
+        LOGGER.info(f"Changed files since {args.diff}: {len(files)}")
     elif os.path.isfile(path):
         files = [path]
     elif os.path.isdir(path):
         files = []
         for root, dirs, filenames in os.walk(path):
-            dirs[:] = [d for d in dirs if d not in [
-                "build", "bazel-bin", "bazel-out", ".git", "vendor", "__pycache__", ".cache"
-            ]]
+            excluded_dirs = {"build", "bazel-bin", "bazel-out", ".git", "vendor", "__pycache__", ".cache"}
+            dirs[:] = [d for d in dirs if d not in excluded_dirs]
             for f in filenames:
                 if f.endswith(('.cpp', '.cc', '.h', '.hpp')):
                     files.append(os.path.join(root, f))
     else:
-        print(f"{RED}Error: {path} is not a valid file or directory{RESET}")
+        LOGGER.info(f"{RED}Error: {path} is not a valid file or directory{RESET}")
         return 1
 
     if not files:
-        print(f"{GREEN}No files to format{RESET}")
+        LOGGER.info(f"{GREEN}No files to format{RESET}")
         return 0
 
-    print(f"Files to process: {len(files)}")
-    print()
+    LOGGER.info(f"Files to process: {len(files)}")
+    LOGGER.info("")
 
     formatter = LineFormatter(max_length=args.max_length)
 
@@ -530,32 +546,31 @@ def main():
                 else:
                     skipped_count += 1
 
-    print()
+    LOGGER.info("")
     if args.check:
         if not check_issues:
-            print(f"{GREEN}{BOLD}All files comply with line length limit ({args.max_length}){RESET}")
+            LOGGER.info(f"{GREEN}{BOLD}All files comply with line length limit ({args.max_length}){RESET}")
             return 0
         else:
             total_issues = sum(len(issues) for _, issues in check_issues)
-            print(f"{RED}{BOLD}Found {total_issues} lines exceeding {args.max_length} characters:{RESET}")
+            LOGGER.info(f"{RED}{BOLD}Found {total_issues} lines exceeding {args.max_length} characters:{RESET}")
             for filepath, issues in check_issues[:10]:
-                print(f"\n  {BLUE}{filepath}{RESET}")
+                LOGGER.info(f"\n  {BLUE}{filepath}{RESET}")
                 for line_no, line_len in issues[:5]:
-                    print(f"    Line {line_no}: {line_len} chars")
+                    LOGGER.info(f"    Line {line_no}: {line_len} chars")
                 if len(issues) > 5:
-                    print(f"    ... and {len(issues) - 5} more")
+                    LOGGER.info(f"    ... and {len(issues) - 5} more")
             if len(check_issues) > 10:
-                print(f"\n  ... and {len(check_issues) - 10} more files")
+                LOGGER.info(f"\n  ... and {len(check_issues) - 10} more files")
             return 1
     else:
         if args.dry_run:
-            print(f"{YELLOW}Dry run - no files were modified{RESET}")
+            LOGGER.info(f"{YELLOW}Dry run - no files were modified{RESET}")
         else:
-            print(f"{GREEN}Formatted {modified_count} files{RESET}")
+            LOGGER.info(f"{GREEN}Formatted {modified_count} files{RESET}")
             if skipped_count > 0:
-                print(f"{YELLOW}Skipped {skipped_count} files (clang-format errors){RESET}")
+                LOGGER.info(f"{YELLOW}Skipped {skipped_count} files (clang-format errors){RESET}")
         return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 
 #include "common/utils/generate_message.h"
+#include "common/utils/meta_store_kv_operation.h"
 #include "mocks/mock_local_sched_srv_actor.h"
 #include "utils/future_test_helper.h"
 #include "utils/generate_info.h"
@@ -259,6 +260,34 @@ TEST_F(LocalSchedMgrActorTest, EvictAgentOnLocal)
         EXPECT_AWAIT_READY(future);
         EXPECT_EQ(future.IsOK(), true);
     }
+    litebus::Terminate(actor->GetAID());
+    litebus::Terminate(scheduler->GetAID());
+    litebus::Await(actor->GetAID());
+    litebus::Await(scheduler->GetAID());
+}
+
+TEST_F(LocalSchedMgrActorTest, UpdateSchedulingStatusOnLocal)
+{
+    auto actor = std::make_shared<functionsystem::global_scheduler::LocalSchedMgrActor>("TestLocalSchedMgrActor");
+    auto scheduler = std::make_shared<MockLocalSchedSrvActor>("MockLocalSchedSrvActor");
+    litebus::Spawn(actor);
+    litebus::Spawn(scheduler);
+
+    EXPECT_CALL(*scheduler.get(), MockUpdateSchedulingStatus(testing::_, testing::_, testing::_))
+        .WillOnce(testing::Invoke(
+            [&scheduler](const litebus::AID &from, const std::string &name, const std::string &msg) {
+                messages::UpdateAgentStatusRequest request;
+                EXPECT_TRUE(request.ParseFromString(msg));
+                EXPECT_EQ(name, "UpdateSchedulingStatus");
+                EXPECT_EQ(request.status(), 1);
+                scheduler->UpdateSchedulingStatusResponse(from, request.requestid());
+            }));
+
+    auto future = litebus::Async(
+        actor->GetAID(), &LocalSchedMgrActor::UpdateSchedulingStatusOnLocal, scheduler->GetAID().Url(), true);
+    EXPECT_AWAIT_READY(future);
+    EXPECT_TRUE(future.Get().IsOk());
+
     litebus::Terminate(actor->GetAID());
     litebus::Terminate(scheduler->GetAID());
     litebus::Await(actor->GetAID());

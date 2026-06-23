@@ -96,10 +96,18 @@ S3Config GetS3Config(const function_agent::FunctionAgentFlags &flags)
     S3Config s3Config;
     s3Config.credentialType = flags.GetCredentialType();
     if (!flags.GetAccessKey().empty()) {
-        s3Config.accessKey = flags.GetAccessKey();
+        if (const auto decrypt = Crypto::GetInstance().Decrypt(flags.GetAccessKey()); decrypt.IsSome()) {
+            s3Config.accessKey = decrypt.Get().GetData();
+        } else {
+            YRLOG_ERROR("failed to decrypt access key");
+        }
     }
     if (!flags.GetSecretKey().empty()) {
-        s3Config.secretKey = flags.GetSecretKey();
+        if (const auto decrypt = Crypto::GetInstance().Decrypt(flags.GetSecretKey()); decrypt.IsSome()) {
+            s3Config.secretKey = decrypt.Get();
+        } else {
+            YRLOG_ERROR("failed to decrypt secret key");
+        }
     }
     s3Config.endpoint = flags.GetS3Endpoint();
     s3Config.protocol = flags.GetS3Protocol();
@@ -558,12 +566,6 @@ void OnCreate(const Flags &flags, const function_agent::FunctionAgentFlags &func
         YRLOG_ERROR("failed to load secret key, reason: {}", status.ToString());
         g_functionProxySwitcher->SetStop();
         return;
-    }
-
-    trace::TraceManager::GetInstance().InitTrace("yuanrong-kernel", flags.GetNodeID(), flags.GetEnableTrace(),
-                                                 flags.GetTraceConfig());
-    if (flags.GetEnableMergeProcess()) {
-        OnCreateFunctionAgent(functionAgentFlags, runtimeManagerFlags, true);
     }
 
     trace::TraceManager::GetInstance().InitTrace(COMPONENT_NAME, flags.GetNodeID(), flags.GetEnableTrace(),

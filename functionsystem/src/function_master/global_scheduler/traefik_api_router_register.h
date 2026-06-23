@@ -70,20 +70,15 @@ public:
     {
         auto handler = [c = std::move(cache),
                         ctx = std::move(leaderCtx),
-                        timeoutMs = static_cast<uint64_t>(forwardTimeoutMs)]
-            (const HttpRequest &req) -> litebus::Future<HttpResponse>
-        {
+                        timeoutMs = static_cast<uint64_t>(forwardTimeoutMs)](
+                           const HttpRequest &req) -> litebus::Future<HttpResponse> {
             if (req.method != "GET") {
                 return HttpResponse(litebus::http::ResponseCode::METHOD_NOT_ALLOWED);
             }
 
             // ---- Leader: serve from local cache ----
             if (ctx->isLeader.load()) {
-                std::string body = c->GetConfigJSON();
-                HttpResponse resp(litebus::http::ResponseCode::OK);
-                resp.headers["Content-Type"] = "application/json";
-                resp.body = std::move(body);
-                return resp;
+                return BuildLeaderResponse(c);
             }
 
             // ---- Standby: forward to leader ----
@@ -93,58 +88,81 @@ public:
                 return HttpResponse(litebus::http::ResponseCode::SERVICE_UNAVAILABLE);
             }
 
-            auto colonPos = leaderAddr.rfind(':');
-            if (colonPos == std::string::npos) {
-                YRLOG_WARN("TraefikApiRouter: invalid leader address '{}', returning 503", leaderAddr);
-                return HttpResponse(litebus::http::ResponseCode::SERVICE_UNAVAILABLE);
-            }
-
-            std::string ip = leaderAddr.substr(0, colonPos);
-            uint16_t port = 0;
-            try {
-                port = static_cast<uint16_t>(std::stoul(leaderAddr.substr(colonPos + 1)));
-            } catch (...) {
-                YRLOG_WARN("TraefikApiRouter: failed to parse leader port from '{}', returning 503", leaderAddr);
-                return HttpResponse(litebus::http::ResponseCode::SERVICE_UNAVAILABLE);
-            }
-
-            litebus::http::URL url;
-            url.scheme = std::string("http");
-            url.ip = ip;
-            url.port = port;
-            url.path = "/global-scheduler/traefik/config";
-
-            auto promise = std::make_shared<litebus::Promise<HttpResponse>>();
-            auto future = promise->GetFuture();
-
-            litebus::http::Get(url, litebus::None(), litebus::Option<uint64_t>(timeoutMs))
-                .OnComplete([promise, leaderAddr](const litebus::Future<litebus::http::Response> &fwdFuture) {
-                    if (fwdFuture.IsError() || !fwdFuture.IsOK()) {
-                        YRLOG_WARN("TraefikApiRouter: forward to leader '{}' failed, returning 503", leaderAddr);
-                        promise->SetValue(HttpResponse(litebus::http::ResponseCode::SERVICE_UNAVAILABLE));
-                        return;
-                    }
-
-                    const auto &fwdResp = fwdFuture.Get();
-                    if (fwdResp.retCode != litebus::http::ResponseCode::OK) {
-                        YRLOG_WARN("TraefikApiRouter: leader '{}' returned {}, returning 503",
-                                   leaderAddr, static_cast<int>(fwdResp.retCode));
-                        promise->SetValue(HttpResponse(litebus::http::ResponseCode::SERVICE_UNAVAILABLE));
-                        return;
-                    }
-
-                    HttpResponse resp(litebus::http::ResponseCode::OK);
-                    resp.headers["Content-Type"] = "application/json";
-                    resp.body = fwdResp.body;
-                    promise->SetValue(std::move(resp));
-                });
-
-            return future;
+            return ForwardToLeader(leaderAddr, timeoutMs);
         };
         RegisterHandler(TRAEFIK_CONFIG_URL, handler);
     }
 
     ~TraefikApiRouterRegister() override = default;
+
+private:
+    static HttpResponse BuildLeaderResponse(const std::shared_ptr<TraefikRouteCache> &cache)
+    {
+        HttpResponse resp(litebus::http::ResponseCode::OK);
+        resp.headers["Content-Type"] = "application/json";
+        resp.body = cache->GetConfigJSON();
+        return resp;
+    }
+
+    static bool BuildLeaderUrl(const std::string &leaderAddr, litebus::http::URL *url)
+    {
+        auto colonPos = leaderAddr.rfind(':');
+        if (colonPos == std::string::npos) {
+            YRLOG_WARN("TraefikApiRouter: invalid leader address '{}', returning 503", leaderAddr);
+            return false;
+        }
+
+        try {
+            url->scheme = std::string("http");
+            url->ip = leaderAddr.substr(0, colonPos);
+            url->port = static_cast<uint16_t>(std::stoul(leaderAddr.substr(colonPos + 1)));
+            url->path = "/global-scheduler/traefik/config";
+            return true;
+        } catch (...) {
+            YRLOG_WARN("TraefikApiRouter: failed to parse leader port from '{}', returning 503", leaderAddr);
+            return false;
+        }
+    }
+
+    static void OnForwardComplete(const std::shared_ptr<litebus::Promise<HttpResponse>> &promise,
+                                  const std::string &leaderAddr,
+                                  const litebus::Future<litebus::http::Response> &fwdFuture)
+    {
+        if (fwdFuture.IsError() || !fwdFuture.IsOK()) {
+            YRLOG_WARN("TraefikApiRouter: forward to leader '{}' failed, returning 503", leaderAddr);
+            promise->SetValue(HttpResponse(litebus::http::ResponseCode::SERVICE_UNAVAILABLE));
+            return;
+        }
+
+        const auto &fwdResp = fwdFuture.Get();
+        if (fwdResp.retCode != litebus::http::ResponseCode::OK) {
+            YRLOG_WARN("TraefikApiRouter: leader '{}' returned {}, returning 503", leaderAddr,
+                       static_cast<int>(fwdResp.retCode));
+            promise->SetValue(HttpResponse(litebus::http::ResponseCode::SERVICE_UNAVAILABLE));
+            return;
+        }
+
+        HttpResponse resp(litebus::http::ResponseCode::OK);
+        resp.headers["Content-Type"] = "application/json";
+        resp.body = fwdResp.body;
+        promise->SetValue(std::move(resp));
+    }
+
+    static litebus::Future<HttpResponse> ForwardToLeader(const std::string &leaderAddr, uint64_t timeoutMs)
+    {
+        litebus::http::URL url;
+        if (!BuildLeaderUrl(leaderAddr, &url)) {
+            return HttpResponse(litebus::http::ResponseCode::SERVICE_UNAVAILABLE);
+        }
+
+        auto promise = std::make_shared<litebus::Promise<HttpResponse>>();
+        auto future = promise->GetFuture();
+        litebus::http::Get(url, litebus::None(), litebus::Option<uint64_t>(timeoutMs))
+            .OnComplete([promise, leaderAddr](const litebus::Future<litebus::http::Response> &fwdFuture) {
+                OnForwardComplete(promise, leaderAddr, fwdFuture);
+            });
+        return future;
+    }
 };
 
 }  // namespace functionsystem::global_scheduler

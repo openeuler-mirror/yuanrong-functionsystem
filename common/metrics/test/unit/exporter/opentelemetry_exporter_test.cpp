@@ -26,15 +26,33 @@ namespace MetricsExporter = observability::exporters::metrics;
 namespace {
 MetricsSdk::InstrumentDescriptor BuildGaugeDescriptor(const std::string &name)
 {
-    return { name, "test descriptor", "", MetricsSdk::InstrumentType::GAUGE, MetricsSdk::InstrumentValueType::UINT64 };
+    return {
+        name,
+        "test descriptor",
+        "",
+        MetricsSdk::InstrumentType::GAUGE,
+        MetricsSdk::InstrumentValueType::UINT64
+    };
 }
 }  // namespace
+
+const std::string ETCD_ALARM_LABEL =
+    R"({"id":"YuanrongEtcdConnection00001","name":"yr_etcd_alarm","severity":5,)"
+    R"("locationInfo":"cn-north-7","cause":"connect failed","startsAt":1727611921601,)"
+    R"("endsAt":0,"annotations":"{\"err_msg\":\"connect failed\"}","op_type":"firing"})";
+
+const std::string INSTANCE_CREATE_FAILURE_ALARM_LABEL =
+    R"({"id":"YuanrongInstanceCreateFailure00001-request-1",)"
+    R"("name":"yr_instance_create_failure_alarm","severity":4,"locationInfo":"127.0.0.1:3000",)"
+    R"("cause":"unable to init runtime, because connect runtime failed and not received exit info of runtime",)"
+    R"("startsAt":1727611921601,"endsAt":0,"request_id":"request-1","resource_id":"instance-1",)"
+    R"("runtime_id":"runtime-1","stage":"check_readiness","status_code":3001,"site":"cn-north-7",)"
+    R"("tenant_id":"tenant-1","application_id":"app-1","service_id":"svc-1","op_type":"firing"})";
 
 TEST(OpenTelemetryAttributeUtilsTest, FlattensJsonAlarmLabelToStructuredAttributes)
 {
     MetricsSdk::PointLabels labels;
-    labels.emplace_back(std::pair{ "yrAlarmLabelKey",
-                                   R"({"id":"YuanrongEtcdConnection00001","name":"yr_etcd_alarm","severity":5,"locationInfo":"cn-north-7","cause":"connect failed","startsAt":1727611921601,"endsAt":0,"annotations":"{\"err_msg\":\"connect failed\"}","op_type":"firing"})" });
+    labels.emplace_back(std::pair{ "yrAlarmLabelKey", ETCD_ALARM_LABEL });
     labels.emplace_back(std::pair{ "node_id", "node-1" });
 
     auto attributes = MetricsExporter::BuildPointAttributes(BuildGaugeDescriptor("yr_etcd_alarm"), labels);
@@ -56,10 +74,7 @@ TEST(OpenTelemetryAttributeUtilsTest, FlattensJsonAlarmLabelToStructuredAttribut
 TEST(OpenTelemetryAttributeUtilsTest, FlattensInstanceCreateFailureAlarmToStructuredAttributes)
 {
     MetricsSdk::PointLabels labels;
-    labels.emplace_back(std::pair{
-        "yrAlarmLabelKey",
-        R"({"id":"YuanrongInstanceCreateFailure00001-request-1","name":"yr_instance_create_failure_alarm","severity":4,"locationInfo":"127.0.0.1:3000","cause":"unable to init runtime, because connect runtime failed and not received exit info of runtime","startsAt":1727611921601,"endsAt":0,"request_id":"request-1","resource_id":"instance-1","runtime_id":"runtime-1","stage":"check_readiness","status_code":3001,"site":"cn-north-7","tenant_id":"tenant-1","application_id":"app-1","service_id":"svc-1","op_type":"firing"})"
-    });
+    labels.emplace_back(std::pair{ "yrAlarmLabelKey", INSTANCE_CREATE_FAILURE_ALARM_LABEL });
     labels.emplace_back(std::pair{ "component_name", "function_proxy" });
 
     auto attributes =

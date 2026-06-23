@@ -41,6 +41,37 @@ def parser_args():
         help="Set program compilation mode(Debug/Release). Default: Release",
     )
     build_parser.add_argument(
+        "--cmake_args",
+        type=utils.parse_kv_args,
+        nargs="+",
+        default=[],
+        help="Add CMake compilation parameters. Format: <key>=<val>",
+    )
+    build_parser.add_argument(
+        "--component",
+        type=str,
+        choices=[
+            "all",
+            "cli",
+            "iam_server",
+            "meta_service",
+            "function_master",
+            "domain_scheduler",
+            "runtime_manager",
+            "function_proxy",
+            "function_agent",
+        ],
+        default="all",
+        help="Build a specific component. Support C++ binaries and Go modules(cli/meta_service). Default: all",
+    )
+    build_parser.add_argument(
+        "--linker",
+        type=str,
+        choices=["auto", "gold", "lld", "mold"],
+        default="auto",
+        help="Select C++ linker backend. Default: auto",
+    )
+    build_parser.add_argument(
         "--builder",
         type=str,
         choices=["cmake", "bazel"],

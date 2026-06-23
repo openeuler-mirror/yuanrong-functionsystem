@@ -31,9 +31,8 @@ const std::string LOG_LEVEL_PREFIX = "-logLevel=";
 const std::string GRPC_ADDRESS_PREFIX = "-grpcAddress=";
 }  // namespace
 
-std::pair<Status, CommandArgs> GoCommandStrategy::BuildArgs(const messages::StartInstanceRequest &request,
-                                                             const std::string &port,
-                                                             const RuntimeConfig &config) const
+std::pair<Status, CommandArgs> GoStrategy::BuildArgs(
+    const messages::StartInstanceRequest &request, const std::string &port, const RuntimeConfig &config) const
 {
     const auto &info = request.runtimeinstanceinfo();
     YRLOG_DEBUG("{}|{}|GoCommandStrategy::BuildArgs instance({}) runtime({})", info.traceid(), info.requestid(),

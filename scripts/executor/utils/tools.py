@@ -86,6 +86,16 @@ def auto_install_and_upgrade(package):
     return check_package_metadata(package)
 
 
+def parse_kv_args(value):
+    """Parse command-line KEY=VALUE pairs into a one-item dict for argparse."""
+    if "=" not in value:
+        raise ValueError(f"Invalid key-value argument: {value}. Expected format: <key>=<val>")
+    key, val = value.split("=", 1)
+    if not key:
+        raise ValueError(f"Invalid key-value argument: {value}. Key cannot be empty")
+    return {key: val}
+
+
 def compare_version(version1, version2):
     """
     简化版本比较函数

@@ -369,7 +369,7 @@ private:
     std::shared_ptr<VirtualEnvManager> virtualEnvMgr_{ nullptr };
     std::shared_ptr<StdMonitor> stdMonitor_{ nullptr };
     StdRedirectParam stdRedirectParam_;
-
+    std::string pkgType_;
 };
 
 class RuntimeExecutorProxy : public ExecutorProxy {

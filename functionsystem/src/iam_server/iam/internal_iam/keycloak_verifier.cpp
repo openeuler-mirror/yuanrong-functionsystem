@@ -17,6 +17,7 @@
 #include "keycloak_verifier.h"
 
 #include <openssl/bn.h>
+#include <openssl/buffer.h>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
@@ -30,6 +31,7 @@
 #include <unordered_set>
 
 #include "async/try.hpp"
+#include "async/uuid_generator.hpp"
 #include "common/hex/hex.h"
 #include "common/logs/logging.h"
 #include "common/utils/actor_worker.h"
@@ -41,6 +43,16 @@ namespace functionsystem::iamserver {
 
 namespace {
 const std::string JWT_SEPARATOR = ".";
+constexpr size_t URL_ENCODE_EXPANSION_FACTOR = 3;
+constexpr size_t BASE64_BLOCK_SIZE = 4;
+constexpr uint64_t JWKS_HTTP_TIMEOUT_MS = 5000;
+constexpr uint64_t TOKEN_HTTP_TIMEOUT_MS = 10000;
+constexpr int SERVICE_TOKEN_DEFAULT_EXPIRES_SECONDS = 300;
+constexpr int SERVICE_TOKEN_EXPIRY_SKEW_SECONDS = 30;
+constexpr uint64_t JWT_CLOCK_SKEW_SECONDS = 60;
+constexpr unsigned int HEX_NIBBLE_BITS = 4;
+constexpr unsigned int HEX_NIBBLE_MASK = 0x0F;
+const char HEX_DIGITS[] = "0123456789ABCDEF";
 
 using BignumPtr = std::unique_ptr<BIGNUM, decltype(&BN_free)>;
 using RsaPtr = std::unique_ptr<RSA, decltype(&RSA_free)>;
@@ -60,7 +72,7 @@ std::vector<unsigned char> Base64UrlToBytes(const std::string &base64url)
         std::replace(base64.begin(), base64.end(), '_', '/');
 
         // Add padding if necessary
-        while (base64.size() % 4 != 0) {
+        while (base64.size() % BASE64_BLOCK_SIZE != 0) {
             base64 += '=';
         }
 
@@ -71,13 +83,12 @@ std::vector<unsigned char> Base64UrlToBytes(const std::string &base64url)
         BIO_set_flags(bio.get(), BIO_FLAGS_BASE64_NO_NL);
 
         // Calculate maximum possible output size
-        size_t maxLen = (base64.length() * 3) / 4;
+        size_t maxLen = (base64.length() * URL_ENCODE_EXPANSION_FACTOR) / BASE64_BLOCK_SIZE;
 
         // Use vector instead of raw pointer for buffer
         std::vector<unsigned char> buffer(maxLen);
 
         int decodedLen = BIO_read(bio.get(), buffer.data(), static_cast<int>(maxLen));
-
         if (decodedLen <= 0) {
             return {};
         }
@@ -85,9 +96,97 @@ std::vector<unsigned char> Base64UrlToBytes(const std::string &base64url)
         // Resize vector to actual decoded length
         buffer.resize(decodedLen);
         return buffer;
+    } catch (const std::exception &e) {
+        YRLOG_ERROR("Base64UrlToBytes decode failed: {}", e.what());
+        return {};
     } catch (...) {
+        YRLOG_ERROR("Base64UrlToBytes decode failed with unknown exception");
         return {};
     }
+}
+
+EvpPkeyPtr CreateRsaPublicPkey(const std::vector<unsigned char> &nBytes, const std::vector<unsigned char> &eBytes)
+{
+    BignumPtr nBn(BN_bin2bn(nBytes.data(), static_cast<int>(nBytes.size()), nullptr), BN_free);
+    BignumPtr eBn(BN_bin2bn(eBytes.data(), static_cast<int>(eBytes.size()), nullptr), BN_free);
+    if (!nBn || !eBn) {
+        YRLOG_ERROR("Failed to create BIGNUM from modulus or exponent");
+        return EvpPkeyPtr(nullptr, EVP_PKEY_free);
+    }
+
+    RsaPtr rsa(RSA_new(), RSA_free);
+    if (!rsa || RSA_set0_key(rsa.get(), nBn.get(), eBn.get(), nullptr) != 1) {
+        YRLOG_ERROR("Failed to create RSA public key");
+        return EvpPkeyPtr(nullptr, EVP_PKEY_free);
+    }
+    nBn.release();
+    eBn.release();
+
+    EvpPkeyPtr pkey(EVP_PKEY_new(), EVP_PKEY_free);
+    if (!pkey || EVP_PKEY_assign_RSA(pkey.get(), rsa.get()) != 1) {
+        YRLOG_ERROR("Failed to assign RSA to EVP_PKEY");
+        return EvpPkeyPtr(nullptr, EVP_PKEY_free);
+    }
+    rsa.release();
+    return pkey;
+}
+
+std::string ExportPublicKeyPem(EVP_PKEY *pkey)
+{
+    BioPtr bio(BIO_new(BIO_s_mem()), BIO_free);
+    if (!bio || PEM_write_bio_PUBKEY(bio.get(), pkey) != 1) {
+        YRLOG_ERROR("Failed to write public key to PEM");
+        return "";
+    }
+
+    BUF_MEM *bioBuffer = nullptr;
+    BIO_get_mem_ptr(bio.get(), &bioBuffer);
+    if (bioBuffer == nullptr || bioBuffer->data == nullptr) {
+        YRLOG_ERROR("Failed to read public key PEM");
+        return "";
+    }
+    return std::string(bioBuffer->data, bioBuffer->length);
+}
+
+JwkKey ParseJwkKey(const nlohmann::json &keyJson)
+{
+    JwkKey key;
+    if (keyJson.contains("kid") && keyJson["kid"].is_string()) {
+        key.kid = keyJson["kid"].get<std::string>();
+    }
+    if (keyJson.contains("kty") && keyJson["kty"].is_string()) {
+        key.kty = keyJson["kty"].get<std::string>();
+    }
+    if (keyJson.contains("n") && keyJson["n"].is_string()) {
+        key.n = keyJson["n"].get<std::string>();
+    }
+    if (keyJson.contains("e") && keyJson["e"].is_string()) {
+        key.e = keyJson["e"].get<std::string>();
+    }
+    if (keyJson.contains("alg") && keyJson["alg"].is_string()) {
+        key.alg = keyJson["alg"].get<std::string>();
+    }
+    return key;
+}
+
+std::string GetJwkUse(const nlohmann::json &keyJson)
+{
+    if (keyJson.contains("use") && keyJson["use"].is_string()) {
+        return keyJson["use"].get<std::string>();
+    }
+    return "";
+}
+
+bool IsValidJwkKey(const JwkKey &key, const std::string &keyUse)
+{
+    bool isValidKey = (key.kty == "RSA" && !key.kid.empty() && !key.n.empty() && !key.e.empty());
+    if (isValidKey && !key.alg.empty()) {
+        isValidKey = (key.alg == "RS256");
+    }
+    if (isValidKey && !keyUse.empty()) {
+        isValidKey = (keyUse == "sig");
+    }
+    return isValidKey;
 }
 
 }  // namespace
@@ -112,29 +211,25 @@ bool KeycloakVerifier::NeedRefreshJwks() const
 
 Status KeycloakVerifier::RefreshJwksOnce(bool forceRefresh)
 {
-    while (true) {
-        if (!forceRefresh && !NeedRefreshJwks()) {
-            return Status::OK();
-        }
-
-        bool expected = false;
-        if (jwksRefreshInProgress_.compare_exchange_strong(expected, true)) {
-            Status refreshStatus = FetchJwksSync();
-            {
-                std::lock_guard<std::mutex> lock(jwksRefreshMutex_);
-                lastJwksRefreshStatus_ = refreshStatus;
-                jwksRefreshInProgress_.store(false);
-            }
-            jwksRefreshCv_.notify_all();
-            return refreshStatus;
-        }
-
-        std::unique_lock<std::mutex> lock(jwksRefreshMutex_);
-        jwksRefreshCv_.wait(lock, [this]() { return !jwksRefreshInProgress_.load(); });
-        if (forceRefresh || !NeedRefreshJwks()) {
-            return lastJwksRefreshStatus_;
-        }
+    if (!forceRefresh && !NeedRefreshJwks()) {
+        return Status::OK();
     }
+
+    bool expected = false;
+    if (jwksRefreshInProgress_.compare_exchange_strong(expected, true)) {
+        Status refreshStatus = FetchJwksSync();
+        {
+            std::lock_guard<std::mutex> lock(jwksRefreshMutex_);
+            lastJwksRefreshStatus_ = refreshStatus;
+            jwksRefreshInProgress_.store(false);
+        }
+        jwksRefreshCv_.notify_all();
+        return refreshStatus;
+    }
+
+    std::unique_lock<std::mutex> lock(jwksRefreshMutex_);
+    jwksRefreshCv_.wait(lock, [this]() { return !jwksRefreshInProgress_.load(); });
+    return lastJwksRefreshStatus_;
 }
 
 Status KeycloakVerifier::FetchJwksSync()
@@ -148,7 +243,8 @@ Status KeycloakVerifier::FetchJwksSync()
         return Status(StatusCode::FAILED, "Failed to execute curl command");
     }
 
-    litebus::Future<litebus::http::Response> response = litebus::http::Get(url.Get(), litebus::None(), 5000);
+    litebus::Future<litebus::http::Response> response =
+        litebus::http::Get(url.Get(), litebus::None(), JWKS_HTTP_TIMEOUT_MS);
     response.Wait();
 
     if (response.IsError()) {
@@ -162,9 +258,12 @@ Status KeycloakVerifier::FetchJwksSync()
         return Status(StatusCode::FAILED, "curl command failed to fetch JWKS");
     }
 
-    const std::string &responseBody = httpResponse.body;
-    YRLOG_DEBUG("JWKS response received, length: {}", responseBody.length());
+    return ParseJwksResponse(httpResponse.body, jwksUrl);
+}
 
+Status KeycloakVerifier::ParseJwksResponse(const std::string &responseBody, const std::string &jwksUrl)
+{
+    YRLOG_DEBUG("JWKS response received, length: {}", responseBody.length());
     try {
         auto json = nlohmann::json::parse(responseBody);
         if (!json.contains("keys") || !json["keys"].is_array()) {
@@ -177,38 +276,9 @@ Status KeycloakVerifier::FetchJwksSync()
         newCache->fetchedAt = std::chrono::steady_clock::now();
 
         for (const auto &keyJson : json["keys"]) {
-            JwkKey key;
-            if (keyJson.contains("kid") && keyJson["kid"].is_string()) {
-                key.kid = keyJson["kid"].get<std::string>();
-            }
-            if (keyJson.contains("kty") && keyJson["kty"].is_string()) {
-                key.kty = keyJson["kty"].get<std::string>();
-            }
-            if (keyJson.contains("n") && keyJson["n"].is_string()) {
-                key.n = keyJson["n"].get<std::string>();
-            }
-            if (keyJson.contains("e") && keyJson["e"].is_string()) {
-                key.e = keyJson["e"].get<std::string>();
-            }
-            if (keyJson.contains("alg") && keyJson["alg"].is_string()) {
-                key.alg = keyJson["alg"].get<std::string>();
-            }
-
-            std::string keyUse;
-            if (keyJson.contains("use") && keyJson["use"].is_string()) {
-                keyUse = keyJson["use"].get<std::string>();
-            }
-
-            // Only add RSA keys with required fields and proper algorithm
-            // Validate: kty=RSA, use=sig (optional but preferred), alg=RS256
-            bool isValidKey = (key.kty == "RSA" && !key.kid.empty() && !key.n.empty() && !key.e.empty());
-            if (isValidKey && !key.alg.empty()) {
-                isValidKey = (key.alg == "RS256");
-            }
-            if (isValidKey && !keyUse.empty()) {
-                isValidKey = (keyUse == "sig");
-            }
-            if (isValidKey) {
+            JwkKey key = ParseJwkKey(keyJson);
+            std::string keyUse = GetJwkUse(keyJson);
+            if (IsValidJwkKey(key, keyUse)) {
                 newCache->keys[key.kid] = key;
                 YRLOG_DEBUG("Added JWKS key: kid={}, kty={}, use={}, alg={}", key.kid, key.kty, keyUse, key.alg);
             } else {
@@ -237,9 +307,12 @@ Status KeycloakVerifier::ParseJwt(const std::string &token, std::string &header,
     if (firstDot == std::string::npos) {
         return Status(StatusCode::FAILED, "JWT format error: first separator not found");
     }
-    size_t secondDot = token.find(JWT_SEPARATOR, firstDot + 1);
-    if (secondDot == std::string::npos) {
+    size_t secondDot = token.rfind(JWT_SEPARATOR);
+    if (secondDot == std::string::npos || secondDot == firstDot) {
         return Status(StatusCode::FAILED, "JWT format error: second separator not found");
+    }
+    if (token.find(JWT_SEPARATOR, firstDot + 1) != secondDot) {
+        return Status(StatusCode::FAILED, "JWT format error: too many separators");
     }
 
     std::string headerB64 = token.substr(0, firstDot);
@@ -265,71 +338,16 @@ std::string KeycloakVerifier::BuildRsaPublicKey(const std::string &n, const std:
     // Decode base64url encoded modulus and exponent
     std::vector<unsigned char> nBytes = Base64UrlToBytes(n);
     std::vector<unsigned char> eBytes = Base64UrlToBytes(e);
-
     if (nBytes.empty() || eBytes.empty()) {
         YRLOG_ERROR("Failed to decode modulus or exponent");
         return "";
     }
 
-    // Convert bytes to BIGNUM
-    BignumPtr nBn(BN_bin2bn(nBytes.data(), static_cast<int>(nBytes.size()), nullptr), BN_free);
-    BignumPtr eBn(BN_bin2bn(eBytes.data(), static_cast<int>(eBytes.size()), nullptr), BN_free);
-
-    if (!nBn || !eBn) {
-        YRLOG_ERROR("Failed to create BIGNUM from modulus or exponent");
-        return "";
-    }
-
-    // Create RSA key
-    RsaPtr rsa(RSA_new(), RSA_free);
-    if (!rsa) {
-        YRLOG_ERROR("Failed to create RSA structure");
-        return "";
-    }
-
-    int setResult = RSA_set0_key(rsa.get(), nBn.get(), eBn.get(), nullptr);
-    if (setResult != 1) {
-        YRLOG_ERROR("Failed to set RSA key components");
-        return "";
-    }
-
-    // nBn and eBn are now owned by rsa, transfer ownership to avoid double free.
-    nBn.release();
-    eBn.release();
-
-    // Convert to EVP_PKEY
-    EvpPkeyPtr pkey(EVP_PKEY_new(), EVP_PKEY_free);
+    EvpPkeyPtr pkey = CreateRsaPublicPkey(nBytes, eBytes);
     if (!pkey) {
-        YRLOG_ERROR("Failed to create EVP_PKEY");
         return "";
     }
-
-    if (EVP_PKEY_assign_RSA(pkey.get(), rsa.get()) != 1) {
-        YRLOG_ERROR("Failed to assign RSA to EVP_PKEY");
-        return "";
-    }
-
-    // rsa is now owned by pkey, transfer ownership to avoid double free.
-    rsa.release();
-
-    // Write to PEM format
-    BioPtr bio(BIO_new(BIO_s_mem()), BIO_free);
-    if (!bio) {
-        YRLOG_ERROR("Failed to create BIO");
-        return "";
-    }
-
-    if (PEM_write_bio_PUBKEY(bio.get(), pkey.get()) != 1) {
-        YRLOG_ERROR("Failed to write public key to PEM");
-        return "";
-    }
-
-    // Read PEM from BIO
-    char *data = nullptr;
-    long len = BIO_get_mem_data(bio.get(), &data);
-    std::string pem(data, len);
-
-    return pem;
+    return ExportPublicKeyPem(pkey.get());
 }
 
 bool KeycloakVerifier::VerifyRs256Signature(const std::string &token, const JwkKey &jwkKey)
@@ -382,9 +400,11 @@ bool KeycloakVerifier::VerifyRs256Signature(const std::string &token, const JwkK
     }
 
     // Verify signature
+    auto signatureBytes = static_cast<const unsigned char *>(static_cast<const void *>(signature.data()));
+    auto signingInputBytes = static_cast<const unsigned char *>(static_cast<const void *>(signingInput.data()));
     ret = EVP_DigestVerify(
-        mdCtx.get(), reinterpret_cast<const unsigned char *>(signature.data()), static_cast<int>(signature.length()),
-        reinterpret_cast<const unsigned char *>(signingInput.data()), static_cast<int>(signingInput.length()));
+        mdCtx.get(), signatureBytes, static_cast<int>(signature.length()), signingInputBytes,
+        static_cast<int>(signingInput.length()));
     YRLOG_DEBUG("Signature verification result: {}", ret);
 
     return ret == 1;
@@ -406,55 +426,41 @@ std::string KeycloakVerifier::GetHighestRole(const std::vector<std::string> &rol
     return highestRole;
 }
 
-ExternalUserInfo KeycloakVerifier::VerifySync(const std::string &idToken)
+Status KeycloakVerifier::EnsureEnabledAndJwks()
 {
-    ExternalUserInfo info;
-
     if (!config_.enabled) {
         YRLOG_ERROR("Keycloak integration is not enabled");
-        info.status = Status(StatusCode::FAILED, "Keycloak integration is not enabled");
-        return info;
+        return Status(StatusCode::FAILED, "Keycloak integration is not enabled");
     }
 
-    // Refresh JWKS if needed
     if (NeedRefreshJwks()) {
         Status fetchStatus = RefreshJwksOnce();
         if (fetchStatus.IsError()) {
-            info.status = Status(StatusCode::FAILED, "Failed to fetch JWKS: " + fetchStatus.ToString());
-            return info;
+            return Status(StatusCode::FAILED, "Failed to fetch JWKS: " + fetchStatus.ToString());
         }
     }
+    return Status::OK();
+}
 
-    // Parse JWT
-    std::string headerJson, payloadJson, signature;
-    Status parseStatus = ParseJwt(idToken, headerJson, payloadJson, signature);
-    if (parseStatus.IsError()) {
-        YRLOG_ERROR("Failed to parse JWT: {}", parseStatus.ToString());
-        info.status = parseStatus;
-        return info;
-    }
-    YRLOG_DEBUG("JWT parsed successfully, headerJson size: {}", headerJson.size());
-
-    // Parse header to get kid
-    std::string kid;
+Status KeycloakVerifier::ExtractJwtHeader(const std::string &headerJson, std::string *kid) const
+{
     try {
         YRLOG_DEBUG("JWT header: {}", headerJson);
         auto header = nlohmann::json::parse(headerJson);
         if (header.contains("kid") && header["kid"].is_string()) {
-            kid = header["kid"].get<std::string>();
+            *kid = header["kid"].get<std::string>();
         }
-        // Verify algorithm is RS256
         if (!header.contains("alg") || header["alg"] != "RS256") {
-            info.status = Status(StatusCode::FAILED, "Unsupported JWT algorithm, expected RS256");
-            return info;
+            return Status(StatusCode::FAILED, "Unsupported JWT algorithm, expected RS256");
         }
     } catch (const nlohmann::json::exception &e) {
-        info.status = Status(StatusCode::FAILED, std::string("Failed to parse JWT header: ") + e.what());
-        return info;
+        return Status(StatusCode::FAILED, std::string("Failed to parse JWT header: ") + e.what());
     }
+    return Status::OK();
+}
 
-    // Find the key in JWKS cache
-    JwkKey jwkKey;
+Status KeycloakVerifier::ResolveJwkKey(const std::string &kid, JwkKey *jwkKey)
+{
     bool keyNotFound = false;
     {
         std::lock_guard<std::mutex> lock(jwksMutex_);
@@ -462,200 +468,227 @@ ExternalUserInfo KeycloakVerifier::VerifySync(const std::string &idToken)
         if (it == jwksCache_->keys.end()) {
             keyNotFound = true;
         } else {
-            jwkKey = it->second;
+            *jwkKey = it->second;
         }
     }
 
-    // If kid not found, try to refresh JWKS once
-    if (keyNotFound) {
-        YRLOG_WARN("JWT key ID not found in JWKS cache: {}, attempting refresh", kid);
-        Status fetchStatus = RefreshJwksOnce(true);
-        if (fetchStatus.IsError()) {
-            info.status = Status(StatusCode::FAILED, "Failed to fetch JWKS after key miss: " + fetchStatus.ToString());
-            return info;
-        }
-        // Retry finding the key
-        std::lock_guard<std::mutex> lock(jwksMutex_);
-        auto it = jwksCache_->keys.find(kid);
-        if (it == jwksCache_->keys.end()) {
-            info.status = Status(StatusCode::FAILED, "JWT key ID not found in JWKS after refresh: " + kid);
-            return info;
-        }
-        jwkKey = it->second;
+    if (!keyNotFound) {
+        return Status::OK();
     }
 
-    // Verify signature
-    if (!VerifyRs256Signature(idToken, jwkKey)) {
-        info.status = Status(StatusCode::FAILED, "JWT signature verification failed");
+    YRLOG_WARN("JWT key ID not found in JWKS cache: {}, attempting refresh", kid);
+    Status fetchStatus = RefreshJwksOnce(true);
+    if (fetchStatus.IsError()) {
+        return Status(StatusCode::FAILED, "Failed to fetch JWKS after key miss: " + fetchStatus.ToString());
+    }
+
+    std::lock_guard<std::mutex> lock(jwksMutex_);
+    auto it = jwksCache_->keys.find(kid);
+    if (it == jwksCache_->keys.end()) {
+        return Status(StatusCode::FAILED, "JWT key ID not found in JWKS after refresh: " + kid);
+    }
+    *jwkKey = it->second;
+    return Status::OK();
+}
+
+Status KeycloakVerifier::ExtractSubjectAndTenant(const nlohmann::json &payload, ExternalUserInfo& info) const
+{
+    if (!payload.contains("sub") || !payload["sub"].is_string()) {
+        return Status(StatusCode::FAILED, "JWT payload missing 'sub' claim");
+    }
+    info.userId = payload["sub"].get<std::string>();
+    if (info.userId.empty()) {
+        return Status(StatusCode::FAILED, "JWT sub claim is empty");
+    }
+
+    if (payload.contains("tenant_id") && payload["tenant_id"].is_string()) {
+        info.tenantId = payload["tenant_id"].get<std::string>();
+    }
+    if (info.tenantId.empty() && payload.contains("preferred_username") &&
+        payload["preferred_username"].is_string()) {
+        info.tenantId = payload["preferred_username"].get<std::string>();
+    }
+    if (info.tenantId.empty() && payload.contains("email") && payload["email"].is_string()) {
+        const std::string email = payload["email"].get<std::string>();
+        const size_t atPos = email.find('@');
+        if (atPos != std::string::npos && atPos + 1 < email.size()) {
+            info.tenantId = email.substr(atPos + 1);
+        }
+    }
+    if (info.tenantId.empty()) {
+        return Status(StatusCode::FAILED,
+                      "JWT payload missing usable tenant identifier: no tenant_id, preferred_username or email");
+    }
+    return Status::OK();
+}
+
+Status KeycloakVerifier::ValidateTokenClaims(const nlohmann::json &payload, ExternalUserInfo& info) const
+{
+    if (!payload.contains("iss") || !payload["iss"].is_string()) {
+        return Status(StatusCode::FAILED, "JWT missing iss claim");
+    }
+    if (payload["iss"].get<std::string>() != config_.issuer) {
+        return Status(StatusCode::FAILED, "JWT issuer validation failed");
+    }
+
+    if (!payload.contains("aud")) {
+        return Status(StatusCode::FAILED, "JWT missing aud claim");
+    }
+    bool audValid = false;
+    if (payload["aud"].is_string()) {
+        audValid = (payload["aud"].get<std::string>() == config_.audience);
+    } else if (payload["aud"].is_array()) {
+        for (const auto &aud : payload["aud"]) {
+            audValid = aud.is_string() && aud.get<std::string>() == config_.audience;
+            if (audValid) {
+                break;
+            }
+        }
+    }
+    if (!audValid) {
+        return Status(StatusCode::FAILED, "JWT audience validation failed");
+    }
+
+    if (payload.contains("azp") && payload["azp"].is_string()) {
+        std::string azp = payload["azp"].get<std::string>();
+        if (!azp.empty() && azp != config_.clientId) {
+            return Status(StatusCode::FAILED, "JWT authorized party validation failed");
+        }
+    }
+
+    auto now = static_cast<uint64_t>(std::time(nullptr));
+    if (payload.contains("iat") && payload["iat"].is_number() &&
+        payload["iat"].get<uint64_t>() > now + JWT_CLOCK_SKEW_SECONDS) {
+        return Status(StatusCode::FAILED, "JWT iat claim indicates future time");
+    }
+    if (payload.contains("nbf") && payload["nbf"].is_number() && payload["nbf"].get<uint64_t>() > now) {
+        return Status(StatusCode::FAILED, "JWT not yet valid (nbf claim)");
+    }
+    if (!payload.contains("exp") || !payload["exp"].is_number()) {
+        return Status(StatusCode::FAILED, "JWT missing or invalid exp claim");
+    }
+    info.exp = payload["exp"].get<int64_t>();
+    if (info.exp > 0 && info.exp < static_cast<int64_t>(now)) {
+        return Status(StatusCode::FAILED, "JWT token has expired");
+    }
+    return Status::OK();
+}
+
+namespace {
+void AppendRoles(const nlohmann::json &roles, std::vector<std::string> *allRoles)
+{
+    if (!roles.is_array()) {
+        return;
+    }
+    for (const auto &role : roles) {
+        if (role.is_string()) {
+            allRoles->push_back(role.get<std::string>());
+        }
+    }
+}
+
+void ExtractQuotaClaim(const nlohmann::json &payload, const std::string &claim, int64_t *quota)
+{
+    if (!payload.contains(claim)) {
+        return;
+    }
+    if (payload[claim].is_number()) {
+        *quota = payload[claim].get<int64_t>();
+        return;
+    }
+    if (!payload[claim].is_string()) {
+        return;
+    }
+    try {
+        *quota = std::stoll(payload[claim].get<std::string>());
+    } catch (const std::exception &e) {
+        YRLOG_DEBUG("Failed to parse {} claim: {}", claim, e.what());
+    }
+}
+}  // namespace
+
+void KeycloakVerifier::ExtractRolesAndQuotas(const nlohmann::json &payload, ExternalUserInfo& info)
+{
+    std::vector<std::string> allRoles;
+    if (payload.contains("realm_access") && payload["realm_access"].is_object()) {
+        auto realmAccess = payload["realm_access"];
+        if (realmAccess.contains("roles")) {
+            AppendRoles(realmAccess["roles"], &allRoles);
+        }
+    }
+    if (payload.contains("resource_access") && payload["resource_access"].is_object()) {
+        for (const auto &clientAccess : payload["resource_access"].items()) {
+            const auto &access = clientAccess.value();
+            if (access.is_object() && access.contains("roles")) {
+                AppendRoles(access["roles"], &allRoles);
+            }
+        }
+    }
+    info.role = GetHighestRole(allRoles);
+    if (info.role.empty()) {
+        info.role = "user";
+    }
+
+    ExtractQuotaClaim(payload, "cpu_quota", &info.cpuQuota);
+    ExtractQuotaClaim(payload, "mem_quota", &info.memQuota);
+}
+
+Status KeycloakVerifier::PopulateUserInfoFromPayload(const std::string &payloadJson, ExternalUserInfo& info)
+{
+    try {
+        auto payload = nlohmann::json::parse(payloadJson);
+        Status status = ExtractSubjectAndTenant(payload, info);
+        if (status.IsError()) {
+            return status;
+        }
+        status = ValidateTokenClaims(payload, info);
+        if (status.IsError()) {
+            return status;
+        }
+        ExtractRolesAndQuotas(payload, info);
+    } catch (const nlohmann::json::exception &e) {
+        return Status(StatusCode::FAILED, std::string("Failed to parse JWT payload: ") + e.what());
+    }
+    return Status::OK();
+}
+
+ExternalUserInfo KeycloakVerifier::VerifySync(const std::string &idToken)
+{
+    ExternalUserInfo info;
+    Status status = EnsureEnabledAndJwks();
+    if (status.IsError()) {
+        info.status = status;
         return info;
     }
 
-    // Parse payload
-    try {
-        auto payload = nlohmann::json::parse(payloadJson);
+    std::string headerJson;
+    std::string payloadJson;
+    std::string signature;
+    status = ParseJwt(idToken, headerJson, payloadJson, signature);
+    if (status.IsError()) {
+        YRLOG_ERROR("Failed to parse JWT: {}", status.ToString());
+        info.status = status;
+        return info;
+    }
+    YRLOG_DEBUG("JWT parsed successfully, headerJson size: {}", headerJson.size());
 
-        // Extract sub (user ID)
-        if (!payload.contains("sub") || !payload["sub"].is_string()) {
-            info.status = Status(StatusCode::FAILED, "JWT payload missing 'sub' claim");
-            return info;
-        }
-        info.userId = payload["sub"].get<std::string>();
-
-        // Extract tenant ID: explicit claim > preferred_username > email domain > fail
-        if (payload.contains("tenant_id") && payload["tenant_id"].is_string()) {
-            info.tenantId = payload["tenant_id"].get<std::string>();
-        }
-
-        if (info.tenantId.empty() && payload.contains("preferred_username")
-            && payload["preferred_username"].is_string()) {
-            info.tenantId = payload["preferred_username"].get<std::string>();
-        }
-
-        if (info.tenantId.empty() && payload.contains("email") && payload["email"].is_string()) {
-            const std::string email = payload["email"].get<std::string>();
-            const size_t atPos = email.find('@');
-            if (atPos != std::string::npos && atPos + 1 < email.size()) {
-                info.tenantId = email.substr(atPos + 1);
-            }
-        }
-
-        if (info.tenantId.empty()) {
-            info.status =
-                Status(StatusCode::FAILED,
-                       "JWT payload missing usable tenant identifier: no tenant_id, preferred_username or email");
-            return info;
-        }
-
-        // Validate iss (issuer)
-        if (!payload.contains("iss") || !payload["iss"].is_string()) {
-            info.status = Status(StatusCode::FAILED, "JWT missing iss claim");
-            return info;
-        }
-        std::string issuer = payload["iss"].get<std::string>();
-        if (issuer != config_.issuer) {
-            info.status = Status(StatusCode::FAILED, "JWT issuer validation failed");
-            return info;
-        }
-
-        // Validate aud (audience)
-        if (!payload.contains("aud")) {
-            info.status = Status(StatusCode::FAILED, "JWT missing aud claim");
-            return info;
-        }
-        bool audValid = false;
-        if (payload["aud"].is_string()) {
-            audValid = (payload["aud"].get<std::string>() == config_.audience);
-        } else if (payload["aud"].is_array()) {
-            for (const auto &aud : payload["aud"]) {
-                if (aud.is_string() && aud.get<std::string>() == config_.audience) {
-                    audValid = true;
-                    break;
-                }
-            }
-        }
-        if (!audValid) {
-            info.status = Status(StatusCode::FAILED, "JWT audience validation failed");
-            return info;
-        }
-
-        // Validate azp (authorized party) if present in token
-        if (payload.contains("azp") && payload["azp"].is_string()) {
-            // Optional: validate azp matches expected client_id
-        }
-
-        // Extract and validate iat (issued at)
-        if (payload.contains("iat") && payload["iat"].is_number()) {
-            uint64_t iat = payload["iat"].get<uint64_t>();
-            auto now = static_cast<uint64_t>(std::time(nullptr));
-            // Token should not be issued in the future (allow 60s clock skew)
-            if (iat > now + 60) {
-                info.status = Status(StatusCode::FAILED, "JWT iat claim indicates future time");
-                return info;
-            }
-        }
-
-        // Extract and validate nbf (not before)
-        if (payload.contains("nbf") && payload["nbf"].is_number()) {
-            uint64_t nbf = payload["nbf"].get<uint64_t>();
-            auto now = static_cast<uint64_t>(std::time(nullptr));
-            if (nbf > now) {
-                info.status = Status(StatusCode::FAILED, "JWT not yet valid (nbf claim)");
-                return info;
-            }
-        }
-
-        // Extract exp
-        if (!payload.contains("exp") || !payload["exp"].is_number()) {
-            info.status = Status(StatusCode::FAILED, "JWT missing or invalid exp claim");
-            return info;
-        }
-        info.exp = payload["exp"].get<int64_t>();
-
-        // Check if token is expired
-        auto now = static_cast<int64_t>(std::time(nullptr));
-        if (info.exp > 0 && info.exp < now) {
-            info.status = Status(StatusCode::FAILED, "JWT token has expired");
-            return info;
-        }
-
-        // Collect roles from realm_access.roles and resource_access.<client>.roles
-        std::vector<std::string> allRoles;
-        if (payload.contains("realm_access") && payload["realm_access"].is_object()) {
-            auto realmAccess = payload["realm_access"];
-            if (realmAccess.contains("roles") && realmAccess["roles"].is_array()) {
-                for (const auto &role : realmAccess["roles"]) {
-                    if (role.is_string()) {
-                        allRoles.push_back(role.get<std::string>());
-                    }
-                }
-            }
-        }
-        if (payload.contains("resource_access") && payload["resource_access"].is_object()) {
-            for (auto &[clientId, clientAccess] : payload["resource_access"].items()) {
-                if (clientAccess.is_object() && clientAccess.contains("roles") && clientAccess["roles"].is_array()) {
-                    for (const auto &role : clientAccess["roles"]) {
-                        if (role.is_string()) {
-                            allRoles.push_back(role.get<std::string>());
-                        }
-                    }
-                }
-            }
-        }
-        info.role = GetHighestRole(allRoles);
-        // Default to "user" for any successfully authenticated principal
-        if (info.role.empty()) {
-            info.role = "user";
-        }
-
-        // Extract resource quotas from user attributes
-        if (payload.contains("cpu_quota")) {
-            if (payload["cpu_quota"].is_number()) {
-                info.cpuQuota = payload["cpu_quota"].get<int64_t>();
-            } else if (payload["cpu_quota"].is_string()) {
-                try {
-                    info.cpuQuota = std::stoll(payload["cpu_quota"].get<std::string>());
-                } catch (...) {
-                }
-            }
-        }
-        if (payload.contains("mem_quota")) {
-            if (payload["mem_quota"].is_number()) {
-                info.memQuota = payload["mem_quota"].get<int64_t>();
-            } else if (payload["mem_quota"].is_string()) {
-                try {
-                    info.memQuota = std::stoll(payload["mem_quota"].get<std::string>());
-                } catch (...) {
-                }
-            }
-        }
-
-        info.status = Status::OK();
+    std::string kid;
+    JwkKey jwkKey;
+    status = ExtractJwtHeader(headerJson, &kid);
+    if (status.IsOk()) {
+        status = ResolveJwkKey(kid, &jwkKey);
+    }
+    if (status.IsOk() && !VerifyRs256Signature(idToken, jwkKey)) {
+        status = Status(StatusCode::FAILED, "JWT signature verification failed");
+    }
+    if (status.IsOk()) {
+        status = PopulateUserInfoFromPayload(payloadJson, info);
+    }
+    info.status = status;
+    if (status.IsOk()) {
         YRLOG_DEBUG("Keycloak token verified successfully: userId={}, role={}, cpuQuota={}, memQuota={}", info.userId,
                     info.role, info.cpuQuota, info.memQuota);
-    } catch (const nlohmann::json::exception &e) {
-        info.status = Status(StatusCode::FAILED, std::string("Failed to parse JWT payload: ") + e.what());
     }
-
     return info;
 }
 
@@ -673,103 +706,118 @@ namespace {
 std::string UrlEncode(const std::string &value)
 {
     std::string encoded;
-    encoded.reserve(value.size() * 3);
+    encoded.reserve(value.size() * URL_ENCODE_EXPANSION_FACTOR);
     for (unsigned char c : value) {
         if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
             encoded += static_cast<char>(c);
         } else {
-            char buf[4];
-            snprintf(buf, sizeof(buf), "%%%02X", c);
-            encoded += buf;
+            encoded += '%';
+            encoded += HEX_DIGITS[c >> HEX_NIBBLE_BITS];
+            encoded += HEX_DIGITS[c & HEX_NIBBLE_MASK];
         }
     }
     return encoded;
 }
 }  // namespace
 
+bool KeycloakVerifier::IsConfigured() const
+{
+    return config_.enabled && !config_.url.empty() && !config_.clientId.empty() && !config_.clientSecret.empty();
+}
+
+std::string KeycloakVerifier::BuildTokenUrl() const
+{
+    return config_.url + "/realms/" + config_.realm + "/protocol/openid-connect/token";
+}
+
+ExternalUserInfo KeycloakVerifier::MakeFailureInfo(const std::string &message) const
+{
+    ExternalUserInfo info;
+    info.userId = "";
+    info.tenantId = "";
+    info.status = Status(StatusCode::FAILED, message);
+    return info;
+}
+
+Status KeycloakVerifier::PostTokenRequest(const std::string &body, const std::string &failureMessage,
+                                          std::string *responseBody) const
+{
+    litebus::Try<litebus::http::URL> url = litebus::http::URL::Decode(BuildTokenUrl());
+    if (url.IsError()) {
+        return Status(StatusCode::FAILED, "Failed to parse token URL");
+    }
+
+    litebus::Future<litebus::http::Response> response =
+        litebus::http::Post(url.Get(), litebus::None(), body, std::string("application/x-www-form-urlencoded"),
+                            TOKEN_HTTP_TIMEOUT_MS);
+    if (response.IsError()) {
+        YRLOG_ERROR("{}: {}", failureMessage, response.GetErrorCode());
+        return Status(StatusCode::FAILED, failureMessage);
+    }
+
+    const auto &httpResponse = response.Get();
+    if (httpResponse.retCode != litebus::http::OK) {
+        YRLOG_ERROR("{} HTTP error: {} - {}", failureMessage, httpResponse.retCode, httpResponse.body);
+        return Status(StatusCode::FAILED, failureMessage + " HTTP error");
+    }
+    *responseBody = httpResponse.body;
+    return Status::OK();
+}
+
+ExternalUserInfo KeycloakVerifier::VerifyTokenResponse(const std::string &responseBody,
+                                                       const std::string &missingTokenMessage)
+{
+    try {
+        auto json = nlohmann::json::parse(responseBody);
+        if (!json.contains("id_token")) {
+            YRLOG_ERROR("{}", missingTokenMessage);
+            return MakeFailureInfo(missingTokenMessage);
+        }
+
+        ExternalUserInfo info = VerifySync(json["id_token"].get<std::string>());
+        if (info.status.IsError()) {
+            YRLOG_ERROR("Keycloak token verification failed: {}", info.status.ToString());
+        }
+        return info;
+    } catch (const nlohmann::json::exception &e) {
+        YRLOG_ERROR("Failed to parse Keycloak token response: {}", e.what());
+        return MakeFailureInfo(std::string("Failed to parse response: ") + e.what());
+    }
+}
+
 litebus::Future<ExternalUserInfo> KeycloakVerifier::LoginWithPassword(const std::string &username,
                                                                       const std::string &password)
 {
     auto promise = std::make_shared<litebus::Promise<ExternalUserInfo>>();
 
-    if (!config_.enabled || config_.url.empty() || config_.clientId.empty() || config_.clientSecret.empty()) {
-        ExternalUserInfo info;
-        info.userId = "";
-        info.tenantId = "";
-        info.status = Status(StatusCode::FAILED, "Keycloak not configured");
-        promise->SetValue(info);
+    if (!IsConfigured()) {
+        promise->SetValue(MakeFailureInfo("Keycloak not configured"));
         return promise->GetFuture();
     }
 
-    std::string tokenUrl = config_.url + "/realms/" + config_.realm + "/protocol/openid-connect/token";
     std::string body =
-        "grant_type=password"
-        "&client_id="
-        + UrlEncode(config_.clientId) + "&client_secret=" + UrlEncode(config_.clientSecret)
-        + "&username=" + UrlEncode(username) + "&password=" + UrlEncode(password) + "&scope=openid+profile+email";
+        "grant_type=password" +
+        std::string("&client_id=") +
+        UrlEncode(config_.clientId) +
+        "&client_secret=" + UrlEncode(config_.clientSecret) +
+        "&username=" + UrlEncode(username) +
+        "&password=" + UrlEncode(password) +
+        "&scope=openid+profile+email";
 
     YRLOG_INFO("Attempting password grant for user: {}", username);
 
-    litebus::Try<litebus::http::URL> url = litebus::http::URL::Decode(tokenUrl);
-    if (url.IsError()) {
-        ExternalUserInfo info;
-        info.userId = "";
-        info.tenantId = "";
-        info.status = Status(StatusCode::FAILED, "Failed to parse token URL");
-        promise->SetValue(info);
+    std::string responseBody;
+    Status status = PostTokenRequest(body, "Password grant failed", &responseBody);
+    if (status.IsError()) {
+        promise->SetValue(MakeFailureInfo(status.GetMessage()));
         return promise->GetFuture();
     }
 
-    litebus::Future<litebus::http::Response> response =
-        litebus::http::Post(url.Get(), litebus::None(), body, std::string("application/x-www-form-urlencoded"), 10000);
-
-    if (response.IsError()) {
-        YRLOG_ERROR("Password grant failed: {}", response.GetErrorCode());
-        ExternalUserInfo info;
-        info.userId = "";
-        info.tenantId = "";
-        info.status = Status(StatusCode::FAILED, "Password grant failed");
-        promise->SetValue(info);
-        return promise->GetFuture();
-    }
-
-    const auto &httpResponse = response.Get();
-    if (httpResponse.retCode != litebus::http::OK) {
-        YRLOG_ERROR("Password grant HTTP error: {} - {}", httpResponse.retCode, httpResponse.body);
-        ExternalUserInfo info;
-        info.userId = "";
-        info.tenantId = "";
-        info.status = Status(StatusCode::FAILED, "Password grant HTTP error");
-        promise->SetValue(info);
-        return promise->GetFuture();
-    }
-
-    try {
-        auto json = nlohmann::json::parse(httpResponse.body);
-        if (!json.contains("id_token")) {
-            YRLOG_ERROR("Password grant response missing id_token");
-            ExternalUserInfo info;
-            info.userId = "";
-            info.tenantId = "";
-            info.status = Status(StatusCode::FAILED, "Password grant response missing id_token");
-            promise->SetValue(info);
-            return promise->GetFuture();
-        }
-
-        std::string idToken = json["id_token"].get<std::string>();
-        ExternalUserInfo info = VerifySync(idToken);
-        info.status = Status::OK();
+    ExternalUserInfo info = VerifyTokenResponse(responseBody, "Password grant response missing id_token");
+    if (info.status.IsOk()) {
         YRLOG_INFO("Password grant successful for user: {}", username);
-        promise->SetValue(info);
-    } catch (const nlohmann::json::exception &e) {
-        YRLOG_ERROR("Failed to parse password grant response: {}", e.what());
-        ExternalUserInfo info;
-        info.userId = "";
-        info.tenantId = "";
-        info.status = Status(StatusCode::FAILED, std::string("Failed to parse response: ") + e.what());
-        promise->SetValue(info);
     }
-
+    promise->SetValue(info);
     return promise->GetFuture();
 }
 
@@ -778,84 +826,33 @@ litebus::Future<ExternalUserInfo> KeycloakVerifier::ExchangeCode(const std::stri
 {
     auto promise = std::make_shared<litebus::Promise<ExternalUserInfo>>();
 
-    if (!config_.enabled || config_.url.empty() || config_.clientId.empty() || config_.clientSecret.empty()) {
-        ExternalUserInfo info;
-        info.userId = "";
-        info.tenantId = "";
-        info.status = Status(StatusCode::FAILED, "Keycloak not configured");
-        promise->SetValue(info);
+    if (!IsConfigured()) {
+        promise->SetValue(MakeFailureInfo("Keycloak not configured"));
         return promise->GetFuture();
     }
 
-    std::string tokenUrl = config_.url + "/realms/" + config_.realm + "/protocol/openid-connect/token";
     std::string body =
-        "grant_type=authorization_code"
-        "&client_id="
-        + UrlEncode(config_.clientId) + "&client_secret=" + UrlEncode(config_.clientSecret) + "&code=" + UrlEncode(code)
-        + "&redirect_uri=" + UrlEncode(redirectUri);
+        "grant_type=authorization_code" +
+        std::string("&client_id=") +
+        UrlEncode(config_.clientId) +
+        "&client_secret=" + UrlEncode(config_.clientSecret) +
+        "&code=" + UrlEncode(code) +
+        "&redirect_uri=" + UrlEncode(redirectUri);
 
     YRLOG_INFO("Exchanging authorization code for tokens");
 
-    litebus::Try<litebus::http::URL> url = litebus::http::URL::Decode(tokenUrl);
-    if (url.IsError()) {
-        ExternalUserInfo info;
-        info.userId = "";
-        info.tenantId = "";
-        info.status = Status(StatusCode::FAILED, "Failed to parse token URL");
-        promise->SetValue(info);
+    std::string responseBody;
+    Status status = PostTokenRequest(body, "Code exchange failed", &responseBody);
+    if (status.IsError()) {
+        promise->SetValue(MakeFailureInfo(status.GetMessage()));
         return promise->GetFuture();
     }
 
-    litebus::Future<litebus::http::Response> response =
-        litebus::http::Post(url.Get(), litebus::None(), body, std::string("application/x-www-form-urlencoded"), 10000);
-
-    if (response.IsError()) {
-        YRLOG_ERROR("Code exchange failed: {}", response.GetErrorCode());
-        ExternalUserInfo info;
-        info.userId = "";
-        info.tenantId = "";
-        info.status = Status(StatusCode::FAILED, "Code exchange failed");
-        promise->SetValue(info);
-        return promise->GetFuture();
-    }
-
-    const auto &httpResponse = response.Get();
-    if (httpResponse.retCode != litebus::http::OK) {
-        YRLOG_ERROR("Code exchange HTTP error: {} - {}", httpResponse.retCode, httpResponse.body);
-        ExternalUserInfo info;
-        info.userId = "";
-        info.tenantId = "";
-        info.status = Status(StatusCode::FAILED, "Code exchange HTTP error");
-        promise->SetValue(info);
-        return promise->GetFuture();
-    }
-
-    try {
-        auto json = nlohmann::json::parse(httpResponse.body);
-        if (!json.contains("id_token")) {
-            YRLOG_ERROR("Code exchange response missing id_token");
-            ExternalUserInfo info;
-            info.userId = "";
-            info.tenantId = "";
-            info.status = Status(StatusCode::FAILED, "Code exchange response missing id_token");
-            promise->SetValue(info);
-            return promise->GetFuture();
-        }
-
-        std::string idToken = json["id_token"].get<std::string>();
-        ExternalUserInfo info = VerifySync(idToken);
-        info.status = Status::OK();
+    ExternalUserInfo info = VerifyTokenResponse(responseBody, "Code exchange response missing id_token");
+    if (info.status.IsOk()) {
         YRLOG_INFO("Code exchange successful for user: {}", info.userId);
-        promise->SetValue(info);
-    } catch (const nlohmann::json::exception &e) {
-        YRLOG_ERROR("Failed to parse code exchange response: {}", e.what());
-        ExternalUserInfo info;
-        info.userId = "";
-        info.tenantId = "";
-        info.status = Status(StatusCode::FAILED, std::string("Failed to parse response: ") + e.what());
-        promise->SetValue(info);
     }
-
+    promise->SetValue(info);
     return promise->GetFuture();
 }
 
@@ -879,8 +876,12 @@ std::string KeycloakVerifier::GetAuthUrl(const std::string &type, const std::str
     url += "&response_type=code";
     url += "&scope=openid+profile+email";
 
-    if (!state.empty()) {
-        url += "&state=" + UrlEncode(state);
+    std::string authState = state;
+    if (type == "auth" && authState.empty()) {
+        authState = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
+    }
+    if (!authState.empty()) {
+        url += "&state=" + UrlEncode(authState);
     }
 
     if (type == "register") {
@@ -890,120 +891,106 @@ std::string KeycloakVerifier::GetAuthUrl(const std::string &type, const std::str
     return url;
 }
 
-litebus::Future<std::pair<int64_t, int64_t>> KeycloakVerifier::QueryTenantQuota(const std::string &tenantId)
+bool KeycloakVerifier::GetCachedServiceAccountToken(std::string& accessToken) const
 {
-    auto promise = std::make_shared<litebus::Promise<std::pair<int64_t, int64_t>>>();
-
-    if (!config_.enabled || config_.url.empty() || config_.clientId.empty() || config_.clientSecret.empty()) {
-        std::pair<int64_t, int64_t> result(-1, -1);
-        promise->SetValue(result);
-        return promise->GetFuture();
+    std::lock_guard<std::mutex> lock(serviceAccountMutex_);
+    auto now = std::chrono::steady_clock::now();
+    if (cachedServiceAccountToken_.empty() || now >= serviceAccountTokenExpiry_) {
+        return false;
     }
+    accessToken = cachedServiceAccountToken_;
+    return true;
+}
 
-    std::string accessToken;
-    bool useCached = false;
-
-    {
-        std::lock_guard<std::mutex> lock(serviceAccountMutex_);
-        auto now = std::chrono::steady_clock::now();
-        if (!cachedServiceAccountToken_.empty() && now < serviceAccountTokenExpiry_) {
-            accessToken = cachedServiceAccountToken_;
-            useCached = true;
-        }
-    }
-
-    if (!useCached) {
-        std::string tokenUrl = config_.url + "/realms/" + config_.realm + "/protocol/openid-connect/token";
-        std::string body =
-            "grant_type=client_credentials"
-            "&client_id="
-            + UrlEncode(config_.clientId) + "&client_secret=" + UrlEncode(config_.clientSecret);
-
-        litebus::Try<litebus::http::URL> tokenUrlParsed = litebus::http::URL::Decode(tokenUrl);
-        if (tokenUrlParsed.IsError()) {
-            promise->SetValue(std::make_pair<int64_t, int64_t>(-1, -1));
-            return promise->GetFuture();
-        }
-
-        litebus::Future<litebus::http::Response> tokenResponse = litebus::http::Post(
-            tokenUrlParsed.Get(), litebus::None(), body, std::string("application/x-www-form-urlencoded"), 10000);
-
-        if (tokenResponse.IsError() || tokenResponse.Get().retCode != litebus::http::OK) {
-            YRLOG_ERROR("Failed to get service account token");
-            promise->SetValue(std::make_pair<int64_t, int64_t>(-1, -1));
-            return promise->GetFuture();
-        }
-
-        try {
-            auto json = nlohmann::json::parse(tokenResponse.Get().body);
-            accessToken = json["access_token"].get<std::string>();
-            int expiresIn = json.value("expires_in", 300);
-
-            {
-                std::lock_guard<std::mutex> lock(serviceAccountMutex_);
-                cachedServiceAccountToken_ = accessToken;
-                serviceAccountTokenExpiry_ = std::chrono::steady_clock::now() + std::chrono::seconds(expiresIn - 30);
-            }
-        } catch (const nlohmann::json::exception &e) {
-            YRLOG_ERROR("Failed to parse service account token response: {}", e.what());
-            std::pair<int64_t, int64_t> result(-1, -1);
-            promise->SetValue(result);
-            return promise->GetFuture();
-        }
-    }
-
-    std::string adminUrl = config_.url + "/admin/realms/" + config_.realm + "/users?username=" + UrlEncode(tenantId);
-
-    litebus::Try<litebus::http::URL> adminUrlParsed = litebus::http::URL::Decode(adminUrl);
-    if (adminUrlParsed.IsError()) {
-        std::pair<int64_t, int64_t> result(-1, -1);
-        promise->SetValue(result);
-        return promise->GetFuture();
-    }
-
-    std::unordered_map<std::string, std::string> headers;
-    headers["Authorization"] = "Bearer " + accessToken;
-    litebus::Future<litebus::http::Response> userResponse =
-        litebus::http::Get(adminUrlParsed.Get(), litebus::Some(headers), 5000);
-
-    if (userResponse.IsError() || userResponse.Get().retCode != litebus::http::OK) {
-        YRLOG_ERROR("Failed to query user: {}", userResponse.GetErrorCode());
-        std::pair<int64_t, int64_t> result(-1, -1);
-        promise->SetValue(result);
-        return promise->GetFuture();
+Status KeycloakVerifier::FetchServiceAccountToken(std::string& accessToken)
+{
+    std::string body = "grant_type=client_credentials&client_id=" + UrlEncode(config_.clientId) +
+                       "&client_secret=" + UrlEncode(config_.clientSecret);
+    std::string responseBody;
+    Status status = PostTokenRequest(body, "Failed to get service account token", &responseBody);
+    if (status.IsError()) {
+        return status;
     }
 
     try {
-        auto userJson = nlohmann::json::parse(userResponse.Get().body);
+        auto json = nlohmann::json::parse(responseBody);
+        accessToken = json["access_token"].get<std::string>();
+        int expiresIn = json.value("expires_in", SERVICE_TOKEN_DEFAULT_EXPIRES_SECONDS);
+
+        std::lock_guard<std::mutex> lock(serviceAccountMutex_);
+        cachedServiceAccountToken_ = accessToken;
+        serviceAccountTokenExpiry_ = std::chrono::steady_clock::now() +
+            std::chrono::seconds(expiresIn - SERVICE_TOKEN_EXPIRY_SKEW_SECONDS);
+        return Status::OK();
+    } catch (const nlohmann::json::exception &e) {
+        YRLOG_ERROR("Failed to parse service account token response: {}", e.what());
+        return Status(StatusCode::FAILED, std::string("Failed to parse service account token response: ") + e.what());
+    }
+}
+
+std::pair<int64_t, int64_t> KeycloakVerifier::ParseQuotaResponse(const std::string &responseBody)
+{
+    try {
+        auto userJson = nlohmann::json::parse(responseBody);
         if (!userJson.is_array() || userJson.empty() || !userJson[0].contains("attributes")) {
-            std::pair<int64_t, int64_t> result(-1, -1);
-            promise->SetValue(result);
-            return promise->GetFuture();
+            return {-1, -1};
         }
 
         auto attrs = userJson[0]["attributes"];
         int64_t cpuQuota = -1;
         int64_t memQuota = -1;
-
-        if (attrs.contains("cpu_quota")) {
-            if (attrs["cpu_quota"].is_array() && !attrs["cpu_quota"].empty()) {
-                cpuQuota = std::stoll(attrs["cpu_quota"][0].get<std::string>());
-            }
+        if (attrs.contains("cpu_quota") && attrs["cpu_quota"].is_array() && !attrs["cpu_quota"].empty()) {
+            cpuQuota = std::stoll(attrs["cpu_quota"][0].get<std::string>());
         }
-        if (attrs.contains("mem_quota")) {
-            if (attrs["mem_quota"].is_array() && !attrs["mem_quota"].empty()) {
-                memQuota = std::stoll(attrs["mem_quota"][0].get<std::string>());
-            }
+        if (attrs.contains("mem_quota") && attrs["mem_quota"].is_array() && !attrs["mem_quota"].empty()) {
+            memQuota = std::stoll(attrs["mem_quota"][0].get<std::string>());
         }
-
-        std::pair<int64_t, int64_t> result(cpuQuota, memQuota);
-        promise->SetValue(result);
+        return {cpuQuota, memQuota};
     } catch (const nlohmann::json::exception &e) {
         YRLOG_ERROR("Failed to parse user response: {}", e.what());
-        std::pair<int64_t, int64_t> result(-1, -1);
-        promise->SetValue(result);
+        return {-1, -1};
+    }
+}
+
+std::pair<int64_t, int64_t> KeycloakVerifier::QueryTenantQuotaWithToken(const std::string &tenantId,
+                                                                        const std::string &accessToken) const
+{
+    std::string adminUrl = config_.url + "/admin/realms/" + config_.realm + "/users?username=" + UrlEncode(tenantId);
+    litebus::Try<litebus::http::URL> adminUrlParsed = litebus::http::URL::Decode(adminUrl);
+    if (adminUrlParsed.IsError()) {
+        return {-1, -1};
     }
 
+    std::unordered_map<std::string, std::string> headers;
+    headers["Authorization"] = "Bearer " + accessToken;
+    litebus::Future<litebus::http::Response> userResponse =
+        litebus::http::Get(adminUrlParsed.Get(), litebus::Some(headers), JWKS_HTTP_TIMEOUT_MS);
+
+    if (userResponse.IsError() || userResponse.Get().retCode != litebus::http::OK) {
+        YRLOG_ERROR("Failed to query user: {}", userResponse.GetErrorCode());
+        return {-1, -1};
+    }
+    return ParseQuotaResponse(userResponse.Get().body);
+}
+
+litebus::Future<std::pair<int64_t, int64_t>> KeycloakVerifier::QueryTenantQuota(const std::string &tenantId)
+{
+    auto promise = std::make_shared<litebus::Promise<std::pair<int64_t, int64_t>>>();
+    if (!IsConfigured()) {
+        promise->SetValue(std::make_pair<int64_t, int64_t>(-1, -1));
+        return promise->GetFuture();
+    }
+
+    std::string accessToken;
+    if (!GetCachedServiceAccountToken(accessToken)) {
+        Status status = FetchServiceAccountToken(accessToken);
+        if (status.IsError()) {
+            promise->SetValue(std::make_pair<int64_t, int64_t>(-1, -1));
+            return promise->GetFuture();
+        }
+    }
+
+    promise->SetValue(QueryTenantQuotaWithToken(tenantId, accessToken));
     return promise->GetFuture();
 }
 

@@ -28,9 +28,10 @@ namespace functionsystem::runtime_manager {
  * JVM args are selected based on the language tag in RuntimeConfig
  * via SelectJvmArgs(), replacing the 4 nearly-identical legacy functions.
  */
-class JavaCommandStrategy : public LanguageCommandStrategy {
+class JavaStrategy : public LanguageStrategy {
 public:
-    explicit JavaCommandStrategy(bool execLookPath = true) : execLookPath_(execLookPath) {}
+    explicit JavaStrategy(bool execLookPath = true) : execLookPath_(execLookPath) {}
+    ~JavaStrategy() override = default;
 
     std::pair<Status, CommandArgs> BuildArgs(const messages::StartInstanceRequest &request,
                                              const std::string &port,
@@ -43,6 +44,8 @@ private:
 
     bool execLookPath_;
 };
+
+using JavaCommandStrategy = JavaStrategy;
 
 }  // namespace functionsystem::runtime_manager
 

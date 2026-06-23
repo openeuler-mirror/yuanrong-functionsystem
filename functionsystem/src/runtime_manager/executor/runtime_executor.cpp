@@ -19,6 +19,7 @@
 #include <google/protobuf/util/json_util.h>
 #include <yaml-cpp/yaml.h>
 #include <sys/eventfd.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -54,9 +55,7 @@ const std::string MONOPOLY = "monopoly";
 const std::string IS_PRESTART = "IS_PRESTART";
 const std::string RUNTIME_DIR = "RUNTIME_DIR";
 const std::string PRESTART_FLAG = "1";
-const std::string PARAM_EXEC_PATH = "execPath";
 const std::string PARAM_RUNTIME_ID = "runtimeID";
-const std::string PARAM_LANGUAGE = "language";
 const std::string CPP_NEW_EXEC_PATH = "/cpp/bin/runtime";
 const std::string GO_NEW_EXEC_PATH = "/go/bin/goruntime";
 const std::string GLOG_LOG_DIR = "GLOG_log_dir";
@@ -77,7 +76,8 @@ const std::vector<std::string> languages = {
     CPP_LANGUAGE,       GO_LANGUAGE,        JAVA_LANGUAGE,        JAVA11_LANGUAGE,
     JAVA17_LANGUAGE,    JAVA21_LANGUAGE,    PYTHON_LANGUAGE,      PYTHON3_LANGUAGE,
     PYTHON36_LANGUAGE,  PYTHON37_LANGUAGE,  PYTHON38_LANGUAGE,    PYTHON39_LANGUAGE,
-    PYTHON310_LANGUAGE, PYTHON311_LANGUAGE, POSIX_CUSTOM_RUNTIME, NODE_JS
+    PYTHON310_LANGUAGE, PYTHON311_LANGUAGE, PYTHON312_LANGUAGE,   PYTHON313_LANGUAGE,
+    POSIX_CUSTOM_RUNTIME, NODE_JS
 };
 const std::string VALGRIND_TOOL_PREFIX = "--tool=";
 const std::string MASSIF_TIME_UNIT_PREFIX = "--time-unit=";
@@ -94,13 +94,12 @@ const std::string GRPC_ADDRESS_PREFIX = "-grpcAddress=";
 const std::string CONFIG_PATH_PREFIX = "-runtimeConfigPath=";
 const std::string JOB_ID_PREFIX = "-jobId=job-";
 const std::string PYTHON_JOB_ID_PREFIX = "job-";
-const std::string RUNTIME_LAYER_DIR_NAME = "layer";
-const std::string RUNTIME_FUNC_DIR_NAME = "func";
 const std::string PYTHON_PRESTART_DEPLOY_DIR = "/dcache";
 const std::string JAVA_SYSTEM_PROPERTY_FILE = "-Dlog4j2.configurationFile=file:";
 const std::string JAVA_SYSTEM_LIBRARY_PATH = "-Djava.library.path=";
 const std::string JAVA_LOG_LEVEL = "-DlogLevel=";
 const std::string JAVA_JOB_ID = "-DjobId=job-";
+const std::string DEFAULT_JAVA8_CMD = "/opt/buildtools/jdk8/bin/java";
 const std::string JAVA_MAIN_CLASS = "org.yuanrong.runtime.server.RuntimeServer";
 const std::string PYTHON_SERVER_PATH = "/python/yr/main/yr_runtime_main.py";
 const std::string PYTHON_NEW_SERVER_PATH = "/python/yr/main/yr_runtime_main.py";
@@ -1158,6 +1157,12 @@ std::string RuntimeExecutor::GetExecPath(const std::string &language) const
         languageCmd = JAVA21_LANGUAGE;
     }
     auto path = LookPath(languageCmd);
+    if (path.IsNone() && languageCmd == JAVA_LANGUAGE) {
+        path = LookPath("java");
+    }
+    if (path.IsNone() && languageCmd == JAVA_LANGUAGE && access(DEFAULT_JAVA8_CMD.c_str(), X_OK) == 0) {
+        return DEFAULT_JAVA8_CMD;
+    }
     if (path.IsNone()) {
         YRLOG_ERROR("GetExecPath failed, path is null");
         return "";
@@ -1242,7 +1247,10 @@ std::map<std::string, std::string> RuntimeExecutor::CombineEnvs(const Envs &envs
     combineEnvs[MAX_LOG_FILE_NUM_ENV] = std::to_string(config_.runtimeMaxLogFileNum);
     // set distributed convergent call stack enable environment variable
     combineEnvs[ENABLE_DIS_CONV_CALL_STACK] = config_.enableDisConvCallStack ? "true" : "false";
-    std::string pythonPath = config_.runtimePath;
+    std::string pythonPath = "";
+    if (pkgType_ == PKG_TYPE_WHEEL) {
+        pythonPath = config_.runtimePath + "/../../../";
+    }
     if (!config_.pythonDependencyPath.empty()) {
         (void)pythonPath.append(":" + config_.pythonDependencyPath);
     }
@@ -1685,6 +1693,9 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::PythonBuildFinalArg
     std::string address = GetPosixAddress(config_, port);
 
     std::string pythonServerPath = PYTHON_NEW_SERVER_PATH;
+    if (pkgType_ == PKG_TYPE_WHEEL) {
+        pythonServerPath = PYTHON_SERVER_PATH_IN_WHEEL;
+    }
 
     return { Status::OK(),
              { execPath, "-u", config_.runtimePath + pythonServerPath, "--rt_server_address", address, "--deploy_dir",
@@ -2093,6 +2104,9 @@ std::vector<std::string> RuntimeExecutor::GetPythonBuildArgsForPrestart(const st
     std::string execPath = GetExecPath(language);
     std::string address = GetPosixAddress(config_, port);
     std::string pythonServerPath = PYTHON_NEW_SERVER_PATH;
+    if (pkgType_ == PKG_TYPE_WHEEL) {
+        pythonServerPath = PYTHON_SERVER_PATH_IN_WHEEL;
+    }
     return { execPath,
              "-u",
              config_.runtimePath + pythonServerPath,

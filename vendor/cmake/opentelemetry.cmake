@@ -14,6 +14,9 @@
 
 set(src_dir ${VENDOR_SRC_DIR}/opentelemetry)
 set(src_name opentelemetry)
+set(opentelemetry_PATCHES
+        ${VENDOR_PATCHES_DIR}/opentelemetry/fix-alias-target-set-properties.patch
+)
 
 set(${src_name}_CMAKE_ARGS
         -DBUILD_SHARED_LIBS=ON
@@ -49,6 +52,7 @@ set(${src_name}_CMAKE_ARGS
 
 set(HISTORY_INSTALLLED "${EP_BUILD_DIR}/Install/${src_name}")
 if (NOT EXISTS ${HISTORY_INSTALLLED})
+    PATCH_FOR_SOURCE(${src_dir} ${opentelemetry_PATCHES})
     # Compile opentelemetry depends on opentelemetry-proto, need to copy the source code to the opentelemetry/third_party directory.
     file(COPY ${VENDOR_SRC_DIR}/opentelemetry_proto DESTINATION ${VENDOR_SRC_DIR}/opentelemetry/third_party)
     # Only depend on protobuf/grpc ExternalProject targets when they exist (vendor top-level build).

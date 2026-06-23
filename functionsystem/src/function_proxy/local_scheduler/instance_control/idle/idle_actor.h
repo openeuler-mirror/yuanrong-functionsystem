@@ -17,18 +17,16 @@
 #ifndef LOCAL_SCHEDULER_IDLE_ACTOR_H
 #define LOCAL_SCHEDULER_IDLE_ACTOR_H
 
+#include <cstdint>
 #include <actor/actor.hpp>
 #include <async/future.hpp>
 #include <string>
 #include <unordered_map>
-#include <cstdint>
 
 #include "common/state_machine/instance_control_view.h"
 #include "common/utils/actor_driver.h"
 
 namespace functionsystem::local_scheduler {
-
-class InstanceCtrlActor;
 
 /**
  * IdleActor manages per-instance idle timeout logic.

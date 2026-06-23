@@ -64,8 +64,6 @@ const static std::string ENABLE_DIS_CONV_CALL_STACK = "ENABLE_DIS_CONV_CALL_STAC
 
 const static std::string S3_STORAGE_TYPE = "s3";
 
-const static std::string RUNTIME_LAYER_DIR_NAME = "layer";
-const static std::string RUNTIME_FUNC_DIR_NAME = "func";
 const static std::string GRACEFUL_SHUTDOWN_TIME = "GRACEFUL_SHUTDOWN_TIME";
 const static std::string PYTHONUNBUFFERED = "PYTHONUNBUFFERED";
 
@@ -163,6 +161,14 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
         std::string delegateDownload = info.runtimeconfig().posixenvs().find(ENV_DELEGATE_DOWNLOAD)->second;
         ss << ":" << delegateDownload << ":" << delegateDownload
            << "/lib";
+    }
+    std::string language = info.runtimeconfig().language();
+    (void)transform(language.begin(), language.end(), language.begin(), ::tolower);
+    if (language.find(CPP_LANGUAGE) != std::string::npos) {
+        ss << ":" << config.runtimePath << "/cpp/lib";
+    }
+    if (language.find(PYTHON_LANGUAGE) != std::string::npos) {
+        ss << ":" << config.runtimePath << "/python/yr";
     }
 
     if (!config.runtimeLdLibraryPath.empty() &&

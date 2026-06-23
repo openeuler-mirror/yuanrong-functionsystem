@@ -43,7 +43,6 @@
 #include "utils/os_utils.hpp"
 #include "utils/utils.h"
 #include "runtime_manager/ckpt/ckpt_file_manager_actor.h"
-#include "common/constants/actor_name.h"
 
 namespace functionsystem::runtime_manager {
 using json = nlohmann::json;
@@ -52,10 +51,6 @@ constexpr double DEFAULT_CPU_RESOURCE = 500;
 constexpr double DEFAULT_MEMORY_RESOURCE = 500;
 constexpr int MAX_PORT_NUMBER = 65535;
 const int64_t RECONNECT_CONTAINERD_INTERVAL_MS = 5000;
-const std::string PARAM_LANGUAGE = "language";
-const std::string RUNTIME_LAYER_DIR_NAME = "layer";
-const std::string RUNTIME_FUNC_DIR_NAME = "func";
-const std::string PARAM_EXEC_PATH = "execPath";
 const std::string PARAM_RUNTIME_ID = "runtimeID";
 const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 // used to chdir for runtime entrypoint
@@ -518,7 +513,7 @@ Envs BuildMountForCode(const std::shared_ptr<runtime::v1::StartRequest> &start,
     if (libPathIter != envs.posixEnvs.end() && !libPathIter->second.empty()) {
         funcPath = libPathIter->second;
     }
-    code->set_source(workingDirIter->second);
+    code->set_host_path(workingDirIter->second);
     if (workingDirIter->second.find(".img") != std::string::npos) {
         code->set_type("erofs");
         funcPath = DirName(workingDirIter->second);
@@ -534,7 +529,7 @@ Envs BuildMountForCode(const std::shared_ptr<runtime::v1::StartRequest> &start,
     for (auto &layer : GenerateLayerPath(request->runtimeinstanceinfo())) {
         auto code = start->add_mounts();
         code->set_type("bind");
-        code->set_source(layer);
+        code->set_host_path(layer);
         std::string target = layer;
         std::replace(target.begin(), target.end(), '/', '-');
         code->set_target(litebus::os::Join("/opt", target));
@@ -679,7 +674,7 @@ std::string BuildBootstrapWorkingRoot(
         return root;
     }
     const std::string mountDst = "/__yuanrong/";
-    mount.set_source(bootstrapConfig.root());
+    mount.set_host_path(bootstrapConfig.root());
     mount.set_target(mountDst);
 
     if (bootstrapConfig.type() == "erofs") {
@@ -792,7 +787,7 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
     }
     runtime::v1::Mount mount;
     auto workingRoot = BuildBootstrapWorkingRoot(request, mount);
-    if (mount.source().length() > 0 && mount.target().length() > 0) {
+    if (mount.has_host_path() && mount.host_path().length() > 0 && mount.target().length() > 0) {
         *start->add_mounts() = mount;
     }
     BuildRuntimeCommands(start->mutable_funcruntime(), request, execPath, buildArgs);
@@ -1360,7 +1355,7 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnAddReferen
     SetRequestExtraConfigForRestore(restoreReq.get(), request);
     runtime::v1::Mount mount;
     auto workingRoot = BuildBootstrapWorkingRoot(request, mount);
-    if (mount.source().length() > 0 && mount.target().length() > 0) {
+    if (mount.has_host_path() && mount.host_path().length() > 0 && mount.target().length() > 0) {
         *restoreReq->add_mounts() = mount;
     }
     BuildRuntimeCommands(restoreReq->mutable_funcruntime(), request, execPath, buildArgs);

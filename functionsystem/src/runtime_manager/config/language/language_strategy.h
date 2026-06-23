@@ -52,14 +52,16 @@ struct CommandArgs {
  *   - All output (including working directory and exec path) is returned
  *     in CommandArgs; the caller decides how to apply it.
  */
-class LanguageCommandStrategy {
+class LanguageStrategy {
 public:
-    virtual ~LanguageCommandStrategy() = default;
+    virtual ~LanguageStrategy() = default;
 
     virtual std::pair<Status, CommandArgs> BuildArgs(const messages::StartInstanceRequest &request,
                                                      const std::string &port,
                                                      const RuntimeConfig &config) const = 0;
 };
+
+using LanguageCommandStrategy = LanguageStrategy;
 
 }  // namespace functionsystem::runtime_manager
 

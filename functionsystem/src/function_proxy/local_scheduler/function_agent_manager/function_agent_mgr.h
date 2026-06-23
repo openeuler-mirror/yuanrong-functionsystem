@@ -118,7 +118,6 @@ public:
         actor_->SetCoProcessReconcileCallback(std::move(callback));
     }
 
-
     // for test
     [[maybe_unused]] litebus::Future<bool> IsRegistered(const std::string &funcAgentID) const
     {

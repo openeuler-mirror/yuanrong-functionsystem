@@ -24,6 +24,7 @@ namespace functionsystem::runtime_manager {
 class NodejsCommandStrategy : public LanguageCommandStrategy {
 public:
     explicit NodejsCommandStrategy(bool execLookPath = true) : execLookPath_(execLookPath) {}
+    ~NodejsCommandStrategy() override = default;
 
     std::pair<Status, CommandArgs> BuildArgs(const messages::StartInstanceRequest &request,
                                              const std::string &port,
@@ -35,6 +36,8 @@ private:
 
 class PosixCustomCommandStrategy : public LanguageCommandStrategy {
 public:
+    ~PosixCustomCommandStrategy() override = default;
+
     std::pair<Status, CommandArgs> BuildArgs(const messages::StartInstanceRequest &request,
                                              const std::string &port,
                                              const RuntimeConfig &config) const override;

@@ -24,6 +24,8 @@ add_subdirectory(resource_group_controller)
 add_subdirectory(subscription_manager)
 add_subdirectory(gc_actor)
 
+target_sources(${UNIT_TEST_MODULE} PRIVATE ${CMAKE_CURRENT_LIST_DIR}/local_sched_driver_test.cpp)
+
 get_property(SRC_LOCAL_SCHEDULER_INCLUDE_DIR GLOBAL PROPERTY "SRC_LOCAL_SCHEDULER_INCLUDE_DIR")
 
 target_include_directories(${UNIT_TEST_MODULE} PRIVATE ${SRC_LOCAL_SCHEDULER_INCLUDE_DIR})

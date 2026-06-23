@@ -33,10 +33,14 @@ Rules covered (subset that can be detected via pattern matching):
     G.CNS.04-CPP  对于指针和引用类型的参数，如果不需要修改其引用的对象，应使用const修饰
 """
 
+import logging
 import os
 import re
-import sys
 import subprocess
+import sys
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+LOGGER = logging.getLogger(__name__)
 
 # ANSI color codes
 RED = '\033[91m'
@@ -68,7 +72,7 @@ class CodeChecker:
             files = result.stdout.strip().split('\n')
             return [f for f in files if f and re.match(r'.*\.(cpp|cc|h|hpp)$', f)]
         except Exception as e:
-            print(f"{YELLOW}Warning: Could not get changed files: {e}{RESET}")
+            LOGGER.info(f"{YELLOW}Warning: Could not get changed files: {e}{RESET}")
             return None
 
     def scan_file(self, filepath):
@@ -85,7 +89,7 @@ class CodeChecker:
                 content = f.read()
                 lines = content.split('\n')
         except Exception as e:
-            print(f"{YELLOW}Warning: Cannot read {filepath}: {e}{RESET}")
+            LOGGER.info(f"{YELLOW}Warning: Cannot read {filepath}: {e}{RESET}")
             return
 
         self.check_all_rules(filepath, lines, content)
@@ -161,8 +165,11 @@ class CodeChecker:
         # G.RES.07-CPP - 资源句柄释放后立即赋予新值
         self.check_resource_cleanup(filepath, lines)
 
-    def add_result(self, filepath, line_no, rule_id, rule_name, severity, msg, code_snippet=""):
+    def add_result(self, filepath, *args, code_snippet=""):
         """Add a rule violation result."""
+        line_no, rule_id, rule_name, severity, msg = args[:5]
+        if len(args) > 5:
+            code_snippet = args[5]
         severity_key = "serious" if severity in ["致命", "严重"] else "warning"
         self.stats[severity_key] += 1
 
@@ -274,11 +281,15 @@ class CodeChecker:
                     name_body = name.lstrip('_')
                     if '_' in name_body and re.search(r'_H+P*_?$', name):
                         continue
-                    # Also allow patterns like _LITEBUS_EXEC_HPP__ (double underscore at end is include guard style)
+                    # Also allow double underscore at the end for include guards.
                     if re.match(r'^__[A-Z]+_[A-Z_]+__$', name):
                         continue
                 # Flag if starts with __ or _ followed by uppercase
-                if name.startswith('__') or (name.startswith('_') and len(name) > 1 and name[1].isupper()):
+                starts_with_double_underscore = name.startswith('__')
+                starts_with_reserved_underscore = (
+                    name.startswith('_') and len(name) > 1 and name[1].isupper()
+                )
+                if starts_with_double_underscore or starts_with_reserved_underscore:
                     self.add_result(
                         filepath, i, "G.EXP.01-CPP",
                         "不要声明或定义保留标识符",
@@ -382,13 +393,13 @@ class CodeChecker:
             if stripped.startswith('//') or stripped.startswith('/*'):
                 continue
 
-            for func,替代 in unsafe_funcs.items():
+            for func, replacement in unsafe_funcs.items():
                 if re.search(rf'\b{func}\s*\(', line):
                     self.add_result(
                         filepath, i, "G.STD.05-CPP",
                         "确保用于字符串操作的缓冲区有足够的空间",
                         "严重",
-                        f"{func}() is unsafe, use {替代} instead",
+                        f"{func}() is unsafe, use {replacement} instead",
                         line.strip()
                     )
 
@@ -424,7 +435,8 @@ class CodeChecker:
                     line.strip()
                 )
 
-    def check_format_strings(self, filepath, lines):
+    @staticmethod
+    def check_format_strings(filepath, lines):
         """G.STD.13-CPP - 调用格式化输入/输出函数时，使用有效的格式字符串"""
         # Check for mismatched format specifiers
         for i, line in enumerate(lines, 1):
@@ -483,7 +495,7 @@ class CodeChecker:
                             "switch语句中至少有两个条件分支",
                             "严重",
                             f"switch has only {case_count} case(s), needs at least 2",
-                            lines[switch_line-1].strip() if switch_line <= len(lines) else ""
+                            lines[switch_line - 1].strip() if switch_line <= len(lines) else ""
                         )
                     in_switch = False
 
@@ -515,7 +527,7 @@ class CodeChecker:
                             "switch语句要有default分支",
                             "严重",
                             "switch without default branch",
-                            lines[switch_line-1].strip() if switch_line <= len(lines) else ""
+                            lines[switch_line - 1].strip() if switch_line <= len(lines) else ""
                         )
                     in_switch = False
 
@@ -563,7 +575,8 @@ class CodeChecker:
                         line.strip()
                     )
 
-    def check_uninitialized_vars(self, filepath, lines):
+    @staticmethod
+    def check_uninitialized_vars(filepath, lines):
         """G.EXP.08-CPP - 确保对象在使用之前已被初始化"""
         # Improved: only flag local variables, not function params or class members
         for i, line in enumerate(lines, 1):
@@ -606,8 +619,9 @@ class CodeChecker:
         # This is a heuristic
         pass
 
-    def check_pointer_param_const(self, filepath, lines, ext):
-        """G.CNS.04-CPP - 对于指针和引用类型的参数，如果不需要修改其引用的对象，应使用const修饰"""
+    @staticmethod
+    def check_pointer_param_const(filepath, lines, ext):
+        """G.CNS.04-CPP - recommend const for read-only pointer/reference params."""
         if ext not in [".h", ".hpp"]:
             return
 
@@ -640,11 +654,9 @@ class CodeChecker:
         changed_files = self.get_changed_files()
 
         for root, dirs, files in os.walk(path):
-            # Skip build directories
-            dirs[:] = [d for d in dirs if d not in [
-                "build", "bazel-bin", "bazel-out", ".git",
-                "node_modules", "__pycache__", ".cache", "vendor"
-            ]]
+            excluded_dirs = {"build", "bazel-bin", "bazel-out", ".git", "node_modules", "__pycache__", ".cache",
+                             "vendor"}
+            dirs[:] = [d for d in dirs if d not in excluded_dirs]
 
             for f in files:
                 filepath = os.path.join(root, f)
@@ -664,7 +676,7 @@ class CodeChecker:
     def print_results(self):
         """Print all results."""
         if not self.results:
-            print(f"\n{GREEN}{BOLD}No issues found!{RESET}")
+            LOGGER.info(f"\n{GREEN}{BOLD}No issues found!{RESET}")
             return
 
         # Sort by severity, then file, then line
@@ -675,13 +687,13 @@ class CodeChecker:
             x["line"]
         ))
 
-        print(f"\n{BOLD}{'='*100}")
-        print(f"Code Check Results: {len(self.results)} issues found")
-        print(f"{'='*100}{RESET}")
-        print(f"Fatal:   {RED}{self.stats['fatal']}{RESET}")
-        print(f"Serious: {RED}{self.stats['serious']}{RESET}")
-        print(f"Warning: {YELLOW}{self.stats['warning']}{RESET}")
-        print()
+        LOGGER.info(f"\n{BOLD}{'='*100}")
+        LOGGER.info(f"Code Check Results: {len(self.results)} issues found")
+        LOGGER.info(f"{'='*100}{RESET}")
+        LOGGER.info(f"Fatal:   {RED}{self.stats['fatal']}{RESET}")
+        LOGGER.info(f"Serious: {RED}{self.stats['serious']}{RESET}")
+        LOGGER.info(f"Warning: {YELLOW}{self.stats['warning']}{RESET}")
+        LOGGER.info("")
 
         # Group by severity
         for severity in ["致命", "严重", "警告", "提示"]:
@@ -690,22 +702,22 @@ class CodeChecker:
                 continue
 
             color = RED if severity in ["致命", "严重"] else YELLOW if severity == "警告" else CYAN
-            print(f"\n{color}{BOLD}{'─'*100}")
-            print(f"{severity} ({len(issues)} issues)")
-            print(f"{'─'*100}{RESET}")
+            LOGGER.info(f"\n{color}{BOLD}{'─'*100}")
+            LOGGER.info(f"{severity} ({len(issues)} issues)")
+            LOGGER.info(f"{'─'*100}{RESET}")
 
             # Show first 50 issues per severity
             for r in issues[:50]:
-                print(f"\n  {BLUE}{r['file']}{RESET}:{BOLD}{r['line']}{RESET}")
-                print(f"  Rule: {MAGENTA}{r['rule_id']}{RESET} - {r['rule_name']}")
-                print(f"  {CYAN}{r['message']}{RESET}")
+                LOGGER.info(f"\n  {BLUE}{r['file']}{RESET}:{BOLD}{r['line']}{RESET}")
+                LOGGER.info(f"  Rule: {MAGENTA}{r['rule_id']}{RESET} - {r['rule_name']}")
+                LOGGER.info(f"  {CYAN}{r['message']}{RESET}")
                 if r['code']:
-                    print(f"  Code: {YELLOW}{r['code']}{RESET}")
+                    LOGGER.info(f"  Code: {YELLOW}{r['code']}{RESET}")
 
             if len(issues) > 50:
-                print(f"\n  ... and {len(issues) - 50} more {severity} issues")
+                LOGGER.info(f"\n  ... and {len(issues) - 50} more {severity} issues")
 
-        print()
+        LOGGER.info("")
 
     def export_json(self, output_file):
         """Export results to JSON."""
@@ -715,7 +727,7 @@ class CodeChecker:
                 "stats": self.stats,
                 "results": self.results,
             }, f, ensure_ascii=False, indent=2)
-        print(f"\nResults exported to {output_file}")
+        LOGGER.info(f"\nResults exported to {output_file}")
 
 
 def main():
@@ -746,11 +758,11 @@ def main():
     )
     args = parser.parse_args()
 
-    print(f"{BOLD}Huawei C++ Code Check Tool{RESET}")
-    print(f"Scanning: {CYAN}{args.path}{RESET}")
+    LOGGER.info(f"{BOLD}Huawei C++ Code Check Tool{RESET}")
+    LOGGER.info(f"Scanning: {CYAN}{args.path}{RESET}")
     if args.diff:
-        print(f"Changed since: {CYAN}{args.diff}{RESET}")
-    print()
+        LOGGER.info(f"Changed since: {CYAN}{args.diff}{RESET}")
+    LOGGER.info("")
 
     checker = CodeChecker(args.path, diff_base=args.diff)
     checker.scan_directory(args.path)
@@ -763,7 +775,6 @@ def main():
     if checker.stats["fatal"] > 0 or checker.stats["serious"] > 0:
         sys.exit(1)
     sys.exit(0)
-
 
 if __name__ == "__main__":
     main()

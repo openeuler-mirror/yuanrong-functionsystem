@@ -93,7 +93,6 @@ public:
                                                int exitCode, const std::string &exitMessage,
                                                const std::string &requestID) const;
 
-
 private:
     std::shared_ptr<HealthCheckActor> actor_;
 };

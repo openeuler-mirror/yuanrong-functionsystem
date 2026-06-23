@@ -26,6 +26,9 @@
 #include "common/resource_view/resource_tool.h"
 #include "common/utils/generate_message.h"
 #include "common/utils/time_trigger.h"
+#include "function_proxy/local_scheduler/function_agent_manager/function_agent_mgr.h"
+#include "function_proxy/local_scheduler/instance_control/instance_ctrl.h"
+#include "function_proxy/local_scheduler/subscription_manager/subscription_mgr.h"
 #include "utils/os_utils.hpp"
 
 namespace functionsystem::local_scheduler {
@@ -185,6 +188,36 @@ litebus::Future<Status> LocalSchedSrvActor::AsyncNotifyWorkerStatus(
         }
         return Status::OK();
     });
+}
+
+litebus::Future<Status> LocalSchedSrvActor::UpdateSchedulingStatus(bool evicting)
+{
+    ASSERT_IF_NULL(resourceViewMgr_);
+    auto targetStatus = evicting ? resource_view::UnitStatus::EVICTING : resource_view::UnitStatus::NORMAL;
+    return resourceViewMgr_->UpdateAllUnitStatus(targetStatus);
+}
+
+void LocalSchedSrvActor::OnUpdateSchedulingStatus(const litebus::AID &from, std::string &&name, std::string &&msg)
+{
+    messages::UpdateAgentStatusRequest request;
+    if (msg.empty() || !request.ParseFromString(msg)) {
+        YRLOG_ERROR("invalid {} request from {}", name, from.HashString());
+        return;
+    }
+    (void)UpdateSchedulingStatus(request.status() != 0)
+        .OnComplete(litebus::Defer(GetAID(), &LocalSchedSrvActor::SendUpdateSchedulingStatusResponse,
+                                   std::placeholders::_1, from, request.requestid()));
+}
+
+void LocalSchedSrvActor::SendUpdateSchedulingStatusResponse(const litebus::Future<Status> &status,
+                                                            const litebus::AID &to,
+                                                            const std::string &requestID)
+{
+    auto response = status.IsError()
+        ? GenUpdateAgentStatusResponse(requestID, status.GetErrorCode(), "failed to update scheduling status")
+        : GenUpdateAgentStatusResponse(requestID, static_cast<int32_t>(status.Get().StatusCode()),
+                                       status.Get().ToString());
+    Send(to, "UpdateSchedulingStatusResponse", response.SerializeAsString());
 }
 
 void LocalSchedSrvActor::ResponseNotifyWorkerStatus(const litebus::AID &from, std::string &&, std::string &&msg)
@@ -599,6 +632,7 @@ void LocalSchedSrvActor::Init()
     Receive("ResponseForwardSchedule", &LocalSchedSrvActor::ResponseForwardSchedule);
     Receive("ResponseForwardKill", &LocalSchedSrvActor::ResponseForwardKill);
     Receive("ResponseNotifyWorkerStatus", &LocalSchedSrvActor::ResponseNotifyWorkerStatus);
+    Receive("UpdateSchedulingStatus", &LocalSchedSrvActor::OnUpdateSchedulingStatus);
     Receive("EvictAgent", &LocalSchedSrvActor::EvictAgent);
     Receive("NotifyEvictResultAck", &LocalSchedSrvActor::NotifyEvictResultAck);
     Receive("OnForwardGroupSchedule", &LocalSchedSrvActor::OnForwardGroupSchedule);

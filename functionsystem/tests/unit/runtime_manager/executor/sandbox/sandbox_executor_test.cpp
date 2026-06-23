@@ -16,6 +16,7 @@
 
 #include "runtime_manager/executor/sandbox/sandbox_executor.h"
 #include "runtime_manager/executor/sandbox/runtime_state_manager.h"
+#include "runtime_manager/port/port_manager.h"
 
 #include <gtest/gtest.h>
 
@@ -160,6 +161,44 @@ TEST_F(SandboxExecutorTest, CommitThenOutOfScopeMgrIsActiveTrue)
 
     // After scope: still active (committed, not rolled back)
     EXPECT_TRUE(mgr_.IsActive(runtimeID));
+}
+
+TEST_F(SandboxExecutorTest, CleanupLocalRuntimeStateForOrphanUnregistersKnownSandbox)
+{
+    SandboxExecutor executor("sandbox-executor-orphan-test", litebus::AID(), "/tmp/sandbox-executor-orphan-test-ckpt");
+    const std::string runtimeID = "rt-orphan-local";
+    const std::string sandboxID = "sandbox-orphan-local";
+
+    auto &portManager = PortManager::GetInstance();
+    portManager.Clear();
+    portManager.InitPortResource(35000, 8);
+    auto ports = portManager.RequestPorts(runtimeID, 2);
+    ASSERT_EQ(ports.size(), 2U);
+    ASSERT_FALSE(portManager.GetPort(runtimeID).empty());
+
+    messages::RuntimeInstanceInfo instanceInfo;
+    instanceInfo.set_runtimeid(runtimeID);
+    instanceInfo.set_instanceid("inst-orphan-local");
+    executor.stateManager_.Register(SandboxInfo{runtimeID, sandboxID, "", "", instanceInfo});
+    executor.sandboxStatsSnapshots_[runtimeID] = SandboxExecutor::SandboxStatsSnapshot{};
+    executor.sandboxStatsPollingRuntimes_.insert(runtimeID);
+    executor.sandboxLifecycleStates_[runtimeID] = SandboxExecutor::SandboxLifecycleStatus::RUNNING;
+    executor.userInitiatedTerminateRuntimes_.insert(runtimeID);
+    executor.sandboxRunningStartTimes_[runtimeID] = std::chrono::steady_clock::now();
+
+    executor.CleanupLocalRuntimeStateForOrphan("req-orphan-local", sandboxID);
+
+    EXPECT_FALSE(executor.stateManager_.IsActive(runtimeID));
+    EXPECT_TRUE(executor.stateManager_.FindRuntimeIDBySandboxID(sandboxID).empty());
+    EXPECT_TRUE(executor.sandboxStatsSnapshots_.count(runtimeID) == 0);
+    EXPECT_TRUE(executor.sandboxStatsPollingRuntimes_.count(runtimeID) == 0);
+    EXPECT_TRUE(executor.sandboxLifecycleStates_.count(runtimeID) == 0);
+    EXPECT_TRUE(executor.userInitiatedTerminateRuntimes_.count(runtimeID) == 0);
+    EXPECT_TRUE(executor.sandboxRunningStartTimes_.count(runtimeID) == 0);
+    EXPECT_TRUE(portManager.GetPort(runtimeID).empty());
+
+    portManager.Clear();
+    portManager.InitPortResource(500, 2000);
 }
 
 TEST_F(SandboxExecutorTest, ReconcileRuntimesRejectsNullRequest)

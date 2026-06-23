@@ -45,7 +45,6 @@ func (s *LauncherService) Start(ctx context.Context, req *pb.StartRequest) (*pb.
 		}
 	}
 
-
 	funcRt := req.GetFuncRuntime()
 	runtimeID := funcRt.GetId()
 
@@ -400,10 +399,25 @@ func (s *LauncherService) List(ctx context.Context, req *pb.ListContainersReques
 	return &pb.ListContainersResponse{}, nil
 }
 
-// Stats 返回容器资源使用统计。
+// Stats 返回容器真实资源使用统计，通过 Docker API 读取 cgroup 数据。
 func (s *LauncherService) Stats(ctx context.Context, req *pb.StatsRequest) (*pb.StatsResponse, error) {
-	log.Printf("[service] Stats: id=%s", req.GetId())
-	return &pb.StatsResponse{}, nil
+	id := req.GetId()
+
+	cs, err := s.runtime.Stats(ctx, id)
+	if err != nil {
+		log.Printf("[service] Stats: id=%s err=%v", id, err)
+		return &pb.StatsResponse{}, nil
+	}
+
+	log.Printf("[service] Stats: id=%s cpu_ns=%d mem=%dMiB limit=%dMiB",
+		id, cs.CPUUsageNs, cs.MemoryUsageBytes/1024/1024, cs.MemoryLimitBytes/1024/1024)
+
+	return &pb.StatsResponse{
+		CpuUsageNs:          cs.CPUUsageNs,
+		MemoryUsageBytes:    cs.MemoryUsageBytes,
+		MemoryLimitBytes:    cs.MemoryLimitBytes,
+		MemoryMaxUsageBytes: cs.MemoryMaxUsageBytes,
+	}, nil
 }
 
 // Version 返回运行时版本信息。
@@ -417,6 +431,7 @@ func (s *LauncherService) Version(ctx context.Context, req *pb.VersionRequest) (
 }
 
 // convertProtoMounts 将 proto Mount 列表转为内部 MountConfig 列表。
+// proto Mount.Source 为字符串，直接映射到 MountConfig.HostPath。
 func convertProtoMounts(protoMounts []*pb.Mount) []rt.MountConfig {
 	mounts := make([]rt.MountConfig, 0, len(protoMounts))
 	for _, m := range protoMounts {
@@ -440,6 +455,7 @@ func convertProtoMounts(protoMounts []*pb.Mount) []rt.MountConfig {
 			}
 		case *pb.Mount_ImageUrl:
 			mc.ImageURL = src.ImageUrl
+		default:
 		}
 		mounts = append(mounts, mc)
 	}

@@ -21,9 +21,10 @@
 
 namespace functionsystem::runtime_manager {
 
-class PythonCommandStrategy : public LanguageCommandStrategy {
+class PythonStrategy : public LanguageStrategy {
 public:
-    explicit PythonCommandStrategy(bool execLookPath = true) : execLookPath_(execLookPath) {}
+    explicit PythonStrategy(bool execLookPath = true) : execLookPath_(execLookPath) {}
+    ~PythonStrategy() override = default;
 
     std::pair<Status, CommandArgs> BuildArgs(const messages::StartInstanceRequest &request,
                                              const std::string &port,
@@ -40,6 +41,8 @@ private:
 
     bool execLookPath_;
 };
+
+using PythonCommandStrategy = PythonStrategy;
 
 }  // namespace functionsystem::runtime_manager
 

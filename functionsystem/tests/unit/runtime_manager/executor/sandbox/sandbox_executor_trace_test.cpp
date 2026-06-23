@@ -47,10 +47,10 @@ protected:
         trace::TraceManager::GetInstance().Clear();
         trace::TraceManager::GetInstance().enableTrace_ = true;
         trace::TraceManager::GetInstance().hostID_ = "node-b";
-        auto provider = opentelemetry::nostd::shared_ptr<opentelemetry::trace::TracerProvider>(
-            opentelemetry::sdk::trace::TracerProviderFactory::Create(
-                std::vector<std::unique_ptr<opentelemetry::sdk::trace::SpanProcessor>>{})
-                .release());
+
+        std::vector<std::unique_ptr<opentelemetry::sdk::trace::SpanProcessor>> spanProcessors;
+        auto sdkProvider = opentelemetry::sdk::trace::TracerProviderFactory::Create(std::move(spanProcessors));
+        opentelemetry::nostd::shared_ptr<opentelemetry::trace::TracerProvider> provider(sdkProvider.release());
         opentelemetry::trace::Provider::SetTracerProvider(provider);
     }
 

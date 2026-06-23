@@ -16,6 +16,8 @@
 
 #include "command_builder.h"
 
+#include <unistd.h>
+
 #include <unordered_set>
 
 #include "common/constants/constants.h"
@@ -33,6 +35,8 @@ namespace {
 const std::string CPP_NEW_EXEC_PATH = "/cpp/bin/runtime";
 const std::string GO_NEW_EXEC_PATH = "/go/bin/goruntime";
 const std::string BASH_PATH = "/bin/bash";
+const std::string JAVA_CMD = "java";
+const std::string DEFAULT_JAVA8_CMD = "/opt/buildtools/jdk8/bin/java";
 const std::string GLOG_LOG_DIR = "GLOG_log_dir";
 const std::string YR_LOG_LEVEL = "YR_LOG_LEVEL";
 const std::string PATH_ENV = "PATH";
@@ -78,10 +82,10 @@ CommandBuilder::CommandBuilder(bool execLookPath) : execLookPath_(execLookPath)
 {
     // Register language strategies.
     // Multiple language tags may share a strategy instance (via shared_ptr).
-    auto cpp     = std::make_shared<CppCommandStrategy>();
-    auto go      = std::make_shared<GoCommandStrategy>();
-    auto python  = std::make_shared<PythonCommandStrategy>(execLookPath);
-    auto java    = std::make_shared<JavaCommandStrategy>(execLookPath);
+    auto cpp     = std::make_shared<CppStrategy>();
+    auto go      = std::make_shared<GoStrategy>();
+    auto python  = std::make_shared<PythonStrategy>(execLookPath);
+    auto java    = std::make_shared<JavaStrategy>(execLookPath);
     auto nodejs  = std::make_shared<NodejsCommandStrategy>(execLookPath);
     auto posix   = std::make_shared<PosixCustomCommandStrategy>();
 
@@ -101,18 +105,20 @@ CommandBuilder::CommandBuilder(bool execLookPath) : execLookPath_(execLookPath)
     strategies_[PYTHON39_LANGUAGE]     = python;
     strategies_[PYTHON310_LANGUAGE]    = python;
     strategies_[PYTHON311_LANGUAGE]    = python;
+    strategies_[PYTHON312_LANGUAGE]    = python;
+    strategies_[PYTHON313_LANGUAGE]    = python;
 }
 
-void CommandBuilder::RegisterStrategy(const std::string &languageTag,
-                                       std::unique_ptr<LanguageCommandStrategy> strategy)
+void CommandBuilder::RegisterStrategy(
+    const std::string &languageTag, std::unique_ptr<LanguageStrategy> strategy)
 {
     strategies_[languageTag] = std::move(strategy);
 }
 
 // ── Core dispatch ─────────────────────────────────────────────────────────────
 
-std::pair<Status, CommandArgs> CommandBuilder::BuildArgs(const std::string &language, const std::string &port,
-                                                          const messages::StartInstanceRequest &request) const
+std::pair<Status, CommandArgs> CommandBuilder::BuildArgs(
+    const std::string &language, const std::string &port, const messages::StartInstanceRequest &request) const
 {
     const auto &info = request.runtimeinstanceinfo();
     std::string tag = GetLanguageTag(language);
@@ -233,6 +239,13 @@ std::string CommandBuilder::GetExecPath(const std::string &language) const
         return cmd;
     }
     auto path = LookPath(cmd);
+    if (path.IsNone() && tag == JAVA_LANGUAGE && language == JAVA_LANGUAGE) {
+        path = LookPath(JAVA_CMD);
+    }
+    if (path.IsNone() && tag == JAVA_LANGUAGE && language == JAVA_LANGUAGE &&
+        access(DEFAULT_JAVA8_CMD.c_str(), X_OK) == 0) {
+        return DEFAULT_JAVA8_CMD;
+    }
     if (path.IsNone()) {
         YRLOG_ERROR("GetExecPath: LookPath failed for: {}", cmd);
         return "";

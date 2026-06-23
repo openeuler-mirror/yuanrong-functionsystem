@@ -103,6 +103,18 @@ struct LocalSchedStartParam {
     bool enableMergeProcess = false;  // 共进程模式开关（--enable_merge_process）
 };
 
+class LocalSchedulingApiRouter : public ApiRouterRegister {
+public:
+    ~LocalSchedulingApiRouter() override = default;
+
+    void RegisterHandler(const std::string &url, const HttpHandler &handler) const override
+    {
+        ApiRouterRegister::RegisterHandler(url, handler);
+    }
+
+    void InitUpdateSchedulingStatusHandler(const std::shared_ptr<resource_view::ResourceViewMgr> &resourceViewMgr);
+};
+
 class LocalSchedDriver : public ModuleDriver {
 public:
     explicit LocalSchedDriver(LocalSchedStartParam &&param, const std::shared_ptr<MetaStoreClient> metaStoreClient)
@@ -152,6 +164,7 @@ private:
     std::shared_ptr<local_scheduler::FunctionAgentMgr> funcAgentMgr_;
     std::shared_ptr<HttpServer> httpServer_;
     std::shared_ptr<DefaultHealthyRouter> apiRouteRegister_;
+    std::shared_ptr<LocalSchedulingApiRouter> localSchedulingApiRouteRegister_;
     std::shared_ptr<MetaStoreClient> metaStoreClient_;
     std::shared_ptr<AbnormalProcessor> abnormalProcessor_;
     std::shared_ptr<DsHealthyChecker> dsHealthyChecker_;

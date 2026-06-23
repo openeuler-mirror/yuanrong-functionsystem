@@ -59,13 +59,12 @@ public:
     void DoUnregister(int fd, std::function<void()> onDone = nullptr);
 
 protected:
+    explicit IOEventActor(const std::string &name);
+
     void Init() override;
     void Finalize() override;
 
 private:
-    explicit IOEventActor(const std::string &name);
-
-
     // Event loop (scheduled periodically via AsyncAfter)
     void EventLoop();
 
@@ -82,8 +81,8 @@ private:
     litebus::Timer eventLoopTimer_;  // Timer for event loop scheduling
 
     static std::shared_ptr<IOEventActor> instance_;
-    static constexpr int MAX_EVENTS = 64;
-    static constexpr int EVENT_LOOP_INTERVAL_MS = 10;
+    static constexpr int maxEvents = 64;
+    static constexpr int eventLoopIntervalMs = 10;
 };
 
 }  // namespace functionsystem

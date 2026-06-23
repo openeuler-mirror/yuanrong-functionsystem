@@ -713,13 +713,13 @@ litebus::Future<messages::QueryAgentInfoResponse> GlobalSchedActor::QueryAgentIn
                                                    req);
 }
 
-litebus::Future<messages::QueryInstancesInfoResponse> GlobalSchedActor::GetSchedulingQueue(
-    const std::shared_ptr<messages::QueryInstancesInfoRequest> &req)
+litebus::Future<messages::QuerySchedulingQueueResponse> GlobalSchedActor::GetSchedulingQueue(
+    const std::shared_ptr<messages::QuerySchedulingQueueRequest> &req)
 {
     auto rootDomain = FindRootDomainSched();
     if (rootDomain == nullptr) {
         YRLOG_ERROR("root domain not exist, can't GetSchedulingQueue.");
-        return messages::QueryInstancesInfoResponse{};
+        return messages::QuerySchedulingQueueResponse{};
     }
 
     ASSERT_IF_NULL(member_->domainSchedMgr);

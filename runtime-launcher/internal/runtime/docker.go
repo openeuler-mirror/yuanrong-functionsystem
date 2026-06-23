@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -15,6 +16,8 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
+
+const shortContainerIDLength = 12
 
 // DockerRuntime 使用 Docker Engine SDK 实现 ContainerRuntime 接口。
 type DockerRuntime struct {
@@ -201,26 +204,53 @@ func (d *DockerRuntime) Wait(ctx context.Context, containerID string) (*Containe
 }
 
 func (d *DockerRuntime) Delete(ctx context.Context, containerID string, timeoutSeconds int64) error {
-	if timeoutSeconds > 0 {
-		// 优雅停止：先发 SIGTERM，等待超时后 SIGKILL
-		timeout := int(timeoutSeconds)
-		stopOpts := container.StopOptions{Timeout: &timeout}
-		if err := d.client.ContainerStop(ctx, containerID, stopOpts); err != nil {
-			log.Printf("[docker] 优雅停止容器 %s 失败: %v，尝试强制删除", containerID[:12], err)
-		}
+	// Always stop with timeout=0 (immediate SIGKILL).
+	// A graceful SIGTERM wait is pointless here: the caller has already performed
+	// application-level shutdown (ShutDownInstance) before invoking Delete.
+	// Waiting for SIGTERM only delays the kill by up to gracefulshutdowntime seconds
+	// and causes the container's Wait RPC to return before OnDeleteDone can unregister
+	// the runtimeID, triggering a spurious NotifySandboxExit from OnWaitDone.
+	zeroTimeout := 0
+	stopOpts := container.StopOptions{Timeout: &zeroTimeout}
+	if err := d.client.ContainerStop(ctx, containerID, stopOpts); err != nil {
+		log.Printf("[docker] 停止容器 %s 失败: %v，尝试强制删除", containerID[:shortContainerIDLength], err)
 	}
 
 	// 强制删除容器
 	err := d.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
 	if err != nil {
-		return fmt.Errorf("删除容器 %s 失败: %w", containerID[:12], err)
+		return fmt.Errorf("删除容器 %s 失败: %w", containerID[:shortContainerIDLength], err)
 	}
-	log.Printf("[docker] 容器已删除: %s", containerID[:12])
+	log.Printf("[docker] 容器已删除: %s", containerID[:shortContainerIDLength])
 	return nil
 }
 
 func (d *DockerRuntime) Close() error {
 	return d.client.Close()
+}
+
+// Stats 通过 Docker API 获取容器的真实 CPU/内存统计信息。
+// 使用单次（非 stream）模式，直接读取一个 stats 快照。
+func (d *DockerRuntime) Stats(ctx context.Context, containerID string) (*ContainerStats, error) {
+	resp, err := d.client.ContainerStats(ctx, containerID, false)
+	if err != nil {
+		return nil, fmt.Errorf("获取容器 stats 失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var raw container.StatsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("解析 stats 响应失败: %w", err)
+	}
+
+	cs := &ContainerStats{
+		CPUUsageNs:       raw.CPUStats.CPUUsage.TotalUsage,
+		MemoryUsageBytes: raw.MemoryStats.Usage,
+		MemoryLimitBytes: raw.MemoryStats.Limit,
+		// MaxUsage 在 cgroup v2 中始终为 0，此处直接透传（调用方已兼容）
+		MemoryMaxUsageBytes: raw.MemoryStats.MaxUsage,
+	}
+	return cs, nil
 }
 
 // convertMounts 将 MountConfig 列表转为 Docker mount.Mount 列表。

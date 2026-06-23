@@ -113,9 +113,9 @@ litebus::Future<messages::QueryAgentInfoResponse> DomainSchedMgr::QueryAgentInfo
     return litebus::Async(domainSchedMgrActor_->GetAID(), &DomainSchedMgrActor::QueryAgentInfo, name, address, req);
 }
 
-litebus::Future<messages::QueryInstancesInfoResponse> DomainSchedMgr::GetSchedulingQueue(
+litebus::Future<messages::QuerySchedulingQueueResponse> DomainSchedMgr::GetSchedulingQueue(
     const std::string &name, const std::string &address,
-    const std::shared_ptr<messages::QueryInstancesInfoRequest> &req)
+    const std::shared_ptr<messages::QuerySchedulingQueueRequest> &req)
 {
     return litebus::Async(domainSchedMgrActor_->GetAID(), &DomainSchedMgrActor::GetSchedulingQueue, name, address, req);
 }

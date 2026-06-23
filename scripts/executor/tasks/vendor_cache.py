@@ -78,7 +78,7 @@ class VendorCacheManager:
         self.builder = builder
         self.cache_root = resolve_cache_root()
         self.install_root = os.path.join(self.vendor_dir, "output", "Install")
-        self.openEuler_root = os.path.join(self.vendor_dir, "output", "openEuler")
+        self.openeuler_root = os.path.join(self.vendor_dir, "output", "openEuler")
         self.targets = {name: ALL_VENDOR_TARGETS[name] for name in self._required_target_names()}
         self.keys: dict[str, str] = {}
         self.hits: set[str] = set()
@@ -143,20 +143,24 @@ class VendorCacheManager:
             "commands": {command: self._command_fingerprint(command) for command in target.command_fingerprints},
             "env": {env: os.environ.get(env, "") for env in FINGERPRINT_ENVS},
         }
-        key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+        encoded_payload = json.dumps(payload, sort_keys=True).encode("utf-8")
+        key = hashlib.sha256(encoded_payload).hexdigest()
         self.keys[name] = key
         return key
 
     def _shared_input_fingerprint(self) -> dict[str, str]:
-        return {relpath: self._path_fingerprint(os.path.join(self.vendor_dir, relpath)) for relpath in SHARED_VENDOR_INPUTS}
+        return {
+            relpath: self._path_fingerprint(os.path.join(self.vendor_dir, relpath))
+            for relpath in SHARED_VENDOR_INPUTS
+        }
 
     def _workspace_path(self, target: VendorTarget) -> str:
         return os.path.join(self.vendor_dir, target.workspace_relpath)
 
     def _ensure_output_layout(self):
         os.makedirs(self.install_root, exist_ok=True)
-        os.makedirs(self.openEuler_root, exist_ok=True)
-        self._materialize_symlink(os.path.join(self.openEuler_root, "Install"), self.install_root)
+        os.makedirs(self.openeuler_root, exist_ok=True)
+        self._materialize_symlink(os.path.join(self.openeuler_root, "Install"), self.install_root)
 
     def _is_cache_ready(self, name: str, cache_path: str) -> bool:
         return os.path.exists(os.path.join(cache_path, READY_MARKER)) and self._is_target_output_valid(name, cache_path)
@@ -169,7 +173,8 @@ class VendorCacheManager:
             return all(os.path.isfile(os.path.join(root_path, relpath)) for relpath in target.required_paths)
         return self._has_payload(root_path)
 
-    def _has_payload(self, root_path: str) -> bool:
+    @staticmethod
+    def _has_payload(root_path: str) -> bool:
         for current_root, dirnames, filenames in os.walk(root_path):
             dirnames[:] = [dirname for dirname in dirnames if dirname != ".staging"]
             for filename in filenames:
@@ -211,7 +216,8 @@ class VendorCacheManager:
         os.makedirs(os.path.dirname(link_path), exist_ok=True)
         os.symlink(target_path, link_path)
 
-    def _remove_path(self, path: str):
+    @staticmethod
+    def _remove_path(path: str):
         if os.path.islink(path) or os.path.isfile(path):
             os.unlink(path)
         elif os.path.isdir(path):
@@ -236,14 +242,16 @@ class VendorCacheManager:
                 sha256.update(self._file_hash(file_path).encode("utf-8"))
         return sha256.hexdigest()
 
-    def _file_hash(self, path: str) -> str:
+    @staticmethod
+    def _file_hash(path: str) -> str:
         sha256 = hashlib.sha256()
         with open(path, "rb") as file_obj:
             for block in iter(lambda: file_obj.read(8192), b""):
                 sha256.update(block)
         return sha256.hexdigest()
 
-    def _command_fingerprint(self, command_name: str) -> dict[str, str]:
+    @staticmethod
+    def _command_fingerprint(command_name: str) -> dict[str, str]:
         command = command_name
         if command_name == "cc":
             command = os.environ.get("CC", "cc")

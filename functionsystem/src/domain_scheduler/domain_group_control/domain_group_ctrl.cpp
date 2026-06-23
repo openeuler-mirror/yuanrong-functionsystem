@@ -31,4 +31,10 @@ litebus::Future<std::vector<std::shared_ptr<messages::ScheduleRequest>>> DomainG
     return litebus::Async(actor_->GetAID(), &DomainGroupCtrlActor::GetRequests);
 }
 
+litebus::Future<std::vector<schedule_decision::ScheduleQueueRecord>> DomainGroupCtrl::GetQueueRecords()
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &DomainGroupCtrlActor::GetQueueRecords);
+}
+
 }  // namespace functionsystem::domain_scheduler

@@ -57,6 +57,7 @@ using Resources = ::resources::Resources;
 using DiskContent = ::resources::DiskContent;
 using ResourceExtension = ::resources::Resource::Extension;
 using InstanceInfo = ::resources::InstanceInfo;
+using SchedulingQueueInfo = ::resources::SchedulingQueueInfo;
 using RouteInfo = ::resources::RouteInfo;
 using ResourceUnit = ::resources::ResourceUnit;
 using ValueType = ::resources::Value_Type;

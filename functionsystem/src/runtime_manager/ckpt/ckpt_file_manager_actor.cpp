@@ -54,7 +54,6 @@ void CkptFileManagerActor::Init()
     // Create checkpoint base directory if not exists
     std::filesystem::create_directories(checkpointBaseDir_);
 
-
     // Restore checkpoint files from local directory
     RestoreCheckpointsFromLocal();
 

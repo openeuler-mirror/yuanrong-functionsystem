@@ -325,6 +325,15 @@ public:
 
     litebus::Future<KillResponse> KillInstancesOfJob(const std::shared_ptr<KillRequest> &killReq);
 
+    // Returns true when a route-less kill should be forwarded to function_master:
+    // direct routing is enabled, the request carries no route/proxy info, and the
+    // target instance is not present in this proxy's local instance view.
+    bool ShouldForwardKillToMaster(const std::shared_ptr<KillRequest> &killReq) const;
+
+    // Forwards a kill to function_master so it can resolve the instance owner from
+    // the global view (or report that the instance does not exist).
+    litebus::Future<KillResponse> ForwardKillToMaster(const std::shared_ptr<KillRequest> &killReq);
+
     void BindControlInterfaceClientManager(const std::shared_ptr<ControlInterfaceClientManagerProxy> &mgr)
     {
         ASSERT_IF_NULL(mgr);
@@ -580,6 +589,8 @@ public:
     litebus::Future<messages::DeployInstanceResponse> DeploySnapStartInstance(
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
+    void SessionCountDelta(const std::string &instanceID, int delta);
+
     /**
      * Evict an instance that has exceeded its idle timeout.
      * Called by IdleActor after idle timer fires.
@@ -594,6 +605,9 @@ public:
         idleMgr_ = idleMgr;
     }
 
+    // Tenant quota cooldown: blocks scheduling for tenants that exceeded quota
+    void OnTenantQuotaExceededMsg(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void OnTenantQuotaExceeded(const std::string &msg);
 
 private:
     Status CheckSchedRequestValid(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
@@ -605,6 +619,10 @@ private:
     litebus::Future<Status> DispatchSchedule(const std::shared_ptr<messages::ScheduleRequest> &request);
 
     litebus::Future<messages::ScheduleResponse> DoDispatchSchedule(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
+        const TransitionResult &result);
+    litebus::Future<messages::ScheduleResponse> HandleDispatchWithoutPreState(
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
         const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
         const TransitionResult &result);
@@ -799,6 +817,12 @@ private:
     litebus::Future<messages::ScheduleResponse> RetryForwardSchedule(
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const messages::ScheduleResponse &resp,
         uint32_t retryTimes, const std::shared_ptr<InstanceStateMachine> &stateMachine);
+    litebus::Future<messages::ScheduleResponse> HandleForwardScheduleResponse(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const messages::ScheduleResponse &resp,
+        uint32_t retryTimes,
+        const std::shared_ptr<InstanceControlView> &instanceControlView);
+    litebus::Future<messages::ScheduleResponse> QueryInstanceAfterForwardConflict(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
     void TryClearStateMachineCache(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
@@ -853,9 +877,8 @@ private:
 
     void DeleteDriverClient(const std::string &instanceID, const std::string &jobID);
 
-    // GC orphaned state machine in DirectRouting mode (scenario: schedule succeeded but ownership transferred to remote node)
+    // GC orphaned state machine in DirectRouting mode.
     void GCOrphanStateMachine(const std::string &instanceID, const std::string &requestID);
-
 
     litebus::Future<Status> TryExitInstance(const std::shared_ptr<InstanceStateMachine> stateMachine,
                                             const std::shared_ptr<KillContext> &killCtx,
@@ -919,6 +942,13 @@ private:
         const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result,
         const TransitionResult &transResult);
+    bool HandleLocalDirectRoutingConflict(
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &scheduleResp,
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const TransitionResult &transResult);
+    litebus::Option<Status> CleanupDirectRoutingConflict(
+        const litebus::Option<Status> &status,
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
     CreateCallResultCallBack RegisterCreateCallResultCallback(
         const std::shared_ptr<messages::ScheduleRequest> &request);
@@ -950,10 +980,9 @@ private:
     void CheckInstanceStateResponse(const litebus::AID &from, std::string &&, std::string &&msg);
 
     void ClearLocalDriver();
-private:
-    litebus::Future<Status> RegisterTraefikRoute(const InstanceInfo& instanceInfo);
-    litebus::Future<Status> UnregisterTraefikRoute(const std::string& instanceID);
-private:
+    litebus::Future<Status> RegisterTraefikRoute(const InstanceInfo &instanceInfo);
+    litebus::Future<Status> UnregisterTraefikRoute(const std::string &instanceID);
+
     litebus::Future<Status> FcAccessorHeartbeatEnable(bool enable)
     {
         fcAccessorHeartbeat_ = enable;
@@ -1046,12 +1075,21 @@ private:
     std::shared_ptr<TraefikRegistry> traefikRegistry_;
 
     std::shared_ptr<IdleMgr> idleMgr_;
+    std::unordered_map<std::string, litebus::Timer> idleTimers_;
 
-public:
-    // Tenant quota cooldown: blocks scheduling for tenants that exceeded quota
-    void OnTenantQuotaExceededMsg(const litebus::AID &from, std::string &&name, std::string &&msg);
-    void OnTenantQuotaExceeded(const std::string &msg);
-private:
+    // Track whether each instance has active exec sessions
+    std::unordered_map<std::string, bool> instanceActiveSessions_;
+    // Track whether each instance is idle by traffic reports
+    std::unordered_map<std::string, bool> instanceTrafficIdle_;
+    // Track per-instance session counts (edge-triggered)
+    std::unordered_map<std::string, size_t> instanceSessionCounts_;
+
+    void TrafficReport(const std::string &instanceID, const size_t &processingNum);
+    void SessionAlive(const std::string &instanceID, bool hasActiveSessions);
+    void StartIdleTimer(const std::string &instanceID);
+    void HandleIdleTimeout(const std::string &instanceID);
+    void CancelIdleTimer(const std::string &instanceID);
+
     void OnTenantCooldownExpired(std::string tenantID, uint64_t generation);
 
     // key: tenantID, value: cooldown expiry timer

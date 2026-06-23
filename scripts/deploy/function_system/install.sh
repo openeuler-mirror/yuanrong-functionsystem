@@ -70,6 +70,7 @@ function install_function_proxy() {
   local merge_process_args=""
   if [ "X${FUNCTION_PROXY_MERGE_PROCESS_ENABLE^^}" == "XTRUE" ]; then
     local ld_library_path=${LD_LIBRARY_PATH}
+    local function_system_ld_library_path=${FUNCTION_SYSTEM_DIR}/lib:${DATA_SYSTEM_DIR}/lib:${ld_library_path}
     local agent_uid=${YR_POD_NAME}
     if [ "x${YR_POD_NAME}" == "x" ]; then
       agent_uid="${NODE_ID}"
@@ -81,6 +82,7 @@ function install_function_proxy() {
     --runtime_home_dir="${RUNTIME_USER_HOME_DIR}" \
     --runtime_logs_dir="${RUNTIME_LOG_PATH}" \
     --runtime_std_log_dir="" \
+    --runtime_ld_library_path="${ld_library_path}:${RUNTIME_HOME_DIR}/service/cpp/snlib:${RUNTIME_HOME_DIR}/sdk/cpp/lib" \
     --runtime_log_level="${RUNTIME_LOG_LEVEL}" \
     --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}" \
     --runtime_max_log_file_num="${RUNTIME_LOG_ROLLING_MAX_FILES}" \
@@ -121,17 +123,18 @@ function install_function_proxy() {
     --data_system_host="${IP_ADDRESS}" \
     --agent_uid="${agent_uid}" \
     --alias="${FUNCTION_AGENT_ALIAS}" \
-    --alias="${FUNCTION_AGENT_ALIAS}" \
     --log_expiration_enable="${LOG_EXPIRATION_ENABLE}" \
     --log_expiration_time_threshold="${LOG_EXPIRATION_TIME_THRESHOLD}" \
     --log_expiration_cleanup_interval="${LOG_EXPIRATION_CLEANUP_INTERVAL}" \
     --log_expiration_max_file_count="${LOG_EXPIRATION_MAX_FILE_COUNT}""
   fi
-  LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${LD_LIBRARY_PATH} \
+  LD_LIBRARY_PATH=${function_system_ld_library_path:-${FUNCTION_SYSTEM_DIR}/lib:${DATA_SYSTEM_DIR}/lib:${LD_LIBRARY_PATH}} \
+    PATH="${RUNTIME_HOME_DIR}/service/java/bin:/opt/buildtools/jdk8/bin:${PATH}" \
     LD_PRELOAD="${jemalloc_path}" \
     LOCAL_IP="${LOCAL_IP}" \
     HOST_IP="${IP_ADDRESS}" \
     RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG \
+    RUNTIME_METRICS_CONFIG_FILE=$RUNTIME_METRICS_CONFIG_FILE \
     INIT_LABELS=${LABELS} \
     ${bin} --address="${IP_ADDRESS}:${FUNCTION_PROXY_PORT}" --meta_store_address="${META_STORE_ADDRESS}" \
     --etcd_address="${ETCD_CLUSTER_ADDRESS}" \
@@ -186,6 +189,7 @@ function install_function_proxy() {
     --traefik_servers_transport="${TRAEFIK_SERVERS_TRANSPORT}" \
     --fc_agent_mgr_retry_times="${FC_AGENT_MGR_RETRY_TIMES}" \
     --fc_agent_mgr_retry_cycle="${FC_AGENT_MGR_RETRY_CYCLE}" \
+    --enable_direct_routing="${ENABLE_DIRECT_ROUTING}" \
     ${merge_process_args} >>"${FS_LOG_PATH}/${NODE_ID}-function_proxy${STD_LOG_SUFFIX}" 2>&1 &
 
   FUNCTION_PROXY_PID="$!"
@@ -194,6 +198,8 @@ function install_function_proxy() {
 
 function install_dashboard() {
   log_info "start dashboard, ip=${IP_ADDRESS}, port=${DASHBOARD_PORT}..."
+  local etcd_ssl_enable="${SSL_ENABLE}"
+  [ "X${ETCD_AUTH_TYPE}" = "XTLS" ] && etcd_ssl_enable="true"
   dashboard_config=${FUNCTION_SYSTEM_DIR}/config/dashboard_config.json
   install_dashboard_config=${config_install_dir}/dashboard_config.json
   cp "${dashboard_config}" "${install_dashboard_config}"
@@ -206,10 +212,10 @@ function install_dashboard() {
   sed -i "s/{frontendAddr}/${IP_ADDRESS}:${FAAS_FRONTEND_HTTP_PORT}/g" "${install_dashboard_config}"
   sed -i "s/{prometheusAddr}/${PROMETHEUS_ADDRESS}/g" "${install_dashboard_config}"
   sed -i "s/{etcdAddr}/$(echo ${ETCD_CLUSTER_ADDRESS} | sed 's/,/","/g')/g" "${install_dashboard_config}"
-  sed -i "s/{etcdSsl}/${SSL_ENABLE}/g" "${install_dashboard_config}"
+  sed -i "s/{etcdSsl}/${etcd_ssl_enable}/g" "${install_dashboard_config}"
   sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" "${install_dashboard_config}"
   sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" "${install_dashboard_config}"
-  if [ "X${SSL_ENABLE}" = "Xtrue" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
+  if [ "X${etcd_ssl_enable}" = "Xtrue" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
     sed -i "s*{etcdCAFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}*g" ${install_dashboard_config}
     sed -i "s*{etcdCertFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}*g" ${install_dashboard_config}
     sed -i "s*{etcdKeyFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}*g" ${install_dashboard_config}
@@ -261,6 +267,8 @@ function install_dashboard() {
 
 function install_collector() {
   log_info "start collector, port=${COLLECTOR_PORT}..."
+  local etcd_ssl_enable="${SSL_ENABLE}"
+  [ "X${ETCD_AUTH_TYPE}" = "XTLS" ] && etcd_ssl_enable="true"
   GO_RUNTIME_BIN=${RUNTIME_HOME_DIR}/service/go/bin
   DS_SDK_GO_LIB=${DATA_SYSTEM_DIR}/sdk/go/lib
   LD_LIBRARY_PATH=${GO_RUNTIME_BIN}:${DS_SDK_GO_LIB}:${LD_LIBRARY_PATH} \
@@ -271,7 +279,7 @@ function install_collector() {
     --port="${COLLECTOR_PORT}" \
     --log_root="${LOG_ROOT}" \
     --etcd_config_servers="${ETCD_CLUSTER_ADDRESS}" \
-    --etcd_config_ssl_enable="${SSL_ENABLE}" \
+    --etcd_config_ssl_enable="${etcd_ssl_enable}" \
     --etcd_config_auth_type="${ETCD_AUTH_TYPE}" \
     --etcd_config_ca_file="${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}" \
     --etcd_config_cert_file="${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}" \
@@ -507,6 +515,7 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
   log_info "start function agent and runtime manager, port=${FUNCTION_AGENT_PORT}..."
   local bin=${FUNCTION_SYSTEM_DIR}/bin/function_agent
   local ld_library_path=${LD_LIBRARY_PATH}
+  local function_system_ld_library_path=${FUNCTION_SYSTEM_DIR}/lib:${DATA_SYSTEM_DIR}/lib:${ld_library_path}
   local unique_proxy_option="--local_node_id=${NODE_ID}"
   if [ "X${DEPLOY_FUNCTION_PROXY}" = "Xfalse" ] && [ ! -z "${UNIQUE_NODE_ID}" ]; then
     unique_proxy_option="--local_node_id=${UNIQUE_NODE_ID}"
@@ -598,7 +607,8 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
 
   # Start with or without redirecting stdout/stderr depending on USER_LOG_EXPORT_MODE
   if [ "x${USER_LOG_EXPORT_MODE}" == "xstd" ]; then
-    LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
+    LD_LIBRARY_PATH=${function_system_ld_library_path} \
+    PATH="${RUNTIME_HOME_DIR}/service/java/bin:/opt/buildtools/jdk8/bin:${PATH}" \
     LOCAL_IP="${LOCAL_IP}" \
     HOST_IP="${IP_ADDRESS}" \
     RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG \
@@ -606,7 +616,8 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     ${bin} "${agent_args[@]}" ${unique_proxy_option} &
     FUNCTION_AGENT_PID="$!"
   else
-    LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
+    LD_LIBRARY_PATH=${function_system_ld_library_path} \
+    PATH="${RUNTIME_HOME_DIR}/service/java/bin:/opt/buildtools/jdk8/bin:${PATH}" \
     LOCAL_IP="${LOCAL_IP}" \
     HOST_IP="${IP_ADDRESS}" \
     RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG \
@@ -854,7 +865,8 @@ function install_iam_server() {
       --casdoor_jwt_public_key="${casdoor_pub_key}" \
       >>"${FS_LOG_PATH}/${NODE_ID}-iam_server${STD_LOG_SUFFIX}" 2>&1 &
     IAM_SERVER_PID=$!
-    if function_system_health_check ${IAM_SERVER_PID} "${IAM_SERVER_PORT}" "iam-server"; then
+    if function_system_health_check "${IAM_SERVER_PID}" "${IAM_SERVER_PORT}" "iam-server" \
+      "IAM_SSL_ENABLE" "IAM_LOCAL_LISTEN_PORT" "IAM_LOCAL_IP"; then
       log_info "succeed to start iam_server process, ip=${IP_ADDRESS}, port=${IAM_SERVER_PORT}, pid=${IAM_SERVER_PID}"
       return 0
     fi

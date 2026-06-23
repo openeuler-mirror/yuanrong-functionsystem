@@ -156,8 +156,8 @@ void RuntimeStateManager::UpdatePortMappings(const std::string &runtimeID, const
 
 // ── In-progress start tracking ────────────────────────────────────────────────
 
-void RuntimeStateManager::MarkStartInProgress(const std::string &runtimeID,
-                                               litebus::Future<messages::StartInstanceResponse> future)
+void RuntimeStateManager::MarkStartInProgress(
+    const std::string &runtimeID, litebus::Future<messages::StartInstanceResponse> future)
 {
     inProgressStarts_.emplace(runtimeID, std::move(future));
 }

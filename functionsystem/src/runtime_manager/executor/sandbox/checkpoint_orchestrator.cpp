@@ -21,6 +21,10 @@
 
 namespace functionsystem::runtime_manager {
 
+namespace {
+constexpr int CHECKPOINT_TIMEOUT_SECONDS = 30;
+}
+
 CheckpointOrchestrator::CheckpointOrchestrator(
     litebus::AID ownerAID,
     std::shared_ptr<GrpcClient<runtime::v1::RuntimeLauncher>> containerd,
@@ -68,60 +72,62 @@ litebus::Future<messages::SnapshotRuntimeResponse> CheckpointOrchestrator::TakeS
     const std::string checkpointID = fmt::format("ckpt-{}-{}",
         instanceID, std::chrono::system_clock::now().time_since_epoch().count());
     const std::string checkpointPath = fmt::format("/home/yuanrong/checkpoints/{}", checkpointID);
+    SnapshotContext context{requestID, runtimeID, checkpointID, checkpointPath, ttl};
 
     auto ckptReq = std::make_shared<runtime::v1::CheckpointRequest>();
     ckptReq->set_id(sandboxID);
-    ckptReq->set_ckpt_dir(checkpointPath);
-    ckptReq->set_timeout(30);
+    ckptReq->set_ckpt_dir(context.checkpointPath);
+    ckptReq->set_timeout(CHECKPOINT_TIMEOUT_SECONDS);
     ckptReq->set_compress(false);
     ckptReq->set_trace_id(requestID);
 
     return DoCheckpoint(ckptReq).Then(
         litebus::Defer(ownerAID_,
-            [self = shared_from_this(), requestID, runtimeID, checkpointID, checkpointPath, ttl](
-                const runtime::v1::CheckpointResponse &response) {
-                    return self->OnCheckpointDone(response, requestID, runtimeID, checkpointID, checkpointPath, ttl);
+            [self = shared_from_this(), context](const runtime::v1::CheckpointResponse &response) {
+                    return self->OnCheckpointDone(response, context);
                 }));
 }
 
 litebus::Future<messages::SnapshotRuntimeResponse> CheckpointOrchestrator::OnCheckpointDone(
     const runtime::v1::CheckpointResponse &ckptResponse,
-    const std::string &requestID, const std::string &runtimeID,
-    const std::string &checkpointID, const std::string &checkpointPath, int32_t ttl)
+    const SnapshotContext &context)
 {
     messages::SnapshotRuntimeResponse response;
-    response.set_requestid(requestID);
+    response.set_requestid(context.requestID);
 
     if (!ckptResponse.success()) {
-        YRLOG_ERROR("{}|checkpoint failed for runtime({}): {}", requestID, runtimeID, ckptResponse.message());
+        YRLOG_ERROR("{}|checkpoint failed for runtime({}): {}", context.requestID, context.runtimeID,
+                    ckptResponse.message());
         response.set_code(static_cast<int32_t>(StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED));
         response.set_message(ckptResponse.message());
         return response;
     }
 
-    YRLOG_INFO("{}|checkpoint succeeded, uploading checkpoint({}) for runtime({})", requestID, checkpointID, runtimeID);
+    YRLOG_INFO("{}|checkpoint succeeded, uploading checkpoint({}) for runtime({})", context.requestID,
+               context.checkpointID, context.runtimeID);
 
     ASSERT_IF_NULL(ckptFileManager_);
-    return ckptFileManager_->RegisterCheckpoint(checkpointID, checkpointPath, checkpointID, ttl)
+    return ckptFileManager_->RegisterCheckpoint(context.checkpointID, context.checkpointPath,
+                                                context.checkpointID, context.ttl)
         .Then(litebus::Defer(ownerAID_,
-            [self = shared_from_this(), response, requestID, runtimeID, checkpointID, ttl](const std::string &storageUrl) {
-                return self->OnRegisterDone(storageUrl, response, requestID, runtimeID, checkpointID, ttl);
+            [self = shared_from_this(), response, context](const std::string &storageUrl) {
+                return self->OnRegisterDone(storageUrl, response, context);
             }));
 }
 
 litebus::Future<messages::SnapshotRuntimeResponse> CheckpointOrchestrator::OnRegisterDone(
     const std::string &storageUrl,
     messages::SnapshotRuntimeResponse response,
-    const std::string &requestID, const std::string &runtimeID,
-    const std::string &checkpointID, int32_t ttl)
+    const SnapshotContext &context)
 {
     auto *info = response.mutable_snapshotinfo();
-    info->set_checkpointid(checkpointID);
+    info->set_checkpointid(context.checkpointID);
     info->set_storage(storageUrl);
-    info->set_ttlseconds(ttl);
+    info->set_ttlseconds(context.ttl);
 
     if (storageUrl.empty()) {
-        YRLOG_ERROR("{}|RegisterCheckpoint returned empty storageUrl for runtime({})", requestID, runtimeID);
+        YRLOG_ERROR("{}|RegisterCheckpoint returned empty storageUrl for runtime({})", context.requestID,
+                    context.runtimeID);
         response.set_code(static_cast<int32_t>(StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED));
         response.set_message("checkpoint registration failed: empty storage URL");
         return response;
@@ -129,31 +135,25 @@ litebus::Future<messages::SnapshotRuntimeResponse> CheckpointOrchestrator::OnReg
 
     // Register in state manager — must happen before returning success so that
     // subsequent StopInstance calls can release the reference.
-    stateManager_.SetCheckpointID(runtimeID, checkpointID);
+    stateManager_.SetCheckpointID(context.runtimeID, context.checkpointID);
 
-    YRLOG_INFO("{}|snapshot complete: runtime({}) checkpoint({}) storage({})", requestID, runtimeID,
-               checkpointID, storageUrl);
+    YRLOG_INFO("{}|snapshot complete: runtime({}) checkpoint({}) storage({})", context.requestID,
+               context.runtimeID, context.checkpointID, storageUrl);
     response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
     response.set_message("snapshot created successfully");
     return response;
 }
 
-// ── DownloadForRestore ────────────────────────────────────────────────────────
-
-litebus::Future<std::string> CheckpointOrchestrator::DownloadForRestore(const std::string &checkpointID,
-                                                                          const std::string &storageUrl,
-                                                                          const std::string &requestID)
+litebus::Future<std::string> CheckpointOrchestrator::DownloadForRestore(
+    const std::string &checkpointID, const std::string &storageUrl, const std::string &requestID)
 {
     YRLOG_INFO("{}|downloading checkpoint({}) from {}", requestID, checkpointID, storageUrl);
     ASSERT_IF_NULL(ckptFileManager_);
     return ckptFileManager_->DownloadCheckpoint(checkpointID, storageUrl);
 }
 
-// ── AddRef ────────────────────────────────────────────────────────────────────
-
-litebus::Future<Status> CheckpointOrchestrator::AddRef(const std::string &checkpointID,
-                                                        const std::string &runtimeID,
-                                                        const std::string &requestID)
+litebus::Future<Status> CheckpointOrchestrator::AddRef(
+    const std::string &checkpointID, const std::string &runtimeID, const std::string &requestID)
 {
     ASSERT_IF_NULL(ckptFileManager_);
     return ckptFileManager_->AddReference(checkpointID)
@@ -172,10 +172,8 @@ litebus::Future<Status> CheckpointOrchestrator::AddRef(const std::string &checkp
             }));
 }
 
-// ── ReleaseRef ────────────────────────────────────────────────────────────────
-
-litebus::Future<Status> CheckpointOrchestrator::ReleaseRef(const std::string &runtimeID,
-                                                            const std::string &requestID)
+litebus::Future<Status> CheckpointOrchestrator::ReleaseRef(
+    const std::string &runtimeID, const std::string &requestID)
 {
     std::string checkpointID = stateManager_.GetCheckpointID(runtimeID);
     if (checkpointID.empty()) {

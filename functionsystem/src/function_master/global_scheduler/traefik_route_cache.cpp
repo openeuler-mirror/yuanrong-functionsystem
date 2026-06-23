@@ -28,6 +28,7 @@ namespace functionsystem::global_scheduler {
 
 static const std::string PORT_FORWARD_KEY = "portForward";
 constexpr size_t MAX_ROUTER_NAME_LEN = 200;
+constexpr size_t PORT_MAPPING_SANDBOX_PORT_INDEX = 2;
 
 TraefikRouteCache::TraefikRouteCache(TraefikConfig cfg)
     : cfg_(std::move(cfg))
@@ -49,8 +50,8 @@ void TraefikRouteCache::OnInstanceRunning(const resource_view::InstanceInfo& ins
     {
         std::unique_lock lock(routeTableMu_);
         routeTable_[instance.instanceid()] = std::move(routes);
+        dirty_ = true;
     }
-    dirty_ = true;
     YRLOG_DEBUG("TraefikRouteCache: added routes for instance {}", instance.instanceid());
 }
 
@@ -61,8 +62,8 @@ void TraefikRouteCache::OnInstanceExited(const std::string& instanceID)
         if (routeTable_.erase(instanceID) == 0) {
             return;
         }
+        dirty_ = true;
     }
-    dirty_ = true;
     YRLOG_DEBUG("TraefikRouteCache: removed routes for instance {}", instanceID);
 }
 
@@ -117,47 +118,15 @@ std::vector<TraefikRouteCache::RouteEntry> TraefikRouteCache::ParseRoutes(
                 continue;
             }
             std::string mapping = entry.get<std::string>();
-            std::vector<std::string> parts;
-            std::stringstream ss(mapping);
-            std::string part;
-            while (std::getline(ss, part, ':')) {
-                parts.push_back(part);
-            }
-
             std::string protocol;
             int hostPort = 0;
             int sandboxPort = 0;
-
-            constexpr size_t NEW_FORMAT_PARTS = 3;
-            constexpr size_t LEGACY_FORMAT_PARTS = 2;
-
-            if (parts.size() == NEW_FORMAT_PARTS) {
-                // "protocol:hostPort:containerPort"
-                protocol = parts[0];
-                hostPort = std::stoi(parts[1]);
-                sandboxPort = std::stoi(parts[2]);
-            } else if (parts.size() == LEGACY_FORMAT_PARTS) {
-                // "hostPort:containerPort"
-                protocol = "http";
-                hostPort = std::stoi(parts[0]);
-                sandboxPort = std::stoi(parts[1]);
-            } else {
+            if (!ParsePortMapping(mapping, protocol, hostPort, sandboxPort)) {
                 YRLOG_WARN("TraefikRouteCache: invalid port mapping format '{}' for instance {}",
                            mapping, instance.instanceid());
                 continue;
             }
-
-            std::string protocolLower = protocol;
-            std::transform(protocolLower.begin(), protocolLower.end(), protocolLower.begin(), ::tolower);
-            bool useHttps = (protocolLower == "https");
-            std::string scheme = useHttps ? "https" : "http";
-
-            RouteEntry route;
-            route.routerName  = safeID + "-p" + std::to_string(sandboxPort);
-            route.backendURL  = scheme + "://" + hostIP + ":" + std::to_string(hostPort);
-            route.sandboxPort = sandboxPort;
-            route.useHttps    = useHttps;
-            routes.push_back(std::move(route));
+            routes.push_back(BuildRouteEntry(safeID, hostIP, protocol, hostPort, sandboxPort));
         }
     } catch (const std::exception& e) {
         YRLOG_WARN("TraefikRouteCache: failed to parse portForward for instance {}: {}",
@@ -165,6 +134,53 @@ std::vector<TraefikRouteCache::RouteEntry> TraefikRouteCache::ParseRoutes(
     }
 
     return routes;
+}
+
+bool TraefikRouteCache::ParsePortMapping(const std::string& mapping, std::string& protocol,
+                                         int& hostPort, int& sandboxPort)
+{
+    std::vector<std::string> parts;
+    std::stringstream ss(mapping);
+    std::string part;
+    while (std::getline(ss, part, ':')) {
+        parts.push_back(part);
+    }
+
+    constexpr size_t newFormatParts = 3;
+    constexpr size_t legacyFormatParts = 2;
+
+    if (parts.size() == newFormatParts) {
+        // "protocol:hostPort:containerPort"
+        protocol = parts[0];
+        hostPort = std::stoi(parts[1]);
+        sandboxPort = std::stoi(parts[PORT_MAPPING_SANDBOX_PORT_INDEX]);
+        return true;
+    }
+    if (parts.size() == legacyFormatParts) {
+        // "hostPort:containerPort"
+        protocol = "http";
+        hostPort = std::stoi(parts[0]);
+        sandboxPort = std::stoi(parts[1]);
+        return true;
+    }
+    return false;
+}
+
+TraefikRouteCache::RouteEntry TraefikRouteCache::BuildRouteEntry(
+    const std::string& safeID, const std::string& hostIP, const std::string& protocol,
+    int hostPort, int sandboxPort)
+{
+    std::string protocolLower = protocol;
+    std::transform(protocolLower.begin(), protocolLower.end(), protocolLower.begin(), ::tolower);
+    bool useHttps = (protocolLower == "https");
+    std::string scheme = useHttps ? "https" : "http";
+
+    RouteEntry route;
+    route.routerName  = safeID + "-p" + std::to_string(sandboxPort);
+    route.backendURL  = scheme + "://" + hostIP + ":" + std::to_string(hostPort);
+    route.sandboxPort = sandboxPort;
+    route.useHttps    = useHttps;
+    return route;
 }
 
 std::string TraefikRouteCache::ExtractIP(const std::string& addr)
@@ -175,14 +191,14 @@ std::string TraefikRouteCache::ExtractIP(const std::string& addr)
 
 std::string TraefikRouteCache::SanitizeID(const std::string& id)
 {
-    constexpr size_t AT_REPLACEMENT_LEN = 4;  // length of "-at-"
+    constexpr size_t atReplacementLen = 4;  // length of "-at-"
     std::string result = id;
 
     // Replace @ with -at-
     size_t pos = 0;
     while ((pos = result.find('@', pos)) != std::string::npos) {
         result.replace(pos, 1, "-at-");
-        pos += AT_REPLACEMENT_LEN;
+        pos += atReplacementLen;
     }
 
     // Replace other problematic characters

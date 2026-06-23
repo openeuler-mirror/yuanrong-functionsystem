@@ -243,7 +243,6 @@ int main(int argc, char **argv)
         return EXIT_ABNORMAL;
     }
 
-
     YRLOG_DEBUG("function_agent GetEnableDisConvCallStack = {}", flags.GetEnableDisConvCallStack());
     if (!g_functionAgentSwitcher->InitLiteBus(address, flags.GetLitebusThreadNum())) {
         g_functionAgentSwitcher->SetStop();

@@ -25,6 +25,10 @@
 
 namespace functionsystem::local_scheduler {
 
+namespace {
+constexpr int64_t SECONDS_TO_MILLISECONDS = 1000;
+}
+
 IdleActor::IdleActor(const std::string &name,
                      const std::string &nodeID,
                      const std::shared_ptr<InstanceControlView> &instanceControlView,
@@ -162,7 +166,7 @@ void IdleActor::StartIdleTimer(const std::string &instanceID)
     auto gen = ++instanceTimerGeneration_[instanceID];
     YRLOG_INFO("start idle timer for instance({}) with timeout {} seconds (gen={})", instanceID, idleTimeout, gen);
     idleTimers_[instanceID] = litebus::AsyncAfter(
-        idleTimeout * 1000, GetAID(), &IdleActor::HandleIdleTimeout, instanceID, gen);
+        idleTimeout * SECONDS_TO_MILLISECONDS, GetAID(), &IdleActor::HandleIdleTimeout, instanceID, gen);
 }
 
 void IdleActor::CancelIdleTimer(const std::string &instanceID)

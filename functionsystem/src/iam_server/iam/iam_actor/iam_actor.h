@@ -21,13 +21,11 @@
 
 #include "common/aksk/aksk_util.h"
 #include "common/http/api_router_register.h"
+#include "iam/internal_iam/external_auth_verifier.h"
 #include "iam/internal_iam/internal_iam.h"
 #include "meta_store_monitor/meta_store_healthy_observer.h"
 
 namespace functionsystem::iamserver {
-
-// Forward declarations
-class ExternalAuthVerifier;
 
 class IAMActor : public ApiRouterRegister, public litebus::ActorBase, public std::enable_shared_from_this<IAMActor> {
 public:
@@ -68,6 +66,12 @@ public:
     litebus::Future<HttpResponse> QueryTenantQuota(const HttpRequest &request);
 
 private:
+    static HttpResponse BuildExternalTokenResponse(const ExternalUserInfo &userInfo,
+                                                   const std::shared_ptr<TokenSalt> &tokenSalt,
+                                                   uint64_t expiresIn);
+    void CompleteExternalToken(const ExternalUserInfo &userInfo, uint64_t expiresIn,
+                               const std::shared_ptr<litebus::Promise<HttpResponse>> &promise);
+
     std::shared_ptr<InternalIAM> internalIAM_;
     std::shared_ptr<ExternalAuthVerifier> verifier_;
 

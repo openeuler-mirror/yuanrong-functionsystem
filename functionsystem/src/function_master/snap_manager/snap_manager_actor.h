@@ -62,6 +62,15 @@ struct SnapManagerConfig {
  */
 class SnapManagerActor : public litebus::ActorBase, public std::enable_shared_from_this<SnapManagerActor> {
 public:
+    struct SnapStartResponse {
+        litebus::AID to;
+        std::string requestID{};
+        int32_t code{0};
+        std::string message{};
+        std::string instanceID{};
+        ::messages::SnapstartInfo snapstartInfo{};
+    };
+
     SnapManagerActor() = delete;
 
     /**
@@ -140,12 +149,7 @@ public:
                                     int32_t code,
                                     const std::string &message);
 
-    void SendSnapStartResponse(const litebus::AID &to,
-                               const std::string &requestID,
-                               int32_t code,
-                               const std::string &message,
-                               const std::string &instanceID,
-                               const ::messages::SnapstartInfo &snapstartInfo = ::messages::SnapstartInfo{});
+    void SendSnapStartResponse(const SnapStartResponse &response);
     void SendListSnapshotsByFunctionKeyResponse(const litebus::AID &to,
                                                 const ::messages::ListSnapshotsByFunctionKeyResponse &rsp);
     void SendListSnapshotsByTenantResponse(const litebus::AID &to,
@@ -222,10 +226,7 @@ private:
 
         void SendRecordSnapshotResponse(const litebus::AID &to, const std::string &requestID,
                                         int32_t code, const std::string &message) const;
-        void SendSnapStartResponse(const litebus::AID &to, const std::string &requestID,
-                                  int32_t code, const std::string &message,
-                                  const std::string &instanceID = "",
-                                  const ::messages::SnapstartInfo &snapstartInfo = ::messages::SnapstartInfo{}) const;
+        void SendSnapStartResponse(const SnapStartResponse &response) const;
     };
 
     /**

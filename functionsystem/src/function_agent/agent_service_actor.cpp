@@ -247,7 +247,6 @@ void AgentServiceActor::DownloadCodeAndStartRuntime(
     const std::shared_ptr<messages::DeployInstanceRequest> &req)
 {
     if (IsDownloadFailed(req)) {
-        DeleteCodeReferByDeployInstanceRequest(req);
         return;
     }
     if (deployObjects->empty()) {
@@ -369,6 +368,7 @@ bool AgentServiceActor::IsDownloadFailed(const std::shared_ptr<messages::DeployI
     auto from = deployingRequest_[req->requestid()].from;
     auto deployResult = failedDownloadRequests_[req->requestid()];
     StopCodeDownloadSpan(req, deployResult);
+    DeleteCodeReferByDeployInstanceRequest(req);
     auto resp = InitDeployInstanceResponse(static_cast<int32_t>(deployResult.status.StatusCode()),
                                            deployResult.status.GetMessage(), *req);
     (void)Send(from, "DeployInstanceResponse", resp.SerializeAsString());

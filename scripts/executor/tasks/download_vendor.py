@@ -5,12 +5,15 @@ import csv
 import hashlib
 import os
 import ssl
+import time
 import urllib.request
 from urllib.parse import urlparse
 
 import utils
 
 log = utils.stream_logger()
+DOWNLOAD_RETRY_TIMES = 3
+DOWNLOAD_RETRY_INTERVAL_SECONDS = 2
 
 
 def download_vendor(config_path, download_path):
@@ -79,22 +82,40 @@ def download_vendor(config_path, download_path):
 
 def download_zipfile(package_name, download_url, download_path):
     """下载文件到指定路径"""
+    last_error = None
+    for attempt in range(1, DOWNLOAD_RETRY_TIMES + 1):
+        try:
+            _download_zipfile_once(package_name, download_url, download_path)
+            return
+        except Exception as e:
+            last_error = e
+            log.info(
+                f"Failed to download dependency {package_name} on attempt "
+                f"{attempt}/{DOWNLOAD_RETRY_TIMES}: {str(e)}"
+            )
+            if os.path.exists(download_path):
+                os.remove(download_path)
+            if attempt < DOWNLOAD_RETRY_TIMES:
+                time.sleep(DOWNLOAD_RETRY_INTERVAL_SECONDS)
+    raise last_error
+
+
+def _download_zipfile_once(package_name, download_url, download_path):
+    """下载文件到指定路径"""
     try:
-        file = open(download_path, "wb")
         headers = {"User-Agent": "curl/7.68.0"}
         req = urllib.request.Request(download_url, headers=headers, method="GET")
-        resp = urllib.request.urlopen(req)
-        file_size = int(resp.getheader("Content-Length", 0))
-        downloaded = 0
-        block_size = 8192
+        with urllib.request.urlopen(req) as resp, open(download_path, "wb") as file:
+            file_size = int(resp.getheader("Content-Length", 0))
+            downloaded = 0
+            block_size = 8192
 
-        while True:
-            buffer = resp.read(block_size)
-            if not buffer:
-                break
-            downloaded += len(buffer)
-            file.write(buffer)
-        file.close()
+            while True:
+                buffer = resp.read(block_size)
+                if not buffer:
+                    break
+                downloaded += len(buffer)
+                file.write(buffer)
         log.info(f"Dependency {package_name} downloaded successfully: Total {downloaded}/{file_size} bytes")
     except Exception as e:
         log.info(f"Failed to download dependency {package_name}: {str(e)}")

@@ -112,10 +112,10 @@ private:
     void PurgeVanishedEntries(
         const std::unordered_map<std::string, std::shared_ptr<InstanceStateMachine>> &instances);
 
-    std::string member_nodeID;
-    uint32_t member_gcIntervalMs;
-    uint32_t member_terminalRetentionMs;
-    uint32_t member_stuckTimeoutMs;
+    std::string memberNodeId;
+    uint32_t memberGcIntervalMs;
+    uint32_t memberTerminalRetentionMs;
+    uint32_t memberStuckTimeoutMs;
 
     std::shared_ptr<InstanceControlView> member_instanceControlView;
     std::shared_ptr<InstanceCtrl> member_instanceCtrl;

@@ -28,7 +28,7 @@
 namespace functionsystem::runtime_manager {
 
 /**
- * CommandBuilder: thin dispatcher from language tag → LanguageCommandStrategy.
+ * CommandBuilder: thin dispatcher from language tag to LanguageStrategy.
  *
  * Responsibilities:
  *   - Route BuildArgs() calls to the correct per-language strategy.
@@ -36,12 +36,13 @@ namespace functionsystem::runtime_manager {
  *   - Resolve exec path from RuntimeConfig (for POSIX custom runtime).
  *
  * CommandBuilder itself contains NO language-specific logic.
- * All language knowledge lives in the LanguageCommandStrategy implementations.
+ * All language knowledge lives in the LanguageStrategy implementations.
  */
 class CommandBuilder {
 public:
     CommandBuilder() = default;
     explicit CommandBuilder(bool execLookPath);
+    ~CommandBuilder() = default;
 
     void SetRuntimeConfig(RuntimeConfig config)
     {
@@ -58,7 +59,7 @@ public:
      * Multiple tags may map to the same strategy type (e.g. python3.6..python3.11).
      * Called during Init; not thread-safe after construction.
      */
-    void RegisterStrategy(const std::string &languageTag, std::unique_ptr<LanguageCommandStrategy> strategy);
+    void RegisterStrategy(const std::string &languageTag, std::unique_ptr<LanguageStrategy> strategy);
 
     /**
      * Build startup arguments for the given language.
@@ -71,6 +72,18 @@ public:
      */
     std::pair<Status, CommandArgs> BuildArgs(const std::string &language, const std::string &port,
                                              const messages::StartInstanceRequest &request) const;
+
+    Status GetBuildArgs(const std::string &language, const std::string &port,
+                        const std::shared_ptr<messages::StartInstanceRequest> &request,
+                        std::vector<std::string> &args) const
+    {
+        auto [status, commandArgs] = BuildArgs(language, port, *request);
+        if (status.IsError()) {
+            return status;
+        }
+        args = std::move(commandArgs.args);
+        return status;
+    }
 
     /**
      * Merge environment variable sources with the following precedence
@@ -95,7 +108,7 @@ private:
     std::string GetLanguageTag(const std::string &language) const;
     void InheritEnv(std::map<std::string, std::string> &envs) const;
 
-    std::unordered_map<std::string, std::shared_ptr<LanguageCommandStrategy>> strategies_;
+    std::unordered_map<std::string, std::shared_ptr<LanguageStrategy>> strategies_;
     RuntimeConfig config_;
     bool execLookPath_ = true;
 };

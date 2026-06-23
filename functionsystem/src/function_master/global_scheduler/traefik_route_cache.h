@@ -65,6 +65,9 @@ private:
     // Parse route entries from InstanceInfo extensions.
     // Parses extensions["portForward"] JSON array and proxyGrpcAddress.
     std::vector<RouteEntry> ParseRoutes(const resource_view::InstanceInfo& instance) const;
+    static bool ParsePortMapping(const std::string& mapping, std::string& protocol, int& hostPort, int& sandboxPort);
+    static RouteEntry BuildRouteEntry(const std::string& safeID, const std::string& hostIP,
+                                      const std::string& protocol, int hostPort, int sandboxPort);
 
     // Extract IP from proxyGrpcAddress (ip:port format)
     static std::string ExtractIP(const std::string& addr);

@@ -17,16 +17,14 @@
 #ifndef COMMON_RPC_SERVER_COMMON_GRPC_SERVER_H
 #define COMMON_RPC_SERVER_COMMON_GRPC_SERVER_H
 
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
-#include <memory>
+
 #include <grpcpp/server.h>
+
 #include "async/future.hpp"
-#include <string>
-#include <thread>
-#include <vector>
-#include <memory>
 
 namespace functionsystem::grpc {
 const int DEFAULT_GRPC_MESSAGE_MAX_SIZE = 500 * 1024 * 1024;

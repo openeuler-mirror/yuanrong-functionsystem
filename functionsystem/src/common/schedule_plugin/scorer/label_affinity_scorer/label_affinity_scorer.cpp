@@ -17,12 +17,12 @@
 #include "label_affinity_scorer.h"
 
 #include <cmath>
+
 #include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
 #include "common/schedule_plugin/common/affinity_utils.h"
 #include "common/schedule_plugin/common/constants.h"
 #include "common/schedule_plugin/common/plugin_register.h"
-#include <cmath>
 
 namespace functionsystem::schedule_plugin::score {
 std::string LabelAffinityScorer::GetPluginName()

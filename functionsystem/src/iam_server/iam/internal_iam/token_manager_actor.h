@@ -89,6 +89,14 @@ protected:
     void Finalize() override;
 
 private:
+    struct TokenGenerateContext {
+        std::string tenantID;
+        std::string role;
+        uint64_t expiredTimeSpan{ 0 };
+        int64_t cpuLimit{ -1 };
+        std::string memLimit{};
+    };
+
     static Status DecryptToken(const std::string &tokenStr, const std::shared_ptr<TokenContent> &tokenContent);
 
     static Status EncryptToken(const std::shared_ptr<TokenContent> &tokenContent);
@@ -106,9 +114,7 @@ private:
      */
     const std::shared_ptr<TokenContent> FindTokenFromCache(const std::string &tenantID, const bool &isNewTokenMap);
 
-    Status GenerateToken(const std::string &tenantID, const std::shared_ptr<TokenContent> &tokenContent,
-                         const std::string &role = "", uint64_t expiredTimeSpan = 0, int64_t cpuLimit = -1,
-                         const std::string &memLimit = "");
+    Status GenerateToken(const TokenGenerateContext &context, const std::shared_ptr<TokenContent> &tokenContent);
 
     Status OnRequireEncryptToken(const std::shared_ptr<TokenSalt> &tokenSalt, const litebus::AID &from,
                                  const std::shared_ptr<messages::GetTokenRequest> &tokenRequest);

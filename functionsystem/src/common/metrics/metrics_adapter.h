@@ -53,6 +53,16 @@ struct MeterData {
 
 class MetricsAdapter : public Singleton<MetricsAdapter> {
 public:
+    struct InstanceCreateFailureAlarm {
+        std::string requestID;
+        std::string instanceID;
+        std::string runtimeID;
+        std::string locationInfo;
+        int64_t statusCode{ 0 };
+        std::string stage;
+        std::string cause;
+    };
+
     MetricsAdapter() = default;
     ~MetricsAdapter() noexcept override;
 
@@ -139,9 +149,7 @@ public:
     void SendTokenRotationFailureAlarm();
     void SendS3Alarm();
     void SendPodAlarm(const std::string &podName, const std::string &cause);
-    void SendInstanceCreateFailureAlarm(const std::string &requestID, const std::string &instanceID,
-                                        const std::string &runtimeID, const std::string &locationInfo,
-                                        int64_t statusCode, const std::string &stage, const std::string &cause);
+    void SendInstanceCreateFailureAlarm(const InstanceCreateFailureAlarm &alarm);
 
     // for test
     [[maybe_unused]] std::map<std::string, std::shared_ptr<observability::api::metrics::ObservableInstrument>>

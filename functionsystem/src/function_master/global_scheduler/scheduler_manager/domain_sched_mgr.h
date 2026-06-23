@@ -118,8 +118,8 @@ public:
     virtual litebus::Future<messages::QueryAgentInfoResponse> QueryAgentInfo(
         const std::string &name, const std::string &address,
         const std::shared_ptr<messages::QueryAgentInfoRequest> &req);
-    litebus::Future<messages::QueryInstancesInfoResponse> GetSchedulingQueue(
-        const std::string &, const std::string &, const std::shared_ptr<messages::QueryInstancesInfoRequest> &req);
+    litebus::Future<messages::QuerySchedulingQueueResponse> GetSchedulingQueue(
+        const std::string &, const std::string &, const std::shared_ptr<messages::QuerySchedulingQueueRequest> &req);
 
     virtual litebus::Future<messages::QueryResourcesInfoResponse> QueryResourcesInfo(
             const std::string &name, const std::string &address,

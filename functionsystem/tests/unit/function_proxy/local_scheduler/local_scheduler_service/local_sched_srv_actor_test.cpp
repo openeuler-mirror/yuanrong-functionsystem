@@ -37,6 +37,7 @@
 #include "mocks/mock_instance_ctrl.h"
 #include "mocks/mock_ping_pong_driver.h"
 #include "mocks/mock_resource_view.h"
+#include "mocks/mock_resource_view_mgr.h"
 #include "mocks/mock_function_agent_mgr.h"
 #include "utils/future_test_helper.h"
 #include "utils/generate_info.h"
@@ -72,6 +73,8 @@ public:
         auto resourceViewMgr = std::make_shared<resource_view::ResourceViewMgr>();
         primary_ = MockResourceView::CreateMockResourceView();
         virtual_ = MockResourceView::CreateMockResourceView();
+        ON_CALL(*primary_, UpdateDomainUrlForLocal(_)).WillByDefault(Return());
+        ON_CALL(*virtual_, UpdateDomainUrlForLocal(_)).WillByDefault(Return());
         resourceViewMgr->primary_ = primary_;
         resourceViewMgr->virtual_ = virtual_;
         dstActor_->BindResourceView(resourceViewMgr);
@@ -98,8 +101,15 @@ public:
                        domainSchedStubActor_->GetAID());
         litebus::Async(dstActor_->GetAID(), &LocalSchedSrvActor::UpdateGlobalSchedulerAddress,
                        globalSchedStubActor_->GetAID());
+        ASSERT_AWAIT_TRUE([&]() -> bool {
+            return dstActor_->domainSchedRegisterInfo_.aid == domainSchedStubActor_->GetAID() &&
+                   dstActor_->globalSchedRegisterInfo_.aid == globalSchedStubActor_->GetAID();
+        });
         litebus::Async(globalSchedStubActor_->GetAID(), &GlobalSchedStubActor::UpdateSchedTopoView, dstActor_->GetAID(),
                        topo);
+        ASSERT_AWAIT_TRUE([&]() -> bool {
+            return dstActor_->domainSchedRegisterInfo_.aid.Url() == domainSchedStubActor_->GetAID().Url();
+        });
     }
 
     void TearDown() override
@@ -737,6 +747,34 @@ TEST_F(LocalSchedSrvActorTest, EvictAgent)
         ASSERT_EQ(ack.ParseFromString(rsp), true);
         EXPECT_EQ(ack.code(), static_cast<int32_t>(StatusCode::SUCCESS));
     }
+}
+
+TEST_F(LocalSchedSrvActorTest, UpdateSchedulingStatus)
+{
+    auto mockResourceViewMgr = std::make_shared<MockResourceViewMgr>();
+    dstActor_->BindResourceView(mockResourceViewMgr);
+    EXPECT_CALL(*mockResourceViewMgr, UpdateAllUnitStatus(resource_view::UnitStatus::EVICTING))
+        .WillOnce(Return(AsyncReturn(Status::OK())));
+
+    auto future = litebus::Async(dstActor_->GetAID(), &LocalSchedSrvActor::UpdateSchedulingStatus, true);
+    EXPECT_AWAIT_READY(future);
+    EXPECT_TRUE(future.Get().IsOk());
+}
+
+TEST_F(LocalSchedSrvActorTest, UpdateSchedulingStatusRequest)
+{
+    auto mockResourceViewMgr = std::make_shared<MockResourceViewMgr>();
+    dstActor_->BindResourceView(mockResourceViewMgr);
+    EXPECT_CALL(*mockResourceViewMgr, UpdateAllUnitStatus(resource_view::UnitStatus::EVICTING))
+        .WillOnce(Return(AsyncReturn(Status::OK())));
+
+    messages::UpdateAgentStatusRequest request;
+    request.set_requestid("request-id");
+    request.set_status(1);
+    auto future = globalSchedStubActor_->SendUpdateSchedulingStatus(dstActor_->GetAID(), request.SerializeAsString());
+    EXPECT_AWAIT_READY(future);
+    EXPECT_EQ(future.Get().requestid(), "request-id");
+    EXPECT_EQ(future.Get().status(), static_cast<int32_t>(StatusCode::SUCCESS));
 }
 
 /**

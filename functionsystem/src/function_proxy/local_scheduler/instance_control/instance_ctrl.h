@@ -200,7 +200,6 @@ public:
         instanceCtrlActor_->SetIdleMgr(idleMgr);
     }
 
-
     void SetTraefikRegistry(const std::shared_ptr<TraefikRegistry> &registry);
 
     virtual litebus::Future<KillResponse> KillInstancesOfJob(const std::shared_ptr<KillRequest> &killReq) const;
