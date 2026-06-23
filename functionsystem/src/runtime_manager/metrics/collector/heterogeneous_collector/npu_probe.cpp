@@ -686,7 +686,7 @@ Status NpuProbe::GetDeviceIPsFromHccnTool()
         std::string getRankTableCmd = getNpuIPInfoCmd_ + std::to_string(devID) + GET_RANK_TABLE_CMD_SUFFIX;
         std::vector<std::string> ipaddr = cmdTool_->GetCmdResult(getRankTableCmd);  // hccn_tool -i
         if (ipaddr.empty()) {
-            YRLOG_ERROR("failed to get dev({}) IP with cmd: {}", devID, getRankTableCmd);
+            YRLOG_DEBUG("failed to get dev({}) IP with cmd: {}", devID, getRankTableCmd);
             devInfo_->devIPs.emplace_back("");
             isSuccess = false;
         } else {

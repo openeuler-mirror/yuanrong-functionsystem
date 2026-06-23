@@ -72,6 +72,7 @@ protected:
         AddRoute("/apis/apps/v1/namespaces/default/deployments", &KubeApiServer::HandleDeploymentRequest);
         AddRoute("/apis/coordination.k8s.io/v1/namespaces/default/leases", &KubeApiServer::HandleLeaseRequest);
         AddRoute("/apis/autoscaling/v2beta2/namespaces/default/horizontalpodautoscalers", &KubeApiServer::HandleHorizontalPodAutoscalerRequest);
+        AddRoute("/apis/autoscaling/v2/namespaces/default/horizontalpodautoscalers", &KubeApiServer::HandleHorizontalPodAutoscalerRequest);
         AddRoute("/nuwa-runtime", &KubeApiServer::HandleNuwaRequest);
         AddRoute("/apis/ray.io/v1/namespaces", &KubeApiServer::HandleRayRequest);
     }
