@@ -97,6 +97,15 @@ void RuntimeReconcileActor::RunReconcileCycle(const std::vector<std::string> &fi
         if (agentID.empty() || info.runtimeid().empty()) {
             continue;
         }
+        if (info.functionproxyid() != nodeID_) {
+            // This reconciler runs on the local proxy node and must only compare
+            // the local executor inventory against instances owned by this proxy.
+            // functionAgentID is the target agent to send the request to; proxy
+            // ownership is recorded in functionProxyID.
+            YRLOG_DEBUG("RuntimeReconcileActor: skip non-local instance {}, proxy {}, local node {}",
+                        instanceID, info.functionproxyid(), nodeID_);
+            continue;
+        }
 
         auto it = agentRequests.find(agentID);
         if (it == agentRequests.end()) {
