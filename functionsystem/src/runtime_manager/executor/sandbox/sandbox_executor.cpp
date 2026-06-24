@@ -1500,6 +1500,7 @@ messages::StartInstanceResponse SandboxExecutor::MakeSuccessStartResponse(
     auto *ir = rsp.mutable_startruntimeinstanceresponse();
     ir->set_runtimeid(info.runtimeid());
     ir->set_containerid(sandboxID);
+    ir->set_executortype(static_cast<int32_t>(EXECUTOR_TYPE::CONTAINER));
     ir->set_pid(0);
 
     // Attach port-mapping JSON if any

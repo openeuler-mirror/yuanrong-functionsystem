@@ -144,6 +144,8 @@ protected:
     void Finalize() override;
 
 private:
+    EXECUTOR_TYPE ResolveStopExecutorType(const std::shared_ptr<messages::StopInstanceRequest> &request);
+
     std::unordered_map<EXECUTOR_TYPE, std::shared_ptr<ExecutorProxy>> executorMap_;
 
     std::shared_ptr<MetricsClient> metricsClient_;

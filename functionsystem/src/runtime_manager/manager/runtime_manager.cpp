@@ -288,10 +288,11 @@ void RuntimeManager::StopInstance(const litebus::AID &from, std::string && /* na
             request->traceid(), request->requestid(), request->runtimeid());
         return;
     }
-    auto executor = FindExecutor(static_cast<EXECUTOR_TYPE>(request->executortype()));
+    const auto executorType = ResolveStopExecutorType(request);
+    auto executor = FindExecutor(executorType);
     if (executor == nullptr) {
         YRLOG_ERROR("{}|{}|the type({}) is not supported to stop runtime({})", request->traceid(), request->requestid(),
-                    request->type(), request->runtimeid());
+                    static_cast<int32_t>(executorType), request->runtimeid());
         messages::StopInstanceResponse response;
         response.set_requestid(request->requestid());
         response.set_runtimeid(request->runtimeid());
@@ -1121,6 +1122,21 @@ litebus::Future<bool> RuntimeManager::IsRuntimeActive(const std::string &runtime
         return false;
     }
     return executor->IsRuntimeActive(runtimeID);
+}
+
+EXECUTOR_TYPE RuntimeManager::ResolveStopExecutorType(const std::shared_ptr<messages::StopInstanceRequest> &request)
+{
+    auto executorType = static_cast<EXECUTOR_TYPE>(request->executortype());
+    if (executorType != EXECUTOR_TYPE::RUNTIME) {
+        return executorType;
+    }
+
+    const auto runtimeType = GetRuntimeType(request->runtimeid());
+    if (runtimeType != EXECUTOR_TYPE::RUNTIME) {
+        request->set_executortype(static_cast<int32_t>(runtimeType));
+        return runtimeType;
+    }
+    return executorType;
 }
 
 litebus::Future<bool> RuntimeManager::IsRuntimeActiveByPid(const pid_t &pid)

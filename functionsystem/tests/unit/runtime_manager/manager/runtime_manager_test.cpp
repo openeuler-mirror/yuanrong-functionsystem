@@ -1298,6 +1298,26 @@ TEST_F(RuntimeManagerTypeTest, GetRuntimeType_ContainerFallbackWhenResponseExecu
     EXPECT_EQ(manager_->GetRuntimeType("test_runtime_id"), EXECUTOR_TYPE::CONTAINER);
 }
 
+TEST_F(RuntimeManagerTypeTest, ResolveStopExecutorTypeUsesContainerFallbackForDefaultRuntimeRequest)
+{
+    messages::RuntimeInstanceInfo instanceInfo;
+    instanceInfo.set_instanceid("test_instance_id");
+    instanceInfo.set_runtimeid("test_runtime_id");
+    instanceInfo.mutable_container()->set_id("test_container_id");
+    manager_->instanceInfoMap_["test_runtime_id"] = instanceInfo;
+
+    messages::StartInstanceResponse startResponse;
+    startResponse.mutable_startruntimeinstanceresponse()->set_runtimeid("test_runtime_id");
+    manager_->instanceResponseMap_["test_instance_id"] = startResponse;
+
+    auto request = std::make_shared<messages::StopInstanceRequest>();
+    request->set_runtimeid("test_runtime_id");
+    request->set_executortype(static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME));
+
+    EXPECT_EQ(manager_->ResolveStopExecutorType(request), EXECUTOR_TYPE::CONTAINER);
+    EXPECT_EQ(request->executortype(), static_cast<int32_t>(EXECUTOR_TYPE::CONTAINER));
+}
+
 /**
  * Feature: GetRuntimeType with multiple executor types
  * Description: Test GetRuntimeType with multiple runtimes of different executor types

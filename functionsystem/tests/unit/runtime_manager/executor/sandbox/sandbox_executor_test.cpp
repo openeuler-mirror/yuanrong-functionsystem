@@ -14,7 +14,9 @@
  * limitations under the License.
  */
 
+#define private public
 #include "runtime_manager/executor/sandbox/sandbox_executor.h"
+#undef private
 #include "runtime_manager/executor/sandbox/runtime_state_manager.h"
 #include "runtime_manager/port/port_manager.h"
 
@@ -161,6 +163,26 @@ TEST_F(SandboxExecutorTest, CommitThenOutOfScopeMgrIsActiveTrue)
 
     // After scope: still active (committed, not rolled back)
     EXPECT_TRUE(mgr_.IsActive(runtimeID));
+}
+
+TEST_F(SandboxExecutorTest, MakeSuccessStartResponseSetsContainerExecutorType)
+{
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    auto *info = request->mutable_runtimeinstanceinfo();
+    info->set_instanceid("instance-container");
+    info->set_runtimeid("runtime-container");
+    info->set_requestid("request-container");
+
+    SandboxExecutor executor("sandbox-executor-response-test", litebus::AID(),
+                             "/tmp/sandbox-executor-response-test-ckpt");
+    const auto response = executor.MakeSuccessStartResponse(request, "sandbox-container-id");
+
+    EXPECT_EQ(response.code(), static_cast<int32_t>(StatusCode::SUCCESS));
+    EXPECT_EQ(response.requestid(), "request-container");
+    EXPECT_EQ(response.startruntimeinstanceresponse().runtimeid(), "runtime-container");
+    EXPECT_EQ(response.startruntimeinstanceresponse().containerid(), "sandbox-container-id");
+    EXPECT_EQ(response.startruntimeinstanceresponse().executortype(),
+              static_cast<int32_t>(EXECUTOR_TYPE::CONTAINER));
 }
 
 TEST_F(SandboxExecutorTest, CleanupLocalRuntimeStateForOrphanUnregistersKnownSandbox)
