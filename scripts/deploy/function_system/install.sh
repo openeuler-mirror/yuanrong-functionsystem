@@ -406,6 +406,7 @@ function install_faas_frontend() {
   RECOVER_HANDLER="faasfrontend.RecoverHandler" \
   SHUTDOWN_HANDLER="faasfrontend.ShutdownHandler" \
   SIGNAL_HANDLER="faasfrontend.SignalHandler" \
+  HEALTH_CHECK_HANDLER="faasfrontend.HealthCheckHandler" \
   YR_FUNCTION_LIB_PATH=${PATTERN_FAAS_HOME_DIR}/faasfrontend/ \
   GLOG_log_dir="${FS_LOG_PATH}" \
   YR_LOG_LEVEL=${FS_LOG_LEVEL} \
@@ -471,6 +472,7 @@ function install_function_scheduler() {
   RECOVER_HANDLER="faasscheduler.RecoverHandler" \
   SHUTDOWN_HANDLER="faasscheduler.ShutdownHandler" \
   SIGNAL_HANDLER="faasscheduler.SignalHandler" \
+  HEALTH_CHECK_HANDLER="faasscheduler.HealthCheckHandler" \
   YR_FUNCTION_LIB_PATH=${PATTERN_FAAS_HOME_DIR}/faasscheduler/ \
   GLOG_log_dir="${FS_LOG_PATH}" \
   YR_LOG_LEVEL=${FS_LOG_LEVEL} \

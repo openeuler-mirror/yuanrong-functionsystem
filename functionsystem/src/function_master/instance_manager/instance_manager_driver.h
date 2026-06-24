@@ -33,6 +33,7 @@ namespace functionsystem::instance_manager {
 
 const std::string APP_JSON_FORMAT = "application/json";
 const std::string JSON_FORMAT = "json";
+const std::string QUERY_INSTANCES_SUMMARY_FIELDS = "summary";
 constexpr uint64_t QUERY_INSTANCES_MAX_PAGE_SIZE = 1000;
 const std::string JSON_SERIALIZE_ERROR = "{\"error\":\"Failed to serialize response\"}";
 
@@ -97,6 +98,57 @@ inline QueryInstancesPageRange GetQueryInstancesPageRange(uint64_t total, const 
     }
     range.end = range.start < total ? range.start + std::min(pagination.pageSize, total - range.start) : total;
     return range;
+}
+
+inline double GetInstanceResourceValue(const resources::InstanceInfo &instance, const std::string &resourceName)
+{
+    const auto &resources = instance.resources().resources();
+    auto it = resources.find(resourceName);
+    if (it == resources.end()) {
+        return 0;
+    }
+    return it->second.scalar().value();
+}
+
+inline nlohmann::json BuildTenantInstanceSummaryJson(const resources::InstanceInfo &instance)
+{
+    nlohmann::json statusJson;
+    statusJson["code"] = instance.instancestatus().code();
+    statusJson["exitCode"] = instance.instancestatus().exitcode();
+    statusJson["msg"] = instance.instancestatus().msg();
+    statusJson["type"] = instance.instancestatus().type();
+    statusJson["errCode"] = instance.instancestatus().errcode();
+
+    nlohmann::json instanceJson;
+    instanceJson["instanceID"] = instance.instanceid();
+    instanceJson["tenantID"] = instance.tenantid();
+    instanceJson["function"] = instance.function();
+    instanceJson["instanceStatus"] = statusJson;
+    instanceJson["startTime"] = instance.starttime();
+    instanceJson["required_cpu"] = GetInstanceResourceValue(instance, "CPU");
+    instanceJson["required_mem"] = GetInstanceResourceValue(instance, "Memory");
+    instanceJson["required_gpu"] = GetInstanceResourceValue(instance, "GPU");
+    instanceJson["required_npu"] = GetInstanceResourceValue(instance, "NPU/.+/count");
+    return instanceJson;
+}
+
+inline Status ConvertTenantInstanceToJson(
+    const resources::InstanceInfo &instance, bool useSummaryFields, nlohmann::json &instanceJson)
+{
+    if (useSummaryFields) {
+        instanceJson = BuildTenantInstanceSummaryJson(instance);
+        return Status::OK();
+    }
+
+    google::protobuf::util::JsonOptions options;
+    options.add_whitespace = false;
+    std::string instanceJsonStr;
+    auto status = google::protobuf::util::MessageToJsonString(instance, &instanceJsonStr, options);
+    if (!status.ok()) {
+        return Status(StatusCode::FAILED, status.ToString());
+    }
+    instanceJson = nlohmann::json::parse(instanceJsonStr);
+    return Status::OK();
 }
 
 inline bool ParsePositiveUInt64Param(
@@ -293,6 +345,11 @@ public:
             if (nodeIt != request.url.query.end() && !nodeIt->second.empty()) {
                 nodeID = nodeIt->second;
             }
+            bool useSummaryFields = false;
+            auto fieldsIt = request.url.query.find("fields");
+            if (fieldsIt != request.url.query.end() && fieldsIt->second == QUERY_INSTANCES_SUMMARY_FIELDS) {
+                useSummaryFields = true;
+            }
 
             auto pagination = ParseQueryInstancesPagination(request.url.query);
             if (!pagination.error.empty()) {
@@ -318,27 +375,29 @@ public:
 
             auto req = std::make_shared<messages::QueryInstancesInfoRequest>();
             req->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
+            req->set_tenantid(tenantID);
+            req->set_instanceid(instanceID);
+            req->set_nodeid(nodeID);
+            req->set_includealltenants(isSystemTenant);
+            if (useSummaryFields) {
+                req->set_fields(QUERY_INSTANCES_SUMMARY_FIELDS);
+            }
+            if (pagination.enabled) {
+                req->set_paginationenabled(true);
+                req->set_page(pagination.page);
+                req->set_pagesize(pagination.pageSize);
+            }
 
-            // Capture tenantID, instanceID, isSystemTenant, and pagination for the lambda
+            // Filtering, summary field trimming, and pagination are pushed down to master.
             return litebus::Async(imActor->GetAID(), &InstanceManagerActor::QueryInstancesInfo, req)
-                .Then([tenantID, instanceID, nodeID, isSystemTenant, pagination](
+                .Then([tenantID, instanceID, nodeID, isSystemTenant, pagination, useSummaryFields](
                           const messages::QueryInstancesInfoResponse &rsp)
                           -> litebus::Future<litebus::http::Response> {
-                    auto matchedIndexes =
-                        CollectSortedTenantInstanceIndexes(rsp.instanceinfos(), tenantID, instanceID, nodeID,
-                                                           isSystemTenant);
-                    auto totalCount = matchedIndexes.size();
-                    auto range = GetQueryInstancesPageRange(static_cast<uint64_t>(totalCount), pagination);
-
                     nlohmann::json instancesArray = nlohmann::json::array();
-                    for (uint64_t index = range.start; index < range.end; ++index) {
-                        const auto &instance = rsp.instanceinfos().Get(matchedIndexes[static_cast<size_t>(index)]);
-                        google::protobuf::util::JsonOptions options;
-                        options.add_whitespace = false;
-                        std::string instanceJsonStr;
-                        auto status = google::protobuf::util::MessageToJsonString(instance, &instanceJsonStr, options);
-                        if (status.ok()) {
-                            nlohmann::json instanceJson = nlohmann::json::parse(instanceJsonStr);
+                    for (const auto &instance : rsp.instanceinfos()) {
+                        nlohmann::json instanceJson;
+                        auto status = ConvertTenantInstanceToJson(instance, useSummaryFields, instanceJson);
+                        if (status.IsOk()) {
                             instancesArray.push_back(instanceJson);
                         } else {
                             YRLOG_WARN("Failed to convert instance to JSON: {}", status.ToString());
@@ -347,11 +406,15 @@ public:
 
                     nlohmann::json responseJson;
                     responseJson["instances"] = instancesArray;
+                    auto totalCount = rsp.totalcount();
+                    if (totalCount == 0 && rsp.instanceinfos_size() > 0) {
+                        totalCount = static_cast<uint64_t>(rsp.instanceinfos_size());
+                    }
                     responseJson["count"] = totalCount;
                     responseJson["tenantID"] = tenantID;
                     if (pagination.enabled) {
-                        responseJson["page"] = pagination.page;
-                        responseJson["pageSize"] = pagination.pageSize;
+                        responseJson["page"] = rsp.page() == 0 ? pagination.page : rsp.page();
+                        responseJson["pageSize"] = rsp.pagesize() == 0 ? pagination.pageSize : rsp.pagesize();
                     }
                     
                     // Add a flag to indicate if this is a system tenant query
