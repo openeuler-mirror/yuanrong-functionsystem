@@ -106,6 +106,11 @@ void LocalGcActor::CleanupAbnormalInstances()
         if (stateMachine == nullptr) {
             continue;
         }
+        // GC 只回收本节点拥有的实例；非本节点的实例由其所属节点的 LocalGcActor 负责，这里跳过。
+        if (stateMachine->GetOwner() != member_nodeID) {
+            member_abnormalFirstSeenTimes.erase(instanceID);
+            continue;
+        }
         InstanceState state = stateMachine->GetInstanceState();
         bool isAbnormal = IsTerminalAbnormalState(state) || IsStuckTransientState(state);
         if (!isAbnormal) {
@@ -116,8 +121,8 @@ void LocalGcActor::CleanupAbnormalInstances()
         auto it = member_abnormalFirstSeenTimes.find(instanceID);
         if (it == member_abnormalFirstSeenTimes.end()) {
             member_abnormalFirstSeenTimes.emplace(instanceID, now);
-            YRLOG_INFO("LocalGcActor: instance {} first seen in abnormal state {}",
-                       instanceID, static_cast<int32_t>(state));
+            YRLOG_DEBUG("LocalGcActor: instance {} first seen in abnormal state {}",
+                        instanceID, static_cast<int32_t>(state));
             ++pendingCount;
             continue;
         }
@@ -140,9 +145,12 @@ void LocalGcActor::CleanupAbnormalInstances()
 
     PurgeVanishedEntries(instances);
 
-    if (cleanedCount > 0 || pendingCount > 0) {
+    if (cleanedCount > 0) {
         YRLOG_INFO("LocalGcActor: GC cycle complete on node {}: cleaned {} instances, {} still pending",
                    member_nodeID, cleanedCount, pendingCount);
+    } else if (pendingCount > 0) {
+        YRLOG_DEBUG("LocalGcActor: GC cycle on node {}: {} instances pending cleanup",
+                    member_nodeID, pendingCount);
     }
 }
 

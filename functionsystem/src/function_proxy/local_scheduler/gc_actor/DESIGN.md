@@ -124,6 +124,9 @@ GetInstances() → 遍历所有实例
        │
        ├─ stateMachine == nullptr? → 跳过
        │
+       ├─ GetOwner() != 本节点? → 从 member_abnormalFirstSeenTimes 移除并跳过
+       │     （非本节点实例由其所属节点的 GC 负责，避免跨节点误删与重复对账）
+       │
        ├─ 状态正常（非 FAILED/EXITED/EVICTED/CREATING/SCHEDULING）?
        │     └── 从 member_abnormalFirstSeenTimes 中移除（清理健康实例的残留记录）
        │
