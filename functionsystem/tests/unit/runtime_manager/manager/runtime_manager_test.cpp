@@ -257,6 +257,8 @@ public:
     static inline std::string env_;
 };
 
+class RuntimeManagerTypeTest : public DISABLED_RuntimeManagerTest {};
+
 TEST_F(DISABLED_RuntimeManagerTest, StartInstanceTest)
 {
     const char *port = ("--port=" + std::to_string(FindAvailablePort())).c_str();
@@ -1275,6 +1277,25 @@ TEST_F(DISABLED_RuntimeManagerTest, GetRuntimeType_SupervisorExecutor)
     EXECUTOR_TYPE runtimeType = manager_->GetRuntimeType("test_runtime_id");
 
     EXPECT_EQ(runtimeType, EXECUTOR_TYPE::SUPERVISOR);
+}
+
+/**
+ * Feature: GetRuntimeType with legacy sandbox/container response
+ * Description: Test container runtime falls back to RuntimeInstanceInfo when executor type is absent in response
+ */
+TEST_F(RuntimeManagerTypeTest, GetRuntimeType_ContainerFallbackWhenResponseExecutorTypeMissing)
+{
+    messages::RuntimeInstanceInfo instanceInfo;
+    instanceInfo.set_instanceid("test_instance_id");
+    instanceInfo.set_runtimeid("test_runtime_id");
+    instanceInfo.mutable_container()->set_id("test_container_id");
+    manager_->instanceInfoMap_["test_runtime_id"] = instanceInfo;
+
+    messages::StartInstanceResponse startResponse;
+    startResponse.mutable_startruntimeinstanceresponse()->set_runtimeid("test_runtime_id");
+    manager_->instanceResponseMap_["test_instance_id"] = startResponse;
+
+    EXPECT_EQ(manager_->GetRuntimeType("test_runtime_id"), EXECUTOR_TYPE::CONTAINER);
 }
 
 /**

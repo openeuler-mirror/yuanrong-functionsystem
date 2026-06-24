@@ -460,8 +460,6 @@ std::string RuntimeManager::GetCpuType() const
 
 std::shared_ptr<ExecutorProxy> RuntimeManager::FindExecutor(EXECUTOR_TYPE type)
 {
-    YRLOG_INFO("infoinfoinfo");
-
     if (auto iter(executorMap_.find(type)); iter != executorMap_.end()) {
         return iter->second;
     }
@@ -1142,13 +1140,21 @@ EXECUTOR_TYPE RuntimeManager::GetRuntimeType(const std::string &runtimeID)
         return EXECUTOR_TYPE::RUNTIME;
     }
 
+    if (instance->second.has_container()) {
+        const auto response = instanceResponseMap_.find(instance->second.instanceid());
+        if (response != instanceResponseMap_.end()) {
+            const auto executorType =
+                static_cast<EXECUTOR_TYPE>(response->second.startruntimeinstanceresponse().executortype());
+            if (executorType != EXECUTOR_TYPE::RUNTIME) {
+                return executorType;
+            }
+        }
+        return EXECUTOR_TYPE::CONTAINER;
+    }
+
     const auto response = instanceResponseMap_.find(instance->second.instanceid());
     if (response != instanceResponseMap_.end()) {
         return static_cast<EXECUTOR_TYPE>(response->second.startruntimeinstanceresponse().executortype());
-    }
-
-    if (instance->second.has_container()) {
-        return EXECUTOR_TYPE::CONTAINER;
     }
     return EXECUTOR_TYPE::RUNTIME;
 }
