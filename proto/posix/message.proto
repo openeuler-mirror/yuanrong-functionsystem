@@ -696,12 +696,23 @@ message QuerySchedulingQueueResponse {
 
 message QueryInstancesInfoRequest {
   string requestID = 1;
+  string tenantID = 2;
+  string instanceID = 3;
+  string nodeID = 4;
+  bool includeAllTenants = 5;
+  string fields = 6;
+  uint64 page = 7;
+  uint64 pageSize = 8;
+  bool paginationEnabled = 9;
 }
 
 message QueryInstancesInfoResponse {
   string requestID                              = 1;
   common.ErrorCode code                         = 2;
   repeated resources.InstanceInfo instanceInfos = 3;
+  uint64 totalCount                             = 4;
+  uint64 page                                   = 5;
+  uint64 pageSize                               = 6;
 }
 
 message QueryNamedInsRequest {

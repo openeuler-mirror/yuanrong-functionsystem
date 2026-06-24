@@ -2023,10 +2023,15 @@ TEST_F(DISABLED_InstanceManagerTest, QueryInstancesInfo)
                    GetLeaderInfo(instanceMgrActor->GetAID()));
 
     auto instance001 = std::make_shared<resource_view::InstanceInfo>();
+    instance001->set_instanceid("instance-a");
+    instance001->set_tenantid("tenant-a");
     litebus::Async(instanceMgrActor->GetAID(), &InstanceManagerActor::OnInstancePut, "inst001", instance001);
 
     auto queryInstanceReq = std::make_shared<messages::QueryInstancesInfoRequest>();
+    queryInstanceReq->set_tenantid("tenant-a");
     auto expectedRsp = std::make_shared<messages::QueryInstancesInfoResponse>();
+    expectedRsp->set_code(common::ErrorCode::ERR_NONE);
+    expectedRsp->set_totalcount(1);
     expectedRsp->mutable_instanceinfos()->Add(resource_view::InstanceInfo(*instance001));
 
     auto future = litebus::Async(instanceMgrActor->GetAID(), &InstanceManagerActor::QueryInstancesInfo, queryInstanceReq);

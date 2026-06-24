@@ -16,7 +16,9 @@
 
 #include "instance_manager_actor.h"
 
+#include <algorithm>
 #include <utility>
+#include <vector>
 
 #include "async/async.hpp"
 #include "async/defer.hpp"
@@ -69,6 +71,57 @@ static std::string ParseTenantIDFromInstanceKey(const std::string &instanceKey)
     }
 
     return remaining.substr(0, pos);
+}
+
+static bool IsSummaryQueryFields(const std::string &fields)
+{
+    return fields == "summary";
+}
+
+static bool MatchQueryInstancesRequest(const messages::QueryInstancesInfoRequest &req,
+                                       const resources::InstanceInfo &instance)
+{
+    if (!req.includealltenants() && !req.tenantid().empty() && instance.tenantid() != req.tenantid()) {
+        return false;
+    }
+    if (!req.instanceid().empty() && instance.instanceid() != req.instanceid()) {
+        return false;
+    }
+    if (!req.nodeid().empty() && instance.functionproxyid() != req.nodeid()) {
+        return false;
+    }
+    return true;
+}
+
+static void CopyResourceIfExists(const resources::InstanceInfo &src, resources::InstanceInfo &dst,
+                                 const std::string &resourceName)
+{
+    const auto &resources = src.resources().resources();
+    auto it = resources.find(resourceName);
+    if (it == resources.end()) {
+        return;
+    }
+    (*dst.mutable_resources()->mutable_resources())[resourceName] = it->second;
+}
+
+static resources::InstanceInfo BuildQueryInstancesResponseInfo(const resources::InstanceInfo &instance,
+                                                               bool useSummaryFields)
+{
+    if (!useSummaryFields) {
+        return resources::InstanceInfo(instance);
+    }
+
+    resources::InstanceInfo summary;
+    summary.set_instanceid(instance.instanceid());
+    summary.set_tenantid(instance.tenantid());
+    summary.set_function(instance.function());
+    summary.set_starttime(instance.starttime());
+    summary.mutable_instancestatus()->CopyFrom(instance.instancestatus());
+    CopyResourceIfExists(instance, summary, "CPU");
+    CopyResourceIfExists(instance, summary, "Memory");
+    CopyResourceIfExists(instance, summary, "GPU");
+    CopyResourceIfExists(instance, summary, "NPU/.+/count");
+    return summary;
 }
 
 static messages::ForwardKillResponse GenerateForwardKillResponse(const messages::ForwardKillRequest &req,
@@ -1590,10 +1643,45 @@ litebus::Future<messages::QueryInstancesInfoResponse> InstanceManagerActor::Mast
     messages::QueryInstancesInfoResponse rsp;
     rsp.set_requestid(req->requestid());
     rsp.set_code(common::ErrorCode::ERR_NONE);
-    for (auto [id, info] : member_->instID2Instance) {
-        // copy constructor
+
+    std::vector<const resources::InstanceInfo *> matchedInstances;
+    matchedInstances.reserve(member_->instID2Instance.size());
+    for (const auto &[id, info] : member_->instID2Instance) {
         (void)id;
-        rsp.mutable_instanceinfos()->Add(resources::InstanceInfo(*info.second));
+        if (!info.second || !MatchQueryInstancesRequest(*req, *info.second)) {
+            continue;
+        }
+        matchedInstances.push_back(info.second.get());
+    }
+    std::sort(matchedInstances.begin(), matchedInstances.end(), [](const auto *lhs, const auto *rhs) {
+        if (lhs->instanceid() != rhs->instanceid()) {
+            return lhs->instanceid() < rhs->instanceid();
+        }
+        return lhs->tenantid() < rhs->tenantid();
+    });
+
+    rsp.set_totalcount(static_cast<uint64_t>(matchedInstances.size()));
+    const uint64_t page = req->paginationenabled() ? req->page() : 0;
+    const uint64_t pageSize = req->paginationenabled() ? req->pagesize() : 0;
+    rsp.set_page(page);
+    rsp.set_pagesize(pageSize);
+
+    uint64_t start = 0;
+    uint64_t end = static_cast<uint64_t>(matchedInstances.size());
+    if (req->paginationenabled() && page > 0 && pageSize > 0) {
+        if (page > 1 && page - 1 > end / pageSize) {
+            start = end;
+        } else {
+            start = (page - 1) * pageSize;
+        }
+        end = start < end ? start + std::min(pageSize, end - start) : end;
+    }
+
+    const bool useSummaryFields = IsSummaryQueryFields(req->fields());
+    for (uint64_t index = start; index < end; ++index) {
+        auto responseInfo = BuildQueryInstancesResponseInfo(*matchedInstances[static_cast<size_t>(index)],
+                                                            useSummaryFields);
+        rsp.mutable_instanceinfos()->Add()->Swap(&responseInfo);
     }
     return rsp;
 }
