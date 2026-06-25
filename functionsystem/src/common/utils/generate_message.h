@@ -17,6 +17,7 @@
 #ifndef COMMON_UTILS_GENERATE_MESSAGE_H
 #define COMMON_UTILS_GENERATE_MESSAGE_H
 
+#include <chrono>
 #include <string>
 
 #include "common/proto/pb/message_pb.h"
@@ -283,6 +284,11 @@ inline std::shared_ptr<messages::DeployInstanceResponse> BuildDeployInstanceResp
     deployInstanceResponse->set_containerid(startInstanceResponse.startruntimeinstanceresponse().containerid());
     deployInstanceResponse->set_executortype(startInstanceResponse.startruntimeinstanceresponse().executortype());
 
+    if (!deployInstanceResponse->runtimeid().empty()) {
+        auto now = std::chrono::system_clock::now().time_since_epoch();
+        auto seconds = std::chrono::duration_cast<std::chrono::seconds>(now).count();
+        deployInstanceResponse->set_timeinfo(std::to_string(seconds));
+    }
     if (!portMappings.empty()) {
         deployInstanceResponse->set_portmappings(portMappings);
     }
