@@ -367,6 +367,11 @@ public:
         return enableDirectRouting_;
     }
 
+    bool GetForceLowReliabilityInstance() const
+    {
+        return forceLowReliabilityInstance_;
+    }
+
     const std::string &GetK8sBasePath() const
     {
         return basePath_;
@@ -559,6 +564,7 @@ protected:
     bool unRegisterWhileStop_{ false };
     bool enableMergeProcess_{ false };
     bool enableDirectRouting_{ false };
+    bool forceLowReliabilityInstance_{ false };
     std::string dPosixUdsPath_;
     bool enableTraefikRegistry_{ false };
     std::string traefikEtcdPrefix_ = "traefik";

@@ -155,6 +155,8 @@ Flags::Flags()
             "if true, all instance & agent would be evicted while function-proxy receive SIGTERM/SIGINT", false);
     AddFlag(&Flags::enableDirectRouting_, "enable_direct_routing",
             "enable direct routing read path with LRU cache and on-demand route query", false);
+    AddFlag(&Flags::forceLowReliabilityInstance_, "force_low_reliability_instance",
+            "force all instances to use low-reliability persistence semantics", false);
     AddElectionFlags();
     AddDSFlags();
     AddRuntimeFlags();

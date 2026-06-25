@@ -87,6 +87,10 @@ bool TransToJsonFromRouteInfo(std::string &jsonStr, const resources::RouteInfo &
 
 void TransToInstanceInfoFromRouteInfo(const resources::RouteInfo &routeInfo, InstanceInfo &instanceInfo);
 
+void SetForceLowReliabilityInstance(bool enabled);
+
+bool IsForceLowReliabilityInstanceEnabled();
+
 bool IsLowReliabilityInstance(const resources::InstanceInfo &instanceInfo);
 
 void TransToRouteInfoFromInstanceInfo(const InstanceInfo &instanceInfo, resources::RouteInfo &routeInfo);
