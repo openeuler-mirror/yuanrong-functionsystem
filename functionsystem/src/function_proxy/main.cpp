@@ -34,6 +34,8 @@
 #include "common/flags/flags.h"
 #include "common/kube_client/kube_client.h"
 #include "common/logs/logging.h"
+#include "common/metadata/metadata.h"
+#include "meta_store_client/meta_store_client.h"
 #include "common/proto/pb/posix_pb.h"
 #include "common/rpc/server/common_grpc_server.h"
 #include "common/status/status.h"
@@ -660,6 +662,7 @@ int main(int argc, char **argv)
     }
 
     DirectRoutingConfig::SetEnabled(flags.GetEnableDirectRouting());
+    SetForceLowReliabilityInstance(flags.GetForceLowReliabilityInstance());
 
     function_agent::FunctionAgentFlags functionAgentFlags;
     runtime_manager::Flags runtimeManagerFlags;
@@ -681,6 +684,7 @@ int main(int argc, char **argv)
     }
 
     YRLOG_INFO("DirectRouting feature flag: {}", flags.GetEnableDirectRouting());
+    YRLOG_INFO("ForceLowReliabilityInstance feature flag: {}", flags.GetForceLowReliabilityInstance());
 
     if (!g_functionProxySwitcher->RegisterHandler(Stop, stopSignal)) {
         return EXIT_ABNORMAL;

@@ -16,7 +16,23 @@
 
 #include "metadata.h"
 
+#include <atomic>
+
 namespace functionsystem {
+namespace {
+std::atomic_bool g_forceLowReliabilityInstance{ false };
+}
+
+void SetForceLowReliabilityInstance(bool enabled)
+{
+    g_forceLowReliabilityInstance.store(enabled, std::memory_order_relaxed);
+}
+
+bool IsForceLowReliabilityInstanceEnabled()
+{
+    return g_forceLowReliabilityInstance.load(std::memory_order_relaxed);
+}
+
 
 bool TransToInstanceInfoFromJson(InstanceInfo &instanceInfo, const std::string &jsonStr)
 {
@@ -96,10 +112,13 @@ void TransToInstanceInfoFromRouteInfo(const resources::RouteInfo &routeInfo, Ins
 
 bool IsLowReliabilityInstance(const resources::InstanceInfo &instanceInfo)
 {
+    if (IsForceLowReliabilityInstanceEnabled()) {
+        return true;
+    }
+
     const auto &createOpt = instanceInfo.createoptions();
     if (auto it = createOpt.find(RELIABILITY_TYPE); it != createOpt.end() && it->second == "low") {
         YRLOG_INFO("The 'ReliabilityType' exists and is 'low'.");
-        // The 'ReliabilityType' exists and is 'low'
         return true;
     }
     // ReliabilityType's default value is "high"

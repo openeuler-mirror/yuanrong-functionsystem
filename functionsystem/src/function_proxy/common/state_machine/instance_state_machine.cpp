@@ -89,6 +89,10 @@ static const std::unordered_map<InstanceState, std::unordered_set<InstanceState>
     bool needPersistentRoute = functionsystem::NeedUpdateRouteState(state, isMetaStoreEnable);
     if (IsLowReliabilityInstance(instanceInfo)) {
         YRLOG_INFO("{}|Instance's reliability is low", instanceInfo.requestid());
+        if (IsForceLowReliabilityInstanceEnabled()
+            && (state == InstanceState::SCHEDULING || state == InstanceState::CREATING)) {
+            return PersistenceType::PERSISTENT_NOT;
+        }
         return needPersistentRoute ? PersistenceType::PERSISTENT_ALL : PersistenceType::PERSISTENT_NOT;
     }
 
@@ -259,11 +263,10 @@ litebus::Future<TransitionResult> InstanceStateMachine::TransitionTo(const Trans
         }
 
         UpdateInstanceVersion(context, instanceInfo);
-        if (auto iter = instanceInfo.createoptions().find(RELIABILITY_TYPE);
-            (iter != instanceInfo.createoptions().end() && iter->second == "low")
-            || context.newState == InstanceState::FATAL) {
-            YRLOG_WARN("{}|the {} is low or instance state({}) is fatal, rm the init args", instanceInfo.requestid(),
-                RELIABILITY_TYPE, static_cast<int32_t>(context.newState));
+        const bool lowReliability = IsLowReliabilityInstance(instanceInfo);
+        if (lowReliability || context.newState == InstanceState::FATAL) {
+            YRLOG_WARN("{}|instance low reliability({}) or state({}) is fatal, rm the init args",
+                instanceInfo.requestid(), lowReliability, static_cast<int32_t>(context.newState));
             instanceInfo.clear_args();
         }
     }
