@@ -26,7 +26,6 @@
 #include "common/logs/logging.h"
 #include "meta_store_client/meta_store_client.h"
 #include "common/scheduler_topology/sched_tree.h"
-#include "nlohmann/json.hpp"
 
 namespace functionsystem::global_scheduler {
 
@@ -73,6 +72,23 @@ std::string BuildUpdateLocalSchedulingStatusBody(const std::string &status, cons
     return "{\"status\":\"" + status + "\",\"message\":\"" + message + "\"}";
 }
 
+std::string AppendCountToJsonObject(std::string json, int count)
+{
+    if (json.empty() || json.back() != '}') {
+        YRLOG_ERROR("failed to append count to scheduling queue response: invalid json object");
+        return {};
+    }
+
+    json.pop_back();
+    if (!json.empty() && json.back() != '{') {
+        json.append(",");
+    }
+    json.append("\"count\":");
+    json.append(std::to_string(count));
+    json.append("}");
+    return json;
+}
+
 void AgentApiRouter::InitGetSchedulingQueueHandler(const std::shared_ptr<GlobalSched> &globalSched)
 {
     auto getSchedulingQueue = [globalSched](const HttpRequest &request) -> litebus::Future<HttpResponse> {
@@ -99,15 +115,13 @@ void AgentApiRouter::InitGetSchedulingQueueHandler(const std::shared_ptr<GlobalS
                 google::protobuf::util::JsonOptions options;
                 options.always_print_primitive_fields = true;
                 (void)google::protobuf::util::MessageToJsonString(resp, &rspBody, options);
-                auto body = nlohmann::json::parse(rspBody, nullptr, false);
-                if (body.is_discarded()) {
-                    YRLOG_ERROR("failed to parse scheduling queue response");
+                rspBody = AppendCountToJsonObject(std::move(rspBody), resp.instanceinfos_size());
+                if (rspBody.empty()) {
                     return HttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR);
                 }
-                body["count"] = resp.instanceinfos_size();
                 YRLOG_DEBUG("GetSchedulingQueue: size {}", resp.instanceinfos_size());
 
-                return litebus::http::Ok(body.dump(), litebus::http::ResponseBodyType::JSON);
+                return litebus::http::Ok(std::move(rspBody), litebus::http::ResponseBodyType::JSON);
             });
     };
 

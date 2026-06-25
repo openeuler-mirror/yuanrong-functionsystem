@@ -24,9 +24,13 @@
 #include "group_manager_actor.h"
 #include "instance_manager_actor.h"
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <exception>
+#include <mutex>
 #include <nlohmann/json.hpp>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace functionsystem::instance_manager {
@@ -35,6 +39,8 @@ const std::string APP_JSON_FORMAT = "application/json";
 const std::string JSON_FORMAT = "json";
 const std::string QUERY_INSTANCES_SUMMARY_FIELDS = "summary";
 constexpr uint64_t QUERY_INSTANCES_MAX_PAGE_SIZE = 1000;
+constexpr auto QUERY_TENANT_INSTANCES_CACHE_TTL = std::chrono::milliseconds(1000);
+constexpr size_t QUERY_TENANT_INSTANCES_CACHE_MAX_ENTRIES = 256;
 const std::string JSON_SERIALIZE_ERROR = "{\"error\":\"Failed to serialize response\"}";
 
 struct QueryInstancesPagination {
@@ -48,6 +54,138 @@ struct QueryInstancesPageRange {
     uint64_t start = 0;
     uint64_t end = 0;
 };
+
+struct QueryTenantInstancesCacheEntry {
+    std::chrono::steady_clock::time_point expiresAt;
+    std::string body;
+};
+
+inline std::mutex g_queryTenantInstancesCacheMutex;
+inline std::unordered_map<std::string, QueryTenantInstancesCacheEntry> g_queryTenantInstancesCache;
+
+inline std::string JsonEscape(const std::string &value)
+{
+    std::string escaped;
+    escaped.reserve(value.size() + 2);
+    for (unsigned char ch : value) {
+        switch (ch) {
+            case '"':
+                escaped += "\\\"";
+                break;
+            case '\\':
+                escaped += "\\\\";
+                break;
+            case '\b':
+                escaped += "\\b";
+                break;
+            case '\f':
+                escaped += "\\f";
+                break;
+            case '\n':
+                escaped += "\\n";
+                break;
+            case '\r':
+                escaped += "\\r";
+                break;
+            case '\t':
+                escaped += "\\t";
+                break;
+            default:
+                if (ch < 0x20) {
+                    const char *digits = "0123456789abcdef";
+                    escaped += "\\u00";
+                    escaped += digits[(ch >> 4) & 0x0F];
+                    escaped += digits[ch & 0x0F];
+                } else {
+                    escaped += static_cast<char>(ch);
+                }
+                break;
+        }
+    }
+    return escaped;
+}
+
+inline void AppendJsonStringField(std::string &body, const std::string &key, const std::string &value,
+                                  bool &needComma)
+{
+    if (needComma) {
+        body += ',';
+    }
+    body += '"';
+    body += key;
+    body += "\":\"";
+    body += JsonEscape(value);
+    body += '"';
+    needComma = true;
+}
+
+inline void AppendJsonUIntField(std::string &body, const std::string &key, uint64_t value, bool &needComma)
+{
+    if (needComma) {
+        body += ',';
+    }
+    body += '"';
+    body += key;
+    body += "\":";
+    body += std::to_string(value);
+    needComma = true;
+}
+
+inline void AppendJsonBoolField(std::string &body, const std::string &key, bool value, bool &needComma)
+{
+    if (needComma) {
+        body += ',';
+    }
+    body += '"';
+    body += key;
+    body += "\":";
+    body += value ? "true" : "false";
+    needComma = true;
+}
+
+inline std::string BuildQueryTenantInstancesCacheKey(const HttpRequest &request)
+{
+    std::vector<std::pair<std::string, std::string>> queryItems(request.url.query.begin(), request.url.query.end());
+    std::sort(queryItems.begin(), queryItems.end());
+
+    std::string key = request.method;
+    key += '|';
+    key += request.url.path;
+    for (const auto &[queryKey, queryValue] : queryItems) {
+        key += '|';
+        key += queryKey;
+        key += '=';
+        key += queryValue;
+    }
+    return key;
+}
+
+inline litebus::Option<std::string> GetQueryTenantInstancesCachedResponse(const std::string &cacheKey)
+{
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> guard(g_queryTenantInstancesCacheMutex);
+    auto it = g_queryTenantInstancesCache.find(cacheKey);
+    if (it == g_queryTenantInstancesCache.end()) {
+        return litebus::None();
+    }
+    if (now >= it->second.expiresAt) {
+        (void)g_queryTenantInstancesCache.erase(it);
+        return litebus::None();
+    }
+    return it->second.body;
+}
+
+inline void PutQueryTenantInstancesCachedResponse(const std::string &cacheKey, std::string body)
+{
+    std::lock_guard<std::mutex> guard(g_queryTenantInstancesCacheMutex);
+    if (g_queryTenantInstancesCache.size() >= QUERY_TENANT_INSTANCES_CACHE_MAX_ENTRIES) {
+        g_queryTenantInstancesCache.clear();
+    }
+    g_queryTenantInstancesCache[cacheKey] = QueryTenantInstancesCacheEntry{
+        .expiresAt = std::chrono::steady_clock::now() + QUERY_TENANT_INSTANCES_CACHE_TTL,
+        .body = std::move(body)
+    };
+}
 
 inline bool IsTenantInstanceMatched(const resources::InstanceInfo &instance, const std::string &tenantID,
                                     const std::string &instanceID, const std::string &nodeID, bool isSystemTenant)
@@ -132,22 +270,24 @@ inline nlohmann::json BuildTenantInstanceSummaryJson(const resources::InstanceIn
     return instanceJson;
 }
 
-inline Status ConvertTenantInstanceToJson(
-    const resources::InstanceInfo &instance, bool useSummaryFields, nlohmann::json &instanceJson)
+inline Status ConvertTenantInstanceToJsonString(
+    const resources::InstanceInfo &instance, bool useSummaryFields, std::string &instanceJson)
 {
     if (useSummaryFields) {
-        instanceJson = BuildTenantInstanceSummaryJson(instance);
+        try {
+            instanceJson = BuildTenantInstanceSummaryJson(instance).dump();
+        } catch (const std::exception &e) {
+            return Status(StatusCode::FAILED, e.what());
+        }
         return Status::OK();
     }
 
     google::protobuf::util::JsonOptions options;
     options.add_whitespace = false;
-    std::string instanceJsonStr;
-    auto status = google::protobuf::util::MessageToJsonString(instance, &instanceJsonStr, options);
+    auto status = google::protobuf::util::MessageToJsonString(instance, &instanceJson, options);
     if (!status.ok()) {
         return Status(StatusCode::FAILED, status.ToString());
     }
-    instanceJson = nlohmann::json::parse(instanceJsonStr);
     return Status::OK();
 }
 
@@ -208,6 +348,59 @@ inline litebus::Future<litebus::http::Response> JsonResponseOrInternalError(cons
     return HttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR,
                         JSON_SERIALIZE_ERROR,
                         litebus::http::ResponseBodyType::JSON);
+}
+
+inline Status BuildTenantInstancesResponseBody(const messages::QueryInstancesInfoResponse &rsp,
+                                               const std::string &tenantID,
+                                               const std::string &instanceID,
+                                               const std::string &nodeID,
+                                               bool isSystemTenant,
+                                               const QueryInstancesPagination &pagination,
+                                               bool useSummaryFields,
+                                               std::string &body)
+{
+    body.clear();
+    body.reserve(static_cast<size_t>(rsp.ByteSizeLong()) + 256);
+    body += "{\"instances\":[";
+
+    bool needInstanceComma = false;
+    for (const auto &instance : rsp.instanceinfos()) {
+        std::string instanceJson;
+        auto status = ConvertTenantInstanceToJsonString(instance, useSummaryFields, instanceJson);
+        if (!status.IsOk()) {
+            YRLOG_WARN("Failed to convert instance to JSON: {}", status.ToString());
+            continue;
+        }
+        if (needInstanceComma) {
+            body += ',';
+        }
+        body += instanceJson;
+        needInstanceComma = true;
+    }
+
+    body += ']';
+    bool needComma = true;
+    auto totalCount = rsp.totalcount();
+    if (totalCount == 0 && rsp.instanceinfos_size() > 0) {
+        totalCount = static_cast<uint64_t>(rsp.instanceinfos_size());
+    }
+    AppendJsonUIntField(body, "count", totalCount, needComma);
+    AppendJsonStringField(body, "tenantID", tenantID, needComma);
+    if (pagination.enabled) {
+        AppendJsonUIntField(body, "page", rsp.page() == 0 ? pagination.page : rsp.page(), needComma);
+        AppendJsonUIntField(body, "pageSize", rsp.pagesize() == 0 ? pagination.pageSize : rsp.pagesize(), needComma);
+    }
+    if (isSystemTenant) {
+        AppendJsonBoolField(body, "isSystemTenant", true, needComma);
+    }
+    if (!instanceID.empty()) {
+        AppendJsonStringField(body, "instanceID", instanceID, needComma);
+    }
+    if (!nodeID.empty()) {
+        AppendJsonStringField(body, "nodeID", nodeID, needComma);
+    }
+    body += '}';
+    return Status::OK();
 }
 
 class InstancesApiRouter : public ApiRouterRegister {
@@ -372,6 +565,12 @@ public:
 
             // Check if this is a system tenant query
             bool isSystemTenant = (tenantID == imActor->GetSystemTenantID());
+            const auto cacheKey = BuildQueryTenantInstancesCacheKey(request);
+            auto cachedResponse = GetQueryTenantInstancesCachedResponse(cacheKey);
+            if (cachedResponse.IsSome()) {
+                YRLOG_DEBUG("query tenant instances cache hit, key: {}", cacheKey);
+                return litebus::http::Ok(cachedResponse.Get(), litebus::http::ResponseBodyType::JSON);
+            }
 
             auto req = std::make_shared<messages::QueryInstancesInfoRequest>();
             req->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
@@ -390,47 +589,23 @@ public:
 
             // Filtering, summary field trimming, and pagination are pushed down to master.
             return litebus::Async(imActor->GetAID(), &InstanceManagerActor::QueryInstancesInfo, req)
-                .Then([tenantID, instanceID, nodeID, isSystemTenant, pagination, useSummaryFields](
+                .Then([tenantID, instanceID, nodeID, isSystemTenant, pagination, useSummaryFields, cacheKey](
                           const messages::QueryInstancesInfoResponse &rsp)
                           -> litebus::Future<litebus::http::Response> {
-                    nlohmann::json instancesArray = nlohmann::json::array();
-                    for (const auto &instance : rsp.instanceinfos()) {
-                        nlohmann::json instanceJson;
-                        auto status = ConvertTenantInstanceToJson(instance, useSummaryFields, instanceJson);
-                        if (status.IsOk()) {
-                            instancesArray.push_back(instanceJson);
-                        } else {
-                            YRLOG_WARN("Failed to convert instance to JSON: {}", status.ToString());
-                        }
+                    std::string responseBody;
+                    auto status = BuildTenantInstancesResponseBody(rsp, tenantID, instanceID, nodeID, isSystemTenant,
+                                                                    pagination, useSummaryFields, responseBody);
+                    if (!status.IsOk()) {
+                        YRLOG_ERROR("Failed to serialize tenant instances response: {}", status.ToString());
+                        return HttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR,
+                                            JSON_SERIALIZE_ERROR,
+                                            litebus::http::ResponseBodyType::JSON);
                     }
 
-                    nlohmann::json responseJson;
-                    responseJson["instances"] = instancesArray;
-                    auto totalCount = rsp.totalcount();
-                    if (totalCount == 0 && rsp.instanceinfos_size() > 0) {
-                        totalCount = static_cast<uint64_t>(rsp.instanceinfos_size());
-                    }
-                    responseJson["count"] = totalCount;
-                    responseJson["tenantID"] = tenantID;
-                    if (pagination.enabled) {
-                        responseJson["page"] = rsp.page() == 0 ? pagination.page : rsp.page();
-                        responseJson["pageSize"] = rsp.pagesize() == 0 ? pagination.pageSize : rsp.pagesize();
-                    }
-                    
-                    // Add a flag to indicate if this is a system tenant query
-                    if (isSystemTenant) {
-                        responseJson["isSystemTenant"] = true;
-                    }
-
-                    // Add instanceID to response if it was specified in request
-                    if (!instanceID.empty()) {
-                        responseJson["instanceID"] = instanceID;
-                    }
-                    if (!nodeID.empty()) {
-                        responseJson["nodeID"] = nodeID;
-                    }
-
-                    return JsonResponseOrInternalError(responseJson);
+                    PutQueryTenantInstancesCachedResponse(cacheKey, responseBody);
+                    YRLOG_DEBUG("query tenant instances cache stored, key: {}, instances: {}, totalCount: {}",
+                                cacheKey, rsp.instanceinfos_size(), rsp.totalcount());
+                    return litebus::http::Ok(std::move(responseBody), litebus::http::ResponseBodyType::JSON);
                 });
         };
         RegisterHandler("/query-tenant-instances", handler);
