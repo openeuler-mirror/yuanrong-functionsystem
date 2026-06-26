@@ -14,9 +14,7 @@
  * limitations under the License.
  */
 
-#define private public
 #include "runtime_manager/executor/sandbox/sandbox_executor.h"
-#undef private
 #include "runtime_manager/executor/sandbox/runtime_state_manager.h"
 #include "runtime_manager/port/port_manager.h"
 
