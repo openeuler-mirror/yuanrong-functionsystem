@@ -93,6 +93,7 @@ type FunctionBasicInfo struct {
 	PoolID                    string                     `form:"poolId" json:"poolId" valid:"optional,poolId~pool id can contain only lowercase letters;digits and - it cannot start or end with - and cannot exceed 40 characters or less than 1 characters"`
 	EnableMetrics             bool                       `form:"enableMetrics" json:"enableMetrics"`
 	EnableAgentSession        bool                       `form:"enableAgentSession" json:"enableAgentSession"`
+	EnableSessionCtx          bool                       `form:"enableSessionCtx" json:"enableSessionCtx"`
 	IdleTime                  int64                      `form:"idleTime" json:"idleTime"`
 	WarmupType                string                     `json:"warmup" valid:",optional"`
 	RootfsSpecMeta            types.RootfsSpecMeta       `json:"rootfs" valid:",optional"`

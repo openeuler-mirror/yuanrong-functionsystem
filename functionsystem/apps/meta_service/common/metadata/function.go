@@ -106,26 +106,27 @@ type InstanceMetaData struct {
 
 // ExtendedMetaData define external meta data of functions
 type ExtendedMetaData struct {
-	ImageName           string                    `json:"image_name" valid:",optional"`
-	Role                types.Role                `json:"role" valid:",optional"`
-	FuncMountConfig     types.FuncMountConfig     `json:"mount_config" valid:",optional"`
-	StrategyConfig      StrategyConfig            `json:"strategy_config" valid:",optional"`
-	ExtendConfig        string                    `json:"extend_config" valid:",optional"`
-	Initializer         types.Initializer         `json:"initializer" valid:",optional"`
-	PreStop             types.PreStop             `json:"pre_stop" valid:",optional"`
-	EnterpriseProjectID string                    `json:"enterprise_project_id" valid:",optional"`
-	LogTankService      logservice.LogTankService `json:"log_tank_service" valid:",optional"`
-	TraceService        trace.Service             `json:"tracing_config" valid:",optional"`
-	UserType            string                    `json:"user_type" valid:",optional"`
-	InstanceMetaData    InstanceMetaData          `json:"instance_meta_data" valid:",optional"`
-	ExtendedHandler     map[string]string         `json:"extended_handler" valid:",optional"`
-	ExtendedTimeout     map[string]int            `json:"extended_timeout" valid:",optional"`
-	Device              types.Device              `json:"device,omitempty" valid:",optional"`
-	PriorityAZ          string                    `json:"priority_az,omitempty"`
-	EnableMetrics       bool                      `json:"enable_metrics,omitempty"`
-	EnableAgentSession  bool                      `json:"enable_agent_session,omitempty"`
-	CustomContainerConfig CustomContainerConfig   `json:"custom_container_config" valid:",optional"`
-	CustomHealthCheck     CustomHealthCheck       `json:"custom_health_check" valid:",optional"`
+	ImageName             string                    `json:"image_name" valid:",optional"`
+	Role                  types.Role                `json:"role" valid:",optional"`
+	FuncMountConfig       types.FuncMountConfig     `json:"mount_config" valid:",optional"`
+	StrategyConfig        StrategyConfig            `json:"strategy_config" valid:",optional"`
+	ExtendConfig          string                    `json:"extend_config" valid:",optional"`
+	Initializer           types.Initializer         `json:"initializer" valid:",optional"`
+	PreStop               types.PreStop             `json:"pre_stop" valid:",optional"`
+	EnterpriseProjectID   string                    `json:"enterprise_project_id" valid:",optional"`
+	LogTankService        logservice.LogTankService `json:"log_tank_service" valid:",optional"`
+	TraceService          trace.Service             `json:"tracing_config" valid:",optional"`
+	UserType              string                    `json:"user_type" valid:",optional"`
+	InstanceMetaData      InstanceMetaData          `json:"instance_meta_data" valid:",optional"`
+	ExtendedHandler       map[string]string         `json:"extended_handler" valid:",optional"`
+	ExtendedTimeout       map[string]int            `json:"extended_timeout" valid:",optional"`
+	Device                types.Device              `json:"device,omitempty" valid:",optional"`
+	PriorityAZ            string                    `json:"priority_az,omitempty"`
+	EnableMetrics         bool                      `json:"enable_metrics,omitempty"`
+	EnableAgentSession    bool                      `json:"enable_agent_session,omitempty"`
+	EnableSessionCtx      bool                      `json:"enable_session_ctx,omitempty"`
+	CustomContainerConfig CustomContainerConfig     `json:"custom_container_config" valid:",optional"`
+	CustomHealthCheck     CustomHealthCheck         `json:"custom_health_check" valid:",optional"`
 }
 
 // FuncCode include function code file and link info
