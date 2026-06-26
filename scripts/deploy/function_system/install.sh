@@ -612,6 +612,7 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     LOCAL_IP="${LOCAL_IP}" \
     HOST_IP="${IP_ADDRESS}" \
     RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG \
+    RUNTIME_METRICS_CONFIG_FILE=$RUNTIME_METRICS_CONFIG_FILE \
     INIT_LABELS=${LABELS} \
     ${bin} "${agent_args[@]}" ${unique_proxy_option} &
     FUNCTION_AGENT_PID="$!"
@@ -621,6 +622,7 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     LOCAL_IP="${LOCAL_IP}" \
     HOST_IP="${IP_ADDRESS}" \
     RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG \
+    RUNTIME_METRICS_CONFIG_FILE=$RUNTIME_METRICS_CONFIG_FILE \
     INIT_LABELS=${LABELS} \
     ${bin} "${agent_args[@]}" ${unique_proxy_option} >>"${FS_LOG_PATH}/${NODE_ID}-function_agent${STD_LOG_SUFFIX}" 2>&1 &
     FUNCTION_AGENT_PID="$!"
