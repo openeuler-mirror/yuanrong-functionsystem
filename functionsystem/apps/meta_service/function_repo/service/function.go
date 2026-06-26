@@ -259,6 +259,7 @@ func buildBasicUpdateFunctionVersion(request model.FunctionUpdateRequest,
 	fv.FunctionVersion.PoolID = request.PoolID
 	fv.FunctionVersion.EnableMetrics = request.EnableMetrics
 	fv.FunctionVersion.EnableAgentSession = request.EnableAgentSession
+	fv.FunctionVersion.EnableSessionCtx = request.EnableSessionCtx
 	fv.FunctionVersion.PriorityAZ = request.PriorityAZ
 	fv.FunctionVersion.IdleTime = request.IdleTime
 	fv.FunctionVersion.IsFuncPublic = request.IsFuncPublic
@@ -522,21 +523,22 @@ func getFunctionVersion(request model.FunctionCreateRequest, env string,
 		PoolLabel:          poolLabel,
 		PoolID:             request.PoolID,
 		EnableAgentSession: request.EnableAgentSession,
-		PriorityAZ:             request.PriorityAZ,
-		EnableMetrics:          request.EnableMetrics,
-		IsFuncPublic:           request.IsFuncPublic,
-		IdleTime:               request.IdleTime,
-		WarmupType:             request.WarmupType,
-		RootfsSpecMeta:         request.RootfsSpecMeta,
-		ScalePolicy:            request.ScalePolicy,
-		SchedulePolicy:         request.SchedulePolicy,
+		EnableSessionCtx:   request.EnableSessionCtx,
+		PriorityAZ:         request.PriorityAZ,
+		EnableMetrics:      request.EnableMetrics,
+		IsFuncPublic:       request.IsFuncPublic,
+		IdleTime:           request.IdleTime,
+		WarmupType:         request.WarmupType,
+		RootfsSpecMeta:     request.RootfsSpecMeta,
+		ScalePolicy:        request.ScalePolicy,
+		SchedulePolicy:     request.SchedulePolicy,
 		AutoScaleConfig: storage.AutoScaleConfig{
 			SLAQuota:      request.AutoScaleConfig.SLAQuota,
 			ScaleDownTime: request.AutoScaleConfig.ScaleDownTime,
 			BurstScaleNum: request.AutoScaleConfig.BurstScaleNum,
 		},
-		CustomContainerConfig:  request.ExtendedMetaData.CustomContainerConfig,
-		CustomHealthCheck:      request.ExtendedMetaData.CustomHealthCheck,
+		CustomContainerConfig: request.ExtendedMetaData.CustomContainerConfig,
+		CustomHealthCheck:     request.ExtendedMetaData.CustomHealthCheck,
 	}
 	if request.Kind == common.Faas {
 		version.Kind = common.Faas

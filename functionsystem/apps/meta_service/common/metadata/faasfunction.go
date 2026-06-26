@@ -289,6 +289,7 @@ type FaaSExtendedMetaData struct {
 	PriorityAZ            string                `json:"priority_az,omitempty"`
 	EnableMetrics         bool                  `json:"enable_metrics,omitempty"`
 	EnableAgentSession    bool                  `json:"enable_agent_session,omitempty"`
+	EnableSessionCtx      bool                  `json:"enable_session_ctx,omitempty"`
 }
 
 // Heartbeat define user custom heartbeat function config

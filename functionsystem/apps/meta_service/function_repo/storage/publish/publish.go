@@ -211,6 +211,7 @@ func buildFaaSFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionVa
 	info.ExtendedMetaData.PriorityAZ = fv.FunctionVersion.PriorityAZ
 	info.ExtendedMetaData.EnableMetrics = fv.FunctionVersion.EnableMetrics
 	info.ExtendedMetaData.EnableAgentSession = fv.FunctionVersion.EnableAgentSession
+	info.ExtendedMetaData.EnableSessionCtx = fv.FunctionVersion.EnableSessionCtx
 	info.ExtendedMetaData.CustomContainerConfig = metadata.CustomContainerConfig{
 		ControlPath: fv.FunctionVersion.CustomContainerConfig.ControlPath,
 		Image:       fv.FunctionVersion.CustomContainerConfig.Image,
@@ -394,6 +395,7 @@ func buildFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionValue,
 	info.ExtendedMetaData.PriorityAZ = fv.FunctionVersion.PriorityAZ
 	info.ExtendedMetaData.EnableMetrics = fv.FunctionVersion.EnableMetrics
 	info.ExtendedMetaData.EnableAgentSession = fv.FunctionVersion.EnableAgentSession
+	info.ExtendedMetaData.EnableSessionCtx = fv.FunctionVersion.EnableSessionCtx
 	info.ExtendedMetaData.CustomContainerConfig = metadata.CustomContainerConfig{
 		ControlPath: fv.FunctionVersion.CustomContainerConfig.ControlPath,
 		Image:       fv.FunctionVersion.CustomContainerConfig.Image,
