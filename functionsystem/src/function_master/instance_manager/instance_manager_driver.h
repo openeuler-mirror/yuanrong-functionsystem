@@ -42,6 +42,11 @@ const std::string QUERY_INSTANCES_SUMMARY_FIELDS = "summary";
 constexpr uint64_t QUERY_INSTANCES_MAX_PAGE_SIZE = 1000;
 constexpr auto QUERY_TENANT_INSTANCES_CACHE_TTL = std::chrono::milliseconds(1000);
 constexpr size_t QUERY_TENANT_INSTANCES_CACHE_MAX_ENTRIES = 256;
+constexpr size_t JSON_ESCAPE_EXTRA_CAPACITY = 2;
+constexpr unsigned char JSON_CONTROL_CHAR_LIMIT = 0x20;
+constexpr unsigned char JSON_HEX_SHIFT = 4;
+constexpr unsigned char JSON_HEX_MASK = 0x0F;
+constexpr size_t QUERY_TENANT_RESPONSE_EXTRA_CAPACITY = 256;
 const std::string JSON_SERIALIZE_ERROR = "{\"error\":\"Failed to serialize response\"}";
 
 struct QueryInstancesPagination {
@@ -56,6 +61,15 @@ struct QueryInstancesPageRange {
     uint64_t end = 0;
 };
 
+struct QueryTenantInstancesResponseOptions {
+    std::string tenantID;
+    std::string instanceID;
+    std::string nodeID;
+    bool isSystemTenant = false;
+    QueryInstancesPagination pagination;
+    bool useSummaryFields = false;
+};
+
 struct QueryTenantInstancesCacheEntry {
     std::chrono::steady_clock::time_point expiresAt;
     std::string body;
@@ -67,7 +81,7 @@ inline std::unordered_map<std::string, QueryTenantInstancesCacheEntry> g_queryTe
 inline std::string JsonEscape(const std::string &value)
 {
     std::string escaped;
-    escaped.reserve(value.size() + 2);
+    escaped.reserve(value.size() + JSON_ESCAPE_EXTRA_CAPACITY);
     for (unsigned char ch : value) {
         switch (ch) {
             case '"':
@@ -92,11 +106,11 @@ inline std::string JsonEscape(const std::string &value)
                 escaped += "\\t";
                 break;
             default:
-                if (ch < 0x20) {
+                if (ch < JSON_CONTROL_CHAR_LIMIT) {
                     const char *digits = "0123456789abcdef";
                     escaped += "\\u00";
-                    escaped += digits[(ch >> 4) & 0x0F];
-                    escaped += digits[ch & 0x0F];
+                    escaped += digits[(ch >> JSON_HEX_SHIFT) & JSON_HEX_MASK];
+                    escaped += digits[ch & JSON_HEX_MASK];
                 } else {
                     escaped += static_cast<char>(ch);
                 }
@@ -352,22 +366,17 @@ inline litebus::Future<litebus::http::Response> JsonResponseOrInternalError(cons
 }
 
 inline Status BuildTenantInstancesResponseBody(const messages::QueryInstancesInfoResponse &rsp,
-                                               const std::string &tenantID,
-                                               const std::string &instanceID,
-                                               const std::string &nodeID,
-                                               bool isSystemTenant,
-                                               const QueryInstancesPagination &pagination,
-                                               bool useSummaryFields,
+                                               const QueryTenantInstancesResponseOptions &options,
                                                std::string &body)
 {
     body.clear();
-    body.reserve(static_cast<size_t>(rsp.ByteSizeLong()) + 256);
+    body.reserve(static_cast<size_t>(rsp.ByteSizeLong()) + QUERY_TENANT_RESPONSE_EXTRA_CAPACITY);
     body += "{\"instances\":[";
 
     bool needInstanceComma = false;
     for (const auto &instance : rsp.instanceinfos()) {
         std::string instanceJson;
-        auto status = ConvertTenantInstanceToJsonString(instance, useSummaryFields, instanceJson);
+        auto status = ConvertTenantInstanceToJsonString(instance, options.useSummaryFields, instanceJson);
         if (!status.IsOk()) {
             YRLOG_WARN("Failed to convert instance to JSON: {}", status.ToString());
             continue;
@@ -386,19 +395,20 @@ inline Status BuildTenantInstancesResponseBody(const messages::QueryInstancesInf
         totalCount = static_cast<uint64_t>(rsp.instanceinfos_size());
     }
     AppendJsonUIntField(body, "count", totalCount, needComma);
-    AppendJsonStringField(body, "tenantID", tenantID, needComma);
-    if (pagination.enabled) {
-        AppendJsonUIntField(body, "page", rsp.page() == 0 ? pagination.page : rsp.page(), needComma);
-        AppendJsonUIntField(body, "pageSize", rsp.pagesize() == 0 ? pagination.pageSize : rsp.pagesize(), needComma);
+    AppendJsonStringField(body, "tenantID", options.tenantID, needComma);
+    if (options.pagination.enabled) {
+        AppendJsonUIntField(body, "page", rsp.page() == 0 ? options.pagination.page : rsp.page(), needComma);
+        AppendJsonUIntField(body, "pageSize", rsp.pagesize() == 0 ? options.pagination.pageSize : rsp.pagesize(),
+                            needComma);
     }
-    if (isSystemTenant) {
+    if (options.isSystemTenant) {
         AppendJsonBoolField(body, "isSystemTenant", true, needComma);
     }
-    if (!instanceID.empty()) {
-        AppendJsonStringField(body, "instanceID", instanceID, needComma);
+    if (!options.instanceID.empty()) {
+        AppendJsonStringField(body, "instanceID", options.instanceID, needComma);
     }
-    if (!nodeID.empty()) {
-        AppendJsonStringField(body, "nodeID", nodeID, needComma);
+    if (!options.nodeID.empty()) {
+        AppendJsonStringField(body, "nodeID", options.nodeID, needComma);
     }
     body += '}';
     return Status::OK();
@@ -593,9 +603,16 @@ public:
                 .Then([tenantID, instanceID, nodeID, isSystemTenant, pagination, useSummaryFields, cacheKey](
                           const messages::QueryInstancesInfoResponse &rsp)
                           -> litebus::Future<litebus::http::Response> {
+                    QueryTenantInstancesResponseOptions options;
+                    options.tenantID = tenantID;
+                    options.instanceID = instanceID;
+                    options.nodeID = nodeID;
+                    options.isSystemTenant = isSystemTenant;
+                    options.pagination = pagination;
+                    options.useSummaryFields = useSummaryFields;
+
                     std::string responseBody;
-                    auto status = BuildTenantInstancesResponseBody(rsp, tenantID, instanceID, nodeID, isSystemTenant,
-                                                                    pagination, useSummaryFields, responseBody);
+                    auto status = BuildTenantInstancesResponseBody(rsp, options, responseBody);
                     if (!status.IsOk()) {
                         YRLOG_ERROR("Failed to serialize tenant instances response: {}", status.ToString());
                         return HttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR,

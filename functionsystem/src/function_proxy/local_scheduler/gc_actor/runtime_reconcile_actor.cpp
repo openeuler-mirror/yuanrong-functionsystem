@@ -27,6 +27,47 @@
 
 namespace functionsystem::local_scheduler {
 
+namespace {
+using ReconcileRequestMap = std::unordered_map<std::string, std::shared_ptr<messages::ReconcileRuntimesRequest>>;
+
+std::shared_ptr<messages::ReconcileRuntimesRequest> MakeReconcileRequest()
+{
+    auto request = std::make_shared<messages::ReconcileRuntimesRequest>();
+    request->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
+    return request;
+}
+
+void AddLocalInstanceRequest(ReconcileRequestMap &agentRequests,
+                             const std::string &nodeID,
+                             const std::string &instanceID,
+                             const resources::InstanceInfo &info)
+{
+    const auto &agentID = info.functionagentid();
+    if (agentID.empty() || info.runtimeid().empty()) {
+        return;
+    }
+    if (info.functionproxyid() != nodeID) {
+        // This reconciler runs on the local proxy node and must only compare
+        // the local executor inventory against instances owned by this proxy.
+        // functionAgentID is the target agent to send the request to; proxy
+        // ownership is recorded in functionProxyID.
+        YRLOG_DEBUG("RuntimeReconcileActor: skip non-local instance {}, proxy {}, local node {}",
+                    instanceID, info.functionproxyid(), nodeID);
+        return;
+    }
+
+    auto it = agentRequests.find(agentID);
+    if (it == agentRequests.end()) {
+        it = agentRequests.emplace(agentID, MakeReconcileRequest()).first;
+    }
+
+    auto *entry = it->second->add_entries();
+    entry->set_runtimeid(info.runtimeid());
+    entry->set_containerid(info.containerid());
+    entry->set_instanceid(instanceID);
+}
+}  // namespace
+
 RuntimeReconcileActor::RuntimeReconcileActor(const std::string &name,
                                              const std::string &nodeID)
     : BasisActor(name),
@@ -86,38 +127,13 @@ void RuntimeReconcileActor::RunReconcileCycle(const std::vector<std::string> &fi
     auto instances = instanceControlView_->GetInstances();
 
     // Group instances by funcAgentID, collecting {runtimeID, containerID} entries
-    std::unordered_map<std::string, std::shared_ptr<messages::ReconcileRuntimesRequest>> agentRequests;
+    ReconcileRequestMap agentRequests;
 
     for (const auto &[instanceID, sm] : instances) {
         if (sm == nullptr) {
             continue;
         }
-        auto info = sm->GetInstanceInfo();
-        const auto &agentID = info.functionagentid();
-        if (agentID.empty() || info.runtimeid().empty()) {
-            continue;
-        }
-        if (info.functionproxyid() != nodeID_) {
-            // This reconciler runs on the local proxy node and must only compare
-            // the local executor inventory against instances owned by this proxy.
-            // functionAgentID is the target agent to send the request to; proxy
-            // ownership is recorded in functionProxyID.
-            YRLOG_DEBUG("RuntimeReconcileActor: skip non-local instance {}, proxy {}, local node {}",
-                        instanceID, info.functionproxyid(), nodeID_);
-            continue;
-        }
-
-        auto it = agentRequests.find(agentID);
-        if (it == agentRequests.end()) {
-            auto request = std::make_shared<messages::ReconcileRuntimesRequest>();
-            request->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
-            it = agentRequests.emplace(agentID, std::move(request)).first;
-        }
-
-        auto *entry = it->second->add_entries();
-        entry->set_runtimeid(info.runtimeid());
-        entry->set_containerid(info.containerid());
-        entry->set_instanceid(instanceID);
+        AddLocalInstanceRequest(agentRequests, nodeID_, instanceID, sm->GetInstanceInfo());
     }
 
     std::unordered_set<std::string> firstPassSet(firstPassAgents.begin(), firstPassAgents.end());
@@ -127,9 +143,7 @@ void RuntimeReconcileActor::RunReconcileCycle(const std::vector<std::string> &fi
     // so without this the local SandboxExecutor would never receive a reconcile
     // request and the orphan grace-period timer would never fire.
     if (agentRequests.find(nodeID_) == agentRequests.end()) {
-        auto request = std::make_shared<messages::ReconcileRuntimesRequest>();
-        request->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
-        agentRequests.emplace(nodeID_, std::move(request));
+        agentRequests.emplace(nodeID_, MakeReconcileRequest());
     }
 
     YRLOG_INFO("RuntimeReconcileActor: starting reconcile cycle, {} agents from instance view, {} first-pass agents",
@@ -144,9 +158,7 @@ void RuntimeReconcileActor::RunReconcileCycle(const std::vector<std::string> &fi
         if (agentRequests.find(agentID) != agentRequests.end()) {
             continue;
         }
-        auto request = std::make_shared<messages::ReconcileRuntimesRequest>();
-        request->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
-        agentRequests.emplace(agentID, std::move(request));
+        agentRequests.emplace(agentID, MakeReconcileRequest());
     }
 
     for (const auto &[agentID, request] : agentRequests) {
