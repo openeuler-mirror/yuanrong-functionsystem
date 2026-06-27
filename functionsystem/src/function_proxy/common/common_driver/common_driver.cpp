@@ -33,6 +33,7 @@ void PrepareMetaStoreConfigs(const function_proxy::Flags &flags, MetaStoreTimeou
     // if enable, metastore address is master ip + global scheduler port; etcd address is used for persistence
     // else metastore address is etcd ip
     metaStoreConfig.enableMetaStore = flags.GetEnableMetaStore();
+    metaStoreConfig.isMetaStorePassthrough = flags.GetMetaStoreMode() == "passthrough";
     metaStoreConfig.etcdTablePrefix = flags.GetETCDTablePrefix();
     metaStoreConfig.excludedKeys = flags.GetMetaStoreExcludedKeys();
     if (metaStoreConfig.enableMetaStore) {
@@ -40,6 +41,10 @@ void PrepareMetaStoreConfigs(const function_proxy::Flags &flags, MetaStoreTimeou
         metaStoreConfig.metaStoreAddress = flags.GetMetaStoreAddress();
     } else {
         metaStoreConfig.etcdAddress = flags.GetMetaStoreAddress();
+    }
+
+    if (metaStoreConfig.enableMetaStore && !metaStoreConfig.isMetaStorePassthrough) {
+        param.backend = METASTORE_BACKEND;
     }
 
     // retries must take longer than health check

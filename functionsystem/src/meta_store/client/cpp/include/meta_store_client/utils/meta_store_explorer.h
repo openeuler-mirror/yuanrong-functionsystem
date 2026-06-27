@@ -17,6 +17,7 @@
 #ifndef COMMON_META_STORE_CLIENT_UTILS_META_STORE_EXPLORER_H
 #define COMMON_META_STORE_CLIENT_UTILS_META_STORE_EXPLORER_H
 
+#include "common/aksk/aksk_util.h"
 #include "httpd/http.hpp"
 
 namespace functionsystem {
@@ -49,6 +50,27 @@ public:
     bool IsNeedExplore() override;
     void UpdateAddress(const std::string &address) override;
 };
+
+class MetaStoreHttpExplorer : public MetaStoreExplorer {
+public:
+    explicit MetaStoreHttpExplorer(const std::string &address) : MetaStoreExplorer(address)
+    {
+        SetAuthKey();
+    }
+
+    ~MetaStoreHttpExplorer() override = default;
+
+    litebus::Future<std::string> Explore() override;
+    bool IsNeedExplore() override;
+    void UpdateAddress(const std::string &address) override;
+
+private:
+    void SetAuthKey();
+
+    bool useAkSk_{ false };
+    KeyForAKSK authKey_;
+};
+
 }  // namespace functionsystem
 
 #endif  // COMMON_META_STORE_CLIENT_UTILS_META_STORE_EXPLORER_H
