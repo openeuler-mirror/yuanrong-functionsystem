@@ -55,6 +55,7 @@ static resources::InstanceInfo MakeInstanceInfo(const std::string &agentID,
 {
     resources::InstanceInfo info;
     info.set_functionagentid(agentID);
+    info.set_functionproxyid(TEST_NODE_ID);
     info.set_runtimeid(runtimeID);
     info.set_containerid(containerID);
     return info;
