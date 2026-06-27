@@ -475,6 +475,8 @@ def _copy_shared_libraries(root_dir: str, output_dir: str):
         os.path.join(root_dir, "vendor", "src", "datasystem", "sdk", "cpp", "lib"),  # @datasystem_sdk
         os.path.join(vendor_install, "obs", "lib"),                                # @obs_sdk
         os.path.join(vendor_install, "curl", "lib"),                               # @curl_sdk
+        os.path.join(root_dir, "bazel-bin", "external", "com_google_protobuf"),     # @com_google_protobuf
+        os.path.join(root_dir, "bazel-bin", "external", "com_github_grpc_grpc"),    # @com_github_grpc_grpc
     ]
 
     import glob as glob_module
@@ -484,7 +486,7 @@ def _copy_shared_libraries(root_dir: str, output_dir: str):
         if not os.path.isdir(src_dir):
             log.debug(f"Shared-lib source dir not found, skipping: {src_dir}")
             continue
-        for so_file in glob_module.glob(os.path.join(src_dir, "lib*.so*")):
+        for so_file in glob_module.glob(os.path.join(src_dir, "**", "lib*.so*"), recursive=True):
             basename = os.path.basename(so_file)
             dst_path = os.path.join(lib_output_dir, basename)
             shutil.copy2(so_file, dst_path)
