@@ -46,6 +46,22 @@ TEST_F(StructTransferTest, StaticFunction_FALSE)
     EXPECT_FALSE(IsStaticFunctionInstance(instanceInfo));
 }
 
+TEST_F(StructTransferTest, SessionContextIsStoredInExtensions)
+{
+    resources::InstanceInfo instanceInfo;
+    CreateRequest createReq;
+    runtime::CallRequest callRequest;
+    (*callRequest.mutable_createoptions())[SESSION_CTX_ID] = "";
+    (*callRequest.mutable_createoptions())["normal_option"] = "normal_value";
+
+    SetInstanceInfo(&instanceInfo, createReq, callRequest, "parent");
+
+    ASSERT_EQ(instanceInfo.extensions().count(SESSION_CTX_ID), 1U);
+    EXPECT_TRUE(instanceInfo.extensions().at(SESSION_CTX_ID).empty());
+    EXPECT_EQ(instanceInfo.createoptions().count(SESSION_CTX_ID), 0U);
+    EXPECT_EQ(instanceInfo.createoptions().at("normal_option"), "normal_value");
+}
+
 void SetValidDiskAllocation(schedule_decision::ScheduleResult &result)
 {
     schedule_framework::VectorResourceAllocation vectorAllocation;

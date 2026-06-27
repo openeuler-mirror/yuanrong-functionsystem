@@ -62,6 +62,7 @@ const std::string CREATE_TIME_STAMP = "createTimestamp";
 const std::string RECEIVED_TIMESTAMP = "receivedTimestamp";
 const std::string INSTANCE_MOD_REVISION = "modRevision";
 const std::string NAMED = "named";
+const std::string SESSION_CTX_ID = "sessionCtxID";
 
 [[maybe_unused]] inline int64_t GetIdleTimeout(const resources::InstanceInfo &instanceInfo)
 {
@@ -899,6 +900,10 @@ static void SetInstanceInfo(::resources::InstanceInfo *instanceInfo, CreateReque
     instanceInfo->set_parentid(parentID);
     // InstanceInfo create options
     auto createOptions = callRequest.createoptions();
+    if (auto sessionCtxIter = createOptions.find(SESSION_CTX_ID); sessionCtxIter != createOptions.end()) {
+        (*instanceInfo->mutable_extensions())[SESSION_CTX_ID] = sessionCtxIter->second;
+        createOptions.erase(sessionCtxIter);
+    }
     *instanceInfo->mutable_createoptions() = createOptions;
 
     // set after CreateOptions
