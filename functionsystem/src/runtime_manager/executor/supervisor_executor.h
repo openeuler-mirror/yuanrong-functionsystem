@@ -97,7 +97,8 @@ private:
     litebus::Future<messages::StartInstanceResponse> OnStartRuntime(
         const runtime::v1::StartResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request);
 
-    litebus::Future<std::string> CreateSandbox(const std::string &runtimeID);
+    litebus::Future<std::string> CreateSandbox(const std::string &runtimeID,
+                                               const std::string &hostUser = "");
     litebus::Future<runtime::v1::DeleteResponse> DoDeleteSandbox(
         const std::shared_ptr<runtime::v1::DeleteRequest> &req);
 
@@ -114,6 +115,7 @@ private:
     std::unordered_map<std::string, std::string> runtime2portMappings_;  // runtimeID -> portMappings JSON
     litebus::AID functionAgentAID_;
     CommandBuilder cmdBuilder_{ false };
+    std::string pkgType_;
 
     // Supervisor process and HTTP communication
     pid_t supervisorPid_ = -1;             // superviser process PID

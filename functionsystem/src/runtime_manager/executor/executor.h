@@ -25,9 +25,9 @@
 #include "async/future.hpp"
 #include "common/proto/pb/message_pb.h"
 #include "common/status/status.h"
+#include "common/utils/test_util.h"
 #include "exec/exec.hpp"
 #include "runtime_manager/config/flags.h"
-#include "common/utils/test_util.h"
 
 namespace functionsystem::runtime_manager {
 
@@ -55,6 +55,10 @@ const std::string PARAM_EXEC_PATH = "execPath";
 const std::string PARAM_LANGUAGE = "language";
 const std::string RUNTIME_LAYER_DIR_NAME = "layer";
 const std::string RUNTIME_FUNC_DIR_NAME = "func";
+const std::string PYTHON_SERVER_PATH = "/python/yr/main/yr_runtime_main.py";
+const std::string PYTHON_SERVER_PATH_IN_WHEEL = "/../../main/yr_runtime_main.py";
+const std::string PKG_TYPE_WHEEL = "WHEEL";
+const std::string PKG_TYPE_TARBALL = "TARBALL";
 
 // this aims to support multiple launcher which orgnized by map
 // key is launcher type name
@@ -220,6 +224,24 @@ protected:
     virtual void InitPrestartRuntimePool() = 0;
 
     virtual void InitVirtualEnvIdleTimeLimit() = 0;
+
+    std::string GetInstallationType()
+    {
+        char result[PATH_MAX];
+        ssize_t count = readlink("/proc/self/exe", result, PATH_MAX);
+        std::string exePath(result, (count > 0) ? count : 0);
+
+        if (exePath.find("inner") != std::string::npos) {
+            return PKG_TYPE_TARBALL;
+        }
+
+        if (exePath.find("dist-packages") != std::string::npos || exePath.find("site-packages") != std::string::npos ||
+            exePath.find("venv") != std::string::npos) {
+            return PKG_TYPE_WHEEL;
+        }
+
+        return PKG_TYPE_TARBALL;
+    }
 
 private:
     void InitDefaultArgs(const std::string &configJsonString);

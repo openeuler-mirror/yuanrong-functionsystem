@@ -539,6 +539,7 @@ func getFunctionVersion(request model.FunctionCreateRequest, env string,
 		},
 		CustomContainerConfig: request.ExtendedMetaData.CustomContainerConfig,
 		CustomHealthCheck:     request.ExtendedMetaData.CustomHealthCheck,
+		SandboxType:           request.SandboxType,
 	}
 	if request.Kind == common.Faas {
 		version.Kind = common.Faas
@@ -1228,6 +1229,7 @@ func buildFunctionVersionEntity(key storage.FunctionVersionKey, v storage.Functi
 		Kind:               v.FunctionVersion.Kind,
 		RootfsSpecMeta:     v.FunctionVersion.RootfsSpecMeta,
 		PriorityAZ:         v.FunctionVersion.PriorityAZ,
+        SandboxType:        v.FunctionVersion.SandboxType,
 	}
 	return funcVer
 }

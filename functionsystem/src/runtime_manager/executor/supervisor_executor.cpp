@@ -42,7 +42,6 @@ namespace functionsystem::runtime_manager {
 constexpr int64_t RECONNECT_SUPERVISOR_INTERVAL_MS = 5000;
 constexpr int64_t HEALTH_CHECK_INTERVAL_MS = 100;
 constexpr int64_t HTTP_TIMEOUT_MS = 30000;
-constexpr unsigned short DEFAULT_SUPERVISOR_PORT = 9321;
 const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 const std::string SUPERVISOR_SANDBOX_PREFIX = "/api/v1/sandboxes";
 const std::string SUPERVISOR_LOG_PATH = "/tmp/supervisor";
@@ -58,6 +57,7 @@ SupervisorExecutor::SupervisorExecutor(const std::string &name, const litebus::A
 
 void SupervisorExecutor::Init()
 {
+    pkgType_ = GetInstallationType();
     YRLOG_INFO("Start init SupervisorExecutor");
 }
 
@@ -286,7 +286,10 @@ litebus::Future<messages::StartInstanceResponse> SupervisorExecutor::StartInstan
 
     if (language.find(PYTHON_LANGUAGE) != std::string::npos) {
         auto execPath = cmdBuilder_.GetExecPathFromRuntimeConfig(info.runtimeconfig());
-        std::string pythonServerPath = "/python/yr/main/yr_runtime_main.py";
+        std::string pythonServerPath = PYTHON_SERVER_PATH;
+        if (pkgType_ == PKG_TYPE_WHEEL) {
+            pythonServerPath = PYTHON_SERVER_PATH_IN_WHEEL;
+        }
         args.insert(args.begin(), { execPath, "-u", config_.runtimePath + pythonServerPath });
     }
 
@@ -327,9 +330,29 @@ litebus::Future<messages::StartInstanceResponse> SupervisorExecutor::StartRuntim
         .Then(litebus::Defer(GetAID(), &SupervisorExecutor::OnStartRuntime, std::placeholders::_1, request));
 }
 
-litebus::Future<std::string> SupervisorExecutor::CreateSandbox(const std::string &runtimeID)
+litebus::Future<std::string> SupervisorExecutor::CreateSandbox(const std::string &runtimeID,
+                                                               const std::string &hostUser)
 {
     nlohmann::json createRequest = nlohmann::json::object();
+
+    nlohmann::json bindMount = nlohmann::json::object();
+    bindMount["host_path"] = "/home/" + hostUser;
+    bindMount["sandbox_path"] = "/home/" + hostUser;
+    bindMount["mode"] = "rw";
+
+    nlohmann::json filesystemPolicy = nlohmann::json::object();
+    filesystemPolicy["bind_mounts"] = nlohmann::json::array();
+    filesystemPolicy["bind_mounts"].push_back(bindMount);
+
+    nlohmann::json policy = nlohmann::json::object();
+    policy["filesystem_policy"] = filesystemPolicy;
+
+    policy["process"] = { { "run_as_user", hostUser }, { "run_as_group", hostUser } };
+    policy["namespace"] = { { "user", false } };
+
+    createRequest["policy"] = policy;
+    createRequest["policy_mode"] = "append";
+
     return SendRequestToSupervisor("POST", SUPERVISOR_SANDBOX_PREFIX, createRequest)
         .Then([this, runtimeID](litebus::Try<nlohmann::json> createResponse) -> litebus::Future<std::string> {
             if (!createResponse.IsOK()) {
@@ -591,8 +614,22 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::StartByRuntimeID
     auto updateEnv = BuildMountForCodes(start, request, envs);
     SetRequestEnvsAndLogsForStart(start.get(), updateEnv, runtimeID);
 
-    return CreateSandbox(runtimeID).Then(
-        [this, start, runtimeID](const std::string &sandboxId) { return ExecInSandbox(runtimeID, start, sandboxId); });
+    const auto &deployOpts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
+    std::string hostUser;
+    if (auto it = deployOpts.find(HOST_USER); it != deployOpts.end()) {
+        hostUser = it->second;
+    }
+
+    return CreateSandbox(runtimeID, hostUser)
+        .Then([this, start, runtimeID](const std::string &sandboxId) -> litebus::Future<runtime::v1::StartResponse> {
+            if (sandboxId == "") {
+                runtime::v1::StartResponse rsp{};
+                rsp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+                rsp.set_message("Failed to create sandbox");
+                return rsp;
+            }
+            return ExecInSandbox(runtimeID, start, sandboxId);
+        });
 }
 
 litebus::Future<Status> SupervisorExecutor::TerminateSandbox(const std::string &runtimeID, const std::string &sandboxID)

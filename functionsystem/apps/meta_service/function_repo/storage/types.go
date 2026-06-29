@@ -120,6 +120,7 @@ type FunctionVersion struct {
 	CustomContainerConfig types.CustomContainerConfig
 	CustomHealthCheck     types.CustomHealthCheck
 	IsFuncPublic          bool
+	SandboxType           string
 }
 
 // FunctionLayer defines layer info related to function version.

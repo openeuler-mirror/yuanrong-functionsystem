@@ -103,6 +103,7 @@ type FunctionBasicInfo struct {
 	PriorityAZ                string                     `json:"priorityAz" valid:",optional"`
 	IsFuncPublic              bool                       `json:"isFuncPublic" valid:"optional"`
 	ExtendedMetaData          types.ExtendedMetaData     `form:"extendedMetaData" json:"extendedMetaData" valid:",optional"`
+	SandboxType               string                     `json:"sandboxType" valid:"optional"`
 }
 
 // FunctionCreateRequest -
@@ -427,6 +428,7 @@ type FunctionVersion struct {
 	Kind               string               `json:"kind,omitempty"`
 	RootfsSpecMeta     types.RootfsSpecMeta `json:"rootfs" valid:",optional"`
 	PriorityAZ         string               `json:"priorityAz,omitempty"`
+	SandboxType        string               `json:"sandboxType" valid:"optional"`
 }
 
 // Function is function entity

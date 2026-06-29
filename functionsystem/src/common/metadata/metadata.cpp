@@ -630,6 +630,10 @@ FunctionMeta GetFuncMetaFromJson(const std::string &jsonStr)
 
         // bootstrapMetaData
         GetBootstrapMetaData(funcMeta, j);
+
+        if (j.find("sandboxType") != j.end()) {
+            funcMeta.sandboxType = j.at("sandboxType");
+        }
     } catch (std::exception &e) {
         YRLOG_ERROR("parse funcMeta json failed, error: {}", e.what());
     }

@@ -291,25 +291,6 @@ std::function<void()> CondaActivate(const std::string &condaPrefix, const std::s
     };
 }
 
-std::string GetInstallationType()
-{
-    char result[PATH_MAX];
-    ssize_t count = readlink("/proc/self/exe", result, PATH_MAX);
-    std::string exePath(result, (count > 0) ? count : 0);
-
-    if (exePath.find("inner") != std::string::npos) {
-        return PKG_TYPE_TARBALL;
-    }
-
-    if (exePath.find("dist-packages") != std::string::npos ||
-        exePath.find("site-packages") != std::string::npos ||
-        exePath.find("venv") != std::string::npos) {
-        return PKG_TYPE_WHEEL;
-    }
-    
-    return PKG_TYPE_TARBALL;
-}
-
 RuntimeExecutor::RuntimeExecutor(const std::string &name, const litebus::AID &functionAgentAID) : Executor(name)
 {
     mounter_ = std::make_shared<VolumeMount>();

@@ -232,6 +232,7 @@ func buildFaaSFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionVa
 		return metadata.FaaSFuncMeta{}, err
 	}
 	info.RootfsSpecMeta = buildRootFsSpecMeta(fv.FunctionVersion.RootfsSpecMeta)
+    info.SandboxType = fv.FunctionVersion.SandboxType
 	return info, nil
 }
 
