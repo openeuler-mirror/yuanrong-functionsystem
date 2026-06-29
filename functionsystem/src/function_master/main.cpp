@@ -70,6 +70,7 @@ namespace {
 const std::string COMPONENT_NAME = COMPONENT_NAME_FUNCTION_MASTER;              // NOLINT
 const std::string DEFAULT_META_STORE_ADDRESS = "127.0.0.1:32279";  // NOLINT
 const std::string META_STORE_MODE_LOCAL = "local";                 // NOLINT
+const std::string META_STORE_MODE_PASSTHROUGH = "passthrough";     // NOLINT
 
 // litebus thread reserve for resource view
 const int32_t RESERVE_THREAD = 2;
@@ -194,7 +195,8 @@ bool GetRuntimeRecoverEnableFlag(const functionmaster::Flags &flags)
 
 bool IsClientEnableMetaStore(const functionmaster::Flags &flags)
 {
-    return flags.GetEnableMetaStore();
+    // when meta-store is in passthrough mode, master can connect to etcd directly
+    return flags.GetEnableMetaStore() && flags.GetMetaStoreMode() != META_STORE_MODE_PASSTHROUGH;
 }
 
 bool CreateExplorer(const functionmaster::Flags &flags, const std::shared_ptr<MetaStoreClient> &metaClient)
@@ -302,7 +304,7 @@ std::shared_ptr<MetaStoreClient> GetMetaStoreClient(const functionmaster::Flags 
     metaStoreConfig.etcdTablePrefix = flags.GetETCDTablePrefix();
     metaStoreConfig.excludedKeys = flags.GetMetaStoreExcludedKeys();
     // if enabled, metastore address is master ip + global scheduler port; etcd
-    // address is used for persistence else metastore address is etcd ip
+    // address is used for persistence or passthrough else metastore address is etcd ip
     if (metaStoreConfig.enableMetaStore) {
         metaStoreConfig.etcdAddress = flags.GetEtcdAddress();
         metaStoreConfig.metaStoreAddress = flags.GetMetaStoreAddress();
@@ -513,6 +515,17 @@ void StartMetaStore(const functionmaster::Flags &flags)
             param
     });
         return;
+    }
+
+    if (flags.GetMetaStoreMode() == META_STORE_MODE_PASSTHROUGH) {
+        YRLOG_INFO("enable passthrough meta-store");
+        if (g_metaStoreDriver->StartPassthrough(etcdAddress, option, GetGrpcSSLConfig(flags), param).IsError()) {
+            YRLOG_ERROR("failed to enable passthrough meta-store");
+            g_functionMasterSwitcher->SetStop();
+            return;
+        }
+
+        g_metaStoreDriver->StartHttpServer(flags.GetIP());
     }
 }
 

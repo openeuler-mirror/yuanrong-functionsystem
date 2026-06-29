@@ -17,15 +17,20 @@
 #ifndef FUNCTION_MASTER_META_STORE_DRIVER_H
 #define FUNCTION_MASTER_META_STORE_DRIVER_H
 
-#include "common/http/http_server.h"
-#include "meta_store_client/key_value/etcd_kv_client_strategy.h"
-#include "common/utils/module_driver.h"
 #include "backup_actor.h"
+#include "common/http/http_server.h"
+#include "common/utils/module_driver.h"
 #include "kv_service_accessor_actor.h"
 #include "kv_service_actor.h"
 #include "lease_service_actor.h"
-#include "maintenance_service_actor.h"
 #include "litebus.hpp"
+#include "maintenance_service_actor.h"
+#include "meta_store_client/key_value/etcd_kv_client_strategy.h"
+#include "passthrough/election_service_passthrough_actor.h"
+#include "passthrough/kv_service_passthrough_actor.h"
+#include "passthrough/lease_service_passthrough_actor.h"
+#include "passthrough/maintenance_service_passthrough_actor.h"
+#include "passthrough/watch_service_passthrough_actor.h"
 
 namespace functionsystem::meta_store {
 
@@ -48,9 +53,14 @@ public:
 
     Status Start(const StartParams& params);
 
+    Status StartPassthrough(const std::string &etcdAddress, const MetaStoreTimeoutOption &timeoutOption = {},
+                            const GrpcSslConfig &sslConfig = {}, const MetaStoreMonitorParam &param = {});
+
     Status Stop() override;
 
     void Await() override;
+
+    void StartHttpServer(const std::string &ip);
 
 private:
     class MetaStoreApiRouteRegister : public ApiRouterRegister {
@@ -64,6 +74,10 @@ private:
     std::shared_ptr<KvServiceAccessorActor> kvServiceAccessorActor_ = nullptr;
     std::shared_ptr<LeaseServiceActor> leaseServiceActor_ = nullptr;
     std::shared_ptr<MaintenanceServiceActor> maintenanceServiceActor_ = nullptr;
+
+    // election only support etcd passthrough
+    std::shared_ptr<ElectionServicePassthroughActor> electionServiceActor_ = nullptr;
+    std::shared_ptr<HttpServer> httpServer_ = nullptr;
 };  // class MetaStoreDriver
 }  // namespace functionsystem::meta_store
 

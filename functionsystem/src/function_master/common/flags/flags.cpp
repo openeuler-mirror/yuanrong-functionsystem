@@ -143,7 +143,7 @@ void Flags::InitMetaStoreFlags()
 {
     AddFlag(&Flags::enableMetaStore_, "enable_meta_store", "for meta store enable", false);
     AddFlag(&Flags::enablePersistence_, "enable_persistence", "persist meta store to etcd", false);
-    AddFlag(&Flags::metaStoreMode_, "meta_store_mode", "meta-store mode, eg. local", "local");
+    AddFlag(&Flags::metaStoreMode_, "meta_store_mode", "meta-store mode, eg. local passthrough", "local");
     AddFlag(&Flags::enableSyncFuncSysFunc_, "enable_sync_sys_func", "enable sync system function info to etcd", false);
     AddFlag(&Flags::metaStoreMaxFlushConcurrency_, "meta_store_max_flush_concurrency",
             "max flush concurrency for meta store backup", DEFAULT_META_STORE_MAX_FLUSH_CONCURRENCY,

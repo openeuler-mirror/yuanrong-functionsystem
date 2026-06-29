@@ -35,6 +35,7 @@ const int64_t KV_OPERATE_RETRY_INTERVAL_UPPER_BOUND = 5000;  // ms
 const uint32_t DEFAULT_META_STORE_MAX_FLUSH_CONCURRENCY = 1000;
 const uint32_t DEFAULT_META_STORE_MAX_FLUSH_BATCH_SIZE = 100;
 const std::string METASTORE_LOCAL_MODE = "local";
+const std::string METASTORE_PASSTHROUGH_MODE = "passthrough";
 const std::string ETCD_BACKEND = "Etcd";
 const std::string METASTORE_BACKEND = "Metastore";
 

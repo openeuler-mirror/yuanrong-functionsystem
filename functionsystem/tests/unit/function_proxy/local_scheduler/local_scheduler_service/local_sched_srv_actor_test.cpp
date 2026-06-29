@@ -708,7 +708,7 @@ TEST_F(LocalSchedSrvActorTest, EvictAgent)
         req->set_agentid("agentID");
         req->set_requestid("agentID");
         req->set_timeoutsec(1);
-        EXPECT_CALL(*functionAgentMgr_, EvictAgent(_)).WillOnce(Return(AsyncReturn(Status(FAILED, "falied to evict"))));
+        EXPECT_CALL(*functionAgentMgr_, EvictAgent(_)).WillOnce(Return(AsyncReturn(Status(FAILED, "failed to evict"))));
         auto future = globalSchedStubActor_->SendEvictAgent(aid, req->SerializeAsString());
         EXPECT_AWAIT_READY(future);
         auto rsp = future.Get();

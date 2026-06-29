@@ -60,7 +60,11 @@ std::shared_ptr<MetaStoreClient> MetaStoreClient::Create(const MetaStoreConfig &
                                                          const MetaStoreMonitorParam &param)
 {
     std::shared_ptr<MetaStoreExplorer> metaStoreExplorer;
-    metaStoreExplorer = std::make_shared<MetaStoreDefaultExplorer>(metaStoreConfig.metaStoreAddress);
+    if (metaStoreConfig.isMetaStorePassthrough && metaStoreConfig.enableMetaStore) {
+        metaStoreExplorer = std::make_shared<MetaStoreHttpExplorer>(metaStoreConfig.metaStoreAddress);
+    } else {
+        metaStoreExplorer = std::make_shared<MetaStoreDefaultExplorer>(metaStoreConfig.metaStoreAddress);
+    }
 
     auto client = std::make_shared<MetaStoreClient>(metaStoreConfig, sslConfig, timeoutOption, metaStoreExplorer);
     if (client->Init().IsError()) {
