@@ -57,6 +57,10 @@ std::shared_ptr<DeployInstanceRequest> GetDeployInstanceReq(const FunctionMeta &
             (void)createOptions->insert({ pair.first, pair.second });
         }
     }
+
+    if (funcMeta.sandboxType == "supervisor") {
+        (*deployInstanceRequest->mutable_createoptions())["sandbox_type"] = funcMeta.sandboxType;
+    }
     deployInstanceRequest->mutable_scheduleoption()->set_schedpolicyname(
         request->instance().scheduleoption().schedpolicyname());
     // 传递 NUMA 等 extension 到 runtime_manager（StartInstanceRequest 无 createoptions，需从 scheduleOption 读取）

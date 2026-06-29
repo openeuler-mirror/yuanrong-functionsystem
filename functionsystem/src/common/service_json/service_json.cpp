@@ -768,6 +768,7 @@ litebus::Option<FunctionMeta> BuildFunctionMeta(const ServiceInfo &serviceInfo, 
                          .instanceMetaData = {},
                          .rootfs = functionConfig.rootfs,
                          .bootstrap = functionConfig.bootstrap,
+                         .sandboxType = "",
                          .rawJsonStr = ""};
 }
 

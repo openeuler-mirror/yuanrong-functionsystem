@@ -98,8 +98,6 @@ const std::string JAVA_SYSTEM_LIBRARY_PATH = "-Djava.library.path=";
 const std::string JAVA_LOG_LEVEL = "-DlogLevel=";
 const std::string JAVA_JOB_ID = "-DjobId=job-";
 const std::string JAVA_MAIN_CLASS = "org.yuanrong.runtime.server.RuntimeServer";
-const std::string PYTHON_SERVER_PATH = "/python/yr/main/yr_runtime_main.py";
-const std::string PYTHON_SERVER_PATH_IN_WHEEL = "/../../main/yr_runtime_main.py";
 
 const std::string YR_JAVA_RUNTIME_PATH = "/java/yr-runtime-1.0.0.jar";
 const std::string POST_START_EXEC_REGEX = R"(^(uv )?pip3.[0-9]* install [a-zA-Z0-9\-\s:/\.=_]* && pip3.[0-9]* check$)";
@@ -285,25 +283,6 @@ std::function<void()> CondaActivate(const std::string &condaPrefix, const std::s
             std::cout << "conda activate finished." << std::endl;
         }
     };
-}
-
-std::string GetInstallationType()
-{
-    char result[PATH_MAX];
-    ssize_t count = readlink("/proc/self/exe", result, PATH_MAX);
-    std::string exePath(result, (count > 0) ? count : 0);
-
-    if (exePath.find("inner") != std::string::npos) {
-        return PKG_TYPE_TARBALL;
-    }
-
-    if (exePath.find("dist-packages") != std::string::npos ||
-        exePath.find("site-packages") != std::string::npos ||
-        exePath.find("venv") != std::string::npos) {
-        return PKG_TYPE_WHEEL;
-    }
-    
-    return PKG_TYPE_TARBALL;
 }
 
 RuntimeExecutor::RuntimeExecutor(const std::string &name, const litebus::AID &functionAgentAID) : Executor(name)

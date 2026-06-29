@@ -41,7 +41,7 @@ const std::unordered_set<std::string> DECRYPT_IGNORE_SET = { CRYPTO_ALGORITHM_ST
 
 const std::vector<std::string> DEPLOY_OPTION_KEYS = { CONDA_CONFIG,       CONDA_COMMAND,         CONDA_PREFIX,
                                                       CONDA_DEFAULT_ENV,  CONTAINER_ROOTFS,      CONTAINER_EXTRA_CONFIG,
-                                                      CONTAINER_NETWORK, EXEC_PATH };
+                                                      CONTAINER_NETWORK, EXEC_PATH, HOST_USER };
 const std::vector<std::string> POSIX_ENV_KEYS = { YR_APP_MODE,
                                                   YR_WORKING_DIR,
                                                   UNZIPPED_WORKING_DIR,

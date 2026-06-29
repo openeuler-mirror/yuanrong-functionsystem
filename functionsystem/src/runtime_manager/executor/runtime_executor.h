@@ -43,8 +43,6 @@
 namespace functionsystem::runtime_manager {
 
 const int CAP_LEN = 4;
-const std::string PKG_TYPE_WHEEL = "WHEEL";
-const std::string PKG_TYPE_TARBALL = "TARBALL";
 
 class RuntimeExecutor : public Executor {
 public:
