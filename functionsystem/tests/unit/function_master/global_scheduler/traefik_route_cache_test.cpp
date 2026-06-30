@@ -15,6 +15,8 @@
  */
 
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <cctype>
 #include <string>
 #include <thread>
 #include <vector>
@@ -42,6 +44,44 @@ static resource_view::InstanceInfo MakeInstance(
     }
     info.mutable_instancestatus()->set_code(statusCode);
     return info;
+}
+
+static std::vector<std::pair<std::string, std::string>> GetHostRules(const nlohmann::json& parsed)
+{
+    std::vector<std::pair<std::string, std::string>> rules;
+    if (!parsed["http"].contains("routers")) {
+        return rules;
+    }
+    for (auto it = parsed["http"]["routers"].begin(); it != parsed["http"]["routers"].end(); ++it) {
+        if (!it.value().contains("rule")) {
+            continue;
+        }
+        std::string rule = it.value()["rule"].get<std::string>();
+        if (rule.rfind("Host(`", 0) == 0) {
+            rules.emplace_back(it.key(), std::move(rule));
+        }
+    }
+    return rules;
+}
+
+static std::string ExtractHostLabel(const std::string& rule)
+{
+    constexpr size_t HOST_RULE_PREFIX_LEN = 6;  // Host(`
+    auto dotPos = rule.find('.', HOST_RULE_PREFIX_LEN);
+    if (dotPos == std::string::npos) {
+        return "";
+    }
+    return rule.substr(HOST_RULE_PREFIX_LEN, dotPos - HOST_RULE_PREFIX_LEN);
+}
+
+static bool IsValidDNSLabel(const std::string& label)
+{
+    if (label.empty() || label.size() > 63 || label.front() == '-' || label.back() == '-') {
+        return false;
+    }
+    return std::all_of(label.begin(), label.end(), [](unsigned char c) {
+        return std::isalnum(c) != 0 || c == '-';
+    });
 }
 
 class TraefikRouteCacheTest : public ::testing::Test {
@@ -98,6 +138,116 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_NewFormatPort)
     auto& service = parsed["http"]["services"]["inst-001-p8080"];
     EXPECT_EQ(service["loadBalancer"]["servers"][0]["url"], "https://10.0.0.1:40001");
     EXPECT_EQ(service["loadBalancer"]["serversTransport"], "yr-backend-tls@file");
+}
+
+TEST_F(TraefikRouteCacheTest, OnInstanceRunning_HostBasedRouteWhenPublicDomainConfigured)
+{
+    cfg_.publicBaseDomain = "http://*.sandbox-gateway.example.com:8888/";
+    cache_ = std::make_shared<TraefikRouteCache>(cfg_);
+
+    auto instance = MakeInstance(
+        "akernel-e43ca14f-a032-43f8-8e87-d7f7bcf9ee4c", "10.0.0.1:50000",
+        R"(["http:40001:5888"])",
+        static_cast<int32_t>(InstanceState::RUNNING));
+
+    cache_->OnInstanceRunning(instance);
+
+    std::string json = cache_->GetConfigJSON();
+    auto parsed = nlohmann::json::parse(json);
+
+    EXPECT_TRUE(parsed["http"]["routers"].contains("akernel-e43ca14f-a032-43f8-8e87-d7f7bcf9ee4c-p5888"));
+    auto& pathRouter = parsed["http"]["routers"]["akernel-e43ca14f-a032-43f8-8e87-d7f7bcf9ee4c-p5888"];
+    EXPECT_EQ(pathRouter["rule"], "PathPrefix(`/akernel-e43ca14f-a032-43f8-8e87-d7f7bcf9ee4c/5888`)");
+    EXPECT_EQ(pathRouter["middlewares"][0], "stripprefix-all");
+
+    EXPECT_TRUE(parsed["http"]["routers"].contains("akernel-e43ca14f-a032-43f8-8e87-d7f7bcf9ee4c-p5888-host"));
+    auto& hostRouter = parsed["http"]["routers"]["akernel-e43ca14f-a032-43f8-8e87-d7f7bcf9ee4c-p5888-host"];
+    EXPECT_EQ(hostRouter["rule"],
+              "Host(`5888-akernel-e43ca14f-a032-43f8-8e87-d7f7bcf9ee4c.sandbox-gateway.example.com`)");
+    EXPECT_EQ(hostRouter["service"], "akernel-e43ca14f-a032-43f8-8e87-d7f7bcf9ee4c-p5888");
+    EXPECT_FALSE(hostRouter.contains("middlewares"));
+    EXPECT_TRUE(hostRouter.contains("tls"));
+}
+
+TEST_F(TraefikRouteCacheTest, OnInstanceRunning_HostBasedRouteSanitizesDNSLabel)
+{
+    cfg_.publicBaseDomain = "sandbox-gateway.example.com";
+    cache_ = std::make_shared<TraefikRouteCache>(cfg_);
+
+    auto instance = MakeInstance(
+        "UPPER_value:bad", "10.0.0.1:50000",
+        R"(["http:40001:5888"])",
+        static_cast<int32_t>(InstanceState::RUNNING));
+
+    cache_->OnInstanceRunning(instance);
+
+    auto parsed = nlohmann::json::parse(cache_->GetConfigJSON());
+    auto hostRules = GetHostRules(parsed);
+    ASSERT_EQ(hostRules.size(), 1);
+    EXPECT_EQ(hostRules[0].second, "Host(`5888-upper-value-bad.sandbox-gateway.example.com`)");
+    EXPECT_TRUE(IsValidDNSLabel(ExtractHostLabel(hostRules[0].second)));
+}
+
+TEST_F(TraefikRouteCacheTest, OnInstanceRunning_HostBasedRouteAvoidsLongLabelCollision)
+{
+    cfg_.publicBaseDomain = "sandbox-gateway.example.com";
+    cache_ = std::make_shared<TraefikRouteCache>(cfg_);
+
+    std::string commonPrefix(90, 'a');
+    auto instanceA = MakeInstance(
+        commonPrefix + "x", "10.0.0.1:50000",
+        R"(["http:40001:5888"])",
+        static_cast<int32_t>(InstanceState::RUNNING));
+    auto instanceB = MakeInstance(
+        commonPrefix + "y", "10.0.0.2:50000",
+        R"(["http:40002:5888"])",
+        static_cast<int32_t>(InstanceState::RUNNING));
+
+    cache_->OnInstanceRunning(instanceA);
+    cache_->OnInstanceRunning(instanceB);
+
+    auto parsed = nlohmann::json::parse(cache_->GetConfigJSON());
+    auto hostRules = GetHostRules(parsed);
+    ASSERT_EQ(hostRules.size(), 2);
+    EXPECT_NE(hostRules[0].second, hostRules[1].second);
+    EXPECT_TRUE(IsValidDNSLabel(ExtractHostLabel(hostRules[0].second)));
+    EXPECT_TRUE(IsValidDNSLabel(ExtractHostLabel(hostRules[1].second)));
+}
+
+TEST_F(TraefikRouteCacheTest, OnInstanceRunning_SkipsHostRouteWhenFQDNIsTooLong)
+{
+    cfg_.publicBaseDomain = std::string(250, 'a') + ".example.com";
+    cache_ = std::make_shared<TraefikRouteCache>(cfg_);
+
+    auto instance = MakeInstance(
+        "inst-001", "10.0.0.1:50000",
+        R"(["http:40001:5888"])",
+        static_cast<int32_t>(InstanceState::RUNNING));
+
+    cache_->OnInstanceRunning(instance);
+
+    auto parsed = nlohmann::json::parse(cache_->GetConfigJSON());
+    EXPECT_TRUE(parsed["http"]["routers"].contains("inst-001-p5888"));
+    EXPECT_TRUE(parsed["http"]["services"].contains("inst-001-p5888"));
+    EXPECT_TRUE(GetHostRules(parsed).empty());
+}
+
+TEST_F(TraefikRouteCacheTest, OnInstanceRunning_HostRouterNameIsBounded)
+{
+    cfg_.publicBaseDomain = "sandbox-gateway.example.com";
+    cache_ = std::make_shared<TraefikRouteCache>(cfg_);
+
+    auto instance = MakeInstance(
+        std::string(240, 'a'), "10.0.0.1:50000",
+        R"(["http:40001:5888"])",
+        static_cast<int32_t>(InstanceState::RUNNING));
+
+    cache_->OnInstanceRunning(instance);
+
+    auto parsed = nlohmann::json::parse(cache_->GetConfigJSON());
+    auto hostRules = GetHostRules(parsed);
+    ASSERT_EQ(hostRules.size(), 1);
+    EXPECT_LE(hostRules[0].first.size(), 200);
 }
 
 TEST_F(TraefikRouteCacheTest, OnInstanceRunning_LegacyFormatPort)
