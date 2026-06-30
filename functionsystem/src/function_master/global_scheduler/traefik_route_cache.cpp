@@ -229,9 +229,11 @@ std::string TraefikRouteCache::NormalizePublicBaseDomain(const std::string& doma
     }
     result.erase(last + 1);
 
-    auto schemePos = result.find("://");
-    if (schemePos != std::string::npos) {
-        result.erase(0, schemePos + 3);
+    const std::string schemeSeparator = "://";
+    auto schemePos = result.find(schemeSeparator);
+    auto firstSlashPos = result.find('/');
+    if (schemePos != std::string::npos && (firstSlashPos == std::string::npos || schemePos < firstSlashPos)) {
+        result.erase(0, schemePos + schemeSeparator.length());
     }
     auto pathPos = result.find('/');
     if (pathPos != std::string::npos) {
@@ -303,6 +305,9 @@ std::string TraefikRouteCache::BuildHostLabel(int sandboxPort, const std::string
     std::string label = std::to_string(sandboxPort) + "-" + safeDNS;
     if (label.length() > MAX_DNS_LABEL_LEN) {
         const std::string suffix = "-" + StableHashSuffix(std::to_string(sandboxPort) + ":" + safeID);
+        if (suffix.length() >= MAX_DNS_LABEL_LEN) {
+            return suffix.substr(suffix.length() - MAX_DNS_LABEL_LEN);
+        }
         label = label.substr(0, MAX_DNS_LABEL_LEN - suffix.length()) + suffix;
     }
     return label;
@@ -316,6 +321,9 @@ std::string TraefikRouteCache::BuildHostRouterName(const std::string& routerName
     }
 
     const std::string hashSuffix = "-" + StableHashSuffix(routerName) + suffix;
+    if (hashSuffix.length() >= MAX_ROUTER_NAME_LEN) {
+        return hashSuffix.substr(hashSuffix.length() - MAX_ROUTER_NAME_LEN);
+    }
     return routerName.substr(0, MAX_ROUTER_NAME_LEN - hashSuffix.length()) + hashSuffix;
 }
 
