@@ -90,6 +90,9 @@ private:
 
     static std::string StableHashSuffix(const std::string& value);
 
+    // Build Traefik Host() rule for a route. Returns empty when the FQDN is invalid.
+    std::string BuildHostRule(int sandboxPort, const std::string& safeID, const std::string& routerName) const;
+
     // Build full Traefik dynamic.Configuration JSON.
     // JSON keys sorted lexicographically for FNV hash stability.
     std::string BuildConfigJSON() const;

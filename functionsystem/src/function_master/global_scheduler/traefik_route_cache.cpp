@@ -319,6 +319,18 @@ std::string TraefikRouteCache::BuildHostRouterName(const std::string& routerName
     return routerName.substr(0, MAX_ROUTER_NAME_LEN - hashSuffix.length()) + hashSuffix;
 }
 
+std::string TraefikRouteCache::BuildHostRule(int sandboxPort, const std::string& safeID,
+                                             const std::string& routerName) const
+{
+    const std::string hostName = BuildHostLabel(sandboxPort, safeID) + "." + cfg_.publicBaseDomain;
+    if (hostName.length() > MAX_FQDN_LEN) {
+        YRLOG_WARN("TraefikRouteCache: skip host-based route for router {} because host '{}' is too long",
+                   routerName, hostName);
+        return "";
+    }
+    return "Host(`" + hostName + "`)";
+}
+
 std::string TraefikRouteCache::BuildConfigJSON() const
 {
     std::shared_lock lock(routeTableMu_);
@@ -357,17 +369,10 @@ std::string TraefikRouteCache::BuildConfigJSON() const
         routersJson[name] = std::move(router);
 
         if (!cfg_.publicBaseDomain.empty()) {
-            nlohmann::json hostRouter;
-            hostRouter["entryPoints"] = nlohmann::json::array({cfg_.httpEntryPoint});
-            // Example:
-            //   port=5888, safeID=akernel-abc, publicBaseDomain=sandbox-gateway.example.com
-            //   => Host(`5888-akernel-abc.sandbox-gateway.example.com`)
-            const std::string hostName = BuildHostLabel(entry.sandboxPort, safeID) + "." + cfg_.publicBaseDomain;
-            if (hostName.length() > MAX_FQDN_LEN) {
-                YRLOG_WARN("TraefikRouteCache: skip host-based route for router {} because host '{}' is too long",
-                           name, hostName);
-            } else {
-                const std::string hostRule = "Host(`" + hostName + "`)";
+            const std::string hostRule = BuildHostRule(entry.sandboxPort, safeID, name);
+            if (!hostRule.empty()) {
+                nlohmann::json hostRouter;
+                hostRouter["entryPoints"] = nlohmann::json::array({cfg_.httpEntryPoint});
                 hostRouter["rule"] = hostRule;
                 hostRouter["service"] = name;
                 if (cfg_.enableTLS) {

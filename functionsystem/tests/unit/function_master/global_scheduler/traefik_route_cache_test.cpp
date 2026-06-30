@@ -29,8 +29,11 @@ namespace functionsystem::test {
 
 using namespace functionsystem::global_scheduler;
 
-// Helper to build a mock InstanceInfo with portForward extension
-static resource_view::InstanceInfo MakeInstance(
+namespace {
+
+constexpr size_t MAX_TEST_DNS_LABEL_LEN = 63;
+
+resource_view::InstanceInfo MakeInstance(
     const std::string& instanceID,
     const std::string& proxyGrpcAddress,
     const std::string& portForwardJson,
@@ -46,7 +49,7 @@ static resource_view::InstanceInfo MakeInstance(
     return info;
 }
 
-static std::vector<std::pair<std::string, std::string>> GetHostRules(const nlohmann::json& parsed)
+std::vector<std::pair<std::string, std::string>> GetHostRules(const nlohmann::json& parsed)
 {
     std::vector<std::pair<std::string, std::string>> rules;
     if (!parsed["http"].contains("routers")) {
@@ -64,7 +67,7 @@ static std::vector<std::pair<std::string, std::string>> GetHostRules(const nlohm
     return rules;
 }
 
-static std::string ExtractHostLabel(const std::string& rule)
+std::string ExtractHostLabel(const std::string& rule)
 {
     constexpr size_t HOST_RULE_PREFIX_LEN = 6;  // Host(`
     auto dotPos = rule.find('.', HOST_RULE_PREFIX_LEN);
@@ -74,15 +77,17 @@ static std::string ExtractHostLabel(const std::string& rule)
     return rule.substr(HOST_RULE_PREFIX_LEN, dotPos - HOST_RULE_PREFIX_LEN);
 }
 
-static bool IsValidDNSLabel(const std::string& label)
+bool IsValidDNSLabel(const std::string& label)
 {
-    if (label.empty() || label.size() > 63 || label.front() == '-' || label.back() == '-') {
+    if (label.empty() || label.size() > MAX_TEST_DNS_LABEL_LEN || label.front() == '-' || label.back() == '-') {
         return false;
     }
     return std::all_of(label.begin(), label.end(), [](unsigned char c) {
         return std::isalnum(c) != 0 || c == '-';
     });
 }
+
+}  // namespace
 
 class TraefikRouteCacheTest : public ::testing::Test {
 protected:
