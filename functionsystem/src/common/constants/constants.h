@@ -69,7 +69,7 @@ const uint64_t DEFAULT_PULL_RESOURCE_INTERVAL = 500;
 
 const uint32_t DEFAULT_DOMAIN_HEARTBEAT_TIMEOUT = 6000;
 
-enum class EXECUTOR_TYPE { RUNTIME = 0, CONTAINER = 1, SUPERVISOR = 2, UNKNOWN = -1 };
+enum class EXECUTOR_TYPE { RUNTIME = 0, CONTAINER = 1, SUPERVISOR = 2, DOCKER = 3, UNKNOWN = -1 };
 
 const int32_t SYSTEM_FUNCTION_INSTANCE_LEVEL = 1;
 
@@ -335,6 +335,9 @@ const std::string CONTAINER_NETWORK = "network";
 // port forwarding internal env vars
 const std::string YR_INTERNAL_HOST_IP = "YR_INTERNAL_HOST_IP";
 const std::string YR_PORT_FORWARDINGS = "YR_PORT_FORWARDINGS";
+
+const std::string DEFAULT_DOCKER_SOCKET = "/var/run/docker.sock";
+const std::string POSIX_LISTEN_ADDR = "POSIX_LISTEN_ADDR";
 
 // hibernate
 const std::string ENABLE_SUSPEND_RESUME = "enableSuspendResume";

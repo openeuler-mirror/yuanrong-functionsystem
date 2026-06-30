@@ -35,7 +35,6 @@ const static std::string HOST_IP = "HOST_IP";
 const static std::string POD_IP = "POD_IP";
 const static std::string SNUSER_LIB_PATH = "SNUSER_LIB_PATH";
 const static std::string REQUEST_ACK_ACC_MAX_SEC = "REQUEST_ACK_ACC_MAX_SEC";
-const static std::string POSIX_LISTEN_ADDR = "POSIX_LISTEN_ADDR";
 const static std::string YR_RUNTIME_ID = "YR_RUNTIME_ID";
 const static std::string INSTANCE_ID_ENV = "INSTANCE_ID";
 const static std::string HOME_ENV = "HOME";
