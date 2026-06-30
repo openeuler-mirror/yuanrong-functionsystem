@@ -101,9 +101,7 @@ const std::string JAVA_LOG_LEVEL = "-DlogLevel=";
 const std::string JAVA_JOB_ID = "-DjobId=job-";
 const std::string DEFAULT_JAVA8_CMD = "/opt/buildtools/jdk8/bin/java";
 const std::string JAVA_MAIN_CLASS = "org.yuanrong.runtime.server.RuntimeServer";
-const std::string PYTHON_SERVER_PATH = "/python/yr/main/yr_runtime_main.py";
 const std::string PYTHON_NEW_SERVER_PATH = "/python/yr/main/yr_runtime_main.py";
-const std::string PYTHON_SERVER_PATH_IN_WHEEL = "/../../main/yr_runtime_main.py";
 
 const std::string YR_JAVA_RUNTIME_PATH = "/java/yr-runtime-1.0.0.jar";
 const std::string POST_START_EXEC_REGEX = R"(^(uv )?pip3.[0-9]* install [a-zA-Z0-9\-\s:/\.=_]* && pip3.[0-9]* check$)";
