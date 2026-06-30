@@ -117,11 +117,10 @@ protected:
 
         // Initialize config
         RuntimeConfig config;
-        config.runtimeDir = "/tmp";
         config.runtimePath = "/tmp";
         config.runtimeLogPath = "/tmp/logs";
         config.runtimeStdLogDir = "std";
-        executor_->SetConfig(config);
+        executor_->config_ = config;
     }
 
     void TearDown() override
