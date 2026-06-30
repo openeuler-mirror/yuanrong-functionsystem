@@ -707,8 +707,9 @@ std::string DockerExecutor::ResolveExecPath(const std::string &language,
     }
     const auto &options = info.deploymentconfig().deployoptions();
     auto execPathIter = options.find(PARAM_EXEC_PATH);
-    std::string execPath =
-        (execPathIter != options.end()) ? execPathIter->second : cmdBuilder_.GetExecPath(language);
+    std::string execPath = (execPathIter != options.end())
+        ? execPathIter->second
+        : cmdBuilder_.GetExecPathFromRuntimeConfig(info.runtimeconfig());
     YRLOG_INFO("{}|{}|python: {} use execPath: {}", info.traceid(), info.requestid(), language, execPath);
     return execPath;
 }
