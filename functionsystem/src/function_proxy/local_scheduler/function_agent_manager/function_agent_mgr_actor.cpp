@@ -50,7 +50,8 @@ FunctionAgentMgrActor::FunctionAgentMgrActor(const std::string &name, const Para
       invalidAgentGCInterval_(param.invalidAgentGCInterval),
       nodeID_(nodeID),
       metaStoreClient_(std::move(metaStoreClient)),
-      enableForceDeletePod_(param.enableForceDeletePod)
+      enableForceDeletePod_(param.enableForceDeletePod),
+      coProcessMode_(param.enableCoProcessMode)
 {
 }
 
@@ -94,6 +95,7 @@ void FunctionAgentMgrActor::Init()
     Receive("UpdateCredResponse", &FunctionAgentMgrActor::UpdateCredResponse);
     Receive("SnapshotRuntimeResponse", &FunctionAgentMgrActor::SnapshotRuntimeResponse);
     Receive("QueryDebugInstanceInfosResponse", &FunctionAgentMgrActor::QueryDebugInstanceInfosResponse);
+    Receive("ReconcileRuntimesResponse", &FunctionAgentMgrActor::ReconcileRuntimesResponse);
     Receive("StaticFunctionScheduleRequest", &FunctionAgentMgrActor::StaticFunctionScheduleRequest);
     Receive("NotifyFunctionStatusChangeResp", &FunctionAgentMgrActor::NotifyFunctionStatusChangeResp);
 }
@@ -109,6 +111,10 @@ litebus::Future<Status> FunctionAgentMgrActor::Sync()
 litebus::Future<Status> FunctionAgentMgrActor::Recover()
 {
     YRLOG_INFO("start recover heartbeat of function proxy.");
+    if (coProcessMode_) {
+        YRLOG_INFO("co-process mode: skip recover internals, reconcile will handle instance cleanup.");
+        return Status::OK();
+    }
     RecoverHeartBeatHelper();
     SyncFailedAgentBundles();
     SyncFailedAgentInstances();
@@ -255,6 +261,10 @@ litebus::Future<Status> FunctionAgentMgrActor::EnableFuncAgent(const litebus::Fu
     }
     auto instanceCtrl = instanceCtrl_.lock();
     instanceCtrl->TriggerToWarmUpFunction(funcAgentID);
+    if (coProcessMode_ && reconcileCallback_) {
+        YRLOG_INFO("co-process mode: agent({}) enabled, triggering reconciliation.", funcAgentID);
+        reconcileCallback_(funcAgentID);
+    }
     return Status(StatusCode::SUCCESS);
 }
 
@@ -275,6 +285,10 @@ litebus::Future<Status> FunctionAgentMgrActor::AddFuncAgent(const Status &status
         YRLOG_INFO("the resource of etcd and agent({}) are the same.", funcAgentID);
         funcAgentTable_[funcAgentID].isInit = true;
         (void)bundleMgr->UpdateBundlesStatus(funcAgentID, UnitStatus::NORMAL);
+        if (coProcessMode_) {
+            YRLOG_INFO("co-process mode: agent({}) staying in RECOVERING until reconciliation completes", funcAgentID);
+            return Status::OK();
+        }
         return resourceView->UpdateUnitStatus(funcAgentID, UnitStatus::NORMAL);
     }
     return status;
@@ -1590,6 +1604,43 @@ void FunctionAgentMgrActor::SnapshotRuntimeResponse(const litebus::AID &from, st
                requestID, response.code(), checkpointID);
     (void)snapshotRuntimeSync_.Synchronized(requestID, response);
 }
+
+litebus::Future<messages::ReconcileRuntimesResponse> FunctionAgentMgrActor::ReconcileRuntimes(
+    const std::string &funcAgentID, const std::shared_ptr<messages::ReconcileRuntimesRequest> &request)
+{
+    if (funcAgentTable_.find(funcAgentID) == funcAgentTable_.end()) {
+        messages::ReconcileRuntimesResponse response;
+        response.set_requestid(request->requestid());
+        response.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        response.set_message("function agent is not registered");
+        YRLOG_ERROR("{}|failed to reconcile runtimes, function agent {} is not registered.",
+                    request->requestid(), funcAgentID);
+        return response;
+    }
+
+    auto requestID = request->requestid();
+    auto future = reconcileSync_.AddSynchronizer(requestID);
+
+    YRLOG_INFO("{}|send ReconcileRuntimes request to agent({}), entries: {}.",
+               requestID, funcAgentID, request->entries_size());
+    Send(funcAgentTable_[funcAgentID].aid, "ReconcileRuntimes", request->SerializeAsString());
+
+    return future;
+}
+
+void FunctionAgentMgrActor::ReconcileRuntimesResponse(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    messages::ReconcileRuntimesResponse response;
+    if (msg.empty() || !response.ParseFromString(msg)) {
+        YRLOG_WARN("invalid ReconcileRuntimesResponse from {}.", from.HashString());
+        return;
+    }
+
+    YRLOG_INFO("{}|received ReconcileRuntimesResponse, code: {}, orphansCleaned: {}, missingIDs: {}",
+               response.requestid(), response.code(), response.orphanscleaned(), response.missingids_size());
+    (void)reconcileSync_.Synchronized(response.requestid(), response);
+}
+
 
 litebus::Future<Status> FunctionAgentMgrActor::EvictAgent(const std::shared_ptr<messages::EvictAgentRequest> &req)
 {

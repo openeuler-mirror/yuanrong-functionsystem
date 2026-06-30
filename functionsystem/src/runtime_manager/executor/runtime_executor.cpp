@@ -19,6 +19,7 @@
 #include <google/protobuf/util/json_util.h>
 #include <yaml-cpp/yaml.h>
 #include <sys/eventfd.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -75,7 +76,8 @@ const std::vector<std::string> languages = {
     CPP_LANGUAGE,       GO_LANGUAGE,        JAVA_LANGUAGE,        JAVA11_LANGUAGE,
     JAVA17_LANGUAGE,    JAVA21_LANGUAGE,    PYTHON_LANGUAGE,      PYTHON3_LANGUAGE,
     PYTHON36_LANGUAGE,  PYTHON37_LANGUAGE,  PYTHON38_LANGUAGE,    PYTHON39_LANGUAGE,
-    PYTHON310_LANGUAGE, PYTHON311_LANGUAGE, POSIX_CUSTOM_RUNTIME, NODE_JS
+    PYTHON310_LANGUAGE, PYTHON311_LANGUAGE, PYTHON312_LANGUAGE,   PYTHON313_LANGUAGE,
+    POSIX_CUSTOM_RUNTIME, NODE_JS
 };
 const std::string VALGRIND_TOOL_PREFIX = "--tool=";
 const std::string MASSIF_TIME_UNIT_PREFIX = "--time-unit=";
@@ -97,7 +99,9 @@ const std::string JAVA_SYSTEM_PROPERTY_FILE = "-Dlog4j2.configurationFile=file:"
 const std::string JAVA_SYSTEM_LIBRARY_PATH = "-Djava.library.path=";
 const std::string JAVA_LOG_LEVEL = "-DlogLevel=";
 const std::string JAVA_JOB_ID = "-DjobId=job-";
+const std::string DEFAULT_JAVA8_CMD = "/opt/buildtools/jdk8/bin/java";
 const std::string JAVA_MAIN_CLASS = "org.yuanrong.runtime.server.RuntimeServer";
+const std::string PYTHON_NEW_SERVER_PATH = "/python/yr/main/yr_runtime_main.py";
 
 const std::string YR_JAVA_RUNTIME_PATH = "/java/yr-runtime-1.0.0.jar";
 const std::string POST_START_EXEC_REGEX = R"(^(uv )?pip3.[0-9]* install [a-zA-Z0-9\-\s:/\.=_]* && pip3.[0-9]* check$)";
@@ -1132,6 +1136,12 @@ std::string RuntimeExecutor::GetExecPath(const std::string &language) const
         languageCmd = JAVA21_LANGUAGE;
     }
     auto path = LookPath(languageCmd);
+    if (path.IsNone() && languageCmd == JAVA_LANGUAGE) {
+        path = LookPath("java");
+    }
+    if (path.IsNone() && languageCmd == JAVA_LANGUAGE && access(DEFAULT_JAVA8_CMD.c_str(), X_OK) == 0) {
+        return DEFAULT_JAVA8_CMD;
+    }
     if (path.IsNone()) {
         YRLOG_ERROR("GetExecPath failed, path is null");
         return "";
@@ -1660,7 +1670,8 @@ std::pair<Status, std::vector<std::string>> RuntimeExecutor::PythonBuildFinalArg
 {
     std::string jobID = PYTHON_JOB_ID_PREFIX + Utils::GetJobIDFromTraceID(info.traceid());
     std::string address = GetPosixAddress(config_, port);
-    std::string pythonServerPath = PYTHON_SERVER_PATH;
+
+    std::string pythonServerPath = PYTHON_NEW_SERVER_PATH;
     if (pkgType_ == PKG_TYPE_WHEEL) {
         pythonServerPath = PYTHON_SERVER_PATH_IN_WHEEL;
     }
@@ -2071,7 +2082,7 @@ std::vector<std::string> RuntimeExecutor::GetPythonBuildArgsForPrestart(const st
     YRLOG_DEBUG("GetPythonBuildArgs start {}", language);
     std::string execPath = GetExecPath(language);
     std::string address = GetPosixAddress(config_, port);
-    std::string pythonServerPath = PYTHON_SERVER_PATH;
+    std::string pythonServerPath = PYTHON_NEW_SERVER_PATH;
     if (pkgType_ == PKG_TYPE_WHEEL) {
         pythonServerPath = PYTHON_SERVER_PATH_IN_WHEEL;
     }

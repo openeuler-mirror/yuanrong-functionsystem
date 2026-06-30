@@ -20,7 +20,7 @@
 #include "function_master/global_scheduler/global_sched.h"
 #include "common/scheduler_topology/sched_node.h"
 #include "domain_activator.h"
-#include "function_master/common/flags/flags.cpp"
+#include "function_master/common/flags/flags.h"
 #include "global_sched_driver.h"
 #include "mocks/mock_domain_sched_mgr.h"
 #include "mocks/mock_domain_scheduler_launcher.h"
@@ -611,6 +611,20 @@ TEST_F(GlobalSchedTest, EvictAgent)
         EXPECT_EQ(future.IsOK(), true);
         EXPECT_EQ(future.Get().StatusCode(), StatusCode::PARAMETER_ERROR);
     }
+    globalSched_.Stop();
+    globalSched_.Await();
+}
+
+TEST_F(GlobalSchedTest, UpdateLocalSchedulingStatus)
+{
+    EXPECT_CALL(*mockLocalSchedMgr_, UpdateSchedulingStatusOnLocal(Eq("local"), true)).WillOnce(Return(Status::OK()));
+    EXPECT_CALL(*mockSchedTree_, FindLeafNode(Eq("localID")))
+        .WillOnce(Return(localSched_))
+        .WillOnce(Return(localSched_));
+
+    auto future = globalSched_.UpdateLocalSchedulingStatus("localID", true);
+    EXPECT_AWAIT_READY(future);
+    EXPECT_EQ(future.IsOK(), true);
     globalSched_.Stop();
     globalSched_.Await();
 }

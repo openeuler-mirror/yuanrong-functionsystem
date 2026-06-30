@@ -19,6 +19,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "actor/actor.hpp"
 
@@ -30,6 +31,7 @@
 #include "meta_store_client/meta_store_struct.h"
 #include "common/resource_view/resource_type.h"
 #include "function_master/global_scheduler/global_sched.h"
+#include "function_master/global_scheduler/traefik_route_cache.h"
 #include "function_master/resource_group_manager/resource_group_manager.h"
 #include "group_manager.h"
 #include "instance_family_caches.h"
@@ -100,6 +102,11 @@ public:
         quotaMgrAID_ = std::move(aid);
     }
 
+    void SetTraefikRouteCache(std::shared_ptr<global_scheduler::TraefikRouteCache> cache)
+    {
+        traefikRouteCache_ = std::move(cache);
+    }
+
     void HandleSystemUpgrade(bool isUpgrading);
 
     void AddNode(const std::string &nodeName);
@@ -156,6 +163,9 @@ private:
      * @param instance will be added
      */
     void OnInstancePut(const std::string &key, const std::shared_ptr<resource_view::InstanceInfo> &instance);
+    void UpdateTraefikRouteCache(const std::shared_ptr<resource_view::InstanceInfo> &instance);
+    bool HandleFaultedInstancePut(const std::string &key,
+                                  const std::shared_ptr<resource_view::InstanceInfo> &instance);
 
     /**
      * called when an instance is deleted.
@@ -268,6 +278,9 @@ private:
      * Periodically report instance count metrics
      */
     void ReportInstanceCountPeriodically();
+    size_t ReportNodeInstanceCountMetrics(std::unordered_set<std::string> &currentReportedNodeIDs);
+    void ClearRemovedNodeInstanceCountMetrics(const std::unordered_set<std::string> &currentReportedNodeIDs);
+    void ReportClusterInstanceTotalMetric(size_t totalInstanceCount, size_t nodeCount);
 
     /**
      * Periodically garbage collect FATAL instances that exceed timeout
@@ -323,6 +336,8 @@ private:
         std::unordered_map<std::string, litebus::Timer> abnormalDeferTimer;
         std::unordered_map<std::string, InstanceManagerMap> instances;
         std::unordered_map<std::string, InstanceKeyInfoPair> instID2Instance;
+        // 追踪已上报 per-node gauge 的节点 ID，用于在节点移除时显式上报 0 防止僵尸指标
+        std::unordered_set<std::string> reportedNodeIDs;
         // key is instanceID
         std::unordered_map<std::string, std::shared_ptr<messages::DebugInstanceInfo>> debugInstInfoMap;
         bool isUpgrading{ false };
@@ -538,6 +553,8 @@ private:
     bool isSuicide_{ false };
 
     litebus::Promise<bool> isInstancesReady_;
+
+    std::shared_ptr<global_scheduler::TraefikRouteCache> traefikRouteCache_;
 
     friend class DISABLED_InstanceManagerTest;
 };  // class InstanceManagerActor

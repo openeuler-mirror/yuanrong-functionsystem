@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,17 +15,20 @@
  */
 
 #include "metrics/exporters/opentelemetry_exporter/opentelemetry_exporter.h"
-#include <iostream>
+
 #include <fstream>
+#include <iostream>
 #include <mutex>
+
 #include <nlohmann/json.hpp>
-#include "opentelemetry/exporters/otlp/otlp_http_metric_exporter.h"
+
+#include "metrics/exporters/opentelemetry_exporter/attribute_utils.h"
+#include "opentelemetry/sdk/common/global_log_handler.h"
+#include "opentelemetry/sdk/instrumentationscope/instrumentation_scope.h"
 #include "opentelemetry/sdk/metrics/data/metric_data.h"
 #include "opentelemetry/sdk/metrics/export/metric_producer.h"
 #include "opentelemetry/sdk/resource/resource.h"
-#include "opentelemetry/sdk/instrumentationscope/instrumentation_scope.h"
-#include "opentelemetry/sdk/common/global_log_handler.h"
-
+#include "opentelemetry/exporters/otlp/otlp_http_metric_exporter.h"
 
 namespace observability {
 namespace exporters {
@@ -61,6 +64,12 @@ OpenTelemetryExporter::OpenTelemetryExporter(const std::string& config)
                 options_.headers[key] = value.get<std::string>();
             }
         }
+        if (root.contains("resource_attrs")) {
+            for (auto& [key, value] : root["resource_attrs"].items()) {
+                options_.resource_attrs[key] = value.get<std::string>();
+            }
+        }
+
         if (root.contains("export_mode")) {
             options_.export_mode = root["export_mode"].get<std::string>();
         }
@@ -127,8 +136,8 @@ ExportResult OpenTelemetryExporter::Export(
         for (const auto& point : metric.pointData) {
             opentelemetry::sdk::metrics::PointDataAttributes otel_point;
 
-            // Convert labels to OpenTelemetry OrderedAttributeMap
-            for (const auto& [key, value] : point.labels) {
+            const auto attributes = BuildPointAttributes(metric.instrumentDescriptor, point.labels);
+            for (const auto& [key, value] : attributes) {
                 otel_point.attributes[key] = value;
             }
 
@@ -173,10 +182,19 @@ ExportResult OpenTelemetryExporter::Export(
     // Create a Resource with service attributes so the OTLP exporter sends
     // non-empty resource attributes.  resource_ is a raw pointer so the
     // Resource object must outlive the Export() call.
-    auto resource = opentelemetry::sdk::resource::Resource::Create(
-        opentelemetry::sdk::resource::ResourceAttributes{
-            {"service.name", "yuanrong-functionsystem"}
-        });
+    //
+    // Inject per-instance attributes (e.g. service.instance.id, component,
+    // node_id) so that producers sharing the same service.name do not collapse
+    // into a single Prometheus labelset.  Without this, target_info from
+    // multiple instances would share one series and trigger out-of-order sample
+    // rejection by Prometheus remote-write.
+    opentelemetry::sdk::resource::ResourceAttributes resource_attributes{
+        {"service.name", "yuanrong-functionsystem"}
+    };
+    for (const auto& [key, value] : options_.resource_attrs) {
+        resource_attributes.SetAttribute(key, value);
+    }
+    auto resource = opentelemetry::sdk::resource::Resource::Create(resource_attributes);
 
     opentelemetry::sdk::metrics::ResourceMetrics resource_metrics;
     resource_metrics.resource_ = &resource;

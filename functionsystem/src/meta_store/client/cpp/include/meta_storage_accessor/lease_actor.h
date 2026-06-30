@@ -19,11 +19,12 @@
 
 #include <utility>
 #include <vector>
+
 #include "actor/actor.hpp"
 #include "async/asyncafter.hpp"
 #include "async/defer.hpp"
-#include "meta_store_client/meta_store_client.h"
 #include "common/status/status.h"
+#include "meta_store_client/meta_store_client.h"
 
 namespace functionsystem {
 

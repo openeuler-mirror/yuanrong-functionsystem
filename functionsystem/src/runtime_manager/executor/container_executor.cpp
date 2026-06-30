@@ -512,7 +512,7 @@ Envs BuildMountForCode(const std::shared_ptr<runtime::v1::StartRequest> &start,
     if (libPathIter != envs.posixEnvs.end() && !libPathIter->second.empty()) {
         funcPath = libPathIter->second;
     }
-    code->set_source(workingDirIter->second);
+    code->set_host_path(workingDirIter->second);
     if (workingDirIter->second.find(".img") != std::string::npos) {
         code->set_type("erofs");
         funcPath = DirName(workingDirIter->second);
@@ -528,7 +528,7 @@ Envs BuildMountForCode(const std::shared_ptr<runtime::v1::StartRequest> &start,
     for (auto &layer : GenerateLayerPath(request->runtimeinstanceinfo())) {
         auto code = start->add_mounts();
         code->set_type("bind");
-        code->set_source(layer);
+        code->set_host_path(layer);
         std::string target = layer;
         std::replace(target.begin(), target.end(), '/', '-');
         code->set_target(litebus::os::Join("/opt", target));
@@ -673,7 +673,7 @@ std::string BuildBootstrapWorkingRoot(
         return root;
     }
     const std::string mountDst = "/__yuanrong/";
-    mount.set_source(bootstrapConfig.root());
+    mount.set_host_path(bootstrapConfig.root());
     mount.set_target(mountDst);
 
     if (bootstrapConfig.type() == "erofs") {
@@ -750,7 +750,7 @@ litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(
     }
     runtime::v1::Mount mount;
     auto workingRoot = BuildBootstrapWorkingRoot(request, mount);
-    if (mount.source().length() > 0 && mount.target().length() > 0) {
+    if (mount.has_host_path() && mount.host_path().length() > 0 && mount.target().length() > 0) {
         *start->add_mounts() = mount;
     }
     BuildRuntimeCommands(start->mutable_funcruntime(), request, execPath, buildArgs);
@@ -1318,7 +1318,7 @@ litebus::Future<messages::StartInstanceResponse> ContainerExecutor::OnAddReferen
     SetRequestExtraConfigForRestore(restoreReq.get(), request);
     runtime::v1::Mount mount;
     auto workingRoot = BuildBootstrapWorkingRoot(request, mount);
-    if (mount.source().length() > 0 && mount.target().length() > 0) {
+    if (mount.has_host_path() && mount.host_path().length() > 0 && mount.target().length() > 0) {
         *restoreReq->add_mounts() = mount;
     }
     BuildRuntimeCommands(restoreReq->mutable_funcruntime(), request, execPath, buildArgs);

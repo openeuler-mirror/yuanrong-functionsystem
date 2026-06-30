@@ -17,6 +17,7 @@
 #include "metrics_adapter.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -99,6 +100,52 @@ static std::string GetLibraryPath(const std::string &exporterType)
         YRLOG_INFO("exporter {} get library path: {}", exporterType, filePath);
     }
     return filePath;
+}
+
+static void SetOtelDefaultConfig(nlohmann::json &initConfigJson, const std::string &componentName)
+{
+    if (initConfigJson.find("endpoint") == initConfigJson.end()) {
+        initConfigJson["endpoint"] = "http://localhost:4318/v1/metrics";
+    }
+    if (initConfigJson.find("protocol") == initConfigJson.end()) {
+        initConfigJson["protocol"] = "http";
+    }
+    if (initConfigJson.find("timeout") == initConfigJson.end()) {
+        constexpr int kDefaultTimeoutMs = 10000;  // 10 seconds
+        initConfigJson["timeout"] = kDefaultTimeoutMs;
+    }
+    if (initConfigJson.find("headers") == initConfigJson.end()) {
+        initConfigJson["headers"] = nlohmann::json::object();
+    }
+    initConfigJson["headers"]["service.name"] = componentName;
+}
+
+static void SetOptionalOtelResourceAttr(nlohmann::json &attrs, const char *envName, const std::string &attrName)
+{
+    if (const char *envValue = std::getenv(envName); envValue != nullptr && envValue[0] != '\0') {
+        attrs[attrName] = envValue;
+    }
+}
+
+static void SetOtelResourceAttrs(nlohmann::json &initConfigJson, const std::string &componentName,
+                                 const std::string &nodeId, const std::string &agentId)
+{
+    if (initConfigJson.find("resource_attrs") == initConfigJson.end()) {
+        initConfigJson["resource_attrs"] = nlohmann::json::object();
+    }
+    auto &attrs = initConfigJson["resource_attrs"];
+    std::string instanceId = componentName;
+    if (!nodeId.empty()) {
+        instanceId += "_" + nodeId;
+    }
+    if (!agentId.empty()) {
+        instanceId += "_" + agentId;
+    }
+    attrs["component"] = componentName;
+    attrs["service.instance.id"] = instanceId;
+    SetOptionalOtelResourceAttr(attrs, "POD_NAME", "pod_name");
+    SetOptionalOtelResourceAttr(attrs, "NODE_NAME", "node_name");
+    SetOptionalOtelResourceAttr(attrs, "INSTANCE_IP", "instance_ip");
 }
 
 const MetricsSdk::ExportConfigs MetricsAdapter::BuildExportConfigs(const nlohmann::json &exporterValue)
@@ -237,27 +284,16 @@ std::shared_ptr<MetricsExporters::Exporter> MetricsAdapter::InitOtelExporter(
     std::string initConfig;
     if (exporterValue.find("initConfig") != exporterValue.end()) {
         auto initConfigJson = exporterValue.at("initConfig");
-        // Set default endpoint if not provided
-        if (initConfigJson.find("endpoint") == initConfigJson.end()) {
-            initConfigJson["endpoint"] = "http://localhost:4318/v1/metrics";
-        }
-
-        // Set default protocol if not provided
-        if (initConfigJson.find("protocol") == initConfigJson.end()) {
-            initConfigJson["protocol"] = "http";
-        }
-
-        // Set default timeout if not provided
-        if (initConfigJson.find("timeout") == initConfigJson.end()) {
-            constexpr int kDefaultTimeoutMs = 10000;  // 10 seconds
-            initConfigJson["timeout"] = kDefaultTimeoutMs;
-        }
-
-        // Add service.name attribute as header for OTLP
-        if (initConfigJson.find("headers") == initConfigJson.end()) {
-            initConfigJson["headers"] = nlohmann::json::object();
-        }
-        initConfigJson["headers"]["service.name"] = metricsContext_.GetAttr("component_name");
+        // Inject per-instance OTLP resource attributes so each producer
+        // (function_master / function_proxy / function_agent on every node)
+        // emits a unique target_info labelset.  Without this the same series is
+        // written by multiple processes, which causes Prometheus remote-write
+        // to reject the whole batch with "out of order sample" and silently
+        // drops co-batched cluster metrics such as yr_cluster_cpu_capacity.
+        const auto componentName = metricsContext_.GetAttr("component_name");
+        SetOtelDefaultConfig(initConfigJson, componentName);
+        SetOtelResourceAttrs(initConfigJson, componentName, metricsContext_.GetAttr("node_id"),
+                             metricsContext_.GetAttr("agent_id"));
 
         try {
             YRLOG_INFO("metrics opentelemetry exporter for backend {}, initConfig: {}",
@@ -723,6 +759,38 @@ void MetricsAdapter::SendPodAlarm(const std::string &podName, const std::string 
     alarmHandler_.SendPodAlarm(podName, cause);
 }
 
+void MetricsAdapter::SendInstanceCreateFailureAlarm(const InstanceCreateFailureAlarm &alarm)
+{
+    if (enabledInstruments_.find(YRInstrument::YR_INSTANCE_CREATE_FAILURE_ALARM) == enabledInstruments_.end()) {
+        YRLOG_DEBUG("instance create failure alarm is not enabled");
+        return;
+    }
+    if (metricsContext_.GetAttr("component_name") != "function_proxy") {
+        YRLOG_DEBUG("current component({}) is not function proxy, do not send instance create failure alarm",
+                    metricsContext_.GetAttr("component_name"));
+        return;
+    }
+
+    MetricsApi::AlarmInfo alarmInfo;
+    AddAlarmCommonAttrs(alarmInfo);
+    alarmInfo.id = "YuanrongInstanceCreateFailure00001-" + alarm.requestID;
+    alarmInfo.alarmName = INSTANCE_CREATE_FAILURE_ALARM;
+    alarmInfo.alarmSeverity = MetricsApi::AlarmSeverity::MAJOR;
+    alarmInfo.locationInfo = alarm.locationInfo;
+    alarmInfo.cause = alarm.cause;
+    alarmInfo.startsAt = GetCurrentTimeInMilliSec();
+    alarmInfo.endsAt = 0;
+    alarmInfo.customOptions["source_tag"] = GetSourceTag() + "YuanrongInstanceCreateFailure";
+    alarmInfo.customOptions["resource_id"] = alarm.instanceID;
+    alarmInfo.customOptions["request_id"] = alarm.requestID;
+    alarmInfo.customOptions["runtime_id"] = alarm.runtimeID;
+    alarmInfo.customOptions["stage"] = alarm.stage;
+    alarmInfo.customOptions["status_code"] = alarm.statusCode;
+    alarmInfo.customOptions["op_type"] = "firing";
+    metricsContext_.SetAlarm(alarmInfo.id, alarmInfo);
+    alarmHandler_.SendInstanceCreateFailureAlarm(alarmInfo);
+}
+
 void MetricsAdapter::InitObservableCounter(const struct MeterTitle &title, int interval, MetricsApi::CallbackPtr &cb,
                                            observability::sdk::metrics::InstrumentValueType observableType)
 {
@@ -833,7 +901,6 @@ std::vector<std::string> MetricsAdapter::ConvertNodeLabels(const NodeLabelsType 
     return poolLabels;
 }
 
-
 void MetricsAdapter::RegisterPhysicalMetricsCounter()
 {
     RegisterPhysicalNodeCPUUtilization();
@@ -857,7 +924,6 @@ void MetricsAdapter::RegisterPhysicalNodeCPUUtilization()
     InitObservableGauge(meterTitle, INSTANCE_RUNNING_DURATION_COLLECT_INTERVAL, cb,
                         observability::sdk::metrics::InstrumentValueType::DOUBLE);
 }
-
 
 void MetricsAdapter::RegisterPhysicalNodeMemoryUsage()
 {
@@ -1019,7 +1085,6 @@ void MetricsAdapter::CollectPhysicalNodeNPUData(MetricsApi::ObserveResult obRes)
         std::get<std::shared_ptr<MetricsApi::ObserveResultT<double>>>(obRes)->Observe(vec);
     }
 }
-
 
 void MetricsAdapter::RegisterInstanceMetrics()
 {
@@ -1319,6 +1384,7 @@ std::pair<MetricsApi::MetricLabels, double> MetricsAdapter::BuildPodResourceData
                     resource_view::MEMORY_RESOURCE_NAME) },
             { "memory_capacity", GetResourceScalar(podResource.capacity, resource_view::MEMORY_RESOURCE_NAME) },
             { "pool_label", poolLabelsJson.dump() },
+            { "status", podResource.status.empty() ? "unknown" : podResource.status },
  			{ "agent_id", agentID },
             { "report_ms", std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
                                               std::chrono::system_clock::now().time_since_epoch())

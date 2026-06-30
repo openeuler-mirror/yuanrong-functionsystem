@@ -27,6 +27,7 @@
 #include "common/utils/meta_store_kv_operation.h"
 #include "common/meta_store_adapter/instance_operator.h"
 #include "common/utils/struct_transfer.h"
+#include "function_proxy/config/direct_routing_config.h"
 
 namespace functionsystem {
 const int32_t MAX_EXIT_TIMES = 3;
@@ -75,9 +76,23 @@ static const std::unordered_map<InstanceState, std::unordered_set<InstanceState>
                                                            bool isMetaStoreEnable)
 {
     auto state = static_cast<InstanceState>(instanceInfo.instancestatus().code());
+
+    // DR mode fast-path: skip etcd writes for SCHEDULING and CREATING (no route address yet).
+    // All other states (RUNNING, FAILED, FATAL, EXITED, etc.) follow the existing logic so that
+    // crash recovery and cleanup writes are preserved.
+    if (function_proxy::DirectRoutingConfig::IsEnabled()) {
+        if (state == InstanceState::SCHEDULING || state == InstanceState::CREATING) {
+            return PersistenceType::PERSISTENT_NOT;
+        }
+    }
+
     bool needPersistentRoute = functionsystem::NeedUpdateRouteState(state, isMetaStoreEnable);
     if (IsLowReliabilityInstance(instanceInfo)) {
         YRLOG_INFO("{}|Instance's reliability is low", instanceInfo.requestid());
+        if (IsForceLowReliabilityInstanceEnabled()
+            && (state == InstanceState::SCHEDULING || state == InstanceState::CREATING)) {
+            return PersistenceType::PERSISTENT_NOT;
+        }
         return needPersistentRoute ? PersistenceType::PERSISTENT_ALL : PersistenceType::PERSISTENT_NOT;
     }
 
@@ -248,11 +263,10 @@ litebus::Future<TransitionResult> InstanceStateMachine::TransitionTo(const Trans
         }
 
         UpdateInstanceVersion(context, instanceInfo);
-        if (auto iter = instanceInfo.createoptions().find(RELIABILITY_TYPE);
-            (iter != instanceInfo.createoptions().end() && iter->second == "low")
-            || context.newState == InstanceState::FATAL) {
-            YRLOG_WARN("{}|the {} is low  or instance state({}) is fatal, rm the init args", instanceInfo.requestid(),
-                RELIABILITY_TYPE, static_cast<int32_t>(context.newState));
+        const bool lowReliability = IsLowReliabilityInstance(instanceInfo);
+        if (lowReliability || context.newState == InstanceState::FATAL) {
+            YRLOG_WARN("{}|instance low reliability({}) or state({}) is fatal, rm the init args",
+                instanceInfo.requestid(), lowReliability, static_cast<int32_t>(context.newState));
             instanceInfo.clear_args();
         }
     }
@@ -294,8 +308,11 @@ litebus::Future<Status> InstanceStateMachine::DelInstance(const std::string &ins
         return instanceOpt_
             ->Delete(instancePutInfo, routePutInfo, debugInstPutInfo, instanceInfo.version(),
                      IsLowReliabilityInstance(instanceInfo))
-            .Then([key(keyPath), self(shared_from_this())](const OperateResult &result) {
+            .Then([key(keyPath), instanceID, self(shared_from_this())](const OperateResult &result) {
                 if (result.status.IsOk()) {
+                    if (controlPlaneObserver_ != nullptr) {
+                        controlPlaneObserver_->CancelWatchInstance(instanceID);
+                    }
                     return Status::OK();
                 }
                 YRLOG_ERROR("failed to delete key {} from metastore, errorCode: {}, error: {}", key,
@@ -1025,6 +1042,14 @@ void InstanceStateMachine::PublishDeleteToLocalObserver(const std::string &insta
 bool InstanceStateMachine::IsFirstPersistence(const InstanceInfo &newInstanceInfo, const InstanceState &oldState,
                                               const int64_t version) const
 {
+    // DR mode: SCHEDULING and CREATING writes are skipped, so version 0 means no prior etcd entry.
+    // Use Create (upsert) semantics whenever version == 0 to handle:
+    //   - first write at RUNNING (happy path)
+    //   - first write at FATAL/FAILED (crash before RUNNING)
+    // For resume after SUSPEND, version > 0 → Modify correctly updates the existing entry.
+    if (function_proxy::DirectRoutingConfig::IsEnabled()) {
+        return version == 0;
+    }
     return oldState == InstanceState::NEW ||
            // for group schedule we only need to persist creating
            (oldState == InstanceState::SCHEDULING && !newInstanceInfo.groupid().empty() && version == 0);

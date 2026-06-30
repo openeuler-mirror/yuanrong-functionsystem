@@ -18,7 +18,9 @@
 
 #include <async/asyncafter.hpp>
 #include <async/defer.hpp>
+#include <exec/reap_process.hpp>
 #include <regex>
+#include <csignal>
 
 #include "common/logs/logging.h"
 #include "common/utils/exec_utils.h"
@@ -27,6 +29,44 @@
 #include "runtime_manager/utils/std_redirector.h"
 
 namespace functionsystem::runtime_manager {
+namespace {
+constexpr int SIGNAL_EXIT_CODE_OFFSET = 128;
+
+std::string GetSignalName(int signal)
+{
+    switch (signal) {
+        case SIGBUS:
+            return "SIGBUS";
+        case SIGILL:
+            return "SIGILL";
+        case SIGALRM:
+            return "SIGALRM";
+        case SIGABRT:
+            return "SIGABRT";
+        case SIGSEGV:
+            return "SIGSEGV";
+        case SIGFPE:
+            return "SIGFPE";
+        default:
+            return "SIGNAL(" + std::to_string(signal) + ")";
+    }
+}
+
+std::string FormatExitInfo(int status)
+{
+    auto msg = " exitState:" + std::to_string(WIFEXITED(status)) +
+               " exitStatus:" + std::to_string(WEXITSTATUS(status));
+    if (WIFSIGNALED(status)) {
+        auto signal = WTERMSIG(status);
+        msg += " receive signal exitSignal:" + std::to_string(signal) + " " + GetSignalName(signal);
+    } else if (status > SIGNAL_EXIT_CODE_OFFSET) {
+        auto signal = status - SIGNAL_EXIT_CODE_OFFSET;
+        msg += " receive signal exitSignal:" + std::to_string(signal) + " " + GetSignalName(signal);
+    }
+    return msg;
+}
+}  // namespace
+
 const uint32_t RETRY_CYCLE = 1000;
 const std::vector<std::string> OOM_MSG = { "Memory cgroup out of memory: Kill process",
                                            "Memory cgroup out of memory: Killed process",
@@ -118,6 +158,10 @@ void HealthCheckActor::CheckHealthResponse(const litebus::AID &from, std::string
                         res.status(), res.message());
         }
     }
+    if (sandboxExitNotifyMap_.find(res.requestid()) != sandboxExitNotifyMap_.end()) {
+        sandboxExitNotifyMap_[res.requestid()]->SetValue(Status{ StatusCode(res.status()), res.message() });
+        (void)sandboxExitNotifyMap_.erase(res.requestid());
+    }
 }
 
 void HealthCheckActor::SetConfig(const Flags &flags)
@@ -187,6 +231,24 @@ litebus::Future<Status> HealthCheckActor::SendInstanceStatus(const std::string &
         });
 }
 
+litebus::Future<Status> HealthCheckActor::NotifySandboxExit(const std::string &instanceID,
+                                                            const std::string &runtimeID, int exitCode,
+                                                            const std::string &exitMessage,
+                                                            const std::string &requestID)
+{
+    auto req = GenUpdateInstanceStatusRequest(instanceID, exitCode, requestID);
+    auto info = req->mutable_instancestatusinfo();
+    info->set_instancemsg(exitMessage);
+    info->set_type(exitCode == 0 ? static_cast<int32_t>(EXIT_TYPE::RETURN)
+                                  : static_cast<int32_t>(EXIT_TYPE::UNKNOWN_ERROR));
+    YRLOG_INFO("{}|NotifySandboxExit: instanceID({}) runtimeID({}) exitCode({})", requestID, instanceID, runtimeID,
+               exitCode);
+    auto promise = std::make_shared<litebus::Promise<Status>>();
+    sandboxExitNotifyMap_[requestID] = promise;
+    litebus::Async(GetAID(), &HealthCheckActor::StartUpdateInstanceStatus, req, functionAgentAID_, runtimeID, exitCode);
+    return promise->GetFuture();
+}
+
 void HealthCheckActor::StartUpdateInstanceStatus(const std::shared_ptr<messages::UpdateInstanceStatusRequest> &req,
                                                  const litebus::AID &to, const std::string &runtimeID, const int status)
 {
@@ -208,6 +270,11 @@ void HealthCheckActor::UpdateInstanceStatus(const std::shared_ptr<messages::Upda
         sendCounter_[requestID] == sendFrequency_) {
         (void)timers_.erase(requestID);
         (void)sendCounter_.erase(requestID);
+        if (sandboxExitNotifyMap_.find(requestID) != sandboxExitNotifyMap_.end()) {
+            sandboxExitNotifyMap_[requestID]->SetValue(
+                Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "update instance status response timeout"));
+            (void)sandboxExitNotifyMap_.erase(requestID);
+        }
         return;
     }
     StartUpdateInstanceStatus(req, to, runtimeID, status);
@@ -292,6 +359,15 @@ void HealthCheckActor::WaitProcessCyclical()
                 HealthCheckActor::logPrefixExitCallback_(runtimeID);
             }
         } else {
+            // In merge_process mode, function_proxy's litebus ReaperActor lives in the
+            // same process and may also be waiting on this pid (e.g. a subprocess
+            // forked by ExecSession). waitpid(-1) above already reaped it, so hand the
+            // real status over to litebus's pending promise before falling through to
+            // the existing oom/callback paths. In non-merge_process mode this is a
+            // cheap no-op (g_promises is empty in runtime_manager).
+            if (litebus::TryNotifyExternalReap(pid, status)) {
+                continue;
+            }
             // Check if the pid corresponds to an RuntimeMemoryExceedLimit(OOM) situation
             if (auto iter(oomMap_.find(pid)); iter != oomMap_.end()) {
                 oomMap_.erase(pid); // end of lifecycle
@@ -344,15 +420,12 @@ litebus::Future<ExceptionInfo> HealthCheckActor::GetStdLog(const std::string &ru
         auto msg = StdRedirector::GetStdLog(logFile, runtimeID, ERROR_LEVEL);
         if (!msg.empty()) {
             msg = "instance(" + instanceID + ") runtime(" + runtimeID + ") exit code(" + std::to_string(status) +
-            ") with exitState(" + std::to_string(WIFEXITED(status)) + ") exitStatus(" +
-            std::to_string(WEXITSTATUS(status)) + ")\n" + msg;
+            ") with" + FormatExitInfo(status) + "\n" + msg;
             return ExceptionInfo{ msg, static_cast<int32_t>(EXIT_TYPE::STANDARD_INFO) };
         }
     }
     return ExceptionInfo{ "an unknown error caused the instance exited. exit code:" + std::to_string(status) +
-                          " instance:" + instanceID + " runtime:" + runtimeID +
-                          " exitState:" + std::to_string(WIFEXITED(status)) + " exitStatus:" +
-                          std::to_string(WEXITSTATUS(status)),
+                          " instance:" + instanceID + " runtime:" + runtimeID + FormatExitInfo(status),
                           static_cast<int32_t>(EXIT_TYPE::UNKNOWN_ERROR) };
 }
 

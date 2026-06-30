@@ -21,8 +21,23 @@ type ContainerRuntime interface {
 	// Delete 停止并删除容器。timeout=0 表示强制杀死。
 	Delete(ctx context.Context, containerID string, timeoutSeconds int64) error
 
+	// Stats 返回容器资源使用统计（CPU 累积纳秒、内存字节）。
+	Stats(ctx context.Context, containerID string) (*ContainerStats, error)
+
 	// Close 在服务关闭时执行清理。
 	Close() error
+}
+
+// ContainerStats 容器资源使用统计。
+type ContainerStats struct {
+	// CPUUsageNs 累积 CPU 用量（纳秒），单调递增。调用方对相邻两次快照做差分得到利用率。
+	CPUUsageNs uint64
+	// MemoryUsageBytes 当前内存用量（字节）。
+	MemoryUsageBytes uint64
+	// MemoryLimitBytes 内存限制（字节），0 表示无限制。
+	MemoryLimitBytes uint64
+	// MemoryMaxUsageBytes 历史峰值内存用量（字节）；cgroup v2 时为 0（不提供）。
+	MemoryMaxUsageBytes uint64
 }
 
 // CreateConfig 封装了创建和启动容器所需的全部配置。
@@ -60,10 +75,12 @@ type CreateConfig struct {
 
 // MountConfig 对应 proto Mount 消息。
 type MountConfig struct {
-	Type    string
-	Source  string
-	Target  string
-	Options []string
+	Type     string
+	Target   string
+	Options  []string
+	HostPath string
+	S3       *S3Config
+	ImageURL string
 }
 
 // RootfsConfig 对应 proto RootfsConfig 消息。
@@ -80,6 +97,7 @@ type RootfsSrcType int
 const (
 	RootfsSrcS3    RootfsSrcType = 0
 	RootfsSrcImage RootfsSrcType = 1
+	RootfsSrcLocal RootfsSrcType = 2
 )
 
 // S3Config S3 存储配置。

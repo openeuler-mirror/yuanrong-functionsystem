@@ -59,12 +59,14 @@ cc_library(
     ]),
     hdrs = glob([
         "busproxy/**/*.h",
+        "config/**/*.h",
         "common/**/*.h",
         "common/**/*.hpp",
     ]),
-    copts = COPTS + ["-fPIE"],
+    copts = COPTS + ["-fPIC", "-Ifunctionsystem/src"],
     deps = [
         ":function_proxy_inc",
+        "//functionsystem/src:src_root_inc",
         "@litebus//:litebus",
         "@datasystem_sdk//:datasystem_sdk",
         "//functionsystem/src/meta_store/client/cpp:meta_store_client",
@@ -76,6 +78,7 @@ cc_library(
         "//functionsystem/src/common:rpc",
         "//functionsystem/src/common:common_flags",
         "//functionsystem/src/common:resource_lock",
+        "//functionsystem/src/common:lru",
     ],
     visibility = ["//visibility:public"],
 )
@@ -84,14 +87,16 @@ cc_library(
 cc_binary(
     name = "function_proxy",
     srcs = ["main.cpp"],
-    copts = COPTS + ["-fPIE", "-fvisibility=hidden"],
+    copts = COPTS + ["-fPIE", "-fvisibility=hidden", "-Ifunctionsystem/src"],
     linkopts = ["-pie"],
     deps = [
         ":function_proxy_inc",
         ":function_proxy_base_lib",
+        "//functionsystem/src:src_root_inc",
         "//functionsystem/src/function_proxy/local_scheduler:local_scheduler_lib",
         "//functionsystem/src/common:utils",
         "//functionsystem/src/common:resource_lock",
+        "//functionsystem/src/common:lru",
         "//functionsystem/src/function_agent:function_agent_lib",
         "//functionsystem/src/runtime_manager:runtime_manager_lib",
         "//functionsystem/src/common:trace_adapter",

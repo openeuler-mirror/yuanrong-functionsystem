@@ -144,6 +144,8 @@ protected:
     void Finalize() override;
 
 private:
+    EXECUTOR_TYPE ResolveStopExecutorType(const std::shared_ptr<messages::StopInstanceRequest> &request);
+
     std::unordered_map<EXECUTOR_TYPE, std::shared_ptr<ExecutorProxy>> executorMap_;
 
     std::shared_ptr<MetricsClient> metricsClient_;
@@ -159,6 +161,7 @@ private:
 
     litebus::AID functionAgentAID_;
     std::string runtimeManagerID_;
+    std::string checkpointDir_;
     bool isUnitTestSituation_{ false };
     uint32_t pingTimeoutMs_{ DEFAULT_PING_PONG_TIMEOUT };
 
@@ -262,6 +265,8 @@ private:
     }
 
     void UpdateCredResponse(const litebus::AID &to, const litebus::Future<messages::UpdateCredResponse> &rsp);
+
+    void ReconcileRuntimes(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     bool CheckStartInstanceRequest(const messages::RuntimeInstanceInfo &instance);
 

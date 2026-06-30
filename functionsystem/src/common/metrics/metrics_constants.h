@@ -36,6 +36,14 @@ const std::string YR_NODE_DISK_CAPACITY = "yr_node_disk_capacity";
 const std::string YR_NODE_NPU = "yr_node_npu";
 const std::string YR_INSTANCE_CPU_USAGE = "yr_instance_cpu_usage";
 const std::string YR_INSTANCE_NPU = "yr_instance_npu";
+const std::string YR_SANDBOX_LIFECYCLE_STATUS = "yr_sandbox_lifecycle_status";
+const std::string YR_SANDBOX_LIFECYCLE_SECONDS = "yr_sandbox_lifecycle_seconds";
+const std::string YR_SANDBOX_REQUESTED_CPU_CORES = "yr_sandbox_requested_cpu_cores";
+const std::string YR_SANDBOX_REQUESTED_MEMORY_BYTES = "yr_sandbox_requested_memory_bytes";
+const std::string YR_SANDBOX_CPU_USAGE_CORES = "yr_sandbox_cpu_usage_cores";
+const std::string YR_SANDBOX_MEMORY_USAGE_RATIO = "yr_sandbox_memory_usage_ratio";
+const std::string YR_SANDBOX_MEMORY_USAGE_BYTES = "yr_sandbox_memory_usage_bytes";
+const std::string YR_SANDBOX_MEMORY_LIMIT_BYTES = "yr_sandbox_memory_limit_bytes";
 
 
 // alarm
@@ -47,6 +55,7 @@ const std::string S3_ALARM("yr_obs_alarm");
 const std::string POD_ALARM("yr_pod_alarm");
 const std::string ELECTION_ALARM("yr_election_alarm");
 const std::string METASTORE_ALARM("yr_metastore_alarm");
+const std::string INSTANCE_CREATE_FAILURE_ALARM("yr_instance_create_failure_alarm");
 const std::string YR_APP_INSTANCE_STATUS("yr_app_instance_status");
 const std::string YR_INSTANCE_EXIT_LATENCY("yr_instance_exit_latency");
 const std::string YR_INSTANCE_MEMORY_USAGE("yr_instance_memory_usage");
@@ -89,6 +98,7 @@ enum class YRInstrument {
     YR_INSTANCE_MEMORY_USAGE = 20,
     YR_INSTANCE_CPU_USAGE = 21,
     YR_INSTANCE_NPU = 22,
+    YR_INSTANCE_CREATE_FAILURE_ALARM = 23,
 };
 
 enum class AlarmLevel { OFF, NOTICE, INFO, MINOR, MAJOR, CRITICAL };
@@ -105,6 +115,7 @@ const std::unordered_map<std::string, YRInstrument> INSTRUMENT_DESC_2_ENUM = {
     { YR_POD_RESOURCE, YRInstrument::YR_POD_RESOURCE },
     { ELECTION_ALARM, YRInstrument::YR_ELECTION_ALARM },
     { METASTORE_ALARM, YRInstrument::YR_METASTORE_ALARM },
+    { INSTANCE_CREATE_FAILURE_ALARM, YRInstrument::YR_INSTANCE_CREATE_FAILURE_ALARM },
     { YR_APP_INSTANCE_STATUS, YRInstrument::YR_APP_INSTANCE_STATUS },
     { YR_INSTANCE_EXIT_LATENCY, YRInstrument::YR_INSTANCE_EXIT_LATENCY },
     { YR_NODE_CPU_USAGE, YRInstrument::YR_NODE_CPU_USAGE },
@@ -130,6 +141,7 @@ const std::unordered_map<YRInstrument, std::string> ENUM_2_INSTRUMENT_DESC = {
     { YRInstrument::YR_POD_RESOURCE, YR_POD_RESOURCE },
     { YRInstrument::YR_ELECTION_ALARM, ELECTION_ALARM },
     { YRInstrument::YR_METASTORE_ALARM, METASTORE_ALARM },
+    { YRInstrument::YR_INSTANCE_CREATE_FAILURE_ALARM, INSTANCE_CREATE_FAILURE_ALARM },
     { YRInstrument::YR_APP_INSTANCE_STATUS, YR_APP_INSTANCE_STATUS },
     { YRInstrument::YR_INSTANCE_EXIT_LATENCY, YR_INSTANCE_EXIT_LATENCY },
     { YRInstrument::YR_NODE_CPU_USAGE, YR_NODE_CPU_USAGE},

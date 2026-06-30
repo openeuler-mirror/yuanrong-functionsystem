@@ -96,9 +96,8 @@ litebus::Future<KillResponse> SnapCtrl::HandleSnapshot(const std::string &reques
     return litebus::Async(aid_, &SnapCtrlActor::HandleSnapshot, requestID, instanceID, payload);
 }
 
-litebus::Future<KillResponse> SnapCtrl::HandleSnapStart(const std::string &requestID,
-                                                        const std::string &checkpointID,
-                                                        const std::string &payload)
+litebus::Future<KillResponse> SnapCtrl::HandleSnapStart(
+    const std::string &requestID, const std::string &checkpointID, const std::string &payload)
 {
     ASSERT_IF_NULL(snapCtrlActor_);
     return litebus::Async(aid_, &SnapCtrlActor::HandleSnapStart, requestID, checkpointID, payload);

@@ -31,8 +31,10 @@
 #include "common/resource_view/resource_view_mgr.h"
 #include "common/status/status.h"
 #include "common/utils/actor_driver.h"
+#include "common/utils/request_sync_helper.h"
 #include "local_scheduler/function_agent_manager/function_agent_mgr.h"
 #include "local_scheduler/instance_control/instance_ctrl.h"
+#include "local_scheduler/subscription_manager/subscription_mgr.h"
 
 namespace functionsystem::local_scheduler {
 const int32_t PING_TIME_OUT_MS = 6000;
@@ -125,6 +127,11 @@ public:
      * @return status
      */
     litebus::Future<Status> NotifyWorkerStatus(const bool healthy);
+    litebus::Future<Status> UpdateSchedulingStatus(bool evicting);
+    void OnUpdateSchedulingStatus(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void SendUpdateSchedulingStatusResponse(const litebus::Future<Status> &status,
+                                            const litebus::AID &to,
+                                            const std::string &requestID);
 
     /**
      * receive forwarding schedule response from domain scheduler
@@ -209,15 +216,36 @@ public:
 
     litebus::Future<Status> TryCancelSchedule(const std::shared_ptr<messages::CancelSchedule> &cancelRequest);
 
-    litebus::Future<messages::RecordSnapshotResponse> RecordSnapshotMetadata(
-        const std::shared_ptr<messages::RecordSnapshotRequest> &req);
+    litebus::Future<::messages::RecordSnapshotResponse> RecordSnapshotMetadata(
+        const std::shared_ptr<::messages::RecordSnapshotRequest> &req);
     void OnRecordSnapshotMetadataResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 
-    litebus::Future<messages::RestoreSnapshotResponse> SnapStartCheckpoint(
-        const std::shared_ptr<messages::RestoreSnapshotRequest> &req);
-    void DoSnapStartCheckpoint(const std::shared_ptr<litebus::Promise<messages::RestoreSnapshotResponse>> &promise,
-                               const std::shared_ptr<messages::RestoreSnapshotRequest> &req);
+    litebus::Future<::messages::RestoreSnapshotResponse> SnapStartCheckpoint(
+        const std::shared_ptr<::messages::RestoreSnapshotRequest> &req);
+    void DoSnapStartCheckpoint(const std::shared_ptr<litebus::Promise<::messages::RestoreSnapshotResponse>> &promise,
+                               const std::shared_ptr<::messages::RestoreSnapshotRequest> &req);
     void OnSnapStartCheckpointResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    litebus::Future<::messages::ListSnapshotsByFunctionKeyResponse> ListSnapshotsByFunctionKey(
+        const std::shared_ptr<::messages::ListSnapshotsByFunctionKeyRequest> &req);
+    void OnListSnapshotsByFunctionKeyResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    litebus::Future<::messages::ListSnapshotsByTenantResponse> ListSnapshotsByTenant(
+        const std::shared_ptr<::messages::ListSnapshotsByTenantRequest> &req);
+    void OnListSnapshotsByTenantResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    litebus::Future<::messages::DeleteSnapshotResponse> DeleteSnapshot(
+        const std::shared_ptr<::messages::DeleteSnapshotRequest> &req);
+    void OnDeleteSnapshotResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    /**
+     * Receive tenant quota exceeded notification from domain scheduler.
+     * Blocks scheduling for the tenant during cooldown period.
+     * @param from: caller AID
+     * @param name: interface name
+     * @param msg: serialized TenantQuotaExceeded proto
+     */
+    void OnTenantQuotaExceeded(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     litebus::Future<Status> IsRegisteredToGlobal();
 
@@ -357,6 +385,13 @@ private:
     const uint32_t snapStartCheckpointTimeout_ = 10000;
     REQUEST_SYNC_HELPER(LocalSchedSrvActor, messages::RestoreSnapshotResponse,
                         snapStartCheckpointTimeout_, snapStartCheckpointSync_);
+    const uint32_t listSnapshotTimeout_ = 10000;
+    REQUEST_SYNC_HELPER(LocalSchedSrvActor, ::messages::ListSnapshotsByFunctionKeyResponse, listSnapshotTimeout_,
+                        listSnapshotsByFunctionKeySync_);
+    REQUEST_SYNC_HELPER(LocalSchedSrvActor, ::messages::ListSnapshotsByTenantResponse, listSnapshotTimeout_,
+                        listSnapshotsByTenantSync_);
+    REQUEST_SYNC_HELPER(LocalSchedSrvActor, ::messages::DeleteSnapshotResponse, listSnapshotTimeout_,
+                        deleteSnapshotSync_);
 
     litebus::Promise<Status> unRegistered_;
 

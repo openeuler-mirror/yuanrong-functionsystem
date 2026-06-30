@@ -41,6 +41,7 @@ TEST_F(BuildTest, GeneratePosixEnvsTest)
     litebus::os::SetEnv("RUNTIME_METRICS_CONFIG_FILE", "/tmp/home/snuser/config.json");
     RuntimeConfig runtimeConfig;
     runtimeConfig.runtimeLdLibraryPath = "/runtime/sdk/lib";
+    runtimeConfig.ip = "127.0.0.1";
     runtimeConfig.hostIP = "10.0.0.1";
     runtimeConfig.dataSystemPort = "31501";
     runtimeConfig.driverServerPort = "22771";

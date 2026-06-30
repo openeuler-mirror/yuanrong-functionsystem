@@ -26,6 +26,34 @@ BINARY_TARGETS = [
     "//functionsystem/src/runtime_manager:runtime_manager",
     "//functionsystem/src/iam_server:iam_server",
 ]
+BINARY_TARGET_BY_COMPONENT = {
+    "function_proxy": "//functionsystem/src/function_proxy:function_proxy",
+    "function_master": "//functionsystem/src/function_master:function_master",
+    "function_agent": "//functionsystem/src/function_agent:function_agent",
+    "domain_scheduler": "//functionsystem/src/domain_scheduler:domain_scheduler",
+    "runtime_manager": "//functionsystem/src/runtime_manager:runtime_manager",
+    "iam_server": "//functionsystem/src/iam_server:iam_server",
+}
+
+# Proto generation tools — built from Bazel source rather than CMake vendor.
+# Outputs land in bazel-bin/external/... and are statically linked (system libs only).
+PROTO_TOOL_TARGETS = [
+    "@com_google_protobuf//:protoc",
+    "@com_github_grpc_grpc//src/compiler:grpc_cpp_plugin",
+]
+
+# Metrics exporter plugins loaded via dlopen at runtime.
+# Built as cc_binary(linkshared=True) — output goes to bazel-bin/common/metrics/.
+EXPORTER_TARGETS = [
+    "//common/metrics:libobservability-metrics-file-exporter.so",
+    "//common/metrics:libobservability-prometheus-push-exporter.so",
+    "//common/metrics:libobservability-metrics-opentelemetry-exporter.so",
+]
+
+TEST_TARGETS = [
+    "//functionsystem/tests/unit:functionsystem_unit_test",
+    "//functionsystem/tests/integration:functionsystem_integration_test",
+]
 
 PROTO_FILES = [
     "common.proto",
@@ -79,6 +107,29 @@ def ensure_bazel_deps(root_dir: str):
     utils.sync_command(["bash", script], cwd=root_dir)
 
 
+def build_proto_tools(root_dir: str, bazel_output_root: str, distdir: str, job_num: int):
+    """Build protoc and grpc_cpp_plugin from Bazel source repos.
+
+    Outputs:
+      bazel-bin/external/com_google_protobuf/protoc
+      bazel-bin/external/com_github_grpc_grpc/src/compiler/grpc_cpp_plugin
+
+    These are statically linked against system libs only, so no LD_LIBRARY_PATH needed.
+    Replaces the CMake-built tools from vendor/output/Install/protobuf|grpc/.
+    """
+    log.info("Building proto tools (protoc, grpc_cpp_plugin) via Bazel...")
+    bazel_cmd = [
+        "bazel",
+        f"--output_user_root={bazel_output_root}",
+        "build",
+        f"--distdir={distdir}",
+        f"--jobs={job_num}",
+        "--config=release",
+        *PROTO_TOOL_TARGETS,
+    ]
+    utils.sync_command(bazel_cmd, cwd=root_dir)
+
+
 def generate_proto_sources(root_dir: str):
     """Generate protobuf/grpc C++ sources into functionsystem/src/common/proto/pb/posix/.
 
@@ -96,7 +147,7 @@ def generate_proto_sources(root_dir: str):
     proto_root = os.path.join(root_dir, "proto", "posix")
     output_dir = os.path.join(root_dir, "functionsystem", "src", "common", "proto", "pb", "posix")
     os.makedirs(output_dir, exist_ok=True)
-    plugin_env = _build_grpc_plugin_env(root_dir)
+    plugin_env = _build_grpc_plugin_env(root_dir, grpc_cpp_plugin)
 
     expected_outputs = _expected_generated_files(output_dir)
     if _proto_outputs_up_to_date(proto_root, expected_outputs, protoc, grpc_cpp_plugin):
@@ -170,6 +221,13 @@ def _proto_outputs_up_to_date(proto_root: str, expected_outputs, protoc: str, gr
 
 
 def _find_grpc_cpp_plugin(root_dir: str):
+    # Prefer Bazel-built plugin (statically linked, no LD_LIBRARY_PATH needed)
+    bazel_plugin = os.path.join(
+        root_dir, "bazel-bin", "external", "com_github_grpc_grpc", "src", "compiler", "grpc_cpp_plugin"
+    )
+    if os.path.isfile(bazel_plugin) and os.access(bazel_plugin, os.X_OK):
+        return bazel_plugin
+
     plugin = shutil.which("grpc_cpp_plugin")
     if plugin is not None:
         return plugin
@@ -187,6 +245,11 @@ def _find_grpc_cpp_plugin(root_dir: str):
 
 
 def _find_protoc(root_dir: str):
+    # Prefer Bazel-built protoc (statically linked, no LD_LIBRARY_PATH needed)
+    bazel_protoc = os.path.join(root_dir, "bazel-bin", "external", "com_google_protobuf", "protoc")
+    if os.path.isfile(bazel_protoc) and os.access(bazel_protoc, os.X_OK):
+        return bazel_protoc
+
     candidates = [
         os.path.join(root_dir, "vendor", "output", "Install", "protobuf", "bin", "protoc"),
         os.path.join(root_dir, "vendor", "output", "openEuler", "Install", "protobuf", "bin", "protoc"),
@@ -197,8 +260,18 @@ def _find_protoc(root_dir: str):
     return shutil.which("protoc")
 
 
-def _build_grpc_plugin_env(root_dir: str):
+def _build_grpc_plugin_env(root_dir: str, grpc_cpp_plugin: str = ""):
+    """Build environment for running protoc + grpc_cpp_plugin.
+
+    Bazel-built tools link only against system libs, so no extra LD_LIBRARY_PATH is needed.
+    CMake-built tools (vendor/output/Install/grpc/) require their lib dir on LD_LIBRARY_PATH.
+    """
     env = os.environ.copy()
+    bazel_bin = os.path.join(root_dir, "bazel-bin")
+    if grpc_cpp_plugin.startswith(bazel_bin):
+        # Bazel-built tool: system libs only, no vendor paths needed
+        return env
+
     ld_library_path = env.get("LD_LIBRARY_PATH", "")
     lib_dirs = [
         os.path.join(root_dir, "vendor", "output", "Install", "grpc", "lib"),
@@ -212,7 +285,7 @@ def _build_grpc_plugin_env(root_dir: str):
     return env
 
 
-def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: str = "Release"):
+def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: str = "Release", component: str = "all"):
     """Build all functionsystem C++ binaries using Bazel and copy artifacts to output/.
 
     Args:
@@ -223,7 +296,6 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     """
     check_bazel_available()
     ensure_bazel_deps(root_dir)
-    generate_proto_sources(root_dir)
 
     # Determine bazel config flag
     config = "release" if build_type.lower() == "release" else "debug"
@@ -232,7 +304,9 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     bin_output_dir = os.path.join(output_dir, "bin")
     os.makedirs(bin_output_dir, exist_ok=True)
 
-    log.info(f"Running Bazel build with config={config}, jobs={job_num}")
+    build_targets = BINARY_TARGETS if component == "all" else [BINARY_TARGET_BY_COMPONENT[component]]
+
+    log.info(f"Running Bazel build with config={config}, jobs={job_num}, component={component}")
 
     # Place Bazel output under workspace/build/ (bind-mounted via -v /home/:/home/).
     # Without this, the default output root lands on Docker overlayfs (/root/.cache/bazel/),
@@ -246,7 +320,14 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     # --distdir=./thirdparty/runtime_deps pattern.
     distdir = os.path.join(root_dir, "thirdparty", "runtime_deps")
 
-    # Build all binary targets
+    # Build proto tools from Bazel source before proto generation.
+    # This produces bazel-bin/external/com_google_protobuf/protoc and
+    # bazel-bin/external/com_github_grpc_grpc/src/compiler/grpc_cpp_plugin,
+    # replacing the CMake-built tools from vendor/output/Install/protobuf|grpc/.
+    build_proto_tools(root_dir, bazel_output_root, distdir, job_num)
+    generate_proto_sources(root_dir)
+
+    # Build all binary targets plus metrics exporter plugins
     bazel_cmd = [
         "bazel",
         f"--output_user_root={bazel_output_root}",
@@ -254,12 +335,13 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
         f"--distdir={distdir}",
         f"--jobs={job_num}",
         f"--config={config}",
-        *BINARY_TARGETS,
+        *build_targets,
+        *EXPORTER_TARGETS,
     ]
     utils.sync_command(bazel_cmd, cwd=root_dir)
 
     # Copy Bazel-built binaries to functionsystem/output/bin/
-    _copy_bazel_outputs(root_dir, bin_output_dir)
+    _copy_bazel_outputs(root_dir, bin_output_dir, component)
 
     # Copy required shared libraries to functionsystem/output/lib/
     _copy_shared_libraries(root_dir, output_dir)
@@ -267,7 +349,73 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     log.info(f"Bazel build complete. Binaries installed to {bin_output_dir}")
 
 
-def _copy_bazel_outputs(root_dir: str, bin_output_dir: str):
+def build_gtest_bazel(root_dir: str, job_num: int):
+    """Build functionsystem test binaries with Bazel."""
+    bazel_output_root, distdir = _prepare_bazel_workspace(root_dir, job_num)
+    bazel_cmd = [
+        "bazel",
+        f"--output_user_root={bazel_output_root}",
+        "build",
+        f"--distdir={distdir}",
+        f"--jobs={job_num}",
+        "--config=debug",
+        *TEST_TARGETS,
+    ]
+    utils.sync_command(bazel_cmd, cwd=root_dir)
+
+
+def _bazel_test_env_flags(root_dir: str):
+    lib_dirs = [
+        os.path.join(root_dir, "functionsystem", "output", "lib"),
+        os.path.join(root_dir, "common", "logs", "output", "lib"),
+        os.path.join(root_dir, "common", "litebus", "output", "lib"),
+        os.path.join(root_dir, "common", "metrics", "output", "lib"),
+    ]
+    existing = [lib_dir for lib_dir in lib_dirs if os.path.isdir(lib_dir)]
+    env_flags = []
+    ld_library_path = os.environ.get("LD_LIBRARY_PATH", "")
+    if existing:
+        value = ":".join(existing + ([ld_library_path] if ld_library_path else []))
+        env_flags.append(f"--test_env=LD_LIBRARY_PATH={value}")
+    output_bin = os.path.join(root_dir, "functionsystem", "output", "bin")
+    if os.path.isdir(output_bin):
+        env_flags.append(f"--test_env=BIN_PATH={output_bin}")
+    return env_flags
+
+
+def run_gtest_bazel(root_dir: str, job_num: int, test_suite: str = "*", test_case: str = "*"):
+    """Run functionsystem tests with Bazel, preserving the legacy gtest filter flags."""
+    bazel_output_root, distdir = _prepare_bazel_workspace(root_dir, job_num)
+    gtest_filter = f"{test_suite}.{test_case}"
+    bazel_cmd = [
+        "bazel",
+        f"--output_user_root={bazel_output_root}",
+        "test",
+        f"--distdir={distdir}",
+        f"--jobs={job_num}",
+        "--config=debug",
+        *_bazel_test_env_flags(root_dir),
+        f"--test_arg=--gtest_filter={gtest_filter}",
+        "--test_output=errors",
+        *TEST_TARGETS,
+    ]
+    utils.sync_command(bazel_cmd, cwd=root_dir)
+
+
+def _prepare_bazel_workspace(root_dir: str, job_num: int):
+    check_bazel_available()
+    ensure_bazel_deps(root_dir)
+
+    bazel_output_root = os.path.join(root_dir, "build", "bazel_root")
+    os.makedirs(bazel_output_root, exist_ok=True)
+    distdir = os.path.join(root_dir, "thirdparty", "runtime_deps")
+
+    build_proto_tools(root_dir, bazel_output_root, distdir, job_num)
+    generate_proto_sources(root_dir)
+    return bazel_output_root, distdir
+
+
+def _copy_bazel_outputs(root_dir: str, bin_output_dir: str, component: str = "all"):
     """Copy compiled binaries from bazel-bin/ into functionsystem/output/bin/."""
     binary_names = [
         "function_proxy",
@@ -287,6 +435,8 @@ def _copy_bazel_outputs(root_dir: str, bin_output_dir: str):
         os.path.join(bazel_bin, "functionsystem", "src", "iam_server"),
     ]
     for binary, src_dir in zip(binary_names, src_dirs):
+        if component != "all" and binary != component:
+            continue
         src_binary = os.path.join(src_dir, binary)
         dst_binary = os.path.join(bin_output_dir, binary)
         if os.path.isfile(src_binary):
@@ -299,19 +449,20 @@ def _copy_bazel_outputs(root_dir: str, bin_output_dir: str):
 def _copy_shared_libraries(root_dir: str, output_dir: str):
     """Copy required shared libraries to output/lib/.
 
-    Only pre-built (.so) dependencies are copied.  Bazel-managed deps
-    (gRPC, protobuf, abseil, boringssl, c-ares) are statically linked into
-    the binaries and do not need runtime .so files.
+    Bazel-built sources:
+      logs (//common/logs:yrlogs)       → statically linked into consumers; no .so needed
+      metrics API/SDK                   → statically linked into binaries; no .so needed
+      OTel (@opentelemetry_cpp)         → statically linked into binaries; plugin linkage follows Bazel plugin targets
+      metrics exporter plugins          → cc_binary(linkshared) in bazel-bin/common/metrics/
 
-    Source directories mirror the new_local_repository declarations in WORKSPACE:
-      @litebus              → common/litebus/output/lib/
-      @logs_sdk             → common/logs/output/lib/
-      @metrics_sdk          → common/metrics/output/lib/
-      @datasystem_sdk       → vendor/src/datasystem/sdk/cpp/lib/
-      @obs_sdk              → vendor/output/Install/obs/lib/
-      @curl_sdk             → vendor/output/Install/curl/lib/
-      @opentelemetry_prebuilt → vendor/output/Install/opentelemetry/lib/
+    Pre-built .so dependencies still needed at runtime:
+      @litebus       → common/litebus/output/lib/
+      @datasystem_sdk → vendor/src/datasystem/sdk/cpp/lib/
+      @obs_sdk        → vendor/output/Install/obs/lib/
+      @curl_sdk       → vendor/output/Install/curl/lib/
+
     Note: @etcdapi and @minizip_sdk use static (.a) libs only — skipped.
+    Note: @logs_sdk, @metrics_sdk, @opentelemetry_prebuilt are replaced by Bazel source builds.
     """
     lib_output_dir = os.path.join(output_dir, "lib")
     os.makedirs(lib_output_dir, exist_ok=True)
@@ -319,15 +470,13 @@ def _copy_shared_libraries(root_dir: str, output_dir: str):
     vendor_install = os.path.join(root_dir, "vendor", "output", "Install")
 
     lib_search_dirs = [
-        # Pre-built common libraries
-        os.path.join(root_dir, "common", "litebus", "output", "lib"),   # @litebus
-        os.path.join(root_dir, "common", "logs", "output", "lib"),      # @logs_sdk
-        os.path.join(root_dir, "common", "metrics", "output", "lib"),   # @metrics_sdk
-        # Pre-built vendor libraries
+        # Pre-built runtime .so dependencies
+        os.path.join(root_dir, "common", "litebus", "output", "lib"),             # @litebus
         os.path.join(root_dir, "vendor", "src", "datasystem", "sdk", "cpp", "lib"),  # @datasystem_sdk
-        os.path.join(vendor_install, "obs", "lib"),             # @obs_sdk
-        os.path.join(vendor_install, "curl", "lib"),            # @curl_sdk
-        os.path.join(vendor_install, "opentelemetry", "lib"),   # @opentelemetry_prebuilt
+        os.path.join(vendor_install, "obs", "lib"),                                # @obs_sdk
+        os.path.join(vendor_install, "curl", "lib"),                               # @curl_sdk
+        os.path.join(root_dir, "bazel-bin", "external", "com_google_protobuf"),     # @com_google_protobuf
+        os.path.join(root_dir, "bazel-bin", "external", "com_github_grpc_grpc"),    # @com_github_grpc_grpc
     ]
 
     import glob as glob_module
@@ -337,12 +486,30 @@ def _copy_shared_libraries(root_dir: str, output_dir: str):
         if not os.path.isdir(src_dir):
             log.debug(f"Shared-lib source dir not found, skipping: {src_dir}")
             continue
-        for so_file in glob_module.glob(os.path.join(src_dir, "lib*.so*")):
+        for so_file in glob_module.glob(os.path.join(src_dir, "**", "lib*.so*"), recursive=True):
             basename = os.path.basename(so_file)
             dst_path = os.path.join(lib_output_dir, basename)
             shutil.copy2(so_file, dst_path)
             log.info(f"Installed {basename} -> {dst_path}")
             copied_count += 1
+
+    # Stage Bazel-built metrics exporter plugins (cc_binary linkshared=True).
+    # These are loaded at runtime via dlopen from <binary_dir>/../lib/.
+    bazel_bin = os.path.join(root_dir, "bazel-bin")
+    exporter_so_names = [
+        "libobservability-metrics-file-exporter.so",
+        "libobservability-prometheus-push-exporter.so",
+        "libobservability-metrics-opentelemetry-exporter.so",
+    ]
+    for so_name in exporter_so_names:
+        src_path = os.path.join(bazel_bin, "common", "metrics", so_name)
+        dst_path = os.path.join(lib_output_dir, so_name)
+        if os.path.isfile(src_path):
+            shutil.copy2(src_path, dst_path)
+            log.info(f"Installed {so_name} -> {dst_path}")
+            copied_count += 1
+        else:
+            log.warning(f"Exporter plugin not found in bazel-bin: {src_path}")
 
     if copied_count > 0:
         log.info(f"Installed {copied_count} shared libraries to {lib_output_dir}")

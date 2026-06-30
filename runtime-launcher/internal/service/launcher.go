@@ -35,6 +35,16 @@ func (s *LauncherService) Start(ctx context.Context, req *pb.StartRequest) (*pb.
 		return &pb.StartResponse{Code: 1, Message: "funcRuntime 不能为空"}, nil
 	}
 
+	// 如果指定了 ckpt_dir，走 restore 流程：校验检查点目录存在
+	if ckptDir := req.GetCkptDir(); ckptDir != "" {
+		if _, err := os.Stat(ckptDir); os.IsNotExist(err) {
+			return &pb.StartResponse{
+				Code:    1,
+				Message: fmt.Sprintf("检查点目录不存在: %s", ckptDir),
+			}, nil
+		}
+	}
+
 	funcRt := req.GetFuncRuntime()
 	runtimeID := funcRt.GetId()
 
@@ -179,15 +189,7 @@ func (s *LauncherService) buildCreateConfig(req *pb.StartRequest) *rt.CreateConf
 	}
 
 	// 转换挂载配置
-	mounts := make([]rt.MountConfig, 0, len(req.GetMounts()))
-	for _, m := range req.GetMounts() {
-		mounts = append(mounts, rt.MountConfig{
-			Type:    m.GetType(),
-			Source:  m.GetSource(),
-			Target:  m.GetTarget(),
-			Options: m.GetOptions(),
-		})
-	}
+	mounts := convertProtoMounts(req.GetMounts())
 
 	// 转换 rootfs 配置
 	rootfs := rt.RootfsConfig{}
@@ -300,10 +302,8 @@ func (s *LauncherService) Restore(ctx context.Context, req *pb.RestoreRequest) (
 
 	log.Printf("[service] Restore(mock): runtimeID=%s, ckpt_dir=%s", runtimeID, ckptDir)
 
-	// 按照 Start 的方式构建配置并启动新容器
 	cfg := s.buildCreateConfigFromRestore(req)
 
-	// 如果此 runtimeID 已注册（预热），合并注册时的环境变量
 	if regRt, ok := s.stateMgr.GetRegisteredRuntime(runtimeID); ok {
 		for k, v := range regRt.GetRuntimeEnvs() {
 			if _, exists := cfg.Envs[k]; !exists {
@@ -332,7 +332,6 @@ func (s *LauncherService) Restore(ctx context.Context, req *pb.RestoreRequest) (
 }
 
 // buildCreateConfigFromRestore 从 proto RestoreRequest 构建 CreateConfig。
-// RestoreRequest 与 StartRequest 结构相同（额外多 ckpt_dir 和 trace_id）。
 func (s *LauncherService) buildCreateConfigFromRestore(req *pb.RestoreRequest) *rt.CreateConfig {
 	funcRt := req.GetFuncRuntime()
 
@@ -344,15 +343,7 @@ func (s *LauncherService) buildCreateConfigFromRestore(req *pb.RestoreRequest) *
 		envs[k] = v
 	}
 
-	mounts := make([]rt.MountConfig, 0, len(req.GetMounts()))
-	for _, m := range req.GetMounts() {
-		mounts = append(mounts, rt.MountConfig{
-			Type:    m.GetType(),
-			Source:  m.GetSource(),
-			Target:  m.GetTarget(),
-			Options: m.GetOptions(),
-		})
-	}
+	mounts := convertProtoMounts(req.GetMounts())
 
 	rootfs := rt.RootfsConfig{}
 	if funcRt.GetRootfs() != nil {
@@ -400,6 +391,75 @@ func (s *LauncherService) buildCreateConfigFromRestore(req *pb.RestoreRequest) *
 		MakeSeed:     funcRt.GetMakeSeed(),
 		Network:      network,
 	}
+}
+
+// List 返回容器列表。
+func (s *LauncherService) List(ctx context.Context, req *pb.ListContainersRequest) (*pb.ListContainersResponse, error) {
+	log.Printf("[service] List: id=%s", req.GetId())
+	return &pb.ListContainersResponse{}, nil
+}
+
+// Stats 返回容器真实资源使用统计，通过 Docker API 读取 cgroup 数据。
+func (s *LauncherService) Stats(ctx context.Context, req *pb.StatsRequest) (*pb.StatsResponse, error) {
+	id := req.GetId()
+
+	cs, err := s.runtime.Stats(ctx, id)
+	if err != nil {
+		log.Printf("[service] Stats: id=%s err=%v", id, err)
+		return &pb.StatsResponse{}, nil
+	}
+
+	log.Printf("[service] Stats: id=%s cpu_ns=%d mem=%dMiB limit=%dMiB",
+		id, cs.CPUUsageNs, cs.MemoryUsageBytes/1024/1024, cs.MemoryLimitBytes/1024/1024)
+
+	return &pb.StatsResponse{
+		CpuUsageNs:          cs.CPUUsageNs,
+		MemoryUsageBytes:    cs.MemoryUsageBytes,
+		MemoryLimitBytes:    cs.MemoryLimitBytes,
+		MemoryMaxUsageBytes: cs.MemoryMaxUsageBytes,
+	}, nil
+}
+
+// Version 返回运行时版本信息。
+func (s *LauncherService) Version(ctx context.Context, req *pb.VersionRequest) (*pb.VersionResponse, error) {
+	return &pb.VersionResponse{
+		Version: "0.1.0",
+		Runtimes: []*pb.RuntimeVersion{
+			{RuntimeName: s.runtime.Name(), RuntimeVersion: "0.1.0"},
+		},
+	}, nil
+}
+
+// convertProtoMounts 将 proto Mount 列表转为内部 MountConfig 列表。
+// proto Mount.Source 为字符串，直接映射到 MountConfig.HostPath。
+func convertProtoMounts(protoMounts []*pb.Mount) []rt.MountConfig {
+	mounts := make([]rt.MountConfig, 0, len(protoMounts))
+	for _, m := range protoMounts {
+		mc := rt.MountConfig{
+			Type:    m.GetType(),
+			Target:  m.GetTarget(),
+			Options: m.GetOptions(),
+		}
+		switch src := m.GetSource().(type) {
+		case *pb.Mount_HostPath:
+			mc.HostPath = src.HostPath
+		case *pb.Mount_S3Config:
+			if src.S3Config != nil {
+				mc.S3 = &rt.S3Config{
+					Endpoint:        src.S3Config.GetEndpoint(),
+					Bucket:          src.S3Config.GetBucket(),
+					Object:          src.S3Config.GetObject(),
+					AccessKeyID:     src.S3Config.GetAccessKeyID(),
+					AccessKeySecret: src.S3Config.GetAccessKeySecret(),
+				}
+			}
+		case *pb.Mount_ImageUrl:
+			mc.ImageURL = src.ImageUrl
+		default:
+		}
+		mounts = append(mounts, mc)
+	}
+	return mounts
 }
 
 // watchContainer 后台监听容器退出，更新状态。

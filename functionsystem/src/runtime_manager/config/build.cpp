@@ -169,6 +169,7 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     if (language.find(PYTHON_LANGUAGE) != std::string::npos) {
         ss << ":" << config.runtimePath << "/python/yr";
     }
+
     if (!config.runtimeLdLibraryPath.empty() &&
         request->type() == static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME)) {
         ss << ":" << config.runtimeLdLibraryPath;
@@ -176,31 +177,7 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     std::string ldLibraryPath = ss.str();
     YRLOG_INFO("{}|{}|start runtime env LD_LIBRARY_PATH: {}", info.traceid(), info.requestid(), ldLibraryPath);
 
-    std::map<std::string, std::string> posixEnvs = {
-        { POSIX_LISTEN_ADDR, config.ip + ":" + port },
-        { POD_IP, config.ip },
-        { SNUSER_LIB_PATH, config.snuserLibDir },
-        { YR_RUNTIME_ID, info.runtimeid() },
-        { INSTANCE_ID_ENV, info.instanceid() },
-        { DATA_SYSTEM_ADDR,
-          config.hostIP + ":" + config.dataSystemPort },  // the port of datasystem worker should be configurable.
-        { YR_DS_ADDRESS,  // keep same env name for runtime in driver mode and job submission mode
-          config.hostIP + ":" + config.dataSystemPort },
-        { DRIVER_SERVER_PORT, config.driverServerPort },
-        { HOME_ENV, config.runtimeHomeDir },
-        { HOST_IP, config.hostIP },
-        { FUNCTION_LIB_PATH, deployFilePath },
-        { "YR_FUNCTION_LIB_PATH", deployFilePath },
-        { LAYER_LIB_PATH, layerPath },
-        { LD_LIBRARY_PATH, ldLibraryPath },
-        { PROXY_GRPC_SERVER_PORT, config.proxyGrpcServerPort },
-        { YR_SERVER_ADDRESS,  // keep same env name for runtime in driver mode and job submission mode
-          config.proxyIP + ":" + config.proxyGrpcServerPort },
-        { CLUSTER_ID, config.clusterID },
-        { NODE_ID, config.nodeID },
-        { ENABLE_DIS_CONV_CALL_STACK, config.enableDisConvCallStack ? "true" : "false" },
-        { YR_DEBUG_SERVER_PORT, debugServerPort }
-    };
+    std::map<std::string, std::string> posixEnvs;
     auto addIfValid = [&posixEnvs](const std::string &key, const std::string &value) {
         if (value.empty() || value == "0") {
             return;
@@ -213,8 +190,7 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     addIfValid(YR_RUNTIME_ID, info.runtimeid());
     addIfValid(INSTANCE_ID_ENV, info.instanceid());
     addIfValid(DATA_SYSTEM_ADDR,
-               config.hostIP + ":" + config.dataSystemPort);  // the port of datasystem worker should be configurable.
-    // keep same env name for runtime in driver mode and job submission mode
+               config.hostIP + ":" + config.dataSystemPort);
     addIfValid(YR_DS_ADDRESS,
                config.hostIP + ":" + config.dataSystemPort);
     addIfValid(DRIVER_SERVER_PORT, config.driverServerPort);
@@ -225,7 +201,6 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     addIfValid(LAYER_LIB_PATH, layerPath);
     addIfValid(LD_LIBRARY_PATH, ldLibraryPath);
     addIfValid(PROXY_GRPC_SERVER_PORT, config.proxyGrpcServerPort);
-    // keep same env name for runtime in driver mode and job submission mode
     addIfValid(YR_SERVER_ADDRESS,
                config.proxyIP + ":" + config.proxyGrpcServerPort);
     addIfValid(YR_DPOSIX_UDS, request->runtimeinstanceinfo().runtimeconfig().dposixudspath());
@@ -296,8 +271,8 @@ std::map<std::string, std::string> GenerateUserEnvs(const ::messages::RuntimeIns
             if (key == "NPU-DEVICE-IDS" || key == "GPU-DEVICE-IDS") {
                 auto realIDs = SelectRealIDs(envIter.second, cardsIDs);
                 auto visibleDevicesEnvKey = key == "NPU-DEVICE-IDS" ? ASCEND_RT_VISIBLE_DEVICES : CUDA_VISIBLE_DEVICES;
-                (void)envs.emplace(std::make_pair(key, envIter.second));
-                // XXX_VISIBLE_DEVICES need to set logic id, not physical id
+                (void)envs.emplace(std::make_pair(key, realIDs));
+                // XXX_VISIBLE_DEVICES need to set logic id, not physical id, so we used sorted schedule result
                 (void)envs.emplace(std::make_pair(visibleDevicesEnvKey, envIter.second));
                 YRLOG_DEBUG("select {} realIDs, mappingIDS: physical[{}], logical[{}]", key, realIDs, envIter.second);
                 continue;

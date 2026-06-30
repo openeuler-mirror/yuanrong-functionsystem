@@ -30,7 +30,14 @@
                 "yr_cluster_memory_capacity",
                 "yr_cluster_memory_allocatable",
                 "yr_instance_count",
-                "yr_cluster_instance_total"
+                "yr_cluster_instance_total",
+                "yr_sandbox_lifecycle_status",
+                "yr_sandbox_requested_cpu_cores",
+                "yr_sandbox_requested_memory_bytes",
+                "yr_sandbox_cpu_usage_cores",
+                "yr_sandbox_memory_usage_ratio",
+                "yr_sandbox_memory_usage_bytes",
+                "yr_sandbox_memory_limit_bytes"
               ],
               "initConfig": {
                 "port": 9091

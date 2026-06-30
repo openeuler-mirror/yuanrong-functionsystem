@@ -29,6 +29,7 @@
 #include "executor/container_executor.h"
 #include "executor/docker_executor.h"
 #include "executor/runtime_executor.h"
+#include "executor/sandbox/sandbox_executor.h"
 #include "executor/supervisor_executor.h"
 #include "port/port_manager.h"
 #include "runtime_manager/executor/executor.h"
@@ -50,6 +51,7 @@ void RuntimeManager::Init()
     ActorBase::Receive("CleanStatus", &RuntimeManager::CleanStatus);
     ActorBase::Receive("UpdateCred", &RuntimeManager::UpdateCred);
     ActorBase::Receive("QueryDebugInstanceInfos", &RuntimeManager::QueryDebugInstanceInfos);
+    ActorBase::Receive("ReconcileRuntimes", &RuntimeManager::ReconcileRuntimes);
     metricsClient_ = std::make_shared<MetricsClient>();
     healthCheckClient_ = std::make_shared<HealthCheck>();
     auto logManagerActor =
@@ -66,6 +68,7 @@ void RuntimeManager::Finalize()
     for (const auto &iter : executorMap_) {
         iter.second->Stop();
     }
+    healthCheckClient_.reset();
     ActorBase::Finalize();
     PortManager::GetInstance().Clear();
 }
@@ -118,7 +121,6 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
         response.set_requestid(instance.requestid());
         response.set_code(static_cast<int32_t>(RUNTIME_MANAGER_PARAMS_INVALID));
         response.set_message(GetExecutorUnavailableMessage(static_cast<EXECUTOR_TYPE>(type)));
-
         litebus::Future<messages::StartInstanceResponse> promise;
         promise.SetValue(response);
         litebus::Async(this->GetAID(), &RuntimeManager::StartInstanceResponse, from,
@@ -288,10 +290,11 @@ void RuntimeManager::StopInstance(const litebus::AID &from, std::string && /* na
             request->traceid(), request->requestid(), request->runtimeid());
         return;
     }
-    auto executor = FindExecutor(static_cast<EXECUTOR_TYPE>(request->executortype()));
+    const auto executorType = ResolveStopExecutorType(request);
+    auto executor = FindExecutor(executorType);
     if (executor == nullptr) {
         YRLOG_ERROR("{}|{}|the type({}) is not supported to stop runtime({})", request->traceid(), request->requestid(),
-                    request->type(), request->runtimeid());
+                    static_cast<int32_t>(executorType), request->runtimeid());
         messages::StopInstanceResponse response;
         response.set_requestid(request->requestid());
         response.set_runtimeid(request->runtimeid());
@@ -340,8 +343,9 @@ void RuntimeManager::SnapshotRuntime(const litebus::AID &from, std::string &&, s
     }
 
     // Call executor's SnapshotRuntime method
-    executor->SnapshotRuntime(request).Then(litebus::Defer(GetAID(), &RuntimeManager::SnapshotRuntimeResponse,
-        from, instanceID, request->requestid(), std::placeholders::_1));
+    executor->SnapshotRuntime(request)
+        .Then(litebus::Defer(GetAID(), &RuntimeManager::SnapshotRuntimeResponse, from, instanceID,
+            request->requestid(), std::placeholders::_1));
 }
 
 void RuntimeManager::HandlePrestartRuntimeExit(const pid_t pid)
@@ -356,6 +360,7 @@ void RuntimeManager::HandlePrestartRuntimeExit(const pid_t pid)
 void RuntimeManager::SetConfig(const Flags &flags)
 {
     functionAgentAID_ = litebus::AID(FUNCTION_AGENT_AGENT_SERVICE_ACTOR_NAME, flags.GetAgentAddress());
+    checkpointDir_ = flags.GetCheckpointDir();
     for (auto type : {EXECUTOR_TYPE::RUNTIME, EXECUTOR_TYPE::CONTAINER, EXECUTOR_TYPE::SUPERVISOR,
                       EXECUTOR_TYPE::DOCKER}) {
         auto executor = FindExecutor(type);
@@ -507,18 +512,13 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::CreateRuntimeExecutor()
 
 std::shared_ptr<ExecutorProxy> RuntimeManager::CreateContainerExecutor()
 {
-    auto ep = litebus::os::GetEnv("CONTAINER_EP");
-    if (ep.IsNone()) {
-        YRLOG_INFO("container executor disabled, no containerd endpoint found");
-        return nullptr;
-    }
-    YRLOG_INFO("not found a executor, create a container executor.");
+    YRLOG_INFO("create a sandbox executor.");
     auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
     const std::string name = "RuntimeExecutor_" + uuid.ToString();
-    auto executor = std::make_shared<ContainerExecutor>(name, functionAgentAID_);
+    auto executor = std::make_shared<SandboxExecutor>(name, functionAgentAID_, checkpointDir_);
     executor->SetHealthCheckClient(healthCheckClient_);
     litebus::Spawn(executor, false);
-    auto executorProxy = std::make_shared<ContainerExecutorProxy>(executor);
+    auto executorProxy = std::make_shared<SandboxExecutorProxy>(executor);
     (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::CONTAINER, executorProxy));
     return executorProxy;
 }
@@ -533,7 +533,7 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::CreateSupervisorExecutor()
     YRLOG_INFO("not found a executor, create a supervisor executor.");
     auto executor = std::make_shared<SupervisorExecutor>("SupervisorExecutor", functionAgentAID_);
     litebus::Spawn(executor, false);
-    auto executorProxy = std::make_shared<SandboxExecutorProxy>(executor);
+    auto executorProxy = std::make_shared<SupervisorExecutorProxy>(executor);
     (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::SUPERVISOR, executorProxy));
     return executorProxy;
 }
@@ -1177,6 +1177,21 @@ litebus::Future<bool> RuntimeManager::IsRuntimeActive(const std::string &runtime
     return executor->IsRuntimeActive(runtimeID);
 }
 
+EXECUTOR_TYPE RuntimeManager::ResolveStopExecutorType(const std::shared_ptr<messages::StopInstanceRequest> &request)
+{
+    auto executorType = static_cast<EXECUTOR_TYPE>(request->executortype());
+    if (executorType != EXECUTOR_TYPE::RUNTIME) {
+        return executorType;
+    }
+
+    const auto runtimeType = GetRuntimeType(request->runtimeid());
+    if (runtimeType != EXECUTOR_TYPE::RUNTIME) {
+        request->set_executortype(static_cast<int32_t>(runtimeType));
+        return runtimeType;
+    }
+    return executorType;
+}
+
 litebus::Future<bool> RuntimeManager::IsRuntimeActiveByPid(const pid_t &pid)
 {
     auto executor = FindExecutor(EXECUTOR_TYPE::RUNTIME);
@@ -1194,11 +1209,69 @@ EXECUTOR_TYPE RuntimeManager::GetRuntimeType(const std::string &runtimeID)
         return EXECUTOR_TYPE::RUNTIME;
     }
 
-    const auto &response = instanceResponseMap_.find(instance->second.instanceid());
-    if (response == instanceResponseMap_.end()) {
-        return EXECUTOR_TYPE::RUNTIME;
+    if (instance->second.has_container()) {
+        const auto response = instanceResponseMap_.find(instance->second.instanceid());
+        if (response != instanceResponseMap_.end()) {
+            const auto executorType =
+                static_cast<EXECUTOR_TYPE>(response->second.startruntimeinstanceresponse().executortype());
+            if (executorType != EXECUTOR_TYPE::RUNTIME) {
+                return executorType;
+            }
+        }
+        return EXECUTOR_TYPE::CONTAINER;
     }
 
-    return static_cast<EXECUTOR_TYPE>(response->second.startruntimeinstanceresponse().executortype());
+    const auto response = instanceResponseMap_.find(instance->second.instanceid());
+    if (response != instanceResponseMap_.end()) {
+        return static_cast<EXECUTOR_TYPE>(response->second.startruntimeinstanceresponse().executortype());
+    }
+    return EXECUTOR_TYPE::RUNTIME;
+}
+void RuntimeManager::ReconcileRuntimes(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    auto request = std::make_shared<messages::ReconcileRuntimesRequest>();
+    if (!request->ParseFromString(msg)) {
+        YRLOG_ERROR("failed to parse ReconcileRuntimesRequest");
+        return;
+    }
+    auto executor = FindExecutor(EXECUTOR_TYPE::CONTAINER);
+    if (executor == nullptr) {
+        YRLOG_WARN("{}|no container executor available for ReconcileRuntimes", request->requestid());
+        messages::ReconcileRuntimesResponse resp;
+        resp.set_requestid(request->requestid());
+        resp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
+        resp.set_message("container executor not available");
+        Send(from, "ReconcileRuntimesResponse", resp.SerializeAsString());
+        return;
+    }
+    executor->ReconcileRuntimes(request)
+        .OnComplete(litebus::Defer(GetAID(),
+            [this, from, requestID = request->requestid()](
+                const litebus::Future<messages::ReconcileRuntimesResponse> &resp) {
+                if (resp.IsError()) {
+                    YRLOG_ERROR("{}|ReconcileRuntimes failed: {}", requestID, resp.GetErrorCode());
+                    messages::ReconcileRuntimesResponse errResp;
+                    errResp.set_requestid(requestID);
+                    errResp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
+                    errResp.set_message("ReconcileRuntimes execution failed");
+                    Send(from, "ReconcileRuntimesResponse", errResp.SerializeAsString());
+                    return;
+                }
+                // Register confirmed entries in instanceInfoMap_ so GetRuntimeType
+                // routes subsequent Stop requests to the CONTAINER executor.
+                const auto &result = resp.Get();
+                for (const auto &entry : result.confirmedentries()) {
+                    if (instanceInfoMap_.find(entry.runtimeid()) == instanceInfoMap_.end()) {
+                        messages::RuntimeInstanceInfo info;
+                        info.set_runtimeid(entry.runtimeid());
+                        if (!entry.instanceid().empty()) {
+                            info.set_instanceid(entry.instanceid());
+                        }
+                        info.mutable_container()->set_id(entry.containerid());
+                        instanceInfoMap_[entry.runtimeid()] = info;
+                    }
+                }
+                Send(from, "ReconcileRuntimesResponse", result.SerializeAsString());
+            }));
 }
 }  // namespace functionsystem::runtime_manager

@@ -9,6 +9,11 @@ cc_library(
     srcs = [
         "lib/libdatasystem.so",
         "lib/libds_router_client.so",
+        "lib/libetcdapi_proto.so",
+        "lib/librpc_option_protos.so",
+        "lib/libprotobuf.so.25.5.0",
+        "lib/libabseil_dll.so.2407.0.0",
+        "lib/libcommon_flags.so",
     ],
     hdrs = glob(["include/**/*.h"]),
     strip_include_prefix = "include",

@@ -91,6 +91,8 @@ public:
     {
         auto sm = std::make_shared<MockInstanceStateMachine>(TEST_NODE_ID);
         ON_CALL(*sm, GetInstanceState()).WillByDefault(Return(state));
+        // Default to local ownership so existing cases exercise the GC path.
+        ON_CALL(*sm, GetOwner()).WillByDefault(Return(TEST_NODE_ID));
         return {{instanceID, sm}};
     }
 
@@ -331,9 +333,11 @@ TEST_F(LocalGcActorTest, MixedInstances_OnlyAbnormalCleaned)
 {
     auto healthySm = std::make_shared<MockInstanceStateMachine>(TEST_NODE_ID);
     ON_CALL(*healthySm, GetInstanceState()).WillByDefault(Return(InstanceState::RUNNING));
+    ON_CALL(*healthySm, GetOwner()).WillByDefault(Return(TEST_NODE_ID));
 
     auto failedSm = std::make_shared<MockInstanceStateMachine>(TEST_NODE_ID);
     ON_CALL(*failedSm, GetInstanceState()).WillByDefault(Return(InstanceState::FAILED));
+    ON_CALL(*failedSm, GetOwner()).WillByDefault(Return(TEST_NODE_ID));
 
     std::unordered_map<std::string, std::shared_ptr<InstanceStateMachine>> instances{
         {TEST_INSTANCE_ID, healthySm},
@@ -373,6 +377,7 @@ TEST_F(LocalGcActorTest, VanishedInstance_StaleEntryPurged)
 {
     auto failedSm = std::make_shared<MockInstanceStateMachine>(TEST_NODE_ID);
     ON_CALL(*failedSm, GetInstanceState()).WillByDefault(Return(InstanceState::FAILED));
+    ON_CALL(*failedSm, GetOwner()).WillByDefault(Return(TEST_NODE_ID));
 
     std::unordered_map<std::string, std::shared_ptr<InstanceStateMachine>> instancesWithFailed{
         {TEST_INSTANCE_ID, failedSm}};
@@ -387,6 +392,35 @@ TEST_F(LocalGcActorTest, VanishedInstance_StaleEntryPurged)
     EXPECT_CALL(*mockInstanceCtrl_, ForceDeleteInstance(_)).Times(0);
 
     // Wait for multiple cycles to confirm the stale entry is never acted upon
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+}
+
+/**
+ * Feature: GC ignores instances owned by other nodes.
+ * Description:
+ *   An abnormal (FAILED) instance whose owner is a different node must never be
+ *   reclaimed by the local GC; only the owning node's GC is responsible for it.
+ * Steps:
+ *   1. Return a FAILED instance whose GetOwner() reports a foreign node.
+ *   2. Run for several GC cycles past the stuck timeout.
+ *   3. Verify ForceDeleteInstance is never called.
+ * Expectation:
+ *   No deletion triggered for the non-local instance.
+ */
+TEST_F(LocalGcActorTest, NonLocalInstance_Skipped)
+{
+    static const std::string OTHER_NODE_ID = "other-node";
+    auto foreignSm = std::make_shared<MockInstanceStateMachine>(TEST_NODE_ID);
+    ON_CALL(*foreignSm, GetInstanceState()).WillByDefault(Return(InstanceState::FAILED));
+    ON_CALL(*foreignSm, GetOwner()).WillByDefault(Return(OTHER_NODE_ID));
+
+    std::unordered_map<std::string, std::shared_ptr<InstanceStateMachine>> instances{{TEST_INSTANCE_ID, foreignSm}};
+    EXPECT_CALL(*mockInstanceControlView_, GetInstances()).WillRepeatedly(Return(instances));
+
+    // Instance owned by another node must never be deleted by the local GC.
+    EXPECT_CALL(*mockInstanceCtrl_, ForceDeleteInstance(_)).Times(0);
+
+    // Wait past the stuck timeout (175ms) across several cycles.
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
 }
 

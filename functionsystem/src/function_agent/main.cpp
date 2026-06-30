@@ -41,12 +41,6 @@
 #include "function_agent/flags/function_agent_flags.h"
 #include "runtime_manager/config/flags.h"
 #include "runtime_manager/driver/runtime_manager_driver.h"
-#include "common/utils/ssl_config.h"
-#include "common/utils/version.h"
-#include "function_agent/driver/function_agent_driver.h"
-#include "function_agent/flags/function_agent_flags.h"
-#include "runtime_manager/config/flags.h"
-#include "runtime_manager/driver/runtime_manager_driver.h"
 
 using namespace functionsystem;
 
@@ -248,6 +242,8 @@ int main(int argc, char **argv)
         g_functionAgentSwitcher->SetStop();
         return EXIT_ABNORMAL;
     }
+
+    YRLOG_DEBUG("function_agent GetEnableDisConvCallStack = {}", flags.GetEnableDisConvCallStack());
     if (!g_functionAgentSwitcher->InitLiteBus(address, flags.GetLitebusThreadNum())) {
         g_functionAgentSwitcher->SetStop();
     } else {

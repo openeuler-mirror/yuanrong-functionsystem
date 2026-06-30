@@ -36,6 +36,8 @@ public:
                 (override));
     MOCK_METHOD((litebus::Future<std::unordered_map<ResourceType, std::shared_ptr<ResourceUnitChanges>>>), GetChanges,
                 (), (override));
+    MOCK_METHOD(litebus::Future<Status>, UpdateAllUnitStatus, (UnitStatus status), (override));
+    MOCK_METHOD(void, UpdateDomainUrlForLocal, (const std::string &addr), (override));
 };
 
 }  // namespace functionsystem::test

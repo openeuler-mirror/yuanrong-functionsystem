@@ -124,6 +124,12 @@ void GlobalSched::AddLocalSchedAbnormalNotifyCallback(const std::string &name,
     litebus::Async(globalSchedActor_->GetAID(), &GlobalSchedActor::AddLocalSchedAbnormalNotifyCallback, name, func);
 }
 
+Status GlobalSched::AddDomainSchedCallback(const CallbackAddFunc &func)
+{
+    ASSERT_IF_NULL(domainSchedMgr_);
+    return domainSchedMgr_->AddDomainSchedCallback(func);
+}
+
 void GlobalSched::BindLocalDeleteCallback(const LocalDeleteCallbackFunc &func)
 {
     ASSERT_IF_NULL(globalSchedActor_);
@@ -189,6 +195,20 @@ litebus::Future<Status> GlobalSched::EvictAgent(const std::string &localID,
     return litebus::Async(globalSchedActor_->GetAID(), &GlobalSchedActor::EvictAgent, localID, req);
 }
 
+litebus::Future<Status> GlobalSched::UpdateLocalSchedulingStatus(const std::string &localID, bool evicting)
+{
+    ASSERT_IF_NULL(localSchedMgr_);
+    return GetLocalAddress(localID).Then(
+        [localSchedMgr(localSchedMgr_), localID, evicting](const litebus::Option<std::string> &address)
+            -> litebus::Future<Status> {
+            if (address.IsNone()) {
+                YRLOG_ERROR("failed to update scheduling status, local scheduler({}) not found", localID);
+                return Status(StatusCode::PARAMETER_ERROR, "Invalid nodeID");
+            }
+            return localSchedMgr->UpdateSchedulingStatusOnLocal(address.Get(), evicting);
+        });
+}
+
 litebus::Future<messages::QueryAgentInfoResponse> GlobalSched::QueryAgentInfo(
     const std::shared_ptr<messages::QueryAgentInfoRequest> &req)
 {
@@ -196,8 +216,8 @@ litebus::Future<messages::QueryAgentInfoResponse> GlobalSched::QueryAgentInfo(
     return litebus::Async(globalSchedActor_->GetAID(), &GlobalSchedActor::QueryAgentInfo, req);
 }
 
-litebus::Future<messages::QueryInstancesInfoResponse> GlobalSched::GetSchedulingQueue(
-    const std::shared_ptr<messages::QueryInstancesInfoRequest> &req)
+litebus::Future<messages::QuerySchedulingQueueResponse> GlobalSched::GetSchedulingQueue(
+    const std::shared_ptr<messages::QuerySchedulingQueueRequest> &req)
 {
     ASSERT_IF_NULL(globalSchedActor_);
     return litebus::Async(globalSchedActor_->GetAID(), &GlobalSchedActor::GetSchedulingQueue, req);

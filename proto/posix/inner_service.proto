@@ -80,6 +80,7 @@ message ForwardKillResponse {
   string           requestID = 1;
   common.ErrorCode code      = 2;
   string           message   = 3;
+  bytes            payload   = 4;
 }
 
 // Used to forward the result of an initcall across nodes

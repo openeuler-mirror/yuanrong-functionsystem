@@ -88,6 +88,8 @@ void Flags::AddDiskUsageMonitorFlags()
 void Flags::AddConfigFlags()
 {
     AddFlag(&Flags::runtimeHomeDir_, "runtime_home_dir", "runtime home dir", litebus::os::GetEnv("HOME").Get());
+    AddFlag(&Flags::checkpointDir_, "checkpoint_dir", "base directory for checkpoint file storage",
+            std::string("/home/yuanrong/checkpoints"));
     AddFlag(&Flags::nodeJsEntryPath_, "nodejs_entry", "node js entry path", "/home/snuser/runtime/nodejs/wrapper.js");
     AddFlag(&Flags::resourceLabelPath_, "resource_label_path", "resource label path", "/home/sn/podInfo/labels");
     AddFlag(&Flags::npuDeviceInfoPath_, "npu_device_info_path", "npu device info file config path",

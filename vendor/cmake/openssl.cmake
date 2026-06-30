@@ -20,9 +20,14 @@ set(${src_name}_CXX_FLAGS "-std=c++14 ${${src_name}_COMMON_FLAGS} ${CODE_GENERAT
 
 set(HISTORY_INSTALLLED "${EP_BUILD_DIR}/Install/${src_name}")
 set(patch_files
+    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-0727.patch
+    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-0727-2.patch
+    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-2511.patch
+    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-4741.patch
+    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-4741-2.patch
+    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-5535.patch
+    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-9143.patch
     ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-13176.patch
-    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2024-41996.patch
-    ${VENDOR_PATCHES_DIR}/openssl/backport-CVE-2025-9230.patch
 )
 
 if (NOT EXISTS ${HISTORY_INSTALLLED})
@@ -47,11 +52,6 @@ message("install dir of ${src_name}: ${INSTALL_DIR}")
 
 set(${src_name}_ROOT ${INSTALL_DIR})
 set(${src_name}_INCLUDE_DIR ${${src_name}_ROOT}/include)
-if (EXISTS ${${src_name}_ROOT}/lib64 AND (NOT EXISTS ${${src_name}_ROOT}/lib))
-    file(GLOB allCopyFiles "${${src_name}_ROOT}/lib64/*")
-    file(COPY ${allCopyFiles} DESTINATION ${${src_name}_ROOT}/lib)
-endif()
-
 set(${src_name}_LIB_DIR ${${src_name}_ROOT}/lib)
 set(crypto_LIB ${${src_name}_LIB_DIR}/libcrypto.so)
 set(ssl_LIB ${${src_name}_LIB_DIR}/libssl.so)
@@ -61,6 +61,12 @@ set(ssl_LIB_A ${${src_name}_LIB_DIR}/libssl.a)
 include_directories(${${src_name}_INCLUDE_DIR})
 
 install(FILES ${${src_name}_LIB_DIR}/libssl.so DESTINATION lib)
-install(FILES ${${src_name}_LIB_DIR}/libssl.so.3 DESTINATION lib)
 install(FILES ${${src_name}_LIB_DIR}/libcrypto.so DESTINATION lib)
-install(FILES ${${src_name}_LIB_DIR}/libcrypto.so.3 DESTINATION lib)
+file(GLOB openssl_ssl_versioned_libs "${${src_name}_LIB_DIR}/libssl.so.*")
+foreach(openssl_ssl_versioned_lib ${openssl_ssl_versioned_libs})
+    install(FILES ${openssl_ssl_versioned_lib} DESTINATION lib)
+endforeach()
+file(GLOB openssl_crypto_versioned_libs "${${src_name}_LIB_DIR}/libcrypto.so.*")
+foreach(openssl_crypto_versioned_lib ${openssl_crypto_versioned_libs})
+    install(FILES ${openssl_crypto_versioned_lib} DESTINATION lib)
+endforeach()

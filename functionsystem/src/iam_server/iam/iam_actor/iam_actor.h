@@ -19,13 +19,15 @@
 
 #include <utility>
 
+#include "common/aksk/aksk_util.h"
 #include "common/http/api_router_register.h"
+#include "iam/internal_iam/external_auth_verifier.h"
 #include "iam/internal_iam/internal_iam.h"
 #include "meta_store_monitor/meta_store_healthy_observer.h"
 
 namespace functionsystem::iamserver {
 
-class IAMActor : public ApiRouterRegister, public litebus::ActorBase {
+class IAMActor : public ApiRouterRegister, public litebus::ActorBase, public std::enable_shared_from_this<IAMActor> {
 public:
     explicit IAMActor(const std::string &name);
 
@@ -48,10 +50,32 @@ public:
     void SetAuthKey();
     void BindInternalIAM(const std::shared_ptr<InternalIAM> &internalIAM);
 
-private:
-    std::shared_ptr<InternalIAM> internalIAM_;
+    // Updated to generic external verifier
+    void SetExternalVerifier(const std::shared_ptr<ExternalAuthVerifier> &verifier);
+    std::shared_ptr<ExternalAuthVerifier> GetExternalVerifier();
 
-    bool useAKSK_{false};
+    // Token exchange endpoint (exchanges external token for IAM token)
+    litebus::Future<HttpResponse> ExchangeToken(const HttpRequest &request);
+
+    // OAuth code exchange endpoint (exchanges authorization code for IAM token)
+    litebus::Future<HttpResponse> ExchangeCode(const HttpRequest &request);
+
+    // External provider consolidation endpoints
+    litebus::Future<HttpResponse> Login(const HttpRequest &request);
+    litebus::Future<HttpResponse> GetAuthUrl(const HttpRequest &request);
+    litebus::Future<HttpResponse> QueryTenantQuota(const HttpRequest &request);
+
+private:
+    static HttpResponse BuildExternalTokenResponse(const ExternalUserInfo &userInfo,
+                                                   const std::shared_ptr<TokenSalt> &tokenSalt,
+                                                   uint64_t expiresIn);
+    void CompleteExternalToken(const ExternalUserInfo &userInfo, uint64_t expiresIn,
+                               const std::shared_ptr<litebus::Promise<HttpResponse>> &promise);
+
+    std::shared_ptr<InternalIAM> internalIAM_;
+    std::shared_ptr<ExternalAuthVerifier> verifier_;
+
+    bool useAKSK_{ false };
 
     KeyForAKSK authKey_;
 };
@@ -68,4 +92,4 @@ private:
     litebus::ActorReference actor_;
 };
 }  // namespace functionsystem::iamserver
-#endif // IAM_SERVER_IAM_ACTOR_IAM_ACTOR_H
+#endif  // IAM_SERVER_IAM_ACTOR_IAM_ACTOR_H

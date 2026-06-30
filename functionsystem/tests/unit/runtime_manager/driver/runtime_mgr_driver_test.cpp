@@ -53,6 +53,7 @@ TEST_F(RuntimeMgrDriverTest, DriverTest)
         "--resource_label_path=/tmp/labels",
         "--runtime_ds_connect_timeout=10",
         "--kill_process_timeout_seconds=2",
+        "--checkpoint_dir=/tmp",
         "--npu_device_info_path=/tmp/home/sn/config/topology-info.json",
         R"(--log_config={"filepath": "/tmp/home/yr/log", "level": "DEBUG", "rolling": {"maxsize": 100, "maxfiles": 1},"alsologtostderr":true})"
     };

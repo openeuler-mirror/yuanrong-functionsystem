@@ -18,6 +18,7 @@ def run_test(root_dir, cmd_args):
     args = {
         "root_dir": root_dir,
         "action": cmd_args.action,
+        "builder": getattr(cmd_args, "builder", "cmake"),
         "job_num": cmd_args.job_num,
         "test_suite": cmd_args.test_suite,
         "test_case": cmd_args.test_case,
@@ -31,6 +32,10 @@ def run_test(root_dir, cmd_args):
         log.warning(f"The -j {args['job_num']} is over the max logical cpu count({os.cpu_count()}) * 2")
     log.info(f"Start to run function-system test case with args: {json.dumps(args)}")
 
+    if args["builder"] == "bazel":
+        run_test_bazel(root_dir, args)
+        return
+
     if args["action"] in ["all", "make"]:
         # 编译测试用例
         log.info(f"Step(1/3, action = [make]): Make test case with {args['job_num']} cores")
@@ -41,7 +46,7 @@ def run_test(root_dir, cmd_args):
     if args["action"] in ["all", "exec"]:
         # 执行测试用例
         log.info(f"Step(2/3, action = [exec]): Exec test case with args: {json.dumps(args)}")
-        # Set BIN_PATH for integration tests that require spawning compiled binaries
+        # Set BIN_PATH for integration tests that require spawning compiled binaries.
         bin_output_path = os.path.join(root_dir, "functionsystem", "output", "bin")
         os.environ["BIN_PATH"] = bin_output_path
         log.info(f"Set BIN_PATH={bin_output_path} for integration tests")
@@ -64,3 +69,20 @@ def run_test(root_dir, cmd_args):
     if args["action"] in ["all", "gcov"]:
         # 计算用例覆盖率
         pass
+
+
+def run_test_bazel(root_dir, args):
+    if args["action"] in ["all", "make"]:
+        log.info(f"Step(1/2, builder = [bazel], action = [make]): Build test case with {args['job_num']} cores")
+        builder.build_gtest_bazel(root_dir, args["job_num"])
+    else:
+        log.info("Step(1/2, builder = [bazel], action = [make]): Skip to make test case")
+
+    if args["action"] in ["all", "exec"]:
+        log.info(f"Step(2/2, builder = [bazel], action = [exec]): Exec test case with args: {json.dumps(args)}")
+        builder.run_gtest_bazel(root_dir, args["job_num"], args["test_suite"], args["test_case"])
+    else:
+        log.info("Step(2/2, builder = [bazel], action = [exec]): Skip to exec test case")
+
+    if args["action"] == "gcov":
+        log.warning("Bazel test coverage is not wired yet; skipping gcov action.")

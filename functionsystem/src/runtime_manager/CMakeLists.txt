@@ -43,15 +43,18 @@ add_subdirectory(std_monitor)
 add_dependencies(runtime_manager_lib aksk
         register common_flags
         http file_monitor network file_storage
+        trace_adapter
         utils metrics_adapter resource_view)
 
 target_link_libraries(runtime_manager_lib ${litebus_ALL_LIB}
         ${yaml_LIB}
         ${curl_LIBS}
-	aksk
+        aksk
         register common_flags
         http file_monitor network file_storage
-        utils metrics_adapter resource_view cap)
+        trace_adapter
+        utils metrics_adapter resource_view cap
+        posix_pb)
 
 add_executable(runtime_manager main.cpp)
 target_compile_options(runtime_manager PRIVATE -fPIE)

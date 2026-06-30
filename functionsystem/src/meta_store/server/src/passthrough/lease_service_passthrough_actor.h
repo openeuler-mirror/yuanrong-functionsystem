@@ -44,7 +44,7 @@ private:
 
     void OnKeepAlive(const litebus::Future<LeaseKeepAliveResponse> &response, const std::string &id,
                      const litebus::AID &aid);
-                    
+
     std::shared_ptr<MetaStoreClient> etcdClient_;
 };
 

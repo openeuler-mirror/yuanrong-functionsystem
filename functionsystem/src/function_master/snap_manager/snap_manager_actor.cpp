@@ -90,6 +90,9 @@ void SnapManagerActor::Init()
     // Register message handlers
     Receive("RecordSnapshotMetadata", &SnapManagerActor::RecordSnapshotMetadata);
     Receive("SnapStartCheckpoint", &SnapManagerActor::SnapStartCheckpoint);
+    Receive("ListSnapshotsByFunctionKey", &SnapManagerActor::ListSnapshotsByFunctionKeyMessage);
+    Receive("ListSnapshotsByTenant", &SnapManagerActor::ListSnapshotsByTenantMessage);
+    Receive("DeleteSnapshot", &SnapManagerActor::DeleteSnapshotMessage);
 
     // Register leader change callback
     (void)Explorer::GetInstance().AddLeaderChangedCallback(
@@ -126,6 +129,69 @@ void SnapManagerActor::SnapStartCheckpoint(const litebus::AID &from, std::string
     business_->SnapStartCheckpoint(from, std::move(name), std::move(msg));
 }
 
+void SnapManagerActor::ListSnapshotsByFunctionKeyMessage(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::ListSnapshotsByFunctionKeyRequest req;
+    ::messages::ListSnapshotsByFunctionKeyResponse rsp;
+    if (!req.ParseFromString(msg)) {
+        rsp.set_code(common::ERR_PARAM_INVALID);
+        rsp.set_message("failed to parse ListSnapshotsByFunctionKeyRequest");
+        SendListSnapshotsByFunctionKeyResponse(from, rsp);
+        return;
+    }
+    rsp.set_requestid(req.requestid());
+    rsp.set_code(common::ERR_NONE);
+    rsp.set_message("success");
+    for (const auto &id : member_->cache.GetByFunctionKeyCheckpointIDs(
+        req.functionkey().tenantid(), req.functionkey().functiontype(), req.functionkey().namespace_())) {
+        rsp.add_checkpointids(id);
+    }
+    SendListSnapshotsByFunctionKeyResponse(from, rsp);
+}
+
+void SnapManagerActor::ListSnapshotsByTenantMessage(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::ListSnapshotsByTenantRequest req;
+    ::messages::ListSnapshotsByTenantResponse rsp;
+    if (!req.ParseFromString(msg)) {
+        rsp.set_code(common::ERR_PARAM_INVALID);
+        rsp.set_message("failed to parse ListSnapshotsByTenantRequest");
+        SendListSnapshotsByTenantResponse(from, rsp);
+        return;
+    }
+    rsp.set_requestid(req.requestid());
+    rsp.set_code(common::ERR_NONE);
+    rsp.set_message("success");
+    for (const auto &id : member_->cache.GetByTenantCheckpointIDs(req.tenantid())) {
+        rsp.add_checkpointids(id);
+    }
+    SendListSnapshotsByTenantResponse(from, rsp);
+}
+
+void SnapManagerActor::DeleteSnapshotMessage(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::DeleteSnapshotRequest req;
+    if (!req.ParseFromString(msg)) {
+        ::messages::DeleteSnapshotResponse rsp;
+        rsp.set_code(common::ERR_PARAM_INVALID);
+        rsp.set_message("failed to parse DeleteSnapshotRequest");
+        SendDeleteSnapshotResponse(from, rsp);
+        return;
+    }
+    DeleteSnapshot(req.checkpointid()).OnComplete([aid(GetAID()), from, req](const litebus::Future<Status> &future) {
+        ::messages::DeleteSnapshotResponse rsp;
+        rsp.set_requestid(req.requestid());
+        if (future.IsError()) {
+            rsp.set_code(common::ERR_INNER_SYSTEM_ERROR);
+            rsp.set_message("delete snapshot request failed");
+        } else {
+            rsp.set_code(static_cast<common::ErrorCode>(future.Get().StatusCode()));
+            rsp.set_message(future.Get().RawMessage());
+        }
+        litebus::Async(aid, &SnapManagerActor::SendDeleteSnapshotResponse, from, rsp);
+    });
+}
+
 litebus::Future<litebus::Option<SnapshotMetadata>> SnapManagerActor::GetSnapshotMetadata(const std::string &snapshotID)
 {
     auto meta = member_->cache.Get(snapshotID);
@@ -138,6 +204,28 @@ litebus::Future<litebus::Option<SnapshotMetadata>> SnapManagerActor::GetSnapshot
 litebus::Future<std::vector<SnapshotMetadata>> SnapManagerActor::ListSnapshotsByFunction(const std::string &functionID)
 {
     return member_->cache.GetByFunction(functionID);
+}
+
+litebus::Future<std::vector<SnapshotMetadata>> SnapManagerActor::ListSnapshotsByFunctionKey(
+    const std::string &tenantID, const std::string &functionType, const std::string &ns)
+{
+    return member_->cache.GetByFunctionKey(tenantID, functionType, ns);
+}
+
+litebus::Future<std::vector<std::string>> SnapManagerActor::ListCheckpointIDsByFunctionKey(
+    const std::string &tenantID, const std::string &functionType, const std::string &ns)
+{
+    return member_->cache.GetByFunctionKeyCheckpointIDs(tenantID, functionType, ns);
+}
+
+litebus::Future<std::vector<SnapshotMetadata>> SnapManagerActor::ListSnapshotsByTenant(const std::string &tenantID)
+{
+    return member_->cache.GetByTenant(tenantID);
+}
+
+litebus::Future<std::vector<std::string>> SnapManagerActor::ListCheckpointIDsByTenant(const std::string &tenantID)
+{
+    return member_->cache.GetByTenantCheckpointIDs(tenantID);
 }
 
 litebus::Future<Status> SnapManagerActor::DeleteSnapshot(const std::string &snapshotID)
@@ -266,20 +354,37 @@ void SnapManagerActor::SendRecordSnapshotResponse(const litebus::AID &to,
     Send(to, "RecordSnapshotMetadataResponse", rsp.SerializeAsString());
 }
 
-void SnapManagerActor::SendSnapStartResponse(const litebus::AID &to,
-                                             const std::string &requestID,
-                                             int32_t code,
-                                             const std::string &message,
-                                             const std::string &instanceID)
+void SnapManagerActor::SendSnapStartResponse(const SnapStartResponse &response)
 {
     messages::RestoreSnapshotResponse rsp;
-    rsp.set_requestid(requestID);
-    rsp.set_code(code);
-    rsp.set_message(message);
-    if (!instanceID.empty()) {
-        rsp.set_instanceid(instanceID);
+    rsp.set_requestid(response.requestID);
+    rsp.set_code(response.code);
+    rsp.set_message(response.message);
+    if (!response.instanceID.empty()) {
+        rsp.set_instanceid(response.instanceID);
     }
-    Send(to, "SnapStartCheckpointResponse", rsp.SerializeAsString());
+    if (response.snapstartInfo.ByteSizeLong() > 0) {
+        rsp.mutable_snapstartinfo()->CopyFrom(response.snapstartInfo);
+    }
+    Send(response.to, "SnapStartCheckpointResponse", rsp.SerializeAsString());
+}
+
+void SnapManagerActor::SendListSnapshotsByFunctionKeyResponse(
+    const litebus::AID &to, const ::messages::ListSnapshotsByFunctionKeyResponse &rsp)
+{
+    Send(to, "ListSnapshotsByFunctionKeyResponse", rsp.SerializeAsString());
+}
+
+void SnapManagerActor::SendListSnapshotsByTenantResponse(
+    const litebus::AID &to, const ::messages::ListSnapshotsByTenantResponse &rsp)
+{
+    Send(to, "ListSnapshotsByTenantResponse", rsp.SerializeAsString());
+}
+
+void SnapManagerActor::SendDeleteSnapshotResponse(const litebus::AID &to,
+                                                  const ::messages::DeleteSnapshotResponse &rsp)
+{
+    Send(to, "DeleteSnapshotResponse", rsp.SerializeAsString());
 }
 
 // ===========================================
@@ -311,7 +416,7 @@ void SnapManagerActor::MasterBusiness::SnapStartCheckpoint(const litebus::AID &f
     auto req = std::make_shared<messages::RestoreSnapshotRequest>();
     if (!req->ParseFromString(msg)) {
         YRLOG_ERROR("failed to parse RestoreSnapshotRequest");
-        SendSnapStartResponse(from, "", common::ERR_PARAM_INVALID, "failed to parse request");
+        SendSnapStartResponse({from, "", common::ERR_PARAM_INVALID, "failed to parse request"});
         return;
     }
     HandleSnapStart(from, req);
@@ -370,6 +475,18 @@ void SnapManagerActor::MasterBusiness::HandleRecordSnapshot(const litebus::AID &
 
     *meta.mutable_instanceinfo() = std::move(*req.mutable_instanceinfo());
 
+    // Populate FunctionKey: prefer request-supplied values, fall back to instanceInfo
+    auto *fk = meta.mutable_functionkey();
+    fk->set_tenantid(meta.instanceinfo().tenantid());
+    if (req.has_functionkey() && !req.functionkey().functiontype().empty()) {
+        fk->set_functiontype(req.functionkey().functiontype());
+    } else {
+        fk->set_functiontype(meta.instanceinfo().function());
+    }
+    if (req.has_functionkey() && !req.functionkey().namespace_().empty()) {
+        fk->set_namespace_(req.functionkey().namespace_());
+    }
+
     const auto &requestID = req.requestid();
 
     // Validate required fields
@@ -413,7 +530,7 @@ void SnapManagerActor::MasterBusiness::HandleSnapStart(const litebus::AID &from,
     auto metaOpt = member_->cache.Get(snapshotID);
     if (!metaOpt.has_value()) {
         YRLOG_ERROR("snapshot not found: {}", snapshotID);
-        SendSnapStartResponse(from, req->requestid(), common::ERR_INSTANCE_NOT_FOUND, "snapshot not found");
+        SendSnapStartResponse({from, req->requestid(), common::ERR_INSTANCE_NOT_FOUND, "snapshot not found"});
         return;
     }
 
@@ -426,7 +543,7 @@ void SnapManagerActor::MasterBusiness::HandleSnapStart(const litebus::AID &from,
     Status validationStatus = ValidateSnapshot(meta, currentTime);
     if (validationStatus.IsError()) {
         YRLOG_ERROR("snapshot validation failed: {}", validationStatus.GetMessage());
-        SendSnapStartResponse(from, req->requestid(), common::ERR_PARAM_INVALID, validationStatus.GetMessage());
+        SendSnapStartResponse({from, req->requestid(), common::ERR_PARAM_INVALID, validationStatus.GetMessage()});
         return;
     }
 
@@ -436,16 +553,27 @@ void SnapManagerActor::MasterBusiness::HandleSnapStart(const litebus::AID &from,
     // Invoke global scheduler
     auto weakActor = actor_;
     member_->scheduler->Schedule(scheduleReq).OnComplete(
-        [weakActor, req, from, scheduleReq](const litebus::Future<Status> &future) {
+        [weakActor, req, from, scheduleReq, meta](const litebus::Future<Status> &future) {
             auto actor = weakActor.lock();
             if (!actor) {
                 return;
             }
             auto code = future.IsError() ? future.GetErrorCode() : future.Get().StatusCode();
             auto message = future.IsError() ? "failed to schedule." : future.Get().RawMessage();
+            ::messages::SnapstartInfo info;
+            if (!scheduleReq->instance().runtimeaddress().empty()) {
+                info.set_routeaddress(scheduleReq->instance().runtimeaddress());
+            }
+            if (!scheduleReq->instance().functionproxyid().empty()) {
+                info.set_functionproxyid(scheduleReq->instance().functionproxyid());
+                info.set_nodeid(scheduleReq->instance().functionproxyid());
+            }
+            if (meta.has_functionkey() && !meta.functionkey().namespace_().empty()) {
+                info.set_namespace_(meta.functionkey().namespace_());
+            }
             litebus::Async(actor->GetAID(), &SnapManagerActor::SendSnapStartResponse,
-                           from, req->requestid(), code, message,
-                           scheduleReq->instance().instanceid());
+                           SnapStartResponse{from, req->requestid(), code, message,
+                                             scheduleReq->instance().instanceid(), info});
         });
 }
 
@@ -528,14 +656,10 @@ void SnapManagerActor::MasterBusiness::SendRecordSnapshotResponse(const litebus:
     }
 }
 
-void SnapManagerActor::MasterBusiness::SendSnapStartResponse(const litebus::AID &to,
-                                                             const std::string &requestID,
-                                                             int32_t code,
-                                                             const std::string &message,
-                                                             const std::string &instanceID) const
+void SnapManagerActor::MasterBusiness::SendSnapStartResponse(const SnapStartResponse &response) const
 {
     if (auto actor = actor_.lock(); actor) {
-        actor->SendSnapStartResponse(to, requestID, code, message, instanceID);
+        actor->SendSnapStartResponse(response);
     }
 }
 

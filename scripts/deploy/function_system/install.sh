@@ -70,6 +70,7 @@ function install_function_proxy() {
   local merge_process_args=""
   if [ "X${FUNCTION_PROXY_MERGE_PROCESS_ENABLE^^}" == "XTRUE" ]; then
     local ld_library_path=${LD_LIBRARY_PATH}
+    local function_system_ld_library_path=${FUNCTION_SYSTEM_DIR}/lib:${DATA_SYSTEM_DIR}/lib:${ld_library_path}
     local agent_uid=${YR_POD_NAME}
     if [ "x${YR_POD_NAME}" == "x" ]; then
       agent_uid="${NODE_ID}"
@@ -81,6 +82,7 @@ function install_function_proxy() {
     --runtime_home_dir="${RUNTIME_USER_HOME_DIR}" \
     --runtime_logs_dir="${RUNTIME_LOG_PATH}" \
     --runtime_std_log_dir="" \
+    --runtime_ld_library_path="${ld_library_path}:${RUNTIME_HOME_DIR}/service/cpp/snlib:${RUNTIME_HOME_DIR}/sdk/cpp/lib" \
     --runtime_log_level="${RUNTIME_LOG_LEVEL}" \
     --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}" \
     --runtime_max_log_file_num="${RUNTIME_LOG_ROLLING_MAX_FILES}" \
@@ -126,8 +128,8 @@ function install_function_proxy() {
     --log_expiration_cleanup_interval="${LOG_EXPIRATION_CLEANUP_INTERVAL}" \
     --log_expiration_max_file_count="${LOG_EXPIRATION_MAX_FILE_COUNT}""
   fi
-
-  LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${LD_LIBRARY_PATH} \
+  LD_LIBRARY_PATH=${function_system_ld_library_path:-${FUNCTION_SYSTEM_DIR}/lib:${DATA_SYSTEM_DIR}/lib:${LD_LIBRARY_PATH}} \
+    PATH="${RUNTIME_HOME_DIR}/service/java/bin:/opt/buildtools/jdk8/bin:${PATH}" \
     LD_PRELOAD="${jemalloc_path}" \
     LOCAL_IP="${LOCAL_IP}" \
     HOST_IP="${IP_ADDRESS}" \
@@ -185,6 +187,10 @@ function install_function_proxy() {
     --traefik_etcd_prefix="${TRAEFIK_ETCD_PREFIX}" --traefik_lease_ttl="${TRAEFIK_LEASE_TTL}" \
     --traefik_http_entrypoint="${TRAEFIK_HTTP_ENTRYPOINT}" --traefik_enable_tls="${TRAEFIK_ENABLE_TLS}" \
     --traefik_servers_transport="${TRAEFIK_SERVERS_TRANSPORT}" \
+    --fc_agent_mgr_retry_times="${FC_AGENT_MGR_RETRY_TIMES}" \
+    --fc_agent_mgr_retry_cycle="${FC_AGENT_MGR_RETRY_CYCLE}" \
+    --enable_direct_routing="${ENABLE_DIRECT_ROUTING}" \
+    --force_low_reliability_instance="${FORCE_LOW_RELIABILITY_INSTANCE}" \
     ${merge_process_args} >>"${FS_LOG_PATH}/${NODE_ID}-function_proxy${STD_LOG_SUFFIX}" 2>&1 &
 
   FUNCTION_PROXY_PID="$!"
@@ -193,7 +199,7 @@ function install_function_proxy() {
 
 function install_dashboard() {
   log_info "start dashboard, ip=${IP_ADDRESS}, port=${DASHBOARD_PORT}..."
-  local etcd_ssl_enable="false"
+  local etcd_ssl_enable="${SSL_ENABLE}"
   [ "X${ETCD_AUTH_TYPE}" = "XTLS" ] && etcd_ssl_enable="true"
   dashboard_config=${FUNCTION_SYSTEM_DIR}/config/dashboard_config.json
   install_dashboard_config=${config_install_dir}/dashboard_config.json
@@ -210,7 +216,7 @@ function install_dashboard() {
   sed -i "s/{etcdSsl}/${etcd_ssl_enable}/g" "${install_dashboard_config}"
   sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" "${install_dashboard_config}"
   sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" "${install_dashboard_config}"
-  if [ "X${ETCD_AUTH_TYPE}" = "XTLS" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
+  if [ "X${etcd_ssl_enable}" = "Xtrue" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
     sed -i "s*{etcdCAFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}*g" ${install_dashboard_config}
     sed -i "s*{etcdCertFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}*g" ${install_dashboard_config}
     sed -i "s*{etcdKeyFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}*g" ${install_dashboard_config}
@@ -262,13 +268,14 @@ function install_dashboard() {
 
 function install_collector() {
   log_info "start collector, port=${COLLECTOR_PORT}..."
-  local etcd_ssl_enable="false"
+  local etcd_ssl_enable="${SSL_ENABLE}"
   [ "X${ETCD_AUTH_TYPE}" = "XTLS" ] && etcd_ssl_enable="true"
   GO_RUNTIME_BIN=${RUNTIME_HOME_DIR}/service/go/bin
   DS_SDK_GO_LIB=${DATA_SYSTEM_DIR}/sdk/go/lib
   LD_LIBRARY_PATH=${GO_RUNTIME_BIN}:${DS_SDK_GO_LIB}:${LD_LIBRARY_PATH} \
   "${FUNCTION_SYSTEM_DIR}"/bin/collector \
     --collect_id="${NODE_ID}" \
+    --datasystem_port="${DS_WORKER_PORT}" \
     --ip="${IP_ADDRESS}" \
     --port="${COLLECTOR_PORT}" \
     --log_root="${LOG_ROOT}" \
@@ -293,6 +300,31 @@ function install_collector() {
 function install_faas_frontend() {
   log_info "start faas frontend, http_ip=${IP_ADDRESS}, http_port=${FAAS_FRONTEND_HTTP_PORT}, grpc_port=${FAAS_FRONTEND_GRPC_PORT}..."
   local meta_service_address="${META_SERVICE_ADDRESS}"
+  local auth_provider="${AUTH_PROVIDER:-casdoor}"
+  
+  local auth_enabled="false"
+  local auth_public_url=""
+  local auth_internal_url=""
+  local auth_realm=""
+  local auth_client_id=""
+  local auth_client_secret=""
+
+  if [ "$auth_provider" == "casdoor" ]; then
+    auth_enabled="${CASDOOR_ENABLED:-false}"
+    auth_public_url="${CASDOOR_PUBLIC_ENDPOINT}"
+    auth_internal_url="${CASDOOR_ENDPOINT}"
+    auth_realm="${CASDOOR_ORGANIZATION:-openyuanrong.org}"
+    auth_client_id="${CASDOOR_CLIENT_ID}"
+    auth_client_secret="${CASDOOR_CLIENT_SECRET}"
+  else
+    auth_enabled="${KEYCLOAK_ENABLED:-false}"
+    auth_public_url="${KEYCLOAK_URL}"
+    auth_internal_url="${KEYCLOAK_INTERNAL_URL:-${KEYCLOAK_URL}}"
+    auth_realm="${KEYCLOAK_REALM:-yuanrong}"
+    auth_client_id="${KEYCLOAK_CLIENT_ID:-frontend}"
+    auth_client_secret="${KEYCLOAK_CLIENT_SECRET}"
+  fi
+
   if [ -z "${meta_service_address}" ]; then
     meta_service_address="${IP_ADDRESS}:${META_SERVICE_PORT}"
   fi
@@ -306,14 +338,61 @@ function install_faas_frontend() {
   sed -i "s/{frontendSslEnable}/${FRONTEND_SSL_ENABLE}/g" ${install_init_frontend_config}
   sed -i "s/RequireAndVerifyClientCert/${FRONTEND_CLIENT_AUTH_TYPE}/g" ${install_init_frontend_config}
   sed -i "s/{sccEnable}/${SCC_ENABLE}/g" ${install_init_frontend_config}
-  sed -i "s/{iam_server_address}/${IAM_SERVER_ADDRESS}/g" ${install_init_frontend_config}
+  # Smart IAM routing: prefer local plaintext when co-deployed, else use configured address
+  local effective_iam_address="${IAM_SERVER_ADDRESS}"
+  if [ -n "${IAM_LOCAL_ADDRESS}" ]; then
+    # Co-deployed: use local plaintext address
+    effective_iam_address="${IAM_LOCAL_ADDRESS}"
+    log_info "frontend using local IAM address: ${effective_iam_address}"
+  fi
+  sed -i "s/{iam_server_address}/${effective_iam_address}/g" ${install_init_frontend_config}
+
+  # IAM TLS config for frontend -> IAM connections (cert paths reuse global)
+  local iam_tls_enable="false"
+  local iam_tls_ca_file=""
+  local iam_tls_cert_file=""
+  local iam_tls_key_file=""
+  if [ -z "${IAM_LOCAL_ADDRESS}" ]; then
+    # Remote IAM: configure TLS if IAM or global SSL is enabled
+    if [ "X${IAM_SSL_ENABLE}" = "Xtrue" ] || [ "X${IAM_SSL_ENABLE}" = "XTRUE" ] || \
+       [ "X${SSL_ENABLE}" = "Xtrue" ] || [ "X${SSL_ENABLE}" = "XTRUE" ]; then
+      iam_tls_enable="true"
+      if [ -n "${SSL_BASE_PATH}" ]; then
+        iam_tls_ca_file="${SSL_BASE_PATH}/${SSL_ROOT_FILE}"
+        iam_tls_cert_file="${SSL_BASE_PATH}/${SSL_CERT_FILE}"
+        iam_tls_key_file="${SSL_BASE_PATH}/${SSL_KEY_FILE}"
+      fi
+      log_info "frontend IAM TLS enabled, ca=${iam_tls_ca_file}"
+    fi
+  fi
+  sed -i "s/{iam_tls_enable}/${iam_tls_enable}/g" ${install_init_frontend_config}
+  sed -i "s*{iam_tls_ca_file}*${iam_tls_ca_file}*g" ${install_init_frontend_config}
+  sed -i "s*{iam_tls_cert_file}*${iam_tls_cert_file}*g" ${install_init_frontend_config}
+  sed -i "s*{iam_tls_key_file}*${iam_tls_key_file}*g" ${install_init_frontend_config}
   sed -i "s/{meta_service_address}/${meta_service_address}/g" ${install_init_frontend_config}
   sed -i "s/{enable_func_token_auth}/${ENABLE_FUNCTION_TOKEN_AUTH}/g" ${install_init_frontend_config}
+  sed -i "s/{frontend_lease_bypass}/${FRONTEND_LEASE_BYPASS}/g" ${install_init_frontend_config}
+  
+  # Generic auth placeholders
+  sed -i "s/{auth_enabled}/${auth_enabled}/g" ${install_init_frontend_config}
+  sed -i "s*{auth_public_url}*${auth_public_url}*g" ${install_init_frontend_config}
+  sed -i "s*{auth_internal_url}*${auth_internal_url}*g" ${install_init_frontend_config}
+  sed -i "s/{auth_realm}/${auth_realm}/g" ${install_init_frontend_config}
+  sed -i "s/{auth_client_id}/${auth_client_id}/g" ${install_init_frontend_config}
+  sed -i "s/{auth_client_secret}/${auth_client_secret}/g" ${install_init_frontend_config}
+
+  # Legacy Keycloak placeholders (fallback)
+  sed -i "s/{keycloak_enabled}/${auth_enabled}/g" ${install_init_frontend_config}
+  sed -i "s*{keycloak_url}*${auth_public_url}*g" ${install_init_frontend_config}
+  sed -i "s*{keycloak_internal_url}*${auth_internal_url}*g" ${install_init_frontend_config}
+  sed -i "s/{keycloak_realm}/${auth_realm}/g" ${install_init_frontend_config}
+  sed -i "s/{keycloak_client_id}/${auth_client_id}/g" ${install_init_frontend_config}
+  sed -i "s/{keycloak_client_secret}/${auth_client_secret}/g" ${install_init_frontend_config}
   sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" ${install_init_frontend_config}
   sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" ${install_init_frontend_config}
   sed -i "s*{sslBasePath}*${SSL_BASE_PATH}*g" ${install_init_frontend_config}
   sed -i "s*{sccBasePath}*${SCC_BASE_PATH}*g" ${install_init_frontend_config}
-  if [ "X${ETCD_AUTH_TYPE}" = "XTLS" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
+  if [ "X${SSL_ENABLE}" = "Xtrue" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
     sed -i "s*{etcdCAFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}*g" ${install_init_frontend_config}
     sed -i "s*{etcdCertFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}*g" ${install_init_frontend_config}
     sed -i "s*{etcdKeyFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}*g" ${install_init_frontend_config}
@@ -334,6 +413,7 @@ function install_faas_frontend() {
   RECOVER_HANDLER="faasfrontend.RecoverHandler" \
   SHUTDOWN_HANDLER="faasfrontend.ShutdownHandler" \
   SIGNAL_HANDLER="faasfrontend.SignalHandler" \
+  HEALTH_CHECK_HANDLER="faasfrontend.HealthCheckHandler" \
   YR_FUNCTION_LIB_PATH=${PATTERN_FAAS_HOME_DIR}/faasfrontend/ \
   GLOG_log_dir="${FS_LOG_PATH}" \
   YR_LOG_LEVEL=${FS_LOG_LEVEL} \
@@ -342,6 +422,8 @@ function install_faas_frontend() {
   DATASYSTEM_ADDR=${IP_ADDRESS}:${DS_WORKER_PORT} \
   INSTANCE_ID="driver-faas-frontend-${NODE_ID}" \
   FAAS_LOG_PATH=${FS_LOG_PATH} \
+  ENABLE_TRACE="${ENABLE_TRACE}" \
+  TRACE_CONFIG="${TRACE_CONFIG}" \
   ${GO_RUNTIME_BIN}/goruntime \
   -jobId=${NODE_ID} \
   -runtimeId='faas_frontend_libruntime' \
@@ -349,7 +431,6 @@ function install_faas_frontend() {
   -functionName='0/0-system-faasfrontend/$latest' \
   -logLevel=${FS_LOG_LEVEL} \
   -logPath=${FS_LOG_PATH} \
-  -enableEvent=${ENABLE_EVENT} \
   -enableMTLS=${ENABLE_MTLS} \
   -privateKeyPath=${PRIVATE_KEY_PATH} \
   -certificateFilePath=${CERTIFICATE_FILE_PATH} \
@@ -358,7 +439,7 @@ function install_faas_frontend() {
   -primaryKeyStoreFile=${PRIMARY_KEY_STORE_FILE} \
   -standbyKeyStoreFile=${STANDBY_KEY_STORE_FILE} \
   -enableDsEncrypt=${RUNTIME_DS_ENCRYPT_ENABLE} \
-  -functionSystemAddress="${IP_ADDRESS}:${FUNCTION_PROXY_GRPC_PORT}" \
+  -functionSystemAddress="${LOCAL_IP}:${FUNCTION_PROXY_GRPC_PORT}" \
   -driverMode true  >> "${FS_LOG_PATH}/${NODE_ID}-faas_frontend${STD_LOG_SUFFIX}"  2>&1 &
   FAAS_FRONTEND_PID="$!"
   log_info "succeed to start faas frontend, http_ip=${IP_ADDRESS}, http_port=${FAAS_FRONTEND_HTTP_PORT}, grpc_port=${FAAS_FRONTEND_GRPC_PORT}, pid=${FAAS_FRONTEND_PID}"
@@ -370,13 +451,14 @@ function install_function_scheduler() {
   install_init_scheduler_config=${config_install_dir}/init_scheduler_args_temp.json
   cp ${init_scheduler_config} ${install_init_scheduler_config}
   sed -i "s/{etcdAddr}/$(echo ${ETCD_CLUSTER_ADDRESS} | sed 's/,/","/g')/g" ${install_init_scheduler_config}
+  sed -i "s/{functionSchedulerLeasePort}/${FUNCTION_SCHEDULER_LEASE_PORT}/g" ${install_init_scheduler_config}
   sed -i "s/{sslEnable}/${SSL_ENABLE}/g" ${install_init_scheduler_config}
   sed -i "s/{sccEnable}/${SCC_ENABLE}/g" ${install_init_scheduler_config}
   sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" ${install_init_scheduler_config}
   sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" ${install_init_scheduler_config}
   sed -i "s*{sslBasePath}*${SSL_BASE_PATH}*g" ${install_init_scheduler_config}
   sed -i "s*{sccBasePath}*${SCC_BASE_PATH}*g" ${install_init_scheduler_config}
-  if [ "X${ETCD_AUTH_TYPE}" = "XTLS" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
+  if [ "X${SSL_ENABLE}" = "Xtrue" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
     sed -i "s*{etcdCAFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}*g" ${install_init_scheduler_config}
     sed -i "s*{etcdCertFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}*g" ${install_init_scheduler_config}
     sed -i "s*{etcdKeyFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}*g" ${install_init_scheduler_config}
@@ -397,6 +479,7 @@ function install_function_scheduler() {
   RECOVER_HANDLER="faasscheduler.RecoverHandler" \
   SHUTDOWN_HANDLER="faasscheduler.ShutdownHandler" \
   SIGNAL_HANDLER="faasscheduler.SignalHandler" \
+  HEALTH_CHECK_HANDLER="faasscheduler.HealthCheckHandler" \
   YR_FUNCTION_LIB_PATH=${PATTERN_FAAS_HOME_DIR}/faasscheduler/ \
   GLOG_log_dir="${FS_LOG_PATH}" \
   YR_LOG_LEVEL=${FS_LOG_LEVEL} \
@@ -420,7 +503,7 @@ function install_function_scheduler() {
   -primaryKeyStoreFile=${PRIMARY_KEY_STORE_FILE} \
   -standbyKeyStoreFile=${STANDBY_KEY_STORE_FILE} \
   -enableDsEncrypt=${RUNTIME_DS_ENCRYPT_ENABLE} \
-  -functionSystemAddress="${IP_ADDRESS}:${FUNCTION_PROXY_GRPC_PORT}" \
+  -functionSystemAddress="${LOCAL_IP}:${FUNCTION_PROXY_GRPC_PORT}" \
   -driverMode true  >> "${FS_LOG_PATH}/${NODE_ID}-scheduler${STD_LOG_SUFFIX}"  2>&1 &
   SCHEDULER_PID="$!"
   log_info "succeed to scheduler, pid=${SCHEDULER_PID}"
@@ -435,6 +518,7 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
   log_info "start function agent and runtime manager, port=${FUNCTION_AGENT_PORT}..."
   local bin=${FUNCTION_SYSTEM_DIR}/bin/function_agent
   local ld_library_path=${LD_LIBRARY_PATH}
+  local function_system_ld_library_path=${FUNCTION_SYSTEM_DIR}/lib:${DATA_SYSTEM_DIR}/lib:${ld_library_path}
   local unique_proxy_option="--local_node_id=${NODE_ID}"
   if [ "X${DEPLOY_FUNCTION_PROXY}" = "Xfalse" ] && [ ! -z "${UNIQUE_NODE_ID}" ]; then
     unique_proxy_option="--local_node_id=${UNIQUE_NODE_ID}"
@@ -459,7 +543,6 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     --runtime_home_dir="${RUNTIME_USER_HOME_DIR}"
     --runtime_logs_dir="${RUNTIME_LOG_PATH}"
     --runtime_std_log_dir=""
-    --runtime_ld_library_path="${ld_library_path}"
     --runtime_log_level="${RUNTIME_LOG_LEVEL}"
     --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}"
     --runtime_max_log_file_num="${RUNTIME_LOG_ROLLING_MAX_FILES}"
@@ -523,13 +606,12 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     --user_log_rolling_size_limit_mb="${USER_LOG_MAX_ROLLING_FILE_SIZE_MB}"
     --user_log_rolling_file_count_limit="${USER_LOG_MAX_ROLLING_LOG_FILE_NUM}"
     --npu_collection_enable="${NPU_COLLECTION_ENABLE}"
-    --numa_collection_enable="${NUMA_COLLECTION_ENABLE}"
-
   )
 
   # Start with or without redirecting stdout/stderr depending on USER_LOG_EXPORT_MODE
   if [ "x${USER_LOG_EXPORT_MODE}" == "xstd" ]; then
-    LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
+    LD_LIBRARY_PATH=${function_system_ld_library_path} \
+    PATH="${RUNTIME_HOME_DIR}/service/java/bin:/opt/buildtools/jdk8/bin:${PATH}" \
     LOCAL_IP="${LOCAL_IP}" \
     HOST_IP="${IP_ADDRESS}" \
     RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG \
@@ -538,7 +620,8 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     ${bin} "${agent_args[@]}" ${unique_proxy_option} &
     FUNCTION_AGENT_PID="$!"
   else
-    LD_LIBRARY_PATH=${FUNCTION_SYSTEM_DIR}/lib:${ld_library_path} \
+    LD_LIBRARY_PATH=${function_system_ld_library_path} \
+    PATH="${RUNTIME_HOME_DIR}/service/java/bin:/opt/buildtools/jdk8/bin:${PATH}" \
     LOCAL_IP="${LOCAL_IP}" \
     HOST_IP="${IP_ADDRESS}" \
     RUNTIME_METRICS_CONFIG=$RUNTIME_METRICS_CONFIG \
@@ -591,7 +674,6 @@ function install_function_master() {
       --election_mode=${ELECTION_MODE} \
       --services_path="${SERVICES_PATH}" \
       --lib_path="${FUNCTION_SYSTEM_DIR}/lib" \
-      --ssl_downgrade_enable="true" \
       --ssl_enable="${SSL_ENABLE}" --ssl_base_path="${SSL_BASE_PATH}" \
       --etcd_auth_type="${ETCD_AUTH_TYPE}" --etcd_root_ca_file="${ETCD_CA_FILE}" --etcd_cert_file="${ETCD_CLIENT_CERT_FILE}" --etcd_key_file="${ETCD_CLIENT_KEY_FILE}" \
       --etcd_ssl_base_path=${ETCD_SSL_BASE_PATH} \
@@ -601,6 +683,11 @@ function install_function_master() {
       --enable_trace=${ENABLE_TRACE} --trace_config="${TRACE_CONFIG}" \
       --meta_store_max_flush_concurrency="${META_STORE_MAX_FLUSH_CONCURRENCY}" --meta_store_max_flush_batch_size="${META_STORE_MAX_FLUSH_BATCH_SIZE}" \
       --system_tenant_id="${SYSTEM_TENANT_ID}" \
+      --enable_traefik_provider="${ENABLE_TRAEFIK_PROVIDER}" \
+      --traefik_http_entry_point="${TRAEFIK_HTTP_ENTRY_POINT}" \
+      --traefik_enable_tls="${TRAEFIK_ENABLE_TLS}" \
+      --traefik_servers_transport="${TRAEFIK_SERVERS_TRANSPORT}" \
+      --traefik_forward_timeout_ms="${TRAEFIK_FORWARD_TIMEOUT_MS}" \
       >>"${FS_LOG_PATH}/${NODE_ID}-function_master${STD_LOG_SUFFIX}" 2>&1 &
     FUNCTION_MASTER_PID=$!
     if function_system_health_check ${FUNCTION_MASTER_PID} "${GLOBAL_SCHEDULER_PORT}" "global-scheduler"; then
@@ -617,8 +704,6 @@ function install_function_master() {
 
 function install_metaservice() {
   log_info "start metaservice, ip=${IP_ADDRESS}, port=${META_SERVICE_PORT}..."
-  local etcd_ssl_enable="false"
-  [ "X${ETCD_AUTH_TYPE}" = "XTLS" ] && etcd_ssl_enable="true"
   metaservice_config=${FUNCTION_SYSTEM_DIR}/config/meta_service/metaservice_config.json
   install_metaservice_config=${config_install_dir}/metaservice_config.json
   cp ${metaservice_config} ${install_metaservice_config}
@@ -627,7 +712,7 @@ function install_metaservice() {
   sed -i "s/{functionMasterAddr}/${IP_ADDRESS}:${GLOBAL_SCHEDULER_PORT}/g" ${install_metaservice_config}
   sed -i "s/{frontendAddr}/${IP_ADDRESS}:${FAAS_FRONTEND_HTTP_PORT}/g" ${install_metaservice_config}
   sed -i "s/{etcdAddr}/$(echo ${ETCD_CLUSTER_ADDRESS} | sed 's/,/","/g')/g" ${install_metaservice_config}
-  sed -i "s/{sslEnable}/${etcd_ssl_enable}/g" ${install_metaservice_config}
+  sed -i "s/{sslEnable}/${SSL_ENABLE}/g" ${install_metaservice_config}
   sed -i "s/{metaserviceSslEnable}/${META_SERVICE_SSL_ENABLE}/g" ${install_metaservice_config}
   sed -i "s/RequireAndVerifyClientCert/${META_SERVICE_CLIENT_AUTH_TYPE}/g" ${install_metaservice_config}
   sed -i "s*{azPrefix}*${ETCD_TABLE_PREFIX}*g" ${install_metaservice_config}
@@ -644,7 +729,7 @@ function install_metaservice() {
     sed -i "s*{moduleCertFile}**g" ${install_metaservice_config}
     sed -i "s*{moduleKeyFile}**g" ${install_metaservice_config}
   fi
-  if [ "X${ETCD_AUTH_TYPE}" = "XTLS" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
+  if [ "X${SSL_ENABLE}" = "Xtrue" ] && [ -n "${ETCD_SSL_BASE_PATH}" ]; then
     sed -i "s*{etcdCAFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CA_FILE}*g" ${install_metaservice_config}
     sed -i "s*{etcdCertFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_CERT_FILE}*g" ${install_metaservice_config}
     sed -i "s*{etcdKeyFile}*${ETCD_SSL_BASE_PATH}/${ETCD_CLIENT_KEY_FILE}*g" ${install_metaservice_config}
@@ -680,6 +765,35 @@ function install_metaservice() {
 function install_iam_server() {
   log_info "start iam_server, ip=${IP_ADDRESS}, port=${IAM_SERVER_PORT}..."
   local bin=${FUNCTION_SYSTEM_DIR}/bin/iam_server
+  local auth_provider="${AUTH_PROVIDER:-casdoor}"
+  
+  # Keycloak configs
+  local keycloak_enabled="${KEYCLOAK_ENABLED}"
+  local keycloak_url="${KEYCLOAK_INTERNAL_URL:-${KEYCLOAK_URL}}"
+  local keycloak_issuer_url="${KEYCLOAK_URL}"
+  local keycloak_realm="${KEYCLOAK_REALM}"
+
+  # Casdoor configs
+  local casdoor_enabled="${CASDOOR_ENABLED:-false}"
+  local casdoor_endpoint="${CASDOOR_ENDPOINT:-http://127.0.0.1:8000}"
+  local casdoor_public_endpoint="${CASDOOR_PUBLIC_ENDPOINT:-${CASDOOR_ENDPOINT}}"
+  local casdoor_client_id="${CASDOOR_CLIENT_ID}"
+  local casdoor_client_secret="${CASDOOR_CLIENT_SECRET}"
+  local casdoor_org="${CASDOOR_ORGANIZATION:-yuanrong}"
+  local casdoor_app="${CASDOOR_APPLICATION:-app-yuanrong}"
+  local casdoor_admin_user="${CASDOOR_ADMIN_USER}"
+  local casdoor_admin_password="${CASDOOR_ADMIN_PASSWORD}"
+  local casdoor_pub_key="${CASDOOR_JWT_PUBLIC_KEY}"
+
+  if [ -z "${keycloak_enabled}" ]; then
+    keycloak_enabled="false"
+  fi
+  if [ -z "${keycloak_url}" ]; then
+    keycloak_url="http://127.0.0.1:8080"
+  fi
+  if [ -z "${keycloak_realm}" ]; then
+    keycloak_realm="yuanrong"
+  fi
 
   jemalloc_path=""
   if [ "X${ENABLE_JEMALLOC}" == "Xtrue" ]; then
@@ -696,12 +810,27 @@ function install_iam_server() {
   fi
 
   # Determine if SSL should be enabled for iam_server
-  # SSL is enabled if either global SSL_ENABLE=true or IAM_SSL_ENABLE=true
+  # IAM_SSL_ENABLE independently toggles SSL for IAM; cert paths reuse global ssl_* values
   local iam_ssl_enable="false"
-  if [ "X${SSL_ENABLE}" = "Xtrue" ] || [ "X${SSL_ENABLE}" = "XTRUE" ] || \
-     [ "X${IAM_SSL_ENABLE}" = "Xtrue" ] || [ "X${IAM_SSL_ENABLE}" = "XTRUE" ]; then
+  if [ "X${IAM_SSL_ENABLE}" = "Xtrue" ] || [ "X${IAM_SSL_ENABLE}" = "XTRUE" ] || \
+     [ "X${SSL_ENABLE}" = "Xtrue" ] || [ "X${SSL_ENABLE}" = "XTRUE" ]; then
     iam_ssl_enable="true"
     log_info "iam_server mTLS enabled, ssl_base_path=${SSL_BASE_PATH}"
+  fi
+
+  # Pass --iam_ssl_enable only when IAM_SSL_ENABLE is explicitly set (independent from global)
+  local iam_ssl_args=""
+  if [ -n "${IAM_SSL_ENABLE}" ] && ([ "X${IAM_SSL_ENABLE}" = "Xtrue" ] || [ "X${IAM_SSL_ENABLE}" = "XTRUE" ]); then
+    iam_ssl_args="--iam_ssl_enable=true"
+    log_info "iam_server independent SSL override enabled"
+  fi
+
+  # Local plaintext listener for co-deployed components
+  local iam_local_args=""
+  if [ -n "${IAM_LOCAL_LISTEN_PORT}" ] && [ "${IAM_LOCAL_LISTEN_PORT}" != "0" ]; then
+    local iam_local_ip="${IAM_LOCAL_IP:-127.0.0.1}"
+    iam_local_args="--local_ip=${iam_local_ip} --local_listen_port=${IAM_LOCAL_LISTEN_PORT}"
+    log_info "iam_server local plaintext listener: ${iam_local_ip}:${IAM_LOCAL_LISTEN_PORT}"
   fi
 
   if check_port "${IP_ADDRESS}" "${IAM_SERVER_PORT}"; then
@@ -722,9 +851,27 @@ function install_iam_server() {
       --ssl_root_file="${SSL_ROOT_FILE}" \
       --ssl_cert_file="${SSL_CERT_FILE}" \
       --ssl_key_file="${SSL_KEY_FILE}" \
+      ${iam_ssl_args} \
+      ${iam_local_args} \
+      --auth_provider="${auth_provider}" \
+      --keycloak_enabled="${keycloak_enabled}" \
+      --keycloak_url="${keycloak_url}" \
+      --keycloak_issuer_url="${keycloak_issuer_url}" \
+      --keycloak_realm="${keycloak_realm}" \
+      --casdoor_enabled="${casdoor_enabled}" \
+      --casdoor_endpoint="${casdoor_endpoint}" \
+      --casdoor_public_endpoint="${casdoor_public_endpoint}" \
+      --casdoor_client_id="${casdoor_client_id}" \
+      --casdoor_client_secret="${casdoor_client_secret}" \
+      --casdoor_organization="${casdoor_org}" \
+      --casdoor_application="${casdoor_app}" \
+      --casdoor_admin_user="${casdoor_admin_user}" \
+      --casdoor_admin_password="${casdoor_admin_password}" \
+      --casdoor_jwt_public_key="${casdoor_pub_key}" \
       >>"${FS_LOG_PATH}/${NODE_ID}-iam_server${STD_LOG_SUFFIX}" 2>&1 &
     IAM_SERVER_PID=$!
-    if function_system_health_check ${IAM_SERVER_PID} "${IAM_SERVER_PORT}" "iam-server"; then
+    if function_system_health_check "${IAM_SERVER_PID}" "${IAM_SERVER_PORT}" "iam-server" \
+      "IAM_SSL_ENABLE" "IAM_LOCAL_LISTEN_PORT" "IAM_LOCAL_IP"; then
       log_info "succeed to start iam_server process, ip=${IP_ADDRESS}, port=${IAM_SERVER_PORT}, pid=${IAM_SERVER_PID}"
       return 0
     fi

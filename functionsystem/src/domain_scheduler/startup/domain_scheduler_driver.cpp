@@ -130,6 +130,7 @@ Status DomainSchedulerDriver::Start()
     domainSrvActor_->BindInstanceCtrl(instanceCtrl);
     domainSrvActor_->BindResourceView(resourceViewMgr_);
     domainSrvActor_->BindUnderlayerMgr(underlayerMgr);
+    domainSrvActor_->BindScheduleRecorder(scheduleRecorder);
 
     underlayerMgrActor_->BindDomainService(domainSrv);
     underlayerMgrActor_->BindResourceView(resourceViewMgr_);

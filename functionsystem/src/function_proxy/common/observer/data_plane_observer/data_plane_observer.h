@@ -35,6 +35,8 @@ public:
                                                            const std::string &targetInstance,
                                                            bool ignoreNonExist = false);
 
+    virtual litebus::Future<std::shared_ptr<resources::RouteInfo>> QueryInstanceRoute(const std::string &instanceID);
+
     virtual void NotifyMigratingRequest(const std::string &instanceID);
 
     virtual void ReportTraffic(const std::string &instanceID, const size_t &size);

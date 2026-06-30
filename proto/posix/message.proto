@@ -684,14 +684,35 @@ message QueryResourcesInfoResponse {
   resources.ResourceUnit resource = 2;
 }
 
+message QuerySchedulingQueueRequest {
+  string requestID = 1;
+}
+
+message QuerySchedulingQueueResponse {
+  string requestID                                   = 1;
+  common.ErrorCode code                              = 2;
+  repeated resources.SchedulingQueueInfo instanceInfos = 3;
+}
+
 message QueryInstancesInfoRequest {
   string requestID = 1;
+  string tenantID = 2;
+  string instanceID = 3;
+  string nodeID = 4;
+  bool includeAllTenants = 5;
+  string fields = 6;
+  uint64 page = 7;
+  uint64 pageSize = 8;
+  bool paginationEnabled = 9;
 }
 
 message QueryInstancesInfoResponse {
   string requestID                              = 1;
   common.ErrorCode code                         = 2;
   repeated resources.InstanceInfo instanceInfos = 3;
+  uint64 totalCount                             = 4;
+  uint64 page                                   = 5;
+  uint64 pageSize                               = 6;
 }
 
 message QueryNamedInsRequest {
@@ -1054,9 +1075,16 @@ message StaticFunctionChangeResponse {
 }
 
 // Snapshot metadata stored in etcd
+message FunctionKey {
+  string tenantID     = 1;
+  string functionType = 2;  // moduleName.className for actors; functionName for FaaS
+  string namespace    = 3;  // optional actor namespace
+}
+
 message SnapshotMetadata {
   resources.InstanceInfo instanceInfo = 1; // 实例信息
   resources.SnapshotInfo snapshotInfo = 2; // 快照信息
+  FunctionKey            functionKey  = 3;
 }
 
 
@@ -1081,17 +1109,27 @@ message RestoreSnapshotRequest {
   core_service.SnapStartOptions snapStartOptions = 3;
 }
 
+message SnapstartInfo {
+  string routeAddress = 1;
+  string portMappings = 2;
+  string functionProxyID = 3;
+  string nodeID = 4;
+  string namespace = 5;
+}
+
 message RestoreSnapshotResponse {
   int32 code = 1;
   string message = 2;
   string requestID = 3;
   string instanceID = 4;
+  SnapstartInfo snapstartInfo = 5;
 }
 
 message RecordSnapshotRequest {
   string requestID = 1;
   resources.SnapshotInfo snapshotInfo = 2;
   resources.InstanceInfo instanceInfo = 3;
+  FunctionKey            functionKey  = 4;
 }
 
 message RecordSnapshotResponse {
@@ -1100,7 +1138,65 @@ message RecordSnapshotResponse {
   string requestID = 3;
 }
 
+message ListSnapshotsByFunctionKeyRequest {
+  string requestID    = 1;
+  FunctionKey functionKey = 2;
+}
+
+message ListSnapshotsByFunctionKeyResponse {
+  common.ErrorCode           code      = 1;
+  string                     message   = 2;
+  string                     requestID = 3;
+  repeated string            checkpointIDs = 4;
+}
+
+message ListSnapshotsByTenantRequest {
+  string requestID = 1;
+  string tenantID  = 2;
+}
+
+message ListSnapshotsByTenantResponse {
+  common.ErrorCode           code      = 1;
+  string                     message   = 2;
+  string                     requestID = 3;
+  repeated string            checkpointIDs = 4;
+}
+
+message DeleteSnapshotRequest {
+  string requestID = 1;
+  string checkpointID = 2;
+}
+
+message DeleteSnapshotResponse {
+  common.ErrorCode code = 1;
+  string message = 2;
+  string requestID = 3;
+}
+
 message TenantQuotaExceeded {
     string tenantID   = 1;
     int64  cooldownMs = 2;
+}
+
+// ── Runtime reconciliation ──────────────────────────────────────────
+
+message RuntimeReconcileEntry {
+  string runtimeID    = 1;
+  string containerID  = 2;  // executor implementation identifier (sandboxID for sandbox executor)
+  string instanceID   = 3;
+}
+
+message ReconcileRuntimesRequest {
+  string requestID                         = 1;
+  repeated RuntimeReconcileEntry entries   = 2;
+}
+
+message ReconcileRuntimesResponse {
+  string requestID           = 1;
+  int32  code                = 2;
+  string message             = 3;
+  int32  orphansCleaned      = 4;
+  repeated string orphanIDs  = 5;  // cleaned orphan containerIDs
+  repeated string missingIDs = 6;  // expected but not found containerIDs
+  repeated RuntimeReconcileEntry confirmedEntries = 7;  // confirmed running entries
 }

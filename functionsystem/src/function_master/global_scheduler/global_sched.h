@@ -54,6 +54,8 @@ public:
     virtual void AddLocalSchedAbnormalNotifyCallback(const std::string &name,
                                                      const LocalSchedAbnormalCallbackFunc &func);
 
+    virtual Status AddDomainSchedCallback(const CallbackAddFunc &func);
+
     virtual void BindLocalDeleteCallback(const LocalDeleteCallbackFunc &func);
 
     virtual void BindLocalAddCallback(const LocalAddCallbackFunc &func);
@@ -61,8 +63,8 @@ public:
     virtual litebus::Future<messages::QueryAgentInfoResponse> QueryAgentInfo(
         const std::shared_ptr<messages::QueryAgentInfoRequest> &req);
 
-    virtual litebus::Future<messages::QueryInstancesInfoResponse> GetSchedulingQueue(
-        const std::shared_ptr<messages::QueryInstancesInfoRequest> &req);
+    virtual litebus::Future<messages::QuerySchedulingQueueResponse> GetSchedulingQueue(
+        const std::shared_ptr<messages::QuerySchedulingQueueRequest> &req);
 
     virtual litebus::Future<messages::QueryResourcesInfoResponse> QueryResourcesInfo(
         const std::shared_ptr<messages::QueryResourcesInfoRequest> &req);
@@ -71,6 +73,7 @@ public:
 
     virtual litebus::Future<Status> EvictAgent(const std::string &localID,
                                                const std::shared_ptr<messages::EvictAgentRequest> &req);
+    virtual litebus::Future<Status> UpdateLocalSchedulingStatus(const std::string &localID, bool evicting);
 
     virtual litebus::Future<std::unordered_set<std::string>> QueryNodes();
 

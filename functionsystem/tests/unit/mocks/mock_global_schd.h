@@ -37,11 +37,13 @@ public:
     MOCK_METHOD(litebus::Future<messages::QueryAgentInfoResponse>, QueryAgentInfo,
                 (const std::shared_ptr<messages::QueryAgentInfoRequest> &req), (override));
 
-    MOCK_METHOD(litebus::Future<messages::QueryInstancesInfoResponse>, GetSchedulingQueue,
-                (const std::shared_ptr<messages::QueryInstancesInfoRequest> &req), (override));
+    MOCK_METHOD(litebus::Future<messages::QuerySchedulingQueueResponse>, GetSchedulingQueue,
+                (const std::shared_ptr<messages::QuerySchedulingQueueRequest> &req), (override));
 
     MOCK_METHOD(litebus::Future<Status>, EvictAgent,
                 (const std::string &localID, const std::shared_ptr<messages::EvictAgentRequest> &req), (override));
+    MOCK_METHOD(litebus::Future<Status>, UpdateLocalSchedulingStatus, (const std::string &localID, bool evicting),
+                (override));
     MOCK_METHOD(litebus::Future<messages::QueryResourcesInfoResponse>, QueryResourcesInfo,
                 (const std::shared_ptr<messages::QueryResourcesInfoRequest> &req), (override));
 

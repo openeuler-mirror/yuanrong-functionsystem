@@ -24,6 +24,7 @@
 #include "common/heartbeat/heartbeat_client.h"
 #include "common/proto/pb/message_pb.h"
 #include "common/resource_view/resource_view_mgr.h"
+#include "common/schedule_decision/schedule_recorder/schedule_recorder.h"
 #include "common/status/status.h"
 #include "common/utils/request_sync_helper.h"
 #include "domain_scheduler/domain_group_control/domain_group_ctrl.h"
@@ -120,10 +121,10 @@ public:
     void GetSchedulingQueue(const litebus::AID &from, std::string &&, std::string &&msg);
     void GetSchedulingQueueCallBack(
         const litebus::AID &to, const std::string &requestID,
-        const litebus::Future<std::vector<std::shared_ptr<messages::ScheduleRequest>>> &future);
+        const litebus::Future<std::vector<schedule_decision::ScheduleQueueRecord>> &future);
 
-    litebus::Future<std::vector<std::shared_ptr<messages::ScheduleRequest>>> CombineInstanceAndGroup(
-        const std::vector<std::shared_ptr<messages::ScheduleRequest>> &instanceQueue);
+    litebus::Future<std::vector<schedule_decision::ScheduleQueueRecord>> CombineInstanceAndGroup(
+        const std::vector<schedule_decision::ScheduleQueueRecord> &instanceQueue);
 
     /* *
      * query resource information
@@ -175,6 +176,12 @@ public:
     {
         ASSERT_IF_NULL(groupCtrl);
         groupCtrl_ = groupCtrl;
+    }
+
+    void BindScheduleRecorder(const std::shared_ptr<schedule_decision::ScheduleRecorder> &recorder)
+    {
+        ASSERT_IF_NULL(recorder);
+        recorder_ = recorder;
     }
 
     virtual void UpdateMasterInfo(const explorer::LeaderInfo &leaderInfo);
@@ -259,6 +266,7 @@ private:
 
     std::shared_ptr<UnderlayerSchedMgr> underlayer_;
     std::shared_ptr<DomainGroupCtrl> groupCtrl_;
+    std::shared_ptr<schedule_decision::ScheduleRecorder> recorder_;
     litebus::AID masterAid_;
     bool isHeader_{ false };  // this indicates whether the domain is the head node.
     bool enableMetrics_{ false };

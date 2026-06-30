@@ -25,6 +25,13 @@
 #include "common/logs/logging.h"
 
 namespace functionsystem {
+namespace {
+class IoEventActor : public IOEventActor {
+public:
+    explicit IoEventActor(const std::string &name) : IOEventActor(name) {}
+    ~IoEventActor() override = default;
+};
+}  // namespace
 
 // Static member initialization
 std::shared_ptr<IOEventActor> IOEventActor::instance_ = nullptr;
@@ -36,8 +43,7 @@ void IOEventActor::CreateInstance()
         return;
     }
 
-    // instance_ = std::shared_ptr<IOEventActor>(new IOEventActor("IOEventActor"));
-    instance_ = std::make_shared<IOEventActor>("IOEventActor");
+    instance_ = std::make_shared<IoEventActor>("IOEventActor");
     litebus::Spawn(instance_);
     YRLOG_INFO("IOEventActor singleton created");
 }
@@ -166,7 +172,7 @@ void IOEventActor::EventLoop()
 
 void IOEventActor::ReadAndDispatch(int fd)
 {
-    char buffer[4096];
+    char buffer[65536];
     ssize_t bytesRead = read(fd, buffer, sizeof(buffer));
 
     auto it = fdToInfo_.find(fd);

@@ -113,6 +113,7 @@ public:
     }
 
     // for test
+
     [[maybe_unused]] void SetStdRedirectors(const std::string logName, const std::shared_ptr<StdRedirector> redirector)
     {
         stdRedirectors_[logName] = redirector;

@@ -17,6 +17,7 @@
 #include "label_affinity_scorer.h"
 
 #include <cmath>
+
 #include "common/logs/logging.h"
 #include "common/resource_view/resource_tool.h"
 #include "common/schedule_plugin/common/affinity_utils.h"

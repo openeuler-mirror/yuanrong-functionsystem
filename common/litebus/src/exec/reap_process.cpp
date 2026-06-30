@@ -72,7 +72,7 @@ void NotifyPromise(pid_t pid, int result, int status)
             // notify not exist
         } else if (result == 0) {
             BUSLOG_WARN("Notify pid none:{}", pid);
-            it->second->SetFailed(0);
+            it->second->SetFailed(-1);
             // notify failed
         } else {
             BUSLOG_ERROR("Notify pid error:{}", pid);
@@ -82,6 +82,24 @@ void NotifyPromise(pid_t pid, int result, int status)
     // remove pid from map finally
     (void)g_promises.erase(pid);
     return;
+}
+
+// Notify the pending promise for `pid` with a real status obtained by an
+// external reaper. Returns true if a promise was found (and notified).
+bool TryNotifyExternalReap(pid_t pid, int status)
+{
+    std::lock_guard<std::mutex> lock(g_promisesLock);
+    if (g_promises.find(pid) == g_promises.end()) {
+        return false;
+    }
+    auto itRange = g_promises.equal_range(pid);
+    for (auto it = itRange.first; it != itRange.second; ++it) {
+        unsigned int st = static_cast<unsigned int>(status);
+        BUSLOG_INFO("External reap notify pid:{},status:{},Wstatus:{}", pid, status, WEXITSTATUS(st));
+        it->second->SetValue(Option<int>(status));
+    }
+    (void)g_promises.erase(pid);
+    return true;
 }
 
 ReaperActor::~ReaperActor()

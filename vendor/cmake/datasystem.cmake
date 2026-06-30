@@ -22,7 +22,24 @@ set(INSTALL_DIR "${EP_BUILD_DIR}/Install/${src_name}")
 message("include datasystem lib from ${INSTALL_DIR}")
 set(datasystem_INCLUDE_DIR ${INSTALL_DIR}/sdk/cpp/include)
 set(datasystem_LIB_DIR ${INSTALL_DIR}/sdk/cpp/lib)
-set(datasystem_LIB ${datasystem_LIB_DIR}/libdatasystem.so ${datasystem_LIB_DIR}/libds_router_client.so)
+# Use the etcd proto library from the datasystem SDK for functionsystem targets too.
+# Linking the vendor static etcdapi archive together with datasystem's shared
+# libetcdapi_proto.so registers gogoproto/gogo.proto twice at process startup.
+set(etcdapi_LIB_A ${datasystem_LIB_DIR}/libetcdapi_proto.so)
+# datasystem was built against OpenSSL 1.1; explicitly add the bundled 1.1 libraries so the
+# linker can resolve @OPENSSL_1_1_0 versioned symbols without conflicting with the vendor
+# OpenSSL 3.0 used by other components.
+set(datasystem_LIB
+    ${datasystem_LIB_DIR}/libdatasystem.so
+    ${datasystem_LIB_DIR}/libds_router_client.so
+    ${datasystem_LIB_DIR}/libetcdapi_proto.so
+    ${datasystem_LIB_DIR}/librpc_option_protos.so
+    ${datasystem_LIB_DIR}/libprotobuf.so.25.5.0
+    ${datasystem_LIB_DIR}/libabseil_dll.so.2407.0.0
+    ${datasystem_LIB_DIR}/libcommon_flags.so
+    ${datasystem_LIB_DIR}/libssl.so.1.1
+    ${datasystem_LIB_DIR}/libcrypto.so.1.1
+)
 
 include_directories(${datasystem_INCLUDE_DIR})
 
@@ -38,19 +55,17 @@ file(GLOB DS_CRYPTO "${datasystem_LIB_DIR}/libcrypto*")
 file(GLOB PROTOBUF "${datasystem_LIB_DIR}/libprotobuf*")
 file(GLOB PROTOC "${datasystem_LIB_DIR}/libprotoc*")
 install(FILES ${datasystem_LIB_DIR}/libdatasystem.so DESTINATION ${INSTALL_LIBDIR})
+install(FILES ${datasystem_LIB_DIR}/libds_router_client.so DESTINATION ${INSTALL_LIBDIR})
+install(FILES ${datasystem_LIB_DIR}/libetcdapi_proto.so DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${datasystem_LIB_DIR}/librpc_option_protos.so DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${PROTOBUF} DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${PROTOC} DESTINATION ${INSTALL_LIBDIR})
-install(FILES ${datasystem_LIB_DIR}/libcommon_flags.so DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${datasystem_LIB_DIR}/libabseil_dll.so.2407.0.0 DESTINATION ${INSTALL_LIBDIR})
-install(FILES ${datasystem_LIB_DIR}/libetcdapi_proto.so DESTINATION ${INSTALL_LIBDIR})
-install(FILES ${datasystem_LIB_DIR}/libds_router_client.so DESTINATION ${INSTALL_LIBDIR})
+install(FILES ${datasystem_LIB_DIR}/libcommon_flags.so DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${DS_SPDLOG} DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${TBB} DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${BRPC} DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${GFLAGS} DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${ZMQ} DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${DS_CURL} DESTINATION ${INSTALL_LIBDIR})
-install(FILES ${DS_SSL} DESTINATION ${INSTALL_LIBDIR})
-install(FILES ${DS_CRYPTO} DESTINATION ${INSTALL_LIBDIR})
 install(FILES ${datasystem_LIB_DIR}/libacl_plugin.so DESTINATION ${INSTALL_LIBDIR} OPTIONAL)

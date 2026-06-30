@@ -68,6 +68,23 @@ public:
         preemptPromise_->SetValue(msg);
     }
 
+    litebus::Future<messages::UpdateAgentStatusResponse> SendUpdateSchedulingStatus(const litebus::AID &local,
+                                                                                    std::string msg)
+    {
+        updateSchedulingStatusPromise_ = std::make_shared<litebus::Promise<messages::UpdateAgentStatusResponse>>();
+        Send(local, "UpdateSchedulingStatus", std::move(msg));
+        return updateSchedulingStatusPromise_->GetFuture();
+    }
+
+    void UpdateSchedulingStatusResponse(const litebus::AID &from, std::string &&name, std::string &&msg)
+    {
+        messages::UpdateAgentStatusResponse response;
+        if (!response.ParseFromString(msg)) {
+            return;
+        }
+        updateSchedulingStatusPromise_->SetValue(response);
+    }
+
     void NotifyEvictResult(const litebus::AID &from, std::string &&name, std::string &&msg)
     {
         messages::EvictAgentResult result;
@@ -100,6 +117,7 @@ protected:
         Receive("EvictAck", &GlobalSchedStubActor::EvictAck);
         Receive("NotifyEvictResult", &GlobalSchedStubActor::NotifyEvictResult);
         Receive("PreemptInstancesResponse", &GlobalSchedStubActor::PreemptInstanceResponse);
+        Receive("UpdateSchedulingStatusResponse", &GlobalSchedStubActor::UpdateSchedulingStatusResponse);
     }
     void Finalize() override
     {
@@ -108,6 +126,7 @@ private:
     std::shared_ptr<litebus::Promise<std::string>> evictPromise_;
     std::shared_ptr<litebus::Promise<std::string>> preemptPromise_;
     std::shared_ptr<litebus::Promise<messages::EvictAgentResult>> evictResultPromise_;
+    std::shared_ptr<litebus::Promise<messages::UpdateAgentStatusResponse>> updateSchedulingStatusPromise_;
 };
 }  // namespace functionsystem::test
 

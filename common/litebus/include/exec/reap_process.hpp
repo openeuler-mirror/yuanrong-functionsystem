@@ -40,6 +40,13 @@ protected:
 
 Future<Option<int>> ReapInActor(pid_t pid);
 
+// Notify litebus ReaperActor that an external reaper (e.g. HealthCheckActor in
+// merge_process mode) has already waited on `pid` and obtained `status`. If the
+// pid has a pending promise, fulfill it with the real status and erase it from
+// the internal map. Returns true when a promise was found and notified.
+// Safe to call from any thread; takes the internal promise lock.
+bool TryNotifyExternalReap(pid_t pid, int status);
+
 }    // namespace litebus
 
 #endif

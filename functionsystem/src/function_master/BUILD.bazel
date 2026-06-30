@@ -29,7 +29,7 @@ cc_library(
         "//functionsystem/src/common:status",
         "//functionsystem/src/common:rpc",
     ],
-    visibility = ["//visibility:private"],
+    visibility = ["//visibility:public"],
 )
 
 cc_library(
@@ -73,7 +73,7 @@ cc_library(
         "//functionsystem/src/common:file_monitor",
         "//functionsystem/src/common:meta_store_adapter",
     ],
-    visibility = ["//visibility:private"],
+    visibility = ["//visibility:public"],
 )
 
 # function_master binary

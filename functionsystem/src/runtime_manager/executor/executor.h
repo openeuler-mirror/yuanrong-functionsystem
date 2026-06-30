@@ -339,6 +339,16 @@ public:
     }
 
     virtual litebus::Future<bool> GracefulShutdown() = 0;
+
+    virtual litebus::Future<messages::ReconcileRuntimesResponse> ReconcileRuntimes(
+        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request)
+    {
+        messages::ReconcileRuntimesResponse resp;
+        resp.set_requestid(request->requestid());
+        resp.set_code(0);
+        return resp;
+    }
+
     /**
      * Stop executor
      */

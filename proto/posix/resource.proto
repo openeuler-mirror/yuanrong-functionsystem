@@ -375,6 +375,14 @@ message InstanceInfo {
     int32 executorType = 40;
 }
 
+message SchedulingQueueInfo {
+    string instanceID = 1;
+    string requestID = 2;
+    Resources resources = 3;
+    int64 enqueueTimeMs = 4;
+    int64 waitDurationMs = 5;
+}
+
 message RouteInfo {
     string instanceID = 1;
     string runtimeAddress = 2;

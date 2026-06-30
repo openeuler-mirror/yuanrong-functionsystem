@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-
 #ifndef COMMON_TRACE_TRACE_MANAGER_H
 #define COMMON_TRACE_TRACE_MANAGER_H
 
@@ -26,6 +25,7 @@
 #include <vector>
 #include <variant>
 #include <mutex>
+#include <google/protobuf/map.h>
 #include "common/logs/logging.h"
 #include "common/proto/pb/posix_pb.h"
 #include "common/utils/singleton.h"
@@ -42,6 +42,16 @@
 namespace functionsystem {
 namespace trace {
 using AttributesVector = std::vector<std::pair<const std::string, const opentelemetry::common::AttributeValue>>;
+
+namespace SpanName {
+inline constexpr char K_CREATE[] = "yr.create";
+inline constexpr char K_DOMAIN_SCHEDULE[] = "yr.schedule.domain";
+inline constexpr char K_LOCAL_SCHEDULE[] = "yr.schedule.local";
+inline constexpr char K_FORWARD_SCHEDULE[] = "yr.schedule.forward";
+inline constexpr char K_DEPLOY_INSTANCE[] = "yr.instance.deploy";
+inline constexpr char K_WAIT_CONNECTION[] = "yr.instance.wait_connection";
+}  // namespace SpanName
+
 class TraceManager : public Singleton<TraceManager> {
 public:
     // Type aliases for cleaner interface
@@ -50,8 +60,10 @@ public:
     // Span creation parameters
     struct SpanParam {
         std::string spanName;
+        std::string spanKey;
         std::string traceID;
         std::string spanID;
+        std::string traceParent;
         std::string function;
         std::string instanceID;
     };
@@ -84,6 +96,7 @@ public:
     OtelSpan StartSpan(const std::string &name,
                       const std::string &traceID,
                       const std::string &spanID,
+                      const std::string &traceParent,
                       AttributesVector &attrs);
 
     // Start span and record for later management (e.g., StopSpan)
@@ -93,11 +106,11 @@ public:
     // Span Lifecycle Management
     // ========================================================================
     void StopSpan(const std::string &spanName,
-                  const std::string &traceID,
+                  const std::string &spanKey,
                   const AttributesVector &attrs = {},
                   const std::vector<std::string> &events = {});
 
-    std::string GetSpanIDFromStore(const std::string &traceID, const std::string &spanName);
+    std::string GetSpanIDFromStore(const std::string &spanKey, const std::string &spanName);
     void Clear();
 
     // ========================================================================
@@ -105,6 +118,16 @@ public:
     // ========================================================================
     static std::string SpanIDToStr(const opentelemetry::trace::SpanId &spanId);
     static std::string TraceIDToStr(const opentelemetry::trace::TraceId &traceID);
+    static std::string SpanContextToTraceParent(const opentelemetry::trace::SpanContext &spanContext);
+    static std::string GetTraceParentFromSpan(const OtelSpan &span);
+    static std::string GetTraceParentFromOptions(
+        const google::protobuf::Map<std::string, std::string> &options,
+        const google::protobuf::Map<std::string, std::string> *fallback = nullptr);
+    static void SetTraceParentToOptions(google::protobuf::Map<std::string, std::string> *options,
+                                        const std::string &traceParent);
+    static void PropagateSpanToOptions(const OtelSpan &span,
+                                       google::protobuf::Map<std::string, std::string> *options,
+                                       google::protobuf::Map<std::string, std::string> *fallback = nullptr);
     opentelemetry::nostd::shared_ptr<opentelemetry::trace::Tracer> GetTracer(
         const std::string &name = "yuanrong", const std::string &version = "");
 
@@ -112,7 +135,9 @@ private:
     OtelSpan CreateNoopSpan();
     std::unique_ptr<opentelemetry::sdk::trace::SpanExporter> InitOtlpGrpcExporter(const OtelGrpcExporterConfig &conf);
     std::unique_ptr<opentelemetry::sdk::trace::SpanExporter> InitLogFileExporter();
-    opentelemetry::trace::StartSpanOptions BuildOptWithParent(const std::string &traceID, const std::string &spanID);
+    opentelemetry::trace::StartSpanOptions BuildOptWithParent(const std::string &traceID,
+                                                              const std::string &spanID,
+                                                              const std::string &traceParent);
 
     bool enableTrace_{ false };
     std::map<std::string, std::string> attribute_;      // Global attributes

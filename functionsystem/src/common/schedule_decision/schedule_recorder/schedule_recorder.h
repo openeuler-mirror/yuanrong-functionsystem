@@ -17,12 +17,23 @@
 #ifndef SCHEDULER_RECORDER_H
 #define SCHEDULER_RECORDER_H
 
+#include <vector>
+
 #include "async/future.hpp"
 #include "litebus.hpp"
 
+#include "common/proto/pb/message_pb.h"
+#include "common/resource_view/resource_type.h"
 #include "common/status/status.h"
 
 namespace functionsystem::schedule_decision {
+struct ScheduleQueueRecord {
+    resource_view::SchedulingQueueInfo info;
+};
+
+resource_view::SchedulingQueueInfo BuildSchedulingQueueInfo(
+    const messages::ScheduleRequest &request, int64_t enqueueTimeMs);
+
 class ScheduleRecorder {
 public:
     explicit ScheduleRecorder(const litebus::ActorReference &actor) : recorder_(actor) {}
@@ -40,6 +51,9 @@ public:
     litebus::Future<Status> TryQueryScheduleErr(const std::string &requestID);
     void RecordScheduleErr(const std::string &requestID, const Status &status);
     void EraseScheduleErr(const std::string &requestID);
+    void RecordScheduleRequest(const std::shared_ptr<messages::ScheduleRequest> &request);
+    void EraseScheduleRequest(const std::string &requestID);
+    litebus::Future<std::vector<ScheduleQueueRecord>> QueryScheduleQueue();
 
 private:
     litebus::ActorReference recorder_;

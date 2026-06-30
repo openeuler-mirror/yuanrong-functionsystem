@@ -235,6 +235,9 @@ public:
 
     virtual void QueryDebugInstanceInfosResponse(const litebus::AID &, std::string &&, std::string &&msg);
 
+    virtual void ReconcileRuntimes(const litebus::AID &from, std::string &&name, std::string &&msg);
+    virtual void ReconcileRuntimesResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
     litebus::Future<Status> CreateStaticFunctionInstance();
 
     litebus::Future<Status> LoadPlugins(const std::string &configs);
@@ -491,6 +494,8 @@ private:
                                const std::shared_ptr<messages::DeployInstanceRequest> &req,
                                const std::string &destination, const litebus::Future<DeployResult> &result);
     bool IsDownloadFailed(const std::shared_ptr<messages::DeployInstanceRequest> &req);
+    static void StartCodeDownloadSpan(const DeployInstanceRequest &request);
+    static void StopCodeDownloadSpan(const DeployInstanceRequest &request, const DeployResult &result);
     void DownloadCode(const std::shared_ptr<messages::DeployRequest> &request,
                       const std::shared_ptr<Deployer> &deployer,
                       const std::shared_ptr<litebus::Promise<DeployResult>> &promise, const uint32_t retryTimes);

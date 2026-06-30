@@ -35,6 +35,7 @@
 #include "local_scheduler/local_scheduler_service/local_sched_srv_actor.h"
 #include "local_scheduler/resource_group_controller/resource_group_ctrl.h"
 #include "local_scheduler/gc_actor/local_gc_actor.h"
+#include "local_scheduler/gc_actor/runtime_reconcile_actor.h"
 #include "local_scheduler/snap_ctrl/snap_ctrl.h"
 #include "local_scheduler/subscription_manager/subscription_mgr.h"
 #include "local_scheduler/grpc_server/exec_service/exec_stream_service.h"
@@ -99,6 +100,19 @@ struct LocalSchedStartParam {
     std::string traefikHttpEntryPoint = "websecure";
     bool traefikEnableTLS = true;
     std::string traefikServersTransport = "yr-backend-tls@file";
+    bool enableMergeProcess = false;  // 共进程模式开关（--enable_merge_process）
+};
+
+class LocalSchedulingApiRouter : public ApiRouterRegister {
+public:
+    ~LocalSchedulingApiRouter() override = default;
+
+    void RegisterHandler(const std::string &url, const HttpHandler &handler) const override
+    {
+        ApiRouterRegister::RegisterHandler(url, handler);
+    }
+
+    void InitUpdateSchedulingStatusHandler(const std::shared_ptr<resource_view::ResourceViewMgr> &resourceViewMgr);
 };
 
 class LocalSchedDriver : public ModuleDriver {
@@ -150,6 +164,7 @@ private:
     std::shared_ptr<local_scheduler::FunctionAgentMgr> funcAgentMgr_;
     std::shared_ptr<HttpServer> httpServer_;
     std::shared_ptr<DefaultHealthyRouter> apiRouteRegister_;
+    std::shared_ptr<LocalSchedulingApiRouter> localSchedulingApiRouteRegister_;
     std::shared_ptr<MetaStoreClient> metaStoreClient_;
     std::shared_ptr<AbnormalProcessor> abnormalProcessor_;
     std::shared_ptr<DsHealthyChecker> dsHealthyChecker_;
@@ -159,6 +174,7 @@ private:
     std::shared_ptr<SubscriptionMgr> subscriptionMgr_;
     std::shared_ptr<SnapCtrl> snapCtrl_;
     std::shared_ptr<LocalGcActor> gcActor_;
+    std::shared_ptr<RuntimeReconcileActor> runtimeReconcileActor_;
     std::shared_ptr<InstanceCtrlMetaStoreHealthyObserver> metaStoreHealthyObserver_;
     std::shared_ptr<functionsystem::grpc::CommonGrpcServer> posixGrpcServer_;
     std::shared_ptr<functionsystem::grpc::CommonGrpcServer> sessionGrpcServer_;

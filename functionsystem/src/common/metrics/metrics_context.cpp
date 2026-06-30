@@ -26,6 +26,24 @@ namespace metrics {
 const std::vector<std::string> SYSTEM_FUNCTION_KEYWORD = { "faasscheduler", "faasfrontend", "faascontroller",
                                                            "faasmanager" };
 
+namespace {
+std::string GetPodStatusLabel(uint32_t status)
+{
+    switch (static_cast<resource_view::UnitStatus>(status)) {
+        case resource_view::UnitStatus::NORMAL:
+            return "normal";
+        case resource_view::UnitStatus::EVICTING:
+            return "evicting";
+        case resource_view::UnitStatus::RECOVERING:
+            return "recovering";
+        case resource_view::UnitStatus::TO_BE_DELETED:
+            return "to_be_deleted";
+        default:
+            return "unknown";
+    }
+}
+}  // namespace
+
 std::string MetricsContext::GetAttr(const std::string &attr) const
 {
     auto it = attribute_.find(attr);
@@ -447,6 +465,7 @@ void MetricsContext::SetPodResource(const std::string &resourceID, const resourc
         std::lock_guard<std::mutex> lock(podResourceMtx_);
         podResourceMap_[resourceID].capacity = unit.capacity();
         podResourceMap_[resourceID].allocatable = unit.allocatable();
+        podResourceMap_[resourceID].status = GetPodStatusLabel(unit.status());
 
         // add labels kv
         podResourceMap_[resourceID].nodeLabels.clear();

@@ -25,6 +25,7 @@
 #include "common/utils/exec_utils.h"
 #include "common/utils/hash_util.h"
 #include "common/kv_client/kv_client.h"
+#include "datasystem/context/context.h"
 #include "function_agent/flags/function_agent_flags.h"
 #include "utils/os_utils.hpp"
 
@@ -149,13 +150,16 @@ private:
 // 'ds://'
 class DSAccessor : public ResourceAccessor {
 public:
-    explicit DSAccessor(const std::string &uri) : dsKey_(uri)
+    explicit DSAccessor(const std::string &uri, const std::string &tenantId = "") : dsKey_(uri), tenantId_(tenantId)
     {
     }
     ~DSAccessor() override = default;
 
     std::pair<Status, std::string> GetResource(std::string dst) override
     {
+        if (!tenantId_.empty()) {
+            datasystem::Context::SetTenantId(tenantId_);
+        }
         auto filename = dsKey_.substr(DS_SCHEME.length());
         auto splits = litebus::strings::Split(filename, ".");
         auto [s, buffer] = KVClient::GetInstance().Get(splits[0]);
@@ -215,19 +219,20 @@ public:
 
 private:
     std::string dsKey_;
+    std::string tenantId_;
 };
 
 class ResourceAccessorFactory {
 public:
     // auto choose ResourceAccessor based on user input
-    static std::shared_ptr<ResourceAccessor> CreateAccessor(const std::string &uri)
+    static std::shared_ptr<ResourceAccessor> CreateAccessor(const std::string &uri, const std::string &tenantId = "")
     {
         if (uri.find(FTP_SCHEME) == 0) {
             // not support yet
             return nullptr;
         }
         if (uri.find(DS_SCHEME) == 0) {
-            return std::make_shared<DSAccessor>(uri);
+            return std::make_shared<DSAccessor>(uri, tenantId);
         }
         if (uri.find(FILE_SCHEME) == 0) {
             return std::make_shared<FileResourceAccessor>(uri);
@@ -235,7 +240,7 @@ public:
         if (uri.find(PATH_SCHEME) == 0) {
             return std::make_shared<PathResourceAccessor>(uri);
         }
-        if (IsDir(uri) || (!uri.empty() && uri[0] == '/' && uri.find("://") == std::string::npos)) {
+    if (IsDir(uri) || (!uri.empty() && uri[0] == '/' && uri.find("://") == std::string::npos)) {
             return std::make_shared<PathResourceAccessor>(uri);
         }
         return nullptr;
@@ -299,6 +304,36 @@ bool WorkingDirDeployer::IsDeployed(const std::string &destination, [[maybe_unus
     return false;
 }
 
+static std::string GetTenantID(const messages::DeploymentConfig &config)
+{
+    auto tenantIdIter = config.deployoptions().find("tenant_id");
+    return tenantIdIter == config.deployoptions().end() ? "" : tenantIdIter->second;
+}
+
+static std::string GetDeployDestination(const std::string &destination)
+{
+    if (EndsWith(destination, ".img")) {
+        return GetDirectoryPath(destination);
+    }
+    return destination;
+}
+
+static Status PrepareDestination(const std::string &destination)
+{
+    if (!CheckIllegalChars(destination) || !litebus::os::Mkdir(destination).IsNone()) {
+        YRLOG_ERROR("failed to create dir for workingDir({}).", destination);
+        return Status(StatusCode::FUNC_AGENT_MKDIR_DEST_WORKING_DIR_ERROR,
+                      "failed to create dest working dir for " + destination + ", msg: +"
+                          + litebus::os::Strerror(errno));
+    }
+    std::string cmd = "chmod -R 750 " + destination;
+    int chmodCode = std::system(cmd.c_str());
+    if (chmodCode) {
+        YRLOG_WARN("failed to execute chmod cmd({}). code: {}", cmd, chmodCode);
+    }
+    return Status::OK();
+}
+
 DeployResult WorkingDirDeployer::Deploy(const std::shared_ptr<messages::DeployRequest> &request)
 {
     // 'working_dir' storage type objectid (src appID = instanceID)
@@ -321,31 +356,20 @@ DeployResult WorkingDirDeployer::Deploy(const std::shared_ptr<messages::DeployRe
     }
 
     // 1. verify input user params
+    // like: "file:///home/xxx/xxy.zip"
     std::shared_ptr<ResourceAccessor> accessor =
-        ResourceAccessorFactory::CreateAccessor(config.bucketid());  // like: "file:///home/xxx/xxy.zip"
+        ResourceAccessorFactory::CreateAccessor(config.bucketid(), GetTenantID(config));
     if (!accessor) {
         YRLOG_WARN("Unsupported working_dir schema: {}", config.bucketid());
         result.status = Status(StatusCode::FUNC_AGENT_UNSUPPORTED_WORKING_DIR_SCHEMA,
                                "Unsupported working_dir schema: " + config.objectid());
         return result;
     }
-    auto dst = result.destination;
-    if (EndsWith(dst, ".img")) {
-        dst = GetDirectoryPath(dst);
-    }
+    auto dst = GetDeployDestination(result.destination);
     // 2. create dest working dir
-    if (!CheckIllegalChars(dst) || !litebus::os::Mkdir(dst).IsNone()) {
-        YRLOG_ERROR("failed to create dir for workingDir({}).", dst);
-        // failed to create directory, return 0x111ad and object directory.
-        result.status =
-            Status(StatusCode::FUNC_AGENT_MKDIR_DEST_WORKING_DIR_ERROR,
-                   "failed to create dest working dir for " + dst + ", msg: +" + litebus::os::Strerror(errno));
+    if (auto status = PrepareDestination(dst); status.IsError()) {
+        result.status = status;
         return result;
-    }
-    std::string cmd = "chmod -R 750 " + dst;
-    int chmodCode = std::system(cmd.c_str());
-    if (chmodCode) {
-        YRLOG_WARN("failed to execute chmod cmd({}). code: {}", cmd, chmodCode);
     }
     auto [status, workingDirZipFile] = accessor->GetResource(result.destination);
     if (!status.IsOk()) {

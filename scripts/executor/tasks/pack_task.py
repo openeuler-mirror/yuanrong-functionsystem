@@ -73,6 +73,8 @@ def pack_functionsystem(args):
         log.info("Remove debug symbols from compiled products")
         remove_cpp_symbol(pack_base_dir)
 
+    copy_runtime_launcher(root_dir, bin_dst_path)
+
     # 拷贝系统部署配置
     log.info("Copy function system deploy package")
     deploy_src_path = os.path.join(root_dir, "scripts", "deploy")
@@ -113,6 +115,17 @@ def remove_cpp_symbol(pack_base_dir):
         utils.sync_command(["objcopy", "--only-keep-debug", file_path, sym_file])
         utils.sync_command(["objcopy", "--add-gnu-debuglink", sym_file, file_path])
         utils.sync_command(["objcopy", "--strip-all", file_path])
+
+
+def copy_runtime_launcher(root_dir, bin_dst_path):
+    runtime_launcher_path = os.path.join(root_dir, "runtime-launcher", "bin", "runtime", "runtime-launcher")
+    if not os.path.exists(runtime_launcher_path):
+        log.warning(f"runtime-launcher not found at {runtime_launcher_path}, skip packaging it")
+        return
+    dst_path = os.path.join(bin_dst_path, "runtime-launcher")
+    shutil.copy2(runtime_launcher_path, dst_path)
+    os.chmod(dst_path, 0o755)
+    log.info(f"Copy runtime-launcher to function system package: {dst_path}")
 
 
 def pack_metrics(args):

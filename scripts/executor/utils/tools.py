@@ -3,21 +3,13 @@
 import ctypes
 import importlib.metadata
 import os
-import sys
-import ctypes
-import argparse
 import platform
 import subprocess
-from typing import Tuple
-import importlib.metadata
+import sys
 from importlib.metadata import PackageNotFoundError
+from typing import Tuple
 
 # 请勿在此声明全局变量
-
-def parse_kv_args(string: str):
-    if '=' not in string:
-        raise argparse.ArgumentTypeError(f"参数必须为 key=value 格式")
-    return string.split('=', 1)
 
 
 def pipeline_env() -> dict:
@@ -92,6 +84,16 @@ def auto_install_and_upgrade(package):
     globals()[package] = __import__(package)
 
     return check_package_metadata(package)
+
+
+def parse_kv_args(value):
+    """Parse command-line KEY=VALUE pairs into a one-item dict for argparse."""
+    if "=" not in value:
+        raise ValueError(f"Invalid key-value argument: {value}. Expected format: <key>=<val>")
+    key, val = value.split("=", 1)
+    if not key:
+        raise ValueError(f"Invalid key-value argument: {value}. Key cannot be empty")
+    return {key: val}
 
 
 def compare_version(version1, version2):

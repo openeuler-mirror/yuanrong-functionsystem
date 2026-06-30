@@ -19,6 +19,7 @@ syntax = "proto3";
 package runtime_service;
 
 import "common.proto";
+import "resource.proto";
 
 option go_package = "functionsystem/pkg/common/faas_common/grpc/pb/runtime;runtime";
 
@@ -37,6 +38,7 @@ message CallRequest {
   repeated string     returnObjectIDs      = 8;
   map<string, string> createOptions        = 9;
   string              spanID               = 10;
+  bool                bypass_datasystem    = 11;
 }
 
 message CallResponse {
@@ -94,6 +96,8 @@ message NotifyRequest {
   repeated common.SmallObject    smallObjects    = 4;
   repeated common.StackTraceInfo stackTraceInfos = 5;
   common.RuntimeInfo             runtimeInfo     = 7;
+  // Route info for local create path -- proxyGrpcAddress (ip:port) for direct routing.
+  resources.InstanceInfo         readyInstance   = 8;
 }
 
 message NotifyResponse {}

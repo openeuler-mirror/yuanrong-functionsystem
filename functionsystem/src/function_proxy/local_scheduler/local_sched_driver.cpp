@@ -91,6 +91,8 @@ Status LocalSchedDriver::Create()
 
     localSchedSrv_ = LocalSchedSrv::Create(param_.localSchedSrvParam);
 
+    // Set co-process mode: skip Recover internals, let reconcile handle cleanup
+    param_.funcAgentMgrParam.enableCoProcessMode = param_.enableMergeProcess;
     funcAgentMgr_ = FunctionAgentMgr::Create(param_.nodeID, param_.funcAgentMgrParam, metaStoreClient_);
 
     abnormalProcessor_ = AbnormalProcessor::Create(param_.nodeID);
@@ -148,10 +150,9 @@ Status LocalSchedDriver::Create()
             param_.traefikEnableTLS,
             param_.traefikServersTransport);
         instanceCtrl_->SetTraefikRegistry(traefikRegistry_);
-        YRLOG_INFO("TraefikRegistry initialized and injected: prefix={}, entryPoint={},"
-        " enableTLS={}, serversTransport={}",
-            param_.traefikEtcdPrefix, param_.traefikHttpEntryPoint,
-            param_.traefikEnableTLS, param_.traefikServersTransport);
+        YRLOG_INFO("TraefikRegistry initialized: prefix={}, entryPoint={}, enableTLS={}, serversTransport={}",
+            param_.traefikEtcdPrefix, param_.traefikHttpEntryPoint, param_.traefikEnableTLS,
+            param_.traefikServersTransport);
     } else {
         YRLOG_INFO("Traefik registry disabled");
     }
@@ -167,6 +168,12 @@ Status LocalSchedDriver::Create()
     metaStoreHealthyObserver_ = std::make_shared<InstanceCtrlMetaStoreHealthyObserver>(instanceCtrl_);
     if (auto registerStatus(httpServer_->RegisterRoute(apiRouteRegister_)); registerStatus != StatusCode::SUCCESS) {
         YRLOG_ERROR("failed to register health check api router.");
+    }
+    localSchedulingApiRouteRegister_ = std::make_shared<LocalSchedulingApiRouter>();
+    localSchedulingApiRouteRegister_->InitUpdateSchedulingStatusHandler(resourceViewMgr_);
+    if (auto registerStatus(httpServer_->RegisterRoute(localSchedulingApiRouteRegister_));
+        registerStatus != StatusCode::SUCCESS) {
+        YRLOG_ERROR("failed to register local scheduling api router.");
     }
     return Status::OK();
 }
@@ -205,6 +212,24 @@ Status LocalSchedDriver::Start()
     gcActor_->BindInstanceControlView(instanceCtrl_->GetInstanceControlView());
     gcActor_->BindInstanceCtrl(instanceCtrl_);
     litebus::Spawn(gcActor_);
+
+    bool isCoProcess = param_.enableMergeProcess;
+    if (isCoProcess) {
+        runtimeReconcileActor_ = std::make_shared<RuntimeReconcileActor>(
+            RUNTIME_RECONCILE_ACTOR_NAME, param_.nodeID);
+        runtimeReconcileActor_->BindInstanceControlView(instanceCtrl_->GetInstanceControlView());
+        runtimeReconcileActor_->BindInstanceCtrl(instanceCtrl_);
+        runtimeReconcileActor_->BindFunctionAgentMgr(funcAgentMgr_);
+        runtimeReconcileActor_->BindResourceView(
+            resourceViewMgr_->GetInf(resource_view::ResourceType::PRIMARY));
+        litebus::Spawn(runtimeReconcileActor_);
+        funcAgentMgr_->SetCoProcessReconcileCallback(
+            [reconcileActor = runtimeReconcileActor_](const std::string &funcAgentID) {
+                if (reconcileActor) {
+                    reconcileActor->TriggerOnce(funcAgentID);
+                }
+            });
+    }
 
     abnormalProcessor_->BindMetaStoreClient(metaStoreClient_);
     abnormalProcessor_->BindObserver(param_.controlPlaneObserver);
@@ -301,6 +326,8 @@ void LocalSchedDriver::ToReady()
     ActorReady({ abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_,
                  resourceViewMgr_->GetInf(resource_view::ResourceType::PRIMARY),
                  resourceViewMgr_->GetInf(resource_view::ResourceType::VIRTUAL), snapCtrl_ });
+    // Co-process reconciliation is triggered by FunctionAgentMgrActor::EnableFuncAgent callback
+    // after agent registration completes and instances are loaded into InstanceControlView.
 }
 
 Status LocalSchedDriver::Stop()
@@ -327,6 +354,9 @@ Status LocalSchedDriver::Stop()
     if (gcActor_) {
         litebus::Terminate(gcActor_->GetAID());
     }
+    if (runtimeReconcileActor_) {
+        litebus::Terminate(runtimeReconcileActor_->GetAID());
+    }
     StopActor(
         { abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
     return Status::OK();
@@ -342,6 +372,9 @@ void LocalSchedDriver::Await()
     }
     if (gcActor_) {
         litebus::Await(gcActor_->GetAID());
+    }
+    if (runtimeReconcileActor_) {
+        litebus::Await(runtimeReconcileActor_->GetAID());
     }
     AwaitActor(
         { abnormalProcessor_, funcAgentMgr_, instanceCtrl_, localGroupCtrl_, localSchedSrv_, bundleMgr_, snapCtrl_ });
@@ -421,7 +454,7 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
     posixGrpcServer_->RegisterService(busService);
 
     // Create ExecStreamService instance
-    execStreamService_ = std::make_shared<ExecStreamService>(instanceCtrl_->GetActorAID());
+    execStreamService_ = std::make_shared<ExecStreamService>(instanceCtrl_->GetIdleMgr());
 
     // Register ExecStreamService based on session server configuration
     if (param_.sessionGrpcPort != "0") {

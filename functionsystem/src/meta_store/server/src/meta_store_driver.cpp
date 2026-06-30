@@ -90,7 +90,7 @@ Status MetaStoreDriver::StartPassthrough(const std::string &etcdAddress, const M
     if (etcdClient == nullptr) {
         return Status(StatusCode::FAILED);
     }
-    
+
     kvServiceActor_ = std::make_shared<KvServicePassthroughActor>(etcdClient);
     litebus::Spawn(kvServiceActor_);
 

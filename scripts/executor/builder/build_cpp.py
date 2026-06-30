@@ -2,24 +2,36 @@
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
 import json
 import os.path
+import platform
 import shutil
 
 import utils
 
 log = utils.stream_logger()
 
+DEFAULT_AARCH64_CPP_MAX_JOBS = 8
+
 
 def build_gtest(root_dir, job_num):
     build_functionsystem(root_dir, job_num, build_type="Debug", gtest=True)
 
 
-def build_binary(root_dir, job_num, version, build_type="Release", component="all", linker="auto",
-                 cmake_args: dict[str, str] = None):
+def build_binary(
+    root_dir,
+    job_num,
+    version,
+    *positional_options,
+    **options,
+):
+    build_type = positional_options[0] if len(positional_options) > 0 else options.get("build_type", "Release")
+    component = positional_options[1] if len(positional_options) > 1 else options.get("component", "all")
+    linker = positional_options[2] if len(positional_options) > 2 else options.get("linker", "auto")
+    cmake_args = positional_options[3] if len(positional_options) > 3 else options.get("cmake_args")
     build_functionsystem(
         root_dir,
         job_num,
-        version=version,
         build_type=build_type,
+        version=version,
         component=component,
         linker=linker,
         cmake_args=cmake_args,
@@ -27,33 +39,27 @@ def build_binary(root_dir, job_num, version, build_type="Release", component="al
 
 
 def build_functionsystem(
-        root_dir,
-        job_num,
-        version="0.0.0",
-        build_type="Debug",
-        time_trace=False,
-        coverage=False,
-        jemalloc=False,
-        sanitizers=False,
-        gtest=False,
-        component="all",
-        linker="auto",
-        cmake_args: dict[str, str] = None,
+    root_dir,
+    job_num,
+    version="0.0.0",
+    build_type="Debug",
+    time_trace=False,
+    coverage=False,
+    jemalloc=False,
+    sanitizers=False,
+    gtest=False,
+    component="all",
+    linker="auto",
+    cmake_args: dict[str, str] = None,
 ):
     log.info("Build cpp code in functionsystem")
-
-    # 拷贝 proto 文件（proto/inner 已合并至 proto/posix，仅需复制 posix）
-    log.info("Auto copy all proto file to cpp common folder")
-    posix_proto = os.path.join(root_dir, "proto", "posix")
-    cpp_proto_dir = os.path.join(root_dir, "functionsystem", "src", "common", "proto", "posix")
-    shutil.copytree(posix_proto, cpp_proto_dir, copy_function=utils.copy2_when_modify, dirs_exist_ok=True)
 
     # 使用 CMake 创建 Ninja 构建清单
     root_dir = os.path.abspath(root_dir)  # Git根目录
     code_path = os.path.join(root_dir, "functionsystem")
     output_dir = os.path.join(code_path, "output")
     build_dir = os.path.join(code_path, "build")
-
+    cpp_job_num = limit_cpp_job_num(job_num)
     if cmake_args is None:
         cmake_args = {}
     cmake_args.update({
@@ -63,7 +69,7 @@ def build_functionsystem(
         "SANITIZERS": bool2switch(sanitizers),
         "BUILD_LLT": bool2switch(gtest),
         "BUILD_GCOV": bool2switch(coverage),
-        "BUILD_THREAD_NUM": job_num,
+        "BUILD_THREAD_NUM": cpp_job_num,
         "ROOT_DIR": root_dir,  # 为了数据系统路径
         "JEMALLOC_PROF_ENABLE": bool2switch(jemalloc),
         "FUNCTION_SYSTEM_BUILD_TARGET": component,
@@ -74,7 +80,7 @@ def build_functionsystem(
     cmake_generate(code_path, build_dir, cmake_args)
 
     # 使用 Ninja 编译程序
-    ninja_make(build_dir, str(job_num), component)
+    ninja_make(build_dir, str(cpp_job_num), component)
 
     # 使用 CMake 完成产物复制
     cmake_install(build_dir)
@@ -97,6 +103,31 @@ def ninja_make(build_dir: str, job_num: str, component: str = "all"):
     if component != "all":
         command.append(component)
     utils.sync_command(command)
+
+
+def limit_cpp_job_num(job_num):
+    try:
+        job_num = int(job_num)
+    except (TypeError, ValueError):
+        log.warning(f"Invalid cpp job num[{job_num}], fallback to 1")
+        return 1
+
+    if platform.system().lower() != "linux" or platform.machine().lower() not in {"aarch64", "arm64"}:
+        return job_num
+
+    max_jobs = os.getenv("YR_AARCH64_CPP_MAX_JOBS", str(DEFAULT_AARCH64_CPP_MAX_JOBS))
+    try:
+        max_jobs = int(max_jobs)
+    except ValueError:
+        log.warning(f"Invalid YR_AARCH64_CPP_MAX_JOBS[{max_jobs}], fallback to {DEFAULT_AARCH64_CPP_MAX_JOBS}")
+        max_jobs = DEFAULT_AARCH64_CPP_MAX_JOBS
+    if max_jobs <= 0:
+        return job_num
+
+    limited_job_num = min(job_num, max_jobs)
+    if limited_job_num != job_num:
+        log.info(f"Limit aarch64 cpp build jobs from {job_num} to {limited_job_num}")
+    return limited_job_num
 
 
 def cmake_install(build_dir: str):

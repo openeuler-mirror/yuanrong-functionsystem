@@ -105,6 +105,14 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgr::SnapshotRun
     return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::SnapshotRuntime, requestID, instanceInfo, ttl);
 }
 
+litebus::Future<messages::ReconcileRuntimesResponse> FunctionAgentMgr::ReconcileRuntimes(
+    const std::string &funcAgentID, const std::shared_ptr<messages::ReconcileRuntimesRequest> &request)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::ReconcileRuntimes, funcAgentID, request);
+}
+
+
 litebus::Future<Status> FunctionAgentMgr::EvictAgent(const std::shared_ptr<messages::EvictAgentRequest> &req)
 {
     ASSERT_IF_NULL(actor_);

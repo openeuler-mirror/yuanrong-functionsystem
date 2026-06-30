@@ -34,6 +34,8 @@
 #include "common/flags/flags.h"
 #include "common/kube_client/kube_client.h"
 #include "common/logs/logging.h"
+#include "common/metadata/metadata.h"
+#include "meta_store_client/meta_store_client.h"
 #include "common/proto/pb/posix_pb.h"
 #include "common/rpc/server/common_grpc_server.h"
 #include "common/status/status.h"
@@ -55,6 +57,7 @@
 #include "function_proxy/common/common_driver/common_driver.h"
 #include "function_proxy/common/observer/control_plane_observer/control_plane_observer.h"
 #include "function_proxy/common/observer/data_plane_observer/data_plane_observer.h"
+#include "function_proxy/config/direct_routing_config.h"
 #include "grpc/grpc_security_constants.h"
 #include "grpcpp/security/server_credentials.h"
 #include "local_scheduler/instance_control/posix_api_handler/posix_api_handler.h"
@@ -95,10 +98,18 @@ S3Config GetS3Config(const function_agent::FunctionAgentFlags &flags)
     S3Config s3Config;
     s3Config.credentialType = flags.GetCredentialType();
     if (!flags.GetAccessKey().empty()) {
-        s3Config.accessKey = flags.GetAccessKey();
+        if (const auto decrypt = Crypto::GetInstance().Decrypt(flags.GetAccessKey()); decrypt.IsSome()) {
+            s3Config.accessKey = decrypt.Get().GetData();
+        } else {
+            YRLOG_ERROR("failed to decrypt access key");
+        }
     }
     if (!flags.GetSecretKey().empty()) {
-        s3Config.secretKey = flags.GetSecretKey();
+        if (const auto decrypt = Crypto::GetInstance().Decrypt(flags.GetSecretKey()); decrypt.IsSome()) {
+            s3Config.secretKey = decrypt.Get();
+        } else {
+            YRLOG_ERROR("failed to decrypt secret key");
+        }
     }
     s3Config.endpoint = flags.GetS3Endpoint();
     s3Config.protocol = flags.GetS3Protocol();
@@ -445,7 +456,8 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .traefikLeaseTTL = flags.GetTraefikLeaseTTL(),
         .traefikHttpEntryPoint = flags.GetTraefikHttpEntryPoint(),
         .traefikEnableTLS = flags.GetTraefikEnableTLS(),
-        .traefikServersTransport = flags.GetTraefikServersTransport()
+        .traefikServersTransport = flags.GetTraefikServersTransport(),
+        .enableMergeProcess = flags.GetEnableMergeProcess()
     };
 }
 
@@ -558,7 +570,7 @@ void OnCreate(const Flags &flags, const function_agent::FunctionAgentFlags &func
         return;
     }
 
-    trace::TraceManager::GetInstance().InitTrace("yuanrong-kernel", flags.GetNodeID(), flags.GetEnableTrace(),
+    trace::TraceManager::GetInstance().InitTrace(COMPONENT_NAME, flags.GetNodeID(), flags.GetEnableTrace(),
                                                  flags.GetTraceConfig());
     if (flags.GetEnableMergeProcess()) {
         OnCreateFunctionAgent(functionAgentFlags, runtimeManagerFlags, true);
@@ -649,6 +661,9 @@ int main(int argc, char **argv)
         return EXIT_COMMAND_MISUSE;
     }
 
+    DirectRoutingConfig::SetEnabled(flags.GetEnableDirectRouting());
+    SetForceLowReliabilityInstance(flags.GetForceLowReliabilityInstance());
+
     function_agent::FunctionAgentFlags functionAgentFlags;
     runtime_manager::Flags runtimeManagerFlags;
     if (flags.GetEnableMergeProcess()) {
@@ -667,6 +682,9 @@ int main(int argc, char **argv)
     if (!g_functionProxySwitcher->InitLogger(flags)) {
         return EXIT_ABNORMAL;
     }
+
+    YRLOG_INFO("DirectRouting feature flag: {}", flags.GetEnableDirectRouting());
+    YRLOG_INFO("ForceLowReliabilityInstance feature flag: {}", flags.GetForceLowReliabilityInstance());
 
     if (!g_functionProxySwitcher->RegisterHandler(Stop, stopSignal)) {
         return EXIT_ABNORMAL;

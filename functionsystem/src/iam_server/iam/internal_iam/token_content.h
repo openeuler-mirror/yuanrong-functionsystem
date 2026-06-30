@@ -18,9 +18,12 @@
 #define IAM_SERVER_INTERNAL_IAM_IAM_TOKEN_CONTENT_H
 
 #include <nlohmann/json.hpp>
+
+#include "common/hex/hex.h"
+#include "common/logs/logging.h"
 #include "common/status/status.h"
 #include "common/utils/token_transfer.h"
-#include "common/hex/hex.h"
+#include "securec.h"
 #include "utils/string_utils.hpp"
 
 namespace functionsystem::iamserver {
@@ -31,9 +34,11 @@ const std::string JWT_HEADER = R"({"alg":"HS256","typ":"JWT"})";
 
 struct TokenContent {
     std::string tenantID;
-    uint64_t expiredTimeStamp{0};
+    uint64_t expiredTimeStamp{ 0 };
     std::string salt;
     std::string role;  // role field for JWT token
+    int64_t cpuLimit{ -1 };
+    std::string memLimit;
     // JWT token format: base64url(header).base64url(payload).base64url(signature)
     std::string encryptToken;
 
@@ -141,28 +146,37 @@ struct TokenContent {
         tokenContent->tenantID = tenantID;
         tokenContent->expiredTimeStamp = expiredTimeStamp;
         tokenContent->role = role;
+        tokenContent->cpuLimit = cpuLimit;
+        tokenContent->memLimit = memLimit;
         tokenContent->encryptToken = encryptToken;
         return tokenContent;
     }
 
     /**
      * Generate JWT payload JSON string using nlohmann::json
-     * Format: {"sub":"tenantID","exp":expiredTimeStamp,"role":"role"}
+     * Format: {"sub":"tenantID","exp":expiredTimeStamp,"role":"role","cpu_limit":cpuLimit,"mem_limit":"memLimit"}
      */
     std::string GetJwtPayloadJson() const
     {
         nlohmann::json payload;
         payload["sub"] = tenantID;
-        payload["exp"] = expiredTimeStamp;
+        payload["exp"] = (expiredTimeStamp == UINT64_MAX) ? nlohmann::json(-1)
+                                                          : nlohmann::json(static_cast<int64_t>(expiredTimeStamp));
         if (!role.empty()) {
             payload["role"] = role;
+        }
+        if (cpuLimit != -1) {
+            payload["cpu_limit"] = cpuLimit;
+        }
+        if (!memLimit.empty()) {
+            payload["mem_limit"] = memLimit;
         }
         return payload.dump();
     }
 
     /**
      * Parse JWT payload JSON string using nlohmann::json
-     * Format: {"sub":"tenantID","exp":expiredTimeStamp,"role":"role"}
+     * Format: {"sub":"tenantID","exp":expiredTimeStamp,"role":"role","cpu_limit":cpuLimit,"mem_limit":"memLimit"}
      */
     Status ParseJwtPayloadJson(const std::string &payloadJson)
     {
@@ -175,12 +189,24 @@ struct TokenContent {
                 return Status(StatusCode::FAILED, "JWT payload missing or invalid 'exp' field");
             }
             tenantID = payload["sub"].get<std::string>();
-            expiredTimeStamp = payload["exp"].get<uint64_t>();
-            // Parse optional role field
+            int64_t exp = payload["exp"].get<int64_t>();
+            if (exp == -1) {
+                expiredTimeStamp = UINT64_MAX;
+            } else if (exp < 0) {
+                return Status(StatusCode::FAILED, "JWT payload contains unsupported negative 'exp' field");
+            } else {
+                expiredTimeStamp = static_cast<uint64_t>(exp);
+            }
+            // Parse optional fields
+            role.clear();
             if (payload.contains("role") && payload["role"].is_string()) {
                 role = payload["role"].get<std::string>();
-            } else {
-                role.clear();
+            }
+            if (payload.contains("cpu_limit") && payload["cpu_limit"].is_number()) {
+                cpuLimit = payload["cpu_limit"].get<int64_t>();
+            }
+            if (payload.contains("mem_limit") && payload["mem_limit"].is_string()) {
+                memLimit = payload["mem_limit"].get<std::string>();
             }
             return Status::OK();
         } catch (const nlohmann::json::exception &e) {
@@ -318,4 +344,4 @@ struct TokenContent {
     }
 };
 }  // namespace functionsystem::iamserver
-#endif // IAM_SERVER_INTERNAL_IAM_IAM_TOKEN_CONTENT_H
+#endif  // IAM_SERVER_INTERNAL_IAM_IAM_TOKEN_CONTENT_H

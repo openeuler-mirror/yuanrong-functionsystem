@@ -20,7 +20,6 @@
 #include <iostream>
 #include <thread>
 
-#include "utils/port_helper.h"
 #include "common/rpc/stream/posix/control_client.h"
 #include "common/rpc/stream/posix/control_server.h"
 #include "common/status/status.h"
@@ -29,6 +28,31 @@
 namespace functionsystem::test {
 using namespace functionsystem::grpc;
 using namespace runtime_rpc;
+
+namespace {
+std::string BuildLoopbackAddress(int port)
+{
+    return "127.0.0.1:" + std::to_string(port);
+}
+
+template <typename ServiceT>
+std::unique_ptr<::grpc::Server> BuildServer(ServiceT *service, std::string *serverAddress)
+{
+    ::grpc::ServerBuilder builder;
+    int selectedPort = 0;
+    builder.AddListeningPort("127.0.0.1:0", ::grpc::InsecureServerCredentials(), &selectedPort);
+    builder.RegisterService(service);
+    auto server = builder.BuildAndStart();
+    EXPECT_NE(server, nullptr);
+    EXPECT_GT(selectedPort, 0);
+    if (server == nullptr || selectedPort <= 0) {
+        return nullptr;
+    }
+    *serverAddress = BuildLoopbackAddress(selectedPort);
+    YRLOG_INFO("Server listening on {}", *serverAddress);
+    return server;
+}
+} // namespace
 
 litebus::Future<std::shared_ptr<StreamingMessage>> InvokeHandler(const std::string &from,
                                                                  const std::shared_ptr<StreamingMessage> &request)
@@ -89,7 +113,6 @@ public:
         REGISTER_RUNTIME_CONTROL_POSIX_HANDLER(StreamingMessage::kCallReq, &CallServerHandler);
         REGISTER_RUNTIME_CONTROL_POSIX_HANDLER(StreamingMessage::kNotifyReq, &NotifyServerHandler);
 
-        serverAddress_ = "127.0.0.1:" + std::to_string(FindAvailablePort());
         StartServerAndClient();
     }
 
@@ -101,19 +124,12 @@ public:
     static void StartServerAndClient()
     {
         service_ = std::make_shared<ControlServer>();
-        litebus::Promise<bool> promise;
-        thr_ = std::thread([promise]() {
-            ::grpc::ServerBuilder builder;
-            YRLOG_INFO("Server listening on {}", serverAddress_);
-            builder.AddListeningPort(serverAddress_, ::grpc::InsecureServerCredentials());
-            builder.RegisterService(service_.get());
-            server_ = std::move(builder.BuildAndStart());
-            promise.SetValue(true);
+        server_ = BuildServer(service_.get(), &serverAddress_);
+        ASSERT_NE(server_, nullptr);
+        thr_ = std::thread([]() {
             server_->Wait();
             std::cout << "Server exit." << std::endl;
         });
-
-        promise.GetFuture().Get();
         grpc::ControlClientConfig config{
             .target = serverAddress_,
             .creds = ::grpc::InsecureChannelCredentials(),
@@ -127,14 +143,22 @@ public:
 
     static void ShutdownServerAndClient()
     {
-        service_->Finish();
-        server_->Shutdown();
+        if (service_ != nullptr) {
+            service_->Finish();
+        }
+        if (server_ != nullptr) {
+            server_->Shutdown();
+        }
         if (thr_.joinable()) {
-            printf("wait server finished\n");
+            std::cout << "wait server finished" << std::endl;
             thr_.join();
         }
         server_ = nullptr;
-        client_->Stop();
+        if (client_ != nullptr) {
+            client_->Stop();
+            client_ = nullptr;
+        }
+        service_ = nullptr;
     }
 
     static void Restart()
@@ -315,23 +339,12 @@ class StreamTestV2 : public ::testing::Test {
 public:
     [[maybe_unused]] static void SetUpTestSuite()
     {
-        serverAddress_ = "127.0.0.1:" + std::to_string(FindAvailablePort());
-        YRLOG_INFO("Start GRPC Server on net port: {}", serverAddress_);
-
-        litebus::Promise<bool> promise;
-        auto thr = std::thread([promise]() {
-            std::string serverAddress(serverAddress_);
-            ::grpc::ServerBuilder builder;
-            builder.AddListeningPort(serverAddress, ::grpc::InsecureServerCredentials());
-            builder.RegisterService(&service_);
-            server_ = std::move(builder.BuildAndStart());
-            std::cout << "Server listening on " << serverAddress << std::endl;
-            promise.SetValue(true);
+        server_ = BuildServer(&service_, &serverAddress_);
+        ASSERT_NE(server_, nullptr);
+        thr_ = std::thread([]() {
             server_->Wait();
             std::cout << "Server exit." << std::endl;
         });
-        thr.detach();
-        promise.GetFuture().Get();
         grpc::ControlClientConfig config{ .target = serverAddress_,
                                           .creds = ::grpc::InsecureChannelCredentials(),
                                           .timeoutSec = 30,
@@ -342,8 +355,17 @@ public:
 
     [[maybe_unused]] static void TearDownTestSuite()
     {
-        server_->Shutdown();
-        client_->Stop();
+        if (server_ != nullptr) {
+            server_->Shutdown();
+        }
+        if (thr_.joinable()) {
+            thr_.join();
+        }
+        server_ = nullptr;
+        if (client_ != nullptr) {
+            client_->Stop();
+            client_ = nullptr;
+        }
     }
 
     void Invoke()
@@ -367,6 +389,7 @@ public:
     }
 
 protected:
+    inline static std::thread thr_;
     inline static std::unique_ptr<::grpc::Server> server_;
     inline static InvocationService service_;
     inline static std::shared_ptr<ControlClient> client_;

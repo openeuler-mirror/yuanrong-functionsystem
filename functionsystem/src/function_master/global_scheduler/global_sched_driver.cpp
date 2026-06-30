@@ -44,8 +44,10 @@ const std::string EVICT_AGENT_URL = "/evictagent";
 const std::string QUERY_AGENT_COUNT_URL = "/queryagentcount";
 const std::string QUERY_RESOURCES_URL = "/resources";
 const std::string QUERY_MASTER_INFO_URL = "/masterinfo";
+const std::string NODE_LOCAL_SCHEDULING_STATUS_URL = "/node/localschedulingstatus";
 const std::string JSON_FORMAT = "json";
 const std::string PROTOBUF_FORMAT = "protobuf";
+const std::string NODE_ID_QUERY_KEY = "node_id";
 
 std::string EvictResultBody(common::ErrorCode code, const std::string &message)
 {
@@ -61,6 +63,33 @@ std::string EvictResultBody(common::ErrorCode code, const std::string &message)
     return rspBody;
 }
 
+std::string GetLocalSchedulingStatusLabel(bool evicting)
+{
+    return evicting ? "evicting" : "normal";
+}
+
+std::string BuildUpdateLocalSchedulingStatusBody(const std::string &status, const std::string &message)
+{
+    return "{\"status\":\"" + status + "\",\"message\":\"" + message + "\"}";
+}
+
+std::string AppendCountToJsonObject(std::string json, int count)
+{
+    if (json.empty() || json.back() != '}') {
+        YRLOG_ERROR("failed to append count to scheduling queue response: invalid json object");
+        return {};
+    }
+
+    json.pop_back();
+    if (!json.empty() && json.back() != '{') {
+        json.append(",");
+    }
+    json.append("\"count\":");
+    json.append(std::to_string(count));
+    json.append("}");
+    return json;
+}
+
 void AgentApiRouter::InitGetSchedulingQueueHandler(const std::shared_ptr<GlobalSched> &globalSched)
 {
     auto getSchedulingQueue = [globalSched](const HttpRequest &request) -> litebus::Future<HttpResponse> {
@@ -72,13 +101,13 @@ void AgentApiRouter::InitGetSchedulingQueueHandler(const std::shared_ptr<GlobalS
         bool useJsonFormat = request.headers.find("Type") == request.headers.end()
                              || request.headers.find("Type")->second == JSON_FORMAT;
 
-        auto req = std::make_shared<messages::QueryInstancesInfoRequest>();
+        auto req = std::make_shared<messages::QuerySchedulingQueueRequest>();
         auto requestID = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
         req->set_requestid(requestID);
         YRLOG_INFO("{}|get scheduling queue", requestID);
 
         return globalSched->GetSchedulingQueue(req).Then(
-            [useJsonFormat](const messages::QueryInstancesInfoResponse &resp) -> litebus::Future<HttpResponse> {
+            [useJsonFormat](const messages::QuerySchedulingQueueResponse &resp) -> litebus::Future<HttpResponse> {
                 if (!useJsonFormat) {
                     return litebus::http::Ok(resp.SerializeAsString());
                 }
@@ -87,13 +116,51 @@ void AgentApiRouter::InitGetSchedulingQueueHandler(const std::shared_ptr<GlobalS
                 google::protobuf::util::JsonOptions options;
                 options.always_print_primitive_fields = true;
                 (void)google::protobuf::util::MessageToJsonString(resp, &rspBody, options);
+                rspBody = AppendCountToJsonObject(std::move(rspBody), resp.instanceinfos_size());
+                if (rspBody.empty()) {
+                    return HttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR);
+                }
                 YRLOG_DEBUG("GetSchedulingQueue: size {}", resp.instanceinfos_size());
 
-                return litebus::http::Ok(rspBody);
+                return litebus::http::Ok(std::move(rspBody), litebus::http::ResponseBodyType::JSON);
             });
     };
 
     RegisterHandler(GET_SCHEDULING_QUEUE_URL, getSchedulingQueue);
+}
+
+void AgentApiRouter::InitUpdateLocalSchedulingStatusHandler(const std::shared_ptr<GlobalSched> &globalSched)
+{
+    auto updateSchedulingStatusHandler = [globalSched](const HttpRequest &request) -> litebus::Future<HttpResponse> {
+        if (request.method != "POST" && request.method != "DELETE") {
+            return GenerateHttpResponse(litebus::http::ResponseCode::METHOD_NOT_ALLOWED,
+                                        BuildUpdateLocalSchedulingStatusBody(
+                                            "unknown", "only POST and DELETE are supported"));
+        }
+
+        const auto nodeIDIt = request.url.query.find(NODE_ID_QUERY_KEY);
+        if (nodeIDIt == request.url.query.end() || nodeIDIt->second.empty()) {
+            return GenerateHttpResponse(litebus::http::ResponseCode::BAD_REQUEST,
+                                        BuildUpdateLocalSchedulingStatusBody(
+                                            "unknown", "node_id query parameter is required"));
+        }
+
+        const bool evicting = request.method == "POST";
+        const auto statusLabel = GetLocalSchedulingStatusLabel(evicting);
+        return globalSched->UpdateLocalSchedulingStatus(nodeIDIt->second, evicting).Then(
+            [statusLabel](const Status &status) -> litebus::Future<HttpResponse> {
+                if (!status.IsOk()) {
+                    auto httpCode = status.StatusCode() == StatusCode::PARAMETER_ERROR
+                                        ? litebus::http::ResponseCode::NOT_FOUND
+                                        : litebus::http::ResponseCode::SERVICE_UNAVAILABLE;
+                    return GenerateHttpResponse(httpCode,
+                                                BuildUpdateLocalSchedulingStatusBody(statusLabel, status.ToString()));
+                }
+                return GenerateHttpResponse(litebus::http::ResponseCode::OK,
+                                            BuildUpdateLocalSchedulingStatusBody(statusLabel, "success"));
+            });
+    };
+    RegisterHandler(NODE_LOCAL_SCHEDULING_STATUS_URL, updateSchedulingStatusHandler);
 }
 
 void AgentApiRouter::InitQueryAgentHandler(const std::shared_ptr<GlobalSched> &globalSched)
@@ -307,23 +374,58 @@ GlobalSchedDriver::GlobalSchedDriver(std::shared_ptr<GlobalSched> globalSched, c
     if (auto registerStatus(httpServer_->RegisterRoute(apiRouteRegister_)); registerStatus != StatusCode::SUCCESS) {
         YRLOG_ERROR("register health check api router failed.");
     }
-    // add agent api route
+    InitAgentApiRoutes(metaStoreClient_);
+    InitResourcesApiRoutes();
+    InitTraefikRoutes(flags);
+}
+
+void GlobalSchedDriver::InitAgentApiRoutes(const std::shared_ptr<MetaStoreClient> &metaStoreClient)
+{
     agentApiRouteRegister_ = std::make_shared<AgentApiRouter>();
     agentApiRouteRegister_->InitQueryAgentHandler(globalSched_);
     agentApiRouteRegister_->InitEvictAgentHandler(globalSched_);
     agentApiRouteRegister_->InitGetSchedulingQueueHandler(globalSched_);
-    agentApiRouteRegister_->InitQueryAgentCountHandler(metaStoreClient_);
+    agentApiRouteRegister_->InitQueryAgentCountHandler(metaStoreClient);
+    agentApiRouteRegister_->InitUpdateLocalSchedulingStatusHandler(globalSched_);
     if (auto registerStatus(httpServer_->RegisterRoute(agentApiRouteRegister_));
         registerStatus != StatusCode::SUCCESS) {
         YRLOG_ERROR("register agent api router failed.");
     }
-    // add resources api route
+}
+
+void GlobalSchedDriver::InitResourcesApiRoutes()
+{
     resourcesApiRouteRegister_ = std::make_shared<ResourcesApiRouter>();
     resourcesApiRouteRegister_->InitQueryResourcesInfoHandler(globalSched_);
     resourcesApiRouteRegister_->InitQueryMasterInfoHandler(globalSched_, globalSchedAddress_, metaStoreAddress_);
     if (auto registerStatus(httpServer_->RegisterRoute(resourcesApiRouteRegister_));
         registerStatus != StatusCode::SUCCESS) {
         YRLOG_ERROR("register resources api router failed.");
+    }
+}
+
+void GlobalSchedDriver::InitTraefikRoutes(const functionmaster::Flags &flags)
+{
+    if (flags.GetEnableTraefikProvider()) {
+        TraefikConfig traefikCfg;
+        traefikCfg.httpEntryPoint   = flags.GetTraefikHttpEntryPoint();
+        traefikCfg.enableTLS        = flags.GetTraefikEnableTLS();
+        traefikCfg.serversTransport = flags.GetTraefikServersTransport();
+        traefikRouteCache_ = std::make_shared<TraefikRouteCache>(std::move(traefikCfg));
+        traefikLeaderCtx_ = std::make_shared<TraefikLeaderContext>();
+        traefikLeaderCtx_->selfHttpAddress = flags.GetIP();
+        (void)explorer::Explorer::GetInstance().AddLeaderChangedCallback(
+            "TraefikLeaderCtx",
+            [ctx = traefikLeaderCtx_, selfAddr = flags.GetIP()](const explorer::LeaderInfo &leaderInfo) {
+                ctx->UpdateLeader(leaderInfo.address, leaderInfo.address == selfAddr);
+            });
+        traefikApiRouteRegister_ = std::make_shared<TraefikApiRouterRegister>(
+            traefikRouteCache_, traefikLeaderCtx_, flags.GetTraefikForwardTimeoutMs());
+        if (auto registerStatus(httpServer_->RegisterRoute(traefikApiRouteRegister_));
+            registerStatus != StatusCode::SUCCESS) {
+            YRLOG_ERROR("register traefik api router failed.");
+        }
+        YRLOG_INFO("Traefik HTTP provider enabled at /traefik/config");
     }
 }
 
@@ -380,6 +482,16 @@ void GlobalSchedDriver::Await() const
 std::shared_ptr<GlobalSched> GlobalSchedDriver::GetGlobalSched() const
 {
     return globalSched_;
+}
+
+std::shared_ptr<TraefikRouteCache> GlobalSchedDriver::GetTraefikRouteCache() const
+{
+    return traefikRouteCache_;
+}
+
+std::shared_ptr<TraefikLeaderContext> GlobalSchedDriver::GetTraefikLeaderContext() const
+{
+    return traefikLeaderCtx_;
 }
 
 void GlobalSchedDriver::BindComponentName(const std::string &componentName)

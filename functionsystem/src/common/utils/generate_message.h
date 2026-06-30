@@ -17,6 +17,7 @@
 #ifndef COMMON_UTILS_GENERATE_MESSAGE_H
 #define COMMON_UTILS_GENERATE_MESSAGE_H
 
+#include <chrono>
 #include <string>
 
 #include "common/proto/pb/message_pb.h"
@@ -192,17 +193,22 @@ inline messages::StartInstanceResponse GenFailStartInstanceResponse(
 
 inline internal::ForwardKillResponse GenForwardKillResponse(const std::string &requestID,
                                                             const common::ErrorCode errorCode,
-                                                            const std::string &message)
+                                                            const std::string &message,
+                                                            const std::string &payload = "")
 {
     internal::ForwardKillResponse forwardKillResponse;
     forwardKillResponse.set_requestid(requestID);
     forwardKillResponse.set_code(errorCode);
     forwardKillResponse.set_message(message);
+    if (!payload.empty()) {
+        forwardKillResponse.set_payload(payload);
+    }
     return forwardKillResponse;
 }
 
 inline messages::ForwardKillResponse GenForwardKillResponse(const std::string &requestID, const int errorCode,
-                                                            const std::string &message)
+                                                            const std::string &message,
+                                                            const std::string &payload = "")
 {
     messages::ForwardKillResponse forwardKillResponse;
     forwardKillResponse.set_requestid(requestID);
@@ -278,6 +284,11 @@ inline std::shared_ptr<messages::DeployInstanceResponse> BuildDeployInstanceResp
     deployInstanceResponse->set_containerid(startInstanceResponse.startruntimeinstanceresponse().containerid());
     deployInstanceResponse->set_executortype(startInstanceResponse.startruntimeinstanceresponse().executortype());
 
+    if (!deployInstanceResponse->runtimeid().empty()) {
+        auto now = std::chrono::system_clock::now().time_since_epoch();
+        auto seconds = std::chrono::duration_cast<std::chrono::seconds>(now).count();
+        deployInstanceResponse->set_timeinfo(std::to_string(seconds));
+    }
     if (!portMappings.empty()) {
         deployInstanceResponse->set_portmappings(portMappings);
     }

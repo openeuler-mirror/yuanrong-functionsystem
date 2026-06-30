@@ -10,6 +10,26 @@ cc_library(
     visibility = ["//visibility:public"],
 )
 
+# function_agent_common_types — header-only target for types used by trace_adapter.
+# create_trace_helper.h (in common:trace_adapter) needs function_agent::DeployResult.
+# This target avoids the circular dep: function_agent_lib→runtime_manager_lib→trace_adapter.
+cc_library(
+    name = "function_agent_common_types",
+    hdrs = [
+        "code_deployer/deployer.h",
+        "common/types.h",
+    ],
+    copts = COPTS,
+    deps = [
+        ":function_agent_inc",
+        "//functionsystem/src/common:posix_pb",
+        "//functionsystem/src/common:status",
+        "@litebus//:litebus",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+
 # function_agent_flags — header-only target for kv_client dependency
 # kv_client.h includes function_agent_flags.h; this avoids circular deps
 cc_library(
@@ -38,7 +58,7 @@ cc_library(
         exclude = ["main.cpp"],
     ),
     hdrs = glob(["**/*.h"]),
-    copts = COPTS + ["-fPIE"],
+    copts = COPTS + ["-fPIC"],
     deps = [
         ":function_agent_inc",
         "//functionsystem/src/common:rpc",

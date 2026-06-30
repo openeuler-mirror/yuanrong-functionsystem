@@ -228,7 +228,7 @@ litebus::Future<Status> KvServicePassthroughActor::AsyncTxn(const litebus::AID &
     ::etcdserverpb::TxnRequest req;
     RETURN_STATUS_IF_TRUE(!req.ParseFromString(request->requestmsg()), StatusCode::FAILED,
                           request->requestid() + "|failed to parse Passthrough Txn request");
-                
+
     YRLOG_DEBUG("{}|receive Passthrough txn request", request->requestid());
     return etcdClient_->Commit(req, true).Then(
         litebus::Defer(GetAID(), &KvServicePassthroughActor::OnTxn, from, request, std::placeholders::_1));

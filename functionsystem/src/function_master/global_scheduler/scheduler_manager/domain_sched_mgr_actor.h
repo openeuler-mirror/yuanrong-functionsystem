@@ -22,6 +22,7 @@
 #include <async/async.hpp>
 #include <async/future_base.hpp>
 #include <functional>
+#include <vector>
 
 #include "common/explorer/explorer.h"
 #include "common/heartbeat/heartbeat_observer.h"
@@ -78,9 +79,9 @@ public:
     litebus::Future<messages::QueryAgentInfoResponse> QueryAgentInfo(const std::string &name,
         const std::string &address, const std::shared_ptr<messages::QueryAgentInfoRequest> &req);
 
-    litebus::Future<messages::QueryInstancesInfoResponse> GetSchedulingQueue(
+    litebus::Future<messages::QuerySchedulingQueueResponse> GetSchedulingQueue(
         const std::string &name, const std::string &address,
-        const std::shared_ptr<messages::QueryInstancesInfoRequest> &req);
+        const std::shared_ptr<messages::QuerySchedulingQueueRequest> &req);
 
     void ResponseGetSchedulingQueue(const litebus::AID &from, std::string &&name, std::string &&msg);
 
@@ -157,7 +158,7 @@ private:
     void SendScheduleRequest(const std::string &name, const std::string &address,
                              const std::shared_ptr<messages::ScheduleRequest> &req, const uint32_t retryCycle,
                              const std::shared_ptr<litebus::Promise<Status>> &promise);
-    CallbackAddFunc addDomainSchedCallback_;
+    std::vector<CallbackAddFunc> addDomainSchedCallbacks_;
     CallbackDelFunc delDomainSchedCallback_;
     CallbackDelFunc delLocalSchedCallback_;
     CallbackWorkerFunc notifyWorkerStatusCallback_;
@@ -173,7 +174,7 @@ private:
 
     std::shared_ptr<litebus::Promise<messages::QueryResourcesInfoResponse>> queryResourcePromise_;
 
-    std::shared_ptr<litebus::Promise<messages::QueryInstancesInfoResponse>> getSchedulingQueuePromise_;
+    std::shared_ptr<litebus::Promise<messages::QuerySchedulingQueueResponse>> getSchedulingQueuePromise_;
 
     BACK_OFF_RETRY_HELPER(DomainSchedMgrActor, messages::QueryResourcesInfoResponse, queryResourceHelper_);
     std::shared_ptr<litebus::AID> domainSchedulerAID_;

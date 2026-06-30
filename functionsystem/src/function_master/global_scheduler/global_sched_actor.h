@@ -147,8 +147,8 @@ public:
     litebus::Future<messages::QueryAgentInfoResponse> QueryAgentInfo(
         const std::shared_ptr<messages::QueryAgentInfoRequest> &req);
 
-    litebus::Future<messages::QueryInstancesInfoResponse> GetSchedulingQueue(
-        const std::shared_ptr<messages::QueryInstancesInfoRequest> &req);
+    litebus::Future<messages::QuerySchedulingQueueResponse> GetSchedulingQueue(
+        const std::shared_ptr<messages::QuerySchedulingQueueRequest> &req);
 
     litebus::Future<Status> EvictAgent(const std::string &localID,
                                        const std::shared_ptr<messages::EvictAgentRequest> &req);

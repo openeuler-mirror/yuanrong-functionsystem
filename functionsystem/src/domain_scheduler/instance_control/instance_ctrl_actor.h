@@ -26,6 +26,7 @@
 #include "common/schedule_decision/schedule_recorder/schedule_recorder.h"
 #include "common/schedule_decision/scheduler.h"
 #include "common/resource_view/resource_view_mgr.h"
+#include "common/utils/tenant_cooldown_manager.h"
 #include "domain_scheduler/underlayer_scheduler_manager/underlayer_sched_mgr.h"
 #include "common/resource_view/resource_type.h"
 
@@ -84,7 +85,7 @@ public:
 
     void OnTenantQuotaExceeded(const litebus::AID &from, std::string &&name, std::string &&msg);
     void HandleTenantQuotaExceeded(std::string msg);  // value-arg adapter for external callers
-    void OnTenantCooldownExpired(std::string tenantID);
+    void OnTenantCooldownExpired(std::string tenantID, uint64_t generation);
 
     void BindResourceView(const std::shared_ptr<resource_view::ResourceViewMgr> &resourceViewMgr)
     {
@@ -133,17 +134,7 @@ public:
         enableHorizontalScale_ = enable;
     }
 
-    std::vector<std::shared_ptr<messages::ScheduleRequest>> GetSchedulerQueue()
-    {
-        // 创建一个vector来存储所有的values
-        std::vector<std::shared_ptr<messages::ScheduleRequest>> values;
-
-        // 使用std::transform和std::back_inserter来获取所有的values
-        std::transform(schedulerQueueMap_.begin(), schedulerQueueMap_.end(), std::back_inserter(values),
-                       [](const auto &pair) { return pair.second; });
-
-        return values;
-    }
+    litebus::Future<std::vector<std::shared_ptr<messages::ScheduleRequest>>> GetSchedulerQueue();
 
 protected:
     void Init() override;
@@ -196,7 +187,7 @@ private:
     std::unordered_map<std::string, litebus::Promise<std::shared_ptr<messages::CreateAgentResponse>>>
         createAgentPromises_;
     std::unordered_map<std::string, litebus::Timer> createAgentRetryTimers_;
-    std::unordered_map<std::string, litebus::Timer> blockedTenants_;
+    functionsystem::TenantCooldownManager cooldownMgr_;
     uint32_t createAgentAwaitRetryInterval_ = DEFAULT_CREATE_AGENT_AWAIT_RETRY_INTERVAL;
     std::vector<uint32_t> retryScheduleIntervals_ = RETRY_SCHEDULE_INTERVALS;
     uint32_t createAgentAwaitRetryTimes_ = DEFAULT_CREATE_AGENT_AWAIT_RETRY_TIMES;
@@ -206,7 +197,6 @@ private:
     std::shared_ptr<schedule_decision::ScheduleRecorder> recorder_;
     uint32_t scheduleRetryTimes_{ 0 };
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<std::string>>> cancelTag_;
-    std::map<std::string, std::shared_ptr<messages::ScheduleRequest>> schedulerQueueMap_;
     bool enableHorizontalScale_{ false };
 };
 }  // namespace functionsystem::domain_scheduler

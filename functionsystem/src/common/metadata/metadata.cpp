@@ -16,7 +16,23 @@
 
 #include "metadata.h"
 
+#include <atomic>
+
 namespace functionsystem {
+namespace {
+std::atomic_bool g_forceLowReliabilityInstance{ false };
+}
+
+void SetForceLowReliabilityInstance(bool enabled)
+{
+    g_forceLowReliabilityInstance.store(enabled, std::memory_order_relaxed);
+}
+
+bool IsForceLowReliabilityInstanceEnabled()
+{
+    return g_forceLowReliabilityInstance.load(std::memory_order_relaxed);
+}
+
 
 bool TransToInstanceInfoFromJson(InstanceInfo &instanceInfo, const std::string &jsonStr)
 {
@@ -96,10 +112,13 @@ void TransToInstanceInfoFromRouteInfo(const resources::RouteInfo &routeInfo, Ins
 
 bool IsLowReliabilityInstance(const resources::InstanceInfo &instanceInfo)
 {
+    if (IsForceLowReliabilityInstanceEnabled()) {
+        return true;
+    }
+
     const auto &createOpt = instanceInfo.createoptions();
     if (auto it = createOpt.find(RELIABILITY_TYPE); it != createOpt.end() && it->second == "low") {
         YRLOG_INFO("The 'ReliabilityType' exists and is 'low'.");
-        // The 'ReliabilityType' exists and is 'low'
         return true;
     }
     // ReliabilityType's default value is "high"
@@ -247,7 +266,6 @@ void GetCodeMetaData(FunctionMeta &funcMeta, const nlohmann::json &j)
     if (codeMetaData.find("storage_type") != codeMetaData.end()) {
         funcMeta.codeMetaData.storageType = codeMetaData.at("storage_type");
     }
-
     if (funcMeta.codeMetaData.storageType == LOCAL_STORAGE_TYPE ||
         funcMeta.codeMetaData.storageType == COPY_STORAGE_TYPE) {  // code in local
         if (codeMetaData.find("code_path") != codeMetaData.end() && !codeMetaData.at("code_path").empty()) {
@@ -256,7 +274,11 @@ void GetCodeMetaData(FunctionMeta &funcMeta, const nlohmann::json &j)
             funcMeta.codeMetaData.deployDir = GetDeployDir();
         }
     } else {  // code in S3 or NSP or woring_dir
-        funcMeta.codeMetaData.deployDir = GetDeployDir();
+        if (codeMetaData.find("deployDir") != codeMetaData.end() && !codeMetaData.at("deployDir").empty()) {
+            funcMeta.codeMetaData.deployDir = codeMetaData.at("deployDir");
+        } else {
+            funcMeta.codeMetaData.deployDir = GetDeployDir();
+        }
         if (codeMetaData.find("bucketId") != codeMetaData.end()) {
             funcMeta.codeMetaData.bucketID = codeMetaData.at("bucketId");
         }

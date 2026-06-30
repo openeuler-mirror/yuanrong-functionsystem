@@ -46,6 +46,20 @@ public:
         return httpListenPort;
     }
 
+    const std::string &GetLocalIP() const
+    {
+        return localIp_;
+    }
+
+    uint16_t GetLocalListenPort() const
+    {
+        if (localListenPort_.empty()) {
+            return 0;
+        }
+        try { return static_cast<uint16_t>(std::stoul(localListenPort_)); }
+        catch (...) { return 0; }
+    }
+
     const std::string &GetMetaStoreAddress() const
     {
         return metaStoreAddress;
@@ -101,11 +115,126 @@ public:
         return credentialHostAddress_;
     }
 
+    const std::string &GetKeycloakUrl() const
+    {
+        return keycloakUrl_;
+    }
+
+    const std::string &GetKeycloakPublicUrl() const
+    {
+        return keycloakPublicUrl_;
+    }
+
+    const std::string &GetKeycloakClientId() const
+    {
+        return keycloakClientId_;
+    }
+
+    const std::string &GetKeycloakClientSecret() const
+    {
+        return keycloakClientSecret_;
+    }
+
+    const std::string &GetKeycloakIssuerUrl() const
+    {
+        return keycloakIssuerUrl_.empty() ? keycloakUrl_ : keycloakIssuerUrl_;
+    }
+
+    const std::string &GetKeycloakRealm() const
+    {
+        return keycloakRealm_;
+    }
+
+    bool GetKeycloakEnabled() const
+    {
+        return keycloakEnabled_;
+    }
+
+    int GetKeycloakCacheTtlSeconds() const
+    {
+        return keycloakCacheTtlSeconds_;
+    }
+
+    const std::string &GetAuthProvider() const
+    {
+        return authProvider_;
+    }
+
+    const std::string &GetCasdoorEndpoint() const
+    {
+        return casdoorEndpoint_;
+    }
+
+    const std::string &GetCasdoorPublicEndpoint() const
+    {
+        return casdoorPublicEndpoint_;
+    }
+
+    const std::string &GetCasdoorClientId() const
+    {
+        return casdoorClientId_;
+    }
+
+    const std::string &GetCasdoorClientSecret() const
+    {
+        return casdoorClientSecret_;
+    }
+
+    const std::string &GetCasdoorOrganization() const
+    {
+        return casdoorOrganization_;
+    }
+
+    const std::string &GetCasdoorApplication() const
+    {
+        return casdoorApplication_;
+    }
+
+    const std::string &GetCasdoorAdminUser() const
+    {
+        return casdoorAdminUser_;
+    }
+
+    const std::string &GetCasdoorAdminPassword() const
+    {
+        return casdoorAdminPassword_;
+    }
+
+    const std::string &GetCasdoorJwtPublicKey() const
+    {
+        return casdoorJwtPublicKey_;
+    }
+
+    bool GetCasdoorEnabled() const
+    {
+        return casdoorEnabled_;
+    }
+
+    /* IAM-specific SSL toggle.
+     * When --iam_ssl_enable is set, it overrides the global --ssl_enable for IAM's listener.
+     * Certificate paths are always reused from the global ssl_base_path/ssl_cert_file/etc.
+     * When --iam_ssl_enable is not set (empty), falls back to global --ssl_enable. */
+    bool GetIAMSslEnable() const
+    {
+        if (iamSslEnable_.empty()) {
+            return GetSslEnable();
+        }
+        return iamSslEnable_ == "true";
+    }
+
+    bool HasIAMSslOverride() const
+    {
+        return !iamSslEnable_.empty();
+    }
+
 private:
+    void RegisterDualPortAndSslFlags();
     std::string logConfig;
     std::string nodeID;
     std::string ip;
     std::string httpListenPort;
+    std::string localIp_;
+    std::string localListenPort_;
     std::string metaStoreAddress;
     std::string servicesPath_;
     std::string libPath_;
@@ -119,6 +248,28 @@ private:
     std::string iamCredentialType_;
     std::string permanentCredentialConfigPath_;
     std::string credentialHostAddress_;
+    std::string keycloakUrl_;
+    std::string keycloakPublicUrl_;
+    std::string keycloakClientId_;
+    std::string keycloakClientSecret_;
+    std::string keycloakIssuerUrl_;
+    std::string keycloakRealm_;
+    bool keycloakEnabled_ = false;
+    int keycloakCacheTtlSeconds_ = 300;
+
+    std::string authProvider_;
+    std::string casdoorEndpoint_;
+    std::string casdoorPublicEndpoint_;
+    std::string casdoorClientId_;
+    std::string casdoorClientSecret_;
+    std::string casdoorOrganization_;
+    std::string casdoorApplication_;
+    std::string casdoorAdminUser_;
+    std::string casdoorAdminPassword_;
+    std::string casdoorJwtPublicKey_;
+    bool casdoorEnabled_ = false;
+
+    std::string iamSslEnable_;
 };
-} // functionsystem::iamserver
-#endif // IAM_SERVER_FLAGS_FLAGS_H
+}  // namespace functionsystem::iamserver
+#endif  // IAM_SERVER_FLAGS_FLAGS_H

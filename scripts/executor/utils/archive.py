@@ -10,22 +10,15 @@ import utils
 log = utils.stream_logger()
 
 
-def extract_file(archive_path, extract_to, create_folder=""):
-    if len(create_folder) != 0:
-        extract_to = os.path.join(extract_to, create_folder)
-
+def extract_file(archive_path, extract_to):
     if archive_path.endswith(".zip"):
-        folder_name = extract_zip(archive_path, extract_to)
+        return extract_zip(archive_path, extract_to)
     elif archive_path.endswith(".tar.gz"):
-        folder_name = extract_tar(archive_path, extract_to)
+        return extract_tar(archive_path, extract_to)
     elif archive_path.endswith(".tar"):
-        folder_name = extract_tar(archive_path, extract_to)
+        return extract_tar(archive_path, extract_to)
     else:
         raise TypeError(f"Unsupported compression type for file {archive_path.split('/')[-1]}")
-
-    if len(create_folder) != 0:
-        return create_folder
-    return folder_name
 
 
 def extract_zip(zipfile_path, extract_to):

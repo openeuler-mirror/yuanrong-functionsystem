@@ -152,6 +152,9 @@ using CancelType = ::messages::CancelType;
 using CancelSchedule = ::messages::CancelSchedule;
 using CancelScheduleResponse = ::messages::CancelScheduleResponse;
 
+using QuerySchedulingQueueRequest = ::messages::QuerySchedulingQueueRequest;
+using QuerySchedulingQueueResponse = ::messages::QuerySchedulingQueueResponse;
+
 using QueryInstancesInfoRequest = ::messages::QueryInstancesInfoRequest;
 using QueryInstancesInfoResponse = ::messages::QueryInstancesInfoResponse;
 
@@ -181,6 +184,10 @@ using RestoreSnapshotResponse = ::messages::RestoreSnapshotResponse;
 using RecordSnapshotRequest = ::messages::RecordSnapshotRequest;
 using RecordSnapshotResponse = ::messages::RecordSnapshotResponse;
 using SnapshotInfo = ::resources::SnapshotInfo;
+
+using RuntimeReconcileEntry = ::messages::RuntimeReconcileEntry;
+using ReconcileRuntimesRequest = ::messages::ReconcileRuntimesRequest;
+using ReconcileRuntimesResponse = ::messages::ReconcileRuntimesResponse;
 
 namespace MetaStore {
 using PutRequest = ::messages::PutRequest;

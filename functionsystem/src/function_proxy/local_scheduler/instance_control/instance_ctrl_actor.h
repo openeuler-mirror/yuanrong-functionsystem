@@ -34,6 +34,7 @@
 #include "common/state_machine/instance_context.h"
 #include "common/status/status.h"
 #include "common/types/instance_state.h"
+#include "common/utils/tenant_cooldown_manager.h"
 #include "function_agent_manager/function_agent_mgr.h"
 #include "function_proxy/common/data_obj_client/data_obj_client.h"
 #include "function_proxy/common/iam/internal_iam.h"
@@ -41,6 +42,7 @@
 #include "function_proxy/common/posix_client/control_plane_client/control_interface_client_manager_proxy.h"
 #include "function_proxy/common/rate_limiter/token_bucket_rate_limiter.h"
 // for remove rgroup, easy for facilitates authentication, which should be extracted in the future
+#include "local_scheduler/instance_control/idle/idle_mgr.h"
 #include "local_scheduler/resource_group_controller/resource_group_ctrl.h"
 #include "local_scheduler/subscription_manager/subscription_mgr.h"
 
@@ -96,6 +98,8 @@ const uint32_t MAX_FORWARD_KILL_RETRY_CYCLE_SYNC_MS = 3 * 60 * 1000;
 
 const uint32_t MAX_FORWARD_SCHEDULE_RETRY_TIMES = 3;
 const uint32_t MAX_NOTIFICATION_SIGNAL_RETRY_TIMES = 3;
+
+const uint32_t INSTANCE_CREATE_GC_TIMEOUT_MS = 5000;  // 5 seconds timeout for GC orphaned state machine
 
 struct InstanceCtrlConfig {
     // maxInstanceReconnectTimes is max number of times to reconnect an instance.
@@ -320,6 +324,15 @@ public:
     litebus::Future<Status> SyncAgent(const std::unordered_map<std::string, messages::FuncAgentRegisInfo> &agentMap);
 
     litebus::Future<KillResponse> KillInstancesOfJob(const std::shared_ptr<KillRequest> &killReq);
+
+    // Returns true when a route-less kill should be forwarded to function_master:
+    // direct routing is enabled, the request carries no route/proxy info, and the
+    // target instance is not present in this proxy's local instance view.
+    bool ShouldForwardKillToMaster(const std::shared_ptr<KillRequest> &killReq) const;
+
+    // Forwards a kill to function_master so it can resolve the instance owner from
+    // the global view (or report that the instance does not exist).
+    litebus::Future<KillResponse> ForwardKillToMaster(const std::shared_ptr<KillRequest> &killReq);
 
     void BindControlInterfaceClientManager(const std::shared_ptr<ControlInterfaceClientManagerProxy> &mgr)
     {
@@ -577,6 +590,25 @@ public:
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
     void SessionCountDelta(const std::string &instanceID, int delta);
+
+    /**
+     * Evict an instance that has exceeded its idle timeout.
+     * Called by IdleActor after idle timer fires.
+     */
+    void EvictByIdleTimeout(const std::string &instanceID);
+
+    /**
+     * Set IdleMgr before Spawn so BindObserver can forward traffic events.
+     */
+    void SetIdleMgr(const std::shared_ptr<IdleMgr> &idleMgr)
+    {
+        idleMgr_ = idleMgr;
+    }
+
+    // Tenant quota cooldown: blocks scheduling for tenants that exceeded quota
+    void OnTenantQuotaExceededMsg(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void OnTenantQuotaExceeded(const std::string &msg);
+
 private:
     Status CheckSchedRequestValid(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
@@ -587,6 +619,10 @@ private:
     litebus::Future<Status> DispatchSchedule(const std::shared_ptr<messages::ScheduleRequest> &request);
 
     litebus::Future<messages::ScheduleResponse> DoDispatchSchedule(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
+        const TransitionResult &result);
+    litebus::Future<messages::ScheduleResponse> HandleDispatchWithoutPreState(
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
         const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
         const TransitionResult &result);
@@ -781,6 +817,12 @@ private:
     litebus::Future<messages::ScheduleResponse> RetryForwardSchedule(
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const messages::ScheduleResponse &resp,
         uint32_t retryTimes, const std::shared_ptr<InstanceStateMachine> &stateMachine);
+    litebus::Future<messages::ScheduleResponse> HandleForwardScheduleResponse(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const messages::ScheduleResponse &resp,
+        uint32_t retryTimes,
+        const std::shared_ptr<InstanceControlView> &instanceControlView);
+    litebus::Future<messages::ScheduleResponse> QueryInstanceAfterForwardConflict(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
     void TryClearStateMachineCache(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
@@ -834,6 +876,9 @@ private:
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
     void DeleteDriverClient(const std::string &instanceID, const std::string &jobID);
+
+    // GC orphaned state machine in DirectRouting mode.
+    void GCOrphanStateMachine(const std::string &instanceID, const std::string &requestID);
 
     litebus::Future<Status> TryExitInstance(const std::shared_ptr<InstanceStateMachine> stateMachine,
                                             const std::shared_ptr<KillContext> &killCtx,
@@ -897,6 +942,13 @@ private:
         const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result,
         const TransitionResult &transResult);
+    bool HandleLocalDirectRoutingConflict(
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &scheduleResp,
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const TransitionResult &transResult);
+    litebus::Option<Status> CleanupDirectRoutingConflict(
+        const litebus::Option<Status> &status,
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
 
     CreateCallResultCallBack RegisterCreateCallResultCallback(
         const std::shared_ptr<messages::ScheduleRequest> &request);
@@ -928,10 +980,9 @@ private:
     void CheckInstanceStateResponse(const litebus::AID &from, std::string &&, std::string &&msg);
 
     void ClearLocalDriver();
-private:
-    litebus::Future<Status> RegisterTraefikRoute(const InstanceInfo& instanceInfo);
-    litebus::Future<Status> UnregisterTraefikRoute(const std::string& instanceID);
-private:
+    litebus::Future<Status> RegisterTraefikRoute(const InstanceInfo &instanceInfo);
+    litebus::Future<Status> UnregisterTraefikRoute(const std::string &instanceID);
+
     litebus::Future<Status> FcAccessorHeartbeatEnable(bool enable)
     {
         fcAccessorHeartbeat_ = enable;
@@ -1023,7 +1074,7 @@ private:
 
     std::shared_ptr<TraefikRegistry> traefikRegistry_;
 
-    // todo(Lwy_Robb): idle controller should be mv to a separate actor in future
+    std::shared_ptr<IdleMgr> idleMgr_;
     std::unordered_map<std::string, litebus::Timer> idleTimers_;
 
     // Track whether each instance has active exec sessions
@@ -1038,6 +1089,11 @@ private:
     void StartIdleTimer(const std::string &instanceID);
     void HandleIdleTimeout(const std::string &instanceID);
     void CancelIdleTimer(const std::string &instanceID);
+
+    void OnTenantCooldownExpired(std::string tenantID, uint64_t generation);
+
+    // key: tenantID, value: cooldown expiry timer
+    functionsystem::TenantCooldownManager cooldownMgr_;
 };
 }  // namespace functionsystem::local_scheduler
 #endif  // LOCAL_SCHEDULER_INSTANCE_CTRL_ACTOR_H

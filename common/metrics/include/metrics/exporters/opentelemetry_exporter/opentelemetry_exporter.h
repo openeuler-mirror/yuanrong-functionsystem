@@ -1,5 +1,5 @@
 /*
-* Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,18 +14,17 @@
  * limitations under the License.
  */
 
-#ifndef OPENTELEMETRY_EXPORTS_H
-#define OPENTELEMETRY_EXPORTS_H
+#pragma once
 
+#include <chrono>
+#include <map>
 #include <string>
 #include <vector>
-#include <map>
-#include <chrono>
+
+#include "metrics/exporters/exporter.h"
 
 // OpenTelemetry headers
 #include "opentelemetry/exporters/otlp/otlp_http_metric_exporter.h"
-
-#include "metrics/exporters/exporter.h"
 
 namespace observability {
 namespace exporters {
@@ -39,6 +38,10 @@ struct OpenTelemetryExporterOptions {
     std::string export_mode = "BATCH";
     uint32_t batch_size = 100;
     uint32_t batch_interval = 5;
+    // Per-instance resource attributes injected into every OTLP ResourceMetrics.
+    // Used to disambiguate producers sharing the same service.name so Prometheus
+    // does not see out-of-order samples from different instances.
+    std::map<std::string, std::string> resource_attrs;
 };
 
 class OpenTelemetryExporter : public Exporter {
@@ -66,4 +69,3 @@ private:
 } // namespace metrics
 } // namespace exporters
 } // namespace observability
-#endif // OPENTELEMETRY_EXPORTS_H

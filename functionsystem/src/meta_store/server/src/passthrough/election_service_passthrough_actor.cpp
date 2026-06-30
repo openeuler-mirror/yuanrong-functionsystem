@@ -118,7 +118,7 @@ void ElectionServicePassthroughActor::Leader(const litebus::AID &from, std::stri
     ::v3electionpb::LeaderRequest request;
     RETURN_IF_TRUE(!request.ParseFromString(req.requestmsg()),
                    "failed to parde Leader LeaderRequest: " + req.requestid());
-    
+
     YRLOG_DEBUG("{}|receive leader request, name: {}", req.requestid(), request.name());
     etcdClient_->Leader(request.name())
         .OnComplete(litebus::Defer(GetAID(), &ElectionServicePassthroughActor::OnLeader, std::placeholders::_1,
@@ -289,7 +289,7 @@ void ElectionServicePassthroughActor::CancelObserve(const litebus::AID &from, st
     messages::MetaStore::ObserveCancelRequest request;
     RETURN_IF_TRUE(!request.ParseFromString(req.requestmsg()),
                    "failed to parse CancelObserve ObserveCancelRequest: " + req.requestid());
-    
+
     YRLOG_DEBUG("{}|receive cancel observer({})", req.requestid(), request.cancelobserveid());
     CancelObserveWithID(req.requestid(), "by user", request.cancelobserveid());
 }

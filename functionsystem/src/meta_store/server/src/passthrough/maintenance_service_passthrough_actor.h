@@ -36,7 +36,7 @@ public:
 private:
     void OnHealthCheck(const litebus::Future<StatusResponse> &response, const std::string &id,
                        const litebus::AID &from);
-    
+
     std::shared_ptr<MetaStoreClient> etcdClient_;
 };
 
