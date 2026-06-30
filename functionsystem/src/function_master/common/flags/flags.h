@@ -266,6 +266,11 @@ public:
         return traefikServersTransport_;
     }
 
+    const std::string &GetTraefikPublicBaseDomain() const
+    {
+        return traefikPublicBaseDomain_;
+    }
+
     uint32_t GetTraefikForwardTimeoutMs() const
     {
         return traefikForwardTimeoutMs_;
@@ -347,6 +352,7 @@ protected:
     std::string traefikHttpEntryPoint_{ "websecure" };
     bool traefikEnableTLS_{ true };
     std::string traefikServersTransport_{ "yr-backend-tls@file" };
+    std::string traefikPublicBaseDomain_;
     uint32_t traefikForwardTimeoutMs_{ 3000 };
 };
 

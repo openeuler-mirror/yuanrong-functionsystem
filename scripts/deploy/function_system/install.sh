@@ -687,6 +687,7 @@ function install_function_master() {
       --traefik_http_entry_point="${TRAEFIK_HTTP_ENTRY_POINT}" \
       --traefik_enable_tls="${TRAEFIK_ENABLE_TLS}" \
       --traefik_servers_transport="${TRAEFIK_SERVERS_TRANSPORT}" \
+      --traefik_public_base_domain="${TRAEFIK_PUBLIC_BASE_DOMAIN}" \
       --traefik_forward_timeout_ms="${TRAEFIK_FORWARD_TIMEOUT_MS}" \
       >>"${FS_LOG_PATH}/${NODE_ID}-function_master${STD_LOG_SUFFIX}" 2>&1 &
     FUNCTION_MASTER_PID=$!

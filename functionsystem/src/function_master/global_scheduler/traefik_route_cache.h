@@ -33,6 +33,7 @@ struct TraefikConfig {
     std::string httpEntryPoint   = "websecure";
     bool        enableTLS        = true;
     std::string serversTransport = "yr-backend-tls@file";
+    std::string publicBaseDomain;
 };
 
 class TraefikRouteCache {
@@ -74,6 +75,20 @@ private:
 
     // Sanitize instanceID for use as Traefik router/service name
     static std::string SanitizeID(const std::string& id);
+
+    // Normalize wildcard domain for Traefik Host() rules.
+    static std::string NormalizePublicBaseDomain(const std::string& domain);
+
+    // Sanitize a value for use as one DNS label component.
+    static std::string SanitizeDNSLabelComponent(const std::string& value);
+
+    // Build the left-most DNS label for host-based sandbox URLs.
+    static std::string BuildHostLabel(int sandboxPort, const std::string& safeID);
+
+    // Build the router name for the host-based route.
+    static std::string BuildHostRouterName(const std::string& routerName);
+
+    static std::string StableHashSuffix(const std::string& value);
 
     // Build full Traefik dynamic.Configuration JSON.
     // JSON keys sorted lexicographically for FNV hash stability.

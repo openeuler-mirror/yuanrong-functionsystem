@@ -17,6 +17,8 @@
 #include "traefik_route_cache.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdint>
 #include <map>
 #include <sstream>
 #include <vector>
@@ -29,10 +31,15 @@ namespace functionsystem::global_scheduler {
 static const std::string PORT_FORWARD_KEY = "portForward";
 constexpr size_t MAX_ROUTER_NAME_LEN = 200;
 constexpr size_t PORT_MAPPING_SANDBOX_PORT_INDEX = 2;
+constexpr size_t MAX_DNS_LABEL_LEN = 63;
+constexpr size_t MAX_FQDN_LEN = 253;
+constexpr uint32_t FNV_OFFSET_BASIS = 2166136261U;
+constexpr uint32_t FNV_PRIME = 16777619U;
 
 TraefikRouteCache::TraefikRouteCache(TraefikConfig cfg)
     : cfg_(std::move(cfg))
 {
+    cfg_.publicBaseDomain = NormalizePublicBaseDomain(cfg_.publicBaseDomain);
 }
 
 void TraefikRouteCache::OnInstanceRunning(const resource_view::InstanceInfo& instance)
@@ -212,6 +219,106 @@ std::string TraefikRouteCache::SanitizeID(const std::string& id)
     return result;
 }
 
+std::string TraefikRouteCache::NormalizePublicBaseDomain(const std::string& domain)
+{
+    std::string result = domain;
+    result.erase(0, result.find_first_not_of(" \t\r\n"));
+    auto last = result.find_last_not_of(" \t\r\n");
+    if (last == std::string::npos) {
+        return "";
+    }
+    result.erase(last + 1);
+
+    auto schemePos = result.find("://");
+    if (schemePos != std::string::npos) {
+        result.erase(0, schemePos + 3);
+    }
+    auto pathPos = result.find('/');
+    if (pathPos != std::string::npos) {
+        result.erase(pathPos);
+    }
+    if (result.rfind("*.", 0) == 0) {
+        result.erase(0, 2);
+    }
+    auto portPos = result.rfind(':');
+    if (portPos != std::string::npos) {
+        result.erase(portPos);
+    }
+    if (!result.empty() && result.back() == '.') {
+        result.pop_back();
+    }
+    std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return result;
+}
+
+std::string TraefikRouteCache::SanitizeDNSLabelComponent(const std::string& value)
+{
+    std::string result;
+    result.reserve(value.size());
+    bool previousWasDash = false;
+    for (unsigned char c : value) {
+        const bool isAlphaNum = std::isalnum(c) != 0;
+        const char next = isAlphaNum ? static_cast<char>(std::tolower(c)) : '-';
+        if (next == '-') {
+            if (!result.empty() && !previousWasDash) {
+                result.push_back(next);
+            }
+            previousWasDash = true;
+            continue;
+        }
+        result.push_back(next);
+        previousWasDash = false;
+    }
+    while (!result.empty() && result.back() == '-') {
+        result.pop_back();
+    }
+    if (result.empty()) {
+        return "sandbox";
+    }
+    return result;
+}
+
+std::string TraefikRouteCache::StableHashSuffix(const std::string& value)
+{
+    uint32_t hash = FNV_OFFSET_BASIS;
+    for (unsigned char c : value) {
+        hash ^= c;
+        hash *= FNV_PRIME;
+    }
+
+    constexpr char HEX[] = "0123456789abcdef";
+    std::string result(8, '0');
+    for (int i = 7; i >= 0; --i) {
+        result[static_cast<size_t>(i)] = HEX[hash & 0xFU];
+        hash >>= 4;
+    }
+    return result;
+}
+
+std::string TraefikRouteCache::BuildHostLabel(int sandboxPort, const std::string& safeID)
+{
+    const std::string safeDNS = SanitizeDNSLabelComponent(safeID);
+    std::string label = std::to_string(sandboxPort) + "-" + safeDNS;
+    if (label.length() > MAX_DNS_LABEL_LEN) {
+        const std::string suffix = "-" + StableHashSuffix(std::to_string(sandboxPort) + ":" + safeID);
+        label = label.substr(0, MAX_DNS_LABEL_LEN - suffix.length()) + suffix;
+    }
+    return label;
+}
+
+std::string TraefikRouteCache::BuildHostRouterName(const std::string& routerName)
+{
+    const std::string suffix = "-host";
+    if (routerName.length() + suffix.length() <= MAX_ROUTER_NAME_LEN) {
+        return routerName + suffix;
+    }
+
+    const std::string hashSuffix = "-" + StableHashSuffix(routerName) + suffix;
+    return routerName.substr(0, MAX_ROUTER_NAME_LEN - hashSuffix.length()) + hashSuffix;
+}
+
 std::string TraefikRouteCache::BuildConfigJSON() const
 {
     std::shared_lock lock(routeTableMu_);
@@ -248,6 +355,27 @@ std::string TraefikRouteCache::BuildConfigJSON() const
             router["tls"] = nlohmann::json::object();
         }
         routersJson[name] = std::move(router);
+
+        if (!cfg_.publicBaseDomain.empty()) {
+            nlohmann::json hostRouter;
+            hostRouter["entryPoints"] = nlohmann::json::array({cfg_.httpEntryPoint});
+            // Example:
+            //   port=5888, safeID=akernel-abc, publicBaseDomain=sandbox-gateway.example.com
+            //   => Host(`5888-akernel-abc.sandbox-gateway.example.com`)
+            const std::string hostName = BuildHostLabel(entry.sandboxPort, safeID) + "." + cfg_.publicBaseDomain;
+            if (hostName.length() > MAX_FQDN_LEN) {
+                YRLOG_WARN("TraefikRouteCache: skip host-based route for router {} because host '{}' is too long",
+                           name, hostName);
+            } else {
+                const std::string hostRule = "Host(`" + hostName + "`)";
+                hostRouter["rule"] = hostRule;
+                hostRouter["service"] = name;
+                if (cfg_.enableTLS) {
+                    hostRouter["tls"] = nlohmann::json::object();
+                }
+                routersJson[BuildHostRouterName(name)] = std::move(hostRouter);
+            }
+        }
 
         // Service
         nlohmann::json service;
