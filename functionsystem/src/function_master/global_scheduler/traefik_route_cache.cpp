@@ -33,6 +33,11 @@ constexpr size_t MAX_ROUTER_NAME_LEN = 200;
 constexpr size_t PORT_MAPPING_SANDBOX_PORT_INDEX = 2;
 constexpr size_t MAX_DNS_LABEL_LEN = 63;
 constexpr size_t MAX_FQDN_LEN = 253;
+constexpr size_t WILDCARD_PREFIX_LEN = 2;
+constexpr size_t HASH_SUFFIX_LEN = 8;
+constexpr int HASH_SUFFIX_LAST_INDEX = static_cast<int>(HASH_SUFFIX_LEN) - 1;
+constexpr uint32_t HASH_NIBBLE_MASK = 0xFU;
+constexpr uint32_t HASH_NIBBLE_BITS = 4;
 constexpr uint32_t FNV_OFFSET_BASIS = 2166136261U;
 constexpr uint32_t FNV_PRIME = 16777619U;
 
@@ -240,7 +245,7 @@ std::string TraefikRouteCache::NormalizePublicBaseDomain(const std::string& doma
         result.erase(pathPos);
     }
     if (result.rfind("*.", 0) == 0) {
-        result.erase(0, 2);
+        result.erase(0, WILDCARD_PREFIX_LEN);
     }
     auto portPos = result.rfind(':');
     if (portPos != std::string::npos) {
@@ -290,11 +295,11 @@ std::string TraefikRouteCache::StableHashSuffix(const std::string& value)
         hash *= FNV_PRIME;
     }
 
-    constexpr char HEX[] = "0123456789abcdef";
-    std::string result(8, '0');
-    for (int i = 7; i >= 0; --i) {
-        result[static_cast<size_t>(i)] = HEX[hash & 0xFU];
-        hash >>= 4;
+    constexpr char hexDigits[] = "0123456789abcdef";
+    std::string result(HASH_SUFFIX_LEN, '0');
+    for (int i = HASH_SUFFIX_LAST_INDEX; i >= 0; --i) {
+        result[static_cast<size_t>(i)] = hexDigits[hash & HASH_NIBBLE_MASK];
+        hash >>= HASH_NIBBLE_BITS;
     }
     return result;
 }
@@ -339,6 +344,51 @@ std::string TraefikRouteCache::BuildHostRule(int sandboxPort, const std::string&
     return "Host(`" + hostName + "`)";
 }
 
+nlohmann::json TraefikRouteCache::BuildPathRouter(const RouteEntry& entry, const std::string& safeID,
+                                                  const std::string& routerName) const
+{
+    nlohmann::json router;
+    router["entryPoints"] = nlohmann::json::array({cfg_.httpEntryPoint});
+    router["middlewares"] = nlohmann::json::array({"stripprefix-all"});
+    router["rule"] = "PathPrefix(`/" + safeID + "/" + std::to_string(entry.sandboxPort) + "`)";
+    router["service"] = routerName;
+    if (cfg_.enableTLS) {
+        router["tls"] = nlohmann::json::object();
+    }
+    return router;
+}
+
+nlohmann::json TraefikRouteCache::BuildHostRouter(const RouteEntry& entry, const std::string& safeID,
+                                                  const std::string& routerName) const
+{
+    const std::string hostRule = BuildHostRule(entry.sandboxPort, safeID, routerName);
+    if (hostRule.empty()) {
+        return nlohmann::json();
+    }
+
+    nlohmann::json router;
+    router["entryPoints"] = nlohmann::json::array({cfg_.httpEntryPoint});
+    router["rule"] = hostRule;
+    router["service"] = routerName;
+    if (cfg_.enableTLS) {
+        router["tls"] = nlohmann::json::object();
+    }
+    return router;
+}
+
+nlohmann::json TraefikRouteCache::BuildLoadBalancerService(const RouteEntry& entry) const
+{
+    nlohmann::json lb;
+    lb["servers"] = nlohmann::json::array({nlohmann::json{{"url", entry.backendURL}}});
+    if (entry.useHttps && !cfg_.serversTransport.empty()) {
+        lb["serversTransport"] = cfg_.serversTransport;
+    }
+
+    nlohmann::json service;
+    service["loadBalancer"] = std::move(lb);
+    return service;
+}
+
 std::string TraefikRouteCache::BuildConfigJSON() const
 {
     std::shared_lock lock(routeTableMu_);
@@ -365,40 +415,16 @@ std::string TraefikRouteCache::BuildConfigJSON() const
         }
         std::string safeID = name.substr(0, dashPPos);
 
-        // Router
-        nlohmann::json router;
-        router["entryPoints"] = nlohmann::json::array({cfg_.httpEntryPoint});
-        router["middlewares"] = nlohmann::json::array({"stripprefix-all"});
-        router["rule"] = "PathPrefix(`/" + safeID + "/" + std::to_string(entry.sandboxPort) + "`)";
-        router["service"] = name;
-        if (cfg_.enableTLS) {
-            router["tls"] = nlohmann::json::object();
-        }
-        routersJson[name] = std::move(router);
+        routersJson[name] = BuildPathRouter(entry, safeID, name);
 
         if (!cfg_.publicBaseDomain.empty()) {
-            const std::string hostRule = BuildHostRule(entry.sandboxPort, safeID, name);
-            if (!hostRule.empty()) {
-                nlohmann::json hostRouter;
-                hostRouter["entryPoints"] = nlohmann::json::array({cfg_.httpEntryPoint});
-                hostRouter["rule"] = hostRule;
-                hostRouter["service"] = name;
-                if (cfg_.enableTLS) {
-                    hostRouter["tls"] = nlohmann::json::object();
-                }
+            nlohmann::json hostRouter = BuildHostRouter(entry, safeID, name);
+            if (!hostRouter.empty()) {
                 routersJson[BuildHostRouterName(name)] = std::move(hostRouter);
             }
         }
 
-        // Service
-        nlohmann::json service;
-        nlohmann::json lb;
-        lb["servers"] = nlohmann::json::array({nlohmann::json{{"url", entry.backendURL}}});
-        if (entry.useHttps && !cfg_.serversTransport.empty()) {
-            lb["serversTransport"] = cfg_.serversTransport;
-        }
-        service["loadBalancer"] = std::move(lb);
-        servicesJson[name] = std::move(service);
+        servicesJson[name] = BuildLoadBalancerService(entry);
     }
 
     // Build the full dynamic configuration
