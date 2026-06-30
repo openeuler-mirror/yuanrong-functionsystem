@@ -460,10 +460,17 @@ void SetStartRuntimeInstanceRequestConfig(const std::unique_ptr<messages::StartI
 
     // Check sandbox_type from createOptions
     if (const auto sandboxTypeIter = req->createoptions().find("sandbox_type");
-        sandboxTypeIter != req->createoptions().end() && sandboxTypeIter->second == "supervisor") {
-        YRLOG_INFO("{}|Using sandbox executor for {}", req->requestid(), sandboxTypeIter->second.c_str());
-        startInstanceRequest->set_type(static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
-        return;
+        sandboxTypeIter != req->createoptions().end()) {
+        if (sandboxTypeIter->second == "supervisor") {
+            YRLOG_INFO("{}|Using supervisor executor for {}", req->requestid(), sandboxTypeIter->second.c_str());
+            startInstanceRequest->set_type(static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
+            return;
+        }
+        if (sandboxTypeIter->second == "docker") {
+            YRLOG_INFO("{}|Using docker executor for {}", req->requestid(), sandboxTypeIter->second.c_str());
+            startInstanceRequest->set_type(static_cast<int32_t>(EXECUTOR_TYPE::DOCKER));
+            return;
+        }
     }
 
     // Check for container configuration

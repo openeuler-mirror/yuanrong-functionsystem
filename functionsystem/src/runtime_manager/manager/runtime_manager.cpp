@@ -20,12 +20,14 @@
 #include "async/defer.hpp"
 #include "async/future.hpp"
 #include "common/constants/actor_name.h"
+#include "common/constants/constants.h"
 #include "common/logs/logging.h"
 #include "common/proto/pb/message_pb.h"
 #include "common/status/status.h"
 #include "common/utils/exec_utils.h"
 #include "common/utils/struct_transfer.h"
 #include "executor/container_executor.h"
+#include "executor/docker_executor.h"
 #include "executor/runtime_executor.h"
 #include "executor/supervisor_executor.h"
 #include "port/port_manager.h"
@@ -115,9 +117,7 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
         messages::StartInstanceResponse response;
         response.set_requestid(instance.requestid());
         response.set_code(static_cast<int32_t>(RUNTIME_MANAGER_PARAMS_INVALID));
-        response.set_message(static_cast<EXECUTOR_TYPE>(type) == EXECUTOR_TYPE::SUPERVISOR
-                                 ? "supervisor service is not ready, please check whether the service is abnormal"
-                                 : "unknown instance type, cannot start instance");
+        response.set_message(GetExecutorUnavailableMessage(static_cast<EXECUTOR_TYPE>(type)));
 
         litebus::Future<messages::StartInstanceResponse> promise;
         promise.SetValue(response);
@@ -356,7 +356,8 @@ void RuntimeManager::HandlePrestartRuntimeExit(const pid_t pid)
 void RuntimeManager::SetConfig(const Flags &flags)
 {
     functionAgentAID_ = litebus::AID(FUNCTION_AGENT_AGENT_SERVICE_ACTOR_NAME, flags.GetAgentAddress());
-    for (auto type : {EXECUTOR_TYPE::RUNTIME, EXECUTOR_TYPE::CONTAINER, EXECUTOR_TYPE::SUPERVISOR}) {
+    for (auto type : {EXECUTOR_TYPE::RUNTIME, EXECUTOR_TYPE::CONTAINER, EXECUTOR_TYPE::SUPERVISOR,
+                      EXECUTOR_TYPE::DOCKER}) {
         auto executor = FindExecutor(type);
         YRLOG_INFO("SetRuntimeConfig for type({})", fmt::underlying(type));
         if (executor != nullptr) {
@@ -456,51 +457,101 @@ std::string RuntimeManager::GetCpuType() const
     return cpuType_;
 }
 
+std::string RuntimeManager::GetExecutorUnavailableMessage(EXECUTOR_TYPE type)
+{
+    if (type == EXECUTOR_TYPE::RUNTIME) {
+        return "runtime service is not ready, please check whether the service is abnormal";
+    }
+    if (type == EXECUTOR_TYPE::CONTAINER) {
+        return "container service is not ready, please check whether the service is abnormal";
+    }
+    if (type == EXECUTOR_TYPE::SUPERVISOR) {
+        return "supervisor service is not ready, please check whether the service is abnormal";
+    }
+    if (type == EXECUTOR_TYPE::DOCKER) {
+        return "docker service is not ready, please check whether the Docker daemon is abnormal";
+    }
+    return "unknown instance type, cannot start instance";
+}
+
 std::shared_ptr<ExecutorProxy> RuntimeManager::FindExecutor(EXECUTOR_TYPE type)
 {
     if (auto iter(executorMap_.find(type)); iter != executorMap_.end()) {
         return iter->second;
     }
-    if (type == EXECUTOR_TYPE::RUNTIME) {
-        YRLOG_DEBUG("not found a executor, create a runtime executor.");
-        auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
-        const std::string name = "RuntimeExecutor_" + uuid.ToString();
-        auto executor = std::make_shared<RuntimeExecutor>(name, functionAgentAID_);
-        litebus::Spawn(executor, false);
-        auto executorProxy = std::make_shared<RuntimeExecutorProxy>(executor);
-        (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::RUNTIME, executorProxy));
-        return executorProxy;
-    }
-    if (type == EXECUTOR_TYPE::CONTAINER) {
-        auto ep = litebus::os::GetEnv("CONTAINER_EP");
-        if (ep.IsNone()) {
-            YRLOG_INFO("container executor disabled, no containerd endpoint found");
+    switch (type) {
+        case EXECUTOR_TYPE::RUNTIME:
+            return CreateRuntimeExecutor();
+        case EXECUTOR_TYPE::CONTAINER:
+            return CreateContainerExecutor();
+        case EXECUTOR_TYPE::SUPERVISOR:
+            return CreateSupervisorExecutor();
+        case EXECUTOR_TYPE::DOCKER:
+            return CreateDockerExecutor();
+        default:
             return nullptr;
-        }
-        YRLOG_INFO("not found a executor, create a container executor.");
-        auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
-        const std::string name = "RuntimeExecutor_" + uuid.ToString();
-        auto executor = std::make_shared<ContainerExecutor>(name, functionAgentAID_);
-        executor->SetHealthCheckClient(healthCheckClient_);
-        litebus::Spawn(executor, false);
-        auto executorProxy = std::make_shared<ContainerExecutorProxy>(executor);
-        (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::CONTAINER, executorProxy));
-        return executorProxy;
     }
-    if (type == EXECUTOR_TYPE::SUPERVISOR) {
-        auto supervisorListenUrl = litebus::os::GetEnv("SUPERVISOR_LISTEN_URL");
-        if (supervisorListenUrl.IsNone()) {
-            YRLOG_INFO("supervisor executor disabled, no supervisorListenUrl found");
-            return nullptr;
-        }
-        YRLOG_INFO("not found a executor, create a supervisor executor.");
-        auto executor = std::make_shared<SupervisorExecutor>("SupervisorExecutor", functionAgentAID_);
-        litebus::Spawn(executor, false);
-        auto executorProxy = std::make_shared<SandboxExecutorProxy>(executor);
-        (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::SUPERVISOR, executorProxy));
-        return executorProxy;
+}
+
+std::shared_ptr<ExecutorProxy> RuntimeManager::CreateRuntimeExecutor()
+{
+    YRLOG_DEBUG("not found a executor, create a runtime executor.");
+    auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
+    const std::string name = "RuntimeExecutor_" + uuid.ToString();
+    auto executor = std::make_shared<RuntimeExecutor>(name, functionAgentAID_);
+    litebus::Spawn(executor, false);
+    auto executorProxy = std::make_shared<RuntimeExecutorProxy>(executor);
+    (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::RUNTIME, executorProxy));
+    return executorProxy;
+}
+
+std::shared_ptr<ExecutorProxy> RuntimeManager::CreateContainerExecutor()
+{
+    auto ep = litebus::os::GetEnv("CONTAINER_EP");
+    if (ep.IsNone()) {
+        YRLOG_INFO("container executor disabled, no containerd endpoint found");
+        return nullptr;
     }
-    return nullptr;
+    YRLOG_INFO("not found a executor, create a container executor.");
+    auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
+    const std::string name = "RuntimeExecutor_" + uuid.ToString();
+    auto executor = std::make_shared<ContainerExecutor>(name, functionAgentAID_);
+    executor->SetHealthCheckClient(healthCheckClient_);
+    litebus::Spawn(executor, false);
+    auto executorProxy = std::make_shared<ContainerExecutorProxy>(executor);
+    (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::CONTAINER, executorProxy));
+    return executorProxy;
+}
+
+std::shared_ptr<ExecutorProxy> RuntimeManager::CreateSupervisorExecutor()
+{
+    auto supervisorListenUrl = litebus::os::GetEnv("SUPERVISOR_LISTEN_URL");
+    if (supervisorListenUrl.IsNone()) {
+        YRLOG_INFO("supervisor executor disabled, no supervisorListenUrl found");
+        return nullptr;
+    }
+    YRLOG_INFO("not found a executor, create a supervisor executor.");
+    auto executor = std::make_shared<SupervisorExecutor>("SupervisorExecutor", functionAgentAID_);
+    litebus::Spawn(executor, false);
+    auto executorProxy = std::make_shared<SandboxExecutorProxy>(executor);
+    (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::SUPERVISOR, executorProxy));
+    return executorProxy;
+}
+
+std::shared_ptr<ExecutorProxy> RuntimeManager::CreateDockerExecutor()
+{
+    auto dockerHost = litebus::os::GetEnv("DOCKER_HOST");
+    bool dockerHostValid = dockerHost.IsSome() && !dockerHost.Get().empty();
+    if (!dockerHostValid && !litebus::os::ExistPath(DEFAULT_DOCKER_SOCKET)) {
+        YRLOG_INFO("docker executor disabled, no Docker daemon endpoint found");
+        return nullptr;
+    }
+    YRLOG_INFO("not found a executor, create a docker executor.");
+    auto executor = std::make_shared<DockerExecutor>("DockerExecutor", functionAgentAID_);
+    litebus::Spawn(executor, false);
+    auto executorProxy = std::make_shared<DockerExecutorProxy>(executor);
+    (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::DOCKER, executorProxy));
+    return executorProxy;
 }
 
 void RuntimeManager::StartInstanceResponse(const litebus::AID &from, const std::string &instanceID,

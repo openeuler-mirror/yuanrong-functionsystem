@@ -49,7 +49,6 @@ using json = nlohmann::json;
 const int64_t DEFAULT_GRACEFUL_SHUTDOWN = 5;
 constexpr double DEFAULT_CPU_RESOURCE = 500;
 constexpr double DEFAULT_MEMORY_RESOURCE = 500;
-constexpr int MAX_PORT_NUMBER = 65535;
 const int64_t RECONNECT_CONTAINERD_INTERVAL_MS = 5000;
 const std::string PARAM_RUNTIME_ID = "runtimeID";
 const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
@@ -686,42 +685,6 @@ std::string BuildBootstrapWorkingRoot(
         mount.set_type("bind");
     }
     return mountDst;
-}
-
-std::vector<ContainerExecutor::PortForwardConfig> ContainerExecutor::ParseForwardPorts(const std::string &networkJson)
-{
-    std::vector<PortForwardConfig> configs;
-    if (networkJson.empty()) {
-        return configs;
-    }
-    try {
-        auto j = json::parse(networkJson);
-        if (!j.contains("portForwardings") || !j["portForwardings"].is_array()) {
-            return configs;
-        }
-        for (const auto &item : j["portForwardings"]) {
-            if (!item.is_object() || !item.contains("port") || !item["port"].is_number_integer()) {
-                continue;
-            }
-            int p = item["port"].get<int>();
-            if (p > 0 && p <= MAX_PORT_NUMBER) {
-                PortForwardConfig config;
-                config.containerPort = static_cast<uint32_t>(p);
-                // Protocol is stored as lowercase (tcp/udp)
-                if (item.contains("protocol") && item["protocol"].is_string()) {
-                    std::string proto = item["protocol"].get<std::string>();
-                    std::transform(proto.begin(), proto.end(), proto.begin(), ::tolower);
-                    config.protocol = proto;
-                } else {
-                    config.protocol = "tcp";  // Default to TCP
-                }
-                configs.push_back(config);
-            }
-        }
-    } catch (const std::exception &e) {
-        YRLOG_WARN("ParseForwardPorts: failed to parse network json: {}, error: {}", networkJson, e.what());
-    }
-    return configs;
 }
 
 litebus::Future<runtime::v1::StartResponse> ContainerExecutor::StartByRuntimeID(

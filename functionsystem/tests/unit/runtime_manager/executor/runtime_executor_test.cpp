@@ -403,6 +403,7 @@ TEST_F(RuntimeExecutorTest, StartInstanceTest)
     auto runtimeInfo = startRequest->mutable_runtimeinstanceinfo();
     runtimeInfo->set_requestid("test_requestID");
     runtimeInfo->set_instanceid("test_instanceID");
+    runtimeInfo->set_runtimeid("test_runtimeID");
     runtimeInfo->set_traceid("test_traceID");
 
     auto runtimeConfig = runtimeInfo->mutable_runtimeconfig();
@@ -644,6 +645,7 @@ TEST_F(RuntimeExecutorTest, StartInstanceWithSubDirTest)
     auto runtimeInfo = startRequest->mutable_runtimeinstanceinfo();
     runtimeInfo->set_requestid("test_requestID");
     runtimeInfo->set_instanceid("test_instanceID");
+    runtimeInfo->set_runtimeid("test_runtimeID");
     runtimeInfo->set_traceid("test_traceID");
 
     auto runtimeConfig = runtimeInfo->mutable_runtimeconfig();
@@ -1456,6 +1458,7 @@ TEST_F(RuntimeExecutorTest, GetNoneExistedCPPExecPathTest)
     auto runtimeInfo = startRequest->mutable_runtimeinstanceinfo();
     runtimeInfo->set_requestid("test_requestID");
     runtimeInfo->set_instanceid("test_instanceID");
+    runtimeInfo->set_runtimeid("test_runtimeID");
     runtimeInfo->set_traceid("test_traceID");
 
     auto runtimeConfig = runtimeInfo->mutable_runtimeconfig();
