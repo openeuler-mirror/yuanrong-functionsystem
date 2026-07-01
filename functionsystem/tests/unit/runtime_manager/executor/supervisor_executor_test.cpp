@@ -64,6 +64,17 @@ public:
         return GenSuccessStartInstanceResponse(request, sandboxID);
     }
 
+    litebus::Future<messages::StartInstanceResponse> TestOnStartRuntime(
+        const runtime::v1::StartResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request)
+    {
+        return OnStartRuntime(response, request);
+    }
+
+    litebus::Future<std::string> TestCreateSandbox(const std::string &runtimeID, const std::string &hostUser = "")
+    {
+        return CreateSandbox(runtimeID, hostUser);
+    }
+
     bool TestIsRuntimeActive(const std::string &runtimeID)
     {
         return IsRuntimeActive(runtimeID);
@@ -319,6 +330,30 @@ TEST_F(SupervisorExecutorTest, GenSuccessStartInstanceResponse_NoPortMapping)
 
     EXPECT_EQ(response.code(), static_cast<int32_t>(StatusCode::SUCCESS));
     EXPECT_EQ(response.startruntimeinstanceresponse().port(), "");
+}
+
+TEST_F(SupervisorExecutorTest, CreateSandboxReturnsEmptyIdWhenSupervisorUnavailable)
+{
+    auto sandboxFuture = executor_->TestCreateSandbox("test_runtime_id");
+
+    ASSERT_AWAIT_READY(sandboxFuture);
+    EXPECT_EQ(sandboxFuture.Get(), "");
+}
+
+TEST_F(SupervisorExecutorTest, OnStartRuntimeReturnsFailureWhenStartResponseFailed)
+{
+    auto request = GenStartInstanceRequest();
+    runtime::v1::StartResponse startResponse;
+    startResponse.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+    startResponse.set_message("failed to execute command in sandbox");
+
+    auto responseFuture = executor_->TestOnStartRuntime(startResponse, request);
+
+    ASSERT_AWAIT_READY(responseFuture);
+    const auto response = responseFuture.Get();
+    EXPECT_NE(response.code(), static_cast<int32_t>(StatusCode::SUCCESS));
+    EXPECT_EQ(response.message(), "failed to execute command in sandbox");
+    EXPECT_EQ(response.startruntimeinstanceresponse().executortype(), static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
 }
 
 /**
