@@ -302,10 +302,8 @@ litebus::Future<messages::StartInstanceResponse> SupervisorExecutor::StartInstan
 inline std::string GetPythonExecPath(const google::protobuf::Map<std::string, std::string> &options,
                                      const messages::RuntimeInstanceInfo &info, CommandBuilder &cmdBuilder)
 {
-    // 插件返回的execPath不局限于python，后续可以统一处理execPath，不需要再分语言了
     auto execPathIter = options.find(EXEC_PATH);
     if (execPathIter != options.end()) {
-        YRLOG_INFO("{}|{}|python execPath: {}", info.traceid(), info.requestid(), execPathIter->second);
         return execPathIter->second;
     }
 
@@ -323,7 +321,6 @@ litebus::Future<messages::StartInstanceResponse> SupervisorExecutor::StartRuntim
     } else {
         const auto &options = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
         execPath = GetPythonExecPath(options, info, cmdBuilder_);
-        YRLOG_INFO("{}|{}|python: {} use execPath: {}", info.traceid(), info.requestid(), language, execPath);
     }
 
     return StartByRuntimeID(request, { { PARAM_EXEC_PATH, execPath }, { PARAM_LANGUAGE, language } }, args, envs)
@@ -334,25 +331,27 @@ litebus::Future<std::string> SupervisorExecutor::CreateSandbox(const std::string
                                                                const std::string &hostUser)
 {
     nlohmann::json createRequest = nlohmann::json::object();
+    if (hostUser != "") {
+        nlohmann::json bindMount = nlohmann::json::object();
+        bindMount["host_path"] = "/home/" + hostUser;
+        bindMount["sandbox_path"] = "/home/" + hostUser;
+        bindMount["mode"] = "rw";
+    
+        nlohmann::json filesystemPolicy = nlohmann::json::object();
+        filesystemPolicy["bind_mounts"] = nlohmann::json::array();
+        filesystemPolicy["bind_mounts"].push_back(bindMount);
+    
+        nlohmann::json policy = nlohmann::json::object();
+        policy["filesystem_policy"] = filesystemPolicy;
+    
+        policy["process"] = { { "run_as_user", hostUser }, { "run_as_group", hostUser } };
+        policy["namespace"] = { { "user", false } };
+    
+        createRequest["policy"] = policy;
+        createRequest["policy_mode"] = "append";
+    }
 
-    nlohmann::json bindMount = nlohmann::json::object();
-    bindMount["host_path"] = "/home/" + hostUser;
-    bindMount["sandbox_path"] = "/home/" + hostUser;
-    bindMount["mode"] = "rw";
-
-    nlohmann::json filesystemPolicy = nlohmann::json::object();
-    filesystemPolicy["bind_mounts"] = nlohmann::json::array();
-    filesystemPolicy["bind_mounts"].push_back(bindMount);
-
-    nlohmann::json policy = nlohmann::json::object();
-    policy["filesystem_policy"] = filesystemPolicy;
-
-    policy["process"] = { { "run_as_user", hostUser }, { "run_as_group", hostUser } };
-    policy["namespace"] = { { "user", false } };
-
-    createRequest["policy"] = policy;
-    createRequest["policy_mode"] = "append";
-
+    YRLOG_INFO("{}|Create sandbox for {}", runtimeID, hostUser);
     return SendRequestToSupervisor("POST", SUPERVISOR_SANDBOX_PREFIX, createRequest)
         .Then([this, runtimeID](litebus::Try<nlohmann::json> createResponse) -> litebus::Future<std::string> {
             if (!createResponse.IsOK()) {
@@ -400,7 +399,7 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::ExecInSandbox(
     }
 
     std::string execPath = SUPERVISOR_SANDBOX_PREFIX + "/" + sandboxId + "/exec_background";
-    YRLOG_INFO("{}|Executing command: {} in sandbox: {}", runtimeID, execRequest.dump(), sandboxId);
+    YRLOG_INFO("{}|Executing command: {} in sandbox: {}", runtimeID, command.dump(), sandboxId);
 
     return SendRequestToSupervisor("POST", execPath, execRequest)
         .Then([this, sandboxId,
@@ -449,31 +448,22 @@ litebus::Future<Status> SupervisorExecutor::StopInstance(const std::shared_ptr<m
                                                          bool oomKilled)
 {
     auto runtimeID = request->runtimeid();
-    YRLOG_INFO("{}|begin to stop sandbox for runtime({})", request->requestid(), runtimeID);
-
-    // Get sandbox ID
     auto sandboxIDIter = runtime2sandboxID_.find(runtimeID);
     if (sandboxIDIter == runtime2sandboxID_.end()) {
         YRLOG_ERROR("sandbox ID not found for runtime({})", runtimeID);
         return Status::OK();
     }
+
     std::string sandboxID = sandboxIDIter->second;
-    // Create delete request
     auto deleteReq = std::make_shared<runtime::v1::DeleteRequest>();
     deleteReq->set_id(sandboxID);
-    // Delete sandbox
+    YRLOG_INFO("{}|Delete sandbox: {} for runtime: {}", request->requestid(), sandboxID, runtimeID);
     return DoDeleteSandbox(deleteReq).Then(
-        [this, runtimeID](const litebus::Future<runtime::v1::DeleteResponse> &future) -> litebus::Future<Status> {
-            if (future.IsError()) {
-                YRLOG_ERROR("failed to delete sandbox for runtime({})", runtimeID);
-                return Status::OK();
-            }
-
-            // Remove from maps
+        [this, runtimeID](const runtime::v1::DeleteResponse &) -> litebus::Future<Status> {
             runtime2sandboxID_.erase(runtimeID);
             runtimeInstanceInfoMap_.erase(runtimeID);
 
-            YRLOG_INFO("successfully stopped sandbox for runtime({})", runtimeID);
+            YRLOG_INFO("Successfully delete sandbox for runtime({})", runtimeID);
             return Status::OK();
         });
 }
@@ -677,7 +667,7 @@ litebus::Future<messages::StartInstanceResponse> SupervisorExecutor::OnStartRunt
 
     // On start runtime
     auto runtimeID = info.runtimeid();
-    YRLOG_INFO("on start runtime({}) with sandbox({})", runtimeID, response.id());
+    YRLOG_INFO("{}|on start runtime in sandbox({})", runtimeID, response.id());
 
     auto startInstanceResponse = GenSuccessStartInstanceResponse(request, response.id());
     return litebus::Async(GetAID(), &SupervisorExecutor::OnStartInstanceCompleted, runtimeID, startInstanceResponse);
