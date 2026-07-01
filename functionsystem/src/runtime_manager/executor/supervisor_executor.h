@@ -94,11 +94,7 @@ private:
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &language, const Envs &envs,
         const std::vector<std::string> &args);
 
-    litebus::Future<messages::StartInstanceResponse> OnStartRuntime(
-        const runtime::v1::StartResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request);
-
-    litebus::Future<std::string> CreateSandbox(const std::string &runtimeID,
-                                               const std::string &hostUser = "");
+    litebus::Future<std::string> CreateSandbox(const std::string &runtimeID, const std::string &hostUser = "");
     litebus::Future<runtime::v1::DeleteResponse> DoDeleteSandbox(
         const std::shared_ptr<runtime::v1::DeleteRequest> &req);
 
@@ -119,7 +115,7 @@ private:
 
     void ParseResponse(litebus::Promise<nlohmann::json> promise, std::string response);
     litebus::Future<nlohmann::json> SendRequestToSupervisor(const std::string &method, const std::string &path,
-                                                            const nlohmann::json &body);
+                                                            const nlohmann::json &body = nlohmann::json::object());
     int ConnectUdsSocket(const std::string &socketPath);
     std::string BuildUdsHttpRequest(const std::string &method, const std::string &path, const std::string &body);
 };
