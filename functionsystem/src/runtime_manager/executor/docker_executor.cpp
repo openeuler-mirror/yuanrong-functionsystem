@@ -29,6 +29,7 @@
 #include "async/asyncafter.hpp"
 #include "common/constants/constants.h"
 #include "common/logs/logging.h"
+#include "common/resource_view/resource_type.h"
 #include "common/utils/collect_status.h"
 #include "common/utils/exec_utils.h"
 #include "common/utils/files.h"
@@ -61,6 +62,8 @@ constexpr size_t HTTP_STATUS_CODE_LEN = 3;
 constexpr int CPU_SHARES_PER_CORE = 1024;       // Docker CPUShares: 1024 = 1 core
 constexpr int CPU_RESOURCE_SCALE = 1000;        // CPU resource is in milli-cores (1000 = 1 core)
 constexpr int64_t BYTES_PER_MB = 1024 * 1024;    // Docker Memory is in bytes; input is MB
+constexpr int64_t NANOCPUS_PER_MILLICORE = 1000000;  // 1 milli-core = 1000000 NanoCpus
+constexpr int DEFAULT_PIDS_LIMIT = 4096;             // Max processes per container
 
 
 DockerExecutor::DockerExecutor(const std::string &name, const litebus::AID &functionAgentAID)
@@ -394,40 +397,22 @@ nlohmann::json DockerExecutor::BuildHostConfig(const ContainerCreateSpec &spec) 
     hostConfig["AutoRemove"] = false;
     hostConfig["NetworkMode"] = "bridge";
 
-    // Binds (volume mounts)
     auto binds = nlohmann::json::array();
     for (const auto &m : spec.bindMounts) {
         binds.push_back(m);
     }
     hostConfig["Binds"] = binds;
 
-    // PortBindings: "containerPort/proto" -> hostPort
     nlohmann::json portBindingsJson = nlohmann::json::object();
-    nlohmann::json exposedPorts = nlohmann::json::object();
     for (const auto &pb : spec.portBindings) {
         nlohmann::json binding = nlohmann::json::array();
         binding.push_back({{"HostPort", pb.second}});
         portBindingsJson[pb.first] = binding;
-        exposedPorts[pb.first] = nlohmann::json::object();
     }
     hostConfig["PortBindings"] = portBindingsJson;
 
-    // Resources: CPUShares (1024 = 1 core; cpu in milli-cores) and Memory (MB -> bytes)
-    double cpu = DEFAULT_CPU_RESOURCE;
-    double memory = DEFAULT_MEMORY_RESOURCE;
-    if (spec.resources.find("cpu") != spec.resources.end()) {
-        cpu = spec.resources.at("cpu");
-    }
-    if (spec.resources.find("memory") != spec.resources.end()) {
-        memory = spec.resources.at("memory");
-    }
-    nlohmann::json resourcesJson = nlohmann::json::object();
-    resourcesJson["CPUShares"] = static_cast<int>(cpu * CPU_SHARES_PER_CORE / CPU_RESOURCE_SCALE);
-    resourcesJson["Memory"] = static_cast<int64_t>(memory * BYTES_PER_MB);
-    resourcesJson["MemorySwap"] = static_cast<int64_t>(memory * BYTES_PER_MB);  // No swap
-    hostConfig["Resources"] = resourcesJson;
+    BuildHostConfigResources(hostConfig, spec.resources);
 
-    // LogConfig
     nlohmann::json logConfig = nlohmann::json::object();
     logConfig["Type"] = "json-file";
     nlohmann::json logConfigConfig = nlohmann::json::object();
@@ -437,6 +422,38 @@ nlohmann::json DockerExecutor::BuildHostConfig(const ContainerCreateSpec &spec) 
     hostConfig["LogConfig"] = logConfig;
 
     return hostConfig;
+}
+
+void DockerExecutor::BuildHostConfigResources(nlohmann::json &hostConfig,
+    const std::map<std::string, double> &resources) const
+{
+    double cpu = DEFAULT_CPU_RESOURCE;
+    double memory = DEFAULT_MEMORY_RESOURCE;
+    double cpuLimit = 0;
+    double memLimit = 0;
+    if (resources.find("cpu") != resources.end()) {
+        cpu = resources.at("cpu");
+    }
+    if (resources.find("memory") != resources.end()) {
+        memory = resources.at("memory");
+    }
+    if (resources.find("cpu_limit") != resources.end()) {
+        cpuLimit = resources.at("cpu_limit");
+    }
+    if (resources.find("memory_limit") != resources.end()) {
+        memLimit = resources.at("memory_limit");
+    }
+    hostConfig["CpuShares"] = static_cast<int>(cpu * CPU_SHARES_PER_CORE / CPU_RESOURCE_SCALE);
+    if (cpuLimit > 0) {
+        hostConfig["NanoCpus"] = static_cast<int64_t>(cpuLimit) * NANOCPUS_PER_MILLICORE;
+    }
+    hostConfig["Memory"] = static_cast<int64_t>(memory * BYTES_PER_MB);
+    if (memLimit > 0) {
+        hostConfig["MemorySwap"] = static_cast<int64_t>(memLimit * BYTES_PER_MB);
+    } else {
+        hostConfig["MemorySwap"] = static_cast<int64_t>(memory * BYTES_PER_MB);
+    }
+    hostConfig["PidsLimit"] = DEFAULT_PIDS_LIMIT;
 }
 
 nlohmann::json DockerExecutor::BuildCreateContainerRequest(const ContainerCreateSpec &spec)
@@ -785,12 +802,20 @@ bool DockerExecutor::BuildPortBindings(const messages::RuntimeInstanceInfo &info
 std::map<std::string, double> DockerExecutor::BuildResources(const messages::RuntimeInstanceInfo &info) const
 {
     std::map<std::string, double> resources;
-    const auto &runtimeResources = info.runtimeconfig().resources();
-    if (runtimeResources.resources().find("cpu") != runtimeResources.resources().end()) {
-        resources["cpu"] = runtimeResources.resources().at("cpu").scalar().value();
+    const auto &runtimeResources = info.runtimeconfig().resources().resources();
+    if (runtimeResources.find(functionsystem::resource_view::CPU_RESOURCE_NAME) != runtimeResources.end()) {
+        const auto &scalar = runtimeResources.at(functionsystem::resource_view::CPU_RESOURCE_NAME).scalar();
+        resources["cpu"] = scalar.value();
+        if (scalar.limit() > 0) {
+            resources["cpu_limit"] = scalar.limit();
+        }
     }
-    if (runtimeResources.resources().find("memory") != runtimeResources.resources().end()) {
-        resources["memory"] = runtimeResources.resources().at("memory").scalar().value();
+    if (runtimeResources.find(functionsystem::resource_view::MEMORY_RESOURCE_NAME) != runtimeResources.end()) {
+        const auto &scalar = runtimeResources.at(functionsystem::resource_view::MEMORY_RESOURCE_NAME).scalar();
+        resources["memory"] = scalar.value();
+        if (scalar.limit() > 0) {
+            resources["memory_limit"] = scalar.limit();
+        }
     }
     return resources;
 }

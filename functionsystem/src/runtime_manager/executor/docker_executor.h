@@ -93,6 +93,9 @@ private:
     // Build CPU/memory resources map from runtime config.
     std::map<std::string, double> BuildResources(const messages::RuntimeInstanceInfo &info) const;
 
+    // Build Docker HostConfig resources (CpuShares, NanoCpus, Memory, MemorySwap, PidsLimit).
+    void BuildHostConfigResources(nlohmann::json &hostConfig, const std::map<std::string, double> &resources) const;
+
     // Parse a /containers/create response into a container ID, or empty string on failure.
     std::string ParseCreateContainerResponse(const nlohmann::json &resp, const std::string &runtimeID);
 
