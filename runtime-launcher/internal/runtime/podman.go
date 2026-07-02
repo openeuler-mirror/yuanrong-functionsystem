@@ -60,6 +60,10 @@ func (p *PodmanRuntime) Stats(ctx context.Context, containerID string) (*Contain
 	return p.inner.Stats(ctx, containerID)
 }
 
+func (p *PodmanRuntime) List(ctx context.Context, id string) ([]*ContainerInfo, error) {
+	return p.inner.List(ctx, id)
+}
+
 func (p *PodmanRuntime) Close() error {
 	return p.inner.Close()
 }

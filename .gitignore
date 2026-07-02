@@ -20,6 +20,7 @@ bazel-*
 
 ### protobuf
 *.pb.go
+!runtime-launcher/api/proto/runtime/v1/*.pb.go
 *_pb.js
 *_pb2.py
 
