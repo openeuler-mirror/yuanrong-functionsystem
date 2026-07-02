@@ -16,6 +16,9 @@
 
 #include "runtime_manager.h"
 
+#include <algorithm>
+#include <cctype>
+
 #include "async/async.hpp"
 #include "async/defer.hpp"
 #include "async/future.hpp"
@@ -30,6 +33,7 @@
 #include "executor/docker_executor.h"
 #include "executor/runtime_executor.h"
 #include "executor/sandbox/sandbox_executor.h"
+#include "executor/sandboxd/sandboxd_executor.h"
 #include "executor/supervisor_executor.h"
 #include "port/port_manager.h"
 #include "runtime_manager/executor/executor.h"
@@ -37,6 +41,44 @@
 namespace functionsystem::runtime_manager {
 const uint32_t HALF = 2;
 const uint32_t MAX_REGISTER_RETRY_TIMES = 30;
+
+// UseSandboxdBackend selects the sandboxd-backed SandboxdExecutor (talks to the
+// runtime.v1.SandboxService) instead of the legacy runc SandboxExecutor for
+// container-type instances. sandboxd is the default backend when
+// YR_RUNTIME_BACKEND is absent or empty. Explicit legacy opt-out values keep the
+// old SandboxExecutor path for deployments that still provide a legacy-compatible
+// endpoint.
+bool UseSandboxdBackend()
+{
+    static const bool enabled = []() {
+        auto envOpt = litebus::os::GetEnv("YR_RUNTIME_BACKEND");
+        if (envOpt.IsNone() || envOpt.Get().empty()) {
+            return true;
+        }
+        auto v = envOpt.Get();
+        auto isNotSpace = [](unsigned char c) { return !std::isspace(c); };
+        v.erase(v.begin(), std::find_if(v.begin(), v.end(), isNotSpace));
+        v.erase(std::find_if(v.rbegin(), v.rend(), isNotSpace).base(), v.end());
+        std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (v.empty()) {
+            return true;
+        }
+        if (v == "container" || v == "runc" || v == "legacy" || v == "false" || v == "0") {
+            return false;
+        }
+        // sandboxd is the default; unknown non-empty values must not silently
+        // fall back to the legacy container path.
+        return true;
+    }();
+    return enabled;
+}
+
+// ContainerExecutorType resolves which container executor type is active for the
+// current process: SANDBOXD when the sandboxd backend is enabled, else CONTAINER.
+EXECUTOR_TYPE ContainerExecutorType()
+{
+    return UseSandboxdBackend() ? EXECUTOR_TYPE::SANDBOXD : EXECUTOR_TYPE::CONTAINER;
+}
 RuntimeManager::RuntimeManager(const std::string &name, bool logReuse) : ActorBase(name), logReuse_(logReuse)
 {
 }
@@ -112,8 +154,15 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
     if (CheckInstanceIsDeployed(from, instance)) {
         return;
     }
-    auto type = request->type();
-    auto executor = FindExecutor(static_cast<EXECUTOR_TYPE>(type));
+    // Route through the active backend: a CONTAINER request must resolve via
+    // ContainerExecutorType() (CONTAINER->SANDBOXD under YR_RUNTIME_BACKEND=sandboxd),
+    // matching GetRuntimeType()/ReconcileRuntimes(). Using the raw request type here
+    // created a SandboxExecutor with a null containerd_ client and crashed in DoStart.
+    auto type = static_cast<EXECUTOR_TYPE>(request->type());
+    if (type == EXECUTOR_TYPE::CONTAINER) {
+        type = ContainerExecutorType();
+    }
+    auto executor = FindExecutor(type);
     if (executor == nullptr) {
         YRLOG_ERROR("{}|{}|the type({}) is not supported to start runtime for instance({}).", instance.traceid(),
                     instance.requestid(), request->type(), instance.instanceid());
@@ -330,8 +379,8 @@ void RuntimeManager::SnapshotRuntime(const litebus::AID &from, std::string &&, s
     YRLOG_INFO("{}|received SnapshotRuntime request for instance({}), runtime({})",
                request->requestid(), instanceID, runtimeID);
 
-    // Find executor by runtime type (CONTAINER)
-    auto executor = FindExecutor(EXECUTOR_TYPE::CONTAINER);
+    // Find executor by runtime type (CONTAINER or SANDBOXD backend)
+    auto executor = FindExecutor(GetRuntimeType(runtimeID));
     if (executor == nullptr) {
         YRLOG_ERROR("{}|container executor not found", request->requestid());
         messages::SnapshotRuntimeResponse response;
@@ -361,7 +410,11 @@ void RuntimeManager::SetConfig(const Flags &flags)
 {
     functionAgentAID_ = litebus::AID(FUNCTION_AGENT_AGENT_SERVICE_ACTOR_NAME, flags.GetAgentAddress());
     checkpointDir_ = flags.GetCheckpointDir();
-    for (auto type : {EXECUTOR_TYPE::RUNTIME, EXECUTOR_TYPE::CONTAINER, EXECUTOR_TYPE::SUPERVISOR,
+    // Configure the process-local runtime executor plus the active container
+    // executor (SANDBOXD when enabled, else CONTAINER), while preserving
+    // explicit supervisor/docker executors used by the master-side branch.
+    auto containerType = ContainerExecutorType();
+    for (auto type : {EXECUTOR_TYPE::RUNTIME, containerType, EXECUTOR_TYPE::SUPERVISOR,
                       EXECUTOR_TYPE::DOCKER}) {
         auto executor = FindExecutor(type);
         YRLOG_INFO("SetRuntimeConfig for type({})", fmt::underlying(type));
@@ -476,6 +529,9 @@ std::string RuntimeManager::GetExecutorUnavailableMessage(EXECUTOR_TYPE type)
     if (type == EXECUTOR_TYPE::DOCKER) {
         return "docker service is not ready, please check whether the Docker daemon is abnormal";
     }
+    if (type == EXECUTOR_TYPE::SANDBOXD) {
+        return "sandboxd service is not ready, please check whether the service is abnormal";
+    }
     return "unknown instance type, cannot start instance";
 }
 
@@ -493,6 +549,8 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::FindExecutor(EXECUTOR_TYPE type)
             return CreateSupervisorExecutor();
         case EXECUTOR_TYPE::DOCKER:
             return CreateDockerExecutor();
+        case EXECUTOR_TYPE::SANDBOXD:
+            return CreateSandboxdExecutor();
         default:
             return nullptr;
     }
@@ -551,6 +609,19 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::CreateDockerExecutor()
     litebus::Spawn(executor, false);
     auto executorProxy = std::make_shared<DockerExecutorProxy>(executor);
     (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::DOCKER, executorProxy));
+    return executorProxy;
+}
+
+std::shared_ptr<ExecutorProxy> RuntimeManager::CreateSandboxdExecutor()
+{
+    YRLOG_INFO("create a sandboxd executor.");
+    auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
+    const std::string name = "RuntimeExecutor_" + uuid.ToString();
+    auto executor = std::make_shared<SandboxdExecutor>(name, functionAgentAID_, checkpointDir_);
+    executor->SetHealthCheckClient(healthCheckClient_);
+    litebus::Spawn(executor, false);
+    auto executorProxy = std::make_shared<SandboxdExecutorProxy>(executor);
+    (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::SANDBOXD, executorProxy));
     return executorProxy;
 }
 
@@ -1218,7 +1289,7 @@ EXECUTOR_TYPE RuntimeManager::GetRuntimeType(const std::string &runtimeID)
                 return executorType;
             }
         }
-        return EXECUTOR_TYPE::CONTAINER;
+        return ContainerExecutorType();
     }
 
     const auto response = instanceResponseMap_.find(instance->second.instanceid());
@@ -1234,7 +1305,7 @@ void RuntimeManager::ReconcileRuntimes(const litebus::AID &from, std::string &&,
         YRLOG_ERROR("failed to parse ReconcileRuntimesRequest");
         return;
     }
-    auto executor = FindExecutor(EXECUTOR_TYPE::CONTAINER);
+    auto executor = FindExecutor(ContainerExecutorType());
     if (executor == nullptr) {
         YRLOG_WARN("{}|no container executor available for ReconcileRuntimes", request->requestid());
         messages::ReconcileRuntimesResponse resp;

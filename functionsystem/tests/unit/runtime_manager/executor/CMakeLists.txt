@@ -25,3 +25,4 @@ set(EXECUTOR_SRCS
 
 target_sources(${UNIT_TEST_MODULE} PRIVATE ${EXECUTOR_SRCS})
 add_subdirectory(sandbox)
+add_subdirectory(sandboxd)

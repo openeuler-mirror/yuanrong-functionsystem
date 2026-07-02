@@ -24,11 +24,34 @@ type ContainerRuntime interface {
 	// Stats 返回容器资源使用统计（CPU 累积纳秒、内存字节）。
 	Stats(ctx context.Context, containerID string) (*ContainerStats, error)
 
+	// List 返回后端中由 runtime-launcher 管理的 sandbox/container。
+	List(ctx context.Context, id string) ([]*ContainerInfo, error)
+
 	// Close 在服务关闭时执行清理。
 	Close() error
 }
 
 // ContainerStats 容器资源使用统计。
+// ContainerInfo 是后端权威列表中的 sandbox/container 元数据。
+type ContainerInfo struct {
+	ID         string
+	RuntimeID  string
+	Image      string
+	Command    []string
+	Labels     map[string]string
+	State      string
+	StartedAt  int64
+	FinishedAt int64
+	ExitCode   int32
+	Message    string
+}
+
+const (
+	ManagedLabelKey   = "yr.runtime-launcher"
+	ManagedLabelValue = "true"
+	RuntimeIDLabelKey = "yr.runtime-id"
+)
+
 type ContainerStats struct {
 	// CPUUsageNs 累积 CPU 用量（纳秒），单调递增。调用方对相邻两次快照做差分得到利用率。
 	CPUUsageNs uint64
@@ -71,6 +94,9 @@ type CreateConfig struct {
 	// 网络配置
 	Network string // 网络模式：host, bridge, none 等，默认 host
 	Ports   []string
+
+	// Labels are sandbox metadata labels carried through to backend labels.
+	Labels map[string]string
 }
 
 // MountConfig 对应 proto Mount 消息。

@@ -181,6 +181,7 @@ private:
     std::shared_ptr<ExecutorProxy> CreateContainerExecutor();
     std::shared_ptr<ExecutorProxy> CreateSupervisorExecutor();
     std::shared_ptr<ExecutorProxy> CreateDockerExecutor();
+    std::shared_ptr<ExecutorProxy> CreateSandboxdExecutor();
 
     // Human-readable message for an executor type whose daemon/service is not ready.
     static std::string GetExecutorUnavailableMessage(EXECUTOR_TYPE type);

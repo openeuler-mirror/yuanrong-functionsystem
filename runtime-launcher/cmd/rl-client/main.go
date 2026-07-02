@@ -17,8 +17,8 @@ import (
 
 func main() {
 	// 命令行参数
-	socketPath := flag.String("socket", "/var/run/runtime-launcher.sock", "RuntimeLauncher UDS 路径")
-	action := flag.String("action", "run", "操作: run | start | wait | delete | register | unregister | list")
+	socketPath := flag.String("socket", "/var/run/runtime-launcher.sock", "SandboxService UDS 路径")
+	action := flag.String("action", "run", "操作: run | start | wait | delete | register | unregister | list | list-sandboxes | list-registered")
 	imageFlag := flag.String("image", "", "容器镜像（必填，用于 run/start）")
 	cmdFlag := flag.String("cmd", "", "容器内执行的命令（如 'echo hello'）")
 	mountFlag := flag.String("mount", "", "挂载，格式: 源路径:目标路径[:ro]，多个用逗号分隔")
@@ -43,7 +43,7 @@ func main() {
 	}
 	defer conn.Close()
 
-	client := pb.NewRuntimeLauncherClient(conn)
+	client := pb.NewSandboxServiceClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -61,16 +61,18 @@ func main() {
 		doRegister(ctx, client, *imageFlag, *idFlag, *cmdFlag, *envFlag)
 	case "unregister":
 		doUnregister(ctx, client, *idFlag)
-	case "list":
-		doList(ctx, client)
+	case "list", "list-sandboxes":
+		doListSandboxes(ctx, client)
+	case "list-registered":
+		doListRegistered(ctx, client)
 	default:
-		fmt.Fprintf(os.Stderr, "未知操作: %s\n可选: run, start, wait, delete, register, unregister, list\n", *action)
+		fmt.Fprintf(os.Stderr, "未知操作: %s\n可选: run, start, wait, delete, register, unregister, list, list-sandboxes, list-registered\n", *action)
 		os.Exit(1)
 	}
 }
 
 // doRun 执行完整的容器生命周期：start -> wait -> delete
-func doRun(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd, mounts, envs, network, ports string, cpu, mem float64, timeout int64) {
+func doRun(ctx context.Context, client pb.SandboxServiceClient, image, cmd, mounts, envs, network, ports string, cpu, mem float64, timeout int64) {
 	if image == "" {
 		log.Fatal("--image 参数必填")
 	}
@@ -102,14 +104,14 @@ func doRun(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd, mou
 	}
 }
 
-func doStart(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd, mounts, envs, network, ports string, cpu, mem float64) {
+func doStart(ctx context.Context, client pb.SandboxServiceClient, image, cmd, mounts, envs, network, ports string, cpu, mem float64) {
 	if image == "" {
 		log.Fatal("--image 参数必填")
 	}
 	mustStart(ctx, client, image, cmd, mounts, envs, network, ports, cpu, mem)
 }
 
-func mustStart(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd, mounts, envs, network, ports string, cpu, mem float64) string {
+func mustStart(ctx context.Context, client pb.SandboxServiceClient, image, cmd, mounts, envs, network, ports string, cpu, mem float64) string {
 	runtimeID := fmt.Sprintf("test-%d", time.Now().UnixNano()%1000000)
 
 	// 构建命令
@@ -160,23 +162,19 @@ func mustStart(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd,
 		}
 	}
 
-	req := &pb.StartRequest{
-		FuncRuntime: &pb.FunctionRuntime{
-			Id:      runtimeID,
-			Sandbox: image,
-			Rootfs: &pb.RootfsConfig{
-				Type: pb.RootfsSrcType_IMAGE,
-			},
-			Command: command,
+	req := &pb.SandboxStartRequest{
+		SandboxId: runtimeID,
+		Runtime:   image,
+		Rootfs: &pb.RootfsConfig{
+			Type:   pb.RootfsSrcType_IMAGE,
+			Source: &pb.RootfsConfig_ImageUrl{ImageUrl: image},
 		},
-		Mounts: mountList,
-		Resources: map[string]float64{
-			"CPU":    cpu,
-			"Memory": mem,
-		},
-		UserEnvs: userEnvs,
-		Network:  network,
-		Ports:    portMappings,
+		Command:   command,
+		Mounts:    mountList,
+		Resources: map[string]float64{"CPU": cpu, "Memory": mem},
+		Envs:      userEnvs,
+		Network:   network,
+		Ports:     portMappings,
 	}
 
 	fmt.Println("--- 启动容器 ---")
@@ -217,7 +215,7 @@ func mustStart(ctx context.Context, client pb.RuntimeLauncherClient, image, cmd,
 	return resp.GetId()
 }
 
-func doWait(ctx context.Context, client pb.RuntimeLauncherClient, id string) {
+func doWait(ctx context.Context, client pb.SandboxServiceClient, id string) {
 	if id == "" {
 		log.Fatal("--id 参数必填")
 	}
@@ -230,7 +228,7 @@ func doWait(ctx context.Context, client pb.RuntimeLauncherClient, id string) {
 		resp.GetExitCode(), resp.GetStatus(), resp.GetMessage())
 }
 
-func doDelete(ctx context.Context, client pb.RuntimeLauncherClient, id string, timeout int64) {
+func doDelete(ctx context.Context, client pb.SandboxServiceClient, id string, timeout int64) {
 	if id == "" {
 		log.Fatal("--id 参数必填")
 	}
@@ -242,7 +240,7 @@ func doDelete(ctx context.Context, client pb.RuntimeLauncherClient, id string, t
 	fmt.Println("容器已删除")
 }
 
-func doRegister(ctx context.Context, client pb.RuntimeLauncherClient, image, id, cmd, envs string) {
+func doRegister(ctx context.Context, client pb.SandboxServiceClient, image, id, cmd, envs string) {
 	if id == "" {
 		id = fmt.Sprintf("reg-%d", time.Now().UnixNano()%1000000)
 	}
@@ -260,13 +258,14 @@ func doRegister(ctx context.Context, client pb.RuntimeLauncherClient, image, id,
 		}
 	}
 
-	req := &pb.RegisterRequest{
-		FuncRuntimes: []*pb.FunctionRuntime{
+	req := &pb.SandboxRegisterRequest{
+		Templates: []*pb.SandboxTemplate{
 			{
-				Id:          id,
-				Sandbox:     image,
-				Command:     command,
-				RuntimeEnvs: runtimeEnvs,
+				Id:      id,
+				Runtime: image,
+				Rootfs:  &pb.RootfsConfig{Type: pb.RootfsSrcType_IMAGE, Source: &pb.RootfsConfig_ImageUrl{ImageUrl: image}},
+				Command: command,
+				Envs:    runtimeEnvs,
 			},
 		},
 	}
@@ -277,31 +276,48 @@ func doRegister(ctx context.Context, client pb.RuntimeLauncherClient, image, id,
 	fmt.Printf("注册结果: success=%v, message=%s\n", resp.GetSuccess(), resp.GetMessage())
 }
 
-func doUnregister(ctx context.Context, client pb.RuntimeLauncherClient, id string) {
+func doUnregister(ctx context.Context, client pb.SandboxServiceClient, id string) {
 	if id == "" {
 		log.Fatal("--id 参数必填")
 	}
 	ids := strings.Split(id, ",")
-	resp, err := client.Unregister(ctx, &pb.UnregisterRequest{Ids: ids})
+	resp, err := client.Unregister(ctx, &pb.SandboxUnregisterRequest{Ids: ids})
 	if err != nil {
 		log.Fatalf("Unregister 失败: %v", err)
 	}
 	fmt.Printf("注销结果: success=%v, message=%s\n", resp.GetSuccess(), resp.GetMessage())
 }
 
-func doList(ctx context.Context, client pb.RuntimeLauncherClient) {
-	resp, err := client.GetRegistered(ctx, &pb.GetRegisteredRequest{})
+func doListSandboxes(ctx context.Context, client pb.SandboxServiceClient) {
+	resp, err := client.List(ctx, &pb.ListSandboxesRequest{})
+	if err != nil {
+		log.Fatalf("List 失败: %v", err)
+	}
+	sandboxes := resp.GetSandboxes()
+	if len(sandboxes) == 0 {
+		fmt.Println("无运行中的 sandbox")
+		return
+	}
+	fmt.Printf("sandboxes（共 %d 个）:\n", len(sandboxes))
+	for i, sb := range sandboxes {
+		fmt.Printf("  [%d] id=%s, runtime=%s, state=%s, exit_code=%d, command=%v\n",
+			i+1, sb.GetId(), sb.GetRuntime(), sb.GetState().String(), sb.GetExitCode(), sb.GetCommand())
+	}
+}
+
+func doListRegistered(ctx context.Context, client pb.SandboxServiceClient) {
+	resp, err := client.GetRegistered(ctx, &pb.SandboxGetRegisteredRequest{})
 	if err != nil {
 		log.Fatalf("GetRegistered 失败: %v", err)
 	}
-	runtimes := resp.GetFuncRuntimes()
-	if len(runtimes) == 0 {
-		fmt.Println("无已注册的运行时")
+	templates := resp.GetTemplates()
+	if len(templates) == 0 {
+		fmt.Println("无已注册的 sandbox template")
 		return
 	}
-	fmt.Printf("已注册的运行时（共 %d 个）:\n", len(runtimes))
-	for i, rt := range runtimes {
-		fmt.Printf("  [%d] id=%s, sandbox=%s, makeSeed=%v, command=%v\n",
-			i+1, rt.GetId(), rt.GetSandbox(), rt.GetMakeSeed(), rt.GetCommand())
+	fmt.Printf("已注册的 sandbox templates（共 %d 个）:\n", len(templates))
+	for i, t := range templates {
+		fmt.Printf("  [%d] id=%s, runtime=%s, makeSeed=%v, command=%v\n",
+			i+1, t.GetId(), t.GetRuntime(), t.GetMakeSeed(), t.GetCommand())
 	}
 }

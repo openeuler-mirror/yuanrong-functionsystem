@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
@@ -85,11 +86,21 @@ func (d *DockerRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, 
 		envList = append(envList, k+"="+v)
 	}
 
+	labels := make(map[string]string, len(cfg.Labels)+2)
+	for k, v := range cfg.Labels {
+		labels[k] = v
+	}
+	labels[ManagedLabelKey] = ManagedLabelValue
+	if cfg.ID != "" {
+		labels[RuntimeIDLabelKey] = cfg.ID
+	}
+
 	// 容器配置
 	containerCfg := &container.Config{
-		Image: imageName,
-		Cmd:   cmd,
-		Env:   envList,
+		Image:  imageName,
+		Cmd:    cmd,
+		Env:    envList,
+		Labels: labels,
 	}
 
 	// 主机配置（资源限制 + 挂载 + 网络）
@@ -227,6 +238,50 @@ func (d *DockerRuntime) Delete(ctx context.Context, containerID string, timeoutS
 
 func (d *DockerRuntime) Close() error {
 	return d.client.Close()
+}
+
+func (d *DockerRuntime) List(ctx context.Context, id string) ([]*ContainerInfo, error) {
+	args := filters.NewArgs(filters.Arg("label", ManagedLabelKey+"="+ManagedLabelValue))
+	containers, err := d.client.ContainerList(ctx, container.ListOptions{All: true, Filters: args})
+	if err != nil {
+		return nil, fmt.Errorf("列出容器失败: %w", err)
+	}
+	infos := make([]*ContainerInfo, 0, len(containers))
+	for _, c := range containers {
+		if id != "" && c.ID != id && !strings.HasPrefix(c.ID, id) {
+			continue
+		}
+		labels := make(map[string]string, len(c.Labels))
+		for k, v := range c.Labels {
+			labels[k] = v
+		}
+		state := strings.ToLower(c.State)
+		exitCode := int32(0)
+		finishedAt := int64(0)
+		if state == "exited" || state == "dead" {
+			finishedAt = c.Created
+		}
+		infos = append(infos, &ContainerInfo{
+			ID:         c.ID,
+			RuntimeID:  labels[RuntimeIDLabelKey],
+			Image:      c.Image,
+			Command:    splitSummaryCommand(c.Command),
+			Labels:     labels,
+			State:      state,
+			StartedAt:  c.Created,
+			FinishedAt: finishedAt,
+			ExitCode:   exitCode,
+			Message:    c.Status,
+		})
+	}
+	return infos, nil
+}
+
+func splitSummaryCommand(command string) []string {
+	if command == "" {
+		return nil
+	}
+	return []string{command}
 }
 
 // Stats 通过 Docker API 获取容器的真实 CPU/内存统计信息。

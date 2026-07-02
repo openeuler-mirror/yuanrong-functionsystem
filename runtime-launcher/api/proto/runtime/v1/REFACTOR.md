@@ -2,7 +2,7 @@
 
 ## 概述
 
-`runtime_launcher.proto` 从面向函数运行时（Function Runtime）的接口设计重构为**面向 Sandbox** 的抽象，同时增强了扩展性并消除了重复定义。
+`runtime_launcher.proto` 已移除；runtime-launcher 现在只从 `proto/posix/sandbox_api.proto` 生成 Go gRPC 代码，避免维护第二份 SandboxService 协议。历史上它曾从面向函数运行时（Function Runtime）的接口重构为面向 Sandbox 的抽象。
 
 | 维度 | 重构前 | 重构后 |
 |------|--------|--------|
@@ -12,6 +12,12 @@
 | RPC 数量 | 8 | 10 |
 
 ---
+
+## Compatibility TODO
+
+当前阶段为了保留旧 `sandbox-executor` / `runtime_launcher_interface.proto` 兼容，`sandbox_api.proto` 仍复用部分旧 message 并对会冲突的 sandboxd message 使用 `Sandbox*` 前缀。
+
+TODO：等旧 `sandbox-executor` 后端从 `runtime_manager` 移除后，把 `proto/posix/sandbox_api.proto` 改成自包含的 sandboxd 原始契约，恢复 `StartRequest` / `RegisterRequest` / `NormalResponse` / `CheckpointRequest` 等原名，并让 runtime-launcher 只从 `sandbox_api.proto` 生成 Go pb。
 
 ## 1. Service 与 RPC 变更
 
