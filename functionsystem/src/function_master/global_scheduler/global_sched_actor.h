@@ -120,6 +120,9 @@ public:
 
     virtual messages::ScheduleTopology FindRootTopologyView();
 
+    // Current leader address (empty if not yet known).
+    std::string GetLeaderAddress();
+
     virtual std::unordered_map<std::string, Node::TreeNode> FindNodes(const uint64_t level);
 
     virtual litebus::Option<std::string> GetLocalAddress(const std::string &name);
@@ -282,6 +285,8 @@ private:
     std::shared_ptr<litebus::Promise<Status>> persisting_;
     litebus::Promise<bool> topoRecovered;
     std::string cacheTopo_;
+    // Current leader address, updated from leader-election callbacks.
+    std::string leaderAddress_;
 };
 
 }  // namespace functionsystem::global_scheduler

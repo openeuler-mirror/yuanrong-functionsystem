@@ -236,6 +236,12 @@ litebus::Future<messages::ScheduleTopology> GlobalSched::QueryRootTopologyView()
     return litebus::Async(globalSchedActor_->GetAID(), &GlobalSchedActor::FindRootTopologyView);
 }
 
+litebus::Future<std::string> GlobalSched::GetLeaderAddress()
+{
+    ASSERT_IF_NULL(globalSchedActor_);
+    return litebus::Async(globalSchedActor_->GetAID(), &GlobalSchedActor::GetLeaderAddress);
+}
+
 void GlobalSched::OnHealthyStatus(const Status &status)
 {
     RETURN_IF_NULL(globalSchedActor_);

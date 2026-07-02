@@ -71,6 +71,8 @@ public:
 
     virtual litebus::Future<messages::ScheduleTopology> QueryRootTopologyView();
 
+    virtual litebus::Future<std::string> GetLeaderAddress();
+
     virtual litebus::Future<Status> EvictAgent(const std::string &localID,
                                                const std::shared_ptr<messages::EvictAgentRequest> &req);
     virtual litebus::Future<Status> UpdateLocalSchedulingStatus(const std::string &localID, bool evicting);

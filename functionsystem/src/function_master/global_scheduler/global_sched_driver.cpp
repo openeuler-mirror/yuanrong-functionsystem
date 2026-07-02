@@ -314,18 +314,31 @@ void ResourcesApiRouter::InitQueryMasterInfoHandler(const std::shared_ptr<Global
         }
 
         YRLOG_INFO("received a request to query master info.");
+        // masterAddress is this node's own address, used only as a fallback. Resolve
+        // the real leader so /masterinfo answered by a slave still points callers
+        // (yr status) at the active function_master.
         return globalSched->QueryRootTopologyView().Then(
-            [masterAddress, metaStoreAddress](
+            [globalSched, masterAddress, metaStoreAddress](
             const messages::ScheduleTopology &scheduleTopo) -> litebus::Future<HttpResponse> {
-                std::string topoStr;
-                google::protobuf::util::JsonOptions options;
-                options.always_print_primitive_fields = false;
-                (void)google::protobuf::util::MessageToJsonString(scheduleTopo, &topoStr, options);
-                nlohmann::json body;
-                body["master_address"] = masterAddress;
-                body["meta_store_address"] = metaStoreAddress;
-                body["schedule_topo"] = nlohmann::json::parse(topoStr);
-                return litebus::http::Ok(body.dump());
+                return globalSched->GetLeaderAddress().Then(
+                    [scheduleTopo, masterAddress, metaStoreAddress](
+                    const std::string &leaderAddress) -> litebus::Future<HttpResponse> {
+                        std::string topoStr;
+                        google::protobuf::util::JsonOptions options;
+                        options.always_print_primitive_fields = false;
+                        (void)google::protobuf::util::MessageToJsonString(scheduleTopo, &topoStr, options);
+                        if (topoStr.empty()) {
+                            topoStr = "{}";
+                        }
+                        const std::string &master = leaderAddress.empty() ? masterAddress : leaderAddress;
+                        // topoStr is already valid JSON; splice it in directly to avoid parsing it
+                        // into a DOM and re-serializing. The string fields still go through nlohmann
+                        // so they are properly escaped.
+                        std::string body = "{\"master_address\":" + nlohmann::json(master).dump()
+                            + ",\"meta_store_address\":" + nlohmann::json(metaStoreAddress).dump()
+                            + ",\"schedule_topo\":" + topoStr + "}";
+                        return litebus::http::Ok(std::move(body));
+                    });
             });
     };
 
