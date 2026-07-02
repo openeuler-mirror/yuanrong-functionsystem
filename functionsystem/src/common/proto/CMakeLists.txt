@@ -24,7 +24,8 @@ set(GRPC_PROTO_SRCS "${PROTO_SRC_PATH}/posix/common.proto"
         "${PROTO_SRC_PATH}/posix/resource.proto"
         "${PROTO_SRC_PATH}/posix/bus_adapter.proto"
         "${PROTO_SRC_PATH}/posix/runtime_launcher_interface.proto"
-        "${PROTO_SRC_PATH}/posix/exec_service.proto")
+        "${PROTO_SRC_PATH}/posix/exec_service.proto"
+        "${PROTO_SRC_PATH}/posix/sandbox_api.proto")
 GENERATE_GRPC_CPP(GRPCPB_SRCS GRPCPB_HDRS ${CMAKE_CURRENT_SOURCE_DIR}/pb/posix
         PROTO_FILES  ${GRPC_PROTO_SRCS}
         SOURCE_ROOT  ${PROTO_SRC_PATH}/posix)

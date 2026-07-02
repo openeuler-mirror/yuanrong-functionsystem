@@ -2,301 +2,124 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"strings"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	pb "runtime-launcher/api/proto/runtime/v1"
 	rt "runtime-launcher/internal/runtime"
 	"runtime-launcher/internal/state"
 )
 
-// LauncherService 实现 RuntimeLauncher gRPC 服务的 8 个 RPC 方法。
+// LauncherService implements sandboxd-compatible runtime.v1.SandboxService.
 type LauncherService struct {
-	pb.UnimplementedRuntimeLauncherServer
+	pb.UnimplementedSandboxServiceServer
 
 	runtime  rt.ContainerRuntime
 	stateMgr *state.Manager
 }
 
-// NewLauncherService 创建 LauncherService 实例。
 func NewLauncherService(runtime rt.ContainerRuntime, stateMgr *state.Manager) *LauncherService {
-	return &LauncherService{
-		runtime:  runtime,
-		stateMgr: stateMgr,
-	}
+	return &LauncherService{runtime: runtime, stateMgr: stateMgr}
 }
 
-// Start 创建并启动一个容器。
-func (s *LauncherService) Start(ctx context.Context, req *pb.StartRequest) (*pb.StartResponse, error) {
-	if req.GetFuncRuntime() == nil {
-		return &pb.StartResponse{Code: 1, Message: "funcRuntime 不能为空"}, nil
+func (s *LauncherService) Start(ctx context.Context, req *pb.SandboxStartRequest) (*pb.StartResponse, error) {
+	if req == nil {
+		return &pb.StartResponse{Code: 1, Message: "sandbox request cannot be nil"}, nil
 	}
+	cfg := buildCreateConfig(req)
+	log.Printf("[service] Start: sandbox_id=%s runtime=%s image=%s", req.GetSandboxId(), req.GetRuntime(), cfg.Sandbox)
+	return s.startWithConfig(ctx, cfg)
+}
 
-	// 如果指定了 ckpt_dir，走 restore 流程：校验检查点目录存在
-	if ckptDir := req.GetCkptDir(); ckptDir != "" {
-		if _, err := os.Stat(ckptDir); os.IsNotExist(err) {
-			return &pb.StartResponse{
-				Code:    1,
-				Message: fmt.Sprintf("检查点目录不存在: %s", ckptDir),
-			}, nil
-		}
-	}
-
-	funcRt := req.GetFuncRuntime()
-	runtimeID := funcRt.GetId()
-
-	// 构建 CreateConfig
-	cfg := s.buildCreateConfig(req)
-
-	// 如果此 runtimeID 已注册（预热），合并注册时的环境变量
-	if regRt, ok := s.stateMgr.GetRegisteredRuntime(runtimeID); ok {
-		for k, v := range regRt.GetRuntimeEnvs() {
-			if _, exists := cfg.Envs[k]; !exists {
-				cfg.Envs[k] = v
-			}
-		}
-	}
-
-	log.Printf("[service] Start: runtimeID=%s, sandbox=%s", runtimeID, cfg.Sandbox)
-
-	// 调用运行时后端创建容器
-	containerID, err := s.runtime.Create(ctx, cfg)
-	if err != nil {
-		log.Printf("[service] Start 失败: %v", err)
-		return &pb.StartResponse{
-			Code:    1,
-			Message: fmt.Sprintf("创建容器失败: %v", err),
-		}, nil
-	}
-
-	// 在状态管理器中记录容器
-	s.stateMgr.AddContainer(containerID, runtimeID)
-
-	// 启动后台 goroutine 监听容器退出
-	go s.watchContainer(containerID)
-
-	return &pb.StartResponse{
-		Code: 0,
-		Id:   containerID,
+func (s *LauncherService) Restore(ctx context.Context, req *pb.RestoreRequest) (*pb.RestoreResponse, error) {
+	_ = ctx
+	_ = req
+	return &pb.RestoreResponse{
+		Code:    1,
+		Message: "restore is not supported by runtime-launcher SandboxService backend",
 	}, nil
 }
 
-// Wait 阻塞直到容器退出，返回退出状态。
+func (s *LauncherService) startWithConfig(ctx context.Context, cfg *rt.CreateConfig) (*pb.StartResponse, error) {
+	containerID, err := s.runtime.Create(ctx, cfg)
+	if err != nil {
+		log.Printf("[service] Start failed: %v", err)
+		return &pb.StartResponse{Code: 1, Message: fmt.Sprintf("create sandbox failed: %v", err)}, nil
+	}
+	runtimeID := cfg.ID
+	if runtimeID == "" {
+		runtimeID = containerID
+	}
+	s.stateMgr.AddContainer(containerID, runtimeID, cfg)
+	go s.watchContainer(containerID)
+	return &pb.StartResponse{Code: 0, Id: containerID}, nil
+}
+
+func (s *LauncherService) Delete(ctx context.Context, req *pb.DeleteRequest) (*pb.DeleteResponse, error) {
+	containerID := req.GetId()
+	if containerID == "" {
+		return &pb.DeleteResponse{}, fmt.Errorf("sandbox id cannot be empty")
+	}
+	log.Printf("[service] Delete: id=%s timeout=%d", containerID, req.GetTimeout())
+	if err := s.runtime.Delete(ctx, containerID, req.GetTimeout()); err != nil {
+		log.Printf("[service] Delete failed: %v", err)
+	}
+	s.stateMgr.RemoveContainer(containerID)
+	return &pb.DeleteResponse{}, nil
+}
+
 func (s *LauncherService) Wait(ctx context.Context, req *pb.WaitRequest) (*pb.WaitResponse, error) {
 	containerID := req.GetId()
 	if containerID == "" {
-		return &pb.WaitResponse{Status: 1, Message: "容器 ID 不能为空"}, nil
+		return &pb.WaitResponse{Status: 1, Message: "sandbox id cannot be empty"}, nil
 	}
-
-	// 检查容器是否存在于状态管理器
 	cs, ok := s.stateMgr.GetContainer(containerID)
 	if !ok {
-		// 容器不在状态管理器中，直接调用运行时 Wait
 		status, err := s.runtime.Wait(ctx, containerID)
 		if err != nil {
 			return &pb.WaitResponse{Status: 1, Message: err.Error()}, nil
 		}
-		return &pb.WaitResponse{
-			Status:   status.StatusCode,
-			ExitCode: status.ExitCode,
-			Message:  status.Message,
-		}, nil
+		return &pb.WaitResponse{Status: status.StatusCode, ExitCode: status.ExitCode, Message: status.Message}, nil
 	}
-
-	// 等待容器退出（通过 DoneCh）
 	select {
 	case <-cs.DoneCh:
-		return &pb.WaitResponse{
-			Status:   0,
-			ExitCode: cs.ExitCode,
-			Message:  cs.ExitMessage,
-		}, nil
-	case <-ctx.Done():
-		return &pb.WaitResponse{Status: 1, Message: "等待超时或被取消"}, nil
-	}
-}
-
-// Delete 停止并删除容器。
-func (s *LauncherService) Delete(ctx context.Context, req *pb.DeleteRequest) (*pb.DeleteResponse, error) {
-	containerID := req.GetId()
-	if containerID == "" {
-		return &pb.DeleteResponse{}, fmt.Errorf("容器 ID 不能为空")
-	}
-
-	log.Printf("[service] Delete: containerID=%s, timeout=%d", containerID, req.GetTimeout())
-
-	err := s.runtime.Delete(ctx, containerID, req.GetTimeout())
-	if err != nil {
-		log.Printf("[service] Delete 失败: %v", err)
-		// 仍然从状态中清理
-	}
-
-	s.stateMgr.RemoveContainer(containerID)
-
-	return &pb.DeleteResponse{}, nil
-}
-
-// Register 将 FunctionRuntime 列表注册到预热注册表。
-func (s *LauncherService) Register(ctx context.Context, req *pb.RegisterRequest) (*pb.NormalResponse, error) {
-	runtimes := req.GetFuncRuntimes()
-	log.Printf("[service] Register: 注册 %d 个运行时", len(runtimes))
-
-	for _, funcRt := range runtimes {
-		s.stateMgr.RegisterRuntime(funcRt)
-		log.Printf("[service] 已注册运行时: id=%s, sandbox=%s, makeSeed=%v",
-			funcRt.GetId(), funcRt.GetSandbox(), funcRt.GetMakeSeed())
-	}
-
-	return &pb.NormalResponse{Success: true, Message: "注册成功"}, nil
-}
-
-// Unregister 从预热注册表中移除指定 ID 的运行时。
-func (s *LauncherService) Unregister(ctx context.Context, req *pb.UnregisterRequest) (*pb.NormalResponse, error) {
-	ids := req.GetIds()
-	log.Printf("[service] Unregister: 注销 %d 个运行时: %s", len(ids), strings.Join(ids, ", "))
-
-	for _, id := range ids {
-		s.stateMgr.UnregisterRuntime(id)
-	}
-
-	return &pb.NormalResponse{Success: true, Message: "注销成功"}, nil
-}
-
-// GetRegistered 返回所有已注册的 FunctionRuntime。
-func (s *LauncherService) GetRegistered(ctx context.Context, req *pb.GetRegisteredRequest) (*pb.GetRegisteredResponse, error) {
-	registered := s.stateMgr.GetAllRegistered()
-	log.Printf("[service] GetRegistered: 返回 %d 个已注册运行时", len(registered))
-
-	return &pb.GetRegisteredResponse{
-		FuncRuntimes: registered,
-	}, nil
-}
-
-// buildCreateConfig 从 proto StartRequest 构建 CreateConfig。
-func (s *LauncherService) buildCreateConfig(req *pb.StartRequest) *rt.CreateConfig {
-	funcRt := req.GetFuncRuntime()
-
-	// 合并环境变量：runtimeEnvs + userEnvs（userEnvs 优先）
-	envs := make(map[string]string)
-	for k, v := range funcRt.GetRuntimeEnvs() {
-		envs[k] = v
-	}
-	for k, v := range req.GetUserEnvs() {
-		envs[k] = v
-	}
-
-	// 转换挂载配置
-	mounts := convertProtoMounts(req.GetMounts())
-
-	// 转换 rootfs 配置
-	rootfs := rt.RootfsConfig{}
-	if funcRt.GetRootfs() != nil {
-		protoRootfs := funcRt.GetRootfs()
-		rootfs.Readonly = protoRootfs.GetReadonly()
-		rootfs.Type = rt.RootfsSrcType(protoRootfs.GetType())
-		rootfs.ImageURL = protoRootfs.GetImageUrl()
-		if protoRootfs.GetS3Config() != nil {
-			rootfs.S3 = &rt.S3Config{
-				Endpoint:        protoRootfs.GetS3Config().GetEndpoint(),
-				Bucket:          protoRootfs.GetS3Config().GetBucket(),
-				Object:          protoRootfs.GetS3Config().GetObject(),
-				AccessKeyID:     protoRootfs.GetS3Config().GetAccessKeyID(),
-				AccessKeySecret: protoRootfs.GetS3Config().GetAccessKeySecret(),
-			}
+		if latest, ok := s.stateMgr.GetContainer(containerID); ok {
+			return &pb.WaitResponse{Status: 0, ExitCode: latest.ExitCode, Message: latest.ExitMessage}, nil
 		}
-	}
-
-	// 提取资源限制
-	cpuMilli := 500.0 // 默认值
-	memMB := 512.0    // 默认值
-	if v, ok := req.GetResources()["CPU"]; ok {
-		cpuMilli = v
-	}
-	if v, ok := req.GetResources()["Memory"]; ok {
-		memMB = v
-	}
-
-	// 网络模式配置，默认使用 host
-	network := req.GetNetwork()
-	if network == "" {
-		network = "bridge"
-	}
-
-	return &rt.CreateConfig{
-		ID:           funcRt.GetId(),
-		Sandbox:      funcRt.GetSandbox(),
-		Rootfs:       rootfs,
-		Command:      funcRt.GetCommand(),
-		Envs:         envs,
-		Mounts:       mounts,
-		CPUMillicore: cpuMilli,
-		MemoryMB:     memMB,
-		Stdout:       req.GetStdout(),
-		Stderr:       req.GetStderr(),
-		ExtraConfig:  req.GetExtraConfig(),
-		MakeSeed:     funcRt.GetMakeSeed(),
-		Network:      network,
-		Ports:        req.GetPorts(),
+		return &pb.WaitResponse{Status: 0, ExitCode: cs.ExitCode, Message: cs.ExitMessage}, nil
+	case <-ctx.Done():
+		return &pb.WaitResponse{Status: 1, Message: "wait timeout or canceled"}, nil
 	}
 }
 
-// Checkpoint 对指定容器创建检查点（mock 实现：在 ckpt_dir 下生成标记文件）。
-func (s *LauncherService) Checkpoint(ctx context.Context, req *pb.CheckpointRequest) (*pb.CheckpointResponse, error) {
-	containerID := req.GetId()
-	ckptDir := req.GetCkptDir()
-
-	if containerID == "" {
-		return &pb.CheckpointResponse{Success: false, Message: "容器 ID 不能为空"}, nil
+func (s *LauncherService) List(ctx context.Context, req *pb.ListSandboxesRequest) (*pb.ListSandboxesResponse, error) {
+	infos, err := s.runtime.List(ctx, req.GetId())
+	if err != nil {
+		log.Printf("[service] List: err=%v", err)
+		return nil, status.Errorf(codes.Internal, "list sandboxes failed: %v", err)
 	}
-	if ckptDir == "" {
-		return &pb.CheckpointResponse{Success: false, Message: "ckpt_dir 不能为空"}, nil
+	statuses := make([]*pb.SandboxStatus, 0, len(infos))
+	for _, info := range infos {
+		status := containerInfoToSandboxStatus(info, s.stateMgr)
+		if !matchesSelector(status.GetLabels(), req.GetSelector()) {
+			continue
+		}
+		statuses = append(statuses, status)
 	}
-
-	log.Printf("[service] Checkpoint(mock): containerID=%s, ckpt_dir=%s", containerID, ckptDir)
-
-	// mock: 创建 ckpt_dir 目录，并写入标记文件
-	if err := os.MkdirAll(ckptDir, 0755); err != nil {
-		return &pb.CheckpointResponse{
-			Success: false,
-			Message: fmt.Sprintf("创建检查点目录失败: %v", err),
-		}, nil
-	}
-
-	markerPath := filepath.Join(ckptDir, "checkpoint.marker")
-	markerContent := fmt.Sprintf("container_id=%s\n", containerID)
-	if err := os.WriteFile(markerPath, []byte(markerContent), 0644); err != nil {
-		return &pb.CheckpointResponse{
-			Success: false,
-			Message: fmt.Sprintf("写入检查点标记文件失败: %v", err),
-		}, nil
-	}
-
-	log.Printf("[service] Checkpoint(mock): 成功，marker=%s", markerPath)
-	return &pb.CheckpointResponse{Success: true, Message: "checkpoint mock 成功"}, nil
+	return &pb.ListSandboxesResponse{Sandboxes: statuses}, nil
 }
 
-// List 返回容器列表。
-func (s *LauncherService) List(ctx context.Context, req *pb.ListContainersRequest) (*pb.ListContainersResponse, error) {
-	log.Printf("[service] List: id=%s", req.GetId())
-	return &pb.ListContainersResponse{}, nil
-}
-
-// Stats 返回容器真实资源使用统计，通过 Docker API 读取 cgroup 数据。
 func (s *LauncherService) Stats(ctx context.Context, req *pb.StatsRequest) (*pb.StatsResponse, error) {
 	id := req.GetId()
-
 	cs, err := s.runtime.Stats(ctx, id)
 	if err != nil {
 		log.Printf("[service] Stats: id=%s err=%v", id, err)
 		return &pb.StatsResponse{}, nil
 	}
-
-	log.Printf("[service] Stats: id=%s cpu_ns=%d mem=%dMiB limit=%dMiB",
-		id, cs.CPUUsageNs, cs.MemoryUsageBytes/1024/1024, cs.MemoryLimitBytes/1024/1024)
-
 	return &pb.StatsResponse{
 		CpuUsageNs:          cs.CPUUsageNs,
 		MemoryUsageBytes:    cs.MemoryUsageBytes,
@@ -305,37 +128,256 @@ func (s *LauncherService) Stats(ctx context.Context, req *pb.StatsRequest) (*pb.
 	}, nil
 }
 
-// Version 返回运行时版本信息。
-func (s *LauncherService) Version(ctx context.Context, req *pb.VersionRequest) (*pb.VersionResponse, error) {
-	return &pb.VersionResponse{
-		Version: "0.1.0",
-		Runtimes: []*pb.RuntimeVersion{
-			{RuntimeName: s.runtime.Name(), RuntimeVersion: "0.1.0"},
-		},
+func (s *LauncherService) Register(ctx context.Context, req *pb.SandboxRegisterRequest) (*pb.SandboxNormalResponse, error) {
+	_ = ctx
+	for _, tmpl := range req.GetTemplates() {
+		s.stateMgr.RegisterTemplate(tmpl)
+		log.Printf("[service] registered template: id=%s runtime=%s makeSeed=%v", tmpl.GetId(), tmpl.GetRuntime(), tmpl.GetMakeSeed())
+	}
+	return &pb.SandboxNormalResponse{Success: true, Message: "registered"}, nil
+}
+
+func (s *LauncherService) Unregister(ctx context.Context, req *pb.SandboxUnregisterRequest) (*pb.SandboxNormalResponse, error) {
+	_ = ctx
+	for _, id := range req.GetIds() {
+		s.stateMgr.UnregisterTemplate(id)
+	}
+	return &pb.SandboxNormalResponse{Success: true, Message: "unregistered"}, nil
+}
+
+func (s *LauncherService) GetRegistered(ctx context.Context, req *pb.SandboxGetRegisteredRequest) (*pb.SandboxGetRegisteredResponse, error) {
+	_ = ctx
+	_ = req
+	return &pb.SandboxGetRegisteredResponse{Templates: s.stateMgr.GetAllRegisteredTemplates()}, nil
+}
+
+func (s *LauncherService) Checkpoint(ctx context.Context, req *pb.SandboxCheckpointRequest) (*pb.SandboxCheckpointResponse, error) {
+	_ = ctx
+	_ = req
+	return &pb.SandboxCheckpointResponse{
+		Success: false,
+		Message: "checkpoint is not supported by runtime-launcher SandboxService backend",
 	}, nil
 }
 
-// convertProtoMounts 将 proto Mount 列表转为内部 MountConfig 列表。
-// proto Mount.Source 为字符串，直接映射到 MountConfig.HostPath。
+func buildCreateConfig(req *pb.SandboxStartRequest) *rt.CreateConfig {
+	id := req.GetSandboxId()
+	if id == "" {
+		id = req.GetEnvs()["YR_RUNTIME_ID"]
+	}
+	rootfs := convertRootfs(req.GetRootfs())
+	sandbox := req.GetRuntime()
+	if rootfs.Type == rt.RootfsSrcImage && rootfs.ImageURL != "" {
+		sandbox = rootfs.ImageURL
+	}
+	cpuMilli := 500.0
+	memMB := 512.0
+	if v, ok := req.GetResources()["CPU"]; ok {
+		cpuMilli = v
+	}
+	if v, ok := req.GetResources()["Memory"]; ok {
+		memMB = v
+	}
+	network := normalizeNetwork(req.GetNetwork())
+	return &rt.CreateConfig{
+		ID:           id,
+		Sandbox:      sandbox,
+		Rootfs:       rootfs,
+		Command:      req.GetCommand(),
+		Envs:         cloneMap(req.GetEnvs()),
+		Mounts:       convertProtoMounts(req.GetMounts()),
+		CPUMillicore: cpuMilli,
+		MemoryMB:     memMB,
+		Stdout:       req.GetStdout(),
+		Stderr:       req.GetStderr(),
+		ExtraConfig:  req.GetExtraConfig(),
+		Network:      network,
+		Ports:        req.GetPorts(),
+		Labels:       cloneMap(req.GetLabels()),
+	}
+}
+
+func normalizeNetwork(network string) string {
+	network = strings.TrimSpace(network)
+	if network == "" || network == "sandbox" {
+		return "bridge"
+	}
+	if strings.HasPrefix(network, "{") {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(network), &payload); err == nil {
+			if mode, ok := payload["mode"].(string); ok && strings.TrimSpace(mode) != "" {
+				return strings.TrimSpace(mode)
+			}
+			// sandboxd callers pass portForwardings as JSON in network while
+			// the actual publish rules are carried in SandboxStartRequest.ports.
+			// Docker expects NetworkMode to be a real mode/name, not the JSON blob.
+			return "bridge"
+		}
+	}
+	return network
+}
+
+func convertRootfs(protoRootfs *pb.RootfsConfig) rt.RootfsConfig {
+	if protoRootfs == nil {
+		return rt.RootfsConfig{}
+	}
+	rootfs := rt.RootfsConfig{Readonly: protoRootfs.GetReadonly(), Type: rt.RootfsSrcType(protoRootfs.GetType())}
+	rootfs.ImageURL = protoRootfs.GetImageUrl()
+	rootfs.S3 = convertS3(protoRootfs.GetS3Config())
+	return rootfs
+}
+
+func convertS3(s3 *pb.S3Config) *rt.S3Config {
+	if s3 == nil {
+		return nil
+	}
+	return &rt.S3Config{
+		Endpoint:        s3.GetEndpoint(),
+		Bucket:          s3.GetBucket(),
+		Object:          s3.GetObject(),
+		AccessKeyID:     s3.GetAccessKeyID(),
+		AccessKeySecret: s3.GetAccessKeySecret(),
+	}
+}
+
+func cloneMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
 func convertProtoMounts(protoMounts []*pb.Mount) []rt.MountConfig {
 	mounts := make([]rt.MountConfig, 0, len(protoMounts))
 	for _, m := range protoMounts {
-		mc := rt.MountConfig{
+		mounts = append(mounts, rt.MountConfig{
 			Type:     m.GetType(),
 			Target:   m.GetTarget(),
 			Options:  m.GetOptions(),
 			HostPath: m.GetHostPath(),
-		}
-		mounts = append(mounts, mc)
+			S3:       convertS3(m.GetS3Config()),
+			ImageURL: m.GetImageUrl(),
+		})
 	}
 	return mounts
 }
 
-// watchContainer 后台监听容器退出，更新状态。
+func containerInfoToSandboxStatus(info *rt.ContainerInfo, stateMgr *state.Manager) *pb.SandboxStatus {
+	labels := sandboxLabels(info)
+	if cs, ok := stateMgr.GetContainer(info.ID); ok {
+		return containerStateToSandboxStatus(cs, labels)
+	}
+	status := pb.SandboxState_SANDBOX_STATE_UNKNOWN
+	switch info.State {
+	case "running":
+		status = pb.SandboxState_SANDBOX_STATE_RUNNING
+	case "exited", "dead":
+		status = pb.SandboxState_SANDBOX_STATE_EXITED
+	}
+	return &pb.SandboxStatus{
+		Id:         info.ID,
+		Command:    append([]string(nil), info.Command...),
+		Runtime:    info.Image,
+		State:      status,
+		StartedAt:  info.StartedAt,
+		FinishedAt: info.FinishedAt,
+		ExitCode:   info.ExitCode,
+		Message:    info.Message,
+		Labels:     labels,
+	}
+}
+
+func sandboxLabels(info *rt.ContainerInfo) map[string]string {
+	labels := make(map[string]string, len(info.Labels)+2)
+	for k, v := range info.Labels {
+		labels[k] = v
+	}
+	if info.RuntimeID != "" {
+		labels[rt.RuntimeIDLabelKey] = info.RuntimeID
+		// Keep the historical helper label for humans/scripts while selectors can
+		// also use the backend-authoritative yr.runtime-id label.
+		labels["runtime_id"] = info.RuntimeID
+	}
+	return labels
+}
+
+func containerStateToSandboxStatus(cs *state.ContainerState, labels map[string]string) *pb.SandboxStatus {
+	status := pb.SandboxState_SANDBOX_STATE_RUNNING
+	if cs.Exited {
+		status = pb.SandboxState_SANDBOX_STATE_EXITED
+	}
+	cfg := cs.Config
+	sandboxStatus := &pb.SandboxStatus{
+		Id:         cs.ID,
+		State:      status,
+		StartedAt:  cs.StartedAt,
+		FinishedAt: cs.FinishedAt,
+		ExitCode:   cs.ExitCode,
+		Message:    cs.ExitMessage,
+		Labels:     labels,
+	}
+	if cfg != nil {
+		sandboxStatus.Command = append([]string(nil), cfg.Command...)
+		sandboxStatus.Runtime = cfg.Sandbox
+		sandboxStatus.Mounts = runtimeMountsToProto(cfg.Mounts)
+		sandboxStatus.Envs = envMapToKeyValues(cfg.Envs)
+		sandboxStatus.Stdout = cfg.Stdout
+		sandboxStatus.Stderr = cfg.Stderr
+		sandboxStatus.Resources = &pb.LinuxSandboxResources{
+			MemoryLimitInBytes: int64(cfg.MemoryMB * 1024 * 1024),
+		}
+		if cfg.CPUMillicore > 0 {
+			sandboxStatus.Resources.CpuPeriod = 100000
+			sandboxStatus.Resources.CpuQuota = int64(cfg.CPUMillicore * 100)
+		}
+	}
+	return sandboxStatus
+}
+
+func runtimeMountsToProto(mounts []rt.MountConfig) []*pb.Mount {
+	result := make([]*pb.Mount, 0, len(mounts))
+	for _, m := range mounts {
+		pm := &pb.Mount{Type: m.Type, Target: m.Target, Options: append([]string(nil), m.Options...)}
+		if m.HostPath != "" {
+			pm.Source = &pb.Mount_HostPath{HostPath: m.HostPath}
+		} else if m.ImageURL != "" {
+			pm.Source = &pb.Mount_ImageUrl{ImageUrl: m.ImageURL}
+		} else if m.S3 != nil {
+			pm.Source = &pb.Mount_S3Config{S3Config: &pb.S3Config{
+				Endpoint:        m.S3.Endpoint,
+				Bucket:          m.S3.Bucket,
+				Object:          m.S3.Object,
+				AccessKeyID:     m.S3.AccessKeyID,
+				AccessKeySecret: m.S3.AccessKeySecret,
+			}}
+		}
+		result = append(result, pm)
+	}
+	return result
+}
+
+func envMapToKeyValues(envs map[string]string) []*pb.KeyValue {
+	result := make([]*pb.KeyValue, 0, len(envs))
+	for k, v := range envs {
+		result = append(result, &pb.KeyValue{Key: k, Value: v})
+	}
+	return result
+}
+
+func matchesSelector(labels, selector map[string]string) bool {
+	for k, v := range selector {
+		if labels[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *LauncherService) watchContainer(containerID string) {
 	status, err := s.runtime.Wait(context.Background(), containerID)
 	if err != nil {
-		log.Printf("[service] 监听容器 %s 退出失败: %v", containerID, err)
+		log.Printf("[service] watch sandbox %s failed: %v", containerID, err)
 		s.stateMgr.MarkExited(containerID, 1, err.Error())
 		return
 	}
