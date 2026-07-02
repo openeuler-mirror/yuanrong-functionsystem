@@ -6,11 +6,11 @@ RuntimeLauncher 是 yuanrong-functionsystem 的容器运行时启动服务，实
 
 ## 构建
 
-在 lwy1 容器中执行：
+在构建环境中执行：
 
 ```bash
 source /etc/profile.d/buildtools.sh
-cd /home/robbluo/code/yuanrong-functionsystem/runtime-launcher
+cd /path/to/yuanrong-functionsystem/runtime-launcher
 
 # 构建服务端
 go build -buildvcs=false -o bin/runtime-launcher ./cmd/runtime-launcher/
