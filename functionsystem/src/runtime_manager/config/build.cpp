@@ -55,6 +55,7 @@ const static std::string METRICS_CONFIG = "METRICS_CONFIG";
 const static std::string METRICS_CONFIG_FILE = "METRICS_CONFIG_FILE";
 const static std::string RUNTIME_METRICS_CONFIG = "RUNTIME_METRICS_CONFIG";
 const static std::string RUNTIME_METRICS_CONFIG_FILE = "RUNTIME_METRICS_CONFIG_FILE";
+const static std::string YR_DATASYSTEM_DEFAULT_WRITE_MODE = "YR_DATASYSTEM_DEFAULT_WRITE_MODE";
 const static std::string DERICT_RUNTIME_SERVER_PORT = "DERICT_RUNTIME_SERVER_PORT";
 const static std::string ENABLE_TRACE = "ENABLE_TRACE";
 const static std::string TRACE_CONFIG = "TRACE_CONFIG";
@@ -339,6 +340,12 @@ void AddYuanRongEnvs(std::map<std::string, std::string> &envs)
 
     auto metricsConfigFileOpt = litebus::os::GetEnv(RUNTIME_METRICS_CONFIG_FILE);
     addIfPresent(METRICS_CONFIG_FILE, metricsConfigFileOpt);
+
+    auto defaultWriteModeOpt = litebus::os::GetEnv(YR_DATASYSTEM_DEFAULT_WRITE_MODE);
+    addIfPresent(YR_DATASYSTEM_DEFAULT_WRITE_MODE, defaultWriteModeOpt);
+    if (!defaultWriteModeOpt.IsNone() && !defaultWriteModeOpt.Get().empty()) {
+        YRLOG_INFO("set runtime env {}={}", YR_DATASYSTEM_DEFAULT_WRITE_MODE, defaultWriteModeOpt.Get());
+    }
 
     auto enableTraceOpt = litebus::os::GetEnv(ENABLE_TRACE);
     addIfEnabled(ENABLE_TRACE, enableTraceOpt);
