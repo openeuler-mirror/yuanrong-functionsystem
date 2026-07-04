@@ -66,6 +66,24 @@ struct SandboxRequestedResources {
     double memoryBytes = 0.0;
 };
 
+// Downstream sandboxd port forwarding only accepts L4 protocols (tcp/udp). L7 portForward schemes (http/https/ws/wss)
+// are normalized to tcp before sending to sandboxd because the underlying mapping is TCP NAT; other schemes are preserved.
+// The portForward written back to instanceinfo keeps the original scheme for sandboxRouter L7 routing.
+std::string ToDownstreamL4Protocol(const std::string &proto)
+{
+    if (proto == "http" || proto == "https" || proto == "ws" || proto == "wss") {
+        return "tcp";
+    }
+    return proto;
+}
+
+std::string ResolveRuntimeLanguage(const messages::RuntimeInstanceInfo &info)
+{
+    std::string language = info.runtimeconfig().language();
+    std::transform(language.begin(), language.end(), language.begin(), ::tolower);
+    return language;
+}
+
 std::string RootfsTypeToLabel(runtime::v1::RootfsSrcType rootfsType)
 {
     switch (rootfsType) {
@@ -316,21 +334,27 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartInstance
         ReportSandboxLifecycleStatus(info, runtimeID, SandboxLifecycleStatus::CREATING);
     }
 
-    std::string language = info.runtimeconfig().language();
-    std::transform(language.begin(), language.end(), language.begin(), ::tolower);
-
     std::string port;
     if (const auto &tls = info.runtimeconfig().tlsconfig(); tls.enableservermode()) {
         port = tls.posixport();
     }
 
-    auto [buildStatus, cmdArgs] = cmdBuilder_.BuildArgs(language, port, *request);
-    if (buildStatus.IsError()) {
-        YRLOG_ERROR("{}|{}|BuildArgs failed for instanceID({}): {}", info.traceid(), info.requestid(),
-                    info.instanceid(), buildStatus.RawMessage());
-        ReportSandboxLifecycleStatus(info, runtimeID, SandboxLifecycleStatus::ABNORMAL);
-        stateManager_.Unregister(runtimeID);
-        return GenFailStartInstanceResponse(request, buildStatus.StatusCode(), buildStatus.GetMessage());
+    CommandArgs cmdArgs;
+    if (HasSelfContainedSandboxBootstrap(request)) {
+        YRLOG_DEBUG("{}|{}|StartInstance: using self-contained bootstrap command without runtime args",
+                    info.traceid(), info.requestid());
+    } else {
+        std::string language = info.runtimeconfig().language();
+        std::transform(language.begin(), language.end(), language.begin(), ::tolower);
+        auto [buildStatus, builtCmdArgs] = cmdBuilder_.BuildArgs(language, port, *request);
+        if (buildStatus.IsError()) {
+            YRLOG_ERROR("{}|{}|BuildArgs failed for instanceID({}): {}", info.traceid(), info.requestid(),
+                        info.instanceid(), buildStatus.RawMessage());
+            ReportSandboxLifecycleStatus(info, runtimeID, SandboxLifecycleStatus::ABNORMAL);
+            stateManager_.Unregister(runtimeID);
+            return GenFailStartInstanceResponse(request, buildStatus.StatusCode(), buildStatus.GetMessage());
+        }
+        cmdArgs = std::move(builtCmdArgs);
     }
 
     RuntimeFeatures features;
@@ -416,10 +440,9 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartWarmUp(
     }
     (*tmpl->mutable_envs())[YR_ONLY_STDOUT] = "true";
 
-    // Set YR_LANGUAGE so entryfile.sh selects the correct language version
-    std::string language = info.runtimeconfig().language();
-    std::transform(language.begin(), language.end(), language.begin(), ::tolower);
-    (*tmpl->mutable_envs())["YR_LANGUAGE"] = language;
+    // YR_LANGUAGE follows the service runtime field. The container runtime is
+    // the sandbox backend (for example runc/runsc), not the user runtime.
+    (*tmpl->mutable_envs())["YR_LANGUAGE"] = ResolveRuntimeLanguage(info);
 
     return DoRegister(registerReq)
         .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnWarmUpRegistered, std::placeholders::_1, request, guard));
@@ -438,6 +461,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnWarmUpRegis
             fmt::format("warmup register failed for instance({}): {}", info.instanceid(), response.message()));
     }
     warmupRuntimes_.insert(runtimeID);
+    registeredTemplateIDs_.insert(runtimeID);
     guard->Commit();
     messages::StartInstanceResponse rsp;
     rsp.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
@@ -496,6 +520,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointR
     params.cmdArgs   = cmdArgs;
     params.envs      = envs;
     params.runtimeID = info.runtimeid();
+    params.registeredTemplateIDs = registeredTemplateIDs_;
 
     auto [status, startReq] = builder.Build(params);
     if (!status.IsOk()) {
@@ -555,6 +580,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartNormal(
     params.cmdArgs   = cmdArgs;
     params.envs      = envs;
     params.runtimeID = request->runtimeinstanceinfo().runtimeid();
+    params.registeredTemplateIDs = registeredTemplateIDs_;
 
     const auto &deployOpts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
     if (auto networkIt = deployOpts.find(CONTAINER_NETWORK); networkIt != deployOpts.end()) {
@@ -565,11 +591,13 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartNormal(
             if (hostPorts.size() == forwardConfigs.size()) {
                 json portJson = json::array();
                 for (size_t i = 0; i < forwardConfigs.size(); ++i) {
-                    std::string mapping = forwardConfigs[i].protocol + ":" +
-                                         std::to_string(hostPorts[i]) + ":" +
-                                         std::to_string(forwardConfigs[i].containerPort);
-                    params.portMappings.push_back(mapping);
-                    portJson.push_back(mapping);
+                    const std::string hostPort = std::to_string(hostPorts[i]);
+                    const std::string containerPort = std::to_string(forwardConfigs[i].containerPort);
+                    const std::string &scheme = forwardConfigs[i].protocol;
+                    // Send L4 protocol to downstream sandboxd (http/https/ws/wss -> tcp, original tcp unchanged), otherwise sandboxd rejects it.
+                    params.portMappings.push_back(ToDownstreamL4Protocol(scheme) + ":" + hostPort + ":" + containerPort);
+                    // Write back portForward (-> instanceinfo -> sandboxrouter) with the original scheme for L7 routing.
+                    portJson.push_back(scheme + ":" + hostPort + ":" + containerPort);
                 }
                 stateManager_.UpdatePortMappings(params.runtimeID, portJson.dump());
             }
@@ -722,6 +750,7 @@ litebus::Future<Status> SandboxdExecutor::OnWarmUpUnregistered(
         return Status(StatusCode::RUNTIME_MANAGER_WARMUP_FAILURE);
     }
     warmupRuntimes_.erase(runtimeID);
+    registeredTemplateIDs_.erase(runtimeID);
     YRLOG_INFO("{}|warm-up unregistered for ({})", requestID, runtimeID);
     return Status::OK();
 }
@@ -1122,8 +1151,12 @@ void SandboxdExecutor::Sync()
     if (!sandboxd_) {
         return;
     }
-    // Discover running sandboxes and resume Wait for them. The legacy
-    // GetRegistered warm-up sync is dropped: SandboxService has no such RPC.
+    // Sync registered templates first. Start requests only carry template_id
+    // for IDs that sandboxd confirms as registered; otherwise production
+    // sandboxd rejects the start.
+    DoGetRegistered();
+
+    // Discover running sandboxes and resume Wait for them.
     DoList().Then([aid(GetAID())](const runtime::v1::ListSandboxesResponse &listResp) -> litebus::Future<Status> {
         int resumed = 0;
         for (const auto &sandbox : listResp.sandboxes()) {
@@ -1216,6 +1249,29 @@ litebus::Future<runtime::v1::SandboxNormalResponse> SandboxdExecutor::DoUnregist
             err.set_success(false);
             err.set_message("Unregister gRPC failed: " + status.RawMessage());
             return err;
+        });
+}
+
+litebus::Future<runtime::v1::SandboxGetRegisteredResponse> SandboxdExecutor::DoGetRegistered()
+{
+    ASSERT_IF_NULL(sandboxd_);
+    auto req = std::make_shared<runtime::v1::SandboxGetRegisteredRequest>();
+    auto resp = std::make_shared<runtime::v1::SandboxGetRegisteredResponse>();
+    return sandboxd_
+        ->CallAsyncX("GetRegistered", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncGetRegistered)
+        .Then([this, resp](const Status &status) -> litebus::Future<runtime::v1::SandboxGetRegisteredResponse> {
+            if (!status.IsOk()) {
+                YRLOG_WARN("GetRegistered gRPC failed: {}", status.RawMessage());
+                return runtime::v1::SandboxGetRegisteredResponse{};
+            }
+            registeredTemplateIDs_.clear();
+            for (const auto &tmpl : resp->templates()) {
+                if (!tmpl.id().empty()) {
+                    registeredTemplateIDs_.insert(tmpl.id());
+                }
+            }
+            YRLOG_INFO("GetRegistered synced {} sandbox templates", registeredTemplateIDs_.size());
+            return *resp;
         });
 }
 

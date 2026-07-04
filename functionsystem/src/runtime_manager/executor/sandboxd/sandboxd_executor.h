@@ -234,6 +234,7 @@ private:
         const std::shared_ptr<runtime::v1::SandboxRegisterRequest> &req);
     litebus::Future<runtime::v1::SandboxNormalResponse> DoUnregister(
         const std::shared_ptr<runtime::v1::SandboxUnregisterRequest> &req);
+    litebus::Future<runtime::v1::SandboxGetRegisteredResponse> DoGetRegistered();
     litebus::Future<runtime::v1::RestoreResponse> DoRestore(
         const std::shared_ptr<messages::StartInstanceRequest> &request,
         const std::shared_ptr<runtime::v1::RestoreRequest> &req);
@@ -331,6 +332,7 @@ private:
     std::shared_ptr<SandboxdCheckpointOrchestrator> ckptOrch_;
     // runtimeIDs registered as warm-up templates (route StopInstance -> Unregister)
     std::unordered_set<std::string> warmupRuntimes_;
+    std::unordered_set<std::string> registeredTemplateIDs_;
     litebus::AID functionAgentAID_;
     bool reconnecting_ = false;
     bool synced_       = false;

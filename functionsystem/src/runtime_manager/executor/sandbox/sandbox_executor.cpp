@@ -45,6 +45,26 @@ namespace functionsystem::runtime_manager {
 using json = nlohmann::json;
 
 namespace {
+// Downstream sandboxd port forwarding only accepts L4 protocols (tcp/udp). L7 portForward schemes (http/https/ws/wss)
+// are normalized to tcp before sending to sandboxd because the underlying mapping is TCP NAT; other schemes (tcp/udp, etc.) are preserved.
+// The portForward written back to instanceinfo keeps the original scheme for sandboxRouter L7 routing.
+std::string ToDownstreamL4Protocol(const std::string &proto)
+{
+    if (proto == "http" || proto == "https" || proto == "ws" || proto == "wss") {
+        return "tcp";
+    }
+    return proto;
+}
+
+std::string ResolveRuntimeLanguage(const messages::RuntimeInstanceInfo &info)
+{
+    std::string language = info.runtimeconfig().language();
+    std::transform(language.begin(), language.end(), language.begin(), ::tolower);
+    return language;
+}
+}  // namespace
+
+namespace {
 constexpr int64_t DEFAULT_GRACEFUL_SHUTDOWN         = 5;
 constexpr int64_t RECONNECT_INTERVAL_MS             = 5000;
 // Backoff bounds for ReconcileRuntimes when containerd is still connecting.
@@ -330,21 +350,27 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::StartInstance(
         ReportSandboxLifecycleStatus(info, runtimeID, SandboxLifecycleStatus::CREATING);
     }
 
-    std::string language = info.runtimeconfig().language();
-    std::transform(language.begin(), language.end(), language.begin(), ::tolower);
-
     std::string port;
     if (const auto &tls = info.runtimeconfig().tlsconfig(); tls.enableservermode()) {
         port = tls.posixport();
     }
 
-    auto [buildStatus, cmdArgs] = cmdBuilder_.BuildArgs(language, port, *request);
-    if (buildStatus.IsError()) {
-        YRLOG_ERROR("{}|{}|BuildArgs failed for instanceID({}): {}", info.traceid(), info.requestid(),
-                    info.instanceid(), buildStatus.RawMessage());
-        ReportSandboxLifecycleStatus(info, runtimeID, SandboxLifecycleStatus::ABNORMAL);
-        stateManager_.Unregister(runtimeID);
-        return GenFailStartInstanceResponse(request, buildStatus.StatusCode(), buildStatus.GetMessage());
+    CommandArgs cmdArgs;
+    if (HasSelfContainedSandboxBootstrap(request)) {
+        YRLOG_DEBUG("{}|{}|StartInstance: using self-contained bootstrap command without runtime args",
+                    info.traceid(), info.requestid());
+    } else {
+        std::string language = info.runtimeconfig().language();
+        std::transform(language.begin(), language.end(), language.begin(), ::tolower);
+        auto [buildStatus, builtCmdArgs] = cmdBuilder_.BuildArgs(language, port, *request);
+        if (buildStatus.IsError()) {
+            YRLOG_ERROR("{}|{}|BuildArgs failed for instanceID({}): {}", info.traceid(), info.requestid(),
+                        info.instanceid(), buildStatus.RawMessage());
+            ReportSandboxLifecycleStatus(info, runtimeID, SandboxLifecycleStatus::ABNORMAL);
+            stateManager_.Unregister(runtimeID);
+            return GenFailStartInstanceResponse(request, buildStatus.StatusCode(), buildStatus.GetMessage());
+        }
+        cmdArgs = std::move(builtCmdArgs);
     }
 
     RuntimeFeatures features;
@@ -417,11 +443,13 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::StartNormal(
             if (hostPorts.size() == forwardConfigs.size()) {
                 json portJson = json::array();
                 for (size_t i = 0; i < forwardConfigs.size(); ++i) {
-                    std::string mapping = forwardConfigs[i].protocol + ":" +
-                                         std::to_string(hostPorts[i]) + ":" +
-                                         std::to_string(forwardConfigs[i].containerPort);
-                    params.portMappings.push_back(mapping);
-                    portJson.push_back(mapping);
+                    const std::string hostPort = std::to_string(hostPorts[i]);
+                    const std::string containerPort = std::to_string(forwardConfigs[i].containerPort);
+                    const std::string &scheme = forwardConfigs[i].protocol;
+                    // Send L4 protocol to downstream sandboxd (http/https/ws/wss -> tcp, original tcp unchanged), otherwise sandboxd rejects it.
+                    params.portMappings.push_back(ToDownstreamL4Protocol(scheme) + ":" + hostPort + ":" + containerPort);
+                    // Write back portForward (-> instanceinfo -> sandboxrouter) with the original scheme for L7 routing.
+                    portJson.push_back(scheme + ":" + hostPort + ":" + containerPort);
                 }
                 stateManager_.UpdatePortMappings(params.runtimeID, portJson.dump());
             }
@@ -507,10 +535,9 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::StartWarmUp(
     }
     (*warmup->mutable_runtimeenvs())[YR_ONLY_STDOUT] = "true";
 
-    // Set YR_LANGUAGE so entryfile.sh selects the correct Python version
-    std::string language = info.runtimeconfig().language();
-    std::transform(language.begin(), language.end(), language.begin(), ::tolower);
-    (*warmup->mutable_runtimeenvs())["YR_LANGUAGE"] = language;
+    // YR_LANGUAGE follows the service runtime field. The container runtime is
+    // the sandbox backend (for example runc/runsc), not the user runtime.
+    (*warmup->mutable_runtimeenvs())["YR_LANGUAGE"] = ResolveRuntimeLanguage(info);
 
     return DoRegisterWarmUp(registerReq)
         .Then(litebus::Defer(GetAID(), &SandboxExecutor::OnWarmUpRegistered, std::placeholders::_1, request,

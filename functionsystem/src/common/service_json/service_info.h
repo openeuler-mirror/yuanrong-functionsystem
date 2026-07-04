@@ -87,6 +87,7 @@ const std::string PYTHON312_RUNTIME_VERSION = "python3.12";
 const std::string PYTHON313_RUNTIME_VERSION = "python3.13";
 const std::string GO_RUNTIME_VERSION = "go1.13";
 const std::string POSIX_CUSTOM_RUNTIME_VERSION = "posix-custom-runtime";
+const std::string RUST_RUNTIME_VERSION = "rust";
 
 const std::string LATEST_VERSION = "$latest";
 

@@ -139,6 +139,27 @@ TEST_F(SandboxRequestBuilderTest, PortMappingsAppliedToStartRequest)
     EXPECT_EQ(startReq->ports().size(), 2);
 }
 
+
+TEST_F(SandboxRequestBuilderTest, SelfContainedBootstrapBuildsWithoutWrapperArgs)
+{
+    auto params = MakeMinimalParams();
+    params.request->mutable_runtimeinstanceinfo()->mutable_runtimeconfig()->set_language("not-a-real-runtime");
+    (*params.request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions())["rootfs"] =
+        R"({"runtime":"runsc","type":"local","path":"/tmp/rootfs.img"})";
+    auto *bootstrap = params.request->mutable_runtimeinstanceinfo()->mutable_bootstrapconfig();
+    bootstrap->set_type("path");
+    bootstrap->set_root("/");
+    bootstrap->set_entrypoint("rrt-runtime");
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk());
+    ASSERT_NE(startReq, nullptr);
+    ASSERT_EQ(startReq->funcruntime().command().size(), 1);
+    EXPECT_EQ(startReq->funcruntime().command(0), "rrt-runtime");
+    EXPECT_EQ(startReq->userenvs().at("YR_LANGUAGE"), "not-a-real-runtime");
+}
+
 // T11-7 (corner case): Build with invalid CONTAINER_ROOTFS JSON → returns error Status
 TEST_F(SandboxRequestBuilderTest, BuildWithInvalidRootfsJsonReturnsError)
 {

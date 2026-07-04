@@ -51,6 +51,7 @@ const std::string PYTHON311_LANGUAGE = "python3.11";
 const std::string PYTHON312_LANGUAGE = "python3.12";
 const std::string PYTHON313_LANGUAGE = "python3.13";
 const std::string POSIX_CUSTOM_RUNTIME = "posix-custom-runtime";
+const std::string RUST_LANGUAGE = "rust";
 
 // this aims to support multiple launcher which orgnized by map
 // key is launcher type name

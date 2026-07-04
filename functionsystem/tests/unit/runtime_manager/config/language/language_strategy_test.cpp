@@ -222,6 +222,23 @@ TEST_F(LanguageStrategyTest, CommandBuilderUnknownLanguageReturnsError)
     EXPECT_FALSE(status.IsOk());
 }
 
+
+TEST_F(LanguageStrategyTest, CommandBuilderDoesNotOwnSelfContainedBootstrapRouting)
+{
+    CommandBuilder cmdBuilder(/*execLookPath=*/false);
+    cmdBuilder.SetRuntimeConfig(config_);
+    auto req = MakeMinimalRequest("not-a-real-runtime");
+    req.mutable_runtimeinstanceinfo()->mutable_bootstrapconfig()->set_entrypoint("rrt-runtime");
+    (*req.mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions())["rootfs"] =
+        R"({"type":"image","imageurl":"runtime:latest"})";
+
+    auto [status, cmdArgs] = cmdBuilder.BuildArgs("not-a-real-runtime", "21000", req);
+
+    EXPECT_FALSE(status.IsOk());
+    EXPECT_TRUE(cmdArgs.execPath.empty());
+    EXPECT_TRUE(cmdArgs.args.empty());
+}
+
 // T9-10: CommandBuilder::BuildArgs is a pure function: same input → same output
 TEST_F(LanguageStrategyTest, CommandBuilderPureFunctionSameInputSameOutput)
 {

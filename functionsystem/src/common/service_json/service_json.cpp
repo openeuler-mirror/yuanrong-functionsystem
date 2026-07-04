@@ -16,6 +16,8 @@
 
 #include "service_json.h"
 
+#include <algorithm>
+
 #include "common/metadata/metadata.h"
 #include "common/resource_view/resource_tool.h"
 #include "common/service_json/service_handler.h"
@@ -29,9 +31,16 @@ static const uint32_t SERVICE_NAME_MAX_LEN = 16;
 static std::unordered_set<std::string> runtimeEnum = {
     CPP_RUNTIME_VERSION,         JAVA_RUNTIME_VERSION,      JAVA11_RUNTIME_VERSION,    PYTHON_RUNTIME_VERSION,
     PYTHON3_RUNTIME_VERSION,     PYTHON36_RUNTIME_VERSION,  PYTHON37_RUNTIME_VERSION,  PYTHON38_RUNTIME_VERSION,
-    PYTHON39_RUNTIME_VERSION,    PYTHON310_RUNTIME_VERSION, PYTHON311_RUNTIME_VERSION, PYTHON312_RUNTIME_VERSION, 
-    PYTHON313_RUNTIME_VERSION,   GO_RUNTIME_VERSION,        POSIX_CUSTOM_RUNTIME_VERSION
+    PYTHON39_RUNTIME_VERSION,    PYTHON310_RUNTIME_VERSION, PYTHON311_RUNTIME_VERSION, PYTHON312_RUNTIME_VERSION,
+    PYTHON313_RUNTIME_VERSION,   GO_RUNTIME_VERSION,        POSIX_CUSTOM_RUNTIME_VERSION, RUST_RUNTIME_VERSION
 };
+
+static std::string NormalizeRuntime(const FunctionConfig &functionConfig)
+{
+    std::string runtime = functionConfig.runtime;
+    std::transform(runtime.begin(), runtime.end(), runtime.begin(), ::tolower);
+    return runtime;
+}
 
 bool NameMatch(const std::string &str, const std::string &regex)
 {
@@ -566,6 +575,8 @@ void Parsefunction(service_json::FunctionConfig &functionConfig, const nlohmann:
     ParseRootfsSpec(functionConfig.rootfs, f);
 
     ParseBootstrap(functionConfig.bootstrap, f);
+
+    functionConfig.runtime = NormalizeRuntime(functionConfig);
 }
 
 void ParseRootfsSpec(RootfsSpecMeta &rootfs, const nlohmann::json &h)

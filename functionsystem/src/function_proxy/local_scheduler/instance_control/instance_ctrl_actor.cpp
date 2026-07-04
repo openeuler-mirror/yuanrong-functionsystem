@@ -95,6 +95,28 @@ const char* HEADER_AUTH_TOKEN_KEY = "X-Auth-Token"; // key for iam-token
 
 const char *DEBUG_CONFIG_KEY = "debug_config";
 
+static size_t ParseRrtActivityProcessingNum(const std::string &payload)
+{
+    // RRT activity report payload:
+    //   empty/"idle"/"0" -> idle, start IdleMgr timer
+    //   "busy"/positive integer -> busy, cancel IdleMgr timer
+    // Empty payload keeps compatibility with the earlier idle-only RRT report.
+    if (payload.empty() || payload == "idle" || payload == "0") {
+        return 0;
+    }
+    if (payload == "busy") {
+        return 1;
+    }
+    size_t value = 0;
+    for (char c : payload) {
+        if (c < '0' || c > '9') {
+            return 0;
+        }
+        value = value * 10 + static_cast<size_t>(c - '0');
+    }
+    return value;
+}
+
 static std::string GenerateJobIDFromTraceID(const std::string &traceID)
 {
     static const std::string sep = "-trace-";
@@ -365,14 +387,14 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleSnapshotSignal(const std:
                                                                        const std::string &srcInstanceID,
                                                                        const std::shared_ptr<KillRequest> &killReq)
 {
-    // 如果 SignalRoute 失败，返回错误
+    // Return an error if SignalRoute fails.
     if (killCtx->killRsp.code() != common::ErrorCode::ERR_NONE) {
         YRLOG_ERROR("{}|failed to route snapshot signal, code: {}",
                     killReq->requestid(), static_cast<uint32_t>(killCtx->killRsp.code()));
         return killCtx->killRsp;
     }
 
-    // 如果实例在其他节点，转发请求
+    // Forward the request if the instance is on another node.
     if (!killCtx->isLocal) {
         YRLOG_INFO("{}|instance({}) is on remote node, forwarding snapshot request",
                    killReq->requestid(), killReq->instanceid());
@@ -382,7 +404,7 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleSnapshotSignal(const std:
                                  killCtx->instanceContext->GetInstanceInfo().requestid(), false));
     }
 
-    // 实例在本地，直接处理
+    // Handle directly when the instance is local.
     ASSERT_IF_NULL(snapCtrl_);
     return snapCtrl_->HandleSnapshot(killReq->requestid(), killReq->instanceid(), killReq->payload());
 }
@@ -393,6 +415,18 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(const std::string &s
 {
     const int &signal = killReq->signal();
     switch (signal) {
+        case RRT_IDLE_REPORT_SIGNAL: {
+            // RRT reports sandbox-local busy/idle transitions from the global HTTP/WS/tunnel/RPC active counter:
+            // processingNum=0 starts the IdleMgr timer; processingNum>0 cancels it. This path does not run the kill flow.
+            // See docs/features/sandbox-rrt-idle-report.md.
+            const size_t processingNum = ParseRrtActivityProcessingNum(killReq->payload());
+            if (idleMgr_ != nullptr) {
+                idleMgr_->TrafficReport(killReq->instanceid(), processingNum);
+            }
+            KillResponse activityRsp;
+            activityRsp.set_code(common::ErrorCode::ERR_NONE);
+            return activityRsp;
+        }
         case SHUT_DOWN_SIGNAL:
             [[fallthrough]];
         case SHUT_DOWN_SIGNAL_SYNC: {
@@ -472,7 +506,7 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(const std::string &s
                 .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::HandleSnapshotSignal, _1, srcInstanceID, killReq));
         }
         case INSTANCE_SNAPSTART_SIGNAL: {
-            // snapstart不需要路由，直接处理
+            // SnapStart does not need routing; handle it directly.
             ASSERT_IF_NULL(snapCtrl_);
             return snapCtrl_->HandleSnapStart(killReq->requestid(), killReq->instanceid(), killReq->payload());
         }
