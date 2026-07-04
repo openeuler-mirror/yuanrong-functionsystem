@@ -47,7 +47,6 @@ const std::string PYTHON_PATH = "PYTHONPATH";
 const std::string WHITE_LIST_ENV_PREFIX = "YR_";
 const std::string ASCEND_RT_VISIBLE_DEVICES = "ASCEND_RT_VISIBLE_DEVICES";
 const std::string YR_NOSET_ASCEND_RT_VISIBLE_DEVICES = "YR_NOSET_ASCEND_RT_VISIBLE_DEVICES";
-
 // Environment keys to exclude from being passed to runtime processes
 const std::vector<std::string> EXCLUDE_ENV_KEYS = {UNZIPPED_WORKING_DIR};
 
@@ -97,6 +96,7 @@ CommandBuilder::CommandBuilder(bool execLookPath) : execLookPath_(execLookPath)
     strategies_[JAVA21_LANGUAGE]       = java;
     strategies_[NODE_JS]               = nodejs;
     strategies_[POSIX_CUSTOM_RUNTIME]  = posix;
+    strategies_[RUST_LANGUAGE]          = posix;
     strategies_[PYTHON_LANGUAGE]       = python;
     strategies_[PYTHON3_LANGUAGE]      = python;
     strategies_[PYTHON36_LANGUAGE]     = python;

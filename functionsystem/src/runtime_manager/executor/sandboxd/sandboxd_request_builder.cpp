@@ -122,6 +122,13 @@ bool HasCustomRootfs(const std::shared_ptr<messages::StartInstanceRequest> &requ
     return opts.contains(CONTAINER_ROOTFS);
 }
 
+std::string ResolveRuntimeLanguage(const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    std::string language = request->runtimeinstanceinfo().runtimeconfig().language();
+    std::transform(language.begin(), language.end(), language.begin(), ::tolower);
+    return language;
+}
+
 Status MountsJsonParse(runtime::v1::SandboxStartRequest &start, const std::string &mountsJson)
 {
     try {
@@ -232,12 +239,12 @@ std::pair<Status, std::shared_ptr<runtime::v1::SandboxStartRequest>> SandboxdReq
     // StartResponse.id; the executor stores that via UpdateSandboxID(runtimeID).
     // Passing the client runtimeID here would conflate the two identities.
 
-    // template_id mirrors the legacy FunctionRuntime.id so sandboxd can
-    // associate the sandbox with a registered template for seed/fork reuse.
-    // Only set it when no custom rootfs is specified: a custom rootfs means
-    // the sandbox cannot reuse a registered seed/fork path.
-    if (!HasCustomRootfs(params.request)) {
-        start->set_template_id(params.request->runtimeinstanceinfo().container().id());
+    // Only reference a template when sandboxd has already registered it.
+    // Production sandboxd rejects unknown template_id values; custom rootfs
+    // starts are never template-backed.
+    const auto &templateID = params.request->runtimeinstanceinfo().container().id();
+    if (!HasCustomRootfs(params.request) && params.registeredTemplateIDs.count(templateID) > 0) {
+        start->set_template_id(templateID);
     }
 
     // Attach tenant ID as a metric label for sandboxd observability.
@@ -282,10 +289,9 @@ std::pair<Status, std::shared_ptr<runtime::v1::SandboxStartRequest>> SandboxdReq
     ApplyResources(params.request, start->mutable_resources());
     ApplyEnvsAndLogs(updatedEnvs, params.runtimeID, start.get());
 
-    // Set YR_LANGUAGE so entryfile.sh selects the correct language version
-    std::string language = params.request->runtimeinstanceinfo().runtimeconfig().language();
-    std::transform(language.begin(), language.end(), language.begin(), ::tolower);
-    (*start->mutable_envs())["YR_LANGUAGE"] = language;
+    // YR_LANGUAGE follows the service runtime field. The container runtime is
+    // the sandbox backend (for example runc/runsc), not the user runtime.
+    (*start->mutable_envs())["YR_LANGUAGE"] = ResolveRuntimeLanguage(params.request);
 
     // trace_id is the distributed trace ID propagated from the upstream request
     // (runtimeinstanceinfo().traceid()), not the local runtimeID.

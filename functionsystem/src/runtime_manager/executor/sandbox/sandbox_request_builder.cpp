@@ -172,6 +172,13 @@ void ApplyMountSource(runtime::v1::Mount *mount, const nlohmann::json &item)
     }
 }
 
+std::string ResolveRuntimeLanguage(const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    std::string language = request->runtimeinstanceinfo().runtimeconfig().language();
+    std::transform(language.begin(), language.end(), language.begin(), ::tolower);
+    return language;
+}
+
 Status MountsJsonParse(runtime::v1::StartRequest &startReq, const std::string &mountsJson)
 {
     try {
@@ -278,10 +285,9 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxRequestBuil
     ApplyResources(params.request, start->mutable_resources());
     ApplyEnvsAndLogs(updatedEnvs, params.runtimeID, start.get());
 
-    // Set YR_LANGUAGE so entryfile.sh selects the correct Python version
-    std::string language = params.request->runtimeinstanceinfo().runtimeconfig().language();
-    std::transform(language.begin(), language.end(), language.begin(), ::tolower);
-    (*start->mutable_userenvs())["YR_LANGUAGE"] = language;
+    // YR_LANGUAGE follows the service runtime field. The container runtime is
+    // the sandbox backend (for example runc/runsc), not the user runtime.
+    (*start->mutable_userenvs())["YR_LANGUAGE"] = ResolveRuntimeLanguage(params.request);
 
     return {Status::OK(), std::move(start)};
 }

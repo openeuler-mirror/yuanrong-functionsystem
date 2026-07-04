@@ -338,6 +338,13 @@ function install_faas_frontend() {
   sed -i "s/{frontendSslEnable}/${FRONTEND_SSL_ENABLE}/g" ${install_init_frontend_config}
   sed -i "s/RequireAndVerifyClientCert/${FRONTEND_CLIENT_AUTH_TYPE}/g" ${install_init_frontend_config}
   sed -i "s/{sccEnable}/${SCC_ENABLE}/g" ${install_init_frontend_config}
+  # sandboxRouter (rrt direct L7 reverse proxy) placeholders; filled here where
+  # install_init_frontend_config (the temp config faasfrontend reads) is defined.
+  sed -i "s/{sandboxRouterEnable}/${ENABLE_SANDBOX_ROUTER:-false}/g" ${install_init_frontend_config}
+  sed -i "s/{sandboxRouterListenPort}/${SANDBOX_ROUTER_LISTEN_PORT:-8080}/g" ${install_init_frontend_config}
+  sed -i "s/{sandboxRouterRrtPort}/${SANDBOX_ROUTER_RRT_PORT:-50090}/g" ${install_init_frontend_config}
+  sed -i "s/{sandboxRouterEnableJwt}/${SANDBOX_ROUTER_ENABLE_JWT:-true}/g" ${install_init_frontend_config}
+  sed -i "s/{sandboxRouterValidateIam}/${SANDBOX_ROUTER_VALIDATE_IAM:-true}/g" ${install_init_frontend_config}
   # Smart IAM routing: prefer local plaintext when co-deployed, else use configured address
   local effective_iam_address="${IAM_SERVER_ADDRESS}"
   if [ -n "${IAM_LOCAL_ADDRESS}" ]; then

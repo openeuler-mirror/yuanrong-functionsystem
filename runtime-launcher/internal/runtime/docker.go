@@ -25,8 +25,8 @@ type DockerRuntime struct {
 	client *client.Client
 }
 
-// NewDockerRuntime 创建 Docker 运行时后端。
-// cfg 支持 "docker_host" 参数指定 Docker daemon 地址。
+// NewDockerRuntime creates a Docker runtime backend.
+// cfg supports the "docker_host" parameter for selecting the Docker daemon address.
 func NewDockerRuntime(cfg map[string]string) (*DockerRuntime, error) {
 	opts := []client.Opt{client.FromEnv, client.WithAPIVersionNegotiation()}
 	if host, ok := cfg["docker_host"]; ok && host != "" {
@@ -34,7 +34,7 @@ func NewDockerRuntime(cfg map[string]string) (*DockerRuntime, error) {
 	}
 	cli, err := client.NewClientWithOpts(opts...)
 	if err != nil {
-		return nil, fmt.Errorf("创建 Docker 客户端失败: %w", err)
+		return nil, fmt.Errorf("failed to create Docker client: %w", err)
 	}
 	return &DockerRuntime{client: cli}, nil
 }
@@ -44,33 +44,33 @@ func (d *DockerRuntime) Name() string {
 }
 
 func (d *DockerRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, error) {
-	// 确定镜像名称
+	// Resolve image name.
 	imageName := cfg.Sandbox
 	if cfg.Rootfs.Type == RootfsSrcImage && cfg.Rootfs.ImageURL != "" {
 		imageName = cfg.Rootfs.ImageURL
 	}
 	if imageName == "" {
-		return "", fmt.Errorf("未指定容器镜像（sandbox 和 imageUrl 均为空）")
+		return "", fmt.Errorf("container image is not specified: sandbox and imageUrl are both empty")
 	}
 
-	// 检查本地镜像是否存在
+	// Check whether the local image exists.
 	_, _, err := d.client.ImageInspectWithRaw(ctx, imageName)
 	if err != nil {
-		// 本地镜像不存在，尝试拉取
-		log.Printf("[docker] 本地镜像 %s 不存在，开始拉取", imageName)
+		// Local image is missing; try pulling it.
+		log.Printf("[docker] local image %s is missing; pulling", imageName)
 		pullOut, pullErr := d.client.ImagePull(ctx, imageName, image.PullOptions{})
 		if pullErr != nil {
-			return "", fmt.Errorf("拉取镜像 %s 失败: %w", imageName, pullErr)
+			return "", fmt.Errorf("failed to pull image %s: %w", imageName, pullErr)
 		}
-		// 必须读完 pull 输出流才能确保拉取完成
+		// The pull output stream must be fully drained to ensure the pull is complete.
 		_, _ = io.Copy(io.Discard, pullOut)
 		pullOut.Close()
-		log.Printf("[docker] 镜像 %s 拉取完成", imageName)
+		log.Printf("[docker] image %s pull completed", imageName)
 	} else {
-		log.Printf("[docker] 使用本地镜像 %s", imageName)
+		log.Printf("[docker] using local image %s", imageName)
 	}
 
-	// 构建命令：将 command tokens 拼接为 shell 命令
+	// Build command by joining command tokens into a shell command.
 	var shellCmd string
 	if len(cfg.Command) > 0 {
 		shellCmd = strings.Join(cfg.Command, " ")
@@ -80,7 +80,7 @@ func (d *DockerRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, 
 		cmd = []string{"/bin/sh", "-c", shellCmd}
 	}
 
-	// 构建环境变量
+	// Build environment variables.
 	envList := make([]string, 0, len(cfg.Envs))
 	for k, v := range cfg.Envs {
 		envList = append(envList, k+"="+v)
@@ -95,7 +95,7 @@ func (d *DockerRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, 
 		labels[RuntimeIDLabelKey] = cfg.ID
 	}
 
-	// 容器配置
+	// Container config.
 	containerCfg := &container.Config{
 		Image:  imageName,
 		Cmd:    cmd,
@@ -103,10 +103,10 @@ func (d *DockerRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, 
 		Labels: labels,
 	}
 
-	// 主机配置（资源限制 + 挂载 + 网络）
+	// Host config: resource limits, mounts, and network.
 	networkMode := container.NetworkMode(cfg.Network)
 	if networkMode == "" {
-		networkMode = "host" // 默认使用 host 网络
+		networkMode = "host" // Default to host networking.
 	}
 
 	hostCfg := &container.HostConfig{
@@ -125,28 +125,28 @@ func (d *DockerRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, 
 		}
 
 		if networkMode == "host" {
-			log.Printf("[docker] network=host 时忽略端口映射: %v", cfg.Ports)
+			log.Printf("[docker] ignoring port mappings when network=host: %v", cfg.Ports)
 		} else {
 			containerCfg.ExposedPorts = exposedPorts
 			hostCfg.PortBindings = portBindings
 		}
 	}
 
-	// 创建容器
+	// Create container.
 	containerName := fmt.Sprintf("rl-%s-%d", cfg.ID, time.Now().UnixNano()%100000)
 	resp, err := d.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, containerName)
 	if err != nil {
-		return "", fmt.Errorf("创建容器失败: %w", err)
+		return "", fmt.Errorf("failed to create container: %w", err)
 	}
 
-	// 启动容器
+	// Start container.
 	if err := d.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		// 启动失败，清理已创建的容器
+		// Startup failed; clean up the created container.
 		_ = d.client.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
-		return "", fmt.Errorf("启动容器失败: %w", err)
+		return "", fmt.Errorf("failed to start container: %w", err)
 	}
 
-	log.Printf("[docker] 容器已启动: id=%s, image=%s, network=%s", resp.ID[:12], imageName, networkMode)
+	log.Printf("[docker] container started: id=%s, image=%s, network=%s", resp.ID[:12], imageName, networkMode)
 	return resp.ID, nil
 }
 
@@ -157,22 +157,29 @@ func parsePortMappings(mappings []string) (nat.PortSet, nat.PortMap, error) {
 	for _, raw := range mappings {
 		parts := strings.Split(raw, ":")
 		if len(parts) != 3 {
-			return nil, nil, fmt.Errorf("无效端口映射 %q，期望格式 protocol:hostPort:containerPort", raw)
+			return nil, nil, fmt.Errorf("invalid port mapping %q; expected format protocol:hostPort:containerPort", raw)
 		}
 
 		protocol := strings.ToLower(strings.TrimSpace(parts[0]))
 		hostPort := strings.TrimSpace(parts[1])
 		containerPort := strings.TrimSpace(parts[2])
 
-		if protocol != "tcp" && protocol != "udp" && protocol != "sctp" {
-			return nil, nil, fmt.Errorf("无效端口映射 %q，protocol 仅支持 tcp/udp/sctp", raw)
+		// L7 schemes (http/https/ws) declare how the sandbox router speaks to
+		// the backend; the docker port binding underneath is always TCP.
+		switch protocol {
+		case "http", "https", "ws", "wss":
+			protocol = "tcp"
+		case "tcp", "udp", "sctp":
+			// transport protocol passed through as-is
+		default:
+			return nil, nil, fmt.Errorf("invalid port mapping %q; protocol only supports http/https/tcp/udp/sctp", raw)
 		}
 
 		if err := validatePort(hostPort); err != nil {
-			return nil, nil, fmt.Errorf("无效端口映射 %q，hostPort %v", raw, err)
+			return nil, nil, fmt.Errorf("invalid port mapping %q; hostPort %v", raw, err)
 		}
 		if err := validatePort(containerPort); err != nil {
-			return nil, nil, fmt.Errorf("无效端口映射 %q，containerPort %v", raw, err)
+			return nil, nil, fmt.Errorf("invalid port mapping %q; containerPort %v", raw, err)
 		}
 
 		portKey := nat.Port(fmt.Sprintf("%s/%s", containerPort, protocol))
@@ -186,10 +193,10 @@ func parsePortMappings(mappings []string) (nat.PortSet, nat.PortMap, error) {
 func validatePort(port string) error {
 	p, err := strconv.Atoi(port)
 	if err != nil {
-		return fmt.Errorf("不是合法整数端口: %s", port)
+		return fmt.Errorf("not a valid integer port: %s", port)
 	}
 	if p < 1 || p > 65535 {
-		return fmt.Errorf("超出范围(1-65535): %d", p)
+		return fmt.Errorf("out of range (1-65535): %d", p)
 	}
 	return nil
 }
@@ -208,7 +215,7 @@ func (d *DockerRuntime) Wait(ctx context.Context, containerID string) (*Containe
 			Message:    msg,
 		}, nil
 	case err := <-errCh:
-		return nil, fmt.Errorf("等待容器退出失败: %w", err)
+		return nil, fmt.Errorf("failed to wait for container exit: %w", err)
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -227,7 +234,7 @@ func (d *DockerRuntime) Delete(ctx context.Context, containerID string, timeoutS
 		log.Printf("[docker] 停止容器 %s 失败: %v，尝试强制删除", containerID[:shortContainerIDLength], err)
 	}
 
-	// 强制删除容器
+	// Force-delete container.
 	err := d.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
 	if err != nil {
 		return fmt.Errorf("删除容器 %s 失败: %w", containerID[:shortContainerIDLength], err)
@@ -244,7 +251,7 @@ func (d *DockerRuntime) List(ctx context.Context, id string) ([]*ContainerInfo, 
 	args := filters.NewArgs(filters.Arg("label", ManagedLabelKey+"="+ManagedLabelValue))
 	containers, err := d.client.ContainerList(ctx, container.ListOptions{All: true, Filters: args})
 	if err != nil {
-		return nil, fmt.Errorf("列出容器失败: %w", err)
+		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
 	infos := make([]*ContainerInfo, 0, len(containers))
 	for _, c := range containers {
@@ -284,41 +291,41 @@ func splitSummaryCommand(command string) []string {
 	return []string{command}
 }
 
-// Stats 通过 Docker API 获取容器的真实 CPU/内存统计信息。
-// 使用单次（非 stream）模式，直接读取一个 stats 快照。
+// Stats reads real CPU/memory statistics through the Docker API.
+// Use one-shot (non-streaming) mode to read a single stats snapshot.
 func (d *DockerRuntime) Stats(ctx context.Context, containerID string) (*ContainerStats, error) {
 	resp, err := d.client.ContainerStats(ctx, containerID, false)
 	if err != nil {
-		return nil, fmt.Errorf("获取容器 stats 失败: %w", err)
+		return nil, fmt.Errorf("failed to get container stats: %w", err)
 	}
 	defer resp.Body.Close()
 
 	var raw container.StatsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, fmt.Errorf("解析 stats 响应失败: %w", err)
+		return nil, fmt.Errorf("failed to parse stats response: %w", err)
 	}
 
 	cs := &ContainerStats{
 		CPUUsageNs:       raw.CPUStats.CPUUsage.TotalUsage,
 		MemoryUsageBytes: raw.MemoryStats.Usage,
 		MemoryLimitBytes: raw.MemoryStats.Limit,
-		// MaxUsage 在 cgroup v2 中始终为 0，此处直接透传（调用方已兼容）
+		// MaxUsage is always 0 on cgroup v2; pass it through because callers already tolerate it.
 		MemoryMaxUsageBytes: raw.MemoryStats.MaxUsage,
 	}
 	return cs, nil
 }
 
-// convertMounts 将 MountConfig 列表转为 Docker mount.Mount 列表。
+// convertMounts converts MountConfig entries to Docker mount.Mount entries.
 func convertMounts(mounts []MountConfig) []mount.Mount {
 	result := make([]mount.Mount, 0, len(mounts))
 	for _, m := range mounts {
-		// 确定挂载源：优先 HostPath，S3/Image 暂不支持
+		// Resolve mount source: prefer HostPath; S3/Image sources are not supported yet.
 		source := m.HostPath
 		if source == "" && m.ImageURL != "" {
-			log.Printf("[docker] mount image_url 源暂不支持: target=%s, image=%s", m.Target, m.ImageURL)
+			log.Printf("[docker] mount image_url source is not supported yet: target=%s, image=%s", m.Target, m.ImageURL)
 		}
 		if source == "" && m.S3 != nil {
-			log.Printf("[docker] mount s3 源暂不支持: target=%s, bucket=%s", m.Target, m.S3.Bucket)
+			log.Printf("[docker] mount s3 source is not supported yet: target=%s, bucket=%s", m.Target, m.S3.Bucket)
 		}
 
 		dm := mount.Mount{
@@ -333,7 +340,7 @@ func convertMounts(mounts []MountConfig) []mount.Mount {
 		case "tmpfs":
 			dm.Type = mount.TypeTmpfs
 		case "erofs":
-			// erofs 作为只读 bind mount 处理
+			// Treat erofs as a read-only bind mount.
 			dm.Type = mount.TypeBind
 			dm.ReadOnly = true
 		default:
