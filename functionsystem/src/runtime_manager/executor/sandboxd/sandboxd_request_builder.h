@@ -20,6 +20,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "common/proto/pb/message_pb.h"
@@ -50,6 +51,10 @@ struct SandboxdStartParams {
 
     // Allocated port numbers for port-forwarding (may be empty)
     std::vector<std::string> portMappings;
+
+    // Template IDs known to be registered in sandboxd. This is a per-build
+    // snapshot so the request builder stays stateless and lifetime-safe.
+    std::unordered_set<std::string> registeredTemplateIDs;
 };
 
 /**

@@ -477,4 +477,50 @@ TEST_F(DISABLED_ServiceJsonTest, NameMatchTest)
     auto result2 = NameMatch("test123", "test123567");
     EXPECT_FALSE(result2);
 }
+
+TEST(ServiceJsonRuntimeNormalizeTest, BootstrapRuntimeUsesPosixCustomRuntime)
+{
+    nlohmann::json function = {
+        {"timeout", "900"},
+        {"cpu", "500"},
+        {"memory", "500"},
+        {"runtime", "not-a-real-runtime"},
+        {"rootfs", {{"runtime", "runsc"}, {"type", "image"}, {"imageurl", "runtime:latest"}}},
+        {"bootstrap", {{"type", "path"}, {"root", "/"}, {"entrypoint", "rrt-runtime"}}}
+    };
+    nlohmann::json service = {
+        {"service", "defaultservice"},
+        {"kind", "yrlib"},
+        {"functions", {{"rrt", function}}}
+    };
+
+    auto serviceInfos = GetServiceInfosFromJson(nlohmann::json::array({service}).dump());
+
+    ASSERT_TRUE(serviceInfos.IsSome());
+    ASSERT_EQ(serviceInfos.Get().size(), 1U);
+    EXPECT_EQ(serviceInfos.Get()[0].functions.at("rrt").runtime, POSIX_CUSTOM_RUNTIME_VERSION);
+}
+
+TEST(ServiceJsonRuntimeNormalizeTest, MissingRuntimeWithBootstrapUsesPosixCustomRuntime)
+{
+    nlohmann::json function = {
+        {"timeout", "900"},
+        {"cpu", "500"},
+        {"memory", "500"},
+        {"rootfs", {{"runtime", "runsc"}, {"type", "image"}, {"imageurl", "runtime:latest"}}},
+        {"bootstrap", {{"type", "path"}, {"root", "/"}, {"entrypoint", "rrt-runtime"}}}
+    };
+    nlohmann::json service = {
+        {"service", "defaultservice"},
+        {"kind", "yrlib"},
+        {"functions", {{"rrt", function}}}
+    };
+
+    auto serviceInfos = GetServiceInfosFromJson(nlohmann::json::array({service}).dump());
+
+    ASSERT_TRUE(serviceInfos.IsSome());
+    ASSERT_EQ(serviceInfos.Get().size(), 1U);
+    EXPECT_EQ(serviceInfos.Get()[0].functions.at("rrt").runtime, POSIX_CUSTOM_RUNTIME_VERSION);
+}
+
 } // namespace functionsystem::test

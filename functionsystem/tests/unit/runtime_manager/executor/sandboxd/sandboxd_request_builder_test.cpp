@@ -115,6 +115,27 @@ TEST_F(SandboxdRequestBuilderTest, FlatRequestEnvsCarriesLanguage)
     EXPECT_EQ(startReq->envs().at("YR_LANGUAGE"), "python3.9");
 }
 
+
+TEST_F(SandboxdRequestBuilderTest, SelfContainedBootstrapUsesOnlyBootstrapCommand)
+{
+    auto params = MakeMinimalParams();
+    auto *info = params.request->mutable_runtimeinstanceinfo();
+    info->mutable_runtimeconfig()->set_language("rust");
+    info->mutable_bootstrapconfig()->set_entrypoint("rrt-runtime --serve");
+    (*info->mutable_deploymentconfig()->mutable_deployoptions())["rootfs"] =
+        R"({"runtime":"runc","type":"image","imageurl":"runtime:latest"})";
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk());
+    ASSERT_NE(startReq, nullptr);
+    ASSERT_EQ(startReq->command_size(), 2);
+    EXPECT_EQ(startReq->command(0), "rrt-runtime");
+    EXPECT_EQ(startReq->command(1), "--serve");
+    EXPECT_EQ(startReq->envs().at("YR_LANGUAGE"), "rust");
+    EXPECT_EQ(startReq->runtime(), "runc");
+}
+
 // stdout/stderr log paths are resolved onto the flat request.
 TEST_F(SandboxdRequestBuilderTest, FlatRequestHasLogPaths)
 {
