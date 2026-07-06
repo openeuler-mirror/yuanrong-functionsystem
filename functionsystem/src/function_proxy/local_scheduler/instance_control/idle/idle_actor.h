@@ -78,6 +78,15 @@ public:
      */
     void SessionCountDelta(const std::string &instanceID, int delta);
 
+    /**
+     * Reconcile idle timer state after an instance reaches RUNNING.
+     * This compensates for an initial idle traffic report that arrived before
+     * the local state machine was visible as RUNNING.
+     *
+     * @param instanceID  Instance identifier
+     */
+    void OnInstanceRunning(const std::string &instanceID);
+
 private:
     void SessionAlive(const std::string &instanceID, bool hasActiveSessions);
     void StartIdleTimer(const std::string &instanceID);

@@ -5441,12 +5441,15 @@ litebus::Future<TransitionResult> InstanceCtrlActor::TransInstanceState(
             });
     }
     return machine->TransitionTo(context).Then(
-        [machine, nodeID(nodeID_), context, isTraefikEnable(traefikRegistry_ != nullptr),
+        [machine, nodeID(nodeID_), context, isTraefikEnable(traefikRegistry_ != nullptr), idleMgr(idleMgr_),
          aid(GetAID())](const TransitionResult &result) -> litebus::Future<TransitionResult> {
             // transition successful
             if (result.status.IsOk()) {
                 // if successfully, need to update state for observer and execute callback
                 machine->ExecuteStateChangeCallback(machine->GetRequestID(), context.newState);
+                if (context.newState == InstanceState::RUNNING && idleMgr != nullptr) {
+                    idleMgr->OnInstanceRunning(machine->GetInstanceInfo().instanceid());
+                }
                 // Register to Traefik when instance enters RUNNING state (async, non-blocking)
                 if (context.newState == InstanceState::RUNNING && isTraefikEnable) {
                     const auto &instanceInfo = machine->GetInstanceInfo();
@@ -5471,6 +5474,9 @@ litebus::Future<TransitionResult> InstanceCtrlActor::TransInstanceState(
                     auto ret = result;
                     ret.status = Status::OK();
                     machine->ExecuteStateChangeCallback(machine->GetRequestID(), context.newState);
+                    if (context.newState == InstanceState::RUNNING && idleMgr != nullptr) {
+                        idleMgr->OnInstanceRunning(machine->GetInstanceInfo().instanceid());
+                    }
                     if (context.newState == InstanceState::RUNNING && isTraefikEnable) {
                         const auto& instanceInfo = machine->GetInstanceInfo();
                         YRLOG_INFO("TransInstanceState: triggering Traefik register (path=txn_recovery), instanceID={}",
