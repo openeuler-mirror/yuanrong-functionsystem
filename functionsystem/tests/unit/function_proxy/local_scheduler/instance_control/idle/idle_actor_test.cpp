@@ -131,8 +131,12 @@ TEST_F(IdleActorTest, RunningTransition_ReconcilesLostInitialIdleReport)
     auto runningSm = MakeRunningInstance(1);
 
     std::atomic<bool> running{false};
+    std::atomic<bool> sawCreatingFetch{false};
     EXPECT_CALL(*idleViewMock_, GetInstance(INST_ID))
         .WillRepeatedly(Invoke([&](const std::string &) {
+            if (!running.load()) {
+                sawCreatingFetch.store(true);
+            }
             return running.load() ? runningSm : creatingSm;
         }));
 
@@ -144,7 +148,7 @@ TEST_F(IdleActorTest, RunningTransition_ReconcilesLostInitialIdleReport)
         }));
 
     litebus::Async(idleActor_->GetAID(), &IdleActor::TrafficReport, std::string(INST_ID), static_cast<size_t>(0));
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    ASSERT_AWAIT_TRUE([&]() { return sawCreatingFetch.load(); });
 
     running.store(true);
     litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, std::string(INST_ID));

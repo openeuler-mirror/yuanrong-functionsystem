@@ -625,6 +625,8 @@ TEST_F(GlobalSchedTest, UpdateLocalSchedulingStatus)
     auto future = globalSched_.UpdateLocalSchedulingStatus("localID", true);
     EXPECT_AWAIT_READY(future);
     EXPECT_EQ(future.IsOK(), true);
+    globalSched_.Stop();
+    globalSched_.Await();
 }
 
 // SlaveBusiness test cases

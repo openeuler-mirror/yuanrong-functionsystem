@@ -38,7 +38,7 @@ public:
         config.runtimePath       = "/opt/runtime";
         config.runtimeLogLevel   = "INFO";
         config.runtimeConfigPath = "/etc/runtime";
-        config.runtimeLogPath    = "/var/log/runtime";
+        config.runtimeLogPath    = "/tmp/sandboxd-request-builder-test";
         config.hostIP            = "127.0.0.1";
 
         cmdBuilder_ = std::make_unique<CommandBuilder>(/*execLookPath=*/false);

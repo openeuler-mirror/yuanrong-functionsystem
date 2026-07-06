@@ -203,7 +203,8 @@ TEST_F(SandboxExecutorTest, CleanupLocalRuntimeStateForOrphanUnregistersKnownSan
 
 TEST_F(SandboxExecutorTest, ReconcileRuntimesRejectsNullRequest)
 {
-    SandboxExecutor executor("sandbox-executor-test", litebus::AID(), "/tmp/sandbox-executor-test-ckpt");
+    SandboxExecutor executor("sandbox-executor-test-null-request", litebus::AID(),
+                             "/tmp/sandbox-executor-test-null-request-ckpt");
 
     const auto response = executor.ReconcileRuntimes(nullptr).Get();
 
