@@ -949,6 +949,8 @@ message GetTokenRequest {
   string requestID = 1;
   string tenantID  = 2;
   bool isCreate = 3;
+  string role = 4;
+  uint64 expiredTimeSpan = 5;
 }
 
 message GetTokenResponse {
