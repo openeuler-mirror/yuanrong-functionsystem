@@ -818,7 +818,7 @@ void TokenManagerActor::MasterBusiness::OnChange()
 }
 
 litebus::Future<std::shared_ptr<messages::GetTokenResponse>> TokenManagerActor::SendForwardGetToken(
-    const std::string &tenantID, const bool needCreate)
+    const std::string &tenantID, const bool needCreate, const std::string &role, uint64_t expiredTimeSpan)
 {
     if (member_->masterAID.Name().empty()) {
         YRLOG_ERROR("{}|master is none, failed to forward", tenantID);
@@ -828,15 +828,24 @@ litebus::Future<std::shared_ptr<messages::GetTokenResponse>> TokenManagerActor::
         tokenResp->set_message("master is none, failed to forward");
         return tokenResp;
     }
-    auto tokenRequest = std::make_shared<messages::GetTokenRequest>();
-    tokenRequest->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
-    tokenRequest->set_tenantid(tenantID);
-    tokenRequest->set_iscreate(needCreate);
+    auto tokenRequest = BuildForwardGetTokenRequest(tenantID, needCreate, role, expiredTimeSpan);
     YRLOG_INFO("{}|{} forward get token to({})", tokenRequest->requestid(), tokenRequest->tenantid(),
                member_->masterAID.HashString());
     auto future = forwardGetTokenSync_.AddSynchronizer(tokenRequest->requestid());
     Send(member_->masterAID, "ForwardGetToken", tokenRequest->SerializeAsString());
     return future;
+}
+
+std::shared_ptr<messages::GetTokenRequest> TokenManagerActor::BuildForwardGetTokenRequest(
+    const std::string &tenantID, const bool needCreate, const std::string &role, uint64_t expiredTimeSpan)
+{
+    auto tokenRequest = std::make_shared<messages::GetTokenRequest>();
+    tokenRequest->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
+    tokenRequest->set_tenantid(tenantID);
+    tokenRequest->set_iscreate(needCreate);
+    tokenRequest->set_role(role);
+    tokenRequest->set_expiredtimespan(expiredTimeSpan);
+    return tokenRequest;
 }
 
 void TokenManagerActor::OnForwardGetNewToken(
@@ -1125,8 +1134,9 @@ litebus::Future<Status> TokenManagerActor::MasterBusiness::HandleForwardGetToken
     auto oldTokenContent = actor->FindTokenFromCache(tenantID, false);
     if (newTokenContent->tenantID.empty() && tokenRequest->iscreate()) {
         // if new token cache is not exist and need to create
-        (void)actor->RequireEncryptToken(tenantID).Then(litebus::Defer(
-            actor->GetAID(), &TokenManagerActor::OnRequireEncryptToken, std::placeholders::_1, from, tokenRequest));
+        (void)actor->RequireEncryptToken(tenantID, tokenRequest->role(), tokenRequest->expiredtimespan())
+            .Then(litebus::Defer(actor->GetAID(), &TokenManagerActor::OnRequireEncryptToken, std::placeholders::_1,
+                                 from, tokenRequest));
         return Status::OK();
     }
     auto tokenResponse = std::make_shared<messages::GetTokenResponse>();
@@ -1196,8 +1206,7 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::SlaveBusiness::Re
     auto actor = actor_.lock();
     ASSERT_IF_NULL(actor);
     auto promise = std::make_shared<litebus::Promise<std::shared_ptr<TokenSalt>>>();
-    // Note: in slave mode, forward request to master, role is not passed directly
-    (void)actor->SendForwardGetToken(tenantID, true)
+    (void)actor->SendForwardGetToken(tenantID, true, role, expiredTimeSpan)
         .OnComplete(litebus::Defer(actor->GetAID(), &TokenManagerActor::OnForwardGetNewToken, std::placeholders::_1,
                                    promise, tenantID));
     return promise->GetFuture();
@@ -1211,12 +1220,12 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::SlaveBusiness::Re
     ASSERT_IF_NULL(actor);
     auto promise = std::make_shared<litebus::Promise<std::shared_ptr<TokenSalt>>>();
 
-    // Cluster enhancement: extend GetTokenRequest in message.proto to include
-    // cpuLimit, memLimit, and role. Currently, these are lost during forwarding to Master.
+    // TODO(Cluster-Enhancement): Extend GetTokenRequest in message.proto to include
+    // cpuLimit and memLimit. Currently, quota values are lost during forwarding to Master.
     YRLOG_WARN("{}|Quota forwarding to Master is not yet supported in cluster mode. Defaulting to standard token.",
                tenantID);
 
-    (void)actor->SendForwardGetToken(tenantID, true)
+    (void)actor->SendForwardGetToken(tenantID, true, role, expiredTimeSpan)
         .OnComplete(litebus::Defer(actor->GetAID(), &TokenManagerActor::OnForwardGetNewToken, std::placeholders::_1,
                                    promise, tenantID));
     return promise->GetFuture();
