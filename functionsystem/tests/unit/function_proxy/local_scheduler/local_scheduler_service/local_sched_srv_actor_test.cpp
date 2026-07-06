@@ -583,7 +583,7 @@ TEST_F(LocalSchedSrvActorTest, ForwardScheduleRetryTest)
 
     auto req = std::make_shared<messages::ScheduleRequest>();
     req->set_requestid(requestID);
-    req->mutable_instance()->mutable_scheduleoption()->set_initcalltimeout(2);
+    req->mutable_instance()->mutable_scheduleoption()->set_initcalltimeout(0);
     EXPECT_CALL(*primary_, GetResourceViewChanges())
         .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
     EXPECT_CALL(*virtual_, GetResourceViewChanges())
@@ -753,6 +753,11 @@ TEST_F(LocalSchedSrvActorTest, UpdateSchedulingStatus)
 {
     auto mockResourceViewMgr = std::make_shared<MockResourceViewMgr>();
     dstActor_->BindResourceView(mockResourceViewMgr);
+    EXPECT_CALL(*mockResourceViewMgr, GetResources())
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(AsyncReturn(
+            std::unordered_map<resource_view::ResourceType, std::shared_ptr<resource_view::ResourceUnit>>())));
+    EXPECT_CALL(*mockResourceViewMgr, UpdateDomainUrlForLocal(_)).Times(AnyNumber());
     EXPECT_CALL(*mockResourceViewMgr, UpdateAllUnitStatus(resource_view::UnitStatus::EVICTING))
         .WillOnce(Return(AsyncReturn(Status::OK())));
 
@@ -765,6 +770,11 @@ TEST_F(LocalSchedSrvActorTest, UpdateSchedulingStatusRequest)
 {
     auto mockResourceViewMgr = std::make_shared<MockResourceViewMgr>();
     dstActor_->BindResourceView(mockResourceViewMgr);
+    EXPECT_CALL(*mockResourceViewMgr, GetResources())
+        .Times(AnyNumber())
+        .WillRepeatedly(Return(AsyncReturn(
+            std::unordered_map<resource_view::ResourceType, std::shared_ptr<resource_view::ResourceUnit>>())));
+    EXPECT_CALL(*mockResourceViewMgr, UpdateDomainUrlForLocal(_)).Times(AnyNumber());
     EXPECT_CALL(*mockResourceViewMgr, UpdateAllUnitStatus(resource_view::UnitStatus::EVICTING))
         .WillOnce(Return(AsyncReturn(Status::OK())));
 

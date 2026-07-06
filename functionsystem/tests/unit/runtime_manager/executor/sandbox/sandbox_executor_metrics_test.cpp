@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdlib>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <sstream>
