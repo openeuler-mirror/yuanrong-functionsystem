@@ -21,6 +21,8 @@ CXX_MODULES = {
     "function_agent",
     "iam_server",
 }
+PROTOC_GEN_GO_VERSION = "v1.36.11"
+PROTOC_GEN_GO_GRPC_VERSION = "v1.5.1"
 
 
 def reset_stale_vendor_externalprojects(root_dir, target_names):
@@ -67,6 +69,8 @@ def run_build(root_dir, cmd_args):
         builder.build_cli(root_dir)
     if args["component"] in ["all", "meta_service"]:
         builder.build_meta_service(root_dir)
+    if args["component"] in ["all", "runtime_launcher"]:
+        build_runtime_launcher(root_dir)
 
     if args["component"] in CXX_MODULES:
         build_vendor(args)
@@ -125,6 +129,64 @@ def install_datasystem(vendor_path):
         log.warning("Datasystem install path is exist. Skip to copy files.")
         return
     shutil.copytree(datasystem_sdk_path, datasystem_install_path, copy_function=shutil.copy2)
+
+
+def build_runtime_launcher(root_dir):
+    runtime_launcher_dir = os.path.join(root_dir, "runtime-launcher")
+    if not os.path.isdir(runtime_launcher_dir):
+        raise FileNotFoundError(f"runtime-launcher source directory not found: {runtime_launcher_dir}")
+
+    env = os.environ.copy()
+    env.setdefault("HOME", os.path.expanduser("~"))
+    env.setdefault("GOCACHE", os.path.join(root_dir, "build", "go-cache"))
+    path_entries = [
+        "/usr/local/go/bin",
+        os.path.expanduser("~/bin"),
+        os.path.expanduser("~/go/bin"),
+        env.get("PATH", ""),
+    ]
+    env["PATH"] = ":".join(path for path in path_entries if path)
+
+    os.makedirs(os.path.join(runtime_launcher_dir, "bin", "runtime"), exist_ok=True)
+    proto_file = os.path.join("api", "proto", "runtime", "v1", "runtime_launcher.proto")
+
+    log.info("Start to install runtime-launcher protobuf plugins")
+    utils.sync_command(
+        ["go", "install", f"google.golang.org/protobuf/cmd/protoc-gen-go@{PROTOC_GEN_GO_VERSION}"],
+        cwd=runtime_launcher_dir,
+        env=env,
+    )
+    utils.sync_command(
+        ["go", "install", f"google.golang.org/grpc/cmd/protoc-gen-go-grpc@{PROTOC_GEN_GO_GRPC_VERSION}"],
+        cwd=runtime_launcher_dir,
+        env=env,
+    )
+
+    log.info("Start to generate runtime-launcher protobuf files")
+    utils.sync_command(
+        [
+            "protoc",
+            "--go_out=.",
+            "--go_opt=paths=source_relative",
+            "--go-grpc_out=.",
+            "--go-grpc_opt=paths=source_relative",
+            proto_file,
+        ],
+        cwd=runtime_launcher_dir,
+        env=env,
+    )
+
+    log.info("Start to build runtime-launcher")
+    utils.sync_command(
+        ["go", "build", "-buildvcs=false", "-o", "bin/runtime/runtime-launcher", "./cmd/runtime-launcher/"],
+        cwd=runtime_launcher_dir,
+        env=env,
+    )
+    utils.sync_command(
+        ["go", "build", "-buildvcs=false", "-o", "bin/rl-client", "./cmd/rl-client/"],
+        cwd=runtime_launcher_dir,
+        env=env,
+    )
 
 
 def build_logs(args):

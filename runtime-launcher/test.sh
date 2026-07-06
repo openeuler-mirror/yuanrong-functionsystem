@@ -7,7 +7,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SERVER_BIN="$SCRIPT_DIR/bin/runtime-launcher"
+SERVER_BIN="$SCRIPT_DIR/bin/runtime/runtime-launcher"
 CLIENT_BIN="$SCRIPT_DIR/bin/rl-client"
 SOCKET="/tmp/runtime-launcher-test.sock"
 IMAGE="${1:-swr.cn-southwest-2.myhuaweicloud.com/yuanrong-dev/compile_x86:2.1}"
@@ -67,7 +67,7 @@ run_test() {
 # ============================
 if [ ! -x "$SERVER_BIN" ] || [ ! -x "$CLIENT_BIN" ]; then
     echo "二进制文件不存在，请先构建:"
-    echo "  go build -buildvcs=false -o bin/runtime-launcher ./cmd/runtime-launcher/"
+    echo "  go build -buildvcs=false -o bin/runtime/runtime-launcher ./cmd/runtime-launcher/"
     echo "  go build -buildvcs=false -o bin/rl-client ./cmd/rl-client/"
     exit 1
 fi

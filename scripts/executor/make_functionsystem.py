@@ -60,6 +60,7 @@ def parser_args():
             "runtime_manager",
             "function_proxy",
             "function_agent",
+            "runtime_launcher",
         ],
         default="all",
         help="Build a specific component. Support C++ binaries and Go modules(cli/meta_service). Default: all",
