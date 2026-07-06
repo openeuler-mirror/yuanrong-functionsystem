@@ -48,7 +48,14 @@ public:
     void UpdateLeaderInfo(const explorer::LeaderInfo &leaderInfo);
 
     litebus::Future<std::shared_ptr<messages::GetTokenResponse>> SendForwardGetToken(const std::string &tenantID,
-                                                                                     const bool needCreate);
+                                                                                     const bool needCreate,
+                                                                                     const std::string &role = "",
+                                                                                     uint64_t expiredTimeSpan = 0);
+
+    static std::shared_ptr<messages::GetTokenRequest> BuildForwardGetTokenRequest(const std::string &tenantID,
+                                                                                  const bool needCreate,
+                                                                                  const std::string &role = "",
+                                                                                  uint64_t expiredTimeSpan = 0);
 
     void OnForwardGetNewToken(const litebus::Future<std::shared_ptr<messages::GetTokenResponse>> future,
                               const std::shared_ptr<litebus::Promise<std::shared_ptr<TokenSalt>>> &promise,
