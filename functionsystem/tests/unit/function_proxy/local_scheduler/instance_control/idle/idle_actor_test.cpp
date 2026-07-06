@@ -61,17 +61,22 @@ public:
      * Build a MockInstanceStateMachine in RUNNING state on NODE_ID.
      * @param idleTimeoutSec  >= 1: sets "idleTimeout" createoption; -1: no key (no timer).
      */
-    std::shared_ptr<MockInstanceStateMachine> MakeRunningInstance(int64_t idleTimeoutSec)
+    std::shared_ptr<MockInstanceStateMachine> MakeInstance(InstanceState state, int64_t idleTimeoutSec)
     {
         auto sm = std::make_shared<MockInstanceStateMachine>(NODE_ID);
         resources::InstanceInfo info;
         info.set_functionproxyid(NODE_ID);
-        info.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::RUNNING));
+        info.mutable_instancestatus()->set_code(static_cast<int32_t>(state));
         if (idleTimeoutSec >= 0) {
             (*info.mutable_createoptions())["idle_timeout"] = std::to_string(idleTimeoutSec);
         }
         EXPECT_CALL(*sm, GetInstanceInfo()).WillRepeatedly(Return(info));
         return sm;
+    }
+
+    std::shared_ptr<MockInstanceStateMachine> MakeRunningInstance(int64_t idleTimeoutSec)
+    {
+        return MakeInstance(InstanceState::RUNNING, idleTimeoutSec);
     }
 
 protected:
@@ -106,6 +111,43 @@ TEST_F(IdleActorTest, TrafficIdle_NoSessions_TimerFires_EvictsInstance)
         }));
 
     litebus::Async(idleActor_->GetAID(), &IdleActor::TrafficReport, std::string(INST_ID), static_cast<size_t>(0));
+
+    ASSERT_AWAIT_TRUE([&]() { return callCount > 0; });
+}
+
+/**
+ * Feature: if the initial idle traffic report arrives before the local state
+ * machine reaches RUNNING, the RUNNING transition reconciles the recorded idle
+ * state and starts the timer.
+ * Steps:
+ *   1. TrafficReport(0) records traffic idle while GetInstance returns CREATING.
+ *   2. The same instance later becomes RUNNING.
+ *   3. OnInstanceRunning reconciles the recorded idle state.
+ * Expectation: idle timer starts and eventually evicts the instance.
+ */
+TEST_F(IdleActorTest, RunningTransition_ReconcilesLostInitialIdleReport)
+{
+    auto creatingSm = MakeInstance(InstanceState::CREATING, 1);
+    auto runningSm = MakeRunningInstance(1);
+
+    std::atomic<bool> running{false};
+    EXPECT_CALL(*idleViewMock_, GetInstance(INST_ID))
+        .WillRepeatedly(Invoke([&](const std::string &) {
+            return running.load() ? runningSm : creatingSm;
+        }));
+
+    std::atomic<int> callCount{0};
+    EXPECT_CALL(*facadeViewMock_, GetInstance(INST_ID))
+        .WillOnce(Invoke([&](const std::string &) {
+            callCount++;
+            return nullptr;
+        }));
+
+    litebus::Async(idleActor_->GetAID(), &IdleActor::TrafficReport, std::string(INST_ID), static_cast<size_t>(0));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    running.store(true);
+    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, std::string(INST_ID));
 
     ASSERT_AWAIT_TRUE([&]() { return callCount > 0; });
 }

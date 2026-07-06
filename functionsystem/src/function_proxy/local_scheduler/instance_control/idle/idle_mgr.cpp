@@ -52,4 +52,9 @@ void IdleMgr::SessionCountDelta(const std::string &instanceID, int delta)
     litebus::Async(idleActor_->GetAID(), &IdleActor::SessionCountDelta, instanceID, delta);
 }
 
+void IdleMgr::OnInstanceRunning(const std::string &instanceID)
+{
+    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, instanceID);
+}
+
 }  // namespace functionsystem::local_scheduler
