@@ -82,10 +82,6 @@ const std::string S3_DEPLOY_DIR = "S3_DEPLOY_DIR";
 const std::string S3_PROTOCOL_HTTP = "http";
 const std::string S3_PROTOCOL_HTTPS = "https";
 
-const std::string GCM_CRYPTO_ALGORITHM = "GCM";
-const std::string CBC_CRYPTO_ALGORITHM = "CBC";
-const std::string NO_CRYPTO_ALGORITHM = "NO_CRYPTO";
-
 const int DEFAULT_RETRY_CLEAR_CODE_PACKAGER_TIMES = 3;
 }  // namespace functionsystem::function_agent
 #endif  // FUNCTION_AGENT_CONSTANTS_H

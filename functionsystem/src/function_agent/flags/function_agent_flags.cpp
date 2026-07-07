@@ -57,9 +57,6 @@ FunctionAgentFlags::FunctionAgentFlags()
     AddFlag(&FunctionAgentFlags::s3Protocol, "s3_protocol", "S3's protocol", S3_PROTOCOL_HTTPS,
             WhiteListCheck({ S3_PROTOCOL_HTTPS, S3_PROTOCOL_HTTP }));
     AddFlag(&FunctionAgentFlags::isEnableS3, "s3_enable", "enable to connect s3", DEFAULT_ENABLE_S3);
-    AddFlag(&FunctionAgentFlags::decryptAlgorithm, "decrypt_algorithm", "decrypt algorithm, eg: GCM, CBC, NO_CRYPTO",
-            function_agent::NO_CRYPTO_ALGORITHM,
-            WhiteListCheck({ NO_CRYPTO_ALGORITHM, CBC_CRYPTO_ALGORITHM, GCM_CRYPTO_ALGORITHM }));
 
     AddFlag(&FunctionAgentFlags::enableMergeProcess, "enable_merge_process",
             "enable function agent and runtime manager merge in the same process", false);

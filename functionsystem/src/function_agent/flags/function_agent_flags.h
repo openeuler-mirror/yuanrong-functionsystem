@@ -188,7 +188,6 @@ protected:
     std::string secretKey;
     std::string s3Endpoint;
     std::string s3Protocol;
-    std::string decryptAlgorithm;
 
     bool enableMergeProcess = false;
     bool enableDisConvCallStack = false;
