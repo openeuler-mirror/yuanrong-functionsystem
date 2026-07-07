@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdlib>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <sstream>
@@ -67,6 +68,7 @@ class SandboxExecutorMetricsTest : public ::testing::Test {
 protected:
     void SetUp() override
     {
+        setenv("YR_SANDBOX_METRICS_ENABLED", "1", 1);
         metrics::MetricsAdapter::GetInstance().InitMetricsFromJson(nlohmann::json::parse(R"(
         {
           "backends": [
@@ -100,6 +102,7 @@ protected:
     {
         metrics::MetricsAdapter::GetInstance().CleanMetrics();
         metrics::MetricsAdapter::GetInstance().doubleGaugeMap_.clear();
+        unsetenv("YR_SANDBOX_METRICS_ENABLED");
     }
 };
 

@@ -46,6 +46,8 @@ public:
 
     void SessionCountDelta(const std::string &instanceID, int delta);
 
+    void OnInstanceRunning(const std::string &instanceID);
+
 private:
     std::shared_ptr<IdleActor> idleActor_;
 };

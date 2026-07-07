@@ -182,7 +182,7 @@ TEST_F(SandboxExecutorTest, CleanupLocalRuntimeStateForOrphanUnregistersKnownSan
     executor.stateManager_.Register(SandboxInfo{runtimeID, sandboxID, "", "", instanceInfo});
     executor.sandboxStatsSnapshots_[runtimeID] = SandboxExecutor::SandboxStatsSnapshot{};
     executor.sandboxStatsPollingRuntimes_.insert(runtimeID);
-    executor.sandboxLifecycleStates_[runtimeID] = SandboxLifecycleStatus::RUNNING;
+    executor.sandboxLifecycleStates_[runtimeID] = SandboxExecutor::SandboxLifecycleStatus::RUNNING;
     executor.userInitiatedTerminateRuntimes_.insert(runtimeID);
     executor.sandboxRunningStartTimes_[runtimeID] = std::chrono::steady_clock::now();
 
@@ -203,7 +203,8 @@ TEST_F(SandboxExecutorTest, CleanupLocalRuntimeStateForOrphanUnregistersKnownSan
 
 TEST_F(SandboxExecutorTest, ReconcileRuntimesRejectsNullRequest)
 {
-    SandboxExecutor executor("sandbox-executor-test", litebus::AID(), "/tmp/sandbox-executor-test-ckpt");
+    SandboxExecutor executor("sandbox-executor-test-null-request", litebus::AID(),
+                             "/tmp/sandbox-executor-test-null-request-ckpt");
 
     const auto response = executor.ReconcileRuntimes(nullptr).Get();
 

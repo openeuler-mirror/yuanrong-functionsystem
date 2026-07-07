@@ -55,9 +55,19 @@ static resources::InstanceInfo MakeInstanceInfo(const std::string &agentID,
 {
     resources::InstanceInfo info;
     info.set_functionagentid(agentID);
+    info.set_functionproxyid(TEST_NODE_ID);
     info.set_runtimeid(runtimeID);
     info.set_containerid(containerID);
     return info;
+}
+
+static litebus::Future<messages::ReconcileRuntimesResponse> MakeSuccessReconcileResponse(
+    const std::shared_ptr<messages::ReconcileRuntimesRequest> &request)
+{
+    messages::ReconcileRuntimesResponse resp;
+    resp.set_requestid(request->requestid());
+    resp.set_code(0);
+    return AsyncReturn(resp);
 }
 
 /**
@@ -87,6 +97,11 @@ public:
         mockFunctionAgentMgr_ = std::make_shared<MockFunctionAgentMgr>("test-agent-mgr", nullptr);
         mockInstanceCtrl_ = std::make_shared<MockInstanceCtrl>();
         mockInstanceControlView_ = std::make_shared<MockInstanceControlView>(TEST_NODE_ID);
+        EXPECT_CALL(*mockFunctionAgentMgr_, ReconcileRuntimes(TEST_NODE_ID, _))
+            .WillRepeatedly(Invoke([](const std::string &,
+                                      const std::shared_ptr<messages::ReconcileRuntimesRequest> &request) {
+                return MakeSuccessReconcileResponse(request);
+            }));
     }
 
     void TearDown() override
@@ -153,11 +168,8 @@ TEST_F(RuntimeReconcileActorTest, SendsCorrectEntriesToAgent)
             EXPECT_TRUE(containerIDs.count(TEST_CONTAINER_ID_1) > 0);
             EXPECT_TRUE(containerIDs.count(TEST_CONTAINER_ID_2) > 0);
 
-            messages::ReconcileRuntimesResponse resp;
-            resp.set_requestid(request->requestid());
-            resp.set_code(0);
             called = true;
-            return AsyncReturn(resp);
+            return MakeSuccessReconcileResponse(request);
         }));
 
     CreateAndSpawnActor();
