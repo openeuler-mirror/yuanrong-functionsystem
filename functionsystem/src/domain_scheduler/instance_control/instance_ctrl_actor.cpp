@@ -23,6 +23,7 @@
 #include "common/logs/logging.h"
 #include "common/trace/trace_manager.h"
 #include "common/proto/pb/posix/message.pb.h"
+#include "common/schedule_plugin/common/preallocated_context.h"
 #include "nlohmann/json.hpp"
 
 namespace functionsystem::domain_scheduler {
@@ -162,6 +163,11 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
                dispatchTimes](const resource_view::PullResourceRequest &snapshot) {
             req->mutable_unitsnapshot()->set_version(snapshot.version());
             req->mutable_unitsnapshot()->set_localviewinittime(snapshot.localviewinittime());
+            // Clear scheduling caches (scheduledScore/scheduledresult/filterCtx/reserved) before forwarding
+            // to underlayer. Domain and proxy have independent preContext_ (allocatedLabels), cached scores
+            // computed on domain side may be stale/wrong for proxy and would short-circuit proxy scoring.
+            // This mirrors what proxy does in its own Reschedule forwarding path.
+            schedule_framework::ClearContext(*req->mutable_contexts());
             (void)underlayer->DispatchSchedule(schedResult.id, req)
                 .OnComplete(litebus::Defer(aid, &InstanceCtrlActor::CheckIsNeedReDispatch, std::placeholders::_1,
                                            promise, schedResult, req, dispatchTimes));
