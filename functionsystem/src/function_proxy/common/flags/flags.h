@@ -362,6 +362,11 @@ public:
         return forceLowReliabilityInstance_;
     }
 
+    bool GetEnableFrontendProxyService() const
+    {
+        return enableFrontendProxyService_;
+    }
+
     const std::string &GetK8sBasePath() const
     {
         return basePath_;
@@ -553,6 +558,7 @@ protected:
     bool enableMergeProcess_{ false };
     bool enableDirectRouting_{ false };
     bool forceLowReliabilityInstance_{ false };
+    bool enableFrontendProxyService_{ false };
     std::string dPosixUdsPath_;
     bool enableTraefikRegistry_{ false };
     std::string traefikEtcdPrefix_ = "traefik";

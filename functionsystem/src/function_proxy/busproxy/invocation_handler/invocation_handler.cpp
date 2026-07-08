@@ -130,6 +130,14 @@ litebus::Future<std::shared_ptr<StreamingMessage>> InvocationHandler::CallResult
     ASSERT_IF_NULL(request);
     ASSERT_FS(request->has_callresultreq());
     YRLOG_INFO("{}|received CallResult request from {} via POSIX.", request->callresultreq().requestid(), from);
+    if (frontendCallResultReceiver_) {
+        auto result = frontendCallResultReceiver_(from, request);
+        if (result.first) {
+            YRLOG_INFO("{}|CallResult from {} is consumed by frontend proxy service.",
+                       request->callresultreq().requestid(), from);
+            return litebus::Future<std::shared_ptr<StreamingMessage>>(result.second);
+        }
+    }
     if (createCallResultReceiver_) {
         auto requestIDs = litebus::strings::Split(request->callresultreq().requestid(), "@");
         if (!requestIDs.empty() && *requestIDs.rbegin() == "initcall") {

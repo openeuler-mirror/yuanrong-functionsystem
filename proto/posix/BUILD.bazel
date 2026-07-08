@@ -172,6 +172,31 @@ cc_grpc_library(
 )
 
 proto_library(
+    name = "frontend_proxy_service_proto",
+    srcs = ["frontend_proxy_service.proto"],
+    strip_import_prefix = "/proto/posix",
+    deps = [
+        ":common_proto",
+        ":core_service_proto",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_proto_library(
+    name = "frontend_proxy_service_cc_proto",
+    deps = [":frontend_proxy_service_proto"],
+    visibility = ["//visibility:public"],
+)
+
+cc_grpc_library(
+    name = "frontend_proxy_service_cc_grpc",
+    srcs = [":frontend_proxy_service_proto"],
+    grpc_only = True,
+    deps = [":frontend_proxy_service_cc_proto"],
+    visibility = ["//visibility:public"],
+)
+
+proto_library(
     name = "log_service_proto",
     srcs = ["log_service.proto"],
     strip_import_prefix = "/proto/posix",
@@ -275,6 +300,8 @@ cc_library(
         ":bus_adapter_cc_proto",
         ":bus_service_cc_proto",
         ":bus_service_cc_grpc",
+        ":frontend_proxy_service_cc_proto",
+        ":frontend_proxy_service_cc_grpc",
         ":log_service_cc_proto",
         ":log_service_cc_grpc",
         ":message_cc_proto",

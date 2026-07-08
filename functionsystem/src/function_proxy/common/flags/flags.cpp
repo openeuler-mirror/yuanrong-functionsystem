@@ -155,6 +155,8 @@ Flags::Flags()
             "enable direct routing read path with LRU cache and on-demand route query", false);
     AddFlag(&Flags::forceLowReliabilityInstance_, "force_low_reliability_instance",
             "force all instances to use low-reliability persistence semantics", false);
+    AddFlag(&Flags::enableFrontendProxyService_, "enable_frontend_proxy_service",
+            "enable faasfrontend gRPC service on the existing proxy POSIX port", false);
     AddElectionFlags();
     AddDSFlags();
     AddRuntimeFlags();

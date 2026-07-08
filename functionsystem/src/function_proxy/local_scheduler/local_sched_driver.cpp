@@ -26,6 +26,8 @@
 #include "local_scheduler/gc_actor/local_gc_actor.h"
 #include "local_scheduler/local_group_ctrl/local_group_ctrl_actor.h"
 #include "local_scheduler/grpc_server/bus_service/bus_service.h"
+#include "local_scheduler/grpc_server/frontend_proxy_service/frontend_proxy_lifecycle_handler.h"
+#include "local_scheduler/grpc_server/frontend_proxy_service/frontend_proxy_service.h"
 
 namespace functionsystem::local_scheduler {
 
@@ -449,9 +451,52 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
                                   .instanceCtrl = instanceCtrl_,
                                   .localSchedSrv = localSchedSrv_,
                                   .isEnableServerMode = param_.enableServerMode,
-                                  .hostIP = param_.ip  };
+                                  .hostIP = param_.ip };
     std::shared_ptr<BusService> busService = std::make_shared<BusService>(std::move(serviceParam));
     posixGrpcServer_->RegisterService(busService);
+    if (param_.enableFrontendProxyService) {
+        auto frontendServiceParam = BuildFrontendProxyServiceParam(
+            param_.nodeID, true,
+            [instanceCtrl(instanceCtrl_)](
+                const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+                const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise) {
+                if (instanceCtrl == nullptr) {
+                    messages::ScheduleResponse response;
+                    response.set_code(common::ERR_LOCAL_SCHEDULER_ABNORMAL);
+                    response.set_message("instance control is nullptr in local scheduler");
+                    return litebus::Future<messages::ScheduleResponse>(response);
+                }
+                scheduleReq->mutable_instance()->set_parentfunctionproxyaid(instanceCtrl->GetActorAID());
+                return instanceCtrl->Schedule(scheduleReq, runtimePromise);
+            },
+            [instanceCtrl(instanceCtrl_)](
+                const std::string &instanceID,
+                const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+                FrontendProxyReadyCallback callback) {
+                if (instanceCtrl == nullptr) {
+                    (void)callback(Status(StatusCode::ERR_LOCAL_SCHEDULER_ABNORMAL,
+                                          "instance control is nullptr in local scheduler"));
+                    return;
+                }
+                instanceCtrl->RegisterReadyCallback(instanceID, scheduleReq, std::move(callback));
+            },
+            true,
+            [instanceCtrl(instanceCtrl_)](const std::string &caller, const std::shared_ptr<KillRequest> &killReq) {
+                if (instanceCtrl == nullptr) {
+                    KillResponse response;
+                    response.set_code(common::ERR_LOCAL_SCHEDULER_ABNORMAL);
+                    response.set_message("instance control is nullptr in local scheduler");
+                    return litebus::Future<KillResponse>(response);
+                }
+                return instanceCtrl->Kill(caller, killReq);
+            });
+        // Lifecycle create/kill use reviewed ready dispatcher seams when the single
+        // frontend-proxy service switch is enabled. Legacy stream dispatchers remain disallowed.
+        std::shared_ptr<FrontendProxyService> frontendProxyService =
+            std::make_shared<FrontendProxyService>(std::move(frontendServiceParam));
+        posixGrpcServer_->RegisterService(frontendProxyService);
+        YRLOG_INFO("FrontendProxyService registered on existing posix port {}", param_.posixPort);
+    }
 
     // Create ExecStreamService instance
     execStreamService_ = std::make_shared<ExecStreamService>(instanceCtrl_->GetIdleMgr());

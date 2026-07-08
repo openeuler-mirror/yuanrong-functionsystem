@@ -101,6 +101,7 @@ struct LocalSchedStartParam {
     bool traefikEnableTLS = true;
     std::string traefikServersTransport = "yr-backend-tls@file";
     bool enableMergeProcess = false;  // 共进程模式开关（--enable_merge_process）
+    bool enableFrontendProxyService = false;
 };
 
 class LocalSchedulingApiRouter : public ApiRouterRegister {

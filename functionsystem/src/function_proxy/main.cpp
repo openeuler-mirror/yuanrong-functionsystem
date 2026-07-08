@@ -457,7 +457,8 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .traefikHttpEntryPoint = flags.GetTraefikHttpEntryPoint(),
         .traefikEnableTLS = flags.GetTraefikEnableTLS(),
         .traefikServersTransport = flags.GetTraefikServersTransport(),
-        .enableMergeProcess = flags.GetEnableMergeProcess()
+        .enableMergeProcess = flags.GetEnableMergeProcess(),
+        .enableFrontendProxyService = flags.GetEnableFrontendProxyService()
     };
 }
 
@@ -685,6 +686,7 @@ int main(int argc, char **argv)
 
     YRLOG_INFO("DirectRouting feature flag: {}", flags.GetEnableDirectRouting());
     YRLOG_INFO("ForceLowReliabilityInstance feature flag: {}", flags.GetForceLowReliabilityInstance());
+    YRLOG_INFO("FrontendProxyService feature flag: {}", flags.GetEnableFrontendProxyService());
 
     if (!g_functionProxySwitcher->RegisterHandler(Stop, stopSignal)) {
         return EXIT_ABNORMAL;
