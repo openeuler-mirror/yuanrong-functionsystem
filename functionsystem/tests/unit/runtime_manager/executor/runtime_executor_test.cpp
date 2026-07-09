@@ -1924,6 +1924,17 @@ TEST_F(RuntimeExecutorTest, InheritEnvFalseTest)
     EXPECT_EQ(combineEnv["POD_FRONTEND_ADDRESS"], "");
 }
 
+TEST_F(RuntimeExecutorTest, CombineEnvsDefaultsOnlyOrdinaryRuntimeToFileLogging)
+{
+    auto env = Envs{};
+    auto combineEnv = executor_->CombineEnvs(env);
+    EXPECT_EQ(combineEnv["YR_ONLY_STDOUT"], "false");
+
+    env.userEnvs["YR_ONLY_STDOUT"] = "true";
+    combineEnv = executor_->CombineEnvs(env);
+    EXPECT_EQ(combineEnv["YR_ONLY_STDOUT"], "true");
+}
+
 TEST_F(RuntimeExecutorTest, SeparatedRuntimeStdRedirected)
 {
     litebus::ExecIO stdOut = litebus::ExecIO::CreatePipeIO();

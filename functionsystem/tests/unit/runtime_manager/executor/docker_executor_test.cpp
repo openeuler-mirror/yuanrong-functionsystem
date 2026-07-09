@@ -25,12 +25,16 @@
 
 #include "common/constants/constants.h"
 #include "common/proto/pb/message_pb.h"
+#include "common/resource_view/resource_type.h"
 #include "common/status/status.h"
 #include "common/utils/files.h"
 #include "utils/future_test_helper.h"
 
 namespace functionsystem::runtime_manager {
 
+using functionsystem::resource_view::CPU_RESOURCE_NAME;
+using functionsystem::resource_view::MEMORY_RESOURCE_NAME;
+using functionsystem::resource_view::ValueType;
 using functionsystem::test::AwaitAssertReady;
 
 class MockDockerExecutor : public DockerExecutor {
@@ -378,8 +382,40 @@ TEST_F(DockerExecutorTest, TestBuildCreateContainerRequestWithPortBindings)
     EXPECT_TRUE(req["ExposedPorts"].contains("8080/tcp"));
     EXPECT_TRUE(req["HostConfig"]["PortBindings"].contains("8080/tcp"));
     EXPECT_EQ(req["HostConfig"]["Binds"].size(), 1u);
-    EXPECT_EQ(req["HostConfig"]["Resources"]["CPUShares"].get<int>(), 512);
-    EXPECT_EQ(req["HostConfig"]["Resources"]["Memory"].get<int64_t>(), 256 * 1024 * 1024);
+    EXPECT_EQ(req["HostConfig"]["CpuShares"].get<int>(), 512);
+    EXPECT_EQ(req["HostConfig"]["Memory"].get<int64_t>(), 256 * 1024 * 1024);
+    EXPECT_EQ(req["HostConfig"]["MemorySwap"].get<int64_t>(), 256 * 1024 * 1024);
+    EXPECT_EQ(req["HostConfig"]["PidsLimit"].get<int>(), 4096);
+}
+
+// ---- BuildResources (proto map uses uppercase CPU/Memory keys) ----
+
+TEST_F(DockerExecutorTest, TestBuildResourcesReadsUppercaseKeys)
+{
+    auto request = CreateStartInstanceRequest("rt-res", "python3");
+    auto *info = request->mutable_runtimeinstanceinfo();
+    auto *resMap = info->mutable_runtimeconfig()->mutable_resources()->mutable_resources();
+    auto &cpu = (*resMap)[CPU_RESOURCE_NAME];
+    cpu.set_type(ValueType::Value_Type_SCALAR);
+    cpu.mutable_scalar()->set_value(1000.0);
+    cpu.mutable_scalar()->set_limit(2000.0);
+    auto &mem = (*resMap)[MEMORY_RESOURCE_NAME];
+    mem.set_type(ValueType::Value_Type_SCALAR);
+    mem.mutable_scalar()->set_value(512.0);
+    mem.mutable_scalar()->set_limit(1024.0);
+
+    auto resources = executor_->BuildResources(*info);
+    EXPECT_DOUBLE_EQ(resources["cpu"], 1000.0);
+    EXPECT_DOUBLE_EQ(resources["cpu_limit"], 2000.0);
+    EXPECT_DOUBLE_EQ(resources["memory"], 512.0);
+    EXPECT_DOUBLE_EQ(resources["memory_limit"], 1024.0);
+}
+
+TEST_F(DockerExecutorTest, TestBuildResourcesEmptyWithoutConfig)
+{
+    auto request = CreateStartInstanceRequest("rt-empty", "python3");
+    auto resources = executor_->BuildResources(request->runtimeinstanceinfo());
+    EXPECT_TRUE(resources.empty());
 }
 
 // ---- GetRuntimeImage ----

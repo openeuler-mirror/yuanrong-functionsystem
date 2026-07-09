@@ -583,11 +583,6 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::CreateContainerExecutor()
 
 std::shared_ptr<ExecutorProxy> RuntimeManager::CreateSupervisorExecutor()
 {
-    auto supervisorListenUrl = litebus::os::GetEnv("SUPERVISOR_LISTEN_URL");
-    if (supervisorListenUrl.IsNone()) {
-        YRLOG_INFO("supervisor executor disabled, no supervisorListenUrl found");
-        return nullptr;
-    }
     YRLOG_INFO("not found a executor, create a supervisor executor.");
     auto executor = std::make_shared<SupervisorExecutor>("SupervisorExecutor", functionAgentAID_);
     litebus::Spawn(executor, false);

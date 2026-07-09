@@ -236,7 +236,28 @@ Node::TreeNode GlobalSchedActor::FindRootDomainSched()
 messages::ScheduleTopology GlobalSchedActor::FindRootTopologyView()
 {
     ASSERT_IF_NULL(business_);
-    return business_->FindRootDomainSched()->GetTopologyView();
+    auto rootDomain = business_->FindRootDomainSched();
+    if (rootDomain != nullptr) {
+        return rootDomain->GetTopologyView();
+    }
+    // A slave has no live topology tree (FindRootDomainSched returns null), so derive
+    // a read-only view from cacheTopo_ (kept in sync by the SCHEDULER_TOPOLOGY watch):
+    // root's children become members, mirroring SchedNode::GetTopologyView.
+    messages::ScheduleTopology topo;
+    messages::SchedulerNode root;
+    if (!cacheTopo_.empty() && root.ParseFromString(cacheTopo_)) {
+        for (const auto &child : root.children()) {
+            auto *member = topo.add_members();
+            member->set_name(child.name());
+            member->set_address(child.address());
+        }
+    }
+    return topo;
+}
+
+std::string GlobalSchedActor::GetLeaderAddress()
+{
+    return leaderAddress_;
 }
 
 litebus::Future<Status> GlobalSchedActor::UpdateSchedTopology()
@@ -671,6 +692,7 @@ void GlobalSchedActor::DoGroupSchedule(
 
 void GlobalSchedActor::UpdateLeaderInfo(const explorer::LeaderInfo &leaderInfo)
 {
+    leaderAddress_ = leaderInfo.address;
     litebus::AID masterAID(GLOBAL_SCHED_ACTOR_NAME, leaderInfo.address);
     business_->UpdateLeaderInfo(leaderInfo);
     auto newStatus = leader::GetStatus(GetAID(), masterAID, curStatus_);

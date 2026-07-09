@@ -17,9 +17,7 @@
 #include "supervisor_executor.h"
 
 #include <sys/un.h>
-#include <sys/wait.h>
 
-#include <csignal>
 #include <cstring>
 #include <sstream>
 #include <utility>
@@ -32,7 +30,6 @@
 #include "common/utils/files.h"
 #include "common/utils/generate_message.h"
 #include "common/utils/time_utils.h"
-#include "exec/exec.hpp"
 #include "httpd/http.hpp"
 #include "httpd/http_connect.hpp"
 #include "nlohmann/json.hpp"
@@ -44,11 +41,7 @@ constexpr int64_t HEALTH_CHECK_INTERVAL_MS = 100;
 constexpr int64_t HTTP_TIMEOUT_MS = 30000;
 const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 const std::string SUPERVISOR_SANDBOX_PREFIX = "/api/v1/sandboxes";
-const std::string SUPERVISOR_LOG_PATH = "/tmp/supervisor";
-const std::string ERR_LOG = litebus::os::Join(SUPERVISOR_LOG_PATH, "supervisor_stderr.log");
-const std::string OUT_LOG = litebus::os::Join(SUPERVISOR_LOG_PATH, "supervisor_stdout.log");
 const std::string SUPERVISOR_UDS_SOCKET = "/run/jiuwenbox/jiuwenbox.sock";
-const std::string SUPERVISOR_LISTEN_URL = "unix:///run/jiuwenbox/jiuwenbox.sock";
 
 SupervisorExecutor::SupervisorExecutor(const std::string &name, const litebus::AID &functionAgentAID)
     : Executor(name), functionAgentAID_(functionAgentAID)
@@ -65,72 +58,12 @@ void SupervisorExecutor::Finalize()
 {
     YRLOG_INFO("Start finalize SupervisorExecutor");
     runtime2portMappings_.clear();
-    StopSupervisorProcess();
     Executor::Finalize();
 }
 
 void SupervisorExecutor::InitConfig()
 {
     cmdBuilder_.SetRuntimeConfig(config_);
-
-    LaunchSupervisorProcess();
-}
-
-void SupervisorExecutor::LaunchSupervisorProcess()
-{
-    auto supervisorListenUrl = litebus::os::GetEnv("SUPERVISOR_LISTEN_URL");
-    if (supervisorListenUrl.IsNone()) {
-        YRLOG_INFO("supervisor executor disabled, no supervisorListenUrl found");
-        return;
-    }
-
-    CreateSupervisorLogs();
-
-    std::string supervisorListenUrlStr =
-        supervisorListenUrl.IsSome() ? supervisorListenUrl.Get() : SUPERVISOR_LISTEN_URL;
-
-    // Use UDS (Unix Domain Socket) to start jiuwenbox service
-    std::vector<std::string> argv = { "env", "JIUWENBOX_LISTEN=" + supervisorListenUrlStr, "python", "-m",
-                                      "jiuwenbox.server.launcher" };
-    auto exec =
-        litebus::Exec::CreateExec("env", argv, litebus::None(), litebus::ExecIO::CreateFileIO("/dev/null"),
-                                  litebus::ExecIO::CreateFileIO(OUT_LOG), litebus::ExecIO::CreateFileIO(ERR_LOG),
-                                  { litebus::ChildInitHook::EXITWITHPARENT() });
-    if (!exec) {
-        YRLOG_ERROR("failed to create exec");
-        return;
-    }
-
-    supervisorPid_ = exec->GetPid();
-    exec_ = std::move(exec);
-    YRLOG_INFO("success to started supervisor process, pid={},uds={}", supervisorPid_, SUPERVISOR_LISTEN_URL);
-}
-
-void SupervisorExecutor::StopSupervisorProcess()
-{
-    if (supervisorPid_ > 0) {
-        YRLOG_INFO("stopping supervisor process with pid: {}", supervisorPid_);
-        kill(supervisorPid_, SIGTERM);
-        int status;
-        waitpid(supervisorPid_, &status, 0);
-        YRLOG_INFO("process stopped, pid={}", supervisorPid_);
-        supervisorPid_ = -1;
-    }
-}
-
-void SupervisorExecutor::CreateSupervisorLogs()
-{
-    litebus::os::Mkdir(SUPERVISOR_LOG_PATH);
-
-    if (litebus::os::ExistPath(ERR_LOG)) {
-        litebus::os::Rm(ERR_LOG);
-    }
-    TouchFile(ERR_LOG);
-
-    if (litebus::os::ExistPath(OUT_LOG)) {
-        litebus::os::Rm(OUT_LOG);
-    }
-    TouchFile(OUT_LOG);
 }
 
 void SupervisorExecutor::ParseResponse(litebus::Promise<nlohmann::json> promise, std::string response)
@@ -302,10 +235,8 @@ litebus::Future<messages::StartInstanceResponse> SupervisorExecutor::StartInstan
 inline std::string GetPythonExecPath(const google::protobuf::Map<std::string, std::string> &options,
                                      const messages::RuntimeInstanceInfo &info, CommandBuilder &cmdBuilder)
 {
-    // 插件返回的execPath不局限于python，后续可以统一处理execPath，不需要再分语言了
     auto execPathIter = options.find(EXEC_PATH);
     if (execPathIter != options.end()) {
-        YRLOG_INFO("{}|{}|python execPath: {}", info.traceid(), info.requestid(), execPathIter->second);
         return execPathIter->second;
     }
 
@@ -323,58 +254,102 @@ litebus::Future<messages::StartInstanceResponse> SupervisorExecutor::StartRuntim
     } else {
         const auto &options = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
         execPath = GetPythonExecPath(options, info, cmdBuilder_);
-        YRLOG_INFO("{}|{}|python: {} use execPath: {}", info.traceid(), info.requestid(), language, execPath);
     }
 
-    return StartByRuntimeID(request, { { PARAM_EXEC_PATH, execPath }, { PARAM_LANGUAGE, language } }, args, envs)
-        .Then(litebus::Defer(GetAID(), &SupervisorExecutor::OnStartRuntime, std::placeholders::_1, request));
+    litebus::Promise<messages::StartInstanceResponse> promise;
+    StartByRuntimeID(request, { { PARAM_EXEC_PATH, execPath }, { PARAM_LANGUAGE, language } }, args, envs)
+        .OnComplete([this, request, promise, info](const litebus::Future<runtime::v1::StartResponse> &future) mutable {
+            if (future.IsError()) {
+                YRLOG_ERROR("{}|{}|start runtime failed in supervisor, error code: {}", info.traceid(),
+                            info.requestid(), future.GetErrorCode());
+                promise.SetFailed(future.GetErrorCode());
+                return;
+            }
+            const auto &response = future.Get();
+            if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+                YRLOG_ERROR("{}|{}|failed to start runtime in supervisor, code({}) message({})", info.traceid(),
+                            info.requestid(), response.code(), response.message());
+                auto startResponse =
+                    GenFailStartInstanceResponse(request, RUNTIME_MANAGER_CREATE_EXEC_FAILED, response.message());
+                startResponse.mutable_startruntimeinstanceresponse()->set_executortype(
+                    static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
+                promise.SetValue(startResponse);
+                return;
+            }
+
+            auto runtimeID = info.runtimeid();
+            auto startInstanceResponse = GenSuccessStartInstanceResponse(request, response.id());
+            litebus::Async(GetAID(), &SupervisorExecutor::OnStartInstanceCompleted, runtimeID, startInstanceResponse)
+                .OnComplete([promise](const litebus::Future<messages::StartInstanceResponse> &innerFuture) mutable {
+                    if (innerFuture.IsError()) {
+                        promise.SetFailed(innerFuture.GetErrorCode());
+                        return;
+                    }
+                    promise.SetValue(innerFuture.Get());
+                });
+        });
+    return promise.GetFuture();
 }
 
 litebus::Future<std::string> SupervisorExecutor::CreateSandbox(const std::string &runtimeID,
                                                                const std::string &hostUser)
 {
     nlohmann::json createRequest = nlohmann::json::object();
+    if (!hostUser.empty()) {
+        nlohmann::json bindMount = nlohmann::json::object();
+        bindMount["host_path"] = "/home/" + hostUser;
+        bindMount["sandbox_path"] = "/home/" + hostUser;
+        bindMount["mode"] = "rw";
 
-    nlohmann::json bindMount = nlohmann::json::object();
-    bindMount["host_path"] = "/home/" + hostUser;
-    bindMount["sandbox_path"] = "/home/" + hostUser;
-    bindMount["mode"] = "rw";
+        nlohmann::json filesystemPolicy = nlohmann::json::object();
+        filesystemPolicy["bind_mounts"] = nlohmann::json::array();
+        filesystemPolicy["bind_mounts"].push_back(bindMount);
 
-    nlohmann::json filesystemPolicy = nlohmann::json::object();
-    filesystemPolicy["bind_mounts"] = nlohmann::json::array();
-    filesystemPolicy["bind_mounts"].push_back(bindMount);
+        nlohmann::json policy = nlohmann::json::object();
+        policy["filesystem_policy"] = filesystemPolicy;
 
-    nlohmann::json policy = nlohmann::json::object();
-    policy["filesystem_policy"] = filesystemPolicy;
+        policy["process"] = { { "run_as_user", hostUser }, { "run_as_group", hostUser } };
+        policy["namespace"] = { { "user", false } };
 
-    policy["process"] = { { "run_as_user", hostUser }, { "run_as_group", hostUser } };
-    policy["namespace"] = { { "user", false } };
+        createRequest["policy"] = policy;
+        createRequest["policy_mode"] = "append";
+    }
 
-    createRequest["policy"] = policy;
-    createRequest["policy_mode"] = "append";
+    litebus::Promise<std::string> promise;
+    YRLOG_INFO("{}|Create sandbox for {}", runtimeID, hostUser);
 
-    return SendRequestToSupervisor("POST", SUPERVISOR_SANDBOX_PREFIX, createRequest)
-        .Then([this, runtimeID](litebus::Try<nlohmann::json> createResponse) -> litebus::Future<std::string> {
-            if (!createResponse.IsOK()) {
-                YRLOG_ERROR("{}|Create sandbox failed: {}", runtimeID, static_cast<int>(createResponse.GetErrorCode()));
-                litebus::Promise<std::string> promise;
-                promise.SetFailed(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
-                return promise.GetFuture();
+    SendRequestToSupervisor("POST", SUPERVISOR_SANDBOX_PREFIX, createRequest)
+        .OnComplete([this, runtimeID, promise](const litebus::Future<nlohmann::json> &future) mutable {
+            if (future.IsError()) {
+                YRLOG_ERROR("{}|Create sandbox request failed with error code: {}", runtimeID, future.GetErrorCode());
+                promise.SetFailed(future.GetErrorCode());
+                return;
             }
 
-            auto createResp = createResponse.Get();
+            const nlohmann::json &createResp = future.Get();
+
+            // 检查 error_message 字段，如果存在且不为 null 则表示有错误
+            if (createResp.contains("error_message") && !createResp["error_message"].is_null()) {
+                std::string errorMsg = createResp["error_message"].get<std::string>();
+                YRLOG_ERROR("{}|Create sandbox failed with error_message: {}", runtimeID, errorMsg);
+                promise.SetFailed(StatusCode::ERR_INNER_COMMUNICATION);
+                return;
+            }
+
+            // 检查 id 字段
             if (!createResp.contains("id") || !createResp["id"].is_string()) {
-                YRLOG_ERROR("{}|Create sandbox failed: response not contains id", runtimeID);
-                litebus::Promise<std::string> promise;
-                promise.SetFailed(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
-                return promise.GetFuture();
+                YRLOG_ERROR("{}|Create sandbox failed: response does not contain valid id", runtimeID);
+                promise.SetFailed(StatusCode::ERR_INNER_COMMUNICATION);
+                return;
             }
 
             std::string sandboxId = createResp["id"];
             YRLOG_INFO("{}|Create sandbox success: {}", runtimeID, sandboxId);
             runtime2sandboxID_.emplace(runtimeID, sandboxId);
-            return sandboxId;
+            promise.SetValue(sandboxId);
         });
+
+    return promise.GetFuture();
 }
 
 litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::ExecInSandbox(
@@ -400,33 +375,38 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::ExecInSandbox(
     }
 
     std::string execPath = SUPERVISOR_SANDBOX_PREFIX + "/" + sandboxId + "/exec_background";
-    YRLOG_INFO("{}|Executing command: {} in sandbox: {}", runtimeID, execRequest.dump(), sandboxId);
+    YRLOG_INFO("{}|Executing command: {} in sandbox: {}", runtimeID, command.dump(), sandboxId);
 
-    return SendRequestToSupervisor("POST", execPath, execRequest)
-        .Then([this, sandboxId,
-               runtimeID](litebus::Try<nlohmann::json> execResponse) -> litebus::Future<runtime::v1::StartResponse> {
+    litebus::Promise<runtime::v1::StartResponse> promise;
+    SendRequestToSupervisor("POST", execPath, execRequest)
+        .OnComplete([this, sandboxId, runtimeID, promise](const litebus::Future<nlohmann::json> &future) mutable {
             runtime::v1::StartResponse rsp{};
-            if (!execResponse.IsOK()) {
+            if (future.IsError()) {
                 YRLOG_ERROR("{}|Failed to exec command in sandbox {}: {}", runtimeID, sandboxId,
-                            static_cast<int>(execResponse.GetErrorCode()));
+                            static_cast<int>(future.GetErrorCode()));
+                rsp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+                rsp.set_message("Failed to execute command in sandbox");
+
                 auto deleteReq = std::make_shared<runtime::v1::DeleteRequest>();
                 deleteReq->set_id(sandboxId);
                 DoDeleteSandbox(deleteReq).OnComplete(
-                    [runtimeID, sandboxId](const litebus::Future<runtime::v1::DeleteResponse> &deleteFuture) {
+                    [this, runtimeID, sandboxId, promise,
+                     rsp](const litebus::Future<runtime::v1::DeleteResponse> &deleteFuture) mutable {
                         if (deleteFuture.IsError()) {
                             YRLOG_WARN("{}|Failed to cleanup sandbox {} after exec failure", runtimeID, sandboxId);
                         }
+                        runtime2sandboxID_.erase(runtimeID);
+                        promise.SetValue(rsp);
                     });
-                rsp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
-                rsp.set_message("Failed to execute command in sandbox");
-                return rsp;
+                return;
             }
 
             rsp.set_code(0);
             rsp.set_message("success");
             rsp.set_id(sandboxId);
-            return rsp;
+            promise.SetValue(rsp);
         });
+    return promise.GetFuture();
 }
 
 litebus::Future<messages::StartInstanceResponse> SupervisorExecutor::OnStartInstanceCompleted(
@@ -449,43 +429,50 @@ litebus::Future<Status> SupervisorExecutor::StopInstance(const std::shared_ptr<m
                                                          bool oomKilled)
 {
     auto runtimeID = request->runtimeid();
-    YRLOG_INFO("{}|begin to stop sandbox for runtime({})", request->requestid(), runtimeID);
-
-    // Get sandbox ID
     auto sandboxIDIter = runtime2sandboxID_.find(runtimeID);
     if (sandboxIDIter == runtime2sandboxID_.end()) {
         YRLOG_ERROR("sandbox ID not found for runtime({})", runtimeID);
         return Status::OK();
     }
+
     std::string sandboxID = sandboxIDIter->second;
-    // Create delete request
     auto deleteReq = std::make_shared<runtime::v1::DeleteRequest>();
     deleteReq->set_id(sandboxID);
-    // Delete sandbox
-    return DoDeleteSandbox(deleteReq).Then(
-        [this, runtimeID](const litebus::Future<runtime::v1::DeleteResponse> &future) -> litebus::Future<Status> {
-            if (future.IsError()) {
-                YRLOG_ERROR("failed to delete sandbox for runtime({})", runtimeID);
-                return Status::OK();
-            }
-
-            // Remove from maps
+    YRLOG_INFO("{}|Delete sandbox: {} for runtime: {}", request->requestid(), sandboxID, runtimeID);
+    litebus::Promise<Status> promise;
+    DoDeleteSandbox(deleteReq)
+        .OnComplete([this, runtimeID, promise](const litebus::Future<runtime::v1::DeleteResponse> &future) mutable {
             runtime2sandboxID_.erase(runtimeID);
             runtimeInstanceInfoMap_.erase(runtimeID);
 
-            YRLOG_INFO("successfully stopped sandbox for runtime({})", runtimeID);
-            return Status::OK();
+            if (future.IsError()) {
+                YRLOG_ERROR("Failed to delete sandbox for runtime({}), error code: {}", runtimeID,
+                            future.GetErrorCode());
+                promise.SetValue(Status(static_cast<StatusCode>(future.GetErrorCode()),
+                                        "Failed to delete sandbox for runtime " + runtimeID));
+                return;
+            }
+
+            YRLOG_INFO("Successfully delete sandbox for runtime({})", runtimeID);
+            promise.SetValue(Status::OK());
         });
+    return promise.GetFuture();
 }
 
 litebus::Future<runtime::v1::DeleteResponse> SupervisorExecutor::DoDeleteSandbox(
     const std::shared_ptr<runtime::v1::DeleteRequest> &req)
 {
     std::string path = SUPERVISOR_SANDBOX_PREFIX + "/" + req->id();
-    return SendRequestToSupervisor("DELETE", path, nlohmann::json::object())
-        .Then([](litebus::Try<nlohmann::json>) -> litebus::Future<runtime::v1::DeleteResponse> {
-            return runtime::v1::DeleteResponse{};
+    litebus::Promise<runtime::v1::DeleteResponse> promise;
+    SendRequestToSupervisor("DELETE", path)
+        .OnComplete([promise](const litebus::Future<nlohmann::json> &future) mutable {
+            if (future.IsError()) {
+                promise.SetFailed(future.GetErrorCode());
+                return;
+            }
+            promise.SetValue(runtime::v1::DeleteResponse{});
         });
+    return promise.GetFuture();
 }
 
 litebus::Future<messages::SnapshotRuntimeResponse> SupervisorExecutor::SnapshotRuntime(
@@ -599,9 +586,9 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::StartByRuntimeID
     const auto &runtimeID = request->runtimeinstanceinfo().runtimeid();
 
     std::string cmd = execPath;
-    runtime::v1::StartResponse rsp{};
     // java has jvm args check so ignore here
     if (language.find(JAVA_LANGUAGE_PREFIX) == std::string::npos && !CheckIllegalChars(cmd)) {
+        runtime::v1::StartResponse rsp{};
         rsp.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
         rsp.set_message(fmt::format("invalid cmd: {}", cmd));
         return rsp;
@@ -620,16 +607,34 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::StartByRuntimeID
         hostUser = it->second;
     }
 
-    return CreateSandbox(runtimeID, hostUser)
-        .Then([this, start, runtimeID](const std::string &sandboxId) -> litebus::Future<runtime::v1::StartResponse> {
-            if (sandboxId == "") {
+    litebus::Promise<runtime::v1::StartResponse> promise;
+    CreateSandbox(runtimeID, hostUser)
+        .OnComplete([this, start, runtimeID, promise](const litebus::Future<std::string> &future) mutable {
+            if (future.IsError()) {
+                YRLOG_ERROR("{}|Failed to create sandbox, error code: {}", runtimeID, future.GetErrorCode());
                 runtime::v1::StartResponse rsp{};
                 rsp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
                 rsp.set_message("Failed to create sandbox");
-                return rsp;
+                promise.SetValue(rsp);
+                return;
             }
-            return ExecInSandbox(runtimeID, start, sandboxId);
+            const std::string &sandboxId = future.Get();
+            ExecInSandbox(runtimeID, start, sandboxId)
+                .OnComplete(
+                [promise, runtimeID](const litebus::Future<runtime::v1::StartResponse> &execFuture) mutable {
+                    if (execFuture.IsError()) {
+                        YRLOG_ERROR("{}|Failed to exec in sandbox, error code: {}", runtimeID,
+                                    execFuture.GetErrorCode());
+                        runtime::v1::StartResponse rsp{};
+                        rsp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+                        rsp.set_message("Failed to execute command in sandbox");
+                        promise.SetValue(rsp);
+                        return;
+                    }
+                    promise.SetValue(execFuture.Get());
+                });
         });
+    return promise.GetFuture();
 }
 
 litebus::Future<Status> SupervisorExecutor::TerminateSandbox(const std::string &runtimeID, const std::string &sandboxID)
@@ -640,7 +645,19 @@ litebus::Future<Status> SupervisorExecutor::TerminateSandbox(const std::string &
     auto deleteReq = std::make_shared<runtime::v1::DeleteRequest>();
     deleteReq->set_id(sandboxID);
 
-    return DoDeleteSandbox(deleteReq).Then([]() -> litebus::Future<Status> { return Status::OK(); });
+    litebus::Promise<Status> promise;
+    DoDeleteSandbox(deleteReq).OnComplete(
+        [promise, sandboxID, runtimeID](const litebus::Future<runtime::v1::DeleteResponse> &future) mutable {
+            if (future.IsError()) {
+                YRLOG_ERROR("Failed to terminate sandbox({}) for runtime({}), error code: {}", sandboxID, runtimeID,
+                            future.GetErrorCode());
+                promise.SetValue(
+                    Status(static_cast<StatusCode>(future.GetErrorCode()), "Failed to terminate sandbox " + sandboxID));
+                return;
+            }
+            promise.SetValue(Status::OK());
+        });
+    return promise.GetFuture();
 }
 
 messages::StartInstanceResponse SupervisorExecutor::GenSuccessStartInstanceResponse(
@@ -668,19 +685,6 @@ messages::StartInstanceResponse SupervisorExecutor::GenSuccessStartInstanceRespo
         instanceResponse->set_port(portMappingsIter->second);
     }
     return response;
-}
-
-litebus::Future<messages::StartInstanceResponse> SupervisorExecutor::OnStartRuntime(
-    const runtime::v1::StartResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request)
-{
-    const auto &info = request->runtimeinstanceinfo();
-
-    // On start runtime
-    auto runtimeID = info.runtimeid();
-    YRLOG_INFO("on start runtime({}) with sandbox({})", runtimeID, response.id());
-
-    auto startInstanceResponse = GenSuccessStartInstanceResponse(request, response.id());
-    return litebus::Async(GetAID(), &SupervisorExecutor::OnStartInstanceCompleted, runtimeID, startInstanceResponse);
 }
 
 litebus::Future<messages::UpdateCredResponse> SupervisorExecutor::UpdateCredForRuntime(

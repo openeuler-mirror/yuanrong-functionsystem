@@ -39,6 +39,14 @@ if [ -z "$FUNCTION_META_PATH" ] && [ -d "${FUNCTION_SYSTEM_DIR}/../pattern/patte
   PATTERN_FAAS_HOME_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas")
   FUNCTION_META_PATH="$PATTERN_FAAS_HOME_DIR/executor-meta"
 fi
+
+function get_runtime_checkpoint_dir() {
+  local checkpoint_dir
+  checkpoint_dir=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../checkpoints")
+  mkdir -p "${checkpoint_dir}"
+  echo "${checkpoint_dir}"
+}
+
 function install_function_proxy() {
   log_info "start function proxy, proxy_port=${FUNCTION_PROXY_PORT}, grpc_port=${FUNCTION_PROXY_GRPC_PORT}..."
   local bin=${FUNCTION_SYSTEM_DIR}/bin/function_proxy
@@ -71,6 +79,8 @@ function install_function_proxy() {
   if [ "X${FUNCTION_PROXY_MERGE_PROCESS_ENABLE^^}" == "XTRUE" ]; then
     local ld_library_path=${LD_LIBRARY_PATH}
     local function_system_ld_library_path=${FUNCTION_SYSTEM_DIR}/lib:${DATA_SYSTEM_DIR}/lib:${ld_library_path}
+    local checkpoint_dir
+    checkpoint_dir=$(get_runtime_checkpoint_dir)
     local agent_uid=${YR_POD_NAME}
     if [ "x${YR_POD_NAME}" == "x" ]; then
       agent_uid="${NODE_ID}"
@@ -82,6 +92,7 @@ function install_function_proxy() {
     --runtime_home_dir="${RUNTIME_USER_HOME_DIR}" \
     --runtime_logs_dir="${RUNTIME_LOG_PATH}" \
     --runtime_std_log_dir="" \
+    --checkpoint_dir="${checkpoint_dir}" \
     --runtime_ld_library_path="${ld_library_path}:${RUNTIME_HOME_DIR}/service/cpp/snlib:${RUNTIME_HOME_DIR}/sdk/cpp/lib" \
     --runtime_log_level="${RUNTIME_LOG_LEVEL}" \
     --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}" \
@@ -526,6 +537,8 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
   local bin=${FUNCTION_SYSTEM_DIR}/bin/function_agent
   local ld_library_path=${LD_LIBRARY_PATH}
   local function_system_ld_library_path=${FUNCTION_SYSTEM_DIR}/lib:${DATA_SYSTEM_DIR}/lib:${ld_library_path}
+  local checkpoint_dir
+  checkpoint_dir=$(get_runtime_checkpoint_dir)
   local unique_proxy_option="--local_node_id=${NODE_ID}"
   if [ "X${DEPLOY_FUNCTION_PROXY}" = "Xfalse" ] && [ ! -z "${UNIQUE_NODE_ID}" ]; then
     unique_proxy_option="--local_node_id=${UNIQUE_NODE_ID}"
@@ -550,6 +563,7 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     --runtime_home_dir="${RUNTIME_USER_HOME_DIR}"
     --runtime_logs_dir="${RUNTIME_LOG_PATH}"
     --runtime_std_log_dir=""
+    --checkpoint_dir="${checkpoint_dir}"
     --runtime_log_level="${RUNTIME_LOG_LEVEL}"
     --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}"
     --runtime_max_log_file_num="${RUNTIME_LOG_ROLLING_MAX_FILES}"

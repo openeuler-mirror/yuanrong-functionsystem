@@ -32,8 +32,9 @@
 
 namespace functionsystem::runtime_manager {
 
-// Bring in the test helper functions for ASSERT_AWAIT_READY macro
+// Bring in the test helper functions for ASSERT_AWAIT_READY / ASSERT_AWAIT_SET macros
 using functionsystem::test::AwaitAssertReady;
+using functionsystem::test::AwaitAssertSet;
 
 class MockSupervisorExecutor : public SupervisorExecutor {
 public:
@@ -62,6 +63,39 @@ public:
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &sandboxID)
     {
         return GenSuccessStartInstanceResponse(request, sandboxID);
+    }
+
+    litebus::Future<std::string> TestCreateSandbox(const std::string &runtimeID, const std::string &hostUser = "")
+    {
+        return CreateSandbox(runtimeID, hostUser);
+    }
+
+    litebus::Future<runtime::v1::StartResponse> TestExecInSandbox(
+        const std::string &runtimeID, const std::shared_ptr<runtime::v1::StartRequest> &start,
+        const std::string &sandboxId)
+    {
+        return ExecInSandbox(runtimeID, start, sandboxId);
+    }
+
+    litebus::Future<runtime::v1::DeleteResponse> TestDoDeleteSandbox(
+        const std::shared_ptr<runtime::v1::DeleteRequest> &req)
+    {
+        return DoDeleteSandbox(req);
+    }
+
+    litebus::Future<runtime::v1::StartResponse> TestStartByRuntimeID(
+        const std::shared_ptr<messages::StartInstanceRequest> &request,
+        const std::map<std::string, std::string> &startRuntimeParams, const std::vector<std::string> &buildArgs,
+        const Envs &envs)
+    {
+        return StartByRuntimeID(request, startRuntimeParams, buildArgs, envs);
+    }
+
+    litebus::Future<messages::StartInstanceResponse> TestStartRuntime(
+        const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &language, const Envs &envs,
+        const std::vector<std::string> &args)
+    {
+        return StartRuntime(request, language, envs, args);
     }
 
     bool TestIsRuntimeActive(const std::string &runtimeID)
@@ -128,7 +162,8 @@ protected:
         litebus::os::Rmdir(testDeployDir_);
     }
 
-    std::shared_ptr<messages::StartInstanceRequest> GenStartInstanceRequest(const std::string &language = "python3")
+    std::shared_ptr<messages::StartInstanceRequest> GenStartInstanceRequest(const std::string &language = "python3",
+                                                                            const std::string &execPath = "")
     {
         auto request = std::make_shared<messages::StartInstanceRequest>();
         request->set_type(static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
@@ -147,6 +182,9 @@ protected:
         deployConfig->set_bucketid("test_bucket_id");
         deployConfig->set_deploydir(testDeployDir_);
         deployConfig->set_storagetype("local");
+        if (!execPath.empty()) {
+            (*deployConfig->mutable_deployoptions())[EXEC_PATH] = execPath;
+        }
 
         auto containerInfo = runtimeInfo->mutable_container();
         containerInfo->set_mountpoint("/opt/func");
@@ -430,20 +468,14 @@ TEST_F(SupervisorExecutorTest, StopInstance_Success)
 
     auto statusFuture = executor_->StopInstance(request, false);
 
-    // Wait for the future to complete (it may fail due to missing supervisor)
-    statusFuture.WaitFor(TEST_AWAIT_TIMEOUT);
-
-    if (statusFuture.IsError()) {
-        // In test environment without supervisor, communication will fail
-        // This is expected behavior - the test verifies the code path is exercised
-        EXPECT_EQ(statusFuture.GetErrorCode(), static_cast<int>(StatusCode::ERR_INNER_COMMUNICATION));
-    } else {
-        // If supervisor is available, expect success
-        auto status = statusFuture.Get();
+    ASSERT_AWAIT_READY(statusFuture);
+    auto status = statusFuture.Get();
+    if (status.IsOk()) {
         EXPECT_EQ(status.StatusCode(), StatusCode::SUCCESS);
+    } else {
+        EXPECT_EQ(status.StatusCode(), StatusCode::ERR_INNER_COMMUNICATION);
     }
-
-    // Note: In real environment with running supervisor, this would clean up the sandbox
+    EXPECT_EQ(executor_->GetSandboxIDByRuntimeID(runtimeID), "");
 }
 
 TEST_F(SupervisorExecutorTest, StopInstance_RuntimeNotExists)
@@ -638,18 +670,16 @@ TEST_F(SupervisorExecutorTest, StopInstance_OomKilled)
     auto statusFuture = executor_->StopInstance(request, true);
 
     // Test with oomKilled flag set to true
-    // Wait for the future to complete (it may fail due to missing supervisor)
-    statusFuture.WaitFor(TEST_AWAIT_TIMEOUT);
-
-    if (statusFuture.IsError()) {
-        // In test environment without supervisor, communication will fail
-        // This is expected behavior - the test verifies the code path is exercised
-        EXPECT_EQ(statusFuture.GetErrorCode(), static_cast<int>(StatusCode::ERR_INNER_COMMUNICATION));
-    } else {
-        // If supervisor is available, expect success
-        auto status = statusFuture.Get();
+    // StopInstance resolves to a Status value; without a supervisor the delete fails and
+    // the Status carries ERR_INNER_COMMUNICATION while still cleaning up local mappings.
+    ASSERT_AWAIT_READY(statusFuture);
+    auto status = statusFuture.Get();
+    if (status.IsOk()) {
         EXPECT_EQ(status.StatusCode(), StatusCode::SUCCESS);
+    } else {
+        EXPECT_EQ(status.StatusCode(), StatusCode::ERR_INNER_COMMUNICATION);
     }
+    EXPECT_EQ(executor_->GetSandboxIDByRuntimeID(runtimeID), "");
 
     // Note: The oomKilled flag is handled internally by StopInstance
 }
@@ -727,40 +757,6 @@ TEST_F(SupervisorExecutorTest, StopAllSandboxes_NoSandboxes)
     EXPECT_EQ(executor_->GetRuntimeToSandboxIDMapSize(), 0);
 }
 
-TEST_F(SupervisorExecutorTest, StopAllSandboxes_WithOneSandbox)
-{
-    std::string runtimeID = "test_runtime_id";
-    std::string sandboxID = "sandbox123";
-    executor_->SetRuntimeToSandboxID(runtimeID, sandboxID);
-
-    EXPECT_EQ(executor_->GetRuntimeToSandboxIDMapSize(), 1);
-    EXPECT_EQ(executor_->GetSandboxIDByRuntimeID(runtimeID), sandboxID);
-
-    auto resultFuture = executor_->StopAllSandboxes();
-
-    // Will attempt to stop but may fail without proper supervisor mocking
-    ASSERT_AWAIT_READY(resultFuture);
-    auto result = resultFuture.Get();
-    // Result may be false if sandbox deletion fails
-}
-
-TEST_F(SupervisorExecutorTest, StopAllSandboxes_WithMultipleSandboxes)
-{
-    // Register multiple sandboxes
-    executor_->SetRuntimeToSandboxID("runtime1", "sandbox1");
-    executor_->SetRuntimeToSandboxID("runtime2", "sandbox2");
-    executor_->SetRuntimeToSandboxID("runtime3", "sandbox3");
-
-    EXPECT_EQ(executor_->GetRuntimeToSandboxIDMapSize(), 3);
-
-    auto resultFuture = executor_->StopAllSandboxes();
-
-    // Will attempt to stop all sandboxes
-    ASSERT_AWAIT_READY(resultFuture);
-    auto result = resultFuture.Get();
-    // Result depends on whether supervisor calls succeed
-}
-
 TEST_F(SupervisorExecutorTest, StopAllSandboxes_StateTransition)
 {
     // Test state transition from multiple sandboxes to empty
@@ -821,6 +817,172 @@ TEST_F(SupervisorExecutorTest, StopAllSandboxes_AfterStopAll)
     auto result2 = resultFuture2.Get();
     EXPECT_TRUE(result2);
     EXPECT_EQ(executor_->GetRuntimeToSandboxIDMapSize(), 0);
+}
+
+/**
+ * Feature: CreateSandbox
+ * Description: Test CreateSandbox failure path - UDS socket unavailable, future should be error
+ */
+TEST_F(SupervisorExecutorTest, CreateSandbox_FailsWhenSupervisorUnavailable)
+{
+    std::string runtimeID = "test_cs_runtime_id";
+    auto future = executor_->TestCreateSandbox(runtimeID, "host_user");
+
+    ASSERT_AWAIT_SET_FOR(future, TEST_AWAIT_TIMEOUT);
+    EXPECT_TRUE(future.IsError());
+    EXPECT_EQ(future.GetErrorCode(), static_cast<int>(StatusCode::ERR_INNER_COMMUNICATION));
+    // No sandbox should be registered on failure
+    EXPECT_FALSE(executor_->TestIsRuntimeActive(runtimeID));
+}
+
+TEST_F(SupervisorExecutorTest, CreateSandbox_FailsWithEmptyHostUser)
+{
+    std::string runtimeID = "test_cs_empty_host";
+    auto future = executor_->TestCreateSandbox(runtimeID, "");
+
+    ASSERT_AWAIT_SET_FOR(future, TEST_AWAIT_TIMEOUT);
+    EXPECT_TRUE(future.IsError());
+    EXPECT_EQ(future.GetErrorCode(), static_cast<int>(StatusCode::ERR_INNER_COMMUNICATION));
+}
+
+/**
+ * Feature: DoDeleteSandbox
+ * Description: Test DoDeleteSandbox failure path - UDS unavailable, error should propagate via SetFailed
+ */
+TEST_F(SupervisorExecutorTest, DoDeleteSandbox_FailsWhenSupervisorUnavailable)
+{
+    auto req = std::make_shared<runtime::v1::DeleteRequest>();
+    req->set_id("sandbox_to_delete");
+
+    auto future = executor_->TestDoDeleteSandbox(req);
+
+    ASSERT_AWAIT_SET_FOR(future, TEST_AWAIT_TIMEOUT);
+    EXPECT_TRUE(future.IsError());
+    EXPECT_EQ(future.GetErrorCode(), static_cast<int>(StatusCode::ERR_INNER_COMMUNICATION));
+}
+
+/**
+ * Feature: ExecInSandbox
+ * Description: Test ExecInSandbox failure path - SendRequestToSupervisor fails, should return
+ *              StartResponse with ERR_INNER_COMMUNICATION code and trigger sandbox cleanup
+ */
+TEST_F(SupervisorExecutorTest, ExecInSandbox_FailsAndTriggersCleanup)
+{
+    std::string runtimeID = "test_exec_runtime_id";
+    std::string sandboxId = "sandbox_exec_failure";
+
+    // Register sandbox so cleanup can be observed via map state
+    executor_->SetRuntimeToSandboxID(runtimeID, sandboxId);
+
+    auto start = std::make_shared<runtime::v1::StartRequest>();
+    auto funcRt = start->mutable_funcruntime();
+    funcRt->add_command("python3");
+    funcRt->add_command("-c");
+    funcRt->add_command("print('hello')");
+    start->mutable_userenvs()->insert({"KEY", "VALUE"});
+
+    auto future = executor_->TestExecInSandbox(runtimeID, start, sandboxId);
+
+    ASSERT_AWAIT_READY_FOR(future, TEST_AWAIT_TIMEOUT);
+    auto rsp = future.Get();
+    // ExecInSandbox swallows future-level error and turns it into failure code
+    EXPECT_EQ(rsp.code(), static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+    EXPECT_EQ(rsp.message(), "Failed to execute command in sandbox");
+    EXPECT_EQ(rsp.id(), "");
+    // Cleanup must drop the local runtime->sandbox mapping so the runtime is no longer active
+    EXPECT_EQ(executor_->GetSandboxIDByRuntimeID(runtimeID), "");
+    EXPECT_FALSE(executor_->TestIsRuntimeActive(runtimeID));
+}
+
+/**
+ * Feature: StartByRuntimeID
+ * Description: Test StartByRuntimeID illegal command path - returns StartResponse with ERR_PARAM_INVALID
+ */
+TEST_F(SupervisorExecutorTest, StartByRuntimeID_RejectsIllegalCommandChars)
+{
+    auto request = GenStartInstanceRequest("python3");
+    std::map<std::string, std::string> startParams = { { PARAM_EXEC_PATH, "/bin/echo$()" },
+                                                       { PARAM_LANGUAGE, "python3" } };
+    std::vector<std::string> buildArgs = { "/bin/echo$()", "arg" };
+    Envs envs;
+
+    auto future = executor_->TestStartByRuntimeID(request, startParams, buildArgs, envs);
+
+    ASSERT_AWAIT_READY_FOR(future, TEST_AWAIT_TIMEOUT);
+    auto rsp = future.Get();
+    EXPECT_EQ(rsp.code(), static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
+    // Message should contain the offending command
+    EXPECT_THAT(rsp.message(), testing::HasSubstr("/bin/echo$()"));
+}
+
+/**
+ * Feature: StartByRuntimeID
+ * Description: Test StartByRuntimeID failure path when CreateSandbox fails - should SetValue
+ *              a StartResponse with ERR_INNER_COMMUNICATION and "Failed to create sandbox" message
+ */
+TEST_F(SupervisorExecutorTest, StartByRuntimeID_ReturnsFailureResponseWhenCreateSandboxFails)
+{
+    auto request = GenStartInstanceRequest("python3");
+    std::map<std::string, std::string> startParams = { { PARAM_EXEC_PATH, "/usr/bin/python3" },
+                                                       { PARAM_LANGUAGE, "python3" } };
+    std::vector<std::string> buildArgs = { "/usr/bin/python3" };
+    Envs envs;
+
+    auto future = executor_->TestStartByRuntimeID(request, startParams, buildArgs, envs);
+
+    ASSERT_AWAIT_READY_FOR(future, TEST_AWAIT_TIMEOUT);
+    auto rsp = future.Get();
+    // CreateSandbox fails (no supervisor) -> OnComplete IsError branch -> SetValue failure StartResponse
+    EXPECT_EQ(rsp.code(), static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+    EXPECT_EQ(rsp.message(), "Failed to create sandbox");
+}
+
+/**
+ * Feature: StartRuntime
+ * Description: Test StartRuntime failure path - when underlying StartByRuntimeID returns a failure
+ *              code, StartRuntime should produce a failed StartInstanceResponse with
+ *              RUNTIME_MANAGER_CREATE_EXEC_FAILED and SUPERVISOR executor type
+ */
+TEST_F(SupervisorExecutorTest, StartRuntime_PropagatesFailureResponseWithCreateExecFailed)
+{
+    auto request = GenStartInstanceRequest("python3");
+    Envs envs;
+    std::vector<std::string> args = { "/usr/bin/python3" };
+
+    auto future = executor_->TestStartRuntime(request, "python3", envs, args);
+
+    ASSERT_AWAIT_READY_FOR(future, TEST_AWAIT_TIMEOUT);
+    auto rsp = future.Get();
+    // code != SUCCESS branch -> GenFailStartInstanceResponse(RUNTIME_MANAGER_CREATE_EXEC_FAILED, ...)
+    EXPECT_NE(rsp.code(), static_cast<int32_t>(StatusCode::SUCCESS));
+    EXPECT_EQ(rsp.startruntimeinstanceresponse().executortype(),
+              static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
+    // Message should come from the underlying StartResponse (Failed to create sandbox)
+    EXPECT_THAT(rsp.message(), testing::HasSubstr("Failed to create sandbox"));
+    EXPECT_EQ(rsp.requestid(), "test_request_id");
+}
+
+/**
+ * Feature: StartRuntime
+ * Description: Test StartRuntime with illegal command - should propagate ERR_PARAM_INVALID
+ *              from StartByRuntimeID into a failed StartInstanceResponse
+ */
+TEST_F(SupervisorExecutorTest, StartRuntime_RejectsIllegalCommandChars)
+{
+    auto request = GenStartInstanceRequest("python3", "/bin/echo$()");
+    Envs envs;
+    std::vector<std::string> args = { "arg" };
+
+    auto future = executor_->TestStartRuntime(request, "python3", envs, args);
+
+    ASSERT_AWAIT_READY_FOR(future, TEST_AWAIT_TIMEOUT);
+    auto rsp = future.Get();
+    EXPECT_NE(rsp.code(), static_cast<int32_t>(StatusCode::SUCCESS));
+    EXPECT_EQ(rsp.startruntimeinstanceresponse().executortype(),
+              static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
+    // Underlying StartByRuntimeID returns ERR_PARAM_INVALID; GenFailStartInstanceResponse
+    // wraps with RUNTIME_MANAGER_CREATE_EXEC_FAILED code, message carries the original
+    EXPECT_THAT(rsp.message(), testing::HasSubstr("/bin/echo$()"));
 }
 
 }  // namespace functionsystem::runtime_manager

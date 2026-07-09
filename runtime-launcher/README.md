@@ -12,8 +12,12 @@ runtime-launcher 是 yuanrong-functionsystem 的本地 sandbox 启动服务，�
 source /etc/profile.d/buildtools.sh
 cd /home/robbluo/code/yuanrong-functionsystem/runtime-launcher
 
+protoc --go_out=. --go_opt=paths=source_relative \
+  --go-grpc_out=. --go-grpc_opt=paths=source_relative \
+  api/proto/runtime/v1/runtime_launcher.proto
+
 # 构建服务端
-go build -buildvcs=false -o bin/runtime-launcher ./cmd/runtime-launcher/
+go build -buildvcs=false -o bin/runtime/runtime-launcher ./cmd/runtime-launcher/
 
 # 构建测试客户端
 go build -buildvcs=false -o bin/rl-client ./cmd/rl-client/

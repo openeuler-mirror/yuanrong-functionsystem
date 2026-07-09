@@ -60,6 +60,7 @@ const std::string CPP_NEW_EXEC_PATH = "/cpp/bin/runtime";
 const std::string GO_NEW_EXEC_PATH = "/go/bin/goruntime";
 const std::string GLOG_LOG_DIR = "GLOG_log_dir";
 const std::string YR_LOG_LEVEL = "YR_LOG_LEVEL";
+const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 const std::string PYTHON_PATH = "PYTHONPATH";
 const std::string PATH = "PATH";
 const std::string PYTHON_LOG_CONFIG_PATH = "PYTHON_LOG_CONFIG";
@@ -1221,6 +1222,7 @@ std::map<std::string, std::string> RuntimeExecutor::CombineEnvs(const Envs &envs
     combineEnvs[YR_LOG_LEVEL] = config_.runtimeLogLevel;
     combineEnvs[GLOG_LOG_DIR] = config_.runtimeLogPath;
     combineEnvs["YR_LOG_PATH"] = config_.runtimeLogPath;
+    combineEnvs.emplace(YR_ONLY_STDOUT, "false");
     combineEnvs[PYTHON_LOG_CONFIG_PATH] = config_.pythonLogConfigPath;
     combineEnvs[MAX_LOG_SIZE_MB_ENV] = std::to_string(config_.runtimeMaxLogSize);
     combineEnvs[MAX_LOG_FILE_NUM_ENV] = std::to_string(config_.runtimeMaxLogFileNum);

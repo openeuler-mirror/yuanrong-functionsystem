@@ -123,7 +123,7 @@ Status DSCacheClientImpl::GetObjMetaInfo(const std::string &tenantId, const std:
 {
     std::vector<::datasystem::ObjMetaInfo> objMetaInfos;
     // only set tenantId when ds auth is enabled
-    RETURN_IF_DS_ERROR(dsObjectClient_->GetObjMetaInfo(isDSAuthEnable_ ? tenantId : "", objs, objMetaInfos));
+    RETURN_IF_DS_ERROR(dsObjectClient_->GetObjMetaInfo(isDSAuthEnable_ ? tenantId : "default", objs, objMetaInfos));
     for (const auto &metaInfo : objMetaInfos) {
         ObjMetaInfo temp;
         temp.objSize = metaInfo.objSize;

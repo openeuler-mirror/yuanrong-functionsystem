@@ -724,6 +724,57 @@ TEST_F(GlobalSchedTest, RecoverTopologyTest)
     globalSched_.Await();
 }
 
+// leader: has a root domain, use the live topology view (and does not crash).
+TEST_F(GlobalSchedTest, FindRootTopologyViewMasterUsesRoot)
+{
+    EXPECT_CALL(*mockSchedTree_, GetRootNode).WillOnce(Return(rootNode_));
+    auto topo = globalSchedActor_->FindRootTopologyView();
+    EXPECT_EQ(topo.members_size(), 0);  // rootNode_ has no children
+    globalSched_.Stop();
+    globalSched_.Await();
+}
+
+// slave: no root domain, fall back to cacheTopo_ (members come from root's children).
+// Guards against the null-deref that previously crashed the process.
+TEST_F(GlobalSchedTest, FindRootTopologyViewSlaveReadsCache)
+{
+    explorer::LeaderInfo leaderInfo{.name = "master", .address = "127.0.0.2:8080"};
+    globalSchedActor_->UpdateLeaderInfo(leaderInfo);  // switch to slave
+
+    messages::SchedulerNode root;
+    root.set_name("root");
+    root.set_address("127.0.0.2:8080");
+    auto *child = root.add_children();
+    child->set_name("domain0");
+    child->set_address("192.168.0.10:22770");
+
+    std::vector<WatchEvent> events;
+    KeyValue kv;
+    kv.set_key("SCHEDULER_TOPOLOGY");
+    kv.set_value(root.SerializeAsString());
+    events.emplace_back(WatchEvent{EventType::EVENT_TYPE_PUT, kv});
+    globalSchedActor_->OnTopologyEvent(events);  // populate cacheTopo_ via the watch path
+
+    auto topo = globalSchedActor_->FindRootTopologyView();  // must not crash
+    ASSERT_EQ(topo.members_size(), 1);
+    EXPECT_EQ(topo.members(0).name(), "domain0");
+    EXPECT_EQ(topo.members(0).address(), "192.168.0.10:22770");
+    globalSched_.Stop();
+    globalSched_.Await();
+}
+
+// GetLeaderAddress returns the elected leader after UpdateLeaderInfo.
+TEST_F(GlobalSchedTest, GetLeaderAddressReturnsElectedLeader)
+{
+    explorer::LeaderInfo leaderInfo{.name = "master", .address = "127.0.0.2:8080"};
+    globalSchedActor_->UpdateLeaderInfo(leaderInfo);
+    auto future = globalSched_.GetLeaderAddress();
+    EXPECT_AWAIT_READY(future);
+    EXPECT_EQ(future.Get(), "127.0.0.2:8080");
+    globalSched_.Stop();
+    globalSched_.Await();
+}
+
 TEST_F(GlobalSchedTest, GroupScheduleSuccessfulTest)
 {
     EXPECT_CALL(*mockSchedTree_, GetRootNode).WillOnce(Return(rootNode_));

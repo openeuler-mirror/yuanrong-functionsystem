@@ -25,6 +25,7 @@
 #include "common/crypto/crypto.h"
 #include "common/logs/logging.h"
 #include "common/metadata/metadata.h"
+#include "common/resource_view/resource_type.h"
 #include "common/utils/struct_transfer.h"
 #include "constants.h"
 
@@ -163,6 +164,21 @@ messages::RuntimeConfig SetRuntimeConfig(const std::shared_ptr<messages::DeployI
         (*runtimeConf.mutable_hookhandler())[it.first] = it.second;
     }
     (*runtimeConf.mutable_resources()) = req->resources();
+
+    // Set CPU/Memory limit from scheduleOption.extension (set by SDK InvokeOptions.cpu_limit/mem_limit).
+    const auto &extension = req->scheduleoption().extension();
+    if (auto cpuLimitIter = extension.find("CPU_LIMIT"); cpuLimitIter != extension.end()) {
+        auto &resources = *runtimeConf.mutable_resources()->mutable_resources();
+        if (resources.find(CPU_RESOURCE_NAME) != resources.end()) {
+            resources[CPU_RESOURCE_NAME].mutable_scalar()->set_limit(std::stod(cpuLimitIter->second));
+        }
+    }
+    if (auto memLimitIter = extension.find("Memory_LIMIT"); memLimitIter != extension.end()) {
+        auto &resources = *runtimeConf.mutable_resources()->mutable_resources();
+        if (resources.find(MEMORY_RESOURCE_NAME) != resources.end()) {
+            resources[MEMORY_RESOURCE_NAME].mutable_scalar()->set_limit(std::stod(memLimitIter->second));
+        }
+    }
 
     AddHeteroConfig(req, runtimeConf);
     AddDiskConfig(req, runtimeConf);
