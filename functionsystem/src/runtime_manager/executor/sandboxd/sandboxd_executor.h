@@ -201,7 +201,7 @@ private:
         const std::shared_ptr<messages::StartInstanceRequest> &request, const CommandArgs &cmdArgs,
         const Envs &envs, std::shared_ptr<SandboxdStartGuard> guard);
     litebus::Future<messages::StartInstanceResponse> OnRestoreDone(
-        const runtime::v1::RestoreResponse &response,
+        const runtime::v1::SandboxRestoreResponse &response,
         const std::shared_ptr<messages::StartInstanceRequest> &request,
         std::shared_ptr<SandboxdStartGuard> guard);
 
@@ -235,9 +235,9 @@ private:
     litebus::Future<runtime::v1::SandboxNormalResponse> DoUnregister(
         const std::shared_ptr<runtime::v1::SandboxUnregisterRequest> &req);
     litebus::Future<runtime::v1::SandboxGetRegisteredResponse> DoGetRegistered();
-    litebus::Future<runtime::v1::RestoreResponse> DoRestore(
+    litebus::Future<runtime::v1::SandboxRestoreResponse> DoRestore(
         const std::shared_ptr<messages::StartInstanceRequest> &request,
-        const std::shared_ptr<runtime::v1::RestoreRequest> &req);
+        const std::shared_ptr<runtime::v1::SandboxRestoreRequest> &req);
 
     void DoWait(const std::string &sandboxID, const std::string &runtimeID);
     void RestoreWait(const std::string &sandboxID);

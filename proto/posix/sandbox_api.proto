@@ -52,7 +52,7 @@ service SandboxService {
   // Start creates and starts a sandbox.
   rpc Start(SandboxStartRequest) returns (StartResponse) {}
   // Restore creates a sandbox from a checkpoint.
-  rpc Restore(RestoreRequest) returns (RestoreResponse) {}
+  rpc Restore(SandboxRestoreRequest) returns (SandboxRestoreResponse) {}
   // Delete stops and deletes a sandbox.
   rpc Delete(DeleteRequest) returns (DeleteResponse) {}
   // Wait waits for a sandbox to exit.
@@ -112,16 +112,20 @@ message SandboxStartRequest {
   map<string, string> metric_labels = 17;
 }
 
-// RestoreRequest describes a sandbox restore (from checkpoint) request.
-message RestoreRequest {
+// SandboxRestoreRequest describes a sandbox restore (from checkpoint) request.
+// Renamed from RestoreRequest to avoid a runtime.v1 symbol clash with the
+// legacy runtime_launcher_interface.proto RestoreRequest.
+message SandboxRestoreRequest {
   // Sandbox is the sandbox spec to create from the checkpoint (same shape as Start).
   SandboxStartRequest sandbox = 1;
   // CheckpointDir is the directory containing checkpoint artifacts.
   string checkpoint_dir = 2;
 }
 
-// RestoreResponse is returned after sandbox restore.
-message RestoreResponse {
+// SandboxRestoreResponse is returned after sandbox restore.
+// Renamed from RestoreResponse to avoid a runtime.v1 symbol clash with the
+// legacy runtime_launcher_interface.proto RestoreResponse.
+message SandboxRestoreResponse {
   // Code is 0 on success.
   int32 code = 1;
   // Message contains details about the restore result.

@@ -530,7 +530,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointR
         return GenFailStartInstanceResponse(request, status.StatusCode(), status.RawMessage());
     }
 
-    auto restoreReq = std::make_shared<runtime::v1::RestoreRequest>();
+    auto restoreReq = std::make_shared<runtime::v1::SandboxRestoreRequest>();
     *restoreReq->mutable_sandbox() = *startReq;
     restoreReq->set_checkpoint_dir(checkpointPath);
 
@@ -540,7 +540,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointR
 }
 
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnRestoreDone(
-    const runtime::v1::RestoreResponse &response,
+    const runtime::v1::SandboxRestoreResponse &response,
     const std::shared_ptr<messages::StartInstanceRequest> &request,
     std::shared_ptr<SandboxdStartGuard> guard)
 {
@@ -1275,21 +1275,21 @@ litebus::Future<runtime::v1::SandboxGetRegisteredResponse> SandboxdExecutor::DoG
         });
 }
 
-litebus::Future<runtime::v1::RestoreResponse> SandboxdExecutor::DoRestore(
+litebus::Future<runtime::v1::SandboxRestoreResponse> SandboxdExecutor::DoRestore(
     const std::shared_ptr<messages::StartInstanceRequest> &request,
-    const std::shared_ptr<runtime::v1::RestoreRequest> &req)
+    const std::shared_ptr<runtime::v1::SandboxRestoreRequest> &req)
 {
     YRLOG_INFO("{}|{}|DoRestore: {}", request->runtimeinstanceinfo().traceid(),
                request->runtimeinstanceinfo().requestid(), req->ShortDebugString());
     ASSERT_IF_NULL(sandboxd_);
-    auto resp = std::make_shared<runtime::v1::RestoreResponse>();
+    auto resp = std::make_shared<runtime::v1::SandboxRestoreResponse>();
     return sandboxd_
         ->CallAsyncX("Restore", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncRestore)
-        .Then([request, resp](const Status &status) -> litebus::Future<runtime::v1::RestoreResponse> {
+        .Then([request, resp](const Status &status) -> litebus::Future<runtime::v1::SandboxRestoreResponse> {
             if (status.IsOk()) {
                 return *resp;
             }
-            runtime::v1::RestoreResponse err;
+            runtime::v1::SandboxRestoreResponse err;
             err.set_code(static_cast<int32_t>(status.StatusCode()));
             err.set_message(fmt::format("Restore gRPC failed for runtime({}): {}",
                                         request->runtimeinstanceinfo().runtimeid(), status.RawMessage()));
