@@ -129,7 +129,7 @@ func runAction(ctx context.Context, client runtimev1.SandboxServiceClient, flags
 		doListRegistered(ctx, client)
 	default:
 		return fmt.Errorf(
-			"未知操作: %s\n可选: run, start, wait, delete, register, unregister, list, list-sandboxes, list-registered\n",
+			"unknown action %s valid actions are run, start, wait, delete, register, unregister, list, list-sandboxes, list-registered",
 			*flags.action,
 		)
 	}
