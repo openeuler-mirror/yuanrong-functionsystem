@@ -80,24 +80,24 @@ litebus::Future<messages::SnapshotRuntimeResponse> SandboxdCheckpointOrchestrato
     ckptReq->set_compress(true);
     ckptReq->set_trace_id(requestID);
 
+    SnapshotContext context{requestID, runtimeID, checkpointID, checkpointPath, ttl};
     return DoCheckpoint(ckptReq).Then(
         litebus::Defer(ownerAID_,
-            [self = shared_from_this(), requestID, runtimeID, checkpointID, checkpointPath, ttl](
-                const runtime::v1::SandboxCheckpointResponse &response) {
-                    return self->OnCheckpointDone(response, requestID, runtimeID, checkpointID, checkpointPath, ttl);
-                }));
+            [self = shared_from_this(), context](const runtime::v1::SandboxCheckpointResponse &response) {
+                return self->OnCheckpointDone(response, context);
+            }));
 }
 
 litebus::Future<messages::SnapshotRuntimeResponse> SandboxdCheckpointOrchestrator::OnCheckpointDone(
     const runtime::v1::SandboxCheckpointResponse &ckptResponse,
-    const std::string &requestID, const std::string &runtimeID,
-    const std::string &checkpointID, const std::string &checkpointPath, int32_t ttl)
+    const SnapshotContext &context)
 {
     messages::SnapshotRuntimeResponse response;
-    response.set_requestid(requestID);
+    response.set_requestid(context.requestID);
 
     if (!ckptResponse.success()) {
-        YRLOG_ERROR("{}|checkpoint failed for runtime({}): {}", requestID, runtimeID, ckptResponse.message());
+        YRLOG_ERROR("{}|checkpoint failed for runtime({}): {}", context.requestID, context.runtimeID,
+                    ckptResponse.message());
         response.set_code(static_cast<int32_t>(StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED));
         response.set_message(ckptResponse.message());
         return response;
@@ -105,30 +105,31 @@ litebus::Future<messages::SnapshotRuntimeResponse> SandboxdCheckpointOrchestrato
 
     YRLOG_INFO(
         "{}|checkpoint succeeded, uploading checkpoint({}) for runtime({})",
-        requestID, checkpointID, runtimeID);
+        context.requestID, context.checkpointID, context.runtimeID);
 
     ASSERT_IF_NULL(ckptFileManager_);
-    return ckptFileManager_->RegisterCheckpoint(checkpointID, checkpointPath, checkpointID, ttl)
+    return ckptFileManager_->RegisterCheckpoint(context.checkpointID, context.checkpointPath,
+                                                context.checkpointID, context.ttl)
         .Then(litebus::Defer(ownerAID_,
-            [self = shared_from_this(), response, requestID, runtimeID, checkpointID, ttl](
+            [self = shared_from_this(), response, context](
                 const std::string &storageUrl) {
-                return self->OnRegisterDone(storageUrl, response, requestID, runtimeID, checkpointID, ttl);
+                return self->OnRegisterDone(storageUrl, response, context);
             }));
 }
 
 litebus::Future<messages::SnapshotRuntimeResponse> SandboxdCheckpointOrchestrator::OnRegisterDone(
     const std::string &storageUrl,
     messages::SnapshotRuntimeResponse response,
-    const std::string &requestID, const std::string &runtimeID,
-    const std::string &checkpointID, int32_t ttl)
+    const SnapshotContext &context)
 {
     auto *info = response.mutable_snapshotinfo();
-    info->set_checkpointid(checkpointID);
+    info->set_checkpointid(context.checkpointID);
     info->set_storage(storageUrl);
-    info->set_ttlseconds(ttl);
+    info->set_ttlseconds(context.ttl);
 
     if (storageUrl.empty()) {
-        YRLOG_ERROR("{}|RegisterCheckpoint returned empty storageUrl for runtime({})", requestID, runtimeID);
+        YRLOG_ERROR("{}|RegisterCheckpoint returned empty storageUrl for runtime({})", context.requestID,
+                    context.runtimeID);
         response.set_code(static_cast<int32_t>(StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED));
         response.set_message("checkpoint registration failed: empty storage URL");
         return response;
@@ -136,10 +137,10 @@ litebus::Future<messages::SnapshotRuntimeResponse> SandboxdCheckpointOrchestrato
 
     // Register in state manager — must happen before returning success so that
     // subsequent StopInstance calls can release the reference.
-    stateManager_.SetCheckpointID(runtimeID, checkpointID);
+    stateManager_.SetCheckpointID(context.runtimeID, context.checkpointID);
 
-    YRLOG_INFO("{}|snapshot complete: runtime({}) checkpoint({}) storage({})", requestID, runtimeID,
-               checkpointID, storageUrl);
+    YRLOG_INFO("{}|snapshot complete: runtime({}) checkpoint({}) storage({})", context.requestID,
+               context.runtimeID, context.checkpointID, storageUrl);
     response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
     response.set_message("snapshot created successfully");
     return response;

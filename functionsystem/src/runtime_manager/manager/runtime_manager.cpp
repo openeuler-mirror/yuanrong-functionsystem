@@ -166,16 +166,7 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
     }
     auto executor = FindExecutor(type);
     if (executor == nullptr) {
-        YRLOG_ERROR("{}|{}|the type({}) is not supported to start runtime for instance({}).", instance.traceid(),
-                    instance.requestid(), request->type(), instance.instanceid());
-        messages::StartInstanceResponse response;
-        response.set_requestid(instance.requestid());
-        response.set_code(static_cast<int32_t>(RUNTIME_MANAGER_PARAMS_INVALID));
-        response.set_message(GetExecutorUnavailableMessage(static_cast<EXECUTOR_TYPE>(type)));
-        litebus::Future<messages::StartInstanceResponse> promise;
-        promise.SetValue(response);
-        litebus::Async(this->GetAID(), &RuntimeManager::StartInstanceResponse, from,
-                       request->runtimeinstanceinfo().instanceid(), promise);
+        StartInstanceExecutorUnavailable(from, request, type);
         return;
     }
     std::string runtimeID = GenerateRuntimeID(instance);
@@ -200,6 +191,23 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
             litebus::Defer(this->GetAID(), &RuntimeManager::CheckHealthForRuntime, std::placeholders::_1, request))
         .OnComplete(litebus::Defer(this->GetAID(), &RuntimeManager::StartInstanceResponse, from,
                                    request->runtimeinstanceinfo().instanceid(), std::placeholders::_1));
+}
+
+void RuntimeManager::StartInstanceExecutorUnavailable(
+    const litebus::AID &from,
+    const std::shared_ptr<messages::StartInstanceRequest> &request,
+    EXECUTOR_TYPE type)
+{
+    const auto &instance = request->runtimeinstanceinfo();
+    YRLOG_ERROR("{}|{}|the type({}) is not supported to start runtime for instance({}).", instance.traceid(),
+                instance.requestid(), request->type(), instance.instanceid());
+    messages::StartInstanceResponse response;
+    response.set_requestid(instance.requestid());
+    response.set_code(static_cast<int32_t>(RUNTIME_MANAGER_PARAMS_INVALID));
+    response.set_message(GetExecutorUnavailableMessage(type));
+    litebus::Future<messages::StartInstanceResponse> promise;
+    promise.SetValue(response);
+    litebus::Async(GetAID(), &RuntimeManager::StartInstanceResponse, from, instance.instanceid(), promise);
 }
 
 litebus::Future<messages::StartInstanceResponse> RuntimeManager::ExecutorStartInstance(

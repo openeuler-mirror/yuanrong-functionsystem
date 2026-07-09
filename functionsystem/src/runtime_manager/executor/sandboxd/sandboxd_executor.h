@@ -21,6 +21,7 @@
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "async/defer.hpp"
 #include "common/metrics/metrics_adapter.h"
@@ -166,10 +167,31 @@ protected:
 private:
     // ── Start paths: normal / warm-up (Register) / restore (Restore) ───────────
 
-    litebus::Future<messages::StartInstanceResponse> StartNormal(
-        const std::shared_ptr<messages::StartInstanceRequest> &request, const CommandArgs &cmdArgs,
-        const std::string &port, const Envs &envs, const std::vector<int> &cardIDs,
-        std::shared_ptr<SandboxdStartGuard> guard);
+    struct SandboxdStartContext {
+        std::shared_ptr<messages::StartInstanceRequest> request;
+        CommandArgs cmdArgs;
+        std::string port;
+        Envs envs;
+        std::vector<int> cardIDs;
+        std::shared_ptr<SandboxdStartGuard> guard;
+    };
+
+    struct SandboxdRestoreContext {
+        std::string checkpointPath;
+        SandboxdStartContext start;
+    };
+
+    struct ReconcileCleanupContext {
+        std::string requestID;
+        std::shared_ptr<runtime::v1::ListSandboxesResponse> listResp;
+        std::unordered_set<std::string> expectedIDs;
+        std::chrono::steady_clock::time_point now;
+        messages::ReconcileRuntimesResponse *response = nullptr;
+        int32_t *orphansCleaned = nullptr;
+        std::unordered_set<std::string> *actualRunningIDs = nullptr;
+    };
+
+    litebus::Future<messages::StartInstanceResponse> StartNormal(const SandboxdStartContext &context);
 
     litebus::Future<messages::StartInstanceResponse> OnStartDone(
         const runtime::v1::StartResponse &response,
@@ -189,17 +211,12 @@ private:
         std::shared_ptr<SandboxdStartGuard> guard);
 
     // Restore: download checkpoint -> add ref -> Restore RPC.
-    litebus::Future<messages::StartInstanceResponse> StartBySnapshot(
-        const std::shared_ptr<messages::StartInstanceRequest> &request, const CommandArgs &cmdArgs,
-        const std::string &port, const Envs &envs, const std::vector<int> &cardIDs,
-        std::shared_ptr<SandboxdStartGuard> guard);
+    litebus::Future<messages::StartInstanceResponse> StartBySnapshot(const SandboxdStartContext &context);
     litebus::Future<messages::StartInstanceResponse> OnCheckpointDownloaded(
-        const std::string &checkpointPath, const std::shared_ptr<messages::StartInstanceRequest> &request,
-        const CommandArgs &cmdArgs, const Envs &envs, std::shared_ptr<SandboxdStartGuard> guard);
+        const std::string &checkpointPath, const SandboxdStartContext &context);
     litebus::Future<messages::StartInstanceResponse> OnCheckpointRefAdded(
-        const Status &refStatus, const std::string &checkpointPath,
-        const std::shared_ptr<messages::StartInstanceRequest> &request, const CommandArgs &cmdArgs,
-        const Envs &envs, std::shared_ptr<SandboxdStartGuard> guard);
+        const Status &refStatus,
+        const SandboxdRestoreContext &context);
     litebus::Future<messages::StartInstanceResponse> OnRestoreDone(
         const runtime::v1::SandboxRestoreResponse &response,
         const std::shared_ptr<messages::StartInstanceRequest> &request,
@@ -261,15 +278,22 @@ private:
         const std::string &runtimeID, const runtime::v1::WaitResponse &response);
 
     static void StartSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request);
-    static void StopSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request,
-                                      const runtime::v1::StartResponse &response);
+    static void StopSandboxCreateSpan(
+        const std::shared_ptr<messages::StartInstanceRequest> &request,
+        const runtime::v1::StartResponse &response);
 
-    void ReportSandboxLifecycleStatus(const messages::RuntimeInstanceInfo &info, const std::string &runtimeID,
-                                      SandboxLifecycleStatus lifecycleStatus);
-    void ReportSandboxRequestedResources(const messages::RuntimeInstanceInfo &info, const std::string &runtimeID);
-    void ReportSandboxUsageMetrics(const messages::RuntimeInstanceInfo &info, const std::string &runtimeID,
-                                   const runtime::v1::StatsResponse &response,
-                                   std::chrono::steady_clock::time_point collectedAt);
+    void ReportSandboxLifecycleStatus(
+        const messages::RuntimeInstanceInfo &info,
+        const std::string &runtimeID,
+        SandboxLifecycleStatus lifecycleStatus);
+    void ReportSandboxRequestedResources(
+        const messages::RuntimeInstanceInfo &info,
+        const std::string &runtimeID);
+    void ReportSandboxUsageMetrics(
+        const messages::RuntimeInstanceInfo &info,
+        const std::string &runtimeID,
+        const runtime::v1::StatsResponse &response,
+        std::chrono::steady_clock::time_point collectedAt);
     void ClearSandboxMetricsState(const std::string &runtimeID);
 
     // ── Connectivity ──────────────────────────────────────────────────────────
@@ -303,13 +327,7 @@ private:
                                 messages::ReconcileRuntimesResponse *response,
                                 int32_t *orphansCleaned);
 
-    void CleanupOrphanSandboxes(const std::string &requestID,
-                                const std::shared_ptr<runtime::v1::ListSandboxesResponse> &listResp,
-                                const std::unordered_set<std::string> &expectedIDs,
-                                const std::chrono::steady_clock::time_point &now,
-                                messages::ReconcileRuntimesResponse *response,
-                                int32_t *orphansCleaned,
-                                std::unordered_set<std::string> *actualRunningIDs);
+    void CleanupOrphanSandboxes(const ReconcileCleanupContext &context);
 
     void AddMissingAndConfirmedEntries(
         const std::shared_ptr<messages::ReconcileRuntimesRequest> &request,
@@ -319,8 +337,16 @@ private:
     void PurgeOrphanTracking(const std::unordered_set<std::string> &actualRunningIDs);
     void CleanupLocalRuntimeStateForOrphan(const std::string &requestID, const std::string &sandboxID);
     void DeleteSandboxAsync(const std::string &sandboxID);
-    Status OnDeleteSandboxComplete(const std::string &sandboxID,
-                                   litebus::Try<runtime::v1::DeleteResponse> rsp);
+    Status OnDeleteSandboxComplete(
+        const std::string &sandboxID,
+        litebus::Try<runtime::v1::DeleteResponse> rsp);
+    Status BuildStartCommandArgs(
+        const std::shared_ptr<messages::StartInstanceRequest> &request,
+        const std::string &port,
+        CommandArgs *cmdArgs);
+    void ApplyPortForwardMappings(
+        SandboxdStartParams *params,
+        const std::shared_ptr<messages::StartInstanceRequest> &request);
 
     // ── State ─────────────────────────────────────────────────────────────────
 

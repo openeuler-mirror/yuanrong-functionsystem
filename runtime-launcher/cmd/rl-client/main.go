@@ -5,14 +5,25 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"time"
 
-	"runtime-launcher/api/proto/runtime/v1"
-
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+
+	"runtime-launcher/api/proto/runtime/v1"
+)
+
+const (
+	defaultContextTimeoutMinutes = 5
+	defaultDeleteTimeoutSeconds  = 5
+	defaultCPUMillicores         = 500.0
+	defaultMemoryMB              = 512.0
+	generatedIDModulo            = 1000000
+	mountPartLimit               = 3
+	minMountParts                = 2
+	readOnlyMountParts           = 3
+	envKeyValueParts             = 2
 )
 
 type startOptions struct {
@@ -58,9 +69,14 @@ func main() {
 	defer conn.Close()
 
 	client := runtimev1.NewSandboxServiceClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		defaultContextTimeoutMinutes*time.Minute,
+	)
 	defer cancel()
-	runAction(ctx, client, flags)
+	if err := runAction(ctx, client, flags); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func parseFlags() cliFlags {
@@ -77,9 +93,9 @@ func parseFlags() cliFlags {
 		network: flag.String("network", "bridge", "网络模式（如 bridge|host|none）"),
 		ports:   flag.String("ports", "", "端口映射，格式: protocol:hostPort:containerPort，多个用逗号分隔"),
 		id:      flag.String("id", "", "容器/运行时 ID（用于 wait/delete/unregister）"),
-		timeout: flag.Int64("timeout", 5, "删除时的优雅超时秒数"),
-		cpu:     flag.Float64("cpu", 500, "CPU 毫核"),
-		memory:  flag.Float64("mem", 512, "内存 MB"),
+		timeout: flag.Int64("timeout", defaultDeleteTimeoutSeconds, "删除时的优雅超时秒数"),
+		cpu:     flag.Float64("cpu", defaultCPUMillicores, "CPU 毫核"),
+		memory:  flag.Float64("mem", defaultMemoryMB, "内存 MB"),
 		envs:    flag.String("env", "", "环境变量，格式: KEY=VAL，多个用逗号分隔"),
 	}
 	flag.Parse()
@@ -93,7 +109,7 @@ func connect(socketPath string) (*grpc.ClientConn, error) {
 	)
 }
 
-func runAction(ctx context.Context, client runtimev1.SandboxServiceClient, flags cliFlags) {
+func runAction(ctx context.Context, client runtimev1.SandboxServiceClient, flags cliFlags) error {
 	switch *flags.action {
 	case "run":
 		doRun(ctx, client, startOptionsFromFlags(flags), *flags.timeout)
@@ -112,13 +128,12 @@ func runAction(ctx context.Context, client runtimev1.SandboxServiceClient, flags
 	case "list-registered":
 		doListRegistered(ctx, client)
 	default:
-		fmt.Fprintf(
-			os.Stderr,
+		return fmt.Errorf(
 			"未知操作: %s\n可选: run, start, wait, delete, register, unregister, list, list-sandboxes, list-registered\n",
 			*flags.action,
 		)
-		os.Exit(1)
 	}
+	return nil
 }
 
 func startOptionsFromFlags(flags cliFlags) startOptions {
@@ -184,7 +199,7 @@ func doStart(ctx context.Context, client runtimev1.SandboxServiceClient, opts st
 }
 
 func mustStart(ctx context.Context, client runtimev1.SandboxServiceClient, opts startOptions) string {
-	runtimeID := fmt.Sprintf("test-%d", time.Now().UnixNano()%1000000)
+	runtimeID := fmt.Sprintf("test-%d", time.Now().UnixNano()%generatedIDModulo)
 	req := buildStartRequest(runtimeID, opts)
 	printStartRequest(opts, req)
 	resp, err := client.Start(ctx, req)
@@ -233,8 +248,8 @@ func parseMounts(mounts string) []*runtimev1.Mount {
 		return mountList
 	}
 	for _, m := range strings.Split(mounts, ",") {
-		parts := strings.SplitN(m, ":", 3)
-		if len(parts) < 2 {
+		parts := strings.SplitN(m, ":", mountPartLimit)
+		if len(parts) < minMountParts {
 			log.Fatalf("挂载格式错误: %s（应为 源:目标[:ro]）", m)
 		}
 		mt := &runtimev1.Mount{
@@ -242,7 +257,7 @@ func parseMounts(mounts string) []*runtimev1.Mount {
 			Target: parts[1],
 			Source: &runtimev1.Mount_HostPath{HostPath: parts[0]},
 		}
-		if len(parts) == 3 && parts[2] == "ro" {
+		if len(parts) == readOnlyMountParts && parts[2] == "ro" {
 			mt.Options = []string{"ro"}
 		}
 		mountList = append(mountList, mt)
@@ -256,8 +271,8 @@ func parseEnvMap(envs string) map[string]string {
 		return userEnvs
 	}
 	for _, e := range strings.Split(envs, ",") {
-		kv := strings.SplitN(e, "=", 2)
-		if len(kv) == 2 {
+		kv := strings.SplitN(e, "=", envKeyValueParts)
+		if len(kv) == envKeyValueParts {
 			userEnvs[kv[0]] = kv[1]
 		}
 	}
@@ -334,7 +349,7 @@ func doDelete(ctx context.Context, client runtimev1.SandboxServiceClient, id str
 func doRegister(ctx context.Context, client runtimev1.SandboxServiceClient, opts registerOptions) {
 	id := opts.id
 	if id == "" {
-		id = fmt.Sprintf("reg-%d", time.Now().UnixNano()%1000000)
+		id = fmt.Sprintf("reg-%d", time.Now().UnixNano()%generatedIDModulo)
 	}
 	var command []string
 	if opts.commandLine != "" {
@@ -343,8 +358,8 @@ func doRegister(ctx context.Context, client runtimev1.SandboxServiceClient, opts
 	runtimeEnvs := make(map[string]string)
 	if opts.envs != "" {
 		for _, e := range strings.Split(opts.envs, ",") {
-			kv := strings.SplitN(e, "=", 2)
-			if len(kv) == 2 {
+			kv := strings.SplitN(e, "=", envKeyValueParts)
+			if len(kv) == envKeyValueParts {
 				runtimeEnvs[kv[0]] = kv[1]
 			}
 		}

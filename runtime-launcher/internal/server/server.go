@@ -7,10 +7,10 @@ import (
 	"os"
 	"time"
 
-	"runtime-launcher/api/proto/runtime/v1"
-
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
+
+	"runtime-launcher/api/proto/runtime/v1"
 )
 
 const (

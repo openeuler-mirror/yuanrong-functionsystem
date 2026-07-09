@@ -129,6 +129,37 @@ std::string ResolveRuntimeLanguage(const std::shared_ptr<messages::StartInstance
     return language;
 }
 
+void SetS3MountSource(runtime::v1::Mount *mount, const nlohmann::json &s3)
+{
+    auto *s3Config = mount->mutable_s3_config();
+    if (s3.find("endpoint") != s3.end()) {
+        s3Config->set_endpoint(s3.at("endpoint").get<std::string>());
+    }
+    if (s3.find("bucket") != s3.end()) {
+        s3Config->set_bucket(s3.at("bucket").get<std::string>());
+    }
+    if (s3.find("object") != s3.end()) {
+        s3Config->set_object(s3.at("object").get<std::string>());
+    }
+    if (s3.find("accessKey") != s3.end()) {
+        s3Config->set_accesskeyid(s3.at("accessKey").get<std::string>());
+    }
+    if (s3.find("secretKey") != s3.end()) {
+        s3Config->set_accesskeysecret(s3.at("secretKey").get<std::string>());
+    }
+}
+
+void SetMountSource(runtime::v1::Mount *mount, const nlohmann::json &item)
+{
+    if (item.find("host_path") != item.end()) {
+        mount->set_host_path(item.at("host_path").get<std::string>());
+    } else if (item.find("s3_config") != item.end() && item.at("s3_config").is_object()) {
+        SetS3MountSource(mount, item.at("s3_config"));
+    } else if (item.find("image_url") != item.end()) {
+        mount->set_image_url(item.at("image_url").get<std::string>());
+    }
+}
+
 Status MountsJsonParse(runtime::v1::SandboxStartRequest &start, const std::string &mountsJson)
 {
     try {
@@ -156,30 +187,7 @@ Status MountsJsonParse(runtime::v1::SandboxStartRequest &start, const std::strin
                 }
             }
 
-            // Parse source (oneof): host_path, s3_config, or image_url
-            if (item.find("host_path") != item.end()) {
-                mount->set_host_path(item.at("host_path").get<std::string>());
-            } else if (item.find("s3_config") != item.end() && item.at("s3_config").is_object()) {
-                const auto &s3 = item.at("s3_config");
-                auto *s3Config = mount->mutable_s3_config();
-                if (s3.find("endpoint") != s3.end()) {
-                    s3Config->set_endpoint(s3.at("endpoint").get<std::string>());
-                }
-                if (s3.find("bucket") != s3.end()) {
-                    s3Config->set_bucket(s3.at("bucket").get<std::string>());
-                }
-                if (s3.find("object") != s3.end()) {
-                    s3Config->set_object(s3.at("object").get<std::string>());
-                }
-                if (s3.find("accessKey") != s3.end()) {
-                    s3Config->set_accesskeyid(s3.at("accessKey").get<std::string>());
-                }
-                if (s3.find("secretKey") != s3.end()) {
-                    s3Config->set_accesskeysecret(s3.at("secretKey").get<std::string>());
-                }
-            } else if (item.find("image_url") != item.end()) {
-                mount->set_image_url(item.at("image_url").get<std::string>());
-            }
+            SetMountSource(mount, item);
         }
     } catch (std::exception &e) {
         auto err = fmt::format("Failed to parse mounts JSON: {}", std::string(e.what()));

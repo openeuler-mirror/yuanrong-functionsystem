@@ -188,6 +188,9 @@ private:
 
     void StartInstanceResponse(const litebus::AID &from, const std::string &instanceID,
                                const litebus::Future<messages::StartInstanceResponse> &response);
+    void StartInstanceExecutorUnavailable(const litebus::AID &from,
+                                          const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                          EXECUTOR_TYPE type);
 
     void StopInstanceResponse(const litebus::AID &from, const litebus::Future<Status> &status,
                               const std::shared_ptr<messages::StopInstanceRequest> &request);

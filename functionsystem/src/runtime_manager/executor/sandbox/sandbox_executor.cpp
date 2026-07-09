@@ -364,21 +364,9 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::StartInstance(
     }
 
     CommandArgs cmdArgs;
-    if (HasSelfContainedSandboxBootstrap(request)) {
-        YRLOG_DEBUG("{}|{}|StartInstance: using self-contained bootstrap command without runtime args",
-                    info.traceid(), info.requestid());
-    } else {
-        std::string language = info.runtimeconfig().language();
-        std::transform(language.begin(), language.end(), language.begin(), ::tolower);
-        auto [buildStatus, builtCmdArgs] = cmdBuilder_.BuildArgs(language, port, *request);
-        if (buildStatus.IsError()) {
-            YRLOG_ERROR("{}|{}|BuildArgs failed for instanceID({}): {}", info.traceid(), info.requestid(),
-                        info.instanceid(), buildStatus.RawMessage());
-            ReportSandboxLifecycleStatus(info, runtimeID, SandboxLifecycleStatus::ABNORMAL);
-            stateManager_.Unregister(runtimeID);
-            return GenFailStartInstanceResponse(request, buildStatus.StatusCode(), buildStatus.GetMessage());
-        }
-        cmdArgs = std::move(builtCmdArgs);
+    auto buildStatus = BuildStartCommandArgs(request, port, &cmdArgs);
+    if (buildStatus.IsError()) {
+        return GenFailStartInstanceResponse(request, buildStatus.StatusCode(), buildStatus.GetMessage());
     }
 
     RuntimeFeatures features;
@@ -407,6 +395,29 @@ litebus::Future<messages::StartInstanceResponse> SandboxExecutor::StartInstance(
         litebus::Defer(GetAID(), &SandboxExecutor::OnStartCompleted, runtimeID, std::placeholders::_1));
     stateManager_.MarkStartInProgress(runtimeID, future);
     return future;
+}
+
+Status SandboxExecutor::BuildStartCommandArgs(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                              const std::string &port, CommandArgs *cmdArgs)
+{
+    const auto &info = request->runtimeinstanceinfo();
+    if (HasSelfContainedSandboxBootstrap(request)) {
+        YRLOG_DEBUG("{}|{}|StartInstance: using self-contained bootstrap command without runtime args",
+                    info.traceid(), info.requestid());
+        return Status::OK();
+    }
+
+    auto [buildStatus, builtCmdArgs] = cmdBuilder_.BuildArgs(ResolveRuntimeLanguage(info), port, *request);
+    if (buildStatus.IsOk()) {
+        *cmdArgs = std::move(builtCmdArgs);
+        return Status::OK();
+    }
+
+    YRLOG_ERROR("{}|{}|BuildArgs failed for instanceID({}): {}", info.traceid(), info.requestid(),
+                info.instanceid(), buildStatus.RawMessage());
+    ReportSandboxLifecycleStatus(info, info.runtimeid(), SandboxLifecycleStatus::ABNORMAL);
+    stateManager_.Unregister(info.runtimeid());
+    return buildStatus;
 }
 
 litebus::Future<messages::StartInstanceResponse> SandboxExecutor::OnStartCompleted(

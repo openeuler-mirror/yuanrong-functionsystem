@@ -5,13 +5,13 @@ import (
 	"errors"
 	"testing"
 
-	"runtime-launcher/api/proto/runtime/v1"
-	"runtime-launcher/internal/runtime"
-	"runtime-launcher/internal/state"
-
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoreflect"
+
+	"runtime-launcher/api/proto/runtime/v1"
+	"runtime-launcher/internal/runtime"
+	"runtime-launcher/internal/state"
 )
 
 const (

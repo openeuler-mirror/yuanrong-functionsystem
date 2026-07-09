@@ -199,6 +199,8 @@ private:
     // Start routing (three paths)
 
     void PreparePortMappings(SandboxStartParams *params);
+    Status BuildStartCommandArgs(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                 const std::string &port, CommandArgs *cmdArgs);
 
     litebus::Future<messages::StartInstanceResponse> StartNormal(const StartContext &context);
 

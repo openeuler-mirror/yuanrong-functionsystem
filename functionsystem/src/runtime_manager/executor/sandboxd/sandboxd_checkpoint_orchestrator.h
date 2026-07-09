@@ -87,16 +87,22 @@ public:
         const std::shared_ptr<runtime::v1::SandboxCheckpointRequest> &req);
 
 private:
+    struct SnapshotContext {
+        std::string requestID;
+        std::string runtimeID;
+        std::string checkpointID;
+        std::string checkpointPath;
+        int32_t ttl = 0;
+    };
+
     litebus::Future<messages::SnapshotRuntimeResponse> OnCheckpointDone(
         const runtime::v1::SandboxCheckpointResponse &ckptResponse,
-        const std::string &requestID, const std::string &runtimeID,
-        const std::string &checkpointID, const std::string &checkpointPath, int32_t ttl);
+        const SnapshotContext &context);
 
     litebus::Future<messages::SnapshotRuntimeResponse> OnRegisterDone(
         const std::string &storageUrl,
         messages::SnapshotRuntimeResponse response,
-        const std::string &requestID, const std::string &runtimeID,
-        const std::string &checkpointID, int32_t ttl);
+        const SnapshotContext &context);
 
     litebus::AID ownerAID_;
     std::shared_ptr<GrpcClient<runtime::v1::SandboxService>> sandboxd_;
