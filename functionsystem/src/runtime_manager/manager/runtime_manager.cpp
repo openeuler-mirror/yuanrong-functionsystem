@@ -176,7 +176,7 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
     auto vecs = metricsClient_->GetCardIDs();
     messages::StartInstanceResponse response;
     response.mutable_startruntimeinstanceresponse()->set_runtimeid(runtimeID);
-    response.mutable_startruntimeinstanceresponse()->set_executortype(type);
+    response.mutable_startruntimeinstanceresponse()->set_executortype(static_cast<int32_t>(type));
 
     // start debug server ahead of runtime
     CreateDebugServer(response, request)
