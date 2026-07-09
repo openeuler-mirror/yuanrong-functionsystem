@@ -148,7 +148,7 @@ def build_runtime_launcher(root_dir):
     env["PATH"] = ":".join(path for path in path_entries if path)
 
     os.makedirs(os.path.join(runtime_launcher_dir, "bin", "runtime"), exist_ok=True)
-    proto_file = os.path.join("api", "proto", "runtime", "v1", "runtime_launcher.proto")
+    proto_script = os.path.join("scripts", "generate-proto.sh")
 
     log.info("Start to install runtime-launcher protobuf plugins")
     utils.sync_command(
@@ -164,14 +164,7 @@ def build_runtime_launcher(root_dir):
 
     log.info("Start to generate runtime-launcher protobuf files")
     utils.sync_command(
-        [
-            "protoc",
-            "--go_out=.",
-            "--go_opt=paths=source_relative",
-            "--go-grpc_out=.",
-            "--go-grpc_opt=paths=source_relative",
-            proto_file,
-        ],
+        ["bash", proto_script],
         cwd=runtime_launcher_dir,
         env=env,
     )

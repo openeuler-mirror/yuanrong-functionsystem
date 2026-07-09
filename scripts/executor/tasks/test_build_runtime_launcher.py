@@ -25,9 +25,10 @@ class BuildRuntimeLauncherTest(unittest.TestCase):
                 sync_command.call_args_list[1].args[0],
                 ["go", "install", "google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1"],
             )
-            self.assertEqual(sync_command.call_args_list[2].args[0][0], "protoc")
-            self.assertIn("--go_out=.", sync_command.call_args_list[2].args[0])
-            self.assertIn("--go-grpc_out=.", sync_command.call_args_list[2].args[0])
+            self.assertEqual(
+                sync_command.call_args_list[2].args[0],
+                ["bash", os.path.join("scripts", "generate-proto.sh")],
+            )
             self.assertEqual(
                 sync_command.call_args_list[3].args[0],
                 ["go", "build", "-buildvcs=false", "-o", "bin/runtime/runtime-launcher", "./cmd/runtime-launcher/"],
