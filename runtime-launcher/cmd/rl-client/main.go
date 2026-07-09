@@ -26,6 +26,18 @@ const (
 	envKeyValueParts             = 2
 )
 
+var validActions = []string{
+	"run",
+	"start",
+	"wait",
+	"delete",
+	"register",
+	"unregister",
+	"list",
+	"list-sandboxes",
+	"list-registered",
+}
+
 type startOptions struct {
 	image       string
 	commandLine string
@@ -129,8 +141,9 @@ func runAction(ctx context.Context, client runtimev1.SandboxServiceClient, flags
 		doListRegistered(ctx, client)
 	default:
 		return fmt.Errorf(
-			"unknown action %s valid actions are run, start, wait, delete, register, unregister, list, list-sandboxes, list-registered",
+			"unknown action %s valid actions are %s",
 			*flags.action,
+			strings.Join(validActions, ", "),
 		)
 	}
 	return nil
