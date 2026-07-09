@@ -43,9 +43,6 @@ constexpr double DEFAULT_MEMORY_MB        = 500.0;
 // Mount
 const std::string YR_FUNCTION_LIB_PATH   = "YR_FUNCTION_LIB_PATH";
 const std::string FUNCTION_LIB_PATH      = "FUNCTION_LIB_PATH";
-// Layer directory names (mirrors function_agent/common/constants.h)
-const std::string RUNTIME_LAYER_DIR_NAME  = "layer";
-const std::string RUNTIME_FUNC_DIR_NAME   = "func";
 // Namespace alias for brevity
 using namespace resource_view;  // NOLINT(google-build-using-namespace)
 
