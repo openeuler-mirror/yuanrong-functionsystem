@@ -7,10 +7,14 @@ import (
 	"os"
 	"time"
 
-	pb "runtime-launcher/api/proto/runtime/v1"
-
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
+	"runtime-launcher/api/proto/runtime/v1"
+)
+
+const (
+	maxMessageBytes  = 64 * 1024 * 1024
+	minKeepaliveTime = 10 * time.Second
 )
 
 // Server 封装 gRPC 服务器，监听 Unix Domain Socket。
@@ -22,7 +26,7 @@ type Server struct {
 
 // New 创建并初始化 gRPC 服务器。
 // socketPath 为 UDS 文件路径，launcher 为 SandboxService 服务实现。
-func New(socketPath string, launcher pb.SandboxServiceServer) (*Server, error) {
+func New(socketPath string, launcher runtimev1.SandboxServiceServer) (*Server, error) {
 	// 清理可能残留的旧 socket 文件
 	if err := os.RemoveAll(socketPath); err != nil {
 		return nil, fmt.Errorf("清理旧 socket 文件失败: %w", err)
@@ -40,14 +44,14 @@ func New(socketPath string, launcher pb.SandboxServiceServer) (*Server, error) {
 	}
 
 	grpcServer := grpc.NewServer(
-		grpc.MaxRecvMsgSize(64*1024*1024), // 64MB 接收消息限制
-		grpc.MaxSendMsgSize(64*1024*1024), // 64MB 发送消息限制
+		grpc.MaxRecvMsgSize(maxMessageBytes),
+		grpc.MaxSendMsgSize(maxMessageBytes),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
-			MinTime:             10 * time.Second,
+			MinTime:             minKeepaliveTime,
 			PermitWithoutStream: true,
 		}),
 	)
-	pb.RegisterSandboxServiceServer(grpcServer, launcher)
+	runtimev1.RegisterSandboxServiceServer(grpcServer, launcher)
 
 	log.Printf("[server] gRPC 服务器已创建，socket: %s", socketPath)
 	return &Server{

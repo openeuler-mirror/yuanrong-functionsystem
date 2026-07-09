@@ -66,8 +66,9 @@ const int32_t INSTANCE_SNAPSTART_SIGNAL = 19;
 const int32_t LIST_CHECKPOINTS_BY_FUNCTION_KEY_SIGNAL = 20;
 const int32_t LIST_CHECKPOINTS_BY_TENANT_SIGNAL = 21;
 const int32_t DELETE_CHECKPOINT_SIGNAL = 22;
-// RRT self-reported busy/idle signal: rrt-daemon -> function-proxy; proxy feeds local_scheduler IdleMgr from it.
-// Payload mapping: idle/0 => TrafficReport=0, busy/>0 => TrafficReport>0. It follows core signals 1..22 and is not POSIX.
+// RRT self-reported busy/idle signal: rrt-daemon -> function-proxy; proxy feeds
+// local_scheduler IdleMgr from it. Payload mapping: idle/0 => TrafficReport=0,
+// busy/>0 => TrafficReport>0. It follows core signals 1..22 and is not POSIX.
 // See docs/features/sandbox-rrt-idle-report.md.
 const int32_t RRT_IDLE_REPORT_SIGNAL = 23;
 

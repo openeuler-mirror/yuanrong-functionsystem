@@ -411,10 +411,14 @@ void SandboxdRequestBuilder::ApplyResources(const std::shared_ptr<messages::Star
 {
     const auto &res = request->runtimeinstanceinfo().runtimeconfig().resources().resources();
     auto getEffectiveValue = [](const resource_view::Resource &res, double defaultVal) -> double {
-        if (res.type() != ValueType::Value_Type_SCALAR) return defaultVal;
+        if (res.type() != ValueType::Value_Type_SCALAR) {
+            return defaultVal;
+        }
         double limit = res.scalar().limit();
-        if (limit > 0) return limit;          // explicit limit
-        return res.scalar().value();           // <= 0 = not set -> use scheduling request value
+        if (limit > 0) {
+            return limit;
+        }
+        return res.scalar().value();
     };
 
     auto cpuIt = res.find(CPU_RESOURCE_NAME);
@@ -441,7 +445,8 @@ void SandboxdRequestBuilder::ApplyEnvsAndLogs(const Envs &envs, const std::strin
     start->mutable_envs()->insert(combined.begin(), combined.end());
     (*start->mutable_envs())[YR_ONLY_STDOUT] = "true";
 
-    std::string stdOut, stdErr;
+    std::string stdOut;
+    std::string stdErr;
     ResolveLogPaths(logDir, runtimeID, stdOut, stdErr);
     start->set_stdout(stdOut);
     start->set_stderr(stdErr);

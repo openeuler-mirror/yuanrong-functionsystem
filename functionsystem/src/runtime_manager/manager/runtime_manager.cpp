@@ -59,7 +59,9 @@ bool UseSandboxdBackend()
         auto isNotSpace = [](unsigned char c) { return !std::isspace(c); };
         v.erase(v.begin(), std::find_if(v.begin(), v.end(), isNotSpace));
         v.erase(std::find_if(v.rbegin(), v.rend(), isNotSpace).base(), v.end());
-        std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
         if (v.empty()) {
             return true;
         }

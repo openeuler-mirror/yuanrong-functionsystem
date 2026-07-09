@@ -4,8 +4,8 @@ import (
 	"sync"
 	"time"
 
-	pb "runtime-launcher/api/proto/runtime/v1"
-	rt "runtime-launcher/internal/runtime"
+	"runtime-launcher/api/proto/runtime/v1"
+	"runtime-launcher/internal/runtime"
 )
 
 // ContainerState 跟踪运行中 sandbox/container 的元数据。
@@ -17,7 +17,7 @@ type ContainerState struct {
 	Exited      bool
 	StartedAt   int64
 	FinishedAt  int64
-	Config      *rt.CreateConfig
+	Config      *runtime.CreateConfig
 	DoneCh      chan struct{}
 }
 
@@ -27,19 +27,19 @@ type Manager struct {
 	containers map[string]*ContainerState
 
 	regMu      sync.RWMutex
-	registered map[string]*pb.SandboxTemplate
+	registered map[string]*runtimev1.SandboxTemplate
 }
 
 // NewManager 创建新的状态管理器。
 func NewManager() *Manager {
 	return &Manager{
 		containers: make(map[string]*ContainerState),
-		registered: make(map[string]*pb.SandboxTemplate),
+		registered: make(map[string]*runtimev1.SandboxTemplate),
 	}
 }
 
 // AddContainer 记录一个新启动的 sandbox/container。
-func (m *Manager) AddContainer(containerID, runtimeID string, cfg *rt.CreateConfig) {
+func (m *Manager) AddContainer(containerID, runtimeID string, cfg *runtime.CreateConfig) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.containers[containerID] = &ContainerState{
@@ -110,7 +110,7 @@ func (m *Manager) ListContainers(id string) []*ContainerState {
 }
 
 // RegisterTemplate 将 SandboxTemplate 加入预热注册表。
-func (m *Manager) RegisterTemplate(t *pb.SandboxTemplate) {
+func (m *Manager) RegisterTemplate(t *runtimev1.SandboxTemplate) {
 	if t == nil {
 		return
 	}
@@ -127,7 +127,7 @@ func (m *Manager) UnregisterTemplate(id string) {
 }
 
 // GetRegisteredTemplate 查找单个注册模板。
-func (m *Manager) GetRegisteredTemplate(id string) (*pb.SandboxTemplate, bool) {
+func (m *Manager) GetRegisteredTemplate(id string) (*runtimev1.SandboxTemplate, bool) {
 	m.regMu.RLock()
 	defer m.regMu.RUnlock()
 	t, ok := m.registered[id]
@@ -135,10 +135,10 @@ func (m *Manager) GetRegisteredTemplate(id string) (*pb.SandboxTemplate, bool) {
 }
 
 // GetAllRegisteredTemplates 返回所有已注册模板。
-func (m *Manager) GetAllRegisteredTemplates() []*pb.SandboxTemplate {
+func (m *Manager) GetAllRegisteredTemplates() []*runtimev1.SandboxTemplate {
 	m.regMu.RLock()
 	defer m.regMu.RUnlock()
-	result := make([]*pb.SandboxTemplate, 0, len(m.registered))
+	result := make([]*runtimev1.SandboxTemplate, 0, len(m.registered))
 	for _, t := range m.registered {
 		result = append(result, t)
 	}

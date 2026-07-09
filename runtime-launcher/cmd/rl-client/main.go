@@ -9,16 +9,38 @@ import (
 	"strings"
 	"time"
 
-	pb "runtime-launcher/api/proto/runtime/v1"
+	"runtime-launcher/api/proto/runtime/v1"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+type startOptions struct {
+	image       string
+	commandLine string
+	mounts      string
+	envs        string
+	network     string
+	ports       string
+	cpu         float64
+	memory      float64
+}
+
+type registerOptions struct {
+	image       string
+	id          string
+	commandLine string
+	envs        string
+}
+
 func main() {
 	// 命令行参数
 	socketPath := flag.String("socket", "/var/run/runtime-launcher.sock", "SandboxService UDS 路径")
-	action := flag.String("action", "run", "操作: run | start | wait | delete | register | unregister | list | list-sandboxes | list-registered")
+	action := flag.String(
+		"action",
+		"run",
+		"操作: run | start | wait | delete | register | unregister | list | list-sandboxes | list-registered",
+	)
 	imageFlag := flag.String("image", "", "容器镜像（必填，用于 run/start）")
 	cmdFlag := flag.String("cmd", "", "容器内执行的命令（如 'echo hello'）")
 	mountFlag := flag.String("mount", "", "挂载，格式: 源路径:目标路径[:ro]，多个用逗号分隔")
@@ -43,22 +65,45 @@ func main() {
 	}
 	defer conn.Close()
 
-	client := pb.NewSandboxServiceClient(conn)
+	client := runtimev1.NewSandboxServiceClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	switch *action {
 	case "run":
 		// run = start + wait + delete（完整生命周期）
-		doRun(ctx, client, *imageFlag, *cmdFlag, *mountFlag, *envFlag, *networkFlag, *portsFlag, *cpuFlag, *memFlag, *timeoutFlag)
+		doRun(ctx, client, buildStartOptions(
+			*imageFlag,
+			*cmdFlag,
+			*mountFlag,
+			*envFlag,
+			*networkFlag,
+			*portsFlag,
+			*cpuFlag,
+			*memFlag,
+		), *timeoutFlag)
 	case "start":
-		doStart(ctx, client, *imageFlag, *cmdFlag, *mountFlag, *envFlag, *networkFlag, *portsFlag, *cpuFlag, *memFlag)
+		doStart(ctx, client, buildStartOptions(
+			*imageFlag,
+			*cmdFlag,
+			*mountFlag,
+			*envFlag,
+			*networkFlag,
+			*portsFlag,
+			*cpuFlag,
+			*memFlag,
+		))
 	case "wait":
 		doWait(ctx, client, *idFlag)
 	case "delete":
 		doDelete(ctx, client, *idFlag, *timeoutFlag)
 	case "register":
-		doRegister(ctx, client, *imageFlag, *idFlag, *cmdFlag, *envFlag)
+		doRegister(ctx, client, registerOptions{
+			image:       *imageFlag,
+			id:          *idFlag,
+			commandLine: *cmdFlag,
+			envs:        *envFlag,
+		})
 	case "unregister":
 		doUnregister(ctx, client, *idFlag)
 	case "list", "list-sandboxes":
@@ -66,23 +111,40 @@ func main() {
 	case "list-registered":
 		doListRegistered(ctx, client)
 	default:
-		fmt.Fprintf(os.Stderr, "未知操作: %s\n可选: run, start, wait, delete, register, unregister, list, list-sandboxes, list-registered\n", *action)
+		fmt.Fprintf(
+			os.Stderr,
+			"未知操作: %s\n可选: run, start, wait, delete, register, unregister, list, list-sandboxes, list-registered\n",
+			*action,
+		)
 		os.Exit(1)
 	}
 }
 
+func buildStartOptions(image, commandLine, mounts, envs, network, ports string, cpu, memory float64) startOptions {
+	return startOptions{
+		image:       image,
+		commandLine: commandLine,
+		mounts:      mounts,
+		envs:        envs,
+		network:     network,
+		ports:       ports,
+		cpu:         cpu,
+		memory:      memory,
+	}
+}
+
 // doRun 执行完整的容器生命周期：start -> wait -> delete
-func doRun(ctx context.Context, client pb.SandboxServiceClient, image, cmd, mounts, envs, network, ports string, cpu, mem float64, timeout int64) {
-	if image == "" {
+func doRun(ctx context.Context, client runtimev1.SandboxServiceClient, opts startOptions, timeout int64) {
+	if opts.image == "" {
 		log.Fatal("--image 参数必填")
 	}
 
 	// 1. Start
-	containerID := mustStart(ctx, client, image, cmd, mounts, envs, network, ports, cpu, mem)
+	containerID := mustStart(ctx, client, opts)
 
 	// 2. Wait
 	fmt.Println("\n--- 等待容器退出 ---")
-	waitResp, err := client.Wait(ctx, &pb.WaitRequest{Id: containerID})
+	waitResp, err := client.Wait(ctx, &runtimev1.WaitRequest{Id: containerID})
 	if err != nil {
 		log.Printf("Wait RPC 失败: %v", err)
 	} else {
@@ -96,7 +158,7 @@ func doRun(ctx context.Context, client pb.SandboxServiceClient, image, cmd, moun
 
 	// 3. Delete
 	fmt.Println("\n--- 删除容器 ---")
-	_, err = client.Delete(ctx, &pb.DeleteRequest{Id: containerID, Timeout: timeout})
+	_, err = client.Delete(ctx, &runtimev1.DeleteRequest{Id: containerID, Timeout: timeout})
 	if err != nil {
 		log.Printf("Delete 失败: %v", err)
 	} else {
@@ -104,34 +166,34 @@ func doRun(ctx context.Context, client pb.SandboxServiceClient, image, cmd, moun
 	}
 }
 
-func doStart(ctx context.Context, client pb.SandboxServiceClient, image, cmd, mounts, envs, network, ports string, cpu, mem float64) {
-	if image == "" {
+func doStart(ctx context.Context, client runtimev1.SandboxServiceClient, opts startOptions) {
+	if opts.image == "" {
 		log.Fatal("--image 参数必填")
 	}
-	mustStart(ctx, client, image, cmd, mounts, envs, network, ports, cpu, mem)
+	mustStart(ctx, client, opts)
 }
 
-func mustStart(ctx context.Context, client pb.SandboxServiceClient, image, cmd, mounts, envs, network, ports string, cpu, mem float64) string {
+func mustStart(ctx context.Context, client runtimev1.SandboxServiceClient, opts startOptions) string {
 	runtimeID := fmt.Sprintf("test-%d", time.Now().UnixNano()%1000000)
 
 	// 构建命令
 	var command []string
-	if cmd != "" {
-		command = strings.Fields(cmd)
+	if opts.commandLine != "" {
+		command = strings.Fields(opts.commandLine)
 	}
 
 	// 构建挂载
-	var mountList []*pb.Mount
-	if mounts != "" {
-		for _, m := range strings.Split(mounts, ",") {
+	var mountList []*runtimev1.Mount
+	if opts.mounts != "" {
+		for _, m := range strings.Split(opts.mounts, ",") {
 			parts := strings.SplitN(m, ":", 3)
 			if len(parts) < 2 {
 				log.Fatalf("挂载格式错误: %s（应为 源:目标[:ro]）", m)
 			}
-			mt := &pb.Mount{
+			mt := &runtimev1.Mount{
 				Type:   "bind",
 				Target: parts[1],
-				Source: &pb.Mount_HostPath{HostPath: parts[0]},
+				Source: &runtimev1.Mount_HostPath{HostPath: parts[0]},
 			}
 			if len(parts) == 3 && parts[2] == "ro" {
 				mt.Options = []string{"ro"}
@@ -142,8 +204,8 @@ func mustStart(ctx context.Context, client pb.SandboxServiceClient, image, cmd, 
 
 	// 构建环境变量
 	userEnvs := make(map[string]string)
-	if envs != "" {
-		for _, e := range strings.Split(envs, ",") {
+	if opts.envs != "" {
+		for _, e := range strings.Split(opts.envs, ",") {
 			kv := strings.SplitN(e, "=", 2)
 			if len(kv) == 2 {
 				userEnvs[kv[0]] = kv[1]
@@ -153,8 +215,8 @@ func mustStart(ctx context.Context, client pb.SandboxServiceClient, image, cmd, 
 
 	// 构建端口映射
 	var portMappings []string
-	if ports != "" {
-		for _, p := range strings.Split(ports, ",") {
+	if opts.ports != "" {
+		for _, p := range strings.Split(opts.ports, ",") {
 			port := strings.TrimSpace(p)
 			if port != "" {
 				portMappings = append(portMappings, port)
@@ -162,27 +224,27 @@ func mustStart(ctx context.Context, client pb.SandboxServiceClient, image, cmd, 
 		}
 	}
 
-	req := &pb.SandboxStartRequest{
+	req := &runtimev1.SandboxStartRequest{
 		SandboxId: runtimeID,
-		Runtime:   image,
-		Rootfs: &pb.RootfsConfig{
-			Type:   pb.RootfsSrcType_IMAGE,
-			Source: &pb.RootfsConfig_ImageUrl{ImageUrl: image},
+		Runtime:   opts.image,
+		Rootfs: &runtimev1.RootfsConfig{
+			Type:   runtimev1.RootfsSrcType_IMAGE,
+			Source: &runtimev1.RootfsConfig_ImageUrl{ImageUrl: opts.image},
 		},
 		Command:   command,
 		Mounts:    mountList,
-		Resources: map[string]float64{"CPU": cpu, "Memory": mem},
+		Resources: map[string]float64{"CPU": opts.cpu, "Memory": opts.memory},
 		Envs:      userEnvs,
-		Network:   network,
+		Network:   opts.network,
 		Ports:     portMappings,
 	}
 
 	fmt.Println("--- 启动容器 ---")
-	fmt.Printf("  镜像:    %s\n", image)
-	fmt.Printf("  命令:    %s\n", cmd)
-	fmt.Printf("  CPU:     %.0f millicore\n", cpu)
-	fmt.Printf("  内存:    %.0f MB\n", mem)
-	fmt.Printf("  网络:    %s\n", network)
+	fmt.Printf("  镜像:    %s\n", opts.image)
+	fmt.Printf("  命令:    %s\n", opts.commandLine)
+	fmt.Printf("  CPU:     %.0f millicore\n", opts.cpu)
+	fmt.Printf("  内存:    %.0f MB\n", opts.memory)
+	fmt.Printf("  网络:    %s\n", opts.network)
 	if len(mountList) > 0 {
 		fmt.Printf("  挂载:\n")
 		for _, m := range mountList {
@@ -215,12 +277,12 @@ func mustStart(ctx context.Context, client pb.SandboxServiceClient, image, cmd, 
 	return resp.GetId()
 }
 
-func doWait(ctx context.Context, client pb.SandboxServiceClient, id string) {
+func doWait(ctx context.Context, client runtimev1.SandboxServiceClient, id string) {
 	if id == "" {
 		log.Fatal("--id 参数必填")
 	}
 	fmt.Printf("等待容器 %s 退出...\n", id)
-	resp, err := client.Wait(ctx, &pb.WaitRequest{Id: id})
+	resp, err := client.Wait(ctx, &runtimev1.WaitRequest{Id: id})
 	if err != nil {
 		log.Fatalf("Wait 失败: %v", err)
 	}
@@ -228,29 +290,30 @@ func doWait(ctx context.Context, client pb.SandboxServiceClient, id string) {
 		resp.GetExitCode(), resp.GetStatus(), resp.GetMessage())
 }
 
-func doDelete(ctx context.Context, client pb.SandboxServiceClient, id string, timeout int64) {
+func doDelete(ctx context.Context, client runtimev1.SandboxServiceClient, id string, timeout int64) {
 	if id == "" {
 		log.Fatal("--id 参数必填")
 	}
 	fmt.Printf("删除容器 %s (timeout=%ds)...\n", id, timeout)
-	_, err := client.Delete(ctx, &pb.DeleteRequest{Id: id, Timeout: timeout})
+	_, err := client.Delete(ctx, &runtimev1.DeleteRequest{Id: id, Timeout: timeout})
 	if err != nil {
 		log.Fatalf("Delete 失败: %v", err)
 	}
 	fmt.Println("容器已删除")
 }
 
-func doRegister(ctx context.Context, client pb.SandboxServiceClient, image, id, cmd, envs string) {
+func doRegister(ctx context.Context, client runtimev1.SandboxServiceClient, opts registerOptions) {
+	id := opts.id
 	if id == "" {
 		id = fmt.Sprintf("reg-%d", time.Now().UnixNano()%1000000)
 	}
 	var command []string
-	if cmd != "" {
-		command = strings.Fields(cmd)
+	if opts.commandLine != "" {
+		command = strings.Fields(opts.commandLine)
 	}
 	runtimeEnvs := make(map[string]string)
-	if envs != "" {
-		for _, e := range strings.Split(envs, ",") {
+	if opts.envs != "" {
+		for _, e := range strings.Split(opts.envs, ",") {
 			kv := strings.SplitN(e, "=", 2)
 			if len(kv) == 2 {
 				runtimeEnvs[kv[0]] = kv[1]
@@ -258,12 +321,15 @@ func doRegister(ctx context.Context, client pb.SandboxServiceClient, image, id, 
 		}
 	}
 
-	req := &pb.SandboxRegisterRequest{
-		Templates: []*pb.SandboxTemplate{
+	req := &runtimev1.SandboxRegisterRequest{
+		Templates: []*runtimev1.SandboxTemplate{
 			{
 				Id:      id,
-				Runtime: image,
-				Rootfs:  &pb.RootfsConfig{Type: pb.RootfsSrcType_IMAGE, Source: &pb.RootfsConfig_ImageUrl{ImageUrl: image}},
+				Runtime: opts.image,
+				Rootfs: &runtimev1.RootfsConfig{
+					Type:   runtimev1.RootfsSrcType_IMAGE,
+					Source: &runtimev1.RootfsConfig_ImageUrl{ImageUrl: opts.image},
+				},
 				Command: command,
 				Envs:    runtimeEnvs,
 			},
@@ -276,20 +342,20 @@ func doRegister(ctx context.Context, client pb.SandboxServiceClient, image, id, 
 	fmt.Printf("注册结果: success=%v, message=%s\n", resp.GetSuccess(), resp.GetMessage())
 }
 
-func doUnregister(ctx context.Context, client pb.SandboxServiceClient, id string) {
+func doUnregister(ctx context.Context, client runtimev1.SandboxServiceClient, id string) {
 	if id == "" {
 		log.Fatal("--id 参数必填")
 	}
 	ids := strings.Split(id, ",")
-	resp, err := client.Unregister(ctx, &pb.SandboxUnregisterRequest{Ids: ids})
+	resp, err := client.Unregister(ctx, &runtimev1.SandboxUnregisterRequest{Ids: ids})
 	if err != nil {
 		log.Fatalf("Unregister 失败: %v", err)
 	}
 	fmt.Printf("注销结果: success=%v, message=%s\n", resp.GetSuccess(), resp.GetMessage())
 }
 
-func doListSandboxes(ctx context.Context, client pb.SandboxServiceClient) {
-	resp, err := client.List(ctx, &pb.ListSandboxesRequest{})
+func doListSandboxes(ctx context.Context, client runtimev1.SandboxServiceClient) {
+	resp, err := client.List(ctx, &runtimev1.ListSandboxesRequest{})
 	if err != nil {
 		log.Fatalf("List 失败: %v", err)
 	}
@@ -305,8 +371,8 @@ func doListSandboxes(ctx context.Context, client pb.SandboxServiceClient) {
 	}
 }
 
-func doListRegistered(ctx context.Context, client pb.SandboxServiceClient) {
-	resp, err := client.GetRegistered(ctx, &pb.SandboxGetRegisteredRequest{})
+func doListRegistered(ctx context.Context, client runtimev1.SandboxServiceClient) {
+	resp, err := client.GetRegistered(ctx, &runtimev1.SandboxGetRegisteredRequest{})
 	if err != nil {
 		log.Fatalf("GetRegistered 失败: %v", err)
 	}

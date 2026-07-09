@@ -31,7 +31,6 @@ type ContainerRuntime interface {
 	Close() error
 }
 
-// ContainerStats 容器资源使用统计。
 // ContainerInfo 是后端权威列表中的 sandbox/container 元数据。
 type ContainerInfo struct {
 	ID         string
@@ -47,11 +46,15 @@ type ContainerInfo struct {
 }
 
 const (
-	ManagedLabelKey   = "yr.runtime-launcher"
+	// ManagedLabelKey marks containers owned by runtime-launcher.
+	ManagedLabelKey = "yr.runtime-launcher"
+	// ManagedLabelValue is the expected ownership label value.
 	ManagedLabelValue = "true"
+	// RuntimeIDLabelKey stores the YuanRong runtime ID on backend containers.
 	RuntimeIDLabelKey = "yr.runtime-id"
 )
 
+// ContainerStats 容器资源使用统计。
 type ContainerStats struct {
 	// CPUUsageNs 累积 CPU 用量（纳秒），单调递增。调用方对相邻两次快照做差分得到利用率。
 	CPUUsageNs uint64

@@ -21,6 +21,10 @@
 
 namespace functionsystem::runtime_manager {
 
+namespace {
+constexpr int64_t CHECKPOINT_TIMEOUT_NS = 30000000000;
+}
+
 SandboxdCheckpointOrchestrator::SandboxdCheckpointOrchestrator(
     litebus::AID ownerAID,
     std::shared_ptr<GrpcClient<runtime::v1::SandboxService>> sandboxd,
@@ -72,7 +76,7 @@ litebus::Future<messages::SnapshotRuntimeResponse> SandboxdCheckpointOrchestrato
     auto ckptReq = std::make_shared<runtime::v1::SandboxCheckpointRequest>();
     ckptReq->set_id(sandboxID);
     ckptReq->set_checkpoint_dir(checkpointPath);
-    ckptReq->set_timeout(30000000000);  // 30 seconds in nanoseconds (Go time.Duration)
+    ckptReq->set_timeout(CHECKPOINT_TIMEOUT_NS);
     ckptReq->set_compress(true);
     ckptReq->set_trace_id(requestID);
 
@@ -99,12 +103,15 @@ litebus::Future<messages::SnapshotRuntimeResponse> SandboxdCheckpointOrchestrato
         return response;
     }
 
-    YRLOG_INFO("{}|checkpoint succeeded, uploading checkpoint({}) for runtime({})", requestID, checkpointID, runtimeID);
+    YRLOG_INFO(
+        "{}|checkpoint succeeded, uploading checkpoint({}) for runtime({})",
+        requestID, checkpointID, runtimeID);
 
     ASSERT_IF_NULL(ckptFileManager_);
     return ckptFileManager_->RegisterCheckpoint(checkpointID, checkpointPath, checkpointID, ttl)
         .Then(litebus::Defer(ownerAID_,
-            [self = shared_from_this(), response, requestID, runtimeID, checkpointID, ttl](const std::string &storageUrl) {
+            [self = shared_from_this(), response, requestID, runtimeID, checkpointID, ttl](
+                const std::string &storageUrl) {
                 return self->OnRegisterDone(storageUrl, response, requestID, runtimeID, checkpointID, ttl);
             }));
 }

@@ -66,8 +66,10 @@ struct SandboxRequestedResources {
     double memoryBytes = 0.0;
 };
 
-// Downstream sandboxd port forwarding only accepts L4 protocols (tcp/udp). L7 portForward schemes (http/https/ws/wss)
-// are normalized to tcp before sending to sandboxd because the underlying mapping is TCP NAT; other schemes are preserved.
+// Downstream sandboxd port forwarding only accepts L4 protocols (tcp/udp). L7
+// portForward schemes (http/https/ws/wss) are normalized to tcp before sending
+// to sandboxd because the underlying mapping is TCP NAT; other schemes are
+// preserved.
 // The portForward written back to instanceinfo keeps the original scheme for sandboxRouter L7 routing.
 std::string ToDownstreamL4Protocol(const std::string &proto)
 {
@@ -594,9 +596,10 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartNormal(
                     const std::string hostPort = std::to_string(hostPorts[i]);
                     const std::string containerPort = std::to_string(forwardConfigs[i].containerPort);
                     const std::string &scheme = forwardConfigs[i].protocol;
-                    // Send L4 protocol to downstream sandboxd (http/https/ws/wss -> tcp, original tcp unchanged), otherwise sandboxd rejects it.
-                    params.portMappings.push_back(ToDownstreamL4Protocol(scheme) + ":" + hostPort + ":" + containerPort);
-                    // Write back portForward (-> instanceinfo -> sandboxrouter) with the original scheme for L7 routing.
+                    // Send L4 protocol to sandboxd, otherwise sandboxd rejects it.
+                    params.portMappings.push_back(
+                        ToDownstreamL4Protocol(scheme) + ":" + hostPort + ":" + containerPort);
+                    // Write back portForward with the original scheme for L7 routing.
                     portJson.push_back(scheme + ":" + hostPort + ":" + containerPort);
                 }
                 stateManager_.UpdatePortMappings(params.runtimeID, portJson.dump());
@@ -706,7 +709,7 @@ litebus::Future<Status> SandboxdExecutor::TerminateSandbox(const std::string &ru
 litebus::Future<Status> SandboxdExecutor::OnDeleteDone(const std::string &runtimeID,
                                                         const std::string &requestID,
                                                         const std::string &sandboxID,
-                                                        const runtime::v1::DeleteResponse & /*response*/)
+                                                        const runtime::v1::DeleteResponse & /* response */)
 {
     YRLOG_INFO("{}|sandbox({}) deleted for runtime({})", requestID, sandboxID, runtimeID);
 
@@ -812,8 +815,8 @@ litebus::Future<messages::UpdateCredResponse> SandboxdExecutor::UpdateCredForRun
     return response;
 }
 
-litebus::Future<Status> SandboxdExecutor::NotifyInstancesDiskUsageExceedLimit(const std::string & /*description*/,
-                                                                              const int /*limit*/)
+litebus::Future<Status> SandboxdExecutor::NotifyInstancesDiskUsageExceedLimit(const std::string & /* description */,
+                                                                              const int /* limit */)
 {
     return Status::OK();
 }

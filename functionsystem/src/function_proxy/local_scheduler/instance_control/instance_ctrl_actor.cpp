@@ -96,6 +96,7 @@ const char* HEADER_IDP_KEY = "X-Idp-Id"; // key for identity provider
 const char* HEADER_AUTH_TOKEN_KEY = "X-Auth-Token"; // key for iam-token
 
 const char *DEBUG_CONFIG_KEY = "debug_config";
+const size_t DECIMAL_BASE = 10;
 
 static size_t ParseRrtActivityProcessingNum(const std::string &payload)
 {
@@ -114,7 +115,7 @@ static size_t ParseRrtActivityProcessingNum(const std::string &payload)
         if (c < '0' || c > '9') {
             return 0;
         }
-        value = value * 10 + static_cast<size_t>(c - '0');
+        value = value * DECIMAL_BASE + static_cast<size_t>(c - '0');
     }
     return value;
 }
@@ -406,8 +407,10 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(const std::string &s
     const int &signal = killReq->signal();
     switch (signal) {
         case RRT_IDLE_REPORT_SIGNAL: {
-            // RRT reports sandbox-local busy/idle transitions from the global HTTP/WS/tunnel/RPC active counter:
-            // processingNum=0 starts the IdleMgr timer; processingNum>0 cancels it. This path does not run the kill flow.
+            // RRT reports sandbox-local busy/idle transitions from the global
+            // HTTP/WS/tunnel/RPC active counter: processingNum=0 starts the
+            // IdleMgr timer; processingNum>0 cancels it. This path does not
+            // run the kill flow.
             // See docs/features/sandbox-rrt-idle-report.md.
             const size_t processingNum = ParseRrtActivityProcessingNum(killReq->payload());
             if (idleMgr_ != nullptr) {

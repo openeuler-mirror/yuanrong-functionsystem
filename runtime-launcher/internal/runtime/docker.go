@@ -18,7 +18,11 @@ import (
 	"github.com/docker/go-connections/nat"
 )
 
-const shortContainerIDLength = 12
+const (
+	shortContainerIDLength = 12
+	runtimeLabelSlots      = 2
+	containerNameModulo    = 100000
+)
 
 // DockerRuntime 使用 Docker Engine SDK 实现 ContainerRuntime 接口。
 type DockerRuntime struct {
@@ -86,7 +90,7 @@ func (d *DockerRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, 
 		envList = append(envList, k+"="+v)
 	}
 
-	labels := make(map[string]string, len(cfg.Labels)+2)
+	labels := make(map[string]string, len(cfg.Labels)+runtimeLabelSlots)
 	for k, v := range cfg.Labels {
 		labels[k] = v
 	}
@@ -133,7 +137,7 @@ func (d *DockerRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, 
 	}
 
 	// Create container.
-	containerName := fmt.Sprintf("rl-%s-%d", cfg.ID, time.Now().UnixNano()%100000)
+	containerName := fmt.Sprintf("rl-%s-%d", cfg.ID, time.Now().UnixNano()%containerNameModulo)
 	resp, err := d.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, containerName)
 	if err != nil {
 		return "", fmt.Errorf("failed to create container: %w", err)
@@ -243,10 +247,12 @@ func (d *DockerRuntime) Delete(ctx context.Context, containerID string, timeoutS
 	return nil
 }
 
+// Close releases the Docker client resources.
 func (d *DockerRuntime) Close() error {
 	return d.client.Close()
 }
 
+// List returns runtime-launcher managed containers from Docker.
 func (d *DockerRuntime) List(ctx context.Context, id string) ([]*ContainerInfo, error) {
 	args := filters.NewArgs(filters.Arg("label", ManagedLabelKey+"="+ManagedLabelValue))
 	containers, err := d.client.ContainerList(ctx, container.ListOptions{All: true, Filters: args})

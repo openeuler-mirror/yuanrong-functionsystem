@@ -45,8 +45,10 @@ namespace functionsystem::runtime_manager {
 using json = nlohmann::json;
 
 namespace {
-// Downstream sandboxd port forwarding only accepts L4 protocols (tcp/udp). L7 portForward schemes (http/https/ws/wss)
-// are normalized to tcp before sending to sandboxd because the underlying mapping is TCP NAT; other schemes (tcp/udp, etc.) are preserved.
+// Downstream sandboxd port forwarding only accepts L4 protocols (tcp/udp). L7
+// portForward schemes (http/https/ws/wss) are normalized to tcp before sending
+// to sandboxd because the underlying mapping is TCP NAT; other schemes are
+// preserved.
 // The portForward written back to instanceinfo keeps the original scheme for sandboxRouter L7 routing.
 std::string ToDownstreamL4Protocol(const std::string &proto)
 {

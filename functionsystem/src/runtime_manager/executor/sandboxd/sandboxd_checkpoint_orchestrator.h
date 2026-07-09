@@ -45,6 +45,7 @@ public:
                                    std::shared_ptr<GrpcClient<runtime::v1::SandboxService>> sandboxd,
                                    std::shared_ptr<CkptFileManager> ckptFileManager,
                                    RuntimeStateManager &stateManager);
+    ~SandboxdCheckpointOrchestrator() = default;
 
     // ── Snapshot ──────────────────────────────────────────────────────────────
 

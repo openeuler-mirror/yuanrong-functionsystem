@@ -134,7 +134,7 @@ public:
     bool IsRuntimeActive(const std::string &runtimeID) override;
     std::shared_ptr<litebus::Exec> GetExecByRuntimeID(const std::string &runtimeID) override;
     void ClearCapability() override {}
-    void UpdatePrestartRuntimePromise(pid_t /*pid*/) override {}
+    void UpdatePrestartRuntimePromise(pid_t /* pid */) override {}
 
     litebus::Future<messages::UpdateCredResponse> UpdateCredForRuntime(
         const std::shared_ptr<messages::UpdateCredRequest> &request) override;
@@ -387,7 +387,7 @@ public:
         return litebus::Async(sandboxd_->GetAID(), &SandboxdExecutor::GetRuntimeInstanceInfos);
     }
 
-    void UpdatePrestartRuntimePromise(pid_t /*pid*/) override {}
+    void UpdatePrestartRuntimePromise(pid_t /* pid */) override {}
     void ClearCapability() override {}
 
     litebus::Future<bool> GracefulShutdown() override

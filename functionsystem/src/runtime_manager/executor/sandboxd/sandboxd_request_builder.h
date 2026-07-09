@@ -71,6 +71,7 @@ struct SandboxdStartParams {
 class SandboxdRequestBuilder {
 public:
     explicit SandboxdRequestBuilder(const CommandBuilder &cmdBuilder);
+    ~SandboxdRequestBuilder() = default;
 
     std::pair<Status, std::shared_ptr<runtime::v1::SandboxStartRequest>> Build(
         const SandboxdStartParams &params) const;
