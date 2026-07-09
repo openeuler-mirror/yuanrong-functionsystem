@@ -56,11 +56,11 @@ func (s *LauncherService) Start(
 // Restore reports that runtime-launcher does not implement sandbox restore.
 func (s *LauncherService) Restore(
 	ctx context.Context,
-	req *runtimev1.RestoreRequest,
-) (*runtimev1.RestoreResponse, error) {
+	req *runtimev1.SandboxRestoreRequest,
+) (*runtimev1.SandboxRestoreResponse, error) {
 	_ = ctx
 	_ = req
-	return &runtimev1.RestoreResponse{
+	return &runtimev1.SandboxRestoreResponse{
 		Code:    1,
 		Message: "restore is not supported by runtime-launcher SandboxService backend",
 	}, nil
