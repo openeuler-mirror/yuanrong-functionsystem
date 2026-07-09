@@ -1220,8 +1220,9 @@ litebus::Future<std::shared_ptr<TokenSalt>> TokenManagerActor::SlaveBusiness::Re
     ASSERT_IF_NULL(actor);
     auto promise = std::make_shared<litebus::Promise<std::shared_ptr<TokenSalt>>>();
 
-    // TODO(Cluster-Enhancement): Extend GetTokenRequest in message.proto to include
-    // cpuLimit and memLimit. Currently, quota values are lost during forwarding to Master.
+    // Cluster enhancement follow-up: extend GetTokenRequest in message.proto
+    // to include cpuLimit and memLimit. Currently, quota values are lost during
+    // forwarding to Master.
     YRLOG_WARN("{}|Quota forwarding to Master is not yet supported in cluster mode. Defaulting to standard token.",
                tenantID);
 

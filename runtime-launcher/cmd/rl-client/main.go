@@ -33,33 +33,25 @@ type registerOptions struct {
 	envs        string
 }
 
+type cliFlags struct {
+	socketPath *string
+	action     *string
+	image      *string
+	command    *string
+	mounts     *string
+	network    *string
+	ports      *string
+	id         *string
+	timeout    *int64
+	cpu        *float64
+	memory     *float64
+	envs       *string
+}
+
 func main() {
-	// 命令行参数
-	socketPath := flag.String("socket", "/var/run/runtime-launcher.sock", "SandboxService UDS 路径")
-	action := flag.String(
-		"action",
-		"run",
-		"操作: run | start | wait | delete | register | unregister | list | list-sandboxes | list-registered",
-	)
-	imageFlag := flag.String("image", "", "容器镜像（必填，用于 run/start）")
-	cmdFlag := flag.String("cmd", "", "容器内执行的命令（如 'echo hello'）")
-	mountFlag := flag.String("mount", "", "挂载，格式: 源路径:目标路径[:ro]，多个用逗号分隔")
-	networkFlag := flag.String("network", "bridge", "网络模式（如 bridge|host|none）")
-	portsFlag := flag.String("ports", "", "端口映射，格式: protocol:hostPort:containerPort，多个用逗号分隔")
-	idFlag := flag.String("id", "", "容器/运行时 ID（用于 wait/delete/unregister）")
-	timeoutFlag := flag.Int64("timeout", 5, "删除时的优雅超时秒数")
-	cpuFlag := flag.Float64("cpu", 500, "CPU 毫核")
-	memFlag := flag.Float64("mem", 512, "内存 MB")
-	envFlag := flag.String("env", "", "环境变量，格式: KEY=VAL，多个用逗号分隔")
-	flag.Parse()
-
+	flags := parseFlags()
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
-
-	// 连接 gRPC 服务
-	conn, err := grpc.NewClient(
-		"unix://"+*socketPath,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	conn, err := connect(*flags.socketPath)
 	if err != nil {
 		log.Fatalf("连接失败: %v", err)
 	}
@@ -68,44 +60,53 @@ func main() {
 	client := runtimev1.NewSandboxServiceClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+	runAction(ctx, client, flags)
+}
 
-	switch *action {
+func parseFlags() cliFlags {
+	flags := cliFlags{
+		socketPath: flag.String("socket", "/var/run/runtime-launcher.sock", "SandboxService UDS 路径"),
+		action: flag.String(
+			"action",
+			"run",
+			"操作: run | start | wait | delete | register | unregister | list | list-sandboxes | list-registered",
+		),
+		image:   flag.String("image", "", "容器镜像（必填，用于 run/start）"),
+		command: flag.String("cmd", "", "容器内执行的命令（如 'echo hello'）"),
+		mounts:  flag.String("mount", "", "挂载，格式: 源路径:目标路径[:ro]，多个用逗号分隔"),
+		network: flag.String("network", "bridge", "网络模式（如 bridge|host|none）"),
+		ports:   flag.String("ports", "", "端口映射，格式: protocol:hostPort:containerPort，多个用逗号分隔"),
+		id:      flag.String("id", "", "容器/运行时 ID（用于 wait/delete/unregister）"),
+		timeout: flag.Int64("timeout", 5, "删除时的优雅超时秒数"),
+		cpu:     flag.Float64("cpu", 500, "CPU 毫核"),
+		memory:  flag.Float64("mem", 512, "内存 MB"),
+		envs:    flag.String("env", "", "环境变量，格式: KEY=VAL，多个用逗号分隔"),
+	}
+	flag.Parse()
+	return flags
+}
+
+func connect(socketPath string) (*grpc.ClientConn, error) {
+	return grpc.NewClient(
+		"unix://"+socketPath,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+}
+
+func runAction(ctx context.Context, client runtimev1.SandboxServiceClient, flags cliFlags) {
+	switch *flags.action {
 	case "run":
-		// run = start + wait + delete（完整生命周期）
-		doRun(ctx, client, buildStartOptions(
-			*imageFlag,
-			*cmdFlag,
-			*mountFlag,
-			*envFlag,
-			*networkFlag,
-			*portsFlag,
-			*cpuFlag,
-			*memFlag,
-		), *timeoutFlag)
+		doRun(ctx, client, startOptionsFromFlags(flags), *flags.timeout)
 	case "start":
-		doStart(ctx, client, buildStartOptions(
-			*imageFlag,
-			*cmdFlag,
-			*mountFlag,
-			*envFlag,
-			*networkFlag,
-			*portsFlag,
-			*cpuFlag,
-			*memFlag,
-		))
+		doStart(ctx, client, startOptionsFromFlags(flags))
 	case "wait":
-		doWait(ctx, client, *idFlag)
+		doWait(ctx, client, *flags.id)
 	case "delete":
-		doDelete(ctx, client, *idFlag, *timeoutFlag)
+		doDelete(ctx, client, *flags.id, *flags.timeout)
 	case "register":
-		doRegister(ctx, client, registerOptions{
-			image:       *imageFlag,
-			id:          *idFlag,
-			commandLine: *cmdFlag,
-			envs:        *envFlag,
-		})
+		doRegister(ctx, client, registerOptionsFromFlags(flags))
 	case "unregister":
-		doUnregister(ctx, client, *idFlag)
+		doUnregister(ctx, client, *flags.id)
 	case "list", "list-sandboxes":
 		doListSandboxes(ctx, client)
 	case "list-registered":
@@ -114,22 +115,31 @@ func main() {
 		fmt.Fprintf(
 			os.Stderr,
 			"未知操作: %s\n可选: run, start, wait, delete, register, unregister, list, list-sandboxes, list-registered\n",
-			*action,
+			*flags.action,
 		)
 		os.Exit(1)
 	}
 }
 
-func buildStartOptions(image, commandLine, mounts, envs, network, ports string, cpu, memory float64) startOptions {
+func startOptionsFromFlags(flags cliFlags) startOptions {
 	return startOptions{
-		image:       image,
-		commandLine: commandLine,
-		mounts:      mounts,
-		envs:        envs,
-		network:     network,
-		ports:       ports,
-		cpu:         cpu,
-		memory:      memory,
+		image:       *flags.image,
+		commandLine: *flags.command,
+		mounts:      *flags.mounts,
+		envs:        *flags.envs,
+		network:     *flags.network,
+		ports:       *flags.ports,
+		cpu:         *flags.cpu,
+		memory:      *flags.memory,
+	}
+}
+
+func registerOptionsFromFlags(flags cliFlags) registerOptions {
+	return registerOptions{
+		image:       *flags.image,
+		id:          *flags.id,
+		commandLine: *flags.command,
+		envs:        *flags.envs,
 	}
 }
 
@@ -175,56 +185,26 @@ func doStart(ctx context.Context, client runtimev1.SandboxServiceClient, opts st
 
 func mustStart(ctx context.Context, client runtimev1.SandboxServiceClient, opts startOptions) string {
 	runtimeID := fmt.Sprintf("test-%d", time.Now().UnixNano()%1000000)
-
-	// 构建命令
-	var command []string
-	if opts.commandLine != "" {
-		command = strings.Fields(opts.commandLine)
+	req := buildStartRequest(runtimeID, opts)
+	printStartRequest(opts, req)
+	resp, err := client.Start(ctx, req)
+	if err != nil {
+		log.Fatalf("Start RPC 失败: %v", err)
+	}
+	if resp.GetCode() != 0 {
+		log.Fatalf("Start 失败: code=%d, message=%s", resp.GetCode(), resp.GetMessage())
 	}
 
-	// 构建挂载
-	var mountList []*runtimev1.Mount
-	if opts.mounts != "" {
-		for _, m := range strings.Split(opts.mounts, ",") {
-			parts := strings.SplitN(m, ":", 3)
-			if len(parts) < 2 {
-				log.Fatalf("挂载格式错误: %s（应为 源:目标[:ro]）", m)
-			}
-			mt := &runtimev1.Mount{
-				Type:   "bind",
-				Target: parts[1],
-				Source: &runtimev1.Mount_HostPath{HostPath: parts[0]},
-			}
-			if len(parts) == 3 && parts[2] == "ro" {
-				mt.Options = []string{"ro"}
-			}
-			mountList = append(mountList, mt)
-		}
-	}
+	fmt.Printf("容器已启动: id=%s\n", resp.GetId())
+	return resp.GetId()
+}
 
-	// 构建环境变量
-	userEnvs := make(map[string]string)
-	if opts.envs != "" {
-		for _, e := range strings.Split(opts.envs, ",") {
-			kv := strings.SplitN(e, "=", 2)
-			if len(kv) == 2 {
-				userEnvs[kv[0]] = kv[1]
-			}
-		}
-	}
-
-	// 构建端口映射
-	var portMappings []string
-	if opts.ports != "" {
-		for _, p := range strings.Split(opts.ports, ",") {
-			port := strings.TrimSpace(p)
-			if port != "" {
-				portMappings = append(portMappings, port)
-			}
-		}
-	}
-
-	req := &runtimev1.SandboxStartRequest{
+func buildStartRequest(runtimeID string, opts startOptions) *runtimev1.SandboxStartRequest {
+	command := parseCommand(opts.commandLine)
+	mountList := parseMounts(opts.mounts)
+	userEnvs := parseEnvMap(opts.envs)
+	portMappings := parsePorts(opts.ports)
+	return &runtimev1.SandboxStartRequest{
 		SandboxId: runtimeID,
 		Runtime:   opts.image,
 		Rootfs: &runtimev1.RootfsConfig{
@@ -238,43 +218,92 @@ func mustStart(ctx context.Context, client runtimev1.SandboxServiceClient, opts 
 		Network:   opts.network,
 		Ports:     portMappings,
 	}
+}
 
+func parseCommand(commandLine string) []string {
+	if commandLine == "" {
+		return nil
+	}
+	return strings.Fields(commandLine)
+}
+
+func parseMounts(mounts string) []*runtimev1.Mount {
+	var mountList []*runtimev1.Mount
+	if mounts == "" {
+		return mountList
+	}
+	for _, m := range strings.Split(mounts, ",") {
+		parts := strings.SplitN(m, ":", 3)
+		if len(parts) < 2 {
+			log.Fatalf("挂载格式错误: %s（应为 源:目标[:ro]）", m)
+		}
+		mt := &runtimev1.Mount{
+			Type:   "bind",
+			Target: parts[1],
+			Source: &runtimev1.Mount_HostPath{HostPath: parts[0]},
+		}
+		if len(parts) == 3 && parts[2] == "ro" {
+			mt.Options = []string{"ro"}
+		}
+		mountList = append(mountList, mt)
+	}
+	return mountList
+}
+
+func parseEnvMap(envs string) map[string]string {
+	userEnvs := make(map[string]string)
+	if envs == "" {
+		return userEnvs
+	}
+	for _, e := range strings.Split(envs, ",") {
+		kv := strings.SplitN(e, "=", 2)
+		if len(kv) == 2 {
+			userEnvs[kv[0]] = kv[1]
+		}
+	}
+	return userEnvs
+}
+
+func parsePorts(ports string) []string {
+	var portMappings []string
+	if ports == "" {
+		return portMappings
+	}
+	for _, p := range strings.Split(ports, ",") {
+		port := strings.TrimSpace(p)
+		if port != "" {
+			portMappings = append(portMappings, port)
+		}
+	}
+	return portMappings
+}
+
+func printStartRequest(opts startOptions, req *runtimev1.SandboxStartRequest) {
 	fmt.Println("--- 启动容器 ---")
 	fmt.Printf("  镜像:    %s\n", opts.image)
 	fmt.Printf("  命令:    %s\n", opts.commandLine)
 	fmt.Printf("  CPU:     %.0f millicore\n", opts.cpu)
 	fmt.Printf("  内存:    %.0f MB\n", opts.memory)
 	fmt.Printf("  网络:    %s\n", opts.network)
-	if len(mountList) > 0 {
+	if len(req.GetMounts()) > 0 {
 		fmt.Printf("  挂载:\n")
-		for _, m := range mountList {
+		for _, m := range req.GetMounts() {
 			fmt.Printf("    %s -> %s\n", m.GetHostPath(), m.Target)
 		}
 	}
-	if len(userEnvs) > 0 {
+	if len(req.GetEnvs()) > 0 {
 		fmt.Printf("  环境变量:\n")
-		for k, v := range userEnvs {
+		for k, v := range req.GetEnvs() {
 			fmt.Printf("    %s=%s\n", k, v)
 		}
 	}
-	if len(portMappings) > 0 {
+	if len(req.GetPorts()) > 0 {
 		fmt.Printf("  端口映射:\n")
-		for _, p := range portMappings {
+		for _, p := range req.GetPorts() {
 			fmt.Printf("    %s\n", p)
 		}
 	}
 	fmt.Println()
-
-	resp, err := client.Start(ctx, req)
-	if err != nil {
-		log.Fatalf("Start RPC 失败: %v", err)
-	}
-	if resp.GetCode() != 0 {
-		log.Fatalf("Start 失败: code=%d, message=%s", resp.GetCode(), resp.GetMessage())
-	}
-
-	fmt.Printf("容器已启动: id=%s\n", resp.GetId())
-	return resp.GetId()
 }
 
 func doWait(ctx context.Context, client runtimev1.SandboxServiceClient, id string) {

@@ -60,6 +60,7 @@ constexpr double CPU_MILLICORES_PER_CORE            = 1000.0;
 constexpr double BYTES_PER_MB                       = 1024.0 * 1024.0;
 constexpr double DEFAULT_SANDBOX_CPU_MILLICORES     = 500.0;
 constexpr double DEFAULT_SANDBOX_MEMORY_MB          = 500.0;
+constexpr int32_t MAX_PORT_NUMBER                   = 65535;
 
 struct SandboxRequestedResources {
     double cpuCores = 0.0;
@@ -1698,7 +1699,7 @@ std::vector<SandboxdExecutor::PortForwardConfig> SandboxdExecutor::ParseForwardP
                 continue;
             }
             int p = item["port"].get<int>();
-            if (p <= 0 || p > 65535) {
+            if (p <= 0 || p > MAX_PORT_NUMBER) {
                 continue;
             }
             PortForwardConfig cfg;

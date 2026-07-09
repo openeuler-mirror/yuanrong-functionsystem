@@ -150,7 +150,9 @@ func (d *DockerRuntime) Create(ctx context.Context, cfg *CreateConfig) (string, 
 		return "", fmt.Errorf("failed to start container: %w", err)
 	}
 
-	log.Printf("[docker] container started: id=%s, image=%s, network=%s", resp.ID[:12], imageName, networkMode)
+	log.Printf(
+		"[docker] container started: id=%s, image=%s, network=%s",
+		resp.ID[:shortContainerIDLength], imageName, networkMode)
 	return resp.ID, nil
 }
 
@@ -173,8 +175,7 @@ func parsePortMappings(mappings []string) (nat.PortSet, nat.PortMap, error) {
 		switch protocol {
 		case "http", "https", "ws", "wss":
 			protocol = "tcp"
-		case "tcp", "udp", "sctp":
-			// transport protocol passed through as-is
+		case "tcp", "udp", "sctp": // transport protocol passed through as-is
 		default:
 			return nil, nil, fmt.Errorf("invalid port mapping %q; protocol only supports http/https/tcp/udp/sctp", raw)
 		}
