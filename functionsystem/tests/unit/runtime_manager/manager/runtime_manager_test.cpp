@@ -257,7 +257,31 @@ public:
     static inline std::string env_;
 };
 
-class RuntimeManagerTypeTest : public DISABLED_RuntimeManagerTest {};
+class RuntimeManagerTypeTest : public DISABLED_RuntimeManagerTest {
+public:
+    void SetUp() override
+    {
+        auto runtimeBackendEnv = litebus::os::GetEnv("YR_RUNTIME_BACKEND");
+        hasRuntimeBackendEnv_ = runtimeBackendEnv.IsSome();
+        runtimeBackendEnv_ = hasRuntimeBackendEnv_ ? runtimeBackendEnv.Get() : "";
+        litebus::os::SetEnv("YR_RUNTIME_BACKEND", "container");
+        DISABLED_RuntimeManagerTest::SetUp();
+    }
+
+    void TearDown() override
+    {
+        DISABLED_RuntimeManagerTest::TearDown();
+        if (hasRuntimeBackendEnv_) {
+            litebus::os::SetEnv("YR_RUNTIME_BACKEND", runtimeBackendEnv_);
+            return;
+        }
+        litebus::os::UnSetEnv("YR_RUNTIME_BACKEND");
+    }
+
+private:
+    bool hasRuntimeBackendEnv_ = false;
+    std::string runtimeBackendEnv_;
+};
 
 TEST_F(DISABLED_RuntimeManagerTest, StartInstanceTest)
 {
