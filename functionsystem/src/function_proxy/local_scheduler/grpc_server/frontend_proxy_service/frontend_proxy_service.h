@@ -35,12 +35,14 @@ struct FrontendProxyServiceParam {
     using CreateReadyDispatcher =
         std::function<litebus::Future<::frontend_proxy::CreateInstanceResponse>(
             const ::frontend_proxy::CreateInstanceRequest &)>;
+    using CreateWaitCanceller = std::function<void(const std::string &, const std::string &)>;
     using KillDispatcher = std::function<litebus::Future<SharedStreamMsg>(const std::string &, const SharedStreamMsg &)>;
     using KillReadyDispatcher =
         std::function<litebus::Future<::frontend_proxy::KillInstanceResponse>(
             const ::frontend_proxy::KillInstanceRequest &)>;
 
     std::string nodeID;
+    std::string endpointAddress;
     // Optional test seam. Production leaves this empty and dispatches through InvocationHandler::Invoke.
     InvokeDispatcher invokeDispatcher;
     // Optional test seam. Production may wire this to the reviewed create handler only after
@@ -49,6 +51,9 @@ struct FrontendProxyServiceParam {
     // Reviewed create seam: dispatcher must return the frontend-facing final/ready response,
     // not the old immediate POSIX scheduler CreateResponse.
     CreateReadyDispatcher createReadyDispatcher;
+    // Removes only the frontend ready waiter. It must never be interpreted as
+    // cancelling an instance whose schedule request may already be dispatched.
+    CreateWaitCanceller createWaitCanceller;
     // Optional test seam. Production may wire this to the reviewed kill handler only after
     // frontend system-caller lifecycle semantics are enabled end-to-end.
     KillDispatcher killDispatcher;
@@ -65,6 +70,9 @@ struct FrontendProxyServiceParam {
 // system services and must not be registered as runtime stream clients.
 class FrontendProxyService final : public frontend_proxy::FrontendProxyService::Service {
 public:
+    inline static constexpr const char *LIFECYCLE_TRANSPORT = "raw-unary";
+    inline static constexpr const char *READY_OPERATION = "ready";
+
     explicit FrontendProxyService(FrontendProxyServiceParam &&param);
     ~FrontendProxyService() override = default;
 

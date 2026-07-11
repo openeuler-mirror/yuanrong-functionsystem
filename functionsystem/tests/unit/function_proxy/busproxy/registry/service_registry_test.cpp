@@ -15,6 +15,7 @@
  */
 
 #include "busproxy/registry/service_registry.h"
+#include "busproxy/startup/busproxy_startup.h"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -76,6 +77,37 @@ TEST_F(ServiceRegistryTest, BusProxyRegistryTestTtlInvalid)
     EXPECT_EQ(serviceRegistry_->Register(), Status(StatusCode::SUCCESS));
 }
 
+TEST_F(ServiceRegistryTest, FrontendCapabilitiesAreReplacedThroughFailClosedLeaseRotation)
+{
+    ::testing::InSequence sequence;
+    const auto legacyDump = Dump(proxyMeta);
+    FrontendProxyServiceMeta frontendService;
+    frontendService.address = "10.0.0.11:19090";
+    frontendService.version = "phase3";
+    frontendService.health = "healthy";
+    frontendService.capabilities = { "faas.create", "faas.invoke", "faas.kill" };
+    auto readyMeta = proxyMeta;
+    readyMeta.frontendService = frontendService;
+
+    EXPECT_CALL(*metaStorageAccessor_, PutWithLease(key, legacyDump, DEFAULT_TTL))
+        .WillOnce(::testing::Return(litebus::Future<Status>(Status::OK())));
+    EXPECT_CALL(*metaStorageAccessor_, Revoke(key))
+        .WillOnce(::testing::Return(litebus::Future<Status>(Status::OK())));
+    EXPECT_CALL(*metaStorageAccessor_, PutWithLease(key, Dump(readyMeta), DEFAULT_TTL))
+        .WillOnce(::testing::Return(litebus::Future<Status>(Status::OK())));
+    EXPECT_CALL(*metaStorageAccessor_, Revoke(key))
+        .WillOnce(::testing::Return(litebus::Future<Status>(Status::OK())));
+    EXPECT_CALL(*metaStorageAccessor_, PutWithLease(key, legacyDump, DEFAULT_TTL))
+        .WillOnce(::testing::Return(litebus::Future<Status>(Status::OK())));
+    EXPECT_CALL(*metaStorageAccessor_, Revoke(key))
+        .WillOnce(::testing::Return(litebus::Future<Status>(Status::OK())));
+
+    serviceRegistry_->Init(metaStorageAccessor_, registerInfo);
+    ASSERT_TRUE(serviceRegistry_->Register().IsOk());
+    EXPECT_TRUE(serviceRegistry_->ReplaceFrontendService(frontendService).IsOk());
+    EXPECT_TRUE(serviceRegistry_->ReplaceFrontendService({}).IsOk());
+}
+
 
 TEST(ServiceRegistryDumpTest, BusProxyRegistryDumpIncludesFrontendServiceWhenProvided)
 {
@@ -117,6 +149,23 @@ TEST(ServiceRegistryDumpTest, GetServiceRegistryInfoCarriesFrontendServiceWhenPr
     auto dumped = nlohmann::json::parse(Dump(registerInfo.meta));
     ASSERT_TRUE(dumped.contains("frontendService"));
     EXPECT_EQ(dumped.at("frontendService").at("address"), "10.0.0.11:19090");
+}
+
+TEST(FrontendServiceReadinessTest, RemainsHiddenUntilAllModuleAndDispatcherGatesPass)
+{
+    EXPECT_FALSE(BusproxyStartup::IsFrontendServiceReady({}));
+    EXPECT_FALSE(BusproxyStartup::IsFrontendServiceReady({ true, false, false, false }));
+    EXPECT_FALSE(BusproxyStartup::IsFrontendServiceReady({ true, true, false, false }));
+    EXPECT_FALSE(BusproxyStartup::IsFrontendServiceReady({ true, true, true, false }));
+    EXPECT_TRUE(BusproxyStartup::IsFrontendServiceReady({ true, true, true, true }));
+}
+
+TEST(FrontendServiceReadinessTest, DispatcherOrModuleFailureWithdrawsCapability)
+{
+    EXPECT_FALSE(BusproxyStartup::IsFrontendServiceReady({ true, true, true, false }));
+    EXPECT_FALSE(BusproxyStartup::IsFrontendServiceReady({ false, true, true, true }));
+    EXPECT_FALSE(BusproxyStartup::IsFrontendServiceReady({ true, false, true, true }));
+    EXPECT_FALSE(BusproxyStartup::IsFrontendServiceReady({ true, true, false, true }));
 }
 
 }  // namespace functionsystem::test

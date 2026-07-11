@@ -72,37 +72,33 @@ std::shared_ptr<messages::ScheduleRequest> BuildFrontendScheduleRequest(
 }
 
 FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDispatcher(
-    const FrontendProxyCreateScheduler &scheduler, const FrontendProxyReadyRegistrar &readyRegistrar)
+    const FrontendProxyCreateReadyScheduler &scheduler)
 {
-    return [scheduler, readyRegistrar](const ::frontend_proxy::CreateInstanceRequest &request) {
+    return [scheduler](const ::frontend_proxy::CreateInstanceRequest &request) {
         if (!scheduler) {
             return litebus::Future<::frontend_proxy::CreateInstanceResponse>(
                 BuildCreateResponse(common::ERR_INNER_SYSTEM_ERROR, "frontend proxy create scheduler is not configured"));
         }
-        if (!readyRegistrar) {
-            return litebus::Future<::frontend_proxy::CreateInstanceResponse>(
-                BuildCreateResponse(common::ERR_INNER_SYSTEM_ERROR, "frontend proxy ready registrar is not configured"));
-        }
-
         auto scheduleReq = BuildFrontendScheduleRequest(request);
         auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+        auto readyPromise = std::make_shared<litebus::Promise<std::shared_ptr<functionsystem::CallResult>>>();
         YRLOG_INFO("{}|frontend system create function({}) from frontendClientID({}), tenantID({})",
                    scheduleReq->requestid(), scheduleReq->instance().function(), request.context().frontendclientid(),
                    request.context().tenantid());
-        return scheduler(scheduleReq, runtimePromise)
-            .Then([scheduleReq, readyRegistrar](const messages::ScheduleResponse &scheduleResponse) {
+        return scheduler(scheduleReq, runtimePromise,
+                         [readyPromise](const std::shared_ptr<functionsystem::CallResult> &readyResult)
+                             -> litebus::Future<CallResultAck> {
+                             if (readyPromise->GetFuture().IsInit()) {
+                                 readyPromise->SetValue(readyResult);
+                             }
+                             return CallResultAck();
+                         })
+            .Then([scheduleReq, readyPromise](const messages::ScheduleResponse &scheduleResponse) {
                 auto response = BuildCreateResponse(scheduleResponse);
                 if (response.create().code() != common::ERR_NONE || response.create().instanceid().empty()) {
                     return litebus::Future<::frontend_proxy::CreateInstanceResponse>(response);
                 }
 
-                auto readyPromise = std::make_shared<litebus::Promise<std::shared_ptr<functionsystem::CallResult>>>();
-                readyRegistrar(response.create().instanceid(), scheduleReq,
-                               [readyPromise](const std::shared_ptr<functionsystem::CallResult> &readyResult)
-                                   -> litebus::Future<CallResultAck> {
-                                   readyPromise->SetValue(readyResult);
-                                   return CallResultAck();
-                               });
                 return readyPromise->GetFuture().Then(
                     [response, scheduleReq](const std::shared_ptr<functionsystem::CallResult> &readyResult) mutable
                         -> litebus::Future<::frontend_proxy::CreateInstanceResponse> {
@@ -111,13 +107,15 @@ FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDi
                             response.mutable_create()->set_message("frontend proxy create ready call result is null");
                             return response;
                         }
-                        if (readyResult->requestid().empty()) {
-                            readyResult->set_requestid(scheduleReq->requestid());
-                        }
                         if (readyResult->instanceid().empty()) {
                             readyResult->set_instanceid(response.create().instanceid());
                         }
                         AttachCreateReadyCallResult(response, *readyResult);
+                        // Instance correlation may legitimately fall back to the
+                        // runtime's instance id, but the public unary boundary
+                        // must echo the frontend/schedule ticket and never leak a
+                        // mismatched runtime-internal request id.
+                        response.mutable_callresult()->set_requestid(scheduleReq->requestid());
                         if (readyResult->code() != common::ERR_NONE) {
                             response.mutable_create()->set_code(readyResult->code());
                             response.mutable_create()->set_message(readyResult->message());
@@ -147,7 +145,7 @@ FrontendProxyServiceParam::KillReadyDispatcher BuildFrontendProxyKillReadyDispat
         YRLOG_INFO("{}|frontend system kill instance({}) from frontendClientID({}), tenantID({})",
                    killReq->requestid(), killReq->instanceid(), request.context().frontendclientid(),
                    request.context().tenantid());
-        return killInvoker(FRONTEND_SYSTEM_KILL_CALLER, killReq)
+        return killInvoker(FRONTEND_SYSTEM_KILL_CALLER, request.context().tenantid(), killReq)
             .Then([](const KillResponse &killResponse) {
                 ::frontend_proxy::KillInstanceResponse response;
                 response.mutable_kill()->CopyFrom(killResponse);
@@ -157,15 +155,16 @@ FrontendProxyServiceParam::KillReadyDispatcher BuildFrontendProxyKillReadyDispat
 }
 
 FrontendProxyServiceParam BuildFrontendProxyServiceParam(
-    const std::string &nodeID, bool enableCreateDispatch, const FrontendProxyCreateScheduler &scheduler,
-    const FrontendProxyReadyRegistrar &readyRegistrar, bool enableKillDispatch,
+    const std::string &nodeID, bool enableCreateDispatch, const FrontendProxyCreateReadyScheduler &scheduler,
+    const FrontendProxyReadyUnregister &readyUnregister, bool enableKillDispatch,
     const FrontendProxyKillInvoker &killInvoker)
 {
     FrontendProxyServiceParam param;
     param.nodeID = nodeID;
     param.enableCreateDispatch = enableCreateDispatch;
     if (enableCreateDispatch) {
-        param.createReadyDispatcher = BuildFrontendProxyCreateReadyDispatcher(scheduler, readyRegistrar);
+        param.createReadyDispatcher = BuildFrontendProxyCreateReadyDispatcher(scheduler);
+        param.createWaitCanceller = readyUnregister;
     }
     param.enableKillDispatch = enableKillDispatch;
     if (enableKillDispatch) {

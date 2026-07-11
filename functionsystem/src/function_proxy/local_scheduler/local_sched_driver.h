@@ -129,6 +129,11 @@ public:
     void ToReady() override;
     void Await() override;
 
+    bool IsFrontendProxyDispatcherAvailable() const
+    {
+        return param_.enableFrontendProxyService && isStarted_ && frontendProxyServiceRegistered_;
+    }
+
 protected:
     Status Create();
 
@@ -182,6 +187,7 @@ private:
     std::shared_ptr<ExecStreamService> execStreamService_;
     std::shared_ptr<TraefikRegistry> traefikRegistry_;
     bool isStarted_ = false;
+    bool frontendProxyServiceRegistered_ = false;
 };
 }  // namespace functionsystem::local_scheduler
 

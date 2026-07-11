@@ -34,22 +34,29 @@ using FrontendProxyReadyCallback = std::function<litebus::Future<CallResultAck>(
 using FrontendProxyReadyRegistrar =
     std::function<void(const std::string &, const std::shared_ptr<messages::ScheduleRequest> &,
                        FrontendProxyReadyCallback)>;
+using FrontendProxyCreateReadyScheduler =
+    std::function<litebus::Future<messages::ScheduleResponse>(
+        const std::shared_ptr<messages::ScheduleRequest> &,
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &,
+        FrontendProxyReadyCallback)>;
+using FrontendProxyReadyUnregister = std::function<void(const std::string &, const std::string &)>;
 using FrontendProxyCreateScheduler =
     std::function<litebus::Future<messages::ScheduleResponse>(
         const std::shared_ptr<messages::ScheduleRequest> &,
         const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &)>;
 using FrontendProxyKillInvoker =
-    std::function<litebus::Future<KillResponse>(const std::string &, const std::shared_ptr<KillRequest> &)>;
+    std::function<litebus::Future<KillResponse>(const std::string &, const std::string &,
+                                                const std::shared_ptr<KillRequest> &)>;
 
 FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDispatcher(
-    const FrontendProxyCreateScheduler &scheduler, const FrontendProxyReadyRegistrar &readyRegistrar);
+    const FrontendProxyCreateReadyScheduler &scheduler);
 
 FrontendProxyServiceParam::KillReadyDispatcher BuildFrontendProxyKillReadyDispatcher(
     const FrontendProxyKillInvoker &killInvoker);
 
 FrontendProxyServiceParam BuildFrontendProxyServiceParam(
-    const std::string &nodeID, bool enableCreateDispatch, const FrontendProxyCreateScheduler &scheduler,
-    const FrontendProxyReadyRegistrar &readyRegistrar, bool enableKillDispatch,
+    const std::string &nodeID, bool enableCreateDispatch, const FrontendProxyCreateReadyScheduler &scheduler,
+    const FrontendProxyReadyUnregister &readyUnregister, bool enableKillDispatch,
     const FrontendProxyKillInvoker &killInvoker);
 
 FrontendProxyServiceParam BuildFrontendProxyServiceParam(const std::string &nodeID, bool enableKillDispatch,

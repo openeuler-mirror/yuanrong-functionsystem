@@ -42,6 +42,9 @@ message FrontendRequestContext {
   // limiting and connection governance. It must not be treated as a runtime
   // instance id or old POSIX `from` value.
   string frontendClientID = 1;
+  // Required for create/invoke/kill. Current core_service.InvokeRequest has no
+  // tenant field, so frontend must populate this context field. Proxy validates
+  // consistency with any tenant label, but this is not transport authentication.
   string tenantID         = 2;
   string requestID        = 3;
   string traceID          = 4;

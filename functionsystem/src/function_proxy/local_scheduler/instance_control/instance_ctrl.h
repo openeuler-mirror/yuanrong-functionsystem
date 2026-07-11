@@ -249,6 +249,13 @@ public:
     virtual void RegisterReadyCallResultCallback(const std::string &instanceID,
                                                  const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
                                                  InstanceReadyCallResultCallBack callback);
+    virtual litebus::Future<messages::ScheduleResponse> ScheduleFrontendAndWaitReady(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
+        InstanceReadyCallResultCallBack callback);
+    virtual void UnregisterFrontendReadyWait(const std::string &requestID, const std::string &reason);
+    virtual litebus::Future<KillResponse> KillFrontend(const std::string &tenantID,
+                                                       const std::shared_ptr<KillRequest> &killReq);
     virtual litebus::Future<Status> ForceDeleteInstance(const std::string &instanceID);
 
     virtual litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> CreateInstanceClient(

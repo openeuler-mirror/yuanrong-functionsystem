@@ -373,6 +373,26 @@ void InstanceCtrl::RegisterReadyCallResultCallback(const std::string &instanceID
                           scheduleReq, callback);
 }
 
+litebus::Future<messages::ScheduleResponse> InstanceCtrl::ScheduleFrontendAndWaitReady(
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
+    InstanceReadyCallResultCallBack callback)
+{
+    return litebus::Async(aid_, &InstanceCtrlActor::ScheduleFrontendAndWaitReady, scheduleReq, runtimePromise,
+                          std::move(callback));
+}
+
+void InstanceCtrl::UnregisterFrontendReadyWait(const std::string &requestID, const std::string &reason)
+{
+    (void)litebus::Async(aid_, &InstanceCtrlActor::UnregisterFrontendReadyWait, requestID, reason);
+}
+
+litebus::Future<KillResponse> InstanceCtrl::KillFrontend(const std::string &tenantID,
+                                                         const std::shared_ptr<KillRequest> &killReq)
+{
+    return litebus::Async(aid_, &InstanceCtrlActor::KillFrontend, tenantID, killReq);
+}
+
 litebus::Future<Status> InstanceCtrl::ForceDeleteInstance(const std::string &instanceID)
 {
     return litebus::Async(aid_, &InstanceCtrlActor::ForceDeleteInstance, instanceID);

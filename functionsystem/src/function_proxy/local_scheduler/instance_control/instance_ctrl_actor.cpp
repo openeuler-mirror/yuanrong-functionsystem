@@ -626,6 +626,28 @@ litebus::Future<KillResponse> InstanceCtrlActor::Kill(const std::string &srcInst
     return promise->GetFuture();
 }
 
+litebus::Future<KillResponse> InstanceCtrlActor::KillFrontend(const std::string &tenantID,
+                                                              const std::shared_ptr<KillRequest> &killReq)
+{
+    ASSERT_IF_NULL(instanceControlView_);
+    auto stateMachine = instanceControlView_->GetInstance(killReq->instanceid());
+    // The unary frontend path is already routed to the advertised owning proxy.
+    // A local miss therefore means that this endpoint cannot authoritatively
+    // prove deletion. Do not relay through master here: the legacy relay folds
+    // ERR_INSTANCE_NOT_FOUND into success for shutdown signals, which would turn
+    // a stale route into a false idempotent-delete acknowledgement.
+    if (stateMachine == nullptr) {
+        return GenKillResponse(common::ERR_INSTANCE_NOT_FOUND,
+                               "frontend proxy is not the owning proxy for this instance");
+    }
+    if (stateMachine != nullptr && !tenantID.empty() && !stateMachine->GetInstanceInfo().tenantid().empty()
+        && tenantID != stateMachine->GetInstanceInfo().tenantid()) {
+        return GenKillResponse(common::ERR_AUTHORIZE_FAILED,
+                               "frontend proxy kill tenant does not match instance tenant");
+    }
+    return Kill("", killReq, false);
+}
+
 void InstanceCtrlActor::OnKill(const std::shared_ptr<KillRequest> &killReq, const litebus::Future<KillResponse> &rsp)
 {
     auto iter = killingRequest_.find(killReq->requestid());
@@ -1662,6 +1684,10 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::CheckGeneratedInstanceID(
         runtimePromise->SetValue(rsp);
         return rsp;
     }
+    // Frontend lifecycle tickets are registered before Schedule. Bind the
+    // authoritative generated instance id before any runtime dispatch or
+    // terminal state callback can escape this actor.
+    (void)BindFrontendReadyTicketInstance(scheduleReq->requestid(), genStatus.instanceID);
     // Currently, it is considered that new scheduling is triggered when duplicate scheduling requests are received
     // after the failed scheduling.
     if (!genStatus.isDuplicate || genStatus.preState == InstanceState::SCHEDULE_FAILED
@@ -6175,12 +6201,83 @@ void InstanceCtrlActor::RegisterReadyCallResultCallback(
     ASSERT_IF_NULL(callback);
     YRLOG_INFO("{}|{}|register create call result callback for frontend instance({})", scheduleReq->traceid(),
                scheduleReq->requestid(), instanceID);
-    EraseReadyCallResultCallbackByRequestID(scheduleReq->requestid());
-    EraseReadyCallResultCallbackByInstanceID(instanceID);
-    instanceRegisteredReadyCallResultCallback_[scheduleReq->requestid()] = callback;
-    instanceReadyCallResultCallbackByInstanceID_[instanceID] = callback;
-    instanceReadyCallResultInstanceIDByRequestID_[scheduleReq->requestid()] = instanceID;
-    instanceReadyCallResultRequestIDByInstanceID_[instanceID] = scheduleReq->requestid();
+    if (!RegisterFrontendReadyTicket(scheduleReq, callback)) {
+        YRLOG_WARN("{}|frontend ready ticket already exists; keep the original waiter", scheduleReq->requestid());
+        return;
+    }
+    (void)BindFrontendReadyTicketInstance(scheduleReq->requestid(), instanceID);
+}
+
+bool InstanceCtrlActor::RegisterFrontendReadyTicket(
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, InstanceReadyCallResultCallBack callback)
+{
+    ASSERT_IF_NULL(scheduleReq);
+    ASSERT_IF_NULL(callback);
+    const auto &requestID = scheduleReq->requestid();
+    if (requestID.empty() || instanceRegisteredReadyCallResultCallback_.find(requestID)
+                                 != instanceRegisteredReadyCallResultCallback_.end()) {
+        return false;
+    }
+    instanceRegisteredReadyCallResultCallback_[requestID] = std::move(callback);
+    return true;
+}
+
+bool InstanceCtrlActor::BindFrontendReadyTicketInstance(const std::string &requestID, const std::string &instanceID)
+{
+    if (requestID.empty() || instanceID.empty()) {
+        return false;
+    }
+    auto callbackIter = instanceRegisteredReadyCallResultCallback_.find(requestID);
+    if (callbackIter == instanceRegisteredReadyCallResultCallback_.end()) {
+        return false;
+    }
+    auto instanceIter = instanceReadyCallResultRequestIDByInstanceID_.find(instanceID);
+    if (instanceIter != instanceReadyCallResultRequestIDByInstanceID_.end() && instanceIter->second != requestID) {
+        YRLOG_ERROR("{}|frontend instance({}) is already bound to request({})", requestID, instanceID,
+                    instanceIter->second);
+        return false;
+    }
+    instanceReadyCallResultCallbackByInstanceID_[instanceID] = callbackIter->second;
+    instanceReadyCallResultInstanceIDByRequestID_[requestID] = instanceID;
+    instanceReadyCallResultRequestIDByInstanceID_[instanceID] = requestID;
+    return true;
+}
+
+litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::ScheduleFrontendAndWaitReady(
+    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
+    InstanceReadyCallResultCallBack callback)
+{
+    if (!RegisterFrontendReadyTicket(scheduleReq, std::move(callback))) {
+        auto response = GenScheduleResponse(StatusCode::ERR_PARAM_INVALID,
+                                            "frontend create request id is already pending", *scheduleReq);
+        runtimePromise->SetValue(response);
+        return response;
+    }
+    auto future = Schedule(scheduleReq, runtimePromise);
+    future.OnComplete(litebus::Defer(GetAID(), &InstanceCtrlActor::OnFrontendScheduleCompleted, _1,
+                                     scheduleReq->requestid()));
+    return future;
+}
+
+void InstanceCtrlActor::OnFrontendScheduleCompleted(const litebus::Future<messages::ScheduleResponse> &future,
+                                                     const std::string &requestID)
+{
+    if (future.IsError() || future.Get().code() != common::ERR_NONE) {
+        UnregisterFrontendReadyWait(requestID, "schedule failed");
+        return;
+    }
+    (void)BindFrontendReadyTicketInstance(requestID, future.Get().instanceid());
+}
+
+void InstanceCtrlActor::UnregisterFrontendReadyWait(const std::string &requestID, const std::string &reason)
+{
+    if (instanceRegisteredReadyCallResultCallback_.find(requestID)
+        == instanceRegisteredReadyCallResultCallback_.end()) {
+        return;
+    }
+    YRLOG_INFO("{}|unregister frontend ready waiter, reason({})", requestID, reason);
+    EraseReadyCallResultCallbackByRequestID(requestID);
 }
 
 void InstanceCtrlActor::EraseReadyCallResultCallbackByRequestID(const std::string &requestID)

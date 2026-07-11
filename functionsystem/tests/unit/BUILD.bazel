@@ -139,6 +139,8 @@ cc_test(
         "//functionsystem/src/common:status",
         "//functionsystem/src/common:utils",
         "//functionsystem/src/function_proxy/local_scheduler:local_scheduler_lib",
+        "@com_github_grpc_grpc//:grpc++",
+        "@datasystem_sdk//:runtime_shared",
         "@gtest//:gtest",
         "@litebus//:litebus",
     ],
@@ -177,8 +179,50 @@ cc_test(
         "//functionsystem/src/common:status",
         "//functionsystem/src/common:utils",
         "//functionsystem/src/function_proxy/local_scheduler:local_scheduler_lib",
+        "@datasystem_sdk//:runtime_shared",
         "@gtest//:gtest",
         "@litebus//:litebus",
+    ],
+)
+
+cc_test(
+    name = "service_registry_test",
+    linkstatic = True,
+    srcs = [
+        "function_proxy/busproxy/registry/service_registry_test.cpp",
+        "gtest_sleep_compat.h",
+        "main.cpp",
+    ] + glob([
+        "mocks/*.h",
+        "utils/*.h",
+    ]),
+    copts = COPTS + [
+        "-Wno-error",
+        "-fno-access-control",
+        "-Wno-missing-field-initializers",
+        "-fvisibility=hidden",
+        "-Ifunctionsystem/src",
+        "-Ifunctionsystem/src/function_proxy",
+        "-Ifunctionsystem/tests/unit",
+        "-include",
+        "functionsystem/tests/unit/gtest_sleep_compat.h",
+    ],
+    linkopts = [
+        "-Wl,--no-as-needed",
+        "-pthread",
+        "-lcap",
+        "-ldl",
+    ],
+    deps = [
+        "//common/logs:logs_sdk",
+        "//functionsystem/src/common:metadata",
+        "//functionsystem/src/common:status",
+        "//functionsystem/src/function_proxy:function_proxy_base_lib",
+        "//functionsystem/src/meta_store/client/cpp:meta_store_client",
+        "@datasystem_sdk//:runtime_shared",
+        "@gtest//:gtest",
+        "@litebus//:litebus",
+        "@nlohmann_json//:nlohmann_json",
     ],
 )
 
@@ -273,6 +317,7 @@ cc_test(
         "@com_google_protobuf//:protobuf",
         "@curl_sdk//:curl",
         "@datasystem_sdk//:datasystem_sdk",
+        "@datasystem_sdk//:runtime_shared",
         "@etcdapi//:etcdapi",
         "@gtest//:gtest",
         "@litebus//:litebus",

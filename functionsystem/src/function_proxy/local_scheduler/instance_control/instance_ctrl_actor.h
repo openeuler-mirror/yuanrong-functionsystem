@@ -483,8 +483,20 @@ public:
     void RegisterReadyCallResultCallback(const std::string &instanceID,
                                          const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
                                          InstanceReadyCallResultCallBack callback);
+    litebus::Future<messages::ScheduleResponse> ScheduleFrontendAndWaitReady(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
+        InstanceReadyCallResultCallBack callback);
+    void UnregisterFrontendReadyWait(const std::string &requestID, const std::string &reason);
+    litebus::Future<KillResponse> KillFrontend(const std::string &tenantID,
+                                               const std::shared_ptr<KillRequest> &killReq);
     void EraseReadyCallResultCallbackByRequestID(const std::string &requestID);
     void EraseReadyCallResultCallbackByInstanceID(const std::string &instanceID);
+    bool RegisterFrontendReadyTicket(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+                                     InstanceReadyCallResultCallBack callback);
+    bool BindFrontendReadyTicketInstance(const std::string &requestID, const std::string &instanceID);
+    void OnFrontendScheduleCompleted(const litebus::Future<messages::ScheduleResponse> &future,
+                                     const std::string &requestID);
     litebus::Future<Status> ForceDeleteInstance(const std::string &instanceID);
     inline void RegisterClearGroupInstanceCallBack(ClearGroupInstanceCallBack callback)
     {

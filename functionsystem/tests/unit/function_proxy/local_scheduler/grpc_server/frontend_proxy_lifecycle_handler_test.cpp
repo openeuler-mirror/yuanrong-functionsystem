@@ -29,24 +29,23 @@ TEST(FrontendProxyLifecycleHandlerTest, CreateUsesFrontendSystemCallerWithoutRun
     std::shared_ptr<messages::ScheduleRequest> capturedScheduleReq;
     auto dispatcher = BuildFrontendProxyCreateReadyDispatcher(
         [&capturedScheduleReq](const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
-                               const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &) {
+                               const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &,
+                               FrontendProxyReadyCallback callback) {
             capturedScheduleReq = scheduleReq;
+            auto readyResult = std::make_shared<functionsystem::CallResult>();
+            readyResult->set_requestid("runtime-internal-mismatched-request");
+            readyResult->set_instanceid("frontend-create-instance");
+            readyResult->set_code(common::ERR_NONE);
+            readyResult->mutable_runtimeinfo()->set_route("grpc://owning-proxy");
+            readyResult->mutable_runtimeinfo()->set_proxyid("owning-node");
+            // Deliberately deliver ready before Schedule completes. The
+            // pre-registered ticket must retain it exactly once.
+            (void)callback(readyResult);
             messages::ScheduleResponse scheduleResponse;
             scheduleResponse.set_code(common::ERR_NONE);
             scheduleResponse.set_requestid(scheduleReq->requestid());
             scheduleResponse.set_instanceid("frontend-create-instance");
             return litebus::Future<messages::ScheduleResponse>(scheduleResponse);
-        },
-        [](const std::string &instanceID, const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
-           FrontendProxyReadyCallback callback) {
-            EXPECT_EQ(instanceID, "frontend-create-instance");
-            auto readyResult = std::make_shared<functionsystem::CallResult>();
-            readyResult->set_requestid(scheduleReq->requestid());
-            readyResult->set_instanceid(instanceID);
-            readyResult->set_code(common::ERR_NONE);
-            readyResult->mutable_runtimeinfo()->set_route("grpc://owning-proxy");
-            readyResult->mutable_runtimeinfo()->set_proxyid("owning-node");
-            (void)callback(readyResult);
         });
 
     ::frontend_proxy::CreateInstanceRequest request;

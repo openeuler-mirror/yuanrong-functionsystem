@@ -44,6 +44,13 @@ struct BusProxyStartParam {
     FrontendProxyServiceMeta frontendService;
 };
 
+struct FrontendServiceReadiness {
+    bool started{ false };
+    bool synced{ false };
+    bool recovered{ false };
+    bool dispatcherAvailable{ false };
+};
+
 class BusproxyStartup {
 public:
     BusproxyStartup() = delete;
@@ -53,12 +60,20 @@ public:
 
     Status Run();
 
+    Status PublishFrontendService();
+
+    Status UpdateFrontendServiceReadiness(const FrontendServiceReadiness &readiness);
+
+    Status WithdrawFrontendService();
+
     Status Stop() const;
 
     void Await() const;
 
     static function_proxy::RegisterInfo BuildRegistryInfo(const BusProxyStartParam &param,
                                                           const litebus::AID &proxyActorAID);
+
+    static bool IsFrontendServiceReady(const FrontendServiceReadiness &readiness);
 
 private:
     void StartProxyActor(const std::string &nodeID, const std::string &modelName);
@@ -70,6 +85,8 @@ private:
     std::shared_ptr<MetaStorageAccessor> metaStorageAccessor_{ nullptr };
     std::shared_ptr<ServiceRegistry> registry_{ nullptr };
     std::shared_ptr<busproxy::RequestRouter> requestRouter_;
+    FrontendProxyServiceMeta advertisedFrontendService_;
+    bool frontendServicePublished_{ false };
 };
 }  // namespace functionsystem
 

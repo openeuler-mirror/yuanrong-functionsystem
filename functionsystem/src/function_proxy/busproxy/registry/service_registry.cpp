@@ -51,6 +51,23 @@ Status ServiceRegistry::Register()
     return Status(StatusCode::SUCCESS);
 }
 
+Status ServiceRegistry::ReplaceFrontendService(const FrontendProxyServiceMeta &frontendService)
+{
+    RETURN_STATUS_IF_NULL(metaStorageAccessor_, StatusCode::FAILED, "meta store accessor is nullptr");
+    // Revoke before replacing the leased value. PutWithLease's keep-alive timer
+    // captures the value supplied by the first put, so an in-place second put can
+    // later resurrect stale capability metadata. The short absent interval is
+    // intentional and fail-closed for discovery.
+    auto revokeStatus = metaStorageAccessor_->Revoke(registerInfo_.key).Get();
+    if (!revokeStatus.IsOk()) {
+        YRLOG_ERROR("Failed to revoke service metadata before frontend capability update, key: {}, status: {}",
+                    registerInfo_.key, revokeStatus.ToString());
+        return Status(StatusCode::FAILED, "service registry frontend capability revoke failed");
+    }
+    registerInfo_.meta.frontendService = frontendService;
+    return Register();
+}
+
 litebus::Future<Status> ServiceRegistry::Stop()
 {
     YRLOG_INFO("Stop Busproxy registry, key: {}, node: {}", registerInfo_.key, registerInfo_.meta.node);

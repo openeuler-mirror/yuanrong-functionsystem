@@ -34,7 +34,7 @@ namespace functionsystem {
 
 BusproxyStartup::BusproxyStartup(BusProxyStartParam &&param,
                                  const std::shared_ptr<MetaStorageAccessor> &metaStorageAccessor)
-    : param_(std::move(param))
+    : param_(std::move(param)), advertisedFrontendService_(param_.frontendService)
 {
     metaStorageAccessor_ = metaStorageAccessor;
 }
@@ -75,7 +75,9 @@ void BusproxyStartup::StartProxyActor(const std::string &nodeID, const std::stri
 void BusproxyStartup::InitRegistry(const litebus::AID &proxyActorAID, std::shared_ptr<MetaStorageAccessor> metaStorage)
 {
     registry_ = std::make_shared<ServiceRegistry>();
-    auto info = BuildRegistryInfo(param_, proxyActorAID);
+    auto initialParam = param_;
+    initialParam.frontendService = {};
+    auto info = BuildRegistryInfo(initialParam, proxyActorAID);
     registry_->Init(std::move(metaStorage), info, param_.serviceTTL);
 }
 
@@ -123,6 +125,39 @@ Status BusproxyStartup::Run()
     YRLOG_INFO("Succeed to init Busproxy, nodeID: {}, modelName: {}", param_.nodeID, param_.modelName);
 
     return Status(StatusCode::SUCCESS);
+}
+
+Status BusproxyStartup::PublishFrontendService()
+{
+    return UpdateFrontendServiceReadiness({ true, true, true, true });
+}
+
+bool BusproxyStartup::IsFrontendServiceReady(const FrontendServiceReadiness &readiness)
+{
+    return readiness.started && readiness.synced && readiness.recovered && readiness.dispatcherAvailable;
+}
+
+Status BusproxyStartup::UpdateFrontendServiceReadiness(const FrontendServiceReadiness &readiness)
+{
+    if (advertisedFrontendService_.address.empty()) {
+        return Status::OK();
+    }
+    const bool shouldPublish = IsFrontendServiceReady(readiness);
+    if (shouldPublish == frontendServicePublished_) {
+        return Status::OK();
+    }
+    RETURN_STATUS_IF_NULL(registry_, StatusCode::FAILED, "service registry is nullptr");
+    auto status = registry_->ReplaceFrontendService(shouldPublish ? advertisedFrontendService_
+                                                                  : FrontendProxyServiceMeta{});
+    if (status.IsOk()) {
+        frontendServicePublished_ = shouldPublish;
+    }
+    return status;
+}
+
+Status BusproxyStartup::WithdrawFrontendService()
+{
+    return UpdateFrontendServiceReadiness({});
 }
 
 Status BusproxyStartup::Stop() const

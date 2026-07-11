@@ -459,7 +459,8 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
             param_.nodeID, true,
             [instanceCtrl(instanceCtrl_)](
                 const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
-                const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise) {
+                const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
+                FrontendProxyReadyCallback callback) {
                 if (instanceCtrl == nullptr) {
                     messages::ScheduleResponse response;
                     response.set_code(common::ERR_LOCAL_SCHEDULER_ABNORMAL);
@@ -467,38 +468,32 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
                     return litebus::Future<messages::ScheduleResponse>(response);
                 }
                 scheduleReq->mutable_instance()->set_parentfunctionproxyaid(instanceCtrl->GetActorAID());
-                return instanceCtrl->Schedule(scheduleReq, runtimePromise);
+                return instanceCtrl->ScheduleFrontendAndWaitReady(scheduleReq, runtimePromise, std::move(callback));
             },
-            [instanceCtrl(instanceCtrl_)](
-                const std::string &instanceID,
-                const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
-                FrontendProxyReadyCallback callback) {
-                if (instanceCtrl == nullptr) {
-                    auto callResult = std::make_shared<functionsystem::CallResult>();
-                    callResult->set_requestid(scheduleReq->requestid());
-                    callResult->set_instanceid(instanceID);
-                    callResult->set_code(common::ERR_LOCAL_SCHEDULER_ABNORMAL);
-                    callResult->set_message("instance control is nullptr in local scheduler");
-                    (void)callback(callResult);
-                    return;
+            [instanceCtrl(instanceCtrl_)](const std::string &requestID, const std::string &reason) {
+                if (instanceCtrl != nullptr) {
+                    instanceCtrl->UnregisterFrontendReadyWait(requestID, reason);
                 }
-                instanceCtrl->RegisterReadyCallResultCallback(instanceID, scheduleReq, std::move(callback));
             },
             true,
-            [instanceCtrl(instanceCtrl_)](const std::string &caller, const std::shared_ptr<KillRequest> &killReq) {
+            [instanceCtrl(instanceCtrl_)](const std::string &caller, const std::string &tenantID,
+                                         const std::shared_ptr<KillRequest> &killReq) {
                 if (instanceCtrl == nullptr) {
                     KillResponse response;
                     response.set_code(common::ERR_LOCAL_SCHEDULER_ABNORMAL);
                     response.set_message("instance control is nullptr in local scheduler");
                     return litebus::Future<KillResponse>(response);
                 }
-                return instanceCtrl->Kill(caller, killReq);
+                (void)caller;
+                return instanceCtrl->KillFrontend(tenantID, killReq);
             });
+        frontendServiceParam.endpointAddress = param_.ip + ":" + param_.posixPort;
         // Lifecycle create/kill use reviewed ready dispatcher seams when the single
         // frontend-proxy service switch is enabled. Legacy stream dispatchers remain disallowed.
         std::shared_ptr<FrontendProxyService> frontendProxyService =
             std::make_shared<FrontendProxyService>(std::move(frontendServiceParam));
         posixGrpcServer_->RegisterService(frontendProxyService);
+        frontendProxyServiceRegistered_ = true;
         YRLOG_INFO("FrontendProxyService registered on existing posix port {}", param_.posixPort);
     }
 
@@ -539,6 +534,7 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
     posixGrpcServer_->Start();
 
     if (!posixGrpcServer_->WaitServerReady()) {
+        frontendProxyServiceRegistered_ = false;
         YRLOG_ERROR("failed to start posix grpc server.");
         return false;
     }

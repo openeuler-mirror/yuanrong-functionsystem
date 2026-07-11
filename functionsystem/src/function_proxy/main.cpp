@@ -532,25 +532,55 @@ Status InitMasterExplorer(const function_proxy::Flags &flags, const std::shared_
 
 void StartUpModule()
 {
+    FrontendServiceReadiness frontendReadiness;
+    const auto updateFrontendReadiness = [&frontendReadiness]() {
+        if (g_busproxyStartup == nullptr) {
+            return Status::OK();
+        }
+        return g_busproxyStartup->UpdateFrontendServiceReadiness(frontendReadiness);
+    };
+    // Any restart/re-entry begins fail-closed. A previously published endpoint
+    // is withdrawn before module gates are evaluated again.
+    (void)updateFrontendReadiness();
     if (const auto status = StartModule({g_commonDriver, g_localSchedDriver}); status.IsError()) {
         YRLOG_ERROR("failed to start function proxy, err: {}", status.ToString());
+        (void)updateFrontendReadiness();
         g_functionProxySwitcher->SetStop();
         return;
     }
+    frontendReadiness.started = true;
+    (void)updateFrontendReadiness();
 
     if (const auto status = SyncModule({g_commonDriver, g_localSchedDriver}); status.IsError()) {
         YRLOG_ERROR("failed to sync function proxy, err: {}", status.ToString());
+        frontendReadiness.synced = false;
+        (void)updateFrontendReadiness();
         g_functionProxySwitcher->SetStop();
         return;
     }
+    frontendReadiness.synced = true;
+    (void)updateFrontendReadiness();
 
     if (const auto status = RecoverModule({g_commonDriver, g_localSchedDriver}); status.IsError()) {
         YRLOG_ERROR("failed to sync function proxy, err: {}", status.ToString());
+        frontendReadiness.recovered = false;
+        (void)updateFrontendReadiness();
         g_functionProxySwitcher->SetStop();
         return;
     }
+    frontendReadiness.recovered = true;
+    (void)updateFrontendReadiness();
     YRLOG_INFO("all modules are successful started, ready to serve");
     ModuleIsReady({g_commonDriver, g_localSchedDriver});
+    frontendReadiness.dispatcherAvailable =
+        g_localSchedDriver != nullptr && g_localSchedDriver->IsFrontendProxyDispatcherAvailable();
+    if (g_busproxyStartup != nullptr) {
+        const auto status = updateFrontendReadiness();
+        if (status.IsError()) {
+            YRLOG_ERROR("failed to publish ready frontend proxy lifecycle capabilities, err: {}", status.ToString());
+            g_functionProxySwitcher->SetStop();
+        }
+    }
 }
 
 void OnCreate(const Flags &flags, const function_agent::FunctionAgentFlags &functionAgentFlags,
@@ -617,6 +647,13 @@ void OnCreate(const Flags &flags, const function_agent::FunctionAgentFlags &func
 void OnDestroy()
 {
     YRLOG_INFO("{} is stopping", COMPONENT_NAME);
+
+    if (g_busproxyStartup != nullptr) {
+        const auto status = g_busproxyStartup->WithdrawFrontendService();
+        if (status.IsError()) {
+            YRLOG_ERROR("failed to withdraw frontend proxy lifecycle capabilities, err: {}", status.ToString());
+        }
+    }
 
     (void)StopModule({g_localSchedDriver, g_commonDriver});
 
