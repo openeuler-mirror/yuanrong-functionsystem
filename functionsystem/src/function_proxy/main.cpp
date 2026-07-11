@@ -263,6 +263,14 @@ bool CreateBusProxy(const function_proxy::Flags &flags)
     }
     auto memoryMonitor = std::make_shared<MemoryMonitor>(memoryControlConfig);
 
+    FrontendProxyServiceMeta frontendService;
+    if (flags.GetEnableFrontendProxyService()) {
+        frontendService.address = flags.GetIP() + ":" + flags.GetGrpcListenPort();
+        frontendService.capabilities = { "faas.create", "faas.invoke", "faas.kill" };
+        frontendService.version = BUILD_VERSION;
+        frontendService.health = "healthy";
+    }
+
     auto dataPlaneObserver = std::make_shared<function_proxy::DataPlaneObserver>(observer);
     BusProxyStartParam busproxyStartParam{
         .nodeID = flags.GetNodeID(),
@@ -274,7 +282,8 @@ bool CreateBusProxy(const function_proxy::Flags &flags)
         .memoryMonitor = memoryMonitor,
         .internalIam = internalIAM,
         .isEnablePerf = flags.GetEnablePerf(),
-        .unRegisterWhileStop = flags.UnRegisterWhileStop()
+        .unRegisterWhileStop = flags.UnRegisterWhileStop(),
+        .frontendService = frontendService
     };
 
     g_busproxyStartup = std::make_shared<BusproxyStartup>(std::move(busproxyStartParam), metaStorageAccessor);

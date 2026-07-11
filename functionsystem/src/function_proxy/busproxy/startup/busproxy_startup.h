@@ -41,6 +41,7 @@ struct BusProxyStartParam {
     std::shared_ptr<function_proxy::InternalIAM> internalIam{ nullptr };
     bool isEnablePerf;
     bool unRegisterWhileStop;
+    FrontendProxyServiceMeta frontendService;
 };
 
 class BusproxyStartup {
@@ -56,10 +57,12 @@ public:
 
     void Await() const;
 
+    static function_proxy::RegisterInfo BuildRegistryInfo(const BusProxyStartParam &param,
+                                                          const litebus::AID &proxyActorAID);
+
 private:
     void StartProxyActor(const std::string &nodeID, const std::string &modelName);
-    void InitRegistry(const litebus::AID &proxyActorAID, const std::string &nodeID,
-                      std::shared_ptr<MetaStorageAccessor> metaStorage);
+    void InitRegistry(const litebus::AID &proxyActorAID, std::shared_ptr<MetaStorageAccessor> metaStorage);
     void StartRequestRouter();
 
     BusProxyStartParam param_;

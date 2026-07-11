@@ -414,6 +414,25 @@ inline Status BuildTenantInstancesResponseBody(const messages::QueryInstancesInf
     return Status::OK();
 }
 
+inline nlohmann::json BuildFrontendProxyEndpointsResponse(const std::vector<ProxyMeta> &proxyMetas)
+{
+    nlohmann::json endpoints = nlohmann::json::array();
+    for (const auto &proxyMeta : proxyMetas) {
+        const auto &frontendService = proxyMeta.frontendService;
+        if (proxyMeta.node.empty() || frontendService.address.empty() || frontendService.capabilities.empty()) {
+            continue;
+        }
+        endpoints.push_back({
+            { "nodeID", proxyMeta.node },
+            { "address", frontendService.address },
+            { "capabilities", frontendService.capabilities },
+            { "version", frontendService.version },
+            { "health", frontendService.health },
+        });
+    }
+    return { { "endpoints", endpoints }, { "count", endpoints.size() } };
+}
+
 class InstancesApiRouter : public ApiRouterRegister {
 public:
     void RegisterHandler(const std::string &url, const HttpHandler &handler) const override
@@ -627,6 +646,24 @@ public:
                 });
         };
         RegisterHandler("/query-tenant-instances", handler);
+    }
+
+    void InitListFrontendProxyEndpointsHandler(std::shared_ptr<InstanceManagerActor> imActor)
+    {
+        auto handler = [imActor](const HttpRequest &request) -> litebus::Future<HttpResponse> {
+            if (request.method != "GET") {
+                YRLOG_ERROR("Invalid request method for frontend proxy endpoint query.");
+                return HttpResponse(litebus::http::ResponseCode::METHOD_NOT_ALLOWED,
+                                    "Only GET method is allowed",
+                                    litebus::http::ResponseBodyType::JSON);
+            }
+
+            return litebus::Async(imActor->GetAID(), &InstanceManagerActor::ListFrontendProxyEndpoints)
+                .Then([](const std::vector<ProxyMeta> &proxyMetas) -> litebus::Future<litebus::http::Response> {
+                    return JsonResponseOrInternalError(BuildFrontendProxyEndpointsResponse(proxyMetas));
+                });
+        };
+        RegisterHandler("/frontend-proxy-endpoints", handler);
     }
 };
 

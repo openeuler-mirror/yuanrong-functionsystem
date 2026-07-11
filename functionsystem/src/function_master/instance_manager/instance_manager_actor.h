@@ -25,6 +25,7 @@
 
 #include "common/constants/actor_name.h"
 #include "common/leader/business_policy.h"
+#include "common/metadata/metadata_type.h"
 #include "common/meta_store_adapter/instance_operator.h"
 #include "meta_store_client/meta_store_client.h"
 #include "common/meta_store_adapter/meta_store_operate_cacher.h"
@@ -77,6 +78,8 @@ public:
 
     std::unordered_map<std::string, std::unordered_set<std::string>> GetInstanceJobMap();       // for ut
     std::unordered_map<std::string, std::unordered_set<std::string>> GetInstanceFuncMetaMap();  // for ut
+
+    std::vector<ProxyMeta> ListFrontendProxyEndpoints();
 
     /**
      * call by global_scheduler when a local_scheduler fault
@@ -325,6 +328,7 @@ private:
 
         // busproxy route info from etcd
         std::unordered_set<std::string> proxyRouteSet;
+        std::unordered_map<std::string, ProxyMeta> frontendProxyEndpoints;
         std::shared_ptr<Watcher> proxyRouteWatcher{ nullptr };
 
         std::shared_ptr<InstanceOperator> instanceOpt{ nullptr };

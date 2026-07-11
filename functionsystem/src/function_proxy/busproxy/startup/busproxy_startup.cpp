@@ -55,6 +55,15 @@ BusproxyStartup::~BusproxyStartup()
     requestRouter_ = nullptr;
 }
 
+function_proxy::RegisterInfo BusproxyStartup::BuildRegistryInfo(const BusProxyStartParam &param,
+                                                                const litebus::AID &proxyActorAID)
+{
+    if (param.frontendService.address.empty()) {
+        return function_proxy::GetServiceRegistryInfo(param.nodeID, proxyActorAID);
+    }
+    return function_proxy::GetServiceRegistryInfo(param.nodeID, proxyActorAID, param.frontendService);
+}
+
 void BusproxyStartup::StartProxyActor(const std::string &nodeID, const std::string &modelName)
 {
     // start proxy actor
@@ -63,11 +72,10 @@ void BusproxyStartup::StartProxyActor(const std::string &nodeID, const std::stri
     litebus::Spawn(proxyActor_);
 }
 
-void BusproxyStartup::InitRegistry(const litebus::AID &proxyActorAID, const std::string &nodeID,
-                                   std::shared_ptr<MetaStorageAccessor> metaStorage)
+void BusproxyStartup::InitRegistry(const litebus::AID &proxyActorAID, std::shared_ptr<MetaStorageAccessor> metaStorage)
 {
     registry_ = std::make_shared<ServiceRegistry>();
-    auto info = function_proxy::GetServiceRegistryInfo(nodeID, proxyActorAID);
+    auto info = BuildRegistryInfo(param_, proxyActorAID);
     registry_->Init(std::move(metaStorage), info, param_.serviceTTL);
 }
 
@@ -103,7 +111,7 @@ Status BusproxyStartup::Run()
         YRLOG_ERROR("invalid parameter, proxy actor is null");
         return Status(StatusCode::FAILED, "proxy actor is null");
     }
-    InitRegistry(proxyActor_->GetAID(), param_.nodeID, metaStorageAccessor_);
+    InitRegistry(proxyActor_->GetAID(), metaStorageAccessor_);
     ASSERT_IF_NULL(registry_);
     auto status = registry_->Register();
     if (status.IsError()) {

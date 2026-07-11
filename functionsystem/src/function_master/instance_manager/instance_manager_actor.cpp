@@ -149,6 +149,42 @@ static void ReportInstanceCountMetric(const std::string &nodeID, double count)
     functionsystem::metrics::MetricsAdapter::GetInstance().ReportDoubleGauge(meterTitle, meterData, {});
 }
 
+static std::string ParseNodeIDFromBusProxyKey(const std::string &key)
+{
+    if (key.rfind(KEY_BUSPROXY_PATH_PREFIX, 0) != 0) {
+        return "";
+    }
+    return key.substr(KEY_BUSPROXY_PATH_PREFIX.length());
+}
+
+static bool ParseFrontendProxyEndpoint(const std::string &key, const std::string &value, ProxyMeta &proxyMeta)
+{
+    try {
+        auto payload = nlohmann::json::parse(value);
+        if (!payload.contains("frontendService") || !payload["frontendService"].is_object()) {
+            return false;
+        }
+        const auto &frontendService = payload["frontendService"];
+        const auto address = frontendService.value("address", std::string{});
+        if (address.empty()) {
+            return false;
+        }
+
+        proxyMeta.node = payload.value("node", ParseNodeIDFromBusProxyKey(key));
+        proxyMeta.aid = payload.value("aid", std::string{});
+        proxyMeta.ak = payload.value("ak", std::string{});
+        proxyMeta.frontendService.address = address;
+        proxyMeta.frontendService.capabilities =
+            frontendService.value("capabilities", std::vector<std::string>{});
+        proxyMeta.frontendService.version = frontendService.value("version", std::string{});
+        proxyMeta.frontendService.health = frontendService.value("health", std::string{});
+        return !proxyMeta.node.empty();
+    } catch (const std::exception &e) {
+        YRLOG_WARN("Failed to parse frontend proxy endpoint from busproxy key({}), error({})", key, e.what());
+        return false;
+    }
+}
+
 InstanceManagerActor::InstanceManagerActor(const std::shared_ptr<MetaStoreClient> &metaClient,
                                            const std::shared_ptr<GlobalScheduler> &scheduler,
                                            const std::shared_ptr<GroupManager> &groupManager,
@@ -883,9 +919,18 @@ void InstanceManagerActor::OnLocalScheduleChange(const std::vector<WatchEvent> &
     for (const auto &event : events) {
         if (event.eventType == EVENT_TYPE_PUT) {
             member_->proxyRouteSet.emplace(event.kv.key());
+            ProxyMeta proxyMeta;
+            if (ParseFrontendProxyEndpoint(event.kv.key(), event.kv.value(), proxyMeta)) {
+                member_->frontendProxyEndpoints[proxyMeta.node] = std::move(proxyMeta);
+            } else if (auto nodeID = ParseNodeIDFromBusProxyKey(event.kv.key()); !nodeID.empty()) {
+                member_->frontendProxyEndpoints.erase(nodeID);
+            }
         } else if (event.eventType == EVENT_TYPE_DELETE) {
             const auto &key = event.kv.key();
             member_->proxyRouteSet.erase(key);
+            if (auto nodeID = ParseNodeIDFromBusProxyKey(key); !nodeID.empty()) {
+                member_->frontendProxyEndpoints.erase(nodeID);
+            }
             YRLOG_DEBUG("{} quit or expire, delete node", key);
             if (auto id = key.substr(KEY_BUSPROXY_PATH_PREFIX.length());
                 member_->instances.find(id) != member_->instances.end()) {
@@ -893,6 +938,16 @@ void InstanceManagerActor::OnLocalScheduleChange(const std::vector<WatchEvent> &
             }
         }
     }
+}
+
+std::vector<ProxyMeta> InstanceManagerActor::ListFrontendProxyEndpoints()
+{
+    std::vector<ProxyMeta> endpoints;
+    endpoints.reserve(member_->frontendProxyEndpoints.size());
+    for (const auto &[_, endpoint] : member_->frontendProxyEndpoints) {
+        endpoints.emplace_back(endpoint);
+    }
+    return endpoints;
 }
 
 void InstanceManagerActor::OnLocalScheduleWatch(const std::shared_ptr<Watcher> &watcher)

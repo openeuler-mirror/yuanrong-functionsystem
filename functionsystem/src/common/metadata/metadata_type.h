@@ -50,10 +50,18 @@ const std::string RELIABILITY_TYPE = "ReliabilityType";  // NOLINT
 
 const std::string IDLE_TIMEOUT = "idle_timeout";  // NOLINT
 
+struct FrontendProxyServiceMeta {
+    std::string address;
+    std::vector<std::string> capabilities;
+    std::string version;
+    std::string health;
+};
+
 struct ProxyMeta {
     std::string node;
     std::string aid;
     std::string ak;
+    FrontendProxyServiceMeta frontendService;
 };
 
 struct InstanceResource {

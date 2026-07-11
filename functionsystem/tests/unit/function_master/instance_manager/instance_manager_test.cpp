@@ -374,6 +374,58 @@ TEST_F(DISABLED_InstanceManagerTest, SchedulerWatchTest)  // NOLINT
     litebus::Await(aid);
 }
 
+TEST(InstanceManagerFrontendProxyEndpointTest, AggregatesFrontendEndpointsFromBusProxyRegistryValues)
+{
+    auto scheduler = std::make_shared<MockGlobalSched>();
+    auto actor = std::make_shared<InstanceManagerActor>(
+        nullptr, scheduler, nullptr, nullptr, InstanceManagerStartParam{ .runtimeRecoverEnable = false });
+
+    nlohmann::json firstEndpoint = {
+        { "node", "node-a" },
+        { "aid", "aid-a" },
+        { "frontendService",
+          {
+              { "address", "10.0.0.11:19090" },
+              { "capabilities", { "faas.create", "faas.invoke" } },
+              { "version", "phase3" },
+              { "health", "healthy" },
+          } },
+    };
+    KeyValue firstKv;
+    firstKv.set_key("/yr/busproxy/business/yrk/tenant/0/node/node-a");
+    firstKv.set_value(firstEndpoint.dump());
+
+    nlohmann::json secondEndpoint = {
+        { "node", "node-b" },
+        { "aid", "aid-b" },
+        { "frontendService",
+          {
+              { "address", "10.0.0.12:19090" },
+              { "capabilities", { "faas.create", "faas.invoke", "faas.kill" } },
+              { "version", "phase3" },
+              { "health", "healthy" },
+          } },
+    };
+    KeyValue secondKv;
+    secondKv.set_key("/yr/busproxy/business/yrk/tenant/0/node/node-b");
+    secondKv.set_value(secondEndpoint.dump());
+
+    actor->OnLocalScheduleChange({ WatchEvent{ EVENT_TYPE_PUT, firstKv, {} },
+                                   WatchEvent{ EVENT_TYPE_PUT, secondKv, {} } });
+
+    const auto endpoints = actor->ListFrontendProxyEndpoints();
+    std::unordered_map<std::string, ProxyMeta> byNode;
+    for (const auto &endpoint : endpoints) {
+        byNode.emplace(endpoint.node, endpoint);
+    }
+
+    ASSERT_EQ(byNode.size(), 2);
+    ASSERT_TRUE(byNode.find("node-a") != byNode.end());
+    EXPECT_EQ(byNode["node-a"].frontendService.address, "10.0.0.11:19090");
+    EXPECT_THAT(byNode["node-b"].frontendService.capabilities,
+                ::testing::ElementsAre("faas.create", "faas.invoke", "faas.kill"));
+}
+
 TEST_F(DISABLED_InstanceManagerTest, ReplayFailedDeleteOperationTest)  // NOLINT
 {
     auto scheduler = std::make_shared<MockGlobalSched>();

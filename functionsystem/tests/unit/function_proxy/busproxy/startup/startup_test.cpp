@@ -72,4 +72,22 @@ TEST_F(StartupBusproxyTest, StartupBusproxy)
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 }
 
+TEST_F(StartupBusproxyTest, BuildRegistryInfoCarriesFrontendServiceFromStartParam)
+{
+    param_.frontendService.address = "10.0.0.11:19090";
+    param_.frontendService.version = "phase3";
+    param_.frontendService.health = "healthy";
+    param_.frontendService.capabilities = { "faas.create", "faas.invoke", "faas.kill" };
+
+    auto registerInfo = BusproxyStartup::BuildRegistryInfo(
+        param_, litebus::AID("function_proxy", "10.0.0.11:24032"));
+
+    EXPECT_EQ(registerInfo.key, BUSPROXY_PATH_PREFIX + "/0/node/nodeA");
+    EXPECT_EQ(registerInfo.meta.node, "nodeA");
+    EXPECT_EQ(registerInfo.meta.frontendService.address, "10.0.0.11:19090");
+    EXPECT_EQ(registerInfo.meta.frontendService.version, "phase3");
+    EXPECT_EQ(registerInfo.meta.frontendService.health, "healthy");
+    EXPECT_EQ(registerInfo.meta.frontendService.capabilities.size(), 3U);
+}
+
 }  // namespace functionsystem::test

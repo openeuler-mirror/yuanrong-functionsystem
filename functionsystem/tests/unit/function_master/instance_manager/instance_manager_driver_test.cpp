@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include <map>
+#include <vector>
 
 #include "function_master/instance_manager/instance_manager_driver.h"
 
@@ -142,6 +143,40 @@ TEST(InstanceManagerDriverTest, GetQueryInstancesPageRangeCalculatesBoundedRange
 
     EXPECT_EQ(range.start, 5U);
     EXPECT_EQ(range.end, 5U);
+}
+
+TEST(InstanceManagerDriverTest, BuildFrontendProxyEndpointsResponseKeepsStableShapeForFrontend)
+{
+    ProxyMeta first;
+    first.node = "node-a";
+    first.frontendService.address = "10.0.0.11:19090";
+    first.frontendService.version = "phase3";
+    first.frontendService.health = "healthy";
+    first.frontendService.capabilities = { "faas.create", "faas.invoke", "faas.kill" };
+
+    ProxyMeta missingAddress;
+    missingAddress.node = "node-b";
+    missingAddress.frontendService.capabilities = { "faas.create" };
+
+    ProxyMeta missingCapability;
+    missingCapability.node = "node-c";
+    missingCapability.frontendService.address = "10.0.0.13:19090";
+
+    auto response = BuildFrontendProxyEndpointsResponse({ first, missingAddress, missingCapability });
+
+    EXPECT_EQ(response.at("count"), 1U);
+    ASSERT_TRUE(response.contains("endpoints"));
+    ASSERT_EQ(response.at("endpoints").size(), 1U);
+    const auto &endpoint = response.at("endpoints").at(0);
+    EXPECT_EQ(endpoint.at("nodeID"), "node-a");
+    EXPECT_EQ(endpoint.at("address"), "10.0.0.11:19090");
+    EXPECT_EQ(endpoint.at("version"), "phase3");
+    EXPECT_EQ(endpoint.at("health"), "healthy");
+    auto capabilities = endpoint.at("capabilities").get<std::vector<std::string>>();
+    ASSERT_EQ(capabilities.size(), 3U);
+    EXPECT_EQ(capabilities[0], "faas.create");
+    EXPECT_EQ(capabilities[1], "faas.invoke");
+    EXPECT_EQ(capabilities[2], "faas.kill");
 }
 
 }  // namespace functionsystem::instance_manager::test

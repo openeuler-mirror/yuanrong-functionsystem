@@ -76,4 +76,47 @@ TEST_F(ServiceRegistryTest, BusProxyRegistryTestTtlInvalid)
     EXPECT_EQ(serviceRegistry_->Register(), Status(StatusCode::SUCCESS));
 }
 
+
+TEST(ServiceRegistryDumpTest, BusProxyRegistryDumpIncludesFrontendServiceWhenProvided)
+{
+    ProxyMeta proxyMeta{ "node-1", "aid-1" };
+    proxyMeta.frontendService.address = "10.0.0.11:19090";
+    proxyMeta.frontendService.version = "phase3";
+    proxyMeta.frontendService.health = "healthy";
+    proxyMeta.frontendService.capabilities = { "faas.create", "faas.invoke", "faas.kill" };
+
+    auto dumped = nlohmann::json::parse(Dump(proxyMeta));
+
+    EXPECT_EQ(dumped.at("aid"), proxyMeta.aid);
+    EXPECT_EQ(dumped.at("node"), proxyMeta.node);
+    ASSERT_TRUE(dumped.contains("frontendService"));
+    EXPECT_EQ(dumped.at("frontendService").at("address"), "10.0.0.11:19090");
+    EXPECT_EQ(dumped.at("frontendService").at("version"), "phase3");
+    EXPECT_EQ(dumped.at("frontendService").at("health"), "healthy");
+    EXPECT_THAT(dumped.at("frontendService").at("capabilities").get<std::vector<std::string>>(),
+                ::testing::ElementsAre("faas.create", "faas.invoke", "faas.kill"));
+}
+
+TEST(ServiceRegistryDumpTest, GetServiceRegistryInfoCarriesFrontendServiceWhenProvided)
+{
+    FrontendProxyServiceMeta frontendService;
+    frontendService.address = "10.0.0.11:19090";
+    frontendService.version = "phase3";
+    frontendService.health = "healthy";
+    frontendService.capabilities = { "faas.create", "faas.invoke", "faas.kill" };
+
+    auto registerInfo = function_proxy::GetServiceRegistryInfo(
+        "node-1", litebus::AID("function_proxy", "10.0.0.11:24032"), frontendService);
+
+    EXPECT_EQ(registerInfo.key, BUSPROXY_PATH_PREFIX + "/0/node/node-1");
+    EXPECT_EQ(registerInfo.meta.node, "node-1");
+    EXPECT_EQ(registerInfo.meta.frontendService.address, "10.0.0.11:19090");
+    EXPECT_THAT(registerInfo.meta.frontendService.capabilities,
+                ::testing::ElementsAre("faas.create", "faas.invoke", "faas.kill"));
+
+    auto dumped = nlohmann::json::parse(Dump(registerInfo.meta));
+    ASSERT_TRUE(dumped.contains("frontendService"));
+    EXPECT_EQ(dumped.at("frontendService").at("address"), "10.0.0.11:19090");
+}
+
 }  // namespace functionsystem::test

@@ -79,14 +79,34 @@ struct RegisterInfo {
     std::string key = BUSPROXY_PATH_PREFIX + "/0/node/" + nodeID;
     RegisterInfo reg{
         .key = key,
-        .meta = { .node = nodeID, .aid = std::string(aid), .ak = std::move(aid.GetAK()) },
+        .meta = { .node = nodeID,
+                  .aid = std::string(aid),
+                  .ak = std::move(aid.GetAK()),
+                  .frontendService = FrontendProxyServiceMeta{} },
     };
+    return reg;
+}
+
+[[maybe_unused]] inline RegisterInfo GetServiceRegistryInfo(const std::string &nodeID, const litebus::AID &aid,
+                                                            FrontendProxyServiceMeta frontendService)
+{
+    auto reg = GetServiceRegistryInfo(nodeID, aid);
+    reg.meta.frontendService = std::move(frontendService);
     return reg;
 }
 
 [[maybe_unused]] inline std::string Dump(ProxyMeta &proxyMeta)
 {
-    return nlohmann::json{ { "aid", proxyMeta.aid }, { "node", proxyMeta.node }, { "ak", proxyMeta.ak } }.dump();
+    nlohmann::json payload{ { "aid", proxyMeta.aid }, { "node", proxyMeta.node }, { "ak", proxyMeta.ak } };
+    if (!proxyMeta.frontendService.address.empty()) {
+        payload["frontendService"] = {
+            { "address", proxyMeta.frontendService.address },
+            { "capabilities", proxyMeta.frontendService.capabilities },
+            { "version", proxyMeta.frontendService.version },
+            { "health", proxyMeta.frontendService.health },
+        };
+    }
+    return payload.dump();
 }
 
 [[maybe_unused]] inline bool TtlValidate(int ttl)
