@@ -29,7 +29,8 @@
 
 namespace functionsystem::local_scheduler {
 
-using FrontendProxyReadyCallback = std::function<litebus::Future<Status>(const Status &)>;
+using FrontendProxyReadyCallback = std::function<litebus::Future<CallResultAck>(
+    const std::shared_ptr<functionsystem::CallResult> &)>;
 using FrontendProxyReadyRegistrar =
     std::function<void(const std::string &, const std::shared_ptr<messages::ScheduleRequest> &,
                        FrontendProxyReadyCallback)>;

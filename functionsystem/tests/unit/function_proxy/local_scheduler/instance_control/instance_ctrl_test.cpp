@@ -161,6 +161,21 @@ static InstanceInfo GenInstanceInfo(const std::string &instanceID, const std::st
     return instanceInfo;
 }
 
+TEST(InstanceCtrlMessageTest, GenScheduleResponseCarriesOwningProxyNodeID)
+{
+    messages::ScheduleRequest request;
+    request.set_requestid("schedule-request-1");
+    request.set_traceid("trace-1");
+    request.mutable_instance()->set_instanceid("instance-1");
+    request.mutable_instance()->set_functionproxyid("proxy-owner-a");
+
+    auto response = GenScheduleResponse(StatusCode::SUCCESS, "ready", request);
+
+    EXPECT_EQ(response.instanceid(), "instance-1");
+    EXPECT_TRUE(response.has_scheduleresult());
+    EXPECT_EQ(response.scheduleresult().nodeid(), "proxy-owner-a");
+}
+
 static std::shared_ptr<messages::ScheduleRequest> GenScheduleReq(std::shared_ptr<InstanceCtrlActor> actor)
 {
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
@@ -370,6 +385,36 @@ TEST_F(InstanceCtrlTest, ScheduleGetFuncMetaFailed)
     auto result = instanceCtrl.Schedule(scheduleReq, runtimePromise);
     ASSERT_AWAIT_READY(result);
     EXPECT_EQ(result.Get().message(), "failed to find function meta");
+}
+
+TEST(InstanceCtrlReadyCallResultTest, FrontendReadyCallResultCallbackFallsBackToInstanceID)
+{
+    auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
+    auto scheduleReq = GenScheduleReq(actor);
+    scheduleReq->set_requestid("frontend-create-request");
+    scheduleReq->mutable_instance()->set_instanceid("frontend-created-instance");
+
+    bool callbackCalled = false;
+    std::shared_ptr<functionsystem::CallResult> observedResult;
+    actor->RegisterReadyCallResultCallback(
+        scheduleReq->instance().instanceid(), scheduleReq,
+        [&callbackCalled, &observedResult](const std::shared_ptr<functionsystem::CallResult> &callResult) {
+            callbackCalled = true;
+            observedResult = callResult;
+            return litebus::Future<CallResultAck>(CallResultAck());
+        });
+
+    auto runtimeReadyResult = std::make_shared<functionsystem::CallResult>();
+    runtimeReadyResult->set_requestid("runtime-ready-request");
+    runtimeReadyResult->set_instanceid(scheduleReq->instance().instanceid());
+    runtimeReadyResult->set_code(common::ERR_NONE);
+
+    auto ack = actor->SendCallResult(scheduleReq->instance().instanceid(), "", "", runtimeReadyResult);
+    ASSERT_AWAIT_READY(ack);
+    EXPECT_TRUE(callbackCalled);
+    ASSERT_NE(observedResult, nullptr);
+    EXPECT_EQ(observedResult->requestid(), "runtime-ready-request");
+    EXPECT_EQ(observedResult->instanceid(), "frontend-created-instance");
 }
 
 TEST_F(InstanceCtrlTest, ScheduleUpdateInstanceInfoFailed)

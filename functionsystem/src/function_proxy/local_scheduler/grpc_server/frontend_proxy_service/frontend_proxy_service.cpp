@@ -37,9 +37,12 @@ constexpr const char *FRONTEND_PROXY_KILL_READY_NOT_WIRED =
 constexpr const char *FRONTEND_CREATE_SOURCE_KEY = "source";
 constexpr const char *FRONTEND_CREATE_SOURCE_VALUE = "frontend";
 
-std::string BuildPendingKey(const std::string &frontendCallerID, const std::string &requestID)
+std::string BuildPendingKey(const std::string &, const std::string &requestID)
 {
-    return frontendCallerID + "|" + requestID;
+    // Frontend unary calls are system-service requests, not runtime-to-runtime calls.
+    // The runtime CallResult may carry an empty/legacy sender instance id, so the
+    // synchronous frontend waiter is keyed only by the unique requestID.
+    return requestID;
 }
 
 std::string BuildFrontendCallerID(const ::frontend_proxy::FrontendRequestContext &context)
@@ -100,12 +103,17 @@ SharedStreamMsg CreateInvokeRequest(const ::frontend_proxy::InvokeInstanceReques
 
 class FrontendCallResultRegistry {
 public:
-    static litebus::Future<SharedStreamMsg> Watch(const std::string &frontendCallerID, const std::string &requestID)
+    struct WatchResult {
+        bool registered;
+        litebus::Future<SharedStreamMsg> future;
+    };
+
+    static WatchResult Watch(const std::string &frontendCallerID, const std::string &requestID)
     {
         auto promise = std::make_shared<litebus::Promise<SharedStreamMsg>>();
         std::lock_guard<std::mutex> lock(Mutex());
-        Pending()[BuildPendingKey(frontendCallerID, requestID)] = promise;
-        return promise->GetFuture();
+        const bool inserted = Pending().emplace(BuildPendingKey(frontendCallerID, requestID), promise).second;
+        return { inserted, promise->GetFuture() };
     }
 
     static void Cancel(const std::string &frontendCallerID, const std::string &requestID)
@@ -205,8 +213,16 @@ FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : 
     YRLOG_INFO("{}|frontend proxy invoke received by proxy({}), frontendClientID({}), instance({}), traceID({})",
                requestID, param_.nodeID, request->context().frontendclientid(), request->invoke().instanceid(), traceID);
 
-    auto resultFuture = FrontendCallResultRegistry::Watch(frontendCallerID, requestID);
-    auto invokeFuture = DispatchInvoke(param_, frontendCallerID, CreateInvokeRequest(*request));
+    auto watchResult = FrontendCallResultRegistry::Watch(frontendCallerID, requestID);
+    if (!watchResult.registered) {
+        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
+                  "frontend proxy invoke requires a globally unique request id");
+        return ::grpc::Status::OK;
+    }
+    // Do not encode frontendClientID as the old runtime caller/from identity.
+    // frontendClientID is a system-service management identity; runtime senderid
+    // remains empty for public FaaS frontend invokes.
+    auto invokeFuture = DispatchInvoke(param_, "", CreateInvokeRequest(*request));
     auto invokeResponse = invokeFuture.Get(param_.invokeResultTimeoutMs);
     if (!invokeResponse.IsSome()) {
         FrontendCallResultRegistry::Cancel(frontendCallerID, requestID);
@@ -229,7 +245,7 @@ FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : 
         return ::grpc::Status::OK;
     }
 
-    auto callResult = resultFuture.Get(param_.invokeResultTimeoutMs);
+    auto callResult = watchResult.future.Get(param_.invokeResultTimeoutMs);
     if (!callResult.IsSome()) {
         FrontendCallResultRegistry::Cancel(frontendCallerID, requestID);
         SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,

@@ -365,6 +365,14 @@ void InstanceCtrl::RegisterReadyCallback(const std::string &instanceID,
                           scheduleReq, callback);
 }
 
+void InstanceCtrl::RegisterReadyCallResultCallback(const std::string &instanceID,
+                                                   const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+                                                   InstanceReadyCallResultCallBack callback)
+{
+    return litebus::Async(aid_, &InstanceCtrlActor::RegisterReadyCallResultCallback, instanceID,
+                          scheduleReq, callback);
+}
+
 litebus::Future<Status> InstanceCtrl::ForceDeleteInstance(const std::string &instanceID)
 {
     return litebus::Async(aid_, &InstanceCtrlActor::ForceDeleteInstance, instanceID);

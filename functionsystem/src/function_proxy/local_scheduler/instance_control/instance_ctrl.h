@@ -246,6 +246,9 @@ public:
     virtual void RegisterReadyCallback(const std::string &instanceID,
                                        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
                                        InstanceReadyCallBack callback);
+    virtual void RegisterReadyCallResultCallback(const std::string &instanceID,
+                                                 const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+                                                 InstanceReadyCallResultCallBack callback);
     virtual litebus::Future<Status> ForceDeleteInstance(const std::string &instanceID);
 
     virtual litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> CreateInstanceClient(

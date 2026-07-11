@@ -474,11 +474,15 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
                 const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
                 FrontendProxyReadyCallback callback) {
                 if (instanceCtrl == nullptr) {
-                    (void)callback(Status(StatusCode::ERR_LOCAL_SCHEDULER_ABNORMAL,
-                                          "instance control is nullptr in local scheduler"));
+                    auto callResult = std::make_shared<functionsystem::CallResult>();
+                    callResult->set_requestid(scheduleReq->requestid());
+                    callResult->set_instanceid(instanceID);
+                    callResult->set_code(common::ERR_LOCAL_SCHEDULER_ABNORMAL);
+                    callResult->set_message("instance control is nullptr in local scheduler");
+                    (void)callback(callResult);
                     return;
                 }
-                instanceCtrl->RegisterReadyCallback(instanceID, scheduleReq, std::move(callback));
+                instanceCtrl->RegisterReadyCallResultCallback(instanceID, scheduleReq, std::move(callback));
             },
             true,
             [instanceCtrl(instanceCtrl_)](const std::string &caller, const std::shared_ptr<KillRequest> &killReq) {

@@ -3012,6 +3012,27 @@ litebus::Future<CallResultAck> InstanceCtrlActor::SendCallResult(
     const std::shared_ptr<functionsystem::CallResult> &callResult)
 {
     auto requestID(callResult->requestid());
+    InstanceReadyCallResultCallBack callback;
+    if (auto iter = instanceRegisteredReadyCallResultCallback_.find(requestID);
+        iter != instanceRegisteredReadyCallResultCallback_.end()) {
+        callback = iter->second;
+        EraseReadyCallResultCallbackByRequestID(requestID);
+    } else if (auto iter = instanceReadyCallResultCallbackByInstanceID_.find(srcInstance);
+               iter != instanceReadyCallResultCallbackByInstanceID_.end()) {
+        callback = iter->second;
+        EraseReadyCallResultCallbackByInstanceID(srcInstance);
+    } else if (!callResult->instanceid().empty()) {
+        if (auto iter = instanceReadyCallResultCallbackByInstanceID_.find(callResult->instanceid());
+            iter != instanceReadyCallResultCallbackByInstanceID_.end()) {
+            callback = iter->second;
+            EraseReadyCallResultCallbackByInstanceID(callResult->instanceid());
+        }
+    }
+    if (callback != nullptr) {
+        YRLOG_INFO("{}|{}| the frontend-created instance is ready. callback is performed. code:{} msg:{}",
+                   requestID, srcInstance, fmt::underlying(callResult->code()), callResult->message());
+        return callback(callResult);
+    }
     if (dstInstance.empty()) {
         YRLOG_INFO("{}|instance({}) was created by function master. no need to notify.", callResult->requestid(),
                    srcInstance);
@@ -6146,10 +6167,55 @@ void InstanceCtrlActor::RegisterReadyCallback(const std::string &instanceID,
         "ReadyCallback");
 }
 
+
+void InstanceCtrlActor::RegisterReadyCallResultCallback(
+    const std::string &instanceID, const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+    InstanceReadyCallResultCallBack callback)
+{
+    ASSERT_IF_NULL(callback);
+    YRLOG_INFO("{}|{}|register create call result callback for frontend instance({})", scheduleReq->traceid(),
+               scheduleReq->requestid(), instanceID);
+    EraseReadyCallResultCallbackByRequestID(scheduleReq->requestid());
+    EraseReadyCallResultCallbackByInstanceID(instanceID);
+    instanceRegisteredReadyCallResultCallback_[scheduleReq->requestid()] = callback;
+    instanceReadyCallResultCallbackByInstanceID_[instanceID] = callback;
+    instanceReadyCallResultInstanceIDByRequestID_[scheduleReq->requestid()] = instanceID;
+    instanceReadyCallResultRequestIDByInstanceID_[instanceID] = scheduleReq->requestid();
+}
+
+void InstanceCtrlActor::EraseReadyCallResultCallbackByRequestID(const std::string &requestID)
+{
+    if (requestID.empty()) {
+        return;
+    }
+    if (auto iter = instanceReadyCallResultInstanceIDByRequestID_.find(requestID);
+        iter != instanceReadyCallResultInstanceIDByRequestID_.end()) {
+        (void)instanceReadyCallResultCallbackByInstanceID_.erase(iter->second);
+        (void)instanceReadyCallResultRequestIDByInstanceID_.erase(iter->second);
+        (void)instanceReadyCallResultInstanceIDByRequestID_.erase(iter);
+    }
+    (void)instanceRegisteredReadyCallResultCallback_.erase(requestID);
+}
+
+void InstanceCtrlActor::EraseReadyCallResultCallbackByInstanceID(const std::string &instanceID)
+{
+    if (instanceID.empty()) {
+        return;
+    }
+    if (auto iter = instanceReadyCallResultRequestIDByInstanceID_.find(instanceID);
+        iter != instanceReadyCallResultRequestIDByInstanceID_.end()) {
+        (void)instanceRegisteredReadyCallResultCallback_.erase(iter->second);
+        (void)instanceReadyCallResultInstanceIDByRequestID_.erase(iter->second);
+        (void)instanceReadyCallResultRequestIDByInstanceID_.erase(iter);
+    }
+    (void)instanceReadyCallResultCallbackByInstanceID_.erase(instanceID);
+}
+
 litebus::Future<Status> InstanceCtrlActor::DeleteSchedulingInstance(const std::string &instanceID,
                                                                     const std::string &requestID)
 {
     (void)instanceRegisteredReadyCallback_.erase(requestID);
+    EraseReadyCallResultCallbackByRequestID(requestID);
     ASSERT_IF_NULL(instanceControlView_);
     auto stateMachine = instanceControlView_->GetInstance(instanceID);
     if (stateMachine == nullptr) {
@@ -6177,6 +6243,7 @@ litebus::Future<Status> InstanceCtrlActor::ForceDeleteInstance(const std::string
     }
     auto instanceInfo = stateMachine->GetInstanceInfo();
     (void)instanceRegisteredReadyCallback_.erase(instanceInfo.requestid());
+    EraseReadyCallResultCallbackByRequestID(instanceInfo.requestid());
     if (instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::CREATING) ||
         instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::SCHEDULING) ||
         instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::EXITING) ||
@@ -6737,6 +6804,7 @@ litebus::Future<Status> InstanceCtrlActor::DeleteInstanceForStaticFunction(const
     YRLOG_INFO("{}|execute static function instance exit handler, instance({})", instanceInfo.requestid(),
                instanceInfo.instanceid());
     (void)instanceRegisteredReadyCallback_.erase(instanceInfo.requestid());
+    EraseReadyCallResultCallbackByRequestID(instanceInfo.requestid());
     return litebus::Async(GetAID(), &InstanceCtrlActor::DeleteInstanceInResourceView, Status::OK(), instanceInfo)
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::DeleteInstanceInControlView, std::placeholders::_1,
                              instanceInfo));

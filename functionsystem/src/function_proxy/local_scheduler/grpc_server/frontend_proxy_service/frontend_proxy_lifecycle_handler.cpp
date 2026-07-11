@@ -23,18 +23,8 @@
 
 namespace functionsystem::local_scheduler {
 namespace {
-constexpr const char *FRONTEND_CALLER_PREFIX = "frontend:";
+constexpr const char *FRONTEND_SYSTEM_CREATE_CALLER = "";
 constexpr const char *FRONTEND_SYSTEM_KILL_CALLER = "";
-constexpr int CREATE_READY_CALL_RESULT_FIELD_NUMBER = 4;
-
-std::string BuildFrontendSystemCallerID(const ::frontend_proxy::FrontendRequestContext &context)
-{
-    const auto &frontendClientID = context.frontendclientid();
-    if (frontendClientID.rfind(FRONTEND_CALLER_PREFIX, 0) == 0) {
-        return frontendClientID;
-    }
-    return std::string(FRONTEND_CALLER_PREFIX) + frontendClientID;
-}
 
 ::frontend_proxy::CreateInstanceResponse BuildCreateResponse(common::ErrorCode code, const std::string &message)
 {
@@ -54,12 +44,7 @@ std::string BuildFrontendSystemCallerID(const ::frontend_proxy::FrontendRequestC
 void AttachCreateReadyCallResult(::frontend_proxy::CreateInstanceResponse &response,
                                  const core_service::CallResult &callResult)
 {
-    // The source proto reserves CreateInstanceResponse.callResult as field 4.
-    // Some checked-in generated C++ protobuf files may lag the proto refresh,
-    // so write the serialized message as an unknown field to preserve wire
-    // compatibility. Regenerated clients parse it as the typed field.
-    response.mutable_unknown_fields()->AddLengthDelimited(CREATE_READY_CALL_RESULT_FIELD_NUMBER,
-                                                          callResult.SerializeAsString());
+    response.mutable_callresult()->CopyFrom(callResult);
 }
 
 std::shared_ptr<messages::ScheduleRequest> BuildFrontendScheduleRequest(
@@ -73,7 +58,16 @@ std::shared_ptr<messages::ScheduleRequest> BuildFrontendScheduleRequest(
     if (createReq.traceid().empty()) {
         createReq.set_traceid(request.context().traceid());
     }
-    return TransFromCreateReqToScheduleReq(std::move(createReq), BuildFrontendSystemCallerID(request.context()));
+    // Frontend unary create is a system-service request, not a runtime child
+    // create. Keep the old runtime parent/sender identity empty so
+    // InstanceCtrl does not try to authorize frontendClientID as a runtime
+    // instance parent. The reviewed system-caller marker is carried by both
+    // createOptions["source"]="frontend" and InstanceInfo.extensions so
+    // function master can recognize frontend-created instances without a
+    // runtime parent.
+    auto scheduleReq = TransFromCreateReqToScheduleReq(std::move(createReq), FRONTEND_SYSTEM_CREATE_CALLER);
+    (*scheduleReq->mutable_instance()->mutable_extensions())[CREATE_SOURCE] = FRONTEND_STR;
+    return scheduleReq;
 }
 }
 
@@ -102,26 +96,31 @@ FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDi
                     return litebus::Future<::frontend_proxy::CreateInstanceResponse>(response);
                 }
 
-                auto readyPromise = std::make_shared<litebus::Promise<Status>>();
+                auto readyPromise = std::make_shared<litebus::Promise<std::shared_ptr<functionsystem::CallResult>>>();
                 readyRegistrar(response.create().instanceid(), scheduleReq,
-                               [readyPromise](const Status &readyStatus) -> litebus::Future<Status> {
-                                   readyPromise->SetValue(readyStatus);
-                                   return Status::OK();
+                               [readyPromise](const std::shared_ptr<functionsystem::CallResult> &readyResult)
+                                   -> litebus::Future<CallResultAck> {
+                                   readyPromise->SetValue(readyResult);
+                                   return CallResultAck();
                                });
                 return readyPromise->GetFuture().Then(
-                    [response, scheduleReq](const Status &readyStatus) mutable
+                    [response, scheduleReq](const std::shared_ptr<functionsystem::CallResult> &readyResult) mutable
                         -> litebus::Future<::frontend_proxy::CreateInstanceResponse> {
-                        core_service::CallResult readyResult;
-                        readyResult.set_requestid(scheduleReq->requestid());
-                        readyResult.set_instanceid(response.create().instanceid());
-                        readyResult.set_code(Status::GetPosixErrorCode(readyStatus.StatusCode()));
-                        if (readyStatus.IsError()) {
-                            readyResult.set_message(readyStatus.ToString());
+                        if (readyResult == nullptr) {
+                            response.mutable_create()->set_code(common::ERR_INNER_SYSTEM_ERROR);
+                            response.mutable_create()->set_message("frontend proxy create ready call result is null");
+                            return response;
                         }
-                        AttachCreateReadyCallResult(response, readyResult);
-                        if (readyStatus.IsError()) {
-                            response.mutable_create()->set_code(readyResult.code());
-                            response.mutable_create()->set_message(readyResult.message());
+                        if (readyResult->requestid().empty()) {
+                            readyResult->set_requestid(scheduleReq->requestid());
+                        }
+                        if (readyResult->instanceid().empty()) {
+                            readyResult->set_instanceid(response.create().instanceid());
+                        }
+                        AttachCreateReadyCallResult(response, *readyResult);
+                        if (readyResult->code() != common::ERR_NONE) {
+                            response.mutable_create()->set_code(readyResult->code());
+                            response.mutable_create()->set_message(readyResult->message());
                         }
                         return response;
                     });

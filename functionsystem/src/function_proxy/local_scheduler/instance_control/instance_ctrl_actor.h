@@ -51,6 +51,8 @@ namespace functionsystem::local_scheduler {
 class TraefikRegistry;
 using CtrlClientPromise = litebus::Promise<std::shared_ptr<ControlInterfacePosixClient>>;
 using InstanceReadyCallBack = std::function<litebus::Future<Status>(const Status &status)>;
+using InstanceReadyCallResultCallBack = std::function<litebus::Future<CallResultAck>(
+    const std::shared_ptr<functionsystem::CallResult> &callResult)>;
 using ClearGroupInstanceCallBack = std::function<void(const InstanceInfo &instanceInfo)>;
 using CreateCallResultCallBack =
     std::function<litebus::Future<CallResultAck>(const std::shared_ptr<functionsystem::CallResult> &callResult)>;
@@ -478,6 +480,11 @@ public:
     void RegisterReadyCallback(const std::string &instanceID,
                                const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
                                InstanceReadyCallBack callback);
+    void RegisterReadyCallResultCallback(const std::string &instanceID,
+                                         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+                                         InstanceReadyCallResultCallBack callback);
+    void EraseReadyCallResultCallbackByRequestID(const std::string &requestID);
+    void EraseReadyCallResultCallbackByInstanceID(const std::string &instanceID);
     litebus::Future<Status> ForceDeleteInstance(const std::string &instanceID);
     inline void RegisterClearGroupInstanceCallBack(ClearGroupInstanceCallBack callback)
     {
@@ -1026,6 +1033,10 @@ private:
 
     std::unordered_map<std::string, litebus::Promise<Status>> instanceStatusPromises_;
     std::unordered_map<std::string, InstanceReadyCallBack> instanceRegisteredReadyCallback_;
+    std::unordered_map<std::string, InstanceReadyCallResultCallBack> instanceRegisteredReadyCallResultCallback_;
+    std::unordered_map<std::string, InstanceReadyCallResultCallBack> instanceReadyCallResultCallbackByInstanceID_;
+    std::unordered_map<std::string, std::string> instanceReadyCallResultInstanceIDByRequestID_;
+    std::unordered_map<std::string, std::string> instanceReadyCallResultRequestIDByInstanceID_;
 
     std::unordered_map<std::string, CreateCallResultCallBack> createCallResultCallback_;
 
