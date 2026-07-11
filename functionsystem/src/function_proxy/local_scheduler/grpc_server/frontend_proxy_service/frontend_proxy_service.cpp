@@ -21,6 +21,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -49,17 +50,29 @@ void LogLifecycleEvent(const char *operation, const char *dispatchPhase,
                        const std::string &retryReason = "", const std::string &cleanupOutcome = "",
                        const std::string &endpointAddress = "", const std::string &owningProxyID = "",
                        uint32_t attempt = 1,
-                       const std::string &transport = FrontendProxyService::LIFECYCLE_TRANSPORT)
+                       const std::string &transport = FrontendProxyService::LIFECYCLE_TRANSPORT,
+                       const FrontendKillCleanupSnapshot *cleanup = nullptr)
 {
     // Payload-free lifecycle event. Only fields known at this boundary are
     // emitted; transport authentication is outside this service and is not
     // implied by frontendClientID or tenant consistency checks.
+    const auto requestTicket = cleanup == nullptr || !cleanup->requestTicketKnown
+                                   ? "unknown"
+                                   : (cleanup->requestTicketCleared ? "cleared" : "pending");
+    const auto instanceTicket = cleanup == nullptr || !cleanup->instanceTicketKnown
+                                    ? "unknown"
+                                    : (cleanup->instanceTicketCleared ? "cleared" : "pending");
+    const auto runtimeState = cleanup == nullptr ? "unknown" : cleanup->runtimeState;
+    const auto instanceState = cleanup == nullptr ? "unknown" : cleanup->instanceState;
+    const auto pendingInvokeCount = cleanup == nullptr ? -1 : cleanup->pendingInvokeCount;
     YRLOG_INFO("frontend_lifecycle operation={} dispatchPhase={} frontendClientID={} tenantID={} requestID={} "
                "traceID={} endpointNodeID={} endpointAddress={} owningProxyID={} instanceID={} attempt={} "
-               "transport={} outcome={} retryable={} retryReason={} cleanupOutcome={}",
+               "transport={} outcome={} retryable={} retryReason={} cleanupOutcome={} cleanupRequestTicket={} "
+               "cleanupInstanceTicket={} cleanupRuntimeState={} cleanupInstanceState={} pendingInvokeCount={}",
                operation, dispatchPhase, context.frontendclientid(), context.tenantid(), context.requestid(),
                context.traceid(), endpointNodeID, endpointAddress, owningProxyID, instanceID, attempt, transport,
-               outcome, retryable, retryReason, cleanupOutcome);
+               outcome, retryable, retryReason, cleanupOutcome, requestTicket, instanceTicket, runtimeState,
+               instanceState, pendingInvokeCount);
 }
 
 template <typename T>
@@ -179,16 +192,23 @@ SharedStreamMsg CreateInvokeRequest(const ::frontend_proxy::InvokeInstanceReques
 
 class FrontendCallResultRegistry {
 public:
+    struct PendingCall {
+        std::shared_ptr<litebus::Promise<SharedStreamMsg>> promise;
+        std::string instanceID;
+    };
+
     struct WatchResult {
         bool registered;
         litebus::Future<SharedStreamMsg> future;
     };
 
-    static WatchResult Watch(const std::string &frontendCallerID, const std::string &requestID)
+    static WatchResult Watch(const std::string &frontendCallerID, const std::string &requestID,
+                             const std::string &instanceID)
     {
         auto promise = std::make_shared<litebus::Promise<SharedStreamMsg>>();
         std::lock_guard<std::mutex> lock(Mutex());
-        const bool inserted = Pending().emplace(BuildPendingKey(frontendCallerID, requestID), promise).second;
+        const bool inserted = Pending().emplace(BuildPendingKey(frontendCallerID, requestID),
+                                                PendingCall{ promise, instanceID }).second;
         return { inserted, promise->GetFuture() };
     }
 
@@ -212,11 +232,18 @@ public:
             if (iter == Pending().end()) {
                 return { false, nullptr };
             }
-            promise = iter->second;
+            promise = iter->second.promise;
             (void)Pending().erase(iter);
         }
         promise->SetValue(request);
         return { true, CreateCallResultAck(common::ERR_NONE, "success", request->messageid()) };
+    }
+
+    static int64_t PendingCount(const std::string &instanceID)
+    {
+        std::lock_guard<std::mutex> lock(Mutex());
+        return static_cast<int64_t>(std::count_if(Pending().begin(), Pending().end(),
+            [&instanceID](const auto &entry) { return entry.second.instanceID == instanceID; }));
     }
 
 private:
@@ -226,12 +253,57 @@ private:
         return mutex;
     }
 
-    static std::unordered_map<std::string, std::shared_ptr<litebus::Promise<SharedStreamMsg>>> &Pending()
+    static std::unordered_map<std::string, PendingCall> &Pending()
     {
-        static std::unordered_map<std::string, std::shared_ptr<litebus::Promise<SharedStreamMsg>>> pending;
+        static std::unordered_map<std::string, PendingCall> pending;
         return pending;
     }
 };
+
+struct KillCleanupObservation {
+    FrontendKillCleanupSnapshot snapshot;
+    std::string outcome { "probe-not-configured" };
+};
+
+KillCleanupObservation ObserveKillCleanup(const FrontendProxyServiceParam &param, ::grpc::ServerContext *context,
+                                          const std::string &requestID, const std::string &instanceID,
+                                          bool killSucceeded)
+{
+    KillCleanupObservation observation;
+    observation.snapshot.pendingInvokeCount = FrontendCallResultRegistry::PendingCount(instanceID);
+    if (!param.killCleanupProbe) {
+        return observation;
+    }
+
+    const auto started = std::chrono::steady_clock::now();
+    while (true) {
+        bool cancelled = false;
+        auto snapshot = WaitFrontendResult(param.killCleanupProbe(requestID, instanceID), context,
+                                           param.killCleanupTimeoutMs, cancelled);
+        if (!snapshot.IsSome()) {
+            observation.outcome = cancelled ? "cancelled" : "probe-timeout";
+            return observation;
+        }
+        observation.snapshot = snapshot.Get();
+        observation.snapshot.pendingInvokeCount = FrontendCallResultRegistry::PendingCount(instanceID);
+        if (!killSucceeded) {
+            observation.outcome = "kill-failed";
+            return observation;
+        }
+        if (observation.snapshot.IsComplete()) {
+            observation.outcome = "complete";
+            return observation;
+        }
+        const auto elapsed = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count());
+        if (elapsed >= param.killCleanupTimeoutMs) {
+            observation.outcome = "incomplete-timeout";
+            return observation;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(
+            std::min(FRONTEND_WAIT_POLL_MS, param.killCleanupTimeoutMs - elapsed)));
+    }
+}
 
 litebus::Future<SharedStreamMsg> DispatchInvoke(const FrontendProxyServiceParam &param,
                                                 const std::string &frontendCallerID,
@@ -304,7 +376,8 @@ FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : 
                       request->invoke().instanceid(), "accepted", false, "", "", param_.endpointAddress,
                       param_.nodeID);
 
-    auto watchResult = FrontendCallResultRegistry::Watch(frontendCallerID, requestID);
+    auto watchResult = FrontendCallResultRegistry::Watch(frontendCallerID, requestID,
+                                                         request->invoke().instanceid());
     if (!watchResult.registered) {
         SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
                   "frontend proxy invoke requires a globally unique request id");
@@ -519,7 +592,8 @@ FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : 
             LogLifecycleEvent("kill", "terminal", request->context(), param_.nodeID,
                               request->kill().instanceid(),
                               cancelled ? "cancelled-unknown" : "timeout-unknown", false,
-                              "post-dispatch-unknown", "", param_.endpointAddress, param_.nodeID);
+                              "post-dispatch-unknown", "dispatch-outcome-unknown", param_.endpointAddress,
+                              param_.nodeID);
             return ::grpc::Status::OK;
         }
         response->CopyFrom(killResponse.Get());
@@ -528,11 +602,15 @@ FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : 
         const bool ownerUnknown = response->kill().code() == common::ERR_INSTANCE_NOT_FOUND && !routeStale;
         SetStatus(response->mutable_status(), response->kill().code(), response->kill().message(), routeStale,
                   routeStale ? "route-stale" : (ownerUnknown ? "owner-unknown" : ""));
+        const auto cleanup = ObserveKillCleanup(param_, context, request->context().requestid(),
+                                                request->kill().instanceid(),
+                                                response->kill().code() == common::ERR_NONE);
         LogLifecycleEvent("kill", "terminal", request->context(), param_.nodeID,
                           request->kill().instanceid(),
                           response->kill().code() == common::ERR_NONE ? "success" : "failed", routeStale,
-                          routeStale ? "route-stale" : (ownerUnknown ? "owner-unknown" : ""), "",
-                          param_.endpointAddress, param_.nodeID);
+                          routeStale ? "route-stale" : (ownerUnknown ? "owner-unknown" : ""), cleanup.outcome,
+                          param_.endpointAddress, param_.nodeID, 1, FrontendProxyService::LIFECYCLE_TRANSPORT,
+                          &cleanup.snapshot);
         return ::grpc::Status::OK;
     }
     if (param_.enableKillDispatch) {

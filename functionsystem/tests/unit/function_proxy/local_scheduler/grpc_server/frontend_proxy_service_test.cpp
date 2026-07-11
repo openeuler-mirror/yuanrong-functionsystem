@@ -437,6 +437,78 @@ TEST(FrontendProxyServiceTest, KillAuthoritativeDeletedIsOnlyAcceptedAsExplicitS
     EXPECT_TRUE(response.status().retryreason().empty());
 }
 
+TEST(FrontendProxyServiceTest, KillSuccessWaitsForObservedCleanupCompletion)
+{
+    int probes = 0;
+    FrontendProxyServiceParam param;
+    param.nodeID = "proxy-node-a";
+    param.enableKillDispatch = true;
+    param.killCleanupTimeoutMs = 100;
+    param.killReadyDispatcher = [](const ::frontend_proxy::KillInstanceRequest &) {
+        ::frontend_proxy::KillInstanceResponse response;
+        response.mutable_kill()->set_code(common::ERR_NONE);
+        return litebus::Future<::frontend_proxy::KillInstanceResponse>(response);
+    };
+    param.killCleanupProbe = [&probes](const std::string &requestID, const std::string &instanceID) {
+        FrontendKillCleanupSnapshot snapshot;
+        snapshot.requestTicketKnown = true;
+        snapshot.requestTicketCleared = ++probes > 1;
+        snapshot.instanceTicketKnown = true;
+        snapshot.instanceTicketCleared = probes > 1;
+        snapshot.runtimeState = probes > 1 ? "terminated" : "terminating";
+        snapshot.instanceState = probes > 1 ? "absent" : "exiting";
+        EXPECT_EQ(requestID, "kill-cleanup-complete");
+        EXPECT_EQ(instanceID, "instance-a");
+        return litebus::Future<FrontendKillCleanupSnapshot>(snapshot);
+    };
+    FrontendProxyService service(std::move(param));
+    ::frontend_proxy::KillInstanceRequest request;
+    request.mutable_context()->set_frontendclientid("frontend-a");
+    request.mutable_context()->set_requestid("kill-cleanup-complete");
+    request.mutable_context()->set_traceid("trace-cleanup-complete");
+    request.mutable_context()->set_tenantid("tenant-a");
+    request.mutable_kill()->set_instanceid("instance-a");
+    ::frontend_proxy::KillInstanceResponse response;
+
+    EXPECT_TRUE(service.KillInstance(nullptr, &request, &response).ok());
+    EXPECT_EQ(response.status().code(), common::ERR_NONE);
+    EXPECT_GE(probes, 2);
+}
+
+TEST(FrontendProxyServiceTest, KillSuccessDoesNotSynthesizeCleanupWhenEvidenceStaysIncomplete)
+{
+    FrontendProxyServiceParam param;
+    param.nodeID = "proxy-node-a";
+    param.enableKillDispatch = true;
+    param.killCleanupTimeoutMs = 1;
+    param.killReadyDispatcher = [](const ::frontend_proxy::KillInstanceRequest &) {
+        ::frontend_proxy::KillInstanceResponse response;
+        response.mutable_kill()->set_code(common::ERR_NONE);
+        return litebus::Future<::frontend_proxy::KillInstanceResponse>(response);
+    };
+    param.killCleanupProbe = [](const std::string &, const std::string &) {
+        FrontendKillCleanupSnapshot snapshot;
+        snapshot.requestTicketKnown = true;
+        snapshot.requestTicketCleared = true;
+        snapshot.instanceTicketKnown = true;
+        snapshot.instanceTicketCleared = false;
+        snapshot.runtimeState = "unknown";
+        snapshot.instanceState = "exiting";
+        return litebus::Future<FrontendKillCleanupSnapshot>(snapshot);
+    };
+    FrontendProxyService service(std::move(param));
+    ::frontend_proxy::KillInstanceRequest request;
+    request.mutable_context()->set_frontendclientid("frontend-a");
+    request.mutable_context()->set_requestid("kill-cleanup-incomplete");
+    request.mutable_context()->set_traceid("trace-cleanup-incomplete");
+    request.mutable_context()->set_tenantid("tenant-a");
+    request.mutable_kill()->set_instanceid("instance-a");
+    ::frontend_proxy::KillInstanceResponse response;
+
+    EXPECT_TRUE(service.KillInstance(nullptr, &request, &response).ok());
+    EXPECT_EQ(response.status().code(), common::ERR_NONE);
+}
+
 TEST(FrontendProxyServiceTest, RealGrpcCancellationRemovesCreateReadyWaiter)
 {
     auto pending = std::make_shared<litebus::Promise<::frontend_proxy::CreateInstanceResponse>>();

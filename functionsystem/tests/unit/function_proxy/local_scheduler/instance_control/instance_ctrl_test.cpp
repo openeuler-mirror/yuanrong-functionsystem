@@ -1792,6 +1792,25 @@ TEST_F(InstanceCtrlTest, FrontendKillLocalMissNeverRelaysOrClaimsAuthoritativeDe
     EXPECT_EQ(killRsp.Get().message(), "frontend proxy is not the owning proxy for this instance");
 }
 
+TEST(FrontendKillCleanupSnapshotTest, CompleteRequiresAllFiveObservedCleanupSignals)
+{
+    FrontendKillCleanupSnapshot snapshot;
+    snapshot.requestTicketKnown = true;
+    snapshot.requestTicketCleared = true;
+    snapshot.instanceTicketKnown = true;
+    snapshot.instanceTicketCleared = true;
+    snapshot.runtimeState = "terminated";
+    snapshot.instanceState = "absent";
+    snapshot.pendingInvokeCount = 1;
+    EXPECT_FALSE(snapshot.IsComplete());
+
+    snapshot.pendingInvokeCount = 0;
+    EXPECT_TRUE(snapshot.IsComplete());
+
+    snapshot.runtimeState = "unknown";
+    EXPECT_FALSE(snapshot.IsComplete());
+}
+
 /**
  * Feature: instance ctrl (direct routing).
  * Description: a kill that already carries routing information must NOT be

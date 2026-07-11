@@ -41,6 +41,7 @@
 #include "function_proxy/common/observer/control_plane_observer/control_plane_observer.h"
 #include "function_proxy/common/posix_client/control_plane_client/control_interface_client_manager_proxy.h"
 #include "function_proxy/common/rate_limiter/token_bucket_rate_limiter.h"
+#include "local_scheduler/instance_control/frontend_kill_cleanup_snapshot.h"
 // for remove rgroup, easy for facilitates authentication, which should be extracted in the future
 #include "local_scheduler/instance_control/idle/idle_mgr.h"
 #include "local_scheduler/resource_group_controller/resource_group_ctrl.h"
@@ -490,6 +491,8 @@ public:
     void UnregisterFrontendReadyWait(const std::string &requestID, const std::string &reason);
     litebus::Future<KillResponse> KillFrontend(const std::string &tenantID,
                                                const std::shared_ptr<KillRequest> &killReq);
+    FrontendKillCleanupSnapshot ProbeFrontendKillCleanup(const std::string &requestID,
+                                                         const std::string &instanceID);
     void EraseReadyCallResultCallbackByRequestID(const std::string &requestID);
     void EraseReadyCallResultCallbackByInstanceID(const std::string &instanceID);
     bool RegisterFrontendReadyTicket(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
@@ -784,6 +787,9 @@ private:
                                                           const std::string &requestID, const std::string &instanceID);
 
     litebus::Future<Status> KillRuntime(const InstanceInfo &instanceInfo, bool isRecovering = false);
+    litebus::Future<Status> RecordFrontendKillRuntimeResult(
+        const InstanceInfo &instanceInfo, const messages::KillInstanceResponse &response);
+    void ExpireFrontendKillRuntimeEvidence(const std::string &instanceID, const std::string &requestID);
     inline bool IsValidKillParam(
         const Status &status, std::shared_ptr<KillContext> &killCtx, const std::shared_ptr<KillRequest> &killReq,
         std::shared_ptr<InstanceStateMachine> &stateMachine);
@@ -1092,6 +1098,8 @@ private:
     std::shared_ptr<SubscriptionMgr> subscriptionMgr_;
 
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<KillResponse>>> killingRequest_;
+    // Short-lived, payload-free evidence used only by the frontend cleanup probe.
+    std::unordered_map<std::string, std::pair<std::string, std::string>> frontendKillRuntimeEvidence_;
 
     BACK_OFF_RETRY_HELPER(InstanceCtrlActor, litebus::Option<InstanceState>, checkStateHelper_);
 

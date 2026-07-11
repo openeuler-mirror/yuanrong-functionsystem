@@ -486,6 +486,13 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
                 }
                 (void)caller;
                 return instanceCtrl->KillFrontend(tenantID, killReq);
+            },
+            [instanceCtrl(instanceCtrl_)](const std::string &requestID, const std::string &instanceID) {
+                if (instanceCtrl == nullptr) {
+                    FrontendKillCleanupSnapshot snapshot;
+                    return litebus::Future<FrontendKillCleanupSnapshot>(snapshot);
+                }
+                return instanceCtrl->ProbeFrontendKillCleanup(requestID, instanceID);
             });
         frontendServiceParam.endpointAddress = param_.ip + ":" + param_.posixPort;
         // Lifecycle create/kill use reviewed ready dispatcher seams when the single

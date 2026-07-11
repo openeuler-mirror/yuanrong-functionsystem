@@ -157,7 +157,7 @@ FrontendProxyServiceParam::KillReadyDispatcher BuildFrontendProxyKillReadyDispat
 FrontendProxyServiceParam BuildFrontendProxyServiceParam(
     const std::string &nodeID, bool enableCreateDispatch, const FrontendProxyCreateReadyScheduler &scheduler,
     const FrontendProxyReadyUnregister &readyUnregister, bool enableKillDispatch,
-    const FrontendProxyKillInvoker &killInvoker)
+    const FrontendProxyKillInvoker &killInvoker, const FrontendProxyKillCleanupProbe &killCleanupProbe)
 {
     FrontendProxyServiceParam param;
     param.nodeID = nodeID;
@@ -169,6 +169,7 @@ FrontendProxyServiceParam BuildFrontendProxyServiceParam(
     param.enableKillDispatch = enableKillDispatch;
     if (enableKillDispatch) {
         param.killReadyDispatcher = BuildFrontendProxyKillReadyDispatcher(killInvoker);
+        param.killCleanupProbe = killCleanupProbe;
     }
     return param;
 }
@@ -176,7 +177,8 @@ FrontendProxyServiceParam BuildFrontendProxyServiceParam(
 FrontendProxyServiceParam BuildFrontendProxyServiceParam(const std::string &nodeID, bool enableKillDispatch,
                                                          const FrontendProxyKillInvoker &killInvoker)
 {
-    return BuildFrontendProxyServiceParam(nodeID, false, nullptr, nullptr, enableKillDispatch, killInvoker);
+    return BuildFrontendProxyServiceParam(nodeID, false, nullptr, nullptr, enableKillDispatch, killInvoker,
+                                          nullptr);
 }
 
 }  // namespace functionsystem::local_scheduler

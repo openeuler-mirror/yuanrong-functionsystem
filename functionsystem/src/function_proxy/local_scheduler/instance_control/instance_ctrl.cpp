@@ -393,6 +393,12 @@ litebus::Future<KillResponse> InstanceCtrl::KillFrontend(const std::string &tena
     return litebus::Async(aid_, &InstanceCtrlActor::KillFrontend, tenantID, killReq);
 }
 
+litebus::Future<FrontendKillCleanupSnapshot> InstanceCtrl::ProbeFrontendKillCleanup(
+    const std::string &requestID, const std::string &instanceID)
+{
+    return litebus::Async(aid_, &InstanceCtrlActor::ProbeFrontendKillCleanup, requestID, instanceID);
+}
+
 litebus::Future<Status> InstanceCtrl::ForceDeleteInstance(const std::string &instanceID)
 {
     return litebus::Async(aid_, &InstanceCtrlActor::ForceDeleteInstance, instanceID);

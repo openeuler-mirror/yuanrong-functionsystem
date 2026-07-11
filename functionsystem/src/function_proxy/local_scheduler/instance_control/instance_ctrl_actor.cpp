@@ -70,6 +70,7 @@ static const uint32_t OBSERVER_TIMEOUT_MS = 60000;
 static const uint32_t HEARTBEAT_INTERVAL_MS = 3000;
 
 static const uint32_t MILLISECONDS_PRE_SECOND = 1000;
+static const uint32_t FRONTEND_KILL_EVIDENCE_TTL_MS = 60000;
 static const uint32_t RETRY_CHECK_CLIENT_CONNECT_TIME = 1000;
 static const uint32_t INSTANCE_BUSY_SUSPEND_RETRY_MS = 300;
 static const int64_t DEFAULT_TENANT_COOLDOWN_MS = 10000;
@@ -645,7 +646,64 @@ litebus::Future<KillResponse> InstanceCtrlActor::KillFrontend(const std::string 
         return GenKillResponse(common::ERR_AUTHORIZE_FAILED,
                                "frontend proxy kill tenant does not match instance tenant");
     }
+    frontendKillRuntimeEvidence_[killReq->instanceid()] = { killReq->requestid(), "not-started" };
+    (void)litebus::AsyncAfter(FRONTEND_KILL_EVIDENCE_TTL_MS, GetAID(),
+                             &InstanceCtrlActor::ExpireFrontendKillRuntimeEvidence, killReq->instanceid(),
+                             killReq->requestid());
     return Kill("", killReq, false);
+}
+
+FrontendKillCleanupSnapshot InstanceCtrlActor::ProbeFrontendKillCleanup(const std::string &requestID,
+                                                                        const std::string &instanceID)
+{
+    FrontendKillCleanupSnapshot snapshot;
+    snapshot.requestTicketKnown = true;
+    snapshot.requestTicketCleared = killingRequest_.find(requestID) == killingRequest_.end()
+                                    && instanceRegisteredReadyCallResultCallback_.find(requestID)
+                                           == instanceRegisteredReadyCallResultCallback_.end();
+    snapshot.instanceTicketKnown = true;
+    snapshot.instanceTicketCleared = exiting_.find(instanceID) == exiting_.end()
+                                     && instanceReadyCallResultRequestIDByInstanceID_.find(instanceID)
+                                            == instanceReadyCallResultRequestIDByInstanceID_.end()
+                                     && instanceReadyCallResultCallbackByInstanceID_.find(instanceID)
+                                            == instanceReadyCallResultCallbackByInstanceID_.end();
+
+    auto runtimeEvidence = frontendKillRuntimeEvidence_.find(instanceID);
+    if (runtimeEvidence != frontendKillRuntimeEvidence_.end() && runtimeEvidence->second.first == requestID) {
+        snapshot.runtimeState = runtimeEvidence->second.second;
+    }
+    auto stateMachine = instanceControlView_ == nullptr ? nullptr : instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        snapshot.instanceState = "absent";
+        return snapshot;
+    }
+    switch (stateMachine->GetInstanceState()) {
+        case InstanceState::EXITED:
+            snapshot.instanceState = "exited";
+            break;
+        case InstanceState::EXITING:
+            snapshot.instanceState = "exiting";
+            break;
+        case InstanceState::RUNNING:
+            snapshot.instanceState = "running";
+            break;
+        case InstanceState::FATAL:
+            snapshot.instanceState = "fatal";
+            break;
+        default:
+            snapshot.instanceState = "non-terminal-" + std::to_string(static_cast<int32_t>(stateMachine->GetInstanceState()));
+            break;
+    }
+    return snapshot;
+}
+
+void InstanceCtrlActor::ExpireFrontendKillRuntimeEvidence(const std::string &instanceID,
+                                                          const std::string &requestID)
+{
+    auto iter = frontendKillRuntimeEvidence_.find(instanceID);
+    if (iter != frontendKillRuntimeEvidence_.end() && iter->second.first == requestID) {
+        (void)frontendKillRuntimeEvidence_.erase(iter);
+    }
 }
 
 void InstanceCtrlActor::OnKill(const std::shared_ptr<KillRequest> &killReq, const litebus::Future<KillResponse> &rsp)
@@ -1211,16 +1269,33 @@ litebus::Future<Status> InstanceCtrlActor::KillRuntime(const InstanceInfo &insta
         (void)instanceStatusPromises_.erase(instanceInfo.instanceid());
     }
 
+    auto evidence = frontendKillRuntimeEvidence_.find(instanceInfo.instanceid());
+    if (evidence != frontendKillRuntimeEvidence_.end()) {
+        evidence->second.second = "terminating";
+    }
     return SendKillRequestToAgent(instanceInfo, isRecovering)
-        .Then([instanceInfo](const messages::KillInstanceResponse &rsp) -> litebus::Future<Status> {
-            if (rsp.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
-                YRLOG_WARN("{}|kill instance({}), errCode {}", instanceInfo.requestid(), instanceInfo.instanceid(),
-                           rsp.code());
-            } else {
-                YRLOG_INFO("{}|succeed to kill instance({})", instanceInfo.requestid(), instanceInfo.instanceid());
-            }
-            return Status::OK();
-        });
+        .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::RecordFrontendKillRuntimeResult, instanceInfo, _1));
+}
+
+litebus::Future<Status> InstanceCtrlActor::RecordFrontendKillRuntimeResult(
+    const InstanceInfo &instanceInfo, const messages::KillInstanceResponse &response)
+{
+    auto evidence = frontendKillRuntimeEvidence_.find(instanceInfo.instanceid());
+    if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+        YRLOG_WARN("{}|kill instance({}), errCode {}", instanceInfo.requestid(), instanceInfo.instanceid(),
+                   response.code());
+        if (evidence != frontendKillRuntimeEvidence_.end()) {
+            evidence->second.second = "failed-" + std::to_string(response.code());
+        }
+    } else {
+        YRLOG_INFO("{}|succeed to kill instance({})", instanceInfo.requestid(), instanceInfo.instanceid());
+        if (evidence != frontendKillRuntimeEvidence_.end()) {
+            evidence->second.second = "terminated";
+        }
+    }
+    // Preserve legacy kill response semantics; the cleanup snapshot reports the
+    // runtime result independently instead of converting it into false success.
+    return Status::OK();
 }
 
 litebus::Future<KillResponse> InstanceCtrlActor::SendSignal(const std::shared_ptr<KillContext> &killCtx,

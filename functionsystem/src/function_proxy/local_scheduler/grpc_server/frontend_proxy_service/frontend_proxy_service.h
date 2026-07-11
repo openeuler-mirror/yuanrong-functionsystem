@@ -26,6 +26,7 @@
 #include "async/future.hpp"
 #include "common/proto/pb/posix/frontend_proxy_service.grpc.pb.h"
 #include "common/proto/pb/posix_pb.h"
+#include "local_scheduler/instance_control/frontend_kill_cleanup_snapshot.h"
 
 namespace functionsystem::local_scheduler {
 
@@ -40,6 +41,8 @@ struct FrontendProxyServiceParam {
     using KillReadyDispatcher =
         std::function<litebus::Future<::frontend_proxy::KillInstanceResponse>(
             const ::frontend_proxy::KillInstanceRequest &)>;
+    using KillCleanupProbe =
+        std::function<litebus::Future<FrontendKillCleanupSnapshot>(const std::string &, const std::string &)>;
 
     std::string nodeID;
     std::string endpointAddress;
@@ -60,9 +63,12 @@ struct FrontendProxyServiceParam {
     // Reviewed kill seam: dispatcher must return the frontend-facing response,
     // not the old POSIX stream KillResponse wrapper.
     KillReadyDispatcher killReadyDispatcher;
+    // Read-only production probe. A successful KillResponse is not cleanup evidence.
+    KillCleanupProbe killCleanupProbe;
     bool enableCreateDispatch { false };
     bool enableKillDispatch { false };
     uint64_t invokeResultTimeoutMs { 60000 };
+    uint64_t killCleanupTimeoutMs { 2000 };
 };
 
 // FrontendProxyService is the same-port frontend entrypoint for faasfrontend.

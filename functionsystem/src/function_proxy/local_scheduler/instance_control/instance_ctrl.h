@@ -256,6 +256,8 @@ public:
     virtual void UnregisterFrontendReadyWait(const std::string &requestID, const std::string &reason);
     virtual litebus::Future<KillResponse> KillFrontend(const std::string &tenantID,
                                                        const std::shared_ptr<KillRequest> &killReq);
+    virtual litebus::Future<FrontendKillCleanupSnapshot> ProbeFrontendKillCleanup(
+        const std::string &requestID, const std::string &instanceID);
     virtual litebus::Future<Status> ForceDeleteInstance(const std::string &instanceID);
 
     virtual litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> CreateInstanceClient(

@@ -47,6 +47,7 @@ using FrontendProxyCreateScheduler =
 using FrontendProxyKillInvoker =
     std::function<litebus::Future<KillResponse>(const std::string &, const std::string &,
                                                 const std::shared_ptr<KillRequest> &)>;
+using FrontendProxyKillCleanupProbe = FrontendProxyServiceParam::KillCleanupProbe;
 
 FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDispatcher(
     const FrontendProxyCreateReadyScheduler &scheduler);
@@ -57,7 +58,8 @@ FrontendProxyServiceParam::KillReadyDispatcher BuildFrontendProxyKillReadyDispat
 FrontendProxyServiceParam BuildFrontendProxyServiceParam(
     const std::string &nodeID, bool enableCreateDispatch, const FrontendProxyCreateReadyScheduler &scheduler,
     const FrontendProxyReadyUnregister &readyUnregister, bool enableKillDispatch,
-    const FrontendProxyKillInvoker &killInvoker);
+    const FrontendProxyKillInvoker &killInvoker,
+    const FrontendProxyKillCleanupProbe &killCleanupProbe = nullptr);
 
 FrontendProxyServiceParam BuildFrontendProxyServiceParam(const std::string &nodeID, bool enableKillDispatch,
                                                          const FrontendProxyKillInvoker &killInvoker);
