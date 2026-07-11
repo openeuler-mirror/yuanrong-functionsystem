@@ -384,6 +384,13 @@ function install_faas_frontend() {
   sed -i "s/{meta_service_address}/${meta_service_address}/g" ${install_init_frontend_config}
   sed -i "s/{enable_func_token_auth}/${ENABLE_FUNCTION_TOKEN_AUTH}/g" ${install_init_frontend_config}
   sed -i "s/{frontend_lease_bypass}/${FRONTEND_LEASE_BYPASS}/g" ${install_init_frontend_config}
+  local frontend_proxy_address="${FRONTEND_PROXY_ADDRESS}"
+  if [ -z "${frontend_proxy_address}" ]; then
+    frontend_proxy_address="${IP_ADDRESS}:${FUNCTION_PROXY_GRPC_PORT}"
+  fi
+  sed -i "s/{function_invoke_backend}/${FUNCTION_INVOKE_BACKEND}/g" ${install_init_frontend_config}
+  sed -i "s/{function_invoke_legacy_fallback}/${FUNCTION_INVOKE_LEGACY_FALLBACK}/g" ${install_init_frontend_config}
+  sed -i "s/{frontend_proxy_address}/${frontend_proxy_address}/g" ${install_init_frontend_config}
   
   # Generic auth placeholders
   sed -i "s/{auth_enabled}/${auth_enabled}/g" ${install_init_frontend_config}
