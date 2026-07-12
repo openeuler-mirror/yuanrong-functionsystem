@@ -641,7 +641,7 @@ litebus::Future<KillResponse> InstanceCtrlActor::KillFrontend(const std::string 
         return GenKillResponse(common::ERR_INSTANCE_NOT_FOUND,
                                "frontend proxy is not the owning proxy for this instance");
     }
-    if (stateMachine != nullptr && !tenantID.empty() && !stateMachine->GetInstanceInfo().tenantid().empty()
+    if (!stateMachine->GetInstanceInfo().tenantid().empty()
         && tenantID != stateMachine->GetInstanceInfo().tenantid()) {
         return GenKillResponse(common::ERR_AUTHORIZE_FAILED,
                                "frontend proxy kill tenant does not match instance tenant");
@@ -6280,7 +6280,9 @@ void InstanceCtrlActor::RegisterReadyCallResultCallback(
         YRLOG_WARN("{}|frontend ready ticket already exists; keep the original waiter", scheduleReq->requestid());
         return;
     }
-    (void)BindFrontendReadyTicketInstance(scheduleReq->requestid(), instanceID);
+    if (!BindFrontendReadyTicketInstance(scheduleReq->requestid(), instanceID)) {
+        UnregisterFrontendReadyWait(scheduleReq->requestid(), "instance binding failed");
+    }
 }
 
 bool InstanceCtrlActor::RegisterFrontendReadyTicket(
@@ -6342,7 +6344,9 @@ void InstanceCtrlActor::OnFrontendScheduleCompleted(const litebus::Future<messag
         UnregisterFrontendReadyWait(requestID, "schedule failed");
         return;
     }
-    (void)BindFrontendReadyTicketInstance(requestID, future.Get().instanceid());
+    if (!BindFrontendReadyTicketInstance(requestID, future.Get().instanceid())) {
+        UnregisterFrontendReadyWait(requestID, "instance binding failed");
+    }
 }
 
 void InstanceCtrlActor::UnregisterFrontendReadyWait(const std::string &requestID, const std::string &reason)

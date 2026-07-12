@@ -82,24 +82,23 @@ FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDi
         auto scheduleReq = BuildFrontendScheduleRequest(request);
         auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
         auto readyPromise = std::make_shared<litebus::Promise<std::shared_ptr<functionsystem::CallResult>>>();
+        auto readyFuture = readyPromise->GetFuture();
         YRLOG_INFO("{}|frontend system create function({}) from frontendClientID({}), tenantID({})",
                    scheduleReq->requestid(), scheduleReq->instance().function(), request.context().frontendclientid(),
                    request.context().tenantid());
         return scheduler(scheduleReq, runtimePromise,
                          [readyPromise](const std::shared_ptr<functionsystem::CallResult> &readyResult)
                              -> litebus::Future<CallResultAck> {
-                             if (readyPromise->GetFuture().IsInit()) {
-                                 readyPromise->SetValue(readyResult);
-                             }
+                             readyPromise->SetValue(readyResult);
                              return CallResultAck();
                          })
-            .Then([scheduleReq, readyPromise](const messages::ScheduleResponse &scheduleResponse) {
+            .Then([scheduleReq, readyFuture](const messages::ScheduleResponse &scheduleResponse) {
                 auto response = BuildCreateResponse(scheduleResponse);
                 if (response.create().code() != common::ERR_NONE || response.create().instanceid().empty()) {
                     return litebus::Future<::frontend_proxy::CreateInstanceResponse>(response);
                 }
 
-                return readyPromise->GetFuture().Then(
+                return readyFuture.Then(
                     [response, scheduleReq](const std::shared_ptr<functionsystem::CallResult> &readyResult) mutable
                         -> litebus::Future<::frontend_proxy::CreateInstanceResponse> {
                         if (readyResult == nullptr) {

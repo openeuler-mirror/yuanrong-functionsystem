@@ -30,7 +30,6 @@
 
 namespace functionsystem::local_scheduler {
 namespace {
-constexpr const char *FRONTEND_CALLER_PREFIX = "frontend:";
 constexpr const char *FRONTEND_PROXY_CONTROL_NOT_WIRED =
     "frontend proxy create/kill control path is not wired; use libruntime fallback until control semantics are reviewed";
 constexpr const char *FRONTEND_PROXY_CREATE_READY_NOT_WIRED =
@@ -126,21 +125,9 @@ bool HasContextTenantMismatch(const ::frontend_proxy::FrontendRequestContext &co
     return false;
 }
 
-std::string BuildPendingKey(const std::string &, const std::string &requestID)
+std::string BuildPendingKey(const std::string &instanceID, const std::string &requestID)
 {
-    // Frontend unary calls are system-service requests, not runtime-to-runtime calls.
-    // The runtime CallResult may carry an empty/legacy sender instance id, so the
-    // synchronous frontend waiter is keyed only by the unique requestID.
-    return requestID;
-}
-
-std::string BuildFrontendCallerID(const ::frontend_proxy::FrontendRequestContext &context)
-{
-    const auto &frontendClientID = context.frontendclientid();
-    if (frontendClientID.rfind(FRONTEND_CALLER_PREFIX, 0) == 0) {
-        return frontendClientID;
-    }
-    return std::string(FRONTEND_CALLER_PREFIX) + frontendClientID;
+    return instanceID + "\x1f" + requestID;
 }
 
 SharedStreamMsg CreateCallResultAck(common::ErrorCode code, const std::string &message, const std::string &messageID)
@@ -202,20 +189,19 @@ public:
         litebus::Future<SharedStreamMsg> future;
     };
 
-    static WatchResult Watch(const std::string &frontendCallerID, const std::string &requestID,
-                             const std::string &instanceID)
+    static WatchResult Watch(const std::string &requestID, const std::string &instanceID)
     {
         auto promise = std::make_shared<litebus::Promise<SharedStreamMsg>>();
         std::lock_guard<std::mutex> lock(Mutex());
-        const bool inserted = Pending().emplace(BuildPendingKey(frontendCallerID, requestID),
+        const bool inserted = Pending().emplace(BuildPendingKey(instanceID, requestID),
                                                 PendingCall{ promise, instanceID }).second;
         return { inserted, promise->GetFuture() };
     }
 
-    static void Cancel(const std::string &frontendCallerID, const std::string &requestID)
+    static void Cancel(const std::string &requestID, const std::string &instanceID)
     {
         std::lock_guard<std::mutex> lock(Mutex());
-        (void)Pending().erase(BuildPendingKey(frontendCallerID, requestID));
+        (void)Pending().erase(BuildPendingKey(instanceID, requestID));
     }
 
     static std::pair<bool, SharedStreamMsg> Receive(const std::string &, const SharedStreamMsg &request)
@@ -277,9 +263,15 @@ KillCleanupObservation ObserveKillCleanup(const FrontendProxyServiceParam &param
 
     const auto started = std::chrono::steady_clock::now();
     while (true) {
+        const auto elapsed = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count());
+        if (elapsed >= param.killCleanupTimeoutMs) {
+            observation.outcome = "incomplete-timeout";
+            return observation;
+        }
         bool cancelled = false;
         auto snapshot = WaitFrontendResult(param.killCleanupProbe(requestID, instanceID), context,
-                                           param.killCleanupTimeoutMs, cancelled);
+                                           param.killCleanupTimeoutMs - elapsed, cancelled);
         if (!snapshot.IsSome()) {
             observation.outcome = cancelled ? "cancelled" : "probe-timeout";
             return observation;
@@ -294,14 +286,14 @@ KillCleanupObservation ObserveKillCleanup(const FrontendProxyServiceParam &param
             observation.outcome = "complete";
             return observation;
         }
-        const auto elapsed = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+        const auto elapsedAfterProbe = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - started).count());
-        if (elapsed >= param.killCleanupTimeoutMs) {
+        if (elapsedAfterProbe >= param.killCleanupTimeoutMs) {
             observation.outcome = "incomplete-timeout";
             return observation;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(
-            std::min(FRONTEND_WAIT_POLL_MS, param.killCleanupTimeoutMs - elapsed)));
+            std::min(FRONTEND_WAIT_POLL_MS, param.killCleanupTimeoutMs - elapsedAfterProbe)));
     }
 }
 
@@ -369,15 +361,13 @@ FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : 
                                                                  : request->invoke().requestid();
     const auto traceID = request->invoke().traceid().empty() ? request->context().traceid()
                                                              : request->invoke().traceid();
-    const auto frontendCallerID = BuildFrontendCallerID(request->context());
     YRLOG_INFO("{}|frontend proxy invoke received by proxy({}), frontendClientID({}), instance({}), traceID({})",
                requestID, param_.nodeID, request->context().frontendclientid(), request->invoke().instanceid(), traceID);
     LogLifecycleEvent("invoke", "received", request->context(), param_.nodeID,
                       request->invoke().instanceid(), "accepted", false, "", "", param_.endpointAddress,
                       param_.nodeID);
 
-    auto watchResult = FrontendCallResultRegistry::Watch(frontendCallerID, requestID,
-                                                         request->invoke().instanceid());
+    auto watchResult = FrontendCallResultRegistry::Watch(requestID, request->invoke().instanceid());
     if (!watchResult.registered) {
         SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
                   "frontend proxy invoke requires a globally unique request id");
@@ -390,7 +380,7 @@ FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : 
     bool invokeCancelled = false;
     auto invokeResponse = WaitFrontendResult(invokeFuture, context, param_.invokeResultTimeoutMs, invokeCancelled);
     if (!invokeResponse.IsSome()) {
-        FrontendCallResultRegistry::Cancel(frontendCallerID, requestID);
+        FrontendCallResultRegistry::Cancel(requestID, request->invoke().instanceid());
         SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
                   invokeCancelled ? "frontend proxy invoke cancelled with unknown dispatch outcome"
                                   : "frontend proxy invoke timed out with unknown dispatch outcome",
@@ -402,7 +392,7 @@ FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : 
         return ::grpc::Status::OK;
     }
     if (!invokeResponse.Get()->has_invokersp()) {
-        FrontendCallResultRegistry::Cancel(frontendCallerID, requestID);
+        FrontendCallResultRegistry::Cancel(requestID, request->invoke().instanceid());
         SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
                   "frontend proxy invoke received invalid call response");
         LogLifecycleEvent("invoke", "terminal", request->context(), param_.nodeID,
@@ -413,7 +403,7 @@ FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : 
 
     response->mutable_invoke()->CopyFrom(invokeResponse.Get()->invokersp());
     if (invokeResponse.Get()->invokersp().code() != common::ERR_NONE) {
-        FrontendCallResultRegistry::Cancel(frontendCallerID, requestID);
+        FrontendCallResultRegistry::Cancel(requestID, request->invoke().instanceid());
         SetStatus(response->mutable_status(), invokeResponse.Get()->invokersp().code(),
                   invokeResponse.Get()->invokersp().message(), true, "call-response-error");
         LogLifecycleEvent("invoke", "terminal", request->context(), param_.nodeID,
@@ -425,7 +415,7 @@ FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : 
     bool resultCancelled = false;
     auto callResult = WaitFrontendResult(watchResult.future, context, param_.invokeResultTimeoutMs, resultCancelled);
     if (!callResult.IsSome()) {
-        FrontendCallResultRegistry::Cancel(frontendCallerID, requestID);
+        FrontendCallResultRegistry::Cancel(requestID, request->invoke().instanceid());
         SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
                   resultCancelled ? "frontend proxy invoke cancelled while result outcome is unknown"
                                   : "frontend proxy invoke timed out while result outcome is unknown",
