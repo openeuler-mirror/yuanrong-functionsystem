@@ -50,6 +50,10 @@ function get_runtime_checkpoint_dir() {
 function install_function_proxy() {
   log_info "start function proxy, proxy_port=${FUNCTION_PROXY_PORT}, grpc_port=${FUNCTION_PROXY_GRPC_PORT}..."
   local bin=${FUNCTION_SYSTEM_DIR}/bin/function_proxy
+  local enable_frontend_proxy_service="${ENABLE_FRONTEND_PROXY_SERVICE:-false}"
+  if [ "${FUNCTION_INVOKE_BACKEND:-0}" = "1" ]; then
+    enable_frontend_proxy_service=true
+  fi
   local is_pseudo_data_plane="false"
   if [ ${CPU4COMP} -le 100 ]; then
     is_pseudo_data_plane="true"
@@ -200,7 +204,7 @@ function install_function_proxy() {
     --traefik_servers_transport="${TRAEFIK_SERVERS_TRANSPORT}" \
     --fc_agent_mgr_retry_times="${FC_AGENT_MGR_RETRY_TIMES}" \
     --fc_agent_mgr_retry_cycle="${FC_AGENT_MGR_RETRY_CYCLE}" \
-    --enable_frontend_proxy_service="${ENABLE_FRONTEND_PROXY_SERVICE:-false}" \
+    --enable_frontend_proxy_service="${enable_frontend_proxy_service}" \
     --enable_direct_routing="${ENABLE_DIRECT_ROUTING}" \
     --force_low_reliability_instance="${FORCE_LOW_RELIABILITY_INSTANCE}" \
     ${merge_process_args} >>"${FS_LOG_PATH}/${NODE_ID}-function_proxy${STD_LOG_SUFFIX}" 2>&1 &
@@ -384,12 +388,13 @@ function install_faas_frontend() {
   sed -i "s/{meta_service_address}/${meta_service_address}/g" ${install_init_frontend_config}
   sed -i "s/{enable_func_token_auth}/${ENABLE_FUNCTION_TOKEN_AUTH}/g" ${install_init_frontend_config}
   sed -i "s/{frontend_lease_bypass}/${FRONTEND_LEASE_BYPASS}/g" ${install_init_frontend_config}
-  local frontend_proxy_address="${FRONTEND_PROXY_ADDRESS}"
+  local frontend_proxy_address="${FRONTEND_PROXY_ADDRESS:-}"
   if [ -z "${frontend_proxy_address}" ]; then
     frontend_proxy_address="${IP_ADDRESS}:${FUNCTION_PROXY_GRPC_PORT}"
   fi
-  sed -i "s/{function_invoke_backend}/${FUNCTION_INVOKE_BACKEND}/g" ${install_init_frontend_config}
-  sed -i "s/{function_invoke_legacy_fallback}/${FUNCTION_INVOKE_LEGACY_FALLBACK}/g" ${install_init_frontend_config}
+  sed -i "s/{function_invoke_backend}/${FUNCTION_INVOKE_BACKEND:-0}/g" ${install_init_frontend_config}
+  sed -i "s/{enable_frontend_proxy_discovery}/${ENABLE_FRONTEND_PROXY_DISCOVERY:-false}/g" ${install_init_frontend_config}
+  sed -i "s/{function_invoke_legacy_fallback}/${FUNCTION_INVOKE_LEGACY_FALLBACK:-false}/g" ${install_init_frontend_config}
   sed -i "s/{frontend_proxy_address}/${frontend_proxy_address}/g" ${install_init_frontend_config}
   
   # Generic auth placeholders
