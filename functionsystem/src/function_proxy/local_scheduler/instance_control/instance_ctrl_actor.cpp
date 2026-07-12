@@ -6347,7 +6347,7 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::ScheduleFrontendA
 }
 
 void InstanceCtrlActor::OnFrontendScheduleCompleted(const litebus::Future<messages::ScheduleResponse> &future,
-                                                     const std::string &requestID)
+    const std::string &requestID)
 {
     if (future.IsError() || future.Get().code() != common::ERR_NONE) {
         UnregisterFrontendReadyWait(requestID, "schedule failed");
