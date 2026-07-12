@@ -106,8 +106,8 @@ TEST(FrontendProxyServiceTest, InvokeTerminalSuccessReturnsDirectResult)
 
 TEST(FrontendProxyServiceTest, CreateReadyTerminalSuccessCarriesOwningRoute)
 {
-    EXPECT_STREQ(FrontendProxyService::LIFECYCLE_TRANSPORT, "raw-unary");
-    EXPECT_STREQ(FrontendProxyService::READY_OPERATION, "ready");
+    EXPECT_STREQ(FrontendProxyService::lifecycleTransport, "raw-unary");
+    EXPECT_STREQ(FrontendProxyService::readyOperation, "ready");
     FrontendProxyServiceParam param;
     param.nodeID = "proxy-node-a";
     param.endpointAddress = "10.0.0.11:19090";

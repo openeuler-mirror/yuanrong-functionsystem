@@ -31,7 +31,8 @@
 namespace functionsystem::local_scheduler {
 namespace {
 constexpr const char *FRONTEND_PROXY_CONTROL_NOT_WIRED =
-    "frontend proxy create/kill control path is not wired; use libruntime fallback until control semantics are reviewed";
+    "frontend proxy create/kill control path is not wired; use libruntime fallback until control semantics "
+    "are reviewed";
 constexpr const char *FRONTEND_PROXY_CREATE_READY_NOT_WIRED =
     "frontend proxy create requires ready create dispatcher; legacy stream create dispatcher is not allowed";
 constexpr const char *FRONTEND_PROXY_KILL_READY_NOT_WIRED =
@@ -42,58 +43,69 @@ constexpr const char *FRONTEND_KILL_ROUTE_STALE_MESSAGE =
     "frontend proxy is not the owning proxy for this instance";
 constexpr uint64_t FRONTEND_WAIT_POLL_MS = 20;
 
-void LogLifecycleEvent(const char *operation, const char *dispatchPhase,
-                       const ::frontend_proxy::FrontendRequestContext &context,
-                       const std::string &endpointNodeID, const std::string &instanceID,
-                       const std::string &outcome, bool retryable = false,
-                       const std::string &retryReason = "", const std::string &cleanupOutcome = "",
-                       const std::string &endpointAddress = "", const std::string &owningProxyID = "",
-                       uint32_t attempt = 1,
-                       const std::string &transport = FrontendProxyService::LIFECYCLE_TRANSPORT,
-                       const FrontendKillCleanupSnapshot *cleanup = nullptr)
+struct LifecycleEvent {
+    const char *operation;
+    const char *dispatchPhase;
+    const ::frontend_proxy::FrontendRequestContext &context;
+    std::string endpointNodeID;
+    std::string instanceID;
+    std::string outcome;
+    bool retryable { false };
+    std::string retryReason;
+    std::string cleanupOutcome;
+    std::string endpointAddress;
+    std::string owningProxyID;
+    uint32_t attempt { 1 };
+    std::string transport { FrontendProxyService::lifecycleTransport };
+    const FrontendKillCleanupSnapshot *cleanup { nullptr };
+};
+
+void LogLifecycleEventImpl(const LifecycleEvent &event)
 {
     // Payload-free lifecycle event. Only fields known at this boundary are
     // emitted; transport authentication is outside this service and is not
     // implied by frontendClientID or tenant consistency checks.
-    const auto requestTicket = cleanup == nullptr || !cleanup->requestTicketKnown
+    const auto requestTicket = event.cleanup == nullptr || !event.cleanup->requestTicketKnown
                                    ? "unknown"
-                                   : (cleanup->requestTicketCleared ? "cleared" : "pending");
-    const auto instanceTicket = cleanup == nullptr || !cleanup->instanceTicketKnown
+                                   : (event.cleanup->requestTicketCleared ? "cleared" : "pending");
+    const auto instanceTicket = event.cleanup == nullptr || !event.cleanup->instanceTicketKnown
                                     ? "unknown"
-                                    : (cleanup->instanceTicketCleared ? "cleared" : "pending");
-    const auto runtimeState = cleanup == nullptr ? "unknown" : cleanup->runtimeState;
-    const auto instanceState = cleanup == nullptr ? "unknown" : cleanup->instanceState;
-    const auto pendingInvokeCount = cleanup == nullptr ? -1 : cleanup->pendingInvokeCount;
+                                    : (event.cleanup->instanceTicketCleared ? "cleared" : "pending");
+    const auto runtimeState = event.cleanup == nullptr ? "unknown" : event.cleanup->runtimeState;
+    const auto instanceState = event.cleanup == nullptr ? "unknown" : event.cleanup->instanceState;
+    const auto pendingInvokeCount = event.cleanup == nullptr ? -1 : event.cleanup->pendingInvokeCount;
     YRLOG_INFO("frontend_lifecycle operation={} dispatchPhase={} frontendClientID={} tenantID={} requestID={} "
                "traceID={} endpointNodeID={} endpointAddress={} owningProxyID={} instanceID={} attempt={} "
                "transport={} outcome={} retryable={} retryReason={} cleanupOutcome={} cleanupRequestTicket={} "
                "cleanupInstanceTicket={} cleanupRuntimeState={} cleanupInstanceState={} pendingInvokeCount={}",
-               operation, dispatchPhase, context.frontendclientid(), context.tenantid(), context.requestid(),
-               context.traceid(), endpointNodeID, endpointAddress, owningProxyID, instanceID, attempt, transport,
-               outcome, retryable, retryReason, cleanupOutcome, requestTicket, instanceTicket, runtimeState,
-               instanceState, pendingInvokeCount);
+               event.operation, event.dispatchPhase, event.context.frontendclientid(), event.context.tenantid(),
+               event.context.requestid(), event.context.traceid(), event.endpointNodeID, event.endpointAddress,
+               event.owningProxyID, event.instanceID, event.attempt, event.transport, event.outcome, event.retryable,
+               event.retryReason, event.cleanupOutcome, requestTicket, instanceTicket, runtimeState, instanceState,
+               pendingInvokeCount);
 }
+
+#define LogLifecycleEvent(...) LogLifecycleEventImpl(LifecycleEvent{ __VA_ARGS__ })
 
 template <typename T>
 litebus::Option<T> WaitFrontendResult(const litebus::Future<T> &future, ::grpc::ServerContext *context,
                                       uint64_t timeoutMs, bool &cancelled)
 {
     const auto started = std::chrono::steady_clock::now();
-    while (true) {
+    uint64_t elapsed = 0;
+    while (elapsed < timeoutMs) {
         if (context != nullptr && context->IsCancelled()) {
             cancelled = true;
-            return litebus::None();
-        }
-        const auto elapsed = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - started).count());
-        if (elapsed >= timeoutMs) {
             return litebus::None();
         }
         auto result = future.Get(std::min(FRONTEND_WAIT_POLL_MS, timeoutMs - elapsed));
         if (result.IsSome()) {
             return result;
         }
+        elapsed = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - started).count());
     }
+    return litebus::None();
 }
 
 bool HasCreateTenantMismatch(const ::frontend_proxy::CreateInstanceRequest &request)
@@ -177,8 +189,7 @@ SharedStreamMsg CreateInvokeRequest(const ::frontend_proxy::InvokeInstanceReques
     return readyRequest;
 }
 
-class FrontendCallResultRegistry {
-public:
+namespace frontend_call_result_registry {
     struct PendingCall {
         std::shared_ptr<litebus::Promise<SharedStreamMsg>> promise;
         std::string instanceID;
@@ -189,7 +200,19 @@ public:
         litebus::Future<SharedStreamMsg> future;
     };
 
-    static WatchResult Watch(const std::string &requestID, const std::string &instanceID)
+    std::mutex &Mutex()
+    {
+        static std::mutex mutex;
+        return mutex;
+    }
+
+    std::unordered_map<std::string, PendingCall> &Pending()
+    {
+        static std::unordered_map<std::string, PendingCall> pending;
+        return pending;
+    }
+
+    WatchResult Watch(const std::string &requestID, const std::string &instanceID)
     {
         auto promise = std::make_shared<litebus::Promise<SharedStreamMsg>>();
         std::lock_guard<std::mutex> lock(Mutex());
@@ -198,13 +221,13 @@ public:
         return { inserted, promise->GetFuture() };
     }
 
-    static void Cancel(const std::string &requestID, const std::string &instanceID)
+    void Cancel(const std::string &requestID, const std::string &instanceID)
     {
         std::lock_guard<std::mutex> lock(Mutex());
         (void)Pending().erase(BuildPendingKey(instanceID, requestID));
     }
 
-    static std::pair<bool, SharedStreamMsg> Receive(const std::string &, const SharedStreamMsg &request)
+    std::pair<bool, SharedStreamMsg> Receive(const std::string &, const SharedStreamMsg &request)
     {
         if (request == nullptr || !request->has_callresultreq()) {
             return { false, nullptr };
@@ -225,26 +248,14 @@ public:
         return { true, CreateCallResultAck(common::ERR_NONE, "success", request->messageid()) };
     }
 
-    static int64_t PendingCount(const std::string &instanceID)
+    int64_t PendingCount(const std::string &instanceID)
     {
         std::lock_guard<std::mutex> lock(Mutex());
         return static_cast<int64_t>(std::count_if(Pending().begin(), Pending().end(),
             [&instanceID](const auto &entry) { return entry.second.instanceID == instanceID; }));
     }
 
-private:
-    static std::mutex &Mutex()
-    {
-        static std::mutex mutex;
-        return mutex;
-    }
-
-    static std::unordered_map<std::string, PendingCall> &Pending()
-    {
-        static std::unordered_map<std::string, PendingCall> pending;
-        return pending;
-    }
-};
+}  // namespace frontend_call_result_registry
 
 struct KillCleanupObservation {
     FrontendKillCleanupSnapshot snapshot;
@@ -256,13 +267,14 @@ KillCleanupObservation ObserveKillCleanup(const FrontendProxyServiceParam &param
                                           bool killSucceeded)
 {
     KillCleanupObservation observation;
-    observation.snapshot.pendingInvokeCount = FrontendCallResultRegistry::PendingCount(instanceID);
+    observation.snapshot.pendingInvokeCount = frontend_call_result_registry::PendingCount(instanceID);
     if (!param.killCleanupProbe) {
         return observation;
     }
 
     const auto started = std::chrono::steady_clock::now();
-    while (true) {
+    while (std::chrono::steady_clock::now() - started
+           < std::chrono::milliseconds(param.killCleanupTimeoutMs)) {
         const auto elapsed = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - started).count());
         if (elapsed >= param.killCleanupTimeoutMs) {
@@ -277,7 +289,7 @@ KillCleanupObservation ObserveKillCleanup(const FrontendProxyServiceParam &param
             return observation;
         }
         observation.snapshot = snapshot.Get();
-        observation.snapshot.pendingInvokeCount = FrontendCallResultRegistry::PendingCount(instanceID);
+        observation.snapshot.pendingInvokeCount = frontend_call_result_registry::PendingCount(instanceID);
         if (!killSucceeded) {
             observation.outcome = "kill-failed";
             return observation;
@@ -295,6 +307,8 @@ KillCleanupObservation ObserveKillCleanup(const FrontendProxyServiceParam &param
         std::this_thread::sleep_for(std::chrono::milliseconds(
             std::min(FRONTEND_WAIT_POLL_MS, param.killCleanupTimeoutMs - elapsedAfterProbe)));
     }
+    observation.outcome = "incomplete-timeout";
+    return observation;
 }
 
 litebus::Future<SharedStreamMsg> DispatchInvoke(const FrontendProxyServiceParam &param,
@@ -329,7 +343,7 @@ std::optional<litebus::Future<::frontend_proxy::KillInstanceResponse>> DispatchR
 
 FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : param_(std::move(param))
 {
-    InvocationHandler::RegisterFrontendCallResultReceiver(FrontendCallResultRegistry::Receive);
+    InvocationHandler::RegisterFrontendCallResultReceiver(frontend_call_result_registry::Receive);
 }
 
 ::grpc::Status FrontendProxyService::InvokeInstance(::grpc::ServerContext *context,
@@ -339,107 +353,120 @@ FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : 
     if (request == nullptr || response == nullptr) {
         return { ::grpc::StatusCode::INVALID_ARGUMENT, "invalid frontend proxy invoke args" };
     }
-    if (!HasRequiredLifecycleContext(request->context()) || request->invoke().instanceid().empty()) {
-        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
-                  "frontend proxy invoke requires context.frontendClientID, context.requestID, context.tenantID and invoke.instanceID");
+    if (!ValidateInvokeRequest(*request, *response)) {
         return ::grpc::Status::OK;
     }
-    // This is a consistency check only. Authentication of the frontend service
-    // remains a transport/interceptor concern and is not inferred from tenantID.
-    if (HasContextTenantMismatch(request->context())) {
-        SetStatus(response->mutable_status(), common::ERR_AUTHORIZE_FAILED,
+    return DispatchInvokeRequest(context, *request, *response);
+}
+
+bool FrontendProxyService::ValidateInvokeRequest(const ::frontend_proxy::InvokeInstanceRequest &request,
+                                                 ::frontend_proxy::InvokeInstanceResponse &response) const
+{
+    if (!HasRequiredLifecycleContext(request.context()) || request.invoke().instanceid().empty()) {
+        SetStatus(response.mutable_status(), common::ERR_PARAM_INVALID,
+                  "frontend proxy invoke requires context.frontendClientID, context.requestID, context.tenantID and "
+                  "invoke.instanceID");
+        return false;
+    }
+    if (HasContextTenantMismatch(request.context())) {
+        SetStatus(response.mutable_status(), common::ERR_AUTHORIZE_FAILED,
                   "frontend proxy invoke tenant does not match context labels");
-        return ::grpc::Status::OK;
+        return false;
     }
-    if (HasOperationRequestIDMismatch(request->context(), request->invoke().requestid())) {
-        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
+    if (HasOperationRequestIDMismatch(request.context(), request.invoke().requestid())) {
+        SetStatus(response.mutable_status(), common::ERR_PARAM_INVALID,
                   "frontend proxy invoke request id does not match context request id");
-        return ::grpc::Status::OK;
+        return false;
     }
+    return true;
+}
 
-    const auto requestID = request->invoke().requestid().empty() ? request->context().requestid()
-                                                                 : request->invoke().requestid();
-    const auto traceID = request->invoke().traceid().empty() ? request->context().traceid()
-                                                             : request->invoke().traceid();
+::grpc::Status FrontendProxyService::DispatchInvokeRequest(
+    ::grpc::ServerContext *context, const ::frontend_proxy::InvokeInstanceRequest &request,
+    ::frontend_proxy::InvokeInstanceResponse &response)
+{
+    const auto requestID = request.invoke().requestid().empty() ? request.context().requestid()
+                                                               : request.invoke().requestid();
+    const auto traceID = request.invoke().traceid().empty() ? request.context().traceid() : request.invoke().traceid();
     YRLOG_INFO("{}|frontend proxy invoke received by proxy({}), frontendClientID({}), instance({}), traceID({})",
-               requestID, param_.nodeID, request->context().frontendclientid(), request->invoke().instanceid(), traceID);
-    LogLifecycleEvent("invoke", "received", request->context(), param_.nodeID,
-                      request->invoke().instanceid(), "accepted", false, "", "", param_.endpointAddress,
-                      param_.nodeID);
-
-    auto watchResult = FrontendCallResultRegistry::Watch(requestID, request->invoke().instanceid());
+               requestID, param_.nodeID, request.context().frontendclientid(), request.invoke().instanceid(), traceID);
+    LogLifecycleEvent("invoke", "received", request.context(), param_.nodeID, request.invoke().instanceid(),
+                      "accepted", false, "", "", param_.endpointAddress, param_.nodeID);
+    auto watchResult = frontend_call_result_registry::Watch(requestID, request.invoke().instanceid());
     if (!watchResult.registered) {
-        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
+        SetStatus(response.mutable_status(), common::ERR_PARAM_INVALID,
                   "frontend proxy invoke requires a globally unique request id");
         return ::grpc::Status::OK;
     }
-    // Do not encode frontendClientID as the old runtime caller/from identity.
-    // frontendClientID is a system-service management identity; runtime senderid
-    // remains empty for public FaaS frontend invokes.
-    auto invokeFuture = DispatchInvoke(param_, "", CreateInvokeRequest(*request));
+    auto invokeFuture = DispatchInvoke(param_, "", CreateInvokeRequest(request));
     bool invokeCancelled = false;
     auto invokeResponse = WaitFrontendResult(invokeFuture, context, param_.invokeResultTimeoutMs, invokeCancelled);
     if (!invokeResponse.IsSome()) {
-        FrontendCallResultRegistry::Cancel(requestID, request->invoke().instanceid());
-        SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
+        frontend_call_result_registry::Cancel(requestID, request.invoke().instanceid());
+        SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
                   invokeCancelled ? "frontend proxy invoke cancelled with unknown dispatch outcome"
                                   : "frontend proxy invoke timed out with unknown dispatch outcome",
                   false, "post-dispatch-unknown");
-        LogLifecycleEvent("invoke", "terminal", request->context(), param_.nodeID,
-                          request->invoke().instanceid(), invokeCancelled ? "cancelled-unknown" : "timeout-unknown",
+        LogLifecycleEvent("invoke", "terminal", request.context(), param_.nodeID, request.invoke().instanceid(),
+                          invokeCancelled ? "cancelled-unknown" : "timeout-unknown",
                           false, "post-dispatch-unknown", "result-waiter-unregistered", param_.endpointAddress,
                           param_.nodeID);
         return ::grpc::Status::OK;
     }
     if (!invokeResponse.Get()->has_invokersp()) {
-        FrontendCallResultRegistry::Cancel(requestID, request->invoke().instanceid());
-        SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
+        frontend_call_result_registry::Cancel(requestID, request.invoke().instanceid());
+        SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
                   "frontend proxy invoke received invalid call response");
-        LogLifecycleEvent("invoke", "terminal", request->context(), param_.nodeID,
-                          request->invoke().instanceid(), "invalid-response", false, "", "result-waiter-unregistered",
+        LogLifecycleEvent("invoke", "terminal", request.context(), param_.nodeID, request.invoke().instanceid(),
+                          "invalid-response", false, "", "result-waiter-unregistered",
                           param_.endpointAddress, param_.nodeID);
         return ::grpc::Status::OK;
     }
-
-    response->mutable_invoke()->CopyFrom(invokeResponse.Get()->invokersp());
+    response.mutable_invoke()->CopyFrom(invokeResponse.Get()->invokersp());
     if (invokeResponse.Get()->invokersp().code() != common::ERR_NONE) {
-        FrontendCallResultRegistry::Cancel(requestID, request->invoke().instanceid());
-        SetStatus(response->mutable_status(), invokeResponse.Get()->invokersp().code(),
+        frontend_call_result_registry::Cancel(requestID, request.invoke().instanceid());
+        SetStatus(response.mutable_status(), invokeResponse.Get()->invokersp().code(),
                   invokeResponse.Get()->invokersp().message(), true, "call-response-error");
-        LogLifecycleEvent("invoke", "terminal", request->context(), param_.nodeID,
-                          request->invoke().instanceid(), "dispatch-failed", true, "call-response-error",
+        LogLifecycleEvent("invoke", "terminal", request.context(), param_.nodeID, request.invoke().instanceid(),
+                          "dispatch-failed", true, "call-response-error",
                           "result-waiter-unregistered", param_.endpointAddress, param_.nodeID);
         return ::grpc::Status::OK;
     }
+    return AwaitInvokeResult(context, request, response, watchResult.future);
+}
 
+::grpc::Status FrontendProxyService::AwaitInvokeResult(
+    ::grpc::ServerContext *context, const ::frontend_proxy::InvokeInstanceRequest &request,
+    ::frontend_proxy::InvokeInstanceResponse &response, const litebus::Future<SharedStreamMsg> &resultFuture)
+{
+    const auto requestID = request.invoke().requestid().empty() ? request.context().requestid()
+                                                               : request.invoke().requestid();
     bool resultCancelled = false;
-    auto callResult = WaitFrontendResult(watchResult.future, context, param_.invokeResultTimeoutMs, resultCancelled);
+    auto callResult = WaitFrontendResult(resultFuture, context, param_.invokeResultTimeoutMs, resultCancelled);
     if (!callResult.IsSome()) {
-        FrontendCallResultRegistry::Cancel(requestID, request->invoke().instanceid());
-        SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
+        frontend_call_result_registry::Cancel(requestID, request.invoke().instanceid());
+        SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
                   resultCancelled ? "frontend proxy invoke cancelled while result outcome is unknown"
                                   : "frontend proxy invoke timed out while result outcome is unknown",
                   false, "post-dispatch-unknown");
-        LogLifecycleEvent("invoke", "terminal", request->context(), param_.nodeID,
-                          request->invoke().instanceid(), resultCancelled ? "cancelled-unknown" : "timeout-unknown",
+        LogLifecycleEvent("invoke", "terminal", request.context(), param_.nodeID, request.invoke().instanceid(),
+                          resultCancelled ? "cancelled-unknown" : "timeout-unknown",
                           false, "post-dispatch-unknown", "result-waiter-unregistered", param_.endpointAddress,
                           param_.nodeID);
         return ::grpc::Status::OK;
     }
     if (!callResult.Get()->has_callresultreq()) {
-        SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
+        SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
                   "frontend proxy invoke received invalid call result");
-        LogLifecycleEvent("invoke", "terminal", request->context(), param_.nodeID,
-                          request->invoke().instanceid(), "invalid-result", false, "", "", param_.endpointAddress,
+        LogLifecycleEvent("invoke", "terminal", request.context(), param_.nodeID, request.invoke().instanceid(),
+                          "invalid-result", false, "", "", param_.endpointAddress,
                           param_.nodeID);
         return ::grpc::Status::OK;
     }
-
-    response->mutable_callresult()->CopyFrom(callResult.Get()->callresultreq());
-    SetStatus(response->mutable_status(), callResult.Get()->callresultreq().code(),
+    response.mutable_callresult()->CopyFrom(callResult.Get()->callresultreq());
+    SetStatus(response.mutable_status(), callResult.Get()->callresultreq().code(),
               callResult.Get()->callresultreq().message());
-    LogLifecycleEvent("invoke", "terminal", request->context(), param_.nodeID,
-                      request->invoke().instanceid(),
+    LogLifecycleEvent("invoke", "terminal", request.context(), param_.nodeID, request.invoke().instanceid(),
                       callResult.Get()->callresultreq().code() == common::ERR_NONE ? "success" : "failed", false,
                       "", "", param_.endpointAddress, param_.nodeID);
     return ::grpc::Status::OK;
@@ -452,85 +479,75 @@ FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : 
     if (request == nullptr || response == nullptr) {
         return { ::grpc::StatusCode::INVALID_ARGUMENT, "invalid frontend proxy create args" };
     }
-    if (!HasRequiredLifecycleContext(request->context()) || request->create().function().empty()) {
-        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
-                  "frontend proxy create requires context.frontendClientID, context.requestID, context.tenantID and create.function");
+    if (!ValidateCreateRequest(*request, *response)) {
         return ::grpc::Status::OK;
     }
-    const auto &createOptions = request->create().createoptions();
+    return DispatchCreateRequest(context, *request, *response);
+}
+
+bool FrontendProxyService::ValidateCreateRequest(const ::frontend_proxy::CreateInstanceRequest &request,
+                                                 ::frontend_proxy::CreateInstanceResponse &response) const
+{
+    if (!HasRequiredLifecycleContext(request.context()) || request.create().function().empty()) {
+        SetStatus(response.mutable_status(), common::ERR_PARAM_INVALID,
+                  "frontend proxy create requires context.frontendClientID, context.requestID, context.tenantID and "
+                  "create.function");
+        return false;
+    }
+    const auto &createOptions = request.create().createoptions();
     const auto sourceIter = createOptions.find(FRONTEND_CREATE_SOURCE_KEY);
     if (sourceIter == createOptions.end() || sourceIter->second != FRONTEND_CREATE_SOURCE_VALUE) {
-        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
+        SetStatus(response.mutable_status(), common::ERR_PARAM_INVALID,
                   "frontend proxy create requires create.createOptions source=frontend");
-        return ::grpc::Status::OK;
+        return false;
     }
-    if (HasCreateTenantMismatch(*request)) {
-        SetStatus(response->mutable_status(), common::ERR_AUTHORIZE_FAILED,
+    if (HasCreateTenantMismatch(request)) {
+        SetStatus(response.mutable_status(), common::ERR_AUTHORIZE_FAILED,
                   "frontend proxy create tenant does not match create options");
-        return ::grpc::Status::OK;
+        return false;
     }
-    if (HasOperationRequestIDMismatch(request->context(), request->create().requestid())) {
-        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
+    if (HasOperationRequestIDMismatch(request.context(), request.create().requestid())) {
+        SetStatus(response.mutable_status(), common::ERR_PARAM_INVALID,
                   "frontend proxy create request id does not match context request id");
-        return ::grpc::Status::OK;
+        return false;
     }
+    return true;
+}
 
+::grpc::Status FrontendProxyService::DispatchCreateRequest(
+    ::grpc::ServerContext *context, const ::frontend_proxy::CreateInstanceRequest &request,
+    ::frontend_proxy::CreateInstanceResponse &response)
+{
     YRLOG_INFO("{}|frontend proxy create received by proxy({}), frontendClientID({}), function({})",
-               request->context().requestid(), param_.nodeID, request->context().frontendclientid(),
-               request->create().function());
-    LogLifecycleEvent("create", "received", request->context(), param_.nodeID, "", "accepted", false, "", "",
+               request.context().requestid(), param_.nodeID, request.context().frontendclientid(),
+               request.create().function());
+    LogLifecycleEvent("create", "received", request.context(), param_.nodeID, "", "accepted", false, "", "",
                       param_.endpointAddress, param_.nodeID);
-    auto createFuture = DispatchReadyCreate(param_, *request);
+    auto createFuture = DispatchReadyCreate(param_, request);
     if (createFuture.has_value()) {
         bool cancelled = false;
         auto createResponse = WaitFrontendResult(createFuture.value(), context, param_.invokeResultTimeoutMs,
                                                  cancelled);
         if (!createResponse.IsSome() || !createResponse.Get().has_create()) {
             if (param_.createWaitCanceller) {
-                param_.createWaitCanceller(request->context().requestid(),
+                param_.createWaitCanceller(request.context().requestid(),
                                            cancelled ? "grpc client cancelled" : "frontend create timed out");
             }
-            SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
+            SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
                       cancelled ? "frontend proxy create cancelled while schedule outcome is unknown"
                                 : "frontend proxy create timed out while schedule outcome is unknown",
                       false, "post-dispatch-unknown");
-            LogLifecycleEvent("create", "terminal", request->context(), param_.nodeID, "",
+            LogLifecycleEvent("create", "terminal", request.context(), param_.nodeID, "",
                               cancelled ? "cancelled-unknown" : "timeout-unknown", false,
                               "post-dispatch-unknown", "ready-waiter-unregistered", param_.endpointAddress,
                               param_.nodeID);
             return ::grpc::Status::OK;
         }
-        response->CopyFrom(createResponse.Get());
-        const auto &createRsp = response->create();
-        if (createRsp.code() == common::ERR_NONE && createRsp.instanceid().empty()) {
-            SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
-                      "frontend proxy create response missing instance id");
-            return ::grpc::Status::OK;
-        }
-        if (createRsp.code() == common::ERR_NONE) {
-            if (response->routeaddress().empty()) {
-                response->set_routeaddress(param_.nodeID);
-            }
-        }
-        SetStatus(response->mutable_status(), createRsp.code(), createRsp.message());
-        const auto owningProxyID = response->has_callresult() && response->callresult().has_runtimeinfo()
-                                       ? response->callresult().runtimeinfo().proxyid()
-                                       : param_.nodeID;
-        LogLifecycleEvent("create", "terminal", request->context(), param_.nodeID, createRsp.instanceid(),
-                          createRsp.code() == common::ERR_NONE ? "success" : "failed", false, "", "",
-                          response->routeaddress().empty() ? param_.endpointAddress : response->routeaddress(),
-                          owningProxyID);
-        if (response->has_callresult()) {
-            LogLifecycleEvent(FrontendProxyService::READY_OPERATION, "terminal", request->context(), param_.nodeID,
-                              createRsp.instanceid(),
-                              response->callresult().code() == common::ERR_NONE ? "success" : "failed", false, "",
-                              "", response->routeaddress().empty() ? param_.endpointAddress : response->routeaddress(),
-                              owningProxyID);
-        }
-        return ::grpc::Status::OK;
+        response.CopyFrom(createResponse.Get());
+        return FinalizeCreateResponse(request, response);
     }
     if (param_.enableCreateDispatch) {
-        SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
+        SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
                   FRONTEND_PROXY_CREATE_READY_NOT_WIRED, false, "control-path-not-wired");
         return ::grpc::Status::OK;
     }
@@ -541,8 +558,37 @@ FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : 
     // Keep the proto/API shape for future control-plane work, but force callers
     // to use the reviewed libruntime fallback until ready-notify semantics and
     // frontend caller identity are designed end-to-end.
-    SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
+    SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
               FRONTEND_PROXY_CONTROL_NOT_WIRED, false, "control-path-not-wired");
+    return ::grpc::Status::OK;
+}
+
+::grpc::Status FrontendProxyService::FinalizeCreateResponse(
+    const ::frontend_proxy::CreateInstanceRequest &request, ::frontend_proxy::CreateInstanceResponse &response)
+{
+    const auto &createRsp = response.create();
+    if (createRsp.code() == common::ERR_NONE && createRsp.instanceid().empty()) {
+        SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
+                  "frontend proxy create response missing instance id");
+        return ::grpc::Status::OK;
+    }
+    if (createRsp.code() == common::ERR_NONE && response.routeaddress().empty()) {
+        response.set_routeaddress(param_.nodeID);
+    }
+    SetStatus(response.mutable_status(), createRsp.code(), createRsp.message());
+    const auto owningProxyID = response.has_callresult() && response.callresult().has_runtimeinfo()
+                                   ? response.callresult().runtimeinfo().proxyid()
+                                   : param_.nodeID;
+    const auto routeAddress = response.routeaddress().empty() ? param_.endpointAddress : response.routeaddress();
+    LogLifecycleEvent("create", "terminal", request.context(), param_.nodeID, createRsp.instanceid(),
+                      createRsp.code() == common::ERR_NONE ? "success" : "failed", false, "", "", routeAddress,
+                      owningProxyID);
+    if (response.has_callresult()) {
+        LogLifecycleEvent(FrontendProxyService::readyOperation, "terminal", request.context(), param_.nodeID,
+                          createRsp.instanceid(),
+                          response.callresult().code() == common::ERR_NONE ? "success" : "failed", false, "", "",
+                          routeAddress, owningProxyID);
+    }
     return ::grpc::Status::OK;
 }
 
@@ -553,62 +599,76 @@ FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : 
     if (request == nullptr || response == nullptr) {
         return { ::grpc::StatusCode::INVALID_ARGUMENT, "invalid frontend proxy kill args" };
     }
-    if (!HasRequiredLifecycleContext(request->context()) || request->kill().instanceid().empty()) {
-        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
-                  "frontend proxy kill requires context.frontendClientID, context.requestID, context.tenantID and kill.instanceID");
+    if (!ValidateKillRequest(*request, *response)) {
         return ::grpc::Status::OK;
     }
-    if (HasOperationRequestIDMismatch(request->context(), request->kill().requestid())) {
-        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
-                  "frontend proxy kill request id does not match context request id");
-        return ::grpc::Status::OK;
-    }
+    return DispatchKillRequest(context, *request, *response);
+}
 
+bool FrontendProxyService::ValidateKillRequest(const ::frontend_proxy::KillInstanceRequest &request,
+                                               ::frontend_proxy::KillInstanceResponse &response) const
+{
+    if (!HasRequiredLifecycleContext(request.context()) || request.kill().instanceid().empty()) {
+        SetStatus(response.mutable_status(), common::ERR_PARAM_INVALID,
+                  "frontend proxy kill requires context.frontendClientID, context.requestID, context.tenantID and "
+                  "kill.instanceID");
+        return false;
+    }
+    if (HasOperationRequestIDMismatch(request.context(), request.kill().requestid())) {
+        SetStatus(response.mutable_status(), common::ERR_PARAM_INVALID,
+                  "frontend proxy kill request id does not match context request id");
+        return false;
+    }
+    return true;
+}
+
+::grpc::Status FrontendProxyService::DispatchKillRequest(
+    ::grpc::ServerContext *context, const ::frontend_proxy::KillInstanceRequest &request,
+    ::frontend_proxy::KillInstanceResponse &response)
+{
     YRLOG_INFO("{}|frontend proxy kill received by proxy({}), frontendClientID({}), instance({})",
-               request->context().requestid(), param_.nodeID, request->context().frontendclientid(),
-               request->kill().instanceid());
-    LogLifecycleEvent("kill", "received", request->context(), param_.nodeID, request->kill().instanceid(),
+               request.context().requestid(), param_.nodeID, request.context().frontendclientid(),
+               request.kill().instanceid());
+    LogLifecycleEvent("kill", "received", request.context(), param_.nodeID, request.kill().instanceid(),
                       "accepted", false, "", "", param_.endpointAddress, param_.nodeID);
-    auto killFuture = DispatchReadyKill(param_, *request);
+    auto killFuture = DispatchReadyKill(param_, request);
     if (killFuture.has_value()) {
         bool cancelled = false;
         auto killResponse = WaitFrontendResult(killFuture.value(), context, param_.invokeResultTimeoutMs,
                                                cancelled);
         if (!killResponse.IsSome() || !killResponse.Get().has_kill()) {
-            SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
+            SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
                       cancelled ? "frontend proxy kill cancelled with unknown dispatch outcome"
                                 : "frontend proxy kill timed out with unknown dispatch outcome",
                       false, "post-dispatch-unknown");
-            LogLifecycleEvent("kill", "terminal", request->context(), param_.nodeID,
-                              request->kill().instanceid(),
+            LogLifecycleEvent("kill", "terminal", request.context(), param_.nodeID, request.kill().instanceid(),
                               cancelled ? "cancelled-unknown" : "timeout-unknown", false,
                               "post-dispatch-unknown", "dispatch-outcome-unknown", param_.endpointAddress,
                               param_.nodeID);
             return ::grpc::Status::OK;
         }
-        response->CopyFrom(killResponse.Get());
-        const bool routeStale = response->kill().code() == common::ERR_INSTANCE_NOT_FOUND
-                                && response->kill().message() == FRONTEND_KILL_ROUTE_STALE_MESSAGE;
-        const bool ownerUnknown = response->kill().code() == common::ERR_INSTANCE_NOT_FOUND && !routeStale;
-        SetStatus(response->mutable_status(), response->kill().code(), response->kill().message(), routeStale,
+        response.CopyFrom(killResponse.Get());
+        const bool routeStale = response.kill().code() == common::ERR_INSTANCE_NOT_FOUND
+                                && response.kill().message() == FRONTEND_KILL_ROUTE_STALE_MESSAGE;
+        const bool ownerUnknown = response.kill().code() == common::ERR_INSTANCE_NOT_FOUND && !routeStale;
+        SetStatus(response.mutable_status(), response.kill().code(), response.kill().message(), routeStale,
                   routeStale ? "route-stale" : (ownerUnknown ? "owner-unknown" : ""));
-        const auto cleanup = ObserveKillCleanup(param_, context, request->context().requestid(),
-                                                request->kill().instanceid(),
-                                                response->kill().code() == common::ERR_NONE);
-        LogLifecycleEvent("kill", "terminal", request->context(), param_.nodeID,
-                          request->kill().instanceid(),
-                          response->kill().code() == common::ERR_NONE ? "success" : "failed", routeStale,
+        const auto cleanup = ObserveKillCleanup(
+            param_, context, request.context().requestid(), request.kill().instanceid(),
+            response.kill().code() == common::ERR_NONE);
+        LogLifecycleEvent("kill", "terminal", request.context(), param_.nodeID, request.kill().instanceid(),
+                          response.kill().code() == common::ERR_NONE ? "success" : "failed", routeStale,
                           routeStale ? "route-stale" : (ownerUnknown ? "owner-unknown" : ""), cleanup.outcome,
-                          param_.endpointAddress, param_.nodeID, 1, FrontendProxyService::LIFECYCLE_TRANSPORT,
+                          param_.endpointAddress, param_.nodeID, 1, FrontendProxyService::lifecycleTransport,
                           &cleanup.snapshot);
         return ::grpc::Status::OK;
     }
     if (param_.enableKillDispatch) {
-        SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
+        SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
                   FRONTEND_PROXY_KILL_READY_NOT_WIRED, false, "control-path-not-wired");
         return ::grpc::Status::OK;
     }
-    SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
+    SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
               FRONTEND_PROXY_CONTROL_NOT_WIRED, false, "control-path-not-wired");
     return ::grpc::Status::OK;
 }
@@ -634,5 +694,7 @@ void FrontendProxyService::SetStatus(::frontend_proxy::FrontendProxyStatus *stat
     status->set_retryable(retryable);
     status->set_retryreason(retryReason);
 }
+
+#undef LogLifecycleEvent
 
 }  // namespace functionsystem::local_scheduler

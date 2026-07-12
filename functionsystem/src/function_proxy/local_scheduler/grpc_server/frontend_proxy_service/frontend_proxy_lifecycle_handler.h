@@ -49,17 +49,23 @@ using FrontendProxyKillInvoker =
                                                 const std::shared_ptr<KillRequest> &)>;
 using FrontendProxyKillCleanupProbe = FrontendProxyServiceParam::KillCleanupProbe;
 
+struct FrontendProxyServiceBindings {
+    bool enableCreateDispatch { false };
+    FrontendProxyCreateReadyScheduler scheduler;
+    FrontendProxyReadyUnregister readyUnregister;
+    bool enableKillDispatch { false };
+    FrontendProxyKillInvoker killInvoker;
+    FrontendProxyKillCleanupProbe killCleanupProbe;
+};
+
 FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDispatcher(
     const FrontendProxyCreateReadyScheduler &scheduler);
 
 FrontendProxyServiceParam::KillReadyDispatcher BuildFrontendProxyKillReadyDispatcher(
     const FrontendProxyKillInvoker &killInvoker);
 
-FrontendProxyServiceParam BuildFrontendProxyServiceParam(
-    const std::string &nodeID, bool enableCreateDispatch, const FrontendProxyCreateReadyScheduler &scheduler,
-    const FrontendProxyReadyUnregister &readyUnregister, bool enableKillDispatch,
-    const FrontendProxyKillInvoker &killInvoker,
-    const FrontendProxyKillCleanupProbe &killCleanupProbe = nullptr);
+FrontendProxyServiceParam BuildFrontendProxyServiceParam(const std::string &nodeID,
+                                                         const FrontendProxyServiceBindings &bindings);
 
 FrontendProxyServiceParam BuildFrontendProxyServiceParam(const std::string &nodeID, bool enableKillDispatch,
                                                          const FrontendProxyKillInvoker &killInvoker);

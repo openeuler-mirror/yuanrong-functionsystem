@@ -246,6 +246,9 @@ public:
     litebus::Future<CallResultAck> ClearCreateCallResultPromises(const litebus::Future<CallResultAck> &future,
                                                                  const std::string &from);
 
+    InstanceReadyCallResultCallBack TakeFrontendReadyCallback(
+        const std::string &srcInstance, const std::shared_ptr<functionsystem::CallResult> &callResult);
+
     virtual litebus::Future<CallResultAck> SendCallResult(
         const std::string &srcInstance,
         const std::string &dstInstance, const std::string &dstProxyID,

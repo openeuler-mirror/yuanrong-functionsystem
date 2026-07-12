@@ -455,8 +455,9 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
     std::shared_ptr<BusService> busService = std::make_shared<BusService>(std::move(serviceParam));
     posixGrpcServer_->RegisterService(busService);
     if (param_.enableFrontendProxyService) {
-        auto frontendServiceParam = BuildFrontendProxyServiceParam(
-            param_.nodeID, true,
+        FrontendProxyServiceBindings bindings;
+        bindings.enableCreateDispatch = true;
+        bindings.scheduler =
             [instanceCtrl(instanceCtrl_)](
                 const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
                 const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
@@ -469,13 +470,15 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
                 }
                 scheduleReq->mutable_instance()->set_parentfunctionproxyaid(instanceCtrl->GetActorAID());
                 return instanceCtrl->ScheduleFrontendAndWaitReady(scheduleReq, runtimePromise, std::move(callback));
-            },
+            };
+        bindings.readyUnregister =
             [instanceCtrl(instanceCtrl_)](const std::string &requestID, const std::string &reason) {
                 if (instanceCtrl != nullptr) {
                     instanceCtrl->UnregisterFrontendReadyWait(requestID, reason);
                 }
-            },
-            true,
+            };
+        bindings.enableKillDispatch = true;
+        bindings.killInvoker =
             [instanceCtrl(instanceCtrl_)](const std::string &caller, const std::string &tenantID,
                                          const std::shared_ptr<KillRequest> &killReq) {
                 if (instanceCtrl == nullptr) {
@@ -486,14 +489,16 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
                 }
                 (void)caller;
                 return instanceCtrl->KillFrontend(tenantID, killReq);
-            },
+            };
+        bindings.killCleanupProbe =
             [instanceCtrl(instanceCtrl_)](const std::string &requestID, const std::string &instanceID) {
                 if (instanceCtrl == nullptr) {
                     FrontendKillCleanupSnapshot snapshot;
                     return litebus::Future<FrontendKillCleanupSnapshot>(snapshot);
                 }
                 return instanceCtrl->ProbeFrontendKillCleanup(requestID, instanceID);
-            });
+            };
+        auto frontendServiceParam = BuildFrontendProxyServiceParam(param_.nodeID, bindings);
         frontendServiceParam.endpointAddress = param_.ip + ":" + param_.posixPort;
         // Lifecycle create/kill use reviewed ready dispatcher seams when the single
         // frontend-proxy service switch is enabled. Legacy stream dispatchers remain disallowed.

@@ -648,8 +648,8 @@ litebus::Future<KillResponse> InstanceCtrlActor::KillFrontend(const std::string 
     }
     frontendKillRuntimeEvidence_[killReq->instanceid()] = { killReq->requestid(), "not-started" };
     (void)litebus::AsyncAfter(FRONTEND_KILL_EVIDENCE_TTL_MS, GetAID(),
-                             &InstanceCtrlActor::ExpireFrontendKillRuntimeEvidence, killReq->instanceid(),
-                             killReq->requestid());
+                              &InstanceCtrlActor::ExpireFrontendKillRuntimeEvidence, killReq->instanceid(),
+                              killReq->requestid());
     return Kill("", killReq, false);
 }
 
@@ -691,7 +691,8 @@ FrontendKillCleanupSnapshot InstanceCtrlActor::ProbeFrontendKillCleanup(const st
             snapshot.instanceState = "fatal";
             break;
         default:
-            snapshot.instanceState = "non-terminal-" + std::to_string(static_cast<int32_t>(stateMachine->GetInstanceState()));
+            snapshot.instanceState =
+                "non-terminal-" + std::to_string(static_cast<int32_t>(stateMachine->GetInstanceState()));
             break;
     }
     return snapshot;
@@ -3108,11 +3109,10 @@ litebus::Future<CallResultAck> InstanceCtrlActor::ClearCreateCallResultPromises(
     return future;
 }
 
-litebus::Future<CallResultAck> InstanceCtrlActor::SendCallResult(
-    const std::string &srcInstance, const std::string &dstInstance, const std::string &dstProxyID,
-    const std::shared_ptr<functionsystem::CallResult> &callResult)
+InstanceReadyCallResultCallBack InstanceCtrlActor::TakeFrontendReadyCallback(
+    const std::string &srcInstance, const std::shared_ptr<functionsystem::CallResult> &callResult)
 {
-    auto requestID(callResult->requestid());
+    const auto &requestID = callResult->requestid();
     InstanceReadyCallResultCallBack callback;
     if (auto iter = instanceRegisteredReadyCallResultCallback_.find(requestID);
         iter != instanceRegisteredReadyCallResultCallback_.end()) {
@@ -3129,6 +3129,15 @@ litebus::Future<CallResultAck> InstanceCtrlActor::SendCallResult(
             EraseReadyCallResultCallbackByInstanceID(callResult->instanceid());
         }
     }
+    return callback;
+}
+
+litebus::Future<CallResultAck> InstanceCtrlActor::SendCallResult(
+    const std::string &srcInstance, const std::string &dstInstance, const std::string &dstProxyID,
+    const std::shared_ptr<functionsystem::CallResult> &callResult)
+{
+    auto requestID(callResult->requestid());
+    auto callback = TakeFrontendReadyCallback(srcInstance, callResult);
     if (callback != nullptr) {
         YRLOG_INFO("{}|{}| the frontend-created instance is ready. callback is performed. code:{} msg:{}",
                    requestID, srcInstance, fmt::underlying(callResult->code()), callResult->message());

@@ -31,13 +31,16 @@
 namespace functionsystem::local_scheduler {
 
 struct FrontendProxyServiceParam {
-    using InvokeDispatcher = std::function<litebus::Future<SharedStreamMsg>(const std::string &, const SharedStreamMsg &)>;
-    using CreateDispatcher = std::function<litebus::Future<SharedStreamMsg>(const std::string &, const SharedStreamMsg &)>;
+    using InvokeDispatcher =
+        std::function<litebus::Future<SharedStreamMsg>(const std::string &, const SharedStreamMsg &)>;
+    using CreateDispatcher =
+        std::function<litebus::Future<SharedStreamMsg>(const std::string &, const SharedStreamMsg &)>;
     using CreateReadyDispatcher =
         std::function<litebus::Future<::frontend_proxy::CreateInstanceResponse>(
             const ::frontend_proxy::CreateInstanceRequest &)>;
     using CreateWaitCanceller = std::function<void(const std::string &, const std::string &)>;
-    using KillDispatcher = std::function<litebus::Future<SharedStreamMsg>(const std::string &, const SharedStreamMsg &)>;
+    using KillDispatcher =
+        std::function<litebus::Future<SharedStreamMsg>(const std::string &, const SharedStreamMsg &)>;
     using KillReadyDispatcher =
         std::function<litebus::Future<::frontend_proxy::KillInstanceResponse>(
             const ::frontend_proxy::KillInstanceRequest &)>;
@@ -76,8 +79,8 @@ struct FrontendProxyServiceParam {
 // system services and must not be registered as runtime stream clients.
 class FrontendProxyService final : public frontend_proxy::FrontendProxyService::Service {
 public:
-    inline static constexpr const char *LIFECYCLE_TRANSPORT = "raw-unary";
-    inline static constexpr const char *READY_OPERATION = "ready";
+    inline static constexpr const char *lifecycleTransport = "raw-unary";
+    inline static constexpr const char *readyOperation = "ready";
 
     explicit FrontendProxyService(FrontendProxyServiceParam &&param);
     ~FrontendProxyService() override = default;
@@ -95,6 +98,27 @@ public:
                                 ::frontend_proxy::KillInstanceResponse *response) override;
 
 private:
+    bool ValidateInvokeRequest(const ::frontend_proxy::InvokeInstanceRequest &request,
+                               ::frontend_proxy::InvokeInstanceResponse &response) const;
+    ::grpc::Status DispatchInvokeRequest(::grpc::ServerContext *context,
+                                         const ::frontend_proxy::InvokeInstanceRequest &request,
+                                         ::frontend_proxy::InvokeInstanceResponse &response);
+    ::grpc::Status AwaitInvokeResult(::grpc::ServerContext *context,
+                                     const ::frontend_proxy::InvokeInstanceRequest &request,
+                                     ::frontend_proxy::InvokeInstanceResponse &response,
+                                     const litebus::Future<SharedStreamMsg> &resultFuture);
+    bool ValidateCreateRequest(const ::frontend_proxy::CreateInstanceRequest &request,
+                               ::frontend_proxy::CreateInstanceResponse &response) const;
+    ::grpc::Status DispatchCreateRequest(::grpc::ServerContext *context,
+                                         const ::frontend_proxy::CreateInstanceRequest &request,
+                                         ::frontend_proxy::CreateInstanceResponse &response);
+    ::grpc::Status FinalizeCreateResponse(const ::frontend_proxy::CreateInstanceRequest &request,
+                                          ::frontend_proxy::CreateInstanceResponse &response);
+    bool ValidateKillRequest(const ::frontend_proxy::KillInstanceRequest &request,
+                             ::frontend_proxy::KillInstanceResponse &response) const;
+    ::grpc::Status DispatchKillRequest(::grpc::ServerContext *context,
+                                       const ::frontend_proxy::KillInstanceRequest &request,
+                                       ::frontend_proxy::KillInstanceResponse &response);
     static bool HasRequiredContext(const ::frontend_proxy::FrontendRequestContext &context);
     static bool HasRequiredLifecycleContext(const ::frontend_proxy::FrontendRequestContext &context);
     static void SetStatus(::frontend_proxy::FrontendProxyStatus *status, common::ErrorCode code,

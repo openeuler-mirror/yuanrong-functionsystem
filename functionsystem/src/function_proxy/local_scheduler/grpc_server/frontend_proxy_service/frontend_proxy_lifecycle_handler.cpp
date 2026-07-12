@@ -76,8 +76,8 @@ FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDi
 {
     return [scheduler](const ::frontend_proxy::CreateInstanceRequest &request) {
         if (!scheduler) {
-            return litebus::Future<::frontend_proxy::CreateInstanceResponse>(
-                BuildCreateResponse(common::ERR_INNER_SYSTEM_ERROR, "frontend proxy create scheduler is not configured"));
+            return litebus::Future<::frontend_proxy::CreateInstanceResponse>(BuildCreateResponse(
+                common::ERR_INNER_SYSTEM_ERROR, "frontend proxy create scheduler is not configured"));
         }
         auto scheduleReq = BuildFrontendScheduleRequest(request);
         auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
@@ -89,8 +89,8 @@ FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDi
         return scheduler(scheduleReq, runtimePromise,
                          [readyPromise](const std::shared_ptr<functionsystem::CallResult> &readyResult)
                              -> litebus::Future<CallResultAck> {
-                             readyPromise->SetValue(readyResult);
-                             return CallResultAck();
+            readyPromise->SetValue(readyResult);
+            return CallResultAck();
                          })
             .Then([scheduleReq, readyFuture](const messages::ScheduleResponse &scheduleResponse) {
                 auto response = BuildCreateResponse(scheduleResponse);
@@ -153,22 +153,20 @@ FrontendProxyServiceParam::KillReadyDispatcher BuildFrontendProxyKillReadyDispat
     };
 }
 
-FrontendProxyServiceParam BuildFrontendProxyServiceParam(
-    const std::string &nodeID, bool enableCreateDispatch, const FrontendProxyCreateReadyScheduler &scheduler,
-    const FrontendProxyReadyUnregister &readyUnregister, bool enableKillDispatch,
-    const FrontendProxyKillInvoker &killInvoker, const FrontendProxyKillCleanupProbe &killCleanupProbe)
+FrontendProxyServiceParam BuildFrontendProxyServiceParam(const std::string &nodeID,
+                                                         const FrontendProxyServiceBindings &bindings)
 {
     FrontendProxyServiceParam param;
     param.nodeID = nodeID;
-    param.enableCreateDispatch = enableCreateDispatch;
-    if (enableCreateDispatch) {
-        param.createReadyDispatcher = BuildFrontendProxyCreateReadyDispatcher(scheduler);
-        param.createWaitCanceller = readyUnregister;
+    param.enableCreateDispatch = bindings.enableCreateDispatch;
+    if (bindings.enableCreateDispatch) {
+        param.createReadyDispatcher = BuildFrontendProxyCreateReadyDispatcher(bindings.scheduler);
+        param.createWaitCanceller = bindings.readyUnregister;
     }
-    param.enableKillDispatch = enableKillDispatch;
-    if (enableKillDispatch) {
-        param.killReadyDispatcher = BuildFrontendProxyKillReadyDispatcher(killInvoker);
-        param.killCleanupProbe = killCleanupProbe;
+    param.enableKillDispatch = bindings.enableKillDispatch;
+    if (bindings.enableKillDispatch) {
+        param.killReadyDispatcher = BuildFrontendProxyKillReadyDispatcher(bindings.killInvoker);
+        param.killCleanupProbe = bindings.killCleanupProbe;
     }
     return param;
 }
@@ -176,8 +174,8 @@ FrontendProxyServiceParam BuildFrontendProxyServiceParam(
 FrontendProxyServiceParam BuildFrontendProxyServiceParam(const std::string &nodeID, bool enableKillDispatch,
                                                          const FrontendProxyKillInvoker &killInvoker)
 {
-    return BuildFrontendProxyServiceParam(nodeID, false, nullptr, nullptr, enableKillDispatch, killInvoker,
-                                          nullptr);
+    return BuildFrontendProxyServiceParam(
+        nodeID, { false, nullptr, nullptr, enableKillDispatch, killInvoker, nullptr });
 }
 
 }  // namespace functionsystem::local_scheduler
