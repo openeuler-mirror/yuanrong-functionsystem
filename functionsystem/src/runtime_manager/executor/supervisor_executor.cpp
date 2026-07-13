@@ -18,6 +18,8 @@
 
 #include <sys/un.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <sstream>
 #include <utility>
@@ -42,6 +44,8 @@ constexpr int64_t HTTP_TIMEOUT_MS = 30000;
 const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 const std::string SUPERVISOR_SANDBOX_PREFIX = "/api/v1/sandboxes";
 const std::string SUPERVISOR_UDS_SOCKET = "/run/jiuwenbox/jiuwenbox.sock";
+constexpr size_t HTTP_HEADER_SEPARATOR_LEN = 4;   // length of "\r\n\r\n"
+constexpr size_t CONTENT_LENGTH_PREFIX_LEN = 15;   // length of "content-length:"
 
 SupervisorExecutor::SupervisorExecutor(const std::string &name, const litebus::AID &functionAgentAID)
     : Executor(name), functionAgentAID_(functionAgentAID)
@@ -74,7 +78,7 @@ void SupervisorExecutor::ParseResponse(litebus::Promise<nlohmann::json> promise,
         promise.SetValue(nlohmann::json::object());
         return;
     }
-    std::string respBody = response.substr(headerEnd + 4);
+    std::string respBody = response.substr(headerEnd + HTTP_HEADER_SEPARATOR_LEN);
     if (respBody.empty()) {
         YRLOG_ERROR("HTTP response body is empty");
         promise.SetValue(nlohmann::json::object());
@@ -103,50 +107,70 @@ litebus::Future<nlohmann::json> SupervisorExecutor::SendRequestToSupervisor(cons
         return result;
     }
     std::string httpRequest = BuildUdsHttpRequest(method, path, body.dump());
-    if (ssize_t sent = send(fd, httpRequest.c_str(), httpRequest.length(), 0);
-        sent < 0 || static_cast<size_t>(sent) != httpRequest.length()) {
-        YRLOG_ERROR("failed to send request to UDS socket: {}", std::strerror(errno));
+    if (!SendUdsRequest(fd, httpRequest)) {
         (void)close(fd);
         promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
         return result;
     }
     // Receive response
     std::string response;
-    char buf[4096];
-    ssize_t received;
-    while ((received = recv(fd, buf, sizeof(buf) - 1, 0)) > 0) {
-        buf[received] = '\0';
-        response += buf;
-        // Check if we have complete HTTP response (headers + body)
-        size_t headerEnd = response.find("\r\n\r\n");
-        if (headerEnd == std::string::npos) {
-            continue;
-        }
-        std::string headers = response.substr(0, headerEnd);
-        size_t bodyStart = headerEnd + 4;
-        // Parse Content-Length from headers
-        size_t contentLengthPos = headers.find("Content-Length:");
-        if (contentLengthPos == std::string::npos) {
-            // No Content-Length, assume we have complete response if connection closed
-            break;
-        }
-        size_t crlfPos = headers.find("\r\n", contentLengthPos);
-        std::string contentLengthStr = headers.substr(contentLengthPos + 15, crlfPos - contentLengthPos - 15);
-        size_t contentLength = std::stoul(contentLengthStr);
-        if (response.length() - bodyStart >= contentLength) {
-            break;
-        }
-    }
-    if (received < 0) {
-        YRLOG_ERROR("failed to receive response from UDS socket: {}", std::strerror(errno));
+    if (!ReceiveUdsResponse(fd, response)) {
         (void)close(fd);
         promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
         return result;
     }
     (void)close(fd);
-    // Parse HTTP response
     ParseResponse(promise, response);
     return result;
+}
+
+bool SupervisorExecutor::SendUdsRequest(int fd, const std::string &httpRequest)
+{
+    ssize_t sent = send(fd, httpRequest.c_str(), httpRequest.length(), 0);
+    if (sent < 0 || static_cast<size_t>(sent) != httpRequest.length()) {
+        YRLOG_ERROR("failed to send request to UDS socket: {}", std::strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+bool SupervisorExecutor::ReceiveUdsResponse(int fd, std::string &response)
+{
+    char buf[4096];
+    size_t headerEnd = std::string::npos;
+    size_t contentLength = 0;
+    bool hasContentLength = false;
+    ssize_t received;
+    while ((received = recv(fd, buf, sizeof(buf) - 1, 0)) > 0) {
+        buf[received] = '\0';
+        response += buf;
+        if (headerEnd == std::string::npos) {
+            headerEnd = response.find("\r\n\r\n");
+            if (headerEnd == std::string::npos) {
+                continue;
+            }
+            std::string headers = response.substr(0, headerEnd);
+            std::string lowerHeaders = headers;
+            std::transform(lowerHeaders.begin(), lowerHeaders.end(), lowerHeaders.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            size_t contentLengthPos = lowerHeaders.find("content-length:");
+            if (contentLengthPos != std::string::npos) {
+                size_t crlfPos = headers.find("\r\n", contentLengthPos);
+                hasContentLength = true;
+                contentLength = std::stoul(
+                    headers.substr(contentLengthPos + CONTENT_LENGTH_PREFIX_LEN,
+                                   crlfPos - contentLengthPos - CONTENT_LENGTH_PREFIX_LEN));
+            }
+        }
+        if (hasContentLength && response.length() - (headerEnd + HTTP_HEADER_SEPARATOR_LEN) >= contentLength) {
+            break;
+        }
+    }
+    if (received < 0) {
+        YRLOG_ERROR("failed to receive response from UDS socket: {}", std::strerror(errno));
+        return false;
+    }
+    return true;
 }
 
 int SupervisorExecutor::ConnectUdsSocket(const std::string &socketPath)
@@ -308,8 +332,12 @@ litebus::Future<std::string> SupervisorExecutor::CreateSandbox(const std::string
         nlohmann::json policy = nlohmann::json::object();
         policy["filesystem_policy"] = filesystemPolicy;
 
+        nlohmann::json environment = nlohmann::json::object();
+        environment["JIUWENSWARM_HOME"] = "/home/" + hostUser;
+        policy["environment"] = environment;
+
         policy["process"] = { { "run_as_user", hostUser }, { "run_as_group", hostUser } };
-        policy["namespace"] = { { "user", false } };
+        policy["namespace"] = { { "user", true } };
 
         createRequest["policy"] = policy;
         createRequest["policy_mode"] = "append";
