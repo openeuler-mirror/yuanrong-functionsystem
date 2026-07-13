@@ -61,7 +61,7 @@ func getTriggerValue(triggerType string) TriggerValue {
 			AuthAlgorithm: "HMAC_SHA256",
 			TriggerURL:    "http://127.0.0.1:31220/service/cn:yrk:function:907ba668fd57:0-base-hellopy:$latest/api",
 			AppID:         "yrk",
-			AppSecret:     "12CFV18835434FDGEEF39BD6YRE45D46",
+			AppSecret:     "test-app-secret",
 		}
 	}
 	return triggerValue
