@@ -32,6 +32,43 @@ class BuildTaskTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.vendor_output_dir, "Install", "openssl")))
         self.assertTrue(os.path.exists(os.path.join(self.vendor_output_dir, "Stamp", "zlib", "zlib-done")))
 
+    def test_build_vendor_removes_restored_cmake_state_before_configure(self):
+        vendor_dir = os.path.join(self.root_dir, "vendor")
+        stale_cache = os.path.join(vendor_dir, "build", "CMakeCache.txt")
+        self._write(stale_cache, "old workspace\n")
+        args = {"root_dir": self.root_dir, "job_num": 8, "builder": "bazel"}
+
+        cache_manager = mock.Mock(misses=set())
+
+        def assert_stale_cache_removed(*_args, **_kwargs):
+            self.assertFalse(os.path.exists(stale_cache))
+
+        with mock.patch.object(build_task.vendor_cache, "VendorCacheManager", return_value=cache_manager), \
+                mock.patch.object(build_task.tasks, "download_vendor"), \
+                mock.patch.object(build_task.builder, "build_etcd"), \
+                mock.patch.object(build_task.utils, "sync_command", side_effect=assert_stale_cache_removed), \
+                mock.patch.object(build_task, "install_datasystem"):
+            build_task.build_vendor(args)
+
+    def test_build_vendor_removes_generated_cmake_state_after_success(self):
+        vendor_dir = os.path.join(self.root_dir, "vendor")
+        generated_cache = os.path.join(vendor_dir, "build", "CMakeCache.txt")
+        args = {"root_dir": self.root_dir, "job_num": 8, "builder": "bazel"}
+
+        cache_manager = mock.Mock(misses=set())
+
+        def generate_cmake_state(*_args, **_kwargs):
+            self._write(generated_cache, "current workspace\n")
+
+        with mock.patch.object(build_task.vendor_cache, "VendorCacheManager", return_value=cache_manager), \
+                mock.patch.object(build_task.tasks, "download_vendor"), \
+                mock.patch.object(build_task.builder, "build_etcd"), \
+                mock.patch.object(build_task.utils, "sync_command", side_effect=generate_cmake_state), \
+                mock.patch.object(build_task, "install_datasystem"):
+            build_task.build_vendor(args)
+
+        self.assertFalse(os.path.exists(os.path.join(vendor_dir, "build")))
+
     def test_cmake_component_build_passes_component_linker_and_cmake_args(self):
         args = SimpleNamespace(
             job_num=8,

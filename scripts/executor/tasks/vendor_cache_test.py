@@ -2,6 +2,8 @@
 # Copyright (c) 2025 Huawei Technologies Co., Ltd
 
 import os
+import shutil
+import tarfile
 import tempfile
 import unittest
 
@@ -69,8 +71,54 @@ class VendorCacheManagerTest(unittest.TestCase):
         cache_path = self._cache_entry_path(manager, "securec")
         self.assertFalse(os.path.exists(os.path.join(cache_path, READY_MARKER)))
 
+    def test_default_cache_survives_vendor_archive_workspace_move(self):
+        os.environ.pop(CACHE_ROOT_ENV, None)
+        source_root = os.path.join(self.temp_dir.name, "source-root")
+        self._init_vendor(source_root)
+
+        source_manager = VendorCacheManager(source_root, "bazel")
+        expected_cache_root = os.path.join(
+            source_root, "vendor", "output", ".functionsystem-vendor-cache"
+        )
+        self.assertEqual(source_manager.cache_root, expected_cache_root)
+
+        source_manager.prepare_workspace()
+        workspace_path = os.path.join(source_root, "vendor", "output", "Install", "securec")
+        self._write(os.path.join(workspace_path, "include", "securec.h"), "header\n")
+        self._write(os.path.join(workspace_path, "lib", "libsecurec.so"), "library\n")
+        source_manager.publish_workspace()
+
+        self.assertTrue(os.path.islink(workspace_path))
+        self.assertFalse(os.path.isabs(os.readlink(workspace_path)))
+
+        archive_path = os.path.join(self.temp_dir.name, "vendor.tar.gz")
+        with tarfile.open(archive_path, "w:gz", dereference=False) as archive:
+            archive.add(os.path.join(source_root, "vendor"), arcname="vendor")
+
+        shutil.rmtree(source_root)
+        destination_root = os.path.join(self.temp_dir.name, "destination-root")
+        os.makedirs(destination_root)
+        with tarfile.open(archive_path, "r:gz") as archive:
+            archive.extractall(destination_root)
+
+        destination_manager = VendorCacheManager(destination_root, "bazel")
+        destination_manager.prepare_workspace()
+        destination_workspace = os.path.join(
+            destination_root, "vendor", "output", "Install", "securec"
+        )
+        self.assertIn("securec", destination_manager.hits)
+        self.assertTrue(os.path.isfile(os.path.join(destination_workspace, "include", "securec.h")))
+
     def _cache_entry_path(self, manager, vendor):
         return manager._cache_entry_path(vendor)  # pylint: disable=protected-access
+
+    def _init_vendor(self, root_dir):
+        vendor_dir = os.path.join(root_dir, "vendor")
+        os.makedirs(vendor_dir, exist_ok=True)
+        for relpath in ("CMakeLists.txt", "VendorList.csv", "vendor_utils.cmake"):
+            self._write(os.path.join(vendor_dir, relpath), "test\n")
+        os.makedirs(os.path.join(vendor_dir, "cmake"), exist_ok=True)
+        os.makedirs(os.path.join(vendor_dir, "patches"), exist_ok=True)
 
     def _write(self, path, content):
         os.makedirs(os.path.dirname(path), exist_ok=True)

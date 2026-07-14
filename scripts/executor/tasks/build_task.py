@@ -40,6 +40,11 @@ def reset_stale_vendor_externalprojects(root_dir, target_names):
                 shutil.rmtree(abs_path, ignore_errors=True)
 
 
+def remove_nonportable_vendor_build_state(vendor_path):
+    # CMake-generated files embed absolute workspace paths and cannot be archived.
+    shutil.rmtree(os.path.join(vendor_path, "build"), ignore_errors=True)
+
+
 def run_build(root_dir, cmd_args):
     start_time = time.time()
     builder_name = getattr(cmd_args, "builder", "cmake")
@@ -105,6 +110,7 @@ def build_vendor(args):
     builder.build_etcd(vendor_path)
 
     log.info("Start to build vendor dependency packages with C++")
+    remove_nonportable_vendor_build_state(vendor_path)
     cmake_configure_cmd = ["cmake", "-B", "build", f"-DTHIRDPARTY_JOBS={args['job_num']}"]
     if args.get("builder") == "bazel":
         # Bazel mode: skip vendor components that Bazel builds from source or does not use.
@@ -120,6 +126,7 @@ def build_vendor(args):
     # 引入二方件产物
     log.info("Auto install yuanrong-datasystem production from tar file")
     install_datasystem(vendor_path)
+    remove_nonportable_vendor_build_state(vendor_path)
 
 
 def install_datasystem(vendor_path):
