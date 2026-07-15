@@ -118,6 +118,8 @@ private:
                                                             const nlohmann::json &body = nlohmann::json::object());
     int ConnectUdsSocket(const std::string &socketPath);
     std::string BuildUdsHttpRequest(const std::string &method, const std::string &path, const std::string &body);
+    bool SendUdsRequest(int fd, const std::string &httpRequest);
+    bool ReceiveUdsResponse(int fd, std::string &response);
 };
 
 class SupervisorExecutorProxy : public ExecutorProxy {

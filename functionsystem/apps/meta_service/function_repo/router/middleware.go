@@ -18,6 +18,7 @@
 package router
 
 import (
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -38,11 +39,11 @@ const (
 )
 
 const (
-	defaultUserID    = "default"
-	defaultTenantID  = "default"
-	defaultPrivilege = "1111"
-	defaultAppID     = "yrk"
-	defaultAppSecret = "12CFV18835434FDGEEF39BD6YRE45D46"
+	defaultUserID       = "default"
+	defaultTenantID     = "default"
+	defaultPrivilege    = "1111"
+	defaultAppID        = "yrk"
+	defaultAppSecretEnv = "YR_DEFAULT_APP_SECRET"
 	// HeaderBusinessID -
 	HeaderBusinessID = "X-Business-ID"
 	// HeaderTenantID -
@@ -70,7 +71,7 @@ func SetRequestHead() server.HandlerFunc {
 		c.Gin().Request.Header.Set(HeaderBusinessID, defaultAppID)
 
 		c.Gin().Set(AppIDKey, defaultAppID)
-		c.Gin().Set(AppSecretKey, defaultAppSecret)
+		c.Gin().Set(AppSecretKey, strings.TrimSpace(os.Getenv(defaultAppSecretEnv)))
 
 		c.Gin().Next()
 	}

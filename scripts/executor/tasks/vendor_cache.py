@@ -17,7 +17,7 @@ import utils
 log = utils.stream_logger()
 
 CACHE_ROOT_ENV = "FS_VENDOR_CACHE_DIR"
-DEFAULT_CACHE_ROOT = "/tmp/functionsystem-vendor-cache"
+DEFAULT_CACHE_DIRNAME = ".functionsystem-vendor-cache"
 READY_MARKER = ".cache_ready"
 
 
@@ -67,8 +67,11 @@ SHARED_VENDOR_INPUTS = ("CMakeLists.txt", "VendorList.csv", "vendor_utils.cmake"
 FINGERPRINT_ENVS = ("CC", "CXX", "CFLAGS", "CXXFLAGS", "LDFLAGS", "GOFLAGS", "CGO_ENABLED")
 
 
-def resolve_cache_root() -> str:
-    return os.path.abspath(os.environ.get(CACHE_ROOT_ENV, DEFAULT_CACHE_ROOT))
+def resolve_cache_root(vendor_dir: str) -> str:
+    configured_root = os.environ.get(CACHE_ROOT_ENV)
+    if configured_root:
+        return os.path.abspath(configured_root)
+    return os.path.join(vendor_dir, "output", DEFAULT_CACHE_DIRNAME)
 
 
 class VendorCacheManager:
@@ -76,7 +79,7 @@ class VendorCacheManager:
         self.root_dir = os.path.abspath(root_dir)
         self.vendor_dir = os.path.join(self.root_dir, "vendor")
         self.builder = builder
-        self.cache_root = resolve_cache_root()
+        self.cache_root = resolve_cache_root(self.vendor_dir)
         self.install_root = os.path.join(self.vendor_dir, "output", "Install")
         self.openeuler_root = os.path.join(self.vendor_dir, "output", "openEuler")
         self.targets = {name: ALL_VENDOR_TARGETS[name] for name in self._required_target_names()}
@@ -214,7 +217,10 @@ class VendorCacheManager:
         elif os.path.exists(link_path):
             self._remove_path(link_path)
         os.makedirs(os.path.dirname(link_path), exist_ok=True)
-        os.symlink(target_path, link_path)
+        link_target = target_path
+        if os.path.commonpath((self.vendor_dir, target_path)) == self.vendor_dir:
+            link_target = os.path.relpath(target_path, os.path.dirname(link_path))
+        os.symlink(link_target, link_path)
 
     @staticmethod
     def _remove_path(path: str):
