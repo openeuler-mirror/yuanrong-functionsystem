@@ -209,6 +209,11 @@ struct RootfsSpecMeta {
 
     // for mount point
     std::string mountpoint;
+
+    // for container run-as user (sourced from function meta rootfs.user)
+    std::string user;
+    // for container port forwardings (sourced from function meta rootfs.ports, e.g. "tcp:22")
+    std::vector<std::string> ports;
 };
 
 struct Initializer {

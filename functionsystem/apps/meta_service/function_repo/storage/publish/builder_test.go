@@ -38,6 +38,8 @@ func TestBuildFunctionRegisterKey(t *testing.T) {
 	assert.Equal(t, "/sn/functions/business/a/tenant/a/function/a/version/", key)
 	key = BuildFunctionRegisterKey(info, "a", "", "yrlib")
 	assert.Equal(t, "/yr/functions/business/a/tenant/a/function/a/version/", key)
+	key = BuildFunctionRegisterKey(info, "a", "", "agent")
+	assert.Equal(t, "/yr/functions/business/a/tenant/a/function/a/version/", key)
 }
 
 func TestBuildFunctionRegisterKeyWithProductID(t *testing.T) {

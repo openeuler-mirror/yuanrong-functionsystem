@@ -411,6 +411,7 @@ func buildFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionValue,
 		PeriodSeconds:    fv.FunctionVersion.CustomHealthCheck.PeriodSeconds,
 		FailureThreshold: fv.FunctionVersion.CustomHealthCheck.FailureThreshold,
 	}
+	info.SandboxType = fv.FunctionVersion.SandboxType
 	return info, nil
 }
 
@@ -419,6 +420,8 @@ func buildRootFsSpecMeta(rootfs types.RootfsSpecMeta) metadata.RootfsSpecMeta {
 		Runtime:  rootfs.Runtime,
 		Type:     rootfs.Type,
 		ImageURL: rootfs.ImageURL,
+		User:     rootfs.User,
+		Ports:    rootfs.Ports,
 		ReadOnly: rootfs.ReadOnly,
 		StorageInfo: metadata.RootfsStorageInfo{
 			Endpoint:  rootfs.StorageInfo.Endpoint,

@@ -153,6 +153,7 @@ private:
         std::map<std::string, std::string> portBindings;  // "containerPort/proto" -> hostPort
         std::map<std::string, double> resources;          // "cpu"/"memory" in milli-cores / MB
         std::string workingDir;                           // container working directory (-w)
+        std::string user;                                 // container run-as user (Config.User)
     };
     nlohmann::json BuildCreateContainerRequest(const ContainerCreateSpec &spec);
     nlohmann::json BuildHostConfig(const ContainerCreateSpec &spec) const;

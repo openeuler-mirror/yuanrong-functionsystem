@@ -485,6 +485,9 @@ nlohmann::json DockerExecutor::BuildCreateContainerRequest(const ContainerCreate
     if (!spec.workingDir.empty()) {
         req["WorkingDir"] = spec.workingDir;
     }
+    if (!spec.user.empty()) {
+        req["User"] = spec.user;
+    }
     return req;
 }
 
@@ -889,10 +892,12 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartRuntime(
     const auto &deployOpts = info.deploymentconfig().deployoptions();
     auto rootfsIter = deployOpts.find(CONTAINER_ROOTFS);
     std::string workdir = rootfsIter != deployOpts.end() ? ParseRootfsWorkdir(rootfsIter->second) : "";
+    auto hostUserIter = deployOpts.find(HOST_USER);
+    std::string runUser = hostUserIter != deployOpts.end() ? hostUserIter->second : "";
 
     auto createBody = BuildCreateContainerRequest(ContainerCreateSpec{
         image, BuildContainerCommand(execPath, startReq), containerEnvs, bindMounts, portBindings,
-        BuildResources(info), workdir });
+        BuildResources(info), workdir, runUser });
 
     return StartContainerChain(request, image, createBody, port);
 }

@@ -529,6 +529,25 @@ inline void GetInstanceMetaData(FunctionMeta &funcMeta, const nlohmann::json &j)
     }
 }
 
+inline void GetRootfsStorageInfo(RootfsStorageInfo &storageInfo, const nlohmann::json &storage)
+{
+    if (storage.find("endpoint") != storage.end()) {
+        storageInfo.endpoint = storage.at("endpoint");
+    }
+    if (storage.find("bucket") != storage.end()) {
+        storageInfo.bucket = storage.at("bucket");
+    }
+    if (storage.find("object") != storage.end()) {
+        storageInfo.object = storage.at("object");
+    }
+    if (storage.find("accessKey") != storage.end()) {
+        storageInfo.accessKey = storage.at("accessKey");
+    }
+    if (storage.find("secretKey") != storage.end()) {
+        storageInfo.secretKey = storage.at("secretKey");
+    }
+}
+
 inline void GetRoofsMetaData(FunctionMeta &funcMeta, const nlohmann::json &h)
 {
     if (h.find("warmup") != h.end()) {
@@ -548,6 +567,16 @@ inline void GetRoofsMetaData(FunctionMeta &funcMeta, const nlohmann::json &h)
     if (rf.find("imageurl") != rf.end()) {
         funcMeta.rootfs.imageurl = rf.at("imageurl");
     }
+    if (rf.find("user") != rf.end()) {
+        funcMeta.rootfs.user = rf.at("user");
+    }
+    if (rf.find("ports") != rf.end() && rf.at("ports").is_array()) {
+        for (const auto &p : rf.at("ports")) {
+            if (p.is_string()) {
+                funcMeta.rootfs.ports.push_back(p);
+            }
+        }
+    }
     if (rf.find("path") != rf.end()) {
         funcMeta.rootfs.path = rf.at("path");
     }
@@ -563,22 +592,7 @@ inline void GetRoofsMetaData(FunctionMeta &funcMeta, const nlohmann::json &h)
         }
     }
     if (rf.find("storageInfo") != rf.end()) {
-        nlohmann::json storage = rf.at("storageInfo");
-        if (storage.find("endpoint") != storage.end()) {
-            funcMeta.rootfs.storageInfo.endpoint = storage.at("endpoint");
-        }
-        if (storage.find("bucket") != storage.end()) {
-            funcMeta.rootfs.storageInfo.bucket = storage.at("bucket");
-        }
-        if (storage.find("object") != storage.end()) {
-            funcMeta.rootfs.storageInfo.object = storage.at("object");
-        }
-        if (storage.find("accessKey") != storage.end()) {
-            funcMeta.rootfs.storageInfo.accessKey = storage.at("accessKey");
-        }
-        if (storage.find("secretKey") != storage.end()) {
-            funcMeta.rootfs.storageInfo.secretKey = storage.at("secretKey");
-        }
+        GetRootfsStorageInfo(funcMeta.rootfs.storageInfo, rf.at("storageInfo"));
     }
 }
 
