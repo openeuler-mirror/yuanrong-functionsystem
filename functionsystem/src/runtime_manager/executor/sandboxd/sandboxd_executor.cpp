@@ -759,7 +759,7 @@ litebus::Future<Status> SandboxdExecutor::UnregisterWarmUp(const std::string &ru
 
 litebus::Future<Status> SandboxdExecutor::OnWarmUpUnregistered(const runtime::v1::NormalResponse &response,
                                                                const std::string &runtimeID,
-    const std::string &requestID)
+                                                               const std::string &requestID)
 {
     if (!response.success()) {
         YRLOG_ERROR("{}|unregister warm-up failed for ({})", requestID, runtimeID);
@@ -1053,8 +1053,8 @@ void SandboxdExecutor::CleanupLocalRuntimeStateForOrphan(const std::string &requ
 
     YRLOG_WARN(
         "{}|ReconcileRuntimes: orphan sandbox {} is still registered as runtime({}); "
-               "releasing local runtime resources before orphan delete",
-               requestID, sandboxID, runtimeID);
+        "releasing local runtime resources before orphan delete",
+        requestID, sandboxID, runtimeID);
 
     if (ckptOrch_ != nullptr) {
         ckptOrch_->ReleaseRef(runtimeID, requestID);
@@ -1098,9 +1098,9 @@ Status SandboxdExecutor::OnDeleteSandboxComplete(const std::string &sandboxID,
     }
     YRLOG_ERROR("DeleteSandboxAsync: sandbox({}) delete failed: {}, scheduling retry in ~{}s", sandboxID,
                 rsp.GetErrorCode(), kOrphanDeleteRetryIntervalSec);
-    auto retryFirstSeen = std::chrono::steady_clock::now()
-                          - std::chrono::seconds(static_cast<int64_t>(orphanGracePeriodSec_))
-                          + std::chrono::seconds(static_cast<int64_t>(kOrphanDeleteRetryIntervalSec));
+    auto retryFirstSeen = std::chrono::steady_clock::now() -
+                          std::chrono::seconds(static_cast<int64_t>(orphanGracePeriodSec_)) +
+                          std::chrono::seconds(static_cast<int64_t>(kOrphanDeleteRetryIntervalSec));
     orphanFirstSeen_.emplace(sandboxID, retryFirstSeen);
     return Status(StatusCode::ERR_INNER_SYSTEM_ERROR);
 }
@@ -1416,14 +1416,13 @@ void SandboxdExecutor::CollectSandboxStats(const std::string &runtimeID, const s
 
     ASSERT_IF_NULL(sandboxd_);
     sandboxd_->CallAsyncX("Stats", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncStats)
-        .Then(
-            [runtimeID, sandboxID, resp, collectedAt, aid(GetAID())](const Status &status) -> litebus::Future<Status> {
+        .Then([runtimeID, sandboxID, resp, collectedAt, aid(GetAID())](const Status &status) -> litebus::Future<Status> {
             runtime::v1::StatsResponse statsResponse;
             if (status.IsOk()) {
                 statsResponse = *resp;
             }
-                return litebus::Async(aid, &SandboxdExecutor::OnSandboxStatsCollected, runtimeID, sandboxID, status,
-                                      statsResponse, collectedAt);
+            return litebus::Async(aid, &SandboxdExecutor::OnSandboxStatsCollected, runtimeID, sandboxID, status,
+                                  statsResponse, collectedAt);
         });
 }
 
@@ -1545,8 +1544,8 @@ void SandboxdExecutor::ReportSandboxLifecycleStatus(const messages::RuntimeInsta
     if (lifecycleStatus == SandboxLifecycleStatus::RUNNING) {
         sandboxRunningStartTimes_.emplace(runtimeID, std::chrono::steady_clock::now());
         ScheduleRunningStatusHeartbeat(runtimeID);
-    } else if (lifecycleStatus == SandboxLifecycleStatus::COMPLETED
-               || lifecycleStatus == SandboxLifecycleStatus::ABNORMAL) {
+    } else if (lifecycleStatus == SandboxLifecycleStatus::COMPLETED ||
+               lifecycleStatus == SandboxLifecycleStatus::ABNORMAL) {
         auto startIt = sandboxRunningStartTimes_.find(runtimeID);
         if (startIt != sandboxRunningStartTimes_.end()) {
             const double durationSec =

@@ -59,6 +59,25 @@ std::string DirName(const std::string &path)
     return pos == 0 ? "/" : path.substr(0, pos);
 }
 
+void ApplyS3RootfsConfig(runtime::v1::StartRequest &start, const nlohmann::json &rootfsConfig)
+{
+    if (!rootfsConfig.contains("storageInfo")) {
+        return;
+    }
+    auto s3 = start.mutable_rootfs()->mutable_s3_config();
+    const auto &storageInfo = rootfsConfig.at("storageInfo");
+    if (storageInfo.contains("endpoint"))
+        s3->set_endpoint(storageInfo.at("endpoint").get<std::string>());
+    if (storageInfo.contains("bucket"))
+        s3->set_bucket(storageInfo.at("bucket").get<std::string>());
+    if (storageInfo.contains("object"))
+        s3->set_object(storageInfo.at("object").get<std::string>());
+    if (storageInfo.contains("accessKey"))
+        s3->set_access_key_id(storageInfo.at("accessKey").get<std::string>());
+    if (storageInfo.contains("secretKey"))
+        s3->set_access_key_secret(storageInfo.at("secretKey").get<std::string>());
+}
+
 // Parse the rootfs deploy-option JSON onto the flat StartRequest. The flat
 // request exposes rootfs + runtime as top-level fields (no FunctionRuntime).
 Status RootfsJsonParse(runtime::v1::StartRequest &start, const std::string &rootfsJson)
@@ -84,21 +103,7 @@ Status RootfsJsonParse(runtime::v1::StartRequest &start, const std::string &root
         const std::string typeStr = j.at("type").get<std::string>();
         if (typeStr == "s3") {
             start.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::S3);
-            if (!j.contains("storageInfo")) {
-                return Status::OK();
-            }
-            auto s3 = start.mutable_rootfs()->mutable_s3_config();
-            const auto &si = j.at("storageInfo");
-            if (si.contains("endpoint"))
-                s3->set_endpoint(si.at("endpoint").get<std::string>());
-            if (si.contains("bucket"))
-                s3->set_bucket(si.at("bucket").get<std::string>());
-            if (si.contains("object"))
-                s3->set_object(si.at("object").get<std::string>());
-            if (si.contains("accessKey"))
-                s3->set_access_key_id(si.at("accessKey").get<std::string>());
-            if (si.contains("secretKey"))
-                s3->set_access_key_secret(si.at("secretKey").get<std::string>());
+            ApplyS3RootfsConfig(start, j);
         } else if (typeStr == "image") {
             start.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::IMAGE);
             if (j.contains("imageurl")) {
