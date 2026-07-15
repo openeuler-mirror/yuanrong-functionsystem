@@ -1416,7 +1416,8 @@ void SandboxdExecutor::CollectSandboxStats(const std::string &runtimeID, const s
 
     ASSERT_IF_NULL(sandboxd_);
     sandboxd_->CallAsyncX("Stats", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncStats)
-        .Then([runtimeID, sandboxID, resp, collectedAt, aid(GetAID())](const Status &status) -> litebus::Future<Status> {
+        .Then([runtimeID, sandboxID, resp, collectedAt,
+               aid(GetAID())](const Status &status) -> litebus::Future<Status> {
             runtime::v1::StatsResponse statsResponse;
             if (status.IsOk()) {
                 statsResponse = *resp;
