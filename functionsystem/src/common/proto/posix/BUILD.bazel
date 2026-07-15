@@ -55,27 +55,6 @@ cc_grpc_library(
 )
 
 proto_library(
-    name = "runtime_launcher_interface_proto",
-    srcs = ["runtime_launcher_interface.proto"],
-    strip_import_prefix = "/functionsystem/src/common/proto/posix",
-    visibility = ["//visibility:public"],
-)
-
-cc_proto_library(
-    name = "runtime_launcher_interface_cc_proto",
-    deps = [":runtime_launcher_interface_proto"],
-    visibility = ["//visibility:public"],
-)
-
-cc_grpc_library(
-    name = "runtime_launcher_interface_cc_grpc",
-    srcs = [":runtime_launcher_interface_proto"],
-    grpc_only = True,
-    deps = [":runtime_launcher_interface_cc_proto"],
-    visibility = ["//visibility:public"],
-)
-
-proto_library(
     name = "bus_adapter_proto",
     srcs = ["bus_adapter.proto"],
     strip_import_prefix = "/functionsystem/src/common/proto/posix",
@@ -215,7 +194,7 @@ proto_library(
         ":common_proto",
         ":core_service_proto",
         ":resource_proto",
-        ":runtime_launcher_interface_proto",
+        "//proto/posix:sandbox_api_proto",
     ],
     visibility = ["//visibility:public"],
 )
@@ -264,8 +243,8 @@ cc_library(
         ":core_service_cc_proto",
         ":exec_service_cc_proto",
         ":exec_service_cc_grpc",
-        ":runtime_launcher_interface_cc_proto",
-        ":runtime_launcher_interface_cc_grpc",
+        "//proto/posix:sandbox_api_cc_proto",
+        "//proto/posix:sandbox_api_cc_grpc",
         ":bus_adapter_cc_proto",
         ":runtime_service_cc_proto",
         ":runtime_rpc_cc_proto",

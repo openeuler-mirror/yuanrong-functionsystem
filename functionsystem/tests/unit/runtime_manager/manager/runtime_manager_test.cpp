@@ -17,6 +17,7 @@
 #include "runtime_manager/manager/runtime_manager.h"
 
 #include <string>
+
 #include "common/utils/files.h"
 #include "exec/exec.hpp"
 #include "gtest/gtest.h"
@@ -257,44 +258,14 @@ public:
     static inline std::string env_;
 };
 
-class RuntimeManagerTypeTest : public DISABLED_RuntimeManagerTest {
-public:
-    void SetUp() override
-    {
-        auto runtimeBackendEnv = litebus::os::GetEnv("YR_RUNTIME_BACKEND");
-        hasRuntimeBackendEnv_ = runtimeBackendEnv.IsSome();
-        runtimeBackendEnv_ = hasRuntimeBackendEnv_ ? runtimeBackendEnv.Get() : "";
-        litebus::os::SetEnv("YR_RUNTIME_BACKEND", "container");
-        DISABLED_RuntimeManagerTest::SetUp();
-    }
-
-    void TearDown() override
-    {
-        DISABLED_RuntimeManagerTest::TearDown();
-        if (hasRuntimeBackendEnv_) {
-            litebus::os::SetEnv("YR_RUNTIME_BACKEND", runtimeBackendEnv_);
-            return;
-        }
-        litebus::os::UnSetEnv("YR_RUNTIME_BACKEND");
-    }
-
-private:
-    bool hasRuntimeBackendEnv_ = false;
-    std::string runtimeBackendEnv_;
-};
+class RuntimeManagerTypeTest : public DISABLED_RuntimeManagerTest {};
 
 TEST_F(DISABLED_RuntimeManagerTest, StartInstanceTest)
 {
     const char *port = ("--port=" + std::to_string(FindAvailablePort())).c_str();
     const char *argv[] = {
-        "/runtime_manager",
-        "--node_id=node1",
-        "--ip=127.0.0.1",
-        "--host_ip=127.0.0.1",
-        port,
-        "--runtime_initial_port=500",
-        "--port_num=2000",
-        "--runtime_dir=/tmp"
+        "/runtime_manager",           "--node_id=node1", "--ip=127.0.0.1",    "--host_ip=127.0.0.1", port,
+        "--runtime_initial_port=500", "--port_num=2000", "--runtime_dir=/tmp"
     };
     functionsystem::runtime_manager::Flags flags;
     flags.ParseFlags(std::size(argv), argv);
@@ -684,7 +655,6 @@ TEST_F(DISABLED_RuntimeManagerTest, StopInstanceTest)
     litebus::Await(testActor_->GetAID());
 }
 
-
 TEST_F(DISABLED_RuntimeManagerTest, StopInstanceFailTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
@@ -721,8 +691,7 @@ TEST_F(DISABLED_RuntimeManagerTest, StopInstanceFailWithUnknowExecutorTypeTest)
     auto stopResponse = testActor_->GetStopInstanceResponse();
     ASSERT_AWAIT_TRUE([=]() -> bool { return testActor_->GetStopInstanceResponse()->requestid() == "test_requestID"; });
     EXPECT_EQ(testActor_->GetStopInstanceResponse()->runtimeid(), "test_runtimeID");
-    EXPECT_EQ(testActor_->GetStopInstanceResponse()->code(),
-              static_cast<int32_t>(RUNTIME_MANAGER_PARAMS_INVALID));
+    EXPECT_EQ(testActor_->GetStopInstanceResponse()->code(), static_cast<int32_t>(RUNTIME_MANAGER_PARAMS_INVALID));
     EXPECT_EQ(testActor_->GetStopInstanceResponse()->message(), "unknown instance type, cannot stop instance");
 
     litebus::Terminate(testActor_->GetAID());
@@ -959,8 +928,8 @@ TEST_F(DISABLED_RuntimeManagerTest, UpdateTokenTest)
     manager_->executorMap_.emplace(EXECUTOR_TYPE::RUNTIME, nullptr);
     testActor_->Send(manager_->GetAID(), "UpdateCred", request.SerializeAsString());
     ASSERT_AWAIT_TRUE([=]() -> bool {
-        return testActor_->GetIsReceiveUpdateTokenResponse()->code() ==
-               static_cast<int32_t>(RUNTIME_MANAGER_PARAMS_INVALID);
+        return testActor_->GetIsReceiveUpdateTokenResponse()->code()
+               == static_cast<int32_t>(RUNTIME_MANAGER_PARAMS_INVALID);
     });
     manager_->executorMap_.clear();
     testActor_->Send(manager_->GetAID(), "UpdateCred", request.SerializeAsString());
@@ -1086,7 +1055,8 @@ TEST_F(DISABLED_RuntimeManagerDebugServerTest, QueryDebugInstanceInfosTest)
     manager_->connected_ = true;
     testActor_->QueryDebugInstanceInfos(manager_->GetAID(), request);
     ASSERT_AWAIT_TRUE([=]() -> bool { return testActor_->isReceiveQueryDebugInstanceInfosResponse_; });
-    ASSERT_AWAIT_TRUE([=]() -> bool { return testActor_->GetQueryDebugInstanceResponse()->requestid() == "request_id"; });
+    ASSERT_AWAIT_TRUE(
+        [=]() -> bool { return testActor_->GetQueryDebugInstanceResponse()->requestid() == "request_id"; });
     EXPECT_EQ(testActor_->GetQueryDebugInstanceResponse()->debuginstanceinfos_size(), 0);
     testActor_->ResetMessage();
 
@@ -1179,7 +1149,6 @@ TEST_F(DISABLED_RuntimeManagerDebugServerTest, EnableDebugInstanceIDTest)
 {
     testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
     litebus::Spawn(testActor_, true);
-
 
     auto startRequest = GenStartInstanceRequest();
     auto runtimeInfo = startRequest.mutable_runtimeinstanceinfo();
@@ -1274,7 +1243,6 @@ TEST_F(DISABLED_RuntimeManagerDebugServerTest, EnablePythonDebugInstanceIDTest)
     litebus::Await(testActor_->GetAID());
 }
 
-
 /**
  * Feature: GetRuntimeType with SUPERVISOR executor type
  * Description: Test GetRuntimeType returns correct executor type from instance response
@@ -1319,7 +1287,7 @@ TEST_F(RuntimeManagerTypeTest, GetRuntimeType_ContainerFallbackWhenResponseExecu
     startResponse.mutable_startruntimeinstanceresponse()->set_runtimeid("test_runtime_id");
     manager_->instanceResponseMap_["test_instance_id"] = startResponse;
 
-    EXPECT_EQ(manager_->GetRuntimeType("test_runtime_id"), EXECUTOR_TYPE::CONTAINER);
+    EXPECT_EQ(manager_->GetRuntimeType("test_runtime_id"), EXECUTOR_TYPE::SANDBOXD);
 }
 
 TEST_F(RuntimeManagerTypeTest, ResolveStopExecutorTypeUsesContainerFallbackForDefaultRuntimeRequest)
@@ -1338,8 +1306,8 @@ TEST_F(RuntimeManagerTypeTest, ResolveStopExecutorTypeUsesContainerFallbackForDe
     request->set_runtimeid("test_runtime_id");
     request->set_executortype(static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME));
 
-    EXPECT_EQ(manager_->ResolveStopExecutorType(request), EXECUTOR_TYPE::CONTAINER);
-    EXPECT_EQ(request->executortype(), static_cast<int32_t>(EXECUTOR_TYPE::CONTAINER));
+    EXPECT_EQ(manager_->ResolveStopExecutorType(request), EXECUTOR_TYPE::SANDBOXD);
+    EXPECT_EQ(request->executortype(), static_cast<int32_t>(EXECUTOR_TYPE::SANDBOXD));
 }
 
 /**
@@ -1400,7 +1368,7 @@ TEST_F(DISABLED_RuntimeManagerTest, GetRuntimeType_MultipleExecutorTypes)
 
     EXPECT_EQ(type1, EXECUTOR_TYPE::RUNTIME);
     EXPECT_EQ(type2, EXECUTOR_TYPE::SUPERVISOR);
-    EXPECT_EQ(type3, EXECUTOR_TYPE::CONTAINER);
+    EXPECT_EQ(type3, EXECUTOR_TYPE::SANDBOXD);
 }
 
 /**

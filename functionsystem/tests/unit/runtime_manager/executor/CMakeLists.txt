@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 set(EXECUTOR_SRCS
-    ${CMAKE_CURRENT_LIST_DIR}/container_executor_network_test.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/port_mapping_test.cpp
     ${CMAKE_CURRENT_LIST_DIR}/docker_executor_test.cpp
     ${CMAKE_CURRENT_LIST_DIR}/executor_test.cpp
-    ${CMAKE_CURRENT_LIST_DIR}/sandbox_executor_network_test.cpp
     ${CMAKE_CURRENT_LIST_DIR}/supervisor_executor_test.cpp
     # ${CMAKE_CURRENT_LIST_DIR}/runtime_executor_test.cpp
     # Disabled: depends on /home/snuser/ (absent in CI) and hits a pre-existing
@@ -24,5 +23,4 @@ set(EXECUTOR_SRCS
 )
 
 target_sources(${UNIT_TEST_MODULE} PRIVATE ${EXECUTOR_SRCS})
-add_subdirectory(sandbox)
 add_subdirectory(sandboxd)

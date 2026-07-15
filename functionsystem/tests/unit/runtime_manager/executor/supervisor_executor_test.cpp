@@ -25,7 +25,7 @@
 
 #include "common/constants/constants.h"
 #include "common/proto/pb/message_pb.h"
-#include "common/proto/pb/posix/runtime_launcher_interface.grpc.pb.h"
+#include "common/proto/pb/posix/sandbox_api.grpc.pb.h"
 #include "common/status/status.h"
 #include "common/utils/files.h"
 #include "utils/future_test_helper.h"
@@ -875,11 +875,10 @@ TEST_F(SupervisorExecutorTest, ExecInSandbox_FailsAndTriggersCleanup)
     executor_->SetRuntimeToSandboxID(runtimeID, sandboxId);
 
     auto start = std::make_shared<runtime::v1::StartRequest>();
-    auto funcRt = start->mutable_funcruntime();
-    funcRt->add_command("python3");
-    funcRt->add_command("-c");
-    funcRt->add_command("print('hello')");
-    start->mutable_userenvs()->insert({"KEY", "VALUE"});
+    start->add_command("python3");
+    start->add_command("-c");
+    start->add_command("print('hello')");
+    start->mutable_envs()->insert({ "KEY", "VALUE" });
 
     auto future = executor_->TestExecInSandbox(runtimeID, start, sandboxId);
 
@@ -955,8 +954,7 @@ TEST_F(SupervisorExecutorTest, StartRuntime_PropagatesFailureResponseWithCreateE
     auto rsp = future.Get();
     // code != SUCCESS branch -> GenFailStartInstanceResponse(RUNTIME_MANAGER_CREATE_EXEC_FAILED, ...)
     EXPECT_NE(rsp.code(), static_cast<int32_t>(StatusCode::SUCCESS));
-    EXPECT_EQ(rsp.startruntimeinstanceresponse().executortype(),
-              static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
+    EXPECT_EQ(rsp.startruntimeinstanceresponse().executortype(), static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
     // Message should come from the underlying StartResponse (Failed to create sandbox)
     EXPECT_THAT(rsp.message(), testing::HasSubstr("Failed to create sandbox"));
     EXPECT_EQ(rsp.requestid(), "test_request_id");
@@ -978,8 +976,7 @@ TEST_F(SupervisorExecutorTest, StartRuntime_RejectsIllegalCommandChars)
     ASSERT_AWAIT_READY_FOR(future, TEST_AWAIT_TIMEOUT);
     auto rsp = future.Get();
     EXPECT_NE(rsp.code(), static_cast<int32_t>(StatusCode::SUCCESS));
-    EXPECT_EQ(rsp.startruntimeinstanceresponse().executortype(),
-              static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
+    EXPECT_EQ(rsp.startruntimeinstanceresponse().executortype(), static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
     // Underlying StartByRuntimeID returns ERR_PARAM_INVALID; GenFailStartInstanceResponse
     // wraps with RUNTIME_MANAGER_CREATE_EXEC_FAILED code, message carries the original
     EXPECT_THAT(rsp.message(), testing::HasSubstr("/bin/echo$()"));

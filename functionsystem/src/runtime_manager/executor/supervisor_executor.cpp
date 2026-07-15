@@ -358,16 +358,13 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::ExecInSandbox(
     nlohmann::json execRequest = nlohmann::json::object();
 
     auto command = nlohmann::json::array();
-    for (const auto &cmd : start->funcruntime().command()) {
+    for (const auto &cmd : start->command()) {
         command.push_back(cmd);
     }
     execRequest["command"] = command;
 
     auto envs = nlohmann::json::object();
-    for (const auto &env : start->funcruntime().runtimeenvs()) {
-        envs[env.first] = env.second;
-    }
-    for (const auto &env : start->userenvs()) {
+    for (const auto &env : start->envs()) {
         envs[env.first] = env.second;
     }
     if (!envs.empty()) {
@@ -440,14 +437,13 @@ litebus::Future<Status> SupervisorExecutor::StopInstance(const std::shared_ptr<m
     deleteReq->set_id(sandboxID);
     YRLOG_INFO("{}|Delete sandbox: {} for runtime: {}", request->requestid(), sandboxID, runtimeID);
     litebus::Promise<Status> promise;
-    DoDeleteSandbox(deleteReq)
-        .OnComplete([this, runtimeID, promise](const litebus::Future<runtime::v1::DeleteResponse> &future) mutable {
+    DoDeleteSandbox(deleteReq).OnComplete([this, runtimeID, promise](
+                                              const litebus::Future<runtime::v1::DeleteResponse> &future) mutable {
             runtime2sandboxID_.erase(runtimeID);
             runtimeInstanceInfoMap_.erase(runtimeID);
 
             if (future.IsError()) {
-                YRLOG_ERROR("Failed to delete sandbox for runtime({}), error code: {}", runtimeID,
-                            future.GetErrorCode());
+            YRLOG_ERROR("Failed to delete sandbox for runtime({}), error code: {}", runtimeID, future.GetErrorCode());
                 promise.SetValue(Status(static_cast<StatusCode>(future.GetErrorCode()),
                                         "Failed to delete sandbox for runtime " + runtimeID));
                 return;
@@ -515,12 +511,12 @@ void SupervisorExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::stri
     }
 }
 
-void SupervisorExecutor::BuildRuntimeCommands(runtime::v1::FunctionRuntime *funcRt,
+void SupervisorExecutor::BuildRuntimeCommands(runtime::v1::StartRequest *request,
                                               const std::vector<std::string> &buildArgs)
 {
     // Build commands for runtime
     for (const auto &arg : buildArgs) {
-        funcRt->add_command(arg);
+        request->add_command(arg);
     }
 }
 
@@ -528,8 +524,8 @@ void SupervisorExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest
                                                        const std::string &runtimeID)
 {
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
-    req->mutable_userenvs()->insert(combineEnvs.begin(), combineEnvs.end());
-    (*req->mutable_userenvs())[YR_ONLY_STDOUT] = "true";
+    req->mutable_envs()->insert(combineEnvs.begin(), combineEnvs.end());
+    (*req->mutable_envs())[YR_ONLY_STDOUT] = "true";
 
     std::string stdOut;
     std::string stdErr;
@@ -596,7 +592,7 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::StartByRuntimeID
     YRLOG_INFO("start {} runtime({}), execute final cmd: {}", language, runtimeID, cmd);
     auto start = std::make_shared<runtime::v1::StartRequest>();
 
-    BuildRuntimeCommands(start->mutable_funcruntime(), buildArgs);
+    BuildRuntimeCommands(start.get(), buildArgs);
 
     auto updateEnv = BuildMountForCodes(start, request, envs);
     SetRequestEnvsAndLogsForStart(start.get(), updateEnv, runtimeID);

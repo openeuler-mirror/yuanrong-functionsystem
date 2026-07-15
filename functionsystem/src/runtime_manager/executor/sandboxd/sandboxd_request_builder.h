@@ -33,7 +33,7 @@ namespace functionsystem::runtime_manager {
 
 /**
  * SandboxdStartParams — all inputs required to build a flat SandboxService
- * SandboxStartRequest. Mirrors SandboxStartParams but drops checkpoint/restore
+ * StartRequest. Mirrors SandboxStartParams but drops checkpoint/restore
  * inputs (restore is not implemented against the sandboxd SandboxService API).
  */
 struct SandboxdStartParams {
@@ -59,7 +59,7 @@ struct SandboxdStartParams {
 
 /**
  * SandboxdRequestBuilder — stateless construction of the flat sandboxd
- * SandboxStartRequest.
+ * StartRequest.
  *
  * It is the sandboxd counterpart of SandboxRequestBuilder: same rootfs/mount/
  * env/resource/port resolution, but writes the flat SandboxService fields
@@ -73,8 +73,7 @@ public:
     explicit SandboxdRequestBuilder(const CommandBuilder &cmdBuilder);
     ~SandboxdRequestBuilder() = default;
 
-    std::pair<Status, std::shared_ptr<runtime::v1::SandboxStartRequest>> Build(
-        const SandboxdStartParams &params) const;
+    std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> Build(const SandboxdStartParams &params) const;
 
     // Adds the bootstrap working-root mount and returns the working-root path
     // that should be set in YR_RT_WORKING_DIR. Shared with the sandbox executor.
@@ -83,29 +82,26 @@ public:
                              std::string &workingRoot) const;
 
 private:
-    std::pair<Status, std::shared_ptr<runtime::v1::SandboxStartRequest>> BuildStart(
-        const SandboxdStartParams &params) const;
+    std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> BuildStart(const SandboxdStartParams &params) const;
 
     Status BuildRootfs(const std::shared_ptr<messages::StartInstanceRequest> &request,
-                       runtime::v1::SandboxStartRequest &start) const;
+                       runtime::v1::StartRequest &start) const;
 
     // ── Shared helpers (mirror sandbox_request_builder) ──────────────────────
 
     Envs ApplyCodeMounts(const std::shared_ptr<messages::StartInstanceRequest> &request,
-                         google::protobuf::RepeatedPtrField<runtime::v1::Mount> *mounts,
-                         const Envs &envs) const;
+                         google::protobuf::RepeatedPtrField<runtime::v1::Mount> *mounts, const Envs &envs) const;
 
-    void ApplyCommands(const std::shared_ptr<messages::StartInstanceRequest> &request,
-                       const CommandArgs &cmdArgs, runtime::v1::SandboxStartRequest *start) const;
+    void ApplyCommands(const std::shared_ptr<messages::StartInstanceRequest> &request, const CommandArgs &cmdArgs,
+                       runtime::v1::StartRequest *start) const;
 
     void ApplyResources(const std::shared_ptr<messages::StartInstanceRequest> &request,
                         google::protobuf::Map<std::string, double> *resources) const;
 
-    void ApplyEnvsAndLogs(const Envs &envs, const std::string &runtimeID,
-                          runtime::v1::SandboxStartRequest *start) const;
+    void ApplyEnvsAndLogs(const Envs &envs, const std::string &runtimeID, runtime::v1::StartRequest *start) const;
 
     void ApplyExtraConfig(const std::shared_ptr<messages::StartInstanceRequest> &request,
-                          runtime::v1::SandboxStartRequest *start) const;
+                          runtime::v1::StartRequest *start) const;
 
     void ApplyPortMappings(const std::vector<std::string> &portMappings,
                            google::protobuf::RepeatedPtrField<std::string> *ports) const;

@@ -14,19 +14,6 @@ protoc \
   -I "$PROTO_DIR" \
   --go_out="$OUT_DIR" \
   --go_opt=paths=source_relative \
-  --go_opt=Mruntime_launcher_interface.proto=runtime-launcher/api/proto/runtime/v1\;runtimev1 \
-  "$PROTO_DIR/runtime_launcher_interface.proto"
-
-protoc \
-  -I "$PROTO_DIR" \
-  --go_out="$OUT_DIR" \
-  --go_opt=paths=source_relative \
-  --go_opt=Mruntime_launcher_interface.proto=runtime-launcher/api/proto/runtime/v1\;runtimev1 \
-  "$PROTO_DIR/sandbox_api.proto"
-
-protoc \
-  -I "$PROTO_DIR" \
   --go-grpc_out="$OUT_DIR" \
   --go-grpc_opt=paths=source_relative \
-  --go-grpc_opt=Mruntime_launcher_interface.proto=runtime-launcher/api/proto/runtime/v1\;runtimev1 \
   "$PROTO_DIR/sandbox_api.proto"

@@ -47,8 +47,8 @@ func (f *fakeRuntime) List(context.Context, string) ([]*runtime.ContainerInfo, e
 }
 func (f *fakeRuntime) Close() error { return nil }
 
-func TestSandboxStartRequestFieldNumbersMatchSandboxAPI(t *testing.T) {
-	fields := (&runtimev1.SandboxStartRequest{}).ProtoReflect().Descriptor().Fields()
+func TestStartRequestFieldNumbersMatchSandboxAPI(t *testing.T) {
+	fields := (&runtimev1.StartRequest{}).ProtoReflect().Descriptor().Fields()
 	assertFieldNumber(t, fields, "sandbox_id", sandboxIDFieldNumber)
 	assertFieldNumber(t, fields, "template_id", templateIDFieldNumber)
 	assertFieldNumber(t, fields, "runtime", runtimeFieldNumber)
@@ -63,10 +63,10 @@ func assertFieldNumber(t *testing.T, fields protoreflect.FieldDescriptors, name 
 	t.Helper()
 	field := fields.ByName(protoreflect.Name(name))
 	if field == nil {
-		t.Fatalf("SandboxStartRequest missing field %q", name)
+		t.Fatalf("StartRequest missing field %q", name)
 	}
 	if got := field.Number(); got != want {
-		t.Fatalf("SandboxStartRequest.%s field number = %d, want %d", name, got, want)
+		t.Fatalf("StartRequest.%s field number = %d, want %d", name, got, want)
 	}
 }
 
@@ -134,7 +134,7 @@ func TestWaitReloadsExitStatusAfterDone(t *testing.T) {
 }
 
 func TestBuildCreateConfigNormalizesSandboxdNetworkJSON(t *testing.T) {
-	cfg := buildCreateConfig(&runtimev1.SandboxStartRequest{
+	cfg := buildCreateConfig(&runtimev1.StartRequest{
 		Network: `{"portForwardings":[{"port":8080,"protocol":"TCP"}]}`,
 		Ports:   []string{"tcp:20000:8080"},
 	})
@@ -147,28 +147,28 @@ func TestBuildCreateConfigNormalizesSandboxdNetworkJSON(t *testing.T) {
 }
 
 func TestBuildCreateConfigUsesNetworkModeFromJSONWhenPresent(t *testing.T) {
-	cfg := buildCreateConfig(&runtimev1.SandboxStartRequest{Network: `{"mode":"host","portForwardings":[{"port":8080}]}`})
+	cfg := buildCreateConfig(&runtimev1.StartRequest{Network: `{"mode":"host","portForwardings":[{"port":8080}]}`})
 	if cfg.Network != "host" {
 		t.Fatalf("Network = %q, want host", cfg.Network)
 	}
 }
 
 func TestBuildCreateConfigFallsBackForInvalidNetworkJSON(t *testing.T) {
-	cfg := buildCreateConfig(&runtimev1.SandboxStartRequest{Network: `{"mode":`})
+	cfg := buildCreateConfig(&runtimev1.StartRequest{Network: `{"mode":`})
 	if cfg.Network != "bridge" {
 		t.Fatalf("Network = %q, want bridge", cfg.Network)
 	}
 }
 
 func TestBuildCreateConfigUsesRuntimeIDEnvWhenSandboxIDEmpty(t *testing.T) {
-	cfg := buildCreateConfig(&runtimev1.SandboxStartRequest{Envs: map[string]string{"YR_RUNTIME_ID": "runtime-123"}})
+	cfg := buildCreateConfig(&runtimev1.StartRequest{Envs: map[string]string{"YR_RUNTIME_ID": "runtime-123"}})
 	if cfg.ID != "runtime-123" {
 		t.Fatalf("ID = %q, want runtime-123", cfg.ID)
 	}
 }
 
 func TestBuildCreateConfigPreservesSandboxLabels(t *testing.T) {
-	cfg := buildCreateConfig(&runtimev1.SandboxStartRequest{Labels: map[string]string{"app": "demo"}})
+	cfg := buildCreateConfig(&runtimev1.StartRequest{Labels: map[string]string{"app": "demo"}})
 	if cfg.Labels["app"] != "demo" {
 		t.Fatalf("Labels = %#v, want app=demo", cfg.Labels)
 	}
@@ -185,7 +185,7 @@ func TestServiceBuildCreateConfigMergesRegisteredTemplateEnvs(t *testing.T) {
 	})
 	svc := NewLauncherService(&fakeRuntime{}, stateMgr)
 
-	cfg := svc.buildCreateConfig(&runtimev1.SandboxStartRequest{
+	cfg := svc.buildCreateConfig(&runtimev1.StartRequest{
 		TemplateId: "template-1",
 		Envs: map[string]string{
 			"USER_ENV":   "from-request",

@@ -16,9 +16,6 @@
 
 #include "runtime_manager.h"
 
-#include <algorithm>
-#include <cctype>
-
 #include "async/async.hpp"
 #include "async/defer.hpp"
 #include "async/future.hpp"
@@ -29,10 +26,8 @@
 #include "common/status/status.h"
 #include "common/utils/exec_utils.h"
 #include "common/utils/struct_transfer.h"
-#include "executor/container_executor.h"
 #include "executor/docker_executor.h"
 #include "executor/runtime_executor.h"
-#include "executor/sandbox/sandbox_executor.h"
 #include "executor/sandboxd/sandboxd_executor.h"
 #include "executor/supervisor_executor.h"
 #include "port/port_manager.h"
@@ -42,44 +37,17 @@ namespace functionsystem::runtime_manager {
 const uint32_t HALF = 2;
 const uint32_t MAX_REGISTER_RETRY_TIMES = 30;
 
-// UseSandboxdBackend selects the sandboxd-backed SandboxdExecutor (talks to the
-// runtime.v1.SandboxService) instead of the legacy runc SandboxExecutor for
-// container-type instances. sandboxd is the default backend when
-// YR_RUNTIME_BACKEND is absent or empty. Explicit legacy opt-out values keep the
-// old SandboxExecutor path for deployments that still provide a legacy-compatible
-// endpoint.
-bool UseSandboxdBackend()
-{
-    static const bool enabled = []() {
-        auto envOpt = litebus::os::GetEnv("YR_RUNTIME_BACKEND");
-        if (envOpt.IsNone() || envOpt.Get().empty()) {
-            return true;
-        }
-        auto v = envOpt.Get();
-        auto isNotSpace = [](unsigned char c) { return !std::isspace(c); };
-        v.erase(v.begin(), std::find_if(v.begin(), v.end(), isNotSpace));
-        v.erase(std::find_if(v.rbegin(), v.rend(), isNotSpace).base(), v.end());
-        std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) {
-            return static_cast<char>(std::tolower(c));
-        });
-        if (v.empty()) {
-            return true;
-        }
-        if (v == "container" || v == "runc" || v == "legacy" || v == "false" || v == "0") {
-            return false;
-        }
-        // sandboxd is the default; unknown non-empty values must not silently
-        // fall back to the legacy container path.
-        return true;
-    }();
-    return enabled;
-}
-
-// ContainerExecutorType resolves which container executor type is active for the
-// current process: SANDBOXD when the sandboxd backend is enabled, else CONTAINER.
+// Container workloads are served exclusively by sandboxd. CONTAINER remains a
+// wire-level compatibility value in existing requests and persisted responses,
+// but it is normalized to SANDBOXD before executor lookup.
 EXECUTOR_TYPE ContainerExecutorType()
 {
-    return UseSandboxdBackend() ? EXECUTOR_TYPE::SANDBOXD : EXECUTOR_TYPE::CONTAINER;
+    return EXECUTOR_TYPE::SANDBOXD;
+}
+
+EXECUTOR_TYPE NormalizeExecutorType(EXECUTOR_TYPE type)
+{
+    return type == EXECUTOR_TYPE::CONTAINER ? ContainerExecutorType() : type;
 }
 RuntimeManager::RuntimeManager(const std::string &name, bool logReuse) : ActorBase(name), logReuse_(logReuse)
 {
@@ -156,14 +124,10 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
     if (CheckInstanceIsDeployed(from, instance)) {
         return;
     }
-    // Route through the active backend: a CONTAINER request must resolve via
-    // ContainerExecutorType() (CONTAINER->SANDBOXD under YR_RUNTIME_BACKEND=sandboxd),
-    // matching GetRuntimeType()/ReconcileRuntimes(). Using the raw request type here
-    // created a SandboxExecutor with a null containerd_ client and crashed in DoStart.
+    // CONTAINER is retained on the wire for compatibility and normalized to the
+    // only supported container backend, SANDBOXD.
     auto type = static_cast<EXECUTOR_TYPE>(request->type());
-    if (type == EXECUTOR_TYPE::CONTAINER) {
-        type = ContainerExecutorType();
-    }
+    type = NormalizeExecutorType(type);
     auto executor = FindExecutor(type);
     if (executor == nullptr) {
         StartInstanceExecutorUnavailable(from, request, type);
@@ -193,8 +157,7 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
                                    request->runtimeinstanceinfo().instanceid(), std::placeholders::_1));
 }
 
-void RuntimeManager::StartInstanceExecutorUnavailable(
-    const litebus::AID &from,
+void RuntimeManager::StartInstanceExecutorUnavailable(const litebus::AID &from,
     const std::shared_ptr<messages::StartInstanceRequest> &request,
     EXECUTOR_TYPE type)
 {
@@ -386,8 +349,8 @@ void RuntimeManager::SnapshotRuntime(const litebus::AID &from, std::string &&, s
 
     const std::string &instanceID = request->instanceid();
     const std::string &runtimeID = request->runtimeid();
-    YRLOG_INFO("{}|received SnapshotRuntime request for instance({}), runtime({})",
-               request->requestid(), instanceID, runtimeID);
+    YRLOG_INFO("{}|received SnapshotRuntime request for instance({}), runtime({})", request->requestid(), instanceID,
+               runtimeID);
 
     // Find executor by runtime type (CONTAINER or SANDBOXD backend)
     auto executor = FindExecutor(GetRuntimeType(runtimeID));
@@ -402,9 +365,8 @@ void RuntimeManager::SnapshotRuntime(const litebus::AID &from, std::string &&, s
     }
 
     // Call executor's SnapshotRuntime method
-    executor->SnapshotRuntime(request)
-        .Then(litebus::Defer(GetAID(), &RuntimeManager::SnapshotRuntimeResponse, from, instanceID,
-            request->requestid(), std::placeholders::_1));
+    executor->SnapshotRuntime(request).Then(litebus::Defer(GetAID(), &RuntimeManager::SnapshotRuntimeResponse, from,
+                                                           instanceID, request->requestid(), std::placeholders::_1));
 }
 
 void RuntimeManager::HandlePrestartRuntimeExit(const pid_t pid)
@@ -424,8 +386,7 @@ void RuntimeManager::SetConfig(const Flags &flags)
     // executor (SANDBOXD when enabled, else CONTAINER), while preserving
     // explicit supervisor/docker executors used by the master-side branch.
     auto containerType = ContainerExecutorType();
-    for (auto type : {EXECUTOR_TYPE::RUNTIME, containerType, EXECUTOR_TYPE::SUPERVISOR,
-                      EXECUTOR_TYPE::DOCKER}) {
+    for (auto type : { EXECUTOR_TYPE::RUNTIME, containerType, EXECUTOR_TYPE::SUPERVISOR, EXECUTOR_TYPE::DOCKER }) {
         auto executor = FindExecutor(type);
         YRLOG_INFO("SetRuntimeConfig for type({})", fmt::underlying(type));
         if (executor != nullptr) {
@@ -547,14 +508,15 @@ std::string RuntimeManager::GetExecutorUnavailableMessage(EXECUTOR_TYPE type)
 
 std::shared_ptr<ExecutorProxy> RuntimeManager::FindExecutor(EXECUTOR_TYPE type)
 {
+    if (type == EXECUTOR_TYPE::CONTAINER) {
+        type = ContainerExecutorType();
+    }
     if (auto iter(executorMap_.find(type)); iter != executorMap_.end()) {
         return iter->second;
     }
     switch (type) {
         case EXECUTOR_TYPE::RUNTIME:
             return CreateRuntimeExecutor();
-        case EXECUTOR_TYPE::CONTAINER:
-            return CreateContainerExecutor();
         case EXECUTOR_TYPE::SUPERVISOR:
             return CreateSupervisorExecutor();
         case EXECUTOR_TYPE::DOCKER:
@@ -575,19 +537,6 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::CreateRuntimeExecutor()
     litebus::Spawn(executor, false);
     auto executorProxy = std::make_shared<RuntimeExecutorProxy>(executor);
     (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::RUNTIME, executorProxy));
-    return executorProxy;
-}
-
-std::shared_ptr<ExecutorProxy> RuntimeManager::CreateContainerExecutor()
-{
-    YRLOG_INFO("create a sandbox executor.");
-    auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
-    const std::string name = "RuntimeExecutor_" + uuid.ToString();
-    auto executor = std::make_shared<SandboxExecutor>(name, functionAgentAID_, checkpointDir_);
-    executor->SetHealthCheckClient(healthCheckClient_);
-    litebus::Spawn(executor, false);
-    auto executorProxy = std::make_shared<SandboxExecutorProxy>(executor);
-    (void)executorMap_.insert(std::make_pair(EXECUTOR_TYPE::CONTAINER, executorProxy));
     return executorProxy;
 }
 
@@ -1088,8 +1037,8 @@ void RuntimeManager::QueryDebugInstanceInfos(const litebus::AID &from, std::stri
     YRLOG_DEBUG("{}|received query debug instances infos.", request.requestid());
 
     RETURN_IF_NULL(debugServerMgr_);
-    debugServerMgr_->QueryDebugInstanceInfos(request.requestid()).Then(litebus::Defer(
-        GetAID(), &RuntimeManager::QueryDebugInstanceInfosResponse, from, std::placeholders::_1));
+    debugServerMgr_->QueryDebugInstanceInfos(request.requestid())
+        .Then(litebus::Defer(GetAID(), &RuntimeManager::QueryDebugInstanceInfosResponse, from, std::placeholders::_1));
 }
 
 Status RuntimeManager::QueryDebugInstanceInfosResponse(const litebus::AID &from,
@@ -1100,8 +1049,8 @@ Status RuntimeManager::QueryDebugInstanceInfosResponse(const litebus::AID &from,
     return Status::OK();
 }
 
-Status RuntimeManager::SnapshotRuntimeResponse(
-    const litebus::AID &from, const std::string &instanceID, const std::string &requestID,
+Status RuntimeManager::SnapshotRuntimeResponse(const litebus::AID &from, const std::string &instanceID,
+                                               const std::string &requestID,
     const litebus::Future<messages::SnapshotRuntimeResponse> &responseFuture)
 {
     if (responseFuture.IsError()) {
@@ -1140,8 +1089,8 @@ void RuntimeManager::QueryInstanceStatusInfo(const litebus::AID &from, std::stri
         messages::InstanceStatusInfo info;
         info.set_instanceid(request.instanceid());
         info.set_status(-1);
-        info.set_instancemsg("an unknown error caused the instance exited. instance:" + request.instanceid() +
-                             " runtime:" + request.runtimeid() + " which is not found. ");
+        info.set_instancemsg("an unknown error caused the instance exited. instance:" + request.instanceid()
+                             + " runtime:" + request.runtimeid() + " which is not found. ");
         info.set_type(static_cast<int32_t>(EXIT_TYPE::NONE_EXIT));
         QueryInstanceStatusInfoResponse(from, request.requestid(), info);
         return;
@@ -1257,6 +1206,8 @@ EXECUTOR_TYPE RuntimeManager::ResolveStopExecutorType(const std::shared_ptr<mess
 {
     auto executorType = static_cast<EXECUTOR_TYPE>(request->executortype());
     if (executorType != EXECUTOR_TYPE::RUNTIME) {
+        executorType = NormalizeExecutorType(executorType);
+        request->set_executortype(static_cast<int32_t>(executorType));
         return executorType;
     }
 
@@ -1291,7 +1242,7 @@ EXECUTOR_TYPE RuntimeManager::GetRuntimeType(const std::string &runtimeID)
             const auto executorType =
                 static_cast<EXECUTOR_TYPE>(response->second.startruntimeinstanceresponse().executortype());
             if (executorType != EXECUTOR_TYPE::RUNTIME) {
-                return executorType;
+                return NormalizeExecutorType(executorType);
             }
         }
         return ContainerExecutorType();
@@ -1299,7 +1250,8 @@ EXECUTOR_TYPE RuntimeManager::GetRuntimeType(const std::string &runtimeID)
 
     const auto response = instanceResponseMap_.find(instance->second.instanceid());
     if (response != instanceResponseMap_.end()) {
-        return static_cast<EXECUTOR_TYPE>(response->second.startruntimeinstanceresponse().executortype());
+        return NormalizeExecutorType(
+            static_cast<EXECUTOR_TYPE>(response->second.startruntimeinstanceresponse().executortype()));
     }
     return EXECUTOR_TYPE::RUNTIME;
 }
@@ -1320,10 +1272,9 @@ void RuntimeManager::ReconcileRuntimes(const litebus::AID &from, std::string &&,
         Send(from, "ReconcileRuntimesResponse", resp.SerializeAsString());
         return;
     }
-    executor->ReconcileRuntimes(request)
-        .OnComplete(litebus::Defer(GetAID(),
-            [this, from, requestID = request->requestid()](
-                const litebus::Future<messages::ReconcileRuntimesResponse> &resp) {
+    executor->ReconcileRuntimes(request).OnComplete(litebus::Defer(
+        GetAID(), [this, from,
+                   requestID = request->requestid()](const litebus::Future<messages::ReconcileRuntimesResponse> &resp) {
                 if (resp.IsError()) {
                     YRLOG_ERROR("{}|ReconcileRuntimes failed: {}", requestID, resp.GetErrorCode());
                     messages::ReconcileRuntimesResponse errResp;

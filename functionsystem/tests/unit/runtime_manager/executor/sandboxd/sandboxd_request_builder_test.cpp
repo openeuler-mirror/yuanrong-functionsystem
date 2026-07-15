@@ -15,14 +15,15 @@
  */
 
 #include "runtime_manager/executor/sandboxd/sandboxd_request_builder.h"
-#include "runtime_manager/config/command_builder.h"
-#include "runtime_manager/config/build.h"
-#include "common/proto/pb/message_pb.h"
 
 #include <gtest/gtest.h>
 
 #include <memory>
 #include <string>
+
+#include "common/proto/pb/message_pb.h"
+#include "runtime_manager/config/build.h"
+#include "runtime_manager/config/command_builder.h"
 
 using namespace functionsystem::runtime_manager;
 
@@ -46,7 +47,9 @@ public:
         builder_    = std::make_unique<SandboxdRequestBuilder>(*cmdBuilder_);
     }
 
-    void TearDown() override {}
+    void TearDown() override
+    {
+    }
 
     // Minimal params with no CONTAINER_ROOTFS -> Build succeeds against the
     // container config; flat request should carry sandbox_id/runtime/rootfs.
@@ -71,7 +74,7 @@ public:
     std::unique_ptr<SandboxdRequestBuilder> builder_;
 };
 
-// Build succeeds and returns a flat SandboxStartRequest.
+// Build succeeds and returns a flat StartRequest.
 TEST_F(SandboxdRequestBuilderTest, BuildReturnsFlatStartRequest)
 {
     auto params = MakeMinimalParams();
@@ -114,7 +117,6 @@ TEST_F(SandboxdRequestBuilderTest, FlatRequestEnvsCarriesLanguage)
     ASSERT_NE(startReq, nullptr);
     EXPECT_EQ(startReq->envs().at("YR_LANGUAGE"), "python3.9");
 }
-
 
 TEST_F(SandboxdRequestBuilderTest, SelfContainedBootstrapUsesOnlyBootstrapCommand)
 {

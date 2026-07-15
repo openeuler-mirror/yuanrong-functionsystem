@@ -20,7 +20,7 @@
 #include <memory>
 
 #include "common/proto/pb/message_pb.h"
-#include "common/proto/pb/posix/runtime_launcher_interface.grpc.pb.h"
+#include "common/proto/pb/posix/sandbox_api.grpc.pb.h"
 #include "common/trace/trace_manager.h"
 #include "function_agent/common/types.h"
 

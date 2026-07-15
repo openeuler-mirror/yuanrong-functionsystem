@@ -156,8 +156,8 @@ void RuntimeStateManager::UpdatePortMappings(const std::string &runtimeID, const
 
 // ── In-progress start tracking ────────────────────────────────────────────────
 
-void RuntimeStateManager::MarkStartInProgress(
-    const std::string &runtimeID, litebus::Future<messages::StartInstanceResponse> future)
+void RuntimeStateManager::MarkStartInProgress(const std::string &runtimeID,
+                                              litebus::Future<messages::StartInstanceResponse> future)
 {
     inProgressStarts_.emplace(runtimeID, std::move(future));
 }
@@ -197,32 +197,6 @@ void RuntimeStateManager::ClearPendingDelete(const std::string &runtimeID)
 bool RuntimeStateManager::IsPendingDelete(const std::string &runtimeID) const
 {
     return pendingDeletes_.count(runtimeID) > 0;
-}
-
-// ── Warm-up state ─────────────────────────────────────────────────────────────
-
-void RuntimeStateManager::RegisterWarmUp(const std::string &runtimeID, runtime::v1::FunctionRuntime proto)
-{
-    warmUpMap_[runtimeID] = std::move(proto);
-}
-
-void RuntimeStateManager::UnregisterWarmUp(const std::string &runtimeID)
-{
-    warmUpMap_.erase(runtimeID);
-}
-
-bool RuntimeStateManager::IsWarmUp(const std::string &runtimeID) const
-{
-    return warmUpMap_.count(runtimeID) > 0;
-}
-
-std::optional<runtime::v1::FunctionRuntime> RuntimeStateManager::GetWarmUp(const std::string &runtimeID) const
-{
-    auto it = warmUpMap_.find(runtimeID);
-    if (it == warmUpMap_.end()) {
-        return std::nullopt;
-    }
-    return it->second;
 }
 
 }  // namespace functionsystem::runtime_manager

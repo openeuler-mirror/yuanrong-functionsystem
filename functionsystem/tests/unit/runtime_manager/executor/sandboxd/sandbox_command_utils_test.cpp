@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "runtime_manager/executor/sandbox/sandbox_command_utils.h"
+#include "runtime_manager/executor/sandboxd/sandbox_command_utils.h"
 
 #include <gtest/gtest.h>
 

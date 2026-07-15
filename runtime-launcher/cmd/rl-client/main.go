@@ -227,12 +227,12 @@ func mustStart(ctx context.Context, client runtimev1.SandboxServiceClient, opts 
 	return resp.GetId()
 }
 
-func buildStartRequest(runtimeID string, opts startOptions) *runtimev1.SandboxStartRequest {
+func buildStartRequest(runtimeID string, opts startOptions) *runtimev1.StartRequest {
 	command := parseCommand(opts.commandLine)
 	mountList := parseMounts(opts.mounts)
 	userEnvs := parseEnvMap(opts.envs)
 	portMappings := parsePorts(opts.ports)
-	return &runtimev1.SandboxStartRequest{
+	return &runtimev1.StartRequest{
 		SandboxId: runtimeID,
 		Runtime:   opts.image,
 		Rootfs: &runtimev1.RootfsConfig{
@@ -306,7 +306,7 @@ func parsePorts(ports string) []string {
 	return portMappings
 }
 
-func printStartRequest(opts startOptions, req *runtimev1.SandboxStartRequest) {
+func printStartRequest(opts startOptions, req *runtimev1.StartRequest) {
 	fmt.Println("--- 启动容器 ---")
 	fmt.Printf("  镜像:    %s\n", opts.image)
 	fmt.Printf("  命令:    %s\n", opts.commandLine)
@@ -378,7 +378,7 @@ func doRegister(ctx context.Context, client runtimev1.SandboxServiceClient, opts
 		}
 	}
 
-	req := &runtimev1.SandboxRegisterRequest{
+	req := &runtimev1.RegisterRequest{
 		Templates: []*runtimev1.SandboxTemplate{
 			{
 				Id:      id,
@@ -404,7 +404,7 @@ func doUnregister(ctx context.Context, client runtimev1.SandboxServiceClient, id
 		log.Fatal("--id 参数必填")
 	}
 	ids := strings.Split(id, ",")
-	resp, err := client.Unregister(ctx, &runtimev1.SandboxUnregisterRequest{Ids: ids})
+	resp, err := client.Unregister(ctx, &runtimev1.UnregisterRequest{Ids: ids})
 	if err != nil {
 		log.Fatalf("Unregister 失败: %v", err)
 	}
@@ -429,7 +429,7 @@ func doListSandboxes(ctx context.Context, client runtimev1.SandboxServiceClient)
 }
 
 func doListRegistered(ctx context.Context, client runtimev1.SandboxServiceClient) {
-	resp, err := client.GetRegistered(ctx, &runtimev1.SandboxGetRegisteredRequest{})
+	resp, err := client.GetRegistered(ctx, &runtimev1.GetRegisteredRequest{})
 	if err != nil {
 		log.Fatalf("GetRegistered 失败: %v", err)
 	}

@@ -14,13 +14,13 @@
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} SANDBOXD_TEST_SRCS)
 target_sources(${UNIT_TEST_MODULE} PRIVATE ${SANDBOXD_TEST_SRCS})
 
-# Focused test binary for the sandboxd executor (independent of the main unit
-# test module, which is currently blocked by a pre-existing sandbox test).
-# Mirrors sandbox_executor_metrics_test_bin in the sibling sandbox/ dir.
+# Focused test binary for the sandboxd executor.
 add_executable(sandboxd_test_bin
     ${PROJECT_SOURCE_DIR}/tests/unit/main.cpp
     sandboxd_request_builder_test.cpp
     sandboxd_executor_test.cpp
+    runtime_state_manager_test.cpp
+    sandbox_command_utils_test.cpp
 )
 target_compile_options(sandboxd_test_bin
     PRIVATE

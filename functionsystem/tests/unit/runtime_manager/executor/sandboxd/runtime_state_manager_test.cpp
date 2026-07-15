@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "runtime_manager/executor/sandbox/runtime_state_manager.h"
+#include "runtime_manager/executor/sandboxd/runtime_state_manager.h"
 
 #include <gtest/gtest.h>
 
@@ -26,8 +26,12 @@ namespace functionsystem::test {
 
 class RuntimeStateManagerTest : public ::testing::Test {
 public:
-    void SetUp() override {}
-    void TearDown() override {}
+    void SetUp() override
+    {
+    }
+    void TearDown() override
+    {
+    }
 
     RuntimeStateManager mgr_;
 };
@@ -186,22 +190,6 @@ TEST_F(RuntimeStateManagerTest, ClearPendingDeleteClearsFlag)
 
     mgr_.ClearPendingDelete(runtimeID);
     EXPECT_FALSE(mgr_.IsPendingDelete(runtimeID));
-}
-
-// T10-13: IsWarmUp: false before RegisterWarmUp, true after; false after UnregisterWarmUp
-TEST_F(RuntimeStateManagerTest, IsWarmUpLifecycle)
-{
-    const std::string runtimeID = "rt-013";
-
-    EXPECT_FALSE(mgr_.IsWarmUp(runtimeID));
-
-    runtime::v1::FunctionRuntime proto;
-    proto.set_id(runtimeID);
-    mgr_.RegisterWarmUp(runtimeID, std::move(proto));
-    EXPECT_TRUE(mgr_.IsWarmUp(runtimeID));
-
-    mgr_.UnregisterWarmUp(runtimeID);
-    EXPECT_FALSE(mgr_.IsWarmUp(runtimeID));
 }
 
 // T10-14 (corner case): GetAllInstanceInfos: empty map initially; correct count after registers

@@ -620,11 +620,11 @@ litebus::Future<Status> DockerExecutor::TerminateContainer(const std::string &ru
 
 // ---- BuildRuntimeCommands & SetRequestEnvsAndLogsForStart ----
 
-void DockerExecutor::BuildRuntimeCommands(runtime::v1::FunctionRuntime *funcRt,
+void DockerExecutor::BuildRuntimeCommands(runtime::v1::StartRequest *request,
     const std::vector<std::string> &buildArgs)
 {
     for (const auto &arg : buildArgs) {
-        funcRt->add_command(arg);
+        request->add_command(arg);
     }
 }
 
@@ -632,8 +632,8 @@ void DockerExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *re
     const std::string &runtimeID)
 {
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
-    req->mutable_userenvs()->insert(combineEnvs.begin(), combineEnvs.end());
-    (*req->mutable_userenvs())[YR_ONLY_STDOUT] = "true";
+    req->mutable_envs()->insert(combineEnvs.begin(), combineEnvs.end());
+    (*req->mutable_envs())[YR_ONLY_STDOUT] = "true";
 
     std::string stdOut;
     std::string stdErr;
@@ -827,7 +827,7 @@ std::vector<std::string> DockerExecutor::BuildContainerCommand(const std::string
     if (!execPath.empty()) {
         command.push_back(execPath);
     }
-    for (const auto &cmd : startReq.funcruntime().command()) {
+    for (const auto &cmd : startReq.command()) {
         command.push_back(cmd);
     }
     return command;
@@ -873,10 +873,10 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartRuntime(
     }
 
     runtime::v1::StartRequest startReq;
-    BuildRuntimeCommands(startReq.mutable_funcruntime(), args);
+    BuildRuntimeCommands(&startReq, args);
     SetRequestEnvsAndLogsForStart(&startReq, envs, runtimeID);
 
-    std::map<std::string, std::string> containerEnvs(startReq.userenvs().begin(), startReq.userenvs().end());
+    std::map<std::string, std::string> containerEnvs(startReq.envs().begin(), startReq.envs().end());
     containerEnvs.erase(LD_LIBRARY_PATH);
 
     std::vector<std::string> bindMounts = BuildBindMounts(envs, info);

@@ -34,7 +34,7 @@
 #include "runtime_manager/ckpt/ckpt_file_manager_actor.h"
 #include "runtime_manager/config/command_builder.h"
 #include "runtime_manager/executor/executor.h"
-#include "runtime_manager/executor/sandbox/runtime_state_manager.h"
+#include "runtime_manager/executor/sandboxd/runtime_state_manager.h"
 #include "sandboxd_checkpoint_orchestrator.h"
 #include "sandboxd_request_builder.h"
 
@@ -48,8 +48,7 @@ namespace functionsystem::runtime_manager {
  *                   back all state — ensuring no map entries leak on failure.
  * On Commit():      transitions state to "active" (MarkStartDone).
  *
- * (Mirrors SandboxStartGuard in sandbox_executor.h; duplicated here so the
- * legacy sandbox executor header stays untouched.)
+ * The guard keeps failed starts from leaking state into actor-owned maps.
  */
 class SandboxdStartGuard {
 public:
@@ -87,15 +86,9 @@ private:
 /**
  * SandboxdExecutor — lifecycle client for the sandboxd runtime.v1.SandboxService.
  *
- * It is the sandboxd counterpart of SandboxExecutor: same Start/Stop/Wait/List/
- * Stats lifecycle and reconciliation flow, but talks to sandboxd's SandboxService
- * (flat SandboxStartRequest, ListSandboxesResponse) instead of the legacy
- * RuntimeLauncher, and relies on the shared RuntimeStateManager.
- *
- * Operations the sandboxd SandboxService does NOT expose — warm-up (Register),
- * snapshot (Checkpoint), and checkpoint-based restore (ckpt_dir) — are reported
- * as RUNTIME_MANAGER_NOT_IMPLEMENTED at the client boundary; the rest of the
- * call chain is unchanged from SandboxExecutor.
+ * It drives Start/Stop/Wait/List/Stats, warm-up, checkpoint, restore, and
+ * reconciliation through sandboxd's SandboxService and relies on the shared
+ * RuntimeStateManager.
  */
 class SandboxdExecutor : public Executor {
 public:
@@ -121,8 +114,7 @@ public:
     // ── Executor interface ────────────────────────────────────────────────────
 
     litebus::Future<messages::StartInstanceResponse> StartInstance(
-        const std::shared_ptr<messages::StartInstanceRequest> &request,
-        const std::vector<int> &cardIDs) override;
+        const std::shared_ptr<messages::StartInstanceRequest> &request, const std::vector<int> &cardIDs) override;
 
     litebus::Future<Status> StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request,
                                          bool oomKilled = false) override;
@@ -134,8 +126,12 @@ public:
     std::map<std::string, messages::RuntimeInstanceInfo> GetRuntimeInstanceInfos() override;
     bool IsRuntimeActive(const std::string &runtimeID) override;
     std::shared_ptr<litebus::Exec> GetExecByRuntimeID(const std::string &runtimeID) override;
-    void ClearCapability() override {}
-    void UpdatePrestartRuntimePromise(pid_t /* pid */) override {}
+    void ClearCapability() override
+    {
+    }
+    void UpdatePrestartRuntimePromise(pid_t /* pid */) override
+    {
+    }
 
     litebus::Future<messages::UpdateCredResponse> UpdateCredForRuntime(
         const std::shared_ptr<messages::UpdateCredRequest> &request) override;
@@ -161,8 +157,12 @@ public:
 protected:
     void Init() override;
     void Finalize() override;
-    void InitPrestartRuntimePool() override {}
-    void InitVirtualEnvIdleTimeLimit() override {}
+    void InitPrestartRuntimePool() override
+    {
+    }
+    void InitVirtualEnvIdleTimeLimit() override
+    {
+    }
 
 private:
     // ── Start paths: normal / warm-up (Register) / restore (Restore) ───────────
@@ -194,67 +194,59 @@ private:
     litebus::Future<messages::StartInstanceResponse> StartNormal(const SandboxdStartContext &context);
 
     litebus::Future<messages::StartInstanceResponse> OnStartDone(
-        const runtime::v1::StartResponse &response,
-        const std::shared_ptr<messages::StartInstanceRequest> &request,
+        const runtime::v1::StartResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request,
         std::shared_ptr<SandboxdStartGuard> guard);
 
-    litebus::Future<messages::StartInstanceResponse> OnStartCompleted(
-        const std::string &runtimeID, const messages::StartInstanceResponse &response);
+    litebus::Future<messages::StartInstanceResponse> OnStartCompleted(const std::string &runtimeID,
+                                                                      const messages::StartInstanceResponse &response);
 
     // Warm-up: register a reusable SandboxTemplate via the Register RPC.
     litebus::Future<messages::StartInstanceResponse> StartWarmUp(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const CommandArgs &cmdArgs,
         const std::string &port, const Envs &envs, std::shared_ptr<SandboxdStartGuard> guard);
     litebus::Future<messages::StartInstanceResponse> OnWarmUpRegistered(
-        const runtime::v1::SandboxNormalResponse &response,
-        const std::shared_ptr<messages::StartInstanceRequest> &request,
+        const runtime::v1::NormalResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request,
         std::shared_ptr<SandboxdStartGuard> guard);
 
     // Restore: download checkpoint -> add ref -> Restore RPC.
     litebus::Future<messages::StartInstanceResponse> StartBySnapshot(const SandboxdStartContext &context);
-    litebus::Future<messages::StartInstanceResponse> OnCheckpointDownloaded(
-        const std::string &checkpointPath, const SandboxdStartContext &context);
-    litebus::Future<messages::StartInstanceResponse> OnCheckpointRefAdded(
-        const Status &refStatus,
+    litebus::Future<messages::StartInstanceResponse> OnCheckpointDownloaded(const std::string &checkpointPath,
+                                                                            const SandboxdStartContext &context);
+    litebus::Future<messages::StartInstanceResponse> OnCheckpointRefAdded(const Status &refStatus,
         const SandboxdRestoreContext &context);
     litebus::Future<messages::StartInstanceResponse> OnRestoreDone(
-        const runtime::v1::SandboxRestoreResponse &response,
-        const std::shared_ptr<messages::StartInstanceRequest> &request,
+        const runtime::v1::RestoreResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request,
         std::shared_ptr<SandboxdStartGuard> guard);
 
     // ── Stop helpers ──────────────────────────────────────────────────────────
 
-    litebus::Future<Status> StopSandbox(const std::string &runtimeID, const std::string &requestID,
-                                        bool oomKilled);
+    litebus::Future<Status> StopSandbox(const std::string &runtimeID, const std::string &requestID, bool oomKilled);
     litebus::Future<Status> TerminateSandbox(const std::string &runtimeID, const std::string &requestID,
                                              const std::string &sandboxID, bool force);
     litebus::Future<Status> OnDeleteDone(const std::string &runtimeID, const std::string &requestID,
-                                         const std::string &sandboxID,
-                                         const runtime::v1::DeleteResponse &response);
+                                         const std::string &sandboxID, const runtime::v1::DeleteResponse &response);
     // Warm-up teardown via the Unregister RPC.
     litebus::Future<Status> UnregisterWarmUp(const std::string &runtimeID, const std::string &requestID);
-    litebus::Future<Status> OnWarmUpUnregistered(const runtime::v1::SandboxNormalResponse &response,
+    litebus::Future<Status> OnWarmUpUnregistered(const runtime::v1::NormalResponse &response,
                                                  const std::string &runtimeID, const std::string &requestID);
 
     // ── gRPC call wrappers (thin, no business logic) ──────────────────────────
 
     litebus::Future<runtime::v1::ListSandboxesResponse> DoList();
-    litebus::Future<runtime::v1::StartResponse> DoStart(
-        const std::shared_ptr<messages::StartInstanceRequest> &request,
-        const std::shared_ptr<runtime::v1::SandboxStartRequest> &startReq);
+    litebus::Future<runtime::v1::StartResponse> DoStart(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                                        const std::shared_ptr<runtime::v1::StartRequest> &startReq);
 
-    litebus::Future<runtime::v1::DeleteResponse> DoDelete(
-        const std::string &instanceID, const std::string &runtimeID, const std::string &requestID,
+    litebus::Future<runtime::v1::DeleteResponse> DoDelete(const std::string &instanceID, const std::string &runtimeID,
+                                                          const std::string &requestID,
         const std::shared_ptr<runtime::v1::DeleteRequest> &req);
 
-    litebus::Future<runtime::v1::SandboxNormalResponse> DoRegister(
-        const std::shared_ptr<runtime::v1::SandboxRegisterRequest> &req);
-    litebus::Future<runtime::v1::SandboxNormalResponse> DoUnregister(
-        const std::shared_ptr<runtime::v1::SandboxUnregisterRequest> &req);
-    litebus::Future<runtime::v1::SandboxGetRegisteredResponse> DoGetRegistered();
-    litebus::Future<runtime::v1::SandboxRestoreResponse> DoRestore(
+    litebus::Future<runtime::v1::NormalResponse> DoRegister(const std::shared_ptr<runtime::v1::RegisterRequest> &req);
+    litebus::Future<runtime::v1::NormalResponse> DoUnregister(
+        const std::shared_ptr<runtime::v1::UnregisterRequest> &req);
+    litebus::Future<runtime::v1::GetRegisteredResponse> DoGetRegistered();
+    litebus::Future<runtime::v1::RestoreResponse> DoRestore(
         const std::shared_ptr<messages::StartInstanceRequest> &request,
-        const std::shared_ptr<runtime::v1::SandboxRestoreRequest> &req);
+        const std::shared_ptr<runtime::v1::RestoreRequest> &req);
 
     void DoWait(const std::string &sandboxID, const std::string &runtimeID);
     void RestoreWait(const std::string &sandboxID);
@@ -267,31 +259,21 @@ private:
     void ScheduleRunningStatusHeartbeat(const std::string &runtimeID);
     void ReportRunningStatusHeartbeat(const std::string &runtimeID);
     litebus::Future<Status> OnSandboxStatsCollected(const std::string &runtimeID, const std::string &sandboxID,
-                                                    const Status &status,
-                                                    const runtime::v1::StatsResponse &response,
+                                                    const Status &status, const runtime::v1::StatsResponse &response,
                                                     std::chrono::steady_clock::time_point collectedAt);
 
-    litebus::Future<Status> CleanupSandboxAfterMaxRetries(const std::string &runtimeID,
-                                                          const std::string &sandboxID);
+    litebus::Future<Status> CleanupSandboxAfterMaxRetries(const std::string &runtimeID, const std::string &sandboxID);
 
-    litebus::Future<Status> OnWaitDone(
-        const std::string &runtimeID, const runtime::v1::WaitResponse &response);
+    litebus::Future<Status> OnWaitDone(const std::string &runtimeID, const runtime::v1::WaitResponse &response);
 
     static void StartSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request);
-    static void StopSandboxCreateSpan(
-        const std::shared_ptr<messages::StartInstanceRequest> &request,
+    static void StopSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request,
         const runtime::v1::StartResponse &response);
 
-    void ReportSandboxLifecycleStatus(
-        const messages::RuntimeInstanceInfo &info,
-        const std::string &runtimeID,
+    void ReportSandboxLifecycleStatus(const messages::RuntimeInstanceInfo &info, const std::string &runtimeID,
         SandboxLifecycleStatus lifecycleStatus);
-    void ReportSandboxRequestedResources(
-        const messages::RuntimeInstanceInfo &info,
-        const std::string &runtimeID);
-    void ReportSandboxUsageMetrics(
-        const messages::RuntimeInstanceInfo &info,
-        const std::string &runtimeID,
+    void ReportSandboxRequestedResources(const messages::RuntimeInstanceInfo &info, const std::string &runtimeID);
+    void ReportSandboxUsageMetrics(const messages::RuntimeInstanceInfo &info, const std::string &runtimeID,
         const runtime::v1::StatsResponse &response,
         std::chrono::steady_clock::time_point collectedAt);
     void ClearSandboxMetricsState(const std::string &runtimeID);
@@ -306,16 +288,15 @@ private:
     messages::StartInstanceResponse MakeSuccessStartResponse(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &sandboxID);
 
-    void ReportMetrics(const std::string &instanceID, const std::string &runtimeID,
-                       const std::string &sandboxID, const functionsystem::metrics::MeterTitle &title);
+    void ReportMetrics(const std::string &instanceID, const std::string &runtimeID, const std::string &sandboxID,
+                       const functionsystem::metrics::MeterTitle &title);
 
-    void DoReportMetrics(const std::string &instanceID, const std::string &runtimeID,
-                         const std::string &sandboxID, const functionsystem::metrics::MeterTitle &title);
+    void DoReportMetrics(const std::string &instanceID, const std::string &runtimeID, const std::string &sandboxID,
+                         const functionsystem::metrics::MeterTitle &title);
 
     // ── Reconciliation helpers ────────────────────────────────────────────────
 
-    void WaitAndReconcile(
-        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request, int32_t retryCount,
+    void WaitAndReconcile(const std::shared_ptr<messages::ReconcileRuntimesRequest> &request, int32_t retryCount,
         const std::shared_ptr<litebus::Promise<messages::ReconcileRuntimesResponse>> &promise);
 
     messages::ReconcileRuntimesResponse OnReconcileRuntimes(
@@ -324,28 +305,21 @@ private:
 
     void CleanupExitedSandboxes(const std::string &requestID,
                                 const std::shared_ptr<runtime::v1::ListSandboxesResponse> &listResp,
-                                messages::ReconcileRuntimesResponse *response,
-                                int32_t *orphansCleaned);
+                                messages::ReconcileRuntimesResponse *response, int32_t *orphansCleaned);
 
     void CleanupOrphanSandboxes(const ReconcileCleanupContext &context);
 
-    void AddMissingAndConfirmedEntries(
-        const std::shared_ptr<messages::ReconcileRuntimesRequest> &request,
+    void AddMissingAndConfirmedEntries(const std::shared_ptr<messages::ReconcileRuntimesRequest> &request,
         const std::unordered_set<std::string> &actualRunningIDs,
         messages::ReconcileRuntimesResponse *response);
 
     void PurgeOrphanTracking(const std::unordered_set<std::string> &actualRunningIDs);
     void CleanupLocalRuntimeStateForOrphan(const std::string &requestID, const std::string &sandboxID);
     void DeleteSandboxAsync(const std::string &sandboxID);
-    Status OnDeleteSandboxComplete(
-        const std::string &sandboxID,
-        litebus::Try<runtime::v1::DeleteResponse> rsp);
-    Status BuildStartCommandArgs(
-        const std::shared_ptr<messages::StartInstanceRequest> &request,
-        const std::string &port,
-        CommandArgs *cmdArgs);
-    void ApplyPortForwardMappings(
-        SandboxdStartParams *params,
+    Status OnDeleteSandboxComplete(const std::string &sandboxID, litebus::Try<runtime::v1::DeleteResponse> rsp);
+    Status BuildStartCommandArgs(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                 const std::string &port, CommandArgs *cmdArgs);
+    void ApplyPortForwardMappings(SandboxdStartParams *params,
         const std::shared_ptr<messages::StartInstanceRequest> &request);
 
     // ── State ─────────────────────────────────────────────────────────────────
@@ -380,24 +354,25 @@ private:
 };
 
 /**
- * SandboxdExecutorProxy — thin actor-message bridge (mirrors SandboxExecutorProxy).
+ * SandboxdExecutorProxy — thin actor-message bridge.
  */
 class SandboxdExecutorProxy : public ExecutorProxy {
 public:
     explicit SandboxdExecutorProxy(const std::shared_ptr<SandboxdExecutor> &executor)
-        : ExecutorProxy(executor), sandboxd_(executor) {}
+        : ExecutorProxy(executor), sandboxd_(executor)
+    {
+    }
 
     ~SandboxdExecutorProxy() override = default;
 
     litebus::Future<messages::StartInstanceResponse> StartInstance(
-        const std::shared_ptr<messages::StartInstanceRequest> &request,
-        const std::vector<int> &cardIDs) override
+        const std::shared_ptr<messages::StartInstanceRequest> &request, const std::vector<int> &cardIDs) override
     {
         return litebus::Async(sandboxd_->GetAID(), &SandboxdExecutor::StartInstance, request, cardIDs);
     }
 
-    litebus::Future<Status> StopInstance(
-        const std::shared_ptr<messages::StopInstanceRequest> &request, bool oomKilled = false) override
+    litebus::Future<Status> StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request,
+                                         bool oomKilled = false) override
     {
         return litebus::Async(sandboxd_->GetAID(), &SandboxdExecutor::StopInstance, request, oomKilled);
     }
@@ -413,8 +388,12 @@ public:
         return litebus::Async(sandboxd_->GetAID(), &SandboxdExecutor::GetRuntimeInstanceInfos);
     }
 
-    void UpdatePrestartRuntimePromise(pid_t /* pid */) override {}
-    void ClearCapability() override {}
+    void UpdatePrestartRuntimePromise(pid_t /* pid */) override
+    {
+    }
+    void ClearCapability() override
+    {
+    }
 
     litebus::Future<bool> GracefulShutdown() override
     {

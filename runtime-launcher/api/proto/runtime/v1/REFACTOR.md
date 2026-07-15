@@ -13,11 +13,11 @@
 
 ---
 
-## Compatibility TODO
+## Compatibility cleanup
 
-当前阶段为了保留旧 `sandbox-executor` / `runtime_launcher_interface.proto` 兼容，`sandbox_api.proto` 仍复用部分旧 message 并对会冲突的 sandboxd message 使用 `Sandbox*` 前缀。
-
-TODO：等旧 `sandbox-executor` 后端从 `runtime_manager` 移除后，把 `proto/posix/sandbox_api.proto` 改成自包含的 sandboxd 原始契约，恢复 `StartRequest` / `RegisterRequest` / `NormalResponse` / `CheckpointRequest` 等原名，并让 runtime-launcher 只从 `sandbox_api.proto` 生成 Go pb。
+旧 `sandbox-executor` 与 `runtime_launcher_interface.proto` 已移除。`sandbox_api.proto`
+现在是自包含的 sandboxd 契约，使用 `StartRequest`、`RegisterRequest`、
+`NormalResponse`、`CheckpointRequest` 等原始名称；C++ 和 Go 均只从该文件生成协议代码。
 
 ## 1. Service 与 RPC 变更
 

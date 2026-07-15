@@ -18,5 +18,4 @@ add_dependencies(runtime_manager_lib posix_pb)
 
 target_sources(runtime_manager_lib PRIVATE ${EXECUTOR_SRCS})
 
-add_subdirectory(sandbox)
 add_subdirectory(sandboxd)

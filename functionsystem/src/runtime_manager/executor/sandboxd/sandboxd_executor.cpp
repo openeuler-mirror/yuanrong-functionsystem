@@ -18,8 +18,8 @@
 
 #include <algorithm>
 #include <chrono>
-#include <unordered_set>
 #include <nlohmann/json.hpp>
+#include <unordered_set>
 
 #include "async/asyncafter.hpp"
 #include "async/collect.hpp"
@@ -35,7 +35,7 @@
 #include "common/utils/struct_transfer.h"
 #include "port/port_manager.h"
 #include "runtime_manager/config/build.h"
-#include "runtime_manager/executor/sandbox/sandbox_command_utils.h"
+#include "runtime_manager/executor/sandboxd/sandbox_command_utils.h"
 #include "sandboxd_request_builder.h"
 #include "utils/utils.h"
 
@@ -207,8 +207,7 @@ SandboxRequestedResources GetSandboxRequestedResources(const messages::RuntimeIn
     requested.cpuCores = cpuMillicores / CPU_MILLICORES_PER_CORE;
 
     auto memoryIt = resources.find(resource_view::MEMORY_RESOURCE_NAME);
-    double memoryMb = memoryIt != resources.end()
-        ? GetEffectiveScalarLimit(memoryIt->second, DEFAULT_SANDBOX_MEMORY_MB)
+    double memoryMb = memoryIt != resources.end() ? GetEffectiveScalarLimit(memoryIt->second, DEFAULT_SANDBOX_MEMORY_MB)
         : DEFAULT_SANDBOX_MEMORY_MB;
     requested.memoryBytes = memoryMb * BYTES_PER_MB;
 
@@ -216,8 +215,7 @@ SandboxRequestedResources GetSandboxRequestedResources(const messages::RuntimeIn
 }
 
 functionsystem::metrics::LabelType BuildSandboxMetricLabels(const messages::RuntimeInstanceInfo &info,
-                                                            const std::string &runtimeID,
-                                                            const std::string &sandboxID)
+                                                            const std::string &runtimeID, const std::string &sandboxID)
 {
     return {
         { "instance_id", info.instanceid() },
@@ -246,8 +244,7 @@ bool IsSandboxMetricsEnabled()
 }
 
 void ReportSandboxGauge(const functionsystem::metrics::MeterTitle &title,
-                        const functionsystem::metrics::LabelType &labels,
-                        double value)
+                        const functionsystem::metrics::LabelType &labels, double value)
 {
     if (!IsSandboxMetricsEnabled()) {
         return;
@@ -266,9 +263,7 @@ bool IsNormalSandboxExit(const runtime::v1::WaitResponse &response)
 bool SandboxdExecutor::IsRetryableWaitError(const Status &status)
 {
     const auto code = status.StatusCode();
-    return code == GRPC_UNAVAILABLE
-        || code == GRPC_CANCELLED
-        || code == GRPC_DEADLINE_EXCEEDED
+    return code == GRPC_UNAVAILABLE || code == GRPC_CANCELLED || code == GRPC_DEADLINE_EXCEEDED
         || code == GRPC_INTERNAL;
 }
 
@@ -277,8 +272,7 @@ void SandboxdExecutor::StartSandboxCreateSpan(const std::shared_ptr<messages::St
     trace::StartSandboxCreateSpan(request);
 }
 
-void SandboxdExecutor::StopSandboxCreateSpan(
-    const std::shared_ptr<messages::StartInstanceRequest> &request,
+void SandboxdExecutor::StopSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request,
     const runtime::v1::StartResponse &response)
 {
     trace::StopSandboxCreateSpan(request, response);
@@ -329,8 +323,7 @@ void SandboxdExecutor::Finalize()
 // ── StartInstance ─────────────────────────────────────────────────────────────
 
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartInstance(
-    const std::shared_ptr<messages::StartInstanceRequest> &request,
-    const std::vector<int> &cardIDs)
+    const std::shared_ptr<messages::StartInstanceRequest> &request, const std::vector<int> &cardIDs)
 {
     const auto &info     = request->runtimeinstanceinfo();
     const auto &runtimeID = info.runtimeid();
@@ -382,8 +375,8 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartInstance
     } else {
         future = StartNormal(context);
     }
-    future = future.Then(
-        litebus::Defer(GetAID(), &SandboxdExecutor::OnStartCompleted, runtimeID, std::placeholders::_1));
+    future =
+        future.Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnStartCompleted, runtimeID, std::placeholders::_1));
     stateManager_.MarkStartInProgress(runtimeID, future);
     return future;
 }
@@ -393,8 +386,8 @@ Status SandboxdExecutor::BuildStartCommandArgs(const std::shared_ptr<messages::S
 {
     const auto &info = request->runtimeinstanceinfo();
     if (HasSelfContainedSandboxBootstrap(request)) {
-        YRLOG_DEBUG("{}|{}|StartInstance: using self-contained bootstrap command without runtime args",
-                    info.traceid(), info.requestid());
+        YRLOG_DEBUG("{}|{}|StartInstance: using self-contained bootstrap command without runtime args", info.traceid(),
+                    info.requestid());
         return Status::OK();
     }
 
@@ -404,8 +397,8 @@ Status SandboxdExecutor::BuildStartCommandArgs(const std::shared_ptr<messages::S
         return Status::OK();
     }
 
-    YRLOG_ERROR("{}|{}|BuildArgs failed for instanceID({}): {}", info.traceid(), info.requestid(),
-                info.instanceid(), buildStatus.RawMessage());
+    YRLOG_ERROR("{}|{}|BuildArgs failed for instanceID({}): {}", info.traceid(), info.requestid(), info.instanceid(),
+                buildStatus.RawMessage());
     ReportSandboxLifecycleStatus(info, info.runtimeid(), SandboxLifecycleStatus::ABNORMAL);
     stateManager_.Unregister(info.runtimeid());
     return buildStatus;
@@ -433,14 +426,14 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnStartComple
 // ── Warm-up path (Register a reusable SandboxTemplate) ───────────────────────
 
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartWarmUp(
-    const std::shared_ptr<messages::StartInstanceRequest> &request, const CommandArgs &cmdArgs,
-    const std::string &port, const Envs &envs, std::shared_ptr<SandboxdStartGuard> guard)
+    const std::shared_ptr<messages::StartInstanceRequest> &request, const CommandArgs &cmdArgs, const std::string &port,
+    const Envs &envs, std::shared_ptr<SandboxdStartGuard> guard)
 {
     const auto &info      = request->runtimeinstanceinfo();
     const auto &runtimeID = info.runtimeid();
     const auto combineEnvs = cmdBuilder_.CombineEnvs(envs);
 
-    auto registerReq = std::make_shared<runtime::v1::SandboxRegisterRequest>();
+    auto registerReq = std::make_shared<runtime::v1::RegisterRequest>();
     auto *tmpl = registerReq->add_templates();
     tmpl->set_id(runtimeID);
     tmpl->set_runtime(info.container().runtime());
@@ -477,8 +470,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartWarmUp(
 }
 
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnWarmUpRegistered(
-    const runtime::v1::SandboxNormalResponse &response,
-    const std::shared_ptr<messages::StartInstanceRequest> &request,
+    const runtime::v1::NormalResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request,
     std::shared_ptr<SandboxdStartGuard> guard)
 {
     const auto &info      = request->runtimeinstanceinfo();
@@ -500,8 +492,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnWarmUpRegis
 
 // ── Restore path (download checkpoint -> add ref -> Restore RPC) ─────────────
 
-litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartBySnapshot(
-    const SandboxdStartContext &context)
+litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartBySnapshot(const SandboxdStartContext &context)
 {
     const auto &request = context.request;
     const auto &info         = request->runtimeinstanceinfo();
@@ -512,8 +503,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartBySnapsh
 
     ASSERT_IF_NULL(ckptOrch_);
     return ckptOrch_->DownloadForRestore(snapshotInfo.checkpointid(), snapshotInfo.storage(), info.requestid())
-        .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnCheckpointDownloaded, std::placeholders::_1,
-                             context));
+        .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnCheckpointDownloaded, std::placeholders::_1, context));
 }
 
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointDownloaded(
@@ -557,25 +547,24 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointR
         return GenFailStartInstanceResponse(request, status.StatusCode(), status.RawMessage());
     }
 
-    auto restoreReq = std::make_shared<runtime::v1::SandboxRestoreRequest>();
+    auto restoreReq = std::make_shared<runtime::v1::RestoreRequest>();
     *restoreReq->mutable_sandbox() = *startReq;
     restoreReq->set_checkpoint_dir(context.checkpointPath);
 
     StartSandboxCreateSpan(request);
     return DoRestore(request, restoreReq)
-        .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnRestoreDone, std::placeholders::_1,
-                             request, context.start.guard));
+        .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnRestoreDone, std::placeholders::_1, request,
+                             context.start.guard));
 }
 
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnRestoreDone(
-    const runtime::v1::SandboxRestoreResponse &response,
-    const std::shared_ptr<messages::StartInstanceRequest> &request,
+    const runtime::v1::RestoreResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request,
     std::shared_ptr<SandboxdStartGuard> guard)
 {
     const auto &info = request->runtimeinstanceinfo();
     if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
-        YRLOG_ERROR("{}|{}|restore failed for runtime({}): {}", info.traceid(), info.requestid(),
-                    info.runtimeid(), response.message());
+        YRLOG_ERROR("{}|{}|restore failed for runtime({}): {}", info.traceid(), info.requestid(), info.runtimeid(),
+                    response.message());
         ReportSandboxLifecycleStatus(info, info.runtimeid(), SandboxLifecycleStatus::ABNORMAL);
         // Compensate: release the checkpoint ref we added before restore
         ckptOrch_->ReleaseRef(info.runtimeid(), info.requestid());
@@ -620,12 +609,10 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartNormal(
     }
     StartSandboxCreateSpan(request);
     return DoStart(request, startReq)
-        .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnStartDone, std::placeholders::_1,
-                             request, context.guard));
+        .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnStartDone, std::placeholders::_1, request, context.guard));
 }
 
-void SandboxdExecutor::ApplyPortForwardMappings(
-    SandboxdStartParams *params,
+void SandboxdExecutor::ApplyPortForwardMappings(SandboxdStartParams *params,
     const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &deployOpts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
@@ -637,8 +624,8 @@ void SandboxdExecutor::ApplyPortForwardMappings(
     if (forwardConfigs.empty()) {
         return;
     }
-    auto hostPorts = PortManager::GetInstance().RequestPorts(params->runtimeID,
-                                                             static_cast<int>(forwardConfigs.size()));
+    auto hostPorts =
+        PortManager::GetInstance().RequestPorts(params->runtimeID, static_cast<int>(forwardConfigs.size()));
     if (hostPorts.size() != forwardConfigs.size()) {
         return;
     }
@@ -654,8 +641,7 @@ void SandboxdExecutor::ApplyPortForwardMappings(
 }
 
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnStartDone(
-    const runtime::v1::StartResponse &response,
-    const std::shared_ptr<messages::StartInstanceRequest> &request,
+    const runtime::v1::StartResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request,
     std::shared_ptr<SandboxdStartGuard> guard)
 {
     const auto &info      = request->runtimeinstanceinfo();
@@ -676,8 +662,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnStartDone(
     sandboxStatsPollingRuntimes_.insert(runtimeID);
     CollectSandboxStats(runtimeID, sandboxID);
     DoWaitWithRetry(sandboxID, runtimeID, 0);
-    ReportMetrics(info.instanceid(), runtimeID, sandboxID,
-                  {"yr_app_instance_start_time", " start timestamp", "ms"});
+    ReportMetrics(info.instanceid(), runtimeID, sandboxID, { "yr_app_instance_start_time", " start timestamp", "ms" });
     YRLOG_INFO("{}|{}|StartNormal success: instance({}) runtime({}) sandbox({})", info.traceid(), info.requestid(),
                info.instanceid(), runtimeID, sandboxID);
     return MakeSuccessStartResponse(request, sandboxID);
@@ -685,8 +670,8 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnStartDone(
 
 // ── StopInstance ──────────────────────────────────────────────────────────────
 
-litebus::Future<Status> SandboxdExecutor::StopInstance(
-    const std::shared_ptr<messages::StopInstanceRequest> &request, bool oomKilled)
+litebus::Future<Status> SandboxdExecutor::StopInstance(const std::shared_ptr<messages::StopInstanceRequest> &request,
+                                                       bool oomKilled)
 {
     const std::string &runtimeID = request->runtimeid();
     const std::string &requestID = request->requestid();
@@ -698,8 +683,8 @@ litebus::Future<Status> SandboxdExecutor::StopInstance(
     return StopSandbox(runtimeID, requestID, oomKilled);
 }
 
-litebus::Future<Status> SandboxdExecutor::StopSandbox(const std::string &runtimeID,
-                                                      const std::string &requestID, bool oomKilled)
+litebus::Future<Status> SandboxdExecutor::StopSandbox(const std::string &runtimeID, const std::string &requestID,
+                                                      bool oomKilled)
 {
     if (stateManager_.IsStartInProgress(runtimeID)) {
         YRLOG_INFO("{}|runtime({}) start in progress, marking pending delete", requestID, runtimeID);
@@ -721,8 +706,7 @@ litebus::Future<Status> SandboxdExecutor::StopSandbox(const std::string &runtime
     return TerminateSandbox(runtimeID, requestID, sandboxID, oomKilled);
 }
 
-litebus::Future<Status> SandboxdExecutor::TerminateSandbox(const std::string &runtimeID,
-                                                           const std::string &requestID,
+litebus::Future<Status> SandboxdExecutor::TerminateSandbox(const std::string &runtimeID, const std::string &requestID,
                                                            const std::string &sandboxID, bool force)
 {
     int64_t timeout = DEFAULT_GRACEFUL_SHUTDOWN;
@@ -739,9 +723,7 @@ litebus::Future<Status> SandboxdExecutor::TerminateSandbox(const std::string &ru
                              std::placeholders::_1));
 }
 
-litebus::Future<Status> SandboxdExecutor::OnDeleteDone(
-    const std::string &runtimeID,
-    const std::string &requestID,
+litebus::Future<Status> SandboxdExecutor::OnDeleteDone(const std::string &runtimeID, const std::string &requestID,
     const std::string &sandboxID,
     const runtime::v1::DeleteResponse & /* response */)
 {
@@ -751,8 +733,7 @@ litebus::Future<Status> SandboxdExecutor::OnDeleteDone(
 
     if (auto info = stateManager_.Find(runtimeID)) {
         auto lifecycleIt = sandboxLifecycleStates_.find(runtimeID);
-        if (lifecycleIt == sandboxLifecycleStates_.end()
-            || lifecycleIt->second != SandboxLifecycleStatus::ABNORMAL) {
+        if (lifecycleIt == sandboxLifecycleStates_.end() || lifecycleIt->second != SandboxLifecycleStatus::ABNORMAL) {
             ReportSandboxLifecycleStatus(info->instanceInfo, runtimeID, SandboxLifecycleStatus::COMPLETED);
         }
         ReportMetrics(info->instanceInfo.instanceid(), runtimeID, sandboxID,
@@ -767,20 +748,17 @@ litebus::Future<Status> SandboxdExecutor::OnDeleteDone(
 
 // ── Warm-up teardown (Unregister RPC) ────────────────────────────────────────
 
-litebus::Future<Status> SandboxdExecutor::UnregisterWarmUp(
-    const std::string &runtimeID,
-    const std::string &requestID)
+litebus::Future<Status> SandboxdExecutor::UnregisterWarmUp(const std::string &runtimeID, const std::string &requestID)
 {
-    auto unReg = std::make_shared<runtime::v1::SandboxUnregisterRequest>();
+    auto unReg = std::make_shared<runtime::v1::UnregisterRequest>();
     *unReg->add_ids() = runtimeID;
     YRLOG_INFO("{}|unregistering warm-up runtime({})", requestID, runtimeID);
-    return DoUnregister(unReg)
-        .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnWarmUpUnregistered, std::placeholders::_1,
-                             runtimeID, requestID));
+    return DoUnregister(unReg).Then(
+        litebus::Defer(GetAID(), &SandboxdExecutor::OnWarmUpUnregistered, std::placeholders::_1, runtimeID, requestID));
 }
 
-litebus::Future<Status> SandboxdExecutor::OnWarmUpUnregistered(
-    const runtime::v1::SandboxNormalResponse &response, const std::string &runtimeID,
+litebus::Future<Status> SandboxdExecutor::OnWarmUpUnregistered(const runtime::v1::NormalResponse &response,
+                                                               const std::string &runtimeID,
     const std::string &requestID)
 {
     if (!response.success()) {
@@ -863,9 +841,7 @@ litebus::Future<runtime::v1::ListSandboxesResponse> SandboxdExecutor::DoList()
     ASSERT_IF_NULL(sandboxd_);
     auto req = std::make_shared<runtime::v1::ListSandboxesRequest>();
     auto resp = std::make_shared<runtime::v1::ListSandboxesResponse>();
-    return sandboxd_
-        ->CallAsyncX("List", *req, resp.get(),
-                     &runtime::v1::SandboxService::Stub::AsyncList)
+    return sandboxd_->CallAsyncX("List", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncList)
         .Then([resp](const Status &status) -> litebus::Future<runtime::v1::ListSandboxesResponse> {
             if (status.IsOk()) {
                 return *resp;
@@ -912,27 +888,24 @@ void SandboxdExecutor::WaitAndReconcile(
             return;
         }
 
-        YRLOG_INFO("{}|ReconcileRuntimes: sandboxd not connected yet, retry {}/{}",
-                   request->requestid(), retryCount + 1, RECONCILE_MAX_RETRIES);
+        YRLOG_INFO("{}|ReconcileRuntimes: sandboxd not connected yet, retry {}/{}", request->requestid(),
+                   retryCount + 1, RECONCILE_MAX_RETRIES);
         int64_t delayMs = RECONCILE_RETRY_INITIAL_MS << std::min(retryCount, 6);
         if (delayMs > RECONCILE_RETRY_MAX_INTERVAL_MS || delayMs <= 0) {
             delayMs = RECONCILE_RETRY_MAX_INTERVAL_MS;
         }
-        litebus::AsyncAfter(delayMs, GetAID(),
-                            &SandboxdExecutor::WaitAndReconcile, request, retryCount + 1, promise);
+        litebus::AsyncAfter(delayMs, GetAID(), &SandboxdExecutor::WaitAndReconcile, request, retryCount + 1, promise);
         return;
     }
 
     auto req = std::make_shared<runtime::v1::ListSandboxesRequest>();
     auto resp = std::make_shared<runtime::v1::ListSandboxesResponse>();
-    auto resultFuture = sandboxd_
-        ->CallAsyncX("List", *req, resp.get(),
-                     &runtime::v1::SandboxService::Stub::AsyncList)
-        .Then([aid = GetAID(), request, resp](const Status &status)
-                  -> litebus::Future<messages::ReconcileRuntimesResponse> {
+    auto resultFuture = sandboxd_->CallAsyncX("List", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncList)
+                            .Then([aid = GetAID(), request,
+                                   resp](const Status &status) -> litebus::Future<messages::ReconcileRuntimesResponse> {
             if (!status.IsOk()) {
-                YRLOG_ERROR("{}|ReconcileRuntimes: DoList gRPC failed: {}",
-                            request->requestid(), status.RawMessage());
+                                    YRLOG_ERROR("{}|ReconcileRuntimes: DoList gRPC failed: {}", request->requestid(),
+                                                status.RawMessage());
                 messages::ReconcileRuntimesResponse errResp;
                 errResp.set_requestid(request->requestid());
                 errResp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
@@ -970,23 +943,20 @@ messages::ReconcileRuntimesResponse SandboxdExecutor::OnReconcileRuntimes(
     int32_t orphansCleaned = 0;
 
     CleanupExitedSandboxes(request->requestid(), listResp, &response, &orphansCleaned);
-    CleanupOrphanSandboxes(
-        ReconcileCleanupContext{
-            request->requestid(), listResp, expectedIDs, now, &response, &orphansCleaned, &actualRunningIDs});
+    CleanupOrphanSandboxes(ReconcileCleanupContext{ request->requestid(), listResp, expectedIDs, now, &response,
+                                                    &orphansCleaned, &actualRunningIDs });
     AddMissingAndConfirmedEntries(request, actualRunningIDs, &response);
     PurgeOrphanTracking(actualRunningIDs);
 
     response.set_orphanscleaned(orphansCleaned);
-    YRLOG_INFO("{}|ReconcileRuntimes: {} orphans cleaned, {} missing, {} confirmed",
-               request->requestid(), orphansCleaned, response.missingids_size(),
-               response.confirmedentries_size());
+    YRLOG_INFO("{}|ReconcileRuntimes: {} orphans cleaned, {} missing, {} confirmed", request->requestid(),
+               orphansCleaned, response.missingids_size(), response.confirmedentries_size());
     return response;
 }
 
 void SandboxdExecutor::CleanupExitedSandboxes(const std::string &requestID,
                                               const std::shared_ptr<runtime::v1::ListSandboxesResponse> &listResp,
-                                              messages::ReconcileRuntimesResponse *response,
-                                              int32_t *orphansCleaned)
+                                              messages::ReconcileRuntimesResponse *response, int32_t *orphansCleaned)
 {
     for (const auto &sandbox : listResp->sandboxes()) {
         if (sandbox.state() != runtime::v1::SANDBOX_STATE_EXITED) {
@@ -1029,8 +999,8 @@ void SandboxdExecutor::CleanupOrphanSandboxes(const ReconcileCleanupContext &con
             continue;
         }
 
-        YRLOG_INFO("{}|ReconcileRuntimes: deleting orphan sandbox {} (orphan for {}s)",
-                   context.requestID, sandboxID, elapsedSec);
+        YRLOG_INFO("{}|ReconcileRuntimes: deleting orphan sandbox {} (orphan for {}s)", context.requestID, sandboxID,
+                   elapsedSec);
         CleanupLocalRuntimeStateForOrphan(context.requestID, sandboxID);
         DeleteSandboxAsync(sandboxID);
         orphanFirstSeen_.erase(it);
@@ -1040,8 +1010,7 @@ void SandboxdExecutor::CleanupOrphanSandboxes(const ReconcileCleanupContext &con
     }
 }
 
-void SandboxdExecutor::AddMissingAndConfirmedEntries(
-    const std::shared_ptr<messages::ReconcileRuntimesRequest> &request,
+void SandboxdExecutor::AddMissingAndConfirmedEntries(const std::shared_ptr<messages::ReconcileRuntimesRequest> &request,
     const std::unordered_set<std::string> &actualRunningIDs,
     messages::ReconcileRuntimesResponse *response)
 {
@@ -1056,8 +1025,8 @@ void SandboxdExecutor::AddMissingAndConfirmedEntries(
         missingSet.insert(id);
     }
     for (const auto &entry : request->entries()) {
-        if (entry.containerid().empty() || actualRunningIDs.count(entry.containerid()) == 0 ||
-            missingSet.count(entry.containerid()) > 0) {
+        if (entry.containerid().empty() || actualRunningIDs.count(entry.containerid()) == 0
+            || missingSet.count(entry.containerid()) > 0) {
             continue;
         }
         auto *confirmed = response->add_confirmedentries();
@@ -1075,16 +1044,15 @@ void SandboxdExecutor::AddMissingAndConfirmedEntries(
     }
 }
 
-void SandboxdExecutor::CleanupLocalRuntimeStateForOrphan(
-    const std::string &requestID,
-    const std::string &sandboxID)
+void SandboxdExecutor::CleanupLocalRuntimeStateForOrphan(const std::string &requestID, const std::string &sandboxID)
 {
     const auto runtimeID = stateManager_.FindRuntimeIDBySandboxID(sandboxID);
     if (runtimeID.empty()) {
         return;
     }
 
-    YRLOG_WARN("{}|ReconcileRuntimes: orphan sandbox {} is still registered as runtime({}); "
+    YRLOG_WARN(
+        "{}|ReconcileRuntimes: orphan sandbox {} is still registered as runtime({}); "
                "releasing local runtime resources before orphan delete",
                requestID, sandboxID, runtimeID);
 
@@ -1116,25 +1084,23 @@ void SandboxdExecutor::DeleteSandboxAsync(const std::string &sandboxID)
     sandboxd_
         ->CallAsync("Delete", *deleteReq, static_cast<runtime::v1::DeleteResponse *>(nullptr),
                     &runtime::v1::SandboxService::Stub::AsyncDelete)
-        .Then([aid(GetAID()), sandboxID](
-                  litebus::Try<runtime::v1::DeleteResponse> rsp) -> litebus::Future<Status> {
+        .Then([aid(GetAID()), sandboxID](litebus::Try<runtime::v1::DeleteResponse> rsp) -> litebus::Future<Status> {
             return litebus::Async(aid, &SandboxdExecutor::OnDeleteSandboxComplete, sandboxID, rsp);
         });
 }
 
-Status SandboxdExecutor::OnDeleteSandboxComplete(
-    const std::string &sandboxID,
+Status SandboxdExecutor::OnDeleteSandboxComplete(const std::string &sandboxID,
     litebus::Try<runtime::v1::DeleteResponse> rsp)
 {
     if (rsp.IsOK()) {
         YRLOG_INFO("DeleteSandboxAsync: sandbox({}) deleted", sandboxID);
         return Status::OK();
     }
-    YRLOG_ERROR("DeleteSandboxAsync: sandbox({}) delete failed: {}, scheduling retry in ~{}s",
-                sandboxID, rsp.GetErrorCode(), kOrphanDeleteRetryIntervalSec);
-    auto retryFirstSeen = std::chrono::steady_clock::now() -
-                          std::chrono::seconds(static_cast<int64_t>(orphanGracePeriodSec_)) +
-                          std::chrono::seconds(static_cast<int64_t>(kOrphanDeleteRetryIntervalSec));
+    YRLOG_ERROR("DeleteSandboxAsync: sandbox({}) delete failed: {}, scheduling retry in ~{}s", sandboxID,
+                rsp.GetErrorCode(), kOrphanDeleteRetryIntervalSec);
+    auto retryFirstSeen = std::chrono::steady_clock::now()
+                          - std::chrono::seconds(static_cast<int64_t>(orphanGracePeriodSec_))
+                          + std::chrono::seconds(static_cast<int64_t>(kOrphanDeleteRetryIntervalSec));
     orphanFirstSeen_.emplace(sandboxID, retryFirstSeen);
     return Status(StatusCode::ERR_INNER_SYSTEM_ERROR);
 }
@@ -1161,9 +1127,7 @@ void SandboxdExecutor::ReconnectContainerd()
     }
     reconnecting_ = true;
     auto actor = std::make_shared<ActorWorker>();
-    actor->AsyncWork([sandboxd(sandboxd_)]() {
-              sandboxd->CheckChannelAndWaitForReconnect(true);
-          })
+    actor->AsyncWork([sandboxd(sandboxd_)]() { sandboxd->CheckChannelAndWaitForReconnect(true); })
         .OnComplete([actor, aid(GetAID())](const litebus::Future<Status> &) {
             actor->Terminate();
             litebus::Async(aid, &SandboxdExecutor::OnReconnectContainerd);
@@ -1210,14 +1174,13 @@ void SandboxdExecutor::Sync()
 
 litebus::Future<runtime::v1::StartResponse> SandboxdExecutor::DoStart(
     const std::shared_ptr<messages::StartInstanceRequest> &request,
-    const std::shared_ptr<runtime::v1::SandboxStartRequest> &startReq)
+    const std::shared_ptr<runtime::v1::StartRequest> &startReq)
 {
     YRLOG_INFO("{}|{}|DoStart: {}", request->runtimeinstanceinfo().traceid(),
                request->runtimeinstanceinfo().requestid(), startReq->ShortDebugString());
     ASSERT_IF_NULL(sandboxd_);
     auto resp = std::make_shared<runtime::v1::StartResponse>();
-    return sandboxd_
-        ->CallAsyncX("Start", *startReq, resp.get(), &runtime::v1::SandboxService::Stub::AsyncStart)
+    return sandboxd_->CallAsyncX("Start", *startReq, resp.get(), &runtime::v1::SandboxService::Stub::AsyncStart)
         .Then([request, resp, startReq](const Status &status) -> litebus::Future<runtime::v1::StartResponse> {
             if (status.IsOk()) {
                 return *resp;
@@ -1251,53 +1214,51 @@ litebus::Future<runtime::v1::DeleteResponse> SandboxdExecutor::DoDelete(
         });
 }
 
-litebus::Future<runtime::v1::SandboxNormalResponse> SandboxdExecutor::DoRegister(
-    const std::shared_ptr<runtime::v1::SandboxRegisterRequest> &req)
+litebus::Future<runtime::v1::NormalResponse> SandboxdExecutor::DoRegister(
+    const std::shared_ptr<runtime::v1::RegisterRequest> &req)
 {
     ASSERT_IF_NULL(sandboxd_);
-    auto resp = std::make_shared<runtime::v1::SandboxNormalResponse>();
-    return sandboxd_
-        ->CallAsyncX("Register", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncRegister)
-        .Then([resp](const Status &status) -> litebus::Future<runtime::v1::SandboxNormalResponse> {
+    auto resp = std::make_shared<runtime::v1::NormalResponse>();
+    return sandboxd_->CallAsyncX("Register", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncRegister)
+        .Then([resp](const Status &status) -> litebus::Future<runtime::v1::NormalResponse> {
             if (status.IsOk()) {
                 return *resp;
             }
-            runtime::v1::SandboxNormalResponse err;
+            runtime::v1::NormalResponse err;
             err.set_success(false);
             err.set_message("Register gRPC failed: " + status.RawMessage());
             return err;
         });
 }
 
-litebus::Future<runtime::v1::SandboxNormalResponse> SandboxdExecutor::DoUnregister(
-    const std::shared_ptr<runtime::v1::SandboxUnregisterRequest> &req)
+litebus::Future<runtime::v1::NormalResponse> SandboxdExecutor::DoUnregister(
+    const std::shared_ptr<runtime::v1::UnregisterRequest> &req)
 {
     ASSERT_IF_NULL(sandboxd_);
-    auto resp = std::make_shared<runtime::v1::SandboxNormalResponse>();
-    return sandboxd_
-        ->CallAsyncX("Unregister", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncUnregister)
-        .Then([resp](const Status &status) -> litebus::Future<runtime::v1::SandboxNormalResponse> {
+    auto resp = std::make_shared<runtime::v1::NormalResponse>();
+    return sandboxd_->CallAsyncX("Unregister", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncUnregister)
+        .Then([resp](const Status &status) -> litebus::Future<runtime::v1::NormalResponse> {
             if (status.IsOk()) {
                 return *resp;
             }
-            runtime::v1::SandboxNormalResponse err;
+            runtime::v1::NormalResponse err;
             err.set_success(false);
             err.set_message("Unregister gRPC failed: " + status.RawMessage());
             return err;
         });
 }
 
-litebus::Future<runtime::v1::SandboxGetRegisteredResponse> SandboxdExecutor::DoGetRegistered()
+litebus::Future<runtime::v1::GetRegisteredResponse> SandboxdExecutor::DoGetRegistered()
 {
     ASSERT_IF_NULL(sandboxd_);
-    auto req = std::make_shared<runtime::v1::SandboxGetRegisteredRequest>();
-    auto resp = std::make_shared<runtime::v1::SandboxGetRegisteredResponse>();
+    auto req = std::make_shared<runtime::v1::GetRegisteredRequest>();
+    auto resp = std::make_shared<runtime::v1::GetRegisteredResponse>();
     return sandboxd_
         ->CallAsyncX("GetRegistered", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncGetRegistered)
-        .Then([this, resp](const Status &status) -> litebus::Future<runtime::v1::SandboxGetRegisteredResponse> {
+        .Then([this, resp](const Status &status) -> litebus::Future<runtime::v1::GetRegisteredResponse> {
             if (!status.IsOk()) {
                 YRLOG_WARN("GetRegistered gRPC failed: {}", status.RawMessage());
-                return runtime::v1::SandboxGetRegisteredResponse{};
+                return runtime::v1::GetRegisteredResponse{};
             }
             registeredTemplateIDs_.clear();
             for (const auto &tmpl : resp->templates()) {
@@ -1310,21 +1271,20 @@ litebus::Future<runtime::v1::SandboxGetRegisteredResponse> SandboxdExecutor::DoG
         });
 }
 
-litebus::Future<runtime::v1::SandboxRestoreResponse> SandboxdExecutor::DoRestore(
+litebus::Future<runtime::v1::RestoreResponse> SandboxdExecutor::DoRestore(
     const std::shared_ptr<messages::StartInstanceRequest> &request,
-    const std::shared_ptr<runtime::v1::SandboxRestoreRequest> &req)
+    const std::shared_ptr<runtime::v1::RestoreRequest> &req)
 {
     YRLOG_INFO("{}|{}|DoRestore: {}", request->runtimeinstanceinfo().traceid(),
                request->runtimeinstanceinfo().requestid(), req->ShortDebugString());
     ASSERT_IF_NULL(sandboxd_);
-    auto resp = std::make_shared<runtime::v1::SandboxRestoreResponse>();
-    return sandboxd_
-        ->CallAsyncX("Restore", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncRestore)
-        .Then([request, resp](const Status &status) -> litebus::Future<runtime::v1::SandboxRestoreResponse> {
+    auto resp = std::make_shared<runtime::v1::RestoreResponse>();
+    return sandboxd_->CallAsyncX("Restore", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncRestore)
+        .Then([request, resp](const Status &status) -> litebus::Future<runtime::v1::RestoreResponse> {
             if (status.IsOk()) {
                 return *resp;
             }
-            runtime::v1::SandboxRestoreResponse err;
+            runtime::v1::RestoreResponse err;
             err.set_code(static_cast<int32_t>(status.StatusCode()));
             err.set_message(fmt::format("Restore gRPC failed for runtime({}): {}",
                                         request->runtimeinstanceinfo().runtimeid(), status.RawMessage()));
@@ -1340,8 +1300,7 @@ void SandboxdExecutor::DoWait(const std::string &sandboxID, const std::string &r
     req->set_id(sandboxID);
     auto resp = std::make_shared<runtime::v1::WaitResponse>();
     YRLOG_INFO("DoWait: sandbox({}) runtime({})", sandboxID, runtimeID);
-    sandboxd_
-        ->CallAsyncX("Wait", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncWait)
+    sandboxd_->CallAsyncX("Wait", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncWait)
         .Then([req, resp, runtimeID, aid(GetAID())](const Status &status) -> litebus::Future<Status> {
             runtime::v1::WaitResponse response;
             if (status.IsOk()) {
@@ -1370,21 +1329,19 @@ void SandboxdExecutor::DoWaitWithRetry(const std::string &sandboxID, const std::
     req->set_id(sandboxID);
     auto resp = std::make_shared<runtime::v1::WaitResponse>();
     YRLOG_INFO("DoWaitWithRetry: sandbox({}) runtime({}) retry({})", sandboxID, runtimeID, retryCount);
-    sandboxd_
-        ->CallAsyncX("Wait", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncWait)
-        .Then([req, resp, sandboxID, runtimeID, retryCount, aid(GetAID())]
-              (const Status &status) -> litebus::Future<Status> {
-            YRLOG_INFO("DoWaitWithRetry returned: sandbox({}) runtime({}) retry({}) statusCode({}) msg({})",
-                       sandboxID, runtimeID, retryCount,
-                       fmt::underlying(status.StatusCode()), status.RawMessage());
+    sandboxd_->CallAsyncX("Wait", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncWait)
+        .Then([req, resp, sandboxID, runtimeID, retryCount,
+               aid(GetAID())](const Status &status) -> litebus::Future<Status> {
+            YRLOG_INFO("DoWaitWithRetry returned: sandbox({}) runtime({}) retry({}) statusCode({}) msg({})", sandboxID,
+                       runtimeID, retryCount, fmt::underlying(status.StatusCode()), status.RawMessage());
             if (status.IsOk()) {
                 return litebus::Async(aid, &SandboxdExecutor::OnWaitDone, runtimeID, *resp);
             }
             if (!SandboxdExecutor::IsRetryableWaitError(status)) {
                 runtime::v1::WaitResponse response;
                 response.set_status(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
-                response.set_message(fmt::format("failed to wait sandbox {}, non-retryable grpc err: {}",
-                                                 req->id(), status.RawMessage()));
+                response.set_message(fmt::format("failed to wait sandbox {}, non-retryable grpc err: {}", req->id(),
+                                                 status.RawMessage()));
                 return litebus::Async(aid, &SandboxdExecutor::OnWaitDone, runtimeID, response);
             }
             if (retryCount >= WAIT_MAX_RETRIES) {
@@ -1392,8 +1349,8 @@ void SandboxdExecutor::DoWaitWithRetry(const std::string &sandboxID, const std::
             }
             YRLOG_WARN("DoWait failed for sandbox {}, retryable error ({}), will retry in {}ms (attempt {}/{})",
                        req->id(), status.RawMessage(), WAIT_RETRY_INTERVAL_MS, retryCount + 1, WAIT_MAX_RETRIES);
-            (void)litebus::AsyncAfter(WAIT_RETRY_INTERVAL_MS, aid, &SandboxdExecutor::DoWaitWithRetry,
-                                      sandboxID, runtimeID, retryCount + 1);
+            (void)litebus::AsyncAfter(WAIT_RETRY_INTERVAL_MS, aid, &SandboxdExecutor::DoWaitWithRetry, sandboxID,
+                                      runtimeID, retryCount + 1);
             return Status::OK();
         });
 }
@@ -1409,8 +1366,8 @@ void SandboxdExecutor::ScheduleSandboxStatsCollection(const std::string &runtime
     if (stateManager_.GetSandboxID(runtimeID) != sandboxID) {
         return;
     }
-    (void)litebus::AsyncAfter(SANDBOX_STATS_COLLECT_INTERVAL_MS, GetAID(),
-                              &SandboxdExecutor::CollectSandboxStats, runtimeID, sandboxID);
+    (void)litebus::AsyncAfter(SANDBOX_STATS_COLLECT_INTERVAL_MS, GetAID(), &SandboxdExecutor::CollectSandboxStats,
+                              runtimeID, sandboxID);
 }
 
 void SandboxdExecutor::ScheduleRunningStatusHeartbeat(const std::string &runtimeID)
@@ -1458,22 +1415,22 @@ void SandboxdExecutor::CollectSandboxStats(const std::string &runtimeID, const s
     auto collectedAt = std::chrono::steady_clock::now();
 
     ASSERT_IF_NULL(sandboxd_);
-    sandboxd_
-        ->CallAsyncX("Stats", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncStats)
-        .Then([runtimeID, sandboxID, resp, collectedAt, aid(GetAID())]
-              (const Status &status) -> litebus::Future<Status> {
+    sandboxd_->CallAsyncX("Stats", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncStats)
+        .Then(
+            [runtimeID, sandboxID, resp, collectedAt, aid(GetAID())](const Status &status) -> litebus::Future<Status> {
             runtime::v1::StatsResponse statsResponse;
             if (status.IsOk()) {
                 statsResponse = *resp;
             }
-            return litebus::Async(aid, &SandboxdExecutor::OnSandboxStatsCollected,
-                                  runtimeID, sandboxID, status, statsResponse, collectedAt);
+                return litebus::Async(aid, &SandboxdExecutor::OnSandboxStatsCollected, runtimeID, sandboxID, status,
+                                      statsResponse, collectedAt);
         });
 }
 
-litebus::Future<Status> SandboxdExecutor::OnSandboxStatsCollected(
-    const std::string &runtimeID, const std::string &sandboxID, const Status &status,
-    const runtime::v1::StatsResponse &response, std::chrono::steady_clock::time_point collectedAt)
+litebus::Future<Status> SandboxdExecutor::OnSandboxStatsCollected(const std::string &runtimeID,
+                                                                  const std::string &sandboxID, const Status &status,
+                                                                  const runtime::v1::StatsResponse &response,
+                                                                  std::chrono::steady_clock::time_point collectedAt)
 {
     if (sandboxStatsPollingRuntimes_.count(runtimeID) == 0) {
         return Status::OK();
@@ -1483,8 +1440,8 @@ litebus::Future<Status> SandboxdExecutor::OnSandboxStatsCollected(
     }
 
     if (!status.IsOk()) {
-        YRLOG_WARN("OnSandboxStatsCollected: runtime({}) sandbox({}) stats failed: {}",
-                   runtimeID, sandboxID, status.RawMessage());
+        YRLOG_WARN("OnSandboxStatsCollected: runtime({}) sandbox({}) stats failed: {}", runtimeID, sandboxID,
+                   status.RawMessage());
         ScheduleSandboxStatsCollection(runtimeID, sandboxID);
         return Status::OK();
     }
@@ -1496,8 +1453,7 @@ litebus::Future<Status> SandboxdExecutor::OnSandboxStatsCollected(
     return Status::OK();
 }
 
-litebus::Future<Status> SandboxdExecutor::CleanupSandboxAfterMaxRetries(
-    const std::string &runtimeID,
+litebus::Future<Status> SandboxdExecutor::CleanupSandboxAfterMaxRetries(const std::string &runtimeID,
     const std::string &sandboxID)
 {
     auto info = stateManager_.Find(runtimeID);
@@ -1509,8 +1465,8 @@ litebus::Future<Status> SandboxdExecutor::CleanupSandboxAfterMaxRetries(
     const auto &instanceID = info->instanceInfo.instanceid();
     auto requestID = litebus::os::Join("update-instance-status-request", runtimeID, '-');
 
-    auto msg = fmt::format("Sandbox {} wait failed after {} retries, marking instance fatal",
-                           sandboxID, WAIT_MAX_RETRIES);
+    auto msg =
+        fmt::format("Sandbox {} wait failed after {} retries, marking instance fatal", sandboxID, WAIT_MAX_RETRIES);
     YRLOG_ERROR("{}|{}", requestID, msg);
 
     ReportSandboxLifecycleStatus(info->instanceInfo, runtimeID, SandboxLifecycleStatus::ABNORMAL);
@@ -1518,13 +1474,11 @@ litebus::Future<Status> SandboxdExecutor::CleanupSandboxAfterMaxRetries(
     sandboxLifecycleStates_.erase(runtimeID);
     stateManager_.Unregister(runtimeID);
 
-    return healthCheckClient_->NotifySandboxExit(
-        instanceID, runtimeID, -1, msg, requestID);
+    return healthCheckClient_->NotifySandboxExit(instanceID, runtimeID, -1, msg, requestID);
 }
 
-
-litebus::Future<Status> SandboxdExecutor::OnWaitDone(
-    const std::string &runtimeID, const runtime::v1::WaitResponse &response)
+litebus::Future<Status> SandboxdExecutor::OnWaitDone(const std::string &runtimeID,
+                                                     const runtime::v1::WaitResponse &response)
 {
     auto info = stateManager_.Find(runtimeID);
     if (!info.has_value()) {
@@ -1535,23 +1489,22 @@ litebus::Future<Status> SandboxdExecutor::OnWaitDone(
     const auto &instanceID = info->instanceInfo.instanceid();
     auto requestID = litebus::os::Join("update-instance-status-request", runtimeID, '-');
 
-    YRLOG_INFO("{}|OnWaitDone: sandbox exited for runtime({}), exit_code({}), status({})",
-               requestID, runtimeID, response.exit_code(), response.status());
+    YRLOG_INFO("{}|OnWaitDone: sandbox exited for runtime({}), exit_code({}), status({})", requestID, runtimeID,
+               response.exit_code(), response.status());
 
     if (userInitiatedTerminateRuntimes_.count(runtimeID) > 0) {
-        YRLOG_INFO("{}|OnWaitDone: user-initiated terminate for runtime({}), defer to OnDeleteDone",
-                   requestID, runtimeID);
+        YRLOG_INFO("{}|OnWaitDone: user-initiated terminate for runtime({}), defer to OnDeleteDone", requestID,
+                   runtimeID);
         return Status::OK();
     }
 
-    ReportSandboxLifecycleStatus(info->instanceInfo, runtimeID,
-                                 IsNormalSandboxExit(response)
-                                     ? SandboxLifecycleStatus::COMPLETED
-                                     : SandboxLifecycleStatus::ABNORMAL);
+    ReportSandboxLifecycleStatus(
+        info->instanceInfo, runtimeID,
+        IsNormalSandboxExit(response) ? SandboxLifecycleStatus::COMPLETED : SandboxLifecycleStatus::ABNORMAL);
     ClearSandboxMetricsState(runtimeID);
 
-    return healthCheckClient_->NotifySandboxExit(
-        instanceID, runtimeID, response.exit_code(), response.message(), requestID);
+    return healthCheckClient_->NotifySandboxExit(instanceID, runtimeID, response.exit_code(), response.message(),
+                                                 requestID);
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
@@ -1577,14 +1530,12 @@ messages::StartInstanceResponse SandboxdExecutor::MakeSuccessStartResponse(
 }
 
 void SandboxdExecutor::ReportMetrics(const std::string &instanceID, const std::string &runtimeID,
-                                     const std::string &sandboxID,
-                                     const functionsystem::metrics::MeterTitle &title)
+                                     const std::string &sandboxID, const functionsystem::metrics::MeterTitle &title)
 {
     DoReportMetrics(instanceID, runtimeID, sandboxID, title);
 }
 
-void SandboxdExecutor::ReportSandboxLifecycleStatus(
-    const messages::RuntimeInstanceInfo &info,
+void SandboxdExecutor::ReportSandboxLifecycleStatus(const messages::RuntimeInstanceInfo &info,
     const std::string &runtimeID,
     SandboxLifecycleStatus lifecycleStatus)
 {
@@ -1594,29 +1545,24 @@ void SandboxdExecutor::ReportSandboxLifecycleStatus(
     if (lifecycleStatus == SandboxLifecycleStatus::RUNNING) {
         sandboxRunningStartTimes_.emplace(runtimeID, std::chrono::steady_clock::now());
         ScheduleRunningStatusHeartbeat(runtimeID);
-    } else if (lifecycleStatus == SandboxLifecycleStatus::COMPLETED ||
-               lifecycleStatus == SandboxLifecycleStatus::ABNORMAL) {
+    } else if (lifecycleStatus == SandboxLifecycleStatus::COMPLETED
+               || lifecycleStatus == SandboxLifecycleStatus::ABNORMAL) {
         auto startIt = sandboxRunningStartTimes_.find(runtimeID);
         if (startIt != sandboxRunningStartTimes_.end()) {
-            const double durationSec = std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - startIt->second).count();
+            const double durationSec =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - startIt->second).count();
             ReportSandboxGauge(
-                { functionsystem::metrics::YR_SANDBOX_LIFECYCLE_SECONDS,
-                  "sandbox lifecycle duration in seconds", "s" },
+                { functionsystem::metrics::YR_SANDBOX_LIFECYCLE_SECONDS, "sandbox lifecycle duration in seconds", "s" },
                 BuildSandboxMetricLabels(info, runtimeID, sandboxID), durationSec);
         }
     }
 
-    ReportSandboxGauge(
-        { functionsystem::metrics::YR_SANDBOX_LIFECYCLE_STATUS,
-          "sandbox lifecycle status: 1-Creating, 2-Running, 3-Completed, 4-Abnormal",
-          "enum" },
-        BuildSandboxMetricLabels(info, runtimeID, sandboxID),
-        static_cast<double>(lifecycleStatus));
+    ReportSandboxGauge({ functionsystem::metrics::YR_SANDBOX_LIFECYCLE_STATUS,
+                         "sandbox lifecycle status: 1-Creating, 2-Running, 3-Completed, 4-Abnormal", "enum" },
+                       BuildSandboxMetricLabels(info, runtimeID, sandboxID), static_cast<double>(lifecycleStatus));
 }
 
-void SandboxdExecutor::ReportSandboxRequestedResources(
-    const messages::RuntimeInstanceInfo &info,
+void SandboxdExecutor::ReportSandboxRequestedResources(const messages::RuntimeInstanceInfo &info,
     const std::string &runtimeID)
 {
     const auto sandboxID = stateManager_.GetSandboxID(runtimeID);
@@ -1624,17 +1570,14 @@ void SandboxdExecutor::ReportSandboxRequestedResources(
     const auto requested = GetSandboxRequestedResources(info);
 
     ReportSandboxGauge(
-        { functionsystem::metrics::YR_SANDBOX_REQUESTED_CPU_CORES,
-          "requested cpu limit for sandbox", "cores" },
-        labels, requested.cpuCores);
+        { functionsystem::metrics::YR_SANDBOX_REQUESTED_CPU_CORES, "requested cpu limit for sandbox", "cores" }, labels,
+        requested.cpuCores);
     ReportSandboxGauge(
-        { functionsystem::metrics::YR_SANDBOX_REQUESTED_MEMORY_BYTES,
-          "requested memory limit for sandbox", "By" },
+        { functionsystem::metrics::YR_SANDBOX_REQUESTED_MEMORY_BYTES, "requested memory limit for sandbox", "By" },
         labels, requested.memoryBytes);
 }
 
-void SandboxdExecutor::ReportSandboxUsageMetrics(
-    const messages::RuntimeInstanceInfo &info,
+void SandboxdExecutor::ReportSandboxUsageMetrics(const messages::RuntimeInstanceInfo &info,
     const std::string &runtimeID,
     const runtime::v1::StatsResponse &response,
     std::chrono::steady_clock::time_point collectedAt)
@@ -1643,32 +1586,25 @@ void SandboxdExecutor::ReportSandboxUsageMetrics(
     auto labels = BuildSandboxMetricLabels(info, runtimeID, sandboxID);
 
     ReportSandboxGauge(
-        { functionsystem::metrics::YR_SANDBOX_MEMORY_USAGE_BYTES,
-          "sandbox memory usage in bytes", "By" },
-        labels, static_cast<double>(response.memory_usage_bytes()));
+        { functionsystem::metrics::YR_SANDBOX_MEMORY_USAGE_BYTES, "sandbox memory usage in bytes", "By" }, labels,
+        static_cast<double>(response.memory_usage_bytes()));
     ReportSandboxGauge(
-        { functionsystem::metrics::YR_SANDBOX_MEMORY_LIMIT_BYTES,
-          "sandbox memory limit in bytes", "By" },
-        labels, static_cast<double>(response.memory_limit_bytes()));
+        { functionsystem::metrics::YR_SANDBOX_MEMORY_LIMIT_BYTES, "sandbox memory limit in bytes", "By" }, labels,
+        static_cast<double>(response.memory_limit_bytes()));
     ReportSandboxGauge(
-        { functionsystem::metrics::YR_SANDBOX_MEMORY_USAGE_RATIO,
-          "sandbox memory usage ratio", "ratio" },
-        labels,
+        { functionsystem::metrics::YR_SANDBOX_MEMORY_USAGE_RATIO, "sandbox memory usage ratio", "ratio" }, labels,
         response.memory_limit_bytes() == 0
             ? 0.0
-            : static_cast<double>(response.memory_usage_bytes()) /
-                  static_cast<double>(response.memory_limit_bytes()));
+            : static_cast<double>(response.memory_usage_bytes()) / static_cast<double>(response.memory_limit_bytes()));
 
     auto previousIt = sandboxStatsSnapshots_.find(runtimeID);
     if (previousIt != sandboxStatsSnapshots_.end()) {
-        const auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            collectedAt - previousIt->second.collectedAt).count();
+        const auto elapsedNs =
+            std::chrono::duration_cast<std::chrono::nanoseconds>(collectedAt - previousIt->second.collectedAt).count();
         if (elapsedNs > 0 && response.cpu_usage_ns() >= previousIt->second.cpuUsageNs) {
-            const double cpuUsageCores =
-                static_cast<double>(response.cpu_usage_ns() - previousIt->second.cpuUsageNs) /
-                static_cast<double>(elapsedNs);
-            ReportSandboxGauge(
-                { functionsystem::metrics::YR_SANDBOX_CPU_USAGE_CORES,
+            const double cpuUsageCores = static_cast<double>(response.cpu_usage_ns() - previousIt->second.cpuUsageNs)
+                                         / static_cast<double>(elapsedNs);
+            ReportSandboxGauge({ functionsystem::metrics::YR_SANDBOX_CPU_USAGE_CORES,
                   "sandbox cpu usage expressed as used cores", "cores" },
                 labels, cpuUsageCores);
         }
@@ -1688,8 +1624,7 @@ void SandboxdExecutor::ClearSandboxMetricsState(const std::string &runtimeID)
 }
 
 void SandboxdExecutor::DoReportMetrics(const std::string &instanceID, const std::string &runtimeID,
-                                       const std::string &sandboxID,
-                                       const functionsystem::metrics::MeterTitle &title)
+                                       const std::string &sandboxID, const functionsystem::metrics::MeterTitle &title)
 {
     (void)instanceID;
 
@@ -1699,8 +1634,9 @@ void SandboxdExecutor::DoReportMetrics(const std::string &instanceID, const std:
     }
 
     auto labels = BuildSandboxMetricLabels(info->instanceInfo, runtimeID, sandboxID);
-    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto nowMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count();
     ReportSandboxGauge(title, labels, static_cast<double>(nowMs));
     ReportSandboxRequestedResources(info->instanceInfo, runtimeID);
 
@@ -1708,8 +1644,7 @@ void SandboxdExecutor::DoReportMetrics(const std::string &instanceID, const std:
         ReportSandboxLifecycleStatus(info->instanceInfo, runtimeID, SandboxLifecycleStatus::RUNNING);
     } else if (title.name == "yr_instance_stop_time") {
         auto lifecycleIt = sandboxLifecycleStates_.find(runtimeID);
-        if (lifecycleIt == sandboxLifecycleStates_.end()
-            || lifecycleIt->second != SandboxLifecycleStatus::ABNORMAL) {
+        if (lifecycleIt == sandboxLifecycleStates_.end() || lifecycleIt->second != SandboxLifecycleStatus::ABNORMAL) {
             ReportSandboxLifecycleStatus(info->instanceInfo, runtimeID, SandboxLifecycleStatus::COMPLETED);
         }
     }
@@ -1717,8 +1652,7 @@ void SandboxdExecutor::DoReportMetrics(const std::string &instanceID, const std:
 
 // ── Port forward helpers ──────────────────────────────────────────────────────
 
-std::vector<SandboxdExecutor::PortForwardConfig> SandboxdExecutor::ParseForwardPorts(
-    const std::string &networkJson)
+std::vector<SandboxdExecutor::PortForwardConfig> SandboxdExecutor::ParseForwardPorts(const std::string &networkJson)
 {
     std::vector<PortForwardConfig> configs;
     if (networkJson.empty()) {

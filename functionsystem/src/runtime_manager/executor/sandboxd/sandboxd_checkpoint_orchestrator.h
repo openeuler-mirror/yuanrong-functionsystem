@@ -26,7 +26,7 @@
 #include "common/rpc/client/grpc_client.h"
 #include "common/status/status.h"
 #include "runtime_manager/ckpt/ckpt_file_manager.h"
-#include "runtime_manager/executor/sandbox/runtime_state_manager.h"
+#include "runtime_manager/executor/sandboxd/runtime_state_manager.h"
 
 namespace functionsystem::runtime_manager {
 
@@ -43,8 +43,7 @@ class SandboxdCheckpointOrchestrator : public std::enable_shared_from_this<Sandb
 public:
     SandboxdCheckpointOrchestrator(litebus::AID ownerAID,
                                    std::shared_ptr<GrpcClient<runtime::v1::SandboxService>> sandboxd,
-                                   std::shared_ptr<CkptFileManager> ckptFileManager,
-                                   RuntimeStateManager &stateManager);
+                                   std::shared_ptr<CkptFileManager> ckptFileManager, RuntimeStateManager &stateManager);
     ~SandboxdCheckpointOrchestrator() = default;
 
     // ── Snapshot ──────────────────────────────────────────────────────────────
@@ -63,8 +62,7 @@ public:
      * Download a checkpoint and return its local path.
      * Caller follows up with AddRef() + the executor's Restore RPC.
      */
-    litebus::Future<std::string> DownloadForRestore(const std::string &checkpointID,
-                                                    const std::string &storageUrl,
+    litebus::Future<std::string> DownloadForRestore(const std::string &checkpointID, const std::string &storageUrl,
                                                     const std::string &requestID);
 
     /**
@@ -83,8 +81,8 @@ public:
 
     // ── gRPC wrapper ──────────────────────────────────────────────────────────
 
-    litebus::Future<runtime::v1::SandboxCheckpointResponse> DoCheckpoint(
-        const std::shared_ptr<runtime::v1::SandboxCheckpointRequest> &req);
+    litebus::Future<runtime::v1::CheckpointResponse> DoCheckpoint(
+        const std::shared_ptr<runtime::v1::CheckpointRequest> &req);
 
 private:
     struct SnapshotContext {
@@ -96,11 +94,9 @@ private:
     };
 
     litebus::Future<messages::SnapshotRuntimeResponse> OnCheckpointDone(
-        const runtime::v1::SandboxCheckpointResponse &ckptResponse,
-        const SnapshotContext &context);
+        const runtime::v1::CheckpointResponse &ckptResponse, const SnapshotContext &context);
 
-    litebus::Future<messages::SnapshotRuntimeResponse> OnRegisterDone(
-        const std::string &storageUrl,
+    litebus::Future<messages::SnapshotRuntimeResponse> OnRegisterDone(const std::string &storageUrl,
         messages::SnapshotRuntimeResponse response,
         const SnapshotContext &context);
 

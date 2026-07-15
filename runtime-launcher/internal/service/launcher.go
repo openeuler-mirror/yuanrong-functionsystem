@@ -38,7 +38,7 @@ func NewLauncherService(runtime runtime.ContainerRuntime, stateMgr *state.Manage
 // Start creates a sandbox container and starts watching its exit status.
 func (s *LauncherService) Start(
 	ctx context.Context,
-	req *runtimev1.SandboxStartRequest,
+	req *runtimev1.StartRequest,
 ) (*runtimev1.StartResponse, error) {
 	if req == nil {
 		return &runtimev1.StartResponse{Code: 1, Message: "sandbox request cannot be nil"}, nil
@@ -56,11 +56,11 @@ func (s *LauncherService) Start(
 // Restore reports that runtime-launcher does not implement sandbox restore.
 func (s *LauncherService) Restore(
 	ctx context.Context,
-	req *runtimev1.SandboxRestoreRequest,
-) (*runtimev1.SandboxRestoreResponse, error) {
+	req *runtimev1.RestoreRequest,
+) (*runtimev1.RestoreResponse, error) {
 	_ = ctx
 	_ = req
-	return &runtimev1.SandboxRestoreResponse{
+	return &runtimev1.RestoreResponse{
 		Code:    1,
 		Message: "restore is not supported by runtime-launcher SandboxService backend",
 	}, nil
@@ -163,8 +163,8 @@ func (s *LauncherService) Stats(ctx context.Context, req *runtimev1.StatsRequest
 // Register stores reusable sandbox templates for later Start requests.
 func (s *LauncherService) Register(
 	ctx context.Context,
-	req *runtimev1.SandboxRegisterRequest,
-) (*runtimev1.SandboxNormalResponse, error) {
+	req *runtimev1.RegisterRequest,
+) (*runtimev1.NormalResponse, error) {
 	_ = ctx
 	for _, tmpl := range req.GetTemplates() {
 		s.stateMgr.RegisterTemplate(tmpl)
@@ -175,45 +175,45 @@ func (s *LauncherService) Register(
 			tmpl.GetMakeSeed(),
 		)
 	}
-	return &runtimev1.SandboxNormalResponse{Success: true, Message: "registered"}, nil
+	return &runtimev1.NormalResponse{Success: true, Message: "registered"}, nil
 }
 
 // Unregister removes reusable sandbox templates.
 func (s *LauncherService) Unregister(
 	ctx context.Context,
-	req *runtimev1.SandboxUnregisterRequest,
-) (*runtimev1.SandboxNormalResponse, error) {
+	req *runtimev1.UnregisterRequest,
+) (*runtimev1.NormalResponse, error) {
 	_ = ctx
 	for _, id := range req.GetIds() {
 		s.stateMgr.UnregisterTemplate(id)
 	}
-	return &runtimev1.SandboxNormalResponse{Success: true, Message: "unregistered"}, nil
+	return &runtimev1.NormalResponse{Success: true, Message: "unregistered"}, nil
 }
 
 // GetRegistered lists reusable sandbox templates stored in memory.
 func (s *LauncherService) GetRegistered(
 	ctx context.Context,
-	req *runtimev1.SandboxGetRegisteredRequest,
-) (*runtimev1.SandboxGetRegisteredResponse, error) {
+	req *runtimev1.GetRegisteredRequest,
+) (*runtimev1.GetRegisteredResponse, error) {
 	_ = ctx
 	_ = req
-	return &runtimev1.SandboxGetRegisteredResponse{Templates: s.stateMgr.GetAllRegisteredTemplates()}, nil
+	return &runtimev1.GetRegisteredResponse{Templates: s.stateMgr.GetAllRegisteredTemplates()}, nil
 }
 
 // Checkpoint reports that runtime-launcher does not implement checkpointing.
 func (s *LauncherService) Checkpoint(
 	ctx context.Context,
-	req *runtimev1.SandboxCheckpointRequest,
-) (*runtimev1.SandboxCheckpointResponse, error) {
+	req *runtimev1.CheckpointRequest,
+) (*runtimev1.CheckpointResponse, error) {
 	_ = ctx
 	_ = req
-	return &runtimev1.SandboxCheckpointResponse{
+	return &runtimev1.CheckpointResponse{
 		Success: false,
 		Message: "checkpoint is not supported by runtime-launcher SandboxService backend",
 	}, nil
 }
 
-func (s *LauncherService) buildCreateConfig(req *runtimev1.SandboxStartRequest) *runtime.CreateConfig {
+func (s *LauncherService) buildCreateConfig(req *runtimev1.StartRequest) *runtime.CreateConfig {
 	cfg := buildCreateConfig(req)
 	templateID := strings.TrimSpace(req.GetTemplateId())
 	if templateID == "" {
@@ -227,7 +227,7 @@ func (s *LauncherService) buildCreateConfig(req *runtimev1.SandboxStartRequest) 
 	return cfg
 }
 
-func buildCreateConfig(req *runtimev1.SandboxStartRequest) *runtime.CreateConfig {
+func buildCreateConfig(req *runtimev1.StartRequest) *runtime.CreateConfig {
 	id := req.GetSandboxId()
 	if id == "" {
 		id = req.GetEnvs()["YR_RUNTIME_ID"]
@@ -277,7 +277,7 @@ func normalizeNetwork(network string) string {
 				return strings.TrimSpace(mode)
 			}
 			// sandboxd callers pass portForwardings as JSON in network while
-			// the actual publish rules are carried in SandboxStartRequest.ports.
+			// the actual publish rules are carried in StartRequest.ports.
 			// Docker expects NetworkMode to be a real mode/name, not the JSON blob.
 			return "bridge"
 		}
@@ -304,7 +304,7 @@ func convertS3(s3 *runtimev1.S3Config) *runtime.S3Config {
 		Endpoint:        s3.GetEndpoint(),
 		Bucket:          s3.GetBucket(),
 		Object:          s3.GetObject(),
-		AccessKeyID:     s3.GetAccessKeyID(),
+		AccessKeyID:     s3.GetAccessKeyId(),
 		AccessKeySecret: s3.GetAccessKeySecret(),
 	}
 }
@@ -425,7 +425,7 @@ func runtimeMountsToProto(mounts []runtime.MountConfig) []*runtimev1.Mount {
 				Endpoint:        m.S3.Endpoint,
 				Bucket:          m.S3.Bucket,
 				Object:          m.S3.Object,
-				AccessKeyID:     m.S3.AccessKeyID,
+				AccessKeyId:     m.S3.AccessKeyID,
 				AccessKeySecret: m.S3.AccessKeySecret,
 			}}
 		}

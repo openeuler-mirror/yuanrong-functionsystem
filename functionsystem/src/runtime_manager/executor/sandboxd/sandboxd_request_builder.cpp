@@ -24,7 +24,7 @@
 #include "common/utils/files.h"
 #include "common/utils/path.h"
 #include "runtime_manager/executor/executor.h"
-#include "runtime_manager/executor/sandbox/sandbox_command_utils.h"
+#include "runtime_manager/executor/sandboxd/sandbox_command_utils.h"
 
 namespace functionsystem::runtime_manager {
 
@@ -61,7 +61,7 @@ std::string DirName(const std::string &path)
 
 // Parse the rootfs deploy-option JSON onto the flat StartRequest. The flat
 // request exposes rootfs + runtime as top-level fields (no FunctionRuntime).
-Status RootfsJsonParse(runtime::v1::SandboxStartRequest &start, const std::string &rootfsJson)
+Status RootfsJsonParse(runtime::v1::StartRequest &start, const std::string &rootfsJson)
 {
     try {
         nlohmann::json j = nlohmann::json::parse(rootfsJson);
@@ -89,11 +89,16 @@ Status RootfsJsonParse(runtime::v1::SandboxStartRequest &start, const std::strin
             }
             auto s3 = start.mutable_rootfs()->mutable_s3_config();
             const auto &si = j.at("storageInfo");
-            if (si.contains("endpoint"))  s3->set_endpoint(si.at("endpoint").get<std::string>());
-            if (si.contains("bucket"))    s3->set_bucket(si.at("bucket").get<std::string>());
-            if (si.contains("object"))    s3->set_object(si.at("object").get<std::string>());
-            if (si.contains("accessKey")) s3->set_accesskeyid(si.at("accessKey").get<std::string>());
-            if (si.contains("secretKey")) s3->set_accesskeysecret(si.at("secretKey").get<std::string>());
+            if (si.contains("endpoint"))
+                s3->set_endpoint(si.at("endpoint").get<std::string>());
+            if (si.contains("bucket"))
+                s3->set_bucket(si.at("bucket").get<std::string>());
+            if (si.contains("object"))
+                s3->set_object(si.at("object").get<std::string>());
+            if (si.contains("accessKey"))
+                s3->set_access_key_id(si.at("accessKey").get<std::string>());
+            if (si.contains("secretKey"))
+                s3->set_access_key_secret(si.at("secretKey").get<std::string>());
         } else if (typeStr == "image") {
             start.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::IMAGE);
             if (j.contains("imageurl")) {
@@ -139,10 +144,10 @@ void SetS3MountSource(runtime::v1::Mount *mount, const nlohmann::json &s3)
         s3Config->set_object(s3.at("object").get<std::string>());
     }
     if (s3.find("accessKey") != s3.end()) {
-        s3Config->set_accesskeyid(s3.at("accessKey").get<std::string>());
+        s3Config->set_access_key_id(s3.at("accessKey").get<std::string>());
     }
     if (s3.find("secretKey") != s3.end()) {
-        s3Config->set_accesskeysecret(s3.at("secretKey").get<std::string>());
+        s3Config->set_access_key_secret(s3.at("secretKey").get<std::string>());
     }
 }
 
@@ -157,7 +162,7 @@ void SetMountSource(runtime::v1::Mount *mount, const nlohmann::json &item)
     }
 }
 
-Status MountsJsonParse(runtime::v1::SandboxStartRequest &start, const std::string &mountsJson)
+Status MountsJsonParse(runtime::v1::StartRequest &start, const std::string &mountsJson)
 {
     try {
         nlohmann::json arr = nlohmann::json::parse(mountsJson);
@@ -195,8 +200,7 @@ Status MountsJsonParse(runtime::v1::SandboxStartRequest &start, const std::strin
 }
 
 // Build log paths and ensure the files exist. Fills stdOut and stdErr.
-void ResolveLogPaths(const std::string &logDir, const std::string &runtimeID,
-                     std::string &stdOut, std::string &stdErr)
+void ResolveLogPaths(const std::string &logDir, const std::string &runtimeID, std::string &stdOut, std::string &stdErr)
 {
     if (!litebus::os::ExistPath(logDir)) {
         YRLOG_WARN("std log dir {} not found, attempting mkdir", logDir);
@@ -219,14 +223,13 @@ void ResolveLogPaths(const std::string &logDir, const std::string &runtimeID,
 
 // ── Construction ──────────────────────────────────────────────────────────────
 
-SandboxdRequestBuilder::SandboxdRequestBuilder(const CommandBuilder &cmdBuilder)
-    : cmdBuilder_(cmdBuilder)
+SandboxdRequestBuilder::SandboxdRequestBuilder(const CommandBuilder &cmdBuilder) : cmdBuilder_(cmdBuilder)
 {
 }
 
 // ── Public Build ──────────────────────────────────────────────────────────────
 
-std::pair<Status, std::shared_ptr<runtime::v1::SandboxStartRequest>> SandboxdRequestBuilder::Build(
+std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBuilder::Build(
     const SandboxdStartParams &params) const
 {
     return BuildStart(params);
@@ -234,10 +237,10 @@ std::pair<Status, std::shared_ptr<runtime::v1::SandboxStartRequest>> SandboxdReq
 
 // ── Start path ────────────────────────────────────────────────────────────────
 
-std::pair<Status, std::shared_ptr<runtime::v1::SandboxStartRequest>> SandboxdRequestBuilder::BuildStart(
+std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBuilder::BuildStart(
     const SandboxdStartParams &params) const
 {
-    auto start = std::make_shared<runtime::v1::SandboxStartRequest>();
+    auto start = std::make_shared<runtime::v1::StartRequest>();
 
     // sandbox_id is intentionally left empty: per the sandboxd SandboxService
     // contract, sandboxd generates the sandbox ID and returns it in
@@ -306,7 +309,7 @@ std::pair<Status, std::shared_ptr<runtime::v1::SandboxStartRequest>> SandboxdReq
 }
 
 Status SandboxdRequestBuilder::BuildRootfs(const std::shared_ptr<messages::StartInstanceRequest> &request,
-                                           runtime::v1::SandboxStartRequest &start) const
+                                           runtime::v1::StartRequest &start) const
 {
     const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
     if (!opts.contains(CONTAINER_ROOTFS)) {
@@ -333,8 +336,8 @@ Envs SandboxdRequestBuilder::ApplyCodeMounts(const std::shared_ptr<messages::Sta
     }
 
     const auto &deploySpec = request->runtimeinstanceinfo().deploymentconfig();
-    auto funcPath = litebus::os::Join(litebus::os::Join(deploySpec.deploydir(), RUNTIME_LAYER_DIR_NAME),
-                                      RUNTIME_FUNC_DIR_NAME);
+    auto funcPath =
+        litebus::os::Join(litebus::os::Join(deploySpec.deploydir(), RUNTIME_LAYER_DIR_NAME), RUNTIME_FUNC_DIR_NAME);
 
     if (auto libIt = envs.posixEnvs.find(YR_FUNCTION_LIB_PATH);
         libIt != envs.posixEnvs.end() && !libIt->second.empty()) {
@@ -365,8 +368,7 @@ Envs SandboxdRequestBuilder::ApplyCodeMounts(const std::shared_ptr<messages::Sta
     return updated;
 }
 
-void SandboxdRequestBuilder::ApplyBootstrapMount(
-    const std::shared_ptr<messages::StartInstanceRequest> &request,
+void SandboxdRequestBuilder::ApplyBootstrapMount(const std::shared_ptr<messages::StartInstanceRequest> &request,
     google::protobuf::RepeatedPtrField<runtime::v1::Mount> *mounts,
     std::string &workingRoot) const
 {
@@ -388,8 +390,7 @@ void SandboxdRequestBuilder::ApplyBootstrapMount(
 }
 
 void SandboxdRequestBuilder::ApplyCommands(const std::shared_ptr<messages::StartInstanceRequest> &request,
-                                           const CommandArgs &cmdArgs,
-                                           runtime::v1::SandboxStartRequest *start) const
+                                           const CommandArgs &cmdArgs, runtime::v1::StartRequest *start) const
 {
     for (const auto &cmd : BuildBootstrapCommands(request)) {
         *start->add_command() = cmd;
@@ -400,8 +401,8 @@ void SandboxdRequestBuilder::ApplyCommands(const std::shared_ptr<messages::Start
             skipNext = false;
             continue;
         }
-        if (arg == "--job_id" || arg.rfind("--job_id=", 0) == 0 ||
-            arg == "--runtime_id" || arg.rfind("--runtime_id=", 0) == 0) {
+        if (arg == "--job_id" || arg.rfind("--job_id=", 0) == 0 || arg == "--runtime_id"
+            || arg.rfind("--runtime_id=", 0) == 0) {
             if (arg == "--job_id" || arg == "--runtime_id") {
                 skipNext = true;
             }
@@ -428,19 +429,15 @@ void SandboxdRequestBuilder::ApplyResources(const std::shared_ptr<messages::Star
 
     auto cpuIt = res.find(CPU_RESOURCE_NAME);
     (*resources)[CPU_RESOURCE_NAME] =
-        (cpuIt != res.end())
-            ? getEffectiveValue(cpuIt->second, DEFAULT_CPU_MILLICORES)
-            : DEFAULT_CPU_MILLICORES;
+        (cpuIt != res.end()) ? getEffectiveValue(cpuIt->second, DEFAULT_CPU_MILLICORES) : DEFAULT_CPU_MILLICORES;
 
     auto memIt = res.find(MEMORY_RESOURCE_NAME);
     (*resources)[MEMORY_RESOURCE_NAME] =
-        (memIt != res.end())
-            ? getEffectiveValue(memIt->second, DEFAULT_MEMORY_MB)
-            : DEFAULT_MEMORY_MB;
+        (memIt != res.end()) ? getEffectiveValue(memIt->second, DEFAULT_MEMORY_MB) : DEFAULT_MEMORY_MB;
 }
 
 void SandboxdRequestBuilder::ApplyEnvsAndLogs(const Envs &envs, const std::string &runtimeID,
-                                              runtime::v1::SandboxStartRequest *start) const
+                                              runtime::v1::StartRequest *start) const
 {
     const auto &config = cmdBuilder_.GetConfig();
     const std::string logDir = litebus::os::Join(config.runtimeLogPath, config.runtimeStdLogDir);
@@ -458,7 +455,7 @@ void SandboxdRequestBuilder::ApplyEnvsAndLogs(const Envs &envs, const std::strin
 }
 
 void SandboxdRequestBuilder::ApplyExtraConfig(const std::shared_ptr<messages::StartInstanceRequest> &request,
-                                              runtime::v1::SandboxStartRequest *start) const
+                                              runtime::v1::StartRequest *start) const
 {
     const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
     if (auto it = opts.find(CONTAINER_EXTRA_CONFIG); it != opts.end()) {

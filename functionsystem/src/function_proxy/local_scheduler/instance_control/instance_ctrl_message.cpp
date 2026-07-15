@@ -145,8 +145,8 @@ void BuildRootfsConfig(
         s3Config->set_endpoint(funcMeta.rootfs.storageInfo.endpoint);
         s3Config->set_bucket(funcMeta.rootfs.storageInfo.bucket);
         s3Config->set_object(funcMeta.rootfs.storageInfo.object);
-        s3Config->set_accesskeyid(funcMeta.rootfs.storageInfo.accessKey);
-        s3Config->set_accesskeysecret(funcMeta.rootfs.storageInfo.secretKey);
+        s3Config->set_access_key_id(funcMeta.rootfs.storageInfo.accessKey);
+        s3Config->set_access_key_secret(funcMeta.rootfs.storageInfo.secretKey);
     } else if (funcMeta.rootfs.type == RootfsSrcType::IMAGE) {
         container->mutable_rootfsconfig()->set_image_url(funcMeta.rootfs.imageurl);
     } else if (funcMeta.rootfs.type == RootfsSrcType::LOCAL) {

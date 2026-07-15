@@ -55,34 +55,9 @@ cc_grpc_library(
 )
 
 proto_library(
-    name = "runtime_launcher_interface_proto",
-    srcs = ["runtime_launcher_interface.proto"],
-    strip_import_prefix = "/proto/posix",
-    visibility = ["//visibility:public"],
-)
-
-cc_proto_library(
-    name = "runtime_launcher_interface_cc_proto",
-    deps = [":runtime_launcher_interface_proto"],
-    visibility = ["//visibility:public"],
-)
-
-cc_grpc_library(
-    name = "runtime_launcher_interface_cc_grpc",
-    srcs = [":runtime_launcher_interface_proto"],
-    grpc_only = True,
-    deps = [":runtime_launcher_interface_cc_proto"],
-    visibility = ["//visibility:public"],
-)
-
-# sandbox_api.proto mirrors sandboxd's runtime.v1.SandboxService. It imports
-# runtime_launcher_interface.proto to reuse identical shared messages, so it
-# depends on that proto target.
-proto_library(
     name = "sandbox_api_proto",
     srcs = ["sandbox_api.proto"],
     strip_import_prefix = "/proto/posix",
-    deps = [":runtime_launcher_interface_proto"],
     visibility = ["//visibility:public"],
 )
 
@@ -225,7 +200,7 @@ proto_library(
         ":common_proto",
         ":core_service_proto",
         ":resource_proto",
-        ":runtime_launcher_interface_proto",
+        ":sandbox_api_proto",
     ],
     visibility = ["//visibility:public"],
 )
@@ -292,8 +267,6 @@ cc_library(
         ":core_service_cc_proto",
         ":exec_service_cc_proto",
         ":exec_service_cc_grpc",
-        ":runtime_launcher_interface_cc_proto",
-        ":runtime_launcher_interface_cc_grpc",
         ":sandbox_api_cc_proto",
         ":sandbox_api_cc_grpc",
         ":runtime_service_cc_proto",

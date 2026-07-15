@@ -66,7 +66,7 @@ PROTO_FILES = [
     "message.proto",
     "resource.proto",
     "bus_adapter.proto",
-    "runtime_launcher_interface.proto",
+    "sandbox_api.proto",
     "exec_service.proto",
 ]
 
@@ -74,7 +74,7 @@ GRPC_PROTO_FILES = [
     "runtime_rpc.proto",
     "inner_service.proto",
     "bus_service.proto",
-    "runtime_launcher_interface.proto",
+    "sandbox_api.proto",
     "exec_service.proto",
 ]
 

@@ -178,7 +178,6 @@ private:
 
     std::shared_ptr<ExecutorProxy> FindExecutor(EXECUTOR_TYPE);
     std::shared_ptr<ExecutorProxy> CreateRuntimeExecutor();
-    std::shared_ptr<ExecutorProxy> CreateContainerExecutor();
     std::shared_ptr<ExecutorProxy> CreateSupervisorExecutor();
     std::shared_ptr<ExecutorProxy> CreateDockerExecutor();
     std::shared_ptr<ExecutorProxy> CreateSandboxdExecutor();
