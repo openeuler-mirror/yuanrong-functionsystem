@@ -30,14 +30,8 @@ namespace functionsystem::global_scheduler {
 
 static const std::string PORT_FORWARD_KEY = "portForward";
 constexpr size_t MAX_ROUTER_NAME_LEN = 200;
-constexpr size_t PORT_MAPPING_SANDBOX_PORT_INDEX = 2;
 constexpr size_t MAX_DNS_LABEL_LEN = 63;
 constexpr size_t MAX_FQDN_LEN = 253;
-constexpr size_t WILDCARD_PREFIX_LEN = 2;
-constexpr size_t HASH_SUFFIX_LEN = 8;
-constexpr int HASH_SUFFIX_LAST_INDEX = static_cast<int>(HASH_SUFFIX_LEN) - 1;
-constexpr uint32_t HASH_NIBBLE_MASK = 0xFU;
-constexpr uint32_t HASH_NIBBLE_BITS = 4;
 constexpr uint32_t FNV_OFFSET_BASIS = 2166136261U;
 constexpr uint32_t FNV_PRIME = 16777619U;
 
@@ -49,22 +43,17 @@ TraefikRouteCache::TraefikRouteCache(TraefikConfig cfg)
 
 void TraefikRouteCache::OnInstanceRunning(const resource_view::InstanceInfo& instance)
 {
-    auto it = instance.extensions().find(PORT_FORWARD_KEY);
-    if (it == instance.extensions().end() || it->second.empty()) {
-        return;
-    }
-
     auto routes = ParseRoutes(instance);
-    if (routes.empty()) {
-        return;
-    }
 
     {
         std::unique_lock lock(routeTableMu_);
-        routeTable_[instance.instanceid()] = std::move(routes);
-        dirty_ = true;
+        routeTable_.erase(instance.instanceid());
+        if (!routes.empty()) {
+            routeTable_[instance.instanceid()] = std::move(routes);
+        }
     }
-    YRLOG_DEBUG("TraefikRouteCache: added routes for instance {}", instance.instanceid());
+    dirty_ = true;
+    YRLOG_DEBUG("TraefikRouteCache: replaced routes for instance {}", instance.instanceid());
 }
 
 void TraefikRouteCache::OnInstanceExited(const std::string& instanceID)
@@ -74,8 +63,8 @@ void TraefikRouteCache::OnInstanceExited(const std::string& instanceID)
         if (routeTable_.erase(instanceID) == 0) {
             return;
         }
-        dirty_ = true;
     }
+    dirty_ = true;
     YRLOG_DEBUG("TraefikRouteCache: removed routes for instance {}", instanceID);
 }
 
@@ -125,20 +114,43 @@ std::vector<TraefikRouteCache::RouteEntry> TraefikRouteCache::ParseRoutes(
             return routes;
         }
 
+        bool hasTunnelRoute = false;
         for (const auto& entry : portJson) {
             if (!entry.is_string()) {
                 continue;
             }
             std::string mapping = entry.get<std::string>();
-            std::string protocol;
-            int hostPort = 0;
-            int sandboxPort = 0;
-            if (!ParsePortMapping(mapping, protocol, hostPort, sandboxPort)) {
-                YRLOG_WARN("TraefikRouteCache: invalid port mapping format '{}' for instance {}",
+            const auto parsed = ParsePortForwardMapping(mapping);
+            if (!parsed.has_value()) {
+                YRLOG_WARN("TraefikRouteCache: unsupported port mapping '{}' for instance {}",
                            mapping, instance.instanceid());
                 continue;
             }
-            routes.push_back(BuildRouteEntry(safeID, hostIP, protocol, hostPort, sandboxPort));
+
+            if (parsed->routeKind == PortRouteKind::DIRECT) {
+                continue;
+            }
+            if (parsed->routeKind == PortRouteKind::TUNNEL && hasTunnelRoute) {
+                YRLOG_WARN("TraefikRouteCache: duplicate tunnel mapping '{}' for instance {}",
+                           mapping, instance.instanceid());
+                continue;
+            }
+            if (parsed->legacyTransport) {
+                YRLOG_WARN("TraefikRouteCache: legacy tcp mapping '{}' is treated as public HTTP", mapping);
+            }
+
+            RouteEntry route;
+            route.routeKind = parsed->routeKind;
+            route.safeID = safeID;
+            route.routerName = parsed->routeKind == PortRouteKind::TUNNEL
+                                   ? safeID + "-tunnel"
+                                   : safeID + "-p" + std::to_string(parsed->containerPort);
+            route.backendURL = parsed->backendScheme + "://" + hostIP + ":" +
+                               std::to_string(parsed->hostPort);
+            route.sandboxPort = parsed->containerPort;
+            route.useHttps = parsed->backendScheme == "https";
+            routes.push_back(std::move(route));
+            hasTunnelRoute = hasTunnelRoute || parsed->routeKind == PortRouteKind::TUNNEL;
         }
     } catch (const std::exception& e) {
         YRLOG_WARN("TraefikRouteCache: failed to parse portForward for instance {}: {}",
@@ -146,53 +158,6 @@ std::vector<TraefikRouteCache::RouteEntry> TraefikRouteCache::ParseRoutes(
     }
 
     return routes;
-}
-
-bool TraefikRouteCache::ParsePortMapping(const std::string& mapping, std::string& protocol,
-                                         int& hostPort, int& sandboxPort)
-{
-    std::vector<std::string> parts;
-    std::stringstream ss(mapping);
-    std::string part;
-    while (std::getline(ss, part, ':')) {
-        parts.push_back(part);
-    }
-
-    constexpr size_t newFormatParts = 3;
-    constexpr size_t legacyFormatParts = 2;
-
-    if (parts.size() == newFormatParts) {
-        // "protocol:hostPort:containerPort"
-        protocol = parts[0];
-        hostPort = std::stoi(parts[1]);
-        sandboxPort = std::stoi(parts[PORT_MAPPING_SANDBOX_PORT_INDEX]);
-        return true;
-    }
-    if (parts.size() == legacyFormatParts) {
-        // "hostPort:containerPort"
-        protocol = "http";
-        hostPort = std::stoi(parts[0]);
-        sandboxPort = std::stoi(parts[1]);
-        return true;
-    }
-    return false;
-}
-
-TraefikRouteCache::RouteEntry TraefikRouteCache::BuildRouteEntry(
-    const std::string& safeID, const std::string& hostIP, const std::string& protocol,
-    int hostPort, int sandboxPort)
-{
-    std::string protocolLower = protocol;
-    std::transform(protocolLower.begin(), protocolLower.end(), protocolLower.begin(), ::tolower);
-    bool useHttps = (protocolLower == "https");
-    std::string scheme = useHttps ? "https" : "http";
-
-    RouteEntry route;
-    route.routerName  = safeID + "-p" + std::to_string(sandboxPort);
-    route.backendURL  = scheme + "://" + hostIP + ":" + std::to_string(hostPort);
-    route.sandboxPort = sandboxPort;
-    route.useHttps    = useHttps;
-    return route;
 }
 
 std::string TraefikRouteCache::ExtractIP(const std::string& addr)
@@ -203,14 +168,14 @@ std::string TraefikRouteCache::ExtractIP(const std::string& addr)
 
 std::string TraefikRouteCache::SanitizeID(const std::string& id)
 {
-    constexpr size_t atReplacementLen = 4;  // length of "-at-"
+    constexpr size_t AT_REPLACEMENT_LEN = 4;  // length of "-at-"
     std::string result = id;
 
     // Replace @ with -at-
     size_t pos = 0;
     while ((pos = result.find('@', pos)) != std::string::npos) {
         result.replace(pos, 1, "-at-");
-        pos += atReplacementLen;
+        pos += AT_REPLACEMENT_LEN;
     }
 
     // Replace other problematic characters
@@ -234,18 +199,16 @@ std::string TraefikRouteCache::NormalizePublicBaseDomain(const std::string& doma
     }
     result.erase(last + 1);
 
-    const std::string schemeSeparator = "://";
-    auto schemePos = result.find(schemeSeparator);
-    auto firstSlashPos = result.find('/');
-    if (schemePos != std::string::npos && (firstSlashPos == std::string::npos || schemePos < firstSlashPos)) {
-        result.erase(0, schemePos + schemeSeparator.length());
+    auto schemePos = result.find("://");
+    if (schemePos != std::string::npos) {
+        result.erase(0, schemePos + 3);
     }
     auto pathPos = result.find('/');
     if (pathPos != std::string::npos) {
         result.erase(pathPos);
     }
     if (result.rfind("*.", 0) == 0) {
-        result.erase(0, WILDCARD_PREFIX_LEN);
+        result.erase(0, 2);
     }
     auto portPos = result.rfind(':');
     if (portPos != std::string::npos) {
@@ -295,11 +258,11 @@ std::string TraefikRouteCache::StableHashSuffix(const std::string& value)
         hash *= FNV_PRIME;
     }
 
-    constexpr char hexDigits[] = "0123456789abcdef";
-    std::string result(HASH_SUFFIX_LEN, '0');
-    for (int i = HASH_SUFFIX_LAST_INDEX; i >= 0; --i) {
-        result[static_cast<size_t>(i)] = hexDigits[hash & HASH_NIBBLE_MASK];
-        hash >>= HASH_NIBBLE_BITS;
+    constexpr char HEX[] = "0123456789abcdef";
+    std::string result(8, '0');
+    for (int i = 7; i >= 0; --i) {
+        result[static_cast<size_t>(i)] = HEX[hash & 0xFU];
+        hash >>= 4;
     }
     return result;
 }
@@ -310,9 +273,6 @@ std::string TraefikRouteCache::BuildHostLabel(int sandboxPort, const std::string
     std::string label = std::to_string(sandboxPort) + "-" + safeDNS;
     if (label.length() > MAX_DNS_LABEL_LEN) {
         const std::string suffix = "-" + StableHashSuffix(std::to_string(sandboxPort) + ":" + safeID);
-        if (suffix.length() >= MAX_DNS_LABEL_LEN) {
-            return suffix.substr(suffix.length() - MAX_DNS_LABEL_LEN);
-        }
         label = label.substr(0, MAX_DNS_LABEL_LEN - suffix.length()) + suffix;
     }
     return label;
@@ -326,67 +286,7 @@ std::string TraefikRouteCache::BuildHostRouterName(const std::string& routerName
     }
 
     const std::string hashSuffix = "-" + StableHashSuffix(routerName) + suffix;
-    if (hashSuffix.length() >= MAX_ROUTER_NAME_LEN) {
-        return hashSuffix.substr(hashSuffix.length() - MAX_ROUTER_NAME_LEN);
-    }
     return routerName.substr(0, MAX_ROUTER_NAME_LEN - hashSuffix.length()) + hashSuffix;
-}
-
-std::string TraefikRouteCache::BuildHostRule(int sandboxPort, const std::string& safeID,
-                                             const std::string& routerName) const
-{
-    const std::string hostName = BuildHostLabel(sandboxPort, safeID) + "." + cfg_.publicBaseDomain;
-    if (hostName.length() > MAX_FQDN_LEN) {
-        YRLOG_WARN("TraefikRouteCache: skip host-based route for router {} because host '{}' is too long",
-                   routerName, hostName);
-        return "";
-    }
-    return "Host(`" + hostName + "`)";
-}
-
-nlohmann::json TraefikRouteCache::BuildPathRouter(const RouteEntry& entry, const std::string& safeID,
-                                                  const std::string& routerName) const
-{
-    nlohmann::json router;
-    router["entryPoints"] = nlohmann::json::array({cfg_.httpEntryPoint});
-    router["middlewares"] = nlohmann::json::array({"stripprefix-all"});
-    router["rule"] = "PathPrefix(`/" + safeID + "/" + std::to_string(entry.sandboxPort) + "`)";
-    router["service"] = routerName;
-    if (cfg_.enableTLS) {
-        router["tls"] = nlohmann::json::object();
-    }
-    return router;
-}
-
-nlohmann::json TraefikRouteCache::BuildHostRouter(const RouteEntry& entry, const std::string& safeID,
-                                                  const std::string& routerName) const
-{
-    const std::string hostRule = BuildHostRule(entry.sandboxPort, safeID, routerName);
-    if (hostRule.empty()) {
-        return nlohmann::json();
-    }
-
-    nlohmann::json router;
-    router["entryPoints"] = nlohmann::json::array({cfg_.httpEntryPoint});
-    router["rule"] = hostRule;
-    router["service"] = routerName;
-    if (cfg_.enableTLS) {
-        router["tls"] = nlohmann::json::object();
-    }
-    return router;
-}
-
-nlohmann::json TraefikRouteCache::BuildLoadBalancerService(const RouteEntry& entry) const
-{
-    nlohmann::json lb;
-    lb["servers"] = nlohmann::json::array({nlohmann::json{{"url", entry.backendURL}}});
-    if (entry.useHttps && !cfg_.serversTransport.empty()) {
-        lb["serversTransport"] = cfg_.serversTransport;
-    }
-
-    nlohmann::json service;
-    service["loadBalancer"] = std::move(lb);
-    return service;
 }
 
 std::string TraefikRouteCache::BuildConfigJSON() const
@@ -408,23 +308,53 @@ std::string TraefikRouteCache::BuildConfigJSON() const
     for (const auto& [name, entryPtr] : sortedRoutes) {
         const auto& entry = *entryPtr;
 
-        // Parse safeID from routerName for the rule
-        auto dashPPos = name.rfind("-p");
-        if (dashPPos == std::string::npos || dashPPos == 0) {
-            continue;
+        // Router
+        nlohmann::json router;
+        router["entryPoints"] = nlohmann::json::array({cfg_.httpEntryPoint});
+        if (entry.routeKind == PortRouteKind::TUNNEL) {
+            router["middlewares"] = nlohmann::json::array({"stripprefix-tunnel"});
+            router["rule"] = "PathPrefix(`/tunnel/" + entry.safeID + "`)";
+            router["priority"] = 100;
+        } else {
+            router["middlewares"] = nlohmann::json::array({"stripprefix-all"});
+            router["rule"] = "PathPrefix(`/" + entry.safeID + "/" + std::to_string(entry.sandboxPort) + "`)";
         }
-        std::string safeID = name.substr(0, dashPPos);
+        router["service"] = name;
+        if (cfg_.enableTLS) {
+            router["tls"] = nlohmann::json::object();
+        }
+        routersJson[name] = std::move(router);
 
-        routersJson[name] = BuildPathRouter(entry, safeID, name);
-
-        if (!cfg_.publicBaseDomain.empty()) {
-            nlohmann::json hostRouter = BuildHostRouter(entry, safeID, name);
-            if (!hostRouter.empty()) {
+        if (entry.routeKind == PortRouteKind::PUBLIC && !cfg_.publicBaseDomain.empty()) {
+            nlohmann::json hostRouter;
+            hostRouter["entryPoints"] = nlohmann::json::array({cfg_.httpEntryPoint});
+            // Example:
+            //   port=5888, safeID=akernel-abc, publicBaseDomain=sandbox-gateway.example.com
+            //   => Host(`5888-akernel-abc.sandbox-gateway.example.com`)
+            const std::string hostName = BuildHostLabel(entry.sandboxPort, entry.safeID) + "." + cfg_.publicBaseDomain;
+            if (hostName.length() > MAX_FQDN_LEN) {
+                YRLOG_WARN("TraefikRouteCache: skip host-based route for router {} because host '{}' is too long",
+                           name, hostName);
+            } else {
+                const std::string hostRule = "Host(`" + hostName + "`)";
+                hostRouter["rule"] = hostRule;
+                hostRouter["service"] = name;
+                if (cfg_.enableTLS) {
+                    hostRouter["tls"] = nlohmann::json::object();
+                }
                 routersJson[BuildHostRouterName(name)] = std::move(hostRouter);
             }
         }
 
-        servicesJson[name] = BuildLoadBalancerService(entry);
+        // Service
+        nlohmann::json service;
+        nlohmann::json lb;
+        lb["servers"] = nlohmann::json::array({nlohmann::json{{"url", entry.backendURL}}});
+        if (entry.useHttps && !cfg_.serversTransport.empty()) {
+            lb["serversTransport"] = cfg_.serversTransport;
+        }
+        service["loadBalancer"] = std::move(lb);
+        servicesJson[name] = std::move(service);
     }
 
     // Build the full dynamic configuration
@@ -434,6 +364,8 @@ std::string TraefikRouteCache::BuildConfigJSON() const
     nlohmann::json middlewares;
     middlewares["stripprefix-all"]["stripPrefixRegex"]["regex"] =
         nlohmann::json::array({"^/[^/]+/[0-9]+"});
+    middlewares["stripprefix-tunnel"]["stripPrefixRegex"]["regex"] =
+        nlohmann::json::array({"^/tunnel/[^/]+"});
 
     nlohmann::json httpConfig;
     httpConfig["middlewares"] = std::move(middlewares);

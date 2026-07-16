@@ -26,7 +26,7 @@
 #include <vector>
 
 #include "common/resource_view/resource_type.h"
-#include "nlohmann/json.hpp"
+#include "common/utils/port_forward_mapping.h"
 
 namespace functionsystem::global_scheduler {
 
@@ -58,7 +58,9 @@ public:
 
 private:
     struct RouteEntry {
+        PortRouteKind routeKind = PortRouteKind::PUBLIC;
         std::string routerName;   // safeID-pPort
+        std::string safeID;
         std::string backendURL;   // https://hostIP:hostPort or http://hostIP:hostPort
         int         sandboxPort = 0;
         bool        useHttps    = false;
@@ -67,9 +69,6 @@ private:
     // Parse route entries from InstanceInfo extensions.
     // Parses extensions["portForward"] JSON array and proxyGrpcAddress.
     std::vector<RouteEntry> ParseRoutes(const resource_view::InstanceInfo& instance) const;
-    static bool ParsePortMapping(const std::string& mapping, std::string& protocol, int& hostPort, int& sandboxPort);
-    static RouteEntry BuildRouteEntry(const std::string& safeID, const std::string& hostIP,
-                                      const std::string& protocol, int hostPort, int sandboxPort);
 
     // Extract IP from proxyGrpcAddress (ip:port format)
     static std::string ExtractIP(const std::string& addr);
@@ -90,15 +89,6 @@ private:
     static std::string BuildHostRouterName(const std::string& routerName);
 
     static std::string StableHashSuffix(const std::string& value);
-
-    // Build Traefik Host() rule for a route. Returns empty when the FQDN is invalid.
-    std::string BuildHostRule(int sandboxPort, const std::string& safeID, const std::string& routerName) const;
-
-    nlohmann::json BuildPathRouter(const RouteEntry& entry, const std::string& safeID,
-                                   const std::string& routerName) const;
-    nlohmann::json BuildHostRouter(const RouteEntry& entry, const std::string& safeID,
-                                   const std::string& routerName) const;
-    nlohmann::json BuildLoadBalancerService(const RouteEntry& entry) const;
 
     // Build full Traefik dynamic.Configuration JSON.
     // JSON keys sorted lexicographically for FNV hash stability.

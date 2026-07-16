@@ -635,7 +635,9 @@ void SandboxdExecutor::ApplyPortForwardMappings(SandboxdStartParams *params,
         const std::string containerPort = std::to_string(forwardConfigs[i].containerPort);
         const std::string &scheme = forwardConfigs[i].protocol;
         params->portMappings.push_back(ToDownstreamL4Protocol(scheme) + ":" + hostPort + ":" + containerPort);
-        portJson.push_back(scheme + ":" + hostPort + ":" + containerPort);
+        portJson.push_back(FormatPortForwardMapping({
+            forwardConfigs[i].routeKind, scheme, static_cast<uint16_t>(hostPorts[i]),
+            static_cast<uint16_t>(forwardConfigs[i].containerPort), false}));
     }
     stateManager_.UpdatePortMappings(params->runtimeID, portJson.dump());
 }
