@@ -22,6 +22,7 @@
 #include "runtime_manager/config/language/go_strategy.h"
 #include "runtime_manager/config/command_builder.h"
 #include "runtime_manager/config/build.h"
+#include "common/service_json/service_json.h"
 #include "common/proto/pb/message_pb.h"
 #include "common/proto/pb/posix/resource.pb.h"
 #include "common/resource_view/resource_type.h"
@@ -220,6 +221,23 @@ TEST_F(LanguageStrategyTest, CommandBuilderUnknownLanguageReturnsError)
     auto [status, cmdArgs] = cmdBuilder.BuildArgs("unknown-lang-xyz", "21000", req);
 
     EXPECT_FALSE(status.IsOk());
+}
+
+TEST_F(LanguageStrategyTest, ServiceJsonAcceptsPython314Runtime)
+{
+    EXPECT_TRUE(functionsystem::service_json::CheckRuntime("python3.14"));
+    EXPECT_TRUE(functionsystem::service_json::CheckHookHandlerRegularization("module.handler", "python3.14"));
+}
+
+TEST_F(LanguageStrategyTest, CommandBuilderDispatchesPython314ToPythonStrategy)
+{
+    CommandBuilder cmdBuilder(/*execLookPath=*/false);
+    cmdBuilder.SetRuntimeConfig(config_);
+    auto req = MakeMinimalRequest("python3.14");
+    auto [status, cmdArgs] = cmdBuilder.BuildArgs("python3.14", "21000", req);
+    EXPECT_TRUE(status.IsOk());
+    EXPECT_FALSE(cmdArgs.execPath.empty());
+    EXPECT_NE(cmdArgs.execPath.find("python"), std::string::npos);
 }
 
 
