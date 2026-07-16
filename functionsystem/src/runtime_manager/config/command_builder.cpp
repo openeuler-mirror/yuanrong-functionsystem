@@ -107,6 +107,7 @@ CommandBuilder::CommandBuilder(bool execLookPath) : execLookPath_(execLookPath)
     strategies_[PYTHON311_LANGUAGE]    = python;
     strategies_[PYTHON312_LANGUAGE]    = python;
     strategies_[PYTHON313_LANGUAGE]    = python;
+    strategies_[PYTHON314_LANGUAGE]    = python;
 }
 
 void CommandBuilder::RegisterStrategy(

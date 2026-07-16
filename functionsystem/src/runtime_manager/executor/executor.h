@@ -50,6 +50,7 @@ const std::string PYTHON310_LANGUAGE = "python3.10";
 const std::string PYTHON311_LANGUAGE = "python3.11";
 const std::string PYTHON312_LANGUAGE = "python3.12";
 const std::string PYTHON313_LANGUAGE = "python3.13";
+const std::string PYTHON314_LANGUAGE = "python3.14";
 const std::string POSIX_CUSTOM_RUNTIME = "posix-custom-runtime";
 const std::string RUST_LANGUAGE = "rust";
 const std::string PARAM_EXEC_PATH = "execPath";
