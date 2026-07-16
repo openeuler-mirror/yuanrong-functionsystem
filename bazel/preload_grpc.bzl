@@ -49,11 +49,11 @@ def preload_grpc():
         path = Label("@com_github_grpc_grpc//:WORKSPACE"),
     )
 
-    # boringssl/openssl — local vendor source
+    # boringssl/openssl — cache-managed vendor installation
     native.new_local_repository(
         name = "boringssl",
         build_file = "//bazel:openssl.bazel",
-        path = "./vendor/src/openssl/",
+        path = "./vendor/output/Install/openssl/",
     )
 
     # re2 — gitee.com mirror zip

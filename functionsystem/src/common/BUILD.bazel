@@ -108,6 +108,19 @@ cc_library(
     visibility = ["//visibility:public"],
 )
 
+# --- crypto ---
+cc_library(
+    name = "crypto",
+    srcs = ["crypto/crypto.cpp"],
+    hdrs = ["crypto/crypto.h"],
+    copts = COPTS,
+    deps = [
+        ":status",
+        ":utils_base",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 # --- metadata ---
 cc_library(
     name = "metadata",
@@ -199,6 +212,7 @@ cc_library(
     hdrs = glob(["rpc/**/*.h"]),
     copts = COPTS + ["-fvisibility=hidden"],
     deps = [
+        ":crypto",
         ":status",
         ":posix_pb",
         ":common_flags",
@@ -234,6 +248,7 @@ cc_library(
     copts = COPTS,
     deps = [
         ":common_root_inc",
+        ":crypto",
         ":status",
         ":common_flags",
         ":utils_base",
@@ -453,6 +468,7 @@ cc_library(
     hdrs = glob(["utils/*.h"]),
     copts = COPTS,
     deps = [
+        ":crypto",
         ":status",
         ":metadata",
         ":hex",
@@ -642,6 +658,26 @@ cc_library(
 )
 
 cc_library(
+    name = "numa_affinity_filter",
+    srcs = glob(["schedule_plugin/filter/numa_affinity_filter/**/*.cpp"]),
+    hdrs = glob(["schedule_plugin/filter/numa_affinity_filter/**/*.h"]),
+    copts = COPTS,
+    deps = [":schedule_plugin_common", ":utils"],
+    alwayslink = True,
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "numa_affinity_scorer",
+    srcs = glob(["schedule_plugin/scorer/numa_affinity_scorer/**/*.cpp"]),
+    hdrs = glob(["schedule_plugin/scorer/numa_affinity_scorer/**/*.h"]),
+    copts = COPTS,
+    deps = [":schedule_plugin_common", ":utils"],
+    alwayslink = True,
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
     name = "disk_filter",
     srcs = glob(["schedule_plugin/filter/disk_filter/**/*.cpp"]),
     hdrs = glob(["schedule_plugin/filter/disk_filter/**/*.h"]),
@@ -673,6 +709,8 @@ cc_library(
         ":default_heterogeneous_scorer",
         ":label_affinity_filter",
         ":label_affinity_scorer",
+        ":numa_affinity_filter",
+        ":numa_affinity_scorer",
         ":disk_filter",
         ":disk_scorer",
     ],

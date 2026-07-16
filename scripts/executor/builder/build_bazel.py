@@ -56,6 +56,7 @@ TEST_TARGETS = [
 ]
 
 PROTO_FILES = [
+    "agent_plugin.proto",
     "common.proto",
     "core_service.proto",
     "runtime_rpc.proto",
@@ -71,6 +72,7 @@ PROTO_FILES = [
 ]
 
 GRPC_PROTO_FILES = [
+    "agent_plugin.proto",
     "runtime_rpc.proto",
     "inner_service.proto",
     "bus_service.proto",
@@ -146,6 +148,7 @@ def generate_proto_sources(root_dir: str):
 
     proto_root = os.path.join(root_dir, "proto", "posix")
     output_dir = os.path.join(root_dir, "functionsystem", "src", "common", "proto", "pb", "posix")
+    protobuf_include = _find_protobuf_include(root_dir, protoc)
     os.makedirs(output_dir, exist_ok=True)
     plugin_env = _build_grpc_plugin_env(root_dir, grpc_cpp_plugin)
 
@@ -164,6 +167,7 @@ def generate_proto_sources(root_dir: str):
     cpp_cmd = [
         protoc,
         f"-I{proto_root}",
+        f"-I{protobuf_include}",
         f"--cpp_out={output_dir}",
         *PROTO_FILES,
     ]
@@ -172,6 +176,7 @@ def generate_proto_sources(root_dir: str):
     grpc_cmd = [
         protoc,
         f"-I{proto_root}",
+        f"-I{protobuf_include}",
         f"--grpc_out={output_dir}",
         f"--plugin=protoc-gen-grpc={grpc_cpp_plugin}",
         *GRPC_PROTO_FILES,
@@ -242,6 +247,26 @@ def _find_grpc_cpp_plugin(root_dir: str):
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
     return None
+
+
+def _find_protobuf_include(root_dir: str, protoc: str):
+    """Locate the well-known proto sources paired with the selected protoc."""
+    protoc_realpath = os.path.realpath(protoc)
+    bazel_out_marker = f"{os.sep}bazel-out{os.sep}"
+    candidates = []
+    if bazel_out_marker in protoc_realpath:
+        execroot = protoc_realpath.split(bazel_out_marker, 1)[0]
+        candidates.append(os.path.join(execroot, "external", "com_google_protobuf", "src"))
+    candidates.extend(
+        [
+            os.path.join(root_dir, "bazel-functionsystem", "external", "com_google_protobuf", "src"),
+            os.path.join(root_dir, "vendor", "output", "Install", "protobuf", "include"),
+        ]
+    )
+    for candidate in candidates:
+        if os.path.isfile(os.path.join(candidate, "google", "protobuf", "any.proto")):
+            return candidate
+    raise RuntimeError("protobuf well-known proto sources not found for generated C++ sources")
 
 
 def _find_protoc(root_dir: str):
