@@ -11,9 +11,12 @@ Workflow:
 
 import os
 import shutil
+import subprocess
 from glob import glob
 
 import utils
+
+from .build_cpp import version_name
 
 log = utils.stream_logger()
 
@@ -321,6 +324,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     """
     check_bazel_available()
     ensure_bazel_deps(root_dir)
+    generate_version_header(root_dir, version)
 
     # Determine bazel config flag
     config = "release" if build_type.lower() == "release" else "debug"
@@ -372,6 +376,34 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     _copy_shared_libraries(root_dir, output_dir)
 
     log.info(f"Bazel build complete. Binaries installed to {bin_output_dir}")
+
+
+def generate_version_header(root_dir: str, version: str):
+    """Generate the ignored version header that CMake normally configures."""
+    template_path = os.path.join(root_dir, "functionsystem", "src", "common", "utils", "version.h.in")
+    output_path = os.path.join(root_dir, "functionsystem", "src", "common", "utils", "version.h")
+
+    def git_output(*args: str) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=root_dir,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else "Unknown"
+
+    with open(template_path, encoding="utf-8") as template_file:
+        content = template_file.read()
+    replacements = {
+        "@BUILD_VERSION@": version_name(version),
+        "@GIT_HASH@": git_output("log", "-1", "--pretty=format:[%H] [%ai]"),
+        "@GIT_BRANCH_NAME@": git_output("symbolic-ref", "--short", "-q", "HEAD"),
+    }
+    for placeholder, value in replacements.items():
+        content = content.replace(placeholder, value)
+    with open(output_path, "w", encoding="utf-8") as output_file:
+        output_file.write(content)
 
 
 def build_gtest_bazel(root_dir: str, job_num: int):
@@ -430,6 +462,7 @@ def run_gtest_bazel(root_dir: str, job_num: int, test_suite: str = "*", test_cas
 def _prepare_bazel_workspace(root_dir: str, job_num: int):
     check_bazel_available()
     ensure_bazel_deps(root_dir)
+    generate_version_header(root_dir, "0.0.0")
 
     bazel_output_root = os.path.join(root_dir, "build", "bazel_root")
     os.makedirs(bazel_output_root, exist_ok=True)
