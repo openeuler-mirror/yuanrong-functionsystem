@@ -374,6 +374,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
 
     # Copy required shared libraries to functionsystem/output/lib/
     _copy_shared_libraries(root_dir, output_dir)
+    _install_metrics_outputs(root_dir)
 
     log.info(f"Bazel build complete. Binaries installed to {bin_output_dir}")
 
@@ -404,6 +405,32 @@ def generate_version_header(root_dir: str, version: str):
         content = content.replace(placeholder, value)
     with open(output_path, "w", encoding="utf-8") as output_file:
         output_file.write(content)
+
+
+def _install_metrics_outputs(root_dir: str):
+    """Create the metrics install layout consumed by the packaging command."""
+    metrics_dir = os.path.join(root_dir, "common", "metrics")
+    output_dir = os.path.join(metrics_dir, "output")
+    include_dir = os.path.join(output_dir, "include")
+    lib_dir = os.path.join(output_dir, "lib")
+    shutil.rmtree(include_dir, ignore_errors=True)
+    shutil.rmtree(lib_dir, ignore_errors=True)
+
+    header_trees = [
+        ("include/metrics", "metrics"),
+        ("src/api/include", "api/include"),
+        ("src/common/include", "common/include"),
+        ("src/sdk/include", "sdk/include"),
+        ("src/exporters/file_exporter/include", "exporters/file_exporter/include"),
+    ]
+    for source, destination in header_trees:
+        shutil.copytree(os.path.join(metrics_dir, source), os.path.join(include_dir, destination))
+
+    os.makedirs(lib_dir, exist_ok=True)
+    bazel_metrics_dir = os.path.join(root_dir, "bazel-bin", "common", "metrics")
+    for target in EXPORTER_TARGETS:
+        library_name = target.rsplit(":", 1)[1]
+        shutil.copy2(os.path.join(bazel_metrics_dir, library_name), os.path.join(lib_dir, library_name))
 
 
 def build_gtest_bazel(root_dir: str, job_num: int):
