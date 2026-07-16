@@ -106,6 +106,24 @@ TEST(SandboxExecutorNetworkTest, ParseForwardPorts_DefaultProtocol)
     EXPECT_EQ("tcp", configs[0].protocol);
 }
 
+TEST(SandboxExecutorNetworkTest, ParseForwardPorts_RouteKinds)
+{
+    auto configs = SandboxExecutor::ParseForwardPorts(
+        R"({"portForwardings":[{"port":50090,"protocol":"http","routeKind":"direct"},{"port":8765,"protocol":"http","routeKind":"tunnel"},{"port":8080,"protocol":"http"}]})");
+    ASSERT_EQ(3u, configs.size());
+    EXPECT_EQ(PortRouteKind::DIRECT, configs[0].routeKind);
+    EXPECT_EQ(PortRouteKind::TUNNEL, configs[1].routeKind);
+    EXPECT_EQ(PortRouteKind::PUBLIC, configs[2].routeKind);
+}
+
+TEST(SandboxExecutorNetworkTest, ParseForwardPorts_InvalidRouteKindIsSkipped)
+{
+    auto configs = SandboxExecutor::ParseForwardPorts(
+        R"({"portForwardings":[{"port":8080,"protocol":"http","routeKind":"unknown"},{"port":9090,"protocol":"https","routeKind":"public"}]})");
+    ASSERT_EQ(1u, configs.size());
+    EXPECT_EQ(9090u, configs[0].containerPort);
+}
+
 TEST(ContainerExecutorNetworkTest, PortMappingsJsonToEnvVarString_SingleEntry)
 {
     // Simulate the JSON stored in runtime2portMappings_ → env var format

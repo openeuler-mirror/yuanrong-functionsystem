@@ -20,6 +20,7 @@ set(SANDBOX_FOCUSED_TEST_COMMON_SRCS
 
 set(SANDBOX_REGRESSION_TEST_SRCS
     sandbox_command_utils_test.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../sandbox_executor_network_test.cpp
     sandbox_executor_retry_test.cpp
     sandbox_executor_test.cpp
     sandbox_executor_trace_test.cpp

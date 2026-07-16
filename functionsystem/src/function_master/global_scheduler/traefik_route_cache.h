@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "common/resource_view/resource_type.h"
+#include "common/utils/port_forward_mapping.h"
 
 namespace functionsystem::global_scheduler {
 
@@ -57,7 +58,9 @@ public:
 
 private:
     struct RouteEntry {
+        PortRouteKind routeKind = PortRouteKind::PUBLIC;
         std::string routerName;   // safeID-pPort
+        std::string safeID;
         std::string backendURL;   // https://hostIP:hostPort or http://hostIP:hostPort
         int         sandboxPort = 0;
         bool        useHttps    = false;

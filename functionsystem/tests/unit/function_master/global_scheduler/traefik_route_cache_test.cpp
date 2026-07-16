@@ -287,6 +287,59 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_MultiplePorts)
     EXPECT_TRUE(parsed["http"]["routers"].contains("inst-003-p9090"));
 }
 
+TEST_F(TraefikRouteCacheTest, OnInstanceRunning_RouteKindsFilterDirect)
+{
+    auto instance = MakeInstance(
+        "inst-kinds", "10.0.0.3:50000",
+        R"(["direct+http:40001:50090","tunnel+http:40002:8765","direct+http:40003:8766","public+http:40004:8080"])",
+        static_cast<int32_t>(InstanceState::RUNNING));
+
+    cache_->OnInstanceRunning(instance);
+    EXPECT_EQ(cache_->GetRouteCount(), 2);
+
+    auto parsed = nlohmann::json::parse(cache_->GetConfigJSON());
+    EXPECT_TRUE(parsed["http"]["routers"].contains("inst-kinds-tunnel"));
+    EXPECT_TRUE(parsed["http"]["routers"].contains("inst-kinds-p8080"));
+    EXPECT_FALSE(parsed["http"]["routers"].contains("inst-kinds-p50090"));
+    EXPECT_FALSE(parsed["http"]["routers"].contains("inst-kinds-p8766"));
+
+    const auto &tunnel = parsed["http"]["routers"]["inst-kinds-tunnel"];
+    EXPECT_EQ(tunnel["rule"], "PathPrefix(`/tunnel/inst-kinds`)");
+    EXPECT_EQ(tunnel["middlewares"][0], "stripprefix-tunnel");
+    EXPECT_EQ(tunnel["priority"], 100);
+    EXPECT_EQ(parsed["http"]["services"]["inst-kinds-tunnel"]["loadBalancer"]["servers"][0]["url"],
+              "http://10.0.0.3:40002");
+}
+
+TEST_F(TraefikRouteCacheTest, OnInstanceRunning_DirectOnlyRemovesOldPublicRoutes)
+{
+    cache_->OnInstanceRunning(MakeInstance(
+        "inst-replace", "10.0.0.4:50000", R"(["http:40004:8080"])",
+        static_cast<int32_t>(InstanceState::RUNNING)));
+    ASSERT_EQ(cache_->GetRouteCount(), 1);
+
+    cache_->OnInstanceRunning(MakeInstance(
+        "inst-replace", "10.0.0.4:50000", R"(["direct:40001:50090"])",
+        static_cast<int32_t>(InstanceState::RUNNING)));
+
+    EXPECT_EQ(cache_->GetRouteCount(), 0);
+    auto parsed = nlohmann::json::parse(cache_->GetConfigJSON());
+    EXPECT_FALSE(parsed["http"].contains("routers"));
+    EXPECT_FALSE(parsed["http"].contains("services"));
+}
+
+TEST_F(TraefikRouteCacheTest, OnInstanceRunning_UnsupportedMappingsFailClosed)
+{
+    auto instance = MakeInstance(
+        "inst-invalid-kind", "10.0.0.5:50000",
+        R"(["direct+udp:40001:53","unknown+http:40002:80","http:40003:8080"])",
+        static_cast<int32_t>(InstanceState::RUNNING));
+    cache_->OnInstanceRunning(instance);
+    EXPECT_EQ(cache_->GetRouteCount(), 1);
+    auto parsed = nlohmann::json::parse(cache_->GetConfigJSON());
+    EXPECT_TRUE(parsed["http"]["routers"].contains("inst-invalid-kind-p8080"));
+}
+
 TEST_F(TraefikRouteCacheTest, OnInstanceExited_RemovesRoutes)
 {
     auto instance = MakeInstance(

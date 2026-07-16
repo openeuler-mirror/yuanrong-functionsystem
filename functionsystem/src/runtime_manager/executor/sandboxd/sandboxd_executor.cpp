@@ -596,8 +596,9 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartNormal(
                     const std::string &scheme = forwardConfigs[i].protocol;
                     // Send L4 protocol to downstream sandboxd (http/https/ws/wss -> tcp, original tcp unchanged), otherwise sandboxd rejects it.
                     params.portMappings.push_back(ToDownstreamL4Protocol(scheme) + ":" + hostPort + ":" + containerPort);
-                    // Write back portForward (-> instanceinfo -> sandboxrouter) with the original scheme for L7 routing.
-                    portJson.push_back(scheme + ":" + hostPort + ":" + containerPort);
+                    portJson.push_back(FormatPortForwardMapping({
+                        forwardConfigs[i].routeKind, scheme, static_cast<uint16_t>(hostPorts[i]),
+                        static_cast<uint16_t>(forwardConfigs[i].containerPort), false}));
                 }
                 stateManager_.UpdatePortMappings(params.runtimeID, portJson.dump());
             }
@@ -1704,6 +1705,17 @@ std::vector<SandboxdExecutor::PortForwardConfig> SandboxdExecutor::ParseForwardP
             if (item.contains("protocol") && item["protocol"].is_string()) {
                 cfg.protocol = item["protocol"].get<std::string>();
                 std::transform(cfg.protocol.begin(), cfg.protocol.end(), cfg.protocol.begin(), ::tolower);
+            }
+            if (item.contains("routeKind")) {
+                if (!item["routeKind"].is_string()) {
+                    continue;
+                }
+                const auto routeKind = ParsePortRouteKind(item["routeKind"].get<std::string>());
+                if (!routeKind.has_value()) {
+                    YRLOG_WARN("ParseForwardPorts: unsupported routeKind '{}'", item["routeKind"].get<std::string>());
+                    continue;
+                }
+                cfg.routeKind = *routeKind;
             }
             configs.push_back(cfg);
         }

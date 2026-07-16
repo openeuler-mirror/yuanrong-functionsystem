@@ -713,6 +713,28 @@ TEST_F(TraefikConfigRouterTest, GetTraefikConfig_AfterInstanceRunning_ContainsRo
               "https://192.168.1.1:40001");
 }
 
+TEST_F(TraefikConfigRouterTest, GetTraefikConfig_RouteKindsExposeOnlyTunnelAndPublic)
+{
+    uint16_t port = StartDriver();
+    auto cache = globalSchedDriver_->GetTraefikRouteCache();
+    ASSERT_NE(cache, nullptr);
+    cache->OnInstanceRunning(MakeTraefikInstance(
+        "drv-kinds", "192.168.1.10:50000",
+        R"(["direct+http:40001:50090","tunnel+http:40002:8765","direct+http:40003:8766","public+http:40004:8080"])"
+    ));
+
+    litebus::http::URL url("http", "127.0.0.1", port, TraefikPath());
+    auto response = litebus::http::Get(url, litebus::None());
+    response.Wait();
+
+    ASSERT_EQ(response.Get().retCode, litebus::http::ResponseCode::OK);
+    auto parsed = nlohmann::json::parse(response.Get().body);
+    EXPECT_TRUE(parsed["http"]["routers"].contains("drv-kinds-tunnel"));
+    EXPECT_TRUE(parsed["http"]["routers"].contains("drv-kinds-p8080"));
+    EXPECT_FALSE(parsed["http"]["routers"].contains("drv-kinds-p50090"));
+    EXPECT_FALSE(parsed["http"]["routers"].contains("drv-kinds-p8766"));
+}
+
 // GET twice with no change → identical response body (byte-stable for FNV hash)
 TEST_F(TraefikConfigRouterTest, GetTraefikConfig_UnchangedCache_ReturnsSameBody)
 {

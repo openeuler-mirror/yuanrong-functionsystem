@@ -93,3 +93,24 @@ target_sources(
           ${HEX_TEST_SRCS}
           ${SCHEDULE_PLUGIN_SRCS}
           ${LRU_TEST_SRCS})
+
+# Keep the port-forward grammar regression independently runnable.  The main
+# functionsystem_unit_test target pulls in every subsystem and is needlessly
+# expensive for this boundary-only parser.
+add_executable(port_forward_mapping_test_bin
+  ${PROJECT_SOURCE_DIR}/tests/unit/main.cpp
+  ${CMAKE_CURRENT_LIST_DIR}/utils/port_forward_mapping_test.cpp)
+target_compile_options(port_forward_mapping_test_bin PRIVATE
+  -Wno-error
+  -fno-access-control
+  -Wno-missing-field-initializers)
+target_include_directories(port_forward_mapping_test_bin PRIVATE
+  ${PROJECT_SOURCE_DIR}/src
+  ${gtest_INCLUDE_DIR})
+target_link_libraries(port_forward_mapping_test_bin PRIVATE
+  utils
+  ${litebus_ALL_LIB}
+  ${gtest_LIB_A}
+  ${gmock_LIB_A}
+  pthread)
+add_test(NAME port_forward_mapping_test_bin COMMAND port_forward_mapping_test_bin)
