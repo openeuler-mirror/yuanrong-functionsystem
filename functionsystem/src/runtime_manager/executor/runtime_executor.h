@@ -243,7 +243,10 @@ private:
             {PYTHON38_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgs},
             {PYTHON39_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgs},
             {PYTHON310_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgs},
-            {PYTHON311_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgs}};
+            {PYTHON311_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgs},
+            {PYTHON312_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgs},
+            {PYTHON313_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgs},
+            {PYTHON314_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgs}};
 
     void StartPrestartRuntimeByLanguage(const std::string &language, const int startCount);
 
@@ -278,7 +281,10 @@ private:
                                    { PYTHON38_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgsForPrestart },
                                    { PYTHON39_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgsForPrestart },
                                    { PYTHON310_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgsForPrestart },
-                                   { PYTHON311_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgsForPrestart } };
+                                   { PYTHON311_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgsForPrestart },
+                                   { PYTHON312_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgsForPrestart },
+                                   { PYTHON313_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgsForPrestart },
+                                   { PYTHON314_LANGUAGE, &RuntimeExecutor::GetPythonBuildArgsForPrestart } };
 
     void HookRuntimeCredentialByID(std::vector<std::function<void()>> &initHook, int userID, int groupID) const;
     [[nodiscard]] std::vector<std::function<void()>> BuildInitHook(
