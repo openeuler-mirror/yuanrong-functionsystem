@@ -50,6 +50,7 @@ PROTO_TOOL_TARGETS = [
 EXPORTER_TARGETS = [
     "//common/metrics:libobservability-metrics-file-exporter.so",
     "//common/metrics:libobservability-prometheus-push-exporter.so",
+    "//common/metrics:libobservability-prometheus-pull-exporter.so",
     "//common/metrics:libobservability-metrics-opentelemetry-exporter.so",
 ]
 
@@ -581,11 +582,7 @@ def _copy_shared_libraries(root_dir: str, output_dir: str):
     # Stage Bazel-built metrics exporter plugins (cc_binary linkshared=True).
     # These are loaded at runtime via dlopen from <binary_dir>/../lib/.
     bazel_bin = os.path.join(root_dir, "bazel-bin")
-    exporter_so_names = [
-        "libobservability-metrics-file-exporter.so",
-        "libobservability-prometheus-push-exporter.so",
-        "libobservability-metrics-opentelemetry-exporter.so",
-    ]
+    exporter_so_names = [target.rsplit(":", 1)[1] for target in EXPORTER_TARGETS]
     for so_name in exporter_so_names:
         src_path = os.path.join(bazel_bin, "common", "metrics", so_name)
         dst_path = os.path.join(lib_output_dir, so_name)
