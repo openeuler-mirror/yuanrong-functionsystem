@@ -12,10 +12,10 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 load("//bazel:local_patched_repository.bzl", "local_patched_repository")
 
-# --- spdlog (local, patches pre-applied) ---
+# --- spdlog (installed tree, patches applied by the vendor build) ---
 local_patched_repository(
     name = "spdlog",
-    path = "./vendor/src/spdlog/",
+    path = "./vendor/output/Install/spdlog/",
     build_file = "@//bazel:spdlog.bzl",
 )
 
