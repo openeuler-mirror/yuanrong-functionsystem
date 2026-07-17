@@ -5,9 +5,15 @@ def preload_grpc():
     # Use one shared gRPC/GPR implementation when DataSystem is loaded into
     # FunctionSystem processes; static duplicates register gflags twice.
     native.new_local_repository(
+        name = "grpc_runtime_libs",
+        build_file = "//bazel:grpc_runtime_libs.BUILD",
+        path = "./vendor/src/datasystem/sdk/cpp/lib",
+    )
+
+    native.new_local_repository(
         name = "grpc_runtime",
         build_file = "//bazel:grpc_runtime.BUILD",
-        path = "./vendor/output/Install/grpc",
+        path = "./vendor/src/grpc",
     )
 
     # abseil-cpp — gitee.com mirror zip

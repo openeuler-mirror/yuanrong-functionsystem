@@ -117,12 +117,12 @@ def ensure_bazel_deps(root_dir: str):
 def configure_shared_grpc_runtime(root_dir: str):
     """Route Bazel gRPC consumers through the vendor shared runtime.
 
-    DataSystem is already linked against the gRPC shared objects produced by
-    the vendor build.  Statically linking Bazel's gRPC implementation into the
+    DataSystem is already linked against the gRPC shared objects shipped in
+    its SDK.  Statically linking Bazel's gRPC implementation into the
     same process registers gflags such as ``grpc_experiments`` twice and aborts
     before main().  Keep the upstream gRPC repository for headers, compiler
     tools, and its subpackages, but replace its public runtime targets with
-    aliases to the matching vendor shared libraries.
+    aliases to those same SDK shared libraries.
     """
     grpc_build = os.path.join(root_dir, "vendor", "src", "grpc", "BUILD")
     if not os.path.isfile(grpc_build):
