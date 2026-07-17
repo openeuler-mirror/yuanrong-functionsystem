@@ -95,6 +95,27 @@ nlohmann::json BuildMiddlewaresJSON()
     return middlewares;
 }
 
+nlohmann::json BuildRouterJSON(const TraefikConfig& cfg, PortRouteKind routeKind, const std::string& safeID,
+                               int sandboxPort, const std::string& serviceName)
+{
+    nlohmann::json router;
+    router["entryPoints"] = nlohmann::json::array({cfg.httpEntryPoint});
+    if (routeKind == PortRouteKind::TUNNEL) {
+        router["middlewares"] = nlohmann::json::array({"stripprefix-tunnel"});
+        const std::string tunnelPath = "/tunnel/" + safeID;
+        router["rule"] = "Path(`" + tunnelPath + "`) || PathPrefix(`" + tunnelPath + "/`)";
+        router["priority"] = TUNNEL_ROUTER_PRIORITY;
+    } else {
+        router["middlewares"] = nlohmann::json::array({"stripprefix-all"});
+        router["rule"] = "PathPrefix(`/" + safeID + "/" + std::to_string(sandboxPort) + "`)";
+    }
+    router["service"] = serviceName;
+    if (cfg.enableTLS) {
+        router["tls"] = nlohmann::json::object();
+    }
+    return router;
+}
+
 TraefikRouteCache::TraefikRouteCache(TraefikConfig cfg)
     : cfg_(std::move(cfg))
 {
@@ -338,23 +359,7 @@ std::string TraefikRouteCache::BuildConfigJSON() const
     for (const auto& [name, entryPtr] : sortedRoutes) {
         const auto& entry = *entryPtr;
 
-        // Router
-        nlohmann::json router;
-        router["entryPoints"] = nlohmann::json::array({cfg_.httpEntryPoint});
-        if (entry.routeKind == PortRouteKind::TUNNEL) {
-            router["middlewares"] = nlohmann::json::array({"stripprefix-tunnel"});
-            const std::string tunnelPath = "/tunnel/" + entry.safeID;
-            router["rule"] = "Path(`" + tunnelPath + "`) || PathPrefix(`" + tunnelPath + "/`)";
-            router["priority"] = TUNNEL_ROUTER_PRIORITY;
-        } else {
-            router["middlewares"] = nlohmann::json::array({"stripprefix-all"});
-            router["rule"] = "PathPrefix(`/" + entry.safeID + "/" + std::to_string(entry.sandboxPort) + "`)";
-        }
-        router["service"] = name;
-        if (cfg_.enableTLS) {
-            router["tls"] = nlohmann::json::object();
-        }
-        routersJson[name] = std::move(router);
+        routersJson[name] = BuildRouterJSON(cfg_, entry.routeKind, entry.safeID, entry.sandboxPort, name);
 
         if (entry.routeKind == PortRouteKind::PUBLIC && !cfg_.publicBaseDomain.empty()) {
             nlohmann::json hostRouter;
