@@ -49,8 +49,19 @@ TEST(PortForwardMappingTest, ParsesPublicAndLegacyFormats)
     EXPECT_TRUE(tcp->legacyTransport);
     EXPECT_EQ(tcp->backendScheme, "http");
 
-    EXPECT_TRUE(ParsePortForwardMapping("direct:40006:50090").has_value());
-    EXPECT_TRUE(ParsePortForwardMapping("tunnel:40007:8765").has_value());
+    auto directShort = ParsePortForwardMapping("direct:40006:50090");
+    ASSERT_TRUE(directShort.has_value());
+    EXPECT_EQ(directShort->routeKind, PortRouteKind::DIRECT);
+    EXPECT_EQ(directShort->backendScheme, "http");
+    EXPECT_EQ(directShort->hostPort, 40006);
+    EXPECT_EQ(directShort->containerPort, 50090);
+
+    auto tunnelShort = ParsePortForwardMapping("tunnel:40007:8765");
+    ASSERT_TRUE(tunnelShort.has_value());
+    EXPECT_EQ(tunnelShort->routeKind, PortRouteKind::TUNNEL);
+    EXPECT_EQ(tunnelShort->backendScheme, "http");
+    EXPECT_EQ(tunnelShort->hostPort, 40007);
+    EXPECT_EQ(tunnelShort->containerPort, 8765);
 }
 
 TEST(PortForwardMappingTest, RejectsUnsupportedOrInvalidMappings)
