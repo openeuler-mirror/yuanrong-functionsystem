@@ -234,6 +234,7 @@ TEST_F(LanguageStrategyTest, CommandBuilderDispatchesPython314ToPythonStrategy)
     CommandBuilder cmdBuilder(/*execLookPath=*/false);
     cmdBuilder.SetRuntimeConfig(config_);
     auto req = MakeMinimalRequest("python3.14");
+    req.mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->set_deploydir("/tmp");
     auto [status, cmdArgs] = cmdBuilder.BuildArgs("python3.14", "21000", req);
     EXPECT_TRUE(status.IsOk());
     EXPECT_FALSE(cmdArgs.execPath.empty());
