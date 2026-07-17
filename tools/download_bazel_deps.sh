@@ -163,6 +163,11 @@ download_one "v1.13.0.tar.gz" \
     "https://github.com/open-telemetry/opentelemetry-cpp/archive/refs/tags/v1.13.0.tar.gz" \
     || failed=$((failed+1))
 
+download_one "v1.1.0.zip" \
+    "8104d3b216aae60a1d0bca04adea4ba9ac1748eb1ed8646e123cf8e1591d99a3" \
+    "https://github.com/jupp0r/prometheus-cpp/archive/refs/tags/v1.1.0.zip" \
+    || failed=$((failed+1))
+
 download_one "bazel-skylib-1.3.0.tar.gz" \
     "74d544d96f4a5bb630d465ca8bbcfe231e3594e5aae57e1edbf17a6eb3ca2506" \
     "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/releases/download/1.3.0/bazel-skylib-1.3.0.tar.gz" \
