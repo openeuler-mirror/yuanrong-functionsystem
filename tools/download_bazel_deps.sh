@@ -113,11 +113,6 @@ download_one "20240722.0.zip" \
     "https://gitee.com/mirrors/abseil-cpp/repository/archive/20240722.0.zip" \
     || failed=$((failed+1))
 
-download_one "v3.25.5.zip" \
-    "747e7477cd959878998145626b49d6f1b9d46065f2fe805622ff5702334f7cb7" \
-    "https://github.com/protocolbuffers/protobuf/archive/refs/tags/v3.25.5.zip" \
-    || failed=$((failed+1))
-
 download_one "d863bc33e15cba6d873c878dcca9e6fe52b2f8cb.zip" \
     "568988b5f7261ca181468dba38849fabf59dd9200fb2ed4b2823da187ef84d8c" \
     "https://github.com/protocolbuffers/utf8_range/archive/d863bc33e15cba6d873c878dcca9e6fe52b2f8cb.zip" \

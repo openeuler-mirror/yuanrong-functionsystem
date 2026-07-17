@@ -26,12 +26,11 @@ def preload_grpc():
         ],
     )
 
-    # protobuf v3.25.5 — GitHub zip (gitee.com mirror uses protobuf_source which lacks Bazel BUILD files)
-    http_archive(
+    # protobuf v3.25.5 — the vendor step already extracts a Bazel-ready source
+    # tree. Reuse it instead of fetching the same sources from GitHub again.
+    native.local_repository(
         name = "com_google_protobuf",
-        strip_prefix = "protobuf-3.25.5",
-        sha256 = "747e7477cd959878998145626b49d6f1b9d46065f2fe805622ff5702334f7cb7",
-        urls = ["https://github.com/protocolbuffers/protobuf/archive/refs/tags/v3.25.5.zip"],
+        path = "./vendor/src/protobuf",
     )
 
     # utf8_range (required by protobuf)
