@@ -104,7 +104,10 @@ cc_library(
         ],
     ),
     copts = COPTS,
-    deps = [":status"],
+    deps = [
+        ":status",
+        "@boringssl//:ssl",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -181,7 +184,10 @@ cc_library(
     srcs = glob(["hex/**/*.cpp"]),
     hdrs = glob(["hex/**/*.h"]),
     copts = COPTS,
-    deps = [":status"],
+    deps = [
+        ":status",
+        "@boringssl//:crypto",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -479,6 +485,7 @@ cc_library(
         ":constants",
         ":resource_view_types",
         ":scheduler",
+        "@boringssl//:ssl",
     ],
     linkopts = ["-lcap"],
     visibility = ["//visibility:public"],

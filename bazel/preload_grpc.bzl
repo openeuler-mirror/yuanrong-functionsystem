@@ -2,6 +2,14 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("//bazel:grpc_upb_repository.bzl", "grpc_upb_repository")
 
 def preload_grpc():
+    # Use one shared gRPC/GPR implementation when DataSystem is loaded into
+    # FunctionSystem processes; static duplicates register gflags twice.
+    native.new_local_repository(
+        name = "grpc_runtime",
+        build_file = "//bazel:grpc_runtime.BUILD",
+        path = "./vendor/output/Install/grpc",
+    )
+
     # abseil-cpp — gitee.com mirror zip
     http_archive(
         name = "com_google_absl",

@@ -10,6 +10,7 @@ Workflow:
 """
 
 import os
+import re
 import shutil
 import subprocess
 from glob import glob
@@ -111,6 +112,79 @@ def ensure_bazel_deps(root_dir: str):
         return
     log.info("Ensuring Bazel dependency archives are present...")
     utils.sync_command(["bash", script], cwd=root_dir)
+
+
+def configure_shared_grpc_runtime(root_dir: str):
+    """Route Bazel gRPC consumers through the vendor shared runtime.
+
+    DataSystem is already linked against the gRPC shared objects produced by
+    the vendor build.  Statically linking Bazel's gRPC implementation into the
+    same process registers gflags such as ``grpc_experiments`` twice and aborts
+    before main().  Keep the upstream gRPC repository for headers, compiler
+    tools, and its subpackages, but replace its public runtime targets with
+    aliases to the matching vendor shared libraries.
+    """
+    grpc_build = os.path.join(root_dir, "vendor", "src", "grpc", "BUILD")
+    if not os.path.isfile(grpc_build):
+        raise RuntimeError(f"gRPC Bazel BUILD file not found: {grpc_build}")
+
+    with open(grpc_build, "r", encoding="utf-8") as file_obj:
+        content = file_obj.read()
+
+    updated = content
+    runtime_targets = (
+        ("grpc", "@grpc_runtime//:grpc"),
+        ("grpc++", "@grpc_runtime//:grpcpp"),
+        ("gpr", "@grpc_runtime//:gpr"),
+    )
+    for name, actual in runtime_targets:
+        updated = _replace_grpc_runtime_target(updated, name, actual)
+
+    if updated != content:
+        with open(grpc_build, "w", encoding="utf-8") as file_obj:
+            file_obj.write(updated)
+        log.info("Configured Bazel gRPC targets to use the vendor shared runtime.")
+
+
+def _replace_grpc_runtime_target(content: str, name: str, actual: str) -> str:
+    alias = (
+        "alias(\n"
+        f'    name = "{name}",\n'
+        f'    actual = "{actual}",\n'
+        '    visibility = ["//visibility:public"],\n'
+        ")"
+    )
+    if alias in content:
+        return content
+
+    target = re.search(rf'grpc_cc_library\(\n\s+name = "{re.escape(name)}",', content)
+    if target is None:
+        raise RuntimeError(f"Unable to locate gRPC Bazel target {name!r} for shared-runtime replacement")
+
+    start = target.start()
+    depth = 0
+    quote = None
+    escaped = False
+    for offset in range(content.find("(", start), len(content)):
+        char = content[offset]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in ('"', "'"):
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return content[:start] + alias + content[offset + 1:]
+
+    raise RuntimeError(f"Unterminated gRPC Bazel target {name!r}")
 
 
 def build_proto_tools(root_dir: str, bazel_output_root: str, distdir: str, job_num: int):
@@ -354,6 +428,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     # This produces bazel-bin/external/com_google_protobuf/protoc and
     # bazel-bin/external/com_github_grpc_grpc/src/compiler/grpc_cpp_plugin,
     # replacing the CMake-built tools from vendor/output/Install/protobuf|grpc/.
+    configure_shared_grpc_runtime(root_dir)
     build_proto_tools(root_dir, bazel_output_root, distdir, job_num)
     generate_proto_sources(root_dir)
 
@@ -496,6 +571,7 @@ def _prepare_bazel_workspace(root_dir: str, job_num: int):
     os.makedirs(bazel_output_root, exist_ok=True)
     distdir = os.path.join(root_dir, "thirdparty", "runtime_deps")
 
+    configure_shared_grpc_runtime(root_dir)
     build_proto_tools(root_dir, bazel_output_root, distdir, job_num)
     generate_proto_sources(root_dir)
     return bazel_output_root, distdir

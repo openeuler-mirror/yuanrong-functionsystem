@@ -67,7 +67,6 @@ cc_library(
         "//functionsystem/src/common:resource_view",
         "//functionsystem/src/common:leader",
         "//functionsystem/src/common:scheduler_topology",
-        "//functionsystem/src/common:kv_client",
         "//functionsystem/src/common:service_json",
         "//functionsystem/src/domain_scheduler:domain_scheduler_lib",
         "//functionsystem/src/common:file_monitor",
