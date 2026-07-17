@@ -34,6 +34,7 @@ constexpr size_t MAX_DNS_LABEL_LEN = 63;
 constexpr size_t MAX_FQDN_LEN = 253;
 constexpr uint32_t FNV_OFFSET_BASIS = 2166136261U;
 constexpr uint32_t FNV_PRIME = 16777619U;
+constexpr uint32_t TUNNEL_ROUTER_PRIORITY = 100;
 
 TraefikRouteCache::TraefikRouteCache(TraefikConfig cfg)
     : cfg_(std::move(cfg))
@@ -315,7 +316,7 @@ std::string TraefikRouteCache::BuildConfigJSON() const
             router["middlewares"] = nlohmann::json::array({"stripprefix-tunnel"});
             const std::string tunnelPath = "/tunnel/" + entry.safeID;
             router["rule"] = "Path(`" + tunnelPath + "`) || PathPrefix(`" + tunnelPath + "/`)";
-            router["priority"] = 100;
+            router["priority"] = TUNNEL_ROUTER_PRIORITY;
         } else {
             router["middlewares"] = nlohmann::json::array({"stripprefix-all"});
             router["rule"] = "PathPrefix(`/" + entry.safeID + "/" + std::to_string(entry.sandboxPort) + "`)";
