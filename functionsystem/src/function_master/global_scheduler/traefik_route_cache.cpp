@@ -35,6 +35,65 @@ constexpr size_t MAX_FQDN_LEN = 253;
 constexpr uint32_t FNV_OFFSET_BASIS = 2166136261U;
 constexpr uint32_t FNV_PRIME = 16777619U;
 constexpr uint32_t TUNNEL_ROUTER_PRIORITY = 100;
+constexpr size_t SCHEME_DELIMITER_LEN = 3;
+constexpr size_t WILDCARD_PREFIX_LEN = 2;
+constexpr size_t STABLE_HASH_LEN = 8;
+constexpr uint32_t HEX_BITS_PER_DIGIT = 4;
+
+std::vector<PortForwardMapping> ParsePortForwardMappings(const std::string& value, const std::string& instanceID)
+{
+    std::vector<PortForwardMapping> mappings;
+    bool hasTunnelRoute = false;
+    const auto entries = nlohmann::json::parse(value);
+    if (!entries.is_array()) {
+        YRLOG_WARN("TraefikRouteCache: portForward is not array for instance {}", instanceID);
+        return mappings;
+    }
+    for (const auto& entry : entries) {
+        if (!entry.is_string()) {
+            continue;
+        }
+        const std::string valueEntry = entry.get<std::string>();
+        const auto parsed = ParsePortForwardMapping(valueEntry);
+        if (!parsed.has_value()) {
+            YRLOG_WARN("TraefikRouteCache: unsupported port mapping '{}' for instance {}", valueEntry, instanceID);
+            continue;
+        }
+        if (parsed->routeKind == PortRouteKind::DIRECT) {
+            continue;
+        }
+        if (parsed->routeKind == PortRouteKind::TUNNEL && hasTunnelRoute) {
+            YRLOG_WARN("TraefikRouteCache: duplicate tunnel mapping '{}' for instance {}", valueEntry, instanceID);
+            continue;
+        }
+        if (parsed->legacyTransport) {
+            YRLOG_WARN("TraefikRouteCache: legacy tcp mapping '{}' is treated as public HTTP", valueEntry);
+        }
+        mappings.push_back(*parsed);
+        hasTunnelRoute = hasTunnelRoute || parsed->routeKind == PortRouteKind::TUNNEL;
+    }
+    return mappings;
+}
+
+nlohmann::json BuildServiceJSON(const std::string& backendURL, bool useHttps, const std::string& serversTransport)
+{
+    nlohmann::json loadBalancer;
+    loadBalancer["servers"] = nlohmann::json::array({nlohmann::json{{"url", backendURL}}});
+    if (useHttps && !serversTransport.empty()) {
+        loadBalancer["serversTransport"] = serversTransport;
+    }
+    return nlohmann::json{{"loadBalancer", std::move(loadBalancer)}};
+}
+
+nlohmann::json BuildMiddlewaresJSON()
+{
+    nlohmann::json middlewares;
+    middlewares["stripprefix-all"]["stripPrefixRegex"]["regex"] =
+        nlohmann::json::array({"^/[^/]+/[0-9]+"});
+    middlewares["stripprefix-tunnel"]["stripPrefixRegex"]["regex"] =
+        nlohmann::json::array({"^/tunnel/[^/]+"});
+    return middlewares;
+}
 
 TraefikRouteCache::TraefikRouteCache(TraefikConfig cfg)
     : cfg_(std::move(cfg))
@@ -109,49 +168,17 @@ std::vector<TraefikRouteCache::RouteEntry> TraefikRouteCache::ParseRoutes(
     }
 
     try {
-        nlohmann::json portJson = nlohmann::json::parse(it->second);
-        if (!portJson.is_array()) {
-            YRLOG_WARN("TraefikRouteCache: portForward is not array for instance {}", instance.instanceid());
-            return routes;
-        }
-
-        bool hasTunnelRoute = false;
-        for (const auto& entry : portJson) {
-            if (!entry.is_string()) {
-                continue;
-            }
-            std::string mapping = entry.get<std::string>();
-            const auto parsed = ParsePortForwardMapping(mapping);
-            if (!parsed.has_value()) {
-                YRLOG_WARN("TraefikRouteCache: unsupported port mapping '{}' for instance {}",
-                           mapping, instance.instanceid());
-                continue;
-            }
-
-            if (parsed->routeKind == PortRouteKind::DIRECT) {
-                continue;
-            }
-            if (parsed->routeKind == PortRouteKind::TUNNEL && hasTunnelRoute) {
-                YRLOG_WARN("TraefikRouteCache: duplicate tunnel mapping '{}' for instance {}",
-                           mapping, instance.instanceid());
-                continue;
-            }
-            if (parsed->legacyTransport) {
-                YRLOG_WARN("TraefikRouteCache: legacy tcp mapping '{}' is treated as public HTTP", mapping);
-            }
-
+        for (const auto& parsed : ParsePortForwardMappings(it->second, instance.instanceid())) {
             RouteEntry route;
-            route.routeKind = parsed->routeKind;
+            route.routeKind = parsed.routeKind;
             route.safeID = safeID;
-            route.routerName = parsed->routeKind == PortRouteKind::TUNNEL
+            route.routerName = parsed.routeKind == PortRouteKind::TUNNEL
                                    ? safeID + "-tunnel"
-                                   : safeID + "-p" + std::to_string(parsed->containerPort);
-            route.backendURL = parsed->backendScheme + "://" + hostIP + ":" +
-                               std::to_string(parsed->hostPort);
-            route.sandboxPort = parsed->containerPort;
-            route.useHttps = parsed->backendScheme == "https";
+                                   : safeID + "-p" + std::to_string(parsed.containerPort);
+            route.backendURL = parsed.backendScheme + "://" + hostIP + ":" + std::to_string(parsed.hostPort);
+            route.sandboxPort = parsed.containerPort;
+            route.useHttps = parsed.backendScheme == "https";
             routes.push_back(std::move(route));
-            hasTunnelRoute = hasTunnelRoute || parsed->routeKind == PortRouteKind::TUNNEL;
         }
     } catch (const std::exception& e) {
         YRLOG_WARN("TraefikRouteCache: failed to parse portForward for instance {}: {}",
@@ -169,14 +196,14 @@ std::string TraefikRouteCache::ExtractIP(const std::string& addr)
 
 std::string TraefikRouteCache::SanitizeID(const std::string& id)
 {
-    constexpr size_t AT_REPLACEMENT_LEN = 4;  // length of "-at-"
+    constexpr size_t atReplacementLen = 4;
     std::string result = id;
 
     // Replace @ with -at-
     size_t pos = 0;
     while ((pos = result.find('@', pos)) != std::string::npos) {
         result.replace(pos, 1, "-at-");
-        pos += AT_REPLACEMENT_LEN;
+        pos += atReplacementLen;
     }
 
     // Traefik rules wrap paths in backticks. Restrict the embedded ID to a
@@ -204,14 +231,14 @@ std::string TraefikRouteCache::NormalizePublicBaseDomain(const std::string& doma
 
     auto schemePos = result.find("://");
     if (schemePos != std::string::npos) {
-        result.erase(0, schemePos + 3);
+        result.erase(0, schemePos + SCHEME_DELIMITER_LEN);
     }
     auto pathPos = result.find('/');
     if (pathPos != std::string::npos) {
         result.erase(pathPos);
     }
     if (result.rfind("*.", 0) == 0) {
-        result.erase(0, 2);
+        result.erase(0, WILDCARD_PREFIX_LEN);
     }
     auto portPos = result.rfind(':');
     if (portPos != std::string::npos) {
@@ -261,11 +288,11 @@ std::string TraefikRouteCache::StableHashSuffix(const std::string& value)
         hash *= FNV_PRIME;
     }
 
-    constexpr char HEX[] = "0123456789abcdef";
-    std::string result(8, '0');
-    for (int i = 7; i >= 0; --i) {
-        result[static_cast<size_t>(i)] = HEX[hash & 0xFU];
-        hash >>= 4;
+    constexpr char hexDigits[] = "0123456789abcdef";
+    std::string result(STABLE_HASH_LEN, '0');
+    for (int i = static_cast<int>(STABLE_HASH_LEN) - 1; i >= 0; --i) {
+        result[static_cast<size_t>(i)] = hexDigits[hash & 0xFU];
+        hash >>= HEX_BITS_PER_DIGIT;
     }
     return result;
 }
@@ -350,29 +377,15 @@ std::string TraefikRouteCache::BuildConfigJSON() const
             }
         }
 
-        // Service
-        nlohmann::json service;
-        nlohmann::json lb;
-        lb["servers"] = nlohmann::json::array({nlohmann::json{{"url", entry.backendURL}}});
-        if (entry.useHttps && !cfg_.serversTransport.empty()) {
-            lb["serversTransport"] = cfg_.serversTransport;
-        }
-        service["loadBalancer"] = std::move(lb);
-        servicesJson[name] = std::move(service);
+        servicesJson[name] = BuildServiceJSON(entry.backendURL, entry.useHttps, cfg_.serversTransport);
     }
 
     // Build the full dynamic configuration
     // NOTE: Traefik's paerser (file.DecodeContent) cannot decode empty JSON objects ({})
     // into map types — it errors with "cannot be a standalone element".  Omitting the
     // key entirely is the correct way to express "no entries" in Traefik dynamic config.
-    nlohmann::json middlewares;
-    middlewares["stripprefix-all"]["stripPrefixRegex"]["regex"] =
-        nlohmann::json::array({"^/[^/]+/[0-9]+"});
-    middlewares["stripprefix-tunnel"]["stripPrefixRegex"]["regex"] =
-        nlohmann::json::array({"^/tunnel/[^/]+"});
-
     nlohmann::json httpConfig;
-    httpConfig["middlewares"] = std::move(middlewares);
+    httpConfig["middlewares"] = BuildMiddlewaresJSON();
     if (!routersJson.empty()) {
         httpConfig["routers"] = std::move(routersJson);
     }
