@@ -117,7 +117,7 @@ TEST_F(TraefikRouteCacheTest, EmptyCache_ReturnsValidEmptyConfig)
     // Traefik-compatible representation of "no routes".
     EXPECT_FALSE(parsed["http"].contains("routers"));
     EXPECT_FALSE(parsed["http"].contains("services"));
-    EXPECT_EQ(cache_->GetRouteCount(), 0);
+    EXPECT_EQ(cache_->GetRouteCount(), 0u);
 }
 
 TEST_F(TraefikRouteCacheTest, OnInstanceRunning_NewFormatPort)
@@ -129,7 +129,7 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_NewFormatPort)
         static_cast<int32_t>(InstanceState::RUNNING));
 
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 1);
+    EXPECT_EQ(cache_->GetRouteCount(), 1u);
 
     std::string json = cache_->GetConfigJSON();
     auto parsed = nlohmann::json::parse(json);
@@ -188,7 +188,7 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_HostBasedRouteSanitizesDNSLabel)
 
     auto parsed = nlohmann::json::parse(cache_->GetConfigJSON());
     auto hostRules = GetHostRules(parsed);
-    ASSERT_EQ(hostRules.size(), 1);
+    ASSERT_EQ(hostRules.size(), 1u);
     EXPECT_EQ(hostRules[0].second, "Host(`5888-upper-value-bad.sandbox-gateway.example.com`)");
     EXPECT_TRUE(IsValidDNSLabel(ExtractHostLabel(hostRules[0].second)));
 }
@@ -213,7 +213,7 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_HostBasedRouteAvoidsLongLabelCol
 
     auto parsed = nlohmann::json::parse(cache_->GetConfigJSON());
     auto hostRules = GetHostRules(parsed);
-    ASSERT_EQ(hostRules.size(), 2);
+    ASSERT_EQ(hostRules.size(), 2u);
     EXPECT_NE(hostRules[0].second, hostRules[1].second);
     EXPECT_TRUE(IsValidDNSLabel(ExtractHostLabel(hostRules[0].second)));
     EXPECT_TRUE(IsValidDNSLabel(ExtractHostLabel(hostRules[1].second)));
@@ -251,8 +251,8 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_HostRouterNameIsBounded)
 
     auto parsed = nlohmann::json::parse(cache_->GetConfigJSON());
     auto hostRules = GetHostRules(parsed);
-    ASSERT_EQ(hostRules.size(), 1);
-    EXPECT_LE(hostRules[0].first.size(), 200);
+    ASSERT_EQ(hostRules.size(), 1u);
+    EXPECT_LE(hostRules[0].first.size(), 200u);
 }
 
 TEST_F(TraefikRouteCacheTest, OnInstanceRunning_LegacyFormatPort)
@@ -264,7 +264,7 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_LegacyFormatPort)
         static_cast<int32_t>(InstanceState::RUNNING));
 
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 1);
+    EXPECT_EQ(cache_->GetRouteCount(), 1u);
 
     std::string json = cache_->GetConfigJSON();
     auto parsed = nlohmann::json::parse(json);
@@ -283,7 +283,7 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_MultiplePorts)
         static_cast<int32_t>(InstanceState::RUNNING));
 
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 2);
+    EXPECT_EQ(cache_->GetRouteCount(), 2u);
 
     std::string json = cache_->GetConfigJSON();
     auto parsed = nlohmann::json::parse(json);
@@ -300,7 +300,7 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_RouteKindsFilterDirect)
         static_cast<int32_t>(InstanceState::RUNNING));
 
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 2);
+    EXPECT_EQ(cache_->GetRouteCount(), 2u);
 
     auto parsed = nlohmann::json::parse(cache_->GetConfigJSON());
     EXPECT_TRUE(parsed["http"]["routers"].contains("inst-kinds-tunnel"));
@@ -309,7 +309,8 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_RouteKindsFilterDirect)
     EXPECT_FALSE(parsed["http"]["routers"].contains("inst-kinds-p8766"));
 
     const auto &tunnel = parsed["http"]["routers"]["inst-kinds-tunnel"];
-    EXPECT_EQ(tunnel["rule"], "PathPrefix(`/tunnel/inst-kinds`)");
+    EXPECT_EQ(tunnel["rule"],
+              "Path(`/tunnel/inst-kinds`) || PathPrefix(`/tunnel/inst-kinds/`)");
     EXPECT_EQ(tunnel["middlewares"][0], "stripprefix-tunnel");
     EXPECT_EQ(tunnel["priority"], 100);
     EXPECT_EQ(parsed["http"]["services"]["inst-kinds-tunnel"]["loadBalancer"]["servers"][0]["url"],
@@ -321,13 +322,13 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_DirectOnlyRemovesOldPublicRoutes
     cache_->OnInstanceRunning(MakeInstance(
         "inst-replace", "10.0.0.4:50000", R"(["http:40004:8080"])",
         static_cast<int32_t>(InstanceState::RUNNING)));
-    ASSERT_EQ(cache_->GetRouteCount(), 1);
+    ASSERT_EQ(cache_->GetRouteCount(), 1u);
 
     cache_->OnInstanceRunning(MakeInstance(
         "inst-replace", "10.0.0.4:50000", R"(["direct:40001:50090"])",
         static_cast<int32_t>(InstanceState::RUNNING)));
 
-    EXPECT_EQ(cache_->GetRouteCount(), 0);
+    EXPECT_EQ(cache_->GetRouteCount(), 0u);
     auto parsed = nlohmann::json::parse(cache_->GetConfigJSON());
     EXPECT_FALSE(parsed["http"].contains("routers"));
     EXPECT_FALSE(parsed["http"].contains("services"));
@@ -340,7 +341,7 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_UnsupportedMappingsFailClosed)
         R"(["direct+udp:40001:53","unknown+http:40002:80","http:40003:8080"])",
         static_cast<int32_t>(InstanceState::RUNNING));
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 1);
+    EXPECT_EQ(cache_->GetRouteCount(), 1u);
     auto parsed = nlohmann::json::parse(cache_->GetConfigJSON());
     EXPECT_TRUE(parsed["http"]["routers"].contains("inst-invalid-kind-p8080"));
 }
@@ -353,10 +354,10 @@ TEST_F(TraefikRouteCacheTest, OnInstanceExited_RemovesRoutes)
         static_cast<int32_t>(InstanceState::RUNNING));
 
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 1);
+    EXPECT_EQ(cache_->GetRouteCount(), 1u);
 
     cache_->OnInstanceExited("inst-004");
-    EXPECT_EQ(cache_->GetRouteCount(), 0);
+    EXPECT_EQ(cache_->GetRouteCount(), 0u);
 
     std::string json = cache_->GetConfigJSON();
     auto parsed = nlohmann::json::parse(json);
@@ -369,7 +370,7 @@ TEST_F(TraefikRouteCacheTest, OnInstanceExited_RemovesRoutes)
 TEST_F(TraefikRouteCacheTest, OnInstanceExited_NonexistentID_IsNoop)
 {
     cache_->OnInstanceExited("nonexistent");
-    EXPECT_EQ(cache_->GetRouteCount(), 0);
+    EXPECT_EQ(cache_->GetRouteCount(), 0u);
 }
 
 TEST_F(TraefikRouteCacheTest, OnInstanceRunning_NoPortForward_IsNoop)
@@ -380,7 +381,7 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_NoPortForward_IsNoop)
         static_cast<int32_t>(InstanceState::RUNNING));
 
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 0);
+    EXPECT_EQ(cache_->GetRouteCount(), 0u);
 }
 
 TEST_F(TraefikRouteCacheTest, OnInstanceRunning_InvalidProxyAddress_IsNoop)
@@ -391,7 +392,7 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_InvalidProxyAddress_IsNoop)
         static_cast<int32_t>(InstanceState::RUNNING));
 
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 0);
+    EXPECT_EQ(cache_->GetRouteCount(), 0u);
 }
 
 TEST_F(TraefikRouteCacheTest, SanitizeID_SpecialCharacters)
@@ -402,7 +403,7 @@ TEST_F(TraefikRouteCacheTest, SanitizeID_SpecialCharacters)
         static_cast<int32_t>(InstanceState::RUNNING));
 
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 1);
+    EXPECT_EQ(cache_->GetRouteCount(), 1u);
 
     std::string json = cache_->GetConfigJSON();
     auto parsed = nlohmann::json::parse(json);
@@ -420,7 +421,7 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_UpdateExistingInstance)
         static_cast<int32_t>(InstanceState::RUNNING));
 
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 1);
+    EXPECT_EQ(cache_->GetRouteCount(), 1u);
 
     // Update with different ports
     auto updated = MakeInstance(
@@ -429,7 +430,7 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_UpdateExistingInstance)
         static_cast<int32_t>(InstanceState::RUNNING));
 
     cache_->OnInstanceRunning(updated);
-    EXPECT_EQ(cache_->GetRouteCount(), 2);
+    EXPECT_EQ(cache_->GetRouteCount(), 2u);
 
     std::string json = cache_->GetConfigJSON();
     auto parsed = nlohmann::json::parse(json);
@@ -536,15 +537,15 @@ TEST_F(TraefikRouteCacheTest, InstanceLifecycle_RunningThenFatalThenDelete)
                                 R"(["https:40001:8080"])",
                                 static_cast<int32_t>(InstanceState::RUNNING));
     cache_->OnInstanceRunning(running);
-    EXPECT_EQ(cache_->GetRouteCount(), 1);
+    EXPECT_EQ(cache_->GetRouteCount(), 1u);
 
     // Instance transitions to FATAL (via OnInstancePut hook)
     cache_->OnInstanceExited("inst-lc");
-    EXPECT_EQ(cache_->GetRouteCount(), 0);
+    EXPECT_EQ(cache_->GetRouteCount(), 0u);
 
     // Delete event for same instance is a no-op
     cache_->OnInstanceExited("inst-lc");
-    EXPECT_EQ(cache_->GetRouteCount(), 0);
+    EXPECT_EQ(cache_->GetRouteCount(), 0u);
 }
 
 TEST_F(TraefikRouteCacheTest, InvalidPortForward_MalformedJSON)
@@ -556,7 +557,7 @@ TEST_F(TraefikRouteCacheTest, InvalidPortForward_MalformedJSON)
 
     // Should not crash, just skip
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 0);
+    EXPECT_EQ(cache_->GetRouteCount(), 0u);
 }
 
 TEST_F(TraefikRouteCacheTest, InvalidPortForward_WrongArrayType)
@@ -568,7 +569,7 @@ TEST_F(TraefikRouteCacheTest, InvalidPortForward_WrongArrayType)
 
     // Non-string array entries should be skipped
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 0);
+    EXPECT_EQ(cache_->GetRouteCount(), 0u);
 }
 
 TEST_F(TraefikRouteCacheTest, InvalidPortForward_BadPartCount)
@@ -580,7 +581,7 @@ TEST_F(TraefikRouteCacheTest, InvalidPortForward_BadPartCount)
 
     // 4-part mapping is invalid
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 0);
+    EXPECT_EQ(cache_->GetRouteCount(), 0u);
 }
 
 TEST_F(TraefikRouteCacheTest, EntryPointConfig_Customized)
@@ -612,7 +613,7 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_EmptyPortForwardArray_IsNoop)
         static_cast<int32_t>(InstanceState::RUNNING));
 
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 0);
+    EXPECT_EQ(cache_->GetRouteCount(), 0u);
 }
 
 // proxyGrpcAddress of the form ":50000" (no host part) → ExtractIP returns ""
@@ -625,7 +626,7 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_NoHostInProxyAddress_IsNoop)
         static_cast<int32_t>(InstanceState::RUNNING));
 
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 0);
+    EXPECT_EQ(cache_->GetRouteCount(), 0u);
 }
 
 // When cfg_.serversTransport is empty, HTTPS backends must NOT emit serversTransport key
@@ -679,7 +680,7 @@ TEST_F(TraefikRouteCacheTest, LongInstanceID_TruncatedInRouterName)
         static_cast<int32_t>(InstanceState::RUNNING));
 
     cache_->OnInstanceRunning(instance);
-    EXPECT_EQ(cache_->GetRouteCount(), 1);
+    EXPECT_EQ(cache_->GetRouteCount(), 1u);
 
     std::string json = cache_->GetConfigJSON();
     auto parsed = nlohmann::json::parse(json);
@@ -704,10 +705,10 @@ TEST_F(TraefikRouteCacheTest, GetRouteCount_SumsAcrossMultipleInstances)
     cache_->OnInstanceRunning(inst2);
 
     // inst-A contributes 2 ports, inst-B contributes 1 → total 3
-    EXPECT_EQ(cache_->GetRouteCount(), 3);
+    EXPECT_EQ(cache_->GetRouteCount(), 3u);
 
     cache_->OnInstanceExited("inst-A");
-    EXPECT_EQ(cache_->GetRouteCount(), 1);
+    EXPECT_EQ(cache_->GetRouteCount(), 1u);
 }
 
 // Concurrent calls to OnInstanceRunning / OnInstanceExited must not crash
@@ -760,7 +761,10 @@ TEST_F(TraefikRouteCacheTest, ConcurrentAccess_NoDataRace)
 
     // After all threads finish, JSON must still be valid
     std::string json = cache_->GetConfigJSON();
-    EXPECT_NO_THROW(nlohmann::json::parse(json));
+    EXPECT_NO_THROW({
+        const auto parsed = nlohmann::json::parse(json);
+        (void)parsed;
+    });
 }
 
 // After adding then removing all instances, JSON is byte-identical to initial empty config
@@ -824,7 +828,7 @@ TEST_F(TraefikRouteCacheTest, TraefikCompat_AddThenRemoveAll_Reverts)
     }
 
     cache_->OnInstanceExited("inst-revert");
-    EXPECT_EQ(cache_->GetRouteCount(), 0);
+    EXPECT_EQ(cache_->GetRouteCount(), 0u);
     {
         auto parsed = nlohmann::json::parse(cache_->GetConfigJSON());
         EXPECT_FALSE(parsed["http"].contains("routers"))

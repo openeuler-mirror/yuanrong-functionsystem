@@ -71,7 +71,7 @@ struct SandboxRequestedResources {
 // portForward schemes (http/https/ws/wss) are normalized to tcp before sending
 // to sandboxd because the underlying mapping is TCP NAT; other schemes are
 // preserved.
-// The portForward written back to instanceinfo keeps the original scheme for sandboxRouter L7 routing.
+// The portForward written back to instanceinfo canonicalizes L7 routing metadata to http/https.
 std::string ToDownstreamL4Protocol(const std::string &proto)
 {
     if (proto == "http" || proto == "https" || proto == "ws" || proto == "wss") {
@@ -1679,6 +1679,19 @@ std::vector<SandboxdExecutor::PortForwardConfig> SandboxdExecutor::ParseForwardP
             if (item.contains("protocol") && item["protocol"].is_string()) {
                 cfg.protocol = item["protocol"].get<std::string>();
                 std::transform(cfg.protocol.begin(), cfg.protocol.end(), cfg.protocol.begin(), ::tolower);
+            }
+            if (item.contains("routeKind")) {
+                if (!item["routeKind"].is_string()) {
+                    YRLOG_WARN("ParseForwardPorts: routeKind must be a string, got {}",
+                               item["routeKind"].type_name());
+                    continue;
+                }
+                const auto routeKind = ParsePortRouteKind(item["routeKind"].get<std::string>());
+                if (!routeKind.has_value()) {
+                    YRLOG_WARN("ParseForwardPorts: unsupported routeKind '{}'", item["routeKind"].get<std::string>());
+                    continue;
+                }
+                cfg.routeKind = *routeKind;
             }
             configs.push_back(cfg);
         }

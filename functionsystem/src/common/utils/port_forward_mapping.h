@@ -29,6 +29,8 @@ struct PortForwardMapping {
     std::string backendScheme = "http";
     uint16_t hostPort = 0;
     uint16_t containerPort = 0;
+    // Parse-only compatibility marker used for diagnostics. Formatting always
+    // emits the canonical routeKind+backendScheme representation.
     bool legacyTransport = false;
 };
 

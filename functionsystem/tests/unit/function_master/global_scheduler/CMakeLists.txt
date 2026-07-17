@@ -24,10 +24,6 @@ add_executable(traefik_route_cache_test_bin
         ${PROJECT_SOURCE_DIR}/tests/unit/main.cpp
         ${CMAKE_CURRENT_LIST_DIR}/traefik_route_cache_test.cpp
         ${PROJECT_SOURCE_DIR}/src/function_master/global_scheduler/traefik_route_cache.cpp)
-target_compile_options(traefik_route_cache_test_bin PRIVATE
-        -Wno-error
-        -fno-access-control
-        -Wno-missing-field-initializers)
 target_include_directories(traefik_route_cache_test_bin PRIVATE
         ${PROJECT_SOURCE_DIR}/src
         ${gtest_INCLUDE_DIR})
