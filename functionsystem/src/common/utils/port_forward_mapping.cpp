@@ -151,8 +151,17 @@ std::string FormatPortForwardMapping(const PortForwardMapping &mapping)
         case PortRouteKind::PUBLIC:
             routeKind = "public";
             break;
+        default:
+            return {};
     }
-    const std::string routeToken = routeKind + "+" + mapping.backendScheme;
+    const auto inputScheme = Lower(mapping.backendScheme);
+    std::string backendScheme = inputScheme;
+    if (inputScheme == "tcp" || inputScheme == "ws") {
+        backendScheme = "http";
+    } else if (inputScheme == "wss") {
+        backendScheme = "https";
+    }
+    const std::string routeToken = routeKind + "+" + backendScheme;
     return routeToken + ":" + std::to_string(mapping.hostPort) + ":" + std::to_string(mapping.containerPort);
 }
 

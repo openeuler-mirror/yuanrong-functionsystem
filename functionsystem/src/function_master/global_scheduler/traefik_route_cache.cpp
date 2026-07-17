@@ -313,7 +313,8 @@ std::string TraefikRouteCache::BuildConfigJSON() const
         router["entryPoints"] = nlohmann::json::array({cfg_.httpEntryPoint});
         if (entry.routeKind == PortRouteKind::TUNNEL) {
             router["middlewares"] = nlohmann::json::array({"stripprefix-tunnel"});
-            router["rule"] = "PathPrefix(`/tunnel/" + entry.safeID + "`)";
+            const std::string tunnelPath = "/tunnel/" + entry.safeID;
+            router["rule"] = "Path(`" + tunnelPath + "`) || PathPrefix(`" + tunnelPath + "/`)";
             router["priority"] = 100;
         } else {
             router["middlewares"] = nlohmann::json::array({"stripprefix-all"});

@@ -119,7 +119,7 @@ TEST(SandboxExecutorNetworkTest, ParseForwardPorts_RouteKinds)
 TEST(SandboxExecutorNetworkTest, ParseForwardPorts_InvalidRouteKindIsSkipped)
 {
     auto configs = SandboxExecutor::ParseForwardPorts(
-        R"({"portForwardings":[{"port":8080,"protocol":"http","routeKind":"unknown"},{"port":9090,"protocol":"https","routeKind":"public"}]})");
+        R"({"portForwardings":[{"port":8080,"protocol":"http","routeKind":"unknown"},{"port":8081,"protocol":"http","routeKind":42},{"port":9090,"protocol":"https","routeKind":"public"}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(9090u, configs[0].containerPort);
 }

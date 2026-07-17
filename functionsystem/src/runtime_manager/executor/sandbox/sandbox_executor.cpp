@@ -47,7 +47,7 @@ using json = nlohmann::json;
 namespace {
 // Downstream sandboxd port forwarding only accepts L4 protocols (tcp/udp). L7 portForward schemes (http/https/ws/wss)
 // are normalized to tcp before sending to sandboxd because the underlying mapping is TCP NAT; other schemes (tcp/udp, etc.) are preserved.
-// The portForward written back to instanceinfo keeps the original scheme for sandboxRouter L7 routing.
+// The portForward written back to instanceinfo canonicalizes L7 routing metadata to http/https.
 std::string ToDownstreamL4Protocol(const std::string &proto)
 {
     if (proto == "http" || proto == "https" || proto == "ws" || proto == "wss") {
@@ -1701,6 +1701,8 @@ std::vector<SandboxExecutor::PortForwardConfig> SandboxExecutor::ParseForwardPor
             }
             if (item.contains("routeKind")) {
                 if (!item["routeKind"].is_string()) {
+                    YRLOG_WARN("ParseForwardPorts: routeKind must be a string, got {}",
+                               item["routeKind"].type_name());
                     continue;
                 }
                 const auto routeKind = ParsePortRouteKind(item["routeKind"].get<std::string>());
