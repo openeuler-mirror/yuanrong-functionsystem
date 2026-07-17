@@ -55,6 +55,11 @@ EXPORTER_TARGETS = [
     "//common/metrics:libobservability-metrics-opentelemetry-exporter.so",
 ]
 
+# Shared libraries loaded explicitly with dlopen by production binaries.
+RUNTIME_PLUGIN_TARGETS = [
+    ("//functionsystem/src/common:libyaml_tool_plugin.so", "libyaml_tool.so"),
+]
+
 TEST_TARGETS = [
     "//functionsystem/tests/unit:functionsystem_unit_test",
     "//functionsystem/tests/integration:functionsystem_integration_test",
@@ -432,7 +437,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     build_proto_tools(root_dir, bazel_output_root, distdir, job_num)
     generate_proto_sources(root_dir)
 
-    # Build all binary targets plus metrics exporter plugins
+    # Build all binary targets plus runtime and metrics exporter plugins.
     bazel_cmd = [
         "bazel",
         f"--output_user_root={bazel_output_root}",
@@ -441,6 +446,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
         f"--jobs={job_num}",
         f"--config={config}",
         *build_targets,
+        *(target for target, _ in RUNTIME_PLUGIN_TARGETS),
         *EXPORTER_TARGETS,
     ]
     utils.sync_command(bazel_cmd, cwd=root_dir)
@@ -615,6 +621,7 @@ def _copy_shared_libraries(root_dir: str, output_dir: str):
       logs (//common/logs:yrlogs)       → statically linked into consumers; no .so needed
       metrics API/SDK                   → statically linked into binaries; no .so needed
       OTel (@opentelemetry_cpp)         → statically linked into binaries; plugin linkage follows Bazel plugin targets
+      runtime plugins                   → cc_binary(linkshared) in bazel-bin/functionsystem/src/common/
       metrics exporter plugins          → cc_binary(linkshared) in bazel-bin/common/metrics/
 
     Pre-built .so dependencies still needed at runtime:
@@ -658,6 +665,20 @@ def _copy_shared_libraries(root_dir: str, output_dir: str):
     # Stage Bazel-built metrics exporter plugins (cc_binary linkshared=True).
     # These are loaded at runtime via dlopen from <binary_dir>/../lib/.
     bazel_bin = os.path.join(root_dir, "bazel-bin")
+
+    # Stage plugins loaded explicitly by production code. Keep this list tied
+    # to RUNTIME_PLUGIN_TARGETS so a successful Bazel build cannot silently
+    # omit a required runtime artifact from the package.
+    for target, installed_name in RUNTIME_PLUGIN_TARGETS:
+        package, built_name = target.removeprefix("//").split(":", 1)
+        src_path = os.path.join(bazel_bin, package, built_name)
+        dst_path = os.path.join(lib_output_dir, installed_name)
+        if not os.path.isfile(src_path):
+            raise RuntimeError(f"Runtime plugin not found in bazel-bin: {src_path}")
+        shutil.copy2(src_path, dst_path)
+        log.info(f"Installed {installed_name} -> {dst_path}")
+        copied_count += 1
+
     exporter_so_names = [target.rsplit(":", 1)[1] for target in EXPORTER_TARGETS]
     for so_name in exporter_so_names:
         src_path = os.path.join(bazel_bin, "common", "metrics", so_name)

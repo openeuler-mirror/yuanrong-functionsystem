@@ -1,4 +1,4 @@
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
 load("@yuanrong_functionsystem//bazel:yr.bzl", "COPTS")
 
 # All common libraries, mirroring the CMake build structure.
@@ -499,6 +499,23 @@ cc_library(
     copts = COPTS,
     deps = [
         ":status",
+        "@yaml-cpp//:yaml-cpp",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+# service_json loads this plugin with dlopen so it must remain a standalone
+# runtime artifact in addition to the static library used by Bazel consumers.
+cc_binary(
+    name = "libyaml_tool_plugin.so",
+    srcs = glob([
+        "yaml_tool/**/*.cpp",
+        "yaml_tool/**/*.h",
+    ]),
+    copts = COPTS,
+    linkshared = True,
+    deps = [
+        ":common_root_inc",
         "@yaml-cpp//:yaml-cpp",
     ],
     visibility = ["//visibility:public"],
