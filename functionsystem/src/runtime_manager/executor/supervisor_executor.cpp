@@ -337,7 +337,7 @@ litebus::Future<std::string> SupervisorExecutor::CreateSandbox(const std::string
         policy["environment"] = environment;
 
         policy["process"] = { { "run_as_user", hostUser }, { "run_as_group", hostUser } };
-        policy["namespace"] = { { "user", true } };
+        policy["namespace"] = { { "user", false } };
 
         createRequest["policy"] = policy;
         createRequest["policy_mode"] = "append";
