@@ -13,10 +13,17 @@
 #include <algorithm>
 #include <charconv>
 #include <cctype>
+#include <limits>
 #include <vector>
 
 namespace functionsystem {
 namespace {
+
+constexpr uint32_t MAX_PORT = std::numeric_limits<uint16_t>::max();
+constexpr size_t ROUTE_KIND_AND_SCHEME_PARTS = 2;
+constexpr size_t LEGACY_MAPPING_PARTS = 2;
+constexpr size_t EXPLICIT_MAPPING_PARTS = 3;
+constexpr size_t CONTAINER_PORT_INDEX = 2;
 
 std::string Lower(std::string_view value)
 {
@@ -31,7 +38,7 @@ std::optional<uint16_t> ParsePort(std::string_view value)
 {
     uint32_t port = 0;
     const auto result = std::from_chars(value.data(), value.data() + value.size(), port);
-    if (result.ec != std::errc() || result.ptr != value.data() + value.size() || port == 0 || port > 65535) {
+    if (result.ec != std::errc() || result.ptr != value.data() + value.size() || port == 0 || port > MAX_PORT) {
         return std::nullopt;
     }
     return static_cast<uint16_t>(port);
@@ -73,7 +80,8 @@ std::optional<std::pair<PortRouteKind, std::string>> ParseRouteToken(std::string
         }
         return std::nullopt;
     }
-    if (kindAndScheme.size() != 2 || (kindAndScheme[1] != "http" && kindAndScheme[1] != "https")) {
+    if (kindAndScheme.size() != ROUTE_KIND_AND_SCHEME_PARTS ||
+        (kindAndScheme[1] != "http" && kindAndScheme[1] != "https")) {
         return std::nullopt;
     }
 
@@ -113,13 +121,13 @@ std::optional<PortForwardMapping> ParsePortForwardMapping(std::string_view value
     std::string_view routeToken = "http";
     std::string_view hostPortText;
     std::string_view containerPortText;
-    if (parts.size() == 2) {
+    if (parts.size() == LEGACY_MAPPING_PARTS) {
         hostPortText = parts[0];
         containerPortText = parts[1];
-    } else if (parts.size() == 3) {
+    } else if (parts.size() == EXPLICIT_MAPPING_PARTS) {
         routeToken = parts[0];
         hostPortText = parts[1];
-        containerPortText = parts[2];
+        containerPortText = parts[CONTAINER_PORT_INDEX];
     } else {
         return std::nullopt;
     }
