@@ -179,10 +179,12 @@ std::string TraefikRouteCache::SanitizeID(const std::string& id)
         pos += AT_REPLACEMENT_LEN;
     }
 
-    // Replace other problematic characters
-    std::replace(result.begin(), result.end(), '/', '-');
-    std::replace(result.begin(), result.end(), '.', '-');
-    std::replace(result.begin(), result.end(), '_', '-');
+    // Traefik rules wrap paths in backticks. Restrict the embedded ID to a
+    // conservative ASCII set so rule delimiters and path separators cannot
+    // be injected through an instance ID.
+    std::transform(result.begin(), result.end(), result.begin(), [](unsigned char ch) {
+        return static_cast<char>(std::isalnum(ch) || ch == '-' ? ch : '-');
+    });
 
     if (result.length() > MAX_ROUTER_NAME_LEN) {
         result = result.substr(0, MAX_ROUTER_NAME_LEN);

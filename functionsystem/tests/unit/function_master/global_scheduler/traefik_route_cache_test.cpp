@@ -329,6 +329,18 @@ TEST_F(TraefikRouteCacheTest, OnInstanceRunning_DirectOnlyRemovesOldPublicRoutes
     EXPECT_FALSE(parsed["http"].contains("services"));
 }
 
+TEST_F(TraefikRouteCacheTest, TunnelRouteSanitizesRuleSensitiveInstanceID)
+{
+    cache_->OnInstanceRunning(MakeInstance(
+        "tenant`bad\\ path/func", "10.0.0.4:50000", R"(["tunnel:40001:8765"])",
+        static_cast<int32_t>(InstanceState::RUNNING)));
+
+    auto parsed = nlohmann::json::parse(cache_->GetConfigJSON());
+    const auto &router = parsed["http"]["routers"]["tenant-bad--path-func-tunnel"];
+    EXPECT_EQ(router["rule"],
+              "Path(`/tunnel/tenant-bad--path-func`) || PathPrefix(`/tunnel/tenant-bad--path-func/`)");
+}
+
 TEST_F(TraefikRouteCacheTest, OnInstanceRunning_UnsupportedMappingsFailClosed)
 {
     auto instance = MakeInstance(
