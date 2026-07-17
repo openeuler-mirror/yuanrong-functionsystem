@@ -168,6 +168,31 @@ download_one "v1.1.0.zip" \
     "https://github.com/jupp0r/prometheus-cpp/archive/refs/tags/v1.1.0.zip" \
     || failed=$((failed+1))
 
+download_one "b7f3e9756f3c45527be27bc38840d5a1ba690436.zip" \
+    "347927fd8de6132099fcdc58e8f7eab7bde4eb2fd424546b9cd4f1c6f8f8bad8" \
+    "https://github.com/protocolbuffers/rules_ruby/archive/b7f3e9756f3c45527be27bc38840d5a1ba690436.zip" \
+    || failed=$((failed+1))
+
+download_one "rules_go-v0.27.0.tar.gz" \
+    "69de5c704a05ff37862f7e0f5534d4f479418afc21806c887db544a316f3cb6b" \
+    "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.27.0/rules_go-v0.27.0.tar.gz" \
+    || failed=$((failed+1))
+
+download_one "rules_java-6.0.0.tar.gz" \
+    "469b7f3b580b4fcf8112f4d6d0d5a4ce8e1ad5e21fee67d8e8335d5f8b3debab" \
+    "https://github.com/bazelbuild/rules_java/releases/download/6.0.0/rules_java-6.0.0.tar.gz" \
+    || failed=$((failed+1))
+
+download_one "rules_pkg-0.7.0.tar.gz" \
+    "8a298e832762eda1830597d64fe7db58178aa84cd5926d76d5b744d6558941c2" \
+    "https://mirror.bazel.build/github.com/bazelbuild/rules_pkg/releases/download/0.7.0/rules_pkg-0.7.0.tar.gz" \
+    || failed=$((failed+1))
+
+download_one "platforms-0.0.6.tar.gz" \
+    "5308fc1d8865406a49427ba24a9ab53087f17f5266a7aabbfc28823f3916e1ca" \
+    "https://mirror.bazel.build/github.com/bazelbuild/platforms/releases/download/0.0.6/platforms-0.0.6.tar.gz" \
+    || failed=$((failed+1))
+
 download_one "bazel-skylib-1.3.0.tar.gz" \
     "74d544d96f4a5bb630d465ca8bbcfe231e3594e5aae57e1edbf17a6eb3ca2506" \
     "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/releases/download/1.3.0/bazel-skylib-1.3.0.tar.gz" \
