@@ -68,7 +68,7 @@ struct SandboxRequestedResources {
 
 // Downstream sandboxd port forwarding only accepts L4 protocols (tcp/udp). L7 portForward schemes (http/https/ws/wss)
 // are normalized to tcp before sending to sandboxd because the underlying mapping is TCP NAT; other schemes are preserved.
-// The portForward written back to instanceinfo keeps the original scheme for sandboxRouter L7 routing.
+// The portForward written back to instanceinfo canonicalizes L7 routing metadata to http/https.
 std::string ToDownstreamL4Protocol(const std::string &proto)
 {
     if (proto == "http" || proto == "https" || proto == "ws" || proto == "wss") {
@@ -596,8 +596,9 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartNormal(
                     const std::string &scheme = forwardConfigs[i].protocol;
                     // Send L4 protocol to downstream sandboxd (http/https/ws/wss -> tcp, original tcp unchanged), otherwise sandboxd rejects it.
                     params.portMappings.push_back(ToDownstreamL4Protocol(scheme) + ":" + hostPort + ":" + containerPort);
-                    // Write back portForward (-> instanceinfo -> sandboxrouter) with the original scheme for L7 routing.
-                    portJson.push_back(scheme + ":" + hostPort + ":" + containerPort);
+                    portJson.push_back(FormatPortForwardMapping({
+                        forwardConfigs[i].routeKind, scheme, static_cast<uint16_t>(hostPorts[i]),
+                        static_cast<uint16_t>(forwardConfigs[i].containerPort), false}));
                 }
                 stateManager_.UpdatePortMappings(params.runtimeID, portJson.dump());
             }
@@ -1704,6 +1705,19 @@ std::vector<SandboxdExecutor::PortForwardConfig> SandboxdExecutor::ParseForwardP
             if (item.contains("protocol") && item["protocol"].is_string()) {
                 cfg.protocol = item["protocol"].get<std::string>();
                 std::transform(cfg.protocol.begin(), cfg.protocol.end(), cfg.protocol.begin(), ::tolower);
+            }
+            if (item.contains("routeKind")) {
+                if (!item["routeKind"].is_string()) {
+                    YRLOG_WARN("ParseForwardPorts: routeKind must be a string, got {}",
+                               item["routeKind"].type_name());
+                    continue;
+                }
+                const auto routeKind = ParsePortRouteKind(item["routeKind"].get<std::string>());
+                if (!routeKind.has_value()) {
+                    YRLOG_WARN("ParseForwardPorts: unsupported routeKind '{}'", item["routeKind"].get<std::string>());
+                    continue;
+                }
+                cfg.routeKind = *routeKind;
             }
             configs.push_back(cfg);
         }

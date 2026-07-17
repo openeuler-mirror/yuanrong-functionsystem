@@ -38,6 +38,27 @@ TEST(SandboxdExecutorTest, ParseForwardPortsParsesPortForwardings)
     EXPECT_EQ(configs[1].protocol, "tcp");  // lowercased
 }
 
+TEST(SandboxdExecutorTest, ParseForwardPortsParsesRouteKinds)
+{
+    const std::string netJson =
+        R"({"portForwardings":[{"port":50090,"protocol":"http","routeKind":"direct"},{"port":8765,"protocol":"http","routeKind":"tunnel"},{"port":8080,"protocol":"http"}]})";
+    auto configs = SandboxdExecutor::ParseForwardPorts(netJson);
+    ASSERT_EQ(configs.size(), 3);
+    EXPECT_EQ(configs[0].routeKind, PortRouteKind::DIRECT);
+    EXPECT_EQ(configs[1].routeKind, PortRouteKind::TUNNEL);
+    EXPECT_EQ(configs[2].routeKind, PortRouteKind::PUBLIC);
+}
+
+TEST(SandboxdExecutorTest, ParseForwardPortsInvalidRouteKindIsSkipped)
+{
+    const std::string netJson =
+        R"({"portForwardings":[{"port":8080,"routeKind":"unknown"},{"port":8081,"routeKind":42},{"port":9090,"routeKind":"public"}]})";
+    const auto configs = SandboxdExecutor::ParseForwardPorts(netJson);
+    ASSERT_EQ(configs.size(), 1u);
+    EXPECT_EQ(configs[0].containerPort, 9090u);
+    EXPECT_EQ(configs[0].routeKind, PortRouteKind::PUBLIC);
+}
+
 TEST(SandboxdExecutorTest, ParseForwardPortsEmptyOrInvalidReturnsEmpty)
 {
     EXPECT_TRUE(SandboxdExecutor::ParseForwardPorts("").empty());

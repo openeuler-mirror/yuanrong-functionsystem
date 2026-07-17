@@ -17,3 +17,22 @@ aux_source_directory(${CMAKE_CURRENT_LIST_DIR}/scheduler_manager GLOBAL_SCHEDULE
 
 target_sources(${UNIT_TEST_MODULE} PRIVATE
         ${GLOBAL_SCHEDULER_TEST_SRCS})
+
+# Route-cache policy is a narrow boundary and should remain verifiable without
+# building the repository-wide unit-test aggregate.
+add_executable(traefik_route_cache_test_bin
+        ${PROJECT_SOURCE_DIR}/tests/unit/main.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/traefik_route_cache_test.cpp
+        ${PROJECT_SOURCE_DIR}/src/function_master/global_scheduler/traefik_route_cache.cpp)
+target_include_directories(traefik_route_cache_test_bin PRIVATE
+        ${PROJECT_SOURCE_DIR}/src
+        ${gtest_INCLUDE_DIR})
+target_link_libraries(traefik_route_cache_test_bin PRIVATE
+        utils
+        resource_view
+        ${litebus_ALL_LIB}
+        ${yrlogs_LIB}
+        ${gtest_LIB_A}
+        ${gmock_LIB_A}
+        pthread)
+add_test(NAME traefik_route_cache_test_bin COMMAND traefik_route_cache_test_bin)

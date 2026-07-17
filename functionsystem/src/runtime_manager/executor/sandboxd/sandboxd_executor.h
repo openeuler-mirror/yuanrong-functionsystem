@@ -24,6 +24,7 @@
 
 #include "async/defer.hpp"
 #include "common/metrics/metrics_adapter.h"
+#include "common/utils/port_forward_mapping.h"
 #include "common/proto/pb/message_pb.h"
 #include "common/proto/pb/posix/sandbox_api.grpc.pb.h"
 #include "common/rpc/client/grpc_client.h"
@@ -152,6 +153,7 @@ public:
     struct PortForwardConfig {
         uint32_t containerPort = 0;
         std::string protocol   = "tcp";
+        PortRouteKind routeKind = PortRouteKind::PUBLIC;
     };
 
     static std::vector<PortForwardConfig> ParseForwardPorts(const std::string &networkJson);
