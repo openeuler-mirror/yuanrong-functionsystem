@@ -59,6 +59,11 @@ public:
         return ConnectUdsSocket(socketPath);
     }
 
+    nlohmann::json TestBuildCommand(const std::shared_ptr<runtime::v1::StartRequest> &start)
+    {
+        return BuildCommand(start);
+    }
+
     messages::StartInstanceResponse TestGenSuccessStartInstanceResponse(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &sandboxID)
     {
@@ -980,6 +985,58 @@ TEST_F(SupervisorExecutorTest, StartRuntime_RejectsIllegalCommandChars)
     // Underlying StartByRuntimeID returns ERR_PARAM_INVALID; GenFailStartInstanceResponse
     // wraps with RUNTIME_MANAGER_CREATE_EXEC_FAILED code, message carries the original
     EXPECT_THAT(rsp.message(), testing::HasSubstr("/bin/echo$()"));
+}
+
+/**
+ * Feature: BuildCommand
+ * Description: BuildCommand wraps every argv token and redirect path in POSIX single-quotes
+ *              so that sh -c takes them literally. A token containing a single quote must
+ *              be split via the '\'' sequence; shell metacharacters must survive verbatim
+ *              and never be interpreted (no injection).
+ */
+TEST_F(SupervisorExecutorTest, BuildCommand_ShellQuotesTokensAndRedirects)
+{
+    auto start = std::make_shared<runtime::v1::StartRequest>();
+    start->add_command("python3");
+    start->add_command("-c");
+    // Contains a single quote and parens — must not be interpreted by sh.
+    start->add_command("print('hello; rm -rf /')");
+    start->set_stdout("/tmp/log dir/a'b.out");  // space + single quote in path
+    start->set_stderr("/tmp/log dir/a'b.err");
+
+    auto command = executor_->TestBuildCommand(start);
+    ASSERT_EQ(command.size(), 3);
+    EXPECT_EQ(command[0], "sh");
+    EXPECT_EQ(command[1], "-c");
+    std::string cmdLine = command[2];
+
+    // argv tokens quoted verbatim, no metacharacter interpretation
+    EXPECT_THAT(cmdLine, testing::HasSubstr("'python3'"));
+    EXPECT_THAT(cmdLine, testing::HasSubstr("'-c'"));
+    // single quote inside token escaped via '\'' rather than closing the wrapper
+    EXPECT_THAT(cmdLine, testing::HasSubstr("'print('\\''hello; rm -rf /'\\''"));
+    // redirect paths quoted too (space + quote survived)
+    EXPECT_THAT(cmdLine, testing::HasSubstr(" >'/tmp/log dir/a'\\''b.out'"));
+    EXPECT_THAT(cmdLine, testing::HasSubstr(" 2>'/tmp/log dir/a'\\''b.err'"));
+    // injection payload must NOT appear as a bare command
+    EXPECT_THAT(cmdLine, testing::Not(testing::HasSubstr("; rm -rf /')")));
+}
+
+/**
+ * Feature: BuildCommand
+ * Description: Empty argv and empty redirect paths must not break the shell line shape
+ *             (empty tokens still quote to '').
+ */
+TEST_F(SupervisorExecutorTest, BuildCommand_EmptyTokensAndPaths)
+{
+    auto start = std::make_shared<runtime::v1::StartRequest>();
+    start->add_command("");
+    start->add_command("arg with space");
+
+    auto command = executor_->TestBuildCommand(start);
+    ASSERT_EQ(command.size(), 3);
+    std::string cmdLine = command[2];
+    EXPECT_EQ(cmdLine, "'' 'arg with space' >'' 2>''");
 }
 
 }  // namespace functionsystem::runtime_manager
