@@ -565,6 +565,7 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     --runtime_std_log_dir=""
     --checkpoint_dir="${checkpoint_dir}"
     --runtime_log_level="${RUNTIME_LOG_LEVEL}"
+    --runtime_ld_library_path="${ld_library_path}:${RUNTIME_HOME_DIR}/service/cpp/snlib:${RUNTIME_HOME_DIR}/sdk/cpp/lib"
     --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}"
     --runtime_max_log_file_num="${RUNTIME_LOG_ROLLING_MAX_FILES}"
     --runtime_config_dir="${RUNTIME_HOME_DIR}/service/cpp/config/"
