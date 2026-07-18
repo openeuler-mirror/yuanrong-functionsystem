@@ -4,6 +4,7 @@
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from builder import build_bazel
 
@@ -40,6 +41,29 @@ grpc_cc_library(
         self.assertEqual(updated.count('actual = "@grpc_runtime//:grpcpp"'), 1)
         self.assertEqual(updated.count('actual = "@grpc_runtime//:gpr"'), 1)
         self.assertNotIn('deps = ["core(target)"]', updated)
+
+
+class BazelCacheConfigTest(unittest.TestCase):
+    def test_defaults_keep_workspace_output_and_no_extra_cache_flags(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(build_bazel._bazel_output_root("/workspace/fs"), "/workspace/fs/build/bazel_root")
+            self.assertEqual(build_bazel._bazel_cache_flags(), [])
+
+    def test_buildkite_cache_environment_configures_all_bazel_caches(self):
+        env = {
+            "FUNCTIONSYSTEM_BAZEL_OUTPUT_ROOT": "/mnt/cache/fs/amd64/output-root",
+            "FUNCTIONSYSTEM_BAZEL_REPOSITORY_CACHE": "/mnt/cache/fs/amd64/repository-cache",
+            "REMOTE_CACHE": "grpc://bazel-remote:9092",
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(build_bazel._bazel_output_root("/workspace/fs"), env["FUNCTIONSYSTEM_BAZEL_OUTPUT_ROOT"])
+            self.assertEqual(
+                build_bazel._bazel_cache_flags(),
+                [
+                    f"--repository_cache={env['FUNCTIONSYSTEM_BAZEL_REPOSITORY_CACHE']}",
+                    f"--remote_cache={env['REMOTE_CACHE']}",
+                ],
+            )
 
 
 if __name__ == "__main__":

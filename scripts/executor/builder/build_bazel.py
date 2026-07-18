@@ -116,7 +116,35 @@ def ensure_bazel_deps(root_dir: str):
         log.warning(f"download_bazel_deps.sh not found at {script}, skipping.")
         return
     log.info("Ensuring Bazel dependency archives are present...")
-    utils.sync_command(["bash", script], cwd=root_dir)
+    env = os.environ.copy()
+    repository_cache = _bazel_repository_cache()
+    if repository_cache and not env.get("BAZEL_REPO_CACHE"):
+        env["BAZEL_REPO_CACHE"] = os.path.join(repository_cache, "content_addressable", "sha256")
+    utils.sync_command(["bash", script], cwd=root_dir, env=env)
+
+
+def _bazel_output_root(root_dir: str) -> str:
+    configured = os.environ.get("FUNCTIONSYSTEM_BAZEL_OUTPUT_ROOT")
+    if not configured:
+        return os.path.join(root_dir, "build", "bazel_root")
+    configured = os.path.expanduser(configured)
+    return configured if os.path.isabs(configured) else os.path.join(root_dir, configured)
+
+
+def _bazel_repository_cache() -> str:
+    configured = os.environ.get("FUNCTIONSYSTEM_BAZEL_REPOSITORY_CACHE", "")
+    return os.path.abspath(os.path.expanduser(configured)) if configured else ""
+
+
+def _bazel_cache_flags() -> list[str]:
+    flags = []
+    repository_cache = _bazel_repository_cache()
+    if repository_cache:
+        flags.append(f"--repository_cache={repository_cache}")
+    remote_cache = os.environ.get("REMOTE_CACHE", "")
+    if remote_cache:
+        flags.append(f"--remote_cache={remote_cache}")
+    return flags
 
 
 def configure_shared_grpc_runtime(root_dir: str):
@@ -209,6 +237,7 @@ def build_proto_tools(root_dir: str, bazel_output_root: str, distdir: str, job_n
         "build",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
+        *_bazel_cache_flags(),
         "--config=release",
         *PROTO_TOOL_TARGETS,
     ]
@@ -421,7 +450,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     # Without this, the default output root lands on Docker overlayfs (/root/.cache/bazel/),
     # which is NOT a bind mount, so linux-sandbox cannot resolve symlinks into the execroot.
     # This mirrors yuanrong's build.sh: --output_user_root="${BASE_DIR}/build".
-    bazel_output_root = os.path.join(root_dir, "build", "bazel_root")
+    bazel_output_root = _bazel_output_root(root_dir)
     os.makedirs(bazel_output_root, exist_ok=True)
 
     # thirdparty/runtime_deps holds pre-downloaded tarballs (e.g. rules_apple)
@@ -444,6 +473,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
         "build",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
+        *_bazel_cache_flags(),
         f"--config={config}",
         *build_targets,
         *(target for target, _ in RUNTIME_PLUGIN_TARGETS),
@@ -524,6 +554,7 @@ def build_gtest_bazel(root_dir: str, job_num: int):
         "build",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
+        *_bazel_cache_flags(),
         "--config=debug",
         *TEST_TARGETS,
     ]
@@ -559,6 +590,7 @@ def run_gtest_bazel(root_dir: str, job_num: int, test_suite: str = "*", test_cas
         "test",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
+        *_bazel_cache_flags(),
         "--config=debug",
         *_bazel_test_env_flags(root_dir),
         f"--test_arg=--gtest_filter={gtest_filter}",
@@ -573,7 +605,7 @@ def _prepare_bazel_workspace(root_dir: str, job_num: int):
     ensure_bazel_deps(root_dir)
     generate_version_header(root_dir, "0.0.0")
 
-    bazel_output_root = os.path.join(root_dir, "build", "bazel_root")
+    bazel_output_root = _bazel_output_root(root_dir)
     os.makedirs(bazel_output_root, exist_ok=True)
     distdir = os.path.join(root_dir, "thirdparty", "runtime_deps")
 
