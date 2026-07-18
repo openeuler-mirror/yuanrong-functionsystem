@@ -46,8 +46,8 @@ grpc_cc_library(
 class BazelCacheConfigTest(unittest.TestCase):
     def test_defaults_keep_workspace_output_and_no_extra_cache_flags(self):
         with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(build_bazel._bazel_output_root("/workspace/fs"), "/workspace/fs/build/bazel_root")
-            self.assertEqual(build_bazel._bazel_cache_flags(), [])
+            self.assertEqual(build_bazel.resolve_bazel_output_root("/workspace/fs"), "/workspace/fs/build/bazel_root")
+            self.assertEqual(build_bazel.bazel_cache_flags(), [])
 
     def test_buildkite_cache_environment_configures_all_bazel_caches(self):
         env = {
@@ -56,9 +56,11 @@ class BazelCacheConfigTest(unittest.TestCase):
             "REMOTE_CACHE": "grpc://bazel-remote:9092",
         }
         with mock.patch.dict(os.environ, env, clear=True):
-            self.assertEqual(build_bazel._bazel_output_root("/workspace/fs"), env["FUNCTIONSYSTEM_BAZEL_OUTPUT_ROOT"])
             self.assertEqual(
-                build_bazel._bazel_cache_flags(),
+                build_bazel.resolve_bazel_output_root("/workspace/fs"), env["FUNCTIONSYSTEM_BAZEL_OUTPUT_ROOT"]
+            )
+            self.assertEqual(
+                build_bazel.bazel_cache_flags(),
                 [
                     f"--repository_cache={env['FUNCTIONSYSTEM_BAZEL_REPOSITORY_CACHE']}",
                     f"--remote_cache={env['REMOTE_CACHE']}",

@@ -123,7 +123,8 @@ def ensure_bazel_deps(root_dir: str):
     utils.sync_command(["bash", script], cwd=root_dir, env=env)
 
 
-def _bazel_output_root(root_dir: str) -> str:
+def resolve_bazel_output_root(root_dir: str) -> str:
+    """Resolve Bazel's output root from the caller environment."""
     configured = os.environ.get("FUNCTIONSYSTEM_BAZEL_OUTPUT_ROOT")
     if not configured:
         return os.path.join(root_dir, "build", "bazel_root")
@@ -136,7 +137,8 @@ def _bazel_repository_cache() -> str:
     return os.path.abspath(os.path.expanduser(configured)) if configured else ""
 
 
-def _bazel_cache_flags() -> list[str]:
+def bazel_cache_flags() -> list[str]:
+    """Return repository and remote-cache flags selected by the caller."""
     flags = []
     repository_cache = _bazel_repository_cache()
     if repository_cache:
@@ -237,7 +239,7 @@ def build_proto_tools(root_dir: str, bazel_output_root: str, distdir: str, job_n
         "build",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
-        *_bazel_cache_flags(),
+        *bazel_cache_flags(),
         "--config=release",
         *PROTO_TOOL_TARGETS,
     ]
@@ -450,7 +452,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     # Without this, the default output root lands on Docker overlayfs (/root/.cache/bazel/),
     # which is NOT a bind mount, so linux-sandbox cannot resolve symlinks into the execroot.
     # This mirrors yuanrong's build.sh: --output_user_root="${BASE_DIR}/build".
-    bazel_output_root = _bazel_output_root(root_dir)
+    bazel_output_root = resolve_bazel_output_root(root_dir)
     os.makedirs(bazel_output_root, exist_ok=True)
 
     # thirdparty/runtime_deps holds pre-downloaded tarballs (e.g. rules_apple)
@@ -473,7 +475,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
         "build",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
-        *_bazel_cache_flags(),
+        *bazel_cache_flags(),
         f"--config={config}",
         *build_targets,
         *(target for target, _ in RUNTIME_PLUGIN_TARGETS),
@@ -554,7 +556,7 @@ def build_gtest_bazel(root_dir: str, job_num: int):
         "build",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
-        *_bazel_cache_flags(),
+        *bazel_cache_flags(),
         "--config=debug",
         *TEST_TARGETS,
     ]
@@ -590,7 +592,7 @@ def run_gtest_bazel(root_dir: str, job_num: int, test_suite: str = "*", test_cas
         "test",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
-        *_bazel_cache_flags(),
+        *bazel_cache_flags(),
         "--config=debug",
         *_bazel_test_env_flags(root_dir),
         f"--test_arg=--gtest_filter={gtest_filter}",
@@ -605,7 +607,7 @@ def _prepare_bazel_workspace(root_dir: str, job_num: int):
     ensure_bazel_deps(root_dir)
     generate_version_header(root_dir, "0.0.0")
 
-    bazel_output_root = _bazel_output_root(root_dir)
+    bazel_output_root = resolve_bazel_output_root(root_dir)
     os.makedirs(bazel_output_root, exist_ok=True)
     distdir = os.path.join(root_dir, "thirdparty", "runtime_deps")
 
