@@ -18,6 +18,8 @@
 
 #include <sys/un.h>
 
+#include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <sstream>
 #include <utility>
@@ -42,6 +44,8 @@ constexpr int64_t HTTP_TIMEOUT_MS = 30000;
 const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 const std::string SUPERVISOR_SANDBOX_PREFIX = "/api/v1/sandboxes";
 const std::string SUPERVISOR_UDS_SOCKET = "/run/jiuwenbox/jiuwenbox.sock";
+constexpr size_t HTTP_HEADER_SEPARATOR_LEN = 4;   // length of "\r\n\r\n"
+constexpr size_t CONTENT_LENGTH_PREFIX_LEN = 15;   // length of "content-length:"
 
 SupervisorExecutor::SupervisorExecutor(const std::string &name, const litebus::AID &functionAgentAID)
     : Executor(name), functionAgentAID_(functionAgentAID)
@@ -74,7 +78,7 @@ void SupervisorExecutor::ParseResponse(litebus::Promise<nlohmann::json> promise,
         promise.SetValue(nlohmann::json::object());
         return;
     }
-    std::string respBody = response.substr(headerEnd + 4);
+    std::string respBody = response.substr(headerEnd + HTTP_HEADER_SEPARATOR_LEN);
     if (respBody.empty()) {
         YRLOG_ERROR("HTTP response body is empty");
         promise.SetValue(nlohmann::json::object());
@@ -103,50 +107,70 @@ litebus::Future<nlohmann::json> SupervisorExecutor::SendRequestToSupervisor(cons
         return result;
     }
     std::string httpRequest = BuildUdsHttpRequest(method, path, body.dump());
-    if (ssize_t sent = send(fd, httpRequest.c_str(), httpRequest.length(), 0);
-        sent < 0 || static_cast<size_t>(sent) != httpRequest.length()) {
-        YRLOG_ERROR("failed to send request to UDS socket: {}", std::strerror(errno));
+    if (!SendUdsRequest(fd, httpRequest)) {
         (void)close(fd);
         promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
         return result;
     }
     // Receive response
     std::string response;
-    char buf[4096];
-    ssize_t received;
-    while ((received = recv(fd, buf, sizeof(buf) - 1, 0)) > 0) {
-        buf[received] = '\0';
-        response += buf;
-        // Check if we have complete HTTP response (headers + body)
-        size_t headerEnd = response.find("\r\n\r\n");
-        if (headerEnd == std::string::npos) {
-            continue;
-        }
-        std::string headers = response.substr(0, headerEnd);
-        size_t bodyStart = headerEnd + 4;
-        // Parse Content-Length from headers
-        size_t contentLengthPos = headers.find("Content-Length:");
-        if (contentLengthPos == std::string::npos) {
-            // No Content-Length, assume we have complete response if connection closed
-            break;
-        }
-        size_t crlfPos = headers.find("\r\n", contentLengthPos);
-        std::string contentLengthStr = headers.substr(contentLengthPos + 15, crlfPos - contentLengthPos - 15);
-        size_t contentLength = std::stoul(contentLengthStr);
-        if (response.length() - bodyStart >= contentLength) {
-            break;
-        }
-    }
-    if (received < 0) {
-        YRLOG_ERROR("failed to receive response from UDS socket: {}", std::strerror(errno));
+    if (!ReceiveUdsResponse(fd, response)) {
         (void)close(fd);
         promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
         return result;
     }
     (void)close(fd);
-    // Parse HTTP response
     ParseResponse(promise, response);
     return result;
+}
+
+bool SupervisorExecutor::SendUdsRequest(int fd, const std::string &httpRequest)
+{
+    ssize_t sent = send(fd, httpRequest.c_str(), httpRequest.length(), 0);
+    if (sent < 0 || static_cast<size_t>(sent) != httpRequest.length()) {
+        YRLOG_ERROR("failed to send request to UDS socket: {}", std::strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+bool SupervisorExecutor::ReceiveUdsResponse(int fd, std::string &response)
+{
+    char buf[4096];
+    size_t headerEnd = std::string::npos;
+    size_t contentLength = 0;
+    bool hasContentLength = false;
+    ssize_t received;
+    while ((received = recv(fd, buf, sizeof(buf) - 1, 0)) > 0) {
+        buf[received] = '\0';
+        response += buf;
+        if (headerEnd == std::string::npos) {
+            headerEnd = response.find("\r\n\r\n");
+            if (headerEnd == std::string::npos) {
+                continue;
+            }
+            std::string headers = response.substr(0, headerEnd);
+            std::string lowerHeaders = headers;
+            std::transform(lowerHeaders.begin(), lowerHeaders.end(), lowerHeaders.begin(),
+                           [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+            size_t contentLengthPos = lowerHeaders.find("content-length:");
+            if (contentLengthPos != std::string::npos) {
+                size_t crlfPos = headers.find("\r\n", contentLengthPos);
+                hasContentLength = true;
+                contentLength = std::stoul(
+                    headers.substr(contentLengthPos + CONTENT_LENGTH_PREFIX_LEN,
+                                   crlfPos - contentLengthPos - CONTENT_LENGTH_PREFIX_LEN));
+            }
+        }
+        if (hasContentLength && response.length() - (headerEnd + HTTP_HEADER_SEPARATOR_LEN) >= contentLength) {
+            break;
+        }
+    }
+    if (received < 0) {
+        YRLOG_ERROR("failed to receive response from UDS socket: {}", std::strerror(errno));
+        return false;
+    }
+    return true;
 }
 
 int SupervisorExecutor::ConnectUdsSocket(const std::string &socketPath)
@@ -308,6 +332,10 @@ litebus::Future<std::string> SupervisorExecutor::CreateSandbox(const std::string
         nlohmann::json policy = nlohmann::json::object();
         policy["filesystem_policy"] = filesystemPolicy;
 
+        nlohmann::json environment = nlohmann::json::object();
+        environment["JIUWENSWARM_HOME"] = "/home/" + hostUser;
+        policy["environment"] = environment;
+
         policy["process"] = { { "run_as_user", hostUser }, { "run_as_group", hostUser } };
         policy["namespace"] = { { "user", false } };
 
@@ -352,15 +380,54 @@ litebus::Future<std::string> SupervisorExecutor::CreateSandbox(const std::string
     return promise.GetFuture();
 }
 
+std::string SupervisorExecutor::ShellQuote(const std::string &token)
+{
+    // POSIX single-quote escaping: wrap the token in '...', and replace every literal ' in it
+    // with the sequence '\'' (close quote, escaped quote, reopen quote). The result is passed
+    // through sh -c with zero metacharacter interpretation, so argv tokens and redirect paths
+    // are taken literally and cannot inject shell commands.
+    std::string escaped = "'";
+    for (char ch : token) {
+        if (ch == '\'') {
+            escaped += "'\\''";
+        } else {
+            escaped += ch;
+        }
+    }
+    escaped += "'";
+    return escaped;
+}
+
+nlohmann::json SupervisorExecutor::BuildCommand(const std::shared_ptr<runtime::v1::StartRequest> &start)
+{
+    auto command = nlohmann::json::array();
+
+    std::string cmdLine;
+    for (int i = 0; i < start->command().size(); ++i) {
+        if (i > 0) {
+            cmdLine += " ";
+        }
+        // Each argv token must be shell-quoted: command() args often contain arbitrary user
+        // content (e.g. python -c "print('hello')") and must not be interpreted by sh.
+        cmdLine += ShellQuote(start->command()[i]);
+    }
+    // Reuse the redirect paths already set on the StartRequest by SetRequestEnvsAndLogsForStart
+    // (which also mkdir/touch/chown them), instead of re-deriving the log layout here.
+    // Quote them too: runtimeID/path may contain spaces or shell metacharacters.
+    cmdLine += " >" + ShellQuote(start->stdout()) + " 2>" + ShellQuote(start->stderr());
+
+    command.push_back("sh");
+    command.push_back("-c");
+    command.push_back(cmdLine);
+    return command;
+}
+
 litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::ExecInSandbox(
     const std::string &runtimeID, const std::shared_ptr<runtime::v1::StartRequest> &start, const std::string &sandboxId)
 {
     nlohmann::json execRequest = nlohmann::json::object();
 
-    auto command = nlohmann::json::array();
-    for (const auto &cmd : start->command()) {
-        command.push_back(cmd);
-    }
+    auto command = BuildCommand(start);
     execRequest["command"] = command;
 
     auto envs = nlohmann::json::object();
@@ -443,7 +510,8 @@ litebus::Future<Status> SupervisorExecutor::StopInstance(const std::shared_ptr<m
             runtimeInstanceInfoMap_.erase(runtimeID);
 
             if (future.IsError()) {
-            YRLOG_ERROR("Failed to delete sandbox for runtime({}), error code: {}", runtimeID, future.GetErrorCode());
+                YRLOG_ERROR("Failed to delete sandbox for runtime({}), error code: {}", runtimeID,
+                            future.GetErrorCode());
                 promise.SetValue(Status(static_cast<StatusCode>(future.GetErrorCode()),
                                         "Failed to delete sandbox for runtime " + runtimeID));
                 return;
@@ -488,7 +556,7 @@ std::map<std::string, messages::RuntimeInstanceInfo> SupervisorExecutor::GetRunt
 }
 
 void SupervisorExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr,
-                                                  const std::string &runtimeID)
+                                                  const std::string &runtimeID, const std::string &hostUser)
 {
     auto path = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
     if (!litebus::os::ExistPath(path)) {
@@ -509,6 +577,16 @@ void SupervisorExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::stri
     if (!litebus::os::ExistPath(stdErr) && TouchFile(stdErr) != 0) {
         YRLOG_WARN("create std err log file {} failed: {}", stdErr, litebus::os::Strerror(errno));
     }
+
+    if (hostUser.empty()) {
+        return;
+    }
+    if (!stdOut.empty() && litebus::os::Chown(hostUser, stdOut, false).IsNone()) {
+        YRLOG_WARN("{}|failed to chown stdout log {} to user {}", runtimeID, stdOut, hostUser);
+    }
+    if (!stdErr.empty() && litebus::os::Chown(hostUser, stdErr, false).IsNone()) {
+        YRLOG_WARN("{}|failed to chown stderr log {} to user {}", runtimeID, stdErr, hostUser);
+    }
 }
 
 void SupervisorExecutor::BuildRuntimeCommands(runtime::v1::StartRequest *request,
@@ -521,7 +599,7 @@ void SupervisorExecutor::BuildRuntimeCommands(runtime::v1::StartRequest *request
 }
 
 void SupervisorExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs,
-                                                       const std::string &runtimeID)
+                                                       const std::string &runtimeID, const std::string &hostUser)
 {
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
     req->mutable_envs()->insert(combineEnvs.begin(), combineEnvs.end());
@@ -529,7 +607,7 @@ void SupervisorExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest
 
     std::string stdOut;
     std::string stdErr;
-    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID);
+    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID, hostUser);
     req->set_stdout(stdOut);
     req->set_stderr(stdErr);
 }
@@ -594,14 +672,14 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::StartByRuntimeID
 
     BuildRuntimeCommands(start.get(), buildArgs);
 
-    auto updateEnv = BuildMountForCodes(start, request, envs);
-    SetRequestEnvsAndLogsForStart(start.get(), updateEnv, runtimeID);
-
     const auto &deployOpts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
     std::string hostUser;
     if (auto it = deployOpts.find(HOST_USER); it != deployOpts.end()) {
         hostUser = it->second;
     }
+
+    auto updateEnv = BuildMountForCodes(start, request, envs);
+    SetRequestEnvsAndLogsForStart(start.get(), updateEnv, runtimeID, hostUser);
 
     litebus::Promise<runtime::v1::StartResponse> promise;
     CreateSandbox(runtimeID, hostUser)

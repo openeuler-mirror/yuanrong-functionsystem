@@ -71,7 +71,7 @@ struct SandboxRequestedResources {
 // portForward schemes (http/https/ws/wss) are normalized to tcp before sending
 // to sandboxd because the underlying mapping is TCP NAT; other schemes are
 // preserved.
-// The portForward written back to instanceinfo keeps the original scheme for sandboxRouter L7 routing.
+// The portForward written back to instanceinfo canonicalizes L7 routing metadata to http/https.
 std::string ToDownstreamL4Protocol(const std::string &proto)
 {
     if (proto == "http" || proto == "https" || proto == "ws" || proto == "wss") {
@@ -635,7 +635,9 @@ void SandboxdExecutor::ApplyPortForwardMappings(SandboxdStartParams *params,
         const std::string containerPort = std::to_string(forwardConfigs[i].containerPort);
         const std::string &scheme = forwardConfigs[i].protocol;
         params->portMappings.push_back(ToDownstreamL4Protocol(scheme) + ":" + hostPort + ":" + containerPort);
-        portJson.push_back(scheme + ":" + hostPort + ":" + containerPort);
+        portJson.push_back(FormatPortForwardMapping({
+            forwardConfigs[i].routeKind, scheme, static_cast<uint16_t>(hostPorts[i]),
+            static_cast<uint16_t>(forwardConfigs[i].containerPort), false}));
     }
     stateManager_.UpdatePortMappings(params->runtimeID, portJson.dump());
 }
@@ -759,7 +761,7 @@ litebus::Future<Status> SandboxdExecutor::UnregisterWarmUp(const std::string &ru
 
 litebus::Future<Status> SandboxdExecutor::OnWarmUpUnregistered(const runtime::v1::NormalResponse &response,
                                                                const std::string &runtimeID,
-    const std::string &requestID)
+                                                               const std::string &requestID)
 {
     if (!response.success()) {
         YRLOG_ERROR("{}|unregister warm-up failed for ({})", requestID, runtimeID);
@@ -1053,8 +1055,8 @@ void SandboxdExecutor::CleanupLocalRuntimeStateForOrphan(const std::string &requ
 
     YRLOG_WARN(
         "{}|ReconcileRuntimes: orphan sandbox {} is still registered as runtime({}); "
-               "releasing local runtime resources before orphan delete",
-               requestID, sandboxID, runtimeID);
+        "releasing local runtime resources before orphan delete",
+        requestID, sandboxID, runtimeID);
 
     if (ckptOrch_ != nullptr) {
         ckptOrch_->ReleaseRef(runtimeID, requestID);
@@ -1098,9 +1100,9 @@ Status SandboxdExecutor::OnDeleteSandboxComplete(const std::string &sandboxID,
     }
     YRLOG_ERROR("DeleteSandboxAsync: sandbox({}) delete failed: {}, scheduling retry in ~{}s", sandboxID,
                 rsp.GetErrorCode(), kOrphanDeleteRetryIntervalSec);
-    auto retryFirstSeen = std::chrono::steady_clock::now()
-                          - std::chrono::seconds(static_cast<int64_t>(orphanGracePeriodSec_))
-                          + std::chrono::seconds(static_cast<int64_t>(kOrphanDeleteRetryIntervalSec));
+    auto retryFirstSeen = std::chrono::steady_clock::now() -
+                          std::chrono::seconds(static_cast<int64_t>(orphanGracePeriodSec_)) +
+                          std::chrono::seconds(static_cast<int64_t>(kOrphanDeleteRetryIntervalSec));
     orphanFirstSeen_.emplace(sandboxID, retryFirstSeen);
     return Status(StatusCode::ERR_INNER_SYSTEM_ERROR);
 }
@@ -1416,14 +1418,14 @@ void SandboxdExecutor::CollectSandboxStats(const std::string &runtimeID, const s
 
     ASSERT_IF_NULL(sandboxd_);
     sandboxd_->CallAsyncX("Stats", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncStats)
-        .Then(
-            [runtimeID, sandboxID, resp, collectedAt, aid(GetAID())](const Status &status) -> litebus::Future<Status> {
+        .Then([runtimeID, sandboxID, resp, collectedAt,
+               aid(GetAID())](const Status &status) -> litebus::Future<Status> {
             runtime::v1::StatsResponse statsResponse;
             if (status.IsOk()) {
                 statsResponse = *resp;
             }
-                return litebus::Async(aid, &SandboxdExecutor::OnSandboxStatsCollected, runtimeID, sandboxID, status,
-                                      statsResponse, collectedAt);
+            return litebus::Async(aid, &SandboxdExecutor::OnSandboxStatsCollected, runtimeID, sandboxID, status,
+                                  statsResponse, collectedAt);
         });
 }
 
@@ -1545,8 +1547,8 @@ void SandboxdExecutor::ReportSandboxLifecycleStatus(const messages::RuntimeInsta
     if (lifecycleStatus == SandboxLifecycleStatus::RUNNING) {
         sandboxRunningStartTimes_.emplace(runtimeID, std::chrono::steady_clock::now());
         ScheduleRunningStatusHeartbeat(runtimeID);
-    } else if (lifecycleStatus == SandboxLifecycleStatus::COMPLETED
-               || lifecycleStatus == SandboxLifecycleStatus::ABNORMAL) {
+    } else if (lifecycleStatus == SandboxLifecycleStatus::COMPLETED ||
+               lifecycleStatus == SandboxLifecycleStatus::ABNORMAL) {
         auto startIt = sandboxRunningStartTimes_.find(runtimeID);
         if (startIt != sandboxRunningStartTimes_.end()) {
             const double durationSec =
@@ -1677,6 +1679,19 @@ std::vector<SandboxdExecutor::PortForwardConfig> SandboxdExecutor::ParseForwardP
             if (item.contains("protocol") && item["protocol"].is_string()) {
                 cfg.protocol = item["protocol"].get<std::string>();
                 std::transform(cfg.protocol.begin(), cfg.protocol.end(), cfg.protocol.begin(), ::tolower);
+            }
+            if (item.contains("routeKind")) {
+                if (!item["routeKind"].is_string()) {
+                    YRLOG_WARN("ParseForwardPorts: routeKind must be a string, got {}",
+                               item["routeKind"].type_name());
+                    continue;
+                }
+                const auto routeKind = ParsePortRouteKind(item["routeKind"].get<std::string>());
+                if (!routeKind.has_value()) {
+                    YRLOG_WARN("ParseForwardPorts: unsupported routeKind '{}'", item["routeKind"].get<std::string>());
+                    continue;
+                }
+                cfg.routeKind = *routeKind;
             }
             configs.push_back(cfg);
         }

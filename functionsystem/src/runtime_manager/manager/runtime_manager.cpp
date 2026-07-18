@@ -1049,8 +1049,10 @@ Status RuntimeManager::QueryDebugInstanceInfosResponse(const litebus::AID &from,
     return Status::OK();
 }
 
-Status RuntimeManager::SnapshotRuntimeResponse(const litebus::AID &from, const std::string &instanceID,
-                                               const std::string &requestID,
+Status RuntimeManager::SnapshotRuntimeResponse(
+    const litebus::AID &from,
+    const std::string &instanceID,
+    const std::string &requestID,
     const litebus::Future<messages::SnapshotRuntimeResponse> &responseFuture)
 {
     if (responseFuture.IsError()) {
