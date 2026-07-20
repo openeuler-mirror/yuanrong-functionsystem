@@ -403,13 +403,13 @@ nlohmann::json SupervisorExecutor::BuildCommand(const std::shared_ptr<runtime::v
     auto command = nlohmann::json::array();
 
     std::string cmdLine;
-    for (int i = 0; i < start->funcruntime().command().size(); ++i) {
+    for (int i = 0; i < start->command().size(); ++i) {
         if (i > 0) {
             cmdLine += " ";
         }
         // Each argv token must be shell-quoted: command() args often contain arbitrary user
         // content (e.g. python -c "print('hello')") and must not be interpreted by sh.
-        cmdLine += ShellQuote(start->funcruntime().command()[i]);
+        cmdLine += ShellQuote(start->command()[i]);
     }
     // Reuse the redirect paths already set on the StartRequest by SetRequestEnvsAndLogsForStart
     // (which also mkdir/touch/chown them), instead of re-deriving the log layout here.
@@ -431,10 +431,7 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::ExecInSandbox(
     execRequest["command"] = command;
 
     auto envs = nlohmann::json::object();
-    for (const auto &env : start->funcruntime().runtimeenvs()) {
-        envs[env.first] = env.second;
-    }
-    for (const auto &env : start->userenvs()) {
+    for (const auto &env : start->envs()) {
         envs[env.first] = env.second;
     }
     if (!envs.empty()) {
@@ -507,8 +504,8 @@ litebus::Future<Status> SupervisorExecutor::StopInstance(const std::shared_ptr<m
     deleteReq->set_id(sandboxID);
     YRLOG_INFO("{}|Delete sandbox: {} for runtime: {}", request->requestid(), sandboxID, runtimeID);
     litebus::Promise<Status> promise;
-    DoDeleteSandbox(deleteReq)
-        .OnComplete([this, runtimeID, promise](const litebus::Future<runtime::v1::DeleteResponse> &future) mutable {
+    DoDeleteSandbox(deleteReq).OnComplete([this, runtimeID, promise](
+                                              const litebus::Future<runtime::v1::DeleteResponse> &future) mutable {
             runtime2sandboxID_.erase(runtimeID);
             runtimeInstanceInfoMap_.erase(runtimeID);
 
@@ -592,12 +589,12 @@ void SupervisorExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::stri
     }
 }
 
-void SupervisorExecutor::BuildRuntimeCommands(runtime::v1::FunctionRuntime *funcRt,
+void SupervisorExecutor::BuildRuntimeCommands(runtime::v1::StartRequest *request,
                                               const std::vector<std::string> &buildArgs)
 {
     // Build commands for runtime
     for (const auto &arg : buildArgs) {
-        funcRt->add_command(arg);
+        request->add_command(arg);
     }
 }
 
@@ -605,8 +602,8 @@ void SupervisorExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest
                                                        const std::string &runtimeID, const std::string &hostUser)
 {
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
-    req->mutable_userenvs()->insert(combineEnvs.begin(), combineEnvs.end());
-    (*req->mutable_userenvs())[YR_ONLY_STDOUT] = "true";
+    req->mutable_envs()->insert(combineEnvs.begin(), combineEnvs.end());
+    (*req->mutable_envs())[YR_ONLY_STDOUT] = "true";
 
     std::string stdOut;
     std::string stdErr;
@@ -673,7 +670,7 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::StartByRuntimeID
     YRLOG_INFO("start {} runtime({}), execute final cmd: {}", language, runtimeID, cmd);
     auto start = std::make_shared<runtime::v1::StartRequest>();
 
-    BuildRuntimeCommands(start->mutable_funcruntime(), buildArgs);
+    BuildRuntimeCommands(start.get(), buildArgs);
 
     const auto &deployOpts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
     std::string hostUser;

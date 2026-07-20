@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "common/resource_view/resource_type.h"
+#include "common/utils/port_forward_mapping.h"
 
 namespace functionsystem::global_scheduler {
 
@@ -33,6 +34,7 @@ struct TraefikConfig {
     std::string httpEntryPoint   = "websecure";
     bool        enableTLS        = true;
     std::string serversTransport = "yr-backend-tls@file";
+    std::string publicBaseDomain;
 };
 
 class TraefikRouteCache {
@@ -56,7 +58,9 @@ public:
 
 private:
     struct RouteEntry {
+        PortRouteKind routeKind = PortRouteKind::PUBLIC;
         std::string routerName;   // safeID-pPort
+        std::string safeID;
         std::string backendURL;   // https://hostIP:hostPort or http://hostIP:hostPort
         int         sandboxPort = 0;
         bool        useHttps    = false;
@@ -65,15 +69,26 @@ private:
     // Parse route entries from InstanceInfo extensions.
     // Parses extensions["portForward"] JSON array and proxyGrpcAddress.
     std::vector<RouteEntry> ParseRoutes(const resource_view::InstanceInfo& instance) const;
-    static bool ParsePortMapping(const std::string& mapping, std::string& protocol, int& hostPort, int& sandboxPort);
-    static RouteEntry BuildRouteEntry(const std::string& safeID, const std::string& hostIP,
-                                      const std::string& protocol, int hostPort, int sandboxPort);
 
     // Extract IP from proxyGrpcAddress (ip:port format)
     static std::string ExtractIP(const std::string& addr);
 
     // Sanitize instanceID for use as Traefik router/service name
     static std::string SanitizeID(const std::string& id);
+
+    // Normalize wildcard domain for Traefik Host() rules.
+    static std::string NormalizePublicBaseDomain(const std::string& domain);
+
+    // Sanitize a value for use as one DNS label component.
+    static std::string SanitizeDNSLabelComponent(const std::string& value);
+
+    // Build the left-most DNS label for host-based sandbox URLs.
+    static std::string BuildHostLabel(int sandboxPort, const std::string& safeID);
+
+    // Build the router name for the host-based route.
+    static std::string BuildHostRouterName(const std::string& routerName);
+
+    static std::string StableHashSuffix(const std::string& value);
 
     // Build full Traefik dynamic.Configuration JSON.
     // JSON keys sorted lexicographically for FNV hash stability.

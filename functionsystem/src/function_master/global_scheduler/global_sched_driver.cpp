@@ -424,6 +424,7 @@ void GlobalSchedDriver::InitTraefikRoutes(const functionmaster::Flags &flags)
         traefikCfg.httpEntryPoint   = flags.GetTraefikHttpEntryPoint();
         traefikCfg.enableTLS        = flags.GetTraefikEnableTLS();
         traefikCfg.serversTransport = flags.GetTraefikServersTransport();
+        traefikCfg.publicBaseDomain = flags.GetTraefikPublicBaseDomain();
         traefikRouteCache_ = std::make_shared<TraefikRouteCache>(std::move(traefikCfg));
         traefikLeaderCtx_ = std::make_shared<TraefikLeaderContext>();
         traefikLeaderCtx_->selfHttpAddress = flags.GetIP();

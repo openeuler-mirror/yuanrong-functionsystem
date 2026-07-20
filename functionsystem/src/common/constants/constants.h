@@ -69,7 +69,9 @@ const uint64_t DEFAULT_PULL_RESOURCE_INTERVAL = 500;
 
 const uint32_t DEFAULT_DOMAIN_HEARTBEAT_TIMEOUT = 6000;
 
-enum class EXECUTOR_TYPE { RUNTIME = 0, CONTAINER = 1, SUPERVISOR = 2, DOCKER = 3, UNKNOWN = -1 };
+// SANDBOXD selects the sandboxd-backed SandboxdExecutor (runtime.v1.SandboxService).
+// Selection is env-gated (YR_RUNTIME_BACKEND=sandboxd); see ContainerExecutorType().
+enum class EXECUTOR_TYPE { RUNTIME = 0, CONTAINER = 1, SUPERVISOR = 2, DOCKER = 3, SANDBOXD = 4, UNKNOWN = -1 };
 
 const int32_t SYSTEM_FUNCTION_INSTANCE_LEVEL = 1;
 

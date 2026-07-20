@@ -50,7 +50,9 @@ const std::string PYTHON310_LANGUAGE = "python3.10";
 const std::string PYTHON311_LANGUAGE = "python3.11";
 const std::string PYTHON312_LANGUAGE = "python3.12";
 const std::string PYTHON313_LANGUAGE = "python3.13";
+const std::string PYTHON314_LANGUAGE = "python3.14";
 const std::string POSIX_CUSTOM_RUNTIME = "posix-custom-runtime";
+const std::string RUST_LANGUAGE = "rust";
 const std::string PARAM_EXEC_PATH = "execPath";
 const std::string PARAM_LANGUAGE = "language";
 const std::string RUNTIME_LAYER_DIR_NAME = "layer";
@@ -60,12 +62,6 @@ const std::string PYTHON_SERVER_PATH_IN_WHEEL = "/../../main/yr_runtime_main.py"
 const std::string PKG_TYPE_WHEEL = "WHEEL";
 const std::string PKG_TYPE_TARBALL = "TARBALL";
 
-// this aims to support multiple launcher which orgnized by map
-// key is launcher type name
-// value is config with json fmt
-struct RuntimeLauncherConfig {
-    std::string endpoint;
-};
 struct RuntimeConfig {
     std::string ip;
     std::string hostIP;
@@ -135,8 +131,7 @@ public:
      * @return response Include start instance result arguments.
      */
     virtual litebus::Future<::messages::StartInstanceResponse> StartInstance(
-        const std::shared_ptr<messages::StartInstanceRequest> &request,
-        const std::vector<int> &cardIDs) = 0;
+        const std::shared_ptr<messages::StartInstanceRequest> &request, const std::vector<int> &cardIDs) = 0;
 
     /**
      * Stop Instance when receive message from function agent.
@@ -235,8 +230,8 @@ protected:
             return PKG_TYPE_TARBALL;
         }
 
-        if (exePath.find("dist-packages") != std::string::npos || exePath.find("site-packages") != std::string::npos ||
-            exePath.find("venv") != std::string::npos) {
+        if (exePath.find("dist-packages") != std::string::npos ||
+            exePath.find("site-packages") != std::string::npos || exePath.find("venv") != std::string::npos) {
             return PKG_TYPE_WHEEL;
         }
 
@@ -272,8 +267,7 @@ public:
      * @return response Include start instance result arguments.
      */
     virtual litebus::Future<::messages::StartInstanceResponse> StartInstance(
-        const std::shared_ptr<messages::StartInstanceRequest> &request,
-        const std::vector<int> &cardIDs) = 0;
+        const std::shared_ptr<messages::StartInstanceRequest> &request, const std::vector<int> &cardIDs) = 0;
 
     /**
      * Stop Instance when receive message from function agent.

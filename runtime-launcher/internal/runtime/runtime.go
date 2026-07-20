@@ -24,9 +24,35 @@ type ContainerRuntime interface {
 	// Stats 返回容器资源使用统计（CPU 累积纳秒、内存字节）。
 	Stats(ctx context.Context, containerID string) (*ContainerStats, error)
 
+	// List 返回后端中由 runtime-launcher 管理的 sandbox/container。
+	List(ctx context.Context, id string) ([]*ContainerInfo, error)
+
 	// Close 在服务关闭时执行清理。
 	Close() error
 }
+
+// ContainerInfo 是后端权威列表中的 sandbox/container 元数据。
+type ContainerInfo struct {
+	ID         string
+	RuntimeID  string
+	Image      string
+	Command    []string
+	Labels     map[string]string
+	State      string
+	StartedAt  int64
+	FinishedAt int64
+	ExitCode   int32
+	Message    string
+}
+
+const (
+	// ManagedLabelKey marks containers owned by runtime-launcher.
+	ManagedLabelKey = "yr.runtime-launcher"
+	// ManagedLabelValue is the expected ownership label value.
+	ManagedLabelValue = "true"
+	// RuntimeIDLabelKey stores the YuanRong runtime ID on backend containers.
+	RuntimeIDLabelKey = "yr.runtime-id"
+)
 
 // ContainerStats 容器资源使用统计。
 type ContainerStats struct {
@@ -71,6 +97,9 @@ type CreateConfig struct {
 	// 网络配置
 	Network string // 网络模式：host, bridge, none 等，默认 host
 	Ports   []string
+
+	// Labels are sandbox metadata labels carried through to backend labels.
+	Labels map[string]string
 }
 
 // MountConfig 对应 proto Mount 消息。

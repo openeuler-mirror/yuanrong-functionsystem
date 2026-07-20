@@ -134,6 +134,23 @@ void IdleActor::SessionAlive(const std::string &instanceID, bool hasActiveSessio
     }
 }
 
+void IdleActor::OnInstanceRunning(const std::string &instanceID)
+{
+    if (instanceID.empty()) {
+        return;
+    }
+    auto trafficIt = instanceTrafficIdle_.find(instanceID);
+    if (trafficIt == instanceTrafficIdle_.end() || !trafficIt->second) {
+        return;
+    }
+    auto sessionIt = instanceActiveSessions_.find(instanceID);
+    if (sessionIt != instanceActiveSessions_.end() && sessionIt->second) {
+        YRLOG_DEBUG("instance({}) is running and idle but has active exec sessions, skip idle timer", instanceID);
+        return;
+    }
+    StartIdleTimer(instanceID);
+}
+
 void IdleActor::StartIdleTimer(const std::string &instanceID)
 {
     if (idleTimers_.find(instanceID) != idleTimers_.end()) {

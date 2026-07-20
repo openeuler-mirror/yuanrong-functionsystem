@@ -1,5 +1,5 @@
 #!/bin/bash
-# RuntimeLauncher 端到端测试脚本
+# SandboxService 端到端测试脚本
 # 用法: ./test.sh [镜像名称]
 # 示例: ./test.sh alpine:latest
 #       ./test.sh swr.cn-southwest-2.myhuaweicloud.com/yuanrong-dev/compile_x86:2.1
@@ -7,8 +7,11 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SERVER_BIN="$SCRIPT_DIR/bin/runtime/runtime-launcher"
-CLIENT_BIN="$SCRIPT_DIR/bin/rl-client"
+SERVER_BIN="${SERVER_BIN:-$SCRIPT_DIR/bin/runtime/runtime-launcher}"
+if [ ! -x "$SERVER_BIN" ] && [ -x "$SCRIPT_DIR/bin/runtime-launcher" ]; then
+    SERVER_BIN="$SCRIPT_DIR/bin/runtime-launcher"
+fi
+CLIENT_BIN="${CLIENT_BIN:-$SCRIPT_DIR/bin/rl-client}"
 SOCKET="/tmp/runtime-launcher-test.sock"
 IMAGE="${1:-swr.cn-southwest-2.myhuaweicloud.com/yuanrong-dev/compile_x86:2.1}"
 SERVER_PID=""
@@ -73,7 +76,7 @@ if [ ! -x "$SERVER_BIN" ] || [ ! -x "$CLIENT_BIN" ]; then
 fi
 
 echo "========================================"
-echo " RuntimeLauncher 端到端测试"
+echo " SandboxService 端到端测试"
 echo "========================================"
 echo "  服务端:  $SERVER_BIN"
 echo "  客户端:  $CLIENT_BIN"
@@ -107,8 +110,8 @@ run_test "Register — 注册运行时" \
 # ============================
 # 测试 2: List（应有 1 条）
 # ============================
-run_test "List — 查询已注册运行时（应有 1 条）" \
-    "$CLIENT_BIN" --socket "$SOCKET" --action list
+run_test "GetRegistered — 查询已注册运行时（应有 1 条）" \
+    "$CLIENT_BIN" --socket "$SOCKET" --action list-registered
 
 # ============================
 # 测试 3: Unregister
@@ -119,8 +122,8 @@ run_test "Unregister — 注销运行时" \
 # ============================
 # 测试 4: List（应为空）
 # ============================
-run_test "List — 查询已注册运行时（应为空）" \
-    "$CLIENT_BIN" --socket "$SOCKET" --action list
+run_test "GetRegistered — 查询已注册运行时（应为空）" \
+    "$CLIENT_BIN" --socket "$SOCKET" --action list-registered
 
 # ============================
 # 测试 5: Run 基本命令
@@ -169,6 +172,15 @@ if [ -z "$CID" ]; then
     echo -e "${RED}  => Start 失败，未获取到容器 ID${RESET}"
     FAILED=$((FAILED + 1))
 else
+    echo ""
+    echo "  List: 查询运行中 sandbox..."
+    LIST_OUT=$("$CLIENT_BIN" --socket "$SOCKET" --action list 2>&1)
+    echo "  $LIST_OUT"
+    if ! echo "$LIST_OUT" | grep -q "$CID"; then
+        echo -e "${RED}  => 失败（List 未返回已启动 sandbox）${RESET}"
+        FAILED=$((FAILED + 1))
+    fi
+
     # Wait
     echo ""
     echo "  Wait: 等待容器退出..."

@@ -272,3 +272,16 @@ InstanceManagerActor::OnInstanceWatchEvent()
 | 尚未选出 Leader | leaderHttpAddress 为空 → 503 | 保留上次有效配置 |
 | 自环检测（地址 = 自身） | 503 | 保留上次有效配置 |
 | 脑裂（两节点都认为自己是 Leader） | 各自提供本地缓存 | 降级但不中断（概率极低） |
+
+## Route-kind portForward contract
+
+Sandbox runtime 端口映射使用 `<routeKind>+<backendScheme>:hostPort:containerPort`，路由意图与后端协议保持正交：
+
+| Mapping | FunctionMaster | SandboxRouter |
+|---|---|---|
+| `direct+http:H:50090` | 不发布 | 缓存，供 `/direct/{safeID}` 使用 |
+| `tunnel+http:H:8765` | 发布 `/tunnel/{safeID}` | 缓存 |
+| `direct+http:H:8766` | 不发布 | 缓存，供 tunnel 内部 proxy 使用 |
+| `public+http:H:P` / `public+https:H:P` | 发布 `/{safeID}/{P}` | 缓存 |
+
+旧 `H:P`、`http:H:P`、`https:H:P`、`direct:H:P`、`tunnel:H:P` 继续兼容；旧 `tcp:H:P` 只按 public HTTP 兼容读取。未知 route kind、UDP 或非法端口跳过，不降级成 public route。每次 RUNNING 更新都原子替换实例路由集合，过滤后为空时也会删除旧路由。

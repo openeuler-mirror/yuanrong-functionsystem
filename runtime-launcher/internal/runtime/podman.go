@@ -61,6 +61,12 @@ func (p *PodmanRuntime) Stats(ctx context.Context, containerID string) (*Contain
 	return p.inner.Stats(ctx, containerID)
 }
 
+// List returns runtime-launcher managed containers from Podman.
+func (p *PodmanRuntime) List(ctx context.Context, id string) ([]*ContainerInfo, error) {
+	return p.inner.List(ctx, id)
+}
+
+// Close releases the underlying Podman client resources.
 func (p *PodmanRuntime) Close() error {
 	return p.inner.Close()
 }

@@ -26,6 +26,23 @@
 
 namespace functionsystem::runtime_manager {
 
+
+inline bool HasSandboxCustomRootfs(const messages::RuntimeInstanceInfo &info)
+{
+    const auto &opts = info.deploymentconfig().deployoptions();
+    if (opts.find("rootfs") != opts.end()) {
+        return true;
+    }
+    return info.has_container() && info.container().has_rootfsconfig();
+}
+
+inline bool HasSelfContainedSandboxBootstrap(const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    const auto &info = request->runtimeinstanceinfo();
+    const auto &bootstrapConfig = info.bootstrapconfig();
+    return HasSandboxCustomRootfs(info) && (!bootstrapConfig.entrypoint().empty() || !bootstrapConfig.cmd().empty());
+}
+
 inline std::vector<std::string> BuildBootstrapCommands(
     const std::shared_ptr<messages::StartInstanceRequest> &request)
 {

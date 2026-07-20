@@ -22,7 +22,7 @@
 #include <vector>
 
 #include "common/proto/pb/message_pb.h"
-#include "common/proto/pb/posix/runtime_launcher_interface.grpc.pb.h"
+#include "common/proto/pb/posix/sandbox_api.grpc.pb.h"
 #include "common/status/status.h"
 #include "config/build.h"
 #include "executor.h"
@@ -78,7 +78,7 @@ private:
                                  const std::string &hostUser = "");
 
     // Helper functions to reduce code duplication
-    void BuildRuntimeCommands(runtime::v1::FunctionRuntime *funcRt, const std::vector<std::string> &buildArgs);
+    void BuildRuntimeCommands(runtime::v1::StartRequest *request, const std::vector<std::string> &buildArgs);
 
     void SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs, const std::string &runtimeID,
                                        const std::string &hostUser);

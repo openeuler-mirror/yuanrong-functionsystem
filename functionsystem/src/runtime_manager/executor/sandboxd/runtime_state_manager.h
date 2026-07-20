@@ -25,7 +25,7 @@
 
 #include "async/future.hpp"
 #include "common/proto/pb/message_pb.h"
-#include "common/proto/pb/posix/runtime_launcher_interface.grpc.pb.h"
+#include "common/proto/pb/posix/sandbox_api.grpc.pb.h"
 
 namespace functionsystem::runtime_manager {
 
@@ -102,8 +102,7 @@ public:
 
     // ── In-progress start tracking ────────────────────────────────────────────
 
-    void MarkStartInProgress(const std::string &runtimeID,
-                             litebus::Future<messages::StartInstanceResponse> future);
+    void MarkStartInProgress(const std::string &runtimeID, litebus::Future<messages::StartInstanceResponse> future);
     void MarkStartDone(const std::string &runtimeID);
     bool IsStartInProgress(const std::string &runtimeID) const;
     /**
@@ -119,13 +118,6 @@ public:
     void ClearPendingDelete(const std::string &runtimeID);
     bool IsPendingDelete(const std::string &runtimeID) const;
 
-    // ── Warm-up state ─────────────────────────────────────────────────────────
-
-    void RegisterWarmUp(const std::string &runtimeID, runtime::v1::FunctionRuntime proto);
-    void UnregisterWarmUp(const std::string &runtimeID);
-    bool IsWarmUp(const std::string &runtimeID) const;
-    std::optional<runtime::v1::FunctionRuntime> GetWarmUp(const std::string &runtimeID) const;
-
 private:
     // Core sandbox state — single source of truth
     std::unordered_map<std::string, SandboxInfo> sandboxes_;
@@ -135,9 +127,6 @@ private:
 
     // Runtimes that should be stopped as soon as their in-progress start completes
     std::unordered_set<std::string> pendingDeletes_;
-
-    // Pre-warmed runtimes (registered but not yet materialized as a container)
-    std::unordered_map<std::string, runtime::v1::FunctionRuntime> warmUpMap_;
 };
 
 }  // namespace functionsystem::runtime_manager

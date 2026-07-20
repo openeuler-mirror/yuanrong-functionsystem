@@ -1,0 +1,119 @@
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ */
+
+#include "common/utils/port_forward_mapping.h"
+
+#include "gtest/gtest.h"
+
+namespace functionsystem {
+namespace {
+
+TEST(PortForwardMappingTest, ParsesCanonicalRouteKinds)
+{
+    auto direct = ParsePortForwardMapping("direct+http:40001:50090");
+    ASSERT_TRUE(direct.has_value());
+    EXPECT_EQ(direct->routeKind, PortRouteKind::DIRECT);
+    EXPECT_EQ(direct->backendScheme, "http");
+    EXPECT_EQ(direct->hostPort, 40001);
+    EXPECT_EQ(direct->containerPort, 50090);
+
+    auto tunnel = ParsePortForwardMapping("tunnel+http:40002:8765");
+    ASSERT_TRUE(tunnel.has_value());
+    EXPECT_EQ(tunnel->routeKind, PortRouteKind::TUNNEL);
+    EXPECT_EQ(tunnel->backendScheme, "http");
+}
+
+TEST(PortForwardMappingTest, ParsesPublicAndLegacyFormats)
+{
+    auto https = ParsePortForwardMapping("public+https:40003:8443");
+    ASSERT_TRUE(https.has_value());
+    EXPECT_EQ(https->routeKind, PortRouteKind::PUBLIC);
+    EXPECT_EQ(https->backendScheme, "https");
+
+    auto old = ParsePortForwardMapping("40004:8080");
+    ASSERT_TRUE(old.has_value());
+    EXPECT_EQ(old->routeKind, PortRouteKind::PUBLIC);
+    EXPECT_EQ(old->backendScheme, "http");
+    EXPECT_FALSE(old->legacyTransport);
+
+    auto tcp = ParsePortForwardMapping("tcp:40005:7000");
+    ASSERT_TRUE(tcp.has_value());
+    EXPECT_EQ(tcp->routeKind, PortRouteKind::PUBLIC);
+    EXPECT_TRUE(tcp->legacyTransport);
+    EXPECT_EQ(tcp->backendScheme, "http");
+
+    auto directShort = ParsePortForwardMapping("direct:40006:50090");
+    ASSERT_TRUE(directShort.has_value());
+    EXPECT_EQ(directShort->routeKind, PortRouteKind::DIRECT);
+    EXPECT_EQ(directShort->backendScheme, "http");
+    EXPECT_EQ(directShort->hostPort, 40006);
+    EXPECT_EQ(directShort->containerPort, 50090);
+
+    auto tunnelShort = ParsePortForwardMapping("tunnel:40007:8765");
+    ASSERT_TRUE(tunnelShort.has_value());
+    EXPECT_EQ(tunnelShort->routeKind, PortRouteKind::TUNNEL);
+    EXPECT_EQ(tunnelShort->backendScheme, "http");
+    EXPECT_EQ(tunnelShort->hostPort, 40007);
+    EXPECT_EQ(tunnelShort->containerPort, 8765);
+}
+
+TEST(PortForwardMappingTest, RejectsUnsupportedOrInvalidMappings)
+{
+    EXPECT_FALSE(ParsePortForwardMapping("direct+udp:40001:53").has_value());
+    EXPECT_FALSE(ParsePortForwardMapping("unknown+http:40001:80").has_value());
+    EXPECT_FALSE(ParsePortForwardMapping("public:40001:80").has_value());
+    EXPECT_FALSE(ParsePortForwardMapping("http:0:80").has_value());
+    EXPECT_FALSE(ParsePortForwardMapping("http:40001:65536").has_value());
+    EXPECT_FALSE(ParsePortForwardMapping("a:b:c:d").has_value());
+}
+
+TEST(PortForwardMappingTest, FormatsCanonicalMappings)
+{
+    EXPECT_EQ(FormatPortForwardMapping({PortRouteKind::DIRECT, "http", 40001, 50090, false}),
+              "direct+http:40001:50090");
+    EXPECT_EQ(FormatPortForwardMapping({PortRouteKind::TUNNEL, "https", 40002, 8765, false}),
+              "tunnel+https:40002:8765");
+    EXPECT_EQ(FormatPortForwardMapping({PortRouteKind::PUBLIC, "http", 40003, 8080, false}),
+              "public+http:40003:8080");
+}
+
+TEST(PortForwardMappingTest, FormatsTransportProtocolsAsCanonicalBackendSchemes)
+{
+    EXPECT_EQ(FormatPortForwardMapping({PortRouteKind::PUBLIC, "tcp", 40001, 8080, false}),
+              "public+http:40001:8080");
+    EXPECT_EQ(FormatPortForwardMapping({PortRouteKind::PUBLIC, "ws", 40002, 8081, false}),
+              "public+http:40002:8081");
+    EXPECT_EQ(FormatPortForwardMapping({PortRouteKind::PUBLIC, "wss", 40003, 8443, false}),
+              "public+https:40003:8443");
+}
+
+TEST(PortForwardMappingTest, RejectsUnknownRouteKindWhenFormatting)
+{
+    EXPECT_TRUE(FormatPortForwardMapping(
+                    {static_cast<PortRouteKind>(99), "http", 40001, 8080, false})
+                    .empty());
+}
+
+TEST(PortForwardMappingTest, LegacyTransportIsCanonicalizedWhenFormatted)
+{
+    const auto legacy = ParsePortForwardMapping("tcp:40001:8080");
+    ASSERT_TRUE(legacy.has_value());
+    ASSERT_TRUE(legacy->legacyTransport);
+
+    const auto canonical = FormatPortForwardMapping(*legacy);
+    EXPECT_EQ(canonical, "public+http:40001:8080");
+    const auto reparsed = ParsePortForwardMapping(canonical);
+    ASSERT_TRUE(reparsed.has_value());
+    EXPECT_FALSE(reparsed->legacyTransport);
+    EXPECT_EQ(reparsed->routeKind, PortRouteKind::PUBLIC);
+}
+
+}  // namespace
+}  // namespace functionsystem

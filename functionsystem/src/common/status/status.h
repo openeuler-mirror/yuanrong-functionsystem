@@ -413,6 +413,9 @@ enum StatusCode : int32_t {
     RUNTIME_MANAGER_RUNTIME_NOT_FOUND,
     RUNTIME_MANAGER_CHECKPOINT_FAILED,
     RUNTIME_MANAGER_CHECKPOINT_REGISTER_FAILED,
+    // Operation is not implemented by the active executor backend
+    // (e.g. sandboxd SandboxService has no Register/Checkpoint/restore RPCs).
+    RUNTIME_MANAGER_NOT_IMPLEMENTED,
 
     // Checkpoint errors
     ERR_CHECKPOINT_NOT_FOUND,

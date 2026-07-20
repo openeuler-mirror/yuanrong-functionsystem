@@ -2,6 +2,20 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("//bazel:grpc_upb_repository.bzl", "grpc_upb_repository")
 
 def preload_grpc():
+    # Use one shared gRPC/GPR implementation when DataSystem is loaded into
+    # FunctionSystem processes; static duplicates register gflags twice.
+    native.new_local_repository(
+        name = "grpc_runtime_libs",
+        build_file = "//bazel:grpc_runtime_libs.BUILD",
+        path = "./vendor/src/datasystem/sdk/cpp/lib",
+    )
+
+    native.new_local_repository(
+        name = "grpc_runtime",
+        build_file = "//bazel:grpc_runtime.BUILD",
+        path = "./vendor/src/grpc",
+    )
+
     # abseil-cpp — gitee.com mirror zip
     http_archive(
         name = "com_google_absl",
@@ -12,12 +26,11 @@ def preload_grpc():
         ],
     )
 
-    # protobuf v3.25.5 — GitHub zip (gitee.com mirror uses protobuf_source which lacks Bazel BUILD files)
-    http_archive(
+    # protobuf v3.25.5 — the vendor step already extracts a Bazel-ready source
+    # tree. Reuse it instead of fetching the same sources from GitHub again.
+    native.local_repository(
         name = "com_google_protobuf",
-        strip_prefix = "protobuf-3.25.5",
-        sha256 = "747e7477cd959878998145626b49d6f1b9d46065f2fe805622ff5702334f7cb7",
-        urls = ["https://github.com/protocolbuffers/protobuf/archive/refs/tags/v3.25.5.zip"],
+        path = "./vendor/src/protobuf",
     )
 
     # utf8_range (required by protobuf)
@@ -49,11 +62,11 @@ def preload_grpc():
         path = Label("@com_github_grpc_grpc//:WORKSPACE"),
     )
 
-    # boringssl/openssl — local vendor source
+    # boringssl/openssl — cache-managed vendor installation
     native.new_local_repository(
         name = "boringssl",
         build_file = "//bazel:openssl.bazel",
-        path = "./vendor/src/openssl/",
+        path = "./vendor/output/Install/openssl/",
     )
 
     # re2 — gitee.com mirror zip

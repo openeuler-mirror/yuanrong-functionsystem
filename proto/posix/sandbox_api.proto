@@ -1,0 +1,394 @@
+// Copyright (c) 2026 Huawei Technologies Co., Ltd. All rights reserved.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package runtime.v1;
+
+option go_package = "runtime-launcher/api/proto/runtime/v1;runtimev1";
+
+// SandboxService manages sandbox lifecycle and inspection operations.
+service SandboxService {
+  // Start creates and starts a sandbox.
+  rpc Start(StartRequest) returns (StartResponse) {}
+  // Restore creates a sandbox from a checkpoint.
+  rpc Restore(RestoreRequest) returns (RestoreResponse) {}
+  // Delete stops and deletes a sandbox.
+  rpc Delete(DeleteRequest) returns (DeleteResponse) {}
+  // Wait waits for a sandbox to exit.
+  rpc Wait(WaitRequest) returns (WaitResponse) {}
+  // List lists sandboxes by filters.
+  rpc List(ListSandboxesRequest) returns (ListSandboxesResponse) {}
+  // Stats returns resource usage statistics for a sandbox.
+  rpc Stats(StatsRequest) returns (StatsResponse) {}
+
+  // Register registers reusable sandbox templates.
+  rpc Register(RegisterRequest) returns (NormalResponse) {}
+  // Unregister unregisters reusable sandbox templates.
+  rpc Unregister(UnregisterRequest) returns (NormalResponse) {}
+  // GetRegistered returns registered reusable sandbox templates.
+  rpc GetRegistered(GetRegisteredRequest) returns (GetRegisteredResponse) {}
+  // Checkpoint checkpoints a sandbox.
+  rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
+}
+
+// RootfsSrcType identifies the root filesystem source type.
+enum RootfsSrcType {
+  S3    = 0;
+  IMAGE = 1;
+  LOCAL = 2;
+}
+
+// S3Config describes an S3 object source.
+message S3Config {
+  string endpoint          = 1;
+  string bucket            = 2;
+  string object            = 3;
+  string access_key_id     = 4;
+  string access_key_secret = 5;
+}
+
+// RootfsConfig describes the sandbox root filesystem source.
+message RootfsConfig {
+  // Readonly makes the root filesystem read-only when true.
+  bool readonly = 1;
+  // Type identifies the root filesystem source type.
+  RootfsSrcType type = 2;
+  oneof source {
+    // ImageURL is the image URL used as the root filesystem source.
+    string image_url = 3;
+    // S3Config is the S3 object used as the root filesystem source.
+    S3Config s3_config = 4;
+    // Path is a local directory or file used as the root filesystem source.
+    string path = 5;
+  }
+}
+
+// Mount describes an additional mount attached to the sandbox.
+message Mount {
+  // Type identifies the mount type, such as bind, volume, or tmpfs.
+  string type = 1;
+  // Target is the mount target path inside the sandbox.
+  string target = 2;
+  // Options contains zero or more fstab-style mount options.
+  repeated string options = 3;
+  oneof source {
+    // HostPath is a host path for bind mounts or a volume name.
+    string host_path = 10;
+    // S3Config is the S3 object used as the mount source.
+    S3Config s3_config = 11;
+    // ImageURL is the OCI image URL used as the mount source.
+    string image_url = 12;
+  }
+}
+
+// StartRequest describes a sandbox start request.
+message StartRequest {
+  // SandboxID is an optional caller-provided sandbox ID. sandboxd generates one when empty.
+  string sandbox_id = 1;
+  // TemplateID is the registered SandboxTemplate ID to start from. Only requests
+  // with this field set are eligible to reuse a registered seed/fork path.
+  string template_id = 2;
+  // Runtime is the runtime handler name, such as runsc.
+  string runtime = 3;
+  // Rootfs is the root filesystem source used by the sandbox.
+  RootfsConfig rootfs = 4;
+  // Command is the executable and arguments to run inside the sandbox.
+  repeated string command = 5;
+  // Cwd is the working directory inside the sandbox.
+  string cwd = 6;
+  // Envs contains environment variables for the sandbox process.
+  map<string, string> envs = 7;
+  // Mounts contains additional mounts attached to the sandbox.
+  repeated Mount mounts = 8;
+  // Resources contains sandbox resource requests. CPU is millicores and memory is MB.
+  map<string, double> resources = 9;
+  // Stdout is the redirect path for stdout. Empty means stdout is discarded to /dev/null.
+  string stdout = 10;
+  // Stderr is the redirect path for stderr. Empty means stderr is discarded to /dev/null.
+  string stderr = 11;
+  // ExtraConfig is a JSON string for runtime-specific configuration.
+  string extra_config = 12;
+  // Network is the network mode. Empty means sandbox network; supported values are sandbox, host, and none.
+  string network = 13;
+  // TraceID is an optional distributed trace ID.
+  string trace_id = 14;
+  // Ports contains port forwarding entries in "protocol:dstPort:targetPort" format.
+  repeated string ports = 15;
+  // Labels contains sandbox labels used for selection and runtime metadata.
+  map<string, string> labels = 16;
+  // MetricLabels contains sandbox metadata intended for metric dimensions.
+  map<string, string> metric_labels = 17;
+}
+
+// StartResponse is returned after sandbox start.
+message StartResponse {
+  // Code is 0 on success.
+  int32 code = 1;
+  // Message contains details about the start result.
+  string message = 2;
+  // ID is the unique sandbox ID.
+  string id = 3;
+}
+
+// RestoreRequest describes a sandbox restore request.
+message RestoreRequest {
+  // Sandbox contains the sandbox spec to create from a checkpoint.
+  StartRequest sandbox = 1;
+  // CheckpointDir is the directory containing checkpoint artifacts.
+  string checkpoint_dir = 2;
+}
+
+// RestoreResponse is returned after sandbox restore.
+message RestoreResponse {
+  // Code is 0 on success.
+  int32 code = 1;
+  // Message contains details about the restore result.
+  string message = 2;
+  // ID is the unique sandbox ID.
+  string id = 3;
+}
+
+// DeleteRequest describes a sandbox delete request.
+message DeleteRequest {
+  // ID is the sandbox ID.
+  string id = 1;
+  // Timeout is the number of seconds to wait for graceful stop before force delete.
+  int64 timeout = 2;
+}
+
+// DeleteResponse is returned after sandbox delete.
+message DeleteResponse {}
+
+// WaitRequest describes a sandbox wait request.
+message WaitRequest {
+  // ID is the sandbox ID.
+  string id = 1;
+}
+
+// WaitResponse is returned after waiting for a sandbox.
+message WaitResponse {
+  // Status is the sandbox wait status.
+  int32 status = 1;
+  // Exit code of the sandbox. Only required when finished_at != 0. Default: 0.
+  int32 exit_code = 2;
+  // Message contains details about the sandbox state.
+  string message = 3;
+}
+
+// SandboxTemplate describes a reusable sandbox template registered in sandboxd.
+message SandboxTemplate {
+  // ID is the registered template ID.
+  string id = 1;
+  // Runtime is the runtime handler name, such as runsc.
+  string runtime = 2;
+  // Rootfs is the root filesystem source used by the template.
+  RootfsConfig rootfs = 3;
+  // MakeSeed asks sandboxd to pre-create a seed sandbox when supported.
+  bool make_seed = 4;
+  // Command is the executable and arguments to run inside the sandbox.
+  repeated string command = 5;
+  // Envs contains environment variables for the sandbox process.
+  map<string, string> envs = 6;
+  // Cwd is the working directory inside the sandbox.
+  string cwd = 7;
+  // Mounts contains additional mounts attached to the sandbox.
+  repeated Mount mounts = 8;
+}
+
+// RegisterRequest describes sandbox template registration.
+message RegisterRequest {
+  // Templates contains sandbox templates to register.
+  repeated SandboxTemplate templates = 1;
+}
+
+// NormalResponse is returned by template registration operations.
+message NormalResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+// UnregisterRequest describes sandbox template removal.
+message UnregisterRequest {
+  // IDs contains sandbox template IDs to unregister.
+  repeated string ids = 1;
+}
+
+// GetRegisteredRequest describes a registered sandbox template list request.
+message GetRegisteredRequest {}
+
+// GetRegisteredResponse contains registered sandbox templates.
+message GetRegisteredResponse {
+  // Templates contains registered sandbox templates.
+  repeated SandboxTemplate templates = 1;
+}
+
+// CheckpointRequest describes a sandbox checkpoint request.
+message CheckpointRequest {
+  // ID is the sandbox ID.
+  string id = 1;
+  // CheckpointDir is the output directory for checkpoint artifacts.
+  string checkpoint_dir = 2;
+  // Timeout is the number of seconds to wait for checkpoint completion.
+  int64 timeout = 3;
+  // Compress enables checkpoint artifact compression when true.
+  bool compress = 4;
+  // TraceID is an optional distributed trace ID.
+  string trace_id = 5;
+}
+
+// CheckpointResponse is returned after sandbox checkpoint.
+message CheckpointResponse {
+  bool   success = 1;
+  string message = 2;
+}
+
+// ListSandboxesRequest describes a sandbox list request.
+message ListSandboxesRequest {
+  // ID filters by sandbox ID when set.
+  string id = 1;
+  // Selector filters sandboxes by labels. Empty selector lists all sandboxes.
+  map<string, string> selector = 10;
+}
+
+// ListSandboxesResponse contains sandbox list results.
+message ListSandboxesResponse {
+  // Sandboxes contains matching sandbox statuses.
+  repeated SandboxStatus sandboxes = 1;
+}
+
+// SandboxState is the persisted lifecycle state of a sandbox.
+enum SandboxState {
+  SANDBOX_STATE_RUNNING = 0;
+  SANDBOX_STATE_EXITED  = 1;
+  SANDBOX_STATE_UNKNOWN = 2;
+}
+
+// SandboxStatus describes the current status and metadata of a sandbox.
+message SandboxStatus {
+  // ID is the sandbox ID.
+  string id = 1;
+  // Command is the executable and arguments configured for the sandbox.
+  repeated string command = 2;
+  // Runtime is the runtime handler name.
+  string runtime = 3;
+  // State is the current sandbox lifecycle state.
+  SandboxState state = 4;
+  // StartedAt is the sandbox start timestamp in Unix seconds.
+  int64 started_at = 5;
+  // FinishedAt is the sandbox finish timestamp in Unix seconds.
+  int64 finished_at = 6;
+  // ExitCode is the sandbox process exit code when available.
+  int32 exit_code = 7;
+  // Message contains details about the sandbox state.
+  string message = 8;
+  // Labels contains sandbox labels.
+  map<string, string> labels = 9;
+  // Mounts contains additional mounts attached to the sandbox.
+  repeated Mount mounts = 10;
+  // Envs contains environment variables configured for the sandbox.
+  repeated KeyValue envs = 11;
+  // Stdout is the configured stdout redirect path.
+  string stdout = 12;
+  // Stderr is the configured stderr redirect path.
+  string stderr = 13;
+  // Resources contains Linux resource settings for the sandbox.
+  LinuxSandboxResources resources = 14;
+  // MetricLabels contains sandbox metadata intended for metric dimensions.
+  map<string, string> metric_labels = 15;
+}
+
+// KeyValue represents a string key-value pair.
+message KeyValue {
+  // Key is the entry key.
+  string key   = 1;
+  // Value is the entry value.
+  string value = 2;
+}
+
+// LinuxSandboxResources describes Linux resource settings for a sandbox.
+message LinuxSandboxResources {
+  // CPUPeriod is the CPU CFS period in microseconds.
+  uint64 cpu_period = 1;
+  // CPUQuota is the CPU CFS quota in microseconds.
+  int64 cpu_quota = 2;
+  // CPUShares is the relative CPU share weight.
+  uint64 cpu_shares = 3;
+  // MemoryLimitInBytes is the memory limit in bytes.
+  int64 memory_limit_in_bytes = 4;
+  // OomScoreAdj is the OOM score adjustment.
+  int64 oom_score_adj = 5;
+  // CpusetCpus is the allowed CPU set.
+  string cpuset_cpus = 6;
+  // CpusetMems is the allowed memory node set.
+  string cpuset_mems = 7;
+  // HugepageLimits contains hugepage limits by page size.
+  repeated HugepageLimit hugepage_limits = 8;
+  // Unified contains cgroup v2 unified controller settings.
+  map<string, string> unified = 9;
+  // MemorySwapLimitInBytes is the memory plus swap limit in bytes.
+  int64 memory_swap_limit_in_bytes = 10;
+}
+
+// HugepageLimit describes a hugepage limit for one page size.
+message HugepageLimit {
+  // PageSize is the hugepage size.
+  string page_size = 1;
+  // Limit is the hugepage limit in bytes.
+  uint64 limit = 2;
+}
+
+// SandboxMetadata contains the persisted metadata for a sandbox.
+message SandboxMetadata {
+  // ID is the sandbox ID.
+  string id = 1;
+  // RuntimeHandler is the runtime handler name.
+  string runtime_handler = 3;
+  // Labels contains sandbox labels.
+  map<string, string> labels = 4;
+  // Stdout is the configured stdout redirect path.
+  string stdout = 6;
+  // Stderr is the configured stderr redirect path.
+  string stderr = 7;
+  // MetricLabels contains sandbox metadata intended for metric dimensions.
+  map<string, string> metric_labels = 8;
+}
+
+// SandboxMetadataList contains persisted sandbox metadata entries.
+message SandboxMetadataList {
+  // Sandboxes maps sandbox ID to sandbox metadata.
+  map<string, SandboxMetadata> sandboxes = 1;
+}
+
+// StatsRequest describes a sandbox stats request.
+message StatsRequest {
+  // ID is the sandbox ID.
+  string id = 1;
+}
+
+// StatsResponse contains sandbox resource usage statistics.
+message StatsResponse {
+  // Total CPU usage in nanoseconds.
+  uint64 cpu_usage_ns = 1;
+  // Current memory usage in bytes.
+  uint64 memory_usage_bytes = 2;
+  // Memory limit in bytes.
+  uint64 memory_limit_bytes = 3;
+  // Maximum memory usage observed in bytes.
+  uint64 memory_max_usage_bytes = 4;
+  // CPU usage in kernel mode in nanoseconds.
+  uint64 cpu_kernel_ns = 5;
+  // CPU usage in user mode in nanoseconds.
+  uint64 cpu_user_ns = 6;
+}

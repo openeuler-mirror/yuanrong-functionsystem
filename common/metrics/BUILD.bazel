@@ -133,6 +133,29 @@ cc_binary(
 )
 
 cc_binary(
+    name = "libobservability-prometheus-pull-exporter.so",
+    srcs = glob([
+        "src/exporters/prometheus_pull_exporter/*.cpp",
+        "src/exporters/common/*.cpp",
+        "src/exporters/prometheus_pull_exporter/**/*.h",
+        "src/exporters/common/**/*.h",
+    ]),
+    includes = ["src"],
+    linkshared = True,
+    linkstatic = True,
+    deps = [
+        ":metrics_headers",
+        ":metrics_internal_headers",
+        ":metrics_common",
+        "//common/logs:yrlogs",
+        "@boringssl//:ssl",
+        "@litebus//:litebus",
+        "@nlohmann_json//:nlohmann_json",
+        "@securec//:securec",
+    ],
+)
+
+cc_binary(
     name = "libobservability-metrics-opentelemetry-exporter.so",
     srcs = glob([
         "src/exporters/opentelemetry_exporter/*.cpp",

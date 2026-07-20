@@ -10,10 +10,14 @@ Workflow:
 """
 
 import os
+import re
 import shutil
+import subprocess
 from glob import glob
 
 import utils
+
+from .build_cpp import version_name
 
 log = utils.stream_logger()
 
@@ -47,7 +51,13 @@ PROTO_TOOL_TARGETS = [
 EXPORTER_TARGETS = [
     "//common/metrics:libobservability-metrics-file-exporter.so",
     "//common/metrics:libobservability-prometheus-push-exporter.so",
+    "//common/metrics:libobservability-prometheus-pull-exporter.so",
     "//common/metrics:libobservability-metrics-opentelemetry-exporter.so",
+]
+
+# Shared libraries loaded explicitly with dlopen by production binaries.
+RUNTIME_PLUGIN_TARGETS = [
+    ("//functionsystem/src/common:libyaml_tool_plugin.so", "libyaml_tool.so"),
 ]
 
 TEST_TARGETS = [
@@ -56,6 +66,7 @@ TEST_TARGETS = [
 ]
 
 PROTO_FILES = [
+    "agent_plugin.proto",
     "common.proto",
     "core_service.proto",
     "runtime_rpc.proto",
@@ -66,15 +77,16 @@ PROTO_FILES = [
     "message.proto",
     "resource.proto",
     "bus_adapter.proto",
-    "runtime_launcher_interface.proto",
+    "sandbox_api.proto",
     "exec_service.proto",
 ]
 
 GRPC_PROTO_FILES = [
+    "agent_plugin.proto",
     "runtime_rpc.proto",
     "inner_service.proto",
     "bus_service.proto",
-    "runtime_launcher_interface.proto",
+    "sandbox_api.proto",
     "exec_service.proto",
 ]
 
@@ -104,7 +116,110 @@ def ensure_bazel_deps(root_dir: str):
         log.warning(f"download_bazel_deps.sh not found at {script}, skipping.")
         return
     log.info("Ensuring Bazel dependency archives are present...")
-    utils.sync_command(["bash", script], cwd=root_dir)
+    env = os.environ.copy()
+    repository_cache = _bazel_repository_cache()
+    if repository_cache and not env.get("BAZEL_REPO_CACHE"):
+        env["BAZEL_REPO_CACHE"] = os.path.join(repository_cache, "content_addressable", "sha256")
+    utils.sync_command(["bash", script], cwd=root_dir, env=env)
+
+
+def resolve_bazel_output_root(root_dir: str) -> str:
+    """Resolve Bazel's output root from the caller environment."""
+    configured = os.environ.get("FUNCTIONSYSTEM_BAZEL_OUTPUT_ROOT")
+    if not configured:
+        return os.path.join(root_dir, "build", "bazel_root")
+    configured = os.path.expanduser(configured)
+    return configured if os.path.isabs(configured) else os.path.join(root_dir, configured)
+
+
+def _bazel_repository_cache() -> str:
+    configured = os.environ.get("FUNCTIONSYSTEM_BAZEL_REPOSITORY_CACHE", "")
+    return os.path.abspath(os.path.expanduser(configured)) if configured else ""
+
+
+def bazel_cache_flags() -> list[str]:
+    """Return repository and remote-cache flags selected by the caller."""
+    flags = []
+    repository_cache = _bazel_repository_cache()
+    if repository_cache:
+        flags.append(f"--repository_cache={repository_cache}")
+    remote_cache = os.environ.get("REMOTE_CACHE", "")
+    if remote_cache:
+        flags.append(f"--remote_cache={remote_cache}")
+    return flags
+
+
+def configure_shared_grpc_runtime(root_dir: str):
+    """Route Bazel gRPC consumers through the vendor shared runtime.
+
+    DataSystem is already linked against the gRPC shared objects shipped in
+    its SDK.  Statically linking Bazel's gRPC implementation into the
+    same process registers gflags such as ``grpc_experiments`` twice and aborts
+    before main().  Keep the upstream gRPC repository for headers, compiler
+    tools, and its subpackages, but replace its public runtime targets with
+    aliases to those same SDK shared libraries.
+    """
+    grpc_build = os.path.join(root_dir, "vendor", "src", "grpc", "BUILD")
+    if not os.path.isfile(grpc_build):
+        raise RuntimeError(f"gRPC Bazel BUILD file not found: {grpc_build}")
+
+    with open(grpc_build, "r", encoding="utf-8") as file_obj:
+        content = file_obj.read()
+
+    updated = content
+    runtime_targets = (
+        ("grpc", "@grpc_runtime//:grpc"),
+        ("grpc++", "@grpc_runtime//:grpcpp"),
+        ("gpr", "@grpc_runtime//:gpr"),
+    )
+    for name, actual in runtime_targets:
+        updated = _replace_grpc_runtime_target(updated, name, actual)
+
+    if updated != content:
+        with open(grpc_build, "w", encoding="utf-8") as file_obj:
+            file_obj.write(updated)
+        log.info("Configured Bazel gRPC targets to use the vendor shared runtime.")
+
+
+def _replace_grpc_runtime_target(content: str, name: str, actual: str) -> str:
+    alias = (
+        "alias(\n"
+        f'    name = "{name}",\n'
+        f'    actual = "{actual}",\n'
+        '    visibility = ["//visibility:public"],\n'
+        ")"
+    )
+    if alias in content:
+        return content
+
+    target = re.search(rf'grpc_cc_library\(\n\s+name = "{re.escape(name)}",', content)
+    if target is None:
+        raise RuntimeError(f"Unable to locate gRPC Bazel target {name!r} for shared-runtime replacement")
+
+    start = target.start()
+    depth = 0
+    quote = None
+    escaped = False
+    for offset in range(content.find("(", start), len(content)):
+        char = content[offset]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in ('"', "'"):
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return content[:start] + alias + content[offset + 1:]
+
+    raise RuntimeError(f"Unterminated gRPC Bazel target {name!r}")
 
 
 def build_proto_tools(root_dir: str, bazel_output_root: str, distdir: str, job_num: int):
@@ -124,6 +239,7 @@ def build_proto_tools(root_dir: str, bazel_output_root: str, distdir: str, job_n
         "build",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
+        *bazel_cache_flags(),
         "--config=release",
         *PROTO_TOOL_TARGETS,
     ]
@@ -146,6 +262,7 @@ def generate_proto_sources(root_dir: str):
 
     proto_root = os.path.join(root_dir, "proto", "posix")
     output_dir = os.path.join(root_dir, "functionsystem", "src", "common", "proto", "pb", "posix")
+    protobuf_include = _find_protobuf_include(root_dir, protoc)
     os.makedirs(output_dir, exist_ok=True)
     plugin_env = _build_grpc_plugin_env(root_dir, grpc_cpp_plugin)
 
@@ -164,6 +281,7 @@ def generate_proto_sources(root_dir: str):
     cpp_cmd = [
         protoc,
         f"-I{proto_root}",
+        f"-I{protobuf_include}",
         f"--cpp_out={output_dir}",
         *PROTO_FILES,
     ]
@@ -172,6 +290,7 @@ def generate_proto_sources(root_dir: str):
     grpc_cmd = [
         protoc,
         f"-I{proto_root}",
+        f"-I{protobuf_include}",
         f"--grpc_out={output_dir}",
         f"--plugin=protoc-gen-grpc={grpc_cpp_plugin}",
         *GRPC_PROTO_FILES,
@@ -244,6 +363,26 @@ def _find_grpc_cpp_plugin(root_dir: str):
     return None
 
 
+def _find_protobuf_include(root_dir: str, protoc: str):
+    """Locate the well-known proto sources paired with the selected protoc."""
+    protoc_realpath = os.path.realpath(protoc)
+    bazel_out_marker = f"{os.sep}bazel-out{os.sep}"
+    candidates = []
+    if bazel_out_marker in protoc_realpath:
+        execroot = protoc_realpath.split(bazel_out_marker, 1)[0]
+        candidates.append(os.path.join(execroot, "external", "com_google_protobuf", "src"))
+    candidates.extend(
+        [
+            os.path.join(root_dir, "bazel-functionsystem", "external", "com_google_protobuf", "src"),
+            os.path.join(root_dir, "vendor", "output", "Install", "protobuf", "include"),
+        ]
+    )
+    for candidate in candidates:
+        if os.path.isfile(os.path.join(candidate, "google", "protobuf", "any.proto")):
+            return candidate
+    raise RuntimeError("protobuf well-known proto sources not found for generated C++ sources")
+
+
 def _find_protoc(root_dir: str):
     # Prefer Bazel-built protoc (statically linked, no LD_LIBRARY_PATH needed)
     bazel_protoc = os.path.join(root_dir, "bazel-bin", "external", "com_google_protobuf", "protoc")
@@ -296,6 +435,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     """
     check_bazel_available()
     ensure_bazel_deps(root_dir)
+    generate_version_header(root_dir, version)
 
     # Determine bazel config flag
     config = "release" if build_type.lower() == "release" else "debug"
@@ -312,7 +452,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     # Without this, the default output root lands on Docker overlayfs (/root/.cache/bazel/),
     # which is NOT a bind mount, so linux-sandbox cannot resolve symlinks into the execroot.
     # This mirrors yuanrong's build.sh: --output_user_root="${BASE_DIR}/build".
-    bazel_output_root = os.path.join(root_dir, "build", "bazel_root")
+    bazel_output_root = resolve_bazel_output_root(root_dir)
     os.makedirs(bazel_output_root, exist_ok=True)
 
     # thirdparty/runtime_deps holds pre-downloaded tarballs (e.g. rules_apple)
@@ -324,18 +464,21 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     # This produces bazel-bin/external/com_google_protobuf/protoc and
     # bazel-bin/external/com_github_grpc_grpc/src/compiler/grpc_cpp_plugin,
     # replacing the CMake-built tools from vendor/output/Install/protobuf|grpc/.
+    configure_shared_grpc_runtime(root_dir)
     build_proto_tools(root_dir, bazel_output_root, distdir, job_num)
     generate_proto_sources(root_dir)
 
-    # Build all binary targets plus metrics exporter plugins
+    # Build all binary targets plus runtime and metrics exporter plugins.
     bazel_cmd = [
         "bazel",
         f"--output_user_root={bazel_output_root}",
         "build",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
+        *bazel_cache_flags(),
         f"--config={config}",
         *build_targets,
+        *(target for target, _ in RUNTIME_PLUGIN_TARGETS),
         *EXPORTER_TARGETS,
     ]
     utils.sync_command(bazel_cmd, cwd=root_dir)
@@ -345,8 +488,63 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
 
     # Copy required shared libraries to functionsystem/output/lib/
     _copy_shared_libraries(root_dir, output_dir)
+    _install_metrics_outputs(root_dir)
 
     log.info(f"Bazel build complete. Binaries installed to {bin_output_dir}")
+
+
+def generate_version_header(root_dir: str, version: str):
+    """Generate the ignored version header that CMake normally configures."""
+    template_path = os.path.join(root_dir, "functionsystem", "src", "common", "utils", "version.h.in")
+    output_path = os.path.join(root_dir, "functionsystem", "src", "common", "utils", "version.h")
+
+    def git_output(*args: str) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=root_dir,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else "Unknown"
+
+    with open(template_path, encoding="utf-8") as template_file:
+        content = template_file.read()
+    replacements = {
+        "@BUILD_VERSION@": version_name(version),
+        "@GIT_HASH@": git_output("log", "-1", "--pretty=format:[%H] [%ai]"),
+        "@GIT_BRANCH_NAME@": git_output("symbolic-ref", "--short", "-q", "HEAD"),
+    }
+    for placeholder, value in replacements.items():
+        content = content.replace(placeholder, value)
+    with open(output_path, "w", encoding="utf-8") as output_file:
+        output_file.write(content)
+
+
+def _install_metrics_outputs(root_dir: str):
+    """Create the metrics install layout consumed by the packaging command."""
+    metrics_dir = os.path.join(root_dir, "common", "metrics")
+    output_dir = os.path.join(metrics_dir, "output")
+    include_dir = os.path.join(output_dir, "include")
+    lib_dir = os.path.join(output_dir, "lib")
+    shutil.rmtree(include_dir, ignore_errors=True)
+    shutil.rmtree(lib_dir, ignore_errors=True)
+
+    header_trees = [
+        ("include/metrics", "metrics"),
+        ("src/api/include", "api/include"),
+        ("src/common/include", "common/include"),
+        ("src/sdk/include", "sdk/include"),
+        ("src/exporters/file_exporter/include", "exporters/file_exporter/include"),
+    ]
+    for source, destination in header_trees:
+        shutil.copytree(os.path.join(metrics_dir, source), os.path.join(include_dir, destination))
+
+    os.makedirs(lib_dir, exist_ok=True)
+    bazel_metrics_dir = os.path.join(root_dir, "bazel-bin", "common", "metrics")
+    for target in EXPORTER_TARGETS:
+        library_name = target.rsplit(":", 1)[1]
+        shutil.copy2(os.path.join(bazel_metrics_dir, library_name), os.path.join(lib_dir, library_name))
 
 
 def build_gtest_bazel(root_dir: str, job_num: int):
@@ -358,6 +556,7 @@ def build_gtest_bazel(root_dir: str, job_num: int):
         "build",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
+        *bazel_cache_flags(),
         "--config=debug",
         *TEST_TARGETS,
     ]
@@ -393,6 +592,7 @@ def run_gtest_bazel(root_dir: str, job_num: int, test_suite: str = "*", test_cas
         "test",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
+        *bazel_cache_flags(),
         "--config=debug",
         *_bazel_test_env_flags(root_dir),
         f"--test_arg=--gtest_filter={gtest_filter}",
@@ -405,11 +605,13 @@ def run_gtest_bazel(root_dir: str, job_num: int, test_suite: str = "*", test_cas
 def _prepare_bazel_workspace(root_dir: str, job_num: int):
     check_bazel_available()
     ensure_bazel_deps(root_dir)
+    generate_version_header(root_dir, "0.0.0")
 
-    bazel_output_root = os.path.join(root_dir, "build", "bazel_root")
+    bazel_output_root = resolve_bazel_output_root(root_dir)
     os.makedirs(bazel_output_root, exist_ok=True)
     distdir = os.path.join(root_dir, "thirdparty", "runtime_deps")
 
+    configure_shared_grpc_runtime(root_dir)
     build_proto_tools(root_dir, bazel_output_root, distdir, job_num)
     generate_proto_sources(root_dir)
     return bazel_output_root, distdir
@@ -453,6 +655,7 @@ def _copy_shared_libraries(root_dir: str, output_dir: str):
       logs (//common/logs:yrlogs)       → statically linked into consumers; no .so needed
       metrics API/SDK                   → statically linked into binaries; no .so needed
       OTel (@opentelemetry_cpp)         → statically linked into binaries; plugin linkage follows Bazel plugin targets
+      runtime plugins                   → cc_binary(linkshared) in bazel-bin/functionsystem/src/common/
       metrics exporter plugins          → cc_binary(linkshared) in bazel-bin/common/metrics/
 
     Pre-built .so dependencies still needed at runtime:
@@ -496,11 +699,21 @@ def _copy_shared_libraries(root_dir: str, output_dir: str):
     # Stage Bazel-built metrics exporter plugins (cc_binary linkshared=True).
     # These are loaded at runtime via dlopen from <binary_dir>/../lib/.
     bazel_bin = os.path.join(root_dir, "bazel-bin")
-    exporter_so_names = [
-        "libobservability-metrics-file-exporter.so",
-        "libobservability-prometheus-push-exporter.so",
-        "libobservability-metrics-opentelemetry-exporter.so",
-    ]
+
+    # Stage plugins loaded explicitly by production code. Keep this list tied
+    # to RUNTIME_PLUGIN_TARGETS so a successful Bazel build cannot silently
+    # omit a required runtime artifact from the package.
+    for target, installed_name in RUNTIME_PLUGIN_TARGETS:
+        package, built_name = target.removeprefix("//").split(":", 1)
+        src_path = os.path.join(bazel_bin, package, built_name)
+        dst_path = os.path.join(lib_output_dir, installed_name)
+        if not os.path.isfile(src_path):
+            raise RuntimeError(f"Runtime plugin not found in bazel-bin: {src_path}")
+        shutil.copy2(src_path, dst_path)
+        log.info(f"Installed {installed_name} -> {dst_path}")
+        copied_count += 1
+
+    exporter_so_names = [target.rsplit(":", 1)[1] for target in EXPORTER_TARGETS]
     for so_name in exporter_so_names:
         src_path = os.path.join(bazel_bin, "common", "metrics", so_name)
         dst_path = os.path.join(lib_output_dir, so_name)

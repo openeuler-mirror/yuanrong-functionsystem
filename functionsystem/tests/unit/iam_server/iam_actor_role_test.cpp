@@ -15,9 +15,12 @@
  */
 
 #include "iam_server/iam/internal_iam/token_content.h"
+#include "iam_server/iam/internal_iam/token_manager_actor.h"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include "common/proto/pb/message_pb.h"
 
 namespace functionsystem::iamserver::test {
 
@@ -92,6 +95,28 @@ TEST_F(IAMActorRoleTest, JwtPayloadSupportsVariousRoles)
 
         EXPECT_EQ(j["role"].get<std::string>(), role);
     }
+}
+
+/**
+ * Feature: Token forwarding request role field support
+ * Description: Test that forwarded token requests preserve role and custom TTL fields.
+ * Expected: Role and expiredTimeSpan survive protobuf serialization.
+ */
+TEST_F(IAMActorRoleTest, ForwardGetTokenRequestPreservesRoleAndExpire)
+{
+    auto request = TokenManagerActor::BuildForwardGetTokenRequest("default", true, "developer", 3600);
+    ASSERT_NE(request, nullptr);
+    ASSERT_FALSE(request->requestid().empty());
+
+    std::string payload = request->SerializeAsString();
+
+    messages::GetTokenRequest parsed;
+    ASSERT_TRUE(parsed.ParseFromString(payload));
+    EXPECT_EQ(parsed.requestid(), request->requestid());
+    EXPECT_EQ(parsed.tenantid(), request->tenantid());
+    EXPECT_TRUE(parsed.iscreate());
+    EXPECT_EQ(parsed.role(), "developer");
+    EXPECT_EQ(parsed.expiredtimespan(), 3600u);
 }
 
 /**

@@ -12,10 +12,10 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 load("@bazel_tools//tools/build_defs/repo:utils.bzl", "maybe")
 load("//bazel:local_patched_repository.bzl", "local_patched_repository")
 
-# --- spdlog (local, patches pre-applied) ---
+# --- spdlog (installed tree, patches applied by the vendor build) ---
 local_patched_repository(
     name = "spdlog",
-    path = "./vendor/src/spdlog/",
+    path = "./vendor/output/Install/spdlog/",
     build_file = "@//bazel:spdlog.bzl",
 )
 
@@ -111,12 +111,24 @@ new_local_repository(
 )
 
 # --- Pre-built vendor libraries (built by run.sh vendor step) ---
-# etcdapi: Bazel source build — proto/gRPC stubs generated from vendor/src/etcd/.
-# The vendor/etcdapi/ directory is a placeholder; all real deps are in @yuanrong_functionsystem//vendor/src/.
+# etcdapi: Bazel source build from extracted vendor trees. Attach tracked BUILD
+# definitions because all three source directories are generated and ignored.
+new_local_repository(
+    name = "etcd_gogoproto",
+    build_file = "@//bazel:etcd_gogoproto.bzl",
+    path = "./vendor/src/gogo-protobuf/",
+)
+
+new_local_repository(
+    name = "etcd_googleapis",
+    build_file = "@//bazel:etcd_googleapis.bzl",
+    path = "./vendor/src/grpc-gateway/third_party/googleapis/",
+)
+
 new_local_repository(
     name = "etcdapi",
     build_file = "@//bazel:etcdapi.bzl",
-    path = "./vendor/etcdapi/",
+    path = "./vendor/src/",
 )
 
 new_local_repository(

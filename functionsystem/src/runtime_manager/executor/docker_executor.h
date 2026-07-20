@@ -74,7 +74,7 @@ protected:
 private:
     void ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID);
 
-    void BuildRuntimeCommands(runtime::v1::FunctionRuntime *funcRt, const std::vector<std::string> &buildArgs);
+    void BuildRuntimeCommands(runtime::v1::StartRequest *request, const std::vector<std::string> &buildArgs);
 
     void SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs, const std::string &runtimeID);
 

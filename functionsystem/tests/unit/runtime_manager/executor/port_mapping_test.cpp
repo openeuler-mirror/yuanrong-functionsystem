@@ -20,7 +20,7 @@
 namespace functionsystem::runtime_manager {
 namespace {
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_ValidJson)
+TEST(PortMappingTest, ParseForwardPorts_ValidJson)
 {
     auto configs = ParseForwardPorts(
         R"({"portForwardings": [{"port": 8888, "protocol": "TCP"}, {"port": 443, "protocol": "TCP"}]})");
@@ -31,40 +31,39 @@ TEST(ContainerExecutorNetworkTest, ParseForwardPorts_ValidJson)
     EXPECT_EQ("tcp", configs[1].protocol);
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_EmptyString)
+TEST(PortMappingTest, ParseForwardPorts_EmptyString)
 {
     auto configs = ParseForwardPorts("");
     EXPECT_EQ(0u, configs.size());
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_InvalidJson)
+TEST(PortMappingTest, ParseForwardPorts_InvalidJson)
 {
     auto configs = ParseForwardPorts("not-json");
     EXPECT_EQ(0u, configs.size());
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_NoPortForwardingsKey)
+TEST(PortMappingTest, ParseForwardPorts_NoPortForwardingsKey)
 {
     auto configs = ParseForwardPorts(R"({"forward": [{"port": 8888}]})");
     EXPECT_EQ(0u, configs.size());
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_EmptyArray)
+TEST(PortMappingTest, ParseForwardPorts_EmptyArray)
 {
     auto configs = ParseForwardPorts(R"({"portForwardings": []})");
     EXPECT_EQ(0u, configs.size());
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_SinglePort)
+TEST(PortMappingTest, ParseForwardPorts_SinglePort)
 {
-    auto configs = ParseForwardPorts(
-        R"({"portForwardings": [{"port": 8080, "protocol": "TCP"}]})");
+    auto configs = ParseForwardPorts(R"({"portForwardings": [{"port": 8080, "protocol": "TCP"}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(8080u, configs[0].containerPort);
     EXPECT_EQ("tcp", configs[0].protocol);
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_FilterInvalidPortValues)
+TEST(PortMappingTest, ParseForwardPorts_FilterInvalidPortValues)
 {
     // Port 0 and 65536+ are invalid, only 80 is valid
     auto configs = ParseForwardPorts(
@@ -74,36 +73,34 @@ TEST(ContainerExecutorNetworkTest, ParseForwardPorts_FilterInvalidPortValues)
     EXPECT_EQ("udp", configs[0].protocol);  // Should be lowercase
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_NotArrayValue)
+TEST(PortMappingTest, ParseForwardPorts_NotArrayValue)
 {
     auto configs = ParseForwardPorts(R"({"portForwardings": "8888"})");
     EXPECT_EQ(0u, configs.size());
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_MissingPortField)
+TEST(PortMappingTest, ParseForwardPorts_MissingPortField)
 {
     // Entry without "port" key should be skipped
-    auto configs = ParseForwardPorts(
-        R"({"portForwardings": [{"protocol": "TCP"}, {"port": 9090, "protocol": "UDP"}]})");
+    auto configs =
+        ParseForwardPorts(R"({"portForwardings": [{"protocol": "TCP"}, {"port": 9090, "protocol": "UDP"}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(9090u, configs[0].containerPort);
     EXPECT_EQ("udp", configs[0].protocol);
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_UDPProtocol)
+TEST(PortMappingTest, ParseForwardPorts_UDPProtocol)
 {
-    auto configs = ParseForwardPorts(
-        R"({"portForwardings": [{"port": 53, "protocol": "UDP"}]})");
+    auto configs = ParseForwardPorts(R"({"portForwardings": [{"port": 53, "protocol": "UDP"}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(53u, configs[0].containerPort);
     EXPECT_EQ("udp", configs[0].protocol);  // Should be lowercase
 }
 
-TEST(ContainerExecutorNetworkTest, ParseForwardPorts_DefaultProtocol)
+TEST(PortMappingTest, ParseForwardPorts_DefaultProtocol)
 {
     // When protocol is missing, default to "tcp"
-    auto configs = ParseForwardPorts(
-        R"({"portForwardings": [{"port": 8080}]})");
+    auto configs = ParseForwardPorts(R"({"portForwardings": [{"port": 8080}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(8080u, configs[0].containerPort);
     EXPECT_EQ("tcp", configs[0].protocol);  // Default to tcp

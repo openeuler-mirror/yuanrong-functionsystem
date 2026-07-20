@@ -1,11 +1,11 @@
 /*
- * Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+ * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "sandbox_request_builder.h"
+#include "sandboxd_request_builder.h"
 
 #include <algorithm>
 
@@ -24,7 +24,7 @@
 #include "common/utils/files.h"
 #include "common/utils/path.h"
 #include "runtime_manager/executor/executor.h"
-#include "sandbox_command_utils.h"
+#include "runtime_manager/executor/sandboxd/sandbox_command_utils.h"
 
 namespace functionsystem::runtime_manager {
 
@@ -43,9 +43,6 @@ constexpr double DEFAULT_MEMORY_MB        = 500.0;
 // Mount
 const std::string YR_FUNCTION_LIB_PATH   = "YR_FUNCTION_LIB_PATH";
 const std::string FUNCTION_LIB_PATH      = "FUNCTION_LIB_PATH";
-// Layer directory names (mirrors function_agent/common/constants.h)
-const std::string CODE_LAYER_DIR_NAME     = "layer";
-const std::string CODE_FUNC_DIR_NAME      = "func";
 // Namespace alias for brevity
 using namespace resource_view;  // NOLINT(google-build-using-namespace)
 
@@ -62,12 +59,33 @@ std::string DirName(const std::string &path)
     return pos == 0 ? "/" : path.substr(0, pos);
 }
 
-Status RootfsJsonParse(runtime::v1::FunctionRuntime &funcRt, const std::string &rootfsJson)
+void ApplyS3RootfsConfig(runtime::v1::StartRequest &start, const nlohmann::json &rootfsConfig)
+{
+    if (!rootfsConfig.contains("storageInfo")) {
+        return;
+    }
+    auto s3 = start.mutable_rootfs()->mutable_s3_config();
+    const auto &storageInfo = rootfsConfig.at("storageInfo");
+    if (storageInfo.contains("endpoint"))
+        s3->set_endpoint(storageInfo.at("endpoint").get<std::string>());
+    if (storageInfo.contains("bucket"))
+        s3->set_bucket(storageInfo.at("bucket").get<std::string>());
+    if (storageInfo.contains("object"))
+        s3->set_object(storageInfo.at("object").get<std::string>());
+    if (storageInfo.contains("accessKey"))
+        s3->set_access_key_id(storageInfo.at("accessKey").get<std::string>());
+    if (storageInfo.contains("secretKey"))
+        s3->set_access_key_secret(storageInfo.at("secretKey").get<std::string>());
+}
+
+// Parse the rootfs deploy-option JSON onto the flat StartRequest. The flat
+// request exposes rootfs + runtime as top-level fields (no FunctionRuntime).
+Status RootfsJsonParse(runtime::v1::StartRequest &start, const std::string &rootfsJson)
 {
     try {
         nlohmann::json j = nlohmann::json::parse(rootfsJson);
         if (j.contains("runtime")) {
-            funcRt.set_sandbox(j.at("runtime").get<std::string>());
+            start.set_runtime(j.at("runtime").get<std::string>());
         }
         if (j.contains("readonly")) {
             bool ro = false;
@@ -77,33 +95,24 @@ Status RootfsJsonParse(runtime::v1::FunctionRuntime &funcRt, const std::string &
                 const auto &s = j.at("readonly").get<std::string>();
                 ro = (s == "true" || s == "1");
             }
-            funcRt.mutable_rootfs()->set_readonly(ro);
+            start.mutable_rootfs()->set_readonly(ro);
         }
         if (!j.contains("type")) {
             return Status::OK();
         }
         const std::string typeStr = j.at("type").get<std::string>();
         if (typeStr == "s3") {
-            funcRt.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::S3);
-            if (!j.contains("storageInfo")) {
-                return Status::OK();
-            }
-            auto s3 = funcRt.mutable_rootfs()->mutable_s3_config();
-            const auto &si = j.at("storageInfo");
-            if (si.contains("endpoint"))  s3->set_endpoint(si.at("endpoint").get<std::string>());
-            if (si.contains("bucket"))    s3->set_bucket(si.at("bucket").get<std::string>());
-            if (si.contains("object"))    s3->set_object(si.at("object").get<std::string>());
-            if (si.contains("accessKey")) s3->set_accesskeyid(si.at("accessKey").get<std::string>());
-            if (si.contains("secretKey")) s3->set_accesskeysecret(si.at("secretKey").get<std::string>());
+            start.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::S3);
+            ApplyS3RootfsConfig(start, j);
         } else if (typeStr == "image") {
-            funcRt.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::IMAGE);
+            start.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::IMAGE);
             if (j.contains("imageurl")) {
-                funcRt.mutable_rootfs()->set_image_url(j.at("imageurl").get<std::string>());
+                start.mutable_rootfs()->set_image_url(j.at("imageurl").get<std::string>());
             }
         } else if (typeStr == "local") {
-            funcRt.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::LOCAL);
+            start.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::LOCAL);
             if (j.contains("path")) {
-                funcRt.mutable_rootfs()->set_path(j.at("path").get<std::string>());
+                start.mutable_rootfs()->set_path(j.at("path").get<std::string>());
             }
         }
     } catch (const std::exception &e) {
@@ -120,26 +129,16 @@ bool HasCustomRootfs(const std::shared_ptr<messages::StartInstanceRequest> &requ
     return opts.contains(CONTAINER_ROOTFS);
 }
 
-void ApplyMountBaseFields(runtime::v1::Mount *mount, const nlohmann::json &item)
+std::string ResolveRuntimeLanguage(const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
-    if (item.find("type") != item.end()) {
-        mount->set_type(item.at("type").get<std::string>());
-    }
-    if (item.find("target") != item.end()) {
-        mount->set_target(item.at("target").get<std::string>());
-    }
-    if (item.find("options") == item.end() || !item.at("options").is_array()) {
-        return;
-    }
-    for (const auto &opt : item.at("options")) {
-        if (opt.is_string()) {
-            mount->add_options(opt.get<std::string>());
-        }
-    }
+    std::string language = request->runtimeinstanceinfo().runtimeconfig().language();
+    std::transform(language.begin(), language.end(), language.begin(), ::tolower);
+    return language;
 }
 
-void ApplyS3Mount(runtime::v1::S3Config *s3Config, const nlohmann::json &s3)
+void SetS3MountSource(runtime::v1::Mount *mount, const nlohmann::json &s3)
 {
+    auto *s3Config = mount->mutable_s3_config();
     if (s3.find("endpoint") != s3.end()) {
         s3Config->set_endpoint(s3.at("endpoint").get<std::string>());
     }
@@ -150,29 +149,25 @@ void ApplyS3Mount(runtime::v1::S3Config *s3Config, const nlohmann::json &s3)
         s3Config->set_object(s3.at("object").get<std::string>());
     }
     if (s3.find("accessKey") != s3.end()) {
-        s3Config->set_accesskeyid(s3.at("accessKey").get<std::string>());
+        s3Config->set_access_key_id(s3.at("accessKey").get<std::string>());
     }
     if (s3.find("secretKey") != s3.end()) {
-        s3Config->set_accesskeysecret(s3.at("secretKey").get<std::string>());
+        s3Config->set_access_key_secret(s3.at("secretKey").get<std::string>());
     }
 }
 
-void ApplyMountSource(runtime::v1::Mount *mount, const nlohmann::json &item)
+void SetMountSource(runtime::v1::Mount *mount, const nlohmann::json &item)
 {
     if (item.find("host_path") != item.end()) {
         mount->set_host_path(item.at("host_path").get<std::string>());
-        return;
-    }
-    if (item.find("s3_config") != item.end() && item.at("s3_config").is_object()) {
-        ApplyS3Mount(mount->mutable_s3_config(), item.at("s3_config"));
-        return;
-    }
-    if (item.find("image_url") != item.end()) {
+    } else if (item.find("s3_config") != item.end() && item.at("s3_config").is_object()) {
+        SetS3MountSource(mount, item.at("s3_config"));
+    } else if (item.find("image_url") != item.end()) {
         mount->set_image_url(item.at("image_url").get<std::string>());
     }
 }
 
-Status MountsJsonParse(runtime::v1::StartRequest &startReq, const std::string &mountsJson)
+Status MountsJsonParse(runtime::v1::StartRequest &start, const std::string &mountsJson)
 {
     try {
         nlohmann::json arr = nlohmann::json::parse(mountsJson);
@@ -183,9 +178,23 @@ Status MountsJsonParse(runtime::v1::StartRequest &startReq, const std::string &m
             if (!item.is_object()) {
                 continue;
             }
-            auto *mount = startReq.add_mounts();
-            ApplyMountBaseFields(mount, item);
-            ApplyMountSource(mount, item);
+            auto *mount = start.add_mounts();
+
+            if (item.find("type") != item.end()) {
+                mount->set_type(item.at("type").get<std::string>());
+            }
+            if (item.find("target") != item.end()) {
+                mount->set_target(item.at("target").get<std::string>());
+            }
+            if (item.find("options") != item.end() && item.at("options").is_array()) {
+                for (const auto &opt : item.at("options")) {
+                    if (opt.is_string()) {
+                        mount->add_options(opt.get<std::string>());
+                    }
+                }
+            }
+
+            SetMountSource(mount, item);
         }
     } catch (std::exception &e) {
         auto err = fmt::format("Failed to parse mounts JSON: {}", std::string(e.what()));
@@ -196,8 +205,7 @@ Status MountsJsonParse(runtime::v1::StartRequest &startReq, const std::string &m
 }
 
 // Build log paths and ensure the files exist. Fills stdOut and stdErr.
-void ResolveLogPaths(const std::string &logDir, const std::string &runtimeID,
-                     std::string &stdOut, std::string &stdErr)
+void ResolveLogPaths(const std::string &logDir, const std::string &runtimeID, std::string &stdOut, std::string &stdErr)
 {
     if (!litebus::os::ExistPath(logDir)) {
         YRLOG_WARN("std log dir {} not found, attempting mkdir", logDir);
@@ -220,39 +228,50 @@ void ResolveLogPaths(const std::string &logDir, const std::string &runtimeID,
 
 // ── Construction ──────────────────────────────────────────────────────────────
 
-SandboxRequestBuilder::SandboxRequestBuilder(const CommandBuilder &cmdBuilder)
-    : cmdBuilder_(cmdBuilder)
+SandboxdRequestBuilder::SandboxdRequestBuilder(const CommandBuilder &cmdBuilder) : cmdBuilder_(cmdBuilder)
 {
 }
 
 // ── Public Build ──────────────────────────────────────────────────────────────
 
-std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxRequestBuilder::Build(
-    const SandboxStartParams &params) const
+std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBuilder::Build(
+    const SandboxdStartParams &params) const
 {
     return BuildStart(params);
 }
 
 // ── Start path ────────────────────────────────────────────────────────────────
 
-std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxRequestBuilder::BuildStart(
-    const SandboxStartParams &params) const
+std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBuilder::BuildStart(
+    const SandboxdStartParams &params) const
 {
     auto start = std::make_shared<runtime::v1::StartRequest>();
 
-    if (params.checkpointID.empty()) {
-        // Normal start: resolve rootfs from deploy options or container config
-        if (auto s = BuildRootfs(params.request, *start); !s.IsOk()) {
-            return {s, nullptr};
+    // sandbox_id is intentionally left empty: per the sandboxd SandboxService
+    // contract, sandboxd generates the sandbox ID and returns it in
+    // StartResponse.id; the executor stores that via UpdateSandboxID(runtimeID).
+    // Passing the client runtimeID here would conflate the two identities.
+
+    // Only reference a template when sandboxd has already registered it.
+    // Production sandboxd rejects unknown template_id values; custom rootfs
+    // starts are never template-backed.
+    const auto &templateID = params.request->runtimeinstanceinfo().container().id();
+    if (!HasCustomRootfs(params.request) && params.registeredTemplateIDs.count(templateID) > 0) {
+        start->set_template_id(templateID);
+    }
+
+    // Attach tenant ID as a metric label for sandboxd observability.
+    // tenant_id is passed via runtimeconfig.posixenvs as YR_TENANT_ID.
+    {
+        const auto &posixEnvs = params.request->runtimeinstanceinfo().runtimeconfig().posixenvs();
+        if (auto it = posixEnvs.find("YR_TENANT_ID"); it != posixEnvs.end() && !it->second.empty()) {
+            (*start->mutable_metric_labels())["tenantid"] = it->second;
         }
-    } else {
-        // Checkpoint-based start: use container identity directly and set ckpt_dir
-        auto *funcRt = start->mutable_funcruntime();
-        funcRt->set_id(params.request->runtimeinstanceinfo().container().id());
-        funcRt->set_sandbox(params.request->runtimeinstanceinfo().container().runtime());
-        *funcRt->mutable_rootfs() = params.request->runtimeinstanceinfo().container().rootfsconfig();
-        start->set_ckpt_dir(params.checkpointID);
-        start->set_trace_id(params.runtimeID);
+    }
+
+    // Resolve rootfs (and runtime handler) from deploy options or container config.
+    if (auto s = BuildRootfs(params.request, *start); !s.IsOk()) {
+        return {s, nullptr};
     }
 
     ApplyExtraConfig(params.request, start.get());
@@ -260,8 +279,9 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxRequestBuil
 
     std::string workingRoot;
     ApplyBootstrapMount(params.request, start->mutable_mounts(), workingRoot);
-    ApplyCommands(params.request, params.cmdArgs, start->mutable_funcruntime());
-    (*start->mutable_funcruntime()->mutable_runtimeenvs())[YR_RT_WORKING_DIR] = workingRoot;
+    ApplyCommands(params.request, params.cmdArgs, start.get());
+    // Flat request has a single envs map; seed the working-root env there.
+    (*start->mutable_envs())[YR_RT_WORKING_DIR] = workingRoot;
 
     Envs updatedEnvs = ApplyCodeMounts(params.request, start->mutable_mounts(), params.envs);
 
@@ -273,40 +293,46 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxRequestBuil
                 return {status, nullptr};
             }
         }
+        // Network mode (optional); empty => sandbox network on the sandboxd side.
+        if (auto netIt = opts.find(CONTAINER_NETWORK); netIt != opts.end()) {
+            start->set_network(netIt->second);
+        }
     }
 
     ApplyResources(params.request, start->mutable_resources());
     ApplyEnvsAndLogs(updatedEnvs, params.runtimeID, start.get());
 
-    // Set YR_LANGUAGE so entryfile.sh selects the correct Python version
-    std::string language = params.request->runtimeinstanceinfo().runtimeconfig().language();
-    std::transform(language.begin(), language.end(), language.begin(), ::tolower);
-    (*start->mutable_userenvs())["YR_LANGUAGE"] = language;
+    // YR_LANGUAGE follows the service runtime field. The container runtime is
+    // the sandbox backend (for example runc/runsc), not the user runtime.
+    (*start->mutable_envs())["YR_LANGUAGE"] = ResolveRuntimeLanguage(params.request);
+
+    // trace_id is the distributed trace ID propagated from the upstream request
+    // (runtimeinstanceinfo().traceid()), not the local runtimeID.
+    start->set_trace_id(params.request->runtimeinstanceinfo().traceid());
 
     return {Status::OK(), std::move(start)};
 }
 
-Status SandboxRequestBuilder::BuildRootfs(
-    const std::shared_ptr<messages::StartInstanceRequest> &request, runtime::v1::StartRequest &start) const
+Status SandboxdRequestBuilder::BuildRootfs(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                           runtime::v1::StartRequest &start) const
 {
-    auto *funcRt = start.mutable_funcruntime();
     const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
     if (!opts.contains(CONTAINER_ROOTFS)) {
-        funcRt->set_id(request->runtimeinstanceinfo().container().id());
-        funcRt->set_sandbox(request->runtimeinstanceinfo().container().runtime());
-        *funcRt->mutable_rootfs() = request->runtimeinstanceinfo().container().rootfsconfig();
+        // No custom rootfs: take runtime handler + rootfs from the container config.
+        // sandbox_id is left empty for sandboxd to generate.
+        start.set_runtime(request->runtimeinstanceinfo().container().runtime());
+        *start.mutable_rootfs() = request->runtimeinstanceinfo().container().rootfsconfig();
         return Status::OK();
     }
-    // Custom rootfs: use runtimeID to avoid re-using a pre-warmed seed with inconsistent rootfs
-    funcRt->set_id(request->runtimeinstanceinfo().runtimeid());
-    return RootfsJsonParse(*funcRt, opts.at(CONTAINER_ROOTFS));
+    // Custom rootfs: parse it from deploy options. sandbox_id left empty (sandboxd generates).
+    return RootfsJsonParse(start, opts.at(CONTAINER_ROOTFS));
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-Envs SandboxRequestBuilder::ApplyCodeMounts(
-    const std::shared_ptr<messages::StartInstanceRequest> &request,
-    google::protobuf::RepeatedPtrField<runtime::v1::Mount> *mounts, const Envs &envs) const
+Envs SandboxdRequestBuilder::ApplyCodeMounts(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                             google::protobuf::RepeatedPtrField<runtime::v1::Mount> *mounts,
+                                             const Envs &envs) const
 {
     Envs updated = envs;
     auto workingDirIt = envs.posixEnvs.find(UNZIPPED_WORKING_DIR);
@@ -315,8 +341,8 @@ Envs SandboxRequestBuilder::ApplyCodeMounts(
     }
 
     const auto &deploySpec = request->runtimeinstanceinfo().deploymentconfig();
-    auto funcPath = litebus::os::Join(litebus::os::Join(deploySpec.deploydir(), CODE_LAYER_DIR_NAME),
-                                      CODE_FUNC_DIR_NAME);
+    auto funcPath =
+        litebus::os::Join(litebus::os::Join(deploySpec.deploydir(), RUNTIME_LAYER_DIR_NAME), RUNTIME_FUNC_DIR_NAME);
 
     if (auto libIt = envs.posixEnvs.find(YR_FUNCTION_LIB_PATH);
         libIt != envs.posixEnvs.end() && !libIt->second.empty()) {
@@ -332,9 +358,9 @@ Envs SandboxRequestBuilder::ApplyCodeMounts(
     code->set_host_path(workingDirIt->second);
     code->set_target(request->runtimeinstanceinfo().container().mountpoint());
 
-    updated.posixEnvs[UNZIPPED_WORKING_DIR] = code->target();
-    updated.posixEnvs[YR_FUNCTION_LIB_PATH] = code->target();
-    updated.posixEnvs[FUNCTION_LIB_PATH] = code->target();
+    updated.posixEnvs[UNZIPPED_WORKING_DIR]  = code->target();
+    updated.posixEnvs[YR_FUNCTION_LIB_PATH]  = code->target();
+    updated.posixEnvs[FUNCTION_LIB_PATH]     = code->target();
 
     for (const auto &layer : GenerateLayerPath(request->runtimeinstanceinfo())) {
         auto *layerMount = mounts->Add();
@@ -347,8 +373,7 @@ Envs SandboxRequestBuilder::ApplyCodeMounts(
     return updated;
 }
 
-void SandboxRequestBuilder::ApplyBootstrapMount(
-    const std::shared_ptr<messages::StartInstanceRequest> &request,
+void SandboxdRequestBuilder::ApplyBootstrapMount(const std::shared_ptr<messages::StartInstanceRequest> &request,
     google::protobuf::RepeatedPtrField<runtime::v1::Mount> *mounts,
     std::string &workingRoot) const
 {
@@ -369,26 +394,33 @@ void SandboxRequestBuilder::ApplyBootstrapMount(
     workingRoot = mountDst;
 }
 
-void SandboxRequestBuilder::ApplyCommands(
-    const std::shared_ptr<messages::StartInstanceRequest> &request, const CommandArgs &cmdArgs,
-    runtime::v1::FunctionRuntime *funcRt) const
+void SandboxdRequestBuilder::ApplyCommands(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                           const CommandArgs &cmdArgs, runtime::v1::StartRequest *start) const
 {
     for (const auto &cmd : BuildBootstrapCommands(request)) {
-        *funcRt->add_command() = cmd;
+        *start->add_command() = cmd;
     }
+    bool skipNext = false;
     for (const auto &arg : cmdArgs.args) {
-        *funcRt->add_command() = arg;
+        if (skipNext) {
+            skipNext = false;
+            continue;
+        }
+        if (arg == "--job_id" || arg.rfind("--job_id=", 0) == 0 || arg == "--runtime_id"
+            || arg.rfind("--runtime_id=", 0) == 0) {
+            if (arg == "--job_id" || arg == "--runtime_id") {
+                skipNext = true;
+            }
+            continue;
+        }
+        *start->add_command() = arg;
     }
 }
 
-void SandboxRequestBuilder::ApplyResources(
-    const std::shared_ptr<messages::StartInstanceRequest> &request,
-    google::protobuf::Map<std::string, double> *resources) const
+void SandboxdRequestBuilder::ApplyResources(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                            google::protobuf::Map<std::string, double> *resources) const
 {
     const auto &res = request->runtimeinstanceinfo().runtimeconfig().resources().resources();
-    // Get effective cgroup value from resource limit field:
-    //   limit > 0  → explicit limit (use as cgroup)
-    //   limit <= 0 → not set (fall back to value, i.e. scheduling request = cgroup limit)
     auto getEffectiveValue = [](const resource_view::Resource &res, double defaultVal) -> double {
         if (res.type() != ValueType::Value_Type_SCALAR) {
             return defaultVal;
@@ -397,46 +429,47 @@ void SandboxRequestBuilder::ApplyResources(
         if (limit > 0) {
             return limit;
         }
-        return res.scalar().value();  // <= 0 = not set, use scheduling request value.
+        return res.scalar().value();
     };
 
     auto cpuIt = res.find(CPU_RESOURCE_NAME);
-    (*resources)[CPU_RESOURCE_NAME] = (cpuIt != res.end()) ?
-        getEffectiveValue(cpuIt->second, DEFAULT_CPU_MILLICORES) : DEFAULT_CPU_MILLICORES;
+    (*resources)[CPU_RESOURCE_NAME] =
+        (cpuIt != res.end()) ? getEffectiveValue(cpuIt->second, DEFAULT_CPU_MILLICORES) : DEFAULT_CPU_MILLICORES;
 
     auto memIt = res.find(MEMORY_RESOURCE_NAME);
-    (*resources)[MEMORY_RESOURCE_NAME] = (memIt != res.end()) ?
-        getEffectiveValue(memIt->second, DEFAULT_MEMORY_MB) : DEFAULT_MEMORY_MB;
+    (*resources)[MEMORY_RESOURCE_NAME] =
+        (memIt != res.end()) ? getEffectiveValue(memIt->second, DEFAULT_MEMORY_MB) : DEFAULT_MEMORY_MB;
 }
 
-void SandboxRequestBuilder::ApplyEnvsAndLogs(
-    const Envs &envs, const std::string &runtimeID, runtime::v1::StartRequest *req) const
+void SandboxdRequestBuilder::ApplyEnvsAndLogs(const Envs &envs, const std::string &runtimeID,
+                                              runtime::v1::StartRequest *start) const
 {
     const auto &config = cmdBuilder_.GetConfig();
     const std::string logDir = litebus::os::Join(config.runtimeLogPath, config.runtimeStdLogDir);
 
+    // Flat request carries a single envs map (no separate runtime/user envs).
     const auto combined = cmdBuilder_.CombineEnvs(envs);
-    req->mutable_userenvs()->insert(combined.begin(), combined.end());
-    (*req->mutable_userenvs())[YR_ONLY_STDOUT] = "true";
+    start->mutable_envs()->insert(combined.begin(), combined.end());
+    (*start->mutable_envs())[YR_ONLY_STDOUT] = "true";
 
     std::string stdOut;
     std::string stdErr;
     ResolveLogPaths(logDir, runtimeID, stdOut, stdErr);
-    req->set_stdout(stdOut);
-    req->set_stderr(stdErr);
+    start->set_stdout(stdOut);
+    start->set_stderr(stdErr);
 }
 
-void SandboxRequestBuilder::ApplyExtraConfig(
-    const std::shared_ptr<messages::StartInstanceRequest> &request, runtime::v1::StartRequest *req) const
+void SandboxdRequestBuilder::ApplyExtraConfig(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                              runtime::v1::StartRequest *start) const
 {
     const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
     if (auto it = opts.find(CONTAINER_EXTRA_CONFIG); it != opts.end()) {
-        req->set_extraconfig(it->second);
+        start->set_extra_config(it->second);
     }
 }
 
-void SandboxRequestBuilder::ApplyPortMappings(
-    const std::vector<std::string> &portMappings, google::protobuf::RepeatedPtrField<std::string> *ports) const
+void SandboxdRequestBuilder::ApplyPortMappings(const std::vector<std::string> &portMappings,
+                                               google::protobuf::RepeatedPtrField<std::string> *ports) const
 {
     for (const auto &mapping : portMappings) {
         *ports->Add() = mapping;

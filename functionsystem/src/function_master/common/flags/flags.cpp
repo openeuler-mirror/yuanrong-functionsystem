@@ -115,6 +115,9 @@ Flags::Flags()
             "enable TLS on generated Traefik routers", true);
     AddFlag(&Flags::traefikServersTransport_, "traefik_servers_transport",
             "Traefik serversTransport for HTTPS backends", "yr-backend-tls@file");
+    AddFlag(&Flags::traefikPublicBaseDomain_, "traefik_public_base_domain",
+            "Wildcard base domain for host-based sandbox port routes, "
+            "for example *.sandbox-gateway.example.com", "");
     // Timeout for standby FunctionMaster to forward /traefik/config requests to the leader.
     // Must be strictly less than Traefik's providers.http.pollTimeout (default 5s),
     // otherwise Traefik will time out before the forward completes, making the forward useless.

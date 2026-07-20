@@ -135,7 +135,7 @@ public:
 
     std::string GetHash() override
     {
-        return CalculateFileMD5(GetRealFilePath());
+        return "";
     }
 
 private:

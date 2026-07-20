@@ -140,7 +140,7 @@ void RuntimeReconcileActor::RunReconcileCycle(const std::vector<std::string> &fi
 
     // Always include the local node in every periodic cycle, even when it has
     // no live instances in etcd.  Orphan containers survive instance deletion,
-    // so without this the local SandboxExecutor would never receive a reconcile
+    // so without this the local SandboxdExecutor would never receive a reconcile
     // request and the orphan grace-period timer would never fire.
     if (agentRequests.find(nodeID_) == agentRequests.end()) {
         agentRequests.emplace(nodeID_, MakeReconcileRequest());
