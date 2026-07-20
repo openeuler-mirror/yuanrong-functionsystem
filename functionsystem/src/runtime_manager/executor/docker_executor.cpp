@@ -703,8 +703,11 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartInstance(
     }
 
     if (language.find(PYTHON_LANGUAGE) != std::string::npos) {
-        std::string pythonServerPath = "/python/yr/main/yr_runtime_main.py";
-        args.insert(args.begin(), { "-u", config_.runtimePath + pythonServerPath });
+        std::string yrServerPath =
+            "import os,sys;"
+            "p=os.path.join(os.path.dirname(__import__('yr').__file__),'main','yr_runtime_main.py');"
+            "os.execv(sys.executable,[sys.executable,'-u',p]+sys.argv[1:])";
+        args.insert(args.begin(), { "-u", "-c", yrServerPath });
     }
 
     runtimeInstanceInfoMap_[runtimeID] = info;
