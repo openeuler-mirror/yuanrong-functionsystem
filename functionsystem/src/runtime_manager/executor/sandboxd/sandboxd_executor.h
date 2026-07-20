@@ -18,7 +18,9 @@
 #define RUNTIME_MANAGER_EXECUTOR_SANDBOXD_SANDBOXD_EXECUTOR_H
 
 #include <chrono>
+#include <functional>
 #include <memory>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -93,6 +95,9 @@ private:
  */
 class SandboxdExecutor : public Executor {
 public:
+    using AvailableRuntimes = std::set<std::string>;
+    using AvailableRuntimesCallback = std::function<void(bool, const AvailableRuntimes &)>;
+
     static constexpr uint32_t kDefaultOrphanGracePeriodSec = 180;
     static constexpr uint32_t kOrphanDeleteRetryIntervalSec = 70;
 
@@ -104,7 +109,8 @@ public:
     };
 
     SandboxdExecutor(const std::string &name, const litebus::AID &functionAgentAID,
-                     const std::string &checkpointDir = {});
+                     const std::string &checkpointDir = {},
+                     AvailableRuntimesCallback availableRuntimesCallback = {});
     ~SandboxdExecutor() override = default;
 
     void SetHealthCheckClient(const std::shared_ptr<HealthCheck> &healthCheck)
@@ -286,6 +292,11 @@ private:
     void ReconnectContainerd();
     void OnReconnectContainerd();
     void CheckConnectivity();
+    void FetchInitialAvailableRuntimes();
+    void RetryFetchInitialAvailableRuntimes();
+    void ScheduleAvailableRuntimesRetry();
+    Status OnListAvailableRuntimes(const std::shared_ptr<runtime::v1::ListAvailableRuntimesResponse> &response,
+                                   const Status &status);
 
     messages::StartInstanceResponse MakeSuccessStartResponse(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &sandboxID);
@@ -336,8 +347,12 @@ private:
     std::unordered_set<std::string> warmupRuntimes_;
     std::unordered_set<std::string> registeredTemplateIDs_;
     litebus::AID functionAgentAID_;
+    AvailableRuntimesCallback availableRuntimesCallback_;
     bool reconnecting_ = false;
     bool synced_       = false;
+    bool fetchingAvailableRuntimes_ = false;
+    bool availableRuntimesInitialized_ = false;
+    bool availableRuntimesRetryScheduled_ = false;
 
     // ── Reconciliation state ─────────────────────────────────────────────────
     uint32_t orphanGracePeriodSec_ = kDefaultOrphanGracePeriodSec;

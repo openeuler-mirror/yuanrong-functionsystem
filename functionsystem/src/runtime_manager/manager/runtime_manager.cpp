@@ -386,6 +386,9 @@ void RuntimeManager::SetConfig(const Flags &flags)
     // executor (SANDBOXD when enabled, else CONTAINER), while preserving
     // explicit supervisor/docker executors used by the master-side branch.
     auto containerType = ContainerExecutorType();
+    if (containerType == EXECUTOR_TYPE::SANDBOXD && !initialRegistrationStarted_) {
+        sandboxRuntimeDiscoveryState_ = SandboxRuntimeDiscoveryState::PENDING;
+    }
     for (auto type : { EXECUTOR_TYPE::RUNTIME, containerType, EXECUTOR_TYPE::SUPERVISOR, EXECUTOR_TYPE::DOCKER }) {
         auto executor = FindExecutor(type);
         YRLOG_INFO("SetRuntimeConfig for type({})", fmt::underlying(type));
@@ -571,7 +574,12 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::CreateSandboxdExecutor()
     YRLOG_INFO("create a sandboxd executor.");
     auto uuid = litebus::uuid_generator::UUID::GetRandomUUID();
     const std::string name = "RuntimeExecutor_" + uuid.ToString();
-    auto executor = std::make_shared<SandboxdExecutor>(name, functionAgentAID_, checkpointDir_);
+    auto availableRuntimesCallback = [aid(GetAID())](bool enabled,
+                                         const SandboxdExecutor::AvailableRuntimes &runtimes) {
+        litebus::Async(aid, &RuntimeManager::OnInitialAvailableRuntimes, enabled, runtimes);
+    };
+    auto executor = std::make_shared<SandboxdExecutor>(name, functionAgentAID_, checkpointDir_,
+                                                       std::move(availableRuntimesCallback));
     executor->SetHealthCheckClient(healthCheckClient_);
     litebus::Spawn(executor, false);
     auto executorProxy = std::make_shared<SandboxdExecutorProxy>(executor);
@@ -640,6 +648,40 @@ void RuntimeManager::RegisterToFunctionAgent()
     }
     (void)executor->GetRuntimeInstanceInfos().Then(
         litebus::Defer(GetAID(), &RuntimeManager::StartRegister, std::placeholders::_1, request));
+}
+
+void RuntimeManager::TryInitialRegisterToFunctionAgent()
+{
+    if (!startRequested_ || initialRegistrationStarted_ ||
+        sandboxRuntimeDiscoveryState_ == SandboxRuntimeDiscoveryState::PENDING) {
+        return;
+    }
+    initialRegistrationStarted_ = true;
+    RegisterToFunctionAgent();
+}
+
+void RuntimeManager::OnInitialAvailableRuntimes(bool enabled, const std::set<std::string> &runtimes)
+{
+    if (!enabled) {
+        sandboxRuntimeDiscoveryState_ = SandboxRuntimeDiscoveryState::NOT_REQUIRED;
+        TryInitialRegisterToFunctionAgent();
+        return;
+    }
+
+    RETURN_IF_NULL(metricsClient_);
+    metricsClient_->InitializeSandboxRuntimeCapabilities(runtimes).Then(
+        litebus::Defer(GetAID(), &RuntimeManager::OnInitialAvailableRuntimesApplied, std::placeholders::_1));
+}
+
+Status RuntimeManager::OnInitialAvailableRuntimesApplied(const Status &status)
+{
+    if (!status.IsOk()) {
+        YRLOG_ERROR("failed to initialize sandbox runtime capability snapshot: {}", status.RawMessage());
+        return status;
+    }
+    sandboxRuntimeDiscoveryState_ = SandboxRuntimeDiscoveryState::READY;
+    TryInitialRegisterToFunctionAgent();
+    return Status::OK();
 }
 
 Status RuntimeManager::StartRegister(const std::map<std::string, messages::RuntimeInstanceInfo> &runtimeInfos,
@@ -966,7 +1008,8 @@ void RuntimeManager::SetRegisterHelper(const std::shared_ptr<RegisterHelper> hel
 
 void RuntimeManager::Start()
 {
-    RegisterToFunctionAgent();
+    startRequested_ = true;
+    TryInitialRegisterToFunctionAgent();
     RETURN_IF_NULL(logManagerClient_);
     logManagerClient_->StartScanLogs();
 }

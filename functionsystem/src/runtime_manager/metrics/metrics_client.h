@@ -17,6 +17,8 @@
 #ifndef RUNTIME_MANAGER_METRICS_METRICS_CLIENT_H
 #define RUNTIME_MANAGER_METRICS_METRICS_CLIENT_H
 
+#include <set>
+
 #include "async/future.hpp"
 #include "common/proto/pb/message_pb.h"
 #include "runtime_manager/config/flags.h"
@@ -37,6 +39,8 @@ public:
                                const std::string &instanceID) const;
 
     resources::ResourceUnit GetResourceUnit() const;
+
+    litebus::Future<Status> InitializeSandboxRuntimeCapabilities(const std::set<std::string> &runtimes) const;
 
     void StartUpdateResource() const;
 

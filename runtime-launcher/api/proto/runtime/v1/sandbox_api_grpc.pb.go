@@ -33,16 +33,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SandboxService_Start_FullMethodName         = "/runtime.v1.SandboxService/Start"
-	SandboxService_Restore_FullMethodName       = "/runtime.v1.SandboxService/Restore"
-	SandboxService_Delete_FullMethodName        = "/runtime.v1.SandboxService/Delete"
-	SandboxService_Wait_FullMethodName          = "/runtime.v1.SandboxService/Wait"
-	SandboxService_List_FullMethodName          = "/runtime.v1.SandboxService/List"
-	SandboxService_Stats_FullMethodName         = "/runtime.v1.SandboxService/Stats"
-	SandboxService_Register_FullMethodName      = "/runtime.v1.SandboxService/Register"
-	SandboxService_Unregister_FullMethodName    = "/runtime.v1.SandboxService/Unregister"
-	SandboxService_GetRegistered_FullMethodName = "/runtime.v1.SandboxService/GetRegistered"
-	SandboxService_Checkpoint_FullMethodName    = "/runtime.v1.SandboxService/Checkpoint"
+	SandboxService_Start_FullMethodName                 = "/runtime.v1.SandboxService/Start"
+	SandboxService_Restore_FullMethodName               = "/runtime.v1.SandboxService/Restore"
+	SandboxService_Delete_FullMethodName                = "/runtime.v1.SandboxService/Delete"
+	SandboxService_Wait_FullMethodName                  = "/runtime.v1.SandboxService/Wait"
+	SandboxService_List_FullMethodName                  = "/runtime.v1.SandboxService/List"
+	SandboxService_Stats_FullMethodName                 = "/runtime.v1.SandboxService/Stats"
+	SandboxService_Register_FullMethodName              = "/runtime.v1.SandboxService/Register"
+	SandboxService_Unregister_FullMethodName            = "/runtime.v1.SandboxService/Unregister"
+	SandboxService_GetRegistered_FullMethodName         = "/runtime.v1.SandboxService/GetRegistered"
+	SandboxService_Checkpoint_FullMethodName            = "/runtime.v1.SandboxService/Checkpoint"
+	SandboxService_ListAvailableRuntimes_FullMethodName = "/runtime.v1.SandboxService/ListAvailableRuntimes"
 )
 
 // SandboxServiceClient is the client API for SandboxService service.
@@ -71,6 +72,8 @@ type SandboxServiceClient interface {
 	GetRegistered(ctx context.Context, in *GetRegisteredRequest, opts ...grpc.CallOption) (*GetRegisteredResponse, error)
 	// Checkpoint checkpoints a sandbox.
 	Checkpoint(ctx context.Context, in *CheckpointRequest, opts ...grpc.CallOption) (*CheckpointResponse, error)
+	// ListAvailableRuntimes lists runtime classes whose handlers are ready.
+	ListAvailableRuntimes(ctx context.Context, in *ListAvailableRuntimesRequest, opts ...grpc.CallOption) (*ListAvailableRuntimesResponse, error)
 }
 
 type sandboxServiceClient struct {
@@ -181,6 +184,16 @@ func (c *sandboxServiceClient) Checkpoint(ctx context.Context, in *CheckpointReq
 	return out, nil
 }
 
+func (c *sandboxServiceClient) ListAvailableRuntimes(ctx context.Context, in *ListAvailableRuntimesRequest, opts ...grpc.CallOption) (*ListAvailableRuntimesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListAvailableRuntimesResponse)
+	err := c.cc.Invoke(ctx, SandboxService_ListAvailableRuntimes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SandboxServiceServer is the server API for SandboxService service.
 // All implementations must embed UnimplementedSandboxServiceServer
 // for forward compatibility.
@@ -207,6 +220,8 @@ type SandboxServiceServer interface {
 	GetRegistered(context.Context, *GetRegisteredRequest) (*GetRegisteredResponse, error)
 	// Checkpoint checkpoints a sandbox.
 	Checkpoint(context.Context, *CheckpointRequest) (*CheckpointResponse, error)
+	// ListAvailableRuntimes lists runtime classes whose handlers are ready.
+	ListAvailableRuntimes(context.Context, *ListAvailableRuntimesRequest) (*ListAvailableRuntimesResponse, error)
 	mustEmbedUnimplementedSandboxServiceServer()
 }
 
@@ -246,6 +261,9 @@ func (UnimplementedSandboxServiceServer) GetRegistered(context.Context, *GetRegi
 }
 func (UnimplementedSandboxServiceServer) Checkpoint(context.Context, *CheckpointRequest) (*CheckpointResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Checkpoint not implemented")
+}
+func (UnimplementedSandboxServiceServer) ListAvailableRuntimes(context.Context, *ListAvailableRuntimesRequest) (*ListAvailableRuntimesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListAvailableRuntimes not implemented")
 }
 func (UnimplementedSandboxServiceServer) mustEmbedUnimplementedSandboxServiceServer() {}
 func (UnimplementedSandboxServiceServer) testEmbeddedByValue()                        {}
@@ -448,6 +466,24 @@ func _SandboxService_Checkpoint_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxService_ListAvailableRuntimes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListAvailableRuntimesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxServiceServer).ListAvailableRuntimes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxService_ListAvailableRuntimes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxServiceServer).ListAvailableRuntimes(ctx, req.(*ListAvailableRuntimesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SandboxService_ServiceDesc is the grpc.ServiceDesc for SandboxService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -494,6 +530,10 @@ var SandboxService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Checkpoint",
 			Handler:    _SandboxService_Checkpoint_Handler,
+		},
+		{
+			MethodName: "ListAvailableRuntimes",
+			Handler:    _SandboxService_ListAvailableRuntimes_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

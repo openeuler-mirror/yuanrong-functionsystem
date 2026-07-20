@@ -281,8 +281,10 @@ void SandboxdExecutor::StopSandboxCreateSpan(const std::shared_ptr<messages::Sta
 // ── Construction ──────────────────────────────────────────────────────────────
 
 SandboxdExecutor::SandboxdExecutor(const std::string &name, const litebus::AID &functionAgentAID,
-                                   const std::string &checkpointDir)
-    : Executor(name), functionAgentAID_(functionAgentAID)
+                                   const std::string &checkpointDir,
+                                   AvailableRuntimesCallback availableRuntimesCallback)
+    : Executor(name), functionAgentAID_(functionAgentAID),
+      availableRuntimesCallback_(std::move(availableRuntimesCallback))
 {
     const std::string &dir = checkpointDir.empty() ? DEFAULT_CHECKPOINT_DIR : checkpointDir;
     auto ckptActor = std::make_shared<CkptFileManagerActor>(name + "_CkptFileManager", dir);
@@ -302,8 +304,12 @@ void SandboxdExecutor::InitConfig()
         sandboxd_ = GrpcClient<runtime::v1::SandboxService>::CreateUdsGrpcClient(endpoint);
         synced_ = true;
         CheckConnectivity();
+        FetchInitialAvailableRuntimes();
     } else {
         YRLOG_INFO("SandboxdExecutor: no sandboxd endpoint, executor disabled");
+        if (availableRuntimesCallback_) {
+            availableRuntimesCallback_(false, {});
+        }
     }
     // ckptOrch_ MUST be created after sandboxd_ is set. Sync() runs after.
     ckptOrch_ = std::make_shared<SandboxdCheckpointOrchestrator>(GetAID(), sandboxd_, ckptFileManager_, stateManager_);
@@ -1145,6 +1151,64 @@ void SandboxdExecutor::OnReconnectContainerd()
     }
     reconnecting_ = false;
     YRLOG_INFO("SandboxdExecutor: reconnect sandboxd success");
+    // Reconnect only helps finish the initial snapshot. Once initialized, the
+    // advertised capability remains static for this process lifetime.
+    FetchInitialAvailableRuntimes();
+}
+
+void SandboxdExecutor::FetchInitialAvailableRuntimes()
+{
+    if (!sandboxd_ || availableRuntimesInitialized_ || fetchingAvailableRuntimes_) {
+        return;
+    }
+    fetchingAvailableRuntimes_ = true;
+    auto request = std::make_shared<runtime::v1::ListAvailableRuntimesRequest>();
+    auto response = std::make_shared<runtime::v1::ListAvailableRuntimesResponse>();
+    sandboxd_
+        ->CallAsyncX("ListAvailableRuntimes", *request, response.get(),
+                     &runtime::v1::SandboxService::Stub::AsyncListAvailableRuntimes)
+        .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnListAvailableRuntimes, response,
+                             std::placeholders::_1));
+}
+
+Status SandboxdExecutor::OnListAvailableRuntimes(
+    const std::shared_ptr<runtime::v1::ListAvailableRuntimesResponse> &response, const Status &status)
+{
+    fetchingAvailableRuntimes_ = false;
+    if (!status.IsOk()) {
+        YRLOG_WARN("ListAvailableRuntimes gRPC failed: {}; initial registration remains pending",
+                   status.RawMessage());
+        ScheduleAvailableRuntimesRetry();
+        return status;
+    }
+
+    AvailableRuntimes runtimes;
+    for (const auto &runtime : response->runtime_classes()) {
+        if (!runtime.empty()) {
+            runtimes.insert(runtime);
+        }
+    }
+    availableRuntimesInitialized_ = true;
+    YRLOG_INFO("initialized sandboxd runtime capability snapshot with {} runtimes", runtimes.size());
+    if (availableRuntimesCallback_) {
+        availableRuntimesCallback_(true, runtimes);
+    }
+    return Status::OK();
+}
+
+void SandboxdExecutor::ScheduleAvailableRuntimesRetry()
+{
+    if (availableRuntimesInitialized_ || availableRuntimesRetryScheduled_) {
+        return;
+    }
+    availableRuntimesRetryScheduled_ = true;
+    litebus::AsyncAfter(RECONNECT_INTERVAL_MS, GetAID(), &SandboxdExecutor::RetryFetchInitialAvailableRuntimes);
+}
+
+void SandboxdExecutor::RetryFetchInitialAvailableRuntimes()
+{
+    availableRuntimesRetryScheduled_ = false;
+    FetchInitialAvailableRuntimes();
 }
 
 void SandboxdExecutor::Sync()

@@ -41,6 +41,8 @@ service SandboxService {
   rpc GetRegistered(GetRegisteredRequest) returns (GetRegisteredResponse) {}
   // Checkpoint checkpoints a sandbox.
   rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
+  // ListAvailableRuntimes lists runtime classes whose handlers are ready.
+  rpc ListAvailableRuntimes(ListAvailableRuntimesRequest) returns (ListAvailableRuntimesResponse) {}
 }
 
 // RootfsSrcType identifies the root filesystem source type.
@@ -391,4 +393,15 @@ message StatsResponse {
   uint64 cpu_kernel_ns = 5;
   // CPU usage in user mode in nanoseconds.
   uint64 cpu_user_ns = 6;
+}
+
+// ListAvailableRuntimesRequest requests the runtime classes currently available
+// for new sandbox creation.
+message ListAvailableRuntimesRequest {}
+
+// ListAvailableRuntimesResponse contains the available runtime class snapshot.
+message ListAvailableRuntimesResponse {
+  // RuntimeClasses contains the sorted handler names accepted by sandbox start requests.
+  // Configured runtime classes whose handlers failed to initialize are excluded.
+  repeated string runtime_classes = 1;
 }

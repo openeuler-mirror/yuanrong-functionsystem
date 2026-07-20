@@ -144,6 +144,8 @@ protected:
     void Finalize() override;
 
 private:
+    enum class SandboxRuntimeDiscoveryState { NOT_REQUIRED, PENDING, READY };
+
     EXECUTOR_TYPE ResolveStopExecutorType(const std::shared_ptr<messages::StopInstanceRequest> &request);
 
     std::unordered_map<EXECUTOR_TYPE, std::shared_ptr<ExecutorProxy>> executorMap_;
@@ -173,6 +175,9 @@ private:
     std::unordered_set<std::string> receivedStartingReq_;
 
     bool connected_ = false;
+    SandboxRuntimeDiscoveryState sandboxRuntimeDiscoveryState_{SandboxRuntimeDiscoveryState::NOT_REQUIRED};
+    bool startRequested_{false};
+    bool initialRegistrationStarted_{false};
 
     bool logReuse_ = false;
 
@@ -181,6 +186,10 @@ private:
     std::shared_ptr<ExecutorProxy> CreateSupervisorExecutor();
     std::shared_ptr<ExecutorProxy> CreateDockerExecutor();
     std::shared_ptr<ExecutorProxy> CreateSandboxdExecutor();
+
+    void TryInitialRegisterToFunctionAgent();
+    void OnInitialAvailableRuntimes(bool enabled, const std::set<std::string> &runtimes);
+    Status OnInitialAvailableRuntimesApplied(const Status &status);
 
     // Human-readable message for an executor type whose daemon/service is not ready.
     static std::string GetExecutorUnavailableMessage(EXECUTOR_TYPE type);
