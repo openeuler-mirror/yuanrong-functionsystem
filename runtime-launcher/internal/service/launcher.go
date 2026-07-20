@@ -213,6 +213,17 @@ func (s *LauncherService) Checkpoint(
 	}, nil
 }
 
+// ListAvailableRuntimes returns an empty successful snapshot because
+// runtime-launcher does not expose sandboxd runtime-class handlers.
+func (s *LauncherService) ListAvailableRuntimes(
+	ctx context.Context,
+	req *runtimev1.ListAvailableRuntimesRequest,
+) (*runtimev1.ListAvailableRuntimesResponse, error) {
+	_ = ctx
+	_ = req
+	return &runtimev1.ListAvailableRuntimesResponse{}, nil
+}
+
 func (s *LauncherService) buildCreateConfig(req *runtimev1.StartRequest) *runtime.CreateConfig {
 	cfg := buildCreateConfig(req)
 	templateID := strings.TrimSpace(req.GetTemplateId())

@@ -85,6 +85,7 @@ const std::string FUNC_MOUNT_SHARE_PATH = "mount_share_path";
 const std::string FUNC_MOUNT_LOCAL_MOUNT_PATH = "local_mount_path";
 const std::string FUNC_MOUNT_STATUS = "status";
 const std::string RESOURCE_OWNER_KEY = "resource.owner";
+const std::string SANDBOX_RUNTIME_LABEL = "sandbox.runtime";
 const std::string SYSTEM_OWNER_VALUE = "system";
 const std::string STATIC_FUNCTION_OWNER_VALUE = "static_function";
 const std::string DEFAULT_OWNER_VALUE = "default";

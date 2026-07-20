@@ -78,6 +78,12 @@ resources::ResourceUnit MetricsClient::GetResourceUnit() const
     return litebus::Async(actor_->GetAID(), &MetricsActor::GetResourceUnit).Get();
 }
 
+litebus::Future<Status> MetricsClient::InitializeSandboxRuntimeCapabilities(
+    const std::set<std::string> &runtimes) const
+{
+    return litebus::Async(actor_->GetAID(), &MetricsActor::InitializeSandboxRuntimeCapabilities, runtimes);
+}
+
 void MetricsClient::StartUpdateResource() const
 {
     litebus::Async(actor_->GetAID(), &MetricsActor::StartUpdateMetrics);

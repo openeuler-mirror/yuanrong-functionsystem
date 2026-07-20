@@ -38,6 +38,7 @@
 #include "collector/system_proc_memory_collector.h"
 #include "collector/system_xpu_collector.h"
 #include "collector/external_system_collector.h"
+#include "common/constants/constants.h"
 #include "collector/numa_collector.h"
 #include "common/logs/logging.h"
 #include "common/proto/pb/message_pb.h"
@@ -422,7 +423,33 @@ resources::ResourceUnit MetricsActor::BuildResourceUnit(const std::vector<litebu
             continue;
         }
     }
+
+    // sandbox.runtime is owned by the sandboxd capability snapshot, so a
+    // configured static label with the same key must never override it.
+    nodeLabels->erase(SANDBOX_RUNTIME_LABEL);
+    if (sandboxRuntimeCapabilitiesInitialized_ && !sandboxRuntimeCapabilities_.empty()) {
+        resources::Value::Counter counter;
+        for (const auto &runtime : sandboxRuntimeCapabilities_) {
+            (*counter.mutable_items())[runtime] = 1;
+        }
+        (*nodeLabels)[SANDBOX_RUNTIME_LABEL] = std::move(counter);
+    }
     return unit;
+}
+
+Status MetricsActor::InitializeSandboxRuntimeCapabilities(const std::set<std::string> &runtimes)
+{
+    if (!sandboxRuntimeCapabilitiesInitialized_) {
+        sandboxRuntimeCapabilities_ = runtimes;
+        sandboxRuntimeCapabilitiesInitialized_ = true;
+        YRLOG_INFO("initialized sandbox runtime capability snapshot with {} runtimes", runtimes.size());
+        return Status::OK();
+    }
+    if (sandboxRuntimeCapabilities_ == runtimes) {
+        return Status::OK();
+    }
+    return Status(StatusCode::ERR_INNER_SYSTEM_ERROR,
+                  "sandbox runtime capability snapshot cannot change after initialization");
 }
 
 resources::ResourceUnit MetricsActor::BuildResourceUnitWithInstance(

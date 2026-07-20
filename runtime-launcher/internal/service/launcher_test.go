@@ -81,6 +81,17 @@ func TestListPropagatesBackendError(t *testing.T) {
 	}
 }
 
+func TestListAvailableRuntimesReturnsSuccessfulEmptySnapshot(t *testing.T) {
+	svc := NewLauncherService(&fakeRuntime{}, state.NewManager())
+	resp, err := svc.ListAvailableRuntimes(context.Background(), &runtimev1.ListAvailableRuntimesRequest{})
+	if err != nil {
+		t.Fatalf("ListAvailableRuntimes returned error: %v", err)
+	}
+	if len(resp.GetRuntimeClasses()) != 0 {
+		t.Fatalf("ListAvailableRuntimes returned %v, want empty snapshot", resp.GetRuntimeClasses())
+	}
+}
+
 func TestListSelectorUsesBackendLabelsForTrackedContainers(t *testing.T) {
 	stateMgr := state.NewManager()
 	stateMgr.AddContainer("container-1", "runtime-1", &runtime.CreateConfig{ID: "runtime-1", Sandbox: "image:latest"})

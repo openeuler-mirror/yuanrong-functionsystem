@@ -2293,6 +2293,91 @@ func (x *StatsResponse) GetCpuUserNs() uint64 {
 	return 0
 }
 
+// ListAvailableRuntimesRequest requests the runtime classes currently available
+// for new sandbox creation.
+type ListAvailableRuntimesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListAvailableRuntimesRequest) Reset() {
+	*x = ListAvailableRuntimesRequest{}
+	mi := &file_sandbox_api_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAvailableRuntimesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAvailableRuntimesRequest) ProtoMessage() {}
+
+func (x *ListAvailableRuntimesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sandbox_api_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAvailableRuntimesRequest.ProtoReflect.Descriptor instead.
+func (*ListAvailableRuntimesRequest) Descriptor() ([]byte, []int) {
+	return file_sandbox_api_proto_rawDescGZIP(), []int{29}
+}
+
+// ListAvailableRuntimesResponse contains the available runtime class snapshot.
+type ListAvailableRuntimesResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// RuntimeClasses contains the sorted handler names accepted by sandbox start requests.
+	// Configured runtime classes whose handlers failed to initialize are excluded.
+	RuntimeClasses []string `protobuf:"bytes,1,rep,name=runtime_classes,json=runtimeClasses,proto3" json:"runtime_classes,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ListAvailableRuntimesResponse) Reset() {
+	*x = ListAvailableRuntimesResponse{}
+	mi := &file_sandbox_api_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListAvailableRuntimesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListAvailableRuntimesResponse) ProtoMessage() {}
+
+func (x *ListAvailableRuntimesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sandbox_api_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListAvailableRuntimesResponse.ProtoReflect.Descriptor instead.
+func (*ListAvailableRuntimesResponse) Descriptor() ([]byte, []int) {
+	return file_sandbox_api_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *ListAvailableRuntimesResponse) GetRuntimeClasses() []string {
+	if x != nil {
+		return x.RuntimeClasses
+	}
+	return nil
+}
+
 var File_sandbox_api_proto protoreflect.FileDescriptor
 
 const file_sandbox_api_proto_rawDesc = "" +
@@ -2492,7 +2577,10 @@ const file_sandbox_api_proto_rawDesc = "" +
 	"\x12memory_limit_bytes\x18\x03 \x01(\x04R\x10memoryLimitBytes\x123\n" +
 	"\x16memory_max_usage_bytes\x18\x04 \x01(\x04R\x13memoryMaxUsageBytes\x12\"\n" +
 	"\rcpu_kernel_ns\x18\x05 \x01(\x04R\vcpuKernelNs\x12\x1e\n" +
-	"\vcpu_user_ns\x18\x06 \x01(\x04R\tcpuUserNs*-\n" +
+	"\vcpu_user_ns\x18\x06 \x01(\x04R\tcpuUserNs\"\x1e\n" +
+	"\x1cListAvailableRuntimesRequest\"H\n" +
+	"\x1dListAvailableRuntimesResponse\x12'\n" +
+	"\x0fruntime_classes\x18\x01 \x03(\tR\x0eruntimeClasses*-\n" +
 	"\rRootfsSrcType\x12\x06\n" +
 	"\x02S3\x10\x00\x12\t\n" +
 	"\x05IMAGE\x10\x01\x12\t\n" +
@@ -2500,7 +2588,7 @@ const file_sandbox_api_proto_rawDesc = "" +
 	"\fSandboxState\x12\x19\n" +
 	"\x15SANDBOX_STATE_RUNNING\x10\x00\x12\x18\n" +
 	"\x14SANDBOX_STATE_EXITED\x10\x01\x12\x19\n" +
-	"\x15SANDBOX_STATE_UNKNOWN\x10\x022\xde\x05\n" +
+	"\x15SANDBOX_STATE_UNKNOWN\x10\x022\xce\x06\n" +
 	"\x0eSandboxService\x12>\n" +
 	"\x05Start\x12\x18.runtime.v1.StartRequest\x1a\x19.runtime.v1.StartResponse\"\x00\x12D\n" +
 	"\aRestore\x12\x1a.runtime.v1.RestoreRequest\x1a\x1b.runtime.v1.RestoreResponse\"\x00\x12A\n" +
@@ -2513,7 +2601,8 @@ const file_sandbox_api_proto_rawDesc = "" +
 	"Unregister\x12\x1d.runtime.v1.UnregisterRequest\x1a\x1a.runtime.v1.NormalResponse\"\x00\x12V\n" +
 	"\rGetRegistered\x12 .runtime.v1.GetRegisteredRequest\x1a!.runtime.v1.GetRegisteredResponse\"\x00\x12M\n" +
 	"\n" +
-	"Checkpoint\x12\x1d.runtime.v1.CheckpointRequest\x1a\x1e.runtime.v1.CheckpointResponse\"\x00B1Z/runtime-launcher/api/proto/runtime/v1;runtimev1b\x06proto3"
+	"Checkpoint\x12\x1d.runtime.v1.CheckpointRequest\x1a\x1e.runtime.v1.CheckpointResponse\"\x00\x12n\n" +
+	"\x15ListAvailableRuntimes\x12(.runtime.v1.ListAvailableRuntimesRequest\x1a).runtime.v1.ListAvailableRuntimesResponse\"\x00B1Z/runtime-launcher/api/proto/runtime/v1;runtimev1b\x06proto3"
 
 var (
 	file_sandbox_api_proto_rawDescOnce sync.Once
@@ -2528,81 +2617,83 @@ func file_sandbox_api_proto_rawDescGZIP() []byte {
 }
 
 var file_sandbox_api_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_sandbox_api_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
+var file_sandbox_api_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
 var file_sandbox_api_proto_goTypes = []any{
-	(RootfsSrcType)(0),            // 0: runtime.v1.RootfsSrcType
-	(SandboxState)(0),             // 1: runtime.v1.SandboxState
-	(*S3Config)(nil),              // 2: runtime.v1.S3Config
-	(*RootfsConfig)(nil),          // 3: runtime.v1.RootfsConfig
-	(*Mount)(nil),                 // 4: runtime.v1.Mount
-	(*StartRequest)(nil),          // 5: runtime.v1.StartRequest
-	(*StartResponse)(nil),         // 6: runtime.v1.StartResponse
-	(*RestoreRequest)(nil),        // 7: runtime.v1.RestoreRequest
-	(*RestoreResponse)(nil),       // 8: runtime.v1.RestoreResponse
-	(*DeleteRequest)(nil),         // 9: runtime.v1.DeleteRequest
-	(*DeleteResponse)(nil),        // 10: runtime.v1.DeleteResponse
-	(*WaitRequest)(nil),           // 11: runtime.v1.WaitRequest
-	(*WaitResponse)(nil),          // 12: runtime.v1.WaitResponse
-	(*SandboxTemplate)(nil),       // 13: runtime.v1.SandboxTemplate
-	(*RegisterRequest)(nil),       // 14: runtime.v1.RegisterRequest
-	(*NormalResponse)(nil),        // 15: runtime.v1.NormalResponse
-	(*UnregisterRequest)(nil),     // 16: runtime.v1.UnregisterRequest
-	(*GetRegisteredRequest)(nil),  // 17: runtime.v1.GetRegisteredRequest
-	(*GetRegisteredResponse)(nil), // 18: runtime.v1.GetRegisteredResponse
-	(*CheckpointRequest)(nil),     // 19: runtime.v1.CheckpointRequest
-	(*CheckpointResponse)(nil),    // 20: runtime.v1.CheckpointResponse
-	(*ListSandboxesRequest)(nil),  // 21: runtime.v1.ListSandboxesRequest
-	(*ListSandboxesResponse)(nil), // 22: runtime.v1.ListSandboxesResponse
-	(*SandboxStatus)(nil),         // 23: runtime.v1.SandboxStatus
-	(*KeyValue)(nil),              // 24: runtime.v1.KeyValue
-	(*LinuxSandboxResources)(nil), // 25: runtime.v1.LinuxSandboxResources
-	(*HugepageLimit)(nil),         // 26: runtime.v1.HugepageLimit
-	(*SandboxMetadata)(nil),       // 27: runtime.v1.SandboxMetadata
-	(*SandboxMetadataList)(nil),   // 28: runtime.v1.SandboxMetadataList
-	(*StatsRequest)(nil),          // 29: runtime.v1.StatsRequest
-	(*StatsResponse)(nil),         // 30: runtime.v1.StatsResponse
-	nil,                           // 31: runtime.v1.StartRequest.EnvsEntry
-	nil,                           // 32: runtime.v1.StartRequest.ResourcesEntry
-	nil,                           // 33: runtime.v1.StartRequest.LabelsEntry
-	nil,                           // 34: runtime.v1.StartRequest.MetricLabelsEntry
-	nil,                           // 35: runtime.v1.SandboxTemplate.EnvsEntry
-	nil,                           // 36: runtime.v1.ListSandboxesRequest.SelectorEntry
-	nil,                           // 37: runtime.v1.SandboxStatus.LabelsEntry
-	nil,                           // 38: runtime.v1.SandboxStatus.MetricLabelsEntry
-	nil,                           // 39: runtime.v1.LinuxSandboxResources.UnifiedEntry
-	nil,                           // 40: runtime.v1.SandboxMetadata.LabelsEntry
-	nil,                           // 41: runtime.v1.SandboxMetadata.MetricLabelsEntry
-	nil,                           // 42: runtime.v1.SandboxMetadataList.SandboxesEntry
+	(RootfsSrcType)(0),                    // 0: runtime.v1.RootfsSrcType
+	(SandboxState)(0),                     // 1: runtime.v1.SandboxState
+	(*S3Config)(nil),                      // 2: runtime.v1.S3Config
+	(*RootfsConfig)(nil),                  // 3: runtime.v1.RootfsConfig
+	(*Mount)(nil),                         // 4: runtime.v1.Mount
+	(*StartRequest)(nil),                  // 5: runtime.v1.StartRequest
+	(*StartResponse)(nil),                 // 6: runtime.v1.StartResponse
+	(*RestoreRequest)(nil),                // 7: runtime.v1.RestoreRequest
+	(*RestoreResponse)(nil),               // 8: runtime.v1.RestoreResponse
+	(*DeleteRequest)(nil),                 // 9: runtime.v1.DeleteRequest
+	(*DeleteResponse)(nil),                // 10: runtime.v1.DeleteResponse
+	(*WaitRequest)(nil),                   // 11: runtime.v1.WaitRequest
+	(*WaitResponse)(nil),                  // 12: runtime.v1.WaitResponse
+	(*SandboxTemplate)(nil),               // 13: runtime.v1.SandboxTemplate
+	(*RegisterRequest)(nil),               // 14: runtime.v1.RegisterRequest
+	(*NormalResponse)(nil),                // 15: runtime.v1.NormalResponse
+	(*UnregisterRequest)(nil),             // 16: runtime.v1.UnregisterRequest
+	(*GetRegisteredRequest)(nil),          // 17: runtime.v1.GetRegisteredRequest
+	(*GetRegisteredResponse)(nil),         // 18: runtime.v1.GetRegisteredResponse
+	(*CheckpointRequest)(nil),             // 19: runtime.v1.CheckpointRequest
+	(*CheckpointResponse)(nil),            // 20: runtime.v1.CheckpointResponse
+	(*ListSandboxesRequest)(nil),          // 21: runtime.v1.ListSandboxesRequest
+	(*ListSandboxesResponse)(nil),         // 22: runtime.v1.ListSandboxesResponse
+	(*SandboxStatus)(nil),                 // 23: runtime.v1.SandboxStatus
+	(*KeyValue)(nil),                      // 24: runtime.v1.KeyValue
+	(*LinuxSandboxResources)(nil),         // 25: runtime.v1.LinuxSandboxResources
+	(*HugepageLimit)(nil),                 // 26: runtime.v1.HugepageLimit
+	(*SandboxMetadata)(nil),               // 27: runtime.v1.SandboxMetadata
+	(*SandboxMetadataList)(nil),           // 28: runtime.v1.SandboxMetadataList
+	(*StatsRequest)(nil),                  // 29: runtime.v1.StatsRequest
+	(*StatsResponse)(nil),                 // 30: runtime.v1.StatsResponse
+	(*ListAvailableRuntimesRequest)(nil),  // 31: runtime.v1.ListAvailableRuntimesRequest
+	(*ListAvailableRuntimesResponse)(nil), // 32: runtime.v1.ListAvailableRuntimesResponse
+	nil,                                   // 33: runtime.v1.StartRequest.EnvsEntry
+	nil,                                   // 34: runtime.v1.StartRequest.ResourcesEntry
+	nil,                                   // 35: runtime.v1.StartRequest.LabelsEntry
+	nil,                                   // 36: runtime.v1.StartRequest.MetricLabelsEntry
+	nil,                                   // 37: runtime.v1.SandboxTemplate.EnvsEntry
+	nil,                                   // 38: runtime.v1.ListSandboxesRequest.SelectorEntry
+	nil,                                   // 39: runtime.v1.SandboxStatus.LabelsEntry
+	nil,                                   // 40: runtime.v1.SandboxStatus.MetricLabelsEntry
+	nil,                                   // 41: runtime.v1.LinuxSandboxResources.UnifiedEntry
+	nil,                                   // 42: runtime.v1.SandboxMetadata.LabelsEntry
+	nil,                                   // 43: runtime.v1.SandboxMetadata.MetricLabelsEntry
+	nil,                                   // 44: runtime.v1.SandboxMetadataList.SandboxesEntry
 }
 var file_sandbox_api_proto_depIdxs = []int32{
 	0,  // 0: runtime.v1.RootfsConfig.type:type_name -> runtime.v1.RootfsSrcType
 	2,  // 1: runtime.v1.RootfsConfig.s3_config:type_name -> runtime.v1.S3Config
 	2,  // 2: runtime.v1.Mount.s3_config:type_name -> runtime.v1.S3Config
 	3,  // 3: runtime.v1.StartRequest.rootfs:type_name -> runtime.v1.RootfsConfig
-	31, // 4: runtime.v1.StartRequest.envs:type_name -> runtime.v1.StartRequest.EnvsEntry
+	33, // 4: runtime.v1.StartRequest.envs:type_name -> runtime.v1.StartRequest.EnvsEntry
 	4,  // 5: runtime.v1.StartRequest.mounts:type_name -> runtime.v1.Mount
-	32, // 6: runtime.v1.StartRequest.resources:type_name -> runtime.v1.StartRequest.ResourcesEntry
-	33, // 7: runtime.v1.StartRequest.labels:type_name -> runtime.v1.StartRequest.LabelsEntry
-	34, // 8: runtime.v1.StartRequest.metric_labels:type_name -> runtime.v1.StartRequest.MetricLabelsEntry
+	34, // 6: runtime.v1.StartRequest.resources:type_name -> runtime.v1.StartRequest.ResourcesEntry
+	35, // 7: runtime.v1.StartRequest.labels:type_name -> runtime.v1.StartRequest.LabelsEntry
+	36, // 8: runtime.v1.StartRequest.metric_labels:type_name -> runtime.v1.StartRequest.MetricLabelsEntry
 	5,  // 9: runtime.v1.RestoreRequest.sandbox:type_name -> runtime.v1.StartRequest
 	3,  // 10: runtime.v1.SandboxTemplate.rootfs:type_name -> runtime.v1.RootfsConfig
-	35, // 11: runtime.v1.SandboxTemplate.envs:type_name -> runtime.v1.SandboxTemplate.EnvsEntry
+	37, // 11: runtime.v1.SandboxTemplate.envs:type_name -> runtime.v1.SandboxTemplate.EnvsEntry
 	4,  // 12: runtime.v1.SandboxTemplate.mounts:type_name -> runtime.v1.Mount
 	13, // 13: runtime.v1.RegisterRequest.templates:type_name -> runtime.v1.SandboxTemplate
 	13, // 14: runtime.v1.GetRegisteredResponse.templates:type_name -> runtime.v1.SandboxTemplate
-	36, // 15: runtime.v1.ListSandboxesRequest.selector:type_name -> runtime.v1.ListSandboxesRequest.SelectorEntry
+	38, // 15: runtime.v1.ListSandboxesRequest.selector:type_name -> runtime.v1.ListSandboxesRequest.SelectorEntry
 	23, // 16: runtime.v1.ListSandboxesResponse.sandboxes:type_name -> runtime.v1.SandboxStatus
 	1,  // 17: runtime.v1.SandboxStatus.state:type_name -> runtime.v1.SandboxState
-	37, // 18: runtime.v1.SandboxStatus.labels:type_name -> runtime.v1.SandboxStatus.LabelsEntry
+	39, // 18: runtime.v1.SandboxStatus.labels:type_name -> runtime.v1.SandboxStatus.LabelsEntry
 	4,  // 19: runtime.v1.SandboxStatus.mounts:type_name -> runtime.v1.Mount
 	24, // 20: runtime.v1.SandboxStatus.envs:type_name -> runtime.v1.KeyValue
 	25, // 21: runtime.v1.SandboxStatus.resources:type_name -> runtime.v1.LinuxSandboxResources
-	38, // 22: runtime.v1.SandboxStatus.metric_labels:type_name -> runtime.v1.SandboxStatus.MetricLabelsEntry
+	40, // 22: runtime.v1.SandboxStatus.metric_labels:type_name -> runtime.v1.SandboxStatus.MetricLabelsEntry
 	26, // 23: runtime.v1.LinuxSandboxResources.hugepage_limits:type_name -> runtime.v1.HugepageLimit
-	39, // 24: runtime.v1.LinuxSandboxResources.unified:type_name -> runtime.v1.LinuxSandboxResources.UnifiedEntry
-	40, // 25: runtime.v1.SandboxMetadata.labels:type_name -> runtime.v1.SandboxMetadata.LabelsEntry
-	41, // 26: runtime.v1.SandboxMetadata.metric_labels:type_name -> runtime.v1.SandboxMetadata.MetricLabelsEntry
-	42, // 27: runtime.v1.SandboxMetadataList.sandboxes:type_name -> runtime.v1.SandboxMetadataList.SandboxesEntry
+	41, // 24: runtime.v1.LinuxSandboxResources.unified:type_name -> runtime.v1.LinuxSandboxResources.UnifiedEntry
+	42, // 25: runtime.v1.SandboxMetadata.labels:type_name -> runtime.v1.SandboxMetadata.LabelsEntry
+	43, // 26: runtime.v1.SandboxMetadata.metric_labels:type_name -> runtime.v1.SandboxMetadata.MetricLabelsEntry
+	44, // 27: runtime.v1.SandboxMetadataList.sandboxes:type_name -> runtime.v1.SandboxMetadataList.SandboxesEntry
 	27, // 28: runtime.v1.SandboxMetadataList.SandboxesEntry.value:type_name -> runtime.v1.SandboxMetadata
 	5,  // 29: runtime.v1.SandboxService.Start:input_type -> runtime.v1.StartRequest
 	7,  // 30: runtime.v1.SandboxService.Restore:input_type -> runtime.v1.RestoreRequest
@@ -2614,18 +2705,20 @@ var file_sandbox_api_proto_depIdxs = []int32{
 	16, // 36: runtime.v1.SandboxService.Unregister:input_type -> runtime.v1.UnregisterRequest
 	17, // 37: runtime.v1.SandboxService.GetRegistered:input_type -> runtime.v1.GetRegisteredRequest
 	19, // 38: runtime.v1.SandboxService.Checkpoint:input_type -> runtime.v1.CheckpointRequest
-	6,  // 39: runtime.v1.SandboxService.Start:output_type -> runtime.v1.StartResponse
-	8,  // 40: runtime.v1.SandboxService.Restore:output_type -> runtime.v1.RestoreResponse
-	10, // 41: runtime.v1.SandboxService.Delete:output_type -> runtime.v1.DeleteResponse
-	12, // 42: runtime.v1.SandboxService.Wait:output_type -> runtime.v1.WaitResponse
-	22, // 43: runtime.v1.SandboxService.List:output_type -> runtime.v1.ListSandboxesResponse
-	30, // 44: runtime.v1.SandboxService.Stats:output_type -> runtime.v1.StatsResponse
-	15, // 45: runtime.v1.SandboxService.Register:output_type -> runtime.v1.NormalResponse
-	15, // 46: runtime.v1.SandboxService.Unregister:output_type -> runtime.v1.NormalResponse
-	18, // 47: runtime.v1.SandboxService.GetRegistered:output_type -> runtime.v1.GetRegisteredResponse
-	20, // 48: runtime.v1.SandboxService.Checkpoint:output_type -> runtime.v1.CheckpointResponse
-	39, // [39:49] is the sub-list for method output_type
-	29, // [29:39] is the sub-list for method input_type
+	31, // 39: runtime.v1.SandboxService.ListAvailableRuntimes:input_type -> runtime.v1.ListAvailableRuntimesRequest
+	6,  // 40: runtime.v1.SandboxService.Start:output_type -> runtime.v1.StartResponse
+	8,  // 41: runtime.v1.SandboxService.Restore:output_type -> runtime.v1.RestoreResponse
+	10, // 42: runtime.v1.SandboxService.Delete:output_type -> runtime.v1.DeleteResponse
+	12, // 43: runtime.v1.SandboxService.Wait:output_type -> runtime.v1.WaitResponse
+	22, // 44: runtime.v1.SandboxService.List:output_type -> runtime.v1.ListSandboxesResponse
+	30, // 45: runtime.v1.SandboxService.Stats:output_type -> runtime.v1.StatsResponse
+	15, // 46: runtime.v1.SandboxService.Register:output_type -> runtime.v1.NormalResponse
+	15, // 47: runtime.v1.SandboxService.Unregister:output_type -> runtime.v1.NormalResponse
+	18, // 48: runtime.v1.SandboxService.GetRegistered:output_type -> runtime.v1.GetRegisteredResponse
+	20, // 49: runtime.v1.SandboxService.Checkpoint:output_type -> runtime.v1.CheckpointResponse
+	32, // 50: runtime.v1.SandboxService.ListAvailableRuntimes:output_type -> runtime.v1.ListAvailableRuntimesResponse
+	40, // [40:51] is the sub-list for method output_type
+	29, // [29:40] is the sub-list for method input_type
 	29, // [29:29] is the sub-list for extension type_name
 	29, // [29:29] is the sub-list for extension extendee
 	0,  // [0:29] is the sub-list for field type_name
@@ -2652,7 +2745,7 @@ func file_sandbox_api_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sandbox_api_proto_rawDesc), len(file_sandbox_api_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   41,
+			NumMessages:   43,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

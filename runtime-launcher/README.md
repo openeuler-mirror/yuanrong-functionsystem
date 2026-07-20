@@ -73,6 +73,7 @@ go build -buildvcs=false -o bin/rl-client ./cmd/rl-client/
 | `Checkpoint` | 对容器创建检查点 |
 | `List` | 按条件列出容器 |
 | `Stats` | 返回容器资源使用统计 |
+| `ListAvailableRuntimes` | 返回运行时类静态快照；runtime-launcher 不暴露 handler，因此返回空快照 |
 | `Version` | 返回运行时版本信息 |
 
 ## Mount 配置

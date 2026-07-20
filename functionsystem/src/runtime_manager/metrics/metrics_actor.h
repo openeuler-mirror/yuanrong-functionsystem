@@ -20,6 +20,8 @@
 #include <actor/actor.hpp>
 #include <async/future.hpp>
 
+#include <set>
+
 #include "collector/base_metrics_collector.h"
 #include "collector/heterogeneous_collector/topo_info.h"
 #include "common/proto/pb/message_pb.h"
@@ -110,6 +112,10 @@ public:
      */
     resources::ResourceUnit GetResourceUnit();
 
+    // Initializes the process-lifetime sandbox runtime capability snapshot.
+    // Repeating the same snapshot is idempotent; changing it is rejected.
+    Status InitializeSandboxRuntimeCapabilities(const std::set<std::string> &runtimes);
+
     void UpdateAgentInfo(const litebus::AID &agent);
 
     void UpdateRuntimeManagerInfo(const litebus::AID &runtimeManagerAID);
@@ -185,6 +191,8 @@ private:
     // Store the consecutive anomaly counts for each instanceID
     std::unordered_map<std::string, int> anomalyCounts_;
     RuntimeMemoryExceedLimitCallbackFunc runtimeMemoryExceedLimitCallback_;
+    bool sandboxRuntimeCapabilitiesInitialized_{false};
+    std::set<std::string> sandboxRuntimeCapabilities_;
 };
 }  // namespace functionsystem::runtime_manager
 

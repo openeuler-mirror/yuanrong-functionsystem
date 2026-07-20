@@ -17,6 +17,7 @@
 
 #include <gtest/gtest.h>
 
+#include "common/constants/constants.h"
 #include "common/utils/exec_utils.h"
 #include "mock_function_agent_actor.h"
 #include "mocks/mock_local_sched_srv.h"
@@ -49,6 +50,39 @@ public:
         return runtime_manager::MetricsActor::BuildResourceUnit(metricses);
     }
 };
+
+TEST(MetricsActorSandboxRuntimeCapabilitiesTest, PublishesFrozenSnapshotAndOverridesConfiguredLabel)
+{
+    TestMetricsActor actor;
+    const std::set<std::string> runtimes{ "kata", "runc" };
+
+    EXPECT_TRUE(actor.InitializeSandboxRuntimeCapabilities(runtimes).IsOk());
+    EXPECT_TRUE(actor.InitializeSandboxRuntimeCapabilities(runtimes).IsOk());
+    EXPECT_FALSE(actor.InitializeSandboxRuntimeCapabilities({ "runsc" }).IsOk());
+
+    Metrics labelMetrics;
+    labelMetrics.initLabels = std::unordered_map<std::string, std::string>{ { SANDBOX_RUNTIME_LABEL, "stale" } };
+    labelMetrics.metricsType = metrics_type::LABELS;
+    labelMetrics.collectorType = collector_type::SYSTEM;
+    std::vector<litebus::Future<Metrics>> metrics{ labelMetrics };
+    auto unit = actor.BuildResourceUnit(metrics);
+
+    ASSERT_EQ(unit.nodelabels().count(SANDBOX_RUNTIME_LABEL), size_t{1});
+    const auto &items = unit.nodelabels().at(SANDBOX_RUNTIME_LABEL).items();
+    EXPECT_EQ(items.size(), size_t{2});
+    EXPECT_EQ(items.at("kata"), uint64_t{1});
+    EXPECT_EQ(items.at("runc"), uint64_t{1});
+    EXPECT_EQ(items.count("stale"), size_t{0});
+}
+
+TEST(MetricsActorSandboxRuntimeCapabilitiesTest, AcceptsEmptySnapshotWithoutPublishingLabel)
+{
+    TestMetricsActor actor;
+    EXPECT_TRUE(actor.InitializeSandboxRuntimeCapabilities({}).IsOk());
+
+    auto unit = actor.BuildResourceUnit({});
+    EXPECT_EQ(unit.nodelabels().count(SANDBOX_RUNTIME_LABEL), size_t{0});
+}
 
 class DISABLED_MetricsActorTest : public ::testing::Test {
 protected:
