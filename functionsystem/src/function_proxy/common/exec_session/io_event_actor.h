@@ -33,7 +33,8 @@ namespace functionsystem {
 class IOEventActor : public litebus::ActorBase {
 public:
     // IO callback type: (data, exitCode) -> void
-    // exitCode: -1 for normal data, >=0 for EOF/error with exit code
+    // exitCode: -1 for normal data, >=0 for EOF/error notification. The latter is not
+    // the child process exit status; ExecSessionActor obtains that from the wait future.
     using IOCallback = std::function<void(const std::string &data, int exitCode)>;
 
     // Create singleton instance (should be called once at service startup)
