@@ -877,7 +877,7 @@ func TestDeleteResponseForMeta(t *testing.T) {
 		}).ApplyFunc(storage.DeleteFunctionStatus, func(txn storage.Transaction, funcName string, funcVer string) error {
 			return nil
 		}).ApplyFunc(publish.DeletePublishFunction, func(txn storage.Transaction, name string,
-			tenantInfo server.TenantInfo, funcVersion string) {
+			tenantInfo server.TenantInfo, funcVersion, kind string) {
 		}).ApplyMethod(reflect.TypeOf(txn), "Commit", func(_ *storage.Txn) error {
 			return snerror.New(10000, "etcd transation failed")
 		})

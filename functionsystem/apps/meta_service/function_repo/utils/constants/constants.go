@@ -69,6 +69,9 @@ const (
 	DefaultClusterID = "cluster001"
 	// Faas kind of function creation
 	Faas = "faas"
+	// Agent is a function category in the same dimension as Faas/Yrlib (not a language).
+	// Registered via kind="agent"; the runtime field carries the real language (e.g. python3.11).
+	Agent = "agent"
 )
 
 const (

@@ -58,7 +58,7 @@ std::shared_ptr<DeployInstanceRequest> GetDeployInstanceReq(const FunctionMeta &
         }
     }
 
-    if (funcMeta.sandboxType == "supervisor") {
+    if (!funcMeta.sandboxType.empty()) {
         (*deployInstanceRequest->mutable_createoptions())["sandbox_type"] = funcMeta.sandboxType;
     }
     deployInstanceRequest->mutable_scheduleoption()->set_schedpolicyname(

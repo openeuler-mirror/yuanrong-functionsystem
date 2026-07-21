@@ -361,5 +361,9 @@ const std::vector<std::string> VIRTUALENV_KEYS = {VIRTUALENV_KIND, VIRTUALENV_NA
 // deploy options
 const std::string EXEC_PATH = "exec_path";
 const std::string HOST_USER = "host_user";
+
+// sandboxType values (function meta sandboxType field)
+const std::string SANDBOX_TYPE_DOCKER = "docker";
+const std::string SANDBOX_TYPE_SUPERVISOR = "supervisor";
 }  // namespace functionsystem
 #endif  // COMMON_CONSTANTS_CONSTANTS_H

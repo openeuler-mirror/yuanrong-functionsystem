@@ -35,6 +35,7 @@ type Function struct {
 	ExtendedMetaData ExtendedMetaData `json:"extendedMetaData" valid:",optional"`
 	WarmupType       string           `json:"warmup" valid:",optional"`
 	RootfsSpecMeta   RootfsSpecMeta   `json:"rootfs" valid:",optional"`
+	SandboxType      string           `json:"sandboxType" valid:"optional"`
 }
 
 // FuncMetaData define meta data of functions
@@ -165,6 +166,8 @@ type RootfsSpecMeta struct {
 	Runtime     string            `json:"runtime" valid:",optional"`
 	Type        string            `json:"type" valid:",optional"`
 	ImageURL    string            `json:"imageurl" valid:",optional"`
+	User        string            `json:"user" valid:",optional"`
+	Ports       []string          `json:"ports" valid:",optional"`
 	ReadOnly    bool              `json:"readonly" valid:",optional"`
 	StorageInfo RootfsStorageInfo `json:"storageInfo" valid:",optional"`
 	MountPoint  string            `json:"mountpoint" valid:",optional"`
