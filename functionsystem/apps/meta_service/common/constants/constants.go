@@ -319,6 +319,8 @@ const (
 	WorkingDirStorageType = "working_dir"
 	// Faas kind of function creation
 	Faas = "faas"
+	// Agent kind of function creation (same dimension as Faas/Yrlib)
+	Agent = "agent"
 )
 
 // prefixes of ETCD keys

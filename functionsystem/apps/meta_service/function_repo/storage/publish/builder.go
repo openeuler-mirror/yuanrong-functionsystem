@@ -37,14 +37,16 @@ func appendTenantInfo(keys []string, info server.TenantInfo) []string {
 
 // BuildFunctionRegisterKey returns the etcd key of the registered function information.
 // Routing is by kind (function category, same dimension as faas/yrlib/agent):
-//   - faas  -> /sn/functions
-//   - agent / yrlib / others -> /yr/functions
-// function_proxy watches /yr/functions so it can load the funcMeta and schedule agent/yrlib instances.
+//   - faas / agent -> /sn/functions
+//   - yrlib / others -> /yr/functions
+//
+// frontend watches /sn/functions so it loads the funcMeta (incl. rootfs.user/ports/sandboxType)
+// for both faas and agent instances.
 func BuildFunctionRegisterKey(info server.TenantInfo, name, funcVersion, kind string) string {
-	// format(faas):  /sn/functions/business/<businessID>/tenant/<tenantID>/function/<functionName>/version/<version>
-	// format(yrlib): /yr/functions/business/<businessID>/tenant/<tenantID>/function/<functionName>/version/<version>
+	// format(faas/agent): /sn/functions/business/<businessID>/tenant/<tenantID>/function/<functionName>/version/<version>
+	// format(yrlib):    /yr/functions/business/<businessID>/tenant/<tenantID>/function/<functionName>/version/<version>
 	keys := []string{constants.YRFunctionPrefix}
-	if kind == constants.Faas {
+	if kind == constants.Faas || kind == constants.Agent {
 		keys = []string{constants.FunctionPrefix}
 	}
 	keys = appendTenantInfo(keys, info)

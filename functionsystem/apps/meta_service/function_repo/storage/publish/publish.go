@@ -232,7 +232,7 @@ func buildFaaSFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionVa
 		return metadata.FaaSFuncMeta{}, err
 	}
 	info.RootfsSpecMeta = buildRootFsSpecMeta(fv.FunctionVersion.RootfsSpecMeta)
-    info.SandboxType = fv.FunctionVersion.SandboxType
+	info.SandboxType = fv.FunctionVersion.SandboxType
 	return info, nil
 }
 
@@ -564,7 +564,9 @@ func getEnvironment(key []byte, funcVersion storage.FunctionVersionValue) (strin
 func getEnvironmentText(funcVersion storage.FunctionVersionValue) (string, error) {
 	envMap := make(map[string]string, envMapLength)
 	envPrefix := config.RepoCfg.FunctionCfg.DefaultCfg.EnvPrefix
-	if funcVersion.FunctionVersion.Kind == common.Faas {
+	// faas and agent carry the environment as-is (no func- prefix) so the keys land in the
+	// container verbatim (e.g. AGENT_MODE). other kinds (e.g. yrlib) keep the func- prefix.
+	if funcVersion.FunctionVersion.Kind == common.Faas || funcVersion.FunctionVersion.Kind == common.Agent {
 		envPrefix = ""
 	}
 	if len(funcVersion.FunctionVersion.Environment) != 0 {

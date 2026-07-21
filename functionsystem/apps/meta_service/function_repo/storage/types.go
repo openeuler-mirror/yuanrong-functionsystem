@@ -409,7 +409,9 @@ type PoolTuple struct {
 
 // GetTxnByKind -
 func GetTxnByKind(ctx server.Context, kind string) Transaction {
-	if kind == constants.Faas {
+	// faas and agent register via meta etcd so frontend / function_proxy watchers
+	// can load the funcMeta (incl. rootfs/sandboxType) from etcd.
+	if kind == constants.Faas || kind == constants.Agent {
 		return NewMetaTxn(ctx)
 	}
 	return NewTxn(ctx)
