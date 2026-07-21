@@ -468,8 +468,17 @@ function install_function_scheduler() {
   init_scheduler_config=${FUNCTION_SYSTEM_DIR}/config/init_scheduler_args.json
   install_init_scheduler_config=${config_install_dir}/init_scheduler_args_temp.json
   cp ${init_scheduler_config} ${install_init_scheduler_config}
+  local lite_enabled_tenants
+  local lite_enabled_functions
+  lite_enabled_tenants=$(printf '%s' "${LITE_SCHEDULER_ENABLED_TENANTS}" | sed 's/[\\&|]/\\&/g')
+  lite_enabled_functions=$(printf '%s' "${LITE_SCHEDULER_ENABLED_FUNCTIONS}" | sed 's/[\\&|]/\\&/g')
   sed -i "s/{etcdAddr}/$(echo ${ETCD_CLUSTER_ADDRESS} | sed 's/,/","/g')/g" ${install_init_scheduler_config}
   sed -i "s/{functionSchedulerLeasePort}/${FUNCTION_SCHEDULER_LEASE_PORT}/g" ${install_init_scheduler_config}
+  sed -i "s|{liteEnable}|${LITE_SCHEDULER_ENABLE}|g" ${install_init_scheduler_config}
+  sed -i "s|{liteEnableAllTenants}|${LITE_SCHEDULER_ENABLE_ALL_TENANTS}|g" ${install_init_scheduler_config}
+  sed -i "s|{liteEnabledTenants}|${lite_enabled_tenants}|g" ${install_init_scheduler_config}
+  sed -i "s|{liteEnabledFunctions}|${lite_enabled_functions}|g" ${install_init_scheduler_config}
+  sed -i "s|{liteAcquireWaitTimeoutMs}|${LITE_SCHEDULER_ACQUIRE_WAIT_TIMEOUT_MS}|g" ${install_init_scheduler_config}
   sed -i "s/{sslEnable}/${SSL_ENABLE}/g" ${install_init_scheduler_config}
   sed -i "s/{sccEnable}/${SCC_ENABLE}/g" ${install_init_scheduler_config}
   sed -i "s/{etcdAuthType}/${ETCD_AUTH_TYPE}/g" ${install_init_scheduler_config}
