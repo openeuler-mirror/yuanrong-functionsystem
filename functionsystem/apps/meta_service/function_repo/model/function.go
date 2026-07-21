@@ -488,6 +488,7 @@ type FunctionForUser struct {
 	Device              types.Device         `json:"device,omitempty"`
 	Kind                string               `json:"kind,omitempty"`
 	RootfsSpecMeta      types.RootfsSpecMeta `json:"rootfs" valid:",optional"`
+	SandboxType         string               `json:"sandboxType" valid:"optional"`
 }
 
 // GetFunctionResponseForUser is response of function info

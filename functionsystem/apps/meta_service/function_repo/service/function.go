@@ -942,6 +942,7 @@ func buildFunctionVersionInfo(function model.Function, functionVersionURN string
 		Device:             version.FunctionVersion.Device,
 		Kind:               version.FunctionVersion.Kind,
 		RootfsSpecMeta:     version.FunctionVersion.RootfsSpecMeta,
+		SandboxType:        version.FunctionVersion.SandboxType,
 	}
 	if version.FunctionVersion.CustomResources != "" {
 		err := json.Unmarshal([]byte(version.FunctionVersion.CustomResources), &v.CustomResources)
