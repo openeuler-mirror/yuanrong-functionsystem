@@ -19,6 +19,7 @@
 #include <fcntl.h>
 #include <csignal>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <chrono>
@@ -104,20 +105,17 @@ void ExecSessionActor::Finalize()
 void ExecSessionActor::DoOutput(const std::string &data, int exitCode)
 {
     if (exitCode >= 0) {
-        YRLOG_INFO("Process exit, sessionId: {}, exitCode: {}", sessionId_, exitCode);
-        running_ = false;
-        stdoutFd_ = -1;  // Mark unregistered so Cleanup skips (IOEventActor handles EOF path)
-        stderrFd_ = -1;
-        // Ensure pendingExitCode_ is set BEFORE calling Close()/DoCleanupAfterUnregister().
-        // OnProcessExit() may not have fired yet (IOEventActor EOF and exec status completion
-        // are two independent events; EOF often arrives first).  Without this store,
-        // DoCleanupAfterUnregister would see pendingExitCode_ == -1 and send an unnecessary
-        // SIGTERM that can hit a new process that reused the same PID (kernel PID recycling).
+        YRLOG_INFO("Output closed, sessionId: {}", sessionId_);
+        // IOEventActor reports EOF and I/O errors with a non-negative sentinel. It does not
+        // know the child process status, so it must never manufacture an exit code. The wait
+        // future and output EOF are independent events and can arrive in either order.
+        stdoutFd_ = -1;
         int actualExitCode = pendingExitCode_.load();
         if (actualExitCode < 0) {
-            pendingExitCode_.store(exitCode);
-            actualExitCode = exitCode;
+            YRLOG_INFO("Waiting for process status, sessionId: {}", sessionId_);
+            return;
         }
+        running_ = false;
         WriteToStream("", actualExitCode);
         Close();
     } else {
@@ -237,15 +235,12 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
         }
     }
 
-    auto onUnregister = [aid = GetAID()]() {
-        litebus::Async(aid, &ExecSessionActor::DoCleanupAfterUnregister);
-    };
     if (stdoutFd_ >= 0) {
         litebus::Async(IOEventActor::GetInstance(), &IOEventActor::DoRegister, stdoutFd_,
                        [aid = GetAID()](const std::string &data, int exitCode) {
                            litebus::Async(aid, &ExecSessionActor::DoOutput, data, exitCode);
                        },
-                       onUnregister);
+                       std::function<void()>{});
     }
 
     if (!tty_ && exec_->GetErr().IsSome()) {
@@ -261,7 +256,7 @@ void ExecSessionActor::DoStart(const std::string &containerId, const std::vector
                                    litebus::Async(aid, &ExecSessionActor::DoOutput, data, exitCode);
                                }
                            },
-                           nullptr);  // stdout's onUnregister triggers DoCleanupAfterUnregister
+                           nullptr);
         }
     }
 
@@ -351,9 +346,14 @@ void ExecSessionActor::OnProcessExit(const litebus::Future<litebus::Option<int>>
         return;
     }
 
-    int exitCode = 0;
+    int exitCode = 1;
     if (!future.IsError() && future.Get().IsSome()) {
-        exitCode = future.Get().Get();
+        const int waitStatus = future.Get().Get();
+        if (WIFEXITED(waitStatus)) {
+            exitCode = WEXITSTATUS(waitStatus);
+        } else if (WIFSIGNALED(waitStatus)) {
+            exitCode = 128 + WTERMSIG(waitStatus);
+        }
     }
 
     YRLOG_INFO("Process exited, sessionId: {}, exitCode: {}", sessionId_, exitCode);

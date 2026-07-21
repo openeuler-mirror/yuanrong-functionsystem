@@ -57,7 +57,9 @@ public:
     void DoStart(const std::string &containerId, const std::vector<std::string> &command,
                  const std::map<std::string, std::string> &env, bool tty, int rows, int cols);
     void DoInput(const std::string &data);
-    void DoOutput(const std::string &data, int exitCode);  // exitCode: -1=normal, >=0=exit
+    // IO callbacks use -1 for data and a non-negative sentinel for stream closure. The
+    // sentinel is not a process exit status; the real status comes from OnProcessExit.
+    void DoOutput(const std::string &data, int exitCode);
     void DoResize(int rows, int cols);
     void DoStdinEof();  // Close the process stdin pipe (enables streaming tar without head -c)
     void DoClose();

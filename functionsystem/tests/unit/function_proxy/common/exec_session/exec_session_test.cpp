@@ -70,5 +70,21 @@ TEST_F(ExecSessionActorTest, IOEventActorSingleton) {
     EXPECT_FALSE(aid1.Name().empty());
 }
 
+// An output EOF can arrive before the child wait future completes. The I/O layer's
+// sentinel must not be published as the process exit code.
+TEST_F(ExecSessionActorTest, OutputEofDoesNotManufactureExitCode) {
+    std::vector<std::pair<std::string, int>> outputs;
+
+    ExecSessionActor::CreateParams params;
+    params.writer = [&outputs](const std::string& data, int exitCode) {
+        outputs.push_back({data, exitCode});
+    };
+
+    auto actor = ExecSessionActor::Create(params);
+    actor->DoOutput("", 0);
+
+    EXPECT_TRUE(outputs.empty());
+}
+
 }  // namespace test
 }  // namespace functionsystem
