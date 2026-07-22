@@ -18,7 +18,9 @@
 
 #include <gtest/gtest.h>
 
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 
 #include "mocks/mock_meta_store_client.h"
 #include "utils/port_helper.h"
@@ -215,6 +217,80 @@ TEST_F(MetaStorageAccessorTest, RevokeValidKey)
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     auto result = accessor.Revoke(testKey).Get();
     EXPECT_TRUE(result.IsOk());
+}
+
+TEST_F(MetaStorageAccessorTest, RevokeCancelsInitialKeepAliveTimer)
+{
+    const std::string testKey = "test key";
+    const std::string testValue = "test value";
+    const int64_t leaseID = 1;
+    const int ttl = 600;
+
+    uint16_t port = GetPortEnv("LITEBUS_PORT", 8080);
+    std::string address = "127.0.0.1:" + std::to_string(port);
+    std::unique_ptr<MockMetaStoreClient> mockMetaStoreClient = std::make_unique<MockMetaStoreClient>(address);
+
+    auto putResponse = std::make_shared<PutResponse>();
+    EXPECT_CALL(*mockMetaStoreClient, Put).WillOnce(Return(putResponse));
+    litebus::Future<LeaseGrantResponse> leaseGrantResponseFuture;
+    leaseGrantResponseFuture.SetValue({ Status::OK(), ResponseHeader(), leaseID, ttl });
+    EXPECT_CALL(*mockMetaStoreClient, Grant).WillOnce(Return(leaseGrantResponseFuture));
+    EXPECT_CALL(*mockMetaStoreClient, KeepAliveOnce).Times(0);
+
+    litebus::Future<LeaseRevokeResponse> leaseRevokeResponseFuture;
+    leaseRevokeResponseFuture.SetValue({});
+    EXPECT_CALL(*mockMetaStoreClient, Revoke).WillOnce(Return(leaseRevokeResponseFuture));
+
+    MetaStorageAccessor accessor{ std::move(mockMetaStoreClient) };
+    EXPECT_TRUE(accessor.PutWithLease(testKey, testValue, ttl).Get().IsOk());
+    EXPECT_TRUE(accessor.Revoke(testKey).Get().IsOk());
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+}
+
+TEST_F(MetaStorageAccessorTest, RevokeInvalidatesInFlightKeepAliveResponse)
+{
+    const std::string testKey = "in-flight-key";
+    const std::string testValue = "old-value";
+    const int64_t leaseID = 1;
+    const int ttl = 100;
+
+    uint16_t port = GetPortEnv("LITEBUS_PORT", 8080);
+    std::string address = "127.0.0.1:" + std::to_string(port);
+    std::unique_ptr<MockMetaStoreClient> mockMetaStoreClient = std::make_unique<MockMetaStoreClient>(address);
+
+    auto putResponse = std::make_shared<PutResponse>();
+    EXPECT_CALL(*mockMetaStoreClient, Put).Times(1).WillOnce(Return(putResponse));
+    litebus::Future<LeaseGrantResponse> leaseGrantResponseFuture;
+    leaseGrantResponseFuture.SetValue({ Status::OK(), ResponseHeader(), leaseID, ttl });
+    EXPECT_CALL(*mockMetaStoreClient, Grant).Times(1).WillOnce(Return(leaseGrantResponseFuture));
+
+    litebus::Promise<LeaseKeepAliveResponse> keepAlivePromise;
+    std::mutex keepAliveMutex;
+    std::condition_variable keepAliveStarted;
+    bool started = false;
+    EXPECT_CALL(*mockMetaStoreClient, KeepAliveOnce(leaseID))
+        .WillOnce([&](int64_t) {
+            {
+                std::lock_guard<std::mutex> lock(keepAliveMutex);
+                started = true;
+            }
+            keepAliveStarted.notify_one();
+            return keepAlivePromise.GetFuture();
+        });
+
+    litebus::Future<LeaseRevokeResponse> leaseRevokeResponseFuture;
+    leaseRevokeResponseFuture.SetValue({});
+    EXPECT_CALL(*mockMetaStoreClient, Revoke(leaseID)).WillOnce(Return(leaseRevokeResponseFuture));
+
+    MetaStorageAccessor accessor{ std::move(mockMetaStoreClient) };
+    ASSERT_TRUE(accessor.PutWithLease(testKey, testValue, ttl).Get().IsOk());
+    {
+        std::unique_lock<std::mutex> lock(keepAliveMutex);
+        ASSERT_TRUE(keepAliveStarted.wait_for(lock, std::chrono::seconds(1), [&] { return started; }));
+    }
+    ASSERT_TRUE(accessor.Revoke(testKey).Get().IsOk());
+    keepAlivePromise.SetValue({ Status::OK(), ResponseHeader(), leaseID, 0 });
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
 }
 
 }  // namespace functionsystem::test

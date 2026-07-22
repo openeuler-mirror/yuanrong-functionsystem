@@ -39,6 +39,7 @@
 #include "local_scheduler/snap_ctrl/snap_ctrl.h"
 #include "local_scheduler/subscription_manager/subscription_mgr.h"
 #include "local_scheduler/grpc_server/exec_service/exec_stream_service.h"
+#include "local_scheduler/tcp_tunnel_server.h"
 
 namespace functionsystem::local_scheduler {
 struct LocalSchedStartParam {
@@ -101,6 +102,14 @@ struct LocalSchedStartParam {
     bool traefikEnableTLS = true;
     std::string traefikServersTransport = "yr-backend-tls@file";
     bool enableMergeProcess = false;  // 共进程模式开关（--enable_merge_process）
+    bool enableTcpTunnel = false;
+    bool tcpTunnelEnableTLS = false;
+    std::string tcpTunnelPort = "22775";
+    uint32_t tcpTunnelMaxConnections = 1024;
+    std::string tcpTunnelRootCert;
+    std::string tcpTunnelModuleCert;
+    std::string tcpTunnelModuleKey;
+    bool enableFrontendProxyService = false;
 };
 
 class LocalSchedulingApiRouter : public ApiRouterRegister {
@@ -117,9 +126,8 @@ public:
 
 class LocalSchedDriver : public ModuleDriver {
 public:
-    explicit LocalSchedDriver(LocalSchedStartParam &&param, const std::shared_ptr<MetaStoreClient> metaStoreClient)
-        : param_(std::move(param)), metaStoreClient_(metaStoreClient){};
-    ~LocalSchedDriver() override = default;
+    explicit LocalSchedDriver(LocalSchedStartParam &&param, const std::shared_ptr<MetaStoreClient> metaStoreClient);
+    ~LocalSchedDriver() override;
 
     Status Start() override;
     Status Stop() override;
@@ -127,6 +135,11 @@ public:
     Status Recover() override;
     void ToReady() override;
     void Await() override;
+
+    bool IsFrontendProxyDispatcherAvailable() const
+    {
+        return param_.enableFrontendProxyService && isStarted_ && frontendProxyServiceRegistered_;
+    }
 
 protected:
     Status Create();
@@ -177,10 +190,12 @@ private:
     std::shared_ptr<RuntimeReconcileActor> runtimeReconcileActor_;
     std::shared_ptr<InstanceCtrlMetaStoreHealthyObserver> metaStoreHealthyObserver_;
     std::shared_ptr<functionsystem::grpc::CommonGrpcServer> posixGrpcServer_;
+    std::unique_ptr<TcpTunnelServer> tcpTunnelServer_;
     std::shared_ptr<functionsystem::grpc::CommonGrpcServer> sessionGrpcServer_;
     std::shared_ptr<ExecStreamService> execStreamService_;
     std::shared_ptr<TraefikRegistry> traefikRegistry_;
     bool isStarted_ = false;
+    bool frontendProxyServiceRegistered_ = false;
 };
 }  // namespace functionsystem::local_scheduler
 

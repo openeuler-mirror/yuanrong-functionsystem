@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "function_proxy/local_scheduler/local_sched_driver.h"
+#include "function_proxy/local_scheduler/tcp_tunnel_server.h"
 #include "mocks/mock_resource_view_mgr.h"
 #include "utils/future_test_helper.h"
 
@@ -87,5 +88,40 @@ TEST(LocalSchedulingApiRouterTest, UnsupportedMethodReturnsMethodNotAllowed)
     auto response = handlers->at("/localschedulingstatus")(request);
     ASSERT_AWAIT_READY(response);
     EXPECT_EQ(response.Get().retCode, litebus::http::ResponseCode::METHOD_NOT_ALLOWED);
+}
+
+TEST(TcpTunnelServerTest, ResolvesPublishedTCPPort)
+{
+    std::string error;
+    EXPECT_EQ(ResolvePublishedTCPPort(R"(["tcp:30222:22","udp:30223:22"])", 22, error), 30222);
+    EXPECT_TRUE(error.empty());
+
+    EXPECT_EQ(ResolvePublishedTCPPort(R"(["tcp:38080:8080"])", 8080, error), 38080);
+    EXPECT_TRUE(error.empty());
+
+    EXPECT_EQ(ResolvePublishedTCPPort(R"(["tcp:38081:2222"])", 0, error), 38081);
+    EXPECT_TRUE(error.empty());
+
+    EXPECT_EQ(ResolvePublishedTCPPort(R"(["30224:22"])", 22, error), -1);
+}
+
+TEST(TcpTunnelServerTest, RejectsInvalidOrNonTcpPortMapping)
+{
+    std::string error;
+    EXPECT_EQ(ResolvePublishedTCPPort(R"(["udp:30223:22"])", 22, error), -1);
+    EXPECT_EQ(error, "requested container port is not published as TCP");
+
+    EXPECT_EQ(ResolvePublishedTCPPort(R"({"tcp:30222:22":true})", 22, error), -1);
+    EXPECT_EQ(error, "port forward metadata must be an array");
+
+    EXPECT_EQ(ResolvePublishedTCPPort(R"(["tcp:30222:22","tcp:30223:8080"])", 0, error), -1);
+    EXPECT_EQ(error, "target port is required when multiple TCP ports are published");
+
+    EXPECT_EQ(ResolvePublishedTCPPort(R"(["tcp:30222:22","tcp:30223:8080"])", 9090, error), -1);
+    EXPECT_EQ(error, "requested container port is not published as TCP");
+
+    EXPECT_EQ(ResolvePublishedTCPPort(R"(["tcp:30222abc:22"])", 22, error), -1);
+    EXPECT_EQ(ResolvePublishedTCPPort(R"(["tcp:30222:22abc"])", 22, error), -1);
+    EXPECT_EQ(ResolvePublishedTCPPort(R"(["tcp: 30222:22"])", 22, error), -1);
 }
 }  // namespace functionsystem::test

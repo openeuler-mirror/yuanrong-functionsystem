@@ -41,6 +41,7 @@
 #include "function_proxy/common/observer/control_plane_observer/control_plane_observer.h"
 #include "function_proxy/common/posix_client/control_plane_client/control_interface_client_manager_proxy.h"
 #include "function_proxy/common/rate_limiter/token_bucket_rate_limiter.h"
+#include "local_scheduler/instance_control/frontend_kill_cleanup_snapshot.h"
 // for remove rgroup, easy for facilitates authentication, which should be extracted in the future
 #include "local_scheduler/instance_control/idle/idle_mgr.h"
 #include "local_scheduler/resource_group_controller/resource_group_ctrl.h"
@@ -51,6 +52,8 @@ namespace functionsystem::local_scheduler {
 class TraefikRegistry;
 using CtrlClientPromise = litebus::Promise<std::shared_ptr<ControlInterfacePosixClient>>;
 using InstanceReadyCallBack = std::function<litebus::Future<Status>(const Status &status)>;
+using InstanceReadyCallResultCallBack = std::function<litebus::Future<CallResultAck>(
+    const std::shared_ptr<functionsystem::CallResult> &callResult)>;
 using ClearGroupInstanceCallBack = std::function<void(const InstanceInfo &instanceInfo)>;
 using CreateCallResultCallBack =
     std::function<litebus::Future<CallResultAck>(const std::shared_ptr<functionsystem::CallResult> &callResult)>;
@@ -242,6 +245,9 @@ public:
 
     litebus::Future<CallResultAck> ClearCreateCallResultPromises(const litebus::Future<CallResultAck> &future,
                                                                  const std::string &from);
+
+    InstanceReadyCallResultCallBack TakeFrontendReadyCallback(
+        const std::string &srcInstance, const std::shared_ptr<functionsystem::CallResult> &callResult);
 
     virtual litebus::Future<CallResultAck> SendCallResult(
         const std::string &srcInstance,
@@ -478,6 +484,25 @@ public:
     void RegisterReadyCallback(const std::string &instanceID,
                                const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
                                InstanceReadyCallBack callback);
+    void RegisterReadyCallResultCallback(const std::string &instanceID,
+                                         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+                                         InstanceReadyCallResultCallBack callback);
+    litebus::Future<messages::ScheduleResponse> ScheduleFrontendAndWaitReady(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
+        InstanceReadyCallResultCallBack callback);
+    void UnregisterFrontendReadyWait(const std::string &requestID, const std::string &reason);
+    litebus::Future<KillResponse> KillFrontend(const std::string &tenantID,
+                                               const std::shared_ptr<KillRequest> &killReq);
+    FrontendKillCleanupSnapshot ProbeFrontendKillCleanup(const std::string &requestID,
+                                                         const std::string &instanceID);
+    void EraseReadyCallResultCallbackByRequestID(const std::string &requestID);
+    void EraseReadyCallResultCallbackByInstanceID(const std::string &instanceID);
+    bool RegisterFrontendReadyTicket(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+                                     InstanceReadyCallResultCallBack callback);
+    bool BindFrontendReadyTicketInstance(const std::string &requestID, const std::string &instanceID);
+    void OnFrontendScheduleCompleted(const litebus::Future<messages::ScheduleResponse> &future,
+                                     const std::string &requestID);
     litebus::Future<Status> ForceDeleteInstance(const std::string &instanceID);
     inline void RegisterClearGroupInstanceCallBack(ClearGroupInstanceCallBack callback)
     {
@@ -765,6 +790,9 @@ private:
                                                           const std::string &requestID, const std::string &instanceID);
 
     litebus::Future<Status> KillRuntime(const InstanceInfo &instanceInfo, bool isRecovering = false);
+    litebus::Future<Status> RecordFrontendKillRuntimeResult(
+        const InstanceInfo &instanceInfo, const messages::KillInstanceResponse &response);
+    void ExpireFrontendKillRuntimeEvidence(const std::string &instanceID, const std::string &requestID);
     inline bool IsValidKillParam(
         const Status &status, std::shared_ptr<KillContext> &killCtx, const std::shared_ptr<KillRequest> &killReq,
         std::shared_ptr<InstanceStateMachine> &stateMachine);
@@ -1026,6 +1054,10 @@ private:
 
     std::unordered_map<std::string, litebus::Promise<Status>> instanceStatusPromises_;
     std::unordered_map<std::string, InstanceReadyCallBack> instanceRegisteredReadyCallback_;
+    std::unordered_map<std::string, InstanceReadyCallResultCallBack> instanceRegisteredReadyCallResultCallback_;
+    std::unordered_map<std::string, InstanceReadyCallResultCallBack> instanceReadyCallResultCallbackByInstanceID_;
+    std::unordered_map<std::string, std::string> instanceReadyCallResultInstanceIDByRequestID_;
+    std::unordered_map<std::string, std::string> instanceReadyCallResultRequestIDByInstanceID_;
 
     std::unordered_map<std::string, CreateCallResultCallBack> createCallResultCallback_;
 
@@ -1069,6 +1101,8 @@ private:
     std::shared_ptr<SubscriptionMgr> subscriptionMgr_;
 
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<KillResponse>>> killingRequest_;
+    // Short-lived, payload-free evidence used only by the frontend cleanup probe.
+    std::unordered_map<std::string, std::pair<std::string, std::string>> frontendKillRuntimeEvidence_;
 
     BACK_OFF_RETRY_HELPER(InstanceCtrlActor, litebus::Option<InstanceState>, checkStateHelper_);
 

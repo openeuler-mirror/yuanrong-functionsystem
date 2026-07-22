@@ -34,6 +34,9 @@ inline messages::ScheduleResponse GenScheduleResponse(int32_t code, const std::s
     response.set_instanceid(scheduleReq.instance().instanceid());
     *response.mutable_updateresources() = scheduleReq.updateresources();
     response.mutable_contexts()->insert(scheduleReq.contexts().begin(), scheduleReq.contexts().end());
+    if (!scheduleReq.instance().functionproxyid().empty()) {
+        response.mutable_scheduleresult()->set_nodeid(scheduleReq.instance().functionproxyid());
+    }
     return response;
 }
 

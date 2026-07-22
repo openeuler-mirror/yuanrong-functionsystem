@@ -79,14 +79,35 @@ struct RegisterInfo {
     std::string key = BUSPROXY_PATH_PREFIX + "/0/node/" + nodeID;
     RegisterInfo reg{
         .key = key,
-        .meta = { .node = nodeID, .aid = std::string(aid), .ak = std::move(aid.GetAK()) },
+        .meta = { .node = nodeID,
+                  .aid = std::string(aid),
+                  .ak = std::move(aid.GetAK()),
+                  .proxyService = ProxyServiceMeta{} },
     };
+    return reg;
+}
+
+[[maybe_unused]] inline RegisterInfo GetServiceRegistryInfo(const std::string &nodeID, const litebus::AID &aid,
+                                                            ProxyServiceMeta proxyService)
+{
+    auto reg = GetServiceRegistryInfo(nodeID, aid);
+    reg.meta.proxyService = std::move(proxyService);
     return reg;
 }
 
 [[maybe_unused]] inline std::string Dump(ProxyMeta &proxyMeta)
 {
-    return nlohmann::json{ { "aid", proxyMeta.aid }, { "node", proxyMeta.node }, { "ak", proxyMeta.ak } }.dump();
+    nlohmann::json payload{ { "aid", proxyMeta.aid }, { "node", proxyMeta.node }, { "ak", proxyMeta.ak } };
+    if (!proxyMeta.proxyService.grpcAddress.empty() || !proxyMeta.proxyService.tcpTunnelAddress.empty()) {
+        payload["proxyService"] = {
+            { "grpcAddress", proxyMeta.proxyService.grpcAddress },
+            { "tcpTunnelAddress", proxyMeta.proxyService.tcpTunnelAddress },
+            { "capabilities", proxyMeta.proxyService.capabilities },
+            { "version", proxyMeta.proxyService.version },
+            { "health", proxyMeta.proxyService.health },
+        };
+    }
+    return payload.dump();
 }
 
 [[maybe_unused]] inline bool TtlValidate(int ttl)

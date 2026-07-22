@@ -34,6 +34,7 @@ public:
     void Init(std::shared_ptr<MetaStorageAccessor> accessor, const RegisterInfo &info);
     void Init(std::shared_ptr<MetaStorageAccessor> accessor, const RegisterInfo &info, int ttl);
     Status Register();
+    Status ReplaceProxyService(const ProxyServiceMeta &proxyService);
     litebus::Future<Status> Stop();
 
 private:

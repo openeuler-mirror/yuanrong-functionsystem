@@ -34,7 +34,7 @@ namespace functionsystem {
 
 BusproxyStartup::BusproxyStartup(BusProxyStartParam &&param,
                                  const std::shared_ptr<MetaStorageAccessor> &metaStorageAccessor)
-    : param_(std::move(param))
+    : param_(std::move(param)), advertisedProxyService_(param_.proxyService)
 {
     metaStorageAccessor_ = metaStorageAccessor;
 }
@@ -55,6 +55,15 @@ BusproxyStartup::~BusproxyStartup()
     requestRouter_ = nullptr;
 }
 
+function_proxy::RegisterInfo BusproxyStartup::BuildRegistryInfo(const BusProxyStartParam &param,
+                                                                const litebus::AID &proxyActorAID)
+{
+    if (param.proxyService.grpcAddress.empty() && param.proxyService.tcpTunnelAddress.empty()) {
+        return function_proxy::GetServiceRegistryInfo(param.nodeID, proxyActorAID);
+    }
+    return function_proxy::GetServiceRegistryInfo(param.nodeID, proxyActorAID, param.proxyService);
+}
+
 void BusproxyStartup::StartProxyActor(const std::string &nodeID, const std::string &modelName)
 {
     // start proxy actor
@@ -63,11 +72,12 @@ void BusproxyStartup::StartProxyActor(const std::string &nodeID, const std::stri
     litebus::Spawn(proxyActor_);
 }
 
-void BusproxyStartup::InitRegistry(const litebus::AID &proxyActorAID, const std::string &nodeID,
-                                   std::shared_ptr<MetaStorageAccessor> metaStorage)
+void BusproxyStartup::InitRegistry(const litebus::AID &proxyActorAID, std::shared_ptr<MetaStorageAccessor> metaStorage)
 {
     registry_ = std::make_shared<ServiceRegistry>();
-    auto info = function_proxy::GetServiceRegistryInfo(nodeID, proxyActorAID);
+    auto initialParam = param_;
+    initialParam.proxyService = {};
+    auto info = BuildRegistryInfo(initialParam, proxyActorAID);
     registry_->Init(std::move(metaStorage), info, param_.serviceTTL);
 }
 
@@ -103,7 +113,7 @@ Status BusproxyStartup::Run()
         YRLOG_ERROR("invalid parameter, proxy actor is null");
         return Status(StatusCode::FAILED, "proxy actor is null");
     }
-    InitRegistry(proxyActor_->GetAID(), param_.nodeID, metaStorageAccessor_);
+    InitRegistry(proxyActor_->GetAID(), metaStorageAccessor_);
     ASSERT_IF_NULL(registry_);
     auto status = registry_->Register();
     if (status.IsError()) {
@@ -115,6 +125,40 @@ Status BusproxyStartup::Run()
     YRLOG_INFO("Succeed to init Busproxy, nodeID: {}, modelName: {}", param_.nodeID, param_.modelName);
 
     return Status(StatusCode::SUCCESS);
+}
+
+Status BusproxyStartup::PublishProxyService()
+{
+    return UpdateProxyServiceReadiness({ true, true, true, true });
+}
+
+bool BusproxyStartup::IsProxyServiceReady(const ProxyServiceReadiness &readiness, bool requiresDispatcher)
+{
+    const bool grpcReady = !requiresDispatcher || readiness.dispatcherAvailable;
+    return readiness.started && readiness.synced && readiness.recovered && grpcReady;
+}
+
+Status BusproxyStartup::UpdateProxyServiceReadiness(const ProxyServiceReadiness &readiness)
+{
+    std::lock_guard<std::mutex> lock(proxyServiceMutex_);
+    if (advertisedProxyService_.grpcAddress.empty() && advertisedProxyService_.tcpTunnelAddress.empty()) {
+        return Status::OK();
+    }
+    const bool shouldPublish = IsProxyServiceReady(readiness, !advertisedProxyService_.grpcAddress.empty());
+    if (shouldPublish == proxyServicePublished_) {
+        return Status::OK();
+    }
+    RETURN_STATUS_IF_NULL(registry_, StatusCode::FAILED, "service registry is nullptr");
+    auto status = registry_->ReplaceProxyService(shouldPublish ? advertisedProxyService_ : ProxyServiceMeta{});
+    if (status.IsOk()) {
+        proxyServicePublished_ = shouldPublish;
+    }
+    return status;
+}
+
+Status BusproxyStartup::WithdrawProxyService()
+{
+    return UpdateProxyServiceReadiness({});
 }
 
 Status BusproxyStartup::Stop() const

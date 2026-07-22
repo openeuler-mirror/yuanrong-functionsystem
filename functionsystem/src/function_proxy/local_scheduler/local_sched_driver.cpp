@@ -16,6 +16,8 @@
 
 #include "local_sched_driver.h"
 
+#include <charconv>
+
 #include "common/constants/actor_name.h"
 #include "local_scheduler/traefik_registry/traefik_registry.h"
 #include "meta_store_monitor/meta_store_monitor_factory.h"
@@ -26,6 +28,9 @@
 #include "local_scheduler/gc_actor/local_gc_actor.h"
 #include "local_scheduler/local_group_ctrl/local_group_ctrl_actor.h"
 #include "local_scheduler/grpc_server/bus_service/bus_service.h"
+#include "local_scheduler/tcp_tunnel_server.h"
+#include "local_scheduler/grpc_server/frontend_proxy_service/frontend_proxy_lifecycle_handler.h"
+#include "local_scheduler/grpc_server/frontend_proxy_service/frontend_proxy_service.h"
 
 namespace functionsystem::local_scheduler {
 
@@ -55,6 +60,14 @@ std::string ExtractIPFromAddress(const std::string& address)
     return address;  // fallback: return as-is
 }
 }  // namespace
+
+LocalSchedDriver::LocalSchedDriver(LocalSchedStartParam &&param,
+                                   const std::shared_ptr<MetaStoreClient> metaStoreClient)
+    : param_(std::move(param)), metaStoreClient_(metaStoreClient)
+{
+}
+
+LocalSchedDriver::~LocalSchedDriver() = default;
 
 void LocalSchedDriver::SetRuntimeConfig(InstanceCtrlConfig &config)
 {
@@ -200,6 +213,28 @@ Status LocalSchedDriver::Start()
         return Status(StatusCode::FAILED);
     }
     BindInstanceCtrl();
+    if (param_.enableTcpTunnel) {
+        uint16_t parsedPort = 0;
+        const auto parsed = std::from_chars(param_.tcpTunnelPort.data(),
+                                            param_.tcpTunnelPort.data() + param_.tcpTunnelPort.size(), parsedPort);
+        if (param_.tcpTunnelPort.empty() || parsed.ec != std::errc()
+            || parsed.ptr != param_.tcpTunnelPort.data() + param_.tcpTunnelPort.size() || parsedPort == 0) {
+            return Status(StatusCode::FAILED, "invalid TCP tunnel port");
+        }
+        tcpTunnelServer_ = std::make_unique<TcpTunnelServer>(
+            TcpTunnelServerConfig{ .listenIP = ExtractIPFromAddress(param_.address),
+                                   .listenPort = parsedPort,
+                                   .nodeID = param_.nodeID,
+                                   .enableTLS = param_.tcpTunnelEnableTLS,
+                                   .maxConnections = param_.tcpTunnelMaxConnections,
+                                   .rootCert = param_.tcpTunnelRootCert,
+                                   .moduleCert = param_.tcpTunnelModuleCert,
+                                   .moduleKey = param_.tcpTunnelModuleKey },
+            instanceCtrl_->GetInstanceControlView(), instanceCtrl_->GetIdleMgr());
+        if (!tcpTunnelServer_->Start()) {
+            return Status(StatusCode::FAILED, "failed to start TCP tunnel server");
+        }
+    }
 
     snapCtrl_ = SnapCtrl::Create(param_.nodeID);
     snapCtrl_->BindFunctionAgentMgr(funcAgentMgr_);
@@ -332,6 +367,10 @@ void LocalSchedDriver::ToReady()
 
 Status LocalSchedDriver::Stop()
 {
+    if (tcpTunnelServer_) {
+        tcpTunnelServer_->Stop();
+        tcpTunnelServer_.reset();
+    }
     if (param_.unRegisterWhileStop && localSchedSrv_ != nullptr && isStarted_) {
         // block to wait instance & agent to be cleared
         (void)localSchedSrv_->GracefulShutdown().Get();
@@ -449,9 +488,73 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
                                   .instanceCtrl = instanceCtrl_,
                                   .localSchedSrv = localSchedSrv_,
                                   .isEnableServerMode = param_.enableServerMode,
-                                  .hostIP = param_.ip  };
+                                  .hostIP = param_.ip };
     std::shared_ptr<BusService> busService = std::make_shared<BusService>(std::move(serviceParam));
     posixGrpcServer_->RegisterService(busService);
+    if (param_.enableFrontendProxyService) {
+        FrontendProxyServiceBindings bindings;
+        bindings.enableCreateDispatch = true;
+        bindings.scheduler =
+            [instanceCtrl(instanceCtrl_)](
+                const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+                const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
+                FrontendProxyReadyCallback callback) {
+                if (instanceCtrl == nullptr) {
+                    messages::ScheduleResponse response;
+                    response.set_code(common::ERR_LOCAL_SCHEDULER_ABNORMAL);
+                    response.set_message("instance control is nullptr in local scheduler");
+                    return litebus::Future<messages::ScheduleResponse>(response);
+                }
+                scheduleReq->mutable_instance()->set_parentfunctionproxyaid(instanceCtrl->GetActorAID());
+                return instanceCtrl->ScheduleFrontendAndWaitReady(scheduleReq, runtimePromise, std::move(callback));
+            };
+        bindings.readyUnregister =
+            [instanceCtrl(instanceCtrl_)](const std::string &requestID, const std::string &reason) {
+                if (instanceCtrl != nullptr) {
+                    instanceCtrl->UnregisterFrontendReadyWait(requestID, reason);
+                }
+            };
+        bindings.enableKillDispatch = true;
+        bindings.killInvoker =
+            [instanceCtrl(instanceCtrl_)](const std::string &caller, const std::string &tenantID,
+                                         const std::shared_ptr<KillRequest> &killReq) {
+                if (instanceCtrl == nullptr) {
+                    KillResponse response;
+                    response.set_code(common::ERR_LOCAL_SCHEDULER_ABNORMAL);
+                    response.set_message("instance control is nullptr in local scheduler");
+                    return litebus::Future<KillResponse>(response);
+                }
+                (void)caller;
+                return instanceCtrl->KillFrontend(tenantID, killReq);
+            };
+        bindings.killCleanupProbe =
+            [instanceCtrl(instanceCtrl_)](const std::string &requestID, const std::string &instanceID) {
+                if (instanceCtrl == nullptr) {
+                    FrontendKillCleanupSnapshot snapshot;
+                    return litebus::Future<FrontendKillCleanupSnapshot>(snapshot);
+                }
+                return instanceCtrl->ProbeFrontendKillCleanup(requestID, instanceID);
+            };
+        auto frontendServiceParam = BuildFrontendProxyServiceParam(param_.nodeID, bindings);
+        frontendServiceParam.endpointAddress = param_.ip + ":" + param_.posixPort;
+        frontendServiceParam.requireAuthenticatedPeer = param_.enableSSL;
+        frontendServiceParam.invokeTenantAuthorizer =
+            [instanceView(instanceCtrl_->GetInstanceControlView())](const std::string &tenantID,
+                                                                    const std::string &instanceID) {
+                if (tenantID.empty() || instanceView == nullptr) {
+                    return false;
+                }
+                auto stateMachine = instanceView->GetInstance(instanceID);
+                return stateMachine != nullptr && stateMachine->GetInstanceInfo().tenantid() == tenantID;
+            };
+        // Lifecycle create/kill use reviewed ready dispatcher seams when the single
+        // frontend-proxy service switch is enabled. Legacy stream dispatchers remain disallowed.
+        std::shared_ptr<FrontendProxyService> frontendProxyService =
+            std::make_shared<FrontendProxyService>(std::move(frontendServiceParam));
+        posixGrpcServer_->RegisterService(frontendProxyService);
+        frontendProxyServiceRegistered_ = true;
+        YRLOG_INFO("FrontendProxyService registered on existing posix port {}", param_.posixPort);
+    }
 
     // Create ExecStreamService instance
     execStreamService_ = std::make_shared<ExecStreamService>(instanceCtrl_->GetIdleMgr());
@@ -490,6 +593,7 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
     posixGrpcServer_->Start();
 
     if (!posixGrpcServer_->WaitServerReady()) {
+        frontendProxyServiceRegistered_ = false;
         YRLOG_ERROR("failed to start posix grpc server.");
         return false;
     }
