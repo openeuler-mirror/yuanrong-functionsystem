@@ -283,17 +283,14 @@ bool CreateBusProxy(const function_proxy::Flags &flags)
             memoryControlConfig.msgSizeThreshold = inputMsgThreshold;
         }
     }
-    auto memoryMonitor = std::make_shared<MemoryMonitor>(memoryControlConfig);
-
-    auto dataPlaneObserver = std::make_shared<function_proxy::DataPlaneObserver>(observer);
     BusProxyStartParam busproxyStartParam{
         .nodeID = flags.GetNodeID(),
         .modelName = COMPONENT_NAME,
         .localAddress = flags.GetAddress(),
         .serviceTTL = flags.GetServiceTTL(),
         .dataInterfaceClientMgr = dataInterfaceClientMgrProxy,
-        .dataPlaneObserver = dataPlaneObserver,
-        .memoryMonitor = memoryMonitor,
+        .dataPlaneObserver = std::make_shared<function_proxy::DataPlaneObserver>(observer),
+        .memoryMonitor = std::make_shared<MemoryMonitor>(memoryControlConfig),
         .internalIam = internalIAM,
         .isEnablePerf = flags.GetEnablePerf(),
         .unRegisterWhileStop = flags.UnRegisterWhileStop(),
