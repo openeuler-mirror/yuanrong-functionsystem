@@ -729,6 +729,21 @@ TEST_F(ObserverTest, GetLocalSchedulerAID)
     ASSERT_TRUE(AIDOption.IsNone());
 }
 
+TEST_F(ObserverTest, SelfDeleteUsesAuthoritativeRegistryRecovery)
+{
+    std::atomic<bool> recovered{ false };
+    observerActor_->SetSelfProxyDeleteCbFunc([&recovered] {
+        recovered.store(true);
+        return Status::OK();
+    });
+
+    auto proxyDelRsp = GetProxyEventRsp(EVENT_TYPE_DELETE, nodeID_);
+    litebus::Async(observerActor_->GetAID(), &function_proxy::ObserverActor::UpdateProxyEvent, proxyDelRsp);
+
+    ASSERT_AWAIT_TRUE([&recovered] { return recovered.load(); });
+    observerActor_->SetSelfProxyDeleteCbFunc({});
+}
+
 TEST_F(ObserverTest, GetLocalSchedulerAIDWithoutCache)
 {
     auto future = controlPlaneObserver_->GetLocalSchedulerAID("proxyID_A");

@@ -68,6 +68,8 @@ public:
 
     Status WithdrawProxyService();
 
+    Status RestoreProxyService();
+
     Status Stop() const;
 
     void Await() const;

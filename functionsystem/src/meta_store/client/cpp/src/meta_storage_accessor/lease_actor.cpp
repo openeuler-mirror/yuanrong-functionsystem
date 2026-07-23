@@ -48,8 +48,8 @@ litebus::Future<Status> LeaseActor::Put(const Status &status, const std::string 
     if (status.IsError()) {
         YRLOG_WARN("failed to get lease id, key:{}", key);
         auto interval = uint32_t(ttl / DEFAULT_LEASE_TIME);
-        leaseTimerMap_[key] = litebus::AsyncAfter(interval ? interval : DEFAULT_LEASE_INTERVAL, GetAID(),
-                                                  &LeaseActor::RetryPutWithLease, key, value, ttl);
+        SetLeaseTimer(key, litebus::AsyncAfter(interval ? interval : DEFAULT_LEASE_INTERVAL, GetAID(),
+                                               &LeaseActor::RetryPutWithLease, key, value, ttl, int64_t{ 0 }));
         return status;
     }
     auto leaseID = leaseIDMap_[key];
@@ -73,9 +73,8 @@ void LeaseActor::OnPutResponse(const litebus::Future<std::shared_ptr<PutResponse
     auto interval = uint32_t(ttl / DEFAULT_LEASE_TIME);
     auto aid = GetAID();
     if (response.IsOK() && response.Get()->status.IsOk()) {
-        leaseTimerMap_[key] =
-            litebus::AsyncAfter(interval ? interval : DEFAULT_LEASE_INTERVAL, aid, &LeaseActor::KeepAliveOnce, key,
-                                value, ttl, leaseID);
+        SetLeaseTimer(key, litebus::AsyncAfter(interval ? interval : DEFAULT_LEASE_INTERVAL, aid,
+                                               &LeaseActor::KeepAliveOnce, key, value, ttl, leaseID));
         promise.SetValue(Status::OK());
         return;
     }
@@ -87,9 +86,8 @@ void LeaseActor::OnPutResponse(const litebus::Future<std::shared_ptr<PutResponse
     }
 
     promise.SetValue(Status(StatusCode::BP_META_STORAGE_PUT_ERROR, "key: " + key));
-    leaseTimerMap_[key] =
-        litebus::AsyncAfter(interval ? interval : DEFAULT_LEASE_INTERVAL, aid, &LeaseActor::RetryPutWithLease, key,
-                            value, ttl);
+    SetLeaseTimer(key, litebus::AsyncAfter(interval ? interval : DEFAULT_LEASE_INTERVAL, aid,
+                                           &LeaseActor::RetryPutWithLease, key, value, ttl, leaseID));
 }
 
 litebus::Future<Status> LeaseActor::CheckLeaseIDExist(const std::string &key, const std::string &value, const int ttl)
@@ -128,8 +126,10 @@ litebus::Future<Status> LeaseActor::Revoke(const std::string &key)
         return Status(StatusCode::BP_LEASE_ID_NOT_FOUND, "key: " + key);
     }
 
-    (void)litebus::TimerTools::Cancel(leaseTimerMap_[key]);
-    (void)leaseTimerMap_.erase(key);
+    if (auto timer = leaseTimerMap_.find(key); timer != leaseTimerMap_.end()) {
+        (void)litebus::TimerTools::Cancel(timer->second);
+        (void)leaseTimerMap_.erase(timer);
+    }
     const int64_t leaseID = iter->second;
     (void)leaseIDMap_.erase(iter);
     ASSERT_IF_NULL(metaClient_);
@@ -166,25 +166,40 @@ void LeaseActor::KeepAliveOnceResponse(const litebus::Future<LeaseKeepAliveRespo
     if (rsp.IsOK() && rsp.Get().ttl != 0) {
         YRLOG_DEBUG("keep lease {} once success", leaseID);
         auto interval = uint32_t(ttl / DEFAULT_LEASE_TIME);
-        leaseTimerMap_[key] = litebus::AsyncAfter(interval ? interval : DEFAULT_LEASE_INTERVAL, GetAID(),
-                                                  &LeaseActor::KeepAliveOnce, key, value, ttl, leaseID);
+        SetLeaseTimer(key, litebus::AsyncAfter(interval ? interval : DEFAULT_LEASE_INTERVAL, GetAID(),
+                                               &LeaseActor::KeepAliveOnce, key, value, ttl, leaseID));
         return;
     }
     YRLOG_WARN("lease {} keep alive failed, try to re-put", leaseID);
-    RetryPutWithLease(key, value, ttl);
+    RetryPutWithLease(key, value, ttl, leaseID);
 }
 
-void LeaseActor::RetryPutWithLease(const std::string &key, const std::string &value, const int ttl)
+void LeaseActor::RetryPutWithLease(const std::string &key, const std::string &value, const int ttl,
+                                   int64_t expectedLeaseID)
 {
+    auto lease = leaseIDMap_.find(key);
+    if ((expectedLeaseID == 0 && lease != leaseIDMap_.end())
+        || (expectedLeaseID != 0 && (lease == leaseIDMap_.end() || lease->second != expectedLeaseID))) {
+        YRLOG_INFO("ignore stale lease retry for key {}, expected lease {}", key, expectedLeaseID);
+        return;
+    }
     YRLOG_WARN("try to re-put with lease, key:{}", key);
     if (auto iter = leaseTimerMap_.find(key); iter != leaseTimerMap_.end()) {
         (void)litebus::TimerTools::Cancel(leaseTimerMap_[key]);
         (void)leaseTimerMap_.erase(key);
     }
-    if (auto iter = leaseIDMap_.find(key); iter != leaseIDMap_.end()) {
-        (void)leaseIDMap_.erase(key);
+    if (lease != leaseIDMap_.end()) {
+        (void)leaseIDMap_.erase(lease);
     }
     (void)litebus::Async(GetAID(), &LeaseActor::PutWithLease, key, value, ttl);
+}
+
+void LeaseActor::SetLeaseTimer(const std::string &key, litebus::Timer timer)
+{
+    if (auto current = leaseTimerMap_.find(key); current != leaseTimerMap_.end()) {
+        (void)litebus::TimerTools::Cancel(current->second);
+    }
+    leaseTimerMap_.insert_or_assign(key, std::move(timer));
 }
 
 litebus::Future<Status> LeaseActor::RevokeResponse(const litebus::Future<LeaseRevokeResponse> &rsp,

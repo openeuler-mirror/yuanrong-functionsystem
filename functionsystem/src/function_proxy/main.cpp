@@ -306,6 +306,14 @@ bool CreateBusProxy(const function_proxy::Flags &flags)
         g_functionProxySwitcher->SetStop();
         return false;
     }
+    std::weak_ptr<BusproxyStartup> busproxyStartup = g_busproxyStartup;
+    observer->SetSelfProxyDeleteCbFunc([busproxyStartup] {
+        auto startup = busproxyStartup.lock();
+        if (startup == nullptr) {
+            return Status(StatusCode::FAILED, "busproxy startup is unavailable");
+        }
+        return startup->RestoreProxyService();
+    });
     return true;
 }
 

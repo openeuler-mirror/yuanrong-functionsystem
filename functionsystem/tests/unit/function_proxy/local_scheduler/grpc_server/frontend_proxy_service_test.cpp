@@ -36,6 +36,34 @@
 namespace functionsystem::test {
 using namespace local_scheduler;
 
+namespace {
+class UnixGrpcServer {
+public:
+    UnixGrpcServer(std::string socketPath, std::unique_ptr<::grpc::Server> server)
+        : socketPath_(std::move(socketPath)), server_(std::move(server))
+    {
+    }
+
+    ~UnixGrpcServer()
+    {
+        if (server_ != nullptr) {
+            server_->Shutdown();
+            server_->Wait();
+        }
+        (void)::unlink(socketPath_.c_str());
+    }
+
+    ::grpc::Server *Get() const
+    {
+        return server_.get();
+    }
+
+private:
+    std::string socketPath_;
+    std::unique_ptr<::grpc::Server> server_;
+};
+}  // namespace
+
 TEST(FrontendProxyServiceTest, RejectsUnauthenticatedPeerWhenRequired)
 {
     FrontendProxyServiceParam param;
@@ -622,8 +650,8 @@ TEST(FrontendProxyServiceTest, RealGrpcCancellationRemovesCreateReadyWaiter)
     (void)::unlink(socketPath.c_str());
     builder.AddListeningPort(address, ::grpc::InsecureServerCredentials());
     builder.RegisterService(&service);
-    auto server = builder.BuildAndStart();
-    ASSERT_NE(server, nullptr);
+    UnixGrpcServer server(socketPath, builder.BuildAndStart());
+    ASSERT_NE(server.Get(), nullptr);
     auto channel = ::grpc::CreateChannel(address, ::grpc::InsecureChannelCredentials());
     ASSERT_TRUE(channel->WaitForConnected(std::chrono::system_clock::now() + std::chrono::seconds(2)));
     auto stub = ::frontend_proxy::FrontendProxyService::NewStub(channel);
@@ -648,7 +676,6 @@ TEST(FrontendProxyServiceTest, RealGrpcCancellationRemovesCreateReadyWaiter)
     if (!enteredServer) {
         clientContext.TryCancel();
         (void)call.get();
-        server->Shutdown();
         return;
     }
     clientContext.TryCancel();
@@ -660,7 +687,6 @@ TEST(FrontendProxyServiceTest, RealGrpcCancellationRemovesCreateReadyWaiter)
         EXPECT_EQ(cancelledRequestID, "create-cancel-request");
         EXPECT_EQ(cancelReason, "grpc client cancelled");
     }
-    server->Shutdown();
 }
 
 TEST(FrontendProxyServiceTest, RealGrpcCancellationStopsInvokeWaitAndClearsRegistry)
@@ -690,8 +716,8 @@ TEST(FrontendProxyServiceTest, RealGrpcCancellationStopsInvokeWaitAndClearsRegis
     (void)::unlink(socketPath.c_str());
     builder.AddListeningPort(address, ::grpc::InsecureServerCredentials());
     builder.RegisterService(&service);
-    auto server = builder.BuildAndStart();
-    ASSERT_NE(server, nullptr);
+    UnixGrpcServer server(socketPath, builder.BuildAndStart());
+    ASSERT_NE(server.Get(), nullptr);
 
     auto channel = ::grpc::CreateChannel(address, ::grpc::InsecureChannelCredentials());
     ASSERT_TRUE(channel->WaitForConnected(std::chrono::system_clock::now() + std::chrono::seconds(2)));
@@ -727,7 +753,6 @@ TEST(FrontendProxyServiceTest, RealGrpcCancellationStopsInvokeWaitAndClearsRegis
     } while (std::chrono::steady_clock::now() < cleanupDeadline);
     EXPECT_EQ(dispatchCount, 2);
     EXPECT_EQ(retryResponse.status().message(), "second dispatch proves registry cleanup");
-    server->Shutdown();
 }
 
 }  // namespace functionsystem::test

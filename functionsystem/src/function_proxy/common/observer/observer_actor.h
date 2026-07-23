@@ -50,6 +50,7 @@ using UpdateFuncMetasFunc =
     std::function<void(bool isAdd, const std::unordered_map<std::string, FunctionMeta> &funcMetas)>;
 
 using TrafficReportCbFunc = std::function<void(const std::string &instanceID, const size_t &size)>;
+using SelfProxyDeleteCbFunc = std::function<Status()>;
 
 const int SERVICE_TTL = 300000;  // ms
 
@@ -164,6 +165,11 @@ public:
     virtual void SetTrafficReportCbFunc(const TrafficReportCbFunc &trafficReportCbFunc)
     {
         trafficReportCbFunc_ = trafficReportCbFunc;
+    }
+
+    virtual void SetSelfProxyDeleteCbFunc(const SelfProxyDeleteCbFunc &selfProxyDeleteCbFunc)
+    {
+        selfProxyDeleteCbFunc_ = selfProxyDeleteCbFunc;
     }
 
     virtual void BindDataInterfaceClientManager(
@@ -391,6 +397,7 @@ private:
     InstanceInfoSyncerCbFunc instanceInfoSyncerCbFunc_;
     UpdateFuncMetasFunc updateFuncMetasFunc_;
     TrafficReportCbFunc trafficReportCbFunc_;
+    SelfProxyDeleteCbFunc selfProxyDeleteCbFunc_;
 
     // for busproxy
     std::shared_ptr<DataInterfaceClientManagerProxy> dataInterfaceClientManager_;

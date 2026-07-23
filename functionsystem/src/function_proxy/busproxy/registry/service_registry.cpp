@@ -31,14 +31,25 @@ void ServiceRegistry::Init(std::shared_ptr<MetaStorageAccessor> accessor, const 
 
 void ServiceRegistry::Init(std::shared_ptr<MetaStorageAccessor> accessor, const RegisterInfo &info, int ttl)
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     registerInfo_ = info;
     ttl_ = TtlValidate(ttl) ? ttl : DEFAULT_TTL;
     metaStorageAccessor_ = std::move(accessor);
+    stopped_ = false;
     YRLOG_INFO("Succeed to init Busproxy ServiceRegistry, TTL: {}, node: {}", ttl_, registerInfo_.meta.node);
 }
 
 Status ServiceRegistry::Register()
 {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return RegisterLocked();
+}
+
+Status ServiceRegistry::RegisterLocked()
+{
+    if (stopped_) {
+        return Status(StatusCode::FAILED, "service registry is stopped");
+    }
     YRLOG_INFO("Start Busproxy registry, key: {}, node: {}", registerInfo_.key, registerInfo_.meta.node);
     RETURN_STATUS_IF_NULL(metaStorageAccessor_, StatusCode::FAILED, "meta store accessor is nullptr");
     Status registerStatus = metaStorageAccessor_->PutWithLease(registerInfo_.key, Dump(registerInfo_.meta), ttl_).Get();
@@ -53,24 +64,58 @@ Status ServiceRegistry::Register()
 
 Status ServiceRegistry::ReplaceProxyService(const ProxyServiceMeta &proxyService)
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     RETURN_STATUS_IF_NULL(metaStorageAccessor_, StatusCode::FAILED, "meta store accessor is nullptr");
+    if (stopped_) {
+        return Status(StatusCode::FAILED, "service registry is stopped");
+    }
+    const auto previousProxyService = registerInfo_.meta.proxyService;
+    registerInfo_.meta.proxyService = proxyService;
     // Revoke before replacing the leased value. PutWithLease's keep-alive timer
     // captures the value supplied by the first put, so an in-place second put can
     // later resurrect stale capability metadata. The short absent interval is
     // intentional and fail-closed for discovery.
     auto revokeStatus = metaStorageAccessor_->Revoke(registerInfo_.key).Get();
     if (!revokeStatus.IsOk()) {
+        registerInfo_.meta.proxyService = previousProxyService;
         YRLOG_ERROR("Failed to revoke proxy service metadata before capability update, key: {}, status: {}",
                     registerInfo_.key, revokeStatus.ToString());
         return Status(StatusCode::FAILED, "service registry proxy capability revoke failed");
     }
-    registerInfo_.meta.proxyService = proxyService;
-    return Register();
+    auto status = RegisterLocked();
+    if (status.IsError()) {
+        // Recovery after the DELETE event must remain fail-closed even when
+        // publishing a ready endpoint failed.
+        registerInfo_.meta.proxyService = {};
+    }
+    return status;
+}
+
+Status ServiceRegistry::Restore()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopped_) {
+        return Status::OK();
+    }
+    RETURN_STATUS_IF_NULL(metaStorageAccessor_, StatusCode::FAILED, "meta store accessor is nullptr");
+    const auto expected = Dump(registerInfo_.meta);
+    const auto current = metaStorageAccessor_->Get(registerInfo_.key);
+    if (current.IsSome() && current.Get() == expected) {
+        return Status::OK();
+    }
+    YRLOG_WARN("Restore Busproxy registry, key: {}, node: {}", registerInfo_.key, registerInfo_.meta.node);
+    return RegisterLocked();
 }
 
 litebus::Future<Status> ServiceRegistry::Stop()
 {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopped_) {
+        return Status::OK();
+    }
     YRLOG_INFO("Stop Busproxy registry, key: {}, node: {}", registerInfo_.key, registerInfo_.meta.node);
+    stopped_ = true;
+    RETURN_STATUS_IF_NULL(metaStorageAccessor_, StatusCode::FAILED, "meta store accessor is nullptr");
     return metaStorageAccessor_->Revoke(registerInfo_.key);
 }
 }  // namespace functionsystem

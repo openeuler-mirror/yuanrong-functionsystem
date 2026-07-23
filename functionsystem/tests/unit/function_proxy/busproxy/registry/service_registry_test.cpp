@@ -133,6 +133,62 @@ TEST_F(ServiceRegistryTest, ProxyCapabilitiesStayFailClosedWhenReplacementPutFai
     EXPECT_TRUE(serviceRegistry_->ReplaceProxyService(proxyService).IsError());
 }
 
+TEST_F(ServiceRegistryTest, DelayedDeleteRestoresCurrentProxyCapabilities)
+{
+    const auto legacyDump = Dump(proxyMeta);
+    ProxyServiceMeta proxyService;
+    proxyService.grpcAddress = "10.0.0.11:19090";
+    proxyService.tcpTunnelAddress = "10.0.0.11:22775";
+    proxyService.capabilities = { "faas.invoke", "tcp.tunnel" };
+    auto readyMeta = proxyMeta;
+    readyMeta.proxyService = proxyService;
+    const auto readyDump = Dump(readyMeta);
+
+    EXPECT_CALL(*metaStorageAccessor_, PutWithLease(key, legacyDump, DEFAULT_TTL))
+        .WillOnce(::testing::Return(litebus::Future<Status>(Status::OK())));
+    EXPECT_CALL(*metaStorageAccessor_, Revoke(key))
+        .Times(2)
+        .WillRepeatedly(::testing::Return(litebus::Future<Status>(Status::OK())));
+    EXPECT_CALL(*metaStorageAccessor_, PutWithLease(key, readyDump, DEFAULT_TTL))
+        .Times(2)
+        .WillRepeatedly(::testing::Return(litebus::Future<Status>(Status::OK())));
+    EXPECT_CALL(*metaStorageAccessor_, Get(key))
+        .WillOnce(::testing::Return(litebus::Option<std::string>{}));
+
+    serviceRegistry_->Init(metaStorageAccessor_, registerInfo);
+    ASSERT_TRUE(serviceRegistry_->Register().IsOk());
+    ASSERT_TRUE(serviceRegistry_->ReplaceProxyService(proxyService).IsOk());
+    EXPECT_TRUE(serviceRegistry_->Restore().IsOk());
+}
+
+TEST_F(ServiceRegistryTest, DelayedDeleteDoesNotRewriteCurrentRegistration)
+{
+    const auto legacyDump = Dump(proxyMeta);
+    EXPECT_CALL(*metaStorageAccessor_, PutWithLease(key, legacyDump, DEFAULT_TTL))
+        .WillOnce(::testing::Return(litebus::Future<Status>(Status::OK())));
+    EXPECT_CALL(*metaStorageAccessor_, Get(key))
+        .WillOnce(::testing::Return(litebus::Option<std::string>{ legacyDump }));
+
+    serviceRegistry_->Init(metaStorageAccessor_, registerInfo);
+    ASSERT_TRUE(serviceRegistry_->Register().IsOk());
+    EXPECT_TRUE(serviceRegistry_->Restore().IsOk());
+}
+
+TEST_F(ServiceRegistryTest, StopPreventsDeleteRecoveryFromRevivingRegistration)
+{
+    const auto legacyDump = Dump(proxyMeta);
+    EXPECT_CALL(*metaStorageAccessor_, PutWithLease(key, legacyDump, DEFAULT_TTL))
+        .WillOnce(::testing::Return(litebus::Future<Status>(Status::OK())));
+    EXPECT_CALL(*metaStorageAccessor_, Revoke(key))
+        .WillOnce(::testing::Return(litebus::Future<Status>(Status::OK())));
+    EXPECT_CALL(*metaStorageAccessor_, Get(key)).Times(0);
+
+    serviceRegistry_->Init(metaStorageAccessor_, registerInfo);
+    ASSERT_TRUE(serviceRegistry_->Register().IsOk());
+    ASSERT_TRUE(serviceRegistry_->Stop().Get().IsOk());
+    EXPECT_TRUE(serviceRegistry_->Restore().IsOk());
+}
+
 
 TEST(ServiceRegistryDumpTest, BusProxyRegistryDumpIncludesProxyServiceWhenProvided)
 {

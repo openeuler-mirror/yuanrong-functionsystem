@@ -161,6 +161,12 @@ Status BusproxyStartup::WithdrawProxyService()
     return UpdateProxyServiceReadiness({});
 }
 
+Status BusproxyStartup::RestoreProxyService()
+{
+    RETURN_STATUS_IF_NULL(registry_, StatusCode::FAILED, "service registry is nullptr");
+    return registry_->Restore();
+}
+
 Status BusproxyStartup::Stop() const
 {
     if (registry_ != nullptr && param_.unRegisterWhileStop) {

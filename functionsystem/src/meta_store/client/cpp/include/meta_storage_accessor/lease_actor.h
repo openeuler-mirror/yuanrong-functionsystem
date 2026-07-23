@@ -85,7 +85,8 @@ protected:
 
     litebus::Future<Status> Put(const Status &status, const std::string &key, const std::string &value, const int ttl);
 
-    void RetryPutWithLease(const std::string &key, const std::string &value, const int ttl);
+    void RetryPutWithLease(const std::string &key, const std::string &value, const int ttl,
+                           int64_t expectedLeaseID);
 
     // Group lease methods (for TxnWithLease)
     void KeepAliveGroupOnce(const std::string& groupKey, int64_t leaseID, const int ttl);
@@ -106,6 +107,8 @@ protected:
         const litebus::Promise<Status>& promise);
 
 private:
+    void SetLeaseTimer(const std::string &key, litebus::Timer timer);
+
     void OnPutResponse(const litebus::Future<std::shared_ptr<PutResponse>> &response, const std::string &key,
                        const std::string &value, int ttl, int64_t leaseID,
                        const litebus::Promise<Status> &promise);

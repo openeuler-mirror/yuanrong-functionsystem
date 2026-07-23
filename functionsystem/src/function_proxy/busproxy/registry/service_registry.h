@@ -17,6 +17,8 @@
 #ifndef BUSPROXY_SERVICE_REGISTRY_H
 #define BUSPROXY_SERVICE_REGISTRY_H
 
+#include <mutex>
+
 #include "common/metadata/metadata.h"
 #include "meta_storage_accessor/meta_storage_accessor.h"
 #include "busproxy/registry/constants.h"
@@ -35,13 +37,18 @@ public:
     void Init(std::shared_ptr<MetaStorageAccessor> accessor, const RegisterInfo &info, int ttl);
     Status Register();
     Status ReplaceProxyService(const ProxyServiceMeta &proxyService);
+    Status Restore();
     litebus::Future<Status> Stop();
 
 private:
+    Status RegisterLocked();
+
     RegisterInfo registerInfo_;
     std::shared_ptr<MetaStorageAccessor> metaStorageAccessor_{ nullptr };
     int ttl_ = DEFAULT_TTL;
+    std::mutex mutex_;
+    bool stopped_{ false };
 };
-} // namespace functionsystem
+}  // namespace functionsystem
 
-#endif // BUSPROXY_SERVICE_REGISTRY_H
+#endif  // BUSPROXY_SERVICE_REGISTRY_H

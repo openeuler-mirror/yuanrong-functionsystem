@@ -709,13 +709,20 @@ void ObserverActor::UpdateProxyEvent(const std::vector<WatchEvent> &events)
         auto node = GetProxyNode(eventKey);
         if (node == nodeID_ && event.eventType == EVENT_TYPE_DELETE) {
             YRLOG_WARN("receive self proxy delete event {}", eventKey);
-            litebus::AID aid;
-            aid.SetName("function_proxy" + nodeID_);
-            aid.SetUrl(GetAID().UnfixUrl());
-            aid.SetAk(GetAID().GetAK());
-            auto info = GetServiceRegistryInfo(nodeID_, aid);
-            auto ttl = TtlValidate(observerParam_.serviceTTL) ? observerParam_.serviceTTL : DEFAULT_TTL;
-            metaStorageAccessor_->PutWithLease(info.key, function_proxy::Dump(info.meta), ttl);
+            if (selfProxyDeleteCbFunc_) {
+                const auto status = selfProxyDeleteCbFunc_();
+                if (status.IsError()) {
+                    YRLOG_ERROR("failed to restore self proxy registration, status: {}", status.ToString());
+                }
+            } else {
+                litebus::AID aid;
+                aid.SetName("function_proxy" + nodeID_);
+                aid.SetUrl(GetAID().UnfixUrl());
+                aid.SetAk(GetAID().GetAK());
+                auto info = GetServiceRegistryInfo(nodeID_, aid);
+                auto ttl = TtlValidate(observerParam_.serviceTTL) ? observerParam_.serviceTTL : DEFAULT_TTL;
+                metaStorageAccessor_->PutWithLease(info.key, function_proxy::Dump(info.meta), ttl);
+            }
         }
 
         // ignore self event

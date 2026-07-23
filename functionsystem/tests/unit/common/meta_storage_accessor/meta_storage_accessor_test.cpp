@@ -37,6 +37,17 @@ public:
     }
 };
 
+class LeaseActorTestPeer : public LeaseActor {
+public:
+    using LeaseActor::LeaseActor;
+
+    bool Retry(const std::string &key, const std::string &value, int ttl, int64_t expectedLeaseID)
+    {
+        RetryPutWithLease(key, value, ttl, expectedLeaseID);
+        return true;
+    }
+};
+
 static void MockMetaStoreClientPutWithLease(std::unique_ptr<MockMetaStoreClient> &mockMetaStoreClient,
                                             const std::string &key, const std::string &value, const int64_t leaseID,
                                             const int ttl)
@@ -291,6 +302,36 @@ TEST_F(MetaStorageAccessorTest, RevokeInvalidatesInFlightKeepAliveResponse)
     ASSERT_TRUE(accessor.Revoke(testKey).Get().IsOk());
     keepAlivePromise.SetValue({ Status::OK(), ResponseHeader(), leaseID, 0 });
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
+}
+
+TEST_F(MetaStorageAccessorTest, StaleRetryDoesNotReplaceCurrentLease)
+{
+    const std::string testKey = "generation-key";
+    const std::string currentValue = "current-value";
+    const int64_t oldLeaseID = 1;
+    const int64_t currentLeaseID = 2;
+    const int ttl = 600000;
+    auto mockMetaStoreClient = std::make_shared<MockMetaStoreClient>("127.0.0.1:1");
+
+    litebus::Future<LeaseGrantResponse> grantResponse;
+    grantResponse.SetValue({ Status::OK(), ResponseHeader(), currentLeaseID, ttl });
+    EXPECT_CALL(*mockMetaStoreClient, Grant(ttl / 1000))
+        .Times(1)
+        .WillOnce(Return(grantResponse));
+    auto putResponse = std::make_shared<PutResponse>();
+    EXPECT_CALL(*mockMetaStoreClient, Put(testKey, currentValue, ::testing::_))
+        .Times(1)
+        .WillOnce(Return(putResponse));
+    EXPECT_CALL(*mockMetaStoreClient, KeepAliveOnce).Times(0);
+
+    auto actor = std::make_shared<LeaseActorTestPeer>("lease-actor-generation-test", mockMetaStoreClient);
+    litebus::Spawn(actor);
+    ASSERT_TRUE(
+        litebus::Async(actor->GetAID(), &LeaseActorTestPeer::PutWithLease, testKey, currentValue, ttl).Get().IsOk());
+    EXPECT_TRUE(litebus::Async(actor->GetAID(), &LeaseActorTestPeer::Retry, testKey, "stale-value", ttl, oldLeaseID)
+                    .Get());
+    litebus::Terminate(actor->GetAID());
+    litebus::Await(actor->GetAID());
 }
 
 }  // namespace functionsystem::test

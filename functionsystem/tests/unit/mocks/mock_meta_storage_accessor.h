@@ -34,6 +34,7 @@ public:
                  (override));
     MOCK_METHOD(litebus::Future<Status>, Delete, (const std::string &key), (override));
     MOCK_METHOD(litebus::Future<Status>, Revoke, (const std::string &key), (override));
+    MOCK_METHOD(litebus::Option<std::string>, Get, (const std::string &key), (override));
 };
 
 }  // namespace functionsystem::test
