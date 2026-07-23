@@ -20,6 +20,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <string>
 
 #include "busproxy/registry/constants.h"
@@ -187,6 +188,28 @@ TEST_F(ServiceRegistryTest, StopPreventsDeleteRecoveryFromRevivingRegistration)
     ASSERT_TRUE(serviceRegistry_->Register().IsOk());
     ASSERT_TRUE(serviceRegistry_->Stop().Get().IsOk());
     EXPECT_TRUE(serviceRegistry_->Restore().IsOk());
+}
+
+TEST_F(ServiceRegistryTest, RestoreTimeoutDoesNotBlockStop)
+{
+    ::testing::InSequence sequence;
+    const auto legacyDump = Dump(proxyMeta);
+    litebus::Promise<Status> pendingPut;
+    EXPECT_CALL(*metaStorageAccessor_, PutWithLease(key, legacyDump, DEFAULT_TTL))
+        .WillOnce(::testing::Return(litebus::Future<Status>(Status::OK())));
+    EXPECT_CALL(*metaStorageAccessor_, Get(key))
+        .WillOnce(::testing::Return(litebus::Option<std::string>{}));
+    EXPECT_CALL(*metaStorageAccessor_, PutWithLease(key, legacyDump, DEFAULT_TTL))
+        .WillOnce(::testing::Return(pendingPut.GetFuture()));
+    EXPECT_CALL(*metaStorageAccessor_, Revoke(key))
+        .WillOnce(::testing::Return(litebus::Future<Status>(Status::OK())));
+
+    serviceRegistry_->Init(metaStorageAccessor_, registerInfo);
+    ASSERT_TRUE(serviceRegistry_->Register().IsOk());
+    const auto started = std::chrono::steady_clock::now();
+    EXPECT_TRUE(serviceRegistry_->Restore().IsError());
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(3));
+    EXPECT_TRUE(serviceRegistry_->Stop().Get().IsOk());
 }
 
 

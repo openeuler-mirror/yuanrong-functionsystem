@@ -17,6 +17,7 @@
 #ifndef BUSPROXY_SERVICE_REGISTRY_H
 #define BUSPROXY_SERVICE_REGISTRY_H
 
+#include <cstdint>
 #include <mutex>
 
 #include "common/metadata/metadata.h"
@@ -42,6 +43,7 @@ public:
 
 private:
     Status RegisterLocked();
+    Status RegisterLocked(uint64_t timeoutMs);
 
     RegisterInfo registerInfo_;
     std::shared_ptr<MetaStorageAccessor> metaStorageAccessor_{ nullptr };

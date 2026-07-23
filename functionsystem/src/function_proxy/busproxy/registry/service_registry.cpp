@@ -23,6 +23,9 @@
 #include "common/logs/logging.h"
 
 namespace functionsystem {
+namespace {
+constexpr uint64_t RESTORE_WRITE_TIMEOUT_MS = 1000;
+}
 
 void ServiceRegistry::Init(std::shared_ptr<MetaStorageAccessor> accessor, const RegisterInfo &info)
 {
@@ -47,12 +50,28 @@ Status ServiceRegistry::Register()
 
 Status ServiceRegistry::RegisterLocked()
 {
+    return RegisterLocked(0);
+}
+
+Status ServiceRegistry::RegisterLocked(uint64_t timeoutMs)
+{
     if (stopped_) {
         return Status(StatusCode::FAILED, "service registry is stopped");
     }
     YRLOG_INFO("Start Busproxy registry, key: {}, node: {}", registerInfo_.key, registerInfo_.meta.node);
     RETURN_STATUS_IF_NULL(metaStorageAccessor_, StatusCode::FAILED, "meta store accessor is nullptr");
-    Status registerStatus = metaStorageAccessor_->PutWithLease(registerInfo_.key, Dump(registerInfo_.meta), ttl_).Get();
+    auto registerFuture = metaStorageAccessor_->PutWithLease(registerInfo_.key, Dump(registerInfo_.meta), ttl_);
+    Status registerStatus;
+    if (timeoutMs == 0) {
+        registerStatus = registerFuture.Get();
+    } else {
+        auto result = registerFuture.Get(timeoutMs);
+        if (result.IsNone()) {
+            YRLOG_ERROR("Timed out registering service, key: {}, node: {}", registerInfo_.key, registerInfo_.meta.node);
+            return Status(StatusCode::FAILED, "service registry timed out");
+        }
+        registerStatus = result.Get();
+    }
     if (!registerStatus.IsOk()) {
         YRLOG_ERROR("Failed to register service, key: {}, node: {}. accessor put response:{}", registerInfo_.key,
                     registerInfo_.meta.node, registerStatus.ToString());
@@ -104,7 +123,7 @@ Status ServiceRegistry::Restore()
         return Status::OK();
     }
     YRLOG_WARN("Restore Busproxy registry, key: {}, node: {}", registerInfo_.key, registerInfo_.meta.node);
-    return RegisterLocked();
+    return RegisterLocked(RESTORE_WRITE_TIMEOUT_MS);
 }
 
 litebus::Future<Status> ServiceRegistry::Stop()
