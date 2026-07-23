@@ -30,7 +30,6 @@ namespace functionsystem::runtime_manager {
 
 namespace {
 // Log-redirect
-const std::string YR_ONLY_STDOUT          = "YR_ONLY_STDOUT";
 const std::string YR_RT_WORKING_DIR       = "YR_RT_WORKING_DIR";
 // Deploy-option keys
 const std::string CONTAINER_ROOTFS        = "rootfs";

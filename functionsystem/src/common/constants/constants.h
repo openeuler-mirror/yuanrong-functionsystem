@@ -362,6 +362,10 @@ const std::vector<std::string> VIRTUALENV_KEYS = {VIRTUALENV_KIND, VIRTUALENV_NA
 const std::string EXEC_PATH = "exec_path";
 const std::string HOST_USER = "host_user";
 
+// runtime log redirect control: when "true", yr runtime emits logs to stdout only (the executor
+// redirects stdout/stderr to per-runtime host files via sh -c "... >out 2>err").
+const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
+
 // sandboxType values (function meta sandboxType field)
 const std::string SANDBOX_TYPE_DOCKER = "docker";
 const std::string SANDBOX_TYPE_SUPERVISOR = "supervisor";

@@ -17,7 +17,9 @@
 #include "executor.h"
 
 #include "async/async.hpp"
+#include "common/constants/constants.h"
 #include "common/logs/logging.h"
+#include "common/utils/files.h"
 
 namespace functionsystem::runtime_manager {
 const std::vector<std::string> logLevels = { "INFO", "DEBUG", "WARN", "ERROR" };
@@ -84,6 +86,84 @@ const double JVM_MEMORY_THRESHOLD = 0.8;
 
 Executor::Executor(const std::string &name) : ActorBase(name)
 {
+}
+
+std::string Executor::ShellQuote(const std::string &token)
+{
+    // POSIX single-quote escaping: wrap the token in '...', and replace every literal ' in it
+    // with the sequence '\'' (close quote, escaped quote, reopen quote). The result is passed
+    // through sh -c with zero metacharacter interpretation, so argv tokens and redirect paths
+    // are taken literally and cannot inject shell commands.
+    std::string escaped = "'";
+    for (char ch : token) {
+        if (ch == '\'') {
+            escaped += "'\\''";
+        } else {
+            escaped += ch;
+        }
+    }
+    escaped += "'";
+    return escaped;
+}
+
+std::string Executor::DockerDaemonMessage(const nlohmann::json &resp)
+{
+    // ParseDockerResponse stores the 4xx/5xx body two ways: "__docker_error" (parsed JSON; a Docker
+    // error body is normally {"message":"..."}) or "__docker_error_raw" (raw text, when the body is
+    // not JSON). Prefer the parsed "message" field (clean, the daemon's own explanation); fall back
+    // to the raw body for non-standard responses. Type-checked so a malformed field never throws
+    // into the logging path.
+    if (resp.contains("__docker_error") && resp["__docker_error"].is_object() &&
+        resp["__docker_error"].contains("message") && resp["__docker_error"]["message"].is_string()) {
+        return resp["__docker_error"]["message"].get<std::string>();
+    }
+    if (resp.contains("__docker_error_raw") && resp["__docker_error_raw"].is_string()) {
+        return resp["__docker_error_raw"].get<std::string>();
+    }
+    return "";
+}
+
+void Executor::ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr,
+    const std::string &runtimeID, const std::string &hostUser)
+{
+    auto path = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
+    if (!litebus::os::ExistPath(path)) {
+        YRLOG_WARN("{}|std log path {} not found, try to make dir", runtimeID, path);
+        if (!litebus::os::Mkdir(path).IsNone()) {
+            YRLOG_WARN("{}|failed to make dir {}, msg: {}", runtimeID, path, litebus::os::Strerror(errno));
+            return;
+        }
+    }
+
+    std::string outPath = litebus::os::Join(path, fmt::format("{}.out", runtimeID));
+    if (!litebus::os::ExistPath(outPath) && TouchFile(outPath) != 0) {
+        YRLOG_WARN("create std out log file {} failed: {}", outPath, litebus::os::Strerror(errno));
+        return;
+    }
+    stdOut = outPath;
+
+    std::string errPath = litebus::os::Join(path, fmt::format("{}.err", runtimeID));
+    if (!litebus::os::ExistPath(errPath) && TouchFile(errPath) != 0) {
+        YRLOG_WARN("create std err log file {} failed: {}", errPath, litebus::os::Strerror(errno));
+        return;
+    }
+    stdErr = errPath;
+
+    // chown the redirect files so a non-root runUser (Config.User) can write to them; otherwise the
+    // sh -c ">/out 2>/err" redirect fails at container start with no logs on the host.
+    if (hostUser.empty()) {
+        return;
+    }
+    // Chown 成功返回 Some(0)、失败返回 None()（IsNone()==true 表示失败，与 Mkdir 相反）。
+    // chown 经 getpwnam 在宿主机查 user，若 hostUser 是仅存在于镜像内的用户（如 agentos/snuser）将查不到而失败。
+    if (!stdOut.empty() && litebus::os::Chown(hostUser, stdOut, false).IsNone()) {
+        YRLOG_WARN("{}|failed to chown stdout log {} to user {} (user may not exist on host)",
+                   runtimeID, stdOut, hostUser, hostUser);
+    }
+    if (!stdErr.empty() && litebus::os::Chown(hostUser, stdErr, false).IsNone()) {
+        YRLOG_WARN("{}|failed to chown stderr log {} to user {} (user may not exist on host)",
+                   runtimeID, stdErr, hostUser, hostUser);
+    }
 }
 
 void Executor::Init()

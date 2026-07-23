@@ -124,6 +124,20 @@ public:
 
     ~Executor() override = default;
 
+    // POSIX single-quote shell-escape a single argv token / redirect path so it is passed through
+    // sh -c verbatim without metacharacter interpretation (no injection). Shared by executors that
+    // wrap a runtime command in `sh -c "<quoted> >out 2>err"` (docker, supervisor). Pure function,
+    // no instance state — kept here once so the quoting logic is correct in exactly one place.
+    static std::string ShellQuote(const std::string &token);
+
+    // Extract the Docker daemon's error message from a parsed API response. ParseDockerResponse
+    // stores the 4xx/5xx body in "__docker_error" (parsed JSON, normally {"message":"..."}) or
+    // "__docker_error_raw" (raw text, when the body is not JSON); this pulls it back out so lifecycle
+    // failure logs carry the daemon's own explanation (port conflict, bind source missing, resource
+    // limit, ...) instead of only a status code. Returns "" when there is no daemon message. Pure
+    // function, no instance state.
+    static std::string DockerDaemonMessage(const nlohmann::json &resp);
+
     /**
      * Start Instance when receive message from function agent.
      *
@@ -205,6 +219,13 @@ protected:
     virtual void Init();
 
     virtual void Finalize();
+
+    // Resolve per-runtime stdout/stderr redirect paths under runtimeLogPath/runtimeStdLogDir,
+    // mkdir/touch them, and (when hostUser is set) chown them so a non-root container User can write
+    // via the sh -c ">/out 2>/err" redirect. Shared by docker and supervisor; moved up so the logic
+    // lives in one place. hostUser="" skips chown (root container / legacy path).
+    void ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID,
+                                  const std::string &hostUser = "");
 
     RuntimeConfig config_{};
 

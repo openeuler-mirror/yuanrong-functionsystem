@@ -50,7 +50,6 @@ constexpr int64_t RECONCILE_RETRY_INITIAL_MS        = 1000;
 constexpr int64_t RECONCILE_RETRY_MAX_INTERVAL_MS   = 10000;
 constexpr int32_t RECONCILE_MAX_RETRIES             = 120;
 constexpr int32_t CONTAINER_DELETE_TIMEOUT_SEC      = 10;
-const std::string YR_ONLY_STDOUT                    = "YR_ONLY_STDOUT";
 
 constexpr int32_t WAIT_MAX_RETRIES                  = 30;
 constexpr int64_t WAIT_RETRY_INTERVAL_MS            = 10000;

@@ -74,9 +74,6 @@ protected:
     void InitVirtualEnvIdleTimeLimit() override {};
 
 private:
-    void ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID,
-                                 const std::string &hostUser = "");
-
     // Helper functions to reduce code duplication
     void BuildRuntimeCommands(runtime::v1::StartRequest *request, const std::vector<std::string> &buildArgs);
 
@@ -98,9 +95,6 @@ private:
 
     litebus::Future<std::string> CreateSandbox(const std::string &runtimeID, const std::string &hostUser = "");
     nlohmann::json BuildCommand(const ::std::shared_ptr<runtime::v1::StartRequest> &start);
-    // POSIX single-quote shell-escape a single argv token / redirect path so it is passed
-    // through sh -c verbatim without any metacharacter interpretation (no injection).
-    static std::string ShellQuote(const std::string &token);
     litebus::Future<runtime::v1::DeleteResponse> DoDeleteSandbox(
         const std::shared_ptr<runtime::v1::DeleteRequest> &req);
 
