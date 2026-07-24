@@ -181,6 +181,9 @@ def pack_wheel(args):
     config_src_path = os.path.join(root_dir, "scripts", "config", "pyproject.toml")
     config_dst_path = os.path.join(wheel_base_dir, "pyproject.toml")
     shutil.copy2(config_src_path, config_dst_path)
+    setup_src_path = os.path.join(root_dir, "scripts", "config", "setup.py")
+    setup_dst_path = os.path.join(wheel_base_dir, "setup.py")
+    shutil.copy2(setup_src_path, setup_dst_path)
 
     # 复制README
     readme_src_path = os.path.join(root_dir, "README.md")
