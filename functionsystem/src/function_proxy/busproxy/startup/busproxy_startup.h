@@ -17,6 +17,8 @@
 #ifndef BUSPROXY_INCLUDE_STARTUP_H
 #define BUSPROXY_INCLUDE_STARTUP_H
 
+#include <mutex>
+
 #include "busproxy/memory_monitor/memory_monitor.h"
 #include "busproxy/registry/service_registry.h"
 #include "common/status/status.h"
@@ -41,6 +43,14 @@ struct BusProxyStartParam {
     std::shared_ptr<function_proxy::InternalIAM> internalIam{ nullptr };
     bool isEnablePerf;
     bool unRegisterWhileStop;
+    ProxyServiceMeta proxyService;
+};
+
+struct ProxyServiceReadiness {
+    bool started{ false };
+    bool synced{ false };
+    bool recovered{ false };
+    bool dispatcherAvailable{ false };
 };
 
 class BusproxyStartup {
@@ -52,14 +62,26 @@ public:
 
     Status Run();
 
+    Status PublishProxyService();
+
+    Status UpdateProxyServiceReadiness(const ProxyServiceReadiness &readiness);
+
+    Status WithdrawProxyService();
+
+    Status RestoreProxyService();
+
     Status Stop() const;
 
     void Await() const;
 
+    static function_proxy::RegisterInfo BuildRegistryInfo(const BusProxyStartParam &param,
+                                                          const litebus::AID &proxyActorAID);
+
+    static bool IsProxyServiceReady(const ProxyServiceReadiness &readiness, bool requiresDispatcher = true);
+
 private:
     void StartProxyActor(const std::string &nodeID, const std::string &modelName);
-    void InitRegistry(const litebus::AID &proxyActorAID, const std::string &nodeID,
-                      std::shared_ptr<MetaStorageAccessor> metaStorage);
+    void InitRegistry(const litebus::AID &proxyActorAID, std::shared_ptr<MetaStorageAccessor> metaStorage);
     void StartRequestRouter();
 
     BusProxyStartParam param_;
@@ -67,6 +89,9 @@ private:
     std::shared_ptr<MetaStorageAccessor> metaStorageAccessor_{ nullptr };
     std::shared_ptr<ServiceRegistry> registry_{ nullptr };
     std::shared_ptr<busproxy::RequestRouter> requestRouter_;
+    ProxyServiceMeta advertisedProxyService_;
+    std::mutex proxyServiceMutex_;
+    bool proxyServicePublished_{ false };
 };
 }  // namespace functionsystem
 

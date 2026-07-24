@@ -72,10 +72,10 @@ public:
     litebus::Future<Status> RevokeGroup(const std::string& groupKey);
 
 protected:
-    void KeepAliveOnce(const std::string &key, const std::string &value, const int ttl);
+    void KeepAliveOnce(const std::string &key, const std::string &value, const int ttl, int64_t leaseID);
 
     void KeepAliveOnceResponse(const litebus::Future<LeaseKeepAliveResponse> &rsp, const std::string &key,
-                               const std::string &value, const int ttl);
+                               const std::string &value, const int ttl, int64_t leaseID);
 
     litebus::Future<Status> RevokeResponse(const litebus::Future<LeaseRevokeResponse> &rsp, const std::string &key);
 
@@ -85,7 +85,8 @@ protected:
 
     litebus::Future<Status> Put(const Status &status, const std::string &key, const std::string &value, const int ttl);
 
-    void RetryPutWithLease(const std::string &key, const std::string &value, const int ttl);
+    void RetryPutWithLease(const std::string &key, const std::string &value, const int ttl,
+                           int64_t expectedLeaseID);
 
     // Group lease methods (for TxnWithLease)
     void KeepAliveGroupOnce(const std::string& groupKey, int64_t leaseID, const int ttl);
@@ -106,8 +107,11 @@ protected:
         const litebus::Promise<Status>& promise);
 
 private:
+    void SetLeaseTimer(const std::string &key, litebus::Timer timer);
+
     void OnPutResponse(const litebus::Future<std::shared_ptr<PutResponse>> &response, const std::string &key,
-                       const std::string &value, int ttl, const litebus::Promise<Status> &promise);
+                       const std::string &value, int ttl, int64_t leaseID,
+                       const litebus::Promise<Status> &promise);
 
     std::shared_ptr<MetaStoreClient> metaClient_;
 

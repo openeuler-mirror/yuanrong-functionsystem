@@ -229,10 +229,32 @@ std::shared_ptr<::grpc::ServerCredentials> InitPosixGrpcServerSecureOption(const
     ::grpc::SslServerCredentialsOptions::PemKeyCertPair pemKeyCertPair;
     pemKeyCertPair.private_key = serverKey.GetData();
     pemKeyCertPair.cert_chain = serverCert;
-    ::grpc::SslServerCredentialsOptions sslServerCredentialsOptions(GRPC_SSL_REQUEST_CLIENT_CERTIFICATE_AND_VERIFY);
+    // Runtime clients share this port and do not all present component
+    // certificates. Services that require component identity enforce it from
+    // ServerContext after the optional certificate has been verified here.
+    ::grpc::SslServerCredentialsOptions sslServerCredentialsOptions(
+        GRPC_SSL_REQUEST_CLIENT_CERTIFICATE_AND_VERIFY);
     sslServerCredentialsOptions.pem_key_cert_pairs.push_back(std::move(pemKeyCertPair));
     sslServerCredentialsOptions.pem_root_certs = caCert;
     return ::grpc::SslServerCredentials(sslServerCredentialsOptions);
+}
+
+ProxyServiceMeta BuildProxyServiceMeta(const function_proxy::Flags &flags)
+{
+    ProxyServiceMeta proxyService;
+    if (flags.GetEnableFrontendProxyService()) {
+        proxyService.grpcAddress = flags.GetIP() + ":" + flags.GetGrpcListenPort();
+        proxyService.capabilities = { "faas.create", "faas.invoke", "faas.kill" };
+    }
+    if (flags.GetEnableTcpTunnel()) {
+        proxyService.tcpTunnelAddress = flags.GetIP() + ":" + flags.GetTcpTunnelPort();
+        proxyService.capabilities.emplace_back("tcp.tunnel");
+    }
+    if (!proxyService.grpcAddress.empty() || !proxyService.tcpTunnelAddress.empty()) {
+        proxyService.version = BUILD_VERSION;
+        proxyService.health = "healthy";
+    }
+    return proxyService;
 }
 
 bool CreateBusProxy(const function_proxy::Flags &flags)
@@ -261,20 +283,18 @@ bool CreateBusProxy(const function_proxy::Flags &flags)
             memoryControlConfig.msgSizeThreshold = inputMsgThreshold;
         }
     }
-    auto memoryMonitor = std::make_shared<MemoryMonitor>(memoryControlConfig);
-
-    auto dataPlaneObserver = std::make_shared<function_proxy::DataPlaneObserver>(observer);
     BusProxyStartParam busproxyStartParam{
         .nodeID = flags.GetNodeID(),
         .modelName = COMPONENT_NAME,
         .localAddress = flags.GetAddress(),
         .serviceTTL = flags.GetServiceTTL(),
         .dataInterfaceClientMgr = dataInterfaceClientMgrProxy,
-        .dataPlaneObserver = dataPlaneObserver,
-        .memoryMonitor = memoryMonitor,
+        .dataPlaneObserver = std::make_shared<function_proxy::DataPlaneObserver>(observer),
+        .memoryMonitor = std::make_shared<MemoryMonitor>(memoryControlConfig),
         .internalIam = internalIAM,
         .isEnablePerf = flags.GetEnablePerf(),
-        .unRegisterWhileStop = flags.UnRegisterWhileStop()
+        .unRegisterWhileStop = flags.UnRegisterWhileStop(),
+        .proxyService = BuildProxyServiceMeta(flags)
     };
 
     g_busproxyStartup = std::make_shared<BusproxyStartup>(std::move(busproxyStartParam), metaStorageAccessor);
@@ -283,6 +303,14 @@ bool CreateBusProxy(const function_proxy::Flags &flags)
         g_functionProxySwitcher->SetStop();
         return false;
     }
+    std::weak_ptr<BusproxyStartup> busproxyStartup = g_busproxyStartup;
+    observer->SetSelfProxyDeleteCbFunc([busproxyStartup] {
+        auto startup = busproxyStartup.lock();
+        if (startup == nullptr) {
+            return Status(StatusCode::FAILED, "busproxy startup is unavailable");
+        }
+        return startup->RestoreProxyService();
+    });
     return true;
 }
 
@@ -318,6 +346,26 @@ void InitPosixServerOption(const function_proxy::Flags &flags, LocalSchedStartPa
     }
     YRLOG_INFO("load certificate from mounted secret file");
     InitSslOptionFromCertFile(flags, param);
+}
+
+void InitTcpTunnelOption(const function_proxy::Flags &flags, LocalSchedStartParam &param)
+{
+    param.enableTcpTunnel = flags.GetEnableTcpTunnel();
+    param.tcpTunnelEnableTLS = flags.GetSslEnable();
+    param.tcpTunnelPort = flags.GetTcpTunnelPort();
+    param.tcpTunnelMaxConnections = flags.GetTcpTunnelMaxConnections();
+    if (!param.enableTcpTunnel) {
+        return;
+    }
+    if (!flags.GetSslEnable()) {
+        return;
+    }
+    const std::string basePath = flags.GetSslBasePath();
+    const std::string keyPath = litebus::os::Join(basePath, flags.GetSslKeyFile());
+    SensitiveValue key = GetSensitivePrivateKeyFromFile(keyPath, SensitiveValue());
+    param.tcpTunnelRootCert = Read(litebus::os::Join(basePath, flags.GetSslRootFile()));
+    param.tcpTunnelModuleCert = Read(litebus::os::Join(basePath, flags.GetSslCertFile()));
+    param.tcpTunnelModuleKey = key.GetData();
 }
 
 std::shared_ptr<DSAuthConfig> InitDsAuthConfig(const function_proxy::Flags &flags)
@@ -457,7 +505,15 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .traefikHttpEntryPoint = flags.GetTraefikHttpEntryPoint(),
         .traefikEnableTLS = flags.GetTraefikEnableTLS(),
         .traefikServersTransport = flags.GetTraefikServersTransport(),
-        .enableMergeProcess = flags.GetEnableMergeProcess()
+        .enableMergeProcess = flags.GetEnableMergeProcess(),
+        .enableTcpTunnel = flags.GetEnableTcpTunnel(),
+        .tcpTunnelEnableTLS = flags.GetSslEnable(),
+        .tcpTunnelPort = flags.GetTcpTunnelPort(),
+        .tcpTunnelMaxConnections = flags.GetTcpTunnelMaxConnections(),
+        .tcpTunnelRootCert = "",
+        .tcpTunnelModuleCert = "",
+        .tcpTunnelModuleKey = "",
+        .enableFrontendProxyService = flags.GetEnableFrontendProxyService()
     };
 }
 
@@ -469,6 +525,7 @@ Status InitLocalSchedulerDriver(const function_proxy::Flags &flags, const std::s
     auto metaStoreClient = g_commonDriver->GetMetaStoreClient();
     auto localSchedStartParam = InitLocalSchedParam(flags, dsAuthConfig);
     InitPosixServerOption(flags, localSchedStartParam);
+    InitTcpTunnelOption(flags, localSchedStartParam);
     g_localSchedDriver = std::make_shared<LocalSchedDriver>(std::move(localSchedStartParam), metaStoreClient);
     return Status::OK();
 }
@@ -522,25 +579,55 @@ Status InitMasterExplorer(const function_proxy::Flags &flags, const std::shared_
 
 void StartUpModule()
 {
+    ProxyServiceReadiness proxyReadiness;
+    const auto updateProxyReadiness = [&proxyReadiness]() {
+        if (g_busproxyStartup == nullptr) {
+            return Status::OK();
+        }
+        return g_busproxyStartup->UpdateProxyServiceReadiness(proxyReadiness);
+    };
+    // Any restart/re-entry begins fail-closed. A previously published endpoint
+    // is withdrawn before module gates are evaluated again.
+    (void)updateProxyReadiness();
     if (const auto status = StartModule({g_commonDriver, g_localSchedDriver}); status.IsError()) {
         YRLOG_ERROR("failed to start function proxy, err: {}", status.ToString());
+        (void)updateProxyReadiness();
         g_functionProxySwitcher->SetStop();
         return;
     }
+    proxyReadiness.started = true;
+    (void)updateProxyReadiness();
 
     if (const auto status = SyncModule({g_commonDriver, g_localSchedDriver}); status.IsError()) {
         YRLOG_ERROR("failed to sync function proxy, err: {}", status.ToString());
+        proxyReadiness.synced = false;
+        (void)updateProxyReadiness();
         g_functionProxySwitcher->SetStop();
         return;
     }
+    proxyReadiness.synced = true;
+    (void)updateProxyReadiness();
 
     if (const auto status = RecoverModule({g_commonDriver, g_localSchedDriver}); status.IsError()) {
         YRLOG_ERROR("failed to sync function proxy, err: {}", status.ToString());
+        proxyReadiness.recovered = false;
+        (void)updateProxyReadiness();
         g_functionProxySwitcher->SetStop();
         return;
     }
+    proxyReadiness.recovered = true;
+    (void)updateProxyReadiness();
     YRLOG_INFO("all modules are successful started, ready to serve");
     ModuleIsReady({g_commonDriver, g_localSchedDriver});
+    proxyReadiness.dispatcherAvailable =
+        g_localSchedDriver != nullptr && g_localSchedDriver->IsFrontendProxyDispatcherAvailable();
+    if (g_busproxyStartup != nullptr) {
+        const auto status = updateProxyReadiness();
+        if (status.IsError()) {
+            YRLOG_ERROR("failed to publish ready proxy service capabilities, err: {}", status.ToString());
+            g_functionProxySwitcher->SetStop();
+        }
+    }
 }
 
 void OnCreate(const Flags &flags, const function_agent::FunctionAgentFlags &functionAgentFlags,
@@ -607,6 +694,13 @@ void OnCreate(const Flags &flags, const function_agent::FunctionAgentFlags &func
 void OnDestroy()
 {
     YRLOG_INFO("{} is stopping", COMPONENT_NAME);
+
+    if (g_busproxyStartup != nullptr) {
+        const auto status = g_busproxyStartup->WithdrawProxyService();
+        if (status.IsError()) {
+            YRLOG_ERROR("failed to withdraw proxy service capabilities, err: {}", status.ToString());
+        }
+    }
 
     (void)StopModule({g_localSchedDriver, g_commonDriver});
 
@@ -685,6 +779,7 @@ int main(int argc, char **argv)
 
     YRLOG_INFO("DirectRouting feature flag: {}", flags.GetEnableDirectRouting());
     YRLOG_INFO("ForceLowReliabilityInstance feature flag: {}", flags.GetForceLowReliabilityInstance());
+    YRLOG_INFO("FrontendProxyService feature flag: {}", flags.GetEnableFrontendProxyService());
 
     if (!g_functionProxySwitcher->RegisterHandler(Stop, stopSignal)) {
         return EXIT_ABNORMAL;

@@ -25,6 +25,7 @@
 
 #include "common/constants/actor_name.h"
 #include "common/leader/business_policy.h"
+#include "common/metadata/metadata_type.h"
 #include "common/meta_store_adapter/instance_operator.h"
 #include "meta_store_client/meta_store_client.h"
 #include "common/meta_store_adapter/meta_store_operate_cacher.h"

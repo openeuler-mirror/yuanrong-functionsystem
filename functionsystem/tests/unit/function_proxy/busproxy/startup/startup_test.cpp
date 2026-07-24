@@ -72,4 +72,24 @@ TEST_F(StartupBusproxyTest, StartupBusproxy)
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 }
 
+TEST_F(StartupBusproxyTest, BuildRegistryInfoCarriesProxyServiceFromStartParam)
+{
+    param_.proxyService.grpcAddress = "10.0.0.11:19090";
+    param_.proxyService.tcpTunnelAddress = "10.0.0.11:22775";
+    param_.proxyService.version = "phase3";
+    param_.proxyService.health = "healthy";
+    param_.proxyService.capabilities = { "faas.create", "faas.invoke", "faas.kill", "tcp.tunnel" };
+
+    auto registerInfo = BusproxyStartup::BuildRegistryInfo(
+        param_, litebus::AID("function_proxy", "10.0.0.11:24032"));
+
+    EXPECT_EQ(registerInfo.key, BUSPROXY_PATH_PREFIX + "/0/node/nodeA");
+    EXPECT_EQ(registerInfo.meta.node, "nodeA");
+    EXPECT_EQ(registerInfo.meta.proxyService.grpcAddress, "10.0.0.11:19090");
+    EXPECT_EQ(registerInfo.meta.proxyService.tcpTunnelAddress, "10.0.0.11:22775");
+    EXPECT_EQ(registerInfo.meta.proxyService.version, "phase3");
+    EXPECT_EQ(registerInfo.meta.proxyService.health, "healthy");
+    EXPECT_EQ(registerInfo.meta.proxyService.capabilities.size(), 4U);
+}
+
 }  // namespace functionsystem::test

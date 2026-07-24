@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 
 #include <map>
+#include <vector>
 
 #include "function_master/instance_manager/instance_manager_driver.h"
 
@@ -143,5 +144,6 @@ TEST(InstanceManagerDriverTest, GetQueryInstancesPageRangeCalculatesBoundedRange
     EXPECT_EQ(range.start, 5U);
     EXPECT_EQ(range.end, 5U);
 }
+
 
 }  // namespace functionsystem::instance_manager::test

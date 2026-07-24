@@ -161,6 +161,21 @@ static InstanceInfo GenInstanceInfo(const std::string &instanceID, const std::st
     return instanceInfo;
 }
 
+TEST(InstanceCtrlMessageTest, GenScheduleResponseCarriesOwningProxyNodeID)
+{
+    messages::ScheduleRequest request;
+    request.set_requestid("schedule-request-1");
+    request.set_traceid("trace-1");
+    request.mutable_instance()->set_instanceid("instance-1");
+    request.mutable_instance()->set_functionproxyid("proxy-owner-a");
+
+    auto response = GenScheduleResponse(StatusCode::SUCCESS, "ready", request);
+
+    EXPECT_EQ(response.instanceid(), "instance-1");
+    EXPECT_TRUE(response.has_scheduleresult());
+    EXPECT_EQ(response.scheduleresult().nodeid(), "proxy-owner-a");
+}
+
 static std::shared_ptr<messages::ScheduleRequest> GenScheduleReq(std::shared_ptr<InstanceCtrlActor> actor)
 {
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
@@ -370,6 +385,89 @@ TEST_F(InstanceCtrlTest, ScheduleGetFuncMetaFailed)
     auto result = instanceCtrl.Schedule(scheduleReq, runtimePromise);
     ASSERT_AWAIT_READY(result);
     EXPECT_EQ(result.Get().message(), "failed to find function meta");
+}
+
+TEST(InstanceCtrlReadyCallResultTest, FrontendReadyCallResultCallbackFallsBackToInstanceID)
+{
+    auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
+    auto scheduleReq = GenScheduleReq(actor);
+    scheduleReq->set_requestid("frontend-create-request");
+    scheduleReq->mutable_instance()->set_instanceid("frontend-created-instance");
+
+    bool callbackCalled = false;
+    std::shared_ptr<functionsystem::CallResult> observedResult;
+    actor->RegisterReadyCallResultCallback(
+        scheduleReq->instance().instanceid(), scheduleReq,
+        [&callbackCalled, &observedResult](const std::shared_ptr<functionsystem::CallResult> &callResult) {
+            callbackCalled = true;
+            observedResult = callResult;
+            return litebus::Future<CallResultAck>(CallResultAck());
+        });
+
+    auto runtimeReadyResult = std::make_shared<functionsystem::CallResult>();
+    runtimeReadyResult->set_requestid("runtime-ready-request");
+    runtimeReadyResult->set_instanceid(scheduleReq->instance().instanceid());
+    runtimeReadyResult->set_code(common::ERR_NONE);
+
+    auto ack = actor->SendCallResult(scheduleReq->instance().instanceid(), "", "", runtimeReadyResult);
+    ASSERT_AWAIT_READY(ack);
+    EXPECT_TRUE(callbackCalled);
+    ASSERT_NE(observedResult, nullptr);
+    EXPECT_EQ(observedResult->requestid(), "runtime-ready-request");
+    EXPECT_EQ(observedResult->instanceid(), "frontend-created-instance");
+}
+
+TEST(InstanceCtrlReadyCallResultTest, FrontendTicketBindsBeforeReadyAndCompletesExactlyOnce)
+{
+    auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
+    auto scheduleReq = GenScheduleReq(actor);
+    scheduleReq->set_requestid("frontend-ticket-request");
+    scheduleReq->mutable_instance()->set_instanceid("frontend-ticket-instance");
+    int callbackCount = 0;
+    ASSERT_TRUE(actor->RegisterFrontendReadyTicket(
+        scheduleReq, [&callbackCount](const std::shared_ptr<functionsystem::CallResult> &) {
+            ++callbackCount;
+            return litebus::Future<CallResultAck>(CallResultAck());
+        }));
+    ASSERT_TRUE(actor->BindFrontendReadyTicketInstance(scheduleReq->requestid(),
+                                                       scheduleReq->instance().instanceid()));
+
+    auto ready = std::make_shared<functionsystem::CallResult>();
+    ready->set_requestid("runtime-request-mismatch");
+    ready->set_instanceid(scheduleReq->instance().instanceid());
+    ready->set_code(common::ERR_NONE);
+    ASSERT_AWAIT_READY(actor->SendCallResult(scheduleReq->instance().instanceid(), "", "", ready));
+    EXPECT_EQ(callbackCount, 1);
+    ASSERT_AWAIT_READY(actor->SendCallResult(scheduleReq->instance().instanceid(), "", "", ready));
+    EXPECT_EQ(callbackCount, 1);
+    EXPECT_TRUE(actor->instanceRegisteredReadyCallResultCallback_.empty());
+    EXPECT_TRUE(actor->instanceReadyCallResultCallbackByInstanceID_.empty());
+}
+
+TEST(InstanceCtrlReadyCallResultTest, CancelledFrontendTicketIgnoresLateReady)
+{
+    auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
+    auto scheduleReq = GenScheduleReq(actor);
+    scheduleReq->set_requestid("cancelled-frontend-ticket");
+    scheduleReq->mutable_instance()->set_instanceid("cancelled-frontend-instance");
+    int callbackCount = 0;
+    ASSERT_TRUE(actor->RegisterFrontendReadyTicket(
+        scheduleReq, [&callbackCount](const std::shared_ptr<functionsystem::CallResult> &) {
+            ++callbackCount;
+            return litebus::Future<CallResultAck>(CallResultAck());
+        }));
+    ASSERT_TRUE(actor->BindFrontendReadyTicketInstance(scheduleReq->requestid(),
+                                                       scheduleReq->instance().instanceid()));
+    actor->UnregisterFrontendReadyWait(scheduleReq->requestid(), "client cancelled");
+
+    auto lateReady = std::make_shared<functionsystem::CallResult>();
+    lateReady->set_requestid(scheduleReq->requestid());
+    lateReady->set_instanceid(scheduleReq->instance().instanceid());
+    lateReady->set_code(common::ERR_NONE);
+    ASSERT_AWAIT_READY(actor->SendCallResult(scheduleReq->instance().instanceid(), "", "", lateReady));
+    EXPECT_EQ(callbackCount, 0);
+    EXPECT_TRUE(actor->instanceRegisteredReadyCallResultCallback_.empty());
+    EXPECT_TRUE(actor->instanceReadyCallResultCallbackByInstanceID_.empty());
 }
 
 TEST_F(InstanceCtrlTest, ScheduleUpdateInstanceInfoFailed)
@@ -1676,6 +1774,87 @@ TEST_F(InstanceCtrlTest, KillForwardedToMasterRelaysNotFound)
     auto killRsp = instanceCtrl_->Kill("src", killReq);
     ASSERT_AWAIT_READY(killRsp);
     EXPECT_EQ(killRsp.Get().code(), common::ErrorCode::ERR_NONE);
+}
+
+TEST_F(InstanceCtrlTest, FrontendKillLocalMissNeverRelaysOrClaimsAuthoritativeDeletion)
+{
+    auto guard = DirectRoutingConfig::EnableForTest();
+    auto killReq = GenKillRequest("InstanceOwnedByAnotherProxy", SHUT_DOWN_SIGNAL);
+    auto localSchedSrv = std::make_shared<MockLocalSchedSrv>();
+    instanceCtrl_->BindLocalSchedSrv(localSchedSrv);
+
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillOnce(Return(nullptr));
+    EXPECT_CALL(*localSchedSrv, ForwardKillToInstanceManager).Times(0);
+
+    auto killRsp = instanceCtrl_->KillFrontend("tenant-a", killReq);
+    ASSERT_AWAIT_READY(killRsp);
+    EXPECT_EQ(killRsp.Get().code(), common::ERR_INSTANCE_NOT_FOUND);
+    EXPECT_EQ(killRsp.Get().message(), "frontend proxy is not the owning proxy for this instance");
+}
+
+TEST_F(InstanceCtrlTest, FrontendKillRejectsInstanceWithoutMatchingTenant)
+{
+    auto killReq = GenKillRequest("InstanceWithoutTenant", SHUT_DOWN_SIGNAL);
+    auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeID");
+    InstanceInfo instanceInfo;
+    instanceInfo.set_instanceid(killReq->instanceid());
+    EXPECT_CALL(*instanceControlView_, GetInstance(killReq->instanceid())).WillOnce(Return(stateMachine));
+    EXPECT_CALL(*stateMachine, GetInstanceInfo).WillOnce(Return(instanceInfo));
+
+    auto killRsp = instanceCtrl_->KillFrontend("tenant-a", killReq);
+
+    ASSERT_AWAIT_READY(killRsp);
+    EXPECT_EQ(killRsp.Get().code(), common::ERR_AUTHORIZE_FAILED);
+}
+
+TEST_F(InstanceCtrlTest, FrontendKillRejectsEmptyTenant)
+{
+    auto killReq = GenKillRequest("InstanceWithTenant", SHUT_DOWN_SIGNAL);
+    auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeID");
+    EXPECT_CALL(*instanceControlView_, GetInstance(killReq->instanceid())).WillOnce(Return(stateMachine));
+    EXPECT_CALL(*stateMachine, GetInstanceInfo).Times(0);
+
+    auto killRsp = instanceCtrl_->KillFrontend("", killReq);
+
+    ASSERT_AWAIT_READY(killRsp);
+    EXPECT_EQ(killRsp.Get().code(), common::ERR_AUTHORIZE_FAILED);
+}
+
+TEST(FrontendKillCleanupSnapshotTest, CompleteRequiresAllFiveObservedCleanupSignals)
+{
+    FrontendKillCleanupSnapshot snapshot;
+    snapshot.requestTicketKnown = true;
+    snapshot.requestTicketCleared = true;
+    snapshot.instanceTicketKnown = true;
+    snapshot.instanceTicketCleared = true;
+    snapshot.runtimeState = "terminated";
+    snapshot.instanceState = "absent";
+    snapshot.pendingInvokeCount = 1;
+    EXPECT_FALSE(snapshot.IsComplete());
+
+    snapshot.pendingInvokeCount = 0;
+    EXPECT_TRUE(snapshot.IsComplete());
+
+    snapshot.runtimeState = "unknown";
+    EXPECT_FALSE(snapshot.IsComplete());
+}
+
+TEST(FrontendKillEvidenceTest, OlderKillResultCannotOverwriteNewerRequestEvidence)
+{
+    auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
+    const std::string instanceID = "concurrent-kill-instance";
+    actor->frontendKillRuntimeEvidence_[instanceID] = { "newer-request", "terminating" };
+    InstanceInfo olderKill;
+    olderKill.set_instanceid(instanceID);
+    olderKill.set_requestid("older-request");
+    messages::KillInstanceResponse response;
+    response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+
+    auto result = actor->RecordFrontendKillRuntimeResult(olderKill, response);
+
+    ASSERT_AWAIT_READY(result);
+    EXPECT_EQ(actor->frontendKillRuntimeEvidence_[instanceID].first, "newer-request");
+    EXPECT_EQ(actor->frontendKillRuntimeEvidence_[instanceID].second, "terminating");
 }
 
 /**

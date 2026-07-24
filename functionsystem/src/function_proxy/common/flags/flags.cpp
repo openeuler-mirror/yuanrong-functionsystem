@@ -43,6 +43,10 @@ const uint32_t MAX_SERVICE_REGISTER_CYCLE_MS = 60000;
 
 const uint32_t SERVICE_PING_TIMEOUT = 90000;
 
+const uint32_t DEFAULT_TCP_TUNNEL_MAX_CONNECTIONS = 1024;
+const uint32_t MIN_TCP_TUNNEL_MAX_CONNECTIONS = 1;
+const uint32_t MAX_TCP_TUNNEL_MAX_CONNECTIONS = 65535;
+
 const uint32_t SERVICE_UPDATE_RESOURCE_CYCLE_MS = 1000;
 const uint32_t MIN_SERVICE_UPDATE_RESOURCE_CYCLE_MS = 500;
 const uint32_t MAX_SERVICE_UPDATE_RESOURCE_CYCLE_MS = 60000;
@@ -155,6 +159,15 @@ Flags::Flags()
             "enable direct routing read path with LRU cache and on-demand route query", false);
     AddFlag(&Flags::forceLowReliabilityInstance_, "force_low_reliability_instance",
             "force all instances to use low-reliability persistence semantics", false);
+    AddFlag(&Flags::enableTcpTunnel_, "enable_tcp_tunnel",
+            "enable the TCP tunnel listener", false);
+    AddFlag(&Flags::tcpTunnelPort_, "tcp_tunnel_port",
+            "listen port for the TCP tunnel", "22775");
+    AddFlag(&Flags::tcpTunnelMaxConnections_, "tcp_tunnel_max_connections",
+            "maximum concurrent TCP tunnel connections", DEFAULT_TCP_TUNNEL_MAX_CONNECTIONS,
+            NumCheck(MIN_TCP_TUNNEL_MAX_CONNECTIONS, MAX_TCP_TUNNEL_MAX_CONNECTIONS));
+    AddFlag(&Flags::enableFrontendProxyService_, "enable_frontend_proxy_service",
+            "enable faasfrontend gRPC service on the existing proxy POSIX port", false);
     AddElectionFlags();
     AddDSFlags();
     AddRuntimeFlags();

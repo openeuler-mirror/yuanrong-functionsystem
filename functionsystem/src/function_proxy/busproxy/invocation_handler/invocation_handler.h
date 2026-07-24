@@ -44,6 +44,14 @@ public:
     {
         createCallResultReceiver_ = createCallResult;
     }
+
+    using FrontendCallResultReceiver =
+        std::function<std::pair<bool, std::shared_ptr<runtime_rpc::StreamingMessage>>(
+            const std::string &, const std::shared_ptr<runtime_rpc::StreamingMessage> &)>;
+    static void RegisterFrontendCallResultReceiver(const FrontendCallResultReceiver frontendCallResult)
+    {
+        frontendCallResultReceiver_ = frontendCallResult;
+    }
     static void BindUrl(const std::string &url)
     {
         localUrl_ = url;
@@ -104,6 +112,7 @@ private:
         const litebus::AID &to, const busproxy::CallerInfo &callerInfo, const std::string &instanceID,
         const SharedStreamMsg &request, const std::shared_ptr<busproxy::TimePoint> &time);
     inline static CreateCallResultReciver createCallResultReceiver_ = nullptr;
+    inline static FrontendCallResultReceiver frontendCallResultReceiver_ = nullptr;
     inline static std::string localUrl_;
     inline static std::shared_ptr<busproxy::InstanceProxyWrapper> instanceProxy_{ nullptr };
     inline static std::shared_ptr<functionsystem::MemoryMonitor> memoryMonitor_{ nullptr };
