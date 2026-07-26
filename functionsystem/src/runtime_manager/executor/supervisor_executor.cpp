@@ -46,6 +46,10 @@ const std::string SUPERVISOR_SANDBOX_PREFIX = "/api/v1/sandboxes";
 const std::string SUPERVISOR_UDS_SOCKET = "/run/jiuwenbox/jiuwenbox.sock";
 constexpr size_t HTTP_HEADER_SEPARATOR_LEN = 4;   // length of "\r\n\r\n"
 constexpr size_t CONTENT_LENGTH_PREFIX_LEN = 15;   // length of "content-length:"
+// HTTP status code boundaries: 0 means "not parsed", 2xx range is success.
+constexpr int HTTP_STATUS_UNPARSED = 0;
+constexpr int HTTP_STATUS_OK_MIN = 200;
+constexpr int HTTP_STATUS_OK_MAX = 300;   // exclusive upper bound of 2xx
 
 SupervisorExecutor::SupervisorExecutor(const std::string &name, const litebus::AID &functionAgentAID)
     : Executor(name), functionAgentAID_(functionAgentAID)
@@ -75,13 +79,38 @@ void SupervisorExecutor::ParseResponse(litebus::Promise<nlohmann::json> promise,
     size_t headerEnd = response.find("\r\n\r\n");
     if (headerEnd == std::string::npos) {
         YRLOG_ERROR("invalid HTTP response (no header/body separator)");
-        promise.SetValue(nlohmann::json::object());
+        promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
         return;
     }
     std::string respBody = response.substr(headerEnd + HTTP_HEADER_SEPARATOR_LEN);
+
+    // Parse HTTP status code from the first line (e.g. "HTTP/1.1 200 OK"); non-2xx is a failure.
+    int httpStatus = HTTP_STATUS_UNPARSED;
+    size_t firstLineEnd = response.find("\r\n");
+    if (firstLineEnd != std::string::npos && firstLineEnd < headerEnd) {
+        std::string statusLine = response.substr(0, firstLineEnd);
+        size_t sp1 = statusLine.find(' ');
+        if (sp1 != std::string::npos) {
+            size_t sp2 = statusLine.find(' ', sp1 + 1);
+            std::string codeStr = statusLine.substr(sp1 + 1,
+                sp2 == std::string::npos ? std::string::npos : sp2 - sp1 - 1);
+            try {
+                httpStatus = std::stoi(codeStr);
+            } catch (std::exception const &e) {
+                YRLOG_WARN("failed to parse HTTP status code from '{}': {}", statusLine, e.what());
+            }
+        }
+    }
+
+    if (httpStatus != HTTP_STATUS_UNPARSED &&
+        (httpStatus < HTTP_STATUS_OK_MIN || httpStatus >= HTTP_STATUS_OK_MAX)) {
+        YRLOG_ERROR("supervisor returned non-2xx status: {}, body: {}", httpStatus, respBody);
+        promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
+        return;
+    }
     if (respBody.empty()) {
         YRLOG_ERROR("HTTP response body is empty");
-        promise.SetValue(nlohmann::json::object());
+        promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
         return;
     }
     try {
@@ -90,7 +119,7 @@ void SupervisorExecutor::ParseResponse(litebus::Promise<nlohmann::json> promise,
         promise.SetValue(jsonResp);
     } catch (std::exception const &e) {
         YRLOG_ERROR("failed to parse response: {}", e.what());
-        promise.SetValue(nlohmann::json::object());
+        promise.SetFailed(static_cast<int32_t>(ERR_INNER_COMMUNICATION));
     }
 }
 
@@ -444,33 +473,48 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::ExecInSandbox(
     litebus::Promise<runtime::v1::StartResponse> promise;
     SendRequestToSupervisor("POST", execPath, execRequest)
         .OnComplete([this, sandboxId, runtimeID, promise](const litebus::Future<nlohmann::json> &future) mutable {
-            runtime::v1::StartResponse rsp{};
             if (future.IsError()) {
                 YRLOG_ERROR("{}|Failed to exec command in sandbox {}: {}", runtimeID, sandboxId,
                             static_cast<int>(future.GetErrorCode()));
-                rsp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
-                rsp.set_message("Failed to execute command in sandbox");
-
-                auto deleteReq = std::make_shared<runtime::v1::DeleteRequest>();
-                deleteReq->set_id(sandboxId);
-                DoDeleteSandbox(deleteReq).OnComplete(
-                    [this, runtimeID, sandboxId, promise,
-                     rsp](const litebus::Future<runtime::v1::DeleteResponse> &deleteFuture) mutable {
-                        if (deleteFuture.IsError()) {
-                            YRLOG_WARN("{}|Failed to cleanup sandbox {} after exec failure", runtimeID, sandboxId);
-                        }
-                        runtime2sandboxID_.erase(runtimeID);
-                        promise.SetValue(rsp);
-                    });
+                CleanupSandboxAfterExecFailure(runtimeID, sandboxId, promise);
                 return;
             }
 
+            // 检查 error_message 字段，如果存在且不为 null 则表示有错误
+            const nlohmann::json &execResp = future.Get();
+            if (execResp.contains("error_message") && !execResp["error_message"].is_null()) {
+                YRLOG_ERROR("{}|Failed to exec command in sandbox {} with error_message: {}", runtimeID, sandboxId,
+                            execResp["error_message"].get<std::string>());
+                CleanupSandboxAfterExecFailure(runtimeID, sandboxId, promise);
+                return;
+            }
+
+            runtime::v1::StartResponse rsp{};
             rsp.set_code(0);
             rsp.set_message("success");
             rsp.set_id(sandboxId);
             promise.SetValue(rsp);
         });
     return promise.GetFuture();
+}
+
+void SupervisorExecutor::CleanupSandboxAfterExecFailure(const std::string &runtimeID, const std::string &sandboxId,
+                                                        litebus::Promise<runtime::v1::StartResponse> promise)
+{
+    runtime::v1::StartResponse failRsp{};
+    failRsp.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+    failRsp.set_message("Failed to execute command in sandbox");
+    promise.SetValue(failRsp);
+
+    auto deleteReq = std::make_shared<runtime::v1::DeleteRequest>();
+    deleteReq->set_id(sandboxId);
+    DoDeleteSandbox(deleteReq).OnComplete(
+        [this, runtimeID, sandboxId](const litebus::Future<runtime::v1::DeleteResponse> &deleteFuture) mutable {
+            if (deleteFuture.IsError()) {
+                YRLOG_WARN("{}|Failed to cleanup sandbox {} after exec failure", runtimeID, sandboxId);
+            }
+            runtime2sandboxID_.erase(runtimeID);
+        });
 }
 
 litebus::Future<messages::StartInstanceResponse> SupervisorExecutor::OnStartInstanceCompleted(

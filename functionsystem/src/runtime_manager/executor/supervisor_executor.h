@@ -104,6 +104,9 @@ private:
     litebus::Future<runtime::v1::DeleteResponse> DoDeleteSandbox(
         const std::shared_ptr<runtime::v1::DeleteRequest> &req);
 
+    void CleanupSandboxAfterExecFailure(const std::string &runtimeID, const std::string &sandboxId,
+                                        litebus::Promise<runtime::v1::StartResponse> promise);
+
     litebus::Future<runtime::v1::StartResponse> ExecInSandbox(const std::string &runtimeID,
                                                               const ::std::shared_ptr<runtime::v1::StartRequest> &start,
                                                               const std::string &sandboxId);

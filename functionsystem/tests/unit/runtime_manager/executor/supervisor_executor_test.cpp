@@ -267,9 +267,10 @@ TEST_F(SupervisorExecutorTest, ParseResponse_NoHeaderSeparator)
 
     executor_->TestParseResponse(promise, response);
 
-    ASSERT_AWAIT_READY(future);
-    auto json = future.Get();
-    EXPECT_TRUE(json.empty());
+    // No "\r\n\r\n" separator -> ParseResponse rejects the response and fails the promise.
+    ASSERT_AWAIT_SET(future);
+    EXPECT_TRUE(future.IsError());
+    EXPECT_EQ(future.GetErrorCode(), static_cast<int>(StatusCode::ERR_INNER_COMMUNICATION));
 }
 
 TEST_F(SupervisorExecutorTest, ParseResponse_EmptyBody)
@@ -284,9 +285,10 @@ TEST_F(SupervisorExecutorTest, ParseResponse_EmptyBody)
 
     executor_->TestParseResponse(promise, response);
 
-    ASSERT_AWAIT_READY(future);
-    auto json = future.Get();
-    EXPECT_TRUE(json.empty());
+    // Empty body -> ParseResponse fails the promise with ERR_INNER_COMMUNICATION.
+    ASSERT_AWAIT_SET(future);
+    EXPECT_TRUE(future.IsError());
+    EXPECT_EQ(future.GetErrorCode(), static_cast<int>(StatusCode::ERR_INNER_COMMUNICATION));
 }
 
 TEST_F(SupervisorExecutorTest, ParseResponse_InvalidJson)
@@ -302,9 +304,10 @@ TEST_F(SupervisorExecutorTest, ParseResponse_InvalidJson)
 
     executor_->TestParseResponse(promise, response);
 
-    ASSERT_AWAIT_READY(future);
-    auto json = future.Get();
-    EXPECT_TRUE(json.empty());
+    // Unparseable JSON body -> ParseResponse catches the exception and fails the promise.
+    ASSERT_AWAIT_SET(future);
+    EXPECT_TRUE(future.IsError());
+    EXPECT_EQ(future.GetErrorCode(), static_cast<int>(StatusCode::ERR_INNER_COMMUNICATION));
 }
 
 /**
