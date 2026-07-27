@@ -19,7 +19,9 @@
 #include <fcntl.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <utime.h>
 
+#include <atomic>
 #include <fstream>
 #include <regex>
 
@@ -269,6 +271,26 @@ public:
         outfile.close();
     }
 
+    std::string MockCreateSeparatedRuntimeStdLog(const std::string &runtimeID, const std::string &extension,
+                                                 time_t modificationTime = std::time(nullptr))
+    {
+        (void)litebus::os::Mkdir("/tmp/snuser");
+        (void)litebus::os::Mkdir(LOG_BASE_DIR);
+        auto logFile = litebus::os::Join(LOG_BASE_DIR, runtimeID + extension);
+        std::ofstream outfile(logFile);
+        outfile << "separated runtime std log. This is a Test." << std::endl;
+        outfile.close();
+
+        struct utimbuf times = { modificationTime, modificationTime };
+        EXPECT_EQ(utime(logFile.c_str(), &times), 0);
+        return logFile;
+    }
+
+    std::string GenerateNamedRuntimeID(size_t index)
+    {
+        return "runtime-named-instance-" + std::to_string(index);
+    }
+
     void MockCreateLogs()
     {
         // mock runtime logs
@@ -399,6 +421,190 @@ TEST_F(LogManagerTest, LogFileExpirationNotExpired1)
         auto files = litebus::os::Ls(LOG_BASE_DIR);
         return files.Get().size() == static_cast<size_t>(5);
     });
+}
+
+TEST_F(LogManagerTest, SeparatedRuntimeStdLogParsing)
+{
+    const std::string uuidRuntimeID = "runtime-12345678-1234-4abc-8def-123456789abc";
+    const std::string uuidRuntimeIDWithSuffix = uuidRuntimeID + "-0123456789ab";
+    const std::string namedRuntimeID = "runtime-named-instance-alpha-001";
+
+    EXPECT_EQ(helper_->GetRuntimeIDFromLogFileName(uuidRuntimeID + ".out", ""), uuidRuntimeID);
+    EXPECT_EQ(helper_->GetRuntimeIDFromLogFileName(uuidRuntimeIDWithSuffix + ".err", ""), uuidRuntimeIDWithSuffix);
+    EXPECT_EQ(helper_->GetRuntimeIDFromLogFileName(namedRuntimeID + ".out", ""), namedRuntimeID);
+    EXPECT_EQ(helper_->GetRuntimeIDFromLogFileName(namedRuntimeID + ".err", ""), namedRuntimeID);
+    EXPECT_EQ(helper_->GetRuntimeIDFromLogFileName("runtime-arbitrary-name.out", ""), "runtime-arbitrary-name");
+
+    const std::vector<std::string> invalidLogFiles = {
+        namedRuntimeID + ".log",
+        namedRuntimeID + ".out.1",
+        "runtime-.out",
+        "runtime-invalid_name.out",
+        "not-runtime-named-instance-alpha-001.err",
+    };
+    for (const auto &file : invalidLogFiles) {
+        EXPECT_TRUE(helper_->GetRuntimeIDFromLogFileName(file, "").empty()) << file;
+    }
+}
+
+TEST_F(LogManagerTest, ExpiredUuidRuntimeStdLogsAreRecycled)
+{
+    const std::string runtimeID = "runtime-12345678-1234-4abc-8def-123456789abc";
+    MockCreateSeparatedRuntimeStdLog(runtimeID, ".out", std::time(nullptr) - 60);
+    MockCreateSeparatedRuntimeStdLog(runtimeID, ".err", std::time(nullptr) - 60);
+    EXPECT_CALL(*helper_, IsRuntimeActive(Eq(runtimeID))).Times(2).WillRepeatedly(Return(false));
+
+    const char *argv[] = {
+        "./runtime-manager",
+        "--runtime_logs_dir=/tmp/snuser/log",
+        "--log_expiration_enable=true",
+        "--log_expiration_cleanup_interval=30",
+        "--log_expiration_time_threshold=10",
+        "--log_expiration_max_file_count=0"
+    };
+    runtime_manager::Flags flags;
+    flags.ParseFlags(std::size(argv), argv);
+    helper_->SetConfig(flags);
+
+    helper_->ScanLogsRegularly();
+
+    EXPECT_AWAIT_TRUE([=]() -> bool {
+        auto files = litebus::os::Ls(LOG_BASE_DIR);
+        return files.IsSome() && files.Get().empty();
+    });
+}
+
+TEST_F(LogManagerTest, ExpiredActiveNamedRuntimeStdLogIsKept)
+{
+    const std::string runtimeID = "runtime-named-instance-active-001";
+    auto logFile = MockCreateSeparatedRuntimeStdLog(runtimeID, ".err", std::time(nullptr) - 60);
+    std::atomic<bool> runtimeChecked = false;
+    EXPECT_CALL(*helper_, IsRuntimeActive(Eq(runtimeID))).WillOnce([&runtimeChecked](const std::string &) {
+        runtimeChecked = true;
+        return litebus::Future<bool>(true);
+    });
+
+    const char *argv[] = {
+        "./runtime-manager",
+        "--runtime_logs_dir=/tmp/snuser/log",
+        "--log_expiration_enable=true",
+        "--log_expiration_cleanup_interval=30",
+        "--log_expiration_time_threshold=10",
+        "--log_expiration_max_file_count=0"
+    };
+    runtime_manager::Flags flags;
+    flags.ParseFlags(std::size(argv), argv);
+    helper_->SetConfig(flags);
+
+    helper_->ScanLogsRegularly();
+
+    EXPECT_AWAIT_TRUE([&]() -> bool {
+        return runtimeChecked && litebus::os::ExistPath(logFile) && helper_->expiredLogQueue_->GetLogCount() == 0;
+    });
+}
+
+TEST_F(LogManagerTest, ExpiredInactiveNamedRuntimeStdLogEntersQueue)
+{
+    const std::string runtimeID = "runtime-named-instance-inactive-001";
+    auto logFile = MockCreateSeparatedRuntimeStdLog(runtimeID, ".out", std::time(nullptr) - 60);
+    EXPECT_CALL(*helper_, IsRuntimeActive(Eq(runtimeID))).WillOnce(Return(false));
+
+    const char *argv[] = {
+        "./runtime-manager",
+        "--runtime_logs_dir=/tmp/snuser/log",
+        "--log_expiration_enable=true",
+        "--log_expiration_cleanup_interval=30",
+        "--log_expiration_time_threshold=10",
+        "--log_expiration_max_file_count=50"
+    };
+    runtime_manager::Flags flags;
+    flags.ParseFlags(std::size(argv), argv);
+    helper_->SetConfig(flags);
+
+    helper_->ScanLogsRegularly();
+
+    EXPECT_AWAIT_TRUE([=]() -> bool {
+        return litebus::os::ExistPath(logFile) && helper_->expiredLogQueue_->GetLogCount() == 1;
+    });
+    auto expiredLog = helper_->expiredLogQueue_->PopLogFile();
+    ASSERT_NE(expiredLog, nullptr);
+    EXPECT_EQ(expiredLog->GetRuntimeID(), runtimeID);
+    EXPECT_EQ(expiredLog->GetFilePath(), logFile);
+}
+
+TEST_F(LogManagerTest, NamedRuntimeStdLogGcKeepsMaxFileCountNewestExpiredFiles)
+{
+    constexpr size_t maxFileCount = 50;
+    constexpr size_t totalFileCount = maxFileCount + 2;
+    const auto baseModificationTime = std::time(nullptr) - 1000;
+    std::vector<std::string> logFiles;
+    for (size_t i = 0; i < totalFileCount; ++i) {
+        auto runtimeID = GenerateNamedRuntimeID(i);
+        logFiles.emplace_back(
+            MockCreateSeparatedRuntimeStdLog(runtimeID, ".out", baseModificationTime + static_cast<time_t>(i)));
+    }
+    EXPECT_CALL(*helper_, IsRuntimeActive(_)).Times(totalFileCount).WillRepeatedly(Return(false));
+
+    const char *argv[] = {
+        "./runtime-manager",
+        "--runtime_logs_dir=/tmp/snuser/log",
+        "--log_expiration_enable=true",
+        "--log_expiration_cleanup_interval=30",
+        "--log_expiration_time_threshold=10",
+        "--log_expiration_max_file_count=50"
+    };
+    runtime_manager::Flags flags;
+    flags.ParseFlags(std::size(argv), argv);
+    helper_->SetConfig(flags);
+
+    helper_->ScanLogsRegularly();
+
+    EXPECT_AWAIT_TRUE([=]() -> bool {
+        auto files = litebus::os::Ls(LOG_BASE_DIR);
+        return files.IsSome() && files.Get().size() == maxFileCount;
+    });
+    EXPECT_FALSE(litebus::os::ExistPath(logFiles[0]));
+    EXPECT_FALSE(litebus::os::ExistPath(logFiles[1]));
+    for (size_t i = 2; i < totalFileCount; ++i) {
+        EXPECT_TRUE(litebus::os::ExistPath(logFiles[i])) << logFiles[i];
+    }
+}
+
+TEST_F(LogManagerTest, InvalidSeparatedRuntimeStdLogsAreIgnored)
+{
+    const std::vector<std::pair<std::string, std::string>> invalidLogFiles = {
+        { "runtime-named-instance-alpha-001", ".log" },
+        { "runtime-invalid_name", ".out" },
+        { "runtime-", ".err" },
+        { "not-runtime-named-instance-alpha-001", ".out" },
+    };
+    std::vector<std::string> logFiles;
+    for (const auto &[runtimeID, extension] : invalidLogFiles) {
+        logFiles.emplace_back(MockCreateSeparatedRuntimeStdLog(runtimeID, extension, std::time(nullptr) - 60));
+    }
+    EXPECT_CALL(*helper_, IsRuntimeActive(_)).Times(0);
+
+    const char *argv[] = {
+        "./runtime-manager",
+        "--runtime_logs_dir=/tmp/snuser/log",
+        "--log_expiration_enable=true",
+        "--log_expiration_cleanup_interval=30",
+        "--log_expiration_time_threshold=10",
+        "--log_expiration_max_file_count=0"
+    };
+    runtime_manager::Flags flags;
+    flags.ParseFlags(std::size(argv), argv);
+    helper_->SetConfig(flags);
+
+    helper_->ScanLogsRegularly();
+
+    EXPECT_AWAIT_TRUE([=]() -> bool {
+        auto files = litebus::os::Ls(LOG_BASE_DIR);
+        return files.IsSome() && files.Get().size() == invalidLogFiles.size();
+    });
+    for (const auto &logFile : logFiles) {
+        EXPECT_TRUE(litebus::os::ExistPath(logFile)) << logFile;
+    }
 }
 
 TEST_F(LogManagerTest, LogFileExpirationNotExpired2)

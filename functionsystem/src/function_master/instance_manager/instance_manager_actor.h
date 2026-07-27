@@ -316,6 +316,8 @@ private:
 
     void ClearAbnormalScheduler(const std::string &node);
 
+    std::string GetAbnormalSchedulerNodeName(const KeyValue &kv) const;
+
     bool IsInstanceManagedByJob(const std::shared_ptr<InstanceInfo> &info);
 
 private:

@@ -46,7 +46,8 @@ const std::regex CPP_RUNTIME_LOG_REGEX_PATTERN_REGEX(CPP_RUNTIME_LOG_REGEX_PATTE
 const std::string LIB_RUNTIME_LOG_REGEX_PATTERN =
     "^job-[0-9a-f]{8}-" + RUNTIME_LOG_REGEX_PATTERN + "(-\\d{14})?(\\.\\d*)?\\.log(\\.gz)?$";
 const std::regex LIB_RUNTIME_LOG_REGEX_PATTERN_REGEX(LIB_RUNTIME_LOG_REGEX_PATTERN);
-const std::string STD_OUTPUT_LOG_REGEX_PATTERN = "^" + RUNTIME_LOG_REGEX_PATTERN + ".*\\.(out|err)$";
+const std::string STD_OUTPUT_LOG_REGEX_PATTERN =
+    "^(" + RUNTIME_UUID_PREFIX + "[A-Za-z0-9-]+)\\.(out|err)$";
 const std::regex STD_OUTPUT_LOG_REGEX_PATTERN_REGEX(STD_OUTPUT_LOG_REGEX_PATTERN);
 const std::string DS_CLIENT_LOG_REGEX_PATTERN =
     R"(ds_client_(?:access_)?(\d+)(?:\.(?:INFO|DEBUG|ERROR|WARNING))?(?:\.log)?)";

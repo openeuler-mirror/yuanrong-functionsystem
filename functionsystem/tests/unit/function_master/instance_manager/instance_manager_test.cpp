@@ -286,6 +286,34 @@ protected:
     }
 };
 
+TEST(InstanceManagerActorTest, DeleteAbnormalSchedulerUsesNodeNameFromKey)
+{
+    const std::string nodeName = "named-local-scheduler";
+    nlohmann::json abnormalInfo = {
+        { "nodeName", nodeName },
+        { "instanceManagerActorAid", "InstanceManagerActor@127.0.0.1:12345" },
+    };
+
+    auto metaStoreClient = std::make_shared<MockMetaStoreClient>("");
+    auto actor = std::make_shared<InstanceManagerActor>(
+        metaStoreClient, nullptr, nullptr, nullptr, InstanceManagerStartParam{});
+    auto business = std::make_shared<InstanceManagerActor::MasterBusiness>(actor->member_, actor);
+    (void)actor->member_->abnormalScheduler->emplace(nodeName);
+    (void)actor->member_->abnormalDeferTimer.emplace(nodeName, litebus::Timer{});
+    ASSERT_TRUE(business->IsLocalAbnormal(nodeName));
+
+    KeyValue previous;
+    previous.set_key(KEY_ABNORMAL_SCHEDULER_PREFIX + nodeName);
+    previous.set_value(abnormalInfo.dump());
+    EXPECT_EQ(actor->GetAbnormalSchedulerNodeName(previous), nodeName);
+
+    WatchEvent event{ .eventType = EVENT_TYPE_DELETE, .kv = {}, .prevKv = previous };
+    actor->OnAbnormalSchedulerWatchEvent({ event }, false);
+
+    EXPECT_FALSE(business->IsLocalAbnormal(nodeName));
+    EXPECT_EQ(actor->member_->abnormalDeferTimer.count(nodeName), 0U);
+}
+
 TEST_F(DISABLED_InstanceManagerTest, SyncInstance)  // NOLINT
 {
     PutInstances(true);
