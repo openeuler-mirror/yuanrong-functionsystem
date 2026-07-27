@@ -380,20 +380,34 @@ void InstanceManagerActor::OnAbnormalSchedulerWatch(const std::shared_ptr<Watche
     member_->abnormalSchedulerWatcher = watcher;
 }
 
+std::string InstanceManagerActor::GetAbnormalSchedulerNodeName(const KeyValue &kv) const
+{
+    auto key = TrimKeyPrefix(kv.key(), member_->client->GetTablePrefix());
+    if (!litebus::strings::StartsWithPrefix(key, KEY_ABNORMAL_SCHEDULER_PREFIX)) {
+        return "";
+    }
+    return key.substr(KEY_ABNORMAL_SCHEDULER_PREFIX.size());
+}
+
 void InstanceManagerActor::OnAbnormalSchedulerWatchEvent(const std::vector<WatchEvent> &events, bool synced)
 {
     for (const auto &event : events) {
         switch (event.eventType) {
             case EVENT_TYPE_PUT: {
-                (void)member_->abnormalScheduler->emplace(event.kv.value());
-                if (member_->abnormalDeferTimer.find(event.kv.value()) != member_->abnormalDeferTimer.end()) {
-                    litebus::TimerTools::Cancel(member_->abnormalDeferTimer[event.kv.value()]);
+                auto nodeName = GetAbnormalSchedulerNodeName(event.kv);
+                if (nodeName.empty()) {
+                    YRLOG_WARN("failed to get abnormal scheduler node name from key({})", event.kv.key());
+                    break;
                 }
-                member_->abnormalDeferTimer[event.kv.value()] = litebus::AsyncAfter(
-                    ABNORMAL_GC_TIMEOUT, GetAID(), &InstanceManagerActor::ClearAbnormalScheduler, event.kv.value());
+                (void)member_->abnormalScheduler->emplace(nodeName);
+                if (member_->abnormalDeferTimer.find(nodeName) != member_->abnormalDeferTimer.end()) {
+                    litebus::TimerTools::Cancel(member_->abnormalDeferTimer[nodeName]);
+                }
+                member_->abnormalDeferTimer[nodeName] = litebus::AsyncAfter(
+                    ABNORMAL_GC_TIMEOUT, GetAID(), &InstanceManagerActor::ClearAbnormalScheduler, nodeName);
                 if (synced && !member_->runtimeRecoverEnable) { // sync event logic
-                    YRLOG_DEBUG("sync abnormal scheduler: {}", event.kv.value());
-                    auto instances = member_->instances.find(event.kv.value());
+                    YRLOG_DEBUG("sync abnormal scheduler: {}", nodeName);
+                    auto instances = member_->instances.find(nodeName);
                     if (instances == member_->instances.end()) {
                         break;
                     }
@@ -407,13 +421,16 @@ void InstanceManagerActor::OnAbnormalSchedulerWatchEvent(const std::vector<Watch
                 break;
             }
             case EVENT_TYPE_DELETE: {
-                YRLOG_INFO("receive delete event: {}", event.prevKv.value());
-                if (member_->abnormalScheduler->find(event.prevKv.value()) != member_->abnormalScheduler->end()) {
-                    (void)member_->abnormalScheduler->erase(event.prevKv.value());
+                auto nodeName = GetAbnormalSchedulerNodeName(event.prevKv);
+                if (nodeName.empty()) {
+                    YRLOG_WARN("failed to get abnormal scheduler node name from key({})", event.prevKv.key());
+                    break;
                 }
-                if (member_->abnormalDeferTimer.find(event.prevKv.value()) != member_->abnormalDeferTimer.end()) {
-                    litebus::TimerTools::Cancel(member_->abnormalDeferTimer[event.prevKv.value()]);
-                    member_->abnormalDeferTimer.erase(event.prevKv.value());
+                YRLOG_INFO("receive abnormal scheduler delete event: {}", nodeName);
+                (void)member_->abnormalScheduler->erase(nodeName);
+                if (member_->abnormalDeferTimer.find(nodeName) != member_->abnormalDeferTimer.end()) {
+                    litebus::TimerTools::Cancel(member_->abnormalDeferTimer[nodeName]);
+                    member_->abnormalDeferTimer.erase(nodeName);
                 }
                 break;
             }
@@ -1994,11 +2011,15 @@ litebus::Future<SyncResult> InstanceManagerActor::ProxyAbnormalSyncer(const std:
     }
     std::list<litebus::Future<Status>> futures;
     for (auto &kv : getResponse->kvs) {
-        WatchEvent event{ .eventType = EVENT_TYPE_PUT, .kv = kv, .prevKv = {} };
+        auto nodeName = GetAbnormalSchedulerNodeName(kv);
+        if (nodeName.empty()) {
+            YRLOG_WARN("failed to get abnormal scheduler node name from key({})", kv.key());
+            continue;
+        }
         auto promise = std::make_shared<litebus::Promise<Status>>();
         std::shared_ptr<PutResponse> putResponse = std::make_shared<PutResponse>();
         putResponse->status = Status::OK();
-        litebus::Async(GetAID(), &InstanceManagerActor::OnPutAbnormalScheduler, putResponse, promise, kv.value());
+        litebus::Async(GetAID(), &InstanceManagerActor::OnPutAbnormalScheduler, putResponse, promise, nodeName);
         futures.emplace_back(promise->GetFuture());
     }
     return CollectStatus(futures, "proxy abnormal syncer").Then([getResponse](const Status &status) {

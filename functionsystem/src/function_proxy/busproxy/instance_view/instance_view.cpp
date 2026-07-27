@@ -269,7 +269,7 @@ void InstanceView::Fatal(const std::string &instanceID, const resources::Instanc
     auto errCode = instanceInfo.instancestatus().errcode();
     auto msg = instanceInfo.instancestatus().msg();
     auto proxyID = instanceInfo.functionproxyid();
-    YRLOG_INFO("instance({}) is fatal owned ({}), errcode({}), msg({})", instanceID, proxyID, errCode, msg);
+    YRLOG_DEBUG("instance({}) is fatal owned ({}), errcode({}), msg({})", instanceID, proxyID, errCode, msg);
     if (auto iter(localInstances_.find(instanceID)); iter != localInstances_.end()) {
         litebus::Async(iter->second->GetAID(), &InstanceProxy::Fatal, instanceID, msg,
                        static_cast<StatusCode>(errCode));

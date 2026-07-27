@@ -298,7 +298,7 @@ void ObserverActor::HandleRouteEvent(bool synced, const WatchEvent &event, std::
             break;
         }
         case EVENT_TYPE_DELETE: {
-            YRLOG_INFO("receive routeInfo delete event, instance({})", instanceID);
+            YRLOG_DEBUG("receive routeInfo delete event, instance({})", instanceID);
             DelInstanceEvent(instanceID, event.kv.mod_revision());
             break;
         }
