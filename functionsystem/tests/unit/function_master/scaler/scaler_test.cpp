@@ -41,6 +41,7 @@
 #include "utils/generate_info.h"
 #include "utils/os_utils.hpp"
 #include "utils/port_helper.h"
+#include "utils/scoped_env.h"
 
 namespace functionsystem::scaler::test {
 using namespace functionsystem::test;
@@ -3576,5 +3577,16 @@ TEST_F(ScalerTest, ParseContainerInfoForServiceAccountNameTest)
 
     EXPECT_TRUE(delegateContainer->ServiceAccountNameIsSet());
     EXPECT_EQ(delegateContainer->GetServiceAccountName(), "sa-test");
+}
+
+TEST_F(ScalerTest, DataSystemDisabledDoesNotInjectDataSystemAddress)
+{
+    functionsystem::test::ScopedEnv dataSystemDeployed("YR_DATASYSTEM_DEPLOYED");
+    dataSystemDeployed.Set("false");
+    auto container = std::make_shared<V1Container>();
+
+    actor_->AddDataSystemIpAndPort(container);
+
+    EXPECT_TRUE(container->GetEnv().empty());
 }
 }  // namespace functionsystem::scaler::test

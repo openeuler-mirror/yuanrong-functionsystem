@@ -16,6 +16,7 @@
 #include "common_driver.h"
 
 #include "common/constants/actor_name.h"
+#include "common/datasystem_capability.h"
 #include "meta_store_monitor/meta_store_monitor_factory.h"
 #include "common/posix_client/shared_client/shared_client_manager.h"
 #include "common/posix_client/shared_client/posix_stream_manager_proxy.h"
@@ -102,6 +103,10 @@ void CommonDriver::CreateDistributedCacheClient()
 
 bool CommonDriver::NeedBindDs()
 {
+    if (!datasystem_capability::GetEnvironmentCapability().dataSystemDeployed) {
+        YRLOG_INFO("DataSystem is disabled, skip binding DataSystem clients");
+        return false;
+    }
     bool isDataSystemFeatureUsed = false;
     if (auto dataSystemFeatureUsed = litebus::os::GetEnv("DATA_SYSTEM_FEATURE_USED"); dataSystemFeatureUsed.IsSome()) {
         isDataSystemFeatureUsed = (dataSystemFeatureUsed == DATASYSTEM_FEATURE_USED_STREAM);
@@ -113,12 +118,17 @@ bool CommonDriver::NeedBindDs()
 
 void CommonDriver::InitDistributedCache()
 {
-    CreateDistributedCacheClient();
-    if (NeedBindDs()) {
-        YRLOG_INFO("need to bind ds client");
-        BindStateActor();
-        BindDataObjClient();
+    if (!datasystem_capability::GetEnvironmentCapability().dataSystemDeployed) {
+        YRLOG_INFO("DataSystem is disabled, skip creating the DataSystem cache client");
+        return;
     }
+    CreateDistributedCacheClient();
+    if (!NeedBindDs()) {
+        return;
+    }
+    YRLOG_INFO("need to bind ds client");
+    BindStateActor();
+    BindDataObjClient();
 }
 
 Status CommonDriver::InitMetaStoreClient()

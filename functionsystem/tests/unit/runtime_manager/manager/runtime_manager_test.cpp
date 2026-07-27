@@ -260,6 +260,52 @@ public:
 
 class RuntimeManagerTypeTest : public DISABLED_RuntimeManagerTest {};
 
+class RuntimeManagerCapabilityTest : public ::testing::Test {
+public:
+    void SetUp() override
+    {
+        manager_ = std::make_shared<RuntimeManager>(GenerateRandomName("RuntimeManagerCapabilityTest"));
+        manager_->isUnitTestSituation_ = true;
+        litebus::Spawn(manager_, true);
+        manager_->connected_ = true;
+        testActor_ = std::make_shared<RuntimeManagerTestActor>(GenerateRandomName("RuntimeManagerTestActor"));
+        litebus::Spawn(testActor_, true);
+    }
+
+    void TearDown() override
+    {
+        litebus::Terminate(testActor_->GetAID());
+        litebus::Await(testActor_->GetAID());
+        litebus::Terminate(manager_->GetAID());
+        litebus::Await(manager_->GetAID());
+    }
+
+protected:
+    std::shared_ptr<RuntimeManager> manager_;
+    std::shared_ptr<RuntimeManagerTestActor> testActor_;
+};
+
+TEST_F(RuntimeManagerCapabilityTest, RejectsDisabledDataSystemWithoutBypass)
+{
+    messages::StartInstanceRequest request;
+    request.set_type(static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME));
+    auto runtimeInfo = request.mutable_runtimeinstanceinfo();
+    runtimeInfo->set_requestid("invalid-capability-request");
+    runtimeInfo->set_instanceid("invalid-capability-instance");
+    runtimeInfo->set_traceid("invalid-capability-trace");
+    auto envs = runtimeInfo->mutable_runtimeconfig()->mutable_posixenvs();
+    (*envs)["YR_DATASYSTEM_DEPLOYED"] = "false";
+    (*envs)["YR_BYPASS_DATASYSTEM"] = "false";
+
+    testActor_->StartInstance(manager_->GetAID(), request);
+
+    ASSERT_AWAIT_TRUE([this]() { return testActor_->GetIsReceiveStartInstanceResponse(); });
+    auto response = testActor_->GetStartInstanceResponse();
+    EXPECT_EQ(response->code(), static_cast<int32_t>(RUNTIME_MANAGER_PARAMS_INVALID));
+    EXPECT_EQ(response->message(), "YR_DATASYSTEM_DEPLOYED=false requires YR_BYPASS_DATASYSTEM=true");
+    EXPECT_TRUE(response->startruntimeinstanceresponse().runtimeid().empty());
+}
+
 TEST_F(DISABLED_RuntimeManagerTest, StartInstanceTest)
 {
     const char *port = ("--port=" + std::to_string(FindAvailablePort())).c_str();

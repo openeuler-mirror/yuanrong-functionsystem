@@ -18,6 +18,7 @@
 
 #include "common/utils/path.h"
 #include "function_agent/code_deployer/working_dir_deployer.h"
+#include "utils/scoped_env.h"
 
 namespace functionsystem::test {
 
@@ -60,5 +61,20 @@ TEST_F(WorkingDirDeployerTest, DeployTreatsPathSchemeAsDelegatedDirectory)
     EXPECT_EQ(result.destination, testDir_);
 }
 
-}  // namespace functionsystem::test
+TEST_F(WorkingDirDeployerTest, DataSystemWorkingDirectoryFailsWhenDataSystemIsDisabled)
+{
+    ScopedEnv dataSystemDeployed("YR_DATASYSTEM_DEPLOYED");
+    dataSystemDeployed.Set("false");
+    functionsystem::function_agent::WorkingDirDeployer deployer;
+    auto request = std::make_shared<messages::DeployRequest>();
+    request->mutable_deploymentconfig()->set_bucketid("ds://package.zip");
+    request->mutable_deploymentconfig()->set_objectid("app-id");
+    request->mutable_deploymentconfig()->set_deploydir(testDir_);
 
+    auto result = deployer.Deploy(request);
+
+    EXPECT_EQ(result.status.StatusCode(), StatusCode::FUNC_AGENT_INVALID_WORKING_DIR_FILE);
+    EXPECT_NE(result.status.ToString().find("DataSystem is disabled"), std::string::npos);
+}
+
+}  // namespace functionsystem::test

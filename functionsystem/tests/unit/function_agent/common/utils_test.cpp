@@ -24,11 +24,13 @@
 #include <utils/os_utils.hpp>
 #include "common/constants/constants.h"
 #include "common/utils/sensitive_value.h"
+#include "common/datasystem_capability.h"
 #include "common/logs/logging.h"
 #include "common/hex/hex.h"
 #include "function_agent/common/constants.h"
 #include "runtime_manager/config/command_builder.h"
 #include "runtime_manager/executor/sandboxd/sandboxd_request_builder.h"
+#include "utils/scoped_env.h"
 
 namespace functionsystem::test {
 
@@ -559,7 +561,51 @@ TEST_F(FunctionAgentUtilsTest, AddDefaultEnvWithDELEGATE_ENV_VAR)
     (*deployInstanceRequest2->mutable_createoptions())["DELEGATE_ENV_VAR"] = R"({"LD_LIBRARY_PATH":"${LD_LIBRARY_PATH}:${FUNCTION_LIB_PATH}/depend")";
     messages::RuntimeConfig runtimeConf2;
     functionsystem::function_agent::AddDefaultEnv(deployInstanceRequest2, runtimeConf2);
-    EXPECT_EQ((*runtimeConf2.mutable_posixenvs()).size(), size_t{1});
+    EXPECT_EQ((*runtimeConf2.mutable_posixenvs()).size(), size_t{5});
+}
+
+TEST_F(FunctionAgentUtilsTest, ParseDataSystemCapabilityBoolean)
+{
+    EXPECT_TRUE(datasystem_capability::ParseBoolean(" TRUE ", false));
+    EXPECT_TRUE(datasystem_capability::ParseBoolean("yes", false));
+    EXPECT_TRUE(datasystem_capability::ParseBoolean("1", false));
+    EXPECT_FALSE(datasystem_capability::ParseBoolean(" OFF ", true));
+    EXPECT_FALSE(datasystem_capability::ParseBoolean("no", true));
+    EXPECT_FALSE(datasystem_capability::ParseBoolean("0", true));
+    EXPECT_TRUE(datasystem_capability::ParseBoolean("invalid", true));
+    EXPECT_FALSE(datasystem_capability::ParseBoolean("invalid", false));
+}
+
+TEST_F(FunctionAgentUtilsTest, AddDefaultEnvUsesTrustedDataSystemCapability)
+{
+    ScopedEnv dataSystemDeployed("YR_DATASYSTEM_DEPLOYED");
+    ScopedEnv bypassDataSystem("YR_BYPASS_DATASYSTEM");
+    dataSystemDeployed.Set("false");
+    bypassDataSystem.Set("true");
+    auto request = std::make_shared<messages::DeployInstanceRequest>();
+    (*request->mutable_createoptions())["DELEGATE_ENV_VAR"] =
+        R"({"YR_DATASYSTEM_DEPLOYED":"true","YR_BYPASS_DATASYSTEM":"false"})";
+    messages::RuntimeConfig runtimeConfig;
+
+    functionsystem::function_agent::AddDefaultEnv(request, runtimeConfig);
+
+    EXPECT_EQ(runtimeConfig.posixenvs().at("YR_DATASYSTEM_DEPLOYED"), "false");
+    EXPECT_EQ(runtimeConfig.posixenvs().at("YR_BYPASS_DATASYSTEM"), "true");
+}
+
+TEST_F(FunctionAgentUtilsTest, AddDefaultEnvPublishesDataSystemDefaults)
+{
+    ScopedEnv dataSystemDeployed("YR_DATASYSTEM_DEPLOYED");
+    ScopedEnv bypassDataSystem("YR_BYPASS_DATASYSTEM");
+    dataSystemDeployed.Unset();
+    bypassDataSystem.Unset();
+    auto request = std::make_shared<messages::DeployInstanceRequest>();
+    messages::RuntimeConfig runtimeConfig;
+
+    functionsystem::function_agent::AddDefaultEnv(request, runtimeConfig);
+
+    EXPECT_EQ(runtimeConfig.posixenvs().at("YR_DATASYSTEM_DEPLOYED"), "true");
+    EXPECT_EQ(runtimeConfig.posixenvs().at("YR_BYPASS_DATASYSTEM"), "false");
 }
 
 TEST_F(FunctionAgentUtilsTest, AddDefaultEnvInjectsPodMetadataForAllRuntimes)
