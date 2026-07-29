@@ -3361,15 +3361,38 @@ void InstanceCtrlActor::ForwardCallResultRequest(const litebus::AID &from, std::
     auto requestID(forwardCallResultRequest.req().requestid());
     YRLOG_INFO("{}|received CallResult from {}.", requestID, from.HashString());
 
+    auto callResult = std::make_shared<core_service::CallResult>(std::move(*forwardCallResultRequest.mutable_req()));
     std::string srcInstanceID;
     if (forwardCallResultRequest.has_readyinstance() && forwardCallResultRequest.readyinstance().lowreliability()) {
         srcInstanceID = forwardCallResultRequest.readyinstance().instanceid();
         auto stateMachine = instanceControlView_->GetInstance(srcInstanceID);
         if ((stateMachine == nullptr) || (stateMachine != nullptr && stateMachine->GetUpdateByRouteInfo())) {
-            YRLOG_INFO("{}|instance {} is unbelievable, need to kill", requestID, srcInstanceID);
-            CallResultAck ack;
-            ack.set_code(static_cast<common::ErrorCode>(StatusCode::ERR_INSTANCE_EXITED));
-            (void)SendForwardCallResultResponse(ack, from, requestID, srcInstanceID);
+            if (callResult->code() == common::ERR_NONE) {
+                YRLOG_INFO("{}|instance({}) route state is stale; reject successful CallResult and request source "
+                           "cleanup",
+                           requestID, srcInstanceID);
+                CallResultAck exitedAck;
+                exitedAck.set_code(static_cast<common::ErrorCode>(StatusCode::ERR_INSTANCE_EXITED));
+                exitedAck.set_message("instance route state is stale");
+                (void)SendForwardCallResultResponse(exitedAck, from, requestID, srcInstanceID);
+                return;
+            }
+            YRLOG_WARN("{}|instance({}) route state is stale; deliver CallResult code({}) message({}) before "
+                       "requesting source cleanup",
+                       requestID, srcInstanceID, fmt::underlying(callResult->code()), callResult->message());
+            CallResultAck exitedAck;
+            exitedAck.set_code(static_cast<common::ErrorCode>(StatusCode::ERR_INSTANCE_EXITED));
+            exitedAck.set_message("instance route state is stale after CallResult delivery");
+            (void)SendCallResult(srcInstanceID, forwardCallResultRequest.instanceid(),
+                                 forwardCallResultRequest.functionproxyid(), callResult)
+                .Then([this, exitedAck, from, requestID, srcInstanceID](const CallResultAck &notifyAck) {
+                    if (notifyAck.code() != common::ERR_NONE) {
+                        YRLOG_ERROR("{}|failed to deliver stale instance({}) CallResult, code({}) message({})",
+                                    requestID, srcInstanceID, fmt::underlying(notifyAck.code()), notifyAck.message());
+                        return SendForwardCallResultResponse(notifyAck, from, requestID, srcInstanceID);
+                    }
+                    return SendForwardCallResultResponse(exitedAck, from, requestID, srcInstanceID);
+                });
             return;
         }
     }
@@ -3384,7 +3407,6 @@ void InstanceCtrlActor::ForwardCallResultRequest(const litebus::AID &from, std::
             observer_->FastPutRemoteInstanceEvent(instanceInfo, false, GetModRevisionFromInstanceInfo(instanceInfo));
         }
     }
-    auto callResult = std::make_shared<core_service::CallResult>(std::move(*forwardCallResultRequest.mutable_req()));
     SendCallResult(srcInstanceID, forwardCallResultRequest.instanceid(), forwardCallResultRequest.functionproxyid(),
                    callResult)
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::SendForwardCallResultResponse, _1, from, requestID,
