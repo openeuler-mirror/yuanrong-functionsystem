@@ -470,6 +470,93 @@ TEST(InstanceCtrlReadyCallResultTest, CancelledFrontendTicketIgnoresLateReady)
     EXPECT_TRUE(actor->instanceReadyCallResultCallbackByInstanceID_.empty());
 }
 
+TEST(InstanceCtrlReadyCallResultTest, LowReliabilityFailuresStillCompleteFrontendWaiter)
+{
+    struct FailureCase {
+        StatusCode code;
+        std::string message;
+    };
+    const std::vector<FailureCase> failureCases = {
+        { StatusCode::RUNTIME_MANAGER_CREATE_EXEC_FAILED, "runtime manager failed to create executor" },
+        { StatusCode::ERR_AUTHORIZE_FAILED, "authorization failed" },
+        { StatusCode::ERR_INNER_COMMUNICATION, "internal communication failed" },
+    };
+
+    for (size_t i = 0; i < failureCases.size(); ++i) {
+        const auto &failure = failureCases[i];
+        SCOPED_TRACE(failure.message);
+
+        auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
+        actor->BindInstanceControlView(std::make_shared<InstanceControlView>("nodeID", false));
+
+        const std::string suffix = std::to_string(i);
+        const std::string requestID = "frontend-create-request-" + suffix;
+        const std::string instanceID = "frontend-created-instance-" + suffix;
+        auto scheduleReq = GenScheduleReq(actor);
+        scheduleReq->set_requestid(requestID);
+        scheduleReq->mutable_instance()->set_instanceid(instanceID);
+
+        bool callbackCalled = false;
+        std::shared_ptr<functionsystem::CallResult> observedResult;
+        actor->RegisterReadyCallResultCallback(
+            instanceID, scheduleReq,
+            [&callbackCalled, &observedResult](const std::shared_ptr<functionsystem::CallResult> &callResult) {
+                callbackCalled = true;
+                observedResult = callResult;
+                return litebus::Future<CallResultAck>(CallResultAck());
+            });
+
+        ::internal::ForwardCallResultRequest request;
+        request.mutable_readyinstance()->set_instanceid(instanceID);
+        request.mutable_readyinstance()->set_lowreliability(true);
+        request.mutable_req()->set_requestid(requestID);
+        request.mutable_req()->set_instanceid(instanceID);
+        request.mutable_req()->set_code(static_cast<common::ErrorCode>(failure.code));
+        request.mutable_req()->set_message(failure.message);
+
+        actor->ForwardCallResultRequest(litebus::AID(), "", request.SerializeAsString());
+
+        EXPECT_TRUE(callbackCalled);
+        ASSERT_NE(observedResult, nullptr);
+        EXPECT_EQ(observedResult->code(), static_cast<common::ErrorCode>(failure.code));
+        EXPECT_EQ(observedResult->message(), failure.message);
+        EXPECT_TRUE(actor->instanceRegisteredReadyCallResultCallback_.empty());
+        EXPECT_TRUE(actor->instanceReadyCallResultCallbackByInstanceID_.empty());
+    }
+}
+
+TEST(InstanceCtrlReadyCallResultTest, LowReliabilitySuccessKeepsStaleInstanceProtection)
+{
+    auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
+    actor->BindInstanceControlView(std::make_shared<InstanceControlView>("nodeID", false));
+
+    const std::string requestID = "frontend-create-request";
+    const std::string instanceID = "frontend-created-instance";
+    auto scheduleReq = GenScheduleReq(actor);
+    scheduleReq->set_requestid(requestID);
+    scheduleReq->mutable_instance()->set_instanceid(instanceID);
+
+    bool callbackCalled = false;
+    actor->RegisterReadyCallResultCallback(
+        instanceID, scheduleReq,
+        [&callbackCalled](const std::shared_ptr<functionsystem::CallResult> &) {
+            callbackCalled = true;
+            return litebus::Future<CallResultAck>(CallResultAck());
+        });
+
+    ::internal::ForwardCallResultRequest request;
+    request.mutable_readyinstance()->set_instanceid(instanceID);
+    request.mutable_readyinstance()->set_lowreliability(true);
+    request.mutable_req()->set_requestid(requestID);
+    request.mutable_req()->set_instanceid(instanceID);
+    request.mutable_req()->set_code(common::ERR_NONE);
+
+    actor->ForwardCallResultRequest(litebus::AID(), "", request.SerializeAsString());
+
+    EXPECT_FALSE(callbackCalled);
+    actor->UnregisterFrontendReadyWait(requestID, "test cleanup");
+}
+
 TEST_F(InstanceCtrlTest, ScheduleUpdateInstanceInfoFailed)
 {
     auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
