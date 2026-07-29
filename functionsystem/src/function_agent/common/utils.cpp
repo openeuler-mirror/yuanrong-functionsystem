@@ -350,15 +350,14 @@ void SetTLSConfig(const std::shared_ptr<messages::DeployInstanceRequest> &req, m
     runtimeConf.mutable_tlsconfig()->set_dsclientprivatekey(req->runtimedsclientprivatekey());
     runtimeConf.mutable_tlsconfig()->set_dsserverpublickey(req->runtimedsserverpublickey());
     SetTenantCredConfig(req, runtimeConf);
-    YRLOG_INFO("{}|put credential: {} into runtime", req->tenantid(),
-               SensitiveValue(runtimeConf.tlsconfig().tenantcredentials().secretkey()).GetMaskData());
 }
 
 void SetTenantCredConfig(const std::shared_ptr<messages::DeployInstanceRequest> &req,
                          messages::RuntimeConfig &runtimeConf)
 {
     if (req->tenantcredentials().accesskey().empty() || !req->tenantcredentials().iscredential()) {
-        YRLOG_DEBUG("tenant credentials is empty, skip");
+        YRLOG_DEBUG("{}|{}|tenant credentials are not attached to the runtime config", req->traceid(),
+                    req->requestid());
         return;
     }
 
@@ -369,6 +368,7 @@ void SetTenantCredConfig(const std::shared_ptr<messages::DeployInstanceRequest> 
     tenantCredentials->set_accesskey(req->tenantcredentials().accesskey());
     tenantCredentials->set_secretkey(req->tenantcredentials().secretkey());
     tenantCredentials->set_datakey(req->tenantcredentials().datakey());
+    YRLOG_DEBUG("{}|{}|tenant credentials are attached to the runtime config", req->traceid(), req->requestid());
     return;
 }
 
