@@ -72,11 +72,10 @@ protected:
     void InitVirtualEnvIdleTimeLimit() override {};
 
 private:
-    void ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID);
-
     void BuildRuntimeCommands(runtime::v1::StartRequest *request, const std::vector<std::string> &buildArgs);
 
-    void SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs, const std::string &runtimeID);
+    void SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs, const std::string &runtimeID,
+                                       const std::string &hostUser);
 
     // Resolve the executable path for the runtime language.
     std::string ResolveExecPath(const std::string &language,

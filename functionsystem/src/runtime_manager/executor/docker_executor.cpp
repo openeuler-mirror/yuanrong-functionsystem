@@ -21,6 +21,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <csignal>
 #include <cstring>
 #include <sstream>
@@ -45,7 +46,6 @@ namespace functionsystem::runtime_manager {
 constexpr int64_t DEFAULT_GRACEFUL_SHUTDOWN = 5;
 constexpr double DEFAULT_CPU_RESOURCE = 500;
 constexpr double DEFAULT_MEMORY_RESOURCE = 500;
-const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 const std::string DEFAULT_DOCKER_API_VERSION = "v1.45";
 
 // HTTP status codes
@@ -217,22 +217,29 @@ void DockerExecutor::ParseDockerResponse(litebus::Promise<nlohmann::json> promis
 litebus::Future<nlohmann::json> DockerExecutor::SendRequestToDocker(const std::string &method,
     const std::string &path, const nlohmann::json &body)
 {
+    // Request start timestamp — used to compute elapsed={}ms in the recv-failure and success
+    // logs below, so a hung daemon (no reply at all) can be told apart from an instant 4xx by
+    // how long we waited, since the daemon sends nothing to log when it truly hangs.
+    auto t0 = std::chrono::steady_clock::now();
+    // Full daemon API path (apiPrefix + path, e.g. "/v1.41/containers/<id>/start"); logged in
+    // every exit so a failure/hang line is self-contained: it names which Docker API and, for
+    // /containers/<id>..., which container — no need to infer the step from neighbouring logs.
+    std::string fullPath = GetDockerApiPrefix() + path;
     litebus::Promise<nlohmann::json> promise;
     litebus::Future<nlohmann::json> result = promise.GetFuture();
     int fd = ConnectDockerSocket();
     if (fd < 0) {
-        YRLOG_ERROR("failed to connect to Docker socket: {}", dockerSocketPath_);
+        YRLOG_ERROR("Docker daemon connect failed: {} {} ({})", method, fullPath, dockerSocketPath_);
         nlohmann::json errResp = nlohmann::json::object();
         errResp["__http_status"] = 0;
         errResp["__connect_failed"] = true;
         promise.SetValue(errResp);
         return result;
     }
-    std::string fullPath = GetDockerApiPrefix() + path;
     std::string httpRequest = BuildDockerHttpRequest(method, fullPath, body.dump());
     if (ssize_t sent = send(fd, httpRequest.c_str(), httpRequest.length(), 0);
         sent < 0 || static_cast<size_t>(sent) != httpRequest.length()) {
-        YRLOG_ERROR("failed to send request to Docker socket: {}", std::strerror(errno));
+        YRLOG_ERROR("Docker daemon send failed: {} {} ({})", method, fullPath, std::strerror(errno));
         (void)close(fd);
         nlohmann::json errResp = nlohmann::json::object();
         errResp["__http_status"] = 0;
@@ -250,7 +257,10 @@ litebus::Future<nlohmann::json> DockerExecutor::SendRequestToDocker(const std::s
         response.append(buf, static_cast<size_t>(received));
     }
     if (received < 0) {
-        YRLOG_ERROR("failed to receive response from Docker socket: {}", std::strerror(errno));
+        YRLOG_ERROR("Docker daemon recv failed: {} {} ({}, elapsed={}ms)", method, fullPath,
+                    std::strerror(errno),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - t0).count());
         (void)close(fd);
         nlohmann::json errResp = nlohmann::json::object();
         errResp["__http_status"] = 0;
@@ -259,6 +269,10 @@ litebus::Future<nlohmann::json> DockerExecutor::SendRequestToDocker(const std::s
         return result;
     }
     (void)close(fd);
+    YRLOG_DEBUG("Docker daemon request done: {} {} (elapsed={}ms, bytes={})", method, fullPath,
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - t0).count(),
+                response.size());
     ParseDockerResponse(promise, response);
     return result;
 }
@@ -509,7 +523,8 @@ litebus::Future<Status> DockerExecutor::StartContainer(const std::string &runtim
                     YRLOG_INFO("{}|container {} started successfully", runtimeID, containerID);
                     return Status::OK();
                 }
-                YRLOG_ERROR("{}|Start container {} failed, status={}", runtimeID, containerID, status);
+                YRLOG_ERROR("{}|Start container {} failed, status={}, msg={}", runtimeID, containerID, status,
+                            DockerDaemonMessage(resp));
                 return Status(StatusCode::ERR_INNER_COMMUNICATION,
                               fmt::format("failed to start container {}, status {}", containerID, status));
             }
@@ -541,7 +556,8 @@ litebus::Future<Status> DockerExecutor::StopContainer(const std::string &contain
                     YRLOG_INFO("container {} stopped", containerID);
                     return Status::OK();
                 }
-                YRLOG_WARN("Stop container {} returned status {}", containerID, status);
+                YRLOG_WARN("Stop container {} returned status {}, msg={}", containerID, status,
+                           DockerDaemonMessage(resp));
                 return Status(StatusCode::FAILED);
             }
             return Status::OK();
@@ -566,7 +582,8 @@ litebus::Future<Status> DockerExecutor::RemoveContainer(const std::string &conta
                     YRLOG_INFO("container {} removed", containerID);
                     return Status::OK();
                 }
-                YRLOG_WARN("Delete container {} returned status {}", containerID, status);
+                YRLOG_WARN("Delete container {} returned status {}, msg={}", containerID, status,
+                           DockerDaemonMessage(resp));
                 return Status(StatusCode::ERR_INNER_COMMUNICATION,
                               fmt::format("failed to remove container {}, status={}", containerID, status));
             }
@@ -632,7 +649,7 @@ void DockerExecutor::BuildRuntimeCommands(runtime::v1::StartRequest *request,
 }
 
 void DockerExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs,
-    const std::string &runtimeID)
+    const std::string &runtimeID, const std::string &hostUser)
 {
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
     req->mutable_envs()->insert(combineEnvs.begin(), combineEnvs.end());
@@ -640,33 +657,9 @@ void DockerExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *re
 
     std::string stdOut;
     std::string stdErr;
-    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID);
+    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID, hostUser);  // base Executor impl (shared)
     req->set_stdout(stdOut);
     req->set_stderr(stdErr);
-}
-
-void DockerExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr,
-    const std::string &runtimeID)
-{
-    auto path = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
-    if (!litebus::os::ExistPath(path)) {
-        YRLOG_WARN("{}|std log path {} not found, try to make dir", runtimeID, path);
-        if (!litebus::os::Mkdir(path).IsNone()) {
-            YRLOG_WARN("{}|failed to make dir {}, msg: {}", runtimeID, path, litebus::os::Strerror(errno));
-            return;
-        }
-    }
-
-    stdOut = litebus::os::Join(path, fmt::format("{}.out", runtimeID));
-    if (!litebus::os::ExistPath(stdOut) && TouchFile(stdOut) != 0) {
-        YRLOG_WARN("create std out log file {} failed: {}", stdOut, litebus::os::Strerror(errno));
-        return;
-    }
-
-    stdErr = litebus::os::Join(path, fmt::format("{}.err", runtimeID));
-    if (!litebus::os::ExistPath(stdErr) && TouchFile(stdErr) != 0) {
-        YRLOG_WARN("create std err log file {} failed: {}", stdErr, litebus::os::Strerror(errno));
-    }
 }
 
 // ---- StartInstance / StopInstance / SnapshotRuntime ----
@@ -766,6 +759,20 @@ std::vector<std::string> DockerExecutor::BuildBindMounts(const Envs &envs,
             bindMounts.push_back(m.source + ":" + m.target + (m.readonly ? ":ro" : ""));
         }
     }
+
+    // Mount the host log dir into the container at the same path so yr runtime logs
+    // (GLOG_LOG_DIR = runtimeLogPath) and the per-runtime stdout/stderr redirect files land on the
+    // host. Server-side plumbing; tenant-agnostic (no per-runtime subdir / permission handling here
+    // — chown of the redirect files is done in ConfigRuntimeRedirectLog). IsSafeBindSource guards
+    // against a misconfigured log path (e.g. /proc, /etc).
+    const std::string hostLogDir = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
+    if (!hostLogDir.empty() && IsSafeBindSource(hostLogDir) && litebus::os::ExistPath(hostLogDir)) {
+        bindMounts.push_back(hostLogDir + ":" + hostLogDir);
+        YRLOG_INFO("{}|mount host log dir {} into container at same path", info.runtimeid(), hostLogDir);
+    } else {
+        YRLOG_WARN("{}|skip log dir mount (path={}, safe={}, exists={}); yr logs may stay in-container",
+                   info.runtimeid(), hostLogDir, IsSafeBindSource(hostLogDir), litebus::os::ExistPath(hostLogDir));
+    }
     return bindMounts;
 }
 
@@ -847,7 +854,8 @@ std::string DockerExecutor::ParseCreateContainerResponse(const nlohmann::json &r
     }
     int status = resp["__http_status"].get<int>();
     if (status >= HTTP_STATUS_CLIENT_ERROR) {
-        YRLOG_ERROR("{}|Create container failed, status={}", runtimeID, status);
+        YRLOG_ERROR("{}|Create container failed, status={}, msg={}", runtimeID, status,
+                    DockerDaemonMessage(resp));
         return "";
     }
     if (resp.contains("__connect_failed") || resp.contains("__send_failed")) {
@@ -878,9 +886,16 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartRuntime(
                                             "no Docker image specified");
     }
 
+    const auto &deployOpts = info.deploymentconfig().deployoptions();
+    auto rootfsIter = deployOpts.find(CONTAINER_ROOTFS);
+    std::string workdir = rootfsIter != deployOpts.end() ? ParseRootfsWorkdir(rootfsIter->second) : "";
+    // runUser defaults to "root" if not specified in deployOptions
+    auto hostUserIter = deployOpts.find(HOST_USER);
+    std::string runUser = hostUserIter != deployOpts.end() ? hostUserIter->second : "root";
+
     runtime::v1::StartRequest startReq;
     BuildRuntimeCommands(&startReq, args);
-    SetRequestEnvsAndLogsForStart(&startReq, envs, runtimeID);
+    SetRequestEnvsAndLogsForStart(&startReq, envs, runtimeID, runUser);
 
     std::map<std::string, std::string> containerEnvs(startReq.envs().begin(), startReq.envs().end());
     containerEnvs.erase(LD_LIBRARY_PATH);
@@ -892,15 +907,50 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartRuntime(
         return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_PORT_UNAVAILABLE);
     }
 
-    const auto &deployOpts = info.deploymentconfig().deployoptions();
-    auto rootfsIter = deployOpts.find(CONTAINER_ROOTFS);
-    std::string workdir = rootfsIter != deployOpts.end() ? ParseRootfsWorkdir(rootfsIter->second) : "";
-    auto hostUserIter = deployOpts.find(HOST_USER);
-    std::string runUser = hostUserIter != deployOpts.end() ? hostUserIter->second : "";
+    // Build the Docker Cmd as ["sh","-c","<quotedArgs> >stdout 2>stderr"]: every argv token and the
+    // redirect paths are POSIX single-quoted (ShellQuote) so user content in command() (e.g. python -c
+    // "...") is taken literally with no shell injection. Redirecting stdout/stderr to per-runtime host
+    // files (set by SetRequestEnvsAndLogsForStart, on the mounted log dir) makes yr runtime output and
+    // startup tracebacks land on the host instead of the daemon's json-file. Mirrors supervisor_executor.
+    auto argv = BuildContainerCommand(execPath, startReq);
+    std::string cmdLine;
+    for (size_t i = 0; i < argv.size(); ++i) {
+        if (i > 0) {
+            cmdLine += " ";
+        }
+        cmdLine += ShellQuote(argv[i]);
+    }
+    // stdout()/stderr() 为空（ConfigRuntimeRedirectLog 创建日志目录失败所致）时跳过重定向，
+    // 否则 >'' / 2>'' 会让 sh -c 因 ENOENT 失败、容器启动即失败。此时容器运行日志无法重定向到宿主机。
+    if (!startReq.stdout().empty() && !startReq.stderr().empty()) {
+        cmdLine += " >" + ShellQuote(startReq.stdout()) + " 2>" + ShellQuote(startReq.stderr());
+    } else {
+        YRLOG_WARN("{}|stdout/stderr path empty, container runtime logs cannot redirect to host",
+                   runtimeID);
+    }
+    std::vector<std::string> cmd = { "sh", "-c", cmdLine };
 
+    auto resources = BuildResources(info);
     auto createBody = BuildCreateContainerRequest(ContainerCreateSpec{
-        image, BuildContainerCommand(execPath, startReq), containerEnvs, bindMounts, portBindings,
-        BuildResources(info), workdir, runUser });
+        image, cmd, containerEnvs, bindMounts, portBindings, resources, workdir, runUser });
+
+    // Log the effective container spec handed to the daemon. Cmd/Binds/Workdir/Resources only;
+    // Env is intentionally omitted to avoid leaking credentials. fmt has no formatter for
+    // std::map, so resource fields are read out individually (same pattern as BuildHostConfigResources).
+    // fmt::join uses the iterator form (begin/end) to match the convention in container_executor.cpp.
+    double cpu = DEFAULT_CPU_RESOURCE;
+    double memory = DEFAULT_MEMORY_RESOURCE;
+    double cpuLimit = 0;
+    double memLimit = 0;
+    if (resources.find("cpu") != resources.end()) { cpu = resources.at("cpu"); }
+    if (resources.find("memory") != resources.end()) { memory = resources.at("memory"); }
+    if (resources.find("cpu_limit") != resources.end()) { cpuLimit = resources.at("cpu_limit"); }
+    if (resources.find("memory_limit") != resources.end()) { memLimit = resources.at("memory_limit"); }
+    YRLOG_INFO("{}|{}|docker create spec: image={}, workdir={}, user={}, cmd=[{}], binds=[{}], "
+               "resources=cpu={},memory={},cpu_limit={},memory_limit={}",
+               info.traceid(), info.requestid(), image, workdir, runUser,
+               fmt::join(cmd.begin(), cmd.end(), " "),
+               fmt::join(bindMounts.begin(), bindMounts.end(), ", "), cpu, memory, cpuLimit, memLimit);
 
     return StartContainerChain(request, image, createBody, port);
 }

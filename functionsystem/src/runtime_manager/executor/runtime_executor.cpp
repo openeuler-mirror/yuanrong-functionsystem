@@ -33,6 +33,7 @@
 #include "async/asyncafter.hpp"
 #include "async/collect.hpp"
 #include "common/hex/hex.h"
+#include "common/constants/constants.h"
 #include "common/logs/logging.h"
 #include "common/resource_view/resource_type.h"
 #include "common/utils/exec_utils.h"
@@ -60,7 +61,6 @@ const std::string CPP_NEW_EXEC_PATH = "/cpp/bin/runtime";
 const std::string GO_NEW_EXEC_PATH = "/go/bin/goruntime";
 const std::string GLOG_LOG_DIR = "GLOG_log_dir";
 const std::string YR_LOG_LEVEL = "YR_LOG_LEVEL";
-const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 const std::string PYTHON_PATH = "PYTHONPATH";
 const std::string PATH = "PATH";
 const std::string PYTHON_LOG_CONFIG_PATH = "PYTHON_LOG_CONFIG";

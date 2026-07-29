@@ -25,6 +25,7 @@
 #include <utility>
 
 #include "async/asyncafter.hpp"
+#include "common/constants/constants.h"
 #include "common/logs/logging.h"
 #include "common/metadata/metadata_type.h"
 #include "common/utils/collect_status.h"
@@ -41,7 +42,6 @@ namespace functionsystem::runtime_manager {
 constexpr int64_t RECONNECT_SUPERVISOR_INTERVAL_MS = 5000;
 constexpr int64_t HEALTH_CHECK_INTERVAL_MS = 100;
 constexpr int64_t HTTP_TIMEOUT_MS = 30000;
-const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 const std::string SUPERVISOR_SANDBOX_PREFIX = "/api/v1/sandboxes";
 const std::string SUPERVISOR_UDS_SOCKET = "/run/jiuwenbox/jiuwenbox.sock";
 constexpr size_t HTTP_HEADER_SEPARATOR_LEN = 4;   // length of "\r\n\r\n"
@@ -409,24 +409,6 @@ litebus::Future<std::string> SupervisorExecutor::CreateSandbox(const std::string
     return promise.GetFuture();
 }
 
-std::string SupervisorExecutor::ShellQuote(const std::string &token)
-{
-    // POSIX single-quote escaping: wrap the token in '...', and replace every literal ' in it
-    // with the sequence '\'' (close quote, escaped quote, reopen quote). The result is passed
-    // through sh -c with zero metacharacter interpretation, so argv tokens and redirect paths
-    // are taken literally and cannot inject shell commands.
-    std::string escaped = "'";
-    for (char ch : token) {
-        if (ch == '\'') {
-            escaped += "'\\''";
-        } else {
-            escaped += ch;
-        }
-    }
-    escaped += "'";
-    return escaped;
-}
-
 nlohmann::json SupervisorExecutor::BuildCommand(const std::shared_ptr<runtime::v1::StartRequest> &start)
 {
     auto command = nlohmann::json::array();
@@ -599,40 +581,6 @@ std::map<std::string, messages::RuntimeInstanceInfo> SupervisorExecutor::GetRunt
     return runtimeInstanceInfoMap_;
 }
 
-void SupervisorExecutor::ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr,
-                                                  const std::string &runtimeID, const std::string &hostUser)
-{
-    auto path = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
-    if (!litebus::os::ExistPath(path)) {
-        YRLOG_WARN("{}|std log path {} not found, try to make dir", runtimeID, path);
-        if (!litebus::os::Mkdir(path).IsNone()) {
-            YRLOG_WARN("{}|failed to make dir {}, msg: {}", runtimeID, path, litebus::os::Strerror(errno));
-            return;
-        }
-    }
-
-    stdOut = litebus::os::Join(path, fmt::format("{}.out", runtimeID));
-    if (!litebus::os::ExistPath(stdOut) && TouchFile(stdOut) != 0) {
-        YRLOG_WARN("create std out log file {} failed: {}", stdOut, litebus::os::Strerror(errno));
-        return;
-    }
-
-    stdErr = litebus::os::Join(path, fmt::format("{}.err", runtimeID));
-    if (!litebus::os::ExistPath(stdErr) && TouchFile(stdErr) != 0) {
-        YRLOG_WARN("create std err log file {} failed: {}", stdErr, litebus::os::Strerror(errno));
-    }
-
-    if (hostUser.empty()) {
-        return;
-    }
-    if (!stdOut.empty() && litebus::os::Chown(hostUser, stdOut, false).IsNone()) {
-        YRLOG_WARN("{}|failed to chown stdout log {} to user {}", runtimeID, stdOut, hostUser);
-    }
-    if (!stdErr.empty() && litebus::os::Chown(hostUser, stdErr, false).IsNone()) {
-        YRLOG_WARN("{}|failed to chown stderr log {} to user {}", runtimeID, stdErr, hostUser);
-    }
-}
-
 void SupervisorExecutor::BuildRuntimeCommands(runtime::v1::StartRequest *request,
                                               const std::vector<std::string> &buildArgs)
 {
@@ -651,7 +599,7 @@ void SupervisorExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest
 
     std::string stdOut;
     std::string stdErr;
-    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID, hostUser);
+    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID, hostUser);  // base Executor impl (shared)
     req->set_stdout(stdOut);
     req->set_stderr(stdErr);
 }
