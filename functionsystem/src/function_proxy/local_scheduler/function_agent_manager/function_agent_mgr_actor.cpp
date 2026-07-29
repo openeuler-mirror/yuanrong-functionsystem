@@ -617,28 +617,36 @@ void FunctionAgentMgrActor::RetryDeploy(const string &requestID, const string &f
                                         const std::shared_ptr<messages::DeployInstanceRequest> &request)
 {
     auto agentDeployNotifyPromise = deployNotifyPromise_.find(funcAgentID);
-    if (agentDeployNotifyPromise == deployNotifyPromise_.end() ||
-        agentDeployNotifyPromise->second.find(requestID) == agentDeployNotifyPromise->second.end() ||
-        agentDeployNotifyPromise->second[requestID].first->GetFuture().IsOK()) {
-        YRLOG_INFO("{}|a response of deploy instance has been received.", requestID);
+    if (agentDeployNotifyPromise == deployNotifyPromise_.end()) {
+        YRLOG_DEBUG("{}|{}|skip deploy retry because function agent promise no longer exists, instanceID: {}, "
+                    "functionAgentID: {}.",
+                    request->traceid(), requestID, request->instanceid(), funcAgentID);
+        return;
+    }
+    auto deployPromise = agentDeployNotifyPromise->second.find(requestID);
+    if (deployPromise == agentDeployNotifyPromise->second.end() || deployPromise->second.first->GetFuture().IsOK()) {
+        YRLOG_DEBUG("{}|{}|skip deploy retry because request has completed, instanceID: {}, functionAgentID: {}.",
+                    request->traceid(), requestID, request->instanceid(), funcAgentID);
         return;
     }
 
     auto iter = funcAgentTable_.find(funcAgentID);
-    if (agentDeployNotifyPromise->second[requestID].second++ < retryTimes_ && iter != funcAgentTable_.end()) {
-        YRLOG_INFO("{}|retry to send request to deploy instance, times: {}.", requestID,
-                   agentDeployNotifyPromise->second[requestID].second);
-        Send(funcAgentTable_[funcAgentID].aid, "DeployInstance", request->SerializeAsString());
+    if (deployPromise->second.second++ < retryTimes_ && iter != funcAgentTable_.end()) {
+        YRLOG_INFO("{}|{}|retry deploy instance, instanceID: {}, functionAgentID: {}, attempt: {}/{}.",
+                   request->traceid(), requestID, request->instanceid(), funcAgentID, deployPromise->second.second,
+                   retryTimes_);
+        Send(iter->second.aid, "DeployInstance", request->SerializeAsString());
         litebus::AsyncAfter(retryCycleMs_, GetAID(), &FunctionAgentMgrActor::RetryDeploy, requestID, funcAgentID,
                             request);
         return;
     }
 
-    YRLOG_ERROR("{}|the number of retry to deploy instance is more than {}.", requestID, retryTimes_);
+    YRLOG_ERROR("{}|{}|deploy instance retry exhausted, instanceID: {}, functionAgentID: {}, attempts: {}.",
+                request->traceid(), requestID, request->instanceid(), funcAgentID, retryTimes_);
     messages::DeployInstanceResponse resp = GenDeployInstanceResponse(
         StatusCode::ERR_INNER_COMMUNICATION,
         iter == funcAgentTable_.end() ? funcAgentID + " connection timeout" : "deploy retry fail", requestID);
-    agentDeployNotifyPromise->second[requestID].first->SetValue(resp);
+    deployPromise->second.first->SetValue(resp);
     (void)agentDeployNotifyPromise->second.erase(requestID);
 }
 
@@ -646,29 +654,37 @@ void FunctionAgentMgrActor::RetryKill(const std::string &requestID, const std::s
                                       const std::shared_ptr<messages::KillInstanceRequest> &request)
 {
     auto agentKillNotifyPromise = killNotifyPromise_.find(funcAgentID);
-    if (agentKillNotifyPromise == killNotifyPromise_.end() ||
-        agentKillNotifyPromise->second.find(requestID) == agentKillNotifyPromise->second.end() ||
-        agentKillNotifyPromise->second[requestID].first == nullptr ||
-        agentKillNotifyPromise->second[requestID].first->GetFuture().IsOK()) {
-        YRLOG_INFO("{}|received a response of kill instance.", requestID);
+    if (agentKillNotifyPromise == killNotifyPromise_.end()) {
+        YRLOG_DEBUG("{}|{}|skip kill retry because function agent promise no longer exists, instanceID: {}, "
+                    "functionAgentID: {}.",
+                    request->traceid(), requestID, request->instanceid(), funcAgentID);
+        return;
+    }
+    auto killPromise = agentKillNotifyPromise->second.find(requestID);
+    if (killPromise == agentKillNotifyPromise->second.end() || killPromise->second.first == nullptr ||
+        killPromise->second.first->GetFuture().IsOK()) {
+        YRLOG_DEBUG("{}|{}|skip kill retry because request has completed, instanceID: {}, functionAgentID: {}.",
+                    request->traceid(), requestID, request->instanceid(), funcAgentID);
         return;
     }
 
     auto iter = funcAgentTable_.find(funcAgentID);
-    if (agentKillNotifyPromise->second[requestID].second++ < retryTimes_ && iter != funcAgentTable_.end()) {
-        Send(funcAgentTable_[funcAgentID].aid, "KillInstance", request->SerializeAsString());
+    if (killPromise->second.second++ < retryTimes_ && iter != funcAgentTable_.end()) {
+        Send(iter->second.aid, "KillInstance", request->SerializeAsString());
         litebus::AsyncAfter(retryCycleMs_, GetAID(), &FunctionAgentMgrActor::RetryKill, requestID, funcAgentID,
                             request);
-        YRLOG_INFO("{}|retry {} times request to kill instance.", requestID,
-                   agentKillNotifyPromise->second[requestID].second);
+        YRLOG_INFO("{}|{}|retry kill instance, instanceID: {}, functionAgentID: {}, attempt: {}/{}.",
+                   request->traceid(), requestID, request->instanceid(), funcAgentID, killPromise->second.second,
+                   retryTimes_);
         return;
     }
     messages::KillInstanceResponse resp = GenKillInstanceResponse(
         StatusCode::ERR_INNER_COMMUNICATION,
         iter == funcAgentTable_.end() ? funcAgentID + " connection timeout" : "kill retry fail", requestID);
-    agentKillNotifyPromise->second[requestID].first->SetValue(resp);
+    killPromise->second.first->SetValue(resp);
     (void)agentKillNotifyPromise->second.erase(requestID);
-    YRLOG_INFO("{}|the times of retry to kill instance is more than {}.", requestID, retryTimes_);
+    YRLOG_ERROR("{}|{}|kill instance retry exhausted, instanceID: {}, functionAgentID: {}, attempts: {}.",
+                request->traceid(), requestID, request->instanceid(), funcAgentID, retryTimes_);
 }
 
 litebus::Future<messages::DeployInstanceResponse> FunctionAgentMgrActor::DeployInstance(
