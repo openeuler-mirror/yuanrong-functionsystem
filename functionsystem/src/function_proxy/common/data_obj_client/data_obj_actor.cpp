@@ -48,22 +48,13 @@ std::vector<std::string> DataObjActor::GetObjNodeList(const std::string &tenantI
     // sort by size desc
     std::vector<std::pair<std::string, uint64_t>> vec(nodeObjSizeMap.begin(), nodeObjSizeMap.end());
     std::sort(vec.begin(), vec.end(), ValueComp);
-    std::vector<std::string> workerIDList;
-    for (const auto &pair : vec) {
-        workerIDList.push_back(pair.first);
-    }
-
-    std::vector<std::string> nodeList;
-    if (distributedCacheClient_->GetWorkerAddrByWorkerId(workerIDList, nodeList).IsError()) {
-        YRLOG_ERROR("get object location failed");
-        return {};
-    }
 
     std::vector<std::string> result;
-    for (const auto &node : nodeList) {
-        auto strs = litebus::strings::Split(node, ":");  // ip:port
+    // DataSystem returns replica locations in IP:port form.
+    for (const auto &pair : vec) {
+        auto strs = litebus::strings::Split(pair.first, ":");  // ip:port
         if (strs.size() != IP_PORT_LENGTH) {
-            YRLOG_WARN("get object location failed, invalid location({})", node);
+            YRLOG_WARN("get object location failed, invalid location({})", pair.first);
             continue;
         }
         result.push_back(strs[0]);
