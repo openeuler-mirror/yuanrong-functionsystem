@@ -1255,14 +1255,16 @@ func ValidateRootfsSpec(rootfs *types.RootfsSpecMeta) error {
 	hasType := rootfs.Type != ""
 	hasMountPoint := rootfs.MountPoint != ""
 	hasReadOnly := rootfs.ReadOnly
+	hasMounts := len(rootfs.Mounts) != 0
 
 	// Rule 1: If all fields are empty, validation passes
-	if !hasPath && !hasImageURL && !hasStorageInfo && !hasType && !hasMountPoint && !hasReadOnly && rootfs.Runtime == "" {
+	if !hasPath && !hasImageURL && !hasStorageInfo && !hasType && !hasMountPoint && !hasReadOnly &&
+		!hasMounts && rootfs.Runtime == "" {
 		return nil
 	}
 
 	// Rule 5: If any field is set but runtime is empty, default to 'runsc'
-	if (hasPath || hasImageURL || hasStorageInfo || hasType || hasMountPoint) && rootfs.Runtime == "" {
+	if (hasPath || hasImageURL || hasStorageInfo || hasType || hasMountPoint || hasMounts) && rootfs.Runtime == "" {
 		rootfs.Runtime = "runsc"
 		log.GetLogger().Infof("rootfs runtime not specified, defaulting to 'runsc'")
 	}
