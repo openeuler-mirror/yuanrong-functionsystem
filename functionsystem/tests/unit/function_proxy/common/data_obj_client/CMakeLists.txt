@@ -12,16 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_subdirectory(data_view)
-add_subdirectory(data_obj_client)
-add_subdirectory(distribute_cache_client)
-add_subdirectory(observer)
-add_subdirectory(posix_client)
-add_subdirectory(posix_service)
-add_subdirectory(state_handler)
-add_subdirectory(state_machine)
-add_subdirectory(rate_limiter)
-add_subdirectory(common_driver)
-add_subdirectory(iam)
+aux_source_directory(${CMAKE_CURRENT_LIST_DIR} DATA_OBJ_CLIENT_TEST_SRCS)
 
-target_include_directories(${UNIT_TEST_MODULE} PRIVATE ${SRC_BUSPROXY_INCLUDE_DIR})
+target_sources(${UNIT_TEST_MODULE} PRIVATE ${DATA_OBJ_CLIENT_TEST_SRCS})
