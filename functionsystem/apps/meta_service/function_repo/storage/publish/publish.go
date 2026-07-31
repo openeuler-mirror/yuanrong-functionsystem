@@ -431,7 +431,27 @@ func buildRootFsSpecMeta(rootfs types.RootfsSpecMeta) metadata.RootfsSpecMeta {
 			SecretKey: rootfs.StorageInfo.SecretKey,
 		},
 		MountPoint: rootfs.MountPoint,
+		Mounts:     buildRootfsMounts(rootfs.Mounts),
 	}
+}
+
+// buildRootfsMounts converts []types.RootfsMount to []metadata.RootfsMount.
+// Added alongside buildRootFsSpecMeta so the publish path (isAdmin=false, the faas
+// deploy flow) does not drop the rootfs.mounts entries that DockerExecutor's
+// ParseRootfsMounts consumes as docker -v bind mounts.
+func buildRootfsMounts(src []types.RootfsMount) []metadata.RootfsMount {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]metadata.RootfsMount, len(src))
+	for i, m := range src {
+		dst[i] = metadata.RootfsMount{
+			Source:   m.Source,
+			Target:   m.Target,
+			ReadOnly: m.ReadOnly,
+		}
+	}
+	return dst
 }
 
 func buildCodeMetaData(fv storage.FunctionVersionValue, businessID string) (metadata.CodeMetaData, error) {
