@@ -19,6 +19,7 @@
 #include <bits/std_abs.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <map>
 
@@ -40,14 +41,20 @@ std::string DefaultHeterogeneousScorer::GetPluginName()
     return DEFAULT_HETEROGENEOUS_SCORER_NAME;
 }
 
-void OnCalcHeterogeneousCardNumScore(const std::string cardType, const resources::Resources &available,
-                                     const resources::Resources &capacity, double reqVal,
+struct HeterogeneousCardScoreContext {
+    const std::string &cardType;
+    const std::string &resourceType;
+    const resources::Resources &available;
+    const resources::Resources &capacity;
+};
+
+void OnCalcHeterogeneousCardNumScore(const HeterogeneousCardScoreContext &context, double reqVal,
                                      schedule_framework::NodeScore &score)
 {
-    const auto &avaVectors =
-        available.resources().at(cardType).vectors().values().at(resource_view::HETEROGENEOUS_MEM_KEY).vectors();
-    const auto &capVectors =
-        capacity.resources().at(cardType).vectors().values().at(resource_view::HETEROGENEOUS_MEM_KEY).vectors();
+    const auto &availableResource = context.available.resources().at(context.cardType);
+    const auto &capacityResource = context.capacity.resources().at(context.cardType);
+    const auto &avaVectors = availableResource.vectors().values().at(context.resourceType).vectors();
+    const auto &capVectors = capacityResource.vectors().values().at(context.resourceType).vectors();
 
     // require resource < 1, only place on a hetero device
     // require resource >= 1, will place on cnt * reqVal(=1) device to satisfy require resource
@@ -59,8 +66,8 @@ void OnCalcHeterogeneousCardNumScore(const std::string cardType, const resources
         reqVal = 1;
     }
 
-    auto &vectors = score.allocatedVectors[cardType];
-    auto &cg = (*vectors.mutable_values())[resource_view::HETEROGENEOUS_MEM_KEY];
+    auto &vectors = score.allocatedVectors[context.cardType];
+    auto &cg = (*vectors.mutable_values())[context.resourceType];
 
     for (auto &[uuid, availVec] : avaVectors) {
         if (capVectors.count(uuid) == 0 || capVectors.at(uuid).values().size() != availVec.values_size()) {
@@ -88,7 +95,7 @@ void OnCalcHeterogeneousCardNumScore(const std::string cardType, const resources
         cg.Clear();
         score.realIDs.clear();
     }
-    score.heteroProductName = cardType;
+    score.heteroProductName = context.cardType;
     score.score = DEFAULT_SCORE;
 }
 
@@ -96,13 +103,26 @@ void CalcHeterogeneousCardNumScore(const std::string cardType, const resources::
                                    const resources::Resources &capacity, double reqVal,
                                    schedule_framework::NodeScore &score)
 {
-    if (!HasHeteroResourceInResources(available, cardType, resource_view::HETEROGENEOUS_MEM_KEY)
-        && !HasHeteroResourceInResources(capacity, cardType, resource_view::HETEROGENEOUS_MEM_KEY)) {
-        YRLOG_WARN("HBM: Not Found.");
+    const bool hasHbmVector =
+        HasHeteroResourceInResources(available, cardType, resource_view::HETEROGENEOUS_MEM_KEY)
+        && HasHeteroResourceInResources(capacity, cardType, resource_view::HETEROGENEOUS_MEM_KEY);
+    const bool hasCountVector =
+        HasHeteroResourceInResources(available, cardType, resource_view::HETEROGENEOUS_CARDNUM_KEY)
+        && HasHeteroResourceInResources(capacity, cardType, resource_view::HETEROGENEOUS_CARDNUM_KEY);
+    const bool useCountVector = !hasHbmVector && hasCountVector;
+    const auto &resourceType = useCountVector ? resource_view::HETEROGENEOUS_CARDNUM_KEY
+                                              : resource_view::HETEROGENEOUS_MEM_KEY;
+    if (!HasHeteroResourceInResources(available, cardType, resourceType)
+        || !HasHeteroResourceInResources(capacity, cardType, resourceType)) {
+        YRLOG_WARN("{}: Not Found.", resourceType);
+        return;
+    }
+    if (useCountVector && abs(reqVal - std::round(reqVal)) > EPSINON) {
+        YRLOG_WARN("specified card quantity {} is invalid because quantity must be a whole number.", reqVal);
         return;
     }
 
-    OnCalcHeterogeneousCardNumScore(cardType, available, capacity, reqVal, score);
+    OnCalcHeterogeneousCardNumScore({ cardType, resourceType, available, capacity }, reqVal, score);
 }
 
 std::vector<float> CalcHeterogeneousHbmScore(const std::string cardType,

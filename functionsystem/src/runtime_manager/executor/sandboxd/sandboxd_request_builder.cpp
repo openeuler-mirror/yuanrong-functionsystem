@@ -17,6 +17,9 @@
 #include "sandboxd_request_builder.h"
 
 #include <algorithm>
+#include <charconv>
+#include <cmath>
+#include <limits>
 
 #include "common/constants/constants.h"
 #include "common/logs/logging.h"
@@ -36,12 +39,14 @@ const std::string CONTAINER_ROOTFS        = "rootfs";
 const std::string CONTAINER_EXTRA_CONFIG  = "extra_config";
 const std::string CONTAINER_MOUNTS        = "mounts";
 const std::string CONTAINER_NETWORK       = "network";
+const std::string STORAGE_RESOURCE_NAME   = "storage";
 // Resource defaults
 constexpr double DEFAULT_CPU_MILLICORES   = 500.0;
 constexpr double DEFAULT_MEMORY_MB        = 500.0;
 // Mount
 const std::string YR_FUNCTION_LIB_PATH   = "YR_FUNCTION_LIB_PATH";
 const std::string FUNCTION_LIB_PATH      = "FUNCTION_LIB_PATH";
+const std::string GPU_DEVICE_IDS         = "GPU-DEVICE-IDS";
 // Namespace alias for brevity
 using namespace resource_view;  // NOLINT(google-build-using-namespace)
 
@@ -299,6 +304,10 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBui
     }
 
     ApplyResources(params.request, start->mutable_resources());
+    if (auto status = ApplyWritableLayerSize(params.request, start.get()); !status.IsOk()) {
+        return {status, nullptr};
+    }
+    ApplyXpuAllocations(params.envs, start.get());
     ApplyEnvsAndLogs(updatedEnvs, params.runtimeID, start.get());
 
     // YR_LANGUAGE follows the service runtime field. The container runtime is
@@ -438,6 +447,61 @@ void SandboxdRequestBuilder::ApplyResources(const std::shared_ptr<messages::Star
     auto memIt = res.find(MEMORY_RESOURCE_NAME);
     (*resources)[MEMORY_RESOURCE_NAME] =
         (memIt != res.end()) ? getEffectiveValue(memIt->second, DEFAULT_MEMORY_MB) : DEFAULT_MEMORY_MB;
+}
+
+Status SandboxdRequestBuilder::ApplyWritableLayerSize(
+    const std::shared_ptr<messages::StartInstanceRequest> &request, runtime::v1::StartRequest *start) const
+{
+    const auto &resources = request->runtimeinstanceinfo().runtimeconfig().resources().resources();
+    const auto iter = resources.find(STORAGE_RESOURCE_NAME);
+    if (iter == resources.end()) {
+        return Status::OK();
+    }
+    if (iter->second.type() != ValueType::Value_Type_SCALAR) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "storage resource must be scalar");
+    }
+
+    const auto &scalar = iter->second.scalar();
+    const double storage = scalar.limit() > 0 ? scalar.limit() : scalar.value();
+    if (!std::isfinite(storage) || storage <= 0 || std::floor(storage) != storage ||
+        storage > static_cast<double>(std::numeric_limits<uint64_t>::max())) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "storage resource must be a positive integer number of bytes");
+    }
+    start->mutable_rootfs()->set_writable_layer_size_bytes(static_cast<uint64_t>(storage));
+    return Status::OK();
+}
+
+void SandboxdRequestBuilder::ApplyXpuAllocations(const Envs &envs, runtime::v1::StartRequest *start) const
+{
+    auto iter = envs.userEnvs.find(GPU_DEVICE_IDS);
+    if (iter == envs.userEnvs.end() || iter->second.empty()) {
+        return;
+    }
+
+    auto *allocation = start->add_xpu_allocations();
+    allocation->set_type("gpu");
+
+    const auto &value = iter->second;
+    size_t begin = 0;
+    while (begin <= value.size()) {
+        const auto end = value.find(',', begin);
+        const auto token = value.substr(begin, end == std::string::npos ? value.size() - begin : end - begin);
+        uint32_t deviceID = 0;
+        const auto result = std::from_chars(token.data(), token.data() + token.size(), deviceID);
+        if (result.ec == std::errc() && result.ptr == token.data() + token.size()) {
+            allocation->add_device_ids(deviceID);
+        } else {
+            YRLOG_WARN("ignore invalid physical GPU device ID: {}", token);
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        begin = end + 1;
+    }
+
+    if (allocation->device_ids().empty()) {
+        start->mutable_xpu_allocations()->RemoveLast();
+    }
 }
 
 void SandboxdRequestBuilder::ApplyEnvsAndLogs(const Envs &envs, const std::string &runtimeID,

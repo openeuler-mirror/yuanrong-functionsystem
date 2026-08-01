@@ -727,6 +727,47 @@ TEST_F(InstanceStateMachineTest, ScheduleMutableSetters)
     ASSERT_TRUE(instanceStateMachine.GetScheduleRequest()->scheduleround() == 1);
 }
 
+TEST_F(InstanceStateMachineTest, CarriesSelectedPhysicalGpuIdsInCreateOptions)
+{
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    auto &resource = (*scheduleReq->mutable_instance()->mutable_resources()->mutable_resources())
+        ["GPU/A10/count"];
+    resource.set_name("GPU/A10/count");
+    resource.set_type(resources::Value_Type_SCALAR);
+    resource.mutable_scalar()->set_value(2);
+
+    auto context = std::make_shared<InstanceContext>(scheduleReq);
+    InstanceStateMachine instanceStateMachine(TEST_NODE_ID, context, false);
+    ScheduleResult result;
+    result.id = "gpu-agent";
+    result.realIDs = { 0, 2 };
+    auto &count = (*result.allocatedVectors["GPU/A10"].mutable_values())
+                      [resource_view::HETEROGENEOUS_CARDNUM_KEY];
+    auto &vector = (*count.mutable_vectors())["gpu-agent"];
+    vector.add_values(1);
+    vector.add_values(0);
+    vector.add_values(1);
+    vector.add_values(0);
+
+    instanceStateMachine.SetFunctionAgentIDAndHeteroConfig(result);
+
+    EXPECT_EQ(instanceStateMachine.GetScheduleRequest()->instance().functionagentid(), "gpu-agent");
+    EXPECT_EQ(instanceStateMachine.GetScheduleRequest()->instance().createoptions().at("func-GPU-DEVICE-IDS"),
+              "0,2");
+    const auto &allocated = instanceStateMachine.GetScheduleRequest()
+                                ->instance()
+                                .resources()
+                                .resources()
+                                .at("GPU/A10")
+                                .vectors()
+                                .values()
+                                .at(resource_view::HETEROGENEOUS_CARDNUM_KEY)
+                                .vectors()
+                                .at("gpu-agent")
+                                .values();
+    EXPECT_EQ(std::vector<double>(allocated.begin(), allocated.end()), (std::vector<double>{ 1, 0, 1, 0 }));
+}
+
 /**
  * Feature: Multiple Try ExitInstance
  * Steps:

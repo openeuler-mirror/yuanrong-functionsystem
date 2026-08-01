@@ -38,6 +38,41 @@ static const std::string IDLE_TO_RECYCLE = "yr-idle-to-recycle";
 // 当变更数量超过此阈值时，使用异步处理
 static const int64_t ASYNC_MERGE_THRESHOLD = 50;
 
+ResourceUnit CollectRemovedResources(const ResourceUnit &current, const Resources &updatedCapacity,
+                                     Resources &retainedCapacity)
+{
+    ResourceUnit removedResources;
+    for (const auto &[resourceName, resource] : current.capacity().resources()) {
+        if (updatedCapacity.resources().contains(resourceName)) {
+            continue;
+        }
+        (*removedResources.mutable_capacity()->mutable_resources())[resourceName] = resource;
+        retainedCapacity.mutable_resources()->erase(resourceName);
+        auto allocatable = current.allocatable().resources().find(resourceName);
+        if (allocatable != current.allocatable().resources().end()) {
+            (*removedResources.mutable_allocatable()->mutable_resources())[resourceName] = allocatable->second;
+        }
+    }
+    return removedResources;
+}
+
+ResourceUnit CollectReportedRemovedResources(const ResourceUnit &current, const CapacityChange &capacityChange)
+{
+    ResourceUnit removedResources;
+    for (const auto &resourceName : capacityChange.removedresourcenames()) {
+        auto capacity = current.capacity().resources().find(resourceName);
+        if (capacity == current.capacity().resources().end()) {
+            continue;
+        }
+        (*removedResources.mutable_capacity()->mutable_resources())[resourceName] = capacity->second;
+        auto allocatable = current.allocatable().resources().find(resourceName);
+        if (allocatable != current.allocatable().resources().end()) {
+            (*removedResources.mutable_allocatable()->mutable_resources())[resourceName] = allocatable->second;
+        }
+    }
+    return removedResources;
+}
+
 // 静态成员变量定义
 bool ResourceViewActor::enableTenantAffinity_ = true;
 
@@ -273,6 +308,28 @@ void ResourceViewActor::DeleteResourceBySubUnit(ResourceUnit &view, ResourceUnit
         (*view.mutable_actualuse()) = view.actualuse() - value.actualuse();
     }
     (*view.mutable_nodelabels()) = view.nodelabels() - value.nodelabels();
+}
+
+void ResourceViewActor::PruneRemovedResources(ResourceUnit &view, const ResourceUnit &removedResources)
+{
+    for (const auto &[resourceName, resource] : removedResources.capacity().resources()) {
+        (void)resource;
+        bool hasCapacityContributor = false;
+        bool hasAllocatableContributor = false;
+        for (const auto &[fragmentId, fragment] : view.fragment()) {
+            (void)fragmentId;
+            hasCapacityContributor =
+                hasCapacityContributor || fragment.capacity().resources().contains(resourceName);
+            hasAllocatableContributor =
+                hasAllocatableContributor || fragment.allocatable().resources().contains(resourceName);
+        }
+        if (!hasCapacityContributor) {
+            view.mutable_capacity()->mutable_resources()->erase(resourceName);
+        }
+        if (!hasAllocatableContributor) {
+            view.mutable_allocatable()->mutable_resources()->erase(resourceName);
+        }
+    }
 }
 
 Status ResourceViewActor::ClearLocalSchedulerAgentsInDomain(const std::string &localID)
@@ -1110,12 +1167,23 @@ void ResourceViewActor::UpdateResourceUnitDynamic(const std::shared_ptr<Resource
         delta: 两次容量的差值
         capacityChange.increment(): 本次容量是否上升
     */
-    (*view_->mutable_capacity()) = view_->capacity() - unit->second.capacity() + value->capacity();
+    Resources retainedCapacity = unit->second.capacity();
+    auto removedResources = CollectRemovedResources(unit->second, value->capacity(), retainedCapacity);
+    if (!removedResources.capacity().resources().empty()) {
+        DeleteResourceBySubUnit(*view_, removedResources);
+    }
+
     // cap decreased
     CapacityChange capacityChange;
     auto delta = capacityChange.mutable_delta();
-    delta->CopyFrom(value->capacity() - unit->second.capacity());
+    delta->CopyFrom(value->capacity() - retainedCapacity);
+    for (const auto &[resourceName, resource] : removedResources.capacity().resources()) {
+        (void)resource;
+        capacityChange.add_removedresourcenames(resourceName);
+    }
     YRLOG_DEBUG("for test: Unit({}) delta:{}", value->id(), delta->ShortDebugString());
+
+    (*view_->mutable_capacity()) = view_->capacity() + *delta;
 
     // maybe negative allocatable
     // todo: while negative allocatable, need to trigger some alert event to evict/migrate instances
@@ -1124,6 +1192,11 @@ void ResourceViewActor::UpdateResourceUnitDynamic(const std::shared_ptr<Resource
     // update in fragment
     *unit->second.mutable_capacity() = value->capacity();
     *unit->second.mutable_allocatable() = unit->second.allocatable() + *delta;
+    for (const auto &[resourceName, resource] : removedResources.capacity().resources()) {
+        (void)resource;
+        unit->second.mutable_allocatable()->mutable_resources()->erase(resourceName);
+    }
+    PruneRemovedResources(*view_, removedResources);
 
     // make change record
     Modification modification;
@@ -1301,7 +1374,8 @@ bool ResourceViewActor::IsResourceUnitChangeEmpty(const ResourceUnitChange &chan
 
 bool ResourceViewActor::IsModifyEmpty(const ResourceUnitChange &modify)
 {
-    return !modify.modification().has_statuschange() && modify.modification().instancechanges().empty();
+    return !modify.modification().has_statuschange() && !modify.modification().has_capacitychange() &&
+        modify.modification().instancechanges().empty();
 }
 
 void ResourceViewActor::MergeResourceViewChanges(int64_t startRevision, int64_t endRevision,
@@ -1389,6 +1463,14 @@ void ResourceViewActor::MergeCapacityChange(ResourceUnitChange &previous, const 
     }
     auto previousCapacityChange = previous.mutable_modification()->mutable_capacitychange();
     auto currentCapacityChange = current.modification().capacitychange();
+    for (const auto &resourceName : currentCapacityChange.removedresourcenames()) {
+        auto *removedResourceNames = previousCapacityChange->mutable_removedresourcenames();
+        if (std::find(removedResourceNames->begin(), removedResourceNames->end(), resourceName) ==
+            removedResourceNames->end()) {
+            previousCapacityChange->add_removedresourcenames(resourceName);
+        }
+        previousCapacityChange->mutable_delta()->mutable_resources()->erase(resourceName);
+    }
     (*previousCapacityChange->mutable_delta()) =
         previousCapacityChange->delta() + currentCapacityChange.delta();
 }
@@ -1405,7 +1487,6 @@ ResourceUnitChange ResourceViewActor::MergeResourceUnitChanges(ResourceUnitChang
      * 6.any changes + add          --x Non-existent combination
      */
     ASSERT_FS(previous.resourceunitid() == current.resourceunitid());
-    MergeCapacityChange(previous, current);
     if (previous.has_addition() && current.has_modification()) {
         return MergeAddAndModify(previous, current);
     }
@@ -1418,12 +1499,25 @@ ResourceUnitChange ResourceViewActor::MergeResourceUnitChanges(ResourceUnitChang
         return current;
     }
 
+    MergeCapacityChange(previous, current);
     return MergeTwoModifies(previous, current);
 }
 
 ResourceUnitChange ResourceViewActor::MergeAddAndModify(ResourceUnitChange &previous, const ResourceUnitChange &current)
 {
     auto previousResourceUnit = previous.mutable_addition()->mutable_resourceunit();
+
+    if (current.modification().has_capacitychange()) {
+        const auto &capacityChange = current.modification().capacitychange();
+        for (const auto &resourceName : capacityChange.removedresourcenames()) {
+            previousResourceUnit->mutable_capacity()->mutable_resources()->erase(resourceName);
+            previousResourceUnit->mutable_allocatable()->mutable_resources()->erase(resourceName);
+        }
+        (*previousResourceUnit->mutable_capacity()) =
+            previousResourceUnit->capacity() + capacityChange.delta();
+        (*previousResourceUnit->mutable_allocatable()) =
+            previousResourceUnit->allocatable() + capacityChange.delta();
+    }
 
     if (current.modification().has_statuschange()) {
         previousResourceUnit->set_status(static_cast<uint32_t>(current.modification().statuschange().status()));
@@ -1677,6 +1771,29 @@ Status ResourceViewActor::HandleReportedDeleteInstacne(const InstanceInfo &insta
     return Status::OK();
 }
 
+void ResourceViewActor::ApplyReportedCapacityChange(ResourceUnit &agentResourceUnit,
+                                                    const CapacityChange &capacityChange)
+{
+    auto removedResources = CollectReportedRemovedResources(agentResourceUnit, capacityChange);
+    if (!removedResources.capacity().resources().empty()) {
+        DeleteResourceBySubUnit(*view_, removedResources);
+        for (const auto &[resourceName, resource] : removedResources.capacity().resources()) {
+            (void)resource;
+            agentResourceUnit.mutable_capacity()->mutable_resources()->erase(resourceName);
+            agentResourceUnit.mutable_allocatable()->mutable_resources()->erase(resourceName);
+        }
+    }
+
+    const auto &delta = capacityChange.delta();
+    YRLOG_DEBUG("for test: Unit({}) delta:{}", agentResourceUnit.id(), delta.ShortDebugString());
+    (*agentResourceUnit.mutable_capacity()) = agentResourceUnit.capacity() + delta;
+    (*agentResourceUnit.mutable_allocatable()) = agentResourceUnit.allocatable() + delta;
+    (*view_->mutable_capacity()) = view_->capacity() + delta;
+    (*view_->mutable_allocatable()) = view_->allocatable() + delta;
+    PruneRemovedResources(*view_, removedResources);
+    MarkResourceUpdated();
+}
+
 Status ResourceViewActor::HandleReportedModification(const ResourceUnitChange &change)
 {
     ASSERT_IF_NULL(view_);
@@ -1699,13 +1816,7 @@ Status ResourceViewActor::HandleReportedModification(const ResourceUnitChange &c
     }
 
     if (modification.has_capacitychange()) {
-        auto delta = modification.capacitychange().delta();
-        YRLOG_DEBUG("for test: Unit({}) delta:{}", agentResourceUnit.id(), delta.ShortDebugString());
-        (*agentResourceUnit.mutable_capacity()) = agentResourceUnit.capacity() + delta;
-        (*agentResourceUnit.mutable_allocatable()) = agentResourceUnit.allocatable() + delta;
-        (*view_->mutable_capacity()) = view_->capacity() + delta;
-        (*view_->mutable_allocatable()) = view_->allocatable() + delta;
-        MarkResourceUpdated();
+        ApplyReportedCapacityChange(agentResourceUnit, modification.capacitychange());
     }
 
     if (modification.instancechanges().empty()) {

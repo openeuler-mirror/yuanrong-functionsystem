@@ -98,6 +98,11 @@ private:
     void ApplyResources(const std::shared_ptr<messages::StartInstanceRequest> &request,
                         google::protobuf::Map<std::string, double> *resources) const;
 
+    Status ApplyWritableLayerSize(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                  runtime::v1::StartRequest *start) const;
+
+    void ApplyXpuAllocations(const Envs &envs, runtime::v1::StartRequest *start) const;
+
     void ApplyEnvsAndLogs(const Envs &envs, const std::string &runtimeID, runtime::v1::StartRequest *start) const;
 
     void ApplyExtraConfig(const std::shared_ptr<messages::StartInstanceRequest> &request,

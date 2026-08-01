@@ -436,6 +436,9 @@ message BucketIndex {
 
 message CapacityChange {
     Resources delta = 1;
+    // Resource names that must be removed before applying delta. A numeric
+    // delta cannot represent deletion of a vector resource key.
+    repeated string removedResourceNames = 2;
 }
 
 message StatusChange {

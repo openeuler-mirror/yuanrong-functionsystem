@@ -75,6 +75,9 @@ message RootfsConfig {
     // Path is a local directory or file used as the root filesystem source.
     string path = 5;
   }
+  // WritableLayerSizeBytes limits the capacity of the root filesystem's
+  // writable layer. Zero uses the server default. Ignored when readonly is true.
+  uint64 writable_layer_size_bytes = 6;
 }
 
 // Mount describes an additional mount attached to the sandbox.
@@ -93,6 +96,14 @@ message Mount {
     // ImageURL is the OCI image URL used as the mount source.
     string image_url = 12;
   }
+}
+
+// XpuAllocation describes physical devices already selected by FunctionSystem.
+message XpuAllocation {
+  // Type is the normalized XPU type, such as gpu.
+  string type = 1;
+  // DeviceIDs contains node-local physical device IDs.
+  repeated uint32 device_ids = 2;
 }
 
 // StartRequest describes a sandbox start request.
@@ -132,6 +143,8 @@ message StartRequest {
   map<string, string> labels = 16;
   // MetricLabels contains sandbox metadata intended for metric dimensions.
   map<string, string> metric_labels = 17;
+  // XpuAllocations contains physical XPU devices selected by FunctionSystem.
+  repeated XpuAllocation xpu_allocations = 18;
 }
 
 // StartResponse is returned after sandbox start.

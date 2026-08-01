@@ -286,6 +286,7 @@ protected:
 private:
     static void AddResourceBySubUnit(ResourceUnit &view, const ResourceUnit &value);
     static void DeleteResourceBySubUnit(ResourceUnit &view, ResourceUnit &value);
+    static void PruneRemovedResources(ResourceUnit &view, const ResourceUnit &removedResources);
     static void AddInstancesBySubUnit(ResourceUnit &view, const ResourceUnit &subUnit);
     static void DeleteInstancesBySubUnit(ResourceUnit &view, const ResourceUnit &subUnit);
     static void AddBucketIndexBySubUnit(ResourceUnit &view, const ResourceUnit &fragmentUnit);
@@ -358,6 +359,7 @@ private:
     Status HandleReportedAddition(const ResourceUnitChange &change);
     Status HandleReportedDeletion(const ResourceUnitChange &change);
     Status HandleReportedModification(const ResourceUnitChange &change);
+    void ApplyReportedCapacityChange(ResourceUnit &agentResourceUnit, const CapacityChange &capacityChange);
     Status HandleReportedAddInstacne(const InstanceInfo &instance);
     Status HandleReportedDeleteInstacne(const InstanceInfo &instance);
     void SimplifyInstanceInfo(const InstanceInfo &instance, InstanceInfo &simplifiedInstance) const;
