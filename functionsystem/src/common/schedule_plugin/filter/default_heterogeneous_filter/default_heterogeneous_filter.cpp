@@ -85,6 +85,58 @@ int CountAvailableCards(const resources::Resource &availableResource, const reso
     return cnt;
 }
 
+struct CardNumResourceContext {
+    const resource_view::InstanceInfo &instance;
+    const resource_view::ResourceUnit &resourceUnit;
+    const resources::Resources &available;
+    std::string cardType;
+    double requestValue;
+};
+
+Status CompareCardNumResource(const CardNumResourceContext &context)
+{
+    const auto &capacity = context.resourceUnit.capacity();
+    const bool hasHbmVector =
+        HasHeteroResourceInResources(context.available, context.cardType, resource_view::HETEROGENEOUS_MEM_KEY) &&
+        HasHeteroResourceInResources(capacity, context.cardType, resource_view::HETEROGENEOUS_MEM_KEY);
+    const bool hasCountVector =
+        HasHeteroResourceInResources(context.available, context.cardType, resource_view::HETEROGENEOUS_CARDNUM_KEY) &&
+        HasHeteroResourceInResources(capacity, context.cardType, resource_view::HETEROGENEOUS_CARDNUM_KEY);
+    const bool useCountVector = !hasHbmVector && hasCountVector;
+    if (useCountVector && abs(context.requestValue - std::round(context.requestValue)) > EPSINON) {
+        YRLOG_WARN("{}|specified card quantity {} is invalid because quantity must be a whole number.",
+                   context.instance.requestid(), context.requestValue);
+        return Status(PARAMETER_ERROR,
+                      "specified card quantity " + std::to_string(context.requestValue) + " must be a whole number");
+    }
+
+    const auto &resourceType = useCountVector ? resource_view::HETEROGENEOUS_CARDNUM_KEY
+                                              : resource_view::HETEROGENEOUS_MEM_KEY;
+    if (!hasHbmVector && !hasCountVector) {
+        YRLOG_WARN("{}|no available {} {} in unit({}) for schedule.", context.instance.requestid(),
+                   context.cardType, resourceType, context.resourceUnit.id());
+        return Status(HETEROGENEOUS_SCHEDULE_FAILED, resourceType + ": Not Found");
+    }
+
+    const auto &availableResource = context.available.resources().at(context.cardType);
+    const auto &capacityResource = capacity.resources().at(context.cardType);
+    const auto requestCount = context.requestValue > INT_MAX ? INT_MAX :
+        static_cast<int>(std::ceil(context.requestValue));
+    const double perCardRequirement =
+        useCountVector || context.requestValue >= NUM_THRESHOLD ? REQUIRE_FACTOR : context.requestValue;
+    const int availableCount = CountAvailableCards(availableResource, capacityResource, resourceType,
+                                                   perCardRequirement);
+    if (availableCount >= requestCount) {
+        YRLOG_DEBUG("{}|{} {} count({}) >= request({}) in unit({})", context.instance.requestid(),
+                    context.cardType, resourceType, availableCount, requestCount, context.resourceUnit.id());
+        return Status::OK();
+    }
+    YRLOG_WARN("{}|{}.{} available count({}) < request({}) in unit({}) for schedule.",
+               context.instance.requestid(), context.cardType, resourceType, availableCount, requestCount,
+               context.resourceUnit.id());
+    return Status(HETEROGENEOUS_SCHEDULE_FAILED, "card count: Not Enough");
+}
+
 std::string DefaultHeterogeneousFilter::GetPluginName()
 {
     return DEFAULT_HETEROGENEOUS_FILTER_NAME;
@@ -205,7 +257,6 @@ Status DefaultHeterogeneousFilter::CheckAndCompareForCardNum(const resource_view
                       "specified quantity " + std::to_string(reqResourceValue)
                           + " is invalid because quantity >1 must be whole numbers or can not less than 0.0001");
     }
-    auto reqNum = reqResourceValue > INT_MAX ? INT_MAX : static_cast<int>(std::ceil(reqResourceValue));
     auto cardTypeRegex = GetHeteroCardTypeFromResName(reqResource.name());
     if (cardTypeRegex.empty()) {
         return Status::OK();
@@ -217,32 +268,7 @@ Status DefaultHeterogeneousFilter::CheckAndCompareForCardNum(const resource_view
         return Status(HETEROGENEOUS_SCHEDULE_FAILED, "Card Type Not Found");
     }
 
-    auto avail = available.resources().find(cardType);
-    auto capacity = resourceUnit.capacity().resources().find(cardType);
-    if (avail == available.resources().end() || capacity == resourceUnit.capacity().resources().end()
-        || avail->second.vectors().values().find(resource_view::HETEROGENEOUS_MEM_KEY)
-               == avail->second.vectors().values().end()
-        || capacity->second.vectors().values().find(resource_view::HETEROGENEOUS_MEM_KEY)
-               == capacity->second.vectors().values().end()) {
-        YRLOG_WARN("{}|no available {} {} in unit({}) for schedule.", instance.requestid(),
-                   cardType, resource_view::HETEROGENEOUS_MEM_KEY, resourceUnit.id());
-        return Status(HETEROGENEOUS_SCHEDULE_FAILED, "HBM: Not Found");
-    }
-
-    int cnt = CountAvailableCards(avail->second, capacity->second, resource_view::HETEROGENEOUS_MEM_KEY,
-                                  reqResourceValue < NUM_THRESHOLD ? reqResourceValue : REQUIRE_FACTOR);
-    if (cnt >= reqNum) {
-        YRLOG_DEBUG("{}|{}.{} available {}({}) >= req({}) in unit({})", instance.requestid(),
-                    cardType, resource_view::HETEROGENEOUS_CARDNUM_KEY,
-                    avail->second.vectors().values().at(resource_view::HETEROGENEOUS_MEM_KEY).ShortDebugString(),
-                    cnt, reqNum, resourceUnit.id());
-        return Status::OK();
-    }
-    YRLOG_WARN("{}|{}.{} is insufficient: available {}({}) < req({}) in unit({}) for schedule.", instance.requestid(),
-               cardType, resource_view::HETEROGENEOUS_CARDNUM_KEY,
-               avail->second.vectors().values().at(resource_view::HETEROGENEOUS_MEM_KEY).ShortDebugString(),
-               cnt, reqNum, resourceUnit.id());
-    return Status(HETEROGENEOUS_SCHEDULE_FAILED, "card count: Not Enough");
+    return CompareCardNumResource({ instance, resourceUnit, available, cardType, reqResourceValue });
 }
 std::shared_ptr<schedule_framework::FilterPlugin> DefaultHeterogeneousFilterPolicyCreator()
 {

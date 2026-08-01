@@ -38,6 +38,7 @@ extern const std::string CPU_SCALA_RESOURCE_STRING;
 extern const std::string CPU_SCALA_RESOURCES_STRING;
 
 const std::string DEFAULT_NPU_TYPE = "NPU/310";
+const std::string DEFAULT_GPU_TYPE = "GPU/A10";
 
 inline resource_view::Resource GetResource(const std::string &name)
 {
@@ -137,6 +138,44 @@ inline resource_view::Resource GetNpuResource(const std::string cardType = DEFAU
                       "0.0.0.4,0.0.0.5,0.0.0.6,0.0.0.7";
     (*heterogeneousInfo)[resource_view::DEV_CLUSTER_IPS_KEY] = ips;
     return r;
+}
+
+inline resource_view::Resource GetGpuCountResource(const std::vector<double> &count,
+                                                   const std::string &cardType = DEFAULT_GPU_TYPE)
+{
+    resource_view::Resource resource;
+    resource.set_name(cardType);
+    resource.set_type(resource_view::ValueType::Value_Type_VECTORS);
+    auto uuid = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
+    auto &values = (*resource.mutable_vectors()->mutable_values())
+                       [resource_view::HETEROGENEOUS_CARDNUM_KEY];
+    auto &vector = (*values.mutable_vectors())[uuid];
+    for (const auto value : count) {
+        vector.mutable_values()->Add(value);
+    }
+    return resource;
+}
+
+inline resource_view::Resources GetCpuMemGpuCountResources(const std::vector<double> &count,
+                                                           const std::string &cardType = DEFAULT_GPU_TYPE)
+{
+    resource_view::Resources resources;
+    (*resources.mutable_resources())[GetCpuResource().name()] = GetCpuResource();
+    (*resources.mutable_resources())[GetMemResource().name()] = GetMemResource();
+    (*resources.mutable_resources())[cardType] = GetGpuCountResource(count, cardType);
+    return resources;
+}
+
+inline resource_view::ResourceUnit Get1DResourceUnitWithGpuCount(
+    const std::vector<double> &count, const std::string &cardType = DEFAULT_GPU_TYPE)
+{
+    resource_view::ResourceUnit unit;
+    unit.set_id("Test_ResID_" + litebus::uuid_generator::UUID::GetRandomUUID().ToString());
+    auto resources = GetCpuMemGpuCountResources(count, cardType);
+    unit.mutable_capacity()->CopyFrom(resources);
+    unit.mutable_allocatable()->CopyFrom(resources);
+    (*unit.mutable_actualuse()) = GetCpuMemGpuCountResources(std::vector<double>(count.size(), 0), cardType);
+    return unit;
 }
 
 inline resource_view::Resources GetCpuMemNpuResources(const std::string cardType = DEFAULT_NPU_TYPE)

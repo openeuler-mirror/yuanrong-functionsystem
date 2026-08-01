@@ -35,6 +35,7 @@ const MetricsType NPU = resource_view::NPU_RESOURCE_NAME;
 const MetricsType NUMA = resource_view::NUMA_RESOURCE_NAME;
 const MetricsType LABELS = resource_view::INIT_LABELS_RESOURCE_NAME;
 const MetricsType DISK = resource_view::DISK_RESOURCE_NAME;
+const MetricsType STORAGE = "storage";
 const std::vector<MetricsType> METRICS_TYPES = { CPU, MEMORY, DISK, GPU, NPU, NUMA, LABELS };
 }  // namespace metrics_type
 

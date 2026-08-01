@@ -84,6 +84,37 @@ TEST(MetricsActorSandboxRuntimeCapabilitiesTest, AcceptsEmptySnapshotWithoutPubl
     EXPECT_EQ(unit.nodelabels().count(SANDBOX_RUNTIME_LABEL), size_t{0});
 }
 
+TEST(MetricsActorGpuCountTest, BuildsSparseGpuCountResource)
+{
+    TestMetricsActor actor;
+    Metrics gpuMetrics;
+    gpuMetrics.usage = 0;
+    gpuMetrics.limit = 0;
+    gpuMetrics.metricsType = metrics_type::GPU;
+    gpuMetrics.collectorType = collector_type::SYSTEM;
+    DevClusterMetrics device;
+    device.count = 3;
+    device.strInfo[dev_metrics_type::PRODUCT_MODEL_KEY] = "A10";
+    device.intsInfo[resource_view::HETEROGENEOUS_CARDNUM_KEY] = { 1, 0, 1, 1 };
+    gpuMetrics.devClusterMetrics = device;
+
+    std::vector<litebus::Future<Metrics>> metrics{ gpuMetrics };
+    auto unit = actor.BuildResourceUnit(metrics);
+
+    for (const auto *resources : { &unit.capacity().resources(), &unit.allocatable().resources() }) {
+        ASSERT_EQ(resources->count("GPU/A10"), size_t{1});
+        const auto &vectors = resources->at("GPU/A10")
+                                  .vectors()
+                                  .values()
+                                  .at(resource_view::HETEROGENEOUS_CARDNUM_KEY)
+                                  .vectors();
+        ASSERT_EQ(vectors.size(), size_t{1});
+        const auto &values = vectors.begin()->second.values();
+        EXPECT_EQ(std::vector<double>(values.begin(), values.end()), (std::vector<double>{ 1, 0, 1, 1 }));
+    }
+    EXPECT_TRUE(actor.GetCardIDs().empty());
+}
+
 class DISABLED_MetricsActorTest : public ::testing::Test {
 protected:
     [[maybe_unused]] static void SetUpTestSuite()

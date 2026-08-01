@@ -1004,6 +1004,74 @@ TEST_F(ResourceViewTest, UpdateResourceUnit)
     EXPECT_TRUE(fragInst.alias() == "unit2");
 }
 
+TEST_F(ResourceViewTest, DynamicUpdateRemovesMissingVectorResourceWithoutAffectingOtherUnitsOrInstances)
+{
+    auto viewPtr = resource_view::ResourceView::CreateResourceView(
+        "dynamic-vector-removal", CHILD_PARAM);
+    auto firstUnit = Get1DResourceUnitWithGpuCount({ 1, 1 });
+    auto secondUnit = Get1DResourceUnitWithGpuCount({ 1 });
+    GenerateMinimumUnitBucketInfo(firstUnit);
+    GenerateMinimumUnitBucketInfo(secondUnit);
+
+    auto add = viewPtr->AddResourceUnit(firstUnit);
+    ASSERT_AWAIT_READY(add);
+    ASSERT_TRUE(add.Get().IsOk());
+    add = viewPtr->AddResourceUnit(secondUnit);
+    ASSERT_AWAIT_READY(add);
+    ASSERT_TRUE(add.Get().IsOk());
+
+    auto instance = Get1DInstance();
+    instance.set_unitid(firstUnit.id());
+    *instance.mutable_schedulerchain()->Add() = firstUnit.id();
+    std::map<std::string, resource_view::InstanceAllocatedInfo> instances;
+    instances.emplace(instance.instanceid(), resource_view::InstanceAllocatedInfo{ instance, nullptr });
+    auto addInstance = viewPtr->AddInstances(instances);
+    ASSERT_AWAIT_READY(addInstance);
+    ASSERT_TRUE(addInstance.Get().IsOk());
+
+    auto updateUnit = std::make_shared<ResourceUnit>(firstUnit);
+    updateUnit->mutable_capacity()->mutable_resources()->erase(DEFAULT_GPU_TYPE);
+    updateUnit->mutable_allocatable()->mutable_resources()->erase(DEFAULT_GPU_TYPE);
+    auto update = viewPtr->UpdateResourceUnit(updateUnit, UpdateType::UPDATE_DYNAMIC);
+    ASSERT_AWAIT_READY(update);
+    ASSERT_TRUE(update.Get().IsOk());
+
+    auto firstPublished = viewPtr->GetResourceUnit(firstUnit.id());
+    ASSERT_AWAIT_READY(firstPublished);
+    ASSERT_TRUE(firstPublished.Get().IsSome());
+    EXPECT_FALSE(firstPublished.Get().Get().capacity().resources().contains(DEFAULT_GPU_TYPE));
+    EXPECT_FALSE(firstPublished.Get().Get().allocatable().resources().contains(DEFAULT_GPU_TYPE));
+    EXPECT_TRUE(firstPublished.Get().Get().instances().contains(instance.instanceid()));
+    EXPECT_DOUBLE_EQ(
+        firstPublished.Get().Get().allocatable().resources().at(RESOURCE_CPU_NAME).scalar().value(),
+        firstUnit.allocatable().resources().at(RESOURCE_CPU_NAME).scalar().value()
+            - instance.resources().resources().at(RESOURCE_CPU_NAME).scalar().value());
+
+    auto secondPublished = viewPtr->GetResourceUnit(secondUnit.id());
+    ASSERT_AWAIT_READY(secondPublished);
+    ASSERT_TRUE(secondPublished.Get().IsSome());
+    EXPECT_TRUE(secondPublished.Get().Get().capacity().resources().contains(DEFAULT_GPU_TYPE));
+    EXPECT_TRUE(secondPublished.Get().Get().allocatable().resources().contains(DEFAULT_GPU_TYPE));
+
+    auto view = viewPtr->GetResourceView();
+    ASSERT_AWAIT_READY(view);
+    ASSERT_TRUE(view.Get()->capacity().resources().contains(DEFAULT_GPU_TYPE));
+    ASSERT_TRUE(view.Get()->allocatable().resources().contains(DEFAULT_GPU_TYPE));
+    const auto &capacityGpu =
+        view.Get()->capacity().resources().at(DEFAULT_GPU_TYPE).vectors().values().at(
+            HETEROGENEOUS_CARDNUM_KEY);
+    const auto &allocatableGpu =
+        view.Get()->allocatable().resources().at(DEFAULT_GPU_TYPE).vectors().values().at(
+            HETEROGENEOUS_CARDNUM_KEY);
+    EXPECT_EQ(capacityGpu.vectors_size(), 1);
+    EXPECT_EQ(allocatableGpu.vectors_size(), 1);
+    ASSERT_EQ(capacityGpu.vectors().begin()->second.values_size(), 1);
+    ASSERT_EQ(allocatableGpu.vectors().begin()->second.values_size(), 1);
+    EXPECT_EQ(capacityGpu.vectors().begin()->second.values(0), 1);
+    EXPECT_EQ(allocatableGpu.vectors().begin()->second.values(0), 1);
+    EXPECT_TRUE(view.Get()->instances().contains(instance.instanceid()));
+}
+
 TEST_F(ResourceViewTest, ResourceUnitWithInstances)
 {
     auto viewPtr = resource_view::ResourceView::CreateResourceView(LOCAL_RESOUCE_VIEW_ID, CHILD_PARAM);

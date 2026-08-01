@@ -226,6 +226,17 @@ TEST_F(FunctionAgentUtilsTest, SetRuntimeConfigSuccess)
     (void)litebus::os::Rmdir(resourcePath);
 }
 
+TEST_F(FunctionAgentUtilsTest, SetRuntimeConfigCarriesGpuDeviceIds)
+{
+    auto request = std::make_shared<messages::DeployInstanceRequest>();
+    (*request->mutable_createoptions())["func-GPU-DEVICE-IDS"] = "0,2";
+
+    auto runtimeConfig = function_agent::SetRuntimeConfig(request);
+
+    ASSERT_EQ(runtimeConfig.userenvs().count("func-GPU-DEVICE-IDS"), size_t{1});
+    EXPECT_EQ(runtimeConfig.userenvs().at("func-GPU-DEVICE-IDS"), "0,2");
+}
+
 TEST_F(FunctionAgentUtilsTest, SetRuntimeConfigWithMountConfig)
 {
     auto deployInstanceRequest = std::make_shared<functionsystem::messages::DeployInstanceRequest>();

@@ -15,14 +15,128 @@
  */
 #include "external_system_collector.h"
 
+#include <algorithm>
+#include <cctype>
+#include <limits>
+
 #include "curl/curl.h"
 #include "nlohmann/json.hpp"
 
+#include "common/resource_view/resource_type.h"
 #include "utils/os_utils.hpp"
 namespace functionsystem::runtime_manager {
 const uint32_t CPU_SCALE = 1000;
 const uint32_t MEMORY_SCALE = 1024 * 1024;
 constexpr long HTTP_OK_STATUS = 200;
+constexpr int64_t MAX_EXACT_DOUBLE_INTEGER = 9007199254740992;
+
+namespace {
+std::string ToLower(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return value;
+}
+
+litebus::Option<DevClusterMetrics> ParseExternalGpuDevice(const nlohmann::json &xpu)
+{
+    if (!xpu.contains("product_model") || !xpu["product_model"].is_string() ||
+        !xpu.contains("device_ids") || !xpu["device_ids"].is_array()) {
+        return {};
+    }
+
+    auto model = ToLower(xpu["product_model"].get<std::string>());
+    if (model.empty()) {
+        return {};
+    }
+
+    std::vector<int> deviceIDs;
+    for (const auto &id : xpu["device_ids"]) {
+        if (!id.is_number_integer()) {
+            return {};
+        }
+        const auto deviceID = id.get<int64_t>();
+        if (deviceID < 0 || deviceID > std::numeric_limits<int>::max()) {
+            return {};
+        }
+        deviceIDs.emplace_back(static_cast<int>(deviceID));
+    }
+    if (deviceIDs.empty()) {
+        return {};
+    }
+
+    // Preserve reported order because realIDs-to-cardIDs mapping is positional.
+    DevClusterMetrics device;
+    device.count = deviceIDs.size();
+    device.strInfo[dev_metrics_type::PRODUCT_MODEL_KEY] = model;
+    device.intsInfo[resource_view::HETEROGENEOUS_CARDNUM_KEY] = std::vector<int>(deviceIDs.size(), 1);
+    device.intsInfo[resource_view::IDS_KEY] = std::move(deviceIDs);
+    return device;
+}
+}  // namespace
+
+litebus::Option<Metric> ParseExternalGpuMetric(const std::string &response)
+{
+    try {
+        auto root = nlohmann::json::parse(response);
+        if (!root.contains("xpu") || !root["xpu"].is_array()) {
+            return {};
+        }
+        if (root["xpu"].empty()) {
+            return Metric{};
+        }
+
+        litebus::Option<Metric> gpuMetric;
+        size_t gpuEntryCount = 0;
+        for (const auto &xpu : root["xpu"]) {
+            if (!xpu.is_object() || !xpu.contains("type") || !xpu["type"].is_string()) {
+                return {};
+            }
+
+            auto type = ToLower(xpu["type"].get<std::string>());
+            if (type != "gpu") {
+                continue;
+            }
+            ++gpuEntryCount;
+            if (gpuEntryCount > 1) {
+                return {};
+            }
+            auto device = ParseExternalGpuDevice(xpu);
+            if (device.IsNone()) {
+                return {};
+            }
+
+            auto parsedDevice = device.Get();
+            Metric metric;
+            metric.value = static_cast<double>(parsedDevice.count);
+            metric.devClusterMetrics = std::move(parsedDevice);
+            gpuMetric = std::move(metric);
+        }
+        return gpuEntryCount == 1 ? gpuMetric : litebus::Option<Metric>{};
+    } catch (const std::exception &e) {
+        YRLOG_DEBUG_COUNT_60("Failed to parse external XPU response: {}, error: {}", response, e.what());
+    }
+    return {};
+}
+
+litebus::Option<Metric> ParseExternalStorageMetric(const std::string &response)
+{
+    try {
+        const auto root = nlohmann::json::parse(response);
+        if (!root.contains(metrics_type::STORAGE) || !root[metrics_type::STORAGE].is_number_integer()) {
+            return {};
+        }
+        const auto storage = root[metrics_type::STORAGE].get<int64_t>();
+        if (storage < 0 || storage > MAX_EXACT_DOUBLE_INTEGER) {
+            return {};
+        }
+        return Metric{ { static_cast<double>(storage) }, {}, {}, {} };
+    } catch (const std::exception &e) {
+        YRLOG_DEBUG_COUNT_60("Failed to parse external storage response: {}, error: {}", response, e.what());
+    }
+    return {};
+}
+
 size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp)
 {
     size_t totalSize = size * nmemb;
@@ -149,5 +263,64 @@ Metric ExternalSystemMemoryCollector::GetLimit() const
         return this->GetLimit();
     }
     return *previous_;
+}
+
+ExternalSystemGPUCollector::ExternalSystemGPUCollector(const litebus::ActorReference &curlActorRef)
+    : ExternalSystemCollector(0, metrics_type::GPU, curlActorRef), previous_(std::make_shared<Metric>())
+{
+    uuid_ = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
+}
+
+litebus::Future<Metric> ExternalSystemGPUCollector::GetUsage() const
+{
+    return CollectFromExternal().Then(
+        [previous(previous_), uuid(uuid_)](const std::string &response) -> litebus::Future<Metric> {
+            YRLOG_DEBUG_COUNT_60("Received GPU response: {}", response);
+            if (response.empty()) {
+                return previous != nullptr ? *previous : Metric{};
+            }
+            auto parsed = ParseExternalGpuMetric(response);
+            if (parsed.IsNone()) {
+                return previous != nullptr ? *previous : Metric{};
+            }
+            auto metric = parsed.Get();
+            if (metric.devClusterMetrics.IsSome()) {
+                auto device = metric.devClusterMetrics.Get();
+                device.uuid = uuid;
+                metric.devClusterMetrics = std::move(device);
+            }
+            *previous = metric;
+            return metric;
+        });
+}
+
+Metric ExternalSystemGPUCollector::GetLimit() const
+{
+    return previous_ != nullptr ? *previous_ : Metric{};
+}
+
+ExternalSystemStorageCollector::ExternalSystemStorageCollector(const litebus::ActorReference &curlActorRef)
+    : ExternalSystemCollector(0, metrics_type::STORAGE, curlActorRef), previous_(std::make_shared<Metric>())
+{
+}
+
+litebus::Future<Metric> ExternalSystemStorageCollector::GetUsage() const
+{
+    return CollectFromExternal().Then(
+        [previous(previous_)](const std::string &response) -> litebus::Future<Metric> {
+            YRLOG_DEBUG_COUNT_60("Received storage response: {}", response);
+            if (!response.empty()) {
+                auto parsed = ParseExternalStorageMetric(response);
+                if (parsed.IsSome()) {
+                    *previous = parsed.Get();
+                }
+            }
+            return Metric{ { 0.0 }, {}, {}, {} };
+        });
+}
+
+Metric ExternalSystemStorageCollector::GetLimit() const
+{
+    return previous_ != nullptr ? *previous_ : Metric{};
 }
 }  // namespace functionsystem::runtime_manager

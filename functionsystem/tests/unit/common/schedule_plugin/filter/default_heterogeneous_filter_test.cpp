@@ -153,6 +153,80 @@ TEST(DefaultHeterogeneousFilterTest, FracCardNumberTest) {
 
 }
 
+TEST(DefaultHeterogeneousFilterTest, FiltersGpuCountVector)
+{
+    DefaultHeterogeneousFilter filter;
+    auto preAllocated = std::make_shared<PreAllocatedContext>();
+    auto unit = view_utils::Get1DResourceUnitWithGpuCount({ 1, 0, 1, 1 });
+
+    auto twoCards = view_utils::Get1DInstanceWithNpuResource(2, "GPU/A10");
+    EXPECT_EQ(filter.Filter(preAllocated, twoCards, unit).status, StatusCode::SUCCESS);
+
+    auto fourCards = view_utils::Get1DInstanceWithNpuResource(4, "GPU/A10");
+    EXPECT_EQ(filter.Filter(preAllocated, fourCards, unit).status, HETEROGENEOUS_SCHEDULE_FAILED);
+}
+
+TEST(DefaultHeterogeneousFilterTest, RejectsFractionalGpuCountVectorRequest)
+{
+    DefaultHeterogeneousFilter filter;
+    auto preAllocated = std::make_shared<PreAllocatedContext>();
+    auto unit = view_utils::Get1DResourceUnitWithGpuCount({ 1, 1 });
+    auto instance = view_utils::Get1DInstanceWithNpuResource(0.5, "GPU/A10");
+
+    EXPECT_EQ(filter.Filter(preAllocated, instance, unit).status, StatusCode::PARAMETER_ERROR);
+}
+
+TEST(DefaultHeterogeneousFilterTest, PrefersHbmWhenCountVectorAlsoExists)
+{
+    DefaultHeterogeneousFilter filter;
+    auto preAllocated = std::make_shared<PreAllocatedContext>();
+    auto unit = view_utils::Get1DResourceUnitWithNpu("NPU/Ascend910B");
+    const auto &hbmVectors = unit.capacity()
+                                 .resources()
+                                 .at("NPU/Ascend910B")
+                                 .vectors()
+                                 .values()
+                                 .at(resource_view::HETEROGENEOUS_MEM_KEY)
+                                 .vectors();
+    const auto &uuid = hbmVectors.begin()->first;
+    auto addCountVector = [&uuid](resources::Resource *resource) {
+        auto &count = (*resource->mutable_vectors()->mutable_values())
+                          [resource_view::HETEROGENEOUS_CARDNUM_KEY];
+        auto &values = (*count.mutable_vectors())[uuid];
+        for (int i = 0; i < 8; ++i) {
+            values.mutable_values()->Add(1);
+        }
+    };
+    addCountVector(&unit.mutable_capacity()->mutable_resources()->at("NPU/Ascend910B"));
+    addCountVector(&unit.mutable_allocatable()->mutable_resources()->at("NPU/Ascend910B"));
+    auto instance = view_utils::Get1DInstanceWithNpuResource(0.5, "NPU/Ascend910B");
+
+    EXPECT_EQ(filter.Filter(preAllocated, instance, unit).status, StatusCode::SUCCESS);
+}
+
+TEST(DefaultHeterogeneousFilterTest, MatchesGpuCountVectorByRegex)
+{
+    DefaultHeterogeneousFilter filter;
+    auto preAllocated = std::make_shared<PreAllocatedContext>();
+    auto unit = view_utils::Get1DResourceUnitWithGpuCount({ 0, 1 }, "GPU/H100-80GB-HBM3");
+    auto instance = view_utils::Get1DInstanceWithNpuResource(1, "GPU/.+");
+
+    EXPECT_EQ(filter.Filter(preAllocated, instance, unit).status, StatusCode::SUCCESS);
+}
+
+TEST(DefaultHeterogeneousFilterTest, DoesNotCombineGpuModelsForCountRequest)
+{
+    DefaultHeterogeneousFilter filter;
+    auto preAllocated = std::make_shared<PreAllocatedContext>();
+    auto unit = view_utils::Get1DResourceUnitWithGpuCount({ 1 }, "GPU/A10");
+    auto h100 = view_utils::GetGpuCountResource({ 1 }, "GPU/H100");
+    (*unit.mutable_capacity()->mutable_resources())["GPU/H100"] = h100;
+    (*unit.mutable_allocatable()->mutable_resources())["GPU/H100"] = h100;
+    auto instance = view_utils::Get1DInstanceWithNpuResource(2, "GPU/.+");
+
+    EXPECT_EQ(filter.Filter(preAllocated, instance, unit).status, HETEROGENEOUS_SCHEDULE_FAILED);
+}
+
 // Regex scenario
 TEST(DefaultHeterogeneousFilterTest, ValidHetegroRegeexRequest) {
     DefaultHeterogeneousFilter filter;

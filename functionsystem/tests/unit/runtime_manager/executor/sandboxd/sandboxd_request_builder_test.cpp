@@ -150,4 +150,55 @@ TEST_F(SandboxdRequestBuilderTest, FlatRequestHasLogPaths)
     EXPECT_FALSE(startReq->stderr().empty());
 }
 
+TEST_F(SandboxdRequestBuilderTest, FlatRequestCarriesPhysicalGpuAllocation)
+{
+    auto params = MakeMinimalParams();
+    params.envs.userEnvs["GPU-DEVICE-IDS"] = "3,8";
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk());
+    ASSERT_NE(startReq, nullptr);
+    ASSERT_EQ(startReq->xpu_allocations_size(), 1);
+    const auto &allocation = startReq->xpu_allocations(0);
+    EXPECT_EQ(allocation.type(), "gpu");
+    ASSERT_EQ(allocation.device_ids_size(), 2);
+    EXPECT_EQ(allocation.device_ids(0), 3U);
+    EXPECT_EQ(allocation.device_ids(1), 8U);
+}
+
+TEST_F(SandboxdRequestBuilderTest, FlatRequestCarriesWritableLayerSize)
+{
+    auto params = MakeMinimalParams();
+    auto *storage = &(*params.request->mutable_runtimeinstanceinfo()
+                           ->mutable_runtimeconfig()
+                           ->mutable_resources()
+                           ->mutable_resources())["storage"];
+    storage->set_type(resources::Value_Type_SCALAR);
+    storage->mutable_scalar()->set_value(104857600);
+    storage->mutable_scalar()->set_limit(104857600);
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk());
+    ASSERT_NE(startReq, nullptr);
+    EXPECT_EQ(startReq->rootfs().writable_layer_size_bytes(), 104857600U);
+}
+
+TEST_F(SandboxdRequestBuilderTest, InvalidWritableLayerSizeFailsBuild)
+{
+    auto params = MakeMinimalParams();
+    auto *storage = &(*params.request->mutable_runtimeinstanceinfo()
+                           ->mutable_runtimeconfig()
+                           ->mutable_resources()
+                           ->mutable_resources())["storage"];
+    storage->set_type(resources::Value_Type_SCALAR);
+    storage->mutable_scalar()->set_value(1.5);
+
+    auto [status, startReq] = builder_->Build(params);
+
+    EXPECT_FALSE(status.IsOk());
+    EXPECT_EQ(startReq, nullptr);
+}
+
 }  // namespace functionsystem::test

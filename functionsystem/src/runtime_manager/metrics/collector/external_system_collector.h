@@ -25,6 +25,10 @@
 #include "base_metrics_collector.h"
 
 namespace functionsystem::runtime_manager {
+// A valid empty inventory returns an empty Metric; malformed or unsupported input returns None.
+litebus::Option<Metric> ParseExternalGpuMetric(const std::string &response);
+litebus::Option<Metric> ParseExternalStorageMetric(const std::string &response);
+
 class CurlHelper : public litebus::ActorBase {
 public:
     static std::shared_ptr<CurlHelper> NewCurlHelper()
@@ -107,6 +111,33 @@ public:
     ~ExternalSystemMemoryCollector() override = default;
     litebus::Future<Metric> GetUsage() const override;
     Metric GetLimit() const override;
+private:
+    std::shared_ptr<Metric> previous_;
+};
+
+class ExternalSystemGPUCollector : public ExternalSystemCollector {
+public:
+    ExternalSystemGPUCollector() = default;
+    explicit ExternalSystemGPUCollector(const litebus::ActorReference &curlActorRef);
+    ~ExternalSystemGPUCollector() override = default;
+
+    litebus::Future<Metric> GetUsage() const override;
+    Metric GetLimit() const override;
+
+private:
+    std::string uuid_;
+    std::shared_ptr<Metric> previous_;
+};
+
+class ExternalSystemStorageCollector : public ExternalSystemCollector {
+public:
+    ExternalSystemStorageCollector() = default;
+    explicit ExternalSystemStorageCollector(const litebus::ActorReference &curlActorRef);
+    ~ExternalSystemStorageCollector() override = default;
+
+    litebus::Future<Metric> GetUsage() const override;
+    Metric GetLimit() const override;
+
 private:
     std::shared_ptr<Metric> previous_;
 };

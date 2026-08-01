@@ -114,6 +114,8 @@ void MetricsActor::AddCpuMemoryAndLabelCollectors(const Flags &flags)
 {
     std::shared_ptr<BaseMetricsCollector> systemCPUCollector;
     std::shared_ptr<BaseMetricsCollector> systemMemoryCollector;
+    std::shared_ptr<BaseMetricsCollector> systemGPUCollector;
+    std::shared_ptr<BaseMetricsCollector> systemStorageCollector;
     if (metricsConfig_.metricsCollectorType == "proc") {
         auto callback = [func = std::bind(&MetricsActor::GenAllMetricsWithoutSystem,
                                           this)]() -> std::vector<litebus::Future<Metrics>> { return func(); };
@@ -128,6 +130,8 @@ void MetricsActor::AddCpuMemoryAndLabelCollectors(const Flags &flags)
         systemCPUCollector = std::make_shared<ExternalSystemCPUCollector>(metricsConfig_.procMetricsCPU, curlActorRef);
         systemMemoryCollector = std::make_shared<ExternalSystemMemoryCollector>(
             metricsConfig_.procMetricsMemory, curlActorRef);
+        systemGPUCollector = std::make_shared<ExternalSystemGPUCollector>(curlActorRef);
+        systemStorageCollector = std::make_shared<ExternalSystemStorageCollector>(curlActorRef);
     } else {
         systemCPUCollector = std::make_shared<SystemCPUCollector>(procFSTools_);
         systemMemoryCollector = std::make_shared<SystemMemoryCollector>(procFSTools_);
@@ -135,12 +139,18 @@ void MetricsActor::AddCpuMemoryAndLabelCollectors(const Flags &flags)
     auto resourceLabelCollector = std::make_shared<ResourceLabelsCollector>(flags.GetResourceLabelPath());
     filter_[systemCPUCollector->GenFilter()] = systemCPUCollector;
     filter_[systemMemoryCollector->GenFilter()] = systemMemoryCollector;
+    if (systemGPUCollector != nullptr) {
+        filter_[systemGPUCollector->GenFilter()] = systemGPUCollector;
+    }
+    if (systemStorageCollector != nullptr) {
+        filter_[systemStorageCollector->GenFilter()] = systemStorageCollector;
+    }
     filter_[resourceLabelCollector->GenFilter()] = resourceLabelCollector;
 }
 
 void MetricsActor::AddGpuNumaNpuCollectors(const Flags &flags)
 {
-    if (flags.GetGpuCollectionEnable()) {
+    if (metricsConfig_.metricsCollectorType != "external" && flags.GetGpuCollectionEnable()) {
         auto params = std::make_shared<XPUCollectorParams>();
         params->ldLibraryPath = metricsConfig_.heteroLdLibraryPath;
         params->deviceInfoPath = flags.GetNpuDeviceInfoPath();
