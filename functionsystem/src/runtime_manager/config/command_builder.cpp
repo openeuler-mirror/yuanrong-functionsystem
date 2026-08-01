@@ -47,6 +47,8 @@ const std::string PYTHON_PATH = "PYTHONPATH";
 const std::string WHITE_LIST_ENV_PREFIX = "YR_";
 const std::string ASCEND_RT_VISIBLE_DEVICES = "ASCEND_RT_VISIBLE_DEVICES";
 const std::string YR_NOSET_ASCEND_RT_VISIBLE_DEVICES = "YR_NOSET_ASCEND_RT_VISIBLE_DEVICES";
+const std::string CUDA_VISIBLE_DEVICES = "CUDA_VISIBLE_DEVICES";
+const std::string YR_NOSET_CUDA_VISIBLE_DEVICES = "YR_NOSET_CUDA_VISIBLE_DEVICES";
 // Environment keys to exclude from being passed to runtime processes
 const std::vector<std::string> EXCLUDE_ENV_KEYS = {UNZIPPED_WORKING_DIR};
 
@@ -301,6 +303,11 @@ void CommandBuilder::InheritEnv(std::map<std::string, std::string> &envs) const
     // If YR_NOSET_ASCEND_RT_VISIBLE_DEVICES is set, suppress GPU visibility env
     if (envs.count(YR_NOSET_ASCEND_RT_VISIBLE_DEVICES)) {
         envs.erase(ASCEND_RT_VISIBLE_DEVICES);
+    }
+    // Keep container-backed executors consistent with RuntimeExecutor: when
+    // the provider owns GPU device visibility, do not forward YR's logical IDs.
+    if (envs.count(YR_NOSET_CUDA_VISIBLE_DEVICES)) {
+        envs.erase(CUDA_VISIBLE_DEVICES);
     }
 }
 
