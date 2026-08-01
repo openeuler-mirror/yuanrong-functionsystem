@@ -35,10 +35,31 @@ else
   ln -sf $INSTALLED_RUNTIME/service $RUNTIME_HOME_DIR/service
 fi
 
-if [ -z "$FUNCTION_META_PATH" ] && [ -d "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas" ]; then
-  PATTERN_FAAS_HOME_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas")
+PATTERN_FAAS_HOME_DIR="${PATTERN_FAAS_HOME_DIR:-}"
+if [ -z "${PATTERN_FAAS_HOME_DIR}" ]; then
+  if [ -d "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas" ]; then
+    PATTERN_FAAS_HOME_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../pattern/pattern_faas")
+  elif [ -d "${FUNCTION_SYSTEM_DIR}/../faas" ]; then
+    PATTERN_FAAS_HOME_DIR=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../faas")
+  fi
+fi
+
+if [ -z "$FUNCTION_META_PATH" ] && [ -n "${PATTERN_FAAS_HOME_DIR}" ]; then
   FUNCTION_META_PATH="$PATTERN_FAAS_HOME_DIR/executor-meta"
 fi
+
+function resolve_faas_config_path() {
+  local config_name="$1"
+  local functionsystem_config="${FUNCTION_SYSTEM_DIR}/config/${config_name}"
+  local faas_config="${PATTERN_FAAS_HOME_DIR}/${config_name}"
+  if [ -f "${functionsystem_config}" ]; then
+    echo "${functionsystem_config}"
+  elif [ -n "${PATTERN_FAAS_HOME_DIR}" ] && [ -f "${faas_config}" ]; then
+    echo "${faas_config}"
+  else
+    echo "${functionsystem_config}"
+  fi
+}
 
 function get_runtime_checkpoint_dir() {
   local checkpoint_dir
@@ -344,7 +365,7 @@ function install_faas_frontend() {
   if [ -z "${meta_service_address}" ]; then
     meta_service_address="${IP_ADDRESS}:${META_SERVICE_PORT}"
   fi
-  init_frontend_config=${FUNCTION_SYSTEM_DIR}/config/init_frontend_args.json
+  init_frontend_config=$(resolve_faas_config_path "init_frontend_args.json")
   install_init_frontend_config=${config_install_dir}/init_frontend_args_temp.json
   cp ${init_frontend_config} ${install_init_frontend_config}
   sed -i "s/{etcdAddr}/$(echo ${ETCD_CLUSTER_ADDRESS} | sed 's/,/","/g')/g" ${install_init_frontend_config}
@@ -478,7 +499,7 @@ function install_faas_frontend() {
 
 function install_function_scheduler() {
   log_info "start scheduler..."
-  init_scheduler_config=${FUNCTION_SYSTEM_DIR}/config/init_scheduler_args.json
+  init_scheduler_config=$(resolve_faas_config_path "init_scheduler_args.json")
   install_init_scheduler_config=${config_install_dir}/init_scheduler_args_temp.json
   cp ${init_scheduler_config} ${install_init_scheduler_config}
   local lite_enabled_tenants

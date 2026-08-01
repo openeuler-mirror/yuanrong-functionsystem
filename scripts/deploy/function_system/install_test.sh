@@ -56,6 +56,18 @@ LITE_SCHEDULER_ACQUIRE_WAIT_TIMEOUT_MS=3000
 scheduler_body=$(sed -n \
   '/^function install_function_scheduler()/,/^function install_function_agent_and_runtime_manager_in_the_same_process()/p' \
   "${install_script}")
+frontend_body=$(sed -n \
+  '/^function install_faas_frontend()/,/^function install_function_scheduler()/p' \
+  "${install_script}")
+
+if [[ "${frontend_body}" != *'init_frontend_config=$(resolve_faas_config_path "init_frontend_args.json")'* ]]; then
+  echo "FaaS frontend must resolve configs from full and core wheel layouts" >&2
+  exit 1
+fi
+if [[ "${scheduler_body}" != *'init_scheduler_config=$(resolve_faas_config_path "init_scheduler_args.json")'* ]]; then
+  echo "function scheduler must resolve configs from full and core wheel layouts" >&2
+  exit 1
+fi
 
 if [[ "${scheduler_body}" == *"render_lite_scheduler_config"* ]]; then
   echo "LiteScheduler config must follow the existing inline scheduler rendering pattern" >&2
@@ -96,3 +108,80 @@ assert lite == {
     "acquireWaitTimeoutMs": 3000,
 }, lite
 PY
+
+function readlink() {
+  if [ "${1:-}" = "-m" ]; then
+    shift
+    python3 - "$1" <<'PY'
+import os
+import sys
+
+print(os.path.realpath(sys.argv[1]))
+PY
+    return
+  fi
+  command readlink "$@"
+}
+
+function assert_layout_resolution() (
+  local layout_root="$1"
+  local expected_faas_root="$2"
+  local expected_config_root="$3"
+
+  BASE_DIR="${layout_root}/yr/deploy/process"
+  RUNTIME_HOME_DIR=""
+  FUNCTION_META_PATH=""
+  # shellcheck source=/dev/null
+  . "${install_script}"
+
+  if [ "${PATTERN_FAAS_HOME_DIR}" != "${expected_faas_root}" ]; then
+    echo "expected FaaS root ${expected_faas_root}, got ${PATTERN_FAAS_HOME_DIR}" >&2
+    exit 1
+  fi
+  if [ "${FUNCTION_META_PATH}" != "${expected_faas_root}/executor-meta" ]; then
+    echo "unexpected function meta path: ${FUNCTION_META_PATH}" >&2
+    exit 1
+  fi
+
+  local frontend_config
+  local scheduler_config_path
+  frontend_config=$(resolve_faas_config_path "init_frontend_args.json")
+  scheduler_config_path=$(resolve_faas_config_path "init_scheduler_args.json")
+  if [ "${frontend_config}" != "${expected_config_root}/init_frontend_args.json" ]; then
+    echo "unexpected frontend config path: ${frontend_config}" >&2
+    exit 1
+  fi
+  if [ "${scheduler_config_path}" != "${expected_config_root}/init_scheduler_args.json" ]; then
+    echo "unexpected scheduler config path: ${scheduler_config_path}" >&2
+    exit 1
+  fi
+)
+
+full_root="${test_tmp_dir}/full"
+full_faas_root="${full_root}/yr/pattern/pattern_faas"
+full_config_root="${full_root}/yr/functionsystem/config"
+mkdir -p \
+  "${full_root}/yr/deploy/process" \
+  "${full_root}/yr/faas" \
+  "${full_faas_root}/executor-meta" \
+  "${full_config_root}"
+touch \
+  "${full_config_root}/init_frontend_args.json" \
+  "${full_config_root}/init_scheduler_args.json"
+assert_layout_resolution "${full_root}" "${full_faas_root}" "${full_config_root}"
+
+core_root="${test_tmp_dir}/core"
+core_faas_root="${core_root}/yr/faas"
+mkdir -p \
+  "${core_root}/yr/deploy/process" \
+  "${core_root}/yr/functionsystem/config" \
+  "${core_faas_root}/executor-meta"
+touch \
+  "${core_faas_root}/init_frontend_args.json" \
+  "${core_faas_root}/init_scheduler_args.json"
+assert_layout_resolution "${core_root}" "${core_faas_root}" "${core_faas_root}"
+
+if [ -e "${core_root}/yr/pattern" ]; then
+  echo "core wheel compatibility must not create a legacy layout" >&2
+  exit 1
+fi
