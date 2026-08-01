@@ -24,6 +24,7 @@
 #include "common/proto/pb/message_pb.h"
 #include "runtime_manager/config/build.h"
 #include "runtime_manager/config/command_builder.h"
+#include "utils/os_utils.hpp"
 
 using namespace functionsystem::runtime_manager;
 
@@ -116,6 +117,21 @@ TEST_F(SandboxdRequestBuilderTest, FlatRequestEnvsCarriesLanguage)
     ASSERT_TRUE(status.IsOk());
     ASSERT_NE(startReq, nullptr);
     EXPECT_EQ(startReq->envs().at("YR_LANGUAGE"), "python3.9");
+}
+
+TEST_F(SandboxdRequestBuilderTest, FlatRequestHonorsNoSetCudaVisibleDevices)
+{
+    litebus::os::SetEnv("YR_NOSET_CUDA_VISIBLE_DEVICES", "1");
+    auto params = MakeMinimalParams();
+    params.envs.userEnvs["CUDA_VISIBLE_DEVICES"] = "0";
+
+    auto [status, startReq] = builder_->Build(params);
+    litebus::os::UnSetEnv("YR_NOSET_CUDA_VISIBLE_DEVICES");
+
+    ASSERT_TRUE(status.IsOk());
+    ASSERT_NE(startReq, nullptr);
+    EXPECT_EQ(startReq->envs().at("YR_NOSET_CUDA_VISIBLE_DEVICES"), "1");
+    EXPECT_EQ(startReq->envs().count("CUDA_VISIBLE_DEVICES"), 0);
 }
 
 TEST_F(SandboxdRequestBuilderTest, SelfContainedBootstrapUsesOnlyBootstrapCommand)
