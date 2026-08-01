@@ -201,7 +201,7 @@ function install_function_proxy() {
     --traefik_servers_transport="${TRAEFIK_SERVERS_TRANSPORT}" \
     --fc_agent_mgr_retry_times="${FC_AGENT_MGR_RETRY_TIMES}" \
     --fc_agent_mgr_retry_cycle="${FC_AGENT_MGR_RETRY_CYCLE}" \
-    --enable_tcp_tunnel="${SSH_ENABLE:-false}" \
+    --enable_tcp_tunnel="$([ "X${SSH_ENABLE}" = "Xtrue" ] || [ "X${ENABLE_TCP_TUNNEL}" = "Xtrue" ] && echo true || echo false)" \
     --tcp_tunnel_port="${TCP_TUNNEL_PORT:-22775}" \
     --tcp_tunnel_max_connections="${TCP_TUNNEL_MAX_CONNECTIONS:-1024}" \
     --enable_frontend_proxy_service="${enable_frontend_proxy_service}" \
