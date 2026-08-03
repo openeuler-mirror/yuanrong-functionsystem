@@ -283,6 +283,7 @@ inline std::shared_ptr<messages::DeployInstanceResponse> BuildDeployInstanceResp
     deployInstanceResponse->set_pid(startInstanceResponse.startruntimeinstanceresponse().pid());
     deployInstanceResponse->set_containerid(startInstanceResponse.startruntimeinstanceresponse().containerid());
     deployInstanceResponse->set_executortype(startInstanceResponse.startruntimeinstanceresponse().executortype());
+    deployInstanceResponse->set_containerip(startInstanceResponse.startruntimeinstanceresponse().containerip());
 
     if (!deployInstanceResponse->runtimeid().empty()) {
         auto now = std::chrono::system_clock::now().time_since_epoch();

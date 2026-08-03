@@ -2707,6 +2707,7 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstance(const DeployInstanceRe
     request->mutable_instance()->set_executortype(response.executortype());
     (*request->mutable_instance()->mutable_extensions())[PID] = std::to_string(response.pid());
     request->mutable_instance()->set_containerid(response.containerid());
+    request->mutable_instance()->set_containerip(response.containerip());
     if (!response.portmappings().empty()) {
         (*request->mutable_instance()->mutable_extensions())[PORT_FORWARD_KEY] = response.portmappings();
     }

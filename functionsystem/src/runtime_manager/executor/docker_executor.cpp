@@ -22,8 +22,10 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cctype>
 #include <csignal>
 #include <cstring>
+#include <limits>
 #include <sstream>
 #include <utility>
 
@@ -57,6 +59,12 @@ constexpr int HTTP_STATUS_CLIENT_ERROR = 400;  // >= 400 is an error response
 
 // HTTP status code string length ("200".."599")
 constexpr size_t HTTP_STATUS_CODE_LEN = 3;
+
+// CRLF ("\r\n") length and hex base, used when decoding chunked transfer bodies.
+constexpr size_t CRLF_LEN = 2;
+constexpr int HEX_BASE = 16;
+// HTTP header/body separator ("\r\n\r\n") length: two CRLFs.
+constexpr size_t HEADER_BODY_SEPARATOR_LEN = 2 * CRLF_LEN;
 
 // Resource conversion factors
 constexpr int CPU_SHARES_PER_CORE = 1024;       // Docker CPUShares: 1024 = 1 core
@@ -160,35 +168,45 @@ std::string DockerExecutor::BuildDockerHttpRequest(const std::string &method, co
     return oss.str();
 }
 
+namespace {
+struct RawHttpResponse {
+    bool ok{false};
+    std::string reason;
+    std::string headers;
+    std::string body;
+    int statusCode{0};
+};
+RawHttpResponse SplitHttpResponse(const std::string &response);
+bool IsChunked(const std::string &headers);
+std::string DecodeChunkedBody(const std::string &chunked);
+} // namespace
+
 void DockerExecutor::ParseDockerResponse(litebus::Promise<nlohmann::json> promise, std::string response)
 {
-    auto fail = [&promise](const char *reason) {
-        YRLOG_ERROR("{}", reason);
+    auto parsed = SplitHttpResponse(response);
+    if (!parsed.ok) {
+        YRLOG_ERROR("{}", parsed.reason);
         nlohmann::json errResp = nlohmann::json::object();
         errResp["__http_status"] = 0;
         errResp["__parse_failed"] = true;
         promise.SetValue(errResp);
-    };
-
-    size_t headerEnd = response.find("\r\n\r\n");
-    if (headerEnd == std::string::npos) {
-        fail("invalid HTTP response (no header/body separator)");
         return;
     }
-    std::string headers = response.substr(0, headerEnd);
-    std::string respBody = response.substr(headerEnd + 4);
+    int statusCode = parsed.statusCode;
+    std::string respBody = parsed.body;
 
-    size_t statusPos = headers.find(" ");
-    if (statusPos == std::string::npos) {
-        fail("invalid HTTP response (no status line)");
-        return;
-    }
-    int statusCode = 0;
-    try {
-        statusCode = std::stoi(headers.substr(statusPos + 1, HTTP_STATUS_CODE_LEN));
-    } catch (...) {
-        fail("failed to parse HTTP status code");
-        return;
+    // The daemon chunk-encodes large bodies; decode to JSON first.
+    if (IsChunked(parsed.headers)) {
+        std::string decoded = DecodeChunkedBody(respBody);
+        if (decoded.empty()) {
+            YRLOG_WARN("parse docker response: chunked decode failed (status={}), body dropped", statusCode);
+            nlohmann::json errResp = nlohmann::json::object();
+            errResp["__http_status"] = statusCode;
+            errResp["__parse_failed"] = true;
+            promise.SetValue(errResp);
+            return;
+        }
+        respBody = decoded;
     }
 
     nlohmann::json resp = nlohmann::json::object();
@@ -210,6 +228,8 @@ void DockerExecutor::ParseDockerResponse(litebus::Promise<nlohmann::json> promis
         } catch (std::exception const &e) {
             YRLOG_WARN("non-JSON Docker response (status={}): {}", statusCode, e.what());
         }
+    } else {
+        YRLOG_WARN("parse docker response: status ok but body empty (only __http_status kept)", statusCode);
     }
     promise.SetValue(resp);
 }
@@ -248,8 +268,8 @@ litebus::Future<nlohmann::json> DockerExecutor::SendRequestToDocker(const std::s
         return result;
     }
     // Receive the full response. The request uses Connection: close, so the daemon closes the
-    // socket when done; reading until EOF handles both Content-Length and chunked/streaming bodies
-    // (e.g. /images/create pull progress) without brittle header parsing.
+    // socket when done; reading until EOF yields the complete raw response (headers + body).
+    // Chunked bodies are decoded from that raw response in ParseDockerResponse.
     std::string response;
     char buf[4096];
     ssize_t received = 0;
@@ -280,6 +300,122 @@ litebus::Future<nlohmann::json> DockerExecutor::SendRequestToDocker(const std::s
 // ---- Image management ----
 
 namespace {
+
+// Split a raw HTTP response into headers/body and parse the status code. ok=false
+// (with reason) on any protocol violation, so the caller marks a parse failure.
+RawHttpResponse SplitHttpResponse(const std::string &response)
+{
+    RawHttpResponse out;
+    size_t headerEnd = response.find("\r\n\r\n");
+    if (headerEnd == std::string::npos) {
+        out.reason = "invalid HTTP response (no header/body separator)";
+        return out;
+    }
+    out.headers = response.substr(0, headerEnd);
+    out.body = response.substr(headerEnd + HEADER_BODY_SEPARATOR_LEN);
+
+    size_t statusPos = out.headers.find(" ");
+    if (statusPos == std::string::npos) {
+        out.reason = "invalid HTTP response (no status line)";
+        return out;
+    }
+    try {
+        out.statusCode = std::stoi(out.headers.substr(statusPos + 1, HTTP_STATUS_CODE_LEN));
+    } catch (...) {
+        out.reason = "failed to parse HTTP status code";
+        return out;
+    }
+    out.ok = true;
+    return out;
+}
+
+// Headers are case-insensitive; lowercase before matching.
+bool IsChunked(const std::string &headers)
+{
+    std::string lower;
+    lower.reserve(headers.size());
+    for (char c : headers) {
+        lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    return lower.find("transfer-encoding: chunked") != std::string::npos;
+}
+
+// Decode a chunked body to the real body. Returns "" (with a WARN) on any protocol
+// violation so the caller treats it as a parse failure rather than a bad-body error.
+std::string DecodeChunkedBody(const std::string &chunked)
+{
+    if (chunked.empty()) {
+        YRLOG_WARN("decode chunked: empty input");
+        return "";
+    }
+    std::string out;
+    size_t pos = 0;
+    bool sawTerminator = false;
+    while (pos < chunked.size()) {
+        size_t lineEnd = chunked.find("\r\n", pos);
+        if (lineEnd == std::string::npos) {
+            YRLOG_WARN("decode chunked: no CRLF after size at pos={}, decoded {} bytes", pos, out.size());
+            return "";
+        }
+        std::string sizeField = chunked.substr(pos, lineEnd - pos);
+        if (size_t semi = sizeField.find(';'); semi != std::string::npos) {
+            sizeField = sizeField.substr(0, semi); // drop chunk-ext
+        }
+        // stoul parses only a valid prefix ("1xyz" -> 1) and even accepts a leading
+        // '+' (an invalid chunk-size). Require a hex digit first, then reject unless
+        // the whole field is consumed.
+        if (sizeField.empty() || !std::isxdigit(static_cast<unsigned char>(sizeField[0]))) {
+            YRLOG_WARN("decode chunked: non-hex chunk size \"{}\" at pos={}, decoded {} bytes", sizeField, pos,
+                       out.size());
+            return "";
+        }
+        size_t idx = 0;
+        unsigned long parsed = 0;
+        try {
+            parsed = std::stoul(sizeField, &idx, HEX_BASE);
+        } catch (...) {
+            YRLOG_WARN("decode chunked: non-hex chunk size \"{}\" at pos={}, decoded {} bytes", sizeField, pos,
+                       out.size());
+            return "";
+        }
+        if (idx != sizeField.size()) {
+            YRLOG_WARN("decode chunked: chunk size \"{}\" has trailing chars at pos={}, decoded {} bytes", sizeField,
+                       pos, out.size());
+            return "";
+        }
+        if (parsed > std::numeric_limits<size_t>::max()) {
+            YRLOG_WARN("decode chunked: chunk size {} exceeds SIZE_MAX at pos={}, decoded {} bytes", parsed, pos,
+                       out.size());
+            return "";
+        }
+        size_t chunkSize = static_cast<size_t>(parsed);
+        if (chunkSize == 0) {
+            sawTerminator = true;
+            break; // last-chunk
+        }
+        // Bounds-check with subtraction to avoid size_t wraparound on the additions below.
+        size_t dataStart = lineEnd + CRLF_LEN; // skip "size\r\n"
+        if (dataStart > chunked.size() || chunkSize > chunked.size() - dataStart) {
+            YRLOG_WARN("decode chunked: size {} exceeds remaining body at pos={}, decoded {} bytes", chunkSize, pos,
+                       out.size());
+            return "";
+        }
+        out.append(chunked, dataStart, chunkSize);
+        size_t afterData = dataStart + chunkSize;
+        if (CRLF_LEN > chunked.size() - afterData || chunked[afterData] != '\r' || chunked[afterData + 1] != '\n') {
+            YRLOG_WARN("decode chunked: missing CRLF after chunk data at pos={}, decoded {} bytes", afterData,
+                       out.size());
+            return "";
+        }
+        pos = afterData + CRLF_LEN;
+    }
+    if (!sawTerminator) {
+        YRLOG_WARN("decode chunked: no last-chunk terminator, decoded {} bytes", out.size());
+        return "";
+    }
+    return out;
+}
+
 bool IsValidImageName(const std::string &image)
 {
     if (image.empty()) {
@@ -400,6 +536,64 @@ litebus::Future<Status> DockerExecutor::EnsureImageExists(const std::string &ima
             YRLOG_ERROR("Docker image check returned unexpected status {} for {}", status, image);
             return Status(StatusCode::ERR_INNER_COMMUNICATION,
                           fmt::format("failed to check Docker image {}, status {}", image, status));
+        });
+}
+
+litebus::Future<std::string> DockerExecutor::InspectContainerIP(const std::string &containerID)
+{
+    if (containerID.empty()) {
+        YRLOG_WARN("inspect container skipped: containerID is empty");
+        return std::string("");
+    }
+    YRLOG_INFO("inspect container {} for internal IP", containerID);
+    return SendRequestToDocker("GET", "/containers/" + containerID + "/json", nlohmann::json::object())
+        .Then([containerID](litebus::Try<nlohmann::json> result) -> std::string {
+            if (!result.IsOK()) {
+                YRLOG_WARN("inspect container {} failed: try not ok", containerID);
+                return "";
+            }
+            auto resp = result.Get();
+            if (resp.contains("__connect_failed") || resp.contains("__send_failed") ||
+                resp.contains("__recv_failed") || resp.contains("__parse_failed") ||
+                (resp.contains("__http_status") && resp["__http_status"].get<int>() == 0)) {
+                YRLOG_WARN("inspect container {} failed: docker daemon communication failed", containerID);
+                return "";
+            }
+            int status = resp.value("__http_status", 0);
+            if (status != HTTP_STATUS_OK) {
+                YRLOG_WARN("inspect container {} returned status {}, msg={}", containerID, status,
+                           DockerDaemonMessage(resp));
+                return "";
+            }
+            // NetworkSettings/IPAddress type-checked and exception-guarded: a null or
+            // wrong-typed field must degrade to an empty IP, not throw out of the callback
+            // (which would fail the whole inspect Future and mark an already-running
+            // container as start-failed).
+            std::string ip;
+            try {
+                auto &ns = resp["NetworkSettings"];
+                if (!ns.is_object()) {
+                    YRLOG_WARN("inspect container {} has no NetworkSettings object, internal IP empty", containerID);
+                    return "";
+                }
+                auto &ipField = ns["IPAddress"];
+                if (!ipField.is_string()) {
+                    YRLOG_WARN("inspect container {} NetworkSettings has no string IPAddress, internal IP empty",
+                               containerID);
+                    return "";
+                }
+                ip = ipField.get<std::string>();
+            } catch (std::exception const &e) {
+                YRLOG_WARN("inspect container {} NetworkSettings access failed: {}, internal IP empty", containerID,
+                           e.what());
+                return "";
+            }
+            if (ip.empty()) {
+                YRLOG_INFO("inspect container {} NetworkSettings.IPAddress empty", containerID);
+            } else {
+                YRLOG_INFO("inspect container {} NetworkSettings.IPAddress={}", containerID, ip);
+            }
+            return ip;
         });
 }
 
@@ -1021,7 +1215,26 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::OnStartRuntime(
     YRLOG_INFO("{}|{}|start Docker container success, runtimeID({}), containerID({})", info.traceid(), info.requestid(),
                runtimeID, containerID);
 
-    auto response = GenSuccessStartInstanceResponse(request, containerID, port);
+    return InspectContainerIP(containerID)
+        .Then(litebus::Defer(GetAID(), &DockerExecutor::OnInspectForIP, std::placeholders::_1, containerID, request,
+                             port));
+}
+
+litebus::Future<messages::StartInstanceResponse> DockerExecutor::OnInspectForIP(
+    const std::string &containerIP, const std::string &containerID,
+    const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &port)
+{
+    const auto &info = request->runtimeinstanceinfo();
+    const auto &runtimeID = info.runtimeid();
+    // containerID is threaded from OnStartRuntime, not re-read from the map: the inspect
+    // runs asynchronously, and the map entry could be deleted/replaced in the meantime.
+    if (!containerIP.empty()) {
+        YRLOG_INFO("{}|{}|container({}) internal IP({})", info.traceid(), info.requestid(), containerID, containerIP);
+    } else {
+        YRLOG_INFO("{}|{}|container({}) internal IP empty (host network or missing field)", info.traceid(),
+                   info.requestid(), containerID);
+    }
+    auto response = GenSuccessStartInstanceResponse(request, containerID, port, containerIP);
     return litebus::Async(GetAID(), &DockerExecutor::OnStartInstanceCompleted, runtimeID, response);
 }
 
@@ -1043,7 +1256,7 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::OnStartInstance
 
 messages::StartInstanceResponse DockerExecutor::GenSuccessStartInstanceResponse(
     const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &containerID,
-    const std::string &port)
+    const std::string &port, const std::string &containerIP)
 {
     messages::StartInstanceResponse response;
     response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
@@ -1057,8 +1270,9 @@ messages::StartInstanceResponse DockerExecutor::GenSuccessStartInstanceResponse(
     auto instanceResponse = response.mutable_startruntimeinstanceresponse();
     instanceResponse->set_runtimeid(runtimeID);
     instanceResponse->set_containerid(containerID);
-    YRLOG_DEBUG("{}|{}|instance({}) runtime({}) with Docker container({})", info.traceid(), info.requestid(),
-                info.instanceid(), runtimeID, containerID);
+    instanceResponse->set_containerip(containerIP);
+    YRLOG_DEBUG("{}|{}|instance({}) runtime({}) with Docker container({}), containerIP({})", info.traceid(),
+                info.requestid(), info.instanceid(), runtimeID, containerID, containerIP);
 
     instanceResponse->set_pid(0);
     instanceResponse->set_address(GetPosixAddress(config_, port));

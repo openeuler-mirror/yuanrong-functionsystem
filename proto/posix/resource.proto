@@ -373,6 +373,9 @@ message InstanceInfo {
     SnapshotInfo snapshotInfo = 39;
 
     int32 executorType = 40;
+
+    // container/sandbox internal IP (docker bridge network via inspect); empty for supervisor/runsc.
+    string containerIP = 41;
 }
 
 message SchedulingQueueInfo {
