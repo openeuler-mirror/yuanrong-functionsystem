@@ -44,7 +44,6 @@
 namespace functionsystem::runtime_manager {
 
 constexpr int64_t DEFAULT_GRACEFUL_SHUTDOWN = 5;
-constexpr double DEFAULT_CPU_RESOURCE = 500;
 constexpr double DEFAULT_MEMORY_RESOURCE = 500;
 const std::string DEFAULT_DOCKER_API_VERSION = "v1.45";
 
@@ -59,8 +58,6 @@ constexpr int HTTP_STATUS_CLIENT_ERROR = 400;  // >= 400 is an error response
 constexpr size_t HTTP_STATUS_CODE_LEN = 3;
 
 // Resource conversion factors
-constexpr int CPU_SHARES_PER_CORE = 1024;       // Docker CPUShares: 1024 = 1 core
-constexpr int CPU_RESOURCE_SCALE = 1000;        // CPU resource is in milli-cores (1000 = 1 core)
 constexpr int64_t BYTES_PER_MB = 1024 * 1024;    // Docker Memory is in bytes; input is MB
 constexpr int64_t NANOCPUS_PER_MILLICORE = 1000000;  // 1 milli-core = 1000000 NanoCpus
 constexpr int DEFAULT_PIDS_LIMIT = 4096;             // Max processes per container
@@ -441,9 +438,8 @@ nlohmann::json DockerExecutor::BuildHostConfig(const ContainerCreateSpec &spec) 
 void DockerExecutor::BuildHostConfigResources(nlohmann::json &hostConfig,
     const std::map<std::string, double> &resources) const
 {
-    double cpu = DEFAULT_CPU_RESOURCE;
+    double cpu = 0;
     double memory = DEFAULT_MEMORY_RESOURCE;
-    double cpuLimit = 0;
     double memLimit = 0;
     if (resources.find("cpu") != resources.end()) {
         cpu = resources.at("cpu");
@@ -451,15 +447,12 @@ void DockerExecutor::BuildHostConfigResources(nlohmann::json &hostConfig,
     if (resources.find("memory") != resources.end()) {
         memory = resources.at("memory");
     }
-    if (resources.find("cpu_limit") != resources.end()) {
-        cpuLimit = resources.at("cpu_limit");
-    }
     if (resources.find("memory_limit") != resources.end()) {
         memLimit = resources.at("memory_limit");
     }
-    hostConfig["CpuShares"] = static_cast<int>(cpu * CPU_SHARES_PER_CORE / CPU_RESOURCE_SCALE);
-    if (cpuLimit > 0) {
-        hostConfig["NanoCpus"] = static_cast<int64_t>(cpuLimit) * NANOCPUS_PER_MILLICORE;
+    // CPU (milli-cores) maps to a NanoCpus hard limit; omitted when cpu is unset (no limit).
+    if (cpu > 0) {
+        hostConfig["NanoCpus"] = static_cast<int64_t>(cpu * NANOCPUS_PER_MILLICORE);
     }
     hostConfig["Memory"] = static_cast<int64_t>(memory * BYTES_PER_MB);
     if (memLimit > 0) {
@@ -816,11 +809,11 @@ std::map<std::string, double> DockerExecutor::BuildResources(const messages::Run
 {
     std::map<std::string, double> resources;
     const auto &runtimeResources = info.runtimeconfig().resources().resources();
-    if (runtimeResources.find(functionsystem::resource_view::CPU_RESOURCE_NAME) != runtimeResources.end()) {
-        const auto &scalar = runtimeResources.at(functionsystem::resource_view::CPU_RESOURCE_NAME).scalar();
-        resources["cpu"] = scalar.value();
-        if (scalar.limit() > 0) {
-            resources["cpu_limit"] = scalar.limit();
+    auto cpuIt = runtimeResources.find(functionsystem::resource_view::CPU_RESOURCE_NAME);
+    if (cpuIt != runtimeResources.end()) {
+        auto cpu = Executor::GetEffectiveScalarLimit(cpuIt->second, 0);
+        if (cpu > 0) {
+            resources["cpu"] = cpu;
         }
     }
     if (runtimeResources.find(functionsystem::resource_view::MEMORY_RESOURCE_NAME) != runtimeResources.end()) {
@@ -938,19 +931,17 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartRuntime(
     // Env is intentionally omitted to avoid leaking credentials. fmt has no formatter for
     // std::map, so resource fields are read out individually (same pattern as BuildHostConfigResources).
     // fmt::join uses the iterator form (begin/end) to match the convention in container_executor.cpp.
-    double cpu = DEFAULT_CPU_RESOURCE;
+    double cpu = 0;
     double memory = DEFAULT_MEMORY_RESOURCE;
-    double cpuLimit = 0;
     double memLimit = 0;
     if (resources.find("cpu") != resources.end()) { cpu = resources.at("cpu"); }
     if (resources.find("memory") != resources.end()) { memory = resources.at("memory"); }
-    if (resources.find("cpu_limit") != resources.end()) { cpuLimit = resources.at("cpu_limit"); }
     if (resources.find("memory_limit") != resources.end()) { memLimit = resources.at("memory_limit"); }
     YRLOG_INFO("{}|{}|docker create spec: image={}, workdir={}, user={}, cmd=[{}], binds=[{}], "
-               "resources=cpu={},memory={},cpu_limit={},memory_limit={}",
+               "resources=cpu={},memory={},memory_limit={}",
                info.traceid(), info.requestid(), image, workdir, runUser,
                fmt::join(cmd.begin(), cmd.end(), " "),
-               fmt::join(bindMounts.begin(), bindMounts.end(), ", "), cpu, memory, cpuLimit, memLimit);
+               fmt::join(bindMounts.begin(), bindMounts.end(), ", "), cpu, memory, memLimit);
 
     return StartContainerChain(request, image, createBody, port);
 }

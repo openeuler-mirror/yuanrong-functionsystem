@@ -24,6 +24,7 @@
 #include "async/async.hpp"
 #include "async/future.hpp"
 #include "common/proto/pb/message_pb.h"
+#include "common/resource_view/resource_type.h"
 #include "common/status/status.h"
 #include "common/utils/test_util.h"
 #include "exec/exec.hpp"
@@ -129,6 +130,11 @@ public:
     // wrap a runtime command in `sh -c "<quoted> >out 2>err"` (docker, supervisor). Pure function,
     // no instance state — kept here once so the quoting logic is correct in exactly one place.
     static std::string ShellQuote(const std::string &token);
+
+    // Resolve a scalar Resource's effective value (CPU/memory). scalar.limit takes precedence;
+    // scalar.value is the fallback when limit is unset; defaultValue is returned when neither is
+    // set. Applies to both CPU and memory the same way. Shared by executors.
+    static double GetEffectiveScalarLimit(const resource_view::Resource &resource, double defaultValue);
 
     // Extract the Docker daemon's error message from a parsed API response. ParseDockerResponse
     // stores the 4xx/5xx body in "__docker_error" (parsed JSON, normally {"message":"..."}) or

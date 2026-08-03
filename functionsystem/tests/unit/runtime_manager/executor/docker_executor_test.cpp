@@ -382,7 +382,7 @@ TEST_F(DockerExecutorTest, TestBuildCreateContainerRequestWithPortBindings)
     EXPECT_TRUE(req["ExposedPorts"].contains("8080/tcp"));
     EXPECT_TRUE(req["HostConfig"]["PortBindings"].contains("8080/tcp"));
     EXPECT_EQ(req["HostConfig"]["Binds"].size(), 1u);
-    EXPECT_EQ(req["HostConfig"]["CpuShares"].get<int>(), 512);
+    EXPECT_EQ(req["HostConfig"]["NanoCpus"].get<int64_t>(), 500LL * 1000000);
     EXPECT_EQ(req["HostConfig"]["Memory"].get<int64_t>(), 256 * 1024 * 1024);
     EXPECT_EQ(req["HostConfig"]["MemorySwap"].get<int64_t>(), 256 * 1024 * 1024);
     EXPECT_EQ(req["HostConfig"]["PidsLimit"].get<int>(), 4096);
@@ -398,7 +398,6 @@ TEST_F(DockerExecutorTest, TestBuildResourcesReadsUppercaseKeys)
     auto &cpu = (*resMap)[CPU_RESOURCE_NAME];
     cpu.set_type(ValueType::Value_Type_SCALAR);
     cpu.mutable_scalar()->set_value(1000.0);
-    cpu.mutable_scalar()->set_limit(2000.0);
     auto &mem = (*resMap)[MEMORY_RESOURCE_NAME];
     mem.set_type(ValueType::Value_Type_SCALAR);
     mem.mutable_scalar()->set_value(512.0);
@@ -406,7 +405,6 @@ TEST_F(DockerExecutorTest, TestBuildResourcesReadsUppercaseKeys)
 
     auto resources = executor_->BuildResources(*info);
     EXPECT_DOUBLE_EQ(resources["cpu"], 1000.0);
-    EXPECT_DOUBLE_EQ(resources["cpu_limit"], 2000.0);
     EXPECT_DOUBLE_EQ(resources["memory"], 512.0);
     EXPECT_DOUBLE_EQ(resources["memory_limit"], 1024.0);
 }
