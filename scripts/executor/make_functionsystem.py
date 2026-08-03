@@ -13,6 +13,25 @@ log = utils.stream_logger()
 ROOT_DIR = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
+def add_bazel_local_cache_args(command_parser):
+    command_parser.add_argument(
+        "--bazel_local_cache_root",
+        type=str,
+        default="",
+        help=(
+            "Enable persistent local Bazel caches under this directory. "
+            "Must be used with --bazel_cache_profile; omitted by default so existing CI behavior is unchanged."
+        ),
+    )
+    command_parser.add_argument(
+        "--bazel_cache_profile",
+        type=str,
+        choices=["release", "ut"],
+        default="",
+        help="Select the isolated local Bazel action/output cache profile (release or ut).",
+    )
+
+
 def make():
     parser, args = parser_args()
     # 执行对应的函数
@@ -79,6 +98,7 @@ def parser_args():
         default="cmake",
         help="Choose build system to use: cmake or bazel. Default: cmake",
     )
+    add_bazel_local_cache_args(build_parser)
     build_parser.set_defaults(func=lambda func_args: tasks.run_build(ROOT_DIR, func_args))
     # 清理缓存执行参数
     clean_parser = subparsers.add_parser("clean", help="Clean all build artifacts and caches")
@@ -128,6 +148,7 @@ def parser_args():
         default="cmake",
         help="Choose build system used for test artifacts: cmake or bazel. Default: cmake",
     )
+    add_bazel_local_cache_args(test_parser)
     test_parser.set_defaults(func=lambda func_args: tasks.run_test(ROOT_DIR, func_args))
     # 打包函数系统构建产物
     pack_parser = subparsers.add_parser("pack", help="Copy and package all compiled products of function system")

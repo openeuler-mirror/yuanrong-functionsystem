@@ -27,6 +27,8 @@ def run_test(root_dir, cmd_args):
         "exec_timeout": cmd_args.exec_timeout,
         "retry_times": cmd_args.retry_times,
         "print_logs": cmd_args.print_logs,
+        "bazel_local_cache_root": getattr(cmd_args, "bazel_local_cache_root", ""),
+        "bazel_cache_profile": getattr(cmd_args, "bazel_cache_profile", ""),
     }
     if args["job_num"] > (os.cpu_count() or 1) * 2:
         log.warning(f"The -j {args['job_num']} is over the max logical cpu count({os.cpu_count()}) * 2")
@@ -74,13 +76,25 @@ def run_test(root_dir, cmd_args):
 def run_test_bazel(root_dir, args):
     if args["action"] in ["all", "make"]:
         log.info(f"Step(1/2, builder = [bazel], action = [make]): Build test case with {args['job_num']} cores")
-        builder.build_gtest_bazel(root_dir, args["job_num"])
+        builder.build_gtest_bazel(
+            root_dir,
+            args["job_num"],
+            bazel_local_cache_root=args["bazel_local_cache_root"],
+            bazel_cache_profile=args["bazel_cache_profile"],
+        )
     else:
         log.info("Step(1/2, builder = [bazel], action = [make]): Skip to make test case")
 
     if args["action"] in ["all", "exec"]:
         log.info(f"Step(2/2, builder = [bazel], action = [exec]): Exec test case with args: {json.dumps(args)}")
-        builder.run_gtest_bazel(root_dir, args["job_num"], args["test_suite"], args["test_case"])
+        builder.run_gtest_bazel(
+            root_dir,
+            args["job_num"],
+            args["test_suite"],
+            args["test_case"],
+            bazel_local_cache_root=args["bazel_local_cache_root"],
+            bazel_cache_profile=args["bazel_cache_profile"],
+        )
     else:
         log.info("Step(2/2, builder = [bazel], action = [exec]): Skip to exec test case")
 
