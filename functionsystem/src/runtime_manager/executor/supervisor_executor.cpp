@@ -25,6 +25,7 @@
 #include <utility>
 
 #include "async/asyncafter.hpp"
+#include "common/constants/constants.h"
 #include "common/logs/logging.h"
 #include "common/metadata/metadata_type.h"
 #include "common/utils/collect_status.h"
@@ -35,6 +36,7 @@
 #include "httpd/http.hpp"
 #include "httpd/http_connect.hpp"
 #include "nlohmann/json.hpp"
+#include "runtime_manager/utils/utils.h"
 #include "utils/os_utils.hpp"
 
 namespace functionsystem::runtime_manager {
@@ -279,7 +281,22 @@ litebus::Future<messages::StartInstanceResponse> SupervisorExecutor::StartInstan
         args.insert(args.begin(), { execPath, "-u", config_.runtimePath + pythonServerPath });
     }
 
-    runtime2portMappings_[info.runtimeid()] = port;
+    // Supervisor runs on host network with no published host ports, so each user port forward
+    // is a direct 1:1 mapping. Emit the JSON array form (matching docker executor) so the
+    // deploy response carries portmappings downstream as the portForward instance extension.
+    const auto &deployOpts = info.deploymentconfig().deployoptions();
+    auto networkIter = deployOpts.find(CONTAINER_NETWORK);
+    if (networkIter != deployOpts.end() && !networkIter->second.empty()) {
+        auto forwardConfigs = ParseForwardPorts(networkIter->second);
+        nlohmann::json portJson = nlohmann::json::array();
+        for (const auto &fc : forwardConfigs) {
+            portJson.push_back(fc.protocol + ":" + std::to_string(fc.containerPort) + ":" +
+                               std::to_string(fc.containerPort));
+        }
+        if (!portJson.empty()) {
+            runtime2portMappings_[info.runtimeid()] = portJson.dump();
+        }
+    }
 
     YRLOG_INFO("begin to start sandbox for runtime({}) instance({})", runtimeID, instanceID);
     return StartRuntime(request, language, GenerateEnvs(config_, request, port, cardIDs, features), args);
