@@ -65,6 +65,8 @@ def run_build(root_dir, cmd_args):
         "component": component,
         "linker": getattr(cmd_args, "linker", "auto"),
         "cmake_args": cmake_args,
+        "bazel_local_cache_root": getattr(cmd_args, "bazel_local_cache_root", ""),
+        "bazel_cache_profile": getattr(cmd_args, "bazel_cache_profile", ""),
     }
     if args["job_num"] > (os.cpu_count() or 1) * 2:
         log.warning(f"The -j {args['job_num']} is over the max logical cpu count({os.cpu_count()}) * 2")
@@ -228,4 +230,12 @@ def build_functionsystem(root_dir, args):
 def build_functionsystem_bazel(root_dir, args):
     log.info("Start to build functionsystem with Bazel")
     # 编译 CPP 程序 (Bazel)
-    builder.build_binary_bazel(root_dir, args["job_num"], args["version"], args["build_type"], args["component"])
+    builder.build_binary_bazel(
+        root_dir,
+        args["job_num"],
+        args["version"],
+        args["build_type"],
+        args["component"],
+        bazel_local_cache_root=args["bazel_local_cache_root"],
+        bazel_cache_profile=args["bazel_cache_profile"],
+    )

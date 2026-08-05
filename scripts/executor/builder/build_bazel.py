@@ -10,9 +10,11 @@ Workflow:
 """
 
 import os
+import platform
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from glob import glob
 
 import utils
@@ -69,6 +71,7 @@ PROTO_FILES = [
     "agent_plugin.proto",
     "common.proto",
     "core_service.proto",
+    "frontend_proxy_service.proto",
     "runtime_rpc.proto",
     "runtime_service.proto",
     "affinity.proto",
@@ -83,12 +86,53 @@ PROTO_FILES = [
 
 GRPC_PROTO_FILES = [
     "agent_plugin.proto",
+    "frontend_proxy_service.proto",
     "runtime_rpc.proto",
     "inner_service.proto",
     "bus_service.proto",
     "sandbox_api.proto",
     "exec_service.proto",
 ]
+
+
+@dataclass(frozen=True)
+class BazelLocalCacheConfig:
+    output_root: str
+    repository_cache: str
+    disk_cache: str
+
+
+def resolve_bazel_local_cache(root_dir: str, cache_root: str = "", cache_profile: str = ""):
+    """Resolve opt-in, profile-isolated local Bazel cache paths.
+
+    Omitting both arguments preserves the existing CI and local defaults.  The
+    repository cache is shared, while output and action caches are isolated so
+    release and UT configuration changes cannot evict each other's hot state.
+    """
+    if bool(cache_root) != bool(cache_profile):
+        raise ValueError("--bazel_local_cache_root and --bazel_cache_profile must be specified together")
+    if not cache_root:
+        return None
+    if cache_profile not in {"release", "ut"}:
+        raise ValueError(f"Unsupported Bazel local cache profile: {cache_profile}")
+
+    expanded_root = os.path.expanduser(cache_root)
+    resolved_root = expanded_root if os.path.isabs(expanded_root) else os.path.join(root_dir, expanded_root)
+    resolved_root = os.path.abspath(resolved_root)
+    namespace = f"bazel6-{platform.system().lower()}-{platform.machine().lower()}-v1"
+    profile_root = os.path.join(resolved_root, "profiles", cache_profile)
+    return BazelLocalCacheConfig(
+        output_root=os.path.join(profile_root, "bazel-output", namespace),
+        repository_cache=os.path.join(resolved_root, "common", "bazel-repository", namespace),
+        disk_cache=os.path.join(profile_root, "bazel-action", namespace),
+    )
+
+
+def prepare_bazel_local_cache(cache_config):
+    if cache_config is None:
+        return
+    for cache_dir in (cache_config.output_root, cache_config.repository_cache, cache_config.disk_cache):
+        os.makedirs(cache_dir, exist_ok=True)
 
 
 def check_bazel_available():
@@ -103,7 +147,7 @@ def check_bazel_available():
     return bazel_path
 
 
-def ensure_bazel_deps(root_dir: str):
+def ensure_bazel_deps(root_dir: str, cache_config=None):
     """Download Bazel dependency archives and populate repository_cache if needed.
 
     Runs tools/download_bazel_deps.sh which:
@@ -117,14 +161,16 @@ def ensure_bazel_deps(root_dir: str):
         return
     log.info("Ensuring Bazel dependency archives are present...")
     env = os.environ.copy()
-    repository_cache = _bazel_repository_cache()
+    repository_cache = _bazel_repository_cache(cache_config)
     if repository_cache and not env.get("BAZEL_REPO_CACHE"):
         env["BAZEL_REPO_CACHE"] = os.path.join(repository_cache, "content_addressable", "sha256")
     utils.sync_command(["bash", script], cwd=root_dir, env=env)
 
 
-def resolve_bazel_output_root(root_dir: str) -> str:
+def resolve_bazel_output_root(root_dir: str, cache_config=None) -> str:
     """Resolve Bazel's output root from the caller environment."""
+    if cache_config is not None:
+        return cache_config.output_root
     configured = os.environ.get("FUNCTIONSYSTEM_BAZEL_OUTPUT_ROOT")
     if not configured:
         return os.path.join(root_dir, "build", "bazel_root")
@@ -132,17 +178,27 @@ def resolve_bazel_output_root(root_dir: str) -> str:
     return configured if os.path.isabs(configured) else os.path.join(root_dir, configured)
 
 
-def _bazel_repository_cache() -> str:
+def _bazel_repository_cache(cache_config=None) -> str:
+    if cache_config is not None:
+        return cache_config.repository_cache
     configured = os.environ.get("FUNCTIONSYSTEM_BAZEL_REPOSITORY_CACHE", "")
     return os.path.abspath(os.path.expanduser(configured)) if configured else ""
 
 
-def bazel_cache_flags() -> list[str]:
-    """Return repository and remote-cache flags selected by the caller."""
+def bazel_cache_flags(cache_config=None) -> list[str]:
+    """Return cache and local-workspace flags selected by the caller."""
     flags = []
-    repository_cache = _bazel_repository_cache()
+    repository_cache = _bazel_repository_cache(cache_config)
     if repository_cache:
         flags.append(f"--repository_cache={repository_cache}")
+    if cache_config is not None:
+        flags.append(f"--disk_cache={cache_config.disk_cache}")
+        # etcd ships a lowercase executable named ``build``.  On the default
+        # case-insensitive macOS filesystem Bazel also resolves it as ``BUILD``
+        # and incorrectly treats @etcdapi//etcd as a subpackage.  The opt-in
+        # local profile marks that false package as deleted; Linux CI keeps its
+        # original command line when no local profile is requested.
+        flags.append("--deleted_packages=@etcdapi//etcd")
     remote_cache = os.environ.get("REMOTE_CACHE", "")
     if remote_cache:
         flags.append(f"--remote_cache={remote_cache}")
@@ -222,7 +278,7 @@ def _replace_grpc_runtime_target(content: str, name: str, actual: str) -> str:
     raise RuntimeError(f"Unterminated gRPC Bazel target {name!r}")
 
 
-def build_proto_tools(root_dir: str, bazel_output_root: str, distdir: str, job_num: int):
+def build_proto_tools(root_dir: str, bazel_output_root: str, distdir: str, job_num: int, cache_config=None):
     """Build protoc and grpc_cpp_plugin from Bazel source repos.
 
     Outputs:
@@ -239,7 +295,7 @@ def build_proto_tools(root_dir: str, bazel_output_root: str, distdir: str, job_n
         "build",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
-        *bazel_cache_flags(),
+        *bazel_cache_flags(cache_config),
         "--config=release",
         *PROTO_TOOL_TARGETS,
     ]
@@ -424,7 +480,16 @@ def _build_grpc_plugin_env(root_dir: str, grpc_cpp_plugin: str = ""):
     return env
 
 
-def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: str = "Release", component: str = "all"):
+def build_binary_bazel(
+    root_dir: str,
+    job_num: int,
+    version: str,
+    build_type: str = "Release",
+    component: str = "all",
+    *,
+    bazel_local_cache_root: str = "",
+    bazel_cache_profile: str = "",
+):
     """Build all functionsystem C++ binaries using Bazel and copy artifacts to output/.
 
     Args:
@@ -433,8 +498,10 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
         version: Build version string (e.g. "1.0.0")
         build_type: "Release" or "Debug"
     """
+    cache_config = resolve_bazel_local_cache(root_dir, bazel_local_cache_root, bazel_cache_profile)
+    prepare_bazel_local_cache(cache_config)
     check_bazel_available()
-    ensure_bazel_deps(root_dir)
+    ensure_bazel_deps(root_dir, cache_config)
     generate_version_header(root_dir, version)
 
     # Determine bazel config flag
@@ -452,7 +519,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     # Without this, the default output root lands on Docker overlayfs (/root/.cache/bazel/),
     # which is NOT a bind mount, so linux-sandbox cannot resolve symlinks into the execroot.
     # This mirrors yuanrong's build.sh: --output_user_root="${BASE_DIR}/build".
-    bazel_output_root = resolve_bazel_output_root(root_dir)
+    bazel_output_root = resolve_bazel_output_root(root_dir, cache_config)
     os.makedirs(bazel_output_root, exist_ok=True)
 
     # thirdparty/runtime_deps holds pre-downloaded tarballs (e.g. rules_apple)
@@ -465,7 +532,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
     # bazel-bin/external/com_github_grpc_grpc/src/compiler/grpc_cpp_plugin,
     # replacing the CMake-built tools from vendor/output/Install/protobuf|grpc/.
     configure_shared_grpc_runtime(root_dir)
-    build_proto_tools(root_dir, bazel_output_root, distdir, job_num)
+    build_proto_tools(root_dir, bazel_output_root, distdir, job_num, cache_config)
     generate_proto_sources(root_dir)
 
     # Build all binary targets plus runtime and metrics exporter plugins.
@@ -475,7 +542,7 @@ def build_binary_bazel(root_dir: str, job_num: int, version: str, build_type: st
         "build",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
-        *bazel_cache_flags(),
+        *bazel_cache_flags(cache_config),
         f"--config={config}",
         *build_targets,
         *(target for target, _ in RUNTIME_PLUGIN_TARGETS),
@@ -547,23 +614,31 @@ def _install_metrics_outputs(root_dir: str):
         shutil.copy2(os.path.join(bazel_metrics_dir, library_name), os.path.join(lib_dir, library_name))
 
 
-def build_gtest_bazel(root_dir: str, job_num: int):
+def build_gtest_bazel(
+    root_dir: str,
+    job_num: int,
+    *,
+    bazel_local_cache_root: str = "",
+    bazel_cache_profile: str = "",
+):
     """Build functionsystem test binaries with Bazel."""
-    bazel_output_root, distdir = _prepare_bazel_workspace(root_dir, job_num)
+    bazel_output_root, distdir, cache_config = _prepare_bazel_workspace(
+        root_dir, job_num, bazel_local_cache_root, bazel_cache_profile
+    )
     bazel_cmd = [
         "bazel",
         f"--output_user_root={bazel_output_root}",
         "build",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
-        *bazel_cache_flags(),
+        *bazel_cache_flags(cache_config),
         "--config=debug",
         *TEST_TARGETS,
     ]
     utils.sync_command(bazel_cmd, cwd=root_dir)
 
 
-def _bazel_test_env_flags(root_dir: str):
+def bazel_test_env_flags(root_dir: str, cache_config=None):
     lib_dirs = [
         os.path.join(root_dir, "functionsystem", "output", "lib"),
         os.path.join(root_dir, "common", "logs", "output", "lib"),
@@ -579,12 +654,31 @@ def _bazel_test_env_flags(root_dir: str):
     output_bin = os.path.join(root_dir, "functionsystem", "output", "bin")
     if os.path.isdir(output_bin):
         env_flags.append(f"--test_env=BIN_PATH={output_bin}")
+    if cache_config is not None:
+        # The packaged brpc pthread hooks resolve the original symbols with
+        # RTLD_NEXT, so brpc must be loaded before libpthread.  Bazel's test
+        # link order does not guarantee that on the local Docker toolchain.
+        # Keep this workaround opt-in with the local profile so existing CI
+        # test environments and command lines remain unchanged.
+        brpc_library = os.path.join(root_dir, "functionsystem", "output", "lib", "libbrpc.so")
+        if os.path.isfile(brpc_library):
+            env_flags.append(f"--test_env=LD_PRELOAD={brpc_library}")
     return env_flags
 
 
-def run_gtest_bazel(root_dir: str, job_num: int, test_suite: str = "*", test_case: str = "*"):
+def run_gtest_bazel(
+    root_dir: str,
+    job_num: int,
+    test_suite: str = "*",
+    test_case: str = "*",
+    *,
+    bazel_local_cache_root: str = "",
+    bazel_cache_profile: str = "",
+):
     """Run functionsystem tests with Bazel, preserving the legacy gtest filter flags."""
-    bazel_output_root, distdir = _prepare_bazel_workspace(root_dir, job_num)
+    bazel_output_root, distdir, cache_config = _prepare_bazel_workspace(
+        root_dir, job_num, bazel_local_cache_root, bazel_cache_profile
+    )
     gtest_filter = f"{test_suite}.{test_case}"
     bazel_cmd = [
         "bazel",
@@ -592,9 +686,9 @@ def run_gtest_bazel(root_dir: str, job_num: int, test_suite: str = "*", test_cas
         "test",
         f"--distdir={distdir}",
         f"--jobs={job_num}",
-        *bazel_cache_flags(),
+        *bazel_cache_flags(cache_config),
         "--config=debug",
-        *_bazel_test_env_flags(root_dir),
+        *bazel_test_env_flags(root_dir, cache_config),
         f"--test_arg=--gtest_filter={gtest_filter}",
         "--test_output=errors",
         *TEST_TARGETS,
@@ -602,19 +696,23 @@ def run_gtest_bazel(root_dir: str, job_num: int, test_suite: str = "*", test_cas
     utils.sync_command(bazel_cmd, cwd=root_dir)
 
 
-def _prepare_bazel_workspace(root_dir: str, job_num: int):
+def _prepare_bazel_workspace(
+    root_dir: str, job_num: int, bazel_local_cache_root: str = "", bazel_cache_profile: str = ""
+):
+    cache_config = resolve_bazel_local_cache(root_dir, bazel_local_cache_root, bazel_cache_profile)
+    prepare_bazel_local_cache(cache_config)
     check_bazel_available()
-    ensure_bazel_deps(root_dir)
+    ensure_bazel_deps(root_dir, cache_config)
     generate_version_header(root_dir, "0.0.0")
 
-    bazel_output_root = resolve_bazel_output_root(root_dir)
+    bazel_output_root = resolve_bazel_output_root(root_dir, cache_config)
     os.makedirs(bazel_output_root, exist_ok=True)
     distdir = os.path.join(root_dir, "thirdparty", "runtime_deps")
 
     configure_shared_grpc_runtime(root_dir)
-    build_proto_tools(root_dir, bazel_output_root, distdir, job_num)
+    build_proto_tools(root_dir, bazel_output_root, distdir, job_num, cache_config)
     generate_proto_sources(root_dir)
-    return bazel_output_root, distdir
+    return bazel_output_root, distdir, cache_config
 
 
 def _copy_bazel_outputs(root_dir: str, bin_output_dir: str, component: str = "all"):

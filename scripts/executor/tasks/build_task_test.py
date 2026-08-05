@@ -105,6 +105,36 @@ class BuildTaskTest(unittest.TestCase):
             cmake_args={"fs_fast_debug": "OFF"},
         )
 
+    def test_bazel_build_forwards_opt_in_local_cache_without_changing_cmake_path(self):
+        args = SimpleNamespace(
+            job_num=8,
+            version="1.2.3",
+            build_type="release",
+            builder="bazel",
+            component="function_proxy",
+            linker="auto",
+            cmake_args=[],
+            bazel_local_cache_root="/cache/functionsystem",
+            bazel_cache_profile="release",
+        )
+
+        with mock.patch.object(build_task, "build_vendor"), \
+                mock.patch.object(build_task, "build_litebus"), \
+                mock.patch.object(build_task.builder, "build_binary") as cmake_build, \
+                mock.patch.object(build_task.builder, "build_binary_bazel") as bazel_build:
+            build_task.run_build(self.root_dir, args)
+
+        cmake_build.assert_not_called()
+        bazel_build.assert_called_once_with(
+            self.root_dir,
+            8,
+            "1.2.3",
+            "Release",
+            "function_proxy",
+            bazel_local_cache_root="/cache/functionsystem",
+            bazel_cache_profile="release",
+        )
+
     def _write(self, path, content):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as file_obj:
