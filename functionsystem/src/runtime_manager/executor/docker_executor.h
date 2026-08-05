@@ -114,12 +114,17 @@ private:
         const Status &startStatus, const std::shared_ptr<messages::StartInstanceRequest> &request,
         const std::string &port);
 
+    // Builds the success response after the containerIP inspect completes.
+    litebus::Future<messages::StartInstanceResponse> OnInspectForIP(
+        const std::string &containerIP, const std::string &containerID,
+        const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &port);
+
     litebus::Future<messages::StartInstanceResponse> OnStartInstanceCompleted(
         const std::string &runtimeID, const messages::StartInstanceResponse &response);
 
     messages::StartInstanceResponse GenSuccessStartInstanceResponse(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &containerID,
-        const std::string &port);
+        const std::string &port, const std::string &containerIP = "");
 
     // Docker Engine API communication (UDS HTTP, same pattern as SupervisorExecutor)
     int ConnectDockerSocket();
@@ -127,6 +132,9 @@ private:
     void ParseDockerResponse(litebus::Promise<nlohmann::json> promise, std::string response);
     litebus::Future<nlohmann::json> SendRequestToDocker(const std::string &method, const std::string &path,
                                                          const nlohmann::json &body = nlohmann::json::object());
+
+    // Returns the container internal IP (NetworkSettings.IPAddress) via inspect, "" on failure.
+    litebus::Future<std::string> InspectContainerIP(const std::string &containerID);
 
     // Container lifecycle management
     litebus::Future<Status> StartContainer(const std::string &runtimeID, const std::string &containerID);

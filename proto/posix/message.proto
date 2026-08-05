@@ -333,6 +333,7 @@ message DeployInstanceResponse {
   // port forward mappings allocated by container executor, JSON: {"8888":"40001","443":"40002"}
   string portMappings = 11;
   int32 executorType =12;
+  string containerIP = 13;  // container/sandbox internal IP (docker bridge network via inspect)
 }
 
 message KillInstanceRequest {
@@ -545,6 +546,7 @@ message StartRuntimeInstanceResponse {
   string cpuType = 5;
   string containerID = 6;
   int32 executorType = 7;  // Executor type (RUNTIME/CONTAINER/SANDBOX)
+  string containerIP = 8;  // container/sandbox internal IP (docker bridge network via inspect)
 }
 
 message StartInstanceResponse {
