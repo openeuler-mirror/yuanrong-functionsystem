@@ -1284,13 +1284,25 @@ litebus::Future<std::shared_ptr<resources::RouteInfo>> ObserverActor::QueryInsta
         .Then([](const litebus::Future<resource_view::InstanceInfo> &future)
                   -> litebus::Future<std::shared_ptr<resources::RouteInfo>> {
             if (future.IsError()) {
-                return litebus::Future<std::shared_ptr<resources::RouteInfo>>(litebus::Status(-1));
+                return litebus::Future<std::shared_ptr<resources::RouteInfo>>(
+                    litebus::Status(future.GetErrorCode()));
             }
 
             auto routeInfo = std::make_shared<resources::RouteInfo>();
             TransToRouteInfoFromInstanceInfo(future.Get(), *routeInfo);
             return routeInfo;
         });
+}
+
+litebus::Future<std::string> ObserverActor::QueryProxyAddress(const std::string &proxyID)
+{
+    const auto proxy = proxyView_->Get(proxyID);
+    if (proxy == nullptr || proxy->GetDstAddress().empty()) {
+        YRLOG_ERROR("failed to get litebus address for proxy {}", proxyID);
+        return litebus::Future<std::string>(
+            litebus::Status(static_cast<int32_t>(StatusCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS)));
+    }
+    return proxy->GetDstAddress();
 }
 
 litebus::Future<resource_view::InstanceInfo> ObserverActor::GetInstanceRouteInfo(const std::string &instanceID)
@@ -1304,7 +1316,8 @@ litebus::Future<resource_view::InstanceInfo> ObserverActor::GetInstanceRouteInfo
     if (instanceWatchers_.find(instanceID) != instanceWatchers_.end()) {
         YRLOG_ERROR("instance({}) watcher already existed, no need to check meta store, instance doesn't exist",
                     instanceID);
-        return litebus::Future<resource_view::InstanceInfo>(litebus::Status(-1));
+        return litebus::Future<resource_view::InstanceInfo>(
+            litebus::Status(static_cast<int32_t>(StatusCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS)));
     }
 
     return metaStorageAccessor_->GetMetaClient()
@@ -1317,16 +1330,29 @@ litebus::Future<resource_view::InstanceInfo> ObserverActor::OnGetInstanceFromMet
 {
     if (getResponse.IsError()) {
         YRLOG_ERROR("failed to get instance({}) from meta store", instanceID);
-        return litebus::Future<resource_view::InstanceInfo>(litebus::Status(-1));
+        return litebus::Future<resource_view::InstanceInfo>(litebus::Status(getResponse.GetErrorCode()));
     }
-    if (getResponse.Get() == nullptr || getResponse.Get()->kvs.empty()) {
+    if (getResponse.Get() == nullptr) {
+        YRLOG_ERROR("failed to get instance({}) from meta store, response is nullptr", instanceID);
+        return litebus::Future<resource_view::InstanceInfo>(
+            litebus::Status(static_cast<int32_t>(StatusCode::ERR_ETCD_OPERATION_ERROR)));
+    }
+    if (getResponse.Get()->status.IsError()) {
+        YRLOG_ERROR("failed to get instance({}) from meta store, error: {}", instanceID,
+                    getResponse.Get()->status.ToString());
+        return litebus::Future<resource_view::InstanceInfo>(
+            litebus::Status(static_cast<int32_t>(getResponse.Get()->status.StatusCode())));
+    }
+    if (getResponse.Get()->kvs.empty()) {
         YRLOG_ERROR("failed to get instance({}) from meta store, kvs is empty", instanceID);
-        return litebus::Future<resource_view::InstanceInfo>(litebus::Status(-1));
+        return litebus::Future<resource_view::InstanceInfo>(
+            litebus::Status(static_cast<int32_t>(StatusCode::ERR_INSTANCE_NOT_FOUND)));
     }
     resource_view::RouteInfo routeInfo;
     if (!TransToRouteInfoFromJson(routeInfo, getResponse.Get()->kvs.front().value())) {
         YRLOG_ERROR("failed to trans to routeInfo from json string, instance({})", instanceID);
-        return litebus::Future<resource_view::InstanceInfo>(litebus::Status(-1));
+        return litebus::Future<resource_view::InstanceInfo>(
+            litebus::Status(static_cast<int32_t>(StatusCode::ERR_ETCD_OPERATION_ERROR)));
     }
 
     resource_view::InstanceInfo instanceInfo;

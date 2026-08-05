@@ -25,7 +25,17 @@ namespace functionsystem::busproxy {
 
 const std::string INSTANCE_EXIT_MESSAGE = "instance has been killed or exited.";
 const std::string YR_ROUTE_KEY = "YR_ROUTE";
+const std::string RETURN_ROUTE_INFO_KEY = "YR_RETURN_ROUTE_INFO";
 const uint32_t MAX_CALL_RESULT_RETRY_TIMES = 3;
+
+common::ErrorCode QueryRouteErrorCode(const int32_t errorCode)
+{
+    if (errorCode == static_cast<int32_t>(StatusCode::ERR_INSTANCE_NOT_FOUND)) {
+        return common::ErrorCode::ERR_INSTANCE_NOT_FOUND;
+    }
+    return common::ErrorCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS;
+}
+
 void InstanceProxy::Init()
 {
     ActorBase::Init();
@@ -170,8 +180,18 @@ void InstanceProxy::OnQueryRouteResult(const std::string &dstInstanceID, const s
                                        std::shared_ptr<litebus::Promise<SharedStreamMsg>> promise,
                                        const litebus::Future<std::shared_ptr<resources::RouteInfo>> &routeFuture)
 {
-    if (routeFuture.IsError() || routeFuture.Get() == nullptr || routeFuture.Get()->proxygrpcaddress().empty()) {
+    if (routeFuture.IsError()) {
         YRLOG_ERROR("{}|QueryInstanceRoute failed for instance {}", request->callreq().traceid(), dstInstanceID);
+        auto code = QueryRouteErrorCode(routeFuture.GetErrorCode());
+        auto message = code == common::ErrorCode::ERR_INSTANCE_NOT_FOUND
+                           ? "instance is not found, maybe be not created or killed"
+                           : "connection with runtime may be interrupted, please retry.";
+        promise->SetValue(CreateCallResponse(code, message, originalMessageID));
+        return;
+    }
+    if (routeFuture.Get() == nullptr || routeFuture.Get()->proxygrpcaddress().empty()) {
+        YRLOG_ERROR("{}|QueryInstanceRoute returned empty route for instance {}", request->callreq().traceid(),
+                    dstInstanceID);
         promise->SetValue(CreateCallResponse(common::ErrorCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS,
                                              "connection with runtime may be interrupted, please retry.",
                                              originalMessageID));
@@ -223,6 +243,10 @@ litebus::Future<Status> InstanceProxy::DoForwardCall(const litebus::AID &from,
                                                      const std::shared_ptr<runtime_rpc::StreamingMessage> &request)
 {
     ASSERT_FS(request->has_callreq());
+    auto callReqWithOptions = request->mutable_callreq();
+    if (callReqWithOptions->mutable_createoptions()->erase(RETURN_ROUTE_INFO_KEY) > 0) {
+        returnRouteInfoRequestIDs_.insert(callReqWithOptions->requestid());
+    }
     auto &srcInstanceID = from.Name();
     const auto &callReq = request->callreq();
     std::string srcTenantID = "";
@@ -287,6 +311,9 @@ void InstanceProxy::OnForwardCall(const litebus::Future<SharedStreamMsg> &callRs
     auto &requestID = callReq->callreq().requestid();
     perf_->RecordReceivedCallRsp(requestID);
     dispatcher->OnCall(callRsp, call.traceid(), call.requestid());
+    if (callRsp->has_callrsp() && callRsp->callrsp().code() != common::ERR_NONE) {
+        returnRouteInfoRequestIDs_.erase(requestID);
+    }
     callRsp->set_messageid(call.requestid());
     YRLOG_INFO("{}|{}|ready to forward call response", call.traceid(), call.requestid());
     Send(from, "ResponseForwardCall", callRsp->SerializeAsString());
@@ -303,6 +330,7 @@ void InstanceProxy::ResponseForwardCall(const litebus::AID &from, std::string &&
     if (auto promise(forwardCallPromises_.find(request->messageid())); promise != forwardCallPromises_.end()) {
         promise->second->SetValue(request);
         (void)forwardCallPromises_.erase(promise);
+        EraseForwardCallContext(requestID);
         return;
     }
     YRLOG_WARN("no request {} is waiting for forward call response, ignore it.", request->messageid());
@@ -314,8 +342,9 @@ litebus::Future<SharedStreamMsg> InstanceProxy::CallResult(const std::string &sr
                                                            const std::shared_ptr<TimePoint> &time)
 {
     ASSERT_FS(request->has_callresultreq());
-    const auto &callresult = request->callresultreq();
-    auto &requestID = callresult.requestid();
+    auto callresult = request->mutable_callresultreq();
+    AttachCurrentRouteInfoForRefreshedCall(callresult);
+    auto &requestID = callresult->requestid();
     perf_->RecordCallResult(requestID, time);
     // which means the invocation is happening without cross node
     // else it should be transferred by remote dispatcher
@@ -343,9 +372,9 @@ litebus::Future<SharedStreamMsg> InstanceProxy::CallResult(const std::string &sr
         return future;
     }
     auto dispatcher = remoteDispatchers_[dstInstanceID];
-    auto callResultCode = callresult.code();
+    auto callResultCode = callresult->code();
     // remote response received by this actor, so the callback can be called in this actor thread
-    auto func = [requestID(callresult.requestid()), dispatcher(selfDispatcher_), callResultCode]
+    auto func = [requestID(callresult->requestid()), dispatcher(selfDispatcher_), callResultCode]
             (const SharedStreamMsg &callResultAck) {
                 dispatcher->OnCallResult(callResultAck, requestID, callResultCode);
                 return callResultAck;
@@ -492,6 +521,7 @@ litebus::Future<SharedStreamMsg> InstanceProxy::SendForwardCall(const litebus::A
     if (promiseIter == forwardCallPromises_.end()) {
         promise = std::make_shared<litebus::Promise<SharedStreamMsg>>();
         forwardCallPromises_[callReq.requestid()] = promise;
+        forwardCallStartTimes_[callReq.requestid()] = std::chrono::steady_clock::now();
     } else {
         promise = promiseIter->second;
         firstForwardCall = false;
@@ -506,14 +536,135 @@ litebus::Future<SharedStreamMsg> InstanceProxy::SendForwardCall(const litebus::A
 
     // low reliable instance retry send
     YRLOG_INFO("{}|{}|low reliable instance retry to forward call", callReq.traceid(), callReq.requestid());
+    const auto startIter = forwardCallStartTimes_.find(callReq.requestid());
+    if (observer_ != nullptr && startIter != forwardCallStartTimes_.end()
+        && std::chrono::steady_clock::now() - startIter->second >= std::chrono::milliseconds(systemTimeoutMs_)
+        && forwardCallRouteQueries_.insert(callReq.requestid()).second) {
+        YRLOG_WARN("{}|{}|forward call has not received ACK within system timeout, query route for instance {}",
+                   callReq.traceid(), callReq.requestid(), aid.Name());
+        observer_->QueryInstanceRoute(aid.Name()).OnComplete(
+            litebus::Defer(GetAID(), &InstanceProxy::OnRetryQueryRouteResult, aid.Name(), request,
+                           std::placeholders::_1));
+        return promise->GetFuture();
+    }
+
+    SendForwardCallToRequestRouter(aid, request);
+    return promise->GetFuture();
+}
+
+void InstanceProxy::SendForwardCallToRequestRouter(const litebus::AID &aid, const SharedStreamMsg &request)
+{
     auto newAid = litebus::AID(REQUEST_ROUTER_NAME, aid.Url());
     internal::RouteCallRequest routeReq;
     routeReq.mutable_req()->CopyFrom(*request);
     routeReq.set_instanceid(aid.Name());
-
-    promise = forwardCallPromises_[callReq.requestid()];
     (void)Send(newAid, "ForwardCall", routeReq.SerializeAsString());
-    return promise->GetFuture();
+}
+
+void InstanceProxy::OnRetryQueryRouteResult(
+    const std::string &dstInstanceID, const SharedStreamMsg &request,
+    const litebus::Future<std::shared_ptr<resources::RouteInfo>> &routeFuture)
+{
+    const auto &callReq = request->callreq();
+    const auto &requestID = callReq.requestid();
+    forwardCallRouteQueries_.erase(requestID);
+    if (forwardCallPromises_.find(requestID) == forwardCallPromises_.end()) {
+        return;
+    }
+
+    if (routeFuture.IsError()) {
+        const auto code = QueryRouteErrorCode(routeFuture.GetErrorCode());
+        const auto message = code == common::ErrorCode::ERR_INSTANCE_NOT_FOUND
+                                 ? "instance is not found, maybe be not created or killed"
+                                 : "failed to query instance route, please retry.";
+        YRLOG_WARN("{}|{}|failed to query route for instance {}, error code {}", callReq.traceid(), requestID,
+                   dstInstanceID, routeFuture.GetErrorCode());
+        CompleteForwardCallWithError(requestID, code, message);
+        return;
+    }
+
+    const auto &routeInfo = routeFuture.Get();
+    if (routeInfo == nullptr) {
+        CompleteForwardCallWithError(requestID, common::ErrorCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS,
+                                     "failed to query instance route, please retry.");
+        return;
+    }
+
+    const auto state = static_cast<InstanceState>(routeInfo->instancestatus().code());
+    if (IsTerminalStatus(state)) {
+        auto code = routeInfo->instancestatus().errcode() == 0
+                        ? common::ErrorCode::ERR_INSTANCE_NOT_FOUND
+                        : static_cast<common::ErrorCode>(routeInfo->instancestatus().errcode());
+        auto message = routeInfo->instancestatus().msg().empty()
+                           ? "instance has been killed or exited."
+                           : routeInfo->instancestatus().msg();
+        YRLOG_WARN("{}|{}|instance {} is in terminal state {}", callReq.traceid(), requestID, dstInstanceID,
+                   routeInfo->instancestatus().code());
+        CompleteForwardCallWithError(requestID, code, message);
+        return;
+    }
+
+    if (routeInfo->functionproxyid().empty()) {
+        CompleteForwardCallWithError(requestID, common::ErrorCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS,
+                                     "instance proxy is empty, please retry.");
+        return;
+    }
+
+    observer_->QueryProxyAddress(routeInfo->functionproxyid())
+        .OnComplete(litebus::Defer(GetAID(), &InstanceProxy::OnRetryQueryProxyAddressResult, dstInstanceID, request,
+                                   std::placeholders::_1));
+}
+
+void InstanceProxy::OnRetryQueryProxyAddressResult(const std::string &dstInstanceID, const SharedStreamMsg &request,
+                                                   const litebus::Future<std::string> &addressFuture)
+{
+    const auto &callReq = request->callreq();
+    const auto &requestID = callReq.requestid();
+    if (forwardCallPromises_.find(requestID) == forwardCallPromises_.end()) {
+        return;
+    }
+    if (addressFuture.IsError() || addressFuture.Get().empty()) {
+        CompleteForwardCallWithError(requestID, common::ErrorCode::ERR_REQUEST_BETWEEN_RUNTIME_BUS,
+                                     "instance proxy route is unavailable, please retry.");
+        return;
+    }
+
+    YRLOG_INFO("{}|{}|forward call through current route {} for instance {}", callReq.traceid(), requestID,
+               addressFuture.Get(), dstInstanceID);
+    auto routeRefreshRequest = std::make_shared<runtime_rpc::StreamingMessage>(*request);
+    (*routeRefreshRequest->mutable_callreq()->mutable_createoptions())[RETURN_ROUTE_INFO_KEY] = "true";
+    SendForwardCallToRequestRouter(litebus::AID(dstInstanceID, addressFuture.Get()), routeRefreshRequest);
+}
+
+void InstanceProxy::AttachCurrentRouteInfoForRefreshedCall(core_service::CallResult *callResult)
+{
+    if (callResult == nullptr || returnRouteInfoRequestIDs_.erase(callResult->requestid()) == 0 || proxyID_.empty()) {
+        return;
+    }
+    // This proxy is the target that accepted the refreshed call. Attach its authoritative route to the result;
+    // the caller-side libruntime updates its cache when it consumes the result.
+    auto runtimeInfo = callResult->mutable_runtimeinfo();
+    runtimeInfo->set_route(GetAID().Url());
+    runtimeInfo->set_proxyid(proxyID_);
+}
+
+void InstanceProxy::CompleteForwardCallWithError(const std::string &requestID, const common::ErrorCode &code,
+                                                 const std::string &message)
+{
+    const auto promiseIter = forwardCallPromises_.find(requestID);
+    if (promiseIter == forwardCallPromises_.end()) {
+        return;
+    }
+    auto promise = promiseIter->second;
+    forwardCallPromises_.erase(promiseIter);
+    EraseForwardCallContext(requestID);
+    promise->SetValue(CreateCallResponse(code, message, requestID));
+}
+
+void InstanceProxy::EraseForwardCallContext(const std::string &requestID)
+{
+    forwardCallStartTimes_.erase(requestID);
+    forwardCallRouteQueries_.erase(requestID);
 }
 
 litebus::Future<SharedStreamMsg> InstanceProxy::SendForwardCallResult(const litebus::AID &aid,

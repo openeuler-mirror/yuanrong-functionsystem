@@ -35,6 +35,7 @@ public:
                 (const std::string &subscriber, const std::string &targetInstance, bool ignoreNonExist), (override));
     MOCK_METHOD((litebus::Future<std::shared_ptr<resources::RouteInfo>>),
                 QueryInstanceRoute, (const std::string &instanceID), (override));
+    MOCK_METHOD((litebus::Future<std::string>), QueryProxyAddress, (const std::string &proxyID), (override));
 };
 
 }  // namespace functionsystem::test

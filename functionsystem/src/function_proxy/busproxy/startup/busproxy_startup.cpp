@@ -95,6 +95,7 @@ Status BusproxyStartup::Run()
     // start observer actor
     InvocationHandler::BindUrl(param_.localAddress);
     busproxy::InstanceProxy::BindObserver(param_.dataPlaneObserver);
+    busproxy::InstanceProxy::BindSystemTimeout(param_.systemTimeoutMs);
     busproxy::RequestDispatcher::BindDataInterfaceClientManager(param_.dataInterfaceClientMgr);
     busproxy::RequestDispatcher::BindInternalIAM(param_.internalIam);
     InvocationHandler::BindInstanceProxy(std::make_shared<busproxy::InstanceProxyWrapper>());

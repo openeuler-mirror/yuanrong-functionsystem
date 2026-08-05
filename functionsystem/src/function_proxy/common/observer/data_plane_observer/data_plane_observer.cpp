@@ -38,6 +38,14 @@ litebus::Future<std::shared_ptr<resources::RouteInfo>> DataPlaneObserver::QueryI
     return litebus::Async(observerActor_->GetAID(), &ObserverActor::QueryInstanceRoute, instanceID);
 }
 
+litebus::Future<std::string> DataPlaneObserver::QueryProxyAddress(const std::string &proxyID)
+{
+    if (observerActor_ == nullptr) {
+        return litebus::Future<std::string>(litebus::Status(-1));
+    }
+    return litebus::Async(observerActor_->GetAID(), &ObserverActor::QueryProxyAddress, proxyID);
+}
+
 void DataPlaneObserver::NotifyMigratingRequest(const std::string &instanceID)
 {
     RETURN_IF_NULL(observerActor_);

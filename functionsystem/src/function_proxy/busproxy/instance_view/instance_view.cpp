@@ -289,7 +289,7 @@ void InstanceView::SpawnInstanceProxy(const std::string &instanceID, const resou
 {
     const auto &functionProxyID = instanceInfo.functionproxyid();
     if (functionProxyID == nodeID_ && localInstances_.find(instanceID) == localInstances_.end()) {
-        auto instanceProxy = std::make_shared<InstanceProxy>(instanceID, instanceInfo.tenantid());
+        auto instanceProxy = std::make_shared<InstanceProxy>(instanceID, instanceInfo.tenantid(), nodeID_);
         YRLOG_INFO("instance view add local instance, instanceID: {}", instanceID);
         localInstances_[instanceID] = instanceProxy;
         instanceProxy->InitDispatcher();

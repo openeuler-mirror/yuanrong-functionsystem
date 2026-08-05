@@ -35,6 +35,7 @@
 #include "mocks/mock_internal_iam.h"
 #include "mocks/mock_shared_client.h"
 #include "mocks/mock_shared_client_manager_proxy.h"
+#include "utils/future_test_helper.h"
 #include "utils/port_helper.h"
 
 namespace functionsystem::test {
@@ -164,6 +165,14 @@ TEST_F(ObserverActorTest, InstanceEvent)
     observerActor_->UpdateInstanceRouteEvent(instanceDeleteRsp, false);
     instance = observerActor_->GetInstanceInfoByID(instanceID).Get();
     EXPECT_TRUE(instance.IsNone());
+}
+
+TEST_F(ObserverActorTest, QueryMissingInstanceRouteReturnsNotFound)
+{
+    auto route = dataPlaneObserver_->QueryInstanceRoute("missing-instance");
+    ASSERT_AWAIT_SET(route);
+    ASSERT_TRUE(route.IsError());
+    EXPECT_EQ(route.GetErrorCode(), static_cast<int32_t>(StatusCode::ERR_INSTANCE_NOT_FOUND));
 }
 
 TEST_F(ObserverActorTest, CommonGetInstanceID)
