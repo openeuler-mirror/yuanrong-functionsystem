@@ -361,6 +361,7 @@ const std::vector<std::string> VIRTUALENV_KEYS = {VIRTUALENV_KIND, VIRTUALENV_NA
 // deploy options
 const std::string EXEC_PATH = "exec_path";
 const std::string HOST_USER = "host_user";
+const std::string CONTAINER_ENV_VARS = "env_vars";
 
 // runtime log redirect control: when "true", yr runtime emits logs to stdout only (the executor
 // redirects stdout/stderr to per-runtime host files via sh -c "... >out 2>err").

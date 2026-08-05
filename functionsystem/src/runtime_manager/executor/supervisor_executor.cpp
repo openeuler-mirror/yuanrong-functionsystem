@@ -381,6 +381,29 @@ nlohmann::json SupervisorExecutor::ParseBindMounts(const std::string &rootfsJson
     return bindMounts;
 }
 
+bool SupervisorExecutor::IsHomeMounted(const std::string &rootfsJson, const std::string &homeDir,
+                                       const std::string &runtimeID) const
+{
+    if (rootfsJson.empty()) {
+        return false;
+    }
+    try {
+        const auto rootfs = nlohmann::json::parse(rootfsJson);
+        if (!rootfs.contains("mounts") || !rootfs["mounts"].is_array()) {
+            return false;
+        }
+        for (const auto &m : rootfs["mounts"]) {
+            if (m.is_object() && m.contains("target") && m["target"].is_string() &&
+                m["target"].get<std::string>() == homeDir) {
+                return true;
+            }
+        }
+    } catch (const std::exception &e) {
+        YRLOG_WARN("{}|Failed to parse rootfs mounts for home detection: {}, skip", runtimeID, e.what());
+    }
+    return false;
+}
+
 nlohmann::json SupervisorExecutor::CreateRequest(const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &info = request->runtimeinstanceinfo();
@@ -392,15 +415,25 @@ nlohmann::json SupervisorExecutor::CreateRequest(const std::shared_ptr<messages:
     };
     const std::string hostUser = getOpt(HOST_USER);
     const std::string rootfsJson = getOpt(CONTAINER_ROOTFS);
+    const std::string homeDir = hostUser.empty() ? "/home/agentos" : "/home/" + hostUser;
 
     nlohmann::json policy = nlohmann::json::object();
     if (auto bindMounts = ParseBindMounts(rootfsJson, runtimeID); !bindMounts.empty()) {
         policy["filesystem_policy"] = { {"bind_mounts", std::move(bindMounts)} };
     }
+    if (!IsHomeMounted(rootfsJson, homeDir, runtimeID)) {
+        const nlohmann::json homeDirs = nlohmann::json::array({ homeDir });
+        policy["filesystem_policy"]["directories"] = homeDirs;
+        policy["filesystem_policy"]["read_write"] = homeDirs;
+    }
+
     if (!hostUser.empty()) {
-        policy["environment"] = { {"JIUWENSWARM_HOME", "/home/" + hostUser} };
+        policy["environment"]["JIUWENSWARM_HOME"] = homeDir;
         policy["process"] = { {"run_as_user", hostUser}, {"run_as_group", hostUser} };
         policy["namespace"] = { {"user", false} };
+    }
+    for (const auto &kv : info.runtimeconfig().posixenvs()) {
+        policy["environment"][kv.first] = kv.second;
     }
     return nlohmann::json{ {"policy", std::move(policy)}, {"policy_mode", "append"} };
 }
