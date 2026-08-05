@@ -638,7 +638,7 @@ def build_gtest_bazel(
     utils.sync_command(bazel_cmd, cwd=root_dir)
 
 
-def _bazel_test_env_flags(root_dir: str, cache_config=None):
+def bazel_test_env_flags(root_dir: str, cache_config=None):
     lib_dirs = [
         os.path.join(root_dir, "functionsystem", "output", "lib"),
         os.path.join(root_dir, "common", "logs", "output", "lib"),
@@ -688,7 +688,7 @@ def run_gtest_bazel(
         f"--jobs={job_num}",
         *bazel_cache_flags(cache_config),
         "--config=debug",
-        *_bazel_test_env_flags(root_dir, cache_config),
+        *bazel_test_env_flags(root_dir, cache_config),
         f"--test_arg=--gtest_filter={gtest_filter}",
         "--test_output=errors",
         *TEST_TARGETS,

@@ -93,7 +93,10 @@ class BazelCacheConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as cache_root, mock.patch.dict(os.environ, env, clear=True):
             local_cache = build_bazel.resolve_bazel_local_cache("/workspace/fs", cache_root, "release")
 
-            self.assertEqual(build_bazel.resolve_bazel_output_root("/workspace/fs", local_cache), local_cache.output_root)
+            self.assertEqual(
+                build_bazel.resolve_bazel_output_root("/workspace/fs", local_cache),
+                local_cache.output_root,
+            )
             self.assertEqual(
                 build_bazel.bazel_cache_flags(local_cache),
                 [
@@ -127,8 +130,8 @@ class BazelCacheConfigTest(unittest.TestCase):
                 pass
             local_cache = build_bazel.resolve_bazel_local_cache(root_dir, "cache", "ut")
 
-            default_flags = build_bazel._bazel_test_env_flags(root_dir)
-            local_flags = build_bazel._bazel_test_env_flags(root_dir, local_cache)
+            default_flags = build_bazel.bazel_test_env_flags(root_dir)
+            local_flags = build_bazel.bazel_test_env_flags(root_dir, local_cache)
 
         self.assertFalse(any("LD_PRELOAD" in flag for flag in default_flags))
         self.assertIn(f"--test_env=LD_PRELOAD={brpc_library}", local_flags)
