@@ -77,8 +77,8 @@ private:
     // Helper functions to reduce code duplication
     void BuildRuntimeCommands(runtime::v1::StartRequest *request, const std::vector<std::string> &buildArgs);
 
-    void SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs, const std::string &runtimeID,
-                                       const std::string &hostUser);
+    void SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs,
+                                       const std::shared_ptr<messages::StartInstanceRequest> &request);
 
     litebus::Future<runtime::v1::StartResponse> StartByRuntimeID(
         const std::shared_ptr<messages::StartInstanceRequest> &request,
@@ -92,8 +92,12 @@ private:
     litebus::Future<messages::StartInstanceResponse> StartRuntime(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &language, const Envs &envs,
         const std::vector<std::string> &args);
+    nlohmann::json ParseBindMounts(const std::string &rootfsJson, const std::string &runtimeID);
+    bool IsReadonlyMount(const nlohmann::json &mount);
 
-    litebus::Future<std::string> CreateSandbox(const std::string &runtimeID, const std::string &hostUser = "");
+    nlohmann::json CreateRequest(const std::shared_ptr<messages::StartInstanceRequest> &request);
+
+    litebus::Future<std::string> CreateSandbox(const std::shared_ptr<messages::StartInstanceRequest> &request);
     nlohmann::json BuildCommand(const ::std::shared_ptr<runtime::v1::StartRequest> &start);
     litebus::Future<runtime::v1::DeleteResponse> DoDeleteSandbox(
         const std::shared_ptr<runtime::v1::DeleteRequest> &req);

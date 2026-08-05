@@ -36,6 +36,7 @@
 #include "httpd/http.hpp"
 #include "httpd/http_connect.hpp"
 #include "nlohmann/json.hpp"
+#include "runtime_manager/utils/utils.h"
 #include "utils/os_utils.hpp"
 
 namespace functionsystem::runtime_manager {
@@ -279,7 +280,22 @@ litebus::Future<messages::StartInstanceResponse> SupervisorExecutor::StartInstan
         args.insert(args.begin(), { execPath, "-u", config_.runtimePath + pythonServerPath });
     }
 
-    runtime2portMappings_[info.runtimeid()] = port;
+    // Supervisor runs on host network with no published host ports, so each user port forward
+    // is a direct 1:1 mapping. Emit the JSON array form (matching docker executor) so the
+    // deploy response carries portmappings downstream as the portForward instance extension.
+    const auto &deployOpts = info.deploymentconfig().deployoptions();
+    auto networkIter = deployOpts.find(CONTAINER_NETWORK);
+    if (networkIter != deployOpts.end() && !networkIter->second.empty()) {
+        auto forwardConfigs = ParseForwardPorts(networkIter->second);
+        nlohmann::json portJson = nlohmann::json::array();
+        for (const auto &fc : forwardConfigs) {
+            portJson.push_back(fc.protocol + ":" + std::to_string(fc.containerPort) + ":" +
+                               std::to_string(fc.containerPort));
+        }
+        if (!portJson.empty()) {
+            runtime2portMappings_[info.runtimeid()] = portJson.dump();
+        }
+    }
 
     YRLOG_INFO("begin to start sandbox for runtime({}) instance({})", runtimeID, instanceID);
     return StartRuntime(request, language, GenerateEnvs(config_, request, port, cardIDs, features), args);
@@ -343,37 +359,81 @@ litebus::Future<messages::StartInstanceResponse> SupervisorExecutor::StartRuntim
         });
     return promise.GetFuture();
 }
-
-litebus::Future<std::string> SupervisorExecutor::CreateSandbox(const std::string &runtimeID,
-                                                               const std::string &hostUser)
+bool SupervisorExecutor::IsReadonlyMount(const nlohmann::json &mount)
 {
-    nlohmann::json createRequest = nlohmann::json::object();
+    const auto it = mount.find("readonly");
+    if (it == mount.end() || (!it->is_boolean() && !it->is_string())) {
+        return false;
+    }
+    if (it->is_boolean()) {
+        return it->get<bool>();
+    }
+    const auto &s = it->get_ref<const std::string &>();
+    return s == "true" || s == "1";
+}
+nlohmann::json SupervisorExecutor::ParseBindMounts(const std::string &rootfsJson, const std::string &runtimeID)
+{
+    nlohmann::json bindMounts = nlohmann::json::array();
+    if (rootfsJson.empty()) {
+        return bindMounts;
+    }
+    try {
+        const auto rootfs = nlohmann::json::parse(rootfsJson);
+        if (rootfs.contains("mounts") && rootfs["mounts"].is_array()) {
+            for (const auto &m : rootfs["mounts"]) {
+                if (!m.is_object() || !m.contains("source") || !m.contains("target")) {
+                    continue;
+                }
+                bindMounts.push_back({
+                    {"host_path", m["source"].get<std::string>()},
+                    {"sandbox_path", m["target"].get<std::string>()},
+                    {"mode", IsReadonlyMount(m) ? "ro" : "rw"},
+                });
+            }
+        }
+    } catch (const std::exception &e) {
+        YRLOG_WARN("{}|Failed to parse rootfs mounts: {}, skip mounts", runtimeID, e.what());
+    }
+    return bindMounts;
+}
+
+nlohmann::json SupervisorExecutor::CreateRequest(const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    const auto &info = request->runtimeinstanceinfo();
+    const auto &runtimeID = info.runtimeid();
+    const auto &deployOpts = info.deploymentconfig().deployoptions();
+    auto getOpt = [&](const std::string &key) {
+        auto it = deployOpts.find(key);
+        return it != deployOpts.end() ? it->second : std::string{};
+    };
+    const std::string hostUser = getOpt(HOST_USER);
+    const std::string rootfsJson = getOpt(CONTAINER_ROOTFS);
+
+    nlohmann::json policy = nlohmann::json::object();
+    if (auto bindMounts = ParseBindMounts(rootfsJson, runtimeID); !bindMounts.empty()) {
+        policy["filesystem_policy"] = { {"bind_mounts", std::move(bindMounts)} };
+    }
     if (!hostUser.empty()) {
-        nlohmann::json bindMount = nlohmann::json::object();
-        bindMount["host_path"] = "/home/" + hostUser;
-        bindMount["sandbox_path"] = "/home/" + hostUser;
-        bindMount["mode"] = "rw";
+        policy["environment"] = { {"JIUWENSWARM_HOME", "/home/" + hostUser} };
+        policy["process"] = { {"run_as_user", hostUser}, {"run_as_group", hostUser} };
+        policy["namespace"] = { {"user", false} };
+    }
+    return nlohmann::json{ {"policy", std::move(policy)}, {"policy_mode", "append"} };
+}
 
-        nlohmann::json filesystemPolicy = nlohmann::json::object();
-        filesystemPolicy["bind_mounts"] = nlohmann::json::array();
-        filesystemPolicy["bind_mounts"].push_back(bindMount);
-
-        nlohmann::json policy = nlohmann::json::object();
-        policy["filesystem_policy"] = filesystemPolicy;
-
-        nlohmann::json environment = nlohmann::json::object();
-        environment["JIUWENSWARM_HOME"] = "/home/" + hostUser;
-        policy["environment"] = environment;
-
-        policy["process"] = { { "run_as_user", hostUser }, { "run_as_group", hostUser } };
-        policy["namespace"] = { { "user", false } };
-
-        createRequest["policy"] = policy;
-        createRequest["policy_mode"] = "append";
+litebus::Future<std::string> SupervisorExecutor::CreateSandbox(
+    const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    const auto &runtimeID = request->runtimeinstanceinfo().runtimeid();
+    const auto &deployOpts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
+    std::string hostUser;
+    if (auto it = deployOpts.find(HOST_USER); it != deployOpts.end()) {
+        hostUser = it->second;
     }
 
     litebus::Promise<std::string> promise;
     YRLOG_INFO("{}|Create sandbox for {}", runtimeID, hostUser);
+    nlohmann::json createRequest = CreateRequest(request);
 
     SendRequestToSupervisor("POST", SUPERVISOR_SANDBOX_PREFIX, createRequest)
         .OnComplete([this, runtimeID, promise](const litebus::Future<nlohmann::json> &future) mutable {
@@ -591,8 +651,14 @@ void SupervisorExecutor::BuildRuntimeCommands(runtime::v1::StartRequest *request
 }
 
 void SupervisorExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs,
-                                                       const std::string &runtimeID, const std::string &hostUser)
+                                                       const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
+    const auto &runtimeID = request->runtimeinstanceinfo().runtimeid();
+    const auto &deployOpts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
+    std::string hostUser;
+    if (auto it = deployOpts.find(HOST_USER); it != deployOpts.end()) {
+        hostUser = it->second;
+    }
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
     req->mutable_envs()->insert(combineEnvs.begin(), combineEnvs.end());
     (*req->mutable_envs())[YR_ONLY_STDOUT] = "true";
@@ -664,17 +730,11 @@ litebus::Future<runtime::v1::StartResponse> SupervisorExecutor::StartByRuntimeID
 
     BuildRuntimeCommands(start.get(), buildArgs);
 
-    const auto &deployOpts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
-    std::string hostUser;
-    if (auto it = deployOpts.find(HOST_USER); it != deployOpts.end()) {
-        hostUser = it->second;
-    }
-
     auto updateEnv = BuildMountForCodes(start, request, envs);
-    SetRequestEnvsAndLogsForStart(start.get(), updateEnv, runtimeID, hostUser);
+    SetRequestEnvsAndLogsForStart(start.get(), updateEnv, request);
 
     litebus::Promise<runtime::v1::StartResponse> promise;
-    CreateSandbox(runtimeID, hostUser)
+    CreateSandbox(request)
         .OnComplete([this, start, runtimeID, promise](const litebus::Future<std::string> &future) mutable {
             if (future.IsError()) {
                 YRLOG_ERROR("{}|Failed to create sandbox, error code: {}", runtimeID, future.GetErrorCode());

@@ -72,7 +72,19 @@ public:
 
     litebus::Future<std::string> TestCreateSandbox(const std::string &runtimeID, const std::string &hostUser = "")
     {
-        return CreateSandbox(runtimeID, hostUser);
+        // CreateSandbox takes a StartInstanceRequest; build a minimal one carrying the
+        // runtimeID and (optionally) HOST_USER deploy option the caller asked for.
+        auto request = std::make_shared<messages::StartInstanceRequest>();
+        request->set_type(static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
+        auto runtimeInfo = request->mutable_runtimeinstanceinfo();
+        runtimeInfo->set_runtimeid(runtimeID);
+        runtimeInfo->set_requestid("test_request_id");
+        runtimeInfo->set_instanceid("test_instance_id");
+        runtimeInfo->set_traceid("test_trace_id");
+        if (!hostUser.empty()) {
+            (*runtimeInfo->mutable_deploymentconfig()->mutable_deployoptions())[HOST_USER] = hostUser;
+        }
+        return CreateSandbox(request);
     }
 
     litebus::Future<runtime::v1::StartResponse> TestExecInSandbox(

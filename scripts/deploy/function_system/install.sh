@@ -109,7 +109,7 @@ function install_function_proxy() {
     fi
     merge_process_args="--enable_merge_process=true \
     --agent_listen_port="${FUNCTION_PROXY_PORT}" \
-    --local_scheduler_address="${LOCAL_IP}:${FUNCTION_PROXY_PORT}" \
+    --local_scheduler_address="${IP_ADDRESS}:${FUNCTION_PROXY_PORT}" \
     --runtime_dir="${RUNTIME_HOME_DIR}/service" \
     --runtime_home_dir="${RUNTIME_USER_HOME_DIR}" \
     --runtime_logs_dir="${RUNTIME_LOG_PATH}" \
