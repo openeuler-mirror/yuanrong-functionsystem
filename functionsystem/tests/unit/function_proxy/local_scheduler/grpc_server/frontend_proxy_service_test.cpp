@@ -844,9 +844,9 @@ TEST(FrontendProxyServiceTest, CreateFileInvokeRequestHasCorrectArgLayout)
     EXPECT_EQ(req.instanceid(), "instance-a");
     EXPECT_FALSE(req.requestid().empty());
     EXPECT_TRUE(req.invokeoptions().bypass_datasystem());
-    // args[0] = protobuf MetaData (6 bytes)
+    // args[0] = protobuf MetaData (8 bytes: invokeType + functionMeta{language, apiType})
     ASSERT_EQ(req.args_size(), 3);
-    EXPECT_EQ(static_cast<int>(req.args(0).value().size()), 6);
+    EXPECT_EQ(static_cast<int>(req.args(0).value().size()), 8);
     // args[1] = 16-byte META_PREFIX
     EXPECT_EQ(req.args(1).value(), "0000000000000000");
     // args[2] = 16-byte META_PREFIX + JSON body

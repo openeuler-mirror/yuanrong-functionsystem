@@ -395,17 +395,6 @@ std::string BuildFileInvokeRequestJSON(const std::string &fileOp, const std::str
 // where the file_op routing lives.
 std::string BuildFileInvokeMetadata()
 {
-    // libruntime::MetaData {
-    //   InvokeType invokeType = 1;   // field 1, varint
-    //   FunctionMeta functionMeta = 2; // field 2, bytes (nested message)
-    // }
-    // InvokeType.InvokeFunction = 1
-    //
-    // FunctionMeta {
-    //   LanguageType language = 5;  // field 5, varint, Python=1
-    //   ApiType apiType = 8;        // field 8, varint, Faas=1
-    // }
-    //
     // Wire format:
     //   field 1 (varint): tag=0x08, value=0x01   → invokeType=InvokeFunction
     //   field 2 (bytes):  tag=0x12, len=0x04      → functionMeta nested message
@@ -456,7 +445,7 @@ SharedStreamMsg ForwardFileInvokeRequest(const FrontendProxyServiceParam &param,
     if (!invokeResponse.IsSome()) {
         frontend_call_result_registry::Cancel(requestID, instanceID);
         YRLOG_ERROR("{}|frontend proxy file {} {} dispatch",
-                   requestID, fileOp, cancelled ? "cancelled" : "timed out");
+            requestID, fileOp, cancelled ? "cancelled" : "timed out");
         return nullptr;
     }
     if (!invokeResponse.Get()->has_invokersp()) {
@@ -467,21 +456,42 @@ SharedStreamMsg ForwardFileInvokeRequest(const FrontendProxyServiceParam &param,
     if (invokeResponse.Get()->invokersp().code() != common::ERR_NONE) {
         frontend_call_result_registry::Cancel(requestID, instanceID);
         YRLOG_ERROR("{}|frontend proxy file {} invoke failed: {}",
-                   requestID, fileOp, invokeResponse.Get()->invokersp().message());
+            requestID, fileOp, invokeResponse.Get()->invokersp().message());
         return nullptr;
     }
     auto callResult = WaitFrontendResult(watchResult.future, context, param.invokeResultTimeoutMs, cancelled);
     if (!callResult.IsSome()) {
         frontend_call_result_registry::Cancel(requestID, instanceID);
         YRLOG_ERROR("{}|frontend proxy file {} result {}",
-                   requestID, fileOp, cancelled ? "cancelled" : "timed out");
+            requestID, fileOp, cancelled ? "cancelled" : "timed out");
         return nullptr;
     }
     if (!callResult.Get()->has_callresultreq()) {
-        YRLOG_ERROR("{}|frontend proxy file {} received invalid call result", requestID, fileOp);
+        YRLOG_ERROR("{}|frontend proxy file {} received invalid call result",
+            requestID, fileOp);
         return nullptr;
     }
     return callResult.Get();
+}
+
+// ExtractDownloadChunkData parses the CallResult message JSON and returns the
+// base64-decoded chunk data. Returns empty string on missing data field or
+// parse failure, and sets parseError when JSON parsing itself fails.
+std::string ExtractDownloadChunkData(const std::string &resultMsg, std::string &parseError)
+{
+    parseError.clear();
+    if (resultMsg.empty()) {
+        return {};
+    }
+    try {
+        auto respJson = nlohmann::json::parse(resultMsg);
+        if (respJson.contains("body") && respJson["body"].contains("data")) {
+            return functionsystem::Base64Decode(respJson["body"]["data"].get<std::string>());
+        }
+    } catch (const std::exception &e) {
+        parseError = std::string("frontend proxy file download failed to parse result: ") + e.what();
+    }
+    return {};
 }
 
 }  // namespace
@@ -871,7 +881,7 @@ void FrontendProxyService::SetStatus(::frontend_proxy::FrontendProxyStatus *stat
 }
 
 bool FrontendProxyService::ValidateFileChunkContext(const ::frontend_proxy::FrontendRequestContext &context,
-                                                   const std::string &instanceID) const
+    const std::string &instanceID) const
 {
     if (!HasRequiredLifecycleContext(context) || instanceID.empty()) {
         return false;
@@ -886,7 +896,7 @@ bool FrontendProxyService::ValidateFileChunkContext(const ::frontend_proxy::Fron
 }
 
 bool FrontendProxyService::ValidateFileTransferRequest(const ::frontend_proxy::FileTransferRequest &request,
-                                                       ::frontend_proxy::FileTransferResponse &response) const
+    ::frontend_proxy::FileTransferResponse &response) const
 {
     if (!HasRequiredLifecycleContext(request.context()) || request.instanceid().empty() || request.path().empty()) {
         SetStatus(response.mutable_status(), common::ERR_PARAM_INVALID,
@@ -982,6 +992,11 @@ SharedStreamMsg FrontendProxyService::CreateFileInvokeRequest(const std::string 
                 return ::grpc::Status::OK;
             }
             firstChunk = false;
+        } else if (chunk.instanceid() != instanceID || chunk.path() != path
+                   || !ValidateFileChunkContext(chunk.context(), instanceID)) {
+            SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
+                      "frontend proxy file upload chunk instanceID/path/context inconsistent with first chunk");
+            return ::grpc::Status::OK;
         }
         const auto dataSize = static_cast<int64_t>(chunk.data().size());
         totalSize += dataSize;
@@ -1069,18 +1084,10 @@ SharedStreamMsg FrontendProxyService::CreateFileInvokeRequest(const std::string 
         // The file_read result is returned via returnByMsg path, so the JSON
         // response (with base64-encoded data) is in CallResult.message, not
         // smallobjects. Parse the JSON to extract the base64 data field.
-        std::string chunkData;
-        const auto &resultMsg = callResult->callresultreq().message();
-        if (!resultMsg.empty()) {
-            try {
-                auto respJson = nlohmann::json::parse(resultMsg);
-                if (respJson.contains("body") && respJson["body"].contains("data")) {
-                    chunkData = functionsystem::Base64Decode(respJson["body"]["data"].get<std::string>());
-                }
-            } catch (const std::exception &e) {
-                    return { ::grpc::StatusCode::INTERNAL,
-                             std::string("frontend proxy file download failed to parse result: ") + e.what() };
-            }
+        std::string parseError;
+        auto chunkData = ExtractDownloadChunkData(callResult->callresultreq().message(), parseError);
+        if (!parseError.empty()) {
+            return { ::grpc::StatusCode::INTERNAL, parseError };
         }
         const auto chunkSize = static_cast<int64_t>(chunkData.size());
         totalSize += chunkSize;

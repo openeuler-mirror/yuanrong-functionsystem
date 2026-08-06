@@ -140,9 +140,9 @@ private:
                           const std::string &message, bool retryable = false,
                           const std::string &retryReason = "");
     bool ValidateFileChunkContext(const ::frontend_proxy::FrontendRequestContext &context,
-                                  const std::string &instanceID) const;
+        const std::string &instanceID) const;
     bool ValidateFileTransferRequest(const ::frontend_proxy::FileTransferRequest &request,
-                                     ::frontend_proxy::FileTransferResponse &response) const;
+        ::frontend_proxy::FileTransferResponse &response) const;
     SharedStreamMsg CreateFileInvokeRequest(const std::string &instanceID,
                                             const std::string &path,
                                             const std::string &fileOp,
