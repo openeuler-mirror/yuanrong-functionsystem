@@ -29,9 +29,14 @@
 #include <grpcpp/create_channel.h>
 #include <grpcpp/server_builder.h>
 
+#include <nlohmann/json.hpp>
+
 #include "common/proto/pb/posix_pb.h"
 #include "function_proxy/busproxy/invocation_handler/invocation_handler.h"
+// Allow test access to private members of FrontendProxyService.
+#define private public
 #include "grpc_server/frontend_proxy_service/frontend_proxy_service.h"
+#undef private
 
 namespace functionsystem::test {
 using namespace local_scheduler;
@@ -611,7 +616,7 @@ TEST(FrontendProxyServiceTest, KillSuccessDoesNotSynthesizeCleanupWhenEvidenceSt
     EXPECT_TRUE(service.KillInstance(nullptr, &request, &response).ok());
     const auto elapsed = std::chrono::steady_clock::now() - started;
     EXPECT_EQ(response.status().code(), common::ERR_NONE);
-    EXPECT_GE(probes, 1);
+    EXPECT_GE(probes, static_cast<size_t>(1));
     EXPECT_GE(elapsed, std::chrono::milliseconds(10));
 }
 
@@ -753,6 +758,127 @@ TEST(FrontendProxyServiceTest, RealGrpcCancellationStopsInvokeWaitAndClearsRegis
     } while (std::chrono::steady_clock::now() < cleanupDeadline);
     EXPECT_EQ(dispatchCount, 2);
     EXPECT_EQ(retryResponse.status().message(), "second dispatch proves registry cleanup");
+}
+
+// ---- File transfer (UploadFile / DownloadFile) tests ----
+
+TEST(FrontendProxyServiceTest, UploadRejectsUnauthenticatedPeer)
+{
+    FrontendProxyServiceParam param;
+    param.requireAuthenticatedPeer = true;
+    FrontendProxyService service(std::move(param));
+
+    ::frontend_proxy::FileTransferResponse response;
+    // ServerReader is not needed for auth check; service rejects before reading.
+    auto status = service.UploadFile(nullptr, nullptr, &response);
+    EXPECT_EQ(status.error_code(), ::grpc::StatusCode::UNAUTHENTICATED);
+}
+
+TEST(FrontendProxyServiceTest, DownloadRejectsUnauthenticatedPeer)
+{
+    FrontendProxyServiceParam param;
+    param.requireAuthenticatedPeer = true;
+    FrontendProxyService service(std::move(param));
+
+    ::frontend_proxy::FileTransferRequest request;
+    auto status = service.DownloadFile(nullptr, &request, nullptr);
+    EXPECT_EQ(status.error_code(), ::grpc::StatusCode::UNAUTHENTICATED);
+}
+
+TEST(FrontendProxyServiceTest, DownloadRejectsMissingInstanceID)
+{
+    FrontendProxyServiceParam param;
+    FrontendProxyService service(std::move(param));
+
+    ::frontend_proxy::FileTransferRequest request;
+    request.mutable_context()->set_frontendclientid("frontend-a");
+    request.mutable_context()->set_requestid("dl-no-instance");
+    request.mutable_context()->set_tenantid("tenant-a");
+    request.set_path("/tmp/test.bin");
+    auto status = service.DownloadFile(nullptr, &request, nullptr);
+    EXPECT_EQ(status.error_code(), ::grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+TEST(FrontendProxyServiceTest, DownloadRejectsMissingPath)
+{
+    FrontendProxyServiceParam param;
+    FrontendProxyService service(std::move(param));
+
+    ::frontend_proxy::FileTransferRequest request;
+    request.mutable_context()->set_frontendclientid("frontend-a");
+    request.mutable_context()->set_requestid("dl-no-path");
+    request.mutable_context()->set_tenantid("tenant-a");
+    request.set_instanceid("instance-a");
+    auto status = service.DownloadFile(nullptr, &request, nullptr);
+    EXPECT_EQ(status.error_code(), ::grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+TEST(FrontendProxyServiceTest, DownloadRejectsTenantMismatch)
+{
+    FrontendProxyServiceParam param;
+    param.invokeTenantAuthorizer = [](const std::string &tenantID, const std::string &instanceID) {
+        return false;
+    };
+    FrontendProxyService service(std::move(param));
+
+    ::frontend_proxy::FileTransferRequest request;
+    request.mutable_context()->set_frontendclientid("frontend-a");
+    request.mutable_context()->set_requestid("dl-tenant-mismatch");
+    request.mutable_context()->set_tenantid("tenant-a");
+    request.set_instanceid("instance-b");
+    request.set_path("/tmp/test.bin");
+    auto status = service.DownloadFile(nullptr, &request, nullptr);
+    EXPECT_EQ(status.error_code(), ::grpc::StatusCode::INVALID_ARGUMENT);
+}
+
+TEST(FrontendProxyServiceTest, CreateFileInvokeRequestHasCorrectArgLayout)
+{
+    FrontendProxyServiceParam param;
+    FrontendProxyService service(std::move(param));
+
+    auto invoke = service.CreateFileInvokeRequest("instance-a", "/tmp/test.bin", "file_write",
+                                                   "wb", "SGVsbG8=", 0, 0, "upload-1", true);
+    ASSERT_NE(invoke, nullptr);
+    ASSERT_TRUE(invoke->has_invokereq());
+    const auto &req = invoke->invokereq();
+    EXPECT_EQ(req.instanceid(), "instance-a");
+    EXPECT_FALSE(req.requestid().empty());
+    EXPECT_TRUE(req.invokeoptions().bypass_datasystem());
+    // args[0] = protobuf MetaData (6 bytes)
+    ASSERT_EQ(req.args_size(), 3);
+    EXPECT_EQ(static_cast<int>(req.args(0).value().size()), 6);
+    // args[1] = 16-byte META_PREFIX
+    EXPECT_EQ(req.args(1).value(), "0000000000000000");
+    // args[2] = 16-byte META_PREFIX + JSON body
+    EXPECT_EQ(req.args(2).value().substr(0, 16), "0000000000000000");
+    // JSON body should contain file_op and path
+    auto jsonBody = req.args(2).value().substr(16);
+    auto parsed = nlohmann::json::parse(jsonBody);
+    EXPECT_EQ(parsed["body"]["file_op"], "file_write");
+    EXPECT_EQ(parsed["body"]["path"], "/tmp/test.bin");
+    EXPECT_EQ(parsed["body"]["mode"], "wb");
+    EXPECT_EQ(parsed["body"]["data"], "SGVsbG8=");
+    EXPECT_EQ(parsed["body"]["upload_id"], "upload-1");
+    EXPECT_TRUE(parsed["body"]["is_last"].get<bool>());
+}
+
+TEST(FrontendProxyServiceTest, CreateFileInvokeRequestFileReadHasNoData)
+{
+    FrontendProxyServiceParam param;
+    FrontendProxyService service(std::move(param));
+
+    auto invoke = service.CreateFileInvokeRequest("instance-a", "/tmp/read.bin", "file_read",
+                                                   "", "", 0, 2097152);
+    ASSERT_NE(invoke, nullptr);
+    ASSERT_TRUE(invoke->has_invokereq());
+    const auto &req = invoke->invokereq();
+    ASSERT_EQ(req.args_size(), 3);
+    auto jsonBody = req.args(2).value().substr(16);
+    auto parsed = nlohmann::json::parse(jsonBody);
+    EXPECT_EQ(parsed["body"]["file_op"], "file_read");
+    EXPECT_EQ(parsed["body"]["path"], "/tmp/read.bin");
+    EXPECT_FALSE(parsed["body"].contains("data"));
+    EXPECT_EQ(parsed["body"]["length"], 2097152);
 }
 
 }  // namespace functionsystem::test
