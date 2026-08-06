@@ -64,6 +64,11 @@ public:
         return BuildCommand(start);
     }
 
+    nlohmann::json TestCreateRequest(const std::shared_ptr<messages::StartInstanceRequest> &request)
+    {
+        return CreateRequest(request);
+    }
+
     messages::StartInstanceResponse TestGenSuccessStartInstanceResponse(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &sandboxID)
     {
@@ -1000,6 +1005,61 @@ TEST_F(SupervisorExecutorTest, StartRuntime_RejectsIllegalCommandChars)
     // Underlying StartByRuntimeID returns ERR_PARAM_INVALID; GenFailStartInstanceResponse
     // wraps with RUNTIME_MANAGER_CREATE_EXEC_FAILED code, message carries the original
     EXPECT_THAT(rsp.message(), testing::HasSubstr("/bin/echo$()"));
+}
+
+/**
+ * Feature: CreateRequest env_vars propagation
+ * Description: The /api/agent frontend splits env_vars into runtimeconfig.posixenvs.
+ *              CreateRequest copies posixenvs into policy.environment at sandbox
+ *              creation time (register and inline style both go through CreateSandbox
+ *              -> CreateRequest). JIUWENSWARM_HOME from host_user is applied last so
+ *              a colliding posixenvs entry can never overwrite the home dir.
+ */
+TEST_F(SupervisorExecutorTest, CreateRequest_AppliesEnvVarsFromPosixEnvs)
+{
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    auto runtimeInfo = request->mutable_runtimeinstanceinfo();
+    runtimeInfo->set_runtimeid("rt");
+    auto posixEnvs = runtimeInfo->mutable_runtimeconfig()->mutable_posixenvs();
+    (*posixEnvs)["AGENT_SERVER_HOST"] = "0.0.0.0";
+    (*posixEnvs)["AGENT_SERVER_PORT"] = "18092";
+    (*posixEnvs)["YR_TENANT_ID"] = "dev";  // system env carried alongside
+
+    auto req = executor_->TestCreateRequest(request);
+    EXPECT_EQ(req["policy_mode"], "append");
+    ASSERT_TRUE(req["policy"]["environment"].is_object());
+    EXPECT_EQ(req["policy"]["environment"]["AGENT_SERVER_HOST"], "0.0.0.0");
+    EXPECT_EQ(req["policy"]["environment"]["AGENT_SERVER_PORT"], "18092");
+    EXPECT_EQ(req["policy"]["environment"]["YR_TENANT_ID"], "dev");
+    // no host_user -> no process/namespace policy
+    EXPECT_FALSE(req["policy"].contains("process"));
+    EXPECT_FALSE(req["policy"].contains("namespace"));
+}
+
+TEST_F(SupervisorExecutorTest, CreateRequest_PosixEnvsCoexistWithHostUser)
+{
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    auto runtimeInfo = request->mutable_runtimeinstanceinfo();
+    runtimeInfo->set_runtimeid("rt");
+    (*runtimeInfo->mutable_deploymentconfig()->mutable_deployoptions())[HOST_USER] = "User9876";
+    (*runtimeInfo->mutable_runtimeconfig()->mutable_posixenvs())["AGENT_SERVER_PORT"] = "18092";
+
+    auto req = executor_->TestCreateRequest(request);
+    ASSERT_TRUE(req["policy"]["environment"].is_object());
+    EXPECT_EQ(req["policy"]["environment"]["AGENT_SERVER_PORT"], "18092");
+    EXPECT_EQ(req["policy"]["environment"]["JIUWENSWARM_HOME"], "/home/User9876");
+    EXPECT_EQ(req["policy"]["process"]["run_as_user"], "User9876");
+    EXPECT_EQ(req["policy"]["process"]["run_as_group"], "User9876");
+    EXPECT_EQ(req["policy"]["namespace"]["user"], false);
+}
+
+TEST_F(SupervisorExecutorTest, CreateRequest_NoEnvVarsNoHostUserHasNoEnvironment)
+{
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    request->mutable_runtimeinstanceinfo()->set_runtimeid("rt");
+    auto req = executor_->TestCreateRequest(request);
+    EXPECT_FALSE(req["policy"].contains("environment"));
+    EXPECT_FALSE(req["policy"].contains("process"));
 }
 
 /**

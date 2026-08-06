@@ -95,6 +95,13 @@ private:
     nlohmann::json ParseBindMounts(const std::string &rootfsJson, const std::string &runtimeID);
     bool IsReadonlyMount(const nlohmann::json &mount);
 
+    // Whether rootfs.mounts already binds something onto homeDir (workspace present). Other
+    // mounts may coexist in rootfs.mounts, so matching homeDir as a mount target — not bindMounts
+    // emptiness — is the workspace-present signal. Returns false when rootfsJson is empty or
+    // unparsable.
+    bool IsHomeMounted(const std::string &rootfsJson, const std::string &homeDir,
+                       const std::string &runtimeID) const;
+
     nlohmann::json CreateRequest(const std::shared_ptr<messages::StartInstanceRequest> &request);
 
     litebus::Future<std::string> CreateSandbox(const std::shared_ptr<messages::StartInstanceRequest> &request);
