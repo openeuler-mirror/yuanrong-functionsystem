@@ -132,16 +132,19 @@ void Executor::ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr
     if (!litebus::os::ExistPath(path)) {
         YRLOG_WARN("{}|std log path {} not found, try to make dir", runtimeID, path);
         if (!litebus::os::Mkdir(path).IsNone()) {
-            YRLOG_WARN("{}|failed to make dir {}, msg: {}", runtimeID, path, litebus::os::Strerror(errno));
+            YRLOG_WARN("{}|failed to make dir {}, msg: {}; log redirect skipped, runtime logs will NOT land on host",
+                       runtimeID, path, litebus::os::Strerror(errno));
             return;
         }
     }
 
-    // 目录放权 1777（sticky bit，等同 /tmp）：容器内 sh -c ">/out 2>/err" 以容器运行用户身份
-    // open(O_CREAT) 日志文件，属主天然是该 uid。
-    if (::chmod(path.c_str(), 01777) != 0) {
-        YRLOG_WARN("{}|failed to chmod log dir {} to 1777, msg: {}", runtimeID, path,
-                   litebus::os::Strerror(errno));
+    // 目录放权：rwxrwxrwt（sticky bit，等同 /tmp），任意 uid 可建文件但仅可删自己的。
+    // 容器内 sh -c ">/out 2>/err" 以容器运行用户身份 open(O_CREAT) 日志文件，属主天然是该 uid。
+    constexpr mode_t logDirMode = 01777;  // rwxrwxrwt + sticky bit
+    if (::chmod(path.c_str(), logDirMode) != 0) {
+        YRLOG_WARN("{}|failed to chmod log dir {} to 1777, msg: {}; log redirect skipped, "
+                   "runtime logs will NOT land on host", runtimeID, path, litebus::os::Strerror(errno));
+        return;
     }
 
     // 日志文件由容器内 sh 自建，此处只返回路径。
