@@ -37,6 +37,8 @@ public:
 
     virtual litebus::Future<std::shared_ptr<resources::RouteInfo>> QueryInstanceRoute(const std::string &instanceID);
 
+    virtual litebus::Future<std::string> QueryProxyAddress(const std::string &proxyID);
+
     virtual void NotifyMigratingRequest(const std::string &instanceID);
 
     virtual void ReportTraffic(const std::string &instanceID, const size_t &size);

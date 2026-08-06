@@ -25,6 +25,7 @@
 #include "common/metrics/metrics_constants.h"
 #include "function_proxy/busproxy/instance_view/instance_view.h"
 #include "function_proxy/busproxy/invocation_handler/invocation_handler.h"
+#include "function_proxy/busproxy/instance_proxy/request_router.h"
 #include "function_proxy/common/observer/data_plane_observer/data_plane_observer.h"
 #include "function_proxy/config/direct_routing_config.h"
 #include "mocks/mock_internal_iam.h"
@@ -95,6 +96,9 @@ public:
 
     MOCK_METHOD(litebus::Future<Status>, SendSubscribeInstanceEvent,
                 (const std::string &subscriber, const std::string &targetInstance, bool ignoreNonExist));
+    MOCK_METHOD((litebus::Future<std::shared_ptr<resources::RouteInfo>>), QueryInstanceRoute,
+                (const std::string &instanceID), (override));
+    MOCK_METHOD((litebus::Future<std::string>), QueryProxyAddress, (const std::string &proxyID), (override));
 
 private:
     std::shared_ptr<InstanceView> instanceView_;
@@ -165,6 +169,7 @@ public:
         proxyView_->Update(remote_, std::make_shared<proxy::Client>(observer_->GetAID()));
 
         InstanceProxy::BindObserver(observer_);
+        InstanceProxy::BindSystemTimeout(DEFAULT_SYSTEM_TIMEOUT);
         RequestDispatcher::BindDataInterfaceClientManager(mockSharedClientManagerProxy_);
         InvocationHandler::BindInstanceProxy(std::make_shared<busproxy::InstanceProxyWrapper>());
         MemoryControlConfig config;
@@ -188,6 +193,7 @@ public:
         instanceView_->Delete("calleeIns", -1);
         instanceInfo_.clear();
         InstanceProxy::BindObserver(nullptr);
+        InstanceProxy::BindSystemTimeout(DEFAULT_SYSTEM_TIMEOUT);
         RequestDispatcher::BindInternalIAM(nullptr);
         RequestDispatcher::BindDataInterfaceClientManager(nullptr);
         instanceView_->BindDataInterfaceClientManager(nullptr);
@@ -847,6 +853,36 @@ TEST_F(InstanceProxyTest, CallResultWithoutCaller)
     EXPECT_EQ(callResultAck.Get()->callresultack().code(), ::common::ErrorCode::ERR_INSTANCE_NOT_FOUND);
 }
 
+TEST_F(InstanceProxyTest, CallResultDoesNotReturnRouteWithoutRefresh)
+{
+    const std::string callerIns = "callerIns";
+    auto callerInfo = NewInstance(callerIns, tenantID_);
+    UpdateInstance(callerInfo, callerIns, static_cast<int32_t>(InstanceState::CREATING), local_);
+    auto mockSharedClient = std::make_shared<MockSharedClient>();
+    EXPECT_CALL(*mockSharedClientManagerProxy_, GetDataInterfacePosixClient(callerIns))
+        .WillOnce(Return(mockSharedClient));
+    observer_->Update(callerIns, callerInfo);
+
+    litebus::AID callerProxy(callerIns, observer_->GetAID().Url());
+    ASSERT_AWAIT_TRUE([&]() { return litebus::GetActor(callerProxy) != nullptr; });
+
+    litebus::Promise<runtime::NotifyRequest> notifyCalled;
+    EXPECT_CALL(*mockSharedClient, NotifyResult(_))
+        .WillOnce(Invoke([notifyCalled](runtime::NotifyRequest &&request)
+                             -> litebus::Future<runtime::NotifyResponse> {
+            notifyCalled.SetValue(request);
+            return runtime::NotifyResponse();
+        }));
+    auto notifyFuture = notifyCalled.GetFuture();
+
+    auto callResultAck = litebus::Async(callerProxy, &InstanceProxy::CallResult, "calleeIns", callerIns,
+                                        CallResult(callerIns, "Request-route-info"), nullptr);
+    ASSERT_AWAIT_SET(callResultAck);
+    ASSERT_AWAIT_SET(notifyFuture);
+    const auto &notify = notifyFuture.Get();
+    EXPECT_FALSE(notify.has_runtimeinfo());
+}
+
 /**
  * Feature: invoke test
  * Description: invoke fatal instance
@@ -979,7 +1015,7 @@ static std::shared_ptr<MockSharedClient> SpawnReadyCalleeProxy(
     const std::string &calleeIns, const std::string &proxyID,
     std::function<litebus::Future<SharedStreamMsg>(const SharedStreamMsg &)> callHandler)
 {
-    auto calleeProxyActor = std::make_shared<InstanceProxy>(calleeIns, "");
+    auto calleeProxyActor = std::make_shared<InstanceProxy>(calleeIns, "", proxyID);
     calleeProxyActor->InitDispatcher();
     auto info = std::make_shared<InstanceRouterInfo>();
     info->isReady = true;
@@ -992,6 +1028,95 @@ static std::shared_ptr<MockSharedClient> SpawnReadyCalleeProxy(
     litebus::Spawn(calleeProxyActor);
     EXPECT_CALL(*mockCalleeClient, Call(_)).WillRepeatedly(Invoke(callHandler));
     return mockCalleeClient;
+}
+
+TEST_F(InstanceProxyTest, QueryRouteNotFoundAfterSystemTimeout)
+{
+    InstanceProxy::BindSystemTimeout(0);
+    const std::string callerIns = "callerIns";
+    const std::string calleeIns = "calleeIns";
+    const std::string staleRoute = "tcp://127.0.0.1:1";
+
+    (void)PrepareCaller(callerIns);
+    litebus::AID callerProxy(callerIns, observer_->GetAID().Url());
+    ASSERT_AWAIT_TRUE([&]() { return litebus::GetActor(callerProxy) != nullptr; });
+    EXPECT_CALL(*observer_, QueryInstanceRoute(calleeIns))
+        .WillOnce(Return(litebus::Future<std::shared_ptr<resources::RouteInfo>>(
+            litebus::Status(static_cast<int32_t>(StatusCode::ERR_INSTANCE_NOT_FOUND)))));
+
+    auto firstCall = litebus::Async(callerProxy, &InstanceProxy::Call,
+                                    busproxy::CallerInfo{ .instanceID = callerIns }, calleeIns,
+                                    CallRequest(callerIns, calleeIns, "Request-query-not-found", staleRoute), nullptr);
+    auto retryCall = litebus::Async(callerProxy, &InstanceProxy::Call,
+                                    busproxy::CallerInfo{ .instanceID = callerIns }, calleeIns,
+                                    CallRequest(callerIns, calleeIns, "Request-query-not-found", staleRoute), nullptr);
+
+    ASSERT_AWAIT_SET(firstCall);
+    ASSERT_AWAIT_SET(retryCall);
+    EXPECT_EQ(firstCall.Get()->callrsp().code(), common::ERR_INSTANCE_NOT_FOUND);
+    EXPECT_EQ(retryCall.Get()->callrsp().code(), common::ERR_INSTANCE_NOT_FOUND);
+}
+
+TEST_F(InstanceProxyTest, ForwardThroughCurrentRouteAfterSystemTimeout)
+{
+    InstanceProxy::BindSystemTimeout(0);
+    const std::string callerIns = "callerIns";
+    const std::string calleeIns = "calleeIns";
+    const std::string staleRoute = "tcp://127.0.0.1:1";
+
+    (void)SpawnReadyCalleeProxy(calleeIns, local_, [](const SharedStreamMsg &) {
+        auto response = std::make_shared<runtime_rpc::StreamingMessage>();
+        response->mutable_callrsp()->set_code(common::ERR_NONE);
+        return litebus::Future<SharedStreamMsg>(response);
+    });
+    auto requestRouter = std::make_shared<busproxy::RequestRouter>(REQUEST_ROUTER_NAME);
+    litebus::Spawn(requestRouter);
+    EXPECT_CALL(*observer_, SendSubscribeInstanceEvent(_, _, true)).WillRepeatedly(Return(Status::OK()));
+
+    auto routeInfo = std::make_shared<resources::RouteInfo>();
+    routeInfo->set_instanceid(calleeIns);
+    routeInfo->set_functionproxyid(local_);
+    routeInfo->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::RUNNING));
+    EXPECT_CALL(*observer_, QueryInstanceRoute(calleeIns))
+        .WillOnce(Return(litebus::Future<std::shared_ptr<resources::RouteInfo>>(routeInfo)));
+    EXPECT_CALL(*observer_, QueryProxyAddress(local_))
+        .WillOnce(Return(litebus::Future<std::string>(observer_->GetAID().Url())));
+
+    auto mockCallerClient = PrepareCaller(callerIns);
+    litebus::AID callerProxy(callerIns, observer_->GetAID().Url());
+    ASSERT_AWAIT_TRUE([&]() { return litebus::GetActor(callerProxy) != nullptr; });
+    litebus::Promise<runtime::NotifyRequest> notifyCalled;
+    EXPECT_CALL(*mockCallerClient, NotifyResult(_))
+        .WillOnce(Invoke([notifyCalled](runtime::NotifyRequest &&request)
+                             -> litebus::Future<runtime::NotifyResponse> {
+            notifyCalled.SetValue(request);
+            return runtime::NotifyResponse();
+        }));
+    auto notifyFuture = notifyCalled.GetFuture();
+    auto firstCall = litebus::Async(callerProxy, &InstanceProxy::Call,
+                                    busproxy::CallerInfo{ .instanceID = callerIns }, calleeIns,
+                                    CallRequest(callerIns, calleeIns, "Request-query-current-route", staleRoute),
+                                    nullptr);
+    auto retryCall = litebus::Async(callerProxy, &InstanceProxy::Call,
+                                    busproxy::CallerInfo{ .instanceID = callerIns }, calleeIns,
+                                    CallRequest(callerIns, calleeIns, "Request-query-current-route", staleRoute),
+                                    nullptr);
+
+    ASSERT_AWAIT_SET(firstCall);
+    ASSERT_AWAIT_SET(retryCall);
+    EXPECT_EQ(firstCall.Get()->callrsp().code(), common::ERR_NONE);
+    EXPECT_EQ(retryCall.Get()->callrsp().code(), common::ERR_NONE);
+    litebus::AID calleeProxy(calleeIns, observer_->GetAID().Url());
+    auto callResultAck = litebus::Async(calleeProxy, &InstanceProxy::CallResult, calleeIns, callerIns,
+                                        CallResult(callerIns, "Request-query-current-route"), nullptr);
+    ASSERT_AWAIT_SET(callResultAck);
+    ASSERT_AWAIT_SET(notifyFuture);
+    const auto &notify = notifyFuture.Get();
+    ASSERT_TRUE(notify.has_runtimeinfo());
+    EXPECT_EQ(notify.runtimeinfo().route(), calleeProxy.Url());
+    EXPECT_EQ(notify.runtimeinfo().proxyid(), local_);
+    litebus::Terminate(requestRouter->GetAID());
+    litebus::Await(requestRouter);
 }
 
 /**

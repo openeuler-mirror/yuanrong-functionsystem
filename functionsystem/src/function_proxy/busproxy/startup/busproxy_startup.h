@@ -21,6 +21,7 @@
 
 #include "busproxy/memory_monitor/memory_monitor.h"
 #include "busproxy/registry/service_registry.h"
+#include "common/constants/constants.h"
 #include "common/status/status.h"
 #include "common/constants/actor_name.h"
 #include "function_proxy/common/communication/proxy/actor.h"
@@ -41,6 +42,7 @@ struct BusProxyStartParam {
     std::shared_ptr<function_proxy::DataPlaneObserver> dataPlaneObserver{ nullptr };
     std::shared_ptr<MemoryMonitor> memoryMonitor{ nullptr };
     std::shared_ptr<function_proxy::InternalIAM> internalIam{ nullptr };
+    uint32_t systemTimeoutMs{ DEFAULT_SYSTEM_TIMEOUT };
     bool isEnablePerf;
     bool unRegisterWhileStop;
     ProxyServiceMeta proxyService;

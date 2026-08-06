@@ -257,6 +257,26 @@ ProxyServiceMeta BuildProxyServiceMeta(const function_proxy::Flags &flags)
     return proxyService;
 }
 
+MemoryControlConfig BuildMemoryControlConfig(const function_proxy::Flags &flags)
+{
+    MemoryControlConfig config;
+    config.enable = flags.GetInvokeLimitationEnable();
+    if (!config.enable) {
+        return config;
+    }
+    auto highThreshold = flags.GetHighMemoryThreshold();
+    auto lowThreshold = flags.GetLowMemoryThreshold();
+    if (lowThreshold > 0 && highThreshold < 1 && lowThreshold < highThreshold) {
+        config.highMemoryThreshold = highThreshold;
+        config.lowMemoryThreshold = lowThreshold;
+    }
+    auto msgThreshold = flags.GetMessageSizeThreshold();
+    if (msgThreshold > 0 && msgThreshold < MAXIMUM_BUSPROXY_MESSAGE_SIZE_THRESHOLD) {
+        config.msgSizeThreshold = msgThreshold;
+    }
+    return config;
+}
+
 bool CreateBusProxy(const function_proxy::Flags &flags)
 {
     if (g_commonDriver == nullptr) {
@@ -268,21 +288,6 @@ bool CreateBusProxy(const function_proxy::Flags &flags)
     auto internalIAM = g_commonDriver->GetInternalIAM();
     auto metaStorageAccessor = g_commonDriver->GetMetaStorageAccessor();
 
-    MemoryControlConfig memoryControlConfig;
-    memoryControlConfig.enable = flags.GetInvokeLimitationEnable();
-    if (memoryControlConfig.enable) {
-        // check input value
-        auto inputHighThreshold = flags.GetHighMemoryThreshold();
-        auto inputLowThreshold = flags.GetLowMemoryThreshold();
-        auto inputMsgThreshold = flags.GetMessageSizeThreshold();
-        if (inputLowThreshold > 0 && inputHighThreshold < 1 && inputLowThreshold < inputHighThreshold) {
-            memoryControlConfig.highMemoryThreshold = inputHighThreshold;
-            memoryControlConfig.lowMemoryThreshold = inputLowThreshold;
-        }
-        if (inputMsgThreshold > 0 && inputMsgThreshold < MAXIMUM_BUSPROXY_MESSAGE_SIZE_THRESHOLD) {
-            memoryControlConfig.msgSizeThreshold = inputMsgThreshold;
-        }
-    }
     BusProxyStartParam busproxyStartParam{
         .nodeID = flags.GetNodeID(),
         .modelName = COMPONENT_NAME,
@@ -290,8 +295,9 @@ bool CreateBusProxy(const function_proxy::Flags &flags)
         .serviceTTL = flags.GetServiceTTL(),
         .dataInterfaceClientMgr = dataInterfaceClientMgrProxy,
         .dataPlaneObserver = std::make_shared<function_proxy::DataPlaneObserver>(observer),
-        .memoryMonitor = std::make_shared<MemoryMonitor>(memoryControlConfig),
+        .memoryMonitor = std::make_shared<MemoryMonitor>(BuildMemoryControlConfig(flags)),
         .internalIam = internalIAM,
+        .systemTimeoutMs = flags.GetSystemTimeout(),
         .isEnablePerf = flags.GetEnablePerf(),
         .unRegisterWhileStop = flags.UnRegisterWhileStop(),
         .proxyService = BuildProxyServiceMeta(flags)

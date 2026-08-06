@@ -16,15 +16,19 @@
 
 #ifndef FUNCTION_PROXY_BUSPROXY_INSTANCE_PROXY_INSTANCE_PROXY_H
 #define FUNCTION_PROXY_BUSPROXY_INSTANCE_PROXY_INSTANCE_PROXY_H
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "actor/actor.hpp"
 #include "async/future.hpp"
 #include "common/constants/actor_name.h"
+#include "common/constants/constants.h"
 #include "common/lru/thread_safe_lru_cache.h"
 #include "common/proto/pb/posix_pb.h"
+#include "common/types/instance_state.h"
 #include "common/utils/request_sync_helper.h"
 #include "function_proxy/busproxy/instance_proxy/forward_interface.h"
 #include "function_proxy/busproxy/instance_proxy/request_dispatcher.h"
@@ -36,8 +40,12 @@ class InstanceProxy : public litebus::ActorBase,
                       public std::enable_shared_from_this<InstanceProxy>,
                       public ForwardInterface {
 public:
-    InstanceProxy(const std::string &instanceID, const std::string &tenantID)
-        : litebus::ActorBase(instanceID), instanceID_(instanceID), tenantID_(tenantID), perf_(std::make_shared<Perf>())
+    InstanceProxy(const std::string &instanceID, const std::string &tenantID, const std::string &proxyID = "")
+        : litebus::ActorBase(instanceID),
+          instanceID_(instanceID),
+          tenantID_(tenantID),
+          proxyID_(proxyID),
+          perf_(std::make_shared<Perf>())
     {
     }
     ~InstanceProxy() override = default;
@@ -92,6 +100,11 @@ public:
         RequestDispatcher::BindObserver(observer);
     }
 
+    static void BindSystemTimeout(uint32_t systemTimeoutMs)
+    {
+        systemTimeoutMs_ = systemTimeoutMs;
+    }
+
 protected:
     void Init() override;
 
@@ -119,6 +132,16 @@ private:
     void OnQueryRouteForwardComplete(const std::string &originalMessageID,
                                      std::shared_ptr<litebus::Promise<SharedStreamMsg>> promise,
                                      const litebus::Future<SharedStreamMsg> &future);
+    void SendForwardCallToRequestRouter(const litebus::AID &aid, const SharedStreamMsg &request);
+    void OnRetryQueryRouteResult(
+        const std::string &dstInstanceID, const SharedStreamMsg &request,
+        const litebus::Future<std::shared_ptr<resources::RouteInfo>> &routeFuture);
+    void OnRetryQueryProxyAddressResult(const std::string &dstInstanceID, const SharedStreamMsg &request,
+                                        const litebus::Future<std::string> &addressFuture);
+    void CompleteForwardCallWithError(const std::string &requestID, const common::ErrorCode &code,
+                                      const std::string &message);
+    void EraseForwardCallContext(const std::string &requestID);
+    void AttachCurrentRouteInfoForRefreshedCall(core_service::CallResult *callResult);
 
     void OnForwardCallResult(const litebus::Future<SharedStreamMsg> &callResultAckFut, const litebus::AID &from,
                              const SharedStreamMsg &callResult, const std::string &srcInstance);
@@ -135,11 +158,16 @@ private:
 
 private:
     inline static std::shared_ptr<function_proxy::DataPlaneObserver> observer_ { nullptr };
+    inline static uint32_t systemTimeoutMs_ { DEFAULT_SYSTEM_TIMEOUT };
     std::string instanceID_;
     std::string tenantID_;
+    std::string proxyID_;
     std::shared_ptr<RequestDispatcher> selfDispatcher_ { nullptr };
     std::unordered_map<std::string, std::shared_ptr<RequestDispatcher>> remoteDispatchers_;
     std::map<std::string, std::shared_ptr<litebus::Promise<SharedStreamMsg>>> forwardCallPromises_;
+    std::unordered_map<std::string, std::chrono::steady_clock::time_point> forwardCallStartTimes_;
+    std::unordered_set<std::string> forwardCallRouteQueries_;
+    std::unordered_set<std::string> returnRouteInfoRequestIDs_;
     std::map<std::string, std::shared_ptr<litebus::Promise<SharedStreamMsg>>> forwardCallResultPromises_;
     std::unordered_map<std::string, std::shared_ptr<PerfContext>> perfMap_;
     std::shared_ptr<Perf> perf_;

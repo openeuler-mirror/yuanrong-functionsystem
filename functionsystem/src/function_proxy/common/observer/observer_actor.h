@@ -316,6 +316,8 @@ public:
 
     litebus::Future<std::shared_ptr<resources::RouteInfo>> QueryInstanceRoute(const std::string &instanceID);
 
+    litebus::Future<std::string> QueryProxyAddress(const std::string &proxyID);
+
     litebus::Future<resource_view::InstanceInfo> GetInstanceRouteInfo(const std::string &instanceID);
 
     litebus::Future<resource_view::InstanceInfo> OnGetInstanceFromMetaStore(
