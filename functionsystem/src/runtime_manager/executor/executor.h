@@ -220,12 +220,10 @@ protected:
 
     virtual void Finalize();
 
-    // Resolve per-runtime stdout/stderr redirect paths under runtimeLogPath/runtimeStdLogDir,
-    // mkdir/touch them, and (when hostUser is set) chown them so a non-root container User can write
-    // via the sh -c ">/out 2>/err" redirect. Shared by docker and supervisor; moved up so the logic
-    // lives in one place. hostUser="" skips chown (root container / legacy path).
-    void ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID,
-                                  const std::string &hostUser = "");
+    // Resolve per-runtime stdout/stderr redirect paths under runtimeLogPath/runtimeStdLogDir;
+    // mkdir the dir and chmod it 1777 so the container's sh -c ">/out 2>/err" creates the files
+    // itself (owner = sh's euid). Shared by docker and supervisor.
+    void ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr, const std::string &runtimeID);
 
     RuntimeConfig config_{};
 

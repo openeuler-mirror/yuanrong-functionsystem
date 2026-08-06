@@ -74,8 +74,7 @@ protected:
 private:
     void BuildRuntimeCommands(runtime::v1::StartRequest *request, const std::vector<std::string> &buildArgs);
 
-    void SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs, const std::string &runtimeID,
-                                       const std::string &hostUser);
+    void SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs, const std::string &runtimeID);
 
     // Resolve the executable path for the runtime language.
     std::string ResolveExecPath(const std::string &language,

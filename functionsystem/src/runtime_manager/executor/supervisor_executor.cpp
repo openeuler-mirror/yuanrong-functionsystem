@@ -682,19 +682,13 @@ void SupervisorExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest
                                                        const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &runtimeID = request->runtimeinstanceinfo().runtimeid();
-    const auto &deployOpts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
-    std::string hostUser;
-    if (auto it = deployOpts.find(HOST_USER); it != deployOpts.end()) {
-        hostUser = it->second;
-    }
-    hostUser = hostUser.empty() ? "agentos" : hostUser;
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
     req->mutable_envs()->insert(combineEnvs.begin(), combineEnvs.end());
     (*req->mutable_envs())[YR_ONLY_STDOUT] = "true";
 
     std::string stdOut;
     std::string stdErr;
-    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID, hostUser);  // base Executor impl (shared)
+    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID);  // base Executor impl (shared)
     req->set_stdout(stdOut);
     req->set_stderr(stdErr);
 }

@@ -843,7 +843,7 @@ void DockerExecutor::BuildRuntimeCommands(runtime::v1::StartRequest *request,
 }
 
 void DockerExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *req, const Envs &envs,
-    const std::string &runtimeID, const std::string &hostUser)
+    const std::string &runtimeID)
 {
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
     req->mutable_envs()->insert(combineEnvs.begin(), combineEnvs.end());
@@ -851,7 +851,7 @@ void DockerExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest *re
 
     std::string stdOut;
     std::string stdErr;
-    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID, hostUser);  // base Executor impl (shared)
+    ConfigRuntimeRedirectLog(stdOut, stdErr, runtimeID);  // base Executor impl (shared)
     req->set_stdout(stdOut);
     req->set_stderr(stdErr);
 }
@@ -956,9 +956,9 @@ std::vector<std::string> DockerExecutor::BuildBindMounts(const Envs &envs,
 
     // Mount the host log dir into the container at the same path so yr runtime logs
     // (GLOG_LOG_DIR = runtimeLogPath) and the per-runtime stdout/stderr redirect files land on the
-    // host. Server-side plumbing; tenant-agnostic (no per-runtime subdir / permission handling here
-    // — chown of the redirect files is done in ConfigRuntimeRedirectLog). IsSafeBindSource guards
-    // against a misconfigured log path (e.g. /proc, /etc).
+    // host. The redirect files are created by the container's sh itself under the 1777 dir set in
+    // ConfigRuntimeRedirectLog. IsSafeBindSource guards against a misconfigured log path
+    // (e.g. /proc, /etc).
     const std::string hostLogDir = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
     if (!hostLogDir.empty() && IsSafeBindSource(hostLogDir) && litebus::os::ExistPath(hostLogDir)) {
         bindMounts.push_back(hostLogDir + ":" + hostLogDir);
@@ -1083,13 +1083,14 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartRuntime(
     const auto &deployOpts = info.deploymentconfig().deployoptions();
     auto rootfsIter = deployOpts.find(CONTAINER_ROOTFS);
     std::string workdir = rootfsIter != deployOpts.end() ? ParseRootfsWorkdir(rootfsIter->second) : "";
-    // runUser defaults to "root" if not specified in deployOptions
+    // 未指定 hostUser 时 runUser 留空，BuildCreateContainerRequest 不设置 req["User"]，
+    // 容器按镜像默认用户运行。
     auto hostUserIter = deployOpts.find(HOST_USER);
-    std::string runUser = hostUserIter != deployOpts.end() ? hostUserIter->second : "root";
+    std::string runUser = hostUserIter != deployOpts.end() ? hostUserIter->second : "";
 
     runtime::v1::StartRequest startReq;
     BuildRuntimeCommands(&startReq, args);
-    SetRequestEnvsAndLogsForStart(&startReq, envs, runtimeID, runUser);
+    SetRequestEnvsAndLogsForStart(&startReq, envs, runtimeID);
 
     std::map<std::string, std::string> containerEnvs(startReq.envs().begin(), startReq.envs().end());
     containerEnvs.erase(LD_LIBRARY_PATH);
