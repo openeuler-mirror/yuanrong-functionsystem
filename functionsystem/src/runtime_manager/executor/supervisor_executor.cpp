@@ -429,13 +429,13 @@ nlohmann::json SupervisorExecutor::CreateRequest(const std::shared_ptr<messages:
         auto it = deployOpts.find(key);
         return it != deployOpts.end() ? it->second : std::string{};
     };
-    const std::string hostUser = getOpt(HOST_USER);
+    const std::string hostUser = getOpt(HOST_USER).empty() ? "agentos" : getOpt(HOST_USER);
     const std::string rootfsJson = getOpt(CONTAINER_ROOTFS);
-    const std::string homeDir = hostUser.empty() ? "/home/agentos" : "/home/" + hostUser;
+    const std::string homeDir = "/home/" + hostUser;
 
     nlohmann::json policy = nlohmann::json::object();
     if (auto bindMounts = ParseBindMounts(rootfsJson, runtimeID); !bindMounts.empty()) {
-        policy["filesystem_policy"] = { {"bind_mounts", std::move(bindMounts)} };
+        policy["filesystem_policy"] = { { "bind_mounts", std::move(bindMounts) } };
     }
     if (!IsHomeMounted(rootfsJson, homeDir, runtimeID)) {
         const nlohmann::json homeDirs = nlohmann::json::array({ homeDir });
@@ -443,29 +443,24 @@ nlohmann::json SupervisorExecutor::CreateRequest(const std::shared_ptr<messages:
         policy["filesystem_policy"]["read_write"] = homeDirs;
     }
 
-    if (!hostUser.empty()) {
-        policy["environment"]["JIUWENSWARM_HOME"] = homeDir;
-        policy["process"] = { {"run_as_user", hostUser}, {"run_as_group", hostUser} };
-        policy["namespace"] = { {"user", false} };
-    }
+    policy["environment"]["JIUWENSWARM_HOME"] = homeDir;
+    policy["process"] = { { "run_as_user", hostUser }, { "run_as_group", hostUser } };
+    policy["namespace"] = { { "user", false } };
+
     for (const auto &kv : info.runtimeconfig().posixenvs()) {
         policy["environment"][kv.first] = kv.second;
     }
-    return nlohmann::json{ {"policy", std::move(policy)}, {"policy_mode", "append"} };
+
+    YRLOG_INFO("{}|Create sandbox for {}", runtimeID, hostUser);
+
+    return nlohmann::json{ { "policy", std::move(policy) }, { "policy_mode", "append" } };
 }
 
 litebus::Future<std::string> SupervisorExecutor::CreateSandbox(
     const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &runtimeID = request->runtimeinstanceinfo().runtimeid();
-    const auto &deployOpts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
-    std::string hostUser;
-    if (auto it = deployOpts.find(HOST_USER); it != deployOpts.end()) {
-        hostUser = it->second;
-    }
-
     litebus::Promise<std::string> promise;
-    YRLOG_INFO("{}|Create sandbox for {}", runtimeID, hostUser);
     nlohmann::json createRequest = CreateRequest(request);
 
     SendRequestToSupervisor("POST", SUPERVISOR_SANDBOX_PREFIX, createRequest)
@@ -692,6 +687,7 @@ void SupervisorExecutor::SetRequestEnvsAndLogsForStart(runtime::v1::StartRequest
     if (auto it = deployOpts.find(HOST_USER); it != deployOpts.end()) {
         hostUser = it->second;
     }
+    hostUser = hostUser.empty() ? "agentos" : hostUser;
     const std::map<std::string, std::string> combineEnvs = cmdBuilder_.CombineEnvs(envs);
     req->mutable_envs()->insert(combineEnvs.begin(), combineEnvs.end());
     (*req->mutable_envs())[YR_ONLY_STDOUT] = "true";

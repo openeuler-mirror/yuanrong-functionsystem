@@ -1031,9 +1031,11 @@ TEST_F(SupervisorExecutorTest, CreateRequest_AppliesEnvVarsFromPosixEnvs)
     EXPECT_EQ(req["policy"]["environment"]["AGENT_SERVER_HOST"], "0.0.0.0");
     EXPECT_EQ(req["policy"]["environment"]["AGENT_SERVER_PORT"], "18092");
     EXPECT_EQ(req["policy"]["environment"]["YR_TENANT_ID"], "dev");
-    // no host_user -> no process/namespace policy
-    EXPECT_FALSE(req["policy"].contains("process"));
-    EXPECT_FALSE(req["policy"].contains("namespace"));
+    // host_user unset -> defaults to "agentos"; process/namespace still emitted
+    EXPECT_EQ(req["policy"]["environment"]["JIUWENSWARM_HOME"], "/home/agentos");
+    EXPECT_EQ(req["policy"]["process"]["run_as_user"], "agentos");
+    EXPECT_EQ(req["policy"]["process"]["run_as_group"], "agentos");
+    EXPECT_EQ(req["policy"]["namespace"]["user"], false);
 }
 
 TEST_F(SupervisorExecutorTest, CreateRequest_PosixEnvsCoexistWithHostUser)
@@ -1053,13 +1055,25 @@ TEST_F(SupervisorExecutorTest, CreateRequest_PosixEnvsCoexistWithHostUser)
     EXPECT_EQ(req["policy"]["namespace"]["user"], false);
 }
 
-TEST_F(SupervisorExecutorTest, CreateRequest_NoEnvVarsNoHostUserHasNoEnvironment)
+/**
+ * Feature: CreateRequest default policy (no posixenvs, no host_user)
+ * Description: With neither runtimeconfig.posixenvs nor an explicit host_user,
+ *              CreateRequest still emits a minimal sandbox policy: JIUWENSWARM_HOME
+ *              and process/namespace entries are always present (host_user defaults
+ *              to "agentos"); only the user-supplied environment entries are absent.
+ */
+TEST_F(SupervisorExecutorTest, CreateRequest_NoEnvVarsNoHostUserHasDefaultPolicy)
 {
     auto request = std::make_shared<messages::StartInstanceRequest>();
     request->mutable_runtimeinstanceinfo()->set_runtimeid("rt");
     auto req = executor_->TestCreateRequest(request);
-    EXPECT_FALSE(req["policy"].contains("environment"));
-    EXPECT_FALSE(req["policy"].contains("process"));
+    // environment always carries the default home dir; no user envs are merged in
+    ASSERT_TRUE(req["policy"]["environment"].is_object());
+    EXPECT_EQ(req["policy"]["environment"].size(), 1);
+    EXPECT_EQ(req["policy"]["environment"]["JIUWENSWARM_HOME"], "/home/agentos");
+    EXPECT_EQ(req["policy"]["process"]["run_as_user"], "agentos");
+    EXPECT_EQ(req["policy"]["process"]["run_as_group"], "agentos");
+    EXPECT_EQ(req["policy"]["namespace"]["user"], false);
 }
 
 /**
