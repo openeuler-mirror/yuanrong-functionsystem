@@ -108,6 +108,20 @@ std::string Executor::ShellQuote(const std::string &token)
     return escaped;
 }
 
+double Executor::GetEffectiveScalarLimit(const resource_view::Resource &resource, double defaultValue)
+{
+    if (resource.type() != resource_view::ValueType::Value_Type_SCALAR) {
+        return defaultValue;
+    }
+    if (resource.scalar().limit() > 0) {
+        return resource.scalar().limit();
+    }
+    if (resource.scalar().value() > 0) {
+        return resource.scalar().value();
+    }
+    return defaultValue;
+}
+
 std::string Executor::DockerDaemonMessage(const nlohmann::json &resp)
 {
     // ParseDockerResponse stores the 4xx/5xx body two ways: "__docker_error" (parsed JSON; a Docker

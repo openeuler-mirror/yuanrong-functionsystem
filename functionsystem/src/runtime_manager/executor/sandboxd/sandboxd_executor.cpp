@@ -180,20 +180,6 @@ std::string ResolveSandboxImage(const messages::RuntimeInstanceInfo &info)
     return "";
 }
 
-double GetEffectiveScalarLimit(const resource_view::Resource &resource, double defaultValue)
-{
-    if (resource.type() != resource_view::ValueType::Value_Type_SCALAR) {
-        return defaultValue;
-    }
-    if (resource.scalar().limit() > 0) {
-        return resource.scalar().limit();
-    }
-    if (resource.scalar().value() > 0) {
-        return resource.scalar().value();
-    }
-    return defaultValue;
-}
-
 SandboxRequestedResources GetSandboxRequestedResources(const messages::RuntimeInstanceInfo &info)
 {
     SandboxRequestedResources requested;
@@ -201,12 +187,13 @@ SandboxRequestedResources GetSandboxRequestedResources(const messages::RuntimeIn
 
     auto cpuIt = resources.find(resource_view::CPU_RESOURCE_NAME);
     double cpuMillicores = cpuIt != resources.end()
-        ? GetEffectiveScalarLimit(cpuIt->second, DEFAULT_SANDBOX_CPU_MILLICORES)
+        ? Executor::GetEffectiveScalarLimit(cpuIt->second, DEFAULT_SANDBOX_CPU_MILLICORES)
         : DEFAULT_SANDBOX_CPU_MILLICORES;
     requested.cpuCores = cpuMillicores / CPU_MILLICORES_PER_CORE;
 
     auto memoryIt = resources.find(resource_view::MEMORY_RESOURCE_NAME);
-    double memoryMb = memoryIt != resources.end() ? GetEffectiveScalarLimit(memoryIt->second, DEFAULT_SANDBOX_MEMORY_MB)
+    double memoryMb = memoryIt != resources.end()
+        ? Executor::GetEffectiveScalarLimit(memoryIt->second, DEFAULT_SANDBOX_MEMORY_MB)
         : DEFAULT_SANDBOX_MEMORY_MB;
     requested.memoryBytes = memoryMb * BYTES_PER_MB;
 

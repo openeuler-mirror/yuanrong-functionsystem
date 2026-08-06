@@ -91,7 +91,7 @@ private:
     // Build CPU/memory resources map from runtime config.
     std::map<std::string, double> BuildResources(const messages::RuntimeInstanceInfo &info) const;
 
-    // Build Docker HostConfig resources (CpuShares, NanoCpus, Memory, MemorySwap, PidsLimit).
+    // Build Docker HostConfig resources (NanoCpus, Memory, MemorySwap, PidsLimit).
     void BuildHostConfigResources(nlohmann::json &hostConfig, const std::map<std::string, double> &resources) const;
 
     // Parse a /containers/create response into a container ID, or empty string on failure.
@@ -157,7 +157,8 @@ private:
         std::map<std::string, std::string> envs;
         std::vector<std::string> bindMounts;
         std::map<std::string, std::string> portBindings;  // "containerPort/proto" -> hostPort
-        std::map<std::string, double> resources;          // "cpu"/"memory" in milli-cores / MB
+        // "cpu"=CPU hard limit (milli-cores), "memory"/"memory_limit" in MB
+        std::map<std::string, double> resources;
         std::string workingDir;                           // container working directory (-w)
         std::string user;                                 // container run-as user (Config.User)
     };
