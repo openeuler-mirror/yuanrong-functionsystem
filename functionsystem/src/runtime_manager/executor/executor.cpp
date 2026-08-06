@@ -16,6 +16,8 @@
 
 #include "executor.h"
 
+#include <sys/stat.h>
+
 #include "async/async.hpp"
 #include "common/constants/constants.h"
 #include "common/logs/logging.h"
@@ -124,46 +126,30 @@ std::string Executor::DockerDaemonMessage(const nlohmann::json &resp)
 }
 
 void Executor::ConfigRuntimeRedirectLog(std::string &stdOut, std::string &stdErr,
-    const std::string &runtimeID, const std::string &hostUser)
+    const std::string &runtimeID)
 {
     auto path = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
     if (!litebus::os::ExistPath(path)) {
         YRLOG_WARN("{}|std log path {} not found, try to make dir", runtimeID, path);
         if (!litebus::os::Mkdir(path).IsNone()) {
-            YRLOG_WARN("{}|failed to make dir {}, msg: {}", runtimeID, path, litebus::os::Strerror(errno));
+            YRLOG_WARN("{}|failed to make dir {}, msg: {}; log redirect skipped, runtime logs will NOT land on host",
+                       runtimeID, path, litebus::os::Strerror(errno));
             return;
         }
     }
 
-    std::string outPath = litebus::os::Join(path, fmt::format("{}.out", runtimeID));
-    if (!litebus::os::ExistPath(outPath) && TouchFile(outPath) != 0) {
-        YRLOG_WARN("create std out log file {} failed: {}", outPath, litebus::os::Strerror(errno));
+    // 目录放权：rwxrwxrwt（sticky bit，等同 /tmp），任意 uid 可建文件但仅可删自己的。
+    // 容器内 sh -c ">/out 2>/err" 以容器运行用户身份 open(O_CREAT) 日志文件，属主天然是该 uid。
+    constexpr mode_t logDirMode = 01777;  // rwxrwxrwt + sticky bit
+    if (::chmod(path.c_str(), logDirMode) != 0) {
+        YRLOG_WARN("{}|failed to chmod log dir {} to 1777, msg: {}; log redirect skipped, "
+                   "runtime logs will NOT land on host", runtimeID, path, litebus::os::Strerror(errno));
         return;
     }
-    stdOut = outPath;
 
-    std::string errPath = litebus::os::Join(path, fmt::format("{}.err", runtimeID));
-    if (!litebus::os::ExistPath(errPath) && TouchFile(errPath) != 0) {
-        YRLOG_WARN("create std err log file {} failed: {}", errPath, litebus::os::Strerror(errno));
-        return;
-    }
-    stdErr = errPath;
-
-    // chown the redirect files so a non-root runUser (Config.User) can write to them; otherwise the
-    // sh -c ">/out 2>/err" redirect fails at container start with no logs on the host.
-    if (hostUser.empty()) {
-        return;
-    }
-    // Chown 成功返回 Some(0)、失败返回 None()（IsNone()==true 表示失败，与 Mkdir 相反）。
-    // chown 经 getpwnam 在宿主机查 user，若 hostUser 是仅存在于镜像内的用户（如 agentos/snuser）将查不到而失败。
-    if (!stdOut.empty() && litebus::os::Chown(hostUser, stdOut, false).IsNone()) {
-        YRLOG_WARN("{}|failed to chown stdout log {} to user {} (user may not exist on host)",
-                   runtimeID, stdOut, hostUser, hostUser);
-    }
-    if (!stdErr.empty() && litebus::os::Chown(hostUser, stdErr, false).IsNone()) {
-        YRLOG_WARN("{}|failed to chown stderr log {} to user {} (user may not exist on host)",
-                   runtimeID, stdErr, hostUser, hostUser);
-    }
+    // 日志文件由容器内 sh 自建，此处只返回路径。
+    stdOut = litebus::os::Join(path, fmt::format("{}.out", runtimeID));
+    stdErr = litebus::os::Join(path, fmt::format("{}.err", runtimeID));
 }
 
 void Executor::Init()
