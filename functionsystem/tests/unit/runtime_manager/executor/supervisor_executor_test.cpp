@@ -26,6 +26,7 @@
 #include "common/constants/constants.h"
 #include "common/proto/pb/message_pb.h"
 #include "common/proto/pb/posix/sandbox_api.grpc.pb.h"
+#include "common/resource_view/resource_type.h"
 #include "common/status/status.h"
 #include "common/utils/files.h"
 #include "utils/future_test_helper.h"
@@ -212,6 +213,24 @@ protected:
         containerInfo->set_mountpoint("/opt/func");
 
         return request;
+    }
+
+    // Set a scalar resource (e.g. "CPU"/"Memory") with value/limit on the request's
+    // runtimeconfig.resources map. Matches how SetRuntimeConfig populates resources
+    // from schedulingops in production (struct_transfer.h:SetInstanceInfoResources).
+    void SetRuntimeResource(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                            const std::string &name, double value, double limit = 0)
+    {
+        auto resource = request->mutable_runtimeinstanceinfo()
+                            ->mutable_runtimeconfig()
+                            ->mutable_resources()
+                            ->mutable_resources();
+        resource_view::Resource r;
+        r.set_name(name);
+        r.set_type(resource_view::ValueType::Value_Type_SCALAR);
+        r.mutable_scalar()->set_value(value);
+        r.mutable_scalar()->set_limit(limit);
+        (*resource)[name] = std::move(r);
     }
 
     std::shared_ptr<messages::StopInstanceRequest> GenStopInstanceRequest(
@@ -1074,6 +1093,79 @@ TEST_F(SupervisorExecutorTest, CreateRequest_NoEnvVarsNoHostUserHasDefaultPolicy
     EXPECT_EQ(req["policy"]["process"]["run_as_user"], "agentos");
     EXPECT_EQ(req["policy"]["process"]["run_as_group"], "agentos");
     EXPECT_EQ(req["policy"]["namespace"]["user"], false);
+}
+
+/**
+ * Feature: CreateRequest cgroup generation
+ * Description: CreateRequest reads runtimeconfig.resources (CPU/Memory) and emits
+ *              policy.cgroup with cpu_max (millicores -> cores, 600 -> 0.6) and
+ *              memory_max (MB -> "NM", 512 -> "512M"). Both inline and registered
+ *              mode reach CreateRequest with the same runtimeconfig.resources shape.
+ */
+TEST_F(SupervisorExecutorTest, CreateRequest_EmitsCgroupFromCpuAndMemory)
+{
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    request->mutable_runtimeinstanceinfo()->set_runtimeid("rt");
+    SetRuntimeResource(request, "CPU", 600);
+    SetRuntimeResource(request, "Memory", 512);
+
+    auto req = executor_->TestCreateRequest(request);
+    ASSERT_TRUE(req["policy"].contains("cgroup"));
+    EXPECT_EQ(req["policy"]["cgroup"]["cpu_max"], 0.6);
+    EXPECT_EQ(req["policy"]["cgroup"]["memory_max"], "512M");
+}
+
+TEST_F(SupervisorExecutorTest, CreateRequest_CpuOnlyEmitsCpuMax)
+{
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    request->mutable_runtimeinstanceinfo()->set_runtimeid("rt");
+    SetRuntimeResource(request, "CPU", 1000);  // 1 core
+
+    auto req = executor_->TestCreateRequest(request);
+    ASSERT_TRUE(req["policy"].contains("cgroup"));
+    EXPECT_EQ(req["policy"]["cgroup"]["cpu_max"], 1.0);
+    EXPECT_FALSE(req["policy"]["cgroup"].contains("memory_max"));
+}
+
+TEST_F(SupervisorExecutorTest, CreateRequest_MemoryOnlyEmitsMemoryMax)
+{
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    request->mutable_runtimeinstanceinfo()->set_runtimeid("rt");
+    SetRuntimeResource(request, "Memory", 2048);
+
+    auto req = executor_->TestCreateRequest(request);
+    ASSERT_TRUE(req["policy"].contains("cgroup"));
+    EXPECT_EQ(req["policy"]["cgroup"]["memory_max"], "2048M");
+    EXPECT_FALSE(req["policy"]["cgroup"].contains("cpu_max"));
+}
+
+/**
+ * Feature: CreateRequest cgroup skipped on empty/zero resources
+ * Description: A zero CPU/Memory value is treated as "not set"; no cgroup section is
+ *              emitted so jiuwenbox applies no resource limit (preserves prior behavior).
+ */
+TEST_F(SupervisorExecutorTest, CreateRequest_ZeroValuesOmitCgroup)
+{
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    request->mutable_runtimeinstanceinfo()->set_runtimeid("rt");
+    SetRuntimeResource(request, "CPU", 0);
+    SetRuntimeResource(request, "Memory", 0);
+
+    auto req = executor_->TestCreateRequest(request);
+    EXPECT_FALSE(req["policy"].contains("cgroup"));
+}
+
+TEST_F(SupervisorExecutorTest, CreateRequest_NoResourcesOmitsCgroup)
+{
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    request->mutable_runtimeinstanceinfo()->set_runtimeid("rt");
+    // no resources set at all
+
+    auto req = executor_->TestCreateRequest(request);
+    EXPECT_FALSE(req["policy"].contains("cgroup"));
+    // base policy still present
+    EXPECT_EQ(req["policy"]["environment"]["JIUWENSWARM_HOME"], "/home/agentos");
+    EXPECT_EQ(req["policy_mode"], "append");
 }
 
 /**
