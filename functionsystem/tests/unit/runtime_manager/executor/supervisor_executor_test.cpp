@@ -71,9 +71,10 @@ public:
     }
 
     messages::StartInstanceResponse TestGenSuccessStartInstanceResponse(
-        const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &sandboxID)
+        const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &sandboxID,
+        const std::string &sandboxIP = "")
     {
-        return GenSuccessStartInstanceResponse(request, sandboxID);
+        return GenSuccessStartInstanceResponse(request, sandboxID, sandboxIP);
     }
 
     litebus::Future<std::string> TestCreateSandbox(const std::string &runtimeID, const std::string &hostUser = "")

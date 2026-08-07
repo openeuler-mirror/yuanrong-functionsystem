@@ -69,6 +69,7 @@ void SupervisorExecutor::Finalize()
 {
     YRLOG_INFO("Start finalize SupervisorExecutor");
     runtime2portMappings_.clear();
+    runtime2sandboxIP_.clear();
     Executor::Finalize();
 }
 
@@ -349,7 +350,11 @@ litebus::Future<messages::StartInstanceResponse> SupervisorExecutor::StartRuntim
             }
 
             auto runtimeID = info.runtimeid();
-            auto startInstanceResponse = GenSuccessStartInstanceResponse(request, response.id());
+            std::string sandboxIP;
+            if (auto node = runtime2sandboxIP_.extract(runtimeID); !node.empty()) {
+                sandboxIP = std::move(node.mapped());
+            }
+            auto startInstanceResponse = GenSuccessStartInstanceResponse(request, response.id(), sandboxIP);
             litebus::Async(GetAID(), &SupervisorExecutor::OnStartInstanceCompleted, runtimeID, startInstanceResponse)
                 .OnComplete([promise](const litebus::Future<messages::StartInstanceResponse> &innerFuture) mutable {
                     if (innerFuture.IsError()) {
@@ -515,6 +520,14 @@ litebus::Future<std::string> SupervisorExecutor::CreateSandbox(
             std::string sandboxId = createResp["id"];
             YRLOG_INFO("{}|Create sandbox success: {}", runtimeID, sandboxId);
             runtime2sandboxID_.emplace(runtimeID, sandboxId);
+
+            // ip_address absent/non-string is non-fatal: sandbox_ip stays empty downstream.
+            if (createResp.contains("ip_address") && createResp["ip_address"].is_string()) {
+                runtime2sandboxIP_.emplace(runtimeID, createResp["ip_address"].get<std::string>());
+            } else {
+                YRLOG_WARN("{}|Create sandbox response has no ip_address, sandbox IP left empty", runtimeID);
+            }
+
             promise.SetValue(sandboxId);
         });
 
@@ -608,6 +621,8 @@ void SupervisorExecutor::CleanupSandboxAfterExecFailure(const std::string &runti
                 YRLOG_WARN("{}|Failed to cleanup sandbox {} after exec failure", runtimeID, sandboxId);
             }
             runtime2sandboxID_.erase(runtimeID);
+            runtime2sandboxIP_.erase(runtimeID);
+            runtime2portMappings_.erase(runtimeID);
         });
 }
 
@@ -645,6 +660,8 @@ litebus::Future<Status> SupervisorExecutor::StopInstance(const std::shared_ptr<m
     DoDeleteSandbox(deleteReq).OnComplete([this, runtimeID, promise](
                                               const litebus::Future<runtime::v1::DeleteResponse> &future) mutable {
             runtime2sandboxID_.erase(runtimeID);
+            runtime2sandboxIP_.erase(runtimeID);
+            runtime2portMappings_.erase(runtimeID);
             runtimeInstanceInfoMap_.erase(runtimeID);
 
             if (future.IsError()) {
@@ -834,7 +851,8 @@ litebus::Future<Status> SupervisorExecutor::TerminateSandbox(const std::string &
 }
 
 messages::StartInstanceResponse SupervisorExecutor::GenSuccessStartInstanceResponse(
-    const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &sandboxID)
+    const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &sandboxID,
+    const std::string &sandboxIP)
 {
     messages::StartInstanceResponse response;
     response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
@@ -848,8 +866,9 @@ messages::StartInstanceResponse SupervisorExecutor::GenSuccessStartInstanceRespo
     auto instanceResponse = response.mutable_startruntimeinstanceresponse();
     instanceResponse->set_runtimeid(runtimeID);
     instanceResponse->set_containerid(sandboxID);
-    YRLOG_DEBUG("{}|{}|instance({}) runtime({}) with container({})", info.traceid(), info.requestid(),
-                info.instanceid(), runtimeID, sandboxID);
+    instanceResponse->set_containerip(sandboxIP);
+    YRLOG_DEBUG("{}|{}|instance({}) runtime({}) with container({}), sandboxIP({})", info.traceid(), info.requestid(),
+                info.instanceid(), runtimeID, sandboxID, sandboxIP);
 
     // set to be zero
     instanceResponse->set_pid(0);

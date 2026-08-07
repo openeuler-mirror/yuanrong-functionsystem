@@ -87,7 +87,8 @@ private:
 
     litebus::Future<Status> TerminateSandbox(const std::string &runtimeID, const std::string &sandboxID);
     messages::StartInstanceResponse GenSuccessStartInstanceResponse(
-        const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &sandboxID);
+        const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &sandboxID,
+        const std::string &sandboxIP);
 
     litebus::Future<messages::StartInstanceResponse> StartRuntime(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &language, const Envs &envs,
@@ -124,6 +125,7 @@ private:
     std::unordered_map<std::string, litebus::Future<messages::StartInstanceResponse>> inProgressStarts_;
     std::unordered_set<std::string> pendingDeletes_;
     std::unordered_map<std::string, std::string> runtime2portMappings_;  // runtimeID -> portMappings JSON
+    std::unordered_map<std::string, std::string> runtime2sandboxIP_;  // runtimeID -> sandbox IP from create response
     litebus::AID functionAgentAID_;
     CommandBuilder cmdBuilder_{ false };
     std::string pkgType_;
