@@ -63,11 +63,38 @@ std::string DirName(const std::string &path)
     return pos == 0 ? "/" : path.substr(0, pos);
 }
 
+Status InvalidRootfsConfig(const std::string &message)
+{
+    YRLOG_ERROR("Invalid rootfs overlay: {}", message);
+    return Status(StatusCode::ERR_PARAM_INVALID, message);
+}
+
+bool HasNonEmptyString(const nlohmann::json &object, const char *key)
+{
+    return object.contains(key) && object.at(key).is_string() && !object.at(key).get<std::string>().empty();
+}
+
+Status ValidateS3RootfsConfig(const nlohmann::json &rootfsConfig)
+{
+    if (!rootfsConfig.contains("storageInfo") || !rootfsConfig.at("storageInfo").is_object()) {
+        return InvalidRootfsConfig("s3 rootfs requires an object storageInfo");
+    }
+    const auto &storageInfo = rootfsConfig.at("storageInfo");
+    for (const auto *key : {"endpoint", "bucket", "object"}) {
+        if (!HasNonEmptyString(storageInfo, key)) {
+            return InvalidRootfsConfig(fmt::format("s3 rootfs requires non-empty storageInfo.{}", key));
+        }
+    }
+    for (const auto *key : {"accessKey", "secretKey"}) {
+        if (storageInfo.contains(key) && !storageInfo.at(key).is_string()) {
+            return InvalidRootfsConfig(fmt::format("storageInfo.{} must be a string", key));
+        }
+    }
+    return Status::OK();
+}
+
 void ApplyS3RootfsConfig(runtime::v1::StartRequest &start, const nlohmann::json &rootfsConfig)
 {
-    if (!rootfsConfig.contains("storageInfo")) {
-        return;
-    }
     auto s3 = start.mutable_rootfs()->mutable_s3_config();
     const auto &storageInfo = rootfsConfig.at("storageInfo");
     if (storageInfo.contains("endpoint"))
@@ -82,42 +109,94 @@ void ApplyS3RootfsConfig(runtime::v1::StartRequest &start, const nlohmann::json 
         s3->set_access_key_secret(storageInfo.at("secretKey").get<std::string>());
 }
 
-// Parse the rootfs deploy-option JSON onto the flat StartRequest. The flat
-// request exposes rootfs + runtime as top-level fields (no FunctionRuntime).
-Status RootfsJsonParse(runtime::v1::StartRequest &start, const std::string &rootfsJson)
+Status ValidateResolvedRootfs(const runtime::v1::StartRequest &start)
+{
+    if (start.runtime().empty()) {
+        return InvalidRootfsConfig("resolved sandbox runtime must not be empty");
+    }
+    switch (start.rootfs().type()) {
+        case runtime::v1::RootfsSrcType::S3:
+            if (!start.rootfs().has_s3_config() || start.rootfs().s3_config().endpoint().empty()
+                || start.rootfs().s3_config().bucket().empty() || start.rootfs().s3_config().object().empty()) {
+                return InvalidRootfsConfig("resolved s3 rootfs is incomplete");
+            }
+            break;
+        case runtime::v1::RootfsSrcType::IMAGE:
+            if (start.rootfs().image_url().empty()) {
+                return InvalidRootfsConfig("resolved image rootfs requires imageurl");
+            }
+            break;
+        case runtime::v1::RootfsSrcType::LOCAL:
+            if (start.rootfs().path().empty()) {
+                return InvalidRootfsConfig("resolved local rootfs requires path");
+            }
+            break;
+        default:
+            return InvalidRootfsConfig("resolved rootfs has an unsupported type");
+    }
+    return Status::OK();
+}
+
+// Apply the rootfs deploy-option as a field-level overlay. The caller seeds
+// start from the service container config before invoking this function.
+Status ApplyRootfsJsonOverlay(runtime::v1::StartRequest &start, const std::string &rootfsJson)
 {
     try {
         nlohmann::json j = nlohmann::json::parse(rootfsJson);
+        if (!j.is_object()) {
+            return InvalidRootfsConfig("rootfs overlay must be a JSON object");
+        }
         if (j.contains("runtime")) {
+            if (!HasNonEmptyString(j, "runtime")) {
+                return InvalidRootfsConfig("runtime must be a non-empty string");
+            }
             start.set_runtime(j.at("runtime").get<std::string>());
         }
         if (j.contains("readonly")) {
-            bool ro = false;
-            if (j.at("readonly").is_boolean()) {
-                ro = j.at("readonly").get<bool>();
-            } else if (j.at("readonly").is_string()) {
-                const auto &s = j.at("readonly").get<std::string>();
-                ro = (s == "true" || s == "1");
+            if (!j.at("readonly").is_boolean()) {
+                return InvalidRootfsConfig("readonly must be a boolean");
             }
-            start.mutable_rootfs()->set_readonly(ro);
+            start.mutable_rootfs()->set_readonly(j.at("readonly").get<bool>());
         }
         if (!j.contains("type")) {
+            if (j.contains("path") || j.contains("imageurl") || j.contains("storageInfo")) {
+                return InvalidRootfsConfig("rootfs source fields require type");
+            }
             return Status::OK();
+        }
+        if (!j.at("type").is_string()) {
+            return InvalidRootfsConfig("rootfs type must be a string");
         }
         const std::string typeStr = j.at("type").get<std::string>();
         if (typeStr == "s3") {
+            if (j.contains("path") || j.contains("imageurl")) {
+                return InvalidRootfsConfig("s3 rootfs cannot contain path or imageurl");
+            }
+            if (auto status = ValidateS3RootfsConfig(j); !status.IsOk()) {
+                return status;
+            }
             start.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::S3);
             ApplyS3RootfsConfig(start, j);
         } else if (typeStr == "image") {
+            if (j.contains("path") || j.contains("storageInfo")) {
+                return InvalidRootfsConfig("image rootfs cannot contain path or storageInfo");
+            }
+            if (!HasNonEmptyString(j, "imageurl")) {
+                return InvalidRootfsConfig("image rootfs requires non-empty imageurl");
+            }
             start.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::IMAGE);
-            if (j.contains("imageurl")) {
-                start.mutable_rootfs()->set_image_url(j.at("imageurl").get<std::string>());
-            }
+            start.mutable_rootfs()->set_image_url(j.at("imageurl").get<std::string>());
         } else if (typeStr == "local") {
-            start.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::LOCAL);
-            if (j.contains("path")) {
-                start.mutable_rootfs()->set_path(j.at("path").get<std::string>());
+            if (j.contains("imageurl") || j.contains("storageInfo")) {
+                return InvalidRootfsConfig("local rootfs cannot contain imageurl or storageInfo");
             }
+            if (!HasNonEmptyString(j, "path")) {
+                return InvalidRootfsConfig("local rootfs requires non-empty path");
+            }
+            start.mutable_rootfs()->set_type(runtime::v1::RootfsSrcType::LOCAL);
+            start.mutable_rootfs()->set_path(j.at("path").get<std::string>());
+        } else {
+            return InvalidRootfsConfig(fmt::format("unsupported rootfs type: {}", typeStr));
         }
     } catch (const std::exception &e) {
         auto msg = fmt::format("Failed to parse rootfs JSON: {}", e.what());
@@ -127,10 +206,27 @@ Status RootfsJsonParse(runtime::v1::StartRequest &start, const std::string &root
     return Status::OK();
 }
 
-bool HasCustomRootfs(const std::shared_ptr<messages::StartInstanceRequest> &request)
+bool HasRootfsSourceOverride(const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
-    return opts.contains(CONTAINER_ROOTFS);
+    auto it = opts.find(CONTAINER_ROOTFS);
+    if (it == opts.end()) {
+        return false;
+    }
+    try {
+        const auto overlay = nlohmann::json::parse(it->second);
+        return overlay.is_object() && overlay.contains("type");
+    } catch (const std::exception &) {
+        // BuildRootfs reports the parse error on normal starts. Conservatively
+        // keep the bootstrap available if this helper is used by warm-up.
+        return true;
+    }
+}
+
+bool IsTemplateCompatible(const messages::RuntimeInstanceInfo &info, const runtime::v1::StartRequest &start)
+{
+    return start.runtime() == info.container().runtime()
+           && start.rootfs().SerializeAsString() == info.container().rootfsconfig().SerializeAsString();
 }
 
 std::string ResolveRuntimeLanguage(const std::shared_ptr<messages::StartInstanceRequest> &request)
@@ -256,14 +352,6 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBui
     // StartResponse.id; the executor stores that via UpdateSandboxID(runtimeID).
     // Passing the client runtimeID here would conflate the two identities.
 
-    // Only reference a template when sandboxd has already registered it.
-    // Production sandboxd rejects unknown template_id values; custom rootfs
-    // starts are never template-backed.
-    const auto &templateID = params.request->runtimeinstanceinfo().container().id();
-    if (!HasCustomRootfs(params.request) && params.registeredTemplateIDs.count(templateID) > 0) {
-        start->set_template_id(templateID);
-    }
-
     // Attach tenant ID as a metric label for sandboxd observability.
     // tenant_id is passed via runtimeconfig.posixenvs as YR_TENANT_ID.
     {
@@ -307,6 +395,16 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBui
     if (auto status = ApplyWritableLayerSize(params.request, start.get()); !status.IsOk()) {
         return {status, nullptr};
     }
+
+    // BuildRootfs above has already applied the request overlay to the service
+    // baseline, and ApplyWritableLayerSize has completed the resolved rootfs.
+    // Reuse the registered baseline template only when that final result still
+    // matches it; never mutate a registered template with a request overlay.
+    const auto &info = params.request->runtimeinstanceinfo();
+    const auto &templateID = info.container().id();
+    if (params.registeredTemplateIDs.count(templateID) > 0 && IsTemplateCompatible(info, *start)) {
+        start->set_template_id(templateID);
+    }
     ApplyXpuAllocations(params.envs, start.get());
     ApplyEnvsAndLogs(updatedEnvs, params.runtimeID, start.get());
 
@@ -324,16 +422,17 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBui
 Status SandboxdRequestBuilder::BuildRootfs(const std::shared_ptr<messages::StartInstanceRequest> &request,
                                            runtime::v1::StartRequest &start) const
 {
+    const auto &container = request->runtimeinstanceinfo().container();
+    start.set_runtime(container.runtime());
+    *start.mutable_rootfs() = container.rootfsconfig();
+
     const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
-    if (!opts.contains(CONTAINER_ROOTFS)) {
-        // No custom rootfs: take runtime handler + rootfs from the container config.
-        // sandbox_id is left empty for sandboxd to generate.
-        start.set_runtime(request->runtimeinstanceinfo().container().runtime());
-        *start.mutable_rootfs() = request->runtimeinstanceinfo().container().rootfsconfig();
-        return Status::OK();
+    if (auto it = opts.find(CONTAINER_ROOTFS); it != opts.end()) {
+        if (auto status = ApplyRootfsJsonOverlay(start, it->second); !status.IsOk()) {
+            return status;
+        }
     }
-    // Custom rootfs: parse it from deploy options. sandbox_id left empty (sandboxd generates).
-    return RootfsJsonParse(start, opts.at(CONTAINER_ROOTFS));
+    return ValidateResolvedRootfs(start);
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
@@ -390,8 +489,7 @@ void SandboxdRequestBuilder::ApplyBootstrapMount(const std::shared_ptr<messages:
     if (bc.type().empty() || bc.root().empty()) {
         return;
     }
-    if (!HasCustomRootfs(request)) {
-        YRLOG_WARN("custom rootfs not specified; skipping bootstrap working root mount");
+    if (!HasRootfsSourceOverride(request)) {
         return;
     }
     auto *mount = mounts->Add();

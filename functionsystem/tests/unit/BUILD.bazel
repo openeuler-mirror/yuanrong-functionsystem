@@ -123,6 +123,30 @@ cc_test(
 )
 
 cc_test(
+    name = "sandboxd_request_builder_test",
+    linkstatic = True,
+    srcs = ["runtime_manager/executor/sandboxd/sandboxd_request_builder_test.cpp"],
+    copts = COPTS + [
+        "-Wno-error",
+        "-fno-access-control",
+        "-Wno-missing-field-initializers",
+        "-fvisibility=hidden",
+        "-Ifunctionsystem/src",
+        "-Ifunctionsystem/src/runtime_manager",
+    ],
+    linkopts = [
+        "-Wl,--no-as-needed",
+        "-pthread",
+        "-lcap",
+        "-ldl",
+    ],
+    deps = [
+        "//functionsystem/src/runtime_manager:runtime_manager_lib",
+        "@gtest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "frontend_proxy_service_test",
     linkstatic = True,
     srcs = [

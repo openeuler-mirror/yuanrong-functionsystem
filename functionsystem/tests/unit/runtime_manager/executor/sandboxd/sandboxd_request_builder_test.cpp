@@ -64,6 +64,10 @@ public:
         req->mutable_runtimeinstanceinfo()->set_traceid("trace-abc");
         req->mutable_runtimeinstanceinfo()->mutable_container()->set_id("container-001");
         req->mutable_runtimeinstanceinfo()->mutable_container()->set_runtime("runsc");
+        auto *rootfs = req->mutable_runtimeinstanceinfo()->mutable_container()->mutable_rootfsconfig();
+        rootfs->set_type(runtime::v1::RootfsSrcType::LOCAL);
+        rootfs->set_path("/opt/runtime/rootfs.img");
+        rootfs->set_readonly(false);
 
         SandboxdStartParams params;
         params.request   = req;
@@ -152,6 +156,117 @@ TEST_F(SandboxdRequestBuilderTest, SelfContainedBootstrapUsesOnlyBootstrapComman
     EXPECT_EQ(startReq->command(1), "--serve");
     EXPECT_EQ(startReq->envs().at("YR_LANGUAGE"), "rust");
     EXPECT_EQ(startReq->runtime(), "runc");
+}
+
+TEST_F(SandboxdRequestBuilderTest, RuntimeOnlyOverlayInheritsServiceRootfsAndBypassesIncompatibleTemplate)
+{
+    auto params = MakeMinimalParams();
+    params.registeredTemplateIDs.insert("container-001");
+    (*params.request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions())["rootfs"] =
+        R"({"runtime":"kata"})";
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk()) << status.RawMessage();
+    ASSERT_NE(startReq, nullptr);
+    EXPECT_EQ(startReq->runtime(), "kata");
+    EXPECT_EQ(startReq->rootfs().type(), runtime::v1::RootfsSrcType::LOCAL);
+    EXPECT_EQ(startReq->rootfs().path(), "/opt/runtime/rootfs.img");
+    EXPECT_FALSE(startReq->rootfs().readonly());
+    EXPECT_TRUE(startReq->template_id().empty());
+}
+
+TEST_F(SandboxdRequestBuilderTest, RuntimeOnlyOverlayKeepsCompatibleTemplateAndSkipsBootstrapMount)
+{
+    auto params = MakeMinimalParams();
+    params.registeredTemplateIDs.insert("container-001");
+    auto *info = params.request->mutable_runtimeinstanceinfo();
+    info->mutable_bootstrapconfig()->set_type("erofs");
+    info->mutable_bootstrapconfig()->set_root("/opt/runtime/rootfs.img");
+    (*info->mutable_deploymentconfig()->mutable_deployoptions())["rootfs"] = R"({"runtime":"runsc"})";
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk()) << status.RawMessage();
+    ASSERT_NE(startReq, nullptr);
+    EXPECT_EQ(startReq->template_id(), "container-001");
+    EXPECT_EQ(startReq->mounts_size(), 0);
+    EXPECT_EQ(startReq->envs().at("YR_RT_WORKING_DIR"), "/");
+}
+
+TEST_F(SandboxdRequestBuilderTest, ReadonlyOverlayPreservesSourceAndBypassesTemplateWithoutBootstrapMount)
+{
+    auto params = MakeMinimalParams();
+    params.registeredTemplateIDs.insert("container-001");
+    auto *info = params.request->mutable_runtimeinstanceinfo();
+    info->mutable_bootstrapconfig()->set_type("erofs");
+    info->mutable_bootstrapconfig()->set_root("/opt/runtime/rootfs.img");
+    (*info->mutable_deploymentconfig()->mutable_deployoptions())["rootfs"] = R"({"readonly":true})";
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk()) << status.RawMessage();
+    ASSERT_NE(startReq, nullptr);
+    EXPECT_TRUE(startReq->rootfs().readonly());
+    EXPECT_EQ(startReq->rootfs().path(), "/opt/runtime/rootfs.img");
+    EXPECT_TRUE(startReq->template_id().empty());
+    EXPECT_EQ(startReq->mounts_size(), 0);
+}
+
+TEST_F(SandboxdRequestBuilderTest, SourceOverlayAtomicallyReplacesRootfsAndAddsBootstrapMount)
+{
+    auto params = MakeMinimalParams();
+    params.registeredTemplateIDs.insert("container-001");
+    auto *info = params.request->mutable_runtimeinstanceinfo();
+    info->mutable_bootstrapconfig()->set_type("erofs");
+    info->mutable_bootstrapconfig()->set_root("/opt/runtime/rootfs.img");
+    (*info->mutable_deploymentconfig()->mutable_deployoptions())["rootfs"] =
+        R"({"runtime":"kata","type":"image","imageurl":"ubuntu:24.04"})";
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk()) << status.RawMessage();
+    ASSERT_NE(startReq, nullptr);
+    EXPECT_EQ(startReq->runtime(), "kata");
+    EXPECT_EQ(startReq->rootfs().type(), runtime::v1::RootfsSrcType::IMAGE);
+    EXPECT_EQ(startReq->rootfs().image_url(), "ubuntu:24.04");
+    EXPECT_TRUE(startReq->rootfs().path().empty());
+    EXPECT_TRUE(startReq->template_id().empty());
+    ASSERT_EQ(startReq->mounts_size(), 1);
+    EXPECT_EQ(startReq->mounts(0).host_path(), "/opt/runtime/rootfs.img");
+    EXPECT_EQ(startReq->mounts(0).target(), "/__yuanrong");
+}
+
+TEST_F(SandboxdRequestBuilderTest, InvalidSourceOverlayFailsBeforeSandboxd)
+{
+    auto params = MakeMinimalParams();
+    (*params.request->mutable_runtimeinstanceinfo()->mutable_deploymentconfig()->mutable_deployoptions())["rootfs"] =
+        R"({"type":"image","path":"/unexpected"})";
+
+    auto [status, startReq] = builder_->Build(params);
+
+    EXPECT_FALSE(status.IsOk());
+    EXPECT_EQ(status.StatusCode(), StatusCode::ERR_PARAM_INVALID);
+    EXPECT_EQ(startReq, nullptr);
+}
+
+TEST_F(SandboxdRequestBuilderTest, WritableLayerChangeBypassesTemplate)
+{
+    auto params = MakeMinimalParams();
+    params.registeredTemplateIDs.insert("container-001");
+    auto *storage = &(*params.request->mutable_runtimeinstanceinfo()
+                           ->mutable_runtimeconfig()
+                           ->mutable_resources()
+                           ->mutable_resources())["storage"];
+    storage->set_type(resources::Value_Type_SCALAR);
+    storage->mutable_scalar()->set_value(104857600);
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk()) << status.RawMessage();
+    ASSERT_NE(startReq, nullptr);
+    EXPECT_EQ(startReq->rootfs().writable_layer_size_bytes(), 104857600U);
+    EXPECT_TRUE(startReq->template_id().empty());
 }
 
 // stdout/stderr log paths are resolved onto the flat request.
