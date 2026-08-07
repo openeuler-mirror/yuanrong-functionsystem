@@ -168,6 +168,7 @@ type RootfsSpecMeta struct {
 	ImageURL    string            `json:"imageurl" valid:",optional"`
 	User        string            `json:"user" valid:",optional"`
 	Ports       []string          `json:"ports" valid:",optional"`
+	Path        string            `json:"path" valid:",optional"`
 	ReadOnly    bool              `json:"readonly" valid:",optional"`
 	StorageInfo RootfsStorageInfo `json:"storageInfo" valid:",optional"`
 	MountPoint  string            `json:"mountpoint" valid:",optional"`
