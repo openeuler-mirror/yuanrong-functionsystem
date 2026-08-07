@@ -28,6 +28,7 @@
 #include "common/constants/constants.h"
 #include "common/logs/logging.h"
 #include "common/metadata/metadata_type.h"
+#include "common/resource_view/resource_type.h"
 #include "common/utils/collect_status.h"
 #include "common/utils/exec_utils.h"
 #include "common/utils/files.h"
@@ -51,6 +52,7 @@ constexpr size_t CONTENT_LENGTH_PREFIX_LEN = 15;   // length of "content-length:
 constexpr int HTTP_STATUS_UNPARSED = 0;
 constexpr int HTTP_STATUS_OK_MIN = 200;
 constexpr int HTTP_STATUS_OK_MAX = 300;   // exclusive upper bound of 2xx
+constexpr double CPU_MILLICORES_PER_CORE = 1000.0;   // CPU resource is in milli-cores (1000 = 1 core)
 
 SupervisorExecutor::SupervisorExecutor(const std::string &name, const litebus::AID &functionAgentAID)
     : Executor(name), functionAgentAID_(functionAgentAID)
@@ -420,6 +422,25 @@ bool SupervisorExecutor::IsHomeMounted(const std::string &rootfsJson, const std:
     return false;
 }
 
+nlohmann::json SupervisorExecutor::BuildCgroup(const messages::RuntimeInstanceInfo &info)
+{
+    const auto &runtimeResources = info.runtimeconfig().resources().resources();
+    nlohmann::json cgroup = nlohmann::json::object();
+    if (runtimeResources.find(CPU_RESOURCE_NAME) != runtimeResources.end()) {
+        const double cpuVal = runtimeResources.at(CPU_RESOURCE_NAME).scalar().value();
+        if (cpuVal > 0) {
+            cgroup["cpu_max"] = cpuVal / CPU_MILLICORES_PER_CORE;
+        }
+    }
+    if (runtimeResources.find(MEMORY_RESOURCE_NAME) != runtimeResources.end()) {
+        const double memVal = runtimeResources.at(MEMORY_RESOURCE_NAME).scalar().value();
+        if (memVal > 0) {
+            cgroup["memory_max"] = std::to_string(static_cast<int64_t>(memVal)) + "M";
+        }
+    }
+    return cgroup;
+}
+
 nlohmann::json SupervisorExecutor::CreateRequest(const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &info = request->runtimeinstanceinfo();
@@ -447,6 +468,9 @@ nlohmann::json SupervisorExecutor::CreateRequest(const std::shared_ptr<messages:
     policy["process"] = { { "run_as_user", hostUser }, { "run_as_group", hostUser } };
     policy["namespace"] = { { "user", false } };
 
+    if (auto cgroup = BuildCgroup(info); !cgroup.empty()) {
+        policy["cgroup"] = std::move(cgroup);
+    }
     for (const auto &kv : info.runtimeconfig().posixenvs()) {
         policy["environment"][kv.first] = kv.second;
     }
