@@ -108,6 +108,9 @@ private:
     void ApplyExtraConfig(const std::shared_ptr<messages::StartInstanceRequest> &request,
                           runtime::v1::StartRequest *start) const;
 
+    Status ApplyNetworkPolicy(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                              runtime::v1::StartRequest *start) const;
+
     void ApplyPortMappings(const std::vector<std::string> &portMappings,
                            google::protobuf::RepeatedPtrField<std::string> *ports) const;
 

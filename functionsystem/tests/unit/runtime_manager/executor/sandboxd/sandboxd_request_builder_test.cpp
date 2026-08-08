@@ -42,6 +42,8 @@ public:
         config.runtimeConfigPath = "/etc/runtime";
         config.runtimeLogPath    = "/tmp/sandboxd-request-builder-test";
         config.hostIP            = "127.0.0.1";
+        config.proxyIP           = "10.20.30.40";
+        config.proxyGrpcServerPort = "31222";
 
         cmdBuilder_ = std::make_unique<CommandBuilder>(/*execLookPath=*/false);
         cmdBuilder_->SetRuntimeConfig(config);
@@ -210,6 +212,94 @@ TEST_F(SandboxdRequestBuilderTest, InvalidWritableLayerSizeFailsBuild)
                            ->mutable_resources())["storage"];
     storage->set_type(resources::Value_Type_SCALAR);
     storage->mutable_scalar()->set_value(1.5);
+
+    auto [status, startReq] = builder_->Build(params);
+
+    EXPECT_FALSE(status.IsOk());
+    EXPECT_EQ(startReq, nullptr);
+}
+
+TEST_F(SandboxdRequestBuilderTest, BlockNetworkAllowsOnlyFunctionProxy)
+{
+    auto params = MakeMinimalParams();
+    (*params.request->mutable_runtimeinstanceinfo()
+          ->mutable_deploymentconfig()
+          ->mutable_deployoptions())["network_policy"] = R"({"blockNetwork":true})";
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk());
+    ASSERT_NE(startReq, nullptr);
+    ASSERT_TRUE(startReq->has_network_policy());
+    ASSERT_TRUE(startReq->network_policy().has_traffic());
+    const auto &traffic = startReq->network_policy().traffic();
+    EXPECT_EQ(traffic.default_action(), runtime::v1::NETWORK_POLICY_ACTION_DENY);
+    ASSERT_EQ(traffic.rules_size(), 1);
+    const auto &rule = traffic.rules(0);
+    EXPECT_EQ(rule.action(), runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
+    EXPECT_EQ(rule.direction(), runtime::v1::NETWORK_DIRECTION_BOTH);
+    EXPECT_EQ(rule.protocol(), runtime::v1::NETWORK_PROTOCOL_TCP);
+    EXPECT_EQ(rule.peer().address(), "10.20.30.40");
+    EXPECT_EQ(rule.peer().port(), 31222U);
+}
+
+TEST_F(SandboxdRequestBuilderTest, ExtraConfigDoesNotConfigureNetworkPolicy)
+{
+    auto params = MakeMinimalParams();
+    (*params.request->mutable_runtimeinstanceinfo()
+          ->mutable_deploymentconfig()
+          ->mutable_deployoptions())["extra_config"] =
+        R"({"networkPolicy":{"blockNetwork":true},"runtimeOption":"value"})";
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk());
+    ASSERT_NE(startReq, nullptr);
+    EXPECT_FALSE(startReq->has_network_policy());
+    EXPECT_EQ(startReq->extra_config(),
+              R"({"networkPolicy":{"blockNetwork":true},"runtimeOption":"value"})");
+}
+
+TEST_F(SandboxdRequestBuilderTest, DNSBlacklistBuildsDefaultAllowPolicy)
+{
+    auto params = MakeMinimalParams();
+    (*params.request->mutable_runtimeinstanceinfo()
+          ->mutable_deploymentconfig()
+          ->mutable_deployoptions())["network_policy"] =
+        R"({"dnsBlacklist":["github.com","*.github.com"]})";
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk());
+    ASSERT_NE(startReq, nullptr);
+    ASSERT_TRUE(startReq->has_network_policy());
+    ASSERT_TRUE(startReq->network_policy().has_dns());
+    const auto &dns = startReq->network_policy().dns();
+    EXPECT_EQ(dns.default_action(), runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
+    ASSERT_EQ(dns.rules_size(), 2);
+    EXPECT_EQ(dns.rules(0).action(), runtime::v1::NETWORK_POLICY_ACTION_DENY);
+    EXPECT_EQ(dns.rules(0).pattern(), "github.com");
+    EXPECT_EQ(dns.rules(1).pattern(), "*.github.com");
+}
+
+TEST_F(SandboxdRequestBuilderTest, MissingNetworkPolicyLeavesRequestUnrestricted)
+{
+    auto params = MakeMinimalParams();
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk());
+    ASSERT_NE(startReq, nullptr);
+    EXPECT_FALSE(startReq->has_network_policy());
+}
+
+TEST_F(SandboxdRequestBuilderTest, InvalidNetworkPolicyFailsBuild)
+{
+    auto params = MakeMinimalParams();
+    (*params.request->mutable_runtimeinstanceinfo()
+          ->mutable_deploymentconfig()
+          ->mutable_deployoptions())["network_policy"] =
+        R"({"blockNetwork":true,"dnsBlacklist":["github.com"]})";
 
     auto [status, startReq] = builder_->Build(params);
 

@@ -22,10 +22,13 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <utils/os_utils.hpp>
+#include "common/constants/constants.h"
 #include "common/utils/sensitive_value.h"
 #include "common/logs/logging.h"
 #include "common/hex/hex.h"
 #include "function_agent/common/constants.h"
+#include "runtime_manager/config/command_builder.h"
+#include "runtime_manager/executor/sandboxd/sandboxd_request_builder.h"
 
 namespace functionsystem::test {
 
@@ -297,6 +300,49 @@ TEST_F(FunctionAgentUtilsTest, SetStartRuntimeInstanceRequestConfigSuccess)
 
     function_agent::SetStartRuntimeInstanceRequestConfig(startInstanceRequest, deployInstanceRequest);
     EXPECT_EQ(startInstanceRequest->runtimeinstanceinfo().requestid(), requestId);
+}
+
+TEST_F(FunctionAgentUtilsTest, NetworkPolicyFlowsFromCreateOptionsToSandboxdStartRequest)
+{
+    auto deployInstanceRequest = std::make_shared<messages::DeployInstanceRequest>();
+    deployInstanceRequest->set_language("python3.9");
+    deployInstanceRequest->set_instanceid("test-instance");
+    deployInstanceRequest->set_traceid("trace-abc");
+    deployInstanceRequest->mutable_funcdeployspec()->set_deploydir("/dcache");
+    deployInstanceRequest->mutable_container()->set_id("container-001");
+    deployInstanceRequest->mutable_container()->set_runtime("runsc");
+    (*deployInstanceRequest->mutable_createoptions())[CONTAINER_NETWORK_POLICY] =
+        R"({"dnsBlacklist":["github.com"]})";
+
+    auto runtimeRequest = std::make_unique<messages::StartInstanceRequest>();
+    function_agent::SetStartRuntimeInstanceRequestConfig(runtimeRequest, deployInstanceRequest);
+    ASSERT_EQ(runtimeRequest->runtimeinstanceinfo()
+                  .deploymentconfig()
+                  .deployoptions()
+                  .at(CONTAINER_NETWORK_POLICY),
+              R"({"dnsBlacklist":["github.com"]})");
+
+    runtime_manager::RuntimeConfig config;
+    config.runtimePath       = "/opt/runtime";
+    config.runtimeLogLevel   = "INFO";
+    config.runtimeConfigPath = "/etc/runtime";
+    config.runtimeLogPath    = "/tmp/network-policy-pipeline-test";
+    config.hostIP            = "127.0.0.1";
+    runtime_manager::CommandBuilder commandBuilder(/*execLookPath=*/false);
+    commandBuilder.SetRuntimeConfig(config);
+    runtime_manager::SandboxdRequestBuilder requestBuilder(commandBuilder);
+
+    runtime_manager::SandboxdStartParams params;
+    params.request   = std::shared_ptr<messages::StartInstanceRequest>(std::move(runtimeRequest));
+    params.runtimeID = "test-runtime";
+    auto [status, sandboxdRequest] = requestBuilder.Build(params);
+
+    ASSERT_TRUE(status.IsOk());
+    ASSERT_NE(sandboxdRequest, nullptr);
+    ASSERT_TRUE(sandboxdRequest->has_network_policy());
+    ASSERT_TRUE(sandboxdRequest->network_policy().has_dns());
+    ASSERT_EQ(sandboxdRequest->network_policy().dns().rules_size(), 1);
+    EXPECT_EQ(sandboxdRequest->network_policy().dns().rules(0).pattern(), "github.com");
 }
 
 TEST_F(FunctionAgentUtilsTest, SetStopRuntimeInstanceRequestSuccess)
