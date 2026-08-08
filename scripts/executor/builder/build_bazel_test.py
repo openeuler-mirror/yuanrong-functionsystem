@@ -44,6 +44,22 @@ grpc_cc_library(
 
 
 class BazelCacheConfigTest(unittest.TestCase):
+    def test_unstamped_version_header_does_not_contain_git_identity(self):
+        with tempfile.TemporaryDirectory() as root_dir:
+            template = os.path.join(root_dir, "functionsystem", "src", "common", "utils")
+            os.makedirs(template)
+            template_path = os.path.join(template, "version.h.in")
+            output_path = os.path.join(template, "version.h")
+            with open(template_path, "w", encoding="utf-8") as file_obj:
+                file_obj.write("@BUILD_VERSION@ @GIT_HASH@ @GIT_BRANCH_NAME@")
+            with mock.patch.dict(os.environ, {"FUNCTIONSYSTEM_BUILD_STAMP": "0"}, clear=True):
+                build_bazel.generate_version_header(root_dir, "0.0.0")
+            with open(output_path, encoding="utf-8") as file_obj:
+                content = file_obj.read()
+
+        self.assertIn("unstamped", content)
+        self.assertNotIn("refs/heads", content)
+
     def test_frontend_proxy_proto_is_generated_for_bazel_consumers(self):
         self.assertIn("frontend_proxy_service.proto", build_bazel.PROTO_FILES)
         self.assertIn("frontend_proxy_service.proto", build_bazel.GRPC_PROTO_FILES)

@@ -525,7 +525,7 @@ def build_binary_bazel(
     # thirdparty/runtime_deps holds pre-downloaded tarballs (e.g. rules_apple)
     # that are not available on the Huawei mirror.  Mirrors yuanrong's
     # --distdir=./thirdparty/runtime_deps pattern.
-    distdir = os.path.join(root_dir, "thirdparty", "runtime_deps")
+    distdir = os.environ.get("FUNCTIONSYSTEM_BAZEL_DISTDIR", os.path.join(root_dir, "thirdparty", "runtime_deps"))
 
     # Build proto tools from Bazel source before proto generation.
     # This produces bazel-bin/external/com_google_protobuf/protoc and
@@ -577,10 +577,11 @@ def generate_version_header(root_dir: str, version: str):
 
     with open(template_path, encoding="utf-8") as template_file:
         content = template_file.read()
+    stamped = os.environ.get("FUNCTIONSYSTEM_BUILD_STAMP", "1").lower() not in {"0", "false", "off", "no"}
     replacements = {
         "@BUILD_VERSION@": version_name(version),
-        "@GIT_HASH@": git_output("log", "-1", "--pretty=format:[%H] [%ai]"),
-        "@GIT_BRANCH_NAME@": git_output("symbolic-ref", "--short", "-q", "HEAD"),
+        "@GIT_HASH@": git_output("log", "-1", "--pretty=format:[%H] [%ai]") if stamped else "[unstamped]",
+        "@GIT_BRANCH_NAME@": git_output("symbolic-ref", "--short", "-q", "HEAD") if stamped else "unstamped",
     }
     for placeholder, value in replacements.items():
         content = content.replace(placeholder, value)
@@ -707,7 +708,7 @@ def _prepare_bazel_workspace(
 
     bazel_output_root = resolve_bazel_output_root(root_dir, cache_config)
     os.makedirs(bazel_output_root, exist_ok=True)
-    distdir = os.path.join(root_dir, "thirdparty", "runtime_deps")
+    distdir = os.environ.get("FUNCTIONSYSTEM_BAZEL_DISTDIR", os.path.join(root_dir, "thirdparty", "runtime_deps"))
 
     configure_shared_grpc_runtime(root_dir)
     build_proto_tools(root_dir, bazel_output_root, distdir, job_num, cache_config)
