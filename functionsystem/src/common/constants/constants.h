@@ -335,6 +335,8 @@ const std::string CONTAINER_EXTRA_CONFIG = "extra_config";
 
 const std::string CONTAINER_NETWORK = "network";
 
+const std::string CONTAINER_NETWORK_POLICY = "network_policy";
+
 // port forwarding internal env vars
 const std::string YR_INTERNAL_HOST_IP = "YR_INTERNAL_HOST_IP";
 const std::string YR_PORT_FORWARDINGS = "YR_PORT_FORWARDINGS";

@@ -17,6 +17,7 @@
 #include "sandboxd_request_builder.h"
 
 #include <algorithm>
+#include <arpa/inet.h>
 #include <charconv>
 #include <cmath>
 #include <limits>
@@ -35,11 +36,11 @@ namespace {
 // Log-redirect
 const std::string YR_RT_WORKING_DIR       = "YR_RT_WORKING_DIR";
 // Deploy-option keys
-const std::string CONTAINER_ROOTFS        = "rootfs";
-const std::string CONTAINER_EXTRA_CONFIG  = "extra_config";
-const std::string CONTAINER_MOUNTS        = "mounts";
-const std::string CONTAINER_NETWORK       = "network";
-const std::string STORAGE_RESOURCE_NAME   = "storage";
+const std::string CONTAINER_ROOTFS             = "rootfs";
+const std::string CONTAINER_EXTRA_CONFIG       = "extra_config";
+const std::string CONTAINER_MOUNTS             = "mounts";
+const std::string CONTAINER_NETWORK            = "network";
+const std::string STORAGE_RESOURCE_NAME        = "storage";
 // Resource defaults
 constexpr double DEFAULT_CPU_MILLICORES   = 500.0;
 constexpr double DEFAULT_MEMORY_MB        = 500.0;
@@ -279,6 +280,9 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBui
     }
 
     ApplyExtraConfig(params.request, start.get());
+    if (auto status = ApplyNetworkPolicy(params.request, start.get()); !status.IsOk()) {
+        return {status, nullptr};
+    }
     ApplyPortMappings(params.portMappings, start->mutable_ports());
 
     std::string workingRoot;
@@ -529,6 +533,91 @@ void SandboxdRequestBuilder::ApplyExtraConfig(const std::shared_ptr<messages::St
     if (auto it = opts.find(CONTAINER_EXTRA_CONFIG); it != opts.end()) {
         start->set_extra_config(it->second);
     }
+}
+
+Status SandboxdRequestBuilder::ApplyNetworkPolicy(
+    const std::shared_ptr<messages::StartInstanceRequest> &request, runtime::v1::StartRequest *start) const
+{
+    const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
+
+    try {
+        auto iter = opts.find(CONTAINER_NETWORK_POLICY);
+        if (iter == opts.end() || iter->second.empty()) {
+            return Status::OK();
+        }
+        auto policy = nlohmann::json::parse(iter->second);
+        if (!policy.is_object()) {
+            return Status(StatusCode::ERR_PARAM_INVALID, "network_policy must be a JSON object");
+        }
+
+        bool blockNetwork = false;
+        if (policy.contains("blockNetwork")) {
+            if (!policy.at("blockNetwork").is_boolean()) {
+                return Status(StatusCode::ERR_PARAM_INVALID, "network_policy.blockNetwork must be boolean");
+            }
+            blockNetwork = policy.at("blockNetwork").get<bool>();
+        }
+
+        std::vector<std::string> dnsBlacklist;
+        if (policy.contains("dnsBlacklist")) {
+            if (!policy.at("dnsBlacklist").is_array()) {
+                return Status(StatusCode::ERR_PARAM_INVALID, "network_policy.dnsBlacklist must be an array");
+            }
+            for (const auto &pattern : policy.at("dnsBlacklist")) {
+                if (!pattern.is_string() || pattern.get<std::string>().empty()) {
+                    return Status(StatusCode::ERR_PARAM_INVALID,
+                                  "network_policy.dnsBlacklist entries must be non-empty strings");
+                }
+                dnsBlacklist.push_back(pattern.get<std::string>());
+            }
+        }
+        if (blockNetwork && !dnsBlacklist.empty()) {
+            return Status(StatusCode::ERR_PARAM_INVALID,
+                          "network_policy blockNetwork and dnsBlacklist cannot be combined");
+        }
+        if (!blockNetwork && dnsBlacklist.empty()) {
+            return Status::OK();
+        }
+
+        auto *networkPolicy = start->mutable_network_policy();
+        if (blockNetwork) {
+            const auto &config = cmdBuilder_.GetConfig();
+            in_addr address{};
+            if (inet_pton(AF_INET, config.proxyIP.c_str(), &address) != 1) {
+                return Status(StatusCode::ERR_PARAM_INVALID,
+                              fmt::format("proxy IP '{}' is not a valid IPv4 address", config.proxyIP));
+            }
+            uint32_t port = 0;
+            const auto &portText = config.proxyGrpcServerPort;
+            const auto parsed = std::from_chars(portText.data(), portText.data() + portText.size(), port);
+            if (parsed.ec != std::errc() || parsed.ptr != portText.data() + portText.size() || port == 0 ||
+                port > 65535) {
+                return Status(StatusCode::ERR_PARAM_INVALID,
+                              fmt::format("proxy gRPC port '{}' is invalid", portText));
+            }
+
+            auto *traffic = networkPolicy->mutable_traffic();
+            traffic->set_default_action(runtime::v1::NETWORK_POLICY_ACTION_DENY);
+            auto *rule = traffic->add_rules();
+            rule->set_action(runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
+            rule->set_direction(runtime::v1::NETWORK_DIRECTION_BOTH);
+            rule->set_protocol(runtime::v1::NETWORK_PROTOCOL_TCP);
+            rule->mutable_peer()->set_address(config.proxyIP);
+            rule->mutable_peer()->set_port(port);
+        } else {
+            auto *dns = networkPolicy->mutable_dns();
+            dns->set_default_action(runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
+            for (const auto &pattern : dnsBlacklist) {
+                auto *rule = dns->add_rules();
+                rule->set_action(runtime::v1::NETWORK_POLICY_ACTION_DENY);
+                rule->set_pattern(pattern);
+            }
+        }
+    } catch (const std::exception &e) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      fmt::format("failed to parse network_policy JSON: {}", e.what()));
+    }
+    return Status::OK();
 }
 
 void SandboxdRequestBuilder::ApplyPortMappings(const std::vector<std::string> &portMappings,
