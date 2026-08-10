@@ -109,6 +109,7 @@ private:
                           runtime::v1::StartRequest *start) const;
 
     Status ApplyNetworkPolicy(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                              const std::vector<std::string> &portMappings,
                               runtime::v1::StartRequest *start) const;
 
     void ApplyPortMappings(const std::vector<std::string> &portMappings,

@@ -349,6 +349,7 @@ TEST_F(SandboxdRequestBuilderTest, BlockNetworkAllowsOnlyFunctionProxy)
     ASSERT_TRUE(startReq->network_policy().has_traffic());
     const auto &traffic = startReq->network_policy().traffic();
     EXPECT_EQ(traffic.default_action(), runtime::v1::NETWORK_POLICY_ACTION_DENY);
+    EXPECT_EQ(traffic.mode(), runtime::v1::TRAFFIC_POLICY_MODE_STATEFUL);
     ASSERT_EQ(traffic.rules_size(), 1);
     const auto &rule = traffic.rules(0);
     EXPECT_EQ(rule.action(), runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
@@ -356,6 +357,44 @@ TEST_F(SandboxdRequestBuilderTest, BlockNetworkAllowsOnlyFunctionProxy)
     EXPECT_EQ(rule.protocol(), runtime::v1::NETWORK_PROTOCOL_TCP);
     EXPECT_EQ(rule.peer().address(), "10.20.30.40");
     EXPECT_EQ(rule.peer().port(), 31222U);
+}
+
+TEST_F(SandboxdRequestBuilderTest, BlockNetworkAllowsPublishedSandboxTargetPorts)
+{
+    auto params = MakeMinimalParams();
+    params.portMappings = {
+        "tcp:21008:50090",
+        "tcp:21009:8765",
+        "tcp:21010:8766",
+        "udp:21011:5353",
+        "tcp:21012:50090",
+    };
+    (*params.request->mutable_runtimeinstanceinfo()
+          ->mutable_deploymentconfig()
+          ->mutable_deployoptions())["network_policy"] = R"({"blockNetwork":true})";
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk());
+    ASSERT_NE(startReq, nullptr);
+    const auto &traffic = startReq->network_policy().traffic();
+    EXPECT_EQ(traffic.mode(), runtime::v1::TRAFFIC_POLICY_MODE_STATEFUL);
+    ASSERT_EQ(traffic.rules_size(), 5);
+    EXPECT_TRUE(traffic.rules(0).has_peer());
+    const std::vector<std::pair<runtime::v1::NetworkProtocol, uint32_t>> expected = {
+        {runtime::v1::NETWORK_PROTOCOL_TCP, 50090},
+        {runtime::v1::NETWORK_PROTOCOL_TCP, 8765},
+        {runtime::v1::NETWORK_PROTOCOL_TCP, 8766},
+        {runtime::v1::NETWORK_PROTOCOL_UDP, 5353},
+    };
+    for (size_t i = 0; i < expected.size(); ++i) {
+        const auto &rule = traffic.rules(static_cast<int>(i + 1));
+        EXPECT_EQ(rule.action(), runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
+        EXPECT_EQ(rule.direction(), runtime::v1::NETWORK_DIRECTION_INGRESS);
+        EXPECT_EQ(rule.protocol(), expected[i].first);
+        EXPECT_EQ(rule.sandbox_port(), expected[i].second);
+        EXPECT_FALSE(rule.has_peer());
+    }
 }
 
 TEST_F(SandboxdRequestBuilderTest, ExtraConfigDoesNotConfigureNetworkPolicy)

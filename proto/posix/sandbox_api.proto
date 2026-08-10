@@ -69,6 +69,13 @@ enum NetworkProtocol {
   NETWORK_PROTOCOL_ICMP        = 4;
 }
 
+// TrafficPolicyMode selects stateless rules or connection-aware replies.
+enum TrafficPolicyMode {
+  TRAFFIC_POLICY_MODE_UNSPECIFIED = 0;
+  TRAFFIC_POLICY_MODE_STATELESS   = 1;
+  TRAFFIC_POLICY_MODE_STATEFUL    = 2;
+}
+
 // NetworkEndpoint identifies the remote peer matched by a traffic rule.
 message NetworkEndpoint {
   string address = 1;
@@ -81,12 +88,15 @@ message TrafficRule {
   NetworkDirection direction = 2;
   NetworkProtocol protocol   = 3;
   NetworkEndpoint peer       = 4;
+  // Destination port on ingress and source port on egress. Zero matches any.
+  uint32 sandbox_port        = 5;
 }
 
 // TrafficPolicy controls IPv4 packets crossing a sandbox's host veth.
 message TrafficPolicy {
   NetworkPolicyAction default_action = 1;
   repeated TrafficRule rules         = 2;
+  TrafficPolicyMode mode             = 3;
 }
 
 // DNSRule matches either an exact DNS name or a leading "*." suffix pattern.

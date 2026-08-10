@@ -400,7 +400,7 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBui
     }
 
     ApplyExtraConfig(params.request, start.get());
-    if (auto status = ApplyNetworkPolicy(params.request, start.get()); !status.IsOk()) {
+    if (auto status = ApplyNetworkPolicy(params.request, params.portMappings, start.get()); !status.IsOk()) {
         return {status, nullptr};
     }
     ApplyPortMappings(params.portMappings, start->mutable_ports());
@@ -666,7 +666,8 @@ void SandboxdRequestBuilder::ApplyExtraConfig(const std::shared_ptr<messages::St
 }
 
 Status SandboxdRequestBuilder::ApplyNetworkPolicy(
-    const std::shared_ptr<messages::StartInstanceRequest> &request, runtime::v1::StartRequest *start) const
+    const std::shared_ptr<messages::StartInstanceRequest> &request,
+    const std::vector<std::string> &portMappings, runtime::v1::StartRequest *start) const
 {
     const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
 
@@ -728,12 +729,54 @@ Status SandboxdRequestBuilder::ApplyNetworkPolicy(
 
             auto *traffic = networkPolicy->mutable_traffic();
             traffic->set_default_action(runtime::v1::NETWORK_POLICY_ACTION_DENY);
+            traffic->set_mode(runtime::v1::TRAFFIC_POLICY_MODE_STATEFUL);
             auto *rule = traffic->add_rules();
             rule->set_action(runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
             rule->set_direction(runtime::v1::NETWORK_DIRECTION_BOTH);
             rule->set_protocol(runtime::v1::NETWORK_PROTOCOL_TCP);
             rule->mutable_peer()->set_address(config.proxyIP);
             rule->mutable_peer()->set_port(port);
+
+            std::unordered_set<std::string> publishedTargets;
+            for (const auto &mapping : portMappings) {
+                const auto firstSeparator = mapping.find(':');
+                const auto secondSeparator =
+                    firstSeparator == std::string::npos ? std::string::npos : mapping.find(':', firstSeparator + 1);
+                if (firstSeparator == std::string::npos || secondSeparator == std::string::npos ||
+                    mapping.find(':', secondSeparator + 1) != std::string::npos) {
+                    return Status(StatusCode::ERR_PARAM_INVALID,
+                                  fmt::format("invalid sandboxd port mapping '{}'", mapping));
+                }
+                const auto protocolText = mapping.substr(0, firstSeparator);
+                runtime::v1::NetworkProtocol protocol;
+                if (protocolText == "tcp") {
+                    protocol = runtime::v1::NETWORK_PROTOCOL_TCP;
+                } else if (protocolText == "udp") {
+                    protocol = runtime::v1::NETWORK_PROTOCOL_UDP;
+                } else {
+                    return Status(StatusCode::ERR_PARAM_INVALID,
+                                  fmt::format("unsupported sandboxd port mapping protocol '{}'", protocolText));
+                }
+                const auto targetText = mapping.substr(secondSeparator + 1);
+                uint32_t targetPort = 0;
+                const auto targetParsed =
+                    std::from_chars(targetText.data(), targetText.data() + targetText.size(), targetPort);
+                if (targetParsed.ec != std::errc() ||
+                    targetParsed.ptr != targetText.data() + targetText.size() ||
+                    targetPort == 0 || targetPort > 65535) {
+                    return Status(StatusCode::ERR_PARAM_INVALID,
+                                  fmt::format("invalid sandboxd target port in mapping '{}'", mapping));
+                }
+                const auto targetKey = protocolText + ":" + targetText;
+                if (!publishedTargets.insert(targetKey).second) {
+                    continue;
+                }
+                auto *published = traffic->add_rules();
+                published->set_action(runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
+                published->set_direction(runtime::v1::NETWORK_DIRECTION_INGRESS);
+                published->set_protocol(protocol);
+                published->set_sandbox_port(targetPort);
+            }
         } else {
             auto *dns = networkPolicy->mutable_dns();
             dns->set_default_action(runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
