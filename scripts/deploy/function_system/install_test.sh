@@ -31,6 +31,21 @@ if [[ "${merged_agent_body}" != *"${expected}"* ]]; then
   exit 1
 fi
 
+proxy_body=$(sed -n \
+  '/^function install_function_proxy()/,/^function install_dashboard()/p' \
+  "${install_script}")
+expected_data_system_arg='--data_system_enable="${DATA_SYSTEM_ENABLE:-false}"'
+for launch_body in "${proxy_body}" "${merged_agent_body}"; do
+  if [[ "${launch_body}" != *"${expected_data_system_arg}"* ]]; then
+    echo "function_agent must forward DATA_SYSTEM_ENABLE" >&2
+    exit 1
+  fi
+  if [[ "${launch_body}" == *'--data_system_enable=true'* ]]; then
+    echo "function_agent must not hard-code data_system_enable" >&2
+    exit 1
+  fi
+done
+
 test_tmp_dir=$(mktemp -d)
 trap 'rm -rf "${test_tmp_dir}"' EXIT
 scheduler_config="${test_tmp_dir}/init_scheduler_args.json"
