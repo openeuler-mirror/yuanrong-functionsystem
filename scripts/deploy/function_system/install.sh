@@ -152,7 +152,7 @@ function install_function_proxy() {
     --runtime_direct_connection_enable="${RUNTIME_DIRECT_CONNECTION_ENABLE}" \
     --runtime_default_config="${RUNTIME_DEFAULT_CONFIG}" \
     --proc_metrics_memory="${MEM4COMP}" \
-    --data_system_enable=true \
+    --data_system_enable="${DATA_SYSTEM_ENABLE:-false}" \
     --data_system_host="${IP_ADDRESS}" \
     --agent_uid="${agent_uid}" \
     --alias="${FUNCTION_AGENT_ALIAS}" \
@@ -659,7 +659,7 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     --runtime_default_config="${RUNTIME_DEFAULT_CONFIG}"
     --proc_metrics_memory="${MEM4COMP}"
     --enable_dis_conv_call_stack="${ENABLE_DIS_CONV_CALL_STACK}"
-    --data_system_enable=true
+    --data_system_enable="${DATA_SYSTEM_ENABLE:-false}"
     --data_system_host="${IP_ADDRESS}"
     --runtime_instance_debug_enable="${RUNTIME_INSTANCE_DEBUG_ENABLE}"
     --log_expiration_enable="${LOG_EXPIRATION_ENABLE}"
