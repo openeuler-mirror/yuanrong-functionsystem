@@ -20,6 +20,7 @@
 #include <arpa/inet.h>
 #include <charconv>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 
 #include "common/constants/constants.h"
@@ -44,6 +45,7 @@ const std::string STORAGE_RESOURCE_NAME        = "storage";
 // Resource defaults
 constexpr double DEFAULT_CPU_MILLICORES   = 500.0;
 constexpr double DEFAULT_MEMORY_MB        = 500.0;
+constexpr uint32_t MAX_NETWORK_PORT        = std::numeric_limits<uint16_t>::max();
 // Mount
 const std::string YR_FUNCTION_LIB_PATH   = "YR_FUNCTION_LIB_PATH";
 const std::string FUNCTION_LIB_PATH      = "FUNCTION_LIB_PATH";
@@ -722,7 +724,7 @@ Status SandboxdRequestBuilder::ApplyNetworkPolicy(
             const auto &portText = config.proxyGrpcServerPort;
             const auto parsed = std::from_chars(portText.data(), portText.data() + portText.size(), port);
             if (parsed.ec != std::errc() || parsed.ptr != portText.data() + portText.size() || port == 0 ||
-                port > 65535) {
+                port > MAX_NETWORK_PORT) {
                 return Status(StatusCode::ERR_PARAM_INVALID,
                               fmt::format("proxy gRPC port '{}' is invalid", portText));
             }
@@ -763,7 +765,7 @@ Status SandboxdRequestBuilder::ApplyNetworkPolicy(
                     std::from_chars(targetText.data(), targetText.data() + targetText.size(), targetPort);
                 if (targetParsed.ec != std::errc() ||
                     targetParsed.ptr != targetText.data() + targetText.size() ||
-                    targetPort == 0 || targetPort > 65535) {
+                    targetPort == 0 || targetPort > MAX_NETWORK_PORT) {
                     return Status(StatusCode::ERR_PARAM_INVALID,
                                   fmt::format("invalid sandboxd target port in mapping '{}'", mapping));
                 }
