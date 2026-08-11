@@ -6809,10 +6809,8 @@ CreateCallResultCallBack InstanceCtrlActor::RegisterCreateCallResultCallback(
             return ack;
         }
         auto instanceInfo = request->instance();
-        if (instanceInfo.lowreliability() || function_proxy::DirectRoutingConfig::IsEnabled()) {
-            callResult->mutable_runtimeinfo()->set_route(aid.Url());
-            callResult->mutable_runtimeinfo()->set_proxyid(nodeID);
-        }
+        callResult->mutable_runtimeinfo()->set_route(aid.Url());
+        callResult->mutable_runtimeinfo()->set_proxyid(nodeID);
         if (callResult->code() == common::ErrorCode::ERR_NONE && stateMachine != nullptr &&
             stateMachine->GetInstanceState() != InstanceState::RUNNING) {
             auto transContext = TransContext{ InstanceState::RUNNING, stateMachine->GetVersion(), "running" };

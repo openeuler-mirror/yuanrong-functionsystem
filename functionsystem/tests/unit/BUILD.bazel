@@ -153,6 +153,7 @@ cc_test(
         "function_proxy/local_scheduler/grpc_server/frontend_proxy_service_test.cpp",
         "gtest_sleep_compat.h",
         "main.cpp",
+        "mocks/mock_instance_proxy_wrapper.h",
         "utils/port_helper.h",
     ],
     copts = COPTS + [

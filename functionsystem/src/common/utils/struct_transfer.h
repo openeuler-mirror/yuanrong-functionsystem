@@ -865,10 +865,21 @@ static int GetRuntimeRecoverTimes(const resources::InstanceInfo &instanceInfo)
 
 [[maybe_unused]] static bool IsCreateByFrontend(const std::shared_ptr<InstanceInfo> &info)
 {
+    if (info == nullptr) {
+        return false;
+    }
     if (info->extensions().find(CREATE_SOURCE) == info->extensions().end()) {
         return false;
     }
     return info->extensions().at(CREATE_SOURCE) == FRONTEND_STR;
+}
+
+[[maybe_unused]] static bool IsCreateByFrontend(const InstanceInfo &info)
+{
+    if (info.extensions().find(CREATE_SOURCE) == info.extensions().end()) {
+        return false;
+    }
+    return info.extensions().at(CREATE_SOURCE) == FRONTEND_STR;
 }
 
 [[maybe_unused]] static bool IsDriver(const InstanceInfo &info)
@@ -885,6 +896,9 @@ static int GetRuntimeRecoverTimes(const resources::InstanceInfo &instanceInfo)
 
 [[maybe_unused]] static bool IsDriver(const std::shared_ptr<InstanceInfo> &info)
 {
+    if (info == nullptr) {
+        return false;
+    }
     return IsDriver(*info);
 }
 
