@@ -311,6 +311,9 @@ TEST_F(FunctionAgentUtilsTest, NetworkPolicyFlowsFromCreateOptionsToSandboxdStar
     deployInstanceRequest->mutable_funcdeployspec()->set_deploydir("/dcache");
     deployInstanceRequest->mutable_container()->set_id("container-001");
     deployInstanceRequest->mutable_container()->set_runtime("runsc");
+    auto *rootfs = deployInstanceRequest->mutable_container()->mutable_rootfsconfig();
+    rootfs->set_type(runtime::v1::RootfsSrcType::LOCAL);
+    rootfs->set_path("/opt/runtime/rootfs.img");
     (*deployInstanceRequest->mutable_createoptions())[CONTAINER_NETWORK_POLICY] =
         R"({"dnsBlacklist":["github.com"]})";
 
