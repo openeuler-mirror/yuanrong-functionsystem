@@ -109,7 +109,6 @@ struct LocalSchedStartParam {
     std::string tcpTunnelRootCert;
     std::string tcpTunnelModuleCert;
     std::string tcpTunnelModuleKey;
-    bool enableFrontendProxyService = false;
 };
 
 class LocalSchedulingApiRouter : public ApiRouterRegister {
@@ -138,7 +137,7 @@ public:
 
     bool IsFrontendProxyDispatcherAvailable() const
     {
-        return param_.enableFrontendProxyService && isStarted_ && frontendProxyServiceRegistered_;
+        return isStarted_ && frontendProxyServiceRegistered_;
     }
 
 protected:

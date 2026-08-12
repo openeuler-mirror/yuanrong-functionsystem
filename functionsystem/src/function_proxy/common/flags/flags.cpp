@@ -166,8 +166,6 @@ Flags::Flags()
     AddFlag(&Flags::tcpTunnelMaxConnections_, "tcp_tunnel_max_connections",
             "maximum concurrent TCP tunnel connections", DEFAULT_TCP_TUNNEL_MAX_CONNECTIONS,
             NumCheck(MIN_TCP_TUNNEL_MAX_CONNECTIONS, MAX_TCP_TUNNEL_MAX_CONNECTIONS));
-    AddFlag(&Flags::enableFrontendProxyService_, "enable_frontend_proxy_service",
-            "enable faasfrontend gRPC service on the existing proxy POSIX port", false);
     AddElectionFlags();
     AddDSFlags();
     AddRuntimeFlags();
