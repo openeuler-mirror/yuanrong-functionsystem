@@ -17,7 +17,10 @@
 #include "frontend_proxy_service.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -35,8 +38,7 @@
 namespace functionsystem::local_scheduler {
 namespace {
 constexpr const char *FRONTEND_PROXY_CONTROL_NOT_WIRED =
-    "frontend proxy create/kill control path is not wired; use libruntime fallback until control semantics "
-    "are reviewed";
+    "frontend proxy create/kill control path is not wired";
 constexpr const char *FRONTEND_PROXY_CREATE_READY_NOT_WIRED =
     "frontend proxy create requires ready create dispatcher; legacy stream create dispatcher is not allowed";
 constexpr const char *FRONTEND_PROXY_KILL_READY_NOT_WIRED =
@@ -52,6 +54,18 @@ constexpr int64_t FRONTEND_FILE_MAX_TOTAL_SIZE = 512LL * 1024 * 1024;  // 512MB
 constexpr int64_t FRONTEND_FILE_READ_CHUNK_SIZE = 2 * 1024 * 1024;      // 2MB
 constexpr int64_t FRONTEND_FILE_READ_EOF_MARKER = -1;
 constexpr const char *FRONTEND_FILE_FAAS_META_PREFIX = "0000000000000000";  // METALEN = 16
+constexpr const char *FUNCTION_PROXY_STREAM_CALLER_ID = "function-proxy";
+constexpr size_t FRONTEND_EVENT_QUEUE_CAPACITY = 100;
+constexpr size_t FRONTEND_EVENT_METADATA_SIZE = 16;
+constexpr const char *FRONTEND_EVENT_EOF = "yuanrong_event_EOF";
+constexpr size_t FRONTEND_RUNTIME_REQUEST_ID_SIZE = 18;
+
+std::string NewRuntimeWireRequestID()
+{
+    auto requestID = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
+    requestID.erase(std::remove(requestID.begin(), requestID.end(), '-'), requestID.end());
+    return requestID.substr(0, FRONTEND_RUNTIME_REQUEST_ID_SIZE);
+}
 
 struct LifecycleEvent {
     const char *operation;
@@ -243,12 +257,14 @@ namespace frontend_call_result_registry {
             return { false, nullptr };
         }
         const auto &callResult = request->callresultreq();
-        const auto &instanceID = callResult.instanceid().empty() ? from : callResult.instanceid();
-        auto key = BuildPendingKey(instanceID, callResult.requestid());
         std::shared_ptr<litebus::Promise<SharedStreamMsg>> promise;
         {
             std::lock_guard<std::mutex> lock(Mutex());
-            auto iter = Pending().find(key);
+            // `from` is the authenticated runtime stream identity. For an SSE
+            // invoke the logical caller is function-proxy, so CallResult's
+            // instanceid may name that destination instead of the runtime that
+            // produced the result.
+            auto iter = Pending().find(BuildPendingKey(from, callResult.requestid()));
             if (iter == Pending().end()) {
                 return { false, nullptr };
             }
@@ -267,6 +283,136 @@ namespace frontend_call_result_registry {
     }
 
 }  // namespace frontend_call_result_registry
+
+namespace frontend_event_registry {
+    struct PendingStream {
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::deque<std::string> events;
+        bool eventComplete { false };
+        bool closed { false };
+    };
+
+    std::mutex &Mutex()
+    {
+        static std::mutex mutex;
+        return mutex;
+    }
+
+    std::unordered_map<std::string, std::shared_ptr<PendingStream>> &Pending()
+    {
+        static std::unordered_map<std::string, std::shared_ptr<PendingStream>> pending;
+        return pending;
+    }
+
+    std::shared_ptr<PendingStream> Watch(const std::string &requestID)
+    {
+        auto stream = std::make_shared<PendingStream>();
+        std::lock_guard<std::mutex> lock(Mutex());
+        if (!Pending().emplace(requestID, stream).second) {
+            return nullptr;
+        }
+        return stream;
+    }
+
+    void Cancel(const std::string &requestID)
+    {
+        std::shared_ptr<PendingStream> stream;
+        {
+            std::lock_guard<std::mutex> lock(Mutex());
+            auto iter = Pending().find(requestID);
+            if (iter == Pending().end()) {
+                return;
+            }
+            stream = iter->second;
+            (void)Pending().erase(iter);
+        }
+        {
+            std::lock_guard<std::mutex> lock(stream->mutex);
+            stream->closed = true;
+        }
+        stream->changed.notify_all();
+    }
+
+    bool Receive(const std::string &, const SharedStreamMsg &request)
+    {
+        if (request == nullptr || !request->has_eventreq()) {
+            return false;
+        }
+        std::shared_ptr<PendingStream> stream;
+        {
+            std::lock_guard<std::mutex> lock(Mutex());
+            auto iter = Pending().find(request->eventreq().requestid());
+            if (iter == Pending().end()) {
+                return false;
+            }
+            stream = iter->second;
+        }
+        {
+            std::unique_lock<std::mutex> lock(stream->mutex);
+            if (stream->closed) {
+                return false;
+            }
+            const auto &framedMessage = request->eventreq().message();
+            if (framedMessage.size() < FRONTEND_EVENT_METADATA_SIZE) {
+                return false;
+            }
+            auto event = framedMessage.substr(FRONTEND_EVENT_METADATA_SIZE);
+            if (event == FRONTEND_EVENT_EOF) {
+                stream->eventComplete = true;
+            } else {
+                stream->changed.wait(lock, [&]() {
+                    return stream->events.size() < FRONTEND_EVENT_QUEUE_CAPACITY || stream->closed;
+                });
+                if (stream->closed) {
+                    return false;
+                }
+                stream->events.emplace_back(std::move(event));
+            }
+        }
+        stream->changed.notify_all();
+        return true;
+    }
+}  // namespace frontend_event_registry
+
+bool ForwardFrontendEvents(
+    ::grpc::ServerContext *context,
+    ::grpc::ServerWriter<::frontend_proxy::InvokeInstanceStreamResponse> *writer,
+    const std::shared_ptr<frontend_event_registry::PendingStream> &pending,
+    const std::atomic<bool> &dispatchComplete,
+    const ::frontend_proxy::InvokeInstanceResponse &finalResponse)
+{
+    bool writeOK = true;
+    bool observedEventComplete = false;
+    while (writeOK && !context->IsCancelled()) {
+        std::deque<std::string> events;
+        bool eventComplete = false;
+        {
+            std::unique_lock<std::mutex> lock(pending->mutex);
+            pending->changed.wait_for(lock, std::chrono::milliseconds(FRONTEND_WAIT_POLL_MS), [&]() {
+                return !pending->events.empty() || pending->eventComplete != observedEventComplete
+                       || context->IsCancelled();
+            });
+            events.swap(pending->events);
+            eventComplete = pending->eventComplete;
+            observedEventComplete = eventComplete;
+        }
+        pending->changed.notify_all();
+        for (auto &event : events) {
+            ::frontend_proxy::InvokeInstanceStreamResponse frame;
+            frame.set_event(std::move(event));
+            if (!writer->Write(frame)) {
+                writeOK = false;
+                break;
+            }
+        }
+        if (dispatchComplete.load(std::memory_order_acquire)
+            && (eventComplete || finalResponse.status().code() != common::ERR_NONE)) {
+            break;
+        }
+    }
+    return writeOK;
+}
 
 struct KillCleanupObservation {
     FrontendKillCleanupSnapshot snapshot;
@@ -440,7 +586,7 @@ SharedStreamMsg ForwardFileInvokeRequest(const FrontendProxyServiceParam &param,
         YRLOG_ERROR("{}|frontend proxy file {} requires a globally unique request id", requestID, fileOp);
         return nullptr;
     }
-    auto invokeFuture = DispatchInvoke(param, "", invokeRequest);
+    auto invokeFuture = DispatchInvoke(param, FUNCTION_PROXY_STREAM_CALLER_ID, invokeRequest);
     auto invokeResponse = WaitFrontendResult(invokeFuture, context, param.invokeResultTimeoutMs, cancelled);
     if (!invokeResponse.IsSome()) {
         frontend_call_result_registry::Cancel(requestID, instanceID);
@@ -499,6 +645,7 @@ std::string ExtractDownloadChunkData(const std::string &resultMsg, std::string &
 FrontendProxyService::FrontendProxyService(FrontendProxyServiceParam &&param) : param_(std::move(param))
 {
     InvocationHandler::RegisterFrontendCallResultReceiver(frontend_call_result_registry::Receive);
+    InvocationHandler::RegisterFrontendEventReceiver(frontend_event_registry::Receive);
 }
 
 bool FrontendProxyService::HasAuthenticatedPeer(const ::grpc::ServerContext *context) const
@@ -528,6 +675,59 @@ bool FrontendProxyService::HasAuthenticatedPeer(const ::grpc::ServerContext *con
         return ::grpc::Status::OK;
     }
     return DispatchInvokeRequest(context, *request, *response);
+}
+
+::grpc::Status FrontendProxyService::InvokeInstanceStream(
+    ::grpc::ServerContext *context, const ::frontend_proxy::InvokeInstanceRequest *request,
+    ::grpc::ServerWriter<::frontend_proxy::InvokeInstanceStreamResponse> *writer)
+{
+    if (!HasAuthenticatedPeer(context)) {
+        return { ::grpc::StatusCode::UNAUTHENTICATED,
+                 "frontend proxy invoke stream requires an authenticated component certificate" };
+    }
+    if (request == nullptr || writer == nullptr) {
+        return { ::grpc::StatusCode::INVALID_ARGUMENT, "invalid frontend proxy invoke stream args" };
+    }
+
+    ::frontend_proxy::InvokeInstanceResponse finalResponse;
+    if (!ValidateInvokeRequest(*request, finalResponse)) {
+        ::frontend_proxy::InvokeInstanceStreamResponse frame;
+        frame.mutable_final()->CopyFrom(finalResponse);
+        (void)writer->Write(frame);
+        return ::grpc::Status::OK;
+    }
+
+    const auto requestID = request->invoke().requestid().empty() ? request->context().requestid()
+                                                                : request->invoke().requestid();
+    auto pending = frontend_event_registry::Watch(requestID);
+    if (pending == nullptr) {
+        SetStatus(finalResponse.mutable_status(), common::ERR_PARAM_INVALID,
+                  "frontend proxy invoke stream requires a globally unique request id");
+        ::frontend_proxy::InvokeInstanceStreamResponse frame;
+        frame.mutable_final()->CopyFrom(finalResponse);
+        (void)writer->Write(frame);
+        return ::grpc::Status::OK;
+    }
+
+    std::atomic<bool> dispatchComplete { false };
+    std::thread dispatchThread([this, context, request, &finalResponse, &dispatchComplete, pending]() {
+        (void)DispatchInvokeRequest(context, *request, finalResponse);
+        dispatchComplete.store(true, std::memory_order_release);
+        pending->changed.notify_all();
+    });
+
+    const bool writeOK = ForwardFrontendEvents(context, writer, pending, dispatchComplete, finalResponse);
+
+    frontend_event_registry::Cancel(requestID);
+    if (dispatchThread.joinable()) {
+        dispatchThread.join();
+    }
+    if (writeOK && !context->IsCancelled()) {
+        ::frontend_proxy::InvokeInstanceStreamResponse frame;
+        frame.mutable_final()->CopyFrom(finalResponse);
+        (void)writer->Write(frame);
+    }
+    return ::grpc::Status::OK;
 }
 
 bool FrontendProxyService::ValidateInvokeRequest(const ::frontend_proxy::InvokeInstanceRequest &request,
@@ -575,7 +775,10 @@ bool FrontendProxyService::ValidateInvokeRequest(const ::frontend_proxy::InvokeI
                   "frontend proxy invoke requires a globally unique request id");
         return ::grpc::Status::OK;
     }
-    auto invokeFuture = DispatchInvoke(param_, "", CreateInvokeRequest(request));
+    // The Call sender is also the destination used by runtime EventAsync.
+    // Direct frontend invokes therefore use the local FunctionProxy's stream
+    // identity so SSE data and the legacy EOF event return to this service.
+    auto invokeFuture = DispatchInvoke(param_, FUNCTION_PROXY_STREAM_CALLER_ID, CreateInvokeRequest(request));
     bool invokeCancelled = false;
     auto invokeResponse = WaitFrontendResult(invokeFuture, context, param_.invokeResultTimeoutMs, invokeCancelled);
     if (!invokeResponse.IsSome()) {
@@ -736,9 +939,8 @@ bool FrontendProxyService::ValidateCreateRequest(const ::frontend_proxy::CreateI
     // the raw libruntime create contract returns the final NotifyRequest, while
     // Posix create only returns the immediate scheduler CreateResponse and its
     // caller argument is also interpreted as parent/sender runtime identity.
-    // Keep the proto/API shape for future control-plane work, but force callers
-    // to use the reviewed libruntime fallback until ready-notify semantics and
-    // frontend caller identity are designed end-to-end.
+    // Keep this explicit failure for an incompletely wired proxy deployment.
+    // Frontend must not fall back to libruntime.
     SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
               FRONTEND_PROXY_CONTROL_NOT_WIRED, false, "control-path-not-wired");
     return ::grpc::Status::OK;
@@ -753,14 +955,19 @@ bool FrontendProxyService::ValidateCreateRequest(const ::frontend_proxy::CreateI
                   "frontend proxy create response missing instance id");
         return ::grpc::Status::OK;
     }
-    if (createRsp.code() == common::ERR_NONE && response.routeaddress().empty()) {
-        response.set_routeaddress(param_.nodeID);
-    }
-    SetStatus(response.mutable_status(), createRsp.code(), createRsp.message());
     const auto owningProxyID = response.has_callresult() && response.callresult().has_runtimeinfo()
                                    ? response.callresult().runtimeinfo().proxyid()
-                                   : param_.nodeID;
-    const auto routeAddress = response.routeaddress().empty() ? param_.endpointAddress : response.routeaddress();
+                                   : "";
+    if (createRsp.code() == common::ERR_NONE && owningProxyID.empty()) {
+        SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
+                  "frontend proxy create response missing final owner proxy node id");
+        return ::grpc::Status::OK;
+    }
+    if (createRsp.code() == common::ERR_NONE) {
+        response.set_routeaddress(owningProxyID);
+    }
+    SetStatus(response.mutable_status(), createRsp.code(), createRsp.message());
+    const auto routeAddress = response.routeaddress();
     LogLifecycleEvent("create", "terminal", request.context(), param_.nodeID, createRsp.instanceid(),
                       createRsp.code() == common::ERR_NONE ? "success" : "failed", false, "", "", routeAddress,
                       owningProxyID);
@@ -936,7 +1143,7 @@ SharedStreamMsg FrontendProxyService::CreateFileInvokeRequest(const std::string 
     auto invokeReq = invoke->mutable_invokereq();
     invokeReq->set_function(FRONTEND_FILE_FUNCTION_URN);
     invokeReq->set_instanceid(instanceID);
-    invokeReq->set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
+    invokeReq->set_requestid(NewRuntimeWireRequestID());
     // File chunk payload bypasses the data system for the whole round-trip.
     invokeReq->mutable_invokeoptions()->set_bypass_datasystem(true);
     // args[0] = protobuf-serialized libruntime::MetaData (invokeType=InvokeFunction,

@@ -244,7 +244,7 @@ ProxyServiceMeta BuildProxyServiceMeta(const function_proxy::Flags &flags)
     ProxyServiceMeta proxyService;
     if (flags.GetEnableFrontendProxyService()) {
         proxyService.grpcAddress = flags.GetIP() + ":" + flags.GetGrpcListenPort();
-        proxyService.capabilities = { "faas.create", "faas.invoke", "faas.kill" };
+        proxyService.capabilities = { "faas.create", "faas.invoke", "faas.kill", "file.transfer" };
     }
     if (flags.GetEnableTcpTunnel()) {
         proxyService.tcpTunnelAddress = flags.GetIP() + ":" + flags.GetTcpTunnelPort();

@@ -33,6 +33,7 @@
 
 #include "common/proto/pb/posix_pb.h"
 #include "function_proxy/busproxy/invocation_handler/invocation_handler.h"
+#include "mocks/mock_instance_proxy_wrapper.h"
 // Allow test access to private members of FrontendProxyService.
 #define private public
 #include "grpc_server/frontend_proxy_service/frontend_proxy_service.h"
@@ -67,6 +68,26 @@ private:
     std::string socketPath_;
     std::unique_ptr<::grpc::Server> server_;
 };
+
+class ScopedInvocationProxy {
+public:
+    ScopedInvocationProxy() : proxy_(std::make_shared<MockInstanceProxy>())
+    {
+        ON_CALL(*proxy_, CompleteFrontendCall)
+            .WillByDefault([](const litebus::AID &, const SharedStreamMsg &, const SharedStreamMsg &ack) {
+                return litebus::Future<SharedStreamMsg>(ack);
+            });
+        InvocationHandler::BindInstanceProxy(proxy_);
+    }
+
+    ~ScopedInvocationProxy()
+    {
+        InvocationHandler::UnBindInstanceProxy();
+    }
+
+private:
+    std::shared_ptr<MockInstanceProxy> proxy_;
+};
 }  // namespace
 
 TEST(FrontendProxyServiceTest, RejectsUnauthenticatedPeerWhenRequired)
@@ -82,7 +103,7 @@ TEST(FrontendProxyServiceTest, RejectsUnauthenticatedPeerWhenRequired)
     EXPECT_EQ(status.error_code(), ::grpc::StatusCode::UNAUTHENTICATED);
 }
 
-TEST(FrontendProxyServiceTest, InvokeDoesNotUseFrontendClientIDAsRuntimeSender)
+TEST(FrontendProxyServiceTest, InvokeUsesFunctionProxyAsRuntimeSender)
 {
     std::string capturedCaller;
     SharedStreamMsg capturedRequest;
@@ -116,7 +137,7 @@ TEST(FrontendProxyServiceTest, InvokeDoesNotUseFrontendClientIDAsRuntimeSender)
 
     ASSERT_NE(capturedRequest, nullptr);
     ASSERT_TRUE(capturedRequest->has_invokereq());
-    EXPECT_TRUE(capturedCaller.empty());
+    EXPECT_EQ(capturedCaller, "function-proxy");
     EXPECT_EQ(capturedRequest->invokereq().requestid(), "frontend-proxy-request-1");
 }
 
@@ -150,6 +171,7 @@ TEST(FrontendProxyServiceTest, InvokeRejectsTenantThatDoesNotOwnTargetInstance)
 
 TEST(FrontendProxyServiceTest, InvokeTerminalSuccessReturnsDirectResult)
 {
+    ScopedInvocationProxy invocationProxy;
     FrontendProxyServiceParam param;
     param.nodeID = "proxy-node-a";
     param.endpointAddress = "10.0.0.11:19090";
@@ -159,7 +181,7 @@ TEST(FrontendProxyServiceTest, InvokeTerminalSuccessReturnsDirectResult)
         result->mutable_callresultreq()->set_code(common::ERR_NONE);
         result->mutable_callresultreq()->set_requestid(request->invokereq().requestid());
         result->mutable_callresultreq()->set_instanceid(request->invokereq().instanceid());
-        (void)InvocationHandler::CallResultAdapter("runtime-instance", result);
+        (void)InvocationHandler::CallResultAdapter(request->invokereq().instanceid(), result);
         auto response = std::make_shared<runtime_rpc::StreamingMessage>();
         response->mutable_invokersp()->set_code(common::ERR_NONE);
         return litebus::Future<SharedStreamMsg>(response);
@@ -178,8 +200,150 @@ TEST(FrontendProxyServiceTest, InvokeTerminalSuccessReturnsDirectResult)
     EXPECT_EQ(response.callresult().instanceid(), "instance-a");
 }
 
+TEST(FrontendProxyServiceTest, InvokeStreamForwardsEventsBeforeFinalResult)
+{
+    ScopedInvocationProxy invocationProxy;
+    FrontendProxyServiceParam param;
+    param.nodeID = "proxy-node-stream";
+    param.endpointAddress = "127.0.0.1:19090";
+    param.invokeResultTimeoutMs = 1000;
+    param.invokeDispatcher = [](const std::string &caller, const SharedStreamMsg &request) {
+        EXPECT_EQ(caller, "function-proxy");
+
+        auto event = std::make_shared<runtime_rpc::StreamingMessage>();
+        event->mutable_eventreq()->set_requestid(request->invokereq().requestid());
+        event->mutable_eventreq()->set_message(std::string(16, '\0') + "first-event");
+        (void)InvocationHandler::EventAdapter("runtime-instance", event);
+
+        auto eof = std::make_shared<runtime_rpc::StreamingMessage>();
+        eof->mutable_eventreq()->set_requestid(request->invokereq().requestid());
+        eof->mutable_eventreq()->set_message(std::string(16, '\0') + "yuanrong_event_EOF");
+        (void)InvocationHandler::EventAdapter("runtime-instance", eof);
+
+        auto result = std::make_shared<runtime_rpc::StreamingMessage>();
+        result->mutable_callresultreq()->set_code(common::ERR_NONE);
+        result->mutable_callresultreq()->set_requestid(request->invokereq().requestid());
+        result->mutable_callresultreq()->set_instanceid(request->invokereq().instanceid());
+        result->mutable_callresultreq()->add_smallobjects()->set_value("final-result");
+        (void)InvocationHandler::CallResultAdapter(request->invokereq().instanceid(), result);
+
+        auto response = std::make_shared<runtime_rpc::StreamingMessage>();
+        response->mutable_invokersp()->set_code(common::ERR_NONE);
+        return litebus::Future<SharedStreamMsg>(response);
+    };
+    FrontendProxyService service(std::move(param));
+    ::grpc::ServerBuilder builder;
+    const auto socketPath = "/tmp/frontend-proxy-invoke-stream-" + std::to_string(::getpid()) + ".sock";
+    const auto address = "unix:" + socketPath;
+    (void)::unlink(socketPath.c_str());
+    builder.AddListeningPort(address, ::grpc::InsecureServerCredentials());
+    builder.RegisterService(&service);
+    UnixGrpcServer server(socketPath, builder.BuildAndStart());
+    ASSERT_NE(server.Get(), nullptr);
+
+    auto channel = ::grpc::CreateChannel(address, ::grpc::InsecureChannelCredentials());
+    ASSERT_TRUE(channel->WaitForConnected(std::chrono::system_clock::now() + std::chrono::seconds(2)));
+    auto stub = ::frontend_proxy::FrontendProxyService::NewStub(channel);
+    ::frontend_proxy::InvokeInstanceRequest request;
+    request.mutable_context()->set_frontendclientid("frontend-a");
+    request.mutable_context()->set_requestid("invoke-stream-request");
+    request.mutable_context()->set_tenantid("tenant-a");
+    request.mutable_invoke()->set_instanceid("instance-a");
+    ::grpc::ClientContext clientContext;
+    auto reader = stub->InvokeInstanceStream(&clientContext, request);
+
+    ::frontend_proxy::InvokeInstanceStreamResponse frame;
+    ASSERT_TRUE(reader->Read(&frame));
+    ASSERT_TRUE(frame.has_event());
+    EXPECT_EQ(frame.event(), "first-event");
+    ASSERT_TRUE(reader->Read(&frame));
+    ASSERT_TRUE(frame.has_final());
+    EXPECT_EQ(frame.final().status().code(), common::ERR_NONE);
+    ASSERT_EQ(frame.final().callresult().smallobjects_size(), 1);
+    EXPECT_EQ(frame.final().callresult().smallobjects(0).value(), "final-result");
+    EXPECT_FALSE(reader->Read(&frame));
+    EXPECT_TRUE(reader->Finish().ok());
+}
+
+TEST(FrontendProxyServiceTest, InvokeStreamCancellationClearsEventAndResultRegistries)
+{
+    auto pending = std::make_shared<litebus::Promise<SharedStreamMsg>>();
+    std::mutex mutex;
+    std::condition_variable entered;
+    int dispatchCount = 0;
+    FrontendProxyServiceParam param;
+    param.nodeID = "proxy-node-stream-cancel";
+    param.endpointAddress = "127.0.0.1:19090";
+    param.invokeResultTimeoutMs = 5000;
+    param.invokeDispatcher = [&](const std::string &, const SharedStreamMsg &) {
+        std::lock_guard<std::mutex> lock(mutex);
+        ++dispatchCount;
+        entered.notify_all();
+        if (dispatchCount == 1) {
+            return pending->GetFuture();
+        }
+        auto response = std::make_shared<runtime_rpc::StreamingMessage>();
+        response->mutable_invokersp()->set_code(common::ERR_PARAM_INVALID);
+        response->mutable_invokersp()->set_message("retry proves stream registries were cleared");
+        return litebus::Future<SharedStreamMsg>(response);
+    };
+    FrontendProxyService service(std::move(param));
+    ::grpc::ServerBuilder builder;
+    const auto socketPath = "/tmp/frontend-proxy-stream-cancel-" + std::to_string(::getpid()) + ".sock";
+    const auto address = "unix:" + socketPath;
+    (void)::unlink(socketPath.c_str());
+    builder.AddListeningPort(address, ::grpc::InsecureServerCredentials());
+    builder.RegisterService(&service);
+    UnixGrpcServer server(socketPath, builder.BuildAndStart());
+    ASSERT_NE(server.Get(), nullptr);
+
+    auto channel = ::grpc::CreateChannel(address, ::grpc::InsecureChannelCredentials());
+    ASSERT_TRUE(channel->WaitForConnected(std::chrono::system_clock::now() + std::chrono::seconds(2)));
+    auto stub = ::frontend_proxy::FrontendProxyService::NewStub(channel);
+    ::frontend_proxy::InvokeInstanceRequest request;
+    request.mutable_context()->set_frontendclientid("frontend-a");
+    request.mutable_context()->set_requestid("invoke-stream-cancel-request");
+    request.mutable_context()->set_tenantid("tenant-a");
+    request.mutable_invoke()->set_instanceid("instance-a");
+
+    ::grpc::ClientContext firstContext;
+    auto firstReader = stub->InvokeInstanceStream(&firstContext, request);
+    auto firstCall = std::async(std::launch::async, [&] {
+        ::frontend_proxy::InvokeInstanceStreamResponse frame;
+        while (firstReader->Read(&frame)) {
+        }
+        return firstReader->Finish();
+    });
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        ASSERT_TRUE(entered.wait_for(lock, std::chrono::seconds(2), [&] { return dispatchCount == 1; }));
+    }
+    firstContext.TryCancel();
+    EXPECT_EQ(firstCall.get().error_code(), ::grpc::StatusCode::CANCELLED);
+
+    bool retrySucceeded = false;
+    const auto retryDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!retrySucceeded && std::chrono::steady_clock::now() < retryDeadline) {
+        ::grpc::ClientContext retryContext;
+        auto retryReader = stub->InvokeInstanceStream(&retryContext, request);
+        ::frontend_proxy::InvokeInstanceStreamResponse retryFrame;
+        ASSERT_TRUE(retryReader->Read(&retryFrame));
+        ASSERT_TRUE(retryFrame.has_final());
+        retrySucceeded = retryFrame.final().status().message() == "retry proves stream registries were cleared";
+        EXPECT_FALSE(retryReader->Read(&retryFrame));
+        EXPECT_TRUE(retryReader->Finish().ok());
+        if (!retrySucceeded) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+    EXPECT_TRUE(retrySucceeded);
+    std::lock_guard<std::mutex> lock(mutex);
+    EXPECT_EQ(dispatchCount, 2);
+}
+
 TEST(FrontendProxyServiceTest, InvokeTerminalSuccessUsesRuntimeSenderWhenResultOmitsInstanceID)
 {
+    ScopedInvocationProxy invocationProxy;
     FrontendProxyServiceParam param;
     param.invokeResultTimeoutMs = 100;
     param.invokeDispatcher = [](const std::string &, const SharedStreamMsg &request) {
@@ -217,8 +381,8 @@ TEST(FrontendProxyServiceTest, CreateReadyTerminalSuccessCarriesOwningRoute)
         ::frontend_proxy::CreateInstanceResponse response;
         response.mutable_create()->set_code(common::ERR_NONE);
         response.mutable_create()->set_instanceid("created-instance");
-        response.set_routeaddress("10.0.0.11:19090");
-        response.mutable_callresult()->mutable_runtimeinfo()->set_proxyid("proxy-node-a");
+        response.set_routeaddress("stale-entry-proxy");
+        response.mutable_callresult()->mutable_runtimeinfo()->set_proxyid("final-owner-proxy");
         return litebus::Future<::frontend_proxy::CreateInstanceResponse>(response);
     };
     FrontendProxyService service(std::move(param));
@@ -233,7 +397,7 @@ TEST(FrontendProxyServiceTest, CreateReadyTerminalSuccessCarriesOwningRoute)
     EXPECT_TRUE(service.CreateInstance(nullptr, &request, &response).ok());
     EXPECT_EQ(response.status().code(), common::ERR_NONE);
     EXPECT_EQ(response.create().instanceid(), "created-instance");
-    EXPECT_EQ(response.routeaddress(), "10.0.0.11:19090");
+    EXPECT_EQ(response.routeaddress(), "final-owner-proxy");
 }
 
 TEST(FrontendProxyServiceTest, DuplicateRequestIDDoesNotReplaceExistingWaiter)
@@ -439,6 +603,58 @@ TEST(FrontendProxyServiceTest, InvokeTimeoutAfterDispatchIsNonRetryableUnknown)
     EXPECT_TRUE(service.InvokeInstance(nullptr, &request, &response).ok());
     EXPECT_FALSE(response.status().retryable());
     EXPECT_EQ(response.status().retryreason(), "post-dispatch-unknown");
+}
+
+TEST(FrontendProxyServiceTest, InvokeRejectedBeforeRuntimeExecutionIsRetryable)
+{
+    FrontendProxyServiceParam param;
+    param.invokeDispatcher = [](const std::string &, const SharedStreamMsg &) {
+        auto response = std::make_shared<runtime_rpc::StreamingMessage>();
+        response->mutable_invokersp()->set_code(common::ERR_INSTANCE_NOT_FOUND);
+        response->mutable_invokersp()->set_message("runtime did not accept invoke");
+        return litebus::Future<SharedStreamMsg>(response);
+    };
+    FrontendProxyService service(std::move(param));
+    ::frontend_proxy::InvokeInstanceRequest request;
+    request.mutable_context()->set_frontendclientid("frontend-a");
+    request.mutable_context()->set_requestid("invoke-rejected");
+    request.mutable_context()->set_tenantid("tenant-a");
+    request.mutable_invoke()->set_instanceid("instance-a");
+    ::frontend_proxy::InvokeInstanceResponse response;
+
+    EXPECT_TRUE(service.InvokeInstance(nullptr, &request, &response).ok());
+    EXPECT_EQ(response.status().code(), common::ERR_INSTANCE_NOT_FOUND);
+    EXPECT_TRUE(response.status().retryable());
+    EXPECT_EQ(response.status().retryreason(), "call-response-error");
+}
+
+TEST(FrontendProxyServiceTest, InvokeRuntimeResultFailurePreservesCodeWithoutRetry)
+{
+    ScopedInvocationProxy invocationProxy;
+    FrontendProxyServiceParam param;
+    param.invokeResultTimeoutMs = 100;
+    param.invokeDispatcher = [](const std::string &, const SharedStreamMsg &request) {
+        auto result = std::make_shared<runtime_rpc::StreamingMessage>();
+        result->mutable_callresultreq()->set_code(common::ERR_INSTANCE_EXITED);
+        result->mutable_callresultreq()->set_message("runtime exited during invoke");
+        result->mutable_callresultreq()->set_requestid(request->invokereq().requestid());
+        (void)InvocationHandler::CallResultAdapter(request->invokereq().instanceid(), result);
+        auto response = std::make_shared<runtime_rpc::StreamingMessage>();
+        response->mutable_invokersp()->set_code(common::ERR_NONE);
+        return litebus::Future<SharedStreamMsg>(response);
+    };
+    FrontendProxyService service(std::move(param));
+    ::frontend_proxy::InvokeInstanceRequest request;
+    request.mutable_context()->set_frontendclientid("frontend-a");
+    request.mutable_context()->set_requestid("invoke-result-failed");
+    request.mutable_context()->set_tenantid("tenant-a");
+    request.mutable_invoke()->set_instanceid("instance-a");
+    ::frontend_proxy::InvokeInstanceResponse response;
+
+    EXPECT_TRUE(service.InvokeInstance(nullptr, &request, &response).ok());
+    EXPECT_EQ(response.status().code(), common::ERR_INSTANCE_EXITED);
+    EXPECT_FALSE(response.status().retryable());
+    EXPECT_TRUE(response.status().retryreason().empty());
 }
 
 TEST(FrontendProxyServiceTest, KillLocalMissIsTypedAsRetryableStaleRoute)
@@ -842,7 +1058,8 @@ TEST(FrontendProxyServiceTest, CreateFileInvokeRequestHasCorrectArgLayout)
     ASSERT_TRUE(invoke->has_invokereq());
     const auto &req = invoke->invokereq();
     EXPECT_EQ(req.instanceid(), "instance-a");
-    EXPECT_FALSE(req.requestid().empty());
+    EXPECT_EQ(req.requestid().size(), 18);
+    EXPECT_EQ(req.requestid().find('-'), std::string::npos);
     EXPECT_TRUE(req.invokeoptions().bypass_datasystem());
     // args[0] = protobuf MetaData (8 bytes: invokeType + functionMeta{language, apiType})
     ASSERT_EQ(req.args_size(), 3);

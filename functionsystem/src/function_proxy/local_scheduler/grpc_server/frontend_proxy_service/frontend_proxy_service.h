@@ -95,6 +95,11 @@ public:
                                   const ::frontend_proxy::InvokeInstanceRequest *request,
                                   ::frontend_proxy::InvokeInstanceResponse *response) override;
 
+    ::grpc::Status InvokeInstanceStream(
+        ::grpc::ServerContext *context,
+        const ::frontend_proxy::InvokeInstanceRequest *request,
+        ::grpc::ServerWriter<::frontend_proxy::InvokeInstanceStreamResponse> *writer) override;
+
     ::grpc::Status CreateInstance(::grpc::ServerContext *context,
                                   const ::frontend_proxy::CreateInstanceRequest *request,
                                   ::frontend_proxy::CreateInstanceResponse *response) override;
