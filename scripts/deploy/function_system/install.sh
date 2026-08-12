@@ -71,7 +71,6 @@ function get_runtime_checkpoint_dir() {
 function install_function_proxy() {
   log_info "start function proxy, proxy_port=${FUNCTION_PROXY_PORT}, grpc_port=${FUNCTION_PROXY_GRPC_PORT}..."
   local bin=${FUNCTION_SYSTEM_DIR}/bin/function_proxy
-  local enable_frontend_proxy_service="true"
   local is_pseudo_data_plane="false"
   if [ ${CPU4COMP} -le 100 ]; then
     is_pseudo_data_plane="true"
@@ -225,7 +224,6 @@ function install_function_proxy() {
     --enable_tcp_tunnel="$([ "X${SSH_ENABLE}" = "Xtrue" ] || [ "X${ENABLE_TCP_TUNNEL}" = "Xtrue" ] && echo true || echo false)" \
     --tcp_tunnel_port="${TCP_TUNNEL_PORT:-22775}" \
     --tcp_tunnel_max_connections="${TCP_TUNNEL_MAX_CONNECTIONS:-1024}" \
-    --enable_frontend_proxy_service="${enable_frontend_proxy_service}" \
     --enable_direct_routing="${ENABLE_DIRECT_ROUTING}" \
     --force_low_reliability_instance="${FORCE_LOW_RELIABILITY_INSTANCE}" \
     ${merge_process_args} >>"${FS_LOG_PATH}/${NODE_ID}-function_proxy${STD_LOG_SUFFIX}" 2>&1 &

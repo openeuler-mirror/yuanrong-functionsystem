@@ -242,10 +242,8 @@ std::shared_ptr<::grpc::ServerCredentials> InitPosixGrpcServerSecureOption(const
 ProxyServiceMeta BuildProxyServiceMeta(const function_proxy::Flags &flags)
 {
     ProxyServiceMeta proxyService;
-    if (flags.GetEnableFrontendProxyService()) {
-        proxyService.grpcAddress = flags.GetIP() + ":" + flags.GetGrpcListenPort();
-        proxyService.capabilities = { "faas.create", "faas.invoke", "faas.kill", "file.transfer" };
-    }
+    proxyService.grpcAddress = flags.GetIP() + ":" + flags.GetGrpcListenPort();
+    proxyService.capabilities = { "faas.create", "faas.invoke", "faas.kill", "file.transfer" };
     if (flags.GetEnableTcpTunnel()) {
         proxyService.tcpTunnelAddress = flags.GetIP() + ":" + flags.GetTcpTunnelPort();
         proxyService.capabilities.emplace_back("tcp.tunnel");
@@ -518,8 +516,7 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .tcpTunnelMaxConnections = flags.GetTcpTunnelMaxConnections(),
         .tcpTunnelRootCert = "",
         .tcpTunnelModuleCert = "",
-        .tcpTunnelModuleKey = "",
-        .enableFrontendProxyService = flags.GetEnableFrontendProxyService()
+        .tcpTunnelModuleKey = ""
     };
 }
 
@@ -785,8 +782,6 @@ int main(int argc, char **argv)
 
     YRLOG_INFO("DirectRouting feature flag: {}", flags.GetEnableDirectRouting());
     YRLOG_INFO("ForceLowReliabilityInstance feature flag: {}", flags.GetForceLowReliabilityInstance());
-    YRLOG_INFO("FrontendProxyService feature flag: {}", flags.GetEnableFrontendProxyService());
-
     if (!g_functionProxySwitcher->RegisterHandler(Stop, stopSignal)) {
         return EXIT_ABNORMAL;
     }

@@ -491,70 +491,68 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
                                   .hostIP = param_.ip };
     std::shared_ptr<BusService> busService = std::make_shared<BusService>(std::move(serviceParam));
     posixGrpcServer_->RegisterService(busService);
-    if (param_.enableFrontendProxyService) {
-        FrontendProxyServiceBindings bindings;
-        bindings.enableCreateDispatch = true;
-        bindings.scheduler =
-            [instanceCtrl(instanceCtrl_)](
-                const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
-                const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
-                FrontendProxyReadyCallback callback) {
-                if (instanceCtrl == nullptr) {
-                    messages::ScheduleResponse response;
-                    response.set_code(common::ERR_LOCAL_SCHEDULER_ABNORMAL);
-                    response.set_message("instance control is nullptr in local scheduler");
-                    return litebus::Future<messages::ScheduleResponse>(response);
-                }
-                scheduleReq->mutable_instance()->set_parentfunctionproxyaid(instanceCtrl->GetActorAID());
-                return instanceCtrl->ScheduleFrontendAndWaitReady(scheduleReq, runtimePromise, std::move(callback));
-            };
-        bindings.readyUnregister =
-            [instanceCtrl(instanceCtrl_)](const std::string &requestID, const std::string &reason) {
-                if (instanceCtrl != nullptr) {
-                    instanceCtrl->UnregisterFrontendReadyWait(requestID, reason);
-                }
-            };
-        bindings.enableKillDispatch = true;
-        bindings.killInvoker =
-            [instanceCtrl(instanceCtrl_)](const std::string &caller, const std::string &tenantID,
-                                         const std::shared_ptr<KillRequest> &killReq) {
-                if (instanceCtrl == nullptr) {
-                    KillResponse response;
-                    response.set_code(common::ERR_LOCAL_SCHEDULER_ABNORMAL);
-                    response.set_message("instance control is nullptr in local scheduler");
-                    return litebus::Future<KillResponse>(response);
-                }
-                (void)caller;
-                return instanceCtrl->KillFrontend(tenantID, killReq);
-            };
-        bindings.killCleanupProbe =
-            [instanceCtrl(instanceCtrl_)](const std::string &requestID, const std::string &instanceID) {
-                if (instanceCtrl == nullptr) {
-                    FrontendKillCleanupSnapshot snapshot;
-                    return litebus::Future<FrontendKillCleanupSnapshot>(snapshot);
-                }
-                return instanceCtrl->ProbeFrontendKillCleanup(requestID, instanceID);
-            };
-        auto frontendServiceParam = BuildFrontendProxyServiceParam(param_.nodeID, bindings);
-        frontendServiceParam.endpointAddress = param_.ip + ":" + param_.posixPort;
-        frontendServiceParam.requireAuthenticatedPeer = param_.enableSSL;
-        frontendServiceParam.invokeTenantAuthorizer =
-            [instanceView(instanceCtrl_->GetInstanceControlView())](const std::string &tenantID,
-                                                                    const std::string &instanceID) {
-                if (tenantID.empty() || instanceView == nullptr) {
-                    return false;
-                }
-                auto stateMachine = instanceView->GetInstance(instanceID);
-                return stateMachine != nullptr && stateMachine->GetInstanceInfo().tenantid() == tenantID;
-            };
-        // Lifecycle create/kill use reviewed ready dispatcher seams when the single
-        // frontend-proxy service switch is enabled. Legacy stream dispatchers remain disallowed.
-        std::shared_ptr<FrontendProxyService> frontendProxyService =
-            std::make_shared<FrontendProxyService>(std::move(frontendServiceParam));
-        posixGrpcServer_->RegisterService(frontendProxyService);
-        frontendProxyServiceRegistered_ = true;
-        YRLOG_INFO("FrontendProxyService registered on existing posix port {}", param_.posixPort);
-    }
+    FrontendProxyServiceBindings bindings;
+    bindings.enableCreateDispatch = true;
+    bindings.scheduler =
+        [instanceCtrl(instanceCtrl_)](
+            const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+            const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &runtimePromise,
+            FrontendProxyReadyCallback callback) {
+            if (instanceCtrl == nullptr) {
+                messages::ScheduleResponse response;
+                response.set_code(common::ERR_LOCAL_SCHEDULER_ABNORMAL);
+                response.set_message("instance control is nullptr in local scheduler");
+                return litebus::Future<messages::ScheduleResponse>(response);
+            }
+            scheduleReq->mutable_instance()->set_parentfunctionproxyaid(instanceCtrl->GetActorAID());
+            return instanceCtrl->ScheduleFrontendAndWaitReady(scheduleReq, runtimePromise, std::move(callback));
+        };
+    bindings.readyUnregister =
+        [instanceCtrl(instanceCtrl_)](const std::string &requestID, const std::string &reason) {
+            if (instanceCtrl != nullptr) {
+                instanceCtrl->UnregisterFrontendReadyWait(requestID, reason);
+            }
+        };
+    bindings.enableKillDispatch = true;
+    bindings.killInvoker =
+        [instanceCtrl(instanceCtrl_)](const std::string &caller, const std::string &tenantID,
+                                     const std::shared_ptr<KillRequest> &killReq) {
+            if (instanceCtrl == nullptr) {
+                KillResponse response;
+                response.set_code(common::ERR_LOCAL_SCHEDULER_ABNORMAL);
+                response.set_message("instance control is nullptr in local scheduler");
+                return litebus::Future<KillResponse>(response);
+            }
+            (void)caller;
+            return instanceCtrl->KillFrontend(tenantID, killReq);
+        };
+    bindings.killCleanupProbe =
+        [instanceCtrl(instanceCtrl_)](const std::string &requestID, const std::string &instanceID) {
+            if (instanceCtrl == nullptr) {
+                FrontendKillCleanupSnapshot snapshot;
+                return litebus::Future<FrontendKillCleanupSnapshot>(snapshot);
+            }
+            return instanceCtrl->ProbeFrontendKillCleanup(requestID, instanceID);
+        };
+    auto frontendServiceParam = BuildFrontendProxyServiceParam(param_.nodeID, bindings);
+    frontendServiceParam.endpointAddress = param_.ip + ":" + param_.posixPort;
+    frontendServiceParam.requireAuthenticatedPeer = param_.enableSSL;
+    frontendServiceParam.invokeTenantAuthorizer =
+        [instanceView(instanceCtrl_->GetInstanceControlView())](const std::string &tenantID,
+                                                                const std::string &instanceID) {
+            if (tenantID.empty() || instanceView == nullptr) {
+                return false;
+            }
+            auto stateMachine = instanceView->GetInstance(instanceID);
+            return stateMachine != nullptr && stateMachine->GetInstanceInfo().tenantid() == tenantID;
+        };
+    // Lifecycle create/kill use reviewed ready dispatcher seams. Legacy stream dispatchers remain
+    // disallowed.
+    std::shared_ptr<FrontendProxyService> frontendProxyService =
+        std::make_shared<FrontendProxyService>(std::move(frontendServiceParam));
+    posixGrpcServer_->RegisterService(frontendProxyService);
+    frontendProxyServiceRegistered_ = true;
+    YRLOG_INFO("FrontendProxyService registered on existing posix port {}", param_.posixPort);
 
     // Create ExecStreamService instance
     execStreamService_ = std::make_shared<ExecStreamService>(instanceCtrl_->GetIdleMgr());
