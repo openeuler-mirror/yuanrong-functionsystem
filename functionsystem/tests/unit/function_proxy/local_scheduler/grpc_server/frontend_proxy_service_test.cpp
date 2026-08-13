@@ -628,7 +628,7 @@ TEST(FrontendProxyServiceTest, InvokeRejectedBeforeRuntimeExecutionIsRetryable)
     EXPECT_EQ(response.status().retryreason(), "call-response-error");
 }
 
-TEST(FrontendProxyServiceTest, InvokeRuntimeResultFailurePreservesCodeWithoutRetry)
+TEST(FrontendProxyServiceTest, InvokeRuntimeResultFailureIsSeparatedFromProxyStatus)
 {
     ScopedInvocationProxy invocationProxy;
     FrontendProxyServiceParam param;
@@ -652,9 +652,11 @@ TEST(FrontendProxyServiceTest, InvokeRuntimeResultFailurePreservesCodeWithoutRet
     ::frontend_proxy::InvokeInstanceResponse response;
 
     EXPECT_TRUE(service.InvokeInstance(nullptr, &request, &response).ok());
-    EXPECT_EQ(response.status().code(), common::ERR_INSTANCE_EXITED);
+    EXPECT_EQ(response.status().code(), common::ERR_NONE);
     EXPECT_FALSE(response.status().retryable());
     EXPECT_TRUE(response.status().retryreason().empty());
+    EXPECT_EQ(response.callresult().code(), common::ERR_INSTANCE_EXITED);
+    EXPECT_EQ(response.callresult().message(), "runtime exited during invoke");
 }
 
 TEST(FrontendProxyServiceTest, KillLocalMissIsTypedAsRetryableStaleRoute)
