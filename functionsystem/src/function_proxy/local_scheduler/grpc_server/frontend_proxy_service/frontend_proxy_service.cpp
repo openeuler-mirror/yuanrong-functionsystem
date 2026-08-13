@@ -844,8 +844,9 @@ bool FrontendProxyService::ValidateInvokeRequest(const ::frontend_proxy::InvokeI
         return ::grpc::Status::OK;
     }
     response.mutable_callresult()->CopyFrom(callResult.Get()->callresultreq());
-    SetStatus(response.mutable_status(), callResult.Get()->callresultreq().code(),
-              callResult.Get()->callresultreq().message());
+    // A valid CallResult means the frontend-to-proxy operation completed. Its
+    // code belongs to runtime/function execution and must remain in callResult.
+    SetStatus(response.mutable_status(), common::ERR_NONE, "");
     LogLifecycleEvent("invoke", "terminal", request.context(), param_.nodeID, request.invoke().instanceid(),
                       callResult.Get()->callresultreq().code() == common::ERR_NONE ? "success" : "failed", false,
                       "", "", param_.endpointAddress, param_.nodeID);
