@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <atomic>
+
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
@@ -415,6 +417,59 @@ TEST(InstanceCtrlReadyCallResultTest, FrontendReadyCallResultCallbackFallsBackTo
     ASSERT_NE(observedResult, nullptr);
     EXPECT_EQ(observedResult->requestid(), "runtime-ready-request");
     EXPECT_EQ(observedResult->instanceid(), "frontend-created-instance");
+}
+
+TEST(InstanceCtrlReadyCallResultTest, FrontendReadyResultUsesTicketAsRemoteDestination)
+{
+    auto source = std::make_shared<InstanceCtrlActor>("FrontendReadySourceProxy", "source-node", instanceCtrlConfig);
+    auto target = std::make_shared<InstanceCtrlActor>("FrontendReadyTargetProxy", "target-node", instanceCtrlConfig);
+    auto sourceView = std::make_shared<MockInstanceControlView>("source-node");
+    source->BindInstanceControlView(sourceView);
+    source->BindObserver(std::make_shared<NiceMock<MockObserver>>());
+
+    const std::string requestID = "remote-frontend-create-request";
+    const std::string instanceID = "remote-frontend-created-instance";
+    auto scheduleReq = GenScheduleReq(source);
+    scheduleReq->set_requestid(requestID);
+    scheduleReq->mutable_instance()->set_instanceid(instanceID);
+    scheduleReq->mutable_instance()->clear_parentid();
+    scheduleReq->mutable_instance()->set_parentfunctionproxyaid(target->GetAID());
+    (*scheduleReq->mutable_instance()->mutable_extensions())[CREATE_SOURCE] = FRONTEND_STR;
+
+    auto stateMachine = std::make_shared<MockInstanceStateMachine>("source-node");
+    EXPECT_CALL(*sourceView, GetInstance(instanceID))
+        .WillOnce(Return(stateMachine))
+        .WillOnce(Return(nullptr));
+    EXPECT_CALL(*stateMachine, GetInstanceState).WillOnce(Return(InstanceState::RUNNING));
+
+    std::atomic<bool> targetCallbackCalled = false;
+    target->RegisterReadyCallResultCallback(
+        instanceID, scheduleReq,
+        [&targetCallbackCalled](const std::shared_ptr<functionsystem::CallResult> &) {
+            targetCallbackCalled = true;
+            return litebus::Future<CallResultAck>(CallResultAck());
+        });
+
+    litebus::Spawn(source);
+    litebus::Spawn(target);
+
+    auto ready = std::make_shared<functionsystem::CallResult>();
+    ready->set_requestid(requestID);
+    ready->set_instanceid(instanceID);
+    ready->set_code(common::ERR_NONE);
+    auto sourceReadyCallback = source->RegisterCreateCallResultCallback(scheduleReq);
+    auto ack = sourceReadyCallback(ready);
+    EXPECT_AWAIT_READY(ack);
+    EXPECT_TRUE(targetCallbackCalled);
+    EXPECT_TRUE(scheduleReq->instance().parentid().empty());
+    if (ack.IsOK()) {
+        EXPECT_EQ(ack.Get().code(), common::ERR_NONE);
+    }
+
+    litebus::Terminate(source->GetAID());
+    litebus::Terminate(target->GetAID());
+    litebus::Await(source);
+    litebus::Await(target);
 }
 
 TEST(InstanceCtrlReadyCallResultTest, FrontendTicketBindsBeforeReadyAndCompletesExactlyOnce)
