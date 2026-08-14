@@ -95,15 +95,52 @@ OperateResult InstanceOperator::OnCreate(const OperateInfo &operateInfo)
         return OperateResult{ Status::OK(), "", 0, operateInfo.response->header.revision };
     }
 
-    OperateResult result;
+    // The Create transaction compares every key (request-scoped instance and,
+    // when present, the shared route) atomically.  A failed transaction is
+    // idempotent success only when every Else-GET exists and every value is
+    // exactly the value this caller attempted to create.  Returning after the
+    // first matching key can otherwise hide a conflicting or missing route.
+    OperateResult mismatchResult;
+    bool hasMismatch = false;
+    bool hasMissing = false;
     for (uint32_t i = 0; i < operateInfo.keySize; ++i) {
-        if (CheckGetResponse(operateInfo.response->responses[i], operateInfo.key, operateInfo.values[i], result)) {
+        const auto &response = operateInfo.response->responses[i];
+        if (response.operationType != TxnOperationType::OPERATION_GET) {
+            YRLOG_ERROR("operation type({}) is not right, key: {}", fmt::underlying(response.operationType),
+                        operateInfo.key);
             PrintResponse(operateInfo);
-            return result;
+            return OperateResult{
+                Status(StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED, "operation type is wrong"), "", 0, 0 };
         }
+
+        const auto getResponse = std::get<GetResponse>(response.response);
+        if (getResponse.kvs.empty()) {
+            YRLOG_ERROR("get response KV is empty, key: {}", operateInfo.key);
+            hasMissing = true;
+            continue;
+        }
+        if (operateInfo.values[i] != getResponse.kvs.front().value()) {
+            hasMismatch = true;
+            // Create appends the shared route after the request-scoped key.
+            // Retaining the last mismatch therefore returns the authoritative
+            // route value when both keys differ.
+            mismatchResult = OperateResult{
+                Status(StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION, "version is incorrect"),
+                getResponse.kvs.front().value(), 0, getResponse.kvs.front().mod_revision() };
+            continue;
+        }
+        YRLOG_INFO("instance success but txn fail, key: {} revision: {}", operateInfo.key,
+                   response.header.revision);
     }
     PrintResponse(operateInfo);
-    return result;
+    if (hasMismatch) {
+        return mismatchResult;
+    }
+    if (hasMissing) {
+        return OperateResult{
+            Status(StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED, "get response KV is empty"), "", 0, 0 };
+    }
+    return OperateResult{ Status::OK(), "", 0, operateInfo.response->header.revision };
 }
 
 OperateResult InstanceOperator::OnModify(const OperateInfo &operateInfo)
