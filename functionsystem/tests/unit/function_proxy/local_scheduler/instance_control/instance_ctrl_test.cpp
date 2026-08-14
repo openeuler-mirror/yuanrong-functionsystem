@@ -3725,7 +3725,7 @@ TEST_F(InstanceCtrlTest, CreateLocalNotEnoughAndRemoteNotEnough)
 }
 
 /**
- * Test schedule instance, local resource not enough, but remote resource enough
+ * Test frontend create, local resource not enough, but remote resource enough
  * Steps:
  * 1. MockObserver (GetFuncMeta() => defaultMeta / IsSystemFunction() => False)
  * 2. MockResourceView (DeleteInstances => OK)
@@ -3735,14 +3735,14 @@ TEST_F(InstanceCtrlTest, CreateLocalNotEnoughAndRemoteNotEnough)
  * 6. MockInstanceCtrlView (NewInstance => return instanceID / GetInstance => return mockStateMachine in step 5)
  * 7. MockScheduler (ScheduleDecision => return RESOURCE_NOT_ENOUGH)
  * 8. start instanceCtrl with above mockers
- * 9. send schedule request
+ * 9. send frontend schedule request and report the remote instance ready
  *
  * Expectations:
- * 1. get ScheduleResponse with code SUCCESS
+ * 1. frontend gets the accepted ScheduleResponse with code SUCCESS
  * 2. mockStateMachine state == Scheduling
- * 3. sendCallResult is called, and callResult code is SUCCESS
+ * 3. frontend ready callback remains registered and receives the remote ready CallResult
  */
-TEST_F(InstanceCtrlTest, CreateLocalNotEnoughAndRemoteEnough)
+TEST_F(InstanceCtrlTest, FrontendCreateLocalNotEnoughAndRemoteEnoughWaitsForReady)
 {
     auto observer = std::make_shared<MockObserver>();
     ASSERT_IF_NULL(observer);
@@ -3755,8 +3755,7 @@ TEST_F(InstanceCtrlTest, CreateLocalNotEnoughAndRemoteEnough)
     resourceViewMgr->virtual_ = MockResourceView::CreateMockResourceView();
     EXPECT_CALL(*primary, DeleteInstances).WillRepeatedly(Return(Status::OK()));
 
-    auto actor = std::make_shared<MockInstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
-    EXPECT_CALL(*actor, MockSendCallResult).Times(0);
+    auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
 
     auto localSchedSrv = std::make_shared<MockLocalSchedSrv>();
     messages::ScheduleResponse scheduleResponse;
@@ -3803,16 +3802,35 @@ TEST_F(InstanceCtrlTest, CreateLocalNotEnoughAndRemoteEnough)
     EXPECT_CALL(mockStateMachine, GetScheduleRequest).WillRepeatedly(Return(scheduleReq));
 
     auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
-    auto result = instanceCtrl->Schedule(scheduleReq, runtimePromise);
+    int readyCallbackCount = 0;
+    std::shared_ptr<functionsystem::CallResult> observedReadyResult;
+    auto result = instanceCtrl->ScheduleFrontendAndWaitReady(
+        scheduleReq, runtimePromise,
+        [&readyCallbackCount, &observedReadyResult](
+            const std::shared_ptr<functionsystem::CallResult> &callResult) {
+            ++readyCallbackCount;
+            observedReadyResult = callResult;
+            return litebus::Future<CallResultAck>(CallResultAck());
+        });
     ASSERT_AWAIT_READY(result);
     auto runtimeFuture = runtimePromise->GetFuture();
     ASSERT_AWAIT_READY(runtimeFuture);
     YRLOG_INFO("Result: {}", result.Get().SerializeAsString());
-    EXPECT_EQ(result.Get().code(), (int32_t)StatusCode::RESOURCE_NOT_ENOUGH);
+    EXPECT_EQ(result.Get().code(), static_cast<int32_t>(StatusCode::SUCCESS));
     EXPECT_EQ(runtimeFuture.Get().code(), 0);
     EXPECT_EQ(runtimeFuture.Get().instanceid(), "instance-id-CreateLocalNotEnoughAndRemoteEnough");
     EXPECT_EQ(mockStateMachineState, InstanceState::SCHEDULING);
     ASSERT_AWAIT_READY(request);
+
+    auto readyResult = std::make_shared<functionsystem::CallResult>();
+    readyResult->set_requestid(scheduleReq->requestid());
+    readyResult->set_instanceid(scheduleReq->instance().instanceid());
+    readyResult->set_code(common::ERR_NONE);
+    auto readyAck = litebus::Async(actor->GetAID(), &InstanceCtrlActor::SendCallResult,
+                                   scheduleReq->instance().instanceid(), "", "", readyResult);
+    ASSERT_AWAIT_READY(readyAck);
+    EXPECT_EQ(readyCallbackCount, 1);
+    EXPECT_EQ(observedReadyResult, readyResult);
 }
 
 /**

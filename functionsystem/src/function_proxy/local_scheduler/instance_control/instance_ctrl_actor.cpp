@@ -6405,10 +6405,15 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::ScheduleFrontendA
         runtimePromise->SetValue(response);
         return response;
     }
-    auto future = Schedule(scheduleReq, runtimePromise);
-    future.OnComplete(litebus::Defer(GetAID(), &InstanceCtrlActor::OnFrontendScheduleCompleted, _1,
-                                     scheduleReq->requestid()));
-    return future;
+    // Frontend create follows the same two-phase contract as the POSIX/libruntime path: runtimePromise acknowledges
+    // that a NEW instance entered SCHEDULING, while the Schedule future may still report an intermediate local
+    // RESOURCE_NOT_ENOUGH result before forwarding completes. Returning the latter would make frontend fail the
+    // request and unregister its ready waiter even though the domain scheduler can place the instance remotely.
+    (void)Schedule(scheduleReq, runtimePromise);
+    auto acceptedFuture = runtimePromise->GetFuture();
+    acceptedFuture.OnComplete(litebus::Defer(GetAID(), &InstanceCtrlActor::OnFrontendScheduleCompleted, _1,
+                                             scheduleReq->requestid()));
+    return acceptedFuture;
 }
 
 void InstanceCtrlActor::OnFrontendScheduleCompleted(const litebus::Future<messages::ScheduleResponse> &future,
