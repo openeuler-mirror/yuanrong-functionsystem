@@ -80,6 +80,16 @@ static const std::string DATA_AFFINITY_ENABLED_KEY = "DATA_AFFINITY_ENABLED";
 static const uint32_t MAX_LABEL_AFFINITY_COUNT = 10;
 static const uint32_t TENANT_ID_MAX_LENGTH = 128;
 
+static std::string GetCreateResultDstInstance(const InstanceInfo &instanceInfo, const std::string &requestID)
+{
+    // Frontend direct-create has no runtime parent instance. Use its ready ticket only for CallResult routing;
+    // keep parentID empty so tenant authorization, lifecycle ownership, and runtime sender semantics stay unchanged.
+    if (instanceInfo.parentid().empty() && IsCreateByFrontend(instanceInfo)) {
+        return requestID;
+    }
+    return instanceInfo.parentid();
+}
+
 // INSTANCE_SCHEDULE_FAILED_TIMEOUT = FORWARD_SCHEDULE_MAX_RETRY * FORWARD_SCHEDULE_TIMEOUT
 
 const uint8_t ERROR_MESSAGE_SEPARATE = 2;
@@ -1868,8 +1878,9 @@ void InstanceCtrlActor::SubscribeStateChangedByInstMgr(const InstanceInfo &insta
     callResult->set_instanceid(instanceInfo.parentid());
     callResult->set_code(code);
     callResult->set_message(status.msg());
-    (void)SendCallResult(instanceInfo.instanceid(), instanceInfo.parentid(), instanceInfo.parentfunctionproxyaid(),
-                         callResult);
+    (void)SendCallResult(instanceInfo.instanceid(),
+                         GetCreateResultDstInstance(instanceInfo, instanceInfo.requestid()),
+                         instanceInfo.parentfunctionproxyaid(), callResult);
 }
 
 void InstanceCtrlActor::SubscribeInstanceStatusChanged(const InstanceInfo &instanceInfo,
@@ -1892,8 +1903,8 @@ void InstanceCtrlActor::SubscribeInstanceStatusChanged(const InstanceInfo &insta
         callResult->set_code(common::ErrorCode::ERR_INSTANCE_EXITED);
         callResult->set_message(status.msg());
     }
-    (void)SendCallResult(instanceInfo.instanceid(), instanceInfo.parentid(), instanceInfo.parentfunctionproxyaid(),
-                         callResult);
+    (void)SendCallResult(instanceInfo.instanceid(), GetCreateResultDstInstance(instanceInfo, currentRequestID),
+                         instanceInfo.parentfunctionproxyaid(), callResult);
 
     instanceControlView_->DeleteRequestFuture(currentRequestID);
 }
@@ -3098,7 +3109,8 @@ litebus::Future<CallResultAck> InstanceCtrlActor::CallResult(
         YRLOG_WARN("{}|instance ({}) is already running, directly pass init call result to caller", requestID,
                    instanceID);
         const auto &instanceInfo = stateMachine->GetInstanceInfo();
-        return SendCallResult(instanceID, instanceInfo.parentid(), instanceInfo.parentfunctionproxyaid(), callResult);
+        return SendCallResult(instanceID, GetCreateResultDstInstance(instanceInfo, requestID),
+                              instanceInfo.parentfunctionproxyaid(), callResult);
     }
 
     if (stateMachine != nullptr
@@ -3685,6 +3697,7 @@ void InstanceCtrlActor::ScheduleEnd(const litebus::Future<Status> &future,
     if (statusCode != StatusCode::SUCCESS && statusCode != StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION) {
         auto instanceID = request->instance().instanceid();
         const std::string &parent = request->instance().parentid();
+        const std::string dstInstance = GetCreateResultDstInstance(request->instance(), request->requestid());
         const std::string &parentProxy = request->instance().parentfunctionproxyaid();
         YRLOG_ERROR(
             "{}|{}|failed to create instance({}), "
@@ -3699,7 +3712,7 @@ void InstanceCtrlActor::ScheduleEnd(const litebus::Future<Status> &future,
             status.MultipleErr() ? status.GetMessage() : status.RawMessage(), nodeID_));
         auto stateMachine = instanceControlView_->GetInstance(instanceID);
         if (stateMachine == nullptr) {
-            (void)SendCallResult(instanceID, parent, parentProxy, callResult);
+            (void)SendCallResult(instanceID, dstInstance, parentProxy, callResult);
             return;
         }
 
@@ -3710,7 +3723,7 @@ void InstanceCtrlActor::ScheduleEnd(const litebus::Future<Status> &future,
                                                true, statusCode })
                 .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::RescheduleWithID, instanceInfo.instanceid()));
         } else {
-            (void)SendCallResult(instanceID, parent, parentProxy, callResult);
+            (void)SendCallResult(instanceID, dstInstance, parentProxy, callResult);
             // need to update stateMachine by scheduleReq, because scheduleReq was already updated
             auto transContext =
                 TransContext{ InstanceState::FATAL, stateMachine->GetVersion(),
@@ -6405,10 +6418,15 @@ litebus::Future<messages::ScheduleResponse> InstanceCtrlActor::ScheduleFrontendA
         runtimePromise->SetValue(response);
         return response;
     }
-    auto future = Schedule(scheduleReq, runtimePromise);
-    future.OnComplete(litebus::Defer(GetAID(), &InstanceCtrlActor::OnFrontendScheduleCompleted, _1,
-                                     scheduleReq->requestid()));
-    return future;
+    // Frontend create follows the same two-phase contract as the POSIX/libruntime path: runtimePromise acknowledges
+    // that a NEW instance entered SCHEDULING, while the Schedule future may still report an intermediate local
+    // RESOURCE_NOT_ENOUGH result before forwarding completes. Returning the latter would make frontend fail the
+    // request and unregister its ready waiter even though the domain scheduler can place the instance remotely.
+    (void)Schedule(scheduleReq, runtimePromise);
+    auto acceptedFuture = runtimePromise->GetFuture();
+    acceptedFuture.OnComplete(litebus::Defer(GetAID(), &InstanceCtrlActor::OnFrontendScheduleCompleted, _1,
+                                             scheduleReq->requestid()));
+    return acceptedFuture;
 }
 
 void InstanceCtrlActor::OnFrontendScheduleCompleted(const litebus::Future<messages::ScheduleResponse> &future,
@@ -6825,7 +6843,8 @@ CreateCallResultCallBack InstanceCtrlActor::RegisterCreateCallResultCallback(
                     }
                     return Status::OK();
                 })
-                .Then([aid, nodeID, instanceID(instanceInfo.instanceid()), dstInstanceID(instanceInfo.parentid()),
+                .Then([aid, nodeID, instanceID(instanceInfo.instanceid()),
+                       dstInstanceID(GetCreateResultDstInstance(instanceInfo, callResult->requestid())),
                        dstProxyID(instanceInfo.parentfunctionproxyaid()), callResult](const Status &status) {
                     if (status.IsError()) {
                         callResult->set_code(common::ErrorCode::ERR_ETCD_OPERATION_ERROR);
@@ -6837,7 +6856,8 @@ CreateCallResultCallBack InstanceCtrlActor::RegisterCreateCallResultCallback(
                 });
         }
         return litebus::Async(aid, &InstanceCtrlActor::SendCallResult, instanceInfo.instanceid(),
-                              instanceInfo.parentid(), instanceInfo.parentfunctionproxyaid(), callResult);
+                              GetCreateResultDstInstance(instanceInfo, callResult->requestid()),
+                              instanceInfo.parentfunctionproxyaid(), callResult);
     };
     YRLOG_DEBUG("{}|{}|Register callResult callback for instance({})", request->traceid(), request->requestid(),
                 request->instance().instanceid());
