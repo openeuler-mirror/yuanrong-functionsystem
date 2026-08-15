@@ -116,6 +116,10 @@ public:
                                 const ::frontend_proxy::FileTransferRequest *request,
                                 ::grpc::ServerWriter<::frontend_proxy::FileChunk> *writer) override;
 
+    ::grpc::Status ListFile(::grpc::ServerContext *context,
+                            const ::frontend_proxy::FileListRequest *request,
+                            ::frontend_proxy::FileListResponse *response) override;
+
 private:
     bool ValidateInvokeRequest(const ::frontend_proxy::InvokeInstanceRequest &request,
                                ::frontend_proxy::InvokeInstanceResponse &response) const;
@@ -156,7 +160,9 @@ private:
                                             int64_t offset = 0,
                                             int64_t length = 0,
                                             const std::string &uploadId = "",
-                                            bool isLast = false);
+                                            bool isLast = false,
+                                            bool recursive = false,
+                                            int32_t maxDepth = 0);
 
     FrontendProxyServiceParam param_;
 };
