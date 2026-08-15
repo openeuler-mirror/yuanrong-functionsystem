@@ -2963,13 +2963,18 @@ litebus::Future<Status> InstanceCtrlActor::SendCheckpointReq(const std::shared_p
         return Status::OK();
     }
     return Checkpoint(instanceInfo.instanceid())
-        .Then([request, instanceInfo](const litebus::Future<Status> &status) {
+        .Then([request, instanceInfo](const litebus::Future<Status> &future) -> litebus::Future<Status> {
+            // Checkpoint() 用 SetValue(Status(err)) 把业务 error 包成 future-OK，
+            // 须用 future.Get() 取业务 Status 判断，不能用 future.IsError()（仅判 future 层）。
+            const Status &status = future.Get();
             if (status.IsError()) {
-                YRLOG_ERROR("{}|instance({}) checkpoint failed", instanceInfo.requestid(), instanceInfo.instanceid());
+                YRLOG_ERROR("{}|{}|instance({}) checkpoint failed, ischeckpointed stays false, code={}",
+                            request->traceid(), request->requestid(), instanceInfo.instanceid(),
+                            status.StatusCode());
                 return status;
             }
             request->mutable_instance()->set_ischeckpointed(true);
-            return status;
+            return Status::OK();
         });
 }
 
