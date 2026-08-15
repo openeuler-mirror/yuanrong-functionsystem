@@ -506,7 +506,9 @@ std::string BuildFileInvokeRequestJSON(const std::string &fileOp, const std::str
                                        const std::string &mode, const std::string &dataB64,
                                        int64_t offset = 0, int64_t length = 0,
                                        const std::string &uploadId = "",
-                                       bool isLast = false)
+                                       bool isLast = false,
+                                       bool recursive = false,
+                                       int32_t maxDepth = 0)
 {
     nlohmann::json body = nlohmann::json::object();
     body["file_op"] = fileOp;
@@ -528,6 +530,12 @@ std::string BuildFileInvokeRequestJSON(const std::string &fileOp, const std::str
     }
     if (isLast) {
         body["is_last"] = true;
+    }
+    if (recursive) {
+        body["recursive"] = true;
+    }
+    if (maxDepth > 0) {
+        body["max_depth"] = maxDepth;
     }
     nlohmann::json argsJson = nlohmann::json::object();
     argsJson["body"] = body;
@@ -561,60 +569,74 @@ std::string BuildFileInvokeRequestPayload(const std::string &fileOp, const std::
                                           const std::string &mode, const std::string &dataB64,
                                           int64_t offset = 0, int64_t length = 0,
                                           const std::string &uploadId = "",
-                                          bool isLast = false)
+                                          bool isLast = false,
+                                          bool recursive = false,
+                                          int32_t maxDepth = 0)
 {
     const auto jsonBody = BuildFileInvokeRequestJSON(fileOp, path, mode, dataB64, offset, length,
-                                                     uploadId, isLast);
+                                                     uploadId, isLast, recursive, maxDepth);
     return FRONTEND_FILE_FAAS_META_PREFIX + jsonBody;
 }
 
 // ForwardFileInvokeRequest dispatches a file-transfer InvokeRequest and awaits
 // the runtime CallResult via frontend_call_result_registry, mirroring the
 // AwaitInvokeResult wait flow. Returns the StreamingMessage that carries the
-// callresultreq, or nullptr on dispatch/wait failure.
+// callresultreq, or nullptr on dispatch/wait failure. On failure, errorMsg is
+// set to a descriptive message that callers can use to distinguish between
+// timeout (runtime may be slow or connection interrupted) and dispatch failure
+// (runtime is dead or unreachable).
 SharedStreamMsg ForwardFileInvokeRequest(const FrontendProxyServiceParam &param,
                                          ::grpc::ServerContext *context,
                                          const SharedStreamMsg &invokeRequest,
                                          const std::string &requestID,
                                          const std::string &instanceID,
                                          const std::string &fileOp,
-                                         bool &cancelled)
+                                         bool &cancelled,
+                                         std::string &errorMsg)
 {
     cancelled = false;
+    errorMsg.clear();
     auto watchResult = frontend_call_result_registry::Watch(requestID, instanceID);
     if (!watchResult.registered) {
-        YRLOG_ERROR("{}|frontend proxy file {} requires a globally unique request id", requestID, fileOp);
+        errorMsg = "frontend proxy file " + fileOp + " requires a globally unique request id";
+        YRLOG_ERROR("{}|{}", requestID, errorMsg);
         return nullptr;
     }
     auto invokeFuture = DispatchInvoke(param, FUNCTION_PROXY_STREAM_CALLER_ID, invokeRequest);
     auto invokeResponse = WaitFrontendResult(invokeFuture, context, param.invokeResultTimeoutMs, cancelled);
     if (!invokeResponse.IsSome()) {
         frontend_call_result_registry::Cancel(requestID, instanceID);
-        YRLOG_ERROR("{}|frontend proxy file {} {} dispatch",
-            requestID, fileOp, cancelled ? "cancelled" : "timed out");
+        errorMsg = cancelled
+            ? "frontend proxy file " + fileOp + " cancelled while dispatching"
+            : "frontend proxy file " + fileOp + " timed out, runtime connection may be interrupted";
+        YRLOG_ERROR("{}|{}", requestID, errorMsg);
         return nullptr;
     }
     if (!invokeResponse.Get()->has_invokersp()) {
         frontend_call_result_registry::Cancel(requestID, instanceID);
-        YRLOG_ERROR("{}|frontend proxy file {} received invalid invoke response", requestID, fileOp);
+        errorMsg = "frontend proxy file " + fileOp + " received invalid invoke response";
+        YRLOG_ERROR("{}|{}", requestID, errorMsg);
         return nullptr;
     }
     if (invokeResponse.Get()->invokersp().code() != common::ERR_NONE) {
         frontend_call_result_registry::Cancel(requestID, instanceID);
-        YRLOG_ERROR("{}|frontend proxy file {} invoke failed: {}",
-            requestID, fileOp, invokeResponse.Get()->invokersp().message());
+        errorMsg = "frontend proxy file " + fileOp + " invoke failed: " +
+            invokeResponse.Get()->invokersp().message();
+        YRLOG_ERROR("{}|{}", requestID, errorMsg);
         return nullptr;
     }
     auto callResult = WaitFrontendResult(watchResult.future, context, param.invokeResultTimeoutMs, cancelled);
     if (!callResult.IsSome()) {
         frontend_call_result_registry::Cancel(requestID, instanceID);
-        YRLOG_ERROR("{}|frontend proxy file {} result {}",
-            requestID, fileOp, cancelled ? "cancelled" : "timed out");
+        errorMsg = cancelled
+            ? "frontend proxy file " + fileOp + " cancelled while result outcome is unknown"
+            : "frontend proxy file " + fileOp + " timed out while result outcome is unknown";
+        YRLOG_ERROR("{}|{}", requestID, errorMsg);
         return nullptr;
     }
     if (!callResult.Get()->has_callresultreq()) {
-        YRLOG_ERROR("{}|frontend proxy file {} received invalid call result",
-            requestID, fileOp);
+        errorMsg = "frontend proxy file " + fileOp + " received invalid call result";
+        YRLOG_ERROR("{}|{}", requestID, errorMsg);
         return nullptr;
     }
     return callResult.Get();
@@ -1138,7 +1160,9 @@ SharedStreamMsg FrontendProxyService::CreateFileInvokeRequest(const std::string 
                                                               const std::string &data,
                                                               int64_t offset, int64_t length,
                                                               const std::string &uploadId,
-                                                              bool isLast)
+                                                              bool isLast,
+                                                              bool recursive,
+                                                              int32_t maxDepth)
 {
     auto invoke = std::make_shared<runtime_rpc::StreamingMessage>();
     auto invokeReq = invoke->mutable_invokereq();
@@ -1164,7 +1188,7 @@ SharedStreamMsg FrontendProxyService::CreateFileInvokeRequest(const std::string 
     // ParseRequest skips args[0] (MetaData), so rawArgs = [args[1], args[2]].
     // faas_call_handler reads event from posix_args[1] = rawArgs[1] = args[2].
     const auto payload = BuildFileInvokeRequestPayload(fileOp, path, mode, data, offset, length,
-                                                       uploadId, isLast);
+                                                       uploadId, isLast, recursive, maxDepth);
     auto bodyArg = invokeReq->add_args();
     bodyArg->set_type(::common::Arg_ArgType_VALUE);
     bodyArg->set_value(payload);
@@ -1220,12 +1244,15 @@ SharedStreamMsg FrontendProxyService::CreateFileInvokeRequest(const std::string 
                                                      dataB64, 0, 0, uploadId, isLast);
         const auto requestID = invokeRequest->invokereq().requestid();
         bool cancelled = false;
+        std::string errorMsg;
         auto callResult = ForwardFileInvokeRequest(param_, context, invokeRequest, requestID, instanceID,
-                                                   "upload", cancelled);
+                                                   "upload", cancelled, errorMsg);
         if (callResult == nullptr) {
             SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
-                      cancelled ? "frontend proxy file upload cancelled while result outcome is unknown"
-                                : "frontend proxy file upload timed out while result outcome is unknown",
+                      errorMsg.empty()
+                          ? (cancelled ? "frontend proxy file upload cancelled while result outcome is unknown"
+                                       : "frontend proxy file upload timed out while result outcome is unknown")
+                          : errorMsg,
                       false, "post-dispatch-unknown");
             return ::grpc::Status::OK;
         }
@@ -1279,12 +1306,15 @@ SharedStreamMsg FrontendProxyService::CreateFileInvokeRequest(const std::string 
                                                      "", offset, length);
         const auto requestID = invokeRequest->invokereq().requestid();
         bool cancelled = false;
+        std::string errorMsg;
         auto callResult = ForwardFileInvokeRequest(param_, context, invokeRequest, requestID,
-                                                   request->instanceid(), "download", cancelled);
+                                                   request->instanceid(), "download", cancelled, errorMsg);
         if (callResult == nullptr) {
             return { ::grpc::StatusCode::INTERNAL,
-                     cancelled ? "frontend proxy file download cancelled while result outcome is unknown"
-                               : "frontend proxy file download timed out while result outcome is unknown" };
+                     errorMsg.empty()
+                         ? (cancelled ? "frontend proxy file download cancelled while result outcome is unknown"
+                                      : "frontend proxy file download timed out while result outcome is unknown")
+                         : errorMsg };
         }
         if (callResult->callresultreq().code() != common::ERR_NONE) {
             return { ::grpc::StatusCode::INTERNAL, callResult->callresultreq().message() };
@@ -1322,6 +1352,63 @@ SharedStreamMsg FrontendProxyService::CreateFileInvokeRequest(const std::string 
             return { ::grpc::StatusCode::CANCELLED, "frontend proxy file download cancelled by client" };
         }
     }
+    return ::grpc::Status::OK;
+}
+
+::grpc::Status FrontendProxyService::ListFile(::grpc::ServerContext *context,
+                                              const ::frontend_proxy::FileListRequest *request,
+                                              ::frontend_proxy::FileListResponse *response)
+{
+    if (!HasAuthenticatedPeer(context)) {
+        return { ::grpc::StatusCode::UNAUTHENTICATED,
+                 "frontend proxy file list requires an authenticated component certificate" };
+    }
+    if (request == nullptr || response == nullptr) {
+        return { ::grpc::StatusCode::INVALID_ARGUMENT, "invalid frontend proxy file list args" };
+    }
+    if (!HasRequiredContext(request->context())) {
+        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
+                  "frontend proxy file list requires context.frontendClientID, context.requestID, "
+                  "context.tenantID and instanceID");
+        return ::grpc::Status::OK;
+    }
+    if (request->instanceid().empty() || request->path().empty()) {
+        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
+                  "frontend proxy file list requires non-empty instanceID and path");
+        return ::grpc::Status::OK;
+    }
+    // Tenant ownership check: reuse the same validation as file chunks.
+    if (!ValidateFileChunkContext(request->context(), request->instanceid())) {
+        SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
+                  "frontend proxy file list requires valid tenant ownership");
+        return ::grpc::Status::OK;
+    }
+
+    auto invokeRequest = CreateFileInvokeRequest(request->instanceid(), request->path(), "file_list",
+                                                 "", "", 0, 0, "", false,
+                                                 request->recursive(), request->maxdepth());
+    const auto requestID = invokeRequest->invokereq().requestid();
+    bool cancelled = false;
+    std::string errorMsg;
+    auto callResult = ForwardFileInvokeRequest(param_, context, invokeRequest, requestID,
+                                               request->instanceid(), "list", cancelled, errorMsg);
+    if (callResult == nullptr) {
+        SetStatus(response->mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
+                  errorMsg.empty()
+                      ? (cancelled ? "frontend proxy file list cancelled while result outcome is unknown"
+                                   : "frontend proxy file list timed out while result outcome is unknown")
+                      : errorMsg,
+                  false, "post-dispatch-unknown");
+        return ::grpc::Status::OK;
+    }
+    if (callResult->callresultreq().code() != common::ERR_NONE) {
+        SetStatus(response->mutable_status(), callResult->callresultreq().code(),
+                  callResult->callresultreq().message());
+        return ::grpc::Status::OK;
+    }
+    // file_list returns {"items": [...]} in CallResult.message as JSON.
+    response->set_items_json(callResult->callresultreq().message());
+    SetStatus(response->mutable_status(), common::ERR_NONE, "success");
     return ::grpc::Status::OK;
 }
 

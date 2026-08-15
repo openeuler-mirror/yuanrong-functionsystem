@@ -38,6 +38,7 @@ service FrontendProxyService {
   rpc KillInstance (KillInstanceRequest) returns (KillInstanceResponse) {}
   rpc UploadFile (stream FileChunk) returns (FileTransferResponse) {}
   rpc DownloadFile (FileTransferRequest) returns (stream FileChunk) {}
+  rpc ListFile (FileListRequest) returns (FileListResponse) {}
 }
 
 message FrontendRequestContext {
@@ -144,4 +145,19 @@ message FileTransferResponse {
   FrontendProxyStatus status = 1;
   string path = 2;
   int64 size = 3;
+}
+
+// FileListRequest 表示文件目录树查询请求
+message FileListRequest {
+  FrontendRequestContext context = 1;
+  string instanceID = 2;
+  string path = 3;
+  bool recursive = 4;
+  int32 maxDepth = 5;
+}
+
+// FileListResponse 表示文件目录树查询响应
+message FileListResponse {
+  FrontendProxyStatus status = 1;
+  string items_json = 2;
 }
