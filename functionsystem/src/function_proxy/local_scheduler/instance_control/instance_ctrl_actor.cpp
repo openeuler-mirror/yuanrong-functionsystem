@@ -3116,8 +3116,7 @@ litebus::Future<CallResultAck> InstanceCtrlActor::CallResult(
     }
     if (stateMachine != nullptr && stateMachine->GetInstanceState() == InstanceState::RUNNING &&
         (createCallResultCallback_.find(from) == createCallResultCallback_.end() ||
-         routeConflictCreateCallbackInstances_.find(from) ==
-             routeConflictCreateCallbackInstances_.end())) {
+         routeConflictCreateCallbackInstances_.find(from) == routeConflictCreateCallbackInstances_.end())) {
         YRLOG_WARN("{}|instance ({}) is already running, directly pass init call result to caller", requestID,
                    instanceID);
         const auto &instanceInfo = stateMachine->GetInstanceInfo();
@@ -7346,8 +7345,8 @@ CallResultAck InstanceCtrlActor::RecordCreateRouteWinnerCallResult(
         return ack;
     }
     createConflictCallResultTombstones_[instanceID] = contenderRequestID;
-    constexpr uint64_t TOMBSTONE_TTL_MS = 5 * 60 * 1000;
-    (void)litebus::AsyncAfter(TOMBSTONE_TTL_MS, GetAID(),
+    constexpr uint64_t tombstoneTtlMs = 5 * 60 * 1000;
+    (void)litebus::AsyncAfter(tombstoneTtlMs, GetAID(),
                               &InstanceCtrlActor::ClearCreateConflictCallResultTombstone,
                               instanceID, contenderRequestID);
     return ack;

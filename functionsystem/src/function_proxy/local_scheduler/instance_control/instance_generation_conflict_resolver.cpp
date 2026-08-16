@@ -74,8 +74,7 @@ void InstanceGenerationConflictResolver::RecordResolvedWinner(const InstanceInfo
     }
 }
 
-std::shared_ptr<InstanceGenerationConflictResolver::CleanupState>
-InstanceGenerationConflictResolver::GetCleanupState() const
+InstanceGenerationConflictResolver::CleanupStatePtr InstanceGenerationConflictResolver::GetCleanupState() const
 {
     return cleanupState_;
 }

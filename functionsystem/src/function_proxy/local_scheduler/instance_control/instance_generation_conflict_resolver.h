@@ -38,8 +38,10 @@ public:
         bool runtimeCleanupDone = false;
         std::shared_ptr<litebus::Future<Status>> attempt;
     };
+    using CleanupStatePtr = std::shared_ptr<CleanupState>;
 
     InstanceGenerationConflictResolver(const InstanceInfo &contenderSnapshot, bool arbitrationEnabled);
+    ~InstanceGenerationConflictResolver() = default;
 
     // The resolver is generic; this policy gate is currently the only caller
     // that has the complete cleanup and winner-propagation contract.
@@ -52,7 +54,7 @@ public:
     const InstanceInfo &ResolvedWinner() const;
     void RecordResolvedWinner(const InstanceInfo &winnerInfo);
 
-    std::shared_ptr<CleanupState> GetCleanupState() const;
+    CleanupStatePtr GetCleanupState() const;
 
     bool IsExactPersistenceFailure(const TransitionResult &result) const;
     bool IsReusableWinner(const InstanceInfo &winnerInfo, const std::string &localProxyID) const;

@@ -64,37 +64,8 @@ bool InstanceOperator::CheckGetResponse(const TxnOperationResponse &resp, const 
     return true;
 }
 
-OperateResult InstanceOperator::OnCreate(const OperateInfo &operateInfo)
+OperateResult InstanceOperator::ResolveCreateConflict(const OperateInfo &operateInfo)
 {
-    if (operateInfo.response->status.IsError()) {
-        YRLOG_ERROR("failed to execute transaction command while creating, key: {}, error: {}", operateInfo.key,
-                    operateInfo.response->status.GetMessage());
-        // only raise to kill self while Centos
-        // most of the current scenarios occur in large-scale
-        // more appropriate methods need to be applied to ensure consistency in the future
-        if (operateInfo.isCentOS && operateInfo.response->status.StatusCode() == StatusCode::GRPC_DEADLINE_EXCEEDED) {
-            YR_EXIT("etcd operation error");
-        }
-        return OperateResult{ operateInfo.response->status, "", 0, 0 };
-    }
-
-    if (operateInfo.response->responses.size() != operateInfo.keySize
-        || operateInfo.keySize != operateInfo.values.size()) {
-        YRLOG_ERROR("the size of responses transaction return is incorrect while creating, key: {}, size is {}",
-                    operateInfo.key, operateInfo.response->responses.size());
-        PrintResponse(operateInfo);
-        return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_WRONG_RESPONSE_SIZE,
-                                     "the size of responses transaction return is incorrect"),
-                              "", 0, 0 };
-    }
-
-    if (operateInfo.response->success) {
-        YRLOG_DEBUG("create instance success: {}, key: {}, revision: {}", operateInfo.response->success,
-                    operateInfo.key, operateInfo.response->header.revision);
-        // use last response's revision, as current revision
-        return OperateResult{ Status::OK(), "", 0, operateInfo.response->header.revision };
-    }
-
     // The Create transaction compares every key (request-scoped instance and,
     // when present, the shared route) atomically.  A failed transaction is
     // idempotent success only when every Else-GET exists and every value is
@@ -132,7 +103,6 @@ OperateResult InstanceOperator::OnCreate(const OperateInfo &operateInfo)
         YRLOG_INFO("instance success but txn fail, key: {} revision: {}", operateInfo.key,
                    response.header.revision);
     }
-    PrintResponse(operateInfo);
     if (hasMismatch) {
         return mismatchResult;
     }
@@ -141,6 +111,41 @@ OperateResult InstanceOperator::OnCreate(const OperateInfo &operateInfo)
             Status(StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED, "get response KV is empty"), "", 0, 0 };
     }
     return OperateResult{ Status::OK(), "", 0, operateInfo.response->header.revision };
+}
+
+OperateResult InstanceOperator::OnCreate(const OperateInfo &operateInfo)
+{
+    if (operateInfo.response->status.IsError()) {
+        YRLOG_ERROR("failed to execute transaction command while creating, key: {}, error: {}", operateInfo.key,
+                    operateInfo.response->status.GetMessage());
+        // only raise to kill self while Centos
+        // most of the current scenarios occur in large-scale
+        // more appropriate methods need to be applied to ensure consistency in the future
+        if (operateInfo.isCentOS && operateInfo.response->status.StatusCode() == StatusCode::GRPC_DEADLINE_EXCEEDED) {
+            YR_EXIT("etcd operation error");
+        }
+        return OperateResult{ operateInfo.response->status, "", 0, 0 };
+    }
+
+    if (operateInfo.response->responses.size() != operateInfo.keySize
+        || operateInfo.keySize != operateInfo.values.size()) {
+        YRLOG_ERROR("the size of responses transaction return is incorrect while creating, key: {}, size is {}",
+                    operateInfo.key, operateInfo.response->responses.size());
+        PrintResponse(operateInfo);
+        return OperateResult{ Status(StatusCode::INSTANCE_TRANSACTION_WRONG_RESPONSE_SIZE,
+                                     "the size of responses transaction return is incorrect"),
+                              "", 0, 0 };
+    }
+
+    if (operateInfo.response->success) {
+        YRLOG_DEBUG("create instance success: {}, key: {}, revision: {}", operateInfo.response->success,
+                    operateInfo.key, operateInfo.response->header.revision);
+        return OperateResult{ Status::OK(), "", 0, operateInfo.response->header.revision };
+    }
+
+    auto result = ResolveCreateConflict(operateInfo);
+    PrintResponse(operateInfo);
+    return result;
 }
 
 OperateResult InstanceOperator::OnModify(const OperateInfo &operateInfo)
