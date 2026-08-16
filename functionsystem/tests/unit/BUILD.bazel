@@ -123,6 +123,30 @@ cc_test(
 )
 
 cc_test(
+    name = "port_manager_test",
+    linkstatic = True,
+    srcs = [
+        "runtime_manager/port/port_manager_test.cpp",
+        "utils/port_helper.h",
+    ],
+    copts = COPTS + [
+        "-Wno-error",
+        "-Ifunctionsystem/src",
+        "-Ifunctionsystem/src/runtime_manager",
+        "-Ifunctionsystem/tests/unit",
+    ],
+    linkopts = [
+        "-pthread",
+        "-lcap",
+        "-ldl",
+    ],
+    deps = [
+        "//functionsystem/src/runtime_manager:port_manager_test_lib",
+        "@gtest//:gtest_main",
+    ],
+)
+
+cc_test(
     name = "sandboxd_request_builder_test",
     linkstatic = True,
     srcs = ["runtime_manager/executor/sandboxd/sandboxd_request_builder_test.cpp"],

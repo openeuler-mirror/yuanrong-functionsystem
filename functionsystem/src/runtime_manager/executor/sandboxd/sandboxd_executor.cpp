@@ -32,6 +32,7 @@
 #include "common/utils/actor_worker.h"
 #include "common/utils/collect_status.h"
 #include "common/utils/generate_message.h"
+#include "common/utils/port_forward_mapping.h"
 #include "common/utils/struct_transfer.h"
 #include "port/port_manager.h"
 #include "runtime_manager/config/build.h"
@@ -65,6 +66,39 @@ struct SandboxRequestedResources {
     double cpuCores = 0.0;
     double memoryBytes = 0.0;
 };
+
+Status ParseReconcileHostPorts(const messages::RuntimeReconcileEntry &entry, std::vector<int> *hostPorts)
+{
+    hostPorts->clear();
+    if (entry.portmappings().empty()) {
+        return Status::OK();
+    }
+
+    try {
+        const auto mappings = json::parse(entry.portmappings());
+        if (!mappings.is_array()) {
+            return Status(StatusCode::RUNTIME_MANAGER_PORT_UNAVAILABLE,
+                          "persisted port mappings for runtime " + entry.runtimeid() + " are not a JSON array");
+        }
+        for (const auto &value : mappings) {
+            if (!value.is_string()) {
+                return Status(StatusCode::RUNTIME_MANAGER_PORT_UNAVAILABLE,
+                              "persisted port mapping for runtime " + entry.runtimeid() + " is not a string");
+            }
+            const auto mapping = ParsePortForwardMapping(value.get<std::string>());
+            if (!mapping.has_value()) {
+                return Status(StatusCode::RUNTIME_MANAGER_PORT_UNAVAILABLE,
+                              "invalid persisted port mapping for runtime " + entry.runtimeid() + ": " +
+                                  value.dump());
+            }
+            hostPorts->push_back(static_cast<int>(mapping->hostPort));
+        }
+    } catch (const json::exception &e) {
+        return Status(StatusCode::RUNTIME_MANAGER_PORT_UNAVAILABLE,
+                      "failed to parse persisted port mappings for runtime " + entry.runtimeid() + ": " + e.what());
+    }
+    return Status::OK();
+}
 
 // Downstream sandboxd port forwarding only accepts L4 protocols (tcp/udp). L7
 // portForward schemes (http/https/ws/wss) are normalized to tcp before sending
@@ -589,7 +623,14 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartNormal(
     params.envs      = context.envs;
     params.runtimeID = request->runtimeinstanceinfo().runtimeid();
     params.registeredTemplateIDs = registeredTemplateIDs_;
-    ApplyPortForwardMappings(&params, request);
+    const auto portStatus = ApplyPortForwardMappings(&params, request);
+    if (portStatus.IsError()) {
+        ReportSandboxLifecycleStatus(request->runtimeinstanceinfo(), params.runtimeID,
+                                     SandboxLifecycleStatus::ABNORMAL);
+        stateManager_.UpdatePortMappings(params.runtimeID, "");
+        PortManager::GetInstance().ReleasePorts(params.runtimeID);
+        return GenFailStartInstanceResponse(request, portStatus.StatusCode(), portStatus.RawMessage());
+    }
 
     auto [status, startReq] = builder.Build(params);
     if (!status.IsOk()) {
@@ -604,22 +645,23 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartNormal(
         .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnStartDone, std::placeholders::_1, request, context.guard));
 }
 
-void SandboxdExecutor::ApplyPortForwardMappings(SandboxdStartParams *params,
+Status SandboxdExecutor::ApplyPortForwardMappings(SandboxdStartParams *params,
     const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     const auto &deployOpts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
     auto networkIt = deployOpts.find(CONTAINER_NETWORK);
     if (networkIt == deployOpts.end()) {
-        return;
+        return Status::OK();
     }
     const auto forwardConfigs = ParseForwardPorts(networkIt->second);
     if (forwardConfigs.empty()) {
-        return;
+        return Status::OK();
     }
     auto hostPorts =
         PortManager::GetInstance().RequestPorts(params->runtimeID, static_cast<int>(forwardConfigs.size()));
     if (hostPorts.size() != forwardConfigs.size()) {
-        return;
+        return Status(StatusCode::RUNTIME_MANAGER_PORT_UNAVAILABLE,
+                      "failed to allocate all requested port mappings for runtime " + params->runtimeID);
     }
     json portJson = json::array();
     for (size_t i = 0; i < forwardConfigs.size(); ++i) {
@@ -632,6 +674,7 @@ void SandboxdExecutor::ApplyPortForwardMappings(SandboxdStartParams *params,
             static_cast<uint16_t>(forwardConfigs[i].containerPort), false}));
     }
     stateManager_.UpdatePortMappings(params->runtimeID, portJson.dump());
+    return Status::OK();
 }
 
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnStartDone(
@@ -1023,17 +1066,33 @@ void SandboxdExecutor::AddMissingAndConfirmedEntries(const std::shared_ptr<messa
             || missingSet.count(entry.containerid()) > 0) {
             continue;
         }
+
+        std::vector<int> hostPorts;
+        auto restoreStatus = ParseReconcileHostPorts(entry, &hostPorts);
+        if (restoreStatus.IsOk()) {
+            restoreStatus = PortManager::GetInstance().ReservePorts(entry.runtimeid(), hostPorts);
+        }
+        if (restoreStatus.IsError()) {
+            YRLOG_ERROR("{}|ReconcileRuntimes: failed to restore port reservations for runtime({}): {}",
+                        request->requestid(), entry.runtimeid(), restoreStatus.RawMessage());
+            response->set_code(static_cast<int32_t>(restoreStatus.StatusCode()));
+            response->set_message(restoreStatus.RawMessage());
+            response->clear_confirmedentries();
+            return;
+        }
+
         auto *confirmed = response->add_confirmedentries();
-        confirmed->set_runtimeid(entry.runtimeid());
-        confirmed->set_containerid(entry.containerid());
-        confirmed->set_instanceid(entry.instanceid());
+        *confirmed = entry;
         if (!stateManager_.IsActive(entry.runtimeid())) {
             messages::RuntimeInstanceInfo instanceInfo;
             instanceInfo.set_instanceid(entry.instanceid());
             instanceInfo.set_runtimeid(entry.runtimeid());
-            stateManager_.Register({entry.runtimeid(), entry.containerid(), {}, {}, instanceInfo});
+            stateManager_.Register(
+                {entry.runtimeid(), entry.containerid(), {}, entry.portmappings(), instanceInfo});
             stateManager_.MarkStartDone(entry.runtimeid());
             DoWaitWithRetry(entry.containerid(), entry.runtimeid(), 0);
+        } else {
+            stateManager_.UpdatePortMappings(entry.runtimeid(), entry.portmappings());
         }
     }
 }

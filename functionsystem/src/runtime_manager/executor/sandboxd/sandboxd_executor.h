@@ -332,7 +332,7 @@ private:
     Status OnDeleteSandboxComplete(const std::string &sandboxID, litebus::Try<runtime::v1::DeleteResponse> rsp);
     Status BuildStartCommandArgs(const std::shared_ptr<messages::StartInstanceRequest> &request,
                                  const std::string &port, CommandArgs *cmdArgs);
-    void ApplyPortForwardMappings(SandboxdStartParams *params,
+    Status ApplyPortForwardMappings(SandboxdStartParams *params,
         const std::shared_ptr<messages::StartInstanceRequest> &request);
 
     // ── State ─────────────────────────────────────────────────────────────────
