@@ -79,6 +79,8 @@ static const std::string KILL_JOB_INS_PREFIX = "job-killer-";
 static const std::string DATA_AFFINITY_ENABLED_KEY = "DATA_AFFINITY_ENABLED";
 static const uint32_t MAX_LABEL_AFFINITY_COUNT = 10;
 static const uint32_t TENANT_ID_MAX_LENGTH = 128;
+static const std::string CREATE_CONFLICT_ARBITRATED_CONTENDER =
+    "createConflictArbitratedContender";
 
 static std::string GetCreateResultDstInstance(const InstanceInfo &instanceInfo, const std::string &requestID)
 {
@@ -3110,7 +3112,16 @@ litebus::Future<CallResultAck> InstanceCtrlActor::CallResult(
     CallResultAck ack;
     auto instanceID(from);
     auto stateMachine = instanceControlView_->GetInstance(instanceID);
-    if (stateMachine != nullptr && stateMachine->GetInstanceState() == InstanceState::RUNNING) {
+    if (auto iter = createConflictCallResultTombstones_.find(instanceID);
+        createCallResultCallback_.find(instanceID) == createCallResultCallback_.end() &&
+        iter != createConflictCallResultTombstones_.end() && iter->second == requestID) {
+        YRLOG_WARN("{}|ignore duplicate CallResult from reclaimed route loser instance({})", requestID, instanceID);
+        ack.set_code(common::ErrorCode::ERR_NONE);
+        return ack;
+    }
+    if (stateMachine != nullptr && stateMachine->GetInstanceState() == InstanceState::RUNNING &&
+        (createCallResultCallback_.find(from) == createCallResultCallback_.end() ||
+         routeConflictCreateCallbackInstances_.find(from) == routeConflictCreateCallbackInstances_.end())) {
         YRLOG_WARN("{}|instance ({}) is already running, directly pass init call result to caller", requestID,
                    instanceID);
         const auto &instanceInfo = stateMachine->GetInstanceInfo();
@@ -3159,6 +3170,7 @@ litebus::Future<CallResultAck> InstanceCtrlActor::ClearCreateCallResultPromises(
     }
 
     (void)createCallResultCallback_.erase(from);
+    (void)routeConflictCreateCallbackInstances_.erase(from);
     (void)syncCreateCallResultPromises_.erase(from);
     return future;
 }
@@ -3219,18 +3231,14 @@ litebus::Future<CallResultAck> InstanceCtrlActor::SendCallResult(
             litebus::Defer(GetAID(), &InstanceCtrlActor::SendNotifyResult, _1, dstInstance, requestID, callResult));
     }
     // forward
-    auto forwardCallResultRequest = std::make_shared<internal::ForwardCallResultRequest>();
-    forwardCallResultRequest->mutable_req()->CopyFrom(*callResult);
-    forwardCallResultRequest->set_instanceid(dstInstance);
-    forwardCallResultRequest->set_functionproxyid(dstProxyID);
-    ASSERT_IF_NULL(instanceControlView_);
-    auto stateMachine = instanceControlView_->GetInstance(srcInstance);
-    if (stateMachine != nullptr) {
-        forwardCallResultRequest->mutable_readyinstance()->CopyFrom(stateMachine->GetInstanceInfo());
-        (*forwardCallResultRequest->mutable_readyinstance()->mutable_extensions())[INSTANCE_MOD_REVISION] =
-            std::to_string(stateMachine->GetModRevision());
+    auto forwardCallResultRequest =
+        BuildForwardCallResultRequest(srcInstance, dstInstance, dstProxyID, callResult);
+    // Preserve the legacy observer precondition for ordinary forwarding. The
+    // arbitration path carries its own exact contender marker and may need to
+    // report a resolved-winner error while the observer is unavailable.
+    if (createConflictForwardContenders_.find(requestID) == createConflictForwardContenders_.end()) {
+        ASSERT_IF_NULL(observer_);
     }
-    ASSERT_IF_NULL(observer_);
     litebus::AID proxyAID(dstProxyID);
     return SendForwardCallResultRequest(proxyAID, forwardCallResultRequest)
         .Then([](const internal::ForwardCallResultResponse &response) {
@@ -3239,6 +3247,40 @@ litebus::Future<CallResultAck> InstanceCtrlActor::SendCallResult(
             ack.set_message(response.message());
             return ack;
         });
+}
+
+std::shared_ptr<internal::ForwardCallResultRequest> InstanceCtrlActor::BuildForwardCallResultRequest(
+    const std::string &srcInstance, const std::string &dstInstance,
+    const std::string &dstProxyID,
+    const std::shared_ptr<functionsystem::CallResult> &callResult)
+{
+    auto request = std::make_shared<internal::ForwardCallResultRequest>();
+    request->mutable_req()->CopyFrom(*callResult);
+    request->set_instanceid(dstInstance);
+    request->set_functionproxyid(dstProxyID);
+
+    const auto marker = createConflictForwardContenders_.find(callResult->requestid());
+    const bool isResolvedWinnerResponse =
+        marker != createConflictForwardContenders_.end() && marker->second == srcInstance;
+    if (isResolvedWinnerResponse) {
+        // Carry only an internal loser marker.  A full readyInstance snapshot may now
+        // describe the remote winner and would make the next proxy reject this
+        // deliberately arbitrated result as a stale loser CallResult.  The marker is
+        // re-established by every relay so a multi-hop forward keeps the same semantics.
+        auto readyInstance = request->mutable_readyinstance();
+        readyInstance->set_instanceid(srcInstance);
+        (*readyInstance->mutable_extensions())[CREATE_CONFLICT_ARBITRATED_CONTENDER] = srcInstance;
+        return request;
+    }
+
+    ASSERT_IF_NULL(instanceControlView_);
+    auto stateMachine = instanceControlView_->GetInstance(srcInstance);
+    if (stateMachine != nullptr) {
+        request->mutable_readyinstance()->CopyFrom(stateMachine->GetInstanceInfo());
+        (*request->mutable_readyinstance()->mutable_extensions())[INSTANCE_MOD_REVISION] =
+            std::to_string(stateMachine->GetModRevision());
+    }
+    return request;
 }
 
 litebus::Future<bool> InstanceCtrlActor::WaitClientConnected(const std::string &dstInstance)
@@ -3365,6 +3407,11 @@ litebus::Future<Status> InstanceCtrlActor::SendForwardCallResultResponse(const C
     YRLOG_DEBUG("{}|send forward CallResult response to {}", requestID, from.HashString());
     Send(from, "ForwardCallResultResponse", response.SerializeAsString());
 
+    if (auto marker = createConflictForwardContenders_.find(requestID);
+        marker != createConflictForwardContenders_.end() && marker->second == instanceID) {
+        (void)createConflictForwardContenders_.erase(marker);
+    }
+
     return Status::OK();
 }
 
@@ -3380,8 +3427,22 @@ void InstanceCtrlActor::ForwardCallResultRequest(const litebus::AID &from, std::
     YRLOG_INFO("{}|received CallResult from {}.", requestID, from.HashString());
 
     auto callResult = std::make_shared<core_service::CallResult>(std::move(*forwardCallResultRequest.mutable_req()));
+    // Preserve the legacy empty source when no readyInstance is supplied. The
+    // arbitration relay below always carries its exact contender marker.
     std::string srcInstanceID;
-    if (forwardCallResultRequest.has_readyinstance() && forwardCallResultRequest.readyinstance().lowreliability()) {
+    bool isArbitratedRelay = false;
+    if (forwardCallResultRequest.has_readyinstance()) {
+        const auto &readyInstance = forwardCallResultRequest.readyinstance();
+        if (auto marker = readyInstance.extensions().find(CREATE_CONFLICT_ARBITRATED_CONTENDER);
+            marker != readyInstance.extensions().end() && !marker->second.empty() &&
+            marker->second == readyInstance.instanceid() && marker->second == callResult->instanceid()) {
+            srcInstanceID = marker->second;
+            createConflictForwardContenders_[requestID] = srcInstanceID;
+            isArbitratedRelay = true;
+        }
+    }
+    if (!isArbitratedRelay && forwardCallResultRequest.has_readyinstance() &&
+        forwardCallResultRequest.readyinstance().lowreliability()) {
         srcInstanceID = forwardCallResultRequest.readyinstance().instanceid();
         auto stateMachine = instanceControlView_->GetInstance(srcInstanceID);
         if ((stateMachine == nullptr) || (stateMachine != nullptr && stateMachine->GetUpdateByRouteInfo())) {
@@ -3416,7 +3477,7 @@ void InstanceCtrlActor::ForwardCallResultRequest(const litebus::AID &from, std::
     }
 
     // for update instance ready fast
-    if (forwardCallResultRequest.has_readyinstance()) {
+    if (!isArbitratedRelay && forwardCallResultRequest.has_readyinstance()) {
         srcInstanceID = forwardCallResultRequest.readyinstance().instanceid();
         auto instanceInfo = forwardCallResultRequest.readyinstance();
         if (instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)) {
@@ -3440,17 +3501,39 @@ void InstanceCtrlActor::ForwardCallResultResponse(const litebus::AID &from, std:
     }
 
     auto requestID(response.requestid());
+    bool isCreateConflictContenderResponse = false;
+    bool hasCreateConflictForwardMarker = false;
+    if (auto iter = createConflictForwardContenders_.find(requestID);
+        iter != createConflictForwardContenders_.end()) {
+        hasCreateConflictForwardMarker = true;
+        isCreateConflictContenderResponse = iter->second == response.instanceid();
+    }
+    // Validate the exact loser before completing the transport promise.  If a
+    // stale/mismatched response were accepted first, the promise would be
+    // erased and the later exact response could never authorize cleanup.
+    if (hasCreateConflictForwardMarker && !isCreateConflictContenderResponse) {
+        YRLOG_WARN("{}|forward response instance({}) does not match arbitrated loser marker, keep pending",
+                   requestID, response.instanceid());
+        return;
+    }
     if (auto iter(forwardCallResultPromise_.find(requestID)); iter == forwardCallResultPromise_.end()) {
         YRLOG_WARN("(call result)no requestID({}) matches result, failed to get response", requestID);
         return;
     }
     forwardCallResultPromise_[requestID]->SetValue(response);
     (void)forwardCallResultPromise_.erase(requestID);
+    if (isCreateConflictContenderResponse) {
+        (void)createConflictForwardContenders_.erase(requestID);
+    }
 
     YRLOG_INFO("{}|(call result)received forward call result response, from: {}", requestID, from.HashString());
-
     if (response.code() == static_cast<common::ErrorCode>(StatusCode::ERR_INSTANCE_EXITED)) {
         auto instanceID(response.instanceid());
+        if (isCreateConflictContenderResponse) {
+            YRLOG_WARN("{}|route loser instance({}) response was arbitrated exactly; skip generic exit cleanup",
+                       requestID, instanceID);
+            return;
+        }
         YRLOG_WARN("{}|instance {} is low reliability and instance info cannot find in {}, need to be killed",
                    requestID, instanceID, from.HashString());
         auto stateMachine = instanceControlView_->GetInstance(instanceID);
@@ -6819,55 +6902,468 @@ litebus::Future<resources::InstanceInfo> InstanceCtrlActor::TransFailedInstanceS
 CreateCallResultCallBack InstanceCtrlActor::RegisterCreateCallResultCallback(
     const std::shared_ptr<ScheduleRequest> &request)
 {
-    auto callback =
-        [request, instanceControlView(instanceControlView_), aid(GetAID()), nodeID(nodeID_)](
-            const std::shared_ptr<functionsystem::CallResult> &callResult) -> litebus::Future<CallResultAck> {
-        CallResultAck ack;
-        ASSERT_IF_NULL(instanceControlView);
-        auto instanceID(request->instance().instanceid());
-        auto stateMachine = instanceControlView->GetInstance(instanceID);
-        if (stateMachine == nullptr) {
-            YRLOG_ERROR("{}|{} info not existed to find creator", callResult->requestid(), instanceID);
-            ack.set_code(common::ERR_INSTANCE_NOT_FOUND);
-            return ack;
-        }
-        auto instanceInfo = request->instance();
-        callResult->mutable_runtimeinfo()->set_route(aid.Url());
-        callResult->mutable_runtimeinfo()->set_proxyid(nodeID);
-        if (callResult->code() == common::ErrorCode::ERR_NONE && stateMachine != nullptr &&
-            stateMachine->GetInstanceState() != InstanceState::RUNNING) {
-            auto transContext = TransContext{ InstanceState::RUNNING, stateMachine->GetVersion(), "running" };
-            transContext.scheduleReq = request;
-            return litebus::Async(aid, &InstanceCtrlActor::SendCheckpointReq, request)
-                .Then(litebus::Defer(aid, &InstanceCtrlActor::TransInstanceState, stateMachine, transContext))
-                .Then([requestID(callResult->requestid())](const TransitionResult &result) -> litebus::Future<Status> {
-                    if (result.preState.IsNone()) {
-                        YRLOG_ERROR("{}|failed to update instance info for meta store", requestID);
-                        return Status(StatusCode::ERR_ETCD_OPERATION_ERROR,
-                                      "failed to update instance info for meta store");
-                    }
-                    return Status::OK();
-                })
-                .Then([aid, nodeID, instanceID(instanceInfo.instanceid()),
-                       dstInstanceID(GetCreateResultDstInstance(instanceInfo, callResult->requestid())),
-                       dstProxyID(instanceInfo.parentfunctionproxyaid()), callResult](const Status &status) {
-                    if (status.IsError()) {
-                        callResult->set_code(common::ErrorCode::ERR_ETCD_OPERATION_ERROR);
-                        callResult->set_message(fmt::format(
-                            "failed to transition to running, err: {} on {}", status.GetMessage(), nodeID));
-                    }
-                    return litebus::Async(aid, &InstanceCtrlActor::SendCallResult, instanceID, dstInstanceID,
-                                          dstProxyID, callResult);
-                });
-        }
-        return litebus::Async(aid, &InstanceCtrlActor::SendCallResult, instanceInfo.instanceid(),
-                              GetCreateResultDstInstance(instanceInfo, callResult->requestid()),
-                              instanceInfo.parentfunctionproxyaid(), callResult);
+    // This snapshot describes the runtime created by this request.  It is only a
+    // contender here; it becomes the loser only if the RUNNING Create transaction
+    // later proves that an authoritative route already exists.
+    const auto contenderSnapshot = request->instance();
+    const bool arbitrationEnabled = InstanceGenerationConflictResolver::IsRouteConflictResolutionCandidate(
+        contenderSnapshot);
+    auto resolver = std::make_shared<InstanceGenerationConflictResolver>(contenderSnapshot, arbitrationEnabled);
+    auto callback = [request, resolver, aid(GetAID())](
+                        const std::shared_ptr<functionsystem::CallResult> &callResult) {
+        // Always enter the actor mailbox before reading the control view or
+        // mutating resolver state.  Future completion threads never own this context.
+        return litebus::Async(aid, &InstanceCtrlActor::HandleCreateCallResult, request, resolver, callResult);
     };
     YRLOG_DEBUG("{}|{}|Register callResult callback for instance({})", request->traceid(), request->requestid(),
                 request->instance().instanceid());
     createCallResultCallback_[request->instance().instanceid()] = callback;
+    if (arbitrationEnabled) {
+        routeConflictCreateCallbackInstances_.insert(request->instance().instanceid());
+    } else {
+        (void)routeConflictCreateCallbackInstances_.erase(request->instance().instanceid());
+    }
     return callback;
+}
+
+litebus::Future<CallResultAck> InstanceCtrlActor::HandleCreateCallResult(
+    const std::shared_ptr<ScheduleRequest> &request,
+    const std::shared_ptr<InstanceGenerationConflictResolver> &resolver,
+    const std::shared_ptr<functionsystem::CallResult> &callResult)
+{
+    ASSERT_IF_NULL(instanceControlView_);
+    const auto &contenderSnapshot = resolver->Contender();
+    auto stateMachine = instanceControlView_->GetInstance(contenderSnapshot.instanceid());
+    if (stateMachine == nullptr) {
+        YRLOG_ERROR("{}|{} info not existed to find creator", callResult->requestid(),
+                    contenderSnapshot.instanceid());
+        if (!resolver->IsArbitrationEnabled()) {
+            CallResultAck ack;
+            ack.set_code(common::ERR_INSTANCE_NOT_FOUND);
+            return ack;
+        }
+        if (resolver->HasResolvedWinner()) {
+            return ReclaimCreateContenderAndSendWinner(
+                contenderSnapshot, resolver->ResolvedWinner(), callResult, resolver);
+        }
+        return ReclaimCreateContenderAndSendError(
+            contenderSnapshot, callResult, resolver, "create contender generation is unavailable");
+    }
+
+    // The first CallResult cannot have a resolved winner yet. This branch is
+    // only for a retry after a previous arbitration attempt resolved the
+    // winner but contender cleanup did not finish.
+    if (resolver->HasResolvedWinner()) {
+        // Failed cleanup keeps this callback installed.  Retry only against the
+        // same winner; a third generation must not be reclaimed by the old snapshot.
+        const auto currentInfo = stateMachine->GetInstanceInfo();
+        const auto &winner = resolver->ResolvedWinner();
+        if (resolver->IsArbitrationEnabled() &&
+            !InstanceGenerationConflictResolver::IsSameGeneration(winner, currentInfo)) {
+            return SendCreateConflictError(
+                contenderSnapshot, callResult,
+                "failed to transition to running, generation changed after winner resolution");
+        }
+        return ReclaimCreateContenderAndSendWinner(contenderSnapshot, winner, callResult, resolver);
+    }
+
+    // On the normal first attempt the state machine still describes this
+    // contender. A generation mismatch here means a watcher/retry replaced it
+    // while the runtime was initializing; handle that case before persisting.
+    if (resolver->IsArbitrationEnabled()) {
+        const auto currentInfo = stateMachine->GetInstanceInfo();
+        if (!resolver->MatchesContenderGenerationView(currentInfo)) {
+            return HandleCreateGenerationChange(contenderSnapshot, currentInfo, callResult, resolver);
+        }
+    }
+    return HandleCreateCallResultForStateMachine(request, resolver, stateMachine, callResult);
+}
+
+litebus::Future<CallResultAck> InstanceCtrlActor::HandleCreateCallResultForStateMachine(
+    const std::shared_ptr<ScheduleRequest> &request,
+    const std::shared_ptr<InstanceGenerationConflictResolver> &resolver,
+    const std::shared_ptr<InstanceStateMachine> &stateMachine,
+    const std::shared_ptr<functionsystem::CallResult> &callResult)
+{
+    const auto &contenderSnapshot = resolver->Contender();
+    callResult->mutable_runtimeinfo()->set_route(GetAID().Url());
+    callResult->mutable_runtimeinfo()->set_proxyid(nodeID_);
+    // Failed initialization is returned as-is; there is no RUNNING transition
+    // to arbitrate. If a watcher or duplicate ready notification already made
+    // the state RUNNING, avoid a second persistence and forward the result.
+    if (callResult->code() != common::ErrorCode::ERR_NONE ||
+        stateMachine->GetInstanceState() == InstanceState::RUNNING) {
+        return SendCallResult(contenderSnapshot.instanceid(),
+                              GetCreateResultDstInstance(contenderSnapshot, callResult->requestid()),
+                              contenderSnapshot.parentfunctionproxyaid(), callResult);
+    }
+
+    auto transContext = TransContext{ InstanceState::RUNNING, stateMachine->GetVersion(), "running" };
+    transContext.scheduleReq = request;
+    return SendCheckpointReq(request)
+        .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::TransInstanceState, stateMachine, transContext))
+        .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::HandleCreateTransitionResult,
+                             resolver, callResult, std::placeholders::_1));
+}
+
+litebus::Future<CallResultAck> InstanceCtrlActor::HandleCreateTransitionResult(
+    const std::shared_ptr<InstanceGenerationConflictResolver> &resolver,
+    const std::shared_ptr<functionsystem::CallResult> &callResult,
+    const TransitionResult &result)
+{
+    const auto &contenderSnapshot = resolver->Contender();
+    if (resolver->IsArbitrationEnabled()) {
+        auto currentStateMachine = instanceControlView_->GetInstance(contenderSnapshot.instanceid());
+        if (currentStateMachine == nullptr) {
+            return SendCreateConflictError(
+                contenderSnapshot, callResult, "create contender generation is unavailable");
+        }
+        // Keep the route revision update inside this opt-in arbitration path.
+        // Other failed transitions retain their existing revision semantics.
+        if (!result.savedInfo.instanceid().empty() && result.currentModRevision > 0) {
+            currentStateMachine->SetModRevision(result.currentModRevision);
+        }
+        const auto currentInfo = currentStateMachine->GetInstanceInfo();
+        const auto &expectedInfo = result.savedInfo.functionproxyid().empty()
+                                       ? contenderSnapshot
+                                       : result.savedInfo;
+        // TransInstanceState applies savedInfo before this continuation. Any
+        // different generation now visible in the state machine came from a
+        // concurrent watcher/retry and must be handled separately.
+        if (!InstanceGenerationConflictResolver::IsSameGeneration(expectedInfo, currentInfo)) {
+            return HandleCreateGenerationChange(contenderSnapshot, currentInfo, callResult, resolver);
+        }
+        // This is the actual Create-txn arbitration fork: both request-scoped
+        // instance and shared route keys were checked atomically, and the
+        // WRONG_VERSION result carries the authoritative route projection.
+        if (result.status.StatusCode() == StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION) {
+            if (!result.savedInfo.instanceid().empty()) {
+                return HandleCreateRouteConflict(contenderSnapshot, result, callResult, resolver);
+            }
+            // The compare definitely failed, so this runtime did not win the
+            // Create transaction. Reclaim it even when the route cannot be
+            // resolved. Ambiguous transport errors keep the legacy behavior.
+            if (resolver->IsExactPersistenceFailure(result)) {
+                return ReclaimCreateContenderAndSendError(
+                    contenderSnapshot, callResult, resolver, "failed to resolve route conflict winner");
+            }
+        }
+        // OnCreate also reports GET_INFO_FAILED when its transaction lost but
+        // one of the compared keys (normally the route) is missing.  The
+        // contender definitely did not persist, and there is no authoritative
+        // winner to return, so reclaim the exact captured generation before
+        // reporting the error.  Transport errors remain on the legacy path
+        // because their commit outcome is ambiguous.
+        if (result.status.StatusCode() == StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED &&
+            resolver->IsExactPersistenceFailure(result)) {
+            return ReclaimCreateContenderAndSendError(
+                contenderSnapshot, callResult, resolver,
+                "failed to transition to running, route is missing after Create conflict");
+        }
+    }
+    if (result.preState.IsNone()) {
+        YRLOG_ERROR("{}|failed to update instance info for meta store", callResult->requestid());
+        callResult->set_code(common::ErrorCode::ERR_ETCD_OPERATION_ERROR);
+        callResult->set_message(
+            "failed to transition to running, err: failed to update instance info for meta store");
+    }
+    return SendCallResult(contenderSnapshot.instanceid(),
+                          GetCreateResultDstInstance(contenderSnapshot, callResult->requestid()),
+                          contenderSnapshot.parentfunctionproxyaid(), callResult);
+}
+
+litebus::Future<CallResultAck> InstanceCtrlActor::HandleCreateGenerationChange(
+    const InstanceInfo &contenderSnapshot, const InstanceInfo &currentInfo,
+    const std::shared_ptr<functionsystem::CallResult> &callResult,
+    const std::shared_ptr<InstanceGenerationConflictResolver> &resolver)
+{
+    if (!resolver->IsReusableWinner(currentInfo, nodeID_)) {
+        YRLOG_WARN("{}|instance({}) generation changed from runtime({}) agent({}) proxy({}) to "
+                   "runtime({}) agent({}) proxy({}); skip loser cleanup",
+                   contenderSnapshot.requestid(), contenderSnapshot.instanceid(), contenderSnapshot.runtimeid(),
+                   contenderSnapshot.functionagentid(), contenderSnapshot.functionproxyid(), currentInfo.runtimeid(),
+                   currentInfo.functionagentid(), currentInfo.functionproxyid());
+        return SendCreateConflictError(
+            contenderSnapshot, callResult,
+            "failed to transition to running, instance generation changed during arbitration");
+    }
+
+    YRLOG_WARN("{}|instance({}) generation is now authoritative remote winner request({}) proxy({}); "
+               "reclaim captured loser before returning winner",
+               contenderSnapshot.requestid(), contenderSnapshot.instanceid(), currentInfo.requestid(),
+               currentInfo.functionproxyid());
+    // Freeze the first resolved winner so cleanup retries cannot silently
+    // switch to a later generation.
+    resolver->RecordResolvedWinner(currentInfo);
+    return ReclaimCreateContenderAndSendWinner(
+        contenderSnapshot, currentInfo, callResult, resolver);
+}
+
+litebus::Future<Status> InstanceCtrlActor::StartCreateContenderCleanup(
+    const InstanceInfo &contenderSnapshot,
+    const std::shared_ptr<InstanceGenerationConflictResolver> &resolver)
+{
+    auto cleanupState = resolver->GetCleanupState();
+    if (cleanupState->attempt != nullptr && cleanupState->attempt->IsInit()) {
+        return *cleanupState->attempt;
+    }
+    if (cleanupState->resourceCleanupDone && cleanupState->runtimeCleanupDone) {
+        return Status::OK();
+    }
+
+    YRLOG_WARN("{}|reclaim losing create contender instance({}) runtime({}) agent({})",
+               contenderSnapshot.requestid(), contenderSnapshot.instanceid(), contenderSnapshot.runtimeid(),
+               contenderSnapshot.functionagentid());
+    if (!cleanupState->localCleanupPrepared) {
+        cleanupState->localCleanupPrepared = true;
+        StopHeartbeat(contenderSnapshot.instanceid());
+        // Mirror KillRuntime's local waiter cleanup while keeping the actual
+        // kill bound to the captured runtime/agent generation below.
+        auto statusPromise = instanceStatusPromises_.find(contenderSnapshot.instanceid());
+        if (statusPromise != instanceStatusPromises_.end()) {
+            statusPromise->second.SetValue(Status::OK());
+            (void)instanceStatusPromises_.erase(statusPromise);
+        }
+        metrics::MetricsAdapter::GetInstance().GetMetricsContext().SetBillingInstanceEndTime(
+            contenderSnapshot.instanceid(),
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+    }
+
+    litebus::Future<Status> resourceFuture = Status::OK();
+    if (!cleanupState->resourceCleanupDone) {
+        resourceFuture = DeleteInstanceInResourceView(Status::OK(), contenderSnapshot);
+    }
+    auto attempt = resourceFuture.Then(
+        litebus::Defer(GetAID(), &InstanceCtrlActor::ContinueCreateContenderCleanupAfterResource,
+                       std::placeholders::_1, contenderSnapshot, resolver));
+    cleanupState->attempt = std::make_shared<litebus::Future<Status>>(attempt);
+    return attempt;
+}
+
+litebus::Future<Status> InstanceCtrlActor::ContinueCreateContenderCleanupAfterResource(
+    const litebus::Future<Status> &resourceFuture, const InstanceInfo &contenderSnapshot,
+    const std::shared_ptr<InstanceGenerationConflictResolver> &resolver)
+{
+    auto cleanupState = resolver->GetCleanupState();
+    if (resourceFuture.IsError() || resourceFuture.Get().IsError()) {
+        YRLOG_ERROR("{}|route loser instance({}) resource cleanup failed", contenderSnapshot.requestid(),
+                    contenderSnapshot.instanceid());
+        return Status(StatusCode::FAILED, "route loser resource cleanup failed");
+    }
+    cleanupState->resourceCleanupDone = true;
+    if (cleanupState->runtimeCleanupDone) {
+        return Status::OK();
+    }
+    return SendKillRequestToAgent(contenderSnapshot, false)
+        .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::FinishCreateContenderRuntimeCleanup,
+                             std::placeholders::_1, contenderSnapshot, resolver));
+}
+
+Status InstanceCtrlActor::FinishCreateContenderRuntimeCleanup(
+    const litebus::Future<messages::KillInstanceResponse> &runtimeFuture,
+    const InstanceInfo &contenderSnapshot,
+    const std::shared_ptr<InstanceGenerationConflictResolver> &resolver)
+{
+    auto cleanupState = resolver->GetCleanupState();
+    if (runtimeFuture.IsError()) {
+        YRLOG_ERROR("{}|failed to reclaim route loser instance({}) runtime({}), future error({})",
+                    contenderSnapshot.requestid(), contenderSnapshot.instanceid(), contenderSnapshot.runtimeid(),
+                    runtimeFuture.GetErrorCode());
+        return Status(StatusCode::FAILED, "failed to kill route loser runtime");
+    }
+    if (runtimeFuture.Get().code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+        YRLOG_ERROR("{}|failed to reclaim route loser instance({}) runtime({}), response code({})",
+                    contenderSnapshot.requestid(), contenderSnapshot.instanceid(), contenderSnapshot.runtimeid(),
+                    runtimeFuture.Get().code());
+        return Status(StatusCode::FAILED,
+                      fmt::format("failed to kill route loser runtime, code {}", runtimeFuture.Get().code()));
+    }
+    cleanupState->runtimeCleanupDone = true;
+    YRLOG_INFO("{}|reclaimed route loser instance({}) runtime({})", contenderSnapshot.requestid(),
+               contenderSnapshot.instanceid(), contenderSnapshot.runtimeid());
+    return Status::OK();
+}
+
+litebus::Future<CallResultAck> InstanceCtrlActor::HandleCreateRouteConflict(
+    const InstanceInfo &contenderSnapshot, const TransitionResult &result,
+    const std::shared_ptr<functionsystem::CallResult> &callResult,
+    const std::shared_ptr<InstanceGenerationConflictResolver> &resolver)
+{
+    if (!resolver->IsArbitrationEnabled() || result.preState.IsSome() ||
+        result.status.StatusCode() != StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION) {
+        return SendCreateConflictError(
+            contenderSnapshot, callResult, "failed to transition to running, invalid route conflict");
+    }
+    return HandleCreateRouteWinner(
+        contenderSnapshot, result.savedInfo, callResult, resolver);
+}
+
+litebus::Future<CallResultAck> InstanceCtrlActor::HandleCreateRouteWinner(
+    const InstanceInfo &contenderSnapshot, const InstanceInfo &winnerInfo,
+    const std::shared_ptr<functionsystem::CallResult> &callResult,
+    const std::shared_ptr<InstanceGenerationConflictResolver> &resolver)
+{
+    if (!resolver->IsArbitrationEnabled()) {
+        return SendCreateConflictError(
+            contenderSnapshot, callResult, "failed to transition to running, invalid route conflict");
+    }
+    // Local runtime clients and resource reservations are keyed by instance ID. If the
+    // apparent winner is on this proxy, generic loser cleanup could delete shared winner
+    // state even when the runtime IDs differ. This race is only reusable across proxies.
+    if (winnerInfo.functionproxyid() == nodeID_) {
+        return SendCreateConflictError(
+            contenderSnapshot, callResult, "failed to transition to running, local winner cannot be safely reused");
+    }
+    if (!resolver->IsReusableWinner(winnerInfo, nodeID_)) {
+        return ReclaimCreateContenderAndSendError(
+            contenderSnapshot, callResult, resolver,
+            "failed to transition to running, invalid winner instance");
+    }
+    // Freeze the first resolved winner so cleanup retries remain bound to it.
+    resolver->RecordResolvedWinner(winnerInfo);
+    return ReclaimCreateContenderAndSendWinner(
+        contenderSnapshot, winnerInfo, callResult, resolver);
+}
+
+litebus::Future<CallResultAck> InstanceCtrlActor::SendCreateConflictError(
+    const InstanceInfo &contenderInfo, const std::shared_ptr<functionsystem::CallResult> &callResult,
+    const std::string &message, bool recordTombstone)
+{
+    callResult->set_instanceid(contenderInfo.instanceid());
+    callResult->set_code(common::ErrorCode::ERR_ETCD_OPERATION_ERROR);
+    callResult->set_message(message);
+    callResult->clear_smallobjects();
+    callResult->clear_stacktraceinfos();
+    callResult->clear_runtimeinfo();
+    return SendCreateArbitratedCallResult(contenderInfo, callResult, recordTombstone);
+}
+
+litebus::Future<CallResultAck> InstanceCtrlActor::ReclaimCreateContenderAndSendError(
+    const InstanceInfo &contenderSnapshot, const std::shared_ptr<functionsystem::CallResult> &callResult,
+    const std::shared_ptr<InstanceGenerationConflictResolver> &resolver,
+    const std::string &message)
+{
+    const auto aid = GetAID();
+    return StartCreateContenderCleanup(contenderSnapshot, resolver)
+        .Then([aid, contenderSnapshot, callResult, message](const Status &cleanupStatus)
+                  -> litebus::Future<CallResultAck> {
+            if (cleanupStatus.IsError()) {
+                CallResultAck ack;
+                ack.set_code(common::ErrorCode::ERR_ETCD_OPERATION_ERROR);
+                ack.set_message("failed to reclaim losing create contender");
+                return ack;
+            }
+            return litebus::Async(aid, &InstanceCtrlActor::SendCreateConflictError,
+                                  contenderSnapshot, callResult, message, true);
+        });
+}
+
+litebus::Future<CallResultAck> InstanceCtrlActor::ReclaimCreateContenderAndSendWinner(
+    const InstanceInfo &contenderSnapshot, const InstanceInfo &winnerInfo,
+    const std::shared_ptr<functionsystem::CallResult> &callResult,
+    const std::shared_ptr<InstanceGenerationConflictResolver> &resolver)
+{
+    const auto aid = GetAID();
+    return StartCreateContenderCleanup(contenderSnapshot, resolver)
+        .Then([aid, contenderSnapshot, winnerInfo, callResult](const Status &cleanupStatus)
+                  -> litebus::Future<CallResultAck> {
+            if (cleanupStatus.IsError()) {
+                CallResultAck ack;
+                ack.set_code(common::ErrorCode::ERR_ETCD_OPERATION_ERROR);
+                ack.set_message("failed to reclaim route loser runtime");
+                return ack;
+            }
+            return litebus::Async(aid, &InstanceCtrlActor::ResolveAndSendCreateRouteWinner,
+                                  contenderSnapshot, winnerInfo, callResult);
+        });
+}
+
+litebus::Future<CallResultAck> InstanceCtrlActor::ResolveAndSendCreateRouteWinner(
+    const InstanceInfo &contenderInfo, const InstanceInfo &winnerInfo,
+    const std::shared_ptr<functionsystem::CallResult> &callResult)
+{
+    YRLOG_WARN("{}|return route winner request({}) proxy({}) for instance({})",
+               contenderInfo.requestid(), winnerInfo.requestid(), winnerInfo.functionproxyid(),
+               contenderInfo.instanceid());
+
+    callResult->set_instanceid(contenderInfo.instanceid());
+    callResult->set_code(common::ErrorCode::ERR_NONE);
+    callResult->clear_message();
+    callResult->clear_smallobjects();
+    callResult->clear_stacktraceinfos();
+    callResult->clear_runtimeinfo();
+
+    if (observer_ == nullptr) {
+        callResult->set_code(common::ErrorCode::ERR_ETCD_OPERATION_ERROR);
+        callResult->set_message("winner proxy route is unavailable");
+        return SendCreateArbitratedCallResult(contenderInfo, callResult, true);
+    }
+    return observer_->GetLocalSchedulerAID(winnerInfo.functionproxyid())
+        .Then([aid(GetAID()), contenderInfo, winnerInfo,
+               callResult](const litebus::Future<litebus::Option<litebus::AID>> &future)
+                  -> litebus::Future<CallResultAck> {
+            if (future.IsError() || future.Get().IsNone()) {
+                YRLOG_ERROR("{}|failed to resolve winner proxy({}) AID for instance({})",
+                            contenderInfo.requestid(), winnerInfo.functionproxyid(), contenderInfo.instanceid());
+                callResult->set_code(common::ErrorCode::ERR_ETCD_OPERATION_ERROR);
+                callResult->set_message("winner proxy route is unavailable");
+            } else {
+                callResult->mutable_runtimeinfo()->set_route(future.Get().Get().Url());
+                callResult->mutable_runtimeinfo()->set_proxyid(winnerInfo.functionproxyid());
+            }
+            return litebus::Async(aid, &InstanceCtrlActor::SendCreateRouteWinnerCallResult,
+                                  contenderInfo, callResult);
+        });
+}
+
+litebus::Future<CallResultAck> InstanceCtrlActor::SendCreateRouteWinnerCallResult(
+    const InstanceInfo &contenderInfo,
+    const std::shared_ptr<functionsystem::CallResult> &callResult)
+{
+    return SendCreateArbitratedCallResult(contenderInfo, callResult, true);
+}
+
+litebus::Future<CallResultAck> InstanceCtrlActor::SendCreateArbitratedCallResult(
+    const InstanceInfo &contenderInfo,
+    const std::shared_ptr<functionsystem::CallResult> &callResult,
+    bool recordTombstone)
+{
+    const auto dstInstance = GetCreateResultDstInstance(contenderInfo, callResult->requestid());
+    if (!dstInstance.empty() && contenderInfo.parentfunctionproxyaid() != GetAID()) {
+        createConflictForwardContenders_[callResult->requestid()] = contenderInfo.instanceid();
+    }
+    auto result = SendCallResult(contenderInfo.instanceid(), dstInstance,
+                                 contenderInfo.parentfunctionproxyaid(), callResult);
+    if (!recordTombstone) {
+        return result;
+    }
+    return result.Then(
+        litebus::Defer(GetAID(), &InstanceCtrlActor::RecordCreateRouteWinnerCallResult,
+                       std::placeholders::_1, contenderInfo.instanceid(), callResult->requestid()));
+}
+
+CallResultAck InstanceCtrlActor::RecordCreateRouteWinnerCallResult(
+    const CallResultAck &ack, const std::string &instanceID, const std::string &contenderRequestID)
+{
+    if (ack.code() != common::ErrorCode::ERR_NONE) {
+        return ack;
+    }
+    createConflictCallResultTombstones_[instanceID] = contenderRequestID;
+    constexpr uint64_t tombstoneTtlMs = 5 * 60 * 1000;
+    (void)litebus::AsyncAfter(tombstoneTtlMs, GetAID(),
+                              &InstanceCtrlActor::ClearCreateConflictCallResultTombstone,
+                              instanceID, contenderRequestID);
+    return ack;
+}
+
+void InstanceCtrlActor::ClearCreateConflictCallResultTombstone(
+    const std::string &instanceID, const std::string &contenderRequestID)
+{
+    if (auto iter = createConflictCallResultTombstones_.find(instanceID);
+        iter != createConflictCallResultTombstones_.end() && iter->second == contenderRequestID) {
+        (void)createConflictCallResultTombstones_.erase(iter);
+    }
 }
 
 void InstanceCtrlActor::SetInstanceBillingContext(const resource_view::InstanceInfo &instance)

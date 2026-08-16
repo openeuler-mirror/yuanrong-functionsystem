@@ -269,6 +269,13 @@ cc_test(
     name = "instance_ctrl_unit_test",
     linkstatic = True,
     srcs = [
+        "common/resource_view/view_utils.cpp",
+        "common/resource_view/view_utils.h",
+        "common/etcd_service/etcd_lease_service.cpp",
+        "common/etcd_service/etcd_kv_service.cpp",
+        "common/etcd_service/etcd_service_driver.cpp",
+        "common/etcd_service/etcd_watch_service.cpp",
+        "common/etcd_service/etcd_watch_srv_actor.cpp",
         "function_proxy/local_scheduler/instance_control/instance_ctrl_test.cpp",
         "gtest_sleep_compat.h",
         "main.cpp",
