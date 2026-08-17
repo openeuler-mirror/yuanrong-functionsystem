@@ -287,6 +287,15 @@ bool SandboxdExecutor::IsRetryableWaitError(const Status &status)
         || code == GRPC_INTERNAL;
 }
 
+uint32_t SandboxdExecutor::SandboxReclaimBackoffMs(uint32_t failedAttempts)
+{
+    uint64_t delayMs = kSandboxReclaimInitialBackoffMs;
+    for (uint32_t attempt = 1; attempt < failedAttempts && delayMs < kSandboxReclaimMaxBackoffMs; ++attempt) {
+        delayMs = std::min<uint64_t>(delayMs * 2, kSandboxReclaimMaxBackoffMs);
+    }
+    return static_cast<uint32_t>(delayMs);
+}
+
 void SandboxdExecutor::StartSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     trace::StartSandboxCreateSpan(request);
@@ -746,6 +755,13 @@ litebus::Future<Status> SandboxdExecutor::StopSandbox(const std::string &runtime
 litebus::Future<Status> SandboxdExecutor::TerminateSandbox(const std::string &runtimeID, const std::string &requestID,
                                                            const std::string &sandboxID, bool force)
 {
+    auto reclaimIt = sandboxReclaims_.find(runtimeID);
+    if (reclaimIt != sandboxReclaims_.end() && reclaimIt->second.sandboxID == sandboxID) {
+        YRLOG_INFO("{}|sandbox({}) runtime({}) is already being reclaimed locally; joining the retrying delete",
+                   requestID, sandboxID, runtimeID);
+        return reclaimIt->second.completion->GetFuture();
+    }
+
     int64_t timeout = DEFAULT_GRACEFUL_SHUTDOWN;
     if (auto info = stateManager_.Find(runtimeID)) {
         timeout = info->instanceInfo.gracefulshutdowntime();
@@ -780,6 +796,12 @@ litebus::Future<Status> SandboxdExecutor::OnDeleteDone(const std::string &runtim
     ClearSandboxMetricsState(runtimeID);
     sandboxLifecycleStates_.erase(runtimeID);
     stateManager_.Unregister(runtimeID);
+
+    auto reclaimIt = sandboxReclaims_.find(runtimeID);
+    if (reclaimIt != sandboxReclaims_.end() && reclaimIt->second.sandboxID == sandboxID) {
+        reclaimIt->second.completion->SetValue(Status::OK());
+        sandboxReclaims_.erase(reclaimIt);
+    }
     return Status::OK();
 }
 
@@ -1321,7 +1343,7 @@ litebus::Future<runtime::v1::DeleteResponse> SandboxdExecutor::DoDelete(
             }
             YRLOG_ERROR("{}|Delete gRPC failed for sandbox({}) runtime({}): {}", requestID, req->id(), runtimeID,
                         rsp.GetErrorCode());
-            return runtime::v1::DeleteResponse{};
+            return litebus::Status(rsp.GetErrorCode());
         });
 }
 
@@ -1583,14 +1605,111 @@ litebus::Future<Status> SandboxdExecutor::CleanupSandboxAfterMaxRetries(const st
     ReportSandboxLifecycleStatus(info->instanceInfo, runtimeID, SandboxLifecycleStatus::ABNORMAL);
     ClearSandboxMetricsState(runtimeID);
 
-    // Keep runtime-to-sandbox ownership until the control-plane reclaim reaches
-    // StopInstance. OnDeleteDone releases every restored forwarding port and
-    // unregisters the runtime after sandboxd has processed the delete request;
-    // it also clears the ABNORMAL lifecycle marker kept above. Dropping either
-    // state here makes StopInstance lose the sandbox ID or report COMPLETED for
-    // this failed sandbox, while leaving multi-port reservations behind.
+    // Notify the control plane first so it can transition the instance and run
+    // its coordinated kill bookkeeping. Local deletion is an independent,
+    // idempotent fallback: it retains runtime/port ownership across failures,
+    // retries with bounded exponential backoff, and only releases resources
+    // after sandboxd confirms deletion (or confirms the sandbox is absent).
+    auto notify = healthCheckClient_->NotifySandboxExit(instanceID, runtimeID, -1, msg, requestID);
+    (void)notify.OnComplete([requestID, runtimeID](const litebus::Future<Status> &result) {
+        if (result.IsError() || result.Get().IsError()) {
+            YRLOG_ERROR("{}|failed to notify control plane about runtime({}) wait failure; local sandbox reclaim "
+                        "continues in the background",
+                        requestID, runtimeID);
+        }
+    });
+    StartSandboxReclaim(runtimeID, sandboxID, requestID);
+    return notify;
+}
 
-    return healthCheckClient_->NotifySandboxExit(instanceID, runtimeID, -1, msg, requestID);
+void SandboxdExecutor::StartSandboxReclaim(const std::string &runtimeID, const std::string &sandboxID,
+                                           const std::string &requestID)
+{
+    auto [it, inserted] = sandboxReclaims_.try_emplace(
+        runtimeID, SandboxReclaimState{ sandboxID, 0, std::make_shared<litebus::Promise<Status>>() });
+    if (!inserted) {
+        if (it->second.sandboxID == sandboxID) {
+            YRLOG_WARN("{}|sandbox({}) runtime({}) reclaim is already scheduled", requestID, sandboxID, runtimeID);
+            return;
+        }
+
+        const auto staleSandboxID = it->second.sandboxID;
+        YRLOG_ERROR("{}|replacing stale sandbox({}) reclaim for runtime({}) with sandbox({})", requestID,
+                    staleSandboxID, runtimeID, sandboxID);
+        it->second.completion->SetValue(
+            Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "sandbox changed during local reclaim"));
+        sandboxReclaims_.erase(it);
+        userInitiatedTerminateRuntimes_.erase(runtimeID);
+        StartSandboxReclaim(runtimeID, sandboxID, requestID);
+        return;
+    }
+
+    userInitiatedTerminateRuntimes_.insert(runtimeID);
+    YRLOG_WARN("{}|starting local reclaim for sandbox({}) runtime({}); delete failures will be retried with "
+               "exponential backoff capped at {}ms",
+               requestID, sandboxID, runtimeID, kSandboxReclaimMaxBackoffMs);
+    (void)litebus::Async(GetAID(), &SandboxdExecutor::ReclaimSandbox, runtimeID, sandboxID, requestID);
+}
+
+void SandboxdExecutor::ReclaimSandbox(const std::string &runtimeID, const std::string &sandboxID,
+                                      const std::string &requestID)
+{
+    auto reclaimIt = sandboxReclaims_.find(runtimeID);
+    if (reclaimIt == sandboxReclaims_.end() || reclaimIt->second.sandboxID != sandboxID) {
+        return;
+    }
+    if (stateManager_.GetSandboxID(runtimeID) != sandboxID) {
+        YRLOG_ERROR("{}|stop retrying local reclaim for sandbox({}) runtime({}): runtime ownership changed",
+                    requestID, sandboxID, runtimeID);
+        reclaimIt->second.completion->SetValue(
+            Status(StatusCode::ERR_INNER_SYSTEM_ERROR, "runtime ownership changed during sandbox reclaim"));
+        sandboxReclaims_.erase(reclaimIt);
+        userInitiatedTerminateRuntimes_.erase(runtimeID);
+        return;
+    }
+
+    auto deleteReq = std::make_shared<runtime::v1::DeleteRequest>();
+    deleteReq->set_id(sandboxID);
+    deleteReq->set_timeout(0);
+    ASSERT_IF_NULL(sandboxd_);
+    sandboxd_
+        ->CallAsync("Delete", *deleteReq, static_cast<runtime::v1::DeleteResponse *>(nullptr),
+                    &runtime::v1::SandboxService::Stub::AsyncDelete)
+        .Then([aid(GetAID()), runtimeID, sandboxID,
+               requestID](litebus::Try<runtime::v1::DeleteResponse> response) -> litebus::Future<Status> {
+            return litebus::Async(aid, &SandboxdExecutor::OnReclaimSandboxDone, runtimeID, sandboxID, requestID,
+                                  response);
+        });
+}
+
+litebus::Future<Status> SandboxdExecutor::OnReclaimSandboxDone(
+    const std::string &runtimeID, const std::string &sandboxID, const std::string &requestID,
+    litebus::Try<runtime::v1::DeleteResponse> response)
+{
+    auto reclaimIt = sandboxReclaims_.find(runtimeID);
+    if (reclaimIt == sandboxReclaims_.end() || reclaimIt->second.sandboxID != sandboxID) {
+        YRLOG_INFO("{}|ignore completed reclaim for stale sandbox({}) runtime({})", requestID, sandboxID, runtimeID);
+        return Status::OK();
+    }
+
+    if (response.IsOK() || response.GetErrorCode() == static_cast<int32_t>(GRPC_NOT_FOUND)) {
+        if (response.IsOK()) {
+            YRLOG_INFO("{}|local reclaim deleted sandbox({}) runtime({}) after {} failed attempt(s)", requestID,
+                       sandboxID, runtimeID, reclaimIt->second.failedAttempts);
+            return OnDeleteDone(runtimeID, requestID, sandboxID, response.Get());
+        }
+        YRLOG_WARN("{}|sandbox({}) runtime({}) was already absent during local reclaim; releasing retained resources",
+                   requestID, sandboxID, runtimeID);
+        return OnDeleteDone(runtimeID, requestID, sandboxID, runtime::v1::DeleteResponse{});
+    }
+
+    ++reclaimIt->second.failedAttempts;
+    const auto delayMs = SandboxReclaimBackoffMs(reclaimIt->second.failedAttempts);
+    YRLOG_ERROR("{}|local reclaim failed for sandbox({}) runtime({}), grpcCode({}), failedAttempts({}); retrying in "
+                "{}ms",
+                requestID, sandboxID, runtimeID, response.GetErrorCode(), reclaimIt->second.failedAttempts, delayMs);
+    (void)litebus::AsyncAfter(delayMs, GetAID(), &SandboxdExecutor::ReclaimSandbox, runtimeID, sandboxID, requestID);
+    return Status(StatusCode::ERR_INNER_COMMUNICATION, "sandbox reclaim delete failed; retry scheduled");
 }
 
 litebus::Future<Status> SandboxdExecutor::OnWaitDone(const std::string &runtimeID,

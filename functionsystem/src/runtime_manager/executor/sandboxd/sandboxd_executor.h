@@ -100,6 +100,8 @@ public:
 
     static constexpr uint32_t kDefaultOrphanGracePeriodSec = 180;
     static constexpr uint32_t kOrphanDeleteRetryIntervalSec = 70;
+    static constexpr uint32_t kSandboxReclaimInitialBackoffMs = 1000;
+    static constexpr uint32_t kSandboxReclaimMaxBackoffMs = 60000;
 
     enum class SandboxLifecycleStatus : int32_t {
         CREATING = 1,
@@ -161,6 +163,7 @@ public:
 
     static std::vector<PortForwardConfig> ParseForwardPorts(const std::string &networkJson);
     static bool IsRetryableWaitError(const Status &status);
+    static uint32_t SandboxReclaimBackoffMs(uint32_t failedAttempts);
 
 protected:
     void Init() override;
@@ -271,6 +274,13 @@ private:
                                                     std::chrono::steady_clock::time_point collectedAt);
 
     litebus::Future<Status> CleanupSandboxAfterMaxRetries(const std::string &runtimeID, const std::string &sandboxID);
+    void StartSandboxReclaim(const std::string &runtimeID, const std::string &sandboxID,
+                             const std::string &requestID);
+    void ReclaimSandbox(const std::string &runtimeID, const std::string &sandboxID,
+                        const std::string &requestID);
+    litebus::Future<Status> OnReclaimSandboxDone(const std::string &runtimeID, const std::string &sandboxID,
+                                                 const std::string &requestID,
+                                                 litebus::Try<runtime::v1::DeleteResponse> response);
 
     litebus::Future<Status> OnWaitDone(const std::string &runtimeID, const runtime::v1::WaitResponse &response);
 
@@ -368,6 +378,13 @@ private:
     std::unordered_map<std::string, SandboxLifecycleStatus> sandboxLifecycleStates_;
     std::unordered_set<std::string> userInitiatedTerminateRuntimes_;
     std::unordered_map<std::string, std::chrono::steady_clock::time_point> sandboxRunningStartTimes_;
+
+    struct SandboxReclaimState {
+        std::string sandboxID;
+        uint32_t failedAttempts = 0;
+        std::shared_ptr<litebus::Promise<Status>> completion;
+    };
+    std::unordered_map<std::string, SandboxReclaimState> sandboxReclaims_;
 };
 
 /**

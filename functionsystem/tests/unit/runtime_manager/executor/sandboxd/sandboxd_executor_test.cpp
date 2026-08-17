@@ -84,7 +84,16 @@ TEST(SandboxdExecutorTest, IsRetryableWaitErrorClassifiesTransportErrors)
     EXPECT_FALSE(SandboxdExecutor::IsRetryableWaitError(Status(SUCCESS)));
 }
 
-TEST(SandboxdExecutorTest, MaxWaitFailureKeepsRecoveredPortsUntilSandboxDelete)
+TEST(SandboxdExecutorTest, SandboxReclaimBackoffIsExponentialAndCapped)
+{
+    EXPECT_EQ(SandboxdExecutor::SandboxReclaimBackoffMs(1), 1000u);
+    EXPECT_EQ(SandboxdExecutor::SandboxReclaimBackoffMs(2), 2000u);
+    EXPECT_EQ(SandboxdExecutor::SandboxReclaimBackoffMs(6), 32000u);
+    EXPECT_EQ(SandboxdExecutor::SandboxReclaimBackoffMs(7), 60000u);
+    EXPECT_EQ(SandboxdExecutor::SandboxReclaimBackoffMs(100), 60000u);
+}
+
+TEST(SandboxdExecutorTest, FailedLocalReclaimKeepsRecoveredPortsUntilDeleteSucceeds)
 {
     struct PortManagerReset {
         ~PortManagerReset()
@@ -127,13 +136,27 @@ TEST(SandboxdExecutorTest, MaxWaitFailureKeepsRecoveredPortsUntilSandboxDelete)
     EXPECT_EQ(executor.stateManager_.GetSandboxID(runtimeID), sandboxID);
     ASSERT_EQ(executor.sandboxLifecycleStates_.count(runtimeID), 1u);
     EXPECT_EQ(executor.sandboxLifecycleStates_.at(runtimeID), SandboxdExecutor::SandboxLifecycleStatus::ABNORMAL);
+    ASSERT_EQ(executor.sandboxReclaims_.count(runtimeID), 1u);
     EXPECT_TRUE(portManager.ReservePorts("other-runtime", {firstPort}).IsError());
     EXPECT_TRUE(portManager.ReservePorts("other-runtime", {firstPort + 1}).IsError());
 
-    runtime::v1::DeleteResponse response;
-    ASSERT_TRUE(executor.OnDeleteDone(runtimeID, "delete-request", sandboxID, response).Get().IsOk());
+    auto failedDelete = executor.OnReclaimSandboxDone(
+        runtimeID, sandboxID, "delete-request",
+        litebus::Try<runtime::v1::DeleteResponse>(static_cast<int32_t>(GRPC_UNAVAILABLE)));
+    ASSERT_TRUE(failedDelete.Get().IsError());
+    ASSERT_EQ(executor.sandboxReclaims_.count(runtimeID), 1u);
+    EXPECT_EQ(executor.sandboxReclaims_.at(runtimeID).failedAttempts, 1u);
+    EXPECT_TRUE(executor.stateManager_.IsActive(runtimeID));
+    EXPECT_TRUE(portManager.ReservePorts("other-runtime", {firstPort}).IsError());
+    EXPECT_TRUE(portManager.ReservePorts("other-runtime", {firstPort + 1}).IsError());
+
+    auto successfulDelete = executor.OnReclaimSandboxDone(
+        runtimeID, sandboxID, "delete-request",
+        litebus::Try<runtime::v1::DeleteResponse>(runtime::v1::DeleteResponse{}));
+    ASSERT_TRUE(successfulDelete.Get().IsOk());
     EXPECT_FALSE(executor.stateManager_.IsActive(runtimeID));
     EXPECT_EQ(executor.sandboxLifecycleStates_.count(runtimeID), 0u);
+    EXPECT_EQ(executor.sandboxReclaims_.count(runtimeID), 0u);
     EXPECT_TRUE(portManager.GetPort(runtimeID).empty());
     EXPECT_EQ(portManager.RequestPorts("next-runtime", 2), (std::vector<int>{firstPort, firstPort + 1}));
 }
