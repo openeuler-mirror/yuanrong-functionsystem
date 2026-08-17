@@ -36,9 +36,6 @@ service FrontendProxyService {
   rpc InvokeInstanceStream (InvokeInstanceRequest) returns (stream InvokeInstanceStreamResponse) {}
   rpc CreateInstance (CreateInstanceRequest) returns (CreateInstanceResponse) {}
   rpc KillInstance (KillInstanceRequest) returns (KillInstanceResponse) {}
-  rpc UploadFile (stream FileChunk) returns (FileTransferResponse) {}
-  rpc DownloadFile (FileTransferRequest) returns (stream FileChunk) {}
-  rpc ListFile (FileListRequest) returns (FileListResponse) {}
 }
 
 message FrontendRequestContext {
@@ -119,49 +116,4 @@ message KillInstanceRequest {
 message KillInstanceResponse {
   FrontendProxyStatus status = 1;
   core_service.KillResponse kill = 2;
-}
-
-// FileChunk 表示文件传输的一个数据块
-message FileChunk {
-  FrontendRequestContext context = 1;
-  string instanceID = 2;
-  string path = 3;
-  int64 offset = 4;
-  bytes data = 5;
-  bool isLast = 6;
-  // permissions is an optional octal permission string (e.g. "600", "755")
-  // carried in the first chunk. When non-empty, the runtime applies
-  // os.chmod(path, int(permissions, 8)) after the file is fully written.
-  string permissions = 7;
-}
-
-// FileTransferRequest 表示文件传输请求（用于下载）
-message FileTransferRequest {
-  FrontendRequestContext context = 1;
-  string instanceID = 2;
-  string path = 3;
-  int64 offset = 4;
-  int64 chunkSize = 5;
-}
-
-// FileTransferResponse 表示文件传输响应（用于上传完成后的响应）
-message FileTransferResponse {
-  FrontendProxyStatus status = 1;
-  string path = 2;
-  int64 size = 3;
-}
-
-// FileListRequest 表示文件目录树查询请求
-message FileListRequest {
-  FrontendRequestContext context = 1;
-  string instanceID = 2;
-  string path = 3;
-  bool recursive = 4;
-  int32 maxDepth = 5;
-}
-
-// FileListResponse 表示文件目录树查询响应
-message FileListResponse {
-  FrontendProxyStatus status = 1;
-  string items_json = 2;
 }
