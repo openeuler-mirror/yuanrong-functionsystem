@@ -152,6 +152,17 @@ class BazelCacheConfigTest(unittest.TestCase):
         self.assertFalse(any("LD_PRELOAD" in flag for flag in default_flags))
         self.assertIn(f"--test_env=LD_PRELOAD={brpc_library}", local_flags)
 
+    def test_test_environment_includes_datasystem_sdk_libraries(self):
+        with tempfile.TemporaryDirectory() as root_dir:
+            datasystem_lib = os.path.join(
+                root_dir, "vendor", "output", "Install", "datasystem", "sdk", "cpp", "lib"
+            )
+            os.makedirs(datasystem_lib)
+
+            flags = build_bazel.bazel_test_env_flags(root_dir)
+
+        self.assertIn(f"--test_env=LD_LIBRARY_PATH={datasystem_lib}", flags)
+
 
 if __name__ == "__main__":
     unittest.main()
