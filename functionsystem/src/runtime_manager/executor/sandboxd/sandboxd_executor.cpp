@@ -1582,8 +1582,13 @@ litebus::Future<Status> SandboxdExecutor::CleanupSandboxAfterMaxRetries(const st
 
     ReportSandboxLifecycleStatus(info->instanceInfo, runtimeID, SandboxLifecycleStatus::ABNORMAL);
     ClearSandboxMetricsState(runtimeID);
-    sandboxLifecycleStates_.erase(runtimeID);
-    stateManager_.Unregister(runtimeID);
+
+    // Keep runtime-to-sandbox ownership until the control-plane reclaim reaches
+    // StopInstance. OnDeleteDone releases every restored forwarding port and
+    // unregisters the runtime after sandboxd has processed the delete request;
+    // it also clears the ABNORMAL lifecycle marker kept above. Dropping either
+    // state here makes StopInstance lose the sandbox ID or report COMPLETED for
+    // this failed sandbox, while leaving multi-port reservations behind.
 
     return healthCheckClient_->NotifySandboxExit(instanceID, runtimeID, -1, msg, requestID);
 }
