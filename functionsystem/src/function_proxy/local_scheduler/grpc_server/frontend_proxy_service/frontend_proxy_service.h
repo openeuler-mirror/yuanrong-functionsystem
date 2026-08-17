@@ -162,7 +162,8 @@ private:
                                             const std::string &uploadId = "",
                                             bool isLast = false,
                                             bool recursive = false,
-                                            int32_t maxDepth = 0);
+                                            int32_t maxDepth = 0,
+                                            const std::string &permissions = "");
 
     FrontendProxyServiceParam param_;
 };

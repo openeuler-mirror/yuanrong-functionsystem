@@ -508,7 +508,8 @@ std::string BuildFileInvokeRequestJSON(const std::string &fileOp, const std::str
                                        const std::string &uploadId = "",
                                        bool isLast = false,
                                        bool recursive = false,
-                                       int32_t maxDepth = 0)
+                                       int32_t maxDepth = 0,
+                                       const std::string &permissions = "")
 {
     nlohmann::json body = nlohmann::json::object();
     body["file_op"] = fileOp;
@@ -536,6 +537,9 @@ std::string BuildFileInvokeRequestJSON(const std::string &fileOp, const std::str
     }
     if (maxDepth > 0) {
         body["max_depth"] = maxDepth;
+    }
+    if (!permissions.empty()) {
+        body["permissions"] = permissions;
     }
     nlohmann::json argsJson = nlohmann::json::object();
     argsJson["body"] = body;
@@ -571,10 +575,11 @@ std::string BuildFileInvokeRequestPayload(const std::string &fileOp, const std::
                                           const std::string &uploadId = "",
                                           bool isLast = false,
                                           bool recursive = false,
-                                          int32_t maxDepth = 0)
+                                          int32_t maxDepth = 0,
+                                          const std::string &permissions = "")
 {
     const auto jsonBody = BuildFileInvokeRequestJSON(fileOp, path, mode, dataB64, offset, length,
-                                                     uploadId, isLast, recursive, maxDepth);
+                                                     uploadId, isLast, recursive, maxDepth, permissions);
     return FRONTEND_FILE_FAAS_META_PREFIX + jsonBody;
 }
 
@@ -1162,7 +1167,8 @@ SharedStreamMsg FrontendProxyService::CreateFileInvokeRequest(const std::string 
                                                               const std::string &uploadId,
                                                               bool isLast,
                                                               bool recursive,
-                                                              int32_t maxDepth)
+                                                              int32_t maxDepth,
+                                                              const std::string &permissions)
 {
     auto invoke = std::make_shared<runtime_rpc::StreamingMessage>();
     auto invokeReq = invoke->mutable_invokereq();
@@ -1188,7 +1194,7 @@ SharedStreamMsg FrontendProxyService::CreateFileInvokeRequest(const std::string 
     // ParseRequest skips args[0] (MetaData), so rawArgs = [args[1], args[2]].
     // faas_call_handler reads event from posix_args[1] = rawArgs[1] = args[2].
     const auto payload = BuildFileInvokeRequestPayload(fileOp, path, mode, data, offset, length,
-                                                       uploadId, isLast, recursive, maxDepth);
+                                                       uploadId, isLast, recursive, maxDepth, permissions);
     auto bodyArg = invokeReq->add_args();
     bodyArg->set_type(::common::Arg_ArgType_VALUE);
     bodyArg->set_value(payload);
@@ -1212,11 +1218,13 @@ SharedStreamMsg FrontendProxyService::CreateFileInvokeRequest(const std::string 
     int64_t totalSize = 0;
     std::string path;
     std::string instanceID;
+    std::string permissions;
     const std::string uploadId = litebus::uuid_generator::UUID::GetRandomUUID().ToString();
     while (reader->Read(&chunk)) {
         if (firstChunk) {
             instanceID = chunk.instanceid();
             path = chunk.path();
+            permissions = chunk.permissions();
             if (!ValidateFileChunkContext(chunk.context(), instanceID)) {
                 SetStatus(response->mutable_status(), common::ERR_PARAM_INVALID,
                           "frontend proxy file upload requires context.frontendClientID, context.requestID, "
@@ -1241,7 +1249,8 @@ SharedStreamMsg FrontendProxyService::CreateFileInvokeRequest(const std::string 
         const std::string effectiveMode = (totalSize == dataSize) ? "wb" : "ab";
         const bool isLast = chunk.islast();
         auto invokeRequest = CreateFileInvokeRequest(instanceID, path, "file_write", effectiveMode,
-                                                     dataB64, 0, 0, uploadId, isLast);
+                                                     dataB64, 0, 0, uploadId, isLast,
+                                                     false, 0, permissions);
         const auto requestID = invokeRequest->invokereq().requestid();
         bool cancelled = false;
         std::string errorMsg;
