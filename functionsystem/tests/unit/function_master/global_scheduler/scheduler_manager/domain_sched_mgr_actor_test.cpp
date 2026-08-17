@@ -304,11 +304,14 @@ TEST_F(DomainSchedMgrActorTest, GetSchedulingQueue)
 
     auto req = std::make_shared<messages::QuerySchedulingQueueRequest>();
     req->set_requestid("request");
-    EXPECT_CALL(*scheduler.get(), MockGetSchedulingQueue(testing::_, testing::_, testing::_)).Times(1);
+    litebus::Future<std::string> receivedRequest;
+    EXPECT_CALL(*scheduler.get(), MockGetSchedulingQueue(testing::_, testing::_, testing::_))
+        .WillOnce(testing::DoAll(FutureArg<2>(&receivedRequest)));
 
     auto future = litebus::Async(actor->GetAID(), &DomainSchedMgrActor::GetSchedulingQueue, "MockDomainScheduler",
                                  scheduler->GetAID().Url(), req);
 
+    ASSERT_AWAIT_READY(receivedRequest);
     scheduler->ResponseGetSchedulingQueue(actor->GetAID(), "");
     messages::QuerySchedulingQueueResponse rsp;
     rsp.set_requestid("request");

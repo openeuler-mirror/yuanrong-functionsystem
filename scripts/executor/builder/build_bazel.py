@@ -642,6 +642,7 @@ def build_gtest_bazel(
 def bazel_test_env_flags(root_dir: str, cache_config=None):
     lib_dirs = [
         os.path.join(root_dir, "functionsystem", "output", "lib"),
+        os.path.join(root_dir, "vendor", "output", "Install", "datasystem", "sdk", "cpp", "lib"),
         os.path.join(root_dir, "common", "logs", "output", "lib"),
         os.path.join(root_dir, "common", "litebus", "output", "lib"),
         os.path.join(root_dir, "common", "metrics", "output", "lib"),
