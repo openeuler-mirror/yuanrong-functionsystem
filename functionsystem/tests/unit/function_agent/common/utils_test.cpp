@@ -561,7 +561,10 @@ TEST_F(FunctionAgentUtilsTest, AddDefaultEnvWithDELEGATE_ENV_VAR)
     (*deployInstanceRequest2->mutable_createoptions())["DELEGATE_ENV_VAR"] = R"({"LD_LIBRARY_PATH":"${LD_LIBRARY_PATH}:${FUNCTION_LIB_PATH}/depend")";
     messages::RuntimeConfig runtimeConf2;
     functionsystem::function_agent::AddDefaultEnv(deployInstanceRequest2, runtimeConf2);
-    EXPECT_EQ((*runtimeConf2.mutable_posixenvs()).size(), size_t{5});
+    EXPECT_EQ((*runtimeConf2.mutable_posixenvs()).size(), size_t{3});
+    EXPECT_EQ(runtimeConf2.posixenvs().at("YR_TENANT_ID"), "Test_TenantID");
+    EXPECT_EQ(runtimeConf2.posixenvs().at("YR_DATASYSTEM_DEPLOYED"), "true");
+    EXPECT_EQ(runtimeConf2.posixenvs().at("YR_BYPASS_DATASYSTEM"), "false");
 }
 
 TEST_F(FunctionAgentUtilsTest, ParseDataSystemCapabilityBoolean)
