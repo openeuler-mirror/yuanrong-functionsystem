@@ -96,6 +96,11 @@ public:
         return GetDockerApiPrefix();
     }
 
+    std::string TestBuildShellCmdLine(const std::string &execPath, const runtime::v1::StartRequest &startReq)
+    {
+        return BuildShellCmdLine(execPath, startReq);
+    }
+
     // Set internal state for testing
     void SetRuntimeToContainerID(const std::string &runtimeID, const std::string &containerID)
     {
@@ -459,6 +464,99 @@ TEST_F(DockerExecutorTest, TestConnectDockerSocketFailsWithoutDocker)
     executor_->SetDockerSocketPath("/tmp/nonexistent_docker.sock");
     int fd = executor_->TestConnectDockerSocket();
     EXPECT_LT(fd, 0);  // Should fail since socket doesn't exist
+}
+
+// ---- BuildShellCmdLine (tolerant redirect, issue #93) ----
+
+/**
+ * Feature: BuildShellCmdLine
+ * Description: With non-empty stdout/stderr, the command line wraps the runtime exec in a
+ *              tolerant redirect: a subshell probes whether the redirect target is writable,
+ *              then execs the runtime with the redirect on success or without it on failure.
+ *              argv tokens and redirect paths are POSIX single-quoted (ShellQuote) so user
+ *              content is taken literally; injection payloads must not appear as bare commands.
+ */
+TEST_F(DockerExecutorTest, BuildShellCmdLine_QuotedArgvAndTolerantRedirect)
+{
+    // execPath is the interpreter ("python3"); command holds the args passed to it. BuildContainerCommand
+    // prepends execPath then appends command, so command must NOT repeat execPath (else it appears twice).
+    runtime::v1::StartRequest startReq;
+    startReq.add_command("-c");
+    // Injection payload bundling several shell metacharacter vectors at once: ';', command
+    // substitution $(...), backticks, '&&', '||', and a newline. ShellQuote must wrap the whole
+    // token in single quotes and escape every internal single quote via '\'' so sh -c takes it as
+    // one literal argv element with no metacharacter interpretation.
+    startReq.add_command("print('hello; rm -rf /') $(pwn) `bad` && steal || die\nnewline");
+    startReq.set_stdout("/tmp/log dir/a'b.out");   // space + single quote in path
+    startReq.set_stderr("/tmp/log dir/a'b.err");
+
+    std::string cmdLine = executor_->TestBuildShellCmdLine("python3", startReq);
+
+    // Tolerant redirect skeleton, closed with ; fi.
+    EXPECT_THAT(cmdLine, testing::StartsWith("if ( >"));
+    EXPECT_THAT(cmdLine, testing::HasSubstr(") 2>/dev/null; then exec "));
+    EXPECT_THAT(cmdLine, testing::HasSubstr("; else exec "));
+    EXPECT_THAT(cmdLine, testing::EndsWith("; fi"));
+
+    // argv tokens quoted verbatim, execPath appears once (not duplicated by command).
+    EXPECT_THAT(cmdLine, testing::HasSubstr("'python3'"));
+    EXPECT_THAT(cmdLine, testing::HasSubstr("'-c'"));
+    // single quote inside payload escaped via '\'' rather than closing the wrapper.
+    EXPECT_THAT(cmdLine, testing::HasSubstr("'print('\\''hello"));
+    EXPECT_THAT(cmdLine, testing::HasSubstr("; rm -rf /'\\''"));
+    // redirect paths quoted too (space + single quote survived).
+    EXPECT_THAT(cmdLine, testing::HasSubstr(">'/tmp/log dir/a'\\''b.out'"));
+    EXPECT_THAT(cmdLine, testing::HasSubstr("2>'/tmp/log dir/a'\\''b.err'"));
+    // The ';' vector's bare sequence "; rm -rf /')" (the ' sitting right before ')' in the payload)
+    // is broken by the '\'' insertion, so the unescaped form must NOT appear.
+    EXPECT_THAT(cmdLine, testing::Not(testing::HasSubstr("; rm -rf /')")));
+    // The other vectors ($(), ``, &&, ||, newline) sit inside the payload without an adjacent single
+    // quote, so ShellQuote leaves them byte-for-byte literal inside the wrapping quotes — proving
+    // they are quoted (not interpreted) is showing they still exist as substrings.
+    EXPECT_THAT(cmdLine, testing::HasSubstr("$(pwn)"));
+    EXPECT_THAT(cmdLine, testing::HasSubstr("`bad`"));
+    EXPECT_THAT(cmdLine, testing::HasSubstr("&& steal"));
+    EXPECT_THAT(cmdLine, testing::HasSubstr("|| die"));
+    EXPECT_THAT(cmdLine, testing::HasSubstr("die\nnewline"));
+}
+
+/**
+ * Feature: BuildShellCmdLine
+ * Description: Empty stdout or stderr (log dir preparation failed) skips the redirect entirely;
+ *              the line is just `exec <quoted argv>` so sh -c never fails on >''.
+ */
+TEST_F(DockerExecutorTest, BuildShellCmdLine_EmptyPathsSkipsRedirect)
+{
+    runtime::v1::StartRequest startReq;
+    startReq.add_command("-m");
+    startReq.add_command("http.server");
+    // both paths empty
+    std::string cmdLine = executor_->TestBuildShellCmdLine("python3", startReq);
+
+    EXPECT_EQ(cmdLine, "exec 'python3' '-m' 'http.server'");
+    EXPECT_THAT(cmdLine, testing::Not(testing::HasSubstr("if (")));
+    EXPECT_THAT(cmdLine, testing::Not(testing::HasSubstr(" >")));
+    EXPECT_THAT(cmdLine, testing::Not(testing::HasSubstr(" 2>")));
+}
+
+/**
+ * Feature: BuildShellCmdLine
+ * Description: Empty argv (no execPath, no command) still yields a syntactically closed shell line:
+ *              tolerant skeleton with then/else branches both present and ; fi at the tail.
+ */
+TEST_F(DockerExecutorTest, BuildShellCmdLine_EmptyArgv)
+{
+    runtime::v1::StartRequest startReq;
+    startReq.set_stdout("/tmp/out.log");
+    startReq.set_stderr("/tmp/err.log");
+    std::string cmdLine = executor_->TestBuildShellCmdLine("", startReq);
+
+    // Tolerant skeleton fully closed: then-branch (exec with redirect), else-branch (bare exec), ; fi tail.
+    EXPECT_THAT(cmdLine, testing::StartsWith("if ( >"));
+    EXPECT_THAT(cmdLine, testing::HasSubstr("then exec  >"));   // empty argv: exec followed by the redirect
+    EXPECT_THAT(cmdLine, testing::HasSubstr(" 2>'/tmp/err.log'"));
+    EXPECT_THAT(cmdLine, testing::HasSubstr("; else exec ;"));  // else branch present and closed
+    EXPECT_THAT(cmdLine, testing::EndsWith("; fi"));
 }
 
 }  // namespace functionsystem::runtime_manager

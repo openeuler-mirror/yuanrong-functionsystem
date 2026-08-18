@@ -101,6 +101,12 @@ private:
     static std::vector<std::string> BuildContainerCommand(const std::string &execPath,
         const runtime::v1::StartRequest &startReq);
 
+    // Build the "sh -c" argument string. Tolerant redirect: probe redirect targets in a
+    // subshell; on open failure exec the runtime with inherited stdout/stderr so startup
+    // never blocks. Empty paths skip redirect (avoids sh ENOENT on >'').
+    static std::string BuildShellCmdLine(const std::string &execPath,
+        const runtime::v1::StartRequest &startReq);
+
     litebus::Future<messages::StartInstanceResponse> StartRuntime(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &language, const Envs &envs,
         const std::vector<std::string> &args, const std::string &port);

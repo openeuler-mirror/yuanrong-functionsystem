@@ -1033,6 +1033,32 @@ std::vector<std::string> DockerExecutor::BuildContainerCommand(const std::string
     return command;
 }
 
+std::string DockerExecutor::BuildShellCmdLine(const std::string &execPath,
+    const runtime::v1::StartRequest &startReq)
+{
+    auto argv = BuildContainerCommand(execPath, startReq);
+    std::string quotedArgv;
+    for (size_t i = 0; i < argv.size(); ++i) {
+        if (i > 0) {
+            quotedArgv += " ";
+        }
+        quotedArgv += ShellQuote(argv[i]);
+    }
+
+    // Skip redirect when stdout/stderr is empty (log dir preparation failed): >'' / 2>''
+    // would make sh -c fail with ENOENT.
+    if (startReq.stdout().empty() || startReq.stderr().empty()) {
+        return "exec " + quotedArgv;
+    }
+
+    // Tolerant redirect: subshell ( >OUT ) probes whether the redirect target is writable; on
+    // open failure the yr_runtime_main execs with inherited stdout/stderr so startup is never blocked.
+    // Paths stay ShellQuote-wrapped, no injection.
+    return "if ( >" + ShellQuote(startReq.stdout()) + " ) 2>/dev/null; then exec " + quotedArgv + " >"
+        + ShellQuote(startReq.stdout()) + " 2>" + ShellQuote(startReq.stderr()) + "; else exec "
+        + quotedArgv + "; fi";
+}
+
 std::string DockerExecutor::ParseCreateContainerResponse(const nlohmann::json &resp, const std::string &runtimeID)
 {
     if (!resp.contains("__http_status")) {
@@ -1095,24 +1121,12 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartRuntime(
         return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_PORT_UNAVAILABLE);
     }
 
-    // Build the Docker Cmd as ["sh","-c","<quotedArgs> >stdout 2>stderr"]: every argv token and the
-    // redirect paths are POSIX single-quoted (ShellQuote) so user content in command() (e.g. python -c
-    // "...") is taken literally with no shell injection. Redirecting stdout/stderr to per-runtime host
-    // files (set by SetRequestEnvsAndLogsForStart, on the mounted log dir) makes yr runtime output and
-    // startup tracebacks land on the host instead of the daemon's json-file. Mirrors supervisor_executor.
-    auto argv = BuildContainerCommand(execPath, startReq);
-    std::string cmdLine;
-    for (size_t i = 0; i < argv.size(); ++i) {
-        if (i > 0) {
-            cmdLine += " ";
-        }
-        cmdLine += ShellQuote(argv[i]);
-    }
-    // stdout()/stderr() 为空（ConfigRuntimeRedirectLog 创建日志目录失败所致）时跳过重定向，
-    // 否则 >'' / 2>'' 会让 sh -c 因 ENOENT 失败、容器启动即失败。此时容器运行日志无法重定向到宿主机。
-    if (!startReq.stdout().empty() && !startReq.stderr().empty()) {
-        cmdLine += " >" + ShellQuote(startReq.stdout()) + " 2>" + ShellQuote(startReq.stderr());
-    } else {
+    // Docker Cmd = ["sh","-c",cmdLine]. BuildShellCmdLine wraps every argv token and redirect path
+    // in POSIX single-quotes (ShellQuote) so user content in command() is taken literally. Redirect
+    // target writability is probed inside the container's sh; on failure the runtime execs with
+    // inherited stdout/stderr so startup is never blocked by a redirect open failure.
+    std::string cmdLine = BuildShellCmdLine(execPath, startReq);
+    if (startReq.stdout().empty() || startReq.stderr().empty()) {
         YRLOG_WARN("{}|stdout/stderr path empty, container runtime logs cannot redirect to host",
                    runtimeID);
     }
