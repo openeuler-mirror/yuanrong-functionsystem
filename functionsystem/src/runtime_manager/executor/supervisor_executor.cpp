@@ -378,9 +378,11 @@ bool SupervisorExecutor::IsReadonlyMount(const nlohmann::json &mount)
     const auto &s = it->get_ref<const std::string &>();
     return s == "true" || s == "1";
 }
+
 nlohmann::json SupervisorExecutor::ParseBindMounts(const std::string &rootfsJson, const std::string &runtimeID)
 {
     nlohmann::json bindMounts = nlohmann::json::array();
+    BindHostLogDir(runtimeID, bindMounts);
     if (rootfsJson.empty()) {
         return bindMounts;
     }
@@ -444,6 +446,22 @@ nlohmann::json SupervisorExecutor::BuildCgroup(const messages::RuntimeInstanceIn
         }
     }
     return cgroup;
+}
+
+void SupervisorExecutor::BindHostLogDir(const std::string &runtimeID, nlohmann::json &bindMounts)
+{
+    const std::string hostLogDir = litebus::os::Join(config_.runtimeLogPath, config_.runtimeStdLogDir);
+    if (!hostLogDir.empty() && IsSafeBindSource(hostLogDir) && litebus::os::ExistPath(hostLogDir)) {
+        bindMounts.push_back({
+            { "host_path", hostLogDir },
+            { "sandbox_path", hostLogDir },
+            { "mode", "rw" },
+        });
+        return;
+    }
+
+    YRLOG_WARN("{}|skip log dir mount (path={}, safe={}, exists={}); yr logs may stay in-sandbox", runtimeID,
+               hostLogDir, IsSafeBindSource(hostLogDir), litebus::os::ExistPath(hostLogDir));
 }
 
 nlohmann::json SupervisorExecutor::CreateRequest(const std::shared_ptr<messages::StartInstanceRequest> &request)
