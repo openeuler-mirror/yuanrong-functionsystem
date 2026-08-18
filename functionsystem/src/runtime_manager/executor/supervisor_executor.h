@@ -107,13 +107,22 @@ private:
     nlohmann::json BuildCgroup(const messages::RuntimeInstanceInfo &info);
     void BindHostLogDir(const std::string &runtimeID, nlohmann::json &bindMounts);
 
-    litebus::Future<std::string> CreateSandbox(const std::shared_ptr<messages::StartInstanceRequest> &request);
+    litebus::Future<runtime::v1::StartResponse> CreateSandbox(
+        const std::shared_ptr<messages::StartInstanceRequest> &request);
     nlohmann::json BuildCommand(const ::std::shared_ptr<runtime::v1::StartRequest> &start);
+    nlohmann::json BuildExecRequest(const std::string &runtimeID,
+                                    const ::std::shared_ptr<runtime::v1::StartRequest> &start,
+                                    const std::string &sandboxId);
     litebus::Future<runtime::v1::DeleteResponse> DoDeleteSandbox(
         const std::shared_ptr<runtime::v1::DeleteRequest> &req);
 
-    void CleanupSandboxAfterExecFailure(const std::string &runtimeID, const std::string &sandboxId,
-                                        litebus::Promise<runtime::v1::StartResponse> promise);
+    void CleanupSandboxAfterFailure(const std::string &runtimeID, const std::string &sandboxId,
+                                    bool cleanMappings = false);
+
+    // Erase the runtime's local runtime->sandbox mappings (ID/IP/port). Centralizes the erase
+    // previously duplicated across CleanupSandboxAfterExecFailure / StopInstance. Does NOT touch
+    // runtimeInstanceInfoMap_ (unchanged from prior per-site behavior).
+    void CleanupRuntimeMappings(const std::string &runtimeID);
 
     litebus::Future<runtime::v1::StartResponse> ExecInSandbox(const std::string &runtimeID,
                                                               const ::std::shared_ptr<runtime::v1::StartRequest> &start,
