@@ -36,6 +36,7 @@ import (
 	"meta_service/common/constants"
 	common "meta_service/common/constants"
 	"meta_service/common/snerror"
+	"meta_service/common/types"
 	"meta_service/function_repo/errmsg"
 	"meta_service/function_repo/model"
 	"meta_service/function_repo/pkgstore"
@@ -1135,4 +1136,131 @@ func Test_deletePackage(t *testing.T) {
 			So(err, ShouldNotBeNil)
 		})
 	})
+}
+
+// Test_ValidateRootfsSpec covers the documented rules of ValidateRootfsSpec:
+// nil pass, all-empty pass, runtime defaulting, path<->local, imageurl<->image,
+// s3 trio requirement, storageInfo scope, invalid type, mounts non-empty.
+// Guards issue #88: this validator had zero test coverage.
+func TestValidateRootfsSpec(t *testing.T) {
+	t.Run("nil", testValidateRootfsNil)
+	t.Run("empty", testValidateRootfsEmpty)
+	t.Run("runtime_default", testValidateRootfsRuntimeDefault)
+	t.Run("path_local", testValidateRootfsPathLocal)
+	t.Run("imageurl_image", testValidateRootfsImageURLImage)
+	t.Run("s3", testValidateRootfsS3)
+	t.Run("storageInfo_scope", testValidateRootfsStorageInfoScope)
+	t.Run("invalid_type", testValidateRootfsInvalidType)
+	t.Run("mounts", testValidateRootfsMounts)
+}
+
+func testValidateRootfsNil(t *testing.T) {
+	assert.Nil(t, ValidateRootfsSpec(nil))
+}
+
+func testValidateRootfsEmpty(t *testing.T) {
+	r := types.RootfsSpecMeta{}
+	assert.Nil(t, ValidateRootfsSpec(&r))
+	assert.Equal(t, "", r.Runtime) // no default when fully empty
+}
+
+func testValidateRootfsRuntimeDefault(t *testing.T) {
+	r := types.RootfsSpecMeta{Type: "image", ImageURL: "img:1"}
+	assert.Nil(t, ValidateRootfsSpec(&r))
+	assert.Equal(t, "runsc", r.Runtime)
+}
+
+// Rule 2: path <-> type=local
+func testValidateRootfsPathLocal(t *testing.T) {
+	t.Run("path set but type not local fails", func(t *testing.T) {
+		r := types.RootfsSpecMeta{Path: "/h", Runtime: "runsc"}
+		assert.NotNil(t, ValidateRootfsSpec(&r))
+	})
+	t.Run("type local but path empty fails", func(t *testing.T) {
+		r := types.RootfsSpecMeta{Type: "local", Runtime: "runsc"}
+		assert.NotNil(t, ValidateRootfsSpec(&r))
+	})
+	t.Run("type local with path passes", func(t *testing.T) {
+		r := types.RootfsSpecMeta{Type: "local", Path: "/h", Runtime: "runsc"}
+		assert.Nil(t, ValidateRootfsSpec(&r))
+	})
+}
+
+// Rule 3: imageurl <-> type=image
+func testValidateRootfsImageURLImage(t *testing.T) {
+	t.Run("imageurl set but type not image fails", func(t *testing.T) {
+		r := types.RootfsSpecMeta{ImageURL: "img:1", Runtime: "runsc"}
+		assert.NotNil(t, ValidateRootfsSpec(&r))
+	})
+	t.Run("type image but imageurl empty fails", func(t *testing.T) {
+		r := types.RootfsSpecMeta{Type: "image", Runtime: "runsc"}
+		assert.NotNil(t, ValidateRootfsSpec(&r))
+	})
+	t.Run("type image with imageurl passes", func(t *testing.T) {
+		r := types.RootfsSpecMeta{Type: "image", ImageURL: "img:1", Runtime: "runsc"}
+		assert.Nil(t, ValidateRootfsSpec(&r))
+	})
+}
+
+// Rule 4: s3 requires endpoint+bucket+object
+func testValidateRootfsS3(t *testing.T) {
+	t.Run("missing endpoint fails", func(t *testing.T) {
+		r := types.RootfsSpecMeta{
+			Type: "s3", Runtime: "runsc",
+			StorageInfo: types.RootfsStorageInfo{Bucket: "b", Object: "o"},
+		}
+		assert.NotNil(t, ValidateRootfsSpec(&r))
+	})
+	t.Run("missing bucket fails", func(t *testing.T) {
+		r := types.RootfsSpecMeta{
+			Type: "s3", Runtime: "runsc",
+			StorageInfo: types.RootfsStorageInfo{Endpoint: "e", Object: "o"},
+		}
+		assert.NotNil(t, ValidateRootfsSpec(&r))
+	})
+	t.Run("missing object fails", func(t *testing.T) {
+		r := types.RootfsSpecMeta{
+			Type: "s3", Runtime: "runsc",
+			StorageInfo: types.RootfsStorageInfo{Endpoint: "e", Bucket: "b"},
+		}
+		assert.NotNil(t, ValidateRootfsSpec(&r))
+	})
+	t.Run("full storageInfo passes", func(t *testing.T) {
+		r := types.RootfsSpecMeta{
+			Type: "s3", Runtime: "runsc",
+			StorageInfo: types.RootfsStorageInfo{
+				Endpoint: "e", Bucket: "b", Object: "o", AccessKey: "ak", SecretKey: "sk",
+			},
+		}
+		assert.Nil(t, ValidateRootfsSpec(&r))
+	})
+}
+
+func testValidateRootfsStorageInfoScope(t *testing.T) {
+	r := types.RootfsSpecMeta{
+		Type: "image", ImageURL: "img:1", Runtime: "runsc",
+		StorageInfo: types.RootfsStorageInfo{Endpoint: "e"},
+	}
+	err := ValidateRootfsSpec(&r)
+	// Assert on the error code, not the message text: NewParamError wraps the
+	// raw message with a user-facing suggestion via userMessage, so the .Error()
+	// string couples to localizable copy. Pinning the code keeps this test
+	// stable across wording changes and still pins the failing rule (any
+	// NewParamError returns the InvalidUserParam code).
+	assert.NotNil(t, err)
+	assert.Equal(t, errmsg.InvalidUserParam, err.(snerror.SNError).Code())
+}
+
+func testValidateRootfsInvalidType(t *testing.T) {
+	r := types.RootfsSpecMeta{Type: "foo", Runtime: "runsc"}
+	assert.NotNil(t, ValidateRootfsSpec(&r))
+}
+
+func testValidateRootfsMounts(t *testing.T) {
+	r := types.RootfsSpecMeta{
+		Mounts: []types.RootfsMount{{Source: "/h", Target: "/c"}},
+	}
+	assert.Nil(t, ValidateRootfsSpec(&r))
+	assert.Equal(t, "runsc", r.Runtime)
+	assert.Len(t, r.Mounts, 1)
 }

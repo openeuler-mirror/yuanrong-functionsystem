@@ -422,6 +422,7 @@ func buildRootFsSpecMeta(rootfs types.RootfsSpecMeta) metadata.RootfsSpecMeta {
 		ImageURL: rootfs.ImageURL,
 		User:     rootfs.User,
 		Ports:    rootfs.Ports,
+		Path:     rootfs.Path,
 		ReadOnly: rootfs.ReadOnly,
 		StorageInfo: metadata.RootfsStorageInfo{
 			Endpoint:  rootfs.StorageInfo.Endpoint,

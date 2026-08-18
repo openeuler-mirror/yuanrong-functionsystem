@@ -34,6 +34,7 @@ import (
 	"meta_service/common/crypto"
 	"meta_service/common/engine"
 	"meta_service/common/metadata"
+	"meta_service/common/types"
 
 	codec2 "meta_service/common/codec"
 
@@ -351,5 +352,86 @@ func TestCreateAliasEtcd2(t *testing.T) {
 			err := CreateAliasEtcd(txn, "mock-fun", AliasEtcd{})
 			So(err, ShouldNotBeNil)
 		})
+	})
+}
+
+// TestBuildRootFsSpecMeta asserts every field of types.RootfsSpecMeta is mapped
+// onto metadata.RootfsSpecMeta. One test covers all field copies so a future
+// dropped field fails CI immediately. Guards the bug class behind PR #382
+// (Mounts silently dropped) and issue #88 (Path silently dropped).
+func TestBuildRootFsSpecMeta(t *testing.T) {
+	in := types.RootfsSpecMeta{
+		Runtime:  "runsc",
+		Type:     "local",
+		ImageURL: "img.example/img:1",
+		User:     "root",
+		Ports:    []string{"8080/tcp", "9090/tcp"},
+		Path:     "/host/rootfs",
+		ReadOnly: true,
+		StorageInfo: types.RootfsStorageInfo{
+			Endpoint:  "https://s3.example",
+			Bucket:    "bucket",
+			Object:    "obj",
+			AccessKey: "ak",
+			SecretKey: "sk",
+		},
+		MountPoint: "/mnt/rootfs",
+		Mounts: []types.RootfsMount{
+			{Source: "/host/a", Target: "/a", ReadOnly: true},
+			{Source: "/host/b", Target: "/b", ReadOnly: false},
+		},
+	}
+
+	got := buildRootFsSpecMeta(in)
+
+	want := metadata.RootfsSpecMeta{
+		Runtime:  "runsc",
+		Type:     "local",
+		ImageURL: "img.example/img:1",
+		User:     "root",
+		Ports:    []string{"8080/tcp", "9090/tcp"},
+		Path:     "/host/rootfs",
+		ReadOnly: true,
+		StorageInfo: metadata.RootfsStorageInfo{
+			Endpoint:  "https://s3.example",
+			Bucket:    "bucket",
+			Object:    "obj",
+			AccessKey: "ak",
+			SecretKey: "sk",
+		},
+		MountPoint: "/mnt/rootfs",
+		Mounts: []metadata.RootfsMount{
+			{Source: "/host/a", Target: "/a", ReadOnly: true},
+			{Source: "/host/b", Target: "/b", ReadOnly: false},
+		},
+	}
+	assert.Equal(t, want, got)
+}
+
+// TestBuildRootfsMounts covers empty/single/multi element slices and the
+// ReadOnly flag's two states (true/false). Empty input must return nil so
+// downstream JSON omits the field rather than serializing [].
+func TestBuildRootfsMounts(t *testing.T) {
+	t.Run("empty returns nil", func(t *testing.T) {
+		assert.Nil(t, buildRootfsMounts(nil))
+		assert.Nil(t, buildRootfsMounts([]types.RootfsMount{}))
+	})
+	t.Run("single element", func(t *testing.T) {
+		in := []types.RootfsMount{{Source: "/h", Target: "/c", ReadOnly: true}}
+		got := buildRootfsMounts(in)
+		assert.Equal(t, []metadata.RootfsMount{
+			{Source: "/h", Target: "/c", ReadOnly: true},
+		}, got)
+	})
+	t.Run("multi element preserves order and readonly states", func(t *testing.T) {
+		in := []types.RootfsMount{
+			{Source: "/h1", Target: "/c1", ReadOnly: true},
+			{Source: "/h2", Target: "/c2", ReadOnly: false},
+		}
+		got := buildRootfsMounts(in)
+		assert.Equal(t, []metadata.RootfsMount{
+			{Source: "/h1", Target: "/c1", ReadOnly: true},
+			{Source: "/h2", Target: "/c2", ReadOnly: false},
+		}, got)
 	})
 }
