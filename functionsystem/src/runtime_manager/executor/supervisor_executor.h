@@ -104,6 +104,7 @@ private:
 
     nlohmann::json CreateRequest(const std::shared_ptr<messages::StartInstanceRequest> &request);
     nlohmann::json BuildCgroup(const messages::RuntimeInstanceInfo &info);
+    void BindHostLogDir(const std::string &runtimeID, nlohmann::json &bindMounts);
 
     litebus::Future<std::string> CreateSandbox(const std::shared_ptr<messages::StartInstanceRequest> &request);
     nlohmann::json BuildCommand(const ::std::shared_ptr<runtime::v1::StartRequest> &start);
