@@ -3188,12 +3188,6 @@ InstanceReadyCallResultCallBack InstanceCtrlActor::TakeFrontendReadyCallback(
                iter != instanceReadyCallResultCallbackByInstanceID_.end()) {
         callback = iter->second;
         EraseReadyCallResultCallbackByInstanceID(srcInstance);
-    } else if (!callResult->instanceid().empty()) {
-        if (auto iter = instanceReadyCallResultCallbackByInstanceID_.find(callResult->instanceid());
-            iter != instanceReadyCallResultCallbackByInstanceID_.end()) {
-            callback = iter->second;
-            EraseReadyCallResultCallbackByInstanceID(callResult->instanceid());
-        }
     }
     return callback;
 }

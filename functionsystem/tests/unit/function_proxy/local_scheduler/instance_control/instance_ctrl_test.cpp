@@ -419,6 +419,33 @@ TEST(InstanceCtrlReadyCallResultTest, FrontendReadyCallResultCallbackFallsBackTo
     EXPECT_EQ(observedResult->instanceid(), "frontend-created-instance");
 }
 
+TEST(InstanceCtrlReadyCallResultTest, NestedCreateResultDoesNotConsumeParentFrontendCallback)
+{
+    auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
+    auto scheduleReq = GenScheduleReq(actor);
+    scheduleReq->set_requestid("parent-frontend-create-request");
+    scheduleReq->mutable_instance()->set_instanceid("parent-frontend-instance");
+
+    bool callbackCalled = false;
+    actor->RegisterReadyCallResultCallback(
+        scheduleReq->instance().instanceid(), scheduleReq,
+        [&callbackCalled](const std::shared_ptr<functionsystem::CallResult> &) {
+            callbackCalled = true;
+            return litebus::Future<CallResultAck>(CallResultAck());
+        });
+
+    auto nestedReadyResult = std::make_shared<functionsystem::CallResult>();
+    nestedReadyResult->set_requestid("nested-create-request");
+    nestedReadyResult->set_instanceid(scheduleReq->instance().instanceid());
+    nestedReadyResult->set_code(common::ERR_NONE);
+
+    auto callback = actor->TakeFrontendReadyCallback("nested-created-instance", nestedReadyResult);
+    EXPECT_EQ(callback, nullptr);
+    EXPECT_FALSE(callbackCalled);
+    EXPECT_EQ(actor->instanceRegisteredReadyCallResultCallback_.count(scheduleReq->requestid()), 1);
+    EXPECT_EQ(actor->instanceReadyCallResultCallbackByInstanceID_.count(scheduleReq->instance().instanceid()), 1);
+}
+
 TEST(InstanceCtrlReadyCallResultTest, FrontendReadyResultUsesTicketAsRemoteDestination)
 {
     auto source = std::make_shared<InstanceCtrlActor>("FrontendReadySourceProxy", "source-node", instanceCtrlConfig);
