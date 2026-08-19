@@ -73,9 +73,6 @@ ResourceUnit CollectReportedRemovedResources(const ResourceUnit &current, const 
     return removedResources;
 }
 
-// 静态成员变量定义
-bool ResourceViewActor::enableTenantAffinity_ = true;
-
 ResourceViewActor::ResourceViewActor(const std::string &name, std::string id, const Param &param)
     : BasisActor(name), unitID_(std::move(id)), isLocal_(param.isLocal),
       tenantPodReuseTimeWindow_(param.tenantPodReuseTimeWindow)
@@ -807,7 +804,8 @@ bool ResourceViewActor::IsValidInstances(const std::map<std::string, InstanceAll
 }
 
 void ResourceViewActor::AddLabel(
-    const InstanceInfo &instance, ::google::protobuf::Map<std::string, ValueCounter> &nodeLabels)
+    const InstanceInfo &instance, ::google::protobuf::Map<std::string, ValueCounter> &nodeLabels,
+    bool enableTenantAffinity)
 {
     for (const auto &label : instance.labels()) {
         resources::Value::Counter cnter;
@@ -818,7 +816,7 @@ void ResourceViewActor::AddLabel(
             (void)nodeLabels.insert({ AFFINITY_SCHEDULE_LABELS, cnter });
         }
         auto kv = ToLabelKV(label);
-        if (enableTenantAffinity_ && kv.count(TENANT_ID) != 0) {
+        if (enableTenantAffinity && kv.count(TENANT_ID) != 0) {
             auto tenantKv = nodeLabels.find(TENANT_ID);
             if (tenantKv == nodeLabels.end() ||
                 tenantKv->second.items().count(kv[TENANT_ID].items().begin()->first) == 0) {
@@ -843,10 +841,10 @@ void ResourceViewActor::AddLabels(const InstanceInfo &instance)
 {
     ASSERT_IF_NULL(view_);
     auto nodeLabels = view_->mutable_nodelabels();
-    AddLabel(instance, *nodeLabels);
+    AddLabel(instance, *nodeLabels, enableTenantAffinity_);
     auto fragment = view_->mutable_fragment();
     if (auto iter = fragment->find(instance.unitid()); iter != fragment->end()) {
-        AddLabel(instance, *iter->second.mutable_nodelabels());
+        AddLabel(instance, *iter->second.mutable_nodelabels(), enableTenantAffinity_);
     }
 }
 
@@ -856,7 +854,7 @@ void ResourceViewActor::StoreChange(int64_t revision, const ResourceUnitChange& 
         versionChanges_[revision] = change;
         return;
     }
-    auto mergeChange = MergeResourceUnitChanges(versionChanges_[revision], change);
+    auto mergeChange = MergeResourceUnitChanges(versionChanges_[revision], change, enableTenantAffinity_);
     if (IsResourceUnitChangeEmpty(mergeChange)) {
         versionChanges_.erase(revision);
     } else {
@@ -987,10 +985,11 @@ void ResourceViewActor::AddInstance(const InstanceInfo &instance)
     }
 }
 
-Resources ResourceViewActor::AddInstanceToAgentView(const InstanceInfo &instance, resources::ResourceUnit &unit)
+Resources ResourceViewActor::AddInstanceToAgentView(const InstanceInfo &instance, resources::ResourceUnit &unit,
+                                                    bool enableTenantAffinity)
 {
     auto nodeLabels = unit.mutable_nodelabels();
-    AddLabel(instance, *nodeLabels);
+    AddLabel(instance, *nodeLabels, enableTenantAffinity);
     // while monopolized schedule, the allocatable of selected minimum unit(function agent)
     // should be substracted to zero
     auto substraction = instance.resources();
@@ -1007,7 +1006,7 @@ void ResourceViewActor::AddInstanceToView(const InstanceInfo &instance)
 {
     ASSERT_IF_NULL(view_);
     auto nodeLabels = view_->mutable_nodelabels();
-    AddLabel(instance, *nodeLabels);
+    AddLabel(instance, *nodeLabels, enableTenantAffinity_);
 
     auto agentId = instance.unitid();
     auto agentFragmentIter = view_->mutable_fragment()->find(agentId);
@@ -1016,7 +1015,7 @@ void ResourceViewActor::AddInstanceToView(const InstanceInfo &instance)
         return;
     }
     auto &agentResourceUnit = agentFragmentIter->second;
-    auto substraction = AddInstanceToAgentView(instance, agentResourceUnit);
+    auto substraction = AddInstanceToAgentView(instance, agentResourceUnit, enableTenantAffinity_);
 
     (*view_->mutable_allocatable()) = view_->allocatable() - substraction;
     // add instance to top level resourceunit
@@ -1382,17 +1381,18 @@ void ResourceViewActor::MergeResourceViewChanges(int64_t startRevision, int64_t 
                                                  ResourceUnitChanges &result)
 {
     ASSERT_IF_NULL(view_);
-    MergeResourceViewChanges(versionChanges_, startRevision, endRevision, view_->id(), result);
+    MergeResourceViewChanges(versionChanges_, RevisionRange{startRevision, endRevision}, view_->id(), result,
+                             enableTenantAffinity_);
 }
 
 void ResourceViewActor::MergeResourceViewChanges(const std::map<int64_t, ResourceUnitChange> &changes,
-                                                 int64_t startRevision, int64_t endRevision,
-                                                 const std::string &localId, ResourceUnitChanges &result)
+                                                 const RevisionRange &range, const std::string &localId,
+                                                 ResourceUnitChanges &result, bool enableTenantAffinity)
 {
     std::unordered_map<std::string, ResourceUnitChange> summarizedChanges;
     std::vector<std::string> orderedIds;
-    auto itEnd = changes.upper_bound(endRevision);
-    for (auto it = changes.upper_bound(startRevision); it != itEnd; ++it) {
+    auto itEnd = changes.upper_bound(range.end);
+    for (auto it = changes.upper_bound(range.start); it != itEnd; ++it) {
         const auto& change = it->second;
         const auto& resourceUnitId = change.resourceunitid();
         auto iter = summarizedChanges.find(resourceUnitId);
@@ -1401,7 +1401,7 @@ void ResourceViewActor::MergeResourceViewChanges(const std::map<int64_t, Resourc
             orderedIds.push_back(resourceUnitId);
             continue;
         }
-        auto mergeChange = MergeResourceUnitChanges(iter->second, change);
+        auto mergeChange = MergeResourceUnitChanges(iter->second, change, enableTenantAffinity);
         if (IsResourceUnitChangeEmpty(mergeChange)) {
             summarizedChanges.erase(iter);
             orderedIds.erase(std::remove(orderedIds.begin(), orderedIds.end(), resourceUnitId), orderedIds.end());
@@ -1416,8 +1416,8 @@ void ResourceViewActor::MergeResourceViewChanges(const std::map<int64_t, Resourc
             *result.add_changes() = std::move(it->second);
         }
     }
-    result.set_startrevision(startRevision);
-    result.set_endrevision(endRevision);
+    result.set_startrevision(range.start);
+    result.set_endrevision(range.end);
     result.set_localid(localId);
 }
 
@@ -1436,11 +1436,15 @@ void ResourceViewActor::MergeResourceViewChangesAsync(int64_t startRevision, int
     }
 
     auto selfAid = GetAID();
+    // capture the value on the actor thread, the static merge functions don't rely on any instance state
+    auto enableTenantAffinity = enableTenantAffinity_;
     // 在 Worker 中执行合并，完成后通过 Async 回调到 Actor 线程发送结果
-    asyncWorker_->AsyncWork([changesCopy, startRevision, endRevision, viewInitTime, localId, replyTo, selfAid]() {
+    asyncWorker_->AsyncWork([changesCopy, startRevision, endRevision, viewInitTime, localId, replyTo, selfAid,
+                             enableTenantAffinity]() {
         auto result = std::make_shared<ResourceUnitChanges>() ;
         result->set_localviewinittime(viewInitTime);
-        MergeResourceViewChanges(*changesCopy, startRevision, endRevision, localId, *result);
+        MergeResourceViewChanges(*changesCopy, RevisionRange{startRevision, endRevision}, localId, *result,
+                                 enableTenantAffinity);
         // 回调到 Actor 线程发送结果
         litebus::Async(selfAid, &ResourceViewActor::ToReportResourceViewChanges, replyTo, result);
     });
@@ -1476,7 +1480,8 @@ void ResourceViewActor::MergeCapacityChange(ResourceUnitChange &previous, const 
 }
 
 ResourceUnitChange ResourceViewActor::MergeResourceUnitChanges(ResourceUnitChange &previous,
-                                                               const ResourceUnitChange &current)
+                                                               const ResourceUnitChange &current,
+                                                               bool enableTenantAffinity)
 {
     /**
      * 1.add         + modify       --> add
@@ -1488,7 +1493,7 @@ ResourceUnitChange ResourceViewActor::MergeResourceUnitChanges(ResourceUnitChang
      */
     ASSERT_FS(previous.resourceunitid() == current.resourceunitid());
     if (previous.has_addition() && current.has_modification()) {
-        return MergeAddAndModify(previous, current);
+        return MergeAddAndModify(previous, current, enableTenantAffinity);
     }
 
     if (previous.has_addition() && current.has_deletion()) {
@@ -1503,7 +1508,8 @@ ResourceUnitChange ResourceViewActor::MergeResourceUnitChanges(ResourceUnitChang
     return MergeTwoModifies(previous, current);
 }
 
-ResourceUnitChange ResourceViewActor::MergeAddAndModify(ResourceUnitChange &previous, const ResourceUnitChange &current)
+ResourceUnitChange ResourceViewActor::MergeAddAndModify(ResourceUnitChange &previous, const ResourceUnitChange &current,
+                                                        bool enableTenantAffinity)
 {
     auto previousResourceUnit = previous.mutable_addition()->mutable_resourceunit();
 
@@ -1529,7 +1535,7 @@ ResourceUnitChange ResourceViewActor::MergeAddAndModify(ResourceUnitChange &prev
         auto instance = instanceChange.instance();
 
         if (instanceChange.changetype() == InstanceChange::ADD) {
-            (void)AddInstanceToAgentView(instance, *previousResourceUnit);
+            (void)AddInstanceToAgentView(instance, *previousResourceUnit, enableTenantAffinity);
             UpdateBucketInfoAddInstance(instance, previousResourceUnit->capacity(),
                                         previousResourceUnit->instances_size(), *previousResourceUnit);
         } else if (instanceChange.changetype() == InstanceChange::DELETE) {
@@ -1739,7 +1745,7 @@ Status ResourceViewActor::HandleReportedAddInstacne(const InstanceInfo &instance
         return Status(FAILED);
     }
     (void)AddInstanceToView(instance);
-    AddLabel(instance, allLocalLabels_[ownerid]);
+    AddLabel(instance, allLocalLabels_[ownerid], enableTenantAffinity_);
     MarkResourceUpdated();
     return Status::OK();
 }
