@@ -29,12 +29,18 @@ namespace functionsystem::runtime_manager {
 // Port forward configuration parsed from network JSON.
 struct PortForwardConfig {
     uint32_t containerPort;  // Container port to forward
-    std::string protocol;    // "tcp" or "udp" (lowercase)
+    std::string protocol;    // Port protocol, e.g. "tcp", "udp"
 };
 
 // Parse the list of port forward configs from a network JSON string.
 // Expected format: {"portForwardings": [{"port": 8080, "protocol": "tcp"}, ...]}
 std::vector<PortForwardConfig> ParseForwardPorts(const std::string &networkJson);
+
+// Returns true when portForwardings is a non-empty array that contains any
+// invalid entry (e.g. port out of range, non-unsigned port, or non-string
+// protocol). Callers treat such input as a failure. An empty/absent array
+// returns false.
+bool HasInvalidPortForwardings(const std::string &networkJson);
 
 // Extract the image URL from a rootfs JSON of type "image".
 // Expected format: {"type": "image", "imageurl": "repo/image:tag", ...}
