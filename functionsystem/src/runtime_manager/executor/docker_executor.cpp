@@ -105,6 +105,7 @@ void DockerExecutor::Finalize()
     runtime2portMappings_.clear();
     runtime2containerID_.clear();
     runtimeInstanceInfoMap_.clear();
+    runtime2dockerErr_.clear();
     Executor::Finalize();
 }
 
@@ -691,10 +692,14 @@ litebus::Future<Status> DockerExecutor::StartContainer(const std::string &runtim
                     YRLOG_INFO("{}|container {} started successfully", runtimeID, containerID);
                     return Status::OK();
                 }
+                auto daemonMsg = DockerDaemonMessage(resp);
                 YRLOG_ERROR("{}|Start container {} failed, status={}, msg={}", runtimeID, containerID, status,
-                            DockerDaemonMessage(resp));
-                return Status(StatusCode::ERR_INNER_COMMUNICATION,
-                              fmt::format("failed to start container {}, status {}", containerID, status));
+                            daemonMsg);
+                auto msg = fmt::format("failed to start container {}, status {}", containerID, status);
+                if (!daemonMsg.empty()) {
+                    msg += ", msg " + daemonMsg;
+                }
+                return Status(StatusCode::ERR_INNER_COMMUNICATION, msg);
             }
             // No HTTP status field — check for connect/send failure
             if (resp.contains("__connect_failed") || resp.contains("__send_failed")) {
@@ -763,6 +768,7 @@ void DockerExecutor::CleanupRuntimeState(const std::string &runtimeID)
 {
     runtime2containerID_.erase(runtimeID);
     runtimeInstanceInfoMap_.erase(runtimeID);
+    runtime2dockerErr_.erase(runtimeID);
     auto portIter = runtime2portMappings_.find(runtimeID);
     if (portIter != runtime2portMappings_.end()) {
         PortManager::GetInstance().ReleasePorts(runtimeID);
@@ -1048,12 +1054,14 @@ std::string DockerExecutor::ParseCreateContainerResponse(const nlohmann::json &r
     }
     int status = resp["__http_status"].get<int>();
     if (status >= HTTP_STATUS_CLIENT_ERROR) {
-        YRLOG_ERROR("{}|Create container failed, status={}, msg={}", runtimeID, status,
-                    DockerDaemonMessage(resp));
+        auto daemonMsg = DockerDaemonMessage(resp);
+        YRLOG_ERROR("{}|Create container failed, status={}, msg={}", runtimeID, status, daemonMsg);
+        runtime2dockerErr_[runtimeID] = daemonMsg;
         return "";
     }
     if (resp.contains("__connect_failed") || resp.contains("__send_failed")) {
         YRLOG_ERROR("{}|Docker daemon connection failed during container creation", runtimeID);
+        runtime2dockerErr_[runtimeID] = "Docker daemon connection failed";
         return "";
     }
     if (!resp.contains("Id") || !resp["Id"].is_string()) {
@@ -1162,11 +1170,17 @@ litebus::Future<messages::StartInstanceResponse> DockerExecutor::StartContainerC
             const auto &info = request->runtimeinstanceinfo();
             const auto &runtimeID = info.runtimeid();
             if (containerID.empty()) {
-                YRLOG_ERROR("{}|{}|failed to create Docker container for runtime({})", info.traceid(),
-                            info.requestid(), runtimeID);
+                // extract before CleanupRuntimeState, which erases runtime2dockerErr_ as well.
+                std::string daemonMsg;
+                if (auto node = runtime2dockerErr_.extract(runtimeID); !node.empty()) {
+                    daemonMsg = std::move(node.mapped());
+                }
+                YRLOG_ERROR("{}|{}|failed to create Docker container for runtime({}), msg={}", info.traceid(),
+                            info.requestid(), runtimeID, daemonMsg);
                 CleanupRuntimeState(runtimeID);
-                return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_CREATE_EXEC_FAILED,
-                                                    "Failed to create Docker container");
+                auto msg = daemonMsg.empty() ? std::string("Failed to create Docker container")
+                                             : "Failed to create Docker container: " + daemonMsg;
+                return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_CREATE_EXEC_FAILED, msg);
             }
             return StartContainer(runtimeID, containerID)
                 .Then(litebus::Defer(GetAID(), &DockerExecutor::OnStartRuntime, std::placeholders::_1, request, port));

@@ -178,6 +178,10 @@ private:
     std::unordered_map<std::string, litebus::Future<messages::StartInstanceResponse>> inProgressStarts_;
     std::unordered_set<std::string> pendingDeletes_;
     std::map<std::string, std::string> runtime2portMappings_;  // runtimeID -> portMappings JSON
+    // 旁路携带 create/pull 失败时 Docker daemon 的 message,跨多层 Then 链递给
+    // StartContainerChain 的 containerID-empty 分支(链中间类型是 std::string,装不下
+    // daemon message)。各 create/pull 失败分支写入,StartContainerChain 消费时 extract 取走。
+    std::unordered_map<std::string, std::string> runtime2dockerErr_;
     litebus::AID functionAgentAID_;
     CommandBuilder cmdBuilder_{ false };
 
