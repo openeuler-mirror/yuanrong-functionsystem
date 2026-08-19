@@ -217,6 +217,9 @@ message StartRequest {
   map<string, string> metric_labels = 17;
   // XpuAllocations contains physical XPU devices selected by FunctionSystem.
   repeated XpuAllocation xpu_allocations = 18;
+  // WritableLayerLimitBytes is the hard quota for the writable root filesystem
+  // layer. Zero preserves the node-configured default for older clients.
+  uint64 writable_layer_limit_bytes = 19;
   // NetworkPolicy is the sandbox's initial packet and DNS policy. Field 20
   // matches the sandboxd SandboxService wire contract.
   NetworkPolicy network_policy = 20;

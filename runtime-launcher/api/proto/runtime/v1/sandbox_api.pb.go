@@ -1126,6 +1126,9 @@ type StartRequest struct {
 	MetricLabels map[string]string `protobuf:"bytes,17,rep,name=metric_labels,json=metricLabels,proto3" json:"metric_labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// XpuAllocations contains physical XPU devices selected by FunctionSystem.
 	XpuAllocations []*XpuAllocation `protobuf:"bytes,18,rep,name=xpu_allocations,json=xpuAllocations,proto3" json:"xpu_allocations,omitempty"`
+	// WritableLayerLimitBytes is the hard quota for the writable root filesystem
+	// layer. Zero preserves the node-configured default for older clients.
+	WritableLayerLimitBytes uint64 `protobuf:"varint,19,opt,name=writable_layer_limit_bytes,json=writableLayerLimitBytes,proto3" json:"writable_layer_limit_bytes,omitempty"`
 	// NetworkPolicy is the sandbox's initial packet and DNS policy. Field 20
 	// matches the sandboxd SandboxService wire contract.
 	NetworkPolicy *NetworkPolicy `protobuf:"bytes,20,opt,name=network_policy,json=networkPolicy,proto3" json:"network_policy,omitempty"`
@@ -1287,6 +1290,13 @@ func (x *StartRequest) GetXpuAllocations() []*XpuAllocation {
 		return x.XpuAllocations
 	}
 	return nil
+}
+
+func (x *StartRequest) GetWritableLayerLimitBytes() uint64 {
+	if x != nil {
+		return x.WritableLayerLimitBytes
+	}
+	return 0
 }
 
 func (x *StartRequest) GetNetworkPolicy() *NetworkPolicy {
@@ -3076,7 +3086,7 @@ const file_sandbox_api_proto_rawDesc = "" +
 	"\rXpuAllocation\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x1d\n" +
 	"\n" +
-	"device_ids\x18\x02 \x03(\rR\tdeviceIds\"\x96\b\n" +
+	"device_ids\x18\x02 \x03(\rR\tdeviceIds\"\xd3\b\n" +
 	"\fStartRequest\x12\x1d\n" +
 	"\n" +
 	"sandbox_id\x18\x01 \x01(\tR\tsandboxId\x12\x1f\n" +
@@ -3098,7 +3108,8 @@ const file_sandbox_api_proto_rawDesc = "" +
 	"\x05ports\x18\x0f \x03(\tR\x05ports\x12<\n" +
 	"\x06labels\x18\x10 \x03(\v2$.runtime.v1.StartRequest.LabelsEntryR\x06labels\x12O\n" +
 	"\rmetric_labels\x18\x11 \x03(\v2*.runtime.v1.StartRequest.MetricLabelsEntryR\fmetricLabels\x12B\n" +
-	"\x0fxpu_allocations\x18\x12 \x03(\v2\x19.runtime.v1.XpuAllocationR\x0expuAllocations\x12@\n" +
+	"\x0fxpu_allocations\x18\x12 \x03(\v2\x19.runtime.v1.XpuAllocationR\x0expuAllocations\x12;\n" +
+	"\x1awritable_layer_limit_bytes\x18\x13 \x01(\x04R\x17writableLayerLimitBytes\x12@\n" +
 	"\x0enetwork_policy\x18\x14 \x01(\v2\x19.runtime.v1.NetworkPolicyR\rnetworkPolicy\x1a7\n" +
 	"\tEnvsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
