@@ -959,6 +959,11 @@ bool DockerExecutor::BuildPortBindings(const messages::RuntimeInstanceInfo &info
     if (networkIter == deployOpts.end() || networkIter->second.empty()) {
         return true;
     }
+    if (HasInvalidPortForwardings(networkIter->second)) {
+        YRLOG_ERROR("{}|{}|invalid port forwarding in network config for runtime({}); see ParseForwardPorts "
+                    "warnings above for the offending entry", info.traceid(), info.requestid(), info.runtimeid());
+        return false;
+    }
     auto forwardConfigs = ParseForwardPorts(networkIter->second);
     if (forwardConfigs.empty()) {
         return true;
@@ -977,7 +982,7 @@ bool DockerExecutor::BuildPortBindings(const messages::RuntimeInstanceInfo &info
     nlohmann::json portJson = nlohmann::json::array();
     for (size_t i = 0; i < hostPorts.size(); ++i) {
         std::string pbKey = std::to_string(forwardConfigs[i].containerPort) + "/" +
-                             (forwardConfigs[i].protocol == "tcp" ? "tcp" : "udp");
+                             forwardConfigs[i].protocol;
         portBindings[pbKey] = std::to_string(hostPorts[i]);
         portJson.push_back(forwardConfigs[i].protocol + ":" + std::to_string(hostPorts[i]) + ":" +
                            std::to_string(forwardConfigs[i].containerPort));

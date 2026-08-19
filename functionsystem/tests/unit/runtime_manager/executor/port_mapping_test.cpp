@@ -63,14 +63,28 @@ TEST(PortMappingTest, ParseForwardPorts_SinglePort)
     EXPECT_EQ("tcp", configs[0].protocol);
 }
 
-TEST(PortMappingTest, ParseForwardPorts_FilterInvalidPortValues)
+TEST(PortMappingTest, ParseForwardPorts_FilterOutOfRangePorts)
 {
-    // Port 0 and 65536+ are invalid, only 80 is valid
+    // Out-of-range ports (0, 65536) are skipped; only port 80 remains.
     auto configs = ParseForwardPorts(
         R"({"portForwardings": [{"port": 0, "protocol": "TCP"}, {"port": 80, "protocol": "UDP"}, {"port": 65536, "protocol": "TCP"}]})");
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(80u, configs[0].containerPort);
-    EXPECT_EQ("udp", configs[0].protocol);  // Should be lowercase
+    EXPECT_EQ("udp", configs[0].protocol);
+}
+
+TEST(PortMappingTest, ParseForwardPorts_PassthroughUnknownProtocol)
+{
+    // Unknown protocols are not validated here: they are passed through verbatim
+    // (lowercased) so the daemon that binds the ports can reject them. Only the
+    // L7 schemes (http/https/ws/wss) are mapped to "tcp".
+    auto configs = ParseForwardPorts(
+        R"({"portForwardings": [{"port": 8080, "protocol": "FOO"}, {"port": 8443, "protocol": "HTTPS"}]})");
+    ASSERT_EQ(2u, configs.size());
+    EXPECT_EQ(8080u, configs[0].containerPort);
+    EXPECT_EQ("foo", configs[0].protocol);
+    EXPECT_EQ(8443u, configs[1].containerPort);
+    EXPECT_EQ("tcp", configs[1].protocol);  // https maps to tcp
 }
 
 TEST(PortMappingTest, ParseForwardPorts_NotArrayValue)
@@ -104,6 +118,47 @@ TEST(PortMappingTest, ParseForwardPorts_DefaultProtocol)
     ASSERT_EQ(1u, configs.size());
     EXPECT_EQ(8080u, configs[0].containerPort);
     EXPECT_EQ("tcp", configs[0].protocol);  // Default to tcp
+}
+
+TEST(PortMappingTest, HasInvalidPortForwardings_EmptyInput)
+{
+    EXPECT_FALSE(HasInvalidPortForwardings(""));
+}
+
+TEST(PortMappingTest, HasInvalidPortForwardings_NoArray)
+{
+    EXPECT_FALSE(HasInvalidPortForwardings(R"({"forward": [{"port": 8888}]})"));
+}
+
+TEST(PortMappingTest, HasInvalidPortForwardings_EmptyArray)
+{
+    EXPECT_FALSE(HasInvalidPortForwardings(R"({"portForwardings": []})"));
+}
+
+TEST(PortMappingTest, HasInvalidPortForwardings_AllValid)
+{
+    EXPECT_FALSE(HasInvalidPortForwardings(
+        R"({"portForwardings": [{"port": 8080, "protocol": "tcp"}, {"port": 443, "protocol": "udp"}]})"));
+}
+
+TEST(PortMappingTest, HasInvalidPortForwardings_AllOutOfRange)
+{
+    // Non-empty array with no valid entry (all ports out of range) -> invalid.
+    EXPECT_TRUE(HasInvalidPortForwardings(
+        R"({"portForwardings": [{"port": 0, "protocol": "tcp"}, {"port": 65536, "protocol": "tcp"}]})"));
+}
+
+TEST(PortMappingTest, HasInvalidPortForwardings_NegativePort)
+{
+    // Negative port is non-unsigned and gets skipped -> array non-empty with no valid entry.
+    EXPECT_TRUE(HasInvalidPortForwardings(R"({"portForwardings": [{"port": -1, "protocol": "tcp"}]})"));
+}
+
+TEST(PortMappingTest, HasInvalidPortForwardings_PartiallyInvalid)
+{
+    // Strict: any invalid entry (99999 out of range) -> reject even if others valid.
+    EXPECT_TRUE(HasInvalidPortForwardings(
+        R"({"portForwardings": [{"port": 8080, "protocol": "tcp"}, {"port": 99999, "protocol": "tcp"}]})"));
 }
 
 }  // namespace

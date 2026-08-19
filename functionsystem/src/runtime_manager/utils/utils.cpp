@@ -33,7 +33,9 @@ const int MAX_PORT_NUMBER = 65535;
 const size_t MAX_NETWORK_JSON_LEN = 65536;
 const size_t MAX_PORT_FORWARDINGS = 256;
 
-// Normalize protocol to lowercase "tcp"/"udp"; returns empty string when invalid (caller skips).
+// L7 schemes (http/https/ws/wss) bind over TCP, so they map to "tcp"; other
+// protocol strings are returned as-is (lowercased). Returns empty only when the
+// "protocol" field is present but not a string.
 std::string NormalizeProtocol(const nlohmann::json &item)
 {
     if (!item.contains("protocol")) {
@@ -45,9 +47,8 @@ std::string NormalizeProtocol(const nlohmann::json &item)
     }
     std::string proto = item["protocol"].get<std::string>();
     std::transform(proto.begin(), proto.end(), proto.begin(), [](unsigned char c) { return std::tolower(c); });
-    if (proto != "tcp" && proto != "udp") {
-        YRLOG_WARN("ParseForwardPorts: invalid protocol {}, skip", proto);
-        return "";
+    if (proto == "http" || proto == "https" || proto == "ws" || proto == "wss") {
+        return "tcp";
     }
     return proto;
 }
@@ -92,6 +93,33 @@ std::vector<PortForwardConfig> ParseForwardPorts(const std::string &networkJson)
                    e.what());
     }
     return configs;
+}
+
+bool HasInvalidPortForwardings(const std::string &networkJson)
+{
+    if (networkJson.empty()) {
+        return false;
+    }
+    try {
+        auto j = nlohmann::json::parse(networkJson);
+        if (!j.contains("portForwardings") || !j["portForwardings"].is_array()) {
+            return false;
+        }
+        const auto &pf = j["portForwardings"];
+        if (pf.empty()) {
+            return false;
+        }
+        // ParseForwardPorts drops any invalid entry (bad port, out of range,
+        // non-string protocol). A non-empty array yielding fewer valid configs
+        // than entries means at least one entry is invalid, so reject. Cap the
+        // comparison at the forwarding limit so an over-long array is not mistaken
+        // for invalid entries.
+        const size_t effective = std::min(pf.size(), MAX_PORT_FORWARDINGS);
+        return ParseForwardPorts(networkJson).size() < effective;
+    } catch (const std::exception &e) {
+        YRLOG_WARN("HasInvalidPortForwardings: failed to parse network json: {}", e.what());
+        return false;
+    }
 }
 
 std::string Utils::JoinToString(const std::vector<std::string> &strings, std::string delim)
