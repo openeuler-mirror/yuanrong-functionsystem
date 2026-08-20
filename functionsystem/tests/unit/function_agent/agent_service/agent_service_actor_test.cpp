@@ -2122,8 +2122,7 @@ TEST_F(AgentServiceActorTest, TestCodeReferWhenRetryDeployAndKillInstance)
     testFuncAgentMgrActor_->SendRequestToAgentServiceActor(dstActor_->GetAID(),
                                                            "DeployInstance",
                                                            deployReq.SerializeAsString());
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    EXPECT_TRUE(testRuntimeManager_->GetReceivedStartInstanceRequest());
+    ASSERT_AWAIT_TRUE([&]() -> bool { return testRuntimeManager_->GetReceivedStartInstanceRequest(); });
     testRuntimeManager_->ResetReceivedStartInstanceRequest();
     EXPECT_EQ(JudgeCodeReferNum(dstActor_->GetCodeReferManager(), LOCAL_DEPLOY_DIR), static_cast<uint32_t>(1));
 
@@ -2136,7 +2135,9 @@ TEST_F(AgentServiceActorTest, TestCodeReferWhenRetryDeployAndKillInstance)
     testFuncAgentMgrActor_->SendRequestToAgentServiceActor(dstActor_->GetAID(),
                                                            "DeployInstance",
                                                            deployReq.SerializeAsString());
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ASSERT_AWAIT_TRUE([&]() -> bool {
+        return testFuncAgentMgrActor_->GetDeployInstanceResponse()->instanceid() == TEST_INSTANCE_ID;
+    });
     EXPECT_EQ(testFuncAgentMgrActor_->GetDeployInstanceResponse()->instanceid(), TEST_INSTANCE_ID);
     testFuncAgentMgrActor_->ResetDeployInstanceResponse();
     EXPECT_EQ(JudgeCodeReferNum(dstActor_->GetCodeReferManager(), LOCAL_DEPLOY_DIR), static_cast<uint32_t>(1));
@@ -2148,8 +2149,7 @@ TEST_F(AgentServiceActorTest, TestCodeReferWhenRetryDeployAndKillInstance)
     testFuncAgentMgrActor_->SendRequestToAgentServiceActor(dstActor_->GetAID(),
                                                            "KillInstance",
                                                            killReq.SerializeAsString());
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    EXPECT_TRUE(testRuntimeManager_->GetReceivedStopInstanceRequest());
+    ASSERT_AWAIT_TRUE([&]() -> bool { return testRuntimeManager_->GetReceivedStopInstanceRequest(); });
     testRuntimeManager_->ResetReceivedStopInstanceRequest();
     EXPECT_EQ(JudgeCodeReferNum(dstActor_->GetCodeReferManager(), LOCAL_DEPLOY_DIR), static_cast<uint32_t>(1));
 
@@ -2162,7 +2162,9 @@ TEST_F(AgentServiceActorTest, TestCodeReferWhenRetryDeployAndKillInstance)
     testFuncAgentMgrActor_->SendRequestToAgentServiceActor(dstActor_->GetAID(),
                                                            "KillInstance",
                                                            killReq.SerializeAsString());
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ASSERT_AWAIT_TRUE([&]() -> bool {
+        return JudgeCodeReferNum(dstActor_->GetCodeReferManager(), LOCAL_DEPLOY_DIR) == 0;
+    });
     EXPECT_EQ(JudgeCodeReferNum(dstActor_->GetCodeReferManager(), LOCAL_DEPLOY_DIR), static_cast<uint32_t>(0));
 }
 
