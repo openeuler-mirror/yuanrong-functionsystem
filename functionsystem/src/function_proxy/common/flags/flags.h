@@ -62,6 +62,21 @@ public:
         return sessionGrpcPort_;
     }
 
+    const std::string &GetExternalGrpcPort() const
+    {
+        return externalGrpcPort_.empty() ? sessionGrpcPort_ : externalGrpcPort_;
+    }
+
+    bool GetEnableExecStreamService() const
+    {
+        return enableExecStreamService_;
+    }
+
+    bool GetEnableFrontendProxyService() const
+    {
+        return enableFrontendProxyService_;
+    }
+
     const std::string &GetMetaStoreAddress() const
     {
         return metaStoreAddress_;
@@ -493,7 +508,10 @@ protected:
     std::string address_;
     std::string ip_;
     std::string grpcListenPort_;
+    std::string externalGrpcPort_;
     std::string sessionGrpcPort_;
+    bool enableExecStreamService_;
+    bool enableFrontendProxyService_;
     std::string schedulePolicy_;
     std::string metaStoreAddress_;
     std::string iamMetastoreAddress_;

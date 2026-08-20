@@ -16,6 +16,7 @@
 
 #include "frontend_proxy_lifecycle_handler.h"
 
+#include <cstddef>
 #include <utility>
 
 #include "common/logs/logging.h"
@@ -25,6 +26,8 @@ namespace functionsystem::local_scheduler {
 namespace {
 constexpr const char *FRONTEND_SYSTEM_CREATE_CALLER = "";
 constexpr const char *FRONTEND_SYSTEM_KILL_CALLER = "";
+constexpr size_t IPV6_BRACKET_OFFSET = 1;
+constexpr size_t IPV6_BRACKET_PAIR_SIZE = 2;
 
 ::frontend_proxy::CreateInstanceResponse BuildCreateResponse(common::ErrorCode code, const std::string &message)
 {
@@ -92,6 +95,26 @@ std::shared_ptr<messages::ScheduleRequest> BuildFrontendScheduleRequest(
     (*scheduleReq->mutable_instance()->mutable_extensions())[CREATE_SOURCE] = FRONTEND_STR;
     return scheduleReq;
 }
+}
+
+std::string ExternalGrpcEndpoint::Address() const
+{
+    return ip + ":" + port;
+}
+
+ExternalGrpcEndpoint ResolveExternalGrpcEndpoint(const std::string &proxyAddress, const std::string &localIP,
+                                                 const std::string &posixPort,
+                                                 const std::string &externalGrpcPort)
+{
+    if (externalGrpcPort == "0") {
+        return { localIP, posixPort, false };
+    }
+    auto separator = proxyAddress.find_last_of(':');
+    auto externalIP = separator == std::string::npos ? proxyAddress : proxyAddress.substr(0, separator);
+    if (externalIP.size() > IPV6_BRACKET_PAIR_SIZE && externalIP.front() == '[' && externalIP.back() == ']') {
+        externalIP = externalIP.substr(IPV6_BRACKET_OFFSET, externalIP.size() - IPV6_BRACKET_PAIR_SIZE);
+    }
+    return { externalIP, externalGrpcPort, true };
 }
 
 FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDispatcher(
