@@ -23,6 +23,7 @@
 #include "common/constants/constants.h"
 #include "common/create_agent_decision/create_agent_decision.h"
 #include "common/crypto/crypto.h"
+#include "common/datasystem_capability.h"
 #include "common/logs/logging.h"
 #include "common/metadata/metadata.h"
 #include "common/resource_view/resource_type.h"
@@ -139,6 +140,13 @@ void AddDefaultEnv(const std::shared_ptr<messages::DeployInstanceRequest> &req, 
         // 2. use insert api, does not overwrite existing values
         ParseDelegateEnv(env.Get(), runtimeConf);
     }
+
+    auto &posixEnvs = *runtimeConf.mutable_posixenvs();
+    const auto capability = datasystem_capability::GetEnvironmentCapability();
+    posixEnvs[datasystem_capability::YR_DATASYSTEM_DEPLOYED] =
+        datasystem_capability::BooleanString(capability.dataSystemDeployed);
+    posixEnvs[datasystem_capability::YR_BYPASS_DATASYSTEM] =
+        datasystem_capability::BooleanString(capability.bypassDataSystem);
 }
 
 void ParseDelegateEnv(const std::string &value, messages::RuntimeConfig &runtimeConf)

@@ -21,6 +21,7 @@
 #include "utils/grpc_client_helper.h"
 #include "function_proxy/common/common_driver/common_driver.h"
 #include "utils/port_helper.h"
+#include "utils/scoped_env.h"
 
 namespace functionsystem::test {
 using namespace ::testing;
@@ -88,5 +89,18 @@ TEST_F(CommonDriverTest, SuccessfulDrived)
     status = commonDriver->Stop();
     EXPECT_EQ(status, StatusCode::SUCCESS);
     commonDriver->Await();
+}
+TEST_F(CommonDriverTest, DataSystemDisabledNeverBindsDataSystemClient)
+{
+    ScopedEnv dataSystemDeployed("YR_DATASYSTEM_DEPLOYED");
+    dataSystemDeployed.Set("false");
+    auto flags = Flags();
+    flags.stateStorageType_ = DATA_SYSTEM_STORE;
+    auto commonDriver = std::make_shared<CommonDriver>(flags, std::make_shared<DSAuthConfig>());
+
+    EXPECT_FALSE(commonDriver->NeedBindDs());
+    commonDriver->InitDistributedCache();
+    EXPECT_EQ(commonDriver->distributedCacheClient_, nullptr);
+
 }
 };  // namespace functionsystem::test

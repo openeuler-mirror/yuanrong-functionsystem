@@ -21,6 +21,7 @@
 
 #include "async/uuid_generator.hpp"
 #include "common/logs/logging.h"
+#include "common/datasystem_capability.h"
 #include "common/metadata/metadata.h"
 #include "common/utils/exec_utils.h"
 #include "common/utils/hash_util.h"
@@ -157,6 +158,12 @@ public:
 
     std::pair<Status, std::string> GetResource(std::string dst) override
     {
+        if (!datasystem_capability::GetEnvironmentCapability().dataSystemDeployed) {
+            return std::make_pair(
+                Status(StatusCode::FUNC_AGENT_INVALID_WORKING_DIR_FILE,
+                       "DataSystem is disabled in this cluster; ds:// working directory is unavailable"),
+                "");
+        }
         if (!tenantId_.empty()) {
             datasystem::Context::SetTenantId(tenantId_);
         }

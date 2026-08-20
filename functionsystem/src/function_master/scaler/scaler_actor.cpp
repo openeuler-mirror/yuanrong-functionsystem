@@ -22,6 +22,7 @@
 #include "async/defer.hpp"
 #include "common/constants/actor_name.h"
 #include "common/constants/constants.h"
+#include "common/datasystem_capability.h"
 #include "common/logs/logging.h"
 #include "common/metrics/metrics_adapter.h"
 #include "common/status/status.h"
@@ -584,6 +585,9 @@ void ScalerActor::GetDsWorkerPort(const std::shared_ptr<V1Deployment> &deploymen
 
 void ScalerActor::AddDataSystemIpAndPort(const std::shared_ptr<V1Container> &container)
 {
+    if (!datasystem_capability::GetEnvironmentCapability().dataSystemDeployed) {
+        return;
+    }
     std::vector<std::shared_ptr<V1EnvVar>> &env = container->GetEnv();
 
     auto hostFieldRef = std::make_shared<V1ObjectFieldSelector>();
@@ -3353,4 +3357,3 @@ Status ScalerActor::SyncTemplateDeployment()
     return Status::OK();
 }
 }  // namespace functionsystem::scaler
-

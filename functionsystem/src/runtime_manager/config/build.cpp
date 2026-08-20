@@ -19,6 +19,7 @@
 #include <unordered_set>
 
 #include "common/logs/logging.h"
+#include "common/datasystem_capability.h"
 #include "common/utils/exec_utils.h"
 #include "common/constants/constants.h"
 #include "utils/os_utils.hpp"
@@ -74,7 +75,8 @@ const static std::string YR_LOG_PREFIX = "YR_LOG_PREFIX";
 const std::vector<std::string> PRE_CONFIG_ENV = {
     POSIX_LISTEN_ADDR, POD_IP, INSTANCE_ID_ENV, DATA_SYSTEM_ADDR, DRIVER_SERVER_PORT,
     HOME_ENV, HOST_IP, FUNCTION_LIB_PATH, YR_FUNCTION_LIB_PATH, LAYER_LIB_PATH,
-    PROXY_GRPC_SERVER_PORT, CLUSTER_ID, NODE_ID
+    PROXY_GRPC_SERVER_PORT, CLUSTER_ID, NODE_ID,
+    datasystem_capability::YR_DATASYSTEM_DEPLOYED, datasystem_capability::YR_BYPASS_DATASYSTEM
 };
 
 const std::unordered_set<std::string> USER_ENV_OVERWRITE_WHITELIST = {
@@ -190,10 +192,16 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     addIfValid(POD_IP, config.ip);
     addIfValid(YR_RUNTIME_ID, info.runtimeid());
     addIfValid(INSTANCE_ID_ENV, info.instanceid());
-    addIfValid(DATA_SYSTEM_ADDR,
-               config.hostIP + ":" + config.dataSystemPort);
-    addIfValid(YR_DS_ADDRESS,
-               config.hostIP + ":" + config.dataSystemPort);
+    const auto &requestEnvs = info.runtimeconfig().posixenvs();
+    const auto dataSystemCapability = datasystem_capability::ResolveCapability(requestEnvs);
+    posixEnvs.emplace(datasystem_capability::YR_DATASYSTEM_DEPLOYED,
+                      datasystem_capability::BooleanString(dataSystemCapability.dataSystemDeployed));
+    posixEnvs.emplace(datasystem_capability::YR_BYPASS_DATASYSTEM,
+                      datasystem_capability::BooleanString(dataSystemCapability.bypassDataSystem));
+    if (dataSystemCapability.dataSystemDeployed) {
+        addIfValid(DATA_SYSTEM_ADDR, config.hostIP + ":" + config.dataSystemPort);
+        addIfValid(YR_DS_ADDRESS, config.hostIP + ":" + config.dataSystemPort);
+    }
     addIfValid(DRIVER_SERVER_PORT, config.driverServerPort);
     addIfValid(HOME_ENV, config.runtimeHomeDir);
     addIfValid(HOST_IP, config.hostIP);

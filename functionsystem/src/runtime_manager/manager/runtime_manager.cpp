@@ -21,6 +21,7 @@
 #include "async/future.hpp"
 #include "common/constants/actor_name.h"
 #include "common/constants/constants.h"
+#include "common/datasystem_capability.h"
 #include "common/logs/logging.h"
 #include "common/proto/pb/message_pb.h"
 #include "common/status/status.h"
@@ -120,6 +121,11 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
     if (!CheckStartInstanceRequest(instance)) {
         return;
     }
+    const auto capability = datasystem_capability::ResolveCapability(instance.runtimeconfig().posixenvs());
+    if (!capability.IsValid()) {
+        StartInstanceCapabilityInvalid(from, request);
+        return;
+    }
     (void)receivedStartingReq_.insert(instance.requestid());
     if (CheckInstanceIsDeployed(from, instance)) {
         return;
@@ -155,6 +161,22 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
             litebus::Defer(this->GetAID(), &RuntimeManager::CheckHealthForRuntime, std::placeholders::_1, request))
         .OnComplete(litebus::Defer(this->GetAID(), &RuntimeManager::StartInstanceResponse, from,
                                    request->runtimeinstanceinfo().instanceid(), std::placeholders::_1));
+}
+
+void RuntimeManager::StartInstanceCapabilityInvalid(
+    const litebus::AID &from, const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    const auto &instance = request->runtimeinstanceinfo();
+    constexpr char message[] = "YR_DATASYSTEM_DEPLOYED=false requires YR_BYPASS_DATASYSTEM=true";
+    YRLOG_ERROR("{}|{}|failed to start instance({}): {}", instance.traceid(), instance.requestid(),
+                instance.instanceid(), message);
+    messages::StartInstanceResponse response;
+    response.set_requestid(instance.requestid());
+    response.set_code(static_cast<int32_t>(RUNTIME_MANAGER_PARAMS_INVALID));
+    response.set_message(message);
+    litebus::Future<messages::StartInstanceResponse> promise;
+    promise.SetValue(response);
+    litebus::Async(GetAID(), &RuntimeManager::StartInstanceResponse, from, instance.instanceid(), promise);
 }
 
 void RuntimeManager::StartInstanceExecutorUnavailable(const litebus::AID &from,
