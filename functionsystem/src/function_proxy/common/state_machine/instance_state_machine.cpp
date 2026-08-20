@@ -26,6 +26,7 @@
 #include "common/metrics/metrics_adapter.h"
 #include "common/utils/meta_store_kv_operation.h"
 #include "common/meta_store_adapter/instance_operator.h"
+#include "common/utils/resume_identity.h"
 #include "common/utils/struct_transfer.h"
 #include "function_proxy/config/direct_routing_config.h"
 
@@ -41,7 +42,7 @@ static const std::unordered_map<InstanceState, std::unordered_set<InstanceState>
       { InstanceState::RUNNING, InstanceState::FAILED, InstanceState::EXITING, InstanceState::FATAL } },
     { InstanceState::RUNNING,
       { InstanceState::FAILED, InstanceState::EXITING, InstanceState::FATAL, InstanceState::EVICTING,
-        InstanceState::SUB_HEALTH, InstanceState::SUSPEND } },
+        InstanceState::SUB_HEALTH, InstanceState::SUSPEND, InstanceState::PAUSED } },
     { InstanceState::SUB_HEALTH,
       { InstanceState::FAILED, InstanceState::EXITING, InstanceState::FATAL, InstanceState::EVICTING,
         InstanceState::RUNNING } },
@@ -54,7 +55,38 @@ static const std::unordered_map<InstanceState, std::unordered_set<InstanceState>
     { InstanceState::SUSPEND,
       { InstanceState::CREATING, InstanceState::SCHEDULING, InstanceState::RUNNING,
         InstanceState::FATAL, InstanceState::EXITING } },
+    { InstanceState::PAUSED,
+      { InstanceState::RUNNING, InstanceState::EXITING, InstanceState::FATAL } },
 };
+
+static bool IsResumeSnapshotCleanup(const TransContext &context,
+                                    const resources::InstanceInfo &current)
+{
+    if (context.newState != InstanceState::RUNNING || context.scheduleReq == nullptr
+        || current.instancestatus().code() != static_cast<int32_t>(InstanceState::RUNNING)
+        || context.version != current.version() || !current.has_snapshotinfo()
+        || !resume_identity::IsCompleteReadySnapshot(current.snapshotinfo())) {
+        return false;
+    }
+    const auto &candidate = context.scheduleReq->instance();
+    return !candidate.has_snapshotinfo()
+        && candidate.instanceid() == current.instanceid()
+        && candidate.requestid() == current.requestid()
+        && candidate.tenantid() == current.tenantid()
+        && candidate.version() == current.version()
+        && candidate.functionproxyid() == current.functionproxyid()
+        && candidate.runtimeid() == current.runtimeid()
+        && candidate.runtimeid() == resume_identity::RuntimeID(
+            current.instanceid(), context.scheduleReq->requestid())
+        && candidate.runtimeaddress() == current.runtimeaddress()
+        && candidate.functionagentid() == current.functionagentid()
+        && candidate.containerid() == current.containerid()
+        && candidate.containerip() == current.containerip()
+        && candidate.unitid() == current.unitid()
+        && candidate.executortype() == current.executortype()
+        && candidate.starttime() == current.starttime()
+        && candidate.proxygrpcaddress() == current.proxygrpcaddress();
+}
 
 /**
  * The status of scheduling and creating does not require persistent routeInfo. Other status requires persistent.
@@ -162,12 +194,28 @@ void InstanceStateMachine::PrepareTransitionInfo(const TransContext &context, re
         }
         instanceInfo = context.scheduleReq->instance();
         previousInfo = instanceContext_->GetInstanceInfo();
-        return;
+    } else {
+        previousInfo.CopyFrom(instanceContext_->GetInstanceInfo());
+        instanceContext_->SetInstanceState(context.newState, errCode, context.exitCode, context.msg, context.type);
+        instanceInfo = instanceContext_->GetInstanceInfo();
     }
 
-    previousInfo.CopyFrom(instanceContext_->GetInstanceInfo());
-    instanceContext_->SetInstanceState(context.newState, errCode, context.exitCode, context.msg, context.type);
-    instanceInfo = instanceContext_->GetInstanceInfo();
+    if (context.newState == InstanceState::PAUSED) {
+        instanceInfo.set_functionproxyid(INSTANCE_MANAGER_OWNER);
+        instanceInfo.clear_runtimeid();
+        instanceInfo.clear_runtimeaddress();
+        instanceInfo.clear_functionagentid();
+        instanceInfo.clear_containerid();
+        instanceInfo.clear_containerip();
+        instanceInfo.clear_unitid();
+        instanceInfo.clear_proxygrpcaddress();
+        instanceInfo.mutable_extensions()->erase(PORT_FORWARD_KEY);
+        if (context.scheduleReq != nullptr) {
+            context.scheduleReq->mutable_instance()->CopyFrom(instanceInfo);
+        } else {
+            instanceContext_->UpdateInstanceInfo(instanceInfo);
+        }
+    }
 }
 
 // should be locked by caller
@@ -231,15 +279,20 @@ litebus::Future<TransitionResult> InstanceStateMachine::TransitionTo(const Trans
 
         requestID = instanceContext_->GetRequestID();
         oldState = instanceContext_->GetState();
+        const bool resumeSnapshotCleanup = IsResumeSnapshotCleanup(
+            context, instanceContext_->GetInstanceInfo());
         // if old state is exiting, will execute exitHandler in VerifyTransitionState
-        if (context.newState == oldState && oldState != InstanceState::EXITING) {
+        if (context.newState == oldState && oldState != InstanceState::EXITING
+            && !resumeSnapshotCleanup) {
             YRLOG_WARN("{}|instance({}) state is same, ignore it", requestID, instanceID_);
             return TransitionResult{ oldState, {}, {}, GetVersion(), Status::OK() };
         }
 
-        auto verifyResult = VerifyTransitionState(context, requestID, oldState);
-        if (verifyResult.preState.IsNone()) {
-            return verifyResult;
+        if (!resumeSnapshotCleanup) {
+            auto verifyResult = VerifyTransitionState(context, requestID, oldState);
+            if (verifyResult.preState.IsNone()) {
+                return verifyResult;
+            }
         }
         SetInstanceBillingTerminated(instanceID_, context.newState);
 
@@ -395,7 +448,8 @@ litebus::Future<TransitionResult> InstanceStateMachine::SaveInstanceInfoToMetaSt
     std::shared_ptr<StoreInfo> instancePutInfo;
     std::shared_ptr<StoreInfo> routePutInfo;
     std::string keyPath;
-    if (TransToStoredData(newInstanceInfo, instancePutInfo, routePutInfo, persistenceType, keyPath).IsError()) {
+    if (TransToStoredData(newInstanceInfo, instancePutInfo, routePutInfo, persistenceType, keyPath)
+            .IsError()) {
         return TransitionResult{
             litebus::None(), {}, prevInstanceInfo, 0, Status(StatusCode::ERR_INSTANCE_INFO_INVALID)
         };
@@ -571,8 +625,8 @@ Status InstanceStateMachine::TransToStoredData(const resources::InstanceInfo &in
         instancePutInfo = std::make_shared<StoreInfo>(path.Get(), jsonStr);
     }
     if ((persistence == PersistenceType::PERSISTENT_ROUTE) || (persistence == PersistenceType::PERSISTENT_ALL)) {
-        std::string jsonStr;
         std::string path;
+        std::string jsonStr;
         if (TransRouteInfo(instanceInfo, jsonStr, path).IsError()) {
             return Status(StatusCode::FAILED);
         }

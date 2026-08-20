@@ -300,6 +300,12 @@ class ScalerTest : public ::testing::Test {
 protected:
     void SetUp() override
     {
+        originalMeterProvider_ = observability::api::metrics::Provider::GetMeterProvider();
+        if (originalMeterProvider_ == nullptr) {
+            metrics::MetricsAdapter::GetInstance().InitMetricsFromJson(
+                nlohmann::json::parse(R"({"backends":[]})"),
+                [](std::string) { return std::string{}; }, {});
+        }
         etcdSrvDriver_ = std::make_unique<meta_store::test::EtcdServiceDriver>();
         int metaStoreServerPort = functionsystem::test::FindAvailablePort();
         metaStoreServerHost_ = "127.0.0.1:" + std::to_string(metaStoreServerPort);
@@ -375,6 +381,7 @@ protected:
         testActor_ = nullptr;
         etcdSrvDriver_->StopServer();
         etcdSrvDriver_ = nullptr;
+        observability::api::metrics::Provider::SetMeterProvider(originalMeterProvider_);
     }
 
 protected:
@@ -387,6 +394,7 @@ protected:
     std::vector<std::shared_ptr<PodPoolInfo>> podPools_;
     std::shared_ptr<std::atomic<int>> counter;
     std::string metaStoreServerHost_;
+    std::shared_ptr<observability::api::metrics::MeterProvider> originalMeterProvider_;
 
     static resource_view::InstanceInfo CreateInstance(const std::string &id, int code)
     {

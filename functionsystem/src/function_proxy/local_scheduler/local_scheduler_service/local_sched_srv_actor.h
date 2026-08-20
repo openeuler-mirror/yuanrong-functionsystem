@@ -220,6 +220,20 @@ public:
         const std::shared_ptr<::messages::RecordSnapshotRequest> &req);
     void OnRecordSnapshotMetadataResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 
+    litebus::Future<::messages::BeginReusableSnapshotResponse> BeginReusableSnapshot(
+        const std::shared_ptr<::messages::BeginReusableSnapshotRequest> &request);
+    void OnBeginReusableSnapshotResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+    litebus::Future<::messages::CommitReusableSnapshotResponse> CommitReusableSnapshot(
+        const std::shared_ptr<::messages::CommitReusableSnapshotRequest> &request);
+    void OnCommitReusableSnapshotResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+    litebus::Future<::messages::FailReusableSnapshotResponse> FailReusableSnapshot(
+        const std::shared_ptr<::messages::FailReusableSnapshotRequest> &request);
+    void OnFailReusableSnapshotResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+    litebus::Future<::messages::ResolveReusableSnapshotForCreateResponse> ResolveReusableSnapshotForCreate(
+        const std::shared_ptr<::messages::ResolveReusableSnapshotForCreateRequest> &request);
+    void OnResolveReusableSnapshotForCreateResponse(
+        const litebus::AID &from, std::string &&name, std::string &&msg);
+
     litebus::Future<::messages::RestoreSnapshotResponse> SnapStartCheckpoint(
         const std::shared_ptr<::messages::RestoreSnapshotRequest> &req);
     void DoSnapStartCheckpoint(const std::shared_ptr<litebus::Promise<::messages::RestoreSnapshotResponse>> &promise,
@@ -381,6 +395,14 @@ private:
     const uint32_t recordSnapshotTimeout_ = 10000;
     REQUEST_SYNC_HELPER(LocalSchedSrvActor, messages::RecordSnapshotResponse,
                         recordSnapshotTimeout_, recordSnapshotSync_);
+    REQUEST_SYNC_HELPER(LocalSchedSrvActor, ::messages::BeginReusableSnapshotResponse,
+                        recordSnapshotTimeout_, beginReusableSnapshotSync_);
+    REQUEST_SYNC_HELPER(LocalSchedSrvActor, ::messages::CommitReusableSnapshotResponse,
+                        recordSnapshotTimeout_, commitReusableSnapshotSync_);
+    REQUEST_SYNC_HELPER(LocalSchedSrvActor, ::messages::FailReusableSnapshotResponse,
+                        recordSnapshotTimeout_, failReusableSnapshotSync_);
+    REQUEST_SYNC_HELPER(LocalSchedSrvActor, ::messages::ResolveReusableSnapshotForCreateResponse,
+                        recordSnapshotTimeout_, resolveReusableSnapshotForCreateSync_);
 
     const uint32_t snapStartCheckpointTimeout_ = 10000;
     REQUEST_SYNC_HELPER(LocalSchedSrvActor, messages::RestoreSnapshotResponse,

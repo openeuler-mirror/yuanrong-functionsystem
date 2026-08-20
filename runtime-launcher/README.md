@@ -1,3 +1,9 @@
+<!--
+Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+Licensed under the Apache License, Version 2.0.
+See the LICENSE file in this repository for the complete license text.
+-->
+
 # SandboxService gRPC 服务
 
 runtime-launcher 是 yuanrong-functionsystem 的本地 sandbox 启动服务，直接实现 sandboxd 兼容的 `runtime.v1.SandboxService` gRPC 接口，通过 Unix Domain Socket 与 C++ 侧的 `SandboxdExecutor` 通信。
@@ -12,9 +18,8 @@ runtime-launcher 是 yuanrong-functionsystem 的本地 sandbox 启动服务，�
 source /etc/profile.d/buildtools.sh
 cd /path/to/yuanrong-functionsystem/runtime-launcher
 
-protoc --go_out=. --go_opt=paths=source_relative \
-  --go-grpc_out=. --go-grpc_opt=paths=source_relative \
-  api/proto/runtime/v1/runtime_launcher.proto
+# 从父仓唯一的 proto/posix/sandbox_api.proto 生成 Go 代码
+./scripts/generate-proto.sh
 
 # 构建服务端
 go build -buildvcs=false -o bin/runtime/runtime-launcher ./cmd/runtime-launcher/
@@ -65,16 +70,17 @@ go build -buildvcs=false -o bin/rl-client ./cmd/rl-client/
 | RPC | 说明 |
 |-----|------|
 | `Start` | 创建并启动容器，返回容器 ID |
+| `Restore` | 不支持；返回 gRPC `Unimplemented`，恢复由 sandboxd/runsc 实现 |
+| `DeleteCheckpoint` | 不支持；runtime-launcher 不持有 checkpoint |
 | `Wait` | 阻塞等待容器退出，返回退出码 |
 | `Delete` | 停止并删除容器（支持优雅超时） |
 | `Register` | 将运行时注册到预热表 |
 | `Unregister` | 从预热表中移除 |
 | `GetRegistered` | 查询所有已注册的运行时 |
-| `Checkpoint` | 对容器创建检查点 |
+| `Checkpoint` | 不支持；返回 gRPC `Unimplemented` |
 | `List` | 按条件列出容器 |
 | `Stats` | 返回容器资源使用统计 |
 | `ListAvailableRuntimes` | 返回运行时类静态快照；runtime-launcher 不暴露 handler，因此返回空快照 |
-| `Version` | 返回运行时版本信息 |
 
 ## Mount 配置
 
@@ -230,10 +236,10 @@ runtime-launcher/
 ├── cmd/
 │   ├── runtime-launcher/main.go          # 服务端入口
 │   └── rl-client/main.go                 # 测试客户端
-├── api/proto/runtime/v1/                 # proto 定义及生成代码
+├── api/proto/runtime/v1/                 # 由父仓 proto/posix/sandbox_api.proto 生成的代码
 ├── internal/
 │   ├── server/server.go                  # gRPC 服务器（UDS 监听、优雅关闭）
-│   ├── service/launcher.go               # 6 个 RPC 方法实现
+│   ├── service/launcher.go               # SandboxService 兼容实现
 │   ├── runtime/
 │   │   ├── runtime.go                    # ContainerRuntime 接口 + 工厂
 │   │   ├── docker.go                     # Docker 后端

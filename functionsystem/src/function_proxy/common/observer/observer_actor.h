@@ -295,6 +295,8 @@ public:
 
     litebus::Future<Status> SubscribeInstanceEvent(const std::string &subscriber, const std::string &targetInstance,
                                                    bool ignoreNonExist);
+    litebus::Future<Status> SetLocalPauseTrafficGate(const resources::InstanceInfo &identity, uint64_t token,
+                                                     bool gated);
     litebus::Future<Status> TrySubscribeInstanceEvent(const std::string &subscriber, const std::string &targetInstance,
                                                       bool ignoreNonExist);
 
@@ -344,6 +346,9 @@ protected:
     void Finalize() override{};
 
 private:
+    litebus::Future<resource_view::InstanceInfo> GetAuthoritativePausedInstance(
+        const resource_view::InstanceInfo &controlRoute);
+
     void ProcFuncMetaEvent(const std::string &funcKey, const WatchEvent &event);
 
     void OnPutMeta(const litebus::Future<bool> &isSystem, const std::string &funcKey, const FunctionMeta &funcMeta);

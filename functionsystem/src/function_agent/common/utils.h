@@ -17,10 +17,16 @@
 #ifndef FUNCTION_AGENT_COMMON_UTILS_H
 #define FUNCTION_AGENT_COMMON_UTILS_H
 
+#include <filesystem>
+#include <memory>
 #include <string>
 #include <async/option.hpp>
+#include "async/future.hpp"
 #include "common/proto/pb/message_pb.h"
 #include "common/metadata/metadata.h"
+#include "common/snapshot_storage/snapshot_storage.h"
+#include "common/status/status.h"
+#include "common/utils/actor_worker.h"
 
 
 namespace functionsystem::function_agent {
@@ -48,8 +54,29 @@ void SetCreateOptions(const std::shared_ptr<messages::DeployInstanceRequest> &re
 
 void SetTLSConfig(const std::shared_ptr<messages::DeployInstanceRequest> &req, messages::RuntimeConfig &runtimeConf);
 
-void SetStartRuntimeInstanceRequestConfig(const std::unique_ptr<messages::StartInstanceRequest> &startInstanceRequest,
-                                          const std::shared_ptr<messages::DeployInstanceRequest> &req);
+enum class ResumeIdentityTrust {
+    ORDINARY,
+    TRUSTED,
+    REUSABLE,
+    INVALID,
+};
+
+ResumeIdentityTrust SetStartRuntimeInstanceRequestConfig(
+    const std::unique_ptr<messages::StartInstanceRequest> &startInstanceRequest,
+    const std::shared_ptr<messages::DeployInstanceRequest> &req,
+    const std::string &expectedTargetAgentID);
+
+litebus::Future<Status> MaterializeTrustedResumeCheckpoint(
+    const std::shared_ptr<snapshot_storage::SnapshotStorage> &snapshotStorage,
+    const std::filesystem::path &checkpointRoot,
+    const std::shared_ptr<ActorWorker> &snapshotWorker,
+    const std::shared_ptr<messages::StartInstanceRequest> &startInstanceRequest);
+
+litebus::Future<Status> MaterializeReusableSnapshotCheckpoint(
+    const std::shared_ptr<snapshot_storage::SnapshotStorage> &snapshotStorage,
+    const std::filesystem::path &checkpointRoot,
+    const std::shared_ptr<ActorWorker> &snapshotWorker,
+    const std::shared_ptr<messages::StartInstanceRequest> &startInstanceRequest);
 
 void SetStopRuntimeInstanceRequest(messages::StopInstanceRequest &stopInstanceRequest,
                                    const std::shared_ptr<messages::KillInstanceRequest> &req);

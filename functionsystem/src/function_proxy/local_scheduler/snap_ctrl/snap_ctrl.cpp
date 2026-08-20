@@ -17,6 +17,7 @@
 #include "snap_ctrl.h"
 
 #include <async/async.hpp>
+#include <utility>
 
 #include "common/constants/actor_name.h"
 #include "common/logs/logging.h"
@@ -88,6 +89,15 @@ void SnapCtrl::BindClientManager(const std::shared_ptr<ControlInterfaceClientMan
     litebus::Async(aid_, &SnapCtrlActor::BindClientManager, clientManager);
 }
 
+void SnapCtrl::BindReusableSnapshotTunnelGate(
+    std::function<bool(const std::string &)> acquire,
+    std::function<void(const std::string &)> release)
+{
+    ASSERT_IF_NULL(snapCtrlActor_);
+    litebus::Async(aid_, &SnapCtrlActor::BindReusableSnapshotTunnelGate,
+                   std::move(acquire), std::move(release));
+}
+
 litebus::Future<KillResponse> SnapCtrl::HandleSnapshot(const std::string &requestID,
                                                        const std::string &instanceID,
                                                        const std::string &payload)
@@ -103,13 +113,43 @@ litebus::Future<KillResponse> SnapCtrl::HandleSnapStart(
     return litebus::Async(aid_, &SnapCtrlActor::HandleSnapStart, requestID, checkpointID, payload);
 }
 
+litebus::Future<DeletePreparation> SnapCtrl::PrepareForAuthorizedDelete(const std::string &instanceID)
+{
+    ASSERT_IF_NULL(snapCtrlActor_);
+    return litebus::Async(aid_, &SnapCtrlActor::PrepareForAuthorizedDelete, instanceID);
+}
+
+litebus::Future<Status> SnapCtrl::FinishAuthorizedDelete(const std::string &instanceID, uint64_t generation)
+{
+    ASSERT_IF_NULL(snapCtrlActor_);
+    return litebus::Async(aid_, &SnapCtrlActor::FinishAuthorizedDelete, instanceID, generation);
+}
+
+litebus::Future<Status> SnapCtrl::DeletePauseSnapshot(const resources::InstanceInfo &instanceInfo)
+{
+    ASSERT_IF_NULL(snapCtrlActor_);
+    return litebus::Async(aid_, &SnapCtrlActor::DeletePauseSnapshot, instanceInfo);
+}
+
+void SnapCtrl::ReplayCommittedResumeFinalize(
+    const std::shared_ptr<messages::ScheduleRequest> &sourceRequest,
+    const resources::InstanceInfo &authoritative,
+    const resume_identity::TrustedResumeIdentity &identity)
+{
+    ASSERT_IF_NULL(snapCtrlActor_);
+    litebus::Async(aid_, &SnapCtrlActor::ReplayCommittedResumeFinalize,
+                   sourceRequest, authoritative, identity);
+}
+
 void SnapCtrl::SnapStart(
     const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
     const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result,
-    const TransitionResult &transResult)
+    const TransitionResult &transResult,
+    const std::shared_ptr<const resume_identity::TrustedResumeIdentity> &trustedResumeIdentity)
 {
     ASSERT_IF_NULL(snapCtrlActor_);
-    litebus::Async(aid_, &SnapCtrlActor::SnapStart, scheduleResp, scheduleReq, result, transResult);
+    litebus::Async(aid_, &SnapCtrlActor::SnapStart, scheduleResp, scheduleReq, result, transResult,
+                   trustedResumeIdentity);
 }
 
 }  // namespace functionsystem::local_scheduler

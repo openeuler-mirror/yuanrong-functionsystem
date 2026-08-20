@@ -40,6 +40,10 @@ public:
 
     litebus::Future<Status> TryCancelSchedule(const std::string &id, const messages::CancelType &type,
                                               const std::string &reason);
+
+    virtual litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse>
+        DeleteReusableSnapshotArtifact(
+            const ::messages::DeleteReusableSnapshotArtifactRequest &request);
 private:
     litebus::ActorReference actor_{ nullptr };
 };  // class InstanceManager

@@ -51,6 +51,7 @@ add_subdirectory(kv_client)
 add_subdirectory(file_storage)
 add_subdirectory(trace)
 add_subdirectory(lru)
+add_subdirectory(snapshot_storage)
 
 #add_subdirectory(redis_client)
 

@@ -18,6 +18,7 @@
 #define LOCAL_SCHEDULER_SNAP_CTRL_H
 
 #include <async/future.hpp>
+#include <functional>
 #include <memory>
 
 #include "common/utils/actor_driver.h"
@@ -79,6 +80,11 @@ public:
      */
     void BindClientManager(const std::shared_ptr<ControlInterfaceClientManagerProxy> &clientManager);
 
+    /** Bind the per-instance active reverse-tunnel admission gate. */
+    void BindReusableSnapshotTunnelGate(
+        std::function<bool(const std::string &)> acquire,
+        std::function<void(const std::string &)> release);
+
     /**
      * Handle INSTANCE_SNAPSHOT_SIGNAL
      * Wrap async call to SnapCtrlActor::HandleSnapshot
@@ -103,10 +109,22 @@ public:
                                                           const std::string &checkpointID,
                                                           const std::string &payload);
 
+    virtual litebus::Future<DeletePreparation> PrepareForAuthorizedDelete(const std::string &instanceID);
+
+    virtual litebus::Future<Status> FinishAuthorizedDelete(const std::string &instanceID, uint64_t generation);
+
+    virtual litebus::Future<Status> DeletePauseSnapshot(const resources::InstanceInfo &instanceInfo);
+
+    virtual void ReplayCommittedResumeFinalize(
+        const std::shared_ptr<messages::ScheduleRequest> &sourceRequest,
+        const resources::InstanceInfo &authoritative,
+        const resume_identity::TrustedResumeIdentity &identity);
+
     void SnapStart(
         const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result,
-        const TransitionResult &transResult);
+        const TransitionResult &transResult,
+        const std::shared_ptr<const resume_identity::TrustedResumeIdentity> &trustedResumeIdentity = nullptr);
 
     /**
      * Get the AID of the underlying actor

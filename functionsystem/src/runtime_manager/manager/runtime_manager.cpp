@@ -25,6 +25,7 @@
 #include "common/logs/logging.h"
 #include "common/proto/pb/message_pb.h"
 #include "common/status/status.h"
+#include "common/utils/resume_identity.h"
 #include "common/utils/exec_utils.h"
 #include "common/utils/struct_transfer.h"
 #include "executor/docker_executor.h"
@@ -37,6 +38,88 @@
 namespace functionsystem::runtime_manager {
 const uint32_t HALF = 2;
 const uint32_t MAX_REGISTER_RETRY_TIMES = 30;
+
+namespace {
+struct RuntimeManagerResumeIdentity {
+    enum class Trust {
+        ORDINARY,
+        TRUSTED,
+        REUSABLE,
+        INVALID,
+    };
+
+    Trust trust{Trust::ORDINARY};
+    bool trusted{false};
+    bool reusable{false};
+    std::string tenantID;
+    std::string logicalRequestID;
+    std::string targetAgentID;
+    int64_t expectedVersion{0};
+    int64_t protocolVersion{0};
+};
+
+RuntimeManagerResumeIdentity ConsumeRuntimeManagerResumeIdentity(messages::StartInstanceRequest &request,
+                                                                 bool trustedSender)
+{
+    RuntimeManagerResumeIdentity identity;
+    auto *extensions = request.mutable_scheduleoption()->mutable_extension();
+    std::string marker;
+    bool hasReservedResumeIdentity = false;
+    bool onlyRuntimeManagerBoundaryKeys = true;
+    bool parsedExpectedVersion = false;
+    bool parsedProtocolVersion = false;
+    for (const auto &[key, value] : *extensions) {
+        if (!resume_identity::IsResumeProtocolExtension(key)) {
+            continue;
+        }
+        hasReservedResumeIdentity = true;
+        if (key == resume_identity::LOGICAL_REQUEST_EXTENSION) {
+            identity.logicalRequestID = value;
+        } else if (key == resume_identity::EXPECTED_VERSION_EXTENSION) {
+            parsedExpectedVersion =
+                resume_identity::ParsePositiveInt64(value, &identity.expectedVersion);
+        } else if (key == resume_identity::TARGET_AGENT_EXTENSION) {
+            identity.targetAgentID = value;
+        } else if (key == resume_identity::PROTOCOL_VERSION_EXTENSION) {
+            parsedProtocolVersion =
+                resume_identity::ParsePositiveInt64(value, &identity.protocolVersion);
+        } else if (key == resume_identity::RUNTIME_MANAGER_MARKER_EXTENSION) {
+            marker = value;
+        } else {
+            onlyRuntimeManagerBoundaryKeys = false;
+        }
+    }
+    const auto &instance = request.runtimeinstanceinfo();
+    const auto tenant = instance.runtimeconfig().posixenvs().find(YR_TENANT_ID);
+    if (tenant != instance.runtimeconfig().posixenvs().end()) {
+        identity.tenantID = tenant->second;
+    }
+    identity.trusted = trustedSender && onlyRuntimeManagerBoundaryKeys
+        && parsedExpectedVersion && parsedProtocolVersion && instance.has_snapshotinfo()
+        && resume_identity::ValidateBoundaryIdentity(instance.instanceid(), identity.logicalRequestID,
+                                                     identity.tenantID, instance.requestid(),
+                                                     instance.snapshotinfo(), identity.expectedVersion,
+                                                     identity.targetAgentID, identity.protocolVersion, marker);
+    identity.reusable = trustedSender && !hasReservedResumeIdentity
+        && !instance.has_snapshotinfo() && instance.has_reusablesnapshotrestore()
+        && resume_identity::ValidateReusableSnapshotRestore(instance.reusablesnapshotrestore());
+    identity.trust = identity.trusted ? RuntimeManagerResumeIdentity::Trust::TRUSTED
+        : (identity.reusable ? RuntimeManagerResumeIdentity::Trust::REUSABLE
+            : ((hasReservedResumeIdentity || instance.has_reusablesnapshotrestore())
+                ? RuntimeManagerResumeIdentity::Trust::INVALID
+                : RuntimeManagerResumeIdentity::Trust::ORDINARY));
+    resume_identity::StripReservedExtensions(extensions);
+    return identity;
+}
+}
+
+std::string RuntimeManager::RuntimeIDForStart(const messages::RuntimeInstanceInfo &instance,
+                                              bool deterministicAttempt)
+{
+    return deterministicAttempt
+        ? resume_identity::RuntimeID(instance.instanceid(), instance.requestid())
+        : GenerateRuntimeID(instance);
+}
 
 // Container workloads are served exclusively by sandboxd. CONTAINER remains a
 // wire-level compatibility value in existing requests and persisted responses,
@@ -60,6 +143,7 @@ void RuntimeManager::Init()
     ActorBase::Receive("StartInstance", &RuntimeManager::StartInstance);
     ActorBase::Receive("StopInstance", &RuntimeManager::StopInstance);
     ActorBase::Receive("SnapshotRuntime", &RuntimeManager::SnapshotRuntime);
+    ActorBase::Receive("SnapshotAttemptFinalize", &RuntimeManager::SnapshotAttemptFinalize);
     ActorBase::Receive("QueryInstanceStatusInfo", &RuntimeManager::QueryInstanceStatusInfo);
     ActorBase::Receive("CleanStatus", &RuntimeManager::CleanStatus);
     ActorBase::Receive("UpdateCred", &RuntimeManager::UpdateCred);
@@ -117,7 +201,18 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
         YRLOG_ERROR("failed to start instance, message({}) from({}) is invalid.", msg, from.HashString());
         return;
     }
+    const bool trustedSender = functionAgentAID_.OK()
+        && from.HashString() == functionAgentAID_.HashString();
+    const auto resumeIdentity = ConsumeRuntimeManagerResumeIdentity(*request, trustedSender);
     const auto &instance = request->runtimeinstanceinfo();
+    if (resumeIdentity.trust == RuntimeManagerResumeIdentity::Trust::INVALID) {
+        messages::StartInstanceResponse response;
+        response.set_requestid(instance.requestid());
+        response.set_code(static_cast<int32_t>(RUNTIME_MANAGER_PARAMS_INVALID));
+        response.set_message("trusted resume identity is invalid");
+        Send(from, "StartInstanceResponse", response.SerializeAsString());
+        return;
+    }
     if (!CheckStartInstanceRequest(instance)) {
         return;
     }
@@ -127,9 +222,10 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
         return;
     }
     (void)receivedStartingReq_.insert(instance.requestid());
-    if (CheckInstanceIsDeployed(from, instance)) {
+    if (!resumeIdentity.trusted && CheckInstanceIsDeployed(from, instance)) {
         return;
     }
+    latestInFlightStartRequestByInstance_[instance.instanceid()] = instance.requestid();
     // CONTAINER is retained on the wire for compatibility and normalized to the
     // only supported container backend, SANDBOXD.
     auto type = static_cast<EXECUTOR_TYPE>(request->type());
@@ -139,8 +235,26 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
         StartInstanceExecutorUnavailable(from, request, type);
         return;
     }
-    std::string runtimeID = GenerateRuntimeID(instance);
+    if (resumeIdentity.trusted) {
+        (void)instanceResponseMap_.erase(instance.instanceid());
+    }
+    auto *extensions = request->mutable_scheduleoption()->mutable_extension();
+    resume_identity::StripReservedExtensions(extensions);
+    std::string runtimeID = RuntimeIDForStart(
+        instance, resumeIdentity.trusted || resumeIdentity.reusable);
     request->mutable_runtimeinstanceinfo()->set_runtimeid(runtimeID);
+    if (resumeIdentity.trusted) {
+        (*extensions)[resume_identity::LOGICAL_REQUEST_EXTENSION] = resumeIdentity.logicalRequestID;
+        (*extensions)[resume_identity::EXPECTED_VERSION_EXTENSION] =
+            std::to_string(resumeIdentity.expectedVersion);
+        (*extensions)[resume_identity::TARGET_AGENT_EXTENSION] = resumeIdentity.targetAgentID;
+        (*extensions)[resume_identity::PROTOCOL_VERSION_EXTENSION] =
+            std::to_string(resumeIdentity.protocolVersion);
+        (*extensions)[resume_identity::EXECUTOR_MARKER_EXTENSION] = resume_identity::ExecutorMarker(
+            instance.instanceid(), resumeIdentity.logicalRequestID, resumeIdentity.tenantID,
+            instance.requestid(), instance.snapshotinfo(), resumeIdentity.expectedVersion,
+            resumeIdentity.targetAgentID, resumeIdentity.protocolVersion);
+    }
     YRLOG_INFO("{}|{}|begin to start runtime({}) for instance({}).", instance.traceid(), instance.requestid(),
                instance.runtimeid(), instance.instanceid());
     auto vecs = metricsClient_->GetCardIDs();
@@ -160,7 +274,8 @@ void RuntimeManager::StartInstance(const litebus::AID &from, std::string && /* n
         .OnComplete(
             litebus::Defer(this->GetAID(), &RuntimeManager::CheckHealthForRuntime, std::placeholders::_1, request))
         .OnComplete(litebus::Defer(this->GetAID(), &RuntimeManager::StartInstanceResponse, from,
-                                   request->runtimeinstanceinfo().instanceid(), std::placeholders::_1));
+                                   request->runtimeinstanceinfo().instanceid(),
+                                   request->runtimeinstanceinfo().requestid(), std::placeholders::_1));
 }
 
 void RuntimeManager::StartInstanceCapabilityInvalid(
@@ -176,7 +291,8 @@ void RuntimeManager::StartInstanceCapabilityInvalid(
     response.set_message(message);
     litebus::Future<messages::StartInstanceResponse> promise;
     promise.SetValue(response);
-    litebus::Async(GetAID(), &RuntimeManager::StartInstanceResponse, from, instance.instanceid(), promise);
+    litebus::Async(GetAID(), &RuntimeManager::StartInstanceResponse, from, instance.instanceid(),
+                   instance.requestid(), promise);
 }
 
 void RuntimeManager::StartInstanceExecutorUnavailable(const litebus::AID &from,
@@ -192,7 +308,8 @@ void RuntimeManager::StartInstanceExecutorUnavailable(const litebus::AID &from,
     response.set_message(GetExecutorUnavailableMessage(type));
     litebus::Future<messages::StartInstanceResponse> promise;
     promise.SetValue(response);
-    litebus::Async(GetAID(), &RuntimeManager::StartInstanceResponse, from, instance.instanceid(), promise);
+    litebus::Async(GetAID(), &RuntimeManager::StartInstanceResponse, from, instance.instanceid(),
+                   instance.requestid(), promise);
 }
 
 litebus::Future<messages::StartInstanceResponse> RuntimeManager::ExecutorStartInstance(
@@ -374,21 +491,118 @@ void RuntimeManager::SnapshotRuntime(const litebus::AID &from, std::string &&, s
     YRLOG_INFO("{}|received SnapshotRuntime request for instance({}), runtime({})", request->requestid(), instanceID,
                runtimeID);
 
-    // Find executor by runtime type (CONTAINER or SANDBOXD backend)
-    auto executor = FindExecutor(GetRuntimeType(runtimeID));
+    auto executorType = EXECUTOR_TYPE::UNKNOWN;
+    const auto resolveStatus = ResolveSnapshotExecutorType(*request, executorType);
+    if (resolveStatus.IsError()) {
+        YRLOG_ERROR("{}|failed to resolve snapshot executor for runtime({}): {}", request->requestid(),
+                    runtimeID, resolveStatus.ToString());
+        messages::SnapshotRuntimeResponse response;
+        response.set_requestid(request->requestid());
+        response.set_agentrequestgeneration(request->agentrequestgeneration());
+        response.set_code(static_cast<int32_t>(resolveStatus.StatusCode()));
+        response.set_message(resolveStatus.RawMessage());
+        Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
+        return;
+    }
+    auto executor = FindExecutor(executorType);
     if (executor == nullptr) {
         YRLOG_ERROR("{}|container executor not found", request->requestid());
         messages::SnapshotRuntimeResponse response;
         response.set_requestid(request->requestid());
+        response.set_agentrequestgeneration(request->agentrequestgeneration());
         response.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
         response.set_message("container executor not found");
         Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
         return;
     }
 
-    // Call executor's SnapshotRuntime method
-    executor->SnapshotRuntime(request).Then(litebus::Defer(GetAID(), &RuntimeManager::SnapshotRuntimeResponse, from,
-                                                           instanceID, request->requestid(), std::placeholders::_1));
+    executor->SnapshotRuntime(request).OnComplete(litebus::Defer(
+        GetAID(), &RuntimeManager::SnapshotRuntimeResponse, from, request, std::placeholders::_1));
+}
+
+void RuntimeManager::SnapshotAttemptFinalize(const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::SnapshotAttemptFinalizeRequest request;
+    if (!request.ParseFromString(msg)) {
+        return;
+    }
+    if (!functionAgentAID_.OK() || from.HashString() != functionAgentAID_.HashString()) {
+        YRLOG_WARN("{}|reject reusable snapshot finalize from untrusted sender {}",
+                   request.attemptid(), from.HashString());
+        return;
+    }
+    FinalizeReusableSnapshotCheckpoint(request).OnComplete(
+        litebus::Defer(GetAID(), &RuntimeManager::SnapshotAttemptFinalizeCompleted,
+                       from, request, std::placeholders::_1));
+}
+
+litebus::Future<Status> RuntimeManager::FinalizeReusableSnapshotCheckpoint(
+    const ::messages::SnapshotAttemptFinalizeRequest &request)
+{
+    const bool reusableOperation = request.operation() == ::messages::REUSABLE_SNAPSHOT_COMMITTED
+        || request.operation() == ::messages::REUSABLE_SNAPSHOT_ABORTED;
+    const auto source = instanceInfoMap_.find(request.runtimeid());
+    if (request.protocolversion() != 1 || !reusableOperation
+        || request.attemptid().empty() || request.instanceid().empty()
+        || request.runtimeid().empty() || request.snapshotid().empty()
+        || request.expectedsize() == 0 || request.expectedsha256().empty()
+        || source == instanceInfoMap_.end()
+        || source->second.instanceid() != request.instanceid()) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "reusable snapshot finalize identity is invalid");
+    }
+    if (GetRuntimeType(request.runtimeid()) != EXECUTOR_TYPE::SANDBOXD) {
+        return Status(StatusCode::RUNTIME_MANAGER_PARAMS_INVALID,
+                      "reusable snapshot cleanup requires a sandboxd runtime");
+    }
+    auto executor = std::dynamic_pointer_cast<SandboxdExecutorProxy>(
+        FindExecutor(EXECUTOR_TYPE::SANDBOXD));
+    if (executor == nullptr) {
+        return Status(StatusCode::ERR_INNER_SYSTEM_ERROR,
+                      "sandboxd executor is unavailable for reusable snapshot cleanup");
+    }
+    return executor->DeleteReusableSnapshotCheckpoint(request);
+}
+
+void RuntimeManager::SnapshotAttemptFinalizeCompleted(
+    const litebus::AID &from, const ::messages::SnapshotAttemptFinalizeRequest &request,
+    const litebus::Future<Status> &future)
+{
+    ::messages::SnapshotAttemptFinalizeResponse response;
+    response.set_attemptid(request.attemptid());
+    if (future.IsError()) {
+        response.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        response.set_message("reusable snapshot local cleanup future failed");
+        response.set_resultunknown(true);
+    } else {
+        const auto &status = future.Get();
+        response.set_code(static_cast<int32_t>(status.StatusCode()));
+        response.set_message(status.IsError() ? status.RawMessage() : "");
+        response.set_localcleanupcomplete(status.IsOk());
+    }
+    Send(from, "SnapshotAttemptFinalizeResponse", response.SerializeAsString());
+}
+
+Status RuntimeManager::ResolveSnapshotExecutorType(const messages::SnapshotRuntimeRequest &request,
+                                                   EXECUTOR_TYPE &executorType)
+{
+    if (instanceInfoMap_.find(request.runtimeid()) == instanceInfoMap_.end()) {
+        return Status(StatusCode::RUNTIME_MANAGER_RUNTIME_PROCESS_NOT_FOUND,
+                      "snapshot runtime is not registered in RuntimeManager");
+    }
+
+    const auto authoritativeType = GetRuntimeType(request.runtimeid());
+    if (request.type() == common::PAUSE_RESUME && authoritativeType != EXECUTOR_TYPE::SANDBOXD) {
+        return Status(StatusCode::RUNTIME_MANAGER_PARAMS_INVALID,
+                      "pause/resume checkpoint requires a sandboxd runtime");
+    }
+    if (authoritativeType == EXECUTOR_TYPE::UNKNOWN) {
+        return Status(StatusCode::RUNTIME_MANAGER_PARAMS_INVALID,
+                      "snapshot runtime has an unknown executor type");
+    }
+
+    executorType = authoritativeType;
+    return Status::OK();
 }
 
 void RuntimeManager::HandlePrestartRuntimeExit(const pid_t pid)
@@ -610,6 +824,7 @@ std::shared_ptr<ExecutorProxy> RuntimeManager::CreateSandboxdExecutor()
 }
 
 void RuntimeManager::StartInstanceResponse(const litebus::AID &from, const std::string &instanceID,
+                                           const std::string &requestID,
                                            const litebus::Future<messages::StartInstanceResponse> &response)
 {
     if (response.IsError()) {
@@ -625,7 +840,18 @@ void RuntimeManager::StartInstanceResponse(const litebus::AID &from, const std::
         YRLOG_ERROR("{}|failed to start runtime, code {}", output.requestid(), output.code());
     } else {
         YRLOG_DEBUG("{}|success to start runtime.", output.requestid());
-        (void)instanceResponseMap_.emplace(instanceID, output);
+        const auto &runtimeID = output.startruntimeinstanceresponse().runtimeid();
+        if (!runtimeID.empty()) {
+            runtimeResponseMap_[runtimeID] = output;
+        }
+        const auto latest = latestInFlightStartRequestByInstance_.find(instanceID);
+        if (latest != latestInFlightStartRequestByInstance_.end() && latest->second == requestID) {
+            instanceResponseMap_[instanceID] = output;
+        }
+    }
+    const auto latest = latestInFlightStartRequestByInstance_.find(instanceID);
+    if (latest != latestInFlightStartRequestByInstance_.end() && latest->second == requestID) {
+        latestInFlightStartRequestByInstance_.erase(latest);
     }
     output.mutable_startruntimeinstanceresponse()->set_cputype(cpuType_);
     (void)receivedStartingReq_.erase(output.requestid());
@@ -730,7 +956,33 @@ void RuntimeManager::SendStopInstanceResponse(const litebus::AID &from, const st
                                               const std::shared_ptr<messages::StopInstanceResponse> &response)
 {
     if (auto iter(instanceInfoMap_.find(runtimeID)); iter != instanceInfoMap_.end()) {
-        (void)instanceResponseMap_.erase(iter->second.instanceid());
+        const auto &instanceID = iter->second.instanceid();
+        const bool exactResumeTarget = resume_identity::IsExactResumeTargetCleanupRequest(
+            response->requestid(), instanceID, runtimeID);
+        const auto owner = instanceResponseMap_.find(instanceID);
+        const bool stoppingLogicalOwner = owner == instanceResponseMap_.end()
+            || owner->second.startruntimeinstanceresponse().runtimeid() == runtimeID;
+        if (!exactResumeTarget) {
+            (void)instanceResponseMap_.erase(instanceID);
+        } else if (stoppingLogicalOwner) {
+            bool rebound = false;
+            for (const auto &[survivingRuntimeID, survivingInfo] : instanceInfoMap_) {
+                if (survivingRuntimeID == runtimeID || survivingInfo.instanceid() != instanceID) {
+                    continue;
+                }
+                const auto survivingResponse = runtimeResponseMap_.find(survivingRuntimeID);
+                if (survivingResponse == runtimeResponseMap_.end()) {
+                    continue;
+                }
+                instanceResponseMap_[instanceID] = survivingResponse->second;
+                rebound = true;
+                break;
+            }
+            if (!rebound) {
+                (void)instanceResponseMap_.erase(instanceID);
+            }
+        }
+        (void)runtimeResponseMap_.erase(runtimeID);
         (void)instanceInfoMap_.erase(runtimeID);
     }
     Send(from, "StopInstanceResponse", response->SerializeAsString());
@@ -801,6 +1053,17 @@ void RuntimeManager::DeleteInstanceMetrics(const litebus::Future<Status> &status
     std::string runtimeID = request->runtimeid();
     if (instanceInfoMap_.find(runtimeID) != instanceInfoMap_.end()) {
         auto instanceInfo = instanceInfoMap_[runtimeID];
+        if (resume_identity::IsExactResumeTargetCleanupRequest(
+                request->requestid(), instanceInfo.instanceid(), runtimeID)) {
+            for (const auto &[ownedRuntimeID, ownedInfo] : instanceInfoMap_) {
+                if (ownedRuntimeID != runtimeID
+                    && ownedInfo.instanceid() == instanceInfo.instanceid()) {
+                    YRLOG_INFO("{}|{}|keep winner metrics while stopping exact resume loser runtime({})",
+                               request->traceid(), request->requestid(), runtimeID);
+                    return;
+                }
+            }
+        }
         RETURN_IF_NULL(metricsClient_);
         (void)metricsClient_->DeleteInstanceMetrics(instanceInfo.deploymentconfig().deploydir(),
                                                     instanceInfo.instanceid());
@@ -1116,14 +1379,15 @@ Status RuntimeManager::QueryDebugInstanceInfosResponse(const litebus::AID &from,
 
 Status RuntimeManager::SnapshotRuntimeResponse(
     const litebus::AID &from,
-    const std::string &instanceID,
-    const std::string &requestID,
+    const std::shared_ptr<messages::SnapshotRuntimeRequest> &request,
     const litebus::Future<messages::SnapshotRuntimeResponse> &responseFuture)
 {
+    const auto &requestID = request->requestid();
     if (responseFuture.IsError()) {
         YRLOG_ERROR("{}|snapshot runtime future error: {}", requestID, responseFuture.GetErrorCode());
         messages::SnapshotRuntimeResponse response;
         response.set_requestid(requestID);
+        response.set_agentrequestgeneration(request->agentrequestgeneration());
         response.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
         response.set_message("snapshot runtime failed");
         (void)Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
@@ -1131,7 +1395,9 @@ Status RuntimeManager::SnapshotRuntimeResponse(
     }
 
     auto response = responseFuture.Get();
-    YRLOG_INFO("{}|snapshot runtime completed for instance({}), code: {}", requestID, instanceID, response.code());
+    response.set_agentrequestgeneration(request->agentrequestgeneration());
+    YRLOG_INFO("{}|snapshot runtime completed for instance({}), code: {}", requestID, request->instanceid(),
+               response.code());
     (void)Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
     return Status::OK();
 }

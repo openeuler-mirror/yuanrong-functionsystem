@@ -17,7 +17,9 @@
 #include "sandboxd_executor.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <filesystem>
 #include <nlohmann/json.hpp>
 #include <unordered_set>
 
@@ -28,13 +30,16 @@
 #include "common/logs/logging.h"
 #include "common/metrics/metrics_adapter.h"
 #include "common/resource_view/resource_type.h"
+#include "common/snapshot_storage/snapshot_storage.h"
 #include "common/trace/create_trace_helper.h"
 #include "common/utils/actor_worker.h"
 #include "common/utils/collect_status.h"
 #include "common/utils/generate_message.h"
 #include "common/utils/port_forward_mapping.h"
+#include "common/utils/resume_identity.h"
 #include "common/utils/struct_transfer.h"
 #include "port/port_manager.h"
+#include "runtime_manager/ckpt/pause_artifact_path_manager.h"
 #include "runtime_manager/config/build.h"
 #include "runtime_manager/executor/sandboxd/sandbox_command_utils.h"
 #include "sandboxd_request_builder.h"
@@ -62,43 +67,206 @@ constexpr double DEFAULT_SANDBOX_CPU_MILLICORES     = 500.0;
 constexpr double DEFAULT_SANDBOX_MEMORY_MB          = 500.0;
 constexpr int32_t MAX_PORT_NUMBER                   = 65535;
 
+constexpr std::array<const char *, 5> STABLE_SANDBOX_LABELS = {
+    "instance_id", "request_id", "runtime_id", "source_snapshot_id", "target_attempt_id"
+};
+
+bool IsDecimalPort(const std::string &value)
+{
+    return !value.empty() && std::all_of(value.begin(), value.end(), [](const char ch) {
+        return ch >= '0' && ch <= '9';
+    });
+}
+
+std::string NormalizeCheckpointRoot(const std::string &checkpointDir)
+{
+    const auto root = std::filesystem::path(checkpointDir.empty() ? DEFAULT_CHECKPOINT_DIR : checkpointDir);
+    return std::filesystem::absolute(root).lexically_normal().string();
+}
+
+bool IsSafePauseIdentityComponent(const std::string &component)
+{
+    return !component.empty() && component != "." && component != ".."
+        && component.find('/') == std::string::npos
+        && component.find('\\') == std::string::npos
+        && component.find('\0') == std::string::npos;
+}
+
+Status ValidatePauseSourceCleanupRequest(const messages::StopInstanceRequest &request)
+{
+    constexpr char prefix[] = "pause-release/";
+    if (request.requestid().rfind(prefix, 0) != 0) {
+        return Status::OK();
+    }
+    if (!IsSafePauseIdentityComponent(request.instanceid())
+        || !IsSafePauseIdentityComponent(request.checkpointid())
+        || request.tenantid().empty() || request.runtimeid().empty()
+        || request.sourcesandboxid().empty() || request.checkpointsize() == 0
+        || request.checkpointsha256().empty()) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "pause source cleanup identity is incomplete or unsafe");
+    }
+    const auto expectedRequestID = std::string(prefix) + request.instanceid() + "/" + request.checkpointid();
+    if (request.requestid() != expectedRequestID) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "pause source cleanup request ID does not match its physical identity");
+    }
+    return Status::OK();
+}
+
+SandboxdResumeIdentity ConsumeRestoreIdentityImpl(messages::StartInstanceRequest &request)
+{
+    SandboxdResumeIdentity identity;
+    auto *extensions = request.mutable_scheduleoption()->mutable_extension();
+    const auto marker = extensions->find(resume_identity::EXECUTOR_MARKER_EXTENSION);
+    std::string targetAgentID;
+    int64_t expectedVersion = 0;
+    int64_t protocolVersion = 0;
+    bool parsedExpectedVersion = false;
+    bool parsedProtocolVersion = false;
+    bool hasReservedResumeIdentity = false;
+    bool onlyExecutorBoundaryKeys = marker != extensions->end();
+    for (const auto &[key, value] : *extensions) {
+        if (!resume_identity::IsReservedExtension(key)) {
+            continue;
+        }
+        hasReservedResumeIdentity = true;
+        if (key == resume_identity::LOGICAL_REQUEST_EXTENSION) {
+            identity.logicalRequestID = value;
+        } else if (key == resume_identity::EXPECTED_VERSION_EXTENSION) {
+            parsedExpectedVersion = resume_identity::ParsePositiveInt64(value, &expectedVersion);
+        } else if (key == resume_identity::TARGET_AGENT_EXTENSION) {
+            targetAgentID = value;
+        } else if (key == resume_identity::PROTOCOL_VERSION_EXTENSION) {
+            parsedProtocolVersion = resume_identity::ParsePositiveInt64(value, &protocolVersion);
+        } else if (key != resume_identity::EXECUTOR_MARKER_EXTENSION) {
+            onlyExecutorBoundaryKeys = false;
+        }
+    }
+    const auto &info = request.runtimeinstanceinfo();
+    const auto tenant = info.runtimeconfig().posixenvs().find(YR_TENANT_ID);
+    if (tenant != info.runtimeconfig().posixenvs().end()) {
+        identity.tenantID = tenant->second;
+    }
+    const bool trustedResume = onlyExecutorBoundaryKeys && parsedExpectedVersion && parsedProtocolVersion
+        && info.has_snapshotinfo()
+        && !info.has_reusablesnapshotrestore()
+        && resume_identity::ParseAndValidateExecutorMarker(
+            info.instanceid(), identity.tenantID, info.requestid(), info.snapshotinfo(),
+            expectedVersion, targetAgentID, protocolVersion,
+            marker == extensions->end() ? std::string{} : marker->second, &identity.logicalRequestID)
+        && resume_identity::ValidateBoundaryIdentity(
+            info.instanceid(), identity.logicalRequestID, identity.tenantID, info.requestid(),
+            info.snapshotinfo(), expectedVersion, targetAgentID, protocolVersion,
+            resume_identity::IdentityDigest(
+                info.instanceid(), identity.logicalRequestID, identity.tenantID, info.requestid(),
+                info.snapshotinfo(), expectedVersion, targetAgentID, protocolVersion))
+        && info.runtimeid() == resume_identity::RuntimeID(info.instanceid(), info.requestid());
+    const bool trustedReusable = !hasReservedResumeIdentity && !info.has_snapshotinfo()
+        && !identity.tenantID.empty() && info.has_reusablesnapshotrestore()
+        && resume_identity::ValidateReusableSnapshotRestore(info.reusablesnapshotrestore())
+        && info.runtimeid() == resume_identity::RuntimeID(info.instanceid(), info.requestid());
+    identity.trusted = trustedResume || trustedReusable;
+    identity.reusable = trustedReusable;
+    identity.rejected = (hasReservedResumeIdentity || info.has_reusablesnapshotrestore())
+        && !identity.trusted;
+    resume_identity::StripReservedExtensions(extensions);
+    if (identity.trusted) {
+        identity.logicalRequestID = trustedReusable ? info.requestid() : identity.logicalRequestID;
+        identity.snapshotID = trustedReusable ? info.reusablesnapshotrestore().snapshotid()
+                                              : info.snapshotinfo().checkpointid();
+        identity.expectedSize = trustedReusable ? info.reusablesnapshotrestore().artifact().size()
+                                                : info.snapshotinfo().size();
+        identity.expectedSHA256 = trustedReusable ? info.reusablesnapshotrestore().artifact().sha256()
+                                                  : info.snapshotinfo().sha256();
+        identity.labels = {
+            { "instance_id", info.instanceid() },
+            { "request_id", identity.logicalRequestID },
+            { "runtime_id", info.runtimeid() },
+            { "source_snapshot_id", identity.snapshotID },
+            { "target_attempt_id", info.requestid() },
+        };
+    }
+    return identity;
+}
+
+Status ValidateTrustedRestoreArtifact(
+    const std::string &checkpointPath,
+    const std::shared_ptr<messages::StartInstanceRequest> &request)
+{
+    const auto &info = request->runtimeinstanceinfo();
+    snapshot_storage::SnapshotObjectMetadata expected;
+    if (info.has_reusablesnapshotrestore()) {
+        const auto &restore = info.reusablesnapshotrestore();
+        if (!resume_identity::ValidateReusableSnapshotRestore(restore)) {
+            return Status(StatusCode::ERR_PARAM_INVALID,
+                          "invalid reusable Snapshot restore metadata");
+        }
+        expected.snapshotID = restore.snapshotid();
+        expected.size = static_cast<uint64_t>(restore.artifact().size());
+        expected.sha256 = restore.artifact().sha256();
+    } else {
+        const auto &snapshot = info.snapshotinfo();
+        expected.snapshotID = snapshot.checkpointid();
+        expected.size = static_cast<uint64_t>(snapshot.size());
+        expected.sha256 = snapshot.sha256();
+    }
+    expected.complete = true;
+    return snapshot_storage::detail::ValidateFile(checkpointPath, expected);
+}
+
+template <typename Sandbox>
+bool IsExactRunningResumeSandbox(const Sandbox &sandbox, const std::map<std::string, std::string> &labels)
+{
+    if (sandbox.state() != runtime::v1::SANDBOX_STATE_RUNNING || sandbox.labels().size() != labels.size()) {
+        return false;
+    }
+    for (const auto &[key, value] : labels) {
+        const auto found = sandbox.labels().find(key);
+        if (found == sandbox.labels().end() || found->second != value) {
+            return false;
+        }
+    }
+    return true;
+}
+
+template <typename Sandbox>
+bool HasExactResumeCleanupIdentity(const Sandbox &sandbox, const std::string &logicalInstanceID,
+                                   const std::string &runtimeID, const std::string &targetAttemptID)
+{
+    const std::array<std::pair<std::string, std::string>, 3> expected = {{
+        {"instance_id", logicalInstanceID},
+        {"runtime_id", runtimeID},
+        {"target_attempt_id", targetAttemptID},
+    }};
+    for (const auto &[key, value] : expected) {
+        const auto found = sandbox.labels().find(key);
+        if (found == sandbox.labels().end() || found->second != value) {
+            return false;
+        }
+    }
+    return sandbox.id() == "sbox-" + runtimeID;
+}
+
+template <typename SourceLabels, typename TargetLabels>
+void CopyStableSandboxLabels(const SourceLabels &source, TargetLabels *target)
+{
+    if (target == nullptr) {
+        return;
+    }
+    target->clear();
+    for (const auto *key : STABLE_SANDBOX_LABELS) {
+        auto it = source.find(key);
+        if (it != source.end()) {
+            (*target)[key] = it->second;
+        }
+    }
+}
+
 struct SandboxRequestedResources {
     double cpuCores = 0.0;
     double memoryBytes = 0.0;
 };
-
-Status ParseReconcileHostPorts(const messages::RuntimeReconcileEntry &entry, std::vector<int> *hostPorts)
-{
-    hostPorts->clear();
-    if (entry.portmappings().empty()) {
-        return Status::OK();
-    }
-
-    try {
-        const auto mappings = json::parse(entry.portmappings());
-        if (!mappings.is_array()) {
-            return Status(StatusCode::RUNTIME_MANAGER_PORT_UNAVAILABLE,
-                          "persisted port mappings for runtime " + entry.runtimeid() + " are not a JSON array");
-        }
-        for (const auto &value : mappings) {
-            if (!value.is_string()) {
-                return Status(StatusCode::RUNTIME_MANAGER_PORT_UNAVAILABLE,
-                              "persisted port mapping for runtime " + entry.runtimeid() + " is not a string");
-            }
-            const auto mapping = ParsePortForwardMapping(value.get<std::string>());
-            if (!mapping.has_value()) {
-                return Status(StatusCode::RUNTIME_MANAGER_PORT_UNAVAILABLE,
-                              "invalid persisted port mapping for runtime " + entry.runtimeid() + ": " +
-                                  value.dump());
-            }
-            hostPorts->push_back(static_cast<int>(mapping->hostPort));
-        }
-    } catch (const json::exception &e) {
-        return Status(StatusCode::RUNTIME_MANAGER_PORT_UNAVAILABLE,
-                      "failed to parse persisted port mappings for runtime " + entry.runtimeid() + ": " + e.what());
-    }
-    return Status::OK();
-}
 
 // Downstream sandboxd port forwarding only accepts L4 protocols (tcp/udp). L7
 // portForward schemes (http/https/ws/wss) are normalized to tcp before sending
@@ -280,6 +448,16 @@ bool IsNormalSandboxExit(const runtime::v1::WaitResponse &response)
 
 }  // namespace
 
+SandboxdResumeIdentity SandboxdExecutor::ConsumeRestoreIdentity(messages::StartInstanceRequest &request)
+{
+    return ConsumeRestoreIdentityImpl(request);
+}
+
+bool SandboxdExecutor::IsRestoreRequest(const messages::RuntimeInstanceInfo &info)
+{
+    return !info.snapshotinfo().checkpointid().empty() || info.has_reusablesnapshotrestore();
+}
+
 bool SandboxdExecutor::IsRetryableWaitError(const Status &status)
 {
     const auto code = status.StatusCode();
@@ -296,6 +474,89 @@ uint32_t SandboxdExecutor::SandboxReclaimBackoffMs(uint32_t failedAttempts)
     return static_cast<uint32_t>(delayMs);
 }
 
+bool SandboxdExecutor::IsResultUnknownRpcError(const Status &status)
+{
+    return resume_identity::IsResultUnknownStatusCode(status.StatusCode());
+}
+
+std::vector<::messages::SandboxPhysicalFact> SandboxdExecutor::ProjectPhysicalFacts(
+    const runtime::v1::ListSandboxesResponse &listResponse)
+{
+    std::vector<::messages::SandboxPhysicalFact> facts;
+    facts.reserve(static_cast<size_t>(listResponse.sandboxes_size()));
+    for (const auto &sandbox : listResponse.sandboxes()) {
+        ::messages::SandboxPhysicalFact fact;
+        fact.set_sandboxid(sandbox.id());
+        fact.set_state(sandbox.state());
+        CopyStableSandboxLabels(sandbox.labels(), fact.mutable_labels());
+        facts.emplace_back(std::move(fact));
+    }
+    return facts;
+}
+
+Status SandboxdExecutor::BuildPortReservationsFromPhysicalFacts(
+    const runtime::v1::ListSandboxesResponse &listResponse,
+    PortManager::ReservationMap &reservations)
+{
+    PortManager::ReservationMap rebuilt;
+    std::unordered_set<int> occupiedHostPorts;
+    for (const auto &sandbox : listResponse.sandboxes()) {
+        if (sandbox.state() != runtime::v1::SANDBOX_STATE_RUNNING) {
+            continue;
+        }
+        const auto runtimeIt = sandbox.labels().find("runtime_id");
+        if (runtimeIt == sandbox.labels().end() || runtimeIt->second.empty()) {
+            return Status(StatusCode::ERR_PARAM_INVALID,
+                          "sandboxd running physical fact has no runtime owner label");
+        }
+        const auto &runtimeID = runtimeIt->second;
+        if (rebuilt.count(runtimeID) != 0) {
+            return Status(StatusCode::SCHEDULE_CONFLICTED,
+                          "sandboxd running physical facts report duplicate runtime ownership");
+        }
+        auto &hostPorts = rebuilt[runtimeID];
+        for (const auto &encoded : sandbox.ports()) {
+            const auto first = encoded.find(':');
+            const auto second = first == std::string::npos ? std::string::npos : encoded.find(':', first + 1);
+            if (first == std::string::npos || second == std::string::npos
+                || encoded.find(':', second + 1) != std::string::npos) {
+                return Status(StatusCode::ERR_PARAM_INVALID,
+                              "sandboxd running physical fact has malformed port mapping");
+            }
+            try {
+                const auto protocol = encoded.substr(0, first);
+                size_t hostConsumed = 0;
+                size_t containerConsumed = 0;
+                const auto hostText = encoded.substr(first + 1, second - first - 1);
+                const auto containerText = encoded.substr(second + 1);
+                if (!IsDecimalPort(hostText) || !IsDecimalPort(containerText)) {
+                    return Status(StatusCode::ERR_PARAM_INVALID,
+                                  "sandboxd running physical fact has invalid port mapping");
+                }
+                const int hostPort = std::stoi(hostText, &hostConsumed);
+                const int containerPort = std::stoi(containerText, &containerConsumed);
+                if ((protocol != "tcp" && protocol != "udp")
+                    || hostConsumed != hostText.size() || containerConsumed != containerText.size()
+                    || hostPort <= 0 || hostPort > MAX_PORT_NUMBER
+                    || containerPort <= 0 || containerPort > MAX_PORT_NUMBER) {
+                    return Status(StatusCode::ERR_PARAM_INVALID,
+                                  "sandboxd running physical fact has invalid port mapping");
+                }
+                if (!occupiedHostPorts.insert(hostPort).second) {
+                    return Status(StatusCode::SCHEDULE_CONFLICTED,
+                                  "sandboxd running physical facts report duplicate host port ownership");
+                }
+                hostPorts.push_back(hostPort);
+            } catch (const std::exception &) {
+                return Status(StatusCode::ERR_PARAM_INVALID,
+                              "sandboxd running physical fact has invalid port mapping");
+            }
+        }
+        std::sort(hostPorts.begin(), hostPorts.end());
+    }
+    reservations.swap(rebuilt);
+    return Status::OK();
+}
 void SandboxdExecutor::StartSandboxCreateSpan(const std::shared_ptr<messages::StartInstanceRequest> &request)
 {
     trace::StartSandboxCreateSpan(request);
@@ -312,13 +573,21 @@ void SandboxdExecutor::StopSandboxCreateSpan(const std::shared_ptr<messages::Sta
 SandboxdExecutor::SandboxdExecutor(const std::string &name, const litebus::AID &functionAgentAID,
                                    const std::string &checkpointDir,
                                    AvailableRuntimesCallback availableRuntimesCallback)
-    : Executor(name), functionAgentAID_(functionAgentAID),
+    : Executor(name), checkpointRoot_(NormalizeCheckpointRoot(checkpointDir)),
+      pauseArtifactWorker_(std::make_shared<ActorWorker>()),
+      functionAgentAID_(functionAgentAID),
       availableRuntimesCallback_(std::move(availableRuntimesCallback))
 {
-    const std::string &dir = checkpointDir.empty() ? DEFAULT_CHECKPOINT_DIR : checkpointDir;
-    auto ckptActor = std::make_shared<CkptFileManagerActor>(name + "_CkptFileManager", dir);
+    auto ckptActor = std::make_shared<CkptFileManagerActor>(name + "_CkptFileManager", checkpointRoot_);
     litebus::Spawn(ckptActor);
     ckptFileManager_ = std::make_shared<CkptFileManager>(ckptActor);
+}
+
+std::shared_ptr<PauseArtifactPathManager> SandboxdExecutor::CreatePauseArtifactPathManager(
+    const std::string &tenantHash, const std::string &instanceID)
+{
+    return std::make_shared<PauseArtifactPathManager>(checkpointRoot_, tenantHash, instanceID,
+                                                      pauseArtifactWorker_);
 }
 
 // ── Executor lifecycle ────────────────────────────────────────────────────────
@@ -332,8 +601,8 @@ void SandboxdExecutor::InitConfig()
         YRLOG_INFO("SandboxdExecutor: connecting to sandboxd at {}", endpoint);
         sandboxd_ = GrpcClient<runtime::v1::SandboxService>::CreateUdsGrpcClient(endpoint);
         synced_ = true;
+        PortManager::GetInstance().BeginReconcile();
         CheckConnectivity();
-        FetchInitialAvailableRuntimes();
     } else {
         YRLOG_INFO("SandboxdExecutor: no sandboxd endpoint, executor disabled");
         if (availableRuntimesCallback_) {
@@ -360,8 +629,16 @@ void SandboxdExecutor::Finalize()
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartInstance(
     const std::shared_ptr<messages::StartInstanceRequest> &request, const std::vector<int> &cardIDs)
 {
+    auto resumeIdentity = ConsumeRestoreIdentity(*request);
     const auto &info     = request->runtimeinstanceinfo();
     const auto &runtimeID = info.runtimeid();
+    if (resumeIdentity.rejected) {
+        messages::StartInstanceResponse response;
+        response.set_requestid(info.requestid());
+        response.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
+        response.set_message("invalid trusted resume executor identity");
+        return response;
+    }
 
     if (auto existing = stateManager_.GetInProgressFuture(runtimeID)) {
         YRLOG_INFO("{}|{}|StartInstance: dedup runtimeID({})", info.traceid(), info.requestid(), runtimeID);
@@ -393,19 +670,20 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartInstance
     features.cleanStreamProducerEnable = config_.cleanStreamProducerEnable;
     Envs envs = GenerateEnvs(config_, request, port, cardIDs, features);
 
-    // Create a placeholder future for dedup; will be replaced by the real future
+    // Create a placeholder future for dedup; MarkStartInProgress replaces it
+    // with the real operation Future before this actor handles another request.
     litebus::Promise<messages::StartInstanceResponse> promise;
     auto guard = std::make_shared<SandboxdStartGuard>(stateManager_, runtimeID, promise.GetFuture());
-    SandboxdStartContext context{request, cmdArgs, port, envs, cardIDs, guard};
+    SandboxdStartContext context{request, cmdArgs, port, envs, cardIDs, guard, std::move(resumeIdentity)};
 
     YRLOG_INFO("{}|{}|StartInstance: route to {}",
                info.traceid(), info.requestid(),
-               isWarmUp ? "WarmUp" : (info.snapshotinfo().checkpointid().empty() ? "Normal" : "Restore"));
+               isWarmUp ? "WarmUp" : (IsRestoreRequest(info) ? "Restore" : "Normal"));
 
     litebus::Future<messages::StartInstanceResponse> future;
     if (isWarmUp) {
         future = StartWarmUp(request, cmdArgs, port, envs, guard);
-    } else if (!info.snapshotinfo().checkpointid().empty()) {
+    } else if (IsRestoreRequest(info)) {
         future = StartBySnapshot(context);
     } else {
         future = StartNormal(context);
@@ -451,11 +729,31 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnStartComple
     if (response.code() == static_cast<int32_t>(StatusCode::SUCCESS)) {
         auto stopReq = std::make_shared<messages::StopInstanceRequest>();
         stopReq->set_runtimeid(runtimeID);
-        StopInstance(stopReq, false);
+        StopInstance(stopReq, false).OnComplete(
+            litebus::Defer(GetAID(), &SandboxdExecutor::OnPendingDeleteCompleted,
+                           runtimeID, std::placeholders::_1));
+    } else {
+        OnPendingDeleteCompleted(runtimeID, litebus::Future<Status>(Status::OK()));
     }
     messages::StartInstanceResponse newRsp = response;
     newRsp.set_requestid(response.requestid());
     return newRsp;
+}
+
+void SandboxdExecutor::OnPendingDeleteCompleted(
+    const std::string &runtimeID, const litebus::Future<Status> &future)
+{
+    auto iter = pendingDeleteWaiters_.find(runtimeID);
+    if (iter == pendingDeleteWaiters_.end()) {
+        return;
+    }
+    const auto status = future.IsError()
+        ? Status(static_cast<StatusCode>(future.GetErrorCode()), "pending sandbox delete future failed")
+        : future.Get();
+    for (const auto &waiter : iter->second) {
+        waiter->SetValue(status);
+    }
+    pendingDeleteWaiters_.erase(iter);
 }
 
 // ── Warm-up path (Register a reusable SandboxTemplate) ───────────────────────
@@ -525,17 +823,46 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnWarmUpRegis
     return rsp;
 }
 
-// ── Restore path (download checkpoint -> add ref -> Restore RPC) ─────────────
+// ── Restore path (legacy download/ref or trusted attempt -> Restore RPC) ─────
 
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartBySnapshot(const SandboxdStartContext &context)
 {
     const auto &request = context.request;
     const auto &info         = request->runtimeinstanceinfo();
     const auto &snapshotInfo = info.snapshotinfo();
+    const auto snapshotID = context.resumeIdentity.trusted
+        ? context.resumeIdentity.snapshotID : snapshotInfo.checkpointid();
 
     YRLOG_INFO("{}|{}|StartBySnapshot: instance({}) runtime({}) checkpoint({})", info.traceid(), info.requestid(),
-               info.instanceid(), info.runtimeid(), snapshotInfo.checkpointid());
+               info.instanceid(), info.runtimeid(), snapshotID);
 
+    if (context.resumeIdentity.trusted) {
+        const auto tenantHash = PauseArtifactPathManager::StableTenantHash(context.resumeIdentity.tenantID);
+        auto artifacts = CreatePauseArtifactPathManager(tenantHash, info.instanceid());
+        const auto attempt = artifacts->PlanRestoreAttempt(snapshotID, info.requestid());
+        if (attempt.status.IsError()) {
+            return GenFailStartInstanceResponse(request, attempt.status.StatusCode(),
+                                                attempt.status.RawMessage());
+        }
+        std::error_code error;
+        const auto fileStatus = std::filesystem::symlink_status(attempt.path, error);
+        if (error || !std::filesystem::is_regular_file(fileStatus)) {
+            return GenFailStartInstanceResponse(
+                request, StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED,
+                "trusted resume attempt is not an existing regular file");
+        }
+        snapshot_storage::SnapshotObjectMetadata expected;
+        expected.snapshotID = snapshotID;
+        expected.size = static_cast<uint64_t>(context.resumeIdentity.expectedSize);
+        expected.sha256 = context.resumeIdentity.expectedSHA256;
+        expected.complete = true;
+        const auto validation = snapshot_storage::detail::ValidateFile(
+            attempt.path.string(), expected);
+        if (validation.IsError()) {
+            return GenFailStartInstanceResponse(request, validation.StatusCode(), validation.RawMessage());
+        }
+        return OnCheckpointDownloaded(attempt.path.string(), context);
+    }
     ASSERT_IF_NULL(ckptOrch_);
     return ckptOrch_->DownloadForRestore(snapshotInfo.checkpointid(), snapshotInfo.storage(), info.requestid())
         .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnCheckpointDownloaded, std::placeholders::_1, context));
@@ -545,11 +872,14 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointD
     const std::string &checkpointPath, const SandboxdStartContext &context)
 {
     const auto &request = context.request;
-    const auto &info         = request->runtimeinstanceinfo();
-    const auto &runtimeID    = info.runtimeid();
-    const auto &checkpointID = info.snapshotinfo().checkpointid();
     SandboxdRestoreContext restoreContext{checkpointPath, context};
 
+    if (context.resumeIdentity.trusted) {
+        return OnCheckpointRefAdded(Status::OK(), restoreContext);
+    }
+    const auto &info = request->runtimeinstanceinfo();
+    const auto &runtimeID = info.runtimeid();
+    const auto &checkpointID = info.snapshotinfo().checkpointid();
     return ckptOrch_->AddRef(checkpointID, runtimeID, info.requestid())
         .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnCheckpointRefAdded, std::placeholders::_1,
                              restoreContext));
@@ -566,6 +896,12 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointR
                                             "add checkpoint reference failed: " + refStatus.RawMessage());
     }
 
+    if (context.start.resumeIdentity.trusted) {
+        // sandboxd is the physical authority.  Query the deterministic sandbox
+        // before allocating any target-node ports.
+        return ReconcileBeforeResumeRestore(context);
+    }
+
     SandboxdRequestBuilder builder{cmdBuilder_};
     SandboxdStartParams params;
     params.request   = request;
@@ -573,40 +909,213 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointR
     params.envs      = context.start.envs;
     params.runtimeID = info.runtimeid();
     params.registeredTemplateIDs = registeredTemplateIDs_;
+    const auto portStatus = ApplyPortForwardMappings(&params, request);
+    if (portStatus.IsError()) {
+        ckptOrch_->ReleaseRef(info.runtimeid(), info.requestid());
+        return GenFailStartInstanceResponse(request, portStatus.StatusCode(), portStatus.RawMessage());
+    }
 
     auto [status, startReq] = builder.Build(params);
     if (!status.IsOk()) {
         ReportSandboxLifecycleStatus(info, info.runtimeid(), SandboxLifecycleStatus::ABNORMAL);
-        // Compensate: remove the reference we just added
         ckptOrch_->ReleaseRef(info.runtimeid(), info.requestid());
+        stateManager_.UpdatePortMappings(params.runtimeID, "");
+        PortManager::GetInstance().ReleasePorts(params.runtimeID);
         return GenFailStartInstanceResponse(request, status.StatusCode(), status.RawMessage());
     }
-
-    auto restoreReq = std::make_shared<runtime::v1::RestoreRequest>();
-    *restoreReq->mutable_sandbox() = *startReq;
-    restoreReq->set_checkpoint_dir(context.checkpointPath);
-
     StartSandboxCreateSpan(request);
+    auto restoreReq = std::make_shared<runtime::v1::RestoreRequest>();
+    *restoreReq->mutable_config() = *startReq;
+    restoreReq->set_checkpoint_dir(context.checkpointPath);
     return DoRestore(request, restoreReq)
         .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnRestoreDone, std::placeholders::_1, request,
-                             context.start.guard));
+                             context.start.guard, false, false));
+}
+
+litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::ReconcileBeforeResumeRestore(
+    const SandboxdRestoreContext &context)
+{
+    return DoListForOperation("sbox-" + context.start.request->runtimeinstanceinfo().runtimeid(),
+                              context.start.resumeIdentity.labels)
+        .Then([this, context](const SandboxdListResult &listed)
+                  -> litebus::Future<messages::StartInstanceResponse> {
+            if (listed.status.IsError()) {
+                return OnRestoreDone(
+                    {Status(StatusCode::GRPC_UNAVAILABLE,
+                            "resume pre-restore List result unavailable: " + listed.status.RawMessage()), {}, {}},
+                    context.start.request, context.start.guard, true);
+            }
+            if (listed.response.sandboxes_size() == 1
+                && IsExactRunningResumeSandbox(listed.response.sandboxes(0),
+                                                context.start.resumeIdentity.labels)) {
+                return OnRestoreDone({Status::OK(), listed.response.sandboxes(0).id(),
+                                      {listed.response.sandboxes(0).ports().begin(),
+                                       listed.response.sandboxes(0).ports().end()}},
+                                     context.start.request, context.start.guard, true, true);
+            }
+            if (listed.response.sandboxes_size() != 0) {
+                return OnRestoreDone(
+                    {Status(StatusCode::SCHEDULE_CONFLICTED,
+                            "resume sandbox facts are ambiguous or mismatched"), {}, {}},
+                    context.start.request, context.start.guard, true);
+            }
+            return RestoreAfterExactAbsence(context);
+        });
+}
+
+litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::RestoreAfterExactAbsence(
+    const SandboxdRestoreContext &context)
+{
+    const auto &request = context.start.request;
+    const auto &info = request->runtimeinstanceinfo();
+    const auto validation = ValidateTrustedRestoreArtifact(context.checkpointPath, request);
+    if (validation.IsError()) {
+        return OnRestoreDone({validation, {}, {}}, request, context.start.guard, true);
+    }
+
+    SandboxdRequestBuilder builder{cmdBuilder_};
+    SandboxdStartParams params;
+    params.request = request;
+    params.cmdArgs = context.start.cmdArgs;
+    params.envs = context.start.envs;
+    params.runtimeID = info.runtimeid();
+    params.sandboxID = "sbox-" + info.runtimeid();
+    params.registeredTemplateIDs = registeredTemplateIDs_;
+    const auto portStatus = ApplyPortForwardMappings(&params, request);
+    if (portStatus.IsError()) {
+        return OnRestoreDone({portStatus, {}, {}}, request, context.start.guard, true);
+    }
+    auto [status, startReq] = builder.Build(params);
+    if (status.IsError()) {
+        stateManager_.UpdatePortMappings(params.runtimeID, "");
+        PortManager::GetInstance().ReleasePorts(params.runtimeID);
+        return OnRestoreDone({status, {}, {}}, request, context.start.guard, true);
+    }
+    startReq->mutable_labels()->insert(context.start.resumeIdentity.labels.begin(),
+                                       context.start.resumeIdentity.labels.end());
+    auto restoreReq = std::make_shared<runtime::v1::RestoreRequest>();
+    *restoreReq->mutable_config() = *startReq;
+    restoreReq->set_checkpoint_dir(std::filesystem::path(context.checkpointPath).parent_path().string());
+    restoreReq->set_checkpoint_id(context.start.resumeIdentity.snapshotID);
+    restoreReq->set_expected_sha256(context.start.resumeIdentity.expectedSHA256);
+    restoreReq->set_expected_size(context.start.resumeIdentity.expectedSize);
+    StartSandboxCreateSpan(request);
+    return DoRestore(request, restoreReq)
+        .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnResumeRestoreUncertain,
+                             std::placeholders::_1, context, restoreReq, false));
+}
+
+litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnResumeRestoreUncertain(
+    const SandboxdRestoreResult &result, const SandboxdRestoreContext &context,
+    const std::shared_ptr<runtime::v1::RestoreRequest> &restoreReq, bool retried)
+{
+    if (result.status.IsOk() || !IsResultUnknownRpcError(result.status)) {
+        return OnRestoreDone(result, context.start.request, context.start.guard, true, false);
+    }
+    return DoListForOperation("sbox-" + context.start.request->runtimeinstanceinfo().runtimeid(),
+                              context.start.resumeIdentity.labels)
+        .Then([this, result, context, restoreReq, retried](const SandboxdListResult &listed)
+                  -> litebus::Future<messages::StartInstanceResponse> {
+            if (listed.status.IsError()) {
+                return OnRestoreDone(
+                    {Status(StatusCode::GRPC_UNAVAILABLE,
+                            "resume authoritative re-List result unavailable: " + listed.status.RawMessage()), {}, {}},
+                    context.start.request, context.start.guard, true);
+            }
+            if (listed.response.sandboxes_size() == 1
+                && IsExactRunningResumeSandbox(listed.response.sandboxes(0),
+                                                context.start.resumeIdentity.labels)) {
+                return OnRestoreDone({Status::OK(), listed.response.sandboxes(0).id(),
+                                      {listed.response.sandboxes(0).ports().begin(),
+                                       listed.response.sandboxes(0).ports().end()}},
+                                     context.start.request, context.start.guard, true, true);
+            }
+            if (listed.response.sandboxes_size() == 0 && !retried) {
+                const auto validation = ValidateTrustedRestoreArtifact(
+                    context.checkpointPath, context.start.request);
+                if (validation.IsError()) {
+                    return OnRestoreDone(
+                        {validation, {}, {}}, context.start.request, context.start.guard, true);
+                }
+                return DoRestore(context.start.request, restoreReq)
+                    .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnResumeRestoreUncertain,
+                                         std::placeholders::_1, context, restoreReq, true));
+            }
+            return OnRestoreDone(result, context.start.request, context.start.guard, true);
+        });
 }
 
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnRestoreDone(
-    const runtime::v1::RestoreResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request,
-    std::shared_ptr<SandboxdStartGuard> guard)
+    const SandboxdRestoreResult &result, const std::shared_ptr<messages::StartInstanceRequest> &request,
+    std::shared_ptr<SandboxdStartGuard> guard, bool trustedResume, bool exactExisting)
 {
     const auto &info = request->runtimeinstanceinfo();
-    if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+    if (result.status.IsError()) {
         YRLOG_ERROR("{}|{}|restore failed for runtime({}): {}", info.traceid(), info.requestid(), info.runtimeid(),
-                    response.message());
+                    result.status.RawMessage());
         ReportSandboxLifecycleStatus(info, info.runtimeid(), SandboxLifecycleStatus::ABNORMAL);
-        // Compensate: release the checkpoint ref we added before restore
-        ckptOrch_->ReleaseRef(info.runtimeid(), info.requestid());
+        if (!trustedResume) {
+            ckptOrch_->ReleaseRef(info.runtimeid(), info.requestid());
+        }
+        stateManager_.UpdatePortMappings(info.runtimeid(), "");
+        PortManager::GetInstance().ReleasePorts(info.runtimeid());
         // guard destructor rolls back state
-        return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_CREATE_EXEC_FAILED, response.message());
+        const auto responseCode = trustedResume && IsResultUnknownRpcError(result.status)
+            ? result.status.StatusCode() : RUNTIME_MANAGER_CREATE_EXEC_FAILED;
+        return GenFailStartInstanceResponse(
+            request, responseCode,
+            fmt::format("Restore gRPC failed for runtime({}): {}", info.runtimeid(), result.status.RawMessage()));
     }
-    const std::string sandboxID = response.id();
+    const std::string sandboxID = result.sandboxID;
+    if (trustedResume) {
+        const auto expectedSandboxID = "sbox-" + info.runtimeid();
+        if (sandboxID != expectedSandboxID) {
+            YRLOG_ERROR("{}|{}|sandboxd restore returned non-deterministic sandbox({}), expected({})",
+                        info.traceid(), info.requestid(), sandboxID, expectedSandboxID);
+            stateManager_.UpdatePortMappings(info.runtimeid(), "");
+            PortManager::GetInstance().ReleasePorts(info.runtimeid());
+            return GenFailStartInstanceResponse(
+                request, StatusCode::ERR_PARAM_INVALID,
+                "sandboxd restore returned a non-deterministic physical identity");
+        }
+        const auto portStatus = exactExisting
+            ? ApplyExistingSandboxPhysicalPortMappings(info.runtimeid(), request, result.ports)
+            : ApplySandboxPhysicalPortMappings(info.runtimeid(), request, result.ports);
+        if (portStatus.IsError()) {
+            YRLOG_ERROR("{}|{}|invalid sandboxd physical port facts for runtime({}) sandbox({}): {}",
+                        info.traceid(), info.requestid(), info.runtimeid(), sandboxID,
+                        portStatus.RawMessage());
+            if (exactExisting) {
+                // The exact sandbox is the durable physical fact.  A cache rebuild
+                // conflict must not delete it; leave it for a deterministic retry.
+                stateManager_.UpdatePortMappings(info.runtimeid(), "");
+                PortManager::GetInstance().ReleasePorts(info.runtimeid());
+                return GenFailStartInstanceResponse(
+                    request, portStatus.StatusCode(),
+                    fmt::format("exact sandbox({}) physical port cache rebuild failed: {}",
+                                sandboxID, portStatus.RawMessage()));
+            }
+            auto del = std::make_shared<runtime::v1::DeleteRequest>();
+            del->set_id(sandboxID);
+            del->set_timeout(0);
+            return DoDelete(info.instanceid(), info.runtimeid(), info.requestid(), del)
+                .Then(litebus::Defer(GetAID(),
+                    [this, request, guard, portStatus, sandboxID](const Status &deleteStatus) {
+                        const auto &failedInfo = request->runtimeinstanceinfo();
+                        stateManager_.UpdatePortMappings(failedInfo.runtimeid(), "");
+                        PortManager::GetInstance().ReleasePorts(failedInfo.runtimeid());
+                        (void)guard;
+                        if (deleteStatus.IsError()) {
+                            return GenFailStartInstanceResponse(
+                                request, deleteStatus.StatusCode(),
+                                fmt::format("invalid sandbox physical port fact; exact sandbox({}) cleanup failed: {}",
+                                            sandboxID, deleteStatus.RawMessage()));
+                        }
+                        return GenFailStartInstanceResponse(
+                            request, portStatus.StatusCode(), portStatus.RawMessage());
+                    }));
+        }
+    }
     stateManager_.UpdateSandboxID(info.runtimeid(), sandboxID);
     guard->Commit();
     sandboxStatsPollingRuntimes_.insert(info.runtimeid());
@@ -649,9 +1158,13 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartNormal(
         PortManager::GetInstance().ReleasePorts(params.runtimeID);
         return GenFailStartInstanceResponse(request, status.StatusCode(), status.RawMessage());
     }
+    // sandboxd owns the physical sandbox identity.  The runtime owner label is
+    // the only metadata needed to rebuild PortManager after an Agent restart.
+    (*startReq->mutable_labels())["runtime_id"] = params.runtimeID;
     StartSandboxCreateSpan(request);
     return DoStart(request, startReq)
-        .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnStartDone, std::placeholders::_1, request, context.guard));
+        .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnStartDone, std::placeholders::_1, request,
+                             context.guard));
 }
 
 Status SandboxdExecutor::ApplyPortForwardMappings(SandboxdStartParams *params,
@@ -686,6 +1199,108 @@ Status SandboxdExecutor::ApplyPortForwardMappings(SandboxdStartParams *params,
     return Status::OK();
 }
 
+Status SandboxdExecutor::ApplySandboxPhysicalPortMappings(
+    const std::string &runtimeID,
+    const std::shared_ptr<messages::StartInstanceRequest> &request,
+    const std::vector<std::string> &physicalPorts)
+{
+    std::vector<int> hostPorts;
+    std::string portMappingsJson;
+    const auto decoded = DecodeSandboxPhysicalPortMappings(
+        request, physicalPorts, hostPorts, portMappingsJson);
+    if (decoded.IsError()) {
+        return decoded;
+    }
+    auto preallocatedHostPorts = PortManager::GetInstance().GetPorts(runtimeID);
+    std::sort(preallocatedHostPorts.begin(), preallocatedHostPorts.end());
+    auto reportedHostPorts = hostPorts;
+    std::sort(reportedHostPorts.begin(), reportedHostPorts.end());
+    if (preallocatedHostPorts != reportedHostPorts) {
+        return Status(StatusCode::SCHEDULE_CONFLICTED,
+                      "sandboxd physical ports differ from the FunctionAgent preallocation");
+    }
+    stateManager_.UpdatePortMappings(runtimeID, portMappingsJson);
+    return Status::OK();
+}
+
+Status SandboxdExecutor::ApplyExistingSandboxPhysicalPortMappings(
+    const std::string &runtimeID,
+    const std::shared_ptr<messages::StartInstanceRequest> &request,
+    const std::vector<std::string> &physicalPorts)
+{
+    std::vector<int> hostPorts;
+    std::string portMappingsJson;
+    const auto decoded = DecodeSandboxPhysicalPortMappings(
+        request, physicalPorts, hostPorts, portMappingsJson);
+    if (decoded.IsError()) {
+        return decoded;
+    }
+    if (!PortManager::GetInstance().ReconcileRuntimePorts(runtimeID, hostPorts)) {
+        return Status(StatusCode::SCHEDULE_CONFLICTED,
+                      "exact sandbox physical ports conflict with another runtime cache owner");
+    }
+    stateManager_.UpdatePortMappings(runtimeID, portMappingsJson);
+    return Status::OK();
+}
+
+Status SandboxdExecutor::DecodeSandboxPhysicalPortMappings(
+    const std::shared_ptr<messages::StartInstanceRequest> &request,
+    const std::vector<std::string> &physicalPorts,
+    std::vector<int> &hostPorts, std::string &portMappingsJson) const
+{
+    const auto &deployOpts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
+    const auto networkIt = deployOpts.find(CONTAINER_NETWORK);
+    const auto expected = networkIt == deployOpts.end()
+        ? std::vector<PortForwardConfig>{}
+        : ParseForwardPorts(networkIt->second);
+    if (expected.size() != physicalPorts.size()) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      fmt::format("sandboxd returned {} ports for {} requested mappings",
+                                  physicalPorts.size(), expected.size()));
+    }
+    hostPorts.clear();
+    json portJson = json::array();
+    std::unordered_set<int> uniqueHostPorts;
+    for (size_t index = 0; index < physicalPorts.size(); ++index) {
+        const auto &encoded = physicalPorts[index];
+        const auto first = encoded.find(':');
+        const auto second = first == std::string::npos ? std::string::npos : encoded.find(':', first + 1);
+        if (first == std::string::npos || second == std::string::npos
+            || encoded.find(':', second + 1) != std::string::npos) {
+            return Status(StatusCode::ERR_PARAM_INVALID,
+                          "sandboxd returned malformed physical port mapping");
+        }
+        try {
+            const auto protocol = encoded.substr(0, first);
+            const auto hostText = encoded.substr(first + 1, second - first - 1);
+            const auto containerText = encoded.substr(second + 1);
+            if (!IsDecimalPort(hostText) || !IsDecimalPort(containerText)) {
+                return Status(StatusCode::ERR_PARAM_INVALID,
+                              "sandboxd returned malformed physical port mapping");
+            }
+            const int hostPort = std::stoi(hostText);
+            const int containerPort = std::stoi(containerText);
+            if (protocol != ToDownstreamL4Protocol(expected[index].protocol)
+                || hostPort <= 0 || hostPort > MAX_PORT_NUMBER
+                || containerPort != static_cast<int>(expected[index].containerPort)
+                || !uniqueHostPorts.insert(hostPort).second) {
+                return Status(StatusCode::ERR_PARAM_INVALID,
+                              "sandboxd physical port mapping conflicts with the network request");
+            }
+            hostPorts.push_back(hostPort);
+            portJson.push_back(FormatPortForwardMapping({
+                expected[index].routeKind, expected[index].protocol,
+                static_cast<uint16_t>(hostPort), static_cast<uint16_t>(containerPort), false}));
+        } catch (const std::exception &) {
+            return Status(StatusCode::ERR_PARAM_INVALID,
+                          "sandboxd returned malformed physical port mapping");
+        }
+    }
+    std::sort(hostPorts.begin(), hostPorts.end());
+    portMappingsJson = portJson.dump();
+    return Status::OK();
+}
+
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnStartDone(
     const runtime::v1::StartResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request,
     std::shared_ptr<SandboxdStartGuard> guard)
@@ -698,6 +1313,8 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnStartDone(
         YRLOG_ERROR("{}|{}|StartNormal failed for instance({}) runtime({}): {}", info.traceid(), info.requestid(),
                     info.instanceid(), runtimeID, response.message());
         ReportSandboxLifecycleStatus(info, runtimeID, SandboxLifecycleStatus::ABNORMAL);
+        stateManager_.UpdatePortMappings(runtimeID, "");
+        PortManager::GetInstance().ReleasePorts(runtimeID);
         return GenFailStartInstanceResponse(request, RUNTIME_MANAGER_CREATE_EXEC_FAILED, response.message());
     }
 
@@ -726,20 +1343,46 @@ litebus::Future<Status> SandboxdExecutor::StopInstance(const std::shared_ptr<mes
     if (warmupRuntimes_.count(runtimeID) > 0) {
         return UnregisterWarmUp(runtimeID, requestID);
     }
-    return StopSandbox(runtimeID, requestID, oomKilled);
+    return StopSandbox(request, oomKilled);
 }
 
-litebus::Future<Status> SandboxdExecutor::StopSandbox(const std::string &runtimeID, const std::string &requestID,
-                                                      bool oomKilled)
+litebus::Future<Status> SandboxdExecutor::StopSandbox(
+    const std::shared_ptr<messages::StopInstanceRequest> &request, bool oomKilled)
 {
+    const auto &runtimeID = request->runtimeid();
+    const auto &requestID = request->requestid();
+    const bool pauseSourceCleanup = requestID.rfind("pause-release/", 0) == 0;
+    const auto cleanupValidation = ValidatePauseSourceCleanupRequest(*request);
+    if (cleanupValidation.IsError()) {
+        return cleanupValidation;
+    }
     if (stateManager_.IsStartInProgress(runtimeID)) {
+        if (pauseSourceCleanup) {
+            return Status(StatusCode::ERR_INSTANCE_BUSY,
+                          "pause source cleanup cannot race an in-progress start");
+        }
         YRLOG_INFO("{}|runtime({}) start in progress, marking pending delete", requestID, runtimeID);
         stateManager_.MarkPendingDelete(runtimeID);
-        return Status::OK();
+        auto waiter = std::make_shared<litebus::Promise<Status>>();
+        pendingDeleteWaiters_[runtimeID].emplace_back(waiter);
+        return waiter->GetFuture();
     }
 
-    const auto sandboxID = stateManager_.GetSandboxID(runtimeID);
+    const auto registeredSandboxID = stateManager_.GetSandboxID(runtimeID);
+    if (pauseSourceCleanup && !registeredSandboxID.empty()
+        && registeredSandboxID != request->sourcesandboxid()) {
+        return Status(StatusCode::SCHEDULE_CONFLICTED,
+                      "pause source sandbox identity does not match registered runtime");
+    }
+    const auto sandboxID = pauseSourceCleanup ? request->sourcesandboxid() : registeredSandboxID;
     if (sandboxID.empty()) {
+        std::string logicalInstanceID;
+        std::string targetAttemptID;
+        if (resume_identity::ParseExactResumeTargetCleanupRequest(
+                requestID, runtimeID, &logicalInstanceID, &targetAttemptID)) {
+            return StopExactResumeSandboxAfterAgentRestart(
+                runtimeID, requestID, logicalInstanceID, targetAttemptID);
+        }
         YRLOG_WARN("{}|runtime({}) not found in state manager", requestID, runtimeID);
         return Status::OK();
     }
@@ -749,7 +1392,76 @@ litebus::Future<Status> SandboxdExecutor::StopSandbox(const std::string &runtime
         ckptOrch_->ReleaseRef(runtimeID, requestID);
     }
 
-    return TerminateSandbox(runtimeID, requestID, sandboxID, oomKilled);
+    auto terminated = TerminateSandbox(runtimeID, requestID, sandboxID, oomKilled);
+    if (!pauseSourceCleanup) {
+        return terminated;
+    }
+    return terminated.Then(litebus::Defer(
+        GetAID(), [this, request](const Status &status) -> litebus::Future<Status> {
+            if (status.IsError()) {
+                return status;
+            }
+            return DeletePauseSourceCheckpoint(request);
+        }));
+}
+
+litebus::Future<Status> SandboxdExecutor::DeletePauseSourceCheckpoint(
+    const std::shared_ptr<messages::StopInstanceRequest> &request)
+{
+    ASSERT_IF_NULL(ckptOrch_);
+    const auto tenantHash = PauseArtifactPathManager::StableTenantHash(request->tenantid());
+    auto artifacts = CreatePauseArtifactPathManager(tenantHash, request->instanceid());
+    const auto source = artifacts->PlanSourceArtifact(request->checkpointid());
+    if (source.status.IsError()) {
+        return source.status;
+    }
+    return ckptOrch_->DeleteCheckpoint(
+            source.path.parent_path().string(), request->checkpointid(),
+            request->sourcesandboxid(), static_cast<int64_t>(request->checkpointsize()),
+            request->checkpointsha256())
+        .Then(litebus::Defer(
+            GetAID(), [request, artifacts](const Status &status) -> litebus::Future<Status> {
+                return status.IsError()
+                    ? litebus::Future<Status>(status)
+                    : artifacts->PruneSourceArtifactParents(request->checkpointid());
+            }));
+}
+
+litebus::Future<Status> SandboxdExecutor::StopExactResumeSandboxAfterAgentRestart(
+    const std::string &runtimeID, const std::string &requestID,
+    const std::string &logicalInstanceID, const std::string &targetAttemptID)
+{
+    const std::string sandboxID = "sbox-" + runtimeID;
+    const std::map<std::string, std::string> selector = {
+        {"instance_id", logicalInstanceID},
+        {"runtime_id", runtimeID},
+        {"target_attempt_id", targetAttemptID},
+    };
+    return DoListForOperation(sandboxID, selector)
+        .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnExactResumeCleanupListed,
+                             runtimeID, requestID, logicalInstanceID, targetAttemptID,
+                             std::placeholders::_1));
+}
+
+litebus::Future<Status> SandboxdExecutor::OnExactResumeCleanupListed(
+    const std::string &runtimeID, const std::string &requestID,
+    const std::string &logicalInstanceID, const std::string &targetAttemptID,
+    const SandboxdListResult &listed)
+{
+    if (listed.status.IsError()) {
+        return Status(listed.status.StatusCode(),
+                      "failed to query sandboxd exact resume cleanup fact: " + listed.status.RawMessage());
+    }
+    if (listed.response.sandboxes_size() == 0) {
+        return Status::OK();
+    }
+    if (listed.response.sandboxes_size() != 1
+        || !HasExactResumeCleanupIdentity(listed.response.sandboxes(0), logicalInstanceID,
+                                          runtimeID, targetAttemptID)) {
+        return Status(StatusCode::SCHEDULE_CONFLICTED,
+                      "sandboxd exact resume cleanup fact is ambiguous or mismatched");
+    }
+    return TerminateSandbox(runtimeID, requestID, listed.response.sandboxes(0).id(), true);
 }
 
 litebus::Future<Status> SandboxdExecutor::TerminateSandbox(const std::string &runtimeID, const std::string &requestID,
@@ -772,8 +1484,12 @@ litebus::Future<Status> SandboxdExecutor::TerminateSandbox(const std::string &ru
     YRLOG_INFO("{}|terminating sandbox({}) runtime({})", requestID, sandboxID, runtimeID);
     userInitiatedTerminateRuntimes_.insert(runtimeID);
     return DoDelete("", runtimeID, requestID, del)
-        .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnDeleteDone, runtimeID, requestID, sandboxID,
-                             std::placeholders::_1));
+        .Then(litebus::Defer(GetAID(), [this, runtimeID, requestID, sandboxID](const Status &status) {
+            if (status.IsError()) {
+                return litebus::Future<Status>(status);
+            }
+            return OnDeleteDone(runtimeID, requestID, sandboxID, runtime::v1::DeleteResponse{});
+        }));
 }
 
 litebus::Future<Status> SandboxdExecutor::OnDeleteDone(const std::string &runtimeID, const std::string &requestID,
@@ -832,11 +1548,144 @@ litebus::Future<Status> SandboxdExecutor::OnWarmUpUnregistered(const runtime::v1
 
 // ── SnapshotRuntime (sandboxd Checkpoint RPC via the orchestrator) ────────────
 
+Status SandboxdExecutor::BuildSnapshotCheckpointPlan(
+    const messages::SnapshotRuntimeRequest &request, const std::string &sandboxID,
+    CheckpointPlan &plan)
+{
+    const bool instanceManaged = request.type() == common::PAUSE_RESUME;
+    const auto lifecycle = instanceManaged ? ArtifactLifecycle::INSTANCE_MANAGED
+                                           : ArtifactLifecycle::USER_MANAGED;
+    const bool leaveRuntimeRunning = instanceManaged
+        || (request.type() == common::SNAPSHOT && request.leaverunning());
+    return BuildCheckpointPlan(request, sandboxID, lifecycle, leaveRuntimeRunning, plan);
+}
+
+bool SandboxdExecutor::UsesLegacySnapshotRegistry(const messages::SnapshotRuntimeRequest &request)
+{
+    return request.type() != common::PAUSE_RESUME && request.type() != common::SNAPSHOT;
+}
+
+Status SandboxdExecutor::BuildReusableSnapshotCleanupIdentity(
+    const ::messages::SnapshotAttemptFinalizeRequest &request, const SandboxInfo &source,
+    const std::string &checkpointRoot, std::string &checkpointDirectory)
+{
+    namespace fs = std::filesystem;
+    const bool reusableOperation = request.operation() == ::messages::REUSABLE_SNAPSHOT_COMMITTED
+        || request.operation() == ::messages::REUSABLE_SNAPSHOT_ABORTED;
+    const fs::path root = fs::path(checkpointRoot).lexically_normal();
+    if (!reusableOperation || request.protocolversion() != 1
+        || request.runtimeid().empty() || request.runtimeid() != source.runtimeID
+        || request.instanceid().empty() || request.instanceid() != source.instanceInfo.instanceid()
+        || source.sandboxID.empty() || !root.is_absolute()
+        || !IsSafeCheckpointIdentityComponent(request.snapshotid())
+        || request.expectedsize() == 0 || request.expectedsha256().empty()) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "reusable snapshot cleanup identity is invalid");
+    }
+    const auto directory = (root / request.snapshotid()).lexically_normal();
+    if (directory.parent_path() != root) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "reusable snapshot checkpoint directory escapes checkpoint root");
+    }
+    checkpointDirectory = directory.string();
+    return Status::OK();
+}
+
+litebus::Future<Status> SandboxdExecutor::DeleteReusableSnapshotCheckpoint(
+    const ::messages::SnapshotAttemptFinalizeRequest &request)
+{
+    ASSERT_IF_NULL(ckptOrch_);
+    const auto source = stateManager_.Find(request.runtimeid());
+    if (!source.has_value()) {
+        return Status(StatusCode::RUNTIME_MANAGER_RUNTIME_PROCESS_NOT_FOUND,
+                      "reusable snapshot source runtime is missing");
+    }
+    std::string checkpointDirectory;
+    const auto identity = BuildReusableSnapshotCleanupIdentity(
+        request, *source, checkpointRoot_, checkpointDirectory);
+    if (identity.IsError()) {
+        return identity;
+    }
+    return ckptOrch_->DeleteCheckpoint(
+        checkpointDirectory, request.snapshotid(), source->sandboxID,
+        static_cast<int64_t>(request.expectedsize()), request.expectedsha256());
+}
+
 litebus::Future<messages::SnapshotRuntimeResponse> SandboxdExecutor::SnapshotRuntime(
     const std::shared_ptr<messages::SnapshotRuntimeRequest> &request)
 {
+    if (!request) {
+        messages::SnapshotRuntimeResponse response;
+        response.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
+        response.set_message("snapshot request is null");
+        return response;
+    }
     ASSERT_IF_NULL(ckptOrch_);
-    return ckptOrch_->TakeSnapshot(request);
+
+    messages::SnapshotRuntimeResponse response;
+    response.set_requestid(request->requestid());
+    response.mutable_snapshotinfo()->set_checkpointid(request->snapshotid());
+
+    auto sandbox = stateManager_.Find(request->runtimeid());
+    if (!sandbox.has_value() || sandbox->sandboxID.empty()) {
+        response.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
+        response.set_message("runtime is missing");
+        return response;
+    }
+    CheckpointPlan plan;
+    const auto planStatus = BuildSnapshotCheckpointPlan(*request, sandbox->sandboxID, plan);
+    if (planStatus.IsError()) {
+        response.set_code(static_cast<int32_t>(planStatus.StatusCode()));
+        response.set_message(planStatus.RawMessage());
+        return response;
+    }
+    if (plan.lifecycle == ArtifactLifecycle::USER_MANAGED
+        && UsesLegacySnapshotRegistry(*request)) {
+        return ckptOrch_->PublishUserManagedSnapshot(request, plan);
+    }
+
+    return ckptOrch_->CheckpointLocal(plan)
+        .Then(litebus::Defer(GetAID(),
+            [this, request, response, sandboxID = sandbox->sandboxID](
+                const CheckpointResult &result) {
+            auto completed = response;
+            if (result.status.IsError()) {
+                const bool resultUnknown = IsResultUnknownRpcError(result.status);
+                return DoListForOperation(sandboxID)
+                    .Then(litebus::Defer(GetAID(),
+                        [this, request, completed, sandboxID, checkpointStatus = result.status,
+                         resultUnknown](const SandboxdListResult &listed)
+                            -> litebus::Future<messages::SnapshotRuntimeResponse> {
+                        auto reconciled = completed;
+                        reconciled.set_code(static_cast<int32_t>(checkpointStatus.StatusCode()));
+                        reconciled.set_message(checkpointStatus.RawMessage());
+                        reconciled.set_resultunknown(resultUnknown);
+                        if (listed.status.IsError()) {
+                            return reconciled;
+                        }
+                        for (const auto &sandbox : listed.response.sandboxes()) {
+                            if (sandbox.id() != sandboxID) {
+                                continue;
+                            }
+                            auto *fact = reconciled.mutable_physicalfact();
+                            fact->set_sandboxid(sandbox.id());
+                            fact->set_state(sandbox.state());
+                            CopyStableSandboxLabels(sandbox.labels(), fact->mutable_labels());
+                            // A leave-running checkpoint may only converge from
+                            // sandboxd's committed Checkpoint response. List can
+                            // describe the sandbox, but it cannot prove the
+                            // artifact identity or turn a legacy CHECKPOINTED
+                            // state into success by guessing a local path.
+                            return reconciled;
+                        }
+                        return reconciled;
+                    }));
+            }
+            completed.mutable_snapshotinfo()->set_size(result.size);
+            completed.mutable_snapshotinfo()->set_sha256(result.sha256);
+            completed.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+            return litebus::Future<messages::SnapshotRuntimeResponse>(completed);
+        }));
 }
 
 // ── Other Executor interface methods ─────────────────────────────────────────
@@ -907,6 +1756,27 @@ litebus::Future<runtime::v1::ListSandboxesResponse> SandboxdExecutor::DoList()
             }
             YRLOG_ERROR("List gRPC failed: {}", status.RawMessage());
             return runtime::v1::ListSandboxesResponse{};
+        });
+}
+
+litebus::Future<SandboxdListResult> SandboxdExecutor::DoListForOperation(
+    const std::string &sandboxID, const std::map<std::string, std::string> &selector)
+{
+    ASSERT_IF_NULL(sandboxd_);
+    auto request = std::make_shared<runtime::v1::ListSandboxesRequest>();
+    request->set_id(sandboxID);
+    request->mutable_selector()->insert(selector.begin(), selector.end());
+    auto response = std::make_shared<runtime::v1::ListSandboxesResponse>();
+    return sandboxd_->CallAsyncX("List", *request, response.get(), &runtime::v1::SandboxService::Stub::AsyncList)
+        .Then([response](const Status &status) {
+            // An exact-ID List reports NOT_FOUND when the physical sandbox is
+            // absent.  Absence is an authoritative empty fact, not a lost
+            // transport result: restore may create the deterministic sandbox
+            // and loser cleanup has nothing physical to delete.
+            if (status.StatusCode() == StatusCode::GRPC_NOT_FOUND) {
+                return SandboxdListResult{Status::OK(), {}};
+            }
+            return SandboxdListResult{status, *response};
         });
 }
 
@@ -992,6 +1862,9 @@ messages::ReconcileRuntimesResponse SandboxdExecutor::OnReconcileRuntimes(
     }
 
     std::unordered_set<std::string> actualRunningIDs;
+    for (auto &fact : ProjectPhysicalFacts(*listResp)) {
+        *response.add_physicalfacts() = std::move(fact);
+    }
     for (const auto &sandbox : listResp->sandboxes()) {
         if (sandbox.state() == runtime::v1::SANDBOX_STATE_RUNNING) {
             actualRunningIDs.insert(sandbox.id());
@@ -1087,20 +1960,6 @@ void SandboxdExecutor::AddMissingAndConfirmedEntries(const std::shared_ptr<messa
         if (entry.containerid().empty() || actualRunningIDs.count(entry.containerid()) == 0
             || missingSet.count(entry.containerid()) > 0) {
             continue;
-        }
-
-        std::vector<int> hostPorts;
-        auto restoreStatus = ParseReconcileHostPorts(entry, &hostPorts);
-        if (restoreStatus.IsOk()) {
-            restoreStatus = PortManager::GetInstance().ReservePorts(entry.runtimeid(), hostPorts);
-        }
-        if (restoreStatus.IsError()) {
-            YRLOG_ERROR("{}|ReconcileRuntimes: failed to restore port reservations for runtime({}): {}",
-                        request->requestid(), entry.runtimeid(), restoreStatus.RawMessage());
-            response->set_code(static_cast<int32_t>(restoreStatus.StatusCode()));
-            response->set_message(restoreStatus.RawMessage());
-            response->clear_confirmedentries();
-            return;
         }
 
         auto *confirmed = response->add_confirmedentries();
@@ -1218,14 +2077,15 @@ void SandboxdExecutor::OnReconnectContainerd()
     }
     reconnecting_ = false;
     YRLOG_INFO("SandboxdExecutor: reconnect sandboxd success");
-    // Reconnect only helps finish the initial snapshot. Once initialized, the
-    // advertised capability remains static for this process lifetime.
-    FetchInitialAvailableRuntimes();
+    PortManager::GetInstance().BeginReconcile();
+    startupPhysicalFactsReady_ = false;
+    Sync();
 }
 
 void SandboxdExecutor::FetchInitialAvailableRuntimes()
 {
-    if (!sandboxd_ || availableRuntimesInitialized_ || fetchingAvailableRuntimes_) {
+    if (!sandboxd_ || !startupPhysicalFactsReady_ || !PortManager::GetInstance().IsReady()
+        || availableRuntimesInitialized_ || fetchingAvailableRuntimes_) {
         return;
     }
     fetchingAvailableRuntimes_ = true;
@@ -1288,19 +2148,63 @@ void SandboxdExecutor::Sync()
     // sandboxd rejects the start.
     DoGetRegistered();
 
-    // Discover running sandboxes and resume Wait for them.
-    DoList().Then([aid(GetAID())](const runtime::v1::ListSandboxesResponse &listResp) -> litebus::Future<Status> {
-        int resumed = 0;
-        for (const auto &sandbox : listResp.sandboxes()) {
-            if (sandbox.state() == runtime::v1::SANDBOX_STATE_RUNNING) {
-                YRLOG_INFO("Sync: resume Wait for running sandbox({})", sandbox.id());
-                litebus::Async(aid, &SandboxdExecutor::RestoreWait, sandbox.id());
-                ++resumed;
-            }
+    // Physical sandbox and port mappings are authoritative in sandboxd.  Keep
+    // allocation and RuntimeManager registration closed until this snapshot is
+    // validated and published atomically into PortManager.
+    DoListForOperation("").Then(
+        litebus::Defer(GetAID(), &SandboxdExecutor::OnStartupPhysicalFacts, std::placeholders::_1));
+}
+
+Status SandboxdExecutor::OnStartupPhysicalFacts(const SandboxdListResult &listed)
+{
+    if (listed.status.IsError()) {
+        YRLOG_ERROR("startup sandboxd List failed; port allocation remains closed: {}",
+                    listed.status.RawMessage());
+        ScheduleStartupPhysicalFactsRetry();
+        return listed.status;
+    }
+    PortManager::ReservationMap reservations;
+    const auto validation = BuildPortReservationsFromPhysicalFacts(listed.response, reservations);
+    if (validation.IsError() || !PortManager::GetInstance().RebuildPorts(reservations)) {
+        const auto status = validation.IsError()
+            ? validation
+            : Status(StatusCode::SCHEDULE_CONFLICTED,
+                     "sandboxd physical ports cannot be represented by the configured PortManager pool");
+        YRLOG_ERROR("startup sandboxd physical reconciliation failed; port allocation remains closed: {}",
+                    status.RawMessage());
+        ScheduleStartupPhysicalFactsRetry();
+        return status;
+    }
+
+    int resumed = 0;
+    for (const auto &sandbox : listed.response.sandboxes()) {
+        if (sandbox.state() == runtime::v1::SANDBOX_STATE_RUNNING) {
+            YRLOG_INFO("Sync: resume Wait for running sandbox({})", sandbox.id());
+            litebus::Async(GetAID(), &SandboxdExecutor::RestoreWait, sandbox.id());
+            ++resumed;
         }
-        YRLOG_INFO("Sync: resumed Wait for {} running sandboxes", resumed);
-        return Status::OK();
-    });
+    }
+    startupPhysicalFactsReady_ = true;
+    YRLOG_INFO("Sync: rebuilt {} runtime port reservations and resumed Wait for {} running sandboxes",
+               reservations.size(), resumed);
+    FetchInitialAvailableRuntimes();
+    return Status::OK();
+}
+
+void SandboxdExecutor::ScheduleStartupPhysicalFactsRetry()
+{
+    if (startupPhysicalFactsReady_ || startupPhysicalFactsRetryScheduled_) {
+        return;
+    }
+    startupPhysicalFactsRetryScheduled_ = true;
+    litebus::AsyncAfter(RECONNECT_INTERVAL_MS, GetAID(),
+                        &SandboxdExecutor::RetryStartupPhysicalFacts);
+}
+
+void SandboxdExecutor::RetryStartupPhysicalFacts()
+{
+    startupPhysicalFactsRetryScheduled_ = false;
+    Sync();
 }
 
 // ── gRPC wrappers ─────────────────────────────────────────────────────────────
@@ -1327,23 +2231,25 @@ litebus::Future<runtime::v1::StartResponse> SandboxdExecutor::DoStart(
         });
 }
 
-litebus::Future<runtime::v1::DeleteResponse> SandboxdExecutor::DoDelete(
+litebus::Future<Status> SandboxdExecutor::DoDelete(
     const std::string &instanceID, const std::string &runtimeID, const std::string &requestID,
     const std::shared_ptr<runtime::v1::DeleteRequest> &req)
 {
+    (void)instanceID;
     YRLOG_INFO("{}|DoDelete: sandbox({}) runtime({})", requestID, req->id(), runtimeID);
     ASSERT_IF_NULL(sandboxd_);
     return sandboxd_
         ->CallAsync("Delete", *req, static_cast<runtime::v1::DeleteResponse *>(nullptr),
                     &runtime::v1::SandboxService::Stub::AsyncDelete)
-        .Then([req, runtimeID, requestID](
-                  litebus::Try<runtime::v1::DeleteResponse> rsp) -> litebus::Future<runtime::v1::DeleteResponse> {
+        .Then([req, runtimeID, requestID](litebus::Try<runtime::v1::DeleteResponse> rsp) -> Status {
             if (rsp.IsOK()) {
-                return rsp.Get();
+                return Status::OK();
             }
-            YRLOG_ERROR("{}|Delete gRPC failed for sandbox({}) runtime({}): {}", requestID, req->id(), runtimeID,
-                        rsp.GetErrorCode());
-            return litebus::Status(rsp.GetErrorCode());
+            const auto code = static_cast<StatusCode>(rsp.GetErrorCode());
+            const auto message = fmt::format("Delete gRPC failed for sandbox({}) runtime({}): {}", req->id(),
+                                             runtimeID, rsp.GetErrorCode());
+            YRLOG_ERROR("{}|{}", requestID, message);
+            return Status(code, message);
         });
 }
 
@@ -1404,25 +2310,34 @@ litebus::Future<runtime::v1::GetRegisteredResponse> SandboxdExecutor::DoGetRegis
         });
 }
 
-litebus::Future<runtime::v1::RestoreResponse> SandboxdExecutor::DoRestore(
+litebus::Future<SandboxdRestoreResult> SandboxdExecutor::DoRestore(
     const std::shared_ptr<messages::StartInstanceRequest> &request,
     const std::shared_ptr<runtime::v1::RestoreRequest> &req)
 {
-    YRLOG_INFO("{}|{}|DoRestore: {}", request->runtimeinstanceinfo().traceid(),
-               request->runtimeinstanceinfo().requestid(), req->ShortDebugString());
+    const auto attemptIt = req->config().labels().find("target_attempt_id");
+    const auto targetAttemptID =
+        attemptIt == req->config().labels().end() ? std::string{} : attemptIt->second;
+    YRLOG_INFO("{}|{}|DoRestore runtime({}) checkpointDir({}) targetAttempt({})",
+               request->runtimeinstanceinfo().traceid(), request->runtimeinstanceinfo().requestid(),
+               request->runtimeinstanceinfo().runtimeid(), req->checkpoint_dir(), targetAttemptID);
     ASSERT_IF_NULL(sandboxd_);
-    auto resp = std::make_shared<runtime::v1::RestoreResponse>();
+    auto resp = std::make_shared<runtime::v1::StartResponse>();
     return sandboxd_->CallAsyncX("Restore", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncRestore)
-        .Then([request, resp](const Status &status) -> litebus::Future<runtime::v1::RestoreResponse> {
-            if (status.IsOk()) {
-                return *resp;
+        .Then([request, resp](const Status &status) -> SandboxdRestoreResult {
+            if (status.IsError()) {
+                YRLOG_ERROR("{}|Restore gRPC failed for runtime({}): {}", request->runtimeinstanceinfo().traceid(),
+                            request->runtimeinstanceinfo().runtimeid(), status.RawMessage());
+                return { status, {}, {} };
             }
-            runtime::v1::RestoreResponse err;
-            err.set_code(static_cast<int32_t>(status.StatusCode()));
-            err.set_message(fmt::format("Restore gRPC failed for runtime({}): {}",
-                                        request->runtimeinstanceinfo().runtimeid(), status.RawMessage()));
-            YRLOG_ERROR("{}|{}", request->runtimeinstanceinfo().traceid(), err.message());
-            return err;
+            if (resp->code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+                return {Status(StatusCode::FAILED,
+                               resp->message().empty()
+                                   ? "sandboxd Restore returned a non-success response"
+                                   : resp->message()),
+                        {}, {}};
+            }
+            return { Status::OK(), resp->id(),
+                     {resp->ports().begin(), resp->ports().end()} };
         });
 }
 
@@ -1444,7 +2359,7 @@ void SandboxdExecutor::DoWait(const std::string &sandboxID, const std::string &r
                 response.set_status(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
                 response.set_message(msg);
             }
-            return litebus::Async(aid, &SandboxdExecutor::OnWaitDone, runtimeID, response);
+            return litebus::Async(aid, &SandboxdExecutor::OnWaitDone, runtimeID, req->id(), response);
         });
 }
 
@@ -1468,14 +2383,14 @@ void SandboxdExecutor::DoWaitWithRetry(const std::string &sandboxID, const std::
             YRLOG_INFO("DoWaitWithRetry returned: sandbox({}) runtime({}) retry({}) statusCode({}) msg({})", sandboxID,
                        runtimeID, retryCount, fmt::underlying(status.StatusCode()), status.RawMessage());
             if (status.IsOk()) {
-                return litebus::Async(aid, &SandboxdExecutor::OnWaitDone, runtimeID, *resp);
+                return litebus::Async(aid, &SandboxdExecutor::OnWaitDone, runtimeID, sandboxID, *resp);
             }
             if (!SandboxdExecutor::IsRetryableWaitError(status)) {
                 runtime::v1::WaitResponse response;
                 response.set_status(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
                 response.set_message(fmt::format("failed to wait sandbox {}, non-retryable grpc err: {}", req->id(),
                                                  status.RawMessage()));
-                return litebus::Async(aid, &SandboxdExecutor::OnWaitDone, runtimeID, response);
+                return litebus::Async(aid, &SandboxdExecutor::OnWaitDone, runtimeID, sandboxID, response);
             }
             if (retryCount >= WAIT_MAX_RETRIES) {
                 return litebus::Async(aid, &SandboxdExecutor::CleanupSandboxAfterMaxRetries, runtimeID, sandboxID);
@@ -1592,6 +2507,12 @@ litebus::Future<Status> SandboxdExecutor::CleanupSandboxAfterMaxRetries(const st
     auto info = stateManager_.Find(runtimeID);
     if (!info.has_value()) {
         YRLOG_WARN("CleanupSandboxAfterMaxRetries: runtime({}) already unregistered", runtimeID);
+        return Status::OK();
+    }
+    if (info->sandboxID != sandboxID) {
+        YRLOG_INFO("CleanupSandboxAfterMaxRetries: ignore stale retry exhaustion for runtime({}) sandbox({}); "
+                   "current sandbox({})",
+                   runtimeID, sandboxID, info->sandboxID);
         return Status::OK();
     }
 
@@ -1712,12 +2633,17 @@ litebus::Future<Status> SandboxdExecutor::OnReclaimSandboxDone(
     return Status(StatusCode::ERR_INNER_COMMUNICATION, "sandbox reclaim delete failed; retry scheduled");
 }
 
-litebus::Future<Status> SandboxdExecutor::OnWaitDone(const std::string &runtimeID,
+litebus::Future<Status> SandboxdExecutor::OnWaitDone(const std::string &runtimeID, const std::string &sandboxID,
                                                      const runtime::v1::WaitResponse &response)
 {
     auto info = stateManager_.Find(runtimeID);
     if (!info.has_value()) {
         YRLOG_INFO("OnWaitDone: runtime({}) already unregistered, skip", runtimeID);
+        return Status::OK();
+    }
+    if (info->sandboxID != sandboxID) {
+        YRLOG_INFO("OnWaitDone: ignore stale Wait for runtime({}) sandbox({}); current sandbox({})", runtimeID,
+                   sandboxID, info->sandboxID);
         return Status::OK();
     }
 
@@ -1730,6 +2656,15 @@ litebus::Future<Status> SandboxdExecutor::OnWaitDone(const std::string &runtimeI
     if (userInitiatedTerminateRuntimes_.count(runtimeID) > 0) {
         YRLOG_INFO("{}|OnWaitDone: user-initiated terminate for runtime({}), defer to OnDeleteDone", requestID,
                    runtimeID);
+        return Status::OK();
+    }
+
+    if (stateManager_.ConsumeExpectedSandboxStop(runtimeID, sandboxID)
+        == ExpectedSandboxStopKind::CHECKPOINT) {
+        YRLOG_INFO("{}|OnWaitDone: expected checkpoint stop consumed for runtime({}) sandbox({}); "
+                   "suppress terminal lifecycle notification",
+                   requestID, runtimeID, sandboxID);
+        sandboxStatsPollingRuntimes_.erase(runtimeID);
         return Status::OK();
     }
 

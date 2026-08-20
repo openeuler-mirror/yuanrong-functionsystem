@@ -257,7 +257,37 @@ public:
     litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(const std::string &requestID,
                                                      const resource_view::InstanceInfo &instanceInfo,
                                                      int32_t ttl);
+    litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(const std::string &requestID,
+                                                     const resource_view::InstanceInfo &instanceInfo,
+                                                     int32_t ttl,
+                                                     common::SnapType type,
+                                                     const std::string &snapshotID,
+                                                     const std::string &checkpointDir);
     void SnapshotRuntimeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    litebus::Future<::messages::SnapshotAttemptFinalizeResponse> FinalizeSnapshotAttempt(
+        const resource_view::InstanceInfo &instanceInfo,
+        const ::messages::SnapshotAttemptFinalizeRequest &request);
+    litebus::Future<::messages::SnapshotAttemptFinalizeResponse> FinalizeSnapshotAttemptOnAnyAgent(
+        const ::messages::SnapshotAttemptFinalizeRequest &request);
+    void FinalizePausedSnapshotDelete(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void SendFinalizePausedSnapshotDeleteResponse(
+        const litebus::AID &to,
+        const std::string &attemptID,
+        const litebus::Future<::messages::SnapshotAttemptFinalizeResponse> &responseFuture);
+    void SnapshotAttemptFinalizeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse>
+        DeleteReusableSnapshotArtifactOnAnyAgent(
+            const ::messages::DeleteReusableSnapshotArtifactRequest &request);
+    void DeleteReusableSnapshotArtifact(
+        const litebus::AID &from, std::string &&name, std::string &&msg);
+    void SendDeleteReusableSnapshotArtifactResponse(
+        const litebus::AID &to,
+        const std::string &requestID,
+        const litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse> &responseFuture);
+    void DeleteReusableSnapshotArtifactResponse(
+        const litebus::AID &from, std::string &&name, std::string &&msg);
 
     litebus::Future<messages::ReconcileRuntimesResponse> ReconcileRuntimes(
         const std::string &funcAgentID,
@@ -571,8 +601,33 @@ private:
     const uint32_t snapshotRuntimeTimeout_ = 120000;  // snapshot may take longer
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::InstanceStatusInfo, queryTimeout_, queryStatusSync_);
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::UpdateCredResponse, updateTokenTimeout_, updateTokenSync_);
-    REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::SnapshotRuntimeResponse,
-                        snapshotRuntimeTimeout_, snapshotRuntimeSync_);
+    std::unordered_map<std::string, litebus::AID> snapshotRuntimeExpectedAgent_;
+    RequestSyncHelper<FunctionAgentMgrActor, messages::SnapshotRuntimeResponse>
+        snapshotRuntimeSync_ { this, &FunctionAgentMgrActor::TimeoutSnapshotRuntimeSync,
+                               snapshotRuntimeTimeout_ };
+    void TimeoutSnapshotRuntimeSync(const std::string &requestID)
+    {
+        snapshotRuntimeExpectedAgent_.erase(requestID);
+        snapshotRuntimeSync_.RequestTimeout(requestID);
+    }
+    std::unordered_map<std::string, litebus::AID> snapshotAttemptExpectedAgent_;
+    RequestSyncHelper<FunctionAgentMgrActor, ::messages::SnapshotAttemptFinalizeResponse>
+        snapshotAttemptFinalizeSync_ { this, &FunctionAgentMgrActor::TimeoutSnapshotAttemptFinalizeSync,
+                                       snapshotRuntimeTimeout_ };
+    void TimeoutSnapshotAttemptFinalizeSync(const std::string &attemptID)
+    {
+        snapshotAttemptExpectedAgent_.erase(attemptID);
+        snapshotAttemptFinalizeSync_.RequestTimeout(attemptID);
+    }
+    std::unordered_map<std::string, litebus::AID> reusableSnapshotDeleteExpectedAgent_;
+    RequestSyncHelper<FunctionAgentMgrActor, ::messages::DeleteReusableSnapshotArtifactResponse>
+        reusableSnapshotDeleteSync_ { this, &FunctionAgentMgrActor::TimeoutReusableSnapshotDeleteSync,
+                                      snapshotRuntimeTimeout_ };
+    void TimeoutReusableSnapshotDeleteSync(const std::string &requestID)
+    {
+        reusableSnapshotDeleteExpectedAgent_.erase(requestID);
+        reusableSnapshotDeleteSync_.RequestTimeout(requestID);
+    }
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::QueryDebugInstanceInfosResponse,
                         QUERY_DEBUG_INSTANCE_INFO_INTERVAL_MS, queryDebugInstInfoSync_);
     const uint32_t reconcileTimeout_ = 120000;  // reconcile may take longer (waits for containerd)

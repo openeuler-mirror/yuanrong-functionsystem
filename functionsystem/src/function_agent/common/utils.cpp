@@ -27,8 +27,10 @@
 #include "common/logs/logging.h"
 #include "common/metadata/metadata.h"
 #include "common/resource_view/resource_type.h"
+#include "common/utils/resume_identity.h"
 #include "common/utils/struct_transfer.h"
 #include "constants.h"
+#include "runtime_manager/ckpt/pause_artifact_path_manager.h"
 
 namespace functionsystem::function_agent {
 const static std::string RUNTIME_ENV_PREFIX = "func-";
@@ -60,6 +62,255 @@ const std::vector<std::string> POSIX_ENV_KEYS = { YR_APP_MODE,
                                                   CONDA_DEFAULT_ENV,
                                                   SHARED_DIRECTORY_PATH };
 const std::vector<std::string> USER_ENV_KEYS = { S3_DEPLOY_DIR };
+
+namespace {
+
+enum class ImmutableSnapshotMaterializationKind {
+    PAUSE_RESUME,
+    REUSABLE,
+};
+
+struct ImmutableSnapshotMaterializationSpec {
+    ImmutableSnapshotMaterializationKind kind;
+    std::string tenantHash;
+    std::string instanceID;
+    std::string attemptID;
+    std::string storageBackend;
+    std::string objectKey;
+    std::string snapshotID;
+    uint64_t expectedSize{ 0 };
+    std::string expectedSha256;
+    int64_t expectedVersion{ 0 };
+};
+
+bool IsPauseResume(const ImmutableSnapshotMaterializationSpec &spec)
+{
+    return spec.kind == ImmutableSnapshotMaterializationKind::PAUSE_RESUME;
+}
+
+Status MakePauseResumeMaterializationSpec(
+    const std::shared_ptr<messages::StartInstanceRequest> &request,
+    ImmutableSnapshotMaterializationSpec &spec)
+{
+    const auto &info = request->runtimeinstanceinfo();
+    int64_t expectedVersion = 0;
+    const auto version = request->scheduleoption().extension().find(
+        resume_identity::EXPECTED_VERSION_EXTENSION);
+    const auto tenant = info.runtimeconfig().posixenvs().find(YR_TENANT_ID);
+    if (tenant == info.runtimeconfig().posixenvs().end() || tenant->second.empty()
+        || info.instanceid().empty() || info.requestid().empty()
+        || !info.has_snapshotinfo() || !resume_identity::IsCompleteReadySnapshot(info.snapshotinfo())
+        || version == request->scheduleoption().extension().end()
+        || !resume_identity::ParsePositiveInt64(version->second, &expectedVersion)) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "trusted resume materialization identity is incomplete");
+    }
+    const auto &snapshot = info.snapshotinfo();
+    spec.kind = ImmutableSnapshotMaterializationKind::PAUSE_RESUME;
+    spec.tenantHash = runtime_manager::PauseArtifactPathManager::StableTenantHash(tenant->second);
+    spec.instanceID = info.instanceid();
+    spec.attemptID = info.requestid();
+    spec.storageBackend = snapshot.storage();
+    spec.objectKey = snapshot_storage::BuildPauseSnapshotKey(
+        spec.tenantHash, spec.instanceID, snapshot.checkpointid());
+    spec.snapshotID = snapshot.checkpointid();
+    spec.expectedSize = static_cast<uint64_t>(snapshot.size());
+    spec.expectedSha256 = snapshot.sha256();
+    spec.expectedVersion = expectedVersion;
+    return Status::OK();
+}
+
+Status MakeReusableSnapshotMaterializationSpec(
+    const std::shared_ptr<messages::StartInstanceRequest> &request,
+    ImmutableSnapshotMaterializationSpec &spec)
+{
+    const auto &info = request->runtimeinstanceinfo();
+    const auto tenant = info.runtimeconfig().posixenvs().find(YR_TENANT_ID);
+    if (tenant == info.runtimeconfig().posixenvs().end() || tenant->second.empty()
+        || info.instanceid().empty() || info.requestid().empty()
+        || !info.has_reusablesnapshotrestore()
+        || !resume_identity::ValidateReusableSnapshotRestore(info.reusablesnapshotrestore())) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "reusable Snapshot restore identity is incomplete");
+    }
+    const auto &restore = info.reusablesnapshotrestore();
+    const auto &artifact = restore.artifact();
+    spec.kind = ImmutableSnapshotMaterializationKind::REUSABLE;
+    spec.tenantHash = runtime_manager::PauseArtifactPathManager::StableTenantHash(tenant->second);
+    spec.instanceID = info.instanceid();
+    spec.attemptID = info.requestid();
+    spec.storageBackend = artifact.storagebackend();
+    spec.objectKey = artifact.objectkey();
+    spec.snapshotID = restore.snapshotid();
+    spec.expectedSize = static_cast<uint64_t>(artifact.size());
+    spec.expectedSha256 = artifact.sha256();
+    return Status::OK();
+}
+
+Status ValidateImmutableSnapshotMetadata(
+    const ImmutableSnapshotMaterializationSpec &spec,
+    const snapshot_storage::SnapshotObjectMetadata &metadata)
+{
+    const bool commonFactsMatch = metadata.complete
+        && metadata.snapshotID == spec.snapshotID
+        && metadata.size == spec.expectedSize
+        && metadata.sha256 == spec.expectedSha256;
+    if (IsPauseResume(spec)) {
+        if (commonFactsMatch && metadata.sourceInstanceVersion > 0
+            && spec.expectedVersion > 1
+            && metadata.sourceInstanceVersion == spec.expectedVersion - 1) {
+            return Status::OK();
+        }
+        return Status(StatusCode::SCHEDULE_CONFLICTED,
+                      "trusted resume immutable metadata does not match READY SnapshotInfo");
+    }
+    if (commonFactsMatch && metadata.expiresAtUnixSeconds == 0) {
+        return Status::OK();
+    }
+    return Status(StatusCode::SCHEDULE_CONFLICTED,
+                  "reusable Snapshot immutable metadata does not match READY record");
+}
+
+litebus::Future<Status> MaterializeImmutableSnapshotArtifact(
+    const std::shared_ptr<snapshot_storage::SnapshotStorage> &snapshotStorage,
+    const std::filesystem::path &checkpointRoot,
+    const std::shared_ptr<ActorWorker> &snapshotWorker,
+    const std::shared_ptr<messages::StartInstanceRequest> &startInstanceRequest,
+    ImmutableSnapshotMaterializationKind kind)
+{
+    auto result = std::make_shared<litebus::Promise<Status>>();
+    if (snapshotStorage == nullptr || snapshotWorker == nullptr || checkpointRoot.empty()
+        || startInstanceRequest == nullptr) {
+        const auto message = kind == ImmutableSnapshotMaterializationKind::PAUSE_RESUME
+            ? "trusted resume data-plane dependencies are not configured"
+            : "reusable Snapshot restore dependencies are not configured";
+        result->SetValue(Status(StatusCode::ERR_PARAM_INVALID, message));
+        return result->GetFuture();
+    }
+
+    ImmutableSnapshotMaterializationSpec spec;
+    const auto specStatus = kind == ImmutableSnapshotMaterializationKind::PAUSE_RESUME
+        ? MakePauseResumeMaterializationSpec(startInstanceRequest, spec)
+        : MakeReusableSnapshotMaterializationSpec(startInstanceRequest, spec);
+    if (specStatus.IsError()) {
+        result->SetValue(specStatus);
+        return result->GetFuture();
+    }
+
+    std::string configuredBackend;
+    const auto backend = snapshot_storage::ResolveStorageBackend(
+        snapshotStorage, spec.storageBackend, configuredBackend);
+    if (backend.IsError() || configuredBackend != spec.storageBackend) {
+        const auto message = IsPauseResume(spec)
+            ? "trusted resume storage backend does not match configured backend"
+            : "reusable Snapshot storage backend does not match configured backend";
+        result->SetValue(Status(StatusCode::SCHEDULE_CONFLICTED, message));
+        return result->GetFuture();
+    }
+
+    runtime_manager::PauseArtifactPathManager artifacts(
+        checkpointRoot, spec.tenantHash, spec.instanceID, snapshotWorker);
+    const auto attempt = artifacts.PlanRestoreAttempt(spec.snapshotID, spec.attemptID);
+    if (attempt.status.IsError()) {
+        result->SetValue(attempt.status);
+        return result->GetFuture();
+    }
+
+    snapshotStorage->Stat(spec.objectKey).OnComplete(
+        [snapshotStorage, result, attempt, spec](
+            const litebus::Future<snapshot_storage::SnapshotStat> &statFuture) {
+            if (statFuture.IsError() || statFuture.Get().status.IsError()) {
+                const auto message = IsPauseResume(spec)
+                    ? "trusted resume immutable Stat future failed"
+                    : "reusable Snapshot immutable Stat future failed";
+                result->SetValue(statFuture.IsError()
+                    ? Status(StatusCode::ERR_INNER_COMMUNICATION, message)
+                    : statFuture.Get().status);
+                return;
+            }
+            const auto metadata = statFuture.Get().metadata;
+            const auto metadataStatus = ValidateImmutableSnapshotMetadata(spec, metadata);
+            if (metadataStatus.IsError()) {
+                result->SetValue(metadataStatus);
+                return;
+            }
+            std::error_code error;
+            const auto existing = std::filesystem::symlink_status(attempt.path, error);
+            if (!error && std::filesystem::exists(existing)) {
+                if (!std::filesystem::is_regular_file(existing)) {
+                    const auto message = IsPauseResume(spec)
+                        ? "trusted resume attempt is not a regular file"
+                        : "reusable Snapshot attempt is not a regular file";
+                    result->SetValue(Status(StatusCode::FAILED, message));
+                    return;
+                }
+                const auto validation = snapshot_storage::detail::ValidateFile(
+                    attempt.path.string(), metadata);
+                if (validation.IsOk()) {
+                    result->SetValue(Status::OK());
+                    return;
+                }
+                std::filesystem::remove(attempt.path, error);
+                if (error) {
+                    const auto message = IsPauseResume(spec)
+                        ? "failed to remove invalid trusted resume attempt"
+                        : "failed to remove invalid reusable Snapshot attempt";
+                    result->SetValue(Status(StatusCode::FAILED, message));
+                    return;
+                }
+            } else if (error && error != std::errc::no_such_file_or_directory) {
+                const auto message = IsPauseResume(spec)
+                    ? "failed to inspect trusted resume attempt"
+                    : "failed to inspect reusable Snapshot attempt";
+                result->SetValue(Status(StatusCode::FAILED, message));
+                return;
+            }
+            auto target = std::make_shared<snapshot_storage::detail::SecureDownloadTarget>();
+            const auto prepared = target->Prepare(attempt.path.string());
+            if (prepared.IsError()) {
+                result->SetValue(prepared);
+                return;
+            }
+            snapshotStorage->Get(spec.objectKey, target->StagingPath())
+                .OnComplete([result, target, metadata, spec](const litebus::Future<Status> &getFuture) {
+                    if (getFuture.IsError() || getFuture.Get().IsError()) {
+                        const auto message = IsPauseResume(spec)
+                            ? "trusted resume Get future failed"
+                            : "reusable Snapshot Get future failed";
+                        result->SetValue(getFuture.IsError()
+                            ? Status(StatusCode::ERR_INNER_COMMUNICATION, message)
+                            : getFuture.Get());
+                        return;
+                    }
+                    result->SetValue(target->Commit(metadata));
+                });
+        });
+    return result->GetFuture();
+}
+
+}  // namespace
+
+litebus::Future<Status> MaterializeTrustedResumeCheckpoint(
+    const std::shared_ptr<snapshot_storage::SnapshotStorage> &snapshotStorage,
+    const std::filesystem::path &checkpointRoot,
+    const std::shared_ptr<ActorWorker> &snapshotWorker,
+    const std::shared_ptr<messages::StartInstanceRequest> &startInstanceRequest)
+{
+    return MaterializeImmutableSnapshotArtifact(
+        snapshotStorage, checkpointRoot, snapshotWorker, startInstanceRequest,
+        ImmutableSnapshotMaterializationKind::PAUSE_RESUME);
+}
+
+litebus::Future<Status> MaterializeReusableSnapshotCheckpoint(
+    const std::shared_ptr<snapshot_storage::SnapshotStorage> &snapshotStorage,
+    const std::filesystem::path &checkpointRoot,
+    const std::shared_ptr<ActorWorker> &snapshotWorker,
+    const std::shared_ptr<messages::StartInstanceRequest> &startInstanceRequest)
+{
+    return MaterializeImmutableSnapshotArtifact(
+        snapshotStorage, checkpointRoot, snapshotWorker, startInstanceRequest,
+        ImmutableSnapshotMaterializationKind::REUSABLE);
+}
 
 std::shared_ptr<messages::DeployRequest> SetDeployRequestConfig(
     const std::shared_ptr<messages::DeployInstanceRequest> &req, const std::shared_ptr<messages::Layer> &layer)
@@ -490,13 +741,66 @@ messages::DeploymentConfig SetDeploymentConfigOfLayer(const std::shared_ptr<mess
     return deploymentConf;
 }
 
-void SetStartRuntimeInstanceRequestConfig(const std::unique_ptr<messages::StartInstanceRequest> &startInstanceRequest,
-                                          const std::shared_ptr<messages::DeployInstanceRequest> &req)
+ResumeIdentityTrust SetStartRuntimeInstanceRequestConfig(
+    const std::unique_ptr<messages::StartInstanceRequest> &startInstanceRequest,
+    const std::shared_ptr<messages::DeployInstanceRequest> &req,
+    const std::string &expectedTargetAgentID)
 {
     ASSERT_IF_NULL(req);
+    std::string logicalRequestID;
+    std::string targetAgentID;
+    std::string resumeMarker;
+    int64_t expectedVersion = 0;
+    int64_t protocolVersion = 0;
+    bool parsedExpectedVersion = false;
+    bool parsedProtocolVersion = false;
+    bool hasReservedResumeIdentity = false;
+    bool onlyAgentBoundaryKeys = true;
+    for (const auto &[key, value] : req->scheduleoption().extension()) {
+        if (!resume_identity::IsResumeProtocolExtension(key)) {
+            continue;
+        }
+        hasReservedResumeIdentity = true;
+        if (key == resume_identity::LOGICAL_REQUEST_EXTENSION) {
+            logicalRequestID = value;
+        } else if (key == resume_identity::EXPECTED_VERSION_EXTENSION) {
+            parsedExpectedVersion = resume_identity::ParsePositiveInt64(value, &expectedVersion);
+        } else if (key == resume_identity::TARGET_AGENT_EXTENSION) {
+            targetAgentID = value;
+        } else if (key == resume_identity::PROTOCOL_VERSION_EXTENSION) {
+            parsedProtocolVersion = resume_identity::ParsePositiveInt64(value, &protocolVersion);
+        } else if (key == resume_identity::AGENT_MARKER_EXTENSION) {
+            resumeMarker = value;
+        } else {
+            onlyAgentBoundaryKeys = false;
+        }
+    }
+    const bool trustedResume = hasReservedResumeIdentity && onlyAgentBoundaryKeys
+        && parsedExpectedVersion && parsedProtocolVersion
+        && targetAgentID == expectedTargetAgentID && req->has_snapshotinfo()
+        && !req->has_reusablesnapshotrestore()
+        && resume_identity::ValidateBoundaryIdentity(req->instanceid(), logicalRequestID, req->tenantid(),
+                                                     req->requestid(), req->snapshotinfo(), expectedVersion,
+                                                     targetAgentID, protocolVersion, resumeMarker);
+    const bool trustedReusable = !hasReservedResumeIdentity && req->has_reusablesnapshotrestore()
+        && !req->has_snapshotinfo()
+        && resume_identity::ValidateReusableSnapshotRestore(req->reusablesnapshotrestore());
+    const auto trust = trustedResume ? ResumeIdentityTrust::TRUSTED
+        : (trustedReusable ? ResumeIdentityTrust::REUSABLE
+                           : ((hasReservedResumeIdentity || req->has_reusablesnapshotrestore())
+                                  ? ResumeIdentityTrust::INVALID
+                                  : ResumeIdentityTrust::ORDINARY));
     auto runtimeInstanceInfo = SetRuntimeInstanceInfo(req);
     *startInstanceRequest->mutable_runtimeinstanceinfo() = std::move(runtimeInstanceInfo);
     *startInstanceRequest->mutable_scheduleoption() = std::move(req->scheduleoption());
+    if (trustedResume) {
+        auto *extensions = startInstanceRequest->mutable_scheduleoption()->mutable_extension();
+        (*extensions)[resume_identity::LOGICAL_REQUEST_EXTENSION] = logicalRequestID;
+        (*extensions)[resume_identity::EXPECTED_VERSION_EXTENSION] = std::to_string(expectedVersion);
+        (*extensions)[resume_identity::TARGET_AGENT_EXTENSION] = targetAgentID;
+        (*extensions)[resume_identity::PROTOCOL_VERSION_EXTENSION] = std::to_string(protocolVersion);
+        (*extensions)[resume_identity::RUNTIME_MANAGER_MARKER_EXTENSION] = resumeMarker;
+    }
 
     // Check sandbox_type from createOptions
     if (const auto sandboxTypeIter = req->createoptions().find("sandbox_type");
@@ -504,12 +808,12 @@ void SetStartRuntimeInstanceRequestConfig(const std::unique_ptr<messages::StartI
         if (sandboxTypeIter->second == SANDBOX_TYPE_SUPERVISOR) {
             YRLOG_INFO("{}|Using supervisor executor for {}", req->requestid(), sandboxTypeIter->second.c_str());
             startInstanceRequest->set_type(static_cast<int32_t>(EXECUTOR_TYPE::SUPERVISOR));
-            return;
+            return trust;
         }
         if (sandboxTypeIter->second == SANDBOX_TYPE_DOCKER) {
             YRLOG_INFO("{}|Using docker executor for {}", req->requestid(), sandboxTypeIter->second.c_str());
             startInstanceRequest->set_type(static_cast<int32_t>(EXECUTOR_TYPE::DOCKER));
-            return;
+            return trust;
         }
     }
 
@@ -519,11 +823,14 @@ void SetStartRuntimeInstanceRequestConfig(const std::unique_ptr<messages::StartI
     } else {
         startInstanceRequest->set_type(static_cast<int32_t>(EXECUTOR_TYPE::RUNTIME));
     }
+    return trust;
 }
 
 messages::RuntimeInstanceInfo SetRuntimeInstanceInfo(const std::shared_ptr<messages::DeployInstanceRequest> &req)
 {
     ASSERT_IF_NULL(req);
+    auto *extensions = req->mutable_scheduleoption()->mutable_extension();
+    resume_identity::StripReservedExtensions(extensions);
     messages::RuntimeInstanceInfo runtimeInstanceInfo;
     auto runtimeConfig = SetRuntimeConfig(req);
     *runtimeInstanceInfo.mutable_runtimeconfig() = std::move(runtimeConfig);
@@ -543,6 +850,9 @@ messages::RuntimeInstanceInfo SetRuntimeInstanceInfo(const std::shared_ptr<messa
     if (req->has_snapshotinfo()) {
         *runtimeInstanceInfo.mutable_snapshotinfo() = std::move(req->snapshotinfo());
     }
+    if (req->has_reusablesnapshotrestore()) {
+        *runtimeInstanceInfo.mutable_reusablesnapshotrestore() = req->reusablesnapshotrestore();
+    }
     return runtimeInstanceInfo;
 }
 
@@ -554,6 +864,12 @@ void SetStopRuntimeInstanceRequest(messages::StopInstanceRequest &stopInstanceRe
     stopInstanceRequest.set_requestid(req->requestid());
     stopInstanceRequest.set_traceid(req->traceid());
     stopInstanceRequest.set_executortype(req->executortype());
+    stopInstanceRequest.set_checkpointid(req->checkpointid());
+    stopInstanceRequest.set_sourcesandboxid(req->sourcesandboxid());
+    stopInstanceRequest.set_checkpointsize(req->checkpointsize());
+    stopInstanceRequest.set_checkpointsha256(req->checkpointsha256());
+    stopInstanceRequest.set_instanceid(req->instanceid());
+    stopInstanceRequest.set_tenantid(req->tenantid());
 }
 
 std::unordered_map<std::string, std::shared_ptr<messages::Layer>> SetDeployingRequestLayers(

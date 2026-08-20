@@ -28,6 +28,7 @@ aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/code_deployer FUNCTION_AGENT_SR
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/driver FUNCTION_AGENT_SRCS)
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/network FUNCTION_AGENT_SRCS)
 aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/plugin FUNCTION_AGENT_SRCS)
+aux_source_directory(${CMAKE_CURRENT_SOURCE_DIR}/snapshot FUNCTION_AGENT_SRCS)
 
 add_library(${FUNCTION_AGENT_LIB} STATIC # for [function_agent_lib]
         ${FUNCTION_AGENT_SRCS})
@@ -43,6 +44,7 @@ target_link_libraries(${FUNCTION_AGENT_LIB} PUBLIC # for [function_agent_lib]
         ${zlib_MINIZIP_LIB}
         ${datasystem_LIB}
         runtime_manager_lib
+        snapshot_storage
         metadata
         kv_client)
 

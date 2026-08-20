@@ -85,7 +85,9 @@ public:
      *
      * @param instanceID  Instance identifier
      */
-    void OnInstanceRunning(const std::string &instanceID);
+    void OnInstanceRunning(const resources::InstanceInfo &identity);
+
+    Status SetPauseGated(const resources::InstanceInfo &identity, uint64_t token, bool gated);
 
 private:
     void SessionAlive(const std::string &instanceID, bool hasActiveSessions);
@@ -116,6 +118,12 @@ private:
 
     // Per-instance session counts for timer management decisions.
     std::unordered_map<std::string, size_t> instanceSessionCounts_;
+
+    struct PauseGateRecord {
+        resources::InstanceInfo identity;
+        uint64_t token = 0;
+    };
+    std::unordered_map<std::string, PauseGateRecord> pauseGatedInstances_;
 };
 
 }  // namespace functionsystem::local_scheduler

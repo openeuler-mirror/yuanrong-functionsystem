@@ -394,6 +394,31 @@ public:
     }
 
     /**
+     * @brief Send an asynchronous RPC while retaining request and response
+     *        ownership until completion.
+     */
+    template <typename Request, typename Response,
+              typename StubFunc = std::unique_ptr<::grpc::ClientAsyncResponseReaderInterface<Response>> (*)(
+                  ::grpc::ClientContext *, const Request &, ::grpc::CompletionQueue *)>
+    litebus::Future<functionsystem::Status> CallAsyncX(
+        const ::grpc::string &method, std::shared_ptr<Request> request,
+        std::shared_ptr<Response> response, StubFunc stubFunc,
+        uint32_t timeoutSeconds = 0)
+    {
+        if (!request || !response) {
+            return functionsystem::Status(POINTER_IS_NULL,
+                                          "ASync GRPC Call Failed: request or response is null.");
+        }
+        return CallAsyncX(method, *request, response.get(), stubFunc, timeoutSeconds)
+            .Then([request = std::move(request), response = std::move(response)](
+                      const functionsystem::Status &status) {
+                (void)request;
+                (void)response;
+                return status;
+            });
+    }
+
+    /**
      * @brief Send RPC messages Asynchronously.
      * @param[in] methodName Method name.
      * @param[in] req Request proto msg.

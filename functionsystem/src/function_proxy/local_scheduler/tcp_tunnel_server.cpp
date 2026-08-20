@@ -476,6 +476,59 @@ void TcpTunnelServer::Stop()
     sslContext_ = nullptr;
 }
 
+bool TcpTunnelServer::TryAcquireReusableSnapshotGate(const std::string &instanceID)
+{
+    if (instanceID.empty()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(sessionStateMutex_);
+    const auto active = activeTunnelSessions_.find(instanceID);
+    if ((active != activeTunnelSessions_.end() && active->second != 0)
+        || reusableSnapshotGates_.find(instanceID) != reusableSnapshotGates_.end()) {
+        return false;
+    }
+    reusableSnapshotGates_.insert(instanceID);
+    return true;
+}
+
+void TcpTunnelServer::ReleaseReusableSnapshotGate(const std::string &instanceID)
+{
+    std::lock_guard<std::mutex> lock(sessionStateMutex_);
+    reusableSnapshotGates_.erase(instanceID);
+}
+
+bool TcpTunnelServer::TryBeginTunnelSession(const std::string &instanceID)
+{
+    std::lock_guard<std::mutex> lock(sessionStateMutex_);
+    if (instanceID.empty()
+        || reusableSnapshotGates_.find(instanceID) != reusableSnapshotGates_.end()) {
+        return false;
+    }
+    ++activeTunnelSessions_[instanceID];
+    return true;
+}
+
+void TcpTunnelServer::EndTunnelSession(const std::string &instanceID)
+{
+    std::lock_guard<std::mutex> lock(sessionStateMutex_);
+    auto active = activeTunnelSessions_.find(instanceID);
+    if (active == activeTunnelSessions_.end()) {
+        return;
+    }
+    if (active->second > 1) {
+        --active->second;
+        return;
+    }
+    activeTunnelSessions_.erase(active);
+}
+
+size_t TcpTunnelServer::ActiveTunnelSessions(const std::string &instanceID)
+{
+    std::lock_guard<std::mutex> lock(sessionStateMutex_);
+    const auto active = activeTunnelSessions_.find(instanceID);
+    return active == activeTunnelSessions_.end() ? 0U : active->second;
+}
+
 void TcpTunnelServer::AcceptLoop()
 {
     while (running_.load()) {
@@ -616,6 +669,12 @@ bool TcpTunnelServer::ServeClient(ClientSession &session)
         }
         backendPort = hostPort;
     }
+    if (!TryBeginTunnelSession(session.instanceID)) {
+        (void)SendResponse(session.ssl, session.clientFd, false,
+                           "instance Snapshot is in progress");
+        return false;
+    }
+    session.tunnelCounted = true;
     session.backendFd = ConnectLocalPort(connectHost, backendPort);
     if (session.backendFd < 0) {
         (void)SendResponse(session.ssl, session.clientFd, false, "failed to connect instance target port");
@@ -639,6 +698,10 @@ void TcpTunnelServer::CloseClient(ClientSession &session)
     if (session.counted) {
         idleMgr_->SessionCountDelta(session.instanceID, -1);
         YRLOG_INFO("{}|closed TCP tunnel for instance {}", session.requestID, session.instanceID);
+    }
+    if (session.tunnelCounted) {
+        EndTunnelSession(session.instanceID);
+        session.tunnelCounted = false;
     }
     if (session.backendFd >= 0) {
         close(session.backendFd);

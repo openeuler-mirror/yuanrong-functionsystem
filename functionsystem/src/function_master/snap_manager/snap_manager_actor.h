@@ -32,9 +32,11 @@
 #include "meta_store_client/meta_store_client.h"
 #include "meta_store_client/meta_store_struct.h"
 #include "function_master/global_scheduler/global_sched.h"
+#include "function_master/instance_manager/instance_manager.h"
 
 #include "snapshot_cache.h"
 #include "snapshot_scheduler.h"
+#include "reusable_snapshot_store.h"
 
 namespace functionsystem::snap_manager {
 
@@ -67,8 +69,7 @@ public:
         std::string requestID{};
         int32_t code{0};
         std::string message{};
-        std::string instanceID{};
-        ::messages::SnapstartInfo snapstartInfo{};
+        ::core_service::SnapStartedInfo snapstartInfo{};
     };
 
     SnapManagerActor() = delete;
@@ -81,7 +82,8 @@ public:
      */
     SnapManagerActor(const std::shared_ptr<MetaStoreClient> &metaClient,
                      const std::shared_ptr<GlobalScheduler> &globalScheduler,
-                     const SnapManagerConfig &config = SnapManagerConfig{});
+                     const SnapManagerConfig &config = SnapManagerConfig{},
+                     const std::shared_ptr<instance_manager::InstanceManager> &instanceManager = nullptr);
 
     ~SnapManagerActor() override = default;
 
@@ -104,6 +106,28 @@ public:
     void ListSnapshotsByFunctionKeyMessage(const litebus::AID &from, std::string &&name, std::string &&msg);
     void ListSnapshotsByTenantMessage(const litebus::AID &from, std::string &&name, std::string &&msg);
     void DeleteSnapshotMessage(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    void BeginReusableSnapshotMessage(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void CommitReusableSnapshotMessage(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void FailReusableSnapshotMessage(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void ResolveReusableSnapshotForCreateMessage(
+        const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    litebus::Future<::messages::BeginReusableSnapshotResponse> BeginReusableSnapshot(
+        const ::messages::BeginReusableSnapshotRequest &request);
+    litebus::Future<::messages::CommitReusableSnapshotResponse> CommitReusableSnapshot(
+        const ::messages::CommitReusableSnapshotRequest &request);
+    litebus::Future<::messages::FailReusableSnapshotResponse> FailReusableSnapshot(
+        const ::messages::FailReusableSnapshotRequest &request);
+    litebus::Future<::messages::GetReusableSnapshotResponse> GetReusableSnapshot(
+        const ::messages::GetReusableSnapshotRequest &request);
+    litebus::Future<::messages::ListReusableSnapshotsResponse> ListReusableSnapshots(
+        const ::messages::ListReusableSnapshotsRequest &request);
+    litebus::Future<::messages::ResolveReusableSnapshotForCreateResponse> ResolveReusableSnapshotForCreate(
+        const ::messages::ResolveReusableSnapshotForCreateRequest &request);
+    litebus::Future<::messages::DeleteReusableSnapshotResponse> DeleteReusableSnapshot(
+        const ::messages::DeleteReusableSnapshotRequest &request);
+    void SetReusableSnapshotArtifactDeleter(ReusableSnapshotStore::ArtifactDeleter deleter);
 
     /**
      * Query snapshot by ID
@@ -165,12 +189,14 @@ private:
     struct Member {
         std::shared_ptr<MetaStoreClient> client{nullptr};
         std::shared_ptr<GlobalScheduler> globalScheduler{nullptr};
+        std::shared_ptr<instance_manager::InstanceManager> instanceManager{nullptr};
         SnapManagerConfig config;
         LeaderInfo leaderInfo;
 
         // Snapshot cache and scheduler (refactored components)
         SnapshotCache cache;
         std::unique_ptr<SnapshotScheduler> scheduler{nullptr};
+        std::shared_ptr<ReusableSnapshotStore> reusableSnapshotStore{nullptr};
 
         // Watcher for etcd
         std::shared_ptr<Watcher> snapshotWatcher{nullptr};
@@ -201,8 +227,15 @@ private:
     /**
      * Master business handles write operations
      */
-    class MasterBusiness : public Business {
+    class MasterBusiness : public Business,
+                           public std::enable_shared_from_this<MasterBusiness> {
     public:
+        struct PauseResumeResult {
+            int32_t code{common::ERR_NONE};
+            std::string message;
+            ::core_service::SnapStartedInfo snapstartInfo;
+        };
+
         MasterBusiness(const std::shared_ptr<Member> &member, const std::shared_ptr<SnapManagerActor> &actor)
             : Business(member, actor) {}
         ~MasterBusiness() override = default;
@@ -215,8 +248,19 @@ private:
         void CleanupExpiredSnapshots() override;
 
     private:
+        struct PauseResumeAttempt {
+            std::string fingerprint;
+            std::shared_ptr<litebus::Promise<PauseResumeResult>> result;
+        };
+
         void HandleRecordSnapshot(const litebus::AID &from, messages::RecordSnapshotRequest &&req);
         void HandleSnapStart(const litebus::AID &from, std::shared_ptr<messages::RestoreSnapshotRequest> req);
+        litebus::Future<PauseResumeResult> StartPauseResume(
+            const std::shared_ptr<messages::RestoreSnapshotRequest> &req);
+
+        static std::string BuildPauseResumeFingerprint(const messages::RestoreSnapshotRequest &req);
+        static Status ValidatePauseResumeInstance(const resources::InstanceInfo &instance,
+                                                  const std::string &logicalInstanceID);
 
         litebus::Future<Status> SaveMetadataToEtcd(const SnapshotMetadata &meta);
         litebus::Future<Status> DeleteMetadataFromEtcd(const std::string &snapshotID);
@@ -227,6 +271,8 @@ private:
         void SendRecordSnapshotResponse(const litebus::AID &to, const std::string &requestID,
                                         int32_t code, const std::string &message) const;
         void SendSnapStartResponse(const SnapStartResponse &response) const;
+
+        std::unordered_map<std::string, PauseResumeAttempt> pauseResumeAttempts_;
     };
 
     /**

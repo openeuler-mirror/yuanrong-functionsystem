@@ -65,6 +65,9 @@ public:
     {
         auto sm = std::make_shared<MockInstanceStateMachine>(NODE_ID);
         resources::InstanceInfo info;
+        info.set_instanceid(INST_ID);
+        info.set_version(1);
+        info.set_runtimeid("runtime-1");
         info.set_functionproxyid(NODE_ID);
         info.mutable_instancestatus()->set_code(static_cast<int32_t>(state));
         if (idleTimeoutSec >= 0) {
@@ -151,7 +154,7 @@ TEST_F(IdleActorTest, RunningTransition_ReconcilesLostInitialIdleReport)
     ASSERT_AWAIT_TRUE([&]() { return sawCreatingFetch.load(); });
 
     running.store(true);
-    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, std::string(INST_ID));
+    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, runningSm->GetInstanceInfo());
 
     ASSERT_AWAIT_TRUE([&]() { return callCount > 0; });
 }

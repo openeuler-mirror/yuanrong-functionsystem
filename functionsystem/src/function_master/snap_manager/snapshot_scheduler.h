@@ -31,20 +31,6 @@ using SnapshotMetadata = ::messages::SnapshotMetadata;
 using GlobalScheduler = functionsystem::global_scheduler::GlobalSched;
 
 /**
- * Context for snapshot restoration scheduling
- */
-struct RestoreContext {
-    std::string snapshotID;
-    std::shared_ptr<messages::RestoreSnapshotRequest> request;
-    litebus::AID requester;
-
-    RestoreContext(const std::string &id,
-                  std::shared_ptr<messages::RestoreSnapshotRequest> req,
-                  const litebus::AID &from)
-        : snapshotID(id), request(std::move(req)), requester(from) {}
-};
-
-/**
  * SnapshotScheduler handles snapshot restoration scheduling logic.
  * Builds schedule requests and manages scheduling callbacks.
  */
@@ -69,24 +55,16 @@ public:
         const SnapshotMetadata &meta,
         const messages::RestoreSnapshotRequest &restoreReq) const;
 
+    std::shared_ptr<messages::ScheduleRequest> BuildPauseResumeScheduleRequest(
+        const resources::InstanceInfo &authoritativeInstance,
+        const messages::RestoreSnapshotRequest &restoreReq) const;
+
     /**
      * Schedule snapshot restoration
      * @param scheduleReq Schedule request
      * @return Future with scheduling status
      */
     litebus::Future<Status> Schedule(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq);
-
-    /**
-     * Build restore response
-     * @param context Restore context
-     * @param scheduleReq Schedule request (contains instanceID)
-     * @param status Schedule result status
-     * @return RestoreSnapshotResponse
-     */
-    static messages::RestoreSnapshotResponse BuildRestoreResponse(
-        const RestoreContext &context,
-        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
-        const Status &status);
 
 private:
     std::shared_ptr<GlobalScheduler> globalScheduler_;

@@ -44,6 +44,7 @@ get_property(SCALER_DIR GLOBAL PROPERTY "SCALER_DIR") # scaler src
 get_property(SCALER_LIB GLOBAL PROPERTY "SCALER_LIB") # scaler lib
 get_property(GLOBAL_SCHEDULER_DIR GLOBAL PROPERTY "GLOBAL_SCHEDULER_DIR")
 get_property(GLOBAL_SCHEDULER_LIB GLOBAL PROPERTY "GLOBAL_SCHEDULER_LIB")
+get_property(SNAP_MANAGER_LIB GLOBAL PROPERTY "SNAP_MANAGER_LIB")
 get_property(RESOURCE_GROUP_MANAGER_DIR GLOBAL PROPERTY "RESOURCE_GROUP_MANAGER_DIR")
 get_property(RESOURCE_GROUP_MANAGER_LIB GLOBAL PROPERTY "RESOURCE_GROUP_MANAGER_LIB")
 get_property(META_STORE_LIB GLOBAL PROPERTY "META_STORE_LIB")
@@ -85,6 +86,7 @@ target_link_libraries(${UNIT_TEST_MODULE} PRIVATE
         ${GLOBAL_SCHEDULER_LIB}
         ${MASTER_COMMON_LIB} # function master common lib
         ${INSTANCE_MANAGER_LIB} # instance_manager lib
+        ${SNAP_MANAGER_LIB}
         ${SYSTEM_FUNCTION_LOADER_LIB} # system_function_loader lib
         ${SCALER_LIB} # scaler lib
         ${RESOURCE_GROUP_MANAGER_LIB}
@@ -108,3 +110,69 @@ target_link_libraries(${UNIT_TEST_MODULE} PRIVATE
 )
 
 add_test(NAME ${UNIT_TEST_MODULE} COMMAND ${UNIT_TEST_MODULE} --gtest_filter=*.*)
+
+# Pause/Resume V1 tests are deliberately kept out of the monolithic unit-test
+# object graph so focused iterations compile and link only the relevant TUs.
+set(PAUSE_RESUME_UNIT_TEST pause_resume_unit_test)
+add_executable(${PAUSE_RESUME_UNIT_TEST}
+        main.cpp
+        common/etcd_service/etcd_kv_service.cpp
+        common/etcd_service/etcd_lease_service.cpp
+        common/etcd_service/etcd_service_driver.cpp
+        common/etcd_service/etcd_watch_service.cpp
+        common/etcd_service/etcd_watch_srv_actor.cpp
+        common/resource_view/view_utils.cpp
+        common/snapshot_storage/snapshot_storage_test.cpp
+        function_master/snap_manager/reusable_snapshot_proto_test.cpp
+        function_master/snap_manager/reusable_snapshot_store_test.cpp
+        function_proxy/local_scheduler/snap_ctrl/snap_ctrl_actor_test.cpp
+        runtime_manager/ckpt/pause_artifact_path_manager_test.cpp)
+
+target_compile_options(${PAUSE_RESUME_UNIT_TEST} PRIVATE
+        -Wno-error
+        -fno-access-control
+        -Wno-missing-field-initializers
+        -fvisibility=hidden)
+add_dependencies(${PAUSE_RESUME_UNIT_TEST} gtest_1_10_0)
+
+target_include_directories(${PAUSE_RESUME_UNIT_TEST} PRIVATE
+        ${CLIENT_CPP_INCLUDE}
+        ${gtest_INCLUDE_DIR}
+        ${SRC_INCLUDE_DIR}
+        ${META_STORE_DIR}
+        ${SRC_BUSPROXY_INCLUDE_DIR}
+        ${SRC_LOCAL_SCHEDULER_INCLUDE_DIR}
+        ${SRC_FUNCTION_PROXY_INCLUDE_DIR}
+        ${GLOBAL_SCHEDULER_DIR}
+        ${INSTANCE_MANAGER_DIR}
+        ${FUNCTION_AGENT_DIR}
+        ${SRC_RUNTIME_MANAGER_INCLUDE_DIR})
+
+target_link_libraries(${PAUSE_RESUME_UNIT_TEST} PRIVATE
+        ${crypto_LIB}
+        ${ssl_LIB}
+        ${zlib_LIB}
+        ${protobuf_LIB}
+        ${grpcpp_LIB}
+        ${gpr_LIB}
+        ${etcdapi_LIB_A}
+        ${securec_LIB}
+        ${gtest_LIB_A}
+        ${gmock_LIB_A}
+        ${litebus_ALL_LIB}
+        ${INSTANCE_MANAGER_LIB}
+        ${SNAP_MANAGER_LIB}
+        ${GLOBAL_SCHEDULER_LIB}
+        snapshot_storage
+        busproxy_lib
+        local_scheduler_lib
+        function_proxy_common_lib
+        ${FUNCTION_AGENT_LIB}
+        runtime_manager_lib
+        ${META_STORE_LIB}
+        scheduler
+        schedule_plugin_common
+        pthread)
+
+add_test(NAME ${PAUSE_RESUME_UNIT_TEST}
+        COMMAND ${PAUSE_RESUME_UNIT_TEST} --gtest_filter=*.*)

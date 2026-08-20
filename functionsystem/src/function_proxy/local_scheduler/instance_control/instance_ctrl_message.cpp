@@ -15,11 +15,106 @@
  */
 #include "instance_ctrl_message.h"
 
+#include "common/hex/hex.h"
 #include "common/metadata/metadata.h"
+#include "common/utils/resume_identity.h"
 #include "common/utils/struct_transfer.h"
 
 namespace functionsystem {
 using namespace messages;
+
+namespace {
+
+Status ValidateReusableSnapshotRestore(
+    const ::messages::ReusableSnapshotRestore &restore,
+    const std::string &requestedSnapshotID)
+{
+    const auto &artifact = restore.artifact();
+    if (requestedSnapshotID.empty() || restore.snapshotid() != requestedSnapshotID
+        || !restore.allowlogicalinstanceidrebind() || !restore.has_artifact()
+        || artifact.storagebackend().empty() || artifact.objectkey().empty()
+        || artifact.size() <= 0 || artifact.sha256().size() != 64
+        || artifact.format() != "gvisor-checkpoint" || artifact.formatversion() != 1) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "resolved reusable Snapshot restore metadata is invalid");
+    }
+    return Status::OK();
+}
+
+Status MergeReusableSnapshotResources(
+    const resources::Resources &source, resources::Resources *target)
+{
+    if (target == nullptr) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "reusable Snapshot target resources are unavailable");
+    }
+    for (const auto &[name, sourceResource] : source.resources()) {
+        auto targetResource = target->mutable_resources()->find(name);
+        if (targetResource == target->mutable_resources()->end()) {
+            (*target->mutable_resources())[name].CopyFrom(sourceResource);
+            continue;
+        }
+        if (!sourceResource.has_scalar() || !targetResource->second.has_scalar()
+            || targetResource->second.scalar().value() < sourceResource.scalar().value()) {
+            return Status(StatusCode::ERR_PARAM_INVALID,
+                          "Create-from-Snapshot cannot reduce or change a Snapshot resource");
+        }
+    }
+    return Status::OK();
+}
+
+}  // namespace
+
+Status ApplyResolvedReusableSnapshotForCreate(
+    const ::messages::ResolveReusableSnapshotForCreateResponse &resolved,
+    const std::shared_ptr<ScheduleRequest> &request)
+{
+    if (request == nullptr || resolved.code() != common::ERR_NONE
+        || !resolved.has_instancetemplate() || !resolved.has_reusablesnapshotrestore()) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "reusable Snapshot resolution is incomplete");
+    }
+    auto *target = request->mutable_instance();
+    auto *scheduleExtensions = target->mutable_scheduleoption()->mutable_extension();
+    const auto requested = scheduleExtensions->find(REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION);
+    if (requested == scheduleExtensions->end()) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "Create request omitted the reusable Snapshot ID");
+    }
+    const auto restoreStatus = ValidateReusableSnapshotRestore(
+        resolved.reusablesnapshotrestore(), requested->second);
+    if (restoreStatus.IsError()) {
+        return restoreStatus;
+    }
+    const auto &source = resolved.instancetemplate();
+    if (source.function().empty()
+        || (!target->function().empty() && target->function() != source.function())) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "Create function does not match the reusable Snapshot template");
+    }
+    const auto resourceStatus = MergeReusableSnapshotResources(
+        source.resources(), target->mutable_resources());
+    if (resourceStatus.IsError()) {
+        return resourceStatus;
+    }
+
+    // Keep the new logical identity, parent, naming and scheduling choices.
+    // Workload/bootstrap inputs are frozen by the Snapshot template in v1.
+    target->set_function(source.function());
+    target->set_restartpolicy(source.restartpolicy());
+    *target->mutable_createoptions() = source.createoptions();
+    target->set_storagetype(source.storagetype());
+    target->mutable_args()->CopyFrom(source.args());
+    target->set_gracefulshutdowntime(source.gracefulshutdowntime());
+    target->set_executortype(source.executortype());
+    target->mutable_extensions()->erase("portForward");
+
+    scheduleExtensions->erase(REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION);
+    (*scheduleExtensions)[REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION] =
+        CharStringToHexString(resolved.reusablesnapshotrestore().SerializeAsString());
+    return Status::OK();
+}
+
 std::shared_ptr<DeployInstanceRequest> GetDeployInstanceReq(const FunctionMeta &funcMeta,
                                                             const std::shared_ptr<ScheduleRequest> &request)
 {
@@ -38,6 +133,14 @@ std::shared_ptr<DeployInstanceRequest> GetDeployInstanceReq(const FunctionMeta &
     deployInstanceRequest->mutable_resources()->CopyFrom(request->instance().resources());
     if (request->instance().has_snapshotinfo()) {
         deployInstanceRequest->mutable_snapshotinfo()->CopyFrom(request->instance().snapshotinfo());
+    }
+    const auto trustedRestore = request->instance().scheduleoption().extension().find(
+        REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION);
+    if (trustedRestore != request->instance().scheduleoption().extension().end()) {
+        ::messages::ReusableSnapshotRestore restore;
+        if (restore.ParseFromString(HexStringToCharString(trustedRestore->second))) {
+            deployInstanceRequest->mutable_reusablesnapshotrestore()->CopyFrom(restore);
+        }
     }
     BuildDeploySpec(funcMeta, deployInstanceRequest);
     BuildRootfsConfig(funcMeta, deployInstanceRequest);
@@ -65,6 +168,11 @@ std::shared_ptr<DeployInstanceRequest> GetDeployInstanceReq(const FunctionMeta &
         request->instance().scheduleoption().schedpolicyname());
     // 传递 NUMA 等 extension 到 runtime_manager（StartInstanceRequest 无 createoptions，需从 scheduleOption 读取）
     for (const auto& [k, v] : request->instance().scheduleoption().extension()) {
+        if (resume_identity::IsReservedExtension(k)
+            || k == REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION
+            || k == REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION) {
+            continue;
+        }
         (*deployInstanceRequest->mutable_scheduleoption()->mutable_extension())[k] = v;
     }
     auto mountUser = funcMeta.extendedMetaData.mountConfig.mountUser;

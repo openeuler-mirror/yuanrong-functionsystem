@@ -310,6 +310,7 @@ message DeployInstanceRequest {
   ContainerRuntimeConfig container = 38;
   BootstrapConfig bootstrapConfig = 39;
   resources.SnapshotInfo snapshotInfo = 40;
+  ReusableSnapshotRestore reusableSnapshotRestore = 41;
 }
 
 message TenantCredentials {
@@ -344,6 +345,11 @@ message KillInstanceRequest {
   string storageType = 5;
   bool isMonopoly = 6;
   int32 executorType = 7;
+  string checkpointID = 8;
+  string sourceSandboxID = 9;
+  uint64 checkpointSize = 10;
+  string checkpointSha256 = 11;
+  string tenantID = 12;
 }
 
 message KillInstanceResponse {
@@ -502,6 +508,7 @@ message RuntimeInstanceInfo {
   ContainerRuntimeConfig container = 10;
   BootstrapConfig bootstrapConfig = 11;
   resources.SnapshotInfo snapshotInfo = 12;
+  ReusableSnapshotRestore reusableSnapshotRestore = 13;
 }
 
 message DeployDuration {
@@ -562,6 +569,12 @@ message StopInstanceRequest {
   string traceID = 3;
   int32 type = 4;
   int32 executorType = 5;
+  string checkpointID = 6;
+  string sourceSandboxID = 7;
+  uint64 checkpointSize = 8;
+  string checkpointSha256 = 9;
+  string instanceID = 10;
+  string tenantID = 11;
 }
 
 message StopInstanceResponse {
@@ -1092,19 +1105,235 @@ message SnapshotMetadata {
 }
 
 
+message SnapshotArtifact {
+  string storageBackend = 1;
+  string objectKey = 2;
+  int64 size = 3;
+  string sha256 = 4;
+  string format = 5;
+  uint32 formatVersion = 6;
+}
+
+// Reusable Snapshot has an independent four-state lifecycle. Pause/Resume
+// continues to use resources.SnapshotStatus unchanged.
+enum ReusableSnapshotPhase {
+  REUSABLE_SNAPSHOT_PHASE_UNSPECIFIED = 0;
+  REUSABLE_SNAPSHOT_PUBLISHING = 1;
+  REUSABLE_SNAPSHOT_READY = 2;
+  REUSABLE_SNAPSHOT_DELETING = 3;
+}
+
+message ReusableSnapshotMetadata {
+  string snapshotID = 1;
+  repeated string names = 2;
+  resources.InstanceInfo instanceTemplate = 3;
+  SnapshotArtifact artifact = 4;
+  string tenantID = 5;
+  string createRequestID = 6;
+  string requestFingerprint = 7;
+  ReusableSnapshotPhase phase = 8;
+  int64 createTime = 9;
+  int64 updateTime = 10;
+  uint64 version = 11;
+}
+
+message ReusableSnapshotRestore {
+  string snapshotID = 1;
+  SnapshotArtifact artifact = 2;
+  bool allowLogicalInstanceIDRebind = 3;
+}
+
+
+message BeginReusableSnapshotRequest {
+  string requestID = 1;
+  string tenantID = 2;
+  string sourceInstanceID = 3;
+  repeated string names = 4;
+  string requestFingerprint = 5;
+}
+
+message BeginReusableSnapshotResponse {
+  int32 code = 1;
+  string message = 2;
+  string requestID = 3;
+  string snapshotID = 4;
+  ReusableSnapshotPhase phase = 5;
+  core_service.SnapshotInfo snapshotInfo = 6;
+}
+
+message CommitReusableSnapshotRequest {
+  string requestID = 1;
+  string tenantID = 2;
+  string snapshotID = 3;
+  string requestFingerprint = 4;
+  resources.InstanceInfo sourceInstanceInfo = 5;
+  SnapshotArtifact artifact = 6;
+}
+
+message CommitReusableSnapshotResponse {
+  int32 code = 1;
+  string message = 2;
+  string requestID = 3;
+  core_service.SnapshotInfo snapshotInfo = 4;
+  uint64 version = 5;
+}
+
+message FailReusableSnapshotRequest {
+  string requestID = 1;
+  string tenantID = 2;
+  string snapshotID = 3;
+  string requestFingerprint = 4;
+  string reason = 5;
+}
+
+message FailReusableSnapshotResponse {
+  int32 code = 1;
+  string message = 2;
+  string requestID = 3;
+}
+
+message GetReusableSnapshotRequest {
+  string requestID = 1;
+  string tenantID = 2;
+  string snapshotID = 3;
+}
+
+message GetReusableSnapshotResponse {
+  int32 code = 1;
+  string message = 2;
+  string requestID = 3;
+  core_service.SnapshotInfo snapshotInfo = 4;
+}
+
+message ListReusableSnapshotsRequest {
+  string requestID = 1;
+  string tenantID = 2;
+  string name = 3;
+  string pageToken = 4;
+  uint32 pageSize = 5;
+}
+
+message ListReusableSnapshotsResponse {
+  int32 code = 1;
+  string message = 2;
+  string requestID = 3;
+  repeated core_service.SnapshotInfo snapshotInfos = 4;
+  string nextPageToken = 5;
+}
+
+message BeginDeleteReusableSnapshotRequest {
+  string requestID = 1;
+  string tenantID = 2;
+  string snapshotID = 3;
+}
+
+message BeginDeleteReusableSnapshotResponse {
+  int32 code = 1;
+  string message = 2;
+  string requestID = 3;
+  SnapshotArtifact artifact = 4;
+  uint64 expectedVersion = 5;
+  bool alreadyDeleted = 6;
+}
+
+message CompleteDeleteReusableSnapshotRequest {
+  string requestID = 1;
+  string tenantID = 2;
+  string snapshotID = 3;
+  uint64 expectedVersion = 4;
+}
+
+message CompleteDeleteReusableSnapshotResponse {
+  int32 code = 1;
+  string message = 2;
+  string requestID = 3;
+}
+
+message DeleteReusableSnapshotRequest {
+  string requestID = 1;
+  string tenantID = 2;
+  string snapshotID = 3;
+}
+
+message DeleteReusableSnapshotResponse {
+  int32 code = 1;
+  string message = 2;
+  string requestID = 3;
+}
+
+message DeleteReusableSnapshotArtifactRequest {
+  string requestID = 1;
+  string tenantID = 2;
+  string snapshotID = 3;
+  SnapshotArtifact artifact = 4;
+}
+
+message DeleteReusableSnapshotArtifactResponse {
+  int32 code = 1;
+  string message = 2;
+  string requestID = 3;
+}
+
+message ResolveReusableSnapshotForCreateRequest {
+  string requestID = 1;
+  string tenantID = 2;
+  string snapshotID = 3;
+}
+
+message ResolveReusableSnapshotForCreateResponse {
+  int32 code = 1;
+  string message = 2;
+  string requestID = 3;
+  resources.InstanceInfo instanceTemplate = 4;
+  ReusableSnapshotRestore reusableSnapshotRestore = 5;
+  uint64 snapshotVersion = 6;
+}
+
+
 message SnapshotRuntimeRequest {
   string requestID = 1;
   string runtimeID = 2;
   string instanceID = 3;
   string containerID = 4;
   int32 ttl = 5;
+  common.SnapType type = 6;
+  string snapshotID = 7;
+  string checkpointDir = 8;
+  // FunctionAgent-local generation echoed by RuntimeManager to fence stale
+  // actor responses. It is cleared before the response leaves FunctionAgent.
+  uint64 agentRequestGeneration = 9;
+  string tenantID = 10;
+  int64 sourceVersion = 11;
+  bool leaveRunning = 12;
 }
 
 message SnapshotRuntimeResponse {
+  reserved 8;
+  reserved "localArtifactPath";
+
   int32 code = 1;
   string message = 2;
   string requestID = 3;
   resources.SnapshotInfo snapshotInfo = 4;
+  bool resultUnknown = 5;
+  // PhysicalFact is populated only after an authoritative List on failure.
+  // Successful PAUSE_RESUME responses use durable snapshotInfo and never
+  // expose a node-local path or fabricate a sandbox lifecycle state.
+  SandboxPhysicalFact physicalFact = 6;
+  uint64 agentRequestGeneration = 7;
+  SnapshotArtifact reusableSnapshotArtifact = 9;
+}
+
+// Internal-only physical facts returned by sandboxd List reconciliation.
+// This intentionally contains no credentials, environment variables, or
+// persisted operation phase.
+message SandboxPhysicalFact {
+  reserved 4, 5;
+  reserved "localArtifactPath", "localArtifactPresent";
+
+  string sandboxID = 1;
+  runtime.v1.SandboxState state = 2;
+  map<string, string> labels = 3;
 }
 
 message RestoreSnapshotRequest {
@@ -1113,20 +1342,14 @@ message RestoreSnapshotRequest {
   core_service.SnapStartOptions snapStartOptions = 3;
 }
 
-message SnapstartInfo {
-  string routeAddress = 1;
-  string portMappings = 2;
-  string functionProxyID = 3;
-  string nodeID = 4;
-  string namespace = 5;
-}
-
 message RestoreSnapshotResponse {
+  reserved 4;
+  reserved "instanceID";
+
   int32 code = 1;
   string message = 2;
   string requestID = 3;
-  string instanceID = 4;
-  SnapstartInfo snapstartInfo = 5;
+  core_service.SnapStartedInfo snapstartInfo = 5;
 }
 
 message RecordSnapshotRequest {
@@ -1182,6 +1405,40 @@ message TenantQuotaExceeded {
     int64  cooldownMs = 2;
 }
 
+// Internal-only FunctionProxy -> FunctionAgent attempt finalization.
+enum SnapshotAttemptFinalizeOperation {
+  SNAPSHOT_ATTEMPT_FINALIZE_OPERATION_UNSPECIFIED = 0;
+  PAUSE_COMMITTED = 1;
+  PAUSE_ABORTED = 2;
+  RESUME_COMMITTED = 3;
+  RESUME_ABORTED = 4;
+  PAUSED_DELETED = 5;
+  REUSABLE_SNAPSHOT_COMMITTED = 6;
+  REUSABLE_SNAPSHOT_ABORTED = 7;
+}
+
+message SnapshotAttemptFinalizeRequest {
+  uint32 protocolVersion = 1;
+  SnapshotAttemptFinalizeOperation operation = 2;
+  string tenantID = 3;
+  string instanceID = 4;
+  string snapshotID = 5;
+  string attemptID = 6;
+  string runtimeID = 7;
+  uint64 expectedSize = 8;
+  string expectedSha256 = 9;
+  string expectedStorage = 10;
+}
+
+message SnapshotAttemptFinalizeResponse {
+  int32 code = 1;
+  string message = 2;
+  bool resultUnknown = 3;
+  bool localCleanupComplete = 4;
+  bool remoteCleanupComplete = 5;
+  string attemptID = 6;
+}
+
 // ── Runtime reconciliation ──────────────────────────────────────────
 
 message RuntimeReconcileEntry {
@@ -1204,4 +1461,5 @@ message ReconcileRuntimesResponse {
   repeated string orphanIDs  = 5;  // cleaned orphan containerIDs
   repeated string missingIDs = 6;  // expected but not found containerIDs
   repeated RuntimeReconcileEntry confirmedEntries = 7;  // confirmed running entries
+  repeated SandboxPhysicalFact physicalFacts = 8;  // current List facts; transient states are not persisted
 }

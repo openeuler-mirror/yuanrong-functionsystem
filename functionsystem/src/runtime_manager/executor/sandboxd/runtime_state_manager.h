@@ -29,6 +29,16 @@
 
 namespace functionsystem::runtime_manager {
 
+enum class ExpectedSandboxStopKind : uint8_t {
+    NONE = 0,
+    CHECKPOINT = 1,
+};
+
+struct ExpectedSandboxStop {
+    std::string sandboxID;
+    ExpectedSandboxStopKind kind = ExpectedSandboxStopKind::NONE;
+};
+
 /**
  * Aggregated state for a single sandbox instance.
  * All fields that were previously scattered across 6 independent maps
@@ -74,6 +84,12 @@ public:
      */
     void Unregister(const std::string &runtimeID);
 
+    /**
+     * Roll back physical sandbox state for an uncommitted start without
+     * destroying the in-progress fence owned by OnStartCompleted().
+     */
+    void RollbackUncommittedStart(const std::string &runtimeID);
+
     // ── Queries ───────────────────────────────────────────────────────────────
 
     std::optional<SandboxInfo> Find(const std::string &runtimeID) const;
@@ -118,6 +134,17 @@ public:
     void ClearPendingDelete(const std::string &runtimeID);
     bool IsPendingDelete(const std::string &runtimeID) const;
 
+    // ── Expected sandbox-stop tracking ──────────────────────────────────────
+
+    void SetExpectedSandboxStop(const std::string &runtimeID, const std::string &sandboxID,
+                                ExpectedSandboxStopKind kind);
+    ExpectedSandboxStopKind ConsumeExpectedSandboxStop(const std::string &runtimeID,
+                                                       const std::string &sandboxID);
+    bool IsExpectedSandboxStop(const std::string &runtimeID, const std::string &sandboxID,
+                               ExpectedSandboxStopKind kind) const;
+    void ClearExpectedSandboxStop(const std::string &runtimeID, const std::string &sandboxID,
+                                  ExpectedSandboxStopKind kind);
+
 private:
     // Core sandbox state — single source of truth
     std::unordered_map<std::string, SandboxInfo> sandboxes_;
@@ -127,6 +154,10 @@ private:
 
     // Runtimes that should be stopped as soon as their in-progress start completes
     std::unordered_set<std::string> pendingDeletes_;
+
+    // Narrow exception to the ordinary Wait -> NotifySandboxExit lifecycle.
+    // It is process-local and generation-fenced by sandboxID.
+    std::unordered_map<std::string, ExpectedSandboxStop> expectedSandboxStops_;
 };
 
 }  // namespace functionsystem::runtime_manager

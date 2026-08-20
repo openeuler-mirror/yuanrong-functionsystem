@@ -26,11 +26,14 @@
 #include "common/proto/pb/message_pb.h"
 #include "common/resource_view/resource_view.h"
 #include "common/status/status.h"
+#include "common/types/instance_state.h"
 #include "function_proxy/common/state_machine/instance_control_view.h"
 #include "local_scheduler/instance_control/instance_ctrl.h"
 #include "local_scheduler/function_agent_manager/function_agent_mgr.h"
 
 namespace functionsystem::local_scheduler {
+
+bool ShouldIncludeInExpectedRuntimes(InstanceState state);
 
 /**
  * RuntimeReconcileActor reconciles the proxy's instance view against the actual

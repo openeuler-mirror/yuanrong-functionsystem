@@ -52,9 +52,17 @@ void IdleMgr::SessionCountDelta(const std::string &instanceID, int delta)
     litebus::Async(idleActor_->GetAID(), &IdleActor::SessionCountDelta, instanceID, delta);
 }
 
-void IdleMgr::OnInstanceRunning(const std::string &instanceID)
+void IdleMgr::OnInstanceRunning(const resources::InstanceInfo &identity)
 {
-    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, instanceID);
+    litebus::Async(idleActor_->GetAID(), &IdleActor::OnInstanceRunning, identity);
+}
+
+litebus::Future<Status> IdleMgr::SetPauseGated(const resources::InstanceInfo &identity, uint64_t token, bool gated)
+{
+    if (idleActor_ == nullptr) {
+        return Status(StatusCode::FAILED, "idle actor is not available");
+    }
+    return litebus::Async(idleActor_->GetAID(), &IdleActor::SetPauseGated, identity, token, gated);
 }
 
 }  // namespace functionsystem::local_scheduler

@@ -195,51 +195,59 @@ protected:
 
 TEST_F(PortManagerRecoveryTest, RestoredPortsAreSkippedByNewAllocations)
 {
-    const auto status = PortManager::GetInstance().ReservePorts(
-        "runtime-a", {initialPort_, initialPort_ + 1});
-    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    PortManager::GetInstance().BeginReconcile();
+    ASSERT_TRUE(PortManager::GetInstance().RebuildPorts({
+        {"runtime-a", {initialPort_, initialPort_ + 1}},
+    }));
 
     const auto ports = PortManager::GetInstance().RequestPorts("runtime-b", 2);
     EXPECT_EQ(ports, (std::vector<int>{initialPort_ + 2, initialPort_ + 3}));
 }
 
-TEST_F(PortManagerRecoveryTest, RestoreIsIdempotentForSameOwner)
+TEST_F(PortManagerRecoveryTest, RebuildIsIdempotentForSameOwner)
 {
-    ASSERT_TRUE(PortManager::GetInstance().ReservePorts("runtime-a", {initialPort_}).IsOk());
-    EXPECT_TRUE(PortManager::GetInstance().ReservePorts("runtime-a", {initialPort_}).IsOk());
+    const PortManager::ReservationMap reservations{{"runtime-a", {initialPort_}}};
+    PortManager::GetInstance().BeginReconcile();
+    ASSERT_TRUE(PortManager::GetInstance().RebuildPorts(reservations));
+    PortManager::GetInstance().BeginReconcile();
+    EXPECT_TRUE(PortManager::GetInstance().RebuildPorts(reservations));
+    EXPECT_EQ(PortManager::GetInstance().GetPorts("runtime-a"), std::vector<int>({initialPort_}));
 }
 
-TEST_F(PortManagerRecoveryTest, RestoreRejectsDifferentOwner)
+TEST_F(PortManagerRecoveryTest, RebuildRejectsDuplicatePhysicalOwner)
 {
-    ASSERT_TRUE(PortManager::GetInstance().ReservePorts("runtime-a", {initialPort_}).IsOk());
-    const auto status = PortManager::GetInstance().ReservePorts("runtime-b", {initialPort_});
-    EXPECT_TRUE(status.IsError());
-    EXPECT_NE(status.RawMessage().find("runtime-a"), std::string::npos);
+    PortManager::GetInstance().BeginReconcile();
+    EXPECT_FALSE(PortManager::GetInstance().RebuildPorts({
+        {"runtime-a", {initialPort_}},
+        {"runtime-b", {initialPort_}},
+    }));
+    EXPECT_FALSE(PortManager::GetInstance().IsReady());
 }
 
-TEST_F(PortManagerRecoveryTest, RestoreRejectsPortsOutsidePoolAtomically)
+TEST_F(PortManagerRecoveryTest, RebuildRejectsPortsOutsidePoolAtomically)
 {
-    const auto status = PortManager::GetInstance().ReservePorts(
-        "runtime-a", {initialPort_, initialPort_ + 4});
-    EXPECT_TRUE(status.IsError());
-
-    const auto ports = PortManager::GetInstance().RequestPorts("runtime-b", 2);
-    EXPECT_EQ(ports, (std::vector<int>{initialPort_, initialPort_ + 1}));
+    PortManager::GetInstance().BeginReconcile();
+    EXPECT_FALSE(PortManager::GetInstance().RebuildPorts({
+        {"runtime-a", {initialPort_, initialPort_ + 4}},
+    }));
+    EXPECT_FALSE(PortManager::GetInstance().IsReady());
+    EXPECT_TRUE(PortManager::GetInstance().GetPorts("runtime-a").empty());
 }
 
-TEST_F(PortManagerRecoveryTest, RestoreRejectsDuplicatePortsAtomically)
+TEST_F(PortManagerRecoveryTest, RebuildRejectsDuplicatePortsAtomically)
 {
-    const auto status = PortManager::GetInstance().ReservePorts(
-        "runtime-a", {initialPort_, initialPort_});
-    EXPECT_TRUE(status.IsError());
-
-    const auto ports = PortManager::GetInstance().RequestPorts("runtime-b", 1);
-    EXPECT_EQ(ports, (std::vector<int>{initialPort_}));
+    PortManager::GetInstance().BeginReconcile();
+    EXPECT_FALSE(PortManager::GetInstance().RebuildPorts({
+        {"runtime-a", {initialPort_, initialPort_}},
+    }));
+    EXPECT_FALSE(PortManager::GetInstance().IsReady());
+    EXPECT_TRUE(PortManager::GetInstance().GetPorts("runtime-a").empty());
 }
 
-TEST_F(PortManagerRecoveryTest, RestoredPortsCanBeReleased)
+TEST_F(PortManagerRecoveryTest, RebuiltPortsCanBeReleased)
 {
-    ASSERT_TRUE(PortManager::GetInstance().ReservePorts("runtime-a", {initialPort_}).IsOk());
+    PortManager::GetInstance().BeginReconcile();
+    ASSERT_TRUE(PortManager::GetInstance().RebuildPorts({{"runtime-a", {initialPort_}}}));
     PortManager::GetInstance().ReleasePorts("runtime-a");
 
     const auto ports = PortManager::GetInstance().RequestPorts("runtime-b", 1);

@@ -75,6 +75,11 @@ litebus::Future<SharedStreamMsg> RequestDispatcher::Call(const SharedStreamMsg &
 {
     ASSERT_FS(request->has_callreq());
     auto callReq = request->callreq();
+    if (pauseTrafficGated_) {
+        YRLOG_ERROR("{}|{}|instance({}) is pause traffic gated", callReq.traceid(), callReq.requestid(), instanceID_);
+        return CreateCallResponse(common::ERR_INSTANCE_SUSPEND, "instance is pause traffic gated",
+                                  request->messageid());
+    }
     // 已退出，不再具备消息处理能力
     if (isFatal_) {
         YRLOG_ERROR("{}|{}|instance({}) is fatal, failed to call", callReq.traceid(), callReq.requestid(), instanceID_);
@@ -300,8 +305,26 @@ void RequestDispatcher::OnCallResult(const SharedStreamMsg &callResultAck, const
     callCache_->DeleteReqInProgress(requestID);
 }
 
-void RequestDispatcher::UpdateInfo(const std::shared_ptr<InstanceRouterInfo> &info)
+bool RequestDispatcher::UpdateInfo(const std::shared_ptr<InstanceRouterInfo> &info)
 {
+    if (routeIdentityInitialized_ && info->version < version_) {
+        return false;
+    }
+    const bool generationChanged = routeIdentityInitialized_
+        && (version_ != info->version || requestID_ != info->requestID || runtimeID_ != info->runtimeID
+            || proxyID_ != info->proxyID || functionAgentID_ != info->functionAgentID
+            || containerID_ != info->containerID || unitID_ != info->unitID
+            || tenantID_ != info->tenantID || runtimeAddress_ != info->runtimeAddress
+            || local_ != info->isLocal);
+    const bool identityChanged = generationChanged || (routeIdentityInitialized_ && state_ != info->state);
+    if (identityChanged) {
+        pauseTrafficGated_ = false;
+        pauseTrafficGateToken_ = 0;
+    }
+    if (generationChanged) {
+        dataInterfaceClient_ = nullptr;
+    }
+    routeIdentityInitialized_ = true;
     local_ = info->isLocal;
     if (info->localClient != nullptr) {
         dataInterfaceClient_ = info->localClient;
@@ -318,9 +341,16 @@ void RequestDispatcher::UpdateInfo(const std::shared_ptr<InstanceRouterInfo> &in
         isReady = false;
     }
     proxyID_ = info->proxyID;
+    version_ = info->version;
+    state_ = info->state;
     isFatal_ = false;
     isReject_ = false;
+    requestID_ = info->requestID;
     runtimeID_ = info->runtimeID;
+    functionAgentID_ = info->functionAgentID;
+    containerID_ = info->containerID;
+    unitID_ = info->unitID;
+    runtimeAddress_ = info->runtimeAddress;
     tenantID_ = info->tenantID;
     function_ = info->function;
     // Update traffic report type only when the instance is running and ready
@@ -341,7 +371,7 @@ void RequestDispatcher::UpdateInfo(const std::shared_ptr<InstanceRouterInfo> &in
     }
     if (!local_ && isReady_) {
         // if instance is in remote node, subscribed event may be late, ignored unready event
-        return;
+        return true;
     }
     if (isReady_ == isReady) {
         // 3. not ready remote instance and aid is not empty, forward force invoke
@@ -355,7 +385,7 @@ void RequestDispatcher::UpdateInfo(const std::shared_ptr<InstanceRouterInfo> &in
                 }
             }
         }
-        return;
+        return true;
     }
     isReady_ = isReady;
     if (isReady_) {
@@ -366,6 +396,7 @@ void RequestDispatcher::UpdateInfo(const std::shared_ptr<InstanceRouterInfo> &in
             TriggerCall(req);
         }
     }
+    return true;
 }
 
 void RequestDispatcher::Fatal(const std::string &message, const StatusCode &code)
@@ -477,6 +508,38 @@ void RequestDispatcher::Reject(const std::string &message, const StatusCode &cod
     fatalMsg_ = message;
     fatalCode_ = code;
     isReject_ = true;
+}
+
+bool RequestDispatcher::MatchesPauseGateIdentity(const resources::InstanceInfo &identity) const
+{
+    return routeIdentityInitialized_ && local_ && state_ == InstanceState::RUNNING
+        && identity.instanceid() == instanceID_ && identity.requestid() == requestID_
+        && identity.version() == version_ && identity.functionproxyid() == proxyID_
+        && identity.runtimeid() == runtimeID_ && identity.functionagentid() == functionAgentID_
+        && identity.containerid() == containerID_ && identity.unitid() == unitID_
+        && identity.tenantid() == tenantID_ && identity.runtimeaddress() == runtimeAddress_
+        && identity.instancestatus().code() == static_cast<int32_t>(state_);
+}
+
+Status RequestDispatcher::SetPauseTrafficGated(const resources::InstanceInfo &identity, uint64_t token, bool gated)
+{
+    if (token == 0 || !MatchesPauseGateIdentity(identity)) {
+        return Status(StatusCode::ERR_INSTANCE_INFO_INVALID, "pause traffic gate identity changed");
+    }
+    if (gated) {
+        if (pauseTrafficGated_ && pauseTrafficGateToken_ != token) {
+            return Status(StatusCode::ERR_INSTANCE_BUSY, "pause traffic gate belongs to another operation");
+        }
+        pauseTrafficGated_ = true;
+        pauseTrafficGateToken_ = token;
+        return Status::OK();
+    }
+    if (pauseTrafficGateToken_ != 0 && pauseTrafficGateToken_ != token) {
+        return Status(StatusCode::ERR_INSTANCE_INFO_INVALID, "pause traffic gate token changed");
+    }
+    pauseTrafficGated_ = false;
+    pauseTrafficGateToken_ = token;
+    return Status::OK();
 }
 
 void RequestDispatcher::ReportTrafficMetrics(bool idle, const size_t &size)

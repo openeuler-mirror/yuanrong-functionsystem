@@ -17,6 +17,15 @@
 #ifndef FUNCTION_MASTER_SNAP_MANAGER_SNAP_MANAGER_DRIVER_H
 #define FUNCTION_MASTER_SNAP_MANAGER_SNAP_MANAGER_DRIVER_H
 
+#include <cstdint>
+#include <exception>
+#include <limits>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <nlohmann/json.hpp>
+
 #include "common/http/http_server.h"
 #include "common/status/status.h"
 #include "common/utils/module_driver.h"
@@ -235,6 +244,103 @@ public:
                 });
         };
         RegisterHandler("/delete-snapshot", handler);
+    }
+
+    void InitReusableSnapshotsHandler(std::shared_ptr<SnapManagerActor> snapActor)
+    {
+        auto handler = [snapActor](const HttpRequest &request) -> litebus::Future<HttpResponse> {
+            const auto tenant = request.url.query.find("tenant_id");
+            if (tenant == request.url.query.end() || tenant->second.empty()) {
+                return HttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "tenant_id is required");
+            }
+            if (request.method == "GET") {
+                const auto snapshot = request.url.query.find("snapshot_id");
+                if (snapshot != request.url.query.end() && !snapshot->second.empty()) {
+                    ::messages::GetReusableSnapshotRequest get;
+                    get.set_tenantid(tenant->second);
+                    get.set_snapshotid(snapshot->second);
+                    return litebus::Async(snapActor->GetAID(), &SnapManagerActor::GetReusableSnapshot, get)
+                        .Then([](const ::messages::GetReusableSnapshotResponse &response)
+                                  -> litebus::Future<litebus::http::Response> {
+                            if (response.code() != common::ERR_NONE) {
+                                return HttpResponse(litebus::http::ResponseCode::NOT_FOUND, response.message());
+                            }
+                            nlohmann::json body;
+                            body["snapshotId"] = response.snapshotinfo().snapshotid();
+                            body["names"] = nlohmann::json::array();
+                            for (const auto &name : response.snapshotinfo().names()) {
+                                body["names"].push_back(name);
+                            }
+                            return litebus::http::Ok(body.dump(), litebus::http::ResponseBodyType::JSON);
+                        });
+                }
+                ::messages::ListReusableSnapshotsRequest list;
+                list.set_tenantid(tenant->second);
+                if (const auto name = request.url.query.find("name"); name != request.url.query.end()) {
+                    list.set_name(name->second);
+                }
+                if (const auto token = request.url.query.find("pageToken"); token != request.url.query.end()) {
+                    list.set_pagetoken(token->second);
+                }
+                if (const auto size = request.url.query.find("pageSize"); size != request.url.query.end()) {
+                    try {
+                        size_t parsed = 0;
+                        const auto value = std::stoul(size->second, &parsed);
+                        if (parsed != size->second.size() || value > std::numeric_limits<uint32_t>::max()) {
+                            return HttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "invalid pageSize");
+                        }
+                        list.set_pagesize(static_cast<uint32_t>(value));
+                    } catch (const std::exception &) {
+                        return HttpResponse(litebus::http::ResponseCode::BAD_REQUEST, "invalid pageSize");
+                    }
+                }
+                return litebus::Async(snapActor->GetAID(), &SnapManagerActor::ListReusableSnapshots, list)
+                    .Then([](const ::messages::ListReusableSnapshotsResponse &response)
+                              -> litebus::Future<litebus::http::Response> {
+                        if (response.code() != common::ERR_NONE) {
+                            return HttpResponse(litebus::http::ResponseCode::BAD_REQUEST, response.message());
+                        }
+                        nlohmann::json body;
+                        body["items"] = nlohmann::json::array();
+                        for (const auto &item : response.snapshotinfos()) {
+                            nlohmann::json snapshotInfo;
+                            snapshotInfo["snapshotId"] = item.snapshotid();
+                            snapshotInfo["names"] = nlohmann::json::array();
+                            for (const auto &name : item.names()) {
+                                snapshotInfo["names"].push_back(name);
+                            }
+                            body["items"].push_back(std::move(snapshotInfo));
+                        }
+                        body["nextPageToken"] = response.nextpagetoken();
+                        return litebus::http::Ok(body.dump(), litebus::http::ResponseBodyType::JSON);
+                    });
+            }
+            if (request.method == "DELETE") {
+                const auto snapshot = request.url.query.find("snapshot_id");
+                const auto requestID = request.url.query.find("request_id");
+                if (snapshot == request.url.query.end() || snapshot->second.empty()
+                    || requestID == request.url.query.end() || requestID->second.empty()) {
+                    return HttpResponse(litebus::http::ResponseCode::BAD_REQUEST,
+                                        "snapshot_id and request_id are required");
+                }
+                ::messages::DeleteReusableSnapshotRequest remove;
+                remove.set_requestid(requestID->second);
+                remove.set_tenantid(tenant->second);
+                remove.set_snapshotid(snapshot->second);
+                return litebus::Async(snapActor->GetAID(), &SnapManagerActor::DeleteReusableSnapshot, remove)
+                    .Then([](const ::messages::DeleteReusableSnapshotResponse &response)
+                              -> litebus::Future<litebus::http::Response> {
+                        if (response.code() != common::ERR_NONE) {
+                            return HttpResponse(litebus::http::ResponseCode::INTERNAL_SERVER_ERROR,
+                                                response.message());
+                        }
+                        return litebus::http::Ok(nlohmann::json::object().dump(),
+                                                 litebus::http::ResponseBodyType::JSON);
+                    });
+            }
+            return HttpResponse(litebus::http::ResponseCode::METHOD_NOT_ALLOWED);
+        };
+        RegisterHandler("/reusable-snapshots", handler);
     }
 };
 
