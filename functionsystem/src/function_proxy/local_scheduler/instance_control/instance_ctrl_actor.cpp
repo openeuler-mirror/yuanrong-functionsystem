@@ -3184,9 +3184,21 @@ InstanceReadyCallResultCallBack InstanceCtrlActor::TakeFrontendReadyCallback(
         iter != instanceRegisteredReadyCallResultCallback_.end()) {
         callback = iter->second;
         EraseReadyCallResultCallbackByRequestID(requestID);
+        // A real CallResult (ready or fatal) is consuming the ready ticket; drop any
+        // pending failure snapshot so the ready-timeout closure cannot resurrect it.
+        EraseFrontendCreateFailure(requestID);
     } else if (auto iter = instanceReadyCallResultCallbackByInstanceID_.find(srcInstance);
                iter != instanceReadyCallResultCallbackByInstanceID_.end()) {
         callback = iter->second;
+        // The runtime CallResult's requestID diverged from the frontend ticket's, so
+        // we matched by instanceID. EraseReadyCallResultCallbackByInstanceID clears the
+        // ready-callback maps but not the failure snapshot bound to the original
+        // requestID; look it up and drop it too, or it leaks and could pollute a later
+        // requestID reuse.
+        if (auto reqIDIter = instanceReadyCallResultRequestIDByInstanceID_.find(srcInstance);
+            reqIDIter != instanceReadyCallResultRequestIDByInstanceID_.end()) {
+            EraseFrontendCreateFailure(reqIDIter->second);
+        }
         EraseReadyCallResultCallbackByInstanceID(srcInstance);
     }
     return callback;
@@ -3792,6 +3804,12 @@ void InstanceCtrlActor::ScheduleEnd(const litebus::Future<Status> &future,
         callResult->set_code(Status::GetPosixErrorCode(statusCode));
         callResult->set_message(fmt::format("{} on {}",
             status.MultipleErr() ? status.GetMessage() : status.RawMessage(), nodeID_));
+        // Record the last deploy failure for a pending frontend create so the
+        // ready-timeout closure can surface the real supervisor error. No-op for
+        // faas/sandbox/POSIX creates (no source=frontend marker) and does NOT alter
+        // the retry state machine below.
+        RecordFrontendCreateFailure(request->requestid(), Status::GetPosixErrorCode(statusCode),
+                                    callResult->message(), instanceID, request->instance());
         auto stateMachine = instanceControlView_->GetInstance(instanceID);
         if (stateMachine == nullptr) {
             (void)SendCallResult(instanceID, dstInstance, parentProxy, callResult);
@@ -6523,6 +6541,45 @@ void InstanceCtrlActor::OnFrontendScheduleCompleted(const litebus::Future<messag
     }
 }
 
+void InstanceCtrlActor::RecordFrontendCreateFailure(const std::string &requestID, int32_t code,
+                                                    const std::string &message, const std::string &instanceID,
+                                                    const InstanceInfo &instance)
+{
+    // Only frontend creates (POST /api/agent) carry a pending ready ticket that may
+    // time out; faas/sandbox/POSIX creates never register one and are skipped here.
+    if (requestID.empty() || instanceRegisteredReadyCallResultCallback_.find(requestID)
+                                == instanceRegisteredReadyCallResultCallback_.end()) {
+        return;
+    }
+    // Policy gate: only record when createOptions opted into last_failure_on_timeout.
+    // This is the real selector that keeps the snapshot/timeout-kill path scoped to
+    // /api/agent (source=frontend alone is not enough once a ticket exists).
+    if (!IsLastFailureOnTimeoutPolicy(instance.createoptions())) {
+        return;
+    }
+    // Overwrite on every failure so the last attempt's reason wins.
+    frontendCreateFailureSnapshots_[requestID] = { true, code, message, instanceID };
+}
+
+FrontendCreateFailureSnapshot InstanceCtrlActor::TakeFrontendCreateFailureSnapshot(const std::string &requestID)
+{
+    auto it = frontendCreateFailureSnapshots_.find(requestID);
+    if (it == frontendCreateFailureSnapshots_.end()) {
+        return FrontendCreateFailureSnapshot{};
+    }
+    FrontendCreateFailureSnapshot snapshot = it->second;
+    frontendCreateFailureSnapshots_.erase(it);
+    return snapshot;
+}
+
+void InstanceCtrlActor::EraseFrontendCreateFailure(const std::string &requestID)
+{
+    if (requestID.empty()) {
+        return;
+    }
+    (void)frontendCreateFailureSnapshots_.erase(requestID);
+}
+
 void InstanceCtrlActor::UnregisterFrontendReadyWait(const std::string &requestID, const std::string &reason)
 {
     if (instanceRegisteredReadyCallResultCallback_.find(requestID)
@@ -6530,7 +6587,43 @@ void InstanceCtrlActor::UnregisterFrontendReadyWait(const std::string &requestID
         return;
     }
     YRLOG_INFO("{}|unregister frontend ready waiter, reason({})", requestID, reason);
+    // Capture the bound instanceID before EraseReadyCallResultCallbackByRequestID drops
+    // the requestID->instanceID map. Under create_error_policy=last_failure_on_timeout,
+    // a ready timeout must also cancel any in-flight schedule/retry so a late success
+    // cannot resurrect an instance the caller has already been told failed.
+    std::string instanceID;
+    if (auto instIter = instanceReadyCallResultInstanceIDByRequestID_.find(requestID);
+        instIter != instanceReadyCallResultInstanceIDByRequestID_.end()) {
+        instanceID = instIter->second;
+    }
+    std::string tenantID;
+    bool policyKillEnabled = false;
+    if (!instanceID.empty()) {
+        if (auto stateMachine = instanceControlView_->GetInstance(instanceID); stateMachine != nullptr) {
+            const auto &info = stateMachine->GetInstanceInfo();
+            tenantID = info.tenantid();
+            policyKillEnabled = IsLastFailureOnTimeoutPolicy(info.createoptions());
+        }
+    }
     EraseReadyCallResultCallbackByRequestID(requestID);
+    // The ready ticket is being consumed (by timeout or client cancel); drop any
+    // pending failure snapshot so a late CallResult cannot resurrect it.
+    EraseFrontendCreateFailure(requestID);
+    if (policyKillEnabled && !instanceID.empty()) {
+        // KillFrontend on the owning proxy (this actor) SetCancels the in-flight
+        // retry state machine via PrepareKillByInstanceState; ERR_INSTANCE_NOT_FOUND
+        // (stateMachine already gone) is the expected clean case and is ignored.
+        YRLOG_INFO("{}|ready-wait timeout with last_failure_on_timeout, kill instance({}) to cancel retry",
+                   requestID, instanceID);
+        auto killReq = GenKillRequest(instanceID, SHUT_DOWN_SIGNAL);
+        if (tenantID.empty()) {
+            // tenantID unknown (stateMachine vanished before capture); fall back to the
+            // internal Kill entry that skips the tenant authorization check.
+            (void)Kill("", killReq, false);
+        } else {
+            (void)KillFrontend(tenantID, killReq);
+        }
+    }
 }
 
 void InstanceCtrlActor::EraseReadyCallResultCallbackByRequestID(const std::string &requestID)
