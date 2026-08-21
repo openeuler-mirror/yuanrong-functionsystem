@@ -19,6 +19,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <future>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -99,6 +100,65 @@ TEST(FrontendProxyServiceTest, RejectsUnauthenticatedPeerWhenRequired)
     auto status = service.InvokeInstance(nullptr, &request, &response);
 
     EXPECT_EQ(status.error_code(), ::grpc::StatusCode::UNAUTHENTICATED);
+}
+
+TEST(FrontendProxyServiceTest, InvokeTimeoutUsesFunctionTimeoutWithResultBuffer)
+{
+    FrontendProxyServiceParam param;
+    param.invokeResultTimeoutMs = 60000;
+    param.invokeResultTimeoutBufferMs = 5000;
+    ::frontend_proxy::InvokeInstanceRequest request;
+
+    EXPECT_EQ(FrontendProxyService::ResolveInvokeResultTimeout(request, param).count(), 65000);
+    request.set_invoketimeoutms(-1);
+    EXPECT_EQ(FrontendProxyService::ResolveInvokeResultTimeout(request, param).count(), 65000);
+    request.set_invoketimeoutms(30000);
+    EXPECT_EQ(FrontendProxyService::ResolveInvokeResultTimeout(request, param).count(), 35000);
+    request.set_invoketimeoutms(std::numeric_limits<int64_t>::max());
+    EXPECT_EQ(FrontendProxyService::ResolveInvokeResultTimeout(request, param).count(), 8640005000);
+}
+
+TEST(FrontendProxyServiceTest, AwaitInvokeResultUsesRemainingDeadline)
+{
+    FrontendProxyService service(FrontendProxyServiceParam {});
+    ::frontend_proxy::InvokeInstanceRequest request;
+    request.mutable_context()->set_requestid("invoke-before-deadline");
+    request.mutable_invoke()->set_instanceid("instance-before-deadline");
+    litebus::Promise<SharedStreamMsg> promise;
+    auto resultFuture = promise.GetFuture();
+    std::thread producer([&promise]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        auto result = std::make_shared<runtime_rpc::StreamingMessage>();
+        result->mutable_callresultreq()->set_code(common::ERR_NONE);
+        result->mutable_callresultreq()->set_requestid("invoke-before-deadline");
+        promise.SetValue(result);
+    });
+    ::frontend_proxy::InvokeInstanceResponse response;
+
+    auto status = service.AwaitInvokeResult(nullptr, request, response, resultFuture,
+                                            std::chrono::steady_clock::now() + std::chrono::milliseconds(200));
+    producer.join();
+
+    EXPECT_TRUE(status.ok());
+    EXPECT_EQ(response.status().code(), common::ERR_NONE);
+    EXPECT_EQ(response.callresult().requestid(), "invoke-before-deadline");
+}
+
+TEST(FrontendProxyServiceTest, AwaitInvokeResultTimesOutAtExpiredDeadline)
+{
+    FrontendProxyService service(FrontendProxyServiceParam {});
+    ::frontend_proxy::InvokeInstanceRequest request;
+    request.mutable_context()->set_requestid("invoke-expired-deadline");
+    request.mutable_invoke()->set_instanceid("instance-expired-deadline");
+    litebus::Promise<SharedStreamMsg> promise;
+    ::frontend_proxy::InvokeInstanceResponse response;
+
+    auto status = service.AwaitInvokeResult(nullptr, request, response, promise.GetFuture(),
+                                            std::chrono::steady_clock::now() - std::chrono::milliseconds(1));
+
+    EXPECT_TRUE(status.ok());
+    EXPECT_EQ(response.status().code(), common::ERR_INNER_SYSTEM_ERROR);
+    EXPECT_EQ(response.status().retryreason(), "post-dispatch-unknown");
 }
 
 TEST(FrontendProxyServiceTest, InvokeUsesFunctionProxyAsRuntimeSender)

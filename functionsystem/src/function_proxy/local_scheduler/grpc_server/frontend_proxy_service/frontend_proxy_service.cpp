@@ -21,6 +21,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -44,6 +45,8 @@ constexpr const char *FRONTEND_CREATE_SOURCE_VALUE = "frontend";
 constexpr const char *FRONTEND_KILL_ROUTE_STALE_MESSAGE =
     "frontend proxy is not the owning proxy for this instance";
 constexpr uint64_t FRONTEND_WAIT_POLL_MS = 20;
+// Keep this aligned with meta_service's maximum function timeout (100 days).
+constexpr int64_t MAX_FUNCTION_INVOKE_TIMEOUT_MS = 100LL * 24 * 60 * 60 * 1000;
 constexpr const char *FUNCTION_PROXY_STREAM_CALLER_ID = "function-proxy";
 constexpr size_t FRONTEND_EVENT_QUEUE_CAPACITY = 100;
 constexpr size_t FRONTEND_EVENT_METADATA_SIZE = 16;
@@ -111,6 +114,21 @@ litebus::Option<T> WaitFrontendResult(const litebus::Future<T> &future, ::grpc::
             std::chrono::steady_clock::now() - started).count());
     }
     return litebus::None();
+}
+
+template <typename T>
+litebus::Option<T> WaitFrontendResult(const litebus::Future<T> &future, ::grpc::ServerContext *context,
+                                      std::chrono::milliseconds timeout, bool &cancelled)
+{
+    return WaitFrontendResult(future, context, static_cast<uint64_t>(timeout.count()), cancelled);
+}
+
+std::chrono::steady_clock::time_point DeadlineAfter(std::chrono::milliseconds timeout)
+{
+    const auto now = std::chrono::steady_clock::now();
+    const auto maxTimeout =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::time_point::max() - now);
+    return now + std::min(timeout, maxTimeout);
 }
 
 bool HasCreateTenantMismatch(const ::frontend_proxy::CreateInstanceRequest &request)
@@ -599,6 +617,8 @@ bool FrontendProxyService::ValidateInvokeRequest(const ::frontend_proxy::InvokeI
     ::grpc::ServerContext *context, const ::frontend_proxy::InvokeInstanceRequest &request,
     ::frontend_proxy::InvokeInstanceResponse &response)
 {
+    const auto totalTimeout = ResolveInvokeResultTimeout(request, param_);
+    const auto waitDeadline = DeadlineAfter(totalTimeout);
     const auto requestID = request.invoke().requestid().empty() ? request.context().requestid()
                                                                : request.invoke().requestid();
     const auto traceID = request.invoke().traceid().empty() ? request.context().traceid() : request.invoke().traceid();
@@ -617,7 +637,7 @@ bool FrontendProxyService::ValidateInvokeRequest(const ::frontend_proxy::InvokeI
     // identity so SSE data and the legacy EOF event return to this service.
     auto invokeFuture = DispatchInvoke(param_, FUNCTION_PROXY_STREAM_CALLER_ID, CreateInvokeRequest(request));
     bool invokeCancelled = false;
-    auto invokeResponse = WaitFrontendResult(invokeFuture, context, param_.invokeResultTimeoutMs, invokeCancelled);
+    auto invokeResponse = WaitFrontendResult(invokeFuture, context, totalTimeout, invokeCancelled);
     if (!invokeResponse.IsSome()) {
         frontend_call_result_registry::Cancel(requestID, request.invoke().instanceid());
         SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
@@ -649,17 +669,21 @@ bool FrontendProxyService::ValidateInvokeRequest(const ::frontend_proxy::InvokeI
                           "result-waiter-unregistered", param_.endpointAddress, param_.nodeID);
         return ::grpc::Status::OK;
     }
-    return AwaitInvokeResult(context, request, response, watchResult.future);
+    return AwaitInvokeResult(context, request, response, watchResult.future, waitDeadline);
 }
 
 ::grpc::Status FrontendProxyService::AwaitInvokeResult(
     ::grpc::ServerContext *context, const ::frontend_proxy::InvokeInstanceRequest &request,
-    ::frontend_proxy::InvokeInstanceResponse &response, const litebus::Future<SharedStreamMsg> &resultFuture)
+    ::frontend_proxy::InvokeInstanceResponse &response, const litebus::Future<SharedStreamMsg> &resultFuture,
+    const std::chrono::steady_clock::time_point &waitDeadline)
 {
     const auto requestID = request.invoke().requestid().empty() ? request.context().requestid()
                                                                : request.invoke().requestid();
+    const auto remainingMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(waitDeadline - std::chrono::steady_clock::now()).count();
+    const auto remainingTimeoutMs = remainingMs > 0 ? static_cast<uint64_t>(remainingMs) : 0;
     bool resultCancelled = false;
-    auto callResult = WaitFrontendResult(resultFuture, context, param_.invokeResultTimeoutMs, resultCancelled);
+    auto callResult = WaitFrontendResult(resultFuture, context, remainingTimeoutMs, resultCancelled);
     if (!callResult.IsSome()) {
         frontend_call_result_registry::Cancel(requestID, request.invoke().instanceid());
         SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
@@ -688,6 +712,19 @@ bool FrontendProxyService::ValidateInvokeRequest(const ::frontend_proxy::InvokeI
                       callResult.Get()->callresultreq().code() == common::ERR_NONE ? "success" : "failed", false,
                       "", "", param_.endpointAddress, param_.nodeID);
     return ::grpc::Status::OK;
+}
+
+std::chrono::milliseconds FrontendProxyService::ResolveInvokeResultTimeout(
+    const ::frontend_proxy::InvokeInstanceRequest &request, const FrontendProxyServiceParam &param)
+{
+    const auto maxFunctionTimeoutMs = static_cast<uint64_t>(MAX_FUNCTION_INVOKE_TIMEOUT_MS);
+    const auto functionTimeoutMs = request.invoketimeoutms() <= 0
+                                       ? std::min(param.invokeResultTimeoutMs, maxFunctionTimeoutMs)
+                                       : static_cast<uint64_t>(
+                                             std::min(request.invoketimeoutms(), MAX_FUNCTION_INVOKE_TIMEOUT_MS));
+    const auto maxBufferMs = static_cast<uint64_t>(std::numeric_limits<int64_t>::max()) - functionTimeoutMs;
+    const auto bufferMs = std::min(param.invokeResultTimeoutBufferMs, maxBufferMs);
+    return std::chrono::milliseconds(static_cast<int64_t>(functionTimeoutMs + bufferMs));
 }
 
 ::grpc::Status FrontendProxyService::CreateInstance(::grpc::ServerContext *context,
