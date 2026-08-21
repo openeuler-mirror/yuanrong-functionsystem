@@ -260,12 +260,10 @@ void Flags::AddGrpcServerFlags()
     AddFlag(&Flags::ip_, "ip", "IP address for listening.", "127.0.0.1", FlagCheckWrraper(IsIPValid));
     AddFlag(&Flags::grpcListenPort_, "grpc_listen_port", "For posix server listening. example: 30001",
             std::string("30001"), FlagCheckWrraper(IsPortValid));
-    AddFlag(&Flags::externalGrpcPort_, "external_grpc_port",
-            "External gRPC port shared by enabled externally reachable proxy services. "
+    AddFlag(&Flags::componentGrpcPort_, "component_grpc_port",
+            "Component gRPC port shared by the enabled proxy services. "
             "0 = register them on the POSIX server.",
-            std::string(""));
-    AddFlag(&Flags::sessionGrpcPort_, "session_grpc_port",
-            "Deprecated alias for external_grpc_port.", std::string("0"));
+            std::string("0"));
     AddFlag(&Flags::enableExecStreamService_, "enable_exec_stream_service",
             "Whether to expose ExecStreamService on a gRPC server.", true);
     AddFlag(&Flags::enableFrontendProxyService_, "enable_frontend_proxy_service",

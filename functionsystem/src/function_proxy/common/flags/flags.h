@@ -57,14 +57,9 @@ public:
         return grpcListenPort_;
     }
 
-    const std::string &GetSessionGrpcPort() const
+    const std::string &GetComponentGrpcPort() const
     {
-        return sessionGrpcPort_;
-    }
-
-    const std::string &GetExternalGrpcPort() const
-    {
-        return externalGrpcPort_.empty() ? sessionGrpcPort_ : externalGrpcPort_;
+        return componentGrpcPort_;
     }
 
     bool GetEnableExecStreamService() const
@@ -508,8 +503,7 @@ protected:
     std::string address_;
     std::string ip_;
     std::string grpcListenPort_;
-    std::string externalGrpcPort_;
-    std::string sessionGrpcPort_;
+    std::string componentGrpcPort_;
     bool enableExecStreamService_;
     bool enableFrontendProxyService_;
     std::string schedulePolicy_;

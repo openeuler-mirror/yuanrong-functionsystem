@@ -244,8 +244,8 @@ ProxyServiceMeta BuildProxyServiceMeta(const function_proxy::Flags &flags)
 {
     ProxyServiceMeta proxyService;
     if (flags.GetEnableFrontendProxyService()) {
-        auto endpoint = ResolveExternalGrpcEndpoint(flags.GetAddress(), flags.GetIP(), flags.GetGrpcListenPort(),
-                                                    flags.GetExternalGrpcPort());
+        auto endpoint = ResolveComponentGrpcEndpoint(flags.GetAddress(), flags.GetIP(), flags.GetGrpcListenPort(),
+                                                     flags.GetComponentGrpcPort());
         proxyService.grpcAddress = endpoint.Address();
         proxyService.capabilities = { "faas.create", "faas.invoke", "faas.kill" };
     }
@@ -506,7 +506,7 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .unRegisterWhileStop = flags.UnRegisterWhileStop(),
         .enableFakeSuspendResume = flags.GetEnableFakeSuspendResume(),
         .udsPath = flags.GetDPosixUdsPath(),
-        .externalGrpcPort = flags.GetExternalGrpcPort(),
+        .componentGrpcPort = flags.GetComponentGrpcPort(),
         .enableExecStreamService = flags.GetEnableExecStreamService(),
         .enableFrontendProxyService = flags.GetEnableFrontendProxyService(),
         .address = flags.GetAddress(),  // LiteBus address for extracting IP used by gRPC servers

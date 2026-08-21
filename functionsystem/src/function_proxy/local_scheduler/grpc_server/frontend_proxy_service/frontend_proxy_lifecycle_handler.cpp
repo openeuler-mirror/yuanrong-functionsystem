@@ -97,24 +97,21 @@ std::shared_ptr<messages::ScheduleRequest> BuildFrontendScheduleRequest(
 }
 }
 
-std::string ExternalGrpcEndpoint::Address() const
+std::string ComponentGrpcEndpoint::Address() const
 {
     return ip + ":" + port;
 }
 
-ExternalGrpcEndpoint ResolveExternalGrpcEndpoint(const std::string &proxyAddress, const std::string &localIP,
-                                                 const std::string &posixPort,
-                                                 const std::string &externalGrpcPort)
+ComponentGrpcEndpoint ResolveComponentGrpcEndpoint(const std::string &proxyAddress, const std::string &localIP,
+                                                   const std::string &posixPort,
+                                                   const std::string &componentGrpcPort)
 {
-    if (externalGrpcPort == "0") {
+    if (componentGrpcPort == "0") {
         return { localIP, posixPort, false };
     }
     auto separator = proxyAddress.find_last_of(':');
-    auto externalIP = separator == std::string::npos ? proxyAddress : proxyAddress.substr(0, separator);
-    if (externalIP.size() > IPV6_BRACKET_PAIR_SIZE && externalIP.front() == '[' && externalIP.back() == ']') {
-        externalIP = externalIP.substr(IPV6_BRACKET_OFFSET, externalIP.size() - IPV6_BRACKET_PAIR_SIZE);
-    }
-    return { externalIP, externalGrpcPort, true };
+    auto componentIP = separator == std::string::npos ? proxyAddress : proxyAddress.substr(0, separator);
+    return { componentIP, componentGrpcPort, true };
 }
 
 FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDispatcher(

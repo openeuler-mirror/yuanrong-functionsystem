@@ -24,21 +24,21 @@
 namespace functionsystem::test {
 using namespace local_scheduler;
 
-TEST(FrontendProxyLifecycleHandlerTest, UsesExternalServerForExternallyRoutableEndpoint)
+TEST(FrontendProxyLifecycleHandlerTest, UsesComponentServerForComponentEndpoint)
 {
-    auto endpoint = ResolveExternalGrpcEndpoint("10.0.0.12:22772", "172.17.0.1", "22773", "22774");
+    auto endpoint = ResolveComponentGrpcEndpoint("10.0.0.12:22772", "172.17.0.1", "22773", "22774");
 
-    EXPECT_TRUE(endpoint.useExternalServer);
+    EXPECT_TRUE(endpoint.useComponentServer);
     EXPECT_EQ(endpoint.ip, "10.0.0.12");
     EXPECT_EQ(endpoint.port, "22774");
     EXPECT_EQ(endpoint.Address(), "10.0.0.12:22774");
 }
 
-TEST(FrontendProxyLifecycleHandlerTest, ReusesPosixServerWhenExternalPortIsDisabled)
+TEST(FrontendProxyLifecycleHandlerTest, ReusesPosixServerWhenComponentPortIsDisabled)
 {
-    auto endpoint = ResolveExternalGrpcEndpoint("10.0.0.12:22772", "172.17.0.1", "22773", "0");
+    auto endpoint = ResolveComponentGrpcEndpoint("10.0.0.12:22772", "172.17.0.1", "22773", "0");
 
-    EXPECT_FALSE(endpoint.useExternalServer);
+    EXPECT_FALSE(endpoint.useComponentServer);
     EXPECT_EQ(endpoint.ip, "172.17.0.1");
     EXPECT_EQ(endpoint.port, "22773");
     EXPECT_EQ(endpoint.Address(), "172.17.0.1:22773");

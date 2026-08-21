@@ -93,7 +93,7 @@ struct LocalSchedStartParam {
     bool unRegisterWhileStop;
     bool enableFakeSuspendResume{ false };
     std::string udsPath;
-    std::string externalGrpcPort = "0";
+    std::string componentGrpcPort = "0";
     bool enableExecStreamService = true;
     bool enableFrontendProxyService = true;
     std::string address;  // LiteBus address (ip:port format), used to extract IP for gRPC servers
@@ -192,7 +192,7 @@ private:
     std::shared_ptr<InstanceCtrlMetaStoreHealthyObserver> metaStoreHealthyObserver_;
     std::shared_ptr<functionsystem::grpc::CommonGrpcServer> posixGrpcServer_;
     std::unique_ptr<TcpTunnelServer> tcpTunnelServer_;
-    std::shared_ptr<functionsystem::grpc::CommonGrpcServer> externalGrpcServer_;
+    std::shared_ptr<functionsystem::grpc::CommonGrpcServer> componentGrpcServer_;
     std::shared_ptr<ExecStreamService> execStreamService_;
     std::shared_ptr<TraefikRegistry> traefikRegistry_;
     bool isStarted_ = false;
