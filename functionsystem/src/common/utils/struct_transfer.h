@@ -470,6 +470,20 @@ static void SetInstanceInfoScheduleOptions(::resources::InstanceInfo *instanceIn
 
     const auto &extension = createReq.schedulingops().extension();
     *(scheduleOpt->mutable_extension()) = extension;
+    // Reusable Snapshot coordination fields are an internal trust boundary.
+    // Public Create callers may only supply CreateRequest.snapshotID; never
+    // accept serialized trusted restore metadata through scheduling options.
+    constexpr char REUSABLE_SNAPSHOT_INTERNAL_PREFIX[] =
+        "yr.internal.reusable_snapshot.";
+    for (auto it = scheduleOpt->mutable_extension()->begin();
+         it != scheduleOpt->mutable_extension()->end();) {
+        const auto key = it->first;
+        ++it;
+        if (key.compare(0, sizeof(REUSABLE_SNAPSHOT_INTERNAL_PREFIX) - 1,
+                        REUSABLE_SNAPSHOT_INTERNAL_PREFIX) == 0) {
+            scheduleOpt->mutable_extension()->erase(key);
+        }
+    }
 
     // policy name
     if (auto iter(extension.find(SCHEDULE_POLICY)); iter != extension.end()) {
@@ -978,6 +992,10 @@ static void SetInstanceInfo(::resources::InstanceInfo *instanceInfo, CreateReque
     auto instanceInfo = scheduleReq->mutable_instance();
     SetInstanceInfo(instanceInfo, createReq, callRequest, parentID);
     SetAffinityOpt(*instanceInfo, createReq, scheduleReq);
+    if (!createReq.snapshotid().empty()) {
+        (*instanceInfo->mutable_scheduleoption()->mutable_extension())
+            ["yr.internal.reusable_snapshot.requested_id"] = createReq.snapshotid();
+    }
     // Set Instance reliability
     instanceInfo->set_lowreliability(IsLowReliabilityInstance(*instanceInfo));
     auto now = std::chrono::high_resolution_clock::now();

@@ -128,12 +128,13 @@ functionsystem::messages::CodePackageThresholds GetCodePackageThresholds(
     return codePackageThresholds;
 }
 
-functionsystem::function_agent::FunctionAgentStartParam BuildFunctionAgentStartParam(
+Status BuildFunctionAgentStartParam(
     const function_agent::FunctionAgentFlags &flags,
     const runtime_manager::Flags &runtimeManagerFlags,
-    bool enableMergeProcess)
+    bool enableMergeProcess,
+    function_agent::FunctionAgentStartParam &startParam)
 {
-    function_agent::FunctionAgentStartParam startParam{
+    startParam = function_agent::FunctionAgentStartParam{
         .ip = flags.GetIP(),
         .localSchedulerAddress = flags.GetLocalSchedulerAddress(),
         .nodeID = flags.GetNodeID(),
@@ -158,9 +159,11 @@ functionsystem::function_agent::FunctionAgentStartParam BuildFunctionAgentStartP
         .dataSystemEnable = flags.GetDataSystemEnable(),
         .dataSystemHost = flags.GetDataSystemHost(),
         .dataSystemPort = flags.GetDataSystemPort(),
-        .pluginConfigs = flags.GetPluginConfigs()
+        .pluginConfigs = flags.GetPluginConfigs(),
+        .checkpointRoot = flags.GetCheckpointDir(),
+        .snapshotStorage = {}
     };
-    return startParam;
+    return function_agent::BuildSnapshotStorageStartConfig(flags, startParam.snapshotStorage);
 }
 
 void OnCreateFunctionAgent(const function_agent::FunctionAgentFlags &functionAgentFlags,
@@ -170,8 +173,15 @@ void OnCreateFunctionAgent(const function_agent::FunctionAgentFlags &functionAge
     YRLOG_INFO("function_agent is starting{}...",
                enableMergeProcess ? " with runtime_manager in merged process" : "");
 
-    function_agent::FunctionAgentStartParam startParam =
-        BuildFunctionAgentStartParam(functionAgentFlags, runtimeManagerFlags, enableMergeProcess);
+    function_agent::FunctionAgentStartParam startParam;
+    if (const auto status = BuildFunctionAgentStartParam(
+            functionAgentFlags, runtimeManagerFlags, enableMergeProcess, startParam);
+        status.IsError()) {
+        YRLOG_ERROR("failed to build function_agent snapshot storage config, reason: {}",
+                    status.ToString());
+        g_functionProxySwitcher->SetStop();
+        return;
+    }
 
     g_functionAgentDriver = std::make_shared<function_agent::FunctionAgentDriver>(
         functionAgentFlags.GetNodeID(), startParam);
@@ -420,8 +430,9 @@ std::shared_ptr<DSAuthConfig> InitDsAuthConfig(const function_proxy::Flags &flag
     return dsConfig;
 }
 
-LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
-                                         const std::shared_ptr<DSAuthConfig> &dsAuthConfig)
+Status InitLocalSchedParam(const function_proxy::Flags &flags,
+                           const std::shared_ptr<DSAuthConfig> &dsAuthConfig,
+                           LocalSchedStartParam &output)
 {
     auto controlInterfaceClientMgrProxy = g_commonDriver->GetControlInterfaceClientManagerProxy();
     auto observer = g_commonDriver->GetObserverActor();
@@ -432,7 +443,7 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
     auto pingCycleMs = flags.GetSystemTimeout() / DEFAULT_HEARTBEAT_TIMES;
     auto pingTimeoutMs = flags.GetSystemTimeout() / 2;
 
-    return LocalSchedStartParam{
+    output = LocalSchedStartParam{
         .nodeID = flags.GetNodeID(),
         .globalSchedulerAddress = flags.GetGlobalSchedulerAddress(),
         .schedulePolicy = flags.GetSchedulePolicy(),
@@ -518,6 +529,7 @@ LocalSchedStartParam InitLocalSchedParam(const function_proxy::Flags &flags,
         .tcpTunnelModuleCert = "",
         .tcpTunnelModuleKey = ""
     };
+    return Status::OK();
 }
 
 Status InitLocalSchedulerDriver(const function_proxy::Flags &flags, const std::shared_ptr<DSAuthConfig> &dsAuthConfig)
@@ -526,10 +538,11 @@ Status InitLocalSchedulerDriver(const function_proxy::Flags &flags, const std::s
         return Status(StatusCode::FAILED, "common is not initialized, failed to init local sched");
     }
     auto metaStoreClient = g_commonDriver->GetMetaStoreClient();
-    auto localSchedStartParam = InitLocalSchedParam(flags, dsAuthConfig);
-    InitPosixServerOption(flags, localSchedStartParam);
-    InitTcpTunnelOption(flags, localSchedStartParam);
-    g_localSchedDriver = std::make_shared<LocalSchedDriver>(std::move(localSchedStartParam), metaStoreClient);
+    LocalSchedStartParam param;
+    RETURN_IF_NOT_OK(InitLocalSchedParam(flags, dsAuthConfig, param));
+    InitPosixServerOption(flags, param);
+    InitTcpTunnelOption(flags, param);
+    g_localSchedDriver = std::make_shared<LocalSchedDriver>(std::move(param), metaStoreClient);
     return Status::OK();
 }
 

@@ -19,8 +19,11 @@
 #include <string>
 
 #include "common/utils/files.h"
+#include "common/utils/resume_identity.h"
 #include "exec/exec.hpp"
 #include "gtest/gtest.h"
+#include "runtime_manager/config/build.h"
+#include "runtime_manager/executor/sandboxd/sandboxd_executor.h"
 #include "runtime_manager/port/port_manager.h"
 #include "runtime_manager_test_actor.h"
 #include "utils/future_test_helper.h"
@@ -29,6 +32,44 @@
 
 using namespace functionsystem::test;
 namespace functionsystem::runtime_manager {
+
+TEST(ReusableSnapshotCreateRuntimeConfigTest, TrustedCloneAloneEnablesRrtLogicalInstanceRebind)
+{
+    RuntimeConfig runtimeConfig;
+    runtimeConfig.hostIP = "10.0.0.1";
+    auto startReq = std::make_shared<messages::StartInstanceRequest>();
+    auto *info = startReq->mutable_runtimeinstanceinfo();
+    info->set_instanceid("new-logical-instance");
+    info->set_runtimeid("deterministic-runtime");
+
+    const auto ordinary = GeneratePosixEnvs(runtimeConfig, startReq, "21000");
+    EXPECT_EQ(ordinary.count("YR_ALLOW_LOGICAL_INSTANCE_ID_REBIND"), 0U);
+
+    auto *restore = info->mutable_reusablesnapshotrestore();
+    restore->set_snapshotid("snapshot-42");
+    restore->set_allowlogicalinstanceidrebind(true);
+    restore->mutable_artifact()->set_objectkey(
+        "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
+    const auto clone = GeneratePosixEnvs(runtimeConfig, startReq, "21000");
+    ASSERT_NE(clone.find("YR_ALLOW_LOGICAL_INSTANCE_ID_REBIND"), clone.end());
+    EXPECT_EQ(clone.at("YR_ALLOW_LOGICAL_INSTANCE_ID_REBIND"), "true");
+
+    restore->set_allowlogicalinstanceidrebind(false);
+    const auto untrusted = GeneratePosixEnvs(runtimeConfig, startReq, "21000");
+    EXPECT_EQ(untrusted.count("YR_ALLOW_LOGICAL_INSTANCE_ID_REBIND"), 0U);
+}
+
+TEST(ReusableSnapshotCreateRuntimeConfigTest, ReusableCloneUsesDeterministicAttemptRuntimeID)
+{
+    messages::RuntimeInstanceInfo info;
+    info.set_instanceid("clone-instance");
+    info.set_requestid("clone-attempt");
+    EXPECT_EQ(RuntimeManager::RuntimeIDForStart(info, true),
+              resume_identity::RuntimeID("clone-instance", "clone-attempt"));
+    EXPECT_NE(RuntimeManager::RuntimeIDForStart(info, false),
+              resume_identity::RuntimeID("clone-instance", "clone-attempt"));
+}
+
 const uint32_t MAX_REGISTER_TEST_TIMES = 5;
 const uint32_t INITIAL_PORT = 700;
 const uint32_t PORT_NUM = 800;
@@ -306,6 +347,26 @@ TEST_F(RuntimeManagerCapabilityTest, RejectsDisabledDataSystemWithoutBypass)
     EXPECT_TRUE(response->startruntimeinstanceresponse().runtimeid().empty());
 }
 
+class RecordingSandboxdExecutorProxy final : public SandboxdExecutorProxy {
+public:
+    RecordingSandboxdExecutorProxy() : SandboxdExecutorProxy(nullptr) {}
+
+    void Stop() override
+    {
+    }
+
+    litebus::Future<Status> DeleteReusableSnapshotCheckpoint(
+        const ::messages::SnapshotAttemptFinalizeRequest &request) override
+    {
+        called = true;
+        captured = request;
+        return result;
+    }
+
+    bool called{ false };
+    ::messages::SnapshotAttemptFinalizeRequest captured;
+    Status result{ Status::OK() };
+};
 TEST_F(DISABLED_RuntimeManagerTest, StartInstanceTest)
 {
     const char *port = ("--port=" + std::to_string(FindAvailablePort())).c_str();
@@ -1334,6 +1395,108 @@ TEST_F(RuntimeManagerTypeTest, GetRuntimeType_ContainerFallbackWhenResponseExecu
     manager_->instanceResponseMap_["test_instance_id"] = startResponse;
 
     EXPECT_EQ(manager_->GetRuntimeType("test_runtime_id"), EXECUTOR_TYPE::SANDBOXD);
+}
+
+TEST_F(RuntimeManagerTypeTest, ResolvePauseSnapshotExecutorUsesAuthoritativeSandboxRecord)
+{
+    messages::RuntimeInstanceInfo instanceInfo;
+    instanceInfo.set_instanceid("sandbox-instance");
+    instanceInfo.set_runtimeid("sandbox-runtime");
+    instanceInfo.mutable_container()->set_id("sandbox-container");
+    manager_->instanceInfoMap_["sandbox-runtime"] = instanceInfo;
+
+    messages::SnapshotRuntimeRequest request;
+    request.set_runtimeid("sandbox-runtime");
+    request.set_type(common::PAUSE_RESUME);
+    auto executorType = EXECUTOR_TYPE::UNKNOWN;
+
+    const auto status = manager_->ResolveSnapshotExecutorType(request, executorType);
+
+    EXPECT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_EQ(executorType, EXECUTOR_TYPE::SANDBOXD);
+}
+
+TEST_F(RuntimeManagerTypeTest, ReusableSnapshotFinalizeUsesExactSandboxdCleanupWithoutRemovingRuntime)
+{
+    messages::RuntimeInstanceInfo instanceInfo;
+    instanceInfo.set_instanceid("snapshot-source-instance");
+    instanceInfo.set_runtimeid("snapshot-source-runtime");
+    instanceInfo.mutable_container()->set_id("snapshot-source-sandbox");
+    manager_->instanceInfoMap_[instanceInfo.runtimeid()] = instanceInfo;
+    auto executor = std::make_shared<RecordingSandboxdExecutorProxy>();
+    manager_->executorMap_[EXECUTOR_TYPE::SANDBOXD] = executor;
+
+    ::messages::SnapshotAttemptFinalizeRequest request;
+    request.set_protocolversion(1);
+    request.set_operation(::messages::REUSABLE_SNAPSHOT_COMMITTED);
+    request.set_instanceid(instanceInfo.instanceid());
+    request.set_runtimeid(instanceInfo.runtimeid());
+    request.set_snapshotid("snapshot-1");
+    request.set_attemptid("attempt-1");
+    request.set_expectedsize(4096);
+    request.set_expectedsha256("sha256-value");
+
+    auto future = manager_->FinalizeReusableSnapshotCheckpoint(request);
+
+    ASSERT_TRUE(future.WaitFor(5'000).IsOK());
+    ASSERT_TRUE(future.Get().IsOk()) << future.Get().ToString();
+    EXPECT_TRUE(executor->called);
+    EXPECT_EQ(executor->captured.SerializeAsString(), request.SerializeAsString());
+    EXPECT_NE(manager_->instanceInfoMap_.find(instanceInfo.runtimeid()),
+              manager_->instanceInfoMap_.end())
+        << "exact checkpoint deletion must leave the source runtime registered and running";
+}
+
+TEST_F(RuntimeManagerTypeTest, ResolvePauseSnapshotExecutorRejectsProcessRuntime)
+{
+    messages::RuntimeInstanceInfo instanceInfo;
+    instanceInfo.set_instanceid("process-instance");
+    instanceInfo.set_runtimeid("process-runtime");
+    manager_->instanceInfoMap_["process-runtime"] = instanceInfo;
+
+    messages::SnapshotRuntimeRequest request;
+    request.set_runtimeid("process-runtime");
+    request.set_type(common::PAUSE_RESUME);
+    auto executorType = EXECUTOR_TYPE::UNKNOWN;
+
+    const auto status = manager_->ResolveSnapshotExecutorType(request, executorType);
+
+    EXPECT_TRUE(status.IsError());
+    EXPECT_EQ(status.StatusCode(), StatusCode::RUNTIME_MANAGER_PARAMS_INVALID);
+    EXPECT_EQ(executorType, EXECUTOR_TYPE::UNKNOWN);
+}
+
+TEST_F(RuntimeManagerTypeTest, ResolvePauseSnapshotExecutorRejectsMissingRuntime)
+{
+    messages::SnapshotRuntimeRequest request;
+    request.set_runtimeid("missing-runtime");
+    request.set_type(common::PAUSE_RESUME);
+    auto executorType = EXECUTOR_TYPE::UNKNOWN;
+
+    const auto status = manager_->ResolveSnapshotExecutorType(request, executorType);
+
+    EXPECT_TRUE(status.IsError());
+    EXPECT_EQ(status.StatusCode(), StatusCode::RUNTIME_MANAGER_RUNTIME_PROCESS_NOT_FOUND);
+    EXPECT_EQ(executorType, EXECUTOR_TYPE::UNKNOWN);
+}
+
+TEST_F(RuntimeManagerTypeTest, ResolvePauseSnapshotExecutorUsesReconciledSandboxRecord)
+{
+    messages::RuntimeInstanceInfo reconciledInfo;
+    reconciledInfo.set_instanceid("reconciled-instance");
+    reconciledInfo.set_runtimeid("reconciled-runtime");
+    reconciledInfo.mutable_container()->set_id("reconciled-container");
+    manager_->instanceInfoMap_["reconciled-runtime"] = reconciledInfo;
+
+    messages::SnapshotRuntimeRequest request;
+    request.set_runtimeid("reconciled-runtime");
+    request.set_type(common::PAUSE_RESUME);
+    auto executorType = EXECUTOR_TYPE::UNKNOWN;
+
+    const auto status = manager_->ResolveSnapshotExecutorType(request, executorType);
+
+    EXPECT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_EQ(executorType, EXECUTOR_TYPE::SANDBOXD);
 }
 
 TEST_F(RuntimeManagerTypeTest, ResolveStopExecutorTypeUsesContainerFallbackForDefaultRuntimeRequest)

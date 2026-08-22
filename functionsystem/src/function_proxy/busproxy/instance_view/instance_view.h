@@ -54,6 +54,9 @@ public:
     Status SubscribeInstanceEvent(const std::string &subscriber, const std::string &targetInstance,
                                   bool ignoreNonExist = false);
 
+    litebus::Future<Status> SetLocalPauseTrafficGate(const resources::InstanceInfo &identity, uint64_t token,
+                                                     bool gated);
+
     void NotifyMigratingRequest(const std::string &instanceID);
     void OnNodeAbnormal(const std::string &nodeID);
 

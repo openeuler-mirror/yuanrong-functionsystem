@@ -65,6 +65,9 @@ public:
      */
     void SnapshotRuntime(const litebus::AID &from, std::string &&name, std::string &&msg);
 
+    /** Delete one exact reusable checkpoint after the logical Snapshot READY commit. */
+    void SnapshotAttemptFinalize(const litebus::AID &from, std::string &&name, std::string &&msg);
+
     /**
      * OOM Kill instance when receive event from metrics actor.
      */
@@ -138,6 +141,9 @@ public:
 
     EXECUTOR_TYPE GetRuntimeType(const std::string &runtimeID);
 
+    static std::string RuntimeIDForStart(const messages::RuntimeInstanceInfo &instance,
+                                         bool deterministicAttempt);
+
 protected:
     void Init() override;
 
@@ -147,6 +153,9 @@ private:
     enum class SandboxRuntimeDiscoveryState { NOT_REQUIRED, PENDING, READY };
 
     EXECUTOR_TYPE ResolveStopExecutorType(const std::shared_ptr<messages::StopInstanceRequest> &request);
+
+    Status ResolveSnapshotExecutorType(const messages::SnapshotRuntimeRequest &request,
+                                       EXECUTOR_TYPE &executorType);
 
     std::unordered_map<EXECUTOR_TYPE, std::shared_ptr<ExecutorProxy>> executorMap_;
 
@@ -172,6 +181,8 @@ private:
 
     std::map<std::string, messages::RuntimeInstanceInfo> instanceInfoMap_;
     std::map<std::string, messages::StartInstanceResponse> instanceResponseMap_;
+    std::map<std::string, messages::StartInstanceResponse> runtimeResponseMap_;
+    std::map<std::string, std::string> latestInFlightStartRequestByInstance_;
     std::unordered_set<std::string> receivedStartingReq_;
 
     bool connected_ = false;
@@ -195,6 +206,7 @@ private:
     static std::string GetExecutorUnavailableMessage(EXECUTOR_TYPE type);
 
     void StartInstanceResponse(const litebus::AID &from, const std::string &instanceID,
+                               const std::string &requestID,
                                const litebus::Future<messages::StartInstanceResponse> &response);
     void StartInstanceExecutorUnavailable(const litebus::AID &from,
                                           const std::shared_ptr<messages::StartInstanceRequest> &request,
@@ -218,9 +230,14 @@ private:
     Status QueryDebugInstanceInfosResponse(const litebus::AID &from,
                                            const messages::QueryDebugInstanceInfosResponse &response);
 
-    Status SnapshotRuntimeResponse(const litebus::AID &from, const std::string &instanceID,
-                                   const std::string &requestID,
+    Status SnapshotRuntimeResponse(const litebus::AID &from,
+                                   const std::shared_ptr<messages::SnapshotRuntimeRequest> &request,
                                    const litebus::Future<messages::SnapshotRuntimeResponse> &responseFuture);
+    litebus::Future<Status> FinalizeReusableSnapshotCheckpoint(
+        const ::messages::SnapshotAttemptFinalizeRequest &request);
+    void SnapshotAttemptFinalizeCompleted(
+        const litebus::AID &from, const ::messages::SnapshotAttemptFinalizeRequest &request,
+        const litebus::Future<Status> &future);
 
     void CreateInstanceMetrics(const litebus::Future<messages::StartInstanceResponse> &response,
                                const std::shared_ptr<messages::StartInstanceRequest> &request);

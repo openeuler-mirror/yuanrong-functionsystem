@@ -53,6 +53,14 @@ public:
     MOCK_METHOD(litebus::Future<Status>, GracefulShutdown, (), (override));
     MOCK_METHOD(litebus::Future<Status>, IsRegisteredToGlobal, (), (override));
     MOCK_METHOD(litebus::Future<std::string>, QueryMasterIP, (), (override));
+    MOCK_METHOD(litebus::Future<::messages::BeginReusableSnapshotResponse>, BeginReusableSnapshot,
+                (const std::shared_ptr<::messages::BeginReusableSnapshotRequest> &req), (override));
+    MOCK_METHOD(litebus::Future<::messages::CommitReusableSnapshotResponse>, CommitReusableSnapshot,
+                (const std::shared_ptr<::messages::CommitReusableSnapshotRequest> &req), (override));
+    MOCK_METHOD(litebus::Future<::messages::FailReusableSnapshotResponse>, FailReusableSnapshot,
+                (const std::shared_ptr<::messages::FailReusableSnapshotRequest> &req), (override));
+    MOCK_METHOD(litebus::Future<::messages::ResolveReusableSnapshotForCreateResponse>, ResolveReusableSnapshotForCreate,
+                (const std::shared_ptr<::messages::ResolveReusableSnapshotForCreateRequest> &req), (override));
 };
 }  // namespace functionsystem::test
 

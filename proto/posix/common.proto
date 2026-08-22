@@ -269,4 +269,5 @@ message EventPayload {
 enum SnapType {
   DUMPSTATE = 0;
   SNAPSHOT = 1;
+  PAUSE_RESUME = 2;
 }

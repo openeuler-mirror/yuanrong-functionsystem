@@ -266,12 +266,21 @@ message InstanceStatus {
     int32 errCode = 5;
 }
 
+enum SnapshotStatus {
+    SNAPSHOT_STATUS_UNSPECIFIED = 0;
+    SNAPSHOT_READY = 1;
+    SNAPSHOT_DELETING = 2;
+}
+
 message SnapshotInfo {
-  string checkpointID = 1;
-  string storage = 2;
-  int64  size = 3;
-  string createTime = 4;
-  int32 ttlSeconds = 5;
+    string checkpointID = 1;
+    string storage = 2;
+    int64 size = 3;
+    string createTime = 4;
+    int32 ttlSeconds = 5;
+    SnapshotStatus status = 6;
+    string sourceNodeID = 7;
+    string sha256 = 8;
 }
 
 message InstanceInfo {

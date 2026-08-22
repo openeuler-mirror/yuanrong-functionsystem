@@ -301,6 +301,14 @@ void InstanceProxy::Reject(const std::string &instanceID, const std::string &mes
     }
 }
 
+Status InstanceProxy::SetPauseTrafficGated(const resources::InstanceInfo &identity, uint64_t token, bool gated)
+{
+    if (identity.instanceid() != instanceID_ || selfDispatcher_ == nullptr) {
+        return Status(StatusCode::ERR_INSTANCE_NOT_FOUND, "local instance dispatcher not found");
+    }
+    return selfDispatcher_->SetPauseTrafficGated(identity, token, gated);
+}
+
 void InstanceProxy::OnForwardCall(const litebus::Future<SharedStreamMsg> &callRspFut, const litebus::AID &from,
                                   const SharedStreamMsg &callReq, const std::shared_ptr<RequestDispatcher> &dispatcher)
 {
@@ -697,12 +705,14 @@ litebus::Future<SharedStreamMsg> InstanceProxy::SendForwardCallResult(const lite
 void InstanceProxy::NotifyChanged(const std::string &instanceID, const std::shared_ptr<InstanceRouterInfo> &info)
 {
     ASSERT_IF_NULL(info);
-    if (function_proxy::DirectRoutingConfig::IsEnabled() && !info->proxyGrpcAddress.empty()) {
-        routeCache_.Put(instanceID, info->proxyGrpcAddress);
-    }
     if (instanceID == instanceID_) {
         ASSERT_FS(selfDispatcher_);
-        selfDispatcher_->UpdateInfo(info);
+        if (!selfDispatcher_->UpdateInfo(info)) {
+            return;
+        }
+        if (function_proxy::DirectRoutingConfig::IsEnabled() && !info->proxyGrpcAddress.empty()) {
+            routeCache_.Put(instanceID, info->proxyGrpcAddress);
+        }
         if (!info->isLocal && info->isReady) {
             // MigratingRequest is already running,
             // notify observer to terminate actor because of instance has been remote
@@ -717,7 +727,12 @@ void InstanceProxy::NotifyChanged(const std::string &instanceID, const std::shar
         auto dispatcher = std::make_shared<RequestDispatcher>(instanceID, false, "", shared_from_this(), perf_);
         remoteDispatchers_[instanceID] = dispatcher;
     }
-    remoteDispatchers_[instanceID]->UpdateInfo(info);
+    if (!remoteDispatchers_[instanceID]->UpdateInfo(info)) {
+        return;
+    }
+    if (function_proxy::DirectRoutingConfig::IsEnabled() && !info->proxyGrpcAddress.empty()) {
+        routeCache_.Put(instanceID, info->proxyGrpcAddress);
+    }
 }
 
 void InstanceProxy::Fatal(const std::string &instanceID, const std::string &message, const StatusCode &code)

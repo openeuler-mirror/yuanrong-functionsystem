@@ -39,6 +39,7 @@
 #include "common/kv_client/kv_client.h"
 #include "function_agent/driver/function_agent_driver.h"
 #include "function_agent/flags/function_agent_flags.h"
+#include "function_agent/snapshot/snapshot_storage_config.h"
 #include "runtime_manager/config/flags.h"
 #include "runtime_manager/driver/runtime_manager_driver.h"
 
@@ -92,9 +93,10 @@ S3Config GetS3Config(const function_agent::FunctionAgentFlags &flags)
     return s3Config;
 }
 
-functionsystem::function_agent::FunctionAgentStartParam BuildStartParam(const function_agent::FunctionAgentFlags &flags)
+Status BuildStartParam(const function_agent::FunctionAgentFlags &flags,
+                       function_agent::FunctionAgentStartParam &startParam)
 {
-    function_agent::FunctionAgentStartParam startParam{
+    startParam = function_agent::FunctionAgentStartParam{
         .ip = flags.GetIP(),
         .localSchedulerAddress = flags.GetLocalSchedulerAddress(),
         .nodeID = flags.GetNodeID(),
@@ -117,9 +119,11 @@ functionsystem::function_agent::FunctionAgentStartParam BuildStartParam(const fu
         .dataSystemEnable = flags.GetDataSystemEnable(),
         .dataSystemHost = flags.GetDataSystemHost(),
         .dataSystemPort = flags.GetDataSystemPort(),
-        .pluginConfigs = flags.GetPluginConfigs()
+        .pluginConfigs = flags.GetPluginConfigs(),
+        .checkpointRoot = flags.GetCheckpointDir(),
+        .snapshotStorage = {}
     };
-    return startParam;
+    return function_agent::BuildSnapshotStorageStartConfig(flags, startParam.snapshotStorage);
 }
 
 void OnStopHandler(int signum)
@@ -247,7 +251,14 @@ int main(int argc, char **argv)
     if (!g_functionAgentSwitcher->InitLiteBus(address, flags.GetLitebusThreadNum())) {
         g_functionAgentSwitcher->SetStop();
     } else {
-        function_agent::FunctionAgentStartParam startParam = BuildStartParam(flags);
+        function_agent::FunctionAgentStartParam startParam;
+        if (const auto status = BuildStartParam(flags, startParam); status.IsError()) {
+            YRLOG_ERROR("failed to build snapshot storage config, reason: {}", status.ToString());
+            g_functionAgentSwitcher->SetStop();
+            g_functionAgentSwitcher->WaitStop();
+            OnDestroy();
+            return EXIT_ABNORMAL;
+        }
         if (flags.GetEnableMergeProcess()) {
             startParam.enableMergeProcess = true;
             startParam.runtimeManagerFlags = std::make_shared<runtime_manager::Flags>(runtimeManagerFlags);

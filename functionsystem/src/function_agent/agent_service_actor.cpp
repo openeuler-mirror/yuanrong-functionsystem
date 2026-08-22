@@ -19,7 +19,10 @@
 #include <async/async.hpp>
 #include <async/asyncafter.hpp>
 #include <async/defer.hpp>
+#include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <ctime>
 #include <limits>
 #include <memory>
 #include <sys/inotify.h>
@@ -34,9 +37,11 @@
 #include "common/utils/actor_worker.h"
 #include "common/utils/exec_utils.h"
 #include "common/utils/generate_message.h"
+#include "common/utils/resume_identity.h"
 #include "common/utils/struct_transfer.h"
 #include "function_agent/common/constants.h"
 #include "function_agent/common/utils.h"
+#include "runtime_manager/ckpt/pause_artifact_path_manager.h"
 
 namespace functionsystem::function_agent {
 using messages::RuleType;
@@ -52,6 +57,7 @@ static const std::string SF_DELEGATE_DIRECTORY_INFO = "SF_DELEGATE_DIRECTORY_INF
 static const std::string SF_INVOKE_LABELS = "SF_INVOKE_LABELS";
 static const std::string SF_FUNCTION_SIGNATURE = "SF_FUNCTION_SIGNATURE";
 static const std::string RUNTIME_MICROSERVICE_AZ_ENV = "RUNTIME_MICROSERVICE_AZ";
+
 static const std::string INSTANCE_AZ = "az";
 
 DeployResult AgentServiceActor::PrepareSharedDir(std::shared_ptr<messages::DeployInstanceRequest> &req)
@@ -130,6 +136,14 @@ void AgentServiceActor::DeployInstance(const litebus::AID &from, std::string &&n
                 deployInstanceRequest->requestid(), deployInstanceRequest->instanceid(),
                 deployInstanceRequest->ShortDebugString());
     const std::string &requestID = deployInstanceRequest->requestid();
+    if (!RejectReservedResumeIdentityFromUntrustedSender(
+            *deployInstanceRequest, from, localSchedFuncAgentMgrAID_)) {
+        auto response = InitDeployInstanceResponse(
+            static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID),
+            "reserved resume identity is not accepted from this sender", *deployInstanceRequest);
+        (void)Send(from, "DeployInstanceResponse", response.SerializeAsString());
+        return;
+    }
     // if functionAgent registration to localScheduler is not complete, refuse request from localScheduler
     if (!isRegisterCompleted_) {
         YRLOG_ERROR(
@@ -225,7 +239,7 @@ void AgentServiceActor::DeployInstance(const litebus::AID &from, std::string &&n
 
     YRLOG_INFO("{}|{}|received a deploy instance({}) request from {}", deployInstanceRequest->traceid(), requestID,
                deployInstanceRequest->instanceid(), std::string(from));
-    deployingRequest_[requestID] = { from, deployInstanceRequest };
+    deployingRequest_[requestID] = { from, deployInstanceRequest, false, false, *deployInstanceRequest };
     gracefulShutdownTime_ = deployInstanceRequest->gracefulshutdowntime() + GRACE_SHUTDOWN_DELAY;
 
     // 4. add shared dir
@@ -240,6 +254,16 @@ void AgentServiceActor::DeployInstance(const litebus::AID &from, std::string &&n
     auto parameters = BuildDeployerParameters(deployInstanceRequest);
     StartCodeDownloadSpan(deployInstanceRequest);
     DownloadCodeAndStartRuntime(parameters, deployInstanceRequest);
+}
+
+bool AgentServiceActor::RejectReservedResumeIdentityFromUntrustedSender(
+    messages::DeployInstanceRequest &request, const litebus::AID &from,
+    const litebus::AID &trustedSender)
+{
+    if (from.HashString() == trustedSender.HashString()) {
+        return true;
+    }
+    return !resume_identity::HasReservedExtension(request.scheduleoption().extension());
 }
 
 void AgentServiceActor::DownloadCodeAndStartRuntime(
@@ -720,66 +744,6 @@ void AgentServiceActor::KillInstance(const litebus::AID &from, std::string &&nam
          stopInstanceRequest.SerializeAsString());
 }
 
-void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&name, std::string &&msg)
-{
-    auto request = std::make_shared<messages::SnapshotRuntimeRequest>();
-    if (!request->ParseFromString(msg)) {
-        YRLOG_ERROR("failed to parse SnapshotRuntimeRequest");
-        return;
-    }
-
-    const std::string &instanceID = request->instanceid();
-    const std::string &runtimeID = request->runtimeid();
-    YRLOG_INFO("{}|received SnapshotRuntime request for instance({}), runtime({})",
-               request->requestid(), instanceID, runtimeID);
-
-    // Prepare response
-    messages::SnapshotRuntimeResponse response;
-    response.set_requestid(request->requestid());
-
-    // Check if agent is registered
-    if (!registerRuntimeMgr_.registered || !isRegisterCompleted_) {
-        response.set_code(static_cast<int32_t>(StatusCode::FUNC_AGENT_NOT_REGISTERED));
-        response.set_message("function agent is not registered");
-        YRLOG_ERROR("{}|registration is not complete, ignore snapshot request for instance({})",
-                    request->requestid(), instanceID);
-        Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
-        return;
-    }
-
-    // Forward snapshot request to RuntimeManager
-    YRLOG_INFO("{}|forward SnapshotRuntime request to RuntimeManager({}-{}) for instance({}), runtime({})",
-               request->requestid(), registerRuntimeMgr_.name, registerRuntimeMgr_.address, instanceID, runtimeID);
-
-    // Store the caller's AID to send response back later
-    snapshotRequests_[request->requestid()] = from;
-
-    Send(litebus::AID(registerRuntimeMgr_.name, registerRuntimeMgr_.address), "SnapshotRuntime", std::move(msg));
-}
-
-void AgentServiceActor::SnapshotRuntimeResponse(const litebus::AID &from, std::string &&, std::string &&msg)
-{
-    messages::SnapshotRuntimeResponse response;
-    if (!response.ParseFromString(msg)) {
-        YRLOG_ERROR("failed to parse SnapshotRuntimeResponse");
-        return;
-    }
-
-    const std::string &requestID = response.requestid();
-    auto iter = snapshotRequests_.find(requestID);
-    if (iter == snapshotRequests_.end()) {
-        YRLOG_WARN("{}|snapshot request not found in snapshotRequests_", requestID);
-        return;
-    }
-
-    YRLOG_INFO("{}|received SnapshotRuntimeResponse from RuntimeManager, code: {}",
-               requestID, response.code());
-
-    // Forward response back to the original caller (FunctionAgentMgrActor)
-    Send(iter->second, "SnapshotRuntimeResponse", std::move(msg));
-    snapshotRequests_.erase(iter);
-}
-
 litebus::Future<Status> AgentServiceActor::SetDeployers(const std::string &storageType,
                                                         const std::shared_ptr<Deployer> &deployer)
 {
@@ -814,6 +778,10 @@ void AgentServiceActor::Init()
     ActorBase::Receive("NotifyFunctionStatusChange", &AgentServiceActor::NotifyFunctionStatusChange);
     ActorBase::Receive("SnapshotRuntime", &AgentServiceActor::SnapshotRuntime);
     ActorBase::Receive("SnapshotRuntimeResponse", &AgentServiceActor::SnapshotRuntimeResponse);
+    ActorBase::Receive("SnapshotAttemptFinalize", &AgentServiceActor::SnapshotAttemptFinalize);
+    ActorBase::Receive("SnapshotAttemptFinalizeResponse", &AgentServiceActor::SnapshotAttemptFinalizeResponse);
+    ActorBase::Receive("DeleteReusableSnapshotArtifact",
+                       &AgentServiceActor::DeleteReusableSnapshotArtifact);
     ActorBase::Receive("ReconcileRuntimes", &AgentServiceActor::ReconcileRuntimes);
     ActorBase::Receive("ReconcileRuntimesResponse", &AgentServiceActor::ReconcileRuntimesResponse);
 
@@ -912,6 +880,13 @@ void AgentServiceActor::StartInstanceResponse(const litebus::AID &from, std::str
         return;
     }
 
+    CompleteStartInstanceResponse(from, std::move(startInstanceResponse));
+}
+
+void AgentServiceActor::CompleteStartInstanceResponse(
+    const litebus::AID &from, messages::StartInstanceResponse startInstanceResponse,
+    bool reusableRestoreAttemptCleaned)
+{
     auto request = deployingRequest_.find(startInstanceResponse.requestid());
     if (request == deployingRequest_.end()) {
         YRLOG_ERROR("{}|can't return start response, maybe instance has been killed.",
@@ -932,10 +907,36 @@ void AgentServiceActor::StartInstanceResponse(const litebus::AID &from, std::str
         startInstanceResponse.set_code(static_cast<int32_t>(SUCCESS));
     }
 
+    const bool reusableRestore = request->second.request->has_reusablesnapshotrestore();
+    const bool resultUnknown = startInstanceResponse.code() != static_cast<int32_t>(StatusCode::SUCCESS)
+        && resume_identity::IsResultUnknownStatusCode(startInstanceResponse.code());
+    if (reusableRestore && !resultUnknown && !reusableRestoreAttemptCleaned) {
+        if (request->second.restoreAttemptCleanupInProgress) {
+            YRLOG_WARN("{}|ignore duplicate StartInstance response while reusable restore cleanup is in progress",
+                       startInstanceResponse.requestid());
+            return;
+        }
+        request->second.restoreAttemptCleanupInProgress = true;
+        const auto &deploy = *request->second.request;
+        auto manager = std::make_shared<runtime_manager::PauseArtifactPathManager>(
+            checkpointRoot_, runtime_manager::PauseArtifactPathManager::StableTenantHash(deploy.tenantid()),
+            deploy.instanceid(), snapshotWorker_);
+        manager->DeleteRestoreAttempt(
+            deploy.reusablesnapshotrestore().snapshotid(), deploy.requestid())
+            .OnComplete(litebus::Defer(
+                GetAID(), &AgentServiceActor::OnReusableRestoreAttemptDeleted,
+                from, startInstanceResponse, deploy.requestid(), manager,
+                std::placeholders::_1));
+        return;
+    }
+
     if (startInstanceResponse.code() != 0) {
         YRLOG_ERROR("{}|received start instance response from {}, error code: {}", startInstanceResponse.requestid(),
                     std::string(from), startInstanceResponse.code());
-        DeleteCodeReferByDeployInstanceRequest(request->second.request);
+        if (!request->second.trustedResume
+            || !resume_identity::IsResultUnknownStatusCode(startInstanceResponse.code())) {
+            DeleteCodeReferByDeployInstanceRequest(request->second.request);
+        }
     } else {
         YRLOG_INFO("{}|received start instance response. instance({}) runtime({}) address({}) pid({}) containerID({})",
                    startInstanceResponse.requestid(), request->second.request->instanceid(),
@@ -943,11 +944,18 @@ void AgentServiceActor::StartInstanceResponse(const litebus::AID &from, std::str
                    startInstanceResponse.startruntimeinstanceresponse().address(),
                    startInstanceResponse.startruntimeinstanceresponse().pid(),
                    startInstanceResponse.startruntimeinstanceresponse().containerid());
-        if (!pluginClient_) {
-            pluginClient_ = std::make_shared<MultiPluginClient>();
+        const auto &runtimeID = startInstanceResponse.startruntimeinstanceresponse().runtimeid();
+        const bool inserted = runtimesDeploymentCache_->runtimes.emplace(
+            runtimeID, SetRuntimeInstanceInfo(request->second.request)).second;
+        if (inserted) {
+            if (!pluginClient_) {
+                pluginClient_ = std::make_shared<MultiPluginClient>();
+            }
+            pluginClient_->IncreaseEnvRef(request->second.request, runtimeID);
+        } else {
+            YRLOG_INFO("{}|physical runtime({}) is already tracked; skip duplicate plugin reference",
+                       startInstanceResponse.requestid(), runtimeID);
         }
-        pluginClient_->IncreaseEnvRef(request->second.request,
-                                      startInstanceResponse.startruntimeinstanceresponse().runtimeid());
     }
 
     // Extract portMappings if present: StartRuntimeInstanceResponse.port carries JSON when it starts with '{' or '['
@@ -957,8 +965,6 @@ void AgentServiceActor::StartInstanceResponse(const litebus::AID &from, std::str
         (!portInField.empty() && (portInField[0] == '{' || portInField[0] == '[')) ? portInField : "";
     auto deployInstanceResponse = BuildDeployInstanceResponse(startInstanceResponse, request->second.request,
                                                               portMappings);
-    (void)runtimesDeploymentCache_->runtimes.emplace(deployInstanceResponse->runtimeid(),
-                                                     SetRuntimeInstanceInfo(request->second.request));
     if (auto ret =
             Send(localSchedFuncAgentMgrAID_, "DeployInstanceResponse", deployInstanceResponse->SerializeAsString());
         ret != 1) {
@@ -966,6 +972,32 @@ void AgentServiceActor::StartInstanceResponse(const litebus::AID &from, std::str
     }
 
     (void)deployingRequest_.erase(request);
+}
+
+void AgentServiceActor::OnReusableRestoreAttemptDeleted(
+    const litebus::AID &from, messages::StartInstanceResponse startInstanceResponse,
+    const std::string &requestID,
+    const std::shared_ptr<runtime_manager::PauseArtifactPathManager> &manager,
+    const litebus::Future<Status> &cleanupFuture)
+{
+    (void)manager;
+    auto request = deployingRequest_.find(requestID);
+    if (request == deployingRequest_.end()) {
+        YRLOG_WARN("{}|reusable restore cleanup completed after deploy request disappeared", requestID);
+        return;
+    }
+    request->second.restoreAttemptCleanupInProgress = false;
+    if (cleanupFuture.IsError() || cleanupFuture.Get().IsError()) {
+        const auto status = cleanupFuture.IsError()
+            ? Status(StatusCode::ERR_INNER_COMMUNICATION,
+                     "reusable restore attempt cleanup future failed")
+            : cleanupFuture.Get();
+        YRLOG_ERROR("{}|failed to delete reusable restore attempt before deploy response: {}",
+                    requestID, status.RawMessage());
+        startInstanceResponse.set_code(static_cast<int32_t>(status.StatusCode()));
+        startInstanceResponse.set_message(status.RawMessage());
+    }
+    CompleteStartInstanceResponse(from, std::move(startInstanceResponse), true);
 }
 
 void AgentServiceActor::StopInstanceResponse(const litebus::AID &from, std::string &&, std::string &&msg)
@@ -978,6 +1010,10 @@ void AgentServiceActor::StopInstanceResponse(const litebus::AID &from, std::stri
     auto requestID = stopInstanceResponse.requestid();
     auto runtimeID = stopInstanceResponse.runtimeid();
     YRLOG_INFO("{}|received StopInstance response from {}, runtimeID: {}", requestID, std::string(from), runtimeID);
+
+    if (HandleResumeAbortStopInstanceResponse(from, stopInstanceResponse)) {
+        return;
+    }
 
     auto request = killingRequest_.find(requestID);
     if (request == killingRequest_.end()) {
@@ -1011,24 +1047,81 @@ void AgentServiceActor::StopInstanceResponse(const litebus::AID &from, std::stri
         TimeOutEvent();
     }
 
+    (void)killingRequest_.erase(requestID);
+    const auto runtimeIter = runtimesDeploymentCache_->runtimes.find(runtimeID);
+    const bool exactResumeTarget = resume_identity::IsExactResumeTargetCleanupRequest(
+        requestID, killInstanceRequest->instanceid(), runtimeID);
+    // Code references and health are keyed by logical instance, not runtime.
+    // A deterministic loser may be deleted after the winner for the same
+    // logical instance is already installed; only the exact runtime's plugin
+    // reference is safe to remove in that case.
+    bool anotherRuntimeOwnsLogicalInstance = false;
+    if (exactResumeTarget) {
+        for (const auto &[ownedRuntimeID, ownedInfo] : runtimesDeploymentCache_->runtimes) {
+            if (ownedRuntimeID != runtimeID
+                && ownedInfo.instanceid() == killInstanceRequest->instanceid()) {
+                anotherRuntimeOwnsLogicalInstance = true;
+                break;
+            }
+        }
+    }
+    if (!anotherRuntimeOwnsLogicalInstance
+        && instanceHealthyMap_.find(killInstanceRequest->instanceid()) != instanceHealthyMap_.end()) {
+        (void)instanceHealthyMap_.erase(killInstanceRequest->instanceid());
+    }
+
     // clear function's code package
-    auto runtimeIter = runtimesDeploymentCache_->runtimes.find(runtimeID);
     if (runtimeIter == runtimesDeploymentCache_->runtimes.end()) {
         YRLOG_ERROR("AgentServiceActor failed to find deployment config of runtime {}", runtimeID);
         return;
     }
 
-    DeleteCodeReferByRuntimeInstanceInfo(runtimeIter->second);
+    if (!anotherRuntimeOwnsLogicalInstance) {
+        DeleteCodeReferByRuntimeInstanceInfo(runtimeIter->second);
+    }
     if (!pluginClient_) {
         pluginClient_ = std::make_shared<MultiPluginClient>();
     }
     pluginClient_->DecreaseEnvRef(runtimeID, runtimeIter->second);
     (void)runtimesDeploymentCache_->runtimes.erase(runtimeID);
-    (void)killingRequest_.erase(requestID);
+}
 
-    if (instanceHealthyMap_.find(killInstanceRequest->instanceid()) != instanceHealthyMap_.end()) {
-        (void)instanceHealthyMap_.erase(killInstanceRequest->instanceid());
+bool AgentServiceActor::HandleResumeAbortStopInstanceResponse(
+    const litebus::AID &from, const ::messages::StopInstanceResponse &response)
+{
+    const auto requestID = response.requestid();
+    auto resumeAbort = resumeAbortFinalizations_.find(requestID);
+    if (resumeAbort == resumeAbortFinalizations_.end()) {
+        return false;
     }
+    const auto expectedRuntimeManager = litebus::AID(
+        registerRuntimeMgr_.name, registerRuntimeMgr_.address);
+    if (from != expectedRuntimeManager || response.runtimeid() != resumeAbort->second.runtimeID) {
+        YRLOG_WARN("{}|reject resume loser StopInstance response from {} for runtime {}",
+                   requestID, std::string(from), response.runtimeid());
+        return true;
+    }
+
+    auto context = std::move(resumeAbort->second);
+    resumeAbortFinalizations_.erase(resumeAbort);
+    const auto code = static_cast<StatusCode>(response.code());
+    const bool stopConfirmed = code == StatusCode::SUCCESS
+        || code == StatusCode::GRPC_NOT_FOUND
+        || code == StatusCode::ERR_INSTANCE_NOT_FOUND
+        || code == StatusCode::RUNTIME_MANAGER_RUNTIME_PROCESS_NOT_FOUND
+        || code == StatusCode::RUNTIME_MANAGER_RUNTIME_NOT_FOUND;
+    if (!stopConfirmed) {
+        SendSnapshotAttemptFinalizeResponse(
+            context.caller, context.request.attemptid(), response.code(), response.message(),
+            resume_identity::IsResultUnknownStatusCode(response.code()), false, false);
+        return true;
+    }
+    context.manager->DeleteRestoreAttempt(
+        context.request.snapshotid(), context.request.attemptid())
+        .OnComplete(litebus::Defer(
+            GetAID(), &AgentServiceActor::OnResumeAttemptLocalFinalized,
+            context.caller, context.request, context.manager, std::placeholders::_1));
+    return true;
 }
 
 void AgentServiceActor::UpdateResources(const litebus::AID &from, std::string &&, std::string &&msg)
@@ -1169,17 +1262,38 @@ void AgentServiceActor::RetryRegisterAgent(const std::string &msg)
         litebus::AsyncAfter(retryRegisterInterval_, GetAID(), &AgentServiceActor::RetryRegisterAgent, msg);
 }
 
+void AgentServiceActor::DrainPendingPauseRequestsForRuntimeManager(const std::string &runtimeManagerID,
+                                                                  const std::string &message)
+{
+    for (auto iter = snapshotRequests_.begin(); iter != snapshotRequests_.end();) {
+        const auto &pending = iter->second;
+        if (pending.request.type() != common::PAUSE_RESUME || pending.runtimeManagerID != runtimeManagerID) {
+            ++iter;
+            continue;
+        }
+        const auto &request = pending.request;
+        ::messages::SnapshotRuntimeResponse response;
+        response.set_requestid(request.requestid());
+        response.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        response.set_message(message);
+        response.set_resultunknown(true);
+        Send(pending.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
+        iter = snapshotRequests_.erase(iter);
+    }
+}
+
 void AgentServiceActor::MarkRuntimeManagerUnavailable(const std::string &id)
 {
-    registerHelper_->StopHeartbeatObserver();
     if (registerRuntimeMgr_.id != id) {
         YRLOG_ERROR("failed to find RuntimeManager({}) info", id);
         return;
     }
+    registerHelper_->StopHeartbeatObserver();
 
     YRLOG_WARN("gonna mark RuntimeManager {} as unavailable", id);
     runtimeManagerGracefulShutdown_.SetValue(true);
     registerRuntimeMgr_.registered = false;
+    DrainPendingPauseRequestsForRuntimeManager(id, "runtime manager heartbeat lost");
 
     UpdateAgentStatusToLocal(static_cast<int32_t>(RUNTIME_MANAGER_REGISTER_FAILED));
 }
@@ -1210,7 +1324,8 @@ Status AgentServiceActor::StartRuntime(const DeployInstanceRequest &request,
         YRLOG_DEBUG("{}|{}|request cmds key {}, value {}", request->traceid(), request->requestid(), fst, snd);
     }
     auto startInstanceRequest = std::make_unique<messages::StartInstanceRequest>();
-    function_agent::SetStartRuntimeInstanceRequestConfig(startInstanceRequest, request);
+    const auto resumeTrust =
+        function_agent::SetStartRuntimeInstanceRequestConfig(startInstanceRequest, request, agentID_);
     YRLOG_DEBUG("{}|{}|StartRuntime request for instance({}): {}", request->traceid(), request->requestid(),
                 request->instanceid(), startInstanceRequest->ShortDebugString());
     if (request->funcdeployspec().storagetype() == COPY_STORAGE_TYPE) {
@@ -1218,6 +1333,16 @@ Status AgentServiceActor::StartRuntime(const DeployInstanceRequest &request,
             deployers_[COPY_STORAGE_TYPE]->GetDestination("", "", request->funcdeployspec().deploydir()));
     }
 
+    if (resumeTrust == function_agent::ResumeIdentityTrust::INVALID) {
+        auto response = InitDeployInstanceResponse(
+            static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID),
+            "trusted resume identity is invalid", *request);
+        (void)Send(localSchedFuncAgentMgrAID_, "DeployInstanceResponse", response.SerializeAsString());
+        DeleteCodeReferByDeployInstanceRequest(request);
+        deployingRequest_.erase(request->requestid());
+        prepareEnvRequest_.erase(request->requestid());
+        return Status(StatusCode::ERR_PARAM_INVALID, "trusted resume identity is invalid");
+    }
     if (!registerRuntimeMgr_.registered) {
         YRLOG_ERROR("{}|{}|runtime-manager not registered, failed to StartRuntime. instance {}", request->traceid(),
                     request->requestid(), request->instanceid());
@@ -1227,12 +1352,68 @@ Status AgentServiceActor::StartRuntime(const DeployInstanceRequest &request,
         prepareEnvRequest_.erase(request->requestid());
         return Status(StatusCode::FUNC_AGENT_START_RUNTIME_FAILED, "invalid runtime-manager");
     }
+    auto sharedStartRequest = std::shared_ptr<messages::StartInstanceRequest>(std::move(startInstanceRequest));
+    if (resumeTrust == function_agent::ResumeIdentityTrust::TRUSTED) {
+        function_agent::MaterializeTrustedResumeCheckpoint(
+            snapshotStorage_, checkpointRoot_, snapshotWorker_, sharedStartRequest)
+            .OnComplete(litebus::Defer(GetAID(), &AgentServiceActor::OnTrustedResumeMaterialized,
+                                       request, sharedStartRequest, std::placeholders::_1));
+        return Status::OK();
+    }
+    if (resumeTrust == function_agent::ResumeIdentityTrust::REUSABLE) {
+        function_agent::MaterializeReusableSnapshotCheckpoint(
+            snapshotStorage_, checkpointRoot_, snapshotWorker_, sharedStartRequest)
+            .OnComplete(litebus::Defer(GetAID(), &AgentServiceActor::OnTrustedResumeMaterialized,
+                                       request, sharedStartRequest, std::placeholders::_1));
+        return Status::OK();
+    }
+    return ForwardStartRuntime(request, sharedStartRequest, false);
+}
+
+Status AgentServiceActor::ForwardStartRuntime(
+    const DeployInstanceRequest &request,
+    const std::shared_ptr<messages::StartInstanceRequest> &startInstanceRequest,
+    bool trustedResume)
+{
+    if (!registerRuntimeMgr_.registered) {
+        auto response = InitDeployInstanceResponse(
+            static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION),
+            "invalid runtime-manager", *request);
+        (void)Send(localSchedFuncAgentMgrAID_, "DeployInstanceResponse", response.SerializeAsString());
+        prepareEnvRequest_.erase(request->requestid());
+        return Status(StatusCode::FUNC_AGENT_START_RUNTIME_FAILED, "invalid runtime-manager");
+    }
+    const auto deploying = deployingRequest_.find(request->requestid());
+    if (deploying != deployingRequest_.end() && deploying->second.request == request) {
+        deploying->second.trustedResume = trustedResume;
+    }
     YRLOG_INFO("{}|{}|send StartInstance request to ({}-{}), instance: {}", request->traceid(), request->requestid(),
                registerRuntimeMgr_.name, registerRuntimeMgr_.address, request->instanceid());
     Send(litebus::AID(registerRuntimeMgr_.name, registerRuntimeMgr_.address), "StartInstance",
          startInstanceRequest->SerializeAsString());
     prepareEnvRequest_.erase(request->requestid());
     return Status::OK();
+}
+
+void AgentServiceActor::OnTrustedResumeMaterialized(
+    const DeployInstanceRequest &request,
+    const std::shared_ptr<messages::StartInstanceRequest> &startInstanceRequest,
+    const litebus::Future<Status> &materialized)
+{
+    if (materialized.IsError() || materialized.Get().IsError()) {
+        const auto status = materialized.IsError()
+            ? Status(StatusCode::ERR_INNER_COMMUNICATION,
+                     "trusted resume materialization future failed")
+            : materialized.Get();
+        auto response = InitDeployInstanceResponse(
+            static_cast<int32_t>(status.StatusCode()), status.RawMessage(), *request);
+        (void)Send(localSchedFuncAgentMgrAID_, "DeployInstanceResponse", response.SerializeAsString());
+        DeleteCodeReferByDeployInstanceRequest(request);
+        deployingRequest_.erase(request->requestid());
+        prepareEnvRequest_.erase(request->requestid());
+        return;
+    }
+    (void)ForwardStartRuntime(request, startInstanceRequest, true);
 }
 
 void AgentServiceActor::SetRegisterHelper(const std::shared_ptr<RegisterHelper> &helper)
@@ -1269,6 +1450,8 @@ void AgentServiceActor::ReceiveRegister(const std::string &message)
         registerHelper_->SendRegistered(req.name(), req.address(), rsp->SerializeAsString());
         return;
     }
+
+    DrainPendingPauseRequestsForRuntimeManager(registerRuntimeMgr_.id, "runtime manager incarnation replaced");
 
     // update agent service actor's cache
     registerRuntimeMgr_ = { req.name(), req.address(), req.id(), true };

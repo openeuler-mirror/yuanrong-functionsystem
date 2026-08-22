@@ -259,6 +259,15 @@ public:
     virtual litebus::Future<FrontendKillCleanupSnapshot> ProbeFrontendKillCleanup(
         const std::string &requestID, const std::string &instanceID);
     virtual litebus::Future<Status> ForceDeleteInstance(const std::string &instanceID);
+    virtual litebus::Future<Status> ReleaseRuntimeForPause(
+        const resource_view::InstanceInfo &instanceInfo, const std::string &snapshotID);
+
+    virtual litebus::Future<Status> ReleasePausedInstanceResources(
+        const resource_view::InstanceInfo &instanceInfo);
+
+    virtual litebus::Future<Status> BeginPauseGate(const resource_view::InstanceInfo &identity);
+
+    virtual litebus::Future<Status> RecoverPauseGate(const resource_view::InstanceInfo &identity);
 
     virtual litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> CreateInstanceClient(
         const std::string &instanceID, const std::string &runtimeID, const std::string &address)
@@ -282,7 +291,21 @@ public:
     virtual litebus::Future<messages::DeployInstanceResponse> DeploySnapStartInstance(
         const std::shared_ptr<messages::ScheduleRequest> &scheduleReq)
     {
-        return litebus::Async(aid_, &InstanceCtrlActor::DeploySnapStartInstance, scheduleReq);
+        using DeployPauseMethod = litebus::Future<messages::DeployInstanceResponse> (InstanceCtrlActor::*)(
+            const std::shared_ptr<messages::ScheduleRequest> &);
+        return litebus::Async(aid_, static_cast<DeployPauseMethod>(&InstanceCtrlActor::DeploySnapStartInstance),
+                              scheduleReq);
+    }
+
+    virtual litebus::Future<messages::DeployInstanceResponse> DeploySnapStartInstance(
+        const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+        const resume_identity::TrustedResumeIdentity &trustedResumeIdentity)
+    {
+        using DeployResumeMethod = litebus::Future<messages::DeployInstanceResponse> (InstanceCtrlActor::*)(
+            const std::shared_ptr<messages::ScheduleRequest> &,
+            const resume_identity::TrustedResumeIdentity &);
+        return litebus::Async(aid_, static_cast<DeployResumeMethod>(&InstanceCtrlActor::DeploySnapStartInstance),
+                              scheduleReq, trustedResumeIdentity);
     }
 
     virtual void RegisterClearGroupInstanceCallBack(ClearGroupInstanceCallBack callback);

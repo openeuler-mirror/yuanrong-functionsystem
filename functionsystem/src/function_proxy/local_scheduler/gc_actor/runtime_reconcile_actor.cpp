@@ -28,6 +28,11 @@
 
 namespace functionsystem::local_scheduler {
 
+bool ShouldIncludeInExpectedRuntimes(InstanceState state)
+{
+    return state != InstanceState::PAUSED;
+}
+
 namespace {
 using ReconcileRequestMap = std::unordered_map<std::string, std::shared_ptr<messages::ReconcileRuntimesRequest>>;
 
@@ -136,6 +141,9 @@ void RuntimeReconcileActor::RunReconcileCycle(const std::vector<std::string> &fi
 
     for (const auto &[instanceID, sm] : instances) {
         if (sm == nullptr) {
+            continue;
+        }
+        if (!ShouldIncludeInExpectedRuntimes(sm->GetInstanceState())) {
             continue;
         }
         AddLocalInstanceRequest(agentRequests, nodeID_, instanceID, sm->GetInstanceInfo());

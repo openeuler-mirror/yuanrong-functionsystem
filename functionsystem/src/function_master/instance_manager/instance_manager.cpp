@@ -39,4 +39,13 @@ litebus::Future<Status> InstanceManager::TryCancelSchedule(const std::string &id
     return litebus::Async(actor_->GetAID(), &InstanceManagerActor::TryCancelSchedule, id, type, reason);
 }
 
+litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse>
+InstanceManager::DeleteReusableSnapshotArtifact(
+    const ::messages::DeleteReusableSnapshotArtifactRequest &request)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(),
+                          &InstanceManagerActor::DeleteReusableSnapshotArtifact, request);
+}
+
 }  // namespace functionsystem::instance_manager

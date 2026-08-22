@@ -85,6 +85,8 @@ public:
 
     void Reject(const std::string &instanceID, const std::string &message, const StatusCode &code);
 
+    Status SetPauseTrafficGated(const resources::InstanceInfo &identity, uint64_t token, bool gated);
+
     std::list<litebus::Future<SharedStreamMsg>> GetOnRespFuture();
 
     void DeleteRemoteDispatcher(const std::string &instanceID);

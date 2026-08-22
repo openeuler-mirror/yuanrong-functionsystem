@@ -23,6 +23,8 @@
 #include "function_proxy/busproxy/instance_proxy/call_cache.h"
 #include "function_proxy/busproxy/instance_proxy/perf.h"
 #include "function_proxy/busproxy/instance_proxy/forward_interface.h"
+#include "common/resource_view/resource_type.h"
+#include "common/types/instance_state.h"
 #include "function_proxy/common/iam/internal_iam.h"
 #include "function_proxy/common/posix_client/data_plane_client/data_interface_posix_client.h"
 #include "function_proxy/common/posix_client/data_plane_client/data_interface_client_manager_proxy.h"
@@ -36,8 +38,15 @@ SharedStreamMsg CreateCallResponse(const common::ErrorCode &code, const std::str
 struct InstanceRouterInfo {
     bool isLocal = false;
     bool isReady = false;
+    int64_t version = 0;
+    InstanceState state = InstanceState::NEW;
+    std::string requestID;
     std::string runtimeID;
     std::string proxyID;
+    std::string functionAgentID;
+    std::string containerID;
+    std::string unitID;
+    std::string runtimeAddress;
     std::string proxyGrpcAddress;
     litebus::AID remote;
     std::string tenantID;
@@ -73,11 +82,13 @@ public:
 
     void OnCallResult(const SharedStreamMsg &, const std::string &, common::ErrorCode callResultCode);
 
-    void UpdateInfo(const std::shared_ptr<InstanceRouterInfo> &info);
+    bool UpdateInfo(const std::shared_ptr<InstanceRouterInfo> &info);
 
     void Fatal(const std::string &, const StatusCode &);
 
     void Reject(const std::string &, const StatusCode &);
+
+    Status SetPauseTrafficGated(const resources::InstanceInfo &identity, uint64_t token, bool gated);
 
     std::list<litebus::Future<SharedStreamMsg>> GetOnRespFuture();
 
@@ -110,6 +121,7 @@ public:
     }
 
 private:
+    bool MatchesPauseGateIdentity(const resources::InstanceInfo &identity) const;
     void TriggerCall(const std::string &requestID);
     void ResponseAllMessage();
 
@@ -126,14 +138,24 @@ private:
     void SendNotify(const std::basic_string<char> &req, const std::shared_ptr<CallRequestContext> &context) const;
 
     std::string instanceID_;
+    std::string requestID_;
     std::string runtimeID_;
     std::string proxyID_;
+    std::string functionAgentID_;
+    std::string containerID_;
+    std::string unitID_;
+    std::string runtimeAddress_;
+    int64_t version_ { 0 };
+    InstanceState state_ { InstanceState::NEW };
+    bool routeIdentityInitialized_ { false };
     std::string tenantID_;
     std::string function_;
     litebus::AID remoteAid_;
     bool local_ { false };
     bool isFatal_ { false };
     bool isReject_ { false };
+    bool pauseTrafficGated_ { false };
+    uint64_t pauseTrafficGateToken_ { 0 };
     bool isReady_ { false };
     bool used_ { false };
     std::string fatalMsg_;

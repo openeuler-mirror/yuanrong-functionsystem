@@ -24,7 +24,7 @@ namespace functionsystem::runtime_manager {
 
 void RuntimeStateManager::Register(SandboxInfo info)
 {
-    const std::string &runtimeID = info.runtimeID;
+    const std::string runtimeID = info.runtimeID;
     YRLOG_DEBUG("RuntimeStateManager::Register runtimeID({})", runtimeID);
     sandboxes_[runtimeID] = std::move(info);
 }
@@ -35,8 +35,16 @@ void RuntimeStateManager::Unregister(const std::string &runtimeID)
     sandboxes_.erase(runtimeID);
     inProgressStarts_.erase(runtimeID);
     pendingDeletes_.erase(runtimeID);
+    expectedSandboxStops_.erase(runtimeID);
     // Note: warmUpMap_ is intentionally NOT cleared here.
     // WarmUp state has its own lifecycle via RegisterWarmUp/UnregisterWarmUp.
+}
+
+void RuntimeStateManager::RollbackUncommittedStart(const std::string &runtimeID)
+{
+    YRLOG_DEBUG("RuntimeStateManager::RollbackUncommittedStart runtimeID({})", runtimeID);
+    sandboxes_.erase(runtimeID);
+    expectedSandboxStops_.erase(runtimeID);
 }
 
 // ── Queries ───────────────────────────────────────────────────────────────────
@@ -159,7 +167,7 @@ void RuntimeStateManager::UpdatePortMappings(const std::string &runtimeID, const
 void RuntimeStateManager::MarkStartInProgress(const std::string &runtimeID,
                                               litebus::Future<messages::StartInstanceResponse> future)
 {
-    inProgressStarts_.emplace(runtimeID, std::move(future));
+    inProgressStarts_.insert_or_assign(runtimeID, std::move(future));
 }
 
 void RuntimeStateManager::MarkStartDone(const std::string &runtimeID)
@@ -197,6 +205,46 @@ void RuntimeStateManager::ClearPendingDelete(const std::string &runtimeID)
 bool RuntimeStateManager::IsPendingDelete(const std::string &runtimeID) const
 {
     return pendingDeletes_.count(runtimeID) > 0;
+}
+
+// ── Expected sandbox-stop tracking ──────────────────────────────────────────
+
+void RuntimeStateManager::SetExpectedSandboxStop(const std::string &runtimeID, const std::string &sandboxID,
+                                                 ExpectedSandboxStopKind kind)
+{
+    if (runtimeID.empty() || sandboxID.empty() || kind == ExpectedSandboxStopKind::NONE) {
+        expectedSandboxStops_.erase(runtimeID);
+        return;
+    }
+    expectedSandboxStops_[runtimeID] = ExpectedSandboxStop{sandboxID, kind};
+}
+
+ExpectedSandboxStopKind RuntimeStateManager::ConsumeExpectedSandboxStop(const std::string &runtimeID,
+                                                                        const std::string &sandboxID)
+{
+    auto it = expectedSandboxStops_.find(runtimeID);
+    if (it == expectedSandboxStops_.end() || it->second.sandboxID != sandboxID) {
+        return ExpectedSandboxStopKind::NONE;
+    }
+    const auto kind = it->second.kind;
+    expectedSandboxStops_.erase(it);
+    return kind;
+}
+
+bool RuntimeStateManager::IsExpectedSandboxStop(const std::string &runtimeID, const std::string &sandboxID,
+                                                ExpectedSandboxStopKind kind) const
+{
+    auto it = expectedSandboxStops_.find(runtimeID);
+    return it != expectedSandboxStops_.end() && it->second.sandboxID == sandboxID && it->second.kind == kind;
+}
+
+void RuntimeStateManager::ClearExpectedSandboxStop(const std::string &runtimeID, const std::string &sandboxID,
+                                                   ExpectedSandboxStopKind kind)
+{
+    auto it = expectedSandboxStops_.find(runtimeID);
+    if (it != expectedSandboxStops_.end() && it->second.sandboxID == sandboxID && it->second.kind == kind) {
+        expectedSandboxStops_.erase(it);
+    }
 }
 
 }  // namespace functionsystem::runtime_manager

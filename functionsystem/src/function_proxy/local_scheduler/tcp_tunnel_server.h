@@ -23,6 +23,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -55,7 +56,12 @@ public:
     bool Start();
     void Stop();
 
+    bool TryAcquireReusableSnapshotGate(const std::string &instanceID);
+    void ReleaseReusableSnapshotGate(const std::string &instanceID);
+
 private:
+    friend class TcpTunnelServerTestPeer;
+
     struct ClientSession {
         SSL *ssl{ nullptr };
         int clientFd{ -1 };
@@ -63,6 +69,7 @@ private:
         std::string instanceID;
         std::string requestID;
         bool counted{ false };
+        bool tunnelCounted{ false };
     };
 
     struct Worker {
@@ -75,6 +82,9 @@ private:
     void ReapWorkers(bool waitForAll = false);
     bool ServeClient(ClientSession &session);
     void CloseClient(ClientSession &session);
+    bool TryBeginTunnelSession(const std::string &instanceID);
+    void EndTunnelSession(const std::string &instanceID);
+    size_t ActiveTunnelSessions(const std::string &instanceID);
     bool ConfigureTLS();
     int ResolveHostPort(const std::string &instanceID, int targetPort, std::string &error) const;
     std::string ResolveContainerIP(const std::string &instanceID, std::string &error) const;
@@ -91,6 +101,9 @@ private:
     std::unordered_set<int> clients_;
     std::mutex workersMutex_;
     std::vector<Worker> workers_;
+    std::mutex sessionStateMutex_;
+    std::unordered_map<std::string, size_t> activeTunnelSessions_;
+    std::unordered_set<std::string> reusableSnapshotGates_;
 };
 
 }  // namespace local_scheduler

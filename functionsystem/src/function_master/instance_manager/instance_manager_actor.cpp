@@ -23,6 +23,7 @@
 #include "async/async.hpp"
 #include "async/defer.hpp"
 #include "common/constants/actor_name.h"
+#include "common/constants/constants.h"
 #include "common/constants/signal.h"
 #include "common/logs/logging.h"
 #include "common/metadata/metadata.h"
@@ -32,7 +33,9 @@
 #include "common/utils/collect_status.h"
 #include "common/utils/generate_message.h"
 #include "common/utils/meta_store_kv_operation.h"
+#include "common/utils/resume_identity.h"
 #include "common/utils/struct_transfer.h"
+#include "instance_owner.h"
 #include "instance_manager_util.h"
 
 namespace functionsystem::instance_manager {
@@ -91,6 +94,19 @@ static bool MatchQueryInstancesRequest(const messages::QueryInstancesInfoRequest
         return false;
     }
     return true;
+}
+
+static void CollectSandboxRuntimeNodes(const resource_view::ResourceUnit &unit,
+                                       std::unordered_set<std::string> &runtimeNodes)
+{
+    const auto capability = unit.nodelabels().find(SANDBOX_RUNTIME_LABEL);
+    if (!unit.id().empty() && capability != unit.nodelabels().end()
+        && !capability->second.items().empty()) {
+        runtimeNodes.insert(unit.id());
+    }
+    for (const auto &[_, fragment] : unit.fragment()) {
+        CollectSandboxRuntimeNodes(fragment, runtimeNodes);
+    }
 }
 
 static void CopyResourceIfExists(const resources::InstanceInfo &src, resources::InstanceInfo &dst,
@@ -265,6 +281,10 @@ void InstanceManagerActor::Init()
 
     Receive("ForwardKill", &InstanceManagerActor::ForwardKill);
     Receive("ForwardCustomSignalResponse", &InstanceManagerActor::ForwardCustomSignalResponse);
+    Receive("FinalizePausedSnapshotDeleteResponse",
+            &InstanceManagerActor::FinalizePausedSnapshotDeleteResponse);
+    Receive("DeleteReusableSnapshotArtifactResponse",
+            &InstanceManagerActor::DeleteReusableSnapshotArtifactResponse);
     Receive("TryCancelResponse", &InstanceManagerActor::TryCancelResponse);
     Receive("ForwardQueryInstancesInfo", &InstanceManagerActor::ForwardQueryInstancesInfoHandler);
     Receive("ForwardQueryInstancesInfoResponse", &InstanceManagerActor::ForwardQueryInstancesInfoResponseHandler);
@@ -792,6 +812,490 @@ bool InstanceManagerActor::IsLocalAbnormal(const std::string &nodeName)
     return business_->IsLocalAbnormal(nodeName);
 }
 
+litebus::Future<Status> InstanceManagerActor::CleanupPausedSnapshot(
+    const resources::InstanceInfo &instanceInfo)
+{
+    if (instanceInfo.tenantid().empty() || instanceInfo.instanceid().empty()
+        || !instanceInfo.has_snapshotinfo()
+        || !resume_identity::IsCompleteReadySnapshot(instanceInfo.snapshotinfo())) {
+        return Status(StatusCode::FAILED, "paused snapshot metadata is incomplete");
+    }
+
+    const auto &snapshot = instanceInfo.snapshotinfo();
+    ::messages::SnapshotAttemptFinalizeRequest request;
+    request.set_protocolversion(1);
+    request.set_operation(::messages::PAUSED_DELETED);
+    request.set_tenantid(instanceInfo.tenantid());
+    request.set_instanceid(instanceInfo.instanceid());
+    request.set_snapshotid(snapshot.checkpointid());
+    request.set_expectedsize(snapshot.size());
+    request.set_expectedsha256(snapshot.sha256());
+    request.set_expectedstorage(snapshot.storage());
+    request.set_attemptid("paused-delete/" + instanceInfo.instanceid() + "/" + snapshot.checkpointid());
+
+    const auto existing = pausedSnapshotCleanupInFlight_.find(request.attemptid());
+    if (existing != pausedSnapshotCleanupInFlight_.end()) {
+        return existing->second->GetFuture();
+    }
+
+    auto result = std::make_shared<litebus::Promise<Status>>();
+    pausedSnapshotCleanupInFlight_[request.attemptid()] = result;
+    auto resourcesRequest = std::make_shared<messages::QueryResourcesInfoRequest>();
+    resourcesRequest->set_requestid(request.attemptid());
+    member_->globalScheduler->QueryResourcesInfo(resourcesRequest).OnComplete(
+        litebus::Defer(GetAID(), &InstanceManagerActor::OnPausedSnapshotCleanupResources,
+                       std::placeholders::_1, request, snapshot.sourcenodeid(), result));
+    return result->GetFuture();
+}
+
+void InstanceManagerActor::OnPausedSnapshotCleanupResources(
+    const litebus::Future<messages::QueryResourcesInfoResponse> &resourcesFuture,
+    const ::messages::SnapshotAttemptFinalizeRequest &request,
+    const std::string &sourceNodeID,
+    const std::shared_ptr<litebus::Promise<Status>> &result)
+{
+    if (resourcesFuture.IsError() || resourcesFuture.Get().resource().id().empty()) {
+        pausedSnapshotCleanupInFlight_.erase(request.attemptid());
+        result->SetValue(Status(StatusCode::ERR_INNER_COMMUNICATION,
+                                "failed to query runtime-capable nodes for paused snapshot cleanup"));
+        return;
+    }
+    auto runtimeNodes = std::make_shared<std::unordered_set<std::string>>();
+    CollectSandboxRuntimeNodes(resourcesFuture.Get().resource(), *runtimeNodes);
+    if (runtimeNodes->empty()) {
+        pausedSnapshotCleanupInFlight_.erase(request.attemptid());
+        result->SetValue(Status(StatusCode::ERR_INNER_COMMUNICATION,
+                                "no sandbox runtime node is available for paused snapshot cleanup"));
+        return;
+    }
+    member_->globalScheduler->QueryNodes().OnComplete(
+        litebus::Defer(GetAID(), &InstanceManagerActor::OnPausedSnapshotCleanupNodes,
+                       std::placeholders::_1, request, sourceNodeID, runtimeNodes, result));
+}
+
+void InstanceManagerActor::OnPausedSnapshotCleanupNodes(
+    const litebus::Future<std::unordered_set<std::string>> &nodesFuture,
+    const ::messages::SnapshotAttemptFinalizeRequest &request,
+    const std::string &sourceNodeID,
+    const std::shared_ptr<std::unordered_set<std::string>> &runtimeNodes,
+    const std::shared_ptr<litebus::Promise<Status>> &result)
+{
+    if (nodesFuture.IsError()) {
+        pausedSnapshotCleanupInFlight_.erase(request.attemptid());
+        result->SetValue(Status(StatusCode::ERR_INNER_COMMUNICATION,
+                                "failed to query nodes for paused snapshot cleanup"));
+        return;
+    }
+
+    auto candidates = std::make_shared<std::vector<std::string>>();
+    if (!sourceNodeID.empty() && nodesFuture.Get().count(sourceNodeID) != 0
+        && runtimeNodes->count(sourceNodeID) != 0) {
+        candidates->push_back(sourceNodeID);
+    }
+    std::vector<std::string> healthy(nodesFuture.Get().begin(), nodesFuture.Get().end());
+    std::sort(healthy.begin(), healthy.end());
+    for (const auto &nodeID : healthy) {
+        if (nodeID != sourceNodeID && runtimeNodes->count(nodeID) != 0) {
+            candidates->push_back(nodeID);
+        }
+    }
+
+    TryPausedSnapshotCleanup(request, candidates, 0).OnComplete(
+        litebus::Defer(GetAID(), &InstanceManagerActor::FinishPausedSnapshotCleanup,
+                       std::placeholders::_1, request.attemptid(), result));
+}
+
+litebus::Future<Status> InstanceManagerActor::TryPausedSnapshotCleanup(
+    const ::messages::SnapshotAttemptFinalizeRequest &request,
+    const std::shared_ptr<std::vector<std::string>> &candidates,
+    size_t index)
+{
+    if (index >= candidates->size()) {
+        return Status(StatusCode::ERR_INNER_COMMUNICATION,
+                      "no healthy function agent completed paused snapshot cleanup");
+    }
+
+    auto result = std::make_shared<litebus::Promise<Status>>();
+    member_->globalScheduler->GetLocalAddress((*candidates)[index]).OnComplete(
+        litebus::Defer(GetAID(), &InstanceManagerActor::OnPausedSnapshotCleanupAddress,
+                       std::placeholders::_1, request, candidates, index, result));
+    return result->GetFuture();
+}
+
+void InstanceManagerActor::OnPausedSnapshotCleanupAddress(
+    const litebus::Future<litebus::Option<std::string>> &addressFuture,
+    const ::messages::SnapshotAttemptFinalizeRequest &request,
+    const std::shared_ptr<std::vector<std::string>> &candidates,
+    size_t index,
+    const std::shared_ptr<litebus::Promise<Status>> &result)
+{
+    if (addressFuture.IsError() || addressFuture.Get().IsNone()) {
+        TryPausedSnapshotCleanup(request, candidates, index + 1).OnComplete(
+            [result](const litebus::Future<Status> &retryFuture) {
+                result->SetValue(retryFuture.IsError()
+                                     ? Status(StatusCode::ERR_INNER_COMMUNICATION,
+                                              "paused snapshot cleanup retry failed")
+                                     : retryFuture.Get());
+            });
+        return;
+    }
+
+    litebus::AID proxyAID((*candidates)[index] + LOCAL_SCHED_FUNC_AGENT_MGR_ACTOR_NAME_POSTFIX,
+                          addressFuture.Get().Get());
+    auto responseFuture = pausedSnapshotCleanupSync_.AddSynchronizer(request.attemptid());
+    pausedSnapshotCleanupExpectedProxy_[request.attemptid()] = proxyAID;
+    YRLOG_INFO("send exact paused snapshot cleanup attempt({}) through proxy({})",
+               request.attemptid(), (*candidates)[index]);
+    (void)Send(proxyAID, "FinalizePausedSnapshotDelete", request.SerializeAsString());
+    responseFuture.OnComplete(
+        litebus::Defer(GetAID(), &InstanceManagerActor::OnPausedSnapshotCleanupCandidate,
+                       std::placeholders::_1, request, candidates, index, result));
+}
+
+void InstanceManagerActor::OnPausedSnapshotCleanupCandidate(
+    const litebus::Future<::messages::SnapshotAttemptFinalizeResponse> &responseFuture,
+    const ::messages::SnapshotAttemptFinalizeRequest &request,
+    const std::shared_ptr<std::vector<std::string>> &candidates,
+    size_t index,
+    const std::shared_ptr<litebus::Promise<Status>> &result)
+{
+    if (!responseFuture.IsError()) {
+        const auto &response = responseFuture.Get();
+        if (response.code() == static_cast<int32_t>(StatusCode::SUCCESS)
+            && response.remotecleanupcomplete()) {
+            result->SetValue(Status::OK());
+            return;
+        }
+        YRLOG_WARN("paused snapshot cleanup attempt({}) through proxy({}) failed, code({}), msg({})",
+                   request.attemptid(), (*candidates)[index], response.code(), response.message());
+    } else {
+        YRLOG_WARN("paused snapshot cleanup attempt({}) through proxy({}) timed out or failed",
+                   request.attemptid(), (*candidates)[index]);
+    }
+
+    TryPausedSnapshotCleanup(request, candidates, index + 1).OnComplete(
+        [result](const litebus::Future<Status> &retryFuture) {
+            result->SetValue(retryFuture.IsError()
+                                 ? Status(StatusCode::ERR_INNER_COMMUNICATION,
+                                          "paused snapshot cleanup retry failed")
+                                 : retryFuture.Get());
+        });
+}
+
+void InstanceManagerActor::FinishPausedSnapshotCleanup(
+    const litebus::Future<Status> &statusFuture,
+    const std::string &attemptID,
+    const std::shared_ptr<litebus::Promise<Status>> &result)
+{
+    pausedSnapshotCleanupInFlight_.erase(attemptID);
+    result->SetValue(statusFuture.IsError()
+                         ? Status(StatusCode::ERR_INNER_COMMUNICATION,
+                                  "paused snapshot cleanup failed")
+                         : statusFuture.Get());
+}
+
+void InstanceManagerActor::FinalizePausedSnapshotDeleteResponse(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::SnapshotAttemptFinalizeResponse response;
+    if (!response.ParseFromString(msg) || response.attemptid().empty()) {
+        YRLOG_WARN("invalid paused snapshot cleanup response from {}", from.HashString());
+        return;
+    }
+    const auto expected = pausedSnapshotCleanupExpectedProxy_.find(response.attemptid());
+    if (expected == pausedSnapshotCleanupExpectedProxy_.end() || expected->second != from) {
+        YRLOG_WARN("ignore paused snapshot cleanup response for attempt({}) from unexpected proxy({})",
+                   response.attemptid(), from.HashString());
+        return;
+    }
+    pausedSnapshotCleanupExpectedProxy_.erase(expected);
+    (void)pausedSnapshotCleanupSync_.Synchronized(response.attemptid(), response);
+}
+
+void InstanceManagerActor::TimeoutPausedSnapshotCleanup(const std::string &attemptID)
+{
+    pausedSnapshotCleanupExpectedProxy_.erase(attemptID);
+    pausedSnapshotCleanupSync_.RequestTimeout(attemptID);
+}
+
+litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse>
+InstanceManagerActor::DeleteReusableSnapshotArtifact(
+    const ::messages::DeleteReusableSnapshotArtifactRequest &input)
+{
+    ::messages::DeleteReusableSnapshotArtifactResponse error;
+    error.set_requestid(input.requestid());
+    const auto &artifact = input.artifact();
+    if (input.requestid().empty() || input.tenantid().empty() || input.snapshotid().empty()
+        || artifact.storagebackend().empty() || artifact.objectkey().empty()
+        || artifact.size() <= 0 || artifact.sha256().empty()) {
+        error.set_code(common::ERR_PARAM_INVALID);
+        error.set_message("reusable Snapshot artifact delete identity is incomplete");
+        return error;
+    }
+
+    std::string identity = input.tenantid();
+    identity.push_back('\0');
+    identity.append(input.snapshotid());
+    identity.push_back('\0');
+    identity.append(input.requestid());
+    const auto dispatchID = "reusable-delete/" + resume_identity::Sha256Hex(identity).substr(0, 40);
+    const auto existing = reusableSnapshotDeleteInFlight_.find(dispatchID);
+    if (existing != reusableSnapshotDeleteInFlight_.end()) {
+        return existing->second->GetFuture();
+    }
+
+    auto request = input;
+    request.set_requestid(dispatchID);
+    auto result = std::make_shared<litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse>>();
+    reusableSnapshotDeleteInFlight_[dispatchID] = result;
+    auto resourcesRequest = std::make_shared<messages::QueryResourcesInfoRequest>();
+    resourcesRequest->set_requestid(dispatchID);
+    member_->globalScheduler->QueryResourcesInfo(resourcesRequest).OnComplete(
+        litebus::Defer(GetAID(), &InstanceManagerActor::OnReusableSnapshotDeleteResources,
+                       std::placeholders::_1, request, input.requestid(), result));
+    return result->GetFuture();
+}
+
+void InstanceManagerActor::OnReusableSnapshotDeleteResources(
+    const litebus::Future<messages::QueryResourcesInfoResponse> &resourcesFuture,
+    const ::messages::DeleteReusableSnapshotArtifactRequest &request,
+    const std::string &originalRequestID,
+    const std::shared_ptr<litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse>> &result)
+{
+    if (resourcesFuture.IsError() || resourcesFuture.Get().resource().id().empty()) {
+        ::messages::DeleteReusableSnapshotArtifactResponse response;
+        response.set_requestid(originalRequestID);
+        response.set_code(common::ERR_INNER_COMMUNICATION);
+        response.set_message("failed to query runtime-capable nodes for reusable Snapshot delete");
+        reusableSnapshotDeleteInFlight_.erase(request.requestid());
+        result->SetValue(response);
+        return;
+    }
+    auto runtimeNodes = std::make_shared<std::unordered_set<std::string>>();
+    CollectSandboxRuntimeNodes(resourcesFuture.Get().resource(), *runtimeNodes);
+    if (runtimeNodes->empty()) {
+        ::messages::DeleteReusableSnapshotArtifactResponse response;
+        response.set_requestid(originalRequestID);
+        response.set_code(common::ERR_INNER_COMMUNICATION);
+        response.set_message("no sandbox runtime node is available for reusable Snapshot delete");
+        reusableSnapshotDeleteInFlight_.erase(request.requestid());
+        result->SetValue(response);
+        return;
+    }
+    member_->globalScheduler->QueryNodes().OnComplete(
+        litebus::Defer(GetAID(), &InstanceManagerActor::OnReusableSnapshotDeleteNodes,
+                       std::placeholders::_1, request, originalRequestID, runtimeNodes, result));
+}
+
+void InstanceManagerActor::OnReusableSnapshotDeleteNodes(
+    const litebus::Future<std::unordered_set<std::string>> &nodesFuture,
+    const ::messages::DeleteReusableSnapshotArtifactRequest &request,
+    const std::string &originalRequestID,
+    const std::shared_ptr<std::unordered_set<std::string>> &runtimeNodes,
+    const std::shared_ptr<litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse>> &result)
+{
+    if (nodesFuture.IsError()) {
+        ::messages::DeleteReusableSnapshotArtifactResponse response;
+        response.set_requestid(originalRequestID);
+        response.set_code(common::ERR_INNER_COMMUNICATION);
+        response.set_message("failed to query healthy nodes for reusable Snapshot delete");
+        reusableSnapshotDeleteInFlight_.erase(request.requestid());
+        result->SetValue(response);
+        return;
+    }
+    auto candidates = std::make_shared<std::vector<std::string>>();
+    std::vector<std::string> healthy(nodesFuture.Get().begin(), nodesFuture.Get().end());
+    std::sort(healthy.begin(), healthy.end());
+    for (const auto &nodeID : healthy) {
+        if (runtimeNodes->count(nodeID) != 0) {
+            candidates->push_back(nodeID);
+        }
+    }
+    TryReusableSnapshotDelete(request, candidates, 0).OnComplete(
+        litebus::Defer(GetAID(), &InstanceManagerActor::FinishReusableSnapshotDelete,
+                       std::placeholders::_1, request.requestid(), originalRequestID, result));
+}
+
+litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse>
+InstanceManagerActor::TryReusableSnapshotDelete(
+    const ::messages::DeleteReusableSnapshotArtifactRequest &request,
+    const std::shared_ptr<std::vector<std::string>> &candidates,
+    size_t index)
+{
+    if (index >= candidates->size()) {
+        ::messages::DeleteReusableSnapshotArtifactResponse response;
+        response.set_requestid(request.requestid());
+        response.set_code(common::ERR_INNER_COMMUNICATION);
+        response.set_message("no healthy function agent completed reusable Snapshot delete");
+        return response;
+    }
+    auto result = std::make_shared<litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse>>();
+    member_->globalScheduler->GetLocalAddress((*candidates)[index]).OnComplete(
+        litebus::Defer(GetAID(), &InstanceManagerActor::OnReusableSnapshotDeleteAddress,
+                       std::placeholders::_1, request, candidates, index, result));
+    return result->GetFuture();
+}
+
+void InstanceManagerActor::OnReusableSnapshotDeleteAddress(
+    const litebus::Future<litebus::Option<std::string>> &addressFuture,
+    const ::messages::DeleteReusableSnapshotArtifactRequest &request,
+    const std::shared_ptr<std::vector<std::string>> &candidates,
+    size_t index,
+    const std::shared_ptr<litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse>> &result)
+{
+    if (addressFuture.IsError() || addressFuture.Get().IsNone()) {
+        TryReusableSnapshotDelete(request, candidates, index + 1).OnComplete(
+            [result](const litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse> &retry) {
+                if (retry.IsError()) {
+                    ::messages::DeleteReusableSnapshotArtifactResponse response;
+                    response.set_code(common::ERR_INNER_COMMUNICATION);
+                    response.set_message("reusable Snapshot delete retry failed");
+                    result->SetValue(response);
+                } else {
+                    result->SetValue(retry.Get());
+                }
+            });
+        return;
+    }
+
+    litebus::AID proxyAID((*candidates)[index] + LOCAL_SCHED_FUNC_AGENT_MGR_ACTOR_NAME_POSTFIX,
+                          addressFuture.Get().Get());
+    auto responseFuture = reusableSnapshotDeleteSync_.AddSynchronizer(request.requestid());
+    reusableSnapshotDeleteExpectedProxy_[request.requestid()] = proxyAID;
+    YRLOG_INFO("send exact reusable Snapshot delete request({}) through proxy({})",
+               request.requestid(), (*candidates)[index]);
+    (void)Send(proxyAID, "DeleteReusableSnapshotArtifact", request.SerializeAsString());
+    responseFuture.OnComplete(
+        litebus::Defer(GetAID(), &InstanceManagerActor::OnReusableSnapshotDeleteCandidate,
+                       std::placeholders::_1, request, candidates, index, result));
+}
+
+void InstanceManagerActor::OnReusableSnapshotDeleteCandidate(
+    const litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse> &responseFuture,
+    const ::messages::DeleteReusableSnapshotArtifactRequest &request,
+    const std::shared_ptr<std::vector<std::string>> &candidates,
+    size_t index,
+    const std::shared_ptr<litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse>> &result)
+{
+    if (!responseFuture.IsError() && responseFuture.Get().code() == common::ERR_NONE) {
+        result->SetValue(responseFuture.Get());
+        return;
+    }
+    if (responseFuture.IsError()) {
+        YRLOG_WARN("reusable Snapshot delete request({}) through proxy({}) timed out or failed",
+                   request.requestid(), (*candidates)[index]);
+    } else {
+        YRLOG_WARN("reusable Snapshot delete request({}) through proxy({}) failed, code({}), msg({})",
+                   request.requestid(), (*candidates)[index], responseFuture.Get().code(),
+                   responseFuture.Get().message());
+    }
+    TryReusableSnapshotDelete(request, candidates, index + 1).OnComplete(
+        [result](const litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse> &retry) {
+            if (retry.IsError()) {
+                ::messages::DeleteReusableSnapshotArtifactResponse response;
+                response.set_code(common::ERR_INNER_COMMUNICATION);
+                response.set_message("reusable Snapshot delete retry failed");
+                result->SetValue(response);
+            } else {
+                result->SetValue(retry.Get());
+            }
+        });
+}
+
+void InstanceManagerActor::FinishReusableSnapshotDelete(
+    const litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse> &responseFuture,
+    const std::string &dispatchID,
+    const std::string &originalRequestID,
+    const std::shared_ptr<litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse>> &result)
+{
+    reusableSnapshotDeleteInFlight_.erase(dispatchID);
+    ::messages::DeleteReusableSnapshotArtifactResponse response;
+    response.set_requestid(originalRequestID);
+    if (responseFuture.IsError()) {
+        response.set_code(common::ERR_INNER_COMMUNICATION);
+        response.set_message("reusable Snapshot artifact delete dispatch failed");
+    } else {
+        response = responseFuture.Get();
+        response.set_requestid(originalRequestID);
+    }
+    result->SetValue(response);
+}
+
+void InstanceManagerActor::DeleteReusableSnapshotArtifactResponse(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::DeleteReusableSnapshotArtifactResponse response;
+    if (!response.ParseFromString(msg) || response.requestid().empty()) {
+        YRLOG_WARN("invalid reusable Snapshot delete response from {}", from.HashString());
+        return;
+    }
+    const auto expected = reusableSnapshotDeleteExpectedProxy_.find(response.requestid());
+    if (expected == reusableSnapshotDeleteExpectedProxy_.end() || expected->second != from) {
+        YRLOG_WARN("ignore reusable Snapshot delete response for request({}) from unexpected proxy({})",
+                   response.requestid(), from.HashString());
+        return;
+    }
+    reusableSnapshotDeleteExpectedProxy_.erase(expected);
+    (void)reusableSnapshotDeleteSync_.Synchronized(response.requestid(), response);
+}
+
+void InstanceManagerActor::TimeoutReusableSnapshotDelete(const std::string &dispatchID)
+{
+    reusableSnapshotDeleteExpectedProxy_.erase(dispatchID);
+    reusableSnapshotDeleteSync_.RequestTimeout(dispatchID);
+}
+
+void InstanceManagerActor::CompleteKillPromise(const std::string &requestID, const Status &status)
+{
+    const auto promise = member_->killReqPromises.find(requestID);
+    if (promise == member_->killReqPromises.end()) {
+        return;
+    }
+    promise->second->SetValue(status);
+    member_->killReqPromises.erase(promise);
+}
+
+litebus::Future<Status> InstanceManagerActor::DeletePausedInstanceAfterSnapshotCleanup(
+    const Status &cleanupStatus,
+    const std::string &instanceKey,
+    const std::shared_ptr<resources::InstanceInfo> &instance,
+    const std::shared_ptr<internal::ForwardKillRequest> &killReq)
+{
+    if (cleanupStatus.IsError()) {
+        CompleteKillPromise(killReq->requestid(), cleanupStatus);
+        return cleanupStatus;
+    }
+
+    auto routePath = GenInstanceRouteKey(instance->instanceid());
+    auto routePutInfo = std::make_shared<StoreInfo>(routePath, "");
+    auto instancePutInfo = std::make_shared<StoreInfo>(instanceKey, "");
+    std::shared_ptr<StoreInfo> debugInstPutInfo = nullptr;
+    if (IsDebugInstance(instance->createoptions())) {
+        debugInstPutInfo = std::make_shared<StoreInfo>(DEBUG_INSTANCE_PREFIX + instance->instanceid(), "");
+    }
+    return member_->instanceOpt
+        ->ForceDelete(instancePutInfo, routePutInfo, debugInstPutInfo, IsLowReliabilityInstance(*instance))
+        .Then(litebus::Defer(GetAID(), &InstanceManagerActor::CompletePausedInstanceDelete,
+                             std::placeholders::_1, instanceKey, instance, killReq));
+}
+
+Status InstanceManagerActor::CompletePausedInstanceDelete(
+    const OperateResult &result,
+    const std::string &instanceKey,
+    const std::shared_ptr<resources::InstanceInfo> &instance,
+    const std::shared_ptr<internal::ForwardKillRequest> &killReq)
+{
+    if (result.status.IsError()) {
+        YRLOG_ERROR("failed to delete paused instance({}) from MetaStore, err status is {}",
+                    instance->instanceid(), fmt::underlying(result.status.StatusCode()));
+        if (TransactionFailedForEtcd(result.status.StatusCode())) {
+            member_->operateCacher->AddDeleteEvent(INSTANCE_PATH_PREFIX, instanceKey);
+        }
+    }
+    CompleteKillPromise(killReq->requestid(), result.status);
+    return result.status;
+}
+
 litebus::Future<Status> InstanceManagerActor::KillInstanceWithRetry(
     const std::string &instanceID, const std::shared_ptr<internal::ForwardKillRequest> &killReq)
 {
@@ -809,14 +1313,20 @@ litebus::Future<Status> InstanceManagerActor::KillInstanceWithRetry(
         return Status::OK();
     }
 
-    if (info->instancestatus().code() == static_cast<int32_t>(InstanceState::FATAL) &&
-        (killReq->req().signal() == FAMILY_EXIT_SIGNAL || info->functionproxyid() == INSTANCE_MANAGER_OWNER ||
-         info->functionproxyid().empty())) {
+    if (ShouldDeleteWithoutScheduler(*info, killReq->req().signal())) {
         YRLOG_INFO("instance({}) with proxy({}) is killing with signal({}), now in status({}), will kill the instance.",
                    instanceID, info->functionproxyid(), killReq->req().signal(), info->instancestatus().code());
-        // instance is fatal
-        //   if want fatal, ok
-        //   if owner is instance manager now, ok
+        if (IsPausedInstanceManagerOwned(*info)) {
+            // A PAUSED instance is Master-owned, but its immutable snapshot may
+            // be stored remotely. Complete exact remote cleanup through any
+            // healthy FunctionAgent before deleting the authoritative ETCD
+            // records or acknowledging the lifecycle request.
+            return CleanupPausedSnapshot(*info).Then(
+                litebus::Defer(GetAID(), &InstanceManagerActor::DeletePausedInstanceAfterSnapshotCleanup,
+                               std::placeholders::_1, instanceKey, info, killReq));
+        }
+        // FATAL instances without a live owner have no FunctionProxy scheduler
+        // to contact. Delete their control-plane records here.
         promise->SetValue(Status::OK());
         member_->killReqPromises.erase(killReq->requestid());
 

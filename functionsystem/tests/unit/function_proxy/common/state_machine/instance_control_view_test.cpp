@@ -498,4 +498,42 @@ TEST_F(InstanceControlViewTest, OldUpdateInstanceEvent)
     EXPECT_EQ(stateMachine->GetInstanceState(), InstanceState::CREATING);
 }
 
+TEST_F(InstanceControlViewTest, ForceUpdateEnrichesPausedRouteAtSameRevision)
+{
+    InstanceControlView instanceControlView(TEST_NODE_ID, false);
+    const std::string instanceID = "paused-route-at-authoritative-revision";
+
+    resources::InstanceInfo controlRoute;
+    controlRoute.set_instanceid(instanceID);
+    controlRoute.set_requestid("logical-request");
+    controlRoute.set_function("default/0-defaultservice-rrt/$latest");
+    controlRoute.set_functionproxyid("InstanceManagerOwner");
+    controlRoute.set_version(2);
+    controlRoute.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::PAUSED));
+    (*controlRoute.mutable_extensions())["modRevision"] = "42";
+    instanceControlView.Update(instanceID, controlRoute, false);
+
+    auto stateMachine = instanceControlView.GetInstance(instanceID);
+    ASSERT_NE(stateMachine, nullptr);
+    stateMachine->SetModRevision(42);
+    ASSERT_FALSE(stateMachine->GetInstanceInfo().has_snapshotinfo());
+
+    auto authoritative = controlRoute;
+    auto *snapshot = authoritative.mutable_snapshotinfo();
+    snapshot->set_checkpointid("ready-checkpoint");
+    snapshot->set_storage("datasystem");
+    snapshot->set_status(resources::SNAPSHOT_READY);
+    instanceControlView.Update(instanceID, authoritative, true);
+
+    EXPECT_EQ(stateMachine->GetModRevision(), 42);
+    ASSERT_TRUE(stateMachine->GetInstanceInfo().has_snapshotinfo());
+    EXPECT_EQ(stateMachine->GetInstanceInfo().snapshotinfo().checkpointid(), "ready-checkpoint");
+
+    auto stale = authoritative;
+    stale.mutable_snapshotinfo()->set_checkpointid("stale-checkpoint");
+    (*stale.mutable_extensions())["modRevision"] = "41";
+    instanceControlView.Update(instanceID, stale, true);
+    EXPECT_EQ(stateMachine->GetInstanceInfo().snapshotinfo().checkpointid(), "ready-checkpoint");
+}
+
 }  // namespace functionsystem::test

@@ -205,6 +205,46 @@ Status LocalSchedDriver::Start()
         param_.nodeID, param_.globalSchedulerAddress, param_.schedulePolicy, param_.metaStoreAddress,
         param_.enableDriver, param_.enablePrintResourceView);
 
+    return StartAfterInitialization();
+}
+
+std::shared_ptr<SnapCtrl> LocalSchedDriver::CreateSnapCtrl()
+{
+    return SnapCtrl::Create(param_.nodeID);
+}
+
+void LocalSchedDriver::CreateAndBindSnapCtrl()
+{
+    snapCtrl_ = CreateSnapCtrl();
+    snapCtrl_->BindFunctionAgentMgr(funcAgentMgr_);
+    snapCtrl_->BindLocalSchedSrv(localSchedSrv_);
+    snapCtrl_->BindInstanceCtrl(instanceCtrl_);
+    snapCtrl_->BindClientManager(param_.controlInterfacePosixMgr);
+    if (tcpTunnelServer_ != nullptr) {
+        snapCtrl_->BindReusableSnapshotTunnelGate(
+            [this](const std::string &instanceID) {
+                return tcpTunnelServer_ != nullptr
+                    && tcpTunnelServer_->TryAcquireReusableSnapshotGate(instanceID);
+            },
+            [this](const std::string &instanceID) {
+                if (tcpTunnelServer_ != nullptr) {
+                    tcpTunnelServer_->ReleaseReusableSnapshotGate(instanceID);
+                }
+            });
+    }
+}
+
+Status LocalSchedDriver::StartAfterInitialization()
+{
+    if (auto status(PrepareForSnapCtrlBinding()); status.IsError()) {
+        return status;
+    }
+    CreateAndBindSnapCtrl();
+    return ContinueAfterSnapCtrlBinding();
+}
+
+Status LocalSchedDriver::PrepareForSnapCtrlBinding()
+{
     if (auto status(Create()); status != StatusCode::SUCCESS) {
         return status;
     }
@@ -235,12 +275,11 @@ Status LocalSchedDriver::Start()
             return Status(StatusCode::FAILED, "failed to start TCP tunnel server");
         }
     }
+    return Status::OK();
+}
 
-    snapCtrl_ = SnapCtrl::Create(param_.nodeID);
-    snapCtrl_->BindFunctionAgentMgr(funcAgentMgr_);
-    snapCtrl_->BindLocalSchedSrv(localSchedSrv_);
-    snapCtrl_->BindInstanceCtrl(instanceCtrl_);
-    snapCtrl_->BindClientManager(param_.controlInterfacePosixMgr);
+Status LocalSchedDriver::ContinueAfterSnapCtrlBinding()
+{
     instanceCtrl_->BindSnapCtrl(snapCtrl_);
 
     gcActor_ = std::make_shared<LocalGcActor>(LOCAL_GC_ACTOR_NAME, param_.nodeID);

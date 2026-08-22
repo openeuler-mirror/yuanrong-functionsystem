@@ -74,6 +74,24 @@ FunctionAgentFlags::FunctionAgentFlags()
     constexpr int kDefaultDataSystemPort = 31501;
     AddFlag(&FunctionAgentFlags::dataSystemPort_, "data_system_port", "data system port", kDefaultDataSystemPort);
     AddFlag(&FunctionAgentFlags::pluginConfigs_, "agent_plugin_configs", "plugin configs", false);
+    AddFlag(&FunctionAgentFlags::snapshotStorageBackend_, "snapshot_storage_backend",
+            "backend for pause/resume snapshot storage", "");
+    AddFlag(&FunctionAgentFlags::snapshotObsEndpoint_, "snapshot_obs_endpoint",
+            "endpoint for snapshot OBS storage", "");
+    AddFlag(&FunctionAgentFlags::snapshotObsBucket_, "snapshot_obs_bucket",
+            "bucket for snapshot OBS storage", "");
+    AddFlag(&FunctionAgentFlags::snapshotObsAccessKey_, "snapshot_obs_access_key",
+            "encrypted access key for snapshot OBS storage", "");
+    AddFlag(&FunctionAgentFlags::snapshotObsSecretKey_, "snapshot_obs_secret_key",
+            "encrypted secret key for snapshot OBS storage", "");
+    AddFlag(&FunctionAgentFlags::snapshotObsSecurityToken_, "snapshot_obs_security_token",
+            "encrypted security token for snapshot OBS storage", "");
+    AddFlag(&FunctionAgentFlags::snapshotObsUseHttps_, "snapshot_obs_use_https",
+            "use HTTPS for snapshot OBS storage", true);
+    AddFlag(&FunctionAgentFlags::snapshotObsPathStyle_, "snapshot_obs_path_style",
+            "use path-style addressing for snapshot OBS storage", false);
+    AddFlag(&FunctionAgentFlags::checkpointDir_, "checkpoint_dir",
+            "base directory for checkpoint file storage", "");
 }
 
 FunctionAgentFlags::~FunctionAgentFlags() = default;

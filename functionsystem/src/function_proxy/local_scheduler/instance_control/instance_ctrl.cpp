@@ -404,6 +404,28 @@ litebus::Future<Status> InstanceCtrl::ForceDeleteInstance(const std::string &ins
     return litebus::Async(aid_, &InstanceCtrlActor::ForceDeleteInstance, instanceID);
 }
 
+litebus::Future<Status> InstanceCtrl::ReleaseRuntimeForPause(
+    const resource_view::InstanceInfo &instanceInfo, const std::string &snapshotID)
+{
+    return litebus::Async(aid_, &InstanceCtrlActor::ReleaseRuntimeForPause, instanceInfo, snapshotID);
+}
+
+litebus::Future<Status> InstanceCtrl::ReleasePausedInstanceResources(
+    const resource_view::InstanceInfo &instanceInfo)
+{
+    return litebus::Async(aid_, &InstanceCtrlActor::ReleasePausedInstanceResources, instanceInfo);
+}
+
+litebus::Future<Status> InstanceCtrl::BeginPauseGate(const resource_view::InstanceInfo &identity)
+{
+    return litebus::Async(aid_, &InstanceCtrlActor::BeginPauseGate, identity);
+}
+
+litebus::Future<Status> InstanceCtrl::RecoverPauseGate(const resource_view::InstanceInfo &identity)
+{
+    return litebus::Async(aid_, &InstanceCtrlActor::RecoverPauseGate, identity);
+}
+
 void InstanceCtrl::RegisterClearGroupInstanceCallBack(ClearGroupInstanceCallBack callback)
 {
     return litebus::Async(aid_, &InstanceCtrlActor::RegisterClearGroupInstanceCallBack,

@@ -63,7 +63,11 @@ function resolve_faas_config_path() {
 
 function get_runtime_checkpoint_dir() {
   local checkpoint_dir
-  checkpoint_dir=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../checkpoints")
+  if [ -n "${CHECKPOINT_DIR:-}" ]; then
+    checkpoint_dir=$(readlink -m "${CHECKPOINT_DIR}")
+  else
+    checkpoint_dir=$(readlink -m "${FUNCTION_SYSTEM_DIR}/../checkpoints")
+  fi
   mkdir -p "${checkpoint_dir}"
   echo "${checkpoint_dir}"
 }
@@ -98,22 +102,30 @@ function install_function_proxy() {
 
   local merge_process_args=""
   if [ "X${FUNCTION_PROXY_MERGE_PROCESS_ENABLE^^}" == "XTRUE" ]; then
-    local ld_library_path=${LD_LIBRARY_PATH}
-    local function_system_ld_library_path=${FUNCTION_SYSTEM_DIR}/lib:${DATA_SYSTEM_DIR}/lib:${ld_library_path}
     local checkpoint_dir
     checkpoint_dir=$(get_runtime_checkpoint_dir)
+    local ld_library_path=${LD_LIBRARY_PATH}
+    local function_system_ld_library_path=${FUNCTION_SYSTEM_DIR}/lib:${DATA_SYSTEM_DIR}/lib:${ld_library_path}
     local agent_uid=${YR_POD_NAME}
     if [ "x${YR_POD_NAME}" == "x" ]; then
       agent_uid="${NODE_ID}"
     fi
     merge_process_args="--enable_merge_process=true \
+    --checkpoint_dir="${checkpoint_dir}" \
+    --snapshot_storage_backend="${SNAPSHOT_STORAGE_BACKEND:-datasystem}" \
+    --snapshot_obs_endpoint="${SNAPSHOT_OBS_ENDPOINT:-}" \
+    --snapshot_obs_bucket="${SNAPSHOT_OBS_BUCKET:-}" \
+    --snapshot_obs_access_key="${SNAPSHOT_OBS_ACCESS_KEY:-}" \
+    --snapshot_obs_secret_key="${SNAPSHOT_OBS_SECRET_KEY:-}" \
+    --snapshot_obs_security_token="${SNAPSHOT_OBS_SECURITY_TOKEN:-}" \
+    --snapshot_obs_use_https="${SNAPSHOT_OBS_USE_HTTPS:-true}" \
+    --snapshot_obs_path_style="${SNAPSHOT_OBS_PATH_STYLE:-false}" \
     --agent_listen_port="${FUNCTION_PROXY_PORT}" \
     --local_scheduler_address="${IP_ADDRESS}:${FUNCTION_PROXY_PORT}" \
     --runtime_dir="${RUNTIME_HOME_DIR}/service" \
     --runtime_home_dir="${RUNTIME_USER_HOME_DIR}" \
     --runtime_logs_dir="${RUNTIME_LOG_PATH}" \
     --runtime_std_log_dir="" \
-    --checkpoint_dir="${checkpoint_dir}" \
     --runtime_ld_library_path="${ld_library_path}:${RUNTIME_HOME_DIR}/service/cpp/snlib:${RUNTIME_HOME_DIR}/sdk/cpp/lib" \
     --runtime_log_level="${RUNTIME_LOG_LEVEL}" \
     --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}" \
@@ -225,6 +237,7 @@ function install_function_proxy() {
     --tcp_tunnel_port="${TCP_TUNNEL_PORT:-22775}" \
     --tcp_tunnel_max_connections="${TCP_TUNNEL_MAX_CONNECTIONS:-1024}" \
     --enable_direct_routing="${ENABLE_DIRECT_ROUTING}" \
+    --enable_sandbox_pause_resume="${ENABLE_SANDBOX_PAUSE_RESUME:-false}" \
     --force_low_reliability_instance="${FORCE_LOW_RELIABILITY_INSTANCE}" \
     ${merge_process_args} >>"${FS_LOG_PATH}/${NODE_ID}-function_proxy${STD_LOG_SUFFIX}" 2>&1 &
 
@@ -605,6 +618,15 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     --runtime_logs_dir="${RUNTIME_LOG_PATH}"
     --runtime_std_log_dir=""
     --checkpoint_dir="${checkpoint_dir}"
+    --enable_sandbox_pause_resume="${ENABLE_SANDBOX_PAUSE_RESUME:-false}"
+    --snapshot_storage_backend="${SNAPSHOT_STORAGE_BACKEND:-datasystem}"
+    --snapshot_obs_endpoint="${SNAPSHOT_OBS_ENDPOINT:-}"
+    --snapshot_obs_bucket="${SNAPSHOT_OBS_BUCKET:-}"
+    --snapshot_obs_access_key="${SNAPSHOT_OBS_ACCESS_KEY:-}"
+    --snapshot_obs_secret_key="${SNAPSHOT_OBS_SECRET_KEY:-}"
+    --snapshot_obs_security_token="${SNAPSHOT_OBS_SECURITY_TOKEN:-}"
+    --snapshot_obs_use_https="${SNAPSHOT_OBS_USE_HTTPS:-true}"
+    --snapshot_obs_path_style="${SNAPSHOT_OBS_PATH_STYLE:-false}"
     --runtime_log_level="${RUNTIME_LOG_LEVEL}"
     --runtime_ld_library_path="${ld_library_path}:${RUNTIME_HOME_DIR}/service/cpp/snlib:${RUNTIME_HOME_DIR}/sdk/cpp/lib"
     --runtime_max_log_size="${RUNTIME_LOG_ROLLING_MAX_SIZE}"
@@ -720,6 +742,7 @@ function install_function_master() {
       --etcd_address="${ETCD_CLUSTER_ADDRESS}" \
       --node_id="${NODE_ID}" --sys_func_retry_period="${SYS_FUNC_RETRY_PERIOD}" \
       --runtime_recover_enable="${RUNTIME_RECOVER_ENABLE}" \
+      --enable_sandbox_pause_resume="${ENABLE_SANDBOX_PAUSE_RESUME:-false}" \
       --litebus_thread_num="${FUNCTION_MASTER_LITEBUS_THREAD}" \
       --system_timeout="${SYSTEM_TIMEOUT}" --enable_metrics="${ENABLE_METRICS}" \
       --metrics_config="${METRICS_CONFIG}" \

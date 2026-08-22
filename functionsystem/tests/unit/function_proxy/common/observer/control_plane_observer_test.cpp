@@ -327,6 +327,50 @@ TEST_F(ObserverTest, GetLocalInstanceInfo)
     });
 }
 
+TEST_F(ObserverTest, SetLocalPauseTrafficGateAwaitsOwnerDispatcherAndRejectsMissingTarget)
+{
+    const std::string instanceID = "observer-owner-local-pause-gate";
+    auto running = GenInstanceInfo(instanceID, "funcAgent", "0/test/$latest", InstanceState::RUNNING);
+    running.set_functionproxyid(nodeID_);
+    running.set_version(11);
+    observerActor_->instanceView_->Update(instanceID, running, false);
+    const std::string subscriberID = "observer-pause-gate-subscriber";
+    auto subscriber = GenInstanceInfo(subscriberID, "funcAgent", "0/subscriber/$latest", InstanceState::RUNNING);
+    subscriber.set_functionproxyid(nodeID_);
+    observerActor_->instanceView_->Update(subscriberID, subscriber, false);
+    ASSERT_TRUE(observerActor_->instanceView_->SubscribeInstanceEvent(subscriberID, instanceID, false).IsOk());
+    auto subscriberProxy = observerActor_->instanceView_->localInstances_.at(subscriberID);
+    ASSERT_AWAIT_TRUE([&]() { return subscriberProxy->remoteDispatchers_.count(instanceID) == 1; });
+    auto subscriberDispatcher = subscriberProxy->remoteDispatchers_.at(instanceID);
+    ASSERT_NE(subscriberDispatcher, nullptr);
+    ASSERT_FALSE(subscriberDispatcher->pauseTrafficGated_);
+    const auto originalInfo = observerActor_->instanceView_->allInstances_.at(instanceID).SerializeAsString();
+
+    auto gated = controlPlaneObserver_->SetLocalPauseTrafficGate(running, 11, true);
+    ASSERT_AWAIT_READY(gated);
+    ASSERT_TRUE(gated.Get().IsOk());
+    auto proxy = observerActor_->instanceView_->localInstances_.at(instanceID);
+    ASSERT_NE(proxy, nullptr);
+    EXPECT_TRUE(proxy->selfDispatcher_->pauseTrafficGated_);
+    EXPECT_FALSE(subscriberDispatcher->pauseTrafficGated_);
+    EXPECT_FALSE(subscriberDispatcher->isReject_);
+    EXPECT_EQ(observerActor_->instanceView_->allInstances_.at(instanceID).SerializeAsString(), originalInfo);
+
+    auto reopened = controlPlaneObserver_->SetLocalPauseTrafficGate(running, 11, false);
+    ASSERT_AWAIT_READY(reopened);
+    EXPECT_TRUE(reopened.Get().IsOk());
+    EXPECT_FALSE(proxy->selfDispatcher_->pauseTrafficGated_);
+
+    auto missingIdentity = running;
+    missingIdentity.set_instanceid("observer-missing-local");
+    auto missing = controlPlaneObserver_->SetLocalPauseTrafficGate(missingIdentity, 11, true);
+    ASSERT_AWAIT_READY(missing);
+    EXPECT_FALSE(missing.Get().IsOk());
+    EXPECT_EQ(missing.Get().StatusCode(), StatusCode::ERR_INSTANCE_NOT_FOUND);
+    observerActor_->instanceView_->Delete(subscriberID, -1);
+    observerActor_->instanceView_->Delete(instanceID, -1);
+}
+
 /**
  * Feature:
  * Description: MetaStorageAccessor is null, failed to put and delete instance
@@ -1136,6 +1180,86 @@ TEST_F(ObserverTest, GetOrWatchInstanceTest)
     ASSERT_AWAIT_TRUE([&]() { return future.IsError(); });
 
     observerActor_->isPartialWatchInstances_ = false;
+}
+
+TEST_F(ObserverTest, GetOrWatchPausedControlRouteReadsFullAuthoritativeInstance)
+{
+    resources::InstanceInfo authoritative;
+    authoritative.set_instanceid("paused-instance");
+    authoritative.set_requestid("logical-request");
+    authoritative.set_tenantid("default");
+    authoritative.set_function("default/0-defaultservice-rrt/$latest");
+    authoritative.set_functionproxyid("InstanceManagerOwner");
+    authoritative.set_version(2);
+    authoritative.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::PAUSED));
+    auto *snapshot = authoritative.mutable_snapshotinfo();
+    snapshot->set_checkpointid("checkpoint-ready");
+    snapshot->set_storage("datasystem");
+    snapshot->set_size(4096);
+    snapshot->set_sha256("sha256-ready");
+    snapshot->set_status(resources::SNAPSHOT_READY);
+
+    std::string authoritativeJson;
+    ASSERT_TRUE(TransToJsonFromInstanceInfo(authoritativeJson, authoritative));
+    const auto key = GenInstanceKey(
+        authoritative.function(), authoritative.instanceid(), authoritative.requestid());
+    ASSERT_TRUE(key.IsSome());
+    ASSERT_TRUE(metaStoreClient_->Put(key.Get(), authoritativeJson, {}).Get()->status.IsOk());
+
+    resources::InstanceInfo controlRoute;
+    controlRoute.set_instanceid(authoritative.instanceid());
+    controlRoute.set_requestid(authoritative.requestid());
+    controlRoute.set_tenantid(authoritative.tenantid());
+    controlRoute.set_function(authoritative.function());
+    controlRoute.set_functionproxyid(authoritative.functionproxyid());
+    controlRoute.set_version(authoritative.version());
+    controlRoute.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::PAUSED));
+    observerActor_->instanceInfoMap_[controlRoute.instanceid()] = controlRoute;
+
+    auto future = controlPlaneObserver_->GetOrWatchInstance(controlRoute.instanceid());
+    ASSERT_AWAIT_READY(future);
+    EXPECT_TRUE(future.Get().has_snapshotinfo());
+    EXPECT_EQ(future.Get().snapshotinfo().checkpointid(), "checkpoint-ready");
+    EXPECT_EQ(future.Get().snapshotinfo().sha256(), "sha256-ready");
+}
+
+TEST_F(ObserverTest, GetOrWatchColdPausedControlRouteReadsFullAuthoritativeInstance)
+{
+    resources::InstanceInfo authoritative;
+    authoritative.set_instanceid("cold-paused-instance");
+    authoritative.set_requestid("cold-logical-request");
+    authoritative.set_tenantid("default");
+    authoritative.set_function("default/0-defaultservice-rrt/$latest");
+    authoritative.set_functionproxyid("InstanceManagerOwner");
+    authoritative.set_version(4);
+    authoritative.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::PAUSED));
+    auto *snapshot = authoritative.mutable_snapshotinfo();
+    snapshot->set_checkpointid("cold-checkpoint-ready");
+    snapshot->set_storage("datasystem");
+    snapshot->set_size(8192);
+    snapshot->set_sha256("cold-sha256-ready");
+    snapshot->set_status(resources::SNAPSHOT_READY);
+
+    std::string authoritativeJson;
+    ASSERT_TRUE(TransToJsonFromInstanceInfo(authoritativeJson, authoritative));
+    const auto key = GenInstanceKey(
+        authoritative.function(), authoritative.instanceid(), authoritative.requestid());
+    ASSERT_TRUE(key.IsSome());
+    ASSERT_TRUE(metaStoreClient_->Put(key.Get(), authoritativeJson, {}).Get()->status.IsOk());
+
+    resources::RouteInfo controlRoute;
+    TransToRouteInfoFromInstanceInfo(authoritative, controlRoute);
+    std::string controlRouteJson;
+    ASSERT_TRUE(TransToJsonFromRouteInfo(controlRouteJson, controlRoute));
+    ASSERT_TRUE(metaStoreClient_->Put(
+        GenInstanceRouteKey(authoritative.instanceid()), controlRouteJson, {}).Get()->status.IsOk());
+
+    observerActor_->isPartialWatchInstances_ = true;
+    auto future = controlPlaneObserver_->GetOrWatchInstance(authoritative.instanceid());
+    ASSERT_AWAIT_READY(future);
+    EXPECT_TRUE(future.Get().has_snapshotinfo());
+    EXPECT_EQ(future.Get().snapshotinfo().checkpointid(), "cold-checkpoint-ready");
+    EXPECT_EQ(future.Get().snapshotinfo().sha256(), "cold-sha256-ready");
 }
 
 

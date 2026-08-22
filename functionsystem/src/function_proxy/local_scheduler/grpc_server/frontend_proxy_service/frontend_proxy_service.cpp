@@ -28,6 +28,11 @@
 #include <unordered_map>
 #include <utility>
 
+#include <nlohmann/json.hpp>
+
+#include "async/uuid_generator.hpp"
+#include "common/constants/signal.h"
+#include "common/hex/hex.h"
 #include "common/logs/logging.h"
 #include "function_proxy/busproxy/invocation_handler/invocation_handler.h"
 
@@ -883,9 +888,14 @@ bool FrontendProxyService::ValidateKillRequest(const ::frontend_proxy::KillInsta
         const bool ownerUnknown = response.kill().code() == common::ERR_INSTANCE_NOT_FOUND && !routeStale;
         SetStatus(response.mutable_status(), response.kill().code(), response.kill().message(), routeStale,
                   routeStale ? "route-stale" : (ownerUnknown ? "owner-unknown" : ""));
-        const auto cleanup = ObserveKillCleanup(
-            param_, context, request.context().requestid(), request.kill().instanceid(),
-            response.kill().code() == common::ERR_NONE);
+        KillCleanupObservation cleanup;
+        if (request.kill().signal() == INSTANCE_SNAPSHOT_SIGNAL
+            || request.kill().signal() == INSTANCE_SNAPSTART_SIGNAL) {
+            cleanup.outcome = "not-applicable";
+        } else {
+            cleanup = ObserveKillCleanup(param_, context, request.context().requestid(), request.kill().instanceid(),
+                                         response.kill().code() == common::ERR_NONE);
+        }
         LogLifecycleEvent("kill", "terminal", request.context(), param_.nodeID, request.kill().instanceid(),
                           response.kill().code() == common::ERR_NONE ? "success" : "failed", routeStale,
                           routeStale ? "route-stale" : (ownerUnknown ? "owner-unknown" : ""), cleanup.outcome,

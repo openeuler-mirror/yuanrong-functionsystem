@@ -67,6 +67,15 @@ public:
     virtual litebus::Future<::messages::RecordSnapshotResponse> RecordSnapshotMetadata(
         const std::shared_ptr<::messages::RecordSnapshotRequest> &req);
 
+    virtual litebus::Future<::messages::BeginReusableSnapshotResponse> BeginReusableSnapshot(
+        const std::shared_ptr<::messages::BeginReusableSnapshotRequest> &request);
+    virtual litebus::Future<::messages::CommitReusableSnapshotResponse> CommitReusableSnapshot(
+        const std::shared_ptr<::messages::CommitReusableSnapshotRequest> &request);
+    virtual litebus::Future<::messages::FailReusableSnapshotResponse> FailReusableSnapshot(
+        const std::shared_ptr<::messages::FailReusableSnapshotRequest> &request);
+    virtual litebus::Future<::messages::ResolveReusableSnapshotForCreateResponse> ResolveReusableSnapshotForCreate(
+        const std::shared_ptr<::messages::ResolveReusableSnapshotForCreateRequest> &request);
+
     virtual litebus::Future<::messages::RestoreSnapshotResponse> SnapStartCheckpoint(
         const std::shared_ptr<::messages::RestoreSnapshotRequest> &req);
 

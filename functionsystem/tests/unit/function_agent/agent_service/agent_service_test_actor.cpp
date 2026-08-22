@@ -35,6 +35,8 @@ void MockRuntimeManagerActor::Init()
     ActorBase::Receive("CleanStatus", &MockRuntimeManagerActor::CleanStatus);
     ActorBase::Receive("UpdateCred", &MockRuntimeManagerActor::UpdateCred);
     ActorBase::Receive("QueryDebugInstanceInfos", &MockRuntimeManagerActor::QueryDebugInstanceInfos);
+    ActorBase::Receive("SnapshotRuntime", &MockRuntimeManagerActor::SnapshotRuntime);
+    ActorBase::Receive("SnapshotAttemptFinalize", &MockRuntimeManagerActor::SnapshotAttemptFinalize);
 }
 
 void MockHealthCheckActor::Init()
@@ -59,6 +61,16 @@ void MockRuntimeManagerActor::StartInstance(const litebus::AID &from, std::strin
     if (isNeedToResponse_) {
         Send(from, "StartInstanceResponse", MockStartInstanceResponse());
     }
+}
+
+void MockRuntimeManagerActor::SnapshotRuntime(const litebus::AID &, std::string &&, std::string &&msg)
+{
+    promiseOfSnapshotRuntimeRequest.SetValue(std::move(msg));
+}
+
+void MockRuntimeManagerActor::SnapshotAttemptFinalize(const litebus::AID &, std::string &&, std::string &&msg)
+{
+    promiseOfSnapshotAttemptFinalizeRequest.SetValue(std::move(msg));
 }
 
 void MockRuntimeManagerActor::CleanStatus(const litebus::AID &from, std::string &&, std::string &&msg)
@@ -155,6 +167,29 @@ void MockFunctionAgentMgrActor::Init()
     ActorBase::Receive("QueryDebugInstanceInfosResponse", &MockFunctionAgentMgrActor::QueryDebugInstanceInfosResponse);
     ActorBase::Receive("StaticFunctionScheduleRequest", &MockFunctionAgentMgrActor::StaticFunctionScheduleRequest);
     ActorBase::Receive("NotifyFunctionStatusChangeResp", &MockFunctionAgentMgrActor::NotifyFunctionStatusChangeResp);
+    ActorBase::Receive("SnapshotRuntimeResponse", &MockFunctionAgentMgrActor::SnapshotRuntimeResponse);
+    ActorBase::Receive("SnapshotAttemptFinalizeResponse",
+                       &MockFunctionAgentMgrActor::SnapshotAttemptFinalizeResponse);
+    ActorBase::Receive("DeleteReusableSnapshotArtifactResponse",
+                       &MockFunctionAgentMgrActor::DeleteReusableSnapshotArtifactResponse);
+}
+
+void MockFunctionAgentMgrActor::SnapshotRuntimeResponse(
+    const litebus::AID &, std::string &&, std::string &&msg)
+{
+    promiseOfSnapshotRuntimeResponse.SetValue(std::move(msg));
+}
+
+void MockFunctionAgentMgrActor::SnapshotAttemptFinalizeResponse(
+    const litebus::AID &, std::string &&, std::string &&msg)
+{
+    promiseOfSnapshotAttemptFinalizeResponse.SetValue(std::move(msg));
+}
+
+void MockFunctionAgentMgrActor::DeleteReusableSnapshotArtifactResponse(
+    const litebus::AID &, std::string &&, std::string &&msg)
+{
+    promiseOfDeleteReusableSnapshotArtifactResponse.SetValue(std::move(msg));
 }
 
 void MockFunctionAgentMgrActor::DeployInstanceResponse(const litebus::AID &from, std::string &&, std::string &&msg)

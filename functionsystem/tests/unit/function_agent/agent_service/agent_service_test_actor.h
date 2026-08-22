@@ -75,6 +75,14 @@ public:
     void QueryDebugInstanceInfosResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
     void StaticFunctionScheduleRequest(const litebus::AID &from, std::string &&name, std::string &&msg);
     void NotifyFunctionStatusChangeResp(const litebus::AID &from, std::string &&, std::string &&msg);
+    void SnapshotRuntimeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void SnapshotAttemptFinalizeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void DeleteReusableSnapshotArtifactResponse(
+        const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    litebus::Promise<std::string> promiseOfSnapshotRuntimeResponse;
+    litebus::Promise<std::string> promiseOfSnapshotAttemptFinalizeResponse;
+    litebus::Promise<std::string> promiseOfDeleteReusableSnapshotArtifactResponse;
 
     [[maybe_unused]] [[nodiscard]] bool GetReceivedScheduleRequest() const
     {
@@ -227,6 +235,8 @@ public:
     void StopInstance(const litebus::AID &from, std::string &&name, std::string &&msg);
     // Simulates the runtime manager to receive and QueryInstanceStatusInfo messages.
     void QueryInstanceStatusInfo(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void SnapshotRuntime(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void SnapshotAttemptFinalize(const litebus::AID &from, std::string &&name, std::string &&msg);
     // Simulates the runtime manager to receive and InstanceStatusResponse messages.
     void UpdateInstanceStatusResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
     // Simulates the runtime manager to receive and UpdateRuntimeStatusResponse messages.
@@ -287,6 +297,8 @@ public:
     }
 
     litebus::Promise<std::string> promiseOfStartInstanceRequest;
+    litebus::Promise<std::string> promiseOfSnapshotRuntimeRequest;
+    litebus::Promise<std::string> promiseOfSnapshotAttemptFinalizeRequest;
 protected:
     // litebus virtual functions
     void Init() override;

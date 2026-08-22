@@ -36,6 +36,37 @@ const int64_t RESERVED = -300;
 const int64_t UNREGISTER_TIMEOUT = 5000;
 using namespace functionsystem::explorer;
 
+namespace {
+template <typename Response>
+litebus::Future<Response> AwaitReusableSnapshotResponse(
+    const litebus::Future<Response> &future, const std::string &requestID)
+{
+    auto promise = std::make_shared<litebus::Promise<Response>>();
+    future.OnComplete([promise, requestID](const litebus::Future<Response> &completed) {
+        if (completed.IsError()) {
+            Response response;
+            response.set_requestid(requestID);
+            response.set_code(common::ERR_INNER_COMMUNICATION);
+            response.set_message("reusable snapshot Master request timed out");
+            promise->SetValue(std::move(response));
+            return;
+        }
+        promise->SetValue(completed.Get());
+    });
+    return promise->GetFuture();
+}
+
+template <typename Response>
+Response MissingReusableSnapshotMaster(const std::string &requestID)
+{
+    Response response;
+    response.set_requestid(requestID);
+    response.set_code(common::ERR_INNER_COMMUNICATION);
+    response.set_message("Master AID is unavailable for reusable snapshot request");
+    return response;
+}
+}  // namespace
+
 LocalSchedSrvActor::LocalSchedSrvActor(const LocalSchedSrvActor::Param &param)
     : BasisActor(LOCAL_SCHED_SRV_ACTOR_NAME),
       nodeID_(param.nodeID),
@@ -641,6 +672,11 @@ void LocalSchedSrvActor::Init()
     Receive("PreemptInstances", &LocalSchedSrvActor::PreemptInstances);
     Receive("TryCancelResponse", &LocalSchedSrvActor::TryCancelResponse);
     Receive("RecordSnapshotMetadataResponse", &LocalSchedSrvActor::OnRecordSnapshotMetadataResponse);
+    Receive("BeginReusableSnapshotResponse", &LocalSchedSrvActor::OnBeginReusableSnapshotResponse);
+    Receive("CommitReusableSnapshotResponse", &LocalSchedSrvActor::OnCommitReusableSnapshotResponse);
+    Receive("FailReusableSnapshotResponse", &LocalSchedSrvActor::OnFailReusableSnapshotResponse);
+    Receive("ResolveReusableSnapshotForCreateResponse",
+            &LocalSchedSrvActor::OnResolveReusableSnapshotForCreateResponse);
     Receive("SnapStartCheckpointResponse", &LocalSchedSrvActor::OnSnapStartCheckpointResponse);
     Receive("ListSnapshotsByFunctionKeyResponse", &LocalSchedSrvActor::OnListSnapshotsByFunctionKeyResponse);
     Receive("ListSnapshotsByTenantResponse", &LocalSchedSrvActor::OnListSnapshotsByTenantResponse);
@@ -1062,6 +1098,96 @@ void LocalSchedSrvActor::OnRecordSnapshotMetadataResponse(
 
     if (auto status = recordSnapshotSync_.Synchronized(rsp.requestid(), rsp); status.IsError()) {
         YRLOG_WARN("no matching request found for requestID: {}", rsp.requestid());
+    }
+}
+
+litebus::Future<::messages::BeginReusableSnapshotResponse> LocalSchedSrvActor::BeginReusableSnapshot(
+    const std::shared_ptr<::messages::BeginReusableSnapshotRequest> &request)
+{
+    ASSERT_IF_NULL(request);
+    if (masterAid_.Name().empty()) {
+        return MissingReusableSnapshotMaster<::messages::BeginReusableSnapshotResponse>(request->requestid());
+    }
+    auto future = beginReusableSnapshotSync_.AddSynchronizer(request->requestid());
+    Send(litebus::AID(SNAP_MANAGER_ACTOR_NAME, masterAid_.Url()),
+         "BeginReusableSnapshot", request->SerializeAsString());
+    return AwaitReusableSnapshotResponse(future, request->requestid());
+}
+
+void LocalSchedSrvActor::OnBeginReusableSnapshotResponse(
+    const litebus::AID &, std::string &&, std::string &&msg)
+{
+    ::messages::BeginReusableSnapshotResponse response;
+    if (response.ParseFromString(msg)) {
+        (void)beginReusableSnapshotSync_.Synchronized(response.requestid(), response);
+    }
+}
+
+litebus::Future<::messages::CommitReusableSnapshotResponse> LocalSchedSrvActor::CommitReusableSnapshot(
+    const std::shared_ptr<::messages::CommitReusableSnapshotRequest> &request)
+{
+    ASSERT_IF_NULL(request);
+    if (masterAid_.Name().empty()) {
+        return MissingReusableSnapshotMaster<::messages::CommitReusableSnapshotResponse>(request->requestid());
+    }
+    auto future = commitReusableSnapshotSync_.AddSynchronizer(request->requestid());
+    Send(litebus::AID(SNAP_MANAGER_ACTOR_NAME, masterAid_.Url()),
+         "CommitReusableSnapshot", request->SerializeAsString());
+    return AwaitReusableSnapshotResponse(future, request->requestid());
+}
+
+void LocalSchedSrvActor::OnCommitReusableSnapshotResponse(
+    const litebus::AID &, std::string &&, std::string &&msg)
+{
+    ::messages::CommitReusableSnapshotResponse response;
+    if (response.ParseFromString(msg)) {
+        (void)commitReusableSnapshotSync_.Synchronized(response.requestid(), response);
+    }
+}
+
+litebus::Future<::messages::FailReusableSnapshotResponse> LocalSchedSrvActor::FailReusableSnapshot(
+    const std::shared_ptr<::messages::FailReusableSnapshotRequest> &request)
+{
+    ASSERT_IF_NULL(request);
+    if (masterAid_.Name().empty()) {
+        return MissingReusableSnapshotMaster<::messages::FailReusableSnapshotResponse>(request->requestid());
+    }
+    auto future = failReusableSnapshotSync_.AddSynchronizer(request->requestid());
+    Send(litebus::AID(SNAP_MANAGER_ACTOR_NAME, masterAid_.Url()),
+         "FailReusableSnapshot", request->SerializeAsString());
+    return AwaitReusableSnapshotResponse(future, request->requestid());
+}
+
+void LocalSchedSrvActor::OnFailReusableSnapshotResponse(
+    const litebus::AID &, std::string &&, std::string &&msg)
+{
+    ::messages::FailReusableSnapshotResponse response;
+    if (response.ParseFromString(msg)) {
+        (void)failReusableSnapshotSync_.Synchronized(response.requestid(), response);
+    }
+}
+
+litebus::Future<::messages::ResolveReusableSnapshotForCreateResponse>
+LocalSchedSrvActor::ResolveReusableSnapshotForCreate(
+    const std::shared_ptr<::messages::ResolveReusableSnapshotForCreateRequest> &request)
+{
+    ASSERT_IF_NULL(request);
+    if (masterAid_.Name().empty()) {
+        return MissingReusableSnapshotMaster<::messages::ResolveReusableSnapshotForCreateResponse>(
+            request->requestid());
+    }
+    auto future = resolveReusableSnapshotForCreateSync_.AddSynchronizer(request->requestid());
+    Send(litebus::AID(SNAP_MANAGER_ACTOR_NAME, masterAid_.Url()),
+         "ResolveReusableSnapshotForCreate", request->SerializeAsString());
+    return AwaitReusableSnapshotResponse(future, request->requestid());
+}
+
+void LocalSchedSrvActor::OnResolveReusableSnapshotForCreateResponse(
+    const litebus::AID &, std::string &&, std::string &&msg)
+{
+    ::messages::ResolveReusableSnapshotForCreateResponse response;
+    if (response.ParseFromString(msg)) {
+        (void)resolveReusableSnapshotForCreateSync_.Synchronized(response.requestid(), response);
     }
 }
 

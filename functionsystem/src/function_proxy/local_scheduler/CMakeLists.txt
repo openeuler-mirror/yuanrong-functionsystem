@@ -41,4 +41,5 @@ aux_source_directory(${CMAKE_CURRENT_LIST_DIR} LOCAL_SCHEDULER_SRC)
 target_sources(local_scheduler_lib PRIVATE ${LOCAL_SCHEDULER_SRC})
 
 add_dependencies(local_scheduler_lib http heartbeat meta_store_client explorer scheduler metadata traefik_registry_lib)
-target_link_libraries(local_scheduler_lib http heartbeat meta_store_client explorer scheduler metadata traefik_registry_lib)
+target_link_libraries(local_scheduler_lib PRIVATE http heartbeat meta_store_client explorer scheduler metadata
+        traefik_registry_lib)

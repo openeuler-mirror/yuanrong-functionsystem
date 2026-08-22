@@ -22,6 +22,28 @@
 #include "mocks/mock_resource_view_mgr.h"
 #include "utils/future_test_helper.h"
 
+namespace functionsystem::local_scheduler {
+
+class TcpTunnelServerTestPeer {
+public:
+    static bool TryBegin(TcpTunnelServer &server, const std::string &instanceID)
+    {
+        return server.TryBeginTunnelSession(instanceID);
+    }
+
+    static void End(TcpTunnelServer &server, const std::string &instanceID)
+    {
+        server.EndTunnelSession(instanceID);
+    }
+
+    static size_t Active(TcpTunnelServer &server, const std::string &instanceID)
+    {
+        return server.ActiveTunnelSessions(instanceID);
+    }
+};
+
+}  // namespace functionsystem::local_scheduler
+
 namespace functionsystem::test {
 using namespace ::testing;
 using namespace functionsystem::local_scheduler;
@@ -123,5 +145,22 @@ TEST(TcpTunnelServerTest, RejectsInvalidOrNonTcpPortMapping)
     EXPECT_EQ(ResolvePublishedTCPPort(R"(["tcp:30222abc:22"])", 22, error), -1);
     EXPECT_EQ(ResolvePublishedTCPPort(R"(["tcp:30222:22abc"])", 22, error), -1);
     EXPECT_EQ(ResolvePublishedTCPPort(R"(["tcp: 30222:22"])", 22, error), -1);
+}
+
+TEST(TcpTunnelServerTest, SnapshotGateAtomicallyExcludesActiveAndNewSessions)
+{
+    TcpTunnelServer server(TcpTunnelServerConfig{}, nullptr, nullptr);
+    EXPECT_TRUE(server.TryAcquireReusableSnapshotGate("instance-1"));
+    EXPECT_FALSE(local_scheduler::TcpTunnelServerTestPeer::TryBegin(server, "instance-1"));
+    server.ReleaseReusableSnapshotGate("instance-1");
+
+    EXPECT_TRUE(local_scheduler::TcpTunnelServerTestPeer::TryBegin(server, "instance-1"));
+    EXPECT_EQ(local_scheduler::TcpTunnelServerTestPeer::Active(server, "instance-1"), 1U);
+    EXPECT_FALSE(server.TryAcquireReusableSnapshotGate("instance-1"));
+
+    local_scheduler::TcpTunnelServerTestPeer::End(server, "instance-1");
+    EXPECT_EQ(local_scheduler::TcpTunnelServerTestPeer::Active(server, "instance-1"), 0U);
+    EXPECT_TRUE(server.TryAcquireReusableSnapshotGate("instance-1"));
+    server.ReleaseReusableSnapshotGate("instance-1");
 }
 }  // namespace functionsystem::test

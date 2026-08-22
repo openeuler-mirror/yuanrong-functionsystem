@@ -49,6 +49,10 @@ struct SandboxdStartParams {
     // Runtime ID used as sandbox_id and for log path construction
     std::string runtimeID;
 
+    // Optional caller-owned deterministic sandbox identity. Ordinary starts
+    // leave this empty; trusted resume uses sbox-<deterministic runtime ID>.
+    std::string sandboxID;
+
     // Allocated port numbers for port-forwarding (may be empty)
     std::vector<std::string> portMappings;
 

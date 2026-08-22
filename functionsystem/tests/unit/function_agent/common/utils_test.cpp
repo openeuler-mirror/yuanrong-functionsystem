@@ -315,7 +315,7 @@ TEST_F(FunctionAgentUtilsTest, SetStartRuntimeInstanceRequestConfigSuccess)
     deployInstanceRequest->set_language(function_agent::JAVA_LANGUAGE);
     deployInstanceRequest->set_requestid(requestId);
 
-    function_agent::SetStartRuntimeInstanceRequestConfig(startInstanceRequest, deployInstanceRequest);
+    function_agent::SetStartRuntimeInstanceRequestConfig(startInstanceRequest, deployInstanceRequest, "");
     EXPECT_EQ(startInstanceRequest->runtimeinstanceinfo().requestid(), requestId);
 }
 
@@ -335,7 +335,7 @@ TEST_F(FunctionAgentUtilsTest, NetworkPolicyFlowsFromCreateOptionsToSandboxdStar
         R"({"dnsBlacklist":["github.com"]})";
 
     auto runtimeRequest = std::make_unique<messages::StartInstanceRequest>();
-    function_agent::SetStartRuntimeInstanceRequestConfig(runtimeRequest, deployInstanceRequest);
+    function_agent::SetStartRuntimeInstanceRequestConfig(runtimeRequest, deployInstanceRequest, "");
     ASSERT_EQ(runtimeRequest->runtimeinstanceinfo()
                   .deploymentconfig()
                   .deployoptions()
@@ -580,6 +580,7 @@ TEST_F(FunctionAgentUtilsTest, AddDefaultEnvWithDELEGATE_ENV_VAR)
     EXPECT_EQ(runtimeConf2.posixenvs().at("YR_TENANT_ID"), "Test_TenantID");
     EXPECT_EQ(runtimeConf2.posixenvs().at("YR_DATASYSTEM_DEPLOYED"), "true");
     EXPECT_EQ(runtimeConf2.posixenvs().at("YR_BYPASS_DATASYSTEM"), "false");
+    EXPECT_EQ(runtimeConf2.posixenvs().count("LD_LIBRARY_PATH"), size_t{0});
 }
 
 TEST_F(FunctionAgentUtilsTest, ParseDataSystemCapabilityBoolean)
