@@ -17,6 +17,7 @@
 #ifndef FUNCTION_PROXY_LOCAL_SCHEDULER_GRPC_SERVER_FRONTEND_PROXY_SERVICE_FRONTEND_PROXY_SERVICE_H
 #define FUNCTION_PROXY_LOCAL_SCHEDULER_GRPC_SERVER_FRONTEND_PROXY_SERVICE_FRONTEND_PROXY_SERVICE_H
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -77,6 +78,7 @@ struct FrontendProxyServiceParam {
     bool enableKillDispatch { false };
     bool requireAuthenticatedPeer { false };
     uint64_t invokeResultTimeoutMs { 60000 };
+    uint64_t invokeResultTimeoutBufferMs { 5000 };
     uint64_t killCleanupTimeoutMs { 2000 };
 };
 
@@ -117,7 +119,10 @@ private:
     ::grpc::Status AwaitInvokeResult(::grpc::ServerContext *context,
                                      const ::frontend_proxy::InvokeInstanceRequest &request,
                                      ::frontend_proxy::InvokeInstanceResponse &response,
-                                     const litebus::Future<SharedStreamMsg> &resultFuture);
+                                     const litebus::Future<SharedStreamMsg> &resultFuture,
+                                     const std::chrono::steady_clock::time_point &waitDeadline);
+    static std::chrono::milliseconds ResolveInvokeResultTimeout(
+        const ::frontend_proxy::InvokeInstanceRequest &request, const FrontendProxyServiceParam &param);
     bool ValidateCreateRequest(const ::frontend_proxy::CreateInstanceRequest &request,
                                ::frontend_proxy::CreateInstanceResponse &response) const;
     ::grpc::Status DispatchCreateRequest(::grpc::ServerContext *context,
