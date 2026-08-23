@@ -16,13 +16,17 @@
 
 #include "sandboxd_request_builder.h"
 
-#include <algorithm>
 #include <arpa/inet.h>
+
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <initializer_list>
 #include <limits>
+#include <string_view>
+#include <unordered_set>
 
 #include "common/constants/constants.h"
 #include "common/logs/logging.h"
@@ -36,21 +40,25 @@ namespace functionsystem::runtime_manager {
 
 namespace {
 // Log-redirect
-const std::string YR_RT_WORKING_DIR       = "YR_RT_WORKING_DIR";
+const std::string YR_RT_WORKING_DIR = "YR_RT_WORKING_DIR";
 // Deploy-option keys
-const std::string CONTAINER_ROOTFS             = "rootfs";
-const std::string CONTAINER_EXTRA_CONFIG       = "extra_config";
-const std::string CONTAINER_MOUNTS             = "mounts";
-const std::string CONTAINER_NETWORK            = "network";
-const std::string STORAGE_RESOURCE_NAME        = "storage";
+const std::string CONTAINER_ROOTFS = "rootfs";
+const std::string CONTAINER_EXTRA_CONFIG = "extra_config";
+const std::string CONTAINER_MOUNTS = "mounts";
+const std::string CONTAINER_NETWORK = "network";
+const std::string STORAGE_RESOURCE_NAME = "storage";
 // Resource defaults
-constexpr double DEFAULT_CPU_MILLICORES   = 500.0;
-constexpr double DEFAULT_MEMORY_MB        = 500.0;
-constexpr uint32_t MAX_NETWORK_PORT        = std::numeric_limits<uint16_t>::max();
+constexpr double DEFAULT_CPU_MILLICORES = 500.0;
+constexpr double DEFAULT_MEMORY_MB = 500.0;
+constexpr uint32_t MAX_NETWORK_PORT = std::numeric_limits<uint16_t>::max();
+constexpr uint32_t DEFAULT_NETWORK_RULE_PRIORITY = 100;
+constexpr uint32_t PLATFORM_NETWORK_RULE_PRIORITY = std::numeric_limits<uint32_t>::max();
+constexpr uint32_t MAX_USER_NETWORK_RULE_PRIORITY = PLATFORM_NETWORK_RULE_PRIORITY - 1;
+constexpr size_t MAX_NETWORK_RULES = 256;
 // Mount
-const std::string YR_FUNCTION_LIB_PATH   = "YR_FUNCTION_LIB_PATH";
-const std::string FUNCTION_LIB_PATH      = "FUNCTION_LIB_PATH";
-const std::string GPU_DEVICE_IDS         = "GPU-DEVICE-IDS";
+const std::string YR_FUNCTION_LIB_PATH = "YR_FUNCTION_LIB_PATH";
+const std::string FUNCTION_LIB_PATH = "FUNCTION_LIB_PATH";
+const std::string GPU_DEVICE_IDS = "GPU-DEVICE-IDS";
 // Namespace alias for brevity
 using namespace resource_view;  // NOLINT(google-build-using-namespace)
 
@@ -73,6 +81,369 @@ Status InvalidRootfsConfig(const std::string &message)
     return Status(StatusCode::ERR_PARAM_INVALID, message);
 }
 
+Status ValidateJSONKeys(const nlohmann::json &object, const std::string &path,
+                        std::initializer_list<std::string_view> allowed)
+{
+    if (!object.is_object()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{} must be an object", path));
+    }
+    for (const auto &[key, value] : object.items()) {
+        (void)value;
+        const auto found = std::find(allowed.begin(), allowed.end(), key);
+        if (found == allowed.end()) {
+            return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{} contains unknown field '{}'", path, key));
+        }
+    }
+    return Status::OK();
+}
+
+Status ParseNetworkAction(const nlohmann::json &value, const std::string &path,
+                          runtime::v1::NetworkPolicyAction &action)
+{
+    if (!value.is_string()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{} must be 'allow' or 'deny'", path));
+    }
+    const auto text = value.get<std::string>();
+    if (text == "allow") {
+        action = runtime::v1::NETWORK_POLICY_ACTION_ALLOW;
+        return Status::OK();
+    }
+    if (text == "deny") {
+        action = runtime::v1::NETWORK_POLICY_ACTION_DENY;
+        return Status::OK();
+    }
+    return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{} must be 'allow' or 'deny'", path));
+}
+
+Status ParseNetworkDirection(const nlohmann::json &value, const std::string &path,
+                             runtime::v1::NetworkDirection &direction)
+{
+    if (!value.is_string()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{} must be 'ingress', 'egress', or 'both'", path));
+    }
+    const auto text = value.get<std::string>();
+    if (text == "ingress") {
+        direction = runtime::v1::NETWORK_DIRECTION_INGRESS;
+        return Status::OK();
+    }
+    if (text == "egress") {
+        direction = runtime::v1::NETWORK_DIRECTION_EGRESS;
+        return Status::OK();
+    }
+    if (text == "both") {
+        direction = runtime::v1::NETWORK_DIRECTION_BOTH;
+        return Status::OK();
+    }
+    return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{} must be 'ingress', 'egress', or 'both'", path));
+}
+
+Status ParseNetworkProtocol(const nlohmann::json &value, const std::string &path,
+                            runtime::v1::NetworkProtocol &protocol)
+{
+    if (!value.is_string()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{} must be 'any', 'tcp', 'udp', or 'icmp'", path));
+    }
+    const auto text = value.get<std::string>();
+    if (text == "any") {
+        protocol = runtime::v1::NETWORK_PROTOCOL_ANY;
+        return Status::OK();
+    }
+    if (text == "tcp") {
+        protocol = runtime::v1::NETWORK_PROTOCOL_TCP;
+        return Status::OK();
+    }
+    if (text == "udp") {
+        protocol = runtime::v1::NETWORK_PROTOCOL_UDP;
+        return Status::OK();
+    }
+    if (text == "icmp") {
+        protocol = runtime::v1::NETWORK_PROTOCOL_ICMP;
+        return Status::OK();
+    }
+    return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{} must be 'any', 'tcp', 'udp', or 'icmp'", path));
+}
+
+Status ParsePortRange(const nlohmann::json &value, const std::string &path, runtime::v1::PortRange *portRange)
+{
+    if (auto status = ValidateJSONKeys(value, path, { "first", "last" }); !status.IsOk()) {
+        return status;
+    }
+    if (!value.contains("first") || !value.contains("last") || !value.at("first").is_number_integer()
+        || !value.at("last").is_number_integer()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{} requires integer first and last", path));
+    }
+    const auto first = value.at("first").get<int64_t>();
+    const auto last = value.at("last").get<int64_t>();
+    if (first <= 0 || last <= 0 || first > last || last > MAX_NETWORK_PORT) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      fmt::format("{} must satisfy 1 <= first <= last <= {}", path, MAX_NETWORK_PORT));
+    }
+    portRange->set_first(static_cast<uint32_t>(first));
+    portRange->set_last(static_cast<uint32_t>(last));
+    return Status::OK();
+}
+
+bool IsValidIPv4CIDR(const std::string &value)
+{
+    const auto slash = value.find('/');
+    const auto addressText = value.substr(0, slash);
+    in_addr address{};
+    if (inet_pton(AF_INET, addressText.c_str(), &address) != 1) {
+        return false;
+    }
+    if (slash == std::string::npos) {
+        return true;
+    }
+    if (value.find('/', slash + 1) != std::string::npos) {
+        return false;
+    }
+    const auto prefixText = value.substr(slash + 1);
+    uint32_t prefix = 0;
+    const auto parsed = std::from_chars(prefixText.data(), prefixText.data() + prefixText.size(), prefix);
+    return !prefixText.empty() && parsed.ec == std::errc() && parsed.ptr == prefixText.data() + prefixText.size()
+           && prefix <= 32;
+}
+
+bool IsValidDomainPattern(const std::string &value)
+{
+    if (value.empty() || value.size() > 255 || value.find('?') != std::string::npos) {
+        return false;
+    }
+    const auto wildcard = value.rfind("*.", 0) == 0;
+    const auto remainder = wildcard ? value.substr(2) : value;
+    if (remainder.empty() || remainder.size() > 253 || remainder.find('*') != std::string::npos
+        || remainder.find_first_of(" \t\r\n/") != std::string::npos) {
+        return false;
+    }
+    size_t start = 0;
+    while (start <= remainder.size()) {
+        const auto end = remainder.find('.', start);
+        const auto length = (end == std::string::npos ? remainder.size() : end) - start;
+        if (length == 0 || length > 63 || remainder[start] == '-' || remainder[start + length - 1] == '-') {
+            return false;
+        }
+        for (size_t index = start; index < start + length; ++index) {
+            const auto character = remainder[index];
+            const bool asciiAlphaNumeric = (character >= 'a' && character <= 'z')
+                                           || (character >= 'A' && character <= 'Z')
+                                           || (character >= '0' && character <= '9');
+            if (!asciiAlphaNumeric && character != '-' && character != '_') {
+                return false;
+            }
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    return true;
+}
+
+Status ParseTrafficRule(const nlohmann::json &value, size_t index, runtime::v1::TrafficRule *rule)
+{
+    const auto path = fmt::format("network_policy.traffic.rules[{}]", index);
+    if (auto status = ValidateJSONKeys(value, path,
+                                       { "action", "direction", "protocol", "peer", "sandboxPortRange", "priority" });
+        !status.IsOk()) {
+        return status;
+    }
+    for (const auto *required : { "action", "direction", "protocol" }) {
+        if (!value.contains(required)) {
+            return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{} requires {}", path, required));
+        }
+    }
+    runtime::v1::NetworkPolicyAction action = runtime::v1::NETWORK_POLICY_ACTION_UNSPECIFIED;
+    if (auto status = ParseNetworkAction(value.at("action"), path + ".action", action); !status.IsOk()) {
+        return status;
+    }
+    runtime::v1::NetworkDirection direction = runtime::v1::NETWORK_DIRECTION_UNSPECIFIED;
+    if (auto status = ParseNetworkDirection(value.at("direction"), path + ".direction", direction); !status.IsOk()) {
+        return status;
+    }
+    runtime::v1::NetworkProtocol protocol = runtime::v1::NETWORK_PROTOCOL_UNSPECIFIED;
+    if (auto status = ParseNetworkProtocol(value.at("protocol"), path + ".protocol", protocol); !status.IsOk()) {
+        return status;
+    }
+    rule->set_action(action);
+    rule->set_direction(direction);
+    rule->set_protocol(protocol);
+
+    uint32_t priority = DEFAULT_NETWORK_RULE_PRIORITY;
+    if (value.contains("priority")) {
+        if (!value.at("priority").is_number_integer()) {
+            return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{}.priority must be an integer", path));
+        }
+        const auto parsed = value.at("priority").get<int64_t>();
+        if (parsed <= 0 || parsed > MAX_USER_NETWORK_RULE_PRIORITY) {
+            return Status(StatusCode::ERR_PARAM_INVALID,
+                          fmt::format("{}.priority must be in 1..{}", path, MAX_USER_NETWORK_RULE_PRIORITY));
+        }
+        priority = static_cast<uint32_t>(parsed);
+    }
+    rule->set_priority(priority);
+
+    bool hasPorts = false;
+    if (value.contains("peer")) {
+        const auto &peer = value.at("peer");
+        if (auto status = ValidateJSONKeys(peer, path + ".peer", { "cidr", "domain", "portRange" }); !status.IsOk()) {
+            return status;
+        }
+        const bool hasCIDR =
+            peer.contains("cidr") && peer.at("cidr").is_string() && !peer.at("cidr").get<std::string>().empty();
+        const bool hasDomain =
+            peer.contains("domain") && peer.at("domain").is_string() && !peer.at("domain").get<std::string>().empty();
+        if ((peer.contains("cidr") && !hasCIDR) || (peer.contains("domain") && !hasDomain)) {
+            return Status(StatusCode::ERR_PARAM_INVALID,
+                          fmt::format("{}.peer cidr and domain must be non-empty strings", path));
+        }
+        if (hasCIDR && hasDomain) {
+            return Status(StatusCode::ERR_PARAM_INVALID,
+                          fmt::format("{}.peer cannot contain both cidr and domain", path));
+        }
+        if (hasCIDR) {
+            const auto cidr = peer.at("cidr").get<std::string>();
+            if (!IsValidIPv4CIDR(cidr)) {
+                return Status(StatusCode::ERR_PARAM_INVALID,
+                              fmt::format("{}.peer.cidr is not an IPv4 address or CIDR", path));
+            }
+            rule->mutable_peer()->set_cidr(cidr);
+        }
+        if (hasDomain) {
+            const auto domain = peer.at("domain").get<std::string>();
+            if (direction != runtime::v1::NETWORK_DIRECTION_EGRESS || !IsValidDomainPattern(domain)) {
+                return Status(StatusCode::ERR_PARAM_INVALID,
+                              fmt::format("{}.peer.domain must be a valid egress-only domain pattern", path));
+            }
+            rule->mutable_peer()->set_domain(domain);
+        }
+        if (peer.contains("portRange")) {
+            if (auto status = ParsePortRange(peer.at("portRange"), path + ".peer.portRange",
+                                             rule->mutable_peer()->mutable_port_range());
+                !status.IsOk()) {
+                return status;
+            }
+            hasPorts = true;
+        }
+    }
+    if (value.contains("sandboxPortRange")) {
+        if (auto status = ParsePortRange(value.at("sandboxPortRange"), path + ".sandboxPortRange",
+                                         rule->mutable_sandbox_port_range());
+            !status.IsOk()) {
+            return status;
+        }
+        hasPorts = true;
+    }
+    if (hasPorts && protocol != runtime::v1::NETWORK_PROTOCOL_TCP && protocol != runtime::v1::NETWORK_PROTOCOL_UDP) {
+        return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{} port ranges require tcp or udp", path));
+    }
+    return Status::OK();
+}
+
+Status ParseTrafficPolicy(const nlohmann::json &value, runtime::v1::TrafficPolicy *traffic)
+{
+    constexpr auto path = "network_policy.traffic";
+    if (auto status = ValidateJSONKeys(value, path, { "ingressDefaultAction", "egressDefaultAction", "mode", "rules" });
+        !status.IsOk()) {
+        return status;
+    }
+    for (const auto *required : { "ingressDefaultAction", "egressDefaultAction" }) {
+        if (!value.contains(required)) {
+            return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{} requires {}", path, required));
+        }
+    }
+    runtime::v1::NetworkPolicyAction ingress = runtime::v1::NETWORK_POLICY_ACTION_UNSPECIFIED;
+    if (auto status =
+            ParseNetworkAction(value.at("ingressDefaultAction"), std::string(path) + ".ingressDefaultAction", ingress);
+        !status.IsOk()) {
+        return status;
+    }
+    runtime::v1::NetworkPolicyAction egress = runtime::v1::NETWORK_POLICY_ACTION_UNSPECIFIED;
+    if (auto status =
+            ParseNetworkAction(value.at("egressDefaultAction"), std::string(path) + ".egressDefaultAction", egress);
+        !status.IsOk()) {
+        return status;
+    }
+    traffic->set_ingress_default_action(ingress);
+    traffic->set_egress_default_action(egress);
+    traffic->set_mode(runtime::v1::TRAFFIC_POLICY_MODE_STATEFUL);
+    if (value.contains("mode")) {
+        if (!value.at("mode").is_string()) {
+            return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{}.mode must be stateful or stateless", path));
+        }
+        const auto mode = value.at("mode").get<std::string>();
+        if (mode == "stateful") {
+            traffic->set_mode(runtime::v1::TRAFFIC_POLICY_MODE_STATEFUL);
+        } else if (mode == "stateless") {
+            traffic->set_mode(runtime::v1::TRAFFIC_POLICY_MODE_STATELESS);
+        } else {
+            return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{}.mode must be stateful or stateless", path));
+        }
+    }
+    if (!value.contains("rules")) {
+        return Status::OK();
+    }
+    if (!value.at("rules").is_array() || value.at("rules").size() > MAX_NETWORK_RULES) {
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      fmt::format("{}.rules must be an array with at most {} entries", path, MAX_NETWORK_RULES));
+    }
+    size_t index = 0;
+    for (const auto &rule : value.at("rules")) {
+        if (auto status = ParseTrafficRule(rule, index, traffic->add_rules()); !status.IsOk()) {
+            return status;
+        }
+        ++index;
+    }
+    return Status::OK();
+}
+
+Status ParseDNSPolicy(const nlohmann::json &value, runtime::v1::DNSPolicy *dns)
+{
+    constexpr auto path = "network_policy.dns";
+    if (auto status = ValidateJSONKeys(value, path, { "defaultAction", "rules" }); !status.IsOk()) {
+        return status;
+    }
+    if (!value.contains("defaultAction")) {
+        return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{} requires defaultAction", path));
+    }
+    runtime::v1::NetworkPolicyAction defaultAction = runtime::v1::NETWORK_POLICY_ACTION_UNSPECIFIED;
+    if (auto status =
+            ParseNetworkAction(value.at("defaultAction"), std::string(path) + ".defaultAction", defaultAction);
+        !status.IsOk()) {
+        return status;
+    }
+    dns->set_default_action(defaultAction);
+    if (!value.contains("rules")) {
+        return Status::OK();
+    }
+    if (!value.at("rules").is_array()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{}.rules must be an array", path));
+    }
+    size_t index = 0;
+    for (const auto &valueRule : value.at("rules")) {
+        const auto rulePath = fmt::format("{}.rules[{}]", path, index);
+        if (auto status = ValidateJSONKeys(valueRule, rulePath, { "action", "pattern" }); !status.IsOk()) {
+            return status;
+        }
+        if (!valueRule.contains("action") || !valueRule.contains("pattern") || !valueRule.at("pattern").is_string()) {
+            return Status(StatusCode::ERR_PARAM_INVALID,
+                          fmt::format("{} requires action and a string pattern", rulePath));
+        }
+        runtime::v1::NetworkPolicyAction action = runtime::v1::NETWORK_POLICY_ACTION_UNSPECIFIED;
+        if (auto status = ParseNetworkAction(valueRule.at("action"), rulePath + ".action", action); !status.IsOk()) {
+            return status;
+        }
+        const auto pattern = valueRule.at("pattern").get<std::string>();
+        if (!IsValidDomainPattern(pattern)) {
+            return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("{}.pattern is invalid", rulePath));
+        }
+        auto *rule = dns->add_rules();
+        rule->set_action(action);
+        rule->set_pattern(pattern);
+        ++index;
+    }
+    return Status::OK();
+}
+
 bool HasNonEmptyString(const nlohmann::json &object, const char *key)
 {
     return object.contains(key) && object.at(key).is_string() && !object.at(key).get<std::string>().empty();
@@ -84,12 +455,12 @@ Status ValidateS3RootfsConfig(const nlohmann::json &rootfsConfig)
         return InvalidRootfsConfig("s3 rootfs requires an object storageInfo");
     }
     const auto &storageInfo = rootfsConfig.at("storageInfo");
-    for (const auto *key : {"endpoint", "bucket", "object"}) {
+    for (const auto *key : { "endpoint", "bucket", "object" }) {
         if (!HasNonEmptyString(storageInfo, key)) {
             return InvalidRootfsConfig(fmt::format("s3 rootfs requires non-empty storageInfo.{}", key));
         }
     }
-    for (const auto *key : {"accessKey", "secretKey"}) {
+    for (const auto *key : { "accessKey", "secretKey" }) {
         if (storageInfo.contains(key) && !storageInfo.at(key).is_string()) {
             return InvalidRootfsConfig(fmt::format("storageInfo.{} must be a string", key));
         }
@@ -412,12 +783,12 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBui
 
     // Resolve rootfs (and runtime handler) from deploy options or container config.
     if (auto s = BuildRootfs(params.request, *start); !s.IsOk()) {
-        return {s, nullptr};
+        return { s, nullptr };
     }
 
     ApplyExtraConfig(params.request, start.get());
     if (auto status = ApplyNetworkPolicy(params.request, params.portMappings, start.get()); !status.IsOk()) {
-        return {status, nullptr};
+        return { status, nullptr };
     }
     ApplyPortMappings(params.portMappings, start->mutable_ports());
 
@@ -434,7 +805,7 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBui
         const auto &opts = params.request->runtimeinstanceinfo().deploymentconfig().deployoptions();
         if (auto it = opts.find(CONTAINER_MOUNTS); it != opts.end()) {
             if (auto status = MountsJsonParse(*start, it->second); !status.IsOk()) {
-                return {status, nullptr};
+                return { status, nullptr };
             }
         }
         // Network mode (optional); empty => sandbox network on the sandboxd side.
@@ -445,7 +816,7 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBui
 
     ApplyResources(params.request, start->mutable_resources());
     if (auto status = ApplyWritableLayerSize(params.request, start.get()); !status.IsOk()) {
-        return {status, nullptr};
+        return { status, nullptr };
     }
 
     // BuildRootfs above has already applied the request overlay to the service
@@ -468,7 +839,7 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBui
     // (runtimeinstanceinfo().traceid()), not the local runtimeID.
     start->set_trace_id(params.request->runtimeinstanceinfo().traceid());
 
-    return {Status::OK(), std::move(start)};
+    return { Status::OK(), std::move(start) };
 }
 
 Status SandboxdRequestBuilder::BuildRootfs(const std::shared_ptr<messages::StartInstanceRequest> &request,
@@ -517,9 +888,9 @@ Envs SandboxdRequestBuilder::ApplyCodeMounts(const std::shared_ptr<messages::Sta
     code->set_host_path(workingDirIt->second);
     code->set_target(request->runtimeinstanceinfo().container().mountpoint());
 
-    updated.posixEnvs[UNZIPPED_WORKING_DIR]  = code->target();
-    updated.posixEnvs[YR_FUNCTION_LIB_PATH]  = code->target();
-    updated.posixEnvs[FUNCTION_LIB_PATH]     = code->target();
+    updated.posixEnvs[UNZIPPED_WORKING_DIR] = code->target();
+    updated.posixEnvs[YR_FUNCTION_LIB_PATH] = code->target();
+    updated.posixEnvs[FUNCTION_LIB_PATH] = code->target();
 
     for (const auto &layer : GenerateLayerPath(request->runtimeinstanceinfo())) {
         auto *layerMount = mounts->Add();
@@ -533,8 +904,8 @@ Envs SandboxdRequestBuilder::ApplyCodeMounts(const std::shared_ptr<messages::Sta
 }
 
 void SandboxdRequestBuilder::ApplyBootstrapMount(const std::shared_ptr<messages::StartInstanceRequest> &request,
-    google::protobuf::RepeatedPtrField<runtime::v1::Mount> *mounts,
-    std::string &workingRoot) const
+                                                 google::protobuf::RepeatedPtrField<runtime::v1::Mount> *mounts,
+                                                 std::string &workingRoot) const
 {
     workingRoot = "/";
     const auto &bc = request->runtimeinstanceinfo().bootstrapconfig();
@@ -599,8 +970,8 @@ void SandboxdRequestBuilder::ApplyResources(const std::shared_ptr<messages::Star
         (memIt != res.end()) ? getEffectiveValue(memIt->second, DEFAULT_MEMORY_MB) : DEFAULT_MEMORY_MB;
 }
 
-Status SandboxdRequestBuilder::ApplyWritableLayerSize(
-    const std::shared_ptr<messages::StartInstanceRequest> &request, runtime::v1::StartRequest *start) const
+Status SandboxdRequestBuilder::ApplyWritableLayerSize(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                                      runtime::v1::StartRequest *start) const
 {
     const auto &resources = request->runtimeinstanceinfo().runtimeconfig().resources().resources();
     const auto iter = resources.find(STORAGE_RESOURCE_NAME);
@@ -613,8 +984,8 @@ Status SandboxdRequestBuilder::ApplyWritableLayerSize(
 
     const auto &scalar = iter->second.scalar();
     const double storage = scalar.limit() > 0 ? scalar.limit() : scalar.value();
-    if (!std::isfinite(storage) || storage <= 0 || std::floor(storage) != storage ||
-        storage > static_cast<double>(std::numeric_limits<uint64_t>::max())) {
+    if (!std::isfinite(storage) || storage <= 0 || std::floor(storage) != storage
+        || storage > static_cast<double>(std::numeric_limits<uint64_t>::max())) {
         return Status(StatusCode::ERR_PARAM_INVALID, "storage resource must be a positive integer number of bytes");
     }
     const auto storageBytes = static_cast<uint64_t>(storage);
@@ -685,9 +1056,9 @@ void SandboxdRequestBuilder::ApplyExtraConfig(const std::shared_ptr<messages::St
     }
 }
 
-Status SandboxdRequestBuilder::ApplyNetworkPolicy(
-    const std::shared_ptr<messages::StartInstanceRequest> &request,
-    const std::vector<std::string> &portMappings, runtime::v1::StartRequest *start) const
+Status SandboxdRequestBuilder::ApplyNetworkPolicy(const std::shared_ptr<messages::StartInstanceRequest> &request,
+                                                  const std::vector<std::string> &portMappings,
+                                                  runtime::v1::StartRequest *start) const
 {
     const auto &opts = request->runtimeinstanceinfo().deploymentconfig().deployoptions();
 
@@ -697,8 +1068,132 @@ Status SandboxdRequestBuilder::ApplyNetworkPolicy(
             return Status::OK();
         }
         auto policy = nlohmann::json::parse(iter->second);
-        if (!policy.is_object()) {
-            return Status(StatusCode::ERR_PARAM_INVALID, "network_policy must be a JSON object");
+        if (auto status = ValidateJSONKeys(policy, "network_policy",
+                                           { "blockNetwork", "dnsBlacklist", "schemaVersion", "traffic", "dns" });
+            !status.IsOk()) {
+            return status;
+        }
+
+        const auto addProtectedRules = [&](runtime::v1::TrafficPolicy *traffic, bool schemaV2) -> Status {
+            const auto &config = cmdBuilder_.GetConfig();
+            in_addr address{};
+            if (inet_pton(AF_INET, config.proxyIP.c_str(), &address) != 1) {
+                return Status(StatusCode::ERR_PARAM_INVALID,
+                              fmt::format("proxy IP '{}' is not a valid IPv4 address", config.proxyIP));
+            }
+            uint32_t port = 0;
+            const auto &portText = config.proxyGrpcServerPort;
+            const auto parsed = std::from_chars(portText.data(), portText.data() + portText.size(), port);
+            if (parsed.ec != std::errc() || parsed.ptr != portText.data() + portText.size() || port == 0
+                || port > MAX_NETWORK_PORT) {
+                return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("proxy gRPC port '{}' is invalid", portText));
+            }
+
+            if (traffic->rules_size() >= static_cast<int>(MAX_NETWORK_RULES)) {
+                return Status(StatusCode::ERR_PARAM_INVALID,
+                              fmt::format("network policy leaves no room for the protected Function Proxy rule; "
+                                          "the combined limit is {} rules",
+                                          MAX_NETWORK_RULES));
+            }
+            auto *rule = traffic->add_rules();
+            rule->set_action(runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
+            rule->set_direction(runtime::v1::NETWORK_DIRECTION_BOTH);
+            rule->set_protocol(runtime::v1::NETWORK_PROTOCOL_TCP);
+            if (schemaV2) {
+                rule->set_priority(PLATFORM_NETWORK_RULE_PRIORITY);
+                rule->mutable_peer()->set_cidr(config.proxyIP + "/32");
+                rule->mutable_peer()->mutable_port_range()->set_first(port);
+                rule->mutable_peer()->mutable_port_range()->set_last(port);
+            } else {
+                rule->mutable_peer()->set_address(config.proxyIP);
+                rule->mutable_peer()->set_port(port);
+            }
+
+            std::unordered_set<std::string> publishedTargets;
+            for (const auto &mapping : portMappings) {
+                const auto firstSeparator = mapping.find(':');
+                const auto secondSeparator =
+                    firstSeparator == std::string::npos ? std::string::npos : mapping.find(':', firstSeparator + 1);
+                if (firstSeparator == std::string::npos || secondSeparator == std::string::npos
+                    || mapping.find(':', secondSeparator + 1) != std::string::npos) {
+                    return Status(StatusCode::ERR_PARAM_INVALID,
+                                  fmt::format("invalid sandboxd port mapping '{}'", mapping));
+                }
+                const auto protocolText = mapping.substr(0, firstSeparator);
+                runtime::v1::NetworkProtocol protocol = runtime::v1::NETWORK_PROTOCOL_UNSPECIFIED;
+                if (protocolText == "tcp") {
+                    protocol = runtime::v1::NETWORK_PROTOCOL_TCP;
+                } else if (protocolText == "udp") {
+                    protocol = runtime::v1::NETWORK_PROTOCOL_UDP;
+                } else {
+                    return Status(StatusCode::ERR_PARAM_INVALID,
+                                  fmt::format("unsupported sandboxd port mapping protocol '{}'", protocolText));
+                }
+                const auto targetText = mapping.substr(secondSeparator + 1);
+                uint32_t targetPort = 0;
+                const auto targetParsed =
+                    std::from_chars(targetText.data(), targetText.data() + targetText.size(), targetPort);
+                if (targetParsed.ec != std::errc() || targetParsed.ptr != targetText.data() + targetText.size()
+                    || targetPort == 0 || targetPort > MAX_NETWORK_PORT) {
+                    return Status(StatusCode::ERR_PARAM_INVALID,
+                                  fmt::format("invalid sandboxd target port in mapping '{}'", mapping));
+                }
+                const auto targetKey = protocolText + ":" + targetText;
+                if (!publishedTargets.insert(targetKey).second) {
+                    continue;
+                }
+                if (traffic->rules_size() >= static_cast<int>(MAX_NETWORK_RULES)) {
+                    return Status(StatusCode::ERR_PARAM_INVALID,
+                                  fmt::format("network policy plus protected published ports exceeds {} rules",
+                                              MAX_NETWORK_RULES));
+                }
+                auto *published = traffic->add_rules();
+                published->set_action(runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
+                published->set_direction(runtime::v1::NETWORK_DIRECTION_INGRESS);
+                published->set_protocol(protocol);
+                if (schemaV2) {
+                    published->set_priority(PLATFORM_NETWORK_RULE_PRIORITY);
+                    published->mutable_sandbox_port_range()->set_first(targetPort);
+                    published->mutable_sandbox_port_range()->set_last(targetPort);
+                } else {
+                    published->set_sandbox_port(targetPort);
+                }
+            }
+            return Status::OK();
+        };
+
+        if (policy.contains("schemaVersion")) {
+            if (!policy.at("schemaVersion").is_number_integer() || policy.at("schemaVersion").get<int64_t>() != 2) {
+                return Status(StatusCode::ERR_PARAM_INVALID, "network_policy.schemaVersion must be 2");
+            }
+            if (policy.contains("blockNetwork") || policy.contains("dnsBlacklist")) {
+                return Status(StatusCode::ERR_PARAM_INVALID,
+                              "legacy and schema v2 network policy fields cannot be combined");
+            }
+            if (!policy.contains("traffic") && !policy.contains("dns")) {
+                return Status::OK();
+            }
+            auto *networkPolicy = start->mutable_network_policy();
+            networkPolicy->set_schema_version(2);
+            if (policy.contains("traffic")) {
+                auto *traffic = networkPolicy->mutable_traffic();
+                if (auto status = ParseTrafficPolicy(policy.at("traffic"), traffic); !status.IsOk()) {
+                    return status;
+                }
+                if (auto status = addProtectedRules(traffic, true); !status.IsOk()) {
+                    return status;
+                }
+            }
+            if (policy.contains("dns")) {
+                if (auto status = ParseDNSPolicy(policy.at("dns"), networkPolicy->mutable_dns()); !status.IsOk()) {
+                    return status;
+                }
+            }
+            return Status::OK();
+        }
+
+        if (policy.contains("traffic") || policy.contains("dns")) {
+            return Status(StatusCode::ERR_PARAM_INVALID, "schema v2 network fields require schemaVersion 2");
         }
 
         bool blockNetwork = false;
@@ -708,16 +1203,15 @@ Status SandboxdRequestBuilder::ApplyNetworkPolicy(
             }
             blockNetwork = policy.at("blockNetwork").get<bool>();
         }
-
         std::vector<std::string> dnsBlacklist;
         if (policy.contains("dnsBlacklist")) {
             if (!policy.at("dnsBlacklist").is_array()) {
                 return Status(StatusCode::ERR_PARAM_INVALID, "network_policy.dnsBlacklist must be an array");
             }
             for (const auto &pattern : policy.at("dnsBlacklist")) {
-                if (!pattern.is_string() || pattern.get<std::string>().empty()) {
+                if (!pattern.is_string() || !IsValidDomainPattern(pattern.get<std::string>())) {
                     return Status(StatusCode::ERR_PARAM_INVALID,
-                                  "network_policy.dnsBlacklist entries must be non-empty strings");
+                                  "network_policy.dnsBlacklist entries must be valid domain patterns");
                 }
                 dnsBlacklist.push_back(pattern.get<std::string>());
             }
@@ -732,70 +1226,11 @@ Status SandboxdRequestBuilder::ApplyNetworkPolicy(
 
         auto *networkPolicy = start->mutable_network_policy();
         if (blockNetwork) {
-            const auto &config = cmdBuilder_.GetConfig();
-            in_addr address{};
-            if (inet_pton(AF_INET, config.proxyIP.c_str(), &address) != 1) {
-                return Status(StatusCode::ERR_PARAM_INVALID,
-                              fmt::format("proxy IP '{}' is not a valid IPv4 address", config.proxyIP));
-            }
-            uint32_t port = 0;
-            const auto &portText = config.proxyGrpcServerPort;
-            const auto parsed = std::from_chars(portText.data(), portText.data() + portText.size(), port);
-            if (parsed.ec != std::errc() || parsed.ptr != portText.data() + portText.size() || port == 0 ||
-                port > MAX_NETWORK_PORT) {
-                return Status(StatusCode::ERR_PARAM_INVALID,
-                              fmt::format("proxy gRPC port '{}' is invalid", portText));
-            }
-
             auto *traffic = networkPolicy->mutable_traffic();
             traffic->set_default_action(runtime::v1::NETWORK_POLICY_ACTION_DENY);
             traffic->set_mode(runtime::v1::TRAFFIC_POLICY_MODE_STATEFUL);
-            auto *rule = traffic->add_rules();
-            rule->set_action(runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
-            rule->set_direction(runtime::v1::NETWORK_DIRECTION_BOTH);
-            rule->set_protocol(runtime::v1::NETWORK_PROTOCOL_TCP);
-            rule->mutable_peer()->set_address(config.proxyIP);
-            rule->mutable_peer()->set_port(port);
-
-            std::unordered_set<std::string> publishedTargets;
-            for (const auto &mapping : portMappings) {
-                const auto firstSeparator = mapping.find(':');
-                const auto secondSeparator =
-                    firstSeparator == std::string::npos ? std::string::npos : mapping.find(':', firstSeparator + 1);
-                if (firstSeparator == std::string::npos || secondSeparator == std::string::npos ||
-                    mapping.find(':', secondSeparator + 1) != std::string::npos) {
-                    return Status(StatusCode::ERR_PARAM_INVALID,
-                                  fmt::format("invalid sandboxd port mapping '{}'", mapping));
-                }
-                const auto protocolText = mapping.substr(0, firstSeparator);
-                runtime::v1::NetworkProtocol protocol;
-                if (protocolText == "tcp") {
-                    protocol = runtime::v1::NETWORK_PROTOCOL_TCP;
-                } else if (protocolText == "udp") {
-                    protocol = runtime::v1::NETWORK_PROTOCOL_UDP;
-                } else {
-                    return Status(StatusCode::ERR_PARAM_INVALID,
-                                  fmt::format("unsupported sandboxd port mapping protocol '{}'", protocolText));
-                }
-                const auto targetText = mapping.substr(secondSeparator + 1);
-                uint32_t targetPort = 0;
-                const auto targetParsed =
-                    std::from_chars(targetText.data(), targetText.data() + targetText.size(), targetPort);
-                if (targetParsed.ec != std::errc() ||
-                    targetParsed.ptr != targetText.data() + targetText.size() ||
-                    targetPort == 0 || targetPort > MAX_NETWORK_PORT) {
-                    return Status(StatusCode::ERR_PARAM_INVALID,
-                                  fmt::format("invalid sandboxd target port in mapping '{}'", mapping));
-                }
-                const auto targetKey = protocolText + ":" + targetText;
-                if (!publishedTargets.insert(targetKey).second) {
-                    continue;
-                }
-                auto *published = traffic->add_rules();
-                published->set_action(runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
-                published->set_direction(runtime::v1::NETWORK_DIRECTION_INGRESS);
-                published->set_protocol(protocol);
-                published->set_sandbox_port(targetPort);
+            if (auto status = addProtectedRules(traffic, false); !status.IsOk()) {
+                return status;
             }
         } else {
             auto *dns = networkPolicy->mutable_dns();
@@ -807,8 +1242,7 @@ Status SandboxdRequestBuilder::ApplyNetworkPolicy(
             }
         }
     } catch (const std::exception &e) {
-        return Status(StatusCode::ERR_PARAM_INVALID,
-                      fmt::format("failed to parse network_policy JSON: {}", e.what()));
+        return Status(StatusCode::ERR_PARAM_INVALID, fmt::format("failed to parse network_policy JSON: {}", e.what()));
     }
     return Status::OK();
 }

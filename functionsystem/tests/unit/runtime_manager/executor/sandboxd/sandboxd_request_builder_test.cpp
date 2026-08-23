@@ -19,6 +19,8 @@
 #include <gtest/gtest.h>
 #include <google/protobuf/descriptor.h>
 
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 
@@ -67,17 +69,17 @@ public:
     void SetUp() override
     {
         RuntimeConfig config;
-        config.runtimePath       = "/opt/runtime";
-        config.runtimeLogLevel   = "INFO";
+        config.runtimePath = "/opt/runtime";
+        config.runtimeLogLevel = "INFO";
         config.runtimeConfigPath = "/etc/runtime";
-        config.runtimeLogPath    = "/tmp/sandboxd-request-builder-test";
-        config.hostIP            = "127.0.0.1";
-        config.proxyIP           = "10.20.30.40";
+        config.runtimeLogPath = "/tmp/sandboxd-request-builder-test";
+        config.hostIP = "127.0.0.1";
+        config.proxyIP = "10.20.30.40";
         config.proxyGrpcServerPort = "31222";
 
         cmdBuilder_ = std::make_unique<CommandBuilder>(/*execLookPath=*/false);
         cmdBuilder_->SetRuntimeConfig(config);
-        builder_    = std::make_unique<SandboxdRequestBuilder>(*cmdBuilder_);
+        builder_ = std::make_unique<SandboxdRequestBuilder>(*cmdBuilder_);
     }
 
     void TearDown() override
@@ -102,12 +104,12 @@ public:
         rootfs->set_readonly(false);
 
         SandboxdStartParams params;
-        params.request   = req;
+        params.request = req;
         params.runtimeID = "test-runtime";
         return params;
     }
 
-    std::unique_ptr<CommandBuilder>         cmdBuilder_;
+    std::unique_ptr<CommandBuilder> cmdBuilder_;
     std::unique_ptr<SandboxdRequestBuilder> builder_;
 };
 
@@ -442,11 +444,7 @@ TEST_F(SandboxdRequestBuilderTest, BlockNetworkAllowsPublishedSandboxTargetPorts
 {
     auto params = MakeMinimalParams();
     params.portMappings = {
-        "tcp:21008:50090",
-        "tcp:21009:8765",
-        "tcp:21010:8766",
-        "udp:21011:5353",
-        "tcp:21012:50090",
+        "tcp:21008:50090", "tcp:21009:8765", "tcp:21010:8766", "udp:21011:5353", "tcp:21012:50090",
     };
     (*params.request->mutable_runtimeinstanceinfo()
           ->mutable_deploymentconfig()
@@ -461,10 +459,10 @@ TEST_F(SandboxdRequestBuilderTest, BlockNetworkAllowsPublishedSandboxTargetPorts
     ASSERT_EQ(traffic.rules_size(), 5);
     EXPECT_TRUE(traffic.rules(0).has_peer());
     const std::vector<std::pair<runtime::v1::NetworkProtocol, uint32_t>> expected = {
-        {runtime::v1::NETWORK_PROTOCOL_TCP, 50090},
-        {runtime::v1::NETWORK_PROTOCOL_TCP, 8765},
-        {runtime::v1::NETWORK_PROTOCOL_TCP, 8766},
-        {runtime::v1::NETWORK_PROTOCOL_UDP, 5353},
+        { runtime::v1::NETWORK_PROTOCOL_TCP, 50090 },
+        { runtime::v1::NETWORK_PROTOCOL_TCP, 8765 },
+        { runtime::v1::NETWORK_PROTOCOL_TCP, 8766 },
+        { runtime::v1::NETWORK_PROTOCOL_UDP, 5353 },
     };
     for (size_t i = 0; i < expected.size(); ++i) {
         const auto &rule = traffic.rules(static_cast<int>(i + 1));
@@ -489,8 +487,7 @@ TEST_F(SandboxdRequestBuilderTest, ExtraConfigDoesNotConfigureNetworkPolicy)
     ASSERT_TRUE(status.IsOk());
     ASSERT_NE(startReq, nullptr);
     EXPECT_FALSE(startReq->has_network_policy());
-    EXPECT_EQ(startReq->extra_config(),
-              R"({"networkPolicy":{"blockNetwork":true},"runtimeOption":"value"})");
+    EXPECT_EQ(startReq->extra_config(), R"({"networkPolicy":{"blockNetwork":true},"runtimeOption":"value"})");
 }
 
 TEST_F(SandboxdRequestBuilderTest, DNSBlacklistBuildsDefaultAllowPolicy)
@@ -498,8 +495,7 @@ TEST_F(SandboxdRequestBuilderTest, DNSBlacklistBuildsDefaultAllowPolicy)
     auto params = MakeMinimalParams();
     (*params.request->mutable_runtimeinstanceinfo()
           ->mutable_deploymentconfig()
-          ->mutable_deployoptions())["network_policy"] =
-        R"({"dnsBlacklist":["github.com","*.github.com"]})";
+          ->mutable_deployoptions())["network_policy"] = R"({"dnsBlacklist":["github.com","*.github.com"]})";
 
     auto [status, startReq] = builder_->Build(params);
 
@@ -513,6 +509,202 @@ TEST_F(SandboxdRequestBuilderTest, DNSBlacklistBuildsDefaultAllowPolicy)
     EXPECT_EQ(dns.rules(0).action(), runtime::v1::NETWORK_POLICY_ACTION_DENY);
     EXPECT_EQ(dns.rules(0).pattern(), "github.com");
     EXPECT_EQ(dns.rules(1).pattern(), "*.github.com");
+}
+
+TEST_F(SandboxdRequestBuilderTest, ACLVersion2BuildsGenericPolicyAndProtectedRules)
+{
+    auto params = MakeMinimalParams();
+    params.portMappings = { "tcp:21010:8766" };
+    (*params.request->mutable_runtimeinstanceinfo()
+          ->mutable_deploymentconfig()
+          ->mutable_deployoptions())["network_policy"] = R"({
+        "schemaVersion": 2,
+        "traffic": {
+            "ingressDefaultAction": "allow",
+            "egressDefaultAction": "deny",
+            "mode": "stateful",
+            "rules": [
+                {
+                    "action": "allow",
+                    "direction": "egress",
+                    "protocol": "tcp",
+                    "peer": {
+                        "cidr": "192.0.2.0/24",
+                        "portRange": {"first": 80, "last": 443}
+                    },
+                    "priority": 110
+                },
+                {
+                    "action": "deny",
+                    "direction": "egress",
+                    "protocol": "udp",
+                    "peer": {"domain": "*.example.com"},
+                    "sandboxPortRange": {"first": 5000, "last": 5010},
+                    "priority": 100
+                }
+            ]
+        },
+        "dns": {
+            "defaultAction": "allow",
+            "rules": [{"action": "deny", "pattern": "blocked.example"}]
+        }
+    })";
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk());
+    ASSERT_NE(startReq, nullptr);
+    ASSERT_TRUE(startReq->has_network_policy());
+    const auto &policy = startReq->network_policy();
+    EXPECT_EQ(policy.schema_version(), 2U);
+    ASSERT_TRUE(policy.has_traffic());
+    const auto &traffic = policy.traffic();
+    EXPECT_EQ(traffic.ingress_default_action(), runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
+    EXPECT_EQ(traffic.egress_default_action(), runtime::v1::NETWORK_POLICY_ACTION_DENY);
+    EXPECT_EQ(traffic.mode(), runtime::v1::TRAFFIC_POLICY_MODE_STATEFUL);
+    ASSERT_EQ(traffic.rules_size(), 4);
+
+    const auto &cidrRule = traffic.rules(0);
+    EXPECT_EQ(cidrRule.action(), runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
+    EXPECT_EQ(cidrRule.direction(), runtime::v1::NETWORK_DIRECTION_EGRESS);
+    EXPECT_EQ(cidrRule.protocol(), runtime::v1::NETWORK_PROTOCOL_TCP);
+    EXPECT_EQ(cidrRule.priority(), 110U);
+    EXPECT_EQ(cidrRule.peer().cidr(), "192.0.2.0/24");
+    EXPECT_EQ(cidrRule.peer().port_range().first(), 80U);
+    EXPECT_EQ(cidrRule.peer().port_range().last(), 443U);
+
+    const auto &domainRule = traffic.rules(1);
+    EXPECT_EQ(domainRule.action(), runtime::v1::NETWORK_POLICY_ACTION_DENY);
+    EXPECT_EQ(domainRule.peer().domain(), "*.example.com");
+    EXPECT_EQ(domainRule.sandbox_port_range().first(), 5000U);
+    EXPECT_EQ(domainRule.sandbox_port_range().last(), 5010U);
+
+    const auto &proxyRule = traffic.rules(2);
+    EXPECT_EQ(proxyRule.priority(), std::numeric_limits<uint32_t>::max());
+    EXPECT_EQ(proxyRule.direction(), runtime::v1::NETWORK_DIRECTION_BOTH);
+    EXPECT_EQ(proxyRule.peer().cidr(), "10.20.30.40/32");
+    EXPECT_EQ(proxyRule.peer().port_range().first(), 31222U);
+    EXPECT_EQ(proxyRule.peer().port_range().last(), 31222U);
+
+    const auto &publishedRule = traffic.rules(3);
+    EXPECT_EQ(publishedRule.priority(), std::numeric_limits<uint32_t>::max());
+    EXPECT_EQ(publishedRule.direction(), runtime::v1::NETWORK_DIRECTION_INGRESS);
+    EXPECT_EQ(publishedRule.sandbox_port_range().first(), 8766U);
+    EXPECT_EQ(publishedRule.sandbox_port_range().last(), 8766U);
+
+    ASSERT_TRUE(policy.has_dns());
+    EXPECT_EQ(policy.dns().default_action(), runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
+    ASSERT_EQ(policy.dns().rules_size(), 1);
+    EXPECT_EQ(policy.dns().rules(0).action(), runtime::v1::NETWORK_POLICY_ACTION_DENY);
+    EXPECT_EQ(policy.dns().rules(0).pattern(), "blocked.example");
+}
+
+TEST_F(SandboxdRequestBuilderTest, ACLVersion2SupportsIndependentDefaultsAndStatelessMode)
+{
+    auto params = MakeMinimalParams();
+    (*params.request->mutable_runtimeinstanceinfo()
+          ->mutable_deploymentconfig()
+          ->mutable_deployoptions())["network_policy"] = R"({
+        "schemaVersion": 2,
+        "traffic": {
+            "ingressDefaultAction": "deny",
+            "egressDefaultAction": "allow",
+            "mode": "stateless",
+            "rules": []
+        }
+    })";
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk());
+    ASSERT_NE(startReq, nullptr);
+    const auto &traffic = startReq->network_policy().traffic();
+    EXPECT_EQ(traffic.ingress_default_action(), runtime::v1::NETWORK_POLICY_ACTION_DENY);
+    EXPECT_EQ(traffic.egress_default_action(), runtime::v1::NETWORK_POLICY_ACTION_ALLOW);
+    EXPECT_EQ(traffic.mode(), runtime::v1::TRAFFIC_POLICY_MODE_STATELESS);
+    ASSERT_EQ(traffic.rules_size(), 1);
+    EXPECT_EQ(traffic.rules(0).priority(), std::numeric_limits<uint32_t>::max());
+}
+
+TEST_F(SandboxdRequestBuilderTest, ACLVersion2ReservesCapacityForProtectedRules)
+{
+    const auto makePolicy = [](size_t ruleCount) {
+        std::string policy =
+            R"({"schemaVersion":2,"traffic":{"ingressDefaultAction":"deny","egressDefaultAction":"deny","rules":[)";
+        const std::string rule = R"({"action":"allow","direction":"egress","protocol":"tcp"})";
+        for (size_t index = 0; index < ruleCount; ++index) {
+            if (index != 0) {
+                policy += ',';
+            }
+            policy += rule;
+        }
+        policy += "]}}";
+        return policy;
+    };
+
+    {
+        auto params = MakeMinimalParams();
+        (*params.request->mutable_runtimeinstanceinfo()
+              ->mutable_deploymentconfig()
+              ->mutable_deployoptions())["network_policy"] = makePolicy(255);
+
+        auto [status, startReq] = builder_->Build(params);
+
+        ASSERT_TRUE(status.IsOk());
+        ASSERT_NE(startReq, nullptr);
+        EXPECT_EQ(startReq->network_policy().traffic().rules_size(), 256);
+    }
+
+    {
+        auto params = MakeMinimalParams();
+        (*params.request->mutable_runtimeinstanceinfo()
+              ->mutable_deploymentconfig()
+              ->mutable_deployoptions())["network_policy"] = makePolicy(256);
+
+        auto [status, startReq] = builder_->Build(params);
+
+        EXPECT_FALSE(status.IsOk());
+        EXPECT_EQ(startReq, nullptr);
+    }
+
+    {
+        auto params = MakeMinimalParams();
+        params.portMappings = { "tcp:21010:8766" };
+        (*params.request->mutable_runtimeinstanceinfo()
+              ->mutable_deploymentconfig()
+              ->mutable_deployoptions())["network_policy"] = makePolicy(255);
+
+        auto [status, startReq] = builder_->Build(params);
+
+        EXPECT_FALSE(status.IsOk());
+        EXPECT_EQ(startReq, nullptr);
+    }
+}
+
+TEST_F(SandboxdRequestBuilderTest, InvalidACLVersion2FailsBuild)
+{
+    const std::vector<std::string> invalidPolicies = {
+        R"({"schemaVersion":2,"blockNetwork":true})",
+        R"({"schemaVersion":3})",
+        R"({"schemaVersion":2,"unknown":true})",
+        R"({"traffic":{"ingressDefaultAction":"allow","egressDefaultAction":"deny"}})",
+        R"({"schemaVersion":2,"traffic":{"ingressDefaultAction":"allow","egressDefaultAction":"deny","rules":[{"action":"allow","direction":"ingress","protocol":"tcp","peer":{"domain":"example.com"}}]}})",
+        R"({"schemaVersion":2,"traffic":{"ingressDefaultAction":"allow","egressDefaultAction":"deny","rules":[{"action":"allow","direction":"egress","protocol":"any","peer":{"portRange":{"first":443,"last":443}}}]}})",
+        R"({"schemaVersion":2,"traffic":{"ingressDefaultAction":"allow","egressDefaultAction":"deny","rules":[{"action":"allow","direction":"egress","protocol":"tcp","priority":4294967295}]}})",
+        R"({"schemaVersion":2,"dns":{"defaultAction":"allow","rules":[{"action":"deny","pattern":"example.com.."}]}})",
+    };
+
+    for (const auto &policy : invalidPolicies) {
+        auto params = MakeMinimalParams();
+        (*params.request->mutable_runtimeinstanceinfo()
+              ->mutable_deploymentconfig()
+              ->mutable_deployoptions())["network_policy"] = policy;
+
+        auto [status, startReq] = builder_->Build(params);
+
+        EXPECT_FALSE(status.IsOk()) << policy;
+        EXPECT_EQ(startReq, nullptr) << policy;
+    }
 }
 
 TEST_F(SandboxdRequestBuilderTest, MissingNetworkPolicyLeavesRequestUnrestricted)
@@ -531,8 +723,7 @@ TEST_F(SandboxdRequestBuilderTest, InvalidNetworkPolicyFailsBuild)
     auto params = MakeMinimalParams();
     (*params.request->mutable_runtimeinstanceinfo()
           ->mutable_deploymentconfig()
-          ->mutable_deployoptions())["network_policy"] =
-        R"({"blockNetwork":true,"dnsBlacklist":["github.com"]})";
+          ->mutable_deployoptions())["network_policy"] = R"({"blockNetwork":true,"dnsBlacklist":["github.com"]})";
 
     auto [status, startReq] = builder_->Build(params);
 

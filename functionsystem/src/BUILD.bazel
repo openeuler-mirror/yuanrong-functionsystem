@@ -10,5 +10,6 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 cc_library(
     name = "src_root_inc",
     includes = ["."],
+    deps = ["//functionsystem/src/common:datasystem_capability"],
     visibility = ["//visibility:public"],
 )
