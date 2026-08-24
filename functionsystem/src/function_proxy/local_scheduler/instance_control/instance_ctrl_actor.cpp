@@ -2958,10 +2958,25 @@ litebus::Future<Status> InstanceCtrlActor::SendRecoverReq(const std::shared_ptr<
         });
 }
 
+// Whether the instance is an agent sandbox (supervisor or docker executor).
+bool IsAgentInstance(const resources::InstanceInfo &instanceInfo)
+{
+    const auto &createOptions = instanceInfo.createoptions();
+    if (auto it = createOptions.find("sandbox_type"); it != createOptions.end()) {
+        return it->second == functionsystem::SANDBOX_TYPE_SUPERVISOR ||
+               it->second == functionsystem::SANDBOX_TYPE_DOCKER;
+    }
+    return false;
+}
+
 litebus::Future<Status> InstanceCtrlActor::SendCheckpointReq(const std::shared_ptr<ScheduleRequest> &request)
 {
     auto instanceInfo = request->instance();
     if (!IsRuntimeRecoverEnable(instanceInfo)) {
+        return Status::OK();
+    }
+    // Agent runs resident cmds as processes with no serializable user-state.
+    if (IsAgentInstance(instanceInfo)) {
         return Status::OK();
     }
     return Checkpoint(instanceInfo.instanceid())
@@ -3018,7 +3033,8 @@ litebus::Future<Status> InstanceCtrlActor::SendInitRuntime(
     }
 
     (void)concernedInstance_.insert(request->instance().instanceid());
-    if (request->instance().ischeckpointed()) {
+    // Agent must re-init to fork resident cmds; recover only restores InstanceManager state.
+    if (request->instance().ischeckpointed() && !IsAgentInstance(request->instance())) {
         return SendRecoverReq(stateMachine, request);
     }
     // Init runtime
