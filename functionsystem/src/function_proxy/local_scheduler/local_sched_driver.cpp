@@ -552,6 +552,14 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
                 instanceCtrl->UnregisterFrontendReadyWait(requestID, reason);
             }
         };
+    bindings.createFailureLookup =
+        [instanceCtrl(instanceCtrl_)](const std::string &requestID)
+            -> litebus::Future<FrontendCreateFailureSnapshot> {
+            if (instanceCtrl == nullptr) {
+                return FrontendCreateFailureSnapshot{};
+            }
+            return instanceCtrl->TakeFrontendCreateFailureSnapshot(requestID);
+        };
     bindings.enableKillDispatch = true;
     bindings.killInvoker =
         [instanceCtrl(instanceCtrl_)](const std::string &caller, const std::string &tenantID,

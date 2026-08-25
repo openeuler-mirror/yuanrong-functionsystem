@@ -42,6 +42,7 @@
 #include "function_proxy/common/observer/control_plane_observer/control_plane_observer.h"
 #include "function_proxy/common/posix_client/control_plane_client/control_interface_client_manager_proxy.h"
 #include "function_proxy/common/rate_limiter/token_bucket_rate_limiter.h"
+#include "local_scheduler/instance_control/frontend_create_failure_snapshot.h"
 #include "local_scheduler/instance_control/frontend_kill_cleanup_snapshot.h"
 #include "local_scheduler/instance_control/instance_generation_conflict_resolver.h"
 // for remove rgroup, easy for facilitates authentication, which should be extracted in the future
@@ -542,6 +543,18 @@ public:
                                                const std::shared_ptr<KillRequest> &killReq);
     FrontendKillCleanupSnapshot ProbeFrontendKillCleanup(const std::string &requestID,
                                                          const std::string &instanceID);
+    // Record the last deploy failure for a frontend create (POST /api/agent) whose
+    // ready ticket is still pending. No-op unless a ready ticket is registered AND
+    // createOptions["create_error_policy"]=="last_failure_on_timeout". The policy
+    // check is the real gate (IsCreateByFrontend/source=frontend is implied by the
+    // ticket); it keeps non-agent creates off this path even if they ever register
+    // a ticket. Does NOT touch the retry state machine; the ready-timeout closure
+    // reads it back via TakeFrontendCreateFailureSnapshot.
+    void RecordFrontendCreateFailure(const std::string &requestID, int32_t code, const std::string &message,
+                                     const std::string &instanceID, const InstanceInfo &instance);
+    // Returns and consumes the last failure snapshot for requestID. present=false if none.
+    FrontendCreateFailureSnapshot TakeFrontendCreateFailureSnapshot(const std::string &requestID);
+    void EraseFrontendCreateFailure(const std::string &requestID);
     void EraseReadyCallResultCallbackByRequestID(const std::string &requestID);
     void EraseReadyCallResultCallbackByInstanceID(const std::string &instanceID);
     bool RegisterFrontendReadyTicket(const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
@@ -1197,6 +1210,11 @@ private:
     std::unordered_map<std::string, InstanceReadyCallResultCallBack> instanceReadyCallResultCallbackByInstanceID_;
     std::unordered_map<std::string, std::string> instanceReadyCallResultInstanceIDByRequestID_;
     std::unordered_map<std::string, std::string> instanceReadyCallResultRequestIDByInstanceID_;
+    // Last deploy failure for pending frontend create requests (key=requestID).
+    // Written by RecordFrontendCreateFailure on IsCreateByFrontend failures, read
+    // and erased by TakeFrontendCreateFailureSnapshot on ready timeout. faas/sandbox
+    // creates never populate this (no source=frontend marker).
+    std::unordered_map<std::string, FrontendCreateFailureSnapshot> frontendCreateFailureSnapshots_;
 
     std::unordered_map<std::string, CreateCallResultCallBack> createCallResultCallback_;
     // Only these callbacks are allowed to consume the RUNNING fast-path.  Other

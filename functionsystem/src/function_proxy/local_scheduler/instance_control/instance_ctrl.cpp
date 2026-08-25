@@ -399,6 +399,25 @@ litebus::Future<FrontendKillCleanupSnapshot> InstanceCtrl::ProbeFrontendKillClea
     return litebus::Async(aid_, &InstanceCtrlActor::ProbeFrontendKillCleanup, requestID, instanceID);
 }
 
+void InstanceCtrl::RecordFrontendCreateFailure(const std::string &requestID, int32_t code,
+                                               const std::string &message, const std::string &instanceID,
+                                               const InstanceInfo &instance)
+{
+    (void)litebus::Async(aid_, &InstanceCtrlActor::RecordFrontendCreateFailure, requestID, code, message, instanceID,
+                         instance);
+}
+
+litebus::Future<FrontendCreateFailureSnapshot> InstanceCtrl::TakeFrontendCreateFailureSnapshot(
+    const std::string &requestID)
+{
+    return litebus::Async(aid_, &InstanceCtrlActor::TakeFrontendCreateFailureSnapshot, requestID);
+}
+
+void InstanceCtrl::EraseFrontendCreateFailure(const std::string &requestID)
+{
+    (void)litebus::Async(aid_, &InstanceCtrlActor::EraseFrontendCreateFailure, requestID);
+}
+
 litebus::Future<Status> InstanceCtrl::ForceDeleteInstance(const std::string &instanceID)
 {
     return litebus::Async(aid_, &InstanceCtrlActor::ForceDeleteInstance, instanceID);
