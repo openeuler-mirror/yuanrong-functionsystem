@@ -31,6 +31,7 @@
 #include "idle/idle_mgr.h"
 #include "instance_ctrl_actor.h"
 #include "local_scheduler/subscription_manager/subscription_mgr.h"
+#include "local_scheduler/instance_control/frontend_create_failure_snapshot.h"
 
 namespace functionsystem::local_scheduler {
 
@@ -258,6 +259,12 @@ public:
                                                        const std::shared_ptr<KillRequest> &killReq);
     virtual litebus::Future<FrontendKillCleanupSnapshot> ProbeFrontendKillCleanup(
         const std::string &requestID, const std::string &instanceID);
+    virtual void RecordFrontendCreateFailure(const std::string &requestID, int32_t code,
+                                             const std::string &message, const std::string &instanceID,
+                                             const InstanceInfo &instance);
+    virtual litebus::Future<FrontendCreateFailureSnapshot> TakeFrontendCreateFailureSnapshot(
+        const std::string &requestID);
+    virtual void EraseFrontendCreateFailure(const std::string &requestID);
     virtual litebus::Future<Status> ForceDeleteInstance(const std::string &instanceID);
 
     virtual litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> CreateInstanceClient(
