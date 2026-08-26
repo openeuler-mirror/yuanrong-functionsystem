@@ -71,6 +71,18 @@ struct FrontendProxyServiceBindings {
     FrontendProxyKillCleanupProbe killCleanupProbe;
 };
 
+struct ComponentGrpcEndpoint {
+    std::string ip;
+    std::string port;
+    bool useComponentServer { false };
+
+    std::string Address() const;
+};
+
+ComponentGrpcEndpoint ResolveComponentGrpcEndpoint(const std::string &proxyAddress, const std::string &localIP,
+                                                   const std::string &posixPort,
+                                                   const std::string &componentGrpcPort);
+
 FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDispatcher(
     const FrontendProxyCreateReadyScheduler &scheduler,
     const FrontendProxyReadyUnregister &readyUnregister = FrontendProxyReadyUnregister(),

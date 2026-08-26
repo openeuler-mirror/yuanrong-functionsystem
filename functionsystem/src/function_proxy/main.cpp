@@ -60,6 +60,7 @@
 #include "function_proxy/config/direct_routing_config.h"
 #include "grpc/grpc_security_constants.h"
 #include "grpcpp/security/server_credentials.h"
+#include "local_scheduler/grpc_server/frontend_proxy_service/frontend_proxy_lifecycle_handler.h"
 #include "local_scheduler/instance_control/posix_api_handler/posix_api_handler.h"
 #include "local_scheduler/local_sched_driver.h"
 #include "memory_monitor/memory_monitor.h"
@@ -252,8 +253,12 @@ std::shared_ptr<::grpc::ServerCredentials> InitPosixGrpcServerSecureOption(const
 ProxyServiceMeta BuildProxyServiceMeta(const function_proxy::Flags &flags)
 {
     ProxyServiceMeta proxyService;
-    proxyService.grpcAddress = flags.GetIP() + ":" + flags.GetGrpcListenPort();
-    proxyService.capabilities = { "faas.create", "faas.invoke", "faas.kill" };
+    if (flags.GetEnableFrontendProxyService()) {
+        auto endpoint = ResolveComponentGrpcEndpoint(flags.GetAddress(), flags.GetIP(), flags.GetGrpcListenPort(),
+                                                     flags.GetComponentGrpcPort());
+        proxyService.grpcAddress = endpoint.Address();
+        proxyService.capabilities = { "faas.create", "faas.invoke", "faas.kill" };
+    }
     if (flags.GetEnableTcpTunnel()) {
         proxyService.tcpTunnelAddress = flags.GetIP() + ":" + flags.GetTcpTunnelPort();
         proxyService.capabilities.emplace_back("tcp.tunnel");
@@ -512,7 +517,9 @@ Status InitLocalSchedParam(const function_proxy::Flags &flags,
         .unRegisterWhileStop = flags.UnRegisterWhileStop(),
         .enableFakeSuspendResume = flags.GetEnableFakeSuspendResume(),
         .udsPath = flags.GetDPosixUdsPath(),
-        .sessionGrpcPort = flags.GetSessionGrpcPort(),
+        .componentGrpcPort = flags.GetComponentGrpcPort(),
+        .enableExecStreamService = flags.GetEnableExecStreamService(),
+        .enableFrontendProxyService = flags.GetEnableFrontendProxyService(),
         .address = flags.GetAddress(),  // LiteBus address for extracting IP used by gRPC servers
         .enableTraefikRegistry = flags.GetEnableTraefikRegistry(),
         .traefikEtcdPrefix = flags.GetTraefikEtcdPrefix(),

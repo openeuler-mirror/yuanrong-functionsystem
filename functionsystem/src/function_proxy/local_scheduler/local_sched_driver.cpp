@@ -139,14 +139,10 @@ Status LocalSchedDriver::Create()
     config.enablePreemption = param_.enablePreemption;
     config.enableFakeSuspendResume = param_.enableFakeSuspendResume;
     config.udsPath = param_.udsPath;
-    // Set proxy gRPC address (ip:port format)
-    // Use session port when session server is enabled, otherwise use posix port
-    // Extract IP from LiteBus address to ensure external connectivity
-    std::string externalIP = ExtractIPFromAddress(param_.address);
-    if (param_.sessionGrpcPort != "0") {
-        config.proxyGrpcAddress = externalIP + ":" + param_.sessionGrpcPort;
-    } else {
-        config.proxyGrpcAddress = externalIP + ":" + param_.grpcListenPort;
+    if (param_.enableExecStreamService) {
+        auto endpoint =
+            ResolveComponentGrpcEndpoint(param_.address, param_.ip, param_.grpcListenPort, param_.componentGrpcPort);
+        config.proxyGrpcAddress = endpoint.Address();
     }
     instanceCtrl_ = InstanceCtrl::Create(param_.nodeID, config);
     PosixAPIHandler::BindInstanceCtrl(instanceCtrl_);
@@ -418,9 +414,9 @@ Status LocalSchedDriver::Stop()
         YRLOG_INFO("Closing ExecStreamService sessions");
         execStreamService_->CloseAllSessions();
     }
-    if (sessionGrpcServer_) {
-        sessionGrpcServer_.reset();
-        YRLOG_INFO("session grpc server stopped");
+    if (componentGrpcServer_) {
+        componentGrpcServer_.reset();
+        YRLOG_INFO("component grpc server stopped");
     }
     execStreamService_.reset();
     if (dsHealthyChecker_) {
@@ -497,10 +493,10 @@ void LocalSchedDriver::StartDebugInstanceInfoMonitor()
 
 bool LocalSchedDriver::CreatePosixAndDriverServer()
 {
-    // Port conflict validation: session port must not conflict with posix port
-    if (param_.sessionGrpcPort != "0" && param_.sessionGrpcPort == param_.posixPort) {
-        YRLOG_ERROR("Session gRPC port ({}) conflicts with POSIX port ({}), cannot start",
-                    param_.sessionGrpcPort, param_.posixPort);
+    // A shared component server cannot bind the same address and port as the POSIX server.
+    if (param_.componentGrpcPort != "0" && param_.componentGrpcPort == param_.posixPort) {
+        YRLOG_ERROR("Component gRPC port ({}) conflicts with POSIX port ({}), cannot start",
+                    param_.componentGrpcPort, param_.posixPort);
         return false;
     }
 
@@ -581,57 +577,55 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
             }
             return instanceCtrl->ProbeFrontendKillCleanup(requestID, instanceID);
         };
-    auto frontendServiceParam = BuildFrontendProxyServiceParam(param_.nodeID, bindings);
-    frontendServiceParam.endpointAddress = param_.ip + ":" + param_.posixPort;
-    frontendServiceParam.requireAuthenticatedPeer = param_.enableSSL;
-    frontendServiceParam.invokeTenantAuthorizer =
-        [instanceView(instanceCtrl_->GetInstanceControlView())](const std::string &tenantID,
-                                                                const std::string &instanceID) {
-            if (tenantID.empty() || instanceView == nullptr) {
-                return false;
-            }
-            auto stateMachine = instanceView->GetInstance(instanceID);
-            return stateMachine != nullptr && stateMachine->GetInstanceInfo().tenantid() == tenantID;
-        };
-    // Lifecycle create/kill use reviewed ready dispatcher seams. Legacy stream dispatchers remain
-    // disallowed.
-    std::shared_ptr<FrontendProxyService> frontendProxyService =
-        std::make_shared<FrontendProxyService>(std::move(frontendServiceParam));
-    posixGrpcServer_->RegisterService(frontendProxyService);
-    frontendProxyServiceRegistered_ = true;
-    YRLOG_INFO("FrontendProxyService registered on existing posix port {}", param_.posixPort);
+    auto componentEndpoint =
+        ResolveComponentGrpcEndpoint(param_.address, param_.ip, param_.posixPort, param_.componentGrpcPort);
+    if (componentEndpoint.useComponentServer &&
+        (param_.enableFrontendProxyService || param_.enableExecStreamService)) {
+        functionsystem::grpc::CommonGrpcServerConfig componentConfig;
+        componentConfig.ip = componentEndpoint.ip;
+        componentConfig.listenPort = componentEndpoint.port;
+        componentConfig.creds = serverConfig.creds;
+        componentGrpcServer_ = std::make_shared<functionsystem::grpc::CommonGrpcServer>(componentConfig);
+    }
 
-    // Create ExecStreamService instance
-    execStreamService_ = std::make_shared<ExecStreamService>(instanceCtrl_->GetIdleMgr());
-
-    // Register ExecStreamService based on session server configuration
-    if (param_.sessionGrpcPort != "0") {
-        // Create independent session gRPC server for ExecStreamService
-        // Use same IP as LiteBus for external connectivity
-        functionsystem::grpc::CommonGrpcServerConfig sessionConfig;
-        sessionConfig.ip =
-            ExtractIPFromAddress(param_.address);  // Extract IP from LiteBus address to ensure external connectivity
-        sessionConfig.listenPort = param_.sessionGrpcPort;
-        sessionConfig.creds = ::grpc::InsecureServerCredentials();
-        if (param_.enableSSL) {
-            sessionConfig.creds = param_.creds;
+    auto registerService = [this](const std::shared_ptr<::grpc::Service> &service) {
+        if (componentGrpcServer_) {
+            componentGrpcServer_->RegisterService(service);
+        } else {
+            posixGrpcServer_->RegisterService(service);
         }
+    };
 
-        sessionGrpcServer_ = std::make_shared<functionsystem::grpc::CommonGrpcServer>(sessionConfig);
-        sessionGrpcServer_->RegisterService(execStreamService_);
-        sessionGrpcServer_->Start();
+    if (param_.enableFrontendProxyService) {
+        auto frontendServiceParam = BuildFrontendProxyServiceParam(param_.nodeID, bindings);
+        frontendServiceParam.endpointAddress = componentEndpoint.Address();
+        frontendServiceParam.requireAuthenticatedPeer = param_.enableSSL;
+        frontendServiceParam.invokeTenantAuthorizer =
+            [instanceView(instanceCtrl_->GetInstanceControlView())](const std::string &tenantID,
+                                                                    const std::string &instanceID) {
+                if (tenantID.empty() || instanceView == nullptr) {
+                    return false;
+                }
+                auto stateMachine = instanceView->GetInstance(instanceID);
+                return stateMachine != nullptr && stateMachine->GetInstanceInfo().tenantid() == tenantID;
+            };
+        registerService(std::make_shared<FrontendProxyService>(std::move(frontendServiceParam)));
+        YRLOG_INFO("FrontendProxyService registered at {}", componentEndpoint.Address());
+    }
 
-        if (!sessionGrpcServer_->WaitServerReady()) {
-            YRLOG_ERROR("failed to start session grpc server on port {}", param_.sessionGrpcPort);
+    if (param_.enableExecStreamService) {
+        execStreamService_ = std::make_shared<ExecStreamService>(instanceCtrl_->GetIdleMgr());
+        registerService(execStreamService_);
+        YRLOG_INFO("ExecStreamService registered at {}", componentEndpoint.Address());
+    }
+
+    if (componentGrpcServer_) {
+        componentGrpcServer_->Start();
+        if (!componentGrpcServer_->WaitServerReady()) {
+            YRLOG_ERROR("failed to start component grpc server at {}", componentEndpoint.Address());
             return false;
         }
-        YRLOG_INFO("Session gRPC server started on port {}, ExecStreamService listening for connections",
-                   param_.sessionGrpcPort);
-    } else {
-        // Session server disabled, register ExecStreamService on posix server for backward compatibility
-        posixGrpcServer_->RegisterService(execStreamService_);
-        YRLOG_INFO("ExecStreamService registered on posix port {} (session server disabled)",
-                   param_.posixPort);
+        YRLOG_INFO("Component gRPC server started at {}", componentEndpoint.Address());
     }
 
     // Start POSIX gRPC server
@@ -642,6 +636,7 @@ bool LocalSchedDriver::CreatePosixAndDriverServer()
         YRLOG_ERROR("failed to start posix grpc server.");
         return false;
     }
+    frontendProxyServiceRegistered_ = param_.enableFrontendProxyService;
     YRLOG_INFO("POSIX gRPC server started on port {}", param_.posixPort);
     return true;
 }

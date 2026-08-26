@@ -260,8 +260,14 @@ void Flags::AddGrpcServerFlags()
     AddFlag(&Flags::ip_, "ip", "IP address for listening.", "127.0.0.1", FlagCheckWrraper(IsIPValid));
     AddFlag(&Flags::grpcListenPort_, "grpc_listen_port", "For posix server listening. example: 30001",
             std::string("30001"), FlagCheckWrraper(IsPortValid));
-    AddFlag(&Flags::sessionGrpcPort_, "session_grpc_port",
-            "Session gRPC port for ExecStream. 0 = disabled. example: 30002", std::string("0"));
+    AddFlag(&Flags::componentGrpcPort_, "component_grpc_port",
+            "Component gRPC port shared by the enabled proxy services. "
+            "0 = register them on the POSIX server.",
+            std::string("0"));
+    AddFlag(&Flags::enableExecStreamService_, "enable_exec_stream_service",
+            "Whether to expose ExecStreamService on a gRPC server.", true);
+    AddFlag(&Flags::enableFrontendProxyService_, "enable_frontend_proxy_service",
+            "Whether to expose FrontendProxyService on a gRPC server.", true);
     AddFlag(&Flags::maxGrpcSize_, "max_grpc_size", "posix max grpc size", DEFAULT_MAX_GRPC_SIZE,
             NumCheck(MIN_MAX_GRPC_SIZE, MAX_MAX_GRPC_SIZE));
     AddFlag(&Flags::enableServerMode_, "enable_server_mode",

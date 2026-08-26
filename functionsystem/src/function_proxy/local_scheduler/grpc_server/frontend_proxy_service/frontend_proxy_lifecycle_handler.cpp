@@ -140,6 +140,23 @@ litebus::Future<std::shared_ptr<functionsystem::CallResult>> BuildFrontendCreate
 }
 }
 
+std::string ComponentGrpcEndpoint::Address() const
+{
+    return ip + ":" + port;
+}
+
+ComponentGrpcEndpoint ResolveComponentGrpcEndpoint(const std::string &proxyAddress, const std::string &localIP,
+                                                   const std::string &posixPort,
+                                                   const std::string &componentGrpcPort)
+{
+    if (componentGrpcPort == "0") {
+        return { localIP, posixPort, false };
+    }
+    auto separator = proxyAddress.find_last_of(':');
+    auto componentIP = separator == std::string::npos ? proxyAddress : proxyAddress.substr(0, separator);
+    return { componentIP, componentGrpcPort, true };
+}
+
 FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDispatcher(
     const FrontendProxyCreateReadyScheduler &scheduler, const FrontendProxyReadyUnregister &readyUnregister,
     uint64_t readyTimeoutMs, const FrontendCreateFailureLookup &createFailureLookup)
