@@ -3389,13 +3389,16 @@ litebus::Future<Status> InstanceCtrlActor::SendRecoverReq(const std::shared_ptr<
         });
 }
 
-// Whether the instance is an agent sandbox (supervisor or docker executor).
+// Whether the instance is an agent sandbox (supervisor, docker, or conch executor).
+// Agent sandboxes run resident cmds in a host-level sandbox (jiuwenbox bubblewrap /
+// conch microVM) with no serializable user-state, so checkpoint/recover are skipped.
 bool IsAgentInstance(const resources::InstanceInfo &instanceInfo)
 {
     const auto &createOptions = instanceInfo.createoptions();
     if (auto it = createOptions.find("sandbox_type"); it != createOptions.end()) {
         return it->second == functionsystem::SANDBOX_TYPE_SUPERVISOR ||
-               it->second == functionsystem::SANDBOX_TYPE_DOCKER;
+               it->second == functionsystem::SANDBOX_TYPE_DOCKER ||
+               it->second == functionsystem::SANDBOX_TYPE_CONCH;
     }
     return false;
 }
