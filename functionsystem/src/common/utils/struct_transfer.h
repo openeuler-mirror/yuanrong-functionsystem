@@ -53,6 +53,13 @@ const std::string NOT_PREEMPTIBLE = "NotPreemptible";
 const std::string FAAS_FRONTEND_FUNCTION_NAME_PREFIX = "0/0-system-faasfrontend/";
 const std::string CREATE_SOURCE = "source";
 const std::string FRONTEND_STR = "frontend";
+// create_error_policy createOption key. Frontend sets it on /api/agent create to opt
+// into the "surface the last deploy failure on ready timeout" policy.
+const std::string CREATE_ERROR_POLICY_KEY = "create_error_policy";
+// Policy value: on ready-ticket timeout, the timeout closure looks up the last deploy
+// failure snapshot (instead of a generic timeout string) and the ready-wait unregister
+// cancels any in-flight schedule/retry via KillFrontend.
+const std::string CREATE_ERROR_POLICY_LAST_FAILURE = "last_failure_on_timeout";
 const std::string RUNTIME_UUID_PREFIX = "runtime-";
 const std::string APP_ENTRYPOINT = "ENTRYPOINT";
 const std::string RUNTIME_ENTRYPOINT = "RUNTIME_ENTRYPOINT";
@@ -470,6 +477,20 @@ static void SetInstanceInfoScheduleOptions(::resources::InstanceInfo *instanceIn
 
     const auto &extension = createReq.schedulingops().extension();
     *(scheduleOpt->mutable_extension()) = extension;
+    // Reusable Snapshot coordination fields are an internal trust boundary.
+    // Public Create callers may only supply CreateRequest.snapshotID; never
+    // accept serialized trusted restore metadata through scheduling options.
+    constexpr char REUSABLE_SNAPSHOT_INTERNAL_PREFIX[] =
+        "yr.internal.reusable_snapshot.";
+    for (auto it = scheduleOpt->mutable_extension()->begin();
+         it != scheduleOpt->mutable_extension()->end();) {
+        const auto key = it->first;
+        ++it;
+        if (key.compare(0, sizeof(REUSABLE_SNAPSHOT_INTERNAL_PREFIX) - 1,
+                        REUSABLE_SNAPSHOT_INTERNAL_PREFIX) == 0) {
+            scheduleOpt->mutable_extension()->erase(key);
+        }
+    }
 
     // policy name
     if (auto iter(extension.find(SCHEDULE_POLICY)); iter != extension.end()) {
@@ -882,6 +903,15 @@ static int GetRuntimeRecoverTimes(const resources::InstanceInfo &instanceInfo)
     return info.extensions().at(CREATE_SOURCE) == FRONTEND_STR;
 }
 
+// True when createOptions opts into the "surface last deploy failure on ready timeout"
+// policy. The map is InstanceInfo::createoptions() (protobuf map<string,string>).
+[[maybe_unused]] static bool IsLastFailureOnTimeoutPolicy(
+    const google::protobuf::Map<std::string, std::string> &createOptions)
+{
+    auto it = createOptions.find(CREATE_ERROR_POLICY_KEY);
+    return it != createOptions.end() && it->second == CREATE_ERROR_POLICY_LAST_FAILURE;
+}
+
 [[maybe_unused]] static bool IsDriver(const InstanceInfo &info)
 {
     if (info.instanceid().find("driver") != std::string::npos) {
@@ -978,6 +1008,10 @@ static void SetInstanceInfo(::resources::InstanceInfo *instanceInfo, CreateReque
     auto instanceInfo = scheduleReq->mutable_instance();
     SetInstanceInfo(instanceInfo, createReq, callRequest, parentID);
     SetAffinityOpt(*instanceInfo, createReq, scheduleReq);
+    if (!createReq.snapshotid().empty()) {
+        (*instanceInfo->mutable_scheduleoption()->mutable_extension())
+            ["yr.internal.reusable_snapshot.requested_id"] = createReq.snapshotid();
+    }
     // Set Instance reliability
     instanceInfo->set_lowreliability(IsLowReliabilityInstance(*instanceInfo));
     auto now = std::chrono::high_resolution_clock::now();

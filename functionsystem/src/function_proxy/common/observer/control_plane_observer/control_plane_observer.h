@@ -119,6 +119,9 @@ public:
 
     virtual litebus::Future<Status> DelInstanceEvent(const std::string &instanceID, int64_t modRevision);
 
+    virtual litebus::Future<Status> SetLocalPauseTrafficGate(const resources::InstanceInfo &identity, uint64_t token,
+                                                             bool gated);
+
     virtual void WatchInstance(const std::string &instanceID, int64_t revision = 0);
 
     virtual litebus::Future<bool> IsInstanceWatched(const std::string &instanceID);

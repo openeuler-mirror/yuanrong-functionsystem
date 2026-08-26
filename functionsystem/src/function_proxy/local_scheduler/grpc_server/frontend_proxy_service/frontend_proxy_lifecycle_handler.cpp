@@ -16,7 +16,6 @@
 
 #include "frontend_proxy_lifecycle_handler.h"
 
-#include <cstddef>
 #include <utility>
 
 #include "common/logs/logging.h"
@@ -26,8 +25,11 @@ namespace functionsystem::local_scheduler {
 namespace {
 constexpr const char *FRONTEND_SYSTEM_CREATE_CALLER = "";
 constexpr const char *FRONTEND_SYSTEM_KILL_CALLER = "";
-constexpr size_t IPV6_BRACKET_OFFSET = 1;
-constexpr size_t IPV6_BRACKET_PAIR_SIZE = 2;
+// Reason recorded when unregistering a frontend ready ticket on timeout.
+constexpr const char *FRONTEND_CREATE_READY_UNREGISTER_REASON = "frontend create ready call result timed out";
+// Generic message attached to the timeout CallResult when no deploy-failure
+// snapshot is available.
+constexpr const char *FRONTEND_CREATE_READY_TIMEOUT_MSG = "frontend proxy create ready call result timed out";
 
 ::frontend_proxy::CreateInstanceResponse BuildCreateResponse(common::ErrorCode code, const std::string &message)
 {
@@ -95,6 +97,47 @@ std::shared_ptr<messages::ScheduleRequest> BuildFrontendScheduleRequest(
     (*scheduleReq->mutable_instance()->mutable_extensions())[CREATE_SOURCE] = FRONTEND_STR;
     return scheduleReq;
 }
+
+// Builds the CallResult emitted when the frontend ready ticket times out. It
+// first consults the last deploy-failure snapshot (if a lookup is wired) so the
+// real supervisor error surfaces instead of the generic timeout string, then
+// unregisters the ticket. Snapshot lookup must run before unregister because
+// UnregisterFrontendReadyWait erases the snapshot. The lookup runs on the
+// InstanceCtrl actor strand; unregister and result building run on that
+// strand's completion, so the snapshot continuation is chained asynchronously.
+litebus::Future<std::shared_ptr<functionsystem::CallResult>> BuildFrontendCreateReadyTimeoutResult(
+    const FrontendCreateFailureLookup &createFailureLookup, const FrontendProxyReadyUnregister &readyUnregister,
+    const std::string &requestID)
+{
+    if (createFailureLookup) {
+        return createFailureLookup(requestID).Then(
+            [requestID, readyUnregister](const FrontendCreateFailureSnapshot &snapshot)
+                -> std::shared_ptr<functionsystem::CallResult> {
+                if (readyUnregister) {
+                    readyUnregister(requestID, FRONTEND_CREATE_READY_UNREGISTER_REASON);
+                }
+                auto result = std::make_shared<functionsystem::CallResult>();
+                result->set_requestid(requestID);
+                if (snapshot.present) {
+                    result->set_code(static_cast<common::ErrorCode>(snapshot.code));
+                    result->set_message(snapshot.message);
+                    result->set_instanceid(snapshot.instanceID);
+                } else {
+                    result->set_code(common::ERR_INNER_SYSTEM_ERROR);
+                    result->set_message(FRONTEND_CREATE_READY_TIMEOUT_MSG);
+                }
+                return result;
+            });
+    }
+    if (readyUnregister) {
+        readyUnregister(requestID, FRONTEND_CREATE_READY_UNREGISTER_REASON);
+    }
+    auto result = std::make_shared<functionsystem::CallResult>();
+    result->set_requestid(requestID);
+    result->set_code(common::ERR_INNER_SYSTEM_ERROR);
+    result->set_message(FRONTEND_CREATE_READY_TIMEOUT_MSG);
+    return result;
+}
 }
 
 std::string ComponentGrpcEndpoint::Address() const
@@ -116,9 +159,10 @@ ComponentGrpcEndpoint ResolveComponentGrpcEndpoint(const std::string &proxyAddre
 
 FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDispatcher(
     const FrontendProxyCreateReadyScheduler &scheduler, const FrontendProxyReadyUnregister &readyUnregister,
-    uint64_t readyTimeoutMs)
+    uint64_t readyTimeoutMs, const FrontendCreateFailureLookup &createFailureLookup)
 {
-    return [scheduler, readyUnregister, readyTimeoutMs](const ::frontend_proxy::CreateInstanceRequest &request) {
+    return [scheduler, readyUnregister, readyTimeoutMs,
+            createFailureLookup](const ::frontend_proxy::CreateInstanceRequest &request) {
         if (!scheduler) {
             return litebus::Future<::frontend_proxy::CreateInstanceResponse>(BuildCreateResponse(
                 common::ERR_INNER_SYSTEM_ERROR, "frontend proxy create scheduler is not configured"));
@@ -127,19 +171,13 @@ FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDi
         auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
         auto readyPromise = std::make_shared<litebus::Promise<std::shared_ptr<functionsystem::CallResult>>>();
         auto readyFuture =
-            readyPromise->GetFuture().After(
-                readyTimeoutMs,
-                [scheduleReq, readyUnregister](const litebus::Future<std::shared_ptr<functionsystem::CallResult>> &)
-                    -> litebus::Future<std::shared_ptr<functionsystem::CallResult>> {
-                    if (readyUnregister) {
-                        readyUnregister(scheduleReq->requestid(), "frontend create ready call result timed out");
-                    }
-                    auto result = std::make_shared<functionsystem::CallResult>();
-                    result->set_requestid(scheduleReq->requestid());
-                    result->set_code(common::ERR_INNER_SYSTEM_ERROR);
-                    result->set_message("frontend proxy create ready call result timed out");
-                    return result;
-                });
+            readyPromise->GetFuture().After(readyTimeoutMs,
+                                            [scheduleReq, readyUnregister, createFailureLookup](
+                                                const litebus::Future<std::shared_ptr<functionsystem::CallResult>> &)
+                                                -> litebus::Future<std::shared_ptr<functionsystem::CallResult>> {
+                                                return BuildFrontendCreateReadyTimeoutResult(
+                                                    createFailureLookup, readyUnregister, scheduleReq->requestid());
+                                            });
         YRLOG_INFO("{}|frontend system create function({}) from frontendClientID({}), tenantID({})",
                    scheduleReq->requestid(), scheduleReq->instance().function(), request.context().frontendclientid(),
                    request.context().tenantid());
@@ -202,7 +240,8 @@ FrontendProxyServiceParam BuildFrontendProxyServiceParam(const std::string &node
     param.enableCreateDispatch = bindings.enableCreateDispatch;
     if (bindings.enableCreateDispatch) {
         param.createReadyDispatcher =
-            BuildFrontendProxyCreateReadyDispatcher(bindings.scheduler, bindings.readyUnregister);
+            BuildFrontendProxyCreateReadyDispatcher(bindings.scheduler, bindings.readyUnregister,
+                                                    FRONTEND_CREATE_READY_TIMEOUT_MS, bindings.createFailureLookup);
         param.createWaitCanceller = bindings.readyUnregister;
     }
     param.enableKillDispatch = bindings.enableKillDispatch;
@@ -217,7 +256,7 @@ FrontendProxyServiceParam BuildFrontendProxyServiceParam(const std::string &node
                                                          const FrontendProxyKillInvoker &killInvoker)
 {
     return BuildFrontendProxyServiceParam(
-        nodeID, { false, nullptr, nullptr, enableKillDispatch, killInvoker, nullptr });
+        nodeID, { false, nullptr, nullptr, nullptr, enableKillDispatch, killInvoker, nullptr });
 }
 
 }  // namespace functionsystem::local_scheduler

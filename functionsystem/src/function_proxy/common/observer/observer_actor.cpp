@@ -883,6 +883,15 @@ litebus::Future<Status> ObserverActor::SubscribeInstanceEvent(const std::string 
     return instanceView_->SubscribeInstanceEvent(subscriber, targetInstance, ignoreNonExist);
 }
 
+litebus::Future<Status> ObserverActor::SetLocalPauseTrafficGate(const resources::InstanceInfo &identity,
+                                                               uint64_t token, bool gated)
+{
+    if (instanceView_ == nullptr) {
+        return Status(StatusCode::ERR_INSTANCE_NOT_FOUND, "local instance view not found");
+    }
+    return instanceView_->SetLocalPauseTrafficGate(identity, token, gated);
+}
+
 litebus::Future<Status> ObserverActor::TrySubscribeInstanceEvent(const std::string &subscriber,
                                                                  const std::string &targetInstance, bool ignoreNonExist)
 {
@@ -1473,13 +1482,46 @@ litebus::Future<resource_view::InstanceInfo> ObserverActor::GetAndWatchInstance(
     return promise.GetFuture();
 }
 
+litebus::Future<resource_view::InstanceInfo> ObserverActor::GetAuthoritativePausedInstance(
+    const resource_view::InstanceInfo &controlRoute)
+{
+    auto key = GenInstanceKey(controlRoute.function(), controlRoute.instanceid(), controlRoute.requestid());
+    if (key.IsNone()) {
+        return litebus::Future<resource_view::InstanceInfo>(litebus::Status(
+            static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID)));
+    }
+    return metaStorageAccessor_->GetMetaClient()
+        ->Get(key.Get(), {})
+        .Then(litebus::Defer(GetAID(), &ObserverActor::OnGetInstancesFromMetaStore,
+                             std::placeholders::_1))
+        .Then([instanceID(controlRoute.instanceid())](const litebus::Future<InstanceInfoMap> &future)
+                  -> litebus::Future<resource_view::InstanceInfo> {
+            if (future.IsError()) {
+                return litebus::Future<resource_view::InstanceInfo>(
+                    litebus::Status(future.GetErrorCode()));
+            }
+            const auto &instances = future.Get();
+            auto authoritative = instances.find(instanceID);
+            if (authoritative == instances.end()) {
+                return litebus::Future<resource_view::InstanceInfo>(litebus::Status(
+                    static_cast<int32_t>(StatusCode::ERR_INSTANCE_NOT_FOUND)));
+            }
+            return authoritative->second;
+        });
+}
+
 litebus::Future<resource_view::InstanceInfo> ObserverActor::GetOrWatchInstance(const std::string &instanceID)
 {
     // if instance existed, either instance have been watched, or instance is managed by this proxy(will be watched)
     // skip watch
-    if (instanceInfoMap_.find(instanceID) != instanceInfoMap_.end()) {
+    if (auto iter = instanceInfoMap_.find(instanceID); iter != instanceInfoMap_.end()) {
+        const auto &cached = iter->second;
+        if (cached.instancestatus().code() == static_cast<int32_t>(InstanceState::PAUSED)
+            && cached.functionproxyid() == INSTANCE_MANAGER_OWNER) {
+            return GetAuthoritativePausedInstance(cached);
+        }
         YRLOG_DEBUG("find existed instance({})", instanceID);
-        return instanceInfoMap_[instanceID];
+        return cached;
     }
 
     // when partial watch isn't enabled, return fail directly
@@ -1489,6 +1531,19 @@ litebus::Future<resource_view::InstanceInfo> ObserverActor::GetOrWatchInstance(c
 
     litebus::Promise<resource_view::InstanceInfo> promise;
     GetInstanceRouteInfo(instanceID)
+        .Then([this](const litebus::Future<resource_view::InstanceInfo> &future)
+                  -> litebus::Future<resource_view::InstanceInfo> {
+            if (future.IsError()) {
+                return litebus::Future<resource_view::InstanceInfo>(
+                    litebus::Status(future.GetErrorCode()));
+            }
+            const auto &controlRoute = future.Get();
+            if (controlRoute.instancestatus().code() == static_cast<int32_t>(InstanceState::PAUSED)
+                && controlRoute.functionproxyid() == INSTANCE_MANAGER_OWNER) {
+                return GetAuthoritativePausedInstance(controlRoute);
+            }
+            return controlRoute;
+        })
         .OnComplete([instanceID, aid(GetAID()), promise](const litebus::Future<resource_view::InstanceInfo> &future) {
             if (future.IsError()) {
                 promise.SetFailed(future.GetErrorCode());

@@ -382,10 +382,12 @@ std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> SandboxdRequestBui
 {
     auto start = std::make_shared<runtime::v1::StartRequest>();
 
-    // sandbox_id is intentionally left empty: per the sandboxd SandboxService
-    // contract, sandboxd generates the sandbox ID and returns it in
-    // StartResponse.id; the executor stores that via UpdateSandboxID(runtimeID).
-    // Passing the client runtimeID here would conflate the two identities.
+    // Ordinary starts let sandboxd generate the physical identity. Trusted
+    // resume supplies a deterministic sbox-* identity so replay and uncertain
+    // results can query the exact physical fact.
+    if (!params.sandboxID.empty()) {
+        start->set_sandbox_id(params.sandboxID);
+    }
 
     // Attach tenant ID as a metric label for sandboxd observability.
     // tenant_id is passed via runtimeconfig.posixenvs as YR_TENANT_ID.

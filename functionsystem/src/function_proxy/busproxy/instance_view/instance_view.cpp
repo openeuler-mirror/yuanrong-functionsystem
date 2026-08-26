@@ -36,6 +36,7 @@ const std::map<InstanceState, IsReady> STATUS_READY = {
     { InstanceState::FAILED, false },
     { InstanceState::EXITING, false },
     { InstanceState::FATAL, false },
+    { InstanceState::PAUSED, false },
     // rely on reject tag
     // while instance change suspend to creating, need to keep request in flight
     { InstanceState::SUSPEND, true },
@@ -76,8 +77,15 @@ std::shared_ptr<InstanceRouterInfo> TransferInstanceInfo(const resources::Instan
     auto info = std::make_shared<InstanceRouterInfo>();
     info->isReady = IsReadyStatus((InstanceState)instanceInfo.instancestatus().code());
     info->isLocal = instanceInfo.functionproxyid() == currentNode;
+    info->version = instanceInfo.version();
+    info->state = static_cast<InstanceState>(instanceInfo.instancestatus().code());
+    info->requestID = instanceInfo.requestid();
     info->runtimeID = instanceInfo.runtimeid();
     info->proxyID = instanceInfo.functionproxyid();
+    info->functionAgentID = instanceInfo.functionagentid();
+    info->containerID = instanceInfo.containerid();
+    info->unitID = instanceInfo.unitid();
+    info->runtimeAddress = instanceInfo.runtimeaddress();
     info->proxyGrpcAddress = instanceInfo.proxygrpcaddress();
     info->tenantID = instanceInfo.tenantid();
     info->function = instanceInfo.function();
@@ -109,6 +117,8 @@ InstanceView::InstanceView(const std::string &nodeID) : nodeID_(nodeID)
         { InstanceState::SUB_HEALTH,
           std::bind(&InstanceView::Reject, this, std::placeholders::_1, std::placeholders::_2) },
         { InstanceState::SUSPEND,
+          std::bind(&InstanceView::Reject, this, std::placeholders::_1, std::placeholders::_2) },
+        { InstanceState::PAUSED,
           std::bind(&InstanceView::Reject, this, std::placeholders::_1, std::placeholders::_2) },
     };
 }
@@ -261,6 +271,13 @@ void InstanceView::Creating(const std::string &instanceID, const resources::Inst
 void InstanceView::Running(const std::string &instanceID, const resources::InstanceInfo &instanceInfo)
 {
     SpawnInstanceProxy(instanceID, instanceInfo);
+    if (instanceInfo.functionproxyid() == nodeID_) {
+        auto iter = localInstances_.find(instanceID);
+        if (iter != localInstances_.end()) {
+            auto routeInfo = TransferInstanceInfo(instanceInfo, nodeID_);
+            (void)litebus::Async(iter->second->GetAID(), &InstanceProxy::NotifyChanged, instanceID, routeInfo);
+        }
+    }
     NotifyReady(instanceID, instanceInfo);
 }
 
@@ -450,13 +467,17 @@ void InstanceView::Reject(const std::string &instanceID, const resources::Instan
 {
     // while proxy restart, the instance prosy may not be spawned
     SpawnInstanceProxy(instanceID, instanceInfo);
-    auto errCode = instanceInfo.instancestatus().errcode();
+    auto errCode = static_cast<StatusCode>(instanceInfo.instancestatus().errcode());
     auto msg = instanceInfo.instancestatus().msg();
+    if (instanceInfo.instancestatus().code() == static_cast<int32_t>(InstanceState::PAUSED)) {
+        errCode = StatusCode::ERR_INSTANCE_SUSPEND;
+        msg = "instance is paused";
+    }
     // only instance in local would reject request
     if (auto iter(localInstances_.find(instanceID)); iter != localInstances_.end()) {
         YRLOG_INFO("instance({}) is set to reject request, errcode({}), msg({})", instanceID, errCode, msg);
         litebus::Async(iter->second->GetAID(), &InstanceProxy::Reject, instanceID, msg,
-                       static_cast<StatusCode>(errCode));
+                       errCode);
     }
     // notify remote subscribers to update route info and set reject state
     const auto &functionProxyID = instanceInfo.functionproxyid();
@@ -473,8 +494,33 @@ void InstanceView::Reject(const std::string &instanceID, const resources::Instan
         }
         NotifyChanged(instanceProxy->GetAID(), instanceID, functionProxyID, routeInfo);
         litebus::Async(instanceProxy->GetAID(), &InstanceProxy::Reject, instanceID, msg,
-                       static_cast<StatusCode>(errCode));
+                       errCode);
     }
+}
+
+litebus::Future<Status> InstanceView::SetLocalPauseTrafficGate(const resources::InstanceInfo &identity,
+                                                               uint64_t token, bool gated)
+{
+    const auto &instanceID = identity.instanceid();
+    auto iter = localInstances_.find(instanceID);
+    if (iter == localInstances_.end() || iter->second == nullptr) {
+        return Status(StatusCode::ERR_INSTANCE_NOT_FOUND, "local instance not found");
+    }
+    auto current = allInstances_.find(instanceID);
+    if (current == allInstances_.end() || current->second.instanceid() != identity.instanceid()
+        || current->second.requestid() != identity.requestid()
+        || current->second.version() != identity.version()
+        || current->second.functionproxyid() != identity.functionproxyid()
+        || current->second.runtimeid() != identity.runtimeid()
+        || current->second.functionagentid() != identity.functionagentid()
+        || current->second.containerid() != identity.containerid()
+        || current->second.unitid() != identity.unitid()
+        || current->second.tenantid() != identity.tenantid()
+        || current->second.runtimeaddress() != identity.runtimeaddress()
+        || current->second.instancestatus().code() != identity.instancestatus().code()) {
+        return Status(StatusCode::ERR_INSTANCE_INFO_INVALID, "local instance identity changed");
+    }
+    return litebus::Async(iter->second->GetAID(), &InstanceProxy::SetPauseTrafficGated, identity, token, gated);
 }
 
 }  // namespace functionsystem::busproxy

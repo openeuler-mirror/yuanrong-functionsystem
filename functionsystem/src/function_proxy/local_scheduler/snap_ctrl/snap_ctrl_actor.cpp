@@ -17,6 +17,7 @@
 #include "snap_ctrl_actor.h"
 
 #include <chrono>
+#include <exception>
 #include <nlohmann/json.hpp>
 
 #include "async/async.hpp"
@@ -32,15 +33,49 @@
 
 namespace functionsystem::local_scheduler {
 
-SnapCtrlActor::SnapCtrlActor(const std::string &name, const std::string &nodeID)
-    : BasisActor(name), nodeID_(nodeID)
+namespace {
+constexpr int32_t DEFAULT_PAUSE_TTL_SECONDS = 90'000;
+constexpr uint32_t SNAPSHOT_ATTEMPT_PROTOCOL_VERSION = 1;
+
+std::string BuildReusableSnapshotFingerprint(
+    const resources::InstanceInfo &instanceInfo, const core_service::SnapOptions &options)
+{
+    const auto identity = instanceInfo.tenantid() + std::string(1, '\0')
+        + instanceInfo.instanceid() + std::string(1, '\0') + options.name();
+    return resume_identity::Sha256Hex(identity);
+}
+}
+
+SnapCtrlActor::SnapCtrlActor(const std::string &name, const std::string &nodeID,
+                             PauseRetryPolicy pauseRetryPolicy)
+    : BasisActor(name), nodeID_(nodeID), pauseRetryPolicy_(pauseRetryPolicy)
 {
 }
 
 void SnapCtrlActor::Init()
 {
     BasisActor::Init();
+    snapshotWorker_ = std::make_shared<ActorWorker>();
     YRLOG_INFO("SnapCtrlActor initialized on node: {}", nodeID_);
+}
+
+void SnapCtrlActor::Finalize()
+{
+    KillResponse response;
+    response.set_code(common::ERR_INNER_COMMUNICATION);
+    response.set_message("snapshot control actor shut down while operation was pending");
+    for (auto &[instanceID, lifecycle] : instanceLifecycles_) {
+        (void)instanceID;
+        if (lifecycle.pauseContext != nullptr) {
+            lifecycle.pauseContext->completion->SetValue(response);
+        }
+        if (lifecycle.deletePreparation != nullptr) {
+            lifecycle.deletePreparation->SetFailed(
+                static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        }
+    }
+    instanceLifecycles_.clear();
+    snapshotWorker_.reset();
 }
 
 static litebus::Future<SnapshotResult> RecordSnapshotMetadata(const std::shared_ptr<LocalSchedSrv> &localSchedSrv,
@@ -91,11 +126,11 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
                                                             const std::string &payload)
 {
     // 1. 解析 payload 获取参数（core_service::SnapOptions）
+    SnapOptions options;
     bool leaveRunning = false;
     int32_t ttl = 0;  // Default TTL is 0 (no expiration)
     std::string functionType;
     if (!payload.empty()) {
-        SnapOptions options;
         if (!options.ParseFromString(payload)) {
             YRLOG_ERROR("{}|{}|failed to parse snapshot payload", requestID, instanceID);
             KillResponse errorRsp;
@@ -107,6 +142,14 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
         ttl = options.ttl();  // Extract TTL from SnapOptions
         functionType = options.functiontype();
     }
+    if (options.type() == common::SnapType::PAUSE_RESUME
+        && (instanceControlView_ == nullptr || instanceCtrl_ == nullptr || clientManager_ == nullptr
+            || functionAgentMgr_ == nullptr)) {
+        KillResponse errorRsp;
+        errorRsp.set_code(common::ERR_INNER_SYSTEM_ERROR);
+        errorRsp.set_message("pause dependencies are unavailable");
+        return errorRsp;
+    }
     // 1. 获取实例状态机
     ASSERT_IF_NULL(instanceControlView_);
     auto stateMachine = instanceControlView_->GetInstance(instanceID);
@@ -117,8 +160,15 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
         errorRsp.set_message("instance not found");
         return errorRsp;
     }
-    YRLOG_INFO("{}|{}|start snapshot, leave_running: {}", requestID, instanceID, leaveRunning);
+    if (options.type() == common::SnapType::PAUSE_RESUME) {
+        const auto effectiveTTL = ttl > 0 ? ttl : DEFAULT_PAUSE_TTL_SECONDS;
+        return HandlePauseResumeSnapshot(requestID, instanceID, stateMachine, effectiveTTL);
+    }
     auto instanceInfo = stateMachine->GetInstanceInfo();
+    if (options.type() == common::SnapType::SNAPSHOT) {
+        return HandleReusableSnapshot(requestID, instanceID, instanceInfo, options);
+    }
+    YRLOG_INFO("{}|{}|start snapshot, leave_running: {}", requestID, instanceID, leaveRunning);
     ASSERT_IF_NULL(functionAgentMgr_);
     // 2. 调用 PrepareSnap 验证实例状态并准备快照
     return PrepareSnap(requestID, instanceID)
@@ -163,6 +213,381 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
         .Then(litebus::Defer(GetAID(), &SnapCtrlActor::OnHandleSnapshot, std::placeholders::_1));
 }
 
+litebus::Future<KillResponse> SnapCtrlActor::HandleReusableSnapshot(
+    const std::string &requestID, const std::string &instanceID,
+    const resources::InstanceInfo &instanceInfo, const SnapOptions &options)
+{
+    auto context = std::make_shared<ReusableSnapshotContext>();
+    context->requestID = requestID;
+    context->instanceID = instanceID;
+    context->name = options.name();
+    context->sourceInstanceInfo = instanceInfo;
+    context->requestFingerprint = BuildReusableSnapshotFingerprint(instanceInfo, options);
+    context->completion = std::make_shared<litebus::Promise<KillResponse>>();
+
+    if (requestID.empty() || instanceID.empty() || instanceInfo.tenantid().empty()
+        || instanceInfo.runtimeid().empty() || instanceInfo.functionagentid().empty()
+        || instanceInfo.version() == 0 || localSchedSrv_ == nullptr
+        || functionAgentMgr_ == nullptr || clientManager_ == nullptr) {
+        CompleteReusableSnapshotRequest(
+            context, BuildReusableSnapshotResponse(
+                         common::ERR_INNER_SYSTEM_ERROR,
+                         "reusable snapshot source identity or dependency is unavailable"));
+        return context->completion->GetFuture();
+    }
+
+    if (reusableSnapshotTunnelGateAcquire_ != nullptr) {
+        if (!reusableSnapshotTunnelGateAcquire_(instanceID)) {
+            CompleteReusableSnapshotRequest(
+                context, BuildReusableSnapshotResponse(
+                             common::ERR_INNER_SYSTEM_ERROR,
+                             "reusable snapshot is not allowed while a reverse tunnel is active"));
+            return context->completion->GetFuture();
+        }
+        context->tunnelGateHeld = true;
+    }
+
+    auto request = std::make_shared<::messages::BeginReusableSnapshotRequest>();
+    request->set_requestid(requestID);
+    request->set_tenantid(instanceInfo.tenantid());
+    request->set_sourceinstanceid(instanceID);
+    if (!options.name().empty()) {
+        request->add_names(options.name());
+    }
+    request->set_requestfingerprint(context->requestFingerprint);
+    localSchedSrv_->BeginReusableSnapshot(request).OnComplete(
+        litebus::Defer(GetAID(), &SnapCtrlActor::OnReusableSnapshotBegun,
+                       context, std::placeholders::_1));
+    return context->completion->GetFuture();
+}
+
+void SnapCtrlActor::OnReusableSnapshotBegun(
+    const std::shared_ptr<ReusableSnapshotContext> &context,
+    const litebus::Future<::messages::BeginReusableSnapshotResponse> &future)
+{
+    if (future.IsError()) {
+        CompleteReusableSnapshotRequest(
+            context, BuildReusableSnapshotResponse(
+                         common::ERR_INNER_COMMUNICATION,
+                         "reusable snapshot Begin request failed"));
+        return;
+    }
+    const auto &response = future.Get();
+    if (response.code() != common::ERR_NONE) {
+        CompleteReusableSnapshotRequest(
+            context, BuildReusableSnapshotResponse(
+                         static_cast<common::ErrorCode>(response.code()), response.message()));
+        return;
+    }
+    if (response.snapshotid().empty()) {
+        CompleteReusableSnapshotRequest(
+            context, BuildReusableSnapshotResponse(
+                         common::ERR_INNER_SYSTEM_ERROR,
+                         "reusable snapshot Begin response omitted snapshot ID"));
+        return;
+    }
+    context->snapshotID = response.snapshotid();
+    if (response.has_snapshotinfo()) {
+        context->publicInfo = response.snapshotinfo();
+    }
+    if (context->publicInfo.snapshotid().empty()) {
+        context->publicInfo.set_snapshotid(context->snapshotID);
+        if (!context->name.empty()) {
+            context->publicInfo.add_names(context->name);
+        }
+    }
+
+    if (response.phase() == ::messages::REUSABLE_SNAPSHOT_READY) {
+        auto request = std::make_shared<::messages::ResolveReusableSnapshotForCreateRequest>();
+        request->set_requestid(context->requestID);
+        request->set_tenantid(context->sourceInstanceInfo.tenantid());
+        request->set_snapshotid(context->snapshotID);
+        localSchedSrv_->ResolveReusableSnapshotForCreate(request).OnComplete(
+            litebus::Defer(GetAID(), &SnapCtrlActor::OnReusableSnapshotResolvedForCleanup,
+                           context, std::placeholders::_1));
+        return;
+    }
+    if (response.phase() != ::messages::REUSABLE_SNAPSHOT_PUBLISHING) {
+        CompleteReusableSnapshotRequest(
+            context, BuildReusableSnapshotResponse(
+                         common::ERR_INNER_SYSTEM_ERROR,
+                         "reusable snapshot Begin returned an invalid phase"));
+        return;
+    }
+
+    PrepareSnap(context->requestID, context->instanceID).OnComplete(
+        litebus::Defer(GetAID(), &SnapCtrlActor::OnReusableSnapshotPrepared,
+                       context, std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnReusableSnapshotResolvedForCleanup(
+    const std::shared_ptr<ReusableSnapshotContext> &context,
+    const litebus::Future<::messages::ResolveReusableSnapshotForCreateResponse> &future)
+{
+    if (future.IsError()) {
+        CompleteReusableSnapshotRequest(
+            context, BuildReusableSnapshotResponse(
+                         common::ERR_INNER_COMMUNICATION,
+                         "reusable snapshot READY cleanup resolution failed"));
+        return;
+    }
+    const auto &response = future.Get();
+    if (response.code() != common::ERR_NONE
+        || !response.has_reusablesnapshotrestore()
+        || !response.reusablesnapshotrestore().has_artifact()) {
+        CompleteReusableSnapshotRequest(
+            context, BuildReusableSnapshotResponse(
+                         response.code() == common::ERR_NONE ? common::ERR_INNER_SYSTEM_ERROR
+                                                             : static_cast<common::ErrorCode>(response.code()),
+                         response.message().empty()
+                             ? "reusable snapshot READY record omitted artifact"
+                             : response.message()));
+        return;
+    }
+    context->artifact = response.reusablesnapshotrestore().artifact();
+    FinalizeReusableSnapshot(context, ::messages::REUSABLE_SNAPSHOT_COMMITTED,
+                             common::ERR_NONE, "");
+}
+
+void SnapCtrlActor::OnReusableSnapshotPrepared(
+    const std::shared_ptr<ReusableSnapshotContext> &context,
+    const litebus::Future<Status> &future)
+{
+    if (future.IsError() || future.Get().IsError()) {
+        const auto message = future.IsError() ? "reusable snapshot PrepareSnap future failed"
+                                              : future.Get().RawMessage();
+        FailReusableSnapshot(context, common::ERR_INNER_COMMUNICATION, message);
+        return;
+    }
+    functionAgentMgr_->SnapshotRuntime(
+        context->requestID, context->sourceInstanceInfo, 0, common::SNAPSHOT,
+        context->snapshotID, {}).OnComplete(
+            litebus::Defer(GetAID(), &SnapCtrlActor::OnReusableSnapshotCheckpointed,
+                           context, std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnReusableSnapshotCheckpointed(
+    const std::shared_ptr<ReusableSnapshotContext> &context,
+    const litebus::Future<::messages::SnapshotRuntimeResponse> &future)
+{
+    if (future.IsError()) {
+        // The Agent may have checkpointed or published successfully before
+        // its reply was lost. Without exact artifact facts, neither local nor
+        // remote deletion is safe. Keep PUBLISHING for deterministic replay.
+        CompleteReusableSnapshotRequest(
+            context, BuildReusableSnapshotResponse(
+                         common::ERR_INNER_COMMUNICATION,
+                         "reusable snapshot Agent result is unknown"));
+        return;
+    }
+    const auto &response = future.Get();
+    if (response.code() != common::ERR_NONE) {
+        if (response.has_reusablesnapshotartifact()
+            && !response.reusablesnapshotartifact().storagebackend().empty()
+            && !response.reusablesnapshotartifact().objectkey().empty()
+            && response.reusablesnapshotartifact().size() > 0
+            && !response.reusablesnapshotartifact().sha256().empty()) {
+            context->artifact = response.reusablesnapshotartifact();
+            FinalizeReusableSnapshot(context, ::messages::REUSABLE_SNAPSHOT_ABORTED,
+                                     static_cast<common::ErrorCode>(response.code()),
+                                     response.message());
+            return;
+        }
+        // The publisher did not return an exact physical identity. Keep the
+        // Master record in PUBLISHING so an idempotent replay can re-inspect
+        // the deterministic checkpoint. Removing the record here would
+        // orphan local/remote data that cannot be deleted safely.
+        CompleteReusableSnapshotRequest(
+            context, BuildReusableSnapshotResponse(
+                         static_cast<common::ErrorCode>(response.code()),
+                         response.message().empty()
+                             ? "reusable snapshot publish failed without exact cleanup identity"
+                             : response.message()));
+        return;
+    }
+    if (!response.has_reusablesnapshotartifact()) {
+        CompleteReusableSnapshotRequest(
+            context, BuildReusableSnapshotResponse(
+                         common::ERR_INNER_SYSTEM_ERROR,
+                         "reusable snapshot Agent response omitted frozen artifact; publishing preserved"));
+        return;
+    }
+    context->artifact = response.reusablesnapshotartifact();
+    auto request = std::make_shared<::messages::CommitReusableSnapshotRequest>();
+    request->set_requestid(context->requestID);
+    request->set_tenantid(context->sourceInstanceInfo.tenantid());
+    request->set_snapshotid(context->snapshotID);
+    request->set_requestfingerprint(context->requestFingerprint);
+    *request->mutable_sourceinstanceinfo() = context->sourceInstanceInfo;
+    *request->mutable_artifact() = context->artifact;
+    localSchedSrv_->CommitReusableSnapshot(request).OnComplete(
+        litebus::Defer(GetAID(), &SnapCtrlActor::OnReusableSnapshotCommitted,
+                       context, std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnReusableSnapshotCommitted(
+    const std::shared_ptr<ReusableSnapshotContext> &context,
+    const litebus::Future<::messages::CommitReusableSnapshotResponse> &future)
+{
+    if (future.IsError()) {
+        // The Master may have committed READY even though its reply was lost.
+        // Preserve both PUBLISHING/READY coordination and the exact artifact so
+        // an idempotent replay can Resolve and finish cleanup safely.
+        CompleteReusableSnapshotRequest(
+            context, BuildReusableSnapshotResponse(
+                         common::ERR_INNER_COMMUNICATION,
+                         "reusable snapshot Commit result is unknown"));
+        return;
+    }
+    const auto &response = future.Get();
+    if (response.code() != common::ERR_NONE) {
+        FinalizeReusableSnapshot(context, ::messages::REUSABLE_SNAPSHOT_ABORTED,
+                                 static_cast<common::ErrorCode>(response.code()),
+                                 response.message());
+        return;
+    }
+    if (!response.has_snapshotinfo()
+        || response.snapshotinfo().snapshotid() != context->snapshotID) {
+        FinalizeReusableSnapshot(
+            context, ::messages::REUSABLE_SNAPSHOT_ABORTED,
+            common::ERR_INNER_SYSTEM_ERROR,
+            "reusable snapshot Commit response omitted matching public metadata");
+        return;
+    }
+    context->publicInfo = response.snapshotinfo();
+    FinalizeReusableSnapshot(context, ::messages::REUSABLE_SNAPSHOT_COMMITTED,
+                             common::ERR_NONE, "");
+}
+
+void SnapCtrlActor::FinalizeReusableSnapshot(
+    const std::shared_ptr<ReusableSnapshotContext> &context,
+    ::messages::SnapshotAttemptFinalizeOperation operation,
+    common::ErrorCode terminalCode, const std::string &terminalMessage)
+{
+    if (context->artifact.storagebackend().empty() || context->artifact.size() <= 0
+        || context->artifact.sha256().empty()) {
+        const auto message = "reusable snapshot exact cleanup artifact identity is incomplete";
+        // Keep the PUBLISHING/READY coordination record when exact cleanup
+        // cannot be proven.  Deleting it here would orphan an immutable
+        // object that this node can no longer identify safely.
+        CompleteReusableSnapshotRequest(
+            context, BuildReusableSnapshotResponse(common::ERR_INNER_SYSTEM_ERROR, message));
+        return;
+    }
+    ::messages::SnapshotAttemptFinalizeRequest request;
+    request.set_protocolversion(SNAPSHOT_ATTEMPT_PROTOCOL_VERSION);
+    request.set_operation(operation);
+    request.set_tenantid(context->sourceInstanceInfo.tenantid());
+    request.set_instanceid(context->instanceID);
+    request.set_snapshotid(context->snapshotID);
+    request.set_attemptid(context->requestID);
+    request.set_runtimeid(context->sourceInstanceInfo.runtimeid());
+    request.set_expectedsize(static_cast<uint64_t>(context->artifact.size()));
+    request.set_expectedsha256(context->artifact.sha256());
+    request.set_expectedstorage(context->artifact.storagebackend());
+    functionAgentMgr_->FinalizeSnapshotAttempt(context->sourceInstanceInfo, request).OnComplete(
+        litebus::Defer(GetAID(), &SnapCtrlActor::OnReusableSnapshotFinalized,
+                       context, operation, terminalCode, terminalMessage,
+                       std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnReusableSnapshotFinalized(
+    const std::shared_ptr<ReusableSnapshotContext> &context,
+    ::messages::SnapshotAttemptFinalizeOperation operation,
+    common::ErrorCode terminalCode, const std::string &terminalMessage,
+    const litebus::Future<::messages::SnapshotAttemptFinalizeResponse> &future)
+{
+    if (future.IsError() || future.Get().code() != static_cast<int32_t>(StatusCode::SUCCESS)
+        || future.Get().resultunknown() || !future.Get().localcleanupcomplete()
+        || !future.Get().remotecleanupcomplete()) {
+        const auto message = future.IsError()
+            ? "reusable snapshot exact cleanup request failed"
+            : (future.Get().message().empty()
+                   ? "reusable snapshot exact cleanup is incomplete"
+                   : future.Get().message());
+        CompleteReusableSnapshotRequest(
+            context, BuildReusableSnapshotResponse(common::ERR_INNER_COMMUNICATION, message));
+        return;
+    }
+    if (operation == ::messages::REUSABLE_SNAPSHOT_ABORTED) {
+        FailReusableSnapshot(context, terminalCode, terminalMessage);
+        return;
+    }
+    CompleteReusableSnapshotRequest(
+        context, BuildReusableSnapshotResponse(common::ERR_NONE, "", &context->publicInfo));
+}
+
+void SnapCtrlActor::FailReusableSnapshot(
+    const std::shared_ptr<ReusableSnapshotContext> &context,
+    common::ErrorCode code, const std::string &message)
+{
+    auto request = std::make_shared<::messages::FailReusableSnapshotRequest>();
+    request->set_requestid(context->requestID);
+    request->set_tenantid(context->sourceInstanceInfo.tenantid());
+    request->set_snapshotid(context->snapshotID);
+    request->set_requestfingerprint(context->requestFingerprint);
+    request->set_reason(message);
+    localSchedSrv_->FailReusableSnapshot(request).OnComplete(
+        litebus::Defer(GetAID(), &SnapCtrlActor::OnReusableSnapshotFailedRecord,
+                       context, code, message, std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnReusableSnapshotFailedRecord(
+    const std::shared_ptr<ReusableSnapshotContext> &context,
+    common::ErrorCode terminalCode, const std::string &terminalMessage,
+    const litebus::Future<::messages::FailReusableSnapshotResponse> &future)
+{
+    if (future.IsError() || future.Get().code() != common::ERR_NONE) {
+        const auto cleanupMessage = future.IsError()
+            ? "reusable snapshot Fail coordination request failed"
+            : future.Get().message();
+        CompleteReusableSnapshotRequest(
+            context, BuildReusableSnapshotResponse(
+                         common::ERR_INNER_COMMUNICATION,
+                         terminalMessage + "; " + cleanupMessage));
+        return;
+    }
+    CompleteReusableSnapshotRequest(
+        context, BuildReusableSnapshotResponse(terminalCode, terminalMessage));
+}
+
+KillResponse SnapCtrlActor::BuildReusableSnapshotResponse(
+    common::ErrorCode code, const std::string &message,
+    const ::core_service::SnapshotInfo *snapshotInfo) const
+{
+    KillResponse response;
+    response.set_code(code);
+    response.set_message(message);
+    if (code == common::ERR_NONE && snapshotInfo != nullptr) {
+        response.set_payload(snapshotInfo->SerializeAsString());
+    }
+    return response;
+}
+
+void SnapCtrlActor::ReleaseReusableSnapshotTunnelGate(
+    const std::shared_ptr<ReusableSnapshotContext> &context)
+{
+    if (!context->tunnelGateHeld) {
+        return;
+    }
+    context->tunnelGateHeld = false;
+    if (reusableSnapshotTunnelGateRelease_ != nullptr) {
+        reusableSnapshotTunnelGateRelease_(context->instanceID);
+    }
+}
+
+void SnapCtrlActor::CompleteReusableSnapshotRequest(
+    const std::shared_ptr<ReusableSnapshotContext> &context,
+    const KillResponse &response)
+{
+    if (context->completed) {
+        return;
+    }
+    context->completed = true;
+    ReleaseReusableSnapshotTunnelGate(context);
+    context->completion->SetValue(response);
+}
+
 KillResponse SnapCtrlActor::OnHandleSnapshot(const SnapshotResult &result)
 {
     KillResponse rsp;
@@ -179,237 +604,6 @@ KillResponse SnapCtrlActor::OnHandleSnapshot(const SnapshotResult &result)
                    result.snapshotInfo.size());
     }
     return rsp;
-}
-
-litebus::Future<KillResponse> SnapCtrlActor::HandleSnapStart(const std::string &requestID,
-                                                             const std::string &checkpointID,
-                                                             const std::string &payload)
-{
-    // 1. 验证 checkpointID
-    if (checkpointID.empty()) {
-        YRLOG_ERROR("{}|HandleSnapStart: empty checkpointID", requestID);
-        KillResponse errorRsp;
-        errorRsp.set_code(static_cast<common::ErrorCode>(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID)));
-        errorRsp.set_message("empty checkpointID");
-        return errorRsp;
-    }
-
-    // 2. 解析 SnapStartOptions payload
-    SnapStartOptions options;
-    if (!payload.empty() && !options.ParseFromString(payload)) {
-        YRLOG_ERROR("{}|failed to parse SnapStartOptions payload", requestID);
-        KillResponse errorRsp;
-        errorRsp.set_code(static_cast<common::ErrorCode>(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID)));
-        errorRsp.set_message("invalid SnapStartOptions payload");
-        return errorRsp;
-    }
-
-    YRLOG_INFO("{}|start snapstart from checkpoint: {}", requestID, checkpointID);
-
-    // 3. 构造 RestoreSnapshotRequest
-    auto req = std::make_shared<messages::RestoreSnapshotRequest>();
-    req->set_requestid(requestID);
-    req->set_checkpointid(checkpointID);
-    *req->mutable_snapstartoptions() = options;
-
-    // 4. 通过 localSchedSrv_ 转发到 function_master 的 ckpt_manager
-    ASSERT_IF_NULL(localSchedSrv_);
-    return localSchedSrv_->SnapStartCheckpoint(req).Then(
-        [requestID, checkpointID](const messages::RestoreSnapshotResponse &rsp) -> KillResponse {
-            KillResponse killRsp;
-            killRsp.set_code(static_cast<common::ErrorCode>(rsp.code()));
-            killRsp.set_message(rsp.message());
-
-            if (rsp.code() == common::ERR_NONE) {
-                YRLOG_INFO("{}|snapstart checkpoint {} succeeded, new instanceID: {}", requestID, checkpointID,
-                           rsp.instanceid());
-                SnapStartedInfo info;
-                info.set_instanceid(rsp.instanceid());
-                if (rsp.has_snapstartinfo()) {
-                    info.set_routeaddress(rsp.snapstartinfo().routeaddress());
-                    info.set_portmappings(rsp.snapstartinfo().portmappings());
-                    info.set_functionproxyid(rsp.snapstartinfo().functionproxyid());
-                    info.set_nodeid(rsp.snapstartinfo().nodeid());
-                    info.set_namespace_(rsp.snapstartinfo().namespace_());
-                }
-                killRsp.set_payload(info.SerializeAsString());
-            } else {
-                YRLOG_ERROR("{}|snapstart checkpoint {} failed: {}", requestID, checkpointID, rsp.message());
-            }
-
-            return killRsp;
-        });
-}
-
-void SnapCtrlActor::SnapStart(
-    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
-    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const schedule_decision::ScheduleResult &result,
-    const TransitionResult &transResult)
-{
-    const auto &instanceID = scheduleReq->instance().instanceid();
-    const auto &requestID = scheduleReq->requestid();
-
-    YRLOG_INFO("{}|{}|SnapStarted: start snapstart instance initialization flow", requestID, instanceID);
-
-    // todo(lwy) :Check transition result
-
-    // 1. DeployInstance - call InstanceCtrl to deploy the snapstart instance
-    ASSERT_IF_NULL(instanceCtrl_);
-    YRLOG_INFO("{}|{}|calling DeploySnapStartInstance", requestID, instanceID);
-    instanceCtrl_->DeploySnapStartInstance(scheduleReq)
-        .OnComplete(litebus::Defer(GetAID(), &SnapCtrlActor::OnDeploySnapStartInstanceComplete, scheduleResp,
-                                   scheduleReq, std::placeholders::_1));
-}
-
-void SnapCtrlActor::OnDeploySnapStartInstanceComplete(
-    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
-    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
-    const litebus::Future<messages::DeployInstanceResponse> &deployFuture)
-{
-    const auto &instanceID = scheduleReq->instance().instanceid();
-    const auto &requestID = scheduleReq->requestid();
-
-    if (deployFuture.IsError()) {
-        YRLOG_ERROR("{}|{}|DeploySnapStartInstance future failed, error code: {}", requestID, instanceID,
-                    deployFuture.GetErrorCode());
-        scheduleResp->SetValue(GenScheduleResponse(StatusCode::FAILED, "DeploySnapStartInstance failed", *scheduleReq));
-        return;
-    }
-
-    const auto &deployResponse = deployFuture.Get();
-    if (deployResponse.code() != 0) {
-        YRLOG_ERROR("{}|{}|deploy snapstart instance failed, code: {}, message: {}", requestID, instanceID,
-                    deployResponse.code(), deployResponse.message());
-        scheduleResp->SetValue(GenScheduleResponse(static_cast<StatusCode>(deployResponse.code()),
-                                                   deployResponse.message(), *scheduleReq));
-        return;
-    }
-
-    const auto &runtimeID = deployResponse.runtimeid();
-    const auto &address = deployResponse.address();
-    YRLOG_INFO("{}|{}|deploy snapstart instance succeeded, runtimeID: {}, address: {}", requestID, instanceID,
-               runtimeID, address);
-
-    // Update scheduleReq with runtime details
-    scheduleReq->mutable_instance()->set_runtimeid(runtimeID);
-    scheduleReq->mutable_instance()->set_runtimeaddress(address);
-    scheduleReq->mutable_instance()->set_starttime(deployResponse.timeinfo());
-    (*scheduleReq->mutable_instance()->mutable_extensions())["PID"] = std::to_string(deployResponse.pid());
-
-    // 2. CreateInstanceClient
-    ASSERT_IF_NULL(instanceCtrl_);
-    YRLOG_INFO("{}|{}|creating instance client", requestID, instanceID);
-    instanceCtrl_->CreateInstanceClient(instanceID, runtimeID, address)
-        .OnComplete(litebus::Defer(GetAID(), &SnapCtrlActor::OnCreateInstanceClientComplete, scheduleResp, scheduleReq,
-                                   std::placeholders::_1));
-}
-
-void SnapCtrlActor::OnCreateInstanceClientComplete(
-    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
-    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
-    const litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> &clientResult)
-{
-    const auto &instanceID = scheduleReq->instance().instanceid();
-    const auto &requestID = scheduleReq->requestid();
-    const auto &runtimeID = scheduleReq->instance().runtimeid();
-
-    if (clientResult.IsError() || clientResult.Get() == nullptr) {
-        YRLOG_ERROR("{}|{}|failed to create instance client, error code: {}", requestID, instanceID,
-                    clientResult.GetErrorCode());
-        scheduleResp->SetValue(
-            GenScheduleResponse(StatusCode::FAILED, "failed to create instance client", *scheduleReq));
-        return;
-    }
-
-    auto client = clientResult.Get();
-    YRLOG_INFO("{}|{}|instance client created successfully", requestID, instanceID);
-
-    // 3. StartHeartbeat
-    ASSERT_IF_NULL(instanceCtrl_);
-    YRLOG_INFO("{}|{}|starting heartbeat for snapstart instance", requestID, instanceID);
-    instanceCtrl_->StartHeartbeat(instanceID, 0, runtimeID, StatusCode::SUCCESS);
-
-    // 4. Call SnapStarted RPC
-    YRLOG_INFO("{}|{}|calling SnapStarted RPC on runtime", requestID, instanceID);
-    runtime::SnapStartedRequest snapStartedReq{};
-    client->SnapStarted(std::move(snapStartedReq))
-        .OnComplete(litebus::Defer(GetAID(), &SnapCtrlActor::OnSnapStartedRpcComplete, scheduleResp, scheduleReq,
-                                   std::placeholders::_1));
-}
-
-void SnapCtrlActor::OnSnapStartedRpcComplete(
-    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
-    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
-    const litebus::Future<runtime::SnapStartedResponse> &snapStartedResult)
-{
-    const auto &instanceID = scheduleReq->instance().instanceid();
-    const auto &requestID = scheduleReq->requestid();
-
-    if (snapStartedResult.IsError()) {
-        YRLOG_ERROR("{}|{}|SnapStarted RPC failed, error code: {}", requestID, instanceID,
-                    snapStartedResult.GetErrorCode());
-        scheduleResp->SetValue(GenScheduleResponse(StatusCode::FAILED, "SnapStarted RPC failed", *scheduleReq));
-        return;
-    }
-
-    auto response = snapStartedResult.Get();
-    if (response.code() != common::ERR_NONE) {
-        YRLOG_ERROR("{}|{}|SnapStarted RPC returned error: code={}, message={}", requestID, instanceID, response.code(),
-                    response.message());
-        scheduleResp->SetValue(
-            GenScheduleResponse(static_cast<StatusCode>(response.code()), response.message(), *scheduleReq));
-        return;
-    }
-
-    YRLOG_INFO("{}|{}|SnapStarted RPC succeeded", requestID, instanceID);
-
-    // 5. TransInstanceState to RUNNING
-    ASSERT_IF_NULL(instanceControlView_);
-    auto stateMachine = instanceControlView_->GetInstance(instanceID);
-    if (stateMachine == nullptr) {
-        YRLOG_ERROR("{}|{}|failed to get instance state machine", requestID, instanceID);
-        scheduleResp->SetValue(
-            GenScheduleResponse(StatusCode::ERR_INSTANCE_NOT_FOUND, "instance state machine not found", *scheduleReq));
-        return;
-    }
-
-    YRLOG_INFO("{}|{}|transitioning instance state to RUNNING", requestID, instanceID);
-    TransContext transContext{ InstanceState::RUNNING, stateMachine->GetVersion(), "running" };
-    transContext.scheduleReq = scheduleReq;
-
-    ASSERT_IF_NULL(instanceCtrl_);
-    instanceCtrl_->TransInstanceState(stateMachine, transContext)
-        .OnComplete(litebus::Defer(GetAID(), &SnapCtrlActor::OnTransInstanceStateComplete, scheduleResp, scheduleReq,
-                                   std::placeholders::_1));
-}
-
-void SnapCtrlActor::OnTransInstanceStateComplete(
-    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> scheduleResp,
-    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq, const litebus::Future<TransitionResult> &transResult)
-{
-    const auto &instanceID = scheduleReq->instance().instanceid();
-    const auto &requestID = scheduleReq->requestid();
-
-    if (transResult.IsError()) {
-        YRLOG_ERROR("{}|{}|failed to transition instance to RUNNING state, error code: {}", requestID, instanceID,
-                    transResult.GetErrorCode());
-        scheduleResp->SetValue(
-            GenScheduleResponse(StatusCode::ERR_ETCD_OPERATION_ERROR, "failed to update instance state", *scheduleReq));
-        return;
-    }
-
-    const auto &result = transResult.Get();
-    if (result.status.IsError()) {
-        YRLOG_ERROR("{}|{}|failed to transition instance to RUNNING state: {}", requestID, instanceID,
-                    result.status.GetMessage());
-        scheduleResp->SetValue(
-            GenScheduleResponse(result.status.StatusCode(), result.status.GetMessage(), *scheduleReq));
-        return;
-    }
-
-    // 6. SetValue to complete schedule
-    YRLOG_INFO("{}|{}|snapstart instance initialized successfully, state: RUNNING", requestID, instanceID);
-    scheduleResp->SetValue(GenScheduleResponse(StatusCode::SUCCESS, "success", *scheduleReq));
 }
 
 litebus::Future<Status> SnapCtrlActor::PrepareSnap(const std::string &requestID, const std::string &instanceID)

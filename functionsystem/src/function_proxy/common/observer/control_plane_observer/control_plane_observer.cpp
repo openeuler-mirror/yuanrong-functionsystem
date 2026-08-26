@@ -161,6 +161,13 @@ litebus::Future<Status> ControlPlaneObserver::DelInstanceEvent(const std::string
     return litebus::Async(observerActor_->GetAID(), &ObserverActor::DelInstanceEvent, instanceID, modRevision);
 }
 
+litebus::Future<Status> ControlPlaneObserver::SetLocalPauseTrafficGate(const resources::InstanceInfo &identity,
+                                                                      uint64_t token, bool gated)
+{
+    ASSERT_IF_NULL(observerActor_);
+    return litebus::Async(observerActor_->GetAID(), &ObserverActor::SetLocalPauseTrafficGate, identity, token, gated);
+}
+
 litebus::Future<std::vector<std::string>> ControlPlaneObserver::GetLocalInstances(
     const std::function<bool(const resource_view::InstanceInfo &)> &filter)
 {

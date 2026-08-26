@@ -94,6 +94,11 @@ void FunctionAgentMgrActor::Init()
     Receive("UpdateLocalStatus", &FunctionAgentMgrActor::UpdateLocalStatus);
     Receive("UpdateCredResponse", &FunctionAgentMgrActor::UpdateCredResponse);
     Receive("SnapshotRuntimeResponse", &FunctionAgentMgrActor::SnapshotRuntimeResponse);
+    Receive("SnapshotAttemptFinalizeResponse", &FunctionAgentMgrActor::SnapshotAttemptFinalizeResponse);
+    Receive("FinalizePausedSnapshotDelete", &FunctionAgentMgrActor::FinalizePausedSnapshotDelete);
+    Receive("DeleteReusableSnapshotArtifact", &FunctionAgentMgrActor::DeleteReusableSnapshotArtifact);
+    Receive("DeleteReusableSnapshotArtifactResponse",
+            &FunctionAgentMgrActor::DeleteReusableSnapshotArtifactResponse);
     Receive("QueryDebugInstanceInfosResponse", &FunctionAgentMgrActor::QueryDebugInstanceInfosResponse);
     Receive("ReconcileRuntimesResponse", &FunctionAgentMgrActor::ReconcileRuntimesResponse);
     Receive("StaticFunctionScheduleRequest", &FunctionAgentMgrActor::StaticFunctionScheduleRequest);
@@ -1568,6 +1573,17 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
     const resource_view::InstanceInfo &instanceInfo,
     int32_t ttl)
 {
+    return SnapshotRuntime(requestID, instanceInfo, ttl, common::DUMPSTATE, {}, {});
+}
+
+litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::SnapshotRuntime(
+    const std::string &requestID,
+    const resource_view::InstanceInfo &instanceInfo,
+    int32_t ttl,
+    common::SnapType type,
+    const std::string &snapshotID,
+    const std::string &checkpointDir)
+{
     // 1. 从 instanceInfo 获取 funcAgentID
     std::string funcAgentID = instanceInfo.functionagentid();
     std::string instanceID = instanceInfo.instanceid();
@@ -1595,12 +1611,20 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
     request->set_instanceid(instanceID);
     request->set_runtimeid(instanceInfo.runtimeid());
     request->set_containerid(instanceInfo.containerid());  // containerID is same as runtimeID in container mode
-    request->set_ttl(ttl);  // Set TTL from parameter
+    request->set_ttl(type == common::SNAPSHOT ? 0 : ttl);
+    request->set_type(type);
+    request->set_leaverunning(type == common::SNAPSHOT);
+    request->set_snapshotid(snapshotID);
+    request->set_checkpointdir(checkpointDir);
+    request->set_tenantid(instanceInfo.tenantid());
+    request->set_sourceversion(instanceInfo.version());
     auto future = snapshotRuntimeSync_.AddSynchronizer(requestID);
+    const auto targetAgent = funcAgentTable_[funcAgentID].aid;
+    snapshotRuntimeExpectedAgent_[requestID] = targetAgent;
 
     YRLOG_INFO("{}|send SnapshotRuntime request to agent({}) for instance({}), ttl: {}",
                requestID, funcAgentID, instanceID, ttl);
-    Send(funcAgentTable_[funcAgentID].aid, "SnapshotRuntime", request->SerializeAsString());
+    Send(targetAgent, "SnapshotRuntime", request->SerializeAsString());
 
     // 3. 将 SnapshotRuntimeResponse 消息转换为结构体
     return future;
@@ -1615,10 +1639,206 @@ void FunctionAgentMgrActor::SnapshotRuntimeResponse(const litebus::AID &from, st
     }
 
     std::string requestID = response.requestid();
+    const auto expected = snapshotRuntimeExpectedAgent_.find(requestID);
+    if (expected == snapshotRuntimeExpectedAgent_.end() || expected->second != from) {
+        YRLOG_WARN("ignore SnapshotRuntimeResponse for request {} from unexpected agent {}",
+                   requestID, from.HashString());
+        return;
+    }
+    snapshotRuntimeExpectedAgent_.erase(expected);
     std::string checkpointID = response.has_snapshotinfo() ? response.snapshotinfo().checkpointid() : "N/A";
     YRLOG_INFO("{}|received SnapshotRuntimeResponse, code: {}, checkpointID: {}",
                requestID, response.code(), checkpointID);
     (void)snapshotRuntimeSync_.Synchronized(requestID, response);
+}
+
+litebus::Future<::messages::SnapshotAttemptFinalizeResponse> FunctionAgentMgrActor::FinalizeSnapshotAttempt(
+    const resource_view::InstanceInfo &instanceInfo,
+    const ::messages::SnapshotAttemptFinalizeRequest &request)
+{
+    ::messages::SnapshotAttemptFinalizeResponse error;
+    error.set_attemptid(request.attemptid());
+    const auto agent = funcAgentTable_.find(instanceInfo.functionagentid());
+    if (agent == funcAgentTable_.end()) {
+        error.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        error.set_message("function agent is not registered");
+        error.set_resultunknown(true);
+        return error;
+    }
+    auto future = snapshotAttemptFinalizeSync_.AddSynchronizer(request.attemptid());
+    snapshotAttemptExpectedAgent_[request.attemptid()] = agent->second.aid;
+    Send(agent->second.aid, "SnapshotAttemptFinalize", request.SerializeAsString());
+    return future;
+}
+
+litebus::Future<::messages::SnapshotAttemptFinalizeResponse>
+FunctionAgentMgrActor::FinalizeSnapshotAttemptOnAnyAgent(
+    const ::messages::SnapshotAttemptFinalizeRequest &request)
+{
+    ::messages::SnapshotAttemptFinalizeResponse error;
+    error.set_attemptid(request.attemptid());
+    const FuncAgentInfo *selected = nullptr;
+    std::string selectedID;
+    for (const auto &[agentID, agent] : funcAgentTable_) {
+        if (!agent.isEnable || !agent.isInit || !agent.aid.OK()) {
+            continue;
+        }
+        if (selected == nullptr || agentID < selectedID) {
+            selected = &agent;
+            selectedID = agentID;
+        }
+    }
+    if (selected == nullptr) {
+        error.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        error.set_message("no function agent is available for snapshot cleanup");
+        error.set_resultunknown(true);
+        return error;
+    }
+    auto future = snapshotAttemptFinalizeSync_.AddSynchronizer(request.attemptid());
+    snapshotAttemptExpectedAgent_[request.attemptid()] = selected->aid;
+    Send(selected->aid, "SnapshotAttemptFinalize", request.SerializeAsString());
+    return future;
+}
+
+void FunctionAgentMgrActor::FinalizePausedSnapshotDelete(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::SnapshotAttemptFinalizeRequest request;
+    if (!request.ParseFromString(msg) || request.attemptid().empty()
+        || request.operation() != ::messages::PAUSED_DELETED) {
+        ::messages::SnapshotAttemptFinalizeResponse response;
+        response.set_attemptid(request.attemptid());
+        response.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
+        response.set_message("invalid paused snapshot delete request");
+        response.set_resultunknown(false);
+        response.set_remotecleanupcomplete(false);
+        (void)Send(from, "FinalizePausedSnapshotDeleteResponse", response.SerializeAsString());
+        return;
+    }
+    FinalizeSnapshotAttemptOnAnyAgent(request).OnComplete(
+        litebus::Defer(GetAID(), &FunctionAgentMgrActor::SendFinalizePausedSnapshotDeleteResponse,
+                       from, request.attemptid(), std::placeholders::_1));
+}
+
+void FunctionAgentMgrActor::SendFinalizePausedSnapshotDeleteResponse(
+    const litebus::AID &to,
+    const std::string &attemptID,
+    const litebus::Future<::messages::SnapshotAttemptFinalizeResponse> &responseFuture)
+{
+    ::messages::SnapshotAttemptFinalizeResponse response;
+    if (responseFuture.IsError()) {
+        response.set_attemptid(attemptID);
+        response.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        response.set_message("paused snapshot delete request to function agent failed");
+        response.set_resultunknown(true);
+        response.set_remotecleanupcomplete(false);
+    } else {
+        response = responseFuture.Get();
+    }
+    (void)Send(to, "FinalizePausedSnapshotDeleteResponse", response.SerializeAsString());
+}
+
+void FunctionAgentMgrActor::SnapshotAttemptFinalizeResponse(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::SnapshotAttemptFinalizeResponse response;
+    if (msg.empty() || !response.ParseFromString(msg) || response.attemptid().empty()) {
+        YRLOG_WARN("invalid SnapshotAttemptFinalizeResponse from {}", from.HashString());
+        return;
+    }
+    const auto expected = snapshotAttemptExpectedAgent_.find(response.attemptid());
+    if (expected == snapshotAttemptExpectedAgent_.end() || expected->second != from) {
+        YRLOG_WARN("ignore SnapshotAttemptFinalizeResponse for attempt {} from unexpected agent {}",
+                   response.attemptid(), from.HashString());
+        return;
+    }
+    snapshotAttemptExpectedAgent_.erase(expected);
+    (void)snapshotAttemptFinalizeSync_.Synchronized(response.attemptid(), response);
+}
+
+litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse>
+FunctionAgentMgrActor::DeleteReusableSnapshotArtifactOnAnyAgent(
+    const ::messages::DeleteReusableSnapshotArtifactRequest &request)
+{
+    ::messages::DeleteReusableSnapshotArtifactResponse error;
+    error.set_requestid(request.requestid());
+    const FuncAgentInfo *selected = nullptr;
+    std::string selectedID;
+    for (const auto &[agentID, agent] : funcAgentTable_) {
+        if (!agent.isEnable || !agent.isInit || !agent.aid.OK()) {
+            continue;
+        }
+        if (selected == nullptr || agentID < selectedID) {
+            selected = &agent;
+            selectedID = agentID;
+        }
+    }
+    if (selected == nullptr) {
+        error.set_code(common::ERR_INNER_COMMUNICATION);
+        error.set_message("no initialized healthy function agent is available for reusable Snapshot delete");
+        return error;
+    }
+    auto future = reusableSnapshotDeleteSync_.AddSynchronizer(request.requestid());
+    reusableSnapshotDeleteExpectedAgent_[request.requestid()] = selected->aid;
+    (void)Send(selected->aid, "DeleteReusableSnapshotArtifact", request.SerializeAsString());
+    return future;
+}
+
+void FunctionAgentMgrActor::DeleteReusableSnapshotArtifact(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::DeleteReusableSnapshotArtifactRequest request;
+    const bool parsed = request.ParseFromString(msg);
+    const auto &artifact = request.artifact();
+    if (!parsed || request.requestid().empty() || request.tenantid().empty()
+        || request.snapshotid().empty() || artifact.storagebackend().empty()
+        || artifact.objectkey().empty() || artifact.size() <= 0
+        || artifact.sha256().empty()) {
+        ::messages::DeleteReusableSnapshotArtifactResponse response;
+        response.set_requestid(request.requestid());
+        response.set_code(common::ERR_PARAM_INVALID);
+        response.set_message("invalid reusable Snapshot artifact delete request");
+        (void)Send(from, "DeleteReusableSnapshotArtifactResponse", response.SerializeAsString());
+        return;
+    }
+    DeleteReusableSnapshotArtifactOnAnyAgent(request).OnComplete(
+        litebus::Defer(GetAID(), &FunctionAgentMgrActor::SendDeleteReusableSnapshotArtifactResponse,
+                       from, request.requestid(), std::placeholders::_1));
+}
+
+void FunctionAgentMgrActor::SendDeleteReusableSnapshotArtifactResponse(
+    const litebus::AID &to,
+    const std::string &requestID,
+    const litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse> &responseFuture)
+{
+    ::messages::DeleteReusableSnapshotArtifactResponse response;
+    response.set_requestid(requestID);
+    if (responseFuture.IsError()) {
+        response.set_code(common::ERR_INNER_COMMUNICATION);
+        response.set_message("reusable Snapshot artifact delete request to function agent failed");
+    } else {
+        response = responseFuture.Get();
+        response.set_requestid(requestID);
+    }
+    (void)Send(to, "DeleteReusableSnapshotArtifactResponse", response.SerializeAsString());
+}
+
+void FunctionAgentMgrActor::DeleteReusableSnapshotArtifactResponse(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::DeleteReusableSnapshotArtifactResponse response;
+    if (!response.ParseFromString(msg) || response.requestid().empty()) {
+        YRLOG_WARN("invalid reusable Snapshot artifact delete response from {}", from.HashString());
+        return;
+    }
+    const auto expected = reusableSnapshotDeleteExpectedAgent_.find(response.requestid());
+    if (expected == reusableSnapshotDeleteExpectedAgent_.end() || expected->second != from) {
+        YRLOG_WARN("ignore reusable Snapshot artifact delete response for request({}) from unexpected agent({})",
+                   response.requestid(), from.HashString());
+        return;
+    }
+    reusableSnapshotDeleteExpectedAgent_.erase(expected);
+    (void)reusableSnapshotDeleteSync_.Synchronized(response.requestid(), response);
 }
 
 litebus::Future<messages::ReconcileRuntimesResponse> FunctionAgentMgrActor::ReconcileRuntimes(

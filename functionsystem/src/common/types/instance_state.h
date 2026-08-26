@@ -38,7 +38,8 @@ enum class InstanceState : int32_t {
     EVICTING,
     EVICTED,
     SUB_HEALTH,
-    SUSPEND
+    SUSPEND,
+    PAUSED = 13
 };
 
 enum class GroupState : int32_t {

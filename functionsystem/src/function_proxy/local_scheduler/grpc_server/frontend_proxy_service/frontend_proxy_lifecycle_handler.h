@@ -27,8 +27,14 @@
 #include "common/proto/pb/posix/frontend_proxy_service.pb.h"
 #include "common/proto/pb/posix_pb.h"
 #include "grpc_server/frontend_proxy_service/frontend_proxy_service.h"
+#include "local_scheduler/instance_control/frontend_create_failure_snapshot.h"
 
 namespace functionsystem::local_scheduler {
+
+// Default upper bound (in milliseconds) the frontend unary-create path waits
+// for the runtime to report the ready CallResult before the ticket is
+// unregistered as timed out.
+inline constexpr uint64_t FRONTEND_CREATE_READY_TIMEOUT_MS = 55ULL * 1000ULL;
 
 using FrontendProxyReadyCallback = std::function<litebus::Future<CallResultAck>(
     const std::shared_ptr<functionsystem::CallResult> &)>;
@@ -41,6 +47,11 @@ using FrontendProxyCreateReadyScheduler =
         const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &,
         FrontendProxyReadyCallback)>;
 using FrontendProxyReadyUnregister = std::function<void(const std::string &, const std::string &)>;
+// Returns and consumes the last deploy-failure snapshot for a pending frontend
+// create (POST /api/agent). present=false when no failure was recorded, in which
+// case the ready-timeout closure falls back to the generic timeout string.
+using FrontendCreateFailureLookup =
+    std::function<litebus::Future<FrontendCreateFailureSnapshot>(const std::string &)>;
 using FrontendProxyCreateScheduler =
     std::function<litebus::Future<messages::ScheduleResponse>(
         const std::shared_ptr<messages::ScheduleRequest> &,
@@ -54,6 +65,7 @@ struct FrontendProxyServiceBindings {
     bool enableCreateDispatch { false };
     FrontendProxyCreateReadyScheduler scheduler;
     FrontendProxyReadyUnregister readyUnregister;
+    FrontendCreateFailureLookup createFailureLookup;
     bool enableKillDispatch { false };
     FrontendProxyKillInvoker killInvoker;
     FrontendProxyKillCleanupProbe killCleanupProbe;
@@ -74,7 +86,8 @@ ComponentGrpcEndpoint ResolveComponentGrpcEndpoint(const std::string &proxyAddre
 FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDispatcher(
     const FrontendProxyCreateReadyScheduler &scheduler,
     const FrontendProxyReadyUnregister &readyUnregister = FrontendProxyReadyUnregister(),
-    uint64_t readyTimeoutMs = 60000);
+    uint64_t readyTimeoutMs = FRONTEND_CREATE_READY_TIMEOUT_MS,
+    const FrontendCreateFailureLookup &createFailureLookup = FrontendCreateFailureLookup());
 
 FrontendProxyServiceParam::KillReadyDispatcher BuildFrontendProxyKillReadyDispatcher(
     const FrontendProxyKillInvoker &killInvoker);

@@ -20,6 +20,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "actor/actor.hpp"
 
@@ -31,6 +32,7 @@
 #include "common/meta_store_adapter/meta_store_operate_cacher.h"
 #include "meta_store_client/meta_store_struct.h"
 #include "common/resource_view/resource_type.h"
+#include "common/utils/request_sync_helper.h"
 #include "function_master/global_scheduler/global_sched.h"
 #include "function_master/global_scheduler/traefik_route_cache.h"
 #include "function_master/resource_group_manager/resource_group_manager.h"
@@ -140,6 +142,10 @@ public:
     litebus::Future<messages::QueryDebugInstanceInfosResponse> QueryDebugInstancesInfo(
         std::shared_ptr<messages::QueryDebugInstanceInfosRequest> req);
 
+    litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse>
+        DeleteReusableSnapshotArtifact(
+            const ::messages::DeleteReusableSnapshotArtifactRequest &request);
+
     void ForwardQueryDebugInstancesInfoHandler(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     void ForwardQueryDebugInstancesInfoResponseHandler(const litebus::AID &from, std::string &&name, std::string &&msg);
@@ -224,6 +230,88 @@ private:
 
     litebus::Future<Status> KillInstanceWithRetry(const std::string& instanceID,
                                                   const std::shared_ptr<internal::ForwardKillRequest> &killReq);
+
+    litebus::Future<Status> CleanupPausedSnapshot(const resources::InstanceInfo &instanceInfo);
+    void OnPausedSnapshotCleanupResources(
+        const litebus::Future<messages::QueryResourcesInfoResponse> &resourcesFuture,
+        const ::messages::SnapshotAttemptFinalizeRequest &request,
+        const std::string &sourceNodeID,
+        const std::shared_ptr<litebus::Promise<Status>> &result);
+    void OnPausedSnapshotCleanupNodes(
+        const litebus::Future<std::unordered_set<std::string>> &nodesFuture,
+        const ::messages::SnapshotAttemptFinalizeRequest &request,
+        const std::string &sourceNodeID,
+        const std::shared_ptr<std::unordered_set<std::string>> &runtimeNodes,
+        const std::shared_ptr<litebus::Promise<Status>> &result);
+    litebus::Future<Status> TryPausedSnapshotCleanup(
+        const ::messages::SnapshotAttemptFinalizeRequest &request,
+        const std::shared_ptr<std::vector<std::string>> &candidates,
+        size_t index);
+    void OnPausedSnapshotCleanupAddress(
+        const litebus::Future<litebus::Option<std::string>> &addressFuture,
+        const ::messages::SnapshotAttemptFinalizeRequest &request,
+        const std::shared_ptr<std::vector<std::string>> &candidates,
+        size_t index,
+        const std::shared_ptr<litebus::Promise<Status>> &result);
+    void OnPausedSnapshotCleanupCandidate(
+        const litebus::Future<::messages::SnapshotAttemptFinalizeResponse> &responseFuture,
+        const ::messages::SnapshotAttemptFinalizeRequest &request,
+        const std::shared_ptr<std::vector<std::string>> &candidates,
+        size_t index,
+        const std::shared_ptr<litebus::Promise<Status>> &result);
+    void FinishPausedSnapshotCleanup(
+        const litebus::Future<Status> &statusFuture,
+        const std::string &attemptID,
+        const std::shared_ptr<litebus::Promise<Status>> &result);
+    void FinalizePausedSnapshotDeleteResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void TimeoutPausedSnapshotCleanup(const std::string &attemptID);
+    void OnReusableSnapshotDeleteResources(
+        const litebus::Future<messages::QueryResourcesInfoResponse> &resourcesFuture,
+        const ::messages::DeleteReusableSnapshotArtifactRequest &request,
+        const std::string &originalRequestID,
+        const std::shared_ptr<litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse>> &result);
+    void OnReusableSnapshotDeleteNodes(
+        const litebus::Future<std::unordered_set<std::string>> &nodesFuture,
+        const ::messages::DeleteReusableSnapshotArtifactRequest &request,
+        const std::string &originalRequestID,
+        const std::shared_ptr<std::unordered_set<std::string>> &runtimeNodes,
+        const std::shared_ptr<litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse>> &result);
+    litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse>
+        TryReusableSnapshotDelete(
+            const ::messages::DeleteReusableSnapshotArtifactRequest &request,
+            const std::shared_ptr<std::vector<std::string>> &candidates,
+            size_t index);
+    void OnReusableSnapshotDeleteAddress(
+        const litebus::Future<litebus::Option<std::string>> &addressFuture,
+        const ::messages::DeleteReusableSnapshotArtifactRequest &request,
+        const std::shared_ptr<std::vector<std::string>> &candidates,
+        size_t index,
+        const std::shared_ptr<litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse>> &result);
+    void OnReusableSnapshotDeleteCandidate(
+        const litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse> &responseFuture,
+        const ::messages::DeleteReusableSnapshotArtifactRequest &request,
+        const std::shared_ptr<std::vector<std::string>> &candidates,
+        size_t index,
+        const std::shared_ptr<litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse>> &result);
+    void FinishReusableSnapshotDelete(
+        const litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse> &responseFuture,
+        const std::string &dispatchID,
+        const std::string &originalRequestID,
+        const std::shared_ptr<litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse>> &result);
+    void DeleteReusableSnapshotArtifactResponse(
+        const litebus::AID &from, std::string &&name, std::string &&msg);
+    void TimeoutReusableSnapshotDelete(const std::string &dispatchID);
+    litebus::Future<Status> DeletePausedInstanceAfterSnapshotCleanup(
+        const Status &cleanupStatus,
+        const std::string &instanceKey,
+        const std::shared_ptr<resources::InstanceInfo> &instance,
+        const std::shared_ptr<internal::ForwardKillRequest> &killReq);
+    Status CompletePausedInstanceDelete(
+        const OperateResult &result,
+        const std::string &instanceKey,
+        const std::shared_ptr<resources::InstanceInfo> &instance,
+        const std::shared_ptr<internal::ForwardKillRequest> &killReq);
+    void CompleteKillPromise(const std::string &requestID, const Status &status);
 
     void CompleteKillInstance(const litebus::Future<Status> &status, const std::string &requestID,
                               const std::string &instanceID);
@@ -558,6 +646,23 @@ private:
     litebus::Promise<bool> isInstancesReady_;
 
     std::shared_ptr<global_scheduler::TraefikRouteCache> traefikRouteCache_;
+
+    const uint32_t pausedSnapshotCleanupTimeoutMs_{ 120000 };
+    std::unordered_map<std::string, litebus::AID> pausedSnapshotCleanupExpectedProxy_;
+    RequestSyncHelper<InstanceManagerActor, ::messages::SnapshotAttemptFinalizeResponse>
+        pausedSnapshotCleanupSync_{ this, &InstanceManagerActor::TimeoutPausedSnapshotCleanup,
+                                    pausedSnapshotCleanupTimeoutMs_ };
+    std::unordered_map<std::string, std::shared_ptr<litebus::Promise<Status>>>
+        pausedSnapshotCleanupInFlight_;
+
+    const uint32_t reusableSnapshotDeleteTimeoutMs_{ 120000 };
+    std::unordered_map<std::string, litebus::AID> reusableSnapshotDeleteExpectedProxy_;
+    RequestSyncHelper<InstanceManagerActor, ::messages::DeleteReusableSnapshotArtifactResponse>
+        reusableSnapshotDeleteSync_{ this, &InstanceManagerActor::TimeoutReusableSnapshotDelete,
+                                     reusableSnapshotDeleteTimeoutMs_ };
+    std::unordered_map<std::string,
+        std::shared_ptr<litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse>>>
+        reusableSnapshotDeleteInFlight_;
 
     friend class DISABLED_InstanceManagerTest;
 };  // class InstanceManagerActor

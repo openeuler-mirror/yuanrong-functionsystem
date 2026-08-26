@@ -144,8 +144,13 @@ public:
 
 protected:
     Status Create();
+    virtual Status PrepareForSnapCtrlBinding();
+    virtual Status ContinueAfterSnapCtrlBinding();
+    virtual std::shared_ptr<SnapCtrl> CreateSnapCtrl();
 
 private:
+    Status StartAfterInitialization();
+    void CreateAndBindSnapCtrl();
     bool CreatePosixAndDriverServer();
     void StartDsHealthyCheck();
     void StartDebugInstanceInfoMonitor();

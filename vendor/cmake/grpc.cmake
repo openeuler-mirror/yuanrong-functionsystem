@@ -1,3 +1,17 @@
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Build the libs grpc depends
 # c-ares
 set(c-ares_src_dir ${VENDOR_SRC_DIR}/c-ares)
@@ -209,7 +223,10 @@ function(GENERATE_GRPC_CPP SRCS HDRS TARGET_DIR)
         list(APPEND ${HDRS} ${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.pb.h)
         list(APPEND ${HDRS} ${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.grpc.pb.h)
         add_custom_command(
-            OUTPUT "${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.grpc.pb.cc" "${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.grpc.pb.h"
+            OUTPUT "${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.pb.cc"
+                   "${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.pb.h"
+                   "${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.grpc.pb.cc"
+                   "${TARGET_DIR}/${_REL_DIR}/${_PROTO_NAME}.grpc.pb.h"
             COMMAND ${CMAKE_COMMAND} -E env LD_LIBRARY_PATH=${grpc_LIB_DIR}:${protobuf_LIB_DIR}
                     ${protobuf_ROOT}/bin/protoc
             ARGS ${_PROTO_IMPORT_ARGS}

@@ -60,6 +60,15 @@ message CreateRequest {
   // optional. if designated instanceID is not empty, the created instance id will be assigned designatedInstanceID
   string			 designatedInstanceID = 7;
   map<string, string> createOptions = 8;
+  // Optional reusable Snapshot resource used as the immutable source of a
+  // normal Create. Only the ID is accepted from an untrusted caller; Master
+  // resolves the authoritative restore metadata before scheduling.
+  string              snapshotID    = 9;
+}
+
+message SnapshotInfo {
+  string          snapshotID = 1;
+  repeated string names      = 2;
 }
 
 message CreateResourceGroupRequest {
@@ -199,6 +208,7 @@ message SnapOptions {
   int32           ttl  = 2;  // seconds
   bool            leaveRunning = 3;
   string          functionType = 4;  // moduleName.className for actors
+  string          name = 5;
 }
 
 message SnapStartOptions {

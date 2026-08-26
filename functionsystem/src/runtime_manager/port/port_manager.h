@@ -21,13 +21,14 @@
 #include <unordered_map>
 #include <map>
 #include <vector>
-#include "common/status/status.h"
 #include "common/utils/singleton.h"
 
 namespace functionsystem::runtime_manager {
 
 class PortManager : public Singleton<PortManager> {
 public:
+    using ReservationMap = std::map<std::string, std::vector<int>>;
+
     PortManager();
 
     ~PortManager() override;
@@ -39,6 +40,19 @@ public:
      * @param portNum Port capacity.
      */
     void InitPortResource(int initialPort, int portNum);
+
+    /** Close allocation while sandboxd physical facts are being reconciled. */
+    void BeginReconcile();
+
+    /**
+     * Atomically replace the cache with sandboxd's authoritative reservations.
+     * Returns false without publishing a partial cache when any reservation is
+     * invalid, outside the configured pool, or conflicts with another runtime.
+     */
+    bool RebuildPorts(const ReservationMap &reservations);
+
+    /** True only after initialization or a successful authoritative rebuild. */
+    bool IsReady() const;
 
     /**
      * Request port resource when start instance.
@@ -74,18 +88,11 @@ public:
      */
     std::vector<int> RequestPorts(const std::string &runtimeID, int count);
 
-    /**
-     * Reserve persisted ports for a runtime during proxy reconciliation.
-     *
-     * The operation is atomic across all supplied ports and idempotent when
-     * the same runtime already owns them. A port outside the configured pool
-     * or owned by another runtime fails the whole operation.
-     *
-     * @param runtimeID Runtime that owns the persisted reservations.
-     * @param ports Host ports to restore.
-     * @return success when every port is reserved by runtimeID.
-     */
-    Status ReservePorts(const std::string &runtimeID, const std::vector<int> &ports);
+    /** Replace one runtime's cache from exact sandboxd physical facts. */
+    bool ReconcileRuntimePorts(const std::string &runtimeID, const std::vector<int> &ports);
+
+    /** Return every cached port for one runtime in ascending order. */
+    std::vector<int> GetPorts(const std::string &runtimeID) const;
 
     /**
      * Release all port resources associated with a runtimeID.
@@ -121,6 +128,7 @@ private:
     };
 
     std::map<int, RuntimeInfo> portMap_;
+    bool ready_ = false;
 };
 }
 

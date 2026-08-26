@@ -30,6 +30,7 @@
 #include "function_agent/code_deployer/local_deployer.h"
 #include "function_agent/code_deployer/s3_deployer.h"
 #include "function_agent/code_deployer/working_dir_deployer.h"
+#include "function_agent/snapshot/snapshot_storage_factory.h"
 
 namespace functionsystem::function_agent {
 
@@ -77,8 +78,18 @@ Status FunctionAgentDriver::PostStartFunctionAgent()
     return Status::OK();
 }
 
+Status FunctionAgentDriver::InitializeSnapshotStorageDependency()
+{
+    RETURN_IF_NOT_OK(CreateSnapshotStorage(startParam_.snapshotStorage, snapshotStorage_));
+    actor_->BindSnapshotDataPlane(snapshotStorage_, startParam_.checkpointRoot,
+                                  startParam_.snapshotStorage.backend);
+    return Status::OK();
+}
+
 Status FunctionAgentDriver::Start()
 {
+    RETURN_IF_NOT_OK(InitializeSnapshotStorageDependency());
+
     // Initialize KVClient if DataSystem is enabled
     if (startParam_.dataSystemEnable) {
         if (auto status = KVClient::GetInstance().Init(startParam_.dataSystemHost,

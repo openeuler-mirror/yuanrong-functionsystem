@@ -27,6 +27,7 @@
 #include "function_proxy/local_scheduler/function_agent_manager/function_agent_mgr_actor.h"
 #include "mocks/mock_function_agent.h"
 #include "mocks/mock_meta_store_client.h"
+#include "utils/future_test_helper.h"
 #include "utils/port_helper.h"
 
 namespace functionsystem::test {
@@ -361,6 +362,228 @@ TEST_F(FuncAgentMgrActorTest, TenantEventCase3)
 
     litebus::Terminate(mockAgent->GetAID());
     litebus::Await(mockAgent->GetAID());
+}
+
+class SnapshotFinalizeAgentStub final : public litebus::ActorBase {
+public:
+    SnapshotFinalizeAgentStub() : ActorBase("snapshot-finalize-agent-stub")
+    {
+    }
+
+    void Init() override
+    {
+        Receive("SnapshotAttemptFinalize", &SnapshotFinalizeAgentStub::SnapshotAttemptFinalize);
+    }
+
+    void SnapshotAttemptFinalize(const litebus::AID &from, std::string &&, std::string &&msg)
+    {
+        ::messages::SnapshotAttemptFinalizeRequest request;
+        if (!request.ParseFromString(msg)) {
+            return;
+        }
+        requests_.push_back(request);
+        ::messages::SnapshotAttemptFinalizeResponse response;
+        response.set_attemptid(request.attemptid());
+        response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+        response.set_remotecleanupcomplete(true);
+        (void)Send(from, "SnapshotAttemptFinalizeResponse", response.SerializeAsString());
+    }
+
+    std::vector<::messages::SnapshotAttemptFinalizeRequest> requests_;
+};
+
+class SnapshotFinalizeMasterStub final : public litebus::ActorBase {
+public:
+    SnapshotFinalizeMasterStub() : ActorBase("snapshot-finalize-master-stub")
+    {
+    }
+
+    void Init() override
+    {
+        Receive("FinalizePausedSnapshotDeleteResponse",
+                &SnapshotFinalizeMasterStub::FinalizePausedSnapshotDeleteResponse);
+    }
+
+    litebus::Future<::messages::SnapshotAttemptFinalizeResponse> DeletePausedSnapshot(
+        const litebus::AID &proxy,
+        const ::messages::SnapshotAttemptFinalizeRequest &request)
+    {
+        response_ = litebus::Promise<::messages::SnapshotAttemptFinalizeResponse>();
+        (void)Send(proxy, "FinalizePausedSnapshotDelete", request.SerializeAsString());
+        return response_.GetFuture();
+    }
+
+    void FinalizePausedSnapshotDeleteResponse(const litebus::AID &, std::string &&, std::string &&msg)
+    {
+        ::messages::SnapshotAttemptFinalizeResponse response;
+        if (response.ParseFromString(msg)) {
+            response_.SetValue(response);
+        }
+    }
+
+private:
+    litebus::Promise<::messages::SnapshotAttemptFinalizeResponse> response_;
+};
+
+TEST_F(FuncAgentMgrActorTest, PausedDeleteGatewayUsesExistingAgentFinalizePath)
+{
+    auto agent = std::make_shared<SnapshotFinalizeAgentStub>();
+    auto proxy = std::make_shared<FunctionAgentMgrActor>(
+        "paused-delete-proxy", PARAM, "paused-delete-node",
+        std::make_shared<MockMetaStoreClient>(metaStoreAddress_));
+    auto master = std::make_shared<SnapshotFinalizeMasterStub>();
+    proxy->funcAgentTable_["agent-healthy"] = {
+        .isEnable = true,
+        .isInit = true,
+        .recoverPromise = std::make_shared<litebus::Promise<bool>>(),
+        .aid = agent->GetAID(),
+        .instanceIDs = {}
+    };
+    ASSERT_TRUE(litebus::Spawn(agent).OK());
+    ASSERT_TRUE(litebus::Spawn(proxy).OK());
+    ASSERT_TRUE(litebus::Spawn(master).OK());
+
+    ::messages::SnapshotAttemptFinalizeRequest request;
+    request.set_protocolversion(1);
+    request.set_operation(::messages::PAUSED_DELETED);
+    request.set_attemptid("paused-delete/instance/snapshot");
+    request.set_tenantid("tenant");
+    request.set_instanceid("instance");
+    request.set_snapshotid("snapshot");
+    request.set_expectedstorage("obs");
+    request.set_expectedsize(4096);
+    request.set_expectedsha256("sha256");
+
+    auto response = master->DeletePausedSnapshot(proxy->GetAID(), request);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), static_cast<int32_t>(StatusCode::SUCCESS));
+    EXPECT_TRUE(response.Get().remotecleanupcomplete());
+    ASSERT_EQ(agent->requests_.size(), size_t{ 1 });
+    EXPECT_EQ(agent->requests_[0].attemptid(), request.attemptid());
+    EXPECT_EQ(agent->requests_[0].operation(), ::messages::PAUSED_DELETED);
+
+    litebus::Terminate(master->GetAID());
+    litebus::Await(master->GetAID());
+    litebus::Terminate(proxy->GetAID());
+    litebus::Await(proxy->GetAID());
+    litebus::Terminate(agent->GetAID());
+    litebus::Await(agent->GetAID());
+}
+
+class ReusableDeleteAgentStub final : public litebus::ActorBase {
+public:
+    explicit ReusableDeleteAgentStub(const std::string &name) : ActorBase(name)
+    {
+    }
+
+    void Init() override
+    {
+        Receive("DeleteReusableSnapshotArtifact", &ReusableDeleteAgentStub::DeleteArtifact);
+    }
+
+    void DeleteArtifact(const litebus::AID &from, std::string &&, std::string &&msg)
+    {
+        ::messages::DeleteReusableSnapshotArtifactRequest request;
+        if (!request.ParseFromString(msg)) {
+            return;
+        }
+        requests_.push_back(request);
+        ::messages::DeleteReusableSnapshotArtifactResponse response;
+        response.set_requestid(request.requestid());
+        response.set_code(common::ERR_NONE);
+        (void)Send(from, "DeleteReusableSnapshotArtifactResponse", response.SerializeAsString());
+    }
+
+    std::vector<::messages::DeleteReusableSnapshotArtifactRequest> requests_;
+};
+
+class ReusableDeleteMasterStub final : public litebus::ActorBase {
+public:
+    ReusableDeleteMasterStub() : ActorBase("reusable-delete-master-stub")
+    {
+    }
+
+    void Init() override
+    {
+        Receive("DeleteReusableSnapshotArtifactResponse",
+                &ReusableDeleteMasterStub::DeleteArtifactResponse);
+    }
+
+    litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse> DeleteArtifact(
+        const litebus::AID &proxy,
+        const ::messages::DeleteReusableSnapshotArtifactRequest &request)
+    {
+        response_ = litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse>();
+        (void)Send(proxy, "DeleteReusableSnapshotArtifact", request.SerializeAsString());
+        return response_.GetFuture();
+    }
+
+    void DeleteArtifactResponse(const litebus::AID &, std::string &&, std::string &&msg)
+    {
+        ::messages::DeleteReusableSnapshotArtifactResponse response;
+        if (response.ParseFromString(msg)) {
+            response_.SetValue(response);
+        }
+    }
+
+private:
+    litebus::Promise<::messages::DeleteReusableSnapshotArtifactResponse> response_;
+};
+
+TEST_F(FuncAgentMgrActorTest, ReusableDeleteGatewaySelectsOnlyHealthyInitializedAgent)
+{
+    auto disabledAgent = std::make_shared<ReusableDeleteAgentStub>("reusable-delete-disabled-agent");
+    auto healthyAgent = std::make_shared<ReusableDeleteAgentStub>("reusable-delete-healthy-agent");
+    auto proxy = std::make_shared<FunctionAgentMgrActor>(
+        "reusable-delete-proxy", PARAM, "reusable-delete-node",
+        std::make_shared<MockMetaStoreClient>(metaStoreAddress_));
+    auto master = std::make_shared<ReusableDeleteMasterStub>();
+    proxy->funcAgentTable_["agent-a-disabled"] = {
+        .isEnable = false,
+        .isInit = true,
+        .recoverPromise = std::make_shared<litebus::Promise<bool>>(),
+        .aid = disabledAgent->GetAID(),
+        .instanceIDs = {}
+    };
+    proxy->funcAgentTable_["agent-b-healthy"] = {
+        .isEnable = true,
+        .isInit = true,
+        .recoverPromise = std::make_shared<litebus::Promise<bool>>(),
+        .aid = healthyAgent->GetAID(),
+        .instanceIDs = {}
+    };
+    ASSERT_TRUE(litebus::Spawn(disabledAgent).OK());
+    ASSERT_TRUE(litebus::Spawn(healthyAgent).OK());
+    ASSERT_TRUE(litebus::Spawn(proxy).OK());
+    ASSERT_TRUE(litebus::Spawn(master).OK());
+
+    ::messages::DeleteReusableSnapshotArtifactRequest request;
+    request.set_requestid("reusable-delete-correlation");
+    request.set_tenantid("tenant");
+    request.set_snapshotid("snapshot");
+    request.mutable_artifact()->set_storagebackend("obs");
+    request.mutable_artifact()->set_objectkey("reusable/v1/hash/snapshot/checkpoint.img");
+    request.mutable_artifact()->set_size(4096);
+    request.mutable_artifact()->set_sha256(std::string(64, 'a'));
+    request.mutable_artifact()->set_format("gvisor-checkpoint");
+    request.mutable_artifact()->set_formatversion(1);
+
+    auto response = master->DeleteArtifact(proxy->GetAID(), request);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().requestid(), request.requestid());
+    EXPECT_EQ(response.Get().code(), common::ERR_NONE);
+    EXPECT_TRUE(disabledAgent->requests_.empty());
+    ASSERT_EQ(healthyAgent->requests_.size(), size_t{ 1 });
+    EXPECT_EQ(healthyAgent->requests_[0].SerializeAsString(), request.SerializeAsString());
+
+    litebus::Terminate(master->GetAID());
+    litebus::Await(master->GetAID());
+    litebus::Terminate(proxy->GetAID());
+    litebus::Await(proxy->GetAID());
+    litebus::Terminate(healthyAgent->GetAID());
+    litebus::Await(healthyAgent->GetAID());
+    litebus::Terminate(disabledAgent->GetAID());
+    litebus::Await(disabledAgent->GetAID());
 }
 
 }  // namespace functionsystem::test

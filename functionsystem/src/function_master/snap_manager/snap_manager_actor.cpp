@@ -22,7 +22,10 @@
 #include "common/constants/actor_name.h"
 #include "common/proto/pb/posix/common.pb.h"
 #include "common/logs/logging.h"
+#include "common/types/instance_state.h"
 #include "common/utils/generate_message.h"
+#include "common/utils/resume_identity.h"
+#include "common/utils/struct_transfer.h"
 
 namespace functionsystem::snap_manager {
 
@@ -30,20 +33,56 @@ using namespace functionsystem::explorer;
 using namespace functionsystem::leader;
 using namespace std::placeholders;
 
+namespace {
+
+std::string ResumeRouteAddress(const resources::InstanceInfo &instance)
+{
+    return instance.runtimeaddress().empty() ? instance.proxygrpcaddress()
+                                             : instance.runtimeaddress();
+}
+
+void PopulateResumeWinner(::core_service::SnapStartedInfo *result,
+                          const resources::InstanceInfo &winner)
+{
+    result->set_instanceid(winner.instanceid());
+    result->set_routeaddress(ResumeRouteAddress(winner));
+    result->set_functionproxyid(winner.functionproxyid());
+    result->set_nodeid(winner.functionproxyid());
+    const auto portMappings = winner.extensions().find(PORT_FORWARD_KEY);
+    if (portMappings != winner.extensions().end()) {
+        result->set_portmappings(portMappings->second);
+    }
+    YRLOG_INFO("resume winner response instance({}) owner({}) route({}) portMappings({})",
+               winner.instanceid(), winner.functionproxyid(), result->routeaddress(), result->portmappings());
+}
+
+}  // namespace
+
 // ===========================================
 // SnapManagerActor Constructor and Lifecycle
 // ===========================================
 
 SnapManagerActor::SnapManagerActor(const std::shared_ptr<MetaStoreClient> &metaClient,
                                    const std::shared_ptr<GlobalScheduler> &globalScheduler,
-                                   const SnapManagerConfig &config)
+                                   const SnapManagerConfig &config,
+                                   const std::shared_ptr<instance_manager::InstanceManager> &instanceManager)
     : ActorBase(SNAP_MANAGER_ACTOR_NAME)
 {
     member_ = std::make_shared<Member>();
     member_->client = metaClient;
     member_->globalScheduler = globalScheduler;
+    member_->instanceManager = instanceManager;
     member_->config = config;
     member_->scheduler = std::make_unique<SnapshotScheduler>(globalScheduler);
+    member_->reusableSnapshotStore = std::make_shared<ReusableSnapshotStore>(
+        std::make_shared<EtcdReusableSnapshotPersistence>(metaClient));
+    if (member_->instanceManager != nullptr) {
+        const auto instanceManager = member_->instanceManager;
+        member_->reusableSnapshotStore->SetArtifactDeleter(
+            [instanceManager](const ::messages::DeleteReusableSnapshotArtifactRequest &request) {
+                return instanceManager->DeleteReusableSnapshotArtifact(request);
+            });
+    }
 }
 
 bool SnapManagerActor::UpdateLeaderInfo(const LeaderInfo &leaderInfo)
@@ -93,6 +132,10 @@ void SnapManagerActor::Init()
     Receive("ListSnapshotsByFunctionKey", &SnapManagerActor::ListSnapshotsByFunctionKeyMessage);
     Receive("ListSnapshotsByTenant", &SnapManagerActor::ListSnapshotsByTenantMessage);
     Receive("DeleteSnapshot", &SnapManagerActor::DeleteSnapshotMessage);
+    Receive("BeginReusableSnapshot", &SnapManagerActor::BeginReusableSnapshotMessage);
+    Receive("CommitReusableSnapshot", &SnapManagerActor::CommitReusableSnapshotMessage);
+    Receive("FailReusableSnapshot", &SnapManagerActor::FailReusableSnapshotMessage);
+    Receive("ResolveReusableSnapshotForCreate", &SnapManagerActor::ResolveReusableSnapshotForCreateMessage);
 
     // Register leader change callback
     (void)Explorer::GetInstance().AddLeaderChangedCallback(
@@ -190,6 +233,182 @@ void SnapManagerActor::DeleteSnapshotMessage(const litebus::AID &from, std::stri
         }
         litebus::Async(aid, &SnapManagerActor::SendDeleteSnapshotResponse, from, rsp);
     });
+}
+
+void SnapManagerActor::BeginReusableSnapshotMessage(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::BeginReusableSnapshotRequest request;
+    if (!request.ParseFromString(msg)) {
+        ::messages::BeginReusableSnapshotResponse response;
+        response.set_code(common::ERR_PARAM_INVALID);
+        response.set_message("failed to parse BeginReusableSnapshotRequest");
+        Send(from, "BeginReusableSnapshotResponse", response.SerializeAsString());
+        return;
+    }
+    BeginReusableSnapshot(request).OnComplete(
+        [weak = weak_from_this(), from, requestID = request.requestid()](
+            const litebus::Future<::messages::BeginReusableSnapshotResponse> &future) {
+            auto actor = weak.lock();
+            if (actor == nullptr) {
+                return;
+            }
+            ::messages::BeginReusableSnapshotResponse response;
+            if (future.IsError()) {
+                response.set_requestid(requestID);
+                response.set_code(common::ERR_INNER_SYSTEM_ERROR);
+                response.set_message("reusable Snapshot begin failed");
+            } else {
+                response = future.Get();
+            }
+            actor->Send(from, "BeginReusableSnapshotResponse", response.SerializeAsString());
+        });
+}
+
+void SnapManagerActor::CommitReusableSnapshotMessage(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::CommitReusableSnapshotRequest request;
+    if (!request.ParseFromString(msg)) {
+        ::messages::CommitReusableSnapshotResponse response;
+        response.set_code(common::ERR_PARAM_INVALID);
+        response.set_message("failed to parse CommitReusableSnapshotRequest");
+        Send(from, "CommitReusableSnapshotResponse", response.SerializeAsString());
+        return;
+    }
+    CommitReusableSnapshot(request).OnComplete(
+        [weak = weak_from_this(), from, requestID = request.requestid()](
+            const litebus::Future<::messages::CommitReusableSnapshotResponse> &future) {
+            auto actor = weak.lock();
+            if (actor == nullptr) {
+                return;
+            }
+            ::messages::CommitReusableSnapshotResponse response;
+            if (future.IsError()) {
+                response.set_requestid(requestID);
+                response.set_code(common::ERR_INNER_SYSTEM_ERROR);
+                response.set_message("reusable Snapshot commit failed");
+            } else {
+                response = future.Get();
+            }
+            actor->Send(from, "CommitReusableSnapshotResponse", response.SerializeAsString());
+        });
+}
+
+void SnapManagerActor::FailReusableSnapshotMessage(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::FailReusableSnapshotRequest request;
+    if (!request.ParseFromString(msg)) {
+        ::messages::FailReusableSnapshotResponse response;
+        response.set_code(common::ERR_PARAM_INVALID);
+        response.set_message("failed to parse FailReusableSnapshotRequest");
+        Send(from, "FailReusableSnapshotResponse", response.SerializeAsString());
+        return;
+    }
+    FailReusableSnapshot(request).OnComplete(
+        [weak = weak_from_this(), from, requestID = request.requestid()](
+            const litebus::Future<::messages::FailReusableSnapshotResponse> &future) {
+            auto actor = weak.lock();
+            if (actor == nullptr) {
+                return;
+            }
+            ::messages::FailReusableSnapshotResponse response;
+            if (future.IsError()) {
+                response.set_requestid(requestID);
+                response.set_code(common::ERR_INNER_SYSTEM_ERROR);
+                response.set_message("reusable Snapshot failure reconciliation failed");
+            } else {
+                response = future.Get();
+            }
+            actor->Send(from, "FailReusableSnapshotResponse", response.SerializeAsString());
+        });
+}
+
+void SnapManagerActor::ResolveReusableSnapshotForCreateMessage(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::ResolveReusableSnapshotForCreateRequest request;
+    if (!request.ParseFromString(msg)) {
+        ::messages::ResolveReusableSnapshotForCreateResponse response;
+        response.set_code(common::ERR_PARAM_INVALID);
+        response.set_message("failed to parse ResolveReusableSnapshotForCreateRequest");
+        Send(from, "ResolveReusableSnapshotForCreateResponse", response.SerializeAsString());
+        return;
+    }
+    ResolveReusableSnapshotForCreate(request).OnComplete(
+        [weak = weak_from_this(), from, requestID = request.requestid()](
+            const litebus::Future<::messages::ResolveReusableSnapshotForCreateResponse> &future) {
+            auto actor = weak.lock();
+            if (actor == nullptr) {
+                return;
+            }
+            ::messages::ResolveReusableSnapshotForCreateResponse response;
+            if (future.IsError()) {
+                response.set_requestid(requestID);
+                response.set_code(common::ERR_INNER_SYSTEM_ERROR);
+                response.set_message("reusable Snapshot resolve failed");
+            } else {
+                response = future.Get();
+            }
+            actor->Send(from, "ResolveReusableSnapshotForCreateResponse", response.SerializeAsString());
+        });
+}
+
+litebus::Future<::messages::BeginReusableSnapshotResponse> SnapManagerActor::BeginReusableSnapshot(
+    const ::messages::BeginReusableSnapshotRequest &request)
+{
+    ASSERT_IF_NULL(member_->reusableSnapshotStore);
+    return member_->reusableSnapshotStore->Begin(request);
+}
+
+litebus::Future<::messages::CommitReusableSnapshotResponse> SnapManagerActor::CommitReusableSnapshot(
+    const ::messages::CommitReusableSnapshotRequest &request)
+{
+    ASSERT_IF_NULL(member_->reusableSnapshotStore);
+    return member_->reusableSnapshotStore->Commit(request);
+}
+
+litebus::Future<::messages::FailReusableSnapshotResponse> SnapManagerActor::FailReusableSnapshot(
+    const ::messages::FailReusableSnapshotRequest &request)
+{
+    ASSERT_IF_NULL(member_->reusableSnapshotStore);
+    return member_->reusableSnapshotStore->Fail(request);
+}
+
+litebus::Future<::messages::GetReusableSnapshotResponse> SnapManagerActor::GetReusableSnapshot(
+    const ::messages::GetReusableSnapshotRequest &request)
+{
+    ASSERT_IF_NULL(member_->reusableSnapshotStore);
+    return member_->reusableSnapshotStore->Get(request);
+}
+
+litebus::Future<::messages::ListReusableSnapshotsResponse> SnapManagerActor::ListReusableSnapshots(
+    const ::messages::ListReusableSnapshotsRequest &request)
+{
+    ASSERT_IF_NULL(member_->reusableSnapshotStore);
+    return member_->reusableSnapshotStore->List(request);
+}
+
+litebus::Future<::messages::ResolveReusableSnapshotForCreateResponse>
+SnapManagerActor::ResolveReusableSnapshotForCreate(
+    const ::messages::ResolveReusableSnapshotForCreateRequest &request)
+{
+    ASSERT_IF_NULL(member_->reusableSnapshotStore);
+    return member_->reusableSnapshotStore->Resolve(request);
+}
+
+litebus::Future<::messages::DeleteReusableSnapshotResponse> SnapManagerActor::DeleteReusableSnapshot(
+    const ::messages::DeleteReusableSnapshotRequest &request)
+{
+    ASSERT_IF_NULL(member_->reusableSnapshotStore);
+    return member_->reusableSnapshotStore->Delete(request);
+}
+
+void SnapManagerActor::SetReusableSnapshotArtifactDeleter(ReusableSnapshotStore::ArtifactDeleter deleter)
+{
+    ASSERT_IF_NULL(member_->reusableSnapshotStore);
+    member_->reusableSnapshotStore->SetArtifactDeleter(std::move(deleter));
 }
 
 litebus::Future<litebus::Option<SnapshotMetadata>> SnapManagerActor::GetSnapshotMetadata(const std::string &snapshotID)
@@ -360,9 +579,6 @@ void SnapManagerActor::SendSnapStartResponse(const SnapStartResponse &response)
     rsp.set_requestid(response.requestID);
     rsp.set_code(response.code);
     rsp.set_message(response.message);
-    if (!response.instanceID.empty()) {
-        rsp.set_instanceid(response.instanceID);
-    }
     if (response.snapstartInfo.ByteSizeLong() > 0) {
         rsp.mutable_snapstartinfo()->CopyFrom(response.snapstartInfo);
     }
@@ -523,6 +739,27 @@ void SnapManagerActor::MasterBusiness::HandleRecordSnapshot(const litebus::AID &
 void SnapManagerActor::MasterBusiness::HandleSnapStart(const litebus::AID &from,
                                                        std::shared_ptr<messages::RestoreSnapshotRequest> req)
 {
+    if (req->snapstartoptions().type() == common::PAUSE_RESUME) {
+        StartPauseResume(req).OnComplete(
+            [weakActor(actor_), from, req](const litebus::Future<PauseResumeResult> &future) {
+                auto actor = weakActor.lock();
+                if (!actor) {
+                    return;
+                }
+                PauseResumeResult result;
+                if (future.IsError()) {
+                    result.code = future.GetErrorCode();
+                    result.message = "failed to process pause resume request";
+                } else {
+                    result = future.Get();
+                }
+                litebus::Async(actor->GetAID(), &SnapManagerActor::SendSnapStartResponse,
+                               SnapStartResponse{from, req->requestid(), result.code, result.message,
+                                                 result.snapstartInfo});
+            });
+        return;
+    }
+
     const auto &snapshotID = req->checkpointid();
     YRLOG_INFO("processing snapstart request for snapshot: {}", snapshotID);
 
@@ -560,7 +797,8 @@ void SnapManagerActor::MasterBusiness::HandleSnapStart(const litebus::AID &from,
             }
             auto code = future.IsError() ? future.GetErrorCode() : future.Get().StatusCode();
             auto message = future.IsError() ? "failed to schedule." : future.Get().RawMessage();
-            ::messages::SnapstartInfo info;
+            ::core_service::SnapStartedInfo info;
+            info.set_instanceid(scheduleReq->instance().instanceid());
             if (!scheduleReq->instance().runtimeaddress().empty()) {
                 info.set_routeaddress(scheduleReq->instance().runtimeaddress());
             }
@@ -572,9 +810,166 @@ void SnapManagerActor::MasterBusiness::HandleSnapStart(const litebus::AID &from,
                 info.set_namespace_(meta.functionkey().namespace_());
             }
             litebus::Async(actor->GetAID(), &SnapManagerActor::SendSnapStartResponse,
-                           SnapStartResponse{from, req->requestid(), code, message,
-                                             scheduleReq->instance().instanceid(), info});
+                           SnapStartResponse{from, req->requestid(), code, message, info});
         });
+}
+
+std::string SnapManagerActor::MasterBusiness::BuildPauseResumeFingerprint(
+    const messages::RestoreSnapshotRequest &req)
+{
+    const auto schedulingOptions = req.snapstartoptions().scheduleopts().SerializeAsString();
+    return std::to_string(req.checkpointid().size()) + ":" + req.checkpointid() + ":" +
+           std::to_string(static_cast<int32_t>(req.snapstartoptions().type())) + ":" +
+           std::to_string(schedulingOptions.size()) + ":" + schedulingOptions;
+}
+
+Status SnapManagerActor::MasterBusiness::ValidatePauseResumeInstance(
+    const resources::InstanceInfo &instance, const std::string &logicalInstanceID)
+{
+    if (instance.instanceid() != logicalInstanceID) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "authoritative instance ID mismatch");
+    }
+    if (instance.instancestatus().code() != static_cast<int32_t>(InstanceState::PAUSED)) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "authoritative instance is not paused");
+    }
+    if (!resume_identity::IsAuthoritativePausedControlIdentity(instance)) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "paused instance control identity is invalid");
+    }
+    if (instance.requestid().empty()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "logical request ID is empty");
+    }
+    if (instance.tenantid().empty()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "tenant ID is empty");
+    }
+    if (instance.version() <= 0) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "instance version is invalid");
+    }
+    if (!instance.has_snapshotinfo()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "snapshot info is missing");
+    }
+    if (!resume_identity::IsCompleteReadySnapshot(instance.snapshotinfo())) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "snapshot metadata is incomplete");
+    }
+    return Status::OK();
+}
+
+litebus::Future<SnapManagerActor::MasterBusiness::PauseResumeResult>
+SnapManagerActor::MasterBusiness::StartPauseResume(
+    const std::shared_ptr<messages::RestoreSnapshotRequest> &req)
+{
+    if (req == nullptr || req->requestid().empty() || req->checkpointid().empty()) {
+        return PauseResumeResult{common::ERR_PARAM_INVALID, "pause resume identity is empty", {}};
+    }
+
+    const auto fingerprint = BuildPauseResumeFingerprint(*req);
+    auto existing = pauseResumeAttempts_.find(req->requestid());
+    if (existing != pauseResumeAttempts_.end()) {
+        if (existing->second.fingerprint != fingerprint) {
+            return PauseResumeResult{static_cast<int32_t>(StatusCode::SCHEDULE_CONFLICTED),
+                                     "target attempt conflicts with an existing pause resume request", {}};
+        }
+        return existing->second.result->GetFuture();
+    }
+
+    auto resultPromise = std::make_shared<litebus::Promise<PauseResumeResult>>();
+    auto resultFuture = resultPromise->GetFuture();
+    pauseResumeAttempts_.emplace(req->requestid(), PauseResumeAttempt{fingerprint, resultPromise});
+    std::weak_ptr<MasterBusiness> weakSelf = shared_from_this();
+    auto complete = [weakSelf, attemptID(req->requestid()), resultPromise](PauseResumeResult result) {
+        if (auto self = weakSelf.lock()) {
+            auto iter = self->pauseResumeAttempts_.find(attemptID);
+            if (iter != self->pauseResumeAttempts_.end() && iter->second.result == resultPromise) {
+                self->pauseResumeAttempts_.erase(iter);
+            }
+        }
+        resultPromise->SetValue(std::move(result));
+    };
+    if (member_->instanceManager == nullptr) {
+        complete(PauseResumeResult{
+            common::ERR_INNER_SYSTEM_ERROR, "instance manager is unavailable", {}});
+        return resultFuture;
+    }
+
+    member_->instanceManager->GetInstanceInfoByInstanceID(req->checkpointid()).OnComplete(
+        [member(member_), req, complete](const litebus::Future<instance_manager::InstanceKeyInfoPair> &future) {
+            if (future.IsError()) {
+                complete(PauseResumeResult{
+                    future.GetErrorCode(), "failed to read authoritative instance", {}});
+                return;
+            }
+            const auto &instance = future.Get().second;
+            if (instance == nullptr) {
+                complete(PauseResumeResult{
+                    common::ERR_INSTANCE_NOT_FOUND, "authoritative instance not found", {}});
+                return;
+            }
+            if (resume_identity::IsCommittedResumeWinner(
+                    *instance, req->checkpointid(), req->requestid())) {
+                if (instance->has_snapshotinfo()
+                    && resume_identity::IsCompleteReadySnapshot(instance->snapshotinfo())) {
+                    auto replay = member->scheduler->BuildPauseResumeScheduleRequest(*instance, *req);
+                    (void)member->scheduler->Schedule(replay);
+                }
+                PauseResumeResult result;
+                result.code = common::ERR_NONE;
+                result.message = "pause resume attempt already committed";
+                PopulateResumeWinner(&result.snapstartInfo, *instance);
+                complete(std::move(result));
+                return;
+            }
+            auto validation = ValidatePauseResumeInstance(*instance, req->checkpointid());
+            if (validation.IsError()) {
+                complete(PauseResumeResult{
+                    common::ERR_PARAM_INVALID, validation.RawMessage(), {}});
+                return;
+            }
+
+            auto scheduleReq = member->scheduler->BuildPauseResumeScheduleRequest(*instance, *req);
+            member->scheduler->Schedule(scheduleReq).OnComplete(
+                [member, scheduleReq, req, complete](const litebus::Future<Status> &scheduleFuture) {
+                    if (scheduleFuture.IsError()) {
+                        complete(PauseResumeResult{scheduleFuture.GetErrorCode(),
+                                                   "failed to schedule pause resume attempt", {}});
+                        return;
+                    }
+                    const auto &scheduleStatus = scheduleFuture.Get();
+                    if (scheduleStatus.IsError()) {
+                        complete(PauseResumeResult{static_cast<int32_t>(scheduleStatus.StatusCode()),
+                                                   scheduleStatus.RawMessage(), {}});
+                        return;
+                    }
+                    // Cross-node scheduling does not mutate the Master's ScheduleRequest.
+                    // Re-read the CAS winner so the lifecycle response is built from the
+                    // authoritative target route, never from the source-stripped request.
+                    member->instanceManager->GetInstanceInfoByInstanceID(req->checkpointid()).OnComplete(
+                        [scheduleReq, req, complete](
+                            const litebus::Future<instance_manager::InstanceKeyInfoPair> &winnerFuture) {
+                            if (winnerFuture.IsError()) {
+                                complete(PauseResumeResult{winnerFuture.GetErrorCode(),
+                                                           "failed to read committed resume winner", {}});
+                                return;
+                            }
+                            const auto &winner = winnerFuture.Get().second;
+                            if (winner == nullptr
+                                || !resume_identity::IsCommittedResumeWinner(
+                                    *winner, req->checkpointid(), req->requestid())
+                                || winner->requestid() != scheduleReq->instance().requestid()
+                                || winner->tenantid() != scheduleReq->instance().tenantid()
+                                || winner->version() <= scheduleReq->instance().version()) {
+                                complete(PauseResumeResult{
+                                    static_cast<int32_t>(StatusCode::SCHEDULE_CONFLICTED),
+                                    "scheduled resume has no authoritative running winner", {}});
+                                return;
+                            }
+                            PauseResumeResult result;
+                            result.code = common::ERR_NONE;
+                            result.message = "pause resume committed";
+                            PopulateResumeWinner(&result.snapstartInfo, *winner);
+                            complete(std::move(result));
+                        });
+                });
+        });
+    return resultFuture;
 }
 
 litebus::Future<Status> SnapManagerActor::MasterBusiness::SaveMetadataToEtcd(const SnapshotMetadata &meta)

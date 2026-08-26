@@ -388,8 +388,7 @@ Status CkptFileManagerActor::DeleteCheckpointFile(const std::string &checkpointI
         return Status(StatusCode::ERR_CHECKPOINT_NOT_FOUND, "checkpoint not found");
     }
 
-    const std::string &localPath = iter->second.localPath;
-
+    const std::string localPath = iter->second.localPath;
     try {
         // Delete file or directory
         if (std::filesystem::exists(localPath)) {

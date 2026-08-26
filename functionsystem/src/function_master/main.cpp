@@ -440,9 +440,12 @@ bool InitResourceGroupManager(const std::shared_ptr<MetaStoreClient> &metaClient
 }
 
 bool InitSnapManagerDriver(const std::shared_ptr<MetaStoreClient> &metaClient,
-                           const std::shared_ptr<global_scheduler::GlobalSched> &globalSched)
+                           const std::shared_ptr<global_scheduler::GlobalSched> &globalSched,
+                           const std::shared_ptr<instance_manager::InstanceManager> &instanceManager)
 {
-    auto snapManagerActor = std::make_shared<snap_manager::SnapManagerActor>(metaClient, globalSched);
+    auto snapManagerActor =
+        std::make_shared<snap_manager::SnapManagerActor>(metaClient, globalSched, snap_manager::SnapManagerConfig{},
+                                                         instanceManager);
     g_snapManagerDriver = std::make_shared<snap_manager::SnapManagerDriver>(snapManagerActor);
     if (!g_snapManagerDriver->Start().IsOk()) {
         YRLOG_ERROR("failed to start snap-manager");
@@ -622,11 +625,11 @@ void OnCreate(const functionmaster::Flags &flags)
         return;
     }
 
-    if (!InitSnapManagerDriver(metaClient, globalSched)) {
+    if (!InitInstanceManagerDriver(flags, metaClient, globalSched, metaStoreMonitor)) {
         return;
     }
 
-    if (!InitInstanceManagerDriver(flags, metaClient, globalSched, metaStoreMonitor)) {
+    if (!InitSnapManagerDriver(metaClient, globalSched, g_instanceMgr)) {
         return;
     }
 

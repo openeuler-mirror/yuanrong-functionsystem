@@ -83,6 +83,28 @@ public:
                  local_scheduler::InstanceReadyCallBack callback),
                 (override));
     MOCK_METHOD(litebus::Future<Status>, ForceDeleteInstance, (const std::string &instanceID), (override));
+    MOCK_METHOD(litebus::Future<Status>, BeginPauseGate,
+                (const resource_view::InstanceInfo &identity), (override));
+    MOCK_METHOD(litebus::Future<Status>, RecoverPauseGate,
+                (const resource_view::InstanceInfo &identity), (override));
+    MOCK_METHOD(litebus::Future<Status>, ReleaseRuntimeForPause,
+                (const resource_view::InstanceInfo &instanceInfo, const std::string &snapshotID), (override));
+    MOCK_METHOD(litebus::Future<Status>, ReleasePausedInstanceResources,
+                (const resource_view::InstanceInfo &instanceInfo), (override));
+    MOCK_METHOD(litebus::Future<messages::DeployInstanceResponse>, DeploySnapStartInstance,
+                (const std::shared_ptr<messages::ScheduleRequest> &scheduleReq), (override));
+    MOCK_METHOD(litebus::Future<messages::DeployInstanceResponse>, DeploySnapStartInstance,
+                (const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
+                 const resume_identity::TrustedResumeIdentity &trustedResumeIdentity), (override));
+    MOCK_METHOD(litebus::Future<std::shared_ptr<ControlInterfacePosixClient>>, CreateInstanceClient,
+                (const std::string &instanceID, const std::string &runtimeID, const std::string &address),
+                (override));
+    MOCK_METHOD(void, StartHeartbeat,
+                (const std::string &instanceID, uint32_t timeoutTimes,
+                 const std::string &runtimeID, const StatusCode &prevStatus), (override));
+    MOCK_METHOD(litebus::Future<TransitionResult>, TransInstanceState,
+                (const std::shared_ptr<InstanceStateMachine> machine, const TransContext &context),
+                (override));
     MOCK_METHOD(litebus::Future<Status>, DeleteSchedulingInstance, (const std::string &instanceID, const std::string &requestID), (override));
     MOCK_METHOD(void, RegisterClearGroupInstanceCallBack, (local_scheduler::ClearGroupInstanceCallBack callback), (override));
     MOCK_METHOD(litebus::Future<Status>, GracefulShutdown, (), (override));

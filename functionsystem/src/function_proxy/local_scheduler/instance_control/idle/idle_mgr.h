@@ -46,7 +46,9 @@ public:
 
     void SessionCountDelta(const std::string &instanceID, int delta);
 
-    void OnInstanceRunning(const std::string &instanceID);
+    void OnInstanceRunning(const resources::InstanceInfo &identity);
+
+    litebus::Future<Status> SetPauseGated(const resources::InstanceInfo &identity, uint64_t token, bool gated);
 
 private:
     std::shared_ptr<IdleActor> idleActor_;

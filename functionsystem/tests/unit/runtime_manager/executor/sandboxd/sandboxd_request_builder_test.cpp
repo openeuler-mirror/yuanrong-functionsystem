@@ -103,6 +103,20 @@ TEST_F(SandboxdRequestBuilderTest, FlatRequestLeavesSandboxIdEmpty)
     EXPECT_EQ(startReq->runtime(), "runsc");
 }
 
+TEST_F(SandboxdRequestBuilderTest, LongRuntimeIdentityStillLeavesSandboxIdToSandboxd)
+{
+    auto params = MakeMinimalParams();
+    params.runtimeID =
+        "runtime-default-refactor-isolation-snapshot-source-00003f03e828";
+    params.request->mutable_runtimeinstanceinfo()->set_runtimeid(params.runtimeID);
+
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk());
+    ASSERT_NE(startReq, nullptr);
+    EXPECT_TRUE(startReq->sandbox_id().empty());
+}
+
 // trace_id is the distributed trace ID from the upstream request (not runtimeID).
 TEST_F(SandboxdRequestBuilderTest, FlatRequestHasTraceId)
 {

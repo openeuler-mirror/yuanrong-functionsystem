@@ -263,6 +263,32 @@ TEST_F(InstanceOperatorTest, ModifyInstanceSuccess)
     EXPECT_EQ(fut.Get().value, "");
 }
 
+TEST_F(InstanceOperatorTest, ModifyWithEmptyRouteValueDoesNotDeleteRouteKey)
+{
+    InstanceOperator instanceOpt(metaStoreClient_);
+    const std::string runningValue =
+        R"({"instanceID":"0ee7cafc-93b9-4be3-ae01-000000000075","requestID":"create-request","functionProxyID":"source-proxy","instanceStatus":{"code":3,"msg":"running"}})";
+    auto instancePutInfo = std::make_shared<StoreInfo>(key, runningValue);
+    auto routePutInfo = std::make_shared<StoreInfo>(routeKey, runningValue);
+    auto result = instanceOpt.Create(instancePutInfo, routePutInfo, false);
+    ASSERT_AWAIT_READY(result);
+    ASSERT_TRUE(result.Get().status.IsOk()) << result.Get().status.ToString();
+
+    const std::string pausedValue =
+        R"({"instanceID":"0ee7cafc-93b9-4be3-ae01-000000000075","requestID":"create-request","functionProxyID":"InstanceManagerOwner","instanceStatus":{"code":4,"msg":"paused"}})";
+    instancePutInfo->value = pausedValue;
+    routePutInfo->value.clear();
+    result = instanceOpt.Modify(instancePutInfo, routePutInfo, 1, false);
+    ASSERT_AWAIT_READY(result);
+    ASSERT_TRUE(result.Get().status.IsOk()) << result.Get().status.ToString();
+
+    auto getRoute = metaStoreClient_->Get(routeKey, GetOption{ .prefix = false });
+    ASSERT_AWAIT_READY(getRoute);
+    ASSERT_TRUE(getRoute.Get()->status.IsOk()) << getRoute.Get()->status.ToString();
+    ASSERT_EQ(getRoute.Get()->kvs.size(), size_t{ 1 });
+    EXPECT_TRUE(getRoute.Get()->kvs.front().value().empty());
+}
+
 TEST_F(InstanceOperatorTest, ModifyInstanceNotExist)
 {
     ASSERT_TRUE(metaStoreClient_->Delete(INSTANCE_ROUTE_PATH_PREFIX, DeleteOption{ .prevKv = false, .prefix = true })

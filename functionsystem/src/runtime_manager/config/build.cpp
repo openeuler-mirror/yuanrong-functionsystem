@@ -218,6 +218,10 @@ std::map<std::string, std::string> GeneratePosixEnvs(const RuntimeConfig &config
     addIfValid(ENABLE_DIS_CONV_CALL_STACK, config.enableDisConvCallStack ? "true" : "");
     addIfValid(YR_DEBUG_SERVER_PORT, debugServerPort);
     addIfValid("YR_JOB_ID", "job-" + Utils::GetJobIDFromTraceID(info.traceid()));
+    if (info.has_reusablesnapshotrestore()
+        && info.reusablesnapshotrestore().allowlogicalinstanceidrebind()) {
+        addIfValid("YR_ALLOW_LOGICAL_INSTANCE_ID_REBIND", "true");
+    }
 
     AddYuanRongEnvs(posixEnvs);
 

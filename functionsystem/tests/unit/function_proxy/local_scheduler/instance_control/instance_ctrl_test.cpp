@@ -23,6 +23,7 @@
 #include "common/constants/actor_name.h"
 #include "common/constants/signal.h"
 #include "common/etcd_service/etcd_service_driver.h"
+#include "common/hex/hex.h"
 #include "common/logs/logging.h"
 #include "common/metrics/metrics_adapter.h"
 #include "common/metadata/metadata.h"
@@ -37,6 +38,7 @@
 #include "function_proxy/config/direct_routing_config.h"
 #include "local_scheduler/instance_control/instance_ctrl_actor.h"
 #include "local_scheduler/instance_control/instance_ctrl_message.h"
+#include "local_scheduler/snap_ctrl/snap_ctrl.h"
 #include "mocks/mock_distributed_cache_client.h"
 #include "mocks/mock_data_obj_client.h"
 #include "mocks/mock_function_agent_mgr.h"
@@ -215,6 +217,31 @@ static resources::InstanceInfo GenParentInstanceInfo(const std::string &parentID
     return parentInfo;
 }
 
+class DeletePreparationSnapCtrlProbe : public SnapCtrl {
+public:
+    explicit DeletePreparationSnapCtrlProbe(const std::shared_ptr<SnapCtrlActor> &actor)
+        : SnapCtrl(actor), preparation_(std::make_shared<litebus::Promise<DeletePreparation>>())
+    {
+    }
+
+    litebus::Future<DeletePreparation> PrepareForAuthorizedDelete(const std::string &) override
+    {
+        ++prepareCalls_;
+        return preparation_->GetFuture();
+    }
+
+    litebus::Future<Status> FinishAuthorizedDelete(const std::string &, uint64_t) override
+    {
+        ++finishCalls_;
+        return finishStatus_;
+    }
+
+    std::shared_ptr<litebus::Promise<DeletePreparation>> preparation_;
+    size_t prepareCalls_{ 0 };
+    size_t finishCalls_{ 0 };
+    Status finishStatus_{ Status::OK() };
+};
+
 static std::string GetMetricsFilesName(const std::string &backendName)
 {
     return backendName + "-metrics.data";
@@ -389,6 +416,87 @@ TEST_F(InstanceCtrlTest, ScheduleGetFuncMetaFailed)
     EXPECT_EQ(result.Get().message(), "failed to find function meta");
 }
 
+TEST_F(InstanceCtrlTest, ConcurrentAuthorizedDeletesShareOnePreparedShutdownOperation)
+{
+    auto snapActor = std::make_shared<SnapCtrlActor>("delete-coalescing-snap-ctrl", nodeID_);
+    litebus::Spawn(snapActor);
+    auto snapCtrl = std::make_shared<DeletePreparationSnapCtrlProbe>(snapActor);
+    instanceCtrl_->instanceCtrlActor_->snapCtrl_ = snapCtrl;
+
+    auto killCtx = std::make_shared<KillContext>();
+    killCtx->killRsp.set_code(common::ERR_NONE);
+    auto request = std::make_shared<KillRequest>();
+    request->set_instanceid("coalesced-delete-instance");
+
+    auto first = instanceCtrl_->instanceCtrlActor_->RegisterAuthorizedDeleteAndShutdown(
+        killCtx, "caller-a", request, true);
+    auto duplicate = instanceCtrl_->instanceCtrlActor_->RegisterAuthorizedDeleteAndShutdown(
+        killCtx, "caller-b", request, true);
+
+    EXPECT_EQ(snapCtrl->prepareCalls_, 1U);
+    ASSERT_AWAIT_NO_SET_FOR(first, 20);
+    ASSERT_AWAIT_NO_SET_FOR(duplicate, 20);
+
+    // Do not leak a pending future/callback into subsequent actor tests.
+    snapCtrl->preparation_->SetFailed(static_cast<int32_t>(StatusCode::FAILED));
+    ASSERT_AWAIT_READY(first);
+    ASSERT_AWAIT_READY(duplicate);
+    EXPECT_EQ(first.Get().code(), common::ERR_INNER_COMMUNICATION);
+    EXPECT_EQ(duplicate.Get().code(), common::ERR_INNER_COMMUNICATION);
+    instanceCtrl_->instanceCtrlActor_->snapCtrl_ = nullptr;
+    litebus::Terminate(snapActor->GetAID());
+    litebus::Await(snapActor->GetAID());
+}
+
+TEST_F(InstanceCtrlTest, DeleteInstanceRetiresPauseGateBeforeLogicalIDReuse)
+{
+    const std::string logicalInstanceID = "recreated-logical-instance";
+    InstanceInfo deletedIdentity;
+    deletedIdentity.set_instanceid(logicalInstanceID);
+    deletedIdentity.set_requestid("deleted-generation-request");
+    deletedIdentity.set_version(7);
+
+    InstanceCtrlActor::PauseGateContext staleGate;
+    staleGate.identity.CopyFrom(deletedIdentity);
+    staleGate.phase = InstanceCtrlActor::PauseGatePhase::RECOVERED;
+    staleGate.token = 1;
+    staleGate.promise = std::make_shared<litebus::Promise<Status>>();
+    instanceCtrl_->instanceCtrlActor_->pauseGateContexts_.emplace(logicalInstanceID, std::move(staleGate));
+    ASSERT_EQ(instanceCtrl_->instanceCtrlActor_->pauseGateContexts_.count(logicalInstanceID), 1u);
+
+    EXPECT_CALL(*instanceControlView_, DelInstance(logicalInstanceID)).WillOnce(Return(Status::OK()));
+    auto deleted = instanceCtrl_->instanceCtrlActor_->DeleteInstanceInControlView(Status::OK(), deletedIdentity);
+
+    ASSERT_AWAIT_READY(deleted);
+    ASSERT_TRUE(deleted.Get().IsOk()) << deleted.Get().ToString();
+    EXPECT_EQ(instanceCtrl_->instanceCtrlActor_->pauseGateContexts_.count(logicalInstanceID), 0u);
+}
+
+TEST_F(InstanceCtrlTest, AuthorizedDeleteReportsLifecycleFinishFailure)
+{
+    auto snapActor = std::make_shared<SnapCtrlActor>("delete-finish-failure-snap-ctrl", nodeID_);
+    litebus::Spawn(snapActor);
+    auto snapCtrl = std::make_shared<DeletePreparationSnapCtrlProbe>(snapActor);
+    snapCtrl->finishStatus_ = Status(StatusCode::SCHEDULE_CONFLICTED,
+                                    "delete generation no longer owns lifecycle");
+    instanceCtrl_->instanceCtrlActor_->snapCtrl_ = snapCtrl;
+
+    KillResponse shutdownResponse;
+    shutdownResponse.set_code(common::ERR_NONE);
+    auto result = std::make_shared<litebus::Promise<KillResponse>>();
+    instanceCtrl_->instanceCtrlActor_->FinishAuthorizedDeleteAfterShutdown(
+        "finish-failure-instance", 9, result,
+        litebus::Future<KillResponse>(shutdownResponse));
+
+    ASSERT_AWAIT_READY(result->GetFuture());
+    EXPECT_NE(result->GetFuture().Get().code(), common::ERR_NONE);
+    EXPECT_EQ(snapCtrl->finishCalls_, 1U);
+
+    instanceCtrl_->instanceCtrlActor_->snapCtrl_ = nullptr;
+    litebus::Terminate(snapActor->GetAID());
+    litebus::Await(snapActor->GetAID());
+}
+
 TEST(InstanceCtrlReadyCallResultTest, FrontendReadyCallResultCallbackFallsBackToInstanceID)
 {
     auto actor = std::make_shared<InstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
@@ -550,6 +658,63 @@ TEST(InstanceCtrlReadyCallResultTest, CancelledFrontendTicketIgnoresLateReady)
     EXPECT_EQ(callbackCount, 0);
     EXPECT_TRUE(actor->instanceRegisteredReadyCallResultCallback_.empty());
     EXPECT_TRUE(actor->instanceReadyCallResultCallbackByInstanceID_.empty());
+}
+
+TEST(InstanceCtrlReadyCallResultTest, RemoteFrontendCreateForwardsReadyWithoutRuntimeParent)
+{
+    auto frontend = std::make_shared<InstanceCtrlActor>(
+        "FrontendReadyInstanceCtrlActor", "frontend-node", instanceCtrlConfig);
+    auto target = std::make_shared<InstanceCtrlActor>(
+        "TargetReadyInstanceCtrlActor", "target-node", instanceCtrlConfig);
+    target->BindObserver(std::make_shared<MockObserver>());
+    auto targetView = std::make_shared<MockInstanceControlView>("target-node");
+    auto targetState = std::make_shared<MockInstanceStateMachine>("target-node");
+    InstanceInfo targetInfo;
+    targetInfo.set_instanceid("remote-frontend-instance");
+    (*targetInfo.mutable_extensions())[CREATE_SOURCE] = FRONTEND_STR;
+    EXPECT_CALL(*targetView, GetInstance("remote-frontend-instance"))
+        .WillRepeatedly(Return(targetState));
+    EXPECT_CALL(*targetState, GetInstanceInfo).WillRepeatedly(Return(targetInfo));
+    EXPECT_CALL(*targetState, GetModRevision).WillRepeatedly(Return(1));
+    target->BindInstanceControlView(targetView);
+    litebus::Spawn(frontend);
+    litebus::Spawn(target);
+
+    const std::string requestID = "remote-frontend-create-ready";
+    const std::string instanceID = "remote-frontend-instance";
+    auto scheduleReq = GenScheduleReq(frontend);
+    scheduleReq->set_requestid(requestID);
+    scheduleReq->mutable_instance()->set_instanceid(instanceID);
+
+    int callbackCount = 0;
+    ASSERT_TRUE(frontend->RegisterFrontendReadyTicket(
+        scheduleReq, [&callbackCount](const std::shared_ptr<functionsystem::CallResult> &) {
+            ++callbackCount;
+            CallResultAck ack;
+            ack.set_code(common::ERR_NONE);
+            return litebus::Future<CallResultAck>(ack);
+        }));
+    ASSERT_TRUE(frontend->BindFrontendReadyTicketInstance(requestID, instanceID));
+
+    auto ready = std::make_shared<functionsystem::CallResult>();
+    ready->set_requestid(requestID);
+    ready->set_code(common::ERR_NONE);
+    auto forwarded = target->SendCallResult(
+        instanceID, "", std::string(frontend->GetAID()), ready);
+    ASSERT_AWAIT_READY(forwarded);
+    EXPECT_EQ(forwarded.Get().code(), common::ERR_NONE);
+    EXPECT_EQ(callbackCount, 1);
+
+    auto replayed = target->SendCallResult(
+        instanceID, "", std::string(frontend->GetAID()), ready);
+    ASSERT_AWAIT_READY(replayed);
+    EXPECT_EQ(replayed.Get().code(), common::ERR_NONE);
+    EXPECT_EQ(callbackCount, 1);
+
+    litebus::Terminate(target->GetAID());
+    litebus::Await(target);
+    litebus::Terminate(frontend->GetAID());
+    litebus::Await(frontend);
 }
 
 TEST(InstanceCtrlReadyCallResultTest, LowReliabilityFailuresStillCompleteFrontendWaiter)
@@ -3958,6 +4123,86 @@ TEST_F(InstanceCtrlTest, FrontendCreateLocalNotEnoughAndRemoteEnoughWaitsForRead
 }
 
 /**
+ * Frontend create must return the accepted scheduling ticket when the local
+ * FunctionProxy cannot place the instance but the authoritative scheduler
+ * accepts the forwarded request.
+ */
+TEST_F(InstanceCtrlTest, FrontendCreateLocalNotEnoughAndRemoteAcceptedReturnsAcceptedTicket)
+{
+    auto observer = std::make_shared<MockObserver>();
+    ASSERT_IF_NULL(observer);
+    EXPECT_CALL(*observer, GetFuncMeta).WillOnce(Return(functionMeta_));
+    EXPECT_CALL(*observer, IsSystemFunction).WillRepeatedly(Return(false));
+
+    auto resourceViewMgr = std::make_shared<resource_view::ResourceViewMgr>();
+    auto primary = MockResourceView::CreateMockResourceView();
+    resourceViewMgr->primary_ = primary;
+    resourceViewMgr->virtual_ = MockResourceView::CreateMockResourceView();
+    EXPECT_CALL(*primary, DeleteInstances).WillRepeatedly(Return(Status::OK()));
+
+    auto actor = std::make_shared<MockInstanceCtrlActor>("InstanceCtrlActor", "nodeID", instanceCtrlConfig);
+    EXPECT_CALL(*actor, MockSendCallResult).Times(0);
+
+    auto localSchedSrv = std::make_shared<MockLocalSchedSrv>();
+    messages::ScheduleResponse forwardedResponse;
+    forwardedResponse.set_requestid("request-id-frontend-forwarded");
+    forwardedResponse.set_message("remote scheduler accepted request");
+    forwardedResponse.set_code(StatusCode::SUCCESS);
+    litebus::Future<std::shared_ptr<messages::ScheduleRequest>> forwardedRequest;
+    EXPECT_CALL(*localSchedSrv, ForwardSchedule)
+        .WillOnce(DoAll(FutureArg<0>(&forwardedRequest), Return(forwardedResponse)));
+
+    auto instanceCtrl = std::make_shared<InstanceCtrl>(actor);
+    ASSERT_IF_NULL(instanceCtrl);
+    instanceCtrl->Start(nullptr, resourceViewMgr, observer);
+    instanceCtrl->BindInternalIAM(mockInternalIAM_);
+    instanceCtrl->BindLocalSchedSrv(localSchedSrv);
+
+    auto stateMachine = std::make_shared<MockInstanceStateMachine>("nodeN");
+    InstanceState state;
+    std::string stateMessage;
+    EXPECT_CALL(*stateMachine, IsSaving()).WillRepeatedly(Return(false));
+    EXPECT_CALL(*stateMachine, TransitionToImpl)
+        .WillRepeatedly(testing::DoAll(SaveArg<0>(&state), SaveArg<1>(&stateMessage), Return(NEW_RESULT)));
+    EXPECT_CALL(*stateMachine, ReleaseOwner).WillRepeatedly(Return());
+    EXPECT_CALL(*stateMachine, GetCancelFuture).WillRepeatedly(Return(litebus::Future<std::string>()));
+
+    const std::string requestID = "request-id-frontend-forwarded";
+    const std::string instanceID = "instance-id-frontend-forwarded";
+    GeneratedInstanceStates generated{ instanceID, InstanceState::NEW, false };
+    EXPECT_CALL(*instanceControlView_, TryGenerateNewInstance).WillOnce(Return(generated));
+    EXPECT_CALL(*instanceControlView_, GetInstance).WillOnce(Return(nullptr)).WillRepeatedly(Return(stateMachine));
+    instanceCtrl->BindInstanceControlView(instanceControlView_);
+
+    auto scheduler = std::make_shared<MockScheduler>();
+    EXPECT_CALL(*scheduler, ScheduleDecision(_))
+        .WillOnce(Return(ScheduleResult{ "", StatusCode::RESOURCE_NOT_ENOUGH, "" }));
+    instanceCtrl->BindScheduler(scheduler);
+
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->set_requestid(requestID);
+    scheduleReq->set_traceid("trace-id-frontend-forwarded");
+    scheduleReq->mutable_instance()->set_instanceid(instanceID);
+    EXPECT_CALL(*stateMachine, GetScheduleRequest).WillRepeatedly(Return(scheduleReq));
+
+    bool readyCallbackCalled = false;
+    auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
+    auto result = instanceCtrl->ScheduleFrontendAndWaitReady(
+        scheduleReq, runtimePromise,
+        [&readyCallbackCalled](const std::shared_ptr<functionsystem::CallResult> &) {
+            readyCallbackCalled = true;
+            return litebus::Future<CallResultAck>(CallResultAck());
+        });
+
+    ASSERT_AWAIT_READY(result);
+    ASSERT_AWAIT_READY(forwardedRequest);
+    EXPECT_EQ(result.Get().code(), static_cast<int32_t>(StatusCode::SUCCESS));
+    EXPECT_EQ(result.Get().instanceid(), instanceID);
+    EXPECT_EQ(state, InstanceState::SCHEDULING);
+    EXPECT_FALSE(readyCallbackCalled);
+}
+
+/**
  * Test schedule instance, local resource not enough, but local is not the first scheduler, so won't forward
  * Steps:
  * 1. MockObserver (GetFuncMeta() => defaultMeta / IsSystemFunction() => False)
@@ -4650,6 +4895,76 @@ TEST_F(InstanceCtrlTest, GetDeployInstanceReqTest)
     EXPECT_EQ(req->instanceid(), "id3");
 }
 
+namespace {
+
+constexpr char REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION[] =
+    "yr.internal.reusable_snapshot.requested_id";
+constexpr char REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION[] =
+    "yr.internal.reusable_snapshot.trusted_restore";
+
+}  // namespace
+
+TEST(ReusableSnapshotCreateTransferTest, CarriesOnlyRequestedSnapshotIDIntoOrdinaryScheduleRequest)
+{
+    core_service::CreateRequest createReq;
+    createReq.set_requestid("create-request");
+    createReq.set_snapshotid("snapshot-42");
+    (*createReq.mutable_schedulingops()->mutable_extension())
+        [REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION] = "forged-snapshot";
+    (*createReq.mutable_schedulingops()->mutable_extension())
+        [REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION] = "forged-restore";
+
+    auto scheduleReq = TransFromCreateReqToScheduleReq(std::move(createReq), "frontend");
+
+    const auto &extensions = scheduleReq->instance().scheduleoption().extension();
+    const auto snapshot = extensions.find(REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION);
+    ASSERT_NE(snapshot, extensions.end());
+    EXPECT_EQ(snapshot->second, "snapshot-42");
+    EXPECT_EQ(extensions.count(REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION), 0U);
+}
+
+TEST(ReusableSnapshotCreateTransferTest, OrdinaryCreateHasNoReusableSnapshotExtensions)
+{
+    core_service::CreateRequest createReq;
+    createReq.set_requestid("ordinary-create-request");
+
+    auto scheduleReq = TransFromCreateReqToScheduleReq(std::move(createReq), "frontend");
+
+    for (const auto &[key, value] : scheduleReq->instance().scheduleoption().extension()) {
+        (void)value;
+        EXPECT_NE(key.rfind("yr.internal.reusable_snapshot.", 0), 0U);
+    }
+}
+
+TEST_F(InstanceCtrlTest, GetDeployInstanceReqMovesTrustedReusableRestoreOutOfSchedulingExtensions)
+{
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->mutable_instance()->set_instanceid("clone-instance");
+    scheduleReq->set_requestid("clone-create-request");
+
+    ::messages::ReusableSnapshotRestore restore;
+    restore.set_snapshotid("snapshot-42");
+    restore.set_allowlogicalinstanceidrebind(true);
+    restore.mutable_artifact()->set_storagebackend("obs");
+    restore.mutable_artifact()->set_objectkey("snapshots/tenant/snapshot-42/checkpoint.img");
+    restore.mutable_artifact()->set_size(4096);
+    restore.mutable_artifact()->set_sha256(std::string(64, 'a'));
+    restore.mutable_artifact()->set_format("runsc");
+    restore.mutable_artifact()->set_formatversion(1);
+    (*scheduleReq->mutable_instance()->mutable_scheduleoption()->mutable_extension())
+        [REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION] =
+            CharStringToHexString(restore.SerializeAsString());
+
+    FunctionMeta meta;
+    auto deployReq = GetDeployInstanceReq(meta, scheduleReq);
+
+    ASSERT_TRUE(deployReq->has_reusablesnapshotrestore());
+    EXPECT_EQ(deployReq->reusablesnapshotrestore().SerializeAsString(), restore.SerializeAsString());
+    EXPECT_EQ(deployReq->scheduleoption().extension().count(REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION), 0U);
+    EXPECT_EQ(scheduleReq->instance().scheduleoption().extension().count(
+                  REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION), 1U);
+}
+
 /**
  * Feature: instance ctrl.
  * Description: CollectInstanceResources test.
@@ -4682,6 +4997,162 @@ TEST_F(InstanceCtrlTest, CollectInstanceResourcesTest)
     *instanceRes = resources;
     actor->CollectInstanceResources(instanceInfo);
     EXPECT_EQ(instanceInfo.instanceid(), "id3");
+}
+
+TEST(ReusableSnapshotCreateTransferTest, ResolvedSnapshotKeepsNewCreateIdentityAndInjectsOnlyTrustedRestore)
+{
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->set_requestid("clone-create-request");
+    scheduleReq->set_traceid("clone-trace");
+    auto *target = scheduleReq->mutable_instance();
+    target->set_instanceid("new-clone-instance");
+    target->set_requestid("clone-create-request");
+    target->set_tenantid("tenant-a");
+    target->set_function("default/sandbox/$latest");
+    target->set_parentid("frontend-instance");
+    (*target->mutable_extensions())[NAMED] = "true";
+    (*target->mutable_scheduleoption()->mutable_extension())
+        [REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION] = "snapshot-42";
+    target->mutable_resources()->mutable_resources()->operator[](CPU_RESOURCE_NAME)
+        .mutable_scalar()->set_value(2000);
+    target->mutable_resources()->mutable_resources()->operator[](MEMORY_RESOURCE_NAME)
+        .mutable_scalar()->set_value(4096);
+
+    ::messages::ResolveReusableSnapshotForCreateResponse resolved;
+    resolved.set_code(common::ERR_NONE);
+    auto *source = resolved.mutable_instancetemplate();
+    source->set_function("default/sandbox/$latest");
+    source->set_storagetype("working_dir");
+    source->set_gracefulshutdowntime(5);
+    (*source->mutable_createoptions())["network_policy"] =
+        R"({"blockNetwork":true})";
+    (*source->mutable_createoptions())["rootfs"] = R"({"type":"local","path":"/runtime"})";
+    source->mutable_resources()->mutable_resources()->operator[](CPU_RESOURCE_NAME)
+        .mutable_scalar()->set_value(1000);
+    source->mutable_resources()->mutable_resources()->operator[](MEMORY_RESOURCE_NAME)
+        .mutable_scalar()->set_value(2048);
+    auto *restore = resolved.mutable_reusablesnapshotrestore();
+    restore->set_snapshotid("snapshot-42");
+    restore->set_allowlogicalinstanceidrebind(true);
+    restore->mutable_artifact()->set_storagebackend("obs");
+    restore->mutable_artifact()->set_objectkey(
+        "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
+    restore->mutable_artifact()->set_size(4096);
+    restore->mutable_artifact()->set_sha256(std::string(64, 'a'));
+    restore->mutable_artifact()->set_format("gvisor-checkpoint");
+    restore->mutable_artifact()->set_formatversion(1);
+
+    const auto status = ApplyResolvedReusableSnapshotForCreate(resolved, scheduleReq);
+
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_EQ(scheduleReq->requestid(), "clone-create-request");
+    EXPECT_EQ(target->instanceid(), "new-clone-instance");
+    EXPECT_EQ(target->requestid(), "clone-create-request");
+    EXPECT_EQ(target->tenantid(), "tenant-a");
+    EXPECT_EQ(target->parentid(), "frontend-instance");
+    EXPECT_EQ(target->extensions().at(NAMED), "true");
+    EXPECT_EQ(target->createoptions().at("network_policy"), R"({"blockNetwork":true})");
+    EXPECT_EQ(target->resources().resources().at(CPU_RESOURCE_NAME).scalar().value(), 2000);
+    EXPECT_EQ(target->resources().resources().at(MEMORY_RESOURCE_NAME).scalar().value(), 4096);
+    EXPECT_EQ(target->scheduleoption().extension().count(
+                  REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION), 0U);
+    const auto trusted = target->scheduleoption().extension().find(
+        REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION);
+    ASSERT_NE(trusted, target->scheduleoption().extension().end());
+    ::messages::ReusableSnapshotRestore decoded;
+    ASSERT_TRUE(decoded.ParseFromString(HexStringToCharString(trusted->second)));
+    EXPECT_EQ(decoded.SerializeAsString(), restore->SerializeAsString());
+}
+
+TEST(ReusableSnapshotCreateTransferTest, RejectsCloneResourceReductionBeforeScheduling)
+{
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->set_requestid("clone-create-request");
+    auto *target = scheduleReq->mutable_instance();
+    target->set_instanceid("new-clone-instance");
+    target->set_tenantid("tenant-a");
+    target->set_function("default/sandbox/$latest");
+    (*target->mutable_scheduleoption()->mutable_extension())
+        [REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION] = "snapshot-42";
+    target->mutable_resources()->mutable_resources()->operator[](MEMORY_RESOURCE_NAME)
+        .mutable_scalar()->set_value(1024);
+
+    ::messages::ResolveReusableSnapshotForCreateResponse resolved;
+    resolved.set_code(common::ERR_NONE);
+    resolved.mutable_instancetemplate()->set_function("default/sandbox/$latest");
+    resolved.mutable_instancetemplate()->mutable_resources()->mutable_resources()
+        ->operator[](MEMORY_RESOURCE_NAME).mutable_scalar()->set_value(2048);
+    auto *restore = resolved.mutable_reusablesnapshotrestore();
+    restore->set_snapshotid("snapshot-42");
+    restore->set_allowlogicalinstanceidrebind(true);
+    restore->mutable_artifact()->set_storagebackend("obs");
+    restore->mutable_artifact()->set_objectkey(
+        "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
+    restore->mutable_artifact()->set_size(4096);
+    restore->mutable_artifact()->set_sha256(std::string(64, 'a'));
+    restore->mutable_artifact()->set_format("gvisor-checkpoint");
+    restore->mutable_artifact()->set_formatversion(1);
+
+    const auto status = ApplyResolvedReusableSnapshotForCreate(resolved, scheduleReq);
+
+    EXPECT_TRUE(status.IsError());
+    EXPECT_EQ(status.StatusCode(), StatusCode::ERR_PARAM_INVALID);
+    EXPECT_EQ(target->scheduleoption().extension().count(
+                  REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION), 0U);
+}
+
+TEST_F(InstanceCtrlTest, CreateFromSnapshotResolvesReadyRecordBeforeOrdinaryAuthorization)
+{
+    auto localSched = std::make_shared<MockLocalSchedSrv>();
+    instanceCtrl_->BindLocalSchedSrv(localSched);
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->set_requestid("clone-create-request");
+    auto *target = scheduleReq->mutable_instance();
+    target->set_instanceid("new-clone-instance");
+    target->set_requestid("clone-create-request");
+    target->set_function("default/sandbox/$latest");
+    target->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::NEW));
+    (*target->mutable_scheduleoption()->mutable_extension())
+        [REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION] = "snapshot-42";
+
+    auto meta = functionMeta_;
+    meta.funcMetaData.tenantId = "tenant-a";
+    EXPECT_CALL(*localSched, ResolveReusableSnapshotForCreate)
+        .WillOnce([](const std::shared_ptr<::messages::ResolveReusableSnapshotForCreateRequest> &request) {
+            EXPECT_EQ(request->requestid(), "clone-create-request");
+            EXPECT_EQ(request->tenantid(), "tenant-a");
+            EXPECT_EQ(request->snapshotid(), "snapshot-42");
+            ::messages::ResolveReusableSnapshotForCreateResponse response;
+            response.set_code(common::ERR_NONE);
+            auto *source = response.mutable_instancetemplate();
+            source->set_function("default/sandbox/$latest");
+            source->mutable_resources()->mutable_resources()->operator[](MEMORY_RESOURCE_NAME)
+                .mutable_scalar()->set_value(2048);
+            auto *restore = response.mutable_reusablesnapshotrestore();
+            restore->set_snapshotid("snapshot-42");
+            restore->set_allowlogicalinstanceidrebind(true);
+            restore->mutable_artifact()->set_storagebackend("obs");
+            restore->mutable_artifact()->set_objectkey(
+                "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
+            restore->mutable_artifact()->set_size(4096);
+            restore->mutable_artifact()->set_sha256(std::string(64, 'a'));
+            restore->mutable_artifact()->set_format("gvisor-checkpoint");
+            restore->mutable_artifact()->set_formatversion(1);
+            return response;
+        });
+
+    auto resolved = litebus::Async(
+        instanceCtrl_->GetActorAID(), &InstanceCtrlActor::ResolveReusableSnapshotForCreate,
+        litebus::Option<FunctionMeta>(meta), scheduleReq);
+
+    ASSERT_AWAIT_READY_FOR(resolved, 5'000);
+    ASSERT_TRUE(resolved.Get().IsOk()) << resolved.Get().ToString();
+    EXPECT_EQ(scheduleReq->instance().tenantid(), "tenant-a");
+    EXPECT_EQ(scheduleReq->instance().instanceid(), "new-clone-instance");
+    EXPECT_EQ(scheduleReq->instance().scheduleoption().extension().count(
+                  REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION), 0U);
+    EXPECT_EQ(scheduleReq->instance().scheduleoption().extension().count(
+                  REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION), 1U);
 }
 
 /**
@@ -6371,9 +6842,10 @@ TEST_F(InstanceCtrlTest, KillFatalInstance)
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->CopyFrom(instanceInfo);
     auto instanceContext = std::make_shared<InstanceContext>(scheduleReq);
-    EXPECT_CALL(*stateMachine, GetInstanceContextCopy)
-        .WillOnce(Return(instanceContext))
-        .WillOnce(Return(instanceContext));
+    // Each terminal kill reads the instance context once before registering the
+    // authorized-delete intent and once again before deleting the pause
+    // snapshot. This test exercises both the success and failure paths.
+    EXPECT_CALL(*stateMachine, GetInstanceContextCopy).Times(4).WillRepeatedly(Return(instanceContext));
     EXPECT_CALL(*stateMachine, GetCancelFuture).WillRepeatedly(Return(litebus::Future<std::string>()));
     EXPECT_CALL(*stateMachine, GetVersion).WillRepeatedly(Return(0));
 
@@ -7159,6 +7631,7 @@ TEST_F(InitialLowReliabilityRouteConflictActorTest, PostTransitionRuntimeGenerat
     EXPECT_CALL(*stateMachine, GetInstanceInfo())
         .WillOnce(Return(loser))
         .WillOnce(Return(loser))
+        .WillOnce(Return(loser))
         .WillOnce(Return(replacement));
     TransitionResult persistenceFailure{
         litebus::None(), {}, loser, 0,
@@ -7269,6 +7742,7 @@ TEST_F(InitialLowReliabilityRouteConflictActorTest, CallResultKeepsCallbackAndRe
     EXPECT_CALL(*stateMachine, GetVersion()).WillOnce(Return(0)).WillOnce(Return(1));
     EXPECT_CALL(*stateMachine, IsSaving()).WillOnce(Return(false));
     EXPECT_CALL(*stateMachine, GetInstanceInfo())
+        .WillOnce(Return(loser))
         .WillOnce(Return(loser))
         .WillOnce(Return(loser))
         .WillOnce(Return(winner))
@@ -7467,7 +7941,7 @@ TEST_F(InitialLowReliabilityRouteConflictActorTest, UnresolvedRouteConflictRecla
     EXPECT_CALL(*stateMachine, GetVersion()).WillOnce(Return(0)).WillOnce(Return(1));
     EXPECT_CALL(*stateMachine, IsSaving()).WillOnce(Return(false));
     EXPECT_CALL(*stateMachine, GetInstanceInfo())
-        .Times(3)
+        .Times(4)
         .WillRepeatedly(Return(loser));
     TransitionResult persistenceFailure{
         litebus::None(), {}, loser, 0,
@@ -7519,7 +7993,7 @@ TEST_F(InitialLowReliabilityRouteConflictActorTest, MissingRoutePersistenceFailu
     EXPECT_CALL(*stateMachine, GetInstanceState()).WillOnce(Return(InstanceState::CREATING));
     EXPECT_CALL(*stateMachine, GetVersion()).WillOnce(Return(0)).WillOnce(Return(1));
     EXPECT_CALL(*stateMachine, IsSaving()).WillOnce(Return(false));
-    EXPECT_CALL(*stateMachine, GetInstanceInfo()).Times(3).WillRepeatedly(Return(loser));
+    EXPECT_CALL(*stateMachine, GetInstanceInfo()).Times(4).WillRepeatedly(Return(loser));
     TransitionResult persistenceFailure{
         litebus::None(), {}, loser, 0,
         Status(StatusCode::INSTANCE_TRANSACTION_GET_INFO_FAILED, "route key is missing")

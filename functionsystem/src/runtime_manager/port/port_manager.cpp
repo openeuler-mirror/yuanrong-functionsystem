@@ -29,6 +29,7 @@ void PortManager::InitPortResource(int initialPort, int portNum)
 {
     YRLOG_INFO("Init port resource, initial port: {}, portNum: {}", initialPort, portNum);
     portMap_.clear();
+    ready_ = false;
     while (portNum > 0) {
         if (portNum > MAX_PORT_NUM) {
             YRLOG_ERROR("exceed port number limit. number is {}", portNum);
@@ -40,11 +41,62 @@ void PortManager::InitPortResource(int initialPort, int portNum)
         initialPort++;
         portNum--;
     }
+    ready_ = true;
+}
+
+void PortManager::BeginReconcile()
+{
+    ready_ = false;
+}
+
+bool PortManager::RebuildPorts(const ReservationMap &reservations)
+{
+    auto rebuilt = portMap_;
+    for (auto &[port, info] : rebuilt) {
+        info.runtimeID.clear();
+        info.port = port;
+        info.grpcPort = -1;
+        info.used = false;
+    }
+
+    std::unordered_set<int> reserved;
+    for (const auto &[runtimeID, ports] : reservations) {
+        if (runtimeID.empty()) {
+            YRLOG_ERROR("authoritative port rebuild contains an empty runtime identity");
+            return false;
+        }
+        for (const int port : ports) {
+            const auto iter = rebuilt.find(port);
+            if (iter == rebuilt.end()) {
+                YRLOG_ERROR("authoritative port {} for runtime({}) is outside the configured pool", port, runtimeID);
+                return false;
+            }
+            if (!reserved.insert(port).second) {
+                YRLOG_ERROR("authoritative port {} is reported by more than one runtime", port);
+                return false;
+            }
+            iter->second.runtimeID = runtimeID;
+            iter->second.port = port;
+            iter->second.used = true;
+        }
+    }
+    portMap_.swap(rebuilt);
+    ready_ = true;
+    return true;
+}
+
+bool PortManager::IsReady() const
+{
+    return ready_;
 }
 
 std::string PortManager::RequestPort(const std::string &runtimeID)
 {
     YRLOG_INFO("runtimeID: {}, request port", runtimeID);
+    if (!ready_) {
+        YRLOG_ERROR("PortManager is reconciling sandboxd physical facts; reject allocation for runtime({})", runtimeID);
+        return "";
+    }
     if (portMap_.size() == 0) {
         YRLOG_ERROR("PortManager port map is empty, request port failed");
         return "";
@@ -128,11 +180,25 @@ int PortManager::ReleasePort(const std::string &runtimeID)
 void PortManager::Clear()
 {
     portMap_.clear();
+    ready_ = false;
 }
 
 std::vector<int> PortManager::RequestPorts(const std::string &runtimeID, int count)
 {
+    if (!ready_) {
+        YRLOG_ERROR("PortManager is reconciling sandboxd physical facts; reject allocation for runtime({})", runtimeID);
+        return {};
+    }
     if (count <= 0) {
+        return {};
+    }
+    auto existing = GetPorts(runtimeID);
+    if (!existing.empty()) {
+        if (static_cast<int>(existing.size()) == count) {
+            return existing;
+        }
+        YRLOG_ERROR("RequestPorts conflicts with existing cache: runtimeID({}) count({}) existing({})",
+                    runtimeID, count, existing.size());
         return {};
     }
     std::vector<int> allocated;
@@ -169,44 +235,49 @@ std::vector<int> PortManager::RequestPorts(const std::string &runtimeID, int cou
     return allocated;
 }
 
-Status PortManager::ReservePorts(const std::string &runtimeID, const std::vector<int> &ports)
+bool PortManager::ReconcileRuntimePorts(const std::string &runtimeID, const std::vector<int> &ports)
 {
-    if (runtimeID.empty()) {
-        return Status(StatusCode::RUNTIME_MANAGER_PORT_UNAVAILABLE,
-                      "cannot restore port reservations for an empty runtime ID");
+    if (!ready_ || runtimeID.empty()) {
+        return false;
     }
-
-    std::unordered_set<int> uniquePorts;
+    std::unordered_set<int> requested;
     for (const int port : ports) {
-        if (!uniquePorts.insert(port).second) {
-            return Status(StatusCode::RUNTIME_MANAGER_PORT_UNAVAILABLE,
-                          "duplicate persisted port " + std::to_string(port) + " for runtime " + runtimeID);
-        }
         const auto iter = portMap_.find(port);
-        if (iter == portMap_.end()) {
-            return Status(StatusCode::RUNTIME_MANAGER_PORT_UNAVAILABLE,
-                          "persisted port " + std::to_string(port) + " for runtime " + runtimeID +
-                              " is outside the configured port pool");
-        }
-        if (iter->second.used && iter->second.runtimeID != runtimeID) {
-            return Status(StatusCode::RUNTIME_MANAGER_PORT_UNAVAILABLE,
-                          "persisted port " + std::to_string(port) + " for runtime " + runtimeID +
-                              " conflicts with owner " + iter->second.runtimeID);
+        if (iter == portMap_.end() || !requested.insert(port).second
+            || (iter->second.used && iter->second.runtimeID != runtimeID)) {
+            return false;
         }
     }
 
+    auto reconciled = portMap_;
+    for (auto &[port, info] : reconciled) {
+        if (info.used && info.runtimeID == runtimeID) {
+            info.runtimeID.clear();
+            info.port = port;
+            info.grpcPort = -1;
+            info.used = false;
+        }
+    }
     for (const int port : ports) {
-        auto &info = portMap_.at(port);
-        info.used = true;
+        auto &info = reconciled.at(port);
         info.runtimeID = runtimeID;
         info.port = port;
+        info.used = true;
     }
-    if (!ports.empty()) {
-        YRLOG_INFO("restored {} port reservations for runtimeID: {}", ports.size(), runtimeID);
-    }
-    return Status::OK();
+    portMap_.swap(reconciled);
+    return true;
 }
 
+std::vector<int> PortManager::GetPorts(const std::string &runtimeID) const
+{
+    std::vector<int> ports;
+    for (const auto &[port, info] : portMap_) {
+        if (info.used && info.runtimeID == runtimeID) {
+            ports.push_back(port);
+        }
+    }
+    return ports;
+}
 void PortManager::ReleasePorts(const std::string &runtimeID)
 {
     for (auto &iter : portMap_) {

@@ -19,11 +19,25 @@
 #include "common/logs/logging.h"
 #include "common/status/status.h"
 
-namespace functionsystem::runtime_manager {
+#include <filesystem>
 
+namespace functionsystem::runtime_manager {
 namespace {
-constexpr int64_t CHECKPOINT_TIMEOUT_NS = 30000000000;
+
+bool IsAuthoritativeArtifactPath(const std::string &artifactPath, const std::string &checkpointDir)
+{
+    if (artifactPath.empty() || checkpointDir.empty()) {
+        return false;
+    }
+    const auto artifact = std::filesystem::path(artifactPath).lexically_normal();
+    const auto directory = std::filesystem::path(checkpointDir).lexically_normal();
+    if (!artifact.is_absolute() || !directory.is_absolute() || artifact.filename() != "checkpoint.img") {
+        return false;
+    }
+    return artifact.parent_path() == directory;
 }
+
+}  // namespace
 
 SandboxdCheckpointOrchestrator::SandboxdCheckpointOrchestrator(
     litebus::AID ownerAID, std::shared_ptr<GrpcClient<runtime::v1::SandboxService>> sandboxd,
@@ -35,70 +49,49 @@ SandboxdCheckpointOrchestrator::SandboxdCheckpointOrchestrator(
 {
 }
 
-// ── TakeSnapshot ──────────────────────────────────────────────────────────────
+// ── User-managed publication policy ──────────────────────────────────────────
 
-litebus::Future<messages::SnapshotRuntimeResponse> SandboxdCheckpointOrchestrator::TakeSnapshot(
-    const std::shared_ptr<messages::SnapshotRuntimeRequest> &request)
+litebus::Future<messages::SnapshotRuntimeResponse> SandboxdCheckpointOrchestrator::PublishUserManagedSnapshot(
+    const std::shared_ptr<messages::SnapshotRuntimeRequest> &request,
+    const CheckpointPlan &plan)
 {
     const std::string &runtimeID    = request->runtimeid();
     const std::string &requestID    = request->requestid();
-    const std::string &instanceID   = request->instanceid();
-    int32_t ttl                     = request->ttl();
 
     messages::SnapshotRuntimeResponse response;
     response.set_requestid(requestID);
-
-    // Verify the sandbox exists
-    if (!stateManager_.HasSandbox(runtimeID)) {
-        YRLOG_ERROR("{}|TakeSnapshot: runtime({}) not found", requestID, runtimeID);
-        response.set_code(static_cast<int32_t>(StatusCode::RUNTIME_MANAGER_RUNTIME_NOT_FOUND));
-        response.set_message(fmt::format("runtime {} not found", runtimeID));
-        return response;
-    }
-
-    // Validate instanceID to prevent path traversal when building checkpoint path
-    if (instanceID.find("..") != std::string::npos || instanceID.find('/') != std::string::npos || instanceID.empty()) {
-        YRLOG_ERROR("{}|TakeSnapshot: invalid instanceID({})", requestID, instanceID);
+    if (plan.lifecycle != ArtifactLifecycle::USER_MANAGED) {
         response.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
-        response.set_message("invalid instanceID");
+        response.set_message("user-managed snapshot requires a user-managed checkpoint plan");
         return response;
     }
 
-    // Generate unique checkpoint ID and local path
-    const std::string sandboxID = stateManager_.GetSandboxID(runtimeID);
-    const std::string checkpointID =
-        fmt::format("ckpt-{}-{}", instanceID, std::chrono::system_clock::now().time_since_epoch().count());
-    const std::string checkpointPath = fmt::format("/home/yuanrong/checkpoints/{}", checkpointID);
-
-    auto ckptReq = std::make_shared<runtime::v1::CheckpointRequest>();
-    ckptReq->set_id(sandboxID);
-    ckptReq->set_checkpoint_dir(checkpointPath);
-    ckptReq->set_timeout(CHECKPOINT_TIMEOUT_NS);
-    ckptReq->set_compress(true);
-    ckptReq->set_trace_id(requestID);
-
-    SnapshotContext context{requestID, runtimeID, checkpointID, checkpointPath, ttl};
-    return DoCheckpoint(ckptReq).Then(
+    SnapshotContext context{requestID, runtimeID, plan.sandboxID, plan.checkpointID,
+                            plan.checkpointDirectory, plan.ttlSeconds};
+    return CheckpointLocal(plan).Then(
         litebus::Defer(ownerAID_,
-            [self = shared_from_this(), context](const runtime::v1::CheckpointResponse &response) {
-                return self->OnCheckpointDone(response, context);
+            [self = shared_from_this(), context](const CheckpointResult &result) {
+                return self->OnCheckpointDone(result, context);
             }));
 }
 
 litebus::Future<messages::SnapshotRuntimeResponse> SandboxdCheckpointOrchestrator::OnCheckpointDone(
-    const runtime::v1::CheckpointResponse &ckptResponse,
-    const SnapshotContext &context)
+    const CheckpointResult &result, const SnapshotContext &context)
 {
     messages::SnapshotRuntimeResponse response;
     response.set_requestid(context.requestID);
 
-    if (!ckptResponse.success()) {
+    if (result.status.IsError()) {
         YRLOG_ERROR("{}|checkpoint failed for runtime({}): {}", context.requestID, context.runtimeID,
-                    ckptResponse.message());
+                    result.status.RawMessage());
         response.set_code(static_cast<int32_t>(StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED));
-        response.set_message(ckptResponse.message());
+        response.set_message(fmt::format("checkpoint gRPC failed for sandbox {}: {}",
+                                         context.sandboxID,
+                                         result.status.RawMessage()));
         return response;
     }
+    response.mutable_snapshotinfo()->set_size(result.size);
+    response.mutable_snapshotinfo()->set_sha256(result.sha256);
 
     YRLOG_INFO("{}|checkpoint succeeded, uploading checkpoint({}) for runtime({})", context.requestID,
                context.checkpointID, context.runtimeID);
@@ -201,22 +194,58 @@ litebus::Future<Status> SandboxdCheckpointOrchestrator::ReleaseRef(const std::st
 
 // ── gRPC wrapper ─────────────────────────────────────────────────────────────
 
-litebus::Future<runtime::v1::CheckpointResponse> SandboxdCheckpointOrchestrator::DoCheckpoint(
+litebus::Future<CheckpointResult> SandboxdCheckpointOrchestrator::DoCheckpoint(
     const std::shared_ptr<runtime::v1::CheckpointRequest> &req)
 {
     ASSERT_IF_NULL(sandboxd_);
     auto resp = std::make_shared<runtime::v1::CheckpointResponse>();
     return sandboxd_->CallAsyncX("Checkpoint", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncCheckpoint)
-        .Then([req, resp](const Status &status) -> litebus::Future<runtime::v1::CheckpointResponse> {
-            if (status.IsOk()) {
-                return *resp;
+        .Then([req, resp](const Status &status) -> CheckpointResult {
+            if (status.IsError()) {
+                YRLOG_ERROR("checkpoint gRPC failed for sandbox({}): {}", req->id(), status.RawMessage());
+                return {status, 0, {}};
             }
-            runtime::v1::CheckpointResponse err;
-            err.set_success(false);
-            err.set_message(fmt::format("checkpoint gRPC failed for sandbox {}: {}", req->id(), status.RawMessage()));
-            YRLOG_ERROR("{}|{}", req->trace_id(), err.message());
-            return err;
+            if (resp->artifact_path().empty() || resp->artifact_size() <= 0 ||
+                resp->artifact_sha256().empty()) {
+                return {Status(StatusCode::FAILED,
+                               "sandboxd returned incomplete checkpoint artifact facts"),
+                        0, {}};
+            }
+            if (!IsAuthoritativeArtifactPath(resp->artifact_path(), req->checkpoint_dir())) {
+                return {Status(StatusCode::FAILED,
+                               "sandboxd returned checkpoint artifact outside requested directory"),
+                        0, {}};
+            }
+            return {Status::OK(), resp->artifact_size(), resp->artifact_sha256()};
         });
+}
+
+litebus::Future<CheckpointResult> SandboxdCheckpointOrchestrator::CheckpointLocal(
+    const CheckpointPlan &plan)
+{
+    auto request = std::make_shared<runtime::v1::CheckpointRequest>();
+    request->set_id(plan.sandboxID);
+    request->set_checkpoint_dir(plan.checkpointDirectory);
+    request->set_checkpoint_id(plan.checkpointID);
+    request->set_leave_running(plan.leaveRuntimeRunning);
+    return DoCheckpoint(request);
+}
+
+litebus::Future<Status> SandboxdCheckpointOrchestrator::DeleteCheckpoint(
+    const std::string &checkpointDir, const std::string &checkpointID,
+    const std::string &sourceSandboxID, int64_t expectedSize,
+    const std::string &expectedSHA256)
+{
+    ASSERT_IF_NULL(sandboxd_);
+    auto request = std::make_shared<runtime::v1::DeleteCheckpointRequest>();
+    request->set_checkpoint_dir(checkpointDir);
+    request->set_checkpoint_id(checkpointID);
+    request->set_source_sandbox_id(sourceSandboxID);
+    request->set_expected_size(expectedSize);
+    request->set_expected_sha256(expectedSHA256);
+    auto response = std::make_shared<runtime::v1::DeleteCheckpointResponse>();
+    return sandboxd_->CallAsyncX("DeleteCheckpoint", request, response,
+                                 &runtime::v1::SandboxService::Stub::AsyncDeleteCheckpoint);
 }
 
 }  // namespace functionsystem::runtime_manager

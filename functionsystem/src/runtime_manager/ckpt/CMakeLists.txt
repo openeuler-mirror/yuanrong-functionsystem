@@ -15,3 +15,4 @@
 aux_source_directory(${CMAKE_CURRENT_LIST_DIR} CKPT_FILE_SRCS)
 
 target_sources(runtime_manager_lib PRIVATE ${CKPT_FILE_SRCS})
+target_link_libraries(runtime_manager_lib snapshot_storage)

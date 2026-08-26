@@ -21,6 +21,7 @@
 
 #define private public
 #define protected public
+#include "common/constants/constants.h"
 #include "common/constants/signal.h"
 #include "common/etcd_service/etcd_service_driver.h"
 #include "common/metadata/metadata.h"
@@ -2494,5 +2495,336 @@ TEST_F(DISABLED_InstanceManagerTest, IsInstanceManagedByJobTest)
     EXPECT_TRUE(instanceMgrActor->IsInstanceManagedByJob(instanceInfoA));
     instanceMgrActor->member_->jobID2InstanceIDs["job-123"] = {"instanceC"};
     EXPECT_TRUE(instanceMgrActor->IsInstanceManagedByJob(instanceInfoA));
+}
+class PausedDeleteProxyStub final : public litebus::ActorBase {
+public:
+    PausedDeleteProxyStub(const std::string &nodeID, StatusCode code, bool remoteCleanupComplete)
+        : ActorBase(nodeID + LOCAL_SCHED_FUNC_AGENT_MGR_ACTOR_NAME_POSTFIX),
+          code_(code),
+          remoteCleanupComplete_(remoteCleanupComplete)
+    {
+    }
+
+    void Init() override
+    {
+        Receive("FinalizePausedSnapshotDelete", &PausedDeleteProxyStub::FinalizePausedSnapshotDelete);
+    }
+
+    void FinalizePausedSnapshotDelete(const litebus::AID &from, std::string &&, std::string &&msg)
+    {
+        ::messages::SnapshotAttemptFinalizeRequest request;
+        if (!request.ParseFromString(msg)) {
+            return;
+        }
+        requests_.push_back(request);
+        ::messages::SnapshotAttemptFinalizeResponse response;
+        response.set_attemptid(request.attemptid());
+        response.set_code(static_cast<int32_t>(code_));
+        response.set_remotecleanupcomplete(remoteCleanupComplete_);
+        (void)Send(from, "FinalizePausedSnapshotDeleteResponse", response.SerializeAsString());
+    }
+
+    std::vector<::messages::SnapshotAttemptFinalizeRequest> requests_;
+
+private:
+    StatusCode code_;
+    bool remoteCleanupComplete_;
+};
+
+class PausedDeleteInstanceManagerActor final : public InstanceManagerActor {
+public:
+    using InstanceManagerActor::InstanceManagerActor;
+
+    void Init() override
+    {
+        Receive("FinalizePausedSnapshotDeleteResponse",
+                &InstanceManagerActor::FinalizePausedSnapshotDeleteResponse);
+        Receive("DeleteReusableSnapshotArtifactResponse",
+                &InstanceManagerActor::DeleteReusableSnapshotArtifactResponse);
+    }
+};
+
+class ReusableDeleteProxyStub final : public litebus::ActorBase {
+public:
+    ReusableDeleteProxyStub(const std::string &nodeID, int32_t code)
+        : ActorBase(nodeID + LOCAL_SCHED_FUNC_AGENT_MGR_ACTOR_NAME_POSTFIX), code_(code)
+    {
+    }
+
+    void Init() override
+    {
+        Receive("DeleteReusableSnapshotArtifact", &ReusableDeleteProxyStub::DeleteArtifact);
+    }
+
+    void DeleteArtifact(const litebus::AID &from, std::string &&, std::string &&msg)
+    {
+        ::messages::DeleteReusableSnapshotArtifactRequest request;
+        if (!request.ParseFromString(msg)) {
+            return;
+        }
+        requests_.push_back(request);
+        ::messages::DeleteReusableSnapshotArtifactResponse response;
+        response.set_requestid(request.requestid());
+        response.set_code(code_);
+        if (code_ != common::ERR_NONE) {
+            response.set_message("injected physical delete failure");
+        }
+        (void)Send(from, "DeleteReusableSnapshotArtifactResponse", response.SerializeAsString());
+    }
+
+    std::vector<::messages::DeleteReusableSnapshotArtifactRequest> requests_;
+
+private:
+    int32_t code_;
+};
+
+static std::shared_ptr<resource_view::InstanceInfo> MakePausedDeleteInstance(const std::string &instanceID)
+{
+    auto info = std::make_shared<resource_view::InstanceInfo>();
+    info->set_instanceid(instanceID);
+    info->set_requestid("request-" + instanceID);
+    info->set_tenantid("tenant-paused-delete");
+    info->set_function("tenant-paused-delete/function/$latest");
+    info->set_functionproxyid(INSTANCE_MANAGER_OWNER);
+    info->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::PAUSED));
+    info->set_version(7);
+    auto *snapshot = info->mutable_snapshotinfo();
+    snapshot->set_checkpointid("checkpoint-" + instanceID);
+    snapshot->set_status(resources::SNAPSHOT_READY);
+    snapshot->set_size(4096);
+    snapshot->set_sha256("0123456789abcdef");
+    snapshot->set_storage("obs");
+    snapshot->set_createtime("1723852800000");
+    snapshot->set_ttlseconds(3600);
+    snapshot->set_sourcenodeid("source-proxy-is-gone");
+    return info;
+}
+
+static std::shared_ptr<internal::ForwardKillRequest> MakePausedDeleteKillRequest(
+    const std::shared_ptr<resource_view::InstanceInfo> &info, const std::string &requestID)
+{
+    auto request = std::make_shared<internal::ForwardKillRequest>();
+    request->set_requestid(requestID);
+    request->mutable_req()->set_requestid(requestID);
+    request->mutable_req()->set_instanceid(info->instanceid());
+    request->mutable_req()->set_signal(SHUT_DOWN_SIGNAL);
+    return request;
+}
+
+static messages::QueryResourcesInfoResponse MakePausedDeleteResourceResponse(
+    std::initializer_list<std::string> runtimeNodeIDs)
+{
+    messages::QueryResourcesInfoResponse response;
+    response.mutable_resource()->set_id("root");
+    for (const auto &nodeID : runtimeNodeIDs) {
+        auto &node = (*response.mutable_resource()->mutable_fragment())[nodeID];
+        node.set_id(nodeID);
+        resources::Value::Counter runtimes;
+        (*runtimes.mutable_items())["runsc"] = 1;
+        (*node.mutable_nodelabels())[SANDBOX_RUNTIME_LABEL] = std::move(runtimes);
+    }
+    return response;
+}
+
+TEST(InstanceManagerReusableDeleteTest, TriesAnotherHealthyRuntimeNodeWithoutSourceIdentity)
+{
+    const std::string failingNode = "a-reusable-delete-failing-node";
+    const std::string winningNode = "b-reusable-delete-winning-node";
+    const auto address = "127.0.0.1:" + std::to_string(GetPortEnv("LITEBUS_PORT", 8080));
+    auto scheduler = std::make_shared<MockGlobalSched>();
+    EXPECT_CALL(*scheduler, QueryNodes())
+        .WillOnce(testing::Return(std::unordered_set<std::string>{ failingNode, winningNode }));
+    EXPECT_CALL(*scheduler, QueryResourcesInfo(testing::_))
+        .WillOnce(testing::Return(MakePausedDeleteResourceResponse({ failingNode, winningNode })));
+    ON_CALL(*scheduler, GetLocalAddress(testing::_))
+        .WillByDefault(testing::Return(litebus::Option<std::string>(address)));
+    EXPECT_CALL(*scheduler, GetLocalAddress(failingNode)).Times(1);
+    EXPECT_CALL(*scheduler, GetLocalAddress(winningNode)).Times(1);
+
+    auto failingProxy = std::make_shared<ReusableDeleteProxyStub>(failingNode, common::ERR_INNER_COMMUNICATION);
+    auto winningProxy = std::make_shared<ReusableDeleteProxyStub>(winningNode, common::ERR_NONE);
+    ASSERT_TRUE(litebus::Spawn(failingProxy).OK());
+    ASSERT_TRUE(litebus::Spawn(winningProxy).OK());
+    auto actor = std::make_shared<PausedDeleteInstanceManagerActor>(
+        nullptr, scheduler, nullptr, nullptr, InstanceManagerStartParam{});
+    ASSERT_TRUE(litebus::Spawn(actor).OK());
+
+    ::messages::DeleteReusableSnapshotArtifactRequest request;
+    request.set_requestid("delete-reusable-through-any-node");
+    request.set_tenantid("tenant-reusable-delete");
+    request.set_snapshotid("snapshot-reusable-delete");
+    request.mutable_artifact()->set_storagebackend("obs");
+    request.mutable_artifact()->set_objectkey(
+        "reusable/v1/tenant-hash/snapshot-reusable-delete/checkpoint.img");
+    request.mutable_artifact()->set_size(4096);
+    request.mutable_artifact()->set_sha256(std::string(64, 'a'));
+    request.mutable_artifact()->set_format("gvisor-checkpoint");
+    request.mutable_artifact()->set_formatversion(1);
+
+    auto response = litebus::Async(actor->GetAID(),
+        &InstanceManagerActor::DeleteReusableSnapshotArtifact, request);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), common::ERR_NONE) << response.Get().message();
+    ASSERT_EQ(failingProxy->requests_.size(), size_t{ 1 });
+    ASSERT_EQ(winningProxy->requests_.size(), size_t{ 1 });
+    EXPECT_EQ(failingProxy->requests_[0].snapshotid(), request.snapshotid());
+    EXPECT_EQ(winningProxy->requests_[0].artifact().SerializeAsString(),
+              request.artifact().SerializeAsString());
+
+    litebus::Terminate(actor->GetAID());
+    litebus::Await(actor->GetAID());
+    litebus::Terminate(winningProxy->GetAID());
+    litebus::Await(winningProxy->GetAID());
+    litebus::Terminate(failingProxy->GetAID());
+    litebus::Await(failingProxy->GetAID());
+}
+
+TEST(InstanceManagerPausedDeleteTest, RemoteCleanupFailurePreservesPausedMetadata)
+{
+    const std::string nodeID = "healthy-cleanup-proxy";
+    auto scheduler = std::make_shared<MockGlobalSched>();
+    EXPECT_CALL(*scheduler, QueryNodes())
+        .WillOnce(testing::Return(std::unordered_set<std::string>{ nodeID }));
+    EXPECT_CALL(*scheduler, QueryResourcesInfo(testing::_))
+        .WillOnce(testing::Return(MakePausedDeleteResourceResponse({ nodeID })));
+    EXPECT_CALL(*scheduler, GetLocalAddress(nodeID))
+        .WillOnce(testing::Return(litebus::Option<std::string>("127.0.0.1:" +
+            std::to_string(GetPortEnv("LITEBUS_PORT", 8080)))));
+
+    auto proxy = std::make_shared<PausedDeleteProxyStub>(nodeID, StatusCode::FAILED, false);
+    ASSERT_TRUE(litebus::Spawn(proxy).OK());
+    auto actor = std::make_shared<PausedDeleteInstanceManagerActor>(
+        nullptr, scheduler, nullptr, nullptr, InstanceManagerStartParam{});
+    ASSERT_TRUE(litebus::Spawn(actor).OK());
+
+    auto instance = MakePausedDeleteInstance("cleanup-failure");
+    const std::string instanceKey = GenInstanceKey(
+        instance->function(), instance->instanceid(), instance->requestid()).Get();
+    actor->member_->instID2Instance[instance->instanceid()] = { instanceKey, instance };
+    auto instanceOperator = std::make_shared<MockInstanceOperator>();
+    actor->member_->instanceOpt = instanceOperator;
+    EXPECT_CALL(*instanceOperator, ForceDelete).Times(0);
+
+    auto kill = MakePausedDeleteKillRequest(instance, "kill-cleanup-failure");
+    auto completion = std::make_shared<litebus::Promise<Status>>();
+    actor->member_->killReqPromises.emplace(kill->requestid(), completion);
+    (void)litebus::Async(actor->GetAID(), &InstanceManagerActor::KillInstanceWithRetry,
+                         instance->instanceid(), kill);
+
+    ASSERT_AWAIT_READY(completion->GetFuture());
+    EXPECT_TRUE(completion->GetFuture().Get().IsError());
+    EXPECT_EQ(actor->member_->instID2Instance.count(instance->instanceid()), 1);
+    ASSERT_EQ(proxy->requests_.size(), 1);
+    EXPECT_EQ(proxy->requests_[0].operation(), ::messages::PAUSED_DELETED);
+
+    litebus::Terminate(actor->GetAID());
+    litebus::Await(actor->GetAID());
+    litebus::Terminate(proxy->GetAID());
+    litebus::Await(proxy->GetAID());
+}
+
+TEST(InstanceManagerPausedDeleteTest, ExactCleanupCompletesBeforePausedMetadataDeletion)
+{
+    const std::string nodeID = "healthy-cleanup-proxy-success";
+    auto scheduler = std::make_shared<MockGlobalSched>();
+    EXPECT_CALL(*scheduler, QueryNodes())
+        .WillOnce(testing::Return(std::unordered_set<std::string>{ nodeID }));
+    EXPECT_CALL(*scheduler, QueryResourcesInfo(testing::_))
+        .WillOnce(testing::Return(MakePausedDeleteResourceResponse({ nodeID })));
+    EXPECT_CALL(*scheduler, GetLocalAddress(nodeID))
+        .WillOnce(testing::Return(litebus::Option<std::string>("127.0.0.1:" +
+            std::to_string(GetPortEnv("LITEBUS_PORT", 8080)))));
+
+    auto proxy = std::make_shared<PausedDeleteProxyStub>(nodeID, StatusCode::SUCCESS, true);
+    ASSERT_TRUE(litebus::Spawn(proxy).OK());
+    auto actor = std::make_shared<PausedDeleteInstanceManagerActor>(
+        nullptr, scheduler, nullptr, nullptr, InstanceManagerStartParam{});
+    ASSERT_TRUE(litebus::Spawn(actor).OK());
+
+    auto instance = MakePausedDeleteInstance("cleanup-success");
+    const std::string instanceKey = GenInstanceKey(
+        instance->function(), instance->instanceid(), instance->requestid()).Get();
+    actor->member_->instID2Instance[instance->instanceid()] = { instanceKey, instance };
+    auto instanceOperator = std::make_shared<MockInstanceOperator>();
+    actor->member_->instanceOpt = instanceOperator;
+    EXPECT_CALL(*instanceOperator, ForceDelete)
+        .WillOnce([](const auto &, const auto &, const auto &, bool) {
+            return OperateResult{ Status::OK(), "", 8 };
+        });
+
+    auto kill = MakePausedDeleteKillRequest(instance, "kill-cleanup-success");
+    auto completion = std::make_shared<litebus::Promise<Status>>();
+    actor->member_->killReqPromises.emplace(kill->requestid(), completion);
+    (void)litebus::Async(actor->GetAID(), &InstanceManagerActor::KillInstanceWithRetry,
+                         instance->instanceid(), kill);
+
+    ASSERT_AWAIT_READY(completion->GetFuture());
+    EXPECT_TRUE(completion->GetFuture().Get().IsOk());
+    ASSERT_EQ(proxy->requests_.size(), 1);
+    const auto &cleanup = proxy->requests_[0];
+    EXPECT_EQ(cleanup.attemptid(), "paused-delete/cleanup-success/checkpoint-cleanup-success");
+    EXPECT_EQ(cleanup.tenantid(), instance->tenantid());
+    EXPECT_EQ(cleanup.instanceid(), instance->instanceid());
+    EXPECT_EQ(cleanup.snapshotid(), instance->snapshotinfo().checkpointid());
+    EXPECT_EQ(cleanup.expectedsize(), instance->snapshotinfo().size());
+    EXPECT_EQ(cleanup.expectedsha256(), instance->snapshotinfo().sha256());
+    EXPECT_EQ(cleanup.expectedstorage(), instance->snapshotinfo().storage());
+
+    litebus::Terminate(actor->GetAID());
+    litebus::Await(actor->GetAID());
+    litebus::Terminate(proxy->GetAID());
+    litebus::Await(proxy->GetAID());
+}
+
+TEST(InstanceManagerPausedDeleteTest, SkipsHealthySchedulersWithoutSandboxRuntimeCapability)
+{
+    const std::string frontendID = "frontend-scheduler";
+    const std::string runtimeNodeID = "runtime-cleanup-proxy";
+    const auto address = "127.0.0.1:" + std::to_string(GetPortEnv("LITEBUS_PORT", 8080));
+    auto scheduler = std::make_shared<MockGlobalSched>();
+    EXPECT_CALL(*scheduler, QueryNodes())
+        .WillOnce(testing::Return(std::unordered_set<std::string>{ frontendID, runtimeNodeID }));
+    EXPECT_CALL(*scheduler, QueryResourcesInfo(testing::_))
+        .WillOnce(testing::Return(MakePausedDeleteResourceResponse({ runtimeNodeID })));
+    ON_CALL(*scheduler, GetLocalAddress(testing::_))
+        .WillByDefault(testing::Return(litebus::Option<std::string>(address)));
+    EXPECT_CALL(*scheduler, GetLocalAddress(runtimeNodeID)).Times(1);
+
+    auto frontend = std::make_shared<PausedDeleteProxyStub>(frontendID, StatusCode::SUCCESS, true);
+    auto runtimeNode = std::make_shared<PausedDeleteProxyStub>(runtimeNodeID, StatusCode::SUCCESS, true);
+    ASSERT_TRUE(litebus::Spawn(frontend).OK());
+    ASSERT_TRUE(litebus::Spawn(runtimeNode).OK());
+    auto actor = std::make_shared<PausedDeleteInstanceManagerActor>(
+        nullptr, scheduler, nullptr, nullptr, InstanceManagerStartParam{});
+    ASSERT_TRUE(litebus::Spawn(actor).OK());
+
+    auto instance = MakePausedDeleteInstance("cleanup-runtime-capability-filter");
+    const std::string instanceKey = GenInstanceKey(
+        instance->function(), instance->instanceid(), instance->requestid()).Get();
+    actor->member_->instID2Instance[instance->instanceid()] = { instanceKey, instance };
+    auto instanceOperator = std::make_shared<MockInstanceOperator>();
+    actor->member_->instanceOpt = instanceOperator;
+    EXPECT_CALL(*instanceOperator, ForceDelete)
+        .WillOnce([](const auto &, const auto &, const auto &, bool) {
+            return OperateResult{ Status::OK(), "", 8 };
+        });
+
+    auto kill = MakePausedDeleteKillRequest(instance, "kill-runtime-capability-filter");
+    auto completion = std::make_shared<litebus::Promise<Status>>();
+    actor->member_->killReqPromises.emplace(kill->requestid(), completion);
+    (void)litebus::Async(actor->GetAID(), &InstanceManagerActor::KillInstanceWithRetry,
+                         instance->instanceid(), kill);
+
+    ASSERT_AWAIT_READY(completion->GetFuture());
+    EXPECT_TRUE(completion->GetFuture().Get().IsOk());
+    EXPECT_TRUE(frontend->requests_.empty());
+    ASSERT_EQ(runtimeNode->requests_.size(), 1);
+
+    litebus::Terminate(actor->GetAID());
+    litebus::Await(actor->GetAID());
+    litebus::Terminate(frontend->GetAID());
+    litebus::Await(frontend->GetAID());
+    litebus::Terminate(runtimeNode->GetAID());
+    litebus::Await(runtimeNode->GetAID());
 }
 }  // namespace functionsystem::instance_manager::test

@@ -35,18 +35,27 @@ Status KVClient::Init(const std::string &host, int32_t port)
 }
 std::pair<Status, datasystem::ReadOnlyBuffer> KVClient::Get(const std::string &key)
 {
+    auto [status, buffer] = GetRaw(key);
+    return status.IsError()
+               ? std::make_pair(Status(StatusCode::BP_DATASYSTEM_ERROR, status.ToString()),
+                                datasystem::ReadOnlyBuffer())
+               : std::make_pair(Status::OK(), std::move(buffer));
+}
+
+std::pair<datasystem::Status, datasystem::ReadOnlyBuffer> KVClient::GetRaw(const std::string &key)
+{
     if (dsKvClient_ == nullptr) {
         YRLOG_ERROR("kv client is not initialized");
-        return std::make_pair(Status(StatusCode::BP_DATASYSTEM_ERROR, "kv client is not initialized"),
+        return std::make_pair(datasystem::Status(datasystem::K_RUNTIME_ERROR, "kv client is not initialized"),
                               datasystem::ReadOnlyBuffer());
     }
 
     datasystem::Optional<datasystem::ReadOnlyBuffer> buffer;
     datasystem::Status s = dsKvClient_->Get(key, buffer);
     if (s.IsError()) {
-        return std::make_pair(Status(StatusCode::BP_DATASYSTEM_ERROR, s.ToString()), datasystem::ReadOnlyBuffer());
+        return std::make_pair(s, datasystem::ReadOnlyBuffer());
     }
-    return std::make_pair(Status::OK(), *buffer);
+    return std::make_pair(datasystem::Status::OK(), *buffer);
 }
 
 Status KVClient::Put(const std::string &key, const std::string &value)
@@ -67,17 +76,23 @@ Status KVClient::Put(const std::string &key, const std::string &value)
 
 Status KVClient::Delete(const std::string &key)
 {
+    auto status = DeleteRaw(key);
+    return status.IsError() ? Status(StatusCode::BP_DATASYSTEM_ERROR, status.ToString()) : Status::OK();
+}
+
+datasystem::Status KVClient::DeleteRaw(const std::string &key)
+{
     if (dsKvClient_ == nullptr) {
         YRLOG_ERROR("kv client is not initialized");
-        return Status(StatusCode::BP_DATASYSTEM_ERROR, "kv client is not initialized");
+        return datasystem::Status(datasystem::K_RUNTIME_ERROR, "kv client is not initialized");
     }
 
     datasystem::Status s = dsKvClient_->Del(key);
     if (s.IsError()) {
         YRLOG_ERROR("failed to delete key: {}, error: {}", key, s.ToString());
-        return Status(StatusCode::BP_DATASYSTEM_ERROR, s.ToString());
+        return s;
     }
     YRLOG_DEBUG("successfully deleted key: {}", key);
-    return Status::OK();
+    return datasystem::Status::OK();
 }
 }  // namespace functionsystem

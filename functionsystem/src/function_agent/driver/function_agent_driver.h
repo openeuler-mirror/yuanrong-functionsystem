@@ -22,6 +22,7 @@
 #include "common/utils/module_driver.h"
 #include "function_agent/agent_service_actor.h"
 #include "function_agent/common/utils.h"
+#include "function_agent/snapshot/snapshot_storage_config.h"
 #include "runtime_manager/config/flags.h"
 #include "runtime_manager/driver/runtime_manager_driver.h"
 
@@ -54,6 +55,8 @@ struct FunctionAgentStartParam {
     std::string dataSystemHost;
     int32_t dataSystemPort = 0;
     std::string pluginConfigs;
+    std::string checkpointRoot;
+    SnapshotStorageStartConfig snapshotStorage;
 };
 
 class FunctionAgentDriver : public ModuleDriver {
@@ -71,7 +74,10 @@ public:
     void GracefulShutdown();
 
 private:
+    Status InitializeSnapshotStorageDependency();
+
     FunctionAgentStartParam startParam_;
+    std::shared_ptr<snapshot_storage::SnapshotStorage> snapshotStorage_;
     std::shared_ptr<AgentServiceActor> actor_ = nullptr;
     std::shared_ptr<HttpServer> httpServer_;
     std::shared_ptr<HealthyApiRouter> apiRouteRegister_;

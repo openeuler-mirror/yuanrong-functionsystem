@@ -18,6 +18,7 @@
 #define RUNTIME_MANAGER_EXECUTOR_SANDBOXD_SANDBOXD_CHECKPOINT_ORCHESTRATOR_H
 
 #include <memory>
+#include <cstdint>
 #include <string>
 
 #include "async/defer.hpp"
@@ -25,6 +26,7 @@
 #include "common/proto/pb/posix/sandbox_api.grpc.pb.h"
 #include "common/rpc/client/grpc_client.h"
 #include "common/status/status.h"
+#include "runtime_manager/ckpt/checkpoint_plan.h"
 #include "runtime_manager/ckpt/ckpt_file_manager.h"
 #include "runtime_manager/executor/sandboxd/runtime_state_manager.h"
 
@@ -34,10 +36,8 @@ namespace functionsystem::runtime_manager {
  * SandboxdCheckpointOrchestrator — checkpoint lifecycle against the sandboxd
  * SandboxService (Checkpoint + Restore RPCs).
  *
- * It is the sandboxd counterpart of CheckpointOrchestrator: same TakeSnapshot /
- * download / ref-count flow, but drives sandboxd's SandboxCheckpoint RPC and
- * reuses the shared CkptFileManager (storage upload/download/ref) and
- * RuntimeStateManager (checkpoint-id tracking).
+ * All callers use the same explicit CheckpointPlan and receive the same local
+ * artifact facts. Artifact publication and lifecycle remain caller policy.
  */
 class SandboxdCheckpointOrchestrator : public std::enable_shared_from_this<SandboxdCheckpointOrchestrator> {
 public:
@@ -48,19 +48,19 @@ public:
 
     // ── Snapshot ──────────────────────────────────────────────────────────────
 
-    /**
-     * Take a checkpoint of a running sandbox.
-     * Chain: DoCheckpoint (sandboxd Checkpoint RPC) -> RegisterCheckpoint (upload)
-     * -> update state manager.
+    /** Publish an already planned user-managed checkpoint through the legacy
+     * register/upload/ref-count lifecycle. The physical checkpoint operation
+     * itself is shared with instance-managed Pause.
      */
-    litebus::Future<messages::SnapshotRuntimeResponse> TakeSnapshot(
-        const std::shared_ptr<messages::SnapshotRuntimeRequest> &request);
+    litebus::Future<messages::SnapshotRuntimeResponse> PublishUserManagedSnapshot(
+        const std::shared_ptr<messages::SnapshotRuntimeRequest> &request,
+        const CheckpointPlan &plan);
 
     // ── Restore ───────────────────────────────────────────────────────────────
 
     /**
      * Download a checkpoint and return its local path.
-     * Caller follows up with AddRef() + the executor's Restore RPC.
+     * Legacy snapshot caller follows up with AddRef() and Restore.
      */
     litebus::Future<std::string> DownloadForRestore(const std::string &checkpointID, const std::string &storageUrl,
                                                     const std::string &requestID);
@@ -81,20 +81,33 @@ public:
 
     // ── gRPC wrapper ──────────────────────────────────────────────────────────
 
-    litebus::Future<runtime::v1::CheckpointResponse> DoCheckpoint(
+    litebus::Future<CheckpointResult> DoCheckpoint(
         const std::shared_ptr<runtime::v1::CheckpointRequest> &req);
+
+    litebus::Future<CheckpointResult> CheckpointLocal(const CheckpointPlan &plan);
+
+    /**
+     * Delete one sandboxd-owned checkpoint artifact after verifying its exact
+     * durable identity. A mismatch is reported by sandboxd and must not delete
+     * any other checkpoint.
+     */
+    litebus::Future<Status> DeleteCheckpoint(
+        const std::string &checkpointDir, const std::string &checkpointID,
+        const std::string &sourceSandboxID, int64_t expectedSize,
+        const std::string &expectedSHA256);
 
 private:
     struct SnapshotContext {
         std::string requestID;
         std::string runtimeID;
+        std::string sandboxID;
         std::string checkpointID;
         std::string checkpointPath;
         int32_t ttl = 0;
     };
 
     litebus::Future<messages::SnapshotRuntimeResponse> OnCheckpointDone(
-        const runtime::v1::CheckpointResponse &ckptResponse, const SnapshotContext &context);
+        const CheckpointResult &result, const SnapshotContext &context);
 
     litebus::Future<messages::SnapshotRuntimeResponse> OnRegisterDone(const std::string &storageUrl,
         messages::SnapshotRuntimeResponse response,

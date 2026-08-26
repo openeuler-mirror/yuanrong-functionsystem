@@ -23,6 +23,11 @@
 
 namespace functionsystem {
 
+inline constexpr char REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION[] =
+    "yr.internal.reusable_snapshot.requested_id";
+inline constexpr char REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION[] =
+    "yr.internal.reusable_snapshot.trusted_restore";
+
 inline messages::ScheduleResponse GenScheduleResponse(int32_t code, const std::string &message,
                                                       const messages::ScheduleRequest &scheduleReq)
 {
@@ -48,6 +53,16 @@ inline messages::ScheduleResponse GenScheduleResponse(StatusCode code, const std
 
 std::shared_ptr<messages::DeployInstanceRequest> GetDeployInstanceReq(
     const FunctionMeta &funcMeta, const std::shared_ptr<messages::ScheduleRequest> &request);
+
+/**
+ * Merge a Master-resolved reusable Snapshot into an otherwise ordinary Create.
+ * Logical identity and placement choices remain those of the new Create; only
+ * immutable workload facts and the trusted restore artifact come from the
+ * Snapshot record.
+ */
+Status ApplyResolvedReusableSnapshotForCreate(
+    const ::messages::ResolveReusableSnapshotForCreateResponse &resolved,
+    const std::shared_ptr<messages::ScheduleRequest> &request);
 
 void BuildRootfsConfig(
     const FunctionMeta &funcMeta, const std::shared_ptr<messages::DeployInstanceRequest> &request);

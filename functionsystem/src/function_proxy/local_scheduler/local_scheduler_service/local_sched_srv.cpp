@@ -148,6 +148,38 @@ litebus::Future<::messages::RecordSnapshotResponse> LocalSchedSrv::RecordSnapsho
     return litebus::Async(actor_->GetAID(), &LocalSchedSrvActor::RecordSnapshotMetadata, req);
 }
 
+litebus::Future<::messages::BeginReusableSnapshotResponse> LocalSchedSrv::BeginReusableSnapshot(
+    const std::shared_ptr<::messages::BeginReusableSnapshotRequest> &request)
+{
+    ASSERT_IF_NULL(actor_);
+    ASSERT_IF_NULL(request);
+    return litebus::Async(actor_->GetAID(), &LocalSchedSrvActor::BeginReusableSnapshot, request);
+}
+
+litebus::Future<::messages::CommitReusableSnapshotResponse> LocalSchedSrv::CommitReusableSnapshot(
+    const std::shared_ptr<::messages::CommitReusableSnapshotRequest> &request)
+{
+    ASSERT_IF_NULL(actor_);
+    ASSERT_IF_NULL(request);
+    return litebus::Async(actor_->GetAID(), &LocalSchedSrvActor::CommitReusableSnapshot, request);
+}
+
+litebus::Future<::messages::FailReusableSnapshotResponse> LocalSchedSrv::FailReusableSnapshot(
+    const std::shared_ptr<::messages::FailReusableSnapshotRequest> &request)
+{
+    ASSERT_IF_NULL(actor_);
+    ASSERT_IF_NULL(request);
+    return litebus::Async(actor_->GetAID(), &LocalSchedSrvActor::FailReusableSnapshot, request);
+}
+
+litebus::Future<::messages::ResolveReusableSnapshotForCreateResponse> LocalSchedSrv::ResolveReusableSnapshotForCreate(
+    const std::shared_ptr<::messages::ResolveReusableSnapshotForCreateRequest> &request)
+{
+    ASSERT_IF_NULL(actor_);
+    ASSERT_IF_NULL(request);
+    return litebus::Async(actor_->GetAID(), &LocalSchedSrvActor::ResolveReusableSnapshotForCreate, request);
+}
+
 litebus::Future<::messages::RestoreSnapshotResponse> LocalSchedSrv::SnapStartCheckpoint(
     const std::shared_ptr<::messages::RestoreSnapshotRequest> &req)
 {

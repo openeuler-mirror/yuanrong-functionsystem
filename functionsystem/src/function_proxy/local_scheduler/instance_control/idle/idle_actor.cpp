@@ -26,8 +26,22 @@
 namespace functionsystem::local_scheduler {
 
 namespace {
-constexpr int64_t SECONDS_TO_MILLISECONDS = 1000;
+bool IsSamePauseGateIdentity(const resources::InstanceInfo &left, const resources::InstanceInfo &right)
+{
+    return left.instanceid() == right.instanceid()
+        && left.requestid() == right.requestid()
+        && left.version() == right.version()
+        && left.functionproxyid() == right.functionproxyid()
+        && left.runtimeid() == right.runtimeid()
+        && left.functionagentid() == right.functionagentid()
+        && left.containerid() == right.containerid()
+        && left.unitid() == right.unitid()
+        && left.tenantid() == right.tenantid()
+        && left.runtimeaddress() == right.runtimeaddress()
+        && left.instancestatus().code() == right.instancestatus().code();
 }
+constexpr int64_t SECONDS_TO_MILLISECONDS = 1000;
+}  // namespace
 
 IdleActor::IdleActor(const std::string &name,
                      const std::string &nodeID,
@@ -47,6 +61,7 @@ void IdleActor::Finalize()
         litebus::TimerTools::Cancel(timer);
     }
     idleTimers_.clear();
+    pauseGatedInstances_.clear();
 }
 
 void IdleActor::TrafficReport(const std::string &instanceID, const size_t &processingNum)
@@ -56,11 +71,16 @@ void IdleActor::TrafficReport(const std::string &instanceID, const size_t &proce
     ASSERT_IF_NULL(instanceControlView_);
     if (!isIdle) {
         instanceTrafficIdle_.erase(instanceID);
-        CancelIdleTimer(instanceID);
+        if (pauseGatedInstances_.find(instanceID) == pauseGatedInstances_.end()) {
+            CancelIdleTimer(instanceID);
+        }
         return;
     }
 
     instanceTrafficIdle_[instanceID] = true;
+    if (pauseGatedInstances_.find(instanceID) != pauseGatedInstances_.end()) {
+        return;
+    }
 
     // Only start idle timer if both traffic idle AND no active sessions
     bool hasActiveSessions = false;
@@ -112,10 +132,16 @@ void IdleActor::SessionAlive(const std::string &instanceID, bool hasActiveSessio
 
     if (hasActiveSessions) {
         instanceActiveSessions_[instanceID] = true;
+        if (pauseGatedInstances_.find(instanceID) != pauseGatedInstances_.end()) {
+            return;
+        }
         // Cancel idle timer when sessions become active
         CancelIdleTimer(instanceID);
     } else {
         instanceActiveSessions_.erase(instanceID);
+        if (pauseGatedInstances_.find(instanceID) != pauseGatedInstances_.end()) {
+            return;
+        }
         // When sessions become inactive, check traffic idle status before starting timer
         bool trafficIdle = false;
         auto trafficIt = instanceTrafficIdle_.find(instanceID);
@@ -134,10 +160,27 @@ void IdleActor::SessionAlive(const std::string &instanceID, bool hasActiveSessio
     }
 }
 
-void IdleActor::OnInstanceRunning(const std::string &instanceID)
+void IdleActor::OnInstanceRunning(const resources::InstanceInfo &identity)
 {
-    if (instanceID.empty()) {
+    const auto &instanceID = identity.instanceid();
+    if (instanceID.empty() || instanceControlView_ == nullptr) {
         return;
+    }
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        return;
+    }
+    const auto current = stateMachine->GetInstanceInfo();
+    if (current.functionproxyid() != nodeID_
+        || current.instancestatus().code() != static_cast<int32_t>(InstanceState::RUNNING)
+        || !IsSamePauseGateIdentity(identity, current)) {
+        return;
+    }
+    if (auto gate = pauseGatedInstances_.find(instanceID); gate != pauseGatedInstances_.end()) {
+        if (IsSamePauseGateIdentity(gate->second.identity, identity)) {
+            return;
+        }
+        pauseGatedInstances_.erase(gate);
     }
     auto trafficIt = instanceTrafficIdle_.find(instanceID);
     if (trafficIt == instanceTrafficIdle_.end() || !trafficIt->second) {
@@ -153,6 +196,9 @@ void IdleActor::OnInstanceRunning(const std::string &instanceID)
 
 void IdleActor::StartIdleTimer(const std::string &instanceID)
 {
+    if (pauseGatedInstances_.find(instanceID) != pauseGatedInstances_.end()) {
+        return;
+    }
     if (idleTimers_.find(instanceID) != idleTimers_.end()) {
         return;
     }
@@ -213,6 +259,9 @@ void IdleActor::HandleIdleTimeout(const std::string &instanceID, uint64_t genera
     }
 
     idleTimers_.erase(instanceID);
+    if (pauseGatedInstances_.find(instanceID) != pauseGatedInstances_.end()) {
+        return;
+    }
     ASSERT_IF_NULL(instanceControlView_);
     auto stateMachine = instanceControlView_->GetInstance(instanceID);
     if (stateMachine == nullptr) {
@@ -232,6 +281,59 @@ void IdleActor::HandleIdleTimeout(const std::string &instanceID, uint64_t genera
                instanceInfo.requestid(), instanceID);
 
     litebus::Async(facadeAID_, &InstanceCtrlActor::EvictByIdleTimeout, instanceID);
+}
+
+Status IdleActor::SetPauseGated(const resources::InstanceInfo &identity, uint64_t token, bool gated)
+{
+    const auto &instanceID = identity.instanceid();
+    if (instanceID.empty()) {
+        return Status(StatusCode::PARAMETER_ERROR, "instance ID is empty");
+    }
+    if (token == 0 || instanceControlView_ == nullptr) {
+        return Status(StatusCode::ERR_INSTANCE_INFO_INVALID, "idle pause gate identity is not available");
+    }
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
+        return Status(StatusCode::ERR_INSTANCE_NOT_FOUND, "idle pause gate instance not found");
+    }
+    const auto current = stateMachine->GetInstanceInfo();
+    if (current.functionproxyid() != nodeID_
+        || current.instancestatus().code() != static_cast<int32_t>(InstanceState::RUNNING)
+        || !IsSamePauseGateIdentity(identity, current)) {
+        return Status(StatusCode::ERR_INSTANCE_INFO_INVALID, "idle pause gate identity changed");
+    }
+    if (gated) {
+        auto existing = pauseGatedInstances_.find(instanceID);
+        if (existing != pauseGatedInstances_.end()) {
+            if (existing->second.token == token && IsSamePauseGateIdentity(existing->second.identity, identity)) {
+                return Status::OK();
+            }
+            return Status(StatusCode::ERR_INSTANCE_BUSY, "idle pause gate belongs to another operation");
+        }
+        PauseGateRecord record;
+        record.identity.CopyFrom(identity);
+        record.token = token;
+        pauseGatedInstances_.emplace(instanceID, std::move(record));
+        CancelIdleTimer(instanceID);
+        return Status::OK();
+    }
+
+    auto existing = pauseGatedInstances_.find(instanceID);
+    if (existing == pauseGatedInstances_.end()) {
+        return Status::OK();
+    }
+    if (existing->second.token != token || !IsSamePauseGateIdentity(existing->second.identity, identity)) {
+        return Status(StatusCode::ERR_INSTANCE_INFO_INVALID, "idle pause gate token changed");
+    }
+    pauseGatedInstances_.erase(existing);
+    const auto trafficIt = instanceTrafficIdle_.find(instanceID);
+    const bool trafficIdle = trafficIt != instanceTrafficIdle_.end() && trafficIt->second;
+    const auto sessionIt = instanceActiveSessions_.find(instanceID);
+    const bool hasActiveSessions = sessionIt != instanceActiveSessions_.end() && sessionIt->second;
+    if (trafficIdle && !hasActiveSessions) {
+        StartIdleTimer(instanceID);
+    }
+    return Status::OK();
 }
 
 }  // namespace functionsystem::local_scheduler

@@ -108,6 +108,21 @@ public:
         const resource_view::InstanceInfo &instanceInfo,
         int32_t ttl = 0);
 
+    virtual litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(
+        const std::string &requestID,
+        const resource_view::InstanceInfo &instanceInfo,
+        int32_t ttl,
+        common::SnapType type,
+        const std::string &snapshotID,
+        const std::string &checkpointDir);
+
+    virtual litebus::Future<::messages::SnapshotAttemptFinalizeResponse> FinalizeSnapshotAttempt(
+        const resource_view::InstanceInfo &instanceInfo,
+        const ::messages::SnapshotAttemptFinalizeRequest &request);
+
+    virtual litebus::Future<::messages::SnapshotAttemptFinalizeResponse> FinalizeSnapshotAttemptOnAnyAgent(
+        const ::messages::SnapshotAttemptFinalizeRequest &request);
+
     virtual litebus::Future<messages::ReconcileRuntimesResponse> ReconcileRuntimes(
         const std::string &funcAgentID,
         const std::shared_ptr<messages::ReconcileRuntimesRequest> &request);

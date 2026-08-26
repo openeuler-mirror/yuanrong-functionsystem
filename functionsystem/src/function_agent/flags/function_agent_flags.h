@@ -165,6 +165,51 @@ public:
         return pluginConfigs_;
     }
 
+    const std::string &GetSnapshotStorageBackend() const
+    {
+        return snapshotStorageBackend_;
+    }
+
+    const std::string &GetSnapshotObsEndpoint() const
+    {
+        return snapshotObsEndpoint_;
+    }
+
+    const std::string &GetSnapshotObsBucket() const
+    {
+        return snapshotObsBucket_;
+    }
+
+    const std::string &GetSnapshotObsAccessKey() const
+    {
+        return snapshotObsAccessKey_;
+    }
+
+    const std::string &GetSnapshotObsSecretKey() const
+    {
+        return snapshotObsSecretKey_;
+    }
+
+    const std::string &GetSnapshotObsSecurityToken() const
+    {
+        return snapshotObsSecurityToken_;
+    }
+
+    bool GetSnapshotObsUseHttps() const
+    {
+        return snapshotObsUseHttps_;
+    }
+
+    bool GetSnapshotObsPathStyle() const
+    {
+        return snapshotObsPathStyle_;
+    }
+
+    const std::string &GetCheckpointDir() const
+    {
+        return checkpointDir_;
+    }
+
 protected:
     std::string logConfig;
     std::string nodeID;
@@ -199,6 +244,15 @@ protected:
     bool dataSystemEnable_ = false;
 
     std::string pluginConfigs_ = "";
+    std::string snapshotStorageBackend_;
+    std::string snapshotObsEndpoint_;
+    std::string snapshotObsBucket_;
+    std::string snapshotObsAccessKey_;
+    std::string snapshotObsSecretKey_;
+    std::string snapshotObsSecurityToken_;
+    bool snapshotObsUseHttps_{ true };
+    bool snapshotObsPathStyle_{ false };
+    std::string checkpointDir_;
 };
 }  // namespace functionsystem::function_agent
 

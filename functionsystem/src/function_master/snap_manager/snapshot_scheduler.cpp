@@ -20,6 +20,8 @@
 #include "common/logs/logging.h"
 #include "common/proto/pb/posix/common.pb.h"
 #include "common/types/instance_state.h"
+#include "common/utils/resume_identity.h"
+#include "common/utils/struct_transfer.h"
 
 namespace functionsystem::snap_manager {
 
@@ -60,6 +62,72 @@ std::shared_ptr<messages::ScheduleRequest> SnapshotScheduler::BuildScheduleReque
     return scheduleReq;
 }
 
+std::shared_ptr<messages::ScheduleRequest> SnapshotScheduler::BuildPauseResumeScheduleRequest(
+    const resources::InstanceInfo &authoritativeInstance,
+    const messages::RestoreSnapshotRequest &restoreReq) const
+{
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    const auto &targetAttemptID = restoreReq.requestid();
+    scheduleReq->set_requestid(targetAttemptID);
+    scheduleReq->set_traceid(targetAttemptID);
+    scheduleReq->mutable_instance()->CopyFrom(authoritativeInstance);
+
+    auto *instance = scheduleReq->mutable_instance();
+    if (authoritativeInstance.instancestatus().code()
+            == static_cast<int32_t>(InstanceState::RUNNING)
+        && authoritativeInstance.version() > 0) {
+        instance->set_version(authoritativeInstance.version() - 1);
+        instance->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::PAUSED));
+    }
+    const auto sourceNodeID = instance->snapshotinfo().sourcenodeid().empty()
+                                  ? instance->functionproxyid()
+                                  : instance->snapshotinfo().sourcenodeid();
+
+    instance->clear_functionproxyid();
+    instance->clear_functionagentid();
+    instance->clear_runtimeid();
+    instance->clear_runtimeaddress();
+    instance->clear_parentid();
+    instance->clear_parentfunctionproxyaid();
+    instance->clear_unitid();
+    instance->clear_containerid();
+    instance->clear_containerip();
+    instance->clear_proxygrpcaddress();
+    instance->clear_schedulerchain();
+    resume_identity::StripReservedExtensions(instance->mutable_extensions());
+
+    // Explicit resource overrides replace the previous allocation. With no overrides,
+    // retain the authoritative allocation so SDK resume() remains schedulable.
+    const bool hasResourceOverrides = !restoreReq.snapstartoptions().scheduleopts().resources().empty();
+    if (hasResourceOverrides) {
+        instance->clear_resources();
+    }
+    // ScheduleOption describes placement for the previous run and is always rebuilt.
+    instance->clear_scheduleoption();
+
+    core_service::CreateRequest schedulingRequest;
+    schedulingRequest.mutable_schedulingops()->CopyFrom(restoreReq.snapstartoptions().scheduleopts());
+    resume_identity::StripReservedExtensions(
+        schedulingRequest.mutable_schedulingops()->mutable_extension());
+    runtime::CallRequest emptyCallRequest;
+    if (hasResourceOverrides) {
+        SetInstanceInfoResources(instance, schedulingRequest);
+    }
+    SetInstanceInfoScheduleOptions(instance, schedulingRequest, emptyCallRequest);
+    SetAffinityOpt(*instance, schedulingRequest, scheduleReq);
+
+    if (!sourceNodeID.empty()) {
+        (*instance->mutable_scheduleoption()->mutable_affinity()->mutable_nodeaffinity()->mutable_affinity())
+            [sourceNodeID] = resources::PreferredAffinity;
+    }
+    (*instance->mutable_scheduleoption()->mutable_extension())
+        [resume_identity::MASTER_MARKER_EXTENSION] = targetAttemptID;
+
+    YRLOG_DEBUG("built PAUSE_RESUME ScheduleRequest for logical instance {} with attempt {}",
+                instance->instanceid(), targetAttemptID);
+    return scheduleReq;
+}
+
 litebus::Future<Status> SnapshotScheduler::Schedule(
     const std::shared_ptr<messages::ScheduleRequest> &scheduleReq)
 {
@@ -70,31 +138,6 @@ litebus::Future<Status> SnapshotScheduler::Schedule(
     return globalScheduler_->Schedule(scheduleReq);
 }
 
-messages::RestoreSnapshotResponse SnapshotScheduler::BuildRestoreResponse(
-    const RestoreContext &context,
-    const std::shared_ptr<messages::ScheduleRequest> &scheduleReq,
-    const Status &status)
-{
-    messages::RestoreSnapshotResponse rsp;
-    rsp.set_requestid(context.request->requestid());
-
-    if (status.IsOk()) {
-        rsp.set_code(common::ERR_NONE);
-        rsp.set_message("snapshot restored and scheduled successfully");
-        if (scheduleReq) {
-            rsp.set_instanceid(scheduleReq->instance().instanceid());
-        }
-        YRLOG_INFO("successfully scheduled restored instance from snapshot {}, instanceID={}",
-                   context.snapshotID, rsp.instanceid());
-    } else {
-        rsp.set_code(common::ERR_INNER_SYSTEM_ERROR);
-        rsp.set_message(status.GetMessage());
-        YRLOG_ERROR("failed to schedule restored instance from snapshot {}: {}",
-                    context.snapshotID, status.GetMessage());
-    }
-
-    return rsp;
-}
 
 std::string SnapshotScheduler::GenerateInstanceID(const std::string &snapshotID)
 {

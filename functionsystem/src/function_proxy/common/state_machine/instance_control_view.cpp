@@ -52,12 +52,15 @@ void InstanceControlView::Update(const std::string &instanceID, const resources:
     // update instance mod revision, when fast publish event send to other nodes, it can be filtered by mod revision
     if (auto modRevision = GetModRevisionFromInstanceInfo(instanceInfo);
         modRevision > 0 && machines_.find(instanceID) != machines_.end()) {
-        if (modRevision <= machines_.at(instanceID)->GetModRevision()) {
+        const auto currentRevision = machines_.at(instanceID)->GetModRevision();
+        if (modRevision < currentRevision || (modRevision == currentRevision && !isForceUpdate)) {
             YRLOG_WARN("receive old instance update events, ignore, current({}) vs received({})",
-                       machines_.at(instanceID)->GetModRevision(), modRevision);
+                       currentRevision, modRevision);
             return;
         }
-        machines_.at(instanceID)->SetModRevision(modRevision);
+        if (modRevision > currentRevision) {
+            machines_.at(instanceID)->SetModRevision(modRevision);
+        }
     }
     if (!isForceUpdate && newOwner == self_ && !IsDriver(instanceInfo)) {
         YRLOG_WARN("{} instance is owned by self({}), ignore it", instanceID, newOwner);
@@ -76,7 +79,8 @@ void InstanceControlView::Update(const std::string &instanceID, const resources:
         // this indicates ownership has been transferred, thus instanceInfo needs to
         // be updated to reflect the new owner.
         if (!isForceUpdate && currentOwner == self_
-                && machines_.at(instanceID)->GetInstanceState() != InstanceState::SUSPEND) {
+                && machines_.at(instanceID)->GetInstanceState() != InstanceState::SUSPEND
+                && state != static_cast<int32_t>(InstanceState::PAUSED)) {
             return;
         }
         if (newOwner != currentOwner) {
