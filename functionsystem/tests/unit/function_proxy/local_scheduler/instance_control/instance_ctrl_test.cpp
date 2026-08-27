@@ -5011,6 +5011,8 @@ TEST(ReusableSnapshotCreateTransferTest, ResolvedSnapshotKeepsNewCreateIdentityA
     target->set_function("default/sandbox/$latest");
     target->set_parentid("frontend-instance");
     (*target->mutable_extensions())[NAMED] = "true";
+    (*target->mutable_createoptions())["DELEGATE_ENV_VAR"] =
+        R"({"RRT_TUNNEL_WS_PORT":"8765","RRT_TUNNEL_HTTP_PORT":"8766"})";
     (*target->mutable_scheduleoption()->mutable_extension())
         [REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION] = "snapshot-42";
     target->mutable_resources()->mutable_resources()->operator[](CPU_RESOURCE_NAME)
@@ -5023,10 +5025,16 @@ TEST(ReusableSnapshotCreateTransferTest, ResolvedSnapshotKeepsNewCreateIdentityA
     auto *source = resolved.mutable_instancetemplate();
     source->set_function("default/sandbox/$latest");
     source->set_storagetype("working_dir");
+    (*source->mutable_scheduleoption()
+          ->mutable_affinity()
+          ->mutable_nodeaffinity()
+          ->mutable_affinity())["source-node"] = resources::PreferredAffinity;
     source->set_gracefulshutdowntime(5);
     (*source->mutable_createoptions())["network_policy"] =
         R"({"blockNetwork":true})";
     (*source->mutable_createoptions())["rootfs"] = R"({"type":"local","path":"/runtime"})";
+    (*source->mutable_createoptions())["DELEGATE_ENV_VAR"] =
+        R"({"RRT_TUNNEL_WS_PORT":"8765","RRT_TUNNEL_HTTP_PORT":"8766"})";
     source->mutable_resources()->mutable_resources()->operator[](CPU_RESOURCE_NAME)
         .mutable_scalar()->set_value(1000);
     source->mutable_resources()->mutable_resources()->operator[](MEMORY_RESOURCE_NAME)
@@ -5039,7 +5047,7 @@ TEST(ReusableSnapshotCreateTransferTest, ResolvedSnapshotKeepsNewCreateIdentityA
         "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
     restore->mutable_artifact()->set_size(4096);
     restore->mutable_artifact()->set_sha256(std::string(64, 'a'));
-    restore->mutable_artifact()->set_format("gvisor-checkpoint");
+    restore->mutable_artifact()->set_format("sandboxd-checkpoint");
     restore->mutable_artifact()->set_formatversion(1);
 
     const auto status = ApplyResolvedReusableSnapshotForCreate(resolved, scheduleReq);
@@ -5052,8 +5060,10 @@ TEST(ReusableSnapshotCreateTransferTest, ResolvedSnapshotKeepsNewCreateIdentityA
     EXPECT_EQ(target->parentid(), "frontend-instance");
     EXPECT_EQ(target->extensions().at(NAMED), "true");
     EXPECT_EQ(target->createoptions().at("network_policy"), R"({"blockNetwork":true})");
-    EXPECT_EQ(target->resources().resources().at(CPU_RESOURCE_NAME).scalar().value(), 2000);
-    EXPECT_EQ(target->resources().resources().at(MEMORY_RESOURCE_NAME).scalar().value(), 4096);
+    EXPECT_EQ(target->resources().resources().at(CPU_RESOURCE_NAME).scalar().value(), 1000);
+    EXPECT_EQ(target->resources().resources().at(MEMORY_RESOURCE_NAME).scalar().value(), 2048);
+    EXPECT_EQ(target->scheduleoption().affinity().nodeaffinity().affinity().at("source-node"),
+              resources::PreferredAffinity);
     EXPECT_EQ(target->scheduleoption().extension().count(
                   REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION), 0U);
     const auto trusted = target->scheduleoption().extension().find(
@@ -5062,9 +5072,19 @@ TEST(ReusableSnapshotCreateTransferTest, ResolvedSnapshotKeepsNewCreateIdentityA
     ::messages::ReusableSnapshotRestore decoded;
     ASSERT_TRUE(decoded.ParseFromString(HexStringToCharString(trusted->second)));
     EXPECT_EQ(decoded.SerializeAsString(), restore->SerializeAsString());
+
+    (*target->mutable_createoptions())["DELEGATE_ENV_VAR"] =
+        R"({"RRT_TUNNEL_WS_PORT":"9000","RRT_TUNNEL_HTTP_PORT":"9001"})";
+    (*target->mutable_scheduleoption()->mutable_extension())
+        [REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION] = "snapshot-42";
+    target->mutable_scheduleoption()->mutable_extension()->erase(
+        REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION);
+    const auto mismatchedTunnel = ApplyResolvedReusableSnapshotForCreate(resolved, scheduleReq);
+    EXPECT_TRUE(mismatchedTunnel.IsError());
+    EXPECT_NE(mismatchedTunnel.RawMessage().find("reverse tunnel ports"), std::string::npos);
 }
 
-TEST(ReusableSnapshotCreateTransferTest, RejectsCloneResourceReductionBeforeScheduling)
+TEST(ReusableSnapshotCreateTransferTest, RestoresFrozenResourcesInsteadOfFrontendDefaults)
 {
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->set_requestid("clone-create-request");
@@ -5090,15 +5110,15 @@ TEST(ReusableSnapshotCreateTransferTest, RejectsCloneResourceReductionBeforeSche
         "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
     restore->mutable_artifact()->set_size(4096);
     restore->mutable_artifact()->set_sha256(std::string(64, 'a'));
-    restore->mutable_artifact()->set_format("gvisor-checkpoint");
+    restore->mutable_artifact()->set_format("sandboxd-checkpoint");
     restore->mutable_artifact()->set_formatversion(1);
 
     const auto status = ApplyResolvedReusableSnapshotForCreate(resolved, scheduleReq);
 
-    EXPECT_TRUE(status.IsError());
-    EXPECT_EQ(status.StatusCode(), StatusCode::ERR_PARAM_INVALID);
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_EQ(target->resources().resources().at(MEMORY_RESOURCE_NAME).scalar().value(), 2048);
     EXPECT_EQ(target->scheduleoption().extension().count(
-                  REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION), 0U);
+                  REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION), 1U);
 }
 
 TEST_F(InstanceCtrlTest, CreateFromSnapshotResolvesReadyRecordBeforeOrdinaryAuthorization)
@@ -5136,7 +5156,7 @@ TEST_F(InstanceCtrlTest, CreateFromSnapshotResolvesReadyRecordBeforeOrdinaryAuth
                 "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
             restore->mutable_artifact()->set_size(4096);
             restore->mutable_artifact()->set_sha256(std::string(64, 'a'));
-            restore->mutable_artifact()->set_format("gvisor-checkpoint");
+            restore->mutable_artifact()->set_format("sandboxd-checkpoint");
             restore->mutable_artifact()->set_formatversion(1);
             return response;
         });

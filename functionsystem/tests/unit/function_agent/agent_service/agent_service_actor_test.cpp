@@ -68,7 +68,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, RestoreMetadataReachesRuntimeManag
         "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
     restore->mutable_artifact()->set_size(4096);
     restore->mutable_artifact()->set_sha256(std::string(64, 'a'));
-    restore->mutable_artifact()->set_format("gvisor-checkpoint");
+    restore->mutable_artifact()->set_format("sandboxd-checkpoint");
     restore->mutable_artifact()->set_formatversion(1);
 
     auto startInstanceRequest = std::make_unique<messages::StartInstanceRequest>();
@@ -212,7 +212,7 @@ namespace {
         restore->mutable_artifact()->set_objectkey(objectKey);
         restore->mutable_artifact()->set_size(payload.size());
         restore->mutable_artifact()->set_sha256(resume_identity::Sha256Hex(payload));
-        restore->mutable_artifact()->set_format("gvisor-checkpoint");
+        restore->mutable_artifact()->set_format("sandboxd-checkpoint");
         restore->mutable_artifact()->set_formatversion(1);
         return start;
     }
@@ -308,7 +308,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, MaterializesFrozenArtifactAtDeterm
         "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
     restore->mutable_artifact()->set_size(payload.size());
     restore->mutable_artifact()->set_sha256(storage->objectMetadata.sha256);
-    restore->mutable_artifact()->set_format("gvisor-checkpoint");
+    restore->mutable_artifact()->set_format("sandboxd-checkpoint");
     restore->mutable_artifact()->set_formatversion(1);
 
     const auto future = function_agent::MaterializeReusableSnapshotCheckpoint(
@@ -735,7 +735,7 @@ TEST_F(AgentServiceActorTest, ReusableCreateRetainsUnknownAttemptThenReplayClean
         "reusable/v1/tenant-hash/" + snapshotID + "/checkpoint.img");
     restore->mutable_artifact()->set_size(payload.size());
     restore->mutable_artifact()->set_sha256(storage->objectMetadata.sha256);
-    restore->mutable_artifact()->set_format("gvisor-checkpoint");
+    restore->mutable_artifact()->set_format("sandboxd-checkpoint");
     restore->mutable_artifact()->set_formatversion(1);
 
     messages::StartInstanceResponse uncertain;
@@ -1008,7 +1008,7 @@ TEST_F(AgentServiceActorTest, ReusableSnapshotPublishesNonExpiringArtifactAndRet
     EXPECT_EQ(artifact.objectkey(), storage->finalKey);
     EXPECT_EQ(artifact.size(), static_cast<int64_t>(storage->publishMetadata.size));
     EXPECT_EQ(artifact.sha256(), storage->publishMetadata.sha256);
-    EXPECT_EQ(artifact.format(), "gvisor-checkpoint");
+    EXPECT_EQ(artifact.format(), "sandboxd-checkpoint");
     EXPECT_EQ(artifact.formatversion(), 1U);
     EXPECT_EQ(storage->putCalls.load(), 1);
     EXPECT_EQ(storage->publishCalls.load(), 1);
@@ -1076,7 +1076,7 @@ static ::messages::DeleteReusableSnapshotArtifactRequest MakeReusableArtifactDel
         runtime_manager::PauseArtifactPathManager::StableTenantHash(TEST_TENANT_ID), snapshotID));
     artifact->set_size(4096);
     artifact->set_sha256(std::string(64, 'a'));
-    artifact->set_format("gvisor-checkpoint");
+    artifact->set_format("sandboxd-checkpoint");
     artifact->set_formatversion(1);
     return request;
 }

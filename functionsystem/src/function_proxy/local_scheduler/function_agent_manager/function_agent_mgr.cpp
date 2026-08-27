@@ -115,15 +115,16 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgr::SnapshotRun
     int32_t ttl,
     common::SnapType type,
     const std::string &snapshotID,
-    const std::string &checkpointDir)
+    const std::string &checkpointDir,
+    uint32_t timeoutSeconds)
 {
     ASSERT_IF_NULL(actor_);
     return litebus::Async(actor_->GetAID(),
                           static_cast<litebus::Future<messages::SnapshotRuntimeResponse> (FunctionAgentMgrActor::*)(
                               const std::string &, const resource_view::InstanceInfo &, int32_t, common::SnapType,
-                              const std::string &, const std::string &)>(
+                              const std::string &, const std::string &, uint32_t)>(
                               &FunctionAgentMgrActor::SnapshotRuntime),
-                          requestID, instanceInfo, ttl, type, snapshotID, checkpointDir);
+                          requestID, instanceInfo, ttl, type, snapshotID, checkpointDir, timeoutSeconds);
 }
 
 litebus::Future<messages::ReconcileRuntimesResponse> FunctionAgentMgr::ReconcileRuntimes(

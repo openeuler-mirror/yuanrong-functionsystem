@@ -262,7 +262,8 @@ public:
                                                      int32_t ttl,
                                                      common::SnapType type,
                                                      const std::string &snapshotID,
-                                                     const std::string &checkpointDir);
+                                                     const std::string &checkpointDir,
+                                                     uint32_t timeoutSeconds = 0);
     void SnapshotRuntimeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     litebus::Future<::messages::SnapshotAttemptFinalizeResponse> FinalizeSnapshotAttempt(

@@ -106,6 +106,19 @@ func TestCheckpointReturnsUnimplementedStatus(t *testing.T) {
 	}
 }
 
+func TestStartRejectsCheckpointRestore(t *testing.T) {
+	svc := NewLauncherService(nil, nil)
+	response, err := svc.Start(context.Background(), &runtimev1.StartRequest{
+		CheckpointInfo: &runtimev1.CheckpointInfo{CheckpointDir: "/tmp/checkpoint"},
+	})
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if response.GetCode() == 0 {
+		t.Fatalf("Start response = %#v, want unsupported restore", response)
+	}
+}
+
 func TestListAvailableRuntimesReturnsSuccessfulEmptySnapshot(t *testing.T) {
 	svc := NewLauncherService(&fakeRuntime{}, state.NewManager())
 	resp, err := svc.ListAvailableRuntimes(context.Background(), &runtimev1.ListAvailableRuntimesRequest{})

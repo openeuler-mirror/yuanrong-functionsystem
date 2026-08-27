@@ -50,6 +50,51 @@ runtime::v1::SandboxStatus RunningSandbox(
 
 // ── SandboxdExecutor static helpers ───────────────────────────────────────────
 
+TEST(SandboxdExecutorTest, RuntimeCapabilitiesConfigureCheckpointHandoffEnvironment)
+{
+    SandboxdExecutor executor("SandboxdRuntimeCapabilityExecutor", litebus::AID(),
+                              "/tmp/sandboxd-runtime-capability-checkpoints");
+    auto response = std::make_shared<runtime::v1::ListAvailableRuntimesResponse>();
+    response->add_runtime_classes("firecracker");
+    response->add_runtime_classes("kata");
+    auto *firecracker = response->add_runtimes();
+    firecracker->set_runtime_class("firecracker");
+    firecracker->set_supports_checkpoint_restore(true);
+    firecracker->set_checkpoint_handoff_path("/run/sandboxd/checkpoint");
+    firecracker->set_restore_env_path("/run/sandboxd/restore-environ");
+    auto *kata = response->add_runtimes();
+    kata->set_runtime_class("kata");
+
+    ASSERT_TRUE(executor.OnListAvailableRuntimes(response, Status::OK()).IsOk());
+    EXPECT_TRUE(executor.SupportsCheckpointRestore("firecracker"));
+    EXPECT_FALSE(executor.SupportsCheckpointRestore("kata"));
+
+    google::protobuf::Map<std::string, std::string> envs;
+    executor.ApplyCheckpointRestoreEnvironment("firecracker", &envs);
+    EXPECT_EQ(envs.at(YR_CHECKPOINT_HANDOFF_FILE), "/run/sandboxd/checkpoint");
+    EXPECT_EQ(envs.at(YR_RESTORE_ENV_FILE), "/run/sandboxd/restore-environ");
+    EXPECT_EQ(envs.count("YR_SEED_FILE"), 0u);
+    EXPECT_EQ(envs.count("YR_ENV_FILE"), 0u);
+
+    google::protobuf::Map<std::string, std::string> unsupportedEnvs;
+    executor.ApplyCheckpointRestoreEnvironment("kata", &unsupportedEnvs);
+    EXPECT_TRUE(unsupportedEnvs.empty());
+}
+
+TEST(SandboxdExecutorTest, IncompleteCheckpointCapabilityFailsClosed)
+{
+    SandboxdExecutor executor("SandboxdIncompleteCapabilityExecutor", litebus::AID(),
+                              "/tmp/sandboxd-incomplete-capability-checkpoints");
+    auto response = std::make_shared<runtime::v1::ListAvailableRuntimesResponse>();
+    auto *runtime = response->add_runtimes();
+    runtime->set_runtime_class("incomplete");
+    runtime->set_supports_checkpoint_restore(true);
+    runtime->set_checkpoint_handoff_path("/run/sandboxd/checkpoint");
+
+    ASSERT_TRUE(executor.OnListAvailableRuntimes(response, Status::OK()).IsOk());
+    EXPECT_FALSE(executor.SupportsCheckpointRestore("incomplete"));
+}
+
 TEST(SandboxdExecutorTest, ParseForwardPortsParsesPortForwardings)
 {
     const std::string netJson = R"({"portForwardings":[{"port":8080},{"port":9090,"protocol":"TCP"}]})";
@@ -228,7 +273,7 @@ TEST(SandboxdExecutorTest, ReusableRestoreMetadataIsValidatedAndBuildsExactPhysi
         "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
     restore.mutable_artifact()->set_size(4096);
     restore.mutable_artifact()->set_sha256(std::string(64, 'a'));
-    restore.mutable_artifact()->set_format("gvisor-checkpoint");
+    restore.mutable_artifact()->set_format("sandboxd-checkpoint");
     restore.mutable_artifact()->set_formatversion(1);
     EXPECT_TRUE(resume_identity::ValidateReusableSnapshotRestore(restore));
 
@@ -528,6 +573,7 @@ TEST(CheckpointPlanTest, UserManagedAndInstanceManagedRequestsUseTheSameExplicit
     userRequest.set_snapshotid("snapshot-1");
     userRequest.set_checkpointdir("/checkpoints/user/snapshot-1");
     userRequest.set_ttl(600);
+    userRequest.set_timeoutseconds(240);
 
     CheckpointPlan userPlan;
     auto status = BuildCheckpointPlan(userRequest, "sandbox-1", ArtifactLifecycle::USER_MANAGED,
@@ -538,6 +584,7 @@ TEST(CheckpointPlanTest, UserManagedAndInstanceManagedRequestsUseTheSameExplicit
     EXPECT_EQ(userPlan.checkpointDirectory, "/checkpoints/user/snapshot-1");
     EXPECT_EQ(userPlan.lifecycle, ArtifactLifecycle::USER_MANAGED);
     EXPECT_FALSE(userPlan.leaveRuntimeRunning);
+    EXPECT_EQ(userPlan.timeoutSeconds, 240U);
 
     auto pauseRequest = userRequest;
     pauseRequest.set_type(common::PAUSE_RESUME);
@@ -551,6 +598,7 @@ TEST(CheckpointPlanTest, UserManagedAndInstanceManagedRequestsUseTheSameExplicit
     EXPECT_EQ(pausePlan.checkpointID, "pause-1");
     EXPECT_EQ(pausePlan.lifecycle, ArtifactLifecycle::INSTANCE_MANAGED);
     EXPECT_TRUE(pausePlan.leaveRuntimeRunning);
+    EXPECT_EQ(pausePlan.timeoutSeconds, 240U);
 }
 
 TEST(CheckpointPlanTest, ReusableFinalizeBuildsExactDeleteCheckpointIdentityWithoutStoppingSandbox)

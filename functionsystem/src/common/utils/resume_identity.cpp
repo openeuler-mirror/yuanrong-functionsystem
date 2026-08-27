@@ -121,7 +121,7 @@ bool ValidateReusableSnapshotRestore(const ::messages::ReusableSnapshotRestore &
     return restore.allowlogicalinstanceidrebind() && validSnapshotID
         && (artifact.storagebackend() == "obs" || artifact.storagebackend() == "datasystem")
         && validObjectKey && artifact.size() > 0 && validSHA
-        && artifact.format() == "gvisor-checkpoint" && artifact.formatversion() == 1;
+        && artifact.format() == "sandboxd-checkpoint" && artifact.formatversion() == 1;
 }
 
 std::string IdentityDigest(const std::string &logicalInstanceID, const std::string &logicalRequestID,

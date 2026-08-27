@@ -369,6 +369,10 @@ const std::string CONTAINER_ENV_VARS = "env_vars";
 // redirects stdout/stderr to per-runtime host files via sh -c "... >out 2>err").
 const std::string YR_ONLY_STDOUT = "YR_ONLY_STDOUT";
 
+// Runtime-owned checkpoint/restore handoff endpoints discovered from sandboxd.
+const std::string YR_CHECKPOINT_HANDOFF_FILE = "YR_CHECKPOINT_HANDOFF_FILE";
+const std::string YR_RESTORE_ENV_FILE = "YR_RESTORE_ENV_FILE";
+
 // sandboxType values (function meta sandboxType field)
 const std::string SANDBOX_TYPE_DOCKER = "docker";
 const std::string SANDBOX_TYPE_SUPERVISOR = "supervisor";

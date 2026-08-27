@@ -786,12 +786,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartWarmUp(
         *tmpl->add_command() = arg;
     }
     tmpl->mutable_envs()->insert(combineEnvs.begin(), combineEnvs.end());
-    if (auto env = litebus::os::GetEnv("YR_ENV_FILE"); env.IsSome()) {
-        (*tmpl->mutable_envs())["YR_ENV_FILE"] = env.Get();
-    }
-    if (auto ready = litebus::os::GetEnv("YR_SEED_FILE"); ready.IsSome()) {
-        (*tmpl->mutable_envs())["YR_SEED_FILE"] = ready.Get();
-    }
+    ApplyCheckpointRestoreEnvironment(tmpl->runtime(), tmpl->mutable_envs());
     (*tmpl->mutable_envs())[YR_ONLY_STDOUT] = "true";
 
     // YR_LANGUAGE follows the service runtime field. The container runtime is
@@ -923,11 +918,19 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointR
         PortManager::GetInstance().ReleasePorts(params.runtimeID);
         return GenFailStartInstanceResponse(request, status.StatusCode(), status.RawMessage());
     }
+    if (!SupportsCheckpointRestore(startReq->runtime())) {
+        ckptOrch_->ReleaseRef(info.runtimeid(), info.requestid());
+        stateManager_.UpdatePortMappings(params.runtimeID, "");
+        PortManager::GetInstance().ReleasePorts(params.runtimeID);
+        return GenFailStartInstanceResponse(
+            request, StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED,
+            fmt::format("runtime '{}' does not support checkpoint restore", startReq->runtime()));
+    }
+    ApplyCheckpointRestoreEnvironment(startReq->runtime(), startReq->mutable_envs());
     StartSandboxCreateSpan(request);
-    auto restoreReq = std::make_shared<runtime::v1::RestoreRequest>();
-    *restoreReq->mutable_config() = *startReq;
-    restoreReq->set_checkpoint_dir(context.checkpointPath);
-    return DoRestore(request, restoreReq)
+    startReq->mutable_checkpoint_info()->set_checkpoint_dir(
+        std::filesystem::path(context.checkpointPath).parent_path().string());
+    return DoRestore(request, startReq)
         .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnRestoreDone, std::placeholders::_1, request,
                              context.start.guard, false, false));
 }
@@ -991,23 +994,27 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::RestoreAfterE
         PortManager::GetInstance().ReleasePorts(params.runtimeID);
         return OnRestoreDone({status, {}, {}}, request, context.start.guard, true);
     }
+    if (!SupportsCheckpointRestore(startReq->runtime())) {
+        return OnRestoreDone(
+            {Status(StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED,
+                    fmt::format("runtime '{}' does not support checkpoint restore", startReq->runtime())),
+             {}, {}},
+            request, context.start.guard, true);
+    }
+    ApplyCheckpointRestoreEnvironment(startReq->runtime(), startReq->mutable_envs());
     startReq->mutable_labels()->insert(context.start.resumeIdentity.labels.begin(),
                                        context.start.resumeIdentity.labels.end());
-    auto restoreReq = std::make_shared<runtime::v1::RestoreRequest>();
-    *restoreReq->mutable_config() = *startReq;
-    restoreReq->set_checkpoint_dir(std::filesystem::path(context.checkpointPath).parent_path().string());
-    restoreReq->set_checkpoint_id(context.start.resumeIdentity.snapshotID);
-    restoreReq->set_expected_sha256(context.start.resumeIdentity.expectedSHA256);
-    restoreReq->set_expected_size(context.start.resumeIdentity.expectedSize);
+    startReq->mutable_checkpoint_info()->set_checkpoint_dir(
+        std::filesystem::path(context.checkpointPath).parent_path().string());
     StartSandboxCreateSpan(request);
-    return DoRestore(request, restoreReq)
+    return DoRestore(request, startReq)
         .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnResumeRestoreUncertain,
-                             std::placeholders::_1, context, restoreReq, false));
+                             std::placeholders::_1, context, startReq, false));
 }
 
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnResumeRestoreUncertain(
     const SandboxdRestoreResult &result, const SandboxdRestoreContext &context,
-    const std::shared_ptr<runtime::v1::RestoreRequest> &restoreReq, bool retried)
+    const std::shared_ptr<runtime::v1::StartRequest> &restoreReq, bool retried)
 {
     if (result.status.IsOk() || !IsResultUnknownRpcError(result.status)) {
         return OnRestoreDone(result, context.start.request, context.start.guard, true, false);
@@ -1158,6 +1165,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartNormal(
         PortManager::GetInstance().ReleasePorts(params.runtimeID);
         return GenFailStartInstanceResponse(request, status.StatusCode(), status.RawMessage());
     }
+    ApplyCheckpointRestoreEnvironment(startReq->runtime(), startReq->mutable_envs());
     // sandboxd owns the physical sandbox identity.  The runtime owner label is
     // the only metadata needed to rebuild PortManager after an Agent restart.
     (*startReq->mutable_labels())["runtime_id"] = params.runtimeID;
@@ -1630,6 +1638,12 @@ litebus::Future<messages::SnapshotRuntimeResponse> SandboxdExecutor::SnapshotRun
     if (!sandbox.has_value() || sandbox->sandboxID.empty()) {
         response.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
         response.set_message("runtime is missing");
+        return response;
+    }
+    const auto &runtimeClass = sandbox->instanceInfo.container().runtime();
+    if (!SupportsCheckpointRestore(runtimeClass)) {
+        response.set_code(static_cast<int32_t>(StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED));
+        response.set_message(fmt::format("runtime '{}' does not support checkpoint restore", runtimeClass));
         return response;
     }
     CheckpointPlan plan;
@@ -2115,12 +2129,50 @@ Status SandboxdExecutor::OnListAvailableRuntimes(
             runtimes.insert(runtime);
         }
     }
+    RuntimeCapabilities capabilities;
+    for (const auto &runtime : response->runtimes()) {
+        if (runtime.runtime_class().empty()) {
+            continue;
+        }
+        runtimes.insert(runtime.runtime_class());
+        auto &capability = capabilities[runtime.runtime_class()];
+        capability.supportsCheckpointRestore = runtime.supports_checkpoint_restore();
+        capability.checkpointHandoffPath = runtime.checkpoint_handoff_path();
+        capability.restoreEnvPath = runtime.restore_env_path();
+        if (capability.supportsCheckpointRestore
+            && (capability.checkpointHandoffPath.empty() || capability.restoreEnvPath.empty())) {
+            YRLOG_WARN("runtime {} advertised checkpoint restore without handoff paths; disabling it for RRT",
+                       runtime.runtime_class());
+            capability.supportsCheckpointRestore = false;
+        }
+    }
+    runtimeCapabilities_ = std::move(capabilities);
     availableRuntimesInitialized_ = true;
     YRLOG_INFO("initialized sandboxd runtime capability snapshot with {} runtimes", runtimes.size());
     if (availableRuntimesCallback_) {
         availableRuntimesCallback_(true, runtimes);
     }
     return Status::OK();
+}
+
+bool SandboxdExecutor::SupportsCheckpointRestore(const std::string &runtimeClass) const
+{
+    const auto capability = runtimeCapabilities_.find(runtimeClass);
+    return capability != runtimeCapabilities_.end() && capability->second.supportsCheckpointRestore;
+}
+
+void SandboxdExecutor::ApplyCheckpointRestoreEnvironment(
+    const std::string &runtimeClass, google::protobuf::Map<std::string, std::string> *envs) const
+{
+    if (envs == nullptr) {
+        return;
+    }
+    const auto capability = runtimeCapabilities_.find(runtimeClass);
+    if (capability == runtimeCapabilities_.end() || !capability->second.supportsCheckpointRestore) {
+        return;
+    }
+    (*envs)[YR_CHECKPOINT_HANDOFF_FILE] = capability->second.checkpointHandoffPath;
+    (*envs)[YR_RESTORE_ENV_FILE] = capability->second.restoreEnvPath;
 }
 
 void SandboxdExecutor::ScheduleAvailableRuntimesRetry()
@@ -2312,32 +2364,32 @@ litebus::Future<runtime::v1::GetRegisteredResponse> SandboxdExecutor::DoGetRegis
 
 litebus::Future<SandboxdRestoreResult> SandboxdExecutor::DoRestore(
     const std::shared_ptr<messages::StartInstanceRequest> &request,
-    const std::shared_ptr<runtime::v1::RestoreRequest> &req)
+    const std::shared_ptr<runtime::v1::StartRequest> &req)
 {
-    const auto attemptIt = req->config().labels().find("target_attempt_id");
+    const auto attemptIt = req->labels().find("target_attempt_id");
     const auto targetAttemptID =
-        attemptIt == req->config().labels().end() ? std::string{} : attemptIt->second;
+        attemptIt == req->labels().end() ? std::string{} : attemptIt->second;
     YRLOG_INFO("{}|{}|DoRestore runtime({}) checkpointDir({}) targetAttempt({})",
                request->runtimeinstanceinfo().traceid(), request->runtimeinstanceinfo().requestid(),
-               request->runtimeinstanceinfo().runtimeid(), req->checkpoint_dir(), targetAttemptID);
+               request->runtimeinstanceinfo().runtimeid(), req->checkpoint_info().checkpoint_dir(), targetAttemptID);
     ASSERT_IF_NULL(sandboxd_);
     auto resp = std::make_shared<runtime::v1::StartResponse>();
-    return sandboxd_->CallAsyncX("Restore", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncRestore)
-        .Then([request, resp](const Status &status) -> SandboxdRestoreResult {
+    return sandboxd_->CallAsyncX("Start", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncStart)
+        .Then([request, req, resp](const Status &status) -> SandboxdRestoreResult {
             if (status.IsError()) {
-                YRLOG_ERROR("{}|Restore gRPC failed for runtime({}): {}", request->runtimeinstanceinfo().traceid(),
+                YRLOG_ERROR("{}|restore Start gRPC failed for runtime({}): {}",
+                            request->runtimeinstanceinfo().traceid(),
                             request->runtimeinstanceinfo().runtimeid(), status.RawMessage());
                 return { status, {}, {} };
             }
             if (resp->code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
                 return {Status(StatusCode::FAILED,
                                resp->message().empty()
-                                   ? "sandboxd Restore returned a non-success response"
+                                   ? "sandboxd restore Start returned a non-success response"
                                    : resp->message()),
                         {}, {}};
             }
-            return { Status::OK(), resp->id(),
-                     {resp->ports().begin(), resp->ports().end()} };
+            return { Status::OK(), resp->id(), {req->ports().begin(), req->ports().end()} };
         });
 }
 

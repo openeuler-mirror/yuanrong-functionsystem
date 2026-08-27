@@ -221,6 +221,7 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleReusableSnapshot(
     context->requestID = requestID;
     context->instanceID = instanceID;
     context->name = options.name();
+    context->checkpointTimeoutSeconds = options.timeoutseconds() == 0 ? 180 : options.timeoutseconds();
     context->sourceInstanceInfo = instanceInfo;
     context->requestFingerprint = BuildReusableSnapshotFingerprint(instanceInfo, options);
     context->completion = std::make_shared<litebus::Promise<KillResponse>>();
@@ -361,7 +362,7 @@ void SnapCtrlActor::OnReusableSnapshotPrepared(
     }
     functionAgentMgr_->SnapshotRuntime(
         context->requestID, context->sourceInstanceInfo, 0, common::SNAPSHOT,
-        context->snapshotID, {}).OnComplete(
+        context->snapshotID, {}, context->checkpointTimeoutSeconds).OnComplete(
             litebus::Defer(GetAID(), &SnapCtrlActor::OnReusableSnapshotCheckpointed,
                            context, std::placeholders::_1));
 }

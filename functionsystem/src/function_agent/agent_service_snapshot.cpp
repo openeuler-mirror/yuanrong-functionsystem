@@ -328,7 +328,7 @@ void AgentServiceActor::SnapshotRuntimeResponse(const litebus::AID &from, std::s
                 artifact->set_objectkey(pending.artifactObjectKey);
                 artifact->set_size(response.snapshotinfo().size());
                 artifact->set_sha256(response.snapshotinfo().sha256());
-                artifact->set_format("gvisor-checkpoint");
+                artifact->set_format("sandboxd-checkpoint");
                 artifact->set_formatversion(1);
                 pending.completed = true;
                 pending.completedResponse = response;
@@ -425,7 +425,7 @@ void AgentServiceActor::OnReusableArtifactPublished(
             artifact->set_objectkey(pending->second.artifactObjectKey);
             artifact->set_size(static_cast<int64_t>(size));
             artifact->set_sha256(sha256);
-            artifact->set_format("gvisor-checkpoint");
+            artifact->set_format("sandboxd-checkpoint");
             artifact->set_formatversion(1);
             pending->second.completed = true;
             pending->second.completedResponse = response;
@@ -528,7 +528,7 @@ void AgentServiceActor::CompleteReusableSnapshot(
     artifact->set_objectkey(iter->second.artifactObjectKey);
     artifact->set_size(static_cast<int64_t>(metadata.size));
     artifact->set_sha256(metadata.sha256);
-    artifact->set_format("gvisor-checkpoint");
+    artifact->set_format("sandboxd-checkpoint");
     artifact->set_formatversion(1);
     response.clear_physicalfact();
     iter->second.completed = true;
@@ -1003,7 +1003,7 @@ void AgentServiceActor::DeleteReusableSnapshotArtifact(
         || request.snapshotid().empty() || snapshotStorage_ == nullptr
         || backend.IsError() || actualBackend != artifact.storagebackend()
         || artifact.objectkey() != canonicalKey || artifact.size() <= 0
-        || !validSha256 || artifact.format() != "gvisor-checkpoint"
+        || !validSha256 || artifact.format() != "sandboxd-checkpoint"
         || artifact.formatversion() != 1) {
         SendDeleteReusableSnapshotArtifactResponse(
             from, request.requestid(), common::ERR_PARAM_INVALID,

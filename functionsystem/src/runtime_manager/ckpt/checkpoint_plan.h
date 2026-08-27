@@ -26,6 +26,7 @@ struct CheckpointPlan {
     int32_t ttlSeconds{ 0 };
     ArtifactLifecycle lifecycle{ ArtifactLifecycle::USER_MANAGED };
     bool leaveRuntimeRunning{ false };
+    uint32_t timeoutSeconds{ 180 };
 };
 
 struct CheckpointResult {
@@ -68,6 +69,7 @@ inline Status BuildCheckpointPlan(const messages::SnapshotRuntimeRequest &reques
     plan.ttlSeconds = request.ttl();
     plan.lifecycle = lifecycle;
     plan.leaveRuntimeRunning = leaveRuntimeRunning;
+    plan.timeoutSeconds = request.timeoutseconds() == 0 ? 180 : request.timeoutseconds();
     return Status::OK();
 }
 

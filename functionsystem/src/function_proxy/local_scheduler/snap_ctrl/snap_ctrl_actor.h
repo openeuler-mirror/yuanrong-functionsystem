@@ -190,6 +190,7 @@ private:
         std::string snapshotID;
         std::string requestFingerprint;
         std::string name;
+        uint32_t checkpointTimeoutSeconds{ 180 };
         resources::InstanceInfo sourceInstanceInfo;
         ::messages::SnapshotArtifact artifact;
         ::core_service::SnapshotInfo publicInfo;

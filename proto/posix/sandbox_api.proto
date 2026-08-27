@@ -22,11 +22,8 @@ option go_package = "runtime-launcher/api/proto/runtime/v1;runtimev1";
 service SandboxService {
   // Start creates and starts a sandbox.
   rpc Start(StartRequest) returns (StartResponse) {}
-  // Restore restores either a legacy local checkpoint or a verified,
-  // deterministic resume attempt and returns authoritative physical facts.
-  rpc Restore(RestoreRequest) returns (StartResponse) {}
-  // DeleteCheckpoint deletes one exact sandboxd-owned checkpoint artifact.
-  rpc DeleteCheckpoint(DeleteCheckpointRequest) returns (DeleteCheckpointResponse) {}
+  // Checkpoint saves a running sandbox into a caller-owned directory.
+  rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
   // Delete stops and deletes a sandbox.
   rpc Delete(DeleteRequest) returns (DeleteResponse) {}
   // Wait waits for a sandbox to exit.
@@ -42,8 +39,6 @@ service SandboxService {
   rpc Unregister(UnregisterRequest) returns (NormalResponse) {}
   // GetRegistered returns registered reusable sandbox templates.
   rpc GetRegistered(GetRegisteredRequest) returns (GetRegisteredResponse) {}
-  // Checkpoint checkpoints a sandbox.
-  rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
   // ListAvailableRuntimes lists runtime classes whose handlers are ready.
   rpc ListAvailableRuntimes(ListAvailableRuntimesRequest) returns (ListAvailableRuntimesResponse) {}
 }
@@ -181,6 +176,12 @@ message XpuAllocation {
   repeated uint32 device_ids = 2;
 }
 
+// CheckpointInfo selects checkpoint restore mode for Start.
+message CheckpointInfo {
+  // CheckpointDir is the caller-owned directory containing runtime artifacts.
+  string checkpoint_dir = 1;
+}
+
 // StartRequest describes a sandbox start request.
 message StartRequest {
   // SandboxID is an optional caller-provided sandbox ID. sandboxd generates one when empty.
@@ -226,6 +227,8 @@ message StartRequest {
   // NetworkPolicy is the sandbox's initial packet and DNS policy. Field 20
   // matches the sandboxd SandboxService wire contract.
   NetworkPolicy network_policy = 20;
+  // CheckpointInfo restores the new sandbox from caller-owned runtime artifacts.
+  CheckpointInfo checkpoint_info = 21;
 }
 
 // StartResponse is returned after sandbox start.
@@ -238,20 +241,6 @@ message StartResponse {
   string id = 3;
   // Ports contains the concrete host/container mappings committed by sandboxd.
   repeated string ports = 4;
-}
-
-// RestoreRequest preserves the legacy config/checkpoint_dir wire fields and
-// adds the immutable identity required by deterministic cross-node resume.
-message RestoreRequest {
-  StartRequest config = 1;
-  string checkpoint_dir = 2;
-  // CheckpointID identifies the immutable logical snapshot. When set, all
-  // deterministic identity fields are required.
-  string checkpoint_id = 3;
-  // ExpectedSHA256 binds the caller-owned artifact to SnapshotInfo.
-  string expected_sha256 = 4;
-  // ExpectedSize binds the caller-owned artifact to SnapshotInfo.
-  int64 expected_size = 5;
 }
 
 // DeleteRequest describes a sandbox delete request.
@@ -328,31 +317,22 @@ message GetRegisteredResponse {
   repeated SandboxTemplate templates = 1;
 }
 
-// CheckpointRequest describes a sandbox checkpoint request.
+// CheckpointRequest describes a synchronous checkpoint operation.
 message CheckpointRequest {
-  reserved 3 to 5;
-  reserved "timeout", "compress", "trace_id";
-
-  // ID is the sandbox ID.
+  // ID is the source sandbox ID.
   string id = 1;
-  // CheckpointDir is the output directory for checkpoint artifacts.
+  // CheckpointDir is an absolute caller-owned output directory.
   string checkpoint_dir = 2;
-  // CheckpointID identifies the immutable logical snapshot.
-  string checkpoint_id = 6;
-  // LeaveRunning keeps the source sandbox alive until the PAUSED commit path
-  // explicitly deletes its exact physical identity.
-  bool leave_running = 7;
+  // TimeoutSeconds bounds the complete checkpoint operation and must be non-zero.
+  uint32 timeout_seconds = 3;
+  // Compress enables runtime-supported checkpoint compression.
+  bool compress = 4;
+  // LeaveRunning keeps the source sandbox running after a successful checkpoint.
+  bool leave_running = 5;
 }
 
-// CheckpointResponse is returned after sandbox checkpoint.
-message CheckpointResponse {
-  reserved 1, 2;
-  reserved "success", "message";
-
-  string artifact_path = 3;
-  int64 artifact_size = 4;
-  string artifact_sha256 = 5;
-}
+// CheckpointResponse is empty after the checkpoint artifact is complete.
+message CheckpointResponse {}
 
 // ListSandboxesRequest describes a sandbox list request.
 message ListSandboxesRequest {
@@ -502,20 +482,24 @@ message StatsResponse {
 // for new sandbox creation.
 message ListAvailableRuntimesRequest {}
 
+// RuntimeInfo describes one initialized runtime handler and its optional
+// checkpoint/restore application handoff interface.
+message RuntimeInfo {
+  // RuntimeClass is the handler name accepted by sandbox start requests.
+  string runtime_class = 1;
+  // SupportsCheckpointRestore reports whether the handler implements both operations.
+  bool supports_checkpoint_restore = 2;
+  // CheckpointHandoffPath is the guest-visible resume/restore/error endpoint.
+  string checkpoint_handoff_path = 3;
+  // RestoreEnvPath exposes the target OCI process environment after restore.
+  string restore_env_path = 4;
+}
+
 // ListAvailableRuntimesResponse contains the available runtime class snapshot.
 message ListAvailableRuntimesResponse {
   // RuntimeClasses contains the sorted handler names accepted by sandbox start requests.
   // Configured runtime classes whose handlers failed to initialize are excluded.
   repeated string runtime_classes = 1;
+  // Runtimes contains detailed capabilities in runtime_classes order.
+  repeated RuntimeInfo runtimes = 2;
 }
-
-// DeleteCheckpointRequest identifies one exact sandboxd-owned artifact.
-message DeleteCheckpointRequest {
-  string checkpoint_dir = 1;
-  string checkpoint_id = 2;
-  string source_sandbox_id = 3;
-  int64 expected_size = 4;
-  string expected_sha256 = 5;
-}
-
-message DeleteCheckpointResponse {}

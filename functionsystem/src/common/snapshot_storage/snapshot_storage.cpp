@@ -203,6 +203,82 @@ litebus::Future<SnapshotStat> InspectLocalSnapshotFile(const std::shared_ptr<Act
     });
 }
 
+litebus::Future<Status> DeleteLocalSnapshotFile(const std::shared_ptr<ActorWorker> &worker,
+                                                const std::string &sourceFile,
+                                                const SnapshotObjectMetadata &expected)
+{
+    if (worker == nullptr) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "snapshot deletion worker is null");
+    }
+    return detail::RunOnWorker<Status>(worker, [sourceFile, expected]() {
+        fs::path path(sourceFile);
+        const auto leaf = path.filename().string();
+        if (!detail::IsSafeLeafName(leaf)) {
+            return Status(StatusCode::ERR_PARAM_INVALID, "invalid local snapshot deletion input");
+        }
+        detail::SecureDirectory directory;
+        auto status = detail::SecureDirectory::Open(path.parent_path(), false, directory);
+        if (status.StatusCode() == StatusCode::FILE_NOT_FOUND) {
+            return Status::OK();
+        }
+        if (status.IsError()) {
+            return status;
+        }
+        int rawFd = openat(directory.Fd(), leaf.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (rawFd < 0) {
+            return errno == ENOENT
+                ? Status::OK()
+                : Status(StatusCode::FAILED,
+                         "failed to open local snapshot for deletion: " + std::string(std::strerror(errno)));
+        }
+        ScopedFileDescriptor fd(rawFd);
+        struct stat pinnedInfo {};
+        if (fstat(fd.Get(), &pinnedInfo) != 0 || !S_ISREG(pinnedInfo.st_mode)) {
+            return Status(StatusCode::ERR_PARAM_INVALID,
+                          "local snapshot deletion target must be a regular file");
+        }
+        if (pinnedInfo.st_size < 0 || static_cast<uint64_t>(pinnedInfo.st_size) != expected.size) {
+            return Status(StatusCode::FAILED, "local snapshot deletion size mismatch");
+        }
+        std::array<unsigned char, 32> digest{};
+        const auto pinnedPath = "/proc/self/fd/" + std::to_string(fd.Get());
+        if (Sha256CalculateFile(pinnedPath.c_str(), digest.data(), digest.size()) != 0) {
+            return Status(StatusCode::FAILED, "failed to hash local snapshot deletion target");
+        }
+        std::ostringstream actual;
+        actual << std::hex << std::setfill('0');
+        for (auto byte : digest) {
+            actual << std::setw(2) << static_cast<unsigned int>(byte);
+        }
+        if (actual.str() != expected.sha256) {
+            return Status(StatusCode::FAILED, "local snapshot deletion sha256 mismatch");
+        }
+        status = directory.VerifyPathIdentity();
+        if (status.IsError()) {
+            return status;
+        }
+        struct stat namedInfo {};
+        if (fstatat(directory.Fd(), leaf.c_str(), &namedInfo, AT_SYMLINK_NOFOLLOW) != 0) {
+            return errno == ENOENT ? Status::OK()
+                                   : Status(StatusCode::FAILED, "failed to verify local snapshot deletion target");
+        }
+        if (!S_ISREG(namedInfo.st_mode) || namedInfo.st_dev != pinnedInfo.st_dev
+            || namedInfo.st_ino != pinnedInfo.st_ino) {
+            return Status(StatusCode::SCHEDULE_CONFLICTED,
+                          "local snapshot deletion target changed during verification");
+        }
+        if (unlinkat(directory.Fd(), leaf.c_str(), 0) != 0 && errno != ENOENT) {
+            return Status(StatusCode::FAILED,
+                          "failed to delete local snapshot: " + std::string(std::strerror(errno)));
+        }
+        if (fsync(directory.Fd()) != 0) {
+            return Status(StatusCode::FAILED,
+                          "failed to persist local snapshot deletion: " + std::string(std::strerror(errno)));
+        }
+        return Status::OK();
+    });
+}
+
 namespace detail {
 
 litebus::Future<SnapshotStat> InspectLocalSnapshotFileWithHookForTest(

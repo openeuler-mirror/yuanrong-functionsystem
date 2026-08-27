@@ -124,7 +124,14 @@ private:
  */
 class SandboxdExecutor : public Executor {
 public:
+    struct RuntimeCapability {
+        bool supportsCheckpointRestore = false;
+        std::string checkpointHandoffPath;
+        std::string restoreEnvPath;
+    };
+
     using AvailableRuntimes = std::set<std::string>;
+    using RuntimeCapabilities = std::unordered_map<std::string, RuntimeCapability>;
     using AvailableRuntimesCallback = std::function<void(bool, const AvailableRuntimes &)>;
 
     static constexpr uint32_t kDefaultOrphanGracePeriodSec = 180;
@@ -280,7 +287,7 @@ private:
         const SandboxdRestoreContext &context);
     litebus::Future<messages::StartInstanceResponse> OnResumeRestoreUncertain(
         const SandboxdRestoreResult &result, const SandboxdRestoreContext &context,
-        const std::shared_ptr<runtime::v1::RestoreRequest> &restoreReq, bool retried);
+        const std::shared_ptr<runtime::v1::StartRequest> &restoreReq, bool retried);
     litebus::Future<messages::StartInstanceResponse> OnRestoreDone(
         const SandboxdRestoreResult &result, const std::shared_ptr<messages::StartInstanceRequest> &request,
         std::shared_ptr<SandboxdStartGuard> guard, bool trustedResume, bool exactExisting = false);
@@ -325,7 +332,7 @@ private:
     litebus::Future<runtime::v1::GetRegisteredResponse> DoGetRegistered();
     litebus::Future<SandboxdRestoreResult> DoRestore(
         const std::shared_ptr<messages::StartInstanceRequest> &request,
-        const std::shared_ptr<runtime::v1::RestoreRequest> &req);
+        const std::shared_ptr<runtime::v1::StartRequest> &req);
 
     void DoWait(const std::string &sandboxID, const std::string &runtimeID);
     void RestoreWait(const std::string &sandboxID);
@@ -379,6 +386,9 @@ private:
     void ScheduleAvailableRuntimesRetry();
     Status OnListAvailableRuntimes(const std::shared_ptr<runtime::v1::ListAvailableRuntimesResponse> &response,
                                    const Status &status);
+    bool SupportsCheckpointRestore(const std::string &runtimeClass) const;
+    void ApplyCheckpointRestoreEnvironment(const std::string &runtimeClass,
+                                           google::protobuf::Map<std::string, std::string> *envs) const;
 
     messages::StartInstanceResponse MakeSuccessStartResponse(
         const std::shared_ptr<messages::StartInstanceRequest> &request, const std::string &sandboxID);
@@ -448,6 +458,7 @@ private:
                        std::vector<std::shared_ptr<litebus::Promise<Status>>>> pendingDeleteWaiters_;
     litebus::AID functionAgentAID_;
     AvailableRuntimesCallback availableRuntimesCallback_;
+    RuntimeCapabilities runtimeCapabilities_;
     bool reconnecting_ = false;
     bool synced_       = false;
     bool fetchingAvailableRuntimes_ = false;

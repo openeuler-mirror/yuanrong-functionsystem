@@ -1573,7 +1573,7 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
     const resource_view::InstanceInfo &instanceInfo,
     int32_t ttl)
 {
-    return SnapshotRuntime(requestID, instanceInfo, ttl, common::DUMPSTATE, {}, {});
+    return SnapshotRuntime(requestID, instanceInfo, ttl, common::DUMPSTATE, {}, {}, 0);
 }
 
 litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::SnapshotRuntime(
@@ -1582,7 +1582,8 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
     int32_t ttl,
     common::SnapType type,
     const std::string &snapshotID,
-    const std::string &checkpointDir)
+    const std::string &checkpointDir,
+    uint32_t timeoutSeconds)
 {
     // 1. 从 instanceInfo 获取 funcAgentID
     std::string funcAgentID = instanceInfo.functionagentid();
@@ -1618,6 +1619,7 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
     request->set_checkpointdir(checkpointDir);
     request->set_tenantid(instanceInfo.tenantid());
     request->set_sourceversion(instanceInfo.version());
+    request->set_timeoutseconds(timeoutSeconds);
     auto future = snapshotRuntimeSync_.AddSynchronizer(requestID);
     const auto targetAgent = funcAgentTable_[funcAgentID].aid;
     snapshotRuntimeExpectedAgent_[requestID] = targetAgent;

@@ -203,6 +203,12 @@ std::string ReusableSnapshotStore::SnapshotID(const ::messages::BeginReusableSna
     target.set_restartpolicy(source.restartpolicy());
     *target.mutable_resources() = source.resources();
     *target.mutable_scheduleoption() = source.scheduleoption();
+    if (!source.functionproxyid().empty()) {
+        (*target.mutable_scheduleoption()
+              ->mutable_affinity()
+              ->mutable_nodeaffinity()
+              ->mutable_affinity())[source.functionproxyid()] = resources::PreferredAffinity;
+    }
     *target.mutable_createoptions() = source.createoptions();
     target.mutable_labels()->CopyFrom(source.labels());
     target.set_storagetype(source.storagetype());
@@ -246,7 +252,7 @@ Status ReusableSnapshotStore::ValidateArtifact(const ::messages::SnapshotArtifac
             return std::isxdigit(value) != 0;
         });
     if (!supportedBackend || !safeObjectKey || artifact.size() <= 0
-        || !validSha256 || artifact.format() != "gvisor-checkpoint"
+        || !validSha256 || artifact.format() != "sandboxd-checkpoint"
         || artifact.formatversion() != 1) {
         return Invalid("reusable Snapshot artifact is incomplete or unsupported");
     }

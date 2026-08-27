@@ -104,7 +104,7 @@ public:
     artifact.set_objectkey("reusable/v1/tenant/snap/checkpoint.img");
     artifact.set_size(4096);
     artifact.set_sha256(std::string(64, 'a'));
-    artifact.set_format("gvisor-checkpoint");
+    artifact.set_format("sandboxd-checkpoint");
     artifact.set_formatversion(1);
     return artifact;
 }
@@ -318,6 +318,8 @@ TEST_F(ReusableSnapshotStoreTest, SanitizedTemplatePreservesWorkloadAndDeclaredR
     EXPECT_EQ(value.resources().resources().at("Memory").scalar().value(), 4096);
     EXPECT_EQ(value.createoptions().at("workdir"), "/workspace");
     EXPECT_TRUE(value.extensions().empty());
+    EXPECT_EQ(value.scheduleoption().affinity().nodeaffinity().affinity().at("source-proxy"),
+              resources::PreferredAffinity);
 }
 
 TEST_F(ReusableSnapshotStoreTest, FailDeletesOnlyMatchingPublishingRecord)

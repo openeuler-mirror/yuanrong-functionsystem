@@ -69,6 +69,9 @@ std::string BuildReusableSnapshotTemporaryKey(const std::string &tenantHash, con
 litebus::Future<SnapshotStat> InspectLocalSnapshotFile(const std::shared_ptr<ActorWorker> &worker,
                                                        const std::string &sourceFile, const std::string &snapshotID,
                                                        int64_t sourceInstanceVersion);
+litebus::Future<Status> DeleteLocalSnapshotFile(const std::shared_ptr<ActorWorker> &worker,
+                                                const std::string &sourceFile,
+                                                const SnapshotObjectMetadata &expected);
 
 namespace detail {
 

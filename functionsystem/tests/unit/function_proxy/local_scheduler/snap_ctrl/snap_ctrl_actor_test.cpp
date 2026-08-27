@@ -206,7 +206,8 @@ public:
 
     litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(
         const std::string &requestID, const resource_view::InstanceInfo &instanceInfo, int32_t ttl,
-        common::SnapType type, const std::string &snapshotID, const std::string &checkpointDir) override
+        common::SnapType type, const std::string &snapshotID, const std::string &checkpointDir,
+        uint32_t timeoutSeconds) override
     {
         pauseCalls_.fetch_add(1);
         pauseRequestID_ = requestID;
@@ -215,6 +216,7 @@ public:
         pauseCheckpointDir_ = checkpointDir;
         pauseTtl_ = ttl;
         pauseType_ = type;
+        pauseTimeoutSeconds_ = timeoutSeconds;
         if (operations_ != nullptr) {
             operations_->emplace_back("checkpoint");
         }
@@ -245,7 +247,7 @@ public:
                 artifact->set_objectkey("reusable/v1/tenant/snapshot/checkpoint.img");
                 artifact->set_size(4096);
                 artifact->set_sha256("agent-persisted-pause-sha256");
-                artifact->set_format("gvisor-checkpoint");
+                artifact->set_format("sandboxd-checkpoint");
                 artifact->set_formatversion(1);
             }
             return response;
@@ -267,7 +269,7 @@ public:
             artifact->set_objectkey("reusable/v1/tenant/failure/checkpoint.img");
             artifact->set_size(4096);
             artifact->set_sha256("agent-persisted-pause-sha256");
-            artifact->set_format("gvisor-checkpoint");
+            artifact->set_format("sandboxd-checkpoint");
             artifact->set_formatversion(1);
         }
         if (responseCode != common::ERR_NONE) {
@@ -443,6 +445,7 @@ public:
     const std::string &PauseCheckpointDir() const { return pauseCheckpointDir_; }
     common::SnapType PauseType() const { return pauseType_; }
     int32_t PauseTtl() const { return pauseTtl_; }
+    uint32_t PauseTimeoutSeconds() const { return pauseTimeoutSeconds_; }
     const std::vector<::messages::SnapshotAttemptFinalizeRequest> &FinalizeRequests() const
     {
         return finalizeRequests_;
@@ -470,6 +473,7 @@ private:
     std::shared_ptr<litebus::Promise<messages::SnapshotRuntimeResponse>> pendingPauseResponse_;
     common::SnapType pauseType_ { common::DUMPSTATE };
     int32_t pauseTtl_ { -1 };
+    uint32_t pauseTimeoutSeconds_ { 0 };
     std::vector<::messages::SnapshotAttemptFinalizeRequest> finalizeRequests_;
     std::vector<::messages::SnapshotAttemptFinalizeResponse> queuedFinalizeResponses_;
     std::shared_ptr<litebus::Promise<::messages::SnapshotAttemptFinalizeResponse>> pendingFinalizeResponse_;
@@ -2292,6 +2296,7 @@ TEST_F(SnapCtrlActorPauseContextTest, ReusableSnapshotCommitsReadyBeforeExactLoc
     EXPECT_EQ(snapshotRuntimeProbe_->PauseCalls(), 1);
     EXPECT_EQ(snapshotRuntimeProbe_->PauseType(), common::SNAPSHOT);
     EXPECT_EQ(snapshotRuntimeProbe_->PauseTtl(), 0);
+    EXPECT_EQ(snapshotRuntimeProbe_->PauseTimeoutSeconds(), 180U);
     EXPECT_EQ(snapshotRuntimeProbe_->PauseSnapshotID(), "snapshot-reusable-1");
     ASSERT_EQ(snapshotRuntimeProbe_->FinalizeRequests().size(), 1U);
     EXPECT_EQ(snapshotRuntimeProbe_->FinalizeRequests().front().operation(),

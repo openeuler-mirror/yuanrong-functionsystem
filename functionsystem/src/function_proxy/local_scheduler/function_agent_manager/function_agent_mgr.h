@@ -114,7 +114,8 @@ public:
         int32_t ttl,
         common::SnapType type,
         const std::string &snapshotID,
-        const std::string &checkpointDir);
+        const std::string &checkpointDir,
+        uint32_t timeoutSeconds = 0);
 
     virtual litebus::Future<::messages::SnapshotAttemptFinalizeResponse> FinalizeSnapshotAttempt(
         const resource_view::InstanceInfo &instanceInfo,

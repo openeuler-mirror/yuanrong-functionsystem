@@ -1305,6 +1305,7 @@ message SnapshotRuntimeRequest {
   string tenantID = 10;
   int64 sourceVersion = 11;
   bool leaveRunning = 12;
+  uint32 timeoutSeconds = 13;
 }
 
 message SnapshotRuntimeResponse {

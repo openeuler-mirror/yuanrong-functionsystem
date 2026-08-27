@@ -26,6 +26,7 @@
 #include "common/proto/pb/posix/sandbox_api.grpc.pb.h"
 #include "common/rpc/client/grpc_client.h"
 #include "common/status/status.h"
+#include "common/utils/actor_worker.h"
 #include "runtime_manager/ckpt/checkpoint_plan.h"
 #include "runtime_manager/ckpt/ckpt_file_manager.h"
 #include "runtime_manager/executor/sandboxd/runtime_state_manager.h"
@@ -34,7 +35,7 @@ namespace functionsystem::runtime_manager {
 
 /**
  * SandboxdCheckpointOrchestrator — checkpoint lifecycle against the sandboxd
- * SandboxService (Checkpoint + Restore RPCs).
+ * SandboxService (Checkpoint + Start with CheckpointInfo).
  *
  * All callers use the same explicit CheckpointPlan and receive the same local
  * artifact facts. Artifact publication and lifecycle remain caller policy.
@@ -82,14 +83,14 @@ public:
     // ── gRPC wrapper ──────────────────────────────────────────────────────────
 
     litebus::Future<CheckpointResult> DoCheckpoint(
-        const std::shared_ptr<runtime::v1::CheckpointRequest> &req);
+        const std::shared_ptr<runtime::v1::CheckpointRequest> &req,
+        const std::string &checkpointID);
 
     litebus::Future<CheckpointResult> CheckpointLocal(const CheckpointPlan &plan);
 
     /**
-     * Delete one sandboxd-owned checkpoint artifact after verifying its exact
-     * durable identity. A mismatch is reported by sandboxd and must not delete
-     * any other checkpoint.
+     * Delete one caller-owned checkpoint artifact after verifying its exact
+     * durable identity. sandboxd never owns the artifact lifecycle.
      */
     litebus::Future<Status> DeleteCheckpoint(
         const std::string &checkpointDir, const std::string &checkpointID,
@@ -117,6 +118,7 @@ private:
     std::shared_ptr<GrpcClient<runtime::v1::SandboxService>> sandboxd_;
     std::shared_ptr<CkptFileManager> ckptFileManager_;
     RuntimeStateManager &stateManager_;
+    std::shared_ptr<ActorWorker> worker_;
 };
 
 }  // namespace functionsystem::runtime_manager

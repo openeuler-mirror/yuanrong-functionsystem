@@ -565,7 +565,7 @@ TEST_F(FuncAgentMgrActorTest, ReusableDeleteGatewaySelectsOnlyHealthyInitialized
     request.mutable_artifact()->set_objectkey("reusable/v1/hash/snapshot/checkpoint.img");
     request.mutable_artifact()->set_size(4096);
     request.mutable_artifact()->set_sha256(std::string(64, 'a'));
-    request.mutable_artifact()->set_format("gvisor-checkpoint");
+    request.mutable_artifact()->set_format("sandboxd-checkpoint");
     request.mutable_artifact()->set_formatversion(1);
 
     auto response = master->DeleteArtifact(proxy->GetAID(), request);
