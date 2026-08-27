@@ -56,6 +56,8 @@ Status ResolveStorageBackend(const std::shared_ptr<SnapshotStorage> &storage,
                              const std::string &configuredBackend,
                              std::string &resolvedBackend);
 
+std::string StableTenantHash(const std::string &tenantID);
+
 std::string BuildPauseSnapshotFinalKey(const std::string &tenantID, const std::string &instanceID);
 std::string BuildPauseSnapshotTemporaryKey(const std::string &tenantID, const std::string &instanceID,
                                            const std::string &snapshotID);
@@ -69,9 +71,6 @@ std::string BuildReusableSnapshotTemporaryKey(const std::string &tenantHash, con
 litebus::Future<SnapshotStat> InspectLocalSnapshotFile(const std::shared_ptr<ActorWorker> &worker,
                                                        const std::string &sourceFile, const std::string &snapshotID,
                                                        int64_t sourceInstanceVersion);
-litebus::Future<Status> DeleteLocalSnapshotFile(const std::shared_ptr<ActorWorker> &worker,
-                                                const std::string &sourceFile,
-                                                const SnapshotObjectMetadata &expected);
 
 namespace detail {
 

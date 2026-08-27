@@ -120,6 +120,55 @@ public:
     std::shared_ptr<litebus::Promise<Status>> promise_;
 };
 
+class RecordingMasterBusiness final : public InstanceManagerActor::MasterBusiness {
+public:
+    RecordingMasterBusiness(const std::shared_ptr<InstanceManagerActor::Member> &member,
+                            const std::shared_ptr<InstanceManagerActor> &actor)
+        : MasterBusiness(member, actor)
+    {
+    }
+
+    void OnFaultLocalInstancePut(
+        const std::string &, const std::shared_ptr<resource_view::InstanceInfo> &,
+        const std::string &) override
+    {
+        ++fatalWrites;
+    }
+
+    int fatalWrites{ 0 };
+};
+
+TEST(InstanceManagerActorTest, LocalFailoverInstanceStaysRunningWhenNodeTemporarilyExits)
+{
+    auto member = std::make_shared<InstanceManagerActor::Member>();
+    auto business = std::make_shared<RecordingMasterBusiness>(
+        member, nullptr);
+    auto instance = std::make_shared<resource_view::InstanceInfo>();
+    instance->set_instanceid("failover-instance");
+    instance->set_failover(true);
+    instance->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::CREATING));
+    const std::pair<const std::string, std::shared_ptr<resource_view::InstanceInfo>> entry(
+        "instance-key", instance);
+
+    business->ProcessInstanceNotReSchedule(entry, "stable-node", "stable-node is exited");
+    EXPECT_EQ(business->fatalWrites, 0);
+    EXPECT_EQ(instance->instancestatus().code(), static_cast<int32_t>(InstanceState::RUNNING));
+
+    instance->set_failover(false);
+    business->ProcessInstanceNotReSchedule(entry, "stable-node", "stable-node is exited");
+    EXPECT_EQ(business->fatalWrites, 1);
+
+    instance->set_failover(true);
+    instance->set_lowreliability(true);
+    instance->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::FATAL));
+    EXPECT_FALSE(business->IsInstanceShouldBeKilled(instance));
+
+    auto baseBusiness = std::make_shared<InstanceManagerActor::MasterBusiness>(member, nullptr);
+    baseBusiness->OnFaultLocalInstancePut(
+        "instance-key", instance, "stable-node is unavailable");
+    EXPECT_EQ(instance->instancestatus().code(), static_cast<int32_t>(InstanceState::RUNNING));
+}
+
 class DISABLED_InstanceManagerTest : public ::testing::Test {
 protected:
     inline static std::unique_ptr<meta_store::test::EtcdServiceDriver> etcdSrvDriver_;
@@ -2677,6 +2726,56 @@ TEST(InstanceManagerReusableDeleteTest, TriesAnotherHealthyRuntimeNodeWithoutSou
     litebus::Await(winningProxy->GetAID());
     litebus::Terminate(failingProxy->GetAID());
     litebus::Await(failingProxy->GetAID());
+}
+
+TEST(InstanceManagerReusableDeleteTest, VisitsEveryHealthyRuntimeNodeAfterFirstSuccess)
+{
+    const std::string firstNode = "a-reusable-delete-success-node";
+    const std::string cacheOwnerNode = "b-reusable-delete-cache-owner-node";
+    const auto address = "127.0.0.1:" + std::to_string(GetPortEnv("LITEBUS_PORT", 8080));
+    auto scheduler = std::make_shared<MockGlobalSched>();
+    EXPECT_CALL(*scheduler, QueryNodes())
+        .WillOnce(testing::Return(std::unordered_set<std::string>{ firstNode, cacheOwnerNode }));
+    EXPECT_CALL(*scheduler, QueryResourcesInfo(testing::_))
+        .WillOnce(testing::Return(MakePausedDeleteResourceResponse({ firstNode, cacheOwnerNode })));
+    ON_CALL(*scheduler, GetLocalAddress(testing::_))
+        .WillByDefault(testing::Return(litebus::Option<std::string>(address)));
+    EXPECT_CALL(*scheduler, GetLocalAddress(firstNode)).Times(1);
+    EXPECT_CALL(*scheduler, GetLocalAddress(cacheOwnerNode)).Times(1);
+
+    auto firstProxy = std::make_shared<ReusableDeleteProxyStub>(firstNode, common::ERR_NONE);
+    auto cacheOwnerProxy = std::make_shared<ReusableDeleteProxyStub>(cacheOwnerNode, common::ERR_NONE);
+    ASSERT_TRUE(litebus::Spawn(firstProxy).OK());
+    ASSERT_TRUE(litebus::Spawn(cacheOwnerProxy).OK());
+    auto actor = std::make_shared<PausedDeleteInstanceManagerActor>(
+        nullptr, scheduler, nullptr, nullptr, InstanceManagerStartParam{});
+    ASSERT_TRUE(litebus::Spawn(actor).OK());
+
+    ::messages::DeleteReusableSnapshotArtifactRequest request;
+    request.set_requestid("delete-reusable-from-every-node");
+    request.set_tenantid("tenant-reusable-delete");
+    request.set_snapshotid("snapshot-reusable-delete");
+    request.mutable_artifact()->set_storagebackend("obs");
+    request.mutable_artifact()->set_objectkey(
+        "reusable/v1/tenant-hash/snapshot-reusable-delete/checkpoint.img");
+    request.mutable_artifact()->set_size(4096);
+    request.mutable_artifact()->set_sha256(std::string(64, 'a'));
+    request.mutable_artifact()->set_format("sandboxd-checkpoint");
+    request.mutable_artifact()->set_formatversion(1);
+
+    auto response = litebus::Async(actor->GetAID(),
+        &InstanceManagerActor::DeleteReusableSnapshotArtifact, request);
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), common::ERR_NONE) << response.Get().message();
+    ASSERT_EQ(firstProxy->requests_.size(), size_t{ 1 });
+    ASSERT_EQ(cacheOwnerProxy->requests_.size(), size_t{ 1 });
+
+    litebus::Terminate(actor->GetAID());
+    litebus::Await(actor->GetAID());
+    litebus::Terminate(cacheOwnerProxy->GetAID());
+    litebus::Await(cacheOwnerProxy->GetAID());
+    litebus::Terminate(firstProxy->GetAID());
+    litebus::Await(firstProxy->GetAID());
 }
 
 TEST(InstanceManagerPausedDeleteTest, RemoteCleanupFailurePreservesPausedMetadata)

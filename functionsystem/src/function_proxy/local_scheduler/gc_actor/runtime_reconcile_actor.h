@@ -105,6 +105,12 @@ private:
 
     void CleanGhostInstance(const std::string &instanceID);
 
+    void RecoverMissingRuntime(const std::string &instanceID,
+                               const std::string &sourceRuntimeID);
+
+    Status OnMissingRuntimeRecoveryDone(const std::string &instanceID,
+                                        const litebus::Future<Status> &future);
+
     Status OnForceDeleteComplete(const std::string &instanceID, const Status &status);
 
     void SchedulePeriodicCycle();

@@ -36,7 +36,6 @@ void MockRuntimeManagerActor::Init()
     ActorBase::Receive("UpdateCred", &MockRuntimeManagerActor::UpdateCred);
     ActorBase::Receive("QueryDebugInstanceInfos", &MockRuntimeManagerActor::QueryDebugInstanceInfos);
     ActorBase::Receive("SnapshotRuntime", &MockRuntimeManagerActor::SnapshotRuntime);
-    ActorBase::Receive("SnapshotAttemptFinalize", &MockRuntimeManagerActor::SnapshotAttemptFinalize);
 }
 
 void MockHealthCheckActor::Init()
@@ -66,11 +65,6 @@ void MockRuntimeManagerActor::StartInstance(const litebus::AID &from, std::strin
 void MockRuntimeManagerActor::SnapshotRuntime(const litebus::AID &, std::string &&, std::string &&msg)
 {
     promiseOfSnapshotRuntimeRequest.SetValue(std::move(msg));
-}
-
-void MockRuntimeManagerActor::SnapshotAttemptFinalize(const litebus::AID &, std::string &&, std::string &&msg)
-{
-    promiseOfSnapshotAttemptFinalizeRequest.SetValue(std::move(msg));
 }
 
 void MockRuntimeManagerActor::CleanStatus(const litebus::AID &from, std::string &&, std::string &&msg)
@@ -172,6 +166,8 @@ void MockFunctionAgentMgrActor::Init()
                        &MockFunctionAgentMgrActor::SnapshotAttemptFinalizeResponse);
     ActorBase::Receive("DeleteReusableSnapshotArtifactResponse",
                        &MockFunctionAgentMgrActor::DeleteReusableSnapshotArtifactResponse);
+    ActorBase::Receive("ListLocalSnapshotsResponse", &MockFunctionAgentMgrActor::ListLocalSnapshotsResponse);
+    ActorBase::Receive("DeleteLocalSnapshotResponse", &MockFunctionAgentMgrActor::DeleteLocalSnapshotResponse);
 }
 
 void MockFunctionAgentMgrActor::SnapshotRuntimeResponse(
@@ -190,6 +186,18 @@ void MockFunctionAgentMgrActor::DeleteReusableSnapshotArtifactResponse(
     const litebus::AID &, std::string &&, std::string &&msg)
 {
     promiseOfDeleteReusableSnapshotArtifactResponse.SetValue(std::move(msg));
+}
+
+void MockFunctionAgentMgrActor::ListLocalSnapshotsResponse(
+    const litebus::AID &, std::string &&, std::string &&msg)
+{
+    promiseOfListLocalSnapshotsResponse.SetValue(std::move(msg));
+}
+
+void MockFunctionAgentMgrActor::DeleteLocalSnapshotResponse(
+    const litebus::AID &, std::string &&, std::string &&msg)
+{
+    promiseOfDeleteLocalSnapshotResponse.SetValue(std::move(msg));
 }
 
 void MockFunctionAgentMgrActor::DeployInstanceResponse(const litebus::AID &from, std::string &&, std::string &&msg)

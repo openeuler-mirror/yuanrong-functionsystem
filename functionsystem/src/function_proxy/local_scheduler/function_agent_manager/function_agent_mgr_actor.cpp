@@ -94,6 +94,8 @@ void FunctionAgentMgrActor::Init()
     Receive("UpdateLocalStatus", &FunctionAgentMgrActor::UpdateLocalStatus);
     Receive("UpdateCredResponse", &FunctionAgentMgrActor::UpdateCredResponse);
     Receive("SnapshotRuntimeResponse", &FunctionAgentMgrActor::SnapshotRuntimeResponse);
+    Receive("ListLocalSnapshotsResponse", &FunctionAgentMgrActor::ListLocalSnapshotsResponse);
+    Receive("DeleteLocalSnapshotResponse", &FunctionAgentMgrActor::DeleteLocalSnapshotResponse);
     Receive("SnapshotAttemptFinalizeResponse", &FunctionAgentMgrActor::SnapshotAttemptFinalizeResponse);
     Receive("FinalizePausedSnapshotDelete", &FunctionAgentMgrActor::FinalizePausedSnapshotDelete);
     Receive("DeleteReusableSnapshotArtifact", &FunctionAgentMgrActor::DeleteReusableSnapshotArtifact);
@@ -210,7 +212,8 @@ litebus::Future<Status> FunctionAgentMgrActor::EnableFuncAgent(const litebus::Fu
         return Status(StatusCode::FAILED);
     }
 
-    if (status.IsError() || status.Get() == StatusCode::LS_SYNC_INSTANCE_FAIL) {
+    const bool enableFailed = status.IsError() || status.Get().IsError();
+    if (enableFailed) {
         if (!IsEvictedAgent(funcAgentID) || !IsEvictingAgent(funcAgentID)) {
             SendCleanStatusToFunctionAgent(funcAgentTable_[funcAgentID].aid, 0);
         }
@@ -224,8 +227,10 @@ litebus::Future<Status> FunctionAgentMgrActor::EnableFuncAgent(const litebus::Fu
 
     litebus::Promise<Status> ret;
     auto recoverPromise = funcAgentTable_[funcAgentID].recoverPromise;
-    if (status.IsError()) {
-        YRLOG_WARN("enable agent({}) fail. code: {}", funcAgentID, status.GetErrorCode());
+    if (enableFailed) {
+        const auto errorCode = status.IsError()
+            ? status.GetErrorCode() : static_cast<int32_t>(status.Get().StatusCode());
+        YRLOG_WARN("enable agent({}) fail. code: {}", funcAgentID, errorCode);
         if (recoverPromise != nullptr) {
             recoverPromise->SetValue(false);
         }
@@ -239,7 +244,7 @@ litebus::Future<Status> FunctionAgentMgrActor::EnableFuncAgent(const litebus::Fu
         if (auto bundleMgr = bundleMgr_.lock()) {
             (void)bundleMgr->NotifyFailedAgent(funcAgentID);
         }
-        ret.SetFailed(static_cast<int32_t>(status.GetErrorCode()));
+        ret.SetFailed(errorCode);
         return ret.GetFuture();
     }
 
@@ -264,8 +269,9 @@ litebus::Future<Status> FunctionAgentMgrActor::EnableFuncAgent(const litebus::Fu
         req->set_timeoutsec(funcAgentsRegisMap_[funcAgentID].evicttimeoutsec());
         EvictInstanceOnAgent(req);
     }
-    auto instanceCtrl = instanceCtrl_.lock();
-    instanceCtrl->TriggerToWarmUpFunction(funcAgentID);
+    if (auto instanceCtrl = instanceCtrl_.lock()) {
+        instanceCtrl->TriggerToWarmUpFunction(funcAgentID);
+    }
     if (coProcessMode_ && reconcileCallback_) {
         YRLOG_INFO("co-process mode: agent({}) enabled, triggering reconciliation.", funcAgentID);
         reconcileCallback_(funcAgentID);
@@ -290,11 +296,8 @@ litebus::Future<Status> FunctionAgentMgrActor::AddFuncAgent(const Status &status
         YRLOG_INFO("the resource of etcd and agent({}) are the same.", funcAgentID);
         funcAgentTable_[funcAgentID].isInit = true;
         (void)bundleMgr->UpdateBundlesStatus(funcAgentID, UnitStatus::NORMAL);
-        if (coProcessMode_) {
-            YRLOG_INFO("co-process mode: agent({}) staying in RECOVERING until reconciliation completes", funcAgentID);
-            return Status::OK();
-        }
-        return resourceView->UpdateUnitStatus(funcAgentID, UnitStatus::NORMAL);
+        YRLOG_INFO("agent({}) staying in RECOVERING until local snapshots are listed", funcAgentID);
+        return Status::OK();
     }
     return status;
 }
@@ -360,8 +363,86 @@ void FunctionAgentMgrActor::Register(const litebus::AID &from, string &&name, st
         .Then(litebus::Defer(GetAID(), &FunctionAgentMgrActor::SyncInstances, std::placeholders::_1))
         .Then(litebus::Defer(GetAID(), &FunctionAgentMgrActor::AddFuncAgent, std::placeholders::_1, funcAgentID,
                              resourceUnit))
+        .Then(litebus::Defer(GetAID(), &FunctionAgentMgrActor::RebuildLocalSnapshotView,
+                             std::placeholders::_1, funcAgentID))
         .OnComplete(
         litebus::Defer(GetAID(), &FunctionAgentMgrActor::EnableFuncAgent, std::placeholders::_1, funcAgentID));
+}
+
+litebus::Future<Status> FunctionAgentMgrActor::RebuildLocalSnapshotView(
+    const Status &status, const std::string &funcAgentID)
+{
+    if (status.IsError()) {
+        return status;
+    }
+    auto completion = std::make_shared<litebus::Promise<Status>>();
+    RequestLocalSnapshotList(funcAgentID, completion);
+    return completion->GetFuture();
+}
+
+void FunctionAgentMgrActor::RequestLocalSnapshotList(
+    const std::string &funcAgentID,
+    const std::shared_ptr<litebus::Promise<Status>> &completion)
+{
+    if (funcAgentTable_.find(funcAgentID) == funcAgentTable_.end()) {
+        completion->SetFailed(static_cast<int32_t>(StatusCode::LS_AGENT_NOT_FOUND));
+        return;
+    }
+    ListLocalSnapshots(funcAgentID).OnComplete(litebus::Defer(
+        GetAID(), &FunctionAgentMgrActor::OnLocalSnapshotListResponse,
+        funcAgentID, completion, std::placeholders::_1));
+}
+
+void FunctionAgentMgrActor::OnLocalSnapshotListResponse(
+    const std::string &funcAgentID,
+    const std::shared_ptr<litebus::Promise<Status>> &completion,
+    const litebus::Future<messages::ListLocalSnapshotsResponse> &future)
+{
+    if (future.IsError()) {
+        YRLOG_WARN("agent({}) local snapshot List failed; keeping RECOVERING and retrying", funcAgentID);
+        litebus::AsyncAfter(retryCycleMs_, GetAID(), &FunctionAgentMgrActor::RequestLocalSnapshotList,
+                            funcAgentID, completion);
+        return;
+    }
+    OnLocalSnapshotsListed(funcAgentID, future.Get()).OnComplete(litebus::Defer(
+        GetAID(), &FunctionAgentMgrActor::OnLocalSnapshotListApplied,
+        funcAgentID, completion, std::placeholders::_1));
+}
+
+void FunctionAgentMgrActor::OnLocalSnapshotListApplied(
+    const std::string &funcAgentID,
+    const std::shared_ptr<litebus::Promise<Status>> &completion,
+    const litebus::Future<Status> &future)
+{
+    if (future.IsError() || future.Get().IsError()) {
+        YRLOG_WARN("agent({}) local snapshot view rebuild failed; keeping RECOVERING and retrying", funcAgentID);
+        litebus::AsyncAfter(retryCycleMs_, GetAID(), &FunctionAgentMgrActor::RequestLocalSnapshotList,
+                            funcAgentID, completion);
+        return;
+    }
+    completion->SetValue(Status::OK());
+}
+
+litebus::Future<Status> FunctionAgentMgrActor::OnLocalSnapshotsListed(
+    const std::string &funcAgentID,
+    const messages::ListLocalSnapshotsResponse &response)
+{
+    if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+        return Status(static_cast<StatusCode>(response.code()), response.message());
+    }
+    const std::vector<messages::LocalSnapshotMetadata> snapshots(
+        response.snapshots().begin(), response.snapshots().end());
+    const auto rebuilt = localSnapshotView_.ReplaceAgentSnapshots(funcAgentID, snapshots);
+    if (rebuilt.IsError()) {
+        return rebuilt;
+    }
+    if (coProcessMode_) {
+        return Status::OK();
+    }
+    const auto resourceView = resourceView_.lock();
+    return resourceView == nullptr
+        ? Status(StatusCode::LS_RESOURCE_VIEW_IS_NULL)
+        : resourceView->UpdateUnitStatus(funcAgentID, UnitStatus::NORMAL);
 }
 
 bool FunctionAgentMgrActor::CheckFunctionAgentRegisterParam(const litebus::AID &from, const messages::Register &req)
@@ -514,7 +595,8 @@ void FunctionAgentMgrActor::UpdateInstanceStatus(const litebus::AID &from, strin
 
     const auto &info = req.instancestatusinfo();
 
-    auto instanceStatusInfo = GenInstanceStatusInfo(info.instanceid(), info.status(), info.instancemsg(), info.type());
+    auto instanceStatusInfo = GenInstanceStatusInfo(
+        info.instanceid(), info.status(), info.instancemsg(), info.type(), info.runtimeid());
     auto requestID(info.requestid());
     if (auto instanceCtrl = instanceCtrl_.lock()) {
         // need reschedule if req.instancestatusinfo().status() is StatusCode::RUNTIME_ERROR_NON_FATAL
@@ -1573,7 +1655,7 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
     const resource_view::InstanceInfo &instanceInfo,
     int32_t ttl)
 {
-    return SnapshotRuntime(requestID, instanceInfo, ttl, common::DUMPSTATE, {}, {}, 0);
+    return SnapshotRuntime(requestID, instanceInfo, ttl, common::DUMPSTATE, {}, {});
 }
 
 litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::SnapshotRuntime(
@@ -1582,8 +1664,7 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
     int32_t ttl,
     common::SnapType type,
     const std::string &snapshotID,
-    const std::string &checkpointDir,
-    uint32_t timeoutSeconds)
+    const std::string &checkpointDir)
 {
     // 1. 从 instanceInfo 获取 funcAgentID
     std::string funcAgentID = instanceInfo.functionagentid();
@@ -1614,12 +1695,12 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
     request->set_containerid(instanceInfo.containerid());  // containerID is same as runtimeID in container mode
     request->set_ttl(type == common::SNAPSHOT ? 0 : ttl);
     request->set_type(type);
-    request->set_leaverunning(type == common::SNAPSHOT);
+    request->set_anonymous(type == common::PAUSE_RESUME);
+    request->set_leaverunning(type == common::SNAPSHOT || type == common::PAUSE_RESUME);
     request->set_snapshotid(snapshotID);
     request->set_checkpointdir(checkpointDir);
     request->set_tenantid(instanceInfo.tenantid());
     request->set_sourceversion(instanceInfo.version());
-    request->set_timeoutseconds(timeoutSeconds);
     auto future = snapshotRuntimeSync_.AddSynchronizer(requestID);
     const auto targetAgent = funcAgentTable_[funcAgentID].aid;
     snapshotRuntimeExpectedAgent_[requestID] = targetAgent;
@@ -1629,6 +1710,36 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
     Send(targetAgent, "SnapshotRuntime", request->SerializeAsString());
 
     // 3. 将 SnapshotRuntimeResponse 消息转换为结构体
+    return future;
+}
+
+litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::SnapshotRuntimeAnonymous(
+    const std::string &requestID,
+    const resource_view::InstanceInfo &instanceInfo,
+    const std::string &snapshotID)
+{
+    messages::SnapshotRuntimeResponse error;
+    error.set_requestid(requestID);
+    const auto agent = funcAgentTable_.find(instanceInfo.functionagentid());
+    if (agent == funcAgentTable_.end() || snapshotID.empty()) {
+        error.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        error.set_message("function agent is not registered or snapshot ID is empty");
+        return error;
+    }
+    messages::SnapshotRuntimeRequest request;
+    request.set_requestid(requestID);
+    request.set_instanceid(instanceInfo.instanceid());
+    request.set_runtimeid(instanceInfo.runtimeid());
+    request.set_containerid(instanceInfo.containerid());
+    request.set_type(common::DUMPSTATE);
+    request.set_snapshotid(snapshotID);
+    request.set_tenantid(instanceInfo.tenantid());
+    request.set_sourceversion(instanceInfo.version());
+    request.set_anonymous(true);
+    request.set_leaverunning(true);
+    auto future = snapshotRuntimeSync_.AddSynchronizer(requestID);
+    snapshotRuntimeExpectedAgent_[requestID] = agent->second.aid;
+    Send(agent->second.aid, "SnapshotRuntime", request.SerializeAsString());
     return future;
 }
 
@@ -1648,10 +1759,139 @@ void FunctionAgentMgrActor::SnapshotRuntimeResponse(const litebus::AID &from, st
         return;
     }
     snapshotRuntimeExpectedAgent_.erase(expected);
+    if (response.code() == static_cast<int32_t>(StatusCode::SUCCESS)
+        && response.has_localsnapshot()) {
+        const auto agent = aidTable_.find(from);
+        if (agent == aidTable_.end()) {
+            response.set_code(static_cast<int32_t>(StatusCode::SCHEDULE_CONFLICTED));
+            response.set_message("snapshot response agent is not present in the local view");
+        } else {
+            const auto recorded = localSnapshotView_.RecordCommitted(
+                agent->second, response.localsnapshot());
+            if (recorded.status.IsError()) {
+                response.set_code(static_cast<int32_t>(recorded.status.StatusCode()));
+                response.set_message(recorded.status.RawMessage());
+            } else if (recorded.replaced.has_value()) {
+                messages::DeleteLocalSnapshotRequest request;
+                request.set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
+                request.set_snapshotid(recorded.replaced->snapshotid());
+                request.set_expectedgeneration(recorded.replaced->generation());
+                request.set_expectedsize(recorded.replaced->size());
+                request.set_expectedsha256(recorded.replaced->sha256());
+                DeleteLocalSnapshot(recorded.replacedFunctionAgentID, request)
+                    .OnComplete(litebus::Defer(
+                        GetAID(), &FunctionAgentMgrActor::OnStaleLocalSnapshotDeleted,
+                        recorded.replaced->snapshotid(), std::placeholders::_1));
+            }
+        }
+    }
     std::string checkpointID = response.has_snapshotinfo() ? response.snapshotinfo().checkpointid() : "N/A";
     YRLOG_INFO("{}|received SnapshotRuntimeResponse, code: {}, checkpointID: {}",
                requestID, response.code(), checkpointID);
     (void)snapshotRuntimeSync_.Synchronized(requestID, response);
+}
+
+void FunctionAgentMgrActor::OnStaleLocalSnapshotDeleted(
+    const std::string &snapshotID,
+    const litebus::Future<messages::DeleteLocalSnapshotResponse> &future)
+{
+    if (future.IsError() || future.Get().code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+        YRLOG_WARN("failed to delete stale local snapshot({}); it will converge on the next Agent List",
+                   snapshotID);
+        return;
+    }
+    localSnapshotView_.Remove(snapshotID);
+}
+
+std::optional<messages::LocalSnapshotMetadata> FunctionAgentMgrActor::LatestAnonymousSnapshot(
+    const std::string &instanceID)
+{
+    return localSnapshotView_.LatestAnonymous(instanceID);
+}
+
+litebus::Future<messages::ListLocalSnapshotsResponse> FunctionAgentMgrActor::ListLocalSnapshots(
+    const std::string &functionAgentID)
+{
+    messages::ListLocalSnapshotsResponse error;
+    const auto agent = funcAgentTable_.find(functionAgentID);
+    if (agent == funcAgentTable_.end()) {
+        error.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        error.set_message("function agent is not registered");
+        return error;
+    }
+    messages::ListLocalSnapshotsRequest request;
+    request.set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
+    auto future = localSnapshotListSync_.AddSynchronizer(request.requestid());
+    localSnapshotListExpectedAgent_[request.requestid()] = agent->second.aid;
+    Send(agent->second.aid, "ListLocalSnapshots", request.SerializeAsString());
+    return future;
+}
+
+void FunctionAgentMgrActor::ListLocalSnapshotsResponse(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    messages::ListLocalSnapshotsResponse response;
+    if (!response.ParseFromString(msg) || response.requestid().empty()) {
+        YRLOG_WARN("invalid ListLocalSnapshotsResponse from {}", from.HashString());
+        return;
+    }
+    const auto expected = localSnapshotListExpectedAgent_.find(response.requestid());
+    if (expected == localSnapshotListExpectedAgent_.end() || expected->second != from) {
+        YRLOG_WARN("{}|ignore ListLocalSnapshotsResponse from unexpected agent {}",
+                   response.requestid(), from.HashString());
+        return;
+    }
+    localSnapshotListExpectedAgent_.erase(expected);
+    (void)localSnapshotListSync_.Synchronized(response.requestid(), response);
+}
+
+litebus::Future<messages::DeleteLocalSnapshotResponse> FunctionAgentMgrActor::DeleteLocalSnapshot(
+    const std::string &functionAgentID,
+    const messages::DeleteLocalSnapshotRequest &request)
+{
+    messages::DeleteLocalSnapshotResponse error;
+    error.set_requestid(request.requestid());
+    const auto agent = funcAgentTable_.find(functionAgentID);
+    if (request.requestid().empty()) {
+        error.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
+        error.set_message("local snapshot delete request ID is empty");
+        return error;
+    }
+    if (agent == funcAgentTable_.end()) {
+        error.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        error.set_message("function agent is not registered");
+        return error;
+    }
+    auto future = localSnapshotDeleteSync_.AddSynchronizer(request.requestid());
+    localSnapshotDeleteExpectedAgent_[request.requestid()] = agent->second.aid;
+    Send(agent->second.aid, "DeleteLocalSnapshot", request.SerializeAsString());
+    return future.Then(litebus::Defer(
+        GetAID(), [this, snapshotID = request.snapshotid()](
+                      const messages::DeleteLocalSnapshotResponse &response) {
+            if (response.code() == static_cast<int32_t>(StatusCode::SUCCESS)
+                || response.code() == static_cast<int32_t>(StatusCode::FILE_NOT_FOUND)) {
+                localSnapshotView_.Remove(snapshotID);
+            }
+            return response;
+        }));
+}
+
+void FunctionAgentMgrActor::DeleteLocalSnapshotResponse(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    messages::DeleteLocalSnapshotResponse response;
+    if (!response.ParseFromString(msg) || response.requestid().empty()) {
+        YRLOG_WARN("invalid DeleteLocalSnapshotResponse from {}", from.HashString());
+        return;
+    }
+    const auto expected = localSnapshotDeleteExpectedAgent_.find(response.requestid());
+    if (expected == localSnapshotDeleteExpectedAgent_.end() || expected->second != from) {
+        YRLOG_WARN("{}|ignore DeleteLocalSnapshotResponse from unexpected agent {}",
+                   response.requestid(), from.HashString());
+        return;
+    }
+    localSnapshotDeleteExpectedAgent_.erase(expected);
+    (void)localSnapshotDeleteSync_.Synchronized(response.requestid(), response);
 }
 
 litebus::Future<::messages::SnapshotAttemptFinalizeResponse> FunctionAgentMgrActor::FinalizeSnapshotAttempt(

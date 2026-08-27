@@ -30,7 +30,6 @@
 #include "common/utils/resume_identity.h"
 #include "common/utils/struct_transfer.h"
 #include "constants.h"
-#include "runtime_manager/ckpt/pause_artifact_path_manager.h"
 
 namespace functionsystem::function_agent {
 const static std::string RUNTIME_ENV_PREFIX = "func-";
@@ -107,7 +106,7 @@ Status MakePauseResumeMaterializationSpec(
     }
     const auto &snapshot = info.snapshotinfo();
     spec.kind = ImmutableSnapshotMaterializationKind::PAUSE_RESUME;
-    spec.tenantHash = runtime_manager::PauseArtifactPathManager::StableTenantHash(tenant->second);
+    spec.tenantHash = snapshot_storage::StableTenantHash(tenant->second);
     spec.instanceID = info.instanceid();
     spec.attemptID = info.requestid();
     spec.storageBackend = snapshot.storage();
@@ -136,7 +135,7 @@ Status MakeReusableSnapshotMaterializationSpec(
     const auto &restore = info.reusablesnapshotrestore();
     const auto &artifact = restore.artifact();
     spec.kind = ImmutableSnapshotMaterializationKind::REUSABLE;
-    spec.tenantHash = runtime_manager::PauseArtifactPathManager::StableTenantHash(tenant->second);
+    spec.tenantHash = snapshot_storage::StableTenantHash(tenant->second);
     spec.instanceID = info.instanceid();
     spec.attemptID = info.requestid();
     spec.storageBackend = artifact.storagebackend();
@@ -208,16 +207,28 @@ litebus::Future<Status> MaterializeImmutableSnapshotArtifact(
         return result->GetFuture();
     }
 
-    runtime_manager::PauseArtifactPathManager artifacts(
-        checkpointRoot, spec.tenantHash, spec.instanceID, snapshotWorker);
-    const auto attempt = artifacts.PlanRestoreAttempt(spec.snapshotID, spec.attemptID);
-    if (attempt.status.IsError()) {
-        result->SetValue(attempt.status);
+    const auto root = checkpointRoot.lexically_normal();
+    if (!root.is_absolute() || !snapshot_storage::detail::IsSafeLeafName(spec.snapshotID)) {
+        result->SetValue(Status(StatusCode::ERR_PARAM_INVALID,
+                                "local materialization snapshot identity is invalid"));
         return result->GetFuture();
     }
+    const auto directoryPath = (root / spec.snapshotID).lexically_normal();
+    if (directoryPath.parent_path() != root) {
+        result->SetValue(Status(StatusCode::ERR_PARAM_INVALID,
+                                "local materialization directory escapes checkpoint root"));
+        return result->GetFuture();
+    }
+    snapshot_storage::detail::SecureDirectory directory;
+    const auto opened = snapshot_storage::detail::SecureDirectory::Open(directoryPath, true, directory);
+    if (opened.IsError()) {
+        result->SetValue(opened);
+        return result->GetFuture();
+    }
+    const auto checkpointPath = directoryPath / "checkpoint.img";
 
     snapshotStorage->Stat(spec.objectKey).OnComplete(
-        [snapshotStorage, result, attempt, spec](
+        [snapshotStorage, result, checkpointPath, spec](
             const litebus::Future<snapshot_storage::SnapshotStat> &statFuture) {
             if (statFuture.IsError() || statFuture.Get().status.IsError()) {
                 const auto message = IsPauseResume(spec)
@@ -235,7 +246,7 @@ litebus::Future<Status> MaterializeImmutableSnapshotArtifact(
                 return;
             }
             std::error_code error;
-            const auto existing = std::filesystem::symlink_status(attempt.path, error);
+            const auto existing = std::filesystem::symlink_status(checkpointPath, error);
             if (!error && std::filesystem::exists(existing)) {
                 if (!std::filesystem::is_regular_file(existing)) {
                     const auto message = IsPauseResume(spec)
@@ -245,12 +256,12 @@ litebus::Future<Status> MaterializeImmutableSnapshotArtifact(
                     return;
                 }
                 const auto validation = snapshot_storage::detail::ValidateFile(
-                    attempt.path.string(), metadata);
+                    checkpointPath.string(), metadata);
                 if (validation.IsOk()) {
                     result->SetValue(Status::OK());
                     return;
                 }
-                std::filesystem::remove(attempt.path, error);
+                std::filesystem::remove(checkpointPath, error);
                 if (error) {
                     const auto message = IsPauseResume(spec)
                         ? "failed to remove invalid trusted resume attempt"
@@ -266,7 +277,7 @@ litebus::Future<Status> MaterializeImmutableSnapshotArtifact(
                 return;
             }
             auto target = std::make_shared<snapshot_storage::detail::SecureDownloadTarget>();
-            const auto prepared = target->Prepare(attempt.path.string());
+            const auto prepared = target->Prepare(checkpointPath.string());
             if (prepared.IsError()) {
                 result->SetValue(prepared);
                 return;
@@ -778,18 +789,23 @@ ResumeIdentityTrust SetStartRuntimeInstanceRequestConfig(
     const bool trustedResume = hasReservedResumeIdentity && onlyAgentBoundaryKeys
         && parsedExpectedVersion && parsedProtocolVersion
         && targetAgentID == expectedTargetAgentID && req->has_snapshotinfo()
-        && !req->has_reusablesnapshotrestore()
+        && !req->has_reusablesnapshotrestore() && req->restoresnapshotid().empty()
         && resume_identity::ValidateBoundaryIdentity(req->instanceid(), logicalRequestID, req->tenantid(),
                                                      req->requestid(), req->snapshotinfo(), expectedVersion,
                                                      targetAgentID, protocolVersion, resumeMarker);
     const bool trustedReusable = !hasReservedResumeIdentity && req->has_reusablesnapshotrestore()
         && !req->has_snapshotinfo()
+        && req->restoresnapshotid().empty()
         && resume_identity::ValidateReusableSnapshotRestore(req->reusablesnapshotrestore());
+    const bool trustedLocal = !hasReservedResumeIdentity && !req->restoresnapshotid().empty()
+        && !req->has_snapshotinfo() && !req->has_reusablesnapshotrestore();
+    const bool hasRestoreIdentity = hasReservedResumeIdentity || req->has_reusablesnapshotrestore()
+        || req->has_snapshotinfo() || !req->restoresnapshotid().empty();
     const auto trust = trustedResume ? ResumeIdentityTrust::TRUSTED
         : (trustedReusable ? ResumeIdentityTrust::REUSABLE
-                           : ((hasReservedResumeIdentity || req->has_reusablesnapshotrestore())
-                                  ? ResumeIdentityTrust::INVALID
-                                  : ResumeIdentityTrust::ORDINARY));
+            : (trustedLocal ? ResumeIdentityTrust::LOCAL
+                            : (hasRestoreIdentity ? ResumeIdentityTrust::INVALID
+                                                  : ResumeIdentityTrust::ORDINARY)));
     auto runtimeInstanceInfo = SetRuntimeInstanceInfo(req);
     *startInstanceRequest->mutable_runtimeinstanceinfo() = std::move(runtimeInstanceInfo);
     *startInstanceRequest->mutable_scheduleoption() = std::move(req->scheduleoption());
@@ -853,6 +869,7 @@ messages::RuntimeInstanceInfo SetRuntimeInstanceInfo(const std::shared_ptr<messa
     if (req->has_reusablesnapshotrestore()) {
         *runtimeInstanceInfo.mutable_reusablesnapshotrestore() = req->reusablesnapshotrestore();
     }
+    runtimeInstanceInfo.set_restoresnapshotid(req->restoresnapshotid());
     return runtimeInstanceInfo;
 }
 

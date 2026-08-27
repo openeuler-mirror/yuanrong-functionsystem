@@ -113,8 +113,8 @@ litebus::Future<std::string> CkptFileManagerActor::DownloadCheckpoint(
 
     // Use local AsyncWorker for concurrent downloads
     auto worker = std::make_shared<ActorWorker>();
-    worker->AsyncWork([parentPath, zipLocalPath, extractedPath, checkpointID,
-                       baseDir = checkpointBaseDir_]() {
+    worker->AsyncStatusWork([parentPath, zipLocalPath, extractedPath, checkpointID,
+                             baseDir = checkpointBaseDir_]() {
         // Download the zip file using parentPath as key
         YRLOG_DEBUG("worker thread downloading checkpoint zip: {} with key: {}", zipLocalPath, parentPath);
         file_storage::FileStorageClient client;
@@ -232,7 +232,7 @@ litebus::Future<std::string> CkptFileManagerActor::RegisterCheckpoint(
     litebus::Promise<std::string> uploadPromise;
     auto uploadFuture = uploadPromise.GetFuture();
 
-    worker->AsyncWork([localPath, parentPath, derivedStorageUrl, checkpointID]() {
+    worker->AsyncStatusWork([localPath, parentPath, derivedStorageUrl, checkpointID]() {
         // Zip the checkpoint directory: localPath → localPath.zip
         std::string zipPath = localPath + ".zip";
         Status zipStatus = ZipDirectory(localPath, zipPath);

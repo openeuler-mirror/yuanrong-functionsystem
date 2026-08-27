@@ -19,8 +19,9 @@
 
 #include <actor/actor.hpp>
 #include <async/future.hpp>
-#include <unordered_set>
 #include <chrono>
+#include <optional>
+#include <unordered_set>
 
 #include "common/proto/pb/message_pb.h"
 #include "common/proto/pb/posix_pb.h"
@@ -240,6 +241,12 @@ public:
      * @return update result
      */
     litebus::Future<Status> UpdateInstanceStatus(const std::shared_ptr<InstanceExitStatus> &info);
+
+    litebus::Future<Status> TryLocalSnapshotFailover(
+        const std::string &instanceID, const std::string &sourceRuntimeID);
+    litebus::Future<Status> TryLocalSnapshotRecovery(
+        const std::string &instanceID, const std::string &sourceRuntimeID,
+        bool requireFailoverPolicy);
 
     litebus::Future<Status> UpdateInstanceStatusPromise(const std::string &instanceID, const std::string &errMsg);
 
@@ -654,6 +661,17 @@ public:
     litebus::Future<KillResponse> HandleSnapshotSignal(const std::shared_ptr<KillContext> &killCtx,
                                                        const std::string &srcInstanceID,
                                                        const std::shared_ptr<KillRequest> &killReq);
+    litebus::Future<KillResponse> HandleAnonymousCheckpointSignal(
+        const std::shared_ptr<KillContext> &killCtx,
+        const std::string &srcInstanceID,
+        const std::shared_ptr<KillRequest> &killReq);
+    litebus::Future<KillResponse> HandleReloadSignal(
+        const std::shared_ptr<KillContext> &killCtx,
+        const std::string &srcInstanceID,
+        const std::shared_ptr<KillRequest> &killReq);
+    void OnAnonymousCheckpointComplete(
+        const resources::InstanceInfo &identity,
+        const litebus::Future<KillResponse> &future);
 
     litebus::Future<KillResponse> ProcessSubscribeRequest(const std::string &srcInstanceID,
                                                           const std::shared_ptr<KillRequest> &killReq);
@@ -893,6 +911,7 @@ private:
                                                const std::shared_ptr<KillRequest> &killReq);
     litebus::Future<Status> DeleteInstanceInResourceView(const Status &status, const InstanceInfo &instanceInfo);
     litebus::Future<Status> DeleteInstanceInControlView(const Status &status, const InstanceInfo &instanceInfo);
+    void CleanupAnonymousSnapshotForDeletedInstance(const InstanceInfo &instanceInfo);
 
     litebus::Future<Status> DoLocalRedeploy(const Status &status,
                                             const std::shared_ptr<::messages::ScheduleRequest> &request,
@@ -1241,6 +1260,47 @@ private:
 
     std::unordered_map<std::string, litebus::Timer> runtimeHeartbeatTimers_;
 
+    struct LocalSnapshotRecoveryContext {
+        resources::InstanceInfo source;
+        std::string snapshotID;
+        std::shared_ptr<messages::ScheduleRequest> request;
+        std::shared_ptr<ControlInterfacePosixClient> candidateClient;
+        std::shared_ptr<litebus::Promise<Status>> completion;
+    };
+    std::unordered_map<std::string, std::shared_ptr<LocalSnapshotRecoveryContext>> localSnapshotRecoveries_;
+
+    bool IsCurrentLocalSnapshotRecovery(
+        const std::shared_ptr<LocalSnapshotRecoveryContext> &context) const;
+    void OnLocalSnapshotSelected(
+        const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+        const litebus::Future<std::optional<messages::LocalSnapshotMetadata>> &future);
+    void OnLocalSnapshotSourceStopped(
+        const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+        const litebus::Future<Status> &future);
+    litebus::Future<messages::DeployInstanceResponse> DeployLocalSnapshot(
+        const std::shared_ptr<LocalSnapshotRecoveryContext> &context);
+    void OnLocalSnapshotDeployed(
+        const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+        const litebus::Future<messages::DeployInstanceResponse> &future);
+    void OnLocalSnapshotClientCreated(
+        const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+        const litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> &future);
+    void OnLocalSnapshotStarted(
+        const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+        const litebus::Future<runtime::SnapStartedResponse> &future);
+    void OnLocalSnapshotCommitted(
+        const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+        const litebus::Future<TransitionResult> &future);
+    void FailLocalSnapshotRecovery(
+        const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+        const Status &status, bool cleanupCandidate);
+    void OnLocalSnapshotCandidateCleaned(
+        const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+        const Status &status, const litebus::Future<Status> &future);
+    void CompleteLocalSnapshotRecovery(
+        const std::shared_ptr<LocalSnapshotRecoveryContext> &context,
+        const Status &status);
+
     enum class PauseGatePhase : uint8_t {
         BEGINNING,
         GATED,
@@ -1304,6 +1364,12 @@ private:
     litebus::Future<Status> TryRecover(const std::string &instanceID, const std::string &runtimeID,
                                        const std::string &errMsg, std::shared_ptr<InstanceStateMachine> &stateMachine,
                                        InstanceInfo &instanceInfo);
+    litebus::Future<Status> OnHeartbeatLocalSnapshotFailoverDone(
+        const Status &status, const std::string &instanceID,
+        const std::string &sourceRuntimeID, const std::string &errMsg);
+    litebus::Future<Status> OnExitLocalSnapshotFailoverDone(
+        const Status &status, const std::shared_ptr<InstanceExitStatus> &info,
+        const std::string &sourceRuntimeID);
 
     std::shared_ptr<InstanceOperator> instanceOpt_;
     std::set<std::string> connectingDriver_;

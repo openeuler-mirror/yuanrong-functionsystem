@@ -106,6 +106,14 @@ litebus::Future<KillResponse> SnapCtrl::HandleSnapshot(const std::string &reques
     return litebus::Async(aid_, &SnapCtrlActor::HandleSnapshot, requestID, instanceID, payload);
 }
 
+litebus::Future<KillResponse> SnapCtrl::HandleAnonymousCheckpoint(
+    const std::string &requestID, const std::string &instanceID)
+{
+    ASSERT_IF_NULL(snapCtrlActor_);
+    return litebus::Async(aid_, &SnapCtrlActor::HandleAnonymousCheckpoint,
+                          requestID, instanceID);
+}
+
 litebus::Future<KillResponse> SnapCtrl::HandleSnapStart(
     const std::string &requestID, const std::string &checkpointID, const std::string &payload)
 {

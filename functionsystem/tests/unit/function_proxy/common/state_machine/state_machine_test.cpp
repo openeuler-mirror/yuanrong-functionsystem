@@ -667,6 +667,112 @@ TEST_F(InstanceStateMachineTest, ChangeSameStateTest)
     EXPECT_EQ(future.Get().instancestatus().code(), static_cast<int32_t>(InstanceState::RUNNING));
 }
 
+TEST_F(InstanceStateMachineTest, RunningFailoverRefreshesOnlyPhysicalRuntimeFacts)
+{
+    auto current = std::make_shared<messages::ScheduleRequest>();
+    current->set_requestid("create-request");
+    auto *info = current->mutable_instance();
+    info->set_instanceid("sandbox-a");
+    info->set_requestid("create-request");
+    info->set_tenantid("tenant-a");
+    info->set_functionproxyid(TEST_NODE_ID);
+    info->set_functionagentid("agent-a");
+    info->set_runtimeid("runtime-old");
+    info->set_runtimeaddress("127.0.0.1:1000");
+    info->set_containerid("container-old");
+    info->set_failover(true);
+    info->set_version(7);
+    info->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::RUNNING));
+    auto machine = std::make_shared<InstanceStateMachine>(
+        TEST_NODE_ID, std::make_shared<InstanceContext>(current), false);
+
+    auto recovered = std::make_shared<messages::ScheduleRequest>(*current);
+    recovered->set_requestid("local-failover-attempt");
+    recovered->mutable_instance()->set_runtimeid("runtime-new");
+    recovered->mutable_instance()->set_runtimeaddress("127.0.0.1:2000");
+    recovered->mutable_instance()->set_containerid("container-new");
+    TransContext transition{InstanceState::RUNNING, 7, "running", false};
+    transition.scheduleReq = recovered;
+
+    const auto result = machine->TransitionTo(transition).Get();
+
+    ASSERT_TRUE(result.status.IsOk()) << result.status.ToString();
+    EXPECT_EQ(machine->GetInstanceState(), InstanceState::RUNNING);
+    EXPECT_EQ(machine->GetInstanceInfo().runtimeid(), "runtime-new");
+    EXPECT_EQ(machine->GetInstanceInfo().containerid(), "container-new");
+
+    auto evicted = std::make_shared<messages::ScheduleRequest>(*current);
+    evicted->mutable_instance()->mutable_instancestatus()->set_code(
+        static_cast<int32_t>(InstanceState::EVICTED));
+    auto evictedMachine = std::make_shared<InstanceStateMachine>(
+        TEST_NODE_ID, std::make_shared<InstanceContext>(evicted), false);
+    auto evictedRecovered = std::make_shared<messages::ScheduleRequest>(*evicted);
+    evictedRecovered->set_requestid("same-node-restart-failover");
+    evictedRecovered->mutable_instance()->set_runtimeid("runtime-after-restart");
+    evictedRecovered->mutable_instance()->set_containerid("container-after-restart");
+    evictedRecovered->mutable_instance()->mutable_instancestatus()->set_code(
+        static_cast<int32_t>(InstanceState::RUNNING));
+    TransContext evictedTransition{InstanceState::RUNNING, 7, "running", false};
+    evictedTransition.scheduleReq = evictedRecovered;
+
+    const auto evictedResult = evictedMachine->TransitionTo(evictedTransition).Get();
+
+    ASSERT_TRUE(evictedResult.status.IsOk()) << evictedResult.status.ToString();
+    EXPECT_EQ(evictedMachine->GetInstanceState(), InstanceState::RUNNING);
+    EXPECT_EQ(evictedMachine->GetInstanceInfo().runtimeid(), "runtime-after-restart");
+}
+
+TEST_F(InstanceStateMachineTest, RunningFailoverRefreshPublishesNewPhysicalIdentity)
+{
+    auto current = std::make_shared<messages::ScheduleRequest>();
+    current->set_requestid("create-request");
+    auto *info = current->mutable_instance();
+    info->set_instanceid("sandbox-publish");
+    info->set_requestid("create-request");
+    info->set_tenantid("tenant-a");
+    info->set_function("default/0-test-helloWorld/$latest");
+    info->set_functionproxyid(TEST_NODE_ID);
+    info->set_functionagentid("agent-a");
+    info->set_runtimeid("runtime-old");
+    info->set_runtimeaddress("127.0.0.1:1000");
+    info->set_containerid("container-old");
+    info->set_failover(true);
+    info->set_version(7);
+    info->mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::RUNNING));
+    auto machine = std::make_shared<InstanceStateMachine>(
+        TEST_NODE_ID, std::make_shared<InstanceContext>(current), false);
+
+    auto mockInstanceOpt = std::make_shared<MockInstanceOperator>();
+    machine->instanceOpt_ = mockInstanceOpt;
+    EXPECT_CALL(*mockInstanceOpt, Modify(_, _, 7, false))
+        .WillOnce(Return(OperateResult{ Status::OK(), "", 7, 11 }));
+
+    auto mockObserver = std::make_shared<MockObserver>();
+    InstanceStateMachine::BindControlPlaneObserver(mockObserver);
+    EXPECT_CALL(*mockObserver, WatchInstance("sandbox-publish", 11)).Times(1);
+    resources::InstanceInfo published;
+    EXPECT_CALL(*mockObserver, PutInstanceEvent(_, false, 11))
+        .WillOnce([&published](const resources::InstanceInfo &instance, bool, int64_t) {
+            published.CopyFrom(instance);
+            return Status::OK();
+        });
+
+    auto recovered = std::make_shared<messages::ScheduleRequest>(*current);
+    recovered->set_requestid("local-failover-attempt");
+    recovered->mutable_instance()->set_runtimeid("runtime-new");
+    recovered->mutable_instance()->set_runtimeaddress("127.0.0.1:2000");
+    recovered->mutable_instance()->set_containerid("container-new");
+    TransContext transition{ InstanceState::RUNNING, 7, "running", true };
+    transition.scheduleReq = recovered;
+
+    const auto result = machine->TransitionTo(transition).Get();
+
+    ASSERT_TRUE(result.status.IsOk()) << result.status.ToString();
+    EXPECT_EQ(published.runtimeid(), "runtime-new");
+    EXPECT_EQ(published.runtimeaddress(), "127.0.0.1:2000");
+    EXPECT_EQ(published.containerid(), "container-new");
+}
+
 TEST_F(InstanceStateMachineTest, TransitionFromFatalToFailed)
 {
     const std::string function = "default/0-test-helloWorld/$latest";

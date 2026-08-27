@@ -56,10 +56,9 @@ std::shared_ptr<messages::DeployInstanceRequest> GetDeployInstanceReq(
 
 /**
  * Merge a Master-resolved reusable Snapshot into an otherwise ordinary Create.
- * Logical identity remains that of the new Create. Immutable workload facts,
- * placement constraints and the trusted restore artifact come from the
- * Snapshot record; source-node placement is a preferred affinity so fallback
- * remains possible.
+ * Logical identity and placement choices remain those of the new Create; only
+ * immutable workload facts and the trusted restore artifact come from the
+ * Snapshot record.
  */
 Status ApplyResolvedReusableSnapshotForCreate(
     const ::messages::ResolveReusableSnapshotForCreateResponse &resolved,

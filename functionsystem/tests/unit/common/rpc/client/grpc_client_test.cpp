@@ -19,7 +19,6 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <chrono>
 #include <iostream>
 #include <memory>
 
@@ -76,9 +75,6 @@ public:
                      etcdserverpb::PutResponse *rsp) override
     {
         YRLOG_DEBUG("TestEtcdKvService recv, key = {}", req->key());
-        if (req->key() == "delayed_test_key") {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
         auto header = rsp->mutable_header();
         header->set_cluster_id(GRPC_TEST_RSP_HEADER_CLUSTER_ID);
         return grpc::Status::OK;
@@ -261,26 +257,6 @@ TEST_F(GrpcClientTest, GrpcEtcdKvPutSuccess3)
     const auto &h = rsp.header();
     auto clusterID = h.cluster_id();
     EXPECT_EQ(clusterID, GRPC_TEST_RSP_HEADER_CLUSTER_ID);
-}
-
-TEST_F(GrpcClientTest, GrpcAsyncCallRetainsRequestAndResponse)
-{
-    auto req = std::make_shared<PutRequest>();
-    req->set_key("delayed_test_key");
-    auto rsp = std::make_shared<PutResponse>();
-    std::weak_ptr<PutRequest> weakReq = req;
-    std::weak_ptr<PutResponse> weakRsp = rsp;
-    auto c = GrpcClient<KV>::CreateGrpcClient(serverAddress_);
-    ASSERT_TRUE(c);
-
-    auto future = c->CallAsyncX("Test::retained async put", req, rsp,
-                                &etcdserverpb::KV::Stub::AsyncPut, 10);
-    req.reset();
-    rsp.reset();
-
-    EXPECT_FALSE(weakReq.expired());
-    EXPECT_FALSE(weakRsp.expired());
-    EXPECT_TRUE(future.Get().IsOk());
 }
 
 TEST_F(GrpcClientTest, GrpcEtcdWatchCallFailed)

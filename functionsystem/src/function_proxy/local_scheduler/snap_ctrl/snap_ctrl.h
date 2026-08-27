@@ -97,6 +97,9 @@ public:
                                                          const std::string &instanceID,
                                                          const std::string &payload);
 
+    virtual litebus::Future<KillResponse> HandleAnonymousCheckpoint(
+        const std::string &requestID, const std::string &instanceID);
+
     /**
      * Handle INSTANCE_SNAPSTART_SIGNAL
      * Wrap async call to SnapCtrlActor::HandleSnapStart

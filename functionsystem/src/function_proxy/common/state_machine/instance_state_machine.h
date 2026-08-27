@@ -216,11 +216,13 @@ private:
     litebus::Future<TransitionResult> SaveInstanceInfoToMetaStore(const resources::InstanceInfo &newInstanceInfo,
                                                                   const resources::InstanceInfo &prevInstanceInfo,
                                                                   const InstanceState oldState,
-                                                                  const TransContext &context);
+                                                                  const TransContext &context,
+                                                                  bool runningFailoverRefresh);
     litebus::Future<TransitionResult> PersistenceInstanceInfo(const resources::InstanceInfo &newInstanceInfo,
                                                               const resources::InstanceInfo &prevInstanceInfo,
                                                               const InstanceState oldState,
-                                                              const TransContext &context);
+                                                              const TransContext &context,
+                                                              bool runningFailoverRefresh);
     litebus::Future<TransitionResult> ResolveInitialLowReliabilityCreateConflict(
         const resources::InstanceInfo &newInstanceInfo, const resources::InstanceInfo &prevInstanceInfo,
         const Status &createStatus);

@@ -759,38 +759,6 @@ TEST(LocalSnapshotInspectionTest, RejectsSameSizeInPlaceWriteDuringInspection)
     EXPECT_FALSE(result.metadata.complete);
 }
 
-TEST(LocalSnapshotDeletionTest, DeletesOnlyMatchingCallerOwnedArtifact)
-{
-    TempDirectory directory;
-    auto source = directory.Path() / "checkpoint.img";
-    WriteFile(source, "payload");
-    auto worker = std::make_shared<ActorWorker>();
-    auto inspected = InspectLocalSnapshotFile(worker, source, "snapshot-7", 19).Get();
-    ASSERT_TRUE(inspected.status.IsOk()) << inspected.status.ToString();
-
-    auto status = DeleteLocalSnapshotFile(worker, source, inspected.metadata).Get();
-
-    EXPECT_TRUE(status.IsOk()) << status.ToString();
-    EXPECT_FALSE(fs::exists(source));
-    EXPECT_TRUE(DeleteLocalSnapshotFile(worker, source, inspected.metadata).Get().IsOk());
-}
-
-TEST(LocalSnapshotDeletionTest, PreservesArtifactWhenIdentityDoesNotMatch)
-{
-    TempDirectory directory;
-    auto source = directory.Path() / "checkpoint.img";
-    WriteFile(source, "payload");
-    auto worker = std::make_shared<ActorWorker>();
-    auto inspected = InspectLocalSnapshotFile(worker, source, "snapshot-7", 19).Get();
-    ASSERT_TRUE(inspected.status.IsOk()) << inspected.status.ToString();
-    inspected.metadata.sha256.assign(64, '0');
-
-    auto status = DeleteLocalSnapshotFile(worker, source, inspected.metadata).Get();
-
-    EXPECT_TRUE(status.IsError());
-    EXPECT_TRUE(fs::exists(source));
-}
-
 TEST(SnapshotStorageWorkerTest, DispatchFailureCompletesResultFuture)
 {
     bool operationRan = false;

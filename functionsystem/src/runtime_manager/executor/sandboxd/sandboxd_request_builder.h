@@ -79,6 +79,8 @@ public:
 
     std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> Build(const SandboxdStartParams &params) const;
 
+    static Status AttachCheckpointInfo(runtime::v1::StartRequest &request, const std::string &directory);
+
     // Adds the bootstrap working-root mount and returns the working-root path
     // that should be set in YR_RT_WORKING_DIR. Shared with the sandbox executor.
     void ApplyBootstrapMount(const std::shared_ptr<messages::StartInstanceRequest> &request,

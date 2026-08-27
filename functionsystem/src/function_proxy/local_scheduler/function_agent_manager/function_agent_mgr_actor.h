@@ -32,6 +32,7 @@
 #include "common/resource_view/resource_view.h"
 #include "common/utils/actor_driver.h"
 #include "common/utils/request_sync_helper.h"
+#include "function_proxy/local_scheduler/function_agent_manager/local_snapshot_view.h"
 
 namespace functionsystem::local_scheduler {
 class InstanceCtrl;
@@ -262,9 +263,22 @@ public:
                                                      int32_t ttl,
                                                      common::SnapType type,
                                                      const std::string &snapshotID,
-                                                     const std::string &checkpointDir,
-                                                     uint32_t timeoutSeconds = 0);
+                                                     const std::string &checkpointDir);
+    litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntimeAnonymous(
+        const std::string &requestID,
+        const resource_view::InstanceInfo &instanceInfo,
+        const std::string &snapshotID);
     void SnapshotRuntimeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
+    virtual litebus::Future<messages::ListLocalSnapshotsResponse> ListLocalSnapshots(
+        const std::string &functionAgentID);
+    void ListLocalSnapshotsResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+    virtual litebus::Future<messages::DeleteLocalSnapshotResponse> DeleteLocalSnapshot(
+        const std::string &functionAgentID,
+        const messages::DeleteLocalSnapshotRequest &request);
+    void DeleteLocalSnapshotResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+    std::optional<messages::LocalSnapshotMetadata> LatestAnonymousSnapshot(
+        const std::string &instanceID);
 
     litebus::Future<::messages::SnapshotAttemptFinalizeResponse> FinalizeSnapshotAttempt(
         const resource_view::InstanceInfo &instanceInfo,
@@ -442,6 +456,25 @@ protected:
                                          const std::shared_ptr<resource_view::ResourceUnit> &view);
 
     litebus::Future<Status> EnableFuncAgent(const litebus::Future<Status> &status, const std::string &funcAgentID);
+    litebus::Future<Status> RebuildLocalSnapshotView(
+        const Status &status, const std::string &funcAgentID);
+    void RequestLocalSnapshotList(
+        const std::string &funcAgentID,
+        const std::shared_ptr<litebus::Promise<Status>> &completion);
+    void OnLocalSnapshotListResponse(
+        const std::string &funcAgentID,
+        const std::shared_ptr<litebus::Promise<Status>> &completion,
+        const litebus::Future<messages::ListLocalSnapshotsResponse> &future);
+    void OnLocalSnapshotListApplied(
+        const std::string &funcAgentID,
+        const std::shared_ptr<litebus::Promise<Status>> &completion,
+        const litebus::Future<Status> &future);
+    litebus::Future<Status> OnLocalSnapshotsListed(
+        const std::string &funcAgentID,
+        const messages::ListLocalSnapshotsResponse &response);
+    void OnStaleLocalSnapshotDeleted(
+        const std::string &snapshotID,
+        const litebus::Future<messages::DeleteLocalSnapshotResponse> &future);
 
     void RetryDeploy(const std::string &requestID, const std::string &funcAgentID,
                      const std::shared_ptr<messages::DeployInstanceRequest> &request);
@@ -587,6 +620,7 @@ private:
     bool enableForceDeletePod_{ true };
     bool coProcessMode_{ false };
     std::function<void(const std::string &)> reconcileCallback_;
+    LocalSnapshotView localSnapshotView_;
 
     // use function-agent ID as key, corresponding function agent ResourceUnit as value
     std::unordered_map<std::string, litebus::Promise<std::shared_ptr<resource_view::ResourceUnit>>>
@@ -610,6 +644,24 @@ private:
     {
         snapshotRuntimeExpectedAgent_.erase(requestID);
         snapshotRuntimeSync_.RequestTimeout(requestID);
+    }
+    std::unordered_map<std::string, litebus::AID> localSnapshotListExpectedAgent_;
+    RequestSyncHelper<FunctionAgentMgrActor, messages::ListLocalSnapshotsResponse>
+        localSnapshotListSync_ { this, &FunctionAgentMgrActor::TimeoutLocalSnapshotListSync,
+                                 snapshotRuntimeTimeout_ };
+    void TimeoutLocalSnapshotListSync(const std::string &requestID)
+    {
+        localSnapshotListExpectedAgent_.erase(requestID);
+        localSnapshotListSync_.RequestTimeout(requestID);
+    }
+    std::unordered_map<std::string, litebus::AID> localSnapshotDeleteExpectedAgent_;
+    RequestSyncHelper<FunctionAgentMgrActor, messages::DeleteLocalSnapshotResponse>
+        localSnapshotDeleteSync_ { this, &FunctionAgentMgrActor::TimeoutLocalSnapshotDeleteSync,
+                                   snapshotRuntimeTimeout_ };
+    void TimeoutLocalSnapshotDeleteSync(const std::string &requestID)
+    {
+        localSnapshotDeleteExpectedAgent_.erase(requestID);
+        localSnapshotDeleteSync_.RequestTimeout(requestID);
     }
     std::unordered_map<std::string, litebus::AID> snapshotAttemptExpectedAgent_;
     RequestSyncHelper<FunctionAgentMgrActor, ::messages::SnapshotAttemptFinalizeResponse>

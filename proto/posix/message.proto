@@ -311,6 +311,7 @@ message DeployInstanceRequest {
   BootstrapConfig bootstrapConfig = 39;
   resources.SnapshotInfo snapshotInfo = 40;
   ReusableSnapshotRestore reusableSnapshotRestore = 41;
+  string restoreSnapshotID = 42;
 }
 
 message TenantCredentials {
@@ -384,6 +385,7 @@ message InstanceStatusInfo {
   string requestID = 3;
   string instanceMsg = 4;
   int32 type = 5;
+  string runtimeID = 6;
 }
 
 message UpdateInstanceStatusRequest {
@@ -509,6 +511,7 @@ message RuntimeInstanceInfo {
   BootstrapConfig bootstrapConfig = 11;
   resources.SnapshotInfo snapshotInfo = 12;
   ReusableSnapshotRestore reusableSnapshotRestore = 13;
+  string restoreSnapshotID = 14;
 }
 
 message DeployDuration {
@@ -1289,6 +1292,49 @@ message ResolveReusableSnapshotForCreateResponse {
   uint64 snapshotVersion = 6;
 }
 
+message LocalSnapshotMetadata {
+  string snapshotID = 1;
+  bool anonymous = 2;
+  string instanceID = 3;
+  uint64 generation = 4;
+  string runtimeClass = 5;
+  string architecture = 6;
+  uint64 size = 7;
+  string sha256 = 8;
+  int64 createdAtUnixSeconds = 9;
+  string sourceRuntimeID = 10;
+  string sourceSandboxID = 11;
+  int64 sourceInstanceVersion = 12;
+  string tenantHash = 13;
+  string artifactFormat = 14;
+  uint32 artifactFormatVersion = 15;
+}
+
+message ListLocalSnapshotsRequest {
+  string requestID = 1;
+}
+
+message ListLocalSnapshotsResponse {
+  int32 code = 1;
+  string message = 2;
+  string requestID = 3;
+  repeated LocalSnapshotMetadata snapshots = 4;
+}
+
+message DeleteLocalSnapshotRequest {
+  string requestID = 1;
+  string snapshotID = 2;
+  uint64 expectedGeneration = 3;
+  uint64 expectedSize = 4;
+  string expectedSha256 = 5;
+}
+
+message DeleteLocalSnapshotResponse {
+  int32 code = 1;
+  string message = 2;
+  string requestID = 3;
+}
+
 
 message SnapshotRuntimeRequest {
   string requestID = 1;
@@ -1305,7 +1351,7 @@ message SnapshotRuntimeRequest {
   string tenantID = 10;
   int64 sourceVersion = 11;
   bool leaveRunning = 12;
-  uint32 timeoutSeconds = 13;
+  bool anonymous = 13;
 }
 
 message SnapshotRuntimeResponse {
@@ -1323,6 +1369,7 @@ message SnapshotRuntimeResponse {
   SandboxPhysicalFact physicalFact = 6;
   uint64 agentRequestGeneration = 7;
   SnapshotArtifact reusableSnapshotArtifact = 9;
+  LocalSnapshotMetadata localSnapshot = 10;
 }
 
 // Internal-only physical facts returned by sandboxd List reconciliation.

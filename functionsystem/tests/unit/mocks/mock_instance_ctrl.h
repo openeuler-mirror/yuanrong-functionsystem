@@ -83,6 +83,8 @@ public:
                  local_scheduler::InstanceReadyCallBack callback),
                 (override));
     MOCK_METHOD(litebus::Future<Status>, ForceDeleteInstance, (const std::string &instanceID), (override));
+    MOCK_METHOD(litebus::Future<Status>, TryLocalSnapshotFailover,
+                (const std::string &instanceID, const std::string &sourceRuntimeID), (override));
     MOCK_METHOD(litebus::Future<Status>, BeginPauseGate,
                 (const resource_view::InstanceInfo &identity), (override));
     MOCK_METHOD(litebus::Future<Status>, RecoverPauseGate,

@@ -46,6 +46,8 @@ public:
                 (override));
     MOCK_METHOD(litebus::Future<runtime::RecoverResponse>, Recover,
                 (runtime::RecoverRequest && request, uint64_t timeoutMs), (override));
+    MOCK_METHOD(litebus::Future<runtime::SnapStartedResponse>, SnapStarted,
+                (runtime::SnapStartedRequest && request), (override));
     MOCK_METHOD(bool, IsDone, (), (override));
 };
 

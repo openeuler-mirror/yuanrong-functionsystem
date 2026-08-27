@@ -18,6 +18,7 @@
 #define LOCAL_SCHEDULER_FUNCTION_AGENT_MGR_H
 #include <async/future.hpp>
 #include <memory>
+#include <optional>
 
 #include "common/utils/actor_driver.h"
 #include "common/logs/logging.h"
@@ -114,8 +115,22 @@ public:
         int32_t ttl,
         common::SnapType type,
         const std::string &snapshotID,
-        const std::string &checkpointDir,
-        uint32_t timeoutSeconds = 0);
+        const std::string &checkpointDir);
+
+    virtual litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntimeAnonymous(
+        const std::string &requestID,
+        const resource_view::InstanceInfo &instanceInfo,
+        const std::string &snapshotID);
+
+    virtual litebus::Future<messages::ListLocalSnapshotsResponse> ListLocalSnapshots(
+        const std::string &functionAgentID);
+
+    virtual litebus::Future<messages::DeleteLocalSnapshotResponse> DeleteLocalSnapshot(
+        const std::string &functionAgentID,
+        const messages::DeleteLocalSnapshotRequest &request);
+
+    virtual litebus::Future<std::optional<messages::LocalSnapshotMetadata>> LatestAnonymousSnapshot(
+        const std::string &instanceID);
 
     virtual litebus::Future<::messages::SnapshotAttemptFinalizeResponse> FinalizeSnapshotAttempt(
         const resource_view::InstanceInfo &instanceInfo,

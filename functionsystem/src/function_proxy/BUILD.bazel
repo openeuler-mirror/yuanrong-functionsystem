@@ -69,6 +69,7 @@ cc_library(
         "//functionsystem/src:src_root_inc",
         "@litebus//:litebus",
         "@datasystem_sdk//:datasystem_sdk",
+        "//functionsystem/src/common:datasystem_capability",
         "//functionsystem/src/meta_store/client/cpp:meta_store_client",
         "//functionsystem/src/common:meta_store_adapter",
         "//functionsystem/src/common:utils",

@@ -42,6 +42,7 @@ cc_library(
     deps = [
         ":runtime_manager_inc",
         "//functionsystem/src/common:aksk",
+        "//functionsystem/src/common:datasystem_capability",
         "//functionsystem/src/common:register",
         "//functionsystem/src/common:common_flags",
         "//functionsystem/src/common:http",
@@ -53,6 +54,7 @@ cc_library(
         "//functionsystem/src/common:utils",
         "//functionsystem/src/common:metrics_adapter",
         "//functionsystem/src/common:resource_view",
+        "//functionsystem/src/common:snapshot_storage",
         "//functionsystem/src/common:status",
         "@litebus//:litebus",
         "@logs_sdk//:logs_sdk",

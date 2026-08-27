@@ -25,6 +25,8 @@
 
 #include <memory>
 #include <string>
+#include <sys/un.h>
+#include <utility>
 #include <vector>
 
 using namespace functionsystem::runtime_manager;
@@ -48,52 +50,54 @@ runtime::v1::SandboxStatus RunningSandbox(
     return sandbox;
 }
 
-// ── SandboxdExecutor static helpers ───────────────────────────────────────────
-
-TEST(SandboxdExecutorTest, RuntimeCapabilitiesConfigureCheckpointHandoffEnvironment)
+std::shared_ptr<runtime::v1::ListAvailableRuntimesResponse> RuntimeCapabilities()
 {
-    SandboxdExecutor executor("SandboxdRuntimeCapabilityExecutor", litebus::AID(),
-                              "/tmp/sandboxd-runtime-capability-checkpoints");
     auto response = std::make_shared<runtime::v1::ListAvailableRuntimesResponse>();
-    response->add_runtime_classes("firecracker");
-    response->add_runtime_classes("kata");
+    auto *runsc = response->add_runtimes();
+    runsc->set_runtime_class("runsc");
+    runsc->set_supports_checkpoint_restore(true);
+    runsc->set_checkpoint_handoff_path("/proc/gvisor/checkpoint");
+    runsc->set_restore_env_path("/proc/gvisor/spec_environ");
     auto *firecracker = response->add_runtimes();
     firecracker->set_runtime_class("firecracker");
     firecracker->set_supports_checkpoint_restore(true);
     firecracker->set_checkpoint_handoff_path("/run/sandboxd/checkpoint");
     firecracker->set_restore_env_path("/run/sandboxd/restore-environ");
-    auto *kata = response->add_runtimes();
-    kata->set_runtime_class("kata");
-
-    ASSERT_TRUE(executor.OnListAvailableRuntimes(response, Status::OK()).IsOk());
-    EXPECT_TRUE(executor.SupportsCheckpointRestore("firecracker"));
-    EXPECT_FALSE(executor.SupportsCheckpointRestore("kata"));
-
-    google::protobuf::Map<std::string, std::string> envs;
-    executor.ApplyCheckpointRestoreEnvironment("firecracker", &envs);
-    EXPECT_EQ(envs.at(YR_CHECKPOINT_HANDOFF_FILE), "/run/sandboxd/checkpoint");
-    EXPECT_EQ(envs.at(YR_RESTORE_ENV_FILE), "/run/sandboxd/restore-environ");
-    EXPECT_EQ(envs.count("YR_SEED_FILE"), 0u);
-    EXPECT_EQ(envs.count("YR_ENV_FILE"), 0u);
-
-    google::protobuf::Map<std::string, std::string> unsupportedEnvs;
-    executor.ApplyCheckpointRestoreEnvironment("kata", &unsupportedEnvs);
-    EXPECT_TRUE(unsupportedEnvs.empty());
+    return response;
 }
 
-TEST(SandboxdExecutorTest, IncompleteCheckpointCapabilityFailsClosed)
+std::shared_ptr<runtime::v1::StartRequest> BuildRuntimeOverlayStartRequest(
+    const std::string &runtimeClass, Envs envs = {})
 {
-    SandboxdExecutor executor("SandboxdIncompleteCapabilityExecutor", litebus::AID(),
-                              "/tmp/sandboxd-incomplete-capability-checkpoints");
-    auto response = std::make_shared<runtime::v1::ListAvailableRuntimesResponse>();
-    auto *runtime = response->add_runtimes();
-    runtime->set_runtime_class("incomplete");
-    runtime->set_supports_checkpoint_restore(true);
-    runtime->set_checkpoint_handoff_path("/run/sandboxd/checkpoint");
+    RuntimeConfig config;
+    config.runtimeLogLevel = "INFO";
+    config.runtimeLogPath = "/tmp/runtime-overlay-test";
+    CommandBuilder commandBuilder(false);
+    commandBuilder.SetRuntimeConfig(config);
+    SandboxdRequestBuilder builder(commandBuilder);
 
-    ASSERT_TRUE(executor.OnListAvailableRuntimes(response, Status::OK()).IsOk());
-    EXPECT_FALSE(executor.SupportsCheckpointRestore("incomplete"));
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    auto *info = request->mutable_runtimeinstanceinfo();
+    info->set_instanceid("runtime-overlay-instance");
+    info->set_runtimeid("runtime-overlay-runtime");
+    info->mutable_runtimeconfig()->set_language("rust");
+    info->mutable_container()->set_runtime("runsc");
+    auto *rootfs = info->mutable_container()->mutable_rootfsconfig();
+    rootfs->set_type(runtime::v1::RootfsSrcType::LOCAL);
+    rootfs->set_path("/opt/runtime/rootfs.img");
+    (*info->mutable_deploymentconfig()->mutable_deployoptions())["rootfs"] =
+        "{\"runtime\":\"" + runtimeClass + "\"}";
+
+    SandboxdStartParams params;
+    params.request = request;
+    params.runtimeID = info->runtimeid();
+    params.envs = std::move(envs);
+    auto [status, start] = builder.Build(params);
+    EXPECT_TRUE(status.IsOk()) << status.RawMessage();
+    return start;
 }
+
+// ── SandboxdExecutor static helpers ───────────────────────────────────────────
 
 TEST(SandboxdExecutorTest, ParseForwardPortsParsesPortForwardings)
 {
@@ -147,6 +151,128 @@ TEST(SandboxdExecutorTest, IsRetryableWaitErrorClassifiesTransportErrors)
     EXPECT_TRUE(SandboxdExecutor::IsRetryableWaitError(Status(GRPC_DEADLINE_EXCEEDED)));
     EXPECT_FALSE(SandboxdExecutor::IsRetryableWaitError(Status(GRPC_NOT_FOUND)));
     EXPECT_FALSE(SandboxdExecutor::IsRetryableWaitError(Status(SUCCESS)));
+}
+
+TEST(SandboxdExecutorTest, RuntimeCapabilityInjectsCheckpointHandoffEnvironment)
+{
+    struct ControlSocketEnvReset {
+        ~ControlSocketEnvReset()
+        {
+            litebus::os::UnSetEnv("YR_RRT_CONTROL_SOCKET_PATH");
+        }
+    } reset;
+    litebus::os::SetEnv("YR_RRT_CONTROL_SOCKET_PATH", "/run/openyuanrong");
+    SandboxdExecutor executor(
+        "runtime-capability-executor", litebus::AID(), "/tmp/runtime-capability-checkpoints");
+    ASSERT_TRUE(executor.OnListAvailableRuntimes(RuntimeCapabilities(), Status::OK()).IsOk());
+    runtime::v1::StartRequest start;
+    start.set_runtime("runsc");
+
+    executor.ApplyRuntimeControlEnvironment(start);
+
+    EXPECT_EQ(start.envs().at("YR_CHECKPOINT_HANDOFF_FILE"), "/proc/gvisor/checkpoint");
+    EXPECT_EQ(start.envs().at("YR_ENV_FILE"), "/proc/gvisor/spec_environ");
+    EXPECT_EQ(start.envs().at("YR_RRT_CONTROL_SOCKET_PATH"), "/run/openyuanrong");
+}
+
+TEST(SandboxdExecutorTest, ResolvedStartRuntimeReplacesStaleControlEnvironment)
+{
+    struct ControlSocketEnvReset {
+        ~ControlSocketEnvReset()
+        {
+            litebus::os::UnSetEnv("YR_RRT_CONTROL_SOCKET_PATH");
+        }
+    } reset;
+    litebus::os::SetEnv("YR_RRT_CONTROL_SOCKET_PATH", "/run/openyuanrong");
+    SandboxdExecutor executor(
+        "resolved-runtime-capability-executor", litebus::AID(), "/tmp/resolved-runtime-checkpoints");
+    ASSERT_TRUE(executor.OnListAvailableRuntimes(RuntimeCapabilities(), Status::OK()).IsOk());
+    Envs envs;
+    envs.posixEnvs["YR_CHECKPOINT_HANDOFF_FILE"] = "/proc/gvisor/checkpoint";
+    envs.posixEnvs["YR_ENV_FILE"] = "/proc/gvisor/spec_environ";
+    auto start = BuildRuntimeOverlayStartRequest("firecracker", std::move(envs));
+    ASSERT_NE(start, nullptr);
+    ASSERT_EQ(start->runtime(), "firecracker");
+    ASSERT_EQ(start->envs().at("YR_ENV_FILE"), "/proc/gvisor/spec_environ");
+
+    executor.ApplyRuntimeControlEnvironment(*start);
+
+    EXPECT_EQ(start->envs().at("YR_CHECKPOINT_HANDOFF_FILE"), "/run/sandboxd/checkpoint");
+    EXPECT_EQ(start->envs().at("YR_ENV_FILE"), "/run/sandboxd/restore-environ");
+    EXPECT_EQ(start->envs().at("YR_RRT_CONTROL_SOCKET_PATH"), "/run/openyuanrong");
+}
+
+TEST(SandboxdExecutorTest, MissingCapabilityRemovesStaleControlEnvironment)
+{
+    SandboxdExecutor executor(
+        "missing-runtime-capability-executor", litebus::AID(), "/tmp/missing-runtime-checkpoints");
+    ASSERT_TRUE(executor.OnListAvailableRuntimes(
+        std::make_shared<runtime::v1::ListAvailableRuntimesResponse>(), Status::OK()).IsOk());
+    runtime::v1::StartRequest start;
+    start.set_runtime("runc");
+    (*start.mutable_envs())["YR_CHECKPOINT_HANDOFF_FILE"] = "/proc/gvisor/checkpoint";
+    (*start.mutable_envs())["YR_ENV_FILE"] = "/proc/gvisor/spec_environ";
+    (*start.mutable_envs())["YR_RRT_CONTROL_SOCKET_PATH"] = "/stale/control";
+
+    executor.ApplyRuntimeControlEnvironment(start);
+
+    EXPECT_EQ(start.envs().count("YR_CHECKPOINT_HANDOFF_FILE"), 0);
+    EXPECT_EQ(start.envs().count("YR_ENV_FILE"), 0);
+    EXPECT_EQ(start.envs().count("YR_RRT_CONTROL_SOCKET_PATH"), 0);
+}
+
+TEST(SandboxdExecutorTest, ExplicitEmptyControlSocketDisablesSocketEnvironment)
+{
+    struct ControlSocketEnvReset {
+        ~ControlSocketEnvReset()
+        {
+            litebus::os::UnSetEnv("YR_RRT_CONTROL_SOCKET_PATH");
+        }
+    } reset;
+    litebus::os::SetEnv("YR_RRT_CONTROL_SOCKET_PATH", "");
+    SandboxdExecutor executor(
+        "empty-control-socket-executor", litebus::AID(), "/tmp/empty-control-socket-checkpoints");
+    ASSERT_TRUE(executor.OnListAvailableRuntimes(RuntimeCapabilities(), Status::OK()).IsOk());
+    runtime::v1::StartRequest start;
+    start.set_runtime("runsc");
+    (*start.mutable_envs())["YR_RRT_CONTROL_SOCKET_PATH"] = "/stale/control";
+
+    executor.ApplyRuntimeControlEnvironment(start);
+
+    EXPECT_EQ(start.envs().at("YR_ENV_FILE"), "/proc/gvisor/spec_environ");
+    EXPECT_EQ(start.envs().count("YR_RRT_CONTROL_SOCKET_PATH"), 0);
+}
+
+TEST(SandboxdExecutorTest, RefreshedCapabilitySnapshotReplacesRuntimePaths)
+{
+    SandboxdExecutor executor(
+        "refreshed-runtime-capability-executor", litebus::AID(), "/tmp/refreshed-runtime-checkpoints");
+    ASSERT_TRUE(executor.OnListAvailableRuntimes(RuntimeCapabilities(), Status::OK()).IsOk());
+    auto refreshed = std::make_shared<runtime::v1::ListAvailableRuntimesResponse>();
+    auto *firecracker = refreshed->add_runtimes();
+    firecracker->set_runtime_class("firecracker");
+    firecracker->set_supports_checkpoint_restore(true);
+    firecracker->set_checkpoint_handoff_path("/run/sandboxd-v2/checkpoint");
+    firecracker->set_restore_env_path("/run/sandboxd-v2/restore-environ");
+    ASSERT_TRUE(executor.OnListAvailableRuntimes(refreshed, Status::OK()).IsOk());
+    runtime::v1::StartRequest start;
+    start.set_runtime("firecracker");
+
+    executor.ApplyRuntimeControlEnvironment(start);
+
+    EXPECT_EQ(start.envs().at("YR_CHECKPOINT_HANDOFF_FILE"), "/run/sandboxd-v2/checkpoint");
+    EXPECT_EQ(start.envs().at("YR_ENV_FILE"), "/run/sandboxd-v2/restore-environ");
+}
+
+TEST(SandboxdExecutorTest, AnonymousCheckpointBypassesLegacySnapshotRegistry)
+{
+    messages::SnapshotRuntimeRequest request;
+    request.set_type(common::DUMPSTATE);
+    request.set_anonymous(true);
+    EXPECT_FALSE(SandboxdExecutor::UsesLegacySnapshotRegistry(request));
+
+    request.set_anonymous(false);
+    EXPECT_TRUE(SandboxdExecutor::UsesLegacySnapshotRegistry(request));
 }
 
 TEST(SandboxdExecutorTest, SandboxReclaimBackoffIsExponentialAndCapped)
@@ -282,6 +408,7 @@ TEST(SandboxdExecutorTest, ReusableRestoreMetadataIsValidatedAndBuildsExactPhysi
     info->set_instanceid("clone-instance");
     info->set_requestid("clone-attempt");
     info->set_runtimeid(resume_identity::RuntimeID("clone-instance", "clone-attempt"));
+    info->set_restoresnapshotid("snapshot-42");
     (*info->mutable_runtimeconfig()->mutable_posixenvs())[YR_TENANT_ID] = "tenant-a";
     *info->mutable_reusablesnapshotrestore() = restore;
 
@@ -289,6 +416,7 @@ TEST(SandboxdExecutorTest, ReusableRestoreMetadataIsValidatedAndBuildsExactPhysi
     EXPECT_TRUE(identity.trusted);
     EXPECT_TRUE(identity.reusable);
     EXPECT_FALSE(identity.rejected);
+    EXPECT_TRUE(SandboxdExecutor::ShouldValidateRestoreArtifact(identity));
     EXPECT_EQ(identity.snapshotID, "snapshot-42");
     EXPECT_EQ(identity.labels.at("instance_id"), "clone-instance");
     EXPECT_EQ(identity.labels.at("request_id"), "clone-attempt");
@@ -299,6 +427,49 @@ TEST(SandboxdExecutorTest, ReusableRestoreMetadataIsValidatedAndBuildsExactPhysi
 
     restore.mutable_artifact()->set_sha256("bad");
     EXPECT_FALSE(resume_identity::ValidateReusableSnapshotRestore(restore));
+}
+
+TEST(SandboxdExecutorTest, LocalRestoreUsesFlatSnapshotDirectory)
+{
+    messages::StartInstanceRequest request;
+    request.mutable_runtimeinstanceinfo()->set_instanceid("sandbox-a");
+    request.mutable_runtimeinstanceinfo()->set_runtimeid("runtime-a");
+    request.mutable_runtimeinstanceinfo()->set_requestid("restore-a");
+    request.mutable_runtimeinstanceinfo()->set_restoresnapshotid("anon-1");
+    const auto identity = SandboxdExecutor::ConsumeRestoreIdentity(request);
+    EXPECT_TRUE(identity.trusted);
+    EXPECT_FALSE(identity.rejected);
+    EXPECT_EQ(identity.snapshotID, "anon-1");
+    EXPECT_FALSE(SandboxdExecutor::ShouldValidateRestoreArtifact(identity));
+    EXPECT_TRUE(SandboxdExecutor::IsRestoreRequest(request.runtimeinstanceinfo()));
+
+    std::string checkpointDirectory;
+
+    const auto status = SandboxdExecutor::ResolveLocalSnapshotDirectory(
+        "/checkpoints", "anon-1", checkpointDirectory);
+
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_EQ(checkpointDirectory, "/checkpoints/anon-1");
+    EXPECT_TRUE(SandboxdExecutor::ResolveLocalSnapshotDirectory(
+                    "/checkpoints", "../escape", checkpointDirectory)
+                    .IsError());
+}
+
+TEST(SandboxdExecutorTest, RestoreSandboxIDFitsRunscControlSocketPath)
+{
+    const std::string runtimeID =
+        "runtime-default-sandbox-fa7628f3-49dd-4442-a85b-b5c979c1835b-0000006674e6";
+    const auto sandboxID = SandboxdExecutor::RestoreSandboxID(runtimeID);
+    const auto repeated = SandboxdExecutor::RestoreSandboxID(runtimeID);
+    const auto different = SandboxdExecutor::RestoreSandboxID(runtimeID + "-other");
+    const auto socketPath =
+        "/home/akernel/sandboxd/root/runsc/runsc-" + sandboxID + ".sock";
+    struct sockaddr_un address {};
+
+    EXPECT_EQ(sandboxID, repeated);
+    EXPECT_NE(sandboxID, different);
+    EXPECT_EQ(sandboxID.rfind("sbox-r-", 0), 0u);
+    EXPECT_LT(socketPath.size(), sizeof(address.sun_path));
 }
 
 TEST(SandboxdExecutorTest, TrustedResumePreallocatesPhysicalPortsThroughPortManager)
@@ -362,7 +533,7 @@ TEST(SandboxdExecutorTest, PortAllocationIsClosedUntilStartupReconciliationCompl
     PortManager::GetInstance().InitPortResource(500, 2000);
 }
 
-TEST(SandboxdExecutorTest, ExistingPortManagerRequestGetAndReleaseBehaviorIsPreserved)
+TEST(SandboxdExecutorTest, ReleasedPortsAreNotImmediatelyReused)
 {
     PortManager::GetInstance().InitPortResource(21000, 4);
 
@@ -378,7 +549,7 @@ TEST(SandboxdExecutorTest, ExistingPortManagerRequestGetAndReleaseBehaviorIsPres
     PortManager::GetInstance().ReleasePorts("runtime-a");
     EXPECT_TRUE(PortManager::GetInstance().GetPorts("runtime-a").empty());
     EXPECT_EQ(PortManager::GetInstance().RequestPorts("runtime-b", 2),
-              std::vector<int>({21000, 21001}));
+              std::vector<int>({21002, 21003}));
     PortManager::GetInstance().InitPortResource(500, 2000);
 }
 
@@ -410,7 +581,7 @@ TEST(SandboxdExecutorTest, ExactSandboxReadThroughDoesNotAllocateASecondPortSet)
     ASSERT_TRUE(PortManager::GetInstance().RebuildPorts(reservations));
     EXPECT_EQ(PortManager::GetInstance().GetPorts("existing-runtime"), std::vector<int>({21002}));
     EXPECT_EQ(PortManager::GetInstance().RequestPorts("new-runtime", 1),
-              std::vector<int>({21000}));
+              std::vector<int>({21003}));
 
     PortManager::GetInstance().BeginReconcile();
     ASSERT_TRUE(PortManager::GetInstance().RebuildPorts(reservations));
@@ -524,7 +695,7 @@ TEST(SandboxdExecutorTest, ExactPhysicalFactReplacesOnlyTheSameRuntimeTemporaryC
     ASSERT_TRUE(status.IsOk()) << status.ToString();
     EXPECT_EQ(PortManager::GetInstance().GetPorts("exact-runtime"), std::vector<int>({21001}));
     EXPECT_EQ(PortManager::GetInstance().GetPorts("other-runtime"), std::vector<int>({21002}));
-    EXPECT_EQ(PortManager::GetInstance().RequestPorts("new-runtime", 1), std::vector<int>({21000}));
+    EXPECT_EQ(PortManager::GetInstance().RequestPorts("new-runtime", 1), std::vector<int>({21003}));
     PortManager::GetInstance().InitPortResource(500, 2000);
 }
 
@@ -561,7 +732,7 @@ TEST(SandboxdExecutorTest, DeleteReleasesOnlyTheExactRuntimePorts)
     EXPECT_TRUE(PortManager::GetInstance().GetPorts("runtime-a").empty());
     EXPECT_EQ(PortManager::GetInstance().GetPorts("runtime-b"), std::vector<int>({21002}));
     EXPECT_EQ(PortManager::GetInstance().RequestPorts("runtime-c", 2),
-              std::vector<int>({21000, 21001}));
+              std::vector<int>({21003, 21004}));
     PortManager::GetInstance().InitPortResource(500, 2000);
 }
 
@@ -573,7 +744,6 @@ TEST(CheckpointPlanTest, UserManagedAndInstanceManagedRequestsUseTheSameExplicit
     userRequest.set_snapshotid("snapshot-1");
     userRequest.set_checkpointdir("/checkpoints/user/snapshot-1");
     userRequest.set_ttl(600);
-    userRequest.set_timeoutseconds(240);
 
     CheckpointPlan userPlan;
     auto status = BuildCheckpointPlan(userRequest, "sandbox-1", ArtifactLifecycle::USER_MANAGED,
@@ -584,7 +754,6 @@ TEST(CheckpointPlanTest, UserManagedAndInstanceManagedRequestsUseTheSameExplicit
     EXPECT_EQ(userPlan.checkpointDirectory, "/checkpoints/user/snapshot-1");
     EXPECT_EQ(userPlan.lifecycle, ArtifactLifecycle::USER_MANAGED);
     EXPECT_FALSE(userPlan.leaveRuntimeRunning);
-    EXPECT_EQ(userPlan.timeoutSeconds, 240U);
 
     auto pauseRequest = userRequest;
     pauseRequest.set_type(common::PAUSE_RESUME);
@@ -598,45 +767,6 @@ TEST(CheckpointPlanTest, UserManagedAndInstanceManagedRequestsUseTheSameExplicit
     EXPECT_EQ(pausePlan.checkpointID, "pause-1");
     EXPECT_EQ(pausePlan.lifecycle, ArtifactLifecycle::INSTANCE_MANAGED);
     EXPECT_TRUE(pausePlan.leaveRuntimeRunning);
-    EXPECT_EQ(pausePlan.timeoutSeconds, 240U);
-}
-
-TEST(CheckpointPlanTest, ReusableFinalizeBuildsExactDeleteCheckpointIdentityWithoutStoppingSandbox)
-{
-    SandboxInfo source;
-    source.runtimeID = "runtime-1";
-    source.sandboxID = "sandbox-1";
-    source.instanceInfo.set_instanceid("instance-1");
-    source.instanceInfo.set_runtimeid("runtime-1");
-
-    ::messages::SnapshotAttemptFinalizeRequest request;
-    request.set_protocolversion(1);
-    request.set_operation(::messages::REUSABLE_SNAPSHOT_COMMITTED);
-    request.set_instanceid("instance-1");
-    request.set_runtimeid("runtime-1");
-    request.set_snapshotid("snapshot-1");
-    request.set_attemptid("attempt-1");
-    request.set_expectedsize(4096);
-    request.set_expectedsha256("sha256-value");
-
-    std::string checkpointDirectory;
-    auto status = SandboxdExecutor::BuildReusableSnapshotCleanupIdentity(
-        request, source, "/checkpoints", checkpointDirectory);
-
-    ASSERT_TRUE(status.IsOk()) << status.ToString();
-    EXPECT_EQ(checkpointDirectory, "/checkpoints/snapshot-1");
-    EXPECT_EQ(source.sandboxID, "sandbox-1");
-
-    request.set_runtimeid("other-runtime");
-    status = SandboxdExecutor::BuildReusableSnapshotCleanupIdentity(
-        request, source, "/checkpoints", checkpointDirectory);
-    EXPECT_TRUE(status.IsError());
-
-    request.set_runtimeid("runtime-1");
-    request.set_snapshotid("../escape");
-    status = SandboxdExecutor::BuildReusableSnapshotCleanupIdentity(
-        request, source, "/checkpoints", checkpointDirectory);
-    EXPECT_TRUE(status.IsError());
 }
 
 TEST(CheckpointPlanTest, RejectsImplicitOrUnsafeCheckpointIdentity)

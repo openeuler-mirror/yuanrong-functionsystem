@@ -135,6 +135,7 @@ public:
     source.set_unitid("source-unit");
     source.set_containerid("source-container");
     source.set_proxygrpcaddress("10.0.0.8:9000");
+    source.set_failover(true);
     (*source.mutable_extensions())["portForward"] = "source-host-port";
     (*source.mutable_extensions())["yr.internal.resume.target_attempt_id"] = "source-attempt";
     (*source.mutable_extensions())["future.physical.or.secret.key"] = "must-not-be-cloned";
@@ -317,9 +318,9 @@ TEST_F(ReusableSnapshotStoreTest, SanitizedTemplatePreservesWorkloadAndDeclaredR
     EXPECT_EQ(value.function(), "rrt-function");
     EXPECT_EQ(value.resources().resources().at("Memory").scalar().value(), 4096);
     EXPECT_EQ(value.createoptions().at("workdir"), "/workspace");
+    EXPECT_TRUE(value.failover());
     EXPECT_TRUE(value.extensions().empty());
-    EXPECT_EQ(value.scheduleoption().affinity().nodeaffinity().affinity().at("source-proxy"),
-              resources::PreferredAffinity);
+    EXPECT_EQ(value.scheduleoption().affinity().nodeaffinity().affinity().count("source-proxy"), 0U);
 }
 
 TEST_F(ReusableSnapshotStoreTest, FailDeletesOnlyMatchingPublishingRecord)

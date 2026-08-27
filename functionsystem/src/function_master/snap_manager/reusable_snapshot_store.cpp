@@ -203,12 +203,6 @@ std::string ReusableSnapshotStore::SnapshotID(const ::messages::BeginReusableSna
     target.set_restartpolicy(source.restartpolicy());
     *target.mutable_resources() = source.resources();
     *target.mutable_scheduleoption() = source.scheduleoption();
-    if (!source.functionproxyid().empty()) {
-        (*target.mutable_scheduleoption()
-              ->mutable_affinity()
-              ->mutable_nodeaffinity()
-              ->mutable_affinity())[source.functionproxyid()] = resources::PreferredAffinity;
-    }
     *target.mutable_createoptions() = source.createoptions();
     target.mutable_labels()->CopyFrom(source.labels());
     target.set_storagetype(source.storagetype());
@@ -219,6 +213,7 @@ std::string ReusableSnapshotStore::SnapshotID(const ::messages::BeginReusableSna
     *target.mutable_kvlabels() = source.kvlabels();
     target.set_trafficreporttype(source.trafficreporttype());
     target.set_executortype(source.executortype());
+    target.set_failover(source.failover());
     // Extensions are an open-ended transport/status channel. An exclusion
     // list would silently persist every future physical identity, credential,
     // timestamp or scheduler marker added by another component. The first

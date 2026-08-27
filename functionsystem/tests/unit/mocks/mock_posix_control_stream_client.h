@@ -42,6 +42,13 @@ public:
     MOCK_METHOD(bool, IsDone, (), (override));
     MOCK_METHOD(litebus::Future<runtime_rpc::StreamingMessage>, Send,
                 (const std::shared_ptr<runtime_rpc::StreamingMessage> &request), (override));
+
+    void FireClosedCallback()
+    {
+        if (userCallback_ != nullptr) {
+            userCallback_();
+        }
+    }
 };
 }  // namespace functionsystem::test
 

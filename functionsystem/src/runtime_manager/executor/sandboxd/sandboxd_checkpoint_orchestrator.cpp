@@ -19,19 +19,74 @@
 #include "common/logs/logging.h"
 #include "common/snapshot_storage/snapshot_storage.h"
 #include "common/status/status.h"
-#include "common/utils/actor_worker.h"
 
+#include <cerrno>
+#include <cstring>
 #include <filesystem>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace functionsystem::runtime_manager {
+namespace {
+
+Status DeleteCallerOwnedCheckpoint(const std::string &checkpointDir, const std::string &checkpointID,
+                                   int64_t expectedSize, const std::string &expectedSHA256)
+{
+    namespace fs = std::filesystem;
+    const auto directoryPath = fs::path(checkpointDir).lexically_normal();
+    if (!directoryPath.is_absolute() || directoryPath.filename() != checkpointID
+        || !snapshot_storage::detail::IsSafeLeafName(checkpointID)
+        || expectedSize <= 0 || expectedSHA256.empty()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "invalid caller-owned checkpoint identity");
+    }
+
+    snapshot_storage::detail::SecureDirectory directory;
+    auto status = snapshot_storage::detail::SecureDirectory::Open(directoryPath, false, directory);
+    if (status.StatusCode() == StatusCode::FILE_NOT_FOUND) {
+        return Status::OK();
+    }
+    if (status.IsError()) {
+        return status;
+    }
+
+    snapshot_storage::SnapshotObjectMetadata expected;
+    expected.snapshotID = checkpointID;
+    expected.size = static_cast<uint64_t>(expectedSize);
+    expected.sha256 = expectedSHA256;
+    expected.complete = true;
+    status = snapshot_storage::detail::ValidateFile(directory.ProcPath("checkpoint.img"), expected);
+    if (status.IsError()) {
+        return snapshot_storage::detail::Conflict(status.RawMessage());
+    }
+    if (auto identity = directory.VerifyPathIdentity(); identity.IsError()) {
+        return identity;
+    }
+    if (unlinkat(directory.Fd(), "checkpoint.img", 0) != 0 && errno != ENOENT) {
+        return Status(StatusCode::FAILED, "failed to delete checkpoint.img: " + std::string(std::strerror(errno)));
+    }
+
+    snapshot_storage::detail::SecureDirectory parent;
+    status = snapshot_storage::detail::SecureDirectory::Open(directoryPath.parent_path(), false, parent);
+    if (status.IsError()) {
+        return status;
+    }
+    if (unlinkat(parent.Fd(), checkpointID.c_str(), AT_REMOVEDIR) != 0 && errno != ENOENT) {
+        return Status(StatusCode::FAILED, "failed to delete checkpoint directory: "
+                                          + std::string(std::strerror(errno)));
+    }
+    return Status::OK();
+}
+
+}  // namespace
+
 SandboxdCheckpointOrchestrator::SandboxdCheckpointOrchestrator(
     litebus::AID ownerAID, std::shared_ptr<GrpcClient<runtime::v1::SandboxService>> sandboxd,
     std::shared_ptr<CkptFileManager> ckptFileManager, RuntimeStateManager &stateManager)
     : ownerAID_(std::move(ownerAID)),
       sandboxd_(std::move(sandboxd)),
       ckptFileManager_(std::move(ckptFileManager)),
-      stateManager_(stateManager),
-      worker_(std::make_shared<ActorWorker>())
+      snapshotWorker_(std::make_shared<ActorWorker>()),
+      stateManager_(stateManager)
 {
 }
 
@@ -181,25 +236,17 @@ litebus::Future<Status> SandboxdCheckpointOrchestrator::ReleaseRef(const std::st
 // ── gRPC wrapper ─────────────────────────────────────────────────────────────
 
 litebus::Future<CheckpointResult> SandboxdCheckpointOrchestrator::DoCheckpoint(
-    const std::shared_ptr<runtime::v1::CheckpointRequest> &req,
-    const std::string &checkpointID)
+    const std::shared_ptr<runtime::v1::CheckpointRequest> &req)
 {
     ASSERT_IF_NULL(sandboxd_);
     auto resp = std::make_shared<runtime::v1::CheckpointResponse>();
-    return sandboxd_->CallAsyncX("Checkpoint", req, resp, &runtime::v1::SandboxService::Stub::AsyncCheckpoint)
-        .Then([this, req, checkpointID](const Status &status) -> litebus::Future<CheckpointResult> {
+    return sandboxd_->CallAsyncX("Checkpoint", *req, resp.get(), &runtime::v1::SandboxService::Stub::AsyncCheckpoint)
+        .Then([req, resp](const Status &status) -> CheckpointResult {
             if (status.IsError()) {
                 YRLOG_ERROR("checkpoint gRPC failed for sandbox({}): {}", req->id(), status.RawMessage());
                 return CheckpointResult{status, 0, {}};
             }
-            const auto artifact = (std::filesystem::path(req->checkpoint_dir()) / "checkpoint.img").string();
-            return snapshot_storage::InspectLocalSnapshotFile(worker_, artifact, checkpointID, 0)
-                .Then([](const snapshot_storage::SnapshotStat &stat) {
-                    return stat.status.IsError()
-                        ? CheckpointResult{stat.status, 0, {}}
-                        : CheckpointResult{Status::OK(), static_cast<int64_t>(stat.metadata.size),
-                                           stat.metadata.sha256};
-                });
+            return {Status::OK(), 0, {}};
         });
 }
 
@@ -210,24 +257,34 @@ litebus::Future<CheckpointResult> SandboxdCheckpointOrchestrator::CheckpointLoca
     request->set_id(plan.sandboxID);
     request->set_checkpoint_dir(plan.checkpointDirectory);
     request->set_timeout_seconds(plan.timeoutSeconds);
-    request->set_compress(true);
+    request->set_compress(plan.compress);
     request->set_leave_running(plan.leaveRuntimeRunning);
-    return DoCheckpoint(request, plan.checkpointID);
+    return DoCheckpoint(request)
+        .Then([this, plan](const CheckpointResult &result) -> litebus::Future<CheckpointResult> {
+            if (result.status.IsError()) {
+                return result;
+            }
+            const auto image = (std::filesystem::path(plan.checkpointDirectory) / "checkpoint.img").string();
+            return snapshot_storage::InspectLocalSnapshotFile(snapshotWorker_, image, plan.checkpointID, 0)
+                .Then([](const snapshot_storage::SnapshotStat &inspection) -> CheckpointResult {
+                    if (inspection.status.IsError()) {
+                        return {inspection.status, 0, {}};
+                    }
+                    return {Status::OK(), static_cast<int64_t>(inspection.metadata.size),
+                            inspection.metadata.sha256};
+                });
+        });
 }
 
 litebus::Future<Status> SandboxdCheckpointOrchestrator::DeleteCheckpoint(
     const std::string &checkpointDir, const std::string &checkpointID,
-    const std::string &sourceSandboxID, int64_t expectedSize,
+    const std::string &, int64_t expectedSize,
     const std::string &expectedSHA256)
 {
-    (void)sourceSandboxID;
-    snapshot_storage::SnapshotObjectMetadata expected;
-    expected.snapshotID = checkpointID;
-    expected.size = static_cast<uint64_t>(expectedSize);
-    expected.sha256 = expectedSHA256;
-    expected.complete = true;
-    const auto artifact = (std::filesystem::path(checkpointDir) / "checkpoint.img").string();
-    return snapshot_storage::DeleteLocalSnapshotFile(worker_, artifact, expected);
+    return snapshot_storage::detail::RunOnWorker<Status>(
+        snapshotWorker_, [checkpointDir, checkpointID, expectedSize, expectedSHA256]() {
+            return DeleteCallerOwnedCheckpoint(checkpointDir, checkpointID, expectedSize, expectedSHA256);
+        });
 }
 
 }  // namespace functionsystem::runtime_manager

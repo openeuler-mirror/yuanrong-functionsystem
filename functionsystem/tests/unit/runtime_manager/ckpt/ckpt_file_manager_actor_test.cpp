@@ -15,16 +15,20 @@
  */
 
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 #include "gtest/gtest.h"
 #include "async/async.hpp"
 #include "runtime_manager/ckpt/ckpt_file_manager_actor.h"
+#include "runtime_manager/ckpt/ckpt_file_manager.h"
+#include "utils/scoped_env.h"
 #include "utils/future_test_helper.h"
 
 namespace functionsystem::test {
 
 using functionsystem::runtime_manager::CkptFileManagerActor;
+using functionsystem::runtime_manager::CkptFileManager;
 
 class CkptFileManagerActorTest : public ::testing::Test {
 public:
@@ -101,6 +105,23 @@ TEST_F(CkptFileManagerActorTest, RemoveReferenceSucceedsForUnknownCheckpoint)
     auto status = litebus::Async(
         actor_->GetAID(), &CkptFileManagerActor::RemoveReference, std::string("no_such_ckpt")).Get();
     EXPECT_TRUE(status.IsOk());
+}
+
+TEST_F(CkptFileManagerActorTest, RegisterCheckpointDoesNotReportSuccessWhenZipFails)
+{
+    ScopedEnv path("PATH");
+    const std::string checkpointID = "zip-failure";
+    const std::string checkpointPath = tmpDir_ + "/" + checkpointID;
+    std::filesystem::create_directories(checkpointPath);
+    std::ofstream(checkpointPath + "/checkpoint.img") << "checkpoint";
+    path.Set("/path-without-zip");
+    CkptFileManager manager(actor_);
+
+    auto result = manager.RegisterCheckpoint(checkpointID, checkpointPath, "", 60);
+
+    ASSERT_AWAIT_SET_FOR(result, 5'000);
+    EXPECT_TRUE(result.IsError());
+    EXPECT_EQ(actor_->checkpointFiles_.count(checkpointID), size_t{0});
 }
 
 }  // namespace functionsystem::test

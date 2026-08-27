@@ -180,9 +180,10 @@ litebus::Future<messages::InstanceStatusInfo> HealthCheckActor::QueryInstanceSta
                                                                                         const std::string &runtimeID)
 {
     YRLOG_INFO("query instanceID({}) runtimeID({}) status.", instanceID, runtimeID);
-    return GetRuntimeException(runtimeID, instanceID, -1).Then([instanceID](const ExceptionInfo &exception) {
+    return GetRuntimeException(runtimeID, instanceID, -1).Then([instanceID, runtimeID](const ExceptionInfo &exception) {
         messages::InstanceStatusInfo req;
         req.set_instanceid(instanceID);
+        req.set_runtimeid(runtimeID);
         req.set_status(-1);
         req.set_instancemsg(exception.message);
         req.set_type(exception.type);
@@ -201,6 +202,7 @@ litebus::Future<Status> HealthCheckActor::SendInstanceStatus(const std::string &
     // 4) value: -1. runtime_manager kill instance for RuntimeMemoryExceedLimit(OOM). need to send instance status
     auto req = GenUpdateInstanceStatusRequest(instanceID, status, requestID);
     auto info = req->mutable_instancestatusinfo();
+    info->set_runtimeid(runtimeID);
     if (status == 0) {
         // runtime return by itself
         auto exitMsg = "runtime had been returned";
@@ -238,6 +240,7 @@ litebus::Future<Status> HealthCheckActor::NotifySandboxExit(const std::string &i
 {
     auto req = GenUpdateInstanceStatusRequest(instanceID, exitCode, requestID);
     auto info = req->mutable_instancestatusinfo();
+    info->set_runtimeid(runtimeID);
     info->set_instancemsg(exitMessage);
     info->set_type(exitCode == 0 ? static_cast<int32_t>(EXIT_TYPE::RETURN)
                                   : static_cast<int32_t>(EXIT_TYPE::UNKNOWN_ERROR));

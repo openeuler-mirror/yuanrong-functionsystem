@@ -214,6 +214,23 @@ TEST_F(SharedPosixClientTest, SharedClientManagerTest)
     EXPECT_EQ(deleted.Get(), nullptr);
 }
 
+TEST_F(SharedPosixClientTest, ReconnectedTransportKeepsClosedCallback)
+{
+    auto first = std::make_shared<MockControlClient>();
+    auto reconnected = std::make_shared<MockControlClient>();
+    EXPECT_CALL(*first, Stop).Times(1);
+    int closed = 0;
+
+    {
+        BaseClient client(first);
+        client.RegisterUserCallback([&closed]() { ++closed; });
+        client.UpdatePosix(reconnected);
+        reconnected->FireClosedCallback();
+    }
+
+    EXPECT_EQ(closed, 1);
+}
+
 /**
  * Description: client Call Test
  * Steps:

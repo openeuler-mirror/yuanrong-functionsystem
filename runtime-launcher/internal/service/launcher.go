@@ -57,12 +57,6 @@ func (s *LauncherService) Start(
 	if req == nil {
 		return &runtimev1.StartResponse{Code: 1, Message: "sandbox request cannot be nil"}, nil
 	}
-	if req.GetCheckpointInfo() != nil {
-		return &runtimev1.StartResponse{
-			Code:    1,
-			Message: "checkpoint restore is not supported by runtime-launcher SandboxService backend",
-		}, nil
-	}
 	cfg := s.buildCreateConfig(req)
 	log.Printf(
 		"[service] Start: sandbox_id=%s runtime=%s image=%s",
@@ -71,6 +65,19 @@ func (s *LauncherService) Start(
 		cfg.Sandbox,
 	)
 	return s.startWithConfig(ctx, cfg)
+}
+
+// Restore reports that runtime-launcher does not implement sandbox restore.
+func (s *LauncherService) Restore(
+	ctx context.Context,
+	req *runtimev1.RestoreRequest,
+) (*runtimev1.StartResponse, error) {
+	_ = ctx
+	_ = req
+	return &runtimev1.StartResponse{
+		Code:    1,
+		Message: "restore is not supported by runtime-launcher SandboxService backend",
+	}, nil
 }
 
 func (s *LauncherService) startWithConfig(

@@ -241,14 +241,18 @@ void RuntimeReconcileActor::OnReconcileComplete(const messages::ReconcileRuntime
 
     // Handle ghost instances: containers expected by proxy but missing in executor
     auto instances = instanceControlView_->GetInstances();
-    std::unordered_map<std::string, std::string> containerToInstance;
+    struct ExpectedRuntime {
+        std::string instanceID;
+        std::string runtimeID;
+    };
+    std::unordered_map<std::string, ExpectedRuntime> containerToInstance;
     for (const auto &[instanceID, sm] : instances) {
         if (sm == nullptr) {
             continue;
         }
         auto info = sm->GetInstanceInfo();
         if (info.functionagentid() == funcAgentID && !info.containerid().empty()) {
-            containerToInstance[info.containerid()] = instanceID;
+            containerToInstance[info.containerid()] = {instanceID, info.runtimeid()};
         }
     }
 
@@ -257,8 +261,8 @@ void RuntimeReconcileActor::OnReconcileComplete(const messages::ReconcileRuntime
         if (it != containerToInstance.end()) {
             YRLOG_WARN("{}|RuntimeReconcileActor: ghost instance {} (container {}) on agent {} — "
                        "container missing from executor",
-                       resp.requestid(), it->second, missingContainerID, funcAgentID);
-            CleanGhostInstance(it->second);
+                       resp.requestid(), it->second.instanceID, missingContainerID, funcAgentID);
+            RecoverMissingRuntime(it->second.instanceID, it->second.runtimeID);
         }
     }
 
@@ -271,6 +275,39 @@ void RuntimeReconcileActor::OnReconcileComplete(const messages::ReconcileRuntime
                    resp.requestid(), funcAgentID);
         resourceView_->UpdateUnitStatus(funcAgentID, resource_view::UnitStatus::NORMAL);
     }
+}
+
+void RuntimeReconcileActor::RecoverMissingRuntime(
+    const std::string &instanceID, const std::string &sourceRuntimeID)
+{
+    if (instanceCtrl_ == nullptr) {
+        CleanGhostInstance(instanceID);
+        return;
+    }
+    instanceCtrl_->TryLocalSnapshotFailover(instanceID, sourceRuntimeID)
+        .OnComplete(litebus::Defer(
+            GetAID(), &RuntimeReconcileActor::OnMissingRuntimeRecoveryDone,
+            instanceID, std::placeholders::_1));
+}
+
+Status RuntimeReconcileActor::OnMissingRuntimeRecoveryDone(
+    const std::string &instanceID, const litebus::Future<Status> &future)
+{
+    if (!future.IsError() && future.Get().IsOk()) {
+        YRLOG_INFO("RuntimeReconcileActor: missing runtime for instance {} recovered from local snapshot",
+                   instanceID);
+        pendingGhostInstances_.erase(instanceID);
+        return Status::OK();
+    }
+    const auto status = future.IsError()
+        ? Status(StatusCode::ERR_INNER_COMMUNICATION,
+                 "local snapshot recovery future failed")
+        : future.Get();
+    YRLOG_WARN("RuntimeReconcileActor: local snapshot recovery failed for missing instance {}: {}; "
+               "continuing existing ghost cleanup",
+               instanceID, status.RawMessage());
+    CleanGhostInstance(instanceID);
+    return status;
 }
 
 void RuntimeReconcileActor::CleanGhostInstance(const std::string &instanceID)

@@ -76,6 +76,9 @@ public:
                                                   const std::string &instanceID,
                                                   const std::string &payload);
 
+    litebus::Future<KillResponse> HandleAnonymousCheckpoint(
+        const std::string &requestID, const std::string &instanceID);
+
     /**
      * Callback to convert SnapshotResult to KillResponse
      * @param result: The snapshot result
@@ -184,13 +187,40 @@ public:
         const resume_identity::TrustedResumeIdentity &identity);
 
 private:
+    struct AnonymousCheckpointContext {
+        std::string requestID;
+        std::string instanceID;
+        std::string snapshotID;
+        resources::InstanceInfo instanceInfo;
+        messages::SnapshotRuntimeResponse snapshotResponse;
+        std::shared_ptr<litebus::Promise<KillResponse>> completion;
+        std::chrono::steady_clock::time_point snapStartedDeadline;
+    };
+
+    void OnAnonymousCheckpointPrepared(
+        const std::shared_ptr<AnonymousCheckpointContext> &context,
+        const litebus::Future<Status> &future);
+    void OnAnonymousCheckpointCreated(
+        const std::shared_ptr<AnonymousCheckpointContext> &context,
+        const litebus::Future<messages::SnapshotRuntimeResponse> &future);
+    void RetryAnonymousCheckpointClient(
+        const std::shared_ptr<AnonymousCheckpointContext> &context);
+    void OnAnonymousCheckpointClient(
+        const std::shared_ptr<AnonymousCheckpointContext> &context,
+        const litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> &future);
+    void OnAnonymousCheckpointStarted(
+        const std::shared_ptr<AnonymousCheckpointContext> &context,
+        const litebus::Future<runtime::SnapStartedResponse> &future);
+    static void CompleteAnonymousCheckpoint(
+        const std::shared_ptr<AnonymousCheckpointContext> &context,
+        common::ErrorCode code, const std::string &message);
+
     struct ReusableSnapshotContext {
         std::string requestID;
         std::string instanceID;
         std::string snapshotID;
         std::string requestFingerprint;
         std::string name;
-        uint32_t checkpointTimeoutSeconds{ 180 };
         resources::InstanceInfo sourceInstanceInfo;
         ::messages::SnapshotArtifact artifact;
         ::core_service::SnapshotInfo publicInfo;
@@ -214,6 +244,12 @@ private:
     void OnReusableSnapshotCheckpointed(
         const std::shared_ptr<ReusableSnapshotContext> &context,
         const litebus::Future<::messages::SnapshotRuntimeResponse> &future);
+    void OnReusableSnapshotClient(
+        const std::shared_ptr<ReusableSnapshotContext> &context,
+        const litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> &future);
+    void OnReusableSnapshotStarted(
+        const std::shared_ptr<ReusableSnapshotContext> &context,
+        const litebus::Future<runtime::SnapStartedResponse> &future);
     void OnReusableSnapshotCommitted(
         const std::shared_ptr<ReusableSnapshotContext> &context,
         const litebus::Future<::messages::CommitReusableSnapshotResponse> &future);

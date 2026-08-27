@@ -98,12 +98,18 @@ Status MergeReusableSnapshotResources(
         return Status(StatusCode::ERR_PARAM_INVALID,
                       "reusable Snapshot target resources are unavailable");
     }
-    // Reusable Snapshot v1 is a template restore, not a resize operation.
-    // The public create request necessarily carries frontend defaults, so
-    // treating those defaults as overrides would make snapshots created from
-    // larger sandboxes unrestorable. Restore the frozen source resources and
-    // leave explicit resource overrides to a future versioned API.
-    target->CopyFrom(source);
+    for (const auto &[name, sourceResource] : source.resources()) {
+        auto targetResource = target->mutable_resources()->find(name);
+        if (targetResource == target->mutable_resources()->end()) {
+            (*target->mutable_resources())[name].CopyFrom(sourceResource);
+            continue;
+        }
+        if (!sourceResource.has_scalar() || !targetResource->second.has_scalar()
+            || targetResource->second.scalar().value() < sourceResource.scalar().value()) {
+            return Status(StatusCode::ERR_PARAM_INVALID,
+                          "Create-from-Snapshot cannot reduce or change a Snapshot resource");
+        }
+    }
     return Status::OK();
 }
 
@@ -146,19 +152,16 @@ Status ApplyResolvedReusableSnapshotForCreate(
         return resourceStatus;
     }
 
-    // Keep the new logical identity, parent and naming choices. Workload,
-    // placement constraints and bootstrap inputs are frozen by the Snapshot
-    // template in v1. The stored source-node affinity is preferred, so an
-    // eligible fallback node can still restore the artifact.
+    // Keep the new logical identity, parent, naming and placement choices.
+    // The Snapshot supplies workload inputs and the restore artifact only.
     target->set_function(source.function());
     target->set_restartpolicy(source.restartpolicy());
-    target->mutable_scheduleoption()->mutable_affinity()->CopyFrom(
-        source.scheduleoption().affinity());
     *target->mutable_createoptions() = source.createoptions();
     target->set_storagetype(source.storagetype());
     target->mutable_args()->CopyFrom(source.args());
     target->set_gracefulshutdowntime(source.gracefulshutdowntime());
     target->set_executortype(source.executortype());
+    target->set_failover(source.failover());
     target->mutable_extensions()->erase("portForward");
 
     scheduleExtensions->erase(REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION);

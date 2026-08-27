@@ -423,6 +423,13 @@ litebus::Future<Status> InstanceCtrl::ForceDeleteInstance(const std::string &ins
     return litebus::Async(aid_, &InstanceCtrlActor::ForceDeleteInstance, instanceID);
 }
 
+litebus::Future<Status> InstanceCtrl::TryLocalSnapshotFailover(
+    const std::string &instanceID, const std::string &sourceRuntimeID)
+{
+    return litebus::Async(
+        aid_, &InstanceCtrlActor::TryLocalSnapshotFailover, instanceID, sourceRuntimeID);
+}
+
 litebus::Future<Status> InstanceCtrl::ReleaseRuntimeForPause(
     const resource_view::InstanceInfo &instanceInfo, const std::string &snapshotID)
 {

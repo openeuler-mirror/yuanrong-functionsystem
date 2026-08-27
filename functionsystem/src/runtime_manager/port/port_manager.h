@@ -116,6 +116,8 @@ public:
     bool CheckPortInUse(int port) const;
 
 private:
+    void AdvanceAllocationCursor(int port);
+
     int initialPort_ = 500;
 
     int poolSize_ = 2000;
@@ -128,6 +130,7 @@ private:
     };
 
     std::map<int, RuntimeInfo> portMap_;
+    int nextPort_ = -1;
     bool ready_ = false;
 };
 }

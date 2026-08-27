@@ -143,7 +143,6 @@ void RuntimeManager::Init()
     ActorBase::Receive("StartInstance", &RuntimeManager::StartInstance);
     ActorBase::Receive("StopInstance", &RuntimeManager::StopInstance);
     ActorBase::Receive("SnapshotRuntime", &RuntimeManager::SnapshotRuntime);
-    ActorBase::Receive("SnapshotAttemptFinalize", &RuntimeManager::SnapshotAttemptFinalize);
     ActorBase::Receive("QueryInstanceStatusInfo", &RuntimeManager::QueryInstanceStatusInfo);
     ActorBase::Receive("CleanStatus", &RuntimeManager::CleanStatus);
     ActorBase::Receive("UpdateCred", &RuntimeManager::UpdateCred);
@@ -518,69 +517,6 @@ void RuntimeManager::SnapshotRuntime(const litebus::AID &from, std::string &&, s
 
     executor->SnapshotRuntime(request).OnComplete(litebus::Defer(
         GetAID(), &RuntimeManager::SnapshotRuntimeResponse, from, request, std::placeholders::_1));
-}
-
-void RuntimeManager::SnapshotAttemptFinalize(const litebus::AID &from, std::string &&, std::string &&msg)
-{
-    ::messages::SnapshotAttemptFinalizeRequest request;
-    if (!request.ParseFromString(msg)) {
-        return;
-    }
-    if (!functionAgentAID_.OK() || from.HashString() != functionAgentAID_.HashString()) {
-        YRLOG_WARN("{}|reject reusable snapshot finalize from untrusted sender {}",
-                   request.attemptid(), from.HashString());
-        return;
-    }
-    FinalizeReusableSnapshotCheckpoint(request).OnComplete(
-        litebus::Defer(GetAID(), &RuntimeManager::SnapshotAttemptFinalizeCompleted,
-                       from, request, std::placeholders::_1));
-}
-
-litebus::Future<Status> RuntimeManager::FinalizeReusableSnapshotCheckpoint(
-    const ::messages::SnapshotAttemptFinalizeRequest &request)
-{
-    const bool reusableOperation = request.operation() == ::messages::REUSABLE_SNAPSHOT_COMMITTED
-        || request.operation() == ::messages::REUSABLE_SNAPSHOT_ABORTED;
-    const auto source = instanceInfoMap_.find(request.runtimeid());
-    if (request.protocolversion() != 1 || !reusableOperation
-        || request.attemptid().empty() || request.instanceid().empty()
-        || request.runtimeid().empty() || request.snapshotid().empty()
-        || request.expectedsize() == 0 || request.expectedsha256().empty()
-        || source == instanceInfoMap_.end()
-        || source->second.instanceid() != request.instanceid()) {
-        return Status(StatusCode::ERR_PARAM_INVALID,
-                      "reusable snapshot finalize identity is invalid");
-    }
-    if (GetRuntimeType(request.runtimeid()) != EXECUTOR_TYPE::SANDBOXD) {
-        return Status(StatusCode::RUNTIME_MANAGER_PARAMS_INVALID,
-                      "reusable snapshot cleanup requires a sandboxd runtime");
-    }
-    auto executor = std::dynamic_pointer_cast<SandboxdExecutorProxy>(
-        FindExecutor(EXECUTOR_TYPE::SANDBOXD));
-    if (executor == nullptr) {
-        return Status(StatusCode::ERR_INNER_SYSTEM_ERROR,
-                      "sandboxd executor is unavailable for reusable snapshot cleanup");
-    }
-    return executor->DeleteReusableSnapshotCheckpoint(request);
-}
-
-void RuntimeManager::SnapshotAttemptFinalizeCompleted(
-    const litebus::AID &from, const ::messages::SnapshotAttemptFinalizeRequest &request,
-    const litebus::Future<Status> &future)
-{
-    ::messages::SnapshotAttemptFinalizeResponse response;
-    response.set_attemptid(request.attemptid());
-    if (future.IsError()) {
-        response.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
-        response.set_message("reusable snapshot local cleanup future failed");
-        response.set_resultunknown(true);
-    } else {
-        const auto &status = future.Get();
-        response.set_code(static_cast<int32_t>(status.StatusCode()));
-        response.set_message(status.IsError() ? status.RawMessage() : "");
-        response.set_localcleanupcomplete(status.IsOk());
-    }
-    Send(from, "SnapshotAttemptFinalizeResponse", response.SerializeAsString());
 }
 
 Status RuntimeManager::ResolveSnapshotExecutorType(const messages::SnapshotRuntimeRequest &request,
@@ -1421,6 +1357,7 @@ void RuntimeManager::QueryInstanceStatusInfo(const litebus::AID &from, std::stri
                    request.instanceid(), request.runtimeid());
         messages::InstanceStatusInfo info;
         info.set_instanceid(request.instanceid());
+        info.set_runtimeid(request.runtimeid());
         info.set_status(-1);
         info.set_instancemsg("an unknown error caused the instance exited. instance:" + request.instanceid()
                              + " runtime:" + request.runtimeid() + " which is not found. ");

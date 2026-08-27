@@ -115,16 +115,50 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgr::SnapshotRun
     int32_t ttl,
     common::SnapType type,
     const std::string &snapshotID,
-    const std::string &checkpointDir,
-    uint32_t timeoutSeconds)
+    const std::string &checkpointDir)
 {
     ASSERT_IF_NULL(actor_);
     return litebus::Async(actor_->GetAID(),
                           static_cast<litebus::Future<messages::SnapshotRuntimeResponse> (FunctionAgentMgrActor::*)(
                               const std::string &, const resource_view::InstanceInfo &, int32_t, common::SnapType,
-                              const std::string &, const std::string &, uint32_t)>(
+                              const std::string &, const std::string &)>(
                               &FunctionAgentMgrActor::SnapshotRuntime),
-                          requestID, instanceInfo, ttl, type, snapshotID, checkpointDir, timeoutSeconds);
+                          requestID, instanceInfo, ttl, type, snapshotID, checkpointDir);
+}
+
+litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgr::SnapshotRuntimeAnonymous(
+    const std::string &requestID,
+    const resource_view::InstanceInfo &instanceInfo,
+    const std::string &snapshotID)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::SnapshotRuntimeAnonymous,
+                          requestID, instanceInfo, snapshotID);
+}
+
+litebus::Future<messages::ListLocalSnapshotsResponse> FunctionAgentMgr::ListLocalSnapshots(
+    const std::string &functionAgentID)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::ListLocalSnapshots,
+                          functionAgentID);
+}
+
+litebus::Future<messages::DeleteLocalSnapshotResponse> FunctionAgentMgr::DeleteLocalSnapshot(
+    const std::string &functionAgentID,
+    const messages::DeleteLocalSnapshotRequest &request)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::DeleteLocalSnapshot,
+                          functionAgentID, request);
+}
+
+litebus::Future<std::optional<messages::LocalSnapshotMetadata>> FunctionAgentMgr::LatestAnonymousSnapshot(
+    const std::string &instanceID)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::LatestAnonymousSnapshot,
+                          instanceID);
 }
 
 litebus::Future<messages::ReconcileRuntimesResponse> FunctionAgentMgr::ReconcileRuntimes(

@@ -56,6 +56,7 @@ void SetTLSConfig(const std::shared_ptr<messages::DeployInstanceRequest> &req, m
 
 enum class ResumeIdentityTrust {
     ORDINARY,
+    LOCAL,
     TRUSTED,
     REUSABLE,
     INVALID,

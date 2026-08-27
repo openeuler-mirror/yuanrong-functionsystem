@@ -266,6 +266,9 @@ public:
         const std::string &requestID);
     virtual void EraseFrontendCreateFailure(const std::string &requestID);
     virtual litebus::Future<Status> ForceDeleteInstance(const std::string &instanceID);
+
+    virtual litebus::Future<Status> TryLocalSnapshotFailover(
+        const std::string &instanceID, const std::string &sourceRuntimeID);
     virtual litebus::Future<Status> ReleaseRuntimeForPause(
         const resource_view::InstanceInfo &instanceInfo, const std::string &snapshotID);
 

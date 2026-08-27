@@ -123,10 +123,10 @@ add_executable(${PAUSE_RESUME_UNIT_TEST}
         common/etcd_service/etcd_watch_srv_actor.cpp
         common/resource_view/view_utils.cpp
         common/snapshot_storage/snapshot_storage_test.cpp
+        function_agent/snapshot/local_snapshot_store_test.cpp
         function_master/snap_manager/reusable_snapshot_proto_test.cpp
         function_master/snap_manager/reusable_snapshot_store_test.cpp
-        function_proxy/local_scheduler/snap_ctrl/snap_ctrl_actor_test.cpp
-        runtime_manager/ckpt/pause_artifact_path_manager_test.cpp)
+        function_proxy/local_scheduler/snap_ctrl/snap_ctrl_actor_test.cpp)
 
 target_compile_options(${PAUSE_RESUME_UNIT_TEST} PRIVATE
         -Wno-error

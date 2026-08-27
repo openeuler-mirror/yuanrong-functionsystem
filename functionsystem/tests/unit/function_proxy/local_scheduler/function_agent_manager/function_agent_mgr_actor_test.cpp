@@ -73,6 +73,33 @@ protected:
     }
 };
 
+class AnonymousSnapshotCaptureActor final : public litebus::ActorBase {
+public:
+    AnonymousSnapshotCaptureActor() : litebus::ActorBase("anonymous-snapshot-capture") {}
+
+    litebus::Promise<messages::SnapshotRuntimeRequest> captured;
+
+protected:
+    void Init() override
+    {
+        Receive("SnapshotRuntime", &AnonymousSnapshotCaptureActor::SnapshotRuntime);
+    }
+
+private:
+    void SnapshotRuntime(const litebus::AID &from, std::string &&, std::string &&msg)
+    {
+        messages::SnapshotRuntimeRequest request;
+        if (!request.ParseFromString(msg)) {
+            return;
+        }
+        captured.SetValue(request);
+        messages::SnapshotRuntimeResponse response;
+        response.set_requestid(request.requestid());
+        response.set_code(static_cast<int32_t>(StatusCode::FAILED));
+        Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
+    }
+};
+
 class FuncAgentMgrActorHelper : public FunctionAgentMgrActor {
 public:
     FuncAgentMgrActorHelper(const std::string &metaStoreAddress)
@@ -99,6 +126,62 @@ public:
     }
 };
 
+class SnapshotRegistrationOrderActor final : public FunctionAgentMgrActor {
+public:
+    explicit SnapshotRegistrationOrderActor(const std::string &metaStoreAddress)
+        : FunctionAgentMgrActor(
+              "snapshot-registration-order", [] {
+                  auto param = PARAM;
+                  param.enableCoProcessMode = true;
+                  return param;
+              }(), "nodeID", std::make_shared<MockMetaStoreClient>(metaStoreAddress))
+    {
+    }
+
+    litebus::Future<messages::ListLocalSnapshotsResponse> ListLocalSnapshots(
+        const std::string &) override
+    {
+        operations.emplace_back("list-snapshots");
+        messages::ListLocalSnapshotsResponse response;
+        response.set_code(listFailuresRemaining == 0
+                              ? static_cast<int32_t>(StatusCode::SUCCESS)
+                              : static_cast<int32_t>(StatusCode::GRPC_UNAVAILABLE));
+        if (listFailuresRemaining > 0) {
+            --listFailuresRemaining;
+        }
+        return response;
+    }
+
+    litebus::Future<messages::DeleteLocalSnapshotResponse> DeleteLocalSnapshot(
+        const std::string &, const messages::DeleteLocalSnapshotRequest &request) override
+    {
+        deletedSnapshots.emplace_back(request.snapshotid());
+        messages::DeleteLocalSnapshotResponse response;
+        response.set_requestid(request.requestid());
+        response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+        return response;
+    }
+
+    std::vector<std::string> operations;
+    std::vector<std::string> deletedSnapshots;
+    int listFailuresRemaining{0};
+};
+
+messages::LocalSnapshotMetadata MakeLocalSnapshot(
+    const std::string &snapshotID, uint64_t generation)
+{
+    messages::LocalSnapshotMetadata snapshot;
+    snapshot.set_snapshotid(snapshotID);
+    snapshot.set_anonymous(true);
+    snapshot.set_instanceid("sandbox-a");
+    snapshot.set_generation(generation);
+    snapshot.set_runtimeclass("runsc");
+    snapshot.set_architecture("x86_64");
+    snapshot.set_size(4096);
+    snapshot.set_sha256(std::string(64, static_cast<char>('a' + generation)));
+    return snapshot;
+}
+
 class FuncAgentMgrActorTest : public ::testing::Test {
 protected:
     [[maybe_unused]] static void SetUpTestSuite()
@@ -114,6 +197,178 @@ protected:
     inline static std::string metaStoreAddress_;
     shared_ptr<FuncAgentMgrActorHelper> agentMgrActorHelper_;
 };
+
+TEST(FunctionAgentMgrTest, RegistrationListsSnapshotsBeforeFirstReconcile)
+{
+    const auto metaStoreAddress = "127.0.0.1:" + std::to_string(FindAvailablePort());
+    auto actor = std::make_shared<SnapshotRegistrationOrderActor>(metaStoreAddress);
+    FunctionAgentMgrActor::FuncAgentInfo info;
+    info.isInit = true;
+    info.recoverPromise = std::make_shared<litebus::Promise<bool>>();
+    info.aid = litebus::AID("agent-a", "127.0.0.1:31003");
+    actor->InsertAgent("agent-a", info);
+    actor->SetCoProcessReconcileCallback([actor](const std::string &) {
+        actor->operations.emplace_back("reconcile");
+    });
+    litebus::Spawn(actor, true);
+    struct ActorGuard {
+        std::shared_ptr<SnapshotRegistrationOrderActor> actor;
+        ~ActorGuard()
+        {
+            litebus::Terminate(actor->GetAID());
+            litebus::Await(actor);
+        }
+    } guard{actor};
+
+    auto listed = litebus::Async(
+        actor->GetAID(), &FunctionAgentMgrActor::RebuildLocalSnapshotView,
+        Status::OK(), std::string("agent-a"));
+    ASSERT_AWAIT_READY_FOR(listed, 5'000);
+    ASSERT_TRUE(listed.Get().IsOk()) << listed.Get().ToString();
+    litebus::Future<Status> completed(listed.Get());
+    auto enabled = litebus::Async(
+        actor->GetAID(), &FunctionAgentMgrActor::EnableFuncAgent,
+        completed, std::string("agent-a"));
+    ASSERT_AWAIT_READY_FOR(enabled, 5'000);
+    ASSERT_TRUE(enabled.Get().IsOk()) << enabled.Get().ToString();
+
+    EXPECT_EQ(actor->operations,
+              (std::vector<std::string>{"list-snapshots", "reconcile"}));
+}
+
+TEST(FunctionAgentMgrTest, LocalSnapshotCommitDeletesPreviousAnonymousSnapshot)
+{
+    const auto metaStoreAddress = "127.0.0.1:" + std::to_string(FindAvailablePort());
+    auto actor = std::make_shared<SnapshotRegistrationOrderActor>(metaStoreAddress);
+    const litebus::AID agentAID("agent-a", "127.0.0.1:31004");
+    FunctionAgentMgrActor::FuncAgentInfo info;
+    info.isEnable = true;
+    info.isInit = true;
+    info.aid = agentAID;
+    actor->InsertAgent("agent-a", info);
+    actor->aidTable_[agentAID] = "agent-a";
+    litebus::Spawn(actor, true);
+    struct ActorGuard {
+        std::shared_ptr<SnapshotRegistrationOrderActor> actor;
+        ~ActorGuard()
+        {
+            litebus::Terminate(actor->GetAID());
+            litebus::Await(actor);
+        }
+    } guard{actor};
+
+    const auto complete = [&](const std::string &requestID,
+                              const messages::LocalSnapshotMetadata &snapshot) {
+        actor->snapshotRuntimeExpectedAgent_[requestID] = agentAID;
+        auto result = actor->snapshotRuntimeSync_.AddSynchronizer(requestID);
+        messages::SnapshotRuntimeResponse response;
+        response.set_requestid(requestID);
+        response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+        *response.mutable_localsnapshot() = snapshot;
+        auto serialized = response.SerializeAsString();
+        actor->SnapshotRuntimeResponse(
+            agentAID, std::string("SnapshotRuntimeResponse"), std::move(serialized));
+        ASSERT_AWAIT_READY_FOR(result, 5'000);
+        EXPECT_EQ(result.Get().code(), static_cast<int32_t>(StatusCode::SUCCESS));
+    };
+
+    complete("snapshot-old", MakeLocalSnapshot("old", 1));
+    complete("snapshot-new", MakeLocalSnapshot("new", 2));
+
+    ASSERT_AWAIT_TRUE_FOR([actor]() { return actor->deletedSnapshots.size() == 1; }, 5'000);
+    EXPECT_EQ(actor->deletedSnapshots, (std::vector<std::string>{"old"}));
+    const auto latest = litebus::Async(
+        actor->GetAID(), &FunctionAgentMgrActor::LatestAnonymousSnapshot,
+        std::string("sandbox-a"));
+    ASSERT_AWAIT_READY_FOR(latest, 5'000);
+    ASSERT_TRUE(latest.Get().has_value());
+    EXPECT_EQ(latest.Get()->snapshotid(), "new");
+}
+
+TEST(FunctionAgentMgrTest, RegistrationRetriesSnapshotListBeforeReconcile)
+{
+    const auto metaStoreAddress = "127.0.0.1:" + std::to_string(FindAvailablePort());
+    auto actor = std::make_shared<SnapshotRegistrationOrderActor>(metaStoreAddress);
+    actor->listFailuresRemaining = 1;
+    FunctionAgentMgrActor::FuncAgentInfo info;
+    info.isInit = true;
+    info.recoverPromise = std::make_shared<litebus::Promise<bool>>();
+    info.aid = litebus::AID("agent-a", "127.0.0.1:31005");
+    actor->InsertAgent("agent-a", info);
+    actor->SetCoProcessReconcileCallback([actor](const std::string &) {
+        actor->operations.emplace_back("reconcile");
+    });
+    litebus::Spawn(actor, true);
+    struct ActorGuard {
+        std::shared_ptr<SnapshotRegistrationOrderActor> actor;
+        ~ActorGuard()
+        {
+            litebus::Terminate(actor->GetAID());
+            litebus::Await(actor);
+        }
+    } guard{actor};
+
+    auto listed = litebus::Async(
+        actor->GetAID(), &FunctionAgentMgrActor::RebuildLocalSnapshotView,
+        Status::OK(), std::string("agent-a"));
+    ASSERT_AWAIT_READY_FOR(listed, 5'000);
+    litebus::Future<Status> completed(listed.Get());
+    auto enabled = litebus::Async(
+        actor->GetAID(), &FunctionAgentMgrActor::EnableFuncAgent,
+        completed, std::string("agent-a"));
+    ASSERT_AWAIT_READY_FOR(enabled, 5'000);
+    ASSERT_TRUE(enabled.Get().IsOk()) << enabled.Get().ToString();
+    EXPECT_EQ(actor->operations,
+              (std::vector<std::string>{"list-snapshots", "list-snapshots", "reconcile"}));
+}
+
+TEST(FunctionAgentMgrTest, AnonymousSnapshotRequestCarriesOnlyLocalCheckpointIntent)
+{
+    const auto metaStoreAddress = "127.0.0.1:" + std::to_string(FindAvailablePort());
+    auto manager = std::make_shared<FunctionAgentMgrActor>(
+        "anonymous-snapshot-manager", PARAM, "nodeID",
+        std::make_shared<MockMetaStoreClient>(metaStoreAddress));
+    auto agent = std::make_shared<AnonymousSnapshotCaptureActor>();
+    FunctionAgentMgrActor::FuncAgentInfo info;
+    info.isEnable = true;
+    info.isInit = true;
+    info.aid = agent->GetAID();
+    manager->InsertAgent("agent-a", info);
+    manager->aidTable_[agent->GetAID()] = "agent-a";
+    litebus::Spawn(manager, true);
+    litebus::Spawn(agent, true);
+    struct ActorGuard {
+        std::shared_ptr<FunctionAgentMgrActor> manager;
+        std::shared_ptr<AnonymousSnapshotCaptureActor> agent;
+        ~ActorGuard()
+        {
+            litebus::Terminate(manager->GetAID());
+            litebus::Terminate(agent->GetAID());
+            litebus::Await(manager);
+            litebus::Await(agent);
+        }
+    } guard{manager, agent};
+
+    resources::InstanceInfo instance;
+    instance.set_instanceid("sandbox-a");
+    instance.set_runtimeid("runtime-a");
+    instance.set_containerid("container-a");
+    instance.set_functionagentid("agent-a");
+    instance.set_tenantid("tenant-a");
+    instance.set_version(7);
+    auto result = litebus::Async(
+        manager->GetAID(), &FunctionAgentMgrActor::SnapshotRuntimeAnonymous,
+        std::string("anonymous-request"), instance, std::string("anon-1"));
+
+    ASSERT_AWAIT_READY_FOR(agent->captured.GetFuture(), 5'000);
+    const auto request = agent->captured.GetFuture().Get();
+    EXPECT_EQ(request.type(), common::DUMPSTATE);
+    EXPECT_TRUE(request.anonymous());
+    EXPECT_TRUE(request.leaverunning());
+    EXPECT_TRUE(request.checkpointdir().empty());
+    EXPECT_EQ(request.snapshotid(), "anon-1");
+    ASSERT_AWAIT_READY_FOR(result, 5'000);
+}
 
 TEST_F(FuncAgentMgrActorTest, EmptyResourceUnit)
 {

@@ -179,6 +179,11 @@ using CheckInstanceStateResponse = ::messages::CheckInstanceStateResponse;
 
 using SnapshotRuntimeRequest = ::messages::SnapshotRuntimeRequest;
 using SnapshotRuntimeResponse = ::messages::SnapshotRuntimeResponse;
+using LocalSnapshotMetadata = ::messages::LocalSnapshotMetadata;
+using ListLocalSnapshotsRequest = ::messages::ListLocalSnapshotsRequest;
+using ListLocalSnapshotsResponse = ::messages::ListLocalSnapshotsResponse;
+using DeleteLocalSnapshotRequest = ::messages::DeleteLocalSnapshotRequest;
+using DeleteLocalSnapshotResponse = ::messages::DeleteLocalSnapshotResponse;
 using RestoreSnapshotRequest = ::messages::RestoreSnapshotRequest;
 using RestoreSnapshotResponse = ::messages::RestoreSnapshotResponse;
 using RecordSnapshotRequest = ::messages::RecordSnapshotRequest;
