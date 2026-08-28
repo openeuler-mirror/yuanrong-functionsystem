@@ -632,8 +632,8 @@ private:
 
     const uint32_t queryTimeout_ = 60000;
     const uint32_t updateTokenTimeout_ = 60000;
-    const uint32_t checkpointRuntimeTimeout_ = 120000;  // checkpoint may take longer
-    const uint32_t snapshotRuntimeTimeout_ = 120000;  // snapshot may take longer
+    const uint32_t checkpointRuntimeTimeout_ = 180000;
+    const uint32_t snapshotRuntimeTimeout_ = 180000;
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::InstanceStatusInfo, queryTimeout_, queryStatusSync_);
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::UpdateCredResponse, updateTokenTimeout_, updateTokenSync_);
     std::unordered_map<std::string, litebus::AID> snapshotRuntimeExpectedAgent_;

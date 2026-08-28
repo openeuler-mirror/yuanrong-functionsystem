@@ -58,7 +58,7 @@ bool ArtifactEquals(const ::messages::SnapshotArtifact &left, const ::messages::
 {
     return left.storagebackend() == right.storagebackend() && left.objectkey() == right.objectkey()
         && left.size() == right.size() && left.sha256() == right.sha256() && left.format() == right.format()
-        && left.formatversion() == right.formatversion();
+        && left.formatversion() == right.formatversion() && left.sourcenodeid() == right.sourcenodeid();
 }
 
 template <typename Response>
@@ -238,7 +238,9 @@ Status ReusableSnapshotStore::ValidateBegin(const ::messages::BeginReusableSnaps
 
 Status ReusableSnapshotStore::ValidateArtifact(const ::messages::SnapshotArtifact &artifact)
 {
-    const bool supportedBackend = artifact.storagebackend() == "obs" || artifact.storagebackend() == "datasystem";
+    const bool local = artifact.storagebackend() == "local";
+    const bool supportedBackend = local || artifact.storagebackend() == "obs"
+        || artifact.storagebackend() == "datasystem";
     const bool safeObjectKey = !artifact.objectkey().empty() && artifact.objectkey().front() != '/'
         && artifact.objectkey().find("../") == std::string::npos
         && artifact.objectkey().find("/..") == std::string::npos;
@@ -247,7 +249,8 @@ Status ReusableSnapshotStore::ValidateArtifact(const ::messages::SnapshotArtifac
             return std::isxdigit(value) != 0;
         });
     if (!supportedBackend || !safeObjectKey || artifact.size() <= 0
-        || !validSha256 || artifact.format() != "sandboxd-checkpoint"
+        || (local ? artifact.sourcenodeid().empty() : !validSha256)
+        || artifact.format() != "sandboxd-checkpoint"
         || artifact.formatversion() != 1) {
         return Invalid("reusable Snapshot artifact is incomplete or unsupported");
     }

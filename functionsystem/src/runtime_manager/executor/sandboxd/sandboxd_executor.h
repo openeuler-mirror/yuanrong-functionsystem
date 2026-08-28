@@ -33,8 +33,6 @@
 #include "common/rpc/client/grpc_client.h"
 #include "common/status/status.h"
 #include "healthcheck/health_check.h"
-#include "runtime_manager/ckpt/ckpt_file_manager.h"
-#include "runtime_manager/ckpt/ckpt_file_manager_actor.h"
 #include "runtime_manager/config/command_builder.h"
 #include "runtime_manager/executor/executor.h"
 #include "runtime_manager/executor/sandboxd/runtime_state_manager.h"
@@ -66,8 +64,6 @@ struct SandboxdResumeIdentity {
     std::string logicalRequestID;
     std::string tenantID;
     std::string snapshotID;
-    int64_t expectedSize{0};
-    std::string expectedSHA256;
     std::map<std::string, std::string> labels;
 };
 
@@ -217,12 +213,10 @@ private:
         const std::string &runtimeClass,
         google::protobuf::Map<std::string, std::string> *envs) const;
     static SandboxdResumeIdentity ConsumeRestoreIdentity(messages::StartInstanceRequest &request);
-    static bool ShouldValidateRestoreArtifact(const SandboxdResumeIdentity &identity);
     static bool IsRestoreRequest(const messages::RuntimeInstanceInfo &info);
     static Status BuildSnapshotCheckpointPlan(
         const messages::SnapshotRuntimeRequest &request, const std::string &sandboxID,
         CheckpointPlan &plan);
-    static bool UsesLegacySnapshotRegistry(const messages::SnapshotRuntimeRequest &request);
     // ── Start paths: normal / warm-up (Register) / restore (Restore) ───────────
 
     struct SandboxdStartContext {
@@ -435,7 +429,6 @@ private:
     CommandBuilder cmdBuilder_{false};
     std::shared_ptr<GrpcClient<runtime::v1::SandboxService>> sandboxd_{nullptr};
     std::shared_ptr<HealthCheck> healthCheckClient_;
-    std::shared_ptr<CkptFileManager> ckptFileManager_;
     std::shared_ptr<SandboxdCheckpointOrchestrator> ckptOrch_;
     std::string checkpointRoot_;
     // runtimeIDs registered as warm-up templates (route StopInstance -> Unregister)

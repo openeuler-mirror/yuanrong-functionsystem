@@ -264,17 +264,6 @@ TEST(SandboxdExecutorTest, RefreshedCapabilitySnapshotReplacesRuntimePaths)
     EXPECT_EQ(start.envs().at("YR_ENV_FILE"), "/run/sandboxd-v2/restore-environ");
 }
 
-TEST(SandboxdExecutorTest, AnonymousCheckpointBypassesLegacySnapshotRegistry)
-{
-    messages::SnapshotRuntimeRequest request;
-    request.set_type(common::DUMPSTATE);
-    request.set_anonymous(true);
-    EXPECT_FALSE(SandboxdExecutor::UsesLegacySnapshotRegistry(request));
-
-    request.set_anonymous(false);
-    EXPECT_TRUE(SandboxdExecutor::UsesLegacySnapshotRegistry(request));
-}
-
 TEST(SandboxdExecutorTest, SandboxReclaimBackoffIsExponentialAndCapped)
 {
     EXPECT_EQ(SandboxdExecutor::SandboxReclaimBackoffMs(1), 1000u);
@@ -736,7 +725,7 @@ TEST(SandboxdExecutorTest, DeleteReleasesOnlyTheExactRuntimePorts)
     PortManager::GetInstance().InitPortResource(500, 2000);
 }
 
-TEST(CheckpointPlanTest, UserManagedAndInstanceManagedRequestsUseTheSameExplicitPlanContract)
+TEST(CheckpointPlanTest, AllRequestsUseTheSameExplicitPlanContract)
 {
     messages::SnapshotRuntimeRequest userRequest;
     userRequest.set_requestid("snapshot-request");
@@ -746,13 +735,13 @@ TEST(CheckpointPlanTest, UserManagedAndInstanceManagedRequestsUseTheSameExplicit
     userRequest.set_ttl(600);
 
     CheckpointPlan userPlan;
-    auto status = BuildCheckpointPlan(userRequest, "sandbox-1", ArtifactLifecycle::USER_MANAGED,
-                                      false, userPlan);
+    userRequest.set_timeoutms(153500);
+    auto status = BuildCheckpointPlan(userRequest, "sandbox-1", false, userPlan);
     ASSERT_TRUE(status.IsOk()) << status.ToString();
     EXPECT_EQ(userPlan.sandboxID, "sandbox-1");
     EXPECT_EQ(userPlan.checkpointID, "snapshot-1");
     EXPECT_EQ(userPlan.checkpointDirectory, "/checkpoints/user/snapshot-1");
-    EXPECT_EQ(userPlan.lifecycle, ArtifactLifecycle::USER_MANAGED);
+    EXPECT_EQ(userPlan.timeoutSeconds, 154U);
     EXPECT_FALSE(userPlan.leaveRuntimeRunning);
 
     auto pauseRequest = userRequest;
@@ -760,12 +749,10 @@ TEST(CheckpointPlanTest, UserManagedAndInstanceManagedRequestsUseTheSameExplicit
     pauseRequest.set_snapshotid("pause-1");
     pauseRequest.set_checkpointdir("/checkpoints/pause/tenant/instance/pause-1");
     CheckpointPlan pausePlan;
-    status = BuildCheckpointPlan(pauseRequest, "sandbox-1", ArtifactLifecycle::INSTANCE_MANAGED,
-                                 true, pausePlan);
+    status = BuildCheckpointPlan(pauseRequest, "sandbox-1", true, pausePlan);
     ASSERT_TRUE(status.IsOk()) << status.ToString();
     EXPECT_EQ(pausePlan.sandboxID, userPlan.sandboxID);
     EXPECT_EQ(pausePlan.checkpointID, "pause-1");
-    EXPECT_EQ(pausePlan.lifecycle, ArtifactLifecycle::INSTANCE_MANAGED);
     EXPECT_TRUE(pausePlan.leaveRuntimeRunning);
 }
 
@@ -777,20 +764,17 @@ TEST(CheckpointPlanTest, RejectsImplicitOrUnsafeCheckpointIdentity)
     request.set_snapshotid("pause-1");
     CheckpointPlan plan;
 
-    auto status = BuildCheckpointPlan(request, "sandbox-1", ArtifactLifecycle::INSTANCE_MANAGED,
-                                      true, plan);
+    auto status = BuildCheckpointPlan(request, "sandbox-1", true, plan);
     EXPECT_TRUE(status.IsError());
     EXPECT_NE(status.RawMessage().find("directory"), std::string::npos);
 
     request.set_checkpointdir("relative/checkpoint");
-    status = BuildCheckpointPlan(request, "sandbox-1", ArtifactLifecycle::INSTANCE_MANAGED,
-                                 true, plan);
+    status = BuildCheckpointPlan(request, "sandbox-1", true, plan);
     EXPECT_TRUE(status.IsError());
 
     request.set_checkpointdir("/checkpoints/pause-1");
     request.set_snapshotid("../escape");
-    status = BuildCheckpointPlan(request, "sandbox-1", ArtifactLifecycle::INSTANCE_MANAGED,
-                                 true, plan);
+    status = BuildCheckpointPlan(request, "sandbox-1", true, plan);
     EXPECT_TRUE(status.IsError());
 }
 

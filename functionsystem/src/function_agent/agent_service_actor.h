@@ -18,6 +18,7 @@
 #define FUNCTION_AGENT_AGENT_SERVICE_ACTOR_H
 
 #include <actor/actor.hpp>
+#include <cstddef>
 #include <memory>
 #include <queue>
 
@@ -37,6 +38,7 @@
 #include "function_agent/network/network_tool.h"
 #include "function_agent/plugin/multi_plugin_client.h"
 #include "function_agent/snapshot/local_snapshot_store.h"
+#include "function_agent/snapshot/snapshot_storage_config.h"
 
 namespace functionsystem::snapshot_storage {
 struct ArtifactPublishResult;
@@ -69,7 +71,7 @@ struct KillInstanceRequestWrapper {
     KillInstanceRequest request;
 };
 
-struct ResumeAbortFinalizeContext {
+struct SnapshotRuntimeFinalizeContext {
     litebus::AID caller;
     ::messages::SnapshotAttemptFinalizeRequest request;
     std::string runtimeID;
@@ -256,15 +258,21 @@ public:
 
     void BindSnapshotDataPlane(
         const std::shared_ptr<snapshot_storage::SnapshotStorage> &snapshotStorage,
-        const std::string &checkpointRoot, const std::string &storageBackend = "")
+        const std::string &checkpointRoot, const std::string &storageBackend = "",
+        SnapshotStorageMode storageMode = SnapshotStorageMode::DISTRIBUTED_CACHE,
+        uint64_t localCacheMaxBytes = 0)
     {
         snapshotStorage_ = snapshotStorage;
         checkpointRoot_ = checkpointRoot;
         snapshotStorageBackend_ = storageBackend;
+        snapshotStorageMode_ = storageMode;
+        snapshotLocalCacheMaxBytes_ = localCacheMaxBytes;
         const bool validCheckpointRoot = !checkpointRoot_.empty()
             && std::filesystem::path(checkpointRoot_).is_absolute();
+        const auto cacheBudget = storageMode == SnapshotStorageMode::DISTRIBUTED_CACHE
+            ? localCacheMaxBytes : 0;
         localSnapshotStore_ = validCheckpointRoot
-                                  ? std::make_shared<LocalSnapshotStore>(checkpointRoot_)
+                                  ? std::make_shared<LocalSnapshotStore>(checkpointRoot_, cacheBudget)
                                   : nullptr;
         if (snapshotStorage_ != nullptr && !checkpointRoot_.empty() && snapshotWorker_ == nullptr) {
             snapshotWorker_ = std::make_shared<ActorWorker>();
@@ -609,7 +617,6 @@ private:
     };
     /** <requestID : pending SnapshotRuntime request> for response forwarding */
     std::unordered_map<std::string, PendingSnapshotRequest> snapshotRequests_;
-    uint64_t nextSnapshotRequestGeneration_{ 1 };
     std::string agentID_;
     std::string alias_;
     std::unordered_map<std::string, litebus::Promise<DeployResult>> deployingObjects_;
@@ -675,15 +682,26 @@ private:
     std::string nodeID_;
     std::shared_ptr<snapshot_storage::SnapshotStorage> snapshotStorage_;
     std::string snapshotStorageBackend_;
+    SnapshotStorageMode snapshotStorageMode_{ SnapshotStorageMode::DISTRIBUTED_CACHE };
+    uint64_t snapshotLocalCacheMaxBytes_{ 0 };
     std::string checkpointRoot_;
     std::shared_ptr<ActorWorker> snapshotWorker_;
     std::shared_ptr<LocalSnapshotStore> localSnapshotStore_;
     std::unordered_map<std::string, litebus::Future<Status>> snapshotMaterializations_;
-    std::unordered_map<std::string, ResumeAbortFinalizeContext> resumeAbortFinalizations_;
+    std::unordered_map<std::string, std::string> restoreSnapshotPins_;
+    std::unordered_map<std::string, SnapshotRuntimeFinalizeContext> snapshotRuntimeFinalizations_;
 
-    bool HandleResumeAbortStopInstanceResponse(
+    bool HandleSnapshotFinalizeStopInstanceResponse(
         const litebus::AID &from, const ::messages::StopInstanceResponse &response);
+    void SnapshotAttemptFinalizeLegacy(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void ContinuePhysicalSnapshotFinalize(
+        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
+        size_t remoteKeyIndex);
+    void OnPhysicalSnapshotObjectDeleted(
+        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
+        size_t remoteKeyIndex, const litebus::Future<Status> &future);
     void ForwardSnapshotRuntimeRequest(const std::string &requestID);
+    void ReleaseRestoreSnapshotPin(const std::string &requestID);
     void ContinueSnapshotAfterLocalCommit(
         const std::string &requestID, ::messages::SnapshotRuntimeResponse response);
     void OnPauseArtifactPublished(

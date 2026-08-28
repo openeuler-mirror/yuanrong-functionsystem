@@ -12,22 +12,19 @@ namespace {
 
 messages::LocalSnapshotMetadata MakeSnapshot(const std::string &snapshotID,
                                              const std::string &instanceID,
-                                             uint64_t generation,
-                                             bool anonymous)
+                                             uint64_t createdAt,
+                                             bool recoveryCandidate)
 {
     messages::LocalSnapshotMetadata snapshot;
     snapshot.set_snapshotid(snapshotID);
     snapshot.set_instanceid(instanceID);
-    snapshot.set_generation(generation);
-    snapshot.set_anonymous(anonymous);
-    snapshot.set_runtimeclass("runsc");
-    snapshot.set_architecture("x86_64");
+    snapshot.set_createdatunixseconds(static_cast<int64_t>(createdAt));
+    snapshot.set_localrecoverycandidate(recoveryCandidate);
     snapshot.set_size(4096);
-    snapshot.set_sha256(std::string(64, 'a'));
     return snapshot;
 }
 
-TEST(LocalSnapshotViewTest, SelectsHighestAnonymousGenerationPerInstance)
+TEST(LocalSnapshotViewTest, SelectsLatestRecoveryCandidatePerInstance)
 {
     LocalSnapshotView view;
 

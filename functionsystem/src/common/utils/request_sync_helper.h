@@ -47,12 +47,18 @@ public:
 
     litebus::Future<Response> AddSynchronizer(const std::string &key)
     {
+        return AddSynchronizer(key, timeoutMs_);
+    }
+
+    litebus::Future<Response> AddSynchronizer(const std::string &key, uint32_t timeoutMs)
+    {
         if (requestMatch_.find(key) != requestMatch_.end()) {
             litebus::TimerTools::Cancel(requestMatch_[key].waitResponseTimer);
         }
         Synchronizer rsp;
         requestMatch_[key] = std::move(rsp);
-        rsp.waitResponseTimer = litebus::AsyncAfter(timeoutMs_, actor_->GetAID(), asyncMethod_, key);
+        requestMatch_[key].waitResponseTimer = litebus::AsyncAfter(
+            timeoutMs, actor_->GetAID(), asyncMethod_, key);
         return requestMatch_[key].promise.GetFuture();
     }
 

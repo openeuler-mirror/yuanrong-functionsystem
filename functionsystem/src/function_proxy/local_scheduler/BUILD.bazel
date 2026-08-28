@@ -40,6 +40,7 @@ cc_library(
         "//functionsystem/src/common:explorer",
         "//functionsystem/src/common:scheduler",
         "//functionsystem/src/common:metadata",
+        "//functionsystem/src/common:snapshot_storage",
         "//functionsystem/src/function_proxy:function_proxy_base_lib",
         "//functionsystem/src/common:trace_adapter",
     ],

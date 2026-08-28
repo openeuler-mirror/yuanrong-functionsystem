@@ -77,7 +77,8 @@ public:
                                                   const std::string &payload);
 
     litebus::Future<KillResponse> HandleAnonymousCheckpoint(
-        const std::string &requestID, const std::string &instanceID);
+        const std::string &requestID, const std::string &instanceID,
+        uint64_t checkpointTimeoutMs = 0);
 
     /**
      * Callback to convert SnapshotResult to KillResponse
@@ -328,7 +329,8 @@ private:
 
     litebus::Future<KillResponse> HandlePauseResumeSnapshot(
         const std::string &requestID, const std::string &instanceID,
-        const std::shared_ptr<InstanceStateMachine> &stateMachine, int32_t ttlSeconds);
+        const std::shared_ptr<InstanceStateMachine> &stateMachine, int32_t ttlSeconds,
+        uint64_t checkpointTimeoutMs);
 
     void OnPauseGateComplete(const std::string &instanceID, const std::shared_ptr<PauseContext> &context,
                              const litebus::Future<Status> &gateFuture);

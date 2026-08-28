@@ -118,7 +118,8 @@ public:
     }
 
     litebus::Future<KillResponse> HandleAnonymousCheckpoint(
-        const std::string &requestID, const std::string &instanceID) override
+        const std::string &requestID, const std::string &instanceID,
+        uint64_t) override
     {
         requestID_ = requestID;
         instanceID_ = instanceID;
@@ -503,12 +504,9 @@ protected:
         messages::LocalSnapshotMetadata snapshot;
         snapshot.set_snapshotid("anon-1");
         snapshot.set_instanceid("sandbox-a");
-        snapshot.set_anonymous(true);
-        snapshot.set_generation(1);
-        snapshot.set_runtimeclass("runsc");
-        snapshot.set_architecture("x86_64");
+        snapshot.set_localrecoverycandidate(true);
+        snapshot.set_createdatunixseconds(1);
         snapshot.set_size(4096);
-        snapshot.set_sha256(std::string(64, 'a'));
         return snapshot;
     }
 
@@ -593,7 +591,7 @@ TEST_F(InstanceCtrlTest, WaitAndHeartbeatShareOneLocalFailover)
     EXPECT_EQ(recoveryInfo_->runtimeid(), "runtime-new");
 }
 
-TEST_F(InstanceCtrlTest, AnonymousCheckpointAcknowledgesBeforeSnapshotCompletes)
+TEST_F(InstanceCtrlTest, AnonymousCheckpointCompletesAfterSnapshotIsDurable)
 {
     SeedRunningLocalFailover(false);
     auto snapActor = std::make_shared<SnapCtrlActor>("deferred-anonymous-checkpoint", nodeID_);
@@ -605,12 +603,13 @@ TEST_F(InstanceCtrlTest, AnonymousCheckpointAcknowledgesBeforeSnapshotCompletes)
 
     auto response = instanceCtrl_->Kill("sandbox-a", request);
 
-    ASSERT_AWAIT_READY_FOR(response, 1'000);
-    EXPECT_EQ(response.Get().code(), common::ERR_NONE);
+    EXPECT_FALSE(response.WaitFor(20).IsOK());
     EXPECT_EQ(snapCtrl->Calls(), size_t{1});
     EXPECT_EQ(snapCtrl->RequestID(), "anonymous-sync-http");
     EXPECT_EQ(snapCtrl->InstanceID(), "sandbox-a");
     snapCtrl->Complete(common::ERR_NONE);
+    ASSERT_AWAIT_READY_FOR(response, 1'000);
+    EXPECT_EQ(response.Get().code(), common::ERR_NONE);
 }
 
 TEST_F(InstanceCtrlTest, SandboxdLocalFailoverAcceptsAsyncPosixRegistration)
@@ -679,9 +678,6 @@ TEST_F(InstanceCtrlTest, DeletedInstanceCleansLatestAnonymousSnapshotByExactIden
     ASSERT_AWAIT_READY(observedFuture);
     const auto request = observedFuture.Get();
     EXPECT_EQ(request.snapshotid(), snapshot.snapshotid());
-    EXPECT_EQ(request.expectedgeneration(), snapshot.generation());
-    EXPECT_EQ(request.expectedsize(), snapshot.size());
-    EXPECT_EQ(request.expectedsha256(), snapshot.sha256());
 }
 
 TEST_F(InstanceCtrlTest, FailoverFalseDoesNotTakeOverRuntimeFailure)

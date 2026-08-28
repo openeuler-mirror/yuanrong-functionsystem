@@ -207,6 +207,13 @@ public:
     litebus::Future<KillResponse> HandleKill(const std::string &srcInstanceID,
                                              const std::shared_ptr<KillRequest> &killReq, bool isSkipAuth);
 
+    litebus::Future<KillResponse> HandleKillImpl(const std::string &srcInstanceID,
+                                                 const std::shared_ptr<KillRequest> &killReq, bool isSkipAuth);
+
+    void CompleteSerializedInstanceOperation(
+        const std::string &instanceID, const std::string &requestID,
+        const litebus::Future<KillResponse> &future);
+
     litebus::Future<KillResponse> RegisterAuthorizedDeleteAndShutdown(
         const std::shared_ptr<KillContext> &killCtx, const std::string &srcInstanceID,
         const std::shared_ptr<KillRequest> &killReq, bool isSynchronized);
@@ -1196,6 +1203,11 @@ private:
     std::shared_ptr<SnapCtrl> snapCtrl_;
     std::unordered_map<std::string, std::shared_ptr<litebus::Promise<KillResponse>>>
         authorizedDeleteOperations_;
+    struct SerializedInstanceOperation {
+        std::string requestID;
+        std::shared_ptr<litebus::Promise<KillResponse>> completion;
+    };
+    std::unordered_map<std::string, SerializedInstanceOperation> serializedInstanceOperations_;
     std::shared_ptr<function_proxy::InternalIAM> internalIAM_;
     std::unordered_map<std::string, std::unordered_set<std::string>> internalCredReferenceMap_;
     std::unordered_map<std::string, litebus::Promise<::messages::UpdateCredResponse>> updateTokenPromises_;
@@ -1263,6 +1275,7 @@ private:
     struct LocalSnapshotRecoveryContext {
         resources::InstanceInfo source;
         std::string snapshotID;
+        messages::LocalSnapshotMetadata snapshot;
         std::shared_ptr<messages::ScheduleRequest> request;
         std::shared_ptr<ControlInterfacePosixClient> candidateClient;
         std::shared_ptr<litebus::Promise<Status>> completion;

@@ -1,7 +1,6 @@
 /*
  * Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
  * Licensed under the Apache License, Version 2.0.
- * See the LICENSE file in this repository for the complete license text.
  */
 
 #ifndef FUNCTIONSYSTEM_FUNCTION_AGENT_SNAPSHOT_LOCAL_SNAPSHOT_STORE_H
@@ -9,44 +8,41 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <list>
 #include <mutex>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "common/status/status.h"
 
 namespace functionsystem::function_agent {
 
+// Process-local artifact index. checkpoint.img is an opaque sandboxd artifact;
+// FunctionAgent does not create a second manifest or validate runtime format.
 struct LocalSnapshotDescriptor {
     std::string snapshotID;
-    bool anonymous{ false };
+    bool recoveryCandidate{ false };
     std::string instanceID;
     std::string tenantHash;
     std::string sourceRuntimeID;
     std::string sourceSandboxID;
     int64_t sourceInstanceVersion{ 0 };
-    uint64_t generation{ 0 };
-    std::string runtimeClass;
-    std::string architecture;
-    std::string artifactFormat{ "sandboxd-checkpoint-v1" };
-    uint32_t artifactFormatVersion{ 1 };
-    uint64_t size{ 0 };
-    std::string sha256;
+    uint64_t size{ 0 };  // observability/cache accounting only
     int64_t createdAtUnixSeconds{ 0 };
+    std::string storageBackend;
+    std::string objectKey;
 };
 
 struct LocalSnapshotCommitRequest {
     std::string snapshotID;
-    bool anonymous{ false };
+    bool recoveryCandidate{ false };
     std::string instanceID;
     std::string tenantHash;
     std::string sourceRuntimeID;
     std::string sourceSandboxID;
     int64_t sourceInstanceVersion{ 0 };
-    std::string runtimeClass;
-    std::string architecture;
-    std::string artifactFormat{ "sandboxd-checkpoint-v1" };
-    uint32_t artifactFormatVersion{ 1 };
     int64_t createdAtUnixSeconds{ 0 };
 };
 
@@ -63,33 +59,40 @@ struct LocalSnapshotCommitResult {
 
 struct LocalSnapshotDeleteIdentity {
     std::string snapshotID;
-    uint64_t expectedGeneration{ 0 };
-    uint64_t expectedSize{ 0 };
-    std::string expectedSha256;
 };
 
 class LocalSnapshotStore {
 public:
-    explicit LocalSnapshotStore(std::filesystem::path checkpointRoot);
+    explicit LocalSnapshotStore(std::filesystem::path checkpointRoot, uint64_t maxCacheBytes = 0);
 
     LocalSnapshotPrepareResult Prepare(const LocalSnapshotCommitRequest &request);
     LocalSnapshotCommitResult Commit(const LocalSnapshotCommitRequest &request);
     std::vector<LocalSnapshotDescriptor> List() const;
-    Status ValidateForRestore(const std::string &snapshotID, LocalSnapshotDescriptor &descriptor) const;
+    Status ValidateForRestore(const std::string &snapshotID, LocalSnapshotDescriptor &descriptor);
+    Status SetStorageLocation(const std::string &snapshotID, const std::string &storageBackend,
+                              const std::string &objectKey);
+    Status PinForRestore(const std::string &snapshotID);
+    Status UnpinAfterRestore(const std::string &snapshotID, bool evictAfterRelease);
+    Status EvictLocalArtifact(const std::string &snapshotID);
     Status Delete(const LocalSnapshotDeleteIdentity &identity);
 
 private:
     Status ValidateCommitRequest(const LocalSnapshotCommitRequest &request) const;
     std::filesystem::path SnapshotDirectory(const std::string &snapshotID) const;
-    Status ReadDescriptor(const std::filesystem::path &directory, LocalSnapshotDescriptor &descriptor) const;
-    Status InspectImage(const std::filesystem::path &directory, uint64_t &size, std::string &sha256) const;
-    Status ValidateCommittedImage(const std::filesystem::path &directory,
-                                  const LocalSnapshotDescriptor &descriptor) const;
-    std::vector<LocalSnapshotDescriptor> ListUnlocked() const;
-    uint64_t NextGeneration(const LocalSnapshotCommitRequest &request) const;
+    Status InspectArtifact(const std::filesystem::path &directory, uint64_t &size) const;
+    void Touch(const std::string &snapshotID);
+    void EvictIfNeeded(const std::string &protectedSnapshotID);
+    Status DeleteUnlocked(const std::string &snapshotID);
 
     std::filesystem::path checkpointRoot_;
     mutable std::mutex mutex_;
+    std::unordered_map<std::string, LocalSnapshotDescriptor> records_;
+    uint64_t maxCacheBytes_{ 0 };
+    uint64_t cachedBytes_{ 0 };
+    std::list<std::string> lru_;
+    std::unordered_map<std::string, std::list<std::string>::iterator> lruIndex_;
+    std::unordered_map<std::string, uint64_t> restorePins_;
+    std::unordered_set<std::string> evictAfterUnpin_;
 };
 
 }  // namespace functionsystem::function_agent

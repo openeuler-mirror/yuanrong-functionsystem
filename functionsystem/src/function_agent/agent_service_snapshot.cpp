@@ -31,7 +31,6 @@
 namespace functionsystem::function_agent {
 namespace {
 constexpr uint32_t SNAPSHOT_ATTEMPT_PROTOCOL_VERSION = 1;
-constexpr char SANDBOX_RUNTIME_CLASS[] = "runsc";
 
 Status EnsureLocalSnapshotID(messages::SnapshotRuntimeRequest &request)
 {
@@ -48,19 +47,16 @@ Status EnsureLocalSnapshotID(messages::SnapshotRuntimeRequest &request)
 }
 
 LocalSnapshotCommitRequest MakeLocalSnapshotCommitRequest(
-    const messages::SnapshotRuntimeRequest &request, int64_t createdAtUnixSeconds,
-    const std::string &architecture)
+    const messages::SnapshotRuntimeRequest &request, int64_t createdAtUnixSeconds)
 {
     LocalSnapshotCommitRequest commit;
     commit.snapshotID = request.snapshotid();
-    commit.anonymous = request.anonymous();
+    commit.recoveryCandidate = request.localrecoverycandidate();
     commit.instanceID = request.instanceid();
     commit.tenantHash = snapshot_storage::StableTenantHash(request.tenantid());
     commit.sourceRuntimeID = request.runtimeid();
     commit.sourceSandboxID = request.containerid().empty() ? request.runtimeid() : request.containerid();
     commit.sourceInstanceVersion = request.sourceversion();
-    commit.runtimeClass = SANDBOX_RUNTIME_CLASS;
-    commit.architecture = architecture;
     commit.createdAtUnixSeconds = createdAtUnixSeconds;
     return commit;
 }
@@ -69,72 +65,30 @@ void CopyLocalSnapshotMetadata(const LocalSnapshotDescriptor &source,
                                ::messages::LocalSnapshotMetadata &target)
 {
     target.set_snapshotid(source.snapshotID);
-    target.set_anonymous(source.anonymous);
+    target.set_localrecoverycandidate(source.recoveryCandidate);
     target.set_instanceid(source.instanceID);
-    target.set_generation(source.generation);
-    target.set_runtimeclass(source.runtimeClass);
-    target.set_architecture(source.architecture);
     target.set_size(source.size);
-    target.set_sha256(source.sha256);
     target.set_createdatunixseconds(source.createdAtUnixSeconds);
     target.set_sourceruntimeid(source.sourceRuntimeID);
     target.set_sourcesandboxid(source.sourceSandboxID);
     target.set_sourceinstanceversion(source.sourceInstanceVersion);
     target.set_tenanthash(source.tenantHash);
-    target.set_artifactformat(source.artifactFormat);
-    target.set_artifactformatversion(source.artifactFormatVersion);
-}
-
-struct ManagedSnapshotPublishSpec {
-    std::string temporaryKey;
-    std::string finalKey;
-    int32_t ttlSeconds{ 0 };
-};
-
-ManagedSnapshotPublishSpec MakePauseResumePublishSpec(
-    const messages::SnapshotRuntimeRequest &request, const std::string &tenantHash)
-{
-    return {
-        snapshot_storage::BuildPauseSnapshotTemporaryKey(
-            tenantHash, request.instanceid(), request.snapshotid(), request.requestid()),
-        snapshot_storage::BuildPauseSnapshotKey(
-            tenantHash, request.instanceid(), request.snapshotid()),
-        request.ttl(),
-    };
-}
-
-ManagedSnapshotPublishSpec MakeReusableSnapshotPublishSpec(
-    const messages::SnapshotRuntimeRequest &request, const std::string &tenantHash,
-    const std::string &frozenObjectKey)
-{
-    return {
-        snapshot_storage::BuildReusableSnapshotTemporaryKey(
-            tenantHash, request.snapshotid(), request.requestid()),
-        frozenObjectKey,
-        0,
-    };
+    target.set_storagebackend(source.storageBackend);
+    target.set_objectkey(source.objectKey);
 }
 
 snapshot_storage::ArtifactPublishRequest BuildManagedSnapshotPublishRequest(
     const messages::SnapshotRuntimeRequest &request, const std::string &sourceFile,
-    const std::string &frozenReusableObjectKey, int64_t createdAtUnixSeconds,
-    const resources::SnapshotInfo &runtimeSnapshot)
+    int64_t createdAtUnixSeconds)
 {
-    const auto tenantHash = snapshot_storage::StableTenantHash(
-        request.tenantid());
-    const auto spec = request.type() == common::PAUSE_RESUME
-        ? MakePauseResumePublishSpec(request, tenantHash)
-        : MakeReusableSnapshotPublishSpec(request, tenantHash, frozenReusableObjectKey);
     snapshot_storage::ArtifactPublishRequest publishRequest;
     publishRequest.sourceFile = sourceFile;
-    publishRequest.temporaryKey = spec.temporaryKey;
-    publishRequest.finalKey = spec.finalKey;
+    publishRequest.temporaryKey = request.artifacttemporaryobjectkey();
+    publishRequest.finalKey = request.artifactobjectkey();
     publishRequest.snapshotID = request.snapshotid();
     publishRequest.sourceInstanceVersion = request.sourceversion();
     publishRequest.createdAtUnixSeconds = createdAtUnixSeconds;
-    publishRequest.ttlSeconds = spec.ttlSeconds;
-    publishRequest.expectedSize = runtimeSnapshot.size();
-    publishRequest.expectedSha256 = runtimeSnapshot.sha256();
+    publishRequest.ttlSeconds = request.ttl();
     return publishRequest;
 }
 
@@ -158,9 +112,6 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
 
     const std::string &instanceID = request->instanceid();
     const std::string &runtimeID = request->runtimeid();
-    const bool isPauseResume = request->type() == common::PAUSE_RESUME;
-    const bool isReusableSnapshot = request->type() == common::SNAPSHOT;
-    const bool isManagedSnapshot = isPauseResume || isReusableSnapshot;
     YRLOG_INFO("{}|received SnapshotRuntime request for instance({}), runtime({})",
                request->requestid(), instanceID, runtimeID);
 
@@ -168,8 +119,8 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
     messages::SnapshotRuntimeResponse response;
     response.set_requestid(request->requestid());
 
-    if (isManagedSnapshot && from != localSchedFuncAgentMgrAID_) {
-        YRLOG_WARN("{}|reject managed SnapshotRuntime from untrusted sender {}",
+    if (from != localSchedFuncAgentMgrAID_) {
+        YRLOG_WARN("{}|reject SnapshotRuntime from untrusted sender {}",
                    request->requestid(), std::string(from));
         return;
     }
@@ -185,15 +136,6 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
     }
 
     const auto runtimeManagerAID = litebus::AID(registerRuntimeMgr_.name, registerRuntimeMgr_.address);
-    if (isPauseResume) {
-        request->set_anonymous(true);
-        request->set_leaverunning(true);
-    }
-    if (isReusableSnapshot) {
-        request->set_anonymous(false);
-        request->set_ttl(0);
-        request->set_leaverunning(true);
-    }
     const auto identityStatus = EnsureLocalSnapshotID(*request);
     if (identityStatus.IsError()) {
         response.set_code(static_cast<int32_t>(identityStatus.StatusCode()));
@@ -201,57 +143,35 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
         Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
         return;
     }
-    if (isManagedSnapshot) {
-        if (request->requestid().empty() || request->instanceid().empty() || request->runtimeid().empty()
-            || request->snapshotid().empty() || request->tenantid().empty()
-            || request->sourceversion() <= 0
-            || (isPauseResume && (request->snapshotid() != request->requestid() || request->ttl() <= 0
-                                  || !request->anonymous() || !request->leaverunning()))
-            || (isReusableSnapshot && (request->ttl() != 0 || !request->leaverunning()))
-            || snapshotStorage_ == nullptr || snapshotWorker_ == nullptr) {
-            response.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
-            response.set_message("managed snapshot data-plane identity or dependency is missing");
-            Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
-            return;
-        }
-        const auto existing = snapshotRequests_.find(request->requestid());
-        if (existing != snapshotRequests_.end()) {
-            auto existingIdentity = existing->second.request;
-            auto retryIdentity = *request;
-            existingIdentity.clear_agentrequestgeneration();
-            retryIdentity.clear_agentrequestgeneration();
-            if (existing->second.request.type() == request->type()
-                && existingIdentity.SerializeAsString() == retryIdentity.SerializeAsString()) {
-                existing->second.caller = from;
-                if (existing->second.completed) {
-                    YRLOG_INFO("{}|replay completed managed SnapshotRuntime response", request->requestid());
-                    Send(from, "SnapshotRuntimeResponse",
-                         existing->second.completedResponse.SerializeAsString());
-                } else {
-                    YRLOG_INFO("{}|reuse in-flight managed SnapshotRuntime request", request->requestid());
-                }
-                return;
+    if (request->requestid().empty() || request->instanceid().empty() || request->runtimeid().empty()
+        || request->snapshotid().empty() || request->tenantid().empty()
+        || request->sourceversion() <= 0
+        || (UsesDistributedStorage(snapshotStorageMode_)
+            && (snapshotStorage_ == nullptr || snapshotWorker_ == nullptr
+                || request->artifactobjectkey().empty()
+                || request->artifacttemporaryobjectkey().empty()))) {
+        response.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
+        response.set_message("snapshot data-plane identity or dependency is missing");
+        Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
+        return;
+    }
+    const auto existing = snapshotRequests_.find(request->requestid());
+    if (existing != snapshotRequests_.end()) {
+        if (existing->second.request.SerializeAsString() == request->SerializeAsString()) {
+            existing->second.caller = from;
+            if (existing->second.completed) {
+                YRLOG_INFO("{}|replay completed SnapshotRuntime response", request->requestid());
+                Send(from, "SnapshotRuntimeResponse",
+                     existing->second.completedResponse.SerializeAsString());
+            } else {
+                YRLOG_INFO("{}|reuse in-flight SnapshotRuntime request", request->requestid());
             }
-            response.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
-            response.set_message("conflicting in-flight managed snapshot request ID");
-            Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
             return;
         }
-        auto runtimeRequestGeneration = nextSnapshotRequestGeneration_++;
-        if (runtimeRequestGeneration == 0) {
-            runtimeRequestGeneration = nextSnapshotRequestGeneration_++;
-        }
-        request->set_agentrequestgeneration(runtimeRequestGeneration);
-    } else {
-        const auto existing = snapshotRequests_.find(request->requestid());
-        if (existing != snapshotRequests_.end()
-            && (existing->second.request.type() == common::PAUSE_RESUME
-                || existing->second.request.type() == common::SNAPSHOT)) {
-            response.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
-            response.set_message("request ID belongs to an in-flight managed snapshot");
-            Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
-            return;
-        }
+        response.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
+        response.set_message("conflicting in-flight snapshot request ID");
+        Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
+        return;
     }
 
     PendingSnapshotRequest pending;
@@ -259,22 +179,16 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
     pending.runtimeManagerAID = runtimeManagerAID;
     pending.runtimeManagerID = registerRuntimeMgr_.id;
     pending.createdAtUnixSeconds = static_cast<int64_t>(std::time(nullptr));
-    if (localSnapshotStore_ == nullptr || registeredResourceUnit_ == nullptr
-        || registeredResourceUnit_->systeminfo().architecture().empty()) {
+    if (localSnapshotStore_ == nullptr) {
         response.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
         response.set_message("local snapshot store or node architecture is unavailable");
         Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
         return;
     }
     pending.localCommitRequest = MakeLocalSnapshotCommitRequest(
-        *request, pending.createdAtUnixSeconds,
-        registeredResourceUnit_->systeminfo().architecture());
-    if (isManagedSnapshot) {
-        const auto tenantHash = snapshot_storage::StableTenantHash(request->tenantid());
-        if (isReusableSnapshot) {
-            pending.artifactObjectKey = snapshot_storage::BuildReusableSnapshotKey(
-                tenantHash, request->snapshotid());
-        }
+        *request, pending.createdAtUnixSeconds);
+    pending.artifactObjectKey = request->artifactobjectkey();
+    if (UsesDistributedStorage(snapshotStorageMode_)) {
         auto backendStatus = snapshot_storage::ResolveStorageBackend(
             snapshotStorage_, snapshotStorageBackend_, pending.storageBackend);
         if (backendStatus.IsError()) {
@@ -283,6 +197,8 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
             Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
             return;
         }
+    } else {
+        pending.storageBackend = "local";
     }
 
     const auto prepared = localSnapshotStore_->Prepare(pending.localCommitRequest);
@@ -295,15 +211,11 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
     request->set_checkpointdir(prepared.directory.string());
     pending.request = *request;
     pending.artifactPath = (prepared.directory / "checkpoint.img").string();
-    if (isManagedSnapshot) {
-        if (!snapshotRequests_.emplace(request->requestid(), std::move(pending)).second) {
-            response.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
-            response.set_message("duplicate in-flight managed snapshot request ID");
-            Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
-            return;
-        }
-    } else {
-        snapshotRequests_.insert_or_assign(request->requestid(), std::move(pending));
+    if (!snapshotRequests_.emplace(request->requestid(), std::move(pending)).second) {
+        response.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
+        response.set_message("duplicate in-flight snapshot request ID");
+        Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
+        return;
     }
 
     if (prepared.replayed) {
@@ -322,7 +234,6 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
         response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
         response.mutable_snapshotinfo()->set_checkpointid(descriptor.snapshotID);
         response.mutable_snapshotinfo()->set_size(static_cast<int64_t>(descriptor.size));
-        response.mutable_snapshotinfo()->set_sha256(descriptor.sha256);
         ContinueSnapshotAfterLocalCommit(request->requestid(), std::move(response));
         return;
     }
@@ -357,11 +268,7 @@ void AgentServiceActor::SnapshotRuntimeResponse(const litebus::AID &from, std::s
     }
 
     auto &pending = iter->second;
-    const bool isPauseResume = pending.request.type() == common::PAUSE_RESUME;
-    const bool isReusableSnapshot = pending.request.type() == common::SNAPSHOT;
-    if (from != pending.runtimeManagerAID
-        || ((isPauseResume || isReusableSnapshot)
-            && response.agentrequestgeneration() != pending.request.agentrequestgeneration())) {
+    if (from != pending.runtimeManagerAID) {
         YRLOG_WARN("{}|ignore mismatched SnapshotRuntime response", requestID);
         return;
     }
@@ -369,34 +276,8 @@ void AgentServiceActor::SnapshotRuntimeResponse(const litebus::AID &from, std::s
     YRLOG_INFO("{}|received SnapshotRuntimeResponse from RuntimeManager, code: {}", requestID, response.code());
 
     if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
-        if (isPauseResume || isReusableSnapshot) {
-            if (response.resultunknown()) {
-                response.clear_physicalfact();
-            }
-            response.clear_agentrequestgeneration();
-            if (isReusableSnapshot && response.has_snapshotinfo()
-                && response.snapshotinfo().size() > 0
-                && !response.snapshotinfo().sha256().empty()
-                && !pending.storageBackend.empty()
-                && !pending.artifactObjectKey.empty()) {
-                auto *artifact = response.mutable_reusablesnapshotartifact();
-                artifact->set_storagebackend(pending.storageBackend);
-                artifact->set_objectkey(pending.artifactObjectKey);
-                artifact->set_size(response.snapshotinfo().size());
-                artifact->set_sha256(response.snapshotinfo().sha256());
-                artifact->set_format("sandboxd-checkpoint");
-                artifact->set_formatversion(1);
-                pending.completed = true;
-                pending.completedResponse = response;
-                Send(pending.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
-                return;
-            }
-            Send(pending.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
-            // Without exact reusable physical facts, keep the Master record
-            // PUBLISHING and forget this dead in-memory request so a retry can
-            // deterministically re-run checkpoint/inspection.
-            snapshotRequests_.erase(iter);
-            return;
+        if (response.resultunknown()) {
+            response.clear_physicalfact();
         }
         Send(pending.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
         snapshotRequests_.erase(iter);
@@ -404,14 +285,8 @@ void AgentServiceActor::SnapshotRuntimeResponse(const litebus::AID &from, std::s
     }
 
     if (response.snapshotinfo().checkpointid() != pending.request.snapshotid()) {
-        if (isPauseResume) {
-            CompletePauseSnapshotError(requestID, static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID),
-                                       "runtime checkpoint response identity is invalid", false);
-            return;
-        }
         response.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
         response.set_message("runtime checkpoint response identity is invalid");
-        response.clear_agentrequestgeneration();
         Send(pending.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
         snapshotRequests_.erase(iter);
         return;
@@ -421,7 +296,6 @@ void AgentServiceActor::SnapshotRuntimeResponse(const litebus::AID &from, std::s
     if (committed.status.IsError()) {
         response.set_code(static_cast<int32_t>(committed.status.StatusCode()));
         response.set_message(committed.status.RawMessage());
-        response.clear_agentrequestgeneration();
         Send(pending.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
         snapshotRequests_.erase(iter);
         return;
@@ -430,7 +304,6 @@ void AgentServiceActor::SnapshotRuntimeResponse(const litebus::AID &from, std::s
     auto *snapshotInfo = response.mutable_snapshotinfo();
     snapshotInfo->set_checkpointid(committed.descriptor.snapshotID);
     snapshotInfo->set_size(static_cast<int64_t>(committed.descriptor.size));
-    snapshotInfo->set_sha256(committed.descriptor.sha256);
     ContinueSnapshotAfterLocalCommit(requestID, std::move(response));
 }
 
@@ -443,31 +316,38 @@ void AgentServiceActor::ContinueSnapshotAfterLocalCommit(
     }
     auto &pending = iter->second;
     response.mutable_localsnapshot()->CopyFrom(pending.localSnapshot);
-    const bool isPauseResume = pending.request.type() == common::PAUSE_RESUME;
-    const bool isReusableSnapshot = pending.request.type() == common::SNAPSHOT;
-    if (!isPauseResume && !isReusableSnapshot) {
-        response.clear_agentrequestgeneration();
-        Send(pending.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
-        snapshotRequests_.erase(iter);
-        return;
-    }
-    if (isReusableSnapshot) {
+    const bool returnArtifact = pending.request.returnartifact();
+    if (returnArtifact) {
         // Preserve the committed local checkpoint facts while immutable
         // publication is in flight so exact cleanup remains possible.
         pending.completedResponse = response;
     }
+    if (!UsesDistributedStorage(snapshotStorageMode_)) {
+        snapshot_storage::SnapshotObjectMetadata metadata;
+        metadata.snapshotID = pending.request.snapshotid();
+        metadata.sourceInstanceVersion = pending.request.sourceversion();
+        metadata.size = pending.localSnapshot.size();
+        metadata.complete = true;
+        pending.storageBackend = "local";
+        pending.artifactObjectKey = pending.request.snapshotid();
+        if (returnArtifact) {
+            CompleteReusableSnapshot(requestID, metadata);
+        } else {
+            CompletePauseSnapshot(requestID, metadata);
+        }
+        return;
+    }
     const auto publishRequest = BuildManagedSnapshotPublishRequest(
-        pending.request, pending.artifactPath, pending.artifactObjectKey,
-        pending.createdAtUnixSeconds, response.snapshotinfo());
+        pending.request, pending.artifactPath, pending.createdAtUnixSeconds);
     auto publishFuture = PublishManagedSnapshotArtifact(
         snapshotStorage_, snapshotWorker_, publishRequest);
-    if (isPauseResume) {
+    if (returnArtifact) {
         publishFuture.OnComplete(litebus::Defer(
-            GetAID(), &AgentServiceActor::OnPauseArtifactPublished,
+            GetAID(), &AgentServiceActor::OnReusableArtifactPublished,
             requestID, std::placeholders::_1));
     } else {
         publishFuture.OnComplete(litebus::Defer(
-            GetAID(), &AgentServiceActor::OnReusableArtifactPublished,
+            GetAID(), &AgentServiceActor::OnPauseArtifactPublished,
             requestID, std::placeholders::_1));
     }
 }
@@ -522,9 +402,6 @@ void AgentServiceActor::DeleteLocalSnapshot(
     if (localSnapshotStore_ != nullptr) {
         LocalSnapshotDeleteIdentity identity;
         identity.snapshotID = request.snapshotid();
-        identity.expectedGeneration = request.expectedgeneration();
-        identity.expectedSize = request.expectedsize();
-        identity.expectedSha256 = request.expectedsha256();
         status = localSnapshotStore_->Delete(identity);
     }
     response.set_code(static_cast<int32_t>(status.StatusCode()));
@@ -631,7 +508,6 @@ void AgentServiceActor::CompletePauseSnapshot(
     }
     messages::SnapshotRuntimeResponse response;
     response.set_requestid(iter->second.request.requestid());
-    response.clear_agentrequestgeneration();
     response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
     response.set_message("");
     response.set_resultunknown(false);
@@ -643,10 +519,20 @@ void AgentServiceActor::CompletePauseSnapshot(
     snapshot->set_createtime(std::to_string(iter->second.localSnapshot.createdatunixseconds()));
     snapshot->set_ttlseconds(iter->second.request.ttl());
     snapshot->set_status(resources::SNAPSHOT_READY);
+    iter->second.localSnapshot.set_storagebackend(iter->second.storageBackend);
+    iter->second.localSnapshot.set_objectkey(iter->second.artifactObjectKey);
+    if (localSnapshotStore_ != nullptr) {
+        (void)localSnapshotStore_->SetStorageLocation(
+            iter->second.request.snapshotid(), iter->second.storageBackend,
+            iter->second.artifactObjectKey);
+    }
     response.mutable_localsnapshot()->CopyFrom(iter->second.localSnapshot);
     response.clear_physicalfact();
     iter->second.completed = true;
     iter->second.completedResponse = response;
+    if (!KeepsLocalSnapshot(snapshotStorageMode_) && localSnapshotStore_ != nullptr) {
+        (void)localSnapshotStore_->EvictLocalArtifact(iter->second.request.snapshotid());
+    }
     Send(iter->second.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
 }
 
@@ -659,7 +545,6 @@ void AgentServiceActor::CompleteReusableSnapshot(
     }
     messages::SnapshotRuntimeResponse response;
     response.set_requestid(iter->second.request.requestid());
-    response.clear_agentrequestgeneration();
     response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
     response.set_message("");
     response.set_resultunknown(false);
@@ -671,6 +556,13 @@ void AgentServiceActor::CompleteReusableSnapshot(
     snapshot->set_createtime(std::to_string(iter->second.localSnapshot.createdatunixseconds()));
     snapshot->set_ttlseconds(0);
     snapshot->set_status(resources::SNAPSHOT_READY);
+    iter->second.localSnapshot.set_storagebackend(iter->second.storageBackend);
+    iter->second.localSnapshot.set_objectkey(iter->second.artifactObjectKey);
+    if (localSnapshotStore_ != nullptr) {
+        (void)localSnapshotStore_->SetStorageLocation(
+            iter->second.request.snapshotid(), iter->second.storageBackend,
+            iter->second.artifactObjectKey);
+    }
     auto *artifact = response.mutable_reusablesnapshotartifact();
     artifact->set_storagebackend(iter->second.storageBackend);
     artifact->set_objectkey(iter->second.artifactObjectKey);
@@ -682,6 +574,9 @@ void AgentServiceActor::CompleteReusableSnapshot(
     response.clear_physicalfact();
     iter->second.completed = true;
     iter->second.completedResponse = response;
+    if (!KeepsLocalSnapshot(snapshotStorageMode_) && localSnapshotStore_ != nullptr) {
+        (void)localSnapshotStore_->EvictLocalArtifact(iter->second.request.snapshotid());
+    }
     Send(iter->second.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
 }
 
@@ -694,7 +589,6 @@ void AgentServiceActor::CompletePauseSnapshotError(const std::string &requestID,
     }
     messages::SnapshotRuntimeResponse response;
     response.set_requestid(iter->second.request.requestid());
-    response.clear_agentrequestgeneration();
     response.set_code(code);
     response.set_message(message);
     response.set_resultunknown(resultUnknown);
@@ -710,7 +604,7 @@ void AgentServiceActor::ForgetCompletedPauseResult(
 {
     auto iter = snapshotRequests_.find(request.attemptid());
     if (iter == snapshotRequests_.end() || !iter->second.completed
-        || iter->second.request.type() != common::PAUSE_RESUME
+        || iter->second.request.returnartifact()
         || iter->second.request.instanceid() != request.instanceid()
         || iter->second.request.snapshotid() != request.snapshotid()) {
         return;
@@ -719,6 +613,97 @@ void AgentServiceActor::ForgetCompletedPauseResult(
 }
 
 void AgentServiceActor::SnapshotAttemptFinalize(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::SnapshotAttemptFinalizeRequest request;
+    if (!request.ParseFromString(msg)) {
+        return;
+    }
+    if (from != localSchedFuncAgentMgrAID_) {
+        YRLOG_WARN("{}|reject physical snapshot finalize from untrusted sender {}",
+                   request.attemptid(), std::string(from));
+        return;
+    }
+    if (request.protocolversion() != SNAPSHOT_ATTEMPT_PROTOCOL_VERSION
+        || request.attemptid().empty() || request.snapshotid().empty()
+        || (request.deleteruntime() && request.runtimeid().empty())
+        || (request.deletelocalartifact() && localSnapshotStore_ == nullptr)
+        || (UsesDistributedStorage(snapshotStorageMode_)
+            && request.deleteremoteobjectkeys_size() > 0 && snapshotStorage_ == nullptr)) {
+        SendSnapshotAttemptFinalizeResponse(
+            from, request.attemptid(), static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID),
+            "invalid physical snapshot finalize request", false, false, false);
+        return;
+    }
+
+    if (request.deletelocalartifact()) {
+        const auto local = localSnapshotStore_->Delete({request.snapshotid()});
+        if (local.IsError()) {
+            SendSnapshotAttemptFinalizeResponse(
+                from, request.attemptid(), static_cast<int32_t>(local.StatusCode()),
+                local.RawMessage(), false, false, false);
+            return;
+        }
+    }
+    snapshotRequests_.erase(request.attemptid());
+
+    if (request.deleteruntime()) {
+        if (!registerRuntimeMgr_.registered || !isRegisterCompleted_) {
+            SendSnapshotAttemptFinalizeResponse(
+                from, request.attemptid(), static_cast<int32_t>(StatusCode::FUNC_AGENT_NOT_REGISTERED),
+                "RuntimeManager is not registered for physical runtime cleanup", false, true, false);
+            return;
+        }
+        const auto cleanupRequestID = "snapshot-finalize/" + request.attemptid();
+        snapshotRuntimeFinalizations_[cleanupRequestID] = {from, request, request.runtimeid()};
+        messages::StopInstanceRequest stop;
+        stop.set_runtimeid(request.runtimeid());
+        stop.set_requestid(cleanupRequestID);
+        stop.set_traceid(cleanupRequestID);
+        stop.set_executortype(static_cast<int32_t>(EXECUTOR_TYPE::SANDBOXD));
+        Send(litebus::AID(registerRuntimeMgr_.name, registerRuntimeMgr_.address),
+             "StopInstance", stop.SerializeAsString());
+        return;
+    }
+    ContinuePhysicalSnapshotFinalize(from, request, 0);
+}
+
+void AgentServiceActor::ContinuePhysicalSnapshotFinalize(
+    const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
+    size_t remoteKeyIndex)
+{
+    if (!UsesDistributedStorage(snapshotStorageMode_)
+        || remoteKeyIndex >= static_cast<size_t>(request.deleteremoteobjectkeys_size())) {
+        SendSnapshotAttemptFinalizeResponse(
+            caller, request.attemptid(), static_cast<int32_t>(StatusCode::SUCCESS),
+            "", false, true, true);
+        return;
+    }
+    snapshotStorage_->Delete(request.deleteremoteobjectkeys(static_cast<int>(remoteKeyIndex)))
+        .OnComplete(litebus::Defer(
+            GetAID(), &AgentServiceActor::OnPhysicalSnapshotObjectDeleted,
+            caller, request, remoteKeyIndex, std::placeholders::_1));
+}
+
+void AgentServiceActor::OnPhysicalSnapshotObjectDeleted(
+    const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
+    size_t remoteKeyIndex, const litebus::Future<Status> &future)
+{
+    if (future.IsError() || (future.Get().IsError()
+        && future.Get().StatusCode() != StatusCode::FILE_NOT_FOUND
+        && future.Get().StatusCode() != StatusCode::BP_DATASYSTEM_ERROR)) {
+        SendSnapshotAttemptFinalizeResponse(
+            caller, request.attemptid(),
+            future.IsError() ? static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION)
+                             : static_cast<int32_t>(future.Get().StatusCode()),
+            future.IsError() ? "snapshot storage Delete future failed" : future.Get().RawMessage(),
+            future.IsError(), true, false);
+        return;
+    }
+    ContinuePhysicalSnapshotFinalize(caller, request, remoteKeyIndex + 1);
+}
+
+void AgentServiceActor::SnapshotAttemptFinalizeLegacy(
     const litebus::AID &from, std::string &&, std::string &&msg)
 {
     ::messages::SnapshotAttemptFinalizeRequest request;
@@ -745,12 +730,37 @@ void AgentServiceActor::SnapshotAttemptFinalize(
             && !pausedDelete)
         || request.tenantid().empty() || request.instanceid().empty()
         || request.snapshotid().empty() || request.attemptid().empty()
-        || snapshotStorage_ == nullptr
-        || ((resumeFinalize || reusableFinalize)
-            && (snapshotWorker_ == nullptr || checkpointRoot_.empty()))) {
+        || (UsesDistributedStorage(snapshotStorageMode_) && snapshotStorage_ == nullptr)
+        || ((resumeFinalize || reusableFinalize) && checkpointRoot_.empty())
+        || (UsesDistributedStorage(snapshotStorageMode_)
+            && (resumeFinalize || reusableFinalize) && snapshotWorker_ == nullptr)) {
         SendSnapshotAttemptFinalizeResponse(from, request.attemptid(),
                                             static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID),
                                             "invalid snapshot attempt finalize request", false, false, false);
+        return;
+    }
+    if (!UsesDistributedStorage(snapshotStorageMode_)
+        && request.operation() != ::messages::RESUME_ABORTED) {
+        Status local = Status::OK();
+        const bool deleteLocal = request.operation() == ::messages::PAUSE_ABORTED
+            || request.operation() == ::messages::RESUME_COMMITTED
+            || request.operation() == ::messages::PAUSED_DELETED
+            || request.operation() == ::messages::REUSABLE_SNAPSHOT_ABORTED;
+        if (deleteLocal && localSnapshotStore_ != nullptr) {
+            local = localSnapshotStore_->Delete({request.snapshotid()});
+        }
+        if (request.operation() == ::messages::PAUSE_COMMITTED
+            || request.operation() == ::messages::PAUSE_ABORTED) {
+            ForgetCompletedPauseResult(request);
+        }
+        if (request.operation() == ::messages::REUSABLE_SNAPSHOT_COMMITTED
+            || request.operation() == ::messages::REUSABLE_SNAPSHOT_ABORTED) {
+            snapshotRequests_.erase(request.attemptid());
+        }
+        SendSnapshotAttemptFinalizeResponse(
+            from, request.attemptid(),
+            static_cast<int32_t>(local.IsOk() ? StatusCode::SUCCESS : local.StatusCode()),
+            local.IsOk() ? "" : local.RawMessage(), false, local.IsOk(), true);
         return;
     }
     if (reusableFinalize) {
@@ -759,20 +769,15 @@ void AgentServiceActor::SnapshotAttemptFinalize(
             snapshotStorage_, request.expectedstorage(), actualBackend);
         const auto pending = snapshotRequests_.find(request.attemptid());
         const bool pendingMismatch = pending != snapshotRequests_.end()
-            && (!pending->second.completed || pending->second.request.type() != common::SNAPSHOT
+            && (!pending->second.completed || !pending->second.request.returnartifact()
                 || pending->second.request.instanceid() != request.instanceid()
                 || pending->second.request.runtimeid() != request.runtimeid()
                 || pending->second.request.snapshotid() != request.snapshotid()
                 || !pending->second.completedResponse.has_reusablesnapshotartifact()
-                || pending->second.completedResponse.reusablesnapshotartifact().size()
-                    != static_cast<int64_t>(request.expectedsize())
-                || pending->second.completedResponse.reusablesnapshotartifact().sha256()
-                    != request.expectedsha256()
                 || pending->second.completedResponse.reusablesnapshotartifact().storagebackend()
                     != request.expectedstorage());
         if (backend.IsError() || actualBackend != request.expectedstorage()
-            || request.expectedsize() == 0
-            || request.expectedsha256().empty() || pendingMismatch
+            || pendingMismatch
             || localSnapshotStore_ == nullptr) {
             SendSnapshotAttemptFinalizeResponse(
                 from, request.attemptid(), static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID),
@@ -786,13 +791,11 @@ void AgentServiceActor::SnapshotAttemptFinalize(
         if (localCleanup.StatusCode() == StatusCode::FILE_NOT_FOUND) {
             localCleanup = Status::OK();
         } else if (localCleanup.IsOk()) {
-            if (descriptor.anonymous || descriptor.size != request.expectedsize()
-                || descriptor.sha256 != request.expectedsha256()) {
+            if (descriptor.recoveryCandidate) {
                 localCleanup = snapshot_storage::detail::Conflict(
                     "reusable local snapshot cleanup identity does not match committed metadata");
             } else {
-                localCleanup = localSnapshotStore_->Delete({descriptor.snapshotID, descriptor.generation,
-                                                            descriptor.size, descriptor.sha256});
+                localCleanup = localSnapshotStore_->Delete({descriptor.snapshotID});
             }
         }
         if (localCleanup.IsError()) {
@@ -821,7 +824,6 @@ void AgentServiceActor::SnapshotAttemptFinalize(
         const auto backend = snapshot_storage::ResolveStorageBackend(
             snapshotStorage_, request.expectedstorage(), actualBackend);
         if (backend.IsError() || actualBackend != request.expectedstorage()
-            || request.expectedsize() == 0 || request.expectedsha256().empty()
             || localSnapshotStore_ == nullptr) {
             SendSnapshotAttemptFinalizeResponse(
                 from, request.attemptid(), static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID),
@@ -842,8 +844,7 @@ void AgentServiceActor::SnapshotAttemptFinalize(
         std::string actualBackend;
         const auto backend = snapshot_storage::ResolveStorageBackend(
             snapshotStorage_, request.expectedstorage(), actualBackend);
-        if (backend.IsError() || actualBackend != request.expectedstorage()
-            || request.expectedsize() == 0 || request.expectedsha256().empty()) {
+        if (backend.IsError() || actualBackend != request.expectedstorage()) {
             SendSnapshotAttemptFinalizeResponse(
                 from, request.attemptid(), static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID),
                 backend.IsError() ? backend.GetMessage() : "resume snapshot cleanup metadata is invalid",
@@ -864,7 +865,7 @@ void AgentServiceActor::SnapshotAttemptFinalize(
         }
         const auto cleanupRequestID = "resume-release/" + request.instanceid()
             + "/resume-target/" + request.attemptid();
-        resumeAbortFinalizations_[cleanupRequestID] = { from, request, runtimeID };
+        snapshotRuntimeFinalizations_[cleanupRequestID] = { from, request, runtimeID };
         messages::StopInstanceRequest stop;
         stop.set_runtimeid(runtimeID);
         stop.set_requestid(cleanupRequestID);
@@ -902,9 +903,7 @@ void AgentServiceActor::OnPausedSnapshotDeleteProbed(
     const bool remoteMissing = stat.status.StatusCode() == StatusCode::FILE_NOT_FOUND;
     if (!remoteMissing
         && (stat.status.IsError() || !stat.metadata.complete
-            || stat.metadata.snapshotID != request.snapshotid()
-            || stat.metadata.size != request.expectedsize()
-            || stat.metadata.sha256 != request.expectedsha256())) {
+            || stat.metadata.snapshotID != request.snapshotid())) {
         SendSnapshotAttemptFinalizeResponse(
             caller, request.attemptid(), static_cast<int32_t>(StatusCode::SCHEDULE_CONFLICTED),
             "paused snapshot cleanup metadata does not match immutable object", false, false, false);
@@ -915,13 +914,11 @@ void AgentServiceActor::OnPausedSnapshotDeleteProbed(
     if (localCleanup.StatusCode() == StatusCode::FILE_NOT_FOUND) {
         localCleanup = Status::OK();
     } else if (localCleanup.IsOk()) {
-        if (!descriptor.anonymous || descriptor.size != request.expectedsize()
-            || descriptor.sha256 != request.expectedsha256()) {
+        if (!descriptor.recoveryCandidate) {
             localCleanup = snapshot_storage::detail::Conflict(
                 "paused local snapshot cleanup identity does not match committed metadata");
         } else {
-            localCleanup = localSnapshotStore_->Delete({descriptor.snapshotID, descriptor.generation,
-                                                        descriptor.size, descriptor.sha256});
+            localCleanup = localSnapshotStore_->Delete({descriptor.snapshotID});
         }
     }
     if (localCleanup.IsError()) {
@@ -1006,9 +1003,7 @@ void AgentServiceActor::OnResumeSnapshotDeleteProbed(
         return;
     }
     if (stat.status.IsError() || !stat.metadata.complete
-        || stat.metadata.snapshotID != request.snapshotid()
-        || stat.metadata.size != request.expectedsize()
-        || stat.metadata.sha256 != request.expectedsha256()) {
+        || stat.metadata.snapshotID != request.snapshotid()) {
         SendSnapshotAttemptFinalizeResponse(
             caller, request.attemptid(), static_cast<int32_t>(StatusCode::SCHEDULE_CONFLICTED),
             "resume snapshot cleanup metadata does not match immutable object", false, true, false);
@@ -1085,9 +1080,7 @@ void AgentServiceActor::OnReusableSnapshotDeleteProbed(
         return;
     }
     if (stat.status.IsError() || !stat.metadata.complete
-        || stat.metadata.snapshotID != request.snapshotid()
-        || stat.metadata.size != request.expectedsize()
-        || stat.metadata.sha256 != request.expectedsha256()) {
+        || stat.metadata.snapshotID != request.snapshotid()) {
         CompleteReusableSnapshotFinalize(
             caller, request, static_cast<int32_t>(StatusCode::SCHEDULE_CONFLICTED),
             "reusable snapshot final object does not match aborted attempt",
@@ -1135,22 +1128,32 @@ void AgentServiceActor::DeleteReusableSnapshotArtifact(
     }
 
     const auto &artifact = request.artifact();
+    if (artifact.storagebackend() == "local") {
+        if (request.requestid().empty() || request.tenantid().empty()
+            || request.snapshotid().empty() || localSnapshotStore_ == nullptr) {
+            SendDeleteReusableSnapshotArtifactResponse(
+                from, request.requestid(), common::ERR_PARAM_INVALID,
+                "local reusable Snapshot delete identity is incomplete");
+            return;
+        }
+        const auto status = localSnapshotStore_->Delete({request.snapshotid()});
+        SendDeleteReusableSnapshotArtifactResponse(
+            from, request.requestid(),
+            status.IsOk() || status.StatusCode() == StatusCode::FILE_NOT_FOUND
+                ? common::ERR_NONE : Status::GetPosixErrorCode(status.StatusCode()),
+            status.IsOk() ? "" : status.RawMessage());
+        return;
+    }
     std::string actualBackend;
     const auto backend = snapshot_storage::ResolveStorageBackend(
         snapshotStorage_, snapshotStorageBackend_, actualBackend);
     const auto canonicalKey = snapshot_storage::BuildReusableSnapshotKey(
         snapshot_storage::StableTenantHash(request.tenantid()),
         request.snapshotid());
-    const bool validSha256 = artifact.sha256().size() == 64
-        && std::all_of(artifact.sha256().begin(), artifact.sha256().end(), [](unsigned char value) {
-            return std::isxdigit(value) != 0;
-        });
     if (request.requestid().empty() || request.tenantid().empty()
         || request.snapshotid().empty() || snapshotStorage_ == nullptr
         || backend.IsError() || actualBackend != artifact.storagebackend()
-        || artifact.objectkey() != canonicalKey || artifact.size() <= 0
-        || !validSha256 || artifact.format() != "sandboxd-checkpoint"
-        || artifact.formatversion() != 1) {
+        || artifact.objectkey() != canonicalKey) {
         SendDeleteReusableSnapshotArtifactResponse(
             from, request.requestid(), common::ERR_PARAM_INVALID,
             backend.IsError() ? backend.GetMessage()
@@ -1159,14 +1162,7 @@ void AgentServiceActor::DeleteReusableSnapshotArtifact(
     }
 
     if (localSnapshotStore_ != nullptr) {
-        LocalSnapshotDescriptor descriptor;
-        auto localStatus = localSnapshotStore_->ValidateForRestore(request.snapshotid(), descriptor);
-        if (localStatus.IsOk() && !descriptor.anonymous
-            && descriptor.size == static_cast<uint64_t>(artifact.size())
-            && descriptor.sha256 == artifact.sha256()) {
-            localStatus = localSnapshotStore_->Delete({descriptor.snapshotID, descriptor.generation,
-                                                       descriptor.size, descriptor.sha256});
-        }
+        auto localStatus = localSnapshotStore_->Delete({request.snapshotid()});
         if (localStatus.IsError() && localStatus.StatusCode() != StatusCode::FILE_NOT_FOUND) {
             YRLOG_WARN("{}|reusable Snapshot({}) local cache cleanup is best-effort: {}",
                        request.requestid(), request.snapshotid(), localStatus.ToString());
@@ -1225,7 +1221,7 @@ void AgentServiceActor::CompleteReusableSnapshotFinalize(
     if (forgetSnapshot) {
         const auto pending = snapshotRequests_.find(request.attemptid());
         if (pending != snapshotRequests_.end()
-            && pending->second.request.type() == common::SNAPSHOT
+            && pending->second.request.returnartifact()
             && pending->second.request.instanceid() == request.instanceid()
             && pending->second.request.snapshotid() == request.snapshotid()) {
             snapshotRequests_.erase(pending);

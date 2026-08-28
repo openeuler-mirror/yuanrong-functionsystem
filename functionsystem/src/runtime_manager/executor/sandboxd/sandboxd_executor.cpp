@@ -30,7 +30,6 @@
 #include "common/logs/logging.h"
 #include "common/metrics/metrics_adapter.h"
 #include "common/resource_view/resource_type.h"
-#include "common/snapshot_storage/snapshot_storage.h"
 #include "common/trace/create_trace_helper.h"
 #include "common/utils/actor_worker.h"
 #include "common/utils/collect_status.h"
@@ -61,6 +60,7 @@ std::string CheckpointDirectoryForRestore(const std::string &checkpointPath)
 }
 
 constexpr int64_t DEFAULT_GRACEFUL_SHUTDOWN         = 5;
+constexpr char DEFAULT_CHECKPOINT_DIR[]              = "/home/yuanrong/checkpoints";
 constexpr int64_t RECONNECT_INTERVAL_MS             = 5000;
 constexpr int64_t RECONCILE_RETRY_INITIAL_MS        = 1000;
 constexpr int64_t RECONCILE_RETRY_MAX_INTERVAL_MS   = 10000;
@@ -190,10 +190,6 @@ SandboxdResumeIdentity ConsumeRestoreIdentityImpl(messages::StartInstanceRequest
         identity.logicalRequestID = (trustedReusable || trustedLocal)
             ? info.requestid() : identity.logicalRequestID;
         identity.snapshotID = info.restoresnapshotid();
-        identity.expectedSize = trustedReusable ? info.reusablesnapshotrestore().artifact().size()
-            : (trustedResume ? info.snapshotinfo().size() : 0);
-        identity.expectedSHA256 = trustedReusable ? info.reusablesnapshotrestore().artifact().sha256()
-            : (trustedResume ? info.snapshotinfo().sha256() : "");
         identity.labels = {
             { "instance_id", info.instanceid() },
             { "request_id", identity.logicalRequestID },
@@ -203,31 +199,6 @@ SandboxdResumeIdentity ConsumeRestoreIdentityImpl(messages::StartInstanceRequest
         };
     }
     return identity;
-}
-
-Status ValidateTrustedRestoreArtifact(
-    const std::string &checkpointPath,
-    const std::shared_ptr<messages::StartInstanceRequest> &request)
-{
-    const auto &info = request->runtimeinstanceinfo();
-    snapshot_storage::SnapshotObjectMetadata expected;
-    if (info.has_reusablesnapshotrestore()) {
-        const auto &restore = info.reusablesnapshotrestore();
-        if (!resume_identity::ValidateReusableSnapshotRestore(restore)) {
-            return Status(StatusCode::ERR_PARAM_INVALID,
-                          "invalid reusable Snapshot restore metadata");
-        }
-        expected.snapshotID = restore.snapshotid();
-        expected.size = static_cast<uint64_t>(restore.artifact().size());
-        expected.sha256 = restore.artifact().sha256();
-    } else {
-        const auto &snapshot = info.snapshotinfo();
-        expected.snapshotID = snapshot.checkpointid();
-        expected.size = static_cast<uint64_t>(snapshot.size());
-        expected.sha256 = snapshot.sha256();
-    }
-    expected.complete = true;
-    return snapshot_storage::detail::ValidateFile(checkpointPath, expected);
 }
 
 template <typename Sandbox>
@@ -474,11 +445,6 @@ std::string SandboxdExecutor::RestoreSandboxID(const std::string &runtimeID)
     return "sbox-r-" + resume_identity::Sha256Hex(runtimeID).substr(0, DIGEST_PREFIX_LENGTH);
 }
 
-bool SandboxdExecutor::ShouldValidateRestoreArtifact(const SandboxdResumeIdentity &identity)
-{
-    return identity.expectedSize > 0;
-}
-
 bool SandboxdExecutor::IsRestoreRequest(const messages::RuntimeInstanceInfo &info)
 {
     return !info.restoresnapshotid().empty() || !info.snapshotinfo().checkpointid().empty()
@@ -623,9 +589,6 @@ SandboxdExecutor::SandboxdExecutor(const std::string &name, const litebus::AID &
       functionAgentAID_(functionAgentAID),
       availableRuntimesCallback_(std::move(availableRuntimesCallback))
 {
-    auto ckptActor = std::make_shared<CkptFileManagerActor>(name + "_CkptFileManager", checkpointRoot_);
-    litebus::Spawn(ckptActor);
-    ckptFileManager_ = std::make_shared<CkptFileManager>(ckptActor);
 }
 
 // ── Executor lifecycle ────────────────────────────────────────────────────────
@@ -648,7 +611,7 @@ void SandboxdExecutor::InitConfig()
         }
     }
     // ckptOrch_ MUST be created after sandboxd_ is set. Sync() runs after.
-    ckptOrch_ = std::make_shared<SandboxdCheckpointOrchestrator>(GetAID(), sandboxd_, ckptFileManager_, stateManager_);
+    ckptOrch_ = std::make_shared<SandboxdCheckpointOrchestrator>(sandboxd_);
     Sync();
 }
 
@@ -897,6 +860,15 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartBySnapsh
 {
     const auto &request = context.request;
     const auto &info         = request->runtimeinstanceinfo();
+    const auto &runtimeClass = info.container().runtime();
+    const auto capability = runtimeCapabilities_.find(runtimeClass);
+    if (!availableRuntimesInitialized_ || runtimeClass.empty()
+        || capability == runtimeCapabilities_.end()
+        || !capability->second.supports_checkpoint_restore()) {
+        return GenFailStartInstanceResponse(
+            request, StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED,
+            "sandbox runtime does not advertise checkpoint/restore capability");
+    }
     const auto &snapshotInfo = info.snapshotinfo();
     const auto snapshotID = !info.restoresnapshotid().empty()
         ? info.restoresnapshotid() : snapshotInfo.checkpointid();
@@ -919,17 +891,11 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartBySnapsh
                 request, StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED,
                 "local restore checkpoint is not an existing regular file");
         }
-        if (ShouldValidateRestoreArtifact(context.resumeIdentity)) {
-            const auto validation = ValidateTrustedRestoreArtifact(checkpointPath.string(), request);
-            if (validation.IsError()) {
-                return GenFailStartInstanceResponse(request, validation.StatusCode(), validation.RawMessage());
-            }
-        }
         return OnCheckpointDownloaded(checkpointPath.string(), context);
     }
-    ASSERT_IF_NULL(ckptOrch_);
-    return ckptOrch_->DownloadForRestore(snapshotInfo.checkpointid(), snapshotInfo.storage(), info.requestid())
-        .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnCheckpointDownloaded, std::placeholders::_1, context));
+    return GenFailStartInstanceResponse(
+        request, StatusCode::ERR_PARAM_INVALID,
+        "restore checkpoint must be materialized by FunctionAgent");
 }
 
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointDownloaded(
@@ -938,15 +904,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointD
     const auto &request = context.request;
     SandboxdRestoreContext restoreContext{checkpointPath, context};
 
-    if (context.resumeIdentity.trusted) {
-        return OnCheckpointRefAdded(Status::OK(), restoreContext);
-    }
-    const auto &info = request->runtimeinstanceinfo();
-    const auto &runtimeID = info.runtimeid();
-    const auto &checkpointID = info.snapshotinfo().checkpointid();
-    return ckptOrch_->AddRef(checkpointID, runtimeID, info.requestid())
-        .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnCheckpointRefAdded, std::placeholders::_1,
-                             restoreContext));
+    return OnCheckpointRefAdded(Status::OK(), restoreContext);
 }
 
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointRefAdded(
@@ -975,14 +933,12 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointR
     params.registeredTemplateIDs = registeredTemplateIDs_;
     const auto portStatus = ApplyPortForwardMappings(&params, request);
     if (portStatus.IsError()) {
-        ckptOrch_->ReleaseRef(info.runtimeid(), info.requestid());
         return GenFailStartInstanceResponse(request, portStatus.StatusCode(), portStatus.RawMessage());
     }
 
     auto [status, startReq] = builder.Build(params);
     if (!status.IsOk()) {
         ReportSandboxLifecycleStatus(info, info.runtimeid(), SandboxLifecycleStatus::ABNORMAL);
-        ckptOrch_->ReleaseRef(info.runtimeid(), info.requestid());
         stateManager_.UpdatePortMappings(params.runtimeID, "");
         PortManager::GetInstance().ReleasePorts(params.runtimeID);
         return GenFailStartInstanceResponse(request, status.StatusCode(), status.RawMessage());
@@ -1034,12 +990,6 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::RestoreAfterE
 {
     const auto &request = context.start.request;
     const auto &info = request->runtimeinstanceinfo();
-    if (ShouldValidateRestoreArtifact(context.start.resumeIdentity)) {
-        const auto validation = ValidateTrustedRestoreArtifact(context.checkpointPath, request);
-        if (validation.IsError()) {
-            return OnRestoreDone({validation, {}, {}}, request, context.start.guard, true);
-        }
-    }
 
     SandboxdRequestBuilder builder{cmdBuilder_};
     SandboxdStartParams params;
@@ -1098,14 +1048,6 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnResumeResto
                                      context.start.request, context.start.guard, true, true);
             }
             if (listed.response.sandboxes_size() == 0 && !retried) {
-                if (ShouldValidateRestoreArtifact(context.start.resumeIdentity)) {
-                    const auto validation = ValidateTrustedRestoreArtifact(
-                        context.checkpointPath, context.start.request);
-                    if (validation.IsError()) {
-                        return OnRestoreDone(
-                            {validation, {}, {}}, context.start.request, context.start.guard, true);
-                    }
-                }
                 return DoStartFromCheckpoint(context.start.request, startReq)
                     .Then(litebus::Defer(GetAID(), &SandboxdExecutor::OnResumeRestoreUncertain,
                                          std::placeholders::_1, context, startReq, true));
@@ -1123,9 +1065,6 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnRestoreDone
         YRLOG_ERROR("{}|{}|restore failed for runtime({}): {}", info.traceid(), info.requestid(), info.runtimeid(),
                     result.status.RawMessage());
         ReportSandboxLifecycleStatus(info, info.runtimeid(), SandboxLifecycleStatus::ABNORMAL);
-        if (!trustedResume) {
-            ckptOrch_->ReleaseRef(info.runtimeid(), info.requestid());
-        }
         stateManager_.UpdatePortMappings(info.runtimeid(), "");
         PortManager::GetInstance().ReleasePorts(info.runtimeid());
         // guard destructor rolls back state
@@ -1456,11 +1395,6 @@ litebus::Future<Status> SandboxdExecutor::StopSandbox(
         return Status::OK();
     }
 
-    // Release checkpoint reference (no-op if this sandbox was not restored)
-    if (ckptOrch_ != nullptr) {
-        ckptOrch_->ReleaseRef(runtimeID, requestID);
-    }
-
     return TerminateSandbox(runtimeID, requestID, sandboxID, oomKilled);
 }
 
@@ -1589,18 +1523,7 @@ Status SandboxdExecutor::BuildSnapshotCheckpointPlan(
     const messages::SnapshotRuntimeRequest &request, const std::string &sandboxID,
     CheckpointPlan &plan)
 {
-    const bool instanceManaged = request.type() == common::PAUSE_RESUME;
-    const auto lifecycle = instanceManaged ? ArtifactLifecycle::INSTANCE_MANAGED
-                                           : ArtifactLifecycle::USER_MANAGED;
-    const bool leaveRuntimeRunning = instanceManaged || request.leaverunning();
-    return BuildCheckpointPlan(request, sandboxID, lifecycle, leaveRuntimeRunning, plan);
-}
-
-bool SandboxdExecutor::UsesLegacySnapshotRegistry(const messages::SnapshotRuntimeRequest &request)
-{
-    return !request.anonymous()
-        && request.type() != common::PAUSE_RESUME
-        && request.type() != common::SNAPSHOT;
+    return BuildCheckpointPlan(request, sandboxID, request.leaverunning(), plan);
 }
 
 litebus::Future<messages::SnapshotRuntimeResponse> SandboxdExecutor::SnapshotRuntime(
@@ -1624,6 +1547,15 @@ litebus::Future<messages::SnapshotRuntimeResponse> SandboxdExecutor::SnapshotRun
         response.set_message("runtime is missing");
         return response;
     }
+    const auto &runtimeClass = sandbox->instanceInfo.container().runtime();
+    const auto capability = runtimeCapabilities_.find(runtimeClass);
+    if (!availableRuntimesInitialized_ || runtimeClass.empty()
+        || capability == runtimeCapabilities_.end()
+        || !capability->second.supports_checkpoint_restore()) {
+        response.set_code(static_cast<int32_t>(StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED));
+        response.set_message("sandbox runtime does not advertise checkpoint/restore capability");
+        return response;
+    }
     CheckpointPlan plan;
     const auto planStatus = BuildSnapshotCheckpointPlan(*request, sandbox->sandboxID, plan);
     if (planStatus.IsError()) {
@@ -1631,11 +1563,6 @@ litebus::Future<messages::SnapshotRuntimeResponse> SandboxdExecutor::SnapshotRun
         response.set_message(planStatus.RawMessage());
         return response;
     }
-    if (plan.lifecycle == ArtifactLifecycle::USER_MANAGED
-        && UsesLegacySnapshotRegistry(*request)) {
-        return ckptOrch_->PublishUserManagedSnapshot(request, plan);
-    }
-
     return ckptOrch_->CheckpointLocal(plan)
         .Then(litebus::Defer(GetAID(),
             [this, request, response, sandboxID = sandbox->sandboxID](
@@ -1673,8 +1600,6 @@ litebus::Future<messages::SnapshotRuntimeResponse> SandboxdExecutor::SnapshotRun
                         return reconciled;
                     }));
             }
-            completed.mutable_snapshotinfo()->set_size(result.size);
-            completed.mutable_snapshotinfo()->set_sha256(result.sha256);
             completed.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
             return litebus::Future<messages::SnapshotRuntimeResponse>(completed);
         }));
@@ -1982,9 +1907,6 @@ void SandboxdExecutor::CleanupLocalRuntimeStateForOrphan(const std::string &requ
         "releasing local runtime resources before orphan delete",
         requestID, sandboxID, runtimeID);
 
-    if (ckptOrch_ != nullptr) {
-        ckptOrch_->ReleaseRef(runtimeID, requestID);
-    }
     PortManager::GetInstance().ReleasePorts(runtimeID);
     ClearSandboxMetricsState(runtimeID);
     sandboxLifecycleStates_.erase(runtimeID);

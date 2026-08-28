@@ -170,6 +170,16 @@ public:
         return snapshotStorageBackend_;
     }
 
+    const std::string &GetSnapshotStorageMode() const
+    {
+        return snapshotStorageMode_;
+    }
+
+    uint64_t GetSnapshotLocalCacheMaxBytes() const
+    {
+        return snapshotLocalCacheMaxBytes_;
+    }
+
     const std::string &GetSnapshotObsEndpoint() const
     {
         return snapshotObsEndpoint_;
@@ -245,6 +255,8 @@ protected:
 
     std::string pluginConfigs_ = "";
     std::string snapshotStorageBackend_;
+    std::string snapshotStorageMode_;
+    uint64_t snapshotLocalCacheMaxBytes_{ 10ULL * 1024ULL * 1024ULL * 1024ULL };
     std::string snapshotObsEndpoint_;
     std::string snapshotObsBucket_;
     std::string snapshotObsAccessKey_;

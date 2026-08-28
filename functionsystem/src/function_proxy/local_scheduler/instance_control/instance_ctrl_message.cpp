@@ -83,7 +83,9 @@ Status ValidateReusableSnapshotRestore(
     if (requestedSnapshotID.empty() || restore.snapshotid() != requestedSnapshotID
         || !restore.allowlogicalinstanceidrebind() || !restore.has_artifact()
         || artifact.storagebackend().empty() || artifact.objectkey().empty()
-        || artifact.size() <= 0 || artifact.sha256().size() != 64
+        || artifact.size() <= 0
+        || (artifact.storagebackend() == "local"
+                ? artifact.sourcenodeid().empty() : artifact.sha256().size() != 64)
         || artifact.format() != "sandboxd-checkpoint" || artifact.formatversion() != 1) {
         return Status(StatusCode::ERR_PARAM_INVALID,
                       "resolved reusable Snapshot restore metadata is invalid");
@@ -167,6 +169,12 @@ Status ApplyResolvedReusableSnapshotForCreate(
     scheduleExtensions->erase(REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION);
     (*scheduleExtensions)[REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION] =
         CharStringToHexString(resolved.reusablesnapshotrestore().SerializeAsString());
+    if (resolved.reusablesnapshotrestore().artifact().storagebackend() == "local") {
+        auto *affinity = target->mutable_scheduleoption()->mutable_affinity()
+            ->mutable_nodeaffinity()->mutable_affinity();
+        (*affinity)[resolved.reusablesnapshotrestore().artifact().sourcenodeid()] =
+            resources::RequiredAffinity;
+    }
     return Status::OK();
 }
 

@@ -22,8 +22,6 @@ struct ArtifactPublishRequest {
     int64_t sourceInstanceVersion{ 0 };
     int64_t createdAtUnixSeconds{ 0 };
     int32_t ttlSeconds{ 0 };
-    int64_t expectedSize{ 0 };
-    std::string expectedSha256;
 };
 
 struct ArtifactPublishResult {
@@ -92,16 +90,6 @@ private:
             return;
         }
         operation->metadata = inspection.Get().metadata;
-        const bool sizeMismatch = operation->request.expectedSize > 0
-            && operation->metadata.size != static_cast<uint64_t>(operation->request.expectedSize);
-        const bool digestMismatch = !operation->request.expectedSha256.empty()
-            && operation->metadata.sha256 != operation->request.expectedSha256;
-        if (sizeMismatch || digestMismatch) {
-            Complete(operation, { Status(StatusCode::SCHEDULE_CONFLICTED,
-                                  "runtime checkpoint facts do not match the local artifact"),
-                                  operation->metadata, false });
-            return;
-        }
         operation->metadata.complete = false;
         operation->metadata.expiresAtUnixSeconds = operation->request.ttlSeconds == 0
             ? 0

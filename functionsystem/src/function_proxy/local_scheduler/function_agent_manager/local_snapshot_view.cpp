@@ -11,11 +11,8 @@ namespace functionsystem::local_scheduler {
 
 Status LocalSnapshotView::Validate(const messages::LocalSnapshotMetadata &snapshot)
 {
-    if (snapshot.snapshotid().empty() || snapshot.runtimeclass().empty()
-        || snapshot.architecture().empty() || snapshot.size() == 0
-        || snapshot.sha256().size() != 64
-        || (snapshot.anonymous()
-            && (snapshot.instanceid().empty() || snapshot.generation() == 0))) {
+    if (snapshot.snapshotid().empty()
+        || (snapshot.localrecoverycandidate() && snapshot.instanceid().empty())) {
         return Status(StatusCode::ERR_PARAM_INVALID,
                       "local snapshot metadata is incomplete");
     }
@@ -27,37 +24,26 @@ Status LocalSnapshotView::RebuildLatest()
     latestAnonymous_.clear();
     struct Candidate {
         const messages::LocalSnapshotMetadata *snapshot{nullptr};
-        bool conflict{false};
     };
     std::unordered_map<std::string, Candidate> candidates;
     for (const auto &item : snapshots_) {
         const auto &snapshot = item.second.metadata;
-        if (!snapshot.anonymous()) {
+        if (!snapshot.localrecoverycandidate()) {
             continue;
         }
         auto current = candidates.find(snapshot.instanceid());
         if (current == candidates.end()
-            || snapshot.generation() > current->second.snapshot->generation()) {
-            candidates[snapshot.instanceid()] = {&snapshot, false};
+            || snapshot.createdatunixseconds() > current->second.snapshot->createdatunixseconds()
+            || (snapshot.createdatunixseconds() == current->second.snapshot->createdatunixseconds()
+                && snapshot.snapshotid() > current->second.snapshot->snapshotid())) {
+            candidates[snapshot.instanceid()] = {&snapshot};
             continue;
         }
-        if (snapshot.generation() == current->second.snapshot->generation()
-            && snapshot.snapshotid() != current->second.snapshot->snapshotid()) {
-            current->second.conflict = true;
-        }
     }
-    bool hasConflict = false;
     for (const auto &[instanceID, candidate] : candidates) {
-        if (candidate.conflict) {
-            hasConflict = true;
-        } else {
-            latestAnonymous_[instanceID] = candidate.snapshot->snapshotid();
-        }
+        latestAnonymous_[instanceID] = candidate.snapshot->snapshotid();
     }
-    return !hasConflict
-        ? Status::OK()
-        : Status(StatusCode::SCHEDULE_CONFLICTED,
-                 "multiple anonymous snapshots share the latest generation");
+    return Status::OK();
 }
 
 Status LocalSnapshotView::ReplaceAgentSnapshots(
@@ -110,7 +96,8 @@ LocalSnapshotRecordResult LocalSnapshotView::RecordCommitted(
                 std::nullopt,
                 {}};
     }
-    const auto previous = snapshot.anonymous() ? LatestAnonymous(snapshot.instanceid()) : std::nullopt;
+    const auto previous = snapshot.localrecoverycandidate()
+        ? LatestAnonymous(snapshot.instanceid()) : std::nullopt;
     const auto previousAgent = previous.has_value()
         ? snapshots_.at(previous->snapshotid()).functionAgentID : std::string{};
     snapshots_[snapshot.snapshotid()] = {functionAgentID, snapshot};
@@ -118,7 +105,8 @@ LocalSnapshotRecordResult LocalSnapshotView::RecordCommitted(
     if (rebuilt.IsError()) {
         return {rebuilt, std::nullopt, {}};
     }
-    const auto latest = snapshot.anonymous() ? LatestAnonymous(snapshot.instanceid()) : std::nullopt;
+    const auto latest = snapshot.localrecoverycandidate()
+        ? LatestAnonymous(snapshot.instanceid()) : std::nullopt;
     return {Status::OK(), previous.has_value() && latest.has_value()
                                     && latest->snapshotid() == snapshot.snapshotid()
                                     && previous->snapshotid() != snapshot.snapshotid()

@@ -75,7 +75,12 @@ FunctionAgentFlags::FunctionAgentFlags()
     AddFlag(&FunctionAgentFlags::dataSystemPort_, "data_system_port", "data system port", kDefaultDataSystemPort);
     AddFlag(&FunctionAgentFlags::pluginConfigs_, "agent_plugin_configs", "plugin configs", false);
     AddFlag(&FunctionAgentFlags::snapshotStorageBackend_, "snapshot_storage_backend",
-            "backend for pause/resume snapshot storage", "");
+            "distributed backend for snapshot storage", "");
+    AddFlag(&FunctionAgentFlags::snapshotStorageMode_, "snapshot_storage_mode",
+            "snapshot storage mode: distributed_cache, distributed_only, or local_only", "distributed_cache",
+            WhiteListCheck({ "distributed_cache", "distributed_only", "local_only" }));
+    AddFlag(&FunctionAgentFlags::snapshotLocalCacheMaxBytes_, "snapshot_local_cache_max_bytes",
+            "maximum bytes retained by the local snapshot LRU", 10ULL * 1024ULL * 1024ULL * 1024ULL);
     AddFlag(&FunctionAgentFlags::snapshotObsEndpoint_, "snapshot_obs_endpoint",
             "endpoint for snapshot OBS storage", "");
     AddFlag(&FunctionAgentFlags::snapshotObsBucket_, "snapshot_obs_bucket",

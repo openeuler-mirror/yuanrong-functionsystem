@@ -113,6 +113,8 @@ function install_function_proxy() {
     merge_process_args="--enable_merge_process=true \
     --checkpoint_dir="${checkpoint_dir}" \
     --snapshot_storage_backend="${SNAPSHOT_STORAGE_BACKEND:-datasystem}" \
+    --snapshot_storage_mode="${SNAPSHOT_STORAGE_MODE:-distributed_cache}" \
+    --snapshot_local_cache_max_bytes="${SNAPSHOT_LOCAL_CACHE_MAX_BYTES:-10737418240}" \
     --snapshot_obs_endpoint="${SNAPSHOT_OBS_ENDPOINT:-}" \
     --snapshot_obs_bucket="${SNAPSHOT_OBS_BUCKET:-}" \
     --snapshot_obs_access_key="${SNAPSHOT_OBS_ACCESS_KEY:-}" \
@@ -620,6 +622,8 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     --checkpoint_dir="${checkpoint_dir}"
     --enable_sandbox_pause_resume="${ENABLE_SANDBOX_PAUSE_RESUME:-false}"
     --snapshot_storage_backend="${SNAPSHOT_STORAGE_BACKEND:-datasystem}"
+    --snapshot_storage_mode="${SNAPSHOT_STORAGE_MODE:-distributed_cache}"
+    --snapshot_local_cache_max_bytes="${SNAPSHOT_LOCAL_CACHE_MAX_BYTES:-10737418240}"
     --snapshot_obs_endpoint="${SNAPSHOT_OBS_ENDPOINT:-}"
     --snapshot_obs_bucket="${SNAPSHOT_OBS_BUCKET:-}"
     --snapshot_obs_access_key="${SNAPSHOT_OBS_ACCESS_KEY:-}"

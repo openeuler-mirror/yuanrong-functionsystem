@@ -172,13 +172,10 @@ messages::LocalSnapshotMetadata MakeLocalSnapshot(
 {
     messages::LocalSnapshotMetadata snapshot;
     snapshot.set_snapshotid(snapshotID);
-    snapshot.set_anonymous(true);
+    snapshot.set_localrecoverycandidate(true);
     snapshot.set_instanceid("sandbox-a");
-    snapshot.set_generation(generation);
-    snapshot.set_runtimeclass("runsc");
-    snapshot.set_architecture("x86_64");
     snapshot.set_size(4096);
-    snapshot.set_sha256(std::string(64, static_cast<char>('a' + generation)));
+    snapshot.set_createdatunixseconds(static_cast<int64_t>(generation));
     return snapshot;
 }
 
@@ -363,7 +360,7 @@ TEST(FunctionAgentMgrTest, AnonymousSnapshotRequestCarriesOnlyLocalCheckpointInt
     ASSERT_AWAIT_READY_FOR(agent->captured.GetFuture(), 5'000);
     const auto request = agent->captured.GetFuture().Get();
     EXPECT_EQ(request.type(), common::DUMPSTATE);
-    EXPECT_TRUE(request.anonymous());
+    EXPECT_TRUE(request.localrecoverycandidate());
     EXPECT_TRUE(request.leaverunning());
     EXPECT_TRUE(request.checkpointdir().empty());
     EXPECT_EQ(request.snapshotid(), "anon-1");

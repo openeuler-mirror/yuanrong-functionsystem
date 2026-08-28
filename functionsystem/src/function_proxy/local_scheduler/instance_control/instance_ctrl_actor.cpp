@@ -361,9 +361,6 @@ void InstanceCtrlActor::CleanupAnonymousSnapshotForDeletedInstance(const Instanc
                 "delete-instance-snapshot/"
                 + litebus::uuid_generator::UUID::GetRandomUUID().ToString());
             request.set_snapshotid(snapshot.snapshotid());
-            request.set_expectedgeneration(snapshot.generation());
-            request.set_expectedsize(snapshot.size());
-            request.set_expectedsha256(snapshot.sha256());
             functionAgentMgr->DeleteLocalSnapshot(instanceInfo.functionagentid(), request)
                 .OnComplete([instanceID = instanceInfo.instanceid(), snapshotID = snapshot.snapshotid()](
                     const litebus::Future<messages::DeleteLocalSnapshotResponse> &deleted) {
@@ -483,21 +480,25 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleAnonymousCheckpointSignal
                 srcInstanceID, killReq,
                 killCtx->instanceContext->GetInstanceInfo().requestid(), false));
     }
-    const auto identity = killCtx->instanceContext->GetInstanceInfo();
+    auto identity = killCtx->instanceContext->GetInstanceInfo();
     if (srcInstanceID != identity.instanceid()) {
         return GenKillResponse(common::ERR_PARAM_INVALID,
                                "anonymous checkpoint may only target the calling instance");
     }
     ASSERT_IF_NULL(snapCtrl_);
+    SnapOptions checkpointOptions;
+    if (!killReq->payload().empty() && checkpointOptions.ParseFromString(killReq->payload())
+        && checkpointOptions.checkpointtimeoutms() > 0) {
+        (*identity.mutable_createoptions())["YR_CHECKPOINT_TIMEOUT_MS"] =
+            std::to_string(checkpointOptions.checkpointtimeoutms());
+    }
     StopHeartbeat(identity.instanceid());
-    snapCtrl_->HandleAnonymousCheckpoint(killReq->requestid(), identity.instanceid())
-        .OnComplete(litebus::Defer(
-            GetAID(), &InstanceCtrlActor::OnAnonymousCheckpointComplete,
-            identity, std::placeholders::_1));
-    KillResponse response;
-    response.set_code(common::ERR_NONE);
-    response.set_message("anonymous checkpoint accepted");
-    return response;
+    auto checkpoint = snapCtrl_->HandleAnonymousCheckpoint(
+        killReq->requestid(), identity.instanceid(), checkpointOptions.checkpointtimeoutms());
+    checkpoint.OnComplete(litebus::Defer(
+        GetAID(), &InstanceCtrlActor::OnAnonymousCheckpointComplete,
+        identity, std::placeholders::_1));
+    return checkpoint;
 }
 
 void InstanceCtrlActor::OnAnonymousCheckpointComplete(
@@ -547,9 +548,76 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleReloadSignal(
         });
 }
 
-litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(const std::string &srcInstanceID,
-                                                            const std::shared_ptr<KillRequest> &killReq,
-                                                            bool isSkipAuth)
+namespace {
+
+bool IsSerializedSnapshotSignal(int signal)
+{
+    return signal == INSTANCE_ANONYMOUS_CHECKPOINT_SIGNAL
+        || signal == INSTANCE_RELOAD_SIGNAL
+        || signal == INSTANCE_CHECKPOINT_SIGNAL
+        || signal == INSTANCE_TRANS_SUSPEND_SIGNAL
+        || signal == INSTANCE_RESUME_SIGNAL
+        || signal == INSTANCE_SNAPSHOT_SIGNAL
+        || signal == INSTANCE_SNAPSTART_SIGNAL;
+}
+
+}  // namespace
+
+litebus::Future<KillResponse> InstanceCtrlActor::HandleKill(
+    const std::string &srcInstanceID, const std::shared_ptr<KillRequest> &killReq,
+    bool isSkipAuth)
+{
+    if (killReq == nullptr) {
+        return GenKillResponse(common::ERR_PARAM_INVALID, "kill request is null");
+    }
+    if (!IsSerializedSnapshotSignal(killReq->signal())) {
+        return HandleKillImpl(srcInstanceID, killReq, isSkipAuth);
+    }
+    const auto &instanceID = killReq->instanceid();
+    const auto &requestID = killReq->requestid();
+    if (instanceID.empty() || requestID.empty()) {
+        return GenKillResponse(common::ERR_PARAM_INVALID,
+                               "checkpoint/restore operation identity is incomplete");
+    }
+    auto active = serializedInstanceOperations_.find(instanceID);
+    if (active != serializedInstanceOperations_.end()) {
+        if (active->second.requestID == requestID) {
+            return active->second.completion->GetFuture();
+        }
+        return GenKillResponse(common::ERR_INSTANCE_BUSY,
+                               "another checkpoint/restore operation is running");
+    }
+    auto completion = std::make_shared<litebus::Promise<KillResponse>>();
+    serializedInstanceOperations_[instanceID] = {requestID, completion};
+    HandleKillImpl(srcInstanceID, killReq, isSkipAuth).OnComplete(litebus::Defer(
+        GetAID(), &InstanceCtrlActor::CompleteSerializedInstanceOperation,
+        instanceID, requestID, std::placeholders::_1));
+    return completion->GetFuture();
+}
+
+void InstanceCtrlActor::CompleteSerializedInstanceOperation(
+    const std::string &instanceID, const std::string &requestID,
+    const litebus::Future<KillResponse> &future)
+{
+    auto active = serializedInstanceOperations_.find(instanceID);
+    if (active == serializedInstanceOperations_.end()
+        || active->second.requestID != requestID) {
+        return;
+    }
+    auto completion = active->second.completion;
+    serializedInstanceOperations_.erase(active);
+    if (future.IsError()) {
+        completion->SetValue(GenKillResponse(
+            common::ERR_INNER_COMMUNICATION,
+            "checkpoint/restore operation future failed"));
+        return;
+    }
+    completion->SetValue(future.Get());
+}
+
+litebus::Future<KillResponse> InstanceCtrlActor::HandleKillImpl(const std::string &srcInstanceID,
+                                                                const std::shared_ptr<KillRequest> &killReq,
+                                                                bool isSkipAuth)
 {
     const int &signal = killReq->signal();
     switch (signal) {
@@ -4312,7 +4380,7 @@ void InstanceCtrlActor::OnLocalSnapshotSelected(
         return;
     }
     const auto &snapshot = *future.Get();
-    if (!snapshot.anonymous() || snapshot.snapshotid().empty()
+    if (!snapshot.localrecoverycandidate() || snapshot.snapshotid().empty()
         || snapshot.instanceid() != context->source.instanceid()) {
         CompleteLocalSnapshotRecovery(
             context, Status(StatusCode::ERR_INSTANCE_INFO_INVALID,
@@ -4328,15 +4396,16 @@ void InstanceCtrlActor::OnLocalSnapshotSelected(
         return;
     }
     context->snapshotID = snapshot.snapshotid();
+    context->snapshot = snapshot;
     context->request = std::make_shared<messages::ScheduleRequest>(*sourceRequest);
     context->request->set_requestid(
         "local-failover/" + litebus::uuid_generator::UUID::GetRandomUUID().ToString());
     context->request->set_traceid(
         "local-failover-trace/" + litebus::uuid_generator::UUID::GetRandomUUID().ToString());
     *context->request->mutable_instance() = context->source;
-    YRLOG_INFO("{}|instance({}) selected local snapshot({}) generation({}) from runtime({})",
+    YRLOG_INFO("{}|instance({}) selected local snapshot({}) from runtime({})",
                context->request->requestid(), context->source.instanceid(), context->snapshotID,
-               snapshot.generation(), context->source.runtimeid());
+               context->source.runtimeid());
     StopHeartbeat(context->source.instanceid());
     KillRuntime(context->source, true).OnComplete(litebus::Defer(
         GetAID(), &InstanceCtrlActor::OnLocalSnapshotSourceStopped,
@@ -4375,7 +4444,17 @@ litebus::Future<messages::DeployInstanceResponse> InstanceCtrlActor::DeployLocal
             context->request->requestid());
     }
     auto request = GetDeployInstanceReq(meta->second, context->request);
-    request->set_restoresnapshotid(context->snapshotID);
+    if (!context->snapshot.storagebackend().empty()
+        && context->snapshot.storagebackend() != "local") {
+        auto *snapshot = request->mutable_snapshotinfo();
+        snapshot->set_checkpointid(context->snapshotID);
+        snapshot->set_storage(context->snapshot.storagebackend());
+        snapshot->set_size(static_cast<int64_t>(context->snapshot.size()));
+        snapshot->set_status(resources::SNAPSHOT_READY);
+        snapshot->set_sourcenodeid(nodeID_);
+    } else {
+        request->set_restoresnapshotid(context->snapshotID);
+    }
     AddDsAuthToDeployInstanceReq(context->request, request);
     return AddCredToDeployInstanceReq(instance.tenantid(), request)
         .Then([functionAgentMgr(functionAgentMgr_), request,
@@ -4902,6 +4981,16 @@ void InstanceCtrlActor::SendHeartbeat(const std::string &instanceID, uint32_t ti
         (pos == std::string::npos && config_.runtimeConfig.runtimeHeartbeatEnable == "false")) {
         return;
     }
+    if (serializedInstanceOperations_.find(instanceID) != serializedInstanceOperations_.end()) {
+        if (CheckHeartbeatExist(instanceID)) {
+            litebus::TimerTools::Cancel(runtimeHeartbeatTimers_[instanceID]);
+            runtimeHeartbeatTimers_[instanceID] = litebus::AsyncAfter(
+                HEARTBEAT_INTERVAL_MS, GetAID(), &InstanceCtrlActor::SendHeartbeat,
+                instanceID, 0, runtimeID, prevStatus);
+        }
+        YRLOG_DEBUG("instance({}) heartbeat is fenced by checkpoint/restore operation", instanceID);
+        return;
+    }
 
     ASSERT_IF_NULL(clientManager_);
     (void)clientManager_->GetControlInterfacePosixClient(instanceID)
@@ -4925,6 +5014,15 @@ void InstanceCtrlActor::SendHeartbeatCallback(const std::string &instanceID, uin
                                               const litebus::Future<Status> &status)
 {
     if (!CheckHeartbeatExist(instanceID)) {
+        return;
+    }
+    if (serializedInstanceOperations_.find(instanceID) != serializedInstanceOperations_.end()) {
+        litebus::TimerTools::Cancel(runtimeHeartbeatTimers_[instanceID]);
+        runtimeHeartbeatTimers_[instanceID] = litebus::AsyncAfter(
+            HEARTBEAT_INTERVAL_MS, GetAID(), &InstanceCtrlActor::SendHeartbeat,
+            instanceID, 0, runtimeID, prevStatus);
+        YRLOG_DEBUG("instance({}) ignores in-flight heartbeat result while checkpoint/restore is active",
+                    instanceID);
         return;
     }
 

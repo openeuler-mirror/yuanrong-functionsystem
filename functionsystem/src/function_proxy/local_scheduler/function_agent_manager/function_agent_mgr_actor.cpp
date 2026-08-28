@@ -18,6 +18,7 @@
 #include <async/asyncafter.hpp>
 #include <async/collect.hpp>
 #include <async/defer.hpp>
+#include <exception>
 #include <iostream>
 #include <nlohmann/json.hpp>
 
@@ -26,9 +27,11 @@
 #include "common/metrics/metrics_adapter.h"
 #include "common/resource_view/resource_tool.h"
 #include "common/resource_view/resource_type.h"
+#include "common/snapshot_storage/snapshot_storage.h"
 #include "common/types/instance_state.h"
 #include "common/utils/generate_message.h"
 #include "common/utils/collect_status.h"
+#include "common/utils/resume_identity.h"
 #include "local_scheduler/bundle_manager/bundle_mgr.h"
 #include "local_scheduler/instance_control/instance_ctrl.h"
 #include "local_scheduler/local_scheduler_service/local_sched_srv.h"
@@ -36,6 +39,60 @@
 namespace functionsystem::local_scheduler {
 using std::string;
 const std::string AGENT_INFO_PATH = "/yr/agentInfo/";
+
+namespace {
+
+constexpr char CHECKPOINT_TIMEOUT_OPTION[] = "YR_CHECKPOINT_TIMEOUT_MS";
+constexpr uint64_t DEFAULT_CHECKPOINT_TIMEOUT_MS = 180000;
+constexpr uint64_t MAX_CHECKPOINT_TIMEOUT_MS = 3600000;
+
+::messages::SnapshotAttemptFinalizeRequest ResolveFinalizeDispositions(
+    const ::messages::SnapshotAttemptFinalizeRequest &input)
+{
+    auto request = input;
+    request.set_deletelocalartifact(false);
+    request.set_deleteruntime(false);
+    request.clear_deleteremoteobjectkeys();
+    const auto tenantHash = snapshot_storage::StableTenantHash(request.tenantid());
+    const auto pauseFinal = snapshot_storage::BuildPauseSnapshotKey(
+        tenantHash, request.instanceid(), request.snapshotid());
+    const auto pauseTemporary = snapshot_storage::BuildPauseSnapshotTemporaryKey(
+        tenantHash, request.instanceid(), request.snapshotid(), request.attemptid());
+    const auto reusableFinal = snapshot_storage::BuildReusableSnapshotKey(
+        tenantHash, request.snapshotid());
+    const auto reusableTemporary = snapshot_storage::BuildReusableSnapshotTemporaryKey(
+        tenantHash, request.snapshotid(), request.attemptid());
+    switch (request.operation()) {
+        case ::messages::PAUSE_COMMITTED:
+            request.add_deleteremoteobjectkeys(pauseTemporary);
+            break;
+        case ::messages::PAUSE_ABORTED:
+            request.set_deletelocalartifact(true);
+            request.add_deleteremoteobjectkeys(pauseTemporary);
+            break;
+        case ::messages::RESUME_COMMITTED:
+        case ::messages::PAUSED_DELETED:
+            request.set_deletelocalartifact(true);
+            request.add_deleteremoteobjectkeys(pauseFinal);
+            break;
+        case ::messages::RESUME_ABORTED:
+            request.set_deleteruntime(true);
+            break;
+        case ::messages::REUSABLE_SNAPSHOT_COMMITTED:
+            request.add_deleteremoteobjectkeys(reusableTemporary);
+            break;
+        case ::messages::REUSABLE_SNAPSHOT_ABORTED:
+            request.set_deletelocalartifact(true);
+            request.add_deleteremoteobjectkeys(reusableTemporary);
+            request.add_deleteremoteobjectkeys(reusableFinal);
+            break;
+        default:
+            break;
+    }
+    return request;
+}
+
+}  // namespace
 
 FunctionAgentMgrActor::FunctionAgentMgrActor(const std::string &name, const Param &param, const std::string &nodeID,
                                              std::shared_ptr<MetaStoreClient> metaStoreClient)
@@ -1695,13 +1752,51 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
     request->set_containerid(instanceInfo.containerid());  // containerID is same as runtimeID in container mode
     request->set_ttl(type == common::SNAPSHOT ? 0 : ttl);
     request->set_type(type);
-    request->set_anonymous(type == common::PAUSE_RESUME);
+    request->set_localrecoverycandidate(type != common::SNAPSHOT);
+    request->set_returnartifact(type == common::SNAPSHOT);
     request->set_leaverunning(type == common::SNAPSHOT || type == common::PAUSE_RESUME);
-    request->set_snapshotid(snapshotID);
+    const auto resolvedSnapshotID = snapshotID.empty()
+        ? "ckpt-" + resume_identity::Sha256Hex(
+            requestID + std::string(1, '\0') + instanceID).substr(0, 40)
+        : snapshotID;
+    request->set_snapshotid(resolvedSnapshotID);
     request->set_checkpointdir(checkpointDir);
     request->set_tenantid(instanceInfo.tenantid());
     request->set_sourceversion(instanceInfo.version());
-    auto future = snapshotRuntimeSync_.AddSynchronizer(requestID);
+    auto timeoutMs = DEFAULT_CHECKPOINT_TIMEOUT_MS;
+    if (const auto configured = instanceInfo.createoptions().find(CHECKPOINT_TIMEOUT_OPTION);
+        configured != instanceInfo.createoptions().end()) {
+        try {
+            timeoutMs = std::stoull(configured->second);
+        } catch (const std::exception &) {
+            timeoutMs = 0;
+        }
+    }
+    if (timeoutMs == 0 || timeoutMs > MAX_CHECKPOINT_TIMEOUT_MS) {
+        messages::SnapshotRuntimeResponse result;
+        result.set_requestid(requestID);
+        result.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
+        result.set_message("checkpoint timeout must be between 1 and 3600000 milliseconds");
+        return result;
+    }
+    request->set_timeoutms(timeoutMs);
+    const auto tenantHash = snapshot_storage::StableTenantHash(instanceInfo.tenantid());
+    if (type == common::SNAPSHOT) {
+        request->set_artifactobjectkey(
+            snapshot_storage::BuildReusableSnapshotKey(tenantHash, resolvedSnapshotID));
+        request->set_artifacttemporaryobjectkey(
+            snapshot_storage::BuildReusableSnapshotTemporaryKey(
+                tenantHash, resolvedSnapshotID, requestID));
+    } else {
+        request->set_artifactobjectkey(
+            snapshot_storage::BuildPauseSnapshotKey(
+                tenantHash, instanceID, resolvedSnapshotID));
+        request->set_artifacttemporaryobjectkey(
+            snapshot_storage::BuildPauseSnapshotTemporaryKey(
+                tenantHash, instanceID, resolvedSnapshotID, requestID));
+    }
+    auto future = snapshotRuntimeSync_.AddSynchronizer(
+        requestID, static_cast<uint32_t>(timeoutMs));
     const auto targetAgent = funcAgentTable_[funcAgentID].aid;
     snapshotRuntimeExpectedAgent_[requestID] = targetAgent;
 
@@ -1735,9 +1830,33 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
     request.set_snapshotid(snapshotID);
     request.set_tenantid(instanceInfo.tenantid());
     request.set_sourceversion(instanceInfo.version());
-    request.set_anonymous(true);
+    request.set_localrecoverycandidate(true);
+    request.set_returnartifact(false);
+    auto timeoutMs = DEFAULT_CHECKPOINT_TIMEOUT_MS;
+    if (const auto configured = instanceInfo.createoptions().find(CHECKPOINT_TIMEOUT_OPTION);
+        configured != instanceInfo.createoptions().end()) {
+        try {
+            timeoutMs = std::stoull(configured->second);
+        } catch (const std::exception &) {
+            timeoutMs = 0;
+        }
+    }
+    if (timeoutMs == 0 || timeoutMs > MAX_CHECKPOINT_TIMEOUT_MS) {
+        error.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
+        error.set_message("checkpoint timeout must be between 1 and 3600000 milliseconds");
+        return error;
+    }
+    request.set_timeoutms(timeoutMs);
     request.set_leaverunning(true);
-    auto future = snapshotRuntimeSync_.AddSynchronizer(requestID);
+    const auto tenantHash = snapshot_storage::StableTenantHash(instanceInfo.tenantid());
+    request.set_artifactobjectkey(
+        snapshot_storage::BuildPauseSnapshotKey(
+            tenantHash, instanceInfo.instanceid(), snapshotID));
+    request.set_artifacttemporaryobjectkey(
+        snapshot_storage::BuildPauseSnapshotTemporaryKey(
+            tenantHash, instanceInfo.instanceid(), snapshotID, requestID));
+    auto future = snapshotRuntimeSync_.AddSynchronizer(
+        requestID, static_cast<uint32_t>(timeoutMs));
     snapshotRuntimeExpectedAgent_[requestID] = agent->second.aid;
     Send(agent->second.aid, "SnapshotRuntime", request.SerializeAsString());
     return future;
@@ -1775,9 +1894,6 @@ void FunctionAgentMgrActor::SnapshotRuntimeResponse(const litebus::AID &from, st
                 messages::DeleteLocalSnapshotRequest request;
                 request.set_requestid(litebus::uuid_generator::UUID::GetRandomUUID().ToString());
                 request.set_snapshotid(recorded.replaced->snapshotid());
-                request.set_expectedgeneration(recorded.replaced->generation());
-                request.set_expectedsize(recorded.replaced->size());
-                request.set_expectedsha256(recorded.replaced->sha256());
                 DeleteLocalSnapshot(recorded.replacedFunctionAgentID, request)
                     .OnComplete(litebus::Defer(
                         GetAID(), &FunctionAgentMgrActor::OnStaleLocalSnapshotDeleted,
@@ -1907,9 +2023,10 @@ litebus::Future<::messages::SnapshotAttemptFinalizeResponse> FunctionAgentMgrAct
         error.set_resultunknown(true);
         return error;
     }
-    auto future = snapshotAttemptFinalizeSync_.AddSynchronizer(request.attemptid());
-    snapshotAttemptExpectedAgent_[request.attemptid()] = agent->second.aid;
-    Send(agent->second.aid, "SnapshotAttemptFinalize", request.SerializeAsString());
+    const auto physical = ResolveFinalizeDispositions(request);
+    auto future = snapshotAttemptFinalizeSync_.AddSynchronizer(physical.attemptid());
+    snapshotAttemptExpectedAgent_[physical.attemptid()] = agent->second.aid;
+    Send(agent->second.aid, "SnapshotAttemptFinalize", physical.SerializeAsString());
     return future;
 }
 
@@ -1936,9 +2053,10 @@ FunctionAgentMgrActor::FinalizeSnapshotAttemptOnAnyAgent(
         error.set_resultunknown(true);
         return error;
     }
-    auto future = snapshotAttemptFinalizeSync_.AddSynchronizer(request.attemptid());
-    snapshotAttemptExpectedAgent_[request.attemptid()] = selected->aid;
-    Send(selected->aid, "SnapshotAttemptFinalize", request.SerializeAsString());
+    const auto physical = ResolveFinalizeDispositions(request);
+    auto future = snapshotAttemptFinalizeSync_.AddSynchronizer(physical.attemptid());
+    snapshotAttemptExpectedAgent_[physical.attemptid()] = selected->aid;
+    Send(selected->aid, "SnapshotAttemptFinalize", physical.SerializeAsString());
     return future;
 }
 
@@ -2035,7 +2153,8 @@ void FunctionAgentMgrActor::DeleteReusableSnapshotArtifact(
     if (!parsed || request.requestid().empty() || request.tenantid().empty()
         || request.snapshotid().empty() || artifact.storagebackend().empty()
         || artifact.objectkey().empty() || artifact.size() <= 0
-        || artifact.sha256().empty()) {
+        || (artifact.storagebackend() == "local"
+                ? artifact.sourcenodeid().empty() : artifact.sha256().empty())) {
         ::messages::DeleteReusableSnapshotArtifactResponse response;
         response.set_requestid(request.requestid());
         response.set_code(common::ERR_PARAM_INVALID);

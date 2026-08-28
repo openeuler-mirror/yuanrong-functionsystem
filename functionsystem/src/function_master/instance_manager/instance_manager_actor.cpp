@@ -1027,7 +1027,9 @@ InstanceManagerActor::DeleteReusableSnapshotArtifact(
     const auto &artifact = input.artifact();
     if (input.requestid().empty() || input.tenantid().empty() || input.snapshotid().empty()
         || artifact.storagebackend().empty() || artifact.objectkey().empty()
-        || artifact.size() <= 0 || artifact.sha256().empty()) {
+        || artifact.size() <= 0
+        || (artifact.storagebackend() == "local"
+                ? artifact.sourcenodeid().empty() : artifact.sha256().empty())) {
         error.set_code(common::ERR_PARAM_INVALID);
         error.set_message("reusable Snapshot artifact delete identity is incomplete");
         return error;
@@ -1106,8 +1108,16 @@ void InstanceManagerActor::OnReusableSnapshotDeleteNodes(
     auto candidates = std::make_shared<std::vector<std::string>>();
     std::vector<std::string> healthy(nodesFuture.Get().begin(), nodesFuture.Get().end());
     std::sort(healthy.begin(), healthy.end());
+    if (request.artifact().storagebackend() == "local") {
+        const auto &sourceNodeID = request.artifact().sourcenodeid();
+        if (nodesFuture.Get().count(sourceNodeID) != 0
+            && runtimeNodes->count(sourceNodeID) != 0) {
+            candidates->push_back(sourceNodeID);
+        }
+    }
     for (const auto &nodeID : healthy) {
-        if (runtimeNodes->count(nodeID) != 0) {
+        if (request.artifact().storagebackend() != "local"
+            && runtimeNodes->count(nodeID) != 0) {
             candidates->push_back(nodeID);
         }
     }

@@ -497,7 +497,6 @@ void RuntimeManager::SnapshotRuntime(const litebus::AID &from, std::string &&, s
                     runtimeID, resolveStatus.ToString());
         messages::SnapshotRuntimeResponse response;
         response.set_requestid(request->requestid());
-        response.set_agentrequestgeneration(request->agentrequestgeneration());
         response.set_code(static_cast<int32_t>(resolveStatus.StatusCode()));
         response.set_message(resolveStatus.RawMessage());
         Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
@@ -508,7 +507,6 @@ void RuntimeManager::SnapshotRuntime(const litebus::AID &from, std::string &&, s
         YRLOG_ERROR("{}|container executor not found", request->requestid());
         messages::SnapshotRuntimeResponse response;
         response.set_requestid(request->requestid());
-        response.set_agentrequestgeneration(request->agentrequestgeneration());
         response.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
         response.set_message("container executor not found");
         Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
@@ -528,10 +526,6 @@ Status RuntimeManager::ResolveSnapshotExecutorType(const messages::SnapshotRunti
     }
 
     const auto authoritativeType = GetRuntimeType(request.runtimeid());
-    if (request.type() == common::PAUSE_RESUME && authoritativeType != EXECUTOR_TYPE::SANDBOXD) {
-        return Status(StatusCode::RUNTIME_MANAGER_PARAMS_INVALID,
-                      "pause/resume checkpoint requires a sandboxd runtime");
-    }
     if (authoritativeType == EXECUTOR_TYPE::UNKNOWN) {
         return Status(StatusCode::RUNTIME_MANAGER_PARAMS_INVALID,
                       "snapshot runtime has an unknown executor type");
@@ -1323,7 +1317,6 @@ Status RuntimeManager::SnapshotRuntimeResponse(
         YRLOG_ERROR("{}|snapshot runtime future error: {}", requestID, responseFuture.GetErrorCode());
         messages::SnapshotRuntimeResponse response;
         response.set_requestid(requestID);
-        response.set_agentrequestgeneration(request->agentrequestgeneration());
         response.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_SYSTEM_ERROR));
         response.set_message("snapshot runtime failed");
         (void)Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
@@ -1331,7 +1324,6 @@ Status RuntimeManager::SnapshotRuntimeResponse(
     }
 
     auto response = responseFuture.Get();
-    response.set_agentrequestgeneration(request->agentrequestgeneration());
     YRLOG_INFO("{}|snapshot runtime completed for instance({}), code: {}", requestID, request->instanceid(),
                response.code());
     (void)Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());

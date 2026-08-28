@@ -98,7 +98,8 @@ public:
                                                          const std::string &payload);
 
     virtual litebus::Future<KillResponse> HandleAnonymousCheckpoint(
-        const std::string &requestID, const std::string &instanceID);
+        const std::string &requestID, const std::string &instanceID,
+        uint64_t checkpointTimeoutMs = 0);
 
     /**
      * Handle INSTANCE_SNAPSTART_SIGNAL

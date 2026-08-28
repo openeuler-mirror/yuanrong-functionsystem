@@ -129,6 +129,7 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
     SnapOptions options;
     bool leaveRunning = false;
     int32_t ttl = 0;  // Default TTL is 0 (no expiration)
+    uint64_t checkpointTimeoutMs = 0;
     std::string functionType;
     if (!payload.empty()) {
         if (!options.ParseFromString(payload)) {
@@ -141,6 +142,7 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
         leaveRunning = options.leaverunning();
         ttl = options.ttl();  // Extract TTL from SnapOptions
         functionType = options.functiontype();
+        checkpointTimeoutMs = options.checkpointtimeoutms();
     }
     if (options.type() == common::SnapType::PAUSE_RESUME
         && (instanceControlView_ == nullptr || instanceCtrl_ == nullptr || clientManager_ == nullptr
@@ -162,11 +164,16 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
     }
     if (options.type() == common::SnapType::PAUSE_RESUME) {
         const auto effectiveTTL = ttl > 0 ? ttl : DEFAULT_PAUSE_TTL_SECONDS;
-        return HandlePauseResumeSnapshot(requestID, instanceID, stateMachine, effectiveTTL);
+        return HandlePauseResumeSnapshot(
+            requestID, instanceID, stateMachine, effectiveTTL, checkpointTimeoutMs);
     }
     auto instanceInfo = stateMachine->GetInstanceInfo();
     if (options.type() == common::SnapType::SNAPSHOT) {
         return HandleReusableSnapshot(requestID, instanceID, instanceInfo, options);
+    }
+    if (checkpointTimeoutMs > 0) {
+        (*instanceInfo.mutable_createoptions())["YR_CHECKPOINT_TIMEOUT_MS"] =
+            std::to_string(checkpointTimeoutMs);
     }
     YRLOG_INFO("{}|{}|start snapshot, leave_running: {}", requestID, instanceID, leaveRunning);
     ASSERT_IF_NULL(functionAgentMgr_);
@@ -214,7 +221,8 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleSnapshot(const std::string &r
 }
 
 litebus::Future<KillResponse> SnapCtrlActor::HandleAnonymousCheckpoint(
-    const std::string &requestID, const std::string &instanceID)
+    const std::string &requestID, const std::string &instanceID,
+    uint64_t checkpointTimeoutMs)
 {
     auto completion = std::make_shared<litebus::Promise<KillResponse>>();
     auto context = std::make_shared<AnonymousCheckpointContext>();
@@ -238,6 +246,10 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleAnonymousCheckpoint(
         return completion->GetFuture();
     }
     context->instanceInfo = stateMachine->GetInstanceInfo();
+    if (checkpointTimeoutMs > 0) {
+        (*context->instanceInfo.mutable_createoptions())["YR_CHECKPOINT_TIMEOUT_MS"] =
+            std::to_string(checkpointTimeoutMs);
+    }
     PrepareSnap(requestID, instanceID).OnComplete(litebus::Defer(
         GetAID(), &SnapCtrlActor::OnAnonymousCheckpointPrepared,
         context, std::placeholders::_1));
@@ -358,6 +370,10 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleReusableSnapshot(
     context->instanceID = instanceID;
     context->name = options.name();
     context->sourceInstanceInfo = instanceInfo;
+    if (options.checkpointtimeoutms() > 0) {
+        (*context->sourceInstanceInfo.mutable_createoptions())["YR_CHECKPOINT_TIMEOUT_MS"] =
+            std::to_string(options.checkpointtimeoutms());
+    }
     context->requestFingerprint = BuildReusableSnapshotFingerprint(instanceInfo, options);
     context->completion = std::make_shared<litebus::Promise<KillResponse>>();
 
@@ -524,6 +540,9 @@ void SnapCtrlActor::OnReusableSnapshotCheckpointed(
             && response.reusablesnapshotartifact().size() > 0
             && !response.reusablesnapshotartifact().sha256().empty()) {
             context->artifact = response.reusablesnapshotartifact();
+            if (context->artifact.storagebackend() == "local") {
+                context->artifact.set_sourcenodeid(nodeID_);
+            }
             FinalizeReusableSnapshot(context, ::messages::REUSABLE_SNAPSHOT_ABORTED,
                                      static_cast<common::ErrorCode>(response.code()),
                                      response.message());
@@ -549,6 +568,9 @@ void SnapCtrlActor::OnReusableSnapshotCheckpointed(
         return;
     }
     context->artifact = response.reusablesnapshotartifact();
+    if (context->artifact.storagebackend() == "local") {
+        context->artifact.set_sourcenodeid(nodeID_);
+    }
     clientManager_->GetControlInterfacePosixClient(context->instanceID)
         .OnComplete(litebus::Defer(
             GetAID(), &SnapCtrlActor::OnReusableSnapshotClient,
@@ -636,7 +658,8 @@ void SnapCtrlActor::FinalizeReusableSnapshot(
     common::ErrorCode terminalCode, const std::string &terminalMessage)
 {
     if (context->artifact.storagebackend().empty() || context->artifact.size() <= 0
-        || context->artifact.sha256().empty()) {
+        || (context->artifact.storagebackend() == "local"
+                ? context->artifact.sourcenodeid().empty() : context->artifact.sha256().empty())) {
         const auto message = "reusable snapshot exact cleanup artifact identity is incomplete";
         // Keep the PUBLISHING/READY coordination record when exact cleanup
         // cannot be proven.  Deleting it here would orphan an immutable

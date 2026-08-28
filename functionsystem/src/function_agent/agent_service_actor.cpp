@@ -79,64 +79,18 @@ static std::string MaterializedSnapshotID(const messages::StartInstanceRequest &
         : info.snapshotinfo().checkpointid();
 }
 
-static Status ValidateMaterializedSnapshot(
-    const LocalSnapshotDescriptor &descriptor,
-    const messages::StartInstanceRequest &request,
-    const std::string &architecture)
-{
-    const auto &info = request.runtimeinstanceinfo();
-    const bool reusable = info.has_reusablesnapshotrestore();
-    const uint64_t expectedSize = reusable
-        ? static_cast<uint64_t>(info.reusablesnapshotrestore().artifact().size())
-        : static_cast<uint64_t>(info.snapshotinfo().size());
-    const auto &expectedSha256 = reusable
-        ? info.reusablesnapshotrestore().artifact().sha256()
-        : info.snapshotinfo().sha256();
-    if (descriptor.snapshotID != MaterializedSnapshotID(request)
-        || descriptor.anonymous != !reusable || descriptor.size != expectedSize
-        || descriptor.sha256 != expectedSha256 || descriptor.architecture != architecture
-        || (!info.container().runtime().empty()
-            && descriptor.runtimeClass != info.container().runtime())) {
-        return Status(StatusCode::SCHEDULE_CONFLICTED,
-                      "materialized local snapshot metadata does not match restore request");
-    }
-    return Status::OK();
-}
-
-static Status ValidateMaterializedCheckpointFile(
-    const std::filesystem::path &checkpointRoot,
-    const messages::StartInstanceRequest &request)
-{
-    const auto &info = request.runtimeinstanceinfo();
-    const bool reusable = info.has_reusablesnapshotrestore();
-    snapshot_storage::SnapshotObjectMetadata expected;
-    expected.snapshotID = MaterializedSnapshotID(request);
-    expected.size = reusable
-        ? static_cast<uint64_t>(info.reusablesnapshotrestore().artifact().size())
-        : static_cast<uint64_t>(info.snapshotinfo().size());
-    expected.sha256 = reusable
-        ? info.reusablesnapshotrestore().artifact().sha256()
-        : info.snapshotinfo().sha256();
-    expected.complete = true;
-    const auto checkpointPath = checkpointRoot / expected.snapshotID / "checkpoint.img";
-    return snapshot_storage::detail::ValidateFile(checkpointPath.string(), expected);
-}
-
 static LocalSnapshotCommitRequest MakeMaterializedSnapshotCommitRequest(
     const DeployInstanceRequest &deploy,
-    const messages::StartInstanceRequest &start,
-    const std::string &architecture)
+    const messages::StartInstanceRequest &start)
 {
     const auto &info = start.runtimeinstanceinfo();
     LocalSnapshotCommitRequest commit;
     commit.snapshotID = MaterializedSnapshotID(start);
-    commit.anonymous = !info.has_reusablesnapshotrestore();
+    commit.recoveryCandidate = !info.has_reusablesnapshotrestore();
     commit.instanceID = info.instanceid();
     commit.tenantHash = snapshot_storage::StableTenantHash(deploy->tenantid());
-    commit.runtimeClass = info.container().runtime().empty() ? "runsc" : info.container().runtime();
-    commit.architecture = architecture;
     commit.createdAtUnixSeconds = static_cast<int64_t>(std::time(nullptr));
-    if (commit.anonymous) {
+    if (commit.recoveryCandidate) {
         int64_t expectedVersion = 0;
         const auto version = start.scheduleoption().extension().find(
             resume_identity::EXPECTED_VERSION_EXTENSION);
@@ -980,12 +934,18 @@ void AgentServiceActor::CompleteStartInstanceResponse(
 {
     auto request = deployingRequest_.find(startInstanceResponse.requestid());
     if (request == deployingRequest_.end()) {
+        if (!resume_identity::IsResultUnknownStatusCode(startInstanceResponse.code())) {
+            ReleaseRestoreSnapshotPin(startInstanceResponse.requestid());
+        }
         YRLOG_ERROR("{}|can't return start response, maybe instance has been killed.",
                     startInstanceResponse.requestid());
         return;
     }
 
     if (!registerRuntimeMgr_.registered || !isRegisterCompleted_) {
+        if (!resume_identity::IsResultUnknownStatusCode(startInstanceResponse.code())) {
+            ReleaseRestoreSnapshotPin(startInstanceResponse.requestid());
+        }
         YRLOG_ERROR("{}|registration is not complete, ignore start instance response.",
                     startInstanceResponse.requestid());
         return;
@@ -1039,6 +999,13 @@ void AgentServiceActor::CompleteStartInstanceResponse(
         YRLOG_ERROR("{}|failed({}) to send a response message.", deployInstanceResponse->requestid(), ret);
     }
 
+    const bool restoreResultUnknown = startInstanceResponse.code() != 0
+        && request->second.trustedResume
+        && resume_identity::IsResultUnknownStatusCode(startInstanceResponse.code());
+    if (!restoreResultUnknown) {
+        ReleaseRestoreSnapshotPin(startInstanceResponse.requestid());
+    }
+
     (void)deployingRequest_.erase(request);
 }
 
@@ -1053,7 +1020,7 @@ void AgentServiceActor::StopInstanceResponse(const litebus::AID &from, std::stri
     auto runtimeID = stopInstanceResponse.runtimeid();
     YRLOG_INFO("{}|received StopInstance response from {}, runtimeID: {}", requestID, std::string(from), runtimeID);
 
-    if (HandleResumeAbortStopInstanceResponse(from, stopInstanceResponse)) {
+    if (HandleSnapshotFinalizeStopInstanceResponse(from, stopInstanceResponse)) {
         return;
     }
 
@@ -1128,24 +1095,24 @@ void AgentServiceActor::StopInstanceResponse(const litebus::AID &from, std::stri
     (void)runtimesDeploymentCache_->runtimes.erase(runtimeID);
 }
 
-bool AgentServiceActor::HandleResumeAbortStopInstanceResponse(
+bool AgentServiceActor::HandleSnapshotFinalizeStopInstanceResponse(
     const litebus::AID &from, const ::messages::StopInstanceResponse &response)
 {
     const auto requestID = response.requestid();
-    auto resumeAbort = resumeAbortFinalizations_.find(requestID);
-    if (resumeAbort == resumeAbortFinalizations_.end()) {
+    auto finalize = snapshotRuntimeFinalizations_.find(requestID);
+    if (finalize == snapshotRuntimeFinalizations_.end()) {
         return false;
     }
     const auto expectedRuntimeManager = litebus::AID(
         registerRuntimeMgr_.name, registerRuntimeMgr_.address);
-    if (from != expectedRuntimeManager || response.runtimeid() != resumeAbort->second.runtimeID) {
-        YRLOG_WARN("{}|reject resume loser StopInstance response from {} for runtime {}",
+    if (from != expectedRuntimeManager || response.runtimeid() != finalize->second.runtimeID) {
+        YRLOG_WARN("{}|reject snapshot finalize StopInstance response from {} for runtime {}",
                    requestID, std::string(from), response.runtimeid());
         return true;
     }
 
-    auto context = std::move(resumeAbort->second);
-    resumeAbortFinalizations_.erase(resumeAbort);
+    auto context = std::move(finalize->second);
+    snapshotRuntimeFinalizations_.erase(finalize);
     const auto code = static_cast<StatusCode>(response.code());
     const bool stopConfirmed = code == StatusCode::SUCCESS
         || code == StatusCode::GRPC_NOT_FOUND
@@ -1158,8 +1125,7 @@ bool AgentServiceActor::HandleResumeAbortStopInstanceResponse(
             resume_identity::IsResultUnknownStatusCode(response.code()), false, false);
         return true;
     }
-    OnResumeAttemptLocalFinalized(
-        context.caller, context.request, litebus::Future<Status>(Status::OK()));
+    ContinuePhysicalSnapshotFinalize(context.caller, context.request, 0);
     return true;
 }
 
@@ -1307,7 +1273,7 @@ void AgentServiceActor::DrainPendingPauseRequestsForRuntimeManager(const std::st
 {
     for (auto iter = snapshotRequests_.begin(); iter != snapshotRequests_.end();) {
         const auto &pending = iter->second;
-        if (pending.request.type() != common::PAUSE_RESUME || pending.runtimeManagerID != runtimeManagerID) {
+        if (pending.runtimeManagerID != runtimeManagerID) {
             ++iter;
             continue;
         }
@@ -1388,14 +1354,6 @@ Status AgentServiceActor::StartRuntime(const DeployInstanceRequest &request,
         auto restoreStatus = localSnapshotStore_ == nullptr
             ? Status(StatusCode::ERR_PARAM_INVALID, "local snapshot store is unavailable")
             : localSnapshotStore_->ValidateForRestore(request->restoresnapshotid(), descriptor);
-        const auto &runtimeClass = request->container().runtime();
-        const auto &architecture = registeredResourceUnit_->systeminfo().architecture();
-        if (restoreStatus.IsOk()
-            && ((!runtimeClass.empty() && descriptor.runtimeClass != runtimeClass)
-                || architecture.empty() || descriptor.architecture != architecture)) {
-            restoreStatus = Status(StatusCode::SCHEDULE_CONFLICTED,
-                                   "local snapshot runtime compatibility does not match target");
-        }
         if (restoreStatus.IsError()) {
             auto response = InitDeployInstanceResponse(
                 static_cast<int32_t>(restoreStatus.StatusCode()), restoreStatus.RawMessage(), *request);
@@ -1443,16 +1401,77 @@ Status AgentServiceActor::ForwardStartRuntime(
         prepareEnvRequest_.erase(request->requestid());
         return Status(StatusCode::FUNC_AGENT_START_RUNTIME_FAILED, "invalid runtime-manager");
     }
+    const auto &restoreSnapshotID =
+        startInstanceRequest->runtimeinstanceinfo().restoresnapshotid();
+    if (!restoreSnapshotID.empty()) {
+        const auto existing = restoreSnapshotPins_.find(request->requestid());
+        if (existing != restoreSnapshotPins_.end() && existing->second != restoreSnapshotID) {
+            auto response = InitDeployInstanceResponse(
+                static_cast<int32_t>(StatusCode::SCHEDULE_CONFLICTED),
+                "restore request ID is already pinned to a different snapshot", *request);
+            (void)Send(localSchedFuncAgentMgrAID_, "DeployInstanceResponse", response.SerializeAsString());
+            DeleteCodeReferByDeployInstanceRequest(request);
+            deployingRequest_.erase(request->requestid());
+            prepareEnvRequest_.erase(request->requestid());
+            return Status(StatusCode::SCHEDULE_CONFLICTED,
+                          "restore request pin identity conflicts");
+        }
+        if (existing == restoreSnapshotPins_.end()) {
+            const auto pin = localSnapshotStore_ == nullptr
+                ? Status(StatusCode::ERR_PARAM_INVALID, "local snapshot store is unavailable")
+                : localSnapshotStore_->PinForRestore(restoreSnapshotID);
+            if (pin.IsError()) {
+                auto response = InitDeployInstanceResponse(
+                    static_cast<int32_t>(pin.StatusCode()), pin.RawMessage(), *request);
+                (void)Send(localSchedFuncAgentMgrAID_, "DeployInstanceResponse", response.SerializeAsString());
+                DeleteCodeReferByDeployInstanceRequest(request);
+                deployingRequest_.erase(request->requestid());
+                prepareEnvRequest_.erase(request->requestid());
+                return pin;
+            }
+            restoreSnapshotPins_[request->requestid()] = restoreSnapshotID;
+        }
+    }
     const auto deploying = deployingRequest_.find(request->requestid());
     if (deploying != deployingRequest_.end() && deploying->second.request == request) {
         deploying->second.trustedResume = trustedResume;
     }
     YRLOG_INFO("{}|{}|send StartInstance request to ({}-{}), instance: {}", request->traceid(), request->requestid(),
                registerRuntimeMgr_.name, registerRuntimeMgr_.address, request->instanceid());
-    Send(litebus::AID(registerRuntimeMgr_.name, registerRuntimeMgr_.address), "StartInstance",
-         startInstanceRequest->SerializeAsString());
+    if (Send(litebus::AID(registerRuntimeMgr_.name, registerRuntimeMgr_.address), "StartInstance",
+             startInstanceRequest->SerializeAsString()) != 1) {
+        ReleaseRestoreSnapshotPin(request->requestid());
+        auto response = InitDeployInstanceResponse(
+            static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION),
+            "failed to send StartInstance to RuntimeManager", *request);
+        (void)Send(localSchedFuncAgentMgrAID_, "DeployInstanceResponse", response.SerializeAsString());
+        DeleteCodeReferByDeployInstanceRequest(request);
+        deployingRequest_.erase(request->requestid());
+        prepareEnvRequest_.erase(request->requestid());
+        return Status(StatusCode::ERR_INNER_COMMUNICATION,
+                      "failed to send StartInstance to RuntimeManager");
+    }
     prepareEnvRequest_.erase(request->requestid());
     return Status::OK();
+}
+
+void AgentServiceActor::ReleaseRestoreSnapshotPin(const std::string &requestID)
+{
+    const auto pin = restoreSnapshotPins_.find(requestID);
+    if (pin == restoreSnapshotPins_.end()) {
+        return;
+    }
+    const auto snapshotID = pin->second;
+    restoreSnapshotPins_.erase(pin);
+    if (localSnapshotStore_ == nullptr) {
+        return;
+    }
+    const auto status = localSnapshotStore_->UnpinAfterRestore(
+        snapshotID, !KeepsLocalSnapshot(snapshotStorageMode_));
+    if (status.IsError()) {
+        YRLOG_WARN("{}|failed to release restore snapshot pin({}): {}",
+                   requestID, snapshotID, status.RawMessage());
+    }
 }
 
 litebus::Future<Status> AgentServiceActor::MaterializeRemoteSnapshot(
@@ -1465,26 +1484,31 @@ litebus::Future<Status> AgentServiceActor::MaterializeRemoteSnapshot(
     if (inFlight != snapshotMaterializations_.end()) {
         return inFlight->second;
     }
-    if (localSnapshotStore_ == nullptr || registeredResourceUnit_ == nullptr
-        || registeredResourceUnit_->systeminfo().architecture().empty()) {
+    if (!UsesDistributedStorage(snapshotStorageMode_)) {
+        if (localSnapshotStore_ == nullptr) {
+            return Status(StatusCode::ERR_PARAM_INVALID, "local snapshot storage is unavailable");
+        }
+        LocalSnapshotDescriptor descriptor;
+        const auto local = localSnapshotStore_->ValidateForRestore(snapshotID, descriptor);
+        if (local.IsOk()) {
+            request->set_restoresnapshotid(snapshotID);
+            startInstanceRequest->mutable_runtimeinstanceinfo()->set_restoresnapshotid(snapshotID);
+        }
+        return local;
+    }
+    if (localSnapshotStore_ == nullptr) {
         return Status(StatusCode::ERR_PARAM_INVALID,
                       "local snapshot materialization dependencies are unavailable");
     }
     const auto commit = MakeMaterializedSnapshotCommitRequest(
-        request, *startInstanceRequest,
-        registeredResourceUnit_->systeminfo().architecture());
+        request, *startInstanceRequest);
     const auto prepared = localSnapshotStore_->Prepare(commit);
     if (prepared.status.IsError()) {
         return prepared.status;
     }
     if (prepared.replayed) {
         LocalSnapshotDescriptor descriptor;
-        const auto validation = localSnapshotStore_->ValidateForRestore(snapshotID, descriptor);
-        const auto result = validation.IsError()
-            ? validation
-            : ValidateMaterializedSnapshot(
-                  descriptor, *startInstanceRequest,
-                  registeredResourceUnit_->systeminfo().architecture());
+        const auto result = localSnapshotStore_->ValidateForRestore(snapshotID, descriptor);
         if (result.IsOk()) {
             request->set_restoresnapshotid(snapshotID);
             startInstanceRequest->mutable_runtimeinstanceinfo()->set_restoresnapshotid(snapshotID);
@@ -1515,24 +1539,15 @@ Status AgentServiceActor::CommitMaterializedSnapshot(
         return materialized;
     }
     const auto snapshotID = MaterializedSnapshotID(*startInstanceRequest);
-    auto committed = ValidateMaterializedCheckpointFile(checkpointRoot_, *startInstanceRequest);
-    if (committed.IsError()) {
-        return committed;
-    }
+    auto committed = Status::OK();
     LocalSnapshotDescriptor descriptor;
     committed = localSnapshotStore_->ValidateForRestore(snapshotID, descriptor);
     if (committed.StatusCode() == StatusCode::FILE_NOT_FOUND) {
         const auto commit = MakeMaterializedSnapshotCommitRequest(
-            request, *startInstanceRequest,
-            registeredResourceUnit_->systeminfo().architecture());
+            request, *startInstanceRequest);
         const auto result = localSnapshotStore_->Commit(commit);
         committed = result.status;
         descriptor = result.descriptor;
-    }
-    if (committed.IsOk()) {
-        committed = ValidateMaterializedSnapshot(
-            descriptor, *startInstanceRequest,
-            registeredResourceUnit_->systeminfo().architecture());
     }
     if (committed.IsOk()) {
         request->set_restoresnapshotid(snapshotID);

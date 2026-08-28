@@ -1115,6 +1115,8 @@ message SnapshotArtifact {
   string sha256 = 4;
   string format = 5;
   uint32 formatVersion = 6;
+  // Required only for local storage; identifies the node that owns the file.
+  string sourceNodeID = 7;
 }
 
 // Reusable Snapshot has an independent four-state lifecycle. Pause/Resume
@@ -1293,21 +1295,21 @@ message ResolveReusableSnapshotForCreateResponse {
 }
 
 message LocalSnapshotMetadata {
+  reserved 4, 5, 6, 8, 14, 15;
+  reserved "generation", "runtimeClass", "architecture", "sha256",
+      "artifactFormat", "artifactFormatVersion";
+
   string snapshotID = 1;
-  bool anonymous = 2;
+  bool localRecoveryCandidate = 2;
   string instanceID = 3;
-  uint64 generation = 4;
-  string runtimeClass = 5;
-  string architecture = 6;
   uint64 size = 7;
-  string sha256 = 8;
   int64 createdAtUnixSeconds = 9;
   string sourceRuntimeID = 10;
   string sourceSandboxID = 11;
   int64 sourceInstanceVersion = 12;
   string tenantHash = 13;
-  string artifactFormat = 14;
-  uint32 artifactFormatVersion = 15;
+  string storageBackend = 16;
+  string objectKey = 17;
 }
 
 message ListLocalSnapshotsRequest {
@@ -1322,11 +1324,11 @@ message ListLocalSnapshotsResponse {
 }
 
 message DeleteLocalSnapshotRequest {
+  reserved 3, 4, 5;
+  reserved "expectedGeneration", "expectedSize", "expectedSha256";
+
   string requestID = 1;
   string snapshotID = 2;
-  uint64 expectedGeneration = 3;
-  uint64 expectedSize = 4;
-  string expectedSha256 = 5;
 }
 
 message DeleteLocalSnapshotResponse {
@@ -1337,26 +1339,32 @@ message DeleteLocalSnapshotResponse {
 
 
 message SnapshotRuntimeRequest {
+  reserved 9;
+  reserved "agentRequestGeneration";
+
   string requestID = 1;
   string runtimeID = 2;
   string instanceID = 3;
   string containerID = 4;
   int32 ttl = 5;
-  common.SnapType type = 6;
+  common.SnapType type = 6;  // interpreted by FunctionProxy only
   string snapshotID = 7;
   string checkpointDir = 8;
-  // FunctionAgent-local generation echoed by RuntimeManager to fence stale
-  // actor responses. It is cleared before the response leaves FunctionAgent.
-  uint64 agentRequestGeneration = 9;
   string tenantID = 10;
   int64 sourceVersion = 11;
   bool leaveRunning = 12;
-  bool anonymous = 13;
+  bool localRecoveryCandidate = 13;
+  // FunctionProxy resolves business-specific keys. FunctionAgent treats both
+  // keys as opaque storage instructions.
+  string artifactObjectKey = 14;
+  string artifactTemporaryObjectKey = 15;
+  bool returnArtifact = 16;
+  uint64 timeoutMs = 17;
 }
 
 message SnapshotRuntimeResponse {
-  reserved 8;
-  reserved "localArtifactPath";
+  reserved 7, 8;
+  reserved "agentRequestGeneration", "localArtifactPath";
 
   int32 code = 1;
   string message = 2;
@@ -1367,7 +1375,6 @@ message SnapshotRuntimeResponse {
   // Successful PAUSE_RESUME responses use durable snapshotInfo and never
   // expose a node-local path or fabricate a sandbox lifecycle state.
   SandboxPhysicalFact physicalFact = 6;
-  uint64 agentRequestGeneration = 7;
   SnapshotArtifact reusableSnapshotArtifact = 9;
   LocalSnapshotMetadata localSnapshot = 10;
 }
@@ -1476,6 +1483,9 @@ message SnapshotAttemptFinalizeRequest {
   uint64 expectedSize = 8;
   string expectedSha256 = 9;
   string expectedStorage = 10;
+  bool deleteLocalArtifact = 11;
+  bool deleteRuntime = 12;
+  repeated string deleteRemoteObjectKeys = 13;
 }
 
 message SnapshotAttemptFinalizeResponse {

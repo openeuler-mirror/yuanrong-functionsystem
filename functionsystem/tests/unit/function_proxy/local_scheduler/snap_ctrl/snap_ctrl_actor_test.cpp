@@ -219,13 +219,10 @@ public:
         if (anonymousCode_ == common::ERR_NONE) {
             auto *snapshot = response.mutable_localsnapshot();
             snapshot->set_snapshotid(snapshotID);
-            snapshot->set_anonymous(true);
+            snapshot->set_localrecoverycandidate(true);
             snapshot->set_instanceid(instanceInfo.instanceid());
-            snapshot->set_generation(1);
-            snapshot->set_runtimeclass("runsc");
-            snapshot->set_architecture("x86_64");
             snapshot->set_size(4096);
-            snapshot->set_sha256(std::string(64, 'a'));
+            snapshot->set_createdatunixseconds(1);
         }
         return response;
     }
@@ -845,7 +842,7 @@ TEST_F(SnapCtrlActorPauseContextTest, AnonymousCheckpointPreparesCheckpointsAndC
     prepareClient_->ConfigureSnapStarted(common::ERR_NONE, &operations);
     auto request = litebus::Async(
         actor_->GetAID(), &SnapCtrlActor::HandleAnonymousCheckpoint,
-        std::string("anonymous-request"), std::string(INSTANCE_ID));
+        std::string("anonymous-request"), std::string(INSTANCE_ID), uint64_t{0});
     requests_.emplace_back(request);
 
     ASSERT_AWAIT_TRUE_FOR([this]() { return prepareClient_->PrepareCalls() == 1; }, 5'000);
@@ -866,7 +863,7 @@ TEST_F(SnapCtrlActorPauseContextTest, AnonymousCheckpointFailureStillCallsSnapSt
     prepareClient_->ConfigureSnapStarted(common::ERR_NONE, nullptr);
     auto request = litebus::Async(
         actor_->GetAID(), &SnapCtrlActor::HandleAnonymousCheckpoint,
-        std::string("anonymous-failure"), std::string(INSTANCE_ID));
+        std::string("anonymous-failure"), std::string(INSTANCE_ID), uint64_t{0});
     requests_.emplace_back(request);
 
     ASSERT_AWAIT_TRUE_FOR([this]() { return prepareClient_->PrepareCalls() == 1; }, 5'000);
@@ -886,7 +883,7 @@ TEST_F(SnapCtrlActorPauseContextTest, AnonymousCheckpointRetriesSnapStartedAfter
     prepareClient_->ConfigureSnapStartedFutureFailures(1);
     auto request = litebus::Async(
         actor_->GetAID(), &SnapCtrlActor::HandleAnonymousCheckpoint,
-        std::string("anonymous-reconnect"), std::string(INSTANCE_ID));
+        std::string("anonymous-reconnect"), std::string(INSTANCE_ID), uint64_t{0});
     requests_.emplace_back(request);
 
     ASSERT_AWAIT_TRUE_FOR([this]() { return prepareClient_->PrepareCalls() == 1; }, 5'000);
