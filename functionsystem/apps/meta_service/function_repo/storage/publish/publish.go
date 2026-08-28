@@ -392,6 +392,7 @@ func buildFuncMetaData(txn storage.Transaction, fv storage.FunctionVersionValue,
 	info.ExtendedMetaData.InstanceMetaData.CacheInstance = fv.FunctionVersion.CacheInstance
 	info.ExtendedMetaData.ExtendedHandler = fv.FunctionVersion.ExtendedHandler
 	info.ExtendedMetaData.ExtendedTimeout = fv.FunctionVersion.ExtendedTimeout
+	info.ExtendedMetaData.Cmds = fv.FunctionVersion.Cmds
 	info.ExtendedMetaData.Device = fv.FunctionVersion.Device
 	info.ExtendedMetaData.PriorityAZ = fv.FunctionVersion.PriorityAZ
 	info.ExtendedMetaData.EnableMetrics = fv.FunctionVersion.EnableMetrics

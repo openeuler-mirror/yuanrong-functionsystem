@@ -103,6 +103,7 @@ type FunctionVersion struct {
 	HookHandler           map[string]string
 	ExtendedHandler       map[string]string
 	ExtendedTimeout       map[string]int
+	Cmds                  [][]string
 	CacheInstance         int
 	Device                types.Device
 	PoolLabel             string
