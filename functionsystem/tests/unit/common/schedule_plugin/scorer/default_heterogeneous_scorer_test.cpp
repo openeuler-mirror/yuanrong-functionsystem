@@ -21,7 +21,7 @@
 
 #include "common/resource_view/view_utils.h"
 #include "common/resource_view/resource_tool.h"
-#include "common/schedule_plugin/common/preallocated_context.h"
+#include "common/schedule_plugin/common/round_allocation_context.h"
 
 namespace functionsystem::test {
 using namespace ::testing;
@@ -55,6 +55,7 @@ void AddPreAllocated(const resource_view::InstanceInfo &ins,
     context->allocated[selected].resource = context->allocated[selected].resource.resources().size() == 0
                                                 ? backupIns.resources()
                                                 : context->allocated[selected].resource + backupIns.resources();
+    context->InvalidateEffectiveAllocatable(selected);
     context->allocatedLabels[selected] = context->allocatedLabels[selected] + ToLabelKVs(ins.labels());
     context->preAllocatedSelectedFunctionAgentMap[ins.instanceid()] = selected;
     context->preAllocatedSelectedFunctionAgentSet.insert(selected);
@@ -126,6 +127,24 @@ TEST(DefaultHeterogeneousScorerTest, SelectsPhysicalIdsFromGpuCountVector)
     ASSERT_EQ(vectors.size(), size_t{1});
     const auto &values = vectors.begin()->second.values();
     EXPECT_EQ(std::vector<double>(values.begin(), values.end()), (std::vector<double>{ 1, 0, 1, 0 }));
+}
+
+TEST(DefaultHeterogeneousScorerTest, UnitRoundCompactsGpuCountWithoutChangingLegacyScore)
+{
+    auto tight = view_utils::Get1DResourceUnitWithGpuCount({ 1, 0, 1, 1 });
+    auto loose = view_utils::Get1DResourceUnitWithGpuCount({ 1, 1, 1, 1 });
+    auto instance = view_utils::Get1DInstanceWithNpuResource(2, "GPU/A10");
+    DefaultHeterogeneousScorer scorer;
+
+    auto legacy = std::make_shared<PreAllocatedContext>();
+    EXPECT_EQ(scorer.Score(legacy, instance, tight).score, 100);
+    EXPECT_EQ(scorer.Score(legacy, instance, loose).score, 100);
+
+    auto round = std::make_shared<RoundAllocationContext>();
+    const auto tightScore = scorer.Score(round, instance, tight);
+    const auto looseScore = scorer.Score(round, instance, loose);
+    EXPECT_GT(tightScore.score, looseScore.score);
+    EXPECT_EQ(tightScore.realIDs, (std::vector<int>{ 0, 2 }));
 }
 
 TEST(DefaultHeterogeneousScorerTest, DoesNotReusePreallocatedGpuCountVector)

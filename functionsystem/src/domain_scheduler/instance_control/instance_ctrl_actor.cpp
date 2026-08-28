@@ -83,6 +83,12 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
 litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::ScheduleDecision(
     const std::shared_ptr<messages::ScheduleRequest> &req)
 {
+    return ScheduleDecisionInternal(req, "");
+}
+
+litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::ScheduleDecisionInternal(
+    const std::shared_ptr<messages::ScheduleRequest> &req, const std::string &conflictedUnitID)
+{
     ASSERT_IF_NULL(scheduler_);
     auto requestID = req->requestid();
     uint64_t timeout = req->instance().scheduleoption().scheduletimeoutms();
@@ -96,7 +102,9 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
     YRLOG_INFO("instance(req={}, priority={}, timeout={}, enableHorizontalScale={}) schedule decision",
                requestID, req->instance().scheduleoption().priority(), timeout, enableHorizontalScale_);
     auto cancelPromise = GetCancelTag(requestID);
-    auto future = scheduler_->ScheduleDecision(req, cancelPromise->GetFuture());
+    auto future = conflictedUnitID.empty()
+                      ? scheduler_->ScheduleDecision(req, cancelPromise->GetFuture())
+                      : scheduler_->RetryScheduleDecision(req, cancelPromise->GetFuture(), conflictedUnitID);
     if (timeout > 0) {
         ASSERT_IF_NULL(recorder_);
         future = future.After(
@@ -200,12 +208,12 @@ void InstanceCtrlActor::CheckIsNeedReDispatch(
         rsp->code() == static_cast<int32_t>(StatusCode::ERR_RESOURCE_NOT_ENOUGH)) {
         rsp->set_code(static_cast<int32_t>(StatusCode::SCHEDULE_CONFLICTED));
     }
-    promise.Associate(CheckReSchedulingIsRequired(rsp, req));
+    promise.Associate(CheckReSchedulingIsRequired(rsp, req, schedResult));
 }
 
 litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::CheckReSchedulingIsRequired(
     const std::shared_ptr<messages::ScheduleResponse> &rsp,
-    const std::shared_ptr<messages::ScheduleRequest> &req)
+    const std::shared_ptr<messages::ScheduleRequest> &req, const ScheduleResult &schedResult)
 {
     // Retry is required when a scheduling conflict occurs or the scheduler is unavailable while under layer abnormal
     // can be tolerated.
@@ -213,7 +221,9 @@ litebus::Future<std::shared_ptr<messages::ScheduleResponse>> InstanceCtrlActor::
          (isTolerateUnderlayerAbnormal_ &&
           rsp->code() == static_cast<int32_t>(StatusCode::DOMAIN_SCHEDULER_UNAVAILABLE_SCHEDULER)))) {
         // schedule conflict don't count as a retry
-        return ScheduleDecision(req);
+        return rsp->code() == static_cast<int32_t>(StatusCode::SCHEDULE_CONFLICTED)
+                   ? ScheduleDecisionInternal(req, schedResult.unitID)
+                   : ScheduleDecision(req);
     }
     (void)cancelTag_.erase(req->requestid());
     // SCHEDULE_CONFLICTED indicates that resources are insufficient.

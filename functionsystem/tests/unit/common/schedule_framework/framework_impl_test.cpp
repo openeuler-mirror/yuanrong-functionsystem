@@ -264,8 +264,9 @@ TEST_F(FrameworkImplTest, FilterFatalErrTest)
     EXPECT_EQ(result.code, static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
 }
 
-// expected larger than relaxed
-TEST_F(FrameworkImplTest, ExpectedLargerThanRelaxedTest)
+// Aggregation expects enough request capacity, rather than one candidate Unit
+// per request. The relaxed value remains the minimum candidate count.
+TEST_F(FrameworkImplTest, ExpectedLargerThanRelaxedUsesCandidateCapacity)
 {
     auto ctx = std::make_shared<ScheduleContext>();
     auto instance = MakeDefaultTestInstanceInfo();
@@ -274,7 +275,8 @@ TEST_F(FrameworkImplTest, ExpectedLargerThanRelaxedTest)
     auto mockPrefilter = DefaultPrefilter(resource);
     auto mockFilter = std::make_shared<MockFilterPlugin>();
     EXPECT_CALL(*mockFilter, GetPluginName()).WillRepeatedly(Return("mockFilter"));
-    EXPECT_CALL(*mockFilter, Filter(_, _, _)).WillRepeatedly(Return(Filtered{}));
+    EXPECT_CALL(*mockFilter, Filter(_, _, _))
+        .WillRepeatedly(Return(Filtered{ Status::OK(), false, 2 }));
     auto mockScore = std::make_shared<MockScorePlugin>();
     EXPECT_CALL(*mockScore, GetPluginName()).WillRepeatedly(Return("mockScore"));
     EXPECT_CALL(*mockScore, Score(_, _, _)).WillRepeatedly(Return(NodeScore{ "", 0 }));
@@ -284,7 +286,7 @@ TEST_F(FrameworkImplTest, ExpectedLargerThanRelaxedTest)
     fw->RegisterPolicy(mockFilter);
     fw->RegisterPolicy(mockScore);
     auto result = fw->SelectFeasible(ctx, instance, resource, 4);
-    EXPECT_EQ(result.sortedFeasibleNodes.size(), (size_t)4);
+    EXPECT_EQ(result.sortedFeasibleNodes.size(), (size_t)2);
 }
 
 // relaxed -1

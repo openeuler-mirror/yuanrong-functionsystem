@@ -29,6 +29,7 @@
 #include "common/resource_view/scala_resource_tool.h"
 #include "common/schedule_plugin/common/constants.h"
 #include "common/schedule_plugin/common/plugin_register.h"
+#include "common/schedule_plugin/common/round_allocation_context.h"
 #include "common/utils/struct_transfer.h"
 #include "utils/string_utils.hpp"
 
@@ -48,8 +49,14 @@ struct HeterogeneousCardScoreContext {
     const resources::Resources &capacity;
 };
 
+struct HeterogeneousCardResources {
+    const std::string &cardType;
+    const resources::Resources &available;
+    const resources::Resources &capacity;
+};
+
 void OnCalcHeterogeneousCardNumScore(const HeterogeneousCardScoreContext &context, double reqVal,
-                                     schedule_framework::NodeScore &score)
+                                     bool compact, schedule_framework::NodeScore &score)
 {
     const auto &availableResource = context.available.resources().at(context.cardType);
     const auto &capacityResource = context.capacity.resources().at(context.cardType);
@@ -66,6 +73,8 @@ void OnCalcHeterogeneousCardNumScore(const HeterogeneousCardScoreContext &contex
         reqVal = 1;
     }
 
+    const int requiredCards = cnt;
+    int feasibleCards = 0;
     auto &vectors = score.allocatedVectors[context.cardType];
     auto &cg = (*vectors.mutable_values())[context.resourceType];
 
@@ -77,6 +86,10 @@ void OnCalcHeterogeneousCardNumScore(const HeterogeneousCardScoreContext &contex
         const auto &capValues = capVectors.at(uuid).values();
         for (int i = 0; i < availVec.values_size(); i++) {
             int req = capValues.at(i) * reqVal;
+            if (capValues.at(i) > EPSINON
+                && (availVec.values().at(i) > req || abs(availVec.values().at(i) - req) < EPSINON)) {
+                ++feasibleCards;
+            }
             // rg resource cap maybe 0 because it only requires part of device, we can not schedule to this device
             // avail >= cap * req, use this device and occupy req resource
             if (cnt > 0 && capValues.at(i) > EPSINON
@@ -96,24 +109,28 @@ void OnCalcHeterogeneousCardNumScore(const HeterogeneousCardScoreContext &contex
         score.realIDs.clear();
     }
     score.heteroProductName = context.cardType;
-    score.score = DEFAULT_SCORE;
+    score.score = compact && feasibleCards > 0
+                      ? std::min(DEFAULT_SCORE,
+                                 static_cast<int64_t>(double(requiredCards) / double(feasibleCards) * DEFAULT_SCORE))
+                      : DEFAULT_SCORE;
 }
 
-void CalcHeterogeneousCardNumScore(const std::string cardType, const resources::Resources &available,
-                                   const resources::Resources &capacity, double reqVal,
-                                   schedule_framework::NodeScore &score)
+void CalcHeterogeneousCardNumScore(const HeterogeneousCardResources &context, double reqVal,
+                                   bool compact, schedule_framework::NodeScore &score)
 {
     const bool hasHbmVector =
-        HasHeteroResourceInResources(available, cardType, resource_view::HETEROGENEOUS_MEM_KEY)
-        && HasHeteroResourceInResources(capacity, cardType, resource_view::HETEROGENEOUS_MEM_KEY);
+        HasHeteroResourceInResources(context.available, context.cardType, resource_view::HETEROGENEOUS_MEM_KEY) &&
+        HasHeteroResourceInResources(context.capacity, context.cardType, resource_view::HETEROGENEOUS_MEM_KEY);
     const bool hasCountVector =
-        HasHeteroResourceInResources(available, cardType, resource_view::HETEROGENEOUS_CARDNUM_KEY)
-        && HasHeteroResourceInResources(capacity, cardType, resource_view::HETEROGENEOUS_CARDNUM_KEY);
+        HasHeteroResourceInResources(context.available, context.cardType,
+                                     resource_view::HETEROGENEOUS_CARDNUM_KEY) &&
+        HasHeteroResourceInResources(context.capacity, context.cardType,
+                                     resource_view::HETEROGENEOUS_CARDNUM_KEY);
     const bool useCountVector = !hasHbmVector && hasCountVector;
     const auto &resourceType = useCountVector ? resource_view::HETEROGENEOUS_CARDNUM_KEY
                                               : resource_view::HETEROGENEOUS_MEM_KEY;
-    if (!HasHeteroResourceInResources(available, cardType, resourceType)
-        || !HasHeteroResourceInResources(capacity, cardType, resourceType)) {
+    if (!HasHeteroResourceInResources(context.available, context.cardType, resourceType) ||
+        !HasHeteroResourceInResources(context.capacity, context.cardType, resourceType)) {
         YRLOG_WARN("{}: Not Found.", resourceType);
         return;
     }
@@ -122,7 +139,8 @@ void CalcHeterogeneousCardNumScore(const std::string cardType, const resources::
         return;
     }
 
-    OnCalcHeterogeneousCardNumScore({ cardType, resourceType, available, capacity }, reqVal, score);
+    OnCalcHeterogeneousCardNumScore(
+        { context.cardType, resourceType, context.available, context.capacity }, reqVal, compact, score);
 }
 
 std::vector<float> CalcHeterogeneousHbmScore(const std::string cardType,
@@ -281,7 +299,8 @@ float CalculateFinalScore(float hbmScore, float latencyScore, float streamScore)
 }
 
 void CalcHeterogeneousScore(const resource_view::InstanceInfo &instance, const resources::Resources &available,
-                            const resource_view::ResourceUnit &resourceUnit, schedule_framework::NodeScore &score)
+                            const resource_view::ResourceUnit &resourceUnit, bool compact,
+                            schedule_framework::NodeScore &score)
 {
     std::vector<float> hbmScores;
     std::vector<float> latencyScores;
@@ -310,8 +329,8 @@ void CalcHeterogeneousScore(const resource_view::InstanceInfo &instance, const r
             streamScores =
                 CalcHeterogeneousStreamScore(available, cardType, static_cast<int>(req.second.scalar().value()));
         } else if (resourceType == resource_view::HETEROGENEOUS_CARDNUM_KEY) {
-            CalcHeterogeneousCardNumScore(cardType, available, resourceUnit.capacity(), req.second.scalar().value(),
-                                          score);
+            CalcHeterogeneousCardNumScore(
+                { cardType, available, resourceUnit.capacity() }, req.second.scalar().value(), compact, score);
             return;
         } else {
             YRLOG_WARN("Unknown hetero resource: {}. Only support HBM, Latency, Stream and CardNum now.", resourceType);
@@ -363,14 +382,12 @@ schedule_framework::NodeScore DefaultHeterogeneousScorer::Score(
         YRLOG_WARN("invalid context for DefaultHeterogeneousScorer");
         return nodeScore;
     }
-    auto available = resourceUnit.allocatable();
-    if (auto iter(preContext->allocated.find(resourceUnit.id())); iter != preContext->allocated.end()) {
-        available = resourceUnit.allocatable() - iter->second.resource;
-    }
+    const auto &available = preContext->EffectiveAllocatable(resourceUnit);
 
     bool hasHeteroReq = resource_view::HasHeterogeneousResource(instance);
     if (hasHeteroReq) {
-        CalcHeterogeneousScore(instance, available, resourceUnit, nodeScore);
+        const bool compact = std::dynamic_pointer_cast<schedule_framework::RoundAllocationContext>(ctx) != nullptr;
+        CalcHeterogeneousScore(instance, available, resourceUnit, compact, nodeScore);
         return nodeScore;
     }
 

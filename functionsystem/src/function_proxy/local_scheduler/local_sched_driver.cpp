@@ -458,7 +458,8 @@ void LocalSchedDriver::BindInstanceCtrl()
 {
     instanceCtrl_->SetEnablePrintResourceView(param_.enablePrintResourceView);
     instanceCtrl_->Start(funcAgentMgr_, resourceViewMgr_, param_.controlPlaneObserver,
-                         param_.aggregatedStrategy_, param_.maxPriority);
+                         InstanceCtrl::StartOptions{ param_.aggregatedStrategy_, param_.maxPriority,
+                                                     param_.enableUnitScheduler });
     instanceCtrl_->BindControlInterfaceClientManager(param_.controlInterfacePosixMgr);
     instanceCtrl_->BindMetaStoreClient(metaStoreClient_);
     instanceCtrl_->BindLocalSchedSrv(localSchedSrv_);

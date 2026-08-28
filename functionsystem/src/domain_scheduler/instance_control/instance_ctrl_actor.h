@@ -140,6 +140,9 @@ protected:
     void Init() override;
 
 private:
+    litebus::Future<std::shared_ptr<messages::ScheduleResponse>> ScheduleDecisionInternal(
+        const std::shared_ptr<messages::ScheduleRequest> &req, const std::string &conflictedUnitID);
+
     litebus::Future<std::shared_ptr<messages::ScheduleResponse>> DispatchSchedule(
         const litebus::Future<schedule_decision::ScheduleResult> &result,
         const std::shared_ptr<messages::ScheduleRequest> &req, uint32_t dispatchTimes);
@@ -154,7 +157,8 @@ private:
                                const std::shared_ptr<messages::ScheduleRequest> &req, uint32_t dispatchTimes);
 
     litebus::Future<std::shared_ptr<messages::ScheduleResponse>> CheckReSchedulingIsRequired(
-        const std::shared_ptr<messages::ScheduleResponse> &rsp, const std::shared_ptr<messages::ScheduleRequest> &req);
+        const std::shared_ptr<messages::ScheduleResponse> &rsp, const std::shared_ptr<messages::ScheduleRequest> &req,
+        const schedule_decision::ScheduleResult &schedResult);
 
     litebus::Future<std::shared_ptr<messages::CreateAgentResponse>> CreateAgent(
         const std::shared_ptr<messages::ScheduleRequest> &req);

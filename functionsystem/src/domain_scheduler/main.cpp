@@ -107,6 +107,8 @@ void OnCreate(const domain_scheduler::Flags &flags)
 	param.enablePreemption = flags.GetEnablePreemption();
 	param.relaxed = flags.GetScheduleRelaxed();
     param.aggregatedStrategy = flags.GetAggregatedStrategy();
+    param.enableUnitScheduler = flags.GetEnableUnitScheduler();
+    param.schedulePlacementPolicy = flags.GetSchedulePlacementPolicy();
     param.componentName = COMPONENT_NAME;
     domainSchedulerDriver_ = std::make_shared<domain_scheduler::DomainSchedulerLauncher>(param);
     if (auto status = domainSchedulerDriver_->Start(); status.IsError()) {

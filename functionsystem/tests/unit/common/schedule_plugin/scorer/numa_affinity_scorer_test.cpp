@@ -21,7 +21,7 @@
 
 #include "common/resource_view/resource_type.h"
 #include "common/resource_view/view_utils.h"
-#include "common/schedule_plugin/common/preallocated_context.h"
+#include "common/schedule_plugin/common/round_allocation_context.h"
 
 namespace functionsystem::test {
 using namespace ::testing;
@@ -119,6 +119,29 @@ TEST_F(NUMAAffinityScorerTest, ScoreWithNUMAAllocation) {
     EXPECT_EQ(score.vectorAllocations[0].type, resource_view::NUMA_RESOURCE_NAME);
     EXPECT_EQ(score.vectorAllocations[0].selectedIndices.size(), size_t{1});
     EXPECT_EQ(score.vectorAllocations[0].selectedIndices[0], 0);
+}
+
+TEST_F(NUMAAffinityScorerTest, UnitRoundPrefersTighterFeasibleNumaPlacement)
+{
+    NUMAAffinityScorer scorer;
+    auto instance = view_utils::Get1DInstance();
+    (*instance.mutable_resources()->mutable_resources())[resource_view::CPU_RESOURCE_NAME]
+        .mutable_scalar()->set_value(500);
+    (*instance.mutable_scheduleoption()->mutable_extension())["bind_resource"] = "NUMA";
+    (*instance.mutable_scheduleoption()->mutable_extension())["bind_strategy"] = "BIND_Spread";
+
+    auto loose = view_utils::Get1DResourceUnitWithNUMA({ 1000.0, 1000.0 }, 2000.0, 4096.0, "loose");
+    loose.set_id("loose");
+    auto tight = view_utils::Get1DResourceUnitWithNUMA({ 600.0, 600.0 }, 1200.0, 4096.0, "tight");
+    tight.set_id("tight");
+
+    auto legacy = std::make_shared<PreAllocatedContext>();
+    EXPECT_EQ(scorer.Score(legacy, instance, loose).score, 0);
+    EXPECT_EQ(scorer.Score(legacy, instance, tight).score, 0);
+
+    auto round = std::make_shared<RoundAllocationContext>();
+    EXPECT_GT(scorer.Score(round, instance, tight).score,
+              scorer.Score(round, instance, loose).score);
 }
 
 // BIND_Pack: multiple nodes selected when one node not enough

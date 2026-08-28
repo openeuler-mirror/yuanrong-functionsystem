@@ -46,6 +46,16 @@ litebus::Future<ScheduleResult> Scheduler::ScheduleDecision(const std::shared_pt
     return litebus::Async(GetAID(static_cast<int32_t>(type)), &ScheduleQueueActor::ScheduleDecision, req, cancelTag);
 }
 
+litebus::Future<ScheduleResult> Scheduler::RetryScheduleDecision(
+    const std::shared_ptr<messages::ScheduleRequest> &req,
+    const litebus::Future<std::string> &cancelTag,
+    const std::string &conflictedUnitID)
+{
+    auto type = resource_view::GetResourceType(req->instance());
+    return litebus::Async(GetAID(static_cast<int32_t>(type)), &ScheduleQueueActor::RetryScheduleDecision,
+                          req, cancelTag, conflictedUnitID);
+}
+
 litebus::Future<Status> Scheduler::ScheduleConfirm(const std::shared_ptr<messages::ScheduleResponse> &rsp,
                                                    const resource_view::InstanceInfo &ins,
                                                    const ScheduleResult & /* schedResult */)

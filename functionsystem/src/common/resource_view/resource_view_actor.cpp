@@ -32,6 +32,11 @@
 #include "utils/string_utils.hpp"
 
 namespace functionsystem::resource_view {
+
+namespace {
+constexpr uint32_t SNAPSHOT_PUBLICATION_MUTATION_LIMIT = 32;
+constexpr uint64_t SNAPSHOT_PUBLICATION_MAX_DELAY_MS = 1;
+}  // namespace
 static const int32_t DEFAULT_PRINT_RESOURCE_VIEW_TIMER_COUNT = 60;
 static const std::string NEED_RECOVER_VIEW = "needRecoverView";
 static const std::string IDLE_TO_RECYCLE = "yr-idle-to-recycle";
@@ -78,6 +83,11 @@ ResourceViewActor::ResourceViewActor(const std::string &name, std::string id, co
       tenantPodReuseTimeWindow_(param.tenantPodReuseTimeWindow)
 {
     enableTenantAffinity_ = param.enableTenantAffinity;
+    scheduleSnapshotEnabled_ = param.enableScheduleSnapshot;
+    scheduleSnapshotStore_ = std::make_shared<ScheduleSnapshotStore>();
+    if (scheduleSnapshotEnabled_) {
+        scheduleSnapshotBuilder_ = std::make_unique<ScheduleSnapshotBuilder>(scheduleSnapshotStore_);
+    }
     if (auto pos = name.find_last_of('-'); pos != std::string::npos) {
         actorSuffix_ = name.substr(pos);
     }
@@ -97,16 +107,154 @@ void ResourceViewActor::Init()
 {
     YRLOG_DEBUG("resource view actor alloc resource view memory");
     view_ = std::make_shared<ResourceUnit>(std::move(InitResource(unitID_)));
+    if (scheduleSnapshotEnabled_) {
+        snapshotDirtySet_.structure = true;
+        snapshotDirtySet_.requestPlacements = true;
+        snapshotDirtySet_.ownerLabels = true;
+        snapshotDirtySet_.monopolyIndex = true;
+        snapshotDirtySet_.metadata = true;
+        CommitScheduleSnapshot();
+    }
     Receive("PullResource", &ResourceViewActor::PullResource);
     Receive("ReportResource", &ResourceViewActor::ReportResource);
 }
 
 void ResourceViewActor::Finalize()
 {
+    if (snapshotFlushScheduled_) {
+        litebus::TimerTools::Cancel(snapshotFlushTimer_);
+        snapshotFlushScheduled_ = false;
+    }
     if (poller_) {
         poller_->Stop();
     }
     YRLOG_DEBUG("Finalize resource view actor");
+}
+
+ResourceViewActor::SnapshotMutationGuard::SnapshotMutationGuard(ResourceViewActor &actor) : actor_(actor)
+{
+    actor_.BeginSnapshotMutation();
+}
+
+ResourceViewActor::SnapshotMutationGuard::~SnapshotMutationGuard()
+{
+    actor_.EndSnapshotMutation();
+}
+
+void ResourceViewActor::BeginSnapshotMutation()
+{
+    if (!scheduleSnapshotEnabled_) {
+        return;
+    }
+    ++snapshotMutationDepth_;
+}
+
+void ResourceViewActor::EndSnapshotMutation()
+{
+    if (!scheduleSnapshotEnabled_) {
+        return;
+    }
+    if (snapshotMutationDepth_ == 0) {
+        return;
+    }
+    --snapshotMutationDepth_;
+    if (snapshotMutationDepth_ == 0 && !snapshotDirtySet_.Empty()) {
+        ++snapshotPendingMutationCount_;
+        if (snapshotDirtySet_.structure ||
+            snapshotPendingMutationCount_ >= SNAPSHOT_PUBLICATION_MUTATION_LIMIT) {
+            CommitScheduleSnapshot();
+        } else {
+            ScheduleSnapshotFlush();
+        }
+    }
+}
+
+void ResourceViewActor::MarkSnapshotUnitDirty(const std::string &unitID)
+{
+    if (scheduleSnapshotEnabled_ && !unitID.empty()) {
+        snapshotDirtySet_.unitIDs.emplace(unitID);
+    }
+}
+
+void ResourceViewActor::MarkSnapshotStructureDirty(const std::string &unitID)
+{
+    if (!scheduleSnapshotEnabled_) {
+        return;
+    }
+    snapshotDirtySet_.structure = true;
+    MarkSnapshotUnitDirty(unitID);
+}
+
+void ResourceViewActor::MarkSnapshotIndexesDirty(bool requestPlacements, bool ownerLabels)
+{
+    if (!scheduleSnapshotEnabled_) {
+        return;
+    }
+    snapshotDirtySet_.requestPlacements = snapshotDirtySet_.requestPlacements || requestPlacements;
+    snapshotDirtySet_.ownerLabels = snapshotDirtySet_.ownerLabels || ownerLabels;
+}
+
+void ResourceViewActor::MarkSnapshotMonopolyIndexDirty()
+{
+    if (scheduleSnapshotEnabled_) {
+        snapshotDirtySet_.monopolyIndex = true;
+    }
+}
+
+void ResourceViewActor::MarkSnapshotMetadataDirty()
+{
+    if (scheduleSnapshotEnabled_) {
+        snapshotDirtySet_.metadata = true;
+    }
+}
+
+void ResourceViewActor::MarkSnapshotRequestMutation(const std::string &requestID)
+{
+    if (scheduleSnapshotEnabled_ && scheduleSnapshotBuilder_ != nullptr && !requestID.empty()) {
+        (void)scheduleSnapshotBuilder_->RecordRequestMutation(requestID);
+    }
+}
+
+void ResourceViewActor::ScheduleSnapshotFlush()
+{
+    if (!scheduleSnapshotEnabled_ || snapshotFlushScheduled_) {
+        return;
+    }
+    snapshotFlushScheduled_ = true;
+    snapshotFlushTimer_ = litebus::AsyncAfter(
+        SNAPSHOT_PUBLICATION_MAX_DELAY_MS, GetAID(), &ResourceViewActor::FlushScheduleSnapshot);
+}
+
+void ResourceViewActor::FlushScheduleSnapshot()
+{
+    snapshotFlushScheduled_ = false;
+    if (!snapshotDirtySet_.Empty()) {
+        CommitScheduleSnapshot();
+    }
+}
+
+void ResourceViewActor::CommitScheduleSnapshot()
+{
+    if (!scheduleSnapshotEnabled_ || view_ == nullptr || scheduleSnapshotBuilder_ == nullptr) {
+        return;
+    }
+    if (snapshotFlushScheduled_) {
+        litebus::TimerTools::Cancel(snapshotFlushTimer_);
+        snapshotFlushScheduled_ = false;
+    }
+    if (isLocal_) {
+        OwnerLabelIndex labels;
+        labels.emplace(view_->id(), view_->nodelabels());
+        scheduleSnapshotBuilder_->BuildAndPublish(*view_, GetCurrentSchedulerLevel(), reqIDToUnitIDMap_, labels,
+                                                  snapshotDirtySet_);
+    } else {
+        // The builder copies labels only when this field is dirty. Avoid
+        // cloning the complete Domain label index for unrelated updates.
+        scheduleSnapshotBuilder_->BuildAndPublish(*view_, GetCurrentSchedulerLevel(), reqIDToUnitIDMap_,
+                                                  allLocalLabels_, snapshotDirtySet_);
+    }
+    snapshotDirtySet_.Clear();
+    snapshotPendingMutationCount_ = 0;
 }
 void ResourceViewActor::DeleteInstancesBySubUnit(ResourceUnit &view, const ResourceUnit &subUnit)
 {
@@ -175,6 +323,7 @@ void ResourceViewActor::AddResourceBySubUnit(ResourceUnit &view, const ResourceU
 
 Status ResourceViewActor::AddResourceUnit(const ResourceUnit &value)
 {
+    SnapshotMutationGuard snapshotGuard(*this);
     if (!IsValidUnit(value)) {
         YRLOG_ERROR("add invalid resource unit.");
         return Status(PARAMETER_ERROR, "add invalid resource unit ");
@@ -225,11 +374,16 @@ Status ResourceViewActor::AddResourceUnit(const ResourceUnit &value)
             PodRecycler(value);
         }
     }
+    MarkSnapshotStructureDirty(value.id());
+    MarkSnapshotIndexesDirty(true, true);
+    MarkSnapshotMonopolyIndexDirty();
+    MarkSnapshotMetadataDirty();
     return Status::OK();
 }
 
 Status ResourceViewActor::AddResourceUnitWithUrl(const ResourceUnit &value, const std::string &url)
 {
+    SnapshotMutationGuard snapshotGuard(*this);
     if (localInfoMap_.find(value.id()) != localInfoMap_.end()) {
         YRLOG_ERROR("add duplicated local resource unit, resource unit id = {}", value.id());
         return Status(PARAMETER_ERROR, "add duplicated local resource unit");
@@ -257,6 +411,7 @@ Status ResourceViewActor::AddResourceUnitWithUrl(const ResourceUnit &value, cons
     allLocalLabels_[value.id()] = value.nodelabels();
     localInfoMap_[value.id()].localRevisionInDomain = value.revision();
     localInfoMap_[value.id()].localViewInitTime = value.viewinittime();
+    MarkSnapshotIndexesDirty(false, true);
     YRLOG_INFO("register one local scheduler to domain resourceview, resource unit id = {}, current revision = {}",
                value.id(), localInfoMap_[value.id()].localRevisionInDomain);
     NotifyResourceUpdated();
@@ -331,6 +486,7 @@ void ResourceViewActor::PruneRemovedResources(ResourceUnit &view, const Resource
 
 Status ResourceViewActor::ClearLocalSchedulerAgentsInDomain(const std::string &localID)
 {
+    SnapshotMutationGuard snapshotGuard(*this);
     if (localInfoMap_.find(localID) == localInfoMap_.end()) {
         YRLOG_WARN("domain resource view has no information about the local named {}.", localID);
         return Status(PARAMETER_ERROR, "domain resource view has no information about the local.");
@@ -358,6 +514,7 @@ Status ResourceViewActor::ClearLocalSchedulerAgentsInDomain(const std::string &l
 
 Status ResourceViewActor::DeleteLocalResourceView(const std::string &localID)
 {
+    SnapshotMutationGuard snapshotGuard(*this);
     if (localID.empty()) {
         YRLOG_WARN("delete local resourceview with empty ID.");
         return Status(PARAMETER_ERROR, "delete local resourceview with empty ID.");
@@ -370,6 +527,7 @@ Status ResourceViewActor::DeleteLocalResourceView(const std::string &localID)
 
     (void)localInfoMap_.erase(localID);
     (void)allLocalLabels_.erase(localID);
+    MarkSnapshotIndexesDirty(false, true);
     (void)urls_.erase(localID);
     poller_->Del(localID);
     YRLOG_INFO("Successfully deleted local resource view named {} from domain resource view.", localID);
@@ -379,6 +537,7 @@ Status ResourceViewActor::DeleteLocalResourceView(const std::string &localID)
 
 Status ResourceViewActor::DeleteResourceUnit(const std::string &unitID)
 {
+    SnapshotMutationGuard snapshotGuard(*this);
     if (unitID.empty()) {
         YRLOG_WARN("delete resource unit with empty ID.");
         return Status(PARAMETER_ERROR, "delete resource unit with empty ID.");
@@ -417,6 +576,10 @@ Status ResourceViewActor::DeleteResourceUnit(const std::string &unitID)
         StoreChange(view_->revision(), resourceUnitChange);
     }
     MarkResourceUpdated();
+    MarkSnapshotStructureDirty(unitID);
+    MarkSnapshotIndexesDirty(true, true);
+    MarkSnapshotMonopolyIndexDirty();
+    MarkSnapshotMetadataDirty();
     YRLOG_INFO("delete {} resource unit from resource view, current revision = {}", unitID, view_->revision());
     return Status::OK();
 }
@@ -439,6 +602,7 @@ void ResourceViewActor::DeleteBucketIndexBySubUnit(ResourceUnit &view, const Res
 
 Status ResourceViewActor::UpdateResourceUnit(const std::shared_ptr<ResourceUnit> &value, const UpdateType &type)
 {
+    SnapshotMutationGuard snapshotGuard(*this);
     if (value == nullptr) {
         YRLOG_ERROR("update null resources unit");
         return Status(PARAMETER_ERROR, "update null resources unit");
@@ -460,9 +624,13 @@ Status ResourceViewActor::UpdateResourceUnit(const std::shared_ptr<ResourceUnit>
     switch (type) {
         case UpdateType::UPDATE_ACTUAL:
             UpdateResourceUnitActual(value);
+            MarkSnapshotUnitDirty(value->id());
+            MarkSnapshotMetadataDirty();
             break;
         case UpdateType::UPDATE_DYNAMIC:
             UpdateResourceUnitDynamic(value);
+            MarkSnapshotUnitDirty(value->id());
+            MarkSnapshotMetadataDirty();
             break;
         case UpdateType::UPDATE_STATIC:
         case UpdateType::UPDATE_UNDEFINED:
@@ -476,6 +644,7 @@ Status ResourceViewActor::UpdateResourceUnit(const std::shared_ptr<ResourceUnit>
 
 Status ResourceViewActor::UpdateUnitStatus(const std::string &unitID, UnitStatus status)
 {
+    SnapshotMutationGuard snapshotGuard(*this);
     ASSERT_IF_NULL(view_);
     YRLOG_INFO("update unit({}) status {}", unitID, fmt::underlying(status));
     auto unit = view_->mutable_fragment()->find(unitID);
@@ -497,6 +666,8 @@ Status ResourceViewActor::UpdateUnitStatus(const std::string &unitID, UnitStatus
     resourceUnitChange.set_resourceunitid(unitID);
     *resourceUnitChange.mutable_modification() = modification;
     StoreChange(view_->revision(), resourceUnitChange);
+    MarkSnapshotUnitDirty(unitID);
+    MarkSnapshotMetadataDirty();
     return Status::OK();
 }
 
@@ -519,10 +690,41 @@ void ResourceViewActor::SimplifyInstanceInfo(const InstanceInfo &instance, Insta
     simplifiedInstance.set_tenantid(instance.tenantid());
 }
 
+Status ResourceViewActor::ValidateInstanceAllocation(const std::string &instanceID,
+                                                     const InstanceInfo &instance) const
+{
+    const auto &selected = instance.unitid();
+    const auto unit = view_->fragment().find(selected);
+    if (unit == view_->fragment().end() ||
+        unit->second.status() != static_cast<uint32_t>(UnitStatus::NORMAL)) {
+        YRLOG_WARN("unable to allocate instances({}). the ({}) is unavailable", instanceID, selected);
+        return Status(StatusCode::ERR_INNER_SYSTEM_ERROR);
+    }
+
+    // Ignore zero-valued resources such as nvidia.com/gpu:0 when checking
+    // capacity, because a Unit may legitimately omit that resource type.
+    auto checkResources = instance.resources();
+    for (auto iter = checkResources.mutable_resources()->begin();
+         iter != checkResources.mutable_resources()->end();) {
+        if (ScalaValueIsEmpty(iter->second)) {
+            iter = checkResources.mutable_resources()->erase(iter);
+        } else {
+            ++iter;
+        }
+    }
+    if (checkResources > unit->second.allocatable()) {
+        YRLOG_WARN("unable to allocate instances({}). the ({}) has insufficient resources may caused by "
+                   "capacity decrement", instanceID, selected);
+        return Status(StatusCode::ERR_INNER_SYSTEM_ERROR);
+    }
+    return Status::OK();
+}
+
 // only add in local
 // never executed on domain
 Status ResourceViewActor::AddInstances(const std::map<std::string, InstanceAllocatedInfo> &insts)
 {
+    SnapshotMutationGuard snapshotGuard(*this);
     if (!IsValidInstances(insts)) {
         YRLOG_WARN("try to add invalid instances to resource view.");
         return Status(PARAMETER_ERROR, "add invalid instances.");
@@ -538,42 +740,31 @@ Status ResourceViewActor::AddInstances(const std::map<std::string, InstanceAlloc
         SimplifyInstanceInfo(inst.second.instanceInfo, simplifyInstance);
         if (inst.second.allocatedPromise == nullptr) {
             AddInstance(simplifyInstance);
+            MarkSnapshotUnitDirty(simplifyInstance.unitid());
+            MarkSnapshotIndexesDirty(true, true);
+            MarkSnapshotMonopolyIndexDirty();
             continue;
         }
-        auto selected = simplifyInstance.unitid();
-        if (view_->fragment().find(selected) == view_->fragment().end()
-            || view_->fragment().at(selected).status() != static_cast<uint32_t>(UnitStatus::NORMAL)) {
-            YRLOG_WARN("unable to allocate instances({}). the ({}) is unavailable", inst.first, selected);
-            inst.second.allocatedPromise->SetValue(Status(StatusCode::ERR_INNER_SYSTEM_ERROR));
-            continue;
-        }
-        // Check capacity: skip resources with value 0 (e.g. nvidia.com/gpu:0) to avoid
-        // false "insufficient resource" when the node has no such resource type at all.
-        auto checkResources = simplifyInstance.resources();
-        for (auto it = checkResources.mutable_resources()->begin();
-             it != checkResources.mutable_resources()->end();) {
-            if (ScalaValueIsEmpty(it->second)) {
-                it = checkResources.mutable_resources()->erase(it);
-            } else {
-                ++it;
-            }
-        }
-        if (checkResources > view_->fragment().at(selected).allocatable()) {
-            YRLOG_WARN(
-                "unable to allocate instances({}). the ({}) has insufficient resources may caused by capacity "
-                "decrement",
-                inst.first, selected);
-            inst.second.allocatedPromise->SetValue(Status(StatusCode::ERR_INNER_SYSTEM_ERROR));
+        const auto status = ValidateInstanceAllocation(inst.first, simplifyInstance);
+        if (status.IsError()) {
+            inst.second.allocatedPromise->SetValue(status);
             continue;
         }
         AddInstance(simplifyInstance);
+        MarkSnapshotUnitDirty(simplifyInstance.unitid());
+        MarkSnapshotIndexesDirty(true, true);
+        MarkSnapshotMonopolyIndexDirty();
         inst.second.allocatedPromise->SetValue(Status::OK());
+    }
+    if (!insts.empty()) {
+        MarkSnapshotMetadataDirty();
     }
     return Status::OK();
 }
 
 Status ResourceViewActor::DeleteInstances(const std::vector<std::string> &instIDs, bool isVirtualInstance)
 {
+    SnapshotMutationGuard snapshotGuard(*this);
     if (instIDs.empty()) {
         YRLOG_WARN("Instance ids is empty, deletion failed");
         return Status(PARAMETER_ERROR, "instance ids is empty, deletion failed");
@@ -585,8 +776,13 @@ Status ResourceViewActor::DeleteInstances(const std::vector<std::string> &instID
             YRLOG_ERROR("failed to delete instance({}) in resource unit, not found", id);
             return Status(PARAMETER_ERROR, "failed to delete instance in resource unit, not found " + id);
         }
+        const auto unitID = view_->instances().at(id).unitid();
         DeleteInstance(id, isVirtualInstance);
+        MarkSnapshotUnitDirty(unitID);
+        MarkSnapshotIndexesDirty(true, true);
+        MarkSnapshotMonopolyIndexDirty();
     }
+    MarkSnapshotMetadataDirty();
     return Status::OK();
 }
 
@@ -607,6 +803,7 @@ std::shared_ptr<ResourceUnitChanges> ResourceViewActor::GetResourceViewChanges()
 
 std::shared_ptr<ResourceUnit> ResourceViewActor::GetResourceViewCopy()
 {
+    FlushScheduleSnapshot();
     if (view_ == nullptr) {
         return {};
     }
@@ -630,6 +827,7 @@ std::shared_ptr<ResourceUnit> ResourceViewActor::GetFullResourceView()
 
 void ResourceViewActor::UpdateDomainUrlForLocal(const std::string &addr)
 {
+    SnapshotMutationGuard snapshotGuard(*this);
     if (domainUrlForLocal_ == addr) {
         YRLOG_DEBUG("Local received a matching domain URL({}) update", addr);
         return;
@@ -639,6 +837,7 @@ void ResourceViewActor::UpdateDomainUrlForLocal(const std::string &addr)
     if (!domainUrlForLocal_.empty()) {
         litebus::uuid_generator::UUID uuid = litebus::uuid_generator::UUID::GetRandomUUID();
         view_->set_viewinittime(uuid.ToString());
+        MarkSnapshotMetadataDirty();
         YRLOG_INFO("Potential domain switch detected, new viewInitTime is {}", view_->viewinittime());
     }
     domainUrlForLocal_ = addr;
@@ -647,7 +846,9 @@ void ResourceViewActor::UpdateDomainUrlForLocal(const std::string &addr)
 
 void ResourceViewActor::UpdateIsHeader(bool isHeader)
 {
+    SnapshotMutationGuard snapshotGuard(*this);
     isHeader_ = isHeader;
+    MarkSnapshotMetadataDirty();
 }
 
 ResourceViewInfo ResourceViewActor::GetResourceInfo()
@@ -702,8 +903,13 @@ litebus::Option<std::string> ResourceViewActor::GetUnitByInstReqID(const std::st
 
 void ResourceViewActor::ClearResourceView()
 {
+    SnapshotMutationGuard snapshotGuard(*this);
     view_.reset(new ResourceUnit());
     reqIDToUnitIDMap_.clear();
+    MarkSnapshotStructureDirty("");
+    MarkSnapshotIndexesDirty(true, true);
+    MarkSnapshotMonopolyIndexDirty();
+    MarkSnapshotMetadataDirty();
 }
 
 void ResourceViewActor::AddResourceUpdateHandler(const ResourceUpdateHandler &handler)
@@ -1027,6 +1233,7 @@ void ResourceViewActor::AddInstanceToView(const InstanceInfo &instance)
 
     if (!instance.requestid().empty()) {
         (void)reqIDToUnitIDMap_.emplace(instance.requestid(), agentId);
+        MarkSnapshotRequestMutation(instance.requestid());
     }
 }
 
@@ -1142,6 +1349,7 @@ void ResourceViewActor::DeleteInstanceFromView(const InstanceInfo &instance)
                                 agentResourceUnit);
     (void)view_->mutable_instances()->erase(instance.instanceid());
     if (!instance.requestid().empty()) {
+        MarkSnapshotRequestMutation(instance.requestid());
         (void)reqIDToUnitIDMap_.erase(instance.requestid());
     }
 }
@@ -1932,8 +2140,33 @@ bool ResourceViewActor::HandleReportedChanges(const std::shared_ptr<ResourceUnit
     return isHandleSuccessful;
 }
 
+void ResourceViewActor::MarkReportedChangesSnapshotDirty(const ResourceUnitChanges &resourceUnitChanges)
+{
+    bool ownerLabelsDirty = false;
+    for (const auto &change : resourceUnitChanges.changes()) {
+        MarkSnapshotUnitDirty(change.resourceunitid());
+        if (change.has_addition() || change.has_deletion()) {
+            MarkSnapshotStructureDirty(change.resourceunitid());
+            MarkSnapshotMonopolyIndexDirty();
+            ownerLabelsDirty = true;
+            continue;
+        }
+        if (!change.has_modification() || change.modification().instancechanges_size() == 0) {
+            continue;
+        }
+        MarkSnapshotMonopolyIndexDirty();
+        for (const auto &instanceChange : change.modification().instancechanges()) {
+            const auto &instance = instanceChange.instance();
+            ownerLabelsDirty = ownerLabelsDirty || instance.labels_size() > 0 || instance.kvlabels_size() > 0;
+        }
+    }
+    MarkSnapshotIndexesDirty(true, ownerLabelsDirty);
+    MarkSnapshotMetadataDirty();
+}
+
 void ResourceViewActor::DoUpdateResourceUnitDelta(const std::string localId)
 {
+    SnapshotMutationGuard snapshotGuard(*this);
     if (latestReportedResourceViewChanges_.find(localId) == latestReportedResourceViewChanges_.end()) {
         return;
     }
@@ -1965,6 +2198,7 @@ void ResourceViewActor::DoUpdateResourceUnitDelta(const std::string localId)
 
     localInfoMap_[localId].localRevisionInDomain = resourceUnitChanges->endrevision();
     localInfoMap_[localId].localViewInitTime = resourceUnitChanges->localviewinittime();
+    MarkReportedChangesSnapshotDirty(*resourceUnitChanges);
     bool isHandleSuccessful = HandleReportedChanges(resourceUnitChanges);
     if (!isHandleSuccessful) {
         YRLOG_ERROR("domain needs to recover the local({}) resourceview", localId);

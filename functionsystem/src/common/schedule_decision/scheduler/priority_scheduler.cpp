@@ -15,10 +15,15 @@
  */
 #include "priority_scheduler.h"
 
+#include <chrono>
+
+#include <limits>
+
 #include "common/create_agent_decision/create_agent_decision.h"
 #include "common/schedule_decision/scheduler/priority_policy/fairness_policy.h"
 #include "common/schedule_decision/scheduler/priority_policy/fifo_policy.h"
 #include "common/schedule_decision/queue/time_sorted_queue.h"
+#include "common/schedule_plugin/common/round_allocation_context.h"
 #include "common/scheduler_framework/utils/label_affinity_utils.h"
 
 namespace functionsystem::schedule_decision {
@@ -29,14 +34,19 @@ PriorityScheduler::PriorityScheduler(const std::shared_ptr<ScheduleRecorder> &re
     : ScheduleStrategy(), recorder_(recorder), maxPriority_(maxPriority)
 {
     YRLOG_DEBUG("priorityScheduler has created，maxPriority:{},aggregatedStrategy:{}", maxPriority, aggregatedStrategy);
-    if (aggregatedStrategy ==  NO_AGGREGATE_STRATEGY) {
-        runningQueue_ = std::make_shared<TimeSortedQueue>(maxPriority);
-        pendingQueue_ = std::make_shared<TimeSortedQueue>(maxPriority);
-    } else {
-        runningQueue_ = std::make_shared<AggregatedQueue>(maxPriority, aggregatedStrategy);
-        pendingQueue_ = std::make_shared<AggregatedQueue>(maxPriority, aggregatedStrategy);
-    }
+    aggregatedStrategy_ = aggregatedStrategy;
+    runningQueue_ = CreateQueue();
+    pendingQueue_ = CreateQueue();
     RegistPriorityPolicy(priorityPolicyType);
+}
+
+std::shared_ptr<ScheduleQueue> PriorityScheduler::CreateQueue() const
+{
+    if (aggregatedStrategy_ == NO_AGGREGATE_STRATEGY) {
+        return std::make_shared<TimeSortedQueue>(maxPriority_);
+    }
+    return std::make_shared<AggregatedQueue>(maxPriority_, aggregatedStrategy_, semanticAggregation_,
+                                             aggregationAllowed_);
 }
 
 
@@ -87,7 +97,7 @@ void PriorityScheduler::ActivatePendingRequests()
     }
     pendingQueue_->Extend(runningQueue_);
     runningQueue_ = std::move(pendingQueue_);
-    pendingQueue_ = std::make_shared<TimeSortedQueue>(maxPriority_);
+    pendingQueue_ = CreateQueue();
     priorityPolicy_->ClearPendingInfos();
 }
 
@@ -99,33 +109,96 @@ void PriorityScheduler::HandleResourceInfoUpdate(const resource_view::ResourceVi
     preContext_->allLocalLabels = resourceInfo_.allLocalLabels;
 }
 
+void PriorityScheduler::HandleScheduleConflict(const std::string &requestID,
+                                               const resource_view::InstanceInfo & /* instance */,
+                                               const std::string & /* unitID */)
+{
+    if (preContext_ == nullptr) {
+        return;
+    }
+    if (auto round = std::dynamic_pointer_cast<schedule_framework::RoundAllocationContext>(preContext_);
+        round != nullptr) {
+        (void)round->RemoveReservationByRequest(requestID);
+        return;
+    }
+    (void)preContext_->RemoveRequestReservation(requestID);
+}
+
 void PriorityScheduler::ConsumeRunningQueue()
+{
+    (void)ConsumeRunningQueue(std::numeric_limits<size_t>::max());
+}
+
+size_t PriorityScheduler::ConsumeRunningQueue(size_t maxRequests)
 {
     ASSERT_IF_NULL(runningQueue_);
     if (runningQueue_->CheckIsQueueEmpty()) {
         YRLOG_WARN("running queue is empty");
-        return;
+        return 0;
     }
 
-    while (!runningQueue_->CheckIsQueueEmpty()) {
-        DoConsume();
+    const auto started = consumeDiagnosticsEnabled_ ? std::chrono::steady_clock::now()
+                                                    : std::chrono::steady_clock::time_point{};
+    size_t consumed = 0;
+    while (!runningQueue_->CheckIsQueueEmpty() && consumed < maxRequests) {
+        const auto current = DoConsume(maxRequests - consumed);
+        if (current == 0) {
+            break;
+        }
+        consumed += current;
     }
+    if (consumeDiagnosticsEnabled_) {
+        const auto elapsed = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - started).count());
+        consumeCalls_.fetch_add(1, std::memory_order_relaxed);
+        consumedRequests_.fetch_add(consumed, std::memory_order_relaxed);
+        consumeTotalNanos_.fetch_add(elapsed, std::memory_order_relaxed);
+        auto maxNanos = consumeMaxNanos_.load(std::memory_order_relaxed);
+        while (maxNanos < elapsed) {
+            if (consumeMaxNanos_.compare_exchange_weak(maxNanos, elapsed, std::memory_order_relaxed)) {
+                break;
+            }
+        }
+        auto maxConsumed = consumeMaxRequests_.load(std::memory_order_relaxed);
+        while (maxConsumed < consumed) {
+            if (consumeMaxRequests_.compare_exchange_weak(maxConsumed, consumed, std::memory_order_relaxed)) {
+                break;
+            }
+        }
+    }
+    return consumed;
 }
 
-void PriorityScheduler::DoConsume()
+void PriorityScheduler::EnableConsumeDiagnostics(bool enabled)
+{
+    consumeDiagnosticsEnabled_ = enabled;
+}
+
+ConsumeDiagnostics PriorityScheduler::GetConsumeDiagnostics() const
+{
+    return ConsumeDiagnostics{
+        consumeCalls_.load(std::memory_order_relaxed),
+        consumedRequests_.load(std::memory_order_relaxed),
+        consumeTotalNanos_.load(std::memory_order_relaxed),
+        consumeMaxNanos_.load(std::memory_order_relaxed),
+        consumeMaxRequests_.load(std::memory_order_relaxed),
+    };
+}
+
+size_t PriorityScheduler::DoConsume(size_t maxRequests)
 {
     ASSERT_IF_NULL(runningQueue_);
     auto item = runningQueue_->Front();
     if (item == nullptr) {
         YRLOG_WARN("item is null");
-        return;
+        return 0;
     }
     // if cancel, skip
     if (item->cancelTag.IsOK()) {
         YRLOG_WARN("{}|schedule is canceled, reason: {}", item->GetRequestId(), item->cancelTag.Get());
         item->AssociateFailure(StatusCode::ERR_SCHEDULE_CANCELED, item->cancelTag.Get());
         runningQueue_->Dequeue();
-        return;
+        return 1;
     }
     ASSERT_IF_NULL(pendingQueue_);
     ASSERT_IF_NULL(priorityPolicy_);
@@ -133,62 +206,106 @@ void PriorityScheduler::DoConsume()
         YRLOG_DEBUG("{}|Exists a similar pending request, push it to pending queue", item->GetRequestId());
         pendingQueue_->Enqueue(item);
         runningQueue_->Dequeue();
-        return;
+        return 1;
     }
-    // schedule
-    if (item->GetItemType() == QueueItemType::INSTANCE) {
-        YRLOG_INFO("{}|start instance schedule", item->GetRequestId());
-        auto instance = std::dynamic_pointer_cast<InstanceItem>(item);
-        ASSERT_IF_NULL(instancePerformer_);
-        priorityPolicy_->PrepareForScheduling(instance);
-        auto future = instancePerformer_->DoSchedule(preContext_, resourceInfo_, instance);
-        OnScheduleDone(future, instance);
-        runningQueue_->Dequeue();
-    } else if (item->GetItemType() == QueueItemType::GROUP) {
-        YRLOG_INFO("{}|start group schedule", item->GetRequestId());
-        auto group = std::dynamic_pointer_cast<GroupItem>(item);
-        if (group->groupReqs.empty()) {
-            YRLOG_WARN("{}|schedule requests are empty", item->GetRequestId());
-            group->groupPromise->SetValue(GroupScheduleResult{ 0, "", {} });
-            runningQueue_->Dequeue();
-            return;
-        }
-        ASSERT_IF_NULL(groupPerformer_);
-        priorityPolicy_->PrepareForScheduling(group);
-        auto future = groupPerformer_->DoSchedule(preContext_, resourceInfo_, group);
-        OnScheduleDone(future, group);
-        runningQueue_->Dequeue();
-    } else if (item->GetItemType() == QueueItemType::AGGREGATED_ITEM) {
-        YRLOG_INFO("start AggregatedItem schedule (reqId={}, priority={})", item->GetRequestId(), item->GetPriority());
-        auto aggregatedItem = std::dynamic_pointer_cast<AggregatedItem>(item);
-        // if cancel, skip
-        auto items = aggregatedItem->reqQueue;
-        while (!items->empty()) {
-            auto instanceItem = items->front();
-            if (!instanceItem->cancelTag.IsOK()) {
-                break; // obtains the first non-cancel req
-            }
-            YRLOG_WARN("schedule (reqId={}) is canceled, reason: {}", instanceItem->GetRequestId(),
-                instanceItem->cancelTag.Get());
-            items->pop_front();
-            if (items->empty()) {
-                runningQueue_->Dequeue();
-                return; // all reqs in aggregateItem are canceled,no need to go into the following scheduling process
-            }
-        }
-        ASSERT_IF_NULL(aggregatedPerformer_);
-        priorityPolicy_->PrepareForScheduling(items->front());
-        auto scheduleResults = aggregatedPerformer_->DoSchedule(preContext_, resourceInfo_, aggregatedItem);
-        for (uint32_t i = 0; i < scheduleResults->size(); ++i) {
-            auto scheResult = (*scheduleResults)[i];
-            auto instance = items->front();
-            OnScheduleDone(scheResult, instance);
-            items->pop_front();
-        }
-        if (items->empty()) {
-            runningQueue_->Dequeue();
-        }
+    switch (item->GetItemType()) {
+        case QueueItemType::INSTANCE:
+            return ConsumeInstanceItem(item);
+        case QueueItemType::GROUP:
+            return ConsumeGroupItem(item);
+        case QueueItemType::AGGREGATED_ITEM:
+            return ConsumeAggregatedItem(item, maxRequests);
+        default:
+            return 0;
     }
+}
+
+size_t PriorityScheduler::ConsumeInstanceItem(const std::shared_ptr<QueueItem> &item)
+{
+    YRLOG_INFO("{}|start instance schedule", item->GetRequestId());
+    auto instance = std::dynamic_pointer_cast<InstanceItem>(item);
+    ASSERT_IF_NULL(instancePerformer_);
+    priorityPolicy_->PrepareForScheduling(instance);
+    auto future = scheduleResourceView_ == nullptr
+                      ? instancePerformer_->DoSchedule(preContext_, resourceInfo_, instance)
+                      : instancePerformer_->DoSchedule(preContext_, *scheduleResourceView_, instance);
+    OnScheduleDone(future, instance);
+    runningQueue_->Dequeue();
+    return 1;
+}
+
+size_t PriorityScheduler::ConsumeGroupItem(const std::shared_ptr<QueueItem> &item)
+{
+    YRLOG_INFO("{}|start group schedule", item->GetRequestId());
+    auto group = std::dynamic_pointer_cast<GroupItem>(item);
+    if (group->groupReqs.empty()) {
+        YRLOG_WARN("{}|schedule requests are empty", item->GetRequestId());
+        group->groupPromise->SetValue(GroupScheduleResult{ 0, "", {} });
+        runningQueue_->Dequeue();
+        return 1;
+    }
+    ASSERT_IF_NULL(groupPerformer_);
+    priorityPolicy_->PrepareForScheduling(group);
+    auto future = scheduleResourceView_ == nullptr
+                      ? groupPerformer_->DoSchedule(preContext_, resourceInfo_, group)
+                      : groupPerformer_->DoSchedule(preContext_, *scheduleResourceView_, group);
+    OnScheduleDone(future, group);
+    runningQueue_->Dequeue();
+    return std::max<size_t>(1, group->groupReqs.size());
+}
+
+size_t PriorityScheduler::DiscardCanceledRequests(
+    const std::shared_ptr<std::deque<std::shared_ptr<InstanceItem>>> &items, size_t maxRequests)
+{
+    size_t canceled = 0;
+    while (!items->empty() && canceled < maxRequests) {
+        const auto &instanceItem = items->front();
+        if (!instanceItem->cancelTag.IsOK()) {
+            break;
+        }
+        YRLOG_WARN("schedule (reqId={}) is canceled, reason: {}", instanceItem->GetRequestId(),
+                   instanceItem->cancelTag.Get());
+        items->pop_front();
+        ++canceled;
+    }
+    return canceled;
+}
+
+size_t PriorityScheduler::ConsumeAggregatedItem(const std::shared_ptr<QueueItem> &item, size_t maxRequests)
+{
+    auto aggregatedItem = std::dynamic_pointer_cast<AggregatedItem>(item);
+    auto items = aggregatedItem->reqQueue;
+    const auto canceled = DiscardCanceledRequests(items, maxRequests);
+    if (items->empty()) {
+        runningQueue_->Dequeue();
+        return canceled;
+    }
+    if (canceled >= maxRequests) {
+        return canceled;
+    }
+
+    ASSERT_IF_NULL(aggregatedPerformer_);
+    priorityPolicy_->PrepareForScheduling(items->front());
+    auto batch = aggregatedItem;
+    const auto remaining = maxRequests - canceled;
+    if (items->size() > remaining) {
+        batch = std::make_shared<AggregatedItem>(aggregatedItem->aggregatedKey, items->front());
+        batch->reqQueue = std::make_shared<std::deque<std::shared_ptr<InstanceItem>>>(
+            items->begin(), items->begin() + static_cast<std::ptrdiff_t>(remaining));
+    }
+    auto scheduleResults = scheduleResourceView_ == nullptr
+                               ? aggregatedPerformer_->DoSchedule(preContext_, resourceInfo_, batch)
+                               : aggregatedPerformer_->DoSchedule(preContext_, *scheduleResourceView_, batch);
+    for (uint32_t index = 0; index < scheduleResults->size(); ++index) {
+        auto scheduleResult = (*scheduleResults)[index];
+        auto instance = items->front();
+        OnScheduleDone(scheduleResult, instance);
+        items->pop_front();
+    }
+    if (items->empty()) {
+        runningQueue_->Dequeue();
+    }
+    return canceled + scheduleResults->size();
 }
 
 void PriorityScheduler::OnScheduleDone(const litebus::Future<ScheduleResult> &future,

@@ -25,10 +25,18 @@ namespace functionsystem::schedule_decision {
 
 enum class AggregatedStrategy { NO_AGGREGATE = 0, STRICTLY = 1, RELAXED = 2 };
 
+// Returns true when identical pure-scalar requests can share a candidate scan
+// and consume the reported per-Unit capacity without rerunning Filter/Score.
+// Static resource affinity and resource selectors are supported; affinity that
+// depends on reservations created in the current round is not.
+bool IsScalarAggregationEligible(const messages::ScheduleRequest &request);
+
 class AggregatedQueue : public ScheduleQueue {
 public:
-    explicit AggregatedQueue(const int &maxPriority, const std::string &strategy)
-        : strategy_(strategy), maxPriority_(maxPriority), frontItem_(nullptr){};
+    explicit AggregatedQueue(const int &maxPriority, const std::string &strategy, bool semanticKey = false,
+                             bool aggregationEnabled = true)
+        : strategy_(strategy), maxPriority_(maxPriority), frontItem_(nullptr), semanticKey_(semanticKey),
+          aggregationEnabled_(aggregationEnabled){};
 
     ~AggregatedQueue() override = default;
 
@@ -50,6 +58,8 @@ public:
 
     bool IsItemNeedAggregate(const std::shared_ptr<QueueItem> &queueItem);
 
+    void ConfigureAggregation(bool enabled);
+
     Status CheckItemValid(const std::shared_ptr<QueueItem> &queueItem);
 
 private:
@@ -60,6 +70,8 @@ private:
     int frontPriority_;                     // when aggregateItem.reqQueue is empty,the value is used
     std::unordered_map<uint16_t, std::deque<std::shared_ptr<QueueItem>>> aggregatedReqs;
     std::unordered_map<std::string, std::shared_ptr<AggregatedItem>> aggregatedItemIndex;  // AggregatedItem index
+    bool semanticKey_{ false };
+    bool aggregationEnabled_{ true };
 };
 }  // namespace functionsystem::schedule_decision
 #endif  // AGGRAVATED_QUEUE_H

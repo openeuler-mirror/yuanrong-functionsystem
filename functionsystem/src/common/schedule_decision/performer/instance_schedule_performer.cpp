@@ -23,13 +23,22 @@ ScheduleResult InstanceSchedulePerformer::DoSchedule(
     const resource_view::ResourceViewInfo &resourceInfo,
     const std::shared_ptr<schedule_decision::InstanceItem> &instanceItem)
 {
-    auto result = DoSelectOne(context, resourceInfo, instanceItem);
+    return DoSchedule(context, resource_view::ScheduleResourceView(resourceInfo), instanceItem);
+}
+
+ScheduleResult InstanceSchedulePerformer::DoSchedule(
+    const std::shared_ptr<schedule_framework::PreAllocatedContext> &context,
+    const resource_view::ScheduleResourceView &resourceView,
+    const std::shared_ptr<schedule_decision::InstanceItem> &instanceItem)
+{
+    auto result = DoSelectOne(context, resourceView, instanceItem);
     if (IsScheduleResultNeedPreempt(result)) {
         YRLOG_INFO("{}|{}|start to check preempt result", instanceItem->scheduleReq->traceid(),
                    instanceItem->scheduleReq->requestid());
         ASSERT_IF_NULL(preemptController_);
+        auto materialized = resourceView.MaterializeResourceView();
         auto preemptRes = preemptController_->PreemptDecision(context, instanceItem->scheduleReq->instance(),
-                                                              resourceInfo.resourceUnit);
+                                                              materialized);
         if (preemptRes.status.IsOk()) {
             YRLOG_INFO("{}|{}|start to trigger preempt instance", instanceItem->scheduleReq->traceid(),
                        instanceItem->scheduleReq->requestid());

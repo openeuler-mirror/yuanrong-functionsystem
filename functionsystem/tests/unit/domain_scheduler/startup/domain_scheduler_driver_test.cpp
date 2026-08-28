@@ -98,6 +98,21 @@ TEST_F(DomainSchedulerDriverTest, StartUpWithPrioritySchedulerTest)
     litebus::Await(global->GetAID());
 }
 
+TEST_F(DomainSchedulerDriverTest, StartUpWithUnitSchedulerAndSnapshotViewsTest)
+{
+    auto global = std::make_shared<GlobalActor>(DOMAIN_SCHED_MGR_ACTOR_NAME);
+    litebus::Spawn(global);
+    auto identity = "node123-127.0.0.1:8080";
+    domain_scheduler::DomainSchedulerParam param{ identity, "127.0.0.1:8080" };
+    param.enableUnitScheduler = true;
+    domain_scheduler::DomainSchedulerDriver driver(param);
+    ASSERT_EQ(driver.Start(), Status::OK());
+    ASSERT_EQ(driver.Stop(), Status::OK());
+    driver.Await();
+    litebus::Terminate(global->GetAID());
+    litebus::Await(global->GetAID());
+}
+
 TEST_F(DomainSchedulerDriverTest, RegisterFilterPolicyTest)
 {
     auto identity = "node123-127.0.0.1:8080";

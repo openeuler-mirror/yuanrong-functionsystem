@@ -40,6 +40,12 @@ class SnapCtrl;
 class TraefikRegistry;
 class InstanceCtrl : public ActorDriver {
 public:
+    struct StartOptions {
+        std::string aggregatedStrategy{ "no_aggregate" };
+        uint16_t maxPriority{ 0 };
+        bool enableUnitScheduler{ false };
+    };
+
     explicit InstanceCtrl(const std::shared_ptr<InstanceCtrlActor> &instanceCtrlActor);
 
     ~InstanceCtrl() override;
@@ -47,8 +53,11 @@ public:
     static std::unique_ptr<InstanceCtrl> Create(const std::string &nodeID, const InstanceCtrlConfig &config);
     void Start(const std::shared_ptr<FunctionAgentMgr> &functionAgentMgr,
                const std::shared_ptr<ResourceViewMgr> &resourceViewMgr,
+               const std::shared_ptr<function_proxy::ControlPlaneObserver> &observer);
+    void Start(const std::shared_ptr<FunctionAgentMgr> &functionAgentMgr,
+               const std::shared_ptr<ResourceViewMgr> &resourceViewMgr,
                const std::shared_ptr<function_proxy::ControlPlaneObserver> &observer,
-               const std::string &aggregatedStrategy = "no_aggregate", uint16_t maxPriority = 0);
+               const StartOptions &options);
 
     void Stop() override;
 
@@ -334,7 +343,8 @@ public:
         const std::string &tag,
         const uint16_t &maxPriority,
         const std::string &aggregatedStrategy,
-        const std::shared_ptr<resource_view::ResourceView> resourceView);
+        const std::shared_ptr<resource_view::ResourceView> resourceView,
+        bool enableUnitScheduler);
 
     virtual litebus::Future<Status> GracefulShutdown();
 

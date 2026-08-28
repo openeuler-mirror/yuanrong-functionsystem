@@ -36,6 +36,28 @@ TEST_F(CommonFlagsTest, DomainSchedulerFlagsOK)
     EXPECT_EQ(flags.GetLitebusThreadNum(), 50);  // 50: thread num
 }
 
+TEST_F(CommonFlagsTest, UnitSchedulerFlagsDefaultToLegacyAndParsePlacementPolicy)
+{
+    CommonFlags defaults;
+    EXPECT_FALSE(defaults.GetEnableUnitScheduler());
+    EXPECT_EQ(defaults.GetSchedulePlacementPolicy(), "spread");
+
+    const char *argv[] = { "./domain_scheduler", "--enable_unit_scheduler=true",
+                           "--schedule_placement_policy=binpack" };
+    CommonFlags configured;
+    auto parse = configured.ParseFlags(3, argv);
+    ASSERT_TRUE(parse.IsNone());
+    EXPECT_TRUE(configured.GetEnableUnitScheduler());
+    EXPECT_EQ(configured.GetSchedulePlacementPolicy(), "binpack");
+}
+
+TEST_F(CommonFlagsTest, UnitSchedulerPlacementPolicyRejectsUnknownValue)
+{
+    const char *argv[] = { "./domain_scheduler", "--schedule_placement_policy=unknown" };
+    CommonFlags flags;
+    EXPECT_TRUE(flags.ParseFlags(2, argv).IsSome());
+}
+
 TEST_F(CommonFlagsTest, ETCDAuthTypeFlags)
 {
     const char *argv[] = { "./function_master", "--etcd_auth_type=TLS" };

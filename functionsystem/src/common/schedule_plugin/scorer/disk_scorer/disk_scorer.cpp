@@ -20,6 +20,7 @@
 #include "common/logs/logging.h"
 #include "common/schedule_plugin/common/constants.h"
 #include "common/schedule_plugin/common/plugin_register.h"
+#include "common/schedule_plugin/common/round_allocation_context.h"
 
 namespace functionsystem::schedule_plugin::score {
 bool IsVectorAllocationValid(const schedule_framework::NodeScore &score)
@@ -74,7 +75,8 @@ void SetDiskMountPoint(const resource_view::Resource &diskResource, schedule_fra
         diskResource.extensions(diskIndex).disk().mountpoints();
 }
 
-void CalcMaxDiskScore(double diskReq, const resource_view::Category &diskCategory, schedule_framework::NodeScore &score)
+void CalcMaxDiskScore(double diskReq, const resource_view::Category &diskCategory, bool compact,
+                      schedule_framework::NodeScore &score)
 {
     float maxScore = INVALID_SCORE;
     score.vectorAllocations.clear();
@@ -89,7 +91,9 @@ void CalcMaxDiskScore(double diskReq, const resource_view::Category &diskCategor
             if (!resource_view::IsRequestSatisfiable(diskReq, diskAvailable)) {
                 continue;
             }
-            float currentScore = (double(BASE_SCORE_FACTOR) - diskReq / diskAvailable) * double(DEFAULT_SCORE);
+            float currentScore = (compact ? diskReq / diskAvailable
+                                          : double(BASE_SCORE_FACTOR) - diskReq / diskAvailable)
+                                 * double(DEFAULT_SCORE);
             if (currentScore > maxScore) {
                 maxScore = currentScore;
                 vectorAllocation.selectedIndices.clear();
@@ -108,7 +112,7 @@ void CalcMaxDiskScore(double diskReq, const resource_view::Category &diskCategor
 void CalcDiskScore(const std::shared_ptr<schedule_framework::PreAllocatedContext> &preContext,
                    const resource_view::InstanceInfo &instance,
                    const resource_view::ResourceUnit &resourceUnit,
-                   schedule_framework::NodeScore &score)
+                   bool compact, schedule_framework::NodeScore &score)
 {
     std::vector<float> scores;
     if (!resource_view::HasDiskResource(instance)) {
@@ -119,10 +123,7 @@ void CalcDiskScore(const std::shared_ptr<schedule_framework::PreAllocatedContext
         return;
     }
 
-    auto resourcesAvailable = resourceUnit.allocatable();
-    if (auto iter(preContext->allocated.find(resourceUnit.id())); iter != preContext->allocated.end()) {
-        resourcesAvailable = resourceUnit.allocatable() - iter->second.resource;
-    }
+    const auto &resourcesAvailable = preContext->EffectiveAllocatable(resourceUnit);
 
     auto diskReq = instance.resources().resources().at(resource_view::DISK_RESOURCE_NAME).scalar().value();
 
@@ -133,7 +134,7 @@ void CalcDiskScore(const std::shared_ptr<schedule_framework::PreAllocatedContext
         return;
     }
 
-    CalcMaxDiskScore(diskReq, diskCategory, score);
+    CalcMaxDiskScore(diskReq, diskCategory, compact, score);
     UpdateDiskAllocation(diskReq, diskCategory, score);
     SetDiskMountPoint(diskResource, score);
 }
@@ -154,7 +155,8 @@ schedule_framework::NodeScore DiskScorer::Score(
         return nodeScore;
     }
 
-    CalcDiskScore(preContext, instance, resourceUnit, nodeScore);
+    const bool compact = std::dynamic_pointer_cast<schedule_framework::RoundAllocationContext>(ctx) != nullptr;
+    CalcDiskScore(preContext, instance, resourceUnit, compact, nodeScore);
     return nodeScore;
 }
 

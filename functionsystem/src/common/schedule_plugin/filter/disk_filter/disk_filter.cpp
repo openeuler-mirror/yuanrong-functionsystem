@@ -36,9 +36,8 @@ Status CheckDiskResource(const std::shared_ptr<schedule_framework::PreAllocatedC
         return Status(DISK_SCHEDULE_FAILED, "disk: Not Enough");
     }
 
-    auto resourcesAvailable = resourceUnit.allocatable();
-    if (auto iter(preContext->allocated.find(resourceUnit.id())); iter != preContext->allocated.end()) {
-        resourcesAvailable = resourceUnit.allocatable() - iter->second.resource;
+    const auto &resourcesAvailable = preContext->EffectiveAllocatable(resourceUnit);
+    if (preContext->allocated.find(resourceUnit.id()) != preContext->allocated.end()) {
         if (!resource_view::IsValid(resourcesAvailable)) {
             return Status(DISK_SCHEDULE_FAILED, "Invalid Resourceunit");
         }

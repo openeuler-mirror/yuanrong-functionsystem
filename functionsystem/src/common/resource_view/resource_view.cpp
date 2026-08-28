@@ -17,6 +17,7 @@
 #include "resource_view.h"
 
 #include "async/async.hpp"
+#include "common/constants/constants.h"
 #include "common/logs/logging.h"
 #include "litebus.hpp"
 
@@ -152,6 +153,12 @@ litebus::Future<ResourceViewInfo> ResourceView::GetResourceInfo()
 {
     ASSERT_IF_NULL(implActor_);
     return litebus::Async(implActor_->GetAID(), &ResourceViewActor::GetResourceInfo);
+}
+
+std::shared_ptr<ScheduleSnapshotStore> ResourceView::GetScheduleSnapshotStore() const
+{
+    ASSERT_IF_NULL(implActor_);
+    return implActor_->GetScheduleSnapshotStore();
 }
 
 void ResourceView::TriggerTryPull()

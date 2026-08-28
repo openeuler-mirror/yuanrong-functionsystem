@@ -239,6 +239,16 @@ public:
         return aggregatedStrategy_;
     }
 
+    bool GetEnableUnitScheduler() const
+    {
+        return enableUnitScheduler_;
+    }
+
+    const std::string &GetSchedulePlacementPolicy() const
+    {
+        return schedulePlacementPolicy_;
+    }
+
     const std::string &GetSystemAuthMode() const
     {
         return systemAuthMode_;
@@ -318,6 +328,8 @@ protected:
     uint16_t maxPriority_;
 
     std::string aggregatedStrategy_;
+    bool enableUnitScheduler_{ false };
+    std::string schedulePlacementPolicy_{ "spread" };
 
     std::string clusterId_;
 

@@ -17,11 +17,16 @@
 #ifndef DOMAIN_SCHEDULER_SCHEDULER_PREALLOCATED_CONTEXT_H
 #define DOMAIN_SCHEDULER_SCHEDULER_PREALLOCATED_CONTEXT_H
 
+#include <algorithm>
+#include <chrono>
+#include <functional>
+#include <queue>
 #include <set>
 #include <unordered_map>
 
 #include "common/resource_view/resource_type.h"
 #include "common/resource_view/resource_tool.h"
+#include "common/resource_view/scala_resource_tool.h"
 #include "common/scheduler_framework/framework/framework.h"
 #include "common/constants/constants.h"
 
@@ -80,6 +85,13 @@ struct NodeInfos {
 };
 
 struct PreAllocatedContext : public schedule_framework::ScheduleContext {
+    struct RequestReservation {
+        std::string unitID;
+        std::string instanceID;
+        resource_view::Resources resources;
+        ::google::protobuf::Map<std::string, resource_view::ValueCounter> labels;
+    };
+
     resource_view::SCHEDULER_LEVEL schedulerLevel;
 
     std::unordered_map<std::string, UnitResource> allocated;
@@ -100,6 +112,11 @@ struct PreAllocatedContext : public schedule_framework::ScheduleContext {
     // key: unitID value: allocated instance label
     std::unordered_map<std::string, ::google::protobuf::Map<std::string, resource_view::ValueCounter>> allocatedLabels;
 
+    // Legacy PRE_ALLOCATION used to retain only the aggregate deduction. Keep
+    // the exact per-request delta as well so a Local conflict can be rolled
+    // back before the same request is re-enqueued.
+    std::unordered_map<std::string, RequestReservation> requestReservations;
+
     // key: requestID value:(key: unitID value: default plugin score)
     std::unordered_map<std::string, std::unordered_map<std::string, int64_t>> requestDefaultScores;
 
@@ -108,9 +125,117 @@ struct PreAllocatedContext : public schedule_framework::ScheduleContext {
 
     ::google::protobuf::Map<std::string, resource_view::ValueCounter>* allLabels;
 
+    const resource_view::Resources &EffectiveAllocatable(const resource_view::ResourceUnit &unit)
+    {
+        if (unitEvaluationActive_ && unit.id() == evaluatedUnitID_) {
+            return effectiveAllocatable_.at(unit.id()).resources;
+        }
+        RebuildEffectiveAllocatable(unit);
+        return effectiveAllocatable_.at(unit.id()).resources;
+    }
+
+    void BeginUnitEvaluation(const resource_view::ResourceUnit &unit)
+    {
+        const auto cached = effectiveAllocatable_.find(unit.id());
+        if (cached == effectiveAllocatable_.end() || cached->second.source != &unit) {
+            RebuildEffectiveAllocatable(unit);
+        }
+        evaluatedUnitID_ = unit.id();
+        unitEvaluationActive_ = true;
+    }
+
+    void EndUnitEvaluation()
+    {
+        unitEvaluationActive_ = false;
+        evaluatedUnitID_.clear();
+    }
+
+    void InvalidateEffectiveAllocatable(const std::string &unitID)
+    {
+        effectiveAllocatable_.erase(unitID);
+        if (unitID == evaluatedUnitID_) {
+            EndUnitEvaluation();
+        }
+    }
+
+    size_t EffectiveAllocatableBuildCount() const
+    {
+        return effectiveAllocatableBuildCount_;
+    }
+
+    void ClearEffectiveAllocatable()
+    {
+        EndUnitEvaluation();
+        effectiveAllocatable_.clear();
+    }
+
+    void RecordRequestReservation(const std::string &requestID, const std::string &unitID,
+                                  const resource_view::InstanceInfo &instance)
+    {
+        RequestReservation reservation;
+        reservation.unitID = unitID;
+        reservation.instanceID = instance.instanceid();
+        reservation.resources = instance.resources();
+        reservation.labels = instance.labels().empty() && instance.kvlabels().empty()
+                                 ? ::google::protobuf::Map<std::string, resource_view::ValueCounter>{}
+                                 : ToLabelKVs(instance.labels()) + ToLabelKVs(instance.kvlabels());
+        requestReservations.insert_or_assign(requestID, std::move(reservation));
+    }
+
+    bool RemoveRequestReservation(const std::string &requestID)
+    {
+        const auto reservation = requestReservations.find(requestID);
+        if (reservation == requestReservations.end()) {
+            return false;
+        }
+        const auto unitID = reservation->second.unitID;
+        if (auto allocatedIter = allocated.find(unitID); allocatedIter != allocated.end()) {
+            allocatedIter->second.resource = allocatedIter->second.resource - reservation->second.resources;
+        }
+        if (!reservation->second.labels.empty()) {
+            if (auto labelsIter = allocatedLabels.find(unitID); labelsIter != allocatedLabels.end()) {
+                labelsIter->second = labelsIter->second - reservation->second.labels;
+            }
+        }
+        preAllocatedSelectedFunctionAgentMap.erase(reservation->second.instanceID);
+        requestReservations.erase(reservation);
+        const auto stillReserved = std::any_of(
+            requestReservations.begin(), requestReservations.end(), [&unitID](const auto &entry) {
+                return entry.second.unitID == unitID;
+            });
+        if (!stillReserved) {
+            preAllocatedSelectedFunctionAgentSet.erase(unitID);
+        }
+        InvalidateEffectiveAllocatable(unitID);
+        return true;
+    }
+
     PreAllocatedContext() = default;
     ~PreAllocatedContext() override = default;
+
+private:
+    struct EffectiveAllocatableEntry {
+        const resource_view::ResourceUnit *source{ nullptr };
+        resource_view::Resources resources;
+    };
+
+    void RebuildEffectiveAllocatable(const resource_view::ResourceUnit &unit)
+    {
+        auto effective = unit.allocatable();
+        if (const auto reserved = allocated.find(unit.id()); reserved != allocated.end()) {
+            effective = unit.allocatable() - reserved->second.resource;
+        }
+        effectiveAllocatable_.insert_or_assign(
+            unit.id(), EffectiveAllocatableEntry{ &unit, std::move(effective) });
+        ++effectiveAllocatableBuildCount_;
+    }
+
+    std::unordered_map<std::string, EffectiveAllocatableEntry> effectiveAllocatable_;
+    std::string evaluatedUnitID_;
+    bool unitEvaluationActive_{ false };
+    size_t effectiveAllocatableBuildCount_{ 0 };
 };
+
 
 inline void ClearContext(::google::protobuf::Map<std::string, messages::PluginContext> &pluginCtx)
 {
@@ -123,7 +248,6 @@ inline void ClearContext(::google::protobuf::Map<std::string, messages::PluginCo
 inline void CopyPluginContext(::google::protobuf::Map<std::string, messages::PluginContext> &out,
                               ::google::protobuf::Map<std::string, messages::PluginContext> &in)
 {
-    out[LABEL_AFFINITY_PLUGIN] = in[LABEL_AFFINITY_PLUGIN];
     out[LABEL_AFFINITY_PLUGIN] = in[LABEL_AFFINITY_PLUGIN];
     out[DEFAULT_FILTER_PLUGIN] = in[DEFAULT_FILTER_PLUGIN];
 }

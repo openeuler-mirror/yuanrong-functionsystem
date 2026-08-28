@@ -114,10 +114,9 @@ schedule_framework::Filtered DefaultFilter::ResourceFilter(
     const std::shared_ptr<schedule_framework::PreAllocatedContext> &preContext,
     const resource_view::InstanceInfo &instance, const resource_view::ResourceUnit &unit)
 {
-    auto available = unit.allocatable();
+    const auto &available = preContext->EffectiveAllocatable(unit);
     // calculate new available
-    if (auto iter(preContext->allocated.find(unit.id())); iter != preContext->allocated.end()) {
-        available = unit.allocatable() - iter->second.resource;
+    if (preContext->allocated.find(unit.id()) != preContext->allocated.end()) {
         if (!resource_view::IsValid(available)) {
             YRLOG_WARN("Invalid available resource, unit {}", unit.id());
             return schedule_framework::Filtered{ Status{ StatusCode::RESOURCE_NOT_ENOUGH, "No Resources Available" },

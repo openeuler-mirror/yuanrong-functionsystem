@@ -39,14 +39,32 @@ public:
     virtual ScheduleType GetScheduleType() = 0;
 
     virtual void ConsumeRunningQueue() = 0;
+    virtual size_t ConsumeRunningQueue(size_t maxRequests)
+    {
+        ConsumeRunningQueue();
+        return maxRequests;
+    }
     virtual void HandleResourceInfoUpdate(const resource_view::ResourceViewInfo &resourceInfo) = 0;
     virtual void ActivatePendingRequests() = 0;
+    virtual bool UsesScheduleSnapshot() const
+    {
+        return false;
+    }
+    virtual Status BeginScheduleRound(const resource_view::ScheduleSnapshotPtr &)
+    {
+        return Status(StatusCode::ERR_SCHEDULE_PLUGIN_CONFIG, "scheduler does not support Unit snapshots");
+    }
+    virtual void HandleScheduleConflict(const std::string &, const resource_view::InstanceInfo &,
+                                        const std::string &)
+    {
+    }
+    void SetPlacementPolicy(const std::string &policy);
 
     litebus::Future<Status> RegisterPolicy(const std::string &policyName);
-    void RegisterSchedulePerformer(const std::shared_ptr<resource_view::ResourceView> &resourceView,
-                                   const std::shared_ptr<schedule_framework::Framework> &framework,
-                                   const PreemptInstancesFunc &func,
-                                   const AllocateType &type = AllocateType::PRE_ALLOCATION);
+    virtual void RegisterSchedulePerformer(const std::shared_ptr<resource_view::ResourceView> &resourceView,
+                                           const std::shared_ptr<schedule_framework::Framework> &framework,
+                                           const PreemptInstancesFunc &func,
+                                           const AllocateType &type = AllocateType::PRE_ALLOCATION);
 
     void RegisterSchedulePerformer(const std::shared_ptr<InstanceSchedulePerformer> &instancePerformer,
                                    const std::shared_ptr<GroupSchedulePerformer> &groupPerformer,
@@ -54,10 +72,13 @@ public:
                                    );
 
 protected:
+    virtual void OnFrameworkPoliciesChanged() {}
+
     std::shared_ptr<InstanceSchedulePerformer> instancePerformer_;
     std::shared_ptr<GroupSchedulePerformer> groupPerformer_;
     std::shared_ptr<schedule_framework::Framework> framework_;
     std::shared_ptr<AggregatedSchedulePerformer> aggregatedPerformer_;
+    std::string placementPolicy_{ "binpack" };
 };
 } // namespace functionsystem::schedule_decision
 #endif // DOMAIN_DECISION_SCHEDULE_STRATEGY_H

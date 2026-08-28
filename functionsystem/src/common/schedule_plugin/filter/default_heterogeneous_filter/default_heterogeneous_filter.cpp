@@ -170,9 +170,8 @@ Status DefaultHeterogeneousFilter::Filtering(const resource_view::InstanceInfo &
                                              const std::shared_ptr<schedule_framework::PreAllocatedContext> &preContext,
                                              const resources::ResourceUnit &unit) const
 {
-    auto available = unit.allocatable();
-    if (auto iter(preContext->allocated.find(unit.id())); iter != preContext->allocated.end()) {
-        available = unit.allocatable() - iter->second.resource;
+    const auto &available = preContext->EffectiveAllocatable(unit);
+    if (preContext->allocated.find(unit.id()) != preContext->allocated.end()) {
         if (!resource_view::IsValid(available)) {
             YRLOG_WARN("Invalid available resource is found during heterogeneous filter");
             return Status(HETEROGENEOUS_SCHEDULE_FAILED, "Invalid Resource");

@@ -27,6 +27,7 @@
 #include "common/status/status.h"
 #include "resource_type.h"
 #include "resource_poller.h"
+#include "schedule_snapshot.h"
 
 namespace functionsystem::resource_view {
 
@@ -53,6 +54,7 @@ public:
         bool isLocal{true};
         bool enableTenantAffinity{true};
         int32_t tenantPodReuseTimeWindow{10};
+        bool enableScheduleSnapshot{false};
     };
     ResourceViewActor(const std::string &name, std::string id, const Param &param);
     ~ResourceViewActor() override = default;
@@ -208,6 +210,11 @@ public:
     // used by domain
     litebus::Future<PullResourceRequest> GetUnitSnapshotInfo(const std::string &unitID);
 
+    std::shared_ptr<ScheduleSnapshotStore> GetScheduleSnapshotStore() const
+    {
+        return scheduleSnapshotStore_;
+    }
+
     // for test
     [[maybe_unused]] std::unordered_map<std::string, std::unordered_set<std::string>> GetAgentCache()
     {
@@ -290,6 +297,30 @@ protected:
     void Finalize() override;
 
 private:
+    class SnapshotMutationGuard {
+    public:
+        explicit SnapshotMutationGuard(ResourceViewActor &actor);
+        ~SnapshotMutationGuard();
+
+        SnapshotMutationGuard(const SnapshotMutationGuard &) = delete;
+        SnapshotMutationGuard &operator=(const SnapshotMutationGuard &) = delete;
+
+    private:
+        ResourceViewActor &actor_;
+    };
+
+    void BeginSnapshotMutation();
+    void EndSnapshotMutation();
+    void MarkSnapshotUnitDirty(const std::string &unitID);
+    void MarkSnapshotStructureDirty(const std::string &unitID);
+    void MarkSnapshotIndexesDirty(bool requestPlacements, bool ownerLabels);
+    void MarkSnapshotMonopolyIndexDirty();
+    void MarkSnapshotMetadataDirty();
+    void MarkSnapshotRequestMutation(const std::string &requestID);
+    void ScheduleSnapshotFlush();
+    void FlushScheduleSnapshot();
+    void CommitScheduleSnapshot();
+
     static void AddResourceBySubUnit(ResourceUnit &view, const ResourceUnit &value);
     static void DeleteResourceBySubUnit(ResourceUnit &view, ResourceUnit &value);
     static void PruneRemovedResources(ResourceUnit &view, const ResourceUnit &removedResources);
@@ -313,6 +344,7 @@ private:
     bool IsValidUnit(const ResourceUnit &unit) const;
     bool IsValidInstance(const InstanceInfo &instance);
     bool IsValidInstances(const std::map<std::string, InstanceAllocatedInfo> &instances);
+    Status ValidateInstanceAllocation(const std::string &instanceID, const InstanceInfo &instance) const;
 
     void AddInstance(const InstanceInfo &instance);
     void DeleteInstance(const std::string &instID, bool isVirtualInstance);
@@ -375,6 +407,7 @@ private:
     Status HandleReportedDeleteInstacne(const InstanceInfo &instance);
     void SimplifyInstanceInfo(const InstanceInfo &instance, InstanceInfo &simplifiedInstance) const;
     bool HandleReportedChanges(const std::shared_ptr<ResourceUnitChanges> &resourceUnitChanges);
+    void MarkReportedChangesSnapshotDirty(const ResourceUnitChanges &resourceUnitChanges);
 
     void MarkResourceUpdated();
     void NotifyResourceUpdated();
@@ -427,6 +460,14 @@ private:
     std::string domainUrlForLocal_;
     std::string actorSuffix_;
     std::shared_ptr<ActorWorker> asyncWorker_;
+    bool scheduleSnapshotEnabled_{ false };
+    uint32_t snapshotMutationDepth_{ 0 };
+    uint32_t snapshotPendingMutationCount_{ 0 };
+    bool snapshotFlushScheduled_{ false };
+    litebus::Timer snapshotFlushTimer_;
+    ScheduleSnapshotDirtySet snapshotDirtySet_;
+    std::shared_ptr<ScheduleSnapshotStore> scheduleSnapshotStore_;
+    std::unique_ptr<ScheduleSnapshotBuilder> scheduleSnapshotBuilder_;
     void SetResourceMetricsContext(const std::shared_ptr<ResourceUnitChanges> &resourceUnitChanges) const;
 };
 

@@ -325,7 +325,10 @@ TEST_F(DomainInstanceCtrlTest, ReSchedulingAfterConflict)
 
     std::string mockSelectedName = "selected";
     ScheduleResult result{ mockSelectedName, 0, "" };
-    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _)).WillRepeatedly(Return(AsyncReturn(result)));
+    result.unitID = "selected-unit";
+    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _)).WillOnce(Return(AsyncReturn(result)));
+    EXPECT_CALL(*mockScheduler_, RetryScheduleDecision(_, _, result.unitID))
+        .WillRepeatedly(Return(AsyncReturn(result)));
 
     auto mockSchedRsp = std::make_shared<messages::ScheduleResponse>();
     mockSchedRsp->set_code(StatusCode::RESOURCE_NOT_ENOUGH);
@@ -377,7 +380,10 @@ TEST_F(DomainInstanceCtrlTest, ReSchedulingFailedAfterConflict)
 
     std::string mockSelectedName = "selected";
     ScheduleResult result{ mockSelectedName, 0, "" };
-    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _)).WillRepeatedly(Return(AsyncReturn(result)));
+    result.unitID = "selected-unit";
+    EXPECT_CALL(*mockScheduler_, ScheduleDecision(_, _)).WillOnce(Return(AsyncReturn(result)));
+    EXPECT_CALL(*mockScheduler_, RetryScheduleDecision(_, _, result.unitID))
+        .WillRepeatedly(Return(AsyncReturn(result)));
 
     auto mockSchedRsp = std::make_shared<messages::ScheduleResponse>();
     mockSchedRsp->set_code(StatusCode::RESOURCE_NOT_ENOUGH);

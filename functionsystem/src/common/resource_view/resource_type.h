@@ -77,6 +77,11 @@ using ResourceUnitChanges = ::resources::ResourceUnitChanges;
 using CapacityChange = ::resources::CapacityChange;
 using PullResourceRequest = ::messages::PullResourceRequest;
 
+enum class ResourceType {
+    PRIMARY = 0,
+    VIRTUAL = 1,
+};
+
 using ResourceUpdateHandler = std::function<void()>;
 using ValueToStringFunc = std::function<std::string(const Resource &)>;
 using ValueValidateFunc = std::function<bool(const Resource &)>;

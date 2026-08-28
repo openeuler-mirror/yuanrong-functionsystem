@@ -79,6 +79,11 @@ CommonFlags::CommonFlags()
     AddFlag(&CommonFlags::aggregatedStrategy_, "aggregated_strategy",
             "req aggregate strategy, eg: no_aggregate, strictly, relaxed", std::string("no_aggregate"),
             WhiteListCheck({ "no_aggregate", "strictly", "relaxed" }));
+    AddFlag(&CommonFlags::enableUnitScheduler_, "enable_unit_scheduler",
+            "enable immutable Unit snapshot scheduling", false);
+    AddFlag(&CommonFlags::schedulePlacementPolicy_, "schedule_placement_policy",
+            "cluster placement policy for Unit scheduler, eg: binpack, spread", std::string("spread"),
+            WhiteListCheck({ "binpack", "spread" }));
     AddFlag(&CommonFlags::clusterId_, "cluster_id", "cluster id", "");
     AddFlag(&CommonFlags::systemAuthMode_, "system_auth_mode", "authentication mode between yuanrong components", "");
     AddFlag(&CommonFlags::decryptAlgorithm_, "decrypt_algorithm", "decrypt algorithm, eg: GCM, CBC, STS",

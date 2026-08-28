@@ -103,6 +103,8 @@ private:
     bool enablePreemption_{ false };
     std::string componentName_{};
     bool enableHorizontalScale_{ false };
+    bool enableUnitScheduler_{ false };
+    std::string schedulePlacementPolicy_{ "spread" };
 
     std::shared_ptr<TraefikRouteCache> traefikRouteCache_;
     std::shared_ptr<TraefikApiRouterRegister> traefikApiRouteRegister_;

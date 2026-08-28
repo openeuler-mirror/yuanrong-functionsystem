@@ -381,6 +381,8 @@ GlobalSchedDriver::GlobalSchedDriver(std::shared_ptr<GlobalSched> globalSched, c
     maxPriority_ = flags.GetMaxPriority();
     enablePreemption_ = flags.GetEnablePreemption();
     aggregatedStrategy_ = flags.GetAggregatedStrategy();
+    enableUnitScheduler_ = flags.GetEnableUnitScheduler();
+    schedulePlacementPolicy_ = flags.GetSchedulePlacementPolicy();
     // create http server
     httpServer_ = std::make_shared<HttpServer>(GLOBAL_SCHEDULER);
     apiRouteRegister_ = std::make_shared<DefaultHealthyRouter>(flags.GetNodeID());
@@ -460,7 +462,8 @@ Status GlobalSchedDriver::Start()
         std::make_shared<domain_scheduler::DomainSchedulerLauncher>(domain_scheduler::DomainSchedulerParam{
             "InnerDomainScheduler", globalSchedAddress_, metaStoreClient_, heartbeatTimeoutMs_, pullResourceInterval_,
             isScheduleTolerateAbnormal_, maxPriority_, enablePreemption_, relaxed_, enableMetrics_,
-            enablePrintResourceView_, schedulePlugins_, aggregatedStrategy_, componentName_, enableHorizontalScale_ });
+            enablePrintResourceView_, schedulePlugins_, aggregatedStrategy_, componentName_, enableHorizontalScale_,
+            enableUnitScheduler_, schedulePlacementPolicy_ });
     auto domainActivator = std::make_shared<DomainActivator>(domainLauncher);
     auto topologyTree = std::make_unique<SchedTree>(maxLocalSchedPerDomainNode_, maxDomainSchedPerDomainNode_);
     auto globalSchedActor = std::make_shared<GlobalSchedActor>(GLOBAL_SCHED_ACTOR_NAME, metaStoreClient_,

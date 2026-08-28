@@ -148,6 +148,42 @@ TEST_F(PrioritySchedulerTest, AggregatedConsumeCompleteTest)
     EXPECT_TRUE(scheduler->CheckIsPendingQueueEmpty());
 }
 
+TEST_F(PrioritySchedulerTest, BoundedConsumeSplitsOneAggregatedItemAtRequestBoundary)
+{
+    auto scheduler = std::make_shared<PriorityScheduler>(recorder_, 10, PriorityPolicyType::FIFO, "relaxed");
+    scheduler->RegisterSchedulePerformer(mockInstancePerformer_, mockGroupPerformer_, mockAggregatedSchedulePerformer_);
+    auto first = CreateAggregatedInstanceItem("bounded-1", 3, 10, 20);
+    auto second = CreateAggregatedInstanceItem("bounded-2", 3, 10, 20);
+    auto third = CreateAggregatedInstanceItem("bounded-3", 3, 10, 20);
+    ASSERT_TRUE(scheduler->Enqueue(first).Get().IsOk());
+    ASSERT_TRUE(scheduler->Enqueue(second).Get().IsOk());
+    ASSERT_TRUE(scheduler->Enqueue(third).Get().IsOk());
+
+    std::vector<size_t> batchSizes;
+    EXPECT_CALL(*mockAggregatedSchedulePerformer_, DoSchedule)
+        .Times(2)
+        .WillRepeatedly(Invoke([&batchSizes](
+            const std::shared_ptr<schedule_framework::PreAllocatedContext> &,
+            const resource_view::ResourceViewInfo &,
+            const std::shared_ptr<AggregatedItem> &item) {
+            batchSizes.emplace_back(item->reqQueue->size());
+            auto results = std::make_shared<std::deque<ScheduleResult>>();
+            for (size_t index = 0; index < item->reqQueue->size(); ++index) {
+                results->emplace_back(ScheduleResult{ "", 0, "" });
+            }
+            return results;
+        }));
+
+    EXPECT_EQ(scheduler->ConsumeRunningQueue(2), 2);
+    EXPECT_FALSE(scheduler->CheckIsRunningQueueEmpty());
+    EXPECT_EQ(scheduler->ConsumeRunningQueue(2), 1);
+    EXPECT_TRUE(scheduler->CheckIsRunningQueueEmpty());
+    EXPECT_THAT(batchSizes, ElementsAre(2, 1));
+    EXPECT_TRUE(first->schedulePromise->GetFuture().IsOK());
+    EXPECT_TRUE(second->schedulePromise->GetFuture().IsOK());
+    EXPECT_TRUE(third->schedulePromise->GetFuture().IsOK());
+}
+
 
 //  FIFO and Fairness policy exhibit consistent behavior
 TEST_F(PrioritySchedulerTest, ConsumeCancelTest)
@@ -335,6 +371,27 @@ TEST_F(PrioritySchedulerTest, AggregatedConsumeOnResourceUpdateTest)
     EXPECT_TRUE(group1->groupPromise->GetFuture().Get().code == 0);
     EXPECT_TRUE(scheduler->CheckIsRunningQueueEmpty());
     EXPECT_TRUE(scheduler->CheckIsPendingQueueEmpty());
+}
+
+TEST_F(PrioritySchedulerTest, AggregatedQueueTypeIsPreservedAcrossPendingActivations)
+{
+    auto scheduler = std::make_shared<PriorityScheduler>(recorder_, 10, PriorityPolicyType::FAIRNESS, "relaxed");
+    ASSERT_NE(std::dynamic_pointer_cast<AggregatedQueue>(scheduler->runningQueue_), nullptr);
+    ASSERT_NE(std::dynamic_pointer_cast<AggregatedQueue>(scheduler->pendingQueue_), nullptr);
+
+    auto first = CreateAggregatedInstanceItem("first", 3, 10, 20);
+    ASSERT_TRUE(scheduler->pendingQueue_->Enqueue(first).Get().IsOk());
+    scheduler->ActivatePendingRequests();
+
+    ASSERT_NE(std::dynamic_pointer_cast<AggregatedQueue>(scheduler->runningQueue_), nullptr);
+    ASSERT_NE(std::dynamic_pointer_cast<AggregatedQueue>(scheduler->pendingQueue_), nullptr);
+
+    auto second = CreateAggregatedInstanceItem("second", 3, 10, 20);
+    ASSERT_TRUE(scheduler->pendingQueue_->Enqueue(second).Get().IsOk());
+    scheduler->ActivatePendingRequests();
+
+    ASSERT_NE(std::dynamic_pointer_cast<AggregatedQueue>(scheduler->runningQueue_), nullptr);
+    ASSERT_NE(std::dynamic_pointer_cast<AggregatedQueue>(scheduler->pendingQueue_), nullptr);
 }
 
 /*

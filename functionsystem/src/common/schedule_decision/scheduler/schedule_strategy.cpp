@@ -50,6 +50,18 @@ void ScheduleStrategy::RegisterSchedulePerformer(
     instancePerformer_ = instancePerformer;
     groupPerformer_ = groupPerformer;
     aggregatedPerformer_ = aggregatedPerformer;
+    SetPlacementPolicy(placementPolicy_);
+}
+
+void ScheduleStrategy::SetPlacementPolicy(const std::string &policy)
+{
+    placementPolicy_ = policy;
+    // The cluster placement policy controls only ordinary aggregated Domain
+    // scheduling. Single-request and GroupSchedule keep their existing score
+    // and group placement semantics.
+    if (aggregatedPerformer_ != nullptr) {
+        aggregatedPerformer_->SetPlacementPolicy(policy);
+    }
 }
 
 litebus::Future<Status> ScheduleStrategy::RegisterPolicy(const std::string &policyName)
@@ -62,6 +74,7 @@ litebus::Future<Status> ScheduleStrategy::RegisterPolicy(const std::string &poli
         YRLOG_WARN("{} schedule policy may duplicated", policyName);
         return Status(StatusCode::FAILED, "duplicated schedule policy");
     }
+    OnFrameworkPoliciesChanged();
     return Status::OK();
 }
 

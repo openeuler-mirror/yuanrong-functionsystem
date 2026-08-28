@@ -34,11 +34,8 @@ schedule_framework::NodeScore DefaultScorer::Score(const std::shared_ptr<schedul
                                                    const resource_view::InstanceInfo &instance,
                                                    const resource_view::ResourceUnit &resourceUnit)
 {
-    auto available = resourceUnit.allocatable();
     const auto preContext = std::dynamic_pointer_cast<schedule_framework::PreAllocatedContext>(ctx);
-    if (auto iter(preContext->allocated.find(resourceUnit.id())); iter != preContext->allocated.end()) {
-        available = resourceUnit.allocatable() - iter->second.resource;
-    }
+    const auto &available = preContext->EffectiveAllocatable(resourceUnit);
 
     const auto &required = instance.resources().resources();
     int64_t calculated = 0;
