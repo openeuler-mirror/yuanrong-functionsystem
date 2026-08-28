@@ -81,12 +81,15 @@ def run_build(root_dir, cmd_args):
 
     if args["component"] in CXX_MODULES:
         build_vendor(args)
+        # litebus' CMake build consumes the installed logs headers.  Bazel
+        # also builds logs from source for FunctionSystem itself, but that
+        # happens after litebus and cannot satisfy a cold output cache.
+        build_logs(args)
         build_litebus(args)
     if args["builder"] == "bazel" and args["component"] in CXX_MODULES:
-        # Bazel builds logs, metrics, and C++ binaries from source itself
+        # Bazel builds logs, metrics, and C++ binaries from source itself.
         build_functionsystem_bazel(root_dir, args)
     elif args["component"] in CXX_MODULES:
-        build_logs(args)
         build_metrics(args)
         build_functionsystem(root_dir, args)
     elapsed_time = time.time() - start_time
