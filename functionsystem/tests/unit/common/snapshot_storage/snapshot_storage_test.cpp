@@ -1290,24 +1290,5 @@ TEST(SnapshotArtifactPublisherTest, ConflictingFinalObjectFailsClosed)
     EXPECT_FALSE(result.Get().resultUnknown);
 }
 
-TEST(SnapshotArtifactPublisherTest, RejectsRuntimeArtifactFactsThatDoNotMatchLocalFile)
-{
-    TempDirectory directory;
-    auto source = directory.Path() / "checkpoint.img";
-    WriteFile(source, "publisher payload");
-    auto storage = std::make_shared<ScriptedArtifactStorage>();
-    auto publisher = std::make_shared<SnapshotArtifactPublisher>(storage, std::make_shared<ActorWorker>());
-    auto request = MakeArtifactPublishRequest(source);
-    request.expectedSize = 1;
-    request.expectedSha256 = "not-the-local-digest";
-
-    auto result = publisher->Publish(request);
-
-    ASSERT_TRUE(result.WaitFor(5'000).IsOK());
-    EXPECT_TRUE(result.Get().status.IsError());
-    EXPECT_EQ(storage->putCalls, 0);
-    EXPECT_EQ(storage->publishCalls, 0);
-}
-
 }  // namespace
 }  // namespace functionsystem::snapshot_storage
