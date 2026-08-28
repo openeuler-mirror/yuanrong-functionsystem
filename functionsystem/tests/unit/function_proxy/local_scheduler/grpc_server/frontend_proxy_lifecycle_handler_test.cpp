@@ -16,7 +16,9 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <memory>
+#include <thread>
 
 #include "common/proto/pb/posix_pb.h"
 #include "grpc_server/frontend_proxy_service/frontend_proxy_lifecycle_handler.h"
@@ -69,8 +71,7 @@ TEST(FrontendProxyLifecycleHandlerTest, CreateUsesFrontendSystemCallerWithoutRun
             readyResult->set_code(common::ERR_NONE);
             readyResult->mutable_runtimeinfo()->set_route("grpc://owning-proxy");
             readyResult->mutable_runtimeinfo()->set_proxyid("owning-node");
-            // Deliberately deliver ready before Schedule completes. The
-            // pre-registered ticket must retain it exactly once.
+            // Delivered before Schedule completes; must not surface in the response.
             (void)callback(readyResult);
             messages::ScheduleResponse scheduleResponse;
             scheduleResponse.set_code(common::ERR_NONE);
@@ -108,15 +109,13 @@ TEST(FrontendProxyLifecycleHandlerTest, CreateUsesFrontendSystemCallerWithoutRun
     ASSERT_NE(extensionIter, capturedScheduleReq->instance().extensions().end());
     EXPECT_EQ(extensionIter->second, "frontend");
 
-    ASSERT_TRUE(response.Get().has_callresult());
-    EXPECT_EQ(response.Get().callresult().requestid(), "request-1");
-    EXPECT_EQ(response.Get().callresult().instanceid(), "frontend-create-instance");
-    ASSERT_TRUE(response.Get().callresult().has_runtimeinfo());
-    EXPECT_EQ(response.Get().callresult().runtimeinfo().route(), "grpc://owning-proxy");
-    EXPECT_EQ(response.Get().callresult().runtimeinfo().proxyid(), "owning-node");
+    // create returns on schedule success with no CallResult.
+    EXPECT_EQ(response.Get().create().code(), common::ERR_NONE);
+    EXPECT_EQ(response.Get().create().instanceid(), "frontend-create-instance");
+    EXPECT_FALSE(response.Get().has_callresult());
 }
 
-TEST(FrontendProxyLifecycleHandlerTest, CreateReadyWaitTimesOutWhenRuntimeNeverReportsReady)
+TEST(FrontendProxyLifecycleHandlerTest, CreateReturnsOnScheduleEvenWhenRuntimeNeverReportsReady)
 {
     bool unregistered = false;
     auto dispatcher = BuildFrontendProxyCreateReadyDispatcher(
@@ -147,8 +146,13 @@ TEST(FrontendProxyLifecycleHandlerTest, CreateReadyWaitTimesOutWhenRuntimeNeverR
     auto response = dispatcher(request).Get(1000);
 
     ASSERT_TRUE(response.IsSome());
-    EXPECT_EQ(response.Get().create().code(), common::ERR_INNER_SYSTEM_ERROR);
-    EXPECT_EQ(response.Get().create().message(), "frontend proxy create ready call result timed out");
+    // create returns on schedule success even though ready never arrives.
+    EXPECT_EQ(response.Get().create().code(), common::ERR_NONE);
+    EXPECT_EQ(response.Get().create().instanceid(), "frontend-create-timeout-instance");
+    EXPECT_FALSE(response.Get().has_callresult());
+
+    // the ready ticket still times out and unregisters in the background.
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
     EXPECT_TRUE(unregistered);
 }
 

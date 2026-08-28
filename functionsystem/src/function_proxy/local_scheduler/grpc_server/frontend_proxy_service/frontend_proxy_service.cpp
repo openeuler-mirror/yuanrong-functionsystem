@@ -847,13 +847,14 @@ bool FrontendProxyService::ValidateCreateRequest(const ::frontend_proxy::CreateI
     const auto owningProxyID = response.has_callresult() && response.callresult().has_runtimeinfo()
                                    ? response.callresult().runtimeinfo().proxyid()
                                    : "";
-    if (createRsp.code() == common::ERR_NONE && owningProxyID.empty()) {
-        SetStatus(response.mutable_status(), common::ERR_INNER_SYSTEM_ERROR,
-                  "frontend proxy create response missing final owner proxy node id");
-        return ::grpc::Status::OK;
-    }
     if (createRsp.code() == common::ERR_NONE) {
-        response.set_routeaddress(owningProxyID);
+        // async create returns before ready: owningProxyID is empty, fall back
+        // to param_.nodeID so frontend records routeOnlyInstance for DELETE/kill.
+        if (owningProxyID.empty()) {
+            YRLOG_WARN("{}|frontend create response missing owning proxyID, routeaddress falls back to local node({})",
+                       request.context().requestid(), param_.nodeID);
+        }
+        response.set_routeaddress(owningProxyID.empty() ? param_.nodeID : owningProxyID);
     }
     SetStatus(response.mutable_status(), createRsp.code(), createRsp.message());
     const auto routeAddress = response.routeaddress();

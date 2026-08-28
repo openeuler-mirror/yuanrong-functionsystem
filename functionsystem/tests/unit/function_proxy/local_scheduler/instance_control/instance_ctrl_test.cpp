@@ -2316,23 +2316,28 @@ TEST_F(InstanceCtrlTest, KillInstanceWithCreating)
     instance.set_requestid("request");
     instance.set_functionproxyid("nodeN");
     instance.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::CREATING));
-    auto readyInstance = instance;
-    readyInstance.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::EXITED));
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->mutable_instance()->CopyFrom(instance);
     auto instanceContext = std::make_shared<InstanceContext>(scheduleReq);
 
-    EXPECT_CALL(*instanceControlView_, GetInstance).WillRepeatedly(Return(stateMachine));
     EXPECT_CALL(mockStateMachine, GetInstanceContextCopy).WillRepeatedly(Return(instanceContext));
     EXPECT_CALL(mockStateMachine, GetInstanceInfo).WillRepeatedly(Return(instance));
     EXPECT_CALL(mockStateMachine, GetCancelFuture).WillRepeatedly(Return(litebus::Future<std::string>()));
+    EXPECT_CALL(mockStateMachine, GetVersion).WillRepeatedly(Return(1));
+    EXPECT_CALL(mockStateMachine, IsSaving).WillRepeatedly(Return(false));
+    EXPECT_CALL(mockStateMachine, GetRequestID).WillRepeatedly(Return("request"));
+    EXPECT_CALL(mockStateMachine, ExecuteStateChangeCallback).Times(testing::AnyNumber());
+    EXPECT_CALL(mockStateMachine, TransitionToImpl(InstanceState::FATAL, _, _, _, _))
+        .WillRepeatedly(Return(TransitionResult{ InstanceState::FATAL, InstanceInfo(), InstanceInfo(), 1 }));
+    // force-FATAL synchronously drives CREATING->FATAL in ProcessKillCtxByInstanceState, then
+    // Exit->ForceDeleteInstance still sees CREATING (mock GetInstanceInfo is fixed) and registers
+    // an AddStateChangeCallback waiting for FATAL/EXITED. In real code TransitionTo completes
+    // asynchronously and ExecuteStateChangeCallback notifies that callback; the mock cannot, so
+    // simulate the post-force-FATAL notification by firing the callback with EXITED on registration.
     EXPECT_CALL(mockStateMachine, AddStateChangeCallback)
-        .WillOnce(Invoke([instance](const std::unordered_set<InstanceState> &statesConcerned,
-                                    const std::function<void(const resources::InstanceInfo &)> &callback,
-                                    const std::string &eventKey) { callback(instance); }))
-        .WillOnce(Invoke([](const std::unordered_set<InstanceState> &statesConcerned,
-                            const std::function<void(const resources::InstanceInfo &)> &callback,
-                            const std::string &eventKey) {
+        .WillRepeatedly(Invoke([](const std::unordered_set<InstanceState> &,
+                                  const std::function<void(const resources::InstanceInfo &)> &callback,
+                                  const std::string &) {
             resources::InstanceInfo exitedInstance;
             exitedInstance.mutable_instancestatus()->set_code(static_cast<int32_t>(InstanceState::EXITED));
             callback(exitedInstance);
