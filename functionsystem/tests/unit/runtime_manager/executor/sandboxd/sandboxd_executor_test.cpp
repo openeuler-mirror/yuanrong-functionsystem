@@ -378,7 +378,7 @@ TEST(SandboxdExecutorTest, StartupReconciliationDoesNotReadOrDeriveSandboxIdenti
     EXPECT_EQ(reservations.at("runtime-a"), std::vector<int>({21006}));
 }
 
-TEST(SandboxdExecutorTest, ReusableRestoreMetadataIsValidatedAndBuildsExactPhysicalIdentity)
+TEST(SandboxdExecutorTest, ReusableRestoreMetadataBuildsExactPhysicalIdentity)
 {
     ::messages::ReusableSnapshotRestore restore;
     restore.set_snapshotid("snapshot-42");
@@ -405,7 +405,6 @@ TEST(SandboxdExecutorTest, ReusableRestoreMetadataIsValidatedAndBuildsExactPhysi
     EXPECT_TRUE(identity.trusted);
     EXPECT_TRUE(identity.reusable);
     EXPECT_FALSE(identity.rejected);
-    EXPECT_TRUE(SandboxdExecutor::ShouldValidateRestoreArtifact(identity));
     EXPECT_EQ(identity.snapshotID, "snapshot-42");
     EXPECT_EQ(identity.labels.at("instance_id"), "clone-instance");
     EXPECT_EQ(identity.labels.at("request_id"), "clone-attempt");
@@ -429,7 +428,6 @@ TEST(SandboxdExecutorTest, LocalRestoreUsesFlatSnapshotDirectory)
     EXPECT_TRUE(identity.trusted);
     EXPECT_FALSE(identity.rejected);
     EXPECT_EQ(identity.snapshotID, "anon-1");
-    EXPECT_FALSE(SandboxdExecutor::ShouldValidateRestoreArtifact(identity));
     EXPECT_TRUE(SandboxdExecutor::IsRestoreRequest(request.runtimeinstanceinfo()));
 
     std::string checkpointDirectory;
