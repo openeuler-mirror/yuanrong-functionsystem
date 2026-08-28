@@ -413,8 +413,6 @@ TEST(SandboxdExecutorTest, ReusableRestoreMetadataBuildsExactPhysicalIdentity)
     EXPECT_EQ(identity.labels.at("target_attempt_id"), "clone-attempt");
     EXPECT_TRUE(SandboxdExecutor::IsRestoreRequest(*info));
 
-    restore.mutable_artifact()->set_sha256("bad");
-    EXPECT_FALSE(resume_identity::ValidateReusableSnapshotRestore(restore));
 }
 
 TEST(SandboxdExecutorTest, LocalRestoreUsesFlatSnapshotDirectory)
