@@ -732,6 +732,14 @@ std::chrono::milliseconds FrontendProxyService::ResolveInvokeResultTimeout(
     return std::chrono::milliseconds(static_cast<int64_t>(functionTimeoutMs + bufferMs));
 }
 
+std::chrono::milliseconds FrontendProxyService::ResolveCreateResultTimeout(
+    const ::frontend_proxy::CreateInstanceRequest &request, const FrontendProxyServiceParam &param)
+{
+    const auto timeoutMs = request.createtimeoutms() > 0 ? request.createtimeoutms()
+                                                        : static_cast<int64_t>(param.invokeResultTimeoutMs);
+    return std::chrono::milliseconds(timeoutMs);
+}
+
 ::grpc::Status FrontendProxyService::CreateInstance(::grpc::ServerContext *context,
                                                     const ::frontend_proxy::CreateInstanceRequest *request,
                                                     ::frontend_proxy::CreateInstanceResponse *response)
@@ -782,6 +790,7 @@ bool FrontendProxyService::ValidateCreateRequest(const ::frontend_proxy::CreateI
     ::grpc::ServerContext *context, const ::frontend_proxy::CreateInstanceRequest &request,
     ::frontend_proxy::CreateInstanceResponse &response)
 {
+    const auto createTimeout = ResolveCreateResultTimeout(request, param_);
     YRLOG_INFO("{}|frontend proxy create received by proxy({}), frontendClientID({}), function({})",
                request.context().requestid(), param_.nodeID, request.context().frontendclientid(),
                request.create().function());
@@ -790,8 +799,7 @@ bool FrontendProxyService::ValidateCreateRequest(const ::frontend_proxy::CreateI
     auto createFuture = DispatchReadyCreate(param_, request);
     if (createFuture.has_value()) {
         bool cancelled = false;
-        auto createResponse = WaitFrontendResult(createFuture.value(), context, param_.invokeResultTimeoutMs,
-                                                 cancelled);
+        auto createResponse = WaitFrontendResult(createFuture.value(), context, createTimeout, cancelled);
         if (!createResponse.IsSome() || !createResponse.Get().has_create()) {
             if (param_.createWaitCanceller) {
                 param_.createWaitCanceller(request.context().requestid(),

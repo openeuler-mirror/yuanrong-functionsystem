@@ -90,6 +90,9 @@ public:
     inline static constexpr const char *lifecycleTransport = "raw-unary";
     inline static constexpr const char *readyOperation = "ready";
 
+    static std::chrono::milliseconds ResolveCreateResultTimeout(
+        const ::frontend_proxy::CreateInstanceRequest &request, const FrontendProxyServiceParam &param);
+
     explicit FrontendProxyService(FrontendProxyServiceParam &&param);
     ~FrontendProxyService() override = default;
 
