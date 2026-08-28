@@ -39,39 +39,29 @@ constexpr const char *FRONTEND_CREATE_READY_TIMEOUT_MSG = "frontend proxy create
     return response;
 }
 
-::frontend_proxy::CreateInstanceResponse BuildCreateResponse(const messages::ScheduleResponse &scheduleResponse)
+// Builds the final create response from the ready (or timeout) CallResult. The
+// ready CallResult carries the authoritative route/proxyid and deploy outcome,
+// so it is propagated verbatim as callResult and drives create.code/message/
+// instanceid. Its runtime-internal requestID is overwritten with the frontend
+// requestID so downstream correlation stays consistent across ready/timeout.
+// fallbackInstanceID (the schedule request's instanceID) is used when the ready
+// result carries no instanceID of its own, so create.instanceid is never empty.
+::frontend_proxy::CreateInstanceResponse BuildCreateResponse(
+    const std::string &requestID, const std::shared_ptr<functionsystem::CallResult> &readyResult,
+    const std::string &fallbackInstanceID)
 {
     ::frontend_proxy::CreateInstanceResponse response;
-    response.mutable_create()->CopyFrom(TransFromScheduleRspToCreateRsp(scheduleResponse));
-    return response;
-}
-
-void AttachCreateReadyCallResult(::frontend_proxy::CreateInstanceResponse &response,
-                                 const core_service::CallResult &callResult)
-{
-    response.mutable_callresult()->CopyFrom(callResult);
-}
-
-::frontend_proxy::CreateInstanceResponse FinalizeCreateReadyResponse(
-    ::frontend_proxy::CreateInstanceResponse response, const std::string &requestID,
-    const std::shared_ptr<functionsystem::CallResult> &readyResult)
-{
     if (readyResult == nullptr) {
         response.mutable_create()->set_code(common::ERR_INNER_SYSTEM_ERROR);
         response.mutable_create()->set_message("frontend proxy create ready call result is null");
         return response;
     }
-    if (readyResult->instanceid().empty()) {
-        readyResult->set_instanceid(response.create().instanceid());
-    }
-    AttachCreateReadyCallResult(response, *readyResult);
-    // The public unary boundary echoes the frontend schedule ticket rather
-    // than a potentially different runtime-internal request id.
+    response.mutable_callresult()->CopyFrom(*readyResult);
     response.mutable_callresult()->set_requestid(requestID);
-    if (readyResult->code() != common::ERR_NONE) {
-        response.mutable_create()->set_code(readyResult->code());
-        response.mutable_create()->set_message(readyResult->message());
-    }
+    auto *createRsp = response.mutable_create();
+    createRsp->set_code(Status::GetPosixErrorCode(static_cast<StatusCode>(readyResult->code())));
+    createRsp->set_message(readyResult->message());
+    createRsp->set_instanceid(readyResult->instanceid().empty() ? fallbackInstanceID : readyResult->instanceid());
     return response;
 }
 
@@ -153,14 +143,18 @@ FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDi
         auto scheduleReq = BuildFrontendScheduleRequest(request);
         auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
         auto readyPromise = std::make_shared<litebus::Promise<std::shared_ptr<functionsystem::CallResult>>>();
-        auto readyFuture =
-            readyPromise->GetFuture().After(readyTimeoutMs,
-                                            [scheduleReq, readyUnregister, createFailureLookup](
-                                                const litebus::Future<std::shared_ptr<functionsystem::CallResult>> &)
-                                                -> litebus::Future<std::shared_ptr<functionsystem::CallResult>> {
-                                                return BuildFrontendCreateReadyTimeoutResult(
-                                                    createFailureLookup, readyUnregister, scheduleReq->requestid());
-                                            });
+        // readyResolved settles to the ready CallResult when the runtime reports
+        // ready, or to the timeout CallResult (snapshot-backed when wired) once
+        // readyTimeoutMs elapses. It is the authoritative source for the final
+        // create response; the scheduler's ScheduleResponse only drives when the
+        // ready callback is delivered.
+        auto readyResolved = readyPromise->GetFuture().After(readyTimeoutMs,
+            [scheduleReq, readyUnregister, createFailureLookup](
+                const litebus::Future<std::shared_ptr<functionsystem::CallResult>> &)
+                -> litebus::Future<std::shared_ptr<functionsystem::CallResult>> {
+                return BuildFrontendCreateReadyTimeoutResult(
+                    createFailureLookup, readyUnregister, scheduleReq->requestid());
+            });
         YRLOG_INFO("{}|frontend system create function({}) from frontendClientID({}), tenantID({})",
                    scheduleReq->requestid(), scheduleReq->instance().function(), request.context().frontendclientid(),
                    request.context().tenantid());
@@ -173,16 +167,12 @@ FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDi
             ack.set_message("success");
             return ack;
                          })
-            .Then([scheduleReq, readyFuture](const messages::ScheduleResponse &scheduleResponse) {
-                auto response = BuildCreateResponse(scheduleResponse);
-                if (response.create().code() != common::ERR_NONE || response.create().instanceid().empty()) {
-                    return litebus::Future<::frontend_proxy::CreateInstanceResponse>(response);
-                }
-
-                return readyFuture.Then([response, requestID = scheduleReq->requestid()](
-                                            const std::shared_ptr<functionsystem::CallResult> &readyResult) mutable {
-                    return FinalizeCreateReadyResponse(std::move(response), requestID, readyResult);
-                });
+            .Then([scheduleReq, readyResolved](const messages::ScheduleResponse &) {
+                return readyResolved.Then(
+                    [scheduleReq](const std::shared_ptr<functionsystem::CallResult> &readyResult) {
+                        return litebus::Future<::frontend_proxy::CreateInstanceResponse>(BuildCreateResponse(
+                            scheduleReq->requestid(), readyResult, scheduleReq->instance().instanceid()));
+                    });
             });
     };
 }

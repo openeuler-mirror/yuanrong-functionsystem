@@ -458,6 +458,35 @@ TEST(FrontendProxyServiceTest, CreateReadyTerminalSuccessCarriesOwningRoute)
     EXPECT_EQ(response.routeaddress(), "final-owner-proxy");
 }
 
+// async create: no callresult -> owningProxyID empty -> fallback to param_.nodeID.
+TEST(FrontendProxyServiceTest, CreateAsyncTerminalCarriesLocalNodeAsOwnerWhenNoCallResult)
+{
+    EXPECT_STREQ(FrontendProxyService::lifecycleTransport, "raw-unary");
+    FrontendProxyServiceParam param;
+    param.nodeID = "proxy-node-a";
+    param.endpointAddress = "10.0.0.11:19090";
+    param.enableCreateDispatch = true;
+    param.createReadyDispatcher = [](const ::frontend_proxy::CreateInstanceRequest &) {
+        ::frontend_proxy::CreateInstanceResponse response;
+        response.mutable_create()->set_code(common::ERR_NONE);
+        response.mutable_create()->set_instanceid("creating-instance");
+        return litebus::Future<::frontend_proxy::CreateInstanceResponse>(response);
+    };
+    FrontendProxyService service(std::move(param));
+    ::frontend_proxy::CreateInstanceRequest request;
+    request.mutable_context()->set_frontendclientid("frontend-a");
+    request.mutable_context()->set_requestid("create-async-no-callresult");
+    request.mutable_context()->set_tenantid("tenant-a");
+    request.mutable_create()->set_function("0/tenant-a/faas/function");
+    (*request.mutable_create()->mutable_createoptions())["source"] = "frontend";
+    ::frontend_proxy::CreateInstanceResponse response;
+
+    EXPECT_TRUE(service.CreateInstance(nullptr, &request, &response).ok());
+    EXPECT_EQ(response.status().code(), common::ERR_NONE);
+    EXPECT_EQ(response.create().instanceid(), "creating-instance");
+    EXPECT_EQ(response.routeaddress(), "proxy-node-a");
+}
+
 TEST(FrontendProxyServiceTest, DuplicateRequestIDDoesNotReplaceExistingWaiter)
 {
     std::mutex mutex;
