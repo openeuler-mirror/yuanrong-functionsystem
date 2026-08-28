@@ -4556,6 +4556,7 @@ void InstanceCtrlActor::OnLocalSnapshotStarted(
     TransContext transition{
         InstanceState::RUNNING, context->source.version(), "running", true };
     transition.scheduleReq = context->request;
+    transition.allowRunningRuntimeRefresh = true;
     TransInstanceState(stateMachine, transition).OnComplete(litebus::Defer(
         GetAID(), &InstanceCtrlActor::OnLocalSnapshotCommitted,
         context, std::placeholders::_1));
@@ -4748,6 +4749,20 @@ litebus::Future<Status> InstanceCtrlActor::UpdateInstanceStatus(const std::share
     if (sourceRuntimeID != instanceInfo.runtimeid()) {
         YRLOG_WARN("ignore stale exit status for instance({}) runtime({}); current runtime is ({})",
                    info->instanceID, sourceRuntimeID, instanceInfo.runtimeid());
+        return Status::OK();
+    }
+    // A PAUSE_RESUME checkpoint is intentionally created with leave_running=false.
+    // sandboxd therefore reports a clean sandbox exit as soon as the local
+    // checkpoint is complete.  The pause gate owns that exit: the snapshot
+    // controller still has to publish the artifact and commit RUNNING->PAUSED,
+    // so treating it as an ordinary runtime failure races the pause flow and
+    // deletes the authoritative instance before the commit can finish.
+    if (const auto pauseGate = pauseGateContexts_.find(info->instanceID);
+        pauseGate != pauseGateContexts_.end()
+        && pauseGate->second.phase == PauseGatePhase::GATED
+        && pauseGate->second.identity.runtimeid() == sourceRuntimeID) {
+        YRLOG_INFO("ignore expected sandbox exit for pause-gated instance({}) runtime({})",
+                   info->instanceID, sourceRuntimeID);
         return Status::OK();
     }
     if (const auto recovery = localSnapshotRecoveries_.find(info->instanceID);

@@ -94,11 +94,12 @@ static bool IsRunningFailoverRefresh(const TransContext &context,
     const auto currentState = static_cast<InstanceState>(current.instancestatus().code());
     if (context.newState != InstanceState::RUNNING || context.scheduleReq == nullptr
         || (currentState != InstanceState::RUNNING && currentState != InstanceState::EVICTED)
-        || context.version != current.version() || !current.failover()) {
+        || context.version != current.version()
+        || (!current.failover() && !context.allowRunningRuntimeRefresh)) {
         return false;
     }
     const auto &candidate = context.scheduleReq->instance();
-    return candidate.failover()
+    return candidate.failover() == current.failover()
         && candidate.instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)
         && candidate.instanceid() == current.instanceid()
         && candidate.requestid() == current.requestid()

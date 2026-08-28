@@ -44,6 +44,10 @@ struct TransContext {
     int32_t type = static_cast<int32_t>(EXIT_TYPE::NONE_EXIT);
     // if not nullptr, need update stateMachine by scheduleReq
     std::shared_ptr<messages::ScheduleRequest> scheduleReq = nullptr;
+    // Permit a RUNNING -> RUNNING CAS to replace only the physical runtime
+    // identity. This is set by the local-snapshot recovery transaction after
+    // the restored runtime has acknowledged SnapStarted.
+    bool allowRunningRuntimeRefresh = false;
 };
 
 struct TransitionResult {
