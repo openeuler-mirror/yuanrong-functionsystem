@@ -36,6 +36,12 @@ struct SnapshotStat {
     SnapshotObjectMetadata metadata;
 };
 
+struct SnapshotPublicationFile {
+    Status status;
+    std::string path;
+    bool temporary{ false };
+};
+
 class SnapshotStorage {
 public:
     virtual ~SnapshotStorage() = default;
@@ -71,6 +77,9 @@ std::string BuildReusableSnapshotTemporaryKey(const std::string &tenantHash, con
 litebus::Future<SnapshotStat> InspectLocalSnapshotFile(const std::shared_ptr<ActorWorker> &worker,
                                                        const std::string &sourceFile, const std::string &snapshotID,
                                                        int64_t sourceInstanceVersion);
+litebus::Future<SnapshotPublicationFile> PrepareSnapshotPublicationFile(
+    const std::shared_ptr<ActorWorker> &worker, const std::string &sourceFile,
+    bool compress);
 
 namespace detail {
 

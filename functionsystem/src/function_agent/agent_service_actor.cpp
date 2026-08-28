@@ -823,6 +823,7 @@ void AgentServiceActor::Init()
     ActorBase::Receive("NotifyFunctionStatusChange", &AgentServiceActor::NotifyFunctionStatusChange);
     ActorBase::Receive("SnapshotRuntime", &AgentServiceActor::SnapshotRuntime);
     ActorBase::Receive("SnapshotRuntimeResponse", &AgentServiceActor::SnapshotRuntimeResponse);
+    ActorBase::Receive("PublishSnapshotArtifact", &AgentServiceActor::PublishSnapshotArtifact);
     ActorBase::Receive("SnapshotAttemptFinalize", &AgentServiceActor::SnapshotAttemptFinalize);
     ActorBase::Receive("DeleteReusableSnapshotArtifact",
                        &AgentServiceActor::DeleteReusableSnapshotArtifact);

@@ -89,6 +89,7 @@ snapshot_storage::ArtifactPublishRequest BuildManagedSnapshotPublishRequest(
     publishRequest.sourceInstanceVersion = request.sourceversion();
     publishRequest.createdAtUnixSeconds = createdAtUnixSeconds;
     publishRequest.ttlSeconds = request.ttl();
+    publishRequest.compress = true;
     return publishRequest;
 }
 
@@ -146,7 +147,7 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
     if (request->requestid().empty() || request->instanceid().empty() || request->runtimeid().empty()
         || request->snapshotid().empty() || request->tenantid().empty()
         || request->sourceversion() <= 0
-        || (UsesDistributedStorage(snapshotStorageMode_)
+        || (!request->internalcheckpoint() && UsesDistributedStorage(snapshotStorageMode_)
             && (snapshotStorage_ == nullptr || snapshotWorker_ == nullptr
                 || request->artifactobjectkey().empty()
                 || request->artifacttemporaryobjectkey().empty()))) {
@@ -159,7 +160,11 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
     if (existing != snapshotRequests_.end()) {
         if (existing->second.request.SerializeAsString() == request->SerializeAsString()) {
             existing->second.caller = from;
-            if (existing->second.completed) {
+            if (existing->second.localReady && !request->internalcheckpoint()) {
+                YRLOG_INFO("{}|replay LOCAL_READY SnapshotRuntime response", request->requestid());
+                Send(from, "SnapshotRuntimeResponse",
+                     existing->second.localReadyResponse.SerializeAsString());
+            } else if (existing->second.completed) {
                 YRLOG_INFO("{}|replay completed SnapshotRuntime response", request->requestid());
                 Send(from, "SnapshotRuntimeResponse",
                      existing->second.completedResponse.SerializeAsString());
@@ -188,7 +193,10 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
     pending.localCommitRequest = MakeLocalSnapshotCommitRequest(
         *request, pending.createdAtUnixSeconds);
     pending.artifactObjectKey = request->artifactobjectkey();
-    if (UsesDistributedStorage(snapshotStorageMode_)) {
+    if (request->internalcheckpoint()) {
+        pending.storageBackend = "local";
+        pending.artifactObjectKey = request->snapshotid();
+    } else if (UsesDistributedStorage(snapshotStorageMode_)) {
         auto backendStatus = snapshot_storage::ResolveStorageBackend(
             snapshotStorage_, snapshotStorageBackend_, pending.storageBackend);
         if (backendStatus.IsError()) {
@@ -308,7 +316,8 @@ void AgentServiceActor::SnapshotRuntimeResponse(const litebus::AID &from, std::s
 }
 
 void AgentServiceActor::ContinueSnapshotAfterLocalCommit(
-    const std::string &requestID, ::messages::SnapshotRuntimeResponse response)
+    const std::string &requestID, ::messages::SnapshotRuntimeResponse response,
+    bool publishRequested)
 {
     auto iter = snapshotRequests_.find(requestID);
     if (iter == snapshotRequests_.end()) {
@@ -317,6 +326,25 @@ void AgentServiceActor::ContinueSnapshotAfterLocalCommit(
     auto &pending = iter->second;
     response.mutable_localsnapshot()->CopyFrom(pending.localSnapshot);
     const bool returnArtifact = pending.request.returnartifact();
+    if (!publishRequested && pending.request.internalcheckpoint()) {
+        snapshot_storage::SnapshotObjectMetadata metadata;
+        metadata.snapshotID = pending.request.snapshotid();
+        metadata.sourceInstanceVersion = pending.request.sourceversion();
+        metadata.size = pending.localSnapshot.size();
+        metadata.complete = true;
+        pending.storageBackend = "local";
+        pending.artifactObjectKey = pending.request.snapshotid();
+        CompletePauseSnapshot(requestID, metadata);
+        return;
+    }
+    const bool deferredPublication = pending.request.type() == common::SNAPSHOT
+        || pending.request.type() == common::PAUSE_RESUME;
+    if (!publishRequested && deferredPublication) {
+        pending.localReady = true;
+        pending.localReadyResponse = response;
+        Send(pending.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
+        return;
+    }
     if (returnArtifact) {
         // Preserve the committed local checkpoint facts while immutable
         // publication is in flight so exact cleanup remains possible.
@@ -350,6 +378,58 @@ void AgentServiceActor::ContinueSnapshotAfterLocalCommit(
             GetAID(), &AgentServiceActor::OnPauseArtifactPublished,
             requestID, std::placeholders::_1));
     }
+}
+
+void AgentServiceActor::PublishSnapshotArtifact(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    ::messages::PublishSnapshotArtifactRequest request;
+    ::messages::SnapshotRuntimeResponse response;
+    if (!request.ParseFromString(msg)) {
+        return;
+    }
+    response.set_requestid(request.requestid());
+    if (from != localSchedFuncAgentMgrAID_) {
+        return;
+    }
+    auto iter = snapshotRequests_.find(request.requestid());
+    if (iter == snapshotRequests_.end()
+        || iter->second.request.snapshotid() != request.snapshotid()
+        || iter->second.request.instanceid() != request.instanceid()) {
+        response.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
+        response.set_message("local-ready snapshot publication identity is invalid");
+        Send(from, "PublishSnapshotArtifactResponse", response.SerializeAsString());
+        return;
+    }
+    auto &pending = iter->second;
+    pending.publishCaller = from;
+    if (pending.completed) {
+        Send(from, "PublishSnapshotArtifactResponse",
+             pending.completedResponse.SerializeAsString());
+        return;
+    }
+    if (!pending.localReady) {
+        response.set_code(static_cast<int32_t>(StatusCode::ERR_INSTANCE_BUSY));
+        response.set_message("snapshot has not reached LOCAL_READY");
+        Send(from, "PublishSnapshotArtifactResponse", response.SerializeAsString());
+        return;
+    }
+    if (pending.publicationStarted) {
+        return;
+    }
+    pending.publicationStarted = true;
+    ContinueSnapshotAfterLocalCommit(
+        request.requestid(), pending.localReadyResponse, true);
+}
+
+void AgentServiceActor::SendSnapshotPhaseResponse(
+    PendingSnapshotRequest &pending,
+    const ::messages::SnapshotRuntimeResponse &response)
+{
+    const bool publication = pending.publicationStarted;
+    Send(publication ? pending.publishCaller : pending.caller,
+         publication ? "PublishSnapshotArtifactResponse" : "SnapshotRuntimeResponse",
+         response.SerializeAsString());
 }
 
 void AgentServiceActor::ListLocalSnapshots(
@@ -454,8 +534,7 @@ void AgentServiceActor::OnReusableArtifactPublished(
             pending->second.completed = true;
             pending->second.completedResponse = response;
         }
-        const auto caller = pending->second.caller;
-        Send(caller, "SnapshotRuntimeResponse", response.SerializeAsString());
+        SendSnapshotPhaseResponse(pending->second, response);
         if (!exactArtifact) {
             // Keep the Master PUBLISHING record, but forget this dead local
             // in-flight entry so the same deterministic request can replay
@@ -530,10 +609,11 @@ void AgentServiceActor::CompletePauseSnapshot(
     response.clear_physicalfact();
     iter->second.completed = true;
     iter->second.completedResponse = response;
-    if (!KeepsLocalSnapshot(snapshotStorageMode_) && localSnapshotStore_ != nullptr) {
+    if (!iter->second.request.internalcheckpoint()
+        && !KeepsLocalSnapshot(snapshotStorageMode_) && localSnapshotStore_ != nullptr) {
         (void)localSnapshotStore_->EvictLocalArtifact(iter->second.request.snapshotid());
     }
-    Send(iter->second.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
+    SendSnapshotPhaseResponse(iter->second, response);
 }
 
 void AgentServiceActor::CompleteReusableSnapshot(
@@ -577,7 +657,7 @@ void AgentServiceActor::CompleteReusableSnapshot(
     if (!KeepsLocalSnapshot(snapshotStorageMode_) && localSnapshotStore_ != nullptr) {
         (void)localSnapshotStore_->EvictLocalArtifact(iter->second.request.snapshotid());
     }
-    Send(iter->second.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
+    SendSnapshotPhaseResponse(iter->second, response);
 }
 
 void AgentServiceActor::CompletePauseSnapshotError(const std::string &requestID, int32_t code,
@@ -595,7 +675,7 @@ void AgentServiceActor::CompletePauseSnapshotError(const std::string &requestID,
     if (resultUnknown) {
         response.clear_physicalfact();
     }
-    Send(iter->second.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
+    SendSnapshotPhaseResponse(iter->second, response);
     snapshotRequests_.erase(iter);
 }
 

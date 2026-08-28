@@ -17,6 +17,8 @@
 #include <string_view>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <vector>
+#include <zlib.h>
 
 #include "common/snapshot_storage/data_system_snapshot_storage.h"
 #include "common/snapshot_storage/obs_snapshot_storage.h"
@@ -52,6 +54,81 @@ private:
 SnapshotStat InspectionFailure(StatusCode code, const std::string &message)
 {
     return { Status(code, message), {} };
+}
+
+SnapshotPublicationFile PrepareSnapshotPublicationFileSync(
+    const std::string &sourceFile, bool compress)
+{
+    if (!compress) {
+        return { Status::OK(), sourceFile, false };
+    }
+    int input = open(sourceFile.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (input < 0) {
+        return { Status(StatusCode::FAILED, "failed to open snapshot for compression"), {}, false };
+    }
+    ScopedFileDescriptor source(input);
+    struct stat sourceInfo {};
+    if (fstat(source.Get(), &sourceInfo) != 0 || !S_ISREG(sourceInfo.st_mode)) {
+        return { Status(StatusCode::ERR_PARAM_INVALID,
+                        "snapshot compression source is not a regular file"), {}, false };
+    }
+
+    std::string pattern = sourceFile + ".publish-XXXXXX";
+    std::vector<char> writable(pattern.begin(), pattern.end());
+    writable.push_back('\0');
+    int output = mkstemp(writable.data());
+    if (output < 0) {
+        return { Status(StatusCode::FAILED,
+                        "failed to create compressed snapshot staging file"), {}, false };
+    }
+    const std::string outputPath(writable.data());
+    gzFile compressed = gzdopen(output, "wb1");
+    if (compressed == nullptr) {
+        close(output);
+        (void)unlink(outputPath.c_str());
+        return { Status(StatusCode::FAILED,
+                        "failed to initialize snapshot gzip stream"), {}, false };
+    }
+
+    std::array<unsigned char, 1024 * 1024> buffer {};
+    Status status = Status::OK();
+    while (status.IsOk()) {
+        const auto count = read(source.Get(), buffer.data(), buffer.size());
+        if (count == 0) {
+            break;
+        }
+        if (count < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            status = Status(StatusCode::FAILED,
+                            "failed to read snapshot during compression");
+            break;
+        }
+        const auto compressedCount = gzwrite(
+            compressed, buffer.data(), static_cast<unsigned int>(count));
+        if (compressedCount != static_cast<int>(count)) {
+            status = Status(StatusCode::FAILED, "failed to compress snapshot artifact");
+            break;
+        }
+    }
+    if (gzclose(compressed) != Z_OK && status.IsOk()) {
+        status = Status(StatusCode::FAILED, "failed to finalize snapshot gzip stream");
+    }
+    int syncFd = open(outputPath.c_str(), O_WRONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (syncFd < 0 || fsync(syncFd) != 0) {
+        if (status.IsOk()) {
+            status = Status(StatusCode::FAILED, "failed to sync compressed snapshot artifact");
+        }
+    }
+    if (syncFd >= 0) {
+        close(syncFd);
+    }
+    if (status.IsError()) {
+        (void)unlink(outputPath.c_str());
+        return { status, {}, false };
+    }
+    return { Status::OK(), outputPath, true };
 }
 
 SnapshotStat InspectLocalSnapshotFileSync(const std::string &sourceFile, const std::string &snapshotID,
@@ -207,6 +284,22 @@ litebus::Future<SnapshotStat> InspectLocalSnapshotFile(const std::shared_ptr<Act
     return detail::RunOnWorker<SnapshotStat>(worker, [sourceFile, snapshotID, sourceInstanceVersion]() {
         return InspectLocalSnapshotFileSync(sourceFile, snapshotID, sourceInstanceVersion, {});
     });
+}
+
+litebus::Future<SnapshotPublicationFile> PrepareSnapshotPublicationFile(
+    const std::shared_ptr<ActorWorker> &worker, const std::string &sourceFile,
+    bool compress)
+{
+    if (worker == nullptr || sourceFile.empty()) {
+        litebus::Promise<SnapshotPublicationFile> promise;
+        promise.SetValue({ Status(StatusCode::ERR_PARAM_INVALID,
+                                  "snapshot publication preparation input is invalid"), {}, false });
+        return promise.GetFuture();
+    }
+    return detail::RunOnWorker<SnapshotPublicationFile>(
+        worker, [sourceFile, compress]() {
+            return PrepareSnapshotPublicationFileSync(sourceFile, compress);
+        });
 }
 
 namespace detail {

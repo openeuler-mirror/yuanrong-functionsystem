@@ -151,6 +151,7 @@ void FunctionAgentMgrActor::Init()
     Receive("UpdateLocalStatus", &FunctionAgentMgrActor::UpdateLocalStatus);
     Receive("UpdateCredResponse", &FunctionAgentMgrActor::UpdateCredResponse);
     Receive("SnapshotRuntimeResponse", &FunctionAgentMgrActor::SnapshotRuntimeResponse);
+    Receive("PublishSnapshotArtifactResponse", &FunctionAgentMgrActor::PublishSnapshotArtifactResponse);
     Receive("ListLocalSnapshotsResponse", &FunctionAgentMgrActor::ListLocalSnapshotsResponse);
     Receive("DeleteLocalSnapshotResponse", &FunctionAgentMgrActor::DeleteLocalSnapshotResponse);
     Receive("SnapshotAttemptFinalizeResponse", &FunctionAgentMgrActor::SnapshotAttemptFinalizeResponse);
@@ -1754,7 +1755,7 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
     request->set_type(type);
     request->set_localrecoverycandidate(type != common::SNAPSHOT);
     request->set_returnartifact(type == common::SNAPSHOT);
-    request->set_leaverunning(type == common::SNAPSHOT || type == common::PAUSE_RESUME);
+    request->set_leaverunning(type == common::SNAPSHOT);
     const auto resolvedSnapshotID = snapshotID.empty()
         ? "ckpt-" + resume_identity::Sha256Hex(
             requestID + std::string(1, '\0') + instanceID).substr(0, 40)
@@ -1832,6 +1833,7 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
     request.set_sourceversion(instanceInfo.version());
     request.set_localrecoverycandidate(true);
     request.set_returnartifact(false);
+    request.set_internalcheckpoint(true);
     auto timeoutMs = DEFAULT_CHECKPOINT_TIMEOUT_MS;
     if (const auto configured = instanceInfo.createoptions().find(CHECKPOINT_TIMEOUT_OPTION);
         configured != instanceInfo.createoptions().end()) {
@@ -1848,17 +1850,34 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Snapsh
     }
     request.set_timeoutms(timeoutMs);
     request.set_leaverunning(true);
-    const auto tenantHash = snapshot_storage::StableTenantHash(instanceInfo.tenantid());
-    request.set_artifactobjectkey(
-        snapshot_storage::BuildPauseSnapshotKey(
-            tenantHash, instanceInfo.instanceid(), snapshotID));
-    request.set_artifacttemporaryobjectkey(
-        snapshot_storage::BuildPauseSnapshotTemporaryKey(
-            tenantHash, instanceInfo.instanceid(), snapshotID, requestID));
     auto future = snapshotRuntimeSync_.AddSynchronizer(
         requestID, static_cast<uint32_t>(timeoutMs));
     snapshotRuntimeExpectedAgent_[requestID] = agent->second.aid;
     Send(agent->second.aid, "SnapshotRuntime", request.SerializeAsString());
+    return future;
+}
+
+litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::PublishSnapshotArtifact(
+    const std::string &requestID,
+    const resource_view::InstanceInfo &instanceInfo,
+    const std::string &snapshotID)
+{
+    messages::SnapshotRuntimeResponse error;
+    error.set_requestid(requestID);
+    const auto agent = funcAgentTable_.find(instanceInfo.functionagentid());
+    if (agent == funcAgentTable_.end() || requestID.empty() || snapshotID.empty()) {
+        error.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        error.set_message("function agent is unavailable for snapshot publication");
+        return error;
+    }
+    ::messages::PublishSnapshotArtifactRequest request;
+    request.set_requestid(requestID);
+    request.set_snapshotid(snapshotID);
+    request.set_instanceid(instanceInfo.instanceid());
+    auto future = publishSnapshotSync_.AddSynchronizer(
+        requestID, static_cast<uint32_t>(snapshotRuntimeTimeout_));
+    publishSnapshotExpectedAgent_[requestID] = agent->second.aid;
+    Send(agent->second.aid, "PublishSnapshotArtifact", request.SerializeAsString());
     return future;
 }
 
@@ -1905,6 +1924,21 @@ void FunctionAgentMgrActor::SnapshotRuntimeResponse(const litebus::AID &from, st
     YRLOG_INFO("{}|received SnapshotRuntimeResponse, code: {}, checkpointID: {}",
                requestID, response.code(), checkpointID);
     (void)snapshotRuntimeSync_.Synchronized(requestID, response);
+}
+
+void FunctionAgentMgrActor::PublishSnapshotArtifactResponse(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    messages::SnapshotRuntimeResponse response;
+    if (msg.empty() || !response.ParseFromString(msg)) {
+        return;
+    }
+    const auto expected = publishSnapshotExpectedAgent_.find(response.requestid());
+    if (expected == publishSnapshotExpectedAgent_.end() || expected->second != from) {
+        return;
+    }
+    publishSnapshotExpectedAgent_.erase(expected);
+    (void)publishSnapshotSync_.Synchronized(response.requestid(), response);
 }
 
 void FunctionAgentMgrActor::OnStaleLocalSnapshotDeleted(

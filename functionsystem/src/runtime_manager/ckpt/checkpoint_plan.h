@@ -22,7 +22,9 @@ struct CheckpointPlan {
     std::string checkpointDirectory;
     int32_t ttlSeconds{ 0 };
     uint32_t timeoutSeconds{ 180 };
-    bool compress{ true };
+    // Runtime checkpointing stays on the latency-sensitive pause path. Any
+    // transport compression is performed later by FunctionAgent.
+    bool compress{ false };
     bool leaveRuntimeRunning{ false };
 };
 

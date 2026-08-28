@@ -136,6 +136,16 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgr::SnapshotRun
                           requestID, instanceInfo, snapshotID);
 }
 
+litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgr::PublishSnapshotArtifact(
+    const std::string &requestID,
+    const resource_view::InstanceInfo &instanceInfo,
+    const std::string &snapshotID)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::PublishSnapshotArtifact,
+                          requestID, instanceInfo, snapshotID);
+}
+
 litebus::Future<messages::ListLocalSnapshotsResponse> FunctionAgentMgr::ListLocalSnapshots(
     const std::string &functionAgentID)
 {

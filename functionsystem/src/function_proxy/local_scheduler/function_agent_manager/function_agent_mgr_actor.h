@@ -268,7 +268,12 @@ public:
         const std::string &requestID,
         const resource_view::InstanceInfo &instanceInfo,
         const std::string &snapshotID);
+    litebus::Future<messages::SnapshotRuntimeResponse> PublishSnapshotArtifact(
+        const std::string &requestID,
+        const resource_view::InstanceInfo &instanceInfo,
+        const std::string &snapshotID);
     void SnapshotRuntimeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+    void PublishSnapshotArtifactResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     virtual litebus::Future<messages::ListLocalSnapshotsResponse> ListLocalSnapshots(
         const std::string &functionAgentID);
@@ -644,6 +649,15 @@ private:
     {
         snapshotRuntimeExpectedAgent_.erase(requestID);
         snapshotRuntimeSync_.RequestTimeout(requestID);
+    }
+    std::unordered_map<std::string, litebus::AID> publishSnapshotExpectedAgent_;
+    RequestSyncHelper<FunctionAgentMgrActor, messages::SnapshotRuntimeResponse>
+        publishSnapshotSync_ { this, &FunctionAgentMgrActor::TimeoutPublishSnapshotSync,
+                               snapshotRuntimeTimeout_ };
+    void TimeoutPublishSnapshotSync(const std::string &requestID)
+    {
+        publishSnapshotExpectedAgent_.erase(requestID);
+        publishSnapshotSync_.RequestTimeout(requestID);
     }
     std::unordered_map<std::string, litebus::AID> localSnapshotListExpectedAgent_;
     RequestSyncHelper<FunctionAgentMgrActor, messages::ListLocalSnapshotsResponse>

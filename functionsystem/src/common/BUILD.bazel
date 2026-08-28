@@ -460,6 +460,7 @@ cc_library(
         "@datasystem_sdk//:datasystem_sdk",
         "@litebus//:litebus",
         "@obs_sdk//:obs_sdk",
+        "@zlib//:zlib",
     ],
     visibility = ["//visibility:public"],
 )

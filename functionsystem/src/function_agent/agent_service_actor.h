@@ -239,6 +239,7 @@ public:
      * @param msg: response data, type is messages::SnapshotRuntimeResponse
      */
     virtual void SnapshotRuntimeResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+    virtual void PublishSnapshotArtifact(const litebus::AID &from, std::string &&name, std::string &&msg);
 
     /** Handle immediate exact cleanup for a completed Pause/Resume attempt. */
     virtual void SnapshotAttemptFinalize(const litebus::AID &from, std::string &&name, std::string &&msg);
@@ -603,6 +604,7 @@ private:
     std::unordered_map<std::string, KillInstanceRequestWrapper> killingRequest_;
     struct PendingSnapshotRequest {
         litebus::AID caller;
+        litebus::AID publishCaller;
         ::messages::SnapshotRuntimeRequest request;
         litebus::AID runtimeManagerAID;
         std::string runtimeManagerID;
@@ -613,6 +615,9 @@ private:
         LocalSnapshotCommitRequest localCommitRequest;
         ::messages::LocalSnapshotMetadata localSnapshot;
         bool completed{ false };
+        bool localReady{ false };
+        bool publicationStarted{ false };
+        ::messages::SnapshotRuntimeResponse localReadyResponse;
         ::messages::SnapshotRuntimeResponse completedResponse;
     };
     /** <requestID : pending SnapshotRuntime request> for response forwarding */
@@ -703,7 +708,10 @@ private:
     void ForwardSnapshotRuntimeRequest(const std::string &requestID);
     void ReleaseRestoreSnapshotPin(const std::string &requestID);
     void ContinueSnapshotAfterLocalCommit(
-        const std::string &requestID, ::messages::SnapshotRuntimeResponse response);
+        const std::string &requestID, ::messages::SnapshotRuntimeResponse response,
+        bool publishRequested = false);
+    void SendSnapshotPhaseResponse(PendingSnapshotRequest &pending,
+                                   const ::messages::SnapshotRuntimeResponse &response);
     void OnPauseArtifactPublished(
         const std::string &requestID,
         const litebus::Future<snapshot_storage::ArtifactPublishResult> &publishFuture);

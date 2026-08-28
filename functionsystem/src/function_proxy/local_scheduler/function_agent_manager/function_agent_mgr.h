@@ -122,6 +122,11 @@ public:
         const resource_view::InstanceInfo &instanceInfo,
         const std::string &snapshotID);
 
+    virtual litebus::Future<messages::SnapshotRuntimeResponse> PublishSnapshotArtifact(
+        const std::string &requestID,
+        const resource_view::InstanceInfo &instanceInfo,
+        const std::string &snapshotID);
+
     virtual litebus::Future<messages::ListLocalSnapshotsResponse> ListLocalSnapshots(
         const std::string &functionAgentID);
 

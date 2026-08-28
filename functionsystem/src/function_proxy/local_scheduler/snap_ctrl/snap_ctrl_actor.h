@@ -245,6 +245,9 @@ private:
     void OnReusableSnapshotCheckpointed(
         const std::shared_ptr<ReusableSnapshotContext> &context,
         const litebus::Future<::messages::SnapshotRuntimeResponse> &future);
+    void OnReusableSnapshotPublished(
+        const std::shared_ptr<ReusableSnapshotContext> &context,
+        const litebus::Future<::messages::SnapshotRuntimeResponse> &future);
     void OnReusableSnapshotClient(
         const std::shared_ptr<ReusableSnapshotContext> &context,
         const litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> &future);

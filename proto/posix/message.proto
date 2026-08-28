@@ -1360,6 +1360,18 @@ message SnapshotRuntimeRequest {
   string artifactTemporaryObjectKey = 15;
   bool returnArtifact = 16;
   uint64 timeoutMs = 17;
+  // Internal checkpoints are retained only as node-local recovery candidates.
+  // They never enter the compression or distributed publication phase.
+  bool internalCheckpoint = 18;
+}
+
+// Starts the storage phase for a checkpoint that has already reached
+// LOCAL_READY. FunctionProxy sends this only after completing the runtime
+// handoff required by the checkpoint purpose.
+message PublishSnapshotArtifactRequest {
+  string requestID = 1;
+  string snapshotID = 2;
+  string instanceID = 3;
 }
 
 message SnapshotRuntimeResponse {

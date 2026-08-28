@@ -7,6 +7,7 @@
 #define FUNCTIONSYSTEM_SRC_COMMON_SNAPSHOT_STORAGE_SNAPSHOT_ARTIFACT_PUBLISHER_H
 
 #include <atomic>
+#include <cstdio>
 #include <memory>
 #include <string>
 
@@ -22,6 +23,7 @@ struct ArtifactPublishRequest {
     int64_t sourceInstanceVersion{ 0 };
     int64_t createdAtUnixSeconds{ 0 };
     int32_t ttlSeconds{ 0 };
+    bool compress{ false };
 };
 
 struct ArtifactPublishResult {
@@ -52,10 +54,10 @@ public:
                                   {}, false });
             return future;
         }
-        InspectLocalSnapshotFile(worker_, request.sourceFile, request.snapshotID,
-                                 request.sourceInstanceVersion)
-            .OnComplete([self = shared_from_this(), operation](const litebus::Future<SnapshotStat> &inspection) {
-                self->OnInspected(operation, inspection);
+        PrepareSnapshotPublicationFile(worker_, request.sourceFile, request.compress)
+            .OnComplete([self = shared_from_this(), operation](
+                            const litebus::Future<SnapshotPublicationFile> &prepared) {
+                self->OnPrepared(operation, prepared);
             });
         return future;
     }
@@ -66,14 +68,42 @@ private:
         SnapshotObjectMetadata metadata;
         std::shared_ptr<litebus::Promise<ArtifactPublishResult>> promise;
         std::atomic_bool completed{ false };
+        std::string publicationFile;
+        bool publicationFileTemporary{ false };
     };
 
     void Complete(const std::shared_ptr<Operation> &operation, ArtifactPublishResult result)
     {
         bool expected = false;
         if (operation->completed.compare_exchange_strong(expected, true)) {
+            if (operation->publicationFileTemporary && !operation->publicationFile.empty()) {
+                (void)std::remove(operation->publicationFile.c_str());
+            }
             operation->promise->SetValue(std::move(result));
         }
+    }
+
+    void OnPrepared(const std::shared_ptr<Operation> &operation,
+                    const litebus::Future<SnapshotPublicationFile> &prepared)
+    {
+        if (prepared.IsError()) {
+            Complete(operation, { Status(StatusCode::ERR_INNER_COMMUNICATION,
+                                         "snapshot compression future failed"), {}, true });
+            return;
+        }
+        if (prepared.Get().status.IsError()) {
+            Complete(operation, { prepared.Get().status, {}, false });
+            return;
+        }
+        operation->publicationFile = prepared.Get().path;
+        operation->publicationFileTemporary = prepared.Get().temporary;
+        InspectLocalSnapshotFile(worker_, operation->publicationFile,
+                                 operation->request.snapshotID,
+                                 operation->request.sourceInstanceVersion)
+            .OnComplete([self = shared_from_this(), operation](
+                            const litebus::Future<SnapshotStat> &inspection) {
+                self->OnInspected(operation, inspection);
+            });
     }
 
     void OnInspected(const std::shared_ptr<Operation> &operation,
@@ -94,7 +124,7 @@ private:
         operation->metadata.expiresAtUnixSeconds = operation->request.ttlSeconds == 0
             ? 0
             : operation->request.createdAtUnixSeconds + operation->request.ttlSeconds;
-        storage_->PutTemporary(operation->request.temporaryKey, operation->request.sourceFile,
+        storage_->PutTemporary(operation->request.temporaryKey, operation->publicationFile,
                                operation->metadata)
             .OnComplete([self = shared_from_this(), operation](const litebus::Future<Status> &put) {
                 self->OnTemporaryPut(operation, put);

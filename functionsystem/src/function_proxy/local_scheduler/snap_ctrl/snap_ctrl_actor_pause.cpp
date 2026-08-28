@@ -651,6 +651,18 @@ litebus::Future<KillResponse> SnapCtrlActor::HandlePauseCheckpointResponse(
     const std::string &instanceID, const std::shared_ptr<PauseContext> &context,
     const messages::SnapshotRuntimeResponse &response)
 {
+    if (response.code() == common::ERR_NONE && response.has_localsnapshot()
+        && (!response.has_snapshotinfo()
+            || response.snapshotinfo().status() != resources::SNAPSHOT_READY)) {
+        return functionAgentMgr_->PublishSnapshotArtifact(
+            context->operationRequestID, context->sourceInstanceInfo,
+            context->operationRequestID)
+            .Then([this, instanceID, context](
+                      const messages::SnapshotRuntimeResponse &published)
+                      -> litebus::Future<KillResponse> {
+                return HandlePauseCheckpointResponse(instanceID, context, published);
+            });
+    }
     const auto validation = ValidatePauseContinuation(instanceID, context);
     const auto convergence = ClassifyPauseCheckpointResponse(response, validation);
     if (convergence != ConvergenceResult::COMMITTED) {

@@ -522,6 +522,24 @@ void SnapCtrlActor::OnReusableSnapshotCheckpointed(
     const std::shared_ptr<ReusableSnapshotContext> &context,
     const litebus::Future<::messages::SnapshotRuntimeResponse> &future)
 {
+    if (future.IsError() || future.Get().code() != common::ERR_NONE
+        || !future.Get().has_localsnapshot()) {
+        FailReusableSnapshot(
+            context, common::ERR_INNER_COMMUNICATION,
+            future.IsError() ? "reusable snapshot LOCAL_READY future failed"
+                             : future.Get().message());
+        return;
+    }
+    clientManager_->GetControlInterfacePosixClient(context->instanceID)
+        .OnComplete(litebus::Defer(
+            GetAID(), &SnapCtrlActor::OnReusableSnapshotClient,
+            context, std::placeholders::_1));
+}
+
+void SnapCtrlActor::OnReusableSnapshotPublished(
+    const std::shared_ptr<ReusableSnapshotContext> &context,
+    const litebus::Future<::messages::SnapshotRuntimeResponse> &future)
+{
     if (future.IsError()) {
         // The Agent may have checkpointed or published successfully before
         // its reply was lost. Without exact artifact facts, neither local nor
@@ -571,10 +589,16 @@ void SnapCtrlActor::OnReusableSnapshotCheckpointed(
     if (context->artifact.storagebackend() == "local") {
         context->artifact.set_sourcenodeid(nodeID_);
     }
-    clientManager_->GetControlInterfacePosixClient(context->instanceID)
-        .OnComplete(litebus::Defer(
-            GetAID(), &SnapCtrlActor::OnReusableSnapshotClient,
-            context, std::placeholders::_1));
+    auto request = std::make_shared<::messages::CommitReusableSnapshotRequest>();
+    request->set_requestid(context->requestID);
+    request->set_tenantid(context->sourceInstanceInfo.tenantid());
+    request->set_snapshotid(context->snapshotID);
+    request->set_requestfingerprint(context->requestFingerprint);
+    *request->mutable_sourceinstanceinfo() = context->sourceInstanceInfo;
+    *request->mutable_artifact() = context->artifact;
+    localSchedSrv_->CommitReusableSnapshot(request).OnComplete(
+        litebus::Defer(GetAID(), &SnapCtrlActor::OnReusableSnapshotCommitted,
+                       context, std::placeholders::_1));
 }
 
 void SnapCtrlActor::OnReusableSnapshotClient(
@@ -606,16 +630,11 @@ void SnapCtrlActor::OnReusableSnapshotStarted(
                              : future.Get().message());
         return;
     }
-    auto request = std::make_shared<::messages::CommitReusableSnapshotRequest>();
-    request->set_requestid(context->requestID);
-    request->set_tenantid(context->sourceInstanceInfo.tenantid());
-    request->set_snapshotid(context->snapshotID);
-    request->set_requestfingerprint(context->requestFingerprint);
-    *request->mutable_sourceinstanceinfo() = context->sourceInstanceInfo;
-    *request->mutable_artifact() = context->artifact;
-    localSchedSrv_->CommitReusableSnapshot(request).OnComplete(
-        litebus::Defer(GetAID(), &SnapCtrlActor::OnReusableSnapshotCommitted,
-                       context, std::placeholders::_1));
+    functionAgentMgr_->PublishSnapshotArtifact(
+        context->requestID, context->sourceInstanceInfo, context->snapshotID)
+        .OnComplete(litebus::Defer(
+            GetAID(), &SnapCtrlActor::OnReusableSnapshotPublished,
+            context, std::placeholders::_1));
 }
 
 void SnapCtrlActor::OnReusableSnapshotCommitted(
