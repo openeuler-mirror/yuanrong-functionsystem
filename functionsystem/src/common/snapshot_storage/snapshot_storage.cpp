@@ -24,6 +24,7 @@
 #include "common/snapshot_storage/obs_snapshot_storage.h"
 #include "common/utils/resume_identity.h"
 #include "common/utils/ssl_config.h"
+#include "openssl/sha.h"
 
 namespace functionsystem::snapshot_storage {
 namespace fs = std::filesystem;
@@ -82,18 +83,49 @@ SnapshotPublicationFile PrepareSnapshotPublicationFileSync(
                         "failed to create compressed snapshot staging file"), {}, false };
     }
     const std::string outputPath(writable.data());
-    gzFile compressed = gzdopen(output, "wb1");
-    if (compressed == nullptr) {
-        close(output);
+    ScopedFileDescriptor destination(output);
+    z_stream stream {};
+    if (deflateInit2(&stream, Z_BEST_SPEED, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
         (void)unlink(outputPath.c_str());
         return { Status(StatusCode::FAILED,
                         "failed to initialize snapshot gzip stream"), {}, false };
     }
 
-    std::array<unsigned char, 1024 * 1024> buffer {};
+    SHA256_CTX digestContext {};
+    if (SHA256_Init(&digestContext) != 1) {
+        (void)deflateEnd(&stream);
+        (void)unlink(outputPath.c_str());
+        return { Status(StatusCode::FAILED,
+                        "failed to initialize compressed snapshot digest"), {}, false };
+    }
+
+    std::array<unsigned char, 1024 * 1024> inputBuffer {};
+    std::array<unsigned char, 1024 * 1024> outputBuffer {};
     Status status = Status::OK();
+    uint64_t outputSize = 0;
+    auto writeCompressed = [&](size_t size) {
+        size_t offset = 0;
+        while (offset < size) {
+            const auto written = write(destination.Get(), outputBuffer.data() + offset, size - offset);
+            if (written < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                return Status(StatusCode::FAILED, "failed to write compressed snapshot artifact");
+            }
+            if (written == 0) {
+                return Status(StatusCode::FAILED, "short write of compressed snapshot artifact");
+            }
+            offset += static_cast<size_t>(written);
+        }
+        if (SHA256_Update(&digestContext, outputBuffer.data(), size) != 1) {
+            return Status(StatusCode::FAILED, "failed to update compressed snapshot digest");
+        }
+        outputSize += size;
+        return Status::OK();
+    };
     while (status.IsOk()) {
-        const auto count = read(source.Get(), buffer.data(), buffer.size());
+        const auto count = read(source.Get(), inputBuffer.data(), inputBuffer.size());
         if (count == 0) {
             break;
         }
@@ -105,30 +137,66 @@ SnapshotPublicationFile PrepareSnapshotPublicationFileSync(
                             "failed to read snapshot during compression");
             break;
         }
-        const auto compressedCount = gzwrite(
-            compressed, buffer.data(), static_cast<unsigned int>(count));
-        if (compressedCount != static_cast<int>(count)) {
-            status = Status(StatusCode::FAILED, "failed to compress snapshot artifact");
+        stream.next_in = inputBuffer.data();
+        stream.avail_in = static_cast<uInt>(count);
+        while (status.IsOk() && stream.avail_in > 0) {
+            stream.next_out = outputBuffer.data();
+            stream.avail_out = static_cast<uInt>(outputBuffer.size());
+            if (deflate(&stream, Z_NO_FLUSH) != Z_OK) {
+                status = Status(StatusCode::FAILED, "failed to compress snapshot artifact");
+                break;
+            }
+            status = writeCompressed(outputBuffer.size() - stream.avail_out);
+        }
+    }
+
+    struct stat finalSourceInfo {};
+    if (status.IsOk() &&
+        (fstat(source.Get(), &finalSourceInfo) != 0 ||
+         finalSourceInfo.st_dev != sourceInfo.st_dev || finalSourceInfo.st_ino != sourceInfo.st_ino ||
+         finalSourceInfo.st_size != sourceInfo.st_size ||
+         finalSourceInfo.st_mtim.tv_sec != sourceInfo.st_mtim.tv_sec ||
+         finalSourceInfo.st_mtim.tv_nsec != sourceInfo.st_mtim.tv_nsec ||
+         finalSourceInfo.st_ctim.tv_sec != sourceInfo.st_ctim.tv_sec ||
+         finalSourceInfo.st_ctim.tv_nsec != sourceInfo.st_ctim.tv_nsec)) {
+        status = Status(StatusCode::SCHEDULE_CONFLICTED,
+                        "snapshot source changed during compression");
+    }
+
+    int deflateResult = Z_OK;
+    while (status.IsOk() && deflateResult != Z_STREAM_END) {
+        stream.next_out = outputBuffer.data();
+        stream.avail_out = static_cast<uInt>(outputBuffer.size());
+        deflateResult = deflate(&stream, Z_FINISH);
+        if (deflateResult != Z_OK && deflateResult != Z_STREAM_END) {
+            status = Status(StatusCode::FAILED, "failed to finalize snapshot gzip stream");
             break;
         }
+        status = writeCompressed(outputBuffer.size() - stream.avail_out);
     }
-    if (gzclose(compressed) != Z_OK && status.IsOk()) {
-        status = Status(StatusCode::FAILED, "failed to finalize snapshot gzip stream");
+    if (deflateEnd(&stream) != Z_OK && status.IsOk()) {
+        status = Status(StatusCode::FAILED, "failed to release snapshot gzip stream");
     }
-    int syncFd = open(outputPath.c_str(), O_WRONLY | O_CLOEXEC | O_NOFOLLOW);
-    if (syncFd < 0 || fsync(syncFd) != 0) {
-        if (status.IsOk()) {
-            status = Status(StatusCode::FAILED, "failed to sync compressed snapshot artifact");
-        }
-    }
-    if (syncFd >= 0) {
-        close(syncFd);
+    if (status.IsOk() && fsync(destination.Get()) != 0) {
+        status = Status(StatusCode::FAILED, "failed to sync compressed snapshot artifact");
     }
     if (status.IsError()) {
         (void)unlink(outputPath.c_str());
         return { status, {}, false };
     }
-    return { Status::OK(), outputPath, true };
+
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest {};
+    if (SHA256_Final(digest.data(), &digestContext) != 1) {
+        (void)unlink(outputPath.c_str());
+        return { Status(StatusCode::FAILED,
+                        "failed to finalize compressed snapshot digest"), {}, false };
+    }
+    std::ostringstream sha256;
+    sha256 << std::hex << std::setfill('0');
+    for (auto byte : digest) {
+        sha256 << std::setw(2) << static_cast<unsigned int>(byte);
+    }
+    return { Status::OK(), outputPath, true, outputSize, sha256.str(), true };
 }
 
 SnapshotStat InspectLocalSnapshotFileSync(const std::string &sourceFile, const std::string &snapshotID,

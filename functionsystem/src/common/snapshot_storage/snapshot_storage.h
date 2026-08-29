@@ -40,6 +40,9 @@ struct SnapshotPublicationFile {
     Status status;
     std::string path;
     bool temporary{ false };
+    uint64_t size{ 0 };
+    std::string sha256;
+    bool metadataReady{ false };
 };
 
 class SnapshotStorage {
@@ -51,6 +54,16 @@ public:
     virtual litebus::Future<SnapshotStat> Stat(const std::string &key) = 0;
     virtual litebus::Future<Status> Publish(const std::string &temporaryKey, const std::string &finalKey,
                                             const SnapshotObjectMetadata &expected) = 0;
+    virtual bool SupportsDirectFinalPut() const
+    {
+        return false;
+    }
+    virtual litebus::Future<Status> PutFinal(const std::string &, const std::string &,
+                                             const SnapshotObjectMetadata &)
+    {
+        return Status(StatusCode::FAILED,
+                      "snapshot storage does not support direct final put");
+    }
     virtual litebus::Future<Status> Get(const std::string &finalKey, const std::string &destinationFile) = 0;
     virtual litebus::Future<Status> Delete(const std::string &key) = 0;
 };

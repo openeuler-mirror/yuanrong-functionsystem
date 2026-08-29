@@ -7,11 +7,13 @@
 #define FUNCTIONSYSTEM_SRC_COMMON_SNAPSHOT_STORAGE_SNAPSHOT_ARTIFACT_PUBLISHER_H
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <memory>
 #include <string>
 
 #include "common/snapshot_storage/snapshot_storage.h"
+#include "common/logs/logging.h"
 
 namespace functionsystem::snapshot_storage {
 
@@ -44,6 +46,8 @@ public:
     {
         auto operation = std::make_shared<Operation>();
         operation->request = request;
+        operation->startedAt = Clock::now();
+        operation->prepareStartedAt = operation->startedAt;
         operation->promise = std::make_shared<litebus::Promise<ArtifactPublishResult>>();
         auto future = operation->promise->GetFuture();
         if (storage_ == nullptr || worker_ == nullptr || request.sourceFile.empty()
@@ -63,6 +67,8 @@ public:
     }
 
 private:
+    using Clock = std::chrono::steady_clock;
+
     struct Operation {
         ArtifactPublishRequest request;
         SnapshotObjectMetadata metadata;
@@ -70,7 +76,15 @@ private:
         std::atomic_bool completed{ false };
         std::string publicationFile;
         bool publicationFileTemporary{ false };
+        Clock::time_point startedAt;
+        Clock::time_point prepareStartedAt;
+        Clock::time_point putStartedAt;
     };
+
+    static int64_t ElapsedMs(Clock::time_point started)
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count();
+    }
 
     void Complete(const std::shared_ptr<Operation> &operation, ArtifactPublishResult result)
     {
@@ -97,6 +111,20 @@ private:
         }
         operation->publicationFile = prepared.Get().path;
         operation->publicationFileTemporary = prepared.Get().temporary;
+        YRLOG_INFO("{}|snapshot publication prepared, checkpoint.compress_ms: {}, "
+                   "checkpoint.published_bytes: {}, compressed: {}",
+                   operation->request.snapshotID, ElapsedMs(operation->prepareStartedAt),
+                   prepared.Get().size, operation->request.compress);
+        if (prepared.Get().metadataReady) {
+            operation->metadata = { operation->request.snapshotID,
+                                    operation->request.sourceInstanceVersion,
+                                    prepared.Get().size,
+                                    prepared.Get().sha256,
+                                    false,
+                                    0 };
+            BeginPut(operation);
+            return;
+        }
         InspectLocalSnapshotFile(worker_, operation->publicationFile,
                                  operation->request.snapshotID,
                                  operation->request.sourceInstanceVersion)
@@ -120,10 +148,26 @@ private:
             return;
         }
         operation->metadata = inspection.Get().metadata;
+        BeginPut(operation);
+    }
+
+    void BeginPut(const std::shared_ptr<Operation> &operation)
+    {
         operation->metadata.complete = false;
         operation->metadata.expiresAtUnixSeconds = operation->request.ttlSeconds == 0
             ? 0
             : operation->request.createdAtUnixSeconds + operation->request.ttlSeconds;
+        if (storage_->SupportsDirectFinalPut()) {
+            operation->metadata.complete = true;
+            operation->putStartedAt = Clock::now();
+            storage_->PutFinal(operation->request.finalKey, operation->publicationFile,
+                               operation->metadata)
+                .OnComplete([self = shared_from_this(), operation](const litebus::Future<Status> &put) {
+                    self->OnPublished(operation, put);
+                });
+            return;
+        }
+        operation->putStartedAt = Clock::now();
         storage_->PutTemporary(operation->request.temporaryKey, operation->publicationFile,
                                operation->metadata)
             .OnComplete([self = shared_from_this(), operation](const litebus::Future<Status> &put) {
@@ -153,6 +197,11 @@ private:
     void OnPublished(const std::shared_ptr<Operation> &operation,
                      const litebus::Future<Status> &publish)
     {
+        YRLOG_INFO("{}|snapshot publication completed, checkpoint.remote_put_ms: {}, "
+                   "checkpoint.total_ms: {}, direct_final: {}, success: {}",
+                   operation->request.snapshotID, ElapsedMs(operation->putStartedAt),
+                   ElapsedMs(operation->startedAt), storage_->SupportsDirectFinalPut(),
+                   !publish.IsError() && publish.Get().IsOk());
         if (!publish.IsError() && publish.Get().IsOk()) {
             Complete(operation, { Status::OK(), operation->metadata, false });
             return;

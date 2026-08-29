@@ -58,6 +58,23 @@ std::pair<datasystem::Status, datasystem::ReadOnlyBuffer> KVClient::GetRaw(const
     return std::make_pair(datasystem::Status::OK(), *buffer);
 }
 
+datasystem::Status KVClient::CreateRaw(const std::string &key, uint64_t size, const datasystem::SetParam &param,
+                                       std::shared_ptr<datasystem::Buffer> &buffer)
+{
+    if (dsKvClient_ == nullptr) {
+        return datasystem::Status(datasystem::K_RUNTIME_ERROR, "kv client is not initialized");
+    }
+    return dsKvClient_->Create(key, size, param, buffer);
+}
+
+datasystem::Status KVClient::SetRaw(const std::shared_ptr<datasystem::Buffer> &buffer)
+{
+    if (dsKvClient_ == nullptr) {
+        return datasystem::Status(datasystem::K_RUNTIME_ERROR, "kv client is not initialized");
+    }
+    return dsKvClient_->Set(buffer);
+}
+
 Status KVClient::Put(const std::string &key, const std::string &value)
 {
     if (dsKvClient_ == nullptr) {
