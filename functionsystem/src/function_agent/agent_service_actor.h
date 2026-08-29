@@ -260,7 +260,7 @@ public:
     void BindSnapshotDataPlane(
         const std::shared_ptr<snapshot_storage::SnapshotStorage> &snapshotStorage,
         const std::string &checkpointRoot, const std::string &storageBackend = "",
-        SnapshotStorageMode storageMode = SnapshotStorageMode::DISTRIBUTED_CACHE,
+        SnapshotStorageMode storageMode = SnapshotStorageMode::LOCAL_ONLY,
         uint64_t localCacheMaxBytes = 0)
     {
         snapshotStorage_ = snapshotStorage;
@@ -687,7 +687,7 @@ private:
     std::string nodeID_;
     std::shared_ptr<snapshot_storage::SnapshotStorage> snapshotStorage_;
     std::string snapshotStorageBackend_;
-    SnapshotStorageMode snapshotStorageMode_{ SnapshotStorageMode::DISTRIBUTED_CACHE };
+    SnapshotStorageMode snapshotStorageMode_{ SnapshotStorageMode::LOCAL_ONLY };
     uint64_t snapshotLocalCacheMaxBytes_{ 0 };
     std::string checkpointRoot_;
     std::shared_ptr<ActorWorker> snapshotWorker_;

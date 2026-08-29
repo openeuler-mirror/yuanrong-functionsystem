@@ -30,7 +30,7 @@ bool KeepsLocalSnapshot(SnapshotStorageMode mode);
 
 struct SnapshotStorageStartConfig {
     bool enabled{ false };
-    SnapshotStorageMode mode{ SnapshotStorageMode::DISTRIBUTED_CACHE };
+    SnapshotStorageMode mode{ SnapshotStorageMode::LOCAL_ONLY };
     uint64_t localCacheMaxBytes{ 0 };
     std::string backend;
     snapshot_storage::ObsSnapshotConfig obs;

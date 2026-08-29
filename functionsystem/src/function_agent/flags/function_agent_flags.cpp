@@ -77,7 +77,7 @@ FunctionAgentFlags::FunctionAgentFlags()
     AddFlag(&FunctionAgentFlags::snapshotStorageBackend_, "snapshot_storage_backend",
             "distributed backend for snapshot storage", "");
     AddFlag(&FunctionAgentFlags::snapshotStorageMode_, "snapshot_storage_mode",
-            "snapshot storage mode: distributed_cache, distributed_only, or local_only", "distributed_cache",
+            "snapshot storage mode: distributed_cache, distributed_only, or local_only", "local_only",
             WhiteListCheck({ "distributed_cache", "distributed_only", "local_only" }));
     AddFlag(&FunctionAgentFlags::snapshotLocalCacheMaxBytes_, "snapshot_local_cache_max_bytes",
             "maximum bytes retained by the local snapshot LRU", 10ULL * 1024ULL * 1024ULL * 1024ULL);
