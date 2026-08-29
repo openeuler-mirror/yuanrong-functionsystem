@@ -84,6 +84,7 @@ type FunctionBasicInfo struct {
 	HookHandler               map[string]string          `json:"hookHandler"`
 	ExtendedHandler           map[string]string          `form:"extendedHandler" json:"extendedHandler"`
 	ExtendedTimeout           map[string]int             `form:"extendedTimeout" json:"extendedTimeout"`
+	Cmds                      [][]string                 `form:"cmds" json:"cmds,omitempty"`
 	CustomResources           map[string]float64         `json:"customResources"`
 	Device                    types.Device               `form:"device" json:"device,omitempty"`
 	S3CodePath                S3CodePathInfo             `form:"s3CodePath" json:"s3CodePath"`
@@ -429,6 +430,7 @@ type FunctionVersion struct {
 	RootfsSpecMeta     types.RootfsSpecMeta `json:"rootfs" valid:",optional"`
 	PriorityAZ         string               `json:"priorityAz,omitempty"`
 	SandboxType        string               `json:"sandboxType" valid:"optional"`
+	Cmds               [][]string           `json:"cmds,omitempty"`
 }
 
 // Function is function entity

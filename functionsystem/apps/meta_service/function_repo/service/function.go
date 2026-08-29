@@ -247,6 +247,9 @@ func buildBasicUpdateFunctionVersion(request model.FunctionUpdateRequest,
 	if request.ExtendedTimeout != nil {
 		fv.FunctionVersion.ExtendedTimeout = request.ExtendedTimeout
 	}
+	if len(request.Cmds) > 0 {
+		fv.FunctionVersion.Cmds = request.Cmds
+	}
 	fv.FunctionVersion.Package.StorageType = request.StorageType
 	fv.FunctionVersion.Package.CodePath = request.CodePath
 	fv.FunctionVersion.CacheInstance = request.CacheInstance
@@ -519,6 +522,7 @@ func getFunctionVersion(request model.FunctionCreateRequest, env string,
 		HookHandler:        getHookHandler(request.Kind, request.Runtime, request.Handler, request.HookHandler),
 		ExtendedHandler:    request.ExtendedHandler,
 		ExtendedTimeout:    request.ExtendedTimeout,
+		Cmds:               request.Cmds,
 		Device:             request.Device,
 		PoolLabel:          poolLabel,
 		PoolID:             request.PoolID,
@@ -944,6 +948,7 @@ func buildFunctionVersionInfo(function model.Function, functionVersionURN string
 		Kind:               version.FunctionVersion.Kind,
 		RootfsSpecMeta:     version.FunctionVersion.RootfsSpecMeta,
 		SandboxType:        version.FunctionVersion.SandboxType,
+		Cmds:               version.FunctionVersion.Cmds,
 	}
 	if version.FunctionVersion.CustomResources != "" {
 		err := json.Unmarshal([]byte(version.FunctionVersion.CustomResources), &v.CustomResources)

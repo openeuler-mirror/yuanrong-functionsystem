@@ -121,6 +121,7 @@ type ExtendedMetaData struct {
 	InstanceMetaData      InstanceMetaData          `json:"instance_meta_data" valid:",optional"`
 	ExtendedHandler       map[string]string         `json:"extended_handler" valid:",optional"`
 	ExtendedTimeout       map[string]int            `json:"extended_timeout" valid:",optional"`
+	Cmds                  [][]string                `json:"cmds,omitempty" valid:",optional"`
 	Device                types.Device              `json:"device,omitempty" valid:",optional"`
 	PriorityAZ            string                    `json:"priority_az,omitempty"`
 	EnableMetrics         bool                      `json:"enable_metrics,omitempty"`
