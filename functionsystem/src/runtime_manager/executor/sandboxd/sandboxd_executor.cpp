@@ -901,7 +901,6 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartBySnapsh
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointDownloaded(
     const std::string &checkpointPath, const SandboxdStartContext &context)
 {
-    const auto &request = context.request;
     SandboxdRestoreContext restoreContext{checkpointPath, context};
 
     return OnCheckpointRefAdded(Status::OK(), restoreContext);
