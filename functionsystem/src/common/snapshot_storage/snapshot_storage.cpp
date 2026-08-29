@@ -61,17 +61,17 @@ SnapshotPublicationFile PrepareSnapshotPublicationFileSync(
     const std::string &sourceFile, bool compress)
 {
     if (!compress) {
-        return { Status::OK(), sourceFile, false };
+        return { Status::OK(), sourceFile, false, 0, {}, false };
     }
     int input = open(sourceFile.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (input < 0) {
-        return { Status(StatusCode::FAILED, "failed to open snapshot for compression"), {}, false };
+        return { Status(StatusCode::FAILED, "failed to open snapshot for compression"), {}, false, 0, {}, false };
     }
     ScopedFileDescriptor source(input);
     struct stat sourceInfo {};
     if (fstat(source.Get(), &sourceInfo) != 0 || !S_ISREG(sourceInfo.st_mode)) {
         return { Status(StatusCode::ERR_PARAM_INVALID,
-                        "snapshot compression source is not a regular file"), {}, false };
+                        "snapshot compression source is not a regular file"), {}, false, 0, {}, false };
     }
 
     std::string pattern = sourceFile + ".publish-XXXXXX";
@@ -80,7 +80,7 @@ SnapshotPublicationFile PrepareSnapshotPublicationFileSync(
     int output = mkstemp(writable.data());
     if (output < 0) {
         return { Status(StatusCode::FAILED,
-                        "failed to create compressed snapshot staging file"), {}, false };
+                        "failed to create compressed snapshot staging file"), {}, false, 0, {}, false };
     }
     const std::string outputPath(writable.data());
     ScopedFileDescriptor destination(output);
@@ -88,7 +88,7 @@ SnapshotPublicationFile PrepareSnapshotPublicationFileSync(
     if (deflateInit2(&stream, Z_BEST_SPEED, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
         (void)unlink(outputPath.c_str());
         return { Status(StatusCode::FAILED,
-                        "failed to initialize snapshot gzip stream"), {}, false };
+                        "failed to initialize snapshot gzip stream"), {}, false, 0, {}, false };
     }
 
     SHA256_CTX digestContext {};
@@ -96,7 +96,7 @@ SnapshotPublicationFile PrepareSnapshotPublicationFileSync(
         (void)deflateEnd(&stream);
         (void)unlink(outputPath.c_str());
         return { Status(StatusCode::FAILED,
-                        "failed to initialize compressed snapshot digest"), {}, false };
+                        "failed to initialize compressed snapshot digest"), {}, false, 0, {}, false };
     }
 
     std::array<unsigned char, 1024 * 1024> inputBuffer {};
@@ -182,14 +182,14 @@ SnapshotPublicationFile PrepareSnapshotPublicationFileSync(
     }
     if (status.IsError()) {
         (void)unlink(outputPath.c_str());
-        return { status, {}, false };
+        return { status, {}, false, 0, {}, false };
     }
 
     std::array<unsigned char, SHA256_DIGEST_LENGTH> digest {};
     if (SHA256_Final(digest.data(), &digestContext) != 1) {
         (void)unlink(outputPath.c_str());
         return { Status(StatusCode::FAILED,
-                        "failed to finalize compressed snapshot digest"), {}, false };
+                        "failed to finalize compressed snapshot digest"), {}, false, 0, {}, false };
     }
     std::ostringstream sha256;
     sha256 << std::hex << std::setfill('0');
@@ -361,7 +361,7 @@ litebus::Future<SnapshotPublicationFile> PrepareSnapshotPublicationFile(
     if (worker == nullptr || sourceFile.empty()) {
         litebus::Promise<SnapshotPublicationFile> promise;
         promise.SetValue({ Status(StatusCode::ERR_PARAM_INVALID,
-                                  "snapshot publication preparation input is invalid"), {}, false });
+                                  "snapshot publication preparation input is invalid"), {}, false, 0, {}, false });
         return promise.GetFuture();
     }
     return detail::RunOnWorker<SnapshotPublicationFile>(
