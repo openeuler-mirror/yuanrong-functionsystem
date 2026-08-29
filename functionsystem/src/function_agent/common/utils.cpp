@@ -887,6 +887,7 @@ void SetStopRuntimeInstanceRequest(messages::StopInstanceRequest &stopInstanceRe
     stopInstanceRequest.set_checkpointsha256(req->checkpointsha256());
     stopInstanceRequest.set_instanceid(req->instanceid());
     stopInstanceRequest.set_tenantid(req->tenantid());
+    stopInstanceRequest.set_checkpointstorage(req->checkpointstorage());
 }
 
 std::unordered_map<std::string, std::shared_ptr<messages::Layer>> SetDeployingRequestLayers(

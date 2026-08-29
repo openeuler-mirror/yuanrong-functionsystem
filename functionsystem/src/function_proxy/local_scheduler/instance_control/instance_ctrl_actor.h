@@ -827,6 +827,7 @@ private:
     litebus::Future<messages::KillInstanceResponse> SendKillRequestToAgent(const InstanceInfo &instanceInfo,
                                                                            bool isRecovering = false,
                                                                            bool forRedeploy = false,
+                                                                           bool deleteInstanceSnapshots = false,
                                                                            const std::string &requestIDOverride = {});
 
     litebus::Future<Status> DoSync(const litebus::Option<function_proxy::InstanceInfoMap> &instanceInfo,
@@ -898,6 +899,9 @@ private:
                                                           const std::string &requestID, const std::string &instanceID);
 
     litebus::Future<Status> KillRuntime(const InstanceInfo &instanceInfo, bool isRecovering = false);
+    litebus::Future<Status> KillRuntimeForInstanceDelete(const InstanceInfo &instanceInfo);
+    litebus::Future<Status> KillRuntimeWithSnapshotCleanup(
+        const InstanceInfo &instanceInfo, bool isRecovering, bool deleteInstanceSnapshots);
     litebus::Future<Status> RecordFrontendKillRuntimeResult(
         const InstanceInfo &instanceInfo, const messages::KillInstanceResponse &response);
     void ExpireFrontendKillRuntimeEvidence(const std::string &instanceID, const std::string &requestID);

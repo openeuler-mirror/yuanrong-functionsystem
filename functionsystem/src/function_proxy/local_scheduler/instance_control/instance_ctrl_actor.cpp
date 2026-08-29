@@ -213,7 +213,7 @@ void InstanceCtrlActor::Init()
             .Then(litebus::Defer(aid, &InstanceCtrlActor::ShutDownInstance, instanceInfo,
                                  static_cast<uint32_t>(instanceInfo.gracefulshutdowntime())))
             .Then([instanceInfo, aid](const Status &) {
-                return litebus::Async(aid, &InstanceCtrlActor::KillRuntime, instanceInfo, false);
+                return litebus::Async(aid, &InstanceCtrlActor::KillRuntimeForInstanceDelete, instanceInfo);
             })
             .Then(litebus::Defer(aid, &InstanceCtrlActor::DeleteInstanceInControlView, std::placeholders::_1,
                                  instanceInfo))
@@ -1596,7 +1596,8 @@ litebus::Future<KillResponse> InstanceCtrlActor::ForwardSubscriptionEvent(const 
 }
 
 litebus::Future<messages::KillInstanceResponse> InstanceCtrlActor::SendKillRequestToAgent(
-    const InstanceInfo &instanceInfo, bool isRecovering, bool forRedeploy, const std::string &requestIDOverride)
+    const InstanceInfo &instanceInfo, bool isRecovering, bool forRedeploy, bool deleteInstanceSnapshots,
+    const std::string &requestIDOverride)
 {
     RemoveInternalTokenReference(instanceInfo.instanceid());
     if (config_.enableServerMode) {
@@ -1618,6 +1619,7 @@ litebus::Future<messages::KillInstanceResponse> InstanceCtrlActor::SendKillReque
         GenKillInstanceRequest(requestID, instanceInfo.instanceid(), traceID, instanceInfo.storagetype(), isMonopoly);
     killInstanceReq->set_runtimeid(instanceInfo.runtimeid());
     killInstanceReq->set_executortype(instanceInfo.executortype());
+    killInstanceReq->set_deleteinstancesnapshots(deleteInstanceSnapshots);
 
     ASSERT_IF_NULL(clientManager_);
     ASSERT_IF_NULL(functionAgentMgr_);
@@ -1651,10 +1653,12 @@ litebus::Future<Status> InstanceCtrlActor::ReleaseRuntimeForPause(
         ASSERT_IF_NULL(functionAgentMgr_);
         releaseFuture = functionAgentMgr_->KillInstance(request, instanceInfo.functionagentid(), false);
     } else {
+        const bool localCheckpoint = instanceInfo.has_snapshotinfo()
+            && instanceInfo.snapshotinfo().storage() == "local";
         const bool validCleanupIdentity = instanceInfo.has_snapshotinfo()
             && instanceInfo.snapshotinfo().checkpointid() == snapshotID
             && instanceInfo.snapshotinfo().size() > 0
-            && !instanceInfo.snapshotinfo().sha256().empty()
+            && (localCheckpoint || !instanceInfo.snapshotinfo().sha256().empty())
             && !instanceInfo.containerid().empty()
             && !instanceInfo.tenantid().empty();
         if (!validCleanupIdentity) {
@@ -1673,6 +1677,7 @@ litebus::Future<Status> InstanceCtrlActor::ReleaseRuntimeForPause(
         request->set_checkpointsize(static_cast<uint64_t>(instanceInfo.snapshotinfo().size()));
         request->set_checkpointsha256(instanceInfo.snapshotinfo().sha256());
         request->set_tenantid(instanceInfo.tenantid());
+        request->set_checkpointstorage(instanceInfo.snapshotinfo().storage());
         ASSERT_IF_NULL(clientManager_);
         ASSERT_IF_NULL(functionAgentMgr_);
         releaseFuture = clientManager_->DeleteClient(instanceInfo.instanceid())
@@ -1750,6 +1755,17 @@ litebus::Future<Status> InstanceCtrlActor::ShutDownInstance(const InstanceInfo &
 
 litebus::Future<Status> InstanceCtrlActor::KillRuntime(const InstanceInfo &instanceInfo, bool isRecovering)
 {
+    return KillRuntimeWithSnapshotCleanup(instanceInfo, isRecovering, false);
+}
+
+litebus::Future<Status> InstanceCtrlActor::KillRuntimeForInstanceDelete(const InstanceInfo &instanceInfo)
+{
+    return KillRuntimeWithSnapshotCleanup(instanceInfo, false, true);
+}
+
+litebus::Future<Status> InstanceCtrlActor::KillRuntimeWithSnapshotCleanup(
+    const InstanceInfo &instanceInfo, bool isRecovering, bool deleteInstanceSnapshots)
+{
     // stop wait for update status when kill runtime
     auto iter = instanceStatusPromises_.find(instanceInfo.instanceid());
     if (iter != instanceStatusPromises_.end()) {
@@ -1761,7 +1777,7 @@ litebus::Future<Status> InstanceCtrlActor::KillRuntime(const InstanceInfo &insta
     if (evidence != frontendKillRuntimeEvidence_.end() && evidence->second.first == instanceInfo.requestid()) {
         evidence->second.second = "terminating";
     }
-    return SendKillRequestToAgent(instanceInfo, isRecovering)
+    return SendKillRequestToAgent(instanceInfo, isRecovering, false, deleteInstanceSnapshots)
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::RecordFrontendKillRuntimeResult, instanceInfo, _1));
 }
 
@@ -6004,7 +6020,7 @@ litebus::Future<Status> InstanceCtrlActor::RescheduleAfterJudgeRecoverable(const
         })
         .Then([aid(GetAID()), instanceInfo](const TransitionResult &result) {
             (void)litebus::Async(aid, &InstanceCtrlActor::SendKillRequestToAgent, instanceInfo, false, false,
-                                 std::string{});
+                                 false, std::string{});
             return result;
         });
     return Status::OK();

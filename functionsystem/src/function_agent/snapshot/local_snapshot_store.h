@@ -74,6 +74,7 @@ public:
     Status PinForRestore(const std::string &snapshotID);
     Status UnpinAfterRestore(const std::string &snapshotID, bool evictAfterRelease);
     Status EvictLocalArtifact(const std::string &snapshotID);
+    Status DeleteRecoveryCandidatesForInstance(const std::string &instanceID);
     Status Delete(const LocalSnapshotDeleteIdentity &identity);
 
 private:

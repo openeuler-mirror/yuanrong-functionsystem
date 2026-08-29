@@ -248,6 +248,32 @@ Status LocalSnapshotStore::EvictLocalArtifact(const std::string &snapshotID)
     return DeleteUnlocked(snapshotID);
 }
 
+Status LocalSnapshotStore::DeleteRecoveryCandidatesForInstance(const std::string &instanceID)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (instanceID.empty()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "instance ID is required for local Snapshot cleanup");
+    }
+    std::vector<std::string> candidates;
+    for (const auto &[snapshotID, descriptor] : records_) {
+        if (descriptor.recoveryCandidate && descriptor.instanceID == instanceID) {
+            candidates.emplace_back(snapshotID);
+        }
+    }
+    for (const auto &snapshotID : candidates) {
+        if (const auto pin = restorePins_.find(snapshotID);
+            pin != restorePins_.end() && pin->second > 0) {
+            evictAfterUnpin_.insert(snapshotID);
+            continue;
+        }
+        const auto status = DeleteUnlocked(snapshotID);
+        if (status.IsError()) {
+            return status;
+        }
+    }
+    return Status::OK();
+}
+
 void LocalSnapshotStore::Touch(const std::string &snapshotID)
 {
     if (const auto existing = lruIndex_.find(snapshotID); existing != lruIndex_.end()) {

@@ -109,6 +109,16 @@ public:
     return artifact;
 }
 
+::messages::SnapshotArtifact LocalArtifact()
+{
+    auto artifact = ReadyArtifact();
+    artifact.set_storagebackend("local");
+    artifact.set_objectkey("local-snapshot");
+    artifact.clear_sha256();
+    artifact.set_sourcenodeid("source-proxy");
+    return artifact;
+}
+
 ::resources::InstanceInfo SourceInstance()
 {
     ::resources::InstanceInfo source;
@@ -207,6 +217,7 @@ TEST_F(ReusableSnapshotStoreTest, BeginCreatesPublishingVersionOne)
     EXPECT_EQ(record->version(), 1U);
     EXPECT_EQ(record->createtime(), 123456);
     EXPECT_EQ(record->updatetime(), 123456);
+    EXPECT_EQ(record->sourceinstanceid(), "source-logical");
 }
 
 TEST_F(ReusableSnapshotStoreTest, BeginDeterministicallyReplaysSameRequest)
@@ -602,6 +613,37 @@ TEST_F(ReusableSnapshotStoreTest, DeleteUsesPhysicalSeamThenCompletesExactRecord
     EXPECT_EQ(observed.snapshotid(), begin.snapshotid());
     EXPECT_EQ(observed.artifact().objectkey(), ReadyArtifact().objectkey());
     EXPECT_TRUE(persistence->values.empty());
+}
+
+TEST_F(ReusableSnapshotStoreTest, DeletedSourceCleansOnlyItsLocalSnapshots)
+{
+    const auto localBegin = Begin();
+    auto localCommit = CommitRequest(localBegin.snapshotid());
+    *localCommit.mutable_artifact() = LocalArtifact();
+    ASSERT_EQ(store->Commit(localCommit).Get().code(), 0);
+
+    auto distributedBeginRequest = BeginRequest();
+    distributedBeginRequest.set_requestid("distributed-snapshot-request");
+    distributedBeginRequest.set_requestfingerprint("distributed-fingerprint");
+    const auto distributedBegin = store->Begin(distributedBeginRequest).Get();
+    auto distributedCommit = CommitRequest(distributedBegin.snapshotid());
+    distributedCommit.set_requestid(distributedBeginRequest.requestid());
+    distributedCommit.set_requestfingerprint(distributedBeginRequest.requestfingerprint());
+    ASSERT_EQ(store->Commit(distributedCommit).Get().code(), 0);
+
+    std::vector<std::string> deleted;
+    store->SetArtifactDeleter([&deleted](const ::messages::DeleteReusableSnapshotArtifactRequest &request) {
+        deleted.emplace_back(request.snapshotid());
+        ::messages::DeleteReusableSnapshotArtifactResponse response;
+        response.set_requestid(request.requestid());
+        return litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse>(response);
+    });
+
+    EXPECT_TRUE(store->DeleteLocalSnapshotsForSource("tenant-a", "source-logical").Get().IsOk());
+    ASSERT_EQ(deleted.size(), 1U);
+    EXPECT_EQ(deleted.front(), localBegin.snapshotid());
+    EXPECT_FALSE(store->ReadForTest("tenant-a", localBegin.snapshotid()).Get().has_value());
+    EXPECT_TRUE(store->ReadForTest("tenant-a", distributedBegin.snapshotid()).Get().has_value());
 }
 
 }  // namespace

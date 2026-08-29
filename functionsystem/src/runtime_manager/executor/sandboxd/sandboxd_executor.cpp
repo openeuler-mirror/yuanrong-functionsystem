@@ -108,11 +108,14 @@ Status ValidatePauseSourceCleanupRequest(const messages::StopInstanceRequest &re
     if (request.requestid().rfind(prefix, 0) != 0) {
         return Status::OK();
     }
+    const bool localCheckpoint = request.checkpointstorage() == "local";
+    const bool supportedStorage = localCheckpoint || request.checkpointstorage() == "datasystem"
+        || request.checkpointstorage() == "obs";
     if (!IsSafePauseIdentityComponent(request.instanceid())
         || !IsSafePauseIdentityComponent(request.checkpointid())
         || request.tenantid().empty() || request.runtimeid().empty()
         || request.sourcesandboxid().empty() || request.checkpointsize() == 0
-        || request.checkpointsha256().empty()) {
+        || !supportedStorage || (!localCheckpoint && request.checkpointsha256().empty())) {
         return Status(StatusCode::ERR_PARAM_INVALID,
                       "pause source cleanup identity is incomplete or unsafe");
     }

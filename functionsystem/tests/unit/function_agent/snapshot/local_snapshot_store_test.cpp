@@ -170,6 +170,30 @@ TEST_F(LocalSnapshotStoreTest, ExplicitDeleteReturnsBusyWhileRestoreIsPinned)
     EXPECT_TRUE(store_->Delete({"checkpoint-a"}).IsOk());
 }
 
+TEST_F(LocalSnapshotStoreTest, InstanceCleanupDeletesOnlyOwnedRecoveryCandidates)
+{
+    Commit("checkpoint-a", "payload-a");
+
+    auto other = Request("checkpoint-b");
+    other.instanceID = "instance-b";
+    auto prepared = store_->Prepare(other);
+    ASSERT_TRUE(prepared.status.IsOk());
+    Write(prepared.directory / "checkpoint.img", "payload-b");
+    ASSERT_TRUE(store_->Commit(other).status.IsOk());
+
+    auto reusable = Request("reusable");
+    reusable.recoveryCandidate = false;
+    prepared = store_->Prepare(reusable);
+    ASSERT_TRUE(prepared.status.IsOk());
+    Write(prepared.directory / "checkpoint.img", "reusable");
+    ASSERT_TRUE(store_->Commit(reusable).status.IsOk());
+
+    ASSERT_TRUE(store_->DeleteRecoveryCandidatesForInstance("instance-a").IsOk());
+    EXPECT_FALSE(fs::exists(root_ / "checkpoint-a"));
+    EXPECT_TRUE(fs::exists(root_ / "checkpoint-b"));
+    EXPECT_TRUE(fs::exists(root_ / "reusable"));
+}
+
 TEST_F(LocalSnapshotStoreTest, LruDoesNotKeepPhantomRemoteRecord)
 {
     store_ = std::make_unique<LocalSnapshotStore>(root_, 8);

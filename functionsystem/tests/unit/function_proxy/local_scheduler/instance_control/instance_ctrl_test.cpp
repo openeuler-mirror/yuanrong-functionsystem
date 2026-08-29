@@ -5449,6 +5449,38 @@ TEST(ReusableSnapshotCreateTransferTest, ResolvedSnapshotKeepsNewCreateIdentityA
     EXPECT_NE(mismatchedTunnel.RawMessage().find("reverse tunnel ports"), std::string::npos);
 }
 
+TEST(ReusableSnapshotCreateTransferTest, LocalArtifactRequiresItsPersistedSourceNode)
+{
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->set_requestid("local-clone-request");
+    auto *target = scheduleReq->mutable_instance();
+    target->set_instanceid("local-clone-instance");
+    target->set_function("default/sandbox/$latest");
+    (*target->mutable_scheduleoption()->mutable_extension())
+        [REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION] = "snapshot-local";
+
+    ::messages::ResolveReusableSnapshotForCreateResponse resolved;
+    resolved.set_code(common::ERR_NONE);
+    resolved.mutable_instancetemplate()->set_function("default/sandbox/$latest");
+    auto *restore = resolved.mutable_reusablesnapshotrestore();
+    restore->set_snapshotid("snapshot-local");
+    restore->set_allowlogicalinstanceidrebind(true);
+    auto *artifact = restore->mutable_artifact();
+    artifact->set_storagebackend("local");
+    artifact->set_objectkey("reusable/local/snapshot-local/checkpoint.img");
+    artifact->set_sourcenodeid("source-node");
+    artifact->set_size(4096);
+    artifact->set_format("sandboxd-checkpoint");
+    artifact->set_formatversion(1);
+
+    const auto status = ApplyResolvedReusableSnapshotForCreate(resolved, scheduleReq);
+
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    const auto &affinity = target->scheduleoption().affinity().nodeaffinity().affinity();
+    ASSERT_EQ(affinity.count("source-node"), 1U);
+    EXPECT_EQ(affinity.at("source-node"), resources::RequiredAffinity);
+}
+
 TEST(ReusableSnapshotCreateTransferTest, InheritsUnspecifiedResourcesAndPreservesTargetOnlyResources)
 {
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();

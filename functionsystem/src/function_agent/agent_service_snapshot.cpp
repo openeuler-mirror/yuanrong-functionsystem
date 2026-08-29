@@ -819,7 +819,7 @@ void AgentServiceActor::SnapshotAttemptFinalizeLegacy(
                                             "invalid snapshot attempt finalize request", false, false, false);
         return;
     }
-    if (!UsesDistributedStorage(snapshotStorageMode_)
+    if (request.expectedstorage() == "local"
         && request.operation() != ::messages::RESUME_ABORTED) {
         Status local = Status::OK();
         const bool deleteLocal = request.operation() == ::messages::PAUSE_ABORTED
@@ -1216,7 +1216,9 @@ void AgentServiceActor::DeleteReusableSnapshotArtifact(
                 "local reusable Snapshot delete identity is incomplete");
             return;
         }
-        const auto status = localSnapshotStore_->Delete({request.snapshotid()});
+        // A lifecycle-bound local Snapshot may still be pinned by an in-flight
+        // restore. Mark it for deletion and let the final unpin remove it.
+        const auto status = localSnapshotStore_->EvictLocalArtifact(request.snapshotid());
         SendDeleteReusableSnapshotArtifactResponse(
             from, request.requestid(),
             status.IsOk() || status.StatusCode() == StatusCode::FILE_NOT_FOUND

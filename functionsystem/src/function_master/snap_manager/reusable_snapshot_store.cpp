@@ -304,7 +304,8 @@ litebus::Future<::messages::BeginReusableSnapshotResponse> ReusableSnapshotStore
                         request.requestid(), Status(StatusCode::ERR_ETCD_OPERATION_ERROR, "invalid Snapshot record")));
             }
             if (current.createrequestid() != request.requestid()
-                || current.requestfingerprint() != request.requestfingerprint()) {
+                || current.requestfingerprint() != request.requestfingerprint()
+                || current.sourceinstanceid() != request.sourceinstanceid()) {
                 return litebus::Future<::messages::BeginReusableSnapshotResponse>(
                     ErrorResponse<::messages::BeginReusableSnapshotResponse>(
                         request.requestid(), Conflict("Snapshot request fingerprint conflict")));
@@ -323,6 +324,7 @@ litebus::Future<::messages::BeginReusableSnapshotResponse> ReusableSnapshotStore
         created.set_tenantid(request.tenantid());
         created.set_createrequestid(request.requestid());
         created.set_requestfingerprint(request.requestfingerprint());
+        created.set_sourceinstanceid(request.sourceinstanceid());
         created.set_phase(::messages::REUSABLE_SNAPSHOT_PUBLISHING);
         created.set_createtime(Now());
         created.set_updatetime(created.createtime());
@@ -370,7 +372,8 @@ litebus::Future<::messages::CommitReusableSnapshotResponse> ReusableSnapshotStor
                     Status(StatusCode::ERR_ETCD_OPERATION_ERROR, "invalid Snapshot record")));
         }
         if (current.createrequestid() != request.requestid()
-            || current.requestfingerprint() != request.requestfingerprint()) {
+            || current.requestfingerprint() != request.requestfingerprint()
+            || current.sourceinstanceid() != request.sourceinstanceinfo().instanceid()) {
             return litebus::Future<::messages::CommitReusableSnapshotResponse>(
                 ErrorResponse<::messages::CommitReusableSnapshotResponse>(
                     request.requestid(), Conflict("Snapshot commit fingerprint conflict")));
@@ -753,6 +756,46 @@ litebus::Future<::messages::DeleteReusableSnapshotResponse> ReusableSnapshotStor
                     });
             });
     });
+}
+
+litebus::Future<Status> ReusableSnapshotStore::DeleteLocalSnapshotsForSource(
+    const std::string &tenantID, const std::string &sourceInstanceID)
+{
+    if (tenantID.empty() || sourceInstanceID.empty() || persistence_ == nullptr) {
+        return litebus::Future<Status>(
+            Invalid("tenantID and sourceInstanceID are required for local Snapshot cleanup"));
+    }
+    return persistence_->List(TenantPrefix(tenantID))
+        .Then([this, tenantID, sourceInstanceID](const ReusableSnapshotListRecordsResult &records)
+            -> litebus::Future<Status> {
+            if (records.status.IsError()) {
+                return litebus::Future<Status>(records.status);
+            }
+            litebus::Future<Status> cleanup(Status::OK());
+            for (const auto &value : records.values) {
+                ::messages::ReusableSnapshotMetadata metadata;
+                if (!ParseMetadata(value, &metadata)
+                    || metadata.sourceinstanceid() != sourceInstanceID
+                    || metadata.artifact().storagebackend() != "local") {
+                    continue;
+                }
+                ::messages::DeleteReusableSnapshotRequest request;
+                request.set_requestid("instance-delete/" + sourceInstanceID + "/" + metadata.snapshotid());
+                request.set_tenantid(tenantID);
+                request.set_snapshotid(metadata.snapshotid());
+                cleanup = cleanup.Then([this, request](const Status &previous) -> litebus::Future<Status> {
+                    return Delete(request).Then([previous](
+                        const ::messages::DeleteReusableSnapshotResponse &response) {
+                        if (previous.IsError()) {
+                            return previous;
+                        }
+                        return response.code() == common::ERR_NONE ? Status::OK()
+                            : Status(StatusCode::FAILED, response.message());
+                    });
+                });
+            }
+            return cleanup;
+        });
 }
 
 void ReusableSnapshotStore::SetArtifactDeleter(ArtifactDeleter deleter)

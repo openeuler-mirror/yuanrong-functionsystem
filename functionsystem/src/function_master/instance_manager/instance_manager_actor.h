@@ -17,6 +17,7 @@
 #ifndef FUNCTION_MASTER_INSTANCE_MANAGER_INSTANCE_MGR_ACTOR_H
 #define FUNCTION_MASTER_INSTANCE_MANAGER_INSTANCE_MGR_ACTOR_H
 
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -108,6 +109,12 @@ public:
     void SetTraefikRouteCache(std::shared_ptr<global_scheduler::TraefikRouteCache> cache)
     {
         traefikRouteCache_ = std::move(cache);
+    }
+
+    void SetInstanceDeleteObserver(
+        std::function<void(const std::shared_ptr<resource_view::InstanceInfo> &)> observer)
+    {
+        member_->instanceDeleteObserver = std::move(observer);
     }
 
     void HandleSystemUpgrade(bool isUpgrading);
@@ -434,6 +441,7 @@ private:
         bool isUpgrading{ false };
         std::shared_ptr<GroupManager> groupManager{ nullptr };
         std::shared_ptr<ResourceGroupManager> resourceGroupManager{ nullptr };
+        std::function<void(const std::shared_ptr<resource_view::InstanceInfo> &)> instanceDeleteObserver;
         std::shared_ptr<InstanceFamilyCaches> family{ nullptr };
         std::set<std::string> exitingInstances;
         // instanceID: promise

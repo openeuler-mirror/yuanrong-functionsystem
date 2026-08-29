@@ -723,7 +723,13 @@ void InstanceManagerActor::OnInstanceWatchEvent(const std::vector<WatchEvent> &e
                     YRLOG_ERROR("failed to transform instance({}) info from String.", eventKey);
                     break;
                 }
+                if (history->tenantid().empty()) {
+                    history->set_tenantid(ParseTenantIDFromInstanceKey(eventKey));
+                }
                 OnInstanceDelete(eventKey, history);
+                if (member_->instanceDeleteObserver) {
+                    member_->instanceDeleteObserver(history);
+                }
                 if (member_->groupManager) {
                     member_->groupManager->OnInstanceDelete(eventKey, history);
                 }

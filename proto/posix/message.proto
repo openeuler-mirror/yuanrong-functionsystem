@@ -351,6 +351,8 @@ message KillInstanceRequest {
   uint64 checkpointSize = 10;
   string checkpointSha256 = 11;
   string tenantID = 12;
+  string checkpointStorage = 13;
+  bool deleteInstanceSnapshots = 14;
 }
 
 message KillInstanceResponse {
@@ -578,6 +580,7 @@ message StopInstanceRequest {
   string checkpointSha256 = 9;
   string instanceID = 10;
   string tenantID = 11;
+  string checkpointStorage = 12;
 }
 
 message StopInstanceResponse {
@@ -1140,6 +1143,7 @@ message ReusableSnapshotMetadata {
   int64 createTime = 9;
   int64 updateTime = 10;
   uint64 version = 11;
+  string sourceInstanceID = 12;
 }
 
 message ReusableSnapshotRestore {

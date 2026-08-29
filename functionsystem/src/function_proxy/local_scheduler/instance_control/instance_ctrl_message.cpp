@@ -169,6 +169,8 @@ Status ApplyResolvedReusableSnapshotForCreate(
     scheduleExtensions->erase(REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION);
     (*scheduleExtensions)[REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION] =
         CharStringToHexString(resolved.reusablesnapshotrestore().SerializeAsString());
+    // Placement follows the persisted artifact fact, not the current cluster
+    // storage-mode flag: a local artifact can only be restored on its owner.
     if (resolved.reusablesnapshotrestore().artifact().storagebackend() == "local") {
         auto *affinity = target->mutable_scheduleoption()->mutable_affinity()
             ->mutable_nodeaffinity()->mutable_affinity();

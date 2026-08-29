@@ -1037,7 +1037,18 @@ void AgentServiceActor::StopInstanceResponse(const litebus::AID &from, std::stri
     }
 
     auto killInstanceRequest = request->second.request;
-    auto killInstanceResponse = BuildKillInstanceResponse(stopInstanceResponse.code(), stopInstanceResponse.message(),
+    auto responseCode = stopInstanceResponse.code();
+    auto responseMessage = stopInstanceResponse.message();
+    if (responseCode == static_cast<int32_t>(StatusCode::SUCCESS)
+        && killInstanceRequest->deleteinstancesnapshots() && localSnapshotStore_ != nullptr) {
+        const auto cleanup = localSnapshotStore_->DeleteRecoveryCandidatesForInstance(
+            killInstanceRequest->instanceid());
+        if (cleanup.IsError()) {
+            responseCode = static_cast<int32_t>(cleanup.StatusCode());
+            responseMessage = cleanup.RawMessage();
+        }
+    }
+    auto killInstanceResponse = BuildKillInstanceResponse(responseCode, responseMessage,
                                                           requestID, killInstanceRequest->instanceid());
     YRLOG_DEBUG("{}|AgentServiceActor send KillInstanceResponse back to {}", requestID,
                 std::string(request->second.from));

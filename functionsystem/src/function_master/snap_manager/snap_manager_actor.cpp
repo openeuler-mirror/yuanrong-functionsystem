@@ -405,6 +405,13 @@ litebus::Future<::messages::DeleteReusableSnapshotResponse> SnapManagerActor::De
     return member_->reusableSnapshotStore->Delete(request);
 }
 
+litebus::Future<Status> SnapManagerActor::DeleteLocalSnapshotsForSource(
+    const std::string &tenantID, const std::string &sourceInstanceID)
+{
+    ASSERT_IF_NULL(member_->reusableSnapshotStore);
+    return member_->reusableSnapshotStore->DeleteLocalSnapshotsForSource(tenantID, sourceInstanceID);
+}
+
 void SnapManagerActor::SetReusableSnapshotArtifactDeleter(ReusableSnapshotStore::ArtifactDeleter deleter)
 {
     ASSERT_IF_NULL(member_->reusableSnapshotStore);

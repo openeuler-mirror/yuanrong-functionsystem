@@ -130,6 +130,8 @@ std::shared_ptr<messages::ScheduleRequest> SnapshotScheduler::BuildPauseResumeSc
     SetAffinityOpt(*instance, schedulingRequest, scheduleReq);
 
     if (!sourceNodeID.empty()) {
+        // SnapshotInfo is the durable placement authority. A cluster may
+        // change its global mode after this Snapshot was created.
         (*instance->mutable_scheduleoption()->mutable_affinity()->mutable_nodeaffinity()->mutable_affinity())
             [sourceNodeID] = instance->snapshotinfo().storage() == "local"
                 ? resources::RequiredAffinity : resources::PreferredAffinity;
