@@ -654,6 +654,54 @@ TEST(LocalSnapshotInspectionTest, ReturnsCompleteMetadataFromWorker)
     EXPECT_TRUE(result.metadata.complete);
 }
 
+TEST(SnapshotDirectoryPublicationTest, RoundTripsOpaqueMultiFileDirectory)
+{
+    for (const bool compress : {false, true}) {
+        TempDirectory directory;
+        const auto source = directory.Path() / "source";
+        const auto destination = directory.Path() / "destination";
+        fs::create_directories(source / "nested" / "empty");
+        fs::create_directories(destination);
+        WriteFile(source / "checkpoint.img", "state");
+        WriteFile(source / "pages_meta.img", "metadata");
+        WriteFile(source / "pages.img", "pages");
+        WriteFile(source / "nested" / "runtime.img", "nested-state");
+        auto worker = std::make_shared<ActorWorker>();
+
+        const auto prepared = PrepareSnapshotPublicationFile(
+            worker, source.string(), compress).Get();
+        ASSERT_TRUE(prepared.status.IsOk()) << prepared.status.ToString();
+        EXPECT_TRUE(prepared.temporary);
+        EXPECT_GT(prepared.size, 0U);
+        ASSERT_TRUE(fs::is_regular_file(prepared.path));
+
+        const auto materialized = MaterializeSnapshotPublicationDirectory(
+            worker, prepared.path, destination).Get();
+        ASSERT_TRUE(materialized.IsOk()) << materialized.ToString();
+        EXPECT_EQ(ReadFile(destination / "checkpoint.img"), "state");
+        EXPECT_EQ(ReadFile(destination / "pages_meta.img"), "metadata");
+        EXPECT_EQ(ReadFile(destination / "pages.img"), "pages");
+        EXPECT_EQ(ReadFile(destination / "nested" / "runtime.img"), "nested-state");
+        EXPECT_TRUE(fs::is_directory(destination / "nested" / "empty"));
+        fs::remove(prepared.path);
+    }
+}
+
+TEST(SnapshotDirectoryPublicationTest, LegacySingleFileMaterializesAsCheckpointImage)
+{
+    TempDirectory directory;
+    const auto source = directory.Path() / "legacy.img";
+    const auto destination = directory.Path() / "destination";
+    WriteFile(source, "legacy-payload");
+    fs::create_directories(destination);
+
+    const auto materialized = MaterializeSnapshotPublicationDirectory(
+        std::make_shared<ActorWorker>(), source.string(), destination).Get();
+
+    ASSERT_TRUE(materialized.IsOk()) << materialized.ToString();
+    EXPECT_EQ(ReadFile(destination / "checkpoint.img"), "legacy-payload");
+}
+
 TEST(LocalSnapshotInspectionTest, MissingSourceReturnsFileNotFound)
 {
     TempDirectory directory;

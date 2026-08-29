@@ -93,6 +93,9 @@ litebus::Future<SnapshotStat> InspectLocalSnapshotFile(const std::shared_ptr<Act
 litebus::Future<SnapshotPublicationFile> PrepareSnapshotPublicationFile(
     const std::shared_ptr<ActorWorker> &worker, const std::string &sourceFile,
     bool compress);
+litebus::Future<Status> MaterializeSnapshotPublicationDirectory(
+    const std::shared_ptr<ActorWorker> &worker, const std::string &publicationFile,
+    const std::filesystem::path &destinationDirectory);
 
 namespace detail {
 

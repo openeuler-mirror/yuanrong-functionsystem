@@ -218,7 +218,7 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
     }
     request->set_checkpointdir(prepared.directory.string());
     pending.request = *request;
-    pending.artifactPath = (prepared.directory / "checkpoint.img").string();
+    pending.artifactPath = prepared.directory.string();
     if (!snapshotRequests_.emplace(request->requestid(), std::move(pending)).second) {
         response.set_code(static_cast<int32_t>(StatusCode::PARAMETER_ERROR));
         response.set_message("duplicate in-flight snapshot request ID");
@@ -286,6 +286,8 @@ void AgentServiceActor::SnapshotRuntimeResponse(const litebus::AID &from, std::s
     if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
         if (response.resultunknown()) {
             response.clear_physicalfact();
+        } else if (localSnapshotStore_ != nullptr) {
+            (void)localSnapshotStore_->DiscardStaging(pending.request.snapshotid());
         }
         Send(pending.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
         snapshotRequests_.erase(iter);
@@ -296,6 +298,7 @@ void AgentServiceActor::SnapshotRuntimeResponse(const litebus::AID &from, std::s
         response.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
         response.set_message("runtime checkpoint response identity is invalid");
         Send(pending.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
+        (void)localSnapshotStore_->DiscardStaging(pending.request.snapshotid());
         snapshotRequests_.erase(iter);
         return;
     }
@@ -305,10 +308,13 @@ void AgentServiceActor::SnapshotRuntimeResponse(const litebus::AID &from, std::s
         response.set_code(static_cast<int32_t>(committed.status.StatusCode()));
         response.set_message(committed.status.RawMessage());
         Send(pending.caller, "SnapshotRuntimeResponse", response.SerializeAsString());
+        (void)localSnapshotStore_->DiscardStaging(pending.request.snapshotid());
         snapshotRequests_.erase(iter);
         return;
     }
     CopyLocalSnapshotMetadata(committed.descriptor, pending.localSnapshot);
+    pending.artifactPath = (std::filesystem::path(checkpointRoot_)
+                            / pending.request.snapshotid()).string();
     auto *snapshotInfo = response.mutable_snapshotinfo();
     snapshotInfo->set_checkpointid(committed.descriptor.snapshotID);
     snapshotInfo->set_size(static_cast<int64_t>(committed.descriptor.size));

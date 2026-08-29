@@ -886,15 +886,14 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartBySnapsh
         if (resolved.IsError()) {
             return GenFailStartInstanceResponse(request, resolved.StatusCode(), resolved.RawMessage());
         }
-        const auto checkpointPath = std::filesystem::path(checkpointDirectory) / "checkpoint.img";
         std::error_code error;
-        const auto fileStatus = std::filesystem::symlink_status(checkpointPath, error);
-        if (error || !std::filesystem::is_regular_file(fileStatus)) {
+        const auto directoryStatus = std::filesystem::symlink_status(checkpointDirectory, error);
+        if (error || !std::filesystem::is_directory(directoryStatus)) {
             return GenFailStartInstanceResponse(
                 request, StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED,
-                "local restore checkpoint is not an existing regular file");
+                "local restore checkpoint is not an existing directory");
         }
-        return OnCheckpointDownloaded(checkpointPath.string(), context);
+        return OnCheckpointDownloaded(checkpointDirectory, context);
     }
     return GenFailStartInstanceResponse(
         request, StatusCode::ERR_PARAM_INVALID,

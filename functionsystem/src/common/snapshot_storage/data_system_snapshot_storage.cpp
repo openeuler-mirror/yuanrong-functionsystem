@@ -402,7 +402,6 @@ Status PutFileToDataSystemBuffer(const std::string &key, const std::string &sour
     auto *destination = static_cast<unsigned char *>(buffer->MutableData());
     std::memcpy(destination, header.data(), header.size());
     uint64_t offset = 0;
-    uint64_t released = 0;
     Status status = Status::OK();
     constexpr size_t CHUNK_SIZE = 1024 * 1024;
     while (offset < metadata.size) {
@@ -416,7 +415,6 @@ Status PutFileToDataSystemBuffer(const std::string &key, const std::string &sour
             break;
         }
         offset += static_cast<uint64_t>(count);
-        ReleaseConsumedSharedPages(destination, header.size() + offset, released);
     }
     struct stat finalInfo {};
     if (status.IsOk() && (fstat(source, &finalInfo) != 0 || !SameFileIdentity(initial, finalInfo))) {

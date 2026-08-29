@@ -8,8 +8,10 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <dirent.h>
 #include <filesystem>
 #include <fcntl.h>
+#include <limits>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -20,12 +22,67 @@ namespace functionsystem::function_agent {
 namespace fs = std::filesystem;
 namespace {
 
-constexpr char CHECKPOINT_IMAGE_NAME[] = "checkpoint.img";
-
 Status FileError(const std::string &operation, int error = errno)
 {
     return Status(error == ENOENT ? StatusCode::FILE_NOT_FOUND : StatusCode::FAILED,
                   operation + ": " + std::strerror(error));
+}
+
+Status RemoveDirectoryContents(int directoryFd)
+{
+    const int scanFd = dup(directoryFd);
+    if (scanFd < 0) {
+        return FileError("duplicate checkpoint directory descriptor");
+    }
+    DIR *entries = fdopendir(scanFd);
+    if (entries == nullptr) {
+        close(scanFd);
+        return FileError("open checkpoint directory stream");
+    }
+    Status status = Status::OK();
+    while (status.IsOk()) {
+        errno = 0;
+        auto *entry = readdir(entries);
+        if (entry == nullptr) {
+            if (errno != 0) {
+                status = FileError("read checkpoint directory");
+            }
+            break;
+        }
+        const std::string name(entry->d_name);
+        if (name == "." || name == "..") {
+            continue;
+        }
+        struct stat info {};
+        if (fstatat(directoryFd, name.c_str(), &info, AT_SYMLINK_NOFOLLOW) != 0) {
+            if (errno == ENOENT) {
+                continue;
+            }
+            status = FileError("inspect checkpoint directory entry");
+            break;
+        }
+        if (S_ISDIR(info.st_mode)) {
+            const int child = openat(directoryFd, name.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+            if (child < 0) {
+                status = FileError("open checkpoint child directory");
+                break;
+            }
+            status = RemoveDirectoryContents(child);
+            close(child);
+            if (status.IsError()) {
+                break;
+            }
+            if (unlinkat(directoryFd, name.c_str(), AT_REMOVEDIR) != 0 && errno != ENOENT) {
+                status = FileError("delete checkpoint child directory");
+            }
+            continue;
+        }
+        if (unlinkat(directoryFd, name.c_str(), 0) != 0 && errno != ENOENT) {
+            status = FileError("delete checkpoint artifact entry");
+        }
+    }
+    closedir(entries);
+    return status;
 }
 
 }  // namespace
@@ -55,6 +112,11 @@ fs::path LocalSnapshotStore::SnapshotDirectory(const std::string &snapshotID) co
     return (checkpointRoot_ / snapshotID).lexically_normal();
 }
 
+fs::path LocalSnapshotStore::StagingDirectory(const std::string &snapshotID) const
+{
+    return (checkpointRoot_ / ("." + snapshotID + ".staging")).lexically_normal();
+}
+
 Status LocalSnapshotStore::InspectArtifact(const fs::path &directory, uint64_t &size) const
 {
     snapshot_storage::detail::SecureDirectory opened;
@@ -62,20 +124,55 @@ Status LocalSnapshotStore::InspectArtifact(const fs::path &directory, uint64_t &
     if (status.IsError()) {
         return status;
     }
-    const int fd = openat(opened.Fd(), CHECKPOINT_IMAGE_NAME, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    if (fd < 0) {
-        return FileError("open local checkpoint artifact");
+    std::error_code error;
+    fs::recursive_directory_iterator iter(directory, fs::directory_options::none, error);
+    if (error) {
+        return Status(StatusCode::FAILED, "enumerate local checkpoint directory: " + error.message());
     }
-    struct stat fileStatus {};
-    const int statResult = fstat(fd, &fileStatus);
-    close(fd);
-    if (statResult != 0) {
-        return FileError("inspect local checkpoint artifact");
+    uint64_t total = 0;
+    size_t regularFiles = 0;
+    for (const auto end = fs::recursive_directory_iterator(); iter != end; iter.increment(error)) {
+        if (error) {
+            return Status(StatusCode::FAILED, "enumerate local checkpoint directory: " + error.message());
+        }
+        const auto fileStatus = iter->symlink_status(error);
+        if (error) {
+            return Status(StatusCode::FAILED, "inspect local checkpoint entry: " + error.message());
+        }
+        if (fs::is_directory(fileStatus)) {
+            continue;
+        }
+        if (!fs::is_regular_file(fileStatus)) {
+            return Status(StatusCode::ERR_PARAM_INVALID,
+                          "local checkpoint directory contains a non-regular entry");
+        }
+        const int fd = open(iter->path().c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (fd < 0) {
+            return FileError("open local checkpoint entry");
+        }
+        struct stat info {};
+        const int statResult = fstat(fd, &info);
+        close(fd);
+        if (statResult != 0 || !S_ISREG(info.st_mode) || info.st_size < 0) {
+            return statResult != 0
+                ? FileError("inspect local checkpoint entry")
+                : Status(StatusCode::SCHEDULE_CONFLICTED, "local checkpoint entry identity changed");
+        }
+        const auto entrySize = static_cast<uint64_t>(info.st_size);
+        if (entrySize > std::numeric_limits<uint64_t>::max() - total) {
+            return Status(StatusCode::FAILED, "local checkpoint directory size overflow");
+        }
+        total += entrySize;
+        ++regularFiles;
     }
-    if (!S_ISREG(fileStatus.st_mode)) {
-        return Status(StatusCode::FAILED, "local checkpoint artifact is not a regular file");
+    if (regularFiles == 0 || total == 0) {
+        return Status(StatusCode::FILE_NOT_FOUND, "local checkpoint directory is empty");
     }
-    size = static_cast<uint64_t>(fileStatus.st_size);
+    const auto identity = opened.VerifyPathIdentity();
+    if (identity.IsError()) {
+        return identity;
+    }
+    size = total;
     return Status::OK();
 }
 
@@ -86,23 +183,32 @@ LocalSnapshotPrepareResult LocalSnapshotStore::Prepare(const LocalSnapshotCommit
     if (status.IsError()) {
         return {status, {}};
     }
-    const auto directory = SnapshotDirectory(request.snapshotID);
+    const auto finalDirectory = SnapshotDirectory(request.snapshotID);
+    const auto directory = StagingDirectory(request.snapshotID);
     std::error_code error;
+    const auto finalStatus = fs::symlink_status(finalDirectory, error);
+    if (!error && fs::exists(finalStatus)) {
+        if (!fs::is_directory(finalStatus)) {
+            return {Status(StatusCode::FAILED, "local artifact path is not a directory"), {}};
+        }
+        uint64_t ignoredSize = 0;
+        const auto artifact = InspectArtifact(finalDirectory, ignoredSize);
+        return artifact.IsOk()
+            ? LocalSnapshotPrepareResult{Status::OK(), finalDirectory, true}
+            : LocalSnapshotPrepareResult{artifact, finalDirectory, false};
+    }
+    if (error && error != std::errc::no_such_file_or_directory) {
+        return {Status(StatusCode::FAILED, "inspect local artifact directory: " + error.message()), {}};
+    }
+    error.clear();
     const auto fileStatus = fs::symlink_status(directory, error);
     if (!error && fs::exists(fileStatus)) {
         if (!fs::is_directory(fileStatus)) {
             return {Status(StatusCode::FAILED, "local artifact path is not a directory"), {}};
         }
-        uint64_t ignoredSize = 0;
-        const auto artifact = InspectArtifact(directory, ignoredSize);
-        if (artifact.IsOk()) {
-            return {Status::OK(), directory, true};
-        }
-        if (artifact.StatusCode() != StatusCode::FILE_NOT_FOUND) {
-            return {artifact, directory, false};
-        }
         if (!fs::is_empty(directory, error) || error) {
-            return {snapshot_storage::detail::Conflict("local artifact directory is not empty"), directory, false};
+            return {snapshot_storage::detail::Conflict(
+                        "uncommitted local artifact staging directory is not empty"), directory, false};
         }
         return {Status::OK(), directory, false};
     }
@@ -122,8 +228,31 @@ LocalSnapshotCommitResult LocalSnapshotStore::Commit(const LocalSnapshotCommitRe
     if (status.IsError()) {
         return {status, {}};
     }
+    const auto finalDirectory = SnapshotDirectory(request.snapshotID);
+    const auto stagingDirectory = StagingDirectory(request.snapshotID);
     uint64_t size = 0;
-    status = InspectArtifact(SnapshotDirectory(request.snapshotID), size);
+    status = InspectArtifact(stagingDirectory, size);
+    if (status.StatusCode() == StatusCode::FILE_NOT_FOUND) {
+        status = InspectArtifact(finalDirectory, size);
+    } else if (status.IsOk()) {
+        std::error_code error;
+        const auto finalStatus = fs::symlink_status(finalDirectory, error);
+        if (!error && fs::exists(finalStatus)) {
+            return {snapshot_storage::detail::Conflict("committed local artifact already exists"), {}};
+        }
+        if (error && error != std::errc::no_such_file_or_directory) {
+            return {Status(StatusCode::FAILED, "inspect committed local artifact: " + error.message()), {}};
+        }
+        fs::rename(stagingDirectory, finalDirectory, error);
+        if (error) {
+            return {Status(StatusCode::FAILED, "commit local checkpoint directory: " + error.message()), {}};
+        }
+        snapshot_storage::detail::SecureDirectory root;
+        status = snapshot_storage::detail::SecureDirectory::Open(checkpointRoot_, false, root);
+        if (status.IsError() || fsync(root.Fd()) != 0) {
+            return {status.IsError() ? status : FileError("sync checkpoint root after commit"), {}};
+        }
+    }
     if (status.IsError()) {
         return {status, {}};
     }
@@ -248,6 +377,15 @@ Status LocalSnapshotStore::EvictLocalArtifact(const std::string &snapshotID)
     return DeleteUnlocked(snapshotID);
 }
 
+Status LocalSnapshotStore::DiscardStaging(const std::string &snapshotID)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!snapshot_storage::detail::IsSafeLeafName(snapshotID)) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "invalid local artifact staging identity");
+    }
+    return DeleteDirectoryUnlocked(StagingDirectory(snapshotID));
+}
+
 Status LocalSnapshotStore::DeleteRecoveryCandidatesForInstance(const std::string &instanceID)
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -315,28 +453,44 @@ Status LocalSnapshotStore::DeleteUnlocked(const std::string &snapshotID)
         restorePins_.erase(snapshotID);
         evictAfterUnpin_.erase(snapshotID);
     };
-    const auto directoryPath = SnapshotDirectory(snapshotID);
+    auto status = DeleteDirectoryUnlocked(SnapshotDirectory(snapshotID));
+    if (status.IsError()) {
+        return status;
+    }
+    status = DeleteDirectoryUnlocked(StagingDirectory(snapshotID));
+    if (status.IsError()) {
+        return status;
+    }
+    forget();
+    return Status::OK();
+}
+
+Status LocalSnapshotStore::DeleteDirectoryUnlocked(const fs::path &directoryPath)
+{
     snapshot_storage::detail::SecureDirectory directory;
     auto status = snapshot_storage::detail::SecureDirectory::Open(directoryPath, false, directory);
     if (status.StatusCode() == StatusCode::FILE_NOT_FOUND) {
-        forget();
         return Status::OK();
     }
     if (status.IsError()) {
         return status;
     }
-    if (unlinkat(directory.Fd(), CHECKPOINT_IMAGE_NAME, 0) != 0 && errno != ENOENT) {
-        return FileError("delete local checkpoint artifact");
+    status = RemoveDirectoryContents(directory.Fd());
+    if (status.IsError()) {
+        return status;
     }
     snapshot_storage::detail::SecureDirectory root;
     status = snapshot_storage::detail::SecureDirectory::Open(checkpointRoot_, false, root);
     if (status.IsError()) {
         return status;
     }
-    if (unlinkat(root.Fd(), snapshotID.c_str(), AT_REMOVEDIR) != 0 && errno != ENOENT) {
+    const auto leaf = directoryPath.filename().string();
+    if (!snapshot_storage::detail::IsSafeLeafName(leaf)) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "invalid local artifact directory name");
+    }
+    if (unlinkat(root.Fd(), leaf.c_str(), AT_REMOVEDIR) != 0 && errno != ENOENT) {
         return FileError("delete local artifact directory");
     }
-    forget();
     return Status::OK();
 }
 

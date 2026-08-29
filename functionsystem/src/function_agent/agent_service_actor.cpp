@@ -1529,9 +1529,9 @@ litebus::Future<Status> AgentServiceActor::MaterializeRemoteSnapshot(
     }
     auto downloaded = reusable
         ? function_agent::MaterializeReusableSnapshotCheckpoint(
-              snapshotStorage_, checkpointRoot_, snapshotWorker_, startInstanceRequest)
+              snapshotStorage_, checkpointRoot_, prepared.directory, snapshotWorker_, startInstanceRequest)
         : function_agent::MaterializeTrustedResumeCheckpoint(
-              snapshotStorage_, checkpointRoot_, snapshotWorker_, startInstanceRequest);
+              snapshotStorage_, checkpointRoot_, prepared.directory, snapshotWorker_, startInstanceRequest);
     auto materialized = downloaded.Then(litebus::Defer(
         GetAID(), &AgentServiceActor::CommitMaterializedSnapshot,
         request, startInstanceRequest, std::placeholders::_1));
@@ -1584,6 +1584,14 @@ void AgentServiceActor::OnTrustedResumeMaterialized(
             ? Status(StatusCode::ERR_INNER_COMMUNICATION,
                      "trusted resume materialization future failed")
             : materialized.Get();
+        if (localSnapshotStore_ != nullptr) {
+            const auto snapshotID = MaterializedSnapshotID(*startInstanceRequest);
+            const auto cleanup = localSnapshotStore_->DiscardStaging(snapshotID);
+            if (cleanup.IsError()) {
+                YRLOG_WARN("{}|failed to discard snapshot materialization staging({}): {}",
+                           request->requestid(), snapshotID, cleanup.RawMessage());
+            }
+        }
         auto response = InitDeployInstanceResponse(
             static_cast<int32_t>(status.StatusCode()), status.RawMessage(), *request);
         (void)Send(localSchedFuncAgentMgrAID_, "DeployInstanceResponse", response.SerializeAsString());

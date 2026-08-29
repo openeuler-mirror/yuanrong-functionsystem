@@ -96,6 +96,47 @@ TEST_F(LocalSnapshotStoreTest, CommitsOpaqueCheckpointWithoutSidecarManifest)
     EXPECT_FALSE(fs::exists(root_ / "checkpoint-a" / "snapshot.meta"));
 }
 
+TEST_F(LocalSnapshotStoreTest, AtomicallyCommitsAndDeletesOpaqueMultiFileDirectory)
+{
+    const auto request = Request("runsc-checkpoint");
+    const auto prepared = store_->Prepare(request);
+    ASSERT_TRUE(prepared.status.IsOk()) << prepared.status.ToString();
+    EXPECT_EQ(prepared.directory.filename(), ".runsc-checkpoint.staging");
+    EXPECT_FALSE(fs::exists(root_ / "runsc-checkpoint"));
+
+    Write(prepared.directory / "checkpoint.img", "state");
+    Write(prepared.directory / "pages_meta.img", "metadata");
+    Write(prepared.directory / "pages.img", "pages");
+    fs::create_directories(prepared.directory / "nested");
+    Write(prepared.directory / "nested" / "runtime.img", "nested-state");
+
+    const auto committed = store_->Commit(request);
+    ASSERT_TRUE(committed.status.IsOk()) << committed.status.ToString();
+    EXPECT_EQ(committed.descriptor.size, 5U + 8U + 5U + 12U);
+    EXPECT_FALSE(fs::exists(prepared.directory));
+    EXPECT_TRUE(fs::is_regular_file(root_ / "runsc-checkpoint" / "pages.img"));
+    EXPECT_TRUE(fs::is_regular_file(root_ / "runsc-checkpoint" / "nested" / "runtime.img"));
+
+    ASSERT_TRUE(store_->Delete({"runsc-checkpoint"}).IsOk());
+    EXPECT_FALSE(fs::exists(root_ / "runsc-checkpoint"));
+}
+
+TEST_F(LocalSnapshotStoreTest, RejectsUnknownNonRegularEntryAnywhereInDirectory)
+{
+    const auto request = Request("checkpoint-link");
+    const auto prepared = store_->Prepare(request);
+    ASSERT_TRUE(prepared.status.IsOk());
+    Write(prepared.directory / "checkpoint.img", "payload");
+    Write(root_ / "outside.img", "outside");
+    fs::create_directories(prepared.directory / "nested");
+    fs::create_symlink(root_ / "outside.img", prepared.directory / "nested" / "pages.img");
+
+    EXPECT_EQ(store_->Commit(request).status.StatusCode(), StatusCode::ERR_PARAM_INVALID);
+    ASSERT_TRUE(store_->DiscardStaging(request.snapshotID).IsOk());
+    EXPECT_FALSE(fs::exists(prepared.directory));
+    EXPECT_TRUE(fs::is_regular_file(root_ / "outside.img"));
+}
+
 TEST_F(LocalSnapshotStoreTest, ExistingRegularCheckpointIsAnIdempotentReplay)
 {
     Commit("checkpoint-a", "payload");

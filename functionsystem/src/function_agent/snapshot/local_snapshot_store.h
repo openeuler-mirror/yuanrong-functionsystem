@@ -19,8 +19,8 @@
 
 namespace functionsystem::function_agent {
 
-// Process-local artifact index. checkpoint.img is an opaque sandboxd artifact;
-// FunctionAgent does not create a second manifest or validate runtime format.
+// Process-local artifact index. The committed checkpoint directory is an
+// opaque sandboxd artifact; FunctionAgent never assumes file names or count.
 struct LocalSnapshotDescriptor {
     std::string snapshotID;
     bool recoveryCandidate{ false };
@@ -74,15 +74,18 @@ public:
     Status PinForRestore(const std::string &snapshotID);
     Status UnpinAfterRestore(const std::string &snapshotID, bool evictAfterRelease);
     Status EvictLocalArtifact(const std::string &snapshotID);
+    Status DiscardStaging(const std::string &snapshotID);
     Status DeleteRecoveryCandidatesForInstance(const std::string &instanceID);
     Status Delete(const LocalSnapshotDeleteIdentity &identity);
 
 private:
     Status ValidateCommitRequest(const LocalSnapshotCommitRequest &request) const;
     std::filesystem::path SnapshotDirectory(const std::string &snapshotID) const;
+    std::filesystem::path StagingDirectory(const std::string &snapshotID) const;
     Status InspectArtifact(const std::filesystem::path &directory, uint64_t &size) const;
     void Touch(const std::string &snapshotID);
     void EvictIfNeeded(const std::string &protectedSnapshotID);
+    Status DeleteDirectoryUnlocked(const std::filesystem::path &directory);
     Status DeleteUnlocked(const std::string &snapshotID);
 
     std::filesystem::path checkpointRoot_;

@@ -70,12 +70,14 @@ ResumeIdentityTrust SetStartRuntimeInstanceRequestConfig(
 litebus::Future<Status> MaterializeTrustedResumeCheckpoint(
     const std::shared_ptr<snapshot_storage::SnapshotStorage> &snapshotStorage,
     const std::filesystem::path &checkpointRoot,
+    const std::filesystem::path &destinationDirectory,
     const std::shared_ptr<ActorWorker> &snapshotWorker,
     const std::shared_ptr<messages::StartInstanceRequest> &startInstanceRequest);
 
 litebus::Future<Status> MaterializeReusableSnapshotCheckpoint(
     const std::shared_ptr<snapshot_storage::SnapshotStorage> &snapshotStorage,
     const std::filesystem::path &checkpointRoot,
+    const std::filesystem::path &destinationDirectory,
     const std::shared_ptr<ActorWorker> &snapshotWorker,
     const std::shared_ptr<messages::StartInstanceRequest> &startInstanceRequest);
 

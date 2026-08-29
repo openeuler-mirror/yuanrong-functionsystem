@@ -173,6 +173,7 @@ Status ValidateImmutableSnapshotMetadata(
 litebus::Future<Status> MaterializeImmutableSnapshotArtifact(
     const std::shared_ptr<snapshot_storage::SnapshotStorage> &snapshotStorage,
     const std::filesystem::path &checkpointRoot,
+    const std::filesystem::path &destinationDirectory,
     const std::shared_ptr<ActorWorker> &snapshotWorker,
     const std::shared_ptr<messages::StartInstanceRequest> &startInstanceRequest,
     ImmutableSnapshotMaterializationKind kind)
@@ -213,22 +214,31 @@ litebus::Future<Status> MaterializeImmutableSnapshotArtifact(
                                 "local materialization snapshot identity is invalid"));
         return result->GetFuture();
     }
-    const auto directoryPath = (root / spec.snapshotID).lexically_normal();
-    if (directoryPath.parent_path() != root) {
+    const auto directoryPath = destinationDirectory.lexically_normal();
+    if (!directoryPath.is_absolute() || directoryPath.parent_path() != root
+        || !snapshot_storage::detail::IsSafeLeafName(directoryPath.filename().string())) {
         result->SetValue(Status(StatusCode::ERR_PARAM_INVALID,
                                 "local materialization directory escapes checkpoint root"));
         return result->GetFuture();
     }
     snapshot_storage::detail::SecureDirectory directory;
-    const auto opened = snapshot_storage::detail::SecureDirectory::Open(directoryPath, true, directory);
+    const auto opened = snapshot_storage::detail::SecureDirectory::Open(directoryPath, false, directory);
     if (opened.IsError()) {
         result->SetValue(opened);
         return result->GetFuture();
     }
-    const auto checkpointPath = directoryPath / "checkpoint.img";
+    std::error_code directoryError;
+    if (!std::filesystem::is_empty(directoryPath, directoryError) || directoryError) {
+        result->SetValue(Status(StatusCode::SCHEDULE_CONFLICTED,
+                                "local materialization staging directory is not empty"));
+        return result->GetFuture();
+    }
+    const auto bundleName = "." + spec.snapshotID + "."
+        + resume_identity::Sha256Hex(spec.attemptID).substr(0, 16) + ".bundle";
+    const auto bundlePath = root / bundleName;
 
     snapshotStorage->Stat(spec.objectKey).OnComplete(
-        [snapshotStorage, result, checkpointPath, spec](
+        [snapshotStorage, snapshotWorker, result, bundlePath, directoryPath, spec](
             const litebus::Future<snapshot_storage::SnapshotStat> &statFuture) {
             if (statFuture.IsError() || statFuture.Get().status.IsError()) {
                 const auto message = IsPauseResume(spec)
@@ -245,8 +255,26 @@ litebus::Future<Status> MaterializeImmutableSnapshotArtifact(
                 result->SetValue(metadataStatus);
                 return;
             }
+            auto materialize = [snapshotWorker, result, bundlePath, directoryPath](
+                                   const snapshot_storage::SnapshotObjectMetadata &expected) {
+                const auto validation = snapshot_storage::detail::ValidateFile(bundlePath.string(), expected);
+                if (validation.IsError()) {
+                    result->SetValue(validation);
+                    return;
+                }
+                snapshot_storage::MaterializeSnapshotPublicationDirectory(
+                    snapshotWorker, bundlePath.string(), directoryPath)
+                    .OnComplete([result, bundlePath](const litebus::Future<Status> &future) {
+                        std::error_code ignored;
+                        std::filesystem::remove(bundlePath, ignored);
+                        result->SetValue(future.IsError()
+                            ? Status(StatusCode::ERR_INNER_COMMUNICATION,
+                                     "snapshot directory materialization future failed")
+                            : future.Get());
+                    });
+            };
             std::error_code error;
-            const auto existing = std::filesystem::symlink_status(checkpointPath, error);
+            const auto existing = std::filesystem::symlink_status(bundlePath, error);
             if (!error && std::filesystem::exists(existing)) {
                 if (!std::filesystem::is_regular_file(existing)) {
                     const auto message = IsPauseResume(spec)
@@ -256,12 +284,12 @@ litebus::Future<Status> MaterializeImmutableSnapshotArtifact(
                     return;
                 }
                 const auto validation = snapshot_storage::detail::ValidateFile(
-                    checkpointPath.string(), metadata);
+                    bundlePath.string(), metadata);
                 if (validation.IsOk()) {
-                    result->SetValue(Status::OK());
+                    materialize(metadata);
                     return;
                 }
-                std::filesystem::remove(checkpointPath, error);
+                std::filesystem::remove(bundlePath, error);
                 if (error) {
                     const auto message = IsPauseResume(spec)
                         ? "failed to remove invalid trusted resume attempt"
@@ -276,14 +304,8 @@ litebus::Future<Status> MaterializeImmutableSnapshotArtifact(
                 result->SetValue(Status(StatusCode::FAILED, message));
                 return;
             }
-            auto target = std::make_shared<snapshot_storage::detail::SecureDownloadTarget>();
-            const auto prepared = target->Prepare(checkpointPath.string());
-            if (prepared.IsError()) {
-                result->SetValue(prepared);
-                return;
-            }
-            snapshotStorage->Get(spec.objectKey, target->StagingPath())
-                .OnComplete([result, target, metadata, spec](const litebus::Future<Status> &getFuture) {
+            snapshotStorage->Get(spec.objectKey, bundlePath.string())
+                .OnComplete([result, metadata, spec, materialize](const litebus::Future<Status> &getFuture) {
                     if (getFuture.IsError() || getFuture.Get().IsError()) {
                         const auto message = IsPauseResume(spec)
                             ? "trusted resume Get future failed"
@@ -293,7 +315,7 @@ litebus::Future<Status> MaterializeImmutableSnapshotArtifact(
                             : getFuture.Get());
                         return;
                     }
-                    result->SetValue(target->Commit(metadata));
+                    materialize(metadata);
                 });
         });
     return result->GetFuture();
@@ -304,22 +326,24 @@ litebus::Future<Status> MaterializeImmutableSnapshotArtifact(
 litebus::Future<Status> MaterializeTrustedResumeCheckpoint(
     const std::shared_ptr<snapshot_storage::SnapshotStorage> &snapshotStorage,
     const std::filesystem::path &checkpointRoot,
+    const std::filesystem::path &destinationDirectory,
     const std::shared_ptr<ActorWorker> &snapshotWorker,
     const std::shared_ptr<messages::StartInstanceRequest> &startInstanceRequest)
 {
     return MaterializeImmutableSnapshotArtifact(
-        snapshotStorage, checkpointRoot, snapshotWorker, startInstanceRequest,
+        snapshotStorage, checkpointRoot, destinationDirectory, snapshotWorker, startInstanceRequest,
         ImmutableSnapshotMaterializationKind::PAUSE_RESUME);
 }
 
 litebus::Future<Status> MaterializeReusableSnapshotCheckpoint(
     const std::shared_ptr<snapshot_storage::SnapshotStorage> &snapshotStorage,
     const std::filesystem::path &checkpointRoot,
+    const std::filesystem::path &destinationDirectory,
     const std::shared_ptr<ActorWorker> &snapshotWorker,
     const std::shared_ptr<messages::StartInstanceRequest> &startInstanceRequest)
 {
     return MaterializeImmutableSnapshotArtifact(
-        snapshotStorage, checkpointRoot, snapshotWorker, startInstanceRequest,
+        snapshotStorage, checkpointRoot, destinationDirectory, snapshotWorker, startInstanceRequest,
         ImmutableSnapshotMaterializationKind::REUSABLE);
 }
 

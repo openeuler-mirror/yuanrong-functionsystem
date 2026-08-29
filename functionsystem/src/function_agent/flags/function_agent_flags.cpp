@@ -96,7 +96,7 @@ FunctionAgentFlags::FunctionAgentFlags()
     AddFlag(&FunctionAgentFlags::snapshotObsPathStyle_, "snapshot_obs_path_style",
             "use path-style addressing for snapshot OBS storage", false);
     AddFlag(&FunctionAgentFlags::checkpointDir_, "checkpoint_dir",
-            "base directory for checkpoint file storage", "");
+            "base directory for checkpoint artifact storage", "");
 }
 
 FunctionAgentFlags::~FunctionAgentFlags() = default;
