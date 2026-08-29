@@ -90,8 +90,6 @@ CommonFlags::CommonFlags()
             -1);
     AddFlag(&CommonFlags::enableFakeSuspendResume_, "enable_fake_suspend_resume",
             "enable fake suspend resume: resume by sending to original owner proxy instead of rescheduling", false);
-    AddFlag(&CommonFlags::enableSandboxPauseResume_, "enable_sandbox_pause_resume",
-            "enable sandbox pause and resume", false);
     InitMetaHealthyCheckFlag();
     InitMetricsFlag();
     InitTraceFlag();
