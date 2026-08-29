@@ -89,6 +89,8 @@ public:
                 (const resource_view::InstanceInfo &identity), (override));
     MOCK_METHOD(litebus::Future<Status>, RecoverPauseGate,
                 (const resource_view::InstanceInfo &identity), (override));
+    MOCK_METHOD(litebus::Future<bool>, IsPauseRuntimeFenced,
+                (const std::string &instanceID, const std::string &runtimeID), (override));
     MOCK_METHOD(litebus::Future<Status>, ReleaseRuntimeForPause,
                 (const resource_view::InstanceInfo &instanceInfo, const std::string &snapshotID), (override));
     MOCK_METHOD(litebus::Future<Status>, ReleasePausedInstanceResources,

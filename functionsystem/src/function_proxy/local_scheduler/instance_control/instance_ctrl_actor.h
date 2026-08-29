@@ -494,6 +494,8 @@ public:
 
     litebus::Future<Status> RecoverPauseGate(const InstanceInfo &identity);
 
+    bool IsPauseRuntimeFenced(const std::string &instanceID, const std::string &runtimeID);
+
     litebus::Future<Status> ShutDownInstance(const InstanceInfo &instanceInfo, uint32_t shutdownTimeoutSec);
 
     void SetAbnormal();

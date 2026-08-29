@@ -502,7 +502,8 @@ Status LocalSnapshotStore::Delete(const LocalSnapshotDeleteIdentity &identity)
     }
     if (const auto pin = restorePins_.find(identity.snapshotID);
         pin != restorePins_.end() && pin->second > 0) {
-        return Status(StatusCode::ERR_INSTANCE_BUSY, "restore artifact is pinned");
+        evictAfterUnpin_.insert(identity.snapshotID);
+        return Status::OK();
     }
     return DeleteUnlocked(identity.snapshotID);
 }

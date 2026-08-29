@@ -60,6 +60,16 @@ static const std::string RUNTIME_MICROSERVICE_AZ_ENV = "RUNTIME_MICROSERVICE_AZ"
 
 static const std::string INSTANCE_AZ = "az";
 
+static bool IsRuntimeStopConfirmed(int32_t code)
+{
+    const auto status = static_cast<StatusCode>(code);
+    return status == StatusCode::SUCCESS
+        || status == StatusCode::GRPC_NOT_FOUND
+        || status == StatusCode::ERR_INSTANCE_NOT_FOUND
+        || status == StatusCode::RUNTIME_MANAGER_RUNTIME_PROCESS_NOT_FOUND
+        || status == StatusCode::RUNTIME_MANAGER_RUNTIME_NOT_FOUND;
+}
+
 static void EnsureResourceUnitArchitecture(resources::ResourceUnit &resourceUnit)
 {
     if (!resourceUnit.systeminfo().architecture().empty()) {
@@ -1003,7 +1013,11 @@ void AgentServiceActor::CompleteStartInstanceResponse(
     const bool restoreResultUnknown = startInstanceResponse.code() != 0
         && request->second.trustedResume
         && resume_identity::IsResultUnknownStatusCode(startInstanceResponse.code());
-    if (!restoreResultUnknown) {
+    if (startInstanceResponse.code() == 0) {
+        PromoteRestoreSnapshotPin(
+            startInstanceResponse.requestid(),
+            startInstanceResponse.startruntimeinstanceresponse().runtimeid());
+    } else if (!restoreResultUnknown) {
         ReleaseRestoreSnapshotPin(startInstanceResponse.requestid());
     }
 
@@ -1020,6 +1034,12 @@ void AgentServiceActor::StopInstanceResponse(const litebus::AID &from, std::stri
     auto requestID = stopInstanceResponse.requestid();
     auto runtimeID = stopInstanceResponse.runtimeid();
     YRLOG_INFO("{}|received StopInstance response from {}, runtimeID: {}", requestID, std::string(from), runtimeID);
+
+    const auto expectedRuntimeManager = litebus::AID(
+        registerRuntimeMgr_.name, registerRuntimeMgr_.address);
+    if (from == expectedRuntimeManager && IsRuntimeStopConfirmed(stopInstanceResponse.code())) {
+        ReleaseRuntimeRestoreSnapshotPin(runtimeID);
+    }
 
     if (HandleSnapshotFinalizeStopInstanceResponse(from, stopInstanceResponse)) {
         return;
@@ -1125,12 +1145,7 @@ bool AgentServiceActor::HandleSnapshotFinalizeStopInstanceResponse(
 
     auto context = std::move(finalize->second);
     snapshotRuntimeFinalizations_.erase(finalize);
-    const auto code = static_cast<StatusCode>(response.code());
-    const bool stopConfirmed = code == StatusCode::SUCCESS
-        || code == StatusCode::GRPC_NOT_FOUND
-        || code == StatusCode::ERR_INSTANCE_NOT_FOUND
-        || code == StatusCode::RUNTIME_MANAGER_RUNTIME_PROCESS_NOT_FOUND
-        || code == StatusCode::RUNTIME_MANAGER_RUNTIME_NOT_FOUND;
+    const bool stopConfirmed = IsRuntimeStopConfirmed(response.code());
     if (!stopConfirmed) {
         SendSnapshotAttemptFinalizeResponse(
             context.caller, context.request.attemptid(), response.code(), response.message(),
@@ -1484,6 +1499,69 @@ void AgentServiceActor::ReleaseRestoreSnapshotPin(const std::string &requestID)
         YRLOG_WARN("{}|failed to release restore snapshot pin({}): {}",
                    requestID, snapshotID, status.RawMessage());
     }
+}
+
+void AgentServiceActor::PromoteRestoreSnapshotPin(
+    const std::string &requestID, const std::string &runtimeID)
+{
+    const auto requestPin = restoreSnapshotPins_.find(requestID);
+    if (requestPin == restoreSnapshotPins_.end()) {
+        return;
+    }
+    if (runtimeID.empty()) {
+        YRLOG_ERROR("{}|restore succeeded without a runtime ID; retain request pin({})",
+                    requestID, requestPin->second);
+        return;
+    }
+    const auto snapshotID = requestPin->second;
+    const auto runtimePin = runtimeRestoreSnapshotPins_.find(runtimeID);
+    if (runtimePin == runtimeRestoreSnapshotPins_.end()) {
+        runtimeRestoreSnapshotPins_[runtimeID] = snapshotID;
+        restoreSnapshotPins_.erase(requestPin);
+        YRLOG_INFO("{}|promote restore snapshot pin({}) to runtime({}) lifecycle",
+                   requestID, snapshotID, runtimeID);
+        return;
+    }
+    if (runtimePin->second != snapshotID) {
+        YRLOG_ERROR("{}|runtime({}) is already pinned to a different snapshot({}); "
+                    "retain request pin({})",
+                    requestID, runtimeID, runtimePin->second, snapshotID);
+        return;
+    }
+
+    // A replay with a new request ID acquired one additional restore pin. The
+    // existing runtime pin already owns the artifact lifecycle, so release only
+    // the duplicate reference.
+    restoreSnapshotPins_.erase(requestPin);
+    if (localSnapshotStore_ != nullptr) {
+        const auto status = localSnapshotStore_->UnpinAfterRestore(snapshotID, false);
+        if (status.IsError()) {
+            YRLOG_WARN("{}|failed to release duplicate restore snapshot pin({}): {}",
+                       requestID, snapshotID, status.RawMessage());
+        }
+    }
+}
+
+void AgentServiceActor::ReleaseRuntimeRestoreSnapshotPin(const std::string &runtimeID)
+{
+    const auto runtimePin = runtimeRestoreSnapshotPins_.find(runtimeID);
+    if (runtimePin == runtimeRestoreSnapshotPins_.end()) {
+        return;
+    }
+    const auto snapshotID = runtimePin->second;
+    runtimeRestoreSnapshotPins_.erase(runtimePin);
+    if (localSnapshotStore_ == nullptr) {
+        return;
+    }
+    const auto status = localSnapshotStore_->UnpinAfterRestore(
+        snapshotID, !KeepsLocalSnapshot(snapshotStorageMode_));
+    if (status.IsError()) {
+        YRLOG_WARN("runtime({})|failed to release lifecycle snapshot pin({}): {}",
+                   runtimeID, snapshotID, status.RawMessage());
+        return;
+    }
+    YRLOG_INFO("runtime({})|released lifecycle snapshot pin({})",
+               runtimeID, snapshotID);
 }
 
 litebus::Future<Status> AgentServiceActor::MaterializeRemoteSnapshot(

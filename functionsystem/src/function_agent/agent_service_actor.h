@@ -694,6 +694,7 @@ private:
     std::shared_ptr<LocalSnapshotStore> localSnapshotStore_;
     std::unordered_map<std::string, litebus::Future<Status>> snapshotMaterializations_;
     std::unordered_map<std::string, std::string> restoreSnapshotPins_;
+    std::unordered_map<std::string, std::string> runtimeRestoreSnapshotPins_;
     std::unordered_map<std::string, SnapshotRuntimeFinalizeContext> snapshotRuntimeFinalizations_;
 
     bool HandleSnapshotFinalizeStopInstanceResponse(
@@ -707,6 +708,8 @@ private:
         size_t remoteKeyIndex, const litebus::Future<Status> &future);
     void ForwardSnapshotRuntimeRequest(const std::string &requestID);
     void ReleaseRestoreSnapshotPin(const std::string &requestID);
+    void PromoteRestoreSnapshotPin(const std::string &requestID, const std::string &runtimeID);
+    void ReleaseRuntimeRestoreSnapshotPin(const std::string &runtimeID);
     void ContinueSnapshotAfterLocalCommit(
         const std::string &requestID, ::messages::SnapshotRuntimeResponse response,
         bool publishRequested = false);

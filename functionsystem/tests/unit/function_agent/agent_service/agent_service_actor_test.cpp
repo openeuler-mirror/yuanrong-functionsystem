@@ -19,9 +19,11 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <vector>
 
 #include "agent_service_test_actor.h"
 #include "common/constants/actor_name.h"
@@ -1000,6 +1002,46 @@ TEST_F(AgentServiceActorTest, RestoreSnapshotIDIsValidatedBeforeRuntimeManager)
     ASSERT_TRUE(request.ParseFromString(forwarded.Get()));
     EXPECT_EQ(request.runtimeinstanceinfo().restoresnapshotid(), "anon-restore");
     std::filesystem::remove_all(checkpointRoot);
+}
+
+TEST_F(AgentServiceActorTest, RestoreSnapshotPinLivesUntilRuntimeLifecycleEnds)
+{
+    auto pattern = (std::filesystem::temp_directory_path()
+                    / "runtime-restore-pin-test-XXXXXX").string();
+    std::vector<char> buffer(pattern.begin(), pattern.end());
+    buffer.push_back('\0');
+    const auto *rootDirectory = mkdtemp(buffer.data());
+    ASSERT_NE(rootDirectory, nullptr);
+    const std::filesystem::path root(rootDirectory);
+
+    dstActor_->snapshotStorageMode_ = function_agent::SnapshotStorageMode::DISTRIBUTED_CACHE;
+    dstActor_->localSnapshotStore_ =
+        std::make_shared<function_agent::LocalSnapshotStore>(root, 1);
+    function_agent::LocalSnapshotCommitRequest commit;
+    commit.snapshotID = "runtime-pinned-snapshot";
+    commit.instanceID = TEST_INSTANCE_ID;
+    commit.createdAtUnixSeconds = 1787670000;
+    const auto prepared = dstActor_->localSnapshotStore_->Prepare(commit);
+    ASSERT_TRUE(prepared.status.IsOk()) << prepared.status.ToString();
+    std::ofstream checkpoint(prepared.directory / "checkpoint.img", std::ios::binary);
+    checkpoint << "runtime-pinned-payload";
+    checkpoint.close();
+    ASSERT_TRUE(dstActor_->localSnapshotStore_->Commit(commit).status.IsOk());
+    ASSERT_TRUE(dstActor_->localSnapshotStore_->PinForRestore(commit.snapshotID).IsOk());
+
+    dstActor_->restoreSnapshotPins_["restore-request"] = commit.snapshotID;
+    dstActor_->PromoteRestoreSnapshotPin("restore-request", "runtime-restored");
+
+    EXPECT_EQ(dstActor_->restoreSnapshotPins_.count("restore-request"), 0U);
+    EXPECT_EQ(dstActor_->runtimeRestoreSnapshotPins_.at("runtime-restored"), commit.snapshotID);
+    EXPECT_TRUE(std::filesystem::exists(root / commit.snapshotID / "checkpoint.img"));
+
+    dstActor_->ReleaseRuntimeRestoreSnapshotPin("runtime-restored");
+
+    EXPECT_TRUE(dstActor_->runtimeRestoreSnapshotPins_.empty());
+    EXPECT_FALSE(std::filesystem::exists(root / commit.snapshotID));
+    std::error_code error;
+    std::filesystem::remove_all(root, error);
 }
 
 TEST_F(AgentServiceActorTest, ListLocalSnapshotsReturnsOnlyCommittedEntries)

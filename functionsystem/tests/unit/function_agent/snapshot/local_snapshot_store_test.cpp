@@ -202,13 +202,14 @@ TEST_F(LocalSnapshotStoreTest, DistributedOnlyEvictionWaitsForAllRestorePins)
     EXPECT_TRUE(store_->List().empty());
 }
 
-TEST_F(LocalSnapshotStoreTest, ExplicitDeleteReturnsBusyWhileRestoreIsPinned)
+TEST_F(LocalSnapshotStoreTest, ExplicitDeleteDefersUntilRestorePinIsReleased)
 {
     Commit("checkpoint-a", "payload");
     ASSERT_TRUE(store_->PinForRestore("checkpoint-a").IsOk());
-    EXPECT_EQ(store_->Delete({"checkpoint-a"}).StatusCode(), StatusCode::ERR_INSTANCE_BUSY);
-    ASSERT_TRUE(store_->UnpinAfterRestore("checkpoint-a", false).IsOk());
     EXPECT_TRUE(store_->Delete({"checkpoint-a"}).IsOk());
+    EXPECT_TRUE(fs::exists(root_ / "checkpoint-a"));
+    ASSERT_TRUE(store_->UnpinAfterRestore("checkpoint-a", false).IsOk());
+    EXPECT_FALSE(fs::exists(root_ / "checkpoint-a"));
 }
 
 TEST_F(LocalSnapshotStoreTest, InstanceCleanupDeletesOnlyOwnedRecoveryCandidates)

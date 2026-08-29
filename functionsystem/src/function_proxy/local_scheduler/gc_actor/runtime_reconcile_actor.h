@@ -108,6 +108,10 @@ private:
     void RecoverMissingRuntime(const std::string &instanceID,
                                const std::string &sourceRuntimeID);
 
+    void OnPauseRuntimeFenceChecked(const std::string &instanceID,
+                                    const std::string &sourceRuntimeID,
+                                    const litebus::Future<bool> &future);
+
     Status OnMissingRuntimeRecoveryDone(const std::string &instanceID,
                                         const litebus::Future<Status> &future);
 

@@ -284,6 +284,28 @@ void RuntimeReconcileActor::RecoverMissingRuntime(
         CleanGhostInstance(instanceID);
         return;
     }
+    instanceCtrl_->IsPauseRuntimeFenced(instanceID, sourceRuntimeID)
+        .OnComplete(litebus::Defer(
+            GetAID(), &RuntimeReconcileActor::OnPauseRuntimeFenceChecked,
+            instanceID, sourceRuntimeID, std::placeholders::_1));
+}
+
+void RuntimeReconcileActor::OnPauseRuntimeFenceChecked(
+    const std::string &instanceID, const std::string &sourceRuntimeID,
+    const litebus::Future<bool> &future)
+{
+    if (future.IsError()) {
+        YRLOG_WARN("RuntimeReconcileActor: pause fence query failed for missing instance {}; "
+                   "deferring ghost cleanup", instanceID);
+        (void)pendingGhostInstances_.insert(instanceID);
+        return;
+    }
+    if (future.Get()) {
+        YRLOG_INFO("RuntimeReconcileActor: missing runtime({}) for instance({}) is owned by an active pause gate; "
+                   "skip failover and ghost cleanup", sourceRuntimeID, instanceID);
+        (void)pendingGhostInstances_.erase(instanceID);
+        return;
+    }
     instanceCtrl_->TryLocalSnapshotFailover(instanceID, sourceRuntimeID)
         .OnComplete(litebus::Defer(
             GetAID(), &RuntimeReconcileActor::OnMissingRuntimeRecoveryDone,
@@ -340,16 +362,19 @@ Status RuntimeReconcileActor::OnForceDeleteComplete(const std::string &instanceI
 
 void RuntimeReconcileActor::RetryPendingGhosts()
 {
-    if (pendingGhostInstances_.empty() || instanceCtrl_ == nullptr) {
+    if (pendingGhostInstances_.empty() || instanceCtrl_ == nullptr || instanceControlView_ == nullptr) {
         return;
     }
     // Snapshot to avoid iterator invalidation across async callbacks.
     std::vector<std::string> snapshot(pendingGhostInstances_.begin(), pendingGhostInstances_.end());
     YRLOG_INFO("RuntimeReconcileActor: retrying {} pending ghost instances", snapshot.size());
     for (const auto &instanceID : snapshot) {
-        (void)instanceCtrl_->ForceDeleteInstance(instanceID)
-            .Then(litebus::Defer(GetAID(), &RuntimeReconcileActor::OnForceDeleteComplete, instanceID,
-                                 std::placeholders::_1));
+        const auto stateMachine = instanceControlView_->GetInstance(instanceID);
+        if (stateMachine == nullptr) {
+            (void)pendingGhostInstances_.erase(instanceID);
+            continue;
+        }
+        RecoverMissingRuntime(instanceID, stateMachine->GetInstanceInfo().runtimeid());
     }
 }
 

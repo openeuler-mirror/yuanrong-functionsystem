@@ -452,6 +452,12 @@ litebus::Future<Status> InstanceCtrl::RecoverPauseGate(const resource_view::Inst
     return litebus::Async(aid_, &InstanceCtrlActor::RecoverPauseGate, identity);
 }
 
+litebus::Future<bool> InstanceCtrl::IsPauseRuntimeFenced(
+    const std::string &instanceID, const std::string &runtimeID)
+{
+    return litebus::Async(aid_, &InstanceCtrlActor::IsPauseRuntimeFenced, instanceID, runtimeID);
+}
+
 void InstanceCtrl::RegisterClearGroupInstanceCallBack(ClearGroupInstanceCallBack callback)
 {
     return litebus::Async(aid_, &InstanceCtrlActor::RegisterClearGroupInstanceCallBack,

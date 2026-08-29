@@ -279,6 +279,9 @@ public:
 
     virtual litebus::Future<Status> RecoverPauseGate(const resource_view::InstanceInfo &identity);
 
+    virtual litebus::Future<bool> IsPauseRuntimeFenced(
+        const std::string &instanceID, const std::string &runtimeID);
+
     virtual litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> CreateInstanceClient(
         const std::string &instanceID, const std::string &runtimeID, const std::string &address)
     {
