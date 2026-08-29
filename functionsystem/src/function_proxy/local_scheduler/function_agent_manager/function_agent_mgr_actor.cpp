@@ -1874,8 +1874,22 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::Publis
     request.set_requestid(requestID);
     request.set_snapshotid(snapshotID);
     request.set_instanceid(instanceInfo.instanceid());
+    auto timeoutMs = DEFAULT_CHECKPOINT_TIMEOUT_MS;
+    if (const auto configured = instanceInfo.createoptions().find(CHECKPOINT_TIMEOUT_OPTION);
+        configured != instanceInfo.createoptions().end()) {
+        try {
+            timeoutMs = std::stoull(configured->second);
+        } catch (const std::exception &) {
+            timeoutMs = 0;
+        }
+    }
+    if (timeoutMs == 0 || timeoutMs > MAX_CHECKPOINT_TIMEOUT_MS) {
+        error.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
+        error.set_message("checkpoint timeout must be between 1 and 3600000 milliseconds");
+        return error;
+    }
     auto future = publishSnapshotSync_.AddSynchronizer(
-        requestID, static_cast<uint32_t>(snapshotRuntimeTimeout_));
+        requestID, static_cast<uint32_t>(timeoutMs));
     publishSnapshotExpectedAgent_[requestID] = agent->second.aid;
     Send(agent->second.aid, "PublishSnapshotArtifact", request.SerializeAsString());
     return future;
