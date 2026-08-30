@@ -29,6 +29,7 @@
 #include "common/constants/actor_name.h"
 #include "common/logs/logging.h"
 #include "common/metadata/metadata.h"
+#include "common/snapshot_storage/snapshot_storage.h"
 #define private public  // only for test
 #include "common/metrics/metrics_adapter.h"
 #undef private  // reset
@@ -247,14 +248,38 @@ namespace {
         return start;
     }
 
+    std::string BuildDirectoryPublicationPayload(const std::string &payload)
+    {
+        const auto identity = resume_identity::Sha256Hex(payload).substr(0, 16);
+        const auto root = std::filesystem::temp_directory_path()
+            / ("agent-materialization-publication-" + identity);
+        std::filesystem::remove_all(root);
+        std::filesystem::create_directories(root / "checkpoint");
+        std::ofstream checkpoint(root / "checkpoint" / "checkpoint.img", std::ios::binary);
+        checkpoint << payload;
+        checkpoint.close();
+        EXPECT_TRUE(checkpoint.good());
+        const auto prepared = snapshot_storage::PrepareSnapshotPublicationFile(
+            std::make_shared<ActorWorker>(), (root / "checkpoint").string(), false).Get();
+        EXPECT_TRUE(prepared.status.IsOk()) << prepared.status.ToString();
+        if (prepared.status.IsError()) {
+            std::filesystem::remove_all(root);
+            return {};
+        }
+        auto publicationPayload = ReadTestFile(prepared.path);
+        std::filesystem::remove(prepared.path);
+        std::filesystem::remove_all(root);
+        return publicationPayload;
+    }
+
     void ServeMaterializationObject(const std::shared_ptr<CountingSnapshotStorage> &storage,
                                     const std::string &snapshotID, const std::string &payload)
     {
         storage->serveObject = true;
-        storage->objectPayload = payload;
+        storage->objectPayload = BuildDirectoryPublicationPayload(payload);
         storage->objectMetadata.snapshotID = snapshotID;
-        storage->objectMetadata.size = payload.size();
-        storage->objectMetadata.sha256 = resume_identity::Sha256Hex(payload);
+        storage->objectMetadata.size = storage->objectPayload.size();
+        storage->objectMetadata.sha256 = resume_identity::Sha256Hex(storage->objectPayload);
         storage->objectMetadata.complete = true;
     }
 
@@ -304,10 +329,9 @@ namespace {
     }
 
     function_agent::LocalSnapshotDescriptor CommitTestLocalSnapshot(
-        const std::filesystem::path &root, const std::string &snapshotID,
+        function_agent::LocalSnapshotStore &store, const std::string &snapshotID,
         const std::string &payload = "local-snapshot-payload")
     {
-        function_agent::LocalSnapshotStore store(root);
         function_agent::LocalSnapshotCommitRequest request;
         request.snapshotID = snapshotID;
         request.recoveryCandidate = true;
@@ -355,12 +379,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, MaterializesFrozenArtifactAtFlatSn
     const std::filesystem::path checkpointRoot = "/tmp/agent-reusable-clone-materialize";
     std::filesystem::remove_all(checkpointRoot);
     auto storage = std::make_shared<CountingSnapshotStorage>();
-    storage->serveObject = true;
-    storage->objectPayload = payload;
-    storage->objectMetadata.snapshotID = "snapshot-42";
-    storage->objectMetadata.size = payload.size();
-    storage->objectMetadata.sha256 = resume_identity::Sha256Hex(payload);
-    storage->objectMetadata.complete = true;
+    ServeMaterializationObject(storage, "snapshot-42", payload);
 
     auto start = std::make_shared<messages::StartInstanceRequest>();
     auto *info = start->mutable_runtimeinstanceinfo();
@@ -373,7 +392,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, MaterializesFrozenArtifactAtFlatSn
     restore->mutable_artifact()->set_storagebackend("datasystem");
     restore->mutable_artifact()->set_objectkey(
         "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
-    restore->mutable_artifact()->set_size(payload.size());
+    restore->mutable_artifact()->set_size(storage->objectMetadata.size);
     restore->mutable_artifact()->set_sha256(storage->objectMetadata.sha256);
     restore->mutable_artifact()->set_format("sandboxd-checkpoint");
     restore->mutable_artifact()->set_formatversion(1);
@@ -399,7 +418,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, PauseMaterializationUsesPauseKeyAn
     auto storage = std::make_shared<CountingSnapshotStorage>();
     ServeMaterializationObject(storage, "pause-snapshot-17", payload);
     storage->objectMetadata.sourceInstanceVersion = 17;
-    auto start = MakePauseMaterializationRequest(payload);
+    auto start = MakePauseMaterializationRequest(storage->objectPayload);
 
     auto future = function_agent::MaterializeTrustedResumeCheckpoint(
         storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
@@ -414,6 +433,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, PauseMaterializationUsesPauseKeyAn
     storage = std::make_shared<CountingSnapshotStorage>();
     ServeMaterializationObject(storage, "pause-snapshot-17", payload);
     storage->objectMetadata.sourceInstanceVersion = 16;
+    start = MakePauseMaterializationRequest(storage->objectPayload);
     future = function_agent::MaterializeTrustedResumeCheckpoint(
         storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
     ASSERT_AWAIT_READY_FOR(future, 5'000);
@@ -430,7 +450,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, ReusableMaterializationUsesFrozenK
     std::filesystem::remove_all(checkpointRoot);
     auto storage = std::make_shared<CountingSnapshotStorage>();
     ServeMaterializationObject(storage, "snapshot-42", payload);
-    auto start = MakeReusableMaterializationRequest(payload, frozenKey);
+    auto start = MakeReusableMaterializationRequest(storage->objectPayload, frozenKey);
 
     auto future = function_agent::MaterializeReusableSnapshotCheckpoint(
         storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
@@ -443,6 +463,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, ReusableMaterializationUsesFrozenK
     storage = std::make_shared<CountingSnapshotStorage>();
     ServeMaterializationObject(storage, "snapshot-42", payload);
     storage->objectMetadata.expiresAtUnixSeconds = 123456789;
+    start = MakeReusableMaterializationRequest(storage->objectPayload, frozenKey);
     future = function_agent::MaterializeReusableSnapshotCheckpoint(
         storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
     ASSERT_AWAIT_READY_FOR(future, 5'000);
@@ -458,7 +479,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, MaterializationDoesNotMutateCommit
     std::filesystem::remove_all(checkpointRoot);
     auto storage = std::make_shared<CountingSnapshotStorage>();
     ServeMaterializationObject(storage, "snapshot-42", payload);
-    auto start = MakeReusableMaterializationRequest(payload);
+    auto start = MakeReusableMaterializationRequest(storage->objectPayload);
     const auto checkpointPath = checkpointRoot / "snapshot-42" / "checkpoint.img";
     ASSERT_TRUE(std::filesystem::create_directories(checkpointPath.parent_path()));
     std::ofstream(checkpointPath, std::ios::binary) << payload;
@@ -480,7 +501,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, MaterializationLeavesExistingCommi
     std::filesystem::remove_all(checkpointRoot);
     auto storage = std::make_shared<CountingSnapshotStorage>();
     ServeMaterializationObject(storage, "snapshot-42", payload);
-    auto start = MakeReusableMaterializationRequest(payload);
+    auto start = MakeReusableMaterializationRequest(storage->objectPayload);
     const auto checkpointPath = checkpointRoot / "snapshot-42" / "checkpoint.img";
     ASSERT_TRUE(std::filesystem::create_directories(checkpointPath.parent_path()));
     std::ofstream(checkpointPath, std::ios::binary) << "invalid";
@@ -504,7 +525,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, MaterializationDoesNotFollowCommit
     std::ofstream(outside, std::ios::binary) << "outside";
     auto storage = std::make_shared<CountingSnapshotStorage>();
     ServeMaterializationObject(storage, "snapshot-42", payload);
-    auto start = MakeReusableMaterializationRequest(payload);
+    auto start = MakeReusableMaterializationRequest(storage->objectPayload);
     const auto checkpointPath = checkpointRoot / "snapshot-42" / "checkpoint.img";
     ASSERT_TRUE(std::filesystem::create_directories(checkpointPath.parent_path()));
     std::filesystem::create_symlink(outside, checkpointPath);
@@ -539,6 +560,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, StatGetAndCommitFailuresRemainErro
 
     storage = std::make_shared<CountingSnapshotStorage>();
     ServeMaterializationObject(storage, "snapshot-42", payload);
+    start = MakeReusableMaterializationRequest(storage->objectPayload);
     storage->getStatus = Status(StatusCode::FAILED, "injected Get failure");
     future = function_agent::MaterializeReusableSnapshotCheckpoint(
         storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
@@ -547,6 +569,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, StatGetAndCommitFailuresRemainErro
 
     storage = std::make_shared<CountingSnapshotStorage>();
     ServeMaterializationObject(storage, "snapshot-42", payload);
+    start = MakeReusableMaterializationRequest(storage->objectPayload);
     storage->objectPayload = std::string(payload.size(), 'x');
     future = function_agent::MaterializeReusableSnapshotCheckpoint(
         storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
@@ -763,13 +786,10 @@ TEST_F(AgentServiceActorTest, ReusableCreateRetainsFlatSnapshotAcrossUnknownRepl
     std::filesystem::remove_all(checkpointRoot);
 
     auto storage = std::make_shared<CountingSnapshotStorage>();
-    storage->serveObject = true;
-    storage->objectPayload = payload;
-    storage->objectMetadata.snapshotID = snapshotID;
-    storage->objectMetadata.size = payload.size();
-    storage->objectMetadata.sha256 = resume_identity::Sha256Hex(payload);
-    storage->objectMetadata.complete = true;
-    dstActor_->BindSnapshotDataPlane(storage, checkpointRoot.string(), "datasystem");
+    ServeMaterializationObject(storage, snapshotID, payload);
+    dstActor_->BindSnapshotDataPlane(
+        storage, checkpointRoot.string(), "datasystem",
+        function_agent::SnapshotStorageMode::DISTRIBUTED_CACHE);
 
     auto deploy = std::make_unique<messages::DeployInstanceRequest>();
     deploy->set_requestid(requestID);
@@ -784,7 +804,7 @@ TEST_F(AgentServiceActorTest, ReusableCreateRetainsFlatSnapshotAcrossUnknownRepl
     restore->mutable_artifact()->set_storagebackend("datasystem");
     restore->mutable_artifact()->set_objectkey(
         "reusable/v1/tenant-hash/" + snapshotID + "/checkpoint.img");
-    restore->mutable_artifact()->set_size(payload.size());
+    restore->mutable_artifact()->set_size(storage->objectMetadata.size);
     restore->mutable_artifact()->set_sha256(storage->objectMetadata.sha256);
     restore->mutable_artifact()->set_format("sandboxd-checkpoint");
     restore->mutable_artifact()->set_formatversion(1);
@@ -913,7 +933,7 @@ TEST_F(AgentServiceActorTest, SnapshotRuntimeCommitsLocalMetadataBeforeSuccess)
     EXPECT_EQ(upstreamResponse.localsnapshot().snapshotid(), forwardedRequest.snapshotid());
     EXPECT_TRUE(upstreamResponse.localsnapshot().localrecoverycandidate());
     EXPECT_EQ(upstreamResponse.localsnapshot().instanceid(), TEST_INSTANCE_ID);
-    EXPECT_FALSE(std::filesystem::exists(forwardedRequest.checkpointdir()));
+    EXPECT_TRUE(std::filesystem::is_directory(forwardedRequest.checkpointdir()));
     EXPECT_TRUE(std::filesystem::is_directory(checkpointRoot / forwardedRequest.snapshotid()));
     EXPECT_FALSE(std::filesystem::exists(
         checkpointRoot / forwardedRequest.snapshotid() / "snapshot.meta"));
@@ -976,7 +996,7 @@ TEST_F(AgentServiceActorTest, RestoreSnapshotIDIsValidatedBeforeRuntimeManager)
     const std::filesystem::path checkpointRoot = "/tmp/agent-local-restore-id";
     std::filesystem::remove_all(checkpointRoot);
     dstActor_->BindSnapshotDataPlane(storage, checkpointRoot.string(), "datasystem");
-    CommitTestLocalSnapshot(checkpointRoot, "anon-restore");
+    CommitTestLocalSnapshot(*dstActor_->localSnapshotStore_, "anon-restore");
 
     auto deploy = std::make_shared<messages::DeployInstanceRequest>();
     deploy->set_instanceid(TEST_INSTANCE_ID);
@@ -1048,7 +1068,7 @@ TEST_F(AgentServiceActorTest, ListLocalSnapshotsReturnsOnlyCommittedEntries)
     const std::filesystem::path checkpointRoot = "/tmp/agent-local-snapshot-list";
     std::filesystem::remove_all(checkpointRoot);
     dstActor_->BindSnapshotDataPlane(storage, checkpointRoot.string(), "datasystem");
-    const auto committed = CommitTestLocalSnapshot(checkpointRoot, "committed");
+    const auto committed = CommitTestLocalSnapshot(*dstActor_->localSnapshotStore_, "committed");
     std::filesystem::create_directories(checkpointRoot / "partial");
     std::ofstream(checkpointRoot / "partial" / "checkpoint.img") << "partial";
     testFuncAgentMgrActor_->actorMessageList_.emplace("ListLocalSnapshots");
@@ -1074,7 +1094,7 @@ TEST_F(AgentServiceActorTest, DeleteLocalSnapshotUsesSnapshotID)
     const std::filesystem::path checkpointRoot = "/tmp/agent-local-snapshot-delete";
     std::filesystem::remove_all(checkpointRoot);
     dstActor_->BindSnapshotDataPlane(storage, checkpointRoot.string(), "datasystem");
-    const auto committed = CommitTestLocalSnapshot(checkpointRoot, "delete-exact");
+    const auto committed = CommitTestLocalSnapshot(*dstActor_->localSnapshotStore_, "delete-exact");
     testFuncAgentMgrActor_->actorMessageList_.emplace("DeleteLocalSnapshot");
 
     messages::DeleteLocalSnapshotRequest request;
@@ -1097,7 +1117,9 @@ TEST_F(AgentServiceActorTest, PauseSnapshotUsesLocallyPlannedArtifactPathWithout
     auto storage = std::make_shared<CountingSnapshotStorage>();
     const std::filesystem::path checkpointRoot = "/tmp/agent-pause-local-artifact";
     std::filesystem::remove_all(checkpointRoot);
-    dstActor_->BindSnapshotDataPlane(storage, checkpointRoot.string(), "datasystem");
+    dstActor_->BindSnapshotDataPlane(
+        storage, checkpointRoot.string(), "datasystem",
+        function_agent::SnapshotStorageMode::DISTRIBUTED_CACHE);
     testFuncAgentMgrActor_->actorMessageList_.emplace("SnapshotRuntime");
     testRuntimeManager_->actorMessageList_.emplace("SnapshotRuntimeResponse");
 
@@ -1141,7 +1163,25 @@ TEST_F(AgentServiceActorTest, PauseSnapshotUsesLocallyPlannedArtifactPathWithout
     EXPECT_EQ(upstreamResponse.code(), static_cast<int32_t>(StatusCode::SUCCESS));
     EXPECT_EQ(upstreamResponse.snapshotinfo().checkpointid(), forwardedRequest.snapshotid());
     EXPECT_EQ(upstreamResponse.snapshotinfo().size(), 30);
-    EXPECT_FALSE(upstreamResponse.snapshotinfo().sha256().empty());
+    EXPECT_TRUE(upstreamResponse.snapshotinfo().sha256().empty());
+    EXPECT_EQ(storage->putCalls.load(), 0);
+    EXPECT_EQ(storage->publishCalls.load(), 0);
+
+    testFuncAgentMgrActor_->actorMessageList_.emplace("PublishSnapshotArtifact");
+    auto published = testFuncAgentMgrActor_->promiseOfPublishSnapshotArtifactResponse.GetFuture();
+    ::messages::PublishSnapshotArtifactRequest publishRequest;
+    publishRequest.set_requestid(forwardedRequest.requestid());
+    publishRequest.set_snapshotid(forwardedRequest.snapshotid());
+    publishRequest.set_instanceid(forwardedRequest.instanceid());
+    testFuncAgentMgrActor_->SendRequestToAgentServiceActor(
+        dstActor_->GetAID(), "PublishSnapshotArtifact", publishRequest.SerializeAsString());
+
+    ASSERT_AWAIT_READY_FOR(published, 5'000);
+    messages::SnapshotRuntimeResponse publishedResponse;
+    ASSERT_TRUE(publishedResponse.ParseFromString(published.Get()));
+    EXPECT_EQ(publishedResponse.code(), static_cast<int32_t>(StatusCode::SUCCESS));
+    EXPECT_EQ(publishedResponse.snapshotinfo().checkpointid(), forwardedRequest.snapshotid());
+    EXPECT_FALSE(publishedResponse.snapshotinfo().sha256().empty());
     const auto tenantHash = snapshot_storage::StableTenantHash(TEST_TENANT_ID);
     EXPECT_EQ(storage->temporaryKey, snapshot_storage::BuildPauseSnapshotTemporaryKey(
         tenantHash, TEST_INSTANCE_ID, forwardedRequest.snapshotid(), forwardedRequest.requestid()));
@@ -1163,8 +1203,10 @@ TEST_F(AgentServiceActorTest, PausedSnapshotDeleteRemovesCommittedLocalArtifact)
     std::filesystem::remove_all(checkpointRoot);
 
     auto storage = std::make_shared<CountingSnapshotStorage>();
-    dstActor_->BindSnapshotDataPlane(storage, checkpointRoot.string(), "datasystem");
-    const auto committed = CommitTestLocalSnapshot(checkpointRoot, snapshotID);
+    dstActor_->BindSnapshotDataPlane(
+        storage, checkpointRoot.string(), "datasystem",
+        function_agent::SnapshotStorageMode::DISTRIBUTED_CACHE);
+    const auto committed = CommitTestLocalSnapshot(*dstActor_->localSnapshotStore_, snapshotID);
     storage->serveObject = true;
     storage->objectMetadata.snapshotID = snapshotID;
     storage->objectMetadata.size = committed.size;
@@ -1240,7 +1282,9 @@ TEST_F(AgentServiceActorTest, ReusableSnapshotPublishesNonExpiringArtifactAndRet
     auto storage = std::make_shared<CountingSnapshotStorage>();
     const std::filesystem::path checkpointRoot = "/tmp/agent-reusable-snapshot-publish";
     std::filesystem::remove_all(checkpointRoot);
-    dstActor_->BindSnapshotDataPlane(storage, checkpointRoot.string(), "datasystem");
+    dstActor_->BindSnapshotDataPlane(
+        storage, checkpointRoot.string(), "datasystem",
+        function_agent::SnapshotStorageMode::DISTRIBUTED_CACHE);
     testFuncAgentMgrActor_->actorMessageList_.emplace("SnapshotRuntime");
     testRuntimeManager_->actorMessageList_.emplace("SnapshotRuntimeResponse");
 
@@ -1251,7 +1295,8 @@ TEST_F(AgentServiceActorTest, ReusableSnapshotPublishesNonExpiringArtifactAndRet
     request.set_runtimeid(TEST_RUNTIME_ID);
     request.set_tenantid(TEST_TENANT_ID);
     request.set_sourceversion(17);
-    request.set_ttl(900);
+    request.set_ttl(0);
+    request.set_leaverunning(true);
     request.set_type(common::SNAPSHOT);
     ApplySnapshotArtifactPolicy(request, true);
 
@@ -1284,8 +1329,26 @@ TEST_F(AgentServiceActorTest, ReusableSnapshotPublishesNonExpiringArtifactAndRet
     messages::SnapshotRuntimeResponse upstreamResponse;
     ASSERT_TRUE(upstreamResponse.ParseFromString(upstream.Get()));
     ASSERT_EQ(upstreamResponse.code(), static_cast<int32_t>(StatusCode::SUCCESS));
-    ASSERT_TRUE(upstreamResponse.has_reusablesnapshotartifact());
-    const auto &artifact = upstreamResponse.reusablesnapshotartifact();
+    ASSERT_TRUE(upstreamResponse.has_localsnapshot());
+    EXPECT_FALSE(upstreamResponse.has_reusablesnapshotartifact());
+    EXPECT_EQ(storage->putCalls.load(), 0);
+    EXPECT_EQ(storage->publishCalls.load(), 0);
+
+    testFuncAgentMgrActor_->actorMessageList_.emplace("PublishSnapshotArtifact");
+    auto published = testFuncAgentMgrActor_->promiseOfPublishSnapshotArtifactResponse.GetFuture();
+    ::messages::PublishSnapshotArtifactRequest publishRequest;
+    publishRequest.set_requestid(forwardedRequest.requestid());
+    publishRequest.set_snapshotid(forwardedRequest.snapshotid());
+    publishRequest.set_instanceid(forwardedRequest.instanceid());
+    testFuncAgentMgrActor_->SendRequestToAgentServiceActor(
+        dstActor_->GetAID(), "PublishSnapshotArtifact", publishRequest.SerializeAsString());
+
+    ASSERT_AWAIT_READY_FOR(published, 5'000);
+    messages::SnapshotRuntimeResponse publishedResponse;
+    ASSERT_TRUE(publishedResponse.ParseFromString(published.Get()));
+    ASSERT_EQ(publishedResponse.code(), static_cast<int32_t>(StatusCode::SUCCESS));
+    ASSERT_TRUE(publishedResponse.has_reusablesnapshotartifact());
+    const auto &artifact = publishedResponse.reusablesnapshotartifact();
     EXPECT_EQ(artifact.storagebackend(), "datasystem");
     EXPECT_EQ(artifact.objectkey(), storage->finalKey);
     EXPECT_EQ(artifact.size(), static_cast<int64_t>(storage->publishMetadata.size));
@@ -1490,7 +1553,9 @@ TEST_F(AgentServiceActorTest, ReusableSnapshotPublishFailureReturnsExactArtifact
     storage->failPut = true;
     const std::filesystem::path checkpointRoot = "/tmp/agent-reusable-snapshot-publish-failure";
     std::filesystem::remove_all(checkpointRoot);
-    dstActor_->BindSnapshotDataPlane(storage, checkpointRoot.string(), "datasystem");
+    dstActor_->BindSnapshotDataPlane(
+        storage, checkpointRoot.string(), "datasystem",
+        function_agent::SnapshotStorageMode::DISTRIBUTED_CACHE);
     testFuncAgentMgrActor_->actorMessageList_.emplace("SnapshotRuntime");
     testRuntimeManager_->actorMessageList_.emplace("SnapshotRuntimeResponse");
 
@@ -1501,6 +1566,8 @@ TEST_F(AgentServiceActorTest, ReusableSnapshotPublishFailureReturnsExactArtifact
     request.set_runtimeid(TEST_RUNTIME_ID);
     request.set_tenantid(TEST_TENANT_ID);
     request.set_sourceversion(19);
+    request.set_ttl(0);
+    request.set_leaverunning(true);
     request.set_type(common::SNAPSHOT);
     ApplySnapshotArtifactPolicy(request, true);
 
@@ -1529,8 +1596,25 @@ TEST_F(AgentServiceActorTest, ReusableSnapshotPublishFailureReturnsExactArtifact
         dstActor_->GetAID(), "SnapshotRuntimeResponse", runtimeResponse.SerializeAsString());
 
     ASSERT_AWAIT_READY_FOR(upstream, 5'000);
+    messages::SnapshotRuntimeResponse localReadyResponse;
+    ASSERT_TRUE(localReadyResponse.ParseFromString(upstream.Get()));
+    ASSERT_EQ(localReadyResponse.code(), static_cast<int32_t>(StatusCode::SUCCESS));
+    ASSERT_TRUE(localReadyResponse.has_localsnapshot());
+    EXPECT_FALSE(localReadyResponse.has_reusablesnapshotartifact());
+    EXPECT_EQ(storage->putCalls.load(), 0);
+
+    testFuncAgentMgrActor_->actorMessageList_.emplace("PublishSnapshotArtifact");
+    auto published = testFuncAgentMgrActor_->promiseOfPublishSnapshotArtifactResponse.GetFuture();
+    ::messages::PublishSnapshotArtifactRequest publishRequest;
+    publishRequest.set_requestid(forwardedRequest.requestid());
+    publishRequest.set_snapshotid(forwardedRequest.snapshotid());
+    publishRequest.set_instanceid(forwardedRequest.instanceid());
+    testFuncAgentMgrActor_->SendRequestToAgentServiceActor(
+        dstActor_->GetAID(), "PublishSnapshotArtifact", publishRequest.SerializeAsString());
+
+    ASSERT_AWAIT_READY_FOR(published, 5'000);
     messages::SnapshotRuntimeResponse failedResponse;
-    ASSERT_TRUE(failedResponse.ParseFromString(upstream.Get()));
+    ASSERT_TRUE(failedResponse.ParseFromString(published.Get()));
     ASSERT_NE(failedResponse.code(), static_cast<int32_t>(StatusCode::SUCCESS));
     ASSERT_TRUE(failedResponse.has_reusablesnapshotartifact())
         << "exact physical identity is required before the coordinator may abort";
@@ -1588,6 +1672,8 @@ TEST_F(AgentServiceActorTest, OrdinarySnapshotCanonicalizesCallerSuppliedCheckpo
     request.set_instanceid(TEST_INSTANCE_ID);
     request.set_runtimeid(TEST_RUNTIME_ID);
     request.set_snapshotid("caller-snapshot");
+    request.set_tenantid(TEST_TENANT_ID);
+    request.set_sourceversion(17);
     request.set_checkpointdir("/tmp/caller-controlled-checkpoint");
     request.set_ttl(600);
     request.set_type(common::DUMPSTATE);

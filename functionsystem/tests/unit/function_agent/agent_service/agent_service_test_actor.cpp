@@ -162,6 +162,8 @@ void MockFunctionAgentMgrActor::Init()
     ActorBase::Receive("StaticFunctionScheduleRequest", &MockFunctionAgentMgrActor::StaticFunctionScheduleRequest);
     ActorBase::Receive("NotifyFunctionStatusChangeResp", &MockFunctionAgentMgrActor::NotifyFunctionStatusChangeResp);
     ActorBase::Receive("SnapshotRuntimeResponse", &MockFunctionAgentMgrActor::SnapshotRuntimeResponse);
+    ActorBase::Receive("PublishSnapshotArtifactResponse",
+                       &MockFunctionAgentMgrActor::PublishSnapshotArtifactResponse);
     ActorBase::Receive("SnapshotAttemptFinalizeResponse",
                        &MockFunctionAgentMgrActor::SnapshotAttemptFinalizeResponse);
     ActorBase::Receive("DeleteReusableSnapshotArtifactResponse",
@@ -174,6 +176,12 @@ void MockFunctionAgentMgrActor::SnapshotRuntimeResponse(
     const litebus::AID &, std::string &&, std::string &&msg)
 {
     promiseOfSnapshotRuntimeResponse.SetValue(std::move(msg));
+}
+
+void MockFunctionAgentMgrActor::PublishSnapshotArtifactResponse(
+    const litebus::AID &, std::string &&, std::string &&msg)
+{
+    promiseOfPublishSnapshotArtifactResponse.SetValue(std::move(msg));
 }
 
 void MockFunctionAgentMgrActor::SnapshotAttemptFinalizeResponse(

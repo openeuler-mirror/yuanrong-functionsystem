@@ -159,7 +159,6 @@ public:
     request.set_tenantid("tenant-a");
     request.set_sourceinstanceid("source-logical");
     request.add_names("python-ready");
-    request.set_requestfingerprint("fingerprint-a");
     return request;
 }
 
@@ -169,7 +168,6 @@ public:
     request.set_requestid("create-snapshot-request");
     request.set_tenantid("tenant-a");
     request.set_snapshotid(snapshotID);
-    request.set_requestfingerprint("fingerprint-a");
     *request.mutable_sourceinstanceinfo() = SourceInstance();
     *request.mutable_artifact() = ReadyArtifact();
     return request;
@@ -231,14 +229,6 @@ TEST_F(ReusableSnapshotStoreTest, BeginDeterministicallyReplaysSameRequest)
     EXPECT_EQ(persistence->casKeys.size(), casCount);
 }
 
-TEST_F(ReusableSnapshotStoreTest, BeginRejectsFingerprintConflict)
-{
-    ASSERT_EQ(Begin().code(), 0);
-    auto conflict = BeginRequest();
-    conflict.set_requestfingerprint("fingerprint-b");
-    EXPECT_NE(store->Begin(conflict).Get().code(), 0);
-}
-
 TEST_F(ReusableSnapshotStoreTest, BeginReportsCasLoserWithoutOverwritingWinner)
 {
     persistence->forceCasMiss = true;
@@ -272,14 +262,6 @@ TEST_F(ReusableSnapshotStoreTest, CommitRejectsUntrustedArtifactLocationAndDiges
     auto request = CommitRequest(begin.snapshotid());
     request.mutable_artifact()->set_objectkey("../source-node/checkpoint.img");
     request.mutable_artifact()->set_sha256(std::string(64, 'z'));
-    EXPECT_NE(store->Commit(request).Get().code(), 0);
-}
-
-TEST_F(ReusableSnapshotStoreTest, CommitRejectsMismatchedRequestFingerprint)
-{
-    const auto begin = Begin();
-    auto request = CommitRequest(begin.snapshotid());
-    request.set_requestfingerprint("other");
     EXPECT_NE(store->Commit(request).Get().code(), 0);
 }
 
@@ -341,7 +323,6 @@ TEST_F(ReusableSnapshotStoreTest, FailDeletesOnlyMatchingPublishingRecord)
     request.set_requestid("create-snapshot-request");
     request.set_tenantid("tenant-a");
     request.set_snapshotid(begin.snapshotid());
-    request.set_requestfingerprint("fingerprint-a");
     ASSERT_EQ(store->Fail(request).Get().code(), 0);
     EXPECT_TRUE(persistence->values.empty());
 }
@@ -354,7 +335,6 @@ TEST_F(ReusableSnapshotStoreTest, FailNeverDeletesReadyRecord)
     request.set_requestid("create-snapshot-request");
     request.set_tenantid("tenant-a");
     request.set_snapshotid(begin.snapshotid());
-    request.set_requestfingerprint("fingerprint-a");
     EXPECT_NE(store->Fail(request).Get().code(), 0);
     EXPECT_EQ(persistence->values.size(), 1U);
 }
@@ -416,11 +396,9 @@ TEST_F(ReusableSnapshotStoreTest, ListUsesStablePageTokenAndPageSize)
     ASSERT_EQ(Commit(begin.snapshotid()).code(), 0);
     auto second = BeginRequest();
     second.set_requestid("create-snapshot-request-2");
-    second.set_requestfingerprint("fingerprint-2");
     const auto begin2 = store->Begin(second).Get();
     auto commit2 = CommitRequest(begin2.snapshotid());
     commit2.set_requestid(second.requestid());
-    commit2.set_requestfingerprint(second.requestfingerprint());
     ASSERT_EQ(store->Commit(commit2).Get().code(), 0);
     ::messages::ListReusableSnapshotsRequest request;
     request.set_requestid("list");
@@ -624,11 +602,9 @@ TEST_F(ReusableSnapshotStoreTest, DeletedSourceCleansOnlyItsLocalSnapshots)
 
     auto distributedBeginRequest = BeginRequest();
     distributedBeginRequest.set_requestid("distributed-snapshot-request");
-    distributedBeginRequest.set_requestfingerprint("distributed-fingerprint");
     const auto distributedBegin = store->Begin(distributedBeginRequest).Get();
     auto distributedCommit = CommitRequest(distributedBegin.snapshotid());
     distributedCommit.set_requestid(distributedBeginRequest.requestid());
-    distributedCommit.set_requestfingerprint(distributedBeginRequest.requestfingerprint());
     ASSERT_EQ(store->Commit(distributedCommit).Get().code(), 0);
 
     std::vector<std::string> deleted;

@@ -40,7 +40,7 @@ TEST(LocalSnapshotViewTest, SelectsLatestRecoveryCandidatePerInstance)
     EXPECT_EQ(latest->snapshotid(), "new");
 }
 
-TEST(LocalSnapshotViewTest, EqualGenerationConflictHasNoWinner)
+TEST(LocalSnapshotViewTest, EqualGenerationUsesSnapshotIDAsDeterministicTieBreak)
 {
     LocalSnapshotView view;
 
@@ -49,8 +49,9 @@ TEST(LocalSnapshotViewTest, EqualGenerationConflictHasNoWinner)
         MakeSnapshot("right", "sandbox-a", 2, true),
     });
 
-    EXPECT_EQ(status.StatusCode(), StatusCode::SCHEDULE_CONFLICTED);
-    EXPECT_FALSE(view.LatestAnonymous("sandbox-a").has_value());
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    ASSERT_TRUE(view.LatestAnonymous("sandbox-a").has_value());
+    EXPECT_EQ(view.LatestAnonymous("sandbox-a")->snapshotid(), "right");
 }
 
 TEST(LocalSnapshotViewTest, AgentRestartReplacesOnlyThatAgentsInventory)

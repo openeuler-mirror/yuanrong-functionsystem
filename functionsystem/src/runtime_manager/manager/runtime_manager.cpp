@@ -530,6 +530,11 @@ Status RuntimeManager::ResolveSnapshotExecutorType(const messages::SnapshotRunti
         return Status(StatusCode::RUNTIME_MANAGER_PARAMS_INVALID,
                       "snapshot runtime has an unknown executor type");
     }
+    if (request.type() == common::PAUSE_RESUME
+        && authoritativeType != EXECUTOR_TYPE::SANDBOXD) {
+        return Status(StatusCode::RUNTIME_MANAGER_PARAMS_INVALID,
+                      "pause/resume snapshot requires a sandboxd runtime");
+    }
 
     executorType = authoritativeType;
     return Status::OK();

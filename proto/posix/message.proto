@@ -1138,12 +1138,11 @@ message ReusableSnapshotMetadata {
   SnapshotArtifact artifact = 4;
   string tenantID = 5;
   string createRequestID = 6;
-  string requestFingerprint = 7;
-  ReusableSnapshotPhase phase = 8;
-  int64 createTime = 9;
-  int64 updateTime = 10;
-  uint64 version = 11;
-  string sourceInstanceID = 12;
+  ReusableSnapshotPhase phase = 7;
+  int64 createTime = 8;
+  int64 updateTime = 9;
+  uint64 version = 10;
+  string sourceInstanceID = 11;
 }
 
 message ReusableSnapshotRestore {
@@ -1158,7 +1157,6 @@ message BeginReusableSnapshotRequest {
   string tenantID = 2;
   string sourceInstanceID = 3;
   repeated string names = 4;
-  string requestFingerprint = 5;
 }
 
 message BeginReusableSnapshotResponse {
@@ -1174,9 +1172,8 @@ message CommitReusableSnapshotRequest {
   string requestID = 1;
   string tenantID = 2;
   string snapshotID = 3;
-  string requestFingerprint = 4;
-  resources.InstanceInfo sourceInstanceInfo = 5;
-  SnapshotArtifact artifact = 6;
+  resources.InstanceInfo sourceInstanceInfo = 4;
+  SnapshotArtifact artifact = 5;
 }
 
 message CommitReusableSnapshotResponse {
@@ -1191,8 +1188,7 @@ message FailReusableSnapshotRequest {
   string requestID = 1;
   string tenantID = 2;
   string snapshotID = 3;
-  string requestFingerprint = 4;
-  string reason = 5;
+  string reason = 4;
 }
 
 message FailReusableSnapshotResponse {
