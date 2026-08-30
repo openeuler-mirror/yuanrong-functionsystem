@@ -263,12 +263,10 @@ private:
         const runtime::v1::NormalResponse &response, const std::shared_ptr<messages::StartInstanceRequest> &request,
         std::shared_ptr<SandboxdStartGuard> guard);
 
-    // Restore: legacy snapshots use download/ref-count; local restores resolve
-    // a flat checkpoint-root/snapshotID directory.
+    // Restore uses the flat checkpoint-root/snapshotID directory materialized
+    // by FunctionAgent.
     litebus::Future<messages::StartInstanceResponse> StartBySnapshot(const SandboxdStartContext &context);
-    litebus::Future<messages::StartInstanceResponse> OnCheckpointDownloaded(const std::string &checkpointPath,
-                                                                            const SandboxdStartContext &context);
-    litebus::Future<messages::StartInstanceResponse> OnCheckpointRefAdded(const Status &refStatus,
+    litebus::Future<messages::StartInstanceResponse> StartFromMaterializedCheckpoint(
         const SandboxdRestoreContext &context);
     litebus::Future<messages::StartInstanceResponse> ReconcileBeforeResumeRestore(
         const SandboxdRestoreContext &context);

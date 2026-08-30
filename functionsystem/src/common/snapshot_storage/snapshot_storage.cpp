@@ -106,54 +106,6 @@ bool IsSafeRelativeArchivePath(const fs::path &path)
     return true;
 }
 
-Status CopyLegacyPublicationFile(const std::string &sourceFile, const fs::path &destinationDirectory)
-{
-    detail::SecureDirectory destination;
-    auto status = detail::SecureDirectory::Open(destinationDirectory, false, destination);
-    if (status.IsError()) {
-        return status;
-    }
-    const int source = open(sourceFile.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    if (source < 0) {
-        return Status(StatusCode::FAILED, "open legacy checkpoint publication file");
-    }
-    ScopedFileDescriptor sourceGuard(source);
-    const int output = openat(destination.Fd(), "checkpoint.img",
-                              O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
-    if (output < 0) {
-        return Status(StatusCode::FAILED, "create legacy checkpoint materialization file");
-    }
-    ScopedFileDescriptor outputGuard(output);
-    std::array<unsigned char, 1024 * 1024> buffer {};
-    while (true) {
-        const auto count = read(source, buffer.data(), buffer.size());
-        if (count == 0) {
-            break;
-        }
-        if (count < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            return Status(StatusCode::FAILED, "read legacy checkpoint publication file");
-        }
-        size_t offset = 0;
-        while (offset < static_cast<size_t>(count)) {
-            const auto written = write(output, buffer.data() + offset,
-                                       static_cast<size_t>(count) - offset);
-            if (written < 0 && errno == EINTR) {
-                continue;
-            }
-            if (written <= 0) {
-                return Status(StatusCode::FAILED, "write legacy checkpoint materialization file");
-            }
-            offset += static_cast<size_t>(written);
-        }
-    }
-    return fsync(output) == 0
-        ? Status::OK()
-        : Status(StatusCode::FAILED, "sync legacy checkpoint materialization file");
-}
-
 SnapshotPublicationFile PrepareSnapshotDirectoryPublicationFileSync(
     const fs::path &sourceDirectory, bool compress)
 {
@@ -362,7 +314,8 @@ Status MaterializeSnapshotPublicationDirectorySync(
     const auto magicRead = gzread(input, magic.data(), magic.size());
     if (magicRead != static_cast<int>(magic.size()) || magic != CHECKPOINT_DIRECTORY_MAGIC) {
         (void)gzclose(input);
-        return CopyLegacyPublicationFile(publicationFile, destinationDirectory);
+        return Status(StatusCode::ERR_PARAM_INVALID,
+                      "checkpoint directory publication artifact header is invalid");
     }
     auto readExact = [&](void *data, size_t size) -> bool {
         size_t offset = 0;

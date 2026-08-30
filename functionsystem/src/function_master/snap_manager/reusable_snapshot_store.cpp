@@ -226,9 +226,8 @@ std::string ReusableSnapshotStore::SnapshotID(const ::messages::BeginReusableSna
 
 Status ReusableSnapshotStore::ValidateBegin(const ::messages::BeginReusableSnapshotRequest &request)
 {
-    if (request.requestid().empty() || request.tenantid().empty() || request.sourceinstanceid().empty()
-        || request.requestfingerprint().empty()) {
-        return Invalid("requestID, tenantID, sourceInstanceID and requestFingerprint are required");
+    if (request.requestid().empty() || request.tenantid().empty() || request.sourceinstanceid().empty()) {
+        return Invalid("requestID, tenantID and sourceInstanceID are required");
     }
     if (request.names_size() > 1 || (request.names_size() == 1 && request.names(0).empty())) {
         return Invalid("reusable Snapshot supports zero or one non-empty name");
@@ -303,12 +302,10 @@ litebus::Future<::messages::BeginReusableSnapshotResponse> ReusableSnapshotStore
                     ErrorResponse<::messages::BeginReusableSnapshotResponse>(
                         request.requestid(), Status(StatusCode::ERR_ETCD_OPERATION_ERROR, "invalid Snapshot record")));
             }
-            if (current.createrequestid() != request.requestid()
-                || current.requestfingerprint() != request.requestfingerprint()
-                || current.sourceinstanceid() != request.sourceinstanceid()) {
+            if (current.createrequestid() != request.requestid()) {
                 return litebus::Future<::messages::BeginReusableSnapshotResponse>(
                     ErrorResponse<::messages::BeginReusableSnapshotResponse>(
-                        request.requestid(), Conflict("Snapshot request fingerprint conflict")));
+                        request.requestid(), Conflict("Snapshot request ID conflict")));
             }
             auto response = Success<::messages::BeginReusableSnapshotResponse>(request.requestid());
             response.set_snapshotid(current.snapshotid());
@@ -323,7 +320,6 @@ litebus::Future<::messages::BeginReusableSnapshotResponse> ReusableSnapshotStore
         created.mutable_names()->CopyFrom(request.names());
         created.set_tenantid(request.tenantid());
         created.set_createrequestid(request.requestid());
-        created.set_requestfingerprint(request.requestfingerprint());
         created.set_sourceinstanceid(request.sourceinstanceid());
         created.set_phase(::messages::REUSABLE_SNAPSHOT_PUBLISHING);
         created.set_createtime(Now());
@@ -351,9 +347,9 @@ litebus::Future<::messages::CommitReusableSnapshotResponse> ReusableSnapshotStor
 {
     const auto artifactStatus = ValidateArtifact(request.artifact());
     if (request.requestid().empty() || request.tenantid().empty() || request.snapshotid().empty()
-        || request.requestfingerprint().empty() || artifactStatus.IsError() || persistence_ == nullptr) {
+        || artifactStatus.IsError() || persistence_ == nullptr) {
         const auto status = artifactStatus.IsError() ? artifactStatus
-            : Invalid("commit requestID, tenantID, snapshotID and requestFingerprint are required");
+            : Invalid("commit requestID, tenantID and snapshotID are required");
         return litebus::Future<::messages::CommitReusableSnapshotResponse>(
             ErrorResponse<::messages::CommitReusableSnapshotResponse>(request.requestid(), status));
     }
@@ -371,12 +367,10 @@ litebus::Future<::messages::CommitReusableSnapshotResponse> ReusableSnapshotStor
                 ErrorResponse<::messages::CommitReusableSnapshotResponse>(request.requestid(),
                     Status(StatusCode::ERR_ETCD_OPERATION_ERROR, "invalid Snapshot record")));
         }
-        if (current.createrequestid() != request.requestid()
-            || current.requestfingerprint() != request.requestfingerprint()
-            || current.sourceinstanceid() != request.sourceinstanceinfo().instanceid()) {
+        if (current.createrequestid() != request.requestid()) {
             return litebus::Future<::messages::CommitReusableSnapshotResponse>(
                 ErrorResponse<::messages::CommitReusableSnapshotResponse>(
-                    request.requestid(), Conflict("Snapshot commit fingerprint conflict")));
+                    request.requestid(), Conflict("Snapshot commit request ID conflict")));
         }
         if (current.phase() == ::messages::REUSABLE_SNAPSHOT_READY) {
             if (!ArtifactEquals(current.artifact(), request.artifact())) {
@@ -418,7 +412,7 @@ litebus::Future<::messages::FailReusableSnapshotResponse> ReusableSnapshotStore:
     const ::messages::FailReusableSnapshotRequest &request)
 {
     if (request.requestid().empty() || request.tenantid().empty() || request.snapshotid().empty()
-        || request.requestfingerprint().empty() || persistence_ == nullptr) {
+        || persistence_ == nullptr) {
         return litebus::Future<::messages::FailReusableSnapshotResponse>(
             ErrorResponse<::messages::FailReusableSnapshotResponse>(
                 request.requestid(), Invalid("invalid fail request")));
@@ -441,7 +435,6 @@ litebus::Future<::messages::FailReusableSnapshotResponse> ReusableSnapshotStore:
                     Status(StatusCode::ERR_ETCD_OPERATION_ERROR, "invalid Snapshot record")));
         }
         if (current.createrequestid() != request.requestid()
-            || current.requestfingerprint() != request.requestfingerprint()
             || current.phase() != ::messages::REUSABLE_SNAPSHOT_PUBLISHING) {
             return litebus::Future<::messages::FailReusableSnapshotResponse>(
                 ErrorResponse<::messages::FailReusableSnapshotResponse>(request.requestid(),

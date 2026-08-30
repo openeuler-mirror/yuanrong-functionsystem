@@ -230,7 +230,7 @@ litebus::Future<Status> MaterializeImmutableSnapshotArtifact(
     std::error_code directoryError;
     if (!std::filesystem::is_empty(directoryPath, directoryError) || directoryError) {
         result->SetValue(Status(StatusCode::SCHEDULE_CONFLICTED,
-                                "local materialization staging directory is not empty"));
+                                "local materialization directory is not empty"));
         return result->GetFuture();
     }
     const auto bundleName = "." + spec.snapshotID + "."

@@ -74,14 +74,13 @@ public:
     Status PinForRestore(const std::string &snapshotID);
     Status UnpinAfterRestore(const std::string &snapshotID, bool evictAfterRelease);
     Status EvictLocalArtifact(const std::string &snapshotID);
-    Status DiscardStaging(const std::string &snapshotID);
+    Status DiscardPrepared(const std::string &snapshotID);
     Status DeleteRecoveryCandidatesForInstance(const std::string &instanceID);
     Status Delete(const LocalSnapshotDeleteIdentity &identity);
 
 private:
     Status ValidateCommitRequest(const LocalSnapshotCommitRequest &request) const;
     std::filesystem::path SnapshotDirectory(const std::string &snapshotID) const;
-    std::filesystem::path StagingDirectory(const std::string &snapshotID) const;
     Status InspectArtifact(const std::filesystem::path &directory, uint64_t &size) const;
     void Touch(const std::string &snapshotID);
     void EvictIfNeeded(const std::string &protectedSnapshotID);

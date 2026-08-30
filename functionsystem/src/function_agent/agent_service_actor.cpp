@@ -1664,9 +1664,9 @@ void AgentServiceActor::OnTrustedResumeMaterialized(
             : materialized.Get();
         if (localSnapshotStore_ != nullptr) {
             const auto snapshotID = MaterializedSnapshotID(*startInstanceRequest);
-            const auto cleanup = localSnapshotStore_->DiscardStaging(snapshotID);
+            const auto cleanup = localSnapshotStore_->DiscardPrepared(snapshotID);
             if (cleanup.IsError()) {
-                YRLOG_WARN("{}|failed to discard snapshot materialization staging({}): {}",
+                YRLOG_WARN("{}|failed to discard prepared snapshot materialization({}): {}",
                            request->requestid(), snapshotID, cleanup.RawMessage());
             }
         }

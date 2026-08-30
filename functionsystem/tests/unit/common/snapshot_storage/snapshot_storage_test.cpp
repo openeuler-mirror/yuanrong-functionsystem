@@ -687,7 +687,7 @@ TEST(SnapshotDirectoryPublicationTest, RoundTripsOpaqueMultiFileDirectory)
     }
 }
 
-TEST(SnapshotDirectoryPublicationTest, LegacySingleFileMaterializesAsCheckpointImage)
+TEST(SnapshotDirectoryPublicationTest, RejectsArtifactWithoutDirectoryHeader)
 {
     TempDirectory directory;
     const auto source = directory.Path() / "legacy.img";
@@ -698,8 +698,8 @@ TEST(SnapshotDirectoryPublicationTest, LegacySingleFileMaterializesAsCheckpointI
     const auto materialized = MaterializeSnapshotPublicationDirectory(
         std::make_shared<ActorWorker>(), source.string(), destination).Get();
 
-    ASSERT_TRUE(materialized.IsOk()) << materialized.ToString();
-    EXPECT_EQ(ReadFile(destination / "checkpoint.img"), "legacy-payload");
+    EXPECT_EQ(materialized.StatusCode(), StatusCode::ERR_PARAM_INVALID);
+    EXPECT_TRUE(fs::is_empty(destination));
 }
 
 TEST(LocalSnapshotInspectionTest, MissingSourceReturnsFileNotFound)

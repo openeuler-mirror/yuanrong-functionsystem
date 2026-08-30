@@ -5438,15 +5438,6 @@ TEST(ReusableSnapshotCreateTransferTest, ResolvedSnapshotKeepsNewCreateIdentityA
     ASSERT_TRUE(decoded.ParseFromString(HexStringToCharString(trusted->second)));
     EXPECT_EQ(decoded.SerializeAsString(), restore->SerializeAsString());
 
-    (*target->mutable_createoptions())["DELEGATE_ENV_VAR"] =
-        R"({"RRT_TUNNEL_WS_PORT":"9000","RRT_TUNNEL_HTTP_PORT":"9001"})";
-    (*target->mutable_scheduleoption()->mutable_extension())
-        [REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION] = "snapshot-42";
-    target->mutable_scheduleoption()->mutable_extension()->erase(
-        REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION);
-    const auto mismatchedTunnel = ApplyResolvedReusableSnapshotForCreate(resolved, scheduleReq);
-    EXPECT_TRUE(mismatchedTunnel.IsError());
-    EXPECT_NE(mismatchedTunnel.RawMessage().find("reverse tunnel ports"), std::string::npos);
 }
 
 TEST(ReusableSnapshotCreateTransferTest, LocalArtifactRequiresItsPersistedSourceNode)
@@ -5481,7 +5472,7 @@ TEST(ReusableSnapshotCreateTransferTest, LocalArtifactRequiresItsPersistedSource
     EXPECT_EQ(affinity.at("source-node"), resources::RequiredAffinity);
 }
 
-TEST(ReusableSnapshotCreateTransferTest, InheritsUnspecifiedResourcesAndPreservesTargetOnlyResources)
+TEST(ReusableSnapshotCreateTransferTest, InheritsMissingResourcesAndPreservesTargetResources)
 {
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->set_requestid("clone-create-request");
@@ -5519,7 +5510,7 @@ TEST(ReusableSnapshotCreateTransferTest, InheritsUnspecifiedResourcesAndPreserve
                   REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION), 1U);
 }
 
-TEST(ReusableSnapshotCreateTransferTest, RejectsCloneResourceReductionBeforeScheduling)
+TEST(ReusableSnapshotCreateTransferTest, AllowsCloneResourceReduction)
 {
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->set_requestid("clone-create-request");
@@ -5550,13 +5541,13 @@ TEST(ReusableSnapshotCreateTransferTest, RejectsCloneResourceReductionBeforeSche
 
     const auto status = ApplyResolvedReusableSnapshotForCreate(resolved, scheduleReq);
 
-    EXPECT_TRUE(status.IsError());
-    EXPECT_EQ(status.StatusCode(), StatusCode::ERR_PARAM_INVALID);
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_EQ(target->resources().resources().at(MEMORY_RESOURCE_NAME).scalar().value(), 1024);
     EXPECT_EQ(target->scheduleoption().extension().count(
-                  REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION), 0U);
+                  REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION), 1U);
 }
 
-TEST(ReusableSnapshotCreateTransferTest, RejectsIncompatibleNonScalarResourceConflict)
+TEST(ReusableSnapshotCreateTransferTest, PreservesExplicitNonScalarResources)
 {
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->set_requestid("clone-create-request");
@@ -5589,8 +5580,11 @@ TEST(ReusableSnapshotCreateTransferTest, RejectsIncompatibleNonScalarResourceCon
 
     const auto status = ApplyResolvedReusableSnapshotForCreate(resolved, scheduleReq);
 
-    EXPECT_TRUE(status.IsError());
-    EXPECT_EQ(status.StatusCode(), StatusCode::ERR_PARAM_INVALID);
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    const auto &device = target->resources().resources().at("Device");
+    ASSERT_TRUE(device.has_set());
+    ASSERT_EQ(device.set().items_size(), 1);
+    EXPECT_EQ(device.set().items(0), "gpu0");
 }
 
 TEST_F(InstanceCtrlTest, CreateFromSnapshotResolvesReadyRecordBeforeOrdinaryAuthorization)

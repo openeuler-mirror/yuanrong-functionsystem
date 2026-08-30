@@ -2150,10 +2150,11 @@ litebus::Future<ScheduleResponse> InstanceCtrlActor::DoCreateInstance(
     const std::string traceID = scheduleReq->traceid();
     const std::string requestID = scheduleReq->requestid();
     if (authorizeStatus.IsError()) {
-        YRLOG_ERROR("{}|{}|authorize failed.", traceID, requestID);
-        runtimePromise->SetValue(
-            GenScheduleResponse(StatusCode::ERR_AUTHORIZE_FAILED, "authorize failed", *scheduleReq));
-        return GenScheduleResponse(StatusCode::ERR_AUTHORIZE_FAILED, "authorize failed", *scheduleReq);
+        YRLOG_ERROR("{}|{}|pre-create validation failed, code({}), message({}).", traceID, requestID,
+                    fmt::underlying(authorizeStatus.StatusCode()), authorizeStatus.RawMessage());
+        auto response = GenScheduleResponse(authorizeStatus.StatusCode(), authorizeStatus.RawMessage(), *scheduleReq);
+        runtimePromise->SetValue(response);
+        return response;
     }
     if (auto schedResultOpt(instanceControlView_->IsDuplicateRequest(scheduleReq, runtimePromise));
         schedResultOpt.IsSome()) {

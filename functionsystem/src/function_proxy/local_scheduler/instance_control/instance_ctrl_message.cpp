@@ -20,60 +20,10 @@
 #include "common/utils/resume_identity.h"
 #include "common/utils/struct_transfer.h"
 
-#include <nlohmann/json.hpp>
-
 namespace functionsystem {
 using namespace messages;
 
 namespace {
-
-Status ReusableSnapshotTunnelPorts(const resources::InstanceInfo &instance,
-                                   std::pair<std::string, std::string> &ports)
-{
-    ports = {};
-    const auto env = instance.createoptions().find("DELEGATE_ENV_VAR");
-    if (env == instance.createoptions().end()) {
-        return Status::OK();
-    }
-    try {
-        const auto parsed = nlohmann::json::parse(env->second);
-        const auto ws = parsed.find("RRT_TUNNEL_WS_PORT");
-        const auto http = parsed.find("RRT_TUNNEL_HTTP_PORT");
-        if (ws == parsed.end() && http == parsed.end()) {
-            return Status::OK();
-        }
-        if (ws == parsed.end() || http == parsed.end() || !ws->is_string() || !http->is_string()
-            || ws->get<std::string>().empty() || http->get<std::string>().empty()) {
-            return Status(StatusCode::ERR_PARAM_INVALID,
-                          "reusable Snapshot reverse tunnel shape is invalid");
-        }
-        ports = { ws->get<std::string>(), http->get<std::string>() };
-        return Status::OK();
-    } catch (const nlohmann::json::exception &) {
-        return Status(StatusCode::ERR_PARAM_INVALID,
-                      "reusable Snapshot environment is invalid JSON");
-    }
-}
-
-Status ValidateReusableSnapshotTunnelShape(const resources::InstanceInfo &source,
-                                           const resources::InstanceInfo &target)
-{
-    std::pair<std::string, std::string> sourcePorts;
-    std::pair<std::string, std::string> targetPorts;
-    auto status = ReusableSnapshotTunnelPorts(source, sourcePorts);
-    if (status.IsError()) {
-        return status;
-    }
-    status = ReusableSnapshotTunnelPorts(target, targetPorts);
-    if (status.IsError()) {
-        return status;
-    }
-    if (sourcePorts != targetPorts) {
-        return Status(StatusCode::ERR_PARAM_INVALID,
-                      "Create-from-Snapshot must explicitly preserve the reverse tunnel ports");
-    }
-    return Status::OK();
-}
 
 Status ValidateReusableSnapshotRestore(
     const ::messages::ReusableSnapshotRestore &restore,
@@ -83,9 +33,7 @@ Status ValidateReusableSnapshotRestore(
     if (requestedSnapshotID.empty() || restore.snapshotid() != requestedSnapshotID
         || !restore.allowlogicalinstanceidrebind() || !restore.has_artifact()
         || artifact.storagebackend().empty() || artifact.objectkey().empty()
-        || artifact.size() <= 0
-        || (artifact.storagebackend() == "local"
-                ? artifact.sourcenodeid().empty() : artifact.sha256().size() != 64)
+        || (artifact.storagebackend() == "local" && artifact.sourcenodeid().empty())
         || artifact.format() != "sandboxd-checkpoint" || artifact.formatversion() != 1) {
         return Status(StatusCode::ERR_PARAM_INVALID,
                       "resolved reusable Snapshot restore metadata is invalid");
@@ -93,26 +41,14 @@ Status ValidateReusableSnapshotRestore(
     return Status::OK();
 }
 
-Status MergeReusableSnapshotResources(
+void InheritMissingReusableSnapshotResources(
     const resources::Resources &source, resources::Resources *target)
 {
-    if (target == nullptr) {
-        return Status(StatusCode::ERR_PARAM_INVALID,
-                      "reusable Snapshot target resources are unavailable");
-    }
     for (const auto &[name, sourceResource] : source.resources()) {
-        auto targetResource = target->mutable_resources()->find(name);
-        if (targetResource == target->mutable_resources()->end()) {
+        if (target->resources().find(name) == target->resources().end()) {
             (*target->mutable_resources())[name].CopyFrom(sourceResource);
-            continue;
-        }
-        if (!sourceResource.has_scalar() || !targetResource->second.has_scalar()
-            || targetResource->second.scalar().value() < sourceResource.scalar().value()) {
-            return Status(StatusCode::ERR_PARAM_INVALID,
-                          "Create-from-Snapshot cannot reduce or change a Snapshot resource");
         }
     }
-    return Status::OK();
 }
 
 }  // namespace
@@ -144,21 +80,14 @@ Status ApplyResolvedReusableSnapshotForCreate(
         return Status(StatusCode::ERR_PARAM_INVALID,
                       "Create function does not match the reusable Snapshot template");
     }
-    const auto tunnelStatus = ValidateReusableSnapshotTunnelShape(source, *target);
-    if (tunnelStatus.IsError()) {
-        return tunnelStatus;
-    }
-    const auto resourceStatus = MergeReusableSnapshotResources(
-        source.resources(), target->mutable_resources());
-    if (resourceStatus.IsError()) {
-        return resourceStatus;
-    }
-
     // Keep the new logical identity, parent, naming and placement choices.
-    // The Snapshot supplies workload inputs and the restore artifact only.
+    // The Snapshot supplies workload inputs and defaults for omitted runtime
+    // resources. Explicit target resources remain valid restore overrides,
+    // including values smaller than the source request.
     target->set_function(source.function());
     target->set_restartpolicy(source.restartpolicy());
     *target->mutable_createoptions() = source.createoptions();
+    InheritMissingReusableSnapshotResources(source.resources(), target->mutable_resources());
     target->set_storagetype(source.storagetype());
     target->mutable_args()->CopyFrom(source.args());
     target->set_gracefulshutdowntime(source.gracefulshutdowntime());

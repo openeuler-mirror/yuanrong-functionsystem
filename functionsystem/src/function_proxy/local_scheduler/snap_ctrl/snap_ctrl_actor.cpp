@@ -37,13 +37,6 @@ namespace {
 constexpr int32_t DEFAULT_PAUSE_TTL_SECONDS = 90'000;
 constexpr uint32_t SNAPSHOT_ATTEMPT_PROTOCOL_VERSION = 1;
 
-std::string BuildReusableSnapshotFingerprint(
-    const resources::InstanceInfo &instanceInfo, const core_service::SnapOptions &options)
-{
-    const auto identity = instanceInfo.tenantid() + std::string(1, '\0')
-        + instanceInfo.instanceid() + std::string(1, '\0') + options.name();
-    return resume_identity::Sha256Hex(identity);
-}
 }
 
 SnapCtrlActor::SnapCtrlActor(const std::string &name, const std::string &nodeID,
@@ -374,7 +367,6 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleReusableSnapshot(
         (*context->sourceInstanceInfo.mutable_createoptions())["YR_CHECKPOINT_TIMEOUT_MS"] =
             std::to_string(options.checkpointtimeoutms());
     }
-    context->requestFingerprint = BuildReusableSnapshotFingerprint(instanceInfo, options);
     context->completion = std::make_shared<litebus::Promise<KillResponse>>();
 
     if (requestID.empty() || instanceID.empty() || instanceInfo.tenantid().empty()
@@ -406,7 +398,6 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleReusableSnapshot(
     if (!options.name().empty()) {
         request->add_names(options.name());
     }
-    request->set_requestfingerprint(context->requestFingerprint);
     localSchedSrv_->BeginReusableSnapshot(request).OnComplete(
         litebus::Defer(GetAID(), &SnapCtrlActor::OnReusableSnapshotBegun,
                        context, std::placeholders::_1));
@@ -593,7 +584,6 @@ void SnapCtrlActor::OnReusableSnapshotPublished(
     request->set_requestid(context->requestID);
     request->set_tenantid(context->sourceInstanceInfo.tenantid());
     request->set_snapshotid(context->snapshotID);
-    request->set_requestfingerprint(context->requestFingerprint);
     *request->mutable_sourceinstanceinfo() = context->sourceInstanceInfo;
     *request->mutable_artifact() = context->artifact;
     localSchedSrv_->CommitReusableSnapshot(request).OnComplete(
@@ -676,9 +666,9 @@ void SnapCtrlActor::FinalizeReusableSnapshot(
     ::messages::SnapshotAttemptFinalizeOperation operation,
     common::ErrorCode terminalCode, const std::string &terminalMessage)
 {
-    if (context->artifact.storagebackend().empty() || context->artifact.size() <= 0
+    if (context->artifact.storagebackend().empty() || context->artifact.objectkey().empty()
         || (context->artifact.storagebackend() == "local"
-                ? context->artifact.sourcenodeid().empty() : context->artifact.sha256().empty())) {
+            && context->artifact.sourcenodeid().empty())) {
         const auto message = "reusable snapshot exact cleanup artifact identity is incomplete";
         // Keep the PUBLISHING/READY coordination record when exact cleanup
         // cannot be proven.  Deleting it here would orphan an immutable
@@ -738,7 +728,6 @@ void SnapCtrlActor::FailReusableSnapshot(
     request->set_requestid(context->requestID);
     request->set_tenantid(context->sourceInstanceInfo.tenantid());
     request->set_snapshotid(context->snapshotID);
-    request->set_requestfingerprint(context->requestFingerprint);
     request->set_reason(message);
     localSchedSrv_->FailReusableSnapshot(request).OnComplete(
         litebus::Defer(GetAID(), &SnapCtrlActor::OnReusableSnapshotFailedRecord,

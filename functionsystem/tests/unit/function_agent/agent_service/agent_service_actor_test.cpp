@@ -258,7 +258,7 @@ namespace {
         storage->objectMetadata.complete = true;
     }
 
-    std::filesystem::path PrepareMaterializationStaging(
+    std::filesystem::path PrepareMaterializationDirectory(
         const std::filesystem::path &checkpointRoot,
         const std::shared_ptr<messages::StartInstanceRequest> &request)
     {
@@ -266,9 +266,9 @@ namespace {
         const auto snapshotID = info.has_reusablesnapshotrestore()
             ? info.reusablesnapshotrestore().snapshotid()
             : info.snapshotinfo().checkpointid();
-        const auto staging = checkpointRoot / ("." + snapshotID + ".staging");
-        std::filesystem::create_directories(staging);
-        return staging;
+        const auto directory = checkpointRoot / snapshotID;
+        std::filesystem::create_directories(directory);
+        return directory;
     }
 
     size_t JudgeCodeReferNum(const std::shared_ptr<std::unordered_map<std::string, CodeReferInfo>> &codeReferMgr,
@@ -379,11 +379,11 @@ TEST(ReusableSnapshotCreateAgentTransferTest, MaterializesFrozenArtifactAtFlatSn
     restore->mutable_artifact()->set_formatversion(1);
 
     const auto future = function_agent::MaterializeReusableSnapshotCheckpoint(
-        storage, checkpointRoot, PrepareMaterializationStaging(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
+        storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
     ASSERT_AWAIT_READY_FOR(future, 5'000);
     ASSERT_TRUE(future.Get().IsOk()) << future.Get().ToString();
 
-    const auto checkpointPath = checkpointRoot / ".snapshot-42.staging" / "checkpoint.img";
+    const auto checkpointPath = checkpointRoot / "snapshot-42" / "checkpoint.img";
     EXPECT_TRUE(std::filesystem::is_regular_file(checkpointPath));
     EXPECT_EQ(storage->getCalls.load(), 1);
     EXPECT_EQ(storage->getKey,
@@ -402,7 +402,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, PauseMaterializationUsesPauseKeyAn
     auto start = MakePauseMaterializationRequest(payload);
 
     auto future = function_agent::MaterializeTrustedResumeCheckpoint(
-        storage, checkpointRoot, PrepareMaterializationStaging(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
+        storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
     ASSERT_AWAIT_READY_FOR(future, 5'000);
     ASSERT_TRUE(future.Get().IsOk()) << future.Get().ToString();
     const auto tenantHash = snapshot_storage::StableTenantHash("tenant-a");
@@ -415,7 +415,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, PauseMaterializationUsesPauseKeyAn
     ServeMaterializationObject(storage, "pause-snapshot-17", payload);
     storage->objectMetadata.sourceInstanceVersion = 16;
     future = function_agent::MaterializeTrustedResumeCheckpoint(
-        storage, checkpointRoot, PrepareMaterializationStaging(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
+        storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
     ASSERT_AWAIT_READY_FOR(future, 5'000);
     EXPECT_TRUE(future.Get().IsError());
     EXPECT_EQ(storage->getCalls.load(), 0);
@@ -433,7 +433,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, ReusableMaterializationUsesFrozenK
     auto start = MakeReusableMaterializationRequest(payload, frozenKey);
 
     auto future = function_agent::MaterializeReusableSnapshotCheckpoint(
-        storage, checkpointRoot, PrepareMaterializationStaging(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
+        storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
     ASSERT_AWAIT_READY_FOR(future, 5'000);
     ASSERT_TRUE(future.Get().IsOk()) << future.Get().ToString();
     EXPECT_EQ(storage->statKey, frozenKey);
@@ -444,7 +444,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, ReusableMaterializationUsesFrozenK
     ServeMaterializationObject(storage, "snapshot-42", payload);
     storage->objectMetadata.expiresAtUnixSeconds = 123456789;
     future = function_agent::MaterializeReusableSnapshotCheckpoint(
-        storage, checkpointRoot, PrepareMaterializationStaging(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
+        storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
     ASSERT_AWAIT_READY_FOR(future, 5'000);
     EXPECT_TRUE(future.Get().IsError());
     EXPECT_EQ(storage->getCalls.load(), 0);
@@ -464,13 +464,12 @@ TEST(ReusableSnapshotCreateAgentTransferTest, MaterializationDoesNotMutateCommit
     std::ofstream(checkpointPath, std::ios::binary) << payload;
 
     const auto future = function_agent::MaterializeReusableSnapshotCheckpoint(
-    storage, checkpointRoot, PrepareMaterializationStaging(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
+    storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
     ASSERT_AWAIT_READY_FOR(future, 5'000);
-    ASSERT_TRUE(future.Get().IsOk()) << future.Get().ToString();
-    EXPECT_EQ(storage->statCalls.load(), 1);
-    EXPECT_EQ(storage->getCalls.load(), 1);
+    EXPECT_TRUE(future.Get().IsError());
+    EXPECT_EQ(storage->statCalls.load(), 0);
+    EXPECT_EQ(storage->getCalls.load(), 0);
     EXPECT_EQ(ReadTestFile(checkpointPath), payload);
-    EXPECT_EQ(ReadTestFile(checkpointRoot / ".snapshot-42.staging" / "checkpoint.img"), payload);
     std::filesystem::remove_all(checkpointRoot);
 }
 
@@ -487,12 +486,11 @@ TEST(ReusableSnapshotCreateAgentTransferTest, MaterializationLeavesExistingCommi
     std::ofstream(checkpointPath, std::ios::binary) << "invalid";
 
     const auto future = function_agent::MaterializeReusableSnapshotCheckpoint(
-        storage, checkpointRoot, PrepareMaterializationStaging(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
+        storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
     ASSERT_AWAIT_READY_FOR(future, 5'000);
-    ASSERT_TRUE(future.Get().IsOk()) << future.Get().ToString();
-    EXPECT_EQ(storage->getCalls.load(), 1);
+    EXPECT_TRUE(future.Get().IsError());
+    EXPECT_EQ(storage->getCalls.load(), 0);
     EXPECT_EQ(ReadTestFile(checkpointPath), "invalid");
-    EXPECT_EQ(ReadTestFile(checkpointRoot / ".snapshot-42.staging" / "checkpoint.img"), payload);
     std::filesystem::remove_all(checkpointRoot);
 }
 
@@ -512,10 +510,10 @@ TEST(ReusableSnapshotCreateAgentTransferTest, MaterializationDoesNotFollowCommit
     std::filesystem::create_symlink(outside, checkpointPath);
 
     const auto future = function_agent::MaterializeReusableSnapshotCheckpoint(
-        storage, checkpointRoot, PrepareMaterializationStaging(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
+        storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
     ASSERT_AWAIT_READY_FOR(future, 5'000);
-    EXPECT_TRUE(future.Get().IsOk());
-    EXPECT_EQ(storage->getCalls.load(), 1);
+    EXPECT_TRUE(future.Get().IsError());
+    EXPECT_EQ(storage->getCalls.load(), 0);
     EXPECT_TRUE(std::filesystem::is_symlink(checkpointPath));
     std::ifstream input(outside, std::ios::binary);
     std::string outsidePayload;
@@ -534,7 +532,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, StatGetAndCommitFailuresRemainErro
     auto storage = std::make_shared<CountingSnapshotStorage>();
     storage->statStatus = Status(StatusCode::FAILED, "injected Stat failure");
     auto future = function_agent::MaterializeReusableSnapshotCheckpoint(
-        storage, checkpointRoot, PrepareMaterializationStaging(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
+        storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
     ASSERT_AWAIT_READY_FOR(future, 5'000);
     EXPECT_TRUE(future.Get().IsError());
     EXPECT_EQ(storage->getCalls.load(), 0);
@@ -543,7 +541,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, StatGetAndCommitFailuresRemainErro
     ServeMaterializationObject(storage, "snapshot-42", payload);
     storage->getStatus = Status(StatusCode::FAILED, "injected Get failure");
     future = function_agent::MaterializeReusableSnapshotCheckpoint(
-        storage, checkpointRoot, PrepareMaterializationStaging(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
+        storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
     ASSERT_AWAIT_READY_FOR(future, 5'000);
     EXPECT_TRUE(future.Get().IsError());
 
@@ -551,7 +549,7 @@ TEST(ReusableSnapshotCreateAgentTransferTest, StatGetAndCommitFailuresRemainErro
     ServeMaterializationObject(storage, "snapshot-42", payload);
     storage->objectPayload = std::string(payload.size(), 'x');
     future = function_agent::MaterializeReusableSnapshotCheckpoint(
-        storage, checkpointRoot, PrepareMaterializationStaging(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
+        storage, checkpointRoot, PrepareMaterializationDirectory(checkpointRoot, start), std::make_shared<ActorWorker>(), start);
     ASSERT_AWAIT_READY_FOR(future, 5'000);
     EXPECT_TRUE(future.Get().IsError());
     std::filesystem::remove_all(checkpointRoot);
@@ -892,7 +890,7 @@ TEST_F(AgentServiceActorTest, SnapshotRuntimeCommitsLocalMetadataBeforeSuccess)
     messages::SnapshotRuntimeRequest forwardedRequest;
     ASSERT_TRUE(forwardedRequest.ParseFromString(forwarded.Get()));
     EXPECT_EQ(std::filesystem::path(forwardedRequest.checkpointdir()),
-              checkpointRoot / ("." + forwardedRequest.snapshotid() + ".staging"));
+              checkpointRoot / forwardedRequest.snapshotid());
     ASSERT_TRUE(std::filesystem::is_directory(forwardedRequest.checkpointdir()));
     std::ofstream checkpoint(std::filesystem::path(forwardedRequest.checkpointdir()) / "checkpoint.img",
                              std::ios::binary);
@@ -1232,7 +1230,7 @@ TEST_F(AgentServiceActorTest, OrdinarySnapshotResolvesCheckpointPlanBeforeRuntim
     ASSERT_TRUE(forwardedRequest.ParseFromString(forwarded.Get()));
     EXPECT_FALSE(forwardedRequest.snapshotid().empty());
     EXPECT_EQ(std::filesystem::path(forwardedRequest.checkpointdir()),
-              checkpointRoot / ("." + forwardedRequest.snapshotid() + ".staging"));
+              checkpointRoot / forwardedRequest.snapshotid());
     EXPECT_EQ(forwardedRequest.ttl(), 600);
     EXPECT_FALSE(forwardedRequest.leaverunning());
 }
@@ -1604,7 +1602,7 @@ TEST_F(AgentServiceActorTest, OrdinarySnapshotCanonicalizesCallerSuppliedCheckpo
     ASSERT_TRUE(forwardedRequest.ParseFromString(forwarded.Get()));
     EXPECT_EQ(forwardedRequest.snapshotid(), "caller-snapshot");
     EXPECT_EQ(std::filesystem::path(forwardedRequest.checkpointdir()),
-              checkpointRoot / ("." + forwardedRequest.snapshotid() + ".staging"));
+              checkpointRoot / forwardedRequest.snapshotid());
 }
 
 /**

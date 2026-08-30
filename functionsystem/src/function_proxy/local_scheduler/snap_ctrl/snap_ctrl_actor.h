@@ -220,7 +220,6 @@ private:
         std::string requestID;
         std::string instanceID;
         std::string snapshotID;
-        std::string requestFingerprint;
         std::string name;
         resources::InstanceInfo sourceInstanceInfo;
         ::messages::SnapshotArtifact artifact;

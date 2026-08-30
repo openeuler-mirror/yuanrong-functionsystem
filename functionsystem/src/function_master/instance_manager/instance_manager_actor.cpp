@@ -1033,9 +1033,7 @@ InstanceManagerActor::DeleteReusableSnapshotArtifact(
     const auto &artifact = input.artifact();
     if (input.requestid().empty() || input.tenantid().empty() || input.snapshotid().empty()
         || artifact.storagebackend().empty() || artifact.objectkey().empty()
-        || artifact.size() <= 0
-        || (artifact.storagebackend() == "local"
-                ? artifact.sourcenodeid().empty() : artifact.sha256().empty())) {
+        || (artifact.storagebackend() == "local" && artifact.sourcenodeid().empty())) {
         error.set_code(common::ERR_PARAM_INVALID);
         error.set_message("reusable Snapshot artifact delete identity is incomplete");
         return error;

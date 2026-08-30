@@ -857,7 +857,7 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnWarmUpRegis
     return rsp;
 }
 
-// ── Restore path (legacy download/ref or trusted attempt -> Restore RPC) ─────
+// ── Restore path (FunctionAgent materialization -> Restore RPC) ──────────────
 
 litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartBySnapshot(const SandboxdStartContext &context)
 {
@@ -893,32 +893,18 @@ litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartBySnapsh
                 request, StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED,
                 "local restore checkpoint is not an existing directory");
         }
-        return OnCheckpointDownloaded(checkpointDirectory, context);
+        return StartFromMaterializedCheckpoint({checkpointDirectory, context});
     }
     return GenFailStartInstanceResponse(
         request, StatusCode::ERR_PARAM_INVALID,
         "restore checkpoint must be materialized by FunctionAgent");
 }
 
-litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointDownloaded(
-    const std::string &checkpointPath, const SandboxdStartContext &context)
-{
-    SandboxdRestoreContext restoreContext{checkpointPath, context};
-
-    return OnCheckpointRefAdded(Status::OK(), restoreContext);
-}
-
-litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::OnCheckpointRefAdded(
-    const Status &refStatus, const SandboxdRestoreContext &context)
+litebus::Future<messages::StartInstanceResponse> SandboxdExecutor::StartFromMaterializedCheckpoint(
+    const SandboxdRestoreContext &context)
 {
     const auto &request = context.start.request;
     const auto &info = request->runtimeinstanceinfo();
-    if (refStatus.IsError()) {
-        ReportSandboxLifecycleStatus(info, info.runtimeid(), SandboxLifecycleStatus::ABNORMAL);
-        return GenFailStartInstanceResponse(request, StatusCode::RUNTIME_MANAGER_CHECKPOINT_FAILED,
-                                            "add checkpoint reference failed: " + refStatus.RawMessage());
-    }
-
     if (context.start.resumeIdentity.trusted) {
         // sandboxd is the physical authority.  Query the deterministic sandbox
         // before allocating any target-node ports.
@@ -1594,8 +1580,7 @@ litebus::Future<messages::SnapshotRuntimeResponse> SandboxdExecutor::SnapshotRun
                             // A leave-running checkpoint may only converge from
                             // sandboxd's committed Checkpoint response. List can
                             // describe the sandbox, but it cannot prove the
-                            // artifact identity or turn a legacy CHECKPOINTED
-                            // state into success by guessing a local path.
+                            // artifact identity after an uncertain RPC result.
                             return reconciled;
                         }
                         return reconciled;

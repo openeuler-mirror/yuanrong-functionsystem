@@ -2200,9 +2200,8 @@ void FunctionAgentMgrActor::DeleteReusableSnapshotArtifact(
     const auto &artifact = request.artifact();
     if (!parsed || request.requestid().empty() || request.tenantid().empty()
         || request.snapshotid().empty() || artifact.storagebackend().empty()
-        || artifact.objectkey().empty() || artifact.size() <= 0
-        || (artifact.storagebackend() == "local"
-                ? artifact.sourcenodeid().empty() : artifact.sha256().empty())) {
+        || artifact.objectkey().empty()
+        || (artifact.storagebackend() == "local" && artifact.sourcenodeid().empty())) {
         ::messages::DeleteReusableSnapshotArtifactResponse response;
         response.set_requestid(request.requestid());
         response.set_code(common::ERR_PARAM_INVALID);

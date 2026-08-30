@@ -112,11 +112,6 @@ fs::path LocalSnapshotStore::SnapshotDirectory(const std::string &snapshotID) co
     return (checkpointRoot_ / snapshotID).lexically_normal();
 }
 
-fs::path LocalSnapshotStore::StagingDirectory(const std::string &snapshotID) const
-{
-    return (checkpointRoot_ / ("." + snapshotID + ".staging")).lexically_normal();
-}
-
 Status LocalSnapshotStore::InspectArtifact(const fs::path &directory, uint64_t &size) const
 {
     snapshot_storage::detail::SecureDirectory opened;
@@ -183,34 +178,22 @@ LocalSnapshotPrepareResult LocalSnapshotStore::Prepare(const LocalSnapshotCommit
     if (status.IsError()) {
         return {status, {}};
     }
-    const auto finalDirectory = SnapshotDirectory(request.snapshotID);
-    const auto directory = StagingDirectory(request.snapshotID);
+    const auto directory = SnapshotDirectory(request.snapshotID);
     std::error_code error;
-    const auto finalStatus = fs::symlink_status(finalDirectory, error);
-    if (!error && fs::exists(finalStatus)) {
-        if (!fs::is_directory(finalStatus)) {
-            return {Status(StatusCode::FAILED, "local artifact path is not a directory"), {}};
-        }
-        uint64_t ignoredSize = 0;
-        const auto artifact = InspectArtifact(finalDirectory, ignoredSize);
-        return artifact.IsOk()
-            ? LocalSnapshotPrepareResult{Status::OK(), finalDirectory, true}
-            : LocalSnapshotPrepareResult{artifact, finalDirectory, false};
-    }
-    if (error && error != std::errc::no_such_file_or_directory) {
-        return {Status(StatusCode::FAILED, "inspect local artifact directory: " + error.message()), {}};
-    }
-    error.clear();
     const auto fileStatus = fs::symlink_status(directory, error);
     if (!error && fs::exists(fileStatus)) {
         if (!fs::is_directory(fileStatus)) {
             return {Status(StatusCode::FAILED, "local artifact path is not a directory"), {}};
         }
-        if (!fs::is_empty(directory, error) || error) {
+        if (records_.find(request.snapshotID) == records_.end()) {
             return {snapshot_storage::detail::Conflict(
-                        "uncommitted local artifact staging directory is not empty"), directory, false};
+                        "local artifact path exists without a committed record"), directory, false};
         }
-        return {Status::OK(), directory, false};
+        uint64_t ignoredSize = 0;
+        const auto artifact = InspectArtifact(directory, ignoredSize);
+        return artifact.IsOk()
+            ? LocalSnapshotPrepareResult{Status::OK(), directory, true}
+            : LocalSnapshotPrepareResult{artifact, directory, false};
     }
     if (error && error != std::errc::no_such_file_or_directory) {
         return {Status(StatusCode::FAILED, "inspect local artifact directory: " + error.message()), {}};
@@ -228,31 +211,9 @@ LocalSnapshotCommitResult LocalSnapshotStore::Commit(const LocalSnapshotCommitRe
     if (status.IsError()) {
         return {status, {}};
     }
-    const auto finalDirectory = SnapshotDirectory(request.snapshotID);
-    const auto stagingDirectory = StagingDirectory(request.snapshotID);
+    const auto directory = SnapshotDirectory(request.snapshotID);
     uint64_t size = 0;
-    status = InspectArtifact(stagingDirectory, size);
-    if (status.StatusCode() == StatusCode::FILE_NOT_FOUND) {
-        status = InspectArtifact(finalDirectory, size);
-    } else if (status.IsOk()) {
-        std::error_code error;
-        const auto finalStatus = fs::symlink_status(finalDirectory, error);
-        if (!error && fs::exists(finalStatus)) {
-            return {snapshot_storage::detail::Conflict("committed local artifact already exists"), {}};
-        }
-        if (error && error != std::errc::no_such_file_or_directory) {
-            return {Status(StatusCode::FAILED, "inspect committed local artifact: " + error.message()), {}};
-        }
-        fs::rename(stagingDirectory, finalDirectory, error);
-        if (error) {
-            return {Status(StatusCode::FAILED, "commit local checkpoint directory: " + error.message()), {}};
-        }
-        snapshot_storage::detail::SecureDirectory root;
-        status = snapshot_storage::detail::SecureDirectory::Open(checkpointRoot_, false, root);
-        if (status.IsError() || fsync(root.Fd()) != 0) {
-            return {status.IsError() ? status : FileError("sync checkpoint root after commit"), {}};
-        }
-    }
+    status = InspectArtifact(directory, size);
     if (status.IsError()) {
         return {status, {}};
     }
@@ -377,13 +338,16 @@ Status LocalSnapshotStore::EvictLocalArtifact(const std::string &snapshotID)
     return DeleteUnlocked(snapshotID);
 }
 
-Status LocalSnapshotStore::DiscardStaging(const std::string &snapshotID)
+Status LocalSnapshotStore::DiscardPrepared(const std::string &snapshotID)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!snapshot_storage::detail::IsSafeLeafName(snapshotID)) {
-        return Status(StatusCode::ERR_PARAM_INVALID, "invalid local artifact staging identity");
+        return Status(StatusCode::ERR_PARAM_INVALID, "invalid prepared local artifact identity");
     }
-    return DeleteDirectoryUnlocked(StagingDirectory(snapshotID));
+    if (records_.find(snapshotID) != records_.end()) {
+        return snapshot_storage::detail::Conflict("cannot discard a committed local artifact");
+    }
+    return DeleteDirectoryUnlocked(SnapshotDirectory(snapshotID));
 }
 
 Status LocalSnapshotStore::DeleteRecoveryCandidatesForInstance(const std::string &instanceID)
@@ -454,10 +418,6 @@ Status LocalSnapshotStore::DeleteUnlocked(const std::string &snapshotID)
         evictAfterUnpin_.erase(snapshotID);
     };
     auto status = DeleteDirectoryUnlocked(SnapshotDirectory(snapshotID));
-    if (status.IsError()) {
-        return status;
-    }
-    status = DeleteDirectoryUnlocked(StagingDirectory(snapshotID));
     if (status.IsError()) {
         return status;
     }

@@ -699,7 +699,6 @@ private:
 
     bool HandleSnapshotFinalizeStopInstanceResponse(
         const litebus::AID &from, const ::messages::StopInstanceResponse &response);
-    void SnapshotAttemptFinalizeLegacy(const litebus::AID &from, std::string &&name, std::string &&msg);
     void ContinuePhysicalSnapshotFinalize(
         const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
         size_t remoteKeyIndex);
@@ -727,49 +726,6 @@ private:
                                   const snapshot_storage::SnapshotObjectMetadata &metadata);
     void CompletePauseSnapshotError(const std::string &requestID, int32_t code,
                                     const std::string &message, bool resultUnknown);
-    void ForgetCompletedPauseResult(const ::messages::SnapshotAttemptFinalizeRequest &request);
-    void OnPauseAttemptTemporaryDeleted(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<Status> &future);
-    void OnPauseAttemptFinalProbed(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<snapshot_storage::SnapshotStat> &future);
-    void OnPauseAttemptFinalDeleted(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<Status> &future);
-    void RetryPauseAttemptFinalDelete(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request);
-    void OnResumeAttemptLocalFinalized(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<Status> &future);
-    void OnResumeSnapshotDeleted(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<Status> &future);
-    void OnResumeSnapshotDeleteProbed(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const std::string &finalKey,
-        const litebus::Future<snapshot_storage::SnapshotStat> &future);
-    void OnPausedSnapshotDeleteProbed(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const std::string &finalKey,
-        const litebus::Future<snapshot_storage::SnapshotStat> &future);
-    void OnPausedSnapshotDeleted(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<Status> &future);
-    void OnReusableAttemptTemporaryDeleted(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<Status> &future);
-    void OnReusableSnapshotDeleteProbed(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const std::string &finalKey,
-        const litebus::Future<snapshot_storage::SnapshotStat> &future);
-    void OnReusableSnapshotDeleted(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        const litebus::Future<Status> &future);
-    void CompleteReusableSnapshotFinalize(
-        const litebus::AID &caller, const ::messages::SnapshotAttemptFinalizeRequest &request,
-        int32_t code, const std::string &message, bool resultUnknown,
-        bool localComplete, bool remoteComplete, bool forgetSnapshot);
     void OnReusableSnapshotArtifactDeleted(
         const litebus::AID &caller,
         const ::messages::DeleteReusableSnapshotArtifactRequest &request,
