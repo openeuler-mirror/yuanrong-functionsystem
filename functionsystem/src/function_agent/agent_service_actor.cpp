@@ -825,6 +825,8 @@ void AgentServiceActor::Init()
     ActorBase::Receive("CleanStatusResponse", &AgentServiceActor::CleanStatusResponse);
     ActorBase::Receive("UpdateCred", &AgentServiceActor::UpdateCred);
     ActorBase::Receive("UpdateCredResponse", &AgentServiceActor::UpdateCredResponse);
+    ActorBase::Receive("UpdateNetworkPolicy", &AgentServiceActor::UpdateNetworkPolicy);
+    ActorBase::Receive("UpdateNetworkPolicyResponse", &AgentServiceActor::UpdateNetworkPolicyResponse);
     ActorBase::Receive("GracefulShutdownFinish", &AgentServiceActor::GracefulShutdownFinish);
     ActorBase::Receive("SetNetworkIsolationRequest", &AgentServiceActor::SetNetworkIsolationRequest);
     ActorBase::Receive("QueryDebugInstanceInfos", &AgentServiceActor::QueryDebugInstanceInfos);
@@ -2060,6 +2062,27 @@ void AgentServiceActor::UpdateCredResponse(const litebus::AID &, std::string &&,
         return;
     }
     (void)Send(localSchedFuncAgentMgrAID_, "UpdateCredResponse", std::move(msg));
+}
+
+void AgentServiceActor::UpdateNetworkPolicy(
+    const litebus::AID &, std::string &&, std::string &&msg)
+{
+    if (!registerRuntimeMgr_.registered) {
+        YRLOG_ERROR("{}|registration is not complete, ignore network policy update", agentID_);
+        return;
+    }
+    (void)Send(litebus::AID(registerRuntimeMgr_.name, registerRuntimeMgr_.address),
+               "UpdateNetworkPolicy", std::move(msg));
+}
+
+void AgentServiceActor::UpdateNetworkPolicyResponse(
+    const litebus::AID &, std::string &&, std::string &&msg)
+{
+    if (!isRegisterCompleted_) {
+        YRLOG_ERROR("{}|registration is not complete, ignore network policy response", agentID_);
+        return;
+    }
+    (void)Send(localSchedFuncAgentMgrAID_, "UpdateNetworkPolicyResponse", std::move(msg));
 }
 
 void AgentServiceActor::GracefulShutdownFinish(const litebus::AID &, std::string &&, std::string &&msg)

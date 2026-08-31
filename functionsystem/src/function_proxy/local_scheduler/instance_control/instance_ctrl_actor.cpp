@@ -548,12 +548,85 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleReloadSignal(
         });
 }
 
+litebus::Future<KillResponse> InstanceCtrlActor::HandleUpdateNetworkPolicySignal(
+    const std::shared_ptr<KillContext> &killCtx,
+    const std::string &srcInstanceID,
+    const std::shared_ptr<KillRequest> &killReq)
+{
+    if (killCtx->killRsp.code() != common::ERR_NONE) {
+        return killCtx->killRsp;
+    }
+    if (!killCtx->isLocal) {
+        return GetLocalSchedulerAID(killCtx->instanceContext->GetInstanceInfo().instanceid())
+            .Then(litebus::Defer(
+                GetAID(), &InstanceCtrlActor::SendForwardCustomSignalRequest, _1,
+                srcInstanceID, killReq,
+                killCtx->instanceContext->GetInstanceInfo().requestid(), false));
+    }
+    const auto identity = killCtx->instanceContext->GetInstanceInfo();
+    if (identity.functionagentid().empty() || identity.runtimeid().empty()) {
+        return GenKillResponse(
+            common::ERR_PARAM_INVALID,
+            "sandbox runtime ownership is incomplete");
+    }
+    auto request = std::make_shared<messages::UpdateNetworkPolicyRequest>();
+    request->set_requestid(killReq->requestid());
+    request->set_instanceid(identity.instanceid());
+    request->set_runtimeid(identity.runtimeid());
+    request->set_networkpolicy(killReq->payload());
+    return functionAgentMgr_->UpdateNetworkPolicy(identity.functionagentid(), request)
+        .Then(litebus::Defer(
+            GetAID(), &InstanceCtrlActor::CompleteNetworkPolicyUpdate,
+            identity, killReq->payload(), std::placeholders::_1));
+}
+
+litebus::Future<KillResponse> InstanceCtrlActor::CompleteNetworkPolicyUpdate(
+    const resources::InstanceInfo &identity,
+    const std::string &policyJSON,
+    const messages::UpdateNetworkPolicyResponse &response)
+{
+    if (response.code() != static_cast<int32_t>(StatusCode::SUCCESS)) {
+        return GenKillResponse(
+            common::ERR_PARAM_INVALID,
+            response.message().empty() ? "network policy update failed" : response.message());
+    }
+    auto updated = identity;
+    if (policyJSON.empty() || policyJSON == "{}") {
+        updated.mutable_createoptions()->erase(CONTAINER_NETWORK_POLICY);
+    } else {
+        (*updated.mutable_createoptions())[CONTAINER_NETWORK_POLICY] = policyJSON;
+    }
+    return observer_->PutInstance(updated)
+        .Then(litebus::Defer(
+            GetAID(), &InstanceCtrlActor::OnNetworkPolicyPersisted,
+            updated, std::placeholders::_1));
+}
+
+KillResponse InstanceCtrlActor::OnNetworkPolicyPersisted(
+    const resources::InstanceInfo &updated,
+    const Status &status)
+{
+    if (!status.IsOk()) {
+        return GenKillResponse(
+            common::ERR_INNER_SYSTEM_ERROR,
+            "failed to persist the updated network policy: " + status.RawMessage());
+    }
+    auto localStatus = UpdateInstanceInfo(updated);
+    if (!localStatus.IsOk()) {
+        return GenKillResponse(
+            common::ERR_INNER_SYSTEM_ERROR,
+            "updated network policy was persisted but local state did not converge");
+    }
+    return GenKillResponse(common::ERR_NONE, "success");
+}
+
 namespace {
 
 bool IsSerializedSnapshotSignal(int signal)
 {
     return signal == INSTANCE_ANONYMOUS_CHECKPOINT_SIGNAL
         || signal == INSTANCE_RELOAD_SIGNAL
+        || signal == INSTANCE_UPDATE_NETWORK_POLICY_SIGNAL
         || signal == INSTANCE_CHECKPOINT_SIGNAL
         || signal == INSTANCE_TRANS_SUSPEND_SIGNAL
         || signal == INSTANCE_RESUME_SIGNAL
@@ -651,6 +724,15 @@ litebus::Future<KillResponse> InstanceCtrlActor::HandleKillImpl(const std::strin
                 .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::SignalRoute, _1))
                 .Then(litebus::Defer(
                     GetAID(), &InstanceCtrlActor::HandleReloadSignal,
+                    _1, srcInstanceID, killReq));
+        }
+        case INSTANCE_UPDATE_NETWORK_POLICY_SIGNAL: {
+            return CheckInstanceExist(srcInstanceID, killReq)
+                .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::CheckKillParam,
+                                     _1, srcInstanceID, killReq))
+                .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::SignalRoute, _1))
+                .Then(litebus::Defer(
+                    GetAID(), &InstanceCtrlActor::HandleUpdateNetworkPolicySignal,
                     _1, srcInstanceID, killReq));
         }
         case SHUT_DOWN_SIGNAL:

@@ -225,6 +225,16 @@ public:
     virtual litebus::Future<messages::UpdateCredResponse> UpdateCredForRuntime(
         const std::shared_ptr<messages::UpdateCredRequest> &request) = 0;
 
+    virtual litebus::Future<messages::UpdateNetworkPolicyResponse> UpdateNetworkPolicyForRuntime(
+        const std::shared_ptr<messages::UpdateNetworkPolicyRequest> &request)
+    {
+        messages::UpdateNetworkPolicyResponse response;
+        response.set_requestid(request->requestid());
+        response.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
+        response.set_message("network policy updates require the sandboxd executor");
+        return response;
+    }
+
     virtual litebus::Future<Status> NotifyInstancesDiskUsageExceedLimit(const std::string &description,
                                                                         const int limit) = 0;
 
@@ -362,6 +372,12 @@ public:
         const std::shared_ptr<messages::UpdateCredRequest> &request)
     {
         return litebus::Async(executor_->GetAID(), &Executor::UpdateCredForRuntime, request);
+    }
+
+    virtual litebus::Future<messages::UpdateNetworkPolicyResponse> UpdateNetworkPolicyForRuntime(
+        const std::shared_ptr<messages::UpdateNetworkPolicyRequest> &request)
+    {
+        return litebus::Async(executor_->GetAID(), &Executor::UpdateNetworkPolicyForRuntime, request);
     }
 
     virtual litebus::Future<bool> GracefulShutdown() = 0;

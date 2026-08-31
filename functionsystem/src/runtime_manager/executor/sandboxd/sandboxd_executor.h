@@ -167,6 +167,9 @@ public:
 
     litebus::Future<messages::UpdateCredResponse> UpdateCredForRuntime(
         const std::shared_ptr<messages::UpdateCredRequest> &request) override;
+    litebus::Future<messages::UpdateNetworkPolicyResponse> UpdateNetworkPolicyForRuntime(
+        const std::shared_ptr<messages::UpdateNetworkPolicyRequest> &request) override;
+
 
     litebus::Future<Status> NotifyInstancesDiskUsageExceedLimit(const std::string &description,
                                                                 const int limit) override;

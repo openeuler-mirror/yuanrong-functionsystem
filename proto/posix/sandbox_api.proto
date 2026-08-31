@@ -41,6 +41,8 @@ service SandboxService {
   rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
   // ListAvailableRuntimes lists runtime classes whose handlers are ready.
   rpc ListAvailableRuntimes(ListAvailableRuntimesRequest) returns (ListAvailableRuntimesResponse) {}
+  // SetNetworkPolicy atomically replaces a running sandbox's complete policy.
+  rpc SetNetworkPolicy(SetNetworkPolicyRequest) returns (SetNetworkPolicyResponse) {}
 }
 
 // NetworkPolicyAction is the action selected by a network policy rule.
@@ -146,6 +148,14 @@ message NetworkPolicy {
   uint32 schema_version = 3;
 }
 
+// SetNetworkPolicyRequest replaces a running sandbox's complete policy.
+message SetNetworkPolicyRequest {
+  string sandbox_id            = 1;
+  NetworkPolicy network_policy = 2;
+}
+
+// SetNetworkPolicyResponse is empty after a successful replacement.
+message SetNetworkPolicyResponse {}
 // RootfsSrcType identifies the root filesystem source type.
 enum RootfsSrcType {
   S3    = 0;

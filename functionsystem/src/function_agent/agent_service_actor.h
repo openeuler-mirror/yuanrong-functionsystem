@@ -219,6 +219,10 @@ public:
     virtual void UpdateCred(const litebus::AID &, std::string &&, std::string &&msg);
 
     virtual void UpdateCredResponse(const litebus::AID &, std::string &&, std::string &&msg);
+    virtual void UpdateNetworkPolicy(const litebus::AID &, std::string &&, std::string &&msg);
+
+    virtual void UpdateNetworkPolicyResponse(const litebus::AID &, std::string &&, std::string &&msg);
+
 
     void GracefulShutdownFinish(const litebus::AID &, std::string &&, std::string &&msg);
 

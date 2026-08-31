@@ -80,6 +80,10 @@ public:
     std::pair<Status, std::shared_ptr<runtime::v1::StartRequest>> Build(const SandboxdStartParams &params) const;
 
     static Status AttachCheckpointInfo(runtime::v1::StartRequest &request, const std::string &directory);
+    Status BuildNetworkPolicy(const std::string &policyJSON,
+                              const std::vector<std::string> &portMappings,
+                              runtime::v1::NetworkPolicy *networkPolicy) const;
+
 
     // Adds the bootstrap working-root mount and returns the working-root path
     // that should be set in YR_RT_WORKING_DIR. Shared with the sandbox executor.

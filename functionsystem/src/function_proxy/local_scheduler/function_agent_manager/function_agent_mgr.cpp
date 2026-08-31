@@ -95,6 +95,14 @@ litebus::Future<messages::UpdateCredResponse> FunctionAgentMgr::UpdateCred(
     ASSERT_IF_NULL(actor_);
     return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::UpdateCred, funcAgentID, request);
 }
+litebus::Future<messages::UpdateNetworkPolicyResponse> FunctionAgentMgr::UpdateNetworkPolicy(
+    const std::string &funcAgentID,
+    const std::shared_ptr<messages::UpdateNetworkPolicyRequest> &request)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::UpdateNetworkPolicy,
+                          funcAgentID, request);
+}
 
 litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgr::SnapshotRuntime(
     const std::string &requestID,

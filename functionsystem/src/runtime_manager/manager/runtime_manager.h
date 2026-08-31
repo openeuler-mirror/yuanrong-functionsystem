@@ -102,6 +102,7 @@ public:
     void CleanStatus(const litebus::AID &from, std::string &&, std::string &&msg);
 
     void UpdateCred(const litebus::AID &from, std::string &&, std::string &&msg);
+    void UpdateNetworkPolicy(const litebus::AID &from, std::string &&, std::string &&msg);
 
     /**
      *  Handle Prestart Runtime Process Exit from HealthCheckActor
@@ -290,6 +291,10 @@ private:
     }
 
     void UpdateCredResponse(const litebus::AID &to, const litebus::Future<messages::UpdateCredResponse> &rsp);
+    void UpdateNetworkPolicyResponse(
+        const litebus::AID &to,
+        const std::string &requestID,
+        const litebus::Future<messages::UpdateNetworkPolicyResponse> &rsp);
 
     void ReconcileRuntimes(const litebus::AID &from, std::string &&name, std::string &&msg);
 

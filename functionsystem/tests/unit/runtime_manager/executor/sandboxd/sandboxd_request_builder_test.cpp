@@ -731,4 +731,39 @@ TEST_F(SandboxdRequestBuilderTest, InvalidNetworkPolicyFailsBuild)
     EXPECT_EQ(startReq, nullptr);
 }
 
+TEST_F(SandboxdRequestBuilderTest, DynamicNetworkPolicyUsesSharedCompilerAndClears)
+{
+    const auto policyJSON = R"({
+        "schemaVersion": 2,
+        "traffic": {
+            "ingressDefaultAction": "allow",
+            "egressDefaultAction": "deny",
+            "mode": "stateful",
+            "rules": [{
+                "action": "allow",
+                "direction": "egress",
+                "protocol": "tcp",
+                "peer": {"cidr": "10.0.0.0/8"},
+                "priority": 100
+            }]
+        }
+    })";
+    runtime::v1::NetworkPolicy policy;
+    auto status = builder_->BuildNetworkPolicy(
+        policyJSON,
+        { "tcp:0:8080" }, &policy);
+
+    ASSERT_TRUE(status.IsOk()) << status.RawMessage();
+    ASSERT_EQ(policy.schema_version(), 2U);
+    ASSERT_TRUE(policy.has_traffic());
+    ASSERT_EQ(policy.traffic().rules_size(), 3);
+    EXPECT_EQ(policy.traffic().rules(1).priority(), std::numeric_limits<uint32_t>::max());
+    EXPECT_EQ(policy.traffic().rules(2).sandbox_port_range().first(), 8080U);
+
+    status = builder_->BuildNetworkPolicy("{}", {}, &policy);
+
+    ASSERT_TRUE(status.IsOk()) << status.RawMessage();
+    EXPECT_EQ(policy.ByteSizeLong(), 0U);
+}
+
 }  // namespace functionsystem::test

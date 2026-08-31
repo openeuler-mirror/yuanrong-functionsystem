@@ -377,6 +377,19 @@ message UpdateCredResponse {
   string message = 3;
 }
 
+message UpdateNetworkPolicyRequest {
+  string requestID = 1;
+  string instanceID = 2;
+  string runtimeID = 3;
+  string networkPolicy = 4;
+}
+
+message UpdateNetworkPolicyResponse {
+  string requestID = 1;
+  int32 code = 2;
+  string message = 3;
+}
+
 message UpdateResourcesRequest {
   resources.ResourceUnit resourceUnit = 1;
 }

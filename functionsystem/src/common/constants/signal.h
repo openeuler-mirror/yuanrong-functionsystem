@@ -75,6 +75,8 @@ const int32_t RRT_IDLE_REPORT_SIGNAL = 23;
 const int32_t INSTANCE_ANONYMOUS_CHECKPOINT_SIGNAL = 24;
 // User explicitly reloads a sandbox from its latest local anonymous checkpoint.
 const int32_t INSTANCE_RELOAD_SIGNAL = 25;
+// Replace the network policy of one running sandbox.
+const int32_t INSTANCE_UPDATE_NETWORK_POLICY_SIGNAL = 26;
 
 inline std::string SignalToString(int32_t signal)
 {
@@ -103,7 +105,8 @@ inline std::string SignalToString(int32_t signal)
         { DELETE_CHECKPOINT_SIGNAL, "DELETE_CHECKPOINT_SIGNAL" },
         { RRT_IDLE_REPORT_SIGNAL, "RRT_IDLE_REPORT_SIGNAL" },
         { INSTANCE_ANONYMOUS_CHECKPOINT_SIGNAL, "INSTANCE_ANONYMOUS_CHECKPOINT_SIGNAL" },
-        { INSTANCE_RELOAD_SIGNAL, "INSTANCE_RELOAD_SIGNAL" }
+        { INSTANCE_RELOAD_SIGNAL, "INSTANCE_RELOAD_SIGNAL" },
+        { INSTANCE_UPDATE_NETWORK_POLICY_SIGNAL, "INSTANCE_UPDATE_NETWORK_POLICY_SIGNAL" }
     };
     return signalMap.find(signal) != signalMap.end() ? signalMap.at(signal) : "UnknownSignal";
 }

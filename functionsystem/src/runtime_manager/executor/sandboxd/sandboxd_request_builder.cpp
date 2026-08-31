@@ -1247,6 +1247,29 @@ Status SandboxdRequestBuilder::ApplyNetworkPolicy(const std::shared_ptr<messages
     return Status::OK();
 }
 
+Status SandboxdRequestBuilder::BuildNetworkPolicy(const std::string &policyJSON,
+                                                   const std::vector<std::string> &portMappings,
+                                                   runtime::v1::NetworkPolicy *networkPolicy) const
+{
+    if (networkPolicy == nullptr) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "network policy output is null");
+    }
+    auto request = std::make_shared<messages::StartInstanceRequest>();
+    auto *options = request->mutable_runtimeinstanceinfo()
+                        ->mutable_deploymentconfig()
+                        ->mutable_deployoptions();
+    (*options)[CONTAINER_NETWORK_POLICY] = policyJSON;
+    runtime::v1::StartRequest start;
+    auto status = ApplyNetworkPolicy(request, portMappings, &start);
+    if (!status.IsOk()) {
+        return status;
+    }
+    networkPolicy->Clear();
+    if (start.has_network_policy()) {
+        networkPolicy->CopyFrom(start.network_policy());
+    }
+    return Status::OK();
+}
 void SandboxdRequestBuilder::ApplyPortMappings(const std::vector<std::string> &portMappings,
                                                google::protobuf::RepeatedPtrField<std::string> *ports) const
 {

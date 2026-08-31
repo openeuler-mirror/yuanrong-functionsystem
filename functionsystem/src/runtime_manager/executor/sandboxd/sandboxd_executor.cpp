@@ -1639,8 +1639,73 @@ litebus::Future<messages::UpdateCredResponse> SandboxdExecutor::UpdateCredForRun
     return response;
 }
 
-litebus::Future<Status> SandboxdExecutor::NotifyInstancesDiskUsageExceedLimit(const std::string & /* description */,
-                                                                              const int /* limit */)
+litebus::Future<messages::UpdateNetworkPolicyResponse>
+SandboxdExecutor::UpdateNetworkPolicyForRuntime(
+    const std::shared_ptr<messages::UpdateNetworkPolicyRequest> &request)
+{
+    messages::UpdateNetworkPolicyResponse failed;
+    failed.set_requestid(request->requestid());
+    auto info = stateManager_.Find(request->runtimeid());
+    if (!info.has_value() || info->sandboxID.empty()) {
+        failed.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
+        failed.set_message("runtime or physical sandbox is not active");
+        return failed;
+    }
+
+    std::vector<std::string> protectedPortMappings;
+    const auto &options = info->instanceInfo.deploymentconfig().deployoptions();
+    if (auto network = options.find(CONTAINER_NETWORK); network != options.end()) {
+        for (const auto &mapping : ParseForwardPorts(network->second)) {
+            protectedPortMappings.push_back(
+                ToDownstreamL4Protocol(mapping.protocol) + ":0:"
+                + std::to_string(mapping.containerPort));
+        }
+    }
+
+    auto grpcRequest = std::make_shared<runtime::v1::SetNetworkPolicyRequest>();
+    grpcRequest->set_sandbox_id(info->sandboxID);
+    SandboxdRequestBuilder builder(cmdBuilder_);
+    auto buildStatus = builder.BuildNetworkPolicy(
+        request->networkpolicy(), protectedPortMappings,
+        grpcRequest->mutable_network_policy());
+    if (!buildStatus.IsOk()) {
+        failed.set_code(static_cast<int32_t>(buildStatus.StatusCode()));
+        failed.set_message(buildStatus.RawMessage());
+        return failed;
+    }
+
+    ASSERT_IF_NULL(sandboxd_);
+    auto grpcResponse = std::make_shared<runtime::v1::SetNetworkPolicyResponse>();
+    return sandboxd_
+        ->CallAsyncX("SetNetworkPolicy", *grpcRequest, grpcResponse.get(),
+                     &runtime::v1::SandboxService::Stub::AsyncSetNetworkPolicy)
+        .Then([this, request, grpcResponse](
+                  const Status &status) -> messages::UpdateNetworkPolicyResponse {
+            messages::UpdateNetworkPolicyResponse response;
+            response.set_requestid(request->requestid());
+            if (!status.IsOk()) {
+                response.set_code(static_cast<int32_t>(status.StatusCode()));
+                response.set_message("SetNetworkPolicy gRPC failed: " + status.RawMessage());
+                return response;
+            }
+            auto current = stateManager_.Find(request->runtimeid());
+            if (current.has_value()) {
+                auto updated = current->instanceInfo;
+                auto *options = updated.mutable_deploymentconfig()->mutable_deployoptions();
+                if (request->networkpolicy().empty() || request->networkpolicy() == "{}") {
+                    options->erase(CONTAINER_NETWORK_POLICY);
+                } else {
+                    (*options)[CONTAINER_NETWORK_POLICY] = request->networkpolicy();
+                }
+                stateManager_.UpdateInstanceInfo(request->runtimeid(), updated);
+            }
+            response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+            return response;
+        });
+}
+litebus::Future<Status> SandboxdExecutor::NotifyInstancesDiskUsageExceedLimit(
+    const std::string & /* description */,
+    const int /* limit */)
 {
     return Status::OK();
 }

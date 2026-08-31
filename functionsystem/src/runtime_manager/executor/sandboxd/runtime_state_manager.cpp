@@ -162,6 +162,18 @@ void RuntimeStateManager::UpdatePortMappings(const std::string &runtimeID, const
     it->second.portMappingsJson = portMappingsJson;
 }
 
+void RuntimeStateManager::UpdateInstanceInfo(
+    const std::string &runtimeID,
+    const messages::RuntimeInstanceInfo &instanceInfo)
+{
+    auto it = sandboxes_.find(runtimeID);
+    if (it == sandboxes_.end()) {
+        YRLOG_WARN("RuntimeStateManager::UpdateInstanceInfo runtimeID({}) not found", runtimeID);
+        return;
+    }
+    it->second.instanceInfo = instanceInfo;
+}
+
 // ── In-progress start tracking ────────────────────────────────────────────────
 
 void RuntimeStateManager::MarkStartInProgress(const std::string &runtimeID,
