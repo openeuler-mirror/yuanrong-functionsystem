@@ -29,7 +29,7 @@ Status CreateSnapshotStorage(const SnapshotStorageStartConfig &config,
                              const std::shared_ptr<snapshot_storage::DataSystemSnapshotClient> &dataSystemClient)
 {
     output.reset();
-    if (!config.enabled) {
+    if (!config.enabled || !UsesDistributedStorage(config.mode)) {
         return Status::OK();
     }
 

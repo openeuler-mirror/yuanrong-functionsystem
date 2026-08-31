@@ -126,6 +126,51 @@ litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgr::SnapshotRun
                           requestID, instanceInfo, ttl, type, snapshotID, checkpointDir);
 }
 
+litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgr::SnapshotRuntimeAnonymous(
+    const std::string &requestID,
+    const resource_view::InstanceInfo &instanceInfo,
+    const std::string &snapshotID)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::SnapshotRuntimeAnonymous,
+                          requestID, instanceInfo, snapshotID);
+}
+
+litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgr::PublishSnapshotArtifact(
+    const std::string &requestID,
+    const resource_view::InstanceInfo &instanceInfo,
+    const std::string &snapshotID)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::PublishSnapshotArtifact,
+                          requestID, instanceInfo, snapshotID);
+}
+
+litebus::Future<messages::ListLocalSnapshotsResponse> FunctionAgentMgr::ListLocalSnapshots(
+    const std::string &functionAgentID)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::ListLocalSnapshots,
+                          functionAgentID);
+}
+
+litebus::Future<messages::DeleteLocalSnapshotResponse> FunctionAgentMgr::DeleteLocalSnapshot(
+    const std::string &functionAgentID,
+    const messages::DeleteLocalSnapshotRequest &request)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::DeleteLocalSnapshot,
+                          functionAgentID, request);
+}
+
+litebus::Future<std::optional<messages::LocalSnapshotMetadata>> FunctionAgentMgr::LatestAnonymousSnapshot(
+    const std::string &instanceID)
+{
+    ASSERT_IF_NULL(actor_);
+    return litebus::Async(actor_->GetAID(), &FunctionAgentMgrActor::LatestAnonymousSnapshot,
+                          instanceID);
+}
+
 litebus::Future<messages::ReconcileRuntimesResponse> FunctionAgentMgr::ReconcileRuntimes(
     const std::string &funcAgentID, const std::shared_ptr<messages::ReconcileRuntimesRequest> &request)
 {

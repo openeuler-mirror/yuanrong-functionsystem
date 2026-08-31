@@ -42,6 +42,18 @@ bool InstanceCtrlActor::IsSamePauseGateIdentity(const InstanceInfo &left, const 
         && left.runtimeaddress() == right.runtimeaddress();
 }
 
+bool InstanceCtrlActor::IsPauseRuntimeFenced(
+    const std::string &instanceID, const std::string &runtimeID)
+{
+    if (instanceID.empty() || runtimeID.empty()) {
+        return false;
+    }
+    const auto gate = pauseGateContexts_.find(instanceID);
+    return gate != pauseGateContexts_.end()
+        && gate->second.phase != PauseGatePhase::RECOVERED
+        && gate->second.identity.runtimeid() == runtimeID;
+}
+
 Status InstanceCtrlActor::ValidatePauseGateIdentity(const InstanceInfo &identity) const
 {
     if (instanceControlView_ == nullptr) {

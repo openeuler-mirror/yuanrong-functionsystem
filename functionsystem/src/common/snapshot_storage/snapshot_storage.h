@@ -36,6 +36,15 @@ struct SnapshotStat {
     SnapshotObjectMetadata metadata;
 };
 
+struct SnapshotPublicationFile {
+    Status status;
+    std::string path;
+    bool temporary{ false };
+    uint64_t size{ 0 };
+    std::string sha256;
+    bool metadataReady{ false };
+};
+
 class SnapshotStorage {
 public:
     virtual ~SnapshotStorage() = default;
@@ -45,6 +54,16 @@ public:
     virtual litebus::Future<SnapshotStat> Stat(const std::string &key) = 0;
     virtual litebus::Future<Status> Publish(const std::string &temporaryKey, const std::string &finalKey,
                                             const SnapshotObjectMetadata &expected) = 0;
+    virtual bool SupportsDirectFinalPut() const
+    {
+        return false;
+    }
+    virtual litebus::Future<Status> PutFinal(const std::string &, const std::string &,
+                                             const SnapshotObjectMetadata &)
+    {
+        return Status(StatusCode::FAILED,
+                      "snapshot storage does not support direct final put");
+    }
     virtual litebus::Future<Status> Get(const std::string &finalKey, const std::string &destinationFile) = 0;
     virtual litebus::Future<Status> Delete(const std::string &key) = 0;
 };
@@ -55,6 +74,8 @@ public:
 Status ResolveStorageBackend(const std::shared_ptr<SnapshotStorage> &storage,
                              const std::string &configuredBackend,
                              std::string &resolvedBackend);
+
+std::string StableTenantHash(const std::string &tenantID);
 
 std::string BuildPauseSnapshotFinalKey(const std::string &tenantID, const std::string &instanceID);
 std::string BuildPauseSnapshotTemporaryKey(const std::string &tenantID, const std::string &instanceID,
@@ -69,6 +90,12 @@ std::string BuildReusableSnapshotTemporaryKey(const std::string &tenantHash, con
 litebus::Future<SnapshotStat> InspectLocalSnapshotFile(const std::shared_ptr<ActorWorker> &worker,
                                                        const std::string &sourceFile, const std::string &snapshotID,
                                                        int64_t sourceInstanceVersion);
+litebus::Future<SnapshotPublicationFile> PrepareSnapshotPublicationFile(
+    const std::shared_ptr<ActorWorker> &worker, const std::string &sourceFile,
+    bool compress);
+litebus::Future<Status> MaterializeSnapshotPublicationDirectory(
+    const std::shared_ptr<ActorWorker> &worker, const std::string &publicationFile,
+    const std::filesystem::path &destinationDirectory);
 
 namespace detail {
 

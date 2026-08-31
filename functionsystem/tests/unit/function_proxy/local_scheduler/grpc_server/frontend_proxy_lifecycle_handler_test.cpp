@@ -24,6 +24,17 @@
 namespace functionsystem::test {
 using namespace local_scheduler;
 
+TEST(FrontendProxyLifecycleHandlerTest, CreateReadyTimeoutUsesFrontendValueWithLegacyFallback)
+{
+    ::frontend_proxy::CreateInstanceRequest request;
+
+    EXPECT_EQ(ResolveFrontendCreateReadyTimeoutMs(request), FRONTEND_CREATE_READY_TIMEOUT_MS);
+    request.set_createtimeoutms(-1);
+    EXPECT_EQ(ResolveFrontendCreateReadyTimeoutMs(request, 1234), 1234);
+    request.set_createtimeoutms(300000);
+    EXPECT_EQ(ResolveFrontendCreateReadyTimeoutMs(request), 300000);
+}
+
 TEST(FrontendProxyLifecycleHandlerTest, UsesComponentServerForComponentEndpoint)
 {
     auto endpoint = ResolveComponentGrpcEndpoint("10.0.0.12:22772", "172.17.0.1", "22773", "22774");

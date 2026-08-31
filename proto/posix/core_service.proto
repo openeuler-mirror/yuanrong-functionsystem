@@ -64,6 +64,8 @@ message CreateRequest {
   // normal Create. Only the ID is accepted from an untrusted caller; Master
   // resolves the authoritative restore metadata before scheduling.
   string              snapshotID    = 9;
+  // Opt in to same-node recovery from the latest local anonymous snapshot.
+  bool                failover      = 10;
 }
 
 message SnapshotInfo {
@@ -209,6 +211,7 @@ message SnapOptions {
   bool            leaveRunning = 3;
   string          functionType = 4;  // moduleName.className for actors
   string          name = 5;
+  uint64          checkpointTimeoutMs = 6;
 }
 
 message SnapStartOptions {

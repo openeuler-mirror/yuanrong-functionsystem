@@ -446,6 +446,23 @@ bool InitSnapManagerDriver(const std::shared_ptr<MetaStoreClient> &metaClient,
     auto snapManagerActor =
         std::make_shared<snap_manager::SnapManagerActor>(metaClient, globalSched, snap_manager::SnapManagerConfig{},
                                                          instanceManager);
+    if (instanceManager != nullptr) {
+        std::weak_ptr<snap_manager::SnapManagerActor> weakSnapManager = snapManagerActor;
+        instanceManager->SetInstanceDeleteObserver(
+            [weakSnapManager](const std::shared_ptr<resource_view::InstanceInfo> &instance) {
+                auto actor = weakSnapManager.lock();
+                if (actor == nullptr || instance == nullptr) {
+                    return;
+                }
+                litebus::Async(actor->GetAID(), &snap_manager::SnapManagerActor::DeleteLocalSnapshotsForSource,
+                               instance->tenantid(), instance->instanceid())
+                    .OnComplete([](const litebus::Future<Status> &cleanup) {
+                        if (cleanup.IsError() || cleanup.Get().IsError()) {
+                            YRLOG_WARN("failed to clean local Snapshots bound to deleted instance");
+                        }
+                    });
+            });
+    }
     g_snapManagerDriver = std::make_shared<snap_manager::SnapManagerDriver>(snapManagerActor);
     if (!g_snapManagerDriver->Start().IsOk()) {
         YRLOG_ERROR("failed to start snap-manager");

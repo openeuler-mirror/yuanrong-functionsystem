@@ -170,8 +170,9 @@ FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDi
         auto scheduleReq = BuildFrontendScheduleRequest(request);
         auto runtimePromise = std::make_shared<litebus::Promise<messages::ScheduleResponse>>();
         auto readyPromise = std::make_shared<litebus::Promise<std::shared_ptr<functionsystem::CallResult>>>();
+        const auto effectiveReadyTimeoutMs = ResolveFrontendCreateReadyTimeoutMs(request, readyTimeoutMs);
         auto readyFuture =
-            readyPromise->GetFuture().After(readyTimeoutMs,
+            readyPromise->GetFuture().After(effectiveReadyTimeoutMs,
                                             [scheduleReq, readyUnregister, createFailureLookup](
                                                 const litebus::Future<std::shared_ptr<functionsystem::CallResult>> &)
                                                 -> litebus::Future<std::shared_ptr<functionsystem::CallResult>> {
@@ -202,6 +203,12 @@ FrontendProxyServiceParam::CreateReadyDispatcher BuildFrontendProxyCreateReadyDi
                 });
             });
     };
+}
+
+uint64_t ResolveFrontendCreateReadyTimeoutMs(const ::frontend_proxy::CreateInstanceRequest &request,
+                                             uint64_t fallbackTimeoutMs)
+{
+    return request.createtimeoutms() > 0 ? static_cast<uint64_t>(request.createtimeoutms()) : fallbackTimeoutMs;
 }
 
 FrontendProxyServiceParam::KillReadyDispatcher BuildFrontendProxyKillReadyDispatcher(

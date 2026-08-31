@@ -44,7 +44,6 @@
 #include "mocks/mock_instance_ctrl.h"
 #include "mocks/mock_instance_control_view.h"
 #include "mocks/mock_local_sched_srv.h"
-#include "runtime_manager/ckpt/pause_artifact_path_manager.h"
 #include "utils/future_test_helper.h"
 
 namespace functionsystem::test {
@@ -204,6 +203,36 @@ public:
         return response;
     }
 
+    litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntimeAnonymous(
+        const std::string &requestID, const resource_view::InstanceInfo &instanceInfo,
+        const std::string &snapshotID) override
+    {
+        anonymousCalls_.fetch_add(1);
+        anonymousSnapshotID_ = snapshotID;
+        if (operations_ != nullptr) {
+            operations_->emplace_back("checkpoint");
+        }
+        messages::SnapshotRuntimeResponse response;
+        response.set_requestid(requestID);
+        response.set_code(anonymousCode_);
+        response.set_message(anonymousCode_ == common::ERR_NONE ? "" : "anonymous checkpoint failed");
+        if (anonymousCode_ == common::ERR_NONE) {
+            auto *snapshot = response.mutable_localsnapshot();
+            snapshot->set_snapshotid(snapshotID);
+            snapshot->set_localrecoverycandidate(true);
+            snapshot->set_instanceid(instanceInfo.instanceid());
+            snapshot->set_size(4096);
+            snapshot->set_createdatunixseconds(1);
+        }
+        return response;
+    }
+
+    void ConfigureAnonymousCheckpoint(int32_t code, std::vector<std::string> *operations)
+    {
+        anonymousCode_ = code;
+        operations_ = operations;
+    }
+
     litebus::Future<messages::SnapshotRuntimeResponse> SnapshotRuntime(
         const std::string &requestID, const resource_view::InstanceInfo &instanceInfo, int32_t ttl,
         common::SnapType type, const std::string &snapshotID, const std::string &checkpointDir) override
@@ -229,6 +258,15 @@ public:
         }
         messages::SnapshotRuntimeResponse response;
         response.set_requestid(requestID);
+        if (type == common::SNAPSHOT) {
+            response.set_code(common::ERR_NONE);
+            auto *local = response.mutable_localsnapshot();
+            local->set_snapshotid(snapshotID);
+            local->set_instanceid(instanceInfo.instanceid());
+            local->set_size(4096);
+            local->set_createdatunixseconds(1);
+            return response;
+        }
         if (agentPersistedPause_) {
             response.set_code(common::ERR_NONE);
             auto *snapshot = response.mutable_snapshotinfo();
@@ -245,7 +283,7 @@ public:
                 artifact->set_objectkey("reusable/v1/tenant/snapshot/checkpoint.img");
                 artifact->set_size(4096);
                 artifact->set_sha256("agent-persisted-pause-sha256");
-                artifact->set_format("gvisor-checkpoint");
+                artifact->set_format("sandboxd-checkpoint");
                 artifact->set_formatversion(1);
             }
             return response;
@@ -267,11 +305,40 @@ public:
             artifact->set_objectkey("reusable/v1/tenant/failure/checkpoint.img");
             artifact->set_size(4096);
             artifact->set_sha256("agent-persisted-pause-sha256");
-            artifact->set_format("gvisor-checkpoint");
+            artifact->set_format("sandboxd-checkpoint");
             artifact->set_formatversion(1);
         }
         if (responseCode != common::ERR_NONE) {
             response.mutable_physicalfact()->set_state(responseState);
+        }
+        return response;
+    }
+
+    litebus::Future<messages::SnapshotRuntimeResponse> PublishSnapshotArtifact(
+        const std::string &requestID, const resource_view::InstanceInfo &,
+        const std::string &snapshotID) override
+    {
+        if (publishFutureFailuresRemaining_.load() > 0) {
+            publishFutureFailuresRemaining_.fetch_sub(1);
+            litebus::Future<messages::SnapshotRuntimeResponse> failed;
+            failed.SetFailed(static_cast<int32_t>(StatusCode::FAILED));
+            return failed;
+        }
+        messages::SnapshotRuntimeResponse response;
+        response.set_requestid(requestID);
+        response.set_code(agentPersistedPause_ ? common::ERR_NONE : pauseCode_);
+        response.set_message(agentPersistedPause_ ? "" : pauseMessage_);
+        response.mutable_snapshotinfo()->set_checkpointid(snapshotID);
+        if (agentPersistedPause_ || reusableFailureWithArtifact_) {
+            auto *artifact = response.mutable_reusablesnapshotartifact();
+            artifact->set_storagebackend("obs");
+            artifact->set_objectkey(reusableFailureWithArtifact_
+                ? "reusable/v1/tenant/failure/checkpoint.img"
+                : "reusable/v1/tenant/snapshot/checkpoint.img");
+            artifact->set_size(4096);
+            artifact->set_sha256("agent-persisted-pause-sha256");
+            artifact->set_format("sandboxd-checkpoint");
+            artifact->set_formatversion(1);
         }
         return response;
     }
@@ -405,6 +472,11 @@ public:
         pauseFutureFailuresRemaining_ = failures;
     }
 
+    void ConfigurePublishFutureFailures(int failures)
+    {
+        publishFutureFailuresRemaining_ = failures;
+    }
+
     void HoldPauseResponse()
     {
         pendingPauseResponse_ = std::make_shared<litebus::Promise<messages::SnapshotRuntimeResponse>>();
@@ -438,6 +510,8 @@ public:
     }
 
     int PauseCalls() const { return pauseCalls_.load(); }
+    int AnonymousCalls() const { return anonymousCalls_.load(); }
+    const std::string &AnonymousSnapshotID() const { return anonymousSnapshotID_; }
     const std::string &PauseSnapshotID() const { return pauseSnapshotID_; }
     const std::vector<std::string> &PauseSnapshotIDs() const { return pauseSnapshotIDs_; }
     const std::string &PauseCheckpointDir() const { return pauseCheckpointDir_; }
@@ -451,8 +525,12 @@ public:
 private:
     std::atomic<int> calls_ { 0 };
     std::atomic<int> pauseCalls_ { 0 };
+    std::atomic<int> anonymousCalls_ { 0 };
     std::atomic<int> pauseFutureFailuresRemaining_ { 0 };
+    std::atomic<int> publishFutureFailuresRemaining_ { 0 };
     std::string pauseRequestID_;
+    std::string anonymousSnapshotID_;
+    int32_t anonymousCode_ { common::ERR_NONE };
     std::string pauseSnapshotID_;
     std::vector<std::string> pauseSnapshotIDs_;
     std::vector<runtime::v1::SandboxState> pausePhysicalStates_;
@@ -800,6 +878,67 @@ protected:
     std::vector<litebus::Future<KillResponse>> requests_;
     PauseRetryPolicy pauseRetryPolicy_;
 };
+
+TEST_F(SnapCtrlActorPauseContextTest, AnonymousCheckpointPreparesCheckpointsAndCallsSnapStarted)
+{
+    std::vector<std::string> operations;
+    snapshotRuntimeProbe_->ConfigureAnonymousCheckpoint(common::ERR_NONE, &operations);
+    prepareClient_->ConfigureSnapStarted(common::ERR_NONE, &operations);
+    auto request = litebus::Async(
+        actor_->GetAID(), &SnapCtrlActor::HandleAnonymousCheckpoint,
+        std::string("anonymous-request"), std::string(INSTANCE_ID), uint64_t{0});
+    requests_.emplace_back(request);
+
+    ASSERT_AWAIT_TRUE_FOR([this]() { return prepareClient_->PrepareCalls() == 1; }, 5'000);
+    prepareClient_->Complete(MakePrepareResponse(common::ERR_NONE, ""));
+    ASSERT_AWAIT_READY_FOR(request, 5'000);
+
+    EXPECT_EQ(request.Get().code(), common::ERR_NONE);
+    EXPECT_EQ(snapshotRuntimeProbe_->AnonymousCalls(), 1);
+    EXPECT_THAT(snapshotRuntimeProbe_->AnonymousSnapshotID(), testing::StartsWith("anon-"));
+    EXPECT_EQ(prepareClient_->SnapStartedCalls(), 1);
+    EXPECT_EQ(operations, (std::vector<std::string>{"checkpoint", "snapstarted"}));
+    EXPECT_EQ(stateMachine_->GetInstanceState(), InstanceState::RUNNING);
+}
+
+TEST_F(SnapCtrlActorPauseContextTest, AnonymousCheckpointFailureStillCallsSnapStarted)
+{
+    snapshotRuntimeProbe_->ConfigureAnonymousCheckpoint(common::ERR_INNER_COMMUNICATION, nullptr);
+    prepareClient_->ConfigureSnapStarted(common::ERR_NONE, nullptr);
+    auto request = litebus::Async(
+        actor_->GetAID(), &SnapCtrlActor::HandleAnonymousCheckpoint,
+        std::string("anonymous-failure"), std::string(INSTANCE_ID), uint64_t{0});
+    requests_.emplace_back(request);
+
+    ASSERT_AWAIT_TRUE_FOR([this]() { return prepareClient_->PrepareCalls() == 1; }, 5'000);
+    prepareClient_->Complete(MakePrepareResponse(common::ERR_NONE, ""));
+    ASSERT_AWAIT_READY_FOR(request, 5'000);
+
+    EXPECT_EQ(request.Get().code(), common::ERR_INNER_COMMUNICATION);
+    EXPECT_EQ(snapshotRuntimeProbe_->AnonymousCalls(), 1);
+    EXPECT_EQ(prepareClient_->SnapStartedCalls(), 1);
+    EXPECT_EQ(stateMachine_->GetInstanceState(), InstanceState::RUNNING);
+}
+
+TEST_F(SnapCtrlActorPauseContextTest, AnonymousCheckpointRetriesSnapStartedAfterStreamReconnect)
+{
+    snapshotRuntimeProbe_->ConfigureAnonymousCheckpoint(common::ERR_NONE, nullptr);
+    prepareClient_->ConfigureSnapStarted(common::ERR_NONE, nullptr);
+    prepareClient_->ConfigureSnapStartedFutureFailures(1);
+    auto request = litebus::Async(
+        actor_->GetAID(), &SnapCtrlActor::HandleAnonymousCheckpoint,
+        std::string("anonymous-reconnect"), std::string(INSTANCE_ID), uint64_t{0});
+    requests_.emplace_back(request);
+
+    ASSERT_AWAIT_TRUE_FOR([this]() { return prepareClient_->PrepareCalls() == 1; }, 5'000);
+    prepareClient_->Complete(MakePrepareResponse(common::ERR_NONE, ""));
+    ASSERT_AWAIT_READY_FOR(request, 5'000);
+
+    EXPECT_EQ(request.Get().code(), common::ERR_NONE);
+    EXPECT_EQ(snapshotRuntimeProbe_->AnonymousCalls(), 1);
+    EXPECT_EQ(prepareClient_->SnapStartedCalls(), 2);
+    EXPECT_EQ(stateMachine_->GetInstanceState(), InstanceState::RUNNING);
+}
 
 TEST_F(SnapCtrlActorPauseContextTest, AuthorizedDeleteWaitersSharePauseTerminalBeforeGateCompletes)
 {
@@ -2222,6 +2361,7 @@ TEST_F(SnapCtrlActorPauseContextTest, CasFutureErrorAfterGenerationChangeOnlyDel
 TEST_F(SnapCtrlActorPauseContextTest, ReusableSnapshotCommitsReadyBeforeExactLocalCleanupAndKeepsSourceRunning)
 {
     std::vector<std::string> operations;
+    prepareClient_->ConfigureSnapStarted(common::ERR_NONE, &operations);
     snapshotRuntimeProbe_->ConfigureReusableSnapshotSuccess(&operations);
     UpdateInstanceInfo([](resources::InstanceInfo &info) {
         info.set_tenantid("tenant-a");
@@ -2250,7 +2390,6 @@ TEST_F(SnapCtrlActorPauseContextTest, ReusableSnapshotCommitsReadyBeforeExactLoc
             EXPECT_EQ(request->tenantid(), "tenant-a");
             EXPECT_EQ(request->sourceinstanceid(), INSTANCE_ID);
             EXPECT_THAT(request->names(), ElementsAre("python-ready"));
-            EXPECT_FALSE(request->requestfingerprint().empty());
             ::messages::BeginReusableSnapshotResponse response;
             response.set_code(common::ERR_NONE);
             response.set_requestid(request->requestid());
@@ -2293,10 +2432,11 @@ TEST_F(SnapCtrlActorPauseContextTest, ReusableSnapshotCommitsReadyBeforeExactLoc
     EXPECT_EQ(snapshotRuntimeProbe_->PauseType(), common::SNAPSHOT);
     EXPECT_EQ(snapshotRuntimeProbe_->PauseTtl(), 0);
     EXPECT_EQ(snapshotRuntimeProbe_->PauseSnapshotID(), "snapshot-reusable-1");
+    EXPECT_EQ(prepareClient_->SnapStartedCalls(), 1);
     ASSERT_EQ(snapshotRuntimeProbe_->FinalizeRequests().size(), 1U);
     EXPECT_EQ(snapshotRuntimeProbe_->FinalizeRequests().front().operation(),
               ::messages::REUSABLE_SNAPSHOT_COMMITTED);
-    EXPECT_THAT(operations, ElementsAre("checkpoint", "commit", "finalize"));
+    EXPECT_THAT(operations, ElementsAre("checkpoint", "snapstarted", "commit", "finalize"));
     EXPECT_EQ(stateMachine_->GetInstanceInfo().instancestatus().code(),
               static_cast<int32_t>(InstanceState::RUNNING));
     EXPECT_TRUE(tunnelGateEntered);
@@ -2342,7 +2482,6 @@ TEST_F(SnapCtrlActorPauseContextTest, ReusableSnapshotCommitFailureCleansExactAr
         .WillOnce(Invoke([&operations](const std::shared_ptr<::messages::FailReusableSnapshotRequest> &request) {
             operations.emplace_back("fail-record");
             EXPECT_EQ(request->snapshotid(), "snapshot-reusable-failed");
-            EXPECT_FALSE(request->requestfingerprint().empty());
             ::messages::FailReusableSnapshotResponse response;
             response.set_code(common::ERR_NONE);
             response.set_requestid(request->requestid());
@@ -2466,7 +2605,7 @@ TEST_F(SnapCtrlActorPauseContextTest, ReusableAgentResultUnknownPreservesPublish
     std::vector<std::string> operations;
     snapshotRuntimeProbe_->ConfigurePauseFailure(runtime::v1::SANDBOX_STATE_RUNNING,
                                                  "unused", &operations);
-    snapshotRuntimeProbe_->ConfigurePauseFutureFailures(1);
+    snapshotRuntimeProbe_->ConfigurePublishFutureFailures(1);
     UpdateInstanceInfo([](resources::InstanceInfo &info) {
         info.set_tenantid("tenant-a");
         info.set_runtimeid("runtime-a");

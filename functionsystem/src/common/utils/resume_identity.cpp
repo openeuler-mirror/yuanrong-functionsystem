@@ -98,18 +98,15 @@ bool IsCompleteReadySnapshot(const resources::SnapshotInfo &snapshot)
 {
     int64_t createTime = 0;
     return snapshot.status() == resources::SNAPSHOT_READY && !snapshot.checkpointid().empty()
-        && (snapshot.storage() == "obs" || snapshot.storage() == "datasystem")
-        && snapshot.size() > 0 && !snapshot.sha256().empty() && snapshot.ttlseconds() > 0
+        && (snapshot.storage() == "obs" || snapshot.storage() == "datasystem"
+            || snapshot.storage() == "local")
+        && snapshot.ttlseconds() > 0
         && ParsePositiveInt64(snapshot.createtime(), &createTime);
 }
 
 bool ValidateReusableSnapshotRestore(const ::messages::ReusableSnapshotRestore &restore)
 {
     const auto &artifact = restore.artifact();
-    const bool validSHA = artifact.sha256().size() == SHA256_DIGEST_LENGTH * 2
-        && std::all_of(artifact.sha256().begin(), artifact.sha256().end(), [](unsigned char value) {
-            return std::isxdigit(value) != 0;
-        });
     const bool validSnapshotID = !restore.snapshotid().empty()
         && restore.snapshotid() != "." && restore.snapshotid() != ".."
         && restore.snapshotid().find('/') == std::string::npos
@@ -119,9 +116,10 @@ bool ValidateReusableSnapshotRestore(const ::messages::ReusableSnapshotRestore &
         && artifact.objectkey().find("../") == std::string::npos
         && artifact.objectkey().find("/..") == std::string::npos;
     return restore.allowlogicalinstanceidrebind() && validSnapshotID
-        && (artifact.storagebackend() == "obs" || artifact.storagebackend() == "datasystem")
-        && validObjectKey && artifact.size() > 0 && validSHA
-        && artifact.format() == "gvisor-checkpoint" && artifact.formatversion() == 1;
+        && (artifact.storagebackend() == "obs" || artifact.storagebackend() == "datasystem"
+            || artifact.storagebackend() == "local")
+        && validObjectKey
+        && (artifact.storagebackend() != "local" || !artifact.sourcenodeid().empty());
 }
 
 std::string IdentityDigest(const std::string &logicalInstanceID, const std::string &logicalRequestID,
@@ -139,9 +137,7 @@ std::string IdentityDigest(const std::string &logicalInstanceID, const std::stri
     AppendIdentityPart(identity, std::to_string(protocolVersion));
     AppendIdentityPart(identity, snapshot.checkpointid());
     AppendIdentityPart(identity, snapshot.storage());
-    AppendIdentityPart(identity, std::to_string(snapshot.size()));
     AppendIdentityPart(identity, std::to_string(static_cast<int32_t>(snapshot.status())));
-    AppendIdentityPart(identity, snapshot.sha256());
     return Sha256Hex(identity);
 }
 
@@ -257,7 +253,7 @@ bool IsCommittedResumeWinner(const resources::InstanceInfo &authoritative, const
 bool SnapshotIdentityMatches(const resources::SnapshotInfo &left, const resources::SnapshotInfo &right)
 {
     return left.checkpointid() == right.checkpointid() && left.status() == right.status()
-        && left.storage() == right.storage() && left.size() == right.size() && left.sha256() == right.sha256();
+        && left.storage() == right.storage();
 }
 
 bool IsAuthoritativePausedControlIdentity(const resources::InstanceInfo &instance)

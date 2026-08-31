@@ -57,7 +57,20 @@ std::shared_ptr<messages::ScheduleRequest> SnapshotScheduler::BuildScheduleReque
     scheduleReq->mutable_instance()->mutable_instancestatus()->set_code(
         static_cast<int32_t>(InstanceState::NEW));
 
-    // TODO: If SnapStartOptions are provided, serialize and add to create options
+    core_service::CreateRequest schedulingRequest;
+    schedulingRequest.mutable_schedulingops()->CopyFrom(
+        restoreReq.snapstartoptions().scheduleopts());
+    resume_identity::StripReservedExtensions(
+        schedulingRequest.mutable_schedulingops()->mutable_extension());
+    runtime::CallRequest emptyCallRequest;
+    if (!restoreReq.snapstartoptions().scheduleopts().resources().empty()) {
+        scheduleReq->mutable_instance()->clear_resources();
+        SetInstanceInfoResources(scheduleReq->mutable_instance(), schedulingRequest);
+    }
+    SetInstanceInfoScheduleOptions(
+        scheduleReq->mutable_instance(), schedulingRequest, emptyCallRequest);
+    SetAffinityOpt(*scheduleReq->mutable_instance(), schedulingRequest, scheduleReq);
+
     YRLOG_DEBUG("built ScheduleRequest from snapshot {}: instanceID={}", snapshotID, newID);
     return scheduleReq;
 }
@@ -117,8 +130,11 @@ std::shared_ptr<messages::ScheduleRequest> SnapshotScheduler::BuildPauseResumeSc
     SetAffinityOpt(*instance, schedulingRequest, scheduleReq);
 
     if (!sourceNodeID.empty()) {
+        // SnapshotInfo is the durable placement authority. A cluster may
+        // change its global mode after this Snapshot was created.
         (*instance->mutable_scheduleoption()->mutable_affinity()->mutable_nodeaffinity()->mutable_affinity())
-            [sourceNodeID] = resources::PreferredAffinity;
+            [sourceNodeID] = instance->snapshotinfo().storage() == "local"
+                ? resources::RequiredAffinity : resources::PreferredAffinity;
     }
     (*instance->mutable_scheduleoption()->mutable_extension())
         [resume_identity::MASTER_MARKER_EXTENSION] = targetAttemptID;

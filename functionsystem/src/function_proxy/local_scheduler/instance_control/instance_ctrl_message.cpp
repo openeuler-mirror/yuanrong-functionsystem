@@ -33,34 +33,22 @@ Status ValidateReusableSnapshotRestore(
     if (requestedSnapshotID.empty() || restore.snapshotid() != requestedSnapshotID
         || !restore.allowlogicalinstanceidrebind() || !restore.has_artifact()
         || artifact.storagebackend().empty() || artifact.objectkey().empty()
-        || artifact.size() <= 0 || artifact.sha256().size() != 64
-        || artifact.format() != "gvisor-checkpoint" || artifact.formatversion() != 1) {
+        || (artifact.storagebackend() == "local" && artifact.sourcenodeid().empty())
+        || artifact.format() != "sandboxd-checkpoint" || artifact.formatversion() != 1) {
         return Status(StatusCode::ERR_PARAM_INVALID,
                       "resolved reusable Snapshot restore metadata is invalid");
     }
     return Status::OK();
 }
 
-Status MergeReusableSnapshotResources(
+void InheritMissingReusableSnapshotResources(
     const resources::Resources &source, resources::Resources *target)
 {
-    if (target == nullptr) {
-        return Status(StatusCode::ERR_PARAM_INVALID,
-                      "reusable Snapshot target resources are unavailable");
-    }
     for (const auto &[name, sourceResource] : source.resources()) {
-        auto targetResource = target->mutable_resources()->find(name);
-        if (targetResource == target->mutable_resources()->end()) {
+        if (target->resources().find(name) == target->resources().end()) {
             (*target->mutable_resources())[name].CopyFrom(sourceResource);
-            continue;
-        }
-        if (!sourceResource.has_scalar() || !targetResource->second.has_scalar()
-            || targetResource->second.scalar().value() < sourceResource.scalar().value()) {
-            return Status(StatusCode::ERR_PARAM_INVALID,
-                          "Create-from-Snapshot cannot reduce or change a Snapshot resource");
         }
     }
-    return Status::OK();
 }
 
 }  // namespace
@@ -92,26 +80,32 @@ Status ApplyResolvedReusableSnapshotForCreate(
         return Status(StatusCode::ERR_PARAM_INVALID,
                       "Create function does not match the reusable Snapshot template");
     }
-    const auto resourceStatus = MergeReusableSnapshotResources(
-        source.resources(), target->mutable_resources());
-    if (resourceStatus.IsError()) {
-        return resourceStatus;
-    }
-
-    // Keep the new logical identity, parent, naming and scheduling choices.
-    // Workload/bootstrap inputs are frozen by the Snapshot template in v1.
+    // Keep the new logical identity, parent, naming and placement choices.
+    // The Snapshot supplies workload inputs and defaults for omitted runtime
+    // resources. Explicit target resources remain valid restore overrides,
+    // including values smaller than the source request.
     target->set_function(source.function());
     target->set_restartpolicy(source.restartpolicy());
     *target->mutable_createoptions() = source.createoptions();
+    InheritMissingReusableSnapshotResources(source.resources(), target->mutable_resources());
     target->set_storagetype(source.storagetype());
     target->mutable_args()->CopyFrom(source.args());
     target->set_gracefulshutdowntime(source.gracefulshutdowntime());
     target->set_executortype(source.executortype());
+    target->set_failover(source.failover());
     target->mutable_extensions()->erase("portForward");
 
     scheduleExtensions->erase(REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION);
     (*scheduleExtensions)[REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION] =
         CharStringToHexString(resolved.reusablesnapshotrestore().SerializeAsString());
+    // Placement follows the persisted artifact fact, not the current cluster
+    // storage-mode flag: a local artifact can only be restored on its owner.
+    if (resolved.reusablesnapshotrestore().artifact().storagebackend() == "local") {
+        auto *affinity = target->mutable_scheduleoption()->mutable_affinity()
+            ->mutable_nodeaffinity()->mutable_affinity();
+        (*affinity)[resolved.reusablesnapshotrestore().artifact().sourcenodeid()] =
+            resources::RequiredAffinity;
+    }
     return Status::OK();
 }
 

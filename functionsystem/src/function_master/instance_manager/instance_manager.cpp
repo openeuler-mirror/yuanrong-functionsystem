@@ -48,4 +48,11 @@ InstanceManager::DeleteReusableSnapshotArtifact(
                           &InstanceManagerActor::DeleteReusableSnapshotArtifact, request);
 }
 
+void InstanceManager::SetInstanceDeleteObserver(
+    std::function<void(const std::shared_ptr<resource_view::InstanceInfo> &)> observer)
+{
+    ASSERT_IF_NULL(actor_);
+    (void)litebus::Async(actor_->GetAID(), &InstanceManagerActor::SetInstanceDeleteObserver, std::move(observer));
+}
+
 }  // namespace functionsystem::instance_manager

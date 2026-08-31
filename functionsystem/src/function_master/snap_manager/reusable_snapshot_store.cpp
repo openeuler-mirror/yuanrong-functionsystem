@@ -58,7 +58,7 @@ bool ArtifactEquals(const ::messages::SnapshotArtifact &left, const ::messages::
 {
     return left.storagebackend() == right.storagebackend() && left.objectkey() == right.objectkey()
         && left.size() == right.size() && left.sha256() == right.sha256() && left.format() == right.format()
-        && left.formatversion() == right.formatversion();
+        && left.formatversion() == right.formatversion() && left.sourcenodeid() == right.sourcenodeid();
 }
 
 template <typename Response>
@@ -213,6 +213,7 @@ std::string ReusableSnapshotStore::SnapshotID(const ::messages::BeginReusableSna
     *target.mutable_kvlabels() = source.kvlabels();
     target.set_trafficreporttype(source.trafficreporttype());
     target.set_executortype(source.executortype());
+    target.set_failover(source.failover());
     // Extensions are an open-ended transport/status channel. An exclusion
     // list would silently persist every future physical identity, credential,
     // timestamp or scheduler marker added by another component. The first
@@ -225,9 +226,8 @@ std::string ReusableSnapshotStore::SnapshotID(const ::messages::BeginReusableSna
 
 Status ReusableSnapshotStore::ValidateBegin(const ::messages::BeginReusableSnapshotRequest &request)
 {
-    if (request.requestid().empty() || request.tenantid().empty() || request.sourceinstanceid().empty()
-        || request.requestfingerprint().empty()) {
-        return Invalid("requestID, tenantID, sourceInstanceID and requestFingerprint are required");
+    if (request.requestid().empty() || request.tenantid().empty() || request.sourceinstanceid().empty()) {
+        return Invalid("requestID, tenantID and sourceInstanceID are required");
     }
     if (request.names_size() > 1 || (request.names_size() == 1 && request.names(0).empty())) {
         return Invalid("reusable Snapshot supports zero or one non-empty name");
@@ -237,7 +237,9 @@ Status ReusableSnapshotStore::ValidateBegin(const ::messages::BeginReusableSnaps
 
 Status ReusableSnapshotStore::ValidateArtifact(const ::messages::SnapshotArtifact &artifact)
 {
-    const bool supportedBackend = artifact.storagebackend() == "obs" || artifact.storagebackend() == "datasystem";
+    const bool local = artifact.storagebackend() == "local";
+    const bool supportedBackend = local || artifact.storagebackend() == "obs"
+        || artifact.storagebackend() == "datasystem";
     const bool safeObjectKey = !artifact.objectkey().empty() && artifact.objectkey().front() != '/'
         && artifact.objectkey().find("../") == std::string::npos
         && artifact.objectkey().find("/..") == std::string::npos;
@@ -246,7 +248,8 @@ Status ReusableSnapshotStore::ValidateArtifact(const ::messages::SnapshotArtifac
             return std::isxdigit(value) != 0;
         });
     if (!supportedBackend || !safeObjectKey || artifact.size() <= 0
-        || !validSha256 || artifact.format() != "gvisor-checkpoint"
+        || (local ? artifact.sourcenodeid().empty() : !validSha256)
+        || artifact.format() != "sandboxd-checkpoint"
         || artifact.formatversion() != 1) {
         return Invalid("reusable Snapshot artifact is incomplete or unsupported");
     }
@@ -299,11 +302,10 @@ litebus::Future<::messages::BeginReusableSnapshotResponse> ReusableSnapshotStore
                     ErrorResponse<::messages::BeginReusableSnapshotResponse>(
                         request.requestid(), Status(StatusCode::ERR_ETCD_OPERATION_ERROR, "invalid Snapshot record")));
             }
-            if (current.createrequestid() != request.requestid()
-                || current.requestfingerprint() != request.requestfingerprint()) {
+            if (current.createrequestid() != request.requestid()) {
                 return litebus::Future<::messages::BeginReusableSnapshotResponse>(
                     ErrorResponse<::messages::BeginReusableSnapshotResponse>(
-                        request.requestid(), Conflict("Snapshot request fingerprint conflict")));
+                        request.requestid(), Conflict("Snapshot request ID conflict")));
             }
             auto response = Success<::messages::BeginReusableSnapshotResponse>(request.requestid());
             response.set_snapshotid(current.snapshotid());
@@ -318,7 +320,7 @@ litebus::Future<::messages::BeginReusableSnapshotResponse> ReusableSnapshotStore
         created.mutable_names()->CopyFrom(request.names());
         created.set_tenantid(request.tenantid());
         created.set_createrequestid(request.requestid());
-        created.set_requestfingerprint(request.requestfingerprint());
+        created.set_sourceinstanceid(request.sourceinstanceid());
         created.set_phase(::messages::REUSABLE_SNAPSHOT_PUBLISHING);
         created.set_createtime(Now());
         created.set_updatetime(created.createtime());
@@ -345,9 +347,9 @@ litebus::Future<::messages::CommitReusableSnapshotResponse> ReusableSnapshotStor
 {
     const auto artifactStatus = ValidateArtifact(request.artifact());
     if (request.requestid().empty() || request.tenantid().empty() || request.snapshotid().empty()
-        || request.requestfingerprint().empty() || artifactStatus.IsError() || persistence_ == nullptr) {
+        || artifactStatus.IsError() || persistence_ == nullptr) {
         const auto status = artifactStatus.IsError() ? artifactStatus
-            : Invalid("commit requestID, tenantID, snapshotID and requestFingerprint are required");
+            : Invalid("commit requestID, tenantID and snapshotID are required");
         return litebus::Future<::messages::CommitReusableSnapshotResponse>(
             ErrorResponse<::messages::CommitReusableSnapshotResponse>(request.requestid(), status));
     }
@@ -365,11 +367,10 @@ litebus::Future<::messages::CommitReusableSnapshotResponse> ReusableSnapshotStor
                 ErrorResponse<::messages::CommitReusableSnapshotResponse>(request.requestid(),
                     Status(StatusCode::ERR_ETCD_OPERATION_ERROR, "invalid Snapshot record")));
         }
-        if (current.createrequestid() != request.requestid()
-            || current.requestfingerprint() != request.requestfingerprint()) {
+        if (current.createrequestid() != request.requestid()) {
             return litebus::Future<::messages::CommitReusableSnapshotResponse>(
                 ErrorResponse<::messages::CommitReusableSnapshotResponse>(
-                    request.requestid(), Conflict("Snapshot commit fingerprint conflict")));
+                    request.requestid(), Conflict("Snapshot commit request ID conflict")));
         }
         if (current.phase() == ::messages::REUSABLE_SNAPSHOT_READY) {
             if (!ArtifactEquals(current.artifact(), request.artifact())) {
@@ -411,7 +412,7 @@ litebus::Future<::messages::FailReusableSnapshotResponse> ReusableSnapshotStore:
     const ::messages::FailReusableSnapshotRequest &request)
 {
     if (request.requestid().empty() || request.tenantid().empty() || request.snapshotid().empty()
-        || request.requestfingerprint().empty() || persistence_ == nullptr) {
+        || persistence_ == nullptr) {
         return litebus::Future<::messages::FailReusableSnapshotResponse>(
             ErrorResponse<::messages::FailReusableSnapshotResponse>(
                 request.requestid(), Invalid("invalid fail request")));
@@ -434,7 +435,6 @@ litebus::Future<::messages::FailReusableSnapshotResponse> ReusableSnapshotStore:
                     Status(StatusCode::ERR_ETCD_OPERATION_ERROR, "invalid Snapshot record")));
         }
         if (current.createrequestid() != request.requestid()
-            || current.requestfingerprint() != request.requestfingerprint()
             || current.phase() != ::messages::REUSABLE_SNAPSHOT_PUBLISHING) {
             return litebus::Future<::messages::FailReusableSnapshotResponse>(
                 ErrorResponse<::messages::FailReusableSnapshotResponse>(request.requestid(),
@@ -749,6 +749,46 @@ litebus::Future<::messages::DeleteReusableSnapshotResponse> ReusableSnapshotStor
                     });
             });
     });
+}
+
+litebus::Future<Status> ReusableSnapshotStore::DeleteLocalSnapshotsForSource(
+    const std::string &tenantID, const std::string &sourceInstanceID)
+{
+    if (tenantID.empty() || sourceInstanceID.empty() || persistence_ == nullptr) {
+        return litebus::Future<Status>(
+            Invalid("tenantID and sourceInstanceID are required for local Snapshot cleanup"));
+    }
+    return persistence_->List(TenantPrefix(tenantID))
+        .Then([this, tenantID, sourceInstanceID](const ReusableSnapshotListRecordsResult &records)
+            -> litebus::Future<Status> {
+            if (records.status.IsError()) {
+                return litebus::Future<Status>(records.status);
+            }
+            litebus::Future<Status> cleanup(Status::OK());
+            for (const auto &value : records.values) {
+                ::messages::ReusableSnapshotMetadata metadata;
+                if (!ParseMetadata(value, &metadata)
+                    || metadata.sourceinstanceid() != sourceInstanceID
+                    || metadata.artifact().storagebackend() != "local") {
+                    continue;
+                }
+                ::messages::DeleteReusableSnapshotRequest request;
+                request.set_requestid("instance-delete/" + sourceInstanceID + "/" + metadata.snapshotid());
+                request.set_tenantid(tenantID);
+                request.set_snapshotid(metadata.snapshotid());
+                cleanup = cleanup.Then([this, request](const Status &previous) -> litebus::Future<Status> {
+                    return Delete(request).Then([previous](
+                        const ::messages::DeleteReusableSnapshotResponse &response) {
+                        if (previous.IsError()) {
+                            return previous;
+                        }
+                        return response.code() == common::ERR_NONE ? Status::OK()
+                            : Status(StatusCode::FAILED, response.message());
+                    });
+                });
+            }
+            return cleanup;
+        });
 }
 
 void ReusableSnapshotStore::SetArtifactDeleter(ArtifactDeleter deleter)

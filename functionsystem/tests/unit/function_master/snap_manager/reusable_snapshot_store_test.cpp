@@ -104,8 +104,18 @@ public:
     artifact.set_objectkey("reusable/v1/tenant/snap/checkpoint.img");
     artifact.set_size(4096);
     artifact.set_sha256(std::string(64, 'a'));
-    artifact.set_format("gvisor-checkpoint");
+    artifact.set_format("sandboxd-checkpoint");
     artifact.set_formatversion(1);
+    return artifact;
+}
+
+::messages::SnapshotArtifact LocalArtifact()
+{
+    auto artifact = ReadyArtifact();
+    artifact.set_storagebackend("local");
+    artifact.set_objectkey("local-snapshot");
+    artifact.clear_sha256();
+    artifact.set_sourcenodeid("source-proxy");
     return artifact;
 }
 
@@ -135,6 +145,7 @@ public:
     source.set_unitid("source-unit");
     source.set_containerid("source-container");
     source.set_proxygrpcaddress("10.0.0.8:9000");
+    source.set_failover(true);
     (*source.mutable_extensions())["portForward"] = "source-host-port";
     (*source.mutable_extensions())["yr.internal.resume.target_attempt_id"] = "source-attempt";
     (*source.mutable_extensions())["future.physical.or.secret.key"] = "must-not-be-cloned";
@@ -148,7 +159,6 @@ public:
     request.set_tenantid("tenant-a");
     request.set_sourceinstanceid("source-logical");
     request.add_names("python-ready");
-    request.set_requestfingerprint("fingerprint-a");
     return request;
 }
 
@@ -158,7 +168,6 @@ public:
     request.set_requestid("create-snapshot-request");
     request.set_tenantid("tenant-a");
     request.set_snapshotid(snapshotID);
-    request.set_requestfingerprint("fingerprint-a");
     *request.mutable_sourceinstanceinfo() = SourceInstance();
     *request.mutable_artifact() = ReadyArtifact();
     return request;
@@ -206,6 +215,7 @@ TEST_F(ReusableSnapshotStoreTest, BeginCreatesPublishingVersionOne)
     EXPECT_EQ(record->version(), 1U);
     EXPECT_EQ(record->createtime(), 123456);
     EXPECT_EQ(record->updatetime(), 123456);
+    EXPECT_EQ(record->sourceinstanceid(), "source-logical");
 }
 
 TEST_F(ReusableSnapshotStoreTest, BeginDeterministicallyReplaysSameRequest)
@@ -217,14 +227,6 @@ TEST_F(ReusableSnapshotStoreTest, BeginDeterministicallyReplaysSameRequest)
     EXPECT_EQ(replay.code(), 0);
     EXPECT_EQ(replay.snapshotid(), first.snapshotid());
     EXPECT_EQ(persistence->casKeys.size(), casCount);
-}
-
-TEST_F(ReusableSnapshotStoreTest, BeginRejectsFingerprintConflict)
-{
-    ASSERT_EQ(Begin().code(), 0);
-    auto conflict = BeginRequest();
-    conflict.set_requestfingerprint("fingerprint-b");
-    EXPECT_NE(store->Begin(conflict).Get().code(), 0);
 }
 
 TEST_F(ReusableSnapshotStoreTest, BeginReportsCasLoserWithoutOverwritingWinner)
@@ -260,14 +262,6 @@ TEST_F(ReusableSnapshotStoreTest, CommitRejectsUntrustedArtifactLocationAndDiges
     auto request = CommitRequest(begin.snapshotid());
     request.mutable_artifact()->set_objectkey("../source-node/checkpoint.img");
     request.mutable_artifact()->set_sha256(std::string(64, 'z'));
-    EXPECT_NE(store->Commit(request).Get().code(), 0);
-}
-
-TEST_F(ReusableSnapshotStoreTest, CommitRejectsMismatchedRequestFingerprint)
-{
-    const auto begin = Begin();
-    auto request = CommitRequest(begin.snapshotid());
-    request.set_requestfingerprint("other");
     EXPECT_NE(store->Commit(request).Get().code(), 0);
 }
 
@@ -317,7 +311,9 @@ TEST_F(ReusableSnapshotStoreTest, SanitizedTemplatePreservesWorkloadAndDeclaredR
     EXPECT_EQ(value.function(), "rrt-function");
     EXPECT_EQ(value.resources().resources().at("Memory").scalar().value(), 4096);
     EXPECT_EQ(value.createoptions().at("workdir"), "/workspace");
+    EXPECT_TRUE(value.failover());
     EXPECT_TRUE(value.extensions().empty());
+    EXPECT_EQ(value.scheduleoption().affinity().nodeaffinity().affinity().count("source-proxy"), 0U);
 }
 
 TEST_F(ReusableSnapshotStoreTest, FailDeletesOnlyMatchingPublishingRecord)
@@ -327,7 +323,6 @@ TEST_F(ReusableSnapshotStoreTest, FailDeletesOnlyMatchingPublishingRecord)
     request.set_requestid("create-snapshot-request");
     request.set_tenantid("tenant-a");
     request.set_snapshotid(begin.snapshotid());
-    request.set_requestfingerprint("fingerprint-a");
     ASSERT_EQ(store->Fail(request).Get().code(), 0);
     EXPECT_TRUE(persistence->values.empty());
 }
@@ -340,7 +335,6 @@ TEST_F(ReusableSnapshotStoreTest, FailNeverDeletesReadyRecord)
     request.set_requestid("create-snapshot-request");
     request.set_tenantid("tenant-a");
     request.set_snapshotid(begin.snapshotid());
-    request.set_requestfingerprint("fingerprint-a");
     EXPECT_NE(store->Fail(request).Get().code(), 0);
     EXPECT_EQ(persistence->values.size(), 1U);
 }
@@ -402,11 +396,9 @@ TEST_F(ReusableSnapshotStoreTest, ListUsesStablePageTokenAndPageSize)
     ASSERT_EQ(Commit(begin.snapshotid()).code(), 0);
     auto second = BeginRequest();
     second.set_requestid("create-snapshot-request-2");
-    second.set_requestfingerprint("fingerprint-2");
     const auto begin2 = store->Begin(second).Get();
     auto commit2 = CommitRequest(begin2.snapshotid());
     commit2.set_requestid(second.requestid());
-    commit2.set_requestfingerprint(second.requestfingerprint());
     ASSERT_EQ(store->Commit(commit2).Get().code(), 0);
     ::messages::ListReusableSnapshotsRequest request;
     request.set_requestid("list");
@@ -599,6 +591,35 @@ TEST_F(ReusableSnapshotStoreTest, DeleteUsesPhysicalSeamThenCompletesExactRecord
     EXPECT_EQ(observed.snapshotid(), begin.snapshotid());
     EXPECT_EQ(observed.artifact().objectkey(), ReadyArtifact().objectkey());
     EXPECT_TRUE(persistence->values.empty());
+}
+
+TEST_F(ReusableSnapshotStoreTest, DeletedSourceCleansOnlyItsLocalSnapshots)
+{
+    const auto localBegin = Begin();
+    auto localCommit = CommitRequest(localBegin.snapshotid());
+    *localCommit.mutable_artifact() = LocalArtifact();
+    ASSERT_EQ(store->Commit(localCommit).Get().code(), 0);
+
+    auto distributedBeginRequest = BeginRequest();
+    distributedBeginRequest.set_requestid("distributed-snapshot-request");
+    const auto distributedBegin = store->Begin(distributedBeginRequest).Get();
+    auto distributedCommit = CommitRequest(distributedBegin.snapshotid());
+    distributedCommit.set_requestid(distributedBeginRequest.requestid());
+    ASSERT_EQ(store->Commit(distributedCommit).Get().code(), 0);
+
+    std::vector<std::string> deleted;
+    store->SetArtifactDeleter([&deleted](const ::messages::DeleteReusableSnapshotArtifactRequest &request) {
+        deleted.emplace_back(request.snapshotid());
+        ::messages::DeleteReusableSnapshotArtifactResponse response;
+        response.set_requestid(request.requestid());
+        return litebus::Future<::messages::DeleteReusableSnapshotArtifactResponse>(response);
+    });
+
+    EXPECT_TRUE(store->DeleteLocalSnapshotsForSource("tenant-a", "source-logical").Get().IsOk());
+    ASSERT_EQ(deleted.size(), 1U);
+    EXPECT_EQ(deleted.front(), localBegin.snapshotid());
+    EXPECT_FALSE(store->ReadForTest("tenant-a", localBegin.snapshotid()).Get().has_value());
+    EXPECT_TRUE(store->ReadForTest("tenant-a", distributedBegin.snapshotid()).Get().has_value());
 }
 
 }  // namespace

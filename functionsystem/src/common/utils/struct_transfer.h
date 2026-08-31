@@ -942,6 +942,7 @@ static void SetInstanceInfo(::resources::InstanceInfo *instanceInfo, CreateReque
     // function
     instanceInfo->set_function(createReq.function());
     instanceInfo->set_parentid(parentID);
+    instanceInfo->set_failover(createReq.failover());
     // InstanceInfo create options
     auto createOptions = callRequest.createoptions();
     if (auto sessionCtxIter = createOptions.find(SESSION_CTX_ID); sessionCtxIter != createOptions.end()) {

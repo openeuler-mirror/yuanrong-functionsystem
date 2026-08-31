@@ -88,6 +88,29 @@ static bool IsResumeSnapshotCleanup(const TransContext &context,
         && candidate.proxygrpcaddress() == current.proxygrpcaddress();
 }
 
+static bool IsRunningFailoverRefresh(const TransContext &context,
+                                     const resources::InstanceInfo &current)
+{
+    const auto currentState = static_cast<InstanceState>(current.instancestatus().code());
+    if (context.newState != InstanceState::RUNNING || context.scheduleReq == nullptr
+        || (currentState != InstanceState::RUNNING && currentState != InstanceState::EVICTED)
+        || context.version != current.version()
+        || (!current.failover() && !context.allowRunningRuntimeRefresh)) {
+        return false;
+    }
+    const auto &candidate = context.scheduleReq->instance();
+    return candidate.failover() == current.failover()
+        && candidate.instancestatus().code() == static_cast<int32_t>(InstanceState::RUNNING)
+        && candidate.instanceid() == current.instanceid()
+        && candidate.requestid() == current.requestid()
+        && candidate.tenantid() == current.tenantid()
+        && candidate.functionproxyid() == current.functionproxyid()
+        && candidate.functionagentid() == current.functionagentid()
+        && candidate.version() == current.version()
+        && !candidate.runtimeid().empty()
+        && candidate.runtimeid() != current.runtimeid();
+}
+
 /**
  * The status of scheduling and creating does not require persistent routeInfo. Other status requires persistent.
  * The high-reliability instance persistent InstanceInfo in each phase.
@@ -242,10 +265,11 @@ void InstanceStateMachine::UpdateInstanceVersion(const TransContext &context, re
 
 litebus::Future<TransitionResult> InstanceStateMachine::PersistenceInstanceInfo(
     const resources::InstanceInfo &newInstanceInfo, const resources::InstanceInfo &prevInstanceInfo,
-    const InstanceState oldState, const TransContext &context)
+    const InstanceState oldState, const TransContext &context, bool runningFailoverRefresh)
 {
     NewSavingPomise();
-    return SaveInstanceInfoToMetaStore(newInstanceInfo, prevInstanceInfo, oldState, context)
+    return SaveInstanceInfoToMetaStore(
+               newInstanceInfo, prevInstanceInfo, oldState, context, runningFailoverRefresh)
         .Then([requestID(newInstanceInfo.requestid()), instanceID(instanceID_), context,
                self(shared_from_this())](const TransitionResult &result) -> litebus::Future<TransitionResult> {
             if (!result.status.IsOk()) {
@@ -270,6 +294,7 @@ litebus::Future<TransitionResult> InstanceStateMachine::TransitionTo(const Trans
     resources::InstanceInfo previousInfo;
     InstanceState oldState;
     std::string requestID;
+    bool runningFailoverRefresh = false;
     {
         std::lock_guard<std::recursive_mutex> guard(lock_);
         if (instanceContext_ == nullptr) {
@@ -281,14 +306,16 @@ litebus::Future<TransitionResult> InstanceStateMachine::TransitionTo(const Trans
         oldState = instanceContext_->GetState();
         const bool resumeSnapshotCleanup = IsResumeSnapshotCleanup(
             context, instanceContext_->GetInstanceInfo());
+        runningFailoverRefresh = IsRunningFailoverRefresh(
+            context, instanceContext_->GetInstanceInfo());
         // if old state is exiting, will execute exitHandler in VerifyTransitionState
         if (context.newState == oldState && oldState != InstanceState::EXITING
-            && !resumeSnapshotCleanup) {
+            && !resumeSnapshotCleanup && !runningFailoverRefresh) {
             YRLOG_WARN("{}|instance({}) state is same, ignore it", requestID, instanceID_);
             return TransitionResult{ oldState, {}, {}, GetVersion(), Status::OK() };
         }
 
-        if (!resumeSnapshotCleanup) {
+        if (!resumeSnapshotCleanup && !runningFailoverRefresh) {
             auto verifyResult = VerifyTransitionState(context, requestID, oldState);
             if (verifyResult.preState.IsNone()) {
                 return verifyResult;
@@ -325,7 +352,8 @@ litebus::Future<TransitionResult> InstanceStateMachine::TransitionTo(const Trans
     }
     auto stamp = std::to_string(static_cast<uint64_t>(std::time(nullptr)));
     (*instanceInfo.mutable_extensions())["updateTimestamp"] = std::move(stamp);
-    return PersistenceInstanceInfo(instanceInfo, previousInfo, oldState, context);
+    return PersistenceInstanceInfo(
+        instanceInfo, previousInfo, oldState, context, runningFailoverRefresh);
 }
 
 litebus::Future<Status> InstanceStateMachine::DelInstance(const std::string &instanceID)
@@ -442,7 +470,7 @@ void InstanceStateMachine::PublishToLocalObserver(const resources::InstanceInfo 
 // should be locked by caller
 litebus::Future<TransitionResult> InstanceStateMachine::SaveInstanceInfoToMetaStore(
     const resources::InstanceInfo &newInstanceInfo, const resources::InstanceInfo &prevInstanceInfo,
-    const InstanceState oldState, const TransContext &context)
+    const InstanceState oldState, const TransContext &context, bool runningFailoverRefresh)
 {
     auto persistenceType = GetPersistenceType(newInstanceInfo, isMetaStoreEnable_);
     std::shared_ptr<StoreInfo> instancePutInfo;
@@ -503,12 +531,15 @@ litebus::Future<TransitionResult> InstanceStateMachine::SaveInstanceInfoToMetaSt
                                 IsLowReliabilityInstance(newInstanceInfo))
         .Then([prevInstanceInfo, oldState, key(keyPath), self(shared_from_this()), version(context.version),
                instanceID(newInstanceInfo.instanceid()), context, newInstanceInfo,
+               runningFailoverRefresh,
                newState(newInstanceInfo.instancestatus().code()),
                errCode(newInstanceInfo.instancestatus().errcode())](const OperateResult &result) {
             if (result.status.IsOk()) {
                 YRLOG_DEBUG("success to modify instance for key({}), preKeyVersion is {}", key, version);
-                if (context.persistence && oldState != context.newState) {
-                    // only update after state changed
+                if (context.persistence
+                    && (oldState != context.newState || runningFailoverRefresh)) {
+                    // State transitions and failover physical-identity refreshes
+                    // must both reach local routing consumers.
                     self->PublishToLocalObserver(newInstanceInfo, result.currentModRevision);
                 }
                 if (self->controlPlaneObserver_ != nullptr && !self->isWatching_.load()) {

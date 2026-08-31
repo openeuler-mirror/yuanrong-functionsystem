@@ -82,7 +82,9 @@ Status FunctionAgentDriver::InitializeSnapshotStorageDependency()
 {
     RETURN_IF_NOT_OK(CreateSnapshotStorage(startParam_.snapshotStorage, snapshotStorage_));
     actor_->BindSnapshotDataPlane(snapshotStorage_, startParam_.checkpointRoot,
-                                  startParam_.snapshotStorage.backend);
+                                  startParam_.snapshotStorage.backend,
+                                  startParam_.snapshotStorage.mode,
+                                  startParam_.snapshotStorage.localCacheMaxBytes);
     return Status::OK();
 }
 

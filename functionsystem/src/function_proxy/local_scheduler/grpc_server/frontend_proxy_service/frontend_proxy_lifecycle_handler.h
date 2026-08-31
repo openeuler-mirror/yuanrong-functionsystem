@@ -36,6 +36,10 @@ namespace functionsystem::local_scheduler {
 // unregistered as timed out.
 inline constexpr uint64_t FRONTEND_CREATE_READY_TIMEOUT_MS = 55ULL * 1000ULL;
 
+uint64_t ResolveFrontendCreateReadyTimeoutMs(
+    const ::frontend_proxy::CreateInstanceRequest &request,
+    uint64_t fallbackTimeoutMs = FRONTEND_CREATE_READY_TIMEOUT_MS);
+
 using FrontendProxyReadyCallback = std::function<litebus::Future<CallResultAck>(
     const std::shared_ptr<functionsystem::CallResult> &)>;
 using FrontendProxyReadyRegistrar =

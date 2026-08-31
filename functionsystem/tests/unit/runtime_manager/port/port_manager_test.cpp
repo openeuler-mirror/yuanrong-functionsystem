@@ -251,6 +251,16 @@ TEST_F(PortManagerRecoveryTest, RebuiltPortsCanBeReleased)
     PortManager::GetInstance().ReleasePorts("runtime-a");
 
     const auto ports = PortManager::GetInstance().RequestPorts("runtime-b", 1);
-    EXPECT_EQ(ports, (std::vector<int>{initialPort_}));
+    EXPECT_EQ(ports, (std::vector<int>{initialPort_ + 1}));
+}
+
+TEST_F(PortManagerRecoveryTest, ReleasedBackendPortIsNotImmediatelyReused)
+{
+    ASSERT_EQ(PortManager::GetInstance().RequestPorts("runtime-old", 1),
+              (std::vector<int>{initialPort_}));
+    PortManager::GetInstance().ReleasePorts("runtime-old");
+
+    EXPECT_EQ(PortManager::GetInstance().RequestPorts("runtime-restored", 1),
+              (std::vector<int>{initialPort_ + 1}));
 }
 }

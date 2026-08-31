@@ -113,6 +113,8 @@ function install_function_proxy() {
     merge_process_args="--enable_merge_process=true \
     --checkpoint_dir="${checkpoint_dir}" \
     --snapshot_storage_backend="${SNAPSHOT_STORAGE_BACKEND:-datasystem}" \
+    --snapshot_storage_mode="${SNAPSHOT_STORAGE_MODE:-local_only}" \
+    --snapshot_local_cache_max_bytes="${SNAPSHOT_LOCAL_CACHE_MAX_BYTES:-10737418240}" \
     --snapshot_obs_endpoint="${SNAPSHOT_OBS_ENDPOINT:-}" \
     --snapshot_obs_bucket="${SNAPSHOT_OBS_BUCKET:-}" \
     --snapshot_obs_access_key="${SNAPSHOT_OBS_ACCESS_KEY:-}" \
@@ -237,7 +239,6 @@ function install_function_proxy() {
     --tcp_tunnel_port="${TCP_TUNNEL_PORT:-22775}" \
     --tcp_tunnel_max_connections="${TCP_TUNNEL_MAX_CONNECTIONS:-1024}" \
     --enable_direct_routing="${ENABLE_DIRECT_ROUTING}" \
-    --enable_sandbox_pause_resume="${ENABLE_SANDBOX_PAUSE_RESUME:-false}" \
     --force_low_reliability_instance="${FORCE_LOW_RELIABILITY_INSTANCE}" \
     ${merge_process_args} >>"${FS_LOG_PATH}/${NODE_ID}-function_proxy${STD_LOG_SUFFIX}" 2>&1 &
 
@@ -618,8 +619,9 @@ function install_function_agent_and_runtime_manager_in_the_same_process() {
     --runtime_logs_dir="${RUNTIME_LOG_PATH}"
     --runtime_std_log_dir=""
     --checkpoint_dir="${checkpoint_dir}"
-    --enable_sandbox_pause_resume="${ENABLE_SANDBOX_PAUSE_RESUME:-false}"
     --snapshot_storage_backend="${SNAPSHOT_STORAGE_BACKEND:-datasystem}"
+    --snapshot_storage_mode="${SNAPSHOT_STORAGE_MODE:-local_only}"
+    --snapshot_local_cache_max_bytes="${SNAPSHOT_LOCAL_CACHE_MAX_BYTES:-10737418240}"
     --snapshot_obs_endpoint="${SNAPSHOT_OBS_ENDPOINT:-}"
     --snapshot_obs_bucket="${SNAPSHOT_OBS_BUCKET:-}"
     --snapshot_obs_access_key="${SNAPSHOT_OBS_ACCESS_KEY:-}"
@@ -742,7 +744,6 @@ function install_function_master() {
       --etcd_address="${ETCD_CLUSTER_ADDRESS}" \
       --node_id="${NODE_ID}" --sys_func_retry_period="${SYS_FUNC_RETRY_PERIOD}" \
       --runtime_recover_enable="${RUNTIME_RECOVER_ENABLE}" \
-      --enable_sandbox_pause_resume="${ENABLE_SANDBOX_PAUSE_RESUME:-false}" \
       --litebus_thread_num="${FUNCTION_MASTER_LITEBUS_THREAD}" \
       --system_timeout="${SYSTEM_TIMEOUT}" --enable_metrics="${ENABLE_METRICS}" \
       --metrics_config="${METRICS_CONFIG}" \

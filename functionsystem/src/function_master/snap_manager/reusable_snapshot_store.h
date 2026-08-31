@@ -103,6 +103,8 @@ public:
         const ::messages::CompleteDeleteReusableSnapshotRequest &request);
     litebus::Future<::messages::DeleteReusableSnapshotResponse> Delete(
         const ::messages::DeleteReusableSnapshotRequest &request);
+    litebus::Future<Status> DeleteLocalSnapshotsForSource(
+        const std::string &tenantID, const std::string &sourceInstanceID);
 
     void SetArtifactDeleter(ArtifactDeleter deleter);
 

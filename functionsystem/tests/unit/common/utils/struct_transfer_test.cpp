@@ -62,6 +62,22 @@ TEST_F(StructTransferTest, SessionContextIsStoredInExtensions)
     EXPECT_EQ(instanceInfo.createoptions().at("normal_option"), "normal_value");
 }
 
+TEST_F(StructTransferTest, PersistsTypedFailoverFromCreateRequest)
+{
+    CreateRequest createReq;
+    createReq.set_failover(true);
+    runtime::CallRequest callRequest;
+    resources::InstanceInfo instanceInfo;
+
+    SetInstanceInfo(&instanceInfo, createReq, callRequest, "parent");
+
+    EXPECT_TRUE(instanceInfo.failover());
+    ASSERT_NE(CreateRequest::descriptor()->FindFieldByName("failover"), nullptr);
+    EXPECT_EQ(CreateRequest::descriptor()->FindFieldByName("failover")->number(), 10);
+    ASSERT_NE(resources::InstanceInfo::descriptor()->FindFieldByName("failover"), nullptr);
+    EXPECT_EQ(resources::InstanceInfo::descriptor()->FindFieldByName("failover")->number(), 42);
+}
+
 void SetValidDiskAllocation(schedule_decision::ScheduleResult &result)
 {
     schedule_framework::VectorResourceAllocation vectorAllocation;

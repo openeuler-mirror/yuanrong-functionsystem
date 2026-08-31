@@ -82,7 +82,8 @@ bool IsExactPausedCommit(const resources::InstanceInfo &source,
 
 litebus::Future<KillResponse> SnapCtrlActor::HandlePauseResumeSnapshot(
     const std::string &requestID, const std::string &instanceID,
-    const std::shared_ptr<InstanceStateMachine> &stateMachine, int32_t ttlSeconds)
+    const std::shared_ptr<InstanceStateMachine> &stateMachine, int32_t ttlSeconds,
+    uint64_t checkpointTimeoutMs)
 {
     const auto instanceInfo = stateMachine->GetInstanceInfo();
     const auto state = static_cast<InstanceState>(instanceInfo.instancestatus().code());
@@ -183,6 +184,10 @@ litebus::Future<KillResponse> SnapCtrlActor::HandlePauseResumeSnapshot(
     auto context = std::make_shared<PauseContext>();
     context->operationRequestID = requestID;
     context->sourceInstanceInfo = instanceInfo;
+    if (checkpointTimeoutMs > 0) {
+        (*context->sourceInstanceInfo.mutable_createoptions())["YR_CHECKPOINT_TIMEOUT_MS"] =
+            std::to_string(checkpointTimeoutMs);
+    }
     context->ttlSeconds = ttlSeconds;
     context->prepareDeadline = std::chrono::steady_clock::now()
         + std::chrono::milliseconds(pauseRetryPolicy_.operationTimeoutMs);
@@ -646,6 +651,18 @@ litebus::Future<KillResponse> SnapCtrlActor::HandlePauseCheckpointResponse(
     const std::string &instanceID, const std::shared_ptr<PauseContext> &context,
     const messages::SnapshotRuntimeResponse &response)
 {
+    if (response.code() == common::ERR_NONE && response.has_localsnapshot()
+        && (!response.has_snapshotinfo()
+            || response.snapshotinfo().status() != resources::SNAPSHOT_READY)) {
+        return functionAgentMgr_->PublishSnapshotArtifact(
+            context->operationRequestID, context->sourceInstanceInfo,
+            context->operationRequestID)
+            .Then([this, instanceID, context](
+                      const messages::SnapshotRuntimeResponse &published)
+                      -> litebus::Future<KillResponse> {
+                return HandlePauseCheckpointResponse(instanceID, context, published);
+            });
+    }
     const auto validation = ValidatePauseContinuation(instanceID, context);
     const auto convergence = ClassifyPauseCheckpointResponse(response, validation);
     if (convergence != ConvergenceResult::COMMITTED) {

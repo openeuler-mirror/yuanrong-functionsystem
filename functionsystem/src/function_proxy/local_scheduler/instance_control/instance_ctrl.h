@@ -266,6 +266,9 @@ public:
         const std::string &requestID);
     virtual void EraseFrontendCreateFailure(const std::string &requestID);
     virtual litebus::Future<Status> ForceDeleteInstance(const std::string &instanceID);
+
+    virtual litebus::Future<Status> TryLocalSnapshotFailover(
+        const std::string &instanceID, const std::string &sourceRuntimeID);
     virtual litebus::Future<Status> ReleaseRuntimeForPause(
         const resource_view::InstanceInfo &instanceInfo, const std::string &snapshotID);
 
@@ -275,6 +278,9 @@ public:
     virtual litebus::Future<Status> BeginPauseGate(const resource_view::InstanceInfo &identity);
 
     virtual litebus::Future<Status> RecoverPauseGate(const resource_view::InstanceInfo &identity);
+
+    virtual litebus::Future<bool> IsPauseRuntimeFenced(
+        const std::string &instanceID, const std::string &runtimeID);
 
     virtual litebus::Future<std::shared_ptr<ControlInterfacePosixClient>> CreateInstanceClient(
         const std::string &instanceID, const std::string &runtimeID, const std::string &address)

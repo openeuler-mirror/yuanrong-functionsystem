@@ -28,18 +28,52 @@ Status DecryptCredential(const std::string &fieldName, const std::string &cipher
 
 }  // namespace
 
+Status ParseSnapshotStorageMode(const std::string &value, SnapshotStorageMode &mode)
+{
+    if (value == "distributed_cache") {
+        mode = SnapshotStorageMode::DISTRIBUTED_CACHE;
+        return Status::OK();
+    }
+    if (value == "distributed_only") {
+        mode = SnapshotStorageMode::DISTRIBUTED_ONLY;
+        return Status::OK();
+    }
+    if (value == "local_only") {
+        mode = SnapshotStorageMode::LOCAL_ONLY;
+        return Status::OK();
+    }
+    return Status(StatusCode::ERR_PARAM_INVALID, "unknown snapshot storage mode");
+}
+
+bool UsesDistributedStorage(SnapshotStorageMode mode)
+{
+    return mode != SnapshotStorageMode::LOCAL_ONLY;
+}
+
+bool KeepsLocalSnapshot(SnapshotStorageMode mode)
+{
+    return mode != SnapshotStorageMode::DISTRIBUTED_ONLY;
+}
+
 Status BuildSnapshotStorageStartConfig(const FunctionAgentFlags &flags,
                                        SnapshotStorageStartConfig &output,
                                        const SnapshotCredentialDecryptor &decrypt)
 {
     output = {};
-    if (!flags.GetEnableSandboxPauseResume()) {
+    if (flags.GetCheckpointDir().empty()) {
         return Status::OK();
     }
 
     SnapshotStorageStartConfig candidate;
     candidate.enabled = true;
+    RETURN_IF_NOT_OK(ParseSnapshotStorageMode(flags.GetSnapshotStorageMode(), candidate.mode));
+    candidate.localCacheMaxBytes = flags.GetSnapshotLocalCacheMaxBytes();
     candidate.backend = flags.GetSnapshotStorageBackend();
+    if (!UsesDistributedStorage(candidate.mode)) {
+        candidate.backend = "local";
+        output = std::move(candidate);
+        return Status::OK();
+    }
     if (candidate.backend == "datasystem") {
         candidate.dataSystem.host = flags.GetDataSystemHost();
         candidate.dataSystem.port = flags.GetDataSystemPort();

@@ -6,7 +6,9 @@
 #ifndef FUNCTIONSYSTEM_SRC_RUNTIME_MANAGER_CKPT_CHECKPOINT_PLAN_H
 #define FUNCTIONSYSTEM_SRC_RUNTIME_MANAGER_CKPT_CHECKPOINT_PLAN_H
 
+#include <algorithm>
 #include <filesystem>
+#include <limits>
 #include <string>
 
 #include "common/proto/pb/message_pb.h"
@@ -14,24 +16,20 @@
 
 namespace functionsystem::runtime_manager {
 
-enum class ArtifactLifecycle {
-    USER_MANAGED,
-    INSTANCE_MANAGED,
-};
-
 struct CheckpointPlan {
     std::string sandboxID;
     std::string checkpointID;
     std::string checkpointDirectory;
     int32_t ttlSeconds{ 0 };
-    ArtifactLifecycle lifecycle{ ArtifactLifecycle::USER_MANAGED };
+    uint32_t timeoutSeconds{ 180 };
+    // Runtime checkpointing stays on the latency-sensitive pause path. Any
+    // transport compression is performed later by FunctionAgent.
+    bool compress{ false };
     bool leaveRuntimeRunning{ false };
 };
 
 struct CheckpointResult {
     Status status;
-    int64_t size{ 0 };
-    std::string sha256;
 };
 
 inline bool IsSafeCheckpointIdentityComponent(const std::string &component)
@@ -44,7 +42,6 @@ inline bool IsSafeCheckpointIdentityComponent(const std::string &component)
 
 inline Status BuildCheckpointPlan(const messages::SnapshotRuntimeRequest &request,
                                   const std::string &sandboxID,
-                                  ArtifactLifecycle lifecycle,
                                   bool leaveRuntimeRunning,
                                   CheckpointPlan &plan)
 {
@@ -66,8 +63,14 @@ inline Status BuildCheckpointPlan(const messages::SnapshotRuntimeRequest &reques
     plan.checkpointID = request.snapshotid();
     plan.checkpointDirectory = directory.string();
     plan.ttlSeconds = request.ttl();
-    plan.lifecycle = lifecycle;
     plan.leaveRuntimeRunning = leaveRuntimeRunning;
+    if (request.timeoutms() > 0) {
+        constexpr uint64_t MILLISECONDS_PER_SECOND = 1000;
+        const auto seconds = request.timeoutms() / MILLISECONDS_PER_SECOND
+            + (request.timeoutms() % MILLISECONDS_PER_SECOND == 0 ? 0 : 1);
+        plan.timeoutSeconds = static_cast<uint32_t>(std::min<uint64_t>(
+            seconds, std::numeric_limits<uint32_t>::max()));
+    }
     return Status::OK();
 }
 

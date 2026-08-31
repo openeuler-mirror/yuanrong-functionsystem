@@ -269,11 +269,6 @@ public:
         return enableFakeSuspendResume_;
     }
 
-    bool GetEnableSandboxPauseResume() const
-    {
-        return enableSandboxPauseResume_;
-    }
-
 protected:
     void InitMetaHealthyCheckFlag();
     void InitMetricsFlag();
@@ -332,7 +327,6 @@ protected:
     int32_t scheduleRelaxed_;
     bool enablePreemption_;
     bool enableFakeSuspendResume_;
-    bool enableSandboxPauseResume_ { false };
 };
 
 }  // namespace functionsystem

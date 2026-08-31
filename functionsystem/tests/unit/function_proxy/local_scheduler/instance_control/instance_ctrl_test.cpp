@@ -110,6 +110,52 @@ const TransitionResult FAILED_RESULT = TransitionResult{ InstanceState::FAILED, 
 const TransitionResult FATAL_RESULT = TransitionResult{ InstanceState::FATAL, InstanceInfo(), InstanceInfo(), 5 };
 const TransitionResult EVICTING_RESULT = TransitionResult{ InstanceState::EXITING, InstanceInfo(), InstanceInfo(), 6 };
 
+class DeferredAnonymousCheckpointSnapCtrl : public SnapCtrl {
+public:
+    explicit DeferredAnonymousCheckpointSnapCtrl(const std::shared_ptr<SnapCtrlActor> &actor)
+        : SnapCtrl(actor)
+    {
+    }
+
+    litebus::Future<KillResponse> HandleAnonymousCheckpoint(
+        const std::string &requestID, const std::string &instanceID,
+        uint64_t) override
+    {
+        requestID_ = requestID;
+        instanceID_ = instanceID;
+        ++calls_;
+        return completion_.GetFuture();
+    }
+
+    void Complete(common::ErrorCode code)
+    {
+        KillResponse response;
+        response.set_code(code);
+        completion_.SetValue(response);
+    }
+
+    size_t Calls() const
+    {
+        return calls_;
+    }
+
+    const std::string &RequestID() const
+    {
+        return requestID_;
+    }
+
+    const std::string &InstanceID() const
+    {
+        return instanceID_;
+    }
+
+private:
+    litebus::Promise<KillResponse> completion_;
+    size_t calls_{0};
+    std::string requestID_;
+    std::string instanceID_;
+};
+
 InstanceCtrlConfig instanceCtrlConfig {
     .maxInstanceReconnectTimes = 2,
     .maxInstanceRedeployTimes = 2,
@@ -178,6 +224,17 @@ TEST(InstanceCtrlMessageTest, GenScheduleResponseCarriesOwningProxyNodeID)
     EXPECT_EQ(response.instanceid(), "instance-1");
     EXPECT_TRUE(response.has_scheduleresult());
     EXPECT_EQ(response.scheduleresult().nodeid(), "proxy-owner-a");
+}
+
+TEST(InstanceCtrlMessageTest, ExitStatusCarriesSourceRuntimeIdentity)
+{
+    const auto *field = messages::InstanceStatusInfo::descriptor()->FindFieldByName("runtimeID");
+    ASSERT_NE(field, nullptr);
+    EXPECT_EQ(field->number(), 6);
+
+    auto status = GenInstanceStatusInfo(
+        "sandbox-a", 1, "exited", static_cast<int32_t>(EXIT_TYPE::UNKNOWN_ERROR), "runtime-old");
+    EXPECT_EQ(status->runtimeID, "runtime-old");
 }
 
 static std::shared_ptr<messages::ScheduleRequest> GenScheduleReq(std::shared_ptr<InstanceCtrlActor> actor)
@@ -398,7 +455,305 @@ protected:
     inline static std::string metaStoreServerHost_;
 
     FunctionMeta functionMeta_;
+
+    void SeedRunningLocalFailover(
+        bool failover, InstanceState state = InstanceState::RUNNING)
+    {
+        recoveryRequest_ = std::make_shared<messages::ScheduleRequest>();
+        recoveryRequest_->set_requestid("create-request");
+        recoveryRequest_->set_traceid("create-trace");
+        recoveryInfo_ = std::make_shared<resources::InstanceInfo>();
+        recoveryInfo_->set_instanceid("sandbox-a");
+        recoveryInfo_->set_requestid("create-request");
+        recoveryInfo_->set_function("default/sandbox/$latest");
+        recoveryInfo_->set_functionproxyid(nodeID_);
+        recoveryInfo_->set_functionagentid("agent-a");
+        recoveryInfo_->set_runtimeid("runtime-old");
+        recoveryInfo_->set_runtimeaddress("127.0.0.1:1000");
+        recoveryInfo_->set_containerid("container-old");
+        recoveryInfo_->set_tenantid("tenant-a");
+        recoveryInfo_->set_storagetype("local");
+        recoveryInfo_->set_failover(failover);
+        recoveryInfo_->set_version(7);
+        recoveryInfo_->mutable_instancestatus()->set_code(static_cast<int32_t>(state));
+        *recoveryRequest_->mutable_instance() = *recoveryInfo_;
+        recoveryContext_ = std::make_shared<InstanceContext>(recoveryRequest_);
+        recoveryStateMachine_ = std::make_shared<MockInstanceStateMachine>(nodeID_, recoveryContext_);
+        ON_CALL(*recoveryStateMachine_, GetInstanceState())
+            .WillByDefault(Invoke([this] {
+                return static_cast<InstanceState>(recoveryInfo_->instancestatus().code());
+            }));
+        ON_CALL(*recoveryStateMachine_, GetInstanceInfo())
+            .WillByDefault(Invoke([this] { return *recoveryInfo_; }));
+        ON_CALL(*recoveryStateMachine_, GetOwner()).WillByDefault(Return(nodeID_));
+        ON_CALL(*recoveryStateMachine_, GetScheduleRequest()).WillByDefault(Return(recoveryRequest_));
+        ON_CALL(*recoveryStateMachine_, GetVersion())
+            .WillByDefault(Invoke([this] { return recoveryInfo_->version(); }));
+        ON_CALL(*recoveryStateMachine_, IsSaving()).WillByDefault(Return(false));
+        ON_CALL(*recoveryStateMachine_, GetRequestID()).WillByDefault(Return("create-request"));
+        ON_CALL(*recoveryStateMachine_, GetInstanceContextCopy()).WillByDefault(Return(recoveryContext_));
+        ON_CALL(*recoveryStateMachine_, GetCancelFuture())
+            .WillByDefault(Return(litebus::Future<std::string>()));
+        ON_CALL(*instanceControlView_, GetInstance("sandbox-a")).WillByDefault(Return(recoveryStateMachine_));
+        instanceCtrl_->instanceCtrlActor_->funcMetaMap_[recoveryInfo_->function()] = functionMeta_;
+        instanceCtrl_->instanceCtrlActor_->concernedInstance_.insert("sandbox-a");
+    }
+
+    messages::LocalSnapshotMetadata LocalFailoverSnapshot() const
+    {
+        messages::LocalSnapshotMetadata snapshot;
+        snapshot.set_snapshotid("anon-1");
+        snapshot.set_instanceid("sandbox-a");
+        snapshot.set_localrecoverycandidate(true);
+        snapshot.set_createdatunixseconds(1);
+        snapshot.set_size(4096);
+        return snapshot;
+    }
+
+    void ExpectSuccessfulLocalFailover(std::string address = "127.0.0.1:2000")
+    {
+        recoveryClient_ = std::make_shared<MockSharedClient>();
+        EXPECT_CALL(*mockSharedClientManagerProxy_, DeleteClient("sandbox-a"))
+            .WillOnce(Return(Status::OK()));
+        EXPECT_CALL(*funcAgentMgr_, KillInstance(_, "agent-a", true))
+            .WillOnce(Return(GenKillInstanceResponse(
+                StatusCode::SUCCESS, "killed", "local-failover")));
+        EXPECT_CALL(*funcAgentMgr_, DeployInstance(_, "agent-a"))
+            .WillOnce(Invoke([address](const std::shared_ptr<messages::DeployInstanceRequest> &request,
+                                      const std::string &) {
+                EXPECT_EQ(request->restoresnapshotid(), "anon-1");
+                messages::DeployInstanceResponse response;
+                response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+                response.set_runtimeid("runtime-new");
+                response.set_address(address);
+                response.set_containerid("container-new");
+                response.set_executortype(static_cast<int32_t>(EXECUTOR_TYPE::SANDBOXD));
+                return litebus::Future<messages::DeployInstanceResponse>(response);
+            }));
+        EXPECT_CALL(*mockSharedClientManagerProxy_, NewControlInterfacePosixClient(
+            "sandbox-a", "runtime-new", address, _, _, _))
+            .WillOnce(Return(recoveryClient_));
+        runtime::SnapStartedResponse started;
+        started.set_code(common::ERR_NONE);
+        EXPECT_CALL(*recoveryClient_, SnapStarted(_)).WillOnce(Return(started));
+        EXPECT_CALL(*recoveryStateMachine_, TransitionToImpl(InstanceState::RUNNING, 7, _, true, _))
+            .WillOnce(Invoke([this, address](const InstanceState &, int64_t, const std::string &, bool, int32_t) {
+                recoveryInfo_->set_runtimeid("runtime-new");
+                recoveryInfo_->set_runtimeaddress(address);
+                recoveryInfo_->set_containerid("container-new");
+                recoveryInfo_->set_version(8);
+                recoveryInfo_->mutable_instancestatus()->set_code(
+                    static_cast<int32_t>(InstanceState::RUNNING));
+                return litebus::Future<TransitionResult>(
+                    TransitionResult{InstanceState::RUNNING, *recoveryInfo_, {}, 8, Status::OK()});
+            }));
+        EXPECT_CALL(*recoveryStateMachine_, ExecuteStateChangeCallback(_, InstanceState::RUNNING))
+            .Times(AnyNumber());
+        EXPECT_CALL(*mockSharedClientManagerProxy_, GetControlInterfacePosixClient("sandbox-a"))
+            .WillRepeatedly(Return(recoveryClient_));
+        EXPECT_CALL(*recoveryClient_, Heartbeat(_)).WillRepeatedly(Return(Status::OK()));
+    }
+
+    std::shared_ptr<messages::ScheduleRequest> recoveryRequest_;
+    std::shared_ptr<resources::InstanceInfo> recoveryInfo_;
+    std::shared_ptr<InstanceContext> recoveryContext_;
+    std::shared_ptr<MockInstanceStateMachine> recoveryStateMachine_;
+    std::shared_ptr<MockSharedClient> recoveryClient_;
 };
+
+TEST_F(InstanceCtrlTest, WaitAndHeartbeatShareOneLocalFailover)
+{
+    SeedRunningLocalFailover(true);
+    litebus::Promise<std::optional<messages::LocalSnapshotMetadata>> snapshotPromise;
+    EXPECT_CALL(*funcAgentMgr_, LatestAnonymousSnapshot("sandbox-a"))
+        .WillOnce(Return(snapshotPromise.GetFuture()));
+    ExpectSuccessfulLocalFailover();
+
+    auto first = litebus::Async(
+        instanceCtrl_->GetActorAID(), &InstanceCtrlActor::HandleFailedInstance,
+        std::string("sandbox-a"), std::string("runtime-old"),
+        std::string("heartbeat lost"));
+    ASSERT_AWAIT_TRUE([this] {
+        return instanceCtrl_->instanceCtrlActor_->localSnapshotRecoveries_.count("sandbox-a") == 1;
+    });
+    auto exit = GenInstanceStatusInfo(
+        "sandbox-a", 1, "sandbox wait returned",
+        static_cast<int32_t>(EXIT_TYPE::UNKNOWN_ERROR), "runtime-old");
+    auto duplicate = instanceCtrl_->UpdateInstanceStatus(exit);
+    snapshotPromise.SetValue(
+        std::optional<messages::LocalSnapshotMetadata>(LocalFailoverSnapshot()));
+
+    ASSERT_AWAIT_READY(first);
+    ASSERT_AWAIT_READY(duplicate);
+    EXPECT_TRUE(first.Get().IsOk()) << first.Get().ToString();
+    EXPECT_TRUE(duplicate.Get().IsOk()) << duplicate.Get().ToString();
+    EXPECT_EQ(recoveryInfo_->instancestatus().code(), static_cast<int32_t>(InstanceState::RUNNING));
+    EXPECT_EQ(recoveryInfo_->runtimeid(), "runtime-new");
+}
+
+TEST_F(InstanceCtrlTest, AnonymousCheckpointCompletesAfterSnapshotIsDurable)
+{
+    SeedRunningLocalFailover(false);
+    auto snapActor = std::make_shared<SnapCtrlActor>("deferred-anonymous-checkpoint", nodeID_);
+    litebus::Spawn(snapActor);
+    auto snapCtrl = std::make_shared<DeferredAnonymousCheckpointSnapCtrl>(snapActor);
+    instanceCtrl_->instanceCtrlActor_->snapCtrl_ = snapCtrl;
+    auto request = GenKillRequest("sandbox-a", INSTANCE_ANONYMOUS_CHECKPOINT_SIGNAL);
+    request->set_requestid("anonymous-sync-http");
+
+    auto response = instanceCtrl_->Kill("sandbox-a", request);
+
+    EXPECT_FALSE(response.WaitFor(20).IsOK());
+    EXPECT_EQ(snapCtrl->Calls(), size_t{1});
+    EXPECT_EQ(snapCtrl->RequestID(), "anonymous-sync-http");
+    EXPECT_EQ(snapCtrl->InstanceID(), "sandbox-a");
+    snapCtrl->Complete(common::ERR_NONE);
+    ASSERT_AWAIT_READY_FOR(response, 1'000);
+    EXPECT_EQ(response.Get().code(), common::ERR_NONE);
+}
+
+TEST_F(InstanceCtrlTest, SandboxdLocalFailoverAcceptsAsyncPosixRegistration)
+{
+    SeedRunningLocalFailover(true);
+    EXPECT_CALL(*funcAgentMgr_, LatestAnonymousSnapshot("sandbox-a"))
+        .WillOnce(Return(std::optional<messages::LocalSnapshotMetadata>(LocalFailoverSnapshot())));
+    ExpectSuccessfulLocalFailover("");
+
+    auto result = instanceCtrl_->TryLocalSnapshotFailover("sandbox-a", "runtime-old");
+
+    ASSERT_AWAIT_READY(result);
+    EXPECT_TRUE(result.Get().IsOk()) << result.Get().ToString();
+    EXPECT_EQ(recoveryInfo_->runtimeid(), "runtime-new");
+    EXPECT_TRUE(recoveryInfo_->runtimeaddress().empty());
+}
+
+TEST_F(InstanceCtrlTest, SameNodeRestartRecoversEvictedFailoverInstance)
+{
+    SeedRunningLocalFailover(true, InstanceState::EVICTED);
+    EXPECT_CALL(*funcAgentMgr_, LatestAnonymousSnapshot("sandbox-a"))
+        .WillOnce(Return(std::optional<messages::LocalSnapshotMetadata>(LocalFailoverSnapshot())));
+    ExpectSuccessfulLocalFailover();
+
+    auto result = instanceCtrl_->TryLocalSnapshotFailover("sandbox-a", "runtime-old");
+
+    ASSERT_AWAIT_READY(result);
+    EXPECT_TRUE(result.Get().IsOk()) << result.Get().ToString();
+    EXPECT_EQ(recoveryInfo_->runtimeid(), "runtime-new");
+}
+
+TEST_F(InstanceCtrlTest, MissingSnapshotFailsClosedWithoutColdDeploy)
+{
+    SeedRunningLocalFailover(true);
+    EXPECT_CALL(*funcAgentMgr_, LatestAnonymousSnapshot("sandbox-a"))
+        .WillOnce(Return(std::optional<messages::LocalSnapshotMetadata>{}));
+    EXPECT_CALL(*funcAgentMgr_, DeployInstance).Times(0);
+
+    auto result = instanceCtrl_->TryLocalSnapshotFailover("sandbox-a", "runtime-old");
+
+    ASSERT_AWAIT_READY(result);
+    EXPECT_TRUE(result.Get().IsError());
+    EXPECT_EQ(recoveryInfo_->instancestatus().code(), static_cast<int32_t>(InstanceState::RUNNING));
+}
+
+TEST_F(InstanceCtrlTest, DeletedInstanceCleansLatestAnonymousSnapshotByExactIdentity)
+{
+    SeedRunningLocalFailover(true);
+    const auto snapshot = LocalFailoverSnapshot();
+    EXPECT_CALL(*funcAgentMgr_, LatestAnonymousSnapshot("sandbox-a"))
+        .WillOnce(Return(std::optional<messages::LocalSnapshotMetadata>(snapshot)));
+    litebus::Promise<messages::DeleteLocalSnapshotRequest> observed;
+    auto observedFuture = observed.GetFuture();
+    EXPECT_CALL(*funcAgentMgr_, DeleteLocalSnapshot("agent-a", _))
+        .WillOnce(Invoke([&observed](const std::string &,
+                                    const messages::DeleteLocalSnapshotRequest &request) {
+            observed.SetValue(request);
+            messages::DeleteLocalSnapshotResponse response;
+            response.set_requestid(request.requestid());
+            response.set_code(static_cast<int32_t>(StatusCode::SUCCESS));
+            return litebus::Future<messages::DeleteLocalSnapshotResponse>(response);
+        }));
+
+    instanceCtrl_->instanceCtrlActor_->CleanupAnonymousSnapshotForDeletedInstance(*recoveryInfo_);
+
+    ASSERT_AWAIT_READY(observedFuture);
+    const auto request = observedFuture.Get();
+    EXPECT_EQ(request.snapshotid(), snapshot.snapshotid());
+}
+
+TEST_F(InstanceCtrlTest, FailoverFalseDoesNotTakeOverRuntimeFailure)
+{
+    SeedRunningLocalFailover(false);
+    EXPECT_CALL(*funcAgentMgr_, LatestAnonymousSnapshot).Times(0);
+    EXPECT_CALL(*funcAgentMgr_, DeployInstance).Times(0);
+
+    auto result = instanceCtrl_->TryLocalSnapshotFailover("sandbox-a", "runtime-old");
+
+    ASSERT_AWAIT_READY(result);
+    EXPECT_TRUE(result.Get().IsError());
+}
+
+TEST_F(InstanceCtrlTest, StaleRuntimeFailureCannotReplaceCurrentRuntime)
+{
+    SeedRunningLocalFailover(true);
+    EXPECT_CALL(*funcAgentMgr_, LatestAnonymousSnapshot).Times(0);
+    EXPECT_CALL(*funcAgentMgr_, DeployInstance).Times(0);
+
+    auto result = instanceCtrl_->TryLocalSnapshotFailover("sandbox-a", "runtime-stale");
+
+    ASSERT_AWAIT_READY(result);
+    EXPECT_TRUE(result.Get().IsError());
+}
+
+TEST_F(InstanceCtrlTest, DelayedWaitForOldRuntimeDoesNotFailRecoveredRuntime)
+{
+    SeedRunningLocalFailover(true);
+    auto exit = GenInstanceStatusInfo(
+        "sandbox-a", 1, "old runtime exited",
+        static_cast<int32_t>(EXIT_TYPE::UNKNOWN_ERROR), "runtime-stale");
+    EXPECT_CALL(*funcAgentMgr_, LatestAnonymousSnapshot).Times(0);
+
+    auto result = instanceCtrl_->UpdateInstanceStatus(exit);
+
+    ASSERT_AWAIT_READY(result);
+    EXPECT_TRUE(result.Get().IsOk()) << result.Get().ToString();
+    EXPECT_EQ(recoveryInfo_->runtimeid(), "runtime-old");
+    EXPECT_EQ(recoveryInfo_->instancestatus().code(), static_cast<int32_t>(InstanceState::RUNNING));
+}
+
+TEST_F(InstanceCtrlTest, ReloadWithoutSnapshotReturnsFalseAndKeepsSource)
+{
+    SeedRunningLocalFailover(false);
+    EXPECT_CALL(*funcAgentMgr_, LatestAnonymousSnapshot("sandbox-a"))
+        .WillOnce(Return(std::optional<messages::LocalSnapshotMetadata>{}));
+    EXPECT_CALL(*mockSharedClientManagerProxy_, DeleteClient(_)).Times(0);
+    EXPECT_CALL(*funcAgentMgr_, KillInstance).Times(0);
+    auto request = GenKillRequest("sandbox-a", INSTANCE_RELOAD_SIGNAL);
+    request->set_requestid("reload-no-snapshot");
+
+    auto response = instanceCtrl_->KillFrontend("tenant-a", request);
+
+    ASSERT_AWAIT_READY(response);
+    EXPECT_NE(response.Get().code(), common::ERR_NONE);
+    EXPECT_EQ(recoveryInfo_->runtimeid(), "runtime-old");
+    EXPECT_EQ(recoveryInfo_->instancestatus().code(), static_cast<int32_t>(InstanceState::RUNNING));
+}
+
+TEST_F(InstanceCtrlTest, ReloadKillsSourceAndUsesAutomaticRecoveryPath)
+{
+    SeedRunningLocalFailover(false);
+    EXPECT_CALL(*funcAgentMgr_, LatestAnonymousSnapshot("sandbox-a"))
+        .WillOnce(Return(std::optional<messages::LocalSnapshotMetadata>(LocalFailoverSnapshot())));
+    ExpectSuccessfulLocalFailover();
+    auto request = GenKillRequest("sandbox-a", INSTANCE_RELOAD_SIGNAL);
+    request->set_requestid("reload-success");
+
+    auto response = instanceCtrl_->KillFrontend("tenant-a", request);
+
+    ASSERT_AWAIT_READY(response);
+    EXPECT_EQ(response.Get().code(), common::ERR_NONE);
+    EXPECT_EQ(recoveryInfo_->runtimeid(), "runtime-new");
+    EXPECT_EQ(recoveryInfo_->instancestatus().code(), static_cast<int32_t>(InstanceState::RUNNING));
+}
 
 TEST_F(InstanceCtrlTest, ScheduleGetFuncMetaFailed)
 {
@@ -5011,22 +5366,37 @@ TEST(ReusableSnapshotCreateTransferTest, ResolvedSnapshotKeepsNewCreateIdentityA
     target->set_function("default/sandbox/$latest");
     target->set_parentid("frontend-instance");
     (*target->mutable_extensions())[NAMED] = "true";
+    (*target->mutable_createoptions())["DELEGATE_ENV_VAR"] =
+        R"({"RRT_TUNNEL_WS_PORT":"8765","RRT_TUNNEL_HTTP_PORT":"8766"})";
     (*target->mutable_scheduleoption()->mutable_extension())
         [REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION] = "snapshot-42";
+    (*target->mutable_scheduleoption()
+          ->mutable_affinity()
+          ->mutable_nodeaffinity()
+          ->mutable_affinity())["target-node"] = resources::RequiredAffinity;
     target->mutable_resources()->mutable_resources()->operator[](CPU_RESOURCE_NAME)
         .mutable_scalar()->set_value(2000);
     target->mutable_resources()->mutable_resources()->operator[](MEMORY_RESOURCE_NAME)
         .mutable_scalar()->set_value(4096);
+    target->mutable_resources()->mutable_resources()->operator[]("TargetOnly")
+        .mutable_scalar()->set_value(1);
 
     ::messages::ResolveReusableSnapshotForCreateResponse resolved;
     resolved.set_code(common::ERR_NONE);
     auto *source = resolved.mutable_instancetemplate();
     source->set_function("default/sandbox/$latest");
     source->set_storagetype("working_dir");
+    (*source->mutable_scheduleoption()
+          ->mutable_affinity()
+          ->mutable_nodeaffinity()
+          ->mutable_affinity())["source-node"] = resources::PreferredAffinity;
     source->set_gracefulshutdowntime(5);
+    source->set_failover(true);
     (*source->mutable_createoptions())["network_policy"] =
         R"({"blockNetwork":true})";
     (*source->mutable_createoptions())["rootfs"] = R"({"type":"local","path":"/runtime"})";
+    (*source->mutable_createoptions())["DELEGATE_ENV_VAR"] =
+        R"({"RRT_TUNNEL_WS_PORT":"8765","RRT_TUNNEL_HTTP_PORT":"8766"})";
     source->mutable_resources()->mutable_resources()->operator[](CPU_RESOURCE_NAME)
         .mutable_scalar()->set_value(1000);
     source->mutable_resources()->mutable_resources()->operator[](MEMORY_RESOURCE_NAME)
@@ -5039,7 +5409,7 @@ TEST(ReusableSnapshotCreateTransferTest, ResolvedSnapshotKeepsNewCreateIdentityA
         "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
     restore->mutable_artifact()->set_size(4096);
     restore->mutable_artifact()->set_sha256(std::string(64, 'a'));
-    restore->mutable_artifact()->set_format("gvisor-checkpoint");
+    restore->mutable_artifact()->set_format("sandboxd-checkpoint");
     restore->mutable_artifact()->set_formatversion(1);
 
     const auto status = ApplyResolvedReusableSnapshotForCreate(resolved, scheduleReq);
@@ -5052,8 +5422,13 @@ TEST(ReusableSnapshotCreateTransferTest, ResolvedSnapshotKeepsNewCreateIdentityA
     EXPECT_EQ(target->parentid(), "frontend-instance");
     EXPECT_EQ(target->extensions().at(NAMED), "true");
     EXPECT_EQ(target->createoptions().at("network_policy"), R"({"blockNetwork":true})");
+    EXPECT_TRUE(target->failover());
     EXPECT_EQ(target->resources().resources().at(CPU_RESOURCE_NAME).scalar().value(), 2000);
     EXPECT_EQ(target->resources().resources().at(MEMORY_RESOURCE_NAME).scalar().value(), 4096);
+    EXPECT_EQ(target->resources().resources().at("TargetOnly").scalar().value(), 1);
+    EXPECT_EQ(target->scheduleoption().affinity().nodeaffinity().affinity().at("target-node"),
+              resources::RequiredAffinity);
+    EXPECT_EQ(target->scheduleoption().affinity().nodeaffinity().affinity().count("source-node"), 0U);
     EXPECT_EQ(target->scheduleoption().extension().count(
                   REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION), 0U);
     const auto trusted = target->scheduleoption().extension().find(
@@ -5062,9 +5437,80 @@ TEST(ReusableSnapshotCreateTransferTest, ResolvedSnapshotKeepsNewCreateIdentityA
     ::messages::ReusableSnapshotRestore decoded;
     ASSERT_TRUE(decoded.ParseFromString(HexStringToCharString(trusted->second)));
     EXPECT_EQ(decoded.SerializeAsString(), restore->SerializeAsString());
+
 }
 
-TEST(ReusableSnapshotCreateTransferTest, RejectsCloneResourceReductionBeforeScheduling)
+TEST(ReusableSnapshotCreateTransferTest, LocalArtifactRequiresItsPersistedSourceNode)
+{
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->set_requestid("local-clone-request");
+    auto *target = scheduleReq->mutable_instance();
+    target->set_instanceid("local-clone-instance");
+    target->set_function("default/sandbox/$latest");
+    (*target->mutable_scheduleoption()->mutable_extension())
+        [REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION] = "snapshot-local";
+
+    ::messages::ResolveReusableSnapshotForCreateResponse resolved;
+    resolved.set_code(common::ERR_NONE);
+    resolved.mutable_instancetemplate()->set_function("default/sandbox/$latest");
+    auto *restore = resolved.mutable_reusablesnapshotrestore();
+    restore->set_snapshotid("snapshot-local");
+    restore->set_allowlogicalinstanceidrebind(true);
+    auto *artifact = restore->mutable_artifact();
+    artifact->set_storagebackend("local");
+    artifact->set_objectkey("reusable/local/snapshot-local/checkpoint.img");
+    artifact->set_sourcenodeid("source-node");
+    artifact->set_size(4096);
+    artifact->set_format("sandboxd-checkpoint");
+    artifact->set_formatversion(1);
+
+    const auto status = ApplyResolvedReusableSnapshotForCreate(resolved, scheduleReq);
+
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    const auto &affinity = target->scheduleoption().affinity().nodeaffinity().affinity();
+    ASSERT_EQ(affinity.count("source-node"), 1U);
+    EXPECT_EQ(affinity.at("source-node"), resources::RequiredAffinity);
+}
+
+TEST(ReusableSnapshotCreateTransferTest, InheritsMissingResourcesAndPreservesTargetResources)
+{
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->set_requestid("clone-create-request");
+    auto *target = scheduleReq->mutable_instance();
+    target->set_instanceid("new-clone-instance");
+    target->set_tenantid("tenant-a");
+    target->set_function("default/sandbox/$latest");
+    (*target->mutable_scheduleoption()->mutable_extension())
+        [REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION] = "snapshot-42";
+    target->mutable_resources()->mutable_resources()->operator[]("TargetOnly")
+        .mutable_scalar()->set_value(1);
+
+    ::messages::ResolveReusableSnapshotForCreateResponse resolved;
+    resolved.set_code(common::ERR_NONE);
+    resolved.mutable_instancetemplate()->set_function("default/sandbox/$latest");
+    resolved.mutable_instancetemplate()->mutable_resources()->mutable_resources()
+        ->operator[](MEMORY_RESOURCE_NAME).mutable_scalar()->set_value(2048);
+    auto *restore = resolved.mutable_reusablesnapshotrestore();
+    restore->set_snapshotid("snapshot-42");
+    restore->set_allowlogicalinstanceidrebind(true);
+    restore->mutable_artifact()->set_storagebackend("obs");
+    restore->mutable_artifact()->set_objectkey(
+        "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
+    restore->mutable_artifact()->set_size(4096);
+    restore->mutable_artifact()->set_sha256(std::string(64, 'a'));
+    restore->mutable_artifact()->set_format("sandboxd-checkpoint");
+    restore->mutable_artifact()->set_formatversion(1);
+
+    const auto status = ApplyResolvedReusableSnapshotForCreate(resolved, scheduleReq);
+
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_EQ(target->resources().resources().at(MEMORY_RESOURCE_NAME).scalar().value(), 2048);
+    EXPECT_EQ(target->resources().resources().at("TargetOnly").scalar().value(), 1);
+    EXPECT_EQ(target->scheduleoption().extension().count(
+                  REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION), 1U);
+}
+
+TEST(ReusableSnapshotCreateTransferTest, AllowsCloneResourceReduction)
 {
     auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
     scheduleReq->set_requestid("clone-create-request");
@@ -5090,15 +5536,55 @@ TEST(ReusableSnapshotCreateTransferTest, RejectsCloneResourceReductionBeforeSche
         "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
     restore->mutable_artifact()->set_size(4096);
     restore->mutable_artifact()->set_sha256(std::string(64, 'a'));
-    restore->mutable_artifact()->set_format("gvisor-checkpoint");
+    restore->mutable_artifact()->set_format("sandboxd-checkpoint");
     restore->mutable_artifact()->set_formatversion(1);
 
     const auto status = ApplyResolvedReusableSnapshotForCreate(resolved, scheduleReq);
 
-    EXPECT_TRUE(status.IsError());
-    EXPECT_EQ(status.StatusCode(), StatusCode::ERR_PARAM_INVALID);
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    EXPECT_EQ(target->resources().resources().at(MEMORY_RESOURCE_NAME).scalar().value(), 1024);
     EXPECT_EQ(target->scheduleoption().extension().count(
-                  REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION), 0U);
+                  REUSABLE_SNAPSHOT_TRUSTED_RESTORE_EXTENSION), 1U);
+}
+
+TEST(ReusableSnapshotCreateTransferTest, PreservesExplicitNonScalarResources)
+{
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->set_requestid("clone-create-request");
+    auto *target = scheduleReq->mutable_instance();
+    target->set_instanceid("new-clone-instance");
+    target->set_tenantid("tenant-a");
+    target->set_function("default/sandbox/$latest");
+    (*target->mutable_scheduleoption()->mutable_extension())
+        [REUSABLE_SNAPSHOT_REQUESTED_ID_EXTENSION] = "snapshot-42";
+    target->mutable_resources()->mutable_resources()->operator[]("Device")
+        .mutable_set()->add_items("gpu0");
+
+    ::messages::ResolveReusableSnapshotForCreateResponse resolved;
+    resolved.set_code(common::ERR_NONE);
+    resolved.mutable_instancetemplate()->set_function("default/sandbox/$latest");
+    auto *range = resolved.mutable_instancetemplate()->mutable_resources()->mutable_resources()
+                      ->operator[]("Device").mutable_ranges()->add_range();
+    range->set_begin(1);
+    range->set_end(1);
+    auto *restore = resolved.mutable_reusablesnapshotrestore();
+    restore->set_snapshotid("snapshot-42");
+    restore->set_allowlogicalinstanceidrebind(true);
+    restore->mutable_artifact()->set_storagebackend("obs");
+    restore->mutable_artifact()->set_objectkey(
+        "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
+    restore->mutable_artifact()->set_size(4096);
+    restore->mutable_artifact()->set_sha256(std::string(64, 'a'));
+    restore->mutable_artifact()->set_format("sandboxd-checkpoint");
+    restore->mutable_artifact()->set_formatversion(1);
+
+    const auto status = ApplyResolvedReusableSnapshotForCreate(resolved, scheduleReq);
+
+    ASSERT_TRUE(status.IsOk()) << status.ToString();
+    const auto &device = target->resources().resources().at("Device");
+    ASSERT_TRUE(device.has_set());
+    ASSERT_EQ(device.set().items_size(), 1);
+    EXPECT_EQ(device.set().items(0), "gpu0");
 }
 
 TEST_F(InstanceCtrlTest, CreateFromSnapshotResolvesReadyRecordBeforeOrdinaryAuthorization)
@@ -5136,7 +5622,7 @@ TEST_F(InstanceCtrlTest, CreateFromSnapshotResolvesReadyRecordBeforeOrdinaryAuth
                 "reusable/v1/tenant-hash/snapshot-42/checkpoint.img");
             restore->mutable_artifact()->set_size(4096);
             restore->mutable_artifact()->set_sha256(std::string(64, 'a'));
-            restore->mutable_artifact()->set_format("gvisor-checkpoint");
+            restore->mutable_artifact()->set_format("sandboxd-checkpoint");
             restore->mutable_artifact()->set_formatversion(1);
             return response;
         });

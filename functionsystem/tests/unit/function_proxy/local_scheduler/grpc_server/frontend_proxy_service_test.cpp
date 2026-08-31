@@ -118,6 +118,19 @@ TEST(FrontendProxyServiceTest, InvokeTimeoutUsesFunctionTimeoutWithResultBuffer)
     EXPECT_EQ(FrontendProxyService::ResolveInvokeResultTimeout(request, param).count(), 8640005000);
 }
 
+TEST(FrontendProxyServiceTest, CreateTimeoutUsesFrontendValueWithLegacyFallback)
+{
+    FrontendProxyServiceParam param;
+    param.invokeResultTimeoutMs = 60000;
+    ::frontend_proxy::CreateInstanceRequest request;
+
+    EXPECT_EQ(FrontendProxyService::ResolveCreateResultTimeout(request, param).count(), 60000);
+    request.set_createtimeoutms(-1);
+    EXPECT_EQ(FrontendProxyService::ResolveCreateResultTimeout(request, param).count(), 60000);
+    request.set_createtimeoutms(300000);
+    EXPECT_EQ(FrontendProxyService::ResolveCreateResultTimeout(request, param).count(), 300000);
+}
+
 TEST(FrontendProxyServiceTest, AwaitInvokeResultUsesRemainingDeadline)
 {
     FrontendProxyService service(FrontendProxyServiceParam {});

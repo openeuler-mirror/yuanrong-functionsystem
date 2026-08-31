@@ -120,6 +120,7 @@ TEST_F(HealthCheckTest, HealthCheckWithNormalReturn)
     auto info = req.instancestatusinfo();
     EXPECT_EQ(0, execPtr->GetStatus().Get().Get());
     EXPECT_EQ(info.instanceid(), "Instance-ID");
+    EXPECT_EQ(info.runtimeid(), "runtime-ID");
     EXPECT_EQ(info.instancemsg(), "runtime had been returned");
 
     litebus::Terminate(functionAgent->GetAID());

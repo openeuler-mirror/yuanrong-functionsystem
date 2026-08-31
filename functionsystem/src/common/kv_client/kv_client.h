@@ -28,6 +28,9 @@ public:
     virtual ~KVClient() = default;
     Status Init(const std::string &host, int32_t port);
     std::pair<datasystem::Status, datasystem::ReadOnlyBuffer> GetRaw(const std::string &key);
+    datasystem::Status CreateRaw(const std::string &key, uint64_t size, const datasystem::SetParam &param,
+                                 std::shared_ptr<datasystem::Buffer> &buffer);
+    datasystem::Status SetRaw(const std::shared_ptr<datasystem::Buffer> &buffer);
     std::pair<Status, datasystem::ReadOnlyBuffer> Get(const std::string &key);
     Status Put(const std::string &key, const std::string &value);
     datasystem::Status DeleteRaw(const std::string &key);

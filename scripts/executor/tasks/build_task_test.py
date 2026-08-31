@@ -119,11 +119,13 @@ class BuildTaskTest(unittest.TestCase):
         )
 
         with mock.patch.object(build_task, "build_vendor"), \
+                mock.patch.object(build_task, "build_logs") as build_logs, \
                 mock.patch.object(build_task, "build_litebus"), \
                 mock.patch.object(build_task.builder, "build_binary") as cmake_build, \
                 mock.patch.object(build_task.builder, "build_binary_bazel") as bazel_build:
             build_task.run_build(self.root_dir, args)
 
+        build_logs.assert_called_once()
         cmake_build.assert_not_called()
         bazel_build.assert_called_once_with(
             self.root_dir,

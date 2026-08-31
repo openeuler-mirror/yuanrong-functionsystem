@@ -21,6 +21,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <limits>
 
 #include "common/constants/constants.h"
@@ -365,6 +366,17 @@ void ResolveLogPaths(const std::string &logDir, const std::string &runtimeID, st
 
 SandboxdRequestBuilder::SandboxdRequestBuilder(const CommandBuilder &cmdBuilder) : cmdBuilder_(cmdBuilder)
 {
+}
+
+Status SandboxdRequestBuilder::AttachCheckpointInfo(runtime::v1::StartRequest &request,
+                                                    const std::string &directory)
+{
+    const auto checkpointDirectory = std::filesystem::path(directory).lexically_normal();
+    if (!checkpointDirectory.is_absolute()) {
+        return Status(StatusCode::ERR_PARAM_INVALID, "checkpoint directory must be absolute");
+    }
+    request.mutable_checkpoint_info()->set_checkpoint_dir(checkpointDirectory.string());
+    return Status::OK();
 }
 
 // ── Public Build ──────────────────────────────────────────────────────────────

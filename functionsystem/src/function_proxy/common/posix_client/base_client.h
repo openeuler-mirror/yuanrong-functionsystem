@@ -45,6 +45,7 @@ public:
 
 protected:
     std::shared_ptr<grpc::PosixClient> posix_;
+    std::function<void()> userCb_;
     std::shared_mutex rwMut_;
 };
 }  // namespace functionsystem
