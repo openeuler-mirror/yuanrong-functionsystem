@@ -44,6 +44,10 @@ struct TransContext {
     int32_t type = static_cast<int32_t>(EXIT_TYPE::NONE_EXIT);
     // if not nullptr, need update stateMachine by scheduleReq
     std::shared_ptr<messages::ScheduleRequest> scheduleReq = nullptr;
+    // when true, bypass the STATE_TRANSITION_MAP guard so a not-ready instance
+    // (NEW/SCHEDULING/CREATING/EVICTING) can be driven straight to FATAL for an
+    // immediate kill. Restricted to FATAL transitions; other targets still guard.
+    bool force = false;
 };
 
 struct TransitionResult {
