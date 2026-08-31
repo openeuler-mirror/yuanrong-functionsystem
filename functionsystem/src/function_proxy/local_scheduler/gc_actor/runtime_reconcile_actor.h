@@ -31,6 +31,10 @@
 #include "local_scheduler/instance_control/instance_ctrl.h"
 #include "local_scheduler/function_agent_manager/function_agent_mgr.h"
 
+namespace functionsystem::test {
+class RuntimeReconcileActorTest;
+}
+
 namespace functionsystem::local_scheduler {
 
 bool ShouldIncludeInExpectedRuntimes(InstanceState state);
@@ -83,13 +87,16 @@ public:
     void TriggerOnce(const std::string &funcAgentID);
 
 private:
+    friend class ::functionsystem::test::RuntimeReconcileActorTest;
+
     void OnTrigger(const std::string &funcAgentID);
 
     // Run a reconcile pass for a specific subset of agents.
-    //   firstPassAgents: agents that just registered; eligible for RECOVERING→NORMAL
-    //                    transition when reconcile reports success/empty.
-    // Periodic passes (no firstPassAgents) reconcile every agent that owns at least
-    // one instance in proxy's local view, but never mutate UnitStatus.
+    //   firstPassAgents: agents that just registered, or whose first-pass intent
+    //                    was deferred; eligible for RECOVERING→NORMAL transition
+    //                    when reconcile reports success/empty.
+    // Periodic passes reconcile every agent that owns at least one instance in the
+    // proxy's local view, and may carry deferred first-pass agents.
     void RunReconcileCycle(const std::vector<std::string> &firstPassAgents);
 
     void ReconcileAgent(const std::string &funcAgentID,
@@ -119,8 +126,9 @@ private:
     std::shared_ptr<FunctionAgentMgr> functionAgentMgr_;
     std::shared_ptr<resource_view::ResourceView> resourceView_;
 
-    // Agents pending first-pass transition (RECOVERING → NORMAL on success).
-    std::vector<std::string> pendingAgents_;
+    // Agents whose first-pass transition is still owed. This must survive an
+    // in-flight skip and first-pass errors until a successful reconcile completes.
+    std::unordered_set<std::string> pendingFirstPassAgents_;
 
     // In-flight reconcile RPCs per agent: prevents overlap between first-pass and
     // periodic passes, or two periodic passes if a previous one is slow.

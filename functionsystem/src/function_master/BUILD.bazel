@@ -56,6 +56,7 @@ cc_library(
         ":function_master_common_lib",
         "//functionsystem/src/common:rpc",
         "//functionsystem/src/common:status",
+        "//functionsystem/src/common:datasystem_capability",
         "//functionsystem/src/meta_store/client/cpp:meta_store_client",
         "//functionsystem/src/common:scheduler",
         "//functionsystem/src/common:utils",

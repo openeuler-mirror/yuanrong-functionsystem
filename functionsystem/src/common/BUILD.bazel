@@ -22,6 +22,15 @@ cc_library(
     visibility = ["//visibility:public"],
 )
 
+# --- datasystem_capability: header-only deployment capability helpers ---
+cc_library(
+    name = "datasystem_capability",
+    hdrs = ["datasystem_capability.h"],
+    copts = COPTS,
+    deps = ["//functionsystem/src:src_root_inc"],
+    visibility = ["//visibility:public"],
+)
+
 # --- logs: local logging wrapper headers ---
 # Exposes common/logs/logging.h (and counter.h) which wrap the @logs_sdk API.
 # Almost every library includes "common/logs/logging.h" via the -Ifunctionsystem/src/ path.
@@ -434,6 +443,24 @@ cc_library(
     hdrs = glob(["file_storage/**/*.h"]),
     copts = COPTS,
     deps = [":status", ":kv_client"],
+    visibility = ["//visibility:public"],
+)
+
+# --- snapshot_storage ---
+cc_library(
+    name = "snapshot_storage",
+    srcs = glob(["snapshot_storage/*.cpp"]),
+    hdrs = glob(["snapshot_storage/*.h"]),
+    copts = COPTS,
+    deps = [
+        ":kv_client",
+        ":status",
+        ":utils",
+        "@boringssl//:crypto",
+        "@datasystem_sdk//:datasystem_sdk",
+        "@litebus//:litebus",
+        "@obs_sdk//:obs_sdk",
+    ],
     visibility = ["//visibility:public"],
 )
 
