@@ -590,32 +590,74 @@ litebus::Future<KillResponse> InstanceCtrlActor::CompleteNetworkPolicyUpdate(
             common::ERR_PARAM_INVALID,
             response.message().empty() ? "network policy update failed" : response.message());
     }
-    auto updated = identity;
-    if (policyJSON.empty() || policyJSON == "{}") {
-        updated.mutable_createoptions()->erase(CONTAINER_NETWORK_POLICY);
-    } else {
-        (*updated.mutable_createoptions())[CONTAINER_NETWORK_POLICY] = policyJSON;
-    }
-    return observer_->PutInstance(updated)
-        .Then(litebus::Defer(
-            GetAID(), &InstanceCtrlActor::OnNetworkPolicyPersisted,
-            updated, std::placeholders::_1));
+    return PersistNetworkPolicyUpdate(identity.instanceid(), policyJSON);
 }
 
-KillResponse InstanceCtrlActor::OnNetworkPolicyPersisted(
-    const resources::InstanceInfo &updated,
-    const Status &status)
+litebus::Future<KillResponse> InstanceCtrlActor::PersistNetworkPolicyUpdate(
+    const std::string &instanceID,
+    const std::string &policyJSON,
+    uint32_t attempt)
 {
-    if (!status.IsOk()) {
+    auto stateMachine = instanceControlView_->GetInstance(instanceID);
+    if (stateMachine == nullptr) {
         return GenKillResponse(
             common::ERR_INNER_SYSTEM_ERROR,
-            "failed to persist the updated network policy: " + status.RawMessage());
+            "sandbox disappeared while persisting its network policy");
     }
-    auto localStatus = UpdateInstanceInfo(updated);
-    if (!localStatus.IsOk()) {
+
+    const bool clearPolicy = policyJSON.empty() || policyJSON == "{}";
+    const auto current = stateMachine->GetInstanceInfo();
+    const auto currentPolicy = current.createoptions().find(CONTAINER_NETWORK_POLICY);
+    if ((clearPolicy && currentPolicy == current.createoptions().end())
+        || (!clearPolicy && currentPolicy != current.createoptions().end()
+            && currentPolicy->second == policyJSON)) {
+        return GenKillResponse(common::ERR_NONE, "success");
+    }
+
+    auto scheduleReq = std::make_shared<messages::ScheduleRequest>();
+    scheduleReq->set_requestid(current.requestid());
+    scheduleReq->mutable_instance()->CopyFrom(current);
+    if (clearPolicy) {
+        scheduleReq->mutable_instance()->mutable_createoptions()->erase(
+            CONTAINER_NETWORK_POLICY);
+    } else {
+        (*scheduleReq->mutable_instance()->mutable_createoptions())[
+            CONTAINER_NETWORK_POLICY] = policyJSON;
+    }
+
+    const auto &status = current.instancestatus();
+    TransContext transition{
+        static_cast<InstanceState>(status.code()), current.version(), status.msg(),
+        true, status.errcode(), status.exitcode(), status.type()
+    };
+    transition.scheduleReq = std::move(scheduleReq);
+    transition.allowNetworkPolicyRefresh = true;
+    return TransInstanceState(stateMachine, transition)
+        .Then(litebus::Defer(
+            GetAID(), &InstanceCtrlActor::OnNetworkPolicyPersisted,
+            instanceID, policyJSON, attempt, std::placeholders::_1));
+}
+
+litebus::Future<KillResponse> InstanceCtrlActor::OnNetworkPolicyPersisted(
+    const std::string &instanceID,
+    const std::string &policyJSON,
+    uint32_t attempt,
+    const TransitionResult &result)
+{
+    constexpr uint32_t MAX_NETWORK_POLICY_PERSIST_ATTEMPTS = 3;
+    if (!result.status.IsOk()
+        && result.status.StatusCode() == StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION
+        && attempt + 1 < MAX_NETWORK_POLICY_PERSIST_ATTEMPTS) {
+        YRLOG_WARN(
+            "instance({}) network policy persistence conflicted, retry {}/{}",
+            instanceID, attempt + 2, MAX_NETWORK_POLICY_PERSIST_ATTEMPTS);
+        return PersistNetworkPolicyUpdate(instanceID, policyJSON, attempt + 1);
+    }
+    if (!result.status.IsOk()) {
         return GenKillResponse(
             common::ERR_INNER_SYSTEM_ERROR,
-            "updated network policy was persisted but local state did not converge");
+            "failed to persist the updated network policy: "
+                + result.status.RawMessage());
     }
     return GenKillResponse(common::ERR_NONE, "success");
 }
@@ -7013,6 +7055,7 @@ litebus::Future<TransitionResult> InstanceCtrlActor::TransInstanceState(
     }
     bool isResumeSnapshotCleanup = false;
     bool isResumeCommit = false;
+    const bool isNetworkPolicyRefresh = context.allowNetworkPolicyRefresh;
     if (context.newState == InstanceState::RUNNING && context.scheduleReq != nullptr) {
         const auto &candidate = context.scheduleReq->instance();
         const auto current = machine->GetInstanceInfo();
@@ -7066,19 +7109,22 @@ litebus::Future<TransitionResult> InstanceCtrlActor::TransInstanceState(
     }
     return machine->TransitionTo(context).Then(
         [machine, nodeID(nodeID_), context, isTraefikEnable(traefikRegistry_ != nullptr), idleMgr(idleMgr_),
-         aid(GetAID()), isResumeSnapshotCleanup, isResumeCommit](const TransitionResult &result)
+         aid(GetAID()), isResumeSnapshotCleanup, isResumeCommit,
+         isNetworkPolicyRefresh](const TransitionResult &result)
             -> litebus::Future<TransitionResult> {
             // transition successful
             if (result.status.IsOk()) {
                 // if successfully, need to update state for observer and execute callback
-                if (!isResumeSnapshotCleanup) {
+                if (!isResumeSnapshotCleanup && !isNetworkPolicyRefresh) {
                     machine->ExecuteStateChangeCallback(machine->GetRequestID(), context.newState);
                 }
-                if (!isResumeSnapshotCleanup && context.newState == InstanceState::RUNNING && idleMgr != nullptr) {
+                if (!isResumeSnapshotCleanup && !isNetworkPolicyRefresh
+                    && context.newState == InstanceState::RUNNING && idleMgr != nullptr) {
                     idleMgr->OnInstanceRunning(machine->GetInstanceInfo());
                 }
                 // Register to Traefik when instance enters RUNNING state (async, non-blocking)
-                if (!isResumeSnapshotCleanup && !isResumeCommit && context.newState == InstanceState::RUNNING
+                if (!isResumeSnapshotCleanup && !isResumeCommit && !isNetworkPolicyRefresh
+                    && context.newState == InstanceState::RUNNING
                     && isTraefikEnable) {
                     const auto &instanceInfo = machine->GetInstanceInfo();
                     (void)litebus::Async(aid, &InstanceCtrlActor::RegisterTraefikRoute, instanceInfo);
@@ -7146,19 +7192,30 @@ litebus::Future<TransitionResult> InstanceCtrlActor::TransInstanceState(
                         && result.savedInfo.starttime() == expected.starttime()
                         && result.savedInfo.proxygrpcaddress() == expected.proxygrpcaddress()
                         && !result.savedInfo.has_snapshotinfo());
+                const auto savedPolicy = result.savedInfo.createoptions().find(
+                    CONTAINER_NETWORK_POLICY);
+                const auto expectedPolicy = expected.createoptions().find(
+                    CONTAINER_NETWORK_POLICY);
+                const bool exactNetworkPolicyWinner = !isNetworkPolicyRefresh
+                    || (savedPolicy == result.savedInfo.createoptions().end()
+                        ? expectedPolicy == expected.createoptions().end()
+                        : expectedPolicy != expected.createoptions().end()
+                            && savedPolicy->second == expectedPolicy->second);
                 if (result.savedInfo.functionproxyid() == nodeID
                     && result.savedInfo.instancestatus().code() == static_cast<int32_t>(context.newState)
-                    && exactResumeWinner && exactResumeCleanup) {
+                    && exactResumeWinner && exactResumeCleanup && exactNetworkPolicyWinner) {
                     auto ret = result;
                     ret.status = Status::OK();
-                    if (!isResumeSnapshotCleanup) {
+                    if (!isResumeSnapshotCleanup && !isNetworkPolicyRefresh) {
                         machine->ExecuteStateChangeCallback(machine->GetRequestID(), context.newState);
                     }
-                    if (!isResumeSnapshotCleanup && context.newState == InstanceState::RUNNING
+                    if (!isResumeSnapshotCleanup && !isNetworkPolicyRefresh
+                        && context.newState == InstanceState::RUNNING
                         && idleMgr != nullptr) {
                         idleMgr->OnInstanceRunning(machine->GetInstanceInfo());
                     }
-                    if (!isResumeSnapshotCleanup && !isResumeCommit && context.newState == InstanceState::RUNNING
+                    if (!isResumeSnapshotCleanup && !isResumeCommit && !isNetworkPolicyRefresh
+                        && context.newState == InstanceState::RUNNING
                         && isTraefikEnable) {
                         const auto& instanceInfo = machine->GetInstanceInfo();
                         YRLOG_INFO("TransInstanceState: triggering Traefik register (path=txn_recovery), instanceID={}",
