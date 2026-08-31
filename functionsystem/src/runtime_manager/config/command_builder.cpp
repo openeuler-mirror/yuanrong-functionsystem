@@ -38,6 +38,8 @@ const std::string BASH_PATH = "/bin/bash";
 const std::string JAVA_CMD = "java";
 const std::string DEFAULT_JAVA8_CMD = "/opt/buildtools/jdk8/bin/java";
 const std::string GLOG_LOG_DIR = "GLOG_log_dir";
+const std::string GOOGLE_LOG_DIR = "GOOGLE_LOG_DIR";
+const std::string SANDBOX_LOG_DIR = "/tmp/yuanrong/logs";
 const std::string YR_LOG_LEVEL = "YR_LOG_LEVEL";
 const std::string PATH_ENV = "PATH";
 const std::string MAX_LOG_SIZE_MB_ENV = "YR_MAX_LOG_SIZE_MB";
@@ -161,7 +163,8 @@ std::map<std::string, std::string> CommandBuilder::CombineEnvs(const Envs &envs)
 
     // Layer 4: framework envs — always override regardless of user settings
     combined[YR_LOG_LEVEL]                  = config_.runtimeLogLevel;
-    combined[GLOG_LOG_DIR]                  = config_.runtimeLogPath;
+    combined[GLOG_LOG_DIR]                  = SANDBOX_LOG_DIR;
+    combined[GOOGLE_LOG_DIR]                = SANDBOX_LOG_DIR;
     combined[MAX_LOG_SIZE_MB_ENV]           = std::to_string(config_.runtimeMaxLogSize);
     combined[MAX_LOG_FILE_NUM_ENV]          = std::to_string(config_.runtimeMaxLogFileNum);
     combined[RUNTIME_DS_CONNECT_TIMEOUT_ENV] = std::to_string(config_.runtimeDsConnectTimeout);

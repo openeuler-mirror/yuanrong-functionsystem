@@ -139,6 +139,18 @@ TEST_F(SandboxdRequestBuilderTest, FlatRequestEnvsCarriesLanguage)
     EXPECT_EQ(startReq->envs().at("YR_LANGUAGE"), "python3.9");
 }
 
+TEST_F(SandboxdRequestBuilderTest, FlatRequestCarriesUnifiedLogDir)
+{
+    auto params = MakeMinimalParams();
+    auto [status, startReq] = builder_->Build(params);
+
+    ASSERT_TRUE(status.IsOk());
+    ASSERT_NE(startReq, nullptr);
+    EXPECT_EQ(startReq->envs().at("GLOG_log_dir"), "/tmp/yuanrong/logs");
+    EXPECT_EQ(startReq->envs().at("GOOGLE_LOG_DIR"), "/tmp/yuanrong/logs");
+    EXPECT_EQ(startReq->envs().at("GLOG_log_dir"), startReq->envs().at("GOOGLE_LOG_DIR"));
+}
+
 TEST_F(SandboxdRequestBuilderTest, FlatRequestHonorsNoSetCudaVisibleDevices)
 {
     litebus::os::SetEnv("YR_NOSET_CUDA_VISIBLE_DEVICES", "1");
