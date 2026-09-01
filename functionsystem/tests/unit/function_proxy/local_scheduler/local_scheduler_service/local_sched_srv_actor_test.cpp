@@ -581,6 +581,13 @@ TEST_F(LocalSchedSrvActorTest, ForwardScheduleRetryTest)
     StatusCode rspCode = StatusCode::LS_FORWARD_DOMAIN_TIMEOUT;
     std::string rspMsg = "forward to domain scheduler timeout";
 
+    auto cancelStub = std::make_shared<DomainSchedStubActor>(REGISTERED_DOMAIN_SCHED_NAME +
+                                                              DOMAIN_SCHEDULER_SRV_ACTOR_NAME_POSTFIX);
+    litebus::Spawn(cancelStub);
+    messages::CancelSchedule capturedCancel;
+    EXPECT_CALL(*cancelStub, MockCancelScheduleWithParam(_)).WillOnce(SaveArg<0>(&capturedCancel));
+    EXPECT_CALL(*cancelStub, MockCancelScheduleResponse()).WillOnce(Return(0));
+
     auto req = std::make_shared<messages::ScheduleRequest>();
     req->set_requestid(requestID);
     req->mutable_instance()->mutable_scheduleoption()->set_initcalltimeout(0);
@@ -596,7 +603,73 @@ TEST_F(LocalSchedSrvActorTest, ForwardScheduleRetryTest)
     EXPECT_EQ(forwardScheduleRsp.requestid(), requestID);
     EXPECT_EQ(forwardScheduleRsp.code(), rspCode);
     EXPECT_EQ(forwardScheduleRsp.message(), rspMsg);
+    ASSERT_AWAIT_TRUE([&]() { return !capturedCancel.msgid().empty(); });
+    EXPECT_EQ(capturedCancel.id(), requestID);
+    EXPECT_EQ(capturedCancel.type(), messages::CancelType::REQUEST);
+    EXPECT_THAT(capturedCancel.reason(), HasSubstr("frontend forward schedule timeout"));
     req = nullptr;
+    litebus::Terminate(cancelStub->GetAID());
+    litebus::Await(cancelStub);
+}
+
+TEST_F(LocalSchedSrvActorTest, ForwardScheduleUsesScheduleTimeoutInsteadOfInitCallTimeout)
+{
+    const std::string requestID = "forwardScheduleUsesScheduleTimeout";
+    auto req = std::make_shared<messages::ScheduleRequest>();
+    req->set_requestid(requestID);
+    req->mutable_instance()->mutable_scheduleoption()->set_initcalltimeout(1);
+    req->mutable_instance()->mutable_scheduleoption()->set_scheduletimeoutms(2000);
+
+    messages::ScheduleResponse rsp;
+    rsp.set_code(StatusCode::SUCCESS);
+    rsp.set_message("forward schedule success");
+    rsp.set_requestid(requestID);
+    uint32_t forwardCount = 0;
+    EXPECT_CALL(*domainSchedStubActor_, MockForwardSchedule())
+        .Times(6)
+        .WillRepeatedly(Invoke([&]() {
+            ++forwardCount;
+            return forwardCount == 6 ? rsp.SerializeAsString() : std::string{};
+        }));
+    EXPECT_CALL(*primary_, GetResourceViewChanges())
+        .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
+    EXPECT_CALL(*virtual_, GetResourceViewChanges())
+        .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
+
+    auto future = litebus::Async(driverActor_->GetAID(), &LocalSchedSrvActorTestDriver::ForwardSchedule,
+                                 dstActor_->GetAID(), req);
+
+    ASSERT_AWAIT_READY(future);
+    EXPECT_EQ(future.Get().code(), StatusCode::SUCCESS);
+    EXPECT_EQ(forwardCount, 6);
+}
+
+TEST_F(LocalSchedSrvActorTest, ForwardScheduleAllowsDomainResponseGrace)
+{
+    const std::string requestID = "forwardScheduleAllowsDomainResponseGrace";
+    auto req = std::make_shared<messages::ScheduleRequest>();
+    req->set_requestid(requestID);
+    req->mutable_instance()->mutable_scheduleoption()->set_initcalltimeout(1);
+    req->mutable_instance()->mutable_scheduleoption()->set_scheduletimeoutms(100);
+
+    messages::ScheduleResponse rsp;
+    rsp.set_code(StatusCode::SUCCESS);
+    rsp.set_message("forward schedule success");
+    rsp.set_requestid(requestID);
+    EXPECT_CALL(*domainSchedStubActor_, MockForwardSchedule())
+        .Times(2)
+        .WillOnce(Return(std::string{}))
+        .WillOnce(Return(rsp.SerializeAsString()));
+    EXPECT_CALL(*primary_, GetResourceViewChanges())
+        .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
+    EXPECT_CALL(*virtual_, GetResourceViewChanges())
+        .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
+
+    auto future = litebus::Async(driverActor_->GetAID(), &LocalSchedSrvActorTestDriver::ForwardSchedule,
+                                 dstActor_->GetAID(), req);
+
+    ASSERT_AWAIT_READY(future);
+    EXPECT_EQ(future.Get().code(), StatusCode::SUCCESS);
 }
 
 /**
@@ -612,6 +685,8 @@ TEST_F(LocalSchedSrvActorTest, ForwardScheduleParamCheck)
 {
     auto req = std::make_shared<messages::ScheduleRequest>();
     req->set_requestid("forwardSchedule123");
+    req->mutable_instance()->mutable_scheduleoption()->set_initcalltimeout(1);
+    req->mutable_instance()->mutable_scheduleoption()->set_scheduletimeoutms(5000);
 
     messages::ScheduleResponse rsp;
     rsp.set_code(StatusCode::SUCCESS);
@@ -637,6 +712,7 @@ TEST_F(LocalSchedSrvActorTest, ForwardScheduleParamCheck)
     ASSERT_AWAIT_READY(forwardScheduleFuture);
     messages::ScheduleRequest scheduleReq;
     EXPECT_TRUE(scheduleReq.ParseFromString(msgValue.Get()));
+    EXPECT_EQ(scheduleReq.instance().scheduleoption().scheduletimeoutms(), 5000);
     auto cpuValue = scheduleReq.updateresources().at(0).changes(0).addition().resourceunit()
                         .capacity()
                         .resources()

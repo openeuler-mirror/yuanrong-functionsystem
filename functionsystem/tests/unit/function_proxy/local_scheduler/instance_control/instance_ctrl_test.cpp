@@ -8511,12 +8511,12 @@ TEST_F(InitialLowReliabilityRouteConflictActorTest, RunningVersionConflictWithRe
     auto stateMachine = std::make_shared<MockInstanceStateMachine>(LOSER_PROXY_ID);
 
     EXPECT_CALL(*instanceControlView_, GetInstance(loser.instanceid()))
-        .Times(2)
+        .Times(1)
         .WillRepeatedly(Return(stateMachine));
     EXPECT_CALL(*stateMachine, GetInstanceState()).WillOnce(Return(InstanceState::CREATING));
     EXPECT_CALL(*stateMachine, GetVersion()).WillOnce(Return(1)).WillOnce(Return(2));
     EXPECT_CALL(*stateMachine, IsSaving()).WillOnce(Return(false));
-    EXPECT_CALL(*stateMachine, GetInstanceInfo()).Times(4).WillRepeatedly(Return(localCreating));
+    EXPECT_CALL(*stateMachine, GetInstanceInfo()).Times(2).WillRepeatedly(Return(localCreating));
     TransitionResult persistenceFailure{
         litebus::None(), authoritative, localCreating, 0,
         Status(StatusCode::INSTANCE_TRANSACTION_WRONG_VERSION, "version is incorrect")

@@ -86,6 +86,7 @@ public:
             YRLOG_ERROR("invalid request message from {} for cancel schedule", std::string(from));
             return;
         }
+        MockCancelScheduleWithParam(*cancelRequest);
         auto resp = std::make_shared<messages::CancelScheduleResponse>();
         resp->set_msgid(cancelRequest->msgid());
         auto status = std::make_shared<messages::FunctionSystemStatus>();
@@ -93,6 +94,7 @@ public:
         Send(from, "TryCancelResponse", resp->SerializeAsString());
     }
     MOCK_METHOD0(MockCancelScheduleResponse, int32_t());
+    MOCK_METHOD1(MockCancelScheduleWithParam, void(const messages::CancelSchedule &));
 
 protected:
     void Init() override
