@@ -147,6 +147,7 @@ void RuntimeManager::Init()
     ActorBase::Receive("QueryInstanceStatusInfo", &RuntimeManager::QueryInstanceStatusInfo);
     ActorBase::Receive("CleanStatus", &RuntimeManager::CleanStatus);
     ActorBase::Receive("UpdateCred", &RuntimeManager::UpdateCred);
+    ActorBase::Receive("UpdateNetworkPolicy", &RuntimeManager::UpdateNetworkPolicy);
     ActorBase::Receive("QueryDebugInstanceInfos", &RuntimeManager::QueryDebugInstanceInfos);
     ActorBase::Receive("ReconcileRuntimes", &RuntimeManager::ReconcileRuntimes);
     metricsClient_ = std::make_shared<MetricsClient>();
@@ -1463,6 +1464,48 @@ void RuntimeManager::UpdateCredResponse(const litebus::AID &to,
     }
     const auto &output = response.Get();
     (void)Send(to, "UpdateCredResponse", output.SerializeAsString());
+}
+
+void RuntimeManager::UpdateNetworkPolicy(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    auto request = std::make_shared<messages::UpdateNetworkPolicyRequest>();
+    if (!request->ParseFromString(msg)) {
+        YRLOG_ERROR("{}|failed to parse UpdateNetworkPolicy from function-agent({})",
+                    runtimeManagerID_, from.HashString());
+        return;
+    }
+    const auto &requestID = request->requestid();
+    const auto &runtimeID = request->runtimeid();
+    auto executor = FindExecutor(GetRuntimeType(runtimeID));
+    if (executor == nullptr) {
+        messages::UpdateNetworkPolicyResponse response;
+        response.set_requestid(requestID);
+        response.set_code(static_cast<int32_t>(RUNTIME_MANAGER_PARAMS_INVALID));
+        response.set_message("failed to get runtime executor");
+        Send(from, "UpdateNetworkPolicyResponse", response.SerializeAsString());
+        return;
+    }
+    executor->UpdateNetworkPolicyForRuntime(request).OnComplete(
+        litebus::Defer(GetAID(), &RuntimeManager::UpdateNetworkPolicyResponse,
+                       from, requestID, std::placeholders::_1));
+}
+
+void RuntimeManager::UpdateNetworkPolicyResponse(
+    const litebus::AID &to,
+    const std::string &requestID,
+    const litebus::Future<messages::UpdateNetworkPolicyResponse> &response)
+{
+    if (response.IsError()) {
+        messages::UpdateNetworkPolicyResponse failed;
+        failed.set_requestid(requestID);
+        failed.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        failed.set_message("network policy update failed");
+        Send(to, "UpdateNetworkPolicyResponse", failed.SerializeAsString());
+        return;
+    }
+    (void)Send(to, "UpdateNetworkPolicyResponse",
+               response.Get().SerializeAsString());
 }
 
 litebus::Future<Status> RuntimeManager::NotifyInstancesDiskUsageExceedLimit(const std::string &description,

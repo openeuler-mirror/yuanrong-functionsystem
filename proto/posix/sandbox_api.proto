@@ -41,6 +41,8 @@ service SandboxService {
   rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse) {}
   // ListAvailableRuntimes lists runtime classes whose handlers are ready.
   rpc ListAvailableRuntimes(ListAvailableRuntimesRequest) returns (ListAvailableRuntimesResponse) {}
+  // SetNetworkPolicy atomically replaces a running sandbox's complete policy.
+  rpc SetNetworkPolicy(SetNetworkPolicyRequest) returns (SetNetworkPolicyResponse) {}
 }
 
 // NetworkPolicyAction is the action selected by a network policy rule.
@@ -67,7 +69,8 @@ enum NetworkProtocol {
   NETWORK_PROTOCOL_ICMP        = 4;
 }
 
-// TrafficPolicyMode selects stateless rules or connection-aware replies.
+// TrafficPolicyMode selects whether replies are evaluated independently or
+// are admitted from connection state created by an allowed new flow.
 enum TrafficPolicyMode {
   TRAFFIC_POLICY_MODE_UNSPECIFIED = 0;
   TRAFFIC_POLICY_MODE_STATELESS   = 1;
@@ -76,8 +79,23 @@ enum TrafficPolicyMode {
 
 // NetworkEndpoint identifies the remote peer matched by a traffic rule.
 message NetworkEndpoint {
+  // Address is an exact IPv4 address in v1.
   string address = 1;
-  uint32 port    = 2;
+  // Port is an exact TCP or UDP port. Zero matches any port.
+  uint32 port = 2;
+  // Cidr is an IPv4 address or CIDR prefix in network policy schema v2.
+  string cidr = 3;
+  // Domain is an exact DNS name or a leading "*." suffix pattern in schema
+  // v2. Domain peers are valid only for egress rules.
+  string domain = 4;
+  // PortRange selects a contiguous remote TCP or UDP port range in schema v2.
+  PortRange port_range = 5;
+}
+
+// PortRange is an inclusive TCP or UDP port interval.
+message PortRange {
+  uint32 first = 1;
+  uint32 last  = 2;
 }
 
 // TrafficRule describes one ingress or egress packet rule.
@@ -86,15 +104,26 @@ message TrafficRule {
   NetworkDirection direction = 2;
   NetworkProtocol protocol   = 3;
   NetworkEndpoint peer       = 4;
-  // Destination port on ingress and source port on egress. Zero matches any.
-  uint32 sandbox_port        = 5;
+  // SandboxPort is the destination port on ingress and source port on
+  // egress. Zero matches any sandbox port. An omitted peer matches any
+  // remote address and port.
+  uint32 sandbox_port = 5;
+  // SandboxPortRange selects an inclusive local port interval in schema v2.
+  PortRange sandbox_port_range = 6;
+  // Priority orders schema v2 rules. Higher values win and DENY wins a tie.
+  // Zero selects the default user priority of 100.
+  uint32 priority = 7;
 }
 
 // TrafficPolicy controls IPv4 packets crossing a sandbox's host veth.
 message TrafficPolicy {
+  // DefaultAction is the shared ingress and egress default in schema v1.
   NetworkPolicyAction default_action = 1;
   repeated TrafficRule rules         = 2;
   TrafficPolicyMode mode             = 3;
+  // IngressDefaultAction and EgressDefaultAction are required by schema v2.
+  NetworkPolicyAction ingress_default_action = 4;
+  NetworkPolicyAction egress_default_action  = 5;
 }
 
 // DNSRule matches either an exact DNS name or a leading "*." suffix pattern.
@@ -113,8 +142,20 @@ message DNSPolicy {
 message NetworkPolicy {
   TrafficPolicy traffic = 1;
   DNSPolicy dns         = 2;
+  // SchemaVersion is omitted for the legacy exact-address schema. Version 2
+  // enables CIDRs, domain peers, port ranges, priorities, and independent
+  // ingress and egress defaults.
+  uint32 schema_version = 3;
 }
 
+// SetNetworkPolicyRequest replaces a running sandbox's complete policy.
+message SetNetworkPolicyRequest {
+  string sandbox_id            = 1;
+  NetworkPolicy network_policy = 2;
+}
+
+// SetNetworkPolicyResponse is empty after a successful replacement.
+message SetNetworkPolicyResponse {}
 // RootfsSrcType identifies the root filesystem source type.
 enum RootfsSrcType {
   S3    = 0;

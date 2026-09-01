@@ -150,6 +150,7 @@ void FunctionAgentMgrActor::Init()
     Receive("SetNetworkIsolationResponse", &FunctionAgentMgrActor::SetNetworkIsolationResponse);
     Receive("UpdateLocalStatus", &FunctionAgentMgrActor::UpdateLocalStatus);
     Receive("UpdateCredResponse", &FunctionAgentMgrActor::UpdateCredResponse);
+    Receive("UpdateNetworkPolicyResponse", &FunctionAgentMgrActor::UpdateNetworkPolicyResponse);
     Receive("SnapshotRuntimeResponse", &FunctionAgentMgrActor::SnapshotRuntimeResponse);
     Receive("PublishSnapshotArtifactResponse", &FunctionAgentMgrActor::PublishSnapshotArtifactResponse);
     Receive("ListLocalSnapshotsResponse", &FunctionAgentMgrActor::ListLocalSnapshotsResponse);
@@ -1706,6 +1707,41 @@ void FunctionAgentMgrActor::UpdateCredResponse(const litebus::AID &from, std::st
     auto requestID = response.requestid();
     YRLOG_INFO("{}|update token successfully", requestID);
     (void)updateTokenSync_.Synchronized(requestID, response);
+}
+
+litebus::Future<messages::UpdateNetworkPolicyResponse> FunctionAgentMgrActor::UpdateNetworkPolicy(
+    const std::string &funcAgentID,
+    const std::shared_ptr<messages::UpdateNetworkPolicyRequest> &request)
+{
+    const auto &requestID = request->requestid();
+    if (funcAgentTable_.find(funcAgentID) == funcAgentTable_.end()) {
+        messages::UpdateNetworkPolicyResponse response;
+        response.set_requestid(requestID);
+        response.set_code(static_cast<int32_t>(StatusCode::ERR_INNER_COMMUNICATION));
+        response.set_message("function agent is not registered");
+        YRLOG_ERROR("{}|failed to update network policy, function agent {} is not registered",
+                    requestID, funcAgentID);
+        return response;
+    }
+    auto future = updateNetworkPolicySync_.AddSynchronizer(requestID);
+    YRLOG_INFO("{}|send network policy update for runtime({}) to agent({})",
+               requestID, request->runtimeid(), funcAgentID);
+    Send(funcAgentTable_[funcAgentID].aid, "UpdateNetworkPolicy",
+         request->SerializeAsString());
+    return future;
+}
+
+void FunctionAgentMgrActor::UpdateNetworkPolicyResponse(
+    const litebus::AID &from, std::string &&, std::string &&msg)
+{
+    messages::UpdateNetworkPolicyResponse response;
+    if (msg.empty() || !response.ParseFromString(msg)) {
+        YRLOG_WARN("invalid network policy response from {}", from.HashString());
+        return;
+    }
+    YRLOG_INFO("{}|network policy update completed with code({})",
+               response.requestid(), response.code());
+    (void)updateNetworkPolicySync_.Synchronized(response.requestid(), response);
 }
 
 litebus::Future<messages::SnapshotRuntimeResponse> FunctionAgentMgrActor::SnapshotRuntime(

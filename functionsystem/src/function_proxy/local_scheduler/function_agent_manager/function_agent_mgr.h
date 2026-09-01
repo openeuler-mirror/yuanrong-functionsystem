@@ -81,6 +81,9 @@ public:
 
     virtual litebus::Future<messages::UpdateCredResponse> UpdateCred(
         const std::string &funcAgentID, const std::shared_ptr<messages::UpdateCredRequest> &request);
+    virtual litebus::Future<messages::UpdateNetworkPolicyResponse> UpdateNetworkPolicy(
+        const std::string &funcAgentID,
+        const std::shared_ptr<messages::UpdateNetworkPolicyRequest> &request);
 
     virtual litebus::Future<Status> EvictAgent(const std::shared_ptr<messages::EvictAgentRequest> &req);
 

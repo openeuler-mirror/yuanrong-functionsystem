@@ -48,6 +48,9 @@ struct TransContext {
     // identity. This is set by the local-snapshot recovery transaction after
     // the restored runtime has acknowledged SnapStarted.
     bool allowRunningRuntimeRefresh = false;
+    // Permit a same-state CAS that changes only the persisted sandbox network
+    // policy. Other metadata differences are rejected by the state machine.
+    bool allowNetworkPolicyRefresh = false;
 };
 
 struct TransitionResult {

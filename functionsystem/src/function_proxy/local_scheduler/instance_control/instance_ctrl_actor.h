@@ -678,6 +678,21 @@ public:
         const std::shared_ptr<KillContext> &killCtx,
         const std::string &srcInstanceID,
         const std::shared_ptr<KillRequest> &killReq);
+    litebus::Future<KillResponse> HandleUpdateNetworkPolicySignal(
+        const std::shared_ptr<KillContext> &killCtx,
+        const std::string &srcInstanceID,
+        const std::shared_ptr<KillRequest> &killReq);
+    litebus::Future<KillResponse> CompleteNetworkPolicyUpdate(
+        const resources::InstanceInfo &identity,
+        const std::string &policyJSON,
+        const messages::UpdateNetworkPolicyResponse &response);
+    litebus::Future<KillResponse> PersistNetworkPolicyUpdate(
+        const std::string &instanceID,
+        const std::string &policyJSON,
+        uint32_t attempt = 0);
+    litebus::Future<KillResponse> OnNetworkPolicyPersisted(
+        const std::string &instanceID, const std::string &policyJSON,
+        uint32_t attempt, const TransitionResult &result);
     void OnAnonymousCheckpointComplete(
         const resources::InstanceInfo &identity,
         const litebus::Future<KillResponse> &future);

@@ -61,6 +61,8 @@ using KillInstanceRequest = ::messages::KillInstanceRequest;
 using KillInstanceResponse = ::messages::KillInstanceResponse;
 using UpdateCredRequest = ::messages::UpdateCredRequest;
 using UpdateCredResponse = ::messages::UpdateCredResponse;
+using UpdateNetworkPolicyRequest = ::messages::UpdateNetworkPolicyRequest;
+using UpdateNetworkPolicyResponse = ::messages::UpdateNetworkPolicyResponse;
 
 using RegisterRuntimeManagerRequest = ::messages::RegisterRuntimeManagerRequest;
 using RegisterRuntimeManagerResponse = ::messages::RegisterRuntimeManagerResponse;

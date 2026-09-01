@@ -773,6 +773,93 @@ TEST_F(InstanceStateMachineTest, RunningFailoverRefreshPublishesNewPhysicalIdent
     EXPECT_EQ(published.containerid(), "container-new");
 }
 
+TEST_F(InstanceStateMachineTest, NetworkPolicyRefreshPersistsSameStateMetadata)
+{
+    auto current = std::make_shared<messages::ScheduleRequest>();
+    current->set_requestid("network-policy-update");
+    auto *info = current->mutable_instance();
+    info->set_instanceid("sandbox-network-policy");
+    info->set_requestid("create-request");
+    info->set_tenantid("tenant-a");
+    info->set_function("default/0-test-helloWorld/$latest");
+    info->set_functionproxyid(TEST_NODE_ID);
+    info->set_functionagentid("agent-a");
+    info->set_runtimeid("runtime-a");
+    info->set_version(7);
+    info->mutable_instancestatus()->set_code(
+        static_cast<int32_t>(InstanceState::RUNNING));
+    (*info->mutable_createoptions())[CONTAINER_NETWORK_POLICY] =
+        R"({"defaultAction":"deny"})";
+    auto machine = std::make_shared<InstanceStateMachine>(
+        TEST_NODE_ID, std::make_shared<InstanceContext>(current), false);
+
+    auto mockInstanceOpt = std::make_shared<MockInstanceOperator>();
+    machine->instanceOpt_ = mockInstanceOpt;
+    EXPECT_CALL(*mockInstanceOpt, Modify(_, _, 7, false))
+        .WillOnce(Return(OperateResult{ Status::OK(), "", 7, 11 }));
+
+    auto mockObserver = std::make_shared<MockObserver>();
+    InstanceStateMachine::BindControlPlaneObserver(mockObserver);
+    EXPECT_CALL(*mockObserver, WatchInstance("sandbox-network-policy", 11)).Times(1);
+    resources::InstanceInfo published;
+    EXPECT_CALL(*mockObserver, PutInstanceEvent(_, false, 11))
+        .WillOnce([&published](const resources::InstanceInfo &instance, bool, int64_t) {
+            published.CopyFrom(instance);
+            return Status::OK();
+        });
+
+    auto updated = std::make_shared<messages::ScheduleRequest>(*current);
+    (*updated->mutable_instance()->mutable_createoptions())[
+        CONTAINER_NETWORK_POLICY] = R"({"defaultAction":"allow"})";
+    TransContext transition{ InstanceState::RUNNING, 7, "", true };
+    transition.scheduleReq = updated;
+    transition.allowNetworkPolicyRefresh = true;
+
+    const auto result = machine->TransitionTo(transition).Get();
+
+    ASSERT_TRUE(result.status.IsOk()) << result.status.ToString();
+    EXPECT_EQ(machine->GetVersion(), 8);
+    EXPECT_EQ(machine->GetInstanceInfo().createoptions().at(CONTAINER_NETWORK_POLICY),
+              R"({"defaultAction":"allow"})");
+    EXPECT_EQ(published.version(), 8);
+    EXPECT_EQ(published.createoptions().at(CONTAINER_NETWORK_POLICY),
+              R"({"defaultAction":"allow"})");
+}
+
+TEST_F(InstanceStateMachineTest, NetworkPolicyRefreshRejectsOtherMetadataChanges)
+{
+    auto current = std::make_shared<messages::ScheduleRequest>();
+    current->set_requestid("network-policy-update-invalid");
+    auto *info = current->mutable_instance();
+    info->set_instanceid("sandbox-network-policy-invalid");
+    info->set_requestid("create-request");
+    info->set_tenantid("tenant-a");
+    info->set_functionproxyid(TEST_NODE_ID);
+    info->set_functionagentid("agent-a");
+    info->set_runtimeid("runtime-a");
+    info->set_version(7);
+    info->mutable_instancestatus()->set_code(
+        static_cast<int32_t>(InstanceState::RUNNING));
+    auto machine = std::make_shared<InstanceStateMachine>(
+        TEST_NODE_ID, std::make_shared<InstanceContext>(current), false);
+
+    auto invalid = std::make_shared<messages::ScheduleRequest>(*current);
+    invalid->mutable_instance()->set_runtimeid("runtime-b");
+    (*invalid->mutable_instance()->mutable_createoptions())[
+        CONTAINER_NETWORK_POLICY] = R"({"defaultAction":"deny"})";
+    TransContext transition{ InstanceState::RUNNING, 7, "", false };
+    transition.scheduleReq = invalid;
+    transition.allowNetworkPolicyRefresh = true;
+
+    const auto result = machine->TransitionTo(transition).Get();
+
+    EXPECT_TRUE(result.status.IsError());
+    EXPECT_EQ(machine->GetVersion(), 7);
+    EXPECT_EQ(machine->GetInstanceInfo().runtimeid(), "runtime-a");
+    EXPECT_EQ(machine->GetInstanceInfo().createoptions().count(
+                  CONTAINER_NETWORK_POLICY), 0);
+}
+
 TEST_F(InstanceStateMachineTest, TransitionFromFatalToFailed)
 {
     const std::string function = "default/0-test-helloWorld/$latest";

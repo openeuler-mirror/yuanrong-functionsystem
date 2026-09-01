@@ -115,6 +115,8 @@ public:
     void UpdateSandboxID(const std::string &runtimeID, const std::string &sandboxID);
     void UpdateCheckpoint(const std::string &runtimeID, const std::string &checkpointID);
     void UpdatePortMappings(const std::string &runtimeID, const std::string &portMappingsJson);
+    void UpdateInstanceInfo(const std::string &runtimeID,
+                            const messages::RuntimeInstanceInfo &instanceInfo);
 
     // ── In-progress start tracking ────────────────────────────────────────────
 

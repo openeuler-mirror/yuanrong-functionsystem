@@ -16,6 +16,8 @@
 
 #include "instance_state_machine.h"
 
+#include <google/protobuf/util/message_differencer.h>
+
 #include <unordered_set>
 
 #include "common/types/instance_state.h"
@@ -109,6 +111,23 @@ static bool IsRunningFailoverRefresh(const TransContext &context,
         && candidate.version() == current.version()
         && !candidate.runtimeid().empty()
         && candidate.runtimeid() != current.runtimeid();
+}
+
+static bool IsNetworkPolicyRefresh(const TransContext &context,
+                                   const resources::InstanceInfo &current)
+{
+    if (!context.allowNetworkPolicyRefresh || context.scheduleReq == nullptr
+        || context.newState != static_cast<InstanceState>(current.instancestatus().code())
+        || context.version != current.version()) {
+        return false;
+    }
+
+    auto currentWithoutPolicy = current;
+    auto candidateWithoutPolicy = context.scheduleReq->instance();
+    currentWithoutPolicy.mutable_createoptions()->erase(CONTAINER_NETWORK_POLICY);
+    candidateWithoutPolicy.mutable_createoptions()->erase(CONTAINER_NETWORK_POLICY);
+    return google::protobuf::util::MessageDifferencer::Equals(
+        currentWithoutPolicy, candidateWithoutPolicy);
 }
 
 /**
@@ -308,14 +327,22 @@ litebus::Future<TransitionResult> InstanceStateMachine::TransitionTo(const Trans
             context, instanceContext_->GetInstanceInfo());
         runningFailoverRefresh = IsRunningFailoverRefresh(
             context, instanceContext_->GetInstanceInfo());
+        const bool networkPolicyRefresh = IsNetworkPolicyRefresh(
+            context, instanceContext_->GetInstanceInfo());
+        if (context.allowNetworkPolicyRefresh && !networkPolicyRefresh) {
+            YRLOG_ERROR("{}|instance({}) network policy refresh changed unrelated metadata",
+                        requestID, instanceID_);
+            return TransitionResult{ litebus::None(), {}, {}, GetVersion(),
+                                     Status(StatusCode::ERR_STATE_MACHINE_ERROR) };
+        }
         // if old state is exiting, will execute exitHandler in VerifyTransitionState
         if (context.newState == oldState && oldState != InstanceState::EXITING
-            && !resumeSnapshotCleanup && !runningFailoverRefresh) {
+            && !resumeSnapshotCleanup && !runningFailoverRefresh && !networkPolicyRefresh) {
             YRLOG_WARN("{}|instance({}) state is same, ignore it", requestID, instanceID_);
             return TransitionResult{ oldState, {}, {}, GetVersion(), Status::OK() };
         }
 
-        if (!resumeSnapshotCleanup && !runningFailoverRefresh) {
+        if (!resumeSnapshotCleanup && !runningFailoverRefresh && !networkPolicyRefresh) {
             auto verifyResult = VerifyTransitionState(context, requestID, oldState);
             if (verifyResult.preState.IsNone()) {
                 return verifyResult;
@@ -537,7 +564,8 @@ litebus::Future<TransitionResult> InstanceStateMachine::SaveInstanceInfoToMetaSt
             if (result.status.IsOk()) {
                 YRLOG_DEBUG("success to modify instance for key({}), preKeyVersion is {}", key, version);
                 if (context.persistence
-                    && (oldState != context.newState || runningFailoverRefresh)) {
+                    && (oldState != context.newState || runningFailoverRefresh
+                        || context.allowNetworkPolicyRefresh)) {
                     // State transitions and failover physical-identity refreshes
                     // must both reach local routing consumers.
                     self->PublishToLocalObserver(newInstanceInfo, result.currentModRevision);

@@ -232,6 +232,12 @@ public:
         const std::string &funcAgentID, const std::shared_ptr<messages::UpdateCredRequest> &request);
 
     void UpdateCredResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+    litebus::Future<messages::UpdateNetworkPolicyResponse> UpdateNetworkPolicy(
+        const std::string &funcAgentID,
+        const std::shared_ptr<messages::UpdateNetworkPolicyRequest> &request);
+
+    void UpdateNetworkPolicyResponse(const litebus::AID &from, std::string &&name, std::string &&msg);
+
 
     void SendCleanStatusToFunctionAgent(const litebus::AID &funcAgentAid, uint32_t curRetryTimes);
 
@@ -641,6 +647,8 @@ private:
     const uint32_t snapshotRuntimeTimeout_ = 180000;
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::InstanceStatusInfo, queryTimeout_, queryStatusSync_);
     REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::UpdateCredResponse, updateTokenTimeout_, updateTokenSync_);
+    REQUEST_SYNC_HELPER(FunctionAgentMgrActor, messages::UpdateNetworkPolicyResponse,
+                        updateTokenTimeout_, updateNetworkPolicySync_);
     std::unordered_map<std::string, litebus::AID> snapshotRuntimeExpectedAgent_;
     RequestSyncHelper<FunctionAgentMgrActor, messages::SnapshotRuntimeResponse>
         snapshotRuntimeSync_ { this, &FunctionAgentMgrActor::TimeoutSnapshotRuntimeSync,
