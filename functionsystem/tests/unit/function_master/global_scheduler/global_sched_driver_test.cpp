@@ -400,10 +400,12 @@ TEST_F(GlobalSchedDriverTest, QueryAgentCountRouter)
 resource_view::SchedulingQueueInfo GetSchedulingQueueInfo(std::string instanceId)
 {
     Resources resources;
-    Resource resource_cpu = view_utils::GetCpuResource();
+    Resource resource_cpu = view_utils::GetNameResourceWithValue("CPU", 2000);
     (*resources.mutable_resources())["CPU"] = resource_cpu;
-    Resource resource_memory = view_utils::GetMemResource();
+    Resource resource_memory = view_utils::GetNameResourceWithValue("Memory", 4096);
     (*resources.mutable_resources())["Memory"] = resource_memory;
+    (*resources.mutable_resources())["ssd"] = view_utils::GetNameResourceWithValue("ssd", 1.5);
+    (*resources.mutable_resources())["NPU"] = view_utils::GetGpuCountResource({ 1, 1 }, "NPU");
 
     resource_view::SchedulingQueueInfo instanceInfo;
     instanceInfo.set_instanceid(instanceId);
@@ -451,12 +453,49 @@ TEST_F(GlobalSchedDriverTest, GetSchedulingQueue)
         EXPECT_EQ(jsonBody.at("instanceInfos").size(), 2UL);
         EXPECT_EQ(jsonBody.at("instanceInfos").at(0).at("enqueueTimeMs"), "1000");
         EXPECT_EQ(jsonBody.at("instanceInfos").at(0).at("waitDurationMs"), "100");
+        const auto &resources = jsonBody.at("instanceInfos").at(0).at("resources");
+        EXPECT_EQ(resources.at("cpu"), "2000m");
+        EXPECT_EQ(resources.at("memory"), "4096Mi");
+        EXPECT_EQ(resources.at("ssd"), "1.5");
+        EXPECT_EQ(resources.at("NPU"), "2");
+        EXPECT_FALSE(resources.contains("resources"));
         EXPECT_FALSE(jsonBody.at("instanceInfos").at(0).contains("extensions"));
         EXPECT_FALSE(jsonBody.at("instanceInfos").at(0).contains("parentID"));
     }
 
     globalSchedDriver_->Stop();
     globalSchedDriver_->Await();
+}
+
+TEST_F(GlobalSchedDriverTest, GetSchedulingQueueProtobufResponse)
+{
+    auto globalSchedDriver =
+        std::make_shared<global_scheduler::GlobalSchedDriver>(mockGlobalSched_, flags_, mockMetaStoreClient_);
+    EXPECT_CALL(*mockGlobalSched_, Start(_)).WillOnce(Return(Status::OK()));
+    EXPECT_CALL(*mockGlobalSched_, InitManager).WillOnce(Return());
+    (void)globalSchedDriver->Start();
+    const uint16_t port = GetPortEnv("LITEBUS_PORT", 0);
+    const litebus::http::URL url("http", "127.0.0.1", port, GLOBAL_SCHEDULER + GET_SCHEDULING_QUEUE_URL);
+    auto resp = messages::QuerySchedulingQueueResponse();
+    *resp.add_instanceinfos() = GetSchedulingQueueInfo("app-script-1-instanceid");
+    EXPECT_CALL(*mockGlobalSched_, GetSchedulingQueue(_)).WillOnce(Return(resp));
+    const std::unordered_map<std::string, std::string> headers = {
+        { "Type", "protobuf" },
+    };
+
+    auto response = litebus::http::Get(url, headers);
+    response.Wait();
+    EXPECT_EQ(response.Get().retCode, litebus::http::ResponseCode::OK);
+    messages::QuerySchedulingQueueResponse decoded;
+    EXPECT_TRUE(decoded.ParseFromString(response.Get().body));
+    ASSERT_EQ(decoded.instanceinfos_size(), 1);
+    EXPECT_EQ(decoded.instanceinfos(0).resources().resources().at("CPU").scalar().value(), 2000);
+    EXPECT_EQ(decoded.instanceinfos(0).resources().resources().at("Memory").scalar().value(), 4096);
+    EXPECT_EQ(decoded.instanceinfos(0).resources().resources().at("NPU").type(),
+              resource_view::ValueType::Value_Type_VECTORS);
+
+    globalSchedDriver->Stop();
+    globalSchedDriver->Await();
 }
 
 TEST_F(GlobalSchedDriverTest, NodeLocalSchedulingStatusRouter)
@@ -572,6 +611,37 @@ TEST_F(GlobalSchedDriverTest, QueryResourcesRouter)
 
     globalSchedDriver_->Stop();
     globalSchedDriver_->Await();
+}
+
+TEST_F(GlobalSchedDriverTest, QueryResourcesRouterPreservesCustomResources)
+{
+    auto globalSchedDriver =
+        std::make_shared<global_scheduler::GlobalSchedDriver>(mockGlobalSched_, flags_, mockMetaStoreClient_);
+    EXPECT_CALL(*mockGlobalSched_, Start(_)).WillOnce(Return(Status::OK()));
+    EXPECT_CALL(*mockGlobalSched_, Stop).WillOnce(Return(Status::OK()));
+    EXPECT_CALL(*mockGlobalSched_, InitManager).WillOnce(Return());
+    (void)globalSchedDriver->Start();
+    const uint16_t port = GetPortEnv("LITEBUS_PORT", 8080);
+    const litebus::http::URL url("http", "127.0.0.1", port, GLOBAL_SCHEDULER + QUERY_RESOURCES_URL);
+    auto resp = messages::QueryResourcesInfoResponse();
+    auto resource = view_utils::Get1DResourceUnit("id1");
+    (*resource.mutable_capacity()->mutable_resources())["NPU"] =
+        view_utils::GetGpuCountResource({ 1, 1 }, "NPU");
+    (*resource.mutable_capacity()->mutable_resources())["ssd"] = view_utils::GetNameResourceWithValue("ssd", 3);
+    (*resp.mutable_resource()) = std::move(resource);
+    EXPECT_CALL(*mockGlobalSched_, QueryResourcesInfo(_)).WillOnce(Return(resp));
+
+    auto response = litebus::http::Get(url, litebus::None());
+    response.Wait();
+    EXPECT_EQ(response.Get().retCode, litebus::http::ResponseCode::OK);
+    auto infos = messages::QueryResourcesInfoResponse();
+    EXPECT_TRUE(google::protobuf::util::JsonStringToMessage(response.Get().body, &infos).ok());
+    EXPECT_EQ(infos.resource().capacity().resources().at("NPU").type(),
+              resource_view::ValueType::Value_Type_VECTORS);
+    EXPECT_EQ(infos.resource().capacity().resources().at("ssd").scalar().value(), 3);
+
+    globalSchedDriver->Stop();
+    globalSchedDriver->Await();
 }
 // ─────────────────────────────────────────────────────────────────────────────
 // Traefik HTTP provider endpoint tests
