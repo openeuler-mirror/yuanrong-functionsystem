@@ -264,10 +264,10 @@ void LocalSchedSrvActor::ResponseNotifyWorkerStatus(const litebus::AID &from, st
     notifyWorkerStatusSync_.Synchronized(rsp.workerip() + "_" + std::to_string(rsp.healthy()), Status::OK());
 }
 
-void LocalSchedSrvActor::ForwardScheduleWithRetry(
+bool LocalSchedSrvActor::HandleForwardScheduleTimeout(
     const std::shared_ptr<messages::ScheduleRequest> &req,
     const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &promise, const uint32_t retryTimes,
-    const uint64_t elapsedMs)
+    const uint64_t elapsedMs, uint64_t &forwardTimeout)
 {
     const int64_t configuredTimeout = req->instance().scheduleoption().scheduletimeoutms();
     const uint64_t scheduleTimeout = configuredTimeout > 0 ? static_cast<uint64_t>(configuredTimeout) : 0;
@@ -282,31 +282,43 @@ void LocalSchedSrvActor::ForwardScheduleWithRetry(
         YRLOG_WARN("{}|schedule timeout is absent; use legacy init call timeout ({})ms for domain forwarding",
                    req->requestid(), legacyInitTimeout);
     }
-    const uint64_t forwardTimeout =
+    forwardTimeout =
         effectiveScheduleTimeout > 0 ? effectiveScheduleTimeout + FORWARD_SCHEDULE_GRACE_TIMEOUT : 0;
-    bool isTimeout =
+    const bool isTimeout =
         forwardTimeout > 0 ? (elapsedMs >= forwardTimeout) : (retryTimes > FORWARD_SCHEDULE_MAX_RETRY);
-    if (isTimeout) {
-        YRLOG_ERROR(
-            "{}|forward to domain scheduler get response timeout, after max retry times({}) or reach forward "
-            "timeout({}ms), configured domain schedule timeout({}ms), effective schedule timeout({}ms)",
-            req->requestid(), FORWARD_SCHEDULE_MAX_RETRY, forwardTimeout,
-            scheduleTimeout, effectiveScheduleTimeout);
-        if (!domainSchedRegisterInfo_.aid.Name().empty()) {
-            auto reason = fmt::format("{}|frontend forward schedule timeout", req->requestid());
-            (void)TryCancelSchedule(GenCancelSchedule(req->requestid(), messages::CancelType::REQUEST, reason))
-                .Then([requestID(req->requestid())](const Status &status) {
-                    if (status.IsError()) {
-                        YRLOG_ERROR("{}|failed to cancel timed-out domain schedule request: {}",
-                                    requestID, status.ToString());
-                    } else {
-                        YRLOG_INFO("{}|canceled timed-out domain schedule request", requestID);
-                    }
-                    return status;
-                });
-        }
-        GenErrorForwardResponseClearPromise(req, promise, "forward to domain scheduler timeout",
-                                            static_cast<int32_t>(StatusCode::LS_FORWARD_DOMAIN_TIMEOUT));
+    if (!isTimeout) {
+        return false;
+    }
+    YRLOG_ERROR(
+        "{}|forward to domain scheduler get response timeout, after max retry times({}) or reach forward "
+        "timeout({}ms), configured domain schedule timeout({}ms), effective schedule timeout({}ms)",
+        req->requestid(), FORWARD_SCHEDULE_MAX_RETRY, forwardTimeout,
+        scheduleTimeout, effectiveScheduleTimeout);
+    if (!domainSchedRegisterInfo_.aid.Name().empty()) {
+        auto reason = fmt::format("{}|frontend forward schedule timeout", req->requestid());
+        (void)TryCancelSchedule(GenCancelSchedule(req->requestid(), messages::CancelType::REQUEST, reason))
+            .Then([requestID(req->requestid())](const Status &status) {
+                if (status.IsError()) {
+                    YRLOG_ERROR("{}|failed to cancel timed-out domain schedule request: {}", requestID,
+                                status.ToString());
+                } else {
+                    YRLOG_INFO("{}|canceled timed-out domain schedule request", requestID);
+                }
+                return status;
+            });
+    }
+    GenErrorForwardResponseClearPromise(req, promise, "forward to domain scheduler timeout",
+                                        static_cast<int32_t>(StatusCode::LS_FORWARD_DOMAIN_TIMEOUT));
+    return true;
+}
+
+void LocalSchedSrvActor::ForwardScheduleWithRetry(
+    const std::shared_ptr<messages::ScheduleRequest> &req,
+    const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &promise, const uint32_t retryTimes,
+    const uint64_t elapsedMs)
+{
+    uint64_t forwardTimeout = 0;
+    if (HandleForwardScheduleTimeout(req, promise, retryTimes, elapsedMs, forwardTimeout)) {
         return;
     }
     if (domainSchedRegisterInfo_.aid.Name().empty()) {

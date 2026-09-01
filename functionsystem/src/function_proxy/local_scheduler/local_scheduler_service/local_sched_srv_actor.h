@@ -338,6 +338,10 @@ private:
     void ForwardScheduleWithRetry(const std::shared_ptr<messages::ScheduleRequest> &req,
                                   const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &promise,
                                   const uint32_t retryTimes, const uint64_t elapsedMs);
+    bool HandleForwardScheduleTimeout(
+        const std::shared_ptr<messages::ScheduleRequest> &req,
+        const std::shared_ptr<litebus::Promise<messages::ScheduleResponse>> &promise,
+        const uint32_t retryTimes, const uint64_t elapsedMs, uint64_t &forwardTimeout);
 
     void ForwardKillWithRetry(const std::shared_ptr<messages::ForwardKillRequest> &req, const uint32_t retryTimes);
 
