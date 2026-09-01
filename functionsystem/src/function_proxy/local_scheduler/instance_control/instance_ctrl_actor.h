@@ -1110,6 +1110,11 @@ private:
         const std::shared_ptr<InstanceGenerationConflictResolver> &resolver,
         const std::shared_ptr<functionsystem::CallResult> &callResult,
         const TransitionResult &result);
+    litebus::Future<CallResultAck> ReclaimCreateContenderForRemoteOwner(
+        const InstanceInfo &contenderSnapshot,
+        const std::shared_ptr<functionsystem::CallResult> &callResult,
+        const std::shared_ptr<InstanceGenerationConflictResolver> &resolver,
+        const TransitionResult &result);
 
     litebus::Future<CallResultAck> HandleCreateGenerationChange(
         const InstanceInfo &contenderSnapshot, const InstanceInfo &currentInfo,

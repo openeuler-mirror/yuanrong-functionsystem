@@ -8480,13 +8480,7 @@ litebus::Future<CallResultAck> InstanceCtrlActor::HandleCreateTransitionResult(
         }
     }
     if (resolver->IsExactRemoteOwnerPersistenceConflict(result)) {
-        YRLOG_WARN("{}|instance({}) failed to transition to RUNNING because authoritative owner changed "
-                   "from ({}) to ({}); reclaim local runtime and resources",
-                   contenderSnapshot.requestid(), contenderSnapshot.instanceid(),
-                   contenderSnapshot.functionproxyid(), result.savedInfo.functionproxyid());
-        return ReclaimCreateContenderAndSendError(
-            contenderSnapshot, callResult, resolver,
-            "failed to transition to running, authoritative instance is owned by another proxy");
+        return ReclaimCreateContenderForRemoteOwner(contenderSnapshot, callResult, resolver, result);
     }
     if (result.preState.IsNone()) {
         YRLOG_ERROR("{}|failed to update instance info for meta store", callResult->requestid());
@@ -8497,6 +8491,21 @@ litebus::Future<CallResultAck> InstanceCtrlActor::HandleCreateTransitionResult(
     return SendCallResult(contenderSnapshot.instanceid(),
                           GetCreateResultDstInstance(contenderSnapshot, callResult->requestid()),
                           contenderSnapshot.parentfunctionproxyaid(), callResult);
+}
+
+litebus::Future<CallResultAck> InstanceCtrlActor::ReclaimCreateContenderForRemoteOwner(
+    const InstanceInfo &contenderSnapshot,
+    const std::shared_ptr<functionsystem::CallResult> &callResult,
+    const std::shared_ptr<InstanceGenerationConflictResolver> &resolver,
+    const TransitionResult &result)
+{
+    YRLOG_WARN("{}|instance({}) failed to transition to RUNNING because authoritative owner changed "
+               "from ({}) to ({}); reclaim local runtime and resources",
+               contenderSnapshot.requestid(), contenderSnapshot.instanceid(),
+               contenderSnapshot.functionproxyid(), result.savedInfo.functionproxyid());
+    return ReclaimCreateContenderAndSendError(
+        contenderSnapshot, callResult, resolver,
+        "failed to transition to running, authoritative instance is owned by another proxy");
 }
 
 litebus::Future<CallResultAck> InstanceCtrlActor::HandleCreateGenerationChange(

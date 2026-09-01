@@ -644,6 +644,37 @@ TEST_F(LocalSchedSrvActorTest, ForwardScheduleUsesScheduleTimeoutInsteadOfInitCa
     EXPECT_EQ(forwardCount, 6);
 }
 
+TEST_F(LocalSchedSrvActorTest, ForwardScheduleUsesInitCallTimeoutForLegacyRequest)
+{
+    const std::string requestID = "forwardScheduleUsesLegacyInitTimeout";
+    auto req = std::make_shared<messages::ScheduleRequest>();
+    req->set_requestid(requestID);
+    req->mutable_instance()->mutable_scheduleoption()->set_initcalltimeout(1);
+
+    messages::ScheduleResponse rsp;
+    rsp.set_code(StatusCode::SUCCESS);
+    rsp.set_message("forward schedule success");
+    rsp.set_requestid(requestID);
+    uint32_t forwardCount = 0;
+    EXPECT_CALL(*domainSchedStubActor_, MockForwardSchedule())
+        .Times(6)
+        .WillRepeatedly(Invoke([&]() {
+            ++forwardCount;
+            return forwardCount == 6 ? rsp.SerializeAsString() : std::string{};
+        }));
+    EXPECT_CALL(*primary_, GetResourceViewChanges())
+        .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
+    EXPECT_CALL(*virtual_, GetResourceViewChanges())
+        .WillRepeatedly(Return(AsyncReturn(std::make_shared<resource_view::ResourceUnitChanges>())));
+
+    auto future = litebus::Async(driverActor_->GetAID(), &LocalSchedSrvActorTestDriver::ForwardSchedule,
+                                 dstActor_->GetAID(), req);
+
+    ASSERT_AWAIT_READY(future);
+    EXPECT_EQ(future.Get().code(), StatusCode::SUCCESS);
+    EXPECT_EQ(forwardCount, 6);
+}
+
 TEST_F(LocalSchedSrvActorTest, ForwardScheduleAllowsDomainResponseGrace)
 {
     const std::string requestID = "forwardScheduleAllowsDomainResponseGrace";

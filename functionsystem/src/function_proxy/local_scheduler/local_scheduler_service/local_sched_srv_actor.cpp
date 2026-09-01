@@ -271,18 +271,39 @@ void LocalSchedSrvActor::ForwardScheduleWithRetry(
 {
     const int64_t configuredTimeout = req->instance().scheduleoption().scheduletimeoutms();
     const uint64_t scheduleTimeout = configuredTimeout > 0 ? static_cast<uint64_t>(configuredTimeout) : 0;
+    const int32_t configuredInitTimeout = req->instance().scheduleoption().initcalltimeout();
+    const uint64_t legacyInitTimeout = configuredInitTimeout > 0
+                                           ? static_cast<uint64_t>(configuredInitTimeout) * 1000
+                                           : 0;
+    // scheduleTimeoutMs owns new requests. Keep initCallTimeout only as a compatibility
+    // fallback for older callers that did not populate the scheduling field.
+    const uint64_t effectiveScheduleTimeout = scheduleTimeout > 0 ? scheduleTimeout : legacyInitTimeout;
+    if (scheduleTimeout == 0 && legacyInitTimeout > 0 && elapsedMs == 0) {
+        YRLOG_WARN("{}|schedule timeout is absent; use legacy init call timeout ({})ms for domain forwarding",
+                   req->requestid(), legacyInitTimeout);
+    }
     const uint64_t forwardTimeout =
-        scheduleTimeout > 0 ? scheduleTimeout + FORWARD_SCHEDULE_GRACE_TIMEOUT : 0;
+        effectiveScheduleTimeout > 0 ? effectiveScheduleTimeout + FORWARD_SCHEDULE_GRACE_TIMEOUT : 0;
     bool isTimeout =
         forwardTimeout > 0 ? (elapsedMs >= forwardTimeout) : (retryTimes > FORWARD_SCHEDULE_MAX_RETRY);
     if (isTimeout) {
         YRLOG_ERROR(
             "{}|forward to domain scheduler get response timeout, after max retry times({}) or reach forward "
-            "timeout({}ms), domain schedule timeout({}ms)",
-            req->requestid(), FORWARD_SCHEDULE_MAX_RETRY, forwardTimeout, scheduleTimeout);
+            "timeout({}ms), configured domain schedule timeout({}ms), effective schedule timeout({}ms)",
+            req->requestid(), FORWARD_SCHEDULE_MAX_RETRY, forwardTimeout,
+            scheduleTimeout, effectiveScheduleTimeout);
         if (!domainSchedRegisterInfo_.aid.Name().empty()) {
             auto reason = fmt::format("{}|frontend forward schedule timeout", req->requestid());
-            (void)TryCancelSchedule(GenCancelSchedule(req->requestid(), messages::CancelType::REQUEST, reason));
+            (void)TryCancelSchedule(GenCancelSchedule(req->requestid(), messages::CancelType::REQUEST, reason))
+                .Then([requestID(req->requestid())](const Status &status) {
+                    if (status.IsError()) {
+                        YRLOG_ERROR("{}|failed to cancel timed-out domain schedule request: {}",
+                                    requestID, status.ToString());
+                    } else {
+                        YRLOG_INFO("{}|canceled timed-out domain schedule request", requestID);
+                    }
+                    return status;
+                });
         }
         GenErrorForwardResponseClearPromise(req, promise, "forward to domain scheduler timeout",
                                             static_cast<int32_t>(StatusCode::LS_FORWARD_DOMAIN_TIMEOUT));

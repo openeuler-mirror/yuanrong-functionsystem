@@ -42,6 +42,7 @@ const uint32_t DEFAULT_REGISTER_CYCLE_MS = 1000;
 const int32_t UPDATE_RESOURCE_CYCLE_MS = 1000;     // ms
 const uint32_t FORWARD_SCHEDULE_MAX_RETRY = 3;
 const uint32_t FORWARD_SCHEDULE_TIMEOUT = 200000;  // ms
+// Let Domain Scheduler publish its terminal response after its pending budget expires.
 const uint32_t FORWARD_SCHEDULE_GRACE_TIMEOUT = 5000;  // ms
 const uint32_t GROUP_FORWARD_SCHEDULE_TIMEOUT = 20000; // ms
 const uint32_t FORWARD_KILL_MAX_RETRY = 3;
