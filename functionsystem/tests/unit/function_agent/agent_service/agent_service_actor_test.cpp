@@ -854,7 +854,9 @@ TEST_F(AgentServiceActorTest, ReusableCreateRetainsFlatSnapshotAcrossUnknownRepl
 TEST_F(AgentServiceActorTest, FirstPauseAttemptForwardsCheckpointBeforeAnyRemoteStat)
 {
     auto storage = std::make_shared<CountingSnapshotStorage>();
-    dstActor_->BindSnapshotDataPlane(storage, "/tmp/agent-first-pause-no-stat", "datasystem");
+    const std::filesystem::path checkpointRoot = "/tmp/agent-first-pause-no-stat";
+    std::filesystem::remove_all(checkpointRoot);
+    dstActor_->BindSnapshotDataPlane(storage, checkpointRoot.string(), "datasystem");
     testFuncAgentMgrActor_->actorMessageList_.emplace("SnapshotRuntime");
 
     messages::SnapshotRuntimeRequest request;
@@ -877,6 +879,7 @@ TEST_F(AgentServiceActorTest, FirstPauseAttemptForwardsCheckpointBeforeAnyRemote
     ASSERT_TRUE(forwardedRequest.ParseFromString(forwarded.Get()));
     EXPECT_FALSE(forwardedRequest.checkpointdir().empty());
     EXPECT_EQ(storage->statCalls.load(), 0);
+    std::filesystem::remove_all(checkpointRoot);
 }
 
 TEST_F(AgentServiceActorTest, SnapshotRuntimeCommitsLocalMetadataBeforeSuccess)
@@ -1250,6 +1253,7 @@ TEST_F(AgentServiceActorTest, OrdinarySnapshotResolvesCheckpointPlanBeforeRuntim
 {
     auto storage = std::make_shared<CountingSnapshotStorage>();
     const std::filesystem::path checkpointRoot = "/tmp/agent-ordinary-checkpoint-plan";
+    std::filesystem::remove_all(checkpointRoot);
     dstActor_->BindSnapshotDataPlane(storage, checkpointRoot.string(), "datasystem");
     testFuncAgentMgrActor_->actorMessageList_.emplace("SnapshotRuntime");
 
@@ -1275,6 +1279,7 @@ TEST_F(AgentServiceActorTest, OrdinarySnapshotResolvesCheckpointPlanBeforeRuntim
               checkpointRoot / forwardedRequest.snapshotid());
     EXPECT_EQ(forwardedRequest.ttl(), 600);
     EXPECT_FALSE(forwardedRequest.leaverunning());
+    std::filesystem::remove_all(checkpointRoot);
 }
 
 TEST_F(AgentServiceActorTest, ReusableSnapshotPublishesNonExpiringArtifactAndReturnsFrozenMetadata)
@@ -1664,6 +1669,7 @@ TEST_F(AgentServiceActorTest, OrdinarySnapshotCanonicalizesCallerSuppliedCheckpo
 {
     auto storage = std::make_shared<CountingSnapshotStorage>();
     const std::filesystem::path checkpointRoot = "/tmp/agent-ordinary-checkpoint-canonical";
+    std::filesystem::remove_all(checkpointRoot);
     dstActor_->BindSnapshotDataPlane(storage, checkpointRoot.string(), "datasystem");
     testFuncAgentMgrActor_->actorMessageList_.emplace("SnapshotRuntime");
 
@@ -1689,6 +1695,7 @@ TEST_F(AgentServiceActorTest, OrdinarySnapshotCanonicalizesCallerSuppliedCheckpo
     EXPECT_EQ(forwardedRequest.snapshotid(), "caller-snapshot");
     EXPECT_EQ(std::filesystem::path(forwardedRequest.checkpointdir()),
               checkpointRoot / forwardedRequest.snapshotid());
+    std::filesystem::remove_all(checkpointRoot);
 }
 
 /**

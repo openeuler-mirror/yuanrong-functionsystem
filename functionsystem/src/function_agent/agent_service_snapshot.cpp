@@ -31,13 +31,15 @@
 namespace functionsystem::function_agent {
 namespace {
 constexpr uint32_t SNAPSHOT_ATTEMPT_PROTOCOL_VERSION = 1;
+constexpr size_t SNAPSHOT_ID_DIGEST_LENGTH = 40;
 
 Status EnsureLocalSnapshotID(messages::SnapshotRuntimeRequest &request)
 {
     if (request.snapshotid().empty()) {
         const auto identity = request.requestid() + std::string(1, '\0')
             + request.instanceid();
-        request.set_snapshotid("ckpt-" + resume_identity::Sha256Hex(identity).substr(0, 40));
+        request.set_snapshotid(
+            "ckpt-" + resume_identity::Sha256Hex(identity).substr(0, SNAPSHOT_ID_DIGEST_LENGTH));
     }
     if (!runtime_manager::IsSafeCheckpointIdentityComponent(request.snapshotid())) {
         return Status(StatusCode::ERR_PARAM_INVALID,
@@ -144,13 +146,15 @@ void AgentServiceActor::SnapshotRuntime(const litebus::AID &from, std::string &&
         Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());
         return;
     }
+    const bool missingDistributedStorageDependency =
+        !request->internalcheckpoint() && UsesDistributedStorage(snapshotStorageMode_)
+        && (snapshotStorage_ == nullptr || snapshotWorker_ == nullptr
+            || request->artifactobjectkey().empty()
+            || request->artifacttemporaryobjectkey().empty());
     if (request->requestid().empty() || request->instanceid().empty() || request->runtimeid().empty()
         || request->snapshotid().empty() || request->tenantid().empty()
         || request->sourceversion() <= 0
-        || (!request->internalcheckpoint() && UsesDistributedStorage(snapshotStorageMode_)
-            && (snapshotStorage_ == nullptr || snapshotWorker_ == nullptr
-                || request->artifactobjectkey().empty()
-                || request->artifacttemporaryobjectkey().empty()))) {
+        || missingDistributedStorageDependency) {
         response.set_code(static_cast<int32_t>(StatusCode::ERR_PARAM_INVALID));
         response.set_message("snapshot data-plane identity or dependency is missing");
         Send(from, "SnapshotRuntimeResponse", response.SerializeAsString());

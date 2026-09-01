@@ -187,7 +187,7 @@ LocalSnapshotPrepareResult LocalSnapshotStore::Prepare(const LocalSnapshotCommit
         }
         if (records_.find(request.snapshotID) == records_.end()) {
             return {snapshot_storage::detail::Conflict(
-                        "local artifact path exists without a committed record"), directory, false};
+                "local artifact path exists without a committed record"), directory, false};
         }
         uint64_t ignoredSize = 0;
         const auto artifact = InspectArtifact(directory, ignoredSize);

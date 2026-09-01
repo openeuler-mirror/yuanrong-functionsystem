@@ -4290,10 +4290,10 @@ litebus::Future<Status> InstanceCtrlActor::OnHeartbeatLocalSnapshotFailoverDone(
     }
     const auto current = stateMachine->GetInstanceInfo();
     return TransInstanceState(
-               stateMachine,
-               TransContext{ InstanceState::FATAL, stateMachine->GetVersion(),
-                             errMsg + "; local snapshot failover failed: " + status.RawMessage(),
-                             true, common::ERR_INSTANCE_EXITED })
+        stateMachine,
+        TransContext{ InstanceState::FATAL, stateMachine->GetVersion(),
+                      errMsg + "; local snapshot failover failed: " + status.RawMessage(),
+                      true, common::ERR_INSTANCE_EXITED })
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::KillRuntime, current, false))
         .Then(litebus::Defer(
             GetAID(), &InstanceCtrlActor::DeleteInstanceInResourceView,
@@ -4833,11 +4833,11 @@ litebus::Future<Status> InstanceCtrlActor::OnExitLocalSnapshotFailoverDone(
     }
     const auto current = stateMachine->GetInstanceInfo();
     return TransInstanceState(
-               stateMachine,
-               TransContext{ InstanceState::FATAL, stateMachine->GetVersion(),
-                             stateMachine->Information() + info->statusMsg
-                                 + "; local snapshot failover failed: " + status.RawMessage(),
-                             true, info->errCode, info->exitCode, info->exitType })
+        stateMachine,
+        TransContext{ InstanceState::FATAL, stateMachine->GetVersion(),
+                      stateMachine->Information() + info->statusMsg
+                          + "; local snapshot failover failed: " + status.RawMessage(),
+                      true, info->errCode, info->exitCode, info->exitType })
         .Then(litebus::Defer(GetAID(), &InstanceCtrlActor::KillRuntime, current, false))
         .Then(litebus::Defer(
             GetAID(), &InstanceCtrlActor::DeleteInstanceInResourceView,

@@ -269,7 +269,7 @@ litebus::Future<TransitionResult> InstanceStateMachine::PersistenceInstanceInfo(
 {
     NewSavingPomise();
     return SaveInstanceInfoToMetaStore(
-               newInstanceInfo, prevInstanceInfo, oldState, context, runningFailoverRefresh)
+        newInstanceInfo, prevInstanceInfo, oldState, context, runningFailoverRefresh)
         .Then([requestID(newInstanceInfo.requestid()), instanceID(instanceID_), context,
                self(shared_from_this())](const TransitionResult &result) -> litebus::Future<TransitionResult> {
             if (!result.status.IsOk()) {

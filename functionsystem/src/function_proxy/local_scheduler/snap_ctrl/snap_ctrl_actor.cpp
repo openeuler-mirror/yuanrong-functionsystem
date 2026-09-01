@@ -36,6 +36,7 @@ namespace functionsystem::local_scheduler {
 namespace {
 constexpr int32_t DEFAULT_PAUSE_TTL_SECONDS = 90'000;
 constexpr uint32_t SNAPSHOT_ATTEMPT_PROTOCOL_VERSION = 1;
+constexpr size_t ANONYMOUS_SNAPSHOT_ID_DIGEST_LENGTH = 40;
 
 }
 
@@ -222,7 +223,8 @@ litebus::Future<KillResponse> SnapCtrlActor::HandleAnonymousCheckpoint(
     context->requestID = requestID;
     context->instanceID = instanceID;
     context->snapshotID = "anon-" + resume_identity::Sha256Hex(
-        requestID + std::string(1, '\0') + instanceID).substr(0, 40);
+        requestID + std::string(1, '\0') + instanceID).substr(
+            0, ANONYMOUS_SNAPSHOT_ID_DIGEST_LENGTH);
     context->completion = completion;
     if (instanceControlView_ == nullptr || clientManager_ == nullptr || functionAgentMgr_ == nullptr) {
         CompleteAnonymousCheckpoint(
@@ -537,8 +539,8 @@ void SnapCtrlActor::OnReusableSnapshotPublished(
         // remote deletion is safe. Keep PUBLISHING for deterministic replay.
         CompleteReusableSnapshotRequest(
             context, BuildReusableSnapshotResponse(
-                         common::ERR_INNER_COMMUNICATION,
-                         "reusable snapshot Agent result is unknown"));
+                common::ERR_INNER_COMMUNICATION,
+                "reusable snapshot Agent result is unknown"));
         return;
     }
     const auto &response = future.Get();
@@ -563,17 +565,17 @@ void SnapCtrlActor::OnReusableSnapshotPublished(
         // orphan local/remote data that cannot be deleted safely.
         CompleteReusableSnapshotRequest(
             context, BuildReusableSnapshotResponse(
-                         static_cast<common::ErrorCode>(response.code()),
-                         response.message().empty()
-                             ? "reusable snapshot publish failed without exact cleanup identity"
-                             : response.message()));
+                static_cast<common::ErrorCode>(response.code()),
+                response.message().empty()
+                    ? "reusable snapshot publish failed without exact cleanup identity"
+                    : response.message()));
         return;
     }
     if (!response.has_reusablesnapshotartifact()) {
         CompleteReusableSnapshotRequest(
             context, BuildReusableSnapshotResponse(
-                         common::ERR_INNER_SYSTEM_ERROR,
-                         "reusable snapshot Agent response omitted frozen artifact; publishing preserved"));
+                common::ERR_INNER_SYSTEM_ERROR,
+                "reusable snapshot Agent response omitted frozen artifact; publishing preserved"));
         return;
     }
     context->artifact = response.reusablesnapshotartifact();

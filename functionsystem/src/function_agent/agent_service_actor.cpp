@@ -1607,9 +1607,9 @@ litebus::Future<Status> AgentServiceActor::MaterializeRemoteSnapshot(
     }
     auto downloaded = reusable
         ? function_agent::MaterializeReusableSnapshotCheckpoint(
-              snapshotStorage_, checkpointRoot_, prepared.directory, snapshotWorker_, startInstanceRequest)
+            snapshotStorage_, checkpointRoot_, prepared.directory, snapshotWorker_, startInstanceRequest)
         : function_agent::MaterializeTrustedResumeCheckpoint(
-              snapshotStorage_, checkpointRoot_, prepared.directory, snapshotWorker_, startInstanceRequest);
+            snapshotStorage_, checkpointRoot_, prepared.directory, snapshotWorker_, startInstanceRequest);
     auto materialized = downloaded.Then(litebus::Defer(
         GetAID(), &AgentServiceActor::CommitMaterializedSnapshot,
         request, startInstanceRequest, std::placeholders::_1));

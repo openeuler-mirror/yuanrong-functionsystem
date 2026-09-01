@@ -60,6 +60,17 @@ constexpr unsigned char DIRECTORY_ENTRY = 1;
 constexpr unsigned char REGULAR_FILE_ENTRY = 2;
 constexpr unsigned char ARCHIVE_END = 0;
 constexpr uint32_t MAX_ARCHIVE_PATH_BYTES = 4096;
+constexpr size_t ARCHIVE_PATH_SIZE_OFFSET = sizeof(unsigned char);
+constexpr size_t ARCHIVE_MODE_OFFSET = ARCHIVE_PATH_SIZE_OFFSET + sizeof(uint32_t);
+constexpr size_t ARCHIVE_FILE_SIZE_OFFSET = ARCHIVE_MODE_OFFSET + sizeof(uint32_t);
+constexpr size_t ARCHIVE_ENTRY_HEADER_BYTES = ARCHIVE_FILE_SIZE_OFFSET + sizeof(uint64_t);
+constexpr size_t ARCHIVE_ENTRY_METADATA_BYTES = 2 * sizeof(uint32_t) + sizeof(uint64_t);
+constexpr mode_t ARCHIVE_PERMISSION_MASK = S_IRWXU | S_IRWXG | S_IRWXO;
+constexpr size_t SNAPSHOT_IO_BUFFER_BYTES = 1024U * 1024U;
+constexpr int GZIP_WINDOW_BITS = 15;
+constexpr int GZIP_HEADER_BITS = 16;
+constexpr int GZIP_MEMORY_LEVEL = 8;
+constexpr int HEX_BYTE_WIDTH = 2;
 
 void EncodeUint32(uint32_t value, unsigned char *output)
 {
@@ -159,7 +170,7 @@ SnapshotPublicationFile PrepareSnapshotDirectoryPublicationFileSync(
                     {}, false, 0, {}, false};
         }
     }
-    auto writeOutput = [&](const void *data, size_t size) -> Status {
+    auto writeOutput = [gzip, output](const void *data, size_t size) -> Status {
         size_t offset = 0;
         while (offset < size) {
             if (gzip != nullptr) {
@@ -184,7 +195,7 @@ SnapshotPublicationFile PrepareSnapshotDirectoryPublicationFileSync(
         return Status::OK();
     };
     status = writeOutput(CHECKPOINT_DIRECTORY_MAGIC.data(), CHECKPOINT_DIRECTORY_MAGIC.size());
-    std::array<unsigned char, 17> header {};
+    std::array<unsigned char, ARCHIVE_ENTRY_HEADER_BYTES> header {};
     for (const auto &relative : entries) {
         if (status.IsError()) {
             break;
@@ -221,9 +232,11 @@ SnapshotPublicationFile PrepareSnapshotDirectoryPublicationFileSync(
         }
         header.fill(0);
         header[0] = directory ? DIRECTORY_ENTRY : REGULAR_FILE_ENTRY;
-        EncodeUint32(static_cast<uint32_t>(path.size()), header.data() + 1);
-        EncodeUint32(static_cast<uint32_t>(info.st_mode & 0777), header.data() + 5);
-        EncodeUint64(directory ? 0 : static_cast<uint64_t>(info.st_size), header.data() + 9);
+        EncodeUint32(static_cast<uint32_t>(path.size()), header.data() + ARCHIVE_PATH_SIZE_OFFSET);
+        EncodeUint32(static_cast<uint32_t>(info.st_mode & ARCHIVE_PERMISSION_MASK),
+                     header.data() + ARCHIVE_MODE_OFFSET);
+        EncodeUint64(directory ? 0 : static_cast<uint64_t>(info.st_size),
+                     header.data() + ARCHIVE_FILE_SIZE_OFFSET);
         status = writeOutput(header.data(), header.size());
         if (status.IsOk()) {
             status = writeOutput(path.data(), path.size());
@@ -231,7 +244,7 @@ SnapshotPublicationFile PrepareSnapshotDirectoryPublicationFileSync(
         if (directory || status.IsError()) {
             continue;
         }
-        std::array<unsigned char, 1024 * 1024> buffer {};
+        std::array<unsigned char, SNAPSHOT_IO_BUFFER_BYTES> buffer {};
         uint64_t remaining = static_cast<uint64_t>(info.st_size);
         while (status.IsOk() && remaining > 0) {
             const auto requested = static_cast<size_t>(std::min<uint64_t>(remaining, buffer.size()));
@@ -317,7 +330,7 @@ Status MaterializeSnapshotPublicationDirectorySync(
         return Status(StatusCode::ERR_PARAM_INVALID,
                       "checkpoint directory publication artifact header is invalid");
     }
-    auto readExact = [&](void *data, size_t size) -> bool {
+    auto readExact = [input](void *data, size_t size) -> bool {
         size_t offset = 0;
         while (offset < size) {
             const auto count = gzread(input, static_cast<unsigned char *>(data) + offset,
@@ -344,14 +357,14 @@ Status MaterializeSnapshotPublicationDirectorySync(
             status = Status(StatusCode::ERR_PARAM_INVALID, "checkpoint directory archive entry type is invalid");
             break;
         }
-        std::array<unsigned char, 16> encoded {};
+        std::array<unsigned char, ARCHIVE_ENTRY_METADATA_BYTES> encoded {};
         if (!readExact(encoded.data(), encoded.size())) {
             status = Status(StatusCode::FAILED, "checkpoint directory archive header is truncated");
             break;
         }
         const auto pathSize = DecodeUint32(encoded.data());
-        const auto mode = DecodeUint32(encoded.data() + 4);
-        const auto fileSize = DecodeUint64(encoded.data() + 8);
+        const auto mode = DecodeUint32(encoded.data() + sizeof(uint32_t));
+        const auto fileSize = DecodeUint64(encoded.data() + 2 * sizeof(uint32_t));
         if (pathSize == 0 || pathSize > MAX_ARCHIVE_PATH_BYTES
             || (type == DIRECTORY_ENTRY && fileSize != 0)) {
             status = Status(StatusCode::ERR_PARAM_INVALID, "checkpoint directory archive header is invalid");
@@ -379,14 +392,14 @@ Status MaterializeSnapshotPublicationDirectorySync(
             continue;
         }
         const int output = open(outputPath.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
-                                static_cast<mode_t>(mode & 0777U));
+                                static_cast<mode_t>(mode & ARCHIVE_PERMISSION_MASK));
         if (output < 0) {
             status = Status(StatusCode::FAILED, "create checkpoint materialization file");
             break;
         }
         ScopedFileDescriptor outputGuard(output);
         uint64_t remaining = fileSize;
-        std::array<unsigned char, 1024 * 1024> buffer {};
+        std::array<unsigned char, SNAPSHOT_IO_BUFFER_BYTES> buffer {};
         while (remaining > 0 && status.IsOk()) {
             const auto chunk = static_cast<size_t>(std::min<uint64_t>(remaining, buffer.size()));
             if (!readExact(buffer.data(), chunk)) {
@@ -463,7 +476,9 @@ SnapshotPublicationFile PrepareSnapshotPublicationFileSync(
     const std::string outputPath(writable.data());
     ScopedFileDescriptor destination(output);
     z_stream stream {};
-    if (deflateInit2(&stream, Z_BEST_SPEED, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+    if (deflateInit2(&stream, Z_BEST_SPEED, Z_DEFLATED,
+                     GZIP_WINDOW_BITS + GZIP_HEADER_BITS, GZIP_MEMORY_LEVEL,
+                     Z_DEFAULT_STRATEGY) != Z_OK) {
         (void)unlink(outputPath.c_str());
         return { Status(StatusCode::FAILED,
                         "failed to initialize snapshot gzip stream"), {}, false, 0, {}, false };
@@ -477,11 +492,11 @@ SnapshotPublicationFile PrepareSnapshotPublicationFileSync(
                         "failed to initialize compressed snapshot digest"), {}, false, 0, {}, false };
     }
 
-    std::array<unsigned char, 1024 * 1024> inputBuffer {};
-    std::array<unsigned char, 1024 * 1024> outputBuffer {};
+    std::array<unsigned char, SNAPSHOT_IO_BUFFER_BYTES> inputBuffer {};
+    std::array<unsigned char, SNAPSHOT_IO_BUFFER_BYTES> outputBuffer {};
     Status status = Status::OK();
     uint64_t outputSize = 0;
-    auto writeCompressed = [&](size_t size) {
+    auto writeCompressed = [&destination, &outputBuffer, &digestContext, &outputSize](size_t size) {
         size_t offset = 0;
         while (offset < size) {
             const auto written = write(destination.Get(), outputBuffer.data() + offset, size - offset);
@@ -572,7 +587,7 @@ SnapshotPublicationFile PrepareSnapshotPublicationFileSync(
     std::ostringstream sha256;
     sha256 << std::hex << std::setfill('0');
     for (auto byte : digest) {
-        sha256 << std::setw(2) << static_cast<unsigned int>(byte);
+        sha256 << std::setw(HEX_BYTE_WIDTH) << static_cast<unsigned int>(byte);
     }
     return { Status::OK(), outputPath, true, outputSize, sha256.str(), true };
 }

@@ -18,6 +18,9 @@ set(UNIT_TEST_MODULE functionsystem_unit_test)
 
 add_executable(${UNIT_TEST_MODULE} main.cpp)
 target_compile_options(${UNIT_TEST_MODULE} PRIVATE -Wno-error -fno-access-control -Wno-missing-field-initializers) # -fno-access-control for test
+if(ENABLE_NUMA)
+    target_compile_definitions(${UNIT_TEST_MODULE} PRIVATE ENABLE_NUMA)
+endif()
 
 add_dependencies(${UNIT_TEST_MODULE} gtest_1_10_0)
 

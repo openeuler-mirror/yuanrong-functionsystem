@@ -30,6 +30,7 @@ namespace {
 constexpr char ENVELOPE_MAGIC_V1[] = "YRSNAP01";
 constexpr char ENVELOPE_MAGIC[] = "YRSNAP02";
 constexpr size_t MAGIC_SIZE = sizeof(ENVELOPE_MAGIC) - 1;
+constexpr size_t ENVELOPE_UINT64_FIELD_COUNT = 5;
 
 using CreateDataSystemBuffer = std::function<datasystem::Status(
     const std::string &, uint64_t, const datasystem::SetParam &, std::shared_ptr<datasystem::Buffer> &)>;
@@ -204,7 +205,8 @@ bool ReadUint64(const unsigned char *input, size_t size, size_t &offset, uint64_
 std::string EncodeEnvelopeHeader(const SnapshotObjectMetadata &metadata)
 {
     std::string output;
-    output.reserve(MAGIC_SIZE + metadata.snapshotID.size() + metadata.sha256.size() + 5 * sizeof(uint64_t) + 1);
+    output.reserve(MAGIC_SIZE + metadata.snapshotID.size() + metadata.sha256.size()
+                   + ENVELOPE_UINT64_FIELD_COUNT * sizeof(uint64_t) + 1);
     output.assign(ENVELOPE_MAGIC, MAGIC_SIZE);
     AppendUint64(output, metadata.snapshotID.size());
     output.append(metadata.snapshotID);
@@ -403,9 +405,9 @@ Status PutFileToDataSystemBuffer(const std::string &key, const std::string &sour
     std::memcpy(destination, header.data(), header.size());
     uint64_t offset = 0;
     Status status = Status::OK();
-    constexpr size_t CHUNK_SIZE = 1024 * 1024;
+    constexpr size_t chunkSize = 1024 * 1024;
     while (offset < metadata.size) {
-        const auto chunk = static_cast<size_t>(std::min<uint64_t>(CHUNK_SIZE, metadata.size - offset));
+        const auto chunk = static_cast<size_t>(std::min<uint64_t>(chunkSize, metadata.size - offset));
         const auto count = read(source, destination + header.size() + static_cast<size_t>(offset), chunk);
         if (count < 0 && errno == EINTR) {
             continue;
@@ -450,9 +452,9 @@ Status DownloadDataSystemBuffer(const void *data, uint64_t size, const std::stri
     uint64_t offset = 0;
     uint64_t released = 0;
     Status status = Status::OK();
-    constexpr size_t CHUNK_SIZE = 1024 * 1024;
+    constexpr size_t chunkSize = 1024 * 1024;
     while (offset < view.payloadSize) {
-        const auto chunk = static_cast<size_t>(std::min<uint64_t>(CHUNK_SIZE, view.payloadSize - offset));
+        const auto chunk = static_cast<size_t>(std::min<uint64_t>(chunkSize, view.payloadSize - offset));
         const auto count = write(output, view.payload + static_cast<size_t>(offset), chunk);
         if (count < 0 && errno == EINTR) {
             continue;

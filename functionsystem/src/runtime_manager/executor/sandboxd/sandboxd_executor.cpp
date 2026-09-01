@@ -444,8 +444,8 @@ SandboxdResumeIdentity SandboxdExecutor::ConsumeRestoreIdentity(messages::StartI
 
 std::string SandboxdExecutor::RestoreSandboxID(const std::string &runtimeID)
 {
-    constexpr std::size_t DIGEST_PREFIX_LENGTH = 40;
-    return "sbox-r-" + resume_identity::Sha256Hex(runtimeID).substr(0, DIGEST_PREFIX_LENGTH);
+    constexpr std::size_t digestPrefixLength = 40;
+    return "sbox-r-" + resume_identity::Sha256Hex(runtimeID).substr(0, digestPrefixLength);
 }
 
 bool SandboxdExecutor::IsRestoreRequest(const messages::RuntimeInstanceInfo &info)
