@@ -107,9 +107,11 @@ void RuntimeReconcileActor::SchedulePeriodicCycle()
 
 void RuntimeReconcileActor::RunPeriodicCycle()
 {
-    // No agents in firstPassAgents => periodic mode: reconcile every agent that
-    // owns at least one instance locally; never mutate UnitStatus.
-    RunReconcileCycle({});
+    // Periodic cycles also carry any first-pass intents that were deferred while
+    // an older reconcile RPC was in flight or that failed transiently.
+    std::vector<std::string> firstPassAgents(pendingFirstPassAgents_.begin(), pendingFirstPassAgents_.end());
+    pendingFirstPassAgents_.clear();
+    RunReconcileCycle(firstPassAgents);
     RetryPendingGhosts();
     SchedulePeriodicCycle();
 }
@@ -121,9 +123,9 @@ void RuntimeReconcileActor::TriggerOnce(const std::string &funcAgentID)
 
 void RuntimeReconcileActor::OnTrigger(const std::string &funcAgentID)
 {
-    pendingAgents_.push_back(funcAgentID);
-    std::vector<std::string> firstPass;
-    firstPass.swap(pendingAgents_);
+    (void)pendingFirstPassAgents_.insert(funcAgentID);
+    std::vector<std::string> firstPass(pendingFirstPassAgents_.begin(), pendingFirstPassAgents_.end());
+    pendingFirstPassAgents_.clear();
     RunReconcileCycle(firstPass);
 }
 
@@ -131,6 +133,7 @@ void RuntimeReconcileActor::RunReconcileCycle(const std::vector<std::string> &fi
 {
     if (instanceControlView_ == nullptr || functionAgentMgr_ == nullptr) {
         YRLOG_WARN("RuntimeReconcileActor: dependencies not bound, skipping cycle");
+        pendingFirstPassAgents_.insert(firstPassAgents.begin(), firstPassAgents.end());
         return;
     }
 
@@ -177,6 +180,9 @@ void RuntimeReconcileActor::RunReconcileCycle(const std::vector<std::string> &fi
     for (const auto &[agentID, request] : agentRequests) {
         if (!inProgressAgents_.insert(agentID).second) {
             YRLOG_INFO("RuntimeReconcileActor: agent {} reconcile already in-flight, skip", agentID);
+            if (firstPassSet.count(agentID) > 0) {
+                (void)pendingFirstPassAgents_.insert(agentID);
+            }
             continue;
         }
         bool isFirstPass = firstPassSet.count(agentID) > 0;
@@ -211,6 +217,10 @@ void RuntimeReconcileActor::OnReconcileError(const std::string &funcAgentID, boo
 {
     (void)inProgressAgents_.erase(funcAgentID);
 
+    if (isFirstPass) {
+        (void)pendingFirstPassAgents_.insert(funcAgentID);
+    }
+
     // Do NOT fail-open to NORMAL on transient errors. If the agent is genuinely
     // offline, the registration/health-check pipeline owns the state transition.
     // We will retry on the next periodic cycle.
@@ -231,6 +241,9 @@ void RuntimeReconcileActor::OnReconcileComplete(const messages::ReconcileRuntime
         YRLOG_WARN("{}|RuntimeReconcileActor: agent {} returned error code={}, msg={}, "
                    "keeping UnitStatus unchanged; will retry next cycle",
                    resp.requestid(), funcAgentID, resp.code(), resp.message());
+        if (isFirstPass) {
+            (void)pendingFirstPassAgents_.insert(funcAgentID);
+        }
         return;
     }
 
@@ -266,10 +279,11 @@ void RuntimeReconcileActor::OnReconcileComplete(const messages::ReconcileRuntime
         }
     }
 
-    // Transition agent RECOVERING → NORMAL only on first pass after registration.
-    // Periodic passes never flip the unit status; that is owned by registration and
-    // health-check pipelines.
-    if (isFirstPass && resourceView_) {
+    // A periodic request that was already in flight when a first-pass trigger
+    // arrived is sufficient once it completes successfully. Otherwise the
+    // retained first-pass intent will be retried by the next periodic cycle.
+    const bool deferredFirstPass = pendingFirstPassAgents_.erase(funcAgentID) > 0;
+    if ((isFirstPass || deferredFirstPass) && resourceView_) {
         YRLOG_INFO("{}|RuntimeReconcileActor: agent {} first-pass reconcile complete, "
                    "transitioning to NORMAL",
                    resp.requestid(), funcAgentID);

@@ -92,6 +92,7 @@ cc_test(
         "//functionsystem/src/common:scheduler",
         "//functionsystem/src/common:scheduler_topology",
         "//functionsystem/src/common:service_json",
+        "//functionsystem/src/common:snapshot_storage",
         "//functionsystem/src/common:status",
         "//functionsystem/src/common:trace_adapter",
         "//functionsystem/src/common:utils",

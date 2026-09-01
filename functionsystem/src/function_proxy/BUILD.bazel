@@ -74,6 +74,7 @@ cc_library(
         "//functionsystem/src/common:meta_store_adapter",
         "//functionsystem/src/common:utils",
         "//functionsystem/src/common:metadata",
+        "//functionsystem/src/common:datasystem_capability",
         "//functionsystem/src/common:aksk",
         "//functionsystem/src/common:service_json",
         "//functionsystem/src/common:rpc",

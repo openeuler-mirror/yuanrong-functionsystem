@@ -31,6 +31,7 @@
 #include "mocks/mock_instance_control_view.h"
 #include "mocks/mock_instance_ctrl.h"
 #include "mocks/mock_instance_state_machine.h"
+#include "mocks/mock_resource_view.h"
 #include "utils/future_test_helper.h"
 
 namespace functionsystem::test {
@@ -89,7 +90,7 @@ MakeInstancesMap(const std::vector<std::tuple<std::string, std::string, std::str
 }
 
 /**
- * Test fixture for RuntimeReconcileActor (trigger-once model).
+ * Test fixture for RuntimeReconcileActor.
  */
 class RuntimeReconcileActorTest : public ::testing::Test {
 public:
@@ -120,22 +121,35 @@ public:
         mockFunctionAgentMgr_ = nullptr;
         mockInstanceCtrl_ = nullptr;
         mockInstanceControlView_ = nullptr;
+        mockResourceView_ = nullptr;
     }
 
-    void CreateAndSpawnActor()
+    void CreateAndSpawnActor(bool bindResourceView = false)
     {
         reconcileActor_ = std::make_shared<RuntimeReconcileActor>(
             RUNTIME_RECONCILE_ACTOR_NAME, TEST_NODE_ID);
         reconcileActor_->BindInstanceControlView(mockInstanceControlView_);
         reconcileActor_->BindInstanceCtrl(mockInstanceCtrl_);
         reconcileActor_->BindFunctionAgentMgr(mockFunctionAgentMgr_);
+        if (bindResourceView) {
+            if (mockResourceView_ == nullptr) {
+                mockResourceView_ = MockResourceView::CreateMockResourceView();
+            }
+            reconcileActor_->BindResourceView(mockResourceView_);
+        }
         litebus::Spawn(reconcileActor_);
+    }
+
+    void RunPeriodicCycleForTest()
+    {
+        (void)litebus::Async(reconcileActor_->GetAID(), &RuntimeReconcileActor::RunPeriodicCycle);
     }
 
 protected:
     std::shared_ptr<MockFunctionAgentMgr> mockFunctionAgentMgr_;
     std::shared_ptr<MockInstanceCtrl> mockInstanceCtrl_;
     std::shared_ptr<MockInstanceControlView> mockInstanceControlView_;
+    std::shared_ptr<MockResourceView> mockResourceView_;
     std::shared_ptr<RuntimeReconcileActor> reconcileActor_;
 };
 
@@ -456,6 +470,63 @@ TEST_F(RuntimeReconcileActorTest, ErrorResponseNoCrashNoGhostCleanup)
     CreateAndSpawnActor();
     reconcileActor_->TriggerOnce(TEST_AGENT_ID);
     ASSERT_AWAIT_TRUE([&reconciled]() { return reconciled.load(); });
+}
+
+/**
+ * Feature: A first-pass trigger is retained when an older reconcile is in flight.
+ * Description:
+ *   A periodic reconcile may already be running when registration completes.
+ *   Its successful response must satisfy the deferred first-pass transition
+ *   instead of leaving the agent permanently in RECOVERING.
+ */
+TEST_F(RuntimeReconcileActorTest, DeferredFirstPassCompletesAfterInFlightPeriodicSuccess)
+{
+    auto instances = MakeInstancesMap({
+        {TEST_INSTANCE_ID_1, TEST_AGENT_ID, TEST_RUNTIME_ID_1, TEST_CONTAINER_ID_1},
+    });
+
+    std::atomic<int> viewReads{0};
+    EXPECT_CALL(*mockInstanceControlView_, GetInstances())
+        .WillRepeatedly(Invoke([&viewReads, &instances]() {
+            ++viewReads;
+            return instances;
+        }));
+
+    litebus::Promise<messages::ReconcileRuntimesResponse> periodicResponse;
+    std::atomic<int> reconcileCalls{0};
+    std::atomic<bool> statusUpdated{false};
+    std::string periodicRequestID;
+    EXPECT_CALL(*mockFunctionAgentMgr_, ReconcileRuntimes(TEST_AGENT_ID, _))
+        .WillRepeatedly(Invoke([&](const std::string &,
+                                   const std::shared_ptr<messages::ReconcileRuntimesRequest> &request) {
+            ++reconcileCalls;
+            periodicRequestID = request->requestid();
+            return periodicResponse.GetFuture();
+        }));
+
+    mockResourceView_ = MockResourceView::CreateMockResourceView();
+    EXPECT_CALL(*mockResourceView_, UpdateUnitStatus(TEST_AGENT_ID, resource_view::UnitStatus::NORMAL))
+        .WillOnce(Invoke([&statusUpdated](const std::string &, resource_view::UnitStatus) {
+            statusUpdated = true;
+            return AsyncReturn(Status::OK());
+        }));
+
+    CreateAndSpawnActor(true);
+
+    // Keep a periodic request in flight, then deliver the registration first-pass
+    // trigger for the same agent. The trigger is deduplicated but must remain owed.
+    RunPeriodicCycleForTest();
+    ASSERT_AWAIT_TRUE([&reconcileCalls]() { return reconcileCalls.load() == 1; });
+    reconcileActor_->TriggerOnce(TEST_AGENT_ID);
+    ASSERT_AWAIT_TRUE([&viewReads]() { return viewReads.load() >= 2; });
+    EXPECT_EQ(reconcileCalls.load(), 1);
+
+    messages::ReconcileRuntimesResponse response;
+    response.set_requestid(periodicRequestID);
+    response.set_code(0);
+    periodicResponse.SetValue(response);
+
+    ASSERT_AWAIT_TRUE([&statusUpdated]() { return statusUpdated.load(); });
 }
 
 /**
